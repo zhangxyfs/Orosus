@@ -59,7 +59,9 @@ process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 try {
   for (;;) {
-    const line = await rl.question("> ");
+    // stdin EOF（管道耗尽 / Ctrl-D）时 question 对已关闭接口 reject → 视作退出
+    const line = await rl.question("> ").catch(() => null);
+    if (line === null) break;
     const text = line.trim();
     if (text === "/quit") break;
     if (text === "") continue;
