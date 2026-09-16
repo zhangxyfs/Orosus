@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "packages/contracts"
+  - "apps/*"
+
+allowBuilds:
+  esbuild: true
+  rolldown: true
