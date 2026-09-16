@@ -46,6 +46,15 @@ importers:
         specifier: workspace:*
         version: link:../testing
 
+  packages/provider-anthropic:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+
   packages/testing:
     dependencies:
       '@orosus/contracts':
