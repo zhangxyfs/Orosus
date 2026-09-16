@@ -64,6 +64,15 @@ importers:
         specifier: ^4.0.0
         version: 4.6.5
 
+  packages/tool-shell:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+
 packages:
 
   '@babel/generator@7.29.8':
