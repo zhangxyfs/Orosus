@@ -38,7 +38,7 @@ export function resolveSections(
     },
 
     configFor(def) {
-      const section = { ...(sections.get(def.name) ?? {}) };
+      const section = { ...sections.get(def.name) };
       for (const k of RESERVED_SECTION_KEYS) delete section[k];
       if (!def.config) {
         const extra = Object.keys(section);

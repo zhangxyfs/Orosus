@@ -8,6 +8,24 @@ importers:
 
   .:
     devDependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@orosus/provider-anthropic':
+        specifier: workspace:*
+        version: link:packages/provider-anthropic
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:packages/testing
+      '@orosus/tool-fs':
+        specifier: workspace:*
+        version: link:packages/tool-fs
+      '@orosus/tool-shell':
+        specifier: workspace:*
+        version: link:packages/tool-shell
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.2

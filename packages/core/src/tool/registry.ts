@@ -25,7 +25,6 @@ export interface ToolRegistry {
  */
 export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
   const tools: { tool: Tool; owner: string }[] = [];
-  const log = createLogger(opts.sink, "tool");
 
   return {
     register(tool, owner) {

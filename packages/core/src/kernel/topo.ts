@@ -130,7 +130,8 @@ export function resolveTopo(input: TopoInput): TopoResult {
   const remaining = new Set([...active.keys()].filter((n) => !emitted.has(n)));
   for (;;) {
     let trimmed = false;
-    for (const n of [...remaining]) {
+    const snapshot = [...remaining]; // 快照迭代：本轮剔除中删除元素不影响本轮遍历集
+    for (const n of snapshot) {
       if (![...(outEdges.get(n) ?? [])].some((m) => remaining.has(m))) {
         remaining.delete(n);
         trimmed = true;

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { defineTool, Access } from "@orosus/contracts/tool";
+import { defineTool } from "@orosus/contracts/tool";
 import { createEventBus, CORE_POINTS } from "../kernel/bus.ts";
 import { createToolRegistry, OUTPUT_LIMIT } from "./registry.ts";
 import type { DiagSink, DiagRecord } from "../diag/logger.ts";

@@ -28,7 +28,7 @@ const makeHarness = async (extra: Parameters<typeof createHarness>[0] = {}) => {
     modules: [fakeProviderModule("fake", script)],
     config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
   };
-  return createHarness({ ...base, ...extra, config: { ...base.config, ...(extra.config ?? {}) } });
+  return createHarness({ ...base, ...extra, config: { ...base.config, ...extra.config } });
 };
 
 describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => {

@@ -11,6 +11,12 @@
     "build": "pnpm -r build"
   },
   "devDependencies": {
+    "@orosus/contracts": "workspace:*",
+    "@orosus/core": "workspace:*",
+    "@orosus/provider-anthropic": "workspace:*",
+    "@orosus/testing": "workspace:*",
+    "@orosus/tool-fs": "workspace:*",
+    "@orosus/tool-shell": "workspace:*",
     "@types/node": "^22.10.0",
     "oxlint": "^1.0.0",
     "tsdown": "^0.9.0",
