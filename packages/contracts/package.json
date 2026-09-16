@@ -2,6 +2,7 @@
   "name": "@orosus/contracts",
   "version": "0.1.0",
   "type": "module",
+  "scripts": { "typecheck": "tsc --noEmit" },
   "orosus": { "contract": true },
   "exports": {
     "./module": "./src/module/index.ts",
