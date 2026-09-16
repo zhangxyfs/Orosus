@@ -4,6 +4,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
+    "orosus": "node --experimental-strip-types apps/cli/src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --filter ./packages/** --filter ./apps/** run typecheck",
     "lint": "oxlint .",
