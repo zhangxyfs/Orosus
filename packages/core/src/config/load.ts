@@ -80,7 +80,9 @@ export function loadConfig(opts: {
   let acc = defaults();
   for (const file of [opts.userFile, opts.projectFile]) {
     if (file && existsSync(file)) {
-      acc = merge(acc, splitDoc(parse(readFileSync(file, "utf8")) as Record<string, unknown>));
+      // 剥 UTF-8 BOM：Windows PowerShell 5.1 的 Out-File -Encoding utf8 / 旧版记事本会写 BOM，smol-toml 拒收
+      const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+      acc = merge(acc, splitDoc(parse(raw) as Record<string, unknown>));
     }
   }
   // env 层：仅核心顶层 key，命名 OROSUS_<KEY>（§6.6）

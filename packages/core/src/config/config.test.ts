@@ -35,6 +35,13 @@ describe("分层合并（§6.6：默认→用户→项目→env→flag）", () =
     expect(cfg.core.model).toBe("openai/gpt-x");
   });
 
+  it("UTF-8 BOM 的配置文件可解析（Windows PowerShell 5.1 Out-File -Encoding utf8 会写 BOM）", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
+    writeFileSync(join(dir, "bom.toml"), `\uFEFFmodel = "anthropic/bom"\n`);
+    const cfg = loadConfig({ userFile: join(dir, "bom.toml"), env: {} });
+    expect(cfg.core.model).toBe("anthropic/bom");
+  });
+
   it("$ENV:VAR 占位解析期替换；缺失变量保留占位并出 warning", () => {
     const cfg = loadConfig({
       cliOverrides: {},
