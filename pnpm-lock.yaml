@@ -41,6 +41,19 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.6.5
+    devDependencies:
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../testing
+
+  packages/testing:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
 
 packages:
 

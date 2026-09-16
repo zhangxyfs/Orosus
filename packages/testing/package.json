@@ -1,0 +1,8 @@
+{
+  "name": "@orosus/testing",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@orosus/contracts": "workspace:*", "zod": "^4.0.0" }
+}
