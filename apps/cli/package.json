@@ -1,0 +1,17 @@
+{
+  "name": "@orosus/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": { "orosus": "node --experimental-strip-types src/main.ts", "typecheck": "tsc --noEmit" },
+  "bin": { "orosus": "./src/main.ts" },
+  "dependencies": {
+    "@orosus/core": "workspace:*",
+    "@orosus/tool-fs": "workspace:*",
+    "@orosus/tool-shell": "workspace:*",
+    "@orosus/provider-anthropic": "workspace:*"
+  },
+  "devDependencies": {
+    "@orosus/contracts": "workspace:*"
+  }
+}

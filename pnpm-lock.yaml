@@ -24,6 +24,25 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.20.2)(lightningcss@1.33.0)
 
+  apps/cli:
+    dependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@orosus/provider-anthropic':
+        specifier: workspace:*
+        version: link:../../packages/provider-anthropic
+      '@orosus/tool-fs':
+        specifier: workspace:*
+        version: link:../../packages/tool-fs
+      '@orosus/tool-shell':
+        specifier: workspace:*
+        version: link:../../packages/tool-shell
+    devDependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+
   packages/contracts:
     dependencies:
       zod:
