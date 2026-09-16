@@ -5,7 +5,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --filter './packages/**' --filter './apps/**' run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --filter ./packages/** --filter ./apps/** run typecheck",
     "lint": "oxlint .",
     "check:boundaries": "node --experimental-strip-types scripts/check-boundaries.mts",
     "build": "pnpm -r build"
