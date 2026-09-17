@@ -1,9 +1,42 @@
 import { createInterface } from "node:readline/promises";
-import { createHarness } from "@orosus/core";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createHarness, discoverModules } from "@orosus/core";
 import type { Chunk } from "@orosus/contracts/provider";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi } from "./menu.ts";
 import { parseArgs } from "./args.ts";
+import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
+import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
+
+// 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
+// `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
+{
+  const argv = process.argv.slice(2);
+  const orosusHome = join(homedir(), ".orosus");
+  if (isProviderSubcommand(argv)) {
+    process.exit(await runProviderSubcommand(argv, {
+      configPath: join(orosusHome, "config.toml"),
+      secretsPath: join(orosusHome, "secrets.env"),
+      env: process.env,
+      out: (l) => console.log(l),
+    }));
+  }
+  if (isModuleSubcommand(argv)) {
+    const discovered = await discoverModules({
+      userDir: join(orosusHome, "modules"),
+      projectDir: join(process.cwd(), ".orosus", "modules"),
+      userFile: join(orosusHome, "config.toml"),
+      sink: { write: () => {}, flush: () => Promise.resolve(), close: () => Promise.resolve() },
+    });
+    process.exit(await runModuleSubcommand(argv, {
+      configPath: join(orosusHome, "config.toml"),
+      trustFile: join(orosusHome, "trust.json"),
+      discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
+      out: (l) => console.log(l),
+    }));
+  }
+}
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -41,7 +74,19 @@ const commandUi = createReadlineUi({
   question: async (q) => {
     askActive = true;
     try {
-      return await rl.question(q);
+      // 命令开始前已到的行（管道脚本/用户预打字）优先喂给询问——否则队列与 question 各等各的（脑裂挂起）
+      const queued = pendingLines.shift();
+      if (queued !== undefined) return queued;
+      // EOF 竞速：stdin 关闭后（或期间）的询问以拒绝收场——命令带内失败（D35 fail-closed 语义）。
+      // 监听逐次挂摘（不用 standing promise）：正常退出时 rl.close() 不产生无人消费的 rejection
+      return await new Promise<string>((resolve, reject) => {
+        const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
+        rl.once("close", onClose);
+        rl.question(q).then(
+          (v) => { rl.removeListener("close", onClose); resolve(v); },
+          (e) => { rl.removeListener("close", onClose); reject(e); },
+        );
+      });
     } finally {
       askActive = false;
     }
