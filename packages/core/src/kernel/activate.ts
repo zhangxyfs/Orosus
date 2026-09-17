@@ -44,6 +44,8 @@ interface Stage {
   commands: { name: string; handler: CommandHandler }[];
   promptSections: PromptSection[];
   listeners: { type: string; listener: Listener }[];
+
+  overlays: { section: string; read(value: unknown): unknown; owner: string }[];
 }
 
 interface OwnerContribs {
@@ -67,6 +69,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
   const committedSections: ActivateOutput["promptSections"] = [];
   const contributes = new Map<string, string[]>();
   const activeNames: string[] = []; // 激活序（dispose 时倒序）
+  const committedOverlays: { section: string; read(value: unknown): unknown; owner: string }[] = []; // 注册序 = 激活拓扑序（§6.6）
 
   const rollbackModule = async (name: string): Promise<void> => {
     const c = ownerContribs.get(name);
@@ -118,13 +121,34 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       continue;
     }
 
-    const stage: Stage = { services: [], tools: [], commands: [], promptSections: [], listeners: [] };
+    const stage: Stage = { services: [], tools: [], commands: [], promptSections: [], listeners: [], overlays: [] };
+    const moduleState = { activated: false }; // activate 返回且 commit 后置 true——configRead 据此区分 activate 期（纯分层值，v13）
     const mlog = createLogger(sink, def.name);
     const allows = (m: string): boolean => def.mounts === undefined || def.mounts.includes(m); // mounts 缺省 = 不限制；一经声明 = 白名单（§5.1），未列出的口注册即抛
 
     const ctx: ModuleContext<unknown> = {
       config: cfg.value,
-      configRead: () => Promise.resolve(cfg.value), // M1：无 overlay（M2）；activate 期即纯分层合并值（§6.6）
+      configRead: async () => {
+        if (!moduleState.activated) return cfg.value; // activate 期 = 纯分层合并值（v13 定案）
+        let value: unknown = cfg.value;
+        for (const ov of committedOverlays) { // 注册序 = 激活拓扑序复合（§6.6）
+          if (ov.section !== def.name) continue;
+          try {
+            const r = await ov.read(value);
+            if (r !== undefined) value = r;
+          } catch (err) {
+            throw new Error(`overlay（${ov.owner}）读取抛错：${String(err instanceof Error ? err.message : err)}`);
+          }
+        }
+        if (def.config !== undefined) { // owner schema 复检（§6.6：不过则该次读取返回错误，不影响图）
+          const parsed = def.config.safeParse(value);
+          if (!parsed.success) {
+            throw new Error(`配置运行期读取校验失败（overlay 改写值未过 schema 复检，§10）：${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+          }
+          return parsed.data;
+        }
+        return value;
+      },
       log: mlog,
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
@@ -143,6 +167,21 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         stage.services.push({ key, impl });
       },
       contribute: {
+        configOverlay: (o) => {
+          if (!allows("contribute:configOverlay")) throw new Error(`mounts 校验：contribute:configOverlay 未在声明（§5.1）`);
+          const section = o.section ?? def.name;
+          if (section !== def.name && !(def.uses ?? []).includes("config.foreign")) {
+            throw new Error(`overlay 声明他人 section "${section}"——须在 uses 中声明 "config.foreign"（§6.6 访问边界）`);
+          }
+          const entry = { section, read: o.read, owner: def.name };
+          stage.overlays.push(entry);
+          return () => { // 真 disposer（测试①）：stage 与 committed 双侧摘除
+            const si = stage.overlays.indexOf(entry);
+            if (si >= 0) stage.overlays.splice(si, 1);
+            const ci = committedOverlays.indexOf(entry);
+            if (ci >= 0) committedOverlays.splice(ci, 1);
+          };
+        },
         tool: (t) => {
           if (!allows("contribute:tool")) throw new Error(`mounts 校验：contribute:tool 未在声明（§5.1）`);
           stage.tools.push(t); return () => { /* M1 已知限制：模块侧 disposer 为 no-op，注销由 kernel 侧 disposers 承担（rollback/disposeAll）；swap 式真 disposer 随 M2 reload 一并做 */ };
@@ -222,6 +261,15 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         for (const l of stage.listeners) {
           mine.disposers.push(bus.on(l.type, l.listener, def.name));
         }
+        for (const ov of stage.overlays) {
+          committedOverlays.push(ov);
+          const off = () => {
+            const ci = committedOverlays.indexOf(ov);
+            if (ci >= 0) committedOverlays.splice(ci, 1);
+          };
+          mine.disposers.push(off); // rollback/disposeAll 摘除
+          myContributes.push(`overlay: ${ov.section === def.name ? "(own)" : ov.section}`);
+        }
         if (stage.listeners.length > 0) myContributes.push(`hooks: ${stage.listeners.map((l) => l.type).join(", ")}`);
       } catch (commitErr) {
         // staged commit 语义（§8.4"任何一步失败，discard"）：services/tools/listeners 经 mine 回收；
@@ -247,6 +295,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       ownerContribs.set(def.name, mine);
       contributes.set(def.name, myContributes);
       activeNames.push(def.name);
+      moduleState.activated = true; // 运行期 configRead 开始应用 overlay
       records.push({ def, name: def.name, source: "inline", state: "active", generation: 1 });
       klog.info("kernel.module.active", "模块激活", { module: def.name });
     } catch (err) {

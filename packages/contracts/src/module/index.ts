@@ -53,6 +53,9 @@ export interface ModuleContext<C = unknown> {
     tool(t: Tool): Disposer;
     command(name: string, handler: CommandHandler): Disposer;
     promptSection(s: PromptSection): Disposer;
+    /** 配置 overlay（§6.6 读侧扩展，D2）：缺省 section = 自家；声明他人 section 须 uses 含 "config.foreign"。
+     *  只作用于 configRead()（运行期复合 + owner schema 复检），不作用于 ctx.config 快照；activate 期 configRead 只保证纯分层值（v13）。 */
+    configOverlay(o: { section?: string; read(value: unknown): unknown }): Disposer;
   };
   readonly session: {
     /** 写会话日志扩展事件；type 须已在 logEvents 声明（白名单）。 */
