@@ -95,3 +95,26 @@ export function loadConfig(opts: {
   acc = resolveEnvPlaceholders(acc, env, warnings);
   return { core: acc.core, sections: new Map(Object.entries(acc.sections)), warnings };
 }
+
+/** 本地密钥文件（D37）：KEY=VALUE 行解析——坏行跳过并计数（调用方 warn，不因手改坏一行丢失全部密钥）。 */
+export function loadSecretsEnv(file: string): { vars: Record<string, string>; badLines: number } {
+  const vars: Record<string, string> = {};
+  let badLines = 0;
+  if (!existsSync(file)) return { vars, badLines };
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    const t = line.trim();
+    if (t === "" || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) {
+      badLines++;
+      continue;
+    }
+    vars[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  return { vars, badLines };
+}
+
+/** env 层合并（D37 优先级）：显式 env 参数（调用方短路）> process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺。 */
+export function mergeEnvLayer(processEnv: Record<string, string | undefined>, secrets: Record<string, string>): Record<string, string | undefined> {
+  return { ...secrets, ...processEnv };
+}

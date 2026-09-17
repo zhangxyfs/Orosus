@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
-import { loadConfig } from "./load.ts";
+import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./load.ts";
 import { resolveSections } from "./validate.ts";
 
 let dir: string;
@@ -97,5 +97,18 @@ describe("section 校验（§6.6 单区制 + 保留 key + strict）", () => {
     expect(r.orphanSections).toEqual(["ghost"]);
     const c = r.configFor(m);
     expect(c.ok).toBe(false);
+  });
+});
+
+describe("secrets.env（D37）", () => {
+  it("loadSecretsEnv：KEY=VALUE 解析，坏行跳过不炸；mergeEnvLayer：process 覆盖 secrets、secrets 补缺", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-sec-"));
+    const f = join(dir, "secrets.env");
+    writeFileSync(f, "A=1\nBADLINE\n=2\nB=2\n# comment\n");
+    const { vars, badLines } = loadSecretsEnv(f);
+    expect(vars).toEqual({ A: "1", B: "2" });
+    expect(badLines).toBeGreaterThan(0);
+    expect(mergeEnvLayer({ X: "proc" }, { X: "sec", Y: "sec" })).toEqual({ X: "proc", Y: "sec" });
+    expect(mergeEnvLayer({}, { Z: "s" })).toEqual({ Z: "s" });
   });
 });

@@ -3,13 +3,20 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "scripts": { "orosus": "node --experimental-strip-types src/main.ts", "typecheck": "tsc --noEmit" },
-  "bin": { "orosus": "./src/main.ts" },
+  "scripts": {
+    "orosus": "node --experimental-strip-types src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "orosus": "./src/main.ts"
+  },
   "dependencies": {
     "@orosus/core": "workspace:*",
     "@orosus/tool-fs": "workspace:*",
     "@orosus/tool-shell": "workspace:*",
-    "@orosus/provider-anthropic": "workspace:*"
+    "@orosus/provider-anthropic": "workspace:*",
+    "@orosus/provider-custom": "workspace:*",
+    "smol-toml": "^1.3.0"
   },
   "devDependencies": {
     "@orosus/contracts": "workspace:*"

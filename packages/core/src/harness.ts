@@ -6,7 +6,7 @@ import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
-import { loadConfig } from "./config/load.ts";
+import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
@@ -19,6 +19,7 @@ export interface HarnessOptions {
   store?: SessionStore;
   diagDir?: string;
   spillDir?: string;
+  secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   config?: {
     userFile?: string;
     projectFile?: string;
@@ -95,11 +96,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const note = hardeningNote();
   if (note) createLogger(sink, "kernel").warn("kernel.session.hardening", note);
 
+  const { vars: secrets, badLines } = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
+  if (badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines });
   const config = loadConfig({
     userFile: options.config?.userFile ?? join(home, "config.toml"),
     projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
     ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
-    env: options.config?.env ?? process.env, // env 层可注入（测试传 {} 密封，阻断真实 OROSUS_* 泄漏）
+    // D37 优先级：显式 env 参数 > process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺
+    env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
   });
 
   const defs = [

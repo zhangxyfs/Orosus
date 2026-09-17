@@ -50,12 +50,18 @@ importers:
       '@orosus/provider-anthropic':
         specifier: workspace:*
         version: link:../../packages/provider-anthropic
+      '@orosus/provider-custom':
+        specifier: workspace:*
+        version: link:../../packages/provider-custom
       '@orosus/tool-fs':
         specifier: workspace:*
         version: link:../../packages/tool-fs
       '@orosus/tool-shell':
         specifier: workspace:*
         version: link:../../packages/tool-shell
+      smol-toml:
+        specifier: ^1.3.0
+        version: 1.8.0
     devDependencies:
       '@orosus/contracts':
         specifier: workspace:*
