@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 import type { Tool } from "../tool/index.ts";
+import type { Chunk, ModelMessage } from "../provider/index.ts";
 
 /** 核心模块 API 主版本。核心按主版本做兼容检查（支持 N 与 N-1，见设计 §8.5）。 */
 export const MODULE_API_VERSION = 1;
@@ -30,6 +31,13 @@ export interface CommandUi {
   confirm(question: string): Promise<boolean>;
 }
 
+/** 二级 LLM 调用口（D39）：模块的辅助模型调用（compaction 摘要、标题生成等）。
+ *  复用 harness 当前 provider/model 解析（含 /model 运行期覆盖）；错误带内（finish error，不许 reject）；
+ *  二级调用不带工具。核心基础设施（与 ctx.log/session 同类）——不是能力槽、不经 services、不可 provide 替换。 */
+export interface LlmPort {
+  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal }): AsyncIterable<Chunk>;
+}
+
 /** 系统 prompt 段：order 决定拼接顺序（核心保留 -100 为 harness 身份），单段 ≤ 32KB。 */
 export interface PromptSection {
   order: number;
@@ -52,6 +60,9 @@ export interface ModuleContext<C = unknown> {
   /** 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。
    *  无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
   readonly ui: CommandUi;
+  /** 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。
+   *  compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。 */
+  readonly llm: LlmPort;
   readonly services: {
     /** 硬依赖能力：拓扑序保证 activate 期间必有值。 */
     get<T>(key: CapabilityKey<T>): Promise<T>;

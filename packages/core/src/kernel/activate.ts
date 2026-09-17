@@ -1,4 +1,4 @@
-import type { CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
+import type { CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -11,6 +11,17 @@ import type { ModuleRecord } from "./types.ts";
 
 export const PROMPT_SECTION_LIMIT = 32768;  // 单段 32KB（§6.5）
 export const PROMPT_TOTAL_LIMIT = 65536;    // 全局 64KB
+
+/** llm 口的持有器（D39）：harness 在 loadModules 后写入实现——activate 期调用只得带内错误（惰性注入）。 */
+export interface LlmHolder {
+  impl?: LlmPort;
+}
+
+const unassignedLlm: LlmPort = {
+  stream: () => (async function* () {
+    yield { type: "finish", kind: "error", errorMessage: "llm 口未注入（harness 未装配——activate 期调用过早，D39）" };
+  })(),
+};
 
 /** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */
 const rejectingUi = (): CommandUi => ({
@@ -36,6 +47,7 @@ export interface ActivateInput {
   bus: EventBus;
   tools: ToolRegistry;
   commandUi?: CommandUi;                        // 宿主交互 UI（D35 M3/T2：ctx.ui——审批询问等 waterfall 侧消费）
+  llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
 }
@@ -191,6 +203,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       },
       log: mlog,
       ui: input.commandUi ?? rejectingUi(),
+      llm: { stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req) }, // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
           if (staledModules.has(def.name)) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);

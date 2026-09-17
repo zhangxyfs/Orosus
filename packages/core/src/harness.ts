@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
-import type { StreamFn } from "@orosus/contracts/provider";
+import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
+import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
@@ -152,6 +152,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(options.config?.module !== undefined ? { module: options.config.module } : {}),
   };
   const spillDirUsed = options.spillDir ?? join(home, "sessions", store.sessionId, "spill");
+  const llmHolder: { impl?: LlmPort } = {}; // D39/T4：loadModules 后装配——Unchanged 模块的旧闭包经同一 holder 读到新解析
   let graph = await loadModules({
     defs,
     cli: cliInput,
@@ -160,6 +161,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     sink,
     spillDir: spillDirUsed,
     commandUi,
+    llm: llmHolder,
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
@@ -263,6 +265,27 @@ session: ${store.sessionId}
       throw new Error(`provider "${provider}" 未声明 defaultModel——请写全名 "<provider>/<model>"。可用 provider：${listing}`);
     }
     return { stream: adapter.stream, model };
+  };
+
+  // ctx.llm 实现（D39/T4）：调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
+  llmHolder.impl = {
+    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal }) =>
+      (async function* (): AsyncGenerator<Chunk> {
+        let resolved: { stream: StreamFn; model: string };
+        try {
+          resolved = resolveProvider();
+        } catch (err) {
+          yield { type: "finish", kind: "error", errorMessage: `llm 口解析失败：${err instanceof Error ? err.message : String(err)}` };
+          return;
+        }
+        yield* resolved.stream({
+          model: resolved.model,
+          system: req.system ?? "",
+          messages: req.messages,
+          tools: [], // 二级调用不带工具（D39）
+          signal: req.signal ?? new AbortController().signal,
+        });
+      })(),
   };
 
   const harnessImpl: Harness = {
@@ -375,6 +398,7 @@ session: ${store.sessionId}
           sink,
           spillDir: spillDirUsed,
           commandUi,
+          llm: llmHolder,
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
           preserved,
           generations,

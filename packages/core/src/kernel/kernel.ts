@@ -1,4 +1,5 @@
 import type { CommandHandler, CommandUi, ModuleDefinition } from "@orosus/contracts/module";
+import type { LlmHolder } from "./activate.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import type { SessionStore } from "../session/types.ts";
 import { createEventBus, type EventBus } from "./bus.ts";
@@ -35,6 +36,7 @@ export interface LoadModulesInput {
   sink: DiagSink;
   spillDir: string;
   commandUi?: CommandUi;   // 宿主交互 UI（D35 M3/T2：ctx.ui 注入，审批询问消费）
+  llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   blocked?: { def: ModuleDefinition; source: string; reason: string }[];
   reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
   preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
@@ -80,6 +82,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   const act = await activateModules({
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
     ...(input.commandUi !== undefined ? { commandUi: input.commandUi } : {}),
+    ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),
   });

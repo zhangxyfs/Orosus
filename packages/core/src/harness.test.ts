@@ -230,3 +230,108 @@ describe("ctx.ui 注入链（M3 T2，D35 修订）", () => {
     await h2.close();
   });
 });
+
+describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
+  const collect = async (s: AsyncIterable<Chunk>): Promise<{ text: string; finish?: Chunk | undefined }> => {
+    let text = "";
+    let finish: Chunk | undefined;
+    for await (const c of s) {
+      if (c.type === "text/delta") text += c.text;
+      if (c.type === "finish") finish = c;
+    }
+    return { text, finish };
+  };
+
+  it("① 模块经 ctx.llm.stream 调当前 provider：system/messages 透传、汇聚 text delta", async () => {
+    const { stream, requests } = fakeProvider([
+      [{ type: "text/delta", text: "摘要内容" }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "主对话" }, { type: "finish", kind: "stop" }],
+    ]);
+    let run: (() => Promise<{ text: string }>) | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) {
+        run = () => collect(ctx.llm.stream({ system: "总结以下对话", messages: [{ role: "user", content: [{ kind: "text", text: "历史…" }] }] }));
+      },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, stream) },
+        consumer,
+      ],
+    });
+    const r = await run!();
+    expect(r.text).toBe("摘要内容");
+    expect(requests[0]).toMatchObject({ model: "m", system: "总结以下对话" }); // model = 解析后的模型名（provider 槽已路由）
+    expect(requests[0]!.messages[0]).toMatchObject({ role: "user" });
+    expect(requests[0]!.tools).toEqual([]); // 二级调用不带工具
+    await h.close();
+  });
+
+  it("② /model 运行期覆盖对 ctx.llm 生效（切换后 stream 用新 model）", async () => {
+    const fake1 = fakeProvider([[{ type: "text/delta", text: "一号" }, { type: "finish", kind: "stop" }]]);
+    const fake2 = fakeProvider([[{ type: "text/delta", text: "二号" }, { type: "finish", kind: "stop" }]]);
+    let call: ((which: "a" | "b") => Promise<{ text: string }>) | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) {
+        call = (which) => collect(ctx.llm.stream({ messages: [{ role: "user", content: [{ kind: "text", text: which }] }] }));
+      },
+    };
+    const provA: ModuleDefinition = { ...fakeModule("provider-a"), activate: (ctx) => ctx.provide("provider:a" as never, fake1.stream) };
+    const provB: ModuleDefinition = { ...fakeModule("provider-b"), activate: (ctx) => ctx.provide("provider:b" as never, fake2.stream) };
+    const ui: CommandUi = { ask: async () => "b/two", choose: async (_t, items) => items.find((i) => i.includes("手动输入"))!, confirm: async () => false };
+    const h = await makeHarness({
+      commandUi: ui,
+      modules: [provA, provB, consumer],
+      config: { ...hermetic(dir), cliOverrides: { model: "a/one" } },
+    });
+    expect((await call!("a")).text).toBe("一号"); // 初始 model a/one
+    await h.prompt("/model"); // ui.ask 返回 "b/two" → model 覆盖
+    expect((await call!("b")).text).toBe("二号"); // 新 model b/two 经同一 llm 口
+    expect(fake2.requests[0]).toMatchObject({ model: "two" });
+    await h.close();
+  });
+
+  it("③ 未配置 model → llm.stream 产出带内 finish error（不 reject）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-"));
+    let run: (() => Promise<{ finish?: Chunk | undefined }>) | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) {
+        run = () => collect(ctx.llm.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }));
+      },
+    };
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      config: hermetic(dir),
+      modules: [fakeProviderModule("fake", []), consumer],
+    });
+    const r = await run!();
+    expect(r.finish).toMatchObject({ type: "finish", kind: "error" });
+    await h.close();
+  });
+
+  it("④ reload 后 ctx.llm 仍指向当前解析（Unchanged 模块的闭包经惰性 holder）", async () => {
+    const fp = fakeProvider([
+      [{ type: "text/delta", text: "重载后仍可用" }, { type: "finish", kind: "stop" }],
+    ]);
+    let run: (() => Promise<{ text: string }>) | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) {
+        run = () => collect(ctx.llm.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }));
+      },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) },
+        consumer,
+      ],
+    });
+    const report = await h.reload();
+    expect(report.unchanged).toContain("llm-consumer");
+    expect((await run!()).text).toBe("重载后仍可用"); // 不是"llm 口未注入"
+    await h.close();
+  });
+});
