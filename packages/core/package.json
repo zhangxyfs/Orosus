@@ -2,13 +2,22 @@
   "name": "@orosus/core",
   "version": "0.1.0",
   "type": "module",
-  "orosus": { "core": true },
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit" },
+  "orosus": {
+    "core": true
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@orosus/contracts": "workspace:*",
+    "jiti": "^2.7.0",
     "smol-toml": "^1.3.0",
     "zod": "^4.0.0"
   },
-  "devDependencies": { "@orosus/testing": "workspace:*" }
+  "devDependencies": {
+    "@orosus/testing": "workspace:*"
+  }
 }

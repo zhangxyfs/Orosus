@@ -78,6 +78,9 @@ importers:
       '@orosus/contracts':
         specifier: workspace:*
         version: link:../contracts
+      jiti:
+        specifier: ^2.7.0
+        version: 2.7.0
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
