@@ -13,6 +13,10 @@ export const OUTPUT_LIMIT = 32768;
 export interface ToolRegistry {
   register(tool: Tool, owner: string): Disposer;
   list(): Tool[];
+  /** owner 名下的工具名（reload 墓碑标记用，§5.5）。 */
+  namesByOwner(owner: string): string[];
+  /** soft 摘除（§5.5）：名字保留占位、run 带内报错、specs 仍含名——tools 数组字节稳定。 */
+  tombstone(name: string): void;
   specs(): ToolSpec[];
   run(call: { id: string; name: string; args: unknown }, ctx: { signal: AbortSignal }): Promise<ToolResult>;
 }
@@ -24,15 +28,23 @@ export interface ToolRegistry {
  * M1 不含并发调度器——调用方（loop）按 call 顺序全串行调用 run（§12）。
  */
 export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
-  const tools: { tool: Tool; owner: string }[] = [];
+  const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
 
   return {
     register(tool, owner) {
       if (!tool.name.startsWith(`${owner}__`)) {
         throw new Error(`工具名 "${tool.name}" 未带 "${owner}__" 前缀（规则 4）`);
       }
-      if (tools.some((t) => t.tool.name === tool.name)) {
+      const existing = tools.find((t) => t.tool.name === tool.name);
+      if (existing !== undefined && !existing.tombstoned) {
         throw new Error(`工具重名：${tool.name}`);
+      }
+      if (existing !== undefined) {
+        // 墓碑位重注册（reload 的 Reloaded 模块）：原位替换，保持注册序（tools 数组字节稳定，§6.3）
+        existing.tool = tool;
+        existing.owner = owner;
+        existing.tombstoned = false;
+        return () => { existing.tombstoned = true; };
       }
       const entry = { tool, owner };
       tools.push(entry);
@@ -46,6 +58,15 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       return tools.map((t) => t.tool);
     },
 
+    namesByOwner(owner: string): string[] {
+      return tools.filter((t) => t.owner === owner).map((t) => t.tool.name);
+    },
+
+    tombstone(name: string): void {
+      const entry = tools.find((t) => t.tool.name === name);
+      if (entry !== undefined) entry.tombstoned = true;
+    },
+
     specs() {
       return tools.map(({ tool }) => ({
         name: tool.name,
@@ -56,6 +77,10 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
     async run(call, { signal }) {
       const entry = tools.find((t) => t.tool.name === call.name);
+      if (entry?.tombstoned) {
+        // §5.5 会话连续性：被换下模块的工具——tools 数组字节不动，调用带内报错，新会话（新 registry）自然消失
+        return { output: "该工具所属模块已在 reload 中变更，新会话生效", isError: true };
+      }
       if (!entry) {
         return { output: `未知工具 "${call.name}"（该工具所属模块可能已降级或未安装）`, isError: true };
       }

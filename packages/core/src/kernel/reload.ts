@@ -4,7 +4,7 @@ import type { ModuleDefinition } from "@orosus/contracts/module";
 export interface GraphDef {
   def: ModuleDefinition;
   source: string;
-  entryHash?: string;
+  entryHash?: string | undefined;
   configValue: unknown;
 }
 

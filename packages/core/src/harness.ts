@@ -9,6 +9,7 @@ import { LOG_TYPES } from "./session/types.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
+import { diffGraphs, type ReloadReport } from "./kernel/reload.ts";
 import { loadTrustStore, checkTrust } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
@@ -46,6 +47,7 @@ export interface Harness {
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
   events(): AsyncIterable<SessionEvent>;
   graph(): ModuleGraph;
+  reload(): Promise<ReloadReport>;  // quiesce 后执行（§5.5/T15）
   close(): Promise<void>;
 }
 
@@ -104,8 +106,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const note = hardeningNote();
   if (note) createLogger(sink, "kernel").warn("kernel.session.hardening", note);
 
-  const { vars: secrets, badLines } = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
-  if (badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines });
+  const secretsLoad = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
+  const secrets = secretsLoad.vars; // reload 复用（同一合并语义）
+  if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
   const config = loadConfig({
     userFile: options.config?.userFile ?? join(home, "config.toml"),
     projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
@@ -135,18 +138,20 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       }
     }
   }
-  const graph = await loadModules({
+  const cliInput = {
+    ...(options.config?.enableModules !== undefined ? { enable: options.config.enableModules } : {}),
+    ...(options.config?.disableModules !== undefined ? { disable: options.config.disableModules } : {}),
+    ...(options.config?.noModules !== undefined ? { noModules: options.config.noModules } : {}),
+    ...(options.config?.module !== undefined ? { module: options.config.module } : {}),
+  };
+  const spillDirUsed = options.spillDir ?? join(home, "sessions", store.sessionId, "spill");
+  let graph = await loadModules({
     defs,
-    cli: {
-      ...(options.config?.enableModules !== undefined ? { enable: options.config.enableModules } : {}),
-      ...(options.config?.disableModules !== undefined ? { disable: options.config.disableModules } : {}),
-      ...(options.config?.noModules !== undefined ? { noModules: options.config.noModules } : {}),
-      ...(options.config?.module !== undefined ? { module: options.config.module } : {}),
-    },
+    cli: cliInput,
     sections: config.sections,
     session: store,
     sink,
-    spillDir: options.spillDir ?? join(home, "sessions", store.sessionId, "spill"),
+    spillDir: spillDirUsed,
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
@@ -211,6 +216,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 session: ${store.sessionId}
 模块图: active ${active} / failed ${failed} / discovered ${discovered}`;
     }],
+    ["/reload", async () => {
+      const r = await harnessImpl.reload();
+      return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length}`;
+    }],
     ["/usage", async () => {
       const events = await store.all();
       let input = 0;
@@ -253,7 +262,7 @@ session: ${store.sessionId}
     return { stream: adapter.stream, model };
   };
 
-  return {
+  const harnessImpl: Harness = {
     async prompt(text) {
       if (closed) throw new Error("harness 已关闭");
       if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
@@ -315,6 +324,74 @@ session: ${store.sessionId}
       return graph;
     },
 
+    async reload() {
+      if (closed) throw new Error("harness 已关闭");
+      // quiesce（§5.5，无超时定案——挂死 turn 由用户 cancel()/Ctrl-C 中止，中止即达边界）
+      if (currentTurn !== null) await currentTurn.done.catch(() => undefined);
+      const oldGraph = graph;
+      const oldDefs = oldGraph.defs();
+      // 重新执行配置分层合并 → 发现 → 信任 →（同一代码路径；§5.5）
+      const home2 = join(homedir(), ".orosus");
+      const config2 = loadConfig({
+        userFile: options.config?.userFile ?? join(home2, "config.toml"),
+        projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
+        ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
+        env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
+      });
+      const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[] = [
+        ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
+        ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
+      ];
+      {
+        const userDir = options.discovery?.userDir ?? join(home2, "modules");
+        const projectDir = options.discovery?.projectDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules");
+        const discovered = await discoverModules({ userDir, projectDir, ...(options.config?.userFile !== undefined ? { userFile: options.config.userFile } : {}), sink });
+        const trustStore = loadTrustStore(options.discovery?.trustFile ?? join(home2, "trust.json"));
+        for (const m of discovered) {
+          const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
+          if (t.ok) defs2.push({ def: m.def, source: "local", ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
+        }
+      }
+      // diff（新 defs 的 configValue 由 loadModules 内部计算——此处先按名字+hash+引用粗判，loadModules 后以 defs() 复核）
+      const oldByName = new Map(oldDefs.map((g) => [g.def.name, g]));
+      const newNames = new Set(defs2.map((d) => d.def.name));
+      const removedOrChanged = new Set<string>();
+      for (const g of oldDefs) {
+        if (!newNames.has(g.def.name)) { removedOrChanged.add(g.def.name); continue; }
+        const next = defs2.find((d) => d.def.name === g.def.name)!;
+        if (g.entryHash !== next.entryHash || g.def !== next.def) removedOrChanged.add(g.def.name);
+      }
+      const preserved = new Map([...oldGraph.preservable()].filter(([name]) => !removedOrChanged.has(name)));
+      const generations = new Map(oldGraph.records.map((r) => [r.name, r.generation]));
+      let newGraph: ModuleGraph;
+      try {
+        newGraph = await loadModules({
+          defs: defs2,
+          cli: cliInput,
+          sections: config2.sections,
+          session: store,
+          sink,
+          spillDir: spillDirUsed,
+          reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
+          preserved,
+          generations,
+        });
+      } catch (err) {
+        // 图级失败（required 护栏等）：新图整体废除、旧图继续运行（§5.5 事务性）——reuse 注册表上的新激活已被 loadModules 内部回滚
+        throw new Error(`reload 失败，旧图继续运行：${err instanceof Error ? err.message : String(err)}`);
+      }
+      // 会话连续性（§5.5）：Removed/Reloaded 模块的工具 soft 墓碑（tools 数组字节稳定；Reloaded 重注册自动顶掉墓碑）
+      for (const name of removedOrChanged) {
+        for (const tn of oldGraph.tools.namesByOwner(name)) newGraph.tools.tombstone(tn);
+      }
+      graph = newGraph;
+      const d = diffGraphs(oldDefs, newGraph.defs());
+      const failed = newGraph.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" }));
+      const report: ReloadReport = { added: d.added, removed: d.removed, reloaded: d.reloaded, unchanged: d.unchanged, failed };
+      createLogger(sink, "kernel").info("kernel.reload.done", "reload 完成", { added: d.added.length, removed: d.removed.length, reloaded: d.reloaded.length, unchanged: d.unchanged.length });
+      return report;
+    },
+
     async close() {
       if (closed) return; // 幂等
       closed = true;
@@ -327,4 +404,5 @@ session: ${store.sessionId}
       channel.close();
     },
   };
+  return harnessImpl;
 }

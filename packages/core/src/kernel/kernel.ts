@@ -21,17 +21,22 @@ export interface ModuleGraph {
   promptSections(): string;
   audit(): AuditEntry[];
   catalog(): string;
+  defs(): import("./reload.ts").GraphDef[];   // 旧图 diff 输入（reload，§5.5）
+  preservable(): Map<string, import("./activate.ts").PreservedInstance>;  // 旧图 Unchanged 沿用数据源（reload）
   dispose(): Promise<void>;
 }
 
 export interface LoadModulesInput {
-  defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[];
+  defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[];   // entryHash 供 defs()/reload diff（T15）
   cli: { enable?: string[]; disable?: string[]; noModules?: boolean; module?: string[] };
   sections: Map<string, Record<string, unknown>>;
   session: SessionStore;
   sink: DiagSink;
   spillDir: string;
   blocked?: { def: ModuleDefinition; source: string; reason: string }[];
+  reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
+  preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
+  generations?: Map<string, number>;               // reload：旧代际基线（透传 activate）
 }
 
 /** §4.2 第 4–6 步串接：启停过滤 → 静态校验 → 拓扑 → 激活 → required 护栏。 */
@@ -72,6 +77,8 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   const tools = createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir });
   const act = await activateModules({
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
+    ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
+    ...(input.generations !== undefined ? { generations: input.generations } : {}),
   });
 
   // required 安全护栏（§10）：失败分级在启动处阻断
@@ -89,6 +96,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   }
 
   const byName = new Map(input.defs.map((d) => [d.def.name, d]));
+  const entryHashByName = new Map(input.defs.map((d) => [d.def.name, d.entryHash]));
   for (const b of input.blocked ?? []) {
     byName.set(b.def.name, { def: b.def, source: b.source === "local" ? "local" : "inline" });
   }
@@ -116,12 +124,21 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     })),
   ];
 
+  const graphDefs: import("./reload.ts").GraphDef[] = records.map((r) => ({
+    def: r.def,
+    source: r.source,
+    ...(entryHashByName.get(r.name) !== undefined ? { entryHash: entryHashByName.get(r.name) } : {}),
+    configValue: (() => { const c = sections.configFor(r.def); return c.ok ? c.value : undefined; })(),
+  }));
+
   const graph: ModuleGraph = {
     records,
     tools,
     services: act.services,
     bus,
     commands: act.commands,
+    defs: () => graphDefs.map((g) => ({ ...g })),
+    preservable: act.preservable,
 
     promptSections() {
       const all = [...act.promptSections].sort((a, b) => a.order - b.order);
