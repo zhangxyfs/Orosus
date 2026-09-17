@@ -87,3 +87,20 @@ describe("kernel 门面（§4.2 第 4–7 步串接）", () => {
     expect(() => parseModel("x/")).toThrow(/<provider>/);
   });
 });
+
+describe("catalogJson（T19，§6.5 机器可读导出）", () => {
+  it("可解析且含全部 records 字段；两次导出字节稳定（§11.3 确定性）", async () => {
+    const m = mod("m", { provides: ["m.x"], activate(ctx) { ctx.provide("m.x", {}); } });
+    const g = await loadModules({
+      defs: [{ def: m, source: "builtin" }], cli: {}, sections: new Map(),
+      session: new InMemorySessionStore(), sink: sink(), spillDir: "/tmp/s",
+    });
+    const j1 = g.catalogJson();
+    const j2 = g.catalogJson();
+    expect(j1).toBe(j2); // 字节稳定
+    const parsed = JSON.parse(j1) as Array<Record<string, unknown>>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ name: "m", source: "builtin", state: "active", generation: 1, provides: ["m.x"] });
+    await g.dispose();
+  });
+});

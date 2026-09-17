@@ -21,6 +21,7 @@ export interface ModuleGraph {
   promptSections(): string;
   audit(): AuditEntry[];
   catalog(): string;
+  catalogJson(): string;   // 机器可读导出（§6.5/T19）
   defs(): import("./reload.ts").GraphDef[];   // 旧图 diff 输入（reload，§5.5）
   preservable(): Map<string, import("./activate.ts").PreservedInstance>;  // 旧图 Unchanged 沿用数据源（reload）
   dispose(): Promise<void>;
@@ -158,6 +159,24 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
           contributes: act.contributes.get(r.name) ?? [],
           ...(r.failReason !== undefined ? { failReason: r.failReason } : {}),
         }));
+    },
+
+    catalogJson(): string {
+      // 稳定键序（确定性纪律 §11.3）：records 按名排序，字段固定序
+      const data = [...records]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((r) => ({
+          name: r.name,
+          version: r.def.version,
+          source: r.source,
+          state: r.state,
+          ...(r.failReason !== undefined ? { failReason: r.failReason } : {}),
+          generation: r.generation,
+          provides: r.def.provides ?? [],
+          dependsOn: (r.def.dependsOn ?? []).map((d) => (typeof d === "string" ? d : `${d.capability}?`)),
+          contributes: act.contributes.get(r.name) ?? [],
+        }));
+      return JSON.stringify(data, null, 2);
     },
 
     catalog() {

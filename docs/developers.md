@@ -1,0 +1,60 @@
+# Orosus 模块开发者指南
+
+> `@orosus/contracts` 是模块开发者的唯一编程面——本文是人类版指南；`catalogJson()` 是运行时机器可读版。
+
+## 最小完整模块（可复制）
+
+```ts
+import { defineModule } from "@orosus/contracts/module";
+import { defineTool } from "@orosus/contracts/tool";
+import { z } from "zod";
+
+export default defineModule({
+  name: "my-module",                    // kebab-case，全局唯一（规则 4）
+  version: "0.1.0",
+  description: "一句话说明",
+  api: 1,                               // 核心兼容窗口：支持 N 与 N-1（§8.5）
+  provides: ["my-module.x"],            // 能力声明（规则 1：公共短名只能在 contracts 登记，否则带模块名前缀）
+  uses: ["fs.read"],                    // 高权限自声明（L0 展示/L1 强制/L2 RPC 面）
+  activate(ctx) {
+    ctx.provide("my-module.x", { hello: () => "world" });
+    ctx.contribute.tool(defineTool({
+      name: "my-module__hello",         // <module>__<tool> 强制前缀（规则 4）
+      description: "问好",
+      parameters: z.object({}),
+      resolveExecution: async () => ({
+        accesses: [{ kind: "fs.read", path: "." }],   // fail-closed 缺省 = kind:"all"（§6.3）
+        approvalRule: "my-module__hello",
+        execute: async () => ({ output: "world", isError: false }),
+      }),
+    }));
+    return { dispose() { /* 注册之外的清理（句柄/子进程）——规则 3 */ } };
+  },
+});
+```
+
+## 何时被谁调用（§11.10 五要素之"调用时机"）
+
+- `activate`：启动/reload 的拓扑序中调用一次；此间 `ctx.services.get` 保证硬依赖已入册（§5.2 规则 2）。
+- `dispose`：模块被停用（close/reload 换代/回滚）时调用——先于各注册的 disposer（§5.2 规则 3）。
+- 工具两阶段：`resolveExecution`（声明，无副作用）→ waterfall → `execute`（唯一副作用点）；错误一律带内 `isError`，不许 reject（§6.3）。
+- `configRead()`：运行期读自身配置（overlay 复合后）；activate 期只保证纯分层值（§6.6）。
+
+## 能力契约目录
+
+| 能力 key | 契约 | 提供者示例 |
+|---|---|---|
+| `fs` | `@orosus/contracts/fs` 的 `Fs`（read/write） | tool-fs |
+| `provider:<name>` | `@orosus/contracts/provider` 的 `ProviderAdapter`（保留槽，经 `provide` 注册） | provider-anthropic 等 |
+
+## 贡献点与拦截点
+
+- 贡献点：`tool` / `command`（`/<module>__<cmd>`）/ `promptSection`（order ≤ -100 为核心保留区）/ `configOverlay`（读侧，D2）
+- 拦截点（§6.5 白名单 8 个）：`agent/pre-step`（emit）、`agent/transform-context`（reduce）、`agent/steering`、`agent/follow-up`（collect）、`agent/should-stop`（布尔 OR）、`tool/pre-execute`（waterfall，审批在此）、`tool/post-execute`（emit）、`ui/command`（emit）
+- 运行时清单：`harness.graph().catalogJson()`（或 CLI `--dump-modules`）
+
+## 错误行为
+
+- StreamFn 不许 reject——错误编码为 `finish{kind:"error"}`（§6.4）
+- 工具执行不许 reject——带内 `{ output, isError: true }`（§6.3）
+- 激活抛错 → 模块降级不阻断（§10）；`required = true` 的模块失败才阻断启动
