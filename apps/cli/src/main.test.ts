@@ -161,3 +161,51 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     await h.close();
   });
 });
+
+describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
+  it("⑧ --resume/--fork flag 解析（含 <id>:<entryId> 冒号语法）", async () => {
+    const { parseArgs } = await import("./args.ts");
+    expect(parseArgs(["--resume", "s_123"])).toMatchObject({ resume: { sessionId: "s_123" } });
+    expect(parseArgs(["--fork", "s_1:e_9"])).toMatchObject({ fork: { parentSessionId: "s_1", atEntryId: "e_9" } });
+    expect(parseArgs(["--fork", "s_1"])).toMatchObject({ fork: { parentSessionId: "s_1" } });
+    expect(() => parseArgs(["--fork"])).toThrow(/缺值/);
+  });
+
+  it("⑨ sessionCommand/harnessOptionsFor：/new 与 /fork 的会话切换指令", async () => {
+    const { sessionCommand, harnessOptionsFor } = await import("./sessions.ts");
+    expect(sessionCommand("/new", { sessionId: "s1" })).toEqual({ kind: "new" });
+    expect(sessionCommand("/fork", { sessionId: "s1", lastEventId: "e7" })).toEqual({ kind: "fork", parentSessionId: "s1", atEntryId: "e7" });
+    expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "none" });
+    expect(sessionCommand("普通输入", { sessionId: "s1" })).toEqual({ kind: "none" });
+    expect(harnessOptionsFor({ kind: "new" })).toEqual({});
+    expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s1", atEntryId: "e7" })).toEqual({ fork: { parentSessionId: "s1", atEntryId: "e7" } });
+  });
+
+  it("⑩ /sessions：列出会话目录最近会话（mtime 降序、jsonl/sqlite 双后缀、空目录友好）", async () => {
+    const { listSessions, formatSessions } = await import("./sessions.ts");
+    const d = tmp("sess");
+    const empty = join(d, "none");
+    expect(listSessions(empty)).toEqual([]);
+    expect(formatSessions(empty)).toContain("暂无会话");
+    const sessDir = join(d, "sessions");
+    mkdirSync(sessDir, { recursive: true });
+    writeFileSync(join(sessDir, "s_old.jsonl"), "{}", "utf8");
+    await new Promise((r) => setTimeout(r, 30));
+    writeFileSync(join(sessDir, "s_new.jsonl"), "{}", "utf8");
+    writeFileSync(join(sessDir, "s_db.sqlite"), "{}", "utf8");
+    const ids = listSessions(sessDir).map((x) => x.id);
+    expect(ids[0]).toBe("s_db"); // 最新写入在前
+    expect(new Set(ids)).toEqual(new Set(["s_old", "s_new", "s_db"]));
+    expect(formatSessions(sessDir)).toContain("s_new");
+  });
+
+  it("⑪ /new 语义端到端：新 harness 即新 session id（旧会话关闭幂等）", async () => {
+    const h1 = await isolated();
+    const id1 = h1.sessionId;
+    await h1.close();
+    await h1.close(); // 幂等
+    const h2 = await isolated();
+    expect(h2.sessionId).not.toBe(id1);
+    await h2.close();
+  });
+});

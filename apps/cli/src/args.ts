@@ -5,6 +5,8 @@ export interface CliArgs {
   noModules: boolean;
   dumpModules: boolean;
   model?: string;
+  resume?: { sessionId: string };                         // --resume <id>（D41/T6）
+  fork?: { parentSessionId: string; atEntryId?: string }; // --fork <id>[:<entryId>]（D41/T6）
 }
 
 const USAGE = `用法: orosus [--model <provider/model>] [--enable-module <name>]...
@@ -25,6 +27,19 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--model": args.model = takeValue(i, "--model"); i++; break;
       case "--no-modules": args.noModules = true; break;
       case "--dump-modules": args.dumpModules = true; break;
+      case "--resume": {
+        const v = takeValue(i, "--resume"); i++;
+        args.resume = { sessionId: v };
+        break;
+      }
+      case "--fork": {
+        const v = takeValue(i, "--fork"); i++;
+        const [parentSessionId, atEntryId] = v.split(":", 2);
+        if (parentSessionId === undefined || parentSessionId === "") throw new Error(`--fork 缺会话 id
+${USAGE}`);
+        args.fork = { parentSessionId, ...(atEntryId !== undefined && atEntryId !== "" ? { atEntryId } : {}) };
+        break;
+      }
       default: throw new Error(`未知参数 ${argv[i]}\n${USAGE}`);
     }
   }

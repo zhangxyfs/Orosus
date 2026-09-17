@@ -3,8 +3,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHarness, discoverModules } from "@orosus/core";
 import type { Chunk } from "@orosus/contracts/provider";
+import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi } from "./menu.ts";
+import { formatSessions, harnessOptionsFor, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
@@ -39,6 +41,7 @@ import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 }
 
 const args = parseArgs(process.argv.slice(2));
+const sessionsDir = join(homedir(), ".orosus", "sessions");
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
@@ -93,20 +96,27 @@ const commandUi = createReadlineUi({
   },
 });
 
-const h = await createHarness({
-  builtinModules: BUILTIN_MODULES,
-  commandUi,
-  config: {
-    enableModules: args.enable,
-    disableModules: args.disable,
-    noModules: args.noModules,
-    module: args.module,
-    ...(args.model !== undefined ? { cliOverrides: { model: args.model } } : {}),
-  },
-});
+const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string } } = {}) =>
+  createHarness({
+    builtinModules: BUILTIN_MODULES,
+    commandUi,
+    sessionsDir,
+    ...(args.resume !== undefined ? { resume: args.resume } : {}),
+    ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
+    config: {
+      enableModules: args.enable,
+      disableModules: args.disable,
+      noModules: args.noModules,
+      module: args.module,
+      ...(args.model !== undefined ? { cliOverrides: { model: args.model } } : {}),
+    },
+  });
+
+let h = await createSession();
 
 // 启动审计横幅（§4.2 第 7 步 / §10"降级必须吵闹"三处留痕的 stdout 出口）——--dump-modules 非交互模式除外（v15）
-if (!args.dumpModules) {
+function banner(h: Harness): void {
+  if (args.dumpModules) return;
   const audit = h.graph().audit();
   const failed = audit.filter((a) => a.state === "failed");
   if (failed.length > 0) {
@@ -123,43 +133,68 @@ if (args.dumpModules) {
   process.exit(0);
 }
 
-// 事件渲染：会话日志的实时投影（append 即转发，§6.7）
-const render = (async () => {
-  for await (const e of h.events()) {
-    if (e.type === "assistant/chunk") {
-      const c = e.chunk as Chunk;
-      if (c.type === "text/delta") process.stdout.write(c.text);
-      else if (c.type === "finish" && c.kind === "error") process.stdout.write(`\n[模型错误] ${c.errorMessage ?? ""}\n`);
-    } else if (e.type === "tool/call") {
-      process.stdout.write(`\n[tool] ${String(e.name)} ${JSON.stringify(e.args)}\n`);
-    } else if (e.type === "tool/result") {
-      process.stdout.write(`[tool ${e.isError === true ? "错误" : "完成"}]\n`);
-    } else if (e.type === "turn/end") {
-      process.stdout.write("\n");
+// 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
+let lastEventId: string | undefined;
+function attachRender(h: Harness): void {
+  void (async () => {
+    for await (const e of h.events()) {
+      lastEventId = e.id;
+      if (e.type === "assistant/chunk") {
+        const c = e.chunk as Chunk;
+        if (c.type === "text/delta") process.stdout.write(c.text);
+        else if (c.type === "finish" && c.kind === "error") process.stdout.write(`
+[模型错误] ${c.errorMessage ?? ""}
+`);
+      } else if (e.type === "tool/call") {
+        process.stdout.write(`
+[tool] ${String(e.name)} ${JSON.stringify(e.args)}
+`);
+      } else if (e.type === "tool/result") {
+        process.stdout.write(`[tool ${e.isError === true ? "错误" : "完成"}]
+`);
+      } else if (e.type === "turn/end") {
+        process.stdout.write("\n");
+      }
     }
-  }
-})();
+  })();
+}
 
-process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出
+process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
 try {
-  for (;;) {
-    process.stdout.write("> ");
-    const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
-    if (line === null) break;
-    const text = line.trim();
-    if (text === "/quit") break;
-    if (text === "") continue;
-    try {
-      // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-      const out = await h.prompt(text);
-      if (out !== undefined) console.log(out);
-    } catch (err) {
-      console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+  sessionLoop: for (;;) {
+    banner(h);
+    attachRender(h);
+    for (;;) {
+      process.stdout.write("> ");
+      const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
+      if (line === null) break sessionLoop;
+      const text = line.trim();
+      if (text === "/quit") break sessionLoop;
+      if (text === "") continue;
+      // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions，D41/T6）
+      if (text === "/sessions") {
+        console.log(formatSessions(sessionsDir));
+        continue;
+      }
+      const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
+      if (directive.kind === "new" || directive.kind === "fork") {
+        const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
+        await h.close();
+        h = await createSession(harnessOptionsFor(directive));
+        console.log(from !== undefined ? `[已从 ${from} 分叉——新会话 ${h.sessionId}]` : `[新会话 ${h.sessionId}]`);
+        continue sessionLoop; // 重挂横幅与渲染（新事件流）
+      }
+      try {
+        // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
+        const out = await h.prompt(text);
+        if (out !== undefined) console.log(out);
+      } catch (err) {
+        console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 } finally {
   rl.close();
   await h.close();
-  await render;
 }

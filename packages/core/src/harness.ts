@@ -4,6 +4,7 @@ import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/mod
 import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
+import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
@@ -20,10 +21,13 @@ export interface HarnessOptions {
   builtinModules?: ModuleDefinition[];
   cwd?: string;
   store?: SessionStore;
+  sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
   diagDir?: string;
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
+  resume?: { sessionId: string };           // 打开既有会话继续（D41/T6）：已有事件非空则不落重复 header
+  fork?: { parentSessionId: string; atEntryId?: string }; // 复合存储新会话（D41/T6）：header 带 parentSession + 首事件 session/fork
   discovery?: {                            // 目录扫描入口（§8.3/T11-T12）：缺省 ~/.orosus/modules 与 <cwd>/.orosus/modules
     userDir: string;
     projectDir: string;
@@ -44,6 +48,8 @@ export interface HarnessOptions {
 export interface Harness {
   prompt(text: string): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined
   cancel(): void;
+  /** 当前会话 id（/fork 等宿主侧会话操作的消费面，D41/T6）。 */
+  readonly sessionId: string;
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
   events(): AsyncIterable<SessionEvent>;
   graph(): ModuleGraph;
@@ -99,7 +105,22 @@ function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): S
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const home = join(homedir(), ".orosus");
   const sink = createDiagSink({ dir: options.diagDir ?? join(home, "logs") });
-  const baseStore = options.store ?? new JsonlSessionStore({ dir: join(home, "sessions") });
+  // 存储构造分支（D41/T6）：显式 store > resume（既有会话继续）> fork（复合存储新会话）> 全新
+  const sessionsDir = options.sessionsDir ?? join(home, "sessions");
+  let baseStore: SessionStore;
+  if (options.store !== undefined) {
+    baseStore = options.store;
+  } else if (options.resume !== undefined) {
+    baseStore = new JsonlSessionStore({ dir: sessionsDir, sessionId: options.resume.sessionId });
+  } else if (options.fork !== undefined) {
+    baseStore = new ForkedSessionStore({
+      parent: new JsonlSessionStore({ dir: sessionsDir, sessionId: options.fork.parentSessionId }),
+      ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
+      own: new JsonlSessionStore({ dir: sessionsDir }),
+    });
+  } else {
+    baseStore = new JsonlSessionStore({ dir: sessionsDir });
+  }
   const channel = new Channel<SessionEvent>();
   const store = forwardingStore(baseStore, channel);
 
@@ -151,7 +172,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(options.config?.noModules !== undefined ? { noModules: options.config.noModules } : {}),
     ...(options.config?.module !== undefined ? { module: options.config.module } : {}),
   };
-  const spillDirUsed = options.spillDir ?? join(home, "sessions", store.sessionId, "spill");
+  const spillDirUsed = options.spillDir ?? join(sessionsDir, store.sessionId, "spill");
   const llmHolder: { impl?: LlmPort } = {}; // D39/T4：loadModules 后装配——Unchanged 模块的旧闭包经同一 holder 读到新解析
   let graph = await loadModules({
     defs,
@@ -165,15 +186,32 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
-  await store.append(LOG_TYPES.sessionHeader, {
-    format: 1,
-    cwd: options.cwd ?? process.cwd(),
-    parentSession: null,
-    moduleGraph: {
-      active: graph.records.filter((r) => r.state === "active").map((r) => r.name),
-      degraded: graph.records.filter((r) => r.state === "failed").map((r) => `${r.name}: ${r.failReason}`),
-    },
-  });
+  // header 分支（D41/T6）：resume 的既有文件已带 header（不重复落）；fork 落新 header（parentSession）+ session/fork 首事件
+  const existingEvents = await store.all();
+  if (options.resume === undefined || existingEvents.length === 0) {
+    let sourceEntryId: string | undefined;
+    if (options.fork !== undefined) {
+      sourceEntryId = options.fork.atEntryId ?? existingEvents[existingEvents.length - 1]?.id;
+    }
+    await store.append(LOG_TYPES.sessionHeader, {
+      format: 1,
+      cwd: options.cwd ?? process.cwd(),
+      parentSession: options.fork?.parentSessionId ?? null,
+      moduleGraph: {
+        active: graph.records.filter((r) => r.state === "active").map((r) => r.name),
+        degraded: graph.records.filter((r) => r.state === "failed").map((r) => `${r.name}: ${r.failReason}`),
+      },
+    });
+    if (options.fork !== undefined) {
+      await store.append(LOG_TYPES.sessionFork, { sourceEntryId: sourceEntryId ?? null, parentSession: options.fork.parentSessionId });
+    }
+  }
+  // 读侧自修复 pass（§6.1/D41）：resume/fork 打开既有历史时做链校验（根分段——复合投影零误报），问题逐条进诊断
+  if (options.resume !== undefined || options.fork !== undefined) {
+    for (const issue of verifyChain(await store.all())) {
+      createLogger(sink, "session").warn("session.chain.issue", issue);
+    }
+  }
 
   let currentTurn: { controller: AbortController; done: Promise<void> } | null = null;
   let closed = false;
@@ -289,6 +327,8 @@ session: ${store.sessionId}
   };
 
   const harnessImpl: Harness = {
+    sessionId: store.sessionId,
+
     async prompt(text) {
       if (closed) throw new Error("harness 已关闭");
       if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");

@@ -10,12 +10,13 @@ describe("deriveMessages（model-visible ⟺ logged 的投影）", () => {
     await s.append("turn/start");
     await s.append("request/header", { model: "m" });
     await s.append("assistant/message", { content: [{ kind: "text", text: "你好！" }] });
+    await s.append("tool/call", { callId: "c1", name: "tool-fs__read", args: { path: "a.ts" } });
     await s.append("tool/result", { callId: "c1", output: "文件内容", isError: false });
     await s.append("turn/end", { kind: "completed" });
     const msgs = deriveMessages(await s.all());
     expect(msgs).toEqual([
       { role: "user", content: [{ kind: "text", text: "你好" }] },
-      { role: "assistant", content: [{ kind: "text", text: "你好！" }] },
+      { role: "assistant", content: [{ kind: "text", text: "你好！" }], toolCalls: [{ callId: "c1", name: "tool-fs__read", args: { path: "a.ts" } }] },
       { role: "toolResult", callId: "c1", output: "文件内容", isError: false },
     ]);
   });

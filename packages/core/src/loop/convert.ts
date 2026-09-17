@@ -7,6 +7,7 @@ import type { SessionEvent } from "../session/types.ts";
  */
 export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
   let out: ModelMessage[] = [];
+  const seenCalls = new Set<string>();
   for (const e of events) {
     switch (e.type) {
       case "user/message":
@@ -21,6 +22,7 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         out.push({ role: "assistant", content: (e.content ?? []) as ContentPart[] });
         break;
       case "tool/call": {
+        seenCalls.add(String(e.callId));
         const last = out[out.length - 1];
         if (last?.role === "assistant") {
           last.toolCalls = [
@@ -40,6 +42,8 @@ ${summary}` }] }, ...out.slice(keepFrom)];
         break;
       }
       case "tool/result":
+        // 孤儿防御（M3/D41）：fork 截断/损坏片段可能产生无对应 tool/call 的 result——跳过，不进请求
+        if (!seenCalls.has(String(e.callId))) break;
         out.push({
           role: "toolResult",
           callId: String(e.callId),

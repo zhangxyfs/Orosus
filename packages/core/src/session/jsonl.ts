@@ -32,7 +32,27 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
   const lastTurnStart = events.map((e, i) => (e.type === "turn/start" ? i : -1)).filter((i) => i >= 0).pop();
   const hasTurnEndAfter = lastTurnStart !== undefined && events.slice(lastTurnStart).some((e) => e.type === "turn/end");
   if (lastTurnStart !== undefined && !hasTurnEndAfter) {
-    const last = events[events.length - 1]!;
+    // 未闭合 turn：先补 turn 内缺 tool/result 的 call（M3/D41——日志里不许出现无结果的 tool/call），
+    // 再补 turn/end{interrupted}
+    const inTurn = events.slice(lastTurnStart);
+    const called = new Set(inTurn.filter((e) => e.type === "tool/call").map((e) => String(e.callId)));
+    const resulted = new Set(inTurn.filter((e) => e.type === "tool/result").map((e) => String(e.callId)));
+    let last = events[events.length - 1]!;
+    for (const callId of called) {
+      if (resulted.has(callId)) continue;
+      last = {
+        v: 1,
+        id: newId("e"),
+        parentId: last.id,
+        seq: last.seq + 1,
+        ts: new Date().toISOString(),
+        type: "tool/result",
+        callId,
+        output: "[已中止：工具未执行]",
+        isError: true,
+      };
+      events.push(last);
+    }
     events.push({
       v: 1,
       id: newId("e"),
