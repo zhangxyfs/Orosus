@@ -1,0 +1,13 @@
+{
+  "name": "@orosus/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "orosus": { "module": true },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@orosus/contracts": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^4.0.0"
+  }
+}
