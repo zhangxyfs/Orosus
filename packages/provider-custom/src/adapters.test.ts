@@ -6,17 +6,22 @@ type Ctx = Parameters<typeof def.activate>[0];
 
 function fakeCtx(config: unknown) {
   const provides: Array<[string, unknown]> = [];
+  const commands: string[] = [];
   const ctx = {
     config,
     configRead: () => Promise.resolve(undefined),
     log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} },
     services: { get: () => Promise.reject(new Error("no")), getOptional: () => Promise.resolve(undefined) },
     provide: (k: string, impl: unknown) => void provides.push([k, impl]),
-    contribute: { tool: () => () => {}, command: () => () => {}, promptSection: () => () => {} },
+    contribute: {
+      tool: () => () => {},
+      command: (name: string) => { commands.push(name); return () => {}; },
+      promptSection: () => () => {},
+    },
     session: { append: () => {} },
     events: { on: () => () => {}, emit: () => Promise.resolve() },
   } as unknown as Ctx;
-  return { ctx, provides };
+  return { ctx, provides, commands };
 }
 
 const entry = { type: "openai" as const, baseUrl: "http://a/v1" };
@@ -49,6 +54,18 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     const { ctx, provides } = fakeCtx({ providers: {} });
     await def.activate(ctx);
     expect(provides).toHaveLength(0);
+  });
+
+  it("M2 补账：schema 缺省路径——section 整体缺失（全新安装）providers 默认空表", () => {
+    const parsed = configSchema.parse({}); // 不传 providers 键，走 default 分支
+    expect(parsed.providers).toEqual({});
+  });
+
+  it("M2 补账：activate 注册 provider-custom__provider 命令（/provider 别名的真实目标）", async () => {
+    const { ctx, provides, commands } = fakeCtx({ providers: {} });
+    await def.activate(ctx);
+    expect(provides).toHaveLength(0);
+    expect(commands).toEqual(["provider-custom__provider"]); // T7 计划明文要求、原实现漏做
   });
 
   it("槽名 glm 与内置撞名时 provide 照常调用（冲突降级归 kernel 既有机制）", async () => {

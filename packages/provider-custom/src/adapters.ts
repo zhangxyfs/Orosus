@@ -13,7 +13,7 @@ export const configSchema = z.object({
       apiKey: z.string().optional(),         // $ENV: 占位；省略不发鉴权头（本地/内网端点）
       defaultModel: z.string().optional(),   // D32：有值则 model = "<name>" 裸名可用
     }),
-  ),
+  ).default({}), // 空表合法（模块文档 §2）——section 整体缺失（全新安装）也激活零槽，/provider 配置入口在任何配置状态下可用
 });
 
 export type CustomProviderEntry = z.infer<typeof configSchema>["providers"][string];
