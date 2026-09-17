@@ -212,3 +212,21 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 });
+
+describe("ctx.ui 注入链（M3 T2，D35 修订）", () => {
+  it("宿主 commandUi 经 harness→kernel→activate 到达 ctx.ui 为同一实例；未注入时为拒绝式缺省", async () => {
+    const injected: CommandUi = { ask: async () => "a", choose: async (_t, i) => i[0]!, confirm: async () => true };
+    const seen: CommandUi[] = [];
+    const probe = fakeModule("ui-probe", {
+      activate(ctx) {
+        seen.push((ctx as unknown as { ui: CommandUi }).ui);
+      },
+    });
+    const h1 = await makeHarness({ commandUi: injected, modules: [probe, fakeProviderModule("fake", script)] });
+    expect(seen[0]).toBe(injected); // 同一实例（引用相等）
+    await h1.close();
+    const h2 = await makeHarness({ modules: [fakeModule("ui-probe2", { activate(ctx) { seen.push((ctx as unknown as { ui: CommandUi }).ui); } }), fakeProviderModule("fake", script)] });
+    await expect(seen[1]!.ask("x")).rejects.toThrow(/无交互环境/); // 缺省拒绝式（fail-closed）
+    await h2.close();
+  });
+});

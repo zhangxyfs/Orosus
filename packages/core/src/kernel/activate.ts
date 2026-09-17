@@ -1,4 +1,4 @@
-import type { CommandHandler, CapabilityKey, Disposer, Listener, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
+import type { CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -11,6 +11,13 @@ import type { ModuleRecord } from "./types.ts";
 
 export const PROMPT_SECTION_LIMIT = 32768;  // 单段 32KB（§6.5）
 export const PROMPT_TOTAL_LIMIT = 65536;    // 全局 64KB
+
+/** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */
+const rejectingUi = (): CommandUi => ({
+  ask: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
+  choose: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
+  confirm: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
+});
 
 export interface ServiceResolver {
   get(key: string): Promise<unknown>;
@@ -28,6 +35,7 @@ export interface ActivateInput {
   sink: DiagSink;
   bus: EventBus;
   tools: ToolRegistry;
+  commandUi?: CommandUi;                        // 宿主交互 UI（D35 M3/T2：ctx.ui——审批询问等 waterfall 侧消费）
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
 }
@@ -182,6 +190,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         return value;
       },
       log: mlog,
+      ui: input.commandUi ?? rejectingUi(),
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
           if (staledModules.has(def.name)) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);

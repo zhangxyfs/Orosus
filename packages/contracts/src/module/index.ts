@@ -49,6 +49,9 @@ export interface ModuleContext<C = unknown> {
   /** 运行期读取自身配置（无 section 参数——只能读自己的 section）。 */
   configRead(): Promise<C>;
   readonly log: Logger;
+  /** 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。
+   *  无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
+  readonly ui: CommandUi;
   readonly services: {
     /** 硬依赖能力：拓扑序保证 activate 期间必有值。 */
     get<T>(key: CapabilityKey<T>): Promise<T>;

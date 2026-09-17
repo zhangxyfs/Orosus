@@ -106,6 +106,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const note = hardeningNote();
   if (note) createLogger(sink, "kernel").warn("kernel.session.hardening", note);
 
+  // 交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）。M3/T2 起经 ctx.ui 同时注入 waterfall 侧（审批询问）
+  const commandUi: CommandUi = options.commandUi ?? {
+    ask: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+    choose: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+    confirm: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+  };
+
   const secretsLoad = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
   const secrets = secretsLoad.vars; // reload 复用（同一合并语义）
   if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
@@ -152,6 +159,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     session: store,
     sink,
     spillDir: spillDirUsed,
+    commandUi,
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
@@ -168,12 +176,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   let currentTurn: { controller: AbortController; done: Promise<void> } | null = null;
   let closed = false;
   let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
-
-  const commandUi: CommandUi = options.commandUi ?? {
-    ask: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
-    choose: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
-    confirm: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
-  };
 
   // 内建别名表（D38）：短名 → 模块命令名；目标不存在提示安装对应模块
   const COMMAND_ALIASES: Record<string, string> = {
@@ -372,6 +374,7 @@ session: ${store.sessionId}
           session: store,
           sink,
           spillDir: spillDirUsed,
+          commandUi,
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
           preserved,
           generations,

@@ -23,6 +23,7 @@ export type PlannedTool =
       execution: ToolExecution;
       accesses: Access[];
       approvalRule: string;
+      matchesRule?: (ruleArgs: string) => boolean;
     }
   | { ok: false; callId: string; result: ToolResult };
 
@@ -36,7 +37,7 @@ export interface ToolRegistry {
   specs(): ToolSpec[];
   /** 阶段一（D40）：声明产物——调度分组与审批预判的输入。 */
   plan(call: { id: string; name: string; args: unknown }): Promise<PlannedTool>;
-  /** 阶段二（D40）：waterfall（审批挂点）→ 执行 → 归一。matchesRule 进 payload 归 T2。 */
+  /** 阶段二（D40）：waterfall（payload 含 matchesRule 函数引用，审批带参规则判定）→ 执行 → 归一。 */
   execute(planned: PlannedTool, ctx: { signal: AbortSignal }): Promise<ToolResult>;
   /** 合成口（M1 语义不变）：单发调用面。 */
   run(call: { id: string; name: string; args: unknown }, ctx: { signal: AbortSignal }): Promise<ToolResult>;
@@ -135,6 +136,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       return {
         ok: true, callId: call.id, name: call.name, owner, args: call.args, log: tlog,
         execution, accesses, approvalRule,
+        ...(execution.matchesRule !== undefined ? { matchesRule: execution.matchesRule } : {}),
       };
     },
 
@@ -143,6 +145,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       const veto = await opts.bus.waterfall(CORE_POINTS.toolPreExecute, {
         callId: planned.callId, name: planned.name, args: planned.args, accesses: planned.accesses,
         approvalRule: planned.approvalRule,
+        ...(planned.matchesRule !== undefined ? { matchesRule: planned.matchesRule } : {}), // 审批带参规则判定（T2/D40）
       });
       if (veto) {
         return { output: veto.reason, isError: true, denied: true };
