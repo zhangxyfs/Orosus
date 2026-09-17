@@ -6,7 +6,7 @@ import type { SessionEvent } from "../session/types.ts";
  * 核心固定实现，不可被模块替换（§6.2）；契约：不许抛异常——未知/不可投影类型跳过。
  */
 export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
-  const out: ModelMessage[] = [];
+  let out: ModelMessage[] = [];
   for (const e of events) {
     switch (e.type) {
       case "user/message":
@@ -28,6 +28,15 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
             { callId: String(e.callId), name: String(e.name), args: e.args },
           ];
         }
+        break;
+      }
+      case "turn/compaction": {
+        // 投影应用（§6.1/M3）：前缀丢弃换摘要——deriveMessages 是事件的纯函数，keepFrom 计数锚定与 entry 锚定等价；
+        // 重放确定性：同一事件序列两次投影字节一致
+        const summary = String(e.summary ?? "");
+        const keepFrom = Number(e.keepFrom ?? 0);
+        out = [{ role: "user", content: [{ kind: "text", text: `[历史摘要]
+${summary}` }] }, ...out.slice(keepFrom)];
         break;
       }
       case "tool/result":

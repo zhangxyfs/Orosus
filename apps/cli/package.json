@@ -23,7 +23,8 @@
     "@orosus/provider-openai": "workspace:*",
     "@orosus/mcp": "workspace:*",
     "@orosus/skill": "workspace:*",
-    "@orosus/approval": "workspace:*"
+    "@orosus/approval": "workspace:*",
+    "@orosus/compaction": "workspace:*"
   },
   "devDependencies": {
     "@orosus/contracts": "workspace:*",

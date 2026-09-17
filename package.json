@@ -32,6 +32,7 @@
     "@orosus/provider-kimi": "workspace:*",
     "@orosus/provider-deepseek": "workspace:*",
     "@orosus/provider-openai": "workspace:*",
-    "@orosus/approval": "workspace:*"
+    "@orosus/approval": "workspace:*",
+    "@orosus/compaction": "workspace:*"
   }
 }

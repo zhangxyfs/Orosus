@@ -34,9 +34,9 @@ describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生�
   it("builtinModules 十模块进图：M2 产物全部可达；未配置密钥的适配器诚实降级", async () => {
     const h = await isolated();
     const audit = h.graph().audit();
-    expect(audit).toHaveLength(BUILTIN_MODULES.length); // T3 起 11
+    expect(audit).toHaveLength(BUILTIN_MODULES.length); // T5 起 12
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "mcp", "provider-custom", "provider-openai", "skill", "tool-fs", "tool-shell"], // T3 起 approval 入图
+      ["approval", "compaction", "mcp", "provider-custom", "provider-openai", "skill", "tool-fs", "tool-shell"], // T3 approval / T5 compaction 入图
     );
     const failed = audit.filter((a) => a.state === "failed");
     expect(failed.map((a) => a.name).sort()).toEqual(["provider-anthropic", "provider-deepseek", "provider-glm", "provider-kimi"]);
