@@ -1,15 +1,56 @@
 import { createInterface } from "node:readline/promises";
 import { createHarness } from "@orosus/core";
 import type { Chunk } from "@orosus/contracts/provider";
-import toolFs from "@orosus/tool-fs";
-import toolShell from "@orosus/tool-shell";
-import anthropic from "@orosus/provider-anthropic";
+import { BUILTIN_MODULES } from "./builtins.ts";
+import { createReadlineUi } from "./menu.ts";
 import { parseArgs } from "./args.ts";
 
 const args = parseArgs(process.argv.slice(2));
 
+// rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
+// M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
+const rl = createInterface({ input: process.stdin, output: process.stdout });
+// 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
+// 且 EOF 落在 await 间隙时已关闭接口上的 question 永不 settle（退出码 13 挂起）——REPL 一律走队列兜底。
+const pendingLines: string[] = [];
+let lineWake: (() => void) | undefined;
+let stdinClosed = false;
+let askActive = false; // 菜单询问期间的行归询问消费（REPL 不抢答）
+rl.on("line", (l) => {
+  if (askActive) return;
+  pendingLines.push(l);
+  const w = lineWake;
+  lineWake = undefined;
+  w?.();
+});
+rl.once("close", () => {
+  stdinClosed = true;
+  const w = lineWake;
+  lineWake = undefined;
+  w?.();
+});
+const nextLine = async (): Promise<string | null> => {
+  for (;;) {
+    const l = pendingLines.shift();
+    if (l !== undefined) return l;
+    if (stdinClosed) return null;
+    await new Promise<void>((r) => { lineWake = r; });
+  }
+};
+const commandUi = createReadlineUi({
+  question: async (q) => {
+    askActive = true;
+    try {
+      return await rl.question(q);
+    } finally {
+      askActive = false;
+    }
+  },
+});
+
 const h = await createHarness({
-  builtinModules: [toolFs, toolShell, anthropic],
+  builtinModules: BUILTIN_MODULES,
+  commandUi,
   config: {
     enableModules: args.enable,
     disableModules: args.disable,
@@ -56,17 +97,18 @@ const render = (async () => {
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
 try {
   for (;;) {
-    // stdin EOF（管道耗尽 / Ctrl-D）时 question 对已关闭接口 reject → 视作退出
-    const line = await rl.question("> ").catch(() => null);
+    process.stdout.write("> ");
+    const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
     if (line === null) break;
     const text = line.trim();
     if (text === "/quit") break;
     if (text === "") continue;
     try {
-      await h.prompt(text);
+      // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
+      const out = await h.prompt(text);
+      if (out !== undefined) console.log(out);
     } catch (err) {
       console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
     }

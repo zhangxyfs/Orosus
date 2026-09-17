@@ -62,12 +62,30 @@ importers:
       '@orosus/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@orosus/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@orosus/provider-anthropic':
         specifier: workspace:*
         version: link:../../packages/provider-anthropic
       '@orosus/provider-custom':
         specifier: workspace:*
         version: link:../../packages/provider-custom
+      '@orosus/provider-deepseek':
+        specifier: workspace:*
+        version: link:../../packages/provider-deepseek
+      '@orosus/provider-glm':
+        specifier: workspace:*
+        version: link:../../packages/provider-glm
+      '@orosus/provider-kimi':
+        specifier: workspace:*
+        version: link:../../packages/provider-kimi
+      '@orosus/provider-openai':
+        specifier: workspace:*
+        version: link:../../packages/provider-openai
+      '@orosus/skill':
+        specifier: workspace:*
+        version: link:../../packages/skill
       '@orosus/tool-fs':
         specifier: workspace:*
         version: link:../../packages/tool-fs
@@ -81,6 +99,9 @@ importers:
       '@orosus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
 
   packages/contracts:
     dependencies:

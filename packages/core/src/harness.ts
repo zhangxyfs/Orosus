@@ -195,7 +195,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       return `model 已切换：${next}（下个 turn 生效，request/header 将落新条目）`;
     }],
     ["/help", async () => {
-      const lines = ["内建命令：", "  /model /help /status /usage"];
+      const lines = ["内建命令：", "  /model /help /status /usage /reload"]; // M2 补账：/reload 是内建表第五成员，原清单漏列
       lines.push("别名命令：");
       for (const [short, full] of Object.entries(COMMAND_ALIASES)) {
         const present = graph.commands.some((c) => c.name === full);
@@ -211,7 +211,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const active = audit.filter((a) => a.state === "active").length;
       const failed = audit.filter((a) => a.state === "failed").length;
       const discovered = audit.filter((a) => a.state === "discovered").length;
-      const modelNow = modelOverride ?? String(config.core.model);
+      // model 未配置时显示「（未配置）」而非字面量 undefined（M2 补账：走查发现）
+      const modelNow = modelOverride ?? (typeof config.core.model === "string" && config.core.model !== "" ? config.core.model : "（未配置）");
       return `model: ${modelNow}${modelOverride !== undefined ? "（运行期覆盖）" : ""}
 session: ${store.sessionId}
 模块图: active ${active} / failed ${failed} / discovered ${discovered}`;
