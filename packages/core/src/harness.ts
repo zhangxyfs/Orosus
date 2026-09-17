@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ModuleDefinition } from "@orosus/contracts/module";
+import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import type { StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
@@ -20,6 +20,7 @@ export interface HarnessOptions {
   diagDir?: string;
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
+  commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
   config?: {
     userFile?: string;
     projectFile?: string;
@@ -33,7 +34,7 @@ export interface HarnessOptions {
 }
 
 export interface Harness {
-  prompt(text: string): Promise<void>;
+  prompt(text: string): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined
   cancel(): void;
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
   events(): AsyncIterable<SessionEvent>;
@@ -136,9 +137,73 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   let currentTurn: { controller: AbortController; done: Promise<void> } | null = null;
   let closed = false;
+  let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
+
+  const commandUi: CommandUi = options.commandUi ?? {
+    ask: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+    choose: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+    confirm: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+  };
+
+  // 内建别名表（D38）：短名 → 模块命令名；目标不存在提示安装对应模块
+  const COMMAND_ALIASES: Record<string, string> = {
+    provider: "provider-custom__provider",
+    permission: "approval__permission", // M3 随审批模块落地
+  };
+
+  const builtinCommands = new Map<string, (args: string) => Promise<string>>([
+    ["/model", async () => {
+      const slots = graph.services.listProviders();
+      const items = [
+        ...slots.filter((x) => x.defaultModel !== undefined).map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`),
+        "手动输入 model 全名（<provider>/<model>）",
+      ];
+      const picked = await commandUi.choose("选择模型", items);
+      const next = picked.includes("手动输入") ? (await commandUi.ask("model")).trim() : picked.split("（")[0]!;
+      if (next === "") return "已取消（空输入）";
+      modelOverride = next;
+      return `model 已切换：${next}（下个 turn 生效，request/header 将落新条目）`;
+    }],
+    ["/help", async () => {
+      const lines = ["内建命令：", "  /model /help /status /usage"];
+      lines.push("别名命令：");
+      for (const [short, full] of Object.entries(COMMAND_ALIASES)) {
+        const present = graph.commands.some((c) => c.name === full);
+        lines.push(`  /${short} → ${full}${present ? "" : "（未安装对应模块）"}`);
+      }
+      lines.push("模块命令：");
+      const cmds = graph.commands.map((c) => c.name);
+      lines.push(cmds.length > 0 ? `  /${cmds.join(" /")}` : "  （无）");
+      return lines.join("\n");
+    }],
+    ["/status", async () => {
+      const audit = graph.audit();
+      const active = audit.filter((a) => a.state === "active").length;
+      const failed = audit.filter((a) => a.state === "failed").length;
+      const discovered = audit.filter((a) => a.state === "discovered").length;
+      const modelNow = modelOverride ?? String(config.core.model);
+      return `model: ${modelNow}${modelOverride !== undefined ? "（运行期覆盖）" : ""}
+session: ${store.sessionId}
+模块图: active ${active} / failed ${failed} / discovered ${discovered}`;
+    }],
+    ["/usage", async () => {
+      const events = await store.all();
+      let input = 0;
+      let output = 0;
+      for (const e of events) {
+        if (e.type !== "assistant/chunk") continue;
+        const c = e.chunk as { type?: string; input?: number; output?: number };
+        if (c?.type === "usage") {
+          input += c.input ?? 0;
+          output += c.output ?? 0;
+        }
+      }
+      return `累计用量：input ${input} / output ${output} tokens`;
+    }],
+  ]);
 
   const resolveProvider = (): { stream: StreamFn; model: string } => {
-    const modelValue = config.core.model;
+    const modelValue = modelOverride ?? (config.core.model as unknown);
     if (typeof modelValue !== "string" || modelValue === "") {
       throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
     }
@@ -167,6 +232,23 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     async prompt(text) {
       if (closed) throw new Error("harness 已关闭");
       if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
+      // 命令路由（D38 三层：CLI 拦截在宿主侧；此处内建表 > 别名 > 模块注册）。命令不触发 agentLoop、不落会话日志
+      if (text.startsWith("/")) {
+        const m = /^\/([a-z0-9][a-z0-9-]*(?:__[a-z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(text);
+        const name = m?.[1];
+        const args = (m?.[2] ?? "").trim();
+        if (name === undefined) throw new Error(`无法解析命令 "${text}"——输入 /help 查看可用命令`);
+        const builtin = builtinCommands.get(`/${name}`);
+        if (builtin !== undefined) return builtin(args);
+        const alias = COMMAND_ALIASES[name];
+        const target = alias ?? name;
+        const cmd = graph.commands.find((c) => c.name === target);
+        if (cmd === undefined) {
+          if (alias !== undefined) throw new Error(`命令 /${name} 需要 ${alias.split("__")[0]} 模块——请安装/启用对应模块后重试（/help 查看可用命令）`);
+          throw new Error(`未知命令 "/${name}"——输入 /help 查看可用命令`);
+        }
+        return await cmd.handler(args, commandUi);
+      }
       const controller = new AbortController();
       let settle!: () => void;
       const done = new Promise<void>((resolve) => { settle = resolve; });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
+import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import { InMemorySessionStore } from "./session/memory.ts";
 import { createHarness } from "./index.ts";
 
@@ -108,3 +109,106 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     await expect(h2.prompt("hi")).rejects.toThrow(/defaultModel|fake/);
     await h2.close();
   });
+
+describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D38）", () => {
+  const cmdModule = (name: string, cmdName: string, handler: (args: string, ui: CommandUi) => Promise<string> | string) =>
+    fakeModule(name, { mounts: ["contribute:command"], activate(ctx) { ctx.contribute.command(cmdName, handler); } });
+
+  const ownHarness = async (extra: { modules?: ModuleDefinition[]; commandUi?: CommandUi; model?: string } = {}) => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-"));
+    const store = new InMemorySessionStore();
+    const fake = fakeProviderModule("fake", [[{ type: "text/delta", text: "x" }, { type: "usage", input: 3, output: 5 }, { type: "finish", kind: "stop" }]]);
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"),
+      ...(extra.commandUi !== undefined ? { commandUi: extra.commandUi } : {}),
+      modules: [fake, ...(extra.modules ?? [])],
+      config: { ...hermetic(dir), ...(extra.model !== undefined ? { cliOverrides: { model: extra.model } } : {}) },
+    });
+    return { h, store };
+  };
+
+  it("① /m__cmd arg 路由到模块注册 handler，返回值作为 prompt 输出", async () => {
+    const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", (a) => `got:${a}`)] });
+    expect(await h.prompt("/m__cmd hi")).toBe("got:hi");
+    await h.close();
+  });
+
+  it("② 未知命令 → 报错列出可用命令（三层合并清单）", async () => {
+    const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
+    await expect(h.prompt("/nope")).rejects.toThrow(/可用命令|help/);
+    await h.close();
+  });
+
+  it("③ 命令不触发 agentLoop（无 turn/start、无 user/message）", async () => {
+    const { h, store } = await ownHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
+    await h.prompt("/m__cmd q");
+    const all = await store.all();
+    expect(all.some((e) => e.type === "turn/start")).toBe(false);
+    expect(all.some((e) => e.type === "user/message")).toBe(false);
+    await h.close();
+  });
+
+  it("④ CommandUi 注入：handler 第二参收到宿主注入的 ui", async () => {
+    const calls: string[] = [];
+    const fakeUi: CommandUi = { ask: async (q) => { calls.push(`ask:${q}`); return "a"; }, choose: async (t) => { calls.push(`choose:${t}`); return "item"; }, confirm: async (q) => { calls.push(`confirm:${q}`); return true; } };
+    const { h } = await ownHarness({ commandUi: fakeUi, modules: [cmdModule("m", "m__ui", async (_a, ui) => `${await ui.choose("t", ["item"])}|${await ui.ask("q")}`)] });
+    expect(await h.prompt("/m__ui")).toBe("item|a");
+    expect(calls).toContain("choose:t");
+    await h.close();
+  });
+
+  it("⑤ 无头 fail-closed：默认拒绝式 ui 下交互命令带内失败", async () => {
+    const h = await makeHarness({ modules: [cmdModule("m", "m__pick", (_a, ui) => ui.choose("t", ["x"]))] });
+    await expect(h.prompt("/m__pick")).rejects.toThrow(/无交互环境/);
+    await h.close();
+  });
+
+  it("⑥ 内建别名：/provider 转发 provider-custom__provider；目标不存在提示安装", async () => {
+    const h1 = await makeHarness({ modules: [cmdModule("provider-custom", "provider-custom__provider", () => "菜单OK")] });
+    expect(await h1.prompt("/provider")).toBe("菜单OK");
+    await h1.close();
+    const h2 = await makeHarness({});
+    await expect(h2.prompt("/permission")).rejects.toThrow(/approval|安装/);
+    await h2.close();
+  });
+
+  it("⑦ /model 切换：手动输入全名 → 下个 turn 的 request/header 落新 model", async () => {
+    const fakeUi: CommandUi = { ask: async () => "fake/m2", choose: async (_t, items) => items.find((x) => x.includes("手动")) ?? items[0]!, confirm: async () => true };
+    const { h, store } = await ownHarness({ commandUi: fakeUi, model: "fake/m1" });
+    await h.prompt("/model");
+    await h.prompt("hi");
+    const headers = (await store.all()).filter((e) => e.type === "request/header");
+    expect(headers.at(-1)!.model).toBe("m2"); // request/header 记 model 段（provider 在路由层，§6.2）
+    await h.close();
+  });
+
+  it("⑧ /help：按类分组输出且含三层全部命令", async () => {
+    const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
+    const out = await h.prompt("/help");
+    expect(out).toContain("内建");
+    expect(out).toContain("/model");
+    expect(out).toContain("/help");
+    expect(out).toContain("/status");
+    expect(out).toContain("/usage");
+    expect(out).toContain("/provider");
+    expect(out).toContain("m__cmd");
+    await h.close();
+  });
+
+  it("⑨ /status：输出含当前 model 与模块图摘要", async () => {
+    const h = await makeHarness({});
+    const out = await h.prompt("/status");
+    expect(out).toContain("model");
+    expect(out).toContain("fake/m");
+    await h.close();
+  });
+
+  it("⑩ /usage：聚合 usage chunk 为累计 input/output", async () => {
+    const { h } = await ownHarness({ model: "fake/m" });
+    await h.prompt("hi");
+    const out = await h.prompt("/usage");
+    expect(out).toContain("3");
+    expect(out).toContain("5");
+    await h.close();
+  });
+});

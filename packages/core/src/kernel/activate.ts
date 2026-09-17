@@ -15,6 +15,8 @@ export const PROMPT_TOTAL_LIMIT = 65536;    // 全局 64KB
 export interface ServiceResolver {
   get(key: string): Promise<unknown>;
   getOptional(key: string): Promise<unknown | undefined>;
+  /** 枚举 provider 槽（/model 等内建命令的消费面，D38）——归一化形态。 */
+  listProviders(): { name: string; defaultModel?: string }[];
   /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32） */
   provider(name: string): { stream: StreamFn; defaultModel?: string } | undefined;
 }
@@ -310,6 +312,14 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       return Promise.resolve(s.impl);
     },
     getOptional: (key) => Promise.resolve(committedServices.get(key)?.impl),
+    listProviders: () =>
+      [...committedServices.keys()]
+        .filter((k) => k.startsWith("provider:"))
+        .map((k) => {
+          const impl = committedServices.get(k)!.impl as ProviderAdapter;
+          return typeof impl === "function" ? { name: k.slice(9) } : { name: k.slice(9), ...(impl.defaultModel !== undefined ? { defaultModel: impl.defaultModel } : {}) };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name)),
     provider: (name) => {
       const impl = committedServices.get(`provider:${name}`)?.impl as ProviderAdapter | undefined;
       if (impl === undefined) return undefined;

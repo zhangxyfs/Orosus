@@ -1,4 +1,4 @@
-import type { ModuleDefinition } from "@orosus/contracts/module";
+import type { CommandHandler, ModuleDefinition } from "@orosus/contracts/module";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import type { SessionStore } from "../session/types.ts";
 import { createEventBus, type EventBus } from "./bus.ts";
@@ -17,6 +17,7 @@ export interface ModuleGraph {
   tools: ToolRegistry;
   services: ServiceResolver;
   bus: EventBus;
+  commands: { name: string; handler: CommandHandler; owner: string }[];  // 命令注册表（消费端路由用，D38）
   promptSections(): string;
   audit(): AuditEntry[];
   catalog(): string;
@@ -112,6 +113,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     tools,
     services: act.services,
     bus,
+    commands: act.commands,
 
     promptSections() {
       const all = [...act.promptSections].sort((a, b) => a.order - b.order);

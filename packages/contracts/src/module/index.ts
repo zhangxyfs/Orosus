@@ -19,8 +19,16 @@ export interface Logger {
 /** 能力 key 的品牌类型——公共短名只能由 contracts 包定义（规则 1）。 */
 export type CapabilityKey<T> = string & { readonly __capability?: T };
 
-/** 斜杠命令处理器：/<module>__<command>。 */
-export type CommandHandler = (args: string) => Promise<string> | string;
+/** 斜杠命令处理器：/<module>__<command>。第二参 ui 为宿主注入的交互抽象（D35）——纯函数命令可忽略。 */
+export type CommandHandler = (args: string, ui: CommandUi) => Promise<string> | string;
+
+/** 命令交互 UI 抽象（D35）：ask/choose/confirm——宿主注入 readline 实现；无头环境注入拒绝式
+ *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。 */
+export interface CommandUi {
+  ask(question: string): Promise<string>;
+  choose(title: string, items: string[]): Promise<string>;
+  confirm(question: string): Promise<boolean>;
+}
 
 /** 系统 prompt 段：order 决定拼接顺序（核心保留 -100 为 harness 身份），单段 ≤ 32KB。 */
 export interface PromptSection {
