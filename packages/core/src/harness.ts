@@ -4,6 +4,7 @@ import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/mod
 import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
+import { SqliteSessionStore } from "./session/sqlite.ts";
 import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
@@ -105,24 +106,6 @@ function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): S
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const home = join(homedir(), ".orosus");
   const sink = createDiagSink({ dir: options.diagDir ?? join(home, "logs") });
-  // 存储构造分支（D41/T6）：显式 store > resume（既有会话继续）> fork（复合存储新会话）> 全新
-  const sessionsDir = options.sessionsDir ?? join(home, "sessions");
-  let baseStore: SessionStore;
-  if (options.store !== undefined) {
-    baseStore = options.store;
-  } else if (options.resume !== undefined) {
-    baseStore = new JsonlSessionStore({ dir: sessionsDir, sessionId: options.resume.sessionId });
-  } else if (options.fork !== undefined) {
-    baseStore = new ForkedSessionStore({
-      parent: new JsonlSessionStore({ dir: sessionsDir, sessionId: options.fork.parentSessionId }),
-      ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
-      own: new JsonlSessionStore({ dir: sessionsDir }),
-    });
-  } else {
-    baseStore = new JsonlSessionStore({ dir: sessionsDir });
-  }
-  const channel = new Channel<SessionEvent>();
-  const store = forwardingStore(baseStore, channel);
 
   const note = hardeningNote();
   if (note) createLogger(sink, "kernel").warn("kernel.session.hardening", note);
@@ -144,6 +127,32 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // D37 优先级：显式 env 参数 > process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺
     env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
   });
+
+  // 存储构造分支（D41/T6 + D42/T7）：显式 store > resume > fork > 全新；后端按核心顶层 key sessionStore 选择（缺省 jsonl）
+  const sessionsDir = options.sessionsDir ?? join(home, "sessions");
+  const makeStore = (sessionId?: string): SessionStore => {
+    const backend = String(config.core.sessionStore ?? "jsonl");
+    const withId = sessionId !== undefined ? { sessionId } : {};
+    if (backend === "sqlite") return new SqliteSessionStore({ dir: sessionsDir, ...withId });
+    if (backend === "jsonl") return new JsonlSessionStore({ dir: sessionsDir, ...withId });
+    throw new Error(`sessionStore 配置非法："${backend}"（合法值 jsonl | sqlite，核心顶层 key，§7.2/D42）`);
+  };
+  let baseStore: SessionStore;
+  if (options.store !== undefined) {
+    baseStore = options.store;
+  } else if (options.resume !== undefined) {
+    baseStore = makeStore(options.resume.sessionId);
+  } else if (options.fork !== undefined) {
+    baseStore = new ForkedSessionStore({
+      parent: makeStore(options.fork.parentSessionId),
+      ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
+      own: makeStore(),
+    });
+  } else {
+    baseStore = makeStore();
+  }
+  const channel = new Channel<SessionEvent>();
+  const store = forwardingStore(baseStore, channel);
 
   const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[] = [
     ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
