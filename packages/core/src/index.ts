@@ -5,3 +5,4 @@ export type { AuditEntry, ModuleRecord, ModuleState } from "./kernel/types.ts";
 export { InMemorySessionStore } from "./session/memory.ts";
 export { JsonlSessionStore, hardeningNote } from "./session/jsonl.ts";
 export type { SessionEvent, SessionStore } from "./session/types.ts";
+export { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrustKey, type TrustStore } from "./kernel/trust.ts";
