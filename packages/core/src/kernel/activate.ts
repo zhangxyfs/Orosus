@@ -28,6 +28,19 @@ export interface ActivateInput {
   sink: DiagSink;
   bus: EventBus;
   tools: ToolRegistry;
+  preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
+  generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
+}
+
+/** reload 保留实例（§5.5 Unchanged）：kernel 侧从旧图收集（preservable()），新图直接沿用。 */
+export interface PreservedInstance {
+  def: ModuleDefinition;
+  generation: number;
+  services: { key: string; impl: unknown }[];  // 带 impl——新图 services 表重建需要实现值
+  commands: { name: string; handler: CommandHandler; owner: string }[];
+  promptSections: { order: number; text: string; owner: string }[];
+  disposeFn?: Disposer;                        // 旧实例的模块 dispose（后续 teardown 调用）
+  record: ModuleRecord;                        // 原记录（generation 不变）
 }
 
 export interface ActivateOutput {
@@ -38,6 +51,8 @@ export interface ActivateOutput {
   contributes: Map<string, string[]>;
   rollbackModule(name: string): Promise<void>;
   disposeAll(): Promise<void>;
+
+  preservable(): Map<string, PreservedInstance>;
 }
 
 interface Stage {
@@ -73,7 +88,10 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
   const activeNames: string[] = []; // 激活序（dispose 时倒序）
   const committedOverlays: { section: string; read(value: unknown): unknown; owner: string }[] = []; // 注册序 = 激活拓扑序（§6.6）
 
+  const staledModules = new Set<string>(); // 换下实例标记：其 ctx.services.get 抛 stale（§5.5）
+
   const rollbackModule = async (name: string): Promise<void> => {
+    staledModules.add(name);
     const c = ownerContribs.get(name);
     if (!c) return;
     ownerContribs.delete(name);
@@ -95,11 +113,23 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
 
   const fail = (def: ModuleDefinition, reason: string): void => {
     failed.set(def.name, reason);
-    records.push({ def, name: def.name, source: "inline", state: "failed", failReason: reason, generation: 1 });
+    records.push({ def, name: def.name, source: "inline", state: "failed", failReason: reason, generation: (input.generations?.get(def.name) ?? 0) + 1 });
     klog.warn("kernel.module.failed", `模块降级：${reason}`, { module: def.name });
   };
 
   for (const def of input.ordered) {
+    const preservedThis = input.preserved?.get(def.name);
+    if (preservedThis !== undefined && preservedThis.def === def) {
+      // Unchanged（§5.5）：不重跑 activate，沿用旧实例的句柄与代际；贡献重登记进本图产出
+      for (const { key, impl } of preservedThis.services) committedServices.set(key, { impl, owner: def.name });
+      committedCommands.push(...preservedThis.commands);
+      committedSections.push(...preservedThis.promptSections);
+      ownerContribs.set(def.name, { serviceKeys: preservedThis.services.map((x) => x.key), disposers: [], ...(preservedThis.disposeFn !== undefined ? { disposeFn: preservedThis.disposeFn } : {}) });
+      contributes.set(def.name, ["(unchanged，句柄沿用)"]);
+      activeNames.push(def.name);
+      records.push({ ...preservedThis.record, state: "active" });
+      continue;
+    }
     // 级联：硬依赖能力未入册 → 预降级不激活。理由必须诚实区分两种情形（审计带完整链，§10）：
     // 提供者已失败 → 级联；提供者 active 但没 provide 该 key → 提供者模块 bug
     const missingKey = (def.dependsOn ?? [])
@@ -154,6 +184,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       log: mlog,
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
+          if (staledModules.has(def.name)) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);
           const s = committedServices.get(key as string);
           if (!s) throw new Error(`能力 "${String(key)}" 无可用提供者（提供者缺失/已降级）`);
           return Promise.resolve(s.impl as T);
@@ -298,7 +329,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       contributes.set(def.name, myContributes);
       activeNames.push(def.name);
       moduleState.activated = true; // 运行期 configRead 开始应用 overlay
-      records.push({ def, name: def.name, source: "inline", state: "active", generation: 1 });
+      records.push({ def, name: def.name, source: "inline", state: "active", generation: (input.generations?.get(def.name) ?? 0) + 1 });
       klog.info("kernel.module.active", "模块激活", { module: def.name });
     } catch (err) {
       fail(def, String(err instanceof Error ? err.message : err));
@@ -334,6 +365,25 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     promptSections: committedSections,
     contributes,
     rollbackModule,
+    /** 旧图 → PreservedInstance 收集口（reload 的 Unchanged 沿用数据源，§5.5）。 */
+    preservable: () => {
+      const out = new Map<string, PreservedInstance>();
+      for (const name of activeNames) {
+        const rec = records.find((r) => r.name === name && r.state === "active");
+        if (rec === undefined) continue;
+        const c = ownerContribs.get(name);
+        out.set(name, {
+          def: rec.def,
+          generation: rec.generation,
+          services: (c?.serviceKeys ?? []).map((key) => ({ key, impl: committedServices.get(key)!.impl })),
+          commands: committedCommands.filter((x) => x.owner === name),
+          promptSections: committedSections.filter((x) => x.owner === name),
+          ...(c?.disposeFn !== undefined ? { disposeFn: c.disposeFn } : {}),
+          record: rec,
+        });
+      }
+      return out;
+    },
     disposeAll: async () => {
       for (const name of [...activeNames].reverse()) {
         await rollbackModule(name);
