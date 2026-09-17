@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
-import { fakeModule, fakeProviderModule } from "@orosus/testing";
+import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { InMemorySessionStore } from "./session/memory.ts";
 import { createHarness } from "./index.ts";
 
@@ -93,3 +93,18 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     await expect(h.prompt("hi")).rejects.toThrow(/已关闭/);
   });
 });
+
+  it("裸 provider 名 → defaultModel 生效；无 defaultModel → 报错列出可用 provider", async () => {
+    const withDefault = fakeModule("provider-fd", {
+      activate(ctx) {
+        const { stream } = fakeProvider([[{ type: "text/delta", text: "ok" }, { type: "finish", kind: "stop" }]]);
+        ctx.provide("provider:fd", { stream, defaultModel: "fd-mini" });
+      },
+    });
+    const h = await makeHarness({ modules: [withDefault], config: { cliOverrides: { model: "fd" } } });
+    await h.prompt("hi"); // 裸名路由到 fd-mini，正常完成
+    await h.close();
+    const h2 = await makeHarness({ config: { cliOverrides: { model: "fake" } } }); // fake 槽是纯 StreamFn，无 defaultModel
+    await expect(h2.prompt("hi")).rejects.toThrow(/defaultModel|fake/);
+    await h2.close();
+  });

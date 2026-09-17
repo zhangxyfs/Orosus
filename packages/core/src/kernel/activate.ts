@@ -1,6 +1,6 @@
-import type { CapabilityKey, CommandHandler, Disposer, Listener, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
+import type { CommandHandler, CapabilityKey, Disposer, Listener, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
-import type { StreamFn } from "@orosus/contracts/provider";
+import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import type { SessionStore } from "../session/types.ts";
 import { CORE_BUS_TYPES, type EventBus } from "./bus.ts";
@@ -15,7 +15,8 @@ export const PROMPT_TOTAL_LIMIT = 65536;    // 全局 64KB
 export interface ServiceResolver {
   get(key: string): Promise<unknown>;
   getOptional(key: string): Promise<unknown | undefined>;
-  provider(name: string): StreamFn | undefined;
+  /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32） */
+  provider(name: string): { stream: StreamFn; defaultModel?: string } | undefined;
 }
 
 export interface ActivateInput {
@@ -260,7 +261,11 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       return Promise.resolve(s.impl);
     },
     getOptional: (key) => Promise.resolve(committedServices.get(key)?.impl),
-    provider: (name) => committedServices.get(`provider:${name}`)?.impl as StreamFn | undefined,
+    provider: (name) => {
+      const impl = committedServices.get(`provider:${name}`)?.impl as ProviderAdapter | undefined;
+      if (impl === undefined) return undefined;
+      return typeof impl === "function" ? { stream: impl } : impl;
+    },
   };
 
   return {

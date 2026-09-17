@@ -17,6 +17,7 @@ export default defineModule({
   uses: ["network", "secrets"],
   config: configSchema,
   activate(ctx) {
-    ctx.provide(providerSlotKey("anthropic"), createStream(ctx.config));
+    // D32 槽值形状：带 defaultModel 的对象（裸名 model = "anthropic" 即用默认模型）
+    ctx.provide(providerSlotKey("anthropic"), { stream: createStream(ctx.config), defaultModel: "claude-sonnet-4-5" });
   },
 });

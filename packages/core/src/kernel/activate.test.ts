@@ -180,3 +180,18 @@ describe("激活管线（§4.2 第 6 步）", () => {
     expect(seen).toContain("listener"); // 若顺序反了（先 disposer 后 dispose），监听者已被摘除，此项失败
   });
 });
+
+describe("ServiceResolver.provider 归一化（D32 槽值形状）", () => {
+  it("裸 StreamFn 槽值归一化为 { stream }；对象槽值原样返回", async () => {
+    const bare = mod("p-bare", { activate(ctx) { ctx.provide("provider:bare", async function* () {}); } });
+    const obj = mod("p-obj", { activate(ctx) { ctx.provide("provider:obj", { stream: async function* () {}, defaultModel: "m1" }); } });
+    const result = await activateModules(setup([bare, obj]).input);
+    const r1 = result.services.provider("bare");
+    const r2 = result.services.provider("obj");
+    expect(typeof r1).toBe("object");
+    expect(typeof r1?.stream).toBe("function");
+    expect(r1?.defaultModel).toBeUndefined();
+    expect(r2).toMatchObject({ defaultModel: "m1" });
+    expect(typeof r2?.stream).toBe("function");
+  });
+});

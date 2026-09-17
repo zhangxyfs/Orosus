@@ -80,8 +80,10 @@ describe("kernel 门面（§4.2 第 4–7 步串接）", () => {
     expect(g.records.filter((r) => r.state === "disposed").map((r) => r.name)).toEqual(["tool-fs", "tool-shell"]); // 审计可信：停用后不谎报 active
   });
 
-  it("parseModel 解析 <provider>/<model>；格式错抛错", () => {
+  it("parseModel 解析 <provider>/<model>；裸名合法；空段抛错（D32）", () => {
     expect(parseModel("anthropic/claude-sonnet-4")).toEqual({ provider: "anthropic", model: "claude-sonnet-4" });
-    expect(() => parseModel("没有斜杠")).toThrow(/<provider>\/<model>/);
+    expect(parseModel("没有斜杠")).toEqual({ provider: "没有斜杠", model: undefined });
+    expect(() => parseModel("/x")).toThrow(/<provider>/);
+    expect(() => parseModel("x/")).toThrow(/<provider>/);
   });
 });

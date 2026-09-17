@@ -136,15 +136,27 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const resolveProvider = (): { stream: StreamFn; model: string } => {
     const modelValue = config.core.model;
     if (typeof modelValue !== "string" || modelValue === "") {
-      throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model>，§6.6）——请在 config.toml 或 CLI 指定`);
+      throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
     }
-    const { provider, model } = parseModel(modelValue);
-    const stream = graph.services.provider(provider);
-    if (!stream) {
+    const { provider, model: explicitModel } = parseModel(modelValue);
+    const adapter = graph.services.provider(provider);
+    if (!adapter) {
       const available = graph.records.filter((r) => r.state === "active").map((r) => r.name).join("、") || "（无）";
       throw new Error(`provider "${provider}" 不可用（model "${modelValue}"）。已激活模块：${available}`);
     }
-    return { stream, model };
+    const model = explicitModel ?? adapter.defaultModel;
+    if (model === undefined) {
+      // 裸名报错须列出可用 provider 及各自 defaultModel（计划补空白登记项）
+      const listing = graph.records
+        .filter((r) => r.state === "active")
+        .map((r) => {
+          const a = graph.services.provider(r.name);
+          return a?.defaultModel !== undefined ? `${r.name}（默认 ${a.defaultModel}）` : `${r.name}（无默认，需写全名）`;
+        })
+        .join("、") || "（无）";
+      throw new Error(`provider "${provider}" 未声明 defaultModel——请写全名 "<provider>/<model>"。可用 provider：${listing}`);
+    }
+    return { stream: adapter.stream, model };
   };
 
   return {

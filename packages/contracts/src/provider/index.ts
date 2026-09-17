@@ -32,6 +32,9 @@ export interface ProviderRequest {
 /** Provider SPI 唯一方法（§6.4）。 */
 export type StreamFn = (request: ProviderRequest) => AsyncIterable<Chunk>;
 
+/** Provider 适配器槽值（D32）：裸函数或带默认模型的对象——核心按形状归一化。 */
+export type ProviderAdapter = StreamFn | { stream: StreamFn; defaultModel?: string };
+
 /** 核心保留槽 key（§7.2）：provider 适配器经 provide(providerSlotKey(name), fn) 注册。 */
 export function providerSlotKey(name: string): string {
   return `provider:${name}`;
