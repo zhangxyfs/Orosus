@@ -33,6 +33,7 @@
     "@orosus/provider-deepseek": "workspace:*",
     "@orosus/provider-openai": "workspace:*",
     "@orosus/approval": "workspace:*",
-    "@orosus/compaction": "workspace:*"
+    "@orosus/compaction": "workspace:*",
+    "zod": "^4.0.0"
   }
 }

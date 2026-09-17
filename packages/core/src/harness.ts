@@ -427,13 +427,24 @@ session: ${store.sessionId}
           if (t.ok) defs2.push({ def: m.def, source: "local", ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
         }
       }
-      // diff（新 defs 的 configValue 由 loadModules 内部计算——此处先按名字+hash+引用粗判，loadModules 后以 defs() 复核）
+      // diff 粗判（§5.5 Reloaded 判据：entryHash / def 引用 / 配置自有 key 有效值——三者任一变化即重载）
       const newNames = new Set(defs2.map((d) => d.def.name));
       const removedOrChanged = new Set<string>();
+      const newConfigValue = (name: string): unknown => {
+        const next = defs2.find((d) => d.def.name === name);
+        if (next === undefined) return undefined;
+        const section = { ...config2.sections.get(name) };
+        for (const k of ["enabled", "source", "required"]) delete section[k];
+        const parsed = next.def.config?.safeParse(section);
+        return parsed?.success ? parsed.data : undefined;
+      };
       for (const g of oldDefs) {
         if (!newNames.has(g.def.name)) { removedOrChanged.add(g.def.name); continue; }
         const next = defs2.find((d) => d.def.name === g.def.name)!;
-        if (g.entryHash !== next.entryHash || g.def !== next.def) removedOrChanged.add(g.def.name);
+        if (g.entryHash !== next.entryHash || g.def !== next.def) { removedOrChanged.add(g.def.name); continue; }
+        // 配置自有 key 有效值 deepEqual 失败 → Reloaded（M3 修复：粗判此前漏配置变化——preserved 误含已变模块，
+        // required 模块的坏配置在 reload 中被静默沿用旧实例，安全护栏失效）
+        if (JSON.stringify(g.configValue) !== JSON.stringify(newConfigValue(g.def.name))) removedOrChanged.add(g.def.name);
       }
       const preserved = new Map([...oldGraph.preservable()].filter(([name]) => !removedOrChanged.has(name)));
       const generations = new Map(oldGraph.records.map((r) => [r.name, r.generation]));
