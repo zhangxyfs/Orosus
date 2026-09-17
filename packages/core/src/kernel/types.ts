@@ -9,7 +9,7 @@ export type ModuleState = "discovered" | "validated" | "resolved" | "active" | "
 export interface ModuleRecord {
   def: ModuleDefinition;
   name: string;
-  source: "builtin" | "inline";
+  source: "builtin" | "inline" | "local";
   state: ModuleState;
   failReason?: string;
   /** 代际按模块实例计（§5.5）：M1 恒为 1，reload（M2）起递增。 */

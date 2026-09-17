@@ -8,6 +8,8 @@ import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
+import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
+import { loadTrustStore, checkTrust } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
@@ -21,6 +23,11 @@ export interface HarnessOptions {
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
+  discovery?: {                            // 目录扫描入口（§8.3/T11-T12）：缺省 ~/.orosus/modules 与 <cwd>/.orosus/modules
+    userDir: string;
+    projectDir: string;
+    trustFile?: string;                    // 缺省 ~/.orosus/trust.json
+  };
   config?: {
     userFile?: string;
     projectFile?: string;
@@ -107,10 +114,27 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
   });
 
-  const defs = [
+  const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[] = [
     ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
     ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
   ];
+  // 目录扫描 + 项目级信任门（§8.3/§8.5/T11-T12）：通过者并入 defs（source local），未过者 blocked（failed untrusted，不激活）
+  const blocked: { def: import("@orosus/contracts/module").ModuleDefinition; source: string; reason: string }[] = [];
+  {
+    const userDir = options.discovery?.userDir ?? join(home, "modules");
+    const projectDir = options.discovery?.projectDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules");
+    const discovered: DiscoveredModule[] = await discoverModules({ userDir, projectDir, ...(options.config?.userFile !== undefined ? { userFile: options.config.userFile } : {}), sink });
+    const trustFile = options.discovery?.trustFile ?? join(home, "trust.json");
+    const trustStore = loadTrustStore(trustFile);
+    for (const m of discovered) {
+      const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
+      if (t.ok) {
+        defs.push({ def: m.def, source: "local" as const });
+      } else {
+        blocked.push({ def: m.def, source: "local", reason: t.reason === "unconfirmed" ? "untrusted（项目级模块未确认——运行 orosus module trust <name> 后重启生效，§8.5）" : "untrusted（项目级模块内容 hash 已变化，须重新确认，§8.5/MCPoison）" });
+      }
+    }
+  }
   const graph = await loadModules({
     defs,
     cli: {
@@ -123,6 +147,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     session: store,
     sink,
     spillDir: options.spillDir ?? join(home, "sessions", store.sessionId, "spill"),
+    ...(blocked.length > 0 ? { blocked } : {}),
   });
 
   await store.append(LOG_TYPES.sessionHeader, {

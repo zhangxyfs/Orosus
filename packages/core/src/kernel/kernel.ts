@@ -25,12 +25,13 @@ export interface ModuleGraph {
 }
 
 export interface LoadModulesInput {
-  defs: { def: ModuleDefinition; source: "builtin" | "inline" }[];
+  defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[];
   cli: { enable?: string[]; disable?: string[]; noModules?: boolean; module?: string[] };
   sections: Map<string, Record<string, unknown>>;
   session: SessionStore;
   sink: DiagSink;
   spillDir: string;
+  blocked?: { def: ModuleDefinition; source: string; reason: string }[];
 }
 
 /** §4.2 第 4–6 步串接：启停过滤 → 静态校验 → 拓扑 → 激活 → required 护栏。 */
@@ -88,6 +89,9 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   }
 
   const byName = new Map(input.defs.map((d) => [d.def.name, d]));
+  for (const b of input.blocked ?? []) {
+    byName.set(b.def.name, { def: b.def, source: b.source === "local" ? "local" : "inline" });
+  }
   // 原地回填 source（不展开复制）：disposeAll 原地改 state，graph.records 必须与 act.records 共享对象，
   // 否则停用后审计仍谎报 active
   for (const r of act.records) {
@@ -102,6 +106,10 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
         def: byName.get(f.name)!.def, name: f.name, source: byName.get(f.name)!.source,
         state: "failed" as const, failReason: f.reason, generation: 1,
       })),
+    ...(input.blocked ?? []).map((b) => ({
+      def: b.def, name: b.def.name, source: "local" as const,
+      state: "failed" as const, failReason: b.reason, generation: 1,
+    })),
     ...[...disabledNames].map((name) => ({
       def: byName.get(name)!.def, name, source: byName.get(name)!.source,
       state: "discovered" as const, failReason: "未启用（defaultEnabled=false 或配置/CLI 禁用，§5.4）", generation: 1,
