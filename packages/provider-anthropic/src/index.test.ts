@@ -29,3 +29,20 @@ describe("provider-anthropic 槽值（D32）", () => {
     expect(v.defaultModel).toBe("claude-sonnet-4-5");
   });
 });
+
+describe("provider-anthropic 双头鉴权（D31 回归）", () => {
+  it("请求同时携带 x-api-key 与 Authorization Bearer 同值", async () => {
+    const { ctx, services } = fakeCtx();
+    await def.activate(ctx);
+    const adapter = services.get("provider:anthropic") as { stream: (req: never) => AsyncIterable<unknown> };
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchImpl = ((url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return Promise.resolve(new Response("{\"type\":\"error\"}", { status: 401 }));
+    }) as typeof fetch;
+    const stream = (await import("./stream.ts")).createStream({ apiKey: "sk-a", baseUrl: "https://api.anthropic.com", fetchImpl });
+    for await (const _ of stream({ model: "m", system: "s", messages: [], tools: [], signal: new AbortController().signal } as never)) void _;
+    expect(seen[0]!.headers["x-api-key"]).toBe("sk-a");
+    expect(seen[0]!.headers["authorization"]).toBe("Bearer sk-a");
+  });
+});
