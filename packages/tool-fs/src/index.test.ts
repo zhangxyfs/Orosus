@@ -53,7 +53,7 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     const { ctx, services, tools } = fakeCtx();
     await def.activate(ctx);
     expect(services.has("fs")).toBe(true);
-    expect(tools.map((t) => t.name)).toEqual(["tool-fs__read", "tool-fs__write", "tool-fs__edit"]);
+    expect(tools.map((t) => t.name)).toEqual(["tool-fs__read", "tool-fs__write", "tool-fs__edit", "tool-fs__glob", "tool-fs__grep"]); // T16 起五件
     const [read, write, edit] = tools as [Tool, Tool, Tool];
     expect((await run(write, { path: "a.txt", content: "hello world" })).isError).toBe(false);
     expect((await run(read, { path: "a.txt" })).output).toBe("hello world");
@@ -82,6 +82,42 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     const { ctx, tools } = fakeCtx();
     await def.activate(ctx);
     const r = await run(tools[0]!, { path: "../../../../etc/passwd" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("越出");
+  });
+});
+
+describe("glob/grep（T16，§12 M2）", () => {
+  it("① tool-fs__glob：**/*.ts 模式匹配（Node 22 原生 fs.glob）", async () => {
+    writeFileSync(join(dir, "a.ts"), "x");
+    writeFileSync(join(dir, "b.js"), "x");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools.find((t) => t.name === "tool-fs__glob")!, { pattern: "**/*.ts" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("a.ts");
+    expect(r.output).not.toContain("b.js");
+  });
+
+  it("② tool-fs__grep：内容正则搜索，输出 path:line:text", async () => {
+    writeFileSync(join(dir, "g1.ts"), "line1\nTARGET here\nline3\n");
+    writeFileSync(join(dir, "g2.ts"), "nope\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools.find((t) => t.name === "tool-fs__grep")!, { pattern: "TARGET" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("g1.ts:2:TARGET here");
+    expect(r.output).not.toContain("g2.ts");
+  });
+
+  it("③ accesses 声明 fs.read + 沙箱边界（越出 → isError，同 read）", async () => {
+    writeFileSync(join(dir, "in.txt"), "x");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const glob = tools.find((t) => t.name === "tool-fs__glob")!;
+    const exec = await glob.resolveExecution({ pattern: "**/*.ts" });
+    expect(exec.accesses).toEqual([{ kind: "fs.read", path: "**/*.ts" }]); // fs.read 声明（路径以 pattern 近似——M1 同款口径）
+    const r = await run(glob, { pattern: "../../etc/**/*.conf" });
     expect(r.isError).toBe(true);
     expect(r.output).toContain("越出");
   });

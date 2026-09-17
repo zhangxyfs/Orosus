@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
@@ -31,6 +31,68 @@ class LocalFs implements Fs {
     writeFileSync(this.safe(path), content, "utf8");
     return Promise.resolve();
   }
+
+  /** glob 匹配（T16）：自实现递归走查 + 模式转正则（避免 fs.glob 类型重载纠缠）；结果经根目录沙箱过滤。 */
+  async globFiles(pattern: string): Promise<string[]> {
+    this.safe(pattern.replace(/[*?{[]/g, "x")); // 越出根的 pattern 在占位化后仍会被 safe 拦下
+    const re = globToRegExp(pattern);
+    const skip = new Set(["node_modules", ".git"]);
+    const out: string[] = [];
+    const walk = (rel: string): void => {
+      const abs = join(this.root, rel);
+      let entries;
+      try {
+        entries = readdirSync(abs, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (skip.has(e.name)) continue;
+        const child = rel === "" ? e.name : `${rel}/${e.name}`;
+        if (re.test(child)) out.push(this.safe(child));
+        if (e.isDirectory()) walk(child);
+      }
+    };
+    walk("");
+    return [...new Set(out)].sort();
+  }
+
+  /** 内容正则搜索（T16）：path:line:text；跳过二进制（替换率粗判）与超大文件（>1MB）。 */
+  async grepLines(regex: string): Promise<string[]> {
+    const re = new RegExp(regex);
+    const out: string[] = [];
+    for (const p of await this.globFiles("**/*")) {
+      let content: string;
+      try {
+        content = readFileSync(p, "utf8");
+      } catch {
+        continue;
+      }
+      if (content.length > 1_048_576) continue;
+      const lines = content.split("\n");
+      const bad = lines.filter((l) => l.includes("\uFFFD")).length;
+      if (lines.length > 0 && bad > lines.length / 4) continue; // 二进制粗判
+      for (let i = 0; i < lines.length; i++) {
+        if (re.test(lines[i]!)) out.push(`${p}:${i + 1}:${lines[i]!.slice(0, 200)}`);
+      }
+    }
+    return out;
+  }
+}
+
+/** glob 模式 → 锚定正则：** 跨段、* 单段内、? 单字符（相对根的 posix 风格路径）。 */
+function globToRegExp(pattern: string): RegExp {
+  const segs = pattern.split("/");
+  const body = segs.map((seg) => {
+    if (seg === "**") return "(?:.+)?";
+    const esc = seg
+      .replace(/[.+^$()|[\]]/g, (c) => "\\" + c)
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "[^/]");
+    return esc;
+  }).join("/");
+  const anchored = body.split("(?:.+)?/").join("(?:.+/)?"); // **/ 的斜杠可省——顶层文件也命中
+  return new RegExp(`^${anchored}$`);
 }
 
 const pathParam = { path: z.string().describe("相对工作目录的路径") };
@@ -109,6 +171,52 @@ function editTool(fs: LocalFs): Tool {
   });
 }
 
+function globTool(fs: LocalFs): Tool {
+  return defineTool({
+    name: "tool-fs__glob",
+    description: "按 glob 模式列出文件（如 **/*.ts），限根目录内",
+    parameters: z.object({ pattern: z.string().describe("glob 模式") }),
+    resolveExecution: async (input) => {
+      const { pattern } = input as { pattern: string };
+      return {
+        accesses: [Access.fsRead(pattern)],
+        approvalRule: "tool-fs__glob",
+        execute: async () => {
+          try {
+            const files = await fs.globFiles(pattern);
+            return { output: files.length > 0 ? files.join("\n") : "（无匹配）", isError: false };
+          } catch (err) {
+            return { output: String(err instanceof Error ? err.message : err), isError: true };
+          }
+        },
+      };
+    },
+  });
+}
+
+function grepTool(fs: LocalFs): Tool {
+  return defineTool({
+    name: "tool-fs__grep",
+    description: "内容正则搜索，输出 path:line:text",
+    parameters: z.object({ pattern: z.string().describe("JavaScript 正则") }),
+    resolveExecution: async (input) => {
+      const { pattern } = input as { pattern: string };
+      return {
+        accesses: [Access.fsRead("**/*")],
+        approvalRule: "tool-fs__grep",
+        execute: async () => {
+          try {
+            const lines = await fs.grepLines(pattern);
+            return { output: lines.length > 0 ? lines.join("\n") : "（无匹配）", isError: false };
+          } catch (err) {
+            return { output: String(err instanceof Error ? err.message : err), isError: true };
+          }
+        },
+      };
+    },
+  });
+}
+
 export default defineModule({
   name: "tool-fs",
   version: "0.1.0",
@@ -123,5 +231,7 @@ export default defineModule({
     ctx.contribute.tool(readTool(fs));
     ctx.contribute.tool(writeTool(fs));
     ctx.contribute.tool(editTool(fs));
+    ctx.contribute.tool(globTool(fs));
+    ctx.contribute.tool(grepTool(fs));
   },
 });
