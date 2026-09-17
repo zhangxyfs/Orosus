@@ -9,9 +9,10 @@ import openai from "@orosus/provider-openai";
 import providerCustom from "@orosus/provider-custom";
 import { mcpDef } from "@orosus/mcp";
 import skill from "@orosus/skill";
+import approval from "@orosus/approval";
 
 /** CLI 内置模块全家福（§8.7 builtin 层，M2 收敛）。
- *  M3 口子：审批（approval）与会话压缩（compaction）模块随 M3 方案审查后加入此清单。 */
+ *  approval 已接入（M3 T3）；compaction 随 T5。 */
 export const BUILTIN_MODULES: ModuleDefinition[] = [
   toolFs,
   toolShell,
@@ -23,4 +24,5 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   providerCustom,
   mcpDef,
   skill,
+  approval,
 ];

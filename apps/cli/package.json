@@ -22,7 +22,8 @@
     "@orosus/provider-deepseek": "workspace:*",
     "@orosus/provider-openai": "workspace:*",
     "@orosus/mcp": "workspace:*",
-    "@orosus/skill": "workspace:*"
+    "@orosus/skill": "workspace:*",
+    "@orosus/approval": "workspace:*"
   },
   "devDependencies": {
     "@orosus/contracts": "workspace:*",

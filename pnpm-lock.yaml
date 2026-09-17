@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@orosus/approval':
+        specifier: workspace:*
+        version: link:packages/modules/approval
       '@orosus/contracts':
         specifier: workspace:*
         version: link:packages/contracts
@@ -59,6 +62,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@orosus/approval':
+        specifier: workspace:*
+        version: link:../../packages/modules/approval
       '@orosus/core':
         specifier: workspace:*
         version: link:../../packages/core

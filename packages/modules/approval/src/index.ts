@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
+import { join } from "node:path";
 import { decide, type PermissionMode } from "./decide.ts";
+import { createPermissionHandler, defaultConfigFile } from "./permission.ts";
 
 const configSchema = z.object({
   mode: z.enum(["ask-always", "ask-risky", "never"]).default("ask-risky"),
@@ -8,6 +10,8 @@ const configSchema = z.object({
     effect: z.enum(["allow", "ask", "deny"]),
     tool: z.string().min(1).describe("工具 pattern：全名 / 后缀通配 tool-fs__* / 带参 tool-shell__bash(git *)"),
   })).default([]),
+  configFile: z.string().optional().describe("/permission 模式写回的用户层配置（缺省 ~/.orosus/config.toml）"),
+  projectConfigFile: z.string().optional().describe("生效层判定的项目层配置路径（缺省 <cwd>/.orosus/config.toml；含 [approval] 节时模式写项目层，五轮 P1）"),
 });
 
 /** waterfall 载荷形状（core registry 产出，D40 增 matchesRule）。 */
@@ -88,5 +92,14 @@ export default defineModule({
       askChain = run.then(() => undefined, () => undefined);
       return run;
     });
+
+    // /permission（D36/D38：内建别名 /permission → approval__permission）——选档闭包 override 即时生效 + 写生效层持久化
+    ctx.contribute.command("approval__permission", createPermissionHandler({
+      current: () => state.modeOverride ?? cfg.mode,
+      apply: (next) => { state.modeOverride = next; },
+      rules: () => cfg.rules,
+      configPath: cfg.configFile ?? defaultConfigFile(),
+      projectConfigPath: cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"), // 生效层判定（五轮 P1）
+    }));
   },
 });
