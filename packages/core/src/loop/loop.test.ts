@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import type { Chunk } from "@orosus/contracts/provider";
-import { defineTool } from "@orosus/contracts/tool";
+import { defineTool, Access } from "@orosus/contracts/tool";
 import { fakeProvider } from "@orosus/testing";
 import { InMemorySessionStore } from "../session/memory.ts";
 import { createEventBus, CORE_POINTS } from "../kernel/bus.ts";
@@ -113,5 +113,104 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     c.abort();
     await run(c.signal);
     expect(provider.requests).toHaveLength(0);
+  });
+});
+
+describe("agentLoop 工具并发调度（M3，§6.3/D40）", () => {
+  const DELAY = 90;
+  const delayedTool = (name: string, accesses: Access[]) =>
+    defineTool({
+      name, description: name, parameters: z.object({}),
+      resolveExecution: async () => ({
+        accesses,
+        approvalRule: name,
+        execute: async () => {
+          await new Promise((r) => setTimeout(r, DELAY));
+          return { output: `${name}-ok`, isError: false };
+        },
+      }),
+    });
+
+  it("无冲突工具并行：总耗时 ≈ max 而非 sum（§6.3 分组并发）", async () => {
+    const { run, tools, session } = setup([
+      [
+        { type: "toolcall/argumentsDelta", callId: "c1", name: "m__a", argumentsDelta: "{}" } as Chunk,
+        { type: "toolcall/argumentsDelta", callId: "c2", name: "m__b", argumentsDelta: "{}" } as Chunk,
+        { type: "finish", kind: "toolUse" } as Chunk,
+      ],
+      [{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }] as Chunk[],
+    ]);
+    tools.register(delayedTool("m__a", [Access.fsRead("/a")]), "m");
+    tools.register(delayedTool("m__b", [Access.fsRead("/b")]), "m");
+    const t0 = Date.now();
+    await run();
+    expect(Date.now() - t0).toBeLessThan(DELAY * 2 - 30); // 串行 ≥ 180ms；并行 ≈ 90ms + 流水开销
+    const all = await session.all();
+    expect(all.filter((e) => e.type === "tool/result" && e.output === "m__a-ok")).toHaveLength(1);
+    expect(all.filter((e) => e.type === "tool/result" && e.output === "m__b-ok")).toHaveLength(1);
+  });
+
+  it("冲突工具串行（耗时 ≈ sum）；同组否决不影响其他成员（denied 与 ok 并存）", async () => {
+    const { run, tools, session, bus } = setup([
+      [
+        { type: "toolcall/argumentsDelta", callId: "c1", name: "m__a", argumentsDelta: "{}" } as Chunk,
+        { type: "toolcall/argumentsDelta", callId: "c2", name: "m__b", argumentsDelta: "{}" } as Chunk,
+        { type: "toolcall/argumentsDelta", callId: "c3", name: "m__c", argumentsDelta: "{}" } as Chunk,
+        { type: "finish", kind: "toolUse" } as Chunk,
+      ],
+      [{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }] as Chunk[],
+    ]);
+    tools.register(delayedTool("m__a", [Access.fsWrite("/same")]), "m");
+    tools.register(delayedTool("m__b", [Access.fsWrite("/same")]), "m"); // 与 a 冲突 → 分组串行
+    tools.register(delayedTool("m__c", [Access.fsRead("/c")]), "m");     // 与 a/b 不冲突 → 同组并行
+    bus.on(CORE_POINTS.toolPreExecute, (p) => {
+      const payload = p as { name?: string };
+      if (payload.name === "m__c") return { deny: true, reason: "审批否决（并行组内）" };
+      return undefined;
+    }, "approval");
+    const t0 = Date.now();
+    await run();
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(DELAY * 2 - 30); // a、b 串行
+    const all = await session.all();
+    const results = all.filter((e) => e.type === "tool/result");
+    expect(results.some((e) => e.output === "m__a-ok" && e.isError !== true)).toBe(true);
+    expect(results.some((e) => e.output === "m__b-ok" && e.isError !== true)).toBe(true);
+    expect(results.some((e) => e.denied === true && e.isError === true)).toBe(true); // c 被否决，同组 a/b 照常
+  });
+
+  it("abort：在飞工具响应 signal 返回带内中止；未启动组的 call 补 [已中止] 结果（§6.1）", async () => {
+    const { run, tools, session } = setup([
+      [
+        { type: "toolcall/argumentsDelta", callId: "c1", name: "m__a", argumentsDelta: "{}" } as Chunk,
+        { type: "toolcall/argumentsDelta", callId: "c2", name: "m__b", argumentsDelta: "{}" } as Chunk,
+        { type: "finish", kind: "toolUse" } as Chunk,
+      ],
+      [{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }] as Chunk[],
+    ]);
+    // a、b 同路径写 → 冲突分组：a 先行，b 排队未启动；a 响应 signal（工具契约）带内中止
+    tools.register(defineTool({
+      name: "m__a", description: "a", parameters: z.object({}),
+      resolveExecution: async () => ({
+        accesses: [Access.fsWrite("/same")],
+        execute: async (tctx) => {
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, DELAY);
+            tctx.signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+          });
+          return tctx.signal.aborted
+            ? { output: "a-已中止", isError: true }
+            : { output: "a-ok", isError: false };
+        },
+      }),
+    }), "m");
+    tools.register(delayedTool("m__b", [Access.fsWrite("/same")]), "m");
+    const c = new AbortController();
+    const running = run(c.signal);
+    setTimeout(() => c.abort(), 40); // a 在飞时中止
+    await running;
+    const all = await session.all();
+    expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.output === "a-已中止")).toBe(true);
+    expect(all.some((e) => e.type === "tool/result" && e.callId === "c2" && e.isError === true && String(e.output).includes("已中止"))).toBe(true); // b 从未启动 → loop 补条
+    expect(all.some((e) => e.type === "turn/end" && e.kind === "interrupted")).toBe(true);
   });
 });

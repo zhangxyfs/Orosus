@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { defineTool } from "@orosus/contracts/tool";
+import { defineTool, Access } from "@orosus/contracts/tool";
 import { createEventBus, CORE_POINTS } from "../kernel/bus.ts";
 import { createToolRegistry, OUTPUT_LIMIT } from "./registry.ts";
 import type { DiagSink, DiagRecord } from "../diag/logger.ts";
@@ -45,6 +45,56 @@ describe("工具注册表（§6.3）", () => {
     const specs = reg.specs();
     expect(specs.map((s) => s.name)).toEqual(["b__t", "a__t"]); // 注册序 = 激活拓扑序
     expect(specs[0]!.parameters.type).toBe("object");
+  });
+
+  it("plan/execute（D40）：plan 产出声明；execute 走 waterfall 后执行（matchesRule 透传断言归 T2）", async () => {
+    const { reg, bus } = setup();
+    reg.register(
+      defineTool({
+        name: "m__t",
+        description: "t",
+        parameters: z.object({}),
+        resolveExecution: async () => ({
+          accesses: [Access.fsWrite("/w")],
+          approvalRule: "m__t(git *)",
+          execute: async () => ({ output: "done", isError: false }),
+        }),
+      }),
+      "m",
+    );
+    const planned = await reg.plan({ id: "c1", name: "m__t", args: {} });
+    expect(planned.ok).toBe(true);
+    if (planned.ok) {
+      expect(planned.accesses).toEqual([Access.fsWrite("/w")]);
+      expect(planned.approvalRule).toBe("m__t(git *)");
+    }
+    const vetoes: unknown[] = [];
+    bus.on(CORE_POINTS.toolPreExecute, (p) => { vetoes.push(p); }, "approval");
+    const result = await reg.execute(planned, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ output: "done", isError: false });
+    expect(vetoes).toHaveLength(1);
+  });
+
+  it("plan/execute（D40）：墓碑/未知/校验失败 → ok:false，execute 直落结果不触发 waterfall", async () => {
+    const { reg, bus } = setup();
+    reg.register(
+      defineTool({
+        name: "m__t",
+        description: "t",
+        parameters: z.object({ n: z.number() }),
+        resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+      }),
+      "m",
+    );
+    const vetoes: unknown[] = [];
+    bus.on(CORE_POINTS.toolPreExecute, (p) => { vetoes.push(p); }, "approval");
+    const bad = await reg.plan({ id: "c1", name: "m__t", args: { n: "x" } }); // 校验失败
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.result.isError).toBe(true);
+    expect((await reg.execute(bad, { signal: new AbortController().signal })).isError).toBe(true);
+    const unknown = await reg.plan({ id: "c2", name: "m__nope", args: {} });
+    expect(unknown.ok).toBe(false);
+    expect(vetoes).toHaveLength(0); // 三类短路都不触发 waterfall
   });
 
   it("run：参数校验失败 → isError；未知工具 → isError", async () => {

@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import type { Logger } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import { LOG_TYPES, type SessionEvent, type SessionStore } from "../session/types.ts";
 import { CORE_POINTS, type EventBus } from "../kernel/bus.ts";
-import type { ToolRegistry } from "../tool/registry.ts";
+import type { PlannedTool, ToolRegistry } from "../tool/registry.ts";
+import { scheduleByAccesses } from "../tool/schedule.ts";
 import { deriveMessages } from "./convert.ts";
 
 export interface LoopOptions {
@@ -25,10 +27,61 @@ interface PendingToolCall {
 
 const hash = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 16);
 
+/** 组间串行、组内并行（D40）；tool/result 按完成序落日志并经 fan-in 队列按完成序转发。
+ *  返回已产出结果的 callId 集——中止时调用方为其余 call 补 [已中止] 条（投影完整性，§6.1）。
+ *  abort 语义：组边界检查（未启动的组不再执行）；在飞任务收到 signal、按工具契约快速带内返回。 */
+async function* executeGroups(
+  groups: number[][],
+  plans: PlannedTool[],
+  parsedCalls: { call: PendingToolCall; args: unknown }[],
+  opts: {
+    signal: AbortSignal;
+    session: SessionStore;
+    bus: EventBus;
+    tools: ToolRegistry;
+    log: Logger;
+  },
+): AsyncGenerator<SessionEvent, Set<string>> {
+  const executedIds = new Set<string>();
+  for (const group of groups) {
+    if (opts.signal.aborted) break; // 未启动的组不再执行——由调用方补条
+    const queue: SessionEvent[] = [];
+    let wake: (() => void) | undefined;
+    let finished = false;
+    const notify = (): void => { const w = wake; wake = undefined; w?.(); };
+    const tasks = group.map((i) => (async () => {
+      const { call } = parsedCalls[i]!;
+      const planned = plans[i]!;
+      opts.log.debug("loop.tool.call", "工具调用", { call: call.callId, name: call.name });
+      const result = await opts.tools.execute(planned, { signal: opts.signal });
+      executedIds.add(call.callId);
+      const e = await opts.session.append(LOG_TYPES.toolResult, {
+        callId: call.callId,
+        output: result.output,
+        isError: result.isError,
+        ...(result.denied !== undefined ? { denied: result.denied } : {}),
+        ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
+        ...(result.spill !== undefined ? { spill: result.spill } : {}),
+      });
+      await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
+      queue.push(e);
+      notify();
+    })());
+    const all = (async () => { await Promise.all(tasks); finished = true; notify(); })();
+    for (;;) {
+      while (queue.length > 0) yield queue.shift()!;
+      if (finished) break;
+      await new Promise<void>((r) => { wake = r; });
+    }
+    await all;
+  }
+  return executedIds;
+}
+
 /**
  * agentLoop（§6.2）：零策略骨架。一切可变行为经 bus 装配（reduce/collect/waterfall），
- * convertToLlm 固定（§6.1 铁律）。M1 工具按 call 顺序全串行（§12；调度器 M3）。
- * 产出 = 会话日志实时投影：每 append 一条 yield 一条（§6.7）。
+ * convertToLlm 固定（§6.1 铁律）。工具执行按 §6.3 冲突矩阵并发分组（M3/D40：组间串行、组内并行）。
+ * 产出 = 会话日志实时投影：每 append 一条 yield 一条（§6.7；组内按完成序）。
  */
 export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent> {
   const { session, bus, tools, provider, model, system, signal, sink } = opts;
@@ -135,7 +188,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
       break outer;
     }
 
-    // 先批量落全部 tool/call，再串行执行（§6.2 伪码同款）——投影规则把 tool/call 附挂到最近的 assistant，
+    // 先批量落全部 tool/call，再并发执行（§6.2 伪码同款）——投影规则把 tool/call 附挂到最近的 assistant，
     // 边执行边落条会让第二个 call 的前一条变成 tool/result 而被投影静默丢弃（model-visible means logged，§6.1 铁律）
     const parsedCalls = toolCalls.map((call) => {
       let args: unknown = {};
@@ -149,24 +202,16 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     for (const { call, args } of parsedCalls) {
       yield* emit(LOG_TYPES.toolCall, { callId: call.callId, name: call.name, args });
     }
-    let executed = 0;
+    // 并发调度（§6.3/D40）：全量 plan → 冲突矩阵贪心分组 → 组间串行、组内并行；tool/result 按完成序落日志
+    const plans: import("../tool/registry.ts").PlannedTool[] = [];
     for (const { call, args } of parsedCalls) {
-      if (signal.aborted) break;
-      log.debug("loop.tool.call", "工具调用", { call: call.callId, name: call.name });
-      const result = await tools.run({ id: call.callId, name: call.name, args }, { signal });
-      executed++;
-      yield* emit(LOG_TYPES.toolResult, {
-        callId: call.callId,
-        output: result.output,
-        isError: result.isError,
-        ...(result.denied !== undefined ? { denied: result.denied } : {}),
-        ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
-        ...(result.spill !== undefined ? { spill: result.spill } : {}),
-      });
-      await bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
+      plans.push(await tools.plan({ id: call.callId, name: call.name, args }));
     }
+    const groups = scheduleByAccesses(plans.map((p) => ({ accesses: p.ok ? p.accesses : [] })));
+    const executedIds = yield* executeGroups(groups, plans, parsedCalls, { signal, session, bus, tools, log });
     // 中止时给未执行的 call 补 interrupted 结果——日志里不许出现无结果的 tool/call（投影完整性）
-    for (const { call } of parsedCalls.slice(executed)) {
+    for (const { call } of parsedCalls) {
+      if (executedIds.has(call.callId)) continue;
       yield* emit(LOG_TYPES.toolResult, { callId: call.callId, output: "[已中止：工具未执行]", isError: true });
     }
     if (signal.aborted) {

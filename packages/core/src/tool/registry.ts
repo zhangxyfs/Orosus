@@ -2,13 +2,29 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Disposer, Logger } from "@orosus/contracts/module";
-import { Access, type Tool, type ToolResult } from "@orosus/contracts/tool";
+import { Access, type Tool, type ToolExecution, type ToolResult } from "@orosus/contracts/tool";
 import type { ToolSpec } from "@orosus/contracts/provider";
 import { CORE_POINTS, type EventBus } from "../kernel/bus.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 
 /** 单条工具输出上限（字节按 length 近似），超出截断 + 溢写 spill（§6.3）。 */
 export const OUTPUT_LIMIT = 32768;
+
+/** 阶段一产物（D40）：声明 + 执行闭包 + 调度/审批所需的判定件。
+ *  ok:false = 墓碑/未知工具/参数校验失败/resolveExecution 抛错的带内短路——execute 直落结果、不触发 waterfall。 */
+export type PlannedTool =
+  | {
+      ok: true;
+      callId: string;
+      name: string;
+      owner: string;
+      args: unknown;
+      log: Logger;
+      execution: ToolExecution;
+      accesses: Access[];
+      approvalRule: string;
+    }
+  | { ok: false; callId: string; result: ToolResult };
 
 export interface ToolRegistry {
   register(tool: Tool, owner: string): Disposer;
@@ -18,14 +34,19 @@ export interface ToolRegistry {
   /** soft 摘除（§5.5）：名字保留占位、run 带内报错、specs 仍含名——tools 数组字节稳定。 */
   tombstone(name: string): void;
   specs(): ToolSpec[];
+  /** 阶段一（D40）：声明产物——调度分组与审批预判的输入。 */
+  plan(call: { id: string; name: string; args: unknown }): Promise<PlannedTool>;
+  /** 阶段二（D40）：waterfall（审批挂点）→ 执行 → 归一。matchesRule 进 payload 归 T2。 */
+  execute(planned: PlannedTool, ctx: { signal: AbortSignal }): Promise<ToolResult>;
+  /** 合成口（M1 语义不变）：单发调用面。 */
   run(call: { id: string; name: string; args: unknown }, ctx: { signal: AbortSignal }): Promise<ToolResult>;
 }
 
 /**
- * 两阶段执行管线（§6.3）：
- * resolveExecution（声明）→ 参数校验 → tool/pre-execute waterfall（审批，M3 前空链即通过）→ execute → 归一。
- * fail-closed 默认值：accesses 缺省 = kind:"all"；approvalRule 缺省 = 需要审批（M1 无消费方，仅作数据携带）。
- * M1 不含并发调度器——调用方（loop）按 call 顺序全串行调用 run（§12）。
+ * 两阶段执行管线（§6.3，D40 拆分）：
+ * plan = resolveExecution（声明）+ 参数校验（失败短路为带内结果）；execute = tool/pre-execute waterfall（审批）
+ * → execute → 归一（截断/spill）。run 为合成口（M1 语义不变）。loop 消费 plan/execute 做 §6.3 并发分组。
+ * fail-closed 默认值：accesses 缺省 = kind:"all"；approvalRule 缺省 = 需要审批。
  */
 export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
   const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
@@ -75,14 +96,14 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       }));
     },
 
-    async run(call, { signal }) {
+    async plan(call): Promise<PlannedTool> {
       const entry = tools.find((t) => t.tool.name === call.name);
       if (entry?.tombstoned) {
         // §5.5 会话连续性：被换下模块的工具——tools 数组字节不动，调用带内报错，新会话（新 registry）自然消失
-        return { output: "该工具所属模块已在 reload 中变更，新会话生效", isError: true };
+        return { ok: false, callId: call.id, result: { output: "该工具所属模块已在 reload 中变更，新会话生效", isError: true } };
       }
       if (!entry) {
-        return { output: `未知工具 "${call.name}"（该工具所属模块可能已降级或未安装）`, isError: true };
+        return { ok: false, callId: call.id, result: { output: `未知工具 "${call.name}"（该工具所属模块可能已降级或未安装）`, isError: true } };
       }
       const { tool, owner } = entry;
       const tlog: Logger = createLogger(opts.sink, owner);
@@ -90,8 +111,12 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       const parsed = tool.parameters.safeParse(call.args);
       if (!parsed.success) {
         return {
-          output: `参数校验失败：${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-          isError: true,
+          ok: false,
+          callId: call.id,
+          result: {
+            output: `参数校验失败：${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+            isError: true,
+          },
         };
       }
 
@@ -99,17 +124,25 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       try {
         execution = await tool.resolveExecution(parsed.data);
       } catch (err) {
-        return { output: `resolveExecution 抛错：${String(err)}`, isError: true };
+        return { ok: false, callId: call.id, result: { output: `resolveExecution 抛错：${String(err)}`, isError: true } };
       }
       // fail-closed 默认值（§6.3）：宽松只能由声明显式打开
       const accesses = execution.accesses ?? [Access.all()];
-      const approvalRule = execution.approvalRule ?? `${call.name}(需要审批)`; // M1：无消费方的数据
+      const approvalRule = execution.approvalRule ?? `${call.name}(需要审批)`;
 
       // 码表纪律（§11.9）：核心码只用 kernel/loop/provider 前缀——工具两阶段归 kernel.tool.*
       tlog.debug("kernel.tool.two-phase", "阶段一完成", { call: call.id, name: call.name, approvalRule, accessKinds: accesses.map((a) => a.kind).join(",") });
+      return {
+        ok: true, callId: call.id, name: call.name, owner, args: call.args, log: tlog,
+        execution, accesses, approvalRule,
+      };
+    },
 
+    async execute(planned, { signal }): Promise<ToolResult> {
+      if (!planned.ok) return planned.result;
       const veto = await opts.bus.waterfall(CORE_POINTS.toolPreExecute, {
-        callId: call.id, name: call.name, args: call.args, accesses, approvalRule,
+        callId: planned.callId, name: planned.name, args: planned.args, accesses: planned.accesses,
+        approvalRule: planned.approvalRule,
       });
       if (veto) {
         return { output: veto.reason, isError: true, denied: true };
@@ -117,14 +150,14 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
       let result: ToolResult;
       try {
-        result = await execution.execute({ callId: call.id, signal, log: tlog });
+        result = await planned.execution.execute({ callId: planned.callId, signal, log: planned.log });
       } catch (err) {
         result = { output: `工具执行抛错：${String(err)}`, isError: true };
       }
 
       if (result.output.length > OUTPUT_LIMIT) {
         mkdirSync(opts.spillDir, { recursive: true });
-        const path = join(opts.spillDir, `spill-${call.id}.txt`);
+        const path = join(opts.spillDir, `spill-${planned.callId}.txt`);
         writeFileSync(path, result.output, { mode: 0o600 });
         const bytes = result.output.length;
         result = {
@@ -135,8 +168,12 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         };
       }
 
-      tlog.debug("kernel.tool.result", "执行完成", { call: call.id, isError: result.isError, truncated: result.truncated ?? false });
+      planned.log.debug("kernel.tool.result", "执行完成", { call: planned.callId, isError: result.isError, truncated: result.truncated ?? false });
       return result;
+    },
+
+    async run(call, ctx) {
+      return this.execute(await this.plan(call), ctx);
     },
   };
 }
