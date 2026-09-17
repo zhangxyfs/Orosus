@@ -53,9 +53,9 @@ async function verify(
   const url = entry.type === "anthropic" ? `${entry.baseUrl}/v1/models` : `${entry.baseUrl}/models`;
   try {
     const res = await deps.fetchImpl(url, {
-      headers: {
-        ...(actualKey !== undefined ? { "x-api-key": actualKey, authorization: `Bearer ${actualKey}` } : {}), // D31 双头
-      },
+      headers: actualKey !== undefined ? {
+        "x-api-key": actualKey, authorization: `Bearer ${actualKey}`, // D31 双头
+      } : {},
       signal: AbortSignal.timeout(10_000),
     });
     if (res.status === 401 || res.status === 403) return "auth";

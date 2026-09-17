@@ -38,7 +38,7 @@ describe("项目级信任门（§8.5，内容 hash + fail-closed）", () => {
     expect(checkTrust({ layer: "project", root: "C:\\x\\m", entryHash: "h2", store })).toEqual({ ok: false, reason: "hash-changed" });
   });
 
-  it("⑤ trust.json roundtrip（含 Windows 盘符大小写归一化：D:\ 与 d:\ 命中同一条目）", () => {
+  it("⑤ trust.json roundtrip（含 Windows 盘符大小写归一化：D:\\ 与 d:\\ 命中同一条目）", () => {
     const dir = mk();
     const file = join(dir, "trust.json");
     const store = loadTrustStore(file);

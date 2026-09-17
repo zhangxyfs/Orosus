@@ -17,6 +17,18 @@ importers:
       '@orosus/provider-anthropic':
         specifier: workspace:*
         version: link:packages/provider-anthropic
+      '@orosus/provider-deepseek':
+        specifier: workspace:*
+        version: link:packages/provider-deepseek
+      '@orosus/provider-glm':
+        specifier: workspace:*
+        version: link:packages/provider-glm
+      '@orosus/provider-kimi':
+        specifier: workspace:*
+        version: link:packages/provider-kimi
+      '@orosus/provider-openai':
+        specifier: workspace:*
+        version: link:packages/provider-openai
       '@orosus/testing':
         specifier: workspace:*
         version: link:packages/testing

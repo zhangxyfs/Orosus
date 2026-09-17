@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, openSync, closeSync, chmodSync } from "node:fs";
-import { isAbsolute, resolve, sep } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 /** 信任存储（§8.5）：key = 模块目录绝对路径（归一化——Windows 盘符大小写）。
  *  解析失败视为空 store（全部重新确认，fail-closed 方向——五轮审查定案）。 */

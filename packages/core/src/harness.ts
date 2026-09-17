@@ -353,7 +353,6 @@ session: ${store.sessionId}
         }
       }
       // diff（新 defs 的 configValue 由 loadModules 内部计算——此处先按名字+hash+引用粗判，loadModules 后以 defs() 复核）
-      const oldByName = new Map(oldDefs.map((g) => [g.def.name, g]));
       const newNames = new Set(defs2.map((d) => d.def.name));
       const removedOrChanged = new Set<string>();
       for (const g of oldDefs) {

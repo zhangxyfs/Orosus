@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
 import { getCatalog, type Catalog } from "./catalog.ts";
-import { runProviderMenu, type MenuUi, type MenuDeps, type ProviderEntry } from "./menu.ts";
+import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
   it("type 已知两族直用（guessed=false）", () => {

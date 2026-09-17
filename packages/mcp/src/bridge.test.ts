@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { z } from "zod";
 import { sanitizeToolMeta, digest, toBridgedTool } from "./bridge.ts";
 import { activateMcp, collectTools, runTool } from "./index.ts";
 import type { Tool } from "@orosus/contracts/tool";

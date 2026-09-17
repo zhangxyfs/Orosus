@@ -34,7 +34,7 @@ describe("provider-anthropic 双头鉴权（D31 回归）", () => {
   it("请求同时携带 x-api-key 与 Authorization Bearer 同值", async () => {
     const { ctx, services } = fakeCtx();
     await def.activate(ctx);
-    const adapter = services.get("provider:anthropic") as { stream: (req: never) => AsyncIterable<unknown> };
+    void services.get("provider:anthropic");
     const seen: { url: string; headers: Record<string, string> }[] = [];
     const fetchImpl = ((url: string | URL | Request, init?: RequestInit) => {
       seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });

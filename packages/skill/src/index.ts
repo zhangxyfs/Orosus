@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
-import { defineModule, type ModuleContext } from "@orosus/contracts/module";
+import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
 
 /**
