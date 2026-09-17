@@ -1,0 +1,9 @@
+{
+  "name": "@orosus/skill",
+  "version": "0.1.0",
+  "type": "module",
+  "orosus": { "module": true },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@orosus/contracts": "workspace:*", "zod": "^4.0.0" }
+}
