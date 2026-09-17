@@ -16,28 +16,28 @@ importers:
         version: link:packages/core
       '@orosus/provider-anthropic':
         specifier: workspace:*
-        version: link:packages/provider-anthropic
+        version: link:packages/modules/provider-anthropic
       '@orosus/provider-deepseek':
         specifier: workspace:*
-        version: link:packages/provider-deepseek
+        version: link:packages/modules/provider-deepseek
       '@orosus/provider-glm':
         specifier: workspace:*
-        version: link:packages/provider-glm
+        version: link:packages/modules/provider-glm
       '@orosus/provider-kimi':
         specifier: workspace:*
-        version: link:packages/provider-kimi
+        version: link:packages/modules/provider-kimi
       '@orosus/provider-openai':
         specifier: workspace:*
-        version: link:packages/provider-openai
+        version: link:packages/modules/provider-openai
       '@orosus/testing':
         specifier: workspace:*
         version: link:packages/testing
       '@orosus/tool-fs':
         specifier: workspace:*
-        version: link:packages/tool-fs
+        version: link:packages/modules/tool-fs
       '@orosus/tool-shell':
         specifier: workspace:*
-        version: link:packages/tool-shell
+        version: link:packages/modules/tool-shell
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.2
@@ -64,34 +64,34 @@ importers:
         version: link:../../packages/core
       '@orosus/mcp':
         specifier: workspace:*
-        version: link:../../packages/mcp
+        version: link:../../packages/modules/mcp
       '@orosus/provider-anthropic':
         specifier: workspace:*
-        version: link:../../packages/provider-anthropic
+        version: link:../../packages/modules/provider-anthropic
       '@orosus/provider-custom':
         specifier: workspace:*
-        version: link:../../packages/provider-custom
+        version: link:../../packages/modules/provider-custom
       '@orosus/provider-deepseek':
         specifier: workspace:*
-        version: link:../../packages/provider-deepseek
+        version: link:../../packages/modules/provider-deepseek
       '@orosus/provider-glm':
         specifier: workspace:*
-        version: link:../../packages/provider-glm
+        version: link:../../packages/modules/provider-glm
       '@orosus/provider-kimi':
         specifier: workspace:*
-        version: link:../../packages/provider-kimi
+        version: link:../../packages/modules/provider-kimi
       '@orosus/provider-openai':
         specifier: workspace:*
-        version: link:../../packages/provider-openai
+        version: link:../../packages/modules/provider-openai
       '@orosus/skill':
         specifier: workspace:*
-        version: link:../../packages/skill
+        version: link:../../packages/modules/skill
       '@orosus/tool-fs':
         specifier: workspace:*
-        version: link:../../packages/tool-fs
+        version: link:../../packages/modules/tool-fs
       '@orosus/tool-shell':
         specifier: workspace:*
-        version: link:../../packages/tool-shell
+        version: link:../../packages/modules/tool-shell
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
@@ -128,32 +128,32 @@ importers:
         specifier: workspace:*
         version: link:../testing
 
-  packages/mcp:
+  packages/modules/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(zod@4.6.5)
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-anthropic:
+  packages/modules/provider-anthropic:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-custom:
+  packages/modules/provider-custom:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
@@ -161,70 +161,70 @@ importers:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-deepseek:
+  packages/modules/provider-deepseek:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-glm:
+  packages/modules/provider-glm:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-kimi:
+  packages/modules/provider-kimi:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/provider-openai:
+  packages/modules/provider-openai:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/skill:
+  packages/modules/skill:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*
-        version: link:../contracts
+        version: link:../../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+
+  packages/modules/tool-fs:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+
+  packages/modules/tool-shell:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
 
   packages/testing:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/tool-fs:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/tool-shell:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*

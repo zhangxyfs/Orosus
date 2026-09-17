@@ -38,7 +38,7 @@ export function checkPackage(pkg: PkgJson, _files: string[]): string[] {
 }
 
 export function run(): number {
-  const dirs = ["packages", join("packages", "contracts"), "apps"];
+  const dirs = ["packages", join("packages", "contracts"), join("packages", "modules"), "apps"]; // modules 组目录无 package.json，由本条目下探一层
   let all: string[] = [];
   for (const dir of dirs) {
     const abs = join(ROOT, dir);

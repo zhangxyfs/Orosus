@@ -2,6 +2,28 @@
 
 > `@orosus/contracts` 是模块开发者的唯一编程面——本文是人类版指南；`catalogJson()` 是运行时机器可读版。
 
+## 仓库目录地图（§4/§9，v26）
+
+```
+Orosus/
+├─ apps/cli/                          # 唯一前端：REPL + 子命令（provider/module）
+├─ packages/
+│  ├─ core/src/                       # 核心五件 + kernel（§4）
+│  │  ├─ session/  loop/  tool/  provider/  kernel/  config/
+│  │  ├─ diag/                        # §11.9 专用诊断日志（独立旁路管线）
+│  │  └─ harness.ts                   # §8.1 createHarness 编程式入口（嵌入式宿主/测试用）
+│  ├─ contracts/src/                  # 零依赖契约，按域分包：module / tool / provider / fs（§9）
+│  ├─ testing/                        # 测试基建：fakeProvider / fakeProviderModule / fakeModule
+│  └─ modules/                        # 内置模块（规则 5：与外部模块走同一条 kernel 注册管线——目录归置≠特权）
+│     ├─ tool-fs/  tool-shell/        #   能力模块（fs seam 的提供者/消费者）
+│     ├─ skill/  mcp/                 #   内容系统 / MCP 桥接
+│     └─ provider-{anthropic,glm,kimi,deepseek,openai}/  provider-custom/
+│                                     #   品牌适配器（D31/D34 封顶五家）+ 自定义厂商统一入口（D33/D34）
+└─ tests/                             # 跨包集成测试（模块图/信任门/reload/多 provider 共存等端到端）
+```
+
+读法：**核心件**（core，禁止 import 任何模块）→ **契约**（contracts，模块唯一可 import 的 Orosus 包）→ **测试基建**（testing，非模块）→ **内置模块**（modules/，包名 `@orosus/<name>` 不含目录层级）→ **前端**（apps）。新增顶层目录/分组先修设计文档 §4/§9（§11.11 验收纪律：无设计外居民）。
+
 ## 最小完整模块（可复制）
 
 ```ts
