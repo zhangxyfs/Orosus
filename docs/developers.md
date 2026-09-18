@@ -80,3 +80,21 @@ export default defineModule({
 - StreamFn 不许 reject——错误编码为 `finish{kind:"error"}`（§6.4）
 - 工具执行不许 reject——带内 `{ output, isError: true }`（§6.3）
 - 激活抛错 → 模块降级不阻断（§10）；`required = true` 的模块失败才阻断启动
+
+## 验收纪律：单测全绿 ≠ 能用（2026-09-18 走查定案）
+
+单测测不出真实用户体验侧的缺陷——2026-09-18 走查实录：测试全绿的代码在真实运行里连出
+ENOENT 崩溃、`$ENV` 占位符原文上屏（401）、目录静默降级成 7 家快照、同前缀厂商错配
+（选 `zhipuai-coding-plan` 导入了普通 `zhipuai`）、密钥输入回显在 Windows 终端层碎成孤星。
+五类缺陷没有一个被单测拦住。**凡改 CLI/向导/渲染/配置链路，收尾前必须以普通用户视角真实运行一遍**：
+
+```bash
+# 配方（HERMETIC：USERPROFILE 隔离配置/密钥/会话/缓存，mock 端点不烧真钱）：
+# 1. mock 端点（GET /models + POST chat/completions SSE，GLM 方言：reasoning_content + usage 同帧）
+# 2. 本地 api.json 指向 mock，向导走「本地文件」源 → 落盘缓存 → /reload → hello → /usage → /quit
+printf '%s\n' "/provider" "1" "2" "<api.json 的 Windows 路径>" "" "1" "<mock-key>" "1" "/reload" "hello" "/usage" "/quit" \
+  | USERPROFILE='C:\tmp\orosus-e2e\home' node --experimental-strip-types apps/cli/src/main.ts
+```
+
+验收点（看真实 stdout，不看测试报告）：向导每级菜单文案、`success` 横幅含端点/密钥/模型/窗口、
+`[思考]` 块与正文渲染、`/usage` 双口径有真实数字、`/quit` 退出码 0、过程中无栈迹无明文密钥。
