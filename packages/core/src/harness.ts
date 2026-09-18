@@ -496,6 +496,11 @@ session: ${store.sessionId}
       }
       const preserved = new Map([...oldGraph.preservable()].filter(([name]) => !removedOrChanged.has(name)));
       const generations = new Map(oldGraph.records.map((r) => [r.name, r.generation]));
+      // 会话连续性（§5.5，时序走查修正）：墓碑在**新图激活前**打——共享注册表上 Reloaded 模块重注册原位
+      // 复活墓碑槽；激活后打会把复活的新工具再杀一次。失败路径：changed 模块工具保持墓碑（带内报错，§5.5 语义）
+      for (const name of removedOrChanged) {
+        for (const tn of oldGraph.tools.namesByOwner(name)) oldGraph.tools.tombstone(tn);
+      }
       let newGraph: ModuleGraph;
       try {
         newGraph = await loadModules({
@@ -515,10 +520,9 @@ session: ${store.sessionId}
         // 图级失败（required 护栏等）：新图整体废除、旧图继续运行（§5.5 事务性）——reuse 注册表上的新激活已被 loadModules 内部回滚
         throw new Error(`reload 失败，旧图继续运行：${err instanceof Error ? err.message : String(err)}`);
       }
-      // 会话连续性（§5.5）：Removed/Reloaded 模块的工具 soft 墓碑（tools 数组字节稳定；Reloaded 重注册自动顶掉墓碑）
-      for (const name of removedOrChanged) {
-        for (const tn of oldGraph.tools.namesByOwner(name)) newGraph.tools.tombstone(tn);
-      }
+      // 换下实例选择性拆除（走查修复）：旧实例 disposers 摘共享 bus 上的旧监听（否则 Reloaded 模块监听双份）、
+      // disposeFn 清理资源——preserved 实例不经此路（句柄被新图沿用）
+      await oldGraph.disposeOwners([...removedOrChanged]);
       graph = newGraph;
       const d = diffGraphs(oldDefs, newGraph.defs());
       const failed = newGraph.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" }));

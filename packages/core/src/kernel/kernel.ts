@@ -25,6 +25,8 @@ export interface ModuleGraph {
   catalogJson(): string;   // 机器可读导出（§6.5/T19）
   defs(): import("./reload.ts").GraphDef[];   // 旧图 diff 输入（reload，§5.5）
   preservable(): Map<string, import("./activate.ts").PreservedInstance>;  // 旧图 Unchanged 沿用数据源（reload）
+  /** 选择性拆除指定模块实例（reload 成功后对 Removed/Reloaded 旧实例调用——共享 bus 上的旧监听摘除）。 */
+  disposeOwners(names: string[]): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -77,8 +79,11 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   }
 
   const { order, degraded } = resolveTopo({ defs: candidates, disabled });
-  const bus = createEventBus(input.sink);
-  const tools = createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir });
+  // reuse 接线（走查修复：曾无视 reuse 每图新建——/reload 后 preserved 模块工具丢失（toolsCount 0、
+  // 模型"没有文件系统模块"）、ctx.events 监听器孤儿化（compaction/approval 拦截器静默失效））：
+  // reload 传当前实例复用（T14/T15 既定）；启动路径缺省新建不变
+  const bus = input.reuse?.bus ?? createEventBus(input.sink);
+  const tools = input.reuse?.tools ?? createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir });
   const act = await activateModules({
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
     ...(input.commandUi !== undefined ? { commandUi: input.commandUi } : {}),
@@ -145,6 +150,8 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     commands: act.commands,
     defs: () => graphDefs.map((g) => ({ ...g })),
     preservable: act.preservable,
+    /** 选择性拆除（reload 换下实例）：disposers 摘共享 bus 上旧监听 + disposeFn 清理——preserved 不受株连（§5.5）。 */
+    disposeOwners: async (names) => { for (const n of names) await act.rollbackModule(n); },
 
     promptSections() {
       const all = [...act.promptSections].sort((a, b) => a.order - b.order);

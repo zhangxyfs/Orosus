@@ -62,11 +62,12 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         throw new Error(`工具重名：${tool.name}`);
       }
       if (existing !== undefined) {
-        // 墓碑位重注册（reload 的 Reloaded 模块）：原位替换，保持注册序（tools 数组字节稳定，§6.3）
-        existing.tool = tool;
-        existing.owner = owner;
-        existing.tombstoned = false;
-        return () => { existing.tombstoned = true; };
+        // 墓碑位重注册（reload 的 Reloaded 模块）：同位新对象顶替，保持注册序（tools 数组字节稳定，§6.3）。
+        // 新对象是必须的：旧实例的 remove-disposer 持旧 entry 引用——若原位复用同一对象，reload 后
+        // 选择性拆除旧实例会把新实例的注册一起剪掉（走查实证：复活工具被 disposeOwners 误删）
+        const revived: { tool: Tool; owner: string; tombstoned?: boolean } = { tool, owner };
+        tools[tools.indexOf(existing)] = revived;
+        return () => { revived.tombstoned = true; };
       }
       const entry = { tool, owner };
       tools.push(entry);

@@ -7,6 +7,7 @@ import { createEventBus } from "./bus.ts";
 import { createToolRegistry } from "../tool/registry.ts";
 import { resolveSections } from "../config/validate.ts";
 import { activateModules, type ActivateOutput } from "./activate.ts";
+import { loadModules } from "./kernel.ts";
 import { diffGraphs, type GraphDef } from "./reload.ts";
 import type { DiagSink } from "../diag/logger.ts";
 
@@ -157,5 +158,58 @@ describe("preserved / 代际 / stale / 墓碑 / 注册表复用", () => {
     await round([preserved.get("m11")!.def], { preserved, reuse: { bus, tools } });
     const res = await tools.run({ id: "c10", name: "m11__t", args: {} }, { signal: new AbortController().signal });
     expect(res.output).toBe("out:m11__t");
+  });
+});
+
+// ---- loadModules 层：reuse 接线（走查实证：/reload 后 toolsCount 0、拦截器静默失效——kernel 无视 reuse） ----
+
+describe("loadModules reuse 接线（/reload 工具与监听器存活）", () => {
+  const gd2 = (def: ModuleDefinition) => ({ def, source: "inline" as const });
+
+  it("⑫ reuse.bus/tools 真被复用：preserved 模块的工具在新图可用、bus 监听器跨 reload 存活", async () => {
+    const s = sink();
+    const seen: string[] = [];
+    const m = mod("m12", {
+      activate(ctx) {
+        ctx.contribute.tool(tool("m12__t"));
+        ctx.events.on("test/hello", () => { seen.push("hit"); });
+      },
+    });
+    const r1 = await loadModules({ defs: [gd2(m)], cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s" });
+    r1.bus.emit("test/hello", {});
+    expect(seen).toEqual(["hit"]);
+    const preserved = r1.preservable();
+    const r2 = await loadModules({
+      defs: [gd2(preserved.get("m12")!.def)], cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+      reuse: { bus: r1.bus, tools: r1.tools }, preserved,
+    });
+    expect(r2.tools.list().map((t) => t.name)).toContain("m12__t"); // 走查缺陷：曾为空——新图新注册表丢了 preserved 工具
+    expect(r2.bus).toBe(r1.bus); // 复用同一 bus——preserved 监听器不孤儿化
+    r2.bus.emit("test/hello", {});
+    expect(seen).toEqual(["hit", "hit"]); // 监听器仍活着（走查缺陷：曾静默失效）
+  });
+
+  it("⑬ Reloaded 模块：重激活复活工具槽 + disposeOwners 拆旧实例（共享 bus 上旧监听器恰好摘除一次）", async () => {
+    const s = sink();
+    const seen: string[] = [];
+    const make = () => mod("m13", {
+      activate(ctx) {
+        ctx.contribute.tool(tool("m13__t"));
+        ctx.events.on("test/hello", () => { seen.push("hit"); });
+      },
+    });
+    const r1 = await loadModules({ defs: [gd2(make())], cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s" });
+    // 配置变化 → Reloaded：不进 preserved，重激活——harness 时序：先墓碑（重注册原位复活，否则撞名激活失败）
+    for (const tn of r1.tools.namesByOwner("m13")) r1.tools.tombstone(tn);
+    const r2 = await loadModules({
+      defs: [gd2(make())], cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+      reuse: { bus: r1.bus, tools: r1.tools },
+      generations: new Map(r1.records.map((r) => [r.name, r.generation])),
+    });
+    await r1.disposeOwners(["m13"]); // 换下旧实例选择性拆除（新图方法）
+    r2.bus.emit("test/hello", {});
+    expect(seen).toEqual(["hit"]); // 恰好一次（仅新实例监听）——不 dispose 会是两次（旧监听器泄漏在共享 bus 上）
+    const res = await r2.tools.run({ id: "c13", name: "m13__t", args: {} }, { signal: new AbortController().signal });
+    expect(res.output).toBe("out:m13__t"); // 工具槽复活可用
   });
 });
