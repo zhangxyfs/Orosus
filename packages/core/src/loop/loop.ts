@@ -88,6 +88,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
   const turnStart = await session.append(LOG_TYPES.turnStart, { model });
   const log = createLogger(sink, "loop").withCtx({ sess: session.sessionId, turn: turnStart.id });
   let lastRequestSig: string | null = null;
+  let overflowRetried = false; // 溢出重试每 turn 至多一次（D43：重试后仍超限即终局，防打转）
 
   async function* emit(type: string, fields?: Record<string, unknown>): AsyncGenerator<SessionEvent, SessionEvent> {
     const e = await session.append(type, fields);
@@ -171,8 +172,18 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
       break;
     }
     if (finish.kind === "error") {
+      // 溢出恢复（M3 补强 D43）：context_limit 且本 turn 未重试且无部分产出（防重试造成重复 assistant 投影）
+      // → 广播 request-error 后重走本 step（投影 → reduce → 重发；compaction 模块监听置 forceOnce）。
+      // 零策略口径：loop 只认适配器打的 errorCode，不读错误文本、不认识压缩与模块——未装时原样重发、二次失败终局
+      if (finish.errorCode === "context_limit" && !overflowRetried && text === "" && pending.size === 0) {
+        overflowRetried = true;
+        await bus.emit(CORE_POINTS.requestError, { code: "context_limit", errorMessage: finish.errorMessage, turn: turnStart.id });
+        continue outer; // 重试步注记：lastRequestSig 不变不落重复 request/header；turn/step 多落合法；steering 已排空
+      }
       endKind = "error";
-      endDetail = finish.errorMessage;
+      endDetail = finish.errorCode === "context_limit"
+        ? `${finish.errorMessage ?? ""}（已自动压缩重试仍超限——可 /compact 或换更大窗口模型）`
+        : finish.errorMessage;
       break;
     }
 

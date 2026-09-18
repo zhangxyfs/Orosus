@@ -214,3 +214,46 @@ describe("agentLoop 工具并发调度（M3，§6.3/D40）", () => {
     expect(all.some((e) => e.type === "turn/end" && e.kind === "interrupted")).toBe(true);
   });
 });
+
+describe("溢出恢复（M3 补强 T4/D43：agent/request-error 广播 + 数据驱动重试一次）", () => {
+  it("① 首请求 context_limit → 广播 request-error → 重发成功：turn completed、重发消息与首请求一致（无 compaction 在场——优雅降级）", async () => {
+    const { run, bus, provider, session } = setup([
+      [{ type: "finish", kind: "error", errorMessage: "HTTP 400：This model's maximum context length is 65536 tokens", errorCode: "context_limit" }],
+      [{ type: "text/delta", text: "好了" }, { type: "finish", kind: "stop" }],
+    ]);
+    await session.append("user/message", { content: [{ kind: "text", text: "hi" }] });
+    const errs: unknown[] = [];
+    bus.on(CORE_POINTS.requestError, (p) => { errs.push(p); }, "observer");
+    const types = await run();
+    expect(errs).toHaveLength(1);
+    expect((errs[0] as { code: string }).code).toBe("context_limit");
+    expect(provider.requests).toHaveLength(2); // 恰重发一次
+    expect(provider.requests[1]!.messages).toEqual(provider.requests[0]!.messages); // 原样重发（无监听者改写）
+    expect(types.filter((t) => t === "request/header")).toHaveLength(1); // lastRequestSig 不变 → 不落重复 header（重试步注记）
+    const all = await session.all();
+    expect(all.at(-1)).toMatchObject({ type: "turn/end", kind: "completed" });
+  });
+
+  it("② 两次都 context_limit → 每 turn 只重试一次：provider 恰调 2 次、turn error 且 errorMessage 含指引", async () => {
+    const { run, provider, session } = setup([
+      [{ type: "finish", kind: "error", errorMessage: "HTTP 400：context_length_exceeded", errorCode: "context_limit" }],
+    ]); // fakeProvider 重复末位脚本 → 恒失败
+    await run();
+    expect(provider.requests).toHaveLength(2);
+    const end = (await session.all()).at(-1) as { type: string; kind?: string; errorMessage?: string };
+    expect(end).toMatchObject({ type: "turn/end", kind: "error" });
+    expect(end.errorMessage).toContain("已自动压缩重试仍超限");
+    expect(end.errorMessage).toContain("/compact");
+  });
+
+  it("③ 部分产出防护：先流出 text 再 context_limit → 不重试（provider 只调 1 次），直接 error 终局（防重复 assistant 投影）", async () => {
+    const { run, provider, session } = setup([
+      [{ type: "text/delta", text: "半截" }, { type: "finish", kind: "error", errorMessage: "HTTP 400：prompt is too long", errorCode: "context_limit" }],
+    ]);
+    await run();
+    expect(provider.requests).toHaveLength(1);
+    const all = await session.all();
+    expect(all.some((e) => e.type === "assistant/message")).toBe(true); // 半截文本已物化
+    expect((all.at(-1) as { kind?: string }).kind).toBe("error");
+  });
+});

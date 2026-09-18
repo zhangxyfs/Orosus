@@ -11,6 +11,7 @@ export const CORE_POINTS = {
   toolPreExecute: "tool/pre-execute",          // waterfall（审批模块在此，M3）
   toolPostExecute: "tool/post-execute",        // emit 广播
   uiCommand: "ui/command",                     // emit 广播（命令端口输入，含审批应答）
+  requestError: "agent/request-error",         // emit 广播（M3 补强 D43：provider 请求失败观测/触发——loop 溢出重试前广播，策略在监听者）
 } as const;
 
 /** 模块 emit 拒收的类型（§6.5：防伪造核心信号）。ctx 层强制，见 activate.ts。
@@ -20,7 +21,7 @@ export const CORE_BUS_TYPES: ReadonlySet<string> = new Set([
   ...Object.values(CORE_POINTS),
   "turn/start", "turn/step", "turn/end", "tool/call", "tool/result",
   "session/header", "user/message", "assistant/chunk", "assistant/message",
-  "agent/steering-message", "request/header", "session/fork", "session/label", "turn/compaction",
+  "agent/steering-message", "request/header", "session/fork", "session/label", "turn/compaction", "turn/prune",
   "llm/stream", "tool/execute",
 ]);
 
