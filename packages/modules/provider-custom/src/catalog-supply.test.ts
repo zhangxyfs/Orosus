@@ -354,6 +354,53 @@ describe("/provider 多级菜单（D37）", () => {
     expect(deps.state.secrets).toHaveLength(0);
   });
 
+  it("前缀厂商反查精确匹配（用户走查：选 zhipuai-coding-plan 却导入普通 zhipuai 的 15 模型清单）：startsWith 会命中字母序在前的同前缀条目", async () => {
+    // 真实形状：zhipuai（15 模型·标准端点）与 zhipuai-coding-plan（4 模型·coding 端点）同目录共存
+    const glm = (id: string, name: string, date: string, ctx: number) => ({ id, name, release_date: date, tool_call: true, limit: { context: ctx } });
+    const catalog = {
+      zhipuai: {
+        name: "Zhipu AI", type: "openai", api: "https://open.bigmodel.cn/api/paas/v4", env: ["ZHIPU_API_KEY"],
+        models: Object.fromEntries([
+          "glm-5.2", "glm-5v-turbo", "glm-5.1", "glm-5", "glm-4.7-flash", "glm-4.7-flashx", "glm-4.7",
+          "glm-4.6", "glm-4.5v", "glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-5.3", "glm-5.3-flash", "glm-4.6v",
+        ].map((id) => [id, glm(id, id, "2026-01-01", 200_000)])),
+      },
+      "zhipuai-coding-plan": {
+        name: "Zhipu AI Coding Plan", type: "openai", api: "https://open.bigmodel.cn/api/coding/paas/v4", env: ["ZHIPU_API_KEY"],
+        models: {
+          "glm-5.3": glm("glm-5.3", "GLM-5.3", "2026-08-14", 1_000_000),
+          "glm-5.3-flash": glm("glm-5.3-flash", "GLM-5.3-Flash", "2026-08-26", 1_000_000),
+          "glm-5.3-highspeed": glm("glm-5.3-highspeed", "GLM-5.3 Highspeed", "2026-08-14", 1_000_000),
+          "glm-4.6v": glm("glm-4.6v", "GLM-4.6V", "2025-12-08", 128_000),
+        },
+      },
+    };
+    let modelItems: string[] = [];
+    const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai-coding-plan（Zhipu AI Coding Plan）"];
+    const deps = fakeDeps({
+      env: { ZHIPU_API_KEY: "sk-live" },
+      getCatalog: async () => ({ catalog: catalog as unknown as Catalog, source: "online" as const }),
+      fetchImpl: (async () => new Response("not-json", { status: 200 })) as typeof fetch, // live 空 → 目录池
+    });
+    const ui: MenuUi = {
+      choose: async (title, items) => {
+        if (String(title).includes("默认模型")) { modelItems = [...items]; return items[0]!; }
+        return answers.shift() ?? "取消";
+      },
+      ask: async () => "",
+      askSecret: async () => "",
+      confirm: async () => false,
+    };
+    await runProviderMenu(ui, deps);
+    // 反查命中的必须是 coding-plan 条目：4 个套餐内模型（不是 15 个全表），端点是 coding 专用
+    expect(modelItems).toHaveLength(4);
+    expect(modelItems.join("\n")).toContain("glm-5.3-highspeed");
+    expect(modelItems.join("\n")).not.toContain("glm-5.2");
+    expect(deps.state.saved).toMatchObject({
+      "zhipuai-coding-plan": { baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4", defaultModel: "glm-5.3-flash" },
+    });
+  });
+
   it("密钥粘贴走 askSecret 掩码询问（用户走查：明文上屏并进终端滚动历史）——明文 ask 只承载非敏感输入", async () => {
     const asked: string[] = [];
     const secretsAsked: string[] = [];

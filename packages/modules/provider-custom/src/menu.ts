@@ -153,7 +153,8 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   entries.sort((a, b) => a[0].localeCompare(b[0])); // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
   const picked = await ui.choose(`选择厂商${degradedNote}`, [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";
-  const [entryId, entry] = entries.find(([id]) => picked.startsWith(id)) ?? [undefined, undefined];
+  // 精确整串匹配（走查：startsWith 会命中字母序在前的同前缀条目——选 zhipuai-coding-plan 导入了普通 zhipuai 的 15 模型清单与错误端点）
+  const [entryId, entry] = entries.find(([id, e]) => picked === `${id}（${displayName(id, e)}）`) ?? [undefined, undefined];
   if (entry === undefined || entryId === undefined) return "已取消";
 
   const wire = resolveWire(entry);
