@@ -1,10 +1,12 @@
-/** provider 中立流式词汇（§6.4）。错误带内编码：失败产出 finish{kind:"error"}，不许 reject。 */
+/** provider 中立流式词汇（§6.4）。错误带内编码：失败产出 finish{kind:"error"}，不许 reject。
+ *  errorCode 是适配器归一化的可编程错误码（M3 补强 D43，首枚 "context_limit" 上下文超限）——
+ *  只承载 loop/模块可编程消费的类别，不追求覆盖全部 API 错误（鉴权/限流等继续走 errorMessage 文本）。 */
 export type Chunk =
   | { type: "text/delta"; text: string }
   | { type: "reasoning/delta"; text: string }
   | { type: "toolcall/argumentsDelta"; callId: string; name?: string; argumentsDelta: string }
   | { type: "usage"; input: number; output: number }
-  | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string };
+  | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string; errorCode?: string };
 
 export type ContentPart = { kind: "text"; text: string };
 
@@ -27,10 +29,31 @@ export interface ProviderRequest {
   messages: ModelMessage[];
   tools: ToolSpec[];
   signal: AbortSignal;
+  /** 输出 token 上限（M3 补强 D39 修订）：缺省 = 适配器现行为（openai 线缆不发送、anthropic 线缆用 MAX_TOKENS）。 */
+  maxTokens?: number;
 }
 
 /** Provider SPI 唯一方法（§6.4）。 */
 export type StreamFn = (request: ProviderRequest) => AsyncIterable<Chunk>;
+
+/** 上下文超限分类器（M3 补强 D43，Chunk 词汇属主随行的共享纯函数——模块间无共享代码，contracts 是唯一合法公共位）。
+ *  以响应全文判定（截断只属于 errorMessage 文案），大小写不敏感；status 限 400/413。
+ *  命中清单集中在函数内常量数组，单元测试锚定——误报最坏后果是 loop 多重试一次（有界无害）。 */
+const CONTEXT_LIMIT_PATTERNS = [
+  "prompt is too long",      // Anthropic
+  "prompt_too_long",         // Anthropic error.type
+  "context_length_exceeded", // OpenAI 系 code
+  "maximum context length",  // OpenAI/Kimi/DeepSeek message
+  "prompt tokens exceed",    // GLM
+  "input length exceeds",    // 兼容端点
+  "request too large",       // 兼容端点/网关 413
+] as const;
+
+export function classifyContextLimit(status: number, body: string): boolean {
+  if (status !== 400 && status !== 413) return false;
+  const lower = body.toLowerCase();
+  return CONTEXT_LIMIT_PATTERNS.some((p) => lower.includes(p));
+}
 
 /** Provider 适配器槽值（D32）：裸函数或带默认模型的对象——核心按形状归一化。 */
 export type ProviderAdapter = StreamFn | { stream: StreamFn; defaultModel?: string };
