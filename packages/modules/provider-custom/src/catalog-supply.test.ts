@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { getCatalog, getCatalogWithSource, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
+import { getCatalog, getCatalogWithSource, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -114,6 +114,21 @@ describe("目录拉取与快照兜底（D34）", () => {
     expect(readFileSync(cacheFile, "utf8")).toBe("{corrupt"); // 原样未动
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+
+  it("persistCatalogCache（本地文件源喂盘）：写入后 getCatalogWithSource 网络失败时读盘——用户下载的 api.json 一次入缓存，永久可用", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-cat2-"));
+    try {
+      const cacheFile = join(dir, "cache", "models-dev.json");
+      const full = { zhipuai: { type: "openai", api: "https://open.bigmodel.cn/api/paas/v4", env: ["ZHIPU_API_KEY"], models: { "glm-5.3": { id: "glm-5.3", limit: { context: 1_000_000 } } } } };
+      persistCatalogCache(full, cacheFile, 7_000_000);
+      resetCatalogCacheForTest();
+      const fail = (async () => { throw new Error("network down"); }) as typeof fetch;
+      const r = await getCatalogWithSource({ fetchImpl: fail, now: () => 7_000_100, cacheFile });
+      expect(r.source).toBe("disk");
+      expect(Object.keys(r.catalog)).toContain("zhipuai");
+      expect(r.fetchedAt).toBe(7_000_000);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 // ---- 菜单（D37 规格：二级中文列表 + [添加新平台]；数据源两选；key 最少输入；校验即确认）----
@@ -135,14 +150,15 @@ const rejectingUi = (): MenuUi => ({
   confirm: async () => { throw new Error("无交互环境"); },
 });
 
-interface DepsState { saved: unknown; secrets: Array<[string, string]>; setModels: string[] }
+interface DepsState { saved: unknown; secrets: Array<[string, string]>; setModels: string[]; ctxWindows: number[] }
 function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState } {
-  const state: DepsState = { saved: null, secrets: [], setModels: [] };
+  const state: DepsState = { saved: null, secrets: [], setModels: [], ctxWindows: [] };
   const deps: MenuDeps = {
     loadProviders: async () => ({}),
     saveProviders: async (next) => { state.saved = JSON.parse(JSON.stringify(next)); },
     appendSecret: async (k, v) => void state.secrets.push([k, v]),
     setModel: async (n: string) => { state.setModels.push(n); },
+    setContextWindow: async (n: number) => { state.ctxWindows.push(n); },
     env: {},
     getCatalog: async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: { "deepseek-chat": { id: "deepseek-chat" } } } } as unknown as Catalog, source: "online" as const }),
     loadLocalCatalog: async () => ({}),
@@ -256,6 +272,52 @@ describe("/provider 多级菜单（D37）", () => {
     expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-chat" } }); // 目录兜底
     expect(deps.state.setModels).toEqual(["deepseek"]);
     expect(out).toContain("deepseek-chat"); // 兜底菜单的选中值出现在回显
+  });
+
+  it("目录池真正解析 api.json 元数据（用户走查）：富标签（名称·上下文·日期）+ 发布日期新→旧排序 + 非 tool_call/过滤；选中写 contextWindow", async () => {
+    // 形状取自真实 models.dev 的 zhipuai-coding-plan 条目
+    const zcp = {
+      "zhipuai-coding-plan": {
+        name: "Zhipu AI Coding Plan", type: "openai", api: "https://open.bigmodel.cn/api/coding/paas/v4", env: ["ZHIPU_API_KEY"],
+        models: {
+          "glm-5.3": { id: "glm-5.3", name: "GLM-5.3", release_date: "2026-08-14", tool_call: true, limit: { context: 1_000_000, output: 131_072 } },
+          "glm-5.3-flash": { id: "glm-5.3-flash", name: "GLM-5.3-Flash", release_date: "2026-08-26", tool_call: true, limit: { context: 1_000_000 } },
+          "glm-4.6v": { id: "glm-4.6v", name: "GLM-4.6V", release_date: "2025-12-08", tool_call: true, limit: { context: 128_000 } },
+          "glm-old-deprecated": { id: "glm-old-deprecated", status: "deprecated" },
+          "glm-no-tool": { id: "glm-no-tool", tool_call: false },
+          "glm-nodate": { id: "glm-nodate", tool_call: true }, // 无日期 → 排最后，标签退化为裸 id
+        },
+      },
+    };
+    let modelItems: string[] = [];
+    const answers: string[] = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai-coding-plan（Zhipu AI Coding Plan）"];
+    const deps = fakeDeps({
+      env: { ZHIPU_API_KEY: "sk-live" },
+      getCatalog: async () => ({ catalog: zcp as unknown as Catalog, source: "online" as const }),
+      fetchImpl: (async () => new Response("not-json", { status: 200 })) as typeof fetch, // verify 失败产 live 空 → 目录池
+    });
+    const ui: MenuUi = {
+      choose: async (title, items) => {
+        if (String(title).includes("默认模型")) { modelItems = [...items]; return items[0]!; }
+        return answers.shift() ?? "取消";
+      },
+      ask: async () => "",
+      confirm: async () => false,
+    };
+    const out = await runProviderMenu(ui, deps);
+    // 排序：flash（08-26）→ 5.3（08-14）→ 4.6v（12-08 旧年）→ 无日期殿后；deprecated 与 tool_call:false 不出现
+    expect(modelItems[0]).toContain("glm-5.3-flash");
+    expect(modelItems[0]).toContain("GLM-5.3-Flash");
+    expect(modelItems[0]).toContain("1000K");
+    expect(modelItems[1]).toContain("glm-5.3（GLM-5.3 · 1000K · 2026-08-14）");
+    expect(modelItems[2]).toContain("glm-4.6v");
+    expect(modelItems.at(-1)).toBe("glm-nodate");
+    expect(modelItems.join("\n")).not.toContain("deprecated");
+    expect(modelItems.join("\n")).not.toContain("glm-no-tool");
+    // 选中 glm-5.3-flash（context 1M）→ defaultModel 裸 id + 顶层 contextWindow 写入
+    expect(deps.state.saved).toMatchObject({ "zhipuai-coding-plan": { defaultModel: "glm-5.3-flash" } });
+    expect(deps.state.ctxWindows).toEqual([1_000_000]);
+    expect(out).toContain("contextWindow = 1000000");
   });
 
   it("校验三分支：401 密钥无效不写入；404 警告后 confirm 写入", async () => {

@@ -3,7 +3,13 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BUILTIN_SNAPSHOT } from "./builtin-snapshot.ts";
 
-export interface CatalogModel { id: string; name?: string; status?: string; modalities?: { output?: string[] }; limit?: { context?: number; output?: number } }
+export interface CatalogModel {
+  id: string; name?: string; status?: string;
+  modalities?: { output?: string[] };
+  limit?: { context?: number; output?: number };
+  release_date?: string; // models.dev 元数据：新→旧排序与菜单标签用
+  tool_call?: boolean;   // false = 纯生成模型（视频/图像），agent harness 不该给选
+}
 export interface CatalogEntry {
   name?: string; type?: string; npm?: string; id?: string;
   api?: string; env?: string[];
@@ -52,6 +58,12 @@ function writeDiskCache(path: string, catalog: Catalog, fetchedAt: number): void
   } catch {
     // 落盘失败（只读文件系统等）不阻断目录使用——本次会话仍有内存数据
   }
+}
+
+/** 本地文件源喂盘（用户方案）：下载的 api.json 解析成功后持久化——此后「在线目录」离线也有全量数据。
+ *  与在线拉取共用盘上信封格式；写失败静默（喂盘是增强，不是前提）。 */
+export function persistCatalogCache(catalog: Catalog, cacheFile: string, fetchedAt: number = Date.now()): void {
+  writeDiskCache(cacheFile, catalog, fetchedAt);
 }
 
 /** 目录拉取（D34 + 用户方案持久化）：10s 超时、10min 内存 TTL、payload 形状校验（非对象拒收）。

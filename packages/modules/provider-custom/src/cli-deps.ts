@@ -2,7 +2,7 @@ import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { defaultCatalogCacheFile, getCatalogWithSource, type Catalog } from "./catalog.ts";
+import { defaultCatalogCacheFile, getCatalogWithSource, persistCatalogCache, type Catalog } from "./catalog.ts";
 import type { MenuDeps, ProviderEntry } from "./menu.ts";
 
 /** /provider 菜单的宿主侧副作用接线（D37）：config/secrets 的真实读写——读写 ~/.orosus/ 下约定文件。
@@ -34,6 +34,11 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
       doc["model"] = providerName;
       saveDoc(doc);
     },
+    setContextWindow: async (n) => {
+      const doc = readDoc();
+      doc["contextWindow"] = n; // 顶层 contextWindow（与 provider import --model 同落点）
+      saveDoc(doc);
+    },
     appendSecret: async (key, value) => {
       if (!existsSync(secretsPath)) {
         const fd = openSync(secretsPath, "a", 0o600);
@@ -46,7 +51,12 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
     getCatalog: () => getCatalogWithSource({ cacheFile: defaultCatalogCacheFile() }), // 拉到即落盘——重启后离线也有全量目录
     loadLocalCatalog: async (path) => {
       if (path === "") throw new Error("未输入 api.json 路径");
-      return JSON.parse(readFileSync(path, "utf8")) as Catalog; // 读失败（不存在/坏 JSON）原样抛——向导 catch 转可读文案
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf8")); // 读失败（不存在/坏 JSON）原样抛——向导 catch 转可读文案
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("api.json 形状不对（须为厂商对象映射）");
+      const catalog = parsed as Catalog;
+      // 本地文件喂盘（用户方案）：一次导入即成磁盘缓存——此后「在线目录」离线也是全量数据
+      persistCatalogCache(catalog, defaultCatalogCacheFile());
+      return catalog;
     },
     fetchImpl: fetch,
     ...overrides,

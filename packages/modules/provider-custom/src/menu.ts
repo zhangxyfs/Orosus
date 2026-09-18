@@ -1,6 +1,6 @@
 import { parseModelsResponse } from "@orosus/contracts/provider";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import type { Catalog, CatalogEntry, CatalogSource } from "./catalog.ts";
+import type { Catalog, CatalogEntry, CatalogModel, CatalogSource } from "./catalog.ts";
 
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
@@ -21,6 +21,8 @@ export interface MenuDeps {
   loadProviders(): Promise<Record<string, ProviderEntry>>;
   saveProviders(next: Record<string, ProviderEntry>): Promise<void>;
   setModel(providerName: string): Promise<void>;
+  /** 目录元数据带来的窗口写入（顶层 contextWindow，与 provider import --model 同落点）。 */
+  setContextWindow(n: number): Promise<void>;
   appendSecret(key: string, value: string): Promise<void>;
   env: Record<string, string | undefined>;
   getCatalog(): Promise<{ catalog: Catalog; source: CatalogSource; fetchedAt?: number }>;
@@ -47,12 +49,23 @@ function relTime(ms: number): string {
   return `${Math.floor(h / 24)} 天前`;
 }
 
-/** 可导入的 text 模型（deprecated/alpha/embedding/非文本输出排除——D34 模型过滤）。 */
-function usableModels(entry: CatalogEntry): string[] {
+/** 可导入的 text 模型（deprecated/alpha/embedding/非文本输出/非工具调用排除——D34 过滤 + 走查补）。
+ *  真正解析 api.json 元数据：按 release_date 新→旧排（无日期殿后），返回模型对象（标签/窗口/日期要用）。 */
+function usableModels(entry: CatalogEntry): CatalogModel[] {
   return Object.values(entry.models ?? {})
     .filter((m) => (m.modalities?.output === undefined || m.modalities.output.includes("text")) && m.status !== "deprecated" && m.status !== "alpha")
-    .filter((m) => !/embed/i.test(m.id))
-    .map((m) => m.id);
+    .filter((m) => m.tool_call !== false && !/embed/i.test(m.id))
+    .toSorted((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? "") || a.id.localeCompare(b.id));
+}
+
+/** 目录模型菜单标签：id（名称 · 上下文 NK · 发布日期）——元数据缺省的条目退化为裸 id。 */
+function modelLabel(m: CatalogModel): string {
+  const parts = [
+    ...(m.name !== undefined && m.name !== m.id ? [m.name] : []),
+    ...(typeof m.limit?.context === "number" && m.limit.context > 0 ? [`${Math.round(m.limit.context / 1000)}K`] : []),
+    ...(m.release_date !== undefined ? [m.release_date] : []),
+  ];
+  return parts.length === 0 ? m.id : `${m.id}（${parts.join(" · ")}）`;
 }
 
 /** 连通性校验（D37 修订：校验即确认）——GET 模型列表，零 token 消耗。 */
@@ -155,7 +168,8 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     }
   }
 
-  const models = usableModels(entry); // 目录清单（live 失败/空时的兜底池）
+  const models = usableModels(entry); // 目录清单（live 失败/空时的兜底池，含 ctx/日期元数据）
+  const modelById = new Map(models.map((m) => [m.id, m]));
 
   // 校验即确认（D37 修订）：2xx 自动写入 / 401 重输 / 网络错回端点 / 404 警告后确认
   const probe: ProviderEntry = { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}) };
@@ -177,13 +191,24 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   }
 
   // 模型发现 T4：默认模型从真实清单挑——live 优先（verify 响应体就地解析）、目录兜底；必选无跳过（四轮 P2②：
-  // 跳过=不写会让 onboarding 复检死循环回归）。不再取 models[0]——走查缺陷①源头修
+  // 跳过=不写会让 onboarding 复检死循环回归）。不再取 models[0]——走查缺陷①源头修。
+  // 目录池走查升级（用户）：富标签（名称·上下文·日期）+ 新→旧排序——api.json 里的关键信息进菜单
   const live = v.kind === "ok" ? (() => { try { return parseModelsResponse(v.body); } catch { return []; } })() : [];
-  const pool = live.length > 0 ? live : models;
+  const useLive = live.length > 0;
+  const pool: string[] = useLive ? live : models.map(modelLabel);
   let defaultModel: string | undefined;
   let modelNote = "";
+  let ctxNote = "";
   if (pool.length > 0) {
-    defaultModel = await ui.choose(live.length > 0 ? "选择默认模型（来自端点实时清单）" : "选择默认模型（目录清单兜底）", pool);
+    const pickedModel = await ui.choose(useLive ? "选择默认模型（来自端点实时清单）" : "选择默认模型（目录清单兜底）", pool);
+    defaultModel = useLive ? pickedModel : (pickedModel.split("（")[0] ?? pickedModel);
+    // 目录元数据链：选中模型带 limit.context → 写顶层 contextWindow（与 provider import --model 同落点）
+    const ctx = modelById.get(defaultModel)?.limit?.context;
+    if (typeof ctx === "number" && Number.isInteger(ctx) && ctx >= 1024) {
+      await deps.setContextWindow(ctx);
+      ctxNote = `
+  目录窗口：contextWindow = ${ctx}（来自 ${defaultModel} 的 limit.context——更换 model 时请自行更新）`;
+    }
   } else {
     modelNote = `
   ⚠ 未找到模型清单——已写入平台，请用 /model 手输全名 "${entryId}/<model>"`;
@@ -197,6 +222,6 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（model = "${entryId}" 裸名即用）` : ""].filter(Boolean).join("\n");
   const banner = v.kind === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
   return `${banner}
-${shown}${modelNote}
+${shown}${ctxNote}${modelNote}
 （重启或 /reload 生效；配置已全量重写，注释已移除）`;
 }
