@@ -1,3 +1,4 @@
+import { parseModelsResponse } from "@orosus/contracts/provider";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
 import type { Catalog, CatalogEntry } from "./catalog.ts";
 
@@ -49,7 +50,7 @@ async function verify(
   deps: MenuDeps,
   entry: ProviderEntry,
   actualKey: string | undefined,
-): Promise<"ok" | "auth" | "network" | "unsupported"> {
+): Promise<{ kind: "ok"; body: unknown } | { kind: "auth" } | { kind: "network" } | { kind: "unsupported" }> {
   const url = entry.type === "anthropic" ? `${entry.baseUrl}/v1/models` : `${entry.baseUrl}/models`;
   try {
     const res = await deps.fetchImpl(url, {
@@ -58,12 +59,12 @@ async function verify(
       } : {},
       signal: AbortSignal.timeout(10_000),
     });
-    if (res.status === 401 || res.status === 403) return "auth";
-    if (res.status === 404 || res.status === 405) return "unsupported";
-    if (!res.ok) return "network";
-    return "ok";
+    if (res.status === 401 || res.status === 403) return { kind: "auth" };
+    if (res.status === 404 || res.status === 405) return { kind: "unsupported" };
+    if (!res.ok) return { kind: "network" };
+    return { kind: "ok", body: await res.json().catch(() => undefined) }; // 模型发现 T4：响应体随行（live 清单）
   } catch {
-    return "network";
+    return { kind: "network" };
   }
 }
 
@@ -129,13 +130,12 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     }
   }
 
-  const models = usableModels(entry);
-  const defaultModel = models[0];
+  const models = usableModels(entry); // 目录清单（live 失败/空时的兜底池）
 
   // 校验即确认（D37 修订）：2xx 自动写入 / 401 重输 / 网络错回端点 / 404 警告后确认
   const probe: ProviderEntry = { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}) };
   let v = await verify(deps, probe, actualKey);
-  if (v === "auth") {
+  if (v.kind === "auth") {
     const retry = (await ui.ask("密钥无效——重新粘贴（回车放弃）")).trim();
     if (retry !== "" && envKey !== undefined) {
       await deps.appendSecret(envKey, retry);
@@ -145,15 +145,33 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
       return "未写入：密钥无效（未产生任何配置变更）";
     }
   }
-  if (v === "network") return "未写入：端点不可达（请检查 baseUrl 后重试）";
-  if (v === "unsupported") {
+  if (v.kind === "network") return "未写入：端点不可达（请检查 baseUrl 后重试）";
+  if (v.kind === "unsupported") {
     const go = await ui.confirm("端点可达但不支持校验接口（/models 404/405），无法校验密钥——仍写入？");
     if (!go) return "已取消";
   }
 
+  // 模型发现 T4：默认模型从真实清单挑——live 优先（verify 响应体就地解析）、目录兜底；必选无跳过（四轮 P2②：
+  // 跳过=不写会让 onboarding 复检死循环回归）。不再取 models[0]——走查缺陷①源头修
+  const live = v.kind === "ok" ? (() => { try { return parseModelsResponse(v.body); } catch { return []; } })() : [];
+  const pool = live.length > 0 ? live : models;
+  let defaultModel: string | undefined;
+  let modelNote = "";
+  if (pool.length > 0) {
+    defaultModel = await ui.choose(live.length > 0 ? "选择默认模型（来自端点实时清单）" : "选择默认模型（目录清单兜底）", pool);
+  } else {
+    modelNote = `
+  ⚠ 未找到模型清单——已写入平台，请用 /model 手输全名 "${entryId}/<model>"`;
+  }
+
   const next = { ...current, [entryId]: { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}), ...(defaultModel !== undefined ? { defaultModel } : {}) } };
   await deps.saveProviders(next);
-  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}` : ""].filter(Boolean).join("\n");
-  const banner = v === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
-  return `${banner}\n${shown}\n（重启或 /reload 生效；配置已全量重写，注释已移除）`;
+  if (defaultModel !== undefined) {
+    await deps.setModel(entryId); // 裸名（三轮 P2①：与"设为当前默认"同语义——defaultModel 随条目落盘经 D32 路由；onboarding 复检闭环（二轮 P1①））
+  }
+  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（model = "${entryId}" 裸名即用）` : ""].filter(Boolean).join("\n");
+  const banner = v.kind === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
+  return `${banner}
+${shown}${modelNote}
+（重启或 /reload 生效；配置已全量重写，注释已移除）`;
 }

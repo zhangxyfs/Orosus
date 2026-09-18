@@ -82,14 +82,14 @@ const rejectingUi = (): MenuUi => ({
   confirm: async () => { throw new Error("无交互环境"); },
 });
 
-interface DepsState { saved: unknown; secrets: Array<[string, string]> }
+interface DepsState { saved: unknown; secrets: Array<[string, string]>; setModels: string[] }
 function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState } {
-  const state: DepsState = { saved: null, secrets: [] };
+  const state: DepsState = { saved: null, secrets: [], setModels: [] };
   const deps: MenuDeps = {
     loadProviders: async () => ({}),
     saveProviders: async (next) => { state.saved = JSON.parse(JSON.stringify(next)); },
     appendSecret: async (k, v) => void state.secrets.push([k, v]),
-    setModel: async () => {},
+    setModel: async (n: string) => { state.setModels.push(n); },
     env: {},
     getCatalog: async () => ({ deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: { "deepseek-chat": { id: "deepseek-chat" } } } }) as unknown as Catalog,
     loadLocalCatalog: async () => ({}),
@@ -102,11 +102,13 @@ function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState }
 describe("/provider 多级菜单（D37）", () => {
   it("添加流程：选数据源→选厂商→env_key 已设零输入→校验 2xx→自动写入", async () => {
     const deps = fakeDeps({ env: { DEEPSEEK_API_KEY: "sk-live" } });
-    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）"], ask: [""] /* 关键字过滤=空 */ });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat" /* T4：目录兜底挑默认模型 */], ask: [""] /* 关键字过滤=空 */ });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY", defaultModel: "deepseek-chat" } });
+    expect(deps.state.setModels).toEqual(["deepseek"]); // T4：裸名写顶层 model（onboarding 复检闭环）
     expect(deps.state.secrets).toHaveLength(0); // 零输入：没写 secrets
     expect(out).toContain("success");
+    expect(out).toContain('model = "deepseek" 裸名即用');
   });
 
   it("目录厂商清单按字母序（同前缀供应商相邻——2026-09-18 用户要求：zai/zhipuai/zhipuai-coding-plan 挨着）", async () => {
@@ -133,6 +135,30 @@ describe("/provider 多级菜单（D37）", () => {
     expect(ids.at(-1)).toBe("取消");
   });
 
+  it("T4① live 清单挑默认模型：verify 响应体解析 → 所选写入 defaultModel（非 models[0]）+ setModel 裸名", async () => {
+    const deps = fakeDeps({
+      env: { DEEPSEEK_API_KEY: "sk-live" },
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-reasoner" }, { id: "deepseek-chat" }] }), { status: 200 })) as typeof fetch,
+    });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-reasoner"], ask: [""] });
+    const out = await runProviderMenu(ui, deps);
+    expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-reasoner" } }); // 用户所选，非目录 models[0]
+    expect(deps.state.setModels).toEqual(["deepseek"]); // 裸名（三轮 P2①）
+    expect(out).toContain("deepseek-reasoner");
+  });
+
+  it("T4② live 坏形状/空 → 目录清单兜底供选（同样写 defaultModel 与 model）", async () => {
+    const deps = fakeDeps({
+      env: { DEEPSEEK_API_KEY: "sk-live" },
+      fetchImpl: (async () => new Response("not-json", { status: 200 })) as typeof fetch, // json 解析失败 → body undefined → live 空
+    });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat"], ask: [""] });
+    const out = await runProviderMenu(ui, deps);
+    expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-chat" } }); // 目录兜底
+    expect(deps.state.setModels).toEqual(["deepseek"]);
+    expect(out).toContain("deepseek-chat"); // 兜底菜单的选中值出现在回显
+  });
+
   it("校验三分支：401 密钥无效不写入；404 警告后 confirm 写入", async () => {
     // 401 → 不写入
     const d401 = fakeDeps({ fetchImpl: (async () => new Response("nope", { status: 401 })) as typeof fetch });
@@ -142,7 +168,7 @@ describe("/provider 多级菜单（D37）", () => {
     expect(d401.state.saved).toBeNull();
     // 404 → confirm 后写入
     const d404 = fakeDeps({ fetchImpl: (async () => new Response("{}", { status: 404 })) as typeof fetch });
-    const ui404 = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）"], ask: [""], confirm: [true] });
+    const ui404 = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat" /* T4 */], ask: [""], confirm: [true] });
     const out404 = await runProviderMenu(ui404, d404);
     expect(out404).toContain("无法校验");
     expect(d404.state.saved).toMatchObject({ deepseek: { baseUrl: "https://api.deepseek.com/v1" } });
