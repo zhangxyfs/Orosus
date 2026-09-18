@@ -55,8 +55,27 @@ export function classifyContextLimit(status: number, body: string): boolean {
   return CONTEXT_LIMIT_PATTERNS.some((p) => lower.includes(p));
 }
 
-/** Provider 适配器槽值（D32）：裸函数或带默认模型的对象——核心按形状归一化。 */
-export type ProviderAdapter = StreamFn | { stream: StreamFn; defaultModel?: string };
+/** Provider 适配器槽值（D32；模型发现修订）：裸函数或带默认模型/模型清单能力的对象——核心按形状归一化。 */
+export type ProviderAdapter =
+  | StreamFn
+  | { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> };
+
+/** 模型 id 白名单（模型发现 T1）：端点是不可信数据源——白名单外字符/超限（>128）的 id 丢弃（dsh 密钥格式校验同思路）。 */
+const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+/** 解析 GET /models 响应（openai 族 {baseUrl}/models 与 anthropic 族 {baseUrl}/v1/models 同为 `{data:[{id},…]}` 形）。
+ *  sanitize（白名单+限长，三轮 P2②）→ 去重 → 排序（菜单稳定序）；非数组 / 全被滤空 → throw（调用方 catch 回退）。 */
+export function parseModelsResponse(body: unknown): string[] {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) throw new Error("models 响应形状不符（缺 data 数组）");
+  const ids = [...new Set(
+    data
+      .map((m) => (m as { id?: unknown } | null)?.id)
+      .filter((id): id is string => typeof id === "string" && MODEL_ID_OK.test(id)),
+  )].sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) throw new Error("models 响应无合法 id");
+  return ids;
+}
 
 /** 核心保留槽 key（§7.2）：provider 适配器经 provide(providerSlotKey(name), fn) 注册。 */
 export function providerSlotKey(name: string): string {
