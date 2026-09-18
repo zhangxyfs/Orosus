@@ -1,4 +1,4 @@
-import { classifyContextLimit, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
+import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState } from "./translate.ts";
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
@@ -76,5 +76,19 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     } catch (err) {
       yield request.signal.aborted ? { type: "finish", kind: "aborted" } : fail(`流读取错误：${err instanceof Error ? err.message : String(err)}`);
     }
+  };
+}
+
+
+/** 端点真实模型清单（模型发现 T2/D32 修订）：GET {baseUrl}/models，双头鉴权、5s 超时、失败 reject——消费方（/model 菜单、向导）catch 回退。 */
+export function createListModels(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch }): () => Promise<string[]> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  return async () => {
+    const res = await doFetch(`${opts.baseUrl}/models`, {
+      headers: opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {},
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return parseModelsResponse(await res.json());
   };
 }

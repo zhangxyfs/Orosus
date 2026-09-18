@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { providerSlotKey } from "@orosus/contracts/provider";
-import { createStream } from "./stream.ts";
+import { createListModels, createStream } from "./stream.ts";
 
 const configSchema = z.object({
   // 密钥只经 "$ENV:DEEPSEEK_API_KEY" 占位入配置（§6.6；官方 env 示例命名）
@@ -19,6 +19,6 @@ export default defineModule({
   config: configSchema,
   activate(ctx) {
     // D31 vendor：翻译层拷贝自 provider-openai（reasoning_content 已在模板内）；裸名 model = "deepseek" 即用
-    ctx.provide(providerSlotKey("deepseek"), { stream: createStream(ctx.config), defaultModel: "deepseek-chat" });
+    ctx.provide(providerSlotKey("deepseek"), { stream: createStream(ctx.config), defaultModel: "deepseek-chat", listModels: createListModels(ctx.config) });
   },
 });

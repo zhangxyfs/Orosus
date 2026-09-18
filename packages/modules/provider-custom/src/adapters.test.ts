@@ -131,3 +131,24 @@ describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
     expect("max_tokens" in captured!).toBe(false);
   });
 });
+
+describe("listModels（模型发现 T2/D32 修订——createAdapters 随槽装配）", () => {
+  it("两族各自的 /models 落点与双头鉴权；404 → reject", async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    let n = 0;
+    const fetchImpl = ((url: string | URL | Request, init?: RequestInit) => {
+      n++;
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return Promise.resolve(n <= 2
+        ? new Response(JSON.stringify({ data: [{ id: "m-1" }, { id: "m-0" }] }), { status: 200 })
+        : new Response("nope", { status: 404 }));
+    }) as typeof fetch;
+    const adapters = createAdapters({ providers: { i: { ...entry, apiKey: "k" }, a: withDm } }, fetchImpl);
+    expect(await adapters.get("i")!.listModels!()).toEqual(["m-0", "m-1"]); // openai 族 {baseUrl}/models
+    expect(seen[0]!.url).toBe("http://a/v1/models");
+    expect(await adapters.get("a")!.listModels!()).toEqual(["m-0", "m-1"]); // anthropic 族 {baseUrl}/v1/models
+    expect(seen[1]!.url).toBe("http://b/v1/models");
+    expect(seen[1]!.headers["authorization"]).toBe("Bearer $ENV:X"); // $ENV 占位原样作为 key 传递（解析在 env 层）
+    await expect(adapters.get("i")!.listModels!()).rejects.toThrow("HTTP 404");
+  });
+});

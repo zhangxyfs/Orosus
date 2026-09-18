@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { StreamFn } from "@orosus/contracts/provider";
-import { createStream as anthropicStream } from "./stream-anthropic.ts";
-import { createStream as openaiStream } from "./stream-openai.ts";
+import { createStream as anthropicStream, createListModels as anthropicListModels } from "./stream-anthropic.ts";
+import { createStream as openaiStream, createListModels as openaiListModels } from "./stream-openai.ts";
 
 /** 厂商表 config schema（D33：区内子结构归模块 schema 自由——§6.6 单区制管 section 命名）。 */
 export const configSchema = z.object({
@@ -22,12 +22,16 @@ export type CustomProviderEntry = z.infer<typeof configSchema>["providers"][stri
 export function createAdapters(
   config: z.infer<typeof configSchema>,
   fetchImpl?: typeof fetch,
-): Map<string, { stream: StreamFn; defaultModel?: string }> {
-  const out = new Map<string, { stream: StreamFn; defaultModel?: string }>();
+): Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }> {
+  const out = new Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }>();
   for (const [name, p] of Object.entries(config.providers)) {
     const glue = { apiKey: p.apiKey, baseUrl: p.baseUrl, ...(fetchImpl !== undefined ? { fetchImpl } : {}) };
-    const stream = p.type === "anthropic" ? anthropicStream(glue) : openaiStream(glue);
-    out.set(name, { stream, ...(p.defaultModel !== undefined ? { defaultModel: p.defaultModel } : {}) });
+    const isAnthropic = p.type === "anthropic";
+    out.set(name, {
+      stream: isAnthropic ? anthropicStream(glue) : openaiStream(glue),
+      listModels: isAnthropic ? anthropicListModels(glue) : openaiListModels(glue), // 模型发现 T2：端点真实清单（尽力能力）
+      ...(p.defaultModel !== undefined ? { defaultModel: p.defaultModel } : {}),
+    });
   }
   return out;
 }

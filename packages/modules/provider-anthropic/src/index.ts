@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { providerSlotKey } from "@orosus/contracts/provider";
-import { createStream } from "./stream.ts";
+import { createListModels, createStream } from "./stream.ts";
 
 const configSchema = z.object({
   // 密钥只经 "$ENV:ANTHROPIC_API_KEY" 占位入配置（§6.6）；占位未解析时原样传入，调用期 401 带内报错
@@ -18,6 +18,6 @@ export default defineModule({
   config: configSchema,
   activate(ctx) {
     // D32 槽值形状：带 defaultModel 的对象（裸名 model = "anthropic" 即用默认模型）
-    ctx.provide(providerSlotKey("anthropic"), { stream: createStream(ctx.config), defaultModel: "claude-sonnet-4-5" });
+    ctx.provide(providerSlotKey("anthropic"), { stream: createStream(ctx.config), defaultModel: "claude-sonnet-4-5", listModels: createListModels(ctx.config) });
   },
 });

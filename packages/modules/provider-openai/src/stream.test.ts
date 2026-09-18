@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createStream } from "./stream.ts";
+import { createListModels, createStream } from "./stream.ts";
 
 const sseResponse = (lines: string[]): Response =>
   new Response(
@@ -76,5 +76,26 @@ describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
     expect(captured!.max_tokens).toBe(1234);
     await collect(s(req()));
     expect("max_tokens" in captured!).toBe(false);
+  });
+});
+
+
+describe("listModels（模型发现 T2/D32 修订）", () => {
+  it("GET http://x/v1/models 双头鉴权 → sanitize/排序清单；404 → reject（回退由消费方 catch）", async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    let n = 0;
+    const fetchImpl = ((url: string | URL | Request, init?: RequestInit) => {
+      n++;
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return Promise.resolve(n === 1
+        ? new Response(JSON.stringify({ data: [{ id: "m-2" }, { id: "bad id" }, { id: "m-1" }] }), { status: 200 })
+        : new Response("nope", { status: 404 }));
+    }) as typeof fetch;
+    const lm = createListModels({ apiKey: "sk-1", baseUrl: "http://x/v1", fetchImpl });
+    expect(await lm()).toEqual(["m-1", "m-2"]); // 排序 + sanitize 滤非法 id
+    expect(seen[0]!.url).toBe("http://x/v1/models");
+    expect(seen[0]!.headers["x-api-key"]).toBe("sk-1");
+    expect(seen[0]!.headers["authorization"]).toBe("Bearer sk-1");
+    await expect(lm()).rejects.toThrow("HTTP 404");
   });
 });
