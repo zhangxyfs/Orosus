@@ -311,14 +311,14 @@ session: ${store.sessionId}
       return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length}`;
     }],
     ["/usage", async () => {
-      // 口径（走查修复）：存储支持跨会话累计（JsonlStore 扫同目录全部会话）——重启不归零；
-      // 内存/SQLite 后端缺省时回退当前会话口径
+      // 双口径（参考系对照：会话级是 /usage 类命令的默认语义，跨会话是独立视图——cc-haha /cost vs /stats）：
+      // 当前会话恒显示；存储支持跨会话累计（JsonlStore 扫同目录全部会话）时加累计行，内存/SQLite 后端缺省
+      const cur = sumUsage(await store.all());
       if (store.lifetimeUsage !== undefined) {
-        const u = await store.lifetimeUsage();
-        return `累计用量：input ${u.input} / output ${u.output} tokens（全部 ${u.sessions} 场会话）`;
+        const all = await store.lifetimeUsage();
+        return `当前会话：input ${cur.input} / output ${cur.output} tokens\n累计（全部 ${all.sessions} 场会话）：input ${all.input} / output ${all.output} tokens`;
       }
-      const u = sumUsage(await store.all());
-      return `累计用量：input ${u.input} / output ${u.output} tokens（当前会话）`;
+      return `当前会话：input ${cur.input} / output ${cur.output} tokens`;
     }],
   ]);
 

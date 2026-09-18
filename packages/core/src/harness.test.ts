@@ -204,16 +204,16 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 
-  it("⑩ /usage：聚合 usage chunk 为累计 input/output", async () => {
+  it("⑩ /usage（内存后端回退）：仅当前会话口径，不出现跨会话累计行", async () => {
     const { h } = await ownHarness({ model: "fake/m" });
     await h.prompt("hi");
     const out = await h.prompt("/usage");
-    expect(out).toContain("3");
-    expect(out).toContain("5");
+    expect(out).toContain("当前会话：input 3 / output 5 tokens");
+    expect(out).not.toContain("累计");
     await h.close();
   });
 
-  it("⑩b /usage 跨会话累计（JsonlStore.lifetimeUsage——重启归零是口径 bug，走查补）：同目录旧会话 + 当前会话合计", async () => {
+  it("⑩b /usage 双口径（JsonlStore.lifetimeUsage）：当前会话一行 + 全部会话累计一行（对齐参考系：会话级是默认语义，跨会话另列）", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-usage-"));
     const old = new JsonlSessionStore({ dir, sessionId: "s_old" });
     await old.append("assistant/chunk", { chunk: { type: "usage", input: 11, output: 6 } });
@@ -226,9 +226,8 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     });
     await h.prompt("hi");
     const out = await h.prompt("/usage");
-    expect(out).toContain("input 14"); // 11（旧会话）+ 3（当前）
-    expect(out).toContain("output 11"); // 6 + 5
-    expect(out).toContain("2"); // 会话数
+    expect(out).toContain("当前会话：input 3 / output 5 tokens");
+    expect(out).toContain("累计（全部 2 场会话）：input 14 / output 11 tokens"); // 11+3 / 6+5
     await h.close();
   });
 });
