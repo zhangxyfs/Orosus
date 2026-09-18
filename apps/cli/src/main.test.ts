@@ -175,6 +175,10 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     const { sessionCommand, harnessOptionsFor } = await import("./sessions.ts");
     expect(sessionCommand("/new", { sessionId: "s1" })).toEqual({ kind: "new" });
     expect(sessionCommand("/fork", { sessionId: "s1", lastEventId: "e7" })).toEqual({ kind: "fork", parentSessionId: "s1", atEntryId: "e7" });
+    expect(sessionCommand("/quit", { sessionId: "s1" })).toEqual({ kind: "quit" });
+    expect(sessionCommand("/exit", { sessionId: "s1" })).toEqual({ kind: "quit" });
+    expect(sessionCommand("/q", { sessionId: "s1" })).toEqual({ kind: "quit" }); // 同义集（2026-09-18 用户要求）
+    expect(sessionCommand("/quit now", { sessionId: "s1" })).toEqual({ kind: "none" }); // 带参不误伤
     expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "none" });
     expect(sessionCommand("普通输入", { sessionId: "s1" })).toEqual({ kind: "none" });
     expect(harnessOptionsFor({ kind: "new" })).toEqual({});

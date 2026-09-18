@@ -24,9 +24,13 @@ export type SessionDirective =
   | { kind: "new" }
   | { kind: "fork"; parentSessionId: string; atEntryId?: string };
 
+/** 退出命令的同义集（用户要求 2026-09-18：/quit = /exit = /q）。 */
+const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
+
 /** 输入是否是会话生命周期命令；是则给出指令（/fork 的分叉点 = 当前流上最后见到的事件 id）。 */
 export function sessionCommand(input: string, current: { sessionId: string; lastEventId?: string | undefined }): SessionDirective | { kind: "none" } {
   const t = input.trim();
+  if (QUIT_COMMANDS.has(t)) return { kind: "quit" };
   if (t === "/new") return { kind: "new" };
   if (t === "/fork") return { kind: "fork", parentSessionId: current.sessionId, ...(current.lastEventId !== undefined ? { atEntryId: current.lastEventId } : {}) };
   return { kind: "none" };

@@ -151,7 +151,6 @@ try {
       const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
       if (line === null) break sessionLoop;
       const text = line.trim();
-      if (text === "/quit") break sessionLoop;
       if (text === "") continue;
       // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions，D41/T6）
       if (text === "/sessions") {
@@ -159,6 +158,7 @@ try {
         continue;
       }
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
+      if (directive.kind === "quit") break sessionLoop; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
       if (directive.kind === "new" || directive.kind === "fork") {
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
         await h.close();
