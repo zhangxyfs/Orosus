@@ -35,8 +35,8 @@ export interface ServiceResolver {
   getOptional(key: string): Promise<unknown | undefined>;
   /** 枚举 provider 槽（/model 等内建命令的消费面，D38）——归一化形态。 */
   listProviders(): { name: string; defaultModel?: string }[];
-  /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32） */
-  provider(name: string): { stream: StreamFn; defaultModel?: string } | undefined;
+  /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32；模型发现修订：透传 listModels 尽力能力） */
+  provider(name: string): { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> } | undefined;
 }
 
 export interface ActivateInput {
@@ -380,7 +380,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     provider: (name) => {
       const impl = committedServices.get(`provider:${name}`)?.impl as ProviderAdapter | undefined;
       if (impl === undefined) return undefined;
-      return typeof impl === "function" ? { stream: impl } : impl;
+      return typeof impl === "function" ? { stream: impl } : impl; // 对象形整体透传——listModels 随槽值（模型发现 T3）
     },
   };
 

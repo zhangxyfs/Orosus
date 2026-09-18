@@ -420,3 +420,65 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
     await h.close();
   });
 });
+
+describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", () => {
+  const mk = async (opts: { listModels?: () => Promise<string[]>; extraProv?: boolean }) => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-model-"));
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake", {}),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "ok" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "m0",
+          ...(opts.listModels !== undefined ? { listModels: opts.listModels } : {}),
+        });
+      },
+    };
+    const extra: ModuleDefinition = {
+      ...fakeModule("provider-two", {}),
+      activate(ctx) { ctx.provide("provider:two" as never, fakeProvider([]).stream); },
+    };
+    const uiAnswers: { choose: string[]; ask: string[] } = { choose: [], ask: [] };
+    const ui: CommandUi = {
+      choose: async (_t, items) => { void items; return uiAnswers.choose.shift() ?? items[0]!; },
+      ask: async () => uiAnswers.ask.shift() ?? "",
+      confirm: async () => true,
+    };
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"), commandUi: ui,
+      modules: opts.extraProv === true ? [prov, extra] : [prov],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    return { h, uiAnswers };
+  };
+
+  it("① 槽带 listModels → 二级菜单出现端点清单，选中即 modelOverride = prov/<picked>（经返回文案断言）", async () => {
+    const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3", "glm-4.7"] });
+    uiAnswers.choose.push("fake（默认 m0，裸名即用）", "glm-4.7");
+    const out = await h.prompt("/model");
+    expect(out).toContain("model 已切换：fake/glm-4.7");
+    await h.close();
+  });
+
+  it("② listModels reject → 回退手输路径不崩，文案含失败原因（经 ask 提示语透出）", async () => {
+    const { h, uiAnswers } = await mk({ listModels: async () => { throw new Error("HTTP 404"); } });
+    uiAnswers.choose.push("fake（默认 m0，裸名即用）");
+    uiAnswers.ask.push("manual-x");
+    const out = await h.prompt("/model");
+    expect(out).toContain("model 已切换：manual-x");
+    await h.close();
+  });
+
+  it("③ 手输裸名：唯一槽自动补前缀（返回文案）；多槽报格式示例", async () => {
+    const h1s = await mk({});
+    h1s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
+    h1s.uiAnswers.ask.push("GLM-5.3");
+    expect(await h1s.h.prompt("/model")).toContain("model 已切换：fake/GLM-5.3");
+    await h1s.h.close();
+    const h2s = await mk({ extraProv: true });
+    h2s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
+    h2s.uiAnswers.ask.push("GLM-5.3");
+    expect(await h2s.h.prompt("/model")).toContain("无法确定 provider");
+    await h2s.h.close();
+  });
+});

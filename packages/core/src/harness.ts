@@ -251,7 +251,32 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         "手动输入 model 全名（<provider>/<model>）",
       ];
       const picked = await commandUi.choose("选择模型", items);
-      const next = picked.includes("手动输入") ? (await commandUi.ask("model")).trim() : picked.split("（")[0]!;
+      let next: string;
+      if (picked.includes("手动输入")) {
+        next = (await commandUi.ask("model")).trim();
+        // 裸名唯一槽自动补前缀（走查缺陷②）；多槽报格式示例——大小写不猜，错了由端点报（一轮定案）
+        if (next !== "" && !next.includes("/")) {
+          if (slots.length === 1) next = `${slots[0]!.name}/${next}`;
+          else return `无法确定 provider——请写全名 "<provider>/<model>"（已配置：${slots.map((s) => s.name).join("、") || "无"}）`;
+        }
+      } else {
+        const slotName = picked.split("（")[0]!;
+        next = slotName;
+        const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
+        if (slot?.listModels !== undefined) {
+          try {
+            const models = await slot.listModels();
+            if (models.length > 0) {
+              const mpick = await commandUi.choose(`选择模型（来自 ${slotName} 端点实时清单）`, [...models, "手动输入…"]);
+              next = mpick.includes("手动输入") ? (await commandUi.ask("model")).trim() : `${slotName}/${mpick}`;
+            }
+          } catch (err) {
+            createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
+            const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
+            if (manual !== "") next = manual;
+          }
+        }
+      }
       if (next === "") return "已取消（空输入）";
       modelOverride = next;
       return `model 已切换：${next}（下个 turn 生效，request/header 将落新条目）`;
