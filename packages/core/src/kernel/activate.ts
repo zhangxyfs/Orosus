@@ -26,6 +26,7 @@ const unassignedLlm: LlmPort = {
 /** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */
 const rejectingUi = (): CommandUi => ({
   ask: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
+  askSecret: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
   choose: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
   confirm: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
 });

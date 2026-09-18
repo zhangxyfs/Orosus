@@ -9,7 +9,7 @@ const u = (t: string): ModelMessage => ({ role: "user", content: [{ kind: "text"
 const a = (t: string): ModelMessage => ({ role: "assistant", content: t === "" ? [] : [{ kind: "text", text: t }] });
 const tr = (id: string, chars: number): ModelMessage => ({ role: "toolResult", callId: id, output: "x".repeat(chars), isError: false });
 
-const stubUi: CommandUi = { ask: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true };
+const stubUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true };
 
 // schema 全默认值的手写镜像（fake ctx 不经 zod default 管线——kernel 真链路才有）
 const DEFAULTS = {

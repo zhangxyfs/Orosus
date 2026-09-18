@@ -5,6 +5,8 @@ import type { Catalog, CatalogEntry, CatalogModel, CatalogSource } from "./catal
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
   ask(question: string): Promise<string>;
+  /** 密钥粘贴走掩码询问（回显 *——用户走查：明文上屏且进终端滚动历史）。 */
+  askSecret(question: string): Promise<string>;
   choose(title: string, items: string[]): Promise<string>;
   confirm(question: string): Promise<boolean>;
 }
@@ -164,7 +166,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   let apiKeyRef: string | undefined;
   if (envKey !== undefined) apiKeyRef = `$ENV:${envKey}`;
   if (actualKey === undefined && envKey !== undefined) {
-    const pasted = (await ui.ask(`粘贴 ${envKey} 的值（已安全写入 secrets.env；回车跳过，稍后自行设置）`)).trim();
+    const pasted = (await ui.askSecret(`粘贴 ${envKey} 的值（已安全写入 secrets.env；回车跳过，稍后自行设置）`)).trim();
     if (pasted !== "") {
       await deps.appendSecret(envKey, pasted);
       actualKey = pasted;
@@ -178,7 +180,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const probe: ProviderEntry = { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}) };
   let v = await verify(deps, probe, actualKey);
   if (v.kind === "auth") {
-    const retry = (await ui.ask("密钥无效——重新粘贴（回车放弃）")).trim();
+    const retry = (await ui.askSecret("密钥无效——重新粘贴（回车放弃）")).trim();
     if (retry !== "" && envKey !== undefined) {
       await deps.appendSecret(envKey, retry);
       actualKey = retry;

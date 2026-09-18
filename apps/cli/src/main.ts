@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createHarness, discoverModules } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
-import { createReadlineUi } from "./menu.ts";
+import { createMaskingOutput, createReadlineUi } from "./menu.ts";
 import { formatSessions, harnessOptionsFor, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
@@ -46,7 +46,14 @@ const sessionsDir = join(homedir(), ".orosus", "sessions");
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
-const rl = createInterface({ input: process.stdin, output: process.stdout });
+// 输出走掩码代理：rl 全部回显经代理——密钥询问期间可打印字符替换为 *（用户走查：明文上屏且进终端滚动历史）。
+// terminal 模式与列宽从真 stdout 透传给代理——保住 raw 模式行编辑（退格/历史）不被 Writable 缺 isTTY 降级。
+const stdoutMask = createMaskingOutput(process.stdout);
+if (process.stdout.isTTY === true) {
+  Object.defineProperty(stdoutMask, "isTTY", { value: true });
+  Object.defineProperty(stdoutMask, "columns", { get: () => process.stdout.columns });
+}
+const rl = createInterface({ input: process.stdin, output: stdoutMask });
 // 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
 // 且 EOF 落在 await 间隙时已关闭接口上的 question 永不 settle（退出码 13 挂起）——REPL 一律走队列兜底。
 const pendingLines: string[] = [];
@@ -91,6 +98,31 @@ const commandUi = createReadlineUi({
           (e) => { rl.removeListener("close", onClose); reject(e); },
         );
       });
+    } finally {
+      askActive = false;
+    }
+  },
+  // 密钥询问（掩码回显）：提示语写真 stdout（走代理会被掩成 ***），rl 回显经代理变 *，
+  // 回车换行是控制符透传。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
+  secretQuestion: async (q) => {
+    askActive = true;
+    try {
+      const queued = pendingLines.shift();
+      if (queued !== undefined) return queued;
+      process.stdout.write(`${q}: `);
+      stdoutMask.setMask(true);
+      try {
+        return await new Promise<string>((resolve, reject) => {
+          const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
+          rl.once("close", onClose);
+          rl.question("").then(
+            (v) => { rl.removeListener("close", onClose); resolve(v); },
+            (e) => { rl.removeListener("close", onClose); reject(e); },
+          );
+        });
+      } finally {
+        stdoutMask.setMask(false);
+      }
     } finally {
       askActive = false;
     }

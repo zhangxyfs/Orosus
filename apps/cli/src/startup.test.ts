@@ -10,7 +10,7 @@ import { startupGate } from "./startup.ts";
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const agreeUi: CommandUi = { ask: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true };
+const agreeUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true };
 
 const makeH = async (): Promise<Harness> => {
   dir = mkdtempSync(join(tmpdir(), "orosus-startup-"));

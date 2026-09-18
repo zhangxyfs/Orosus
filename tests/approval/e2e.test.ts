@@ -23,6 +23,7 @@ describe("approval × 调度端到端", () => {
       const uiCalls: string[] = [];
       const ui: CommandUi = {
         ask: async () => { throw new Error("不应 ask"); },
+        askSecret: async () => { throw new Error("不应 askSecret"); },
         confirm: async () => { throw new Error("不应 confirm"); },
         choose: async (_t, items) => { uiCalls.push(items.join("|")); return "本会话始终允许"; },
       };

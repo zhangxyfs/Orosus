@@ -115,6 +115,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // 交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）。M3/T2 起经 ctx.ui 同时注入 waterfall 侧（审批询问）
   const commandUi: CommandUi = options.commandUi ?? {
     ask: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
+    askSecret: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
     choose: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
     confirm: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
   };

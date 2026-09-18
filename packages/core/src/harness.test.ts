@@ -151,7 +151,7 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
 
   it("④ CommandUi 注入：handler 第二参收到宿主注入的 ui", async () => {
     const calls: string[] = [];
-    const fakeUi: CommandUi = { ask: async (q) => { calls.push(`ask:${q}`); return "a"; }, choose: async (t) => { calls.push(`choose:${t}`); return "item"; }, confirm: async (q) => { calls.push(`confirm:${q}`); return true; } };
+    const fakeUi: CommandUi = { ask: async (q) => { calls.push(`ask:${q}`); return "a"; }, askSecret: async () => "", choose: async (t) => { calls.push(`choose:${t}`); return "item"; }, confirm: async (q) => { calls.push(`confirm:${q}`); return true; } };
     const { h } = await ownHarness({ commandUi: fakeUi, modules: [cmdModule("m", "m__ui", async (_a, ui) => `${await ui.choose("t", ["item"])}|${await ui.ask("q")}`)] });
     expect(await h.prompt("/m__ui")).toBe("item|a");
     expect(calls).toContain("choose:t");
@@ -174,7 +174,7 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
   });
 
   it("⑦ /model 切换：手动输入全名 → 下个 turn 的 request/header 落新 model", async () => {
-    const fakeUi: CommandUi = { ask: async () => "fake/m2", choose: async (_t, items) => items.find((x) => x.includes("手动")) ?? items[0]!, confirm: async () => true };
+    const fakeUi: CommandUi = { ask: async () => "fake/m2", askSecret: async () => "", choose: async (_t, items) => items.find((x) => x.includes("手动")) ?? items[0]!, confirm: async () => true };
     const { h, store } = await ownHarness({ commandUi: fakeUi, model: "fake/m1" });
     await h.prompt("/model");
     await h.prompt("hi");
@@ -234,7 +234,7 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
 
 describe("ctx.ui 注入链（M3 T2，D35 修订）", () => {
   it("宿主 commandUi 经 harness→kernel→activate 到达 ctx.ui 为同一实例；未注入时为拒绝式缺省", async () => {
-    const injected: CommandUi = { ask: async () => "a", choose: async (_t, i) => i[0]!, confirm: async () => true };
+    const injected: CommandUi = { ask: async () => "a", askSecret: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => true };
     const seen: CommandUi[] = [];
     const probe = fakeModule("ui-probe", {
       activate(ctx) {
@@ -299,7 +299,7 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
     };
     const provA: ModuleDefinition = { ...fakeModule("provider-a"), activate: (ctx) => ctx.provide("provider:a" as never, fake1.stream) };
     const provB: ModuleDefinition = { ...fakeModule("provider-b"), activate: (ctx) => ctx.provide("provider:b" as never, fake2.stream) };
-    const ui: CommandUi = { ask: async () => "b/two", choose: async (_t, items) => items.find((i) => i.includes("手动输入"))!, confirm: async () => false };
+    const ui: CommandUi = { ask: async () => "b/two", askSecret: async () => "", choose: async (_t, items) => items.find((i) => i.includes("手动输入"))!, confirm: async () => false };
     const h = await makeHarness({
       commandUi: ui,
       modules: [provA, provB, consumer],
@@ -461,6 +461,7 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const ui: CommandUi = {
       choose: async (_t, items) => { void items; return uiAnswers.choose.shift() ?? items[0]!; },
       ask: async () => uiAnswers.ask.shift() ?? "",
+      askSecret: async () => uiAnswers.ask.shift() ?? "",
       confirm: async () => true,
     };
     const h = await createHarness({

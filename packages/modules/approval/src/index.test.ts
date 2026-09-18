@@ -18,6 +18,7 @@ function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknow
   const uiCalls: Harness["uiCalls"] = [];
   const ui: CommandUi = {
     ask: opts.ui?.ask ?? (async () => { throw new Error("无交互环境（headless）"); }),
+    askSecret: opts.ui?.askSecret ?? (async () => { throw new Error("无交互环境（headless）"); }),
     choose: opts.ui?.choose
       ?? (async (title: string, items: string[]) => { uiCalls.push({ title, items }); throw new Error("无交互环境（headless）"); }),
     confirm: opts.ui?.confirm ?? (async () => { throw new Error("无交互环境（headless）"); }),

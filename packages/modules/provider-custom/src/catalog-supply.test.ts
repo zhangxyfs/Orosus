@@ -140,6 +140,7 @@ const fakeUi = (script: { choose?: string[]; ask?: string[]; confirm?: boolean[]
   return {
     choose: async (_t, _items) => chooseQueue.shift() ?? "",
     ask: async (_q) => askQueue.shift() ?? "",
+    askSecret: async (_q) => askQueue.shift() ?? "",
     confirm: async (_q) => confirmQueue.shift() ?? true,
   };
 };
@@ -147,6 +148,7 @@ const fakeUi = (script: { choose?: string[]; ask?: string[]; confirm?: boolean[]
 const rejectingUi = (): MenuUi => ({
   choose: async () => { throw new Error("无交互环境"); },
   ask: async () => { throw new Error("无交互环境"); },
+  askSecret: async () => { throw new Error("无交互环境"); },
   confirm: async () => { throw new Error("无交互环境"); },
 });
 
@@ -199,6 +201,7 @@ describe("/provider 多级菜单（D37）", () => {
         return answers.shift() ?? "取消";
       },
       ask: async () => "",
+      askSecret: async () => "",
       confirm: async () => false,
     };
     await runProviderMenu(ui, deps);
@@ -217,6 +220,7 @@ describe("/provider 多级菜单（D37）", () => {
           return answers.shift() ?? "取消";
         },
         ask: async () => "",
+        askSecret: async () => "",
         confirm: async () => false,
       };
     };
@@ -305,6 +309,7 @@ describe("/provider 多级菜单（D37）", () => {
         return answers.shift() ?? "取消";
       },
       ask: async () => "",
+      askSecret: async () => "",
       confirm: async () => false,
     };
     const out = await runProviderMenu(ui, deps);
@@ -347,5 +352,27 @@ describe("/provider 多级菜单（D37）", () => {
     await expect(runProviderMenu(rejectingUi(), deps)).rejects.toThrow(/无交互环境/);
     expect(deps.state.saved).toBeNull();
     expect(deps.state.secrets).toHaveLength(0);
+  });
+
+  it("密钥粘贴走 askSecret 掩码询问（用户走查：明文上屏并进终端滚动历史）——明文 ask 只承载非敏感输入", async () => {
+    const asked: string[] = [];
+    const secretsAsked: string[] = [];
+    const deps = fakeDeps({
+      env: {}, // 环境无 key → 必须粘贴
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-chat" }] }), { status: 200 })) as typeof fetch,
+    });
+    const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat"];
+    const ui: MenuUi = {
+      choose: async (_t, _items) => answers.shift() ?? "取消",
+      ask: async (q) => { asked.push(q); return ""; }, // 关键字等非敏感输入
+      askSecret: async (q) => { secretsAsked.push(q); return "sk-pasted"; },
+      confirm: async () => false,
+    };
+    const out = await runProviderMenu(ui, deps);
+    expect(deps.state.secrets).toEqual([["DEEPSEEK_API_KEY", "sk-pasted"]]);
+    expect(secretsAsked).toHaveLength(1);
+    expect(secretsAsked[0]).toContain("DEEPSEEK_API_KEY");
+    expect(asked).toEqual(["厂商关键字（回车全列）"]); // 只有非敏感走明文 ask
+    expect(out).toContain("success");
   });
 });

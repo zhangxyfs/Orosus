@@ -98,6 +98,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     writeFileSync(join(d, "user.toml"), cfgLine + writeTarget.split("\\").join("/") + "'\n", "utf8");
     const ui: CommandUi = {
       ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
       confirm: async () => { throw new Error("不应 confirm"); },
       choose: async (_t, items) => { choices.push(items.join("|")); return items.find((i) => i.includes("从不询问"))!; },
     };
@@ -146,6 +147,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     writeFileSync(projToml, "[approval]" + String.fromCharCode(10) + 'mode = "ask-risky"' + String.fromCharCode(10), "utf8"); // 项目层节存在 → 生效层
     const ui: CommandUi = {
       ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
       confirm: async () => false,
       choose: async (_t, items) => items.find((i) => i.includes("从不询问"))!,
     };

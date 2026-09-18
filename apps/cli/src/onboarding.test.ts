@@ -35,10 +35,10 @@ describe("首启 provider 引导（M3 T10 补——D37/D38 的宿主侧闭环）
   it("runOnboarding：拒绝 → 跳过提示且不进 /provider；同意 → 转发 /provider 并回显结果", async () => {
     const prompts: string[] = [];
     const h = { graph: () => ({ services: { listProviders: () => [] } }), prompt: async (t: string) => { prompts.push(t); return "provider 菜单结果"; } };
-    const noUi: CommandUi = { ask: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => false };
+    const noUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => false };
     expect(await runOnboarding(h, noUi)).toContain("跳过");
     expect(prompts).toEqual([]);
-    const yesUi: CommandUi = { ask: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => true };
+    const yesUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => true };
     expect(await runOnboarding(h, yesUi)).toBe("provider 菜单结果");
     expect(prompts).toEqual(["/provider"]);
   });

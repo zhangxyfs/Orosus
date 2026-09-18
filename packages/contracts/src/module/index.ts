@@ -27,6 +27,8 @@ export type CommandHandler = (args: string, ui: CommandUi) => Promise<string> | 
  *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。 */
 export interface CommandUi {
   ask(question: string): Promise<string>;
+  /** 敏感输入（密钥等）：语义同 ask，宿主应以掩码回显（*）——headless 拒绝式实现同 ask。 */
+  askSecret(question: string): Promise<string>;
   choose(title: string, items: string[]): Promise<string>;
   confirm(question: string): Promise<boolean>;
 }
