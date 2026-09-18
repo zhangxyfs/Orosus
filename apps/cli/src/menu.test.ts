@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createMaskingOutput, createReadlineUi } from "./menu.ts";
+import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
 
 describe("readline 版 CommandUi（menu 组件，D35/D38 语言约定注记）", () => {
   it("choose：编号选择，无效序号重问后命中", async () => {
@@ -20,22 +20,20 @@ describe("readline 版 CommandUi（menu 组件，D35/D38 语言约定注记）",
   });
 });
 
-describe("掩码输出代理（密钥回显 *，用户走查：明文上屏并进终端滚动历史）", () => {
-  it("mask on：可打印字符逐个替换为 *；控制序列（退屏 \\b \\b、换行）透传", async () => {
+describe("可静默输出代理（密钥输入无回显——逐键 * 在真实 Windows 终端层碎成孤星，走查改盲输）", () => {
+  it("silence on：一切回显（含 ANSI 刷新/控制序列/换行）全吞；off 恢复透传", async () => {
     const out: string[] = [];
-    const w = createMaskingOutput({ write: (s) => void out.push(s) });
+    const w = createSilenceableOutput({ write: (s) => void out.push(s) });
     const push = (s: string): Promise<void> => new Promise((r) => w.write(s, () => r()));
-    await push("abc"); // mask off → 原样
-    expect(out.at(-1)).toBe("abc");
-    w.setMask(true);
-    await push("sk-secret");
-    expect(out.at(-1)).toBe("*********");
-    await push("\b \b");
-    expect(out.at(-1)).toBe("\b \b");
-    await push("a\nb");
-    expect(out.at(-1)).toBe("*\n*");
-    w.setMask(false);
     await push("正常");
-    expect(out.at(-1)).toBe("正常");
+    expect(out).toEqual(["正常"]);
+    w.silence(true);
+    await push("sk-secret");
+    await push("\x1b[1G\x1b[0J");
+    await push("a\nb");
+    expect(out).toEqual(["正常"]); // 静默期零输出
+    w.silence(false);
+    await push("恢复");
+    expect(out).toEqual(["正常", "恢复"]);
   });
 });

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createHarness, discoverModules } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
-import { createMaskingOutput, createReadlineUi } from "./menu.ts";
+import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
 import { formatSessions, harnessOptionsFor, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
@@ -46,14 +46,14 @@ const sessionsDir = join(homedir(), ".orosus", "sessions");
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
-// 输出走掩码代理：rl 全部回显经代理——密钥询问期间可打印字符替换为 *（用户走查：明文上屏且进终端滚动历史）。
-// terminal 模式与列宽从真 stdout 透传给代理——保住 raw 模式行编辑（退格/历史）不被 Writable 缺 isTTY 降级。
-const stdoutMask = createMaskingOutput(process.stdout);
+// 输出走可静默代理：密钥询问期间 rl 回显全吞（盲输，ssh/docker 同款）——逐键 * 回显在真实 Windows
+// 终端层会碎成孤星（走查实录），静默在任意终端层行为一致。terminal/列宽透传给代理保住行编辑。
+const stdoutEcho = createSilenceableOutput(process.stdout);
 if (process.stdout.isTTY === true) {
-  Object.defineProperty(stdoutMask, "isTTY", { value: true });
-  Object.defineProperty(stdoutMask, "columns", { get: () => process.stdout.columns });
+  Object.defineProperty(stdoutEcho, "isTTY", { value: true });
+  Object.defineProperty(stdoutEcho, "columns", { get: () => process.stdout.columns });
 }
-const rl = createInterface({ input: process.stdin, output: stdoutMask });
+const rl = createInterface({ input: process.stdin, output: stdoutEcho });
 // 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
 // 且 EOF 落在 await 间隙时已关闭接口上的 question 永不 settle（退出码 13 挂起）——REPL 一律走队列兜底。
 const pendingLines: string[] = [];
@@ -102,15 +102,15 @@ const commandUi = createReadlineUi({
       askActive = false;
     }
   },
-  // 密钥询问（掩码回显）：提示语写真 stdout（走代理会被掩成 ***），rl 回显经代理变 *，
-  // 回车换行是控制符透传。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
+  // 密钥询问（静默盲输）：提示语写真 stdout（明示不回显），rl 回显经代理全吞——
+  // 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
   secretQuestion: async (q) => {
     askActive = true;
     try {
       const queued = pendingLines.shift();
       if (queued !== undefined) return queued;
-      process.stdout.write(`${q}: `);
-      stdoutMask.setMask(true);
+      process.stdout.write(`${q}（输入不回显）: `);
+      stdoutEcho.silence(true);
       try {
         return await new Promise<string>((resolve, reject) => {
           const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
@@ -121,7 +121,8 @@ const commandUi = createReadlineUi({
           );
         });
       } finally {
-        stdoutMask.setMask(false);
+        stdoutEcho.silence(false);
+        process.stdout.write("\n");
       }
     } finally {
       askActive = false;

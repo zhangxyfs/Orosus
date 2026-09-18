@@ -5,7 +5,7 @@ import type { Catalog, CatalogEntry, CatalogModel, CatalogSource } from "./catal
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
   ask(question: string): Promise<string>;
-  /** 密钥粘贴走掩码询问（回显 *——用户走查：明文上屏且进终端滚动历史）。 */
+  /** 密钥粘贴走静默询问（无回显——ssh/docker login 同款；明文上屏且进终端滚动历史，用户走查）。 */
   askSecret(question: string): Promise<string>;
   choose(title: string, items: string[]): Promise<string>;
   confirm(question: string): Promise<boolean>;
