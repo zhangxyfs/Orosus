@@ -10,6 +10,7 @@ import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { attachRender as attachRenderTo } from "./render.ts";
+import { realReadModel, startupGate } from "./startup.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -131,6 +132,13 @@ if (args.dumpModules) {
   console.log(h.graph().catalog());
   await h.close();
   process.exit(0);
+}
+
+// 首启引导（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认转 /provider 向导 → /reload → 复检回显；
+// 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）
+if (process.stdin.isTTY) {
+  const out = await startupGate({ h, ui: commandUi, readModel: realReadModel(process.cwd()), isTty: true });
+  if (out !== undefined) console.log(out);
 }
 
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
