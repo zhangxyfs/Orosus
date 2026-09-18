@@ -122,9 +122,11 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   if (src === "取消") return "已取消";
   let catalog: Catalog;
   let degradedNote = ""; // 降级可见（走查修复）：静默回退 7 家快照让用户以为目录被改小；磁盘缓存兜底如实标注来源与时间
+  let catalogFull = false; // 全量目录（online/disk/本地文件）＝models.dev 策展数据可信；builtin 快照是裁剪版
   if (src.startsWith("在线目录")) {
     const r = await deps.getCatalog();
     catalog = r.catalog;
+    catalogFull = r.source !== "builtin";
     if (r.source === "builtin") degradedNote = "（⚠ 在线目录拉取失败——已回退内置快照（常用 7 家）；检查网络稍后重试，或改用本地文件源）";
     else if (r.source === "disk") degradedNote = `（在线拉取失败——已使用本地缓存目录，上次成功拉取 ${relTime(Date.now() - (r.fetchedAt ?? Date.now()))}）`;
   }
@@ -134,6 +136,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     if (p === "") return "已取消（未输入路径——本地文件源需给 api.json 路径）";
     try {
       catalog = await deps.loadLocalCatalog(p);
+      catalogFull = true; // 本地 api.json 即完整目录（形状校验在加载口）
     } catch (err) {
       return `读取本地目录失败：${err instanceof Error ? err.message : String(err)}——请检查路径与 JSON 格式（或改用在线目录）`;
     }
@@ -190,17 +193,22 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     if (!go) return "已取消";
   }
 
-  // 模型发现 T4：默认模型从真实清单挑——live 优先（verify 响应体就地解析）、目录兜底；必选无跳过（四轮 P2②：
-  // 跳过=不写会让 onboarding 复检死循环回归）。不再取 models[0]——走查缺陷①源头修。
-  // 目录池走查升级（用户）：富标签（名称·上下文·日期）+ 新→旧排序——api.json 里的关键信息进菜单
+  // 模型发现 T4 修订（走查：coding-plan 条目选 2 却列出端点全部 11 个按量模型）：
+  // 全量目录在手 → 目录池优先——models.dev 的策展清单就是覆盖口径（coding-plan 条目只含套餐内模型，
+  // live /models 会把按量模型一并列出，选了就 1113）。目录降级（builtin）或条目无模型 → live 清单兜底。
+  // 必选无跳过（四轮 P2②：跳过=不写会让 onboarding 复检死循环回归）；不取 models[0]（走查缺陷①）
   const live = v.kind === "ok" ? (() => { try { return parseModelsResponse(v.body); } catch { return []; } })() : [];
-  const useLive = live.length > 0;
-  const pool: string[] = useLive ? live : models.map(modelLabel);
+  const useCatalog = catalogFull && models.length > 0;
+  const useLive = !useCatalog && live.length > 0;
+  const pool: string[] = useCatalog ? models.map(modelLabel) : useLive ? live : [];
   let defaultModel: string | undefined;
   let modelNote = "";
   let ctxNote = "";
   if (pool.length > 0) {
-    const pickedModel = await ui.choose(useLive ? "选择默认模型（来自端点实时清单）" : "选择默认模型（目录清单兜底）", pool);
+    const pickedModel = await ui.choose(
+      useCatalog ? "选择默认模型（目录策展清单——即该条目的覆盖口径）" : "选择默认模型（来自端点实时清单）",
+      pool,
+    );
     defaultModel = useLive ? pickedModel : (pickedModel.split("（")[0] ?? pickedModel);
     // 目录元数据链：选中模型带 limit.context → 写顶层 contextWindow（与 provider import --model 同落点）
     const ctx = modelById.get(defaultModel)?.limit?.context;

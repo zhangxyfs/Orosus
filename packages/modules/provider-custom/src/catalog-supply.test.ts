@@ -250,9 +250,10 @@ describe("/provider 多级菜单（D37）", () => {
     expect(out2).toContain("读取本地目录失败");
   });
 
-  it("T4① live 清单挑默认模型：verify 响应体解析 → 所选写入 defaultModel（非 models[0]）+ setModel 裸名", async () => {
+  it("T4① 目录降级（builtin 快照）时 live 清单兜底挑默认模型：verify 响应体解析 → 所选写入 defaultModel（非 models[0]）+ setModel 裸名", async () => {
     const deps = fakeDeps({
       env: { DEEPSEEK_API_KEY: "sk-live" },
+      getCatalog: async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: {} } } as unknown as Catalog, source: "builtin" as const }), // 降级：条目在但无策展模型 → live 优先
       fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-reasoner" }, { id: "deepseek-chat" }] }), { status: 200 })) as typeof fetch,
     });
     const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-reasoner"], ask: [""] });
@@ -274,7 +275,7 @@ describe("/provider 多级菜单（D37）", () => {
     expect(out).toContain("deepseek-chat"); // 兜底菜单的选中值出现在回显
   });
 
-  it("目录池真正解析 api.json 元数据（用户走查）：富标签（名称·上下文·日期）+ 发布日期新→旧排序 + 非 tool_call/过滤；选中写 contextWindow", async () => {
+  it("目录池真正解析 api.json 元数据（用户走查）：富标签（名称·上下文·日期）+ 发布日期新→旧排序 + 非 tool_call/过滤；全量目录在手时目录优先于端点实时清单（coding-plan 条目只列套餐内模型——live /models 会返回端点全部按量模型，选了就 1113）；选中写 contextWindow", async () => {
     // 形状取自真实 models.dev 的 zhipuai-coding-plan 条目
     const zcp = {
       "zhipuai-coding-plan": {
@@ -291,10 +292,12 @@ describe("/provider 多级菜单（D37）", () => {
     };
     let modelItems: string[] = [];
     const answers: string[] = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai-coding-plan（Zhipu AI Coding Plan）"];
+    // live 干扰：端点 /models 返回全部按量模型（含套餐外的 flashx / glm-5.2）——不应出现在菜单
+    const liveBody = JSON.stringify({ data: [{ id: "glm-5.3-flashx" }, { id: "glm-5.3-flash" }, { id: "glm-5.2" }, { id: "glm-4.5" }] });
     const deps = fakeDeps({
       env: { ZHIPU_API_KEY: "sk-live" },
       getCatalog: async () => ({ catalog: zcp as unknown as Catalog, source: "online" as const }),
-      fetchImpl: (async () => new Response("not-json", { status: 200 })) as typeof fetch, // verify 失败产 live 空 → 目录池
+      fetchImpl: (async () => new Response(liveBody, { status: 200 })) as typeof fetch,
     });
     const ui: MenuUi = {
       choose: async (title, items) => {
@@ -314,6 +317,10 @@ describe("/provider 多级菜单（D37）", () => {
     expect(modelItems.at(-1)).toBe("glm-nodate");
     expect(modelItems.join("\n")).not.toContain("deprecated");
     expect(modelItems.join("\n")).not.toContain("glm-no-tool");
+    // 目录优先：live 的套餐外模型（flashx/glm-5.2/glm-4.5）不进菜单
+    expect(modelItems.join("\n")).not.toContain("flashx");
+    expect(modelItems.join("\n")).not.toContain("glm-5.2（");
+    expect(modelItems.join("\n")).not.toContain("glm-4.5");
     // 选中 glm-5.3-flash（context 1M）→ defaultModel 裸 id + 顶层 contextWindow 写入
     expect(deps.state.saved).toMatchObject({ "zhipuai-coding-plan": { defaultModel: "glm-5.3-flash" } });
     expect(deps.state.ctxWindows).toEqual([1_000_000]);
