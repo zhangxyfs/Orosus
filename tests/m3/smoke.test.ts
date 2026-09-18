@@ -19,7 +19,7 @@ describe("M3 全链冒烟", () => {
       writeFileSync(join(dir, "config.toml"), [
         "[compaction]",
         "thresholdTokens = 1",
-        "keepRecent = 1",
+        "keepRecentTokens = 1",
         "[approval]",
         'mode = "ask-risky"',
         "",

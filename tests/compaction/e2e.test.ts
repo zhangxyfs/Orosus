@@ -13,7 +13,7 @@ describe("compaction 端到端（M3 T5/T9）", () => {
   it("压缩后主请求 messages 前缀为摘要消息，被压缩的原文不再进请求", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orosus-compaction-"));
     try {
-      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 1\nkeepRecent = 1\n", "utf8");
+      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 1\nkeepRecentTokens = 1\n", "utf8");
       const fp = fakeProvider([
         [{ type: "text/delta", text: "turn1" }, { type: "finish", kind: "stop" }] as Chunk[],
         [{ type: "text/delta", text: "摘要产物" }, { type: "finish", kind: "stop" }] as Chunk[],
@@ -52,7 +52,7 @@ describe("compaction × fork/resume（M3 T9）", () => {
   it("压缩后 fork：新会话投影保留摘要、不含被压缩原文（append-only 下 fork 与压缩正交）", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orosus-compaction-fork-"));
     try {
-      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 1\nkeepRecent = 1\n", "utf8");
+      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 1\nkeepRecentTokens = 1\n", "utf8");
       const fp = fakeProvider([
         [{ type: "text/delta", text: "turn1" }, { type: "finish", kind: "stop" }] as Chunk[],
         [{ type: "text/delta", text: "摘要产物" }, { type: "finish", kind: "stop" }] as Chunk[],
