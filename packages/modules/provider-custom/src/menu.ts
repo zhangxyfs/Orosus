@@ -99,7 +99,16 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   if (src === "取消") return "已取消";
   let catalog: Catalog;
   if (src.startsWith("在线目录")) catalog = await deps.getCatalog();
-  else catalog = await deps.loadLocalCatalog((await ui.ask("api.json 路径")).trim());
+  else {
+    // 空路径/文件不存在/坏 JSON → 可读文案而非裸异常崩溃（走查：空回车曾 ENOENT 直接炸栈）
+    const p = (await ui.ask("api.json 路径")).trim();
+    if (p === "") return "已取消（未输入路径——本地文件源需给 api.json 路径）";
+    try {
+      catalog = await deps.loadLocalCatalog(p);
+    } catch (err) {
+      return `读取本地目录失败：${err instanceof Error ? err.message : String(err)}——请检查路径与 JSON 格式（或改用在线目录）`;
+    }
+  }
 
   const keyword = (await ui.ask("厂商关键字（回车全列）")).trim().toLowerCase();
   const entries = Object.entries(catalog).filter(([id, e]) => {

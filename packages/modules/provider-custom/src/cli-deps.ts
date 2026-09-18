@@ -44,7 +44,10 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
     },
     env: process.env,
     getCatalog: (): Promise<Catalog> => getCatalog({}),
-    loadLocalCatalog: async (path) => JSON.parse(readFileSync(path, "utf8")) as Catalog,
+    loadLocalCatalog: async (path) => {
+      if (path === "") throw new Error("未输入 api.json 路径");
+      return JSON.parse(readFileSync(path, "utf8")) as Catalog; // 读失败（不存在/坏 JSON）原样抛——向导 catch 转可读文案
+    },
     fetchImpl: fetch,
     ...overrides,
   };

@@ -135,6 +135,17 @@ describe("/provider 多级菜单（D37）", () => {
     expect(ids.at(-1)).toBe("取消");
   });
 
+  it("本地文件源防御：空路径 → 取消文案；坏 JSON → 可读失败文案（走查：空回车曾 ENOENT 炸栈）", async () => {
+    const deps = fakeDeps();
+    const ui1 = fakeUi({ choose: ["[添加新平台]", "本地文件（api.json）"], ask: [""] });
+    expect(await runProviderMenu(ui1, deps)).toContain("已取消（未输入路径");
+    const ui2 = fakeUi({ choose: ["[添加新平台]", "本地文件（api.json）", "[添加新平台]", "本地文件（api.json）"], ask: ["C:/no/such/api.json", "C:/no/such/api.json"] });
+    const deps3 = fakeDeps();
+    deps3.loadLocalCatalog = async () => { throw new Error("ENOENT: no such file"); };
+    const out2 = await runProviderMenu(ui2, deps3); // 第二次调用需重新排队 choose（首项仍是已关联平台列表）
+    expect(out2).toContain("读取本地目录失败");
+  });
+
   it("T4① live 清单挑默认模型：verify 响应体解析 → 所选写入 defaultModel（非 models[0]）+ setModel 裸名", async () => {
     const deps = fakeDeps({
       env: { DEEPSEEK_API_KEY: "sk-live" },
