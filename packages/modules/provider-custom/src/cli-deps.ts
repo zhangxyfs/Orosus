@@ -2,7 +2,7 @@ import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { getCatalogWithSource, type Catalog } from "./catalog.ts";
+import { defaultCatalogCacheFile, getCatalogWithSource, type Catalog } from "./catalog.ts";
 import type { MenuDeps, ProviderEntry } from "./menu.ts";
 
 /** /provider 菜单的宿主侧副作用接线（D37）：config/secrets 的真实读写——读写 ~/.orosus/ 下约定文件。
@@ -43,7 +43,7 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
       appendFileSync(secretsPath, `${key}=${value}\n`);
     },
     env: process.env,
-    getCatalog: () => getCatalogWithSource({}),
+    getCatalog: () => getCatalogWithSource({ cacheFile: defaultCatalogCacheFile() }), // 拉到即落盘——重启后离线也有全量目录
     loadLocalCatalog: async (path) => {
       if (path === "") throw new Error("未输入 api.json 路径");
       return JSON.parse(readFileSync(path, "utf8")) as Catalog; // 读失败（不存在/坏 JSON）原样抛——向导 catch 转可读文案

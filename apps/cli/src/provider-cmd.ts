@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync, openSync, closeSync, chmodSync } from "node:fs";
 import { parse, stringify } from "smol-toml";
-import { getCatalog, type Catalog } from "@orosus/provider-custom";
+import { defaultCatalogCacheFile, getCatalog, type Catalog } from "@orosus/provider-custom";
 import { resolveWire, adaptBaseUrl } from "@orosus/provider-custom";
 
 /** CLI provider 子命令（D34/D37 配置写器）：import（校验即确认）与 list。 */
@@ -48,7 +48,7 @@ export function isProviderSubcommand(argv: string[]): boolean {
 
 export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): Promise<number> {
   const doFetch = io.fetchImpl ?? fetch;
-  const getCat = io.getCatalog ?? getCatalog;
+  const getCat = io.getCatalog ?? ((o: { registryUrl?: string; fetchImpl?: typeof fetch; cacheFile?: string }) => getCatalog({ ...o, cacheFile: defaultCatalogCacheFile() })); // 磁盘持久化：离线也有全量目录
   const cmd = argv[1];
   const rest = argv.slice(2);
   const flag = (name: string): string | undefined => {

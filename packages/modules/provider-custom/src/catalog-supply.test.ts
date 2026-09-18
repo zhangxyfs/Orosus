@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { getCatalog, getCatalogWithSource, type Catalog } from "./catalog.ts";
+import { getCatalog, getCatalogWithSource, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -73,6 +76,43 @@ describe("目录拉取与快照兜底（D34）", () => {
     expect(r2.source).toBe("online");
     const r3 = await getCatalogWithSource({ fetchImpl: fail, now: () => 1_800_100 }); // TTL 内命中 → 沿用来源，fetch 不被调用
     expect(r3.source).toBe("online");
+  });
+
+  it("磁盘持久化（用户方案：拉到一次就落盘，之后 baseUrl 等从本地 JSON 取）：成功→写盘；重启后网络失败→读盘全量；坏文件忽略；builtin 不落盘", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-cat-"));
+    try {
+    const cacheFile = join(dir, "cache", "models-dev.json");
+    const payloadA = { vendorA: { type: "openai", api: "https://a" } };
+    const payloadB = { vendorB: { type: "openai", api: "https://b" } };
+    const okA = (async () => new Response(JSON.stringify(payloadA), { status: 200 })) as typeof fetch;
+    const okB = (async () => new Response(JSON.stringify(payloadB), { status: 200 })) as typeof fetch;
+    const fail = (async () => { throw new Error("network down"); }) as typeof fetch;
+
+    // ① 成功拉取 → 落盘（envelope：fetchedAt + catalog）
+    resetCatalogCacheForTest();
+    const r1 = await getCatalogWithSource({ fetchImpl: okA, now: () => 5_000_000, cacheFile });
+    expect(r1.source).toBe("online");
+    expect(JSON.parse(readFileSync(cacheFile, "utf8"))).toEqual({ fetchedAt: 5_000_000, catalog: payloadA });
+
+    // ② 模拟重启（内存缓存清空）+ 网络失败 → 读盘：全量数据、来源 disk、fetchedAt 保留
+    resetCatalogCacheForTest();
+    const r2 = await getCatalogWithSource({ fetchImpl: fail, now: () => 5_000_100, cacheFile });
+    expect(r2.source).toBe("disk");
+    expect(r2.catalog).toEqual(payloadA);
+    expect(r2.fetchedAt).toBe(5_000_000);
+
+    // ③ 网络恢复（TTL 过期后）→ 重取 online 并覆写盘上文件
+    const r3 = await getCatalogWithSource({ fetchImpl: okB, now: () => 5_700_000, cacheFile });
+    expect(r3.source).toBe("online");
+    expect(JSON.parse(readFileSync(cacheFile, "utf8"))).toEqual({ fetchedAt: 5_700_000, catalog: payloadB });
+
+    // ④ 坏缓存文件（torn/corrupt）→ 忽略，回退 builtin；builtin 不写盘（盘上只存真实拉取数据——不让 7 家快照冒充本地缓存掩盖降级）
+    resetCatalogCacheForTest();
+    writeFileSync(cacheFile, "{corrupt", "utf8");
+    const r4 = await getCatalogWithSource({ fetchImpl: fail, now: () => 5_900_000, cacheFile });
+    expect(r4.source).toBe("builtin");
+    expect(readFileSync(cacheFile, "utf8")).toBe("{corrupt"); // 原样未动
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -174,6 +214,13 @@ describe("/provider 多级菜单（D37）", () => {
     online.getCatalog = async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://a" } } as unknown as Catalog, source: "online" as const });
     await runProviderMenu(mkUi(), online);
     expect(vendorTitle).not.toContain("拉取失败");
+    vendorTitle = "";
+    const disk = fakeDeps(); // 磁盘缓存兜底：全量数据但来源如实标注 + 拉取时间
+    disk.getCatalog = async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://a" } } as unknown as Catalog, source: "disk" as const, fetchedAt: Date.now() - 5 * 60_000 });
+    await runProviderMenu(mkUi(), disk);
+    expect(vendorTitle).toContain("本地缓存");
+    expect(vendorTitle).toContain("5 分钟前");
+    expect(vendorTitle).not.toContain("内置快照");
   });
 
   it("本地文件源防御：空路径 → 取消文案；坏 JSON → 可读失败文案（走查：空回车曾 ENOENT 炸栈）", async () => {

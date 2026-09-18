@@ -23,7 +23,7 @@ export interface MenuDeps {
   setModel(providerName: string): Promise<void>;
   appendSecret(key: string, value: string): Promise<void>;
   env: Record<string, string | undefined>;
-  getCatalog(): Promise<{ catalog: Catalog; source: CatalogSource }>;
+  getCatalog(): Promise<{ catalog: Catalog; source: CatalogSource; fetchedAt?: number }>;
   loadLocalCatalog(path: string): Promise<Catalog>;
   fetchImpl: typeof fetch;
 }
@@ -36,6 +36,16 @@ const DISPLAY_NAMES: Record<string, string> = {
 };
 
 const displayName = (id: string, entry: CatalogEntry): string => DISPLAY_NAMES[id] ?? entry.name ?? id;
+
+/** 相对时间（目录缓存来源标注）：刚刚 / N 分钟前 / N 小时前 / N 天前。 */
+function relTime(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return "刚刚";
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
 
 /** 可导入的 text 模型（deprecated/alpha/embedding/非文本输出排除——D34 模型过滤）。 */
 function usableModels(entry: CatalogEntry): string[] {
@@ -98,11 +108,12 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const src = await ui.choose("数据源", ["在线目录（https://models.dev/api.json）", "本地文件（api.json）", "取消"]);
   if (src === "取消") return "已取消";
   let catalog: Catalog;
-  let degradedNote = ""; // 降级可见（走查修复）：静默回退 7 家快照让用户以为目录被改小
+  let degradedNote = ""; // 降级可见（走查修复）：静默回退 7 家快照让用户以为目录被改小；磁盘缓存兜底如实标注来源与时间
   if (src.startsWith("在线目录")) {
     const r = await deps.getCatalog();
     catalog = r.catalog;
     if (r.source === "builtin") degradedNote = "（⚠ 在线目录拉取失败——已回退内置快照（常用 7 家）；检查网络稍后重试，或改用本地文件源）";
+    else if (r.source === "disk") degradedNote = `（在线拉取失败——已使用本地缓存目录，上次成功拉取 ${relTime(Date.now() - (r.fetchedAt ?? Date.now()))}）`;
   }
   else {
     // 空路径/文件不存在/坏 JSON → 可读文案而非裸异常崩溃（走查：空回车曾 ENOENT 直接炸栈）
