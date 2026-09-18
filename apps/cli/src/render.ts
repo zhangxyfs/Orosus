@@ -37,10 +37,13 @@ export function renderEvent(e: SessionEvent, state: RenderState): string {
     if (c.type === "finish" && c.kind === "error") {
       // 401/403 提示（模型发现 T5，走查缺陷③提示面）：校验用输入值、运行用合并链（显式 env > process.env > secrets.env）
       // ——同名环境变量覆盖刚写入的 secrets 是最常见根因，给用户排查方向
-      const hint = /HTTP 40[13]/.test(c.errorMessage ?? "")
+      const msg = c.errorMessage ?? "";
+      const hint = /HTTP 40[13]/.test(msg)
         ? "\n[提示] 密钥被拒——若刚更新过 secrets.env，检查同名环境变量是否覆盖（优先级：显式 env > process.env > secrets.env）\n"
-        : "";
-      return `${closeReasoning()}\n[模型错误] ${c.errorMessage ?? ""}${hint}`;
+        : /HTTP 429/.test(msg)
+          ? "\n[提示] 429 限流或配额不足——错误体含 1113（余额不足或无可用资源包）时，检查套餐窗口配额是否用尽、模型是否在套餐覆盖列表\n"
+          : "";
+      return `${closeReasoning()}\n[模型错误] ${msg}${hint}`;
     }
     return "";
   }

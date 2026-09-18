@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { getCatalog, type Catalog } from "./catalog.ts";
+import { getCatalog, getCatalogWithSource, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -42,8 +42,9 @@ describe("目录拉取与快照兜底（D34）", () => {
       fetchCount++;
       throw new Error("network down");
     }) as typeof fetch;
-    const c1 = await getCatalog({ fetchImpl, now: () => 1_000 });
-    expect(Object.keys(c1).length).toBeGreaterThan(0); // 快照兜底可用（离线导入）
+    const c1 = await getCatalogWithSource({ fetchImpl, now: () => 1_000 });
+    expect(Object.keys(c1.catalog).length).toBeGreaterThan(0); // 快照兜底可用（离线导入）
+    expect(c1.source).toBe("builtin"); // 无缓存 + 失败 → 降级快照（降级态可见的根基）
     await getCatalog({ fetchImpl, now: () => 2_000 }); // TTL 内 → 不再 fetch
     expect(fetchCount).toBe(1);
     const bad = await getCatalog({ fetchImpl: (async () => new Response("[1,2]", { status: 200 })) as typeof fetch, now: () => 100_000 });
@@ -60,6 +61,18 @@ describe("目录拉取与快照兜底（D34）", () => {
     const cat = await getCatalog({ fetchImpl: (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch, now: () => 1_000_000 });
     expect(cat.vendor!.models!["m-big"]!.limit).toEqual({ context: 262_144, output: 8_192 });
     expect(cat.vendor!.models!["m-plain"]!.limit).toBeUndefined();
+  });
+
+  it("getCatalogWithSource 暴露降级态（走查：在线失败静默回退 7 家快照，用户以为列表被改小）：成功→online；TTL 命中沿用来源；失败但有旧缓存供旧数据不降级（stale-while-error）", async () => {
+    // 前置：limit 测试已留 online 缓存（at=1_000_000）
+    const fail = (async () => { throw new Error("network down"); }) as typeof fetch;
+    const r1 = await getCatalogWithSource({ fetchImpl: fail, now: () => 1_700_000 }); // TTL 过期 + 失败 + 有旧缓存 → 供旧 online（比 7 家快照好）
+    expect(r1.source).toBe("online");
+    const ok = (async () => new Response(JSON.stringify({ vendor: { type: "openai", api: "https://x" } }), { status: 200 })) as typeof fetch;
+    const r2 = await getCatalogWithSource({ fetchImpl: ok, now: () => 1_800_000 }); // 网络恢复 → 重取 online
+    expect(r2.source).toBe("online");
+    const r3 = await getCatalogWithSource({ fetchImpl: fail, now: () => 1_800_100 }); // TTL 内命中 → 沿用来源，fetch 不被调用
+    expect(r3.source).toBe("online");
   });
 });
 
@@ -91,7 +104,7 @@ function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState }
     appendSecret: async (k, v) => void state.secrets.push([k, v]),
     setModel: async (n: string) => { state.setModels.push(n); },
     env: {},
-    getCatalog: async () => ({ deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: { "deepseek-chat": { id: "deepseek-chat" } } } }) as unknown as Catalog,
+    getCatalog: async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: { "deepseek-chat": { id: "deepseek-chat" } } } } as unknown as Catalog, source: "online" as const }),
     loadLocalCatalog: async () => ({}),
     fetchImpl: (async () => new Response("[]", { status: 200 })) as typeof fetch,
     ...over,
@@ -114,11 +127,14 @@ describe("/provider 多级菜单（D37）", () => {
   it("目录厂商清单按字母序（同前缀供应商相邻——2026-09-18 用户要求：zai/zhipuai/zhipuai-coding-plan 挨着）", async () => {
     const deps = fakeDeps();
     deps.getCatalog = async () => ({
-      "zhipuai-coding-plan": { name: "Zhipu AI Coding Plan", type: "openai", api: "https://a", env: ["ZHIPU_API_KEY"] },
-      zai: { name: "Z.AI", type: "openai", api: "https://b" },
-      zhipuai: { name: "Zhipu AI", type: "openai", api: "https://c" },
-      anthropic: { name: "Anthropic", type: "anthropic", api: "https://d" },
-    }) as unknown as Catalog;
+      catalog: {
+        "zhipuai-coding-plan": { name: "Zhipu AI Coding Plan", type: "openai", api: "https://a", env: ["ZHIPU_API_KEY"] },
+        zai: { name: "Z.AI", type: "openai", api: "https://b" },
+        zhipuai: { name: "Zhipu AI", type: "openai", api: "https://c" },
+        anthropic: { name: "Anthropic", type: "anthropic", api: "https://d" },
+      } as unknown as Catalog,
+      source: "online" as const,
+    });
     let vendorItems: string[] = [];
     const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "取消"];
     const ui: MenuUi = {
@@ -133,6 +149,31 @@ describe("/provider 多级菜单（D37）", () => {
     const ids = vendorItems.map((s) => s.split("（")[0]!);
     expect(ids.slice(0, 4)).toEqual(["anthropic", "zai", "zhipuai", "zhipuai-coding-plan"]); // 字母序，同前缀相邻
     expect(ids.at(-1)).toBe("取消");
+  });
+
+  it("在线目录降级可见（走查：拉取失败静默回退内置快照 7 家，用户以为列表被改小）：厂商标题带回退警示；在线正常时无警示", async () => {
+    let vendorTitle = "";
+    const mkUi = (): MenuUi => {
+      const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "取消"];
+      return {
+        choose: async (title, _items) => {
+          if (String(title).includes("厂商")) vendorTitle = String(title);
+          return answers.shift() ?? "取消";
+        },
+        ask: async () => "",
+        confirm: async () => false,
+      };
+    };
+    const degraded = fakeDeps();
+    degraded.getCatalog = async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://a" } } as unknown as Catalog, source: "builtin" as const });
+    await runProviderMenu(mkUi(), degraded);
+    expect(vendorTitle).toContain("在线目录拉取失败");
+    expect(vendorTitle).toContain("内置快照");
+    vendorTitle = "";
+    const online = fakeDeps();
+    online.getCatalog = async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://a" } } as unknown as Catalog, source: "online" as const });
+    await runProviderMenu(mkUi(), online);
+    expect(vendorTitle).not.toContain("拉取失败");
   });
 
   it("本地文件源防御：空路径 → 取消文案；坏 JSON → 可读失败文案（走查：空回车曾 ENOENT 炸栈）", async () => {

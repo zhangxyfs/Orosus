@@ -1,6 +1,6 @@
 import { parseModelsResponse } from "@orosus/contracts/provider";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import type { Catalog, CatalogEntry } from "./catalog.ts";
+import type { Catalog, CatalogEntry, CatalogSource } from "./catalog.ts";
 
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
@@ -23,7 +23,7 @@ export interface MenuDeps {
   setModel(providerName: string): Promise<void>;
   appendSecret(key: string, value: string): Promise<void>;
   env: Record<string, string | undefined>;
-  getCatalog(): Promise<Catalog>;
+  getCatalog(): Promise<{ catalog: Catalog; source: CatalogSource }>;
   loadLocalCatalog(path: string): Promise<Catalog>;
   fetchImpl: typeof fetch;
 }
@@ -98,7 +98,12 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const src = await ui.choose("数据源", ["在线目录（https://models.dev/api.json）", "本地文件（api.json）", "取消"]);
   if (src === "取消") return "已取消";
   let catalog: Catalog;
-  if (src.startsWith("在线目录")) catalog = await deps.getCatalog();
+  let degradedNote = ""; // 降级可见（走查修复）：静默回退 7 家快照让用户以为目录被改小
+  if (src.startsWith("在线目录")) {
+    const r = await deps.getCatalog();
+    catalog = r.catalog;
+    if (r.source === "builtin") degradedNote = "（⚠ 在线目录拉取失败——已回退内置快照（常用 7 家）；检查网络稍后重试，或改用本地文件源）";
+  }
   else {
     // 空路径/文件不存在/坏 JSON → 可读文案而非裸异常崩溃（走查：空回车曾 ENOENT 直接炸栈）
     const p = (await ui.ask("api.json 路径")).trim();
@@ -117,7 +122,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   });
   if (entries.length === 0) return "目录中没有匹配的厂商";
   entries.sort((a, b) => a[0].localeCompare(b[0])); // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
-  const picked = await ui.choose("选择厂商", [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
+  const picked = await ui.choose(`选择厂商${degradedNote}`, [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";
   const [entryId, entry] = entries.find(([id]) => picked.startsWith(id)) ?? [undefined, undefined];
   if (entry === undefined || entryId === undefined) return "已取消";

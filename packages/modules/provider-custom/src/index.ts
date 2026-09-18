@@ -22,7 +22,7 @@ export default defineModule({
 });
 
 // CLI（配置写器）与宿主复用的目录供给公开面——经根出口再导出，保持单出口纪律
-export { getCatalog, type Catalog, type CatalogEntry } from "./catalog.ts";
+export { getCatalog, getCatalogWithSource, type Catalog, type CatalogEntry, type CatalogSource } from "./catalog.ts";
 export { resolveWire, adaptBaseUrl } from "./infer.ts";
 export { runProviderMenu, type MenuUi, type MenuDeps, type ProviderEntry } from "./menu.ts";
 export { defaultMenuDeps } from "./cli-deps.ts";

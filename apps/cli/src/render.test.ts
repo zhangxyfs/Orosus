@@ -56,4 +56,12 @@ describe("reasoning 块渲染（思考过程可见）", () => {
     expect(renderEvent(chunkEvent({ type: "text/delta", text: "hi" }), st)).toBe("hi");
     expect(renderEvent(chunkEvent({ type: "usage", input: 1, output: 2 }), st)).toBe("");
   });
+
+  it("⑧ HTTP 429 提示配额/余额排查方向（智谱 1113：余额不足或无可用资源包）；500 无提示", () => {
+    const st = createRenderState();
+    const out429 = renderEvent(chunkEvent({ type: "finish", kind: "error", errorMessage: 'HTTP 429：{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}' }), st);
+    expect(out429).toContain("套餐窗口配额");
+    const st2 = createRenderState();
+    expect(renderEvent(chunkEvent({ type: "finish", kind: "error", errorMessage: "HTTP 500：boom" }), st2)).not.toContain("套餐窗口配额");
+  });
 });
