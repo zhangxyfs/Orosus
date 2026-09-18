@@ -118,7 +118,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   };
 
   const secretsLoad = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
-  const secrets = secretsLoad.vars; // reload 复用（同一合并语义）
+  let secrets = secretsLoad.vars; // reload 需重读（向导等运行期写入 secrets.env 后 reload 须看到新值——修复：启动快照导致 $ENV 占位符解析不到 → 字面量当 key → 401）
   if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
   let config = loadConfig({
     userFile: options.config?.userFile ?? join(home, "config.toml"),
@@ -453,6 +453,7 @@ session: ${store.sessionId}
       const oldDefs = oldGraph.defs();
       // 重新执行配置分层合并 → 发现 → 信任 →（同一代码路径；§5.5）
       const home2 = join(homedir(), ".orosus");
+      secrets = loadSecretsEnv(options.secretsFile ?? join(home2, "secrets.env")).vars; // 重读 secrets（向导等运行期写入后 reload 必须看到）
       const config2 = loadConfig({
         userFile: options.config?.userFile ?? join(home2, "config.toml"),
         projectFile: join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
