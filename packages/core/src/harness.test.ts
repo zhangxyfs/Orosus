@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -332,6 +332,91 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
     const report = await h.reload();
     expect(report.unchanged).toContain("llm-consumer");
     expect((await run!()).text).toBe("重载后仍可用"); // 不是"llm 口未注入"
+    await h.close();
+  });
+});
+
+describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补强 T3，D39 修订）", () => {
+  const stateModule = (extra?: Partial<ModuleDefinition>): ModuleDefinition => ({
+    ...fakeModule("llm-probe"),
+    mounts: ["contribute:command"],
+    activate(ctx) {
+      ctx.contribute.command("llm-probe__state", () => JSON.stringify({ lastUsage: ctx.llm.lastUsage ?? null, contextWindow: ctx.llm.contextWindow ?? null }));
+    },
+    ...extra,
+  });
+
+  it("① 主循环 usage chunk → 模块经 ctx.llm.lastUsage 读到 { totalTokens, atMessageCount }（装配层：拿掉 harness 包装线必红）", async () => {
+    const fp = fakeProvider([
+      [{ type: "text/delta", text: "答" }, { type: "usage", input: 100, output: 20 }, { type: "finish", kind: "stop" }],
+    ]);
+    const h = await makeHarness({
+      modules: [
+        { ...fakeModule("provider-fake", {}), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) },
+        stateModule(),
+      ],
+    });
+    await h.prompt("hi"); // 主循环请求 = 1 条消息，产出 usage{100,20}
+    const state = JSON.parse((await h.prompt("/llm-probe__state")) as string) as { lastUsage: { totalTokens: number; atMessageCount: number } | null };
+    expect(state.lastUsage).toEqual({ totalTokens: 120, atMessageCount: 1 });
+    await h.close();
+  });
+
+  it("② contextWindow：config 顶层正整数透出；未配置 / ≤0 忽略（三轮 P2：0 窗口防）", async () => {
+    const state = async (configToml?: string): Promise<{ contextWindow: number | null }> => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-harness-cw-"));
+      if (configToml !== undefined) writeFileSync(join(dir, "user.toml"), configToml, "utf8");
+      const h = await createHarness({
+        store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+        modules: [fakeProviderModule("fake", []), stateModule()],
+        config: { ...(configToml !== undefined ? { userFile: join(dir, "user.toml") } : hermetic(dir)), cliOverrides: { model: "fake/m" } },
+      });
+      const raw = await h.prompt("/llm-probe__state");
+      await h.close();
+      return JSON.parse(raw as string) as { contextWindow: number | null };
+    };
+    expect((await state("contextWindow = 65536\n")).contextWindow).toBe(65536);
+    expect((await state()).contextWindow).toBeNull();
+    expect((await state("contextWindow = 0\n")).contextWindow).toBeNull();
+  });
+
+  it("③ reload 更新：改 config 文件后 /reload → contextWindow 读到新值（getter 代际正确性）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-cwr-"));
+    const userFile = join(dir, "user.toml");
+    writeFileSync(userFile, "contextWindow = 65536\n", "utf8");
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", []), stateModule()],
+      config: { userFile, projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    expect(JSON.parse((await h.prompt("/llm-probe__state")) as string).contextWindow).toBe(65536);
+    writeFileSync(userFile, "contextWindow = 131072\n", "utf8");
+    await h.reload();
+    expect(JSON.parse((await h.prompt("/llm-probe__state")) as string).contextWindow).toBe(131072);
+    await h.close();
+  });
+
+  it("④ ctx.llm.stream maxTokens 透传到 provider 请求；缺省不带", async () => {
+    const fp = fakeProvider([[{ type: "text/delta", text: "ok" }, { type: "finish", kind: "stop" }]]);
+    let call: ((maxTokens?: number) => Promise<void>) | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-probe"),
+      activate(ctx) {
+        call = async (maxTokens) => {
+          for await (const _ of ctx.llm.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }], ...(maxTokens !== undefined ? { maxTokens } : {}) })) void _;
+        };
+      },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeModule("provider-fake", {}), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) },
+        consumer,
+      ],
+    });
+    await call!(1234);
+    expect(fp.requests[0]!.maxTokens).toBe(1234);
+    await call!();
+    expect(fp.requests[1]!.maxTokens).toBeUndefined();
     await h.close();
   });
 });

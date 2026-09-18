@@ -154,6 +154,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const channel = new Channel<SessionEvent>();
   const store = forwardingStore(baseStore, channel);
 
+  // 窗口语义（M3 补强空白 §5）：核心顶层 contextWindow——正整数才生效；非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）
+  const readContextWindow = (core: Record<string, unknown>): number | undefined => {
+    const v = core.contextWindow;
+    if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+    if (v !== undefined) createLogger(sink, "kernel").warn("kernel.config.contextwindow", `contextWindow 配置非法（${String(v)}）——须为正整数，已忽略`);
+    return undefined;
+  };
+  let contextWindow = readContextWindow(config.core);
+  let usageAnchor: { totalTokens: number; atMessageCount: number } | undefined; // usage 锚点（空白 §4）：主循环 stream 包装记录，二级调用不更新
+
   const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[] = [
     ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
     ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
@@ -314,9 +324,9 @@ session: ${store.sessionId}
     return { stream: adapter.stream, model };
   };
 
-  // ctx.llm 实现（D39/T4）：调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
+  // ctx.llm 实现（D39/T4 + 补强 T3 三扩展）：调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
   llmHolder.impl = {
-    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal }) =>
+    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number }) =>
       (async function* (): AsyncGenerator<Chunk> {
         let resolved: { stream: StreamFn; model: string };
         try {
@@ -330,9 +340,12 @@ session: ${store.sessionId}
           system: req.system ?? "",
           messages: req.messages,
           tools: [], // 二级调用不带工具（D39）
+          ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
           signal: req.signal ?? new AbortController().signal,
         });
       })(),
+    get contextWindow() { return contextWindow; }, // getter：reload 后读新值（空白 §5）
+    get lastUsage() { return usageAnchor; }, // usage 锚点只读透出（空白 §4）——锚点在 harness 主循环包装，loop 骨架不消费
   };
 
   const harnessImpl: Harness = {
@@ -366,12 +379,19 @@ session: ${store.sessionId}
       currentTurn = { controller, done };
       try {
         const { stream, model } = resolveProvider();
+        // usage 锚点（补强 T3/空白 §4）：包装主循环 stream 记录最近一次真实用量——loop 骨架仍不消费 usage（零策略口径闭合）
+        const trackedStream: StreamFn = (req) => (async function* () {
+          for await (const c of stream(req)) {
+            if (c.type === "usage") usageAnchor = { totalTokens: c.input + c.output, atMessageCount: req.messages.length };
+            yield c;
+          }
+        })();
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
         await store.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text }] });
         try {
           for await (const _ of agentLoop({
             session: store, bus: graph.bus, tools: graph.tools,
-            provider: stream, model, system: graph.promptSections(),
+            provider: trackedStream, model, system: graph.promptSections(),
             signal: controller.signal, sink,
           })) {
             // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
@@ -409,10 +429,11 @@ session: ${store.sessionId}
       const home2 = join(homedir(), ".orosus");
       const config2 = loadConfig({
         userFile: options.config?.userFile ?? join(home2, "config.toml"),
-        projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
+        projectFile: join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
         ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
         env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
       });
+      contextWindow = readContextWindow(config2.core); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
       const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[] = [
         ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
         ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),

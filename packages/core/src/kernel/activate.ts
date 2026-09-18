@@ -203,7 +203,11 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       },
       log: mlog,
       ui: input.commandUi ?? rejectingUi(),
-      llm: { stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req) }, // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
+      llm: {
+        stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req), // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
+        get contextWindow() { return (input.llm?.impl ?? unassignedLlm).contextWindow; }, // 补强 T3：同款惰性转发——只转发 stream 透不出只读字段（首轮 P0）
+        get lastUsage() { return (input.llm?.impl ?? unassignedLlm).lastUsage; },
+      },
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
           if (staledModules.has(def.name)) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);

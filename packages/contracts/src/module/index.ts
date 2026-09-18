@@ -33,9 +33,15 @@ export interface CommandUi {
 
 /** 二级 LLM 调用口（D39）：模块的辅助模型调用（compaction 摘要、标题生成等）。
  *  复用 harness 当前 provider/model 解析（含 /model 运行期覆盖）；错误带内（finish error，不许 reject）；
- *  二级调用不带工具。核心基础设施（与 ctx.log/session 同类）——不是能力槽、不经 services、不可 provide 替换。 */
+ *  二级调用不带工具。核心基础设施（与 ctx.log/session 同类）——不是能力槽、不经 services、不可 provide 替换。
+ *  M3 补强三扩展（D39 修订）：stream 增可选 maxTokens（输出上限）；contextWindow/lastUsage 只读事实，getter 惰性读 holder。 */
 export interface LlmPort {
-  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal }): AsyncIterable<Chunk>;
+  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number }): AsyncIterable<Chunk>;
+  /** 当前模型上下文窗口（token）——harness 解析（config 顶层 contextWindow > provider import 目录写入）；未知 undefined。 */
+  readonly contextWindow?: number | undefined;
+  /** 最近一次主循环请求的真实用量锚点：totalTokens = input+output（该次请求全上下文）、atMessageCount = 该次请求
+   *  messages 条数——其后消息用估算增量（compaction 消费；锚点有效性三态规则见 M3 补强方案空白 §4）。 */
+  readonly lastUsage?: { totalTokens: number; atMessageCount: number } | undefined;
 }
 
 /** 系统 prompt 段：order 决定拼接顺序（核心保留 -100 为 harness 身份），单段 ≤ 32KB。 */
