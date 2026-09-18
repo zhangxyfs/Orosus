@@ -2,7 +2,6 @@ import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHarness, discoverModules } from "@orosus/core";
-import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi } from "./menu.ts";
@@ -10,6 +9,7 @@ import { formatSessions, harnessOptionsFor, sessionCommand } from "./sessions.ts
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
+import { attachRender as attachRenderTo } from "./render.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -134,29 +134,10 @@ if (args.dumpModules) {
 }
 
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
+// 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
 function attachRender(h: Harness): void {
-  void (async () => {
-    for await (const e of h.events()) {
-      lastEventId = e.id;
-      if (e.type === "assistant/chunk") {
-        const c = e.chunk as Chunk;
-        if (c.type === "text/delta") process.stdout.write(c.text);
-        else if (c.type === "finish" && c.kind === "error") process.stdout.write(`
-[模型错误] ${c.errorMessage ?? ""}
-`);
-      } else if (e.type === "tool/call") {
-        process.stdout.write(`
-[tool] ${String(e.name)} ${JSON.stringify(e.args)}
-`);
-      } else if (e.type === "tool/result") {
-        process.stdout.write(`[tool ${e.isError === true ? "错误" : "完成"}]
-`);
-      } else if (e.type === "turn/end") {
-        process.stdout.write("\n");
-      }
-    }
-  })();
+  attachRenderTo(h, (s) => process.stdout.write(s), (id) => { lastEventId = id; });
 }
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）

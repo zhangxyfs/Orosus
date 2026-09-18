@@ -240,6 +240,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const COMMAND_ALIASES: Record<string, string> = {
     provider: "provider-custom__provider",
     permission: "approval__permission", // M3 随审批模块落地
+    compact: "compaction__compact",    // M3 补强 T8 runbook 走查发现：M3 起短名从未路由（注册名是全名）——补齐
   };
 
   const builtinCommands = new Map<string, (args: string) => Promise<string>>([
