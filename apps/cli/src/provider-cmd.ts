@@ -122,7 +122,18 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     pc["providers"] = providers;
     config["provider-custom"] = pc;
     const modelFlag = flag("--model");
-    if (modelFlag !== undefined) config["model"] = `${id}/${modelFlag}`;
+    if (modelFlag !== undefined) {
+      config["model"] = `${id}/${modelFlag}`;
+      // 目录窗口链（M3 补强 T7）：models.dev 的 limit.context 写入核心顶层 contextWindow——
+      // 目录数据当不受信输入（五轮定案）：整数且 ≥1024 才写，否则跳过 + 提示
+      const limit = entry.models?.[modelFlag]?.limit?.context;
+      if (typeof limit === "number" && Number.isInteger(limit) && limit >= 1024) {
+        config["contextWindow"] = limit;
+        io.out(`目录窗口：已按 ${modelFlag} 写入 contextWindow = ${limit}——更换 model 时请自行更新此值`);
+      } else if (limit !== undefined) {
+        io.out(`目录窗口字段无效（${String(limit)}，须为 ≥1024 的整数）——未写入 contextWindow`);
+      }
+    }
     writeFileSync(io.configPath, stringify(config), "utf8");
     io.out(`success：已写入 ${id}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}，${finalBaseUrl}）`);
     io.out("（重启或 /reload 生效；配置已全量重写，注释已移除）");

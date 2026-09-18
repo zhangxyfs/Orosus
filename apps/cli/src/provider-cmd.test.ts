@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProviderSubcommand } from "./provider-cmd.ts";
@@ -12,10 +12,13 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const CATALOG: Catalog = {
   openrouter: { name: "OpenRouter", type: "openai", api: "https://openrouter.ai/api/v1", env: ["OPENROUTER_API_KEY"] },
   "no-endpoint-vendor": { name: "NoEndpoint", type: "openai" },
+  "win-vendor": { name: "Win", type: "openai", api: "https://w", models: { "m-big": { id: "m-big", limit: { context: 131_072 } } } },
+  "bad-win-vendor": { name: "BadWin", type: "openai", api: "https://b", models: { "m-tiny": { id: "m-tiny", limit: { context: 100 } } } },
 };
 
-function makeIo(env: Record<string, string> = {}, configExists = false) {
-  const configPath = join(dir, "config.toml");
+function makeIo(env: Record<string, string> = {}, configExists = false, sub = "") {
+  const d = sub === "" ? dir : (mkdirSync(join(dir, sub), { recursive: true }) ?? join(dir, sub)); // sub：用例内多子场景各自隔离一份 config（mkdirSync 递归可返 undefined）
+  const configPath = join(d, "config.toml");
   if (configExists) writeFileSync(configPath, 'model = "openai/gpt-4.1"\n');
   const lines: string[] = [];
   return {
@@ -75,5 +78,21 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(code).toBe(0);
     expect(existsSync(io.secretsPath)).toBe(false);
     expect(readFileSync(io.configPath, "utf8")).toContain("$ENV:OPENROUTER_API_KEY");
+  });
+
+  it("import --model：目录 limit.context 写入 contextWindow（≥1024 整数）；无 limit / 无效值不写 + 提示（四轮校验钉子）", async () => {
+    const io = makeIo({}, false, "c1");
+    expect(await runProviderSubcommand(["provider", "import", "win-vendor", "--model", "m-big"], io)).toBe(0);
+    const toml = readFileSync(io.configPath, "utf8");
+    expect(toml).toContain('model = "win-vendor/m-big"');
+    expect(toml).toContain("contextWindow = 131072");
+    expect(io.lines.some((l) => l.includes("contextWindow = 131072"))).toBe(true);
+    const io2 = makeIo({}, false, "c2");
+    expect(await runProviderSubcommand(["provider", "import", "openrouter", "--model", "x"], io2)).toBe(0); // 目录无 limit → 不写
+    expect(readFileSync(io2.configPath, "utf8")).not.toContain("contextWindow");
+    const io3 = makeIo({}, false, "c3");
+    expect(await runProviderSubcommand(["provider", "import", "bad-win-vendor", "--model", "m-tiny"], io3)).toBe(0); // <1024 → 拒
+    expect(readFileSync(io3.configPath, "utf8")).not.toContain("contextWindow");
+    expect(io3.lines.some((l) => l.includes("无效"))).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { BUILTIN_SNAPSHOT } from "./builtin-snapshot.ts";
 
-export interface CatalogModel { id: string; name?: string; status?: string; modalities?: { output?: string[] } }
+export interface CatalogModel { id: string; name?: string; status?: string; modalities?: { output?: string[] }; limit?: { context?: number; output?: number } }
 export interface CatalogEntry {
   name?: string; type?: string; npm?: string; id?: string;
   api?: string; env?: string[];

@@ -49,6 +49,18 @@ describe("目录拉取与快照兜底（D34）", () => {
     const bad = await getCatalog({ fetchImpl: (async () => new Response("[1,2]", { status: 200 })) as typeof fetch, now: () => 100_000 });
     expect(Object.keys(bad).length).toBeGreaterThan(0); // 非对象拒收 → 仍回退快照（错误不炸）
   });
+
+  it("limit 窗口字段透传（M3 补强 T7）：models.<id>.limit 保留 / 缺省 undefined", async () => {
+    const payload = {
+      vendor: { type: "openai", api: "https://x", models: {
+        "m-big": { id: "m-big", limit: { context: 262_144, output: 8_192 } },
+        "m-plain": { id: "m-plain" },
+      } },
+    };
+    const cat = await getCatalog({ fetchImpl: (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch, now: () => 1_000_000 });
+    expect(cat.vendor!.models!["m-big"]!.limit).toEqual({ context: 262_144, output: 8_192 });
+    expect(cat.vendor!.models!["m-plain"]!.limit).toBeUndefined();
+  });
 });
 
 // ---- 菜单（D37 规格：二级中文列表 + [添加新平台]；数据源两选；key 最少输入；校验即确认）----
