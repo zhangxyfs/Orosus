@@ -60,12 +60,12 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     const config = readConfig(io.configPath);
     const providers = ((config["provider-custom"] as Record<string, unknown> | undefined)?.["providers"] ?? {}) as Record<string, { baseUrl?: string }>;
     io.out("本地已配置厂商：");
-    const names = Object.keys(providers);
+    const names = Object.keys(providers).sort((a, b) => a.localeCompare(b)); // 字母序（2026-09-18）——Object.keys 已是新数组，spread 冗余
     if (names.length === 0) io.out("  （无）");
     for (const n of names) io.out(`  ${n}（${providers[n]!.baseUrl ?? "?"}）`);
     io.out("目录厂商（models.dev）：");
     const catalog = await getCat({ fetchImpl: doFetch });
-    for (const id of Object.keys(catalog)) io.out(`  ${id}${catalog[id]!.name !== undefined ? `（${catalog[id]!.name}）` : ""}`);
+    for (const id of Object.keys(catalog).sort((a, b) => a.localeCompare(b))) io.out(`  ${id}${catalog[id]!.name !== undefined ? `（${catalog[id]!.name}）` : ""}`); // 字母序
     return 0;
   }
 

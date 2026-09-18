@@ -109,6 +109,30 @@ describe("/provider 多级菜单（D37）", () => {
     expect(out).toContain("success");
   });
 
+  it("目录厂商清单按字母序（同前缀供应商相邻——2026-09-18 用户要求：zai/zhipuai/zhipuai-coding-plan 挨着）", async () => {
+    const deps = fakeDeps();
+    deps.getCatalog = async () => ({
+      "zhipuai-coding-plan": { name: "Zhipu AI Coding Plan", type: "openai", api: "https://a", env: ["ZHIPU_API_KEY"] },
+      zai: { name: "Z.AI", type: "openai", api: "https://b" },
+      zhipuai: { name: "Zhipu AI", type: "openai", api: "https://c" },
+      anthropic: { name: "Anthropic", type: "anthropic", api: "https://d" },
+    }) as unknown as Catalog;
+    let vendorItems: string[] = [];
+    const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "取消"];
+    const ui: MenuUi = {
+      choose: async (title, items) => {
+        if (String(title).includes("厂商")) vendorItems = [...items];
+        return answers.shift() ?? "取消";
+      },
+      ask: async () => "",
+      confirm: async () => false,
+    };
+    await runProviderMenu(ui, deps);
+    const ids = vendorItems.map((s) => s.split("（")[0]!);
+    expect(ids.slice(0, 4)).toEqual(["anthropic", "zai", "zhipuai", "zhipuai-coding-plan"]); // 字母序，同前缀相邻
+    expect(ids.at(-1)).toBe("取消");
+  });
+
   it("校验三分支：401 密钥无效不写入；404 警告后 confirm 写入", async () => {
     // 401 → 不写入
     const d401 = fakeDeps({ fetchImpl: (async () => new Response("nope", { status: 401 })) as typeof fetch });

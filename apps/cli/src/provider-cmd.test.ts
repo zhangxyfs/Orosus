@@ -59,6 +59,8 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(code).toBe(0);
     const out = io2.lines.join("\n");
     expect(out).toContain("openrouter");           // 本地表
+    const catalogIds = io2.lines.filter((l) => l.startsWith("  ") && !l.includes("（无）")).map((l) => l.trim().split("（")[0]!);
+    expect(catalogIds.slice(0, 4)).toEqual(["bad-win-vendor", "no-endpoint-vendor", "openrouter", "win-vendor"]); // 目录表字母序（2026-09-18）
     expect(out).toContain("no-endpoint-vendor");   // 目录表
   });
 

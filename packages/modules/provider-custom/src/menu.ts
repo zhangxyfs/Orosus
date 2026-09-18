@@ -106,6 +106,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     return keyword === "" || hay.includes(keyword);
   });
   if (entries.length === 0) return "目录中没有匹配的厂商";
+  entries.sort((a, b) => a[0].localeCompare(b[0])); // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
   const picked = await ui.choose("选择厂商", [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";
   const [entryId, entry] = entries.find(([id]) => picked.startsWith(id)) ?? [undefined, undefined];
