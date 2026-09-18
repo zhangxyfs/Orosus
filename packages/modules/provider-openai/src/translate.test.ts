@@ -56,6 +56,16 @@ describe("SSE 事件映射（决策点 2）", () => {
     expect(mapSseChunk(state(), { choices: [], usage: { prompt_tokens: 3, completion_tokens: 5 } }))
       .toEqual([{ type: "usage", input: 3, output: 5 }]);
   });
+
+  it("GLM/DeepSeek 方言：usage 与 finish 帧同帧 → 不丢、追加在 finish 之后（/usage 走查）", () => {
+    expect(mapSseChunk(state(), { choices: [{ finish_reason: "stop", delta: {} }], usage: { prompt_tokens: 12, completion_tokens: 34 } }))
+      .toEqual([{ type: "finish", kind: "stop" }, { type: "usage", input: 12, output: 34 }]);
+  });
+
+  it("include_usage 中间帧 usage:null → 不产 usage chunk", () => {
+    expect(mapSseChunk(state(), { choices: [{ delta: { content: "hi" } }], usage: null }))
+      .toEqual([{ type: "text/delta", text: "hi" }]);
+  });
 });
 
 describe("finish_reason 映射（决策点 3）", () => {

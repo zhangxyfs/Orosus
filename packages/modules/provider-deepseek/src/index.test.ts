@@ -37,6 +37,12 @@ describe("provider-deepseek（OpenAI 族品牌实例，D34 封顶第五件）", 
       .toEqual([{ type: "text/delta", text: "再说" }, { type: "reasoning/delta", text: "再想" }]); // 同片内 text 先出（vendor 同源顺序）
   });
 
+  it("DeepSeek 方言：usage 与 finish 帧同帧 → 不丢、追加在 finish 之后（/usage 走查）", () => {
+    const s: OaiStreamState = { calls: new Map() };
+    expect(mapSseChunk(s, { choices: [{ finish_reason: "stop", delta: {} }], usage: { prompt_tokens: 12, completion_tokens: 34 } }))
+      .toEqual([{ type: "finish", kind: "stop" }, { type: "usage", input: 12, output: 34 }]);
+  });
+
   it("fetch 落点 https://api.deepseek.com/v1/chat/completions", async () => {
     const seen: string[] = [];
     const fetchImpl = ((url: string | URL | Request) => {

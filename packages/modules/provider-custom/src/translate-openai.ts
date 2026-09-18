@@ -35,15 +35,16 @@ export function toOpenAITools(tools: ToolSpec[]): ApiMessage[] {
   return tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
 }
 
-/** 单个 SSE data 块（已 JSON.parse）→ Chunk[]（模块文档决策点 2–3）。 */
+/** 单个 SSE data 块（已 JSON.parse）→ Chunk[]（模块文档决策点 2–3）。
+ *  usage 两种方言都接：OpenAI 官方空 choices 尾包（include_usage），以及 GLM/DeepSeek 与最后一个
+ *  finish 帧同帧到达（不带 stream_options 也发）——只认空 choices 会把后者整帧丢掉，/usage 恒 0。 */
 export function mapSseChunk(state: OaiStreamState, obj: Record<string, unknown>): Chunk[] {
-  const usage = obj.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  const usage = obj.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
   const choices = obj.choices as Array<Record<string, unknown>> | undefined;
-  if (usage !== undefined && (choices === undefined || choices.length === 0)) {
-    return [{ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 }];
-  }
   const choice = choices?.[0];
-  if (choice === undefined) return [];
+  if (choice === undefined) {
+    return usage ? [{ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 }] : [];
+  }
   const delta = (choice.delta ?? {}) as Record<string, unknown>;
   const chunks: Chunk[] = [];
 
@@ -71,10 +72,11 @@ export function mapSseChunk(state: OaiStreamState, obj: Record<string, unknown>)
   if (finish !== undefined && finish !== null) {
     chunks.push(
       finish === "length" ? { type: "finish", kind: "length" }
-      : finish === "tool_calls" ? { type: "finish", kind: "toolUse" }
-      : finish === "stop" ? { type: "finish", kind: "stop" }
-      : { type: "finish", kind: "error", errorMessage: `finish_reason: ${finish}` }, // content_filter 及未知：带内错误不静默
+        : finish === "tool_calls" ? { type: "finish", kind: "toolUse" }
+        : finish === "stop" ? { type: "finish", kind: "stop" }
+        : { type: "finish", kind: "error", errorMessage: `finish_reason: ${finish}` }, // content_filter 及未知：带内错误不静默
     );
   }
+  if (usage) chunks.push({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
   return chunks;
 }
