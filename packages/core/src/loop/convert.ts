@@ -41,6 +41,21 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
 ${summary}` }] }, ...out.slice(keepFrom)];
         break;
       }
+      case "turn/prune": {
+        // 投影应用（M3 补强 D44）：工具结果中段裁剪——prunes 逐条应用，参数入事件故重放与 config 无关；
+        // 与模块侧 reduce 返回值是同一变换的双写（铁律 2 下模块不得 import core——[历史摘要] 包装同型先例，模块测试钉两侧一致）
+        const prunes = Array.isArray(e.prunes) ? (e.prunes as unknown[]) : [];
+        for (const p of prunes) {
+          const at = Number((p as { at?: unknown })?.at ?? -1);
+          const m = out[at];
+          if (m === undefined || m.role !== "toolResult") continue; // 防御：越界/非工具结果跳过
+          const headChars = Math.max(0, Number((p as { headChars?: unknown })?.headChars ?? 0)); // 负值按 0 夹紧（三轮 P2）
+          const tailChars = Math.max(0, Number((p as { tailChars?: unknown })?.tailChars ?? 0));
+          if (m.output.length <= headChars + tailChars) continue; // 防御：过短跳过
+          m.output = `${m.output.slice(0, headChars)}\n[...pruned: original ${m.output.length} chars...]\n${m.output.slice(-tailChars)}`;
+        }
+        break;
+      }
       case "tool/result":
         // 孤儿防御（M3/D41）：fork 截断/损坏片段可能产生无对应 tool/call 的 result——跳过，不进请求
         if (!seenCalls.has(String(e.callId))) break;

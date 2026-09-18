@@ -32,14 +32,17 @@ export function validateModule(def: ModuleDefinition): string[] {
     }
   }
   for (const t of def.logEvents ?? []) {
-    if (!t.startsWith(`${def.name}/`) && !MODULE_WRITABLE_CORE_LOG_TYPES.has(t)) {
-      v.push(`logEvents 的 "${t}" 未带 "${def.name}/" 前缀且非模块可写核心类型（规则 4/v25 例外清单）`);
+    if (!t.startsWith(`${def.name}/`) && MODULE_WRITABLE_CORE_LOG_TYPES[t] !== def.name) {
+      v.push(`logEvents 的 "${t}" 未带 "${def.name}/" 前缀且非本模块可写核心类型（规则 4；核心类型 owner 制——M3 补强四轮 P1）`);
     }
   }
   return v;
 }
 
-/** 模块可写核心日志类型（v25/M3）：核心定义、由指定模块经 logEvents 声明后可写的核心事件。
- *  收敛为一个反直觉事实的两面：turn/compaction 由 compaction 模块写入（策略归模块），
- *  而投影应用它的 deriveMessages 是核心——核心不得认识 <module>/* 类型（铁律 3 的反向推论）。 */
-export const MODULE_WRITABLE_CORE_LOG_TYPES: ReadonlySet<string> = new Set(["turn/compaction"]);
+/** 模块可写核心日志类型（v25/M3 立；M3 补强改 **owner 制**——四轮 P1）：核心定义、由指名模块经 logEvents 声明后可写的核心事件。
+ *  类型制（Set）会让任意第三方模块都能写核心投影类型——两模块并写会静默互相破坏投影；owner 表按模块名放行，
+ *  机器强制优先于文档（MCPoison 姿态）。词表与 PUBLIC_CAPABILITY_KEYS 同款置放（非模块依赖，不违铁律 3——铁律禁的是 import 方向）。 */
+export const MODULE_WRITABLE_CORE_LOG_TYPES: Readonly<Record<string, string>> = {
+  "turn/compaction": "compaction",
+  "turn/prune": "compaction",
+};

@@ -32,6 +32,17 @@ describe("defineModule 静态校验（§4.2 第 4 步）", () => {
     expect(v.some((m) => m.includes("logEvents"))).toBe(true);
   });
 
+  it("logEvents owner 正向（M3 补强 T5 四轮 P1）：compaction 名义声明核心类型过校验；其他核心类型仍拒（M3 计划⑤正向例的独立落地）", () => {
+    expect(validateModule(defineModule({ ...base, name: "compaction", logEvents: ["turn/compaction", "turn/prune"] })).filter((m) => m.includes("logEvents"))).toEqual([]);
+    const bad = validateModule(defineModule({ ...base, name: "compaction", logEvents: ["turn/start"] }));
+    expect(bad.some((m) => m.includes("logEvents"))).toBe(true);
+  });
+
+  it("owner 拒绝：他模块声明 turn/prune 被拒（认识类型 ≠ 能写——类型制残余的钉子）", () => {
+    const v = validateModule(defineModule({ ...base, name: "evil", logEvents: ["turn/prune"] }));
+    expect(v.some((m) => m.includes("logEvents"))).toBe(true);
+  });
+
   it("保留槽 key 不得出现在 provides 声明（§7.2：不计入声明、由 provide 注册）", () => {
     const v = validateModule(defineModule({ ...base, name: "a", provides: ["provider:x"] }));
     expect(v.some((m) => m.includes("保留槽"))).toBe(true);
