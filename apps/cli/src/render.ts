@@ -7,7 +7,14 @@ export function renderEvent(e: SessionEvent): string {
   if (e.type === "assistant/chunk") {
     const c = e.chunk as Chunk;
     if (c.type === "text/delta") return c.text;
-    if (c.type === "finish" && c.kind === "error") return `\n[模型错误] ${c.errorMessage ?? ""}\n`;
+    if (c.type === "finish" && c.kind === "error") {
+      // 401/403 提示（模型发现 T5，走查缺陷③提示面）：校验用输入值、运行用合并链（显式 env > process.env > secrets.env）
+      // ——同名环境变量覆盖刚写入的 secrets 是最常见根因，给用户排查方向
+      const hint = /HTTP 40[13]/.test(c.errorMessage ?? "")
+        ? "\n[提示] 密钥被拒——若刚更新过 secrets.env，检查同名环境变量是否覆盖（优先级：显式 env > process.env > secrets.env）\n"
+        : "";
+      return `\n[模型错误] ${c.errorMessage ?? ""}${hint}`;
+    }
     return "";
   }
   if (e.type === "tool/call") return `\n[tool] ${String(e.name)} ${JSON.stringify(e.args)}\n`;

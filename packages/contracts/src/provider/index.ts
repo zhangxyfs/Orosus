@@ -68,11 +68,11 @@ const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
 export function parseModelsResponse(body: unknown): string[] {
   const data = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) throw new Error("models 响应形状不符（缺 data 数组）");
-  const ids = [...new Set(
+  const ids = Array.from(new Set(
     data
       .map((m) => (m as { id?: unknown } | null)?.id)
       .filter((id): id is string => typeof id === "string" && MODEL_ID_OK.test(id)),
-  )].sort((a, b) => a.localeCompare(b));
+  )).sort((a, b) => a.localeCompare(b));
   if (ids.length === 0) throw new Error("models 响应无合法 id");
   return ids;
 }

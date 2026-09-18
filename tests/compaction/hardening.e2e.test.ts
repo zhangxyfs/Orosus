@@ -9,7 +9,7 @@ import { z } from "zod";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { ModuleDefinition } from "@orosus/contracts/module";
 import compaction from "@orosus/compaction";
-import { attachRender } from "../../apps/cli/src/render.ts";
+import { attachRender, renderEvent } from "../../apps/cli/src/render.ts";
 
 /** M3 补强 T8：强化端到端——prune 全链 / 溢出恢复全链（loop×compaction×锚点装配）/ 溢出两连败 / CLI 渲染两分支。 */
 let dir: string;
@@ -142,5 +142,14 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     await h.prompt("读");
     expect(render.buf.join("")).toContain("[已裁剪 1 个超长工具结果（原文保留在会话文件中）]");
     await h.close();
+  });
+});
+
+describe("render 401/403 提示（模型发现 T5——走查缺陷③提示面）", () => {
+  it("errorMessage 含 HTTP 401 → 输出含 env 覆盖提示行；500 不含", () => {
+    expect(renderEvent({ type: "assistant/chunk", chunk: { type: "finish", kind: "error", errorMessage: "HTTP 401：token expired" } } as never))
+      .toContain("检查同名环境变量是否覆盖");
+    expect(renderEvent({ type: "assistant/chunk", chunk: { type: "finish", kind: "error", errorMessage: "HTTP 500：boom" } } as never))
+      .not.toContain("检查同名环境变量是否覆盖");
   });
 });
