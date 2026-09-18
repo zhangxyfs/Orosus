@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, closeSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 
@@ -70,10 +70,26 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
   return { truncated, interruptedClosed };
 }
 
+/** usage chunk 求和助手（lifetimeUsage 与 /usage 共用口径：assistant/chunk 里 type === "usage"）。 */
+export function sumUsage(events: SessionEvent[]): { input: number; output: number } {
+  let input = 0;
+  let output = 0;
+  for (const e of events) {
+    if (e.type !== "assistant/chunk") continue;
+    const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+    if (c?.type === "usage") {
+      input += c.input ?? 0;
+      output += c.output ?? 0;
+    }
+  }
+  return { input, output };
+}
+
 /** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。 */
 export class JsonlSessionStore implements SessionStore {
   readonly sessionId: string;
   private readonly file: string;
+  private readonly dir: string;
   private seq = 0;
   private lastId: string | null = null;
   private queue: Promise<void> = Promise.resolve(); // 每文件写队列：seq 单调的串行化保证
@@ -84,6 +100,7 @@ export class JsonlSessionStore implements SessionStore {
   constructor(opts: { dir: string; sessionId?: string }) {
     mkdirSync(opts.dir, { recursive: true });
     this.sessionId = opts.sessionId ?? newId("s");
+    this.dir = opts.dir;
     this.file = join(opts.dir, `${this.sessionId}.jsonl`);
     repairFile(this.file);
     if (existsSync(this.file)) {
@@ -140,6 +157,44 @@ export class JsonlSessionStore implements SessionStore {
 
   all(): Promise<SessionEvent[]> {
     return Promise.resolve([...this.events]);
+  }
+
+  /** 跨会话累计（/usage 口径修复：重启后此前会话的用量不归零）。当前会话取内存镜像——
+   *  buffer 可能未 drain；其余会话读盘，坏行（torn tail）跳过不炸。会话数按文件计（有用量才算）。 */
+  async lifetimeUsage(): Promise<{ input: number; output: number; sessions: number }> {
+    let input = 0;
+    let output = 0;
+    let sessions = 0;
+    for (const name of readdirSync(this.dir).filter((n) => n.endsWith(".jsonl")).toSorted((a, b) => a.localeCompare(b))) {
+      if (name === `${this.sessionId}.jsonl`) {
+        const u = sumUsage(this.events);
+        input += u.input;
+        output += u.output;
+        if (u.input > 0 || u.output > 0) sessions++;
+        continue;
+      }
+      let fileInput = 0;
+      let fileOutput = 0;
+      for (const line of readFileSync(join(this.dir, name), "utf8").split("\n")) {
+        if (line === "") continue;
+        let e: SessionEvent;
+        try {
+          e = JSON.parse(line) as SessionEvent;
+        } catch {
+          continue; // 他会话 torn tail：累计值不因坏行中断
+        }
+        if (e.type !== "assistant/chunk") continue;
+        const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+        if (c?.type === "usage") {
+          fileInput += c.input ?? 0;
+          fileOutput += c.output ?? 0;
+        }
+      }
+      input += fileInput;
+      output += fileOutput;
+      if (fileInput > 0 || fileOutput > 0) sessions++;
+    }
+    return { input, output, sessions };
   }
 
   async flush(): Promise<void> {

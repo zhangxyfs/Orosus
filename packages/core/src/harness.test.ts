@@ -6,6 +6,7 @@ import type { Chunk } from "@orosus/contracts/provider";
 import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
 import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import { InMemorySessionStore } from "./session/memory.ts";
+import { JsonlSessionStore } from "./session/jsonl.ts";
 import { createHarness } from "./index.ts";
 
 let dir: string;
@@ -209,6 +210,25 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     const out = await h.prompt("/usage");
     expect(out).toContain("3");
     expect(out).toContain("5");
+    await h.close();
+  });
+
+  it("⑩b /usage 跨会话累计（JsonlStore.lifetimeUsage——重启归零是口径 bug，走查补）：同目录旧会话 + 当前会话合计", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-usage-"));
+    const old = new JsonlSessionStore({ dir, sessionId: "s_old" });
+    await old.append("assistant/chunk", { chunk: { type: "usage", input: 11, output: 6 } });
+    await old.close();
+    const fake = fakeProviderModule("fake", [[{ type: "text/delta", text: "x" }, { type: "usage", input: 3, output: 5 }, { type: "finish", kind: "stop" }]]);
+    const h = await createHarness({
+      store: new JsonlSessionStore({ dir }), diagDir: join(dir, "diag"), spillDir: join(dir, "spill"),
+      modules: [fake],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("hi");
+    const out = await h.prompt("/usage");
+    expect(out).toContain("input 14"); // 11（旧会话）+ 3（当前）
+    expect(out).toContain("output 11"); // 6 + 5
+    expect(out).toContain("2"); // 会话数
     await h.close();
   });
 });

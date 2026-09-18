@@ -16,6 +16,9 @@ export interface SessionStore {
   append(type: string, fields?: Record<string, unknown>): Promise<SessionEvent>;
   /** 按 seq 全量读出（M1 投影与测试用；分页留待需要时）。 */
   all(): Promise<SessionEvent[]>;
+  /** 跨会话累计用量（/usage 口径）：同存储域全部会话的 usage chunk 求和；sessions = 有用量的会话数。
+   *  可选——内存/SQLite 后端可缺省，调用方回退当前会话口径。 */
+  lifetimeUsage?(): Promise<{ input: number; output: number; sessions: number }>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }

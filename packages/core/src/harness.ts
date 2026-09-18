@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
-import { hardeningNote, JsonlSessionStore } from "./session/jsonl.ts";
+import { hardeningNote, JsonlSessionStore, sumUsage } from "./session/jsonl.ts";
 import { SqliteSessionStore } from "./session/sqlite.ts";
 import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
@@ -87,7 +87,8 @@ class Channel<T> {
   }
 }
 
-/** 转发代理：一切 append（loop/模块 ctx.session.append 一视同仁）即转发订阅端（§6.7 日志实时投影）。 */
+/** 转发代理：一切 append（loop/模块 ctx.session.append 一视同仁）即转发订阅端（§6.7 日志实时投影）。
+ *  可选能力透传（lifetimeUsage）——缺省后端自然不挂。 */
 function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): SessionStore {
   return {
     sessionId: store.sessionId,
@@ -97,6 +98,7 @@ function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): S
       return e;
     },
     all: () => store.all(),
+    ...(store.lifetimeUsage !== undefined ? { lifetimeUsage: () => store.lifetimeUsage!() } : {}),
     flush: () => store.flush(),
     close: () => store.close(),
   };
@@ -309,18 +311,14 @@ session: ${store.sessionId}
       return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length}`;
     }],
     ["/usage", async () => {
-      const events = await store.all();
-      let input = 0;
-      let output = 0;
-      for (const e of events) {
-        if (e.type !== "assistant/chunk") continue;
-        const c = e.chunk as { type?: string; input?: number; output?: number };
-        if (c?.type === "usage") {
-          input += c.input ?? 0;
-          output += c.output ?? 0;
-        }
+      // 口径（走查修复）：存储支持跨会话累计（JsonlStore 扫同目录全部会话）——重启不归零；
+      // 内存/SQLite 后端缺省时回退当前会话口径
+      if (store.lifetimeUsage !== undefined) {
+        const u = await store.lifetimeUsage();
+        return `累计用量：input ${u.input} / output ${u.output} tokens（全部 ${u.sessions} 场会话）`;
       }
-      return `累计用量：input ${input} / output ${output} tokens`;
+      const u = sumUsage(await store.all());
+      return `累计用量：input ${u.input} / output ${u.output} tokens（当前会话）`;
     }],
   ]);
 

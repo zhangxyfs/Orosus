@@ -73,4 +73,21 @@ describe("JsonlSessionStore", () => {
     expect(await s2.append("x")).toMatchObject({ seq: 3, parentId: all[1]!.id }); // 恢复后 seq/parentId 链延续
     await s2.close();
   });
+
+  it("lifetimeUsage 跨会话累计（/usage 走查：重启归零是口径 bug——同目录全部 *.jsonl 的 usage chunk 求和）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-"));
+    const s1 = new JsonlSessionStore({ dir, sessionId: "s_a" });
+    await s1.append("assistant/chunk", { chunk: { type: "usage", input: 10, output: 4 } });
+    await s1.close();
+    const s2 = new JsonlSessionStore({ dir, sessionId: "s_b" });
+    await s2.append("assistant/chunk", { chunk: { type: "usage", input: 7, output: 2 } });
+    await s2.append("assistant/chunk", { chunk: { type: "usage", input: 3, output: 1 } });
+    await s2.close();
+    const s3 = new JsonlSessionStore({ dir, sessionId: "s_c" }); // 空会话（无任何 usage）
+    await s3.close();
+    const s4 = new JsonlSessionStore({ dir, sessionId: "s_d" }); // 当前会话：内存态 usage 也计入
+    await s4.append("assistant/chunk", { chunk: { type: "usage", input: 100, output: 50 } });
+    expect(await s4.lifetimeUsage()).toEqual({ input: 120, output: 57, sessions: 3 }); // 3 = 有用量的会话数，空会话不计
+    await s4.close();
+  });
 });
