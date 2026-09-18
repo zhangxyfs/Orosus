@@ -10,6 +10,7 @@ import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { attachRender as attachRenderTo } from "./render.ts";
+import { banner } from "./banner.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
@@ -148,18 +149,7 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
 
 let h = await createSession();
 
-// 启动审计横幅（§4.2 第 7 步 / §10"降级必须吵闹"三处留痕的 stdout 出口）——--dump-modules 非交互模式除外（v15）
-function banner(h: Harness): void {
-  if (args.dumpModules) return;
-  const audit = h.graph().audit();
-  const failed = audit.filter((a) => a.state === "failed");
-  if (failed.length > 0) {
-    console.error(`⚠ ${failed.length} 个模块降级（完整表：orosus --dump-modules）：`);
-    for (const a of failed) console.error(`  - ${a.name}: ${a.failReason ?? ""}`);
-  } else {
-    console.error(`[orosus] ${audit.filter((a) => a.state === "active").length} 个模块已激活`);
-  }
-}
+// 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
 
 if (args.dumpModules) {
   console.log(h.graph().catalog());
@@ -185,7 +175,7 @@ process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出�
 
 try {
   sessionLoop: for (;;) {
-    banner(h);
+    for (const line of banner(h)) console.error(line);
     attachRender(h);
     for (;;) {
       process.stdout.write("> ");
