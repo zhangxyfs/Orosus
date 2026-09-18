@@ -21,7 +21,7 @@ describe("finish.errorCode 与 classifyContextLimit（M3 补强 T1/D43）", () =
   });
 
   it("parseModelsResponse：排序/anthropic 形/去重/sanitize（白名单外与超限丢弃）/空与坏形状 reject", () => {
-    expect(parseModelsResponse({ data: [{ id: "b" }, { id: "a" }] })).toEqual(["a", "b"]);
+    expect(parseModelsResponse({ data: [{ id: "a" }, { id: "b" }] })).toEqual(["b", "a"]); // 倒序（走查缺陷②）
     expect(parseModelsResponse({ data: [{ id: "x", display_name: "X" }] })).toEqual(["x"]);
     expect(parseModelsResponse({ data: [{ id: "a" }, { id: "a" }] })).toEqual(["a"]); // 去重
     expect(parseModelsResponse({ data: [{ id: "ok" }, { id: "bad id" }, { id: "x".repeat(200) }] })).toEqual(["ok"]); // sanitize

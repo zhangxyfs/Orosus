@@ -120,7 +120,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const secretsLoad = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
   const secrets = secretsLoad.vars; // reload 复用（同一合并语义）
   if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
-  const config = loadConfig({
+  let config = loadConfig({
     userFile: options.config?.userFile ?? join(home, "config.toml"),
     projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
     ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
@@ -460,6 +460,7 @@ session: ${store.sessionId}
         env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
       });
       contextWindow = readContextWindow(config2.core); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
+      config = config2; // 核心顶层 key（model 等）同步更新——修复：reload 后 model/contextWindow 等仍读旧值（走查缺陷③：向导写 model + /reload 后 resolveProvider 仍读旧 config.core.model = undefined → "未配置 model"）
       const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[] = [
         ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
         ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),

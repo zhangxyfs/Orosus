@@ -118,7 +118,7 @@ describe("listModels（模型发现 T2/D32 修订）", () => {
         : new Response("nope", { status: 404 }));
     }) as typeof fetch;
     const lm = createListModels({ apiKey: "sk-1", baseUrl: "http://x", fetchImpl });
-    expect(await lm()).toEqual(["m-1", "m-2"]); // 排序 + sanitize 滤非法 id
+    expect(await lm()).toEqual(["m-2", "m-1"]); // 倒序 + sanitize 滤非法 id（走查缺陷②）
     expect(seen[0]!.url).toBe("http://x/v1/models");
     expect(seen[0]!.headers["x-api-key"]).toBe("sk-1");
     expect(seen[0]!.headers["authorization"]).toBe("Bearer sk-1");

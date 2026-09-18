@@ -72,7 +72,7 @@ export function parseModelsResponse(body: unknown): string[] {
     data
       .map((m) => (m as { id?: unknown } | null)?.id)
       .filter((id): id is string => typeof id === "string" && MODEL_ID_OK.test(id)),
-  )).sort((a, b) => a.localeCompare(b));
+  )).sort((a, b) => b.localeCompare(a)); // 倒序（走查缺陷②）：版本号大的（新模型）排前——glm-5.3 在 glm-4.7 前
   if (ids.length === 0) throw new Error("models 响应无合法 id");
   return ids;
 }
