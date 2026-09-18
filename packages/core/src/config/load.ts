@@ -45,6 +45,8 @@ function merge(base: Doc, over: Doc): Doc {
 const ENV_PLACEHOLDER = /^\$ENV:([A-Z][A-Z0-9_]*)$/;
 
 function resolveEnvPlaceholders(doc: Doc, env: NodeJS.ProcessEnv, warnings: string[]): Doc {
+  // 递归 walk（修复：嵌套对象内的 $ENV 占位符从不被解析——如 [provider-custom] section 的
+  // providers.zhipuai.apiKey = "$ENV:ZHIPU_API_KEY" 深层值原样透传给适配器 → 字面量当 key → 401）
   const walk = (obj: Record<string, unknown>): Record<string, unknown> =>
     Object.fromEntries(
       Object.entries(obj).map(([k, v]) => {
@@ -58,6 +60,11 @@ function resolveEnvPlaceholders(doc: Doc, env: NodeJS.ProcessEnv, warnings: stri
             }
             return [k, value];
           }
+          return [k, v];
+        }
+        // 嵌套纯对象递归（数组内元素不递归——数组不承载 $ENV 占位符的约定场景）
+        if (typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date)) {
+          return [k, walk(v as Record<string, unknown>)];
         }
         return [k, v];
       }),
