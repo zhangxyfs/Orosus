@@ -59,3 +59,33 @@ describe("provider-glm（Anthropic 族模板实例，D31/D32）", () => {
     expect(headersSeen[0]!["authorization"]).toBe("Bearer zk");
   });
 });
+
+describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
+  const req = (maxTokens?: number) => ({
+    model: "glm-5.3", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  });
+  const last = async (stream: ReturnType<typeof createStream>, r: ReturnType<typeof req>): Promise<unknown> => {
+    let out: unknown;
+    for await (const c of stream(r)) out = c;
+    return out;
+  };
+
+  it("HTTP 400 超限体 → finish{error, errorCode: context_limit}；鉴权错误体不带码", async () => {
+    const over = createStream({ apiKey: "zk", baseUrl: "http://x", fetchImpl: (async () => new Response("This model's maximum context length is 65536 tokens", { status: 400 })) as typeof fetch });
+    expect(await last(over, req())).toMatchObject({ type: "finish", kind: "error", errorCode: "context_limit" });
+    const auth = createStream({ apiKey: "zk", baseUrl: "http://x", fetchImpl: (async () => new Response("invalid api key", { status: 400 })) as typeof fetch });
+    const fin = await last(auth, req());
+    expect(fin).toMatchObject({ type: "finish", kind: "error" });
+    expect((fin as { errorCode?: string }).errorCode).toBeUndefined();
+  });
+
+  it("maxTokens 覆盖缺省 MAX_TOKENS(8192) 进请求体 max_tokens（anthropic 线缆）", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const s = createStream({ apiKey: "zk", baseUrl: "http://x", fetchImpl: (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return new Response("", { status: 200 }); }) as typeof fetch });
+    await last(s, req(1234));
+    expect(captured!.max_tokens).toBe(1234);
+    await last(s, req());
+    expect(captured!.max_tokens).toBe(8192);
+  });
+});

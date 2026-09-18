@@ -53,3 +53,28 @@ describe("provider-openai stream glue", () => {
     expect((r3[0] as { errorMessage: string }).errorMessage).toContain("401");
   });
 });
+
+describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
+  const req = (maxTokens?: number) => ({
+    model: "gpt-x", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  });
+
+  it("HTTP 400 超限体 → finish{error, errorCode: context_limit}；鉴权错误体不带码（回归：仍带内不 reject）", async () => {
+    const over = createStream({ baseUrl: "http://x", fetchImpl: (async () => new Response("This model's maximum context length is 65536 tokens", { status: 400 })) as typeof fetch });
+    expect((await collect(over(req()))).at(-1)).toMatchObject({ type: "finish", kind: "error", errorCode: "context_limit" });
+    const auth = createStream({ baseUrl: "http://x", fetchImpl: (async () => new Response("invalid api key", { status: 400 })) as typeof fetch });
+    const fin = (await collect(auth(req()))).at(-1);
+    expect(fin).toMatchObject({ type: "finish", kind: "error" });
+    expect((fin as { errorCode?: string }).errorCode).toBeUndefined();
+  });
+
+  it("maxTokens 透传进请求体 max_tokens；缺省不发送（openai 线缆现行为不变）", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const s = createStream({ baseUrl: "http://x", fetchImpl: (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return sseResponse([`data: [DONE]\n\n`]); }) as typeof fetch });
+    await collect(s(req(1234)));
+    expect(captured!.max_tokens).toBe(1234);
+    await collect(s(req()));
+    expect("max_tokens" in captured!).toBe(false);
+  });
+});

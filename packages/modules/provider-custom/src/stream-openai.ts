@@ -1,11 +1,12 @@
-import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
+import { classifyContextLimit, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState } from "./translate-openai.ts";
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
 export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
-    const fail = (errorMessage: string): Chunk => ({ type: "finish", kind: "error", errorMessage });
+    const fail = (errorMessage: string, errorCode?: string): Chunk =>
+    ({ type: "finish", kind: "error", errorMessage, ...(errorCode !== undefined ? { errorCode } : {}) });
     let res: Response;
     try {
       res = await doFetch(`${opts.baseUrl}/chat/completions`, {
@@ -19,6 +20,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           model: request.model,
           messages: toOpenAIMessages(request.system, request.messages),
           ...(request.tools.length > 0 ? { tools: toOpenAITools(request.tools) } : {}),
+          ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
           stream: true,
           stream_options: { include_usage: true },
         }),
@@ -30,7 +32,8 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     }
     if (!res.ok || !res.body) {
       const body = await res.text().catch(() => "");
-      yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`);
+      // 分类以响应全文判定（D43）——slice(0,500) 只用于 errorMessage 文案；网络/流读取错误不打码
+      yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`, classifyContextLimit(res.status, body) ? "context_limit" : undefined);
       return;
     }
     const state: OaiStreamState = { calls: new Map() };

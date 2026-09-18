@@ -60,3 +60,33 @@ describe("provider-deepseek（OpenAI 族品牌实例，D34 封顶第五件）", 
     expect(headersSeen[0]!["authorization"]).toBe("Bearer dk");
   });
 });
+
+describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
+  const req = (maxTokens?: number) => ({
+    model: "deepseek-chat", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  });
+  const last = async (stream: ReturnType<typeof createStream>, r: ReturnType<typeof req>): Promise<unknown> => {
+    let out: unknown;
+    for await (const c of stream(r)) out = c;
+    return out;
+  };
+
+  it("HTTP 400 超限体 → finish{error, errorCode: context_limit}；鉴权错误体不带码", async () => {
+    const over = createStream({ apiKey: "dk", baseUrl: "http://x", fetchImpl: (async () => new Response("This model's maximum context length is 65536 tokens", { status: 400 })) as typeof fetch });
+    expect(await last(over, req())).toMatchObject({ type: "finish", kind: "error", errorCode: "context_limit" });
+    const auth = createStream({ apiKey: "dk", baseUrl: "http://x", fetchImpl: (async () => new Response("invalid api key", { status: 400 })) as typeof fetch });
+    const fin = await last(auth, req());
+    expect(fin).toMatchObject({ type: "finish", kind: "error" });
+    expect((fin as { errorCode?: string }).errorCode).toBeUndefined();
+  });
+
+  it("maxTokens 透传进 max_tokens；缺省不发送（openai 线缆现行为不变）", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const s = createStream({ apiKey: "dk", baseUrl: "http://x", fetchImpl: (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return new Response("data: [DONE]\n\n", { status: 200 }); }) as typeof fetch });
+    await last(s, req(1234));
+    expect(captured!.max_tokens).toBe(1234);
+    await last(s, req());
+    expect("max_tokens" in captured!).toBe(false);
+  });
+});

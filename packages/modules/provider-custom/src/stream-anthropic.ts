@@ -1,4 +1,4 @@
-import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
+import { classifyContextLimit, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { mapEvent, parseSseBlock, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -8,7 +8,8 @@ const MAX_TOKENS = 8192;
 export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
-    const fail = (errorMessage: string): Chunk => ({ type: "finish", kind: "error", errorMessage });
+    const fail = (errorMessage: string, errorCode?: string): Chunk =>
+    ({ type: "finish", kind: "error", errorMessage, ...(errorCode !== undefined ? { errorCode } : {}) });
     let res: Response;
     try {
       res = await doFetch(`${opts.baseUrl}/v1/messages`, {
@@ -21,7 +22,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
         },
         body: JSON.stringify({
           model: request.model,
-          max_tokens: MAX_TOKENS,
+          max_tokens: request.maxTokens ?? MAX_TOKENS,
           system: request.system,
           messages: toAnthropicMessages(request.messages),
           tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
@@ -35,7 +36,8 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     }
     if (!res.ok || !res.body) {
       const body = await res.text().catch(() => "");
-      yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`);
+      // 分类以响应全文判定（D43）——slice(0,500) 只用于 errorMessage 文案；网络/流读取错误不打码
+      yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`, classifyContextLimit(res.status, body) ? "context_limit" : undefined);
       return;
     }
     const state: SseState = { inputTokens: 0, currentCall: null, pendingStop: null };

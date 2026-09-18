@@ -96,3 +96,38 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     expect(seen[0]).toBe("http://a/v1/chat/completions");
   });
 });
+
+describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
+  const req = (maxTokens?: number) => ({
+    model: "m", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  });
+  const last = async (stream: (r: ReturnType<typeof req>) => AsyncIterable<unknown>, r: ReturnType<typeof req>): Promise<unknown> => {
+    let out: unknown;
+    for await (const c of stream(r)) out = c;
+    return out;
+  };
+
+  it("openai 族：HTTP 400 超限体 → errorCode context_limit；鉴权体不带码", async () => {
+    const over = createAdapters({ providers: { i: { ...entry, apiKey: "k" } } }, (async () => new Response("This model's maximum context length is 65536 tokens", { status: 400 })) as typeof fetch).get("i")!;
+    expect(await last(over.stream, req())).toMatchObject({ type: "finish", kind: "error", errorCode: "context_limit" });
+    const auth = createAdapters({ providers: { i: { ...entry, apiKey: "k" } } }, (async () => new Response("invalid api key", { status: 400 })) as typeof fetch).get("i")!;
+    const fin = await last(auth.stream, req());
+    expect(fin).toMatchObject({ type: "finish", kind: "error" });
+    expect((fin as { errorCode?: string }).errorCode).toBeUndefined();
+  });
+
+  it("两族 maxTokens 语义并例：anthropic 覆盖缺省 8192、openai 缺省不发送", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return new Response("", { status: 200 }); }) as typeof fetch;
+    const adapters = createAdapters({ providers: { a: withDm, i: { ...entry, apiKey: "k" } } }, fetchImpl);
+    await last(adapters.get("a")!.stream, req(1234));
+    expect(captured!.max_tokens).toBe(1234);
+    await last(adapters.get("a")!.stream, req());
+    expect(captured!.max_tokens).toBe(8192);
+    await last(adapters.get("i")!.stream, req(555));
+    expect(captured!.max_tokens).toBe(555);
+    await last(adapters.get("i")!.stream, req());
+    expect("max_tokens" in captured!).toBe(false);
+  });
+});
