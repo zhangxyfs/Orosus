@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
@@ -21,6 +21,11 @@ class LocalFs implements Fs {
       throw new Error(`路径越出根目录：${path}`);
     }
     return abs;
+  }
+
+  /** safe 的只读公开（M4-2.5 T0：mtime 去重需要 statSync 绝对路径——沙箱语义不变）。 */
+  resolveAbs(path: string): string {
+    return this.safe(path);
   }
 
   read(path: string): Promise<string> {
@@ -98,10 +103,15 @@ function globToRegExp(pattern: string): RegExp {
 
 const pathParam = { path: z.string().describe("相对工作目录的路径") };
 
+/** read 缺省窗口（M4-2.5 T0，opencode/pi 同款）：模型得连贯首段+续读提示；日志侧坍缩靠 mtime 去重。 */
+const READ_DEFAULT_WINDOW = 2000;
+
 function readTool(fs: LocalFs): Tool {
+  // mtime 去重状态（cc readFileState 同款）：键 = path+offset+limit，值 = mtimeMs——文件被改即失效
+  const lastRead = new Map<string, number>();
   return defineTool({
     name: "tool-fs__read",
-    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nFor large files, use offset+limit to read sections rather than the whole file.",
+    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFor large files, use offset+limit to read sections rather than the whole file.",
     parameters: z.object({
       ...pathParam,
       offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
@@ -114,15 +124,25 @@ function readTool(fs: LocalFs): Tool {
         approvalRule: "tool-fs__read",
         execute: async () => {
           try {
+            const mtime = statSync(fs.resolveAbs(path)).mtimeMs;
+            const key = `${path}:${offset ?? 1}:${limit ?? "d"}`;
+            if (lastRead.get(key) === mtime) {
+              return { output: `(file_unchanged：${path} 内容与上次读取相同，未重复注入——重看请换行区间)`, isError: false };
+            }
             const content = await fs.read(path);
             const lines = content.split("\n").filter((_, i, arr) => i < arr.length - 1 || arr[i] !== ""); // 去尾空段
             const start = (offset ?? 1) - 1;
             if (start >= lines.length) {
               return { output: `文件共 ${lines.length} 行，offset 超界（offset = ${offset ?? 1}）`, isError: false };
             }
-            const slice = lines.slice(start, start + (limit ?? lines.length - start));
+            const effectiveLimit = limit ?? Math.min(READ_DEFAULT_WINDOW, lines.length - start);
+            const slice = lines.slice(start, start + effectiveLimit);
+            const truncatedTail = start + slice.length < lines.length;
             const numbered = slice.map((text, i) => `${start + i + 1}→${text}`).join("\n");
-            const footer = `\n(第 ${start + 1}-${start + slice.length} 行，共 ${lines.length} 行)`;
+            const footer = truncatedTail
+              ? `\n(共 ${lines.length} 行，已显示 ${start + 1}-${start + slice.length}——续读请带 offset=${start + slice.length + 1}，或 offset+limit 读区间)`
+              : `\n(第 ${start + 1}-${start + slice.length} 行，共 ${lines.length} 行)`;
+            lastRead.set(key, mtime);
             return { output: numbered + footer, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };

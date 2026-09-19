@@ -130,14 +130,15 @@ describe("tool-fs 增强（M4-2 T6/B14——read 行区间+行号 / edit edits[]
     return tools;
   };
 
-  it("① read offset=3 limit=4 → 第 3-6 行带行号 + 页脚", async () => {
+  it("① read offset=3 limit=4 → 第 3-6 行带行号 + 页脚（M4-2.5 T0 过账：区间有余量 → 续读提示形态）", async () => {
     writeFileSync(join(dir, "big.txt"), "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n");
     const tools = await setup();
     const r = await run(tools[0]!, { path: "big.txt", offset: 3, limit: 4 });
     expect(r.isError).toBe(false);
     expect(r.output).toContain("3→line3");
     expect(r.output).toContain("6→line6");
-    expect(r.output).toContain("第 3-6 行，共 10 行");
+    expect(r.output).toContain("共 10 行，已显示 3-6");
+    expect(r.output).toContain("offset=7");
   });
 
   it("② read 无 offset → 全文带行号", async () => {
@@ -230,5 +231,72 @@ describe("tool-fs 增强（M4-2 T6/B14——read 行区间+行号 / edit edits[]
     expect(r.isError).toBe(false);
     expect(r.output).toContain("共 3 条");
     expect(r.output).toContain("仅显示前 2 条");
+  });
+});
+
+describe("read 缺省窗口 + mtime 去重（M4-2.5 T0——日志体积调研 P1+P2）", () => {
+  it("① 无 limit 读 >2000 行文件 → 只返回前 2000 行 + 续读提示", async () => {
+    const big = Array.from({ length: 2500 }, (_, i) => `line${i + 1}`).join("\n") + "\n";
+    writeFileSync(join(dir, "huge.txt"), big);
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools[0]!, { path: "huge.txt" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("1→line1");
+    expect(r.output).toContain("2000→line2000");
+    expect(r.output).not.toContain("2001→line2001");
+    expect(r.output).toContain("共 2500 行");
+    expect(r.output).toContain("offset=2001");
+  });
+
+  it("② 显式 limit 不受缺省窗口影响（读满 2500 行可带 limit）", async () => {
+    const big = Array.from({ length: 2500 }, (_, i) => `line${i + 1}`).join("\n") + "\n";
+    writeFileSync(join(dir, "huge.txt"), big);
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools[0]!, { path: "huge.txt", limit: 2500 });
+    expect(r.output).toContain("2500→line2500");
+  });
+
+  it("③ ≤2000 行文件行为不变（缺省=全文）", async () => {
+    writeFileSync(join(dir, "small.txt"), "a\nb\nc\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools[0]!, { path: "small.txt" });
+    expect(r.output).toContain("3→c");
+    expect(r.output).not.toContain("offset=4"); // 无续读提示
+  });
+
+  it("④ 同参重读且 mtime 未变 → file_unchanged 占位（不重复注入全文）", async () => {
+    writeFileSync(join(dir, "dedup.txt"), "content\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r1 = await run(tools[0]!, { path: "dedup.txt" });
+    expect(r1.output).toContain("1→content");
+    const r2 = await run(tools[0]!, { path: "dedup.txt" });
+    expect(r2.isError).toBe(false);
+    expect(r2.output).toContain("file_unchanged");
+    expect(r2.output).not.toContain("1→content");
+  });
+
+  it("⑤ mtime 变化（文件被改）→ 重新给全文", async () => {
+    writeFileSync(join(dir, "dedup2.txt"), "v1\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    await run(tools[0]!, { path: "dedup2.txt" });
+    writeFileSync(join(dir, "dedup2.txt"), "v2\n");
+    const r = await run(tools[0]!, { path: "dedup2.txt" });
+    expect(r.output).toContain("1→v2");
+    expect(r.output).not.toContain("file_unchanged");
+  });
+
+  it("⑥ 不同行区间（不同 offset/limit）→ 不触发去重", async () => {
+    writeFileSync(join(dir, "dedup3.txt"), "x\ny\nz\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    await run(tools[0]!, { path: "dedup3.txt", offset: 1, limit: 1 });
+    const r = await run(tools[0]!, { path: "dedup3.txt", offset: 2, limit: 1 });
+    expect(r.output).toContain("2→y");
+    expect(r.output).not.toContain("file_unchanged");
   });
 });
