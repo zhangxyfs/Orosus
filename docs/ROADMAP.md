@@ -1,16 +1,17 @@
 # Orosus 路线图（之后做什么——单一事实源）
 
 > **维护纪律**：每批收官/立项/排期变更时更新本文件（commit 留痕）；细节不在本文展开，链接到对应方案书/台账/调研。
-> **状态快照**：2026-09-19 —— M4-2 已收官（508）；M4-2.5 方案 v1 待审；代码态 511 测试四门全绿，v31、D1–D49、批次 16。
+> **状态快照**：2026-09-19 —— M4-2 已收官（508）；**M4-2.5 容量与多模态已收官（511→558 四门全绿，v32、D1–D51、批次 17）**；代码态 558 测试全绿。下一批 M4.5 子代理（既定顺序，见下）。
 
 ## 排队中（按当前顺序）
 
 | 顺序 | 批次 | 内容 | 状态 | 方案/出处 |
 |---|---|---|---|---|
-| 1 | **M4-2.5 容量与多模态** | read 缺省窗口+mtime 去重 / 截断头尾 3:1 / readTitle 预算 / /compact 立即执行+/summary / **图片真实喂图**（ContentPart image，V.2 销账） | **方案 v1 待审**（511→542） | `plans/2026-09-19-m4-2-5-capacity-multimodal.md` |
-| 2 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | 既定（master plan 决策点⑤：M4-2 之后启动，不等 M4-3；被 M4-2.5 顺延一位） | master plan Part V.1 |
-| 3 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
-| 4 | **M5 候选池**（TUI 推荐为首项——见下） | 见下节 | 未立项 | master plan Part V.1 |
+| 1 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | **下一位**（master plan 决策点⑤：M4-2 之后启动、不等 M4-3——编号表里程碑位置非执行序号；M4-2.5 热修批已插队收官） | master plan Part V.1 |
+| 2 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
+| 3 | **M5 候选池**（TUI 推荐为首项——见下） | 见下节 | 未立项 | master plan Part V.1 |
+
+**已收官**：M4-2.5 容量与多模态（2026-09-19，511→558，`plans/2026-09-19-m4-2-5-capacity-multimodal.md`——read 窗口+去重/截断头尾 3:1/readTitle 预算//compact 立即+/summary/图片真实喂图 V.2 销账/OROSUS_HOME+home migrate）。
 
 ## M5 / 独立里程碑候选
 
