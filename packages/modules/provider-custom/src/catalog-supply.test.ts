@@ -458,7 +458,7 @@ describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai �
         if (String(title).includes("入口")) { gateTitle = String(title); gateItems = [...items]; }
         return inner.choose(title, items);
       },
-      ask: async (q) => "",
+      ask: async (_q) => "",
       askSecret: async () => "",
       confirm: async () => true,
     };
