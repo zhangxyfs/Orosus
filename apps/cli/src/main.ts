@@ -17,6 +17,7 @@ import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from 
 import { pasteImage, withImageRef } from "./paste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
+import { commandCompleter, HELP_TEXT } from "./help.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -68,7 +69,7 @@ if (process.stdout.isTTY === true) {
   Object.defineProperty(stdoutEcho, "isTTY", { value: true });
   Object.defineProperty(stdoutEcho, "columns", { get: () => process.stdout.columns });
 }
-const rl = createInterface({ input: process.stdin, output: stdoutEcho });
+const rl = createInterface({ input: process.stdin, output: stdoutEcho, completer: commandCompleter }); // Tab 补全（M4-2 T21，readline 原生）
 // 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
 // 且 EOF 落在 await 间隙时已关闭接口上的 question 永不 settle（退出码 13 挂起）——REPL 一律走队列兜底。
 const pendingLines: string[] = [];
@@ -285,6 +286,8 @@ if (args.print === undefined) try {
         console.log(from !== undefined ? `[已从 ${from} 分叉——新会话 ${h.sessionId}]` : `[新会话 ${h.sessionId}]`);
         continue sessionLoop; // 重挂横幅与渲染（新事件流）
       }
+      // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
+      if (text === "/help") { console.log(HELP_TEXT); continue; }
       // /paste（M4-2 T10，别名 /image）：剪贴板图存临时文件，随下一条消息以路径引用（真实喂图 V.2）
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
