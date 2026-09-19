@@ -26,7 +26,7 @@
 
 - **V.2 远期池剩余**（`plans/2026-09-18-m4-master-plan.md` Part V.2）：B13 审批拒绝带反馈（CommandUi 扩契约——M4-2.5 明示不顺带，下个契约窗口评估）、Markdown 复杂版（引库+高亮+表格，随 TUI）、--input-format 双向流、todo stale 提醒、ask 指纹去重、金额折算、/paste Alt+V 按键（raw-mode）、每日 stats JSONL、会话信封短键名（format:2）。
 - **V.3 条件触发**：parseModelsResponse 非标形状、跨后端 resume 探测、动态依赖调度。
-- **V.4 暂缓/备选**：**zstd/gzip 日志压缩**（日志调研 P4 升级为正式候选——引依赖需单独拍板，Node 内置 gzip 零依赖路线与 zstd 选型合并评估）、C1 工具结果外溢剩余面（read 侧 M4-2.5 T0 部分销）、启动期自动 GC（永不做——「降级必须吵闹」）。
+- **V.4 暂缓/备选**：**会话数据压缩（2026-09-19 记录，用户犹豫中——等痛点数据再定）**：触发条件 = **M4-2.5 T0/T1（read 窗口化+截断头尾）落地后，单会话文件仍常见 >1MB 才立项**（源头瘦身预期已把 150KB 案例压到 <25KB，压缩是第二道防线不抢跑）；若立项，路线倾向 = **Node 内置 zlib gzip 多 member 分帧**（零新依赖、帧边界可定位——按帧解压/按帧 grep），zstd 仅在 gzip 实测不满意再议（引原生依赖需单独拍板）；**犹豫点如实记录**：压缩的代价是会话文件失去可直接 grep/阅读的调试面（master plan V.2 原话「JSONL 可读性是调试刚需」，fork 取证/体积解剖/readTitle 全靠裸文本）——dsh 压缩成立是配套了「只读首帧/分块流式」整套工具，那是额外工程量；佐证：dsh 实测 zstd+chunk 打包 **-60%**（日志调研 §1.2）、用户两次表达关注（分桶时代「没做压缩？」+ 150KB 文件抱怨）。C1 工具结果外溢剩余面（read 侧 M4-2.5 T0 部分销）、启动期自动 GC（永不做——「降级必须吵闹」）。
 - 模块×六家缺失盘点少数派（等真实需求）：EnterPlanMode 计划模式、LSP 工具、notebook、git worktree 隔离、持久 shell 会话、Goal 工具族、ToolSearch 按需加载、web search/fetch 模块（生态项随 M4-3）。
 
 ## 已完结里程碑（存档索引）
