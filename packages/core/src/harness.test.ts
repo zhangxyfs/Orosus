@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -34,10 +34,10 @@ const makeHarness = async (extra: Parameters<typeof createHarness>[0] = {}) => {
 };
 
 describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => {
-  it("prompt 一轮：事件流 = 日志实时投影，session/header 含模块图摘要", async () => {
+  it("prompt 一轮：事件流 = 日志实时投影，session/header 含模块计数摘要（M4-1 T3 瘦身：全列表 → 三数字）", async () => {
     const h = await makeHarness();
     const seen: string[] = [];
-    let header: { moduleGraph?: { active?: string[] } } | undefined;
+    let header: { moduleSummary?: { active?: number; failed?: number; discovered?: number }; moduleGraph?: unknown } | undefined;
     const collect = (async () => {
       for await (const e of h.events()) {
         seen.push(e.type);
@@ -51,8 +51,35 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     expect(seen).toContain("user/message");
     expect(seen).toContain("assistant/message");
     expect(seen[seen.length - 1]).toBe("turn/end");
-    expect(header!.moduleGraph!.active).toContain("provider-fake");
+    expect(header!.moduleSummary).toEqual({ active: 1, failed: 0, discovered: 0 }); // 计数正确（全图运行期经 graph().audit()/--dump-modules）
+    expect(header!.moduleGraph).toBeUndefined(); // 全列表键不再落盘（661B/会话固定开销移除）
     await h.close();
+  });
+
+  it("旧 header（含 moduleGraph 全列表）读取兼容：resume 不炸、不落重复 header（M4-1 T3）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t3-"));
+    const sid = "s_legacy";
+    mkdirSync(join(dir, "sessions"), { recursive: true });
+    const legacy = JSON.stringify({
+      v: 1, id: "e_root", parentId: null, seq: 1, ts: "2026-09-01T00:00:00.000Z", type: "session/header",
+      format: 1, cwd: "/old", parentSession: null,
+      moduleGraph: { active: ["provider-anthropic", "tool-fs", "tool-shell"], degraded: [] }, // 旧形状
+    });
+    writeFileSync(join(dir, "sessions", `${sid}.jsonl`), `${legacy}\n`);
+    const store = new JsonlSessionStore({ dir: join(dir, "sessions"), sessionId: sid });
+    const h = await createHarness({
+      store,
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script)],
+      resume: { sessionId: sid },
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("续聊");
+    await h.close();
+    const events = await store.all();
+    expect(events.filter((e) => e.type === "session/header")).toHaveLength(1); // 既有 header 不重复落
+    expect(events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("续聊"))).toBe(true);
   });
 
   it("未配置 model → prompt 报清晰错误（核心顶层 key，§6.6）", async () => {

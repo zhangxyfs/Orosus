@@ -226,9 +226,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       format: 1,
       cwd: options.cwd ?? process.cwd(),
       parentSession: options.fork?.parentSessionId ?? null,
-      moduleGraph: {
-        active: graph.records.filter((r) => r.state === "active").map((r) => r.name),
-        degraded: graph.records.filter((r) => r.state === "failed").map((r) => `${r.name}: ${r.failReason}`),
+      moduleSummary: { // M4-1 T3 瘦身：模块图全列表（661B/会话）→ 三计数——全图运行期经 graph().audit() / --dump-modules
+        active: graph.records.filter((r) => r.state === "active").length,
+        failed: graph.records.filter((r) => r.state === "failed").length,
+        discovered: graph.records.filter((r) => r.state === "discovered").length,
       },
     });
     if (options.fork !== undefined) {
