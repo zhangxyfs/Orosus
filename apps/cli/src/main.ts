@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
@@ -13,6 +13,7 @@ import { banner } from "./banner.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
+import { pasteImage, withImageRef } from "./paste.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -201,6 +202,7 @@ if (process.stdin.isTTY) {
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
 // 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
+let pendingImage: string | undefined; // /paste 挂起的图片文件——随下一条消息以路径引用（M4-2 T10）
 function attachRender(h: Harness): void {
   attachRenderTo(h, (s) => process.stdout.write(s), (id) => { lastEventId = id; });
 }
@@ -273,9 +275,18 @@ try {
         console.log(from !== undefined ? `[已从 ${from} 分叉——新会话 ${h.sessionId}]` : `[新会话 ${h.sessionId}]`);
         continue sessionLoop; // 重挂横幅与渲染（新事件流）
       }
+      // /paste（M4-2 T10，别名 /image）：剪贴板图存临时文件，随下一条消息以路径引用（真实喂图 V.2）
+      if (text === "/paste" || text === "/image") {
+        const img = await pasteImage();
+        if (img === undefined) { console.log("（剪贴板中没有图片——截图后重试，或检查终端权限）"); continue; }
+        console.log(`[已粘贴图片: ${basename(img.file)}]——将随下一条消息发送（M4-2 以文件路径随消息；模型直接看图属 V.2）`);
+        pendingImage = img.file;
+        continue;
+      }
       try {
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-        const out = await h.prompt(text);
+        const out = await h.prompt(withImageRef(text, pendingImage)); // /paste 挂起的图随本条消息发出
+        pendingImage = undefined;
         if (out !== undefined) console.log(out);
       } catch (err) {
         console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
