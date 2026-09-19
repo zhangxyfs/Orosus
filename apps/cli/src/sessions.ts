@@ -1,20 +1,9 @@
-import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { scanSessionFiles, type SessionFileEntry } from "@orosus/core";
 
-/** /sessions：列出会话目录里的最近会话（mtime 降序，前 10）。jsonl/sqlite 两种后端文件都认。 */
-export function listSessions(dir: string): { id: string; file: string; mtimeMs: number }[] {
-  try {
-    return readdirSync(dir)
-      .filter((f) => f.endsWith(".jsonl") || f.endsWith(".sqlite"))
-      .map((f) => {
-        const file = join(dir, f);
-        return { id: f.replace(/\.(jsonl|sqlite)$/, ""), file, mtimeMs: statSync(file).mtimeMs };
-      })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, 10);
-  } catch {
-    return []; // 目录不存在（尚未有会话）
-  }
+/** /sessions：双层扫描（M4-1 T1/D46）——根平铺（存量）+ 桶目录（现行），复用 core 统一件
+ *  scanSessionFiles（不另造目录遍历）；mtime 降序取前 10；bucket 标注来源（平铺 = 存量原地兼容）。 */
+export function listSessions(root: string): SessionFileEntry[] {
+  return scanSessionFiles(root).slice(0, 10);
 }
 
 /** CLI 拦截层会话命令（D41/D38 第一层——宿主操作）：/new /fork /sessions。
@@ -36,16 +25,26 @@ export function sessionCommand(input: string, current: { sessionId: string; last
   return { kind: "none" };
 }
 
-/** 会话切换的构造参数（外层循环据此建新 harness）。 */
-export function harnessOptionsFor(directive: SessionDirective): { fork?: { parentSessionId: string; atEntryId?: string } } {
+/** 会话切换的构造参数（外层循环据此建新 harness）。parentDir（T1/D46）：父会话所在目录——
+ *  fork 子会话落当前项目桶，父会话可能在别的桶或平铺（resume 旧会话后 /fork 的场景），由外层填。 */
+export function harnessOptionsFor(
+  directive: SessionDirective,
+  opts: { parentDir?: string } = {},
+): { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string } } {
   if (directive.kind === "fork") {
-    return { fork: { parentSessionId: directive.parentSessionId, ...(directive.atEntryId !== undefined ? { atEntryId: directive.atEntryId } : {}) } };
+    return {
+      fork: {
+        parentSessionId: directive.parentSessionId,
+        ...(directive.atEntryId !== undefined ? { atEntryId: directive.atEntryId } : {}),
+        ...(opts.parentDir !== undefined ? { parentDir: opts.parentDir } : {}),
+      },
+    };
   }
   return {};
 }
 
-export function formatSessions(dir: string): string {
-  const sessions = listSessions(dir);
+export function formatSessions(root: string): string {
+  const sessions = listSessions(root);
   if (sessions.length === 0) return "（暂无会话——发送第一条消息即创建）";
-  return sessions.map((s, i) => `  ${i + 1}. ${s.id}（${new Date(s.mtimeMs).toLocaleString()}）`).join("\n");
+  return sessions.map((s, i) => `  ${i + 1}. ${s.id}［${s.bucket ?? "平铺"}］（${new Date(s.mtimeMs).toLocaleString()}）`).join("\n");
 }

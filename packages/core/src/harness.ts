@@ -28,7 +28,7 @@ export interface HarnessOptions {
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
   resume?: { sessionId: string };           // 打开既有会话继续（D41/T6）：已有事件非空则不落重复 header
-  fork?: { parentSessionId: string; atEntryId?: string }; // 复合存储新会话（D41/T6）：header 带 parentSession + 首事件 session/fork
+  fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; // 复合存储新会话（D41/T6）：header 带 parentSession + 首事件 session/fork；parentDir（M4-1 T1/D46）= 父会话所在目录（跨桶/平铺 fork 时由宿主定位填入，缺省同 sessionsDir）
   discovery?: {                            // 目录扫描入口（§8.3/T11-T12）：缺省 ~/.orosus/modules 与 <cwd>/.orosus/modules
     userDir: string;
     projectDir: string;
@@ -133,11 +133,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // 存储构造分支（D41/T6 + D42/T7）：显式 store > resume > fork > 全新；后端按核心顶层 key sessionStore 选择（缺省 jsonl）
   const sessionsDir = options.sessionsDir ?? join(home, "sessions");
-  const makeStore = (sessionId?: string): SessionStore => {
+  const makeStore = (sessionId?: string, dir: string = sessionsDir): SessionStore => {
     const backend = String(config.core.sessionStore ?? "jsonl");
     const withId = sessionId !== undefined ? { sessionId } : {};
-    if (backend === "sqlite") return new SqliteSessionStore({ dir: sessionsDir, ...withId });
-    if (backend === "jsonl") return new JsonlSessionStore({ dir: sessionsDir, ...withId });
+    if (backend === "sqlite") return new SqliteSessionStore({ dir, ...withId });
+    if (backend === "jsonl") return new JsonlSessionStore({ dir, ...withId });
     throw new Error(`sessionStore 配置非法："${backend}"（合法值 jsonl | sqlite，核心顶层 key，§7.2/D42）`);
   };
   let baseStore: SessionStore;
@@ -147,7 +147,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     baseStore = makeStore(options.resume.sessionId);
   } else if (options.fork !== undefined) {
     baseStore = new ForkedSessionStore({
-      parent: makeStore(options.fork.parentSessionId),
+      // 父会话定位（T1/D46）：parentDir 缺省同桶（REPL /fork 同会话目录）；跨桶/平铺父由宿主经 locateSessionFile 定位后填入
+      parent: makeStore(options.fork.parentSessionId, options.fork.parentDir ?? sessionsDir),
       ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
       own: makeStore(),
     });

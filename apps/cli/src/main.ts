@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createHarness, discoverModules } from "@orosus/core";
+import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
@@ -43,7 +43,12 @@ import { realReadModel, startupGate } from "./startup.ts";
 }
 
 const args = parseArgs(process.argv.slice(2));
-const sessionsDir = join(homedir(), ".orosus", "sessions");
+// 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
+const sessionsRoot = join(homedir(), ".orosus", "sessions");
+const sessionsDir = join(sessionsRoot, encodeCwd(process.cwd()));
+// --resume 双层定位（T1/D46）：旧平铺/他桶会话在原位续写（新事件仍进原文件）；找不到 = 全新空会话（M3 既有语义）
+const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId) : undefined;
+let activeDir = resumeLoc?.dir ?? sessionsDir; // 当前 harness 的会话目录（/fork 的父定位依据）
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
@@ -131,11 +136,11 @@ const commandUi = createReadlineUi({
   },
 });
 
-const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string } } = {}) =>
+const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; sessionsDir?: string } = {}) =>
   createHarness({
     builtinModules: BUILTIN_MODULES,
     commandUi,
-    sessionsDir,
+    sessionsDir: extra.sessionsDir ?? activeDir,
     ...(args.resume !== undefined ? { resume: args.resume } : {}),
     ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
     config: {
@@ -185,7 +190,7 @@ try {
       if (text === "") continue;
       // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions，D41/T6）
       if (text === "/sessions") {
-        console.log(formatSessions(sessionsDir));
+        console.log(formatSessions(sessionsRoot)); // 双层扫描（T1/D46）：平铺存量 + 各项目桶
         continue;
       }
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
@@ -193,7 +198,11 @@ try {
       if (directive.kind === "new" || directive.kind === "fork") {
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
         await h.close();
-        h = await createSession(harnessOptionsFor(directive));
+        // 新会话/fork 子会话一律落当前项目桶；fork 父会话按 activeDir 定位（可能在平铺或他桶——resume 旧会话后 /fork）
+        h = await createSession(directive.kind === "fork"
+          ? { ...harnessOptionsFor(directive, { parentDir: activeDir }), sessionsDir }
+          : { sessionsDir });
+        activeDir = sessionsDir;
         console.log(from !== undefined ? `[已从 ${from} 分叉——新会话 ${h.sessionId}]` : `[新会话 ${h.sessionId}]`);
         continue sessionLoop; // 重挂横幅与渲染（新事件流）
       }
