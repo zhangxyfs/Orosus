@@ -131,6 +131,14 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     catalogFull = r.source !== "builtin";
     if (r.source === "builtin") degradedNote = "（⚠ 在线目录拉取失败——已回退内置快照（常用 7 家）；检查网络稍后重试，或改用本地文件源）";
     else if (r.source === "disk") degradedNote = `（在线拉取失败——已使用本地缓存目录，上次成功拉取 ${relTime(Date.now() - (r.fetchedAt ?? Date.now()))}）`;
+    if (r.source !== "online") {
+      // 代理根因提示（M4-2 T3/B2 spike 降级）：undici 包不可 import（Node 不暴露内置 undici 模块面，
+      // 新增依赖违反零新增约束）——实证 Node ≥24 启动期 NODE_USE_ENV_PROXY=1 使内置 fetch 走代理环境变量
+      const proxyUrl = process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy;
+      if (proxyUrl !== undefined) {
+        degradedNote += `；检测到代理 ${proxyUrl}，但 Node 内置 fetch 不自动走代理环境变量——Node ≥24 以 NODE_USE_ENV_PROXY=1 启动即可启用，或改用本地文件源`;
+      }
+    }
   }
   else {
     // 空路径/文件不存在/坏 JSON → 可读文案而非裸异常崩溃（走查：空回车曾 ENOENT 直接炸栈）

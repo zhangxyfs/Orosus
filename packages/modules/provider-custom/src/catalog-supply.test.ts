@@ -472,3 +472,30 @@ describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai �
     expect(out).toContain("coding");
   });
 });
+
+describe("目录拉取代理提示（M4-2 T3/B2 spike 降级——undici 不可 import，NODE_USE_ENV_PROXY 启动期实证可用）", () => {
+  it("HTTPS_PROXY + 在线拉取失败降级 → 厂商标题含代理根因与 NODE_USE_ENV_PROXY 指引", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+    try {
+      let vendorTitle = "";
+      const answers = ["[添加新平台]", "在线目录（https://models.dev/api.json）", "取消"];
+      const ui: MenuUi = {
+        choose: async (title, _items) => {
+          if (String(title).includes("厂商")) vendorTitle = String(title);
+          return answers.shift() ?? "取消";
+        },
+        ask: async () => "",
+        askSecret: async () => "",
+        confirm: async () => false,
+      };
+      const degraded = fakeDeps();
+      degraded.getCatalog = async () => ({ catalog: { deepseek: { name: "DeepSeek", api: "https://a" } } as unknown as Catalog, source: "builtin" as const });
+      await runProviderMenu(ui, degraded);
+      expect(vendorTitle).toContain("内置快照");
+      expect(vendorTitle).toContain("127.0.0.1:7890");      // 检测到代理且如实展示
+      expect(vendorTitle).toContain("NODE_USE_ENV_PROXY");  // 可行动指引（spike 实证）
+    } finally {
+      delete process.env.HTTPS_PROXY;
+    }
+  });
+});
