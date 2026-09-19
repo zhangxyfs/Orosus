@@ -18,7 +18,7 @@
   - **前置小批可插队**：B5 第 2 层 raw-mode（上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘——自写小型组件零依赖，几天量级；顺带解锁 Esc 取消审批询问、@path#L10-L20 行范围补全）。
 - 多前端服务器（headless server + CUI/Web 前端，dsh 形态；TUI 是其第一前端；前置：WorkspaceLease 跨会话写锁——Reasonix 借鉴）。
 - 用户态 hooks；企业面；声明式插件工程细节（随 `module add` 设计）。
-- L2（子进程隔离 + 出口代理 + OS 兜底 bubblewrap/seatbelt）——M4-3 的 L1 之后独立批。
+- L2（子进程隔离 + 出口代理 + OS 兜底 bubblewrap/seatbelt）——M4-3 的 L1 之后独立批。**时点理由（2026-09-19 复核定）**：① 触发条件随 M4-3 出现——npm 分发/`module add` 才引入不受信模块入口（主文档 §8.5「随 npm 分发之后引入——这层不能省」），此前全部第一方模块、进程内同权+信任门+审批门够用；② 依赖序——L2 的 RPC broker/endowment 收窄建立在 L1 的 SES 声明强制之上（M4-3 已标 L1 先 spike）；③ 批次纪律——不塞进 M4-3 本体，Windows 原生组合件属 Win32 深水区（主文档开放问题 7），一批一事。**Windows 原生组合件 spike（Job Object + AppContainer 受限 token + 句柄授予 broker 语义验证）可随 M4-3 并行先行、不占 M4-3 范围账本**——它是 L2 唯一真不确定项，句柄授予后子进程原生读写的性能数据决定 L2 批的规模估算；与「L1 先 spike」同款打法。
 - sansheng-liubu（三省六部）多智能体编排旗舰——subagent 之后立项。
 - **缓存目录迁移（OROSUS_HOME，2026-09-19 用户提出——随 TUI 批）**：允许把 `~/.orosus` 整体迁到其他盘符（系统盘空间治理）。**动机（用户实测对照）**：大量工作在 kimi-code 做、其缓存目录 <1GB；ZCode 没几个会话 `.zcode` 已近 2GB——宿主数据目录无声膨胀是通病（master plan D47 已记 ZCode 本机 SQLite 775MB+83MB WAL 前案），Orosus 应让用户能搬走。**形态三步**：① 基础设施收拢——散落各处的 `homedir()/.orosus` 拼接（config/secrets/sessions/cache/tmp/modules trust——cli-deps/startup/permission/catalog/main/paste 等多处）统一到单一解析点 + `OROSUS_HOME` 环境变量覆盖（缺省 `~/.orosus` 不变）；② 迁移命令 `orosus home migrate <目标路径>`（复制 + 完整性校验 + 指针切换 + 旧目录改名留证不静默删）；③ TUI 设置界面给入口与磁盘占用视图。**注记**：①②是 CLI 子命令形态、不依赖 TUI——可先行小批落地，③随 TUI。
 - 会话内分支树/undo；全文索引/搜索；文件历史快照/回滚；thinking 回流——各见 master plan V.2。
