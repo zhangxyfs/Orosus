@@ -202,6 +202,12 @@ if (args.print !== undefined) {
 
 // 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
 
+/** 清屏（用户走查 2026-09-19）：/new 与 /fork 换会话时清残屏。TTY only——
+ *  管道/重定向下吐 ANSI 转义只会污染输出（走查与脚本消费方都要干净 stdout）。 */
+const clearScreen = (): void => {
+  if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // 屏+回滚缓冲清空、光标归位
+};
+
 // 首启引导（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认转 /provider 向导 → /reload → 复检回显；
 // 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）；--print 单发不触发
 if (args.print === undefined && process.stdin.isTTY) {
@@ -283,7 +289,14 @@ if (args.print === undefined) try {
           ? { ...harnessOptionsFor(directive, { parentDir: activeDir }), sessionsDir }
           : { sessionsDir });
         activeDir = sessionsDir;
-        console.log(from !== undefined ? `[已从 ${from} 分叉——新会话 ${h.sessionId}]` : `[新会话 ${h.sessionId}]`);
+        clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
+        if (from !== undefined) {
+          // fork 继承父上下文（ForkedSessionStore 投影 suau 实证）——回显历史让继承可见，否则像丢了
+          console.log(`[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]`);
+          await echoHistory(h);
+        } else {
+          console.log(`[新会话 ${h.sessionId}]`);
+        }
         continue sessionLoop; // 重挂横幅与渲染（新事件流）
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
