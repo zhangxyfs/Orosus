@@ -16,6 +16,7 @@ import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
 import { pasteImage, withImageRef } from "./paste.ts";
 import { runPrint } from "./print.ts";
+import { resolveAtRefs } from "./atfile.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -293,8 +294,11 @@ if (args.print === undefined) try {
         continue;
       }
       try {
+        // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
+        const { text: cleaned, attachments } = resolveAtRefs(text, process.cwd());
+        const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-        const out = await h.prompt(withImageRef(text, pendingImage)); // /paste 挂起的图随本条消息发出
+        const out = await h.prompt(withImageRef(withAt, pendingImage)); // /paste 挂起的图随本条消息发出
         pendingImage = undefined;
         if (out !== undefined) console.log(out);
       } catch (err) {
