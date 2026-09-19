@@ -73,6 +73,11 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(sessionCommand("/new", { sessionId: "s1" })).toEqual({ kind: "new" });
     expect(sessionCommand("/fork", { sessionId: "s1", lastEventId: "e9" })).toEqual({ kind: "fork", parentSessionId: "s1", atEntryId: "e9" });
     expect(sessionCommand("hello", { sessionId: "s1" })).toEqual({ kind: "none" });
+    // 命令归一化（2026-09-19 用户走查）：斜杠后空格/连续空格/首尾空白一律可解析
+    expect(sessionCommand("/ exit", { sessionId: "s1" })).toEqual({ kind: "quit" });
+    expect(sessionCommand("  /quit  ", { sessionId: "s1" })).toEqual({ kind: "quit" });
+    expect(sessionCommand("/ resume   2", { sessionId: "s1" })).toEqual({ kind: "resume", sessionId: "2" });
+    expect(sessionCommand("/  sessions", { sessionId: "s1" })).toEqual({ kind: "pick" });
   });
 
   it("⑥ resolveTarget：序号按列表、sid 双层定位（不限前 10）、未命中 undefined；harnessOptionsFor resume 形状", () => {

@@ -82,6 +82,13 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     expect(events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("续聊"))).toBe(true);
   });
 
+  it("命令归一化：斜杠后空格/连续空格/首尾空白可解析（/ status 同 /status——2026-09-19 用户走查）", async () => {
+    const h = await makeHarness();
+    const out = await h.prompt("/  status");
+    expect(out).toContain("model:");
+    await h.close();
+  });
+
   it("未配置 model → prompt 报清晰错误（核心顶层 key，§6.6）", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-harness-"));
     const h = await createHarness({

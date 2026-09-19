@@ -460,8 +460,11 @@ session: ${store.sessionId}
       if (closed) throw new Error("harness 已关闭");
       if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
       // 命令路由（D38 三层：CLI 拦截在宿主侧；此处内建表 > 别名 > 模块注册）。命令不触发 agentLoop、不落会话日志
-      if (text.startsWith("/")) {
-        const m = /^\/([a-z0-9][a-z0-9-]*(?:__[a-z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(text);
+      // 命令归一化（2026-09-19 用户走查）：`/ status`、`/compact  `、` /model ` 一律可解析——
+      // 斜杠后空格抹除 + 连续空白折叠（不认就当聊天发出是缺陷；与 CLI 拦截层 sessionCommand 同款规则）
+      const cmdText = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
+      if (cmdText.startsWith("/")) {
+        const m = /^\/([a-z0-9][a-z0-9-]*(?:__[a-z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(cmdText);
         const name = m?.[1];
         const args = (m?.[2] ?? "").trim();
         if (name === undefined) throw new Error(`无法解析命令 "${text}"——输入 /help 查看可用命令`);

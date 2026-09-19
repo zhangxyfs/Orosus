@@ -90,9 +90,11 @@ export type SessionDirective =
 /** 退出命令的同义集（用户要求 2026-09-18：/quit = /exit = /q）。 */
 const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
 
-/** 输入是否是会话生命周期命令；是则给出指令（/fork 的分叉点 = 当前流上最后见到的事件 id）。 */
+/** 输入是否是会话生命周期命令；是则给出指令（/fork 的分叉点 = 当前流上最后见到的事件 id）。
+ *  命令归一化（2026-09-19 用户走查）：`/ exit`、`/resume  2`、` /quit ` 一律可解析——
+ *  trim + 斜杠后空格抹除 + 连续空白折叠为单空格（不认就当聊天发出是缺陷，不是特性）。 */
 export function sessionCommand(input: string, current: { sessionId: string; lastEventId?: string | undefined }): SessionDirective | { kind: "none" } {
-  const t = input.trim();
+  const t = input.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
   if (QUIT_COMMANDS.has(t)) return { kind: "quit" };
   if (t === "/new") return { kind: "new" };
   if (t === "/fork") return { kind: "fork", parentSessionId: current.sessionId, ...(current.lastEventId !== undefined ? { atEntryId: current.lastEventId } : {}) };
