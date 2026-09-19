@@ -85,3 +85,22 @@ describe("toAnthropicMessages（ModelMessage → API 消息）", () => {
     ]);
   });
 });
+
+// M4-2.5 T5：五家内置 provider 同款图片映射钉（anthropic 线缆——base64 source block）
+const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { join } = await import("node:path");
+describe("toAnthropicMessages 图片映射（M4-2.5 T5 五家同款）", () => {
+  it("image part → base64 source block", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-t5c-"));
+    const p = join(dir, "shot.png");
+    writeFileSync(p, Buffer.from([1, 2, 3]));
+    const msg: ModelMessage = { role: "user", content: [{ kind: "image", path: p, mimeType: "image/png" }] };
+    const out = toAnthropicMessages([msg]) as Array<{ content: Array<Record<string, unknown>> }>;
+    const src = out[0]!.content[0]!["source"] as { type: string; data: string };
+    expect(out[0]!.content[0]!["type"]).toBe("image");
+    expect(src.type).toBe("base64");
+    expect(src.data).toBe(Buffer.from([1, 2, 3]).toString("base64"));
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

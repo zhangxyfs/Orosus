@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Chunk, ModelMessage, ToolSpec } from "@orosus/contracts/provider";
 
 /** OpenAI 流式解析状态（每条流一份）：tool_calls 分片按 index 聚合的 callId 映射。 */
@@ -16,8 +17,19 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[]): ApiM
       out.push({ role: "tool", tool_call_id: m.callId, content: m.output });
       continue;
     }
-    const text = m.content.filter((p) => p.text !== "").map((p) => p.text).join("");
-    const msg: ApiMessage = { role: m.role, ...(text !== "" ? { content: text } : {}) };
+    // M4-2.5 T5：含图消息走 content 数组（image → image_url data URL，请求期读文件；缺失降级 text 占位）；纯文本保持字符串
+    const content: string | Array<Record<string, unknown>> = m.content.some((p) => p.kind === "image")
+      ? m.content.map((p) => {
+          if (p.kind === "text") return { type: "text", text: p.text };
+          try {
+            const b64 = readFileSync(p.path).toString("base64");
+            return { type: "image_url", image_url: { url: `data:${p.mimeType};base64,${b64}` } };
+          } catch {
+            return { type: "text", text: `[图片文件缺失：${p.path}]` };
+          }
+        })
+      : m.content.filter((p) => p.kind === "text" && p.text !== "").map((p) => (p as { text: string }).text).join("");
+    const msg: ApiMessage = { role: m.role, ...(content !== "" ? { content } : {}) };
     if (m.role === "assistant" && m.toolCalls) {
       msg.tool_calls = m.toolCalls.map((tc) => ({
         id: tc.callId,

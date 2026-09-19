@@ -74,7 +74,10 @@ export function renderHistoryLines(events: SessionEvent[]): string[] {
   for (const e of events) {
     if (e.type === "user/message") {
       const text = textBlocks(e);
-      if (text !== "") out.push(`> ${cap(text)}`);
+      const imgs = ((e.content ?? []) as { kind?: string }[]).filter((p) => p.kind === "image").length;
+      // image part 图痕（M4-2.5 T5）：回显不零痕——[图片] 标记随 user 行（纯图消息也有一行）
+      const line = `${text}${imgs > 0 ? `${text !== "" ? " " : ""}[图片]${imgs > 1 ? `×${imgs}` : ""}` : ""}`;
+      if (line !== "") out.push(`> ${cap(line)}`);
     } else if (e.type === "assistant/message") {
       const text = textBlocks(e);
       if (text !== "") out.push(renderMarkdown(cap(text)), ""); // M4-2 T13：回显面 markdown 第 1 层（流式期间原样）

@@ -123,7 +123,7 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     const requestIdx = all.findIndex((e) => e.type === "request/header");
     expect(steeringIdx).toBeGreaterThanOrEqual(0);
     expect(steeringIdx).toBeLessThan(requestIdx);
-    expect(provider.requests[0]!.messages.some((m) => m.role === "user" && m.content[0]!.text === "记得喝水")).toBe(true);
+    expect(provider.requests[0]!.messages.some((m) => m.role === "user" && (m.content[0] as { text?: string }).text === "记得喝水")).toBe(true); // M4-2.5 T5 过账：ContentPart 联合扩 image——text 经窄化断言
   });
 
   it("预中止的 signal → turn/end{kind:interrupted}，不发请求", async () => {

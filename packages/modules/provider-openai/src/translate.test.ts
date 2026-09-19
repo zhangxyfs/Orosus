@@ -78,3 +78,22 @@ describe("finish_reason 映射（决策点 3）", () => {
     expect(cf).toMatchObject({ type: "finish", kind: "error" });
   });
 });
+
+// M4-2.5 T5：五家内置 provider 同款图片映射钉（openai 线缆）
+const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+const { tmpdir } = await import("node:os");
+const { join } = await import("node:path");
+type MP5 = import("@orosus/contracts/provider").ModelMessage;
+describe("toOpenAIMessages 图片映射（M4-2.5 T5 五家同款）", () => {
+  it("image part → content 数组 + image_url data URL", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-t5g-"));
+    const p = join(dir, "shot.png");
+    writeFileSync(p, Buffer.from([3, 3]));
+    const msg: MP5 = { role: "user", content: [{ kind: "image", path: p, mimeType: "image/png" }] };
+    const out = toOpenAIMessages("", [msg]) as Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+    expect(Array.isArray(out[0]!.content)).toBe(true);
+    expect(out[0]!.content[0]!.type).toBe("image_url");
+    expect(out[0]!.content[0]!.image_url!.url.startsWith("data:image/png;base64,")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

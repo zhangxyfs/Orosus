@@ -8,7 +8,11 @@ export type Chunk =
   | { type: "usage"; input: number; output: number }
   | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string; errorCode?: string };
 
-export type ContentPart = { kind: "text"; text: string };
+/** 内容块（M4-2.5 T5 扩 image 引用形态）：text 直存；image 只存路径——日志不吃 base64 4/3 膨胀，
+ *  请求期由 provider 翻译层读文件转 base64（pi 两段式同款）；文件缺失诚实降级为文本占位。 */
+export type ContentPart =
+  | { kind: "text"; text: string }
+  | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" };
 
 /** convertToLlm 投影产出的模型消息（日志投影 → 模型消息，§6.1 铁律）。 */
 export type ModelMessage =

@@ -25,6 +25,7 @@ export function estimateTokens(messages: ModelMessage[]): number {
   for (const m of messages) {
     for (const p of "content" in m ? m.content : []) { // toolResult 角色无 content 字段
       if (p.kind === "text") tokens += textTokens(p.text);
+      else tokens += 1000; // image 粗估（M4-2.5 T5 设计空白）：阈值判定启发式，精确 vision 计费无契约面——留待真实账单校准
     }
     if (m.role === "assistant" && m.toolCalls !== undefined) {
       tokens += m.toolCalls.reduce((n, tc) => n + textTokens(JSON.stringify(tc.args ?? {})), 0);

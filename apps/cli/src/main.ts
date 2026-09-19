@@ -14,7 +14,7 @@ import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
-import { pasteImage, withImageRef } from "./paste.ts";
+import { pasteImage, imagesFor } from "./paste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
@@ -301,11 +301,11 @@ if (args.print === undefined) try {
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
       if (text === "/help") { console.log(HELP_TEXT); continue; }
-      // /paste（M4-2 T10，别名 /image）：剪贴板图存临时文件，随下一条消息以路径引用（真实喂图 V.2）
+      // /paste（M4-2 T10，别名 /image；M4-2.5 T5 起真实喂图）：剪贴板图存临时文件，随下一条消息以 image part 发给模型
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
         if (img === undefined) { console.log("（剪贴板中没有图片——截图后重试，或检查终端权限）"); continue; }
-        console.log(`[已粘贴图片: ${basename(img.file)}]——将随下一条消息发送（M4-2 以文件路径随消息；模型直接看图属 V.2）`);
+        console.log(`[已粘贴图片: ${basename(img.file)}]——将随下一条消息发送（需 vision 模型）`);
         pendingImage = img.file;
         continue;
       }
@@ -314,7 +314,7 @@ if (args.print === undefined) try {
         const { text: cleaned, attachments } = resolveAtRefs(text, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-        const out = await h.prompt(withImageRef(withAt, pendingImage)); // /paste 挂起的图随本条消息发出
+        const out = await h.prompt(withAt, imagesFor(pendingImage)); // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
         pendingImage = undefined;
         if (out !== undefined) console.log(out);
       } catch (err) {

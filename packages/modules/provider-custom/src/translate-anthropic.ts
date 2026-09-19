@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
 
 /** 跨事件的可变解析状态（每条流一份）。 */
@@ -83,7 +84,15 @@ export function toAnthropicMessages(messages: ModelMessage[]): ApiMessage[] {
       continue;
     }
     // 空 text block 会被 Anthropic API 拒绝（纯工具调用 turn 会物化 text 为 "" 的 assistant/message）——在此过滤
-    const content: ApiBlock[] = m.content.filter((p) => p.text !== "").map((p) => ({ type: "text", text: p.text }));
+    // M4-2.5 T5：image part → base64 source block（请求期读文件；缺失诚实降级 text 占位——不发坏请求）
+    const content: ApiBlock[] = m.content.flatMap((p): ApiBlock[] => {
+      if (p.kind === "text") return p.text !== "" ? [{ type: "text", text: p.text }] : [];
+      try {
+        return [{ type: "image", source: { type: "base64", media_type: p.mimeType, data: readFileSync(p.path).toString("base64") } }];
+      } catch {
+        return [{ type: "text", text: `[图片文件缺失：${p.path}]` }];
+      }
+    });
     if (m.role === "assistant" && m.toolCalls) {
       for (const tc of m.toolCalls) content.push({ type: "tool_use", id: tc.callId, name: tc.name, input: tc.args });
     }

@@ -1,4 +1,22 @@
-import type { Chunk, ModelMessage, ToolSpec } from "@orosus/contracts/provider";
+import { readFileSync } from "node:fs";
+import type { Chunk, ContentPart, ModelMessage, ToolSpec } from "@orosus/contracts/provider";
+
+/** 含图消息判定与 part 映射（M4-2.5 T5——openai 线缆五处同款）：image → image_url data URL（请求期读文件），
+ *  文件缺失诚实降级 text 占位（不发坏请求）。纯文本消息保持字符串 join（端点兼容最稳）。 */
+function imageAwareContent(parts: ContentPart[]): string | Array<Record<string, unknown>> {
+  if (!parts.some((p) => p.kind === "image")) {
+    return parts.filter((p) => p.kind === "text" && p.text !== "").map((p) => (p as { text: string }).text).join("");
+  }
+  return parts.map((p) => {
+    if (p.kind === "text") return { type: "text", text: p.text };
+    try {
+      const b64 = readFileSync(p.path).toString("base64");
+      return { type: "image_url", image_url: { url: `data:${p.mimeType};base64,${b64}` } };
+    } catch {
+      return { type: "text", text: `[图片文件缺失：${p.path}]` };
+    }
+  });
+}
 
 /** OpenAI 流式解析状态（每条流一份）：tool_calls 分片按 index 聚合的 callId 映射。 */
 export interface OaiStreamState {
@@ -16,8 +34,8 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[]): ApiM
       out.push({ role: "tool", tool_call_id: m.callId, content: m.output });
       continue;
     }
-    const text = m.content.filter((p) => p.text !== "").map((p) => p.text).join("");
-    const msg: ApiMessage = { role: m.role, ...(text !== "" ? { content: text } : {}) };
+    const content = imageAwareContent(m.content);
+    const msg: ApiMessage = { role: m.role, ...(content !== "" ? { content } : {}) };
     if (m.role === "assistant" && m.toolCalls) {
       msg.tool_calls = m.toolCalls.map((tc) => ({
         id: tc.callId,

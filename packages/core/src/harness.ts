@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
-import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
+import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore, sumUsage } from "./session/jsonl.ts";
 import { SqliteSessionStore } from "./session/sqlite.ts";
@@ -17,6 +17,15 @@ import { loadTrustStore, checkTrust } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
+
+/** 扩展名 → MIME（M4-2.5 T5）：/paste 产物即 png；未知缺省 image/png。 */
+function imageMimeOf(path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" {
+  const ext = path.toLowerCase().split(".").at(-1) ?? "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return "image/png";
+}
 
 export interface HarnessOptions {
   modules?: ModuleDefinition[];
@@ -49,7 +58,7 @@ export interface HarnessOptions {
 }
 
 export interface Harness {
-  prompt(text: string): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined
+  prompt(text: string, opts?: { images?: string[] | undefined }): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined。images = /paste 挂起图（M4-2.5 T5）
   cancel(): void;
   /** 当前会话 id（/fork 等宿主侧会话操作的消费面，D41/T6）。 */
   readonly sessionId: string;
@@ -487,7 +496,7 @@ session: ${store.sessionId}
   const harnessImpl: Harness = {
     sessionId: store.sessionId,
 
-    async prompt(text) {
+    async prompt(text, opts) {
       if (closed) throw new Error("harness 已关闭");
       if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
       // 命令路由（D38 三层：CLI 拦截在宿主侧；此处内建表 > 别名 > 模块注册）。命令不触发 agentLoop、不落会话日志
@@ -527,7 +536,12 @@ session: ${store.sessionId}
         })();
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
         await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
-        await store.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text }] });
+        // user/message content 构造（M4-2.5 T5）：text part 在前、image part 引用形态在后（日志只存路径）
+        const content: ContentPart[] = [
+          ...(text !== "" ? [{ kind: "text", text } as const] : []),
+          ...(opts?.images ?? []).map((p) => ({ kind: "image" as const, path: p, mimeType: imageMimeOf(p) })),
+        ];
+        await store.append(LOG_TYPES.userMessage, { content: content.length > 0 ? content : [{ kind: "text", text: "" }] });
         try {
         let lastTurnEvent: SessionEvent | undefined;
         for await (const e of agentLoop({

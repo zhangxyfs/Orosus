@@ -16,14 +16,15 @@ export function isMeaningfulImage(size: number): boolean {
   return size > 100;
 }
 
-/** pendingImage 附着（纯函数——main 接线一行消费，可测）。 */
-export function withImageRef(text: string, image: string | undefined): string {
-  return image === undefined ? text : `${text}\n[图片: ${image}]`;
+/** pendingImage → prompt images opts（纯函数——main 接线一行消费，可测；M4-2.5 T5 装配锚，withImageRef 同位）。
+ *  返回 undefined 表示无挂起图——prompt 第二参可省。 */
+export function imagesFor(pendingImage: string | undefined): { images: string[] } | undefined {
+  return pendingImage === undefined ? undefined : { images: [pendingImage] };
 }
 
-/** 从系统剪贴板读取图片（M4-2 T10）。
+/** 从系统剪贴板读取图片（M4-2 T10；M4-2.5 T5 起随消息真实喂图）。
  *  返回保存的 PNG 文件路径；剪贴板无图返回 undefined。
- *  效力边界见方案任务头部：M4-2 = 文件 + 路径引用；真实喂图 V.2（ContentPart 无 image 形态）。 */
+ *  路径以 image part 进 user/message（日志存路径、请求期翻译层转 base64）。 */
 export async function pasteImage(): Promise<{ file: string } | undefined> {
   const tmp = join(homedir(), ".orosus", "tmp", `paste-${Date.now()}.png`);
   mkdirSync(dirname(tmp), { recursive: true });

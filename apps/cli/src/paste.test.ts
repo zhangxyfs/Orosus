@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { psCommandFor, isMeaningfulImage, withImageRef } from "./paste.ts";
+import { psCommandFor, isMeaningfulImage, imagesFor } from "./paste.ts";
 
-describe("图片粘贴（M4-2 T10）", () => {
+describe("图片粘贴（M4-2 T10；M4-2.5 T5 升真实附着）", () => {
   it("① psCommandFor + isMeaningfulImage——PS 参数正确；≤100 字节无效（空文件防御）", () => {
     const args = psCommandFor("C:\\Users\\x\\.orosus\\tmp\\paste-1.png");
     expect(args.join(" ")).toContain("Get-Clipboard -Format Image");
@@ -11,9 +11,8 @@ describe("图片粘贴（M4-2 T10）", () => {
     expect(isMeaningfulImage(4096)).toBe(true);
   });
 
-  it("② withImageRef——pendingImage 附着到下一条消息文本；无图原样", () => {
-    expect(withImageRef("这是什么？", "/x/.orosus/tmp/paste-1.png"))
-      .toBe("这是什么？\n[图片: /x/.orosus/tmp/paste-1.png]");
-    expect(withImageRef("普通消息", undefined)).toBe("普通消息");
+  it("② imagesFor——pendingImage 构造 prompt images opts；无图 undefined（M4-2.5 T5 装配锚，1:1 换 withImageRef 例）", () => {
+    expect(imagesFor("/x/.orosus/tmp/paste-1.png")).toEqual({ images: ["/x/.orosus/tmp/paste-1.png"] });
+    expect(imagesFor(undefined)).toBeUndefined();
   });
 });

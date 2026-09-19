@@ -125,3 +125,16 @@ describe("压缩点渲染可见（M4-2.5 T4——压缩调研 P2：实时+回显
     expect(lines.some((l) => l.includes("已压缩") && l.includes("/summary"))).toBe(true);
   });
 });
+
+describe("回显图痕（M4-2.5 T5——image part 在 renderHistoryLines 可见）", () => {
+  it("含 image part 的 user/message → [图片] 标记行（resume 回显不零痕）", () => {
+    const lines = renderHistoryLines([
+      event("user/message", { content: [{ kind: "text", text: "这是什么" }, { kind: "image", path: "C:/tmp/p.png", mimeType: "image/png" }] }),
+    ]);
+    expect(lines.some((l) => l.includes("这是什么") && l.includes("[图片]"))).toBe(true);
+    const imgOnly = renderHistoryLines([
+      event("user/message", { content: [{ kind: "image", path: "C:/tmp/q.png", mimeType: "image/png" }] }),
+    ]);
+    expect(imgOnly.some((l) => l.includes("[图片]"))).toBe(true);
+  });
+});

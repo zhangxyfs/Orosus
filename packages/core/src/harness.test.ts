@@ -815,3 +815,24 @@ describe("/summary 内建命令（M4-2.5 T4——压缩调研 P2：摘要可见�
     await h.close();
   });
 });
+
+describe("prompt images（M4-2.5 T5——/paste 图进模型上下文，V.2 销账）", () => {
+  it("⑦ prompt(text, {images}) → user/message 事件 content 含 image part（path 原样）", async () => {
+    const h = await makeHarness();
+    const out = await h.prompt("看图", { images: ["C:/tmp/paste-1.png"] });
+    expect(out).toBeUndefined(); // 普通 turn 返回 undefined
+    const ev = (await h.history()).find((e) => e.type === "user/message") as unknown as { content: Array<{ kind: string; path?: string; text?: string; mimeType?: string }> };
+    expect(ev.content[0]).toEqual({ kind: "text", text: "看图" });
+    expect(ev.content[1]).toEqual({ kind: "image", path: "C:/tmp/paste-1.png", mimeType: "image/png" });
+    await h.close();
+  });
+
+  it("⑧ deriveMessages 投影透传（下一轮请求 messages 含 image part）", async () => {
+    const { deriveMessages } = await import("./index.ts");
+    const h = await makeHarness();
+    await h.prompt("看图", { images: ["C:/tmp/paste-1.png"] });
+    const msgs = deriveMessages(await h.history());
+    expect((msgs[0] as { content: unknown }).content).toEqual([{ kind: "text", text: "看图" }, { kind: "image", path: "C:/tmp/paste-1.png", mimeType: "image/png" }]);
+    await h.close();
+  });
+});

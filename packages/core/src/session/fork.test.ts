@@ -50,7 +50,7 @@ describe("fork/resume（M3 T6，D41）", () => {
     const own = new JsonlSessionStore({ dir: d, sessionId: sid });
     const headers = (await own.all()).filter((e) => e.type === "session/header");
     expect(headers).toHaveLength(1); // 不落重复 header
-    expect(fp.requests[0]!.messages.map((m) => (m.role === "user" && m.content[0] ? m.content[0].text : ""))).toContain("旧问题");
+    expect(fp.requests[0]!.messages.map((m) => (m.role === "user" && m.content[0] ? (m.content[0] as { text?: string }).text : ""))).toContain("旧问题"); // M4-2.5 T5 过账：同上
     await h.close();
     await own.close();
   });
