@@ -106,6 +106,19 @@ export function sessionCommand(input: string, current: { sessionId: string; last
   return { kind: "none" };
 }
 
+/** 序号选择（B9 走查定案：不选即取消——无需专门取消项）：空输入 = undefined（取消）；
+ *  无效序号重问。ask 注入（readline UI / 测试替身）。 */
+export async function pickSessionNumber(ask: (q: string) => Promise<string>, count: number): Promise<number | undefined> {
+  for (;;) {
+    const ans = (await ask("输入序号恢复（直接回车 = 取消）")).trim();
+    if (ans === "") return undefined;
+    if (/^\d+$/.test(ans)) {
+      const n = Number(ans);
+      if (n >= 1 && n <= count) return n;
+    }
+  }
+}
+
 /** 序号/sid → 会话 id（pick 选中或直达共用）。序号按当前列表（创建时间倒序前 10）；
  *  sid 经双层定位（不限前 10）。 */
 export function resolveTarget(target: string, root: string): string | undefined {

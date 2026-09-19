@@ -91,3 +91,15 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(harnessOptionsFor({ kind: "resume", sessionId: "s_x" })).toEqual({ resume: { sessionId: "s_x" } });
   });
 });
+
+describe("pickSessionNumber（走查定案：不选即取消——专门取消项退役）", () => {
+  it("① 空输入 = 取消（undefined）；② 有效序号返回；③ 无效序号重问直到有效", async () => {
+    const { pickSessionNumber } = await import("./sessions.ts");
+    expect(await pickSessionNumber(async () => "", 3)).toBeUndefined();          // 直接回车 = 取消
+    expect(await pickSessionNumber(async () => " 2 ", 3)).toBe(2);               // 容忍空白
+    const answers = ["abc", "9", "1"];
+    let i = 0;
+    expect(await pickSessionNumber(async () => answers[i++]!, 3)).toBe(1);       // 无效两轮后命中
+    expect(i).toBe(3);
+  });
+});

@@ -5,7 +5,7 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { formatSessions, harnessOptionsFor, listSessions, readTitle, relativeTime, resolveTarget, sessionCommand } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
@@ -236,11 +236,12 @@ try {
         if (!process.stdin.isTTY) { console.log(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); continue; }
         const items = listSessions(sessionsRoot);
         if (items.length === 0) { console.log("（暂无会话——发送第一条消息即创建）"); continue; }
-        const options = items.map((s) => `${s.title} · ${relativeTime(s.createdAtMs)}${s.id === h.sessionId ? "（当前）" : ""}`); // choose 自带序号——标签不再重复编号（走查：1. 1. run）
-        const picked = await commandUi.choose("选择要恢复的会话（输入序号）", [...options, "取消"]);
-        const idx = options.indexOf(picked);
-        if (idx < 0) continue;
-        await switchTo(items[idx]!.id);
+        // 走查定案（2026-09-19）：不选即取消——菜单自绘（序号/高亮/相对时间），ask 循环选号，
+        // 空输入 = 取消（专门「取消」项退役——占序号位且多一步）
+        console.log(formatSessions(sessionsRoot, h.sessionId));
+        const n = await pickSessionNumber((q) => commandUi.ask(q), items.length);
+        if (n === undefined) continue;
+        await switchTo(items[n - 1]!.id);
         continue sessionLoop; // 换 harness 后重挂横幅与渲染
       }
       if (directive.kind === "resume") {
