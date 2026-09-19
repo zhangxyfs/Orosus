@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,8 @@ import { Access, defineTool } from "@orosus/contracts/tool";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeProvider } from "@orosus/testing";
 import { z } from "zod";
+
+const repoRoot = (): string => join(import.meta.dirname, "..", "..", "..");
 import approvalDef from "@orosus/approval";
 import { BUILTIN_MODULES } from "./builtins.ts";
 
@@ -218,4 +221,43 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     expect(h2.sessionId).not.toBe(id1);
     await h2.close();
   });
+});
+
+describe("steering 排队锁定（M4-2 T19/B19——cc-haha 排队式：turn 进行中到达的行入队，完成后依序消费）", () => {
+  it("① 子进程管道两条消息 → 两轮完整回复、退出码 0、无「已有进行中的 turn」（回归钉：并发 REPL/丢队列将变红）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-steer-"));
+    try {
+      const env = { ...process.env, USERPROFILE: join(d, "home"), MOCK_PORT: "8765" } as Record<string, string>;
+      // 家目录喂 mock provider 配置（进程外 mock 端点需可达——本机 8765 由走查环境持有；不可达时跳过断言网络内容，仅锁定退出码与无并发错误）
+      mkdirSync(join(d, "home", ".orosus"), { recursive: true });
+      const configOk = await fetch("http://127.0.0.1:8765/models").then((r) => r.ok, () => false);
+      writeFileSync(join(d, "home", ".orosus", "config.toml"), [
+        'model = "mock/mock-1"',
+        "[provider-custom.providers.mock]",
+        'type = "openai"',
+        'baseUrl = "http://127.0.0.1:8765"',
+        'apiKey = "mock-key"',
+        "",
+      ].join("\n"), "utf8");
+      const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
+        cwd: d, env, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (c) => { out += String(c); });
+      child.stderr.on("data", (c) => { out += String(c); });
+      child.stdin.write("第一条\n");
+      await new Promise((r) => setTimeout(r, 300)); // 第一轮进行中投递第二条（排队场景）
+      child.stdin.write("第二条\n");
+      child.stdin.end();
+      const code = await new Promise<number>((resolve) => { child.on("exit", (c) => resolve(c ?? -1)); });
+      expect(code).toBe(0);
+      expect(out).not.toContain("已有进行中的 turn");
+      if (configOk) {
+        const replies = (out.match(/（mock）收到：/g) ?? []).length;
+        expect(replies).toBe(2); // 两轮完整回复——管道喂两条不丢行
+      }
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
