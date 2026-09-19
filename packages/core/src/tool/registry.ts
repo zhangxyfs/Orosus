@@ -9,6 +9,9 @@ import { createLogger, type DiagSink } from "../diag/logger.ts";
 
 /** 单条工具输出上限（字节按 length 近似），超出截断 + 溢写 spill（§6.3）。 */
 export const OUTPUT_LIMIT = 32768;
+/** 头尾双保留配比（M4-2.5 T1，3:1）：头保上下文、尾保报错摘要——两段相加 = OUTPUT_LIMIT。 */
+export const HEAD_KEEP = 24576;
+export const TAIL_KEEP = 8192;
 
 /** 阶段一产物（D40）：声明 + 执行闭包 + 调度/审批所需的判定件。
  *  ok:false = 墓碑/未知工具/参数校验失败/resolveExecution 抛错的带内短路——execute 直落结果、不触发 waterfall。 */
@@ -164,9 +167,13 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         const path = join(opts.spillDir, `spill-${planned.callId}.txt`);
         writeFileSync(path, result.output, { mode: 0o600 });
         const bytes = result.output.length;
+        // 头尾双保留 3:1（M4-2.5 T1）：头 24576 保调用上下文、尾 8192 保报错摘要（命令报错常在尾部），
+        // 总量不变；中缝提示溢写全文位置。kimi 4:1 同思路，本批略偏头。
+        const head = result.output.slice(0, HEAD_KEEP);
+        const tail = result.output.slice(-TAIL_KEEP);
         result = {
           ...result,
-          output: result.output.slice(0, OUTPUT_LIMIT) + `\n…[输出截断，全文 ${bytes}B 已溢写 ${path}]`,
+          output: `${head}\n[…中间截断 ${bytes - HEAD_KEEP - TAIL_KEEP} 字符——全文已溢写 ${path}…]\n${tail}`,
           truncated: true,
           spill: { path, bytes },
         };

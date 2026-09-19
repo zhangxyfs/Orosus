@@ -167,3 +167,37 @@ describe("工具注册表（§6.3）", () => {
     expect(reg.list()).toHaveLength(0);
   });
 });
+
+describe("工具输出截断头尾双保留 3:1（M4-2.5 T1——日志调研 P3）", () => {
+  const runBig = async (out: string) => {
+    const { reg } = setup();
+    reg.register(echo("m__big", out), "m");
+    return reg.run({ id: "c1", name: "m__big", args: {} }, { signal: new AbortController().signal });
+  };
+
+  it("① 超限输出 → 头部与尾部都在、中缝有溢写提示（报错尾不被截掉）", async () => {
+    const mid = "y".repeat(40_000 - "HEADMARK".length - "TAILMARK".length);
+    const r = await runBig(`HEADMARK${mid}TAILMARK`);
+    expect(r.truncated).toBe(true);
+    expect(r.spill).toBeDefined();
+    expect(r.spill!.bytes).toBe(40_000);
+    expect(readFileSync(r.spill!.path, "utf8")).toBe(`HEADMARK${mid}TAILMARK`); // spill 含全文
+    expect(r.output.startsWith("HEADMARK")).toBe(true); // 头部保留
+    expect(r.output.endsWith("TAILMARK")).toBe(true); // 尾部保留（修复前被截掉）
+    expect(r.output).toContain("中间截断"); // 中缝提示
+    expect(r.output).toContain(r.spill!.path);
+  });
+
+  it("② 未超限输出 → 原样（零改动路径回归）", async () => {
+    const r = await runBig("x".repeat(1024));
+    expect(r.truncated).toBeUndefined();
+    expect(r.spill).toBeUndefined();
+    expect(r.output).toBe("x".repeat(1024));
+  });
+
+  it("③ 头 24576 + 尾 8192——两段相加不超信封（32768+提示行）", async () => {
+    const r = await runBig("z".repeat(OUTPUT_LIMIT + 1)); // 恰好超限 1 字符
+    expect(r.output).toContain("中间截断 1 字符");
+    expect(r.output.length).toBeLessThanOrEqual(OUTPUT_LIMIT + 100); // 头+尾+提示行不超信封
+  });
+});
