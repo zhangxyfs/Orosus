@@ -794,3 +794,24 @@ describe("/context 余量（M4-2 T20/B20——窗口感知 + usage 锚点零新�
     await h.close();
   });
 });
+
+describe("/summary 内建命令（M4-2.5 T4——压缩调研 P2：摘要可见性）", () => {
+  it("① 有压缩 → 输出摘要全文与次数/压前缀条数", async () => {
+    const store = new InMemorySessionStore();
+    const h = await makeHarness({ store });
+    await store.append("turn/compaction", { summary: "这是第一份摘要", keepFrom: 4, droppedCount: 4 });
+    const out = await h.prompt("/summary");
+    expect(out).toContain("这是第一份摘要");
+    expect(out).toContain("第 1 次");
+    expect(out).toContain("压前缀 4 条");
+    await h.close();
+  });
+
+  it("② 无压缩 → 明示（含 /compact 指引）", async () => {
+    const h = await makeHarness();
+    const out = await h.prompt("/summary");
+    expect(out).toContain("尚未压缩过");
+    expect(out).toContain("/compact");
+    await h.close();
+  });
+});

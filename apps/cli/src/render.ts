@@ -51,7 +51,7 @@ export function renderChunk(c: Chunk, state: RenderState): string {
 export function renderEvent(e: SessionEvent, state: RenderState): string {
   if (e.type === "tool/call") return `${closeReasoning(state)}\n[tool] ${String(e.name)} ${JSON.stringify(e.args)}\n`;
   if (e.type === "tool/result") return `[tool ${e.isError === true ? "错误" : "完成"}]\n`;
-  if (e.type === "turn/compaction") return `\n[已压缩：前 ${Number(e.droppedCount ?? 0)} 条历史已摘要，完整原文在会话文件中]\n`;
+  if (e.type === "turn/compaction") return `\n[已压缩：前缀 ${Number(e.droppedCount ?? 0)} 条 → 摘要（/summary 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
   return "";
@@ -80,6 +80,9 @@ export function renderHistoryLines(events: SessionEvent[]): string[] {
       if (text !== "") out.push(renderMarkdown(cap(text)), ""); // M4-2 T13：回显面 markdown 第 1 层（流式期间原样）
     } else if (e.type === "tool/call") {
       out.push(`  [tool] ${String(e.name)}`);
+    } else if (e.type === "turn/compaction") {
+      // 压缩点回显（M4-2.5 T4——压缩调研 §4.2：resume 后压缩点完全隐形是六家独一份的偏差）
+      out.push(`  [已压缩：前缀 ${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条 → 摘要（/summary 查看）]`);
     }
   }
   return out;

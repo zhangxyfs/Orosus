@@ -425,6 +425,13 @@ session: ${store.sessionId}
       const pct = contextWindow !== undefined ? Math.round((used / contextWindow) * 100) : undefined;
       return `模型: ${modelNow}\n窗口: ${contextWindow !== undefined ? `${contextWindow} tokens` : "未知（/provider import --model 可写入）"}\n已用: ~${used} tokens${pct !== undefined ? `（${pct}%）` : ""}`;
     }],
+    ["/summary", async () => {
+      // 压缩摘要查看口（M4-2.5 T4——压缩调研 P2：六家独一份的「摘要不可见」补齐）——直读最近 turn/compaction 事件
+      const compactions = (await store.all()).filter((e) => e.type === "turn/compaction");
+      const last = compactions.at(-1) as { summary?: string; droppedCount?: number } | undefined;
+      if (last === undefined) return "本会话尚未压缩过——上下文增长到阈值会自动压缩，或随时 /compact 手动压缩";
+      return `[压缩摘要（本会话第 ${compactions.length} 次，压前缀 ${last.droppedCount ?? "?"} 条）]\n\n${String(last.summary ?? "")}`;
+    }],
   ]);
 
   const resolveProvider = (): { stream: StreamFn; model: string } => {

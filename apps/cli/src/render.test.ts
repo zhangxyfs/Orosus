@@ -107,3 +107,21 @@ describe("回显分页（走查：巨量历史全量回显刷爆终端）", () =
     expect(lines[0]).toContain("完整原文在会话文件");
   });
 });
+
+describe("压缩点渲染可见（M4-2.5 T4——压缩调研 P2：实时+回显两处）", () => {
+  it("① renderEvent turn/compaction → 实时一行，含 /summary 指针", () => {
+    const st = createRenderState();
+    const out = renderEvent(event("turn/compaction", { summary: "s", keepFrom: 4, droppedCount: 7 }), st);
+    expect(out).toContain("已压缩");
+    expect(out).toContain("7");
+    expect(out).toContain("/summary");
+  });
+
+  it("② renderHistoryLines turn/compaction → 回显一行（resume 后压缩点不再隐形）", () => {
+    const lines = renderHistoryLines([
+      event("user/message", { content: [{ kind: "text", text: "问" }] }),
+      event("turn/compaction", { summary: "s", keepFrom: 1, droppedCount: 3 }),
+    ]);
+    expect(lines.some((l) => l.includes("已压缩") && l.includes("/summary"))).toBe(true);
+  });
+});

@@ -5,7 +5,7 @@ export function commandCompleter(line: string): [string[], string] {
   if (!line.startsWith("/")) return [[], line];
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/quit", "/exit", "/q",
-    "/model", "/status", "/usage", "/reload", "/context", "/paste", "/help",
+    "/model", "/status", "/usage", "/reload", "/context", "/paste", "/summary", "/help",
     "/compact", "/permission", "/yolo",
   ];
   return [all.filter((c) => c.startsWith(line)), line];
@@ -25,6 +25,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /reload     重新加载模块配置
   /context    显示上下文窗口用量
   /paste      粘贴剪贴板图片
+  /summary    查看当前生效的压缩摘要
   /help       显示此帮助
 
 模块命令：

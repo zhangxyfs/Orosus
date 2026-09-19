@@ -124,7 +124,7 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     });
     await h.prompt("一");
     await h.prompt("二");
-    expect(render.buf.join("")).toContain("[已压缩：前 2 条历史已摘要，完整原文在会话文件中]");
+    expect(render.buf.join("")).toContain("[已压缩：前缀 2 条 → 摘要（/summary 查看）]"); // M4-2.5 T4 过账：文案补 /summary 指针
     await h.close();
   });
 
