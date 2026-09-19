@@ -12,6 +12,7 @@ import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { attachRender as attachRenderTo } from "./render.ts";
 import { banner } from "./banner.ts";
 import { realReadModel, startupGate } from "./startup.ts";
+import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -25,6 +26,10 @@ import { realReadModel, startupGate } from "./startup.ts";
       env: process.env,
       out: (l) => console.log(l),
     }));
+  }
+  // `orosus sessions prune`（M4-1 T2/D47）：显式清理——缺省 dry-run、--apply 才删、不做启动自动 GC
+  if (isSessionsSubcommand(argv)) {
+    process.exit(await runPruneSubcommand(argv, { out: (l) => console.log(l) }));
   }
   if (isModuleSubcommand(argv)) {
     const discovered = await discoverModules({
