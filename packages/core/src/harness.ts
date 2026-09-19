@@ -53,6 +53,9 @@ export interface Harness {
   readonly sessionId: string;
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
   events(): AsyncIterable<SessionEvent>;
+  /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
+   *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
+  liveChunks(): AsyncIterable<Chunk>;
   graph(): ModuleGraph;
   reload(): Promise<ReloadReport>;  // quiesce 后执行（§5.5/T15）
   close(): Promise<void>;
@@ -81,6 +84,36 @@ class Channel<T> {
       }
       if (this.done) return;
       const r = await new Promise<IteratorResult<T>>((res) => this.waiters.push(res));
+      if (r.done) return;
+      yield r.value;
+    }
+  }
+}
+
+/** 实时旁路通道（M4-1 T4/D45）：内存 Chunk 通道——零缓冲多订阅者；无等待者的 push 直接丢弃
+ *  （断连即弃、零积压——实时显示丢帧可接受，与 §6.7「UI 可见性不构成持久化承诺」同向；
+ *  事实源是完成事件，不是这里）。 */
+class LiveChannel {
+  private waiters = new Set<(r: IteratorResult<Chunk>) => void>();
+  private closed = false;
+  push(c: Chunk): void {
+    // 删除的恰为当前遍历元素（Set 迭代安全），无需拷贝快照
+    for (const w of this.waiters) {
+      this.waiters.delete(w);
+      w({ value: c, done: false });
+    }
+  }
+  close(): void {
+    this.closed = true;
+    for (const w of this.waiters) {
+      this.waiters.delete(w);
+      w({ value: undefined as never, done: true });
+    }
+  }
+  async *iterate(): AsyncGenerator<Chunk> {
+    for (;;) {
+      if (this.closed) return;
+      const r = await new Promise<IteratorResult<Chunk>>((res) => this.waiters.add(res));
       if (r.done) return;
       yield r.value;
     }
@@ -156,6 +189,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     baseStore = makeStore();
   }
   const channel = new Channel<SessionEvent>();
+  const live = new LiveChannel(); // 实时旁路（T4/D45）：Chunk 级内存投递，断连即弃
   const store = forwardingStore(baseStore, channel);
 
   // 窗口语义（M3 补强空白 §5）：核心顶层 contextWindow——正整数才生效；非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）
@@ -427,6 +461,7 @@ session: ${store.sessionId}
             session: store, bus: graph.bus, tools: graph.tools,
             provider: trackedStream, model, system: graph.promptSections(),
             signal: controller.signal, sink,
+            livePush: (c) => live.push(c), // 双投并存（T4）：落日志（assistantChunk）+ 旁路——T5 断流后仅旁路
           })) {
             // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
           }
@@ -447,6 +482,20 @@ session: ${store.sessionId}
 
     events() {
       return channel.iterate();
+    },
+
+    liveChunks() {
+      // §11.9 纪律（T4）：订阅/断开记 klog——实时通道可观测性（无订阅者期间 push 全弃属设计行为）
+      const klog = createLogger(sink, "kernel");
+      const gen = live.iterate();
+      return (async function* () {
+        klog.debug("kernel.live.subscribe", "liveChunks 订阅", { sess: store.sessionId });
+        try {
+          yield* gen;
+        } finally {
+          klog.debug("kernel.live.disconnect", "liveChunks 断开", { sess: store.sessionId });
+        }
+      })();
     },
 
     graph() {
@@ -547,6 +596,7 @@ session: ${store.sessionId}
       await currentTurn?.done.catch(() => undefined);
       await graph.dispose();
       await store.close();
+      live.close();
       await sink.flush();
       await sink.close();
       channel.close();

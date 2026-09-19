@@ -17,6 +17,9 @@ export interface LoopOptions {
   system: string;
   signal: AbortSignal;
   sink: DiagSink;
+  /** 实时旁路（M4-1 T4/D45）：流式 Chunk 的内存投递口（harness liveChunks 通道）。
+   *  T4 并存态：assistantChunk 照落日志 + livePush 双投；T5 断流后仅剩 livePush。 */
+  livePush?: (chunk: Chunk) => void;
 }
 
 interface PendingToolCall {
@@ -134,6 +137,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     try {
       for await (const chunk of provider({ model, system, messages, tools: tools.specs(), signal })) {
         yield* emit(LOG_TYPES.assistantChunk, { chunk });
+        opts.livePush?.(chunk); // 双投并存（T4/D45）：日志投影 + 实时旁路
         if (signal.aborted) {
           finish = { type: "finish", kind: "aborted" };
           break;

@@ -530,6 +530,68 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
   });
 });
 
+describe("liveChunks 实时旁路通道（M4-1 T4/D45——双投并存态）", () => {
+  const richScript: Chunk[][] = [[
+    { type: "reasoning/delta", text: "思考" },
+    { type: "text/delta", text: "答" },
+    { type: "usage", input: 3, output: 1 },
+    { type: "finish", kind: "stop" },
+  ]];
+  const mkT4 = () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t4-"));
+    return createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", richScript)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+  };
+
+  it("① 订阅者按序收到 reasoning/text/usage/finish（与 provider 脚本同序；close 结束迭代）", async () => {
+    const h = await mkT4();
+    const got: string[] = [];
+    const collect = (async () => { for await (const c of h.liveChunks()) got.push(c.type); })();
+    await h.prompt("hi");
+    await h.close();
+    await collect;
+    expect(got).toEqual(["reasoning/delta", "text/delta", "usage", "finish"]);
+  });
+
+  it("② 并存态：events() 仍含 assistant/chunk（日志投影不受旁路影响——T5 断流前的安全网）", async () => {
+    const h = await mkT4();
+    const types: string[] = [];
+    const collect = (async () => {
+      for await (const e of h.events()) {
+        types.push(e.type);
+        if (e.type === "turn/end") break;
+      }
+    })();
+    await h.prompt("hi");
+    await collect;
+    expect(types.filter((t) => t === "assistant/chunk")).toHaveLength(4);
+    expect(types).toContain("assistant/message");
+    await h.close();
+  });
+
+  it("③ 断连即弃：中途断开的订阅者不补帧（无积压）；新订阅从当下起、无重放", async () => {
+    const h = await mkT4();
+    const it = h.liveChunks()[Symbol.asyncIterator]();
+    const p1 = h.prompt("第一轮");
+    const first = await it.next();
+    expect(first.value.type).toBe("reasoning/delta");
+    await it.return!(); // 断开——本轮其余 3 chunk 落空即弃
+    await p1;
+    const it2 = h.liveChunks()[Symbol.asyncIterator](); // 新订阅：不重放已过内容
+    const p2 = h.prompt("第二轮");
+    const r2 = await it2.next();
+    expect(r2.value.type).toBe("reasoning/delta"); // 只收到新 turn 首帧
+    await it2.return!();
+    await p2;
+    await h.close();
+  });
+});
+
 describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）", () => {
   // 开工实证修正：计划原前提「onboarding 校验 harness」不成立——向导校验是直接 fetch、startupGate 复用主 harness；
   // 真实垃圾源 = createHarness 构造期急切写 session/header（原 harness.ts:218）——每次 CLI 启动/--dump-modules/引导后未聊即退各留一个文件
