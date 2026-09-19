@@ -6,7 +6,7 @@ export function commandCompleter(line: string): [string[], string] {
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/quit", "/exit", "/q",
     "/model", "/status", "/usage", "/reload", "/context", "/paste", "/help",
-    "/compact", "/permission",
+    "/compact", "/permission", "/yolo",
   ];
   return [all.filter((c) => c.startsWith(line)), line];
 }
@@ -29,6 +29,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
 
 模块命令：
   /compact    手动压缩对话历史
-  /permission 查看或切换审批模式
+  /permission 查看或切换审批模式（rules 子参数看规则清单）
+  /yolo       一键切到从不询问（危险命令仍确认）
 
 提示：输入 / 后按 Tab 补全命令名`;

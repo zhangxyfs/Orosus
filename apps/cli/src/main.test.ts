@@ -121,7 +121,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     await h.prompt("run"); // ask-risky 下本应询问——override 后零询问直通
     await h.close();
     await render;
-    expect(choices).toEqual(["切换权限模式|查看规则清单|取消", "始终询问（ask-always）|需要时询问（ask-risky，默认）|从不询问（危险命令仍确认）"]);
+    expect(choices).toEqual(["始终询问（ask-always）|需要时询问（ask-risky，默认）|从不询问（危险命令仍确认）"]); // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
   });
 
   it("② 出厂 required：activate 抛错的 approval 替身 → createHarness reject（§10 安全护栏 e2e）", async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import def from "./index.ts";
 import type { CommandUi } from "@orosus/contracts/module";
 import { Access } from "@orosus/contracts/tool";
@@ -205,7 +205,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     const h = fakeCtx({ config: { configFile: join(base, "config.toml") } });
     await def.activate(h.ctx);
     const handler = h.commands.get("approval__permission")!;
-    const answers = ["切换权限模式", "始终询问（ask-always）"];
+    const answers = ["始终询问（ask-always）"]; // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
     const ui: CommandUi = {
       ask: async () => { throw new Error("不应 ask"); },
       askSecret: async () => { throw new Error("不应 askSecret"); },
@@ -227,5 +227,55 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     expect(await h.listener(bashPayload("git status"))).toBeUndefined();
     expect(readFileSync(projectFile, "utf8")).toContain('tool = "tool-shell__bash(git *)"'); // 写项目层
     expect(existsSync(userFile)).toBe(false);                                                // 用户层不动（未创建）
+  });
+});
+
+describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜单多余；yolo 一键从不询问）", () => {
+  let base: string;
+  beforeEach(() => { base = mkdtempSync(join(tmpdir(), "orosus-perm-")); });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+  const mkUi = (answers: string[]): { u: CommandUi; asked: string[] } => {
+    const asked: string[] = [];
+    return { asked, u: {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => { throw new Error("不应 askSecret"); },
+      confirm: async () => { throw new Error("不应 confirm"); },
+      choose: async (t: string, items: string[]) => { asked.push(`${t}::${items.join("|")}`); return answers.shift() ?? "取消"; },
+    } };
+  };
+
+  it("① /permission 无参 → 直接三档菜单（无顶级菜单、无规则清单项）", async () => {
+    const h = fakeCtx({ config: { configFile: join(base, "c1.toml"), projectConfigFile: join(base, "no-proj.toml") } });
+    await def.activate(h.ctx);
+    const { u, asked } = mkUi(["始终询问（ask-always）"]);
+    const out = await h.commands.get("approval__permission")!("", u);
+    expect(asked).toHaveLength(1); // 一级直达——不再「切换权限模式」二级跳
+    expect(asked[0]).toContain("当前权限模式：ask-risky");
+    expect(asked[0]).toContain("从不询问");
+    expect(asked[0]).not.toContain("查看规则清单");
+    expect(out).toContain("ask-always");
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
+    expect(readFileSync(join(base, "c1.toml"), "utf8")).toContain('mode = "ask-always"');
+  });
+
+  it("② /permission rules → 规则清单文本直出（不弹菜单）", async () => {
+    const h = fakeCtx({ config: { rules: [{ effect: "allow", tool: "tool-shell__bash(git *)" }] } });
+    await def.activate(h.ctx);
+    const { u, asked } = mkUi([]);
+    const out = await h.commands.get("approval__permission")!("rules", u);
+    expect(asked).toHaveLength(0); // 零交互
+    expect(out).toContain("tool-shell__bash(git *)");
+    expect(out).toContain("allow");
+  });
+
+  it("③ /yolo（approval__yolo）→ 零交互直接 never + 写盘 + policy 事件", async () => {
+    const h = fakeCtx({ config: { configFile: join(base, "c3.toml"), projectConfigFile: join(base, "no-proj.toml") } });
+    await def.activate(h.ctx);
+    const { u, asked } = mkUi([]);
+    const out = await h.commands.get("approval__yolo")!("", u);
+    expect(asked).toHaveLength(0); // 一键——无菜单
+    expect(out).toContain("never");
+    expect(readFileSync(join(base, "c3.toml"), "utf8")).toContain('mode = "never"');
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "never")).toBe(true);
   });
 });
