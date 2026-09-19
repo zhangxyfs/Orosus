@@ -9,23 +9,26 @@ export interface SessionListItem extends SessionFileEntry {
 }
 
 /** 从会话文件提取标题：最后的 session/label → 首个 user/message 文本截断 → sid（sqlite/无对话）。
- *  文件已是完成事件形态（D45 断流后小文件），逐行读到命中即停。 */
+ *  文件已是完成事件形态（D45 断流后小文件），逐行读到命中即停。
+ *  取「最后」而非首枚：手动 /title 追加的新 label 须覆盖自动标题（M4-2 T0 走查实录——
+ *  首枚短路使 /title 后列表仍显示旧名，单测全绿但真机不可用）。 */
 export function readTitle(file: string, id: string): string {
   if (file.endsWith(".sqlite")) return id;
   try {
     let firstUser: string | undefined;
+    let label: string | undefined;
     for (const line of readFileSync(file, "utf8").split("\n")) {
       if (line === "") continue;
       let e: { type?: string; label?: unknown; content?: unknown };
       try { e = JSON.parse(line) as typeof e; } catch { continue; }
-      if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") return e.label;
+      if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") label = e.label;
       if (firstUser === undefined && e.type === "user/message") {
         const parts = (e.content ?? []) as { kind?: string; text?: string }[];
         const text = parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join("").replace(/\s+/g, " ").trim();
         if (text !== "") firstUser = text.slice(0, 20);
       }
     }
-    return firstUser ?? id;
+    return label ?? firstUser ?? id;
   } catch {
     return id;
   }
@@ -85,7 +88,8 @@ export type SessionDirective =
   | { kind: "new" }
   | { kind: "fork"; parentSessionId: string; atEntryId?: string }
   | { kind: "pick" }
-  | { kind: "resume"; sessionId: string };
+  | { kind: "resume"; sessionId: string }
+  | { kind: "title"; name?: string; target?: string };
 
 /** 退出命令的同义集（用户要求 2026-09-18：/quit = /exit = /q）。 */
 const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
@@ -102,6 +106,15 @@ export function sessionCommand(input: string, current: { sessionId: string; last
   if (m !== null) {
     const arg = m[2];
     return arg === undefined ? { kind: "pick" } : { kind: "resume", sessionId: arg };
+  }
+  const tm = /^\/(title|rename)(?:\s+([\s\S]+))?$/.exec(t);
+  if (tm !== null) {
+    const raw = tm[2]?.trim();
+    if (raw === undefined || raw === "") return { kind: "title" };
+    // 首位纯数字 → target + name；否则全部是 name
+    const sm = /^(\d+)\s+(.+)$/.exec(raw);
+    if (sm !== null) return { kind: "title", ...(sm[1] !== undefined ? { target: sm[1] } : {}), name: sm[2]! };
+    return { kind: "title", name: raw };
   }
   return { kind: "none" };
 }
@@ -128,6 +141,20 @@ export function resolveTarget(target: string, root: string): string | undefined 
     return n >= 1 && n <= list.length ? list[n - 1]!.id : undefined;
   }
   return locateSessionFile(root, target) !== undefined ? target : undefined;
+}
+
+/** /title 命名（M4-2 T0）：当前会话或指定会话追加 session/label。截断 200 字符（kimi 同款）。 */
+export async function setTitle(
+  root: string, currentSid: string, target: string | undefined, name: string,
+): Promise<{ sid: string } | undefined> {
+  const sid = target !== undefined ? (resolveTarget(target, root) ?? currentSid) : currentSid;
+  const loc = locateSessionFile(root, sid);
+  if (loc === undefined) return undefined;
+  const { JsonlSessionStore } = await import("@orosus/core");
+  const store = new JsonlSessionStore({ dir: loc.dir, sessionId: sid });
+  await store.append("session/label", { label: name.slice(0, 200) });
+  await store.close();
+  return { sid };
 }
 
 /** 会话切换的构造参数（外层循环据此建新 harness）。parentDir（T1/D46）：父会话所在目录——

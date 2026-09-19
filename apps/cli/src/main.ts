@@ -5,7 +5,7 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
@@ -243,6 +243,18 @@ try {
         if (n === undefined) continue;
         await switchTo(items[n - 1]!.id);
         continue sessionLoop; // 换 harness 后重挂横幅与渲染
+      }
+      if (directive.kind === "title") {
+        // /title（M4-2 T0）：无参 = 查看当前名；有参 = 追加 session/label（当前或序号/sid 指定会话）
+        if (directive.name === undefined) {
+          const events = await h.history();
+          const label = events.filter((e) => e.type === "session/label").at(-1);
+          console.log(`当前会话：${label !== undefined ? String(label.label) : "（未命名）"}（${h.sessionId}）——/title <名> 命名`);
+        } else {
+          const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name);
+          console.log(r !== undefined ? `[已命名 ${r.sid} → ${directive.name}]` : `[未找到目标会话]`);
+        }
+        continue;
       }
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot);

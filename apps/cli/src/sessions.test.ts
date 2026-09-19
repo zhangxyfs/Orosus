@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listSessions, formatSessions, harnessOptionsFor, relativeTime, resolveTarget, sessionCommand, readTitle } from "./sessions.ts";
@@ -19,6 +19,7 @@ const sessionFile = (root: string, sid: string, lines: string[], bucket?: string
     utimesSync(join(target, `${sid}.jsonl`), t, t);
   }
 };
+const { setTitle } = await import("./sessions.ts");
 
 describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对时间/倒序/当前高亮/无黑话）", () => {
   it("① readTitle 三级：session/label 优先 → 首问文本兜底 → sid 兜底", () => {
@@ -92,6 +93,57 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s_p" }, { parentDir: "/bucket/x" })).toEqual(
       { fork: { parentSessionId: "s_p", parentDir: "/bucket/x" } },
     ); // 装配层钉子（code-review Spec P1）：fork 跨桶定位的 parentDir 透传——拿掉接线必红
+  });
+});
+
+describe("/title 会话手动命名（M4-2 T0/B9 剩余——session/label 预留类型首次消费）", () => {
+  it("① /title 无参 → sessionCommand 返回 {kind:'title'}（无 name/target）", () => {
+    expect(sessionCommand("/title", { sessionId: "s1" })).toEqual({ kind: "title" });
+    expect(sessionCommand("/rename", { sessionId: "s1" })).toEqual({ kind: "title" }); // 别名
+  });
+
+  it("② /title 名 → setTitle 落 session/label（截断 200 字符）", async () => {
+    const root = fresh();
+    sessionFile(root, "s_target", [ev("e1", "session/header")]);
+    const r = await setTitle(root, "s_target", undefined, "我的调试会话");
+    expect(r).toEqual({ sid: "s_target" });
+    const lines = readFileSync(join(root, "s_target.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(lines[1]!)).toMatchObject({ type: "session/label", label: "我的调试会话" });
+    // 截断测试
+    const long = "很长的名字".repeat(50);
+    await setTitle(root, "s_target", undefined, long);
+    const lines2 = readFileSync(join(root, "s_target.jsonl"), "utf8").trim().split("\n");
+    const last = JSON.parse(lines2[lines2.length - 1]!);
+    expect(last.label.length).toBeLessThanOrEqual(200);
+  });
+
+  it("③ /title 2 名 → resolveTarget 定位第二会话追加 label", async () => {
+    const root = fresh();
+    sessionFile(root, "s_first", [ev("e1", "session/header")], undefined, 5); // 旧
+    sessionFile(root, "s_second", [ev("e1", "session/header")]); // 新
+    // listSessions 倒序 → 1=s_second 2=s_first
+    const r = await setTitle(root, "s_current", "2", "指定命名");
+    expect(r).toEqual({ sid: "s_first" }); // 序号 2 = 较旧的 s_first
+    const lines = readFileSync(join(root, "s_first.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(lines[1]!)).toMatchObject({ type: "session/label", label: "指定命名" });
+  });
+
+  it("④ sessionCommand 解析 /title 有参形态（名 / 序号+名）", () => {
+    expect(sessionCommand("/title 我的调试", { sessionId: "s1" }))
+      .toEqual({ kind: "title", name: "我的调试" });
+    expect(sessionCommand("/title 2 其他名", { sessionId: "s1" }))
+      .toEqual({ kind: "title", name: "其他名", target: "2" });
+  });
+
+  it("⑤ 多枚 session/label → readTitle 取最后（手动 /title 覆盖自动标题——T0 走查实录回归钉）", () => {
+    const root = fresh();
+    sessionFile(root, "s_multi", [
+      ev("e1", "session/header"),
+      ev("e2", "user/message", { content: [{ kind: "text", text: "问" }] }),
+      ev("e3", "session/label", { label: "自动标题" }),
+      ev("e4", "session/label", { label: "手动命名" }),
+    ]);
+    expect(readTitle(join(root, "s_multi.jsonl"), "s_multi")).toBe("手动命名");
   });
 });
 
