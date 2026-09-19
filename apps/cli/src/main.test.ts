@@ -181,7 +181,7 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     expect(sessionCommand("/exit", { sessionId: "s1" })).toEqual({ kind: "quit" });
     expect(sessionCommand("/q", { sessionId: "s1" })).toEqual({ kind: "quit" }); // 同义集（2026-09-18 用户要求）
     expect(sessionCommand("/quit now", { sessionId: "s1" })).toEqual({ kind: "none" }); // 带参不误伤
-    expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "none" });
+    expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "pick" }); // B9 拉前：无参 = 列表选中即 resume
     expect(sessionCommand("普通输入", { sessionId: "s1" })).toEqual({ kind: "none" });
     expect(harnessOptionsFor({ kind: "new" })).toEqual({});
     expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s1", atEntryId: "e7" })).toEqual({ fork: { parentSessionId: "s1", atEntryId: "e7" } });

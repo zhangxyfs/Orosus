@@ -27,6 +27,7 @@ export interface HarnessOptions {
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
+  autoTitle?: boolean;                     // 会话自动标题（M4-2 B9 拉前）：首轮 completed 后生成 session/label。核心缺省关（保守——宿主显式开；CLI 装配 true）
   resume?: { sessionId: string };           // 打开既有会话继续（D41/T6）：已有事件非空则不落重复 header
   fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; // 复合存储新会话（D41/T6）：header 带 parentSession + 首事件 session/fork；parentDir（M4-1 T1/D46）= 父会话所在目录（跨桶/平铺 fork 时由宿主定位填入，缺省同 sessionsDir）
   discovery?: {                            // 目录扫描入口（§8.3/T11-T12）：缺省 ~/.orosus/modules 与 <cwd>/.orosus/modules
@@ -270,6 +271,43 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await store.append(LOG_TYPES.sessionFork, { sourceEntryId: pendingForkSourceEntryId ?? null, parentSession: options.fork.parentSessionId });
     }
   };
+
+  // 会话自动标题（M4-2 B9 用户拉前，2026-09-19 走查）：首轮 completed 后经主 provider 生成 ≤16 字标题，
+  // 落 session/label（M3/T6 预留类型首次消费）；LLM 失败/空产出 → 兜底 = 首问文本截断。已有 label（resume）跳过。
+  const maybeTitle = async (): Promise<void> => {
+    const events = await store.all();
+    if (events.some((e) => e.type === LOG_TYPES.sessionLabel)) return;
+    const textOf = (e: SessionEvent): string =>
+      ((e.content ?? []) as { kind?: string; text?: string }[]).filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join("");
+    const q = events.filter((e) => e.type === "user/message").at(-1);
+    const a = events.filter((e) => e.type === "assistant/message").at(-1);
+    if (q === undefined || a === undefined) return;
+    const qText = textOf(q);
+    const aText = textOf(a);
+    if (qText === "" || aText === "") return;
+    let label = qText.replace(/\s+/g, " ").slice(0, 20); // 兜底：首问截断
+    try {
+      const { stream, model } = resolveProvider();
+      let t = "";
+      for await (const c of stream({
+        model,
+        system: "根据这组问答生成一个不超过 16 字的会话标题：与对话同语言、直接输出标题本身（无引号无解释）。",
+        messages: [
+          { role: "user", content: [{ kind: "text", text: qText.slice(0, 400) }] },
+          { role: "assistant", content: [{ kind: "text", text: aText.slice(0, 400) }] },
+        ],
+        tools: [],
+        signal: new AbortController().signal,
+        maxTokens: 32,
+      })) {
+        if (c.type === "text/delta") t += c.text;
+        else if (c.type === "finish" && c.kind === "error") t = "";
+      }
+      const trimmed = t.trim().replace(/^["'“”「『]+|["'“”」』]+$/g, "");
+      if (trimmed !== "") label = trimmed.slice(0, 24);
+    } catch { /* 兜底：首问截断 */ }
+    await store.append(LOG_TYPES.sessionLabel, { label });
+  };
   // 读侧自修复 pass（§6.1/D41）：resume/fork 打开既有历史时做链校验（根分段——复合投影零误报），问题逐条进诊断
   if (options.resume !== undefined || options.fork !== undefined) {
     for (const issue of verifyChain(await store.all())) {
@@ -457,14 +495,21 @@ session: ${store.sessionId}
         await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
         await store.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text }] });
         try {
-          for await (const _ of agentLoop({
+        let lastTurnEvent: SessionEvent | undefined;
+        for await (const e of agentLoop({
             session: store, bus: graph.bus, tools: graph.tools,
             provider: trackedStream, model, system: graph.promptSections(),
             signal: controller.signal, sink,
-            livePush: (c) => live.push(c), // 双投并存（T4）：落日志（assistantChunk）+ 旁路——T5 断流后仅旁路
+            livePush: (c) => live.push(c), // 双投并存（T4/D45）：落日志（assistantChunk）+ 旁路——T5 断流后仅旁路
           })) {
-            // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
-          }
+          lastTurnEvent = e;
+          // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
+        }
+        // 会话自动标题（M4-2 B9 用户拉前，2026-09-19 走查）：首轮问答完成后总结短标题落 session/label
+        // （M3/T6 预留类型首次消费）；LLM 失败兜底 = 首问文本截断。宿主显式 opt-in（核心缺省关）。
+        if (options.autoTitle === true && lastTurnEvent?.type === "turn/end" && (lastTurnEvent as { kind?: string }).kind === "completed") {
+          await maybeTitle();
+        }
         } finally {
           currentTurn = null;
           settle();

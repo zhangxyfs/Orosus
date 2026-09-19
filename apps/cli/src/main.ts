@@ -5,7 +5,7 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { formatSessions, harnessOptionsFor, sessionCommand } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, relativeTime, resolveTarget, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
@@ -141,12 +141,13 @@ const commandUi = createReadlineUi({
   },
 });
 
-const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; sessionsDir?: string } = {}) =>
+const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) =>
   createHarness({
     builtinModules: BUILTIN_MODULES,
     commandUi,
+    autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
     sessionsDir: extra.sessionsDir ?? activeDir,
-    ...(args.resume !== undefined ? { resume: args.resume } : {}),
+    ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
     ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
     config: {
       enableModules: args.enable,
@@ -183,6 +184,16 @@ function attachRender(h: Harness): void {
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
+// 恢复会话（B9 拉前）：双层定位 → 原位续写（新事件仍进原文件——平铺/他桶均在原位）
+const switchTo = async (sid: string): Promise<void> => {
+  const loc = locateSessionFile(sessionsRoot, sid);
+  if (loc === undefined) { console.log(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
+  await h.close();
+  h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
+  activeDir = loc.dir;
+  console.log(`[已恢复 ${sid}]`);
+};
+
 try {
   sessionLoop: for (;;) {
     for (const line of banner(h)) console.error(line);
@@ -193,13 +204,27 @@ try {
       if (line === null) break sessionLoop;
       const text = line.trim();
       if (text === "") continue;
-      // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions，D41/T6）
-      if (text === "/sessions") {
-        console.log(formatSessions(sessionsRoot)); // 双层扫描（T1/D46）：平铺存量 + 各项目桶
-        continue;
-      }
+      // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
       if (directive.kind === "quit") break sessionLoop; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
+      if (directive.kind === "pick") {
+        // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
+        if (!process.stdin.isTTY) { console.log(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); continue; }
+        const items = listSessions(sessionsRoot);
+        if (items.length === 0) { console.log("（暂无会话——发送第一条消息即创建）"); continue; }
+        const options = items.map((s, i) => `${i + 1}. ${s.title} · ${relativeTime(s.createdAtMs)}${s.id === h.sessionId ? "（当前）" : ""}`);
+        const picked = await commandUi.choose("选择要恢复的会话（输入序号）", [...options, "取消"]);
+        const idx = options.indexOf(picked);
+        if (idx < 0) continue;
+        await switchTo(items[idx]!.id);
+        continue sessionLoop; // 换 harness 后重挂横幅与渲染
+      }
+      if (directive.kind === "resume") {
+        const sid = resolveTarget(directive.sessionId, sessionsRoot);
+        if (sid === undefined) { console.log(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); continue; }
+        await switchTo(sid);
+        continue sessionLoop;
+      }
       if (directive.kind === "new" || directive.kind === "fork") {
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
         await h.close();

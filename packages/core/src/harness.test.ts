@@ -530,6 +530,46 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
   });
 });
 
+describe("会话自动标题（M4-2 B9 拉前：首轮 completed 后生成，session/label 首次消费）", () => {
+  const mkTitle = async (script: Chunk[][]) => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-title-"));
+    const store = new InMemorySessionStore();
+    const h = await createHarness({
+      store,
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script)],
+      autoTitle: true, // B9 拉前：测试显式开（核心缺省关——宿主 opt-in 语义）
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    return { h, store } as const;
+  };
+  const labelsOf = async (store: InMemorySessionStore): Promise<string[]> =>
+    (await store.all()).filter((e) => e.type === "session/label").map((e) => String(e.label));
+
+  it("① 首轮问答完成 → session/label 落生成标题；后续轮次不再生成（label 恰一枚）", async () => {
+    const { h, store } = await mkTitle([
+      [{ type: "text/delta", text: "答" }, { type: "usage", input: 3, output: 1 }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "这是一个标题" }, { type: "finish", kind: "stop" }], // 标题生成调用（fake 逐轮消费）
+    ]);
+    await h.prompt("第一问");
+    expect(await labelsOf(store)).toEqual(["这是一个标题"]);
+    await h.prompt("第二问"); // label 已存在 → 不再生成（脚本也只剩重放，但不应被调用产生第二枚）
+    expect(await labelsOf(store)).toEqual(["这是一个标题"]);
+    await h.close();
+  });
+
+  it("② 标题生成失败（finish error）→ 兜底 = 首问文本截断", async () => {
+    const { h, store } = await mkTitle([
+      [{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }],
+      [{ type: "finish", kind: "error", errorMessage: "HTTP 500" }], // 标题生成失败
+    ]);
+    await h.prompt("帮我写个排序算法");
+    expect(await labelsOf(store)).toEqual(["帮我写个排序算法"]);
+    await h.close();
+  });
+});
+
 describe("liveChunks 实时旁路通道（M4-1 T4/D45——双投并存态）", () => {
   const richScript: Chunk[][] = [[
     { type: "reasoning/delta", text: "思考" },
