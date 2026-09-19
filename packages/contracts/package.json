@@ -2,13 +2,20 @@
   "name": "@orosus/contracts",
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit" },
-  "orosus": { "contract": true },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "orosus": {
+    "contract": true
+  },
   "exports": {
     "./module": "./src/module/index.ts",
     "./tool": "./src/tool/index.ts",
     "./provider": "./src/provider/index.ts",
-    "./fs": "./src/fs/index.ts"
+    "./fs": "./src/fs/index.ts",
+    "./home": "./src/home/index.ts"
   },
-  "dependencies": { "zod": "^4.0.0" }
+  "dependencies": {
+    "zod": "^4.0.0"
+  }
 }

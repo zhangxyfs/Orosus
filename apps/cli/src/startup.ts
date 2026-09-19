@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import type { CommandUi } from "@orosus/contracts/module";
 import type { Harness } from "@orosus/core";
@@ -31,5 +31,5 @@ export async function startupGate(opts: {
 
 /** 真实 readModel：用户层 → 项目层（§6.6 分层的只读镜像，onboarding.readConfigModel 同源）。 */
 export function realReadModel(cwd: string): () => string | undefined {
-  return () => readConfigModel(join(homedir(), ".orosus", "config.toml"), join(cwd, ".orosus", "config.toml"));
+  return () => readConfigModel(join(orosusHome(), "config.toml"), join(cwd, ".orosus", "config.toml"));
 }

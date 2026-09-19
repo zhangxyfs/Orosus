@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, rmSync, rmdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import { scanSessionFiles, type SessionFileEntry } from "@orosus/core";
 
@@ -71,7 +71,7 @@ export async function runPruneSubcommand(
   io: { out(s: string): void; root?: string; now?: number },
 ): Promise<number> {
   const opts = parsePruneFlags(argv.slice(2));
-  const root = io.root ?? join(homedir(), ".orosus", "sessions");
+  const root = io.root ?? join(orosusHome(), "sessions");
   const now = io.now ?? Date.now();
   const entries: PruneEntry[] = scanSessionFiles(root).map((e) => ({ ...e, eventCount: countEvents(e.file) }));
   const plan = buildPrunePlan(entries, { days: opts.days, now });

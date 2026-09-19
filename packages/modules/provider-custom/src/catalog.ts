@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { dirname, join } from "node:path";
 import { BUILTIN_SNAPSHOT } from "./builtin-snapshot.ts";
 
@@ -27,7 +27,7 @@ export const UPSTREAM_TIMEOUT_MS = 10_000;
 
 /** 磁盘缓存缺省落点（~/.orosus/cache/models-dev.json）——宿主接线用；测试注入 tmp 路径保密封离。 */
 export function defaultCatalogCacheFile(): string {
-  return join(homedir(), ".orosus", "cache", "models-dev.json");
+  return join(orosusHome(), "cache", "models-dev.json");
 }
 
 interface CacheState { catalog: Catalog; at: number; source: CatalogSource; fetchedAt?: number }

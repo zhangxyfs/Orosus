@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
@@ -84,7 +84,7 @@ export default defineModule({
   uses: ["fs.read"],
   activate(ctx) {
     const cfg = ctx.config as { userDir?: string; projectDir?: string } | undefined;
-    const userDir = cfg?.userDir ?? join(homedir(), ".orosus", "skills");
+    const userDir = cfg?.userDir ?? join(orosusHome(), "skills");
     const projectDir = cfg?.projectDir ?? join(process.cwd(), ".orosus", "skills");
     const skills = scanSkills([{ dir: userDir, layer: "user" }, { dir: projectDir, layer: "project" }]);
     if (skills.length === 0) return; // 无技能零贡献（空转合法）

@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
@@ -152,7 +152,7 @@ function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): S
 
 /** §4.2 启动序列的编程式形态。CLI 只是本入口的配置驱动薄壳（§8.1）。 */
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const home = join(homedir(), ".orosus");
+  const home = orosusHome();
   const sink = createDiagSink({ dir: options.diagDir ?? join(home, "logs") });
 
   const note = hardeningNote();
@@ -606,7 +606,7 @@ session: ${store.sessionId}
       const oldGraph = graph;
       const oldDefs = oldGraph.defs();
       // 重新执行配置分层合并 → 发现 → 信任 →（同一代码路径；§5.5）
-      const home2 = join(homedir(), ".orosus");
+      const home2 = orosusHome();
       secrets = loadSecretsEnv(options.secretsFile ?? join(home2, "secrets.env")).vars; // 重读 secrets（向导等运行期写入后 reload 必须看到）
       const config2 = loadConfig({
         userFile: options.config?.userFile ?? join(home2, "config.toml"),

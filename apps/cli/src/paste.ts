@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
@@ -26,7 +26,7 @@ export function imagesFor(pendingImage: string | undefined): { images: string[] 
  *  返回保存的 PNG 文件路径；剪贴板无图返回 undefined。
  *  路径以 image part 进 user/message（日志存路径、请求期翻译层转 base64）。 */
 export async function pasteImage(): Promise<{ file: string } | undefined> {
-  const tmp = join(homedir(), ".orosus", "tmp", `paste-${Date.now()}.png`);
+  const tmp = join(orosusHome(), "tmp", `paste-${Date.now()}.png`);
   mkdirSync(dirname(tmp), { recursive: true });
   try {
     if (process.platform === "win32") {

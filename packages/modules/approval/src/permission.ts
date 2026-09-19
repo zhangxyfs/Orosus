@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { CommandHandler } from "@orosus/contracts/module";
@@ -7,7 +7,7 @@ import type { ApprovalRule, PermissionMode } from "./decide.ts";
 
 /** /permission 写回的缺省配置文件（§6.6 平台注记：~/.orosus 经 os.homedir() 解析）。 */
 export function defaultConfigFile(): string {
-  return join(homedir(), ".orosus", "config.toml");
+  return join(orosusHome(), "config.toml");
 }
 
 function readToml(path: string): Record<string, unknown> {

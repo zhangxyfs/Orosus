@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { basename, join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
@@ -8,6 +8,8 @@ import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
+import { isHomeSubcommand, runHomeSubcommand } from "./home-cmd.ts";
+import { execFileSync } from "node:child_process";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { banner } from "./banner.ts";
 import { needsProviderSetup, } from "./onboarding.ts";
@@ -23,11 +25,11 @@ import { commandCompleter, HELP_TEXT } from "./help.ts";
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
 {
   const argv = process.argv.slice(2);
-  const orosusHome = join(homedir(), ".orosus");
+  const homeDir = orosusHome();
   if (isProviderSubcommand(argv)) {
     process.exit(await runProviderSubcommand(argv, {
-      configPath: join(orosusHome, "config.toml"),
-      secretsPath: join(orosusHome, "secrets.env"),
+      configPath: join(homeDir, "config.toml"),
+      secretsPath: join(homeDir, "secrets.env"),
       env: process.env,
       out: (l) => console.log(l),
     }));
@@ -36,16 +38,25 @@ import { commandCompleter, HELP_TEXT } from "./help.ts";
   if (isSessionsSubcommand(argv)) {
     process.exit(await runPruneSubcommand(argv, { out: (l) => console.log(l) }));
   }
+  // `orosus home path|migrate`（M4-2.5 T6）：OROSUS_HOME 单一解析点 + 一键迁移（dry-run/apply、留证不删）
+  if (isHomeSubcommand(argv)) {
+    process.exit(await runHomeSubcommand(argv, {
+      sourceHome: orosusHome(),
+      env: process.env,
+      out: (l) => console.log(l),
+      ...(process.platform === "win32" ? { setEnv: (v) => { execFileSync("setx", ["OROSUS_HOME", v], { stdio: "ignore" }); } } : {}),
+    }));
+  }
   if (isModuleSubcommand(argv)) {
     const discovered = await discoverModules({
-      userDir: join(orosusHome, "modules"),
+      userDir: join(homeDir, "modules"),
       projectDir: join(process.cwd(), ".orosus", "modules"),
-      userFile: join(orosusHome, "config.toml"),
+      userFile: join(homeDir, "config.toml"),
       sink: { write: () => {}, flush: () => Promise.resolve(), close: () => Promise.resolve() },
     });
     process.exit(await runModuleSubcommand(argv, {
-      configPath: join(orosusHome, "config.toml"),
-      trustFile: join(orosusHome, "trust.json"),
+      configPath: join(homeDir, "config.toml"),
+      trustFile: join(homeDir, "trust.json"),
       discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
       out: (l) => console.log(l),
     }));
@@ -54,7 +65,7 @@ import { commandCompleter, HELP_TEXT } from "./help.ts";
 
 const args = parseArgs(process.argv.slice(2));
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
-const sessionsRoot = join(homedir(), ".orosus", "sessions");
+const sessionsRoot = join(orosusHome(), "sessions");
 const sessionsDir = join(sessionsRoot, encodeCwd(process.cwd()));
 // --resume 双层定位（T1/D46）：旧平铺/他桶会话在原位续写（新事件仍进原文件）；找不到 = 全新空会话（M3 既有语义）
 const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId) : undefined;

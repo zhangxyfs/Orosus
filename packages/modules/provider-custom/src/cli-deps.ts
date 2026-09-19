@@ -1,5 +1,5 @@
 import { appendFileSync, chmodSync, closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { defaultCatalogCacheFile, getCatalogWithSource, persistCatalogCache, type Catalog } from "./catalog.ts";
@@ -8,8 +8,8 @@ import type { MenuDeps, ProviderEntry } from "./menu.ts";
 /** /provider 菜单的宿主侧副作用接线（D37）：config/secrets 的真实读写——读写 ~/.orosus/ 下约定文件。
  *  CLI 与嵌入式宿主可整体替换（覆盖个别口注入测试/自定义落点）。 */
 export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
-  const configPath = join(homedir(), ".orosus", "config.toml");
-  const secretsPath = join(homedir(), ".orosus", "secrets.env");
+  const configPath = join(orosusHome(), "config.toml");
+  const secretsPath = join(orosusHome(), "secrets.env");
   const readDoc = (): Record<string, unknown> => {
     if (!existsSync(configPath)) return {};
     return parse(readFileSync(configPath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>; // BOM 剥离（v17）

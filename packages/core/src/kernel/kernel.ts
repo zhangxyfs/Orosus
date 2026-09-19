@@ -1,6 +1,6 @@
 import type { CommandHandler, CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { orosusHome } from "@orosus/contracts/home";
 import { join } from "node:path";
 import type { LlmHolder } from "./activate.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -32,7 +32,7 @@ export function buildCorePromptSections(env: PromptEnv): string[] {
 function readAgentsMd(cwd: string): { text: string; source: string } | undefined {
   const candidates: [string, string][] = [
     [join(cwd, ".orosus", "AGENTS.md"), "project"],
-    [join(homedir(), ".orosus", "AGENTS.md"), "user"],
+    [join(orosusHome(), "AGENTS.md"), "user"],
   ];
   for (const [file, source] of candidates) {
     if (existsSync(file)) {

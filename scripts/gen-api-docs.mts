@@ -15,6 +15,7 @@ const app = await Application.bootstrapWithPlugins(
       toPosix(join(ROOT, "packages/contracts/src/tool/index.ts")),
       toPosix(join(ROOT, "packages/contracts/src/provider/index.ts")),
       toPosix(join(ROOT, "packages/contracts/src/fs/index.ts")),
+      toPosix(join(ROOT, "packages/contracts/src/home/index.ts")),
     ],
     out: toPosix(join(ROOT, "docs/api")),
     githubPages: false,
@@ -40,7 +41,7 @@ await app.generateDocs(project, join(ROOT, "docs/api"));
 const OUT = join(ROOT, "docs/api");
 const allHtml = readdirSync(OUT, { recursive: true }).filter((f) => String(f).endsWith(".html"));
 const haystack = allHtml.map((f) => readFileSync(join(OUT, String(f)), "utf8")).join("\n");
-const required = ["defineModule", "CommandUi", "ProviderAdapter", "ToolExecution"];
+const required = ["defineModule", "CommandUi", "ProviderAdapter", "ToolExecution", "orosusHome"]; // M4-2.5 T6：home 第五入口
 const missing = required.filter((sym) => !haystack.includes(sym));
 if (allHtml.length < 10 || missing.length > 0) {
   console.error(`API 参考生成产物不完整（${allHtml.length} 页，缺失符号：${missing.join(", ") || "无"}）——疑似 typedoc 静默失败`);
