@@ -316,7 +316,9 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           if (s.text.length > PROMPT_SECTION_LIMIT) throw new Error(`promptSection 单段超预算 32KB（§6.5）`);
           const total = committedSections.reduce((n, x) => n + x.text.length, 0) + s.text.length;
           if (total > PROMPT_TOTAL_LIMIT) throw new Error(`promptSection 全局超预算 64KB（§6.5）`);
-          committedSections.push({ ...s, owner: def.name });
+          // 不用 { ...s } 展开——会拍平 getter 成快照字符串；经 getter 透传保持惰性读取
+          // （M4-2 T7/T12：todo/mcp 的 promptSection 反映运行期最新状态）
+          committedSections.push({ order: s.order, owner: def.name, get text() { return s.text; } });
         }
         for (const l of stage.listeners) {
           mine.disposers.push(bus.on(l.type, l.listener, def.name));

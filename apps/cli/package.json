@@ -14,6 +14,7 @@
     "@orosus/core": "workspace:*",
     "@orosus/tool-fs": "workspace:*",
     "@orosus/tool-shell": "workspace:*",
+    "@orosus/tool-todo": "workspace:*",
     "@orosus/provider-anthropic": "workspace:*",
     "@orosus/provider-custom": "workspace:*",
     "smol-toml": "^1.3.0",
