@@ -768,3 +768,29 @@ describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config�
     await h.close();
   });
 });
+
+describe("/context 余量（M4-2 T20/B20——窗口感知 + usage 锚点零新架构）", () => {
+  const ctxScript: Chunk[][] = [[{ type: "text/delta", text: "答" }, { type: "usage", input: 6000, output: 536 }, { type: "finish", kind: "stop" }]];
+
+  it("① contextWindow=65536 + usage 有值 → 三行含数字与百分比", async () => {
+    const h = await makeHarness({
+      modules: [fakeProviderModule("fake", ctxScript)],
+      config: { userFile: join(dir, "no-user.toml"), projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m", contextWindow: 65536 } },
+    });
+    await h.prompt("问一句"); // 触发 usage 锚点
+    const out = await h.prompt("/context");
+    expect(out).toContain("模型: fake/m");
+    expect(out).toContain("65536 tokens");
+    expect(out).toContain("~6536 tokens");
+    expect(out).toContain("10%"); // 6536/65536 ≈ 9.97 → 10
+    await h.close();
+  });
+
+  it("② 未配窗口 → 「未知」+ 指引", async () => {
+    const h = await makeHarness({ modules: [fakeProviderModule("fake", ctxScript)] });
+    const out = await h.prompt("/context");
+    expect(out).toContain("未知");
+    expect(out).toContain("/provider import --model");
+    await h.close();
+  });
+});

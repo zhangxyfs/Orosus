@@ -417,6 +417,13 @@ session: ${store.sessionId}
       }
       return `当前会话：input ${cur.input} / output ${cur.output} tokens`;
     }],
+    ["/context", async () => {
+      // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出）
+      const modelNow = modelOverride ?? (typeof config.core.model === "string" ? config.core.model : "（未配置）");
+      const used = usageAnchor?.totalTokens ?? 0;
+      const pct = contextWindow !== undefined ? Math.round((used / contextWindow) * 100) : undefined;
+      return `模型: ${modelNow}\n窗口: ${contextWindow !== undefined ? `${contextWindow} tokens` : "未知（/provider import --model 可写入）"}\n已用: ~${used} tokens${pct !== undefined ? `（${pct}%）` : ""}`;
+    }],
   ]);
 
   const resolveProvider = (): { stream: StreamFn; model: string } => {
