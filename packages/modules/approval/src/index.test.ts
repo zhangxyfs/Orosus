@@ -1,21 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import def from "./index.ts";
 import type { CommandUi } from "@orosus/contracts/module";
 import { Access } from "@orosus/contracts/tool";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type Ctx = Parameters<NonNullable<typeof def.activate>>[0];
+type CmdHandler = (args: string, ui: CommandUi) => Promise<string> | string;
 
 interface Harness {
   ctx: Ctx;
   listener: (payload: unknown) => Promise<unknown>;
   events: { type: string; payload: Record<string, unknown> }[];
   uiCalls: { title: string; items: string[] }[];
+  commands: Map<string, CmdHandler>;
 }
 
 function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknown> } = {}): Harness {
   const events: Harness["events"] = [];
   let listener: Harness["listener"] = async () => undefined;
   const uiCalls: Harness["uiCalls"] = [];
+  const commands = new Map<string, CmdHandler>();
   const ui: CommandUi = {
     ask: opts.ui?.ask ?? (async () => { throw new Error("无交互环境（headless）"); }),
     askSecret: opts.ui?.askSecret ?? (async () => { throw new Error("无交互环境（headless）"); }),
@@ -30,14 +36,19 @@ function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknow
     ui,
     services: { get: () => Promise.reject(new Error("no")), getOptional: () => Promise.resolve(undefined) },
     provide: () => {},
-    contribute: { tool: () => () => {}, command: () => () => {}, promptSection: () => () => {}, configOverlay: () => () => {} },
+    contribute: {
+      tool: () => () => {},
+      command: (name: string, handler: CmdHandler) => { commands.set(name, handler); return () => {}; },
+      promptSection: () => () => {},
+      configOverlay: () => () => {},
+    },
     session: { append: (type: string, payload: Record<string, unknown>) => { events.push({ type, payload }); } },
     events: {
       on: (_t: string, l: (p: unknown) => Promise<unknown>) => { listener = l as Harness["listener"]; return () => {}; },
       emit: () => Promise.resolve(),
     },
   } as unknown as Ctx;
-  return { ctx, get listener() { return listener; }, set listener(l) { listener = l; }, events, uiCalls };
+  return { ctx, get listener() { return listener; }, set listener(l) { listener = l; }, events, uiCalls, commands };
 }
 
 const bashPayload = (command: string) => ({
@@ -50,13 +61,13 @@ const bashPayload = (command: string) => ({
 });
 
 describe("approval 模块（waterfall 首个消费方）", () => {
-  it("waterfall 集成：subprocess 触发询问——三选菜单（批准一次/本会话始终允许/拒绝），批准 → 通过", async () => {
+  it("waterfall 集成：subprocess 触发询问——四选菜单（T9 起含写规则落盘），批准 → 通过", async () => {
     const h = fakeCtx({ ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } } });
     await def.activate(h.ctx);
     const veto = await h.listener(bashPayload("ls -la"));
     expect(veto).toBeUndefined();
     expect(h.uiCalls).toHaveLength(1);
-    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "拒绝"]);
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]);
     expect(h.uiCalls[0]!.title).toContain("tool-shell__bash");
     expect(h.uiCalls[0]!.title).toContain("ls -la");
   });
@@ -80,7 +91,7 @@ describe("approval 模块（waterfall 首个消费方）", () => {
     const h = fakeCtx({ ui: { choose: async (title: string, items: string[]) => { h.uiCalls.push({ title, items }); return "本会话始终允许"; } } });
     await def.activate(h.ctx);
     await h.listener(bashPayload("git status"));
-    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "拒绝"]);
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]); // T9 起四选
     await h.listener(bashPayload("git status")); // 记忆命中
     expect(h.uiCalls).toHaveLength(1);
     // 危险命令：memoryKey=null → 菜单两选，且多次触发始终询问
@@ -113,9 +124,108 @@ describe("approval 模块（waterfall 首个消费方）", () => {
     const p1 = h2.listener({ ...bashPayload("ls"), callId: "c1" });
     const p2 = h2.listener({ ...bashPayload("pwd"), callId: "c2" });
     await new Promise((r) => setTimeout(r, 20));
-    expect(order).toEqual([`ask:批准一次|本会话始终允许|拒绝`]); // 第二个询问尚未发起
+    expect(order).toEqual([`ask:批准一次|本会话始终允许|始终允许（写规则落盘）|拒绝`]); // T9 起四选；第二个询问尚未发起
     release1();
     await Promise.all([p1, p2]);
     expect(order).toHaveLength(2);
+  });
+});
+
+describe("审批硬化（M4-2 T9/B12）", () => {
+  let dir: string | undefined;
+  const freshDir = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-t9-")));
+  afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+
+  it("⑤ 面板四选含「始终允许（写规则落盘）」（可分段命令）", async () => {
+    const h = fakeCtx({ ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } } });
+    await def.activate(h.ctx);
+    await h.listener(bashPayload("git status"));
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]);
+  });
+
+  it("⑥ 选「始终允许」→ config [approval] rules 含生成规则（单段 git status → bash(git *)）", async () => {
+    const base = freshDir();
+    const configFile = join(base, "config.toml");
+    const h = fakeCtx({ config: { configFile }, ui: { choose: async (title: string, items: string[]) => { h.uiCalls.push({ title, items }); return "始终允许（写规则落盘）"; } } });
+    await def.activate(h.ctx);
+    expect(await h.listener(bashPayload("git status"))).toBeUndefined();
+    const cfg = readFileSync(configFile, "utf8");
+    expect(cfg).toContain('tool = "tool-shell__bash(git *)"');
+    expect(cfg).toContain('effect = "allow"');
+    // 会话内即时生效：同命令二次零询问
+    expect(await h.listener(bashPayload("git status"))).toBeUndefined();
+    expect(h.uiCalls).toHaveLength(1);
+  });
+
+  it("⑦ 分段防搭车——git status; rm -rf / 在 bash(git *) 规则下仍询问；纯 git 复合零询问（核心增量）", async () => {
+    const h = fakeCtx({
+      config: { rules: [{ effect: "allow", tool: "tool-shell__bash(git *)" }] },
+      ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } },
+    });
+    await def.activate(h.ctx);
+    // 反向对照先行：纯复合命中 git 前缀分段 → 规则放行零询问
+    expect(await h.listener(bashPayload("git add . && git push"))).toBeUndefined();
+    expect(h.uiCalls).toHaveLength(0);
+    // 危险尾巴搭车：分段不全命中 → 退回询问（rm -rf 危险门 → 两选面板）
+    await h.listener(bashPayload("git status; rm -rf /"));
+    expect(h.uiCalls).toHaveLength(1);
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "拒绝"]);
+  });
+
+  it("⑧ eval → 面板退化两选（memoryKey null 现状语义）", async () => {
+    const h = fakeCtx({ ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } } });
+    await def.activate(h.ctx);
+    await h.listener(bashPayload("eval $(dangerous)"));
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "拒绝"]);
+  });
+
+  it("⑨ echo $HOME → 询问（reason 含不可分析、memoryKey null——今天放行进记忆，T9 增量）", async () => {
+    const h = fakeCtx({ ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } } });
+    await def.activate(h.ctx);
+    await h.listener(bashPayload("echo $HOME"));
+    expect(h.uiCalls).toHaveLength(1);
+    expect(h.uiCalls[0]!.title).toContain("不可分析");
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "拒绝"]); // memoryKey null → 无记忆无落盘
+  });
+
+  it("⑩ 复合命令规则生成——npm run build && npm test → 单条 bash(npm run build && npm test)", async () => {
+    const base = freshDir();
+    const configFile = join(base, "config.toml");
+    const h = fakeCtx({ config: { configFile }, ui: { choose: async (title: string, items: string[]) => { h.uiCalls.push({ title, items }); return "始终允许（写规则落盘）"; } } });
+    await def.activate(h.ctx);
+    expect(await h.listener(bashPayload("npm run build && npm test"))).toBeUndefined();
+    expect(readFileSync(configFile, "utf8")).toContain('tool = "tool-shell__bash(npm run build && npm test)"');
+    // 复合规则命中同一复合命令（段列全等）——会话内即时生效
+    expect(await h.listener(bashPayload("npm run build && npm test"))).toBeUndefined();
+    expect(h.uiCalls).toHaveLength(1);
+  });
+
+  it("⑪ /permission 切换 → approval/policy 事件落日志", async () => {
+    const base = freshDir();
+    const h = fakeCtx({ config: { configFile: join(base, "config.toml") } });
+    await def.activate(h.ctx);
+    const handler = h.commands.get("approval__permission")!;
+    const answers = ["切换权限模式", "始终询问（ask-always）"];
+    const ui: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => { throw new Error("不应 askSecret"); },
+      confirm: async () => { throw new Error("不应 confirm"); },
+      choose: async () => answers.shift() ?? "取消",
+    };
+    const out = await handler("", ui);
+    expect(out).toContain("ask-always");
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
+  });
+
+  it("⑫ 项目层有 [approval] 节 → 规则写项目层文件（非用户层）", async () => {
+    const base = freshDir();
+    const userFile = join(base, "config.toml");
+    const projectFile = join(base, "p.toml");
+    writeFileSync(projectFile, '[approval]\nmode = "ask-risky"\n', "utf8");
+    const h = fakeCtx({ config: { configFile: userFile, projectConfigFile: projectFile }, ui: { choose: async () => "始终允许（写规则落盘）" } });
+    await def.activate(h.ctx);
+    expect(await h.listener(bashPayload("git status"))).toBeUndefined();
+    expect(readFileSync(projectFile, "utf8")).toContain('tool = "tool-shell__bash(git *)"'); // 写项目层
+    expect(existsSync(userFile)).toBe(false);                                                // 用户层不动（未创建）
   });
 });

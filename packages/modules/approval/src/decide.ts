@@ -1,5 +1,6 @@
 import type { Access } from "@orosus/contracts/tool";
 import { analyzeDangerous } from "./dangerous.ts";
+import { isUnanalyzable } from "./decompose.ts";
 
 /** D36 三档权限模式。 */
 export type PermissionMode = "ask-always" | "ask-risky" | "never";
@@ -70,7 +71,13 @@ function dangerousGate(input: DecideInput): Decision | undefined {
   const cmd = commandOf(input.approvalRule);
   if (cmd === null) return undefined;
   const verdict = analyzeDangerous(cmd);
-  if (verdict === undefined) return undefined; // 安全
+  if (verdict === undefined) {
+    // AST 安全后的补集（M4-2 T9）：$/反引号/通配符展开——静态规则匹配不了运行期展开值，保守询问
+    if (isUnanalyzable(cmd)) {
+      return { effect: "ask", source: "mode", reason: `命令含不可分析模式（变量/通配符/间接执行）：${cmd.slice(0, 80)}`, memoryKey: null };
+    }
+    return undefined; // 安全
+  }
   if (verdict.kind === "dangerous") {
     return { effect: "ask", source: "mode", reason: `危险命令：${verdict.command}`, memoryKey: null };
   }

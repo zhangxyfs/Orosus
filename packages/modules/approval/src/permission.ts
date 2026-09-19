@@ -31,6 +31,19 @@ function hasApprovalSection(path: string): boolean {
   return (readToml(path)["approval"] as Record<string, unknown> | undefined) !== undefined;
 }
 
+/** 「始终允许（写规则落盘）」规则持久化（M4-2 T9）：[approval] rules 追加 allow 条目（去重）。
+ *  写生效层同 persistMode：项目层含 [approval] 节写项目层，否则用户层。 */
+export function persistAllowRule(configPath: string, tool: string, projectConfigPath?: string): void {
+  const target = projectConfigPath !== undefined && hasApprovalSection(projectConfigPath) ? projectConfigPath : configPath;
+  const doc = readToml(target);
+  const section = (doc["approval"] as Record<string, unknown> | undefined) ?? {};
+  const rules = Array.isArray(section["rules"]) ? [...(section["rules"] as { effect?: string; tool?: string }[])] : [];
+  if (!rules.some((r) => r.tool === tool)) rules.push({ effect: "allow", tool });
+  section["rules"] = rules;
+  doc["approval"] = section;
+  writeFileSync(target, stringify(doc), "utf8");
+}
+
 /** /permission 命令（D36/D38，内建别名 /permission → approval__permission）：
  *  模式菜单（中文，D37 语言约定）→ 运行期闭包 override 即时生效 + 写回 config 持久化。 */
 export function createPermissionHandler(opts: {

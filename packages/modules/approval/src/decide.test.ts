@@ -147,3 +147,31 @@ describe("decide——会话记忆（kimi-code session-approval-history 同款�
     })).toMatchObject({ effect: "allow", source: "memory" });
   });
 });
+
+import { decomposeCommand, isUnanalyzable } from "./decompose.ts";
+
+describe("decomposeCommand 纯函数（M4-2 T9/B12——Reasonix bash_decompose 参照）", () => {
+  it("① git 复合命令拆段——各取前两词", () => {
+    expect(decomposeCommand("git add . && git push origin main"))
+      .toEqual(["git add", "git push"]);
+  });
+
+  it("② 包管理器 run 取三词", () => {
+    expect(decomposeCommand("npm run build")).toEqual(["npm run build"]);
+    expect(decomposeCommand("pnpm run test:unit")).toEqual(["pnpm run test:unit"]);
+  });
+
+  it("③ eval/xargs/嵌套 -c → 返回空数组（require-human）", () => {
+    expect(decomposeCommand("eval $(dangerous)")).toEqual([]);
+    expect(decomposeCommand("find . | xargs rm")).toEqual([]);
+    expect(decomposeCommand("bash -c 'rm -rf /'")).toEqual([]);
+  });
+
+  it("④ isUnanalyzable——含 $/反引号/通配符 → true（今天 dangerousGate 放行的三类）", () => {
+    expect(isUnanalyzable("echo $HOME")).toBe(true);
+    expect(isUnanalyzable("rm -rf $DIR")).toBe(true);
+    expect(isUnanalyzable("ls `pwd`")).toBe(true);
+    expect(isUnanalyzable("cat *.txt")).toBe(true);
+    expect(isUnanalyzable("git status")).toBe(false);
+  });
+});
