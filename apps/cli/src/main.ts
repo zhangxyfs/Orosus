@@ -10,6 +10,7 @@ import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { banner } from "./banner.ts";
+import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
@@ -222,7 +223,7 @@ const switchTo = async (sid: string): Promise<void> => {
 
 try {
   sessionLoop: for (;;) {
-    for (const line of banner(h)) console.error(line);
+    for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) console.error(line);
     attachRender(h);
     for (;;) {
       process.stdout.write("> ");

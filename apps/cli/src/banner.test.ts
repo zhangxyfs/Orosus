@@ -24,10 +24,19 @@ describe("降级横幅分级（M4-B7 提前落地，走查：已配 provider 后
     expect(out.join("\n")).toContain("provider-glm:");
   });
 
-  it("③ 零配置首跑（无任何可用 provider）→ 品牌缺 key 也保持吵闹（新用户需要看见引导，B7 剩余场景）", () => {
+  it("③ 零配置首跑（model 未配置、失败全为品牌缺 key）→ 引导语指路 /provider，不再吓人 ⚠（M4-2 T15/B7 剩余）", () => {
     const rows = [brandNoKey("provider-anthropic"), brandNoKey("provider-glm"), active("tool-fs"), active("skill")];
-    const out = banner({ graph: () => ({ audit: () => rows }) });
-    expect(out[0]).toContain("⚠ 2 个模块降级");
+    const out = banner({ graph: () => ({ audit: () => rows }) }, { modelConfigured: false });
+    expect(out.join("\n")).toContain("尚未配置");
+    expect(out.join("\n")).toContain("/provider");
+    expect(out.join("\n")).not.toContain("⚠");
+  });
+
+  it("③b 零失败且 model 未配置（--no-modules 形态）→ 同样引导语", () => {
+    const rows = [active("tool-fs")];
+    const out = banner({ graph: () => ({ audit: () => rows }) }, { modelConfigured: false });
+    expect(out.join("\n")).toContain("尚未配置");
+    expect(out.join("\n")).toContain("/provider");
   });
 
   it("④ 全员健康 → 原激活行不变；dumpModules 模式零输出", () => {
