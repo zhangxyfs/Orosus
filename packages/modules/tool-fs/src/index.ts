@@ -57,10 +57,11 @@ class LocalFs implements Fs {
     return [...new Set(out)].sort();
   }
 
-  /** 内容正则搜索（T16）：path:line:text；跳过二进制（替换率粗判）与超大文件（>1MB）。 */
-  async grepLines(regex: string): Promise<string[]> {
+  /** 内容正则搜索（T16 起）：结构化命中（file 绝对路径 / 1-based 行号 / 行文本截断 200）；
+   *  跳过二进制（替换率粗判）与超大文件（>1MB）。三输出模式由工具层渲染（M4-2 T6）。 */
+  async grepMatches(regex: string): Promise<{ file: string; lineNo: number; text: string }[]> {
     const re = new RegExp(regex);
-    const out: string[] = [];
+    const out: { file: string; lineNo: number; text: string }[] = [];
     for (const p of await this.globFiles("**/*")) {
       let content: string;
       try {
@@ -73,7 +74,7 @@ class LocalFs implements Fs {
       const bad = lines.filter((l) => l.includes("\uFFFD")).length;
       if (lines.length > 0 && bad > lines.length / 4) continue; // 二进制粗判
       for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i]!)) out.push(`${p}:${i + 1}:${lines[i]!.slice(0, 200)}`);
+        if (re.test(lines[i]!)) out.push({ file: p, lineNo: i + 1, text: lines[i]!.slice(0, 200) });
       }
     }
     return out;
@@ -100,16 +101,29 @@ const pathParam = { path: z.string().describe("相对工作目录的路径") };
 function readTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__read",
-    description: "读取文件全部内容",
-    parameters: z.object(pathParam),
+    description: "Read file contents with optional line range. Results include line numbers (N→text).\nUse this tool — not cat/head/tail — to inspect text files.\nFor large files, use offset+limit to read sections rather than the whole file.",
+    parameters: z.object({
+      ...pathParam,
+      offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
+      limit: z.number().int().positive().optional().describe("返回的最大行数"),
+    }),
     resolveExecution: async (input) => {
-      const { path } = input as z.infer<z.ZodObject<typeof pathParam>>;
+      const { path, offset, limit } = input as { path: string; offset?: number; limit?: number };
       return {
         accesses: [Access.fsRead(path)],
         approvalRule: "tool-fs__read",
         execute: async () => {
           try {
-            return { output: await fs.read(path), isError: false };
+            const content = await fs.read(path);
+            const lines = content.split("\n").filter((_, i, arr) => i < arr.length - 1 || arr[i] !== ""); // 去尾空段
+            const start = (offset ?? 1) - 1;
+            if (start >= lines.length) {
+              return { output: `文件共 ${lines.length} 行，offset 超界（offset = ${offset ?? 1}）`, isError: false };
+            }
+            const slice = lines.slice(start, start + (limit ?? lines.length - start));
+            const numbered = slice.map((text, i) => `${start + i + 1}→${text}`).join("\n");
+            const footer = `\n(第 ${start + 1}-${start + slice.length} 行，共 ${lines.length} 行)`;
+            return { output: numbered + footer, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
@@ -145,23 +159,58 @@ function writeTool(fs: LocalFs): Tool {
 function editTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__edit",
-    description: "精确替换文件中的唯一文本段",
-    parameters: z.object({ ...pathParam, oldText: z.string(), newText: z.string() }),
+    description: "Make precise text replacements using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits match the ORIGINAL file simultaneously (not incrementally). Overlapping edits fail.\noldText must be unique unless replaceAll:true. Keep oldText short but unique.",
+    parameters: z.object({
+      ...pathParam,
+      edits: z.array(z.object({
+        oldText: z.string().describe("待替换的精确文本"),
+        newText: z.string().describe("替换后的文本"),
+        replaceAll: z.boolean().optional().describe("替换全部出现（不参与唯一性/重叠检测）"),
+      })).min(1).describe("编辑列表——全部基于原文件匹配，不得重叠"),
+    }),
     resolveExecution: async (input) => {
-      const { path, oldText, newText } = input as { path: string; oldText: string; newText: string };
+      const { path, edits } = input as { path: string; edits: { oldText: string; newText: string; replaceAll?: boolean }[] };
       return {
         accesses: [Access.fsWrite(path)],
         approvalRule: "tool-fs__edit",
         execute: async () => {
           try {
             const before = await fs.read(path);
-            const first = before.indexOf(oldText);
-            if (first < 0) return { output: `未找到待替换文本（oldText 不匹配）`, isError: true };
-            if (before.indexOf(oldText, first + 1) >= 0) {
-              return { output: `oldText 在文件中多处匹配，请提供更长的唯一片段`, isError: true };
+            const positions: { start: number; end: number; newText: string; index: number }[] = [];
+            for (let i = 0; i < edits.length; i++) {
+              const e = edits[i]!;
+              if (e.replaceAll === true) continue; // 全替换不参与位置检测
+              const pos = before.indexOf(e.oldText);
+              if (pos < 0) return { output: `edits[${i}]: 未找到待替换文本`, isError: true };
+              if (before.indexOf(e.oldText, pos + 1) >= 0) {
+                return { output: `edits[${i}]: 多处匹配——请提供更长的唯一片段或设 replaceAll`, isError: true };
+              }
+              positions.push({ start: pos, end: pos + e.oldText.length, newText: e.newText, index: i });
             }
-            await fs.write(path, before.slice(0, first) + newText + before.slice(first + oldText.length));
-            return { output: `已编辑 ${path}`, isError: false };
+            // 重叠检测（pi 原文件匹配方案核心）
+            positions.sort((a, b) => a.start - b.start);
+            for (let i = 1; i < positions.length; i++) {
+              if (positions[i]!.start < positions[i - 1]!.end) {
+                return {
+                  output: `edits[${positions[i - 1]!.index}] 和 edits[${positions[i]!.index}] 重叠——合并为一个 edit 或选不重叠的区域`,
+                  isError: true,
+                };
+              }
+            }
+            // 从原文件一次性应用（不基于中间结果）
+            let result = "";
+            let cursor = 0;
+            for (const p of positions) {
+              result += before.slice(cursor, p.start) + p.newText;
+              cursor = p.end;
+            }
+            result += before.slice(cursor);
+            for (const e of edits) {
+              if (e.replaceAll === true) result = result.split(e.oldText).join(e.newText);
+            }
+            await fs.write(path, result);
+            const count = positions.length + edits.filter((e) => e.replaceAll === true).length;
+            return { output: `已编辑 ${path}（${count} 处）`, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
@@ -174,17 +223,23 @@ function editTool(fs: LocalFs): Tool {
 function globTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__glob",
-    description: "按 glob 模式列出文件（如 **/*.ts），限根目录内",
-    parameters: z.object({ pattern: z.string().describe("glob 模式") }),
+    description: "按 glob 模式列出文件（如 **/*.ts），限根目录内。head_limit 截断（缺省 100）",
+    parameters: z.object({
+      pattern: z.string().describe("glob 模式"),
+      head_limit: z.number().int().positive().optional().describe("返回的最大条数（缺省 100）"),
+    }),
     resolveExecution: async (input) => {
-      const { pattern } = input as { pattern: string };
+      const { pattern, head_limit } = input as { pattern: string; head_limit?: number };
       return {
         accesses: [Access.fsRead(pattern)],
         approvalRule: "tool-fs__glob",
         execute: async () => {
           try {
             const files = await fs.globFiles(pattern);
-            return { output: files.length > 0 ? files.join("\n") : "（无匹配）", isError: false };
+            const limit = head_limit ?? 100;
+            const shown = files.slice(0, limit);
+            const footer = files.length > limit ? `\n(共 ${files.length} 条，仅显示前 ${limit} 条)` : "";
+            return { output: (shown.length > 0 ? shown.join("\n") : "（无匹配）") + footer, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
@@ -197,17 +252,30 @@ function globTool(fs: LocalFs): Tool {
 function grepTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__grep",
-    description: "内容正则搜索，输出 path:line:text",
-    parameters: z.object({ pattern: z.string().describe("JavaScript 正则") }),
+    description: "内容正则搜索。output_mode：content（path:line:text 缺省）/ files_with_matches（仅文件名）/ count（每文件命中数）",
+    parameters: z.object({
+      pattern: z.string().describe("JavaScript 正则"),
+      output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
+    }),
     resolveExecution: async (input) => {
-      const { pattern } = input as { pattern: string };
+      const { pattern, output_mode } = input as { pattern: string; output_mode?: "content" | "files_with_matches" | "count" };
       return {
         accesses: [Access.fsRead("**/*")],
         approvalRule: "tool-fs__grep",
         execute: async () => {
           try {
-            const lines = await fs.grepLines(pattern);
-            return { output: lines.length > 0 ? lines.join("\n") : "（无匹配）", isError: false };
+            const matches = await fs.grepMatches(pattern);
+            let body: string;
+            if (output_mode === "files_with_matches") {
+              body = [...new Set(matches.map((m) => m.file))].join("\n");
+            } else if (output_mode === "count") {
+              const perFile = new Map<string, number>();
+              for (const m of matches) perFile.set(m.file, (perFile.get(m.file) ?? 0) + 1);
+              body = [...perFile].map(([f, n]) => `${f}: ${n}`).join("\n");
+            } else {
+              body = matches.map((m) => `${m.file}:${m.lineNo}:${m.text}`).join("\n");
+            }
+            return { output: body !== "" ? body : "（无匹配）", isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
