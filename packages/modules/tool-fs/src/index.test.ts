@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
@@ -285,6 +285,8 @@ describe("read 缺省窗口 + mtime 去重（M4-2.5 T0——日志体积调研 P
     await def.activate(ctx);
     await run(tools[0]!, { path: "dedup2.txt" });
     writeFileSync(join(dir, "dedup2.txt"), "v2\n");
+    // 强制 mtime 前移：同毫秒两次写在快速机器上可能同 mtimeMs（cc FILE_UNCHANGED 同款语义），测试不赌时序
+    utimesSync(join(dir, "dedup2.txt"), new Date(Date.now() + 10_000), new Date(Date.now() + 10_000));
     const r = await run(tools[0]!, { path: "dedup2.txt" });
     expect(r.output).toContain("1→v2");
     expect(r.output).not.toContain("file_unchanged");

@@ -8,8 +8,13 @@ export interface SessionListItem extends SessionFileEntry {
   createdAtMs: number;
 }
 
+/** readTitle 读取预算（M4-2.5 T2——日志调研 P5）：64 行或 16KB 先到先赢，超限退 sid——标题尽力而为，列表速度优先。 */
+const READ_TITLE_MAX_LINES = 64;
+const READ_TITLE_MAX_BYTES = 16 * 1024;
+
 /** 从会话文件提取标题：最后的 session/label → 首个 user/message 文本截断 → sid（sqlite/无对话）。
- *  文件已是完成事件形态（D45 断流后小文件），逐行读到命中即停。
+ *  文件已是完成事件形态（D45 断流后小文件），逐行读到命中即停；读取带硬预算（超限退 sid——
+ *  无 label 无对话的大文件不再拖慢 /sessions 列表，cc/dsh 头窗同思路）。
  *  取「最后」而非首枚：手动 /title 追加的新 label 须覆盖自动标题（M4-2 T0 走查实录——
  *  首枚短路使 /title 后列表仍显示旧名，单测全绿但真机不可用）。 */
 export function readTitle(file: string, id: string): string {
@@ -17,8 +22,13 @@ export function readTitle(file: string, id: string): string {
   try {
     let firstUser: string | undefined;
     let label: string | undefined;
+    let lines = 0;
+    let bytes = 0;
     for (const line of readFileSync(file, "utf8").split("\n")) {
       if (line === "") continue;
+      lines++;
+      bytes += line.length;
+      if (lines > READ_TITLE_MAX_LINES || bytes > READ_TITLE_MAX_BYTES) break; // 预算硬上限
       let e: { type?: string; label?: unknown; content?: unknown };
       try { e = JSON.parse(line) as typeof e; } catch { continue; }
       if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") label = e.label;

@@ -158,3 +158,23 @@ describe("pickSessionNumber（走查定案：不选即取消——专门取消�
     expect(i).toBe(3);
   });
 });
+
+describe("readTitle 读取预算（M4-2.5 T2——日志调研 P5：列表不被无对话大文件拖慢）", () => {
+  it("① 无 label 无对话的超大文件 → 64 行/16KB 内退化为 sid", () => {
+    const root = fresh();
+    const noise = Array.from({ length: 200 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] }));
+    sessionFile(root, "s_noise", noise); // 无 label、无 user/message——现状要读完 200 行
+    expect(readTitle(join(root, "s_noise.jsonl"), "s_noise")).toBe("s_noise"); // 预算内无命中 → sid
+  });
+  it("② 预算是硬上限不是软提示：label 越预算退 sid、预算内正常命中", () => {
+    const root = fresh();
+    // label 在第 100 行（预算外）也退 sid
+    const withLabel = [...Array.from({ length: 100 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] })), ev("l", "session/label", { label: "百行之后" })];
+    sessionFile(root, "s_label_late", withLabel);
+    expect(readTitle(join(root, "s_label_late.jsonl"), "s_label_late")).toBe("s_label_late");
+    // 对照：label 在前 64 行内 → 正常命中
+    const early = [ev("e1", "session/header"), ev("e2", "session/label", { label: "早标签" })];
+    sessionFile(root, "s_label_early", early);
+    expect(readTitle(join(root, "s_label_early.jsonl"), "s_label_early")).toBe("早标签");
+  });
+});
