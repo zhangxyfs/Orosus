@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync, openSync, closeSync, chmodSync } from "node:fs";
 import { parse, stringify } from "smol-toml";
-import { defaultCatalogCacheFile, getCatalog, type Catalog } from "@orosus/provider-custom";
+import { defaultCatalogCacheFile, getCatalogWithSource, type Catalog, type CatalogSource } from "@orosus/provider-custom";
 import { resolveWire, adaptBaseUrl } from "@orosus/provider-custom";
 
 /** CLI provider 子命令（D34/D37 配置写器）：import（校验即确认）与 list。 */
@@ -8,7 +8,7 @@ export interface ProviderCmdIo {
   configPath: string;
   secretsPath: string;
   env: Record<string, string | undefined>;
-  getCatalog?: (opts: { registryUrl?: string; fetchImpl?: typeof fetch }) => Promise<Catalog>;
+  getCatalog?: (opts: { registryUrl?: string; fetchImpl?: typeof fetch }) => Promise<{ catalog: Catalog; source: CatalogSource; fetchedAt?: number }>;
   fetchImpl?: typeof fetch;
   out(line: string): void;
 }
@@ -48,7 +48,7 @@ export function isProviderSubcommand(argv: string[]): boolean {
 
 export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): Promise<number> {
   const doFetch = io.fetchImpl ?? fetch;
-  const getCat = io.getCatalog ?? ((o: { registryUrl?: string; fetchImpl?: typeof fetch; cacheFile?: string }) => getCatalog({ ...o, cacheFile: defaultCatalogCacheFile() })); // 磁盘持久化：离线也有全量目录
+  const getCat = io.getCatalog ?? ((o: { registryUrl?: string; fetchImpl?: typeof fetch }) => getCatalogWithSource({ ...o, cacheFile: defaultCatalogCacheFile() })); // 磁盘持久化：离线也有全量目录；带 source——降级提示要判（M4-2 T1）
   const cmd = argv[1];
   const rest = argv.slice(2);
   const flag = (name: string): string | undefined => {
@@ -64,7 +64,7 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     if (names.length === 0) io.out("  （无）");
     for (const n of names) io.out(`  ${n}（${providers[n]!.baseUrl ?? "?"}）`);
     io.out("目录厂商（models.dev）：");
-    const catalog = await getCat({ fetchImpl: doFetch });
+    const { catalog } = await getCat({ fetchImpl: doFetch });
     for (const id of Object.keys(catalog).sort((a, b) => a.localeCompare(b))) io.out(`  ${id}${catalog[id]!.name !== undefined ? `（${catalog[id]!.name}）` : ""}`); // 字母序
     return 0;
   }
@@ -76,10 +76,13 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
       return 1;
     }
     const registry = flag("--registry");
-    const catalog = await getCat({ ...(registry !== undefined ? { registryUrl: registry } : {}), fetchImpl: doFetch });
+    const { catalog, source } = await getCat({ ...(registry !== undefined ? { registryUrl: registry } : {}), fetchImpl: doFetch });
     const entry = catalog[id];
     if (entry === undefined) {
       io.out(`目录中没有厂商 "${id}"（可用 orosus provider list 查看）`);
+      if (source !== "online") {
+        io.out(`[提示] 当前使用${source === "disk" ? "本地缓存目录" : "内置快照"}（在线拉取失败）——厂商可能存在于在线目录，检查网络或代理后重试 /provider（在线源）`);
+      }
       return 1;
     }
     const wire = resolveWire(entry);
@@ -114,14 +117,15 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     const config = readConfig(io.configPath);
     const pc = (config["provider-custom"] as Record<string, unknown> | undefined) ?? {};
     const providers = (pc["providers"] as Record<string, unknown> | undefined) ?? {};
+    const modelFlag = flag("--model"); // 提前读取——providers 条目与顶层 model 两处消费（M4-2 T1）
     providers[id] = {
       type: wire.wire,
       baseUrl: finalBaseUrl,
       ...(envKey !== undefined ? { apiKey: `$ENV:${envKey}` } : {}),
+      ...(modelFlag !== undefined ? { defaultModel: modelFlag } : {}), // D32 裸名路由锚——与向导 setModel 同口径（M4-2 T1）
     };
     pc["providers"] = providers;
     config["provider-custom"] = pc;
-    const modelFlag = flag("--model");
     if (modelFlag !== undefined) {
       config["model"] = `${id}/${modelFlag}`;
       // 目录窗口链（M3 补强 T7）：models.dev 的 limit.context 写入核心顶层 contextWindow——

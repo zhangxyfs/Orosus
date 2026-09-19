@@ -25,7 +25,7 @@ function makeIo(env: Record<string, string> = {}, configExists = false, sub = ""
     configPath,
     secretsPath: join(dir, "secrets.env"),
     env,
-    getCatalog: async () => CATALOG,
+    getCatalog: async () => ({ catalog: CATALOG, source: "online" as const }),
     fetchImpl: (async () => new Response("[]", { status: 200 })) as typeof fetch,
     out: (l: string) => void lines.push(l),
     lines,
@@ -96,5 +96,48 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(await runProviderSubcommand(["provider", "import", "bad-win-vendor", "--model", "m-tiny"], io3)).toBe(0); // <1024 → 拒
     expect(readFileSync(io3.configPath, "utf8")).not.toContain("contextWindow");
     expect(io3.lines.some((l) => l.includes("无效"))).toBe(true);
+  });
+});
+
+describe("C5 便车：import 补 defaultModel + 降级报错（M4-2 T1）", () => {
+  // 注：方案原测试①未注入目录（默认 getCat 经 mock fetch 拿到空目录 → 厂商不存在即退出）——
+  // 任何实现都无法通过；按本文件 makeIo 注入形态改写，断言意图不变（config 含 defaultModel）。
+  it("① import --model → config 含 defaultModel（D32 裸名路由锚——与向导 setModel 同口径）", async () => {
+    const d = join(dir, "c5a");
+    mkdirSync(d, { recursive: true });
+    const configFile = join(d, "config.toml");
+    const code = await runProviderSubcommand(
+      ["provider", "import", "zhipuai", "--model", "glm-4.7", "--baseUrl", "https://api.z.ai/v4"],
+      {
+        configPath: configFile,
+        secretsPath: join(d, "s.env"),
+        env: {},
+        out: () => {},
+        getCatalog: async () => ({
+          catalog: { zhipuai: { name: "智谱", type: "openai", api: "https://api.z.ai/v4" } },
+          source: "online" as const,
+        }),
+        fetchImpl: (async () => new Response("{}", { status: 200 })) as typeof fetch,
+      },
+    );
+    expect(code).toBe(0);
+    expect(readFileSync(configFile, "utf8")).toContain('defaultModel = "glm-4.7"');
+  });
+
+  it("② 降级目录 + 未知厂商 → 报错含「本地缓存」提示", async () => {
+    const d = join(dir, "c5b");
+    mkdirSync(d, { recursive: true });
+    const lines: string[] = [];
+    await runProviderSubcommand(
+      ["provider", "import", "nonexistent-vendor"],
+      {
+        configPath: join(d, "config.toml"),
+        secretsPath: "",
+        env: {},
+        out: (l: string) => lines.push(l),
+        getCatalog: async () => ({ catalog: {}, source: "disk" as const, fetchedAt: Date.now() }),
+      },
+    );
+    expect(lines.some((l) => l.includes("本地缓存"))).toBe(true);
   });
 });
