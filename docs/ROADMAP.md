@@ -1,21 +1,22 @@
 # Orosus 路线图（之后做什么——单一事实源）
 
 > **维护纪律**：每批收官/立项/排期变更时更新本文件（commit 留痕）；细节不在本文展开，链接到对应方案书/台账/调研。
-> **状态快照**：2026-09-19 —— M4-2 已收官（508）；**M4-2.5 容量与多模态已收官（511→558 四门全绿，v32、D1–D51、批次 17）**；代码态 558 测试全绿。下一批 M4.5 子代理（既定顺序，见下）。
+> **状态快照**：2026-09-19 —— M4-2 已收官（508）；M4-2.5 容量与多模态已收官（511→558 四门全绿，v32、D1–D51、批次 17）；代码态 558 测试全绿。**下一批 = TUI 界面批（2026-09-19 用户拍板提前：主要功能基本完工、界面优先；raw-mode 前置小批可先行）**。
 
-## 排队中（按当前顺序）
+## 排队中（按执行顺序——批号是里程碑编号非序号，插队以本表顺序为准）
 
 | 顺序 | 批次 | 内容 | 状态 | 方案/出处 |
 |---|---|---|---|---|
-| 1 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | **下一位**（master plan 决策点⑤：M4-2 之后启动、不等 M4-3——编号表里程碑位置非执行序号；M4-2.5 热修批已插队收官） | master plan Part V.1 |
-| 2 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
-| 3 | **M5 候选池**（TUI 推荐为首项——见下） | 见下节 | 未立项 | master plan Part V.1 |
+| 1 | **TUI 界面批**（原 M5 首项候选，2026-09-19 用户拍板提前） | **前置小批（raw-mode，几天量级可先行）**：上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘/**Alt+V 按键粘贴**/@path#L10-L20 行范围补全 → **TUI 框架化**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一——先一周选型 spike） | 未立项（独立计划书；raw-mode 小批与选型 spike 可并行先行） | 本文件「M5 / 独立里程碑候选」节 |
+| 2 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | 既定（master plan 决策点⑤：M4-2 之后启动、不等 M4-3；被 TUI 插队顺延一位） | master plan Part V.1 |
+| 3 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
+| 4 | **M5 候选池剩余** | 见下节（TUI 已提出升为排队 1） | 未立项 | master plan Part V.1 |
 
 **已收官**：M4-2.5 容量与多模态（2026-09-19，511→558，`plans/2026-09-19-m4-2-5-capacity-multimodal.md`——read 窗口+去重/截断头尾 3:1/readTitle 预算//compact 立即+/summary/图片真实喂图 V.2 销账/OROSUS_HOME+home migrate）。
 
 ## M5 / 独立里程碑候选
 
-- **TUI 框架化（推荐 M5 首项，2026-09-19 排期讨论定）**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一）。技术前置已成熟（D45 旁路通道 ✅ + CommandUi 接缝 ✅），唯一缺选型 spike（一周）。排在 M4.5/M4-3 之后的理由是性价比（readline 层已榨干大半）而非技术依赖——用户可提前。
+- **TUI 框架化（已升为排队第 1 位——2026-09-19 用户拍板提前：主要功能基本完工、界面优先；技术前置已成熟）**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一）。技术前置已成熟（D45 旁路通道 ✅ + CommandUi 接缝 ✅），唯一缺选型 spike（一周）。
   - **前置小批可插队**：B5 第 2 层 raw-mode（上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘——自写小型组件零依赖，几天量级；顺带解锁 Esc 取消审批询问、@path#L10-L20 行范围补全；**+/paste Alt+V 按键粘贴**【2026-09-19 用户拍板从 V.2 远期池移入——微信截图场景实测诉求：readline 拿不到 Alt 组合键正是 raw-mode 问题，实现在剪贴板已有 `/paste` 命令态（M4-2 T10 + M4-2.5 T5 真实喂图）之上只补按键触发层】）。
 - 多前端服务器（headless server + CUI/Web 前端，dsh 形态；TUI 是其第一前端；前置：WorkspaceLease 跨会话写锁——Reasonix 借鉴）。
 - 用户态 hooks；企业面；声明式插件工程细节（随 `module add` 设计）。
