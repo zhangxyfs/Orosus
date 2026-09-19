@@ -12,7 +12,7 @@ import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
 import { banner } from "./banner.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
-import { renderHistoryLines, attachRender as attachRenderTo } from "./render.ts";
+import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -158,11 +158,29 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
     },
   });
 
+// 历史回显（B9 走查补 + 分页）：尾页优先（最新对话先可见），TTY 下回车向前翻页、q 结束；
+// 非交互（管道）只出尾页——巨量历史不再刷爆终端（单行截断在 renderHistoryLines）
+const echoHistory = async (h: Harness): Promise<void> => {
+  const lines = renderHistoryLines(await h.history());
+  const PAGE = 30;
+  let { shown, hiddenBefore } = historyPage(lines, PAGE);
+  if (hiddenBefore > 0) console.log(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
+  for (const l of shown) console.log(l);
+  while (hiddenBefore > 0 && process.stdin.isTTY) {
+    const more = await commandUi.ask(`…（前面还有 ${hiddenBefore} 行）回车=继续往前翻，q=停止回显`);
+    if (more.trim().toLowerCase() === "q") break;
+    const end = hiddenBefore;
+    const start = Math.max(0, end - PAGE);
+    for (let i = start; i < end; i++) console.log(lines[i]!);
+    hiddenBefore = start;
+  }
+};
+
 let h = await createSession();
 if (args.resume !== undefined) {
   // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）
   console.log(`[已恢复 ${h.sessionId}——历史对话如下]`);
-  for (const line of renderHistoryLines(await h.history())) console.log(line);
+  await echoHistory(h);
 }
 
 // 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
@@ -197,7 +215,7 @@ const switchTo = async (sid: string): Promise<void> => {
   h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
   activeDir = loc.dir;
   console.log(`[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`);
-  for (const line of renderHistoryLines(await h.history())) console.log(line); // 回显存量对话（B9 走查补）
+  await echoHistory(h); // 回显存量对话（B9 走查补 + 分页）
 };
 
 try {

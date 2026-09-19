@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { SessionEvent } from "@orosus/core";
-import { createRenderState, renderChunk, renderEvent, renderHistoryLines } from "./render.ts";
+import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage } from "./render.ts";
 
 // M4-1 T5/D45：chunk 渲染迁 renderChunk（断流后 chunk 经 liveChunks 旁路到达，不再落日志/事件流）；
 // 完成事件面仍走 renderEvent——两路共享 RenderState。
@@ -86,5 +86,24 @@ describe("历史回显（B9 走查补：resume 后屏幕空白——用户以为
       ev("tool/result", { output: "巨大输出不入屏" }),
     ]);
     expect(lines).toEqual(["> 你好", "答", "", "  [tool] tool-fs__read"]);
+  });
+});
+
+describe("回显分页（走查：巨量历史全量回显刷爆终端）", () => {
+  const ev2 = (type: string, fields: Record<string, unknown> = {}): SessionEvent =>
+    ({ id: "e1", sessionId: "s", ts: 0, seq: 1, type, ...fields }) as unknown as SessionEvent;
+  it("① historyPage：不超页全显示；超页取尾页并报 hiddenBefore", () => {
+    expect(historyPage(["a", "b", "c"], 30)).toEqual({ shown: ["a", "b", "c"], hiddenBefore: 0 });
+    const lines = Array.from({ length: 75 }, (_, i) => `L${i}`);
+    const p = historyPage(lines, 30);
+    expect(p.hiddenBefore).toBe(45);
+    expect(p.shown).toEqual(lines.slice(45));
+  });
+
+  it("② renderHistoryLines 单行截断：超 2000 字符的巨回答截断并注明原文位置", () => {
+    const huge = "x".repeat(3000);
+    const lines = renderHistoryLines([ev2("assistant/message", { content: [{ kind: "text", text: huge }] })]);
+    expect(lines[0]!.length).toBeLessThan(2100);
+    expect(lines[0]).toContain("完整原文在会话文件");
   });
 });

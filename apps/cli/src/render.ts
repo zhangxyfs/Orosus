@@ -58,7 +58,10 @@ export function renderEvent(e: SessionEvent, state: RenderState): string {
 
 /** 历史回显（B9 走查补，2026-09-19：resume 后屏幕上什么都没有——用户以为历史没记录）：
  *  存量事件 → 文案行。user 以 `> ` 呈现（与 REPL 输入形态一致）、assistant 只画正文块
- *  （reasoning 属审计面，回显不刷屏）、tool/call 一行带过（result 可能巨大不入屏）。 */
+ *  （reasoning 属审计面，回显不刷屏）、tool/call 一行带过（result 可能巨大不入屏）。
+ *  单行超长截断（走查：巨回答单行刷屏）——完整原文永远在会话文件。 */
+const HISTORY_LINE_MAX = 2000;
+
 export function renderHistoryLines(events: SessionEvent[]): string[] {
   const out: string[] = [];
   const textBlocks = (e: SessionEvent): string =>
@@ -66,18 +69,26 @@ export function renderHistoryLines(events: SessionEvent[]): string[] {
       .filter((p) => p.kind === "text")
       .map((p) => p.text ?? "")
       .join("");
+  const cap = (s: string): string => (s.length > HISTORY_LINE_MAX ? `${s.slice(0, HISTORY_LINE_MAX)}…（超长截断——完整原文在会话文件）` : s);
   for (const e of events) {
     if (e.type === "user/message") {
       const text = textBlocks(e);
-      if (text !== "") out.push(`> ${text}`);
+      if (text !== "") out.push(`> ${cap(text)}`);
     } else if (e.type === "assistant/message") {
       const text = textBlocks(e);
-      if (text !== "") out.push(text, "");
+      if (text !== "") out.push(cap(text), "");
     } else if (e.type === "tool/call") {
       out.push(`  [tool] ${String(e.name)}`);
     }
   }
   return out;
+}
+
+/** 回显分页（走查：历史太大全量回显刷爆终端）：尾页优先——最新对话最先可见，
+ *  hiddenBefore = 前面还有多少行（TTY 下由宿主翻页消费；非交互只出尾页）。 */
+export function historyPage(lines: string[], page = 30): { shown: string[]; hiddenBefore: number } {
+  if (lines.length <= page) return { shown: lines, hiddenBefore: 0 };
+  return { shown: lines.slice(lines.length - page), hiddenBefore: lines.length - page };
 }
 
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
