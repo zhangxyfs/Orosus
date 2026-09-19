@@ -7,10 +7,13 @@ export interface CliArgs {
   model?: string;
   resume?: { sessionId: string };                         // --resume <id>（D41/T6）
   fork?: { parentSessionId: string; atEntryId?: string }; // --fork <id>[:<entryId>]（D41/T6）
+  print?: string;                                          // --print <prompt> / -p（非交互单发，M4-2 T17）
+  outputFormat?: "text" | "json" | "stream-json";         // --output-format（仅 --print 模式）
 }
 
 const USAGE = `用法: orosus [--model <provider/model>] [--enable-module <name>]...
-             [--disable-module <name>]... [--no-modules [--module <name>]...] [--dump-modules]`;
+             [--disable-module <name>]... [--no-modules [--module <name>]...] [--dump-modules]
+             [--print <prompt> [--output-format text|json|stream-json]]`;
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { enable: [], disable: [], module: [], noModules: false, dumpModules: false };
@@ -27,6 +30,18 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--model": args.model = takeValue(i, "--model"); i++; break;
       case "--no-modules": args.noModules = true; break;
       case "--dump-modules": args.dumpModules = true; break;
+      case "--print":
+      case "-p": {
+        const v = takeValue(i, "--print"); i++;
+        args.print = v;
+        break;
+      }
+      case "--output-format": {
+        const v = takeValue(i, "--output-format"); i++;
+        if (v !== "text" && v !== "json" && v !== "stream-json") throw new Error(`--output-format 非法值 "${v}"（合法：text | json | stream-json）\n${USAGE}`);
+        args.outputFormat = v;
+        break;
+      }
       case "--resume": {
         const v = takeValue(i, "--resume"); i++;
         args.resume = { sessionId: v };

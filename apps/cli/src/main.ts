@@ -15,6 +15,7 @@ import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
 import { pasteImage, withImageRef } from "./paste.ts";
+import { runPrint } from "./print.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -179,7 +180,19 @@ const echoHistory = async (h: Harness): Promise<void> => {
 };
 
 let h = await createSession();
-if (args.resume !== undefined) {
+if (args.dumpModules) {
+  console.log(h.graph().catalog());
+  await h.close();
+  process.exit(0);
+}
+
+// --print（M4-2 T17）：非交互单发——三格式输出后以 exitCode 收尾，不进 REPL、不触发首启引导/历史回显
+if (args.print !== undefined) {
+  await runPrint(h, args.print, args, (s) => console.log(s));
+  rl.close();
+  await h.close();
+  process.exitCode = 0;
+} else if (args.resume !== undefined) {
   // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）
   console.log(`[已恢复 ${h.sessionId}——历史对话如下]`);
   await echoHistory(h);
@@ -187,15 +200,9 @@ if (args.resume !== undefined) {
 
 // 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
 
-if (args.dumpModules) {
-  console.log(h.graph().catalog());
-  await h.close();
-  process.exit(0);
-}
-
 // 首启引导（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认转 /provider 向导 → /reload → 复检回显；
-// 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）
-if (process.stdin.isTTY) {
+// 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）；--print 单发不触发
+if (args.print === undefined && process.stdin.isTTY) {
   const out = await startupGate({ h, ui: commandUi, readModel: realReadModel(process.cwd()), isTty: true });
   if (out !== undefined) console.log(out);
 }
@@ -221,7 +228,8 @@ const switchTo = async (sid: string): Promise<void> => {
   await echoHistory(h); // 回显存量对话（B9 走查补 + 分页）
 };
 
-try {
+// REPL（--print 单发模式不进——M4-2 T17：runPrint 已收尾）
+if (args.print === undefined) try {
   sessionLoop: for (;;) {
     for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) console.error(line);
     attachRender(h);
