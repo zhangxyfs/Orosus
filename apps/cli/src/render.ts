@@ -1,5 +1,6 @@
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
+import { renderMarkdown } from "./markdown.ts";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[22m";
@@ -76,7 +77,7 @@ export function renderHistoryLines(events: SessionEvent[]): string[] {
       if (text !== "") out.push(`> ${cap(text)}`);
     } else if (e.type === "assistant/message") {
       const text = textBlocks(e);
-      if (text !== "") out.push(cap(text), "");
+      if (text !== "") out.push(renderMarkdown(cap(text)), ""); // M4-2 T13：回显面 markdown 第 1 层（流式期间原样）
     } else if (e.type === "tool/call") {
       out.push(`  [tool] ${String(e.name)}`);
     }
