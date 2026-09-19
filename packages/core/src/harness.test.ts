@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -510,7 +510,7 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3", "glm-4.7"] });
     uiAnswers.choose.push("fake（默认 m0，裸名即用）", "glm-4.7");
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换：fake/glm-4.7");
+    expect(out).toContain("model 已切换并写入 config：fake/glm-4.7");
     await h.close();
   });
 
@@ -519,7 +519,7 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     uiAnswers.choose.push("fake（默认 m0，裸名即用）");
     uiAnswers.ask.push("manual-x");
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换：manual-x");
+    expect(out).toContain("model 已切换并写入 config：manual-x");
     await h.close();
   });
 
@@ -527,7 +527,7 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const h1s = await mk({});
     h1s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
     h1s.uiAnswers.ask.push("GLM-5.3");
-    expect(await h1s.h.prompt("/model")).toContain("model 已切换：fake/GLM-5.3");
+    expect(await h1s.h.prompt("/model")).toContain("model 已切换并写入 config：fake/GLM-5.3");
     await h1s.h.close();
     const h2s = await mk({ extraProv: true });
     h2s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
@@ -740,5 +740,31 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     } finally {
       rmSync(d2, { recursive: true, force: true });
     }
+  });
+});
+
+describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config，否则仅本会话）", () => {
+  const mkUi = (confirmAnswer: boolean): CommandUi => ({
+    ask: async () => "fake/new-model",
+    askSecret: async () => "",
+    confirm: async () => confirmAnswer,
+    choose: async (_t, items) => items.find((i) => i.includes("手动输入")) ?? items[0]!,
+  });
+
+  it("① 选后 y → user config 顶层 model 行级写入（读-改-写保其他键）", async () => {
+    const h = await makeHarness({ commandUi: mkUi(true) });
+    const out = await h.prompt("/model");
+    expect(out).toContain("model 已切换并写入 config");
+    const cfgText = readFileSync(join(dir, "no-user.toml"), "utf8");
+    expect(cfgText).toContain('model = "fake/new-model"');
+    await h.close();
+  });
+
+  it("② 选后 n → 仅本会话内存态（config 不落盘）", async () => {
+    const h = await makeHarness({ commandUi: mkUi(false) });
+    const out = await h.prompt("/model");
+    expect(out).toContain("model 已切换（本会话）");
+    expect(existsSync(join(dir, "no-user.toml"))).toBe(false); // hermetic userFile 未创建
+    await h.close();
   });
 });

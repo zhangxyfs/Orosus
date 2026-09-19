@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
@@ -159,8 +160,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const secretsLoad = loadSecretsEnv(options.secretsFile ?? join(home, "secrets.env"));
   let secrets = secretsLoad.vars; // reload 需重读（向导等运行期写入 secrets.env 后 reload 须看到新值——修复：启动快照导致 $ENV 占位符解析不到 → 字面量当 key → 401）
   if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
+  const userConfigFile = options.config?.userFile ?? join(home, "config.toml"); // /model 持久化落点（M4-2 T14）
   let config = loadConfig({
-    userFile: options.config?.userFile ?? join(home, "config.toml"),
+    userFile: userConfigFile,
     projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
     ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
     // D37 优先级：显式 env 参数 > process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺
@@ -365,7 +367,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       }
       if (next === "") return "已取消（空输入）";
       modelOverride = next;
-      return `model 已切换：${next}（下个 turn 生效，request/header 将落新条目）`;
+      // 持久化确认（M4-2 T14/D38 修订）：缺省仍内存态（D38 原语义不变），显式确认才写盘——
+      // 行级写 user config 顶层 model 键（无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
+      const persist = await commandUi.confirm("写入 config 永久生效？（否则仅本会话）");
+      if (persist) {
+        const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
+        const after = /^model\s*=.*$/m.test(before)
+          ? before.replace(/^model\s*=.*$/m, `model = "${next}"`)
+          : `${before}${before.endsWith("\n") || before === "" ? "" : "\n"}model = "${next}"\n`;
+        writeFileSync(userConfigFile, after, "utf8");
+        return `model 已切换并写入 config：${next}（下次启动生效；project 层若有 model 键则以其为准）`;
+      }
+      return `model 已切换（本会话）：${next}`;
     }],
     ["/help", async () => {
       const lines = ["内建命令：", "  /model /help /status /usage /reload"]; // M2 补账：/reload 是内建表第五成员，原清单漏列
