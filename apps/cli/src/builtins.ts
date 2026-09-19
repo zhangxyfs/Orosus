@@ -2,6 +2,7 @@ import type { ModuleDefinition } from "@orosus/contracts/module";
 import toolFs from "@orosus/tool-fs";
 import toolShell from "@orosus/tool-shell";
 import toolTodo from "@orosus/tool-todo";
+import toolAsk from "@orosus/tool-ask";
 import anthropic from "@orosus/provider-anthropic";
 import glm from "@orosus/provider-glm";
 import kimi from "@orosus/provider-kimi";
@@ -14,11 +15,12 @@ import approval from "@orosus/approval";
 import compaction from "@orosus/compaction";
 
 /** CLI 内置模块全家福（§8.7 builtin 层，M2 收敛）。
- *  approval（T3）与 compaction（T5）已接入；tool-todo（M4-2 T7）任务清单。 */
+ *  approval（T3）与 compaction（T5）已接入；tool-todo（M4-2 T7）任务清单；tool-ask（T8）模型提问。 */
 export const BUILTIN_MODULES: ModuleDefinition[] = [
   toolFs,
   toolShell,
   toolTodo,
+  toolAsk,
   anthropic,
   glm,
   kimi,

@@ -38,7 +38,7 @@ describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生�
     const audit = h.graph().audit();
     expect(audit).toHaveLength(BUILTIN_MODULES.length); // T5 起 12
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "mcp", "provider-custom", "provider-openai", "skill", "tool-fs", "tool-shell", "tool-todo"], // T3 approval / T5 compaction 入图
+      ["approval", "compaction", "mcp", "provider-custom", "provider-openai", "skill", "tool-ask", "tool-fs", "tool-shell", "tool-todo"], // T3 approval / T5 compaction 入图
     );
     const failed = audit.filter((a) => a.state === "failed");
     expect(failed.map((a) => a.name).sort()).toEqual(["provider-anthropic", "provider-deepseek", "provider-glm", "provider-kimi"]);

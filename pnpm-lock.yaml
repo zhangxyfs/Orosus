@@ -38,6 +38,9 @@ importers:
       '@orosus/testing':
         specifier: workspace:*
         version: link:packages/testing
+      '@orosus/tool-ask':
+        specifier: workspace:*
+        version: link:packages/modules/tool-ask
       '@orosus/tool-fs':
         specifier: workspace:*
         version: link:packages/modules/tool-fs
@@ -104,6 +107,9 @@ importers:
       '@orosus/skill':
         specifier: workspace:*
         version: link:../../packages/modules/skill
+      '@orosus/tool-ask':
+        specifier: workspace:*
+        version: link:../../packages/modules/tool-ask
       '@orosus/tool-fs':
         specifier: workspace:*
         version: link:../../packages/modules/tool-fs
@@ -247,6 +253,22 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.6.5
+
+  packages/modules/tool-ask:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+    devDependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../../testing
 
   packages/modules/tool-fs:
     dependencies:

@@ -23,6 +23,7 @@
     "@orosus/tool-fs": "workspace:*",
     "@orosus/tool-shell": "workspace:*",
     "@orosus/tool-todo": "workspace:*",
+    "@orosus/tool-ask": "workspace:*",
     "@types/node": "^22.10.0",
     "oxlint": "^1.0.0",
     "tsdown": "^0.9.0",
