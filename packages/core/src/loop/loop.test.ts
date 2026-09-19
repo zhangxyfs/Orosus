@@ -7,6 +7,7 @@ import { InMemorySessionStore } from "../session/memory.ts";
 import { createEventBus, CORE_POINTS } from "../kernel/bus.ts";
 import { createToolRegistry } from "../tool/registry.ts";
 import { agentLoop } from "./loop.ts";
+import { deriveMessages } from "./convert.ts";
 import type { DiagSink, DiagRecord } from "../diag/logger.ts";
 
 const sink = (): DiagSink & { records: DiagRecord[] } => {
@@ -32,10 +33,12 @@ const setup = (script: Chunk[][]) => {
 };
 
 describe("agentLoop（§6.2 零策略骨架）", () => {
-  it("纯文本对话：turn 骨架 + chunk 双写 + 物化 assistant/message + completed", async () => {
+  it("纯文本对话（T5/D45 断流）：无 assistant/chunk——完成事件一条物化 content 块（reasoning 前 text 后）+ usage", async () => {
     const { run, bus, session } = setup([[
+      { type: "reasoning/delta", text: "思" },
       { type: "text/delta", text: "你" },
       { type: "text/delta", text: "好" },
+      { type: "usage", input: 3, output: 2 },
       { type: "finish", kind: "stop" },
     ]]);
     const preSteps: unknown[] = [];
@@ -43,10 +46,26 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     const types = await run();
     expect(types).toEqual([
       "turn/start", "turn/step", "request/header",
-      "assistant/chunk", "assistant/chunk", "assistant/chunk",
       "assistant/message", "turn/end",
     ]);
-    expect(preSteps).toEqual([{ turn: (await session.all())[0]!.id }]); // step 开始广播被驱动（§6.5：白名单 8 点全部装配）
+    expect(preSteps).toEqual([{ turn: (await session.all())[0]!.id }]); // step 开始广播被驱动（§6.5）
+    const all = await session.all();
+    const msg = all.find((e) => e.type === "assistant/message")!;
+    expect(msg.content).toEqual([{ kind: "reasoning", text: "思" }, { kind: "text", text: "你好" }]); // reasoning 首次持久化（D45）
+    expect(msg.usage).toEqual({ input: 3, output: 2 }); // usage 落 message（不再只在 chunk 碎片里）
+    expect(deriveMessages(all).at(-1)).toEqual({ role: "assistant", content: [{ kind: "text", text: "你好" }] }); // reasoning 不回流模型（v1 定案）
+  });
+
+  it("livePush 收到全量 chunk（断流后旁路是唯一实时面）", async () => {
+    const { s, bus, tools, session, provider } = setup([[
+      { type: "text/delta", text: "a" },
+      { type: "finish", kind: "stop" },
+    ]]);
+    const pushed: string[] = [];
+    for await (const _ of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s, livePush: (c) => pushed.push(c.type) })) {
+      // 驱动迭代
+    }
+    expect(pushed).toEqual(["text/delta", "finish"]);
   });
 
   it("工具调用回合：tool/call → tool/result 落日志，下一请求消息含 toolResult 投影", async () => {

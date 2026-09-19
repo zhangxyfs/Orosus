@@ -75,11 +75,21 @@ export function sumUsage(events: SessionEvent[]): { input: number; output: numbe
   let input = 0;
   let output = 0;
   for (const e of events) {
-    if (e.type !== "assistant/chunk") continue;
-    const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-    if (c?.type === "usage") {
-      input += c.input ?? 0;
-      output += c.output ?? 0;
+    if (e.type === "assistant/chunk") {
+      const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+      if (c?.type === "usage") {
+        input += c.input ?? 0;
+        output += c.output ?? 0;
+      }
+      continue;
+    }
+    // T5/D45 双形态：新会话 usage 落 assistant/message（断流后无 chunk）；旧会话落 chunk——一事件只属一形态
+    if (e.type === "assistant/message") {
+      const u = e.usage as { input?: number; output?: number } | undefined;
+      if (u !== undefined) {
+        input += u.input ?? 0;
+        output += u.output ?? 0;
+      }
     }
   }
   return { input, output };
@@ -193,11 +203,21 @@ export class JsonlSessionStore implements SessionStore {
         } catch {
           continue; // 他会话 torn tail：累计值不因坏行中断
         }
-        if (e.type !== "assistant/chunk") continue;
-        const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-        if (c?.type === "usage") {
-          fileInput += c.input ?? 0;
-          fileOutput += c.output ?? 0;
+        if (e.type === "assistant/chunk") {
+          const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+          if (c?.type === "usage") {
+            fileInput += c.input ?? 0;
+            fileOutput += c.output ?? 0;
+          }
+          continue;
+        }
+        // T5/D45 双形态（与 sumUsage 同款）：新形态 usage 落 assistant/message
+        if (e.type === "assistant/message") {
+          const u = e.usage as { input?: number; output?: number } | undefined;
+          if (u !== undefined) {
+            fileInput += u.input ?? 0;
+            fileOutput += u.output ?? 0;
+          }
         }
       }
       input += fileInput;

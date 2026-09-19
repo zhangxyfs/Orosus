@@ -27,7 +27,7 @@ export interface SessionStore {
 export const LOG_TYPES = {
   sessionHeader: "session/header",
   userMessage: "user/message",
-  assistantChunk: "assistant/chunk",
+  assistantChunk: "assistant/chunk", // T5/D45 后 legacy：新会话不再产生（delta 不落盘）——存量文件读取/汇总保留（双形态）
   assistantMessage: "assistant/message",
   steeringMessage: "agent/steering-message",
   turnStart: "turn/start",

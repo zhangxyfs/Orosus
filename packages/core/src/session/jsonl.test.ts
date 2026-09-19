@@ -91,3 +91,24 @@ describe("JsonlSessionStore", () => {
     await s4.close();
   });
 });
+
+describe("sumUsage / lifetimeUsage 双形态（M4-1 T5/D45：新形态 usage 落 assistant/message）", () => {
+  it("新形态：assistant/message.usage 计入（断流后无 chunk 事件）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-dual-"));
+    const s = new JsonlSessionStore({ dir, sessionId: "s_new" });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 11, output: 4 } });
+    expect(await s.lifetimeUsage()).toEqual({ input: 11, output: 4, sessions: 1 });
+    await s.close();
+  });
+
+  it("混合（旧 chunk + 新 message 各自计一次，不双算——一事件只属一形态）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-dual-"));
+    const legacy = new JsonlSessionStore({ dir, sessionId: "s_old" });
+    await legacy.append("assistant/chunk", { chunk: { type: "usage", input: 10, output: 4 } });
+    await legacy.close();
+    const cur = new JsonlSessionStore({ dir, sessionId: "s_cur" }); // 旧会话续聊后新 turn 落 message.usage
+    await cur.append("assistant/message", { content: [{ kind: "text", text: "续" }], usage: { input: 5, output: 1 } });
+    expect(await cur.lifetimeUsage()).toEqual({ input: 15, output: 5, sessions: 2 });
+    await cur.close();
+  });
+});

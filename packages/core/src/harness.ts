@@ -359,7 +359,7 @@ session: ${store.sessionId}
       const cur = sumUsage(await store.all());
       if (store.lifetimeUsage !== undefined) {
         const all = await store.lifetimeUsage();
-        return `当前会话：input ${cur.input} / output ${cur.output} tokens\n累计（全部 ${all.sessions} 场会话）：input ${all.input} / output ${all.output} tokens`;
+        return `当前会话：input ${cur.input} / output ${cur.output} tokens\n累计（当前项目 ${all.sessions} 场会话）：input ${all.input} / output ${all.output} tokens`; // T5/决策点④：口径收窄为当前项目桶——标签随口径同步（用户视角防撒谎）
       }
       return `当前会话：input ${cur.input} / output ${cur.output} tokens`;
     }],

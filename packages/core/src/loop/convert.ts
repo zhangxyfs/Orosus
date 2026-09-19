@@ -18,9 +18,12 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         for (const m of items) out.push({ role: "user", content: [{ kind: "text", text: m.text }] });
         break;
       }
-      case "assistant/message":
-        out.push({ role: "assistant", content: (e.content ?? []) as ContentPart[] });
+      case "assistant/message": {
+        // T5/D45：reasoning 块只入审计/显示面，不回流模型（现状 reasoning 本就不回流——v1 定案，思考回流属 M5+）
+        const content = ((e.content ?? []) as ContentPart[]).filter((p) => (p as { kind?: string }).kind !== "reasoning");
+        out.push({ role: "assistant", content });
         break;
+      }
       case "tool/call": {
         seenCalls.add(String(e.callId));
         const last = out[out.length - 1];

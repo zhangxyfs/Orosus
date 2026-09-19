@@ -254,7 +254,7 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.prompt("hi");
     const out = await h.prompt("/usage");
     expect(out).toContain("当前会话：input 3 / output 5 tokens");
-    expect(out).toContain("累计（全部 2 场会话）：input 14 / output 11 tokens"); // 11+3 / 6+5
+    expect(out).toContain("累计（当前项目 2 场会话）：input 14 / output 11 tokens"); // 11+3 / 6+5——T5/决策点④：标签随口径收窄同步（dir 即项目桶）
     await h.close();
   });
 });
@@ -558,7 +558,7 @@ describe("liveChunks 实时旁路通道（M4-1 T4/D45——双投并存态）", 
     expect(got).toEqual(["reasoning/delta", "text/delta", "usage", "finish"]);
   });
 
-  it("② 并存态：events() 仍含 assistant/chunk（日志投影不受旁路影响——T5 断流前的安全网）", async () => {
+  it("② 断流钉子（T5 落地后）：events() 不再含 assistant/chunk——chunk 仅经 liveChunks 旁路（①）", async () => {
     const h = await mkT4();
     const types: string[] = [];
     const collect = (async () => {
@@ -569,7 +569,7 @@ describe("liveChunks 实时旁路通道（M4-1 T4/D45——双投并存态）", 
     })();
     await h.prompt("hi");
     await collect;
-    expect(types.filter((t) => t === "assistant/chunk")).toHaveLength(4);
+    expect(types).not.toContain("assistant/chunk"); // 断流（D45）：日志只落完成事件
     expect(types).toContain("assistant/message");
     await h.close();
   });

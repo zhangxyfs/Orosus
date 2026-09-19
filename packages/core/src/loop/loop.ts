@@ -131,13 +131,15 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
 
     log.debug("loop.provider.stream-start", "provider 流式开始", { messages: messages.length });
     let text = "";
+    let reasoning = ""; // T5/D45：流内累积——reasoning 首次持久化（只入审计/显示面；投影跳过，模型可见性不变）
+    let usage: { input: number; output: number } | undefined;
     const pending = new Map<string, PendingToolCall>();
     let finish: Extract<Chunk, { type: "finish" }> = { type: "finish", kind: "stop" };
 
     try {
       for await (const chunk of provider({ model, system, messages, tools: tools.specs(), signal })) {
-        yield* emit(LOG_TYPES.assistantChunk, { chunk });
-        opts.livePush?.(chunk); // 双投并存（T4/D45）：日志投影 + 实时旁路
+        // 断流（T5/D45）：assistantChunk 不再落日志——实时经 livePush 旁路；完成事件 = assistant/message 一条
+        opts.livePush?.(chunk);
         if (signal.aborted) {
           finish = { type: "finish", kind: "aborted" };
           break;
@@ -145,6 +147,12 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
         switch (chunk.type) {
           case "text/delta":
             text += chunk.text;
+            break;
+          case "reasoning/delta":
+            reasoning += chunk.text;
+            break;
+          case "usage":
+            usage = { input: chunk.input, output: chunk.output };
             break;
           case "toolcall/argumentsDelta": {
             const p = pending.get(chunk.callId) ?? { callId: chunk.callId, name: "", argsJson: "" };
@@ -157,7 +165,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
             finish = chunk;
             break;
           default:
-            break; // reasoning/usage：已落日志，骨架不消费
+            break;
         }
       }
     } catch (err) {
@@ -166,9 +174,16 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     }
     log.debug("loop.provider.stream-finish", "provider 流式结束", { kind: finish.kind });
 
-    if (text !== "" || pending.size > 0) {
-      // 纯工具回合无文本：content 留空数组（tool/call 随后落条附挂到这条 assistant）——不放空 text 段，Anthropic 拒收空 text block
-      yield* emit(LOG_TYPES.assistantMessage, { content: text !== "" ? [{ kind: "text", text }] : [] });
+    if (text !== "" || reasoning !== "" || pending.size > 0) {
+      // 完成事件扩形（T5/D45）：content 块数组（reasoning 在前 text 在后）+ usage——纯工具回合 content 留空数组
+      // （tool/call 随后落条附挂——不放空 text 段，Anthropic 拒收空 text block）
+      yield* emit(LOG_TYPES.assistantMessage, {
+        content: [
+          ...(reasoning !== "" ? [{ kind: "reasoning", text: reasoning }] : []),
+          ...(text !== "" ? [{ kind: "text", text }] : []),
+        ],
+        ...(usage !== undefined ? { usage } : {}),
+      });
     }
 
     if (finish.kind === "aborted" || signal.aborted) {
