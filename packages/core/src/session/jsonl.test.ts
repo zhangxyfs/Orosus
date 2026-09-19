@@ -112,3 +112,30 @@ describe("sumUsage / lifetimeUsage 双形态（M4-1 T5/D45：新形态 usage 落
     await cur.close();
   });
 });
+
+describe("/fork 用量去重（M4-2 T4/B3——子体 lineage 以父计，cc-haha 同款）", () => {
+  it("fork 子体 usage 跳过——父已含", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-fork-"));
+    // 父：无 parentSession
+    const parent = new JsonlSessionStore({ dir, sessionId: "s_parent" });
+    await parent.append("session/header", { cwd: "/x", parentSession: null });
+    await parent.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 10, output: 4 } });
+    await parent.close();
+    // 子：parentSession = 父 sid
+    const child = new JsonlSessionStore({ dir, sessionId: "s_child" });
+    await child.append("session/header", { cwd: "/x", parentSession: "s_parent" });
+    await child.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 5, output: 1 } });
+    await child.close();
+    // 子会话视角：自身 5/1 跳过 + 父文件 10/4 计入 = 10/4/1（不双算）
+    expect(await child.lifetimeUsage()).toEqual({ input: 10, output: 4, sessions: 1 });
+    // 第三会话视角：父计入、子文件整个跳过
+    const third = new JsonlSessionStore({ dir, sessionId: "s_third" });
+    await third.append("session/header", { cwd: "/x", parentSession: null });
+    expect(await third.lifetimeUsage()).toEqual({ input: 10, output: 4, sessions: 1 });
+    await third.close();
+    // 父会话视角（resume 父后 /usage）：子体不回灌
+    const parentResumed = new JsonlSessionStore({ dir, sessionId: "s_parent" });
+    expect(await parentResumed.lifetimeUsage()).toEqual({ input: 10, output: 4, sessions: 1 });
+    await parentResumed.close();
+  });
+});

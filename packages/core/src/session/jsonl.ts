@@ -180,21 +180,29 @@ export class JsonlSessionStore implements SessionStore {
   }
 
   /** 跨会话累计（/usage 口径修复：重启后此前会话的用量不归零）。当前会话取内存镜像——
-   *  buffer 可能未 drain；其余会话读盘，坏行（torn tail）跳过不炸。会话数按文件计（有用量才算）。 */
+   *  buffer 可能未 drain；其余会话读盘，坏行（torn tail）跳过不炸。会话数按文件计（有用量才算）。
+   *  fork 子体整文件跳过（M4-2 T4/B3）：header.parentSession 非空 = fork 子体，其 usage 不入累计
+   *  ——lineage 以父计（cc-haha 同款）；当前会话自身是子体时同样跳过（父文件仍在同目录被计入）。 */
   async lifetimeUsage(): Promise<{ input: number; output: number; sessions: number }> {
     let input = 0;
     let output = 0;
     let sessions = 0;
+    const ownHeader = this.events[0];
+    const ownParent = (ownHeader as { parentSession?: unknown } | undefined)?.parentSession;
+    const ownIsForkChild = ownHeader !== undefined && ownHeader.type === "session/header"
+      && ownParent !== null && ownParent !== undefined;
+    if (!ownIsForkChild) {
+      const u = sumUsage(this.events);
+      input += u.input;
+      output += u.output;
+      if (u.input > 0 || u.output > 0) sessions++;
+    }
     for (const name of readdirSync(this.dir).filter((n) => n.endsWith(".jsonl")).toSorted((a, b) => a.localeCompare(b))) {
-      if (name === `${this.sessionId}.jsonl`) {
-        const u = sumUsage(this.events);
-        input += u.input;
-        output += u.output;
-        if (u.input > 0 || u.output > 0) sessions++;
-        continue;
-      }
+      if (name === `${this.sessionId}.jsonl`) continue; // 当前会话已按内存镜像计（或为 fork 子体跳过）
       let fileInput = 0;
       let fileOutput = 0;
+      let isForkChild = false;
+      let seenFirst = false;
       for (const line of readFileSync(join(this.dir, name), "utf8").split("\n")) {
         if (line === "") continue;
         let e: SessionEvent;
@@ -203,6 +211,12 @@ export class JsonlSessionStore implements SessionStore {
         } catch {
           continue; // 他会话 torn tail：累计值不因坏行中断
         }
+        if (!seenFirst) {
+          seenFirst = true;
+          const ps = (e as { parentSession?: unknown }).parentSession;
+          if (e.type === "session/header" && ps !== null && ps !== undefined) isForkChild = true;
+        }
+        if (isForkChild) continue; // 子体整文件跳过——含 sessions 计数
         if (e.type === "assistant/chunk") {
           const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
           if (c?.type === "usage") {
@@ -220,6 +234,7 @@ export class JsonlSessionStore implements SessionStore {
           }
         }
       }
+      if (isForkChild) continue;
       input += fileInput;
       output += fileOutput;
       if (fileInput > 0 || fileOutput > 0) sessions++;
