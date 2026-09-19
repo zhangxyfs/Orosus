@@ -104,6 +104,7 @@ export class JsonlSessionStore implements SessionStore {
     this.file = join(opts.dir, `${this.sessionId}.jsonl`);
     repairFile(this.file);
     if (existsSync(this.file)) {
+      this.fileEnsured = true;
       const lines = readFileSync(this.file, "utf8").split("\n").filter(Boolean);
       for (const line of lines) {
         const e = JSON.parse(line) as SessionEvent;
@@ -111,11 +112,9 @@ export class JsonlSessionStore implements SessionStore {
         this.lastId = e.id;
         this.events.push(e);
       }
-    } else {
-      const fd = openSync(this.file, "a", 0o600);
-      closeSync(fd);
-      if (process.platform !== "win32") chmodSync(this.file, 0o600);
     }
+    // M4-1 T0（D46 止血）：文件不再构造期预建——零 append 的临时会话零落盘；首写时 ensureFile 以 0o600 懒建。
+    // 既有文件的权限校正与 dev/ino 身份记录保留（POSIX 语义）。
     if (process.platform !== "win32" && existsSync(this.file)) {
       const st = statSync(this.file);
       if ((st.mode & 0o777) !== 0o600) chmodSync(this.file, 0o600);
@@ -125,6 +124,16 @@ export class JsonlSessionStore implements SessionStore {
   }
 
   private devIno: string | null = null;
+  private fileEnsured = false;
+
+  /** 首写前懒建文件（0o600——构造期预建的权限硬化语义原样移到此处）。 */
+  private ensureFile(): void {
+    if (this.fileEnsured) return;
+    this.fileEnsured = true;
+    const fd = openSync(this.file, "a", 0o600);
+    closeSync(fd);
+    if (process.platform !== "win32") chmodSync(this.file, 0o600);
+  }
 
   append(type: string, fields: Record<string, unknown> = {}): Promise<SessionEvent> {
     if (this.closed) return Promise.reject(new Error("store closed"));
@@ -147,6 +156,7 @@ export class JsonlSessionStore implements SessionStore {
 
   private drain(): void {
     if (this.buffer.length === 0) return;
+    this.ensureFile(); // 首写懒建（T0）——权限 0o600 与原构造期预建语义一致
     if (this.devIno !== null && process.platform !== "win32") {
       const st = statSync(this.file);
       if (`${st.dev}:${st.ino}` !== this.devIno) throw new Error("log file replaced (symlink attack?)");

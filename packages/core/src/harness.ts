@@ -208,13 +208,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
-  // header 分支（D41/T6）：resume 的既有文件已带 header（不重复落）；fork 落新 header（parentSession）+ session/fork 首事件
+  // header 懒写（M4-1 T0/D46 止血）：构造期零落盘——临时会话（CLI 启动即退 / --dump-modules / 引导后未聊）
+  // 不再各留一个空壳文件（走查垃圾场 1147 文件的主源头）。首次真实 turn 前补写（命令派发不触发——
+  // onboarding 的 /provider、/reload 不落盘），保持 §6.1「文件首行 = session/header」不变量；
+  // resume 的既有文件已带 header（不重复落）；模块图摘要取写入时刻的图（onboarding 在首聊前 /reload，
+  // 捕获的是会话真正开工时的图——比构造期快照更真）。fork 的 sourceEntryId 仍在 fork 时刻取父尾（语义不变）。
   const existingEvents = await store.all();
-  if (options.resume === undefined || existingEvents.length === 0) {
-    let sourceEntryId: string | undefined;
-    if (options.fork !== undefined) {
-      sourceEntryId = options.fork.atEntryId ?? existingEvents[existingEvents.length - 1]?.id;
-    }
+  let headerPending = options.resume === undefined || existingEvents.length === 0;
+  const pendingForkSourceEntryId = headerPending && options.fork !== undefined
+    ? options.fork.atEntryId ?? existingEvents[existingEvents.length - 1]?.id
+    : undefined;
+  const ensureHeader = async (): Promise<void> => {
+    if (!headerPending) return;
+    headerPending = false;
     await store.append(LOG_TYPES.sessionHeader, {
       format: 1,
       cwd: options.cwd ?? process.cwd(),
@@ -225,9 +231,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       },
     });
     if (options.fork !== undefined) {
-      await store.append(LOG_TYPES.sessionFork, { sourceEntryId: sourceEntryId ?? null, parentSession: options.fork.parentSessionId });
+      await store.append(LOG_TYPES.sessionFork, { sourceEntryId: pendingForkSourceEntryId ?? null, parentSession: options.fork.parentSessionId });
     }
-  }
+  };
   // 读侧自修复 pass（§6.1/D41）：resume/fork 打开既有历史时做链校验（根分段——复合投影零误报），问题逐条进诊断
   if (options.resume !== undefined || options.fork !== undefined) {
     for (const issue of verifyChain(await store.all())) {
@@ -412,6 +418,7 @@ session: ${store.sessionId}
           }
         })();
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
+        await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
         await store.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text }] });
         try {
           for await (const _ of agentLoop({

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -500,5 +500,65 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     h2s.uiAnswers.ask.push("GLM-5.3");
     expect(await h2s.h.prompt("/model")).toContain("无法确定 provider");
     await h2s.h.close();
+  });
+});
+
+describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）", () => {
+  // 开工实证修正：计划原前提「onboarding 校验 harness」不成立——向导校验是直接 fetch、startupGate 复用主 harness；
+  // 真实垃圾源 = createHarness 构造期急切写 session/header（原 harness.ts:218）——每次 CLI 启动/--dump-modules/引导后未聊即退各留一个文件
+  const mkJsonl = async (d: string, extra: Parameters<typeof createHarness>[0] = {}) => {
+    const store = new JsonlSessionStore({ dir: join(d, "sessions") });
+    const h = await createHarness({
+      diagDir: d,
+      spillDir: join(d, "spill"),
+      store,
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(d), cliOverrides: { model: "fake/m" } },
+      ...extra,
+    });
+    return { h, store };
+  };
+  const freshDir = (): string => { dir = mkdtempSync(join(tmpdir(), "orosus-t0-")); return dir; };
+
+  it("① 零落盘钉子：构造后 sessions 目录零文件——改回急切 header 此例必红", async () => {
+    const d = freshDir();
+    const { h } = await mkJsonl(d);
+    expect(readdirSync(join(d, "sessions"))).toEqual([]);
+    await h.close();
+  });
+
+  it("② 首次 prompt 后文件存在且 header 仍是首事件、seq 连续（懒写不破 §6.1 首行不变量）", async () => {
+    const d = freshDir();
+    const { h, store } = await mkJsonl(d);
+    await h.prompt("hi");
+    await h.close();
+    const recs = readFileSync(join(d, "sessions", `${store.sessionId}.jsonl`), "utf8").trim().split("\n")
+      .map((l) => JSON.parse(l) as { type: string; seq: number });
+    expect(recs[0]!.type).toBe("session/header");
+    expect(recs.map((r) => r.seq)).toEqual(recs.map((_, i) => i + 1));
+  });
+
+  it("③ fork 懒写：fork 构造零新文件；首 prompt 后前两事件 = header + session/fork（sourceEntryId = fork 时刻父尾）", async () => {
+    const d = freshDir();
+    const { h: hp, store: parent } = await mkJsonl(d);
+    await hp.prompt("父问题");
+    await hp.close();
+    const tailId = (await parent.all()).at(-1)!.id;
+    // 真实 fork 路径：createHarness 自建 ForkSessionStore 复合体（parent + own）——不手塞 store
+    const hc = await createHarness({
+      diagDir: d,
+      spillDir: join(d, "spill"),
+      sessionsDir: join(d, "sessions"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(d), cliOverrides: { model: "fake/m" } },
+      fork: { parentSessionId: parent.sessionId },
+    });
+    expect(readdirSync(join(d, "sessions"))).toEqual([`${parent.sessionId}.jsonl`]); // 仅父文件——own 未建
+    await hc.prompt("子问题");
+    await hc.close();
+    const recs = readFileSync(join(d, "sessions", `${hc.sessionId}.jsonl`), "utf8").trim().split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(recs[0]).toMatchObject({ type: "session/header", parentSession: parent.sessionId });
+    expect(recs[1]).toMatchObject({ type: "session/fork", sourceEntryId: tailId, parentSession: parent.sessionId });
   });
 });
