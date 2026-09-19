@@ -62,7 +62,7 @@ function countEvents(file: string): number {
   try {
     return Math.max(0, readFileSync(file, "utf8").split("\n").filter(Boolean).length - 1);
   } catch {
-    return 0;
+    return 1; // 不可读 = 保守非空（只按龄）——返回 0 会让 --apply 误删不可读文件（code-review Spec P1）
   }
 }
 

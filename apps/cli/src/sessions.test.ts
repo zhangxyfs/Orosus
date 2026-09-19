@@ -89,6 +89,9 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(resolveTarget("s_nope", root)).toBeUndefined();
     expect(resolveTarget("99", root)).toBeUndefined();
     expect(harnessOptionsFor({ kind: "resume", sessionId: "s_x" })).toEqual({ resume: { sessionId: "s_x" } });
+    expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s_p" }, { parentDir: "/bucket/x" })).toEqual(
+      { fork: { parentSessionId: "s_p", parentDir: "/bucket/x" } },
+    ); // 装配层钉子（code-review Spec P1）：fork 跨桶定位的 parentDir 透传——拿掉接线必红
   });
 });
 
