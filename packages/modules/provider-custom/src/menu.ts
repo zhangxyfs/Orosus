@@ -1,6 +1,6 @@
 import { parseModelsResponse } from "@orosus/contracts/provider";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import type { Catalog, CatalogEntry, CatalogModel, CatalogSource } from "./catalog.ts";
+import { detectSameGate, type Catalog, type CatalogEntry, type CatalogModel, type CatalogSource } from "./catalog.ts";
 
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
@@ -143,6 +143,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
       return `读取本地目录失败：${err instanceof Error ? err.message : String(err)}——请检查路径与 JSON 格式（或改用在线目录）`;
     }
   }
+  catalog = detectSameGate(catalog); // 同厂两门标注（M4-2 T2）：在线/本地两源统一后处理
 
   const keyword = (await ui.ask("厂商关键字（回车全列）")).trim().toLowerCase();
   const entries = Object.entries(catalog).filter(([id, e]) => {
@@ -154,8 +155,23 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const picked = await ui.choose(`选择厂商${degradedNote}`, [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";
   // 精确整串匹配（走查：startsWith 会命中字母序在前的同前缀条目——选 zhipuai-coding-plan 导入了普通 zhipuai 的 15 模型清单与错误端点）
-  const [entryId, entry] = entries.find(([id, e]) => picked === `${id}（${displayName(id, e)}）`) ?? [undefined, undefined];
-  if (entry === undefined || entryId === undefined) return "已取消";
+  const [pickedId0, pickedEntry0] = entries.find(([id, e]) => picked === `${id}（${displayName(id, e)}）`) ?? [undefined, undefined];
+  if (pickedEntry0 === undefined || pickedId0 === undefined) return "已取消";
+  let entryId = pickedId0;
+  let entry = pickedEntry0;
+  // 同厂两门子菜单（M4-2 T2/B1）：同前缀条目 = 端点/计费不同的两个入口——选错门 = 按量报 1113/429
+  if (entry.sameGate !== undefined && entry.sameGate.length > 0) {
+    const gateOptions = [
+      `${entryId}（标准端点 · 按量计费）`,
+      ...entry.sameGate.map((g) => `${g}（专用端点 · 套餐计费——选错门=按量报 1113）`),
+    ];
+    const gatePicked = await ui.choose(`此厂商有 ${gateOptions.length} 个入口（端点/计费不同），请选择：`, gateOptions);
+    const gateIdx = gateOptions.findIndex((o) => o === gatePicked);
+    if (gateIdx > 0) {
+      entryId = entry.sameGate[gateIdx - 1]!; // 重新定向到 sameGate 指向的条目（端点/模型清单随条目）
+      entry = catalog[entryId]!;
+    }
+  }
 
   const wire = resolveWire(entry);
   if (wire.kind === "invalid") return `无法导入：${wire.reason}`;

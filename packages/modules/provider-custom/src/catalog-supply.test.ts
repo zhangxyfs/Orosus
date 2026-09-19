@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { getCatalog, getCatalogWithSource, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
+import { detectSameGate, getCatalog, getCatalogWithSource, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -421,5 +421,54 @@ describe("/provider 多级菜单（D37）", () => {
     expect(secretsAsked[0]).toContain("DEEPSEEK_API_KEY");
     expect(asked).toEqual(["厂商关键字（回车全列）"]); // 只有非敏感走明文 ask
     expect(out).toContain("success");
+  });
+});
+
+describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai 提示两入口）", () => {
+  it("① detectSameGate：同前缀互指、无同前缀 undefined、不污染入参（纯函数）", () => {
+    const catalog = {
+      "zhipuai": { name: "智谱" },
+      "zhipuai-coding-plan": { name: "智谱 Coding Plan" },
+      "deepseek": { name: "DeepSeek" },
+    } as unknown as Catalog;
+    const processed = detectSameGate(catalog);
+    expect(processed["zhipuai"]!.sameGate).toEqual(["zhipuai-coding-plan"]);
+    expect(processed["zhipuai-coding-plan"]!.sameGate).toEqual(["zhipuai"]);
+    expect(processed["deepseek"]!.sameGate).toBeUndefined(); // 无同前缀
+    expect((catalog["zhipuai"] as { sameGate?: string[] }).sameGate).toBeUndefined(); // 入参不被污染
+  });
+
+  it("② 选 zhipuai → 两门子菜单 → 选 coding-plan → baseUrl 落专用端点", async () => {
+    const deps = fakeDeps();
+    deps.getCatalog = async () => ({
+      catalog: {
+        zhipuai: { name: "智谱", type: "openai", api: "https://open.bigmodel.cn/api/paas/v4", env: ["ZHIPU_API_KEY"], models: { "glm-4.7": { id: "glm-4.7" } } },
+        "zhipuai-coding-plan": { name: "智谱 Coding Plan", type: "openai", api: "https://open.bigmodel.cn/api/coding/paas/v4", env: ["ZHIPU_API_KEY"], models: { "glm-4.7": { id: "glm-4.7" } } },
+      } as unknown as Catalog,
+      source: "online" as const,
+    });
+    let gateTitle = "";
+    let gateItems: string[] = [];
+    const inner = fakeUi({
+      choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai（智谱）", "zhipuai-coding-plan（专用端点 · 套餐计费——选错门=按量报 1113）", "glm-4.7"],
+      ask: [""],
+    });
+    const ui: MenuUi = {
+      choose: async (title, items) => {
+        if (String(title).includes("入口")) { gateTitle = String(title); gateItems = [...items]; }
+        return inner.choose(title, items);
+      },
+      ask: async (q) => "",
+      askSecret: async () => "",
+      confirm: async () => true,
+    };
+    const out = await runProviderMenu(ui, deps);
+    expect(gateTitle).toContain("2 个入口"); // 子菜单出现且说明端点/计费不同
+    expect(gateItems[0]).toContain("zhipuai（标准端点");
+    expect(gateItems[1]).toContain("zhipuai-coding-plan（专用端点");
+    const saved = deps.state.saved as Record<string, { baseUrl: string }>;
+    expect(saved["zhipuai-coding-plan"]!.baseUrl).toContain("/api/coding/paas/v4"); // 重新定向到 coding-plan 条目
+    expect(saved["zhipuai"]).toBeUndefined(); // 未写标准门
+    expect(out).toContain("coding");
   });
 });

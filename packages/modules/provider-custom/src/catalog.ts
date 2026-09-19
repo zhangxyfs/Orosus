@@ -14,6 +14,7 @@ export interface CatalogEntry {
   name?: string; type?: string; npm?: string; id?: string;
   api?: string; env?: string[];
   models?: Record<string, CatalogModel>;
+  sameGate?: string[]; // 同厂异门条目 id 列表（互指——M4-2 T2 选门子菜单数据源）
 }
 export type Catalog = Record<string, CatalogEntry>;
 /** 数据从哪来：online = models.dev 真实目录（含 TTL 缓存命中）；disk = 本地持久缓存（曾成功拉取、当前网络失败）；
@@ -106,4 +107,21 @@ export async function getCatalogWithSource(opts: { registryUrl?: string; fetchIm
 /** 兼容面：只取目录（来源无关的调用方沿用）。 */
 export async function getCatalog(opts: { registryUrl?: string; fetchImpl?: typeof fetch; now?: () => number; cacheFile?: string } = {}): Promise<Catalog> {
   return (await getCatalogWithSource(opts)).catalog;
+}
+
+/** 同厂两门检测（M4-2 T2/B1）：id_A.startsWith(id_B + "-") → sameGate 互指（带 "-" 防 zhipu/zhipuai 误连）。
+ *  纯函数：条目浅拷贝后标注，入参不被污染。调用点 = 菜单侧 getCatalog 后处理（注入路径无关）。 */
+export function detectSameGate(catalog: Catalog): Catalog {
+  const result: Catalog = {};
+  for (const [k, v] of Object.entries(catalog)) result[k] = { ...v };
+  const ids = Object.keys(catalog);
+  for (const a of ids) {
+    for (const b of ids) {
+      if (a !== b && a.startsWith(b + "-")) {
+        result[a]!.sameGate = [...(result[a]!.sameGate ?? []), b];
+        result[b]!.sameGate = [...(result[b]!.sameGate ?? []), a];
+      }
+    }
+  }
+  return result;
 }
