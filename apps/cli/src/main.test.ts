@@ -25,6 +25,8 @@ const isolated = (over: { userToml?: string } = {}) => {
     builtinModules: BUILTIN_MODULES,
     secretsFile: join(d, "secrets.env"),
     diagDir: join(d, "logs"),
+    sessionsDir: join(d, "sessions"), // 密封（2026-09-19 走查泄漏修复）：此前缺省 = 真实 ~/.orosus/sessions——
+    // 每跑一次测试套件就在用户真实目录漏 2 个会话文件（走查实录：10 个 2040B 的 run/done 空壳）。M1 纪律补丁。
     discovery: { userDir: join(d, "mods"), projectDir: join(d, "pmods"), trustFile: join(d, "trust.json") },
     config: { userFile, projectFile: join(d, "proj.toml"), env: {} },
   });
@@ -105,6 +107,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     const h = await createHarness({
       cwd: d, builtinModules: BUILTIN_MODULES, modules: [subToolModule(), fakeProv()], commandUi: ui,
       secretsFile: join(d, "s.env"), diagDir: join(d, "logs"), spillDir: join(d, "spill"),
+      sessionsDir: join(d, "sessions"), // 密封（2026-09-19 泄漏修复）——自建 harness 不过 isolated() 的两处
       discovery: { userDir: join(d, "m"), projectDir: join(d, "p"), trustFile: join(d, "t.json") },
       config: { userFile: join(d, "user.toml"), projectFile: join(d, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
     });
@@ -154,6 +157,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     const h = await createHarness({
       cwd: d, builtinModules: BUILTIN_MODULES, commandUi: ui,
       secretsFile: join(d, "s.env"), diagDir: join(d, "logs"), spillDir: join(d, "spill"),
+      sessionsDir: join(d, "sessions"), // 密封（2026-09-19 泄漏修复）——自建 harness 不过 isolated() 的两处
       discovery: { userDir: join(d, "m"), projectDir: join(d, "p"), trustFile: join(d, "t.json") },
       config: { userFile: userToml, projectFile: projToml, env: {} },
     });
