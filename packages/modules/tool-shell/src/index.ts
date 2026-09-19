@@ -70,7 +70,7 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal): Promise<ToolRes
 function bashTool(fs: Fs): Tool {
   return defineTool({
     name: "tool-shell__bash",
-    description: "在系统 shell 执行命令，返回合并的 stdout/stderr；120s 默认超时",
+    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.",
     parameters: z.object(params),
     resolveExecution: (input) => {
       const { command, writeOutputTo, timeoutMs } = input as BashInput;

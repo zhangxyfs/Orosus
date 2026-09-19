@@ -101,7 +101,7 @@ const pathParam = { path: z.string().describe("相对工作目录的路径") };
 function readTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__read",
-    description: "Read file contents with optional line range. Results include line numbers (N→text).\nUse this tool — not cat/head/tail — to inspect text files.\nFor large files, use offset+limit to read sections rather than the whole file.",
+    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nFor large files, use offset+limit to read sections rather than the whole file.",
     parameters: z.object({
       ...pathParam,
       offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
@@ -136,7 +136,7 @@ function readTool(fs: LocalFs): Tool {
 function writeTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__write",
-    description: "写入文件（覆盖）",
+    description: "Create a new file or completely replace an existing file's contents.\nUse this tool — not shell echo/redirection or heredocs — to create or overwrite files.\nFor targeted changes to existing files, prefer edit instead (read the file first).",
     parameters: z.object({ ...pathParam, content: z.string() }),
     resolveExecution: async (input) => {
       const { path, content } = input as { path: string; content: string };
@@ -159,7 +159,7 @@ function writeTool(fs: LocalFs): Tool {
 function editTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__edit",
-    description: "Make precise text replacements using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits match the ORIGINAL file simultaneously (not incrementally). Overlapping edits fail.\noldText must be unique unless replaceAll:true. Keep oldText short but unique.",
+    description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.",
     parameters: z.object({
       ...pathParam,
       edits: z.array(z.object({
@@ -223,7 +223,7 @@ function editTool(fs: LocalFs): Tool {
 function globTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__glob",
-    description: "按 glob 模式列出文件（如 **/*.ts），限根目录内。head_limit 截断（缺省 100）",
+    description: "Find files by glob pattern. Results are file paths only.\nUse this tool — not shell find or ls — to discover files by name pattern.\nRespects .gitignore. head_limit to cap results (default 100).",
     parameters: z.object({
       pattern: z.string().describe("glob 模式"),
       head_limit: z.number().int().positive().optional().describe("返回的最大条数（缺省 100）"),
@@ -252,7 +252,7 @@ function globTool(fs: LocalFs): Tool {
 function grepTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__grep",
-    description: "内容正则搜索。output_mode：content（path:line:text 缺省）/ files_with_matches（仅文件名）/ count（每文件命中数）",
+    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.",
     parameters: z.object({
       pattern: z.string().describe("JavaScript 正则"),
       output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
