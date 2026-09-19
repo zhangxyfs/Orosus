@@ -56,6 +56,30 @@ export function renderEvent(e: SessionEvent, state: RenderState): string {
   return "";
 }
 
+/** 历史回显（B9 走查补，2026-09-19：resume 后屏幕上什么都没有——用户以为历史没记录）：
+ *  存量事件 → 文案行。user 以 `> ` 呈现（与 REPL 输入形态一致）、assistant 只画正文块
+ *  （reasoning 属审计面，回显不刷屏）、tool/call 一行带过（result 可能巨大不入屏）。 */
+export function renderHistoryLines(events: SessionEvent[]): string[] {
+  const out: string[] = [];
+  const textBlocks = (e: SessionEvent): string =>
+    ((e.content ?? []) as { kind?: string; text?: string }[])
+      .filter((p) => p.kind === "text")
+      .map((p) => p.text ?? "")
+      .join("");
+  for (const e of events) {
+    if (e.type === "user/message") {
+      const text = textBlocks(e);
+      if (text !== "") out.push(`> ${text}`);
+    } else if (e.type === "assistant/message") {
+      const text = textBlocks(e);
+      if (text !== "") out.push(text, "");
+    } else if (e.type === "tool/call") {
+      out.push(`  [tool] ${String(e.name)}`);
+    }
+  }
+  return out;
+}
+
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
  *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId——chunk 无事件 id，不受影响）。
  *  两路共享同一 RenderState（思考块的闭合可来自任一路：正文 delta 或 tool/call 事件）。 */

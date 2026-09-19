@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { SessionEvent } from "@orosus/core";
-import { createRenderState, renderChunk, renderEvent } from "./render.ts";
+import { createRenderState, renderChunk, renderEvent, renderHistoryLines } from "./render.ts";
 
 // M4-1 T5/D45：chunk 渲染迁 renderChunk（断流后 chunk 经 liveChunks 旁路到达，不再落日志/事件流）；
 // 完成事件面仍走 renderEvent——两路共享 RenderState。
@@ -70,5 +70,21 @@ describe("reasoning 块渲染（思考过程可见——T5 后经 renderChunk/li
   it("⑨ 事件面无 assistant/chunk 分支（断流钉子——renderEvent 对 chunk 事件返回空）", () => {
     const st = createRenderState();
     expect(renderEvent(event("assistant/chunk", { chunk: { type: "text/delta", text: "x" } }), st)).toBe("");
+  });
+});
+
+describe("历史回显（B9 走查补：resume 后屏幕空白——用户以为历史没记录）", () => {
+  const ev = (type: string, fields: Record<string, unknown> = {}): SessionEvent =>
+    ({ id: "e1", sessionId: "s", ts: 0, seq: 1, type, ...fields }) as unknown as SessionEvent;
+
+  it("① user 以 > 呈现、assistant 只画正文、reasoning 不刷屏、tool 一行带过、result 不入屏", () => {
+    const lines = renderHistoryLines([
+      ev("session/header"),
+      ev("user/message", { content: [{ kind: "text", text: "你好" }] }),
+      ev("assistant/message", { content: [{ kind: "reasoning", text: "长篇思考不该出现在回显" }, { kind: "text", text: "答" }] }),
+      ev("tool/call", { name: "tool-fs__read" }),
+      ev("tool/result", { output: "巨大输出不入屏" }),
+    ]);
+    expect(lines).toEqual(["> 你好", "答", "", "  [tool] tool-fs__read"]);
   });
 });

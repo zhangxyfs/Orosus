@@ -5,14 +5,14 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { formatSessions, harnessOptionsFor, listSessions, relativeTime, resolveTarget, sessionCommand } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, readTitle, relativeTime, resolveTarget, sessionCommand } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isModuleSubcommand, runModuleSubcommand } from "./module-cmd.ts";
-import { attachRender as attachRenderTo } from "./render.ts";
 import { banner } from "./banner.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
+import { renderHistoryLines, attachRender as attachRenderTo } from "./render.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -159,6 +159,11 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
   });
 
 let h = await createSession();
+if (args.resume !== undefined) {
+  // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）
+  console.log(`[已恢复 ${h.sessionId}——历史对话如下]`);
+  for (const line of renderHistoryLines(await h.history())) console.log(line);
+}
 
 // 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
 
@@ -191,7 +196,8 @@ const switchTo = async (sid: string): Promise<void> => {
   await h.close();
   h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
   activeDir = loc.dir;
-  console.log(`[已恢复 ${sid}]`);
+  console.log(`[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`);
+  for (const line of renderHistoryLines(await h.history())) console.log(line); // 回显存量对话（B9 走查补）
 };
 
 try {

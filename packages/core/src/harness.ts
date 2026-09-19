@@ -54,6 +54,8 @@ export interface Harness {
   readonly sessionId: string;
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
   events(): AsyncIterable<SessionEvent>;
+  /** 会话历史（宿主显示面，B9 走查补）：全部持久事件（resume 回显用；含 reasoning 块——显示方自行取舍）。 */
+  history(): Promise<SessionEvent[]>;
   /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
    *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
   liveChunks(): AsyncIterable<Chunk>;
@@ -530,6 +532,10 @@ session: ${store.sessionId}
 
     events() {
       return channel.iterate();
+    },
+
+    history() {
+      return store.all(); // 内存镜像（含未 drain 的 buffer）——与投影同源
     },
 
     liveChunks() {
