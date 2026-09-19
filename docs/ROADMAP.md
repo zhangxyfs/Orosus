@@ -7,7 +7,7 @@
 
 | 顺序 | 批次 | 内容 | 状态 | 方案/出处 |
 |---|---|---|---|---|
-| 1 | **TUI 界面批**（原 M5 首项候选，2026-09-19 用户拍板提前） | **前置小批（raw-mode，几天量级可先行）**：上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘/**Alt+V 按键粘贴**/@path#L10-L20 行范围补全 → **TUI 框架化**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一——先一周选型 spike） | 未立项（独立计划书；raw-mode 小批与选型 spike 可并行先行） | 本文件「M5 / 独立里程碑候选」节 |
+| 1 | **TUI 界面批**（原 M5 首项候选，2026-09-19 用户拍板提前） | **前置小批（raw-mode，几天量级可先行）**：上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘/**Alt+V 按键粘贴**/@path#L10-L20 行范围补全 → **TUI 框架化**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏 + **Markdown 复杂版渲染（语法高亮+表格——自零依赖第 1 层升格，2026-09-19 用户拍板并入）**；Ink / pi-tui / 自写三选一——先一周选型 spike） | 未立项（独立计划书；raw-mode 小批与选型 spike 可并行先行） | 本文件「M5 / 独立里程碑候选」节 |
 | 2 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | 既定（master plan 决策点⑤：M4-2 之后启动、不等 M4-3；被 TUI 插队顺延一位） | master plan Part V.1 |
 | 3 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
 | 4 | **M5 候选池剩余** | 见下节（TUI 已提出升为排队 1） | 未立项 | master plan Part V.1 |
@@ -16,7 +16,7 @@
 
 ## M5 / 独立里程碑候选
 
-- **TUI 框架化（已升为排队第 1 位——2026-09-19 用户拍板提前：主要功能基本完工、界面优先；技术前置已成熟）**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一）。技术前置已成熟（D45 旁路通道 ✅ + CommandUi 接缝 ✅），唯一缺选型 spike（一周）。
+- **TUI 框架化（已升为排队第 1 位——2026-09-19 用户拍板提前：主要功能基本完工、界面优先；技术前置已成熟）**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；**含 Markdown 复杂版渲染（高亮+表格，自 V.2 池并入）**；Ink / pi-tui / 自写三选一）。技术前置已成熟（D45 旁路通道 ✅ + CommandUi 接缝 ✅），唯一缺选型 spike（一周）。
   - **前置小批可插队**：B5 第 2 层 raw-mode（上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘——自写小型组件零依赖，几天量级；顺带解锁 Esc 取消审批询问、@path#L10-L20 行范围补全；**+/paste Alt+V 按键粘贴**【2026-09-19 用户拍板从 V.2 远期池移入——微信截图场景实测诉求：readline 拿不到 Alt 组合键正是 raw-mode 问题，实现在剪贴板已有 `/paste` 命令态（M4-2 T10 + M4-2.5 T5 真实喂图）之上只补按键触发层】）。
 - 多前端服务器（headless server + CUI/Web 前端，dsh 形态；TUI 是其第一前端；前置：WorkspaceLease 跨会话写锁——Reasonix 借鉴）。
 - 用户态 hooks；企业面；声明式插件工程细节（随 `module add` 设计）。
@@ -28,7 +28,7 @@
 
 ## 遗留台账（不主动立项）
 
-- **V.2 远期池剩余**（`plans/2026-09-18-m4-master-plan.md` Part V.2）：B13 审批拒绝带反馈（CommandUi 扩契约——M4-2.5 明示不顺带，下个契约窗口评估）、Markdown 复杂版（引库+高亮+表格，随 TUI）、--input-format 双向流、todo stale 提醒、ask 指纹去重、金额折算、每日 stats JSONL、会话信封短键名（format:2）。（/paste Alt+V 按键已于 2026-09-19 用户拍板移入上方 TUI 批 raw-mode 前置小批。）
+- **V.2 远期池剩余**（`plans/2026-09-18-m4-master-plan.md` Part V.2）：B13 审批拒绝带反馈（CommandUi 扩契约——M4-2.5 明示不顺带，下个契约窗口评估）、--input-format 双向流、todo stale 提醒、ask 指纹去重、每日 stats JSONL、会话信封短键名（format:2）。（移出注记：/paste Alt+V 按键已于 2026-09-19 用户拍板移入上方 TUI 批 raw-mode 前置小批；**Markdown 复杂版同日用户拍板并入 TUI 批框架化**——TUI 界面批既已提前，渲染升级随之；**金额折算移除**——M4-2 决策点⑤已删（「cost 数据改善后再看」），2026-09-19 用户再确认无意义、不再入池。）
 - **V.3 条件触发**：parseModelsResponse 非标形状、跨后端 resume 探测、动态依赖调度。
 - **V.4 暂缓/备选**：**会话数据压缩（2026-09-19 记录，用户犹豫中——等痛点数据再定）**：触发条件 = **M4-2.5 T0/T1（read 窗口化+截断头尾）落地后，单会话文件仍常见 >1MB 才立项**（源头瘦身预期已把 150KB 案例的同参重复读压到 ~35KB 级——坍缩主要靠 mtime 去重；M4-2.5 深审 2026-09-19 账目修正，原「<25KB」口径推演不成立，压缩是第二道防线不抢跑）；若立项，路线倾向 = **Node 内置 zlib gzip 多 member 分帧**（零新依赖、帧边界可定位——按帧解压/按帧 grep），zstd 仅在 gzip 实测不满意再议（引原生依赖需单独拍板）；**犹豫点如实记录**：压缩的代价是会话文件失去可直接 grep/阅读的调试面（master plan V.2 原话「JSONL 可读性是调试刚需」，fork 取证/体积解剖/readTitle 全靠裸文本）——dsh 压缩成立是配套了「只读首帧/分块流式」整套工具，那是额外工程量；佐证：dsh 实测 zstd+chunk 打包 **-60%**（日志调研 §1.2）、用户两次表达关注（分桶时代「没做压缩？」+ 150KB 文件抱怨）、**2026-09-19 新证：用户对照实测 kimi-code 缓存 <1GB（大量工作）vs ZCode `.zcode` 近 2GB（没几个会话）——无压缩存储的膨胀差距眼见为实**。C1 工具结果外溢剩余面（read 侧 M4-2.5 T0 部分销）、启动期自动 GC（永不做——「降级必须吵闹」）。
 - 模块×六家缺失盘点少数派（等真实需求）：EnterPlanMode 计划模式、LSP 工具、notebook、git worktree 隔离、持久 shell 会话、Goal 工具族、ToolSearch 按需加载、web search/fetch 模块（生态项随 M4-3）。
