@@ -5,7 +5,8 @@
  *  其余（真坏件）保持吵闹横幅。 */
 export interface AuditRow { name: string; state: string; failReason?: string }
 
-const BRAND_NO_KEY = /^配置校验失败：apiKey/;
+/** 品牌适配器「缺 key」降级判定的共享正则（banner 分级与 startup 品牌引导共用——M4-2 T16 上移导出）。 */
+export const BRAND_NO_KEY = /^配置校验失败：apiKey/;
 
 export function banner(h: { graph(): { audit(): AuditRow[] } }, opts: { dumpModules?: boolean; modelConfigured?: boolean } = {}): string[] {
   if (opts.dumpModules) return [];

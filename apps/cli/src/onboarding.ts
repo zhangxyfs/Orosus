@@ -33,15 +33,20 @@ export function readConfigModel(userFile: string, projectFile: string): string |
 }
 
 /** 首启引导流：确认 → 复用 /provider 向导（D37"只输 apiKey 即用"同一闭环）。
+ *  degradedBrands（M4-2 T16/B8）：装了品牌适配器未配 key 的降级名单——确认文案点名品牌（配 key 即启用）。
  *  返回向导输出（或跳过提示）；配置是否生效由调用方 reload 后复检。 */
 export async function runOnboarding(
   h: { prompt(text: string): Promise<string | undefined>; graph(): { services: { listProviders(): { name: string }[] } } },
   ui: CommandUi,
+  degradedBrands: string[] = [],
 ): Promise<string> {
   const providers = h.graph().services.listProviders().map((p) => p.name);
+  const brandNote = degradedBrands.length > 0
+    ? `检测到 ${degradedBrands.length} 个品牌适配器未配 key（${degradedBrands.join("、")}）——配 key 即启用；`
+    : "";
   const msg = providers.length > 0
-    ? `已配置 ${providers.length} 个平台（${providers.join("、")}）但尚未选择 model——现在选吗？（进入 /provider 向导）`
-    : "尚未配置任何模型提供商——现在配置吗？（进入 /provider 向导：选平台 → 粘贴 apiKey 即用）";
+    ? `${brandNote}已配置 ${providers.length} 个平台（${providers.join("、")}）但尚未选择 model——现在选吗？（进入 /provider 向导）`
+    : `${brandNote}尚未配置任何模型提供商——现在配置吗？（进入 /provider 向导：选平台 → 粘贴 apiKey 即用）`;
   const go = await ui.confirm(msg);
   if (!go) return "已跳过——随时输入 /provider 配置（或参照 docs/developers.md 手写 config.toml）";
   return (await h.prompt("/provider")) ?? "（/provider 不可用——请确认 provider-custom 模块已启用）";
