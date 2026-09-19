@@ -15,7 +15,7 @@
 ## M5 / 独立里程碑候选
 
 - **TUI 框架化（推荐 M5 首项，2026-09-19 排期讨论定）**：kimi-code 形态完整界面（全屏接管、流式重绘、编辑器/picker/状态栏；Ink / pi-tui / 自写三选一）。技术前置已成熟（D45 旁路通道 ✅ + CommandUi 接缝 ✅），唯一缺选型 spike（一周）。排在 M4.5/M4-3 之后的理由是性价比（readline 层已榨干大半）而非技术依赖——用户可提前。
-  - **前置小批可插队**：B5 第 2 层 raw-mode（上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘——自写小型组件零依赖，几天量级；顺带解锁 Esc 取消审批询问、@path#L10-L20 行范围补全）。
+  - **前置小批可插队**：B5 第 2 层 raw-mode（上下键菜单/Esc 取消/厂商目录滚动翻页/流式清屏重绘——自写小型组件零依赖，几天量级；顺带解锁 Esc 取消审批询问、@path#L10-L20 行范围补全；**+/paste Alt+V 按键粘贴**【2026-09-19 用户拍板从 V.2 远期池移入——微信截图场景实测诉求：readline 拿不到 Alt 组合键正是 raw-mode 问题，实现在剪贴板已有 `/paste` 命令态（M4-2 T10 + M4-2.5 T5 真实喂图）之上只补按键触发层】）。
 - 多前端服务器（headless server + CUI/Web 前端，dsh 形态；TUI 是其第一前端；前置：WorkspaceLease 跨会话写锁——Reasonix 借鉴）。
 - 用户态 hooks；企业面；声明式插件工程细节（随 `module add` 设计）。
 - L2（子进程隔离 + 出口代理 + OS 兜底 bubblewrap/seatbelt）——M4-3 的 L1 之后独立批。**时点理由（2026-09-19 复核定）**：① 触发条件随 M4-3 出现——npm 分发/`module add` 才引入不受信模块入口（主文档 §8.5「随 npm 分发之后引入——这层不能省」），此前全部第一方模块、进程内同权+信任门+审批门够用；② 依赖序——L2 的 RPC broker/endowment 收窄建立在 L1 的 SES 声明强制之上（M4-3 已标 L1 先 spike）；③ 批次纪律——不塞进 M4-3 本体，Windows 原生组合件属 Win32 深水区（主文档开放问题 7），一批一事。**Windows 原生组合件 spike（Job Object + AppContainer 受限 token + 句柄授予 broker 语义验证）可随 M4-3 并行先行、不占 M4-3 范围账本**——它是 L2 唯一真不确定项，句柄授予后子进程原生读写的性能数据决定 L2 批的规模估算；与「L1 先 spike」同款打法。
@@ -26,7 +26,7 @@
 
 ## 遗留台账（不主动立项）
 
-- **V.2 远期池剩余**（`plans/2026-09-18-m4-master-plan.md` Part V.2）：B13 审批拒绝带反馈（CommandUi 扩契约——M4-2.5 明示不顺带，下个契约窗口评估）、Markdown 复杂版（引库+高亮+表格，随 TUI）、--input-format 双向流、todo stale 提醒、ask 指纹去重、金额折算、/paste Alt+V 按键（raw-mode）、每日 stats JSONL、会话信封短键名（format:2）。
+- **V.2 远期池剩余**（`plans/2026-09-18-m4-master-plan.md` Part V.2）：B13 审批拒绝带反馈（CommandUi 扩契约——M4-2.5 明示不顺带，下个契约窗口评估）、Markdown 复杂版（引库+高亮+表格，随 TUI）、--input-format 双向流、todo stale 提醒、ask 指纹去重、金额折算、每日 stats JSONL、会话信封短键名（format:2）。（/paste Alt+V 按键已于 2026-09-19 用户拍板移入上方 TUI 批 raw-mode 前置小批。）
 - **V.3 条件触发**：parseModelsResponse 非标形状、跨后端 resume 探测、动态依赖调度。
 - **V.4 暂缓/备选**：**会话数据压缩（2026-09-19 记录，用户犹豫中——等痛点数据再定）**：触发条件 = **M4-2.5 T0/T1（read 窗口化+截断头尾）落地后，单会话文件仍常见 >1MB 才立项**（源头瘦身预期已把 150KB 案例的同参重复读压到 ~35KB 级——坍缩主要靠 mtime 去重；M4-2.5 深审 2026-09-19 账目修正，原「<25KB」口径推演不成立，压缩是第二道防线不抢跑）；若立项，路线倾向 = **Node 内置 zlib gzip 多 member 分帧**（零新依赖、帧边界可定位——按帧解压/按帧 grep），zstd 仅在 gzip 实测不满意再议（引原生依赖需单独拍板）；**犹豫点如实记录**：压缩的代价是会话文件失去可直接 grep/阅读的调试面（master plan V.2 原话「JSONL 可读性是调试刚需」，fork 取证/体积解剖/readTitle 全靠裸文本）——dsh 压缩成立是配套了「只读首帧/分块流式」整套工具，那是额外工程量；佐证：dsh 实测 zstd+chunk 打包 **-60%**（日志调研 §1.2）、用户两次表达关注（分桶时代「没做压缩？」+ 150KB 文件抱怨）、**2026-09-19 新证：用户对照实测 kimi-code 缓存 <1GB（大量工作）vs ZCode `.zcode` 近 2GB（没几个会话）——无压缩存储的膨胀差距眼见为实**。C1 工具结果外溢剩余面（read 侧 M4-2.5 T0 部分销）、启动期自动 GC（永不做——「降级必须吵闹」）。
 - 模块×六家缺失盘点少数派（等真实需求）：EnterPlanMode 计划模式、LSP 工具、notebook、git worktree 隔离、持久 shell 会话、Goal 工具族、ToolSearch 按需加载、web search/fetch 模块（生态项随 M4-3）。
