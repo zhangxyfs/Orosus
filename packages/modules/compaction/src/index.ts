@@ -111,94 +111,136 @@ function safeCut(messages: ModelMessage[], budget: number, minKeep: number): num
 }
 
 type ForceKind = "manual" | "overflow";
+type Cfg = z.infer<typeof configSchema>;
+interface CompactionEvent { type: string; fields: Record<string, unknown> }
+/** 退避/熔断/锚点共享状态（M4-2.5 T3 抽取：activate 闭包持有、compactOnce 就地更新——两路同一状态防行为漂移）。 */
+interface CompactState {
+  failPoint?: number | undefined;
+  consecutiveFailures: number;
+  anchorStale: boolean;
+  seenAnchorAt?: number | undefined;
+}
+interface CompactLog {
+  debug(code: string, msg: string, fields?: Record<string, unknown>): void;
+  info(code: string, msg: string, fields?: Record<string, unknown>): void;
+  warn(code: string, msg: string, fields?: Record<string, unknown>): void;
+}
+
+/** compactOnce 结果（M4-2.5 T3）：拦截器与命令两路共用——事件由调用方落盘（先落日志再改值的可重建性契约不变）。 */
+type CompactResult =
+  | { kind: "none"; events: [] }                                            // 未达阈值（自动路径常态）
+  | { kind: "pruned"; messages: ModelMessage[]; events: CompactionEvent[] } // prune 免摘要救援
+  | { kind: "skipped"; reason: "backoff" | "breaker" | "no-space"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
+  | { kind: "failed"; reason: string; events: CompactionEvent[] }           // 摘要失败/收敛不过（不装占位）
+  | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; summaryTokens: number; summary: string } };
+
+/** 压缩核心（M4-2.5 T3 从拦截器体抽出）：阈值判定 → prune 前置 → 退避/熔断 → 预算切点 → 摘要 → 收敛检查。
+ *  纯形状（messages → 结果 + 事件清单）；退避/熔断/锚点状态经 opts.state 由调用方持有（两路共享一份）。 */
+async function compactOnce(
+  messages: ModelMessage[],
+  cfg: Cfg,
+  opts: {
+    llm: LlmPort; window?: number | undefined; force: ForceKind | undefined;
+    estimate: (m: ModelMessage[]) => number; state: CompactState; log: CompactLog;
+  },
+): Promise<CompactResult> {
+  const threshold = opts.force !== undefined ? 0 : (opts.window !== undefined ? Math.floor(opts.window * cfg.thresholdRatio) : cfg.thresholdTokens);
+  let est = opts.estimate(messages);
+  if (est <= threshold) return { kind: "none", events: [] };
+  const events: CompactionEvent[] = [];
+
+  // ② prune 前置（免 LLM 的第一段，dsh/Reasonix 同型）：退避/熔断不禁 prune（确定性、零成本）
+  const { messages: pruned, prunes, prunedChars } = applyPrunes(messages, cfg);
+  const rewrote = prunes.length > 0;
+  if (rewrote) {
+    events.push({ type: "turn/prune", fields: { prunes, prunedChars } }); // 先落日志再改值（可重建性契约）——事件由调用方 append
+    opts.state.anchorStale = true; // prune 缩内容不减条数——长度判据测不出，锚点须显式置 stale（二轮 P1）
+    est = opts.estimate(pruned);
+    if (est <= threshold) {
+      opts.log.info("compaction.prune-applied", "超长工具结果已裁剪（免摘要救援）", { pruned: prunes.length, savedChars: prunedChars });
+      return { kind: "pruned", messages: pruned, events };
+    }
+  }
+  const afterPrune = (): ModelMessage[] | undefined => (rewrote ? pruned : undefined);
+
+  // ③ 退避/熔断（空白 §7/§11）：退避管短期节奏（force 旁路）；熔断管链路坏了别再烧（手动旁路、溢出受约束）
+  if (opts.force !== "manual" && opts.state.consecutiveFailures >= 3) {
+    opts.log.warn("compaction.breaker-open", "连续 3 次压缩失败——自动尝试停手等人工（/compact 可手动重试）", { failures: opts.state.consecutiveFailures });
+    return { kind: "skipped", reason: "breaker", messages: afterPrune(), events };
+  }
+  if (opts.force === undefined && opts.state.failPoint !== undefined && est < opts.state.failPoint * (1 + cfg.backoffGrowthRatio)) {
+    opts.log.debug("compaction.skipped-backoff", "退避中——估算增长不足不重试", { est, failPoint: opts.state.failPoint });
+    return { kind: "skipped", reason: "backoff", messages: afterPrune(), events };
+  }
+
+  // ④ 预算切点：溢出 force 收缩至 minKeepMessages（dsh retainTokens=0 同型）；窗口已知时预算封顶 25%（空白 §16）；
+  //    手动 /compact 预算减半（M4-2.5 T3/P3——Reasonix 手动 force 减半同款：用户主动要压，尾部保更少）
+  const autoBudget = opts.window !== undefined ? Math.min(cfg.keepRecentTokens, Math.floor(opts.window * 0.25)) : cfg.keepRecentTokens;
+  const budget = opts.force === "overflow" ? 0 : opts.force === "manual" ? Math.floor(autoBudget / 2) : autoBudget;
+  const cut = safeCut(pruned, budget, cfg.minKeepMessages);
+  if (cut <= 0 || cut >= pruned.length) return { kind: "skipped", reason: "no-space", messages: afterPrune(), events }; // 无压缩空间；越界防御（首轮 P1）
+
+  const dropped = pruned.slice(0, cut);
+  const kept = pruned.slice(cut);
+  const maxTokens = opts.window !== undefined ? Math.min(cfg.summaryMaxTokens, Math.max(512, Math.floor(opts.window / 4))) : cfg.summaryMaxTokens;
+  const summary = await summarize(opts.llm, dropped, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars });
+
+  // ⑤ 收敛检查（dsh 同款 + 512 显著性门槛）：压后必须更小——但玩具尺寸对话（[历史摘要] 包装 ≈9 token）
+  // 天然不满足"严格变小"，只对非平凡大摘要（≥512 token，与 maxTokens 公式的 512 下限同源）执行；
+  // 超长跑飞摘要照抓。执行期修正（计划⑪与⑮的夹具张力），T8 文档登记
+  const summaryMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: `[历史摘要]\n${summary ?? ""}` }] };
+  const summaryCost = estimateTokens([summaryMsg]);
+  if (summary === undefined || (summaryCost >= estimateTokens(dropped) && summaryCost >= 512)) {
+    opts.state.consecutiveFailures++;
+    opts.state.failPoint = est;
+    opts.log.warn("compaction.summary-failed", summary === undefined ? "摘要生成失败——不装占位（宁可不压）" : "收敛检查不过（压后未变小）——不装", { dropped: dropped.length });
+    return { kind: "failed", reason: summary === undefined ? "摘要生成失败（不装占位）" : "收敛检查不过（压后未变小）", events };
+  }
+
+  opts.state.consecutiveFailures = 0; // 任一成功清零（熔断与退避同释）
+  opts.state.failPoint = undefined;
+  opts.state.anchorStale = true; // 压缩改写上下文 → 锚点 stale
+  events.push({ type: "turn/compaction", fields: { summary, keepFrom: cut, droppedCount: dropped.length } });
+  opts.log.info("compaction.applied", "已压缩", { dropped: dropped.length, kept: kept.length });
+  return { kind: "compacted", newMessages: [summaryMsg, ...kept], events, stats: { dropped: dropped.length, kept: kept.length, tokensBefore: est, summaryTokens: summaryCost, summary } };
+}
 
 export default defineModule({
   name: "compaction",
-  version: "0.2.0",
-  description: "会话压缩——transformContext 消费方：锚定估算/窗口感知阈值/prune 前置/预算切点/结构化摘要/失败不装+退避+熔断/溢出联动（M3 补强 D44）",
+  version: "0.3.0",
+  description: "会话压缩——transformContext 消费方：锚定估算/窗口感知阈值/prune 前置/预算切点/结构化摘要/失败不装+退避+熔断/溢出联动（M3 补强 D44）；/compact 立即执行+结果反馈+手动预算减半（M4-2.5 T3——compactOnce 两路共用、投影缓存零契约）",
   api: 1,
   mounts: ["hook:agent/transform-context", "hook:agent/request-error", "contribute:command"],
   config: configSchema,
   logEvents: ["turn/compaction", "turn/prune"], // 模块可写核心日志类型（owner 制例外两枚）
   activate(ctx) {
+    const state: CompactState = { consecutiveFailures: 0, anchorStale: false }; // 退避/熔断/锚点（两路共享）
     let forceKind: ForceKind | undefined; // /compact（manual）与溢出触发（overflow）：旁路退避；manual 另旁路熔断
-    let failPoint: number | undefined;    // 退避点：失败时的估算值——再增长 backoffGrowthRatio 才重试
-    let consecutiveFailures = 0;          // 熔断计数（非手动路径失败累计，任一成功清零——cc-haha 同款，硬编码 3）
-    let anchorStale = false;              // 锚点 stale（空白 §4 三态）：本模块改写上下文后置位
-    let seenAnchorAt: number | undefined; // 观察到的最近锚点 atMessageCount——变化即新锚点
+    const cfg = ctx.config as Cfg;
 
     const estimate = (messages: ModelMessage[]): number => {
       const a = ctx.llm.lastUsage;
       if (a === undefined || a.totalTokens <= 0) return estimateTokens(messages);
       const lengthOk = messages.length >= a.atMessageCount + 1;
-      if (a.atMessageCount !== seenAnchorAt && lengthOk) anchorStale = false; // 新锚点到达且长度判据满足 → 清 stale
-      seenAnchorAt = a.atMessageCount;
-      if (!anchorStale && lengthOk) return a.totalTokens + estimateTokens(messages.slice(a.atMessageCount + 1));
+      if (a.atMessageCount !== state.seenAnchorAt && lengthOk) state.anchorStale = false; // 新锚点到达且长度判据满足 → 清 stale
+      state.seenAnchorAt = a.atMessageCount;
+      if (!state.anchorStale && lengthOk) return a.totalTokens + estimateTokens(messages.slice(a.atMessageCount + 1));
       return estimateTokens(messages); // stale / 长度判据不过（压缩后变短） → 纯估算
     };
 
+    // 投影缓存（M4-2.5 T3）：transform-context 每轮刷新、且跟踪变换后结果（缓存一致性——自动压缩后缓存不得
+    // 停留压缩前投影，否则后续 /compact 拿陈旧前缀再压、同前缀双落事件致投影错乱）。
+    let lastSeenMessages: ModelMessage[] | undefined;
+
     ctx.events.on("agent/transform-context", async (value) => {
       const messages = value as ModelMessage[];
-      const cfg = ctx.config as z.infer<typeof configSchema>;
       const force = forceKind;
       forceKind = undefined; // 消费即复位（手动一次、溢出一次）
-      const window = ctx.llm.contextWindow;
-      const threshold = force !== undefined ? 0 : (window !== undefined ? Math.floor(window * cfg.thresholdRatio) : cfg.thresholdTokens);
-      let est = estimate(messages);
-      if (est <= threshold) return undefined;
-
-      // ② prune 前置（免 LLM 的第一段，dsh/Reasonix 同型）：退避/熔断不禁 prune（确定性、零成本）
-      const { messages: pruned, prunes, prunedChars } = applyPrunes(messages, cfg);
-      const rewrote = prunes.length > 0;
-      if (rewrote) {
-        ctx.session.append("turn/prune", { prunes, prunedChars }); // 先落日志再改值（可重建性契约）
-        anchorStale = true; // prune 缩内容不减条数——长度判据测不出，锚点须显式置 stale（二轮 P1）
-        est = estimate(pruned);
-        if (est <= threshold) {
-          ctx.log.info("compaction.prune-applied", "超长工具结果已裁剪（免摘要救援）", { pruned: prunes.length, savedChars: prunedChars });
-          return pruned;
-        }
-      }
-      const afterPrune = (): ModelMessage[] | undefined => (rewrote ? pruned : undefined);
-
-      // ③ 退避/熔断（空白 §7/§11）：退避管短期节奏（force 旁路）；熔断管链路坏了别再烧（手动旁路、溢出受约束）
-      if (force !== "manual" && consecutiveFailures >= 3) {
-        ctx.log.warn("compaction.breaker-open", "连续 3 次压缩失败——自动尝试停手等人工（/compact 可手动重试）", { failures: consecutiveFailures });
-        return afterPrune();
-      }
-      if (force === undefined && failPoint !== undefined && est < failPoint * (1 + cfg.backoffGrowthRatio)) {
-        ctx.log.debug("compaction.skipped-backoff", "退避中——估算增长不足不重试", { est, failPoint });
-        return afterPrune();
-      }
-
-      // ④ 预算切点：溢出 force 收缩至 minKeepMessages（dsh retainTokens=0 同型）；窗口已知时预算封顶 25%（空白 §16——防小窗口 cut=0 永不压缩）
-      const budget = force === "overflow" ? 0 : (window !== undefined ? Math.min(cfg.keepRecentTokens, Math.floor(window * 0.25)) : cfg.keepRecentTokens);
-      const cut = safeCut(pruned, budget, cfg.minKeepMessages);
-      if (cut <= 0 || cut >= pruned.length) return afterPrune(); // 无压缩空间；越界防御（首轮 P1：切点推到末尾=全删，放弃）
-
-      const dropped = pruned.slice(0, cut);
-      const kept = pruned.slice(cut);
-      const maxTokens = window !== undefined ? Math.min(cfg.summaryMaxTokens, Math.max(512, Math.floor(window / 4))) : cfg.summaryMaxTokens;
-      const summary = await summarize(ctx.llm, dropped, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars });
-
-      // ⑤ 收敛检查（dsh 同款 + 512 显著性门槛）：压后必须更小——但玩具尺寸对话（[历史摘要] 包装 ≈9 token）
-      // 天然不满足"严格变小"，只对非平凡大摘要（≥512 token，与 maxTokens 公式的 512 下限同源）执行；
-      // 超长跑飞摘要照抓。执行期修正（计划⑪与⑮的夹具张力），T8 文档登记
-      const summaryMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: `[历史摘要]\n${summary ?? ""}` }] };
-      const summaryCost = estimateTokens([summaryMsg]);
-      if (summary === undefined || (summaryCost >= estimateTokens(dropped) && summaryCost >= 512)) {
-        consecutiveFailures++;
-        failPoint = est;
-        ctx.log.warn("compaction.summary-failed", summary === undefined ? "摘要生成失败——不装占位（宁可不压）" : "收敛检查不过（压后未变小）——不装", { dropped: dropped.length });
-        return afterPrune();
-      }
-
-      consecutiveFailures = 0; // 任一成功清零（熔断与退避同释）
-      failPoint = undefined;
-      anchorStale = true; // 压缩改写上下文 → 锚点 stale
-      ctx.session.append("turn/compaction", { summary, keepFrom: cut, droppedCount: dropped.length });
-      ctx.log.info("compaction.applied", "已压缩", { dropped: dropped.length, kept: kept.length });
-      return [summaryMsg, ...kept];
+      const r = await compactOnce(messages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force, estimate, state, log: ctx.log });
+      for (const e of r.events) ctx.session.append(e.type, e.fields);
+      const out = r.kind === "compacted" ? r.newMessages : (r.kind === "pruned" || r.kind === "skipped") ? r.messages : undefined;
+      lastSeenMessages = out ?? messages; // 缓存跟踪变换后结果（v1.4 审修补）
+      return out;
     });
 
     ctx.events.on("agent/request-error", (p) => {
@@ -206,8 +248,30 @@ export default defineModule({
     });
 
     ctx.contribute.command("compaction__compact", async () => {
-      forceKind = "manual";
-      return "已安排压缩：下一条消息发出前执行。成功时界面会显示一行压缩提示；若未出现且对话异常增长，请查诊断日志后重试 /compact";
+      if (lastSeenMessages === undefined) {
+        // 冷缓存回落（审修 2026-09-19）：resume 会话有历史但缓存未预热（ctx.session 只有 append 无读口——
+        // 模块侧拿不到冷投影）→ 置 forceKind=manual 由拦截器在下一条消息前消费，不误报「无历史」、不阻断
+        forceKind = "manual";
+        return "已安排：下一条消息发出前压缩（resume 会话先发一条消息预热投影，之后 /compact 即时执行）";
+      }
+      if (lastSeenMessages.length === 0) return "无可压缩历史（本会话还没有对话）";
+      const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log });
+      for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
+      switch (r.kind) {
+        case "none": return "无可压缩历史（本会话还没有对话）";
+        case "pruned":
+          lastSeenMessages = r.messages;
+          return `已裁剪 ${(r.events[0]!.fields.prunes as unknown[]).length} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`;
+        case "skipped":
+          return r.reason === "no-space"
+            ? "无可压缩空间：对话尚短，尾部保留区已覆盖全部内容"
+            : `已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`;
+        case "failed":
+          return `压缩失败：${r.reason}——未产生任何变更（可重试 /compact）`;
+        case "compacted":
+          lastSeenMessages = r.newMessages; // 缓存与已落事件对齐——防连击拿陈旧前缀双落事件（机制要点 1）
+          return `已压缩：前缀 ${r.stats.dropped} 条 → 摘要（约 ${r.stats.summaryTokens} tokens，压前 ${r.stats.tokensBefore}）\n\n${r.stats.summary}\n\n（保留尾部 ${r.stats.kept} 条原文——/summary 随时可看本摘要）`;
+      }
     });
   },
 });

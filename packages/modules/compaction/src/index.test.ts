@@ -332,10 +332,102 @@ describe("compaction 模块（M3 补强 T6/D44：锚定/窗口/prune 前置/预�
     await def.activate(s.ctx);
     for (const n of [50, 120, 300]) await s.listener([u("问"), u("中"), u("长".repeat(n))]); // 熔断
     s.setLlmChunks([{ type: "text/delta", text: "短摘要" } as Chunk, { type: "finish", kind: "stop" } as Chunk]);
-    await s.command("", stubUi);                                   // 手动重试 → 成功 → 清零
+    await s.command("", stubUi);                                   // 手动重试（M4-2.5 T3 起立即执行）→ 成功 → 清零
     const r = (await s.listener([u("问"), u("中"), u("长".repeat(400))])) as ModelMessage[];
     expect(firstText(r[0])).toContain("短摘要");
     await s.listener([u("问"), u("中"), u("长".repeat(500))]);      // 自动尝试不再被熔断挡
-    expect(s.llmRequests).toHaveLength(5);
+    expect(s.llmRequests).toHaveLength(6);                         // 3 败 + 命令即时 1 + 自动 2（T3 过账：原 5——旧命令只置 force 不调 llm）
+  });
+});
+
+describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3：结果反馈/手动减半/冷缓存回落/连击一致性）", () => {
+  const bigMsgs = (): ModelMessage[] => Array.from({ length: 40 }, (_, i) => u(`m${i} ${"x".repeat(3600)}`));
+  // 40 条 ≈ 36000 token：默认 thresholdTokens 60000 → 预热不触发自动；手动路径 threshold=0 必尝试
+
+  it("① 立即执行：敲命令即返回「已压缩」与 token 数；事件已落盘", async () => {
+    const s = setup();
+    await def.activate(s.ctx);
+    await s.listener(bigMsgs()); // 预热投影缓存（est < 60000 → 自动不触发、零事件）
+    expect(s.appended).toHaveLength(0);
+    const out = await s.command("", stubUi);
+    expect(out).toMatch(/已压缩：前缀 \d+ 条 → 摘要（约 \d+ tokens，压前 \d+）/);
+    expect(out).toContain("/summary");
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
+    expect(s.llmRequests).toHaveLength(1); // 立即执行（不等下一条消息——修复前只返回「已安排」）
+  });
+
+  it("② 摘要正文在返回文案中", async () => {
+    const s = setup();
+    await def.activate(s.ctx);
+    await s.listener(bigMsgs());
+    expect(await s.command("", stubUi)).toContain("这是摘要");
+  });
+
+  it("③ 只落事件：miniReplay(原始, events) 首条 = [历史摘要]、总量骤减（D20 投影自然应用）", async () => {
+    const s = setup();
+    await def.activate(s.ctx);
+    const msgs = bigMsgs();
+    await s.listener(msgs);
+    await s.command("", stubUi);
+    const replayed = miniReplay(msgs, s.appended);
+    expect(firstText(replayed[0])).toContain("[历史摘要]");
+    expect(replayed.length).toBeLessThan(msgs.length);
+  });
+
+  it("④ 空投影（本会话还没有对话）→ 无可压缩文案、零事件", async () => {
+    const s = setup();
+    await def.activate(s.ctx);
+    await s.listener([]); // 已预热但确无对话
+    expect(await s.command("", stubUi)).toContain("无可压缩历史");
+    expect(s.appended).toHaveLength(0);
+  });
+
+  it("⑤ 手动预算减半：同消息同配置，手动 keepFrom > 自动（尾部保更少）", async () => {
+    const auto = setup({ config: { thresholdTokens: 30_000 } }); // est 36000 > 30000 → 拦截器自动路径（预算 16000）
+    await def.activate(auto.ctx);
+    await auto.listener(bigMsgs());
+    const autoKf = (auto.appended.find((e) => e.type === "turn/compaction")!.payload as { keepFrom: number }).keepFrom;
+    const man = setup(); // 默认阈值不触发自动 → 命令路径（预算 16000/2）
+    await def.activate(man.ctx);
+    await man.listener(bigMsgs());
+    await man.command("", stubUi);
+    const manKf = (man.appended.find((e) => e.type === "turn/compaction")!.payload as { keepFrom: number }).keepFrom;
+    expect(manKf).toBeGreaterThan(autoKf);
+  });
+
+  it("⑥ 失败不落事件不装占位：llm 报错 → 「压缩失败」+ 零 turn/compaction", async () => {
+    const s = setup({ llmChunks: [{ type: "finish", kind: "error", errorMessage: "boom" } as Chunk] });
+    await def.activate(s.ctx);
+    await s.listener(bigMsgs());
+    expect(await s.command("", stubUi)).toContain("压缩失败");
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(0);
+  });
+
+  it("⑦ resume 冷缓存回落：缓存未预热 → 「已安排」+ forceKind 置位（下一条消息发出前压缩）", async () => {
+    const s = setup(); // 未 fire listener——lastSeenMessages undefined（ctx.session 无读口，模块拿不到冷投影）
+    await def.activate(s.ctx);
+    expect(await s.command("", stubUi)).toContain("已安排");
+    expect(s.appended).toHaveLength(0);
+    await s.listener(bigMsgs()); // force manual 消费：threshold=0 → 立即压缩
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
+  });
+
+  it("⑧ 连击缓存一致性：第二次 /compact 基于已压投影——无同前缀重复事件、锚定不漂移", async () => {
+    const s = setup();
+    await def.activate(s.ctx);
+    const msgs = bigMsgs();
+    await s.listener(msgs);
+    await s.command("", stubUi);
+    const evAfter1 = s.appended.filter((e) => e.type === "turn/compaction");
+    await s.command("", stubUi); // 连击：两次命令间无新请求——缓存必须是已压投影而非陈旧前缀
+    const evAfter2 = s.appended.filter((e) => e.type === "turn/compaction");
+    expect(evAfter2.length).toBeLessThanOrEqual(2);
+    const rAll = miniReplay(msgs, s.appended);
+    expect(firstText(rAll[0])).toContain("[历史摘要]");
+    if (evAfter2.length === 2) {
+      const [e1, e2] = evAfter2.map((e) => e.payload as { keepFrom: number });
+      expect(e2.keepFrom).not.toBe(e1.keepFrom); // 第二次锚定在已压投影（防同前缀双落）
+      expect(rAll.length).toBeLessThan(miniReplay(msgs, evAfter1).length); // 连击后总量更少（进一步压缩合法）
+    }
   });
 });
