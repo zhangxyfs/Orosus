@@ -24,6 +24,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
+import { withCompactHint } from "./compact-hint.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -409,7 +410,14 @@ if (args.print === undefined) try {
         const { text: cleaned, attachments } = resolveAtRefs(text, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-        const out = await h.prompt(withAt, imagesFor(pendingImage)); // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
+        // /compact 进度指示（TUI 批 T7）：命中时 h.prompt 前经 lv 写指示行，settle 后 discard 擦除——
+        // 结果/错误由下方 console 输出（不经 liveview），视觉上指示行被结果替换；非 TTY 零输出变化。
+        // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
+        const out = await withCompactHint(
+          text,
+          { isTTY: process.stdout.isTTY === true, activity: (s) => lv.activity(s), discard: () => lv.discard() },
+          () => h.prompt(withAt, imagesFor(pendingImage)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
+        );
         pendingImage = undefined;
         if (out !== undefined) console.log(out);
       } catch (err) {
