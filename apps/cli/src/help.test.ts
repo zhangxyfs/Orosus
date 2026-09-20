@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 
 describe("completer + /help（M4-2 T21/B5）", () => {
@@ -21,5 +24,38 @@ describe("completer + /help（M4-2 T21/B5）", () => {
     expect(HELP_TEXT).toContain("/paste      粘贴剪贴板图片（或 Alt+V 按键）"); // T5 可发现性：新键位入帮助
     expect(HELP_TEXT).toContain("/permission 查看或切换审批模式");
     expect(HELP_TEXT).toContain("Tab 补全");
+    expect(HELP_TEXT).toContain("@ 后 Tab 补全文件"); // T6 可发现性：@ 补全与 #L 语法入提示行
+    expect(HELP_TEXT).toContain("@path#L10-L20 引用行范围");
+  });
+});
+
+describe("@ 文件补全（TUI 批 T6——B18 半项）", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "orosus-atcomp-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("④ 行尾 @src/ → 候选 = src 下前缀匹配项（目录以 / 结尾）；唯一命中补入行内（匹配段 = @前缀）", () => {
+    mkdirSync(join(dir, "sub", "inner"), { recursive: true });
+    writeFileSync(join(dir, "sub", "a.ts"), "a", "utf8");
+    writeFileSync(join(dir, "sub", "b.ts"), "b", "utf8");
+    const [hits, matched] = commandCompleter("看看 @sub/", dir);
+    expect(hits).toContain("@sub/a.ts");
+    expect(hits).toContain("@sub/b.ts");
+    expect(hits).toContain("@sub/inner/"); // 目录以 / 结尾——补入后可继续 Tab
+    expect(matched).toBe("@sub/"); // 第二参 = @ 匹配段（不含行首文本——readline 只替换这段）
+    const [one] = commandCompleter("看看 @sub/a", dir);
+    expect(one).toEqual(["@sub/a.ts"]); // 唯一命中——readline 自行补入
+  });
+  it("⑤ 候选超 20 截断（设计空白）；命令补全回归（/ 开头行为不变——既有用例为钉）", () => {
+    mkdirSync(join(dir, "big"), { recursive: true });
+    for (let i = 1; i <= 25; i++) writeFileSync(join(dir, "big", `f${String(i).padStart(2, "0")}.txt`), "x", "utf8");
+    const [hits] = commandCompleter("@big/f", dir);
+    expect(hits.length).toBe(20);
+    expect(hits.every((h) => h.startsWith("@big/f"))).toBe(true);
+    expect(commandCompleter("/re")[0]).toContain("/resume"); // / 开头回归
+  });
+  it("⑥ 非 @ 非 / 行 → 空候选（现状回归）；目录不存在静默空候选", () => {
+    expect(commandCompleter("hello", dir)).toEqual([[], "hello"]);
+    expect(commandCompleter("看看 @nodir/x", dir)[0]).toEqual([]);
   });
 });

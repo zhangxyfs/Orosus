@@ -1,8 +1,31 @@
+import { readdirSync } from "node:fs";
+import { resolve } from "node:path";
+
 /** CLI 命令补全（M4-2 T21/B5）——readline/promises Completer 形态：返回 [completions, line]
  *  （注意与回调版 readline 的记忆相反——promises 版文档示例即此序；方案草图返回序勘误）。
- *  命令清单 = CLI 拦截层（sessions）+ core 内建 + 模块注册三层全量（两版 /help 并存注记：CLI 拦截后 core 简版被遮蔽）。 */
-export function commandCompleter(line: string): [string[], string] {
-  if (!line.startsWith("/")) return [[], line];
+ *  命令清单 = CLI 拦截层（sessions）+ core 内建 + 模块注册三层全量（两版 /help 并存注记：CLI 拦截后 core 简版被遮蔽）。
+ *  @ 文件补全（TUI 批 T6/B18 半项）：行尾 @前缀 → 目录列举前缀过滤（目录候选以 / 结尾——补入后
+ *  可继续 Tab；候选上限 20，设计空白登记）；第二参 = @ 匹配段（readline 只替换该段，行首文本不动）。
+ *  目录列举失败（不存在/无权限）静默空候选；cwd 注入面供测试（生产缺省 process.cwd()）。 */
+export function commandCompleter(line: string, cwd = process.cwd()): [string[], string] {
+  if (!line.startsWith("/")) {
+    const at = /(?:^|\s)@([^\s]*)$/.exec(line);
+    if (at === null) return [[], line];
+    const prefix = at[1]!;
+    try {
+      const slash = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf("\\"));
+      const dirPart = slash >= 0 ? prefix.slice(0, slash + 1) : "";
+      const stem = slash >= 0 ? prefix.slice(slash + 1) : prefix;
+      const entries = readdirSync(resolve(cwd, dirPart === "" ? "." : dirPart), { withFileTypes: true });
+      const matches = entries
+        .filter((e) => e.name.startsWith(stem))
+        .map((e) => `@${dirPart}${e.name}${e.isDirectory() ? "/" : ""}`)
+        .slice(0, 20);
+      return [matches, `@${prefix}`];
+    } catch {
+      return [[], line];
+    }
+  }
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/quit", "/exit", "/q",
     "/model", "/status", "/usage", "/reload", "/context", "/paste", "/summary", "/help",
@@ -33,4 +56,4 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /permission 查看或切换审批模式（rules 子参数看规则清单）
   /yolo       一键切到从不询问（危险命令仍确认）
 
-提示：输入 / 后按 Tab 补全命令名`;
+提示：输入 / 后按 Tab 补全命令名；@ 后 Tab 补全文件；@path#L10-L20 引用行范围`;
