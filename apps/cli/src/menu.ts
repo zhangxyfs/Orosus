@@ -20,7 +20,9 @@ export function createSilenceableOutput(inner: { write(s: string): void }): Writ
  *  askSecret 经宿主的静默 question（回显全吞——粘贴密钥无感，手输为盲输）。
  *  choose 的 TTY 键盘引擎（TUI 批 T1）：宿主注入 pick 面即走上下键菜单（picker.ts）；
  *  缺省 = 现状编号读序号（非 TTY 回落/测试注入面）。Esc 取消经机制③带内抛错——
- *  pick 面以 reject 表达，此处统一映射「已取消（Esc）」（D35 无头拒绝式同族）。 */
+ *  pick 面以 reject 表达，此处统一映射「已取消（Esc）」（D35 无头拒绝式同族）。
+ *  ask/askSecret 的 Esc（TUI 批 T3）：宿主 question/secretQuestion 面抛同款错，天然穿透；
+ *  confirm 的 Esc 按契约语义内「非确认」折为 false（不抛错——审批 false 即否决，同向 fail-closed）。 */
 export function createReadlineUi(io: {
   question(q: string): Promise<string>;
   secretQuestion(q: string): Promise<string>;
@@ -45,6 +47,15 @@ export function createReadlineUi(io: {
         if (Number.isInteger(n) && n >= 1 && n <= items.length) return items[n - 1]!;
       }
     },
-    confirm: async (q) => /^[yY]/.test((await io.question(`${q} [y/N]: `)).trim()),
+    confirm: async (q) => {
+      try {
+        return /^[yY]/.test((await io.question(`${q} [y/N]: `)).trim());
+      } catch (e) {
+        // Esc = 「非确认」——confirm 语义内 false，无需抛错（机制③；审批路径 false 即否决，
+        // 与 waterfall 抛错同向 fail-closed）。文案与宿主/choose 取消的既定字面量同宗（menu.test ③ 钉）
+        if (e instanceof Error && e.message === "已取消（Esc）") return false;
+        throw e;
+      }
+    },
   };
 }

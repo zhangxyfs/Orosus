@@ -5,7 +5,7 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { createModal, type KeyEvent } from "./keys.ts";
+import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
@@ -110,28 +110,42 @@ const nextLine = async (): Promise<string | null> => {
     await new Promise<void>((r) => { lineWake = r; });
   }
 };
+// 行询问公共内核（TUI 批 T3）：EOF 竞速监听逐次挂摘（不用 standing promise——正常退出时
+// rl.close() 不产生无人消费的 rejection）；TTY 下 watchEsc 多播监听按键流（与 readline 行编辑
+// 共存，同字节不抢占），单 Esc 命中 abort rl.question → 带内抛「已取消（Esc）」（机制③，
+// D35 拒绝式同族）；方向键等 CSI/SS3 序列被解析器吞掉不取消（v1.8 修正）。非 TTY 不挂监听
+const askLine = (prompt: string): Promise<string> =>
+  new Promise<string>((resolve, reject) => {
+    const ac = new AbortController();
+    const stopEsc = process.stdin.isTTY === true ? watchEsc(process.stdin, () => ac.abort()) : undefined;
+    const onClose = (): void => {
+      cleanup();
+      reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
+    };
+    const cleanup = (): void => {
+      rl.removeListener("close", onClose);
+      stopEsc?.();
+    };
+    rl.once("close", onClose);
+    rl.question(prompt, { signal: ac.signal }).then(
+      (v) => { cleanup(); resolve(v); },
+      (e: unknown) => { cleanup(); reject(ac.signal.aborted ? new Error("已取消（Esc）") : e); },
+    );
+  });
 const question = async (q: string): Promise<string> => {
   askActive = true;
   try {
     // 命令开始前已到的行（管道脚本/用户预打字）优先喂给询问——否则队列与 question 各等各的（脑裂挂起）
     const queued = pendingLines.shift();
     if (queued !== undefined) return queued;
-    // EOF 竞速：stdin 关闭后（或期间）的询问以拒绝收场——命令带内失败（D35 fail-closed 语义）。
-    // 监听逐次挂摘（不用 standing promise）：正常退出时 rl.close() 不产生无人消费的 rejection
-    return await new Promise<string>((resolve, reject) => {
-      const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
-      rl.once("close", onClose);
-      rl.question(q).then(
-        (v) => { rl.removeListener("close", onClose); resolve(v); },
-        (e) => { rl.removeListener("close", onClose); reject(e); },
-      );
-    });
+    return await askLine(q);
   } finally {
     askActive = false;
   }
 };
 // 密钥询问（静默盲输）：提示语写真 stdout（明示不回显），rl 回显经代理全吞——
-// 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
+// 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏。
+// Esc 取消（T3）经 askLine 同款抛错，finally 保证静默开/关成对
 const secretQuestion = async (q: string): Promise<string> => {
   askActive = true;
   try {
@@ -140,14 +154,7 @@ const secretQuestion = async (q: string): Promise<string> => {
     process.stdout.write(`${q}（输入不回显）: `);
     stdoutEcho.silence(true);
     try {
-      return await new Promise<string>((resolve, reject) => {
-        const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
-        rl.once("close", onClose);
-        rl.question("").then(
-          (v) => { rl.removeListener("close", onClose); resolve(v); },
-          (e) => { rl.removeListener("close", onClose); reject(e); },
-        );
-      });
+      return await askLine("");
     } finally {
       stdoutEcho.silence(false);
       process.stdout.write("\n");
@@ -210,7 +217,12 @@ const echoHistory = async (h: Harness): Promise<void> => {
   if (hiddenBefore > 0) console.log(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
   for (const l of shown) console.log(l);
   while (hiddenBefore > 0 && process.stdin.isTTY) {
-    const more = await commandUi.ask(`…（前面还有 ${hiddenBefore} 行）回车=继续往前翻，q=停止回显`);
+    let more: string;
+    try {
+      more = await commandUi.ask(`…（前面还有 ${hiddenBefore} 行）回车=继续往前翻，q/Esc=停止回显`);
+    } catch {
+      break; // Esc（已取消）= 停止翻页，语义同 q——echoHistory 调用点在 REPL catch 面外（TUI 批 T3 过账：不接则 Esc 未捕获异常炸进程）
+    }
     if (more.trim().toLowerCase() === "q") break;
     const end = hiddenBefore;
     const start = Math.max(0, end - PAGE);

@@ -169,6 +169,29 @@ export function createKeyParser(opts?: {
   };
 }
 
+/** Esc 多播监听（TUI 批 T3/T5）——'data' 监听与 readline 行编辑共存（同一份字节多播，
+ *  不抢占消费）：整流喂解析器，单 ESC（30ms 窗口判出）命中即回调；CSI/SS3 序列（方向键/
+ *  Home/Delete 等）被解析器吞掉不触发——盲输中误按方向键不取消整次输入（v1.8 修正：
+ *  原稿「data 层直判 \x1b」会把序列首字节误判 Esc）。返回 dispose（摘监听）。
+ *  定时器 unref 不拖进程；dispose 后迟到窗口命中 abort 已 settled 的控制器是无害 no-op。 */
+export function watchEsc(
+  input: NodeJS.ReadableStream,
+  onEsc: () => void,
+  opts?: { escWindowMs?: number },
+): () => void {
+  const parser = createKeyParser({
+    ...(opts?.escWindowMs !== undefined ? { escWindowMs: opts.escWindowMs } : {}),
+    onEvent: (e) => {
+      if (e.type === "esc") onEsc();
+    },
+  });
+  const onData = (buf: Buffer): void => {
+    parser.feed(buf); // onEvent 路径推 esc；feed 返回值此处无消费方（多播旁路）
+  };
+  input.on("data", onData);
+  return () => input.removeListener("data", onData);
+}
+
 /** 模态管理器（接管/恢复协议——菜单与询问的运行时）。
  *  run = 接管（流级 pause 停掉宿主行编辑消费 + readable 拉取喂解析器）→ 执行 fn → 恢复
  *  （摘监听 + resume——放 finally：fn 抛错即 Esc reject 是常态路径，不恢复则 readline 暂停态
