@@ -77,7 +77,7 @@ export function createPermissionHandler(opts: {
     } catch (err) {
       return `权限模式已切换：${next}（本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    return `权限模式已切换：${next}（本会话即时生效；已写入 ${opts.configPath}，配置全量重写、注释已移除）`;
+    return `权限模式已切换：${next}`; // 瘦身（2026-09-20 用户实测：只报切到什么）；失败分支保留细节
   };
 }
 
@@ -95,6 +95,6 @@ export function createYoloHandler(opts: {
     } catch (err) {
       return `权限模式已切换：never（/yolo，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    return `权限模式已切换：never（/yolo——本会话即时生效；已写入 ${opts.configPath}）。危险命令仍会确认（D36 修订）；切回 /permission`;
+    return "权限模式已切换：never"; // 瘦身同上——never 语义（危险命令仍确认）在 /permission 菜单项内已注明
   };
 }

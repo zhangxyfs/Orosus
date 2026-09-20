@@ -207,9 +207,25 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h2.close();
   });
 
-  it("⑦ /model 切换：手动输入全名 → 下个 turn 的 request/header 落新 model", async () => {
-    const fakeUi: CommandUi = { ask: async () => "fake/m2", askSecret: async () => "", choose: async (_t, items) => items.find((x) => x.includes("手动")) ?? items[0]!, confirm: async () => true };
-    const { h, store } = await ownHarness({ commandUi: fakeUi, model: "fake/m1" });
+  it("⑦ /model 切换：槽 → 端点清单选型 → 下个 turn 的 request/header 落新 model", async () => {
+    // 顶级手输入口已砍（2026-09-20 用户实测）——机制验证改走槽内端点清单路径
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-"));
+    const store = new InMemorySessionStore();
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "m1",
+          listModels: async () => ["m1", "m2"],
+        });
+      },
+    };
+    const fakeUi: CommandUi = { ask: async () => { throw new Error("不应 ask"); }, askSecret: async () => "", choose: async (_t, items) => items.find((x) => x === "m2") ?? items[0]!, confirm: async () => true };
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi,
+      modules: [prov], config: { ...hermetic(dir), cliOverrides: { model: "fake/m1" } },
+    });
     await h.prompt("/model");
     await h.prompt("hi");
     const headers = (await store.all()).filter((e) => e.type === "request/header");
@@ -332,15 +348,16 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
       },
     };
     const provA: ModuleDefinition = { ...fakeModule("provider-a"), activate: (ctx) => ctx.provide("provider:a" as never, fake1.stream) };
-    const provB: ModuleDefinition = { ...fakeModule("provider-b"), activate: (ctx) => ctx.provide("provider:b" as never, fake2.stream) };
-    const ui: CommandUi = { ask: async () => "b/two", askSecret: async () => "", choose: async (_t, items) => items.find((i) => i.includes("手动输入"))!, confirm: async () => false };
+    const provB: ModuleDefinition = { ...fakeModule("provider-b"), activate: (ctx) => ctx.provide("provider:b" as never, { stream: fake2.stream, defaultModel: "two" }) };
+    // 顶级手输入口已砍（2026-09-20 用户实测）——选带默认模型的 b 槽即覆盖为裸名 b（默认 two）
+    const ui: CommandUi = { ask: async () => { throw new Error("不应 ask"); }, askSecret: async () => "", choose: async (_t, items) => items.find((i) => i.startsWith("b（")) ?? items[0]!, confirm: async () => false };
     const h = await makeHarness({
       commandUi: ui,
       modules: [provA, provB, consumer],
       config: { ...hermetic(dir), cliOverrides: { model: "a/one" } },
     });
     expect((await call!("a")).text).toBe("一号"); // 初始 model a/one
-    await h.prompt("/model"); // ui.ask 返回 "b/two" → model 覆盖
+    await h.prompt("/model"); // 选 b 槽 → model 覆盖为裸名 b
     expect((await call!("b")).text).toBe("二号"); // 新 model b/two 经同一 llm 口
     expect(fake2.requests[0]).toMatchObject({ model: "two" });
     await h.close();
@@ -523,17 +540,19 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     await h.close();
   });
 
-  it("③ 手输裸名：唯一槽自动补前缀（返回文案）；多槽报格式示例", async () => {
-    const h1s = await mk({});
-    h1s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
+  it("③ 槽内手输裸名：自动补槽前缀（顶级手输入口已砍——2026-09-20 用户实测，裸名逻辑内移槽语境）", async () => {
+    const h1s = await mk({ listModels: async () => ["m0"] });
+    h1s.uiAnswers.choose.push("fake（默认 m0，裸名即用）", "手动输入…");
     h1s.uiAnswers.ask.push("GLM-5.3");
     expect(await h1s.h.prompt("/model")).toContain("model 已切换并写入 config：fake/GLM-5.3");
     await h1s.h.close();
-    const h2s = await mk({ extraProv: true });
-    h2s.uiAnswers.choose.push("手动输入 model 全名（<provider>/<model>）");
-    h2s.uiAnswers.ask.push("GLM-5.3");
-    expect(await h2s.h.prompt("/model")).toContain("无法确定 provider");
-    await h2s.h.close();
+  });
+
+  it("④ 无带默认模型的槽 → 直接提示走 /provider（不弹空菜单、不触发 ui）", async () => {
+    const h = await makeHarness({}); // fakeProviderModule 无 defaultModel——一级列表为空
+    const out = await h.prompt("/model");
+    expect(out).toContain("/provider");
+    await h.close();
   });
 });
 
@@ -745,14 +764,33 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
 
 describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config，否则仅本会话）", () => {
   const mkUi = (confirmAnswer: boolean): CommandUi => ({
-    ask: async () => "fake/new-model",
+    ask: async () => "new-model", // 槽内手输裸名 → 自动补 fake/ 前缀（顶级手输入口已砍后的触达路径）
     askSecret: async () => "",
     confirm: async () => confirmAnswer,
     choose: async (_t, items) => items.find((i) => i.includes("手动输入")) ?? items[0]!,
   });
+  // 持久化断言关切写盘行为——provider 需带 defaultModel + listModels（fakeProviderModule 裸流在新菜单下是空列表）
+  const mkPersist = async (confirmAnswer: boolean) => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-"));
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider(script).stream,
+          defaultModel: "m0",
+          listModels: async () => ["m0"],
+        });
+      },
+    };
+    return createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      commandUi: mkUi(confirmAnswer), modules: [prov],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+  };
 
   it("① 选后 y → user config 顶层 model 行级写入（读-改-写保其他键）", async () => {
-    const h = await makeHarness({ commandUi: mkUi(true) });
+    const h = await mkPersist(true);
     const out = await h.prompt("/model");
     expect(out).toContain("model 已切换并写入 config");
     const cfgText = readFileSync(join(dir, "no-user.toml"), "utf8");
@@ -761,7 +799,7 @@ describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config�
   });
 
   it("② 选后 n → 仅本会话内存态（config 不落盘）", async () => {
-    const h = await makeHarness({ commandUi: mkUi(false) });
+    const h = await mkPersist(false);
     const out = await h.prompt("/model");
     expect(out).toContain("model 已切换（本会话）");
     expect(existsSync(join(dir, "no-user.toml"))).toBe(false); // hermetic userFile 未创建
@@ -791,6 +829,21 @@ describe("/context 余量（M4-2 T20/B20——窗口感知 + usage 锚点零新�
     const out = await h.prompt("/context");
     expect(out).toContain("未知");
     expect(out).toContain("/provider import --model");
+    await h.close();
+  });
+
+  it("③ 进程内尚无模型往返（resume/新会话）→ 已用回退 store 末条 usage，不恒 ~0（2026-09-20 用户实测）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-context-"));
+    const store = new InMemorySessionStore();
+    await store.append("assistant/chunk", { chunk: { type: "usage", input: 5000, output: 100 } }); // 模拟 resume 带出的历史足迹
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", ctxScript)],
+      config: { userFile: join(dir, "no-user.toml"), projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m", contextWindow: 10000 } },
+    });
+    const out = await h.prompt("/context"); // 未发任何消息——运行期锚点仍空
+    expect(out).toContain("~5100 tokens");
+    expect(out).toContain("51%");
     await h.close();
   });
 });

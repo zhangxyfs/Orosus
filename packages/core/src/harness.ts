@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
-import { hardeningNote, JsonlSessionStore, sumUsage } from "./session/jsonl.ts";
+import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./session/jsonl.ts";
 import { SqliteSessionStore } from "./session/sqlite.ts";
 import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
@@ -344,38 +344,34 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const builtinCommands = new Map<string, (args: string) => Promise<string>>([
     ["/model", async () => {
       const slots = graph.services.listProviders();
-      const items = [
-        ...slots.filter((x) => x.defaultModel !== undefined).map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`),
-        "手动输入 model 全名（<provider>/<model>）",
-      ];
+      // 一级只列带默认模型的槽——顶级「手动输入全名」入口已砍（2026-09-20 用户实测：没有用）；
+      // 手输仍可达于槽内端点清单末位「手动输入…」，且槽语境裸名自动补 <slot>/ 前缀（原顶级手输的
+      // 走查缺陷②逻辑内移——槽已选定，多槽歧义报错随之消失）
+      const items = slots.filter((x) => x.defaultModel !== undefined).map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`);
+      if (items.length === 0) return "无可切换的平台——先用 /provider 添加平台（含默认模型）";
       const picked = await commandUi.choose("选择模型", items);
-      let next: string;
-      if (picked.includes("手动输入")) {
-        next = (await commandUi.ask("model")).trim();
-        // 裸名唯一槽自动补前缀（走查缺陷②）；多槽报格式示例——大小写不猜，错了由端点报（一轮定案）
-        if (next !== "" && !next.includes("/")) {
-          if (slots.length === 1) next = `${slots[0]!.name}/${next}`;
-          else return `无法确定 provider——请写全名 "<provider>/<model>"（已配置：${slots.map((s) => s.name).join("、") || "无"}）`;
-        }
-      } else {
-        const slotName = picked.split("（")[0]!;
-        next = slotName;
-        const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
-        if (slot?.listModels !== undefined) {
-          try {
-            const models = await slot.listModels();
-            if (models.length > 0) {
-              const mpick = await commandUi.choose(`选择模型（来自 ${slotName} 端点实时清单）`, [...models, "手动输入…"]);
-              next = mpick.includes("手动输入") ? (await commandUi.ask("model")).trim() : `${slotName}/${mpick}`;
+      const slotName = picked.split("（")[0]!;
+      let next = slotName;
+      const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
+      if (slot?.listModels !== undefined) {
+        try {
+          const models = await slot.listModels();
+          if (models.length > 0) {
+            const mpick = await commandUi.choose(`选择模型（来自 ${slotName} 端点实时清单）`, [...models, "手动输入…"]);
+            if (mpick.includes("手动输入")) {
+              const manual = (await commandUi.ask("model")).trim();
+              if (manual === "") return "已取消（空输入）";
+              next = manual.includes("/") ? manual : `${slotName}/${manual}`;
+            } else {
+              next = `${slotName}/${mpick}`;
             }
-          } catch (err) {
-            createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
-            const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
-            if (manual !== "") next = manual;
           }
+        } catch (err) {
+          createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
+          const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
+          if (manual !== "") next = manual;
         }
       }
-      if (next === "") return "已取消（空输入）";
       modelOverride = next;
       // 持久化确认（M4-2 T14/D38 修订）：缺省仍内存态（D38 原语义不变），显式确认才写盘——
       // 行级写 user config 顶层 model 键（无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
@@ -428,9 +424,10 @@ session: ${store.sessionId}
       return `当前会话：input ${cur.input} / output ${cur.output} tokens`;
     }],
     ["/context", async () => {
-      // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出）
+      // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出），
+      // 进程内还没有模型往返（新会话/resume 后）时回退 store 末条 usage——否则 resume 会话恒显 ~0（2026-09-20 用户实测）
       const modelNow = modelOverride ?? (typeof config.core.model === "string" ? config.core.model : "（未配置）");
-      const used = usageAnchor?.totalTokens ?? 0;
+      const used = usageAnchor?.totalTokens ?? lastUsageTotal(await store.all()) ?? 0;
       const pct = contextWindow !== undefined ? Math.round((used / contextWindow) * 100) : undefined;
       return `模型: ${modelNow}\n窗口: ${contextWindow !== undefined ? `${contextWindow} tokens` : "未知（/provider import --model 可写入）"}\n已用: ~${used} tokens${pct !== undefined ? `（${pct}%）` : ""}`;
     }],

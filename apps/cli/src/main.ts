@@ -421,7 +421,12 @@ if (args.print === undefined) try {
         pendingImage = undefined;
         if (out !== undefined) console.log(out);
       } catch (err) {
-        console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+        // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
+        // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
+        // 取消仍以抛错带内表达，仅 REPL 呈现面不再按错误打印。
+        if (!(err instanceof Error && err.message === "已取消（Esc）")) {
+          console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
   }

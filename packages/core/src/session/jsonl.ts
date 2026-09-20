@@ -95,6 +95,24 @@ export function sumUsage(events: SessionEvent[]): { input: number; output: numbe
   return { input, output };
 }
 
+/** 末条真实 usage 的总量（/context 已用回退口径——2026-09-20 用户实测：resume 后运行期锚点为空恒显 ~0）。
+ *  与 sumUsage 同双形态口径但取末条非求和：usage 的 input 是该请求的全量上下文足迹，末条即最近上下文规模。 */
+export function lastUsageTotal(events: SessionEvent[]): number | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "assistant/chunk") {
+      const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+      if (c?.type === "usage") return (c.input ?? 0) + (c.output ?? 0);
+      continue;
+    }
+    if (e.type === "assistant/message") {
+      const u = e.usage as { input?: number; output?: number } | undefined;
+      if (u !== undefined) return (u.input ?? 0) + (u.output ?? 0);
+    }
+  }
+  return undefined;
+}
+
 /** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。 */
 export class JsonlSessionStore implements SessionStore {
   readonly sessionId: string;

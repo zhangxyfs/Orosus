@@ -213,7 +213,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
       choose: async () => answers.shift() ?? "取消",
     };
     const out = await handler("", ui);
-    expect(out).toContain("ask-always");
+    expect(out).toBe("权限模式已切换：ask-always"); // 瘦身钉（2026-09-20 用户实测：只报切到什么）
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
   });
 
@@ -274,7 +274,7 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     const { u, asked } = mkUi([]);
     const out = await h.commands.get("approval__yolo")!("", u);
     expect(asked).toHaveLength(0); // 一键——无菜单
-    expect(out).toContain("never");
+    expect(out).toBe("权限模式已切换：never"); // 瘦身钉同上
     expect(readFileSync(join(base, "c3.toml"), "utf8")).toContain('mode = "never"');
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "never")).toBe(true);
   });
