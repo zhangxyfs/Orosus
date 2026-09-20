@@ -19,7 +19,8 @@ import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
 import { createLiveView } from "./liveview.ts";
-import { pasteImage, imagesFor } from "./paste.ts";
+import { pasteImage, imagesFor, PASTE_EMPTY, pasteOkHint } from "./paste.ts";
+import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
@@ -276,6 +277,23 @@ if (args.print === undefined && process.stdin.isTTY) {
 // 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
 let pendingImage: string | undefined; // /paste 挂起的图片文件——随下一条消息以路径引用（M4-2 T10）
+// Alt+V 按键粘贴（TUI 批 T5）：keypress 多播拦截——与敲 /paste 完全同效；非 TTY 不挂（按键零处理）。
+// keypress 事件发在输入流上（emitKeypressEvents(process.stdin)，与 rl.input 同一对象）；
+// rl.line/rl.cursor 运行时可写（readline 公开属性）——@types/node 的 promises 变体声明为 readonly，窄化断言
+attachAltVPaste({
+  input: process.stdin,
+  isTTY: process.stdin.isTTY === true,
+  pasteImage,
+  write: (s) => lv.write(s),
+  clearInputLine: () => {
+    const w = rl as unknown as { line: string; cursor: number };
+    w.line = "";
+    w.cursor = 0;
+  },
+  setPendingImage: (file) => {
+    pendingImage = file;
+  },
+});
 function attachRender(h: Harness): void {
   // 双写面（T4/v1.8）：chunk 路 TTY 进 lv.activity（节流重绘），事件路 lv.write（直写）；
   // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 lv.end() 定格终稿
@@ -381,8 +399,8 @@ if (args.print === undefined) try {
       // /paste（M4-2 T10，别名 /image；M4-2.5 T5 起真实喂图）：剪贴板图存临时文件，随下一条消息以 image part 发给模型
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
-        if (img === undefined) { console.log("（剪贴板中没有图片——截图后重试，或检查终端权限）"); continue; }
-        console.log(`[已粘贴图片: ${basename(img.file)}]——将随下一条消息发送（需 vision 模型）`);
+        if (img === undefined) { console.log(PASTE_EMPTY); continue; }
+        console.log(pasteOkHint(basename(img.file)));
         pendingImage = img.file;
         continue;
       }

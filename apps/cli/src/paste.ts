@@ -22,6 +22,10 @@ export function imagesFor(pendingImage: string | undefined): { images: string[] 
   return pendingImage === undefined ? undefined : { images: [pendingImage] };
 }
 
+/** /paste 命令与 Alt+V 按键（TUI 批 T5）两触发面的提示语同源常量——文案只此一份，两分支不漂移。 */
+export const PASTE_EMPTY = "（剪贴板中没有图片——截图后重试，或检查终端权限）";
+export const pasteOkHint = (name: string): string => `[已粘贴图片: ${name}]——将随下一条消息发送（需 vision 模型）`;
+
 /** 从系统剪贴板读取图片（M4-2 T10；M4-2.5 T5 起随消息真实喂图）。
  *  返回保存的 PNG 文件路径；剪贴板无图返回 undefined。
  *  路径以 image part 进 user/message（日志存路径、请求期翻译层转 base64）。 */

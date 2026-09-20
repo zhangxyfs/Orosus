@@ -18,7 +18,7 @@ describe("completer + /help（M4-2 T21/B5）", () => {
     expect(HELP_TEXT).toContain("内建命令（模型与状态）");
     expect(HELP_TEXT).toContain("模块命令");
     expect(HELP_TEXT).toContain("/new        开始新会话");
-    expect(HELP_TEXT).toContain("/paste      粘贴剪贴板图片");
+    expect(HELP_TEXT).toContain("/paste      粘贴剪贴板图片（或 Alt+V 按键）"); // T5 可发现性：新键位入帮助
     expect(HELP_TEXT).toContain("/permission 查看或切换审批模式");
     expect(HELP_TEXT).toContain("Tab 补全");
   });

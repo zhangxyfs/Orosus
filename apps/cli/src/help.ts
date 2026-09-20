@@ -24,7 +24,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /usage      显示 token 用量
   /reload     重新加载模块配置
   /context    显示上下文窗口用量
-  /paste      粘贴剪贴板图片
+  /paste      粘贴剪贴板图片（或 Alt+V 按键）
   /summary    查看当前生效的压缩摘要
   /help       显示此帮助
 
