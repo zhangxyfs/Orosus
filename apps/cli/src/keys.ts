@@ -271,7 +271,12 @@ export function createModal(io: {
         input.removeListener("close", onClose);
         for (const l of keypressListeners) input.on("keypress", l as (...args: unknown[]) => void); // 先于 resume 装回——
         if (canRaw) input.setRawMode!(wasRaw); //   恢复流动后到达的字节才有人正常处理
-        input.resume(); // 未被消费的字节留在流缓冲，readline 恢复后依序续收
+        // resume 必须让到下一拍（T8 走查实锤·双模态接力悬死）：removeListener('readable') 的
+        // readableListening 标志刷新被 node 推迟到 nextTick——同拍 resume() 读到陈旧 true，
+        // resume_ 内部 flowing = !readableListening 算回 false，流永久卡停（无拉取、不流动），
+        // 第二次模态接管按键零到达（/provider 平台→数据源接力实测复现）。setImmediate 落在
+        // nextTick 队列之后，标志已归 false，resume 才能真正把 flowing 翻回 true 交还 readline。
+        setImmediate(() => input.resume()); // 未被消费的字节留在流缓冲，readline 恢复后依序续收
       }
     },
   };
