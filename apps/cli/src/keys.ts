@@ -4,9 +4,15 @@
  *  退格 \x7f/\x08 双形态同判（Windows 终端矩阵差异，v1.8 补）。修饰方向键（\x1b[1;2A 系）、
  *  Home/End 等本批不消费的序列按未知 CSI/SS3 整体吞掉——不炸、不把序列字节漏进字符流；
  *  框架化阶段需要时在已知表扩展（KeyEvent 穷举的是本批消费形态）。
- *  模态接管 = 流级 pause + readable 拉取（方案风险节预备形态）：readline 的行编辑消费
- *  （flowing data 模式）随流暂停天然停摆；接管期间只有本件 read() 消费字节，未被消费的
- *  字节留在流缓冲里，resume 后由 readline 依序续收（无回灌、无丢行）。 */
+ *  模态接管 = readable 拉取 + keypress 摘听（T8 走查修正二则：① 挂 'readable' 监听即自动停
+ *  flowing，且**不可显式 pause()**——readline/promises 的 question 流过之后，pause 会把底层
+ *  句柄读一起杀掉且不再拉起（winpty/conhost 实测：pause+readable 下按键零到达），而 readable
+ *  监听语义自身停 flowing 且保持句柄活跃拉取；② 但 readable 拉取拦不住字节继续流向
+ *  emitKeypressEvents 合成器——'keypress' 事件直达 readline 的 _ttyWrite，↑ 触发历史召回把
+ *  上一条命令整行写回 rl.line（模态后再打字与残留拼接翻倍，BUG C 实锤）——接管即摘下流上
+ *  全部 keypress 监听（readline 行编辑与 Alt+V 挂钩一并停摆，模态自身消费 meta 键；合成器
+ *  无监听空转无害），退出 finally 原样装回）。接管期间只有本件 read() 消费字节，未被消费的
+ *  留在流缓冲里，dispose 后 resume 交还 readline 依序续收（无回灌、无丢行）。 */
 
 export type KeyEvent =
   | { type: "char"; ch: string } // 可打印字符（含 CJK 多字节拼装后的整字符）
@@ -193,10 +199,11 @@ export function watchEsc(
 }
 
 /** 模态管理器（接管/恢复协议——菜单与询问的运行时）。
- *  run = 接管（流级 pause 停掉宿主行编辑消费 + readable 拉取喂解析器）→ 执行 fn → 恢复
- *  （摘监听 + resume——放 finally：fn 抛错即 Esc reject 是常态路径，不恢复则 readline 暂停态
- *  死锁）。接管期间 stdin close（Ctrl-D/EOF）时挂起的 readKey 以 esc 冲刷返回——防询问在
- *  已关闭的流上悬死。非 TTY：run 直接抛 D35 同款拒绝式（与 main.ts:121/:143 逐字同源）。 */
+ *  run = 接管（readable 拉取喂解析器 + 摘除 keypress 监听停掉宿主行编辑消费——见文件头注）
+ *  → 执行 fn → 恢复（摘监听 + 装回 keypress + resume——放 finally：fn 抛错即 Esc reject 是
+ *  常态路径，不恢复则 readline 停摆死锁）。接管期间 stdin close（Ctrl-D/EOF）时挂起的
+ *  readKey 以 esc 冲刷返回——防询问在已关闭的流上悬死。非 TTY：run 直接抛 D35 同款拒绝式
+ *  （与 main.ts:121/:143 逐字同源）。 */
 export function createModal(io: {
   input: NodeJS.ReadableStream & { setRawMode?(m: boolean): void };
   isTTY: boolean;
@@ -239,14 +246,31 @@ export function createModal(io: {
           waiters.push(resolve);
         });
       };
-      input.pause(); // 流级暂停：readline（flowing data 消费）随之停摆——见文件头注
+      // 接管 = 挂 'readable' 监听 + 摘除 keypress 监听（监听语义自动停 flowing——但停不掉
+      // emitKeypressEvents 合成器的 'data' 消费，方向键 keypress 会直达 readline 触发历史召回
+      // 污染 rl.line——T8 走查实锤 BUG C，故连 keypress 监听一并摘下，退出原样装回；**不可显式
+      // pause()**：question 流过后 pause 会连底层句柄读一起杀掉且不再拉起，按键零到达——winpty/
+      // conhost 实测矩阵见方案 T8 节）。raw 自开同理实锤（cooked 控制台自吞方向键/Alt）；进出成对，
+      // 接管前状态（isRaw 可读回）finally 恢复，不扰宿主 readline 原始态管理。
+      // 非 TTY/假流无 setRawMode 则跳过（测试注入面零改动）。
+      const canRaw = typeof input.setRawMode === "function";
+      const wasRaw = (input as { isRaw?: boolean }).isRaw === true;
+      if (canRaw) input.setRawMode!(true);
+      const keypressListeners = input.listeners("keypress");
+      input.removeAllListeners("keypress");
       input.on("readable", onReadable);
       input.once("close", onClose);
+      // 活性托底（T8 走查实锤）：readable 拉取下句柄保持活跃，但本定时器兜住「readable 未拉活」
+      // 的一切残留变体（原 crash 形态：模态等待 = 裸 promise + 空循环 → node unsettled TLA 崩退）。
+      const keepAlive = setInterval(() => {}, 60_000);
       try {
         return await fn(readKey);
       } finally {
+        clearInterval(keepAlive);
         input.removeListener("readable", onReadable);
         input.removeListener("close", onClose);
+        for (const l of keypressListeners) input.on("keypress", l as (...args: unknown[]) => void); // 先于 resume 装回——
+        if (canRaw) input.setRawMode!(wasRaw); //   恢复流动后到达的字节才有人正常处理
         input.resume(); // 未被消费的字节留在流缓冲，readline 恢复后依序续收
       }
     },
