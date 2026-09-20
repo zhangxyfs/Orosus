@@ -11,6 +11,7 @@
 | 2 | **M4.5 子代理小里程碑** | 第一档纯外部迷你 loop（explore 只读型，零新核心口）；bash 后台执行+任务管理四件套（run_in_background/读输出/查杀/wait+完成通知）；第二档（ctx.tools.invoke 编排）待核心口入主文档 | 既定（master plan 决策点⑤：M4-2 之后启动、不等 M4-3；被 TUI 插队顺延一位） | master plan Part V.1 |
 | 3 | **M4-3 分发主体批** | npm 模块分发 + `module add` + 声明式内容模块 + L1（SES Compartment，先一周 spike）；C2 事件 schema 版本化 / C4 用户文档 / C3 i18n 标记；overlay 权限门与目录 hash 信任粒度重估；生态搭车池（OAuth/重试/keychain/skills/.agents 等） | 未立项（独立计划书，L1 spike 先行） | master plan Part IV |
 | 4 | **M5 候选池剩余** | 见下节（TUI 已提出升为排队 1） | 未立项 | master plan Part V.1 |
+| 5 | **i18n 多语言批**（2026-09-20 用户拍板形态，顺位在立项时随方案书再定——末位登记暂不占用插队语义） | 内置中英双语（系统语言自动 + `/locale` 切换）；更多语言 = **纯数据语言包模块**挂载（provide 能力槽）；卸载/热重载空窗**查询时动态回退英文、配置不改写**。**契约窗口门**：`ctx.t` 注入口（D35 同族）+ `i18n.locale.*` 能力 key 登记——与 B13 同契约窗口评估 | 未立项（方案书待 T9 收官后起草） | 本文件「M5 / 独立里程碑候选」节 2026-09-20 条 |
 
 **已收官**：M4-2.5 容量与多模态（2026-09-19，511→558，`plans/2026-09-19-m4-2-5-capacity-multimodal.md`——read 窗口+去重/截断头尾 3:1/readTitle 预算//compact 立即+/summary/图片真实喂图 V.2 销账/OROSUS_HOME+home migrate）。
 
@@ -24,6 +25,7 @@
 - sansheng-liubu（三省六部）多智能体编排旗舰——subagent 之后立项。
 - **缓存目录迁移（OROSUS_HOME，2026-09-19 用户提出——随 TUI 批）**：允许把 `~/.orosus` 整体迁到其他盘符（系统盘空间治理）。**动机（用户实测对照）**：大量工作在 kimi-code 做、其缓存目录 <1GB；ZCode 没几个会话 `.zcode` 已近 2GB——宿主数据目录无声膨胀是通病（master plan D47 已记 ZCode 本机 SQLite 775MB+83MB WAL 前案），Orosus 应让用户能搬走。**形态三步**：① 基础设施收拢——散落各处的 `homedir()/.orosus` 拼接（config/secrets/sessions/cache/tmp/modules trust——cli-deps/startup/permission/catalog/main/paste 等多处）统一到单一解析点 + `OROSUS_HOME` 环境变量覆盖（缺省 `~/.orosus` 不变）；② 迁移命令 `orosus home migrate <目标路径>`（复制 + 完整性校验 + 指针切换 + 旧目录改名留证不静默删）；③ TUI 设置界面给入口与磁盘占用视图。**注记**：①②是 CLI 子命令形态、不依赖 TUI——可先行小批落地，③随 TUI。
   **✅ ①② 已兑现（2026-09-19，M4-2.5 T6）**：`@orosus/contracts/home` 单一解析点 orosusHome()（env>缺省、空串视为未设——D51）收拢用户层拼接 13 行/10 文件；`orosus home path|migrate` 子命令落地（缺省 dry-run、双侧文件数+字节校验、源改名 `.pre-migrate-<ts>` 留证绝不删、setx/export 指引、旧终端残响警示）。**③ TUI 设置界面与磁盘占用视图仍留 TUI 批**。
+- **i18n 多语言批（2026-09-20 用户拍板形态——内置双语 + 语言包模块化，方案书未起草）**：项目默认带中英两语，更多语言经模块挂载，语言包卸载自动回英文。**形态定案**：① i18n 内核 = 目录查找 + 参数插值 + 回退链的零依赖纯函数件（contracts 包或独立 `packages/i18n`），持有 zh/en 内置目录——引导悖论由此化解：模块系统自身的报错/挂载/审计文案永远有中英地板，语言包模块加载失败不致哑系统；② 模块消费 = `ctx.t(key, params)` 注入口，与 `ctx.ui`/`ctx.llm` 同族（D35 接缝哲学——模块不 import 实现）；③ 启动解析顺序 = config 显式设置 > `LANG`/`LC_ALL`（zh 前缀→中文、其余→英文）> 默认英文；`/locale` 命令运行期切换并写回 config，选未挂载语言 → 带内提示（不静默回退）；④ **语言包 = 纯数据模块**（无工具/命令/交互），activate 一句 `ctx.provide("i18n.locale.<tag>", 目录)` 走既有能力槽（单所有者、每语言一 key）；功能模块自带中英目录（自家命名空间），语言包可给多模块供译文；⑤ **键级回退链 `active → en → key 本身`**——翻译覆盖率不满 100% 可用，模块作者渐进补译；⑥ **卸载/热重载空窗 = 查询时动态回退、配置不改写**——语言包被 disable 或 `/reload` 热卸后目录消失即落英文，重挂载自动恢复（/reload 开发场景的几秒空窗不把用户永久踢回英文），回退时带内提示一次（英文显示）。**边界**：诊断面不翻译（Logger 稳定事件码保持原样，翻译只覆盖用户可见交互面）；master plan C3「模型可见标记 i18n 统一」（`[历史摘要]` 前缀等）语义不同物、互不占用——届时可同批顺带评估。**契约窗口门**：`ctx.t` 是 ModuleContext 契约扩展 + `i18n.locale.*` 命名模式须 contracts 登记（规则 1：能力短名只能由 contracts 包定义）——与 B13 同契约窗口评估，当前 TUI 批零契约扩展不顺带。**工作量结构**：内核极小，大头 = 全仓用户可见文案抽取入目录（CLI 装配层 help/banner/picker/compact-hint/paste + 十模块包向导/审批/返回串），抽取期顺手把硬编码拼接文案参数化。方案书待 T9 spike 收官后按 writing-plan-docs 起草（一批一事）。
 - 会话内分支树/undo；全文索引/搜索；文件历史快照/回滚；thinking 回流——各见 master plan V.2。
 
 ## 遗留台账（不主动立项）
