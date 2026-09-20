@@ -46,7 +46,7 @@ const mk = async (opts: { script: Chunk[][]; configToml: string; withTool?: bool
     discovery: { userDir: join(dir, "m"), projectDir: join(dir, "p"), trustFile: join(dir, "t.json") },
     config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
   });
-  if (opts.render !== undefined) attachRender(h, (s) => void opts.render!.buf.push(s));
+  if (opts.render !== undefined) attachRender(h, { write: (s) => void opts.render!.buf.push(s) }); // T4 双写面过账：缺省 activity = 两路同 write = 旧签名等价
   return { h, fp, store };
 };
 

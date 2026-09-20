@@ -1,4 +1,5 @@
 import type { KeyEvent } from "./keys.ts";
+import { moveUp, clearLine, reverse } from "./ansi.ts";
 
 /** 视口计算（TUI 批 T2/B5 厂商目录分页）——纯函数：窗口由选中项派生（选中项置底边滚入、
  *  首部贴顶、尾部贴底），pick 渲染每帧经它取 [start, end)；PageUp/PageDown 把选中项
@@ -14,8 +15,8 @@ export function viewportOf(count: number, selected: number, height: number): { s
  *  T2 起支持滚动视口：io.height 注入且项数超窗时只画 [start, end) + 顶部范围提示行
  *  （…（第 X–Y 项，共 N 项）——帧高恒定，重绘算术不漂移），PageUp/PageDown 整屏翻页。
  *  非 TTY 回落现状编号读序号（脚本/CI 消费方零破坏，退化矩阵登记）。
- *  重绘 = 「上移 N 行 + 逐行清行 + 重写」最简版（约 10 行）——T4 开工时与 liveview 一起
- *  抽 ansi.ts 公共件（序列常量不变，测试零改动）。 */
+ *  重绘 = 「上移 N 行 + 逐行清行 + 重写」——T4 起序列常量走 ansi.ts 公共件
+ *  （moveUp/clearLine/reverse——字节形态不变，测试零改动）。 */
 export function pick(
   items: string[],
   io: {
@@ -51,7 +52,7 @@ export function pick(
       if (vpHeight !== undefined) lines.push(`…（第 ${win.start + 1}–${win.end} 项，共 ${items.length} 项）`);
       for (let i = win.start; i < win.end; i++) {
         const text = items[i]!.replace(/\n/g, " ");
-        lines.push(i === selected ? `\x1b[7m${text}\x1b[27m` : text);
+        lines.push(i === selected ? reverse(text) : text);
       }
       lines.push(hint);
       return lines;
@@ -59,8 +60,8 @@ export function pick(
     let drawn = 0;
     const render = (): void => {
       const lines = frameLines();
-      if (drawn > 0) io.write(`\x1b[${drawn}A\r`);
-      for (const l of lines) io.write(`\x1b[K${l}\n`);
+      if (drawn > 0) io.write(moveUp(drawn));
+      for (const l of lines) io.write(`${clearLine}${l}\n`);
       drawn = lines.length;
     };
     render();

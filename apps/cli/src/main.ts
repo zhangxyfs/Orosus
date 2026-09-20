@@ -18,6 +18,7 @@ import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
+import { createLiveView } from "./liveview.ts";
 import { pasteImage, imagesFor } from "./paste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
@@ -163,18 +164,24 @@ const secretQuestion = async (q: string): Promise<string> => {
     askActive = false;
   }
 };
+// 流式活动区（TUI 批 T4）——装配序先于菜单与渲染：菜单写面（picker/标题行）同接 lv.write
+// （v1.8 B5：审批 choose 首帧与 tool/call 行落屏的竞速由「任何写先固化活动区」天然消解）；
+// 非 TTY lv.write 为直通（T1–T3 行为不变）
+const lv = createLiveView({
+  write: (s) => process.stdout.write(s),
+  isTTY: process.stdout.isTTY === true,
+  columns: () => process.stdout.columns ?? 80,
+});
 // 键盘菜单引擎（TUI 批 T1/T2）：TTY 下 choose 与 /sessions 选号走 picker（上下键/Esc/数字直达/
 // 滚动视口）——模态管理器接管期间 readline 行编辑停摆（keys.ts 文件头注）；非 TTY 不注入，
 // 编号读序号现状回落。视口高度 = 设计空白公式 max(3, min(终端行数−8, 15))（v1.8 B4 修正版）
 const terminalMenuIo = () => {
-  const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => process.stdout.write(s) });
+  const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => lv.write(s) });
   return {
     isTTY: true,
     height: Math.max(3, Math.min((process.stdout.rows ?? 24) - 8, 15)),
     runModal: <T,>(fn: (rk: () => Promise<KeyEvent>) => Promise<T>): Promise<T> => modal.run(fn),
-    write: (s: string): void => {
-      process.stdout.write(s);
-    },
+    write: (s: string): void => lv.write(s),
     numberQuestion: question,
   };
 };
@@ -182,7 +189,7 @@ const pickFace =
   process.stdin.isTTY === true
     ? {
         pick: async (title: string, items: string[]): Promise<number> => {
-          process.stdout.write(`== ${title} ==\n`);
+          lv.write(`== ${title} ==\n`);
           const n = await pick(items, terminalMenuIo());
           if (n === undefined) throw new Error("已取消（Esc）");
           return n;
@@ -270,7 +277,16 @@ if (args.print === undefined && process.stdin.isTTY) {
 let lastEventId: string | undefined;
 let pendingImage: string | undefined; // /paste 挂起的图片文件——随下一条消息以路径引用（M4-2 T10）
 function attachRender(h: Harness): void {
-  attachRenderTo(h, (s) => process.stdout.write(s), (id) => { lastEventId = id; });
+  // 双写面（T4/v1.8）：chunk 路 TTY 进 lv.activity（节流重绘），事件路 lv.write（直写）；
+  // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 lv.end() 定格终稿
+  attachRenderTo(
+    h,
+    { write: (s) => lv.write(s), ...(process.stdout.isTTY === true ? { activity: (s) => lv.activity(s) } : {}) },
+    (e) => {
+      lastEventId = e.id;
+      if (e.type === "turn/end") lv.end();
+    },
+  );
 }
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）

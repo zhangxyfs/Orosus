@@ -99,21 +99,29 @@ export function historyPage(lines: string[], page = 30): { shown: string[]; hidd
 }
 
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
- *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId——chunk 无事件 id，不受影响）。
- *  两路共享同一 RenderState（思考块的闭合可来自任一路：正文 delta 或 tool/call 事件）。 */
-export function attachRender(h: Harness, write: (s: string) => void, onEvent?: (id: string) => void): void {
+ *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 liveview 的 turn/end 判定——
+ *  chunk 无事件 id，不受影响）。两路共享同一 RenderState（思考块的闭合可来自任一路）。
+ *  双写面（TUI 批 T4/v1.8 补）：chunk 路输出接 io.activity ?? io.write（TTY 时进 liveview 活动区
+ *  节流重绘），事件路输出接 io.write（工具行/压缩行直写——混入重绘区会固化序错乱）；activity
+ *  缺省 = 两路同 write = 现状等价（非 TTY/--print 零变化）。onEvent 同步升级为完整事件。 */
+export function attachRender(
+  h: Harness,
+  io: { write(s: string): void; activity?(s: string): void },
+  onEvent?: (e: SessionEvent) => void,
+): void {
   const state = createRenderState();
+  const chunkOut = io.activity ?? io.write;
   void (async () => {
     for await (const c of h.liveChunks()) {
       const out = renderChunk(c, state);
-      if (out !== "") write(out);
+      if (out !== "") chunkOut(out);
     }
   })();
   void (async () => {
     for await (const e of h.events()) {
-      onEvent?.(e.id);
+      onEvent?.(e);
       const out = renderEvent(e, state);
-      if (out !== "") write(out);
+      if (out !== "") io.write(out);
     }
   })();
 }
