@@ -5,9 +5,9 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
-import { createModal } from "./keys.ts";
+import { createModal, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
-import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isHomeSubcommand, runHomeSubcommand } from "./home-cmd.ts";
@@ -156,20 +156,27 @@ const secretQuestion = async (q: string): Promise<string> => {
     askActive = false;
   }
 };
-// 键盘菜单引擎（TUI 批 T1）：TTY 下 choose 走 picker（上下键/Esc/数字直达）——模态管理器
-// 接管期间 readline 行编辑停摆（keys.ts 文件头注）；非 TTY 不注入，编号读序号现状回落
+// 键盘菜单引擎（TUI 批 T1/T2）：TTY 下 choose 与 /sessions 选号走 picker（上下键/Esc/数字直达/
+// 滚动视口）——模态管理器接管期间 readline 行编辑停摆（keys.ts 文件头注）；非 TTY 不注入，
+// 编号读序号现状回落。视口高度 = 设计空白公式 max(3, min(终端行数−8, 15))（v1.8 B4 修正版）
+const terminalMenuIo = () => {
+  const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => process.stdout.write(s) });
+  return {
+    isTTY: true,
+    height: Math.max(3, Math.min((process.stdout.rows ?? 24) - 8, 15)),
+    runModal: <T,>(fn: (rk: () => Promise<KeyEvent>) => Promise<T>): Promise<T> => modal.run(fn),
+    write: (s: string): void => {
+      process.stdout.write(s);
+    },
+    numberQuestion: question,
+  };
+};
 const pickFace =
   process.stdin.isTTY === true
     ? {
         pick: async (title: string, items: string[]): Promise<number> => {
-          const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => process.stdout.write(s) });
           process.stdout.write(`== ${title} ==\n`);
-          const n = await pick(items, {
-            isTTY: true,
-            runModal: (fn) => modal.run(fn),
-            write: (s) => process.stdout.write(s),
-            numberQuestion: question,
-          });
+          const n = await pick(items, terminalMenuIo());
           if (n === undefined) throw new Error("已取消（Esc）");
           return n;
         },
@@ -286,10 +293,21 @@ if (args.print === undefined) try {
         if (!process.stdin.isTTY) { console.log(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); continue; }
         const items = listSessions(sessionsRoot);
         if (items.length === 0) { console.log("（暂无会话——发送第一条消息即创建）"); continue; }
-        // 走查定案（2026-09-19）：不选即取消——菜单自绘（序号/高亮/相对时间），ask 循环选号，
-        // 空输入 = 取消（专门「取消」项退役——占序号位且多一步）
-        console.log(formatSessions(sessionsRoot, h.sessionId));
-        const n = await pickSessionNumber((q) => commandUi.ask(q), items.length);
+        // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
+        // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
+        // 不再先打印静态表格——picker 自带列表渲染），Esc reject 在 pickSessionNumber 内转 undefined
+        const n = await pickSessionNumber(
+          (q) => commandUi.ask(q),
+          items.length,
+          async () => {
+            const labels = items.map(
+              (s, i) => `${i + 1}. ${s.title} · ${relativeTime(s.createdAtMs)}${s.id === h.sessionId ? "（当前）" : ""}`,
+            );
+            const n0 = await pick(labels, terminalMenuIo());
+            if (n0 === undefined) throw new Error("已取消（Esc）");
+            return n0 + 1; // picker 0-based → 序号 1-based（与回落路径同口径）
+          },
+        );
         if (n === undefined) continue;
         await switchTo(items[n - 1]!.id);
         continue sessionLoop; // 换 harness 后重挂横幅与渲染

@@ -130,8 +130,22 @@ export function sessionCommand(input: string, current: { sessionId: string; last
 }
 
 /** 序号选择（B9 走查定案：不选即取消——无需专门取消项）：空输入 = undefined（取消）；
- *  无效序号重问。ask 注入（readline UI / 测试替身）。 */
-export async function pickSessionNumber(ask: (q: string) => Promise<string>, count: number): Promise<number | undefined> {
+ *  无效序号重问。ask 注入（readline UI / 测试替身）。
+ *  可选第三参 ttyPick（TUI 批 T2——保留调用兼容：两参调用面语义不变）：TTY 下 main.ts 注入
+ *  picker 闭包走键盘菜单；picker 的 Esc reject 在此转 undefined（「空输入 = 取消」的键盘
+ *  对应——reject 不外溢 main.ts 消费面）。缺省 = 非 TTY 回落，既有 ask 循环原样。 */
+export async function pickSessionNumber(
+  ask: (q: string) => Promise<string>,
+  count: number,
+  ttyPick?: ((count: number) => Promise<number>) | undefined,
+): Promise<number | undefined> {
+  if (ttyPick !== undefined) {
+    try {
+      return await ttyPick(count);
+    } catch {
+      return undefined;
+    }
+  }
   for (;;) {
     const ans = (await ask("输入序号恢复（直接回车 = 取消）")).trim();
     if (ans === "") return undefined;

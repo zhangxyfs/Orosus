@@ -157,6 +157,18 @@ describe("pickSessionNumber（走查定案：不选即取消——专门取消�
     expect(await pickSessionNumber(async () => answers[i++]!, 3)).toBe(1);       // 无效两轮后命中
     expect(i).toBe(3);
   });
+  it("④ TTY 注入面驱动选号（TUI 批 T2）：picker 选中返回序号、ask 不被触达；picker 的 Esc reject 转 undefined（「空输入 = 取消」的键盘对应——reject 不外溢 main.ts 消费面）", async () => {
+    const { pickSessionNumber } = await import("./sessions.ts");
+    const n = await pickSessionNumber(
+      async () => { throw new Error("TTY 分支不应走 ask"); },
+      3,
+      async (count) => { expect(count).toBe(3); return 2; },
+    );
+    expect(n).toBe(2);
+    await expect(
+      pickSessionNumber(async () => "", 3, async () => { throw new Error("已取消（Esc）"); }),
+    ).resolves.toBeUndefined();
+  });
 });
 
 describe("readTitle 读取预算（M4-2.5 T2——日志调研 P5：列表不被无对话大文件拖慢）", () => {
