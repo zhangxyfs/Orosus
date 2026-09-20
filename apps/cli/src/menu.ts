@@ -17,12 +17,26 @@ export function createSilenceableOutput(inner: { write(s: string): void }): Writ
 
 /** readline 版 CommandUi（D35）：choose 渲染编号列表读序号、ask、confirm [y/N]。
  *  语言约定（D37/D38）：命令一级英文、二级起中文——items 文案由命令侧给。多级菜单 = 命令内嵌套调用。
- *  askSecret 经宿主的静默 question（回显全吞——粘贴密钥无感，手输为盲输）。 */
-export function createReadlineUi(io: { question(q: string): Promise<string>; secretQuestion(q: string): Promise<string> }): CommandUi {
+ *  askSecret 经宿主的静默 question（回显全吞——粘贴密钥无感，手输为盲输）。
+ *  choose 的 TTY 键盘引擎（TUI 批 T1）：宿主注入 pick 面即走上下键菜单（picker.ts）；
+ *  缺省 = 现状编号读序号（非 TTY 回落/测试注入面）。Esc 取消经机制③带内抛错——
+ *  pick 面以 reject 表达，此处统一映射「已取消（Esc）」（D35 无头拒绝式同族）。 */
+export function createReadlineUi(io: {
+  question(q: string): Promise<string>;
+  secretQuestion(q: string): Promise<string>;
+  pick?(title: string, items: string[]): Promise<number>;
+}): CommandUi {
   return {
     ask: async (q) => (await io.question(`${q}: `)).trim(),
     askSecret: async (q) => (await io.secretQuestion(q)).trim(),
     choose: async (title, items) => {
+      if (io.pick !== undefined) {
+        try {
+          return items[await io.pick(title, items)]!;
+        } catch {
+          throw new Error("已取消（Esc）");
+        }
+      }
       for (;;) {
         const lines = [`== ${title} ==`, ...items.map((x, i) => `${i + 1}. ${x.replace(/\n/g, " ")}`)];
         for (const l of lines) process.stdout.write(`${l}\n`);

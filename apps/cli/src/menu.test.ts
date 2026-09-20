@@ -8,6 +8,17 @@ describe("readline 版 CommandUi（menu 组件，D35/D38 语言约定注记）",
     const picked = await ui.choose("选择平台", ["甲", "乙", "丙"]);
     expect(picked).toBe("乙");
   });
+  it("choose：TTY 引擎注入面——pick 面 reject 统一映射「已取消（Esc）」（机制③统一文案的装配层钉，硬约束 1）", async () => {
+    const ui = createReadlineUi({
+      // question 恒给合法序号：未接 pick 面的旧实现会正常返回（断言随之失败）而非死循环重问
+      question: async () => "1",
+      secretQuestion: async () => "",
+      pick: async () => {
+        throw new Error("注入的取消");
+      },
+    });
+    await expect(ui.choose("选择平台", ["甲"])).rejects.toThrow("已取消（Esc）");
+  });
   it("confirm：y/Y 为真，其余为假；ask 原样返回 trim 后输入；askSecret 走掩码询问口", async () => {
     const answers = ["y", "n", "  hello  "];
     const secrets: string[] = [];

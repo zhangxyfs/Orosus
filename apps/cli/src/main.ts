@@ -5,6 +5,8 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@o
 import type { Harness } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
+import { createModal } from "./keys.ts";
+import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
@@ -108,54 +110,72 @@ const nextLine = async (): Promise<string | null> => {
     await new Promise<void>((r) => { lineWake = r; });
   }
 };
-const commandUi = createReadlineUi({
-  question: async (q) => {
-    askActive = true;
+const question = async (q: string): Promise<string> => {
+  askActive = true;
+  try {
+    // 命令开始前已到的行（管道脚本/用户预打字）优先喂给询问——否则队列与 question 各等各的（脑裂挂起）
+    const queued = pendingLines.shift();
+    if (queued !== undefined) return queued;
+    // EOF 竞速：stdin 关闭后（或期间）的询问以拒绝收场——命令带内失败（D35 fail-closed 语义）。
+    // 监听逐次挂摘（不用 standing promise）：正常退出时 rl.close() 不产生无人消费的 rejection
+    return await new Promise<string>((resolve, reject) => {
+      const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
+      rl.once("close", onClose);
+      rl.question(q).then(
+        (v) => { rl.removeListener("close", onClose); resolve(v); },
+        (e) => { rl.removeListener("close", onClose); reject(e); },
+      );
+    });
+  } finally {
+    askActive = false;
+  }
+};
+// 密钥询问（静默盲输）：提示语写真 stdout（明示不回显），rl 回显经代理全吞——
+// 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
+const secretQuestion = async (q: string): Promise<string> => {
+  askActive = true;
+  try {
+    const queued = pendingLines.shift();
+    if (queued !== undefined) return queued;
+    process.stdout.write(`${q}（输入不回显）: `);
+    stdoutEcho.silence(true);
     try {
-      // 命令开始前已到的行（管道脚本/用户预打字）优先喂给询问——否则队列与 question 各等各的（脑裂挂起）
-      const queued = pendingLines.shift();
-      if (queued !== undefined) return queued;
-      // EOF 竞速：stdin 关闭后（或期间）的询问以拒绝收场——命令带内失败（D35 fail-closed 语义）。
-      // 监听逐次挂摘（不用 standing promise）：正常退出时 rl.close() 不产生无人消费的 rejection
       return await new Promise<string>((resolve, reject) => {
         const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
         rl.once("close", onClose);
-        rl.question(q).then(
+        rl.question("").then(
           (v) => { rl.removeListener("close", onClose); resolve(v); },
           (e) => { rl.removeListener("close", onClose); reject(e); },
         );
       });
     } finally {
-      askActive = false;
+      stdoutEcho.silence(false);
+      process.stdout.write("\n");
     }
-  },
-  // 密钥询问（静默盲输）：提示语写真 stdout（明示不回显），rl 回显经代理全吞——
-  // 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏
-  secretQuestion: async (q) => {
-    askActive = true;
-    try {
-      const queued = pendingLines.shift();
-      if (queued !== undefined) return queued;
-      process.stdout.write(`${q}（输入不回显）: `);
-      stdoutEcho.silence(true);
-      try {
-        return await new Promise<string>((resolve, reject) => {
-          const onClose = (): void => reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
-          rl.once("close", onClose);
-          rl.question("").then(
-            (v) => { rl.removeListener("close", onClose); resolve(v); },
-            (e) => { rl.removeListener("close", onClose); reject(e); },
-          );
-        });
-      } finally {
-        stdoutEcho.silence(false);
-        process.stdout.write("\n");
+  } finally {
+    askActive = false;
+  }
+};
+// 键盘菜单引擎（TUI 批 T1）：TTY 下 choose 走 picker（上下键/Esc/数字直达）——模态管理器
+// 接管期间 readline 行编辑停摆（keys.ts 文件头注）；非 TTY 不注入，编号读序号现状回落
+const pickFace =
+  process.stdin.isTTY === true
+    ? {
+        pick: async (title: string, items: string[]): Promise<number> => {
+          const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => process.stdout.write(s) });
+          process.stdout.write(`== ${title} ==\n`);
+          const n = await pick(items, {
+            isTTY: true,
+            runModal: (fn) => modal.run(fn),
+            write: (s) => process.stdout.write(s),
+            numberQuestion: question,
+          });
+          if (n === undefined) throw new Error("已取消（Esc）");
+          return n;
+        },
       }
-    } finally {
-      askActive = false;
-    }
-  },
-});
+    : {};
+const commandUi = createReadlineUi({ question, secretQuestion, ...pickFace });
 
 const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) =>
   createHarness({
