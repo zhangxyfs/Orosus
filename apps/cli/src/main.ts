@@ -323,8 +323,10 @@ const clearScreen = (): void => {
 };
 
 // 首启引导（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认转 /provider 向导 → /reload → 复检回显；
-// 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）；--print 单发不触发
-if (args.print === undefined && process.stdin.isTTY) {
+// 非交互跳过；只挂首会话（/new、/fork 换出的会话不再触发，M3 T9 定案）；--print 单发不触发。
+// 全屏模式不再引导（F5 七轮用户拍板）：直接进主窗口，未配置时提问走带内提示（见 processReplLine）
+const willFullscreen = args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true;
+if (args.print === undefined && process.stdin.isTTY && !willFullscreen) {
   const out = await startupGate({ h, ui: commandUi, readModel: realReadModel(process.cwd()), isTty: true });
   if (out !== undefined) console.log(out);
 }
@@ -519,6 +521,12 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         const label = attachPendingImage(img.file);
         activeApp?.addAttachment(label); // 全屏期 chip 进输入框（F5 二轮⑬——消息组成部分的可见形态）
         out(`${label} 已挂接——将随下一条消息发送（共 ${pendingImages.length} 张）`);
+        return "again";
+      }
+      // 模型未配置拦截（F5 七轮用户拍板）：提问不进 harness（resolveProvider 必抛）——
+      // 带内指路 /provider（与首启引导退役配套；命令仍可用，配好即通）
+      if (needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })) {
+        out("[提示] 还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 选模型），配好后直接提问");
         return "again";
       }
       try {
