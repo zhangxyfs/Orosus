@@ -268,6 +268,19 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     expect(out).toContain("allow");
   });
 
+  it("②b /permission ask-always 直参直达（F5 用户实测：全屏二级菜单选定后再弹 choose = 三级弹窗）", async () => {
+    const h = fakeCtx({ config: { configFile: join(base, "c2b.toml"), projectConfigFile: join(base, "no-proj.toml") } });
+    await def.activate(h.ctx);
+    const { u, asked } = mkUi([]);
+    const out = await h.commands.get("approval__permission")!("ask-always", u);
+    expect(asked).toHaveLength(0); // 零交互——不弹菜单
+    expect(out).toBe("权限模式已切换：ask-always");
+    expect(readFileSync(join(base, "c2b.toml"), "utf8")).toContain('mode = "ask-always"');
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
+    const bad = await h.commands.get("approval__permission")!("bogus", u);
+    expect(bad).toContain("未知权限模式");
+  });
+
   it("③ /yolo（approval__yolo）→ 零交互直接 never + 写盘 + policy 事件", async () => {
     const h = fakeCtx({ config: { configFile: join(base, "c3.toml"), projectConfigFile: join(base, "no-proj.toml") } });
     await def.activate(h.ctx);

@@ -216,11 +216,20 @@ export class FullApp {
 	stop(): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		// 挂起的模块询问随应用停止结算为「取消」（F5：Ctrl+T/C 中途离场时 promise 不得永挂——
+		// 否则模块命令侧永远等不到回答）
+		if (this.pendingUi !== undefined) {
+			const pu = this.pendingUi;
+			this.pendingUi = undefined;
+			if (pu.kind === "pick") pu.resolve(undefined);
+			else pu.resolve(undefined);
+		}
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
 		this.scheduler.stop();
 		if (this.full.isActive) this.full.exit();
 		this.term.stop();
+		if (FullApp.activeInstance === this) FullApp.activeInstance = undefined;
 	}
 
 	setBusy(b: boolean): void {
@@ -337,10 +346,22 @@ export class FullApp {
 
 	// ---------- 按键 ----------
 
+	private lastCtrlC = 0; // 双击退出窗口（Esc 同族惯例——claude-code 双击 Ctrl+C 退出）
+
 	private onKey(key: string): void {
 		const s = this.state;
 		if (key === "ctrl+c") {
-			this.io.requestExit();
+			// Ctrl+C 语义（F5 用户实测拍板：忙碌中按 Ctrl+C 是想停生成，整app退出被当成「崩了」）：
+			// 忙碌 = 取消当前 turn（SIGINT 同效）；空闲 = 2s 内再按一次才退出，首按给提示
+			if (s.busy) {
+				this.lastCtrlC = 0;
+				this.io.requestCancel();
+			} else if (Date.now() - this.lastCtrlC < 2000) {
+				this.io.requestExit();
+			} else {
+				this.lastCtrlC = Date.now();
+			}
+			this.scheduler.requestImmediateRender();
 			return;
 		}
 		if (key === "ctrl+t") {
@@ -352,28 +373,9 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
-		if (key === "escape") {
-			if (s.busy) {
-				this.io.requestCancel(); // AI 回答中 Esc = 取消当前 turn（SIGINT 同效——修复轮①）
-				this.scheduler.requestImmediateRender();
-				return;
-			}
-			if (s.overlayOpen) {
-				if (s.overlayCmd !== "") {
-					s.overlayCmd = "";
-					s.input = "/";
-					s.cursor = 1;
-					s.overlaySel = 0;
-				} else s.overlayOpen = false;
-				this.scheduler.requestImmediateRender();
-				return;
-			}
-			s.focusIdx = 0;
-			this.scheduler.requestImmediateRender();
-			return;
-		}
 
-		// 全屏 CommandUi 挂起态（模块 choose/ask 的 overlay 化——优先于一切编辑态）
+		// 全屏 CommandUi 挂起态（模块 choose/ask 的 overlay 化——优先于一切编辑态；
+		// F5 实证：须先于 busy-Esc 判定，否则命令询问期间 Esc 被取消 turn 分支截胡、询问卡死）
 		if (this.pendingUi !== undefined) {
 			const pu = this.pendingUi;
 			if (pu.kind === "pick") {
@@ -405,6 +407,27 @@ export class FullApp {
 				this.onEditKey(key);
 				return;
 			}
+			this.scheduler.requestImmediateRender();
+			return;
+		}
+
+		if (key === "escape") {
+			if (s.busy) {
+				this.io.requestCancel(); // AI 回答中 Esc = 取消当前 turn（SIGINT 同效——修复轮①）
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			if (s.overlayOpen) {
+				if (s.overlayCmd !== "") {
+					s.overlayCmd = "";
+					s.input = "/";
+					s.cursor = 1;
+					s.overlaySel = 0;
+				} else s.overlayOpen = false;
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			s.focusIdx = 0;
 			this.scheduler.requestImmediateRender();
 			return;
 		}
@@ -615,9 +638,12 @@ export class FullApp {
 
 	private tailLine(): string {
 		const s = this.state;
-		return s.busy
-			? `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`
-			: theme.dim("正在待命");
+		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
+		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
+		if (this.pendingUi?.kind === "pick") return theme.fg("info", "● 等待选择——↑↓ 移动 · Enter 选定 · Esc 取消");
+		if (s.busy) return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
+		if (Date.now() - this.lastCtrlC < 2000) return theme.fg("warn", "再按一次 Ctrl+C 退出（Esc 返回输入）");
+		return theme.dim("正在待命");
 	}
 
 	private panelBox(title: string, en: string, focused: boolean, w: number, h: number, content: string[], hints: string[], footer?: string[]): string[] {
@@ -775,7 +801,14 @@ export class FullApp {
 			screen[r] = padToWidth(doc[start + r] ?? "", leftW);
 		}
 		const divRow = streamH;
-		screen[divRow] = theme.fg(ibc, "╭" + "─".repeat(Math.max(1, leftW - 2)) + "╮");
+		// 模块询问挂起期：问题写进输入框顶边标题（F5——placeholder 只在空输入时可见，用户一打字问题就消失）
+		if (this.pendingUi?.kind === "ask") {
+			const qSeg = theme.fg("accent", ` ${this.pendingUi.question} `);
+			const qFill = Math.max(1, leftW - 4 - visibleWidth(qSeg));
+			screen[divRow] = theme.fg(ibc, "╭─") + qSeg + theme.fg(ibc, "─".repeat(qFill) + "╮");
+		} else {
+			screen[divRow] = theme.fg(ibc, "╭" + "─".repeat(Math.max(1, leftW - 2)) + "╮");
+		}
 
 		const sel = this.selRange();
 		const paneIn = (l: string) => theme.bg("surface2", theme.fg(ibc, "│") + padToWidth(l, leftW - 2) + theme.fg(ibc, "│"));
@@ -910,17 +943,26 @@ export class FullApp {
 	// ---------- 崩溃恢复（spike 判据 4 同款） ----------
 
 	private installCrashHooks(): void {
+		// 进程级钩子每次 runFullScreen 新建实例都会再挂——不拦则 5 次模式切换后 MaxListeners 告警、
+		// 旧实例的 term/full 引用陪葬（F5 修复轮补）。恢复只认当前活跃实例。
+		FullApp.activeInstance = this;
+		if (FullApp.hooksInstalled) return;
+		FullApp.hooksInstalled = true;
 		process.on("exit", () => {
 			try {
-				writeSync(1, "\x1b[?25h\x1b[?2004l\x1b[?7h" + (this.full.isActive ? "\x1b[?1049l" : ""));
+				const cur = FullApp.activeInstance;
+				writeSync(1, "\x1b[?25h\x1b[?2004l\x1b[?7h" + (cur?.full.isActive === true ? "\x1b[?1049l" : ""));
 			} catch {
 				/* noop */
 			}
 		});
 		process.on("uncaughtException", (err) => {
 			try {
-				if (this.full.isActive) this.full.exit();
-				this.term.stop();
+				const cur = FullApp.activeInstance;
+				if (cur !== undefined) {
+					if (cur.full.isActive) cur.full.exit();
+					cur.term.stop();
+				}
 				writeSync(1, "\x1b[?25h\x1b[?2004l\x1b[?7h");
 			} catch {
 				/* 恢复尽力而为 */
@@ -928,4 +970,7 @@ export class FullApp {
 			throw err;
 		});
 	}
+
+	private static hooksInstalled = false;
+	private static activeInstance: FullApp | undefined;
 }

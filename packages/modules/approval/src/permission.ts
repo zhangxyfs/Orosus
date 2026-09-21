@@ -68,9 +68,18 @@ export function createPermissionHandler(opts: {
       { label: "需要时询问（ask-risky，默认）", value: "ask-risky" },
       { label: "从不询问（危险命令仍确认）", value: "never" }, // 五轮 UX 修正：与 D36 修订后的 never 语义一致
     ];
-    const picked = await ui.choose(`当前权限模式：${opts.current()}——选择新模式`, modes.map((m) => m.label));
-    const next = modes.find((m) => m.label === picked)?.value;
-    if (next === undefined) return "已取消";
+    // 直参直达（F5 用户实测：全屏二级菜单已选定模式，无参菜单再弹一次 = 三级弹窗）——
+    // `/permission ask-always` 跳过 choose 直接生效；无参才进菜单
+    const direct = args.trim();
+    let next: PermissionMode | undefined;
+    if (direct !== "") {
+      next = modes.find((m) => m.value === direct)?.value;
+      if (next === undefined) return `未知权限模式 "${direct}"——合法值：${modes.map((m) => m.value).join(" / ")}`;
+    } else {
+      const picked = await ui.choose(`当前权限模式：${opts.current()}——选择新模式`, modes.map((m) => m.label));
+      next = modes.find((m) => m.label === picked)?.value;
+      if (next === undefined) return "已取消";
+    }
     opts.apply(next);
     try {
       persistMode(opts.configPath, next, opts.projectConfigPath);

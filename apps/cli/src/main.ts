@@ -99,11 +99,22 @@ let stdinClosed = false;
 let askActive = false; // 菜单询问期间的行归询问消费（REPL 不抢答）
 rl.on("line", (l) => {
   if (askActive) return;
+  // 全屏期 readline 与 FullApp 共用同一 stdin（rl 不摘——行模式回切还要用）：按键两头都到，
+  // rl 会把全屏输入框里的回车也酿成 line 事件——不丢则回行模式后陈旧命令连环重放（F5 走查实证）
+  if (activeApp !== undefined) {
+    const w2 = rl as unknown as { line: string; cursor: number };
+    w2.line = "";
+    w2.cursor = 0;
+    return;
+  }
   pendingLines.push(l);
   const w = lineWake;
   lineWake = undefined;
   w?.();
 });
+// Ctrl+C 在 raw 模式以 \x03 数据字节到达，readline 默认行为是关闭接口（无 SIGINT 监听时）——
+// 关掉 rl 会 pause stdin，FullApp 随之断粮冻结。挂空监听拦住默认关闭；退出决策归 FullApp/REPL。
+rl.on("SIGINT", () => { /* 全屏期防 rl 自闭；行模式 SIGINT 由 process 级处理器取消 turn */ });
 rl.once("close", () => {
   stdinClosed = true;
   const w = lineWake;
@@ -327,6 +338,7 @@ attachAltVPaste({
   setPendingImage: (file) => {
     pendingImage = file;
   },
+  enabled: () => activeApp === undefined, // 全屏期 Alt+V 归 FullApp（F5 走查：此处直写 lv 毁屏）
 });
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
 // 全屏 = DocModel（FullApp 的行源）。模式切换只换 sink 指向，attachRender 订阅每会话一次不重挂。
@@ -350,6 +362,9 @@ let tuiMode: "line" | "full" =
 // （行内未提交内容先清空是防 readline 把换行追加进当前行——F5 评估是否保留行内容）。
 if (process.stdin.isTTY === true) {
   process.stdin.on("keypress", (_s: string, k: { name?: string; ctrl?: boolean } | undefined) => {
+    // activeApp 守卫（F5 走查实证）：全屏期按键先经 FullApp——requestLineMode 已把 tuiMode 翻成
+    // "line"，此监听同 tick 再触发会翻回 full 并注 \n（双切换）；全屏期按键一律归 FullApp。
+    if (activeApp !== undefined) return;
     if (k?.name === "t" && k.ctrl === true && tuiMode === "line") {
       tuiMode = "full";
       const w = rl as unknown as { line: string; cursor: number };
@@ -410,7 +425,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
             const labels = items.map(
               (s, i) => `${i + 1}. ${s.title} · ${relativeTime(s.createdAtMs)}${s.id === h.sessionId ? "（当前）" : ""}`,
             );
-            const n0 = await pick(labels, terminalMenuIo());
+            // 全屏期走 FullApp overlay（F5 走查实证：readline picker 的 modal 与 FullApp 抢 stdin 卡死）
+            const n0 = activeApp !== undefined
+              ? await activeApp.pickOverlay("选择会话", labels)
+              : await pick(labels, terminalMenuIo());
             if (n0 === undefined) throw new Error("已取消（Esc）");
             return n0 + 1; // picker 0-based → 序号 1-based（与回落路径同口径）
           },
@@ -475,7 +493,12 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
         const cmdOut = await withCompactHint(
           text,
-          { isTTY: process.stdout.isTTY === true, activity: (s) => lv.activity({ kind: "text", text: s }), discard: () => lv.discard() },
+          // 全屏期不走 lv（直写 stdout 毁 alt-screen——F5 走查实证）；忙碌 spinner 已承载进度语义
+          {
+            isTTY: process.stdout.isTTY === true && activeApp === undefined,
+            activity: (s) => lv.activity({ kind: "text", text: s }),
+            discard: () => lv.discard(),
+          },
           () => h.prompt(withAt, imagesFor(pendingImage)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
         );
         pendingImage = undefined;
@@ -502,7 +525,7 @@ const shortenPath = (p: string, maxW: number): string => {
 	let s2 = p;
 	if (p === home || p.startsWith(home + "\\") || p.startsWith(home + "/")) s2 = "~" + p.slice(home.length);
 	if (s2.length <= maxW) return s2;
-	const parts = s2.split(/[\/]/);
+	const parts = s2.split(/[\\/]/); // F5 走查实修：原 /[\/]/ 只劈正斜杠，Windows 路径整串落入「…\+全路径」
 	const tail = parts.slice(-2).join("\\");
 	if (parts.length > 3) {
 		const cand = `${parts[0]}\…\${tail}`;
@@ -630,6 +653,8 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
           else if (r === "quit") action = "quit";
         } finally {
           app.setBusy(false);
+          // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
+          void refreshPanel();
         }
       })();
     },
@@ -663,12 +688,22 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     },
   });
   activeApp = app; // 全屏 CommandUi 适配层激活（模块 choose/ask 经 overlay/输入行接管）
+  stdoutEcho.silence(true); // readline 与 FullApp 共用 stdin——全屏期 rl 回显全吞（F5 走查实证毁屏）
   app.start();
   while (action === undefined) {
     await new Promise((r) => setTimeout(r, 40));
   }
   activeApp = undefined;
   app.stop();
+  stdoutEcho.silence(false);
+  if (action === "line") {
+    // Term.stop() 退出时 pause 了 stdin（防缓冲输入被壳层误读——那是为进程退出设计的）；
+    // 回滚动流模式必须恢复流动，否则事件循环排空、nextLine() 悬挂、进程以 unsettled TLA 退出（F5 实证）
+    process.stdin.resume();
+    const w = rl as unknown as { line: string; cursor: number };
+    w.line = "";
+    w.cursor = 0;
+  }
   return action;
 };
 

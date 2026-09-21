@@ -68,6 +68,8 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
   it("⑤ sessionCommand：/resume 无参=pick、/resume 2 与 /sessions abc=直达、既有命令不变", () => {
     expect(sessionCommand("/resume", { sessionId: "s1" })).toEqual({ kind: "pick" });
     expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "pick" });
+    expect(sessionCommand("/session", { sessionId: "s1" })).toEqual({ kind: "pick" }); // 单数同义（F5 用户实测：少打 s 被当消息吞）
+    expect(sessionCommand("/session 3", { sessionId: "s1" })).toEqual({ kind: "resume", sessionId: "3" });
     expect(sessionCommand("/resume 2", { sessionId: "s1" })).toEqual({ kind: "resume", sessionId: "2" });
     expect(sessionCommand("/sessions s_abc", { sessionId: "s1" })).toEqual({ kind: "resume", sessionId: "s_abc" });
     expect(sessionCommand("/quit", { sessionId: "s1" })).toEqual({ kind: "quit" });

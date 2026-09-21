@@ -506,7 +506,13 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     };
     const extra: ModuleDefinition = {
       ...fakeModule("provider-two", {}),
-      activate(ctx) { ctx.provide("provider:two" as never, fakeProvider([]).stream); },
+      activate(ctx) {
+        ctx.provide("provider:two" as never, {
+          stream: fakeProvider([]).stream,
+          // extraProv 槽也带默认模型 → 一级「选择平台」菜单可达（F5 前单槽也问，用户实测废问）
+          defaultModel: "t0",
+        });
+      },
     };
     const uiAnswers: { choose: string[]; ask: string[] } = { choose: [], ask: [] };
     const ui: CommandUi = {
@@ -523,17 +529,24 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     return { h, uiAnswers };
   };
 
-  it("① 槽带 listModels → 二级菜单出现端点清单，选中即 modelOverride = prov/<picked>（经返回文案断言）", async () => {
+  it("① 单槽直达（F5 用户实测拍板）：只有一格默认模型槽时跳过「选择平台」，直接拉端点清单", async () => {
     const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3", "glm-4.7"] });
-    uiAnswers.choose.push("fake（默认 m0，裸名即用）", "glm-4.7");
+    uiAnswers.choose.push("glm-4.7"); // 首个 choose 即端点清单（无平台 choose 可答）
     const out = await h.prompt("/model");
     expect(out).toContain("model 已切换并写入 config：fake/glm-4.7");
     await h.close();
   });
 
+  it("①b 多槽仍先问平台（标题「选择平台」），选定后进槽内清单", async () => {
+    const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3"], extraProv: true });
+    uiAnswers.choose.push("fake（默认 m0，裸名即用）", "glm-5.3");
+    const out = await h.prompt("/model");
+    expect(out).toContain("model 已切换并写入 config：fake/glm-5.3");
+    await h.close();
+  });
+
   it("② listModels reject → 回退手输路径不崩，文案含失败原因（经 ask 提示语透出）", async () => {
     const { h, uiAnswers } = await mk({ listModels: async () => { throw new Error("HTTP 404"); } });
-    uiAnswers.choose.push("fake（默认 m0，裸名即用）");
     uiAnswers.ask.push("manual-x");
     const out = await h.prompt("/model");
     expect(out).toContain("model 已切换并写入 config：manual-x");
@@ -542,7 +555,7 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
 
   it("③ 槽内手输裸名：自动补槽前缀（顶级手输入口已砍——2026-09-20 用户实测，裸名逻辑内移槽语境）", async () => {
     const h1s = await mk({ listModels: async () => ["m0"] });
-    h1s.uiAnswers.choose.push("fake（默认 m0，裸名即用）", "手动输入…");
+    h1s.uiAnswers.choose.push("手动输入…");
     h1s.uiAnswers.ask.push("GLM-5.3");
     expect(await h1s.h.prompt("/model")).toContain("model 已切换并写入 config：fake/GLM-5.3");
     await h1s.h.close();

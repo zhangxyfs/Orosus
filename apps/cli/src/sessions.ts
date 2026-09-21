@@ -112,7 +112,8 @@ export function sessionCommand(input: string, current: { sessionId: string; last
   if (QUIT_COMMANDS.has(t)) return { kind: "quit" };
   if (t === "/new") return { kind: "new" };
   if (t === "/fork") return { kind: "fork", parentSessionId: current.sessionId, ...(current.lastEventId !== undefined ? { atEntryId: current.lastEventId } : {}) };
-  const m = /^\/(sessions|resume)(?:\s+(\S+))?$/.exec(t);
+  // /session 单数同义（F5 用户实测：少打个 s 被路由成「未知命令」气泡，观感 = 消息被吞）
+  const m = /^\/(sessions?|resume)(?:\s+(\S+))?$/.exec(t);
   if (m !== null) {
     const arg = m[2];
     return arg === undefined ? { kind: "pick" } : { kind: "resume", sessionId: arg };

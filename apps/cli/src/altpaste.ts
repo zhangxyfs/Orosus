@@ -14,6 +14,7 @@ export function attachAltVPaste(io: {
   write(s: string): void;
   clearInputLine(): void; // 宿主 readline 行缓冲清理面（rl.line = ""; rl.cursor = 0）
   setPendingImage(file: string): void;
+  enabled?(): boolean; // 全屏期返回 false（F5）：按键流归 FullApp，此处直写 lv 会毁 alt-screen
 }): void {
   if (!io.isTTY) return;
   const trigger = async (): Promise<void> => {
@@ -23,6 +24,7 @@ export function attachAltVPaste(io: {
     if (img !== undefined) io.setPendingImage(img.file);
   };
   io.input.on("keypress", (_s, k) => {
+    if (io.enabled !== undefined && !io.enabled()) return;
     if (k?.name === "v" && k.meta === true) void trigger();
   });
 }

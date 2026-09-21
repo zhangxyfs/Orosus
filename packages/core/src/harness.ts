@@ -347,10 +347,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // 一级只列带默认模型的槽——顶级「手动输入全名」入口已砍（2026-09-20 用户实测：没有用）；
       // 手输仍可达于槽内端点清单末位「手动输入…」，且槽语境裸名自动补 <slot>/ 前缀（原顶级手输的
       // 走查缺陷②逻辑内移——槽已选定，多槽歧义报错随之消失）
-      const items = slots.filter((x) => x.defaultModel !== undefined).map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`);
-      if (items.length === 0) return "无可切换的平台——先用 /provider 添加平台（含默认模型）";
-      const picked = await commandUi.choose("选择模型", items);
-      const slotName = picked.split("（")[0]!;
+      const candidates = slots.filter((x) => x.defaultModel !== undefined);
+      if (candidates.length === 0) return "无可切换的平台——先用 /provider 添加平台（含默认模型）";
+      // 单槽直达（F5 用户实测：只有一个平台时还问「选哪个」是废问——/model 语义是换模型不是换平台）
+      const slotName = candidates.length === 1
+        ? candidates[0]!.name
+        : (await commandUi.choose("选择平台", candidates.map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`))).split("（")[0]!;
       let next = slotName;
       const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
       if (slot?.listModels !== undefined) {

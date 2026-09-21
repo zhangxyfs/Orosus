@@ -120,16 +120,45 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		expect(st.state.scrollBack).toBe(0);
 		app.stop();
 	});
-	it("⑤ Ctrl+T → requestLineMode；Ctrl+C → requestExit", async () => {
+	it("⑤ Ctrl+T → requestLineMode；Ctrl+C 空闲双击才退出（F5 用户实测：单按毁 app 观感=崩）", async () => {
 		const { app, input, actions } = rig();
 		app.start();
 		await flush();
 		input.emit("data", "\x14");
 		await flush();
 		expect(actions).toEqual(["line"]);
-		input.emit("data", "\x03");
+		input.emit("data", "\x03"); // 首按：只给提示不退出
+		await flush();
+		expect(actions).toEqual(["line"]);
+		input.emit("data", "\x03"); // 2s 窗口内再按 → 退出
 		await flush();
 		expect(actions).toEqual(["line", "exit"]);
+		app.stop();
+	});
+	it("⑤b 忙碌中 Ctrl+C → requestCancel（不退出）；Esc 同效", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "\x03");
+		await flush();
+		expect(actions).toEqual(["cancel"]);
+		input.emit("data", "\x03"); // 忙碌期连按也只取消
+		await flush();
+		expect(actions).toEqual(["cancel", "cancel"]);
+		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤c 模块询问挂起期 Esc → 询问取消（不被忙碌取消截胡——F5 实证卡死位）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true); // 命令执行中弹询问（/model 确认形态）
+		const p = app.promptInput("写入 config？", false);
+		input.emit("data", "\x1b"); // Esc
+		await flush(80); // ESC 时间窗 30ms 判定单 Esc
+		await expect(p).resolves.toBeUndefined();
+		app.setBusy(false);
 		app.stop();
 	});
 	it("⑥ 退出恢复序列：stop() 后 alt-screen 退出序列写出（?1049l + ?25h）", async () => {
