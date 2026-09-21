@@ -30,7 +30,7 @@ interface Setup {
   setLlmChunks(chunks: Chunk[]): void;
 }
 
-function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; contextWindow?: number } = {}): Setup {
+function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; contextWindow?: number; coldProject?: ModelMessage[] } = {}): Setup {
   const appended: Setup["appended"] = [];
   const listeners = new Map<string, Listener>();
   let command: CommandHandler = async () => "";
@@ -63,7 +63,11 @@ function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; co
       promptSection: () => () => {},
       configOverlay: () => () => {},
     },
-    session: { append: (type: string, payload: Record<string, unknown>) => { appended.push({ type, payload }); } },
+    session: {
+      append: (type: string, payload: Record<string, unknown>) => { appended.push({ type, payload }); },
+      // F5 二轮⑰ 读口夹具：coldProject 提供时模拟核心宿主的投影读口
+      ...(opts.coldProject !== undefined ? { messages: async () => opts.coldProject! } : {}),
+    },
     events: {
       on: (type: string, l: Listener) => { listeners.set(type, l); return () => {}; },
       emit: () => Promise.resolve(),
@@ -410,6 +414,18 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     expect(s.appended).toHaveLength(0);
     await s.listener(bigMsgs()); // force manual 消费：threshold=0 → 立即压缩
     expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
+  });
+
+  it("⑦b 冷投影读口在 → /compact 立即执行（M5 F5 二轮⑰ 用户拍板：「等下一条」语义废弃）", async () => {
+    const s = setup({ coldProject: bigMsgs() }); // 模拟 resume 后核心宿主读口重建的投影
+    await def.activate(s.ctx);
+    const out = await s.command("", stubUi);
+    expect(out).not.toContain("已安排");
+    expect(out).toContain("已压缩");
+    expect(s.llmRequests).toHaveLength(1);
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
+    await s.command("", stubUi); // 连击：缓存已与已压投影对齐——不再重复压同前缀
+    expect(s.appended.filter((e) => e.type === "turn/compaction").length).toBeLessThanOrEqual(2);
   });
 
   it("⑧ 连击缓存一致性：第二次 /compact 基于已压投影——无同前缀重复事件、锚定不漂移", async () => {

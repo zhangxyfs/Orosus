@@ -3,6 +3,7 @@ import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import type { SessionStore } from "../session/types.ts";
+import { deriveMessages } from "../loop/convert.ts";
 import { CORE_BUS_TYPES, type EventBus } from "./bus.ts";
 import type { ToolRegistry } from "../tool/registry.ts";
 import type { SectionResolution } from "../config/validate.ts";
@@ -265,6 +266,8 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
             klog.error("kernel.session.append-error", "扩展事件落日志失败", { module: def.name, type, error: String(err) });
           });
         },
+        // 冷投影读口（M5 F5 二轮⑰——/compact 立即执行）：与 agentLoop 同投影函数（deriveMessages 全量重放）
+        messages: async () => deriveMessages(await session.all()),
       },
       events: {
         on: (type, listener) => {

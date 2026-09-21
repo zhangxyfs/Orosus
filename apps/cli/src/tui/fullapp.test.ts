@@ -39,7 +39,8 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 			model: "glm-5.3",
 			session: "test-sid",
 			cwd: "D:/x",
-			usedTokens: 42000,
+			tokens: { input: 12408, output: 3052 },
+			startedAt: new Date(Date.now() - 12 * 60000).toISOString(),
 			contextWindow: 100000,
 			modules: [
 				{ name: "orosus-core", desc: "核心循环", state: "mounted", locked: true },

@@ -21,7 +21,8 @@ export interface PanelData {
 	model: string;
 	session: string;
 	cwd: string;
-	usedTokens: number;
+	tokens: { input: number; output: number }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）
+	startedAt: string | undefined; // 会话首事件 ts（F5 二轮④：运行时间行数据源）
 	contextWindow: number;
 	modules: { name: string; desc: string; state: "mounted" | "loading" | "off"; locked?: boolean }[];
 	tasks: { text: string; state: "done" | "active" | "pending" }[];
@@ -49,6 +50,8 @@ export interface FullAppIO {
 	slashCurrent(cmd: string): string; // 二级列表当前值（/permission → 当前模式）
 	thinkOpen(): boolean;
 	toggleThink(): void;
+	/** Alt + V 粘贴剪贴板图片（F5 二轮⑬——宿主侧 pasteImage 完成后经 addAttachment 回挂 chip）。 */
+	requestPasteImage?(): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -77,6 +80,19 @@ const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
 const TASK_TICK: Record<string, string> = { done: theme.fg("accent", "✓"), active: theme.fg("warn", "◐"), pending: theme.fg("muted", "○") };
+/** 运行时间格式化（F5 二轮④）：<1 分「刚刚」；<1 时「N 分」；<1 天「N 时 N 分」；否则「N 天 N 时」。 */
+export function elapsedText(startedAt: string | undefined, now: number = Date.now()): string {
+	if (startedAt === undefined) return "—";
+	const ms = Math.max(0, now - Date.parse(startedAt));
+	if (Number.isNaN(ms)) return "—";
+	const min = Math.floor(ms / 60000);
+	if (min < 1) return "刚刚";
+	if (min < 60) return `${min} 分`;
+	const hr = Math.floor(min / 60);
+	if (hr < 24) return `${hr} 时 ${min % 60} 分`;
+	return `${Math.floor(hr / 24)} 天 ${hr % 24} 时`;
+}
+
 const PERM_LABEL: Record<string, string> = { "ask-always": "总是询问", "ask-risky": "危险时询问", never: "从不询问" };
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
@@ -221,8 +237,7 @@ export class FullApp {
 		if (this.pendingUi !== undefined) {
 			const pu = this.pendingUi;
 			this.pendingUi = undefined;
-			if (pu.kind === "pick") pu.resolve(undefined);
-			else pu.resolve(undefined);
+			if (pu.kind !== "view") pu.resolve(undefined); // view 无 promise 可结
 		}
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
@@ -254,7 +269,22 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
+		| { kind: "view"; title: string; lines: string[]; scroll: number }
 		| undefined;
+
+	/** 只读文本浮层（F5 二轮⑪——/help 形态：不可选择、↑↓/PgUp/PgDn 翻页、Esc/Enter/q 关闭）。 */
+	viewText(title: string, text: string): void {
+		this.state.overlayOpen = false; // 与斜杠菜单互斥
+		this.pendingUi = { kind: "view", title, lines: text.split("\n"), scroll: 0 };
+		this.scheduler.requestImmediateRender();
+	}
+
+	/** 挂起的图片附件 chip 标签（F5 二轮⑬——「[image #2 (165×103)]」随输入框显示，提交即清空）。 */
+	attachments: string[] = [];
+	addAttachment(label: string): void {
+		this.attachments.push(label);
+		this.scheduler.requestImmediateRender();
+	}
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。 */
 	pickOverlay(title: string, items: string[]): Promise<number | undefined> {
@@ -373,11 +403,25 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
+		if (key === "alt+v") {
+			this.io.requestPasteImage?.(); // F5 二轮⑬——全屏期 Alt+V 由 FullApp 接管（readline 侧已让位）
+			return;
+		}
 
 		// 全屏 CommandUi 挂起态（模块 choose/ask 的 overlay 化——优先于一切编辑态；
 		// F5 实证：须先于 busy-Esc 判定，否则命令询问期间 Esc 被取消 turn 分支截胡、询问卡死）
 		if (this.pendingUi !== undefined) {
 			const pu = this.pendingUi;
+			if (pu.kind === "view") {
+				const page = Math.max(3, this.io.rows() - 12);
+				if (key === "up") pu.scroll = Math.max(0, pu.scroll - 1);
+				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
+				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
+				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
+				else if (key === "escape" || key === "enter" || key === "q") this.pendingUi = undefined;
+				this.scheduler.requestImmediateRender();
+				return;
+			}
 			if (pu.kind === "pick") {
 				if (key === "up" && pu.items.length > 0) pu.sel = (pu.sel - 1 + pu.items.length) % pu.items.length;
 				else if (key === "down" && pu.items.length > 0) pu.sel = (pu.sel + 1) % pu.items.length;
@@ -611,6 +655,7 @@ export class FullApp {
 
 	private submitLine(text: string): void {
 		const s = this.state;
+		this.attachments = []; // 附件 chip 随提交清空（宿主侧文件列表同步清——F5 二轮⑬）
 		s.history.push(text);
 		s.historyIdx = s.history.length;
 		s.input = "";
@@ -642,7 +687,7 @@ export class FullApp {
 		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
 		if (this.pendingUi?.kind === "pick") return theme.fg("info", "● 等待选择——↑↓ 移动 · Enter 选定 · Esc 取消");
 		if (s.busy) return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
-		if (Date.now() - this.lastCtrlC < 2000) return theme.fg("warn", "再按一次 Ctrl+C 退出（Esc 返回输入）");
+		if (Date.now() - this.lastCtrlC < 2000) return theme.fg("warn", "再按一次 Ctrl + C 退出（Esc 返回输入）");
 		return theme.dim("正在待命");
 	}
 
@@ -656,7 +701,7 @@ export class FullApp {
 		const enFit = truncateToWidth(enSeg, enBudget);
 		const fill = Math.max(1, w - 4 - titleW - visibleWidth(enFit));
 		const top = theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(fill)) + enFit + theme.fg(bc, "─╮");
-		const pane = (l: string) => theme.bg("surface", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
+		const pane = (l: string) => theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"); // 内底透明（F5 二轮⑩——surface 铺色在第三方终端主题下是一块黑）
 		const rows: string[] = [top, pane("")];
 		for (const l of content) rows.push(pane(l));
 		const footRows = footer ?? [];
@@ -698,16 +743,20 @@ export class FullApp {
 			content.push(this.kvRow("模型", theme.fg("info", d.model), inner));
 			content.push(this.kvRow("会话", d.session, inner));
 			content.push(this.kvRow("工作目录", theme.fg("info", d.cwd), inner));
-			content.push(this.kvRow("Tokens", `↑↓ ${d.usedTokens.toLocaleString()}`, inner));
+			content.push(this.kvRow("运行时间", elapsedText(d.startedAt), inner)); // F5 二轮④
+			content.push(this.kvRow("Tokens", `↑ ${d.tokens.input.toLocaleString()} · ↓ ${d.tokens.output.toLocaleString()}`, inner)); // F5 二轮⑤
 			content.push(this.sep(inner));
-			const pct = d.contextWindow > 0 ? Math.min(1, d.usedTokens / d.contextWindow) : 0;
-			const pctText = `${Math.round(d.usedTokens / 1000)}k/${Math.round(d.contextWindow / 1000)}k`;
+			// 上下文占用 = 末次请求的输入规模（上下文体量口径）；占比再小也至少给一格 ▏（F5 二轮⑥——
+			// 0k/1000k 时零绿块被读成「进度条坏了」）
+			const usedCtx = d.tokens.input;
+			const pct = d.contextWindow > 0 ? Math.min(1, usedCtx / d.contextWindow) : 0;
+			const pctText = `${Math.round(usedCtx / 1000)}k/${Math.round(d.contextWindow / 1000)}k`;
 			const FRACS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 			const barW = Math.max(6, inner - 8 - pctText.length - 1);
 			const total = Math.max(0, Math.min(barW, Math.round(pct * barW * 8) / 8));
 			const full = Math.floor(total);
 			const frac = total - full;
-			const fracCh = frac > 0 ? FRACS[Math.min(7, Math.ceil(frac * 8) - 1)] : "";
+			const fracCh = frac > 0 ? FRACS[Math.min(7, Math.ceil(frac * 8) - 1)] : usedCtx > 0 ? "▏" : "";
 			content.push(
 				` ${theme.fg("muted", "上下文")} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
 			);
@@ -722,12 +771,12 @@ export class FullApp {
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["Shift+←→ 翻页", "Shift+↑↓ 翻页 · Enter 挂载/卸载"], [this.sep(inner)]);
+			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["Shift + ←→ 翻页", "Shift + ↑↓ 翻页 · Enter 挂载/卸载"], [this.sep(inner)]);
 		}
 		const content: string[] = [
 			` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
 		];
-		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["Shift+←→ 返回运行状态 · Esc 返回"], [this.sep(inner)]);
+		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["Shift + ←→ 返回运行状态 · Esc 返回"], [this.sep(inner)]);
 	}
 
 	private taskRows(w: number, h: number): string[] {
@@ -741,7 +790,6 @@ export class FullApp {
 		const page = Math.min(pages - 1, Math.floor(s.taskSel / slots));
 		const lo = page * slots;
 		const content: string[] = [];
-		if (d.tasks.length === 0) content.push(` ${theme.fg("muted", "（本会话暂无任务——Agent 写 todo 后实时显示）")}`);
 		for (let i = lo; i < Math.min(d.tasks.length, lo + slots); i++) {
 			const t = d.tasks[i]!;
 			const text =
@@ -756,7 +804,7 @@ export class FullApp {
 		const footL = theme.dim(" 由 Agent 实时同步");
 		const footR = theme.dim(`任务数：${done}/${d.tasks.length}`);
 		const footer = [this.sep(inner), footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["Shift+PgUp/PgDn 翻页 · Esc 返回"], footer);
+		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["Shift + PgUp/PgDn 翻页 · Esc 返回"], footer);
 	}
 
 	private styleWithSelection(vr: InputRow, sel: { lo: number; hi: number } | undefined): string {
@@ -780,7 +828,8 @@ export class FullApp {
 		const inputRows = layoutInputRows(s.input, innerW);
 		const cursorPos = locateCursor(inputRows, s.cursor);
 		const showRows = Math.min(INPUT_MAX_ROWS, inputRows.length);
-		const inputH = showRows + 3;
+		const chipRows = this.attachments.length > 0 ? 1 : 0; // 图片附件 chip 行（F5 二轮⑬）
+		const inputH = showRows + 3 + chipRows;
 		const streamH = rows - inputH;
 
 		const statusH = Math.max(8, Math.floor(rows * 0.55));
@@ -812,6 +861,9 @@ export class FullApp {
 
 		const sel = this.selRange();
 		const paneIn = (l: string) => theme.bg("surface2", theme.fg(ibc, "│") + padToWidth(l, leftW - 2) + theme.fg(ibc, "│"));
+		if (chipRows > 0) {
+			screen[divRow + 1] = paneIn(` ${this.attachments.map((a2) => theme.fg("info", a2)).join(" ")}`);
+		}
 		for (let i = 0; i < showRows; i++) {
 			const vr = inputRows[s.inputScroll + i];
 			const prefix = i + s.inputScroll === 0 ? theme.fg("accent", "❯ ") : "  ";
@@ -826,18 +878,18 @@ export class FullApp {
 			} else {
 				line = prefix + this.styleWithSelection(vr, sel);
 			}
-			screen[divRow + 1 + i] = paneIn(inputFocused ? line : theme.dim(line));
+			screen[divRow + 1 + chipRows + i] = paneIn(inputFocused ? line : theme.dim(line));
 		}
 		const d = this.io.panelData();
 		const chip = theme.fg("accent", `◆ ${PERM_LABEL[d.permission] ?? d.permission}`);
-		const leftHint = `${chip}${theme.dim(" · Shift+Tab 切换模式")}`;
-		const rightHint = theme.dim("Enter 发送 · Alt+Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
+		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}`;
+		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
 		const hintW = leftW - 2;
 		const gap = hintW - visibleWidth(leftHint) - visibleWidth(rightHint) - 1;
-		screen[divRow + 1 + showRows] = paneIn(
+		screen[divRow + 1 + chipRows + showRows] = paneIn(
 			gap > 2 ? ` ${leftHint}${" ".repeat(gap)}${rightHint}` : padToWidth(` ${leftHint}`, hintW),
 		);
-		screen[divRow + 2 + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
+		screen[divRow + 2 + chipRows + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
 
 		for (let r = 0; r < rows; r++) {
 			const sep = theme.fg("border", "│");
@@ -849,13 +901,40 @@ export class FullApp {
 		if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;
 			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel);
+		} else if (this.pendingUi?.kind === "view") {
+			const pu = this.pendingUi;
+			overlay = this.buildViewOverlay(leftW, divRow, pu.title, pu.lines, pu.scroll);
 		} else if (s.overlayOpen) {
 			overlay = this.buildOverlay(leftW, divRow);
 		}
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
-		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, inputFocused);
+		this.full.placeCursor(divRow + 1 + chipRows + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, inputFocused);
 		return bytes;
+	}
+
+	/** 只读文本浮层（F5 二轮⑪——/help：全宽青玉框 + 滚动窗口 + 余量指示；不可选择）。 */
+	private buildViewOverlay(leftW: number, divRow: number, title: string, lines: string[], scroll: number): OverlayFrame {
+		const ow = leftW;
+		const oInner = ow - 2;
+		const bc = "accent";
+		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+		const olines: string[] = [];
+		const titleSeg = theme.fg("accent", ` ${title} `);
+		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
+		olines.push(boxRow(""));
+		const page = Math.max(3, divRow - 6); // 浮层不高过输入框顶
+		const maxScroll = Math.max(0, lines.length - page);
+		const sc = Math.max(0, Math.min(maxScroll, scroll));
+		const win = lines.slice(sc, sc + page);
+		if (sc > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${sc} 行`)));
+		for (const l of win) olines.push(boxRow(" " + truncateToWidth(l, oInner - 2)));
+		const rest = lines.length - sc - win.length;
+		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 行`)));
+		olines.push(boxRow(theme.dim(" ↑↓ / PgUp/PgDn 翻页 · Esc 关闭")));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
+		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
 
 	/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */
@@ -913,7 +992,7 @@ export class FullApp {
 					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有以该前缀开头的命令。继续输入或删除字符修改前缀，Esc 关闭菜单。" }]
 					: real.map((c) => ({
 							text: `${c.name} ${theme.dim(c.desc)}`,
-							mark: c.children !== undefined ? theme.fg("muted", "›") : " ",
+							mark: " ",
 							long: c.long,
 						}));
 		}

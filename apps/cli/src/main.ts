@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
@@ -23,8 +23,9 @@ import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 import { parse } from "smol-toml";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile } from "@orosus/provider-custom";
 import { readFileSync } from "node:fs";
-import { pasteImage, imagesFor, PASTE_EMPTY, pasteOkHint } from "./paste.ts";
+import { pasteImage, imagesFor, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
@@ -284,6 +285,10 @@ const echoHistory = async (h: Harness, out: (s: string) => void = (s) => console
   }
 };
 
+// 全屏会话切换的回显延期槽（F5 二轮⑯）：switch 后 dm 在 sessionLoop 顶重建——
+// 当场回显等于写进即弃的旧 dm（用户实测：/sessions 切换后历史「没加载」）。
+let pendingEcho: { notice: string; history: boolean } | undefined;
+
 let h = await createSession();
 if (args.dumpModules) {
   console.log(h.graph().catalog());
@@ -298,9 +303,15 @@ if (args.print !== undefined) {
   await h.close();
   process.exitCode = 0;
 } else if (args.resume !== undefined) {
-  // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）
-  console.log(`[已恢复 ${h.sessionId}——历史对话如下]`);
-  await echoHistory(h);
+  // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）；
+  // 全屏模式延期到 dm 重建后（F5 二轮⑯——tuiMode 此时未定，按 TTY 实况同口径预判）
+  const notice = `[已恢复 ${h.sessionId}——历史对话如下]`;
+  if (args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true) {
+    pendingEcho = { notice, history: true };
+  } else {
+    console.log(notice);
+    await echoHistory(h);
+  }
 }
 
 // 启动审计横幅在 sessionLoop 首轮统一打印（banner.ts 可测抽取；分级规则见彼处注释——B7 提前落地）
@@ -321,7 +332,18 @@ if (args.print === undefined && process.stdin.isTTY) {
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
 // 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
-let pendingImage: string | undefined; // /paste 挂起的图片文件——随下一条消息以路径引用（M4-2 T10）
+// /paste 与 Alt + V 挂起的图片文件列（F5 二轮⑬ 升多图）——随下一条消息以路径引用；
+// labels 与文件列平行（chip 形态 [image #N (宽×高)]，序号会话内累计）
+let pendingImages: string[] = [];
+let pendingImageLabels: string[] = [];
+let imageSeq = 0;
+const attachPendingImage = (file: string): string => {
+  imageSeq++;
+  pendingImages.push(file);
+  const label = imageChipLabel(imageSeq, file);
+  pendingImageLabels.push(label);
+  return label;
+};
 // Alt+V 按键粘贴（TUI 批 T5）：keypress 多播拦截——与敲 /paste 完全同效；非 TTY 不挂（按键零处理）。
 // keypress 事件发在输入流上（emitKeypressEvents(process.stdin)，与 rl.input 同一对象）；
 // rl.line/rl.cursor 运行时可写（readline 公开属性）——@types/node 的 promises 变体声明为 readonly，窄化断言
@@ -335,9 +357,7 @@ attachAltVPaste({
     w.line = "";
     w.cursor = 0;
   },
-  setPendingImage: (file) => {
-    pendingImage = file;
-  },
+  setPendingImage: (file) => attachPendingImage(file),
   enabled: () => activeApp === undefined, // 全屏期 Alt+V 归 FullApp（F5 走查：此处直写 lv 毁屏）
 });
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
@@ -400,8 +420,13 @@ const switchTo = async (sid: string, out: (s: string) => void = (s) => console.l
   await h.close();
   h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
   activeDir = loc.dir;
-  out(`[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`);
-  await echoHistory(h, out); // 回显存量对话（B9 走查补 + 分页）
+  const notice = `[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`;
+  if (tuiMode === "full") {
+    pendingEcho = { notice, history: true }; // 延期到 dm 重建后（F5 二轮⑯）
+  } else {
+    out(notice);
+    await echoHistory(h, out); // 回显存量对话（B9 走查补 + 分页）
+  }
 };
 
 /** 单行处理（REPL 与全屏共用——F3 抽取）：会话生命周期指令 → "switch"（重挂横幅/渲染）；
@@ -464,12 +489,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           : { sessionsDir });
         activeDir = sessionsDir;
         clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
-        if (from !== undefined) {
-          // fork 继承父上下文（ForkedSessionStore 投影 suau 实证）——回显历史让继承可见，否则像丢了
-          out(`[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]`);
-          await echoHistory(h);
-        } else {
-          out(`[新会话 ${h.sessionId}]`);
+        const notice = from !== undefined
+          ? `[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]` // fork 继承父上下文（ForkedSessionStore 投影实证）——回显让继承可见
+          : `[新会话 ${h.sessionId}]`;
+        if (tuiMode === "full") pendingEcho = { notice, history: from !== undefined }; // F5 二轮⑯ 延期
+        else {
+          out(notice);
+          if (from !== undefined) await echoHistory(h);
         }
         return "switch"; // 重挂横幅与渲染（新事件流）
       }
@@ -479,11 +505,24 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
         if (img === undefined) { out(PASTE_EMPTY); return "again"; }
-        out(pasteOkHint(basename(img.file)));
-        pendingImage = img.file;
+        const label = attachPendingImage(img.file);
+        activeApp?.addAttachment(label); // 全屏期 chip 进输入框（F5 二轮⑬——消息组成部分的可见形态）
+        out(`${label} 已挂接——将随下一条消息发送（共 ${pendingImages.length} 张）`);
         return "again";
       }
       try {
+        // 非 vision 模型拦截（F5 二轮⑭）：含图消息先查 models.dev 目录——明确不支持图片输入则拒发
+        // （坏消息落日志后每轮重发 = 会话永久报废，用户实测痛点）；目录未命中（自架模型）放行。
+        // 注：模型判定走 config 面值——/model 会话内覆盖在 harness 闭包内，CLI 不可见（持久化则同值）。
+        if (pendingImages.length > 0) {
+          const modelNow = realReadModel(process.cwd())() ?? "";
+          const vision = lookupModelVision(readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}, modelNow);
+          if (vision === false) {
+            out(`[已拦截] 当前模型 ${modelNow || "（未配置）"} 的目录数据显示不支持图片输入——消息未发送，图片仍挂起（/model 换视觉模型后再发，或 /sessions 另起会话）`);
+            for (const l of pendingImageLabels) activeApp?.addAttachment(l); // chip 回挂（提交已清视觉态）
+            return "again";
+          }
+        }
         // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
         const { text: cleaned, attachments } = resolveAtRefs(text, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
@@ -499,9 +538,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
             activity: (s) => lv.activity({ kind: "text", text: s }),
             discard: () => lv.discard(),
           },
-          () => h.prompt(withAt, imagesFor(pendingImage)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
+          () => h.prompt(withAt, imagesFor(pendingImages)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
         );
-        pendingImage = undefined;
+        pendingImages = [];
+        pendingImageLabels = [];
         if (cmdOut !== undefined) out(cmdOut);
       } catch (err) {
         // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
@@ -528,26 +568,27 @@ const shortenPath = (p: string, maxW: number): string => {
 	const parts = s2.split(/[\\/]/); // F5 走查实修：原 /[\/]/ 只劈正斜杠，Windows 路径整串落入「…\+全路径」
 	const tail = parts.slice(-2).join("\\");
 	if (parts.length > 3) {
-		const cand = `${parts[0]}\…\${tail}`;
+		const cand = parts[0] + "\\…\\" + tail; // 头+…+尾两段（F5 二轮：旧模板 \$ 把插值转义成字面量——rig 实证 C:…${tail}）
 		if (cand.length <= maxW) return cand;
 	}
 	return "…\\" + tail;
 };
 
-/** 末条 usage 总量（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。 */
-const lastUsageOf = (events: SessionEvent[]): number => {
+/** 末条 usage 输入/输出分拆（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。
+ *  F5 二轮⑤：面板 Tokens 行要 ↑ 输入 · ↓ 输出 分列，不再合并总量。 */
+const lastUsageOf = (events: SessionEvent[]): { input: number; output: number } => {
 	for (let i = events.length - 1; i >= 0; i--) {
 		const e = events[i]!;
 		if (e.type === "assistant/chunk") {
 			const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-			if (c?.type === "usage") return (c.input ?? 0) + (c.output ?? 0);
+			if (c?.type === "usage") return { input: c.input ?? 0, output: c.output ?? 0 };
 		}
 		if (e.type === "assistant/message") {
 			const u = e.usage as { input?: number; output?: number } | undefined;
-			if (u !== undefined) return (u.input ?? 0) + (u.output ?? 0);
+			if (u !== undefined) return { input: u.input ?? 0, output: u.output ?? 0 };
 		}
 	}
-	return 0;
+	return { input: 0, output: 0 };
 };
 
 /** 配置面读数（contextWindow + approval.mode 缺省——用户层 → 项目层同 §6.6 分层）。 */
@@ -583,7 +624,8 @@ const refreshPanel = async (): Promise<void> => {
 		model: realReadModel(process.cwd())() ?? "（未配置——/provider 向导）",
 		session: h.sessionId,
 		cwd: shortenPath(process.cwd(), 26),
-		usedTokens: lastUsageOf(events),
+		tokens: lastUsageOf(events),
+		startedAt: events[0]?.ts, // 运行时间锚（F5 二轮④）：首事件 ts = 会话创建时刻
 		contextWindow: cfg.contextWindow,
 		modules: h
 			.graph()
@@ -614,9 +656,18 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把早期对话折叠成摘要，释放 token 空间。压缩期间显示进度指示，完成后可用 /summary 回看过往摘要。" },
 	{ name: "/sessions", desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换。/fork 可从当前会话分叉副本。" },
 	{ name: "/context", desc: "上下文用量", long: "显示当前会话的 token 用量明细：输入/输出累计、上下文窗口占用比例、距自动压缩阈值的余量。" },
-	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（滚动流模式快捷键 Alt+V 同效）。需要当前模型具备视觉能力。" },
+	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（快捷键 Alt + V 同效）。需要当前模型具备视觉能力。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
-	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。Ctrl+C 同效。" },
+	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
+	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
+	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
+	{ name: "/fork", desc: "分叉会话", long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
+	{ name: "/resume", desc: "恢复会话", long: "按序号或会话 ID 恢复历史会话。无参时等同 /sessions 打开列表。" },
+	{ name: "/title", desc: "会话命名", long: "给当前会话起名字（/title 名字），在 /sessions 列表里按名字找会话。无参查看当前名。" },
+	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」（危险命令仍会确认）。等同于 /permission never。" },
+	{ name: "/usage", desc: "token 用量", long: "当前会话与历史累计的 input/output token 用量。" },
+	{ name: "/status", desc: "运行状态", long: "模型、会话 ID、模块图状态一览（文本版右侧面板）。" },
+	{ name: "/reload", desc: "重载模块", long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
 ];
 
 /** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行）。 */
@@ -633,6 +684,8 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
+	// 快捷键导引行（F5 二轮③——logo 框恢复快捷键提示；内容宽 52 + 6 空格 = 内宽 58）
+	theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考 · / 命令") + "      " + theme.fg("accent", "│"),
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
 	"",
 ];
@@ -644,8 +697,18 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     rows: () => process.stdout.rows ?? 24,
     doc: () => dm.frameLines(process.stdout.columns ?? 80),
     submit: (text) => {
+      const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
+      // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡
+      if (cmd === "/help") {
+        app.viewText("帮助", HELP_TEXT);
+        return;
+      }
       app.setBusy(true);
-      dm.userPrompt(text); // 用户消息块（❯ 加粗 + 段落间距——修复轮①）
+      // 命令是操作不是对话（F5 二轮⑮——❯ /xxx 气泡不再留流区）；用户消息附图片 chip 标签
+      if (!cmd.startsWith("/")) {
+        const chips = pendingImageLabels.length > 0 ? `  ${pendingImageLabels.join(" ")}` : "";
+        dm.userPrompt(text + chips);
+      }
       void (async () => {
         try {
           const r = await processReplLine(text, (s) => dm.pushLine(s));
@@ -673,7 +736,8 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
         model: "…",
         session: h.sessionId,
         cwd: shortenPath(process.cwd(), 26),
-        usedTokens: 0,
+        tokens: { input: 0, output: 0 },
+        startedAt: undefined,
         contextWindow: configFace().contextWindow,
         modules: [],
         tasks: [],
@@ -685,6 +749,17 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     thinkOpen: () => dm.thinkOpen,
     toggleThink: () => {
       dm.thinkOpen = !dm.thinkOpen;
+    },
+    // Alt + V 全屏接线（F5 二轮⑬）：取图 → chip 进输入框；无图提示进流区
+    requestPasteImage: () => {
+      void (async () => {
+        const img = await pasteImage();
+        if (img === undefined) {
+          dm.pushLine(theme.dim(PASTE_EMPTY));
+          return;
+        }
+        app.addAttachment(attachPendingImage(img.file));
+      })();
     },
   });
   activeApp = app; // 全屏 CommandUi 适配层激活（模块 choose/ask 经 overlay/输入行接管）
@@ -718,13 +793,25 @@ if (args.print === undefined) try {
       else console.error(line);
     }
     attachRender(h);
+    if (pendingEcho !== undefined) {
+      // 延期的切换回显落新 dm（F5 二轮⑯）；行模式已在 switchTo 内即时回显，不会走到这
+      const pe = pendingEcho;
+      pendingEcho = undefined;
+      if (tuiMode === "full") {
+        dm.pushLine(pe.notice);
+        if (pe.history) for (const l of renderHistoryLines(await h.history(), process.stdout.columns ?? 80)) dm.pushLine(l);
+      }
+    }
     void refreshPanel(); // 面板首刷（F4）
     for (;;) {
       // 全屏模式（F3）：FullApp 接管终端（alt-screen 双栏）；返回后按动作分流
       if (tuiMode === "full") {
         const action = await runFullScreen();
         if (action === "quit") break sessionLoop;
-        continue; // action=switch → 重挂横幅与渲染（仍在 full）；action=line → tuiMode 已被 requestLineMode 改写，落 readline REPL
+        // switch（/new /resume /sessions 切换）必须回外层循环顶：dm 重建、横幅、attachRender(新 h)、
+        // pendingEcho 消费全在那（F5 二轮⑯——原内层 continue 跳过全部，历史回显永不落屏）
+        if (action === "switch") continue sessionLoop;
+        continue; // action=line → tuiMode 已被 requestLineMode 改写，落 readline REPL
       }
       process.stdout.write("> ");
       const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出

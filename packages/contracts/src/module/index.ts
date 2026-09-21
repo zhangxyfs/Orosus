@@ -90,6 +90,10 @@ export interface ModuleContext<C = unknown> {
   readonly session: {
     /** 写会话日志扩展事件；type 须已在 logEvents 声明（白名单）。 */
     append(type: string, payload: Record<string, unknown>): void;
+    /** 读当前日志的模型消息投影（M5 F5 二轮⑰——/compact 立即执行的冷投影读口）：
+     *  事件 → ModelMessage[]（压缩/裁剪事件已应用，与 agentLoop 同投影）。
+     *  可选——非核心宿主可不提供；消费方必须带回落路径。 */
+    messages?(): Promise<ModelMessage[]>;
   };
   readonly events: {
     on(type: string, listener: Listener): Disposer;

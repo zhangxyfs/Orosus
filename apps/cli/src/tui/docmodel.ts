@@ -22,7 +22,7 @@ export class DocModel {
 		const raw = wrapText(text, Math.max(8, w - 2));
 		if (!this.thinkOpen) {
 			// 收起 = 最多 2 视觉行 + 展开提示（原型 ThinkBlock 同形态）
-			const head = theme.dim("[思考] · Alt+E 展开");
+			const head = theme.dim("[思考] · Alt + E 展开");
 			return [head, ...raw.slice(0, 2).map((l) => theme.dim("  " + l))];
 		}
 		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
@@ -36,17 +36,18 @@ export class DocModel {
 		return this.mdStream.render(text);
 	}
 
-	/** 活动块固化（write/end 前）：md → 终稿渲染进定格行；think → dim 块进定格行。 */
+	/** 活动块固化（write/end 前）：think → dim 块先进定格行，md → 终稿渲染随后——
+	 *  时序上思考恒先于正文（F5 二轮用户实测：原先 md 先沉底，思考被压到答案后面）。 */
 	private settleActive(width: number): void {
-		if (this.mdText !== "") {
-			this.lines.push(...renderMarkdown(this.mdText, width));
-			this.mdText = "";
-			this.mdStream = undefined;
-		}
 		if (this.thinkText !== "") {
 			this.lines.push(...this.thinkBlock(this.thinkText, width));
 			this.thinkText = "";
 			this.inThink = false;
+		}
+		if (this.mdText !== "") {
+			this.lines.push(...renderMarkdown(this.mdText, width));
+			this.mdText = "";
+			this.mdStream = undefined;
 		}
 	}
 
@@ -84,10 +85,10 @@ export class DocModel {
 		this.mdStream = undefined;
 	}
 
-	/** 用户消息块（❯ 加粗 + 前后各空一行——原型 prompt-line 段落间距口径，走查 v1.1）。 */
+	/** 用户消息块（❯ 青玉 + 暖金加粗正文〔F5 二轮拍板：提问文字黄色〕+ 前后各空一行）。 */
 	userPrompt(text: string): void {
 		this.lines.push("");
-		for (const l of text.split("\n")) this.lines.push(`${theme.fg("accent", "❯")} ${theme.bold(l)}`);
+		for (const l of text.split("\n")) this.lines.push(`${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", l))}`);
 		this.lines.push("");
 	}
 

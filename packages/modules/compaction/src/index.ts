@@ -250,10 +250,14 @@ export default defineModule({
 
     ctx.contribute.command("compaction__compact", async () => {
       if (lastSeenMessages === undefined) {
-        // 冷缓存回落（审修 2026-09-19）：resume 会话有历史但缓存未预热（ctx.session 只有 append 无读口——
-        // 模块侧拿不到冷投影）→ 置 forceKind=manual 由拦截器在下一条消息前消费，不误报「无历史」、不阻断
-        forceKind = "manual";
-        return "已安排：下一条消息发出前压缩（resume 会话先发一条消息预热投影，之后 /compact 即时执行）";
+        // 冷投影重建（M5 F5 二轮⑰ 用户拍板：/compact 必须立即执行，「等下一条」语义废弃）——
+        // ctx.session.messages 读口（契约扩展，与 agentLoop 同投影）；宿主无读口才回落旧延期语义
+        const projected = await ctx.session.messages?.();
+        if (projected === undefined) {
+          forceKind = "manual";
+          return "已安排：下一条消息发出前压缩（宿主无投影读口——发一条消息预热投影，之后 /compact 即时执行）";
+        }
+        lastSeenMessages = projected;
       }
       if (lastSeenMessages.length === 0) return "无可压缩历史（本会话还没有对话）";
       const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log });

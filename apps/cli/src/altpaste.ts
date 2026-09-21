@@ -1,5 +1,4 @@
-import { basename } from "node:path";
-import { PASTE_EMPTY, pasteOkHint } from "./paste.ts";
+import { PASTE_EMPTY } from "./paste.ts";
 
 /** Alt+V 按键粘贴触发层（TUI 批 T5/V.2 移入项——ROADMAP「只补按键触发层」兑现）。
  *  keypress 多播拦截（机制①——不经 T0 解析器，v1.7 勘误）：readline 的 keypress 事件多播
@@ -13,15 +12,16 @@ export function attachAltVPaste(io: {
   pasteImage(): Promise<{ file: string } | undefined>;
   write(s: string): void;
   clearInputLine(): void; // 宿主 readline 行缓冲清理面（rl.line = ""; rl.cursor = 0）
-  setPendingImage(file: string): void;
+  setPendingImage(file: string): string; // 返回 chip 标签（F5 二轮⑬：[image #N (宽×高)]——序号/尺寸归宿主）
   enabled?(): boolean; // 全屏期返回 false（F5）：按键流归 FullApp，此处直写 lv 会毁 alt-screen
 }): void {
   if (!io.isTTY) return;
   const trigger = async (): Promise<void> => {
     const img = await io.pasteImage();
     io.clearInputLine();
-    io.write(`\r\x1b[K${img === undefined ? PASTE_EMPTY : pasteOkHint(basename(img.file))}\n> `);
-    if (img !== undefined) io.setPendingImage(img.file);
+    const label = img === undefined ? undefined : io.setPendingImage(img.file);
+    io.write(`[K${label === undefined ? PASTE_EMPTY : `${label} 已挂接——将随下一条消息发送`}
+> `);
   };
   io.input.on("keypress", (_s, k) => {
     if (io.enabled !== undefined && !io.enabled()) return;

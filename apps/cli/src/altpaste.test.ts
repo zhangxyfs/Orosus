@@ -21,6 +21,7 @@ const fakeIo = (opts: { img?: { file: string } | undefined; isTTY?: boolean } = 
     },
     setPendingImage: (f) => {
       calls.pending.push(f);
+      return '[image #1]'; // chip 标签宿主造（F5 二轮⑬）
     },
   });
   const emitKey = (k: { name?: string; meta?: boolean } | undefined): void => {
@@ -44,8 +45,8 @@ describe("Alt+V 按键粘贴（TUI 批 T5——V.2 移入项）", () => {
     expect(calls.clear).toBe(1); // 行残留清理（readline 对未绑定 meta 序列可能残留控制字符）
     expect(calls.pending).toEqual(["D:\\home\\tmp\\paste-1.png"]);
     const out = w.join("");
-    expect(out).toContain("[已粘贴图片: paste-1.png]"); // basename——与 /paste 提示同源
-    expect(out).not.toContain("> [已粘贴图片"); // 提示独立成行、不带 `> ` 前缀（v1.8 B3）
+    expect(out).toContain("[image #1] 已挂接"); // chip 标签（F5 二轮⑬——宿主供序号/尺寸，fixtures 无尺寸读）
+    expect(out).not.toContain("> [image"); // 提示独立成行、不带 `> ` 前缀（v1.8 B3）
     expect(out.endsWith("\n> ")).toBe(true); // 结尾重绘提示符
   });
   it("② 剪贴板无图 → 同 /paste 无图提示，输入行清空重绘、进程不崩", async () => {

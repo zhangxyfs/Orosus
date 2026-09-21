@@ -5,7 +5,8 @@ import { BUILTIN_SNAPSHOT } from "./builtin-snapshot.ts";
 
 export interface CatalogModel {
   id: string; name?: string; status?: string;
-  modalities?: { output?: string[] };
+  modalities?: { input?: string[]; output?: string[] }; // input 供 vision 判定（F5 二轮⑭）
+  attachment?: boolean;  // models.dev：支持附件（图片/文件输入）
   limit?: { context?: number; output?: number };
   release_date?: string; // models.dev 元数据：新→旧排序与菜单标签用
   tool_call?: boolean;   // false = 纯生成模型（视频/图像），agent harness 不该给选
@@ -20,6 +21,35 @@ export type Catalog = Record<string, CatalogEntry>;
 /** 数据从哪来：online = models.dev 真实目录（含 TTL 缓存命中）；disk = 本地持久缓存（曾成功拉取、当前网络失败）；
  *  builtin = 内置快照兜底（从未成功拉取过的离线首跑）。 */
 export type CatalogSource = "online" | "disk" | "builtin";
+
+/** 模型视觉能力查表（F5 二轮⑭——含图消息发送前拦截：不支持图的模型收到 image part 会被端点
+ *  400 拒，且坏消息落进会话日志后每一轮都重发 = 会话永久报废，用户实测痛点）。
+ *  口径：命中条目 → modalities.input 含 image 或 attachment=true 视为支持；
+ *  未命中（自架/自定义提供商模型）→ undefined（不知道，放行但调用方可警示）。
+ *  model 形参接受 "<slot>/<model>" 全名或裸模型 id——按 models 记录键/尾段/name 三口径匹配。 */
+export function lookupModelVision(catalog: Catalog, model: string): boolean | undefined {
+  const bare = model.includes("/") ? model.split("/").pop()! : model;
+  for (const entry of Object.values(catalog)) {
+    for (const [key, m] of Object.entries(entry.models ?? {})) {
+      if (key === model || key === bare || key.endsWith(`/${bare}`) || m.id === model || m.id === bare || m.name === bare) {
+        if (m.modalities?.input !== undefined) return m.modalities.input.includes("image");
+        if (m.attachment !== undefined) return m.attachment;
+        return undefined; // 命中条目但无能力字段——不知道
+      }
+    }
+  }
+  return undefined;
+}
+
+/** 磁盘缓存直读（发送路径用——不走网络、不走 TTL：读不到 = undefined 放行）。 */
+export function readCatalogDiskCache(cacheFile: string): Catalog | undefined {
+  try {
+    const doc = JSON.parse(readFileSync(cacheFile, "utf8")) as { catalog?: Catalog };
+    return doc.catalog;
+  } catch {
+    return undefined;
+  }
+}
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const CACHE_TTL_MS = 10 * 60 * 1000;
