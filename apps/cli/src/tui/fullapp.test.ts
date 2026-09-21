@@ -34,6 +34,28 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 		submit: (t) => submitted.push(t),
 		requestLineMode: () => actions.push("line"),
 		requestExit: () => actions.push("exit"),
+		requestCancel: () => actions.push("cancel"),
+		panelData: () => ({
+			model: "glm-5.3",
+			session: "test-sid",
+			cwd: "D:/x",
+			usedTokens: 42000,
+			contextWindow: 100000,
+			modules: [
+				{ name: "orosus-core", desc: "核心循环", state: "mounted", locked: true },
+				{ name: "orosus-mcp", desc: "MCP 桥接", state: "off" },
+			],
+			tasks: [{ text: "样例任务", state: "active" }],
+			permission: "ask-risky",
+			permissionNext: () => "/permission ask-always",
+		}),
+		slashCommands: () => [
+			{ name: "/help", desc: "帮助", long: "长说明" },
+			{ name: "/permission", desc: "权限", long: "长", children: ["ask-risky", "never"] },
+		],
+		slashCurrent: () => "ask-risky",
+		thinkOpen: () => false,
+		toggleThink: () => actions.push("think"),
 	};
 	const { input, output } = fakeTerm(cols, rows);
 	const app = new FullApp(io, { input, output });

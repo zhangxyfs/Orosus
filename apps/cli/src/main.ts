@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { basename, join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
-import type { Harness } from "@orosus/core";
+import type { Harness, SessionEvent } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
@@ -20,7 +20,10 @@ import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
-import { FullApp } from "./tui/fullapp.ts";
+import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
+import * as theme from "./theme.ts";
+import { parse } from "smol-toml";
+import { readFileSync } from "node:fs";
 import { pasteImage, imagesFor, PASTE_EMPTY, pasteOkHint } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
@@ -137,7 +140,7 @@ const askLine = (prompt: string): Promise<string> =>
       (e: unknown) => { cleanup(); reject(ac.signal.aborted ? new Error("已取消（Esc）") : e); },
     );
   });
-const question = async (q: string): Promise<string> => {
+const rlQuestion = async (q: string): Promise<string> => {
   askActive = true;
   try {
     // 命令开始前已到的行（管道脚本/用户预打字）优先喂给询问——否则队列与 question 各等各的（脑裂挂起）
@@ -151,7 +154,7 @@ const question = async (q: string): Promise<string> => {
 // 密钥询问（静默盲输）：提示语写真 stdout（明示不回显），rl 回显经代理全吞——
 // 结束后补换行（回车回显也被吞了）。管道预输行直接采纳——非 TTY 无回显，天然不泄漏。
 // Esc 取消（T3）经 askLine 同款抛错，finally 保证静默开/关成对
-const secretQuestion = async (q: string): Promise<string> => {
+const rlSecretQuestion = async (q: string): Promise<string> => {
   askActive = true;
   try {
     const queued = pendingLines.shift();
@@ -168,6 +171,27 @@ const secretQuestion = async (q: string): Promise<string> => {
     askActive = false;
   }
 };
+// 全屏 CommandUi 适配层（F3–F5，spike adapter.ts 实证形态）：全屏激活期 ask/askSecret/choose
+// 经 FullApp 的 overlay/输入行接管（readline 系件在 alt-screen 下毁屏）；Esc → 「已取消（Esc）」
+// 带内抛错（机制③同族）；非全屏或应用未起 → readline 原路径。
+let activeApp: FullApp | undefined;
+const question = async (q: string): Promise<string> => {
+  if (activeApp !== undefined) {
+    const v = await activeApp.promptInput(q, false);
+    if (v === undefined) throw new Error("已取消（Esc）");
+    return v;
+  }
+  return rlQuestion(q);
+};
+const secretQuestion = async (q: string): Promise<string> => {
+  if (activeApp !== undefined) {
+    const v = await activeApp.promptInput(q, true);
+    if (v === undefined) throw new Error("已取消（Esc）");
+    return v;
+  }
+  return rlSecretQuestion(q);
+};
+
 // 流式活动区（TUI 批 T4）——装配序先于菜单与渲染：菜单写面（picker/标题行）同接 lv.write
 // （v1.8 B5：审批 choose 首帧与 tool/call 行落屏的竞速由「任何写先固化活动区」天然消解）；
 // 非 TTY lv.write 为直通（T1–T3 行为不变）
@@ -193,7 +217,14 @@ const pickFace =
   process.stdin.isTTY === true
     ? {
         pick: async (title: string, items: string[]): Promise<number> => {
-          lv.write(`== ${title} ==\n`);
+          // 全屏 CommandUi 适配层：全屏激活期 choose 走 FullApp overlay（readline picker 毁屏）
+          if (activeApp !== undefined) {
+            const n = await activeApp.pickOverlay(title, items);
+            if (n === undefined) throw new Error("已取消（Esc）");
+            return n;
+          }
+          lv.write(`== ${title} ==
+`);
           const n = await pick(items, terminalMenuIo());
           if (n === undefined) throw new Error("已取消（Esc）");
           return n;
@@ -337,7 +368,10 @@ function attachRender(h: Harness): void {
     { write: (s) => sinkFor().write(s), ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c) } : {}) },
     (e) => {
       lastEventId = e.id;
-      if (e.type === "turn/end") sinkFor().end();
+      if (e.type === "turn/end") {
+        sinkFor().end();
+        void refreshPanel(); // 面板数据随 turn 刷新（F4）
+      }
     },
   );
 }
@@ -460,6 +494,126 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
 /** 全屏模式循环（TUI 批阶段三 F3）：FullApp 接管终端（alt-screen 双栏），
  *  Ctrl+T → 切回滚动流（requestLineMode 改写 tuiMode）；Ctrl+C → 退出；会话生命周期指令 → switch 重挂。
  *  提交走 processReplLine 共用体（输出通道 = dm.pushLine——console 输出在全屏下毁屏）。 */
+// ---------- 全屏面板数据与斜杠清单（F4——真实数据源接线；原型图右栏组件清单逐行） ----------
+
+/** 路径压缩（工作目录 KV——v1.11 三档：家目录 → ~ / 头+…+尾两级 / 只留尾两段）。 */
+const shortenPath = (p: string, maxW: number): string => {
+	const home = orosusHome();
+	let s2 = p;
+	if (p === home || p.startsWith(home + "\\") || p.startsWith(home + "/")) s2 = "~" + p.slice(home.length);
+	if (s2.length <= maxW) return s2;
+	const parts = s2.split(/[\/]/);
+	const tail = parts.slice(-2).join("\\");
+	if (parts.length > 3) {
+		const cand = `${parts[0]}\…\${tail}`;
+		if (cand.length <= maxW) return cand;
+	}
+	return "…\\" + tail;
+};
+
+/** 末条 usage 总量（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。 */
+const lastUsageOf = (events: SessionEvent[]): number => {
+	for (let i = events.length - 1; i >= 0; i--) {
+		const e = events[i]!;
+		if (e.type === "assistant/chunk") {
+			const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+			if (c?.type === "usage") return (c.input ?? 0) + (c.output ?? 0);
+		}
+		if (e.type === "assistant/message") {
+			const u = e.usage as { input?: number; output?: number } | undefined;
+			if (u !== undefined) return (u.input ?? 0) + (u.output ?? 0);
+		}
+	}
+	return 0;
+};
+
+/** 配置面读数（contextWindow + approval.mode 缺省——用户层 → 项目层同 §6.6 分层）。 */
+const configFace = (): { contextWindow: number; approvalMode: string } => {
+	let contextWindow = 200000;
+	let approvalMode = "ask-risky";
+	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
+		try {
+			const doc = parse(readFileSync(f, "utf8")) as { contextWindow?: number; approval?: { mode?: string } };
+			if (typeof doc.contextWindow === "number") contextWindow = doc.contextWindow;
+			if (typeof doc.approval?.mode === "string") approvalMode = doc.approval.mode;
+		} catch {
+			/* 缺文件/解析失败用缺省 */
+		}
+	}
+	return { contextWindow, approvalMode };
+};
+
+const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
+let panelCache: PanelData | undefined;
+
+/** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
+const refreshPanel = async (): Promise<void> => {
+	const events = await h.history();
+	const cfg = configFace();
+	const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
+	const permission = lastPolicy?.mode ?? cfg.approvalMode;
+	const lastTodo = events.filter((e) => e.type === "tool-todo/write").at(-1) as
+		| { todos?: { content: string; status: "pending" | "in_progress" | "done" }[] }
+		| undefined;
+	const next = PERM_CYCLE[(PERM_CYCLE.indexOf(permission) + 1 + PERM_CYCLE.length) % PERM_CYCLE.length]!;
+	panelCache = {
+		model: realReadModel(process.cwd())() ?? "（未配置——/provider 向导）",
+		session: h.sessionId,
+		cwd: shortenPath(process.cwd(), 26),
+		usedTokens: lastUsageOf(events),
+		contextWindow: cfg.contextWindow,
+		modules: h
+			.graph()
+			.audit()
+			.map((a) => ({
+				name: a.name,
+				desc: a.name === "orosus-core" ? "核心循环" : "",
+				state: a.state === "active" ? ("mounted" as const) : ("off" as const),
+				...(a.name === "orosus-core" ? { locked: true } : {}),
+			})),
+		tasks: (lastTodo?.todos ?? []).map((t) => ({
+			text: t.content,
+			state: t.status === "done" ? ("done" as const) : t.status === "in_progress" ? ("active" as const) : ("pending" as const),
+		})),
+		permission,
+		permissionNext: () => `/permission ${next}`,
+	};
+};
+
+/** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
+const SLASH_ITEMS: SlashItem[] = [
+	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
+	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
+	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
+	{
+		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略：ask-always 逐条确认、ask-risky 危险操作确认、never 全部自动放行。切换立即生效并写入配置。", children: [...PERM_CYCLE],
+	},
+	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把早期对话折叠成摘要，释放 token 空间。压缩期间显示进度指示，完成后可用 /summary 回看过往摘要。" },
+	{ name: "/sessions", desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换。/fork 可从当前会话分叉副本。" },
+	{ name: "/context", desc: "上下文用量", long: "显示当前会话的 token 用量明细：输入/输出累计、上下文窗口占用比例、距自动压缩阈值的余量。" },
+	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（滚动流模式快捷键 Alt+V 同效）。需要当前模型具备视觉能力。" },
+	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
+	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。Ctrl+C 同效。" },
+];
+
+/** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行）。 */
+const ASCII_BANNER = (VERSION: string): string[] => [
+	"",
+	theme.fg("accent", "╭──────────────────────────────────────────────────────────╮"),
+	theme.fg("accent", "│") + theme.fg("accent", "  ██████╗ ██████╗  ██████╗ ███████╗██╗   ██╗███████╗") + "      " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("accent", " ██╔═══██╗██╔══██╗██╔═══██╗██╔════╝██║   ██║██╔════╝") + "      " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("accent", " ██║   ██║██████╔╝██║   ██║███████╗██║   ██║███████╗") + "      " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("accent", " ██║   ██║██╔══██╗██║   ██║╚════██║██║   ██║╚════██║") + "      " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("accent", " ╚██████╔╝██║  ██║╚██████╔╝███████║╚██████╔╝███████║") + "      " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("accent", "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝ ╚══════╝ ╚══════╝") + "     " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + "                                                          " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
+	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
+	"",
+];
+
 const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
   let action: "switch" | "line" | "quit" | undefined;
   const app = new FullApp({
@@ -468,6 +622,7 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     doc: () => dm.frameLines(process.stdout.columns ?? 80),
     submit: (text) => {
       app.setBusy(true);
+      dm.userPrompt(text); // 用户消息块（❯ 加粗 + 段落间距——修复轮①）
       void (async () => {
         try {
           const r = await processReplLine(text, (s) => dm.pushLine(s));
@@ -485,11 +640,34 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     requestExit: () => {
       action = "quit";
     },
+    requestCancel: () => {
+      h.cancel(); // Esc 忙碌时取消当前 turn（SIGINT 同效——修复轮②）
+    },
+    panelData: () =>
+      panelCache ?? {
+        model: "…",
+        session: h.sessionId,
+        cwd: shortenPath(process.cwd(), 26),
+        usedTokens: 0,
+        contextWindow: configFace().contextWindow,
+        modules: [],
+        tasks: [],
+        permission: configFace().approvalMode,
+        permissionNext: () => "/permission ask-always",
+      },
+    slashCommands: () => SLASH_ITEMS,
+    slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
+    thinkOpen: () => dm.thinkOpen,
+    toggleThink: () => {
+      dm.thinkOpen = !dm.thinkOpen;
+    },
   });
+  activeApp = app; // 全屏 CommandUi 适配层激活（模块 choose/ask 经 overlay/输入行接管）
   app.start();
   while (action === undefined) {
     await new Promise((r) => setTimeout(r, 40));
   }
+  activeApp = undefined;
   app.stop();
   return action;
 };
@@ -499,11 +677,13 @@ if (args.print === undefined) try {
   sessionLoop: for (;;) {
     // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）
     dm = new DocModel();
+    if (tuiMode === "full") for (const l of ASCII_BANNER("0.1.0")) dm.pushLine(l); // ASCII 字 banner（修复轮①）
     for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);
     }
     attachRender(h);
+    void refreshPanel(); // 面板首刷（F4）
     for (;;) {
       // 全屏模式（F3）：FullApp 接管终端（alt-screen 双栏）；返回后按动作分流
       if (tuiMode === "full") {

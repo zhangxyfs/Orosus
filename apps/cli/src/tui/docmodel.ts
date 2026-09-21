@@ -9,6 +9,8 @@ import { wrapText } from "./width.ts";
 import type { StreamChunk } from "./streamview.ts";
 
 export class DocModel {
+	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
+	thinkOpen = false;
 	private lines: string[] = []; // 定格行（工具/事件行 + 已固化块）
 	private mdText = "";
 	private thinkText = "";
@@ -18,6 +20,11 @@ export class DocModel {
 
 	private thinkBlock(text: string, w: number): string[] {
 		const raw = wrapText(text, Math.max(8, w - 2));
+		if (!this.thinkOpen) {
+			// 收起 = 最多 2 视觉行 + 展开提示（原型 ThinkBlock 同形态）
+			const head = theme.dim("[思考] · Alt+E 展开");
+			return [head, ...raw.slice(0, 2).map((l) => theme.dim("  " + l))];
+		}
 		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
 	}
 
@@ -75,6 +82,13 @@ export class DocModel {
 		this.thinkText = "";
 		this.inThink = false;
 		this.mdStream = undefined;
+	}
+
+	/** 用户消息块（❯ 加粗 + 前后各空一行——原型 prompt-line 段落间距口径，走查 v1.1）。 */
+	userPrompt(text: string): void {
+		this.lines.push("");
+		for (const l of text.split("\n")) this.lines.push(`${theme.fg("accent", "❯")} ${theme.bold(l)}`);
+		this.lines.push("");
 	}
 
 	/** 直接推一行（宿主带内输出——命令结果/提示语的流区呈现）。 */

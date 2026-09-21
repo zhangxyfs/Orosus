@@ -52,6 +52,13 @@ export class FullScreen {
 		return this.active;
 	}
 
+	/** 强制下帧全量重绘（WT alt-buffer 滚轮自滚防御——滚轮触发终端侧滚屏后终端真实内容与
+	 *  previousScreen 脱节，diff 跳过未变行造成「输入区消失」〔图3 用户实测报告〕；
+	 *  FullApp 看门狗每 2s 调一次，真机复核确认行为后可去留）。 */
+	reset(): void {
+		this.previousScreen = [];
+	}
+
 	/**
 	 * 渲染一帧：screen = 行数组（长度 = rows，每行显示宽 ≤ cols）。
 	 * overlay 可选浮层——先合成进屏幕行再 diff。

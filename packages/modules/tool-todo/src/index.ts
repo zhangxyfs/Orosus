@@ -10,7 +10,7 @@ const render = (todos: TodoItem[]): string =>
     `${i + 1}. ${t.status === "done" ? "✓" : t.status === "in_progress" ? "→" : "□"} ${t.content}`).join("\n")}`;
 
 /** 工厂：工具与状态同闭包——模块侧 promptSection 经 state 读最新值（tool-fs 工厂可测面同款）。 */
-export function createTodoTool(): { tool: Tool; state: TodoState } {
+export function createTodoTool(onWrite?: (todos: TodoItem[]) => void): { tool: Tool; state: TodoState } {
   const state: TodoState = { todos: [] };
   const tool = defineTool({
     name: "tool-todo__todo_write",
@@ -35,6 +35,9 @@ Do NOT call when nothing changed — query first if unsure. Auto-cleared when AL
             return { output: render(state.todos) || "（清单为空）", isError: false };
           }
           state.todos = newTodos.every((t) => t.status === "done") ? [] : newTodos; // allDone 自动清空（cc-haha）
+          // 任务面板投影读口（TUI 批阶段三 F4——todo/write 事件落日志，全屏任务清单经会话历史投影；
+          // ToolContext 无 session 口（contracts ToolContext = callId/signal/log）——经 onWrite 回调上行
+          onWrite?.(state.todos);
           return { output: state.todos.length === 0 ? "Todo list cleared." : `Todo list updated:\n${render(state.todos)}`, isError: false };
         },
       };
@@ -48,8 +51,9 @@ export default defineModule({
   version: "0.1.0",
   description: "任务清单——模型多步任务的自我跟踪",
   api: 1,
+  logEvents: ["tool-todo/write"], // 任务面板投影读口（TUI 批阶段三 F4——append 白名单前置）
   activate(ctx) {
-    const { tool, state } = createTodoTool();
+    const { tool, state } = createTodoTool((todos) => ctx.session.append("tool-todo/write", { todos }));
     ctx.contribute.tool(tool);
     ctx.contribute.promptSection({
       order: 10, // skill=0 之后、mcp=20 之前（M4-2 批 B 分配表）
