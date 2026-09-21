@@ -18,7 +18,7 @@ import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
-import { createLiveView } from "./liveview.ts";
+import { createStreamView } from "./tui/streamview.ts";
 import { pasteImage, imagesFor, PASTE_EMPTY, pasteOkHint } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
@@ -169,7 +169,7 @@ const secretQuestion = async (q: string): Promise<string> => {
 // 流式活动区（TUI 批 T4）——装配序先于菜单与渲染：菜单写面（picker/标题行）同接 lv.write
 // （v1.8 B5：审批 choose 首帧与 tool/call 行落屏的竞速由「任何写先固化活动区」天然消解）；
 // 非 TTY lv.write 为直通（T1–T3 行为不变）
-const lv = createLiveView({
+const lv = createStreamView({
   write: (s) => process.stdout.write(s),
   isTTY: process.stdout.isTTY === true,
   columns: () => process.stdout.columns ?? 80,
@@ -220,7 +220,7 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
 // 历史回显（B9 走查补 + 分页）：尾页优先（最新对话先可见），TTY 下回车向前翻页、q 结束；
 // 非交互（管道）只出尾页——巨量历史不再刷爆终端（单行截断在 renderHistoryLines）
 const echoHistory = async (h: Harness): Promise<void> => {
-  const lines = renderHistoryLines(await h.history());
+  const lines = renderHistoryLines(await h.history(), process.stdout.columns ?? 80);
   const PAGE = 30;
   let { shown, hiddenBefore } = historyPage(lines, PAGE);
   if (hiddenBefore > 0) console.log(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
@@ -300,7 +300,7 @@ function attachRender(h: Harness): void {
   // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 lv.end() 定格终稿
   attachRenderTo(
     h,
-    { write: (s) => lv.write(s), ...(process.stdout.isTTY === true ? { activity: (s) => lv.activity(s) } : {}) },
+    { write: (s) => lv.write(s), ...(process.stdout.isTTY === true ? { activity: (c) => lv.activity(c) } : {}) },
     (e) => {
       lastEventId = e.id;
       if (e.type === "turn/end") lv.end();
@@ -415,7 +415,7 @@ if (args.print === undefined) try {
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
         const out = await withCompactHint(
           text,
-          { isTTY: process.stdout.isTTY === true, activity: (s) => lv.activity(s), discard: () => lv.discard() },
+          { isTTY: process.stdout.isTTY === true, activity: (s) => lv.activity({ kind: "text", text: s }), discard: () => lv.discard() },
           () => h.prompt(withAt, imagesFor(pendingImage)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
         );
         pendingImage = undefined;

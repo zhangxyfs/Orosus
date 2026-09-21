@@ -84,7 +84,7 @@ describe("历史回显（B9 走查补：resume 后屏幕空白——用户以为
       ev("assistant/message", { content: [{ kind: "reasoning", text: "长篇思考不该出现在回显" }, { kind: "text", text: "答" }] }),
       ev("tool/call", { name: "tool-fs__read" }),
       ev("tool/result", { output: "巨大输出不入屏" }),
-    ]);
+    ], 80);
     expect(lines).toEqual(["> 你好", "答", "", "  [tool] tool-fs__read"]);
   });
 });
@@ -102,9 +102,9 @@ describe("回显分页（走查：巨量历史全量回显刷爆终端）", () =
 
   it("② renderHistoryLines 单行截断：超 2000 字符的巨回答截断并注明原文位置", () => {
     const huge = "x".repeat(3000);
-    const lines = renderHistoryLines([ev2("assistant/message", { content: [{ kind: "text", text: huge }] })]);
+    const lines = renderHistoryLines([ev2("assistant/message", { content: [{ kind: "text", text: huge }] })], 80);
     expect(lines[0]!.length).toBeLessThan(2100);
-    expect(lines[0]).toContain("完整原文在会话文件");
+    expect(lines.join(String.fromCharCode(10))).toContain("完整原文在会话文件"); // 折行后注记在尾部——语义不变（F2 新管线多行输出）
   });
 });
 
@@ -121,7 +121,7 @@ describe("压缩点渲染可见（M4-2.5 T4——压缩调研 P2：实时+回显
     const lines = renderHistoryLines([
       event("user/message", { content: [{ kind: "text", text: "问" }] }),
       event("turn/compaction", { summary: "s", keepFrom: 1, droppedCount: 3 }),
-    ]);
+    ], 80);
     expect(lines.some((l) => l.includes("已压缩") && l.includes("/summary"))).toBe(true);
   });
 });
@@ -130,11 +130,11 @@ describe("回显图痕（M4-2.5 T5——image part 在 renderHistoryLines 可见
   it("含 image part 的 user/message → [图片] 标记行（resume 回显不零痕）", () => {
     const lines = renderHistoryLines([
       event("user/message", { content: [{ kind: "text", text: "这是什么" }, { kind: "image", path: "C:/tmp/p.png", mimeType: "image/png" }] }),
-    ]);
+    ], 80);
     expect(lines.some((l) => l.includes("这是什么") && l.includes("[图片]"))).toBe(true);
     const imgOnly = renderHistoryLines([
       event("user/message", { content: [{ kind: "image", path: "C:/tmp/q.png", mimeType: "image/png" }] }),
-    ]);
+    ], 80);
     expect(imgOnly.some((l) => l.includes("[图片]"))).toBe(true);
   });
 });

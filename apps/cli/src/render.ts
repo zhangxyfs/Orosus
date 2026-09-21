@@ -1,6 +1,7 @@
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
-import { renderMarkdown } from "./markdown.ts";
+import { renderMarkdown } from "./mdpipe.ts";
+import type { StreamChunk } from "./tui/streamview.ts";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[22m";
@@ -63,7 +64,7 @@ export function renderEvent(e: SessionEvent, state: RenderState): string {
  *  单行超长截断（走查：巨回答单行刷屏）——完整原文永远在会话文件。 */
 const HISTORY_LINE_MAX = 2000;
 
-export function renderHistoryLines(events: SessionEvent[]): string[] {
+export function renderHistoryLines(events: SessionEvent[], width: number): string[] {
   const out: string[] = [];
   const textBlocks = (e: SessionEvent): string =>
     ((e.content ?? []) as { kind?: string; text?: string }[])
@@ -80,7 +81,13 @@ export function renderHistoryLines(events: SessionEvent[]): string[] {
       if (line !== "") out.push(`> ${cap(line)}`);
     } else if (e.type === "assistant/message") {
       const text = textBlocks(e);
-      if (text !== "") out.push(renderMarkdown(cap(text)), ""); // M4-2 T13：回显面 markdown 第 1 层（流式期间原样）
+      if (text !== "") {
+        // 回显面 markdown 新管线（F2——mdpipe 替换 markdown.ts 第 1 层）；
+        // 段落渲染自带末尾空行——回显行序与旧第 1 层同形（单空行分隔）故剥尾
+        const md = renderMarkdown(cap(text), width);
+        while (md.length > 0 && md[md.length - 1] === "") md.pop();
+        out.push(...md, "");
+      }
     } else if (e.type === "tool/call") {
       out.push(`  [tool] ${String(e.name)}`);
     } else if (e.type === "turn/compaction") {
@@ -99,22 +106,28 @@ export function historyPage(lines: string[], page = 30): { shown: string[]; hidd
 }
 
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
- *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 liveview 的 turn/end 判定——
+ *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 streamview 的 turn/end 判定——
  *  chunk 无事件 id，不受影响）。两路共享同一 RenderState（思考块的闭合可来自任一路）。
- *  双写面（TUI 批 T4/v1.8 补）：chunk 路输出接 io.activity ?? io.write（TTY 时进 liveview 活动区
- *  节流重绘），事件路输出接 io.write（工具行/压缩行直写——混入重绘区会固化序错乱）；activity
- *  缺省 = 两路同 write = 现状等价（非 TTY/--print 零变化）。onEvent 同步升级为完整事件。 */
+ *  双写面（T4/v1.8；F2 升级）：chunk 路 TTY 接 io.activity——**结构化 StreamChunk**（kind + 原文，
+ *  渲染形态由 streamview/mdpipe 负责——F2 新管线）；activity 缺省回落 renderChunk 旧形态（非 TTY
+ *  /--print 零变化）。事件路输出接 io.write（工具行/压缩行直写——混入重绘区会固化序错乱）。 */
 export function attachRender(
   h: Harness,
-  io: { write(s: string): void; activity?(s: string): void },
+  io: { write(s: string): void; activity?(c: StreamChunk): void },
   onEvent?: (e: SessionEvent) => void,
 ): void {
   const state = createRenderState();
-  const chunkOut = io.activity ?? io.write;
   void (async () => {
     for await (const c of h.liveChunks()) {
+      if (io.activity !== undefined) {
+        // 结构化活动面（F2）：kind + 原文——思考/正文边界与着色由 streamview 负责
+        if (c.type === "reasoning/delta") io.activity({ kind: "reasoning", text: c.text });
+        else if (c.type === "text/delta") io.activity({ kind: "text", text: c.text });
+        else if (c.type === "finish" && c.kind === "error") io.activity({ kind: "text", text: renderChunk(c, createRenderState()) });
+        continue;
+      }
       const out = renderChunk(c, state);
-      if (out !== "") chunkOut(out);
+      if (out !== "") io.write(out);
     }
   })();
   void (async () => {
