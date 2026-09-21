@@ -9,11 +9,12 @@ export interface CliArgs {
   fork?: { parentSessionId: string; atEntryId?: string }; // --fork <id>[:<entryId>]（D41/T6）
   print?: string;                                          // --print <prompt> / -p（非交互单发，M4-2 T17）
   outputFormat?: "text" | "json" | "stream-json";         // --output-format（仅 --print 模式）
+  tui?: "line" | "full";                                   // --tui：界面模式（TUI 批阶段三 F3——full 全屏双栏为 TTY 缺省，line 滚动流降级）
 }
 
 const USAGE = `用法: orosus [--model <provider/model>] [--enable-module <name>]...
              [--disable-module <name>]... [--no-modules [--module <name>]...] [--dump-modules]
-             [--print <prompt> [--output-format text|json|stream-json]]`;
+             [--print <prompt> [--output-format text|json|stream-json]] [--tui line|full]`;
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { enable: [], disable: [], module: [], noModules: false, dumpModules: false };
@@ -45,6 +46,13 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--resume": {
         const v = takeValue(i, "--resume"); i++;
         args.resume = { sessionId: v };
+        break;
+      }
+      case "--tui": {
+        const v = takeValue(i, "--tui"); i++;
+        if (v !== "line" && v !== "full") throw new Error(`--tui 非法值 "${v}"（合法：line | full）
+${USAGE}`);
+        args.tui = v;
         break;
       }
       case "--fork": {

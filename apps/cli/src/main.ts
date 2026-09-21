@@ -18,7 +18,9 @@ import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
-import { createStreamView } from "./tui/streamview.ts";
+import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
+import { DocModel } from "./tui/docmodel.ts";
+import { FullApp } from "./tui/fullapp.ts";
 import { pasteImage, imagesFor, PASTE_EMPTY, pasteOkHint } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
@@ -219,12 +221,12 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
 
 // 历史回显（B9 走查补 + 分页）：尾页优先（最新对话先可见），TTY 下回车向前翻页、q 结束；
 // 非交互（管道）只出尾页——巨量历史不再刷爆终端（单行截断在 renderHistoryLines）
-const echoHistory = async (h: Harness): Promise<void> => {
+const echoHistory = async (h: Harness, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
   const lines = renderHistoryLines(await h.history(), process.stdout.columns ?? 80);
   const PAGE = 30;
   let { shown, hiddenBefore } = historyPage(lines, PAGE);
-  if (hiddenBefore > 0) console.log(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
-  for (const l of shown) console.log(l);
+  if (hiddenBefore > 0) out(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
+  for (const l of shown) out(l);
   while (hiddenBefore > 0 && process.stdin.isTTY) {
     let more: string;
     try {
@@ -235,7 +237,7 @@ const echoHistory = async (h: Harness): Promise<void> => {
     if (more.trim().toLowerCase() === "q") break;
     const end = hiddenBefore;
     const start = Math.max(0, end - PAGE);
-    for (let i = start; i < end; i++) console.log(lines[i]!);
+    for (let i = start; i < end; i++) out(lines[i]!);
     hiddenBefore = start;
   }
 };
@@ -295,15 +297,47 @@ attachAltVPaste({
     pendingImage = file;
   },
 });
+// 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
+// 全屏 = DocModel（FullApp 的行源）。模式切换只换 sink 指向，attachRender 订阅每会话一次不重挂。
+let dm = new DocModel();
+const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; end(): void } =>
+  tuiMode === "full"
+    ? {
+        write: (s) => dm.write(s, process.stdout.columns ?? 80),
+        activity: (c) => dm.activity(c, process.stdout.columns ?? 80),
+        end: () => dm.end(process.stdout.columns ?? 80),
+      }
+    : { write: (s) => lv.write(s), activity: (c) => lv.activity(c), end: () => lv.end() };
+
+// 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
+// Ctrl+T 运行中互切（全屏 → requestLineMode 置 line；readline REPL → keypress 置 full 并提交空行触发）
+let tuiMode: "line" | "full" =
+  args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true ? "full" : "line";
+
+// Ctrl+T 切全屏（F3 双模式——keypress 多播拦截与 Alt+V 同族；readline emacs 的 transpose-chars
+// 让位：滚动流下此监听器唯一消费）。触发后清空当前行并提交空行，REPL 循环顶吃到新模式
+// （行内未提交内容先清空是防 readline 把换行追加进当前行——F5 评估是否保留行内容）。
+if (process.stdin.isTTY === true) {
+  process.stdin.on("keypress", (_s: string, k: { name?: string; ctrl?: boolean } | undefined) => {
+    if (k?.name === "t" && k.ctrl === true && tuiMode === "line") {
+      tuiMode = "full";
+      const w = rl as unknown as { line: string; cursor: number };
+      w.line = "";
+      w.cursor = 0;
+      rl.write("\n");
+    }
+  });
+}
+
 function attachRender(h: Harness): void {
-  // 双写面（T4/v1.8）：chunk 路 TTY 进 lv.activity（节流重绘），事件路 lv.write（直写）；
-  // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 lv.end() 定格终稿
+  // 双写面（T4/v1.8；F3 多路复用）：chunk 路 TTY 进 sink.activity，事件路 sink.write（直写）；
+  // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 sink.end() 定格终稿
   attachRenderTo(
     h,
-    { write: (s) => lv.write(s), ...(process.stdout.isTTY === true ? { activity: (c) => lv.activity(c) } : {}) },
+    { write: (s) => sinkFor().write(s), ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c) } : {}) },
     (e) => {
       lastEventId = e.id;
-      if (e.type === "turn/end") lv.end();
+      if (e.type === "turn/end") sinkFor().end();
     },
   );
 }
@@ -311,35 +345,27 @@ function attachRender(h: Harness): void {
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
 // 恢复会话（B9 拉前）：双层定位 → 原位续写（新事件仍进原文件——平铺/他桶均在原位）
-const switchTo = async (sid: string): Promise<void> => {
+const switchTo = async (sid: string, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
   const loc = locateSessionFile(sessionsRoot, sid);
-  if (loc === undefined) { console.log(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
+  if (loc === undefined) { out(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
   await h.close();
   h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
   activeDir = loc.dir;
-  console.log(`[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`);
-  await echoHistory(h); // 回显存量对话（B9 走查补 + 分页）
+  out(`[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`);
+  await echoHistory(h, out); // 回显存量对话（B9 走查补 + 分页）
 };
 
-// REPL（--print 单发模式不进——M4-2 T17：runPrint 已收尾）
-if (args.print === undefined) try {
-  sessionLoop: for (;;) {
-    for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) console.error(line);
-    attachRender(h);
-    for (;;) {
-      process.stdout.write("> ");
-      const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
-      if (line === null) break sessionLoop;
-      const text = line.trim();
-      if (text === "") continue;
-      // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）
+/** 单行处理（REPL 与全屏共用——F3 抽取）：会话生命周期指令 → "switch"（重挂横幅/渲染）；
+ *  /quit → "quit"；其余 → "again"。out = 输出通道（REPL=console.log，全屏=DocModel.pushLine——
+ *  全屏 alt-screen 下 console 输出会毁屏，一切带内输出必须进流区）。 */
+const processReplLine = async (text: string, out: (s: string) => void): Promise<"again" | "switch" | "quit"> => {
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
-      if (directive.kind === "quit") break sessionLoop; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
+      if (directive.kind === "quit") return "quit"; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
       if (directive.kind === "pick") {
         // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
-        if (!process.stdin.isTTY) { console.log(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); continue; }
+        if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
         const items = listSessions(sessionsRoot);
-        if (items.length === 0) { console.log("（暂无会话——发送第一条消息即创建）"); continue; }
+        if (items.length === 0) { out("（暂无会话——发送第一条消息即创建）"); return "again"; }
         // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
         // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
         // 不再先打印静态表格——picker 自带列表渲染），Esc reject 在 pickSessionNumber 内转 undefined
@@ -355,27 +381,27 @@ if (args.print === undefined) try {
             return n0 + 1; // picker 0-based → 序号 1-based（与回落路径同口径）
           },
         );
-        if (n === undefined) continue;
+        if (n === undefined) return "again";
         await switchTo(items[n - 1]!.id);
-        continue sessionLoop; // 换 harness 后重挂横幅与渲染
+        return "switch"; // 换 harness 后重挂横幅与渲染
       }
       if (directive.kind === "title") {
         // /title（M4-2 T0）：无参 = 查看当前名；有参 = 追加 session/label（当前或序号/sid 指定会话）
         if (directive.name === undefined) {
           const events = await h.history();
           const label = events.filter((e) => e.type === "session/label").at(-1);
-          console.log(`当前会话：${label !== undefined ? String(label.label) : "（未命名）"}（${h.sessionId}）——/title <名> 命名`);
+          out(`当前会话：${label !== undefined ? String(label.label) : "（未命名）"}（${h.sessionId}）——/title <名> 命名`);
         } else {
           const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name);
-          console.log(r !== undefined ? `[已命名 ${r.sid} → ${directive.name}]` : `[未找到目标会话]`);
+          out(r !== undefined ? `[已命名 ${r.sid} → ${directive.name}]` : `[未找到目标会话]`);
         }
-        continue;
+        return "again";
       }
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot);
-        if (sid === undefined) { console.log(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); continue; }
+        if (sid === undefined) { out(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
         await switchTo(sid);
-        continue sessionLoop;
+        return "switch";
       }
       if (directive.kind === "new" || directive.kind === "fork") {
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
@@ -388,22 +414,22 @@ if (args.print === undefined) try {
         clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
         if (from !== undefined) {
           // fork 继承父上下文（ForkedSessionStore 投影 suau 实证）——回显历史让继承可见，否则像丢了
-          console.log(`[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]`);
+          out(`[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]`);
           await echoHistory(h);
         } else {
-          console.log(`[新会话 ${h.sessionId}]`);
+          out(`[新会话 ${h.sessionId}]`);
         }
-        continue sessionLoop; // 重挂横幅与渲染（新事件流）
+        return "switch"; // 重挂横幅与渲染（新事件流）
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
-      if (text === "/help") { console.log(HELP_TEXT); continue; }
+      if (text === "/help") { out(HELP_TEXT); return "again"; }
       // /paste（M4-2 T10，别名 /image；M4-2.5 T5 起真实喂图）：剪贴板图存临时文件，随下一条消息以 image part 发给模型
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
-        if (img === undefined) { console.log(PASTE_EMPTY); continue; }
-        console.log(pasteOkHint(basename(img.file)));
+        if (img === undefined) { out(PASTE_EMPTY); return "again"; }
+        out(pasteOkHint(basename(img.file)));
         pendingImage = img.file;
-        continue;
+        return "again";
       }
       try {
         // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
@@ -413,21 +439,88 @@ if (args.print === undefined) try {
         // /compact 进度指示（TUI 批 T7）：命中时 h.prompt 前经 lv 写指示行，settle 后 discard 擦除——
         // 结果/错误由下方 console 输出（不经 liveview），视觉上指示行被结果替换；非 TTY 零输出变化。
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
-        const out = await withCompactHint(
+        const cmdOut = await withCompactHint(
           text,
           { isTTY: process.stdout.isTTY === true, activity: (s) => lv.activity({ kind: "text", text: s }), discard: () => lv.discard() },
           () => h.prompt(withAt, imagesFor(pendingImage)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
         );
         pendingImage = undefined;
-        if (out !== undefined) console.log(out);
+        if (cmdOut !== undefined) out(cmdOut);
       } catch (err) {
         // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
         // 取消仍以抛错带内表达，仅 REPL 呈现面不再按错误打印。
         if (!(err instanceof Error && err.message === "已取消（Esc）")) {
-          console.error(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+          out(`[错误] ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+  return "again";
+};
+
+/** 全屏模式循环（TUI 批阶段三 F3）：FullApp 接管终端（alt-screen 双栏），
+ *  Ctrl+T → 切回滚动流（requestLineMode 改写 tuiMode）；Ctrl+C → 退出；会话生命周期指令 → switch 重挂。
+ *  提交走 processReplLine 共用体（输出通道 = dm.pushLine——console 输出在全屏下毁屏）。 */
+const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
+  let action: "switch" | "line" | "quit" | undefined;
+  const app = new FullApp({
+    columns: () => process.stdout.columns ?? 80,
+    rows: () => process.stdout.rows ?? 24,
+    doc: () => dm.frameLines(process.stdout.columns ?? 80),
+    submit: (text) => {
+      app.setBusy(true);
+      void (async () => {
+        try {
+          const r = await processReplLine(text, (s) => dm.pushLine(s));
+          if (r === "switch") action = "switch";
+          else if (r === "quit") action = "quit";
+        } finally {
+          app.setBusy(false);
+        }
+      })();
+    },
+    requestLineMode: () => {
+      tuiMode = "line";
+      action = "line";
+    },
+    requestExit: () => {
+      action = "quit";
+    },
+  });
+  app.start();
+  while (action === undefined) {
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  app.stop();
+  return action;
+};
+
+// REPL（--print 单发模式不进——M4-2 T17：runPrint 已收尾）
+if (args.print === undefined) try {
+  sessionLoop: for (;;) {
+    // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）
+    dm = new DocModel();
+    for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) {
+      if (tuiMode === "full") dm.pushLine(line);
+      else console.error(line);
+    }
+    attachRender(h);
+    for (;;) {
+      // 全屏模式（F3）：FullApp 接管终端（alt-screen 双栏）；返回后按动作分流
+      if (tuiMode === "full") {
+        const action = await runFullScreen();
+        if (action === "quit") break sessionLoop;
+        continue; // action=switch → 重挂横幅与渲染（仍在 full）；action=line → tuiMode 已被 requestLineMode 改写，落 readline REPL
+      }
+      process.stdout.write("> ");
+      const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
+      if (line === null) break sessionLoop;
+      const text = line.trim();
+      if (text === "") continue;
+      const r = await processReplLine(text, (s) => console.log(s));
+      if (r === "quit") break sessionLoop;
+      if (r === "switch") continue sessionLoop;
+      // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）
+
     }
   }
 } finally {
