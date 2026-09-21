@@ -96,3 +96,17 @@ describe("按键解析器（TUI 批 T0——raw-mode 基座）", () => {
     expect(hits).toEqual(["Ax", "Bx", "Az", "Bz"]); // 宿主键处理复活
   });
 });
+
+describe("shift 修饰扩表（TUI 批阶段三 F0——T0 预留扩展位兑现）", () => {
+  it("⑨ shift+tab/shift+方向/shift+翻页入表；旧形态 \x1b[a-d 同判", () => {
+    const p = createKeyParser({ escWindowMs: 0 });
+    expect(p.feed(Buffer.from("\x1b[Z\x1b[1;2A\x1b[1;2D\x1b[5;2~\x1b[6;2~\x1b[a"))).toEqual([
+      { type: "shiftTab" },
+      { type: "shiftArrow", dir: "up" },
+      { type: "shiftArrow", dir: "left" },
+      { type: "shiftPage", dir: "up" },
+      { type: "shiftPage", dir: "down" },
+      { type: "shiftArrow", dir: "up" },
+    ]);
+  });
+});

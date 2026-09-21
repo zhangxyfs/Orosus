@@ -4,6 +4,8 @@
  *  退格 \x7f/\x08 双形态同判（Windows 终端矩阵差异，v1.8 补）。修饰方向键（\x1b[1;2A 系）、
  *  Home/End 等本批不消费的序列按未知 CSI/SS3 整体吞掉——不炸、不把序列字节漏进字符流；
  *  框架化阶段需要时在已知表扩展（KeyEvent 穷举的是本批消费形态）。
+ *  【阶段三 F0 已扩】shiftTab / shiftArrow / shiftPage 三类修饰事件入表（盲输态方向键仍不误取消——
+ *  watchEsc 只判 esc 与可打印，修饰事件与「吞掉」同效）。
  *  模态接管 = readable 拉取 + keypress 摘听（T8 走查修正二则：① 挂 'readable' 监听即自动停
  *  flowing，且**不可显式 pause()**——readline/promises 的 question 流过之后，pause 会把底层
  *  句柄读一起杀掉且不再拉起（winpty/conhost 实测：pause+readable 下按键零到达），而 readable
@@ -22,7 +24,10 @@ export type KeyEvent =
   | { type: "meta"; ch: string } // Alt 组合（\x1b + 单字符，如 \x1bv）
   | { type: "enter" }
   | { type: "backspace" }
-  | { type: "tab" };
+  | { type: "tab" }
+  | { type: "shiftTab" } // Shift+Tab（[Z——框架化全屏键位模型消费，TUI 批阶段三 F0 扩表）
+  | { type: "shiftArrow"; dir: "up" | "down" | "left" | "right" } // [1;2A 系与 [a-d 旧形态
+  | { type: "shiftPage"; dir: "up" | "down" }; // [5;2~ / [6;2~
 
 const ESC = 0x1b;
 
@@ -34,6 +39,18 @@ const CSI_TABLE: Readonly<Record<string, KeyEvent>> = {
   "[D": { type: "arrow", dir: "left" },
   "[5~": { type: "page", dir: "up" },
   "[6~": { type: "page", dir: "down" },
+  // shift 修饰系（TUI 批阶段三 F0——T0 文件头预留扩展位兑现；ConPTY 下裸 raw 即达，spike S5 实证）
+  "[Z": { type: "shiftTab" },
+  "[1;2A": { type: "shiftArrow", dir: "up" },
+  "[1;2B": { type: "shiftArrow", dir: "down" },
+  "[1;2C": { type: "shiftArrow", dir: "right" },
+  "[1;2D": { type: "shiftArrow", dir: "left" },
+  "[5;2~": { type: "shiftPage", dir: "up" },
+  "[6;2~": { type: "shiftPage", dir: "down" },
+  "[a": { type: "shiftArrow", dir: "up" }, // 部分终端旧形态
+  "[b": { type: "shiftArrow", dir: "down" },
+  "[c": { type: "shiftArrow", dir: "right" },
+  "[d": { type: "shiftArrow", dir: "left" },
 };
 
 /** 已知 SS3 表（应用模式方向键，mintty 等终端的另一发送形态）。 */
