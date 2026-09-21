@@ -107,8 +107,10 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     const name = sel.split("\n")[0]!;
     const act = await ui.choose(`${name}`, ["设为当前默认", "更新密钥", "移除", "返回"]);
     if (act === "设为当前默认") {
-      await deps.setModel(name);
-      return `已设为当前默认（model = "${name}"），下个 turn 生效`;
+      const dm = current[name]?.defaultModel; // 全名形态（F5 九轮④）——无 defaultModel 退裸名（依赖槽内默认）
+      const full = dm !== undefined ? `${name}/${dm}` : name;
+      await deps.setModel(full);
+      return `已设为当前默认（model = "${full}"），下个 turn 生效`;
     }
     if (act === "移除") {
       const next = { ...current };
@@ -153,13 +155,10 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   }
   catalog = detectSameGate(catalog); // 同厂两门标注（M4-2 T2）：在线/本地两源统一后处理
 
-  const keyword = (await ui.ask("厂商关键字（回车全列）")).trim().toLowerCase();
-  const entries = Object.entries(catalog).filter(([id, e]) => {
-    const hay = `${id} ${e.name ?? ""} ${displayName(id, e)}`.toLowerCase();
-    return keyword === "" || hay.includes(keyword);
-  });
-  if (entries.length === 0) return "目录中没有匹配的厂商";
-  entries.sort((a, b) => a[0].localeCompare(b[0])); // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
+  // 全量直列（F5 九轮用户拍板：不再先问关键字——全屏列表内输入即过滤，includes 口径）；
+  // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
+  const entries = [...Object.entries(catalog)];
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
   const picked = await ui.choose(`选择厂商${degradedNote}`, [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";
   // 精确整串匹配（走查：startsWith 会命中字母序在前的同前缀条目——选 zhipuai-coding-plan 导入了普通 zhipuai 的 15 模型清单与错误端点）
@@ -167,19 +166,8 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   if (pickedEntry0 === undefined || pickedId0 === undefined) return "已取消";
   let entryId = pickedId0;
   let entry = pickedEntry0;
-  // 同厂两门子菜单（M4-2 T2/B1）：同前缀条目 = 端点/计费不同的两个入口——选错门 = 按量报 1113/429
-  if (entry.sameGate !== undefined && entry.sameGate.length > 0) {
-    const gateOptions = [
-      `${entryId}（标准端点 · 按量计费）`,
-      ...entry.sameGate.map((g) => `${g}（专用端点 · 套餐计费——选错门=按量报 1113）`),
-    ];
-    const gatePicked = await ui.choose(`此厂商有 ${gateOptions.length} 个入口（端点/计费不同），请选择：`, gateOptions);
-    const gateIdx = gateOptions.findIndex((o) => o === gatePicked);
-    if (gateIdx > 0) {
-      entryId = entry.sameGate[gateIdx - 1]!; // 重新定向到 sameGate 指向的条目（端点/模型清单随条目）
-      entry = catalog[entryId]!;
-    }
-  }
+  // sameGate 子菜单退役（F5 九轮用户拍板）：列表两门相邻独立可选，选中即所得——
+  // 「此厂商有 N 个入口」二跳与选中项标注错位（标准/套餐标签按 picked 假设硬编码）一并消失
 
   const wire = resolveWire(entry);
   if (wire.kind === "invalid") return `无法导入：${wire.reason}`;
@@ -191,7 +179,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   let apiKeyRef: string | undefined;
   if (envKey !== undefined) apiKeyRef = `$ENV:${envKey}`;
   if (actualKey === undefined && envKey !== undefined) {
-    const pasted = (await ui.askSecret(`粘贴 ${envKey} 的值（已安全写入 secrets.env；回车跳过，稍后自行设置）`)).trim();
+    const pasted = (await ui.askSecret(`请粘贴 ${envKey} 的值（回车跳过；粘贴后将安全写入 secrets.env）`)).trim();
     if (pasted !== "") {
       await deps.appendSecret(envKey, pasted);
       actualKey = pasted;
@@ -252,9 +240,10 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const next = { ...current, [entryId]: { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}), ...(defaultModel !== undefined ? { defaultModel } : {}) } };
   await deps.saveProviders(next);
   if (defaultModel !== undefined) {
-    await deps.setModel(entryId); // 裸名（三轮 P2①：与"设为当前默认"同语义——defaultModel 随条目落盘经 D32 路由；onboarding 复检闭环（二轮 P1①））
+    // 全名形态（F5 九轮用户拍板）：model = "<slot>/<model>"——裸槽名让用户在 config 里看不到用的哪个模型
+    await deps.setModel(`${entryId}/${defaultModel}`);
   }
-  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（model = "${entryId}" 裸名即用）` : ""].filter(Boolean).join("\n");
+  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（model = "${entryId}/${defaultModel}"）` : ""].filter(Boolean).join("\n");
   const banner = v.kind === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
   return `${banner}
 ${shown}${ctxNote}${modelNote}

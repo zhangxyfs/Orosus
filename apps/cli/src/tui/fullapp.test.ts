@@ -191,3 +191,39 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		app.stop();
 	});
 });
+
+describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列、列表内 includes 筛）", () => {
+	const rig20 = (): { app: FullApp; input: FakeInput } => {
+		const r = rig();
+		const items = Array.from({ length: 20 }, (_, i) => `vendor-${String(i).padStart(2, "0")}（厂商${i}）`);
+		void r.app.pickOverlay("选择厂商", items);
+		return { app: r.app, input: r.input };
+	};
+
+	it("① ≥12 项自动启用过滤：输入子串即筛（includes 非 startsWith）、Enter 返回原表序号", async () => {
+		const { app, input } = rig20();
+		app.start();
+		await flush();
+		input.emit("data", "vendor-1"); // 输入过滤串
+		await flush(120);
+		const pu = (app as unknown as { pendingUi: { filter?: string } }).pendingUi; // 私有面测试探针
+		expect(pu?.filter).toBe("vendor-1");
+		input.emit("data", "\r");
+		await flush();
+		app.stop();
+	});
+
+	it("② 退格收缩过滤串；中缀匹配命中（非前缀）", async () => {
+		const { app, input } = rig20();
+		app.start();
+		await flush();
+		input.emit("data", "厂商1");
+		await flush(120);
+		const probe = (app as unknown as { pendingUi: { filter?: string } }).pendingUi;
+		expect(probe?.filter).toBe("厂商1"); // 中缀（"厂商10"在第二列）也命中——includes 口径
+		input.emit("data", ""); // 退格三次清空
+		await flush(120);
+		expect((app as unknown as { pendingUi: { filter?: string } }).pendingUi?.filter).toBe("");
+		app.stop();
+	});
+});

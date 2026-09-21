@@ -87,6 +87,7 @@ let activeDir = resumeLoc?.dir ?? sessionsDir; // 当前 harness 的会话目录
 // 输出走可静默代理：密钥询问期间 rl 回显全吞（盲输，ssh/docker 同款）——逐键 * 回显在真实 Windows
 // 终端层会碎成孤星（走查实录），静默在任意终端层行为一致。terminal/列宽透传给代理保住行编辑。
 const stdoutEcho = createSilenceableOutput(process.stdout);
+const RUN_STARTED_AT = new Date().toISOString(); // 运行时间锚（F5 九轮⑤ 用户拍板：本次进程运行时长，非会话年龄）
 if (process.stdout.isTTY === true) {
   Object.defineProperty(stdoutEcho, "isTTY", { value: true });
   Object.defineProperty(stdoutEcho, "columns", { get: () => process.stdout.columns });
@@ -648,7 +649,7 @@ const refreshPanel = async (): Promise<void> => {
 		session: h.sessionId,
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),
-		startedAt: events[0]?.ts, // 运行时间锚（F5 二轮④）：首事件 ts = 会话创建时刻
+		startedAt: RUN_STARTED_AT, // 本次进程启动（F5 九轮⑤：resume 旧会话不再显示历史年龄）
 		contextWindow: cfg.contextWindow,
 		modules: h
 			.graph()

@@ -173,13 +173,13 @@ function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState }
 describe("/provider 多级菜单（D37）", () => {
   it("添加流程：选数据源→选厂商→env_key 已设零输入→校验 2xx→自动写入", async () => {
     const deps = fakeDeps({ env: { DEEPSEEK_API_KEY: "sk-live" } });
-    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat" /* T4：目录兜底挑默认模型 */], ask: [""] /* 关键字过滤=空 */ });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat" /* T4：目录兜底挑默认模型 */] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY", defaultModel: "deepseek-chat" } });
-    expect(deps.state.setModels).toEqual(["deepseek"]); // T4：裸名写顶层 model（onboarding 复检闭环）
+    expect(deps.state.setModels).toEqual(["deepseek/deepseek-chat"]); // F5 九轮④：全名形态（裸槽名看不出用的哪个模型）
     expect(deps.state.secrets).toHaveLength(0); // 零输入：没写 secrets
     expect(out).toContain("success");
-    expect(out).toContain('model = "deepseek" 裸名即用');
+    expect(out).toContain('model = "deepseek/deepseek-chat"');
   });
 
   it("目录厂商清单按字母序（同前缀供应商相邻——2026-09-18 用户要求：zai/zhipuai/zhipuai-coding-plan 挨着）", async () => {
@@ -260,10 +260,10 @@ describe("/provider 多级菜单（D37）", () => {
       getCatalog: async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: {} } } as unknown as Catalog, source: "builtin" as const }), // 降级：条目在但无策展模型 → live 优先
       fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-reasoner" }, { id: "deepseek-chat" }] }), { status: 200 })) as typeof fetch,
     });
-    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-reasoner"], ask: [""] });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-reasoner"] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-reasoner" } }); // 用户所选，非目录 models[0]
-    expect(deps.state.setModels).toEqual(["deepseek"]); // 裸名（三轮 P2①）
+    expect(deps.state.setModels).toEqual(["deepseek/deepseek-reasoner"]); // F5 九轮④：全名形态
     expect(out).toContain("deepseek-reasoner");
   });
 
@@ -272,10 +272,10 @@ describe("/provider 多级菜单（D37）", () => {
       env: { DEEPSEEK_API_KEY: "sk-live" },
       fetchImpl: (async () => new Response("not-json", { status: 200 })) as typeof fetch, // json 解析失败 → body undefined → live 空
     });
-    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat"], ask: [""] });
+    const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat"] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-chat" } }); // 目录兜底
-    expect(deps.state.setModels).toEqual(["deepseek"]);
+    expect(deps.state.setModels).toEqual(["deepseek/deepseek-chat"]); // F5 九轮④：全名形态
     expect(out).toContain("deepseek-chat"); // 兜底菜单的选中值出现在回显
   });
 
@@ -419,7 +419,7 @@ describe("/provider 多级菜单（D37）", () => {
     expect(deps.state.secrets).toEqual([["DEEPSEEK_API_KEY", "sk-pasted"]]);
     expect(secretsAsked).toHaveLength(1);
     expect(secretsAsked[0]).toContain("DEEPSEEK_API_KEY");
-    expect(asked).toEqual(["厂商关键字（回车全列）"]); // 只有非敏感走明文 ask
+    expect(asked).toEqual([]); // F5 九轮①：厂商关键字问句退役（全量直列 + 列表内过滤）——明文 ask 归零
     expect(out).toContain("success");
   });
 });
@@ -448,26 +448,23 @@ describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai �
       source: "online" as const,
     });
     let gateTitle = "";
-    let gateItems: string[] = [];
-    const inner = fakeUi({
-      choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai（智谱）", "zhipuai-coding-plan（专用端点 · 套餐计费——选错门=按量报 1113）", "glm-4.7"],
-      ask: [""],
+    // F5 九轮② 用户拍板：「此厂商有 N 个入口」子菜单退役——列表两门相邻独立可选，选中即所得
+    const ui = fakeUi({
+      choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "zhipuai-coding-plan（智谱 Coding Plan）", "glm-4.7"],
     });
-    const ui: MenuUi = {
+    const wrapped: MenuUi = {
       choose: async (title, items) => {
-        if (String(title).includes("入口")) { gateTitle = String(title); gateItems = [...items]; }
-        return inner.choose(title, items);
+        if (String(title).includes("入口")) gateTitle = String(title);
+        return ui.choose(title, items);
       },
       ask: async (_q) => "",
       askSecret: async () => "",
       confirm: async () => true,
     };
-    const out = await runProviderMenu(ui, deps);
-    expect(gateTitle).toContain("2 个入口"); // 子菜单出现且说明端点/计费不同
-    expect(gateItems[0]).toContain("zhipuai（标准端点");
-    expect(gateItems[1]).toContain("zhipuai-coding-plan（专用端点");
+    const out = await runProviderMenu(wrapped, deps);
+    expect(gateTitle).toBe(""); // 不再出现入口子菜单
     const saved = deps.state.saved as Record<string, { baseUrl: string }>;
-    expect(saved["zhipuai-coding-plan"]!.baseUrl).toContain("/api/coding/paas/v4"); // 重新定向到 coding-plan 条目
+    expect(saved["zhipuai-coding-plan"]!.baseUrl).toContain("/api/coding/paas/v4"); // 选中条目原样写入
     expect(saved["zhipuai"]).toBeUndefined(); // 未写标准门
     expect(out).toContain("coding");
   });

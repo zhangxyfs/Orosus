@@ -176,6 +176,7 @@ export class FullApp {
 	private state: AppState;
 	private busyTimer: NodeJS.Timeout | undefined;
 	private watchdogTimer: NodeJS.Timeout | undefined;
+	private tickTimer: NodeJS.Timeout | undefined;
 	private stopped = false;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
@@ -238,6 +239,9 @@ export class FullApp {
 		// 终端侧滚屏使 FullScreen 簿记与真实屏脱节；2s 看门狗强制全帧重绘兜底）
 		this.watchdogTimer = setInterval(() => this.full.reset(), 2000);
 		this.watchdogTimer.unref?.();
+		// 1s 心跳重绘（F5 九轮⑤：运行时间等时钟性行实时——diff 后只动变化行）
+		this.tickTimer = setInterval(() => this.scheduler.requestRender(), 1000);
+		this.tickTimer.unref?.();
 		this.term.onInput((seq) => this.onKey(matchKey(seq)));
 		this.term.onPaste((text) => {
 			this.inputInsert(text);
@@ -260,6 +264,7 @@ export class FullApp {
 		}
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+		if (this.tickTimer) clearInterval(this.tickTimer);
 		this.scheduler.stop();
 		if (this.full.isActive) this.full.exit();
 		this.term.stop();
@@ -286,7 +291,7 @@ export class FullApp {
 	// ---------- 全屏 CommandUi 适配面（choose → overlay 选择器；ask/askSecret → 输入行询问） ----------
 
 	private pendingUi:
-		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void }
+		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; lines: string[]; scroll: number }
 		| undefined;
@@ -310,7 +315,15 @@ export class FullApp {
 		if (this.pendingUi?.kind === "pick") this.pendingUi.resolve(undefined);
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
 		return new Promise((resolve) => {
-			this.pendingUi = { kind: "pick", title, items, sel: 0, resolve };
+			// ≥12 项启用输入过滤（F5 九轮① 用户拍板：厂商目录全量直列、列表内输入即筛——includes 口径）
+			this.pendingUi = {
+				kind: "pick",
+				title,
+				items,
+				sel: 0,
+				resolve,
+				...(items.length >= 12 ? { filter: "" } : {}),
+			};
 			this.scheduler.requestImmediateRender();
 		});
 	}
@@ -442,13 +455,27 @@ export class FullApp {
 				return;
 			}
 			if (pu.kind === "pick") {
-				if (key === "up" && pu.items.length > 0) pu.sel = (pu.sel - 1 + pu.items.length) % pu.items.length;
-				else if (key === "down" && pu.items.length > 0) pu.sel = (pu.sel + 1) % pu.items.length;
-				else if (key === "pageUp" && pu.items.length > 0) pu.sel = Math.max(0, pu.sel - OVERLAY_PAGE);
-				else if (key === "pageDown" && pu.items.length > 0) pu.sel = Math.min(pu.items.length - 1, pu.sel + OVERLAY_PAGE);
-				else if (key === "enter") {
+				// 过滤列表（F5 九轮①）：可打印/退格编辑过滤串——子串匹配 includes（非 startsWith）
+				const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));
+				if (pu.filter !== undefined && key.length === 1 && isPrintable(key)) { // 单字符才入过滤——键名串（backspace 等）不得混入
+					pu.filter += key;
+					pu.sel = 0;
+					this.scheduler.requestImmediateRender();
+					return;
+				}
+				if (pu.filter !== undefined && pu.filter !== "" && key === "backspace") {
+					pu.filter = pu.filter.slice(0, -1);
+					pu.sel = 0;
+					this.scheduler.requestImmediateRender();
+					return;
+				}
+				if (key === "up" && filtered.length > 0) pu.sel = (pu.sel - 1 + filtered.length) % filtered.length;
+				else if (key === "down" && filtered.length > 0) pu.sel = (pu.sel + 1) % filtered.length;
+				else if (key === "pageUp" && filtered.length > 0) pu.sel = Math.max(0, pu.sel - OVERLAY_PAGE);
+				else if (key === "pageDown" && filtered.length > 0) pu.sel = Math.min(filtered.length - 1, pu.sel + OVERLAY_PAGE);
+				else if (key === "enter" && filtered.length > 0) {
 					this.pendingUi = undefined;
-					pu.resolve(pu.sel);
+					pu.resolve(pu.items.indexOf(filtered[pu.sel]!));
 				} else if (key === "escape") {
 					this.pendingUi = undefined;
 					pu.resolve(undefined);
@@ -896,7 +923,9 @@ export class FullApp {
 			} else if (s.input !== "" && this.pendingUi?.kind === "ask" && this.pendingUi.secret) {
 				line = prefix + "•".repeat(vr.text.length);
 			} else if (s.input === "" && i === 0) {
-				const ph = this.pendingUi?.kind === "ask" ? this.pendingUi.question : "向 Orosus 下达指令，或输入 / 查看命令…";
+				const ph = this.pendingUi?.kind === "ask"
+					? this.pendingUi.secret ? "请输入（不回显）…" : "请输入…" // 问题已在顶边标题（F5 九轮③——占位符不再复读）
+					: "向 Orosus 下达指令，或输入 / 查看命令…";
 				line = prefix + theme.dim(ph);
 			} else {
 				line = prefix + this.styleWithSelection(vr, sel);
@@ -923,7 +952,7 @@ export class FullApp {
 		let overlay: OverlayFrame | undefined;
 		if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;
-			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel);
+			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter);
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
 			overlay = this.buildViewOverlay(leftW, divRow, pu.title, pu.lines, pu.scroll);
@@ -961,28 +990,30 @@ export class FullApp {
 	}
 
 	/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */
-	private buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number): OverlayFrame {
+	private buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): OverlayFrame {
 		const ow = leftW;
 		const oInner = ow - 2;
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+		const shown = filter === undefined ? items : items.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
 		const olines: string[] = [];
+		const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : `过滤「${filter}」`} ${shown.length}/${items.length} `;
 		const titleSeg = theme.fg("accent", ` ${title} `);
-		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
+		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg) - visibleWidth(theme.dim(filterSeg)));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.dim(filterSeg) + theme.fg(bc, "─╮")));
 		olines.push(boxRow(""));
-		const selI = Math.max(0, Math.min(items.length - 1, sel));
-		const winStart = Math.max(0, Math.min(Math.max(0, items.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
-		const win = items.slice(winStart, winStart + OVERLAY_PAGE);
+		const selI = Math.max(0, Math.min(shown.length - 1, sel));
+		const winStart = Math.max(0, Math.min(Math.max(0, shown.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
+		const win = shown.slice(winStart, winStart + OVERLAY_PAGE);
 		if (winStart > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${winStart} 项`)));
 		for (let i = 0; i < win.length; i++) {
 			const gi = winStart + i;
 			const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${win[i]!}`;
 			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 		}
-		const rest = items.length - winStart - win.length;
+		const rest = shown.length - winStart - win.length;
 		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 项`)));
-		olines.push(boxRow(theme.dim(" ↑↓ 选择 · Enter 选定 · Esc 取消")));
+		olines.push(boxRow(theme.dim(filter === undefined ? " ↑↓ 选择 · Enter 选定 · Esc 取消" : " 输入文字过滤 · ↑↓ 选择 · Enter 选定 · Esc 取消")));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
