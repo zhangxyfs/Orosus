@@ -217,6 +217,20 @@ export class FullApp {
 		return Math.max(8, this.io.columns() - this.sidebarW() - 2);
 	}
 
+	/** 忙碌探针（F5 四轮：宿主排队判定用）。 */
+	get isBusy(): boolean {
+		return this.state.busy;
+	}
+
+	/** 排队提交数（流式中提交的命令/消息——turn 结束后依序执行，尾行提示）。 */
+	queuedCount = 0;
+
+	/** 宿主更新排队数并即刻重绘尾行（F5 四轮）。 */
+	setQueued(n: number): void {
+		this.queuedCount = n;
+		this.scheduler.requestImmediateRender();
+	}
+
 	start(): void {
 		this.full.enter();
 		this.term.start();
@@ -691,7 +705,10 @@ export class FullApp {
 		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
 		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
 		if (this.pendingUi?.kind === "pick") return theme.fg("info", "● 等待选择——↑↓ 移动 · Enter 选定 · Esc 取消");
-		if (s.busy) return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
+		if (s.busy) {
+			const queued = this.queuedCount > 0 ? theme.fg("info", ` · 已排队 ${this.queuedCount} 条（回答结束后执行）`) : "";
+			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}${queued}`;
+		}
 		if (Date.now() - this.lastCtrlC < 2000) return theme.fg("warn", "再按一次 Ctrl + C 退出（Esc 返回输入）");
 		return theme.dim("正在待命");
 	}

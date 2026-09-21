@@ -700,29 +700,20 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     rows: () => process.stdout.rows ?? 24,
     doc: () => dm.frameLines(streamW()),
     submit: (text) => {
-      const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡
+      const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmd === "/help") {
         app.viewText("帮助", HELP_TEXT);
         return;
       }
-      app.setBusy(true);
-      // 命令是操作不是对话（F5 二轮⑮——❯ /xxx 气泡不再留流区）；用户消息附图片 chip 标签
-      if (!cmd.startsWith("/")) {
-        const chips = pendingImageLabels.length > 0 ? `  ${pendingImageLabels.join(" ")}` : "";
-        dm.userPrompt(text + chips);
+      // 流式中提交不落活动流区（F5 四轮用户实测：命令输出插进流式 markdown = 渲染窗口乱）——
+      // 一律排队，回答结束后依序执行（行模式 T19 队列同语义）；尾行显示「已排队 N 条」
+      if (inflight) {
+        pendingSubmits.push(text);
+        app.setQueued(pendingSubmits.length);
+        return;
       }
-      void (async () => {
-        try {
-          const r = await processReplLine(text, (s) => dm.pushLine(s));
-          if (r === "switch") action = "switch";
-          else if (r === "quit") action = "quit";
-        } finally {
-          app.setBusy(false);
-          // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
-          void refreshPanel();
-        }
-      })();
+      runSubmit(text);
     },
     requestLineMode: () => {
       tuiMode = "line";
@@ -765,6 +756,35 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
       })();
     },
   });
+  // 流式排队面（F5 四轮）：turn 进行中的提交入队，结束后依序执行——消息带气泡、命令不带，
+  // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
+  const pendingSubmits: string[] = [];
+  let inflight = false;
+  const runSubmit = (text: string): void => {
+    inflight = true;
+    const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
+    app.setBusy(true);
+    if (!cmd.startsWith("/")) {
+      const chips = pendingImageLabels.length > 0 ? `  ${pendingImageLabels.join(" ")}` : "";
+      dm.userPrompt(text + chips);
+    }
+    void (async () => {
+      try {
+        const r = await processReplLine(text, (s) => dm.pushLine(s));
+        if (r === "switch") action = "switch";
+        else if (r === "quit") action = "quit";
+      } finally {
+        inflight = false;
+        app.setBusy(false);
+        // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
+        void refreshPanel();
+        const next = pendingSubmits.shift();
+        app.setQueued(pendingSubmits.length);
+        if (next !== undefined && action === undefined) runSubmit(next);
+      }
+    })();
+  };
+
   activeApp = app; // 全屏 CommandUi 适配层激活（模块 choose/ask 经 overlay/输入行接管）
   stdoutEcho.silence(true); // readline 与 FullApp 共用 stdin——全屏期 rl 回显全吞（F5 走查实证毁屏）
   app.start();
