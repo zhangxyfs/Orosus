@@ -523,9 +523,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         out(`${label} 已挂接——将随下一条消息发送（共 ${pendingImages.length} 张）`);
         return "again";
       }
-      // 模型未配置拦截（F5 七轮用户拍板）：提问不进 harness（resolveProvider 必抛）——
-      // 带内指路 /provider（与首启引导退役配套；命令仍可用，配好即通）
-      if (needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })) {
+      // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
+      // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
+      const isCmdLine = text.trim().startsWith("/");
+      if (
+        !isCmdLine &&
+        needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })
+      ) {
         out("[提示] 还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 选模型），配好后直接提问");
         return "again";
       }
