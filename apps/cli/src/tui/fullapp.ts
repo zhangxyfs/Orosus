@@ -674,6 +674,7 @@ export class FullApp {
 
 	private submitLine(text: string): void {
 		const s = this.state;
+		s.scrollBack = 0; // 回看历史时提交 → 跳到底部（F5 五轮②：一次性置底，非粘底）
 		this.attachments = []; // 附件 chip 随提交清空（宿主侧文件列表同步清——F5 二轮⑬）
 		s.history.push(text);
 		s.historyIdx = s.history.length;

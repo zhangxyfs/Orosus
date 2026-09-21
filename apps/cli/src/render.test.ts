@@ -85,7 +85,7 @@ describe("历史回显（B9 走查补：resume 后屏幕空白——用户以为
       ev("tool/call", { name: "tool-fs__read" }),
       ev("tool/result", { output: "巨大输出不入屏" }),
     ], 80);
-    expect(lines).toEqual(["> 你好", "答", "", "  [tool] tool-fs__read"]);
+    expect(lines).toEqual(["> 你好", "答", "", "  Used Read"]); // F5 五轮①：工具行 kimi 形态（无名参 → 只剩显示名）
   });
 });
 

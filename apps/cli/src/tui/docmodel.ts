@@ -6,6 +6,7 @@
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
+import { TOOL_MERGE, toolCallLine } from "../render.ts";
 import type { StreamChunk } from "./streamview.ts";
 
 export class DocModel {
@@ -68,10 +69,25 @@ export class DocModel {
 		}
 	}
 
-	/** 工具/事件行：活动块先固化再追加（交错序正确——streamview 同语义）。 */
+		/** 工具/事件行：活动块先固化再追加（交错序正确——streamview 同语义）。
+	 *  结果哨兵行（GS 前缀，F5 五轮①）原位合并进最近一条 ● 工具行：Using→Used + 行数 chip。 */
 	write(s: string, width: number): void {
 		this.settleActive(width);
-		for (const l of s.replace(/\n$/, "").split("\n")) this.lines.push(l);
+		for (const l of s.replace(/\n$/, "").split("\n")) {
+			if (l.startsWith(TOOL_MERGE)) {
+				const chip = l.slice(TOOL_MERGE.length);
+				for (let i = this.lines.length - 1; i >= 0; i--) {
+					const prev = this.lines[i]!;
+					if (typeof prev === "string" && prev.startsWith("● Using ")) {
+						this.lines[i] = "● Used " + prev.slice(8) + " · " + chip;
+						break;
+					}
+					if (typeof prev === "string" && prev.trim() !== "") break;
+				}
+				continue;
+			}
+			this.lines.push(l);
+		}
 	}
 
 	/** turn 结束定格。 */
@@ -92,6 +108,43 @@ export class DocModel {
 		this.lines.push("");
 		for (const l of text.split("\n")) this.lines.push(`${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", l))}`);
 		this.lines.push("");
+	}
+
+	/** 历史结构化摄入（F5 五轮②③④）：用户消息走 userPrompt（暖金 + ❯）、assistant 文本走
+	 *  markdown 渲染、reasoning 进 think marker（Alt+E 可翻）、工具行合成 Used 形态——与实时流同形
+	 *  （此前 renderHistoryLines 平文本：** 原样、无思考、提问不黄）。 */
+	historyFrom(events: { type: string; [k: string]: unknown }[], width: number): void {
+		for (const e of events) {
+			if (e.type === "user/message") {
+				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
+				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
+				const imgs = parts.filter((p) => p.kind === "image").length;
+				if (text !== "" || imgs > 0) this.userPrompt(text + (imgs > 0 ? `  [图片${imgs > 1 ? `×${imgs}` : ""}]` : ""));
+			} else if (e.type === "assistant/message") {
+				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
+				const think = parts.filter((p) => p.kind === "reasoning").map((p) => p.text ?? "").join("");
+				if (think !== "") {
+					this.settleActive(width);
+					this.lines.push({ think });
+				}
+				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
+				if (text !== "") {
+					this.settleActive(width);
+					this.lines.push(...renderMarkdown(text, width));
+				}
+			} else if (e.type === "tool/call") {
+				this.settleActive(width);
+				this.lines.push(toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd()));
+			} else if (e.type === "tool/result") {
+				this.settleActive(width);
+				const n = String(e.output ?? "").split("\n").filter((l) => l.trim() !== "").length;
+				this.write(TOOL_MERGE + (e.isError === true ? "失败" : n + " 行"), width);
+			} else if (e.type === "turn/compaction") {
+				this.settleActive(width);
+				this.lines.push(`  [已压缩：前缀 ${Number(e.droppedCount ?? 0)} 条 → 摘要（/summary 查看）]`);
+			}
+		}
+		this.settleActive(width);
 	}
 
 	/** 直接推一行（宿主带内输出——命令结果/提示语的流区呈现）。 */

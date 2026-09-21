@@ -17,7 +17,7 @@ import { banner } from "./banner.ts";
 import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
-import { renderHistoryLines, historyPage, attachRender as attachRenderTo } from "./render.ts";
+import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE } from "./render.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
@@ -373,7 +373,15 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
         activity: (c) => dm.activity(c, streamW()),
         end: () => dm.end(streamW()),
       }
-    : { write: (s) => lv.write(s), activity: (c) => lv.activity(c), end: () => lv.end() };
+    : {
+        write: (s) => {
+          // 工具结果哨兵（F5 五轮①）行模式转独立缩进行（全屏 DocModel 才做原位合并）
+          lv.write(s.startsWith(TOOL_MERGE) ? `  ${theme.dim("↳ · " + s.slice(1))}
+` : s);
+        },
+        activity: (c) => lv.activity(c),
+        end: () => lv.end(),
+      };
 
 // 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
 // Ctrl+T 运行中互切（全屏 → requestLineMode 置 line；readline REPL → keypress 置 full 并提交空行触发）
@@ -822,7 +830,7 @@ if (args.print === undefined) try {
       pendingEcho = undefined;
       if (tuiMode === "full") {
         dm.pushLine(pe.notice);
-        if (pe.history) for (const l of renderHistoryLines(await h.history(), streamW())) dm.pushLine(l);
+        if (pe.history) dm.historyFrom(await h.history(), streamW()); // 结构化摄入（F5 五轮②③④）
       }
     }
     void refreshPanel(); // 面板首刷（F4）

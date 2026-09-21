@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { renderMarkdown } from "./mdpipe.ts";
@@ -47,11 +48,59 @@ export function renderChunk(c: Chunk, state: RenderState): string {
   return "";
 }
 
+// ---------- 工具行（F5 五轮①——kimi-code 形态调研落地：● Using/Used Tool (关键参数) · N 行） ----------
+// Using → 结果到达后由 DocModel 原位合并成 Used + 行数 chip（行模式转独立 ↳ 行）。
+
+/** 工具显示名：tool-fs__read → Read；无 __ 前缀整体首字母大写。 */
+export function toolDisplayName(name: string): string {
+  const tail = name.includes("__") ? name.split("__").pop()! : name;
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
+}
+
+const capArg = (s: string, max = 60): string => {
+  const t = s.replace(/\\s+/g, " ").trim();
+  return t.length <= max ? t : `${t.slice(0, max - 12)}…${t.slice(-10)}`;
+};
+
+/** 关键参数：path/file/pattern/command/query 优先；工作区内相对路径、区外全路径（用户口径）。 */
+export function toolKeyArg(args: Record<string, unknown> | undefined, cwd: string): string {
+  const raw =
+    typeof args?.path === "string" ? args.path
+    : typeof args?.file === "string" ? args.file
+    : typeof args?.pattern === "string" ? args.pattern
+    : typeof args?.command === "string" ? args.command
+    : typeof args?.query === "string" ? args.query
+    : undefined;
+  if (raw === undefined) return "";
+  if (/[\\/]/.test(raw)) {
+    const rel = relative(cwd, raw);
+    if (rel !== "" && !rel.startsWith("..") && !/^[a-zA-Z]:/.test(rel)) return capArg(rel.replace(/\\/g, "/"));
+    return capArg(raw.replace(/\\/g, "/"));
+  }
+  return capArg(raw);
+}
+
+/** tool/call 行（纯文本——着色/原位合并归消费面）。 */
+export function toolCallLine(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
+  const arg = toolKeyArg(args, cwd);
+  return `● Using ${toolDisplayName(name)}${arg === "" ? "" : ` (${arg})`}`;
+}
+
+/** 原位合并哨兵（DocModel 挂到对应 ● 行；行模式消费面转独立行）。 */
+export const TOOL_MERGE = "\x1d";
+export function toolResultChip(output: unknown, isError: unknown): string {
+  if (isError === true) return TOOL_MERGE + "失败";
+  const text = typeof output === "string" ? output : String(output ?? "");
+  let n = 0;
+  for (const l of text.split("\n")) if (l.trim().length > 0) n++;
+  return TOOL_MERGE + `${n} 行`;
+}
+
 /** 单事件 → 终端文案（完成事件面——T5 断流后 assistant/chunk 不在此列）。
  *  压缩/裁剪对用户可见（三轮 P1：此前零渲染）；四家参考均有可见提示。 */
 export function renderEvent(e: SessionEvent, state: RenderState): string {
-  if (e.type === "tool/call") return `${closeReasoning(state)}\n[tool] ${String(e.name)} ${JSON.stringify(e.args)}\n`;
-  if (e.type === "tool/result") return `[tool ${e.isError === true ? "错误" : "完成"}]\n`;
+  if (e.type === "tool/call") return `${closeReasoning(state)}\n${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd())}\n`;
+  if (e.type === "tool/result") return `${toolResultChip(e.output, e.isError)}\n`;
   if (e.type === "turn/compaction") return `\n[已压缩：前缀 ${Number(e.droppedCount ?? 0)} 条 → 摘要（/summary 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
@@ -89,7 +138,7 @@ export function renderHistoryLines(events: SessionEvent[], width: number): strin
         out.push(...md, "");
       }
     } else if (e.type === "tool/call") {
-      out.push(`  [tool] ${String(e.name)}`);
+      out.push(`  ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd()).replace("● Using ", "Used ")}`);
     } else if (e.type === "turn/compaction") {
       // 压缩点回显（M4-2.5 T4——压缩调研 §4.2：resume 后压缩点完全隐形是六家独一份的偏差）
       out.push(`  [已压缩：前缀 ${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条 → 摘要（/summary 查看）]`);

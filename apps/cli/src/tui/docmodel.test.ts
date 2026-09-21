@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DocModel } from "./docmodel.ts";
 import { stripAnsi } from "./width.ts";
+import { TOOL_MERGE } from "../render.ts";
 
 describe("DocModel 思考块与流区折行（F5 三轮）", () => {
 	it("① 收起态显示思考尾部（最新内容）——流式追加后尾行跟随", () => {
@@ -33,5 +34,34 @@ describe("DocModel 思考块与流区折行（F5 三轮）", () => {
 		const plain = lines.map(stripAnsi);
 		for (const l of plain) expect([...l].length).toBeLessThanOrEqual(62); // 每行不超宽（CJK 2 列 → 字数 ≤ 61+）
 		expect(plain.join("")).toContain("模块已激活提示文字".repeat(30).slice(-8)); // 尾部内容在档（未被截掉）
+	});
+});
+
+describe("DocModel 工具行与历史结构化（F5 五轮）", () => {
+		it("① 工具行：call 行 → result 哨兵原位合并为 Used · N 行（不新增行）", () => {
+		const dm = new DocModel();
+		dm.write("● Using Read (src/main.ts)\n", 80);
+		dm.write(TOOL_MERGE + "32 行\n", 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines).toContain("● Used Read (src/main.ts) · 32 行");
+		expect(lines.filter((l) => l.includes("Read (src/main.ts)"))).toHaveLength(1); // 原位合并——单行
+	});
+
+	it("② 历史结构化：提问暖金、md 解析（** 不残留）、思考 marker、工具 Used 形态", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: "你好" }] },
+			{ type: "assistant/message", content: [{ kind: "reasoning", text: "推理过程" }, { kind: "text", text: "**加粗回答**" }] },
+			{ type: "tool/call", name: "tool-fs__read", args: { path: process.cwd().replace(/\\/g, "/") + "/src/main.ts" } },
+			{ type: "tool/result", output: "a\nb\nc", isError: false },
+		], 80);
+		const raw = dm.frameLines(80).join("\n");
+		expect(raw).toContain("38;5;179m"); // 提问暖金
+		expect(raw).not.toContain("**"); // md 已解析
+		expect(raw).toContain("[思考]"); // 思考块在档（收起态）
+		const plain = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(plain).toContain("Used Read (src/main.ts) · 3 行");
+		dm.thinkOpen = true;
+		expect(dm.frameLines(80).map(stripAnsi).join(" ")).toContain("推理过程"); // Alt+E 可翻
 	});
 });
