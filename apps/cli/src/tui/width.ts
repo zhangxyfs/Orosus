@@ -123,8 +123,12 @@ class AnsiTracker {
 	}
 }
 
-/** 折行：按显示宽折，ANSI 状态跨行延续（pi wrapTextWithAnsi 同构精简——grapheme 贪心折）。
- *  纯 ASCII 行走下标直切快路径（spike 实测 grapheme 分段是热路径大头）。 */
+/** 词字符连跑（ASCII 词原子：URL/标识符/路径整体为一个断行单元——F5 六轮用户实测
+ *  「c|heck:boundaries」「生成物|diff」被劈半即此）。 */
+const WORD_RUN = /[A-Za-z0-9_.\/:@#$%&+=~^!?*"\-]+/y;
+
+/** 折行：按显示宽折，ANSI 状态跨行延续。断行单元 = ASCII 词连跑（原子）或单 grapheme
+ *  （CJK/宽标点/emoji）——词不劈半、CJK 逐字可断（标准中西文混排口径，F5 六轮重写）。 */
 export function wrapText(text: string, width: number): string[] {
 	const w = Math.max(1, width);
 	const out: string[] = [];
@@ -133,14 +137,15 @@ export function wrapText(text: string, width: number): string[] {
 			out.push(logical);
 			continue;
 		}
-		if (isAsciiPrintable(logical)) {
-			for (let i = 0; i < logical.length; i += w) out.push(logical.slice(i, i + w));
-			continue;
-		}
 		const tracker = new AnsiTracker();
 		let cur = "";
 		let curW = 0;
 		let i = 0;
+		const emit = (): void => {
+			out.push(cur.replace(/ +$/, "") + tracker.resetSuffix());
+			cur = tracker.prefix();
+			curW = 0;
+		};
 		while (i < logical.length) {
 			const a = extractAnsiCode(logical, i);
 			if (a) {
@@ -149,24 +154,44 @@ export function wrapText(text: string, width: number): string[] {
 				i += a.length;
 				continue;
 			}
+			// 单元：ASCII 词连跑优先，否则单 grapheme
+			WORD_RUN.lastIndex = i;
+			const wr = WORD_RUN.exec(logical);
 			let gEnd = i + 1;
-			const rest = logical.slice(i);
-			for (const { segment } of segmenter.segment(rest)) {
-				gEnd = i + segment.length;
-				break;
+			if (wr !== null && wr[0].length > 1) gEnd = i + wr[0].length;
+			else {
+				const rest = logical.slice(i);
+				for (const { segment } of segmenter.segment(rest)) {
+					gEnd = i + segment.length;
+					break;
+				}
 			}
 			const g = logical.slice(i, gEnd);
-			const gw = graphemeWidth(g);
+			const gw = visibleWidth(g);
+			if (gw > w && g.length > 1) {
+				// 单词自身超行宽（超长 URL）——退化为逐 grapheme 折，不再整词溢出
+				if (curW > 0) emit();
+				for (const { segment } of segmenter.segment(g)) {
+					const sw = visibleWidth(segment);
+					if (curW + sw > w && curW > 0) emit();
+					cur += segment;
+					curW += sw;
+				}
+				i = gEnd;
+				continue;
+			}
 			if (curW + gw > w && curW > 0) {
-				out.push(cur + tracker.resetSuffix());
-				cur = tracker.prefix();
-				curW = 0;
+				emit();
+				if (g === " ") { // 断点正好落在空格——行首吞掉
+					i = gEnd;
+					continue;
+				}
 			}
 			cur += g;
 			curW += gw;
 			i = gEnd;
 		}
-		out.push(cur);
+		if (cur !== "" || out.length === 0) out.push(cur);
 	}
 	return out.length > 0 ? out : [""];
 }

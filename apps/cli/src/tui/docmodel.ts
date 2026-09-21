@@ -21,6 +21,13 @@ export class DocModel {
 	private mdStream: StreamingMarkdown | undefined;
 	private streamWidth = -1;
 
+	/** 工具行配色（F5 六轮① 用户拍板）：● 与工具名青玉、动词与参数/行数灰。 */
+	private styleToolLine(l: string): string {
+		const m = /^(●) (Using |Used )([^ ]+)(.*)$/.exec(l);
+		if (m === null) return l;
+		return theme.fg("accent", m[1]!) + theme.dim(" " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!); // 原序：●(青玉) Using(灰) Glob(青玉) (args)(灰)
+	}
+
 	private thinkBlock(text: string, w: number): string[] {
 		const raw = wrapText(text, Math.max(8, w - 2));
 		if (!this.thinkOpen) {
@@ -147,6 +154,12 @@ export class DocModel {
 		this.settleActive(width);
 	}
 
+	/** markdown 渲染推入（F5 六轮②）：命令结果通道专用——/compact /summary 等输出含 md，
+	 *  平文本直推会字面残留 ** 与反引号（用户实测）。 */
+	pushMd(text: string, width: number): void {
+		for (const l of renderMarkdown(text, width)) this.lines.push(l);
+	}
+
 	/** 直接推一行（宿主带内输出——命令结果/提示语的流区呈现）。 */
 	pushLine(s: string): void {
 		for (const l of s.replace(/\n$/, "").split("\n")) this.lines.push(l);
@@ -158,8 +171,9 @@ export class DocModel {
 		const out: string[] = [];
 		for (const l of this.lines) {
 			if (typeof l === "string") {
-				if (visibleWidth(l) > width) out.push(...wrapText(l, width));
-				else out.push(l);
+				const shown = l.startsWith("● ") ? this.styleToolLine(l) : l; // 工具行渲染期上色（F5 六轮①——存储留纯文本供合并）
+				if (visibleWidth(shown) > width) out.push(...wrapText(shown, width));
+				else out.push(shown);
 			} else {
 				out.push(...this.thinkBlock(l.think, width));
 			}

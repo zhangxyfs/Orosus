@@ -778,7 +778,7 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
     }
     void (async () => {
       try {
-        const r = await processReplLine(text, (s) => dm.pushLine(s));
+        const r = await processReplLine(text, (s) => dm.pushMd(s, streamW())); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
         if (r === "switch") action = "switch";
         else if (r === "quit") action = "quit";
       } finally {

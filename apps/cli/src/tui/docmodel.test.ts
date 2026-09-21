@@ -47,6 +47,15 @@ describe("DocModel 工具行与历史结构化（F5 五轮）", () => {
 		expect(lines.filter((l) => l.includes("Read (src/main.ts)"))).toHaveLength(1); // 原位合并——单行
 	});
 
+	it("①b pushMd：命令结果通道走 md 管线——/compact /summary 类输出无字面 ** 与反引号（F5 六轮②）", () => {
+		const dm = new DocModel();
+		dm.pushMd("**四门全绿才准 commit**：`test`（vitest）/ `typecheck` / `check:boundaries`（依赖方向脚本）/ `docs:check`（typedoc 生成物 diff）", 60);
+		const lines = dm.frameLines(60).map(stripAnsi);
+		expect(lines.join("\n")).not.toContain("**");
+		expect(lines.join("\n")).not.toContain("`");
+		expect(lines.some((l) => l.includes("check:boundaries"))).toBe(true); // 词原子——长 token 不劈半
+	});
+
 	it("② 历史结构化：提问暖金、md 解析（** 不残留）、思考 marker、工具 Used 形态", () => {
 		const dm = new DocModel();
 		dm.historyFrom([
