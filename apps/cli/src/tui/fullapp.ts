@@ -212,6 +212,11 @@ export class FullApp {
 		return this.state;
 	}
 
+	/** 流区可用宽（左栏内容宽——doc 折行口径，F5 三轮②③：宿主按此宽喂 DocModel）。 */
+	get streamCols(): number {
+		return Math.max(8, this.io.columns() - this.sidebarW() - 2);
+	}
+
 	start(): void {
 		this.full.enter();
 		this.term.start();

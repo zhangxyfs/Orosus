@@ -5,13 +5,15 @@
 
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import * as theme from "../theme.ts";
-import { wrapText } from "./width.ts";
+import { visibleWidth, wrapText } from "./width.ts";
 import type { StreamChunk } from "./streamview.ts";
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
 	thinkOpen = false;
-	private lines: string[] = []; // 定格行（工具/事件行 + 已固化块）
+	// 定格行（工具/事件行 + 已固化块）。think 以 marker 存储——Alt+E 随时切换折叠态时
+	// frameLines 重渲染（F5 三轮①：定稿后渲染成静态行会让 Alt+E 失效）
+	private lines: (string | { think: string })[] = [];
 	private mdText = "";
 	private thinkText = "";
 	private inThink = false;
@@ -21,9 +23,9 @@ export class DocModel {
 	private thinkBlock(text: string, w: number): string[] {
 		const raw = wrapText(text, Math.max(8, w - 2));
 		if (!this.thinkOpen) {
-			// 收起 = 最多 2 视觉行 + 展开提示（原型 ThinkBlock 同形态）
+			// 收起 = 尾部 2 视觉行 + 展开提示（F5 三轮①：流式观看语义 = 永远最新内容，slice(0,2) 是最旧的）
 			const head = theme.dim("[思考] · Alt + E 展开");
-			return [head, ...raw.slice(0, 2).map((l) => theme.dim("  " + l))];
+			return [head, ...raw.slice(-2).map((l) => theme.dim("  " + l))];
 		}
 		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
 	}
@@ -40,7 +42,7 @@ export class DocModel {
 	 *  时序上思考恒先于正文（F5 二轮用户实测：原先 md 先沉底，思考被压到答案后面）。 */
 	private settleActive(width: number): void {
 		if (this.thinkText !== "") {
-			this.lines.push(...this.thinkBlock(this.thinkText, width));
+			this.lines.push({ think: this.thinkText }); // marker——折叠态由 frameLines 按当下渲染
 			this.thinkText = "";
 			this.inThink = false;
 		}
@@ -97,9 +99,18 @@ export class DocModel {
 		for (const l of s.replace(/\n$/, "").split("\n")) this.lines.push(l);
 	}
 
-	/** 当前完整行源（定格行 + 活动块渲染）。 */
+	/** 当前完整行源（定格行 + 活动块渲染）。宽度 = 流区宽（F5 三轮②③：此前按整屏宽折行，
+	 *  流区只有左栏——每行尾部被截掉 = 「好多文字没显示」；pushLine 原始行也在此统一折行）。 */
 	frameLines(width: number): string[] {
-		const out = [...this.lines];
+		const out: string[] = [];
+		for (const l of this.lines) {
+			if (typeof l === "string") {
+				if (visibleWidth(l) > width) out.push(...wrapText(l, width));
+				else out.push(l);
+			} else {
+				out.push(...this.thinkBlock(l.think, width));
+			}
+		}
 		if (this.thinkText !== "") out.push(...this.thinkBlock(this.thinkText, width));
 		if (this.mdText !== "") out.push(...this.mdRender(this.mdText, width));
 		return out;

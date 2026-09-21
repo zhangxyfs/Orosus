@@ -363,12 +363,15 @@ attachAltVPaste({
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
 // 全屏 = DocModel（FullApp 的行源）。模式切换只换 sink 指向，attachRender 订阅每会话一次不重挂。
 let dm = new DocModel();
+// 全屏流区宽 = 左栏内容宽（F5 三轮②③——此前按整屏宽折行，流区只有左栏，每行尾部被截）
+const streamW = (): number =>
+  tuiMode === "full" ? (activeApp?.streamCols ?? process.stdout.columns ?? 80) : (process.stdout.columns ?? 80);
 const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; end(): void } =>
   tuiMode === "full"
     ? {
-        write: (s) => dm.write(s, process.stdout.columns ?? 80),
-        activity: (c) => dm.activity(c, process.stdout.columns ?? 80),
-        end: () => dm.end(process.stdout.columns ?? 80),
+        write: (s) => dm.write(s, streamW()),
+        activity: (c) => dm.activity(c, streamW()),
+        end: () => dm.end(streamW()),
       }
     : { write: (s) => lv.write(s), activity: (c) => lv.activity(c), end: () => lv.end() };
 
@@ -695,7 +698,7 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
     rows: () => process.stdout.rows ?? 24,
-    doc: () => dm.frameLines(process.stdout.columns ?? 80),
+    doc: () => dm.frameLines(streamW()),
     submit: (text) => {
       const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡
@@ -799,7 +802,7 @@ if (args.print === undefined) try {
       pendingEcho = undefined;
       if (tuiMode === "full") {
         dm.pushLine(pe.notice);
-        if (pe.history) for (const l of renderHistoryLines(await h.history(), process.stdout.columns ?? 80)) dm.pushLine(l);
+        if (pe.history) for (const l of renderHistoryLines(await h.history(), streamW())) dm.pushLine(l);
       }
     }
     void refreshPanel(); // 面板首刷（F4）
