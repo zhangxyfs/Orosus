@@ -161,11 +161,12 @@ export class DocModel {
 		for (const l of s.replace(/\n$/, "").split("\n")) this.lines.push({ k: "raw", s: l });
 	}
 
-	/** 工具行配色（F5 六轮① 用户拍板）：● 与工具名青玉、动词与参数/行数灰。 */
+	/** 工具行配色（F5 六轮① 用户拍板；2026-09-22 再拍板：动词 Using/Used 白色）：
+	 *  ● 与工具名青玉、动词白、参数/行数灰。 */
 	private styleToolLine(l: string): string {
 		const m = /^(●) (Using |Used )([^ ]+)(.*)$/.exec(l);
 		if (m === null) return l;
-		return theme.fg("accent", m[1]!) + theme.dim(" " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!);
+		return theme.fg("accent", m[1]!) + theme.fg("fg", " " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!);
 	}
 
 	/** 当前完整行源（定格条目 + 活动块）——按调用方当前宽度渲染：宽度变化即回流（F5 十一轮）。 */
