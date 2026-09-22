@@ -34,16 +34,29 @@ export function renderBlock(t: Token, out: string[], depth: number, width: numbe
 			out.push("");
 			break;
 		case "list": {
+			// 悬挂缩进（mdpipe 批 T3，pi continuationPrefix 三件套）：条目内容先按 itemWidth
+			// 折行、再逐物理行贴前缀——首行贴 marker（含任务 [x]），续行贴 marker 等宽空格，
+			// 续行与首行内容列对齐；着色只上 marker，续行前缀纯空格（宽度口径干净）。
 			const l = t as Tokens.List;
+			const pad = "  ".repeat(depth);
 			l.items.forEach((item, idx) => {
 				const bullet = l.ordered ? `${(l.start || 1) + idx}. ` : "• ";
-				const pad = "  ".repeat(depth);
+				const task = item.task ? `[${item.checked ? "x" : " "}] ` : "";
+				const marker = bullet + task;
+				const firstPrefix = `${pad}${theme.fg("accent", marker)}`;
+				const continuationPrefix = `${pad}${" ".repeat(visibleWidth(marker))}`;
+				const itemWidth = Math.max(1, width - visibleWidth(pad) - visibleWidth(marker));
 				const sub: string[] = [];
-				for (const tok of item.tokens) renderBlock(tok, sub, depth + 1, width - pad.length - bullet.length);
-				const flat = sub.filter((x) => x !== "");
-				flat.forEach((x, i) => {
-					out.push(i === 0 ? `${pad}${theme.fg("accent", bullet)}${x}` : `${pad}${" ".repeat(bullet.length)}${x}`);
-				});
+				for (const tok of item.tokens) renderBlock(tok, sub, depth + 1, itemWidth);
+				let first = true;
+				for (const x of sub) {
+					if (x === "") continue;
+					for (const phys of wrapText(x, itemWidth)) {
+						out.push(first ? `${firstPrefix}${phys}` : `${continuationPrefix}${phys}`);
+						first = false;
+					}
+				}
+				if (first) out.push(firstPrefix); // 空条目防丢
 			});
 			out.push("");
 			break;
@@ -59,10 +72,14 @@ export function renderBlock(t: Token, out: string[], depth: number, width: numbe
 			break;
 		}
 		case "blockquote": {
+			// 悬挂缩进（mdpipe 批 T3）：子块按 width-2 渲染 → 逐行按 width-2 折行 → 每条物理行
+			// 贴 ▎ 前缀（先折行后贴前缀——折行知晓前缀占用，续行不丢引用符）。
 			const sub: string[] = [];
-			for (const tok of (t as Tokens.Blockquote).tokens) renderBlock(tok, sub, depth, width - 2);
+			for (const tok of (t as Tokens.Blockquote).tokens) renderBlock(tok, sub, depth, Math.max(1, width - 2));
 			for (const line of sub.filter((x) => x !== "")) {
-				out.push(theme.fg("muted", `▎ ${line}`));
+				for (const phys of wrapText(line, Math.max(1, width - 2))) {
+					out.push(theme.fg("muted", `▎ ${phys}`));
+				}
 			}
 			out.push("");
 			break;
