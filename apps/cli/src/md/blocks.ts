@@ -122,6 +122,14 @@ export function renderBlock(
 			out.push("");
 			break;
 		}
+		case "text": {
+			// 列表项的 text 块携带内嵌 inline tokens——必须走行内渲染（原 default 分支直推
+			// t.text 会把粗体/链接/公式等行内标记原样漏出；T8 矩阵交叉项「长列表项内公式」钉出）
+			const tt = t as Tokens.Text;
+			out.push(tt.tokens && tt.tokens.length > 0 ? inlineTokens(tt.tokens, ctx) : tt.text);
+			out.push("");
+			break;
+		}
 		case "space":
 			break;
 		default:

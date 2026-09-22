@@ -40,4 +40,12 @@ describe("md/ 列表与引用悬挂缩进（mdpipe 批 T3——P1-③）", () =>
 		expect(p.length).toBeGreaterThan(1);
 		for (const l of p) expect(l).toMatch(/^▎ /); // 每条物理行都有引用符（现状：续行前缀丢失）
 	});
+	it("6. 列表项内行内标记渲染（T8 矩阵钉出的漏网——text 块原样直推修复）", () => {
+		const lines = renderMarkdown("- 项 **粗体** 与 `码` 和 [链](https://e.com)", 60);
+		const joined = lines.join("\n");
+		expect(stripAnsi(joined)).toContain("粗体");
+		expect(joined).toContain("\x1b[1m"); // 粗体真实着色（原样直推则无）
+		expect(stripAnsi(joined)).toContain("码");
+		expect(stripAnsi(joined)).toContain("链 (https://e.com)");
+	});
 });
