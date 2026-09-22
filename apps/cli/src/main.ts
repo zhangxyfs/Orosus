@@ -524,22 +524,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
       if (text === "/help") { out(HELP_TEXT); return "again"; }
-      // /config（F6）：设置面板——全屏走浮层（模式持久化 + 磁盘占用视图）；行模式指路
-      if (text === "/config") {
+      // /other（F5 十六轮③：config 改名——其他详细信息；磁盘占用 + 上下文用量双子项）；行模式指路
+      if (text === "/other" || text === "/config") {
         if (activeApp !== undefined) {
-          await openConfigPanel(activeApp);
+          await openOtherPanel(activeApp);
         } else {
-          out("磁盘占用视图为全屏形态（--tui full 进入）。界面模式由启动决定：--tui 旗标或 config.toml [tui] mode");
+          out("详细信息面板为全屏形态（--tui full 进入）。磁盘占用/上下文用量在行模式可看：du ~/.orosus 与 /context");
         }
-        return "again";
-      }
-      // /paste（M4-2 T10，别名 /image；M4-2.5 T5 起真实喂图）：剪贴板图存临时文件，随下一条消息以 image part 发给模型
-      if (text === "/paste" || text === "/image") {
-        const img = await pasteImage();
-        if (img === undefined) { out(PASTE_EMPTY); return "again"; }
-        const label = attachPendingImage(img.file);
-        activeApp?.addAttachment(label); // 全屏期 chip 进输入框（F5 二轮⑬——消息组成部分的可见形态）
-        out(`${label} 已挂接——将随下一条消息发送（共 ${pendingImages.length} 张）`);
         return "again";
       }
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
@@ -683,10 +674,36 @@ const diskUsageText = (): string => {
 	return lines.join("\n");
 };
 
-/** /config 设置菜单（F5 十一轮① 用户拍板：不直开单项——磁盘视图是设置项之一，以后更多）。 */
-const openConfigPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("设置", ["磁盘占用（各目录大小与清理口径）"]);
+/** 上下文用量视图文本（F5 十六轮③：/context 并入——panelCache 同源数据）。 */
+const ctxUsageText = (): string => {
+	const cfg = configFace();
+	const p = panelCache;
+	const model = (() => {
+		const v = realReadModel(process.cwd())() ?? "";
+		if (v === "") return "（未配置）";
+		if (v.includes("/")) return v.split("/").pop()!;
+		return v;
+	})();
+	const used = p?.tokens.input ?? 0;
+	const pct = cfg.contextWindow > 0 ? Math.min(100, Math.round((used / cfg.contextWindow) * 100)) : 0;
+	return [
+		"上下文用量",
+		"",
+		`模型　　　${model}`,
+		`窗口　　　${cfg.contextWindow.toLocaleString()} tokens`,
+		`已用　　　~${used.toLocaleString()} tokens（${pct}%）`,
+		`输入累计　↑ ${(p?.tokens.input ?? 0).toLocaleString()}`,
+		`输出累计　↓ ${(p?.tokens.output ?? 0).toLocaleString()}`,
+		"",
+		"口径：已用 = 最近一次请求的输入规模（上下文体量）；累计 = 本会话末条 usage。上下文增长到阈值会自动压缩（/compact 可手动）。",
+	].join("\n");
+};
+
+/** /other 详细信息面板（F5 十六轮③：config 改名；子项 = 磁盘占用 + 上下文用量）。 */
+const openOtherPanel = async (app: FullApp): Promise<void> => {
+	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）"]);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
+	else if (picked === 1) app.viewText("上下文用量", ctxUsageText());
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
@@ -749,18 +766,16 @@ const SLASH_ITEMS: SlashItem[] = [
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：Always Ask 全确认 / Ask When Needed 危险才确认 / Never Ask 全放行。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},
 	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把早期对话折叠成摘要，释放 token 空间。压缩期间显示进度指示，完成后可用 /summary 回看过往摘要。" },
-	{ name: "/sessions", desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。别名 /resume。" },
-	{ name: "/context", desc: "上下文用量", long: "显示当前会话的 token 用量明细：输入/输出累计、上下文窗口占用比例、距自动压缩阈值的余量。" },
-	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（快捷键 Alt + V 同效）。需要当前模型具备视觉能力。" },
+	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
 	{
-		name: "/config", desc: "磁盘占用", long: "查看 ~/.orosus 各目录（缓存、会话、日志、暂存、模块）的占用大小与文件总量，附各目录清理口径。",
+		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）。",
 	},
-	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。别名 /exit、/q；空闲时双击 Ctrl + C 同效。" },
+	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
 	{ name: "/fork", desc: "分叉会话", long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
-	{ name: "/title", desc: "会话命名", long: "给当前会话起名字（/title 名字），在 /sessions 列表里按名字找会话。无参查看当前名。别名 /rename。" },
+	{ name: "/title", aliases: ["rename"], desc: "会话命名", long: "给当前会话起名字（/title 名字），在 /sessions 列表里按名字找会话。无参查看当前名。" },
 	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」（危险命令仍会确认）。等同于 /permission never。" },
 	{ name: "/usage", desc: "token 用量", long: "当前会话与历史累计的 input/output token 用量。" },
 	{ name: "/status", desc: "运行状态", long: "模型、会话 ID、模块图状态一览（文本版右侧面板）。" },
@@ -801,9 +816,20 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         app.viewText("帮助", HELP_TEXT);
         return;
       }
-      // 流式中提交不落活动流区（F5 四轮用户实测：命令输出插进流式 markdown = 渲染窗口乱）——
-      // 一律排队，回答结束后依序执行（行模式 T19 队列同语义）；尾行显示「已排队 N 条」
+      // busy 命令策略（F5 十六轮② 用户拍板）：/quit 族立即执行并打断当前输出；
+      // /new /sessions(/resume) /provider /summary 直接拒收（会话/配置操作没理由排队）；
+      // 其余命令与消息照旧排队（尾行「已排队 N 条」）
+      const cmdN = text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
       if (inflight) {
+        if (cmdN === "/quit" || cmdN === "/exit" || cmdN === "/q") {
+          void h.cancel(); // 打断当前消息输出
+          action = "quit";
+          return;
+        }
+        if (cmdN === "/new" || cmdN === "/sessions" || cmdN === "/session" || cmdN === "/resume" || cmdN === "/provider" || cmdN === "/summary") {
+          dm.pushLine(`[提示] 回答进行中——${cmdN} 不支持排队，请等本轮结束后再执行（Esc 可取消当前回答）`);
+          return;
+        }
         pendingSubmits.push(text);
         app.setQueued(pendingSubmits.length);
         return;

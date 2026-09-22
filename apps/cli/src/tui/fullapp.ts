@@ -35,6 +35,7 @@ export interface SlashItem {
 	desc: string;
 	long: string;
 	children?: string[]; // 有二级列表的命令（当前值 ✓ 标记——当前值由 io.slashCurrent 提供）
+	aliases?: string[]; // 别名（F5 十六轮①：过滤/展示用——路由层早已直达，菜单按别名可筛出真实命令）
 	childMeta?: Record<string, { label: string; desc: string; long: string }>; // 二级项元数据（F5 十轮⑤：档名/短解/详释）
 }
 
@@ -733,7 +734,8 @@ export class FullApp {
 
 	private filteredCommands(): SlashItem[] {
 		const q = normCmd(this.state.input).slice(1).split(" ")[0]!;
-		return this.io.slashCommands().filter((c) => c.name.startsWith("/" + q));
+		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
+		return this.io.slashCommands().filter((c) => c.name.startsWith("/" + q) || (c.aliases ?? []).some((a) => a.startsWith(q)));
 	}
 
 	// ---------- 布局与渲染 ----------
@@ -1073,7 +1075,7 @@ export class FullApp {
 				real.length === 0
 					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有以该前缀开头的命令。继续输入或删除字符修改前缀，Esc 关闭菜单。" }]
 					: real.map((c) => ({
-							text: `${c.name} ${theme.dim(c.desc)}`,
+							text: `${c.name}${c.aliases === undefined ? "" : theme.fg("muted", `（${c.aliases.join(", ")}）`)} ${theme.dim(c.desc)}`,
 							mark: " ",
 							long: c.long,
 						}));
