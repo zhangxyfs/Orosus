@@ -87,7 +87,11 @@ export function renderBlock(t: Token, out: string[], depth: number, width: numbe
 /** 一次性渲染（回显面）：token 流 → 折行后的物理行数组。opts.transient 供流式尾段
  *  跳高亮（公开签名 renderMarkdown 不透出，仅 streaming 内部使用）。 */
 export function renderLines(src: string, width: number, opts?: RenderOpts): string[] {
-	const tokens = lex(src);
+	return renderTokens(lex(src), width, opts);
+}
+
+/** 对既有 token 数组渲染（流式尾段用——token 边界定稿与半截围栏修剪后直接渲，免二次 lex）。 */
+export function renderTokens(tokens: Token[], width: number, opts?: RenderOpts): string[] {
 	const logical: string[] = [];
 	for (const t of tokens) renderBlock(t, logical, 0, width, opts);
 	const out: string[] = [];
