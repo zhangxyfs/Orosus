@@ -43,7 +43,6 @@ export interface FullAppIO {
 	rows(): number;
 	doc(): string[];
 	submit(text: string): void;
-	requestLineMode(): void;
 	requestExit(): void;
 	requestCancel(): void; // Esc 忙碌时取消当前 turn（h.cancel）
 	panelData(): PanelData;
@@ -71,6 +70,7 @@ interface AppState {
 	scrollBack: number;
 	busy: boolean;
 	spinIdx: number;
+	sidebarVisible: boolean; // 右侧面板栏开关（Ctrl+T——用户拍板）
 	overlayOpen: boolean;
 	overlaySel: number;
 	overlayCmd: string; // "" = 一级
@@ -208,6 +208,7 @@ export class FullApp {
 			scrollBack: 0,
 			busy: false,
 			spinIdx: 0,
+			sidebarVisible: true,
 			overlayOpen: false,
 			overlaySel: 0,
 			overlayCmd: "",
@@ -432,6 +433,12 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
+		if (key === "ctrl+t") {
+			s.sidebarVisible = !s.sidebarVisible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
+			if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
+			this.scheduler.requestImmediateRender();
+			return;
+		}
 		if (key === "alt+e") {
 			this.io.toggleThink();
 			this.scheduler.requestImmediateRender();
@@ -531,7 +538,7 @@ export class FullApp {
 		}
 
 		if (key === "tab") {
-			s.focusIdx = ((s.focusIdx + 1) % 3) as FocusIdx;
+			if (s.sidebarVisible) s.focusIdx = ((s.focusIdx + 1) % 3) as FocusIdx; // 面板隐藏时焦点恒输入区
 		} else if (key === "shift+tab") {
 			this.io.submit(this.io.panelData().permissionNext());
 			return;
@@ -757,9 +764,11 @@ export class FullApp {
 		const rows: string[] = [top, pane("")];
 		for (const l of content) rows.push(pane(l));
 		const footRows = footer ?? [];
-		while (rows.length < h - 2 - footRows.length - hints.length) rows.push(pane(""));
+		// 提示行超内宽折行不截字（F5 十一轮②：窄侧栏下「Enter 挂载/卸载」曾截成「挂载/卸」）
+		const hintLines = hints.flatMap((hl) => wrapText(theme.dim(" " + hl), inner));
+		while (rows.length < h - 2 - footRows.length - hintLines.length) rows.push(pane(""));
 		for (const l of footRows) rows.push(pane(l));
-		for (const hl of hints) rows.push(pane(theme.dim(" " + hl)));
+		for (const hl of hintLines) rows.push(pane(hl));
 		rows.push(theme.fg(bc, "╰" + "─".repeat(inner) + "╯"));
 		return rows.slice(0, h);
 	}
@@ -873,7 +882,7 @@ export class FullApp {
 		const cols = this.io.columns();
 		const rows = this.io.rows();
 		const s = this.state;
-		const sidebarW = this.sidebarW();
+		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0; // 隐藏 = 左栏占满（无分隔线/无面板）
 		const leftW = cols - sidebarW - 2;
 
 		const innerW = Math.max(8, leftW - 4);
@@ -884,10 +893,11 @@ export class FullApp {
 		const inputH = showRows + 3 + chipRows;
 		const streamH = rows - inputH;
 
+		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
 		const statusH = Math.max(8, Math.floor(rows * 0.55));
 		const taskH = rows - statusH;
-		const status = this.statusRows(sidebarW, statusH);
-		const tasks = this.taskRows(sidebarW, taskH);
+		const status = s.sidebarVisible ? this.statusRows(sidebarW, statusH) : [];
+		const tasks = s.sidebarVisible ? this.taskRows(sidebarW, taskH) : [];
 
 		const doc = [...this.io.doc(), this.tailLine()];
 		const maxScroll = Math.max(0, doc.length - streamH);
@@ -945,10 +955,12 @@ export class FullApp {
 		);
 		screen[divRow + 2 + chipRows + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
 
-		for (let r = 0; r < rows; r++) {
-			const sep = theme.fg("border", "│");
-			const right = r < statusH ? (status[r] ?? "") : (tasks[r - statusH] ?? "");
-			screen[r] = (screen[r] ?? "") + sep + right;
+		if (s.sidebarVisible) {
+			for (let r = 0; r < rows; r++) {
+				const sep = theme.fg("border", "│");
+				const right = r < statusH ? (status[r] ?? "") : (tasks[r - statusH] ?? "");
+				screen[r] = (screen[r] ?? "") + sep + right;
+			}
 		}
 
 		let overlay: OverlayFrame | undefined;

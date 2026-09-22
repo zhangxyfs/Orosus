@@ -32,7 +32,6 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 		rows: () => rows,
 		doc: () => docLines,
 		submit: (t) => submitted.push(t),
-		requestLineMode: () => actions.push("line"),
 		requestExit: () => actions.push("exit"),
 		requestCancel: () => actions.push("cancel"),
 		panelData: () => ({
@@ -127,7 +126,8 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		await flush();
 		input.emit("data", "\x14");
 		await flush();
-		expect(actions).toEqual([]); // Ctrl+T 互切下线（用户拍板）——按键无动作
+		expect(app.stateRef.sidebarVisible).toBe(false); // Ctrl+T = 侧栏开关（互切下线）
+		expect(actions).toEqual([]); // 互切下线（用户拍板）——按键无动作
 		input.emit("data", "\x03"); // 首按：只给提示不退出
 		await flush();
 		expect(actions).toEqual([]);

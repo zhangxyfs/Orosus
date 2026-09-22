@@ -660,9 +660,10 @@ const diskUsageText = (): string => {
 	return lines.join("\n");
 };
 
-/** /config 设置面板（F6；模式切换已下线——用户拍板：启动时由 --tui/[tui] mode 选定，运行期不切）。 */
+/** /config 设置菜单（F5 十一轮① 用户拍板：不直开单项——磁盘视图是设置项之一，以后更多）。 */
 const openConfigPanel = async (app: FullApp): Promise<void> => {
-	app.viewText("磁盘占用", diskUsageText());
+	const picked = await app.pickOverlay("设置", ["磁盘占用（各目录大小与清理口径）"]);
+	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
@@ -757,8 +758,8 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	"",
 ];
 
-const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
-  let action: "switch" | "line" | "quit" | undefined;
+const runFullScreen = async (): Promise<"switch" | "quit"> => {
+  let action: "switch" | "quit" | undefined;
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
     rows: () => process.stdout.rows ?? 24,
@@ -778,10 +779,6 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
         return;
       }
       runSubmit(text);
-    },
-    requestLineMode: () => {
-      tuiMode = "line";
-      action = "line";
     },
     requestExit: () => {
       action = "quit";
@@ -858,14 +855,6 @@ const runFullScreen = async (): Promise<"switch" | "line" | "quit"> => {
   activeApp = undefined;
   app.stop();
   stdoutEcho.silence(false);
-  if (action === "line") {
-    // Term.stop() 退出时 pause 了 stdin（防缓冲输入被壳层误读——那是为进程退出设计的）；
-    // 回滚动流模式必须恢复流动，否则事件循环排空、nextLine() 悬挂、进程以 unsettled TLA 退出（F5 实证）
-    process.stdin.resume();
-    const w = rl as unknown as { line: string; cursor: number };
-    w.line = "";
-    w.cursor = 0;
-  }
   return action;
 };
 
@@ -895,10 +884,9 @@ if (args.print === undefined) try {
       if (tuiMode === "full") {
         const action = await runFullScreen();
         if (action === "quit") break sessionLoop;
-        // switch（/new /resume /sessions 切换）必须回外层循环顶：dm 重建、横幅、attachRender(新 h)、
-        // pendingEcho 消费全在那（F5 二轮⑯——原内层 continue 跳过全部，历史回显永不落屏）
-        if (action === "switch") continue sessionLoop;
-        continue; // action=line → tuiMode 已被 requestLineMode 改写，落 readline REPL
+        // switch（/new /resume /sessions 切换）回外层循环顶：dm 重建、横幅、attachRender(新 h)、
+        // pendingEcho 消费全在那；退出全屏只剩 quit 一途（Ctrl+T 已改管侧栏开关——用户拍板）
+        continue sessionLoop;
       }
       process.stdout.write("> ");
       const line = await nextLine(); // EOF（管道耗尽 / Ctrl-D）→ null → 退出
