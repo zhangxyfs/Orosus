@@ -710,7 +710,14 @@ const refreshPanel = async (): Promise<void> => {
 		| undefined;
 	const next = PERM_CYCLE[(PERM_CYCLE.indexOf(permission) + 1 + PERM_CYCLE.length) % PERM_CYCLE.length]!;
 	panelCache = {
-		model: (() => { const v = realReadModel(process.cwd())() ?? "（未配置——/provider 配置）"; return v.includes("/") ? v.split("/").pop()! : v; })(), // 只显示模型名（F5 十轮①——slot/model 取尾段，裸槽名原样）
+		model: (() => {
+			// F5 十三轮② 用户实测：裸 provider 值不能直接当模型名显示——解析槽的 defaultModel
+			const v = realReadModel(process.cwd())() ?? "";
+			if (v === "") return "（未配置——/provider 配置）";
+			if (v.includes("/")) return v.split("/").pop()!;
+			const slot = h.graph().services.provider(v) as { defaultModel?: string } | undefined;
+			return slot?.defaultModel ?? v;
+		})(),
 		session: h.sessionId,
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),

@@ -840,7 +840,7 @@ export class FullApp {
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["Shift + ←→ 翻页", "Shift + ↑↓ 翻页 · Enter 挂载/卸载"], [this.sep(inner)]);
+			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["Shift + ←→ 翻页", "Shift + ↑↓ 翻页 · Enter 挂/卸载"], [this.sep(inner)]);
 		}
 		const content: string[] = [
 			` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
