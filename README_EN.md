@@ -15,8 +15,8 @@
 
 <p align="center">
   <b>Orosus</b> is a modular AI coding-assistant CLI — written in TypeScript, running directly on Node 22+<br>
-  (no build step required). A core kernel + a zero-dependency contracts package + a pluggable module<br>
-  ecosystem: everything is a module, and built-in modules go through the same registration pipeline as external ones.
+  (no build step required). It consists of a core kernel, a zero-dependency contracts package,<br>
+  and a set of pluggable modules; built-in modules go through the same registration pipeline as external ones.
 </p>
 
 ---
