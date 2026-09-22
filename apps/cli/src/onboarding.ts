@@ -23,7 +23,8 @@ export function readConfigModel(userFile: string, projectFile: string): string |
   const read = (f: string): unknown => {
     if (!existsSync(f)) return undefined;
     try {
-      return (parse(readFileSync(f, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>)["model"];
+      const doc = parse(readFileSync(f, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+      return (doc["provider"] ?? doc["model"]) as string | undefined; // F5 十轮：键名 provider（model 旧名兼容读）
     } catch {
       return undefined;
     }

@@ -176,10 +176,10 @@ describe("/provider 多级菜单（D37）", () => {
     const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat" /* T4：目录兜底挑默认模型 */] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY", defaultModel: "deepseek-chat" } });
-    expect(deps.state.setModels).toEqual(["deepseek/deepseek-chat"]); // F5 九轮④：全名形态（裸槽名看不出用的哪个模型）
+    expect(deps.state.setModels).toEqual(["deepseek"]); // F5 十轮：provider = 裸槽名（模型落条目 defaultModel）
     expect(deps.state.secrets).toHaveLength(0); // 零输入：没写 secrets
     expect(out).toContain("success");
-    expect(out).toContain('model = "deepseek/deepseek-chat"');
+    expect(out).toContain('provider = "deepseek"');
   });
 
   it("目录厂商清单按字母序（同前缀供应商相邻——2026-09-18 用户要求：zai/zhipuai/zhipuai-coding-plan 挨着）", async () => {
@@ -263,7 +263,7 @@ describe("/provider 多级菜单（D37）", () => {
     const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-reasoner"] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-reasoner" } }); // 用户所选，非目录 models[0]
-    expect(deps.state.setModels).toEqual(["deepseek/deepseek-reasoner"]); // F5 九轮④：全名形态
+    expect(deps.state.setModels).toEqual(["deepseek"]); // F5 十轮：provider = 裸槽名
     expect(out).toContain("deepseek-reasoner");
   });
 
@@ -275,7 +275,7 @@ describe("/provider 多级菜单（D37）", () => {
     const ui = fakeUi({ choose: ["[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）", "deepseek-chat"] });
     const out = await runProviderMenu(ui, deps);
     expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-chat" } }); // 目录兜底
-    expect(deps.state.setModels).toEqual(["deepseek/deepseek-chat"]); // F5 九轮④：全名形态
+    expect(deps.state.setModels).toEqual(["deepseek"]); // F5 十轮：provider = 裸槽名
     expect(out).toContain("deepseek-chat"); // 兜底菜单的选中值出现在回显
   });
 

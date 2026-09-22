@@ -35,6 +35,7 @@ export interface SlashItem {
 	desc: string;
 	long: string;
 	children?: string[]; // 有二级列表的命令（当前值 ✓ 标记——当前值由 io.slashCurrent 提供）
+	childMeta?: Record<string, { label: string; desc: string; long: string }>; // 二级项元数据（F5 十轮⑤：档名/短解/详释）
 }
 
 export interface FullAppIO {
@@ -80,20 +81,25 @@ const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
 const TASK_TICK: Record<string, string> = { done: theme.fg("accent", "✓"), active: theme.fg("warn", "◐"), pending: theme.fg("muted", "○") };
-/** 运行时间格式化（F5 二轮④）：<1 分「刚刚」；<1 时「N 分」；<1 天「N 时 N 分」；否则「N 天 N 时」。 */
+/** 运行时间格式化（F5 十轮② 用户拍板：精确到秒，随 1s 心跳实时跳）：
+ *  <60s「N 秒」；<1 时「M 分 SS 秒」；<1 天「H 时 MM 分 SS 秒」；否则「D 天 H 时」。 */
 export function elapsedText(startedAt: string | undefined, now: number = Date.now()): string {
 	if (startedAt === undefined) return "—";
 	const ms = Math.max(0, now - Date.parse(startedAt));
 	if (Number.isNaN(ms)) return "—";
-	const min = Math.floor(ms / 60000);
-	if (min < 1) return "刚刚";
-	if (min < 60) return `${min} 分`;
-	const hr = Math.floor(min / 60);
-	if (hr < 24) return `${hr} 时 ${min % 60} 分`;
-	return `${Math.floor(hr / 24)} 天 ${hr % 24} 时`;
+	const total = Math.floor(ms / 1000);
+	const p2 = (n: number): string => String(n).padStart(2, "0");
+	const sec = total % 60;
+	const min = Math.floor(total / 60) % 60;
+	const hr = Math.floor(total / 3600) % 24;
+	const day = Math.floor(total / 86400);
+	if (total < 60) return `${total} 秒`;
+	if (total < 3600) return `${Math.floor(total / 60)} 分 ${p2(sec)} 秒`;
+	if (total < 86400) return `${hr} 时 ${p2(min)} 分 ${p2(sec)} 秒`;
+	return `${day} 天 ${hr} 时`;
 }
 
-const PERM_LABEL: Record<string, string> = { "ask-always": "总是询问", "ask-risky": "危险时询问", never: "从不询问" };
+const PERM_LABEL: Record<string, string> = { "ask-always": "Ask Always", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
 
@@ -1033,12 +1039,16 @@ export class FullApp {
 		olines.push(boxRow(""));
 		let items: { text: string; mark: string; long: string }[];
 		if (level2) {
+			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);
 			const current = this.io.slashCurrent(s.overlayCmd);
-			items = (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? []).map((c) => ({
-				text: c,
-				mark: c === current ? theme.fg("accent", "✓") : " ",
-				long: `${s.overlayCmd} 二级项：${c}——回车选定。`,
-			}));
+			items = (cmdDef?.children ?? []).map((c) => {
+				const meta = cmdDef?.childMeta?.[c]; // F5 十轮⑤：档名 + 短解（详释区用 long）
+				return {
+					text: meta === undefined ? c : `${theme.fg("fg", meta.label)} ${theme.dim(`——${meta.desc}`)} ${theme.dim(`(${c})`)}`,
+					mark: c === current ? theme.fg("accent", "✓") : " ",
+					long: meta?.long ?? `${s.overlayCmd} 二级项：${c}——回车选定。`,
+				};
+			});
 		} else {
 			const real = this.filteredCommands();
 			items =

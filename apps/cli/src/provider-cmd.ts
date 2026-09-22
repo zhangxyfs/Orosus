@@ -127,7 +127,7 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     pc["providers"] = providers;
     config["provider-custom"] = pc;
     if (modelFlag !== undefined) {
-      config["model"] = `${id}/${modelFlag}`;
+      config["provider"] = `${id}/${modelFlag}`; // F5 十轮：键名 provider（读侧 model 旧名兼容）
       // 目录窗口链（M3 补强 T7）：models.dev 的 limit.context 写入核心顶层 contextWindow——
       // 目录数据当不受信输入（五轮定案）：整数且 ≥1024 才写，否则跳过 + 提示
       const limit = entry.models?.[modelFlag]?.limit?.context;

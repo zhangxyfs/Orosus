@@ -31,7 +31,9 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
     },
     setModel: async (providerName) => {
       const doc = readDoc();
-      doc["model"] = providerName;
+      // F5 十轮用户拍板：键名 provider（旧 model 键清除防陈旧双写）
+      doc["provider"] = providerName;
+      delete doc["model"];
       saveDoc(doc);
     },
     setContextWindow: async (n) => {

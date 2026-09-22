@@ -380,11 +380,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const persist = await commandUi.confirm("写入 config 永久生效？（否则仅本会话）");
       if (persist) {
         const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
-        const after = /^model\s*=.*$/m.test(before)
-          ? before.replace(/^model\s*=.*$/m, `model = "${next}"`)
-          : `${before}${before.endsWith("\n") || before === "" ? "" : "\n"}model = "${next}"\n`;
+        // F5 十轮：行级写 provider 键（/model 选的是具体模型——值保留 slot/model 全形）；旧 model 行清除防双键漂移
+        let after = /^model\s*=.*$/m.test(before)
+          ? before.replace(/^model\s*=.*$/m, `provider = "${next}"`)
+          : `${before}${before.endsWith("\n") || before === "" ? "" : "\n"}provider = "${next}"\n`;
+        after = after.replace(/^model\s*=.*\n?/m, (m0) => (m0.includes("provider") ? m0 : ""));
         writeFileSync(userConfigFile, after, "utf8");
-        return `model 已切换并写入 config：${next}（下次启动生效；project 层若有 model 键则以其为准）`;
+        return `model 已切换并写入 config（provider 键）：${next}（下次启动生效）`;
       }
       return `model 已切换（本会话）：${next}`;
     }],
@@ -406,7 +408,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const failed = audit.filter((a) => a.state === "failed").length;
       const discovered = audit.filter((a) => a.state === "discovered").length;
       // model 未配置时显示「（未配置）」而非字面量 undefined（M2 补账：走查发现）
-      const modelNow = modelOverride ?? (typeof config.core.model === "string" && config.core.model !== "" ? config.core.model : "（未配置）");
+      const modelNow = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : "（未配置）");
       return `model: ${modelNow}${modelOverride !== undefined ? "（运行期覆盖）" : ""}
 session: ${store.sessionId}
 模块图: active ${active} / failed ${failed} / discovered ${discovered}`;
@@ -428,7 +430,7 @@ session: ${store.sessionId}
     ["/context", async () => {
       // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出），
       // 进程内还没有模型往返（新会话/resume 后）时回退 store 末条 usage——否则 resume 会话恒显 ~0（2026-09-20 用户实测）
-      const modelNow = modelOverride ?? (typeof config.core.model === "string" ? config.core.model : "（未配置）");
+      const modelNow = modelOverride ?? (typeof cfgModelValue() === "string" ? (cfgModelValue() as string) : "（未配置）");
       const used = usageAnchor?.totalTokens ?? lastUsageTotal(await store.all()) ?? 0;
       const pct = contextWindow !== undefined ? Math.round((used / contextWindow) * 100) : undefined;
       return `模型: ${modelNow}\n窗口: ${contextWindow !== undefined ? `${contextWindow} tokens` : "未知（/provider import --model 可写入）"}\n已用: ~${used} tokens${pct !== undefined ? `（${pct}%）` : ""}`;
@@ -442,8 +444,10 @@ session: ${store.sessionId}
     }],
   ]);
 
+  // F5 十轮：核心顶层键名 provider（旧 model 键兼容读——分层合并两键都在时 provider 胜）
+  const cfgModelValue = (): unknown => config.core.provider ?? config.core.model;
   const resolveProvider = (): { stream: StreamFn; model: string } => {
-    const modelValue = modelOverride ?? (config.core.model as unknown);
+    const modelValue = modelOverride ?? cfgModelValue();
     if (typeof modelValue !== "string" || modelValue === "") {
       throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
     }

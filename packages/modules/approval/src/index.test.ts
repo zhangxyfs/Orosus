@@ -205,7 +205,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     const h = fakeCtx({ config: { configFile: join(base, "config.toml") } });
     await def.activate(h.ctx);
     const handler = h.commands.get("approval__permission")!;
-    const answers = ["始终询问（ask-always）"]; // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
+    const answers = ["Ask Always——每次工具调用都确认（ask-always）"]; // F5 十轮⑤：英文档名 + 短解
     const ui: CommandUi = {
       ask: async () => { throw new Error("不应 ask"); },
       askSecret: async () => { throw new Error("不应 askSecret"); },
@@ -247,11 +247,11 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
   it("① /permission 无参 → 直接三档菜单（无顶级菜单、无规则清单项）", async () => {
     const h = fakeCtx({ config: { configFile: join(base, "c1.toml"), projectConfigFile: join(base, "no-proj.toml") } });
     await def.activate(h.ctx);
-    const { u, asked } = mkUi(["始终询问（ask-always）"]);
+    const { u, asked } = mkUi(["Ask Always——每次工具调用都确认（ask-always）"]); // F5 十轮⑤
     const out = await h.commands.get("approval__permission")!("", u);
     expect(asked).toHaveLength(1); // 一级直达——不再「切换权限模式」二级跳
     expect(asked[0]).toContain("当前权限模式：ask-risky");
-    expect(asked[0]).toContain("从不询问");
+    expect(asked[0]).toContain("Never Ask"); // F5 十轮⑤：英文档名
     expect(asked[0]).not.toContain("查看规则清单");
     expect(out).toContain("ask-always");
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);

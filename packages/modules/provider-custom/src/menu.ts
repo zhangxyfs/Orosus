@@ -107,10 +107,8 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     const name = sel.split("\n")[0]!;
     const act = await ui.choose(`${name}`, ["设为当前默认", "更新密钥", "移除", "返回"]);
     if (act === "设为当前默认") {
-      const dm = current[name]?.defaultModel; // 全名形态（F5 九轮④）——无 defaultModel 退裸名（依赖槽内默认）
-      const full = dm !== undefined ? `${name}/${dm}` : name;
-      await deps.setModel(full);
-      return `已设为当前默认（model = "${full}"），下个 turn 生效`;
+      await deps.setModel(name); // 裸槽名（F5 十轮）
+      return `已设为当前默认（provider = "${name}"），下个 turn 生效`;
     }
     if (act === "移除") {
       const next = { ...current };
@@ -240,10 +238,9 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const next = { ...current, [entryId]: { type: wire.wire, baseUrl, ...(apiKeyRef !== undefined ? { apiKey: apiKeyRef } : {}), ...(defaultModel !== undefined ? { defaultModel } : {}) } };
   await deps.saveProviders(next);
   if (defaultModel !== undefined) {
-    // 全名形态（F5 九轮用户拍板）：model = "<slot>/<model>"——裸槽名让用户在 config 里看不到用的哪个模型
-    await deps.setModel(`${entryId}/${defaultModel}`);
+    await deps.setModel(entryId); // 裸槽名（F5 十轮用户拍板：provider = "<槽>"——模型落在条目 defaultModel）
   }
-  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（model = "${entryId}/${defaultModel}"）` : ""].filter(Boolean).join("\n");
+  const shown = [`  平台：${displayName(entryId, entry)}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}）`, `  端点：${baseUrl}`, `  密钥：${apiKeyRef ?? "（未设置——本地/内网端点可留空）"}`, defaultModel !== undefined ? `  默认模型：${defaultModel}（provider = "${entryId}"，模型经条目 defaultModel 生效）` : ""].filter(Boolean).join("\n");
   const banner = v.kind === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
   return `${banner}
 ${shown}${ctxNote}${modelNote}

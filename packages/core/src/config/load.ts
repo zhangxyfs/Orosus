@@ -31,8 +31,13 @@ function defaults(): Doc {
 }
 
 function merge(base: Doc, over: Doc): Doc {
+  const core = { ...base.core, ...over.core };
+  // 模型键分层归一（F5 十轮）：上层出现 provider/model 任一键即删除下层另一键——
+  // 防用户层 provider 与 CLI 层 model 双键并存时「provider ?? model」永取用户层（--model 失效）
+  if ("provider" in over.core) delete core.model;
+  else if ("model" in over.core) delete core.provider;
   return {
-    core: { ...base.core, ...over.core },
+    core,
     sections: Object.fromEntries(
       [...new Set([...Object.keys(base.sections), ...Object.keys(over.sections)])].map((k) => [
         k,

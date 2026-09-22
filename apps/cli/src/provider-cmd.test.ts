@@ -86,7 +86,7 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     const io = makeIo({}, false, "c1");
     expect(await runProviderSubcommand(["provider", "import", "win-vendor", "--model", "m-big"], io)).toBe(0);
     const toml = readFileSync(io.configPath, "utf8");
-    expect(toml).toContain('model = "win-vendor/m-big"');
+    expect(toml).toContain('provider = "win-vendor/m-big"'); // F5 十轮：键名 provider
     expect(toml).toContain("contextWindow = 131072");
     expect(io.lines.some((l) => l.includes("contextWindow = 131072"))).toBe(true);
     const io2 = makeIo({}, false, "c2");

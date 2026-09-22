@@ -632,6 +632,12 @@ const configFace = (): { contextWindow: number; approvalMode: string } => {
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
+/** 权限三档元数据（F5 十轮⑤ 用户拍板：英文档名 + 短解释 + 详细解释——菜单/芯片同源）。 */
+const PERM_META: Record<string, { label: string; desc: string; long: string }> = {
+	"ask-always": { label: "Ask Always", desc: "每次工具调用都确认", long: "最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。" },
+	"ask-risky": { label: "Ask When Needed", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
+	never: { label: "Never Ask", desc: "全部自动放行", long: "全自动档：所有工具调用直接放行，只有极危险命令（如删除系统文件）仍会确认。完全信任当前会话、追求连续执行时用。" },
+};
 let panelCache: PanelData | undefined;
 
 /** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
@@ -645,7 +651,7 @@ const refreshPanel = async (): Promise<void> => {
 		| undefined;
 	const next = PERM_CYCLE[(PERM_CYCLE.indexOf(permission) + 1 + PERM_CYCLE.length) % PERM_CYCLE.length]!;
 	panelCache = {
-		model: realReadModel(process.cwd())() ?? "（未配置——/provider 向导）",
+		model: (() => { const v = realReadModel(process.cwd())() ?? "（未配置——/provider 配置）"; return v.includes("/") ? v.split("/").pop()! : v; })(), // 只显示模型名（F5 十轮①——slot/model 取尾段，裸槽名原样）
 		session: h.sessionId,
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),
@@ -675,7 +681,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
-		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略：ask-always 逐条确认、ask-risky 危险操作确认、never 全部自动放行。切换立即生效并写入配置。", children: [...PERM_CYCLE],
+		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：Ask Always 全确认 / Ask When Needed 危险才确认 / Never Ask 全放行。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},
 	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把早期对话折叠成摘要，释放 token 空间。压缩期间显示进度指示，完成后可用 /summary 回看过往摘要。" },
 	{ name: "/sessions", desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换。/fork 可从当前会话分叉副本。" },
