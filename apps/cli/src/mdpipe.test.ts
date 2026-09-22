@@ -68,12 +68,13 @@ describe("markdown 新管线（TUI 批阶段三 F1——九条挂账缺陷验收
 		const codeLine = lines.find((l) => stripAnsi(l).includes("echo hi"))!;
 		expect(stripAnsi(codeLine).indexOf("echo hi")).toBeGreaterThan(2);
 	});
-	it("⑨ 超宽表格降级 key-value（决策③ 逃生门）", () => {
+	it("⑨ 超宽表格：长单元格网格内折行不降级（mdpipe 批 T4 改写——pi 等比列宽替换 cap 24 降级；本批唯一既有测试改写，特此登记）", () => {
 		const wide = "很长".repeat(30);
 		const lines = renderMarkdown(`| 名称 | 说明 |\n|---|---|\n| 甲 | ${wide} |`, 60);
 		const p = plain(lines);
-		expect(p).toContain("· 名称: 甲");
-		expect(p).not.toContain("│"); // 不再是网格
+		expect(p).toContain("│"); // 网格形态保持
+		expect(p).toContain("┌");
+		expect(p).toContain("甲");
 	});
 	it("⑩ 流式冻结：已闭合段只解析一次，尾部逐帧重渲", () => {
 		const sm = createStreamingMarkdown(60);
