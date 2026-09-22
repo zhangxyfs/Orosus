@@ -192,6 +192,23 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 	});
 });
 
+
+describe("侧栏开关持久化接缝（F5 十二轮②）", () => {
+	it("sidebarInit false → 初始隐藏；切换回调上抛新态", async () => {
+		const r = rig();
+		const changes: boolean[] = [];
+		const r2 = { io: { ...r.io, sidebarInit: () => false, onSidebarChange: (v: boolean) => changes.push(v) } };
+		const app2 = new FullApp(r2.io, { input: r.input, output: r.output });
+		expect(app2.stateRef.sidebarVisible).toBe(false);
+		app2.start();
+		await flush();
+		r.input.emit("data", "\x14");
+		await flush();
+		expect(changes).toEqual([true]); // 隐藏→显示，回调上抛新态
+		app2.stop();
+	});
+});
+
 describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列、列表内 includes 筛）", () => {
 	const rig20 = (): { app: FullApp; input: FakeInput } => {
 		const r = rig();

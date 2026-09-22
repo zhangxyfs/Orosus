@@ -52,6 +52,10 @@ export interface FullAppIO {
 	toggleThink(): void;
 	/** Alt + V 粘贴剪贴板图片（F5 二轮⑬——宿主侧 pasteImage 完成后经 addAttachment 回挂 chip）。 */
 	requestPasteImage?(): void;
+	/** 侧栏初始可见性（F5 十二轮②：[tui] sidebar 持久化读数；缺省可见）。 */
+	sidebarInit?(): boolean;
+	/** 侧栏开关变更（F5 十二轮②：宿主持久化 [tui] sidebar）。 */
+	onSidebarChange?(visible: boolean): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -208,7 +212,7 @@ export class FullApp {
 			scrollBack: 0,
 			busy: false,
 			spinIdx: 0,
-			sidebarVisible: true,
+			sidebarVisible: io.sidebarInit?.() ?? true,
 			overlayOpen: false,
 			overlaySel: 0,
 			overlayCmd: "",
@@ -222,7 +226,10 @@ export class FullApp {
 
 	/** 流区可用宽（左栏内容宽——doc 折行口径，F5 三轮②③：宿主按此宽喂 DocModel）。 */
 	get streamCols(): number {
-		return Math.max(8, this.io.columns() - this.sidebarW() - 2);
+		// 侧栏隐藏 = 左栏占满（与 renderFrame 同口径——F5 十二轮①：此前不看可见性，
+		// 隐藏后 dm 仍按窄宽渲染 = 「回流没修好」的真根因）
+		const sidebarW = this.state.sidebarVisible ? this.sidebarW() : 0;
+		return Math.max(8, this.io.columns() - sidebarW - 2);
 	}
 
 	/** 忙碌探针（F5 四轮：宿主排队判定用）。 */
@@ -436,6 +443,7 @@ export class FullApp {
 		if (key === "ctrl+t") {
 			s.sidebarVisible = !s.sidebarVisible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
 			if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
+			this.io.onSidebarChange?.(s.sidebarVisible); // 持久化（F5 十二轮②）
 			this.scheduler.requestImmediateRender();
 			return;
 		}

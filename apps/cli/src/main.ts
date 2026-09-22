@@ -392,6 +392,30 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
 // 运行期不切换——Ctrl+T 互切已下线，用户拍板）
 const cfgTuiMode = configFaceTui();
 let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
+// 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见
+const tuiSidebarInit = tuiSidebarRead();
+function tuiSidebarRead(): boolean {
+	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
+		try {
+			const doc = parse(readFileSync(f, "utf8")) as { tui?: { sidebar?: unknown } };
+			if (typeof doc.tui?.sidebar === "boolean") return doc.tui.sidebar;
+		} catch {
+			/* 缺文件/解析失败用缺省 */
+		}
+	}
+	return true;
+}
+function tuiSidebarPersist(visible: boolean): void {
+	const f = join(orosusHome(), "config.toml");
+	let doc: Record<string, unknown> = {};
+	try {
+		doc = parse(readFileSync(f, "utf8")) as Record<string, unknown>;
+	} catch {
+		/* 缺文件从空起 */
+	}
+	doc.tui = { ...((doc.tui as Record<string, unknown>) ?? {}), sidebar: visible };
+	writeFileSync(f, stringify(doc), "utf8");
+}
 
 // Ctrl+T 运行期互切已下线（用户拍板：界面模式只由 --tui 旗标 / [tui] mode 配置在启动时选定）。
 
@@ -752,8 +776,9 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
-	// 快捷键导引行（F5 二轮③——logo 框恢复快捷键提示；内容宽 52 + 6 空格 = 内宽 58）
-	theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考 · / 命令") + "      " + theme.fg("accent", "│"),
+	// 快捷键导引两行（F5 十二轮③：加 Ctrl + T 侧栏；单行放不下——拆两行，宽 43/38 + 补空 = 内宽 58）
+	theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考") + "               " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + theme.dim(" / 命令 · Ctrl + T 侧栏 · Alt + V 贴图") + "                    " + theme.fg("accent", "│"),
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
 	"",
 ];
@@ -801,6 +826,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       },
     slashCommands: () => SLASH_ITEMS,
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
+    sidebarInit: () => tuiSidebarInit,
+    onSidebarChange: (visible) => tuiSidebarPersist(visible), // Ctrl+T 状态持久化
     thinkOpen: () => dm.thinkOpen,
     toggleThink: () => {
       dm.thinkOpen = !dm.thinkOpen;
