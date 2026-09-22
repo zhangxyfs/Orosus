@@ -1,0 +1,99 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Orosus" width="480">
+</p>
+
+<p align="center">
+  <a href="README.md">简体中文</a> · <b>English</b> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="docs/developers.md">Developer Guide</a>
+</p>
+
+<p align="center">
+  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D22-339933">
+  <img alt="pnpm" src="https://img.shields.io/badge/pnpm-monorepo-f69220">
+  <img alt="platform" src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-0078d6">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <b>Orosus</b> is a modular AI coding-assistant CLI — written in TypeScript, running directly on Node 22+<br>
+  (no build step required). A core kernel + a zero-dependency contracts package + a pluggable module<br>
+  ecosystem: everything is a module, and built-in modules go through the same registration pipeline as external ones.
+</p>
+
+---
+
+## Quick Start
+
+### 1. Install
+
+```bash
+git clone https://github.com/zhangxyfs/Orosus.git
+cd Orosus
+pnpm install
+```
+
+### 2. Run
+
+```bash
+pnpm orosus
+```
+
+On first launch, if no provider is configured, the `/provider` wizard opens automatically — follow the menus to set up endpoint / API key / model, and modules reload automatically afterwards.
+
+### 3. Daily Use
+
+Type natural language to chat. Commands start with `/` (press Tab after `/` to complete command names, Tab after `@` to complete file paths, `@path#L10-L20` to reference line ranges, Alt+V to paste images).
+
+| Category | Command | Description |
+|----------|---------|-------------|
+| Sessions | `/new` `/fork` `/sessions` (`/resume`) `/title` (`/rename`) `/quit` | New session / fork / list & resume history / rename / quit |
+| Model & state | `/model` `/reload` `/summary` `/help` | Switch model (works mid-answer, applies next turn) / reload modules / view compaction summary / help |
+| Module commands | `/compact` `/permission` `/yolo` `/auto` | Compact history / view or switch approval mode / full auto-approve / back to default ask mode |
+| Info panel | `/other` | Disk usage / context usage / token usage / runtime status |
+
+## Features
+
+- **Modular kernel**: five core pieces (session / loop / tool / provider / kernel) + the zero-dependency contracts package `@orosus/contracts`; modules activate in topological order, support hot reload, and degrade gracefully without blocking startup
+- **Multi-provider**: brand adapters for Anthropic / GLM / Kimi / DeepSeek / OpenAI, plus a unified entry for custom OpenAI-compatible endpoints
+- **Tool ecosystem**: built-in modules for filesystem, shell, todo, ask; skill system and MCP bridge
+- **Approval gate**: two-phase tool execution (declare → execute) with a `tool/pre-execute` waterfall interception point; ask-when-needed / yolo / auto modes, user deny rules always win
+- **Context management**: automatic & manual compaction, windowed reads with dedup/truncation, true multimodal image input
+- **TUI**: full-screen takeover, streaming redraw, keyboard menus / Esc cancellation, Markdown rendering (frameworkization in progress — see the roadmap)
+- **Data self-governance**: sessions stored as readable, grep-able JSONL; `OROSUS_HOME` env var + `orosus home migrate` to relocate the entire data directory
+
+## Repository Layout
+
+```
+Orosus/
+├─ apps/cli/                    # The only frontend: REPL + subcommands (provider/module/home)
+├─ packages/
+│  ├─ core/                     # Core five + kernel + diagnostics log + createHarness entry
+│  ├─ contracts/                # Zero-dependency contracts: module / tool / provider / fs / home
+│  ├─ testing/                  # Test infrastructure: fakeProvider / fakeModule, etc.
+│  └─ modules/                  # Built-in modules (same kernel pipeline as external modules)
+│     ├─ tool-fs/  tool-shell/  tool-todo/  tool-ask/   # Capability modules
+│     ├─ skill/  mcp/                                   # Content system / MCP bridge
+│     ├─ approval/  compaction/                         # Approval gate / context compaction
+│     └─ provider-{anthropic,glm,kimi,deepseek,openai}/  provider-custom/
+└─ tests/                       # Cross-package integration tests (module graph / trust gate / reload / ...)
+```
+
+## Development
+
+```bash
+pnpm test               # vitest — full test suite
+pnpm typecheck          # tsc — repo-wide type checking
+pnpm lint               # oxlint
+pnpm check:boundaries   # package boundary checks (core must not import modules, etc.)
+pnpm build              # tsdown — build all packages
+pnpm gen-docs           # typedoc — generate API docs (docs/api)
+```
+
+| Document | Location |
+|----------|----------|
+| Roadmap (single source of truth for what's next) | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Module developer guide (minimal module / contribution points / interception points) | [docs/developers.md](docs/developers.md) |
+| API docs (generated by typedoc) | [docs/api/](docs/api/) |
+
+## License
+
+[MIT](LICENSE)
