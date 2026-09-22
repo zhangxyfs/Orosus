@@ -25,7 +25,7 @@ export function createStreamingMarkdown(width: number): StreamingMarkdown {
 			if (isFence) {
 				if (!inFence) cut = Math.max(cut, i); // fence 开启前的内容可冻结
 				inFence = !inFence;
-				if (!inFence && nl !== -1) cut = nl + 1; // fence 刚闭合——整块冻结
+				if (!inFence) cut = nl === -1 ? n : nl + 1; // fence 刚闭合——整块冻结（EOF 处闭合同样算，transient 定格钉需要）
 			} else if (!inFence && lineEnd === i && nl !== -1) {
 				cut = nl + 1; // 空行（fence 外）= 冻结点
 			}
@@ -49,7 +49,8 @@ export function createStreamingMarkdown(width: number): StreamingMarkdown {
 			}
 			const tail = full.slice(frozenUpto);
 			if (tail === "") return frozenLines;
-			return [...frozenLines, ...renderLines(tail, width)];
+			// 尾段 transient：代码块纯文本跳高亮，冻结定格时一次上色（设计空白 #16）
+			return [...frozenLines, ...renderLines(tail, width, { transient: true })];
 		},
 	};
 }

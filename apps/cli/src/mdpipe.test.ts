@@ -51,11 +51,13 @@ describe("markdown 新管线（TUI 批阶段三 F1——九条挂账缺陷验收
 		const u = stripAnsi(lines[1]!);
 		expect(u).toBe("═".repeat(8)); // 4 个全角字 = 8 显示宽
 	});
-	it("⑦ 围栏代码块语法着色（缺陷：零着色）", () => {
+	it("⑦ 围栏代码块语法着色（缺陷：零着色——mdpipe 批 T1 改写：cli-highlight 色板，断言泛化为「有着色且内容完整」）", () => {
 		const lines = renderMarkdown("```ts\nconst x = 1;\n// 注释\n```", 60);
-		const code = lines.find((l) => l.includes("const"))!;
-		expect(code).toContain("\x1b[38;5;115m"); // 关键字 accent（256 色降级下 115 / truecolor 38;2;124;201;165）
-		const comment = lines.find((l) => l.includes("注释"))!;
+		const code = lines.find((l) => stripAnsi(l).includes("const"))!;
+		// oxlint-disable-next-line no-control-regex -- 终端断言合法形态：断言 ANSI 着色存在必须匹配 ESC
+		expect(code).toMatch(/\x1b\[/); // 关键字行有着色（cli-highlight DEFAULT_THEME 色板）
+		expect(stripAnsi(code)).toContain("const x = 1;"); // 内容完整
+		const comment = lines.find((l) => stripAnsi(l).includes("注释"))!;
 		expect(comment).not.toBe(code);
 	});
 	it("⑧ 列表内代码块正确缩进（缺陷：无嵌套上下文语义）", () => {
