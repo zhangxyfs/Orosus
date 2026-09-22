@@ -9,6 +9,13 @@ export function resolveTuiMode(flag: "line" | "full" | undefined, cfgMode: strin
   return isTTY ? "full" : "line";
 }
 
+/** LaTeX 数学渲染开关解析（mdpipe 批 T7，设计空白 #12）：[tui] latex，布尔、缺省 true（开）。
+ *  非法值（非布尔）按未配置处理——缺省兜底不炸，与 resolveTuiMode 同式；
+ *  生效时机 = 启动读一次，改配置重启生效（设计空白 #13——/reload 热切换不做）。 */
+export function resolveLatexFlag(cfgLatex: unknown): boolean {
+  return typeof cfgLatex === "boolean" ? cfgLatex : true;
+}
+
 /** 字节数人性化（磁盘占用视图用）。 */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

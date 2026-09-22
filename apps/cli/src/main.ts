@@ -31,7 +31,8 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { withCompactHint } from "./compact-hint.ts";
-import { resolveTuiMode, formatBytes, dirUsage } from "./tuicfg.ts";
+import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
+import { setLatexEnabled } from "./md/latex.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -398,6 +399,9 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
 // 运行期不切换——Ctrl+T 互切已下线，用户拍板）
 const cfgTuiMode = configFaceTui();
 let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
+// LaTeX 数学渲染开关（mdpipe 批 T7，设计空白 #12/#13）：[tui] latex 缺省开，启动读一次注入，
+// 改配置重启生效（/reload 热切换不做——本仓配置面无热读口，诚实登记）
+setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
 // 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见
 function tuiSidebarRead(): boolean {
 	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
@@ -659,6 +663,19 @@ const configFace = (): { contextWindow: number; approvalMode: string } => {
 	}
 	return { contextWindow, approvalMode };
 };
+
+/** [tui] latex 读数（mdpipe 批 T7）：boolean | undefined；分层同 configFaceTui。 */
+function configFaceTuiLatex(): boolean | undefined {
+	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
+		try {
+			const doc = parse(readFileSync(f, "utf8")) as { tui?: { latex?: unknown } };
+			if (typeof doc.tui?.latex === "boolean") return doc.tui.latex;
+		} catch {
+			/* 缺文件/解析失败用缺省 */
+		}
+	}
+	return undefined;
+}
 
 /** [tui] mode 读数（用户层 → 项目层同 §6.6 分层；F6）。function 声明——早处初始化要用（hoisting）。 */
 function configFaceTui(): string | undefined {

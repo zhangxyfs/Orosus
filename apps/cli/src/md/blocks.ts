@@ -6,6 +6,7 @@ import * as theme from "../theme.ts";
 import { lex } from "./lex.ts";
 import { inlineTokens, stylePrefixOf, type InlineStyleContext } from "./inline.ts";
 import { highlightLines } from "./highlight.ts";
+import { renderLatex } from "./latex.ts";
 import { renderTable } from "./table.ts";
 
 /** 渲染期可选项（mdpipe 批 T1）：transient = 流式尾段形态——代码块跳过高亮（纯文本行）。 */
@@ -112,6 +113,15 @@ export function renderBlock(
 		case "table":
 			renderTable(t as Tokens.Table, out, width, ctx);
 			break;
+		case "latexBlock": {
+			// LaTeX 块级公式（mdpipe 批 T7）：display 模式（算符上下标多行布局；分式恒单行
+			// ——竖排堆叠路径已摘除）；渲染失败（undefined）回退原文，判空 ?? 非 === null
+			const lb = t as unknown as { text: string; raw: string };
+			const rendered = renderLatex(lb.text, { display: true }) ?? lb.raw;
+			for (const line of rendered.split("\n")) out.push(line);
+			out.push("");
+			break;
+		}
 		case "space":
 			break;
 		default:
