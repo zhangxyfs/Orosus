@@ -44,6 +44,9 @@ export interface FullAppIO {
 	rows(): number;
 	doc(): string[];
 	submit(text: string): void;
+	/** 提交闸门（批④——busy 期拒收档拦在回车前）：返回拒因 = 拦截（输入保留、不进历史、不写流区，
+	 *  拒因尾行瞬显自消）；undefined = 放行。宿主侧复用 inflight + 拒收名单单一数据源。 */
+	submitGate?(text: string): string | undefined;
 	requestExit(): void;
 	requestCancel(): void; // Esc 忙碌时取消当前 turn（h.cancel）
 	panelData(): PanelData;
@@ -79,6 +82,9 @@ interface AppState {
 	overlayOpen: boolean;
 	overlaySel: number;
 	overlayCmd: string; // "" = 一级
+	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消——瞬时反馈的统一形态（闸门拒因/模型切换等），
+	 *  取代批④的尾行拒因位（rejectHint）。 */
+	toast: { text: string; at: number } | undefined;
 }
 
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -217,6 +223,7 @@ export class FullApp {
 			overlayOpen: false,
 			overlaySel: 0,
 			overlayCmd: "",
+			toast: undefined,
 		};
 	}
 
@@ -277,6 +284,8 @@ export class FullApp {
 			this.pendingUi = undefined;
 			if (pu.kind !== "view") pu.resolve(undefined); // view 无 promise 可结
 		}
+		// 暂存队列一并排空（批③②——thunk 内自查 stopped 即 resolve(undefined)，promise 不永挂）
+		for (const run of this.uiQueue.splice(0)) run();
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
 		if (this.tickTimer) clearInterval(this.tickTimer);
@@ -311,11 +320,35 @@ export class FullApp {
 		| { kind: "view"; title: string; lines: string[]; scroll: number }
 		| undefined;
 
+	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
+	 *  顶退会把挂起的审批 resolve(undefined) = 静默否决；暂存后当前挂起结算即自动展开。 */
+	private uiQueue: Array<() => void> = [];
+
+	/** 当前挂起结算后提升队首（无挂起才提——视图/选择/询问任一在位都等待）。 */
+	private promoteUi(): void {
+		if (this.pendingUi !== undefined) return;
+		this.uiQueue.shift()?.();
+	}
+
 	/** 只读文本浮层（F5 二轮⑪——/help 形态：不可选择、↑↓/PgUp/PgDn 翻页、Esc/Enter/q 关闭）。 */
 	viewText(title: string, text: string): void {
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
 		this.pendingUi = { kind: "view", title, lines: text.split("\n"), scroll: 0 };
 		this.scheduler.requestImmediateRender();
+	}
+
+	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消。自消靠定时器补一帧——
+	 *  非 busy 期没有 spinner 心跳，不定时的話旧 toast 会留到下一次按键。 */
+	showToast(text: string): void {
+		this.state.toast = { text, at: Date.now() };
+		this.scheduler.requestImmediateRender();
+		const timer = setTimeout(() => {
+			if (this.state.toast !== undefined && Date.now() - this.state.toast.at >= 2_900) {
+				this.state.toast = undefined;
+				this.scheduler.requestRender();
+			}
+		}, 3_100);
+		timer.unref?.();
 	}
 
 	/** 挂起的图片附件 chip 标签（F5 二轮⑬——「[image #2 (165×103)]」随输入框显示，提交即清空）。 */
@@ -325,9 +358,15 @@ export class FullApp {
 		this.scheduler.requestImmediateRender();
 	}
 
-	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。 */
+	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
+	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
 	pickOverlay(title: string, items: string[]): Promise<number | undefined> {
-		if (this.pendingUi?.kind === "pick") this.pendingUi.resolve(undefined);
+		if (this.pendingUi !== undefined) {
+			return new Promise((resolve) => this.uiQueue.push(() => {
+				if (this.stopped) { resolve(undefined); return; }
+				void this.pickOverlay(title, items).then(resolve);
+			}));
+		}
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
 		return new Promise((resolve) => {
 			// ≥12 项启用输入过滤（F5 九轮① 用户拍板：厂商目录全量直列、列表内输入即筛——includes 口径）
@@ -343,9 +382,15 @@ export class FullApp {
 		});
 	}
 
-	/** ask/askSecret 的全屏形态：输入行接管（提示语进输入框前缀；secret 盲显 •；Esc → undefined）。 */
+	/** ask/askSecret 的全屏形态：输入行接管（提示语进输入框前缀；secret 盲显 •；Esc → undefined）。
+	 *  单槽占用期 FIFO 暂存（同 pickOverlay——批③②）。 */
 	promptInput(question: string, secret: boolean): Promise<string | undefined> {
-		if (this.pendingUi?.kind === "ask") this.pendingUi.resolve(undefined);
+		if (this.pendingUi !== undefined) {
+			return new Promise((resolve) => this.uiQueue.push(() => {
+				if (this.stopped) { resolve(undefined); return; }
+				void this.promptInput(question, secret).then(resolve);
+			}));
+		}
 		const prev = { input: this.state.input, cursor: this.state.cursor };
 		this.state.input = "";
 		this.state.cursor = 0;
@@ -468,7 +513,7 @@ export class FullApp {
 				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
 				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
 				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
-				else if (key === "escape" || key === "enter" || key === "q") this.pendingUi = undefined;
+				else if (key === "escape" || key === "enter" || key === "q") { this.pendingUi = undefined; this.promoteUi(); }
 				this.scheduler.requestImmediateRender();
 				return;
 			}
@@ -494,9 +539,11 @@ export class FullApp {
 				else if (key === "enter" && filtered.length > 0) {
 					this.pendingUi = undefined;
 					pu.resolve(pu.items.indexOf(filtered[pu.sel]!));
+					this.promoteUi(); // 结算即提升暂存队首（批③②）
 				} else if (key === "escape") {
 					this.pendingUi = undefined;
 					pu.resolve(undefined);
+					this.promoteUi();
 				}
 				this.scheduler.requestImmediateRender();
 				return;
@@ -508,9 +555,11 @@ export class FullApp {
 				this.state.input = "";
 				this.state.cursor = 0;
 				pu.resolve(v);
+				this.promoteUi();
 			} else if (key === "escape") {
 				this.pendingUi = undefined;
 				pu.resolve(undefined);
+				this.promoteUi();
 			} else {
 				this.onEditKey(key);
 				return;
@@ -721,6 +770,13 @@ export class FullApp {
 
 	private submitLine(text: string): void {
 		const s = this.state;
+		// 提交闸门（批④——busy 期拒收档拦在回车前）：拦下则输入框原文保留、不进历史、不写流区、不提交，
+		// 拒因尾行瞬显自消；回答结束后原文还在，直接再按回车即发
+		const gated = this.io.submitGate?.(text);
+		if (gated !== undefined) {
+			this.showToast(gated); // 拒因走浮动 toast（输入框上边缘黄字 3s 自消——原尾行位退役）
+			return;
+		}
 		s.scrollBack = 0; // 回看历史时提交 → 跳到底部（F5 五轮②：一次性置底，非粘底）
 		this.attachments = []; // 附件 chip 随提交清空（宿主侧文件列表同步清——F5 二轮⑬）
 		s.history.push(text);
@@ -753,6 +809,9 @@ export class FullApp {
 		const s = this.state;
 		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
 		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
+		// 交互挂起期（pick/view）spinner 同让位（2026-09-22 用户实测：/model 选择期间「正在生成…」照转——
+		// 挂起 = 等用户操作，不是在生成；浮层自带操作页脚，尾行回退待命态）
+		if (this.pendingUi !== undefined) return theme.dim("正在待命");
 		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
 		if (s.busy) {
 			const queued = this.queuedCount > 0 ? theme.fg("info", ` · 已排队 ${this.queuedCount} 条（回答结束后执行）`) : "";
@@ -933,6 +992,17 @@ export class FullApp {
 			screen[divRow] = theme.fg(ibc, "╭" + "─".repeat(Math.max(1, leftW - 2)) + "╮");
 		}
 
+		// 浮动 toast（2026-09-22 用户拍板终稿：全宽无框——宽度与输入框一致左右顶到头、无包边字符）：
+		// 输入框顶边上方叠黄色文字行（wrapText 折行 ≤3 行、3s 自消），只盖左栏（侧栏追加合并不受影响），
+		// 遮蔽的流区内容随自消还原
+		if (s.toast !== undefined && Date.now() - s.toast.at < 3000) {
+			const tLines = wrapText(s.toast.text, Math.max(8, leftW - 2)).slice(0, 3);
+			const top = Math.max(0, divRow - tLines.length);
+			for (let i = 0; i < tLines.length; i++) {
+				screen[top + i] = theme.fg("warn", padToWidth(` ${tLines[i]!}`, leftW));
+			}
+		}
+
 		const sel = this.selRange();
 		const paneIn = (l: string) => theme.bg("surface2", theme.fg(ibc, "│") + padToWidth(l, leftW - 2) + theme.fg(ibc, "│"));
 		if (chipRows > 0) {
@@ -957,7 +1027,8 @@ export class FullApp {
 			screen[divRow + 1 + chipRows + i] = paneIn(inputFocused ? line : theme.dim(line));
 		}
 		const d = this.io.panelData();
-		const chip = theme.fg("accent", `◆ ${PERM_LABEL[d.permission] ?? d.permission}`);
+		// 档色语义（2026-09-22 用户拍板）：Never Ask = 全自动放行危险档 → 警示黄；确认类档保持青玉
+		const chip = theme.fg(d.permission === "never" ? "warn" : "accent", `◆ ${PERM_LABEL[d.permission] ?? d.permission}`);
 		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}`;
 		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
 		const hintW = leftW - 2;

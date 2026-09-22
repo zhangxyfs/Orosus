@@ -67,7 +67,7 @@ export function createPermissionHandler(opts: {
       // 英文档名（F5 十轮⑤ 用户拍板，与全屏菜单同源）：档名 + 短解 + 值
       { label: "Always Ask——每次工具调用都确认（ask-always）", value: "ask-always" },
       { label: "Ask When Needed——仅危险操作确认（ask-risky，默认）", value: "ask-risky" },
-      { label: "Never Ask——全部自动放行，极危险命令仍确认（never）", value: "never" },
+      { label: "Never Ask——全部自动放行，批准自动处理（never）", value: "never" },
     ];
     // 直参直达（F5 用户实测：全屏二级菜单已选定模式，无参菜单再弹一次 = 三级弹窗）——
     // `/permission ask-always` 跳过 choose 直接生效；无参才进菜单
@@ -87,7 +87,26 @@ export function createPermissionHandler(opts: {
     } catch (err) {
       return `权限模式已切换：${next}（本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    return `权限模式已切换：${next}`; // 瘦身（2026-09-20 用户实测：只报切到什么）；失败分支保留细节
+    // 静默生效（2026-09-22 用户拍板）：切换成功零输出——面板 chip 即时反映新档，流区落行是噪音；
+    // 空串 = 静默的管线约定在 processReplLine（空输出不落流区）。失败分支保留带内详情
+    return "";
+  };
+}
+
+/** /auto 命令（2026-09-22 用户拍板）：一键切「Ask When Needed」（ask-risky——日常默认档）。/yolo 镜像件。 */
+export function createAutoHandler(opts: {
+  apply(next: PermissionMode): void;
+  configPath: string;
+  projectConfigPath?: string;
+}): CommandHandler {
+  return async () => {
+    opts.apply("ask-risky");
+    try {
+      persistMode(opts.configPath, "ask-risky", opts.projectConfigPath);
+    } catch (err) {
+      return `权限模式已切换：ask-risky（/auto，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+    return ""; // 静默生效（同 /permission /yolo——面板 chip 即时反映）
   };
 }
 
@@ -105,6 +124,6 @@ export function createYoloHandler(opts: {
     } catch (err) {
       return `权限模式已切换：never（/yolo，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    return "权限模式已切换：never"; // 瘦身同上——never 语义（危险命令仍确认）在 /permission 菜单项内已注明
+    return ""; // 静默生效（2026-09-22 用户拍板，同 /permission——面板 chip 即时反映；never 语义在 /permission 菜单项内已注明）
   };
 }

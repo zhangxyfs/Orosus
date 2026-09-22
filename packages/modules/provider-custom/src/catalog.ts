@@ -139,6 +139,16 @@ export async function getCatalog(opts: { registryUrl?: string; fetchImpl?: typeo
   return (await getCatalogWithSource(opts)).catalog;
 }
 
+/** 可用的 text 模型（deprecated/alpha/embedding/非文本输出/非工具调用排除——D34 过滤 + 走查补）。
+ *  按 release_date 新→旧排（无日期殿后，同日期按 id 字典序）。onboarding 菜单与槽值 listModels
+ *  目录优选共用同一口径（单源——2026-09-22 自 menu.ts 上移）。 */
+export function usableCatalogModels(entry: CatalogEntry): CatalogModel[] {
+  return Object.values(entry.models ?? {})
+    .filter((m) => (m.modalities?.output === undefined || m.modalities.output.includes("text")) && m.status !== "deprecated" && m.status !== "alpha")
+    .filter((m) => m.tool_call !== false && !/embed/i.test(m.id))
+    .toSorted((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? "") || a.id.localeCompare(b.id));
+}
+
 /** 同厂两门检测（M4-2 T2/B1）：id_A.startsWith(id_B + "-") → sameGate 互指（带 "-" 防 zhipu/zhipuai 误连）。
  *  纯函数：条目浅拷贝后标注，入参不被污染。调用点 = 菜单侧 getCatalog 后处理（注入路径无关）。 */
 export function detectSameGate(catalog: Catalog): Catalog {

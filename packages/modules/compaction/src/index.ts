@@ -248,29 +248,33 @@ export default defineModule({
       if ((p as { code?: string })?.code === "context_limit") forceKind = "overflow";
     });
 
-    ctx.contribute.command("compaction__compact", async () => {
+    ctx.contribute.command("compaction__compact", async (_args, ui) => {
+      // 纯提示类结果走 ui.notice（批⑧：toast 浮动窗/行模式单行，不落流区）+ 返回空串（静默约定）；
+      // 有实质内容的（摘要本文/失败详情/裁剪结果）仍走流区
       if (lastSeenMessages === undefined) {
         // 冷投影重建（M5 F5 二轮⑰ 用户拍板：/compact 必须立即执行，「等下一条」语义废弃）——
         // ctx.session.messages 读口（契约扩展，与 agentLoop 同投影）；宿主无读口才回落旧延期语义
         const projected = await ctx.session.messages?.();
         if (projected === undefined) {
           forceKind = "manual";
-          return "已安排：下一条消息发出前压缩（宿主无投影读口——发一条消息预热投影，之后 /compact 即时执行）";
+          ui.notice?.("已安排：下一条消息发出前压缩（宿主无投影读口——发一条消息预热投影，之后 /compact 即时执行）");
+          return "";
         }
         lastSeenMessages = projected;
       }
-      if (lastSeenMessages.length === 0) return "无可压缩历史（本会话还没有对话）";
+      if (lastSeenMessages.length === 0) { ui.notice?.("无可压缩历史（本会话还没有对话）"); return ""; }
       const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log });
       for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
       switch (r.kind) {
-        case "none": return "无可压缩历史（本会话还没有对话）";
+        case "none": ui.notice?.("无可压缩历史（本会话还没有对话）"); return "";
         case "pruned":
           lastSeenMessages = r.messages;
           return `已裁剪 ${(r.events[0]!.fields.prunes as unknown[]).length} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`;
         case "skipped":
-          return r.reason === "no-space"
+          ui.notice?.(r.reason === "no-space"
             ? "无可压缩空间：对话尚短，尾部保留区已覆盖全部内容"
-            : `已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`;
+            : `已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`);
+          return "";
         case "failed":
           return `压缩失败：${r.reason}——未产生任何变更（可重试 /compact）`;
         case "compacted":

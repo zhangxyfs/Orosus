@@ -122,12 +122,25 @@ export function sessionCommand(input: string, current: { sessionId: string; last
   if (tm !== null) {
     const raw = tm[2]?.trim();
     if (raw === undefined || raw === "") return { kind: "title" };
-    // 首位纯数字 → target + name；否则全部是 name
+    // 首位纯数字 → target + name；否则全部是 name。名字成对引号剥离（批⑦c——/title "名字" 的引号是分隔符不是名字一部分）
     const sm = /^(\d+)\s+(.+)$/.exec(raw);
-    if (sm !== null) return { kind: "title", ...(sm[1] !== undefined ? { target: sm[1] } : {}), name: sm[2]! };
-    return { kind: "title", name: raw };
+    if (sm !== null) {
+      const name = unquote(sm[2]!.trim());
+      if (name === "") return { kind: "title" };
+      return { kind: "title", target: sm[1]!, name };
+    }
+    const name = unquote(raw);
+    if (name === "") return { kind: "title" };
+    return { kind: "title", name };
   }
   return { kind: "none" };
+}
+
+/** 成对引号剥离（批⑦c）：ASCII/中文弯引号/书名号式「」——两端成对才剥，不对称原样保留（名字内容可能 legit 带引号尾）。 */
+function unquote(s: string): string {
+  const close: Record<string, string> = { '"': '"', "'": "'", "“": "”", "「": "」" };
+  const c = close[s[0] ?? ""];
+  return c !== undefined && s.length >= 2 && s.endsWith(c) ? s.slice(1, -1).trim() : s;
 }
 
 /** 序号选择（B9 走查定案：不选即取消——无需专门取消项）：空输入 = undefined（取消）；

@@ -66,8 +66,13 @@ const onlyReads = (accesses: Access[]): boolean =>
   accesses.length > 0 && accesses.every((a) => a.kind === "fs.read");
 
 /** 危险命令判定（二轮定案 AST 方案）：三态 verdict——dangerous/unanalyzable 都 fail-closed 询问
- *  （memoryKey=null 永不进会话记忆）；三档均生效（含 never——"从不询问"不含自杀开关，D36 修订）。 */
+ *  （memoryKey=null 永不进会话记忆）。
+ *  生效档（2026-09-22 修订，学 kimi-code permissionPolicy 双档语义）：ask-always / ask-risky 两档生效；
+ *  never 整门短路（kimi auto 同款——dangerous-command-ask.ts:131 对 auto 直接 return undefined）：
+ *  「从不询问」即全自动，unanalyzable/dangerous 都放行；用户显式规则仍在管线前段优先（deny 最强意图）。
+ *  推翻 D36「从不询问不含自杀开关」——用户实证：never 下良性命令（glob/格式串致 AST 降级）被误伤询问。 */
 function dangerousGate(input: DecideInput): Decision | undefined {
+  if (input.mode === "never") return undefined; // kimi auto 语义：全自动档危险门整门拆除
   const cmd = commandOf(input.approvalRule);
   if (cmd === null) return undefined;
   const verdict = analyzeDangerous(cmd);
@@ -98,7 +103,7 @@ export function decide(input: DecideInput): Decision {
   const dangerous = dangerousGate(input);
   if (dangerous !== undefined) return dangerous; // 三档均如此——含 never（规则优先于危险门：用户显式 allow 是最强意图）
 
-  if (input.mode === "never") return { effect: "allow", source: "mode", reason: "never 模式放行（危险命令除外，D36 修订）" };
+  if (input.mode === "never") return { effect: "allow", source: "mode", reason: "never 模式全自动放行（含危险/不可分析命令——kimi auto 语义，2026-09-22 修订）" };
   if (input.mode === "ask-always") {
     if (onlyReads(input.accesses)) return { effect: "allow", source: "mode", reason: "ask-always：只读放行" };
     if (input.sessionAllowed(input.approvalRule)) return { effect: "allow", source: "memory", reason: "本会话已允许" };

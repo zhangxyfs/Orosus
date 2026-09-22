@@ -10,18 +10,21 @@ describe("completer + /help（M4-2 T21/B5）", () => {
     expect(hits1).toContain("/resume");
     expect(hits1).toContain("/reload");
     expect(line1).toBe("/re"); // readline/promises CompleterResult 第二位回传原行
-    const [hits2] = commandCompleter("/con");
-    expect(hits2).toEqual(["/context"]); // 唯一命中——readline 自行补全
+    const [hits2] = commandCompleter("/ren");
+    expect(hits2).toEqual(["/rename"]); // 唯一命中——readline 自行补全（批⑤⑥：/context 退役后原 /con 唯一命中钉换成 /ren）
     expect(commandCompleter("普通文本")[0]).toEqual([]);
     expect(commandCompleter("")[0]).toEqual([]);
   });
 
-  it("② HELP_TEXT：三组命令名 + 每条中文说明（如 /new 开始新会话）", () => {
+  it("② HELP_TEXT：三组命令名 + 每条中文说明（如 /new 开始新会话）；退役命令（/usage /status /context /paste）不再列", () => {
     expect(HELP_TEXT).toContain("CLI 命令（会话生命周期）");
     expect(HELP_TEXT).toContain("内建命令（模型与状态）");
     expect(HELP_TEXT).toContain("模块命令");
     expect(HELP_TEXT).toContain("/new        开始新会话");
-    expect(HELP_TEXT).toContain("/paste      粘贴剪贴板图片（或 Alt+V 按键）"); // T5 可发现性：新键位入帮助
+    expect(HELP_TEXT).not.toContain("\n  /usage"); // 行首命令位不再列（/other 行内的「/usage /status 已并入」指路属有意保留）
+    expect(HELP_TEXT).not.toContain("\n  /status");
+    expect(HELP_TEXT).not.toContain("/paste "); // 批⑤⑥退役清理（Alt+V 提示并入尾部提示行）
+    expect(HELP_TEXT).toContain("Alt+V"); // T5 可发现性：图片键位仍在帮助
     expect(HELP_TEXT).toContain("/permission 查看或切换审批模式");
     expect(HELP_TEXT).toContain("Tab 补全");
     expect(HELP_TEXT).toContain("@ 后 Tab 补全文件"); // T6 可发现性：@ 补全与 #L 语法入提示行

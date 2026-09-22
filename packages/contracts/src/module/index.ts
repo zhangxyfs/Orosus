@@ -31,6 +31,10 @@ export interface CommandUi {
   askSecret(question: string): Promise<string>;
   choose(title: string, items: string[]): Promise<string>;
   confirm(question: string): Promise<boolean>;
+  /** 瞬时提示（2026-09-22 批⑧，可选）：「无可压缩/已切换」类一次性反馈——全屏宿主走浮动 toast（3s 自消），
+   *  行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。
+   *  缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。 */
+  notice?(text: string): void;
 }
 
 /** 二级 LLM 调用口（D39）：模块的辅助模型调用（compaction 摘要、标题生成等）。

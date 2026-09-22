@@ -27,8 +27,11 @@ export function createReadlineUi(io: {
   question(q: string): Promise<string>;
   secretQuestion(q: string): Promise<string>;
   pick?(title: string, items: string[]): Promise<number>;
+  /** 瞬时提示出口（批⑧）：宿主给全屏 toast / 行模式单行；缺省 stdout 单行。 */
+  notice?(text: string): void;
 }): CommandUi {
   return {
+    notice: (t) => { if (io.notice !== undefined) io.notice(t); else process.stdout.write(`${t}\n`); },
     ask: async (q) => (await io.question(`${q}: `)).trim(),
     askSecret: async (q) => (await io.secretQuestion(q)).trim(),
     choose: async (title, items) => {

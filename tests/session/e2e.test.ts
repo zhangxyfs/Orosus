@@ -65,8 +65,8 @@ describe("M4-1 T6：新形状下的 fork / resume / 自修复复核", () => {
     writeFileSync(join(d, "sessions", `${sid}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
     const h = await mk(d, { store: new JsonlSessionStore({ dir: join(d, "sessions"), sessionId: sid }), resume: { sessionId: sid } });
     await h.prompt("续问");
-    const out = await h.prompt("/usage");
-    expect(out).toContain("当前会话：input 15 / output 5 tokens"); // 双形态：旧 chunk 10/4 + 新 message 5/1
+    const u = await h.usage(); // 批⑤：/usage 命令退役 → 读口
+    expect(u.current).toEqual({ input: 15, output: 5 }); // 双形态：旧 chunk 10/4 + 新 message 5/1
     await h.close();
     const events = await new JsonlSessionStore({ dir: join(d, "sessions"), sessionId: sid }).all();
     const projection = deriveMessages(events);

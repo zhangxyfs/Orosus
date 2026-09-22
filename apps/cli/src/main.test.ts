@@ -58,15 +58,15 @@ describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生�
     // T3 接通后：/permission 别名不再带「未安装」尾注
     expect(help).toContain("/permission → approval__permission");
     expect(help).not.toContain("未安装对应模块");
-    expect(help).toContain("/model /help /status /usage /reload"); // 内建清单含 /reload（补账）
+    expect(help).toContain("/model /help /reload"); // 内建清单含 /reload（补账；批⑤⑥：/status /usage 退役出内建表）
     await h.close();
   });
 
-  it("/status 在 model 未配置时显示（未配置）而非字面量 undefined（补账回归）", async () => {
+  it("h.status() 读口在 model 未配置时显示（未配置）而非字面量 undefined（补账回归——批⑥ /status 命令退役转读口）", async () => {
     const h = await isolated();
-    const out = await h.prompt("/status");
-    expect(out).toContain("model: （未配置）");
-    expect(out).not.toContain("undefined");
+    const st = h.status();
+    expect(st.model).toBe("（未配置）");
+    expect(JSON.stringify(st)).not.toContain("undefined");
     await h.close();
   });
 });
@@ -96,7 +96,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
   });
   const choices: string[] = [];
 
-  it("① 菜单选『Never Ask——全部自动放行，极危险命令仍确认（never）』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
+  it("① 菜单选『Never Ask——全部自动放行，批准自动处理（never）』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
     const d = tmp("perm");
     const writeTarget = join(d, "written.toml");
     const cfgLine = "[approval]\nmode = \"ask-risky\"\nconfigFile = '";
@@ -115,13 +115,13 @@ describe("/permission 接入 CLI（M3 T3）", () => {
       config: { userFile: join(d, "user.toml"), projectFile: join(d, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
     });
     const msg = await h.prompt("/permission");
-    expect(msg).toContain("never");
+    expect(msg).toBe(""); // 静默钉（批⑧——切换成功零输出；生效面在写盘与下方渲染）
     expect(readFileSync(writeTarget, "utf8")).toContain('mode = "never"');
     const render = (async () => { for await (const _ of h.events()) void _; })();
     await h.prompt("run"); // ask-risky 下本应询问——override 后零询问直通
     await h.close();
     await render;
-    expect(choices).toEqual(["Always Ask——每次工具调用都确认（ask-always）|Ask When Needed——仅危险操作确认（ask-risky，默认）|Never Ask——全部自动放行，极危险命令仍确认（never）"]); // F5 十轮⑤：英文档名 // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
+    expect(choices).toEqual(["Always Ask——每次工具调用都确认（ask-always）|Ask When Needed——仅危险操作确认（ask-risky，默认）|Never Ask——全部自动放行，批准自动处理（never）"]); // F5 十轮⑤：英文档名 // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
   });
 
   it("② 出厂 required：activate 抛错的 approval 替身 → createHarness reject（§10 安全护栏 e2e）", async () => {

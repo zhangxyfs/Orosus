@@ -130,11 +130,19 @@ describe("/title 会话手动命名（M4-2 T0/B9 剩余——session/label 预�
     expect(JSON.parse(lines[1]!)).toMatchObject({ type: "session/label", label: "指定命名" });
   });
 
-  it("④ sessionCommand 解析 /title 有参形态（名 / 序号+名）", () => {
+  it("④ sessionCommand 解析 /title 有参形态（名 / 序号+名）；成对引号剥离（批⑦c）", () => {
     expect(sessionCommand("/title 我的调试", { sessionId: "s1" }))
       .toEqual({ kind: "title", name: "我的调试" });
     expect(sessionCommand("/title 2 其他名", { sessionId: "s1" }))
       .toEqual({ kind: "title", name: "其他名", target: "2" });
+    expect(sessionCommand('/title "我的名字"', { sessionId: "s1" }))
+      .toEqual({ kind: "title", name: "我的名字" }); // 引号是分隔符不是名字一部分
+    expect(sessionCommand("/title 2 “中文弯引号”", { sessionId: "s1" }))
+      .toEqual({ kind: "title", name: "中文弯引号", target: "2" });
+    expect(sessionCommand('/title "不对称', { sessionId: "s1" }))
+      .toEqual({ kind: "title", name: "\"不对称" }); // 不成对原样保留
+    expect(sessionCommand('/title ""', { sessionId: "s1" }))
+      .toEqual({ kind: "title" }); // 引号剥空 = 无参（静默）
   });
 
   it("⑤ 多枚 session/label → readTitle 取最后（手动 /title 覆盖自动标题——T0 走查实录回归钉）", () => {

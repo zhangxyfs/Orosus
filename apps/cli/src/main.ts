@@ -245,7 +245,13 @@ const pickFace =
         },
       }
     : {};
-const commandUi = createReadlineUi({ question, secretQuestion, ...pickFace });
+const commandUi = createReadlineUi({
+  question,
+  secretQuestion,
+  ...pickFace,
+  // 瞬时提示出口（批⑧）：全屏 → 浮动 toast；行模式 → 单行
+  notice: (t) => { if (activeApp !== undefined) activeApp.showToast(t); else console.log(t); },
+});
 
 const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) =>
   createHarness({
@@ -486,11 +492,15 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "switch"; // 换 harness 后重挂横幅与渲染
       }
       if (directive.kind === "title") {
-        // /title（M4-2 T0）：无参 = 查看当前名；有参 = 追加 session/label（当前或序号/sid 指定会话）
-        if (directive.name === undefined) {
-          const events = await h.history();
-          const label = events.filter((e) => e.type === "session/label").at(-1);
-          out(`当前会话：${label !== undefined ? String(label.label) : "（未命名）"}（${h.sessionId}）——/title <名> 命名`);
+        // /title（批⑦）：无参 = 静默零输出零写入（旧「当前会话：…——/title <名> 命名」行退役——2026-09-22 用户拍板无意义）
+        if (directive.name === undefined) return "again";
+        // 当前会话（或目标解析回当前）走活 harness 写口——批⑦a 破链修复：旁路新建 store 写活文件
+        // 会让活 store 内存 lastId/seq 失真，后续事件 parentId 链断裂；序号/sid 指定的非活会话保持旁路（单写者安全）
+        const targetSid = directive.target !== undefined ? resolveTarget(directive.target, sessionsRoot) : undefined;
+        if (directive.target !== undefined && targetSid === undefined) { out("[未找到目标会话]"); return "again"; }
+        if (targetSid === undefined || targetSid === h.sessionId) {
+          await h.setLabel(directive.name);
+          out(`[已命名 → ${directive.name}]`);
         } else {
           const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name);
           out(r !== undefined ? `[已命名 ${r.sid} → ${directive.name}]` : `[未找到目标会话]`);
@@ -505,11 +515,17 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       }
       if (directive.kind === "new" || directive.kind === "fork") {
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
+        // fork 自动命名（2026-09-22 用户拍板）：「fork <父标题>」——/sessions 里父子一眼可辨；
+        // 经 h.setLabel 活写口（header 已由 harness fork 分支即刻落盘，链序 header→fork→label）
+        const parentTitle = from !== undefined
+          ? (() => { const loc = locateSessionFile(sessionsRoot, from); return loc !== undefined ? readTitle(loc.file, from) : from; })()
+          : undefined;
         await h.close();
         // 新会话/fork 子会话一律落当前项目桶；fork 父会话按 activeDir 定位（可能在平铺或他桶——resume 旧会话后 /fork）
         h = await createSession(directive.kind === "fork"
           ? { ...harnessOptionsFor(directive, { parentDir: activeDir }), sessionsDir }
           : { sessionsDir });
+        if (from !== undefined && parentTitle !== undefined) await h.setLabel(`fork ${parentTitle}`);
         activeDir = sessionsDir;
         clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
         const notice = from !== undefined
@@ -533,6 +549,9 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         }
         return "again";
       }
+      // 退役命令指路（批⑤⑥——打字面肌肉记忆；/paste 先例是干净移除，此二条有明确新家故留一行）
+      if (/^\/usage\s*$/.test(text.trim())) { out("[已退役] /usage 并入 /other → Token 用量"); return "again"; }
+      if (/^\/status\s*$/.test(text.trim())) { out("[已退役] /status 并入 /other → 运行状态"); return "again"; }
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
       // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
       const isCmdLine = text.trim().startsWith("/");
@@ -575,7 +594,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         );
         pendingImages = [];
         pendingImageLabels = [];
-        if (cmdOut !== undefined) out(cmdOut);
+        // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
+        if (cmdOut !== undefined && cmdOut !== "") out(cmdOut);
       } catch (err) {
         // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
@@ -699,16 +719,46 @@ const ctxUsageText = (): string => {
 	].join("\n");
 };
 
-/** /other 详细信息面板（F5 十六轮③/十七轮②：子项 = 磁盘占用 + 上下文用量 + Token 用量）。 */
+/** /other 详细信息面板（批⑤⑥：四子项 = 磁盘占用 + 上下文用量 + Token 用量 + 运行状态；
+ *  数据源 = harness 读口 h.usage()/h.status()——/usage /status 内建命令已退役）。 */
 const openOtherPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）", "Token 用量（本会话与项目累计）"]);
+	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）", "Token 用量（本会话与项目累计）", "运行状态（模型 / 会话 / 模块图）"]);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
 	else if (picked === 1) app.viewText("上下文用量", ctxUsageText());
 	else if (picked === 2) {
-		// core /usage 同源输出（会话累计 + 跨会话累计——h.prompt 命令面，空闲时可达）
-		const txt = await h.prompt("/usage").catch((err: unknown) => `[错误] ${err instanceof Error ? err.message : String(err)}`);
-		app.viewText("Token 用量", String(txt));
+		try {
+			const u = await h.usage();
+			const lines = [`当前会话：input ${u.current.input} / output ${u.current.output} tokens`];
+			if (u.lifetime !== undefined) lines.push(`累计（当前项目 ${u.lifetime.sessions} 场会话）：input ${u.lifetime.input} / output ${u.lifetime.output} tokens`);
+			app.viewText("Token 用量", lines.join("\n"));
+		} catch (err) {
+			app.viewText("Token 用量", `[错误] ${err instanceof Error ? err.message : String(err)}`);
+		}
+	} else if (picked === 3) {
+		const st = h.status();
+		app.viewText("运行状态", [
+			`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
+			`session: ${st.sessionId}`,
+			`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
+		].join("\n"));
 	}
+};
+
+// busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
+// BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
+// BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
+const BUSY_EXEC = new Set(["/model", "/permission", "/yolo", "/auto", "/title", "/rename"]); // /auto 与 /yolo 同族（批⑧）
+const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider", "/summary"]);
+const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
+
+/** /model 切换反馈（2026-09-22 用户拍板：harness 静默返回，流区不落行）：前后 diff h.status().model——
+ *  变了才反馈；全屏走浮动 toast（输入框上边缘黄字 3s 自消），行模式单行打印。面板「运行状态」卡随 refreshPanel 同步。 */
+const reportModelSwitch = (before: string): void => {
+	const now = h.status().model;
+	if (now === before) return; // Esc/原样选择 = 未切换，零反馈
+	const msg = `模型已切换 → ${now}（已写入 config）`;
+	if (activeApp !== undefined) activeApp.showToast(msg);
+	else console.log(`[${msg}]`);
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
@@ -716,7 +766,7 @@ const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
 const PERM_META: Record<string, { label: string; desc: string; long: string }> = {
 	"ask-always": { label: "Always Ask", desc: "每次工具调用都确认", long: "最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。" },
 	"ask-risky": { label: "Ask When Needed", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
-	never: { label: "Never Ask", desc: "全部自动放行", long: "全自动档：所有工具调用直接放行，只有极危险命令（如删除系统文件）仍会确认。完全信任当前会话、追求连续执行时用。" },
+	never: { label: "Never Ask", desc: "全部自动放行", long: "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。" },
 };
 let panelCache: PanelData | undefined;
 
@@ -764,6 +814,9 @@ const refreshPanel = async (): Promise<void> => {
 
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
 const SLASH_ITEMS: SlashItem[] = [
+	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
+	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」：所有工具批准自动处理（含危险命令；手写 deny 规则仍拦）。等同于 /permission never。回答进行中也可执行，本轮生效。" },
+	{ name: "/auto", desc: "一键日常默认档", long: "权限模式直达「Ask When Needed」（只读放行、危险确认）。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
 	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
@@ -774,16 +827,14 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
 	{
-		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）。",
+		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）。",
 	},
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
+	// 批⑤⑥：/usage /status 退役出菜单（并入 /other 面板；打字面留指路）
 	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
 	{ name: "/fork", desc: "分叉会话", long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
-	{ name: "/title", aliases: ["rename"], desc: "会话命名", long: "给当前会话起名字（/title 名字），在 /sessions 列表里按名字找会话。无参查看当前名。" },
-	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」（危险命令仍会确认）。等同于 /permission never。" },
-	{ name: "/usage", desc: "token 用量", long: "当前会话与历史累计的 input/output token 用量。" },
-	{ name: "/status", desc: "运行状态", long: "模型、会话 ID、模块图状态一览（文本版右侧面板）。" },
+	{ name: "/title", aliases: ["rename"], desc: "会话命名", long: "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。" },
 	{ name: "/reload", desc: "重载模块", long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
 ];
 
@@ -821,25 +872,26 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         app.viewText("帮助", HELP_TEXT);
         return;
       }
-      // busy 命令策略（F5 十六轮② 用户拍板）：/quit 族立即执行并打断当前输出；
-      // /new /sessions(/resume) /provider /summary 直接拒收（会话/配置操作没理由排队）；
-      // 其余命令与消息照旧排队（尾行「已排队 N 条」）
-      const cmdN = text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
+      // busy 命令策略（批①②④⑦d 重构）：/quit 族立即打断退出；即改档（BUSY_EXEC）busy 期直接执行；
+      // 拦回车档（BUSY_BLOCK）已由 submitGate 拦在提交前（到不了这里）；其余命令与消息照旧排队
+      const cmdN = cmdNameOf(text);
       if (inflight) {
         if (cmdN === "/quit" || cmdN === "/exit" || cmdN === "/q") {
           void h.cancel(); // 打断当前消息输出
           action = "quit";
           return;
         }
-        if (cmdN === "/new" || cmdN === "/sessions" || cmdN === "/session" || cmdN === "/resume" || cmdN === "/provider" || cmdN === "/summary") {
-          dm.pushLine(`[提示] 回答进行中——${cmdN} 不支持排队，请等本轮结束后再执行（Esc 可取消当前回答）`);
-          return;
-        }
+        if (BUSY_EXEC.has(cmdN)) { runSubmit(text, true); return; }
         pendingSubmits.push(text);
         app.setQueued(pendingSubmits.length);
         return;
       }
       runSubmit(text);
+    },
+    submitGate: (text) => {
+      // 批④：拦回车档的拒因（返回串 = 拦截——FullApp 尾行瞬显，输入保留不进历史）
+      const c = cmdNameOf(text);
+      return inflight && BUSY_BLOCK.has(c) ? `回答进行中——${c} 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）` : undefined;
     },
     requestExit: () => {
       action = "quit";
@@ -884,27 +936,39 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
   const pendingSubmits: string[] = [];
   let inflight = false;
-  const runSubmit = (text: string): void => {
-    inflight = true;
+  // busyExec = busy 即改档（批①②⑦d）：不占有/释放 inflight 与 busy（归进行中的 turn 所有），
+  // 结果走单行 pushLine（md 块会 settle 活动流块——busy 期 [提示] 直写先例）；命令不产生 switch/quit 语义
+  const runSubmit = (text: string, busyExec = false): void => {
+    if (!busyExec) {
+      inflight = true;
+      app.setBusy(true);
+    }
     const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
-    app.setBusy(true);
     if (!cmd.startsWith("/")) {
       const chips = pendingImageLabels.length > 0 ? `  ${pendingImageLabels.join(" ")}` : "";
       dm.userPrompt(text + chips);
     }
     void (async () => {
+      const modelBefore = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：反馈靠前后 diff
       try {
-        const r = await processReplLine(text, (s) => dm.pushMd(s, streamW())); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
-        if (r === "switch") action = "switch";
-        else if (r === "quit") action = "quit";
+        const emit = busyExec ? (s: string) => dm.pushLine(s) : (s: string) => dm.pushMd(s, streamW()); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
+        const r = await processReplLine(text, emit);
+        if (modelBefore !== undefined) reportModelSwitch(modelBefore);
+        if (!busyExec) {
+          if (r === "switch") action = "switch";
+          else if (r === "quit") action = "quit";
+        }
       } finally {
-        inflight = false;
-        app.setBusy(false);
-        // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
-        void refreshPanel();
-        const next = pendingSubmits.shift();
-        app.setQueued(pendingSubmits.length);
-        if (next !== undefined && action === undefined) runSubmit(next);
+        // busy 即改档不占有/释放 inflight——turn 的 finally 归原属主（条件块形态：finally 里不写 return——oxlint no-unsafe-finally）
+        if (!busyExec) {
+          inflight = false;
+          app.setBusy(false);
+          // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
+          void refreshPanel();
+          const next = pendingSubmits.shift();
+          app.setQueued(pendingSubmits.length);
+          if (next !== undefined && action === undefined) runSubmit(next);
+        }
       }
     })();
   };
@@ -956,7 +1020,9 @@ if (args.print === undefined) try {
       if (line === null) break sessionLoop;
       const text = line.trim();
       if (text === "") continue;
+      const mb = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：切换反馈 diff 前后值
       const r = await processReplLine(text, (s) => console.log(s));
+      if (mb !== undefined) reportModelSwitch(mb);
       if (r === "quit") break sessionLoop;
       if (r === "switch") continue sessionLoop;
       // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）

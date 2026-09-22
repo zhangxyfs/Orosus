@@ -40,10 +40,13 @@ describe("decide——模式基线（D36 三档）", () => {
     }
   });
 
-  it("never：放行一切，唯危险命令仍询问（2026-09-17 定案，D36 修订）", () => {
+  it("never：全自动放行一切（含危险/不可分析命令——2026-09-22 学 kimi auto 档语义，推翻 D36 自杀开关；用户显式 deny 规则仍最优先）", () => {
     expect(run({ mode: "never", accesses: [Access.subprocess()] })).toMatchObject({ effect: "allow" });
     expect(run({ mode: "never", accesses: [Access.all()] })).toMatchObject({ effect: "allow" });
-    expect(run({ mode: "never", approvalRule: "tool-shell__bash(rm -rf /)", accesses: [Access.subprocess()] })).toMatchObject({ effect: "ask", memoryKey: null });
+    expect(run({ mode: "never", approvalRule: "tool-shell__bash(rm -rf /)", accesses: [Access.subprocess()] })).toMatchObject({ effect: "allow" }); // 危险门 never 短路
+    expect(run({ mode: "never", approvalRule: "tool-shell__bash(echo $HOME/*.ts)", accesses: [Access.subprocess()] })).toMatchObject({ effect: "allow" }); // unanalyzable 同放
+    // 显式 deny 规则优先于 never（kimi 链同序：UserConfiguredDeny 在 AutoModeApprove 前）
+    expect(run({ mode: "never", accesses: [Access.subprocess()], name: "tool-shell__bash", rules: [{ effect: "deny", tool: "tool-shell__bash" }] })).toMatchObject({ effect: "deny", source: "rule" });
   });
 });
 

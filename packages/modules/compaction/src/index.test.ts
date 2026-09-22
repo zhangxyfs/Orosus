@@ -9,7 +9,8 @@ const u = (t: string): ModelMessage => ({ role: "user", content: [{ kind: "text"
 const a = (t: string): ModelMessage => ({ role: "assistant", content: t === "" ? [] : [{ kind: "text", text: t }] });
 const tr = (id: string, chars: number): ModelMessage => ({ role: "toolResult", callId: id, output: "x".repeat(chars), isError: false });
 
-const stubUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true };
+const notices: string[] = []; // notice 通道捕获（批⑧——纯提示类结果改走 ui.notice，不落返回串）
+const stubUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true, notice: (t) => notices.push(t) };
 
 // schema 全默认值的手写镜像（fake ctx 不经 zod default 管线——kernel 真链路才有）
 const DEFAULTS = {
@@ -382,7 +383,8 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     const s = setup();
     await def.activate(s.ctx);
     await s.listener([]); // 已预热但确无对话
-    expect(await s.command("", stubUi)).toContain("无可压缩历史");
+    expect(await s.command("", stubUi)).toBe(""); // 静默空串
+    expect(notices.some((t) => t.includes("无可压缩历史"))).toBe(true); // 提示走 notice
     expect(s.appended).toHaveLength(0);
   });
 
@@ -410,7 +412,8 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
   it("⑦ resume 冷缓存回落：缓存未预热 → 「已安排」+ forceKind 置位（下一条消息发出前压缩）", async () => {
     const s = setup(); // 未 fire listener——lastSeenMessages undefined（ctx.session 无读口，模块拿不到冷投影）
     await def.activate(s.ctx);
-    expect(await s.command("", stubUi)).toContain("已安排");
+    expect(await s.command("", stubUi)).toBe(""); // 静默空串
+    expect(notices.some((t) => t.includes("已安排"))).toBe(true); // 提示走 notice
     expect(s.appended).toHaveLength(0);
     await s.listener(bigMsgs()); // force manual 消费：threshold=0 → 立即压缩
     expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);

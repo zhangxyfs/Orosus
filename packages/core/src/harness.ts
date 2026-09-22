@@ -1,6 +1,6 @@
 import { orosusHome } from "@orosus/contracts/home";
-import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
@@ -69,6 +69,14 @@ export interface Harness {
   /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
    *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
   liveChunks(): AsyncIterable<Chunk>;
+  /** Token 用量读口（2026-09-22 命令分级批⑤——/usage 内建命令退役，宿主 /other 面板直调）：
+   *  当前会话累计恒有；存储后端支持跨会话累计（JsonlStore）时带 lifetime。 */
+  usage(): Promise<{ current: { input: number; output: number }; lifetime?: { input: number; output: number; sessions: number } }>;
+  /** 运行状态读口（批⑥——/status 内建命令退役并入 /other）：model（含运行期覆盖标记）、会话 id、模块图三计数。 */
+  status(): { model: string; overridden: boolean; sessionId: string; modules: { active: number; failed: number; discovered: number } };
+  /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
+   *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
+  setLabel(label: string): Promise<void>;
   graph(): ModuleGraph;
   reload(): Promise<ReloadReport>;  // quiesce 后执行（§5.5/T15）
   close(): Promise<void>;
@@ -206,6 +214,23 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const live = new LiveChannel(); // 实时旁路（T4/D45）：Chunk 级内存投递，断连即弃
   const store = forwardingStore(baseStore, channel);
 
+  // header 兜底面（2026-09-22 fork 走查连带实证：/yolo /title 等事件先于首个 turn 落盘 → 无 header 的
+  // 「断头文件」污染 /sessions 且 verifyChain 无根可校验）：经模块面（loadModules 的 session 参）的 append
+  // 一律先补 header。holder 占位 = 直通（loadModules 激活期 header 依赖图未就绪——现状无模块在激活期落事件）；
+  // header 本体由 ensureHeader 经裸 store.append 写，不经此面（防递归）
+  const ensureHeaderHolder: { fn: () => Promise<void> } = { fn: async () => undefined };
+  const sessionGuarded: SessionStore = {
+    sessionId: store.sessionId,
+    append: async (type, fields) => {
+      await ensureHeaderHolder.fn();
+      return store.append(type, fields);
+    },
+    all: () => store.all(),
+    ...(store.lifetimeUsage !== undefined ? { lifetimeUsage: () => store.lifetimeUsage!() } : {}),
+    flush: () => store.flush(),
+    close: () => store.close(),
+  };
+
   // 窗口语义（M3 补强空白 §5）：核心顶层 contextWindow——正整数才生效；非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）
   const readContextWindow = (core: Record<string, unknown>): number | undefined => {
     const v = core.contextWindow;
@@ -249,7 +274,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     defs,
     cli: cliInput,
     sections: config.sections,
-    session: store,
+    session: sessionGuarded, // header 兜底面——模块事件先于首个 turn 落盘时先补 header（断头文件实证修复）
     sink,
     spillDir: spillDirUsed,
     cwd: options.cwd ?? process.cwd(),
@@ -285,6 +310,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await store.append(LOG_TYPES.sessionFork, { sourceEntryId: pendingForkSourceEntryId ?? null, parentSession: options.fork.parentSessionId });
     }
   };
+  ensureHeaderHolder.fn = ensureHeader; // 模块面 header 兜底激活（loadModules 已过、图就绪——holder 占位期无人落事件）
+
+  // fork 即刻落盘（2026-09-22 用户实测：fork 走懒写 → 零 turn 时 /sessions 看不到子会话、观感同 /new）——
+  // fork 是显式用户动作，不是 D46 懒写要挡的临时空壳：header + session/fork 立即写并刷盘
+  if (options.fork !== undefined) {
+    await ensureHeader();
+    await store.flush();
+  }
 
   // 会话自动标题（M4-2 B9 用户拉前，2026-09-19 走查）：首轮 completed 后经主 provider 生成 ≤16 字标题，
   // 落 session/label（M3/T6 预留类型首次消费）；LLM 失败/空产出 → 兜底 = 首问文本截断。已有 label（resume）跳过。
@@ -338,7 +371,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     provider: "provider-custom__provider",
     permission: "approval__permission", // M3 随审批模块落地
     compact: "compaction__compact",    // M3 补强 T8 runbook 走查发现：M3 起短名从未路由（注册名是全名）——补齐
-    yolo: "approval__yolo",            // 用户走查 2026-09-19：一键从不询问（never——危险命令仍确认）
+    yolo: "approval__yolo",            // 用户走查 2026-09-19：一键从不询问（never——2026-09-22 起全自动含危险命令，kimi auto 语义）
+    auto: "approval__auto",            // 2026-09-22 用户拍板：一键回日常默认档（ask-risky——/yolo 镜像）
   };
 
   const builtinCommands = new Map<string, (args: string) => Promise<string>>([
@@ -356,42 +390,53 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       let next = slotName;
       const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
       if (slot?.listModels !== undefined) {
+        let models: string[] = [];
         try {
-          const models = await slot.listModels();
-          if (models.length > 0) {
-            const mpick = await commandUi.choose(`选择模型（来自 ${slotName} 端点实时清单）`, [...models, "手动输入…"]);
-            if (mpick.includes("手动输入")) {
-              const manual = (await commandUi.ask("model")).trim();
-              if (manual === "") return "已取消（空输入）";
-              next = manual.includes("/") ? manual : `${slotName}/${manual}`;
-            } else {
-              next = `${slotName}/${mpick}`;
-            }
-          }
+          models = await slot.listModels();
         } catch (err) {
           createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
           const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
           if (manual !== "") next = manual;
         }
+        // choose 在 try 外：Esc 的「已取消（Esc）」带内抛错必须穿透——曾在兜底 catch 内被吞成「拉取失败」
+        // 而回落手输（2026-09-22 用户实测：Esc 后仍问模型名）。清单来源随槽值目录优选（provider-custom），标题不标注来源
+        if (models.length > 0) {
+          // 清单 = 纯模型项（2026-09-22 用户拍板：「手动输入…」项退役——清单就是全部可达路径；
+          // 手输兜底只剩 listModels 失败时的 catch 分支）。当前模型勾标（与 /permission 二级列表 ✓ 当前值同族）：
+          // 全名取尾段比对；裸槽名值经槽 defaultModel 解析（面板同口径）
+          const curRaw = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : undefined);
+          const curBare = curRaw === undefined ? undefined
+            : curRaw.includes("/") ? curRaw.split("/").pop()
+            : curRaw === slotName ? slot.defaultModel
+            : curRaw;
+          const mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
+          next = `${slotName}/${mpick.replace(/ ✓$/, "")}`;
+        }
       }
+      // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
+      // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
       modelOverride = next;
-      // 持久化确认（M4-2 T14/D38 修订）：缺省仍内存态（D38 原语义不变），显式确认才写盘——
-      // 行级写 user config 顶层 model 键（无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
-      const persist = await commandUi.confirm("写入 config 永久生效？（否则仅本会话）");
-      if (persist) {
-        const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
-        // F5 十轮：行级写 provider 键（/model 选的是具体模型——值保留 slot/model 全形）；旧 model 行清除防双键漂移
-        let after = /^model\s*=.*$/m.test(before)
-          ? before.replace(/^model\s*=.*$/m, `provider = "${next}"`)
-          : `${before}${before.endsWith("\n") || before === "" ? "" : "\n"}provider = "${next}"\n`;
-        after = after.replace(/^model\s*=.*\n?/m, (m0) => (m0.includes("provider") ? m0 : ""));
-        writeFileSync(userConfigFile, after, "utf8");
-        return `model 已切换并写入 config（provider 键）：${next}（下次启动生效）`;
-      }
-      return `model 已切换（本会话）：${next}`;
+      // 持久化（2026-09-22 用户拍板，推翻 T14/D38「显式确认才写盘」）：选定即写盘永久生效——
+      // 「要不要永久」是工具该自己处理的琐事，不该问用户。行级写 user config 顶层 provider 键
+      // （无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
+      const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
+      // TOML 顶层锚定（2026-09-22 启动阻断实证：裸键追加在文件末尾会落进最后一个 [节]——approval strict 校验
+      // 直接拒启动）。节区感知：顶层区 = 首个节头之前；旧 model/provider 行只在顶层区清除，新键写到顶层区末尾
+      const cfgLines = before.split("\n");
+      const firstSection = cfgLines.findIndex((l) => /^\s*\[/.test(l));
+      const headEnd = firstSection === -1 ? cfgLines.length : firstSection;
+      const head = cfgLines.slice(0, headEnd).filter((l) => !/^\s*(model|provider)\s*=/.test(l));
+      while (head.length > 0 && head[head.length - 1]!.trim() === "") head.pop(); // 尾空行收拢
+      head.push(`provider = "${next}"`); // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行已随上方过滤清除
+      const after = [...head, "", ...cfgLines.slice(headEnd)].join("\n").replace(/\n{3,}/g, "\n\n");
+      mkdirSync(dirname(userConfigFile), { recursive: true }); // 目录缺省即建（批⑧确认制废除后写盘无条件化——宿主/测试自定义路径不得 ENOENT）
+      writeFileSync(userConfigFile, after, "utf8");
+      // 静默返回（2026-09-22 用户拍板：切换反馈由宿主侧浮动 toast 承担——diff h.status() 前后值得知；
+      // 空串 = 不落流区的管线约定，同 /permission /yolo）
+      return "";
     }],
     ["/help", async () => {
-      const lines = ["内建命令：", "  /model /help /status /usage /reload"]; // M2 补账：/reload 是内建表第五成员，原清单漏列
+      const lines = ["内建命令：", "  /model /help /reload"]; // 批⑤⑥：/usage /status 退役（宿主读口 h.usage()/h.status() 取代，CLI 并入 /other 面板）
       lines.push("别名命令：");
       for (const [short, full] of Object.entries(COMMAND_ALIASES)) {
         const present = graph.commands.some((c) => c.name === full);
@@ -402,30 +447,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       lines.push(cmds.length > 0 ? `  /${cmds.join(" /")}` : "  （无）");
       return lines.join("\n");
     }],
-    ["/status", async () => {
-      const audit = graph.audit();
-      const active = audit.filter((a) => a.state === "active").length;
-      const failed = audit.filter((a) => a.state === "failed").length;
-      const discovered = audit.filter((a) => a.state === "discovered").length;
-      // model 未配置时显示「（未配置）」而非字面量 undefined（M2 补账：走查发现）
-      const modelNow = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : "（未配置）");
-      return `model: ${modelNow}${modelOverride !== undefined ? "（运行期覆盖）" : ""}
-session: ${store.sessionId}
-模块图: active ${active} / failed ${failed} / discovered ${discovered}`;
-    }],
     ["/reload", async () => {
       const r = await harnessImpl.reload();
       return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length}`;
-    }],
-    ["/usage", async () => {
-      // 双口径（参考系对照：会话级是 /usage 类命令的默认语义，跨会话是独立视图——cc-haha /cost vs /stats）：
-      // 当前会话恒显示；存储支持跨会话累计（JsonlStore 扫同目录全部会话）时加累计行，内存/SQLite 后端缺省
-      const cur = sumUsage(await store.all());
-      if (store.lifetimeUsage !== undefined) {
-        const all = await store.lifetimeUsage();
-        return `当前会话：input ${cur.input} / output ${cur.output} tokens\n累计（当前项目 ${all.sessions} 场会话）：input ${all.input} / output ${all.output} tokens`; // T5/决策点④：口径收窄为当前项目桶——标签随口径同步（用户视角防撒谎）
-      }
-      return `当前会话：input ${cur.input} / output ${cur.output} tokens`;
     }],
     ["/context", async () => {
       // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出），
@@ -439,7 +463,11 @@ session: ${store.sessionId}
       // 压缩摘要查看口（M4-2.5 T4——压缩调研 P2：六家独一份的「摘要不可见」补齐）——直读最近 turn/compaction 事件
       const compactions = (await store.all()).filter((e) => e.type === "turn/compaction");
       const last = compactions.at(-1) as { summary?: string; droppedCount?: number } | undefined;
-      if (last === undefined) return "本会话尚未压缩过——上下文增长到阈值会自动压缩，或随时 /compact 手动压缩";
+      if (last === undefined) {
+        // 纯提示走 notice（批⑧：toast 浮动窗/行模式单行，不落流区）+ 空串静默
+        commandUi.notice?.("本会话尚未压缩过——上下文增长到阈值会自动压缩，或随时 /compact 手动压缩");
+        return "";
+      }
       return `[压缩摘要（本会话第 ${compactions.length} 次，压前缀 ${last.droppedCount ?? "?"} 条）]\n\n${String(last.summary ?? "")}`;
     }],
   ]);
@@ -501,10 +529,11 @@ session: ${store.sessionId}
 
     async prompt(text, opts) {
       if (closed) throw new Error("harness 已关闭");
-      if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
       // 命令路由（D38 三层：CLI 拦截在宿主侧；此处内建表 > 别名 > 模块注册）。命令不触发 agentLoop、不落会话日志
       // 命令归一化（2026-09-19 用户走查）：`/ status`、`/compact  `、` /model ` 一律可解析——
       // 斜杠后空格抹除 + 连续空白折叠（不认就当聊天发出是缺陷；与 CLI 拦截层 sessionCommand 同款规则）
+      // 批①②：命令路由先于单并发守卫——命令不创建 turn，busy 期可执行（/model /permission /yolo 等）；
+      // 守卫只挡聊天消息。注意：core 不设 busy 白名单——「哪些命令 turn 安全」是宿主分级职责（/compact 这类改历史的仍须排队）
       const cmdText = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmdText.startsWith("/")) {
         const m = /^\/([a-z0-9][a-z0-9-]*(?:__[a-z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(cmdText);
@@ -522,6 +551,7 @@ session: ${store.sessionId}
         }
         return await cmd.handler(args, commandUi);
       }
+      if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
       const controller = new AbortController();
       let settle!: () => void;
       const done = new Promise<void>((resolve) => { settle = resolve; });
@@ -600,6 +630,37 @@ session: ${store.sessionId}
 
     graph() {
       return graph;
+    },
+
+    // 批⑤：/usage 内建命令退役后的宿主读口（双口径不变——会话级恒有、项目级随存储后端）
+    async usage() {
+      const cur = sumUsage(await store.all());
+      const lt = store.lifetimeUsage !== undefined ? await store.lifetimeUsage() : undefined;
+      return { current: cur, ...(lt !== undefined ? { lifetime: lt } : {}) };
+    },
+
+    // 批⑥：/status 内建命令退役后的宿主读口（model 未配置显示「（未配置）」——M2 补账口径保留）
+    status() {
+      const audit = graph.audit();
+      const configured = typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : "（未配置）";
+      return {
+        model: modelOverride ?? configured,
+        overridden: modelOverride !== undefined,
+        sessionId: store.sessionId,
+        modules: {
+          active: audit.filter((a) => a.state === "active").length,
+          failed: audit.filter((a) => a.state === "failed").length,
+          discovered: audit.filter((a) => a.state === "discovered").length,
+        },
+      };
+    },
+
+    // 批⑦a：/title 当前会话改名走活 store（单写者——旁路新建 store 写活文件会破 parentId 链/seq 单调）。
+    // append 后立即 flush（2026-09-22 用户实测：label 滞留写缓冲时 /sessions 读盘看不到新名——改名必须即落盘）
+    async setLabel(label: string) {
+      await ensureHeader(); // 命名先于首个 turn 也不出断头文件（/title 新政同 fork 走查批）
+      await store.append(LOG_TYPES.sessionLabel, { label: label.slice(0, 200) });
+      await store.flush();
     },
 
     async reload() {

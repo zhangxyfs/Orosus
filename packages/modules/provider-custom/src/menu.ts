@@ -1,6 +1,6 @@
 import { parseModelsResponse } from "@orosus/contracts/provider";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { detectSameGate, type Catalog, type CatalogEntry, type CatalogModel, type CatalogSource } from "./catalog.ts";
+import { detectSameGate, usableCatalogModels, type Catalog, type CatalogEntry, type CatalogModel, type CatalogSource } from "./catalog.ts";
 
 /** D35 CommandUi 的本地结构形态（T10 落 contracts 后结构兼容直通；无头环境由宿主注入拒绝式实现——fail-closed）。 */
 export interface MenuUi {
@@ -51,14 +51,8 @@ function relTime(ms: number): string {
   return `${Math.floor(h / 24)} 天前`;
 }
 
-/** 可导入的 text 模型（deprecated/alpha/embedding/非文本输出/非工具调用排除——D34 过滤 + 走查补）。
- *  真正解析 api.json 元数据：按 release_date 新→旧排（无日期殿后），返回模型对象（标签/窗口/日期要用）。 */
-function usableModels(entry: CatalogEntry): CatalogModel[] {
-  return Object.values(entry.models ?? {})
-    .filter((m) => (m.modalities?.output === undefined || m.modalities.output.includes("text")) && m.status !== "deprecated" && m.status !== "alpha")
-    .filter((m) => m.tool_call !== false && !/embed/i.test(m.id))
-    .toSorted((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? "") || a.id.localeCompare(b.id));
-}
+/** 可导入的 text 模型清单（口径单源在 catalog.ts 的 usableCatalogModels——槽值 listModels 目录优选同用）。 */
+const usableModels = usableCatalogModels;
 
 /** 目录模型菜单标签：id（名称 · 上下文 NK · 发布日期）——元数据缺省的条目退化为裸 id。 */
 function modelLabel(m: CatalogModel): string {

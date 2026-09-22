@@ -213,7 +213,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
       choose: async () => answers.shift() ?? "取消",
     };
     const out = await handler("", ui);
-    expect(out).toBe("权限模式已切换：ask-always"); // 瘦身钉（2026-09-20 用户实测：只报切到什么）
+    expect(out).toBe(""); // 静默钉（2026-09-22 用户拍板：切换成功零输出——面板 chip 自反映，流区落行是噪音）
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
   });
 
@@ -253,7 +253,7 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     expect(asked[0]).toContain("当前权限模式：ask-risky");
     expect(asked[0]).toContain("Never Ask"); // F5 十轮⑤：英文档名
     expect(asked[0]).not.toContain("查看规则清单");
-    expect(out).toContain("ask-always");
+    expect(out).toBe(""); // 静默钉（批⑧——生效面在 policy 事件与写盘，输出零行）
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
     expect(readFileSync(join(base, "c1.toml"), "utf8")).toContain('mode = "ask-always"');
   });
@@ -274,7 +274,7 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     const { u, asked } = mkUi([]);
     const out = await h.commands.get("approval__permission")!("ask-always", u);
     expect(asked).toHaveLength(0); // 零交互——不弹菜单
-    expect(out).toBe("权限模式已切换：ask-always");
+    expect(out).toBe(""); // 静默钉同上
     expect(readFileSync(join(base, "c2b.toml"), "utf8")).toContain('mode = "ask-always"');
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-always")).toBe(true);
     const bad = await h.commands.get("approval__permission")!("bogus", u);
@@ -287,8 +287,19 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     const { u, asked } = mkUi([]);
     const out = await h.commands.get("approval__yolo")!("", u);
     expect(asked).toHaveLength(0); // 一键——无菜单
-    expect(out).toBe("权限模式已切换：never"); // 瘦身钉同上
+    expect(out).toBe(""); // 静默钉同上
     expect(readFileSync(join(base, "c3.toml"), "utf8")).toContain('mode = "never"');
     expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "never")).toBe(true);
+  });
+
+  it("④ /auto（approval__auto，2026-09-22 用户拍板）→ 零交互直接 ask-risky + 写盘 + policy 事件（/yolo 镜像——回日常默认档的直达键）", async () => {
+    const h = fakeCtx({ config: { configFile: join(base, "c4.toml"), projectConfigFile: join(base, "no-proj.toml") } });
+    await def.activate(h.ctx);
+    const { u, asked } = mkUi([]);
+    const out = await h.commands.get("approval__auto")!("", u);
+    expect(asked).toHaveLength(0);
+    expect(out).toBe(""); // 静默钉同上
+    expect(readFileSync(join(base, "c4.toml"), "utf8")).toContain('mode = "ask-risky"');
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-risky")).toBe(true);
   });
 });

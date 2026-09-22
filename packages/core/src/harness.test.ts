@@ -7,6 +7,7 @@ import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
 import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import { InMemorySessionStore } from "./session/memory.ts";
 import { JsonlSessionStore } from "./session/jsonl.ts";
+import { verifyChain } from "./session/fork.ts";
 import { createHarness } from "./index.ts";
 
 let dir: string;
@@ -82,10 +83,10 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     expect(events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("续聊"))).toBe(true);
   });
 
-  it("命令归一化：斜杠后空格/连续空格/首尾空白可解析（/ status 同 /status——2026-09-19 用户走查）", async () => {
+  it("命令归一化：斜杠后空格/连续空格/首尾空白可解析（/ reload 同 /reload——2026-09-19 用户走查；载体自 /status 换 /reload，批⑥退役）", async () => {
     const h = await makeHarness();
-    const out = await h.prompt("/  status");
-    expect(out).toContain("model:");
+    const out = await h.prompt("/  reload");
+    expect(out).toContain("reload 完成");
     await h.close();
   });
 
@@ -233,37 +234,40 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 
-  it("⑧ /help：按类分组输出且含三层全部命令", async () => {
+  it("⑧ /help：按类分组输出且含三层全部命令（批⑤⑥：/usage /status 退役后不再列）", async () => {
     const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
     const out = await h.prompt("/help");
     expect(out).toContain("内建");
     expect(out).toContain("/model");
     expect(out).toContain("/help");
-    expect(out).toContain("/status");
-    expect(out).toContain("/usage");
+    expect(out).not.toContain("/status");
+    expect(out).not.toContain("/usage");
     expect(out).toContain("/provider");
     expect(out).toContain("m__cmd");
     await h.close();
   });
 
-  it("⑨ /status：输出含当前 model 与模块图摘要", async () => {
+  it("⑨ h.status() 读口（批⑥——/status 命令退役）：model 含覆盖标记、会话 id、模块图三计数", async () => {
     const h = await makeHarness({});
-    const out = await h.prompt("/status");
-    expect(out).toContain("model");
-    expect(out).toContain("fake/m");
+    const st = h.status();
+    expect(st.model).toBe("fake/m");
+    expect(st.overridden).toBe(false);
+    expect(st.sessionId).toBe(h.sessionId);
+    expect(st.modules.active).toBeGreaterThan(0);
+    expect(st.modules).toMatchObject({ failed: 0 });
     await h.close();
   });
 
-  it("⑩ /usage（内存后端回退）：仅当前会话口径，不出现跨会话累计行", async () => {
+  it("⑩ h.usage() 读口（批⑤——内存后端回退）：仅当前会话口径，无 lifetime 字段", async () => {
     const { h } = await ownHarness({ model: "fake/m" });
     await h.prompt("hi");
-    const out = await h.prompt("/usage");
-    expect(out).toContain("当前会话：input 3 / output 5 tokens");
-    expect(out).not.toContain("累计");
+    const u = await h.usage();
+    expect(u.current).toEqual({ input: 3, output: 5 });
+    expect(u.lifetime).toBeUndefined();
     await h.close();
   });
 
-  it("⑩b /usage 双口径（JsonlStore.lifetimeUsage）：当前会话一行 + 全部会话累计一行（对齐参考系：会话级是默认语义，跨会话另列）", async () => {
+  it("⑩b h.usage() 双口径（JsonlStore.lifetimeUsage）：当前会话 + 项目累计（对齐参考系：会话级是默认语义，跨会话另列）", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-usage-"));
     const old = new JsonlSessionStore({ dir, sessionId: "s_old" });
     await old.append("assistant/chunk", { chunk: { type: "usage", input: 11, output: 6 } });
@@ -275,9 +279,66 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
       config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
     });
     await h.prompt("hi");
-    const out = await h.prompt("/usage");
-    expect(out).toContain("当前会话：input 3 / output 5 tokens");
-    expect(out).toContain("累计（当前项目 2 场会话）：input 14 / output 11 tokens"); // 11+3 / 6+5——T5/决策点④：标签随口径收窄同步（dir 即项目桶）
+    const u = await h.usage();
+    expect(u.current).toEqual({ input: 3, output: 5 });
+    expect(u.lifetime).toEqual({ input: 14, output: 11, sessions: 2 }); // 11+3 / 6+5——T5/决策点④：口径 = 当前项目桶（dir）
+    await h.close();
+  });
+
+  it("⑩c h.setLabel() 写口（批⑦a——/title 走活 store 单写者）：label 落链且后续事件 parentId 续接不破链", async () => {
+    const { h } = await ownHarness({ model: "fake/m" });
+    await h.prompt("hi"); // 先产生若干事件（活 store 内存尾部前进）
+    await h.setLabel("手动命名");
+    await h.prompt("再来一轮"); // 活 store 续写——parentId 必须接在 label 之后
+    const events = await h.history();
+    expect(events.filter((e) => e.type === "session/label").at(-1)!.label).toBe("手动命名");
+    expect(verifyChain(events)).toEqual([]); // 链完好——旁路双写者的破链回归（sessions.ts setTitle 旧路径）不再发生
+    await h.close();
+  });
+
+  it("⑩e h.setLabel() 即落盘（2026-09-22 用户实测：label 滞留写缓冲时 /sessions 读盘看不到新名）——新 store 读盘立即可见", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-label-"));
+    const sessDir = join(dir, "sessions");
+    const h = await createHarness({
+      store: new JsonlSessionStore({ dir: sessDir }), diagDir: join(dir, "diag"), spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("hi");
+    await h.setLabel("落盘名");
+    // 旁路新 store 直读盘（/sessions 的视角）——不经活 store 内存镜像
+    const diskEvents = await new JsonlSessionStore({ dir: sessDir, sessionId: h.sessionId }).all();
+    expect(diskEvents.some((e) => e.type === "session/label" && e.label === "落盘名")).toBe(true);
+    await h.close();
+  });
+
+  it("⑩d 命令不过单并发守卫（批①②——路由先行的实证）：turn 进行中命令可执行，聊天仍被拒", async () => {
+    // 挂起 fake：流不结束（直到 abort）让 turn 一直占坑——命令此时可路由执行，第二条聊天 prompt 仍撞守卫
+    const hanging: ModuleDefinition = fakeModule("provider-fake", {
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: (req: { signal?: AbortSignal }) => (async function* (): AsyncGenerator<Chunk> {
+            yield { type: "text/delta", text: "x" };
+            await new Promise<void>((resolve) => {
+              if (req.signal?.aborted === true) { resolve(); return; }
+              req.signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+          })(),
+        });
+      },
+    });
+    dir = mkdtempSync(join(tmpdir(), "orosus-busycmd-"));
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [hanging], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    const turn = h.prompt("hi"); // 不 await——turn 挂起中
+    await new Promise((r) => setTimeout(r, 20)); // 让 turn 起跑占坑
+    const out = await h.prompt("/help"); // 命令在 busy 期可执行
+    expect(out).toContain("内建命令");
+    await expect(h.prompt("第二条")).rejects.toThrow(/进行中的 turn/); // 聊天消息仍被守卫挡
+    h.cancel();
+    await turn.catch(() => undefined);
     await h.close();
   });
 });
@@ -492,7 +553,7 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
 });
 
 describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", () => {
-  const mk = async (opts: { listModels?: () => Promise<string[]>; extraProv?: boolean }) => {
+  const mk = async (opts: { listModels?: () => Promise<string[]>; extraProv?: boolean; escChoose?: boolean }) => {
     dir = mkdtempSync(join(tmpdir(), "orosus-model-"));
     const prov: ModuleDefinition = {
       ...fakeModule("provider-fake", {}),
@@ -515,9 +576,14 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
       },
     };
     const uiAnswers: { choose: string[]; ask: string[] } = { choose: [], ask: [] };
+    const seenItems: string[][] = []; // choose 清单捕获（批⑧：「手动输入…」退役钉）
+    let askCalls = 0;
     const ui: CommandUi = {
-      choose: async (_t, items) => { void items; return uiAnswers.choose.shift() ?? items[0]!; },
-      ask: async () => uiAnswers.ask.shift() ?? "",
+      choose: async (_t, items) => {
+        if (opts.escChoose === true) throw new Error("已取消（Esc）"); // 机制③带内抛错（overlay Esc 的统一表达）
+        seenItems.push(items); return uiAnswers.choose.shift() ?? items[0]!;
+      },
+      ask: async () => { askCalls++; return uiAnswers.ask.shift() ?? ""; },
       askSecret: async () => uiAnswers.ask.shift() ?? "",
       confirm: async () => true,
     };
@@ -526,14 +592,15 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
       modules: opts.extraProv === true ? [prov, extra] : [prov],
       config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
     });
-    return { h, uiAnswers };
+    return { h, uiAnswers, askCalls: () => askCalls, seenItems };
   };
 
-  it("① 单槽直达（F5 用户实测拍板）：只有一格默认模型槽时跳过「选择平台」，直接拉端点清单", async () => {
+  it("① 单槽直达（F5 用户实测拍板）：只有一格默认模型槽时跳过「选择平台」，直接拉端点清单；选定静默生效（批⑧——返回空串，反馈走宿主 toast）", async () => {
     const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3", "glm-4.7"] });
     uiAnswers.choose.push("glm-4.7"); // 首个 choose 即端点清单（无平台 choose 可答）
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换并写入 config（provider 键）：fake/glm-4.7"); // F5 十轮：键名 provider
+    expect(out).toBe(""); // 静默（空串约定）
+    expect(h.status().model).toBe("fake/glm-4.7"); // 生效面：运行期覆盖
     await h.close();
   });
 
@@ -541,7 +608,8 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const { h, uiAnswers } = await mk({ listModels: async () => ["glm-5.3"], extraProv: true });
     uiAnswers.choose.push("fake（默认 m0，裸名即用）", "glm-5.3");
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换并写入 config（provider 键）：fake/glm-5.3");
+    expect(out).toBe("");
+    expect(h.status().model).toBe("fake/glm-5.3");
     await h.close();
   });
 
@@ -549,22 +617,45 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const { h, uiAnswers } = await mk({ listModels: async () => { throw new Error("HTTP 404"); } });
     uiAnswers.ask.push("manual-x");
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换并写入 config（provider 键）：manual-x");
+    expect(out).toBe("");
+    expect(h.status().model).toBe("manual-x");
     await h.close();
   });
 
-  it("③ 槽内手输裸名：自动补槽前缀（顶级手输入口已砍——2026-09-20 用户实测，裸名逻辑内移槽语境）", async () => {
-    const h1s = await mk({ listModels: async () => ["m0"] });
-    h1s.uiAnswers.choose.push("手动输入…");
-    h1s.uiAnswers.ask.push("GLM-5.3");
-    expect(await h1s.h.prompt("/model")).toContain("model 已切换并写入 config（provider 键）：fake/GLM-5.3");
-    await h1s.h.close();
+  it("③ 清单为纯模型项——「手动输入…」退役（2026-09-22 用户拍板：清单即全部可达路径；手输只剩 listModels 失败兜底）", async () => {
+    const { h, uiAnswers, seenItems } = await mk({ listModels: async () => ["m0", "m1"] });
+    uiAnswers.choose.push("m1");
+    await h.prompt("/model");
+    expect(seenItems.flat().some((i) => i.includes("手动输入"))).toBe(false);
+    expect(h.status().model).toBe("fake/m1");
+    await h.close();
+  });
+
+  it("③b 当前模型勾标（2026-09-22 用户拍板——/permission 二级列表 ✓ 当前值同族）：当前项带 ✓，选定后剥勾生效", async () => {
+    const { h, uiAnswers, seenItems } = await mk({ listModels: async () => ["m0", "m1"] });
+    // cliOverrides model = "fake/m"（mk 固定）——无匹配项时不标勾
+    uiAnswers.choose.push("m1");
+    await h.prompt("/model");
+    expect(seenItems[0]).toEqual(["m0", "m1"]);
+    // 覆盖后当前 = fake/m1 → 再次打开清单，m1 带勾；选带勾项 = 维持原值（勾剥除）
+    uiAnswers.choose.push("m1 ✓");
+    await h.prompt("/model");
+    expect(seenItems[1]).toEqual(["m0", "m1 ✓"]);
+    expect(h.status().model).toBe("fake/m1");
+    await h.close();
   });
 
   it("④ 无带默认模型的槽 → 直接提示走 /provider（不弹空菜单、不触发 ui）", async () => {
     const h = await makeHarness({}); // fakeProviderModule 无 defaultModel——一级列表为空
     const out = await h.prompt("/model");
     expect(out).toContain("/provider");
+    await h.close();
+  });
+
+  it("⑤ 清单选择按 Esc → 取消穿透（不得被 listModels 兜底 catch 吞成「拉取失败」而回落手输——2026-09-22 用户实测）", async () => {
+    const { h, askCalls } = await mk({ listModels: async () => ["m1", "m2"], escChoose: true });
+    await expect(h.prompt("/model")).rejects.toThrow("已取消（Esc）");
+    expect(askCalls()).toBe(0); // 取消后不得再问「输入模型名」
     await h.close();
   });
 });
@@ -706,7 +797,7 @@ describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）"
     expect(recs.map((r) => r.seq)).toEqual(recs.map((_, i) => i + 1));
   });
 
-  it("③ fork 懒写：fork 构造零新文件；首 prompt 后前两事件 = header + session/fork（sourceEntryId = fork 时刻父尾）", async () => {
+  it("③ fork 即刻落盘（2026-09-22 用户拍板推翻懒写：fork 是显式动作不是临时空壳——零 turn 也在 /sessions 可见）：构造后前两事件 = header + session/fork（sourceEntryId = fork 时刻父尾）", async () => {
     const d = freshDir();
     const { h: hp, store: parent } = await mkJsonl(d);
     await hp.prompt("父问题");
@@ -721,13 +812,15 @@ describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）"
       config: { ...hermetic(d), cliOverrides: { model: "fake/m" } },
       fork: { parentSessionId: parent.sessionId },
     });
-    expect(readdirSync(join(d, "sessions"))).toEqual([`${parent.sessionId}.jsonl`]); // 仅父文件——own 未建
-    await hc.prompt("子问题");
-    await hc.close();
+    // 即刻落盘：零 turn 子文件已存在且链完好（旧懒写断言「仅父文件」随语义推翻退役）
     const recs = readFileSync(join(d, "sessions", `${hc.sessionId}.jsonl`), "utf8").trim().split("\n")
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(recs[0]).toMatchObject({ type: "session/header", parentSession: parent.sessionId });
     expect(recs[1]).toMatchObject({ type: "session/fork", sourceEntryId: tailId, parentSession: parent.sessionId });
+    await hc.prompt("子问题");
+    await hc.close();
+    const after = readFileSync(join(d, "sessions", `${hc.sessionId}.jsonl`), "utf8").trim().split("\n");
+    expect(after.length).toBeGreaterThan(2); // 后续事件续接在 fork 事件后
   });
 });
 
@@ -775,15 +868,15 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
   });
 });
 
-describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config，否则仅本会话）", () => {
-  const mkUi = (confirmAnswer: boolean): CommandUi => ({
-    ask: async () => "new-model", // 槽内手输裸名 → 自动补 fake/ 前缀（顶级手输入口已砍后的触达路径）
+describe("/model 持久化（2026-09-22 批⑧——选定即写盘不再问，推翻 T14/D38 确认制：「要不要永久」是工具自己的琐事）", () => {
+  const mkUi = (): CommandUi => ({
+    ask: async () => { throw new Error("ask 不应被调用——「手动输入…」项已退役（批⑧）"); },
     askSecret: async () => "",
-    confirm: async () => confirmAnswer,
-    choose: async (_t, items) => items.find((i) => i.includes("手动输入")) ?? items[0]!,
+    confirm: async () => { throw new Error("confirm 不应被调用——/model 不再问持久化"); }, // 钉：确认制废除
+    choose: async (_t, items) => items[0]!, // 清单首项 = m0（listModels 桩）
   });
   // 持久化断言关切写盘行为——provider 需带 defaultModel + listModels（fakeProviderModule 裸流在新菜单下是空列表）
-  const mkPersist = async (confirmAnswer: boolean) => {
+  const mkPersist = async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-harness-"));
     const prov: ModuleDefinition = {
       ...fakeModule("provider-fake"),
@@ -797,25 +890,51 @@ describe("/model 持久化（M4-2 T14/D38 修订——确认后写 user config�
     };
     return createHarness({
       store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
-      commandUi: mkUi(confirmAnswer), modules: [prov],
+      commandUi: mkUi(), modules: [prov],
       config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
     });
   };
 
-  it("① 选后 y → user config 顶层 model 行级写入（读-改-写保其他键）", async () => {
-    const h = await mkPersist(true);
+  it("① 选定即写盘（零确认——confirm 被调即炸）：user config 顶层 provider 行级写入（读-改-写保其他键）；返回静默空串", async () => {
+    const h = await mkPersist();
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换并写入 config");
+    expect(out).toBe(""); // 静默（批⑧——反馈走宿主 toast）
     const cfgText = readFileSync(join(dir, "no-user.toml"), "utf8");
-    expect(cfgText).toContain('provider = "fake/new-model"'); // F5 十轮：键名 provider
+    expect(cfgText).toContain('provider = "fake/m0"'); // F5 十轮：键名 provider；清单首项即选定项
+    expect(h.status().model).toBe("fake/m0");
     await h.close();
   });
 
-  it("② 选后 n → 仅本会话内存态（config 不落盘）", async () => {
-    const h = await mkPersist(false);
+  it("② user config 不存在时新建落盘（原「选 n 仅本会话」语义随确认制退役——一律写盘）", async () => {
+    const h = await mkPersist();
     const out = await h.prompt("/model");
-    expect(out).toContain("model 已切换（本会话）");
-    expect(existsSync(join(dir, "no-user.toml"))).toBe(false); // hermetic userFile 未创建
+    expect(out).toBe("");
+    expect(existsSync(join(dir, "no-user.toml"))).toBe(true); // hermetic userFile 被创建
+    await h.close();
+  });
+
+  it("③ 文件末尾有 [节] 时 provider 仍写顶层（2026-09-22 启动阻断回归：裸键追加在 EOF 曾落进 [approval]，strict 校验拒启动）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-"));
+    const userFile = join(dir, "cfg.toml");
+    writeFileSync(userFile, 'contextWindow = 1000\n\n[approval]\nmode = "ask-risky"\n\n[tui]\nsidebar = true\n', "utf8");
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, { stream: fakeProvider(script).stream, defaultModel: "m0", listModels: async () => ["m0"] });
+      },
+    };
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      commandUi: mkUi(), modules: [prov],
+      config: { userFile, projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("/model");
+    const text = readFileSync(userFile, "utf8");
+    const at = text.indexOf('provider = "fake/m0"');
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(text.indexOf("[approval]")); // 顶层区（首个节头之前）
+    expect(text).toContain('[approval]\nmode = "ask-risky"'); // 节内容原样未动
+    expect(text.slice(text.indexOf("[approval]"))).not.toContain("provider"); // 节内零污染
     await h.close();
   });
 });
@@ -873,11 +992,13 @@ describe("/summary 内建命令（M4-2.5 T4——压缩调研 P2：摘要可见�
     await h.close();
   });
 
-  it("② 无压缩 → 明示（含 /compact 指引）", async () => {
-    const h = await makeHarness();
+  it("② 无压缩 → 提示走 notice 通道（批⑧ toast 化），命令返回静默空串", async () => {
+    const notes: string[] = [];
+    const ui: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => true, notice: (t) => notes.push(t) };
+    const h = await makeHarness({ commandUi: ui });
     const out = await h.prompt("/summary");
-    expect(out).toContain("尚未压缩过");
-    expect(out).toContain("/compact");
+    expect(out).toBe(""); // 静默约定
+    expect(notes.some((t) => t.includes("尚未压缩过") && t.includes("/compact"))).toBe(true);
     await h.close();
   });
 });
@@ -900,5 +1021,59 @@ describe("prompt images（M4-2.5 T5——/paste 图进模型上下文，V.2 销�
     const msgs = deriveMessages(await h.history());
     expect((msgs[0] as { content: unknown }).content).toEqual([{ kind: "text", text: "看图" }, { kind: "image", path: "C:/tmp/paste-1.png", mimeType: "image/png" }]);
     await h.close();
+  });
+});
+
+describe("fork 即刻落盘与 header 兜底（2026-09-22 用户实测：fork 零落盘 → /sessions 不可见 + 观感同 /new；模块事件先于 turn → 断头文件）", () => {
+  it("① fork 零 turn 也立即落盘：子文件首行 header（parentSession 指父）+ 次行 session/fork", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-forkeager-"));
+    const sessDir = join(dir, "sessions");
+    const h1 = await createHarness({
+      store: new JsonlSessionStore({ dir: sessDir }), diagDir: join(dir, "d"), spillDir: join(dir, "s"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h1.prompt("母题");
+    await h1.close();
+    const h2 = await createHarness({
+      sessionsDir: sessDir, diagDir: join(dir, "d"), spillDir: join(dir, "s"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+      fork: { parentSessionId: h1.sessionId },
+    });
+    // 零 turn——子会话文件已在盘上（懒写时代此文件要等首条消息才出现）
+    const childEvents = await new JsonlSessionStore({ dir: sessDir, sessionId: h2.sessionId }).all();
+    expect(childEvents[0]).toMatchObject({ type: "session/header", parentSession: h1.sessionId });
+    expect(childEvents[1]).toMatchObject({ type: "session/fork", parentSession: h1.sessionId });
+    expect(childEvents[1]!.parentId).toBe(childEvents[0]!.id); // 链完好
+    // 历史投影仍 = 父前缀 + 己身（回显/上下文继承语义不变）
+    const hist = await h2.history();
+    expect(hist.some((e) => e.type === "user/message" && JSON.stringify(e).includes("母题"))).toBe(true);
+    expect(verifyChain(hist)).toEqual([]);
+    await h2.close();
+  });
+
+  it("② 模块事件先于首个 turn 落盘 → header 兜底先写（/yolo 类命令在全新会话产生断头文件的实证回归）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-headguard-"));
+    const sessDir = join(dir, "sessions");
+    const mod: ModuleDefinition = {
+      ...fakeModule("m"),
+      mounts: ["contribute:command"],
+      logEvents: ["m/mark"],
+      activate(ctx) {
+        ctx.contribute.command("m__mark", () => { ctx.session.append("m/mark", {}); return ""; });
+      },
+    };
+    const h = await createHarness({
+      sessionsDir: sessDir, diagDir: join(dir, "d"), spillDir: join(dir, "s"),
+      modules: [mod, fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("/m__mark"); // 零对话先落模块事件
+    await h.close();
+    const events = await new JsonlSessionStore({ dir: sessDir, sessionId: h.sessionId }).all();
+    expect(events[0]!.type).toBe("session/header"); // 兜底：header 永远第一行
+    expect(events[1]!.type).toBe("m/mark");
+    expect(verifyChain(events)).toEqual([]);
   });
 });
