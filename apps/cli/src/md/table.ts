@@ -11,7 +11,7 @@
 import type { Tokens } from "marked";
 import { visibleWidth, wrapText } from "../tui/width.ts";
 import * as theme from "../theme.ts";
-import { inlineTokens } from "./inline.ts";
+import { inlineTokens, type InlineStyleContext } from "./inline.ts";
 
 /** 单词最小列宽 cap（设计空白 #7——pi 同值 30）。 */
 const MAX_UNBROKEN_WORD_W = 30;
@@ -57,10 +57,10 @@ function renderKeyValueFallback(head: string[], rows: string[][], out: string[],
 	out.push("");
 }
 
-export function renderTable(t: Tokens.Table, out: string[], width: number): void {
+export function renderTable(t: Tokens.Table, out: string[], width: number, ctx?: InlineStyleContext): void {
 	const cols = t.header.length;
 	if (cols === 0) return;
-	const cellText = (cell: Tokens.TableCell): string => inlineTokens(cell.tokens ?? []);
+	const cellText = (cell: Tokens.TableCell): string => inlineTokens(cell.tokens ?? [], ctx);
 	const head = t.header.map(cellText);
 	const rows = t.rows.map((r) => r.map(cellText));
 
