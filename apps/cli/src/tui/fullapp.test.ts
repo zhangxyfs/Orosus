@@ -127,13 +127,13 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		await flush();
 		input.emit("data", "\x14");
 		await flush();
-		expect(actions).toEqual(["line"]);
+		expect(actions).toEqual([]); // Ctrl+T 互切下线（用户拍板）——按键无动作
 		input.emit("data", "\x03"); // 首按：只给提示不退出
 		await flush();
-		expect(actions).toEqual(["line"]);
+		expect(actions).toEqual([]);
 		input.emit("data", "\x03"); // 2s 窗口内再按 → 退出
 		await flush();
-		expect(actions).toEqual(["line", "exit"]);
+		expect(actions).toEqual(["exit"]);
 		app.stop();
 	});
 	it("⑤b 忙碌中 Ctrl+C → requestCancel（不退出）；Esc 同效", async () => {

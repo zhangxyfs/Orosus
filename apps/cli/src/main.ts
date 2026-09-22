@@ -388,28 +388,12 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
       };
 
 // 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
-// Ctrl+T 运行中互切（全屏 → requestLineMode 置 line；readline REPL → keypress 置 full 并提交空行触发）
-// F6：--tui 旗标 > 配置 [tui] mode > TTY 缺省（resolveTuiMode 纯函数可测）
+// 界面模式（F6）：--tui 旗标 > 配置 [tui] mode > TTY 缺省（resolveTuiMode 纯函数可测；
+// 运行期不切换——Ctrl+T 互切已下线，用户拍板）
 const cfgTuiMode = configFaceTui();
 let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
 
-// Ctrl+T 切全屏（F3 双模式——keypress 多播拦截与 Alt+V 同族；readline emacs 的 transpose-chars
-// 让位：滚动流下此监听器唯一消费）。触发后清空当前行并提交空行，REPL 循环顶吃到新模式
-// （行内未提交内容先清空是防 readline 把换行追加进当前行——F5 评估是否保留行内容）。
-if (process.stdin.isTTY === true) {
-  process.stdin.on("keypress", (_s: string, k: { name?: string; ctrl?: boolean } | undefined) => {
-    // activeApp 守卫（F5 走查实证）：全屏期按键先经 FullApp——requestLineMode 已把 tuiMode 翻成
-    // "line"，此监听同 tick 再触发会翻回 full 并注 \n（双切换）；全屏期按键一律归 FullApp。
-    if (activeApp !== undefined) return;
-    if (k?.name === "t" && k.ctrl === true && tuiMode === "line") {
-      tuiMode = "full";
-      const w = rl as unknown as { line: string; cursor: number };
-      w.line = "";
-      w.cursor = 0;
-      rl.write("\n");
-    }
-  });
-}
+// Ctrl+T 运行期互切已下线（用户拍板：界面模式只由 --tui 旗标 / [tui] mode 配置在启动时选定）。
 
 function attachRender(h: Harness): void {
   // 双写面（T4/v1.8；F3 多路复用）：chunk 路 TTY 进 sink.activity，事件路 sink.write（直写）；
@@ -522,7 +506,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         if (activeApp !== undefined) {
           await openConfigPanel(activeApp);
         } else {
-          out("设置面板为全屏形态（--tui full 或 Ctrl+T 进入）。行模式直接编辑 config.toml：[tui] mode = \"full\" | \"line\"");
+          out("磁盘占用视图为全屏形态（--tui full 进入）。界面模式由启动决定：--tui 旗标或 config.toml [tui] mode");
         }
         return "again";
       }
@@ -655,19 +639,6 @@ function configFaceTui(): string | undefined {
 	return undefined;
 }
 
-/** [tui] mode 持久化（用户层；读-改-写全量重写——provider 写器同策略，注释移除明示）。 */
-const persistTuiMode = (mode: "full" | "line"): void => {
-	const f = join(orosusHome(), "config.toml");
-	let doc: Record<string, unknown> = {};
-	try {
-		doc = parse(readFileSync(f, "utf8")) as Record<string, unknown>;
-	} catch {
-		/* 缺文件从空起 */
-	}
-	doc.tui = { ...((doc.tui as Record<string, unknown>) ?? {}), mode };
-	writeFileSync(f, stringify(doc), "utf8");
-};
-
 /** 磁盘占用视图文本（F6——ROADMAP 缓存目录条目③销账面）。 */
 const diskUsageText = (): string => {
 	const home = orosusHome();
@@ -689,22 +660,8 @@ const diskUsageText = (): string => {
 	return lines.join("\n");
 };
 
-/** /config 设置面板（F6——全屏浮层形态：模式持久化 + 磁盘占用视图）。 */
+/** /config 设置面板（F6；模式切换已下线——用户拍板：启动时由 --tui/[tui] mode 选定，运行期不切）。 */
 const openConfigPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("设置", ["界面模式（全屏 / 滚动流）", "磁盘占用"]);
-	if (picked === undefined) return;
-	if (picked === 0) {
-		const cur = tuiMode === "full" ? 0 : 1;
-		const labels = ["全屏双栏", "滚动流"].map((l, i) => (i === cur ? `${l}（当前）` : l));
-		const mode = await app.pickOverlay("界面模式", labels);
-		if (mode === undefined) return;
-		const next = mode === 0 ? "full" : "line";
-		if (next !== tuiMode) {
-			persistTuiMode(next);
-			dm.pushLine(`[设置] 界面模式已写入 config：${next === "full" ? "全屏双栏" : "滚动流"}（下次启动生效；当前会话 Ctrl+T 立即切换）`);
-		}
-		return;
-	}
 	app.viewText("磁盘占用", diskUsageText());
 };
 
@@ -766,7 +723,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（快捷键 Alt + V 同效）。需要当前模型具备视觉能力。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
 	{
-		name: "/config", desc: "设置", long: "打开设置面板：界面模式（全屏 / 滚动流，写入配置下次启动生效，Ctrl+T 随时临时切换）；磁盘占用视图（缓存、会话、日志等目录大小与总量）。",
+		name: "/config", desc: "磁盘占用", long: "查看 ~/.orosus 各目录（缓存、会话、日志、暂存、模块）的占用大小与文件总量，附各目录清理口径。",
 	},
 	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）

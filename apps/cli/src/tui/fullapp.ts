@@ -432,10 +432,6 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
-		if (key === "ctrl+t") {
-			this.io.requestLineMode();
-			return;
-		}
 		if (key === "alt+e") {
 			this.io.toggleThink();
 			this.scheduler.requestImmediateRender();
