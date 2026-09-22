@@ -753,7 +753,7 @@ export class FullApp {
 		const s = this.state;
 		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
 		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
-		if (this.pendingUi?.kind === "pick") return theme.fg("info", "● 等待选择——↑↓ 移动 · Enter 选定 · Esc 取消");
+		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
 		if (s.busy) {
 			const queued = this.queuedCount > 0 ? theme.fg("info", ` · 已排队 ${this.queuedCount} 条（回答结束后执行）`) : "";
 			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}${queued}`;

@@ -699,11 +699,16 @@ const ctxUsageText = (): string => {
 	].join("\n");
 };
 
-/** /other 详细信息面板（F5 十六轮③：config 改名；子项 = 磁盘占用 + 上下文用量）。 */
+/** /other 详细信息面板（F5 十六轮③/十七轮②：子项 = 磁盘占用 + 上下文用量 + Token 用量）。 */
 const openOtherPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）"]);
+	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）", "Token 用量（本会话与项目累计）"]);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
 	else if (picked === 1) app.viewText("上下文用量", ctxUsageText());
+	else if (picked === 2) {
+		// core /usage 同源输出（会话累计 + 跨会话累计——h.prompt 命令面，空闲时可达）
+		const txt = await h.prompt("/usage").catch((err: unknown) => `[错误] ${err instanceof Error ? err.message : String(err)}`);
+		app.viewText("Token 用量", String(txt));
+	}
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
@@ -769,7 +774,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
 	{
-		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）。",
+		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）。",
 	},
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
