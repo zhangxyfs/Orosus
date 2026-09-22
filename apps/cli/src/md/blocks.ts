@@ -1,7 +1,7 @@
 /** 块渲染 + 一次性渲染公共体（原 mdpipe.ts:120-201 零变化搬迁；renderLines = 原
  *  renderMarkdown/renderSeg 的重复合流——lex → 块渲染 → 逐逻辑行 wrapText）。 */
 import type { Token, Tokens } from "marked";
-import { truncateToWidth, visibleWidth, wrapText } from "../tui/width.ts";
+import { visibleWidth, wrapText } from "../tui/width.ts";
 import * as theme from "../theme.ts";
 import { lex } from "./lex.ts";
 import { inlineTokens } from "./inline.ts";
@@ -64,8 +64,12 @@ export function renderBlock(t: Token, out: string[], depth: number, width: numbe
 		case "code": {
 			const c = t as Tokens.Code;
 			out.push(theme.dim(`  \`\`\`${c.lang ?? ""}`));
+			// 折行不截断（mdpipe 批 T5，P2-⑤）：超宽代码行 wrapText 展开多行（ANSI 感知，
+			// 颜色跨行延续），不再 truncateToWidth 砍尾；保留 max(8, …) 下限（现状值延续）
 			for (const line of highlightLines(c.text, c.lang, opts)) {
-				out.push(`  ${truncateToWidth(line, Math.max(8, width - 2))}`);
+				for (const phys of wrapText(line, Math.max(8, width - 2))) {
+					out.push(`  ${phys}`);
+				}
 			}
 			out.push(theme.dim("  ```"));
 			out.push("");
