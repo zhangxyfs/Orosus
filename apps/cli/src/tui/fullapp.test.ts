@@ -209,6 +209,35 @@ describe("侧栏开关持久化接缝（F5 十二轮②）", () => {
 	});
 });
 
+
+describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
+	it("'/qu' + Esc + 继续输入 → 菜单重开；非斜杠输入不重开", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/qu");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b"); // Esc 关菜单（文本保留）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(app.stateRef.input).toBe("/qu");
+		input.emit("data", "i"); // 继续补字母——菜单重开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b");
+		await flush(120);
+		// 清空再输入普通文本——不重开
+		input.emit("data", "\x01"); // Ctrl+A 全选
+		input.emit("data", "\x7f");
+		await flush(120);
+		input.emit("data", "h");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+});
+
 describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列、列表内 includes 筛）", () => {
 	const rig20 = (): { app: FullApp; input: FakeInput } => {
 		const r = rig();
@@ -238,7 +267,7 @@ describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列�
 		await flush(120);
 		const probe = (app as unknown as { pendingUi: { filter?: string } }).pendingUi;
 		expect(probe?.filter).toBe("厂商1"); // 中缀（"厂商10"在第二列）也命中——includes 口径
-		input.emit("data", ""); // 退格三次清空
+		input.emit("data", "\x7f\x7f\x7f"); // 退格三次清空
 		await flush(120);
 		expect((app as unknown as { pendingUi: { filter?: string } }).pendingUi?.filter).toBe("");
 		app.stop();

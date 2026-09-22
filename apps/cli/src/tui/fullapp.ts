@@ -706,7 +706,9 @@ export class FullApp {
 			default:
 				if (isPrintable(key)) {
 					this.inputInsert(key);
-					if (normCmd(s.input) === "/" && !s.overlayOpen) {
+					// 输入仍是斜杠命令形态即（重）开菜单（F5 十五轮②：Esc 关掉后继续补字母要能重开
+					// ——原条件 === "/" 只在恰好一个斜杠时触发，"/qu"+Esc 后再输入永不重开）
+					if (normCmd(s.input).startsWith("/") && !s.overlayOpen) {
 						s.overlayOpen = true;
 						s.overlaySel = 0;
 						s.overlayCmd = "";
