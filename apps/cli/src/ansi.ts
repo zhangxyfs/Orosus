@@ -13,7 +13,9 @@ export const clearToEnd = "\x1b[0J";
 /** 反色包裹（菜单当前项高亮）。 */
 export const reverse = (s: string): string => `\x1b[7m${s}\x1b[27m`;
 
-/** CSI 转义序列匹配（颜色/光标/清屏全形态——测宽前剥除，转义零宽）。 */
+/** CSI 转义序列匹配（颜色/光标/清屏全形态——测宽前剥除，转义零宽）。
+ *  终端代码合法形态：正则本体就必须匹配 ESC 控制符，no-control-regex 在此误伤（lint 基线批定点豁免）。 */
+// oxlint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 /** 单码点显示宽：全角（CJK 主区间/全角形式/emoji 平面）= 2，其余 = 1（Ambiguous 从 1，已登记）。 */

@@ -1,6 +1,5 @@
 import { cpSync, existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { orosusHome } from "@orosus/contracts/home";
 
 /** `orosus home path` / `orosus home migrate <目标> [--dry-run|--apply]`（M4-2.5 T6——ROADMAP 迁移 ②）。
  *  纪律与 prune 同款：移动性操作当删除性对待——缺省 dry-run、显式 --apply 才动；

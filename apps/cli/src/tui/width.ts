@@ -109,6 +109,8 @@ class AnsiTracker {
 				continue;
 			}
 			i += a.length;
+			// 终端代码合法形态：SGR 判定正则必须含 ESC 控制符（lint 基线批定点豁免）
+			// oxlint-disable-next-line no-control-regex
 			if (/^\x1b\[[0-9;]*m$/.test(a.code)) {
 				if (a.code === "\x1b[0m") this.active = "";
 				else this.active += a.code;
@@ -125,7 +127,7 @@ class AnsiTracker {
 
 /** 词字符连跑（ASCII 词原子：URL/标识符/路径整体为一个断行单元——F5 六轮用户实测
  *  「c|heck:boundaries」「生成物|diff」被劈半即此）。 */
-const WORD_RUN = /[A-Za-z0-9_.\/:@#$%&+=~^!?*"\-]+/y;
+const WORD_RUN = /[A-Za-z0-9_./:@#$%&+=~^!?*"-]+/y;
 
 /** 折行：按显示宽折，ANSI 状态跨行延续。断行单元 = ASCII 词连跑（原子）或单 grapheme
  *  （CJK/宽标点/emoji）——词不劈半、CJK 逐字可断（标准中西文混排口径，F5 六轮重写）。 */
@@ -205,13 +207,13 @@ export function truncateToWidth(text: string, maxWidth: number): string {
 	let leaked = "";
 	while (i < text.length) {
 		const a = extractAnsiCode(text, i);
-		if (a) {
-			out += a.code;
-			if (/m$/.test(a.code)) leaked = a.code === "\x1b[0m" ? "" : "\x1b[0m";
-			i += a.length;
-			continue;
-		}
-		const rest = text.slice(i);
+			if (a) {
+				out += a.code;
+				if (a.code.endsWith("m")) leaked = a.code === "\x1b[0m" ? "" : "\x1b[0m";
+				i += a.length;
+				continue;
+			}
+			const rest = text.slice(i);
 		let g = rest[0]!;
 		for (const { segment } of segmenter.segment(rest)) {
 			g = segment;
@@ -240,9 +242,9 @@ export function sliceByColumn(line: string, startCol: number, len: number): stri
 	let leaked = "";
 	while (i < line.length) {
 		const a = extractAnsiCode(line, i);
-		if (a) {
-			if (col >= startCol) out += a.code;
-			if (/m$/.test(a.code)) leaked = a.code === "\x1b[0m" ? "" : "\x1b[0m";
+			if (a) {
+				if (col >= startCol) out += a.code;
+				if (a.code.endsWith("m")) leaked = a.code === "\x1b[0m" ? "" : "\x1b[0m";
 			i += a.length;
 			continue;
 		}

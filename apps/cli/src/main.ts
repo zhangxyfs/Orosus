@@ -418,7 +418,7 @@ function tuiSidebarPersist(visible: boolean): void {
 	} catch {
 		/* 缺文件从空起 */
 	}
-	doc.tui = { ...((doc.tui as Record<string, unknown>) ?? {}), sidebar: visible };
+	doc.tui = { ...(doc.tui as Record<string, unknown>), sidebar: visible };
 	writeFileSync(f, stringify(doc), "utf8");
 }
 

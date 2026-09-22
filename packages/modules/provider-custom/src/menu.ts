@@ -149,7 +149,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
 
   // 全量直列（F5 九轮用户拍板：不再先问关键字——全屏列表内输入即过滤，includes 口径）；
   // 字母序（用户要求 2026-09-18）——同前缀供应商相邻（zai/zhipuai/zhipuai-coding-plan）
-  const entries = [...Object.entries(catalog)];
+  const entries = Object.entries(catalog);
   entries.sort((a, b) => a[0].localeCompare(b[0]));
   const picked = await ui.choose(`选择厂商${degradedNote}`, [...entries.map(([id, e]) => `${id}（${displayName(id, e)}）`), "取消"]);
   if (picked === "取消") return "已取消";

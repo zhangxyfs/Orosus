@@ -978,7 +978,7 @@ export class FullApp {
 
 		const inputFocused = s.focusIdx === 0;
 		const ibc = inputFocused ? "accent" : "border";
-		const screen: string[] = new Array(rows).fill("");
+		const screen: string[] = Array.from({ length: rows }, () => "");
 		for (let r = 0; r < streamH; r++) {
 			screen[r] = padToWidth(doc[start + r] ?? "", leftW);
 		}

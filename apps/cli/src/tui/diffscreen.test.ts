@@ -35,6 +35,8 @@ describe("滚动流渲染器（TUI 批阶段三 F0——行级 diff + append 快
 		d.render(["a", "b", "c", "d"], 80);
 		d.render(["a", "b"], 80);
 		const f = frames[1]!;
+		// 终端断言合法形态：计数 ANSI 控制序列必须匹配 ESC（lint 基线批定点豁免）
+		// oxlint-disable-next-line no-control-regex
 		expect((f.match(/\x1b\[2K/g) ?? []).length).toBeGreaterThanOrEqual(2); // 清掉两行旧内容
 	});
 	it("④ 宽度变化 → 全量重绘（清屏 + 清滚动回退 \\x1b[3J）", () => {
