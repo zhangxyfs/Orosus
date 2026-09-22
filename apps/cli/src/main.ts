@@ -393,7 +393,6 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
 const cfgTuiMode = configFaceTui();
 let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
 // 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见
-const tuiSidebarInit = tuiSidebarRead();
 function tuiSidebarRead(): boolean {
 	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
 		try {
@@ -833,7 +832,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       },
     slashCommands: () => SLASH_ITEMS,
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
-    sidebarInit: () => tuiSidebarInit,
+    sidebarInit: () => tuiSidebarRead(), // 即时读（F5 十四轮：会话切换重建 FullApp——不能用进程启动快照）
     onSidebarChange: (visible) => tuiSidebarPersist(visible), // Ctrl+T 状态持久化
     thinkOpen: () => dm.thinkOpen,
     toggleThink: () => {
