@@ -74,3 +74,18 @@ describe("DocModel 工具行与历史结构化（F5 五轮）", () => {
 		expect(dm.frameLines(80).map(stripAnsi).join(" ")).toContain("推理过程"); // Alt+E 可翻
 	});
 });
+
+
+describe("DocModel 宽度回流（F5 十一轮——Ctrl+T 侧栏开关后内容按新宽重排）", () => {
+	it("md 块与用户消息在宽度变化后重新折行（窄宽折的行在宽下回流）", () => {
+		const dm = new DocModel();
+		dm.userPrompt("这句提问很长很长很长很长很长需要折行才能放下测试回流行为");
+		dm.activity({ kind: "text", text: "回答也安排一段很长的内容用来验证markdown块宽度回流同样的效果如何" }, 40);
+		dm.end(40);
+		const narrow = dm.frameLines(40);
+		const wide = dm.frameLines(100);
+		expect(wide.length).toBeLessThan(narrow.length); // 宽下行数更少（回流发生）
+		const plain = wide.map(stripAnsi);
+		expect(plain.some((l) => stripAnsi(l).trim().length >= 30)).toBe(true); // 单行容纳更多内容
+	});
+});
