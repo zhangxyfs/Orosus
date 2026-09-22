@@ -65,7 +65,7 @@ export function createPermissionHandler(opts: {
     }
     const modes: { label: string; value: PermissionMode }[] = [
       // 英文档名（F5 十轮⑤ 用户拍板，与全屏菜单同源）：档名 + 短解 + 值
-      { label: "Ask Always——每次工具调用都确认（ask-always）", value: "ask-always" },
+      { label: "Always Ask——每次工具调用都确认（ask-always）", value: "ask-always" },
       { label: "Ask When Needed——仅危险操作确认（ask-risky，默认）", value: "ask-risky" },
       { label: "Never Ask——全部自动放行，极危险命令仍确认（never）", value: "never" },
     ];

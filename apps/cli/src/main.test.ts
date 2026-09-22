@@ -121,7 +121,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     await h.prompt("run"); // ask-risky 下本应询问——override 后零询问直通
     await h.close();
     await render;
-    expect(choices).toEqual(["Ask Always——每次工具调用都确认（ask-always）|Ask When Needed——仅危险操作确认（ask-risky，默认）|Never Ask——全部自动放行，极危险命令仍确认（never）"]); // F5 十轮⑤：英文档名 // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
+    expect(choices).toEqual(["Always Ask——每次工具调用都确认（ask-always）|Ask When Needed——仅危险操作确认（ask-risky，默认）|Never Ask——全部自动放行，极危险命令仍确认（never）"]); // F5 十轮⑤：英文档名 // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
   });
 
   it("② 出厂 required：activate 抛错的 approval 替身 → createHarness reject（§10 安全护栏 e2e）", async () => {

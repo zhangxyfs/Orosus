@@ -99,7 +99,7 @@ export function elapsedText(startedAt: string | undefined, now: number = Date.no
 	return `${day} 天 ${hr} 时`;
 }
 
-const PERM_LABEL: Record<string, string> = { "ask-always": "Ask Always", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
+const PERM_LABEL: Record<string, string> = { "ask-always": "Always Ask", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
 
