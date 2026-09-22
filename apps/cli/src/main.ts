@@ -22,15 +22,16 @@ import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile } from "@orosus/provider-custom";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { pasteImage, imagesFor, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { withCompactHint } from "./compact-hint.ts";
+import { resolveTuiMode, formatBytes, dirUsage } from "./tuicfg.ts";
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
@@ -388,8 +389,9 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
 
 // 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
 // Ctrl+T 运行中互切（全屏 → requestLineMode 置 line；readline REPL → keypress 置 full 并提交空行触发）
-let tuiMode: "line" | "full" =
-  args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true ? "full" : "line";
+// F6：--tui 旗标 > 配置 [tui] mode > TTY 缺省（resolveTuiMode 纯函数可测）
+const cfgTuiMode = configFaceTui();
+let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
 
 // Ctrl+T 切全屏（F3 双模式——keypress 多播拦截与 Alt+V 同族；readline emacs 的 transpose-chars
 // 让位：滚动流下此监听器唯一消费）。触发后清空当前行并提交空行，REPL 循环顶吃到新模式
@@ -515,6 +517,15 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
       if (text === "/help") { out(HELP_TEXT); return "again"; }
+      // /config（F6）：设置面板——全屏走浮层（模式持久化 + 磁盘占用视图）；行模式指路
+      if (text === "/config") {
+        if (activeApp !== undefined) {
+          await openConfigPanel(activeApp);
+        } else {
+          out("设置面板为全屏形态（--tui full 或 Ctrl+T 进入）。行模式直接编辑 config.toml：[tui] mode = \"full\" | \"line\"");
+        }
+        return "again";
+      }
       // /paste（M4-2 T10，别名 /image；M4-2.5 T5 起真实喂图）：剪贴板图存临时文件，随下一条消息以 image part 发给模型
       if (text === "/paste" || text === "/image") {
         const img = await pasteImage();
@@ -631,6 +642,72 @@ const configFace = (): { contextWindow: number; approvalMode: string } => {
 	return { contextWindow, approvalMode };
 };
 
+/** [tui] mode 读数（用户层 → 项目层同 §6.6 分层；F6）。function 声明——早处初始化要用（hoisting）。 */
+function configFaceTui(): string | undefined {
+	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
+		try {
+			const doc = parse(readFileSync(f, "utf8")) as { tui?: { mode?: string } };
+			if (typeof doc.tui?.mode === "string") return doc.tui.mode;
+		} catch {
+			/* 缺文件/解析失败用缺省 */
+		}
+	}
+	return undefined;
+}
+
+/** [tui] mode 持久化（用户层；读-改-写全量重写——provider 写器同策略，注释移除明示）。 */
+const persistTuiMode = (mode: "full" | "line"): void => {
+	const f = join(orosusHome(), "config.toml");
+	let doc: Record<string, unknown> = {};
+	try {
+		doc = parse(readFileSync(f, "utf8")) as Record<string, unknown>;
+	} catch {
+		/* 缺文件从空起 */
+	}
+	doc.tui = { ...((doc.tui as Record<string, unknown>) ?? {}), mode };
+	writeFileSync(f, stringify(doc), "utf8");
+};
+
+/** 磁盘占用视图文本（F6——ROADMAP 缓存目录条目③销账面）。 */
+const diskUsageText = (): string => {
+	const home = orosusHome();
+	const names = ["cache", "sessions", "logs", "tmp", "modules"];
+	const lines: string[] = [];
+	let total = 0;
+	let totalFiles = 0;
+	for (const name of names) {
+		const u = dirUsage(join(home, name));
+		total += u.bytes;
+		totalFiles += u.files;
+		lines.push(`${name.padEnd(10)}${formatBytes(u.bytes).padStart(10)}   ${u.files} 个文件`);
+	}
+	lines.push("");
+	lines.push(`${"合计".padEnd(10)}${formatBytes(total).padStart(10)}   ${totalFiles} 个文件`);
+	lines.push("");
+	lines.push(`根目录：${home}`);
+	lines.push("清理口径：cache 可安全删除（目录缓存可再拉取）；tmp 为粘贴图片暂存，重启不清、可手动清；sessions 是会话历史（/sessions prune 可清理）。");
+	return lines.join("\n");
+};
+
+/** /config 设置面板（F6——全屏浮层形态：模式持久化 + 磁盘占用视图）。 */
+const openConfigPanel = async (app: FullApp): Promise<void> => {
+	const picked = await app.pickOverlay("设置", ["界面模式（全屏 / 滚动流）", "磁盘占用"]);
+	if (picked === undefined) return;
+	if (picked === 0) {
+		const cur = tuiMode === "full" ? 0 : 1;
+		const labels = ["全屏双栏", "滚动流"].map((l, i) => (i === cur ? `${l}（当前）` : l));
+		const mode = await app.pickOverlay("界面模式", labels);
+		if (mode === undefined) return;
+		const next = mode === 0 ? "full" : "line";
+		if (next !== tuiMode) {
+			persistTuiMode(next);
+			dm.pushLine(`[设置] 界面模式已写入 config：${next === "full" ? "全屏双栏" : "滚动流"}（下次启动生效；当前会话 Ctrl+T 立即切换）`);
+		}
+		return;
+	}
+	app.viewText("磁盘占用", diskUsageText());
+};
+
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
 /** 权限三档元数据（F5 十轮⑤ 用户拍板：英文档名 + 短解释 + 详细解释——菜单/芯片同源）。 */
 const PERM_META: Record<string, { label: string; desc: string; long: string }> = {
@@ -688,6 +765,9 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/context", desc: "上下文用量", long: "显示当前会话的 token 用量明细：输入/输出累计、上下文窗口占用比例、距自动压缩阈值的余量。" },
 	{ name: "/paste", desc: "粘贴剪贴板图片", long: "把剪贴板里的图片挂到下一条消息上发送（快捷键 Alt + V 同效）。需要当前模型具备视觉能力。" },
 	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
+	{
+		name: "/config", desc: "设置", long: "打开设置面板：界面模式（全屏 / 滚动流，写入配置下次启动生效，Ctrl+T 随时临时切换）；磁盘占用视图（缓存、会话、日志等目录大小与总量）。",
+	},
 	{ name: "/quit", desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
