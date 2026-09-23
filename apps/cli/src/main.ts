@@ -1,7 +1,10 @@
 import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
+import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
+import { deriveMessages } from "@orosus/core";
+import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
@@ -25,7 +28,7 @@ import * as theme from "./theme.ts";
 import { parse, stringify } from "smol-toml";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile } from "@orosus/provider-custom";
 import { readFileSync, writeFileSync } from "node:fs";
-import { pasteImage, imagesFor, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
+import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
@@ -343,17 +346,16 @@ if (args.print === undefined && process.stdin.isTTY && !willFullscreen) {
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
 // 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
-// /paste 与 Alt + V 挂起的图片文件列（F5 二轮⑬ 升多图）——随下一条消息以路径引用；
-// labels 与文件列平行（chip 形态 [image #N (宽×高)]，序号会话内累计）
-let pendingImages: string[] = [];
-let pendingImageLabels: string[] = [];
+// Alt + V 挂起的图片注册表（2026-09-23 走查拍板重构）：seq → 文件（序号会话内累计）；
+// chip [image #N (宽×高)] 全屏期是输入框文内 token（光标位插入、可删），行模式期是挂起序号列
+//（pendingLineSeqs——行模式输入不经 token）。提交时从文本 token/行模式列收集 seq → 查表取文件。
+const pendingImageFiles = new Map<number, string>();
+let pendingLineSeqs: number[] = [];
 let imageSeq = 0;
 const attachPendingImage = (file: string): string => {
   imageSeq++;
-  pendingImages.push(file);
-  const label = imageChipLabel(imageSeq, file);
-  pendingImageLabels.push(label);
-  return label;
+  pendingImageFiles.set(imageSeq, file);
+  return imageChipLabel(imageSeq, file);
 };
 // Alt+V 按键粘贴（TUI 批 T5）：keypress 多播拦截——与敲 /paste 完全同效；非 TTY 不挂（按键零处理）。
 // keypress 事件发在输入流上（emitKeypressEvents(process.stdin)，与 rl.input 同一对象）；
@@ -368,7 +370,11 @@ attachAltVPaste({
     w.line = "";
     w.cursor = 0;
   },
-  setPendingImage: (file) => attachPendingImage(file),
+  setPendingImage: (file) => {
+    const label = attachPendingImage(file);
+    pendingLineSeqs.push(imageSeq); // 行模式无文内 token——挂起序号列（提交时并入）
+    return label;
+  },
   enabled: () => activeApp === undefined, // 全屏期 Alt+V 归 FullApp（F5 走查：此处直写 lv 毁屏）
 });
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
@@ -431,9 +437,18 @@ function tuiSidebarPersist(visible: boolean): void {
 function attachRender(h: Harness): void {
   // 双写面（T4/v1.8；F3 多路复用）：chunk 路 TTY 进 sink.activity，事件路 sink.write（直写）；
   // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 sink.end() 定格终稿
+  // 全屏追加工具结构化口（2026-09-23 走查批）：tool/call / tool/result 带 args/output 进 DocModel
+  // （diff/失败体渲染）；行模式不传 = renderEvent 文本形态不变
+  const toolIo =
+    tuiMode === "full"
+      ? {
+          toolCall: (name: string, args: Record<string, unknown> | undefined) => dm.toolCall(name, args),
+          toolResult: (output: unknown, isError: unknown) => dm.toolResult(output, isError),
+        }
+      : {};
   attachRenderTo(
     h,
-    { write: (s) => sinkFor().write(s), ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c) } : {}) },
+    { write: (s) => sinkFor().write(s), ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c) } : {}), ...toolIo },
     (e) => {
       lastEventId = e.id;
       if (e.type === "turn/end") {
@@ -504,10 +519,15 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         if (directive.target !== undefined && targetSid === undefined) { out("[未找到目标会话]"); return "again"; }
         if (targetSid === undefined || targetSid === h.sessionId) {
           await h.setLabel(directive.name);
-          out(`[已命名 → ${directive.name}]`);
+          // 命名确认走浮动 toast（2026-09-23 用户拍板——瞬时确认不落流区，/model 切换反馈同族）
+          if (activeApp !== undefined) activeApp.showToast(`已命名 → ${directive.name}`);
+          else out(`[已命名 → ${directive.name}]`);
         } else {
           const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name);
-          out(r !== undefined ? `[已命名 ${r.sid} → ${directive.name}]` : `[未找到目标会话]`);
+          if (r !== undefined) {
+            if (activeApp !== undefined) activeApp.showToast(`已命名 ${r.sid} → ${directive.name}`);
+            else out(`[已命名 ${r.sid} → ${directive.name}]`);
+          } else out(`[未找到目标会话]`); // 失败保留带内（要可读可回翻）
         }
         return "again";
       }
@@ -567,20 +587,26 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "again";
       }
       try {
+        // 图片收集（2026-09-23 走查拍板）：全屏 = 文内 [image #N] token（extractImageRefs 剥除后进正文），
+        // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
+        const imgRefs = extractImageRefs(text);
+        const textNoImg = imgRefs.cleaned;
+        const imgSeqs = [...pendingLineSeqs, ...imgRefs.seqs];
+        const imgs = imgSeqs.map((q) => pendingImageFiles.get(q)).filter((f): f is string => f !== undefined);
         // 非 vision 模型拦截（F5 二轮⑭）：含图消息先查 models.dev 目录——明确不支持图片输入则拒发
         // （坏消息落日志后每轮重发 = 会话永久报废，用户实测痛点）；目录未命中（自架模型）放行。
         // 注：模型判定走 config 面值——/model 会话内覆盖在 harness 闭包内，CLI 不可见（持久化则同值）。
-        if (pendingImages.length > 0) {
+        if (imgs.length > 0) {
           const modelNow = realReadModel(process.cwd())() ?? "";
           const vision = lookupModelVision(readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}, modelNow);
           if (vision === false) {
             out(`[已拦截] 当前模型 ${modelNow || "（未配置）"} 的目录数据显示不支持图片输入——消息未发送，图片仍挂起（/model 换视觉模型后再发，或 /sessions 另起会话）`);
-            for (const l of pendingImageLabels) activeApp?.addAttachment(l); // chip 回挂（提交已清视觉态）
+            activeApp?.restoreInput(text); // 全屏：输入原文（含 chip token）回挂——提交已清输入框
             return "again";
           }
         }
         // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
-        const { text: cleaned, attachments } = resolveAtRefs(text, process.cwd());
+        const { text: cleaned, attachments } = resolveAtRefs(textNoImg, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
         // /compact 进度指示（TUI 批 T7）：命中时 h.prompt 前经 lv 写指示行，settle 后 discard 擦除——
@@ -594,10 +620,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
             activity: (s) => lv.activity({ kind: "text", text: s }),
             discard: () => lv.discard(),
           },
-          () => h.prompt(withAt, imagesFor(pendingImages)), // /paste 挂起的图以 image part 随本条消息发出（M4-2.5 T5）
+          () => h.prompt(withAt, imagesFor(imgs)), // 挂起的图以 image part 随本条消息发出（M4-2.5 T5；文内 token 形态自 2026-09-23）
         );
-        pendingImages = [];
-        pendingImageLabels = [];
+        for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
+        pendingLineSeqs = [];
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") out(cmdOut);
       } catch (err) {
@@ -632,20 +658,29 @@ const shortenPath = (p: string, maxW: number): string => {
 };
 
 /** 末条 usage 输入/输出分拆（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。
- *  F5 二轮⑤：面板 Tokens 行要 ↑ 输入 · ↓ 输出 分列，不再合并总量。 */
-const lastUsageOf = (events: SessionEvent[]): { input: number; output: number } => {
-	for (let i = events.length - 1; i >= 0; i--) {
-		const e = events[i]!;
-		if (e.type === "assistant/chunk") {
-			const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-			if (c?.type === "usage") return { input: c.input ?? 0, output: c.output ?? 0 };
-		}
-		if (e.type === "assistant/message") {
-			const u = e.usage as { input?: number; output?: number } | undefined;
-			if (u !== undefined) return { input: u.input ?? 0, output: u.output ?? 0 };
-		}
-	}
-	return { input: 0, output: 0 };
+ *  F5 二轮⑤：面板 Tokens 行要 ↑ 输入 · ↓ 输出 分列，不再合并总量。
+ *  v3 压缩后口径（2026-09-23 实机首例二：压缩成功但面板仍显示压缩前 73k——末条 usage 停在压缩前的请求，
+ *  数字回落被滞后掩盖到下一条消息）：末条 turn/compaction 晚于末条 usage 时，input 换压缩后投影估算
+ *  （deriveMessages 已应用压缩事件）并置 postCompaction 标记。 */
+const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; postCompaction?: boolean } => {
+  let usageSeq = -1;
+  let result = { input: 0, output: 0 };
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "assistant/chunk") {
+      const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
+      if (c?.type === "usage") { result = { input: c.input ?? 0, output: c.output ?? 0 }; usageSeq = e.seq; break; }
+    }
+    if (e.type === "assistant/message") {
+      const u = e.usage as { input?: number; output?: number } | undefined;
+      if (u !== undefined) { result = { input: u.input ?? 0, output: u.output ?? 0 }; usageSeq = e.seq; break; }
+    }
+  }
+  const lastCompaction = events.filter((e) => e.type === "turn/compaction").at(-1) as { seq?: number } | undefined;
+  if (lastCompaction !== undefined && (lastCompaction.seq ?? 0) > usageSeq) {
+    return { input: estimateTokens(deriveMessages(events)), output: result.output, postCompaction: true };
+  }
+  return result;
 };
 
 /** 配置面读数（contextWindow + approval.mode 缺省——用户层 → 项目层同 §6.6 分层）。 */
@@ -728,11 +763,11 @@ const ctxUsageText = (): string => {
 		"",
 		`模型　　　${model}`,
 		`窗口　　　${cfg.contextWindow.toLocaleString()} tokens`,
-		`已用　　　~${used.toLocaleString()} tokens（${pct}%）`,
+		`已用　　　~${used.toLocaleString()} tokens（${pct}%）${p?.tokens.postCompaction === true ? "（压缩后估算——下一条消息发出后按实际请求刷新）" : ""}`,
 		`输入累计　↑ ${(p?.tokens.input ?? 0).toLocaleString()}`,
 		`输出累计　↓ ${(p?.tokens.output ?? 0).toLocaleString()}`,
 		"",
-		"口径：已用 = 最近一次请求的输入规模（上下文体量）；累计 = 本会话末条 usage。上下文增长到阈值会自动压缩（/compact 可手动）。",
+		"口径：已用 = 最近一次请求的输入规模（上下文体量；压缩后至下一条消息前 = 压缩后投影估算）；累计 = 本会话末条 usage。上下文增长到阈值会自动压缩（/compact 可手动）。",
 	].join("\n");
 };
 
@@ -806,7 +841,11 @@ const refreshPanel = async (): Promise<void> => {
 			const slot = h.graph().services.provider(v) as { defaultModel?: string } | undefined;
 			return slot?.defaultModel ?? v;
 		})(),
-		session: h.sessionId,
+    session: (() => {
+      // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名回退 sid
+      const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
+      return lastLabel?.label ?? h.sessionId;
+    })(),
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),
 		startedAt: RUN_STARTED_AT, // 本次进程启动（F5 九轮⑤：resume 旧会话不再显示历史年龄）
@@ -899,8 +938,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           return;
         }
         if (BUSY_EXEC.has(cmdN)) { runSubmit(text, true); return; }
-        pendingSubmits.push(text);
-        app.setQueued(pendingSubmits.length);
+        pendingSubmits.push(text); // 队列区逐条显示（2026-09-23 队列批——尾行计数 chip 退役）
         return;
       }
       runSubmit(text);
@@ -937,7 +975,35 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     toggleThink: () => {
       dm.thinkOpen = !dm.thinkOpen;
     },
-    // Alt + V 全屏接线（F5 二轮⑬）：取图 → chip 进输入框；无图提示进流区
+    toggleTool: () => {
+      dm.toolOpen = !dm.toolOpen;
+    },
+    toggleErr: () => {
+      dm.errOpen = !dm.errOpen;
+    },
+    // 消息队列三件套（2026-09-23 队列批——kimi 方案改 Ctrl+U）：队列区数据源 / ↑ 召回队尾 / steer 注入
+    queueItems: () => [...pendingSubmits],
+    recallQueued: () => pendingSubmits.pop(), // LIFO 队尾召回（kimi recallLastQueued 同语义）
+    requestSteer: (texts) => {
+      if (!inflight) { // 无进行中 turn：首条直接发、其余照旧排队（kimi Ctrl-S 空闲 = 直接提交）
+        const [first, ...rest] = texts;
+        if (first !== undefined) runSubmit(first);
+        pendingSubmits.push(...rest);
+        return;
+      }
+      const remain: string[] = [];
+      for (const t of texts) {
+        // 命令类不可 steer（kimi 同口径——/ 开头留队，防顺序错乱）；steer 落空（turn 已收尾）同样留队
+        if (t.trimStart().startsWith("/") || !h.steer(t)) {
+          remain.push(t);
+          continue;
+        }
+        dm.userPrompt(t); // steer 回声（kimi：steered 消息作为 user 条目进 transcript）
+      }
+      pendingSubmits.length = 0;
+      pendingSubmits.push(...remain);
+    },
+    // Alt + V 全屏接线（2026-09-23 修订）：取图 → chip token 插入输入框光标位；无图提示进流区
     requestPasteImage: () => {
       void (async () => {
         const img = await pasteImage();
@@ -945,10 +1011,26 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           dm.pushLine(theme.dim(PASTE_EMPTY));
           return;
         }
-        app.addAttachment(attachPendingImage(img.file));
+        app.insertAtCursor(attachPendingImage(img.file)); // chip token 进输入框光标位（删除键可删 = 撤销挂图）
       })();
     },
   });
+  // 输入历史播种（2026-09-23 实测：/sessions 恢复后 ↑ 无历史可召——FullApp 随会话重建即清零）：
+  // 会话的 user/message + steering 文本作为可召回历史；图片 chip token 剥除（seq 注册表已随旧会话失效）
+  {
+    const hist = await h.history();
+    const seedTexts: string[] = [];
+    for (const e of hist) {
+      if (e.type === "user/message") {
+        const t = ((e.content ?? []) as { kind?: string; text?: string }[]).filter((p2) => p2.kind === "text").map((p2) => p2.text ?? "").join("");
+        const { cleaned } = extractImageRefs(t);
+        if (cleaned !== "") seedTexts.push(cleaned);
+      } else if (e.type === "agent/steering-message") {
+        for (const m of (e.messages ?? []) as { text?: string }[]) if (typeof m.text === "string" && m.text !== "") seedTexts.push(m.text);
+      }
+    }
+    app.seedHistory(seedTexts);
+  }
   // 流式排队面（F5 四轮）：turn 进行中的提交入队，结束后依序执行——消息带气泡、命令不带，
   // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
   const pendingSubmits: string[] = [];
@@ -962,8 +1044,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     }
     const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
     if (!cmd.startsWith("/")) {
-      const chips = pendingImageLabels.length > 0 ? `  ${pendingImageLabels.join(" ")}` : "";
-      dm.userPrompt(text + chips);
+      dm.userPrompt(text); // 图片 chip 已是文内 token（2026-09-23——不再追加独立 chip 行）
     }
     void (async () => {
       const modelBefore = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：反馈靠前后 diff
@@ -983,8 +1064,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
           void refreshPanel();
           const next = pendingSubmits.shift();
-          app.setQueued(pendingSubmits.length);
           if (next !== undefined && action === undefined) runSubmit(next);
+        } else {
+          void refreshPanel(); // busy 即改档（/title /permission…）也要即时刷面板（2026-09-23：/title 改名单元格陈旧前案）
         }
       }
     })();
@@ -1007,7 +1089,7 @@ if (args.print === undefined) try {
   sessionLoop: for (;;) {
     // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）
     dm = new DocModel();
-    if (tuiMode === "full") for (const l of ASCII_BANNER("0.1.0")) dm.pushLine(l); // ASCII 字 banner（修复轮①）
+    if (tuiMode === "full") for (const l of ASCII_BANNER(OROSUS_VERSION)) dm.pushLine(l); // ASCII 字 banner（修复轮①）
     for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);

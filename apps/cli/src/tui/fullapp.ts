@@ -1,9 +1,10 @@
 /** 全屏应用（TUI 批阶段三 F3–F5——原型完整交互面落地；v1.1–v1.11 走查拍板口径）。
  *  布局：无标题栏 + 左栏（stream 滚动区 + 输入框带框多行 ≤5 行超出上滚）+ 右栏双面板
  *  （运行状态/任务清单，真实数据经 io.panelData）+ 末列整列留白（conhost DECAWM 防御）。
- *  交互：Tab 焦点循环（聚焦面板青玉框）/ Shift+Tab 权限循环 / Esc 忙碌时取消 turn、闲时返回输入 /
+ *  交互：Tab 焦点循环（聚焦面板青玉框）/ Shift+Tab 权限循环 / Esc 忙碌时双击停生成（单击 toast 提示防误触）、闲时返回输入 /
  *  斜杠菜单全宽浮层（每页 10 条窗口跟随/「还有 N 项」/二级列表 ✓ 当前值/空过滤占位不关窗/长说明）/
- *  输入多行 ≤5 + Alt+Enter 换行 + Ctrl+A 全选 + Shift+←→ 选择 + bracketed paste / Alt+E 思考折叠。
+ *  输入多行 ≤5 + Alt+Enter 换行 + Ctrl+A 全选 + Shift+←→ 选择 + bracketed paste / Alt+E 思考折叠 / Alt+O 工具明细折叠 / Alt+F 失败体折叠。
+ *  Ctrl+C 全屏期不占用（2026-09-23 用户拍板——WT 原生复制让位；退出走 /quit，停生成走双击 Esc）。
  *  崩溃恢复（spike 判据 4）：exit 钩子同步直写恢复序列 + uncaughtException 先恢复再抛。
  *  鼠标接管关闭（用户拍板 2026-09-21——重开 = fullscreen.ts ENTER_ALT 追加 ?1000/?1006）。 */
 
@@ -21,7 +22,7 @@ export interface PanelData {
 	model: string;
 	session: string;
 	cwd: string;
-	tokens: { input: number; output: number }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）
+	tokens: { input: number; output: number; postCompaction?: boolean }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）；postCompaction = 末条压缩晚于末条 usage，input 为压缩后投影估算（v3：压缩的数字回落不得滞后到下一条消息）
 	startedAt: string | undefined; // 会话首事件 ts（F5 二轮④：运行时间行数据源）
 	contextWindow: number;
 	modules: { name: string; desc: string; state: "mounted" | "loading" | "off"; locked?: boolean }[];
@@ -54,8 +55,20 @@ export interface FullAppIO {
 	slashCurrent(cmd: string): string; // 二级列表当前值（/permission → 当前模式）
 	thinkOpen(): boolean;
 	toggleThink(): void;
-	/** Alt + V 粘贴剪贴板图片（F5 二轮⑬——宿主侧 pasteImage 完成后经 addAttachment 回挂 chip）。 */
+	/** Alt + O 工具明细折叠切换（2026-09-23 走查批——Edit/Write diff 展开/收起）。 */
+	toggleTool(): void;
+	/** Alt + F 工具失败体折叠切换（二轮走查拍板：错误默认全收起，与 diff 分键）。 */
+	toggleErr(): void;
+	/** Alt + V 粘贴剪贴板图片（2026-09-23 修订——宿主侧 pasteImage 完成后经 insertAtCursor 把
+	 *  chip token 插入输入框光标位，删除键可删 = 撤销挂图）。 */
 	requestPasteImage?(): void;
+	/** 消息队列（2026-09-23 队列批——kimi QueuePane 同族）：busy 期排队的消息列表（输入框上方逐条显示）。 */
+	queueItems(): string[];
+	/** ↑ 召回队尾（LIFO——kimi recallLastQueued 同语义）；空队列 → undefined。 */
+	recallQueued(): string | undefined;
+	/** Ctrl+U = steer（kimi Ctrl-S 改键位——Ctrl+S 是终端流控 XOFF 冲突回避）：排队消息 + 当前草稿
+	 *  注入进行中的 turn；命令类（/ 开头）不可 steer 由宿主留队；无进行中 turn 时宿主直接提交。 */
+	requestSteer(texts: string[]): void;
 	/** 侧栏初始可见性（F5 十二轮②：[tui] sidebar 持久化读数；缺省可见）。 */
 	sidebarInit?(): boolean;
 	/** 侧栏开关变更（F5 十二轮②：宿主持久化 [tui] sidebar）。 */
@@ -71,6 +84,9 @@ interface AppState {
 	selAnchor: number; // -1 = 无选择
 	history: string[];
 	historyIdx: number;
+	/** 历史浏览草稿快照（2026-09-23 走查拍板，kimi navigateHistory 同口径——进入浏览那一刻暂存
+	 *  当前输入，↓ 翻回最新位时原样恢复；编辑即退出浏览丢弃草稿——kimi exitHistoryBrowsing 同语义）。 */
+	historyDraft: string | undefined;
 	focusIdx: FocusIdx;
 	moduleSel: number;
 	taskSel: number;
@@ -212,6 +228,7 @@ export class FullApp {
 			selAnchor: -1,
 			history: [],
 			historyIdx: 0,
+			historyDraft: undefined,
 			focusIdx: 0,
 			moduleSel: 0,
 			taskSel: 0,
@@ -243,15 +260,6 @@ export class FullApp {
 	/** 忙碌探针（F5 四轮：宿主排队判定用）。 */
 	get isBusy(): boolean {
 		return this.state.busy;
-	}
-
-	/** 排队提交数（流式中提交的命令/消息——turn 结束后依序执行，尾行提示）。 */
-	queuedCount = 0;
-
-	/** 宿主更新排队数并即刻重绘尾行（F5 四轮）。 */
-	setQueued(n: number): void {
-		this.queuedCount = n;
-		this.scheduler.requestImmediateRender();
 	}
 
 	start(): void {
@@ -351,11 +359,34 @@ export class FullApp {
 		timer.unref?.();
 	}
 
-	/** 挂起的图片附件 chip 标签（F5 二轮⑬——「[image #2 (165×103)]」随输入框显示，提交即清空）。 */
-	attachments: string[] = [];
-	addAttachment(label: string): void {
-		this.attachments.push(label);
-		this.scheduler.requestImmediateRender();
+	/** 文本插入输入框光标位（2026-09-23 走查拍板——图片 chip [image #N (宽×高)] 从独立 chip 行
+	 *  改为文内 token：光标处插入、删除键可删 = 撤销挂图）。 */
+	insertAtCursor(text: string): void {
+		const s = this.state;
+		this.exitHistoryBrowse(); // 贴图 = 编辑（kimi exitHistoryBrowsing 同语义）
+		s.input = s.input.slice(0, s.cursor) + text + s.input.slice(s.cursor);
+		s.cursor += text.length; // chip 为 ASCII+×（BMP）——码元步进安全
+		s.selAnchor = -1;
+		this.afterEdit();
+	}
+
+	/** 提交被拒（如非 vision 模型拦截）时恢复输入原文（含图片 chip token——挂图不丢）。 */
+	restoreInput(text: string): void {
+		const s = this.state;
+		s.input = text;
+		s.cursor = text.length;
+		s.selAnchor = -1;
+		this.afterEdit();
+	}
+
+	/** 输入历史播种（2026-09-23 实测：/sessions 恢复后 FullApp 随会话重建、输入历史清零——
+	 *  ↑ 无历史可召回前案）：宿主从会话事件取用户消息文本灌入（kimi 按 cwd 持久化历史的同族口径），
+	 *  帽 100 条（kimi 同值）。 */
+	seedHistory(items: string[]): void {
+		const s = this.state;
+		s.history = items.slice(-100);
+		s.historyIdx = s.history.length;
+		s.historyDraft = undefined;
 	}
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
@@ -429,8 +460,16 @@ export class FullApp {
 		return true;
 	}
 
+	/** 编辑即退出历史浏览（kimi exitHistoryBrowsing——浏览中改动的是召回条目本身，草稿快照作废）。 */
+	private exitHistoryBrowse(): void {
+		const s = this.state;
+		s.historyIdx = s.history.length;
+		s.historyDraft = undefined;
+	}
+
 	private inputInsert(text: string): void {
 		const s = this.state;
+		this.exitHistoryBrowse(); // 编辑即退出历史浏览、丢弃草稿快照（kimi exitHistoryBrowsing 同语义）
 		const norm = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 		this.deleteSelection();
 		s.input = s.input.slice(0, s.cursor) + norm + s.input.slice(s.cursor);
@@ -468,24 +507,10 @@ export class FullApp {
 
 	// ---------- 按键 ----------
 
-	private lastCtrlC = 0; // 双击退出窗口（Esc 同族惯例——claude-code 双击 Ctrl+C 退出）
+	private lastEscCancel = 0; // 双击 Esc 停止生成窗口（2026-09-23 走查拍板——防误触，qwen-code 1s 同口径）
 
 	private onKey(key: string): void {
 		const s = this.state;
-		if (key === "ctrl+c") {
-			// Ctrl+C 语义（F5 用户实测拍板：忙碌中按 Ctrl+C 是想停生成，整app退出被当成「崩了」）：
-			// 忙碌 = 取消当前 turn（SIGINT 同效）；空闲 = 2s 内再按一次才退出，首按给提示
-			if (s.busy) {
-				this.lastCtrlC = 0;
-				this.io.requestCancel();
-			} else if (Date.now() - this.lastCtrlC < 2000) {
-				this.io.requestExit();
-			} else {
-				this.lastCtrlC = Date.now();
-			}
-			this.scheduler.requestImmediateRender();
-			return;
-		}
 		if (key === "ctrl+t") {
 			s.sidebarVisible = !s.sidebarVisible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
 			if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
@@ -495,6 +520,31 @@ export class FullApp {
 		}
 		if (key === "alt+e") {
 			this.io.toggleThink();
+			this.scheduler.requestImmediateRender();
+			return;
+		}
+		if (key === "alt+o") {
+			this.io.toggleTool();
+			this.scheduler.requestImmediateRender();
+			return;
+		}
+		if (key === "alt+f") {
+			this.io.toggleErr();
+			this.scheduler.requestImmediateRender();
+			return;
+		}
+		if (key === "ctrl+u") {
+			// Ctrl+U = steer（2026-09-23 队列批——kimi Ctrl-S 改键位，Ctrl+S 是终端 XOFF 流控）：
+			// 排队消息 + 当前草稿一起注入/提交；输入框清空（宿主把不可 steer 项留队）
+			const texts = [...this.io.queueItems(), ...(s.input.trim() !== "" ? [s.input] : [])];
+			if (texts.length > 0) {
+				s.input = "";
+				s.cursor = 0;
+				s.inputScroll = 0;
+				s.selAnchor = -1;
+				this.exitHistoryBrowse();
+				this.io.requestSteer(texts);
+			}
 			this.scheduler.requestImmediateRender();
 			return;
 		}
@@ -570,10 +620,21 @@ export class FullApp {
 
 		if (key === "escape") {
 			if (s.busy) {
-				this.io.requestCancel(); // AI 回答中 Esc = 取消当前 turn（SIGINT 同效——修复轮①）
+				// 双击 Esc 才停止生成（2026-09-23 走查拍板——单击误触痛点；qwen-code 双击窗口
+				// CTRL_EXIT_PROMPT_DURATION_MS=1000ms 同口径，比 claude-code 的 2s 短）：
+				// 首按 toast 提示，1s 内再按才真正取消；窗口外再按重新计首按
+				if (Date.now() - this.lastEscCancel < 1000) {
+					this.lastEscCancel = 0;
+					s.toast = undefined; // 二次确认即消提示（走查拍板——toast 留着会误解为「还没停」）
+					this.io.requestCancel();
+				} else {
+					this.lastEscCancel = Date.now();
+					this.showToast("再按一次 Esc 停止生成");
+				}
 				this.scheduler.requestImmediateRender();
 				return;
 			}
+			this.lastEscCancel = 0;
 			if (s.overlayOpen) {
 				if (s.overlayCmd !== "") {
 					s.overlayCmd = "";
@@ -665,7 +726,10 @@ export class FullApp {
 				s.cursor = picked.length;
 				s.overlaySel = Math.max(0, slash.children.indexOf(this.io.slashCurrent(picked)));
 			} else {
-				const cmd = level2 ? `${s.overlayCmd} ${picked}` : picked;
+				// 带参数输入（/title 新名字）提交原文——裸命令名会丢参数（2026-09-23 实测：/title 改名失效前案，
+				// 菜单过滤只认命令词、Enter 只提交 picked）；无参数 = picked（别名转正名）
+				const typed = normCmd(s.input);
+				const cmd = level2 ? `${s.overlayCmd} ${picked}` : typed.includes(" ") ? typed : picked;
 				s.overlayOpen = false;
 				s.overlayCmd = "";
 				this.submitLine(cmd);
@@ -703,6 +767,7 @@ export class FullApp {
 				this.moveCursor(1, true);
 				break;
 			case "backspace":
+				this.exitHistoryBrowse();
 				if (!this.deleteSelection() && s.cursor > 0) {
 					const cp = s.input.codePointAt(s.cursor - 1)!;
 					const w = cp >= 0xd800 && cp <= 0xdbff ? 2 : 1;
@@ -711,6 +776,7 @@ export class FullApp {
 				}
 				break;
 			case "delete":
+				this.exitHistoryBrowse();
 				if (!this.deleteSelection() && s.cursor < s.input.length) {
 					const cp = s.input.codePointAt(s.cursor)!;
 					s.input = s.input.slice(0, s.cursor) + s.input.slice(s.cursor + (cp > 0xffff ? 2 : 1));
@@ -732,24 +798,46 @@ export class FullApp {
 				break;
 			case "up":
 			case "down": {
+				// ↑/↓ 历史导航（2026-09-23 走查拍板，照抄 kimi pi-tui editor.ts:1027-1052 语义）：
+				// 非首/末视觉行 → 行内移动；首行非起始点 → 先回行首；起始点再 ↑ 才召回历史；
+				// 进入浏览快照草稿，↓ 翻回最新位草稿原样恢复；上翻光标置首（可连按续翻）、下翻置末
 				s.selAnchor = -1;
 				const rows = layoutInputRows(s.input, this.inputInnerW());
 				const cur = locateCursor(rows, s.cursor);
-				const target = cur.row + (key === "up" ? -1 : 1);
-				if (target < 0) {
-					if (s.historyIdx > 0) {
+				const browsing = s.historyIdx < s.history.length;
+				if (key === "up") {
+					if (cur.row > 0) {
+						s.cursor = indexAtRowCol(rows, cur.row - 1, cur.col);
+					} else if (s.cursor !== 0) {
+						s.cursor = 0; // 首行非起始 → 先回起始点（kimi moveToLineStart）
+					} else if (s.input === "" && this.io.queueItems().length > 0) {
+						// 空输入 + 队列非空 → 召回队尾（LIFO，kimi onUpArrowEmpty 优先于历史导航同口径）
+						const q = this.io.recallQueued();
+						if (q !== undefined) {
+							s.input = q;
+							s.cursor = q.length;
+						}
+					} else if (s.historyIdx > 0) {
+						if (!browsing) s.historyDraft = s.input; // 进入浏览那一刻快照草稿
 						s.historyIdx--;
 						s.input = s.history[s.historyIdx]!;
-						s.cursor = s.input.length;
+						s.cursor = 0; // 上翻光标放开头——多行历史条目上连按 ↑ 即续翻（kimi setTextInternal "start"）
+						s.inputScroll = 0;
 					}
-				} else if (target >= rows.length) {
-					if (s.historyIdx < s.history.length) {
-						s.historyIdx++;
-						s.input = s.history[s.historyIdx] ?? "";
-						s.cursor = s.input.length;
+				} else if (browsing && cur.row === rows.length - 1) {
+					s.historyIdx++;
+					if (s.historyIdx === s.history.length) {
+						s.input = s.historyDraft ?? ""; // 回到草稿位——草稿原样恢复
+						s.historyDraft = undefined;
+					} else {
+						s.input = s.history[s.historyIdx]!;
 					}
+					s.cursor = s.input.length; // 下翻/回草稿光标放末尾（kimi "end"）
+					s.inputScroll = 0;
+				} else if (cur.row < rows.length - 1) {
+					s.cursor = indexAtRowCol(rows, cur.row + 1, cur.col);
 				} else {
-					s.cursor = indexAtRowCol(rows, target, cur.col);
+					s.cursor = s.input.length; // 末行非浏览 → 跳行尾（kimi moveToLineEnd）
 				}
 				break;
 			}
@@ -778,9 +866,9 @@ export class FullApp {
 			return;
 		}
 		s.scrollBack = 0; // 回看历史时提交 → 跳到底部（F5 五轮②：一次性置底，非粘底）
-		this.attachments = []; // 附件 chip 随提交清空（宿主侧文件列表同步清——F5 二轮⑬）
 		s.history.push(text);
 		s.historyIdx = s.history.length;
+		s.historyDraft = undefined;
 		s.input = "";
 		s.cursor = 0;
 		s.inputScroll = 0;
@@ -814,10 +902,8 @@ export class FullApp {
 		if (this.pendingUi !== undefined) return theme.dim("正在待命");
 		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
 		if (s.busy) {
-			const queued = this.queuedCount > 0 ? theme.fg("info", ` · 已排队 ${this.queuedCount} 条（回答结束后执行）`) : "";
-			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}${queued}`;
+			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
 		}
-		if (Date.now() - this.lastCtrlC < 2000) return theme.fg("warn", "再按一次 Ctrl + C 退出（Esc 返回输入）");
 		return theme.dim("正在待命");
 	}
 
@@ -960,9 +1046,12 @@ export class FullApp {
 		const inputRows = layoutInputRows(s.input, innerW);
 		const cursorPos = locateCursor(inputRows, s.cursor);
 		const showRows = Math.min(INPUT_MAX_ROWS, inputRows.length);
-		const chipRows = this.attachments.length > 0 ? 1 : 0; // 图片附件 chip 行（F5 二轮⑬）
-		const inputH = showRows + 3 + chipRows;
-		const streamH = rows - inputH;
+		const inputH = showRows + 3;
+		// 队列区（2026-09-23 队列批——kimi QueuePane 同族）：busy 期排队消息逐条单行摘要 +
+		// 操作 hint 行，位于流区与输入框之间；空队列不占行
+		const queue = this.io.queueItems();
+		const queueH = queue.length === 0 ? 0 : queue.length + 1;
+		const streamH = rows - inputH - queueH;
 
 		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
 		const statusH = Math.max(8, Math.floor(rows * 0.55));
@@ -982,7 +1071,15 @@ export class FullApp {
 		for (let r = 0; r < streamH; r++) {
 			screen[r] = padToWidth(doc[start + r] ?? "", leftW);
 		}
-		const divRow = streamH;
+		if (queueH > 0) {
+			for (let i = 0; i < queue.length; i++) {
+				const oneLine = queue[i]!.replace(/\s+/g, " ").trim(); // 单行摘要（kimi QueuePane 同形态）
+				screen[streamH + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.dim(truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
+			}
+			// 两行都 pad 到左栏宽——不补齐则右侧面板分隔线/内容左移错位（走查实锤）
+			screen[streamH + queue.length] = padToWidth(theme.dim("  ↑ 召回队尾 · Ctrl + U 立即注入本轮 · 回答结束后依序发送"), leftW);
+		}
+		const divRow = streamH + queueH;
 		// 模块询问挂起期：问题写进输入框顶边标题（F5——placeholder 只在空输入时可见，用户一打字问题就消失）
 		if (this.pendingUi?.kind === "ask") {
 			const qSeg = theme.fg("accent", ` ${this.pendingUi.question} `);
@@ -1005,9 +1102,6 @@ export class FullApp {
 
 		const sel = this.selRange();
 		const paneIn = (l: string) => theme.bg("surface2", theme.fg(ibc, "│") + padToWidth(l, leftW - 2) + theme.fg(ibc, "│"));
-		if (chipRows > 0) {
-			screen[divRow + 1] = paneIn(` ${this.attachments.map((a2) => theme.fg("info", a2)).join(" ")}`);
-		}
 		for (let i = 0; i < showRows; i++) {
 			const vr = inputRows[s.inputScroll + i];
 			const prefix = i + s.inputScroll === 0 ? theme.fg("accent", "❯ ") : "  ";
@@ -1024,7 +1118,7 @@ export class FullApp {
 			} else {
 				line = prefix + this.styleWithSelection(vr, sel);
 			}
-			screen[divRow + 1 + chipRows + i] = paneIn(inputFocused ? line : theme.dim(line));
+			screen[divRow + 1 + i] = paneIn(inputFocused ? line : theme.dim(line));
 		}
 		const d = this.io.panelData();
 		// 档色语义（2026-09-22 用户拍板）：Never Ask = 全自动放行危险档 → 警示黄；确认类档保持青玉
@@ -1033,10 +1127,10 @@ export class FullApp {
 		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
 		const hintW = leftW - 2;
 		const gap = hintW - visibleWidth(leftHint) - visibleWidth(rightHint) - 1;
-		screen[divRow + 1 + chipRows + showRows] = paneIn(
+		screen[divRow + 1 + showRows] = paneIn(
 			gap > 2 ? ` ${leftHint}${" ".repeat(gap)}${rightHint}` : padToWidth(` ${leftHint}`, hintW),
 		);
-		screen[divRow + 2 + chipRows + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
+		screen[divRow + 2 + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
 
 		if (s.sidebarVisible) {
 			for (let r = 0; r < rows; r++) {
@@ -1058,7 +1152,7 @@ export class FullApp {
 		}
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
-		this.full.placeCursor(divRow + 1 + chipRows + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, inputFocused);
+		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, inputFocused);
 		return bytes;
 	}
 
