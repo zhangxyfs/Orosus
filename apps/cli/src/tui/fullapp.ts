@@ -1284,9 +1284,15 @@ export class FullApp {
 		const selI = Math.max(0, Math.min(items.length - 1, s.overlaySel));
 		const winStart = Math.max(0, Math.min(Math.max(0, items.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
 		const win = items.slice(winStart, winStart + OVERLAY_PAGE);
-		if (winStart > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${winStart} 项`)));
-		for (let i = 0; i < win.length; i++) {
-			const it = win[i]!;
+		// 列表区恒定（2026-09-23 用户拍板：固定防闪烁）——↑↓ 提示行常驻占位（无内容时空行）、
+		// 命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
+		olines.push(boxRow(winStart > 0 ? theme.dim(`   ↑ 还有 ${winStart} 项`) : ""));
+		for (let i = 0; i < OVERLAY_PAGE; i++) {
+			const it = win[i];
+			if (it === undefined) {
+				olines.push(boxRow(""));
+				continue;
+			}
 			const gi = winStart + i;
 			const selPrefix = gi === selI ? theme.fg("accent", "❯") : " ";
 			const markSeg = it.mark === " " ? "" : `${it.mark} `;
@@ -1294,8 +1300,13 @@ export class FullApp {
 			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 		}
 		const rest = items.length - winStart - win.length;
-		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 项`)));
-		const longLines = wrapText(theme.dim(items[selI]?.long ?? ""), oInner - 2).map((l) => ` ${l}`);
+		olines.push(boxRow(rest > 0 ? theme.dim(`   ↓ 还有 ${rest} 项`) : ""));
+		// 详释区恒定 3 行（同拍板）：说明最多 2 行，显示不下第 2 行末尾 "..."（占 3 列），第 3 行操作提示
+		const longW = oInner - 2;
+		const wrapped = wrapText(theme.dim(items[selI]?.long ?? ""), longW);
+		const longLines = wrapped.slice(0, 2).map((l) => ` ${l}`);
+		if (wrapped.length > 2) longLines[1] = ` ${truncateToWidth(wrapped[1] ?? "", longW - 4)}...`;
+		while (longLines.length < 2) longLines.push("");
 		const foot = theme.dim(level2 ? " ↑↓ 选择 · Enter 选定 · Esc 返回" : " ↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭");
 		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
 		for (const l of longLines) olines.push(boxRow(l));

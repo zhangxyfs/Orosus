@@ -27,6 +27,7 @@ function fakeTerm(cols = 100, rows = 30): { input: FakeInput; output: FakeOutput
 function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 	const submitted: string[] = [];
 	const actions: string[] = [];
+	const queue: string[] = [];
 	const io: FullAppIO = {
 		columns: () => cols,
 		rows: () => rows,
@@ -34,6 +35,9 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 		submit: (t) => submitted.push(t),
 		requestExit: () => actions.push("exit"),
 		requestCancel: () => actions.push("cancel"),
+		queueItems: () => [...queue],
+		recallQueued: () => queue.pop(),
+		requestSteer: (texts) => actions.push(`steer:${texts.join("|")}`),
 		panelData: () => ({
 			model: "glm-5.3",
 			session: "test-sid",
@@ -51,15 +55,18 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 		}),
 		slashCommands: () => [
 			{ name: "/help", desc: "帮助", long: "长说明" },
+			{ name: "/title", desc: "会话命名", long: "长" },
 			{ name: "/permission", desc: "权限", long: "长", children: ["ask-risky", "never"] },
 		],
 		slashCurrent: () => "ask-risky",
 		thinkOpen: () => false,
 		toggleThink: () => actions.push("think"),
+		toggleTool: () => actions.push("tool"),
+		toggleErr: () => actions.push("err"),
 	};
 	const { input, output } = fakeTerm(cols, rows);
 	const app = new FullApp(io, { input, output });
-	return { app, io, input, output, submitted, actions };
+	return { app, io, input, output, submitted, actions, queue };
 }
 
 const flush = async (ms = 40): Promise<void> => {
@@ -105,6 +112,44 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		app.stop();
 		expect(stripAnsi((app as unknown as { state: { input: string } }).state.input)).toBe("你好");
 	});
+	it("③c ↑/↓ 分级历史导航（2026-09-23 走查拍板，kimi pi-tui editor.ts 规格照抄）：行内上移 → 回首 → 才召回；草稿快照恢复", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "第一条"); // 先造一条历史
+		input.emit("data", "\r");
+		await flush();
+		input.emit("data", "草"); // 两行草稿
+		input.emit("data", "\x1b\r"); // Alt+Enter 换行
+		input.emit("data", "稿");
+		await flush();
+		input.emit("data", "\x1b[A"); // 光标在第二行 → 上移一行（不召回）
+		await flush();
+		expect(app.stateRef.input).toBe("草\n稿");
+		expect(app.stateRef.cursor).toBe(1); // 移到第一行同列（"草"后）
+		input.emit("data", "\x1b[A"); // 第一行非起始 → 回起始点（仍不召回）
+		await flush();
+		expect(app.stateRef.cursor).toBe(0);
+		expect(app.stateRef.input).toBe("草\n稿");
+		input.emit("data", "\x1b[A"); // 起始点 → 召回上一条历史
+		await flush();
+		expect(app.stateRef.input).toBe("第一条");
+		input.emit("data", "\x1b[B"); // ↓ 翻回最新位 → 草稿原样恢复
+		await flush();
+		expect(app.stateRef.input).toBe("草\n稿");
+		app.stop();
+	});
+	it("③b Alt + O / Alt + F 触发工具明细/失败体折叠切换（io.toggleTool / io.toggleErr——2026-09-23 走查批）", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "\x1bo");
+		input.emit("data", "\x1bf");
+		await flush();
+		app.stop();
+		expect(actions).toContain("tool");
+		expect(actions).toContain("err");
+	});
 	it("④ PgUp/PgDn 滚动 stream（scrollBack 变化）", async () => {
 		const doc = Array.from({ length: 60 }, (_, i) => `第 ${i} 行`);
 		const { app, input } = rig(doc);
@@ -120,7 +165,7 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		expect(st.state.scrollBack).toBe(0);
 		app.stop();
 	});
-	it("⑤ Ctrl+T → requestLineMode；Ctrl+C 空闲双击才退出（F5 用户实测：单按毁 app 观感=崩）", async () => {
+	it("⑤ Ctrl+T → 侧栏开关；Ctrl+C 全屏期不占用（2026-09-23 用户拍板：WT 原生复制让位——退出走 /quit）", async () => {
 		const { app, input, actions } = rig();
 		app.start();
 		await flush();
@@ -128,26 +173,108 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		await flush();
 		expect(app.stateRef.sidebarVisible).toBe(false); // Ctrl+T = 侧栏开关（互切下线）
 		expect(actions).toEqual([]); // 互切下线（用户拍板）——按键无动作
-		input.emit("data", "\x03"); // 首按：只给提示不退出
+		input.emit("data", "\x03"); // Ctrl+C 不响应（复制让位——双击退出/忙碌取消均下线）
 		await flush();
 		expect(actions).toEqual([]);
-		input.emit("data", "\x03"); // 2s 窗口内再按 → 退出
-		await flush();
-		expect(actions).toEqual(["exit"]);
 		app.stop();
 	});
-	it("⑤b 忙碌中 Ctrl+C → requestCancel（不退出）；Esc 同效", async () => {
+	it("⑤b 忙碌中 Ctrl+C 也不再取消（复制让位同拍板——停生成只有双击 Esc）", async () => {
 		const { app, input, actions } = rig();
 		app.start();
 		await flush();
 		app.setBusy(true);
 		input.emit("data", "\x03");
 		await flush();
-		expect(actions).toEqual(["cancel"]);
-		input.emit("data", "\x03"); // 忙碌期连按也只取消
-		await flush();
-		expect(actions).toEqual(["cancel", "cancel"]);
+		expect(actions).toEqual([]);
 		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤bb 忙碌中双击 Esc 才停止生成（2026-09-23 走查拍板——单击防误触：toast 提示，1s 窗口内再按才取消）", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "\x1b"); // 首按：只提示不取消
+		await flush(80); // ESC 时间窗判定单 Esc
+		expect(actions).toEqual([]);
+		expect(app.stateRef.toast?.text).toContain("再按一次 Esc");
+		input.emit("data", "\x1b"); // 窗口内再按：真正取消
+		await flush(80);
+		expect(actions).toEqual(["cancel"]);
+		input.emit("data", "\x1b"); // 取消后（仍 busy 至 turn 收尾）按 = 重新计首按
+		await flush(80);
+		expect(actions).toEqual(["cancel"]);
+		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤bc 图片 chip 文内 token：insertAtCursor 光标位插入、restoreInput 恢复原文（2026-09-23 走查拍板）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "看图");
+		await flush();
+		app.insertAtCursor("[image #1 (271×157)]"); // 光标在文尾 → 追加
+		expect(app.stateRef.input).toBe("看图[image #1 (271×157)]");
+		// 退格删除 chip（用户可编辑 = 撤销挂图）：全选删除后恢复原文
+		app.restoreInput("看图[image #1 (271×157)]");
+		expect(app.stateRef.input).toBe("看图[image #1 (271×157)]");
+		expect(app.stateRef.cursor).toBe(app.stateRef.input.length);
+		app.stop();
+	});
+	it("⑤bd 消息队列区（2026-09-23 队列批——kimi QueuePane 同族）：逐条摘要 + hint 入帧；Ctrl+U = steer 队列+草稿；空输入 ↑ 召回队尾", async () => {
+		const { app, input, output, queue, actions } = rig();
+		app.start();
+		await flush();
+		queue.push("第一条排队", "第二条排队");
+		app.setBusy(true);
+		input.emit("data", "草稿内容");
+		await flush();
+		const plain = stripAnsi(output.buf);
+		expect(plain).toContain("› 第一条排队"); // 队列区逐条摘要
+		expect(plain).toContain("› 第二条排队");
+		expect(plain).toContain("Ctrl + U 立即注入"); // 操作 hint
+		// 队列行补齐左栏宽（不齐则右栏分隔线左移错位——2026-09-23 走查实锤回归钉）：截获帧屏幕行测宽
+		const { visibleWidth } = await import("./width.ts");
+		let lastScreen: string[] = [];
+		const fullRef = (app as unknown as { full: { render(s: string[], ...rest: unknown[]): number } }).full;
+		const origRender = fullRef.render.bind(fullRef);
+		fullRef.render = (s: string[], ...rest: unknown[]): number => {
+			lastScreen = s;
+			return origRender(s, ...rest);
+		};
+		input.emit("data", "\x1b[D"); // 方向键触发一帧（不改文本）
+		await flush();
+		const qLine = stripAnsi(lastScreen.find((l) => stripAnsi(l).includes("› 第一条排队"))!);
+		// 分隔线必须落在左栏宽处（队列行未补齐则 │ 左移错位——2026-09-23 走查实锤回归钉；CJK 计宽用 visibleWidth）
+		expect(visibleWidth(qLine.slice(0, qLine.indexOf("│")))).toBe(100 - (app as unknown as { sidebarW(): number }).sidebarW() - 2);
+		input.emit("data", "\x15"); // Ctrl+U = steer：队列 + 草稿一起给宿主
+		await flush();
+		expect(actions).toEqual(["steer:第一条排队|第二条排队|草稿内容"]);
+		expect(app.stateRef.input).toBe(""); // 输入框清空
+		// ↑ 召回队尾（LIFO）——steer 后宿主会清队（此处手动模拟宿主清队）
+		queue.length = 0;
+		queue.push("再排一条");
+		input.emit("data", "\x1b[A");
+		await flush();
+		expect(app.stateRef.input).toBe("再排一条");
+		expect(queue).toEqual([]);
+		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤be 斜杠菜单带参提交原文（/title 新名字 → 参数不丢——2026-09-23 实测前案）+ seedHistory 播种后 ↑ 召回", async () => {
+		const { app, input, submitted } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/title 新名字");
+		await flush();
+		input.emit("data", "\r"); // 菜单开着按 Enter——必须提交含参数的原文而非裸 /title
+		await flush();
+		expect(submitted).toEqual(["/title 新名字"]);
+		// 输入历史播种（/sessions 恢复路径）：播种后空输入 ↑ 即召回
+		app.seedHistory(["旧问题甲", "旧问题乙"]);
+		input.emit("data", "\x1b[A");
+		await flush();
+		expect(app.stateRef.input).toBe("旧问题乙");
 		app.stop();
 	});
 	it("⑤c 模块询问挂起期 Esc → 询问取消（不被忙碌取消截胡——F5 实证卡死位）", async () => {
@@ -325,6 +452,73 @@ describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
 		input.emit("data", "h");
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+});
+
+	describe("斜杠菜单固定布局（2026-09-23 用户拍板：命令恒 10 行 + ↑↓ 常驻占位 + 详释恒 3 行——高度恒定防闪烁）", () => {
+	const overlayLines = (app: FullApp): string[] =>
+		(app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[] } }).buildOverlay(80, 24).lines;
+	// 空占位行 = 框线 + 空格填充（boxRow padToWidth 全宽）——除 │ 外无可见内容
+	const isBlankRow = (l: string): boolean => l.replace(/│/g, "").trim().length === 0;
+
+	it("短/超长说明、滚动前后——菜单总行数一律相同；超长说明第 2 行末尾 ... 截断", async () => {
+		const r = rig();
+		r.io.slashCommands = () => [
+			{ name: "/short", desc: "短说明", long: "一句话讲完。" },
+			{ name: "/long", desc: "长说明", long: "这句说明非常长，".repeat(30) },
+			...Array.from({ length: 10 }, (_, i) => ({ name: `/cmd${i}`, desc: `第${i}`, long: `第${i}条` })),
+		]; // 12 条 → 有滚动余量
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/"); // 开菜单（首条 /short 选中）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		const hTop = overlayLines(app).length;
+		input.emit("data", "\x1b[B"); // ↓ 选中 /long（5+ 行折行说明）
+		await flush(120);
+		const longLines = overlayLines(app);
+		expect(longLines.length).toBe(hTop); // 高度不随说明长短跳
+		expect(longLines.map(stripAnsi).some((l) => l.includes("..."))).toBe(true); // 超出 2 行 → 第 2 行末尾 ...
+		input.emit("data", "\x1b[6~"); // PageDown → 窗口滚动
+		await flush(120);
+		expect(overlayLines(app).length).toBe(hTop); // 滚动边界同样不跳
+		app.stop();
+	});
+
+	it("不足 10 条与滚动两端：命令区恒 10 行（空槽补空行）、↑/↓ 行常驻占位", async () => {
+		const r = rig(); // rig 默认 3 条命令
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		const plain = overlayLines(app).map(stripAnsi);
+		// 结构恒定：标题 + 空 + ↑占位 + 10 行命令 + ↓行 + 分隔 + 2 行说明 + foot + 底框 = 19 行
+		expect(plain).toHaveLength(19);
+		const cmdRows = plain.slice(3, 13);
+		expect(cmdRows.filter((l) => l.includes("/help") || l.includes("/title") || l.includes("/permission"))).toHaveLength(3);
+		expect(cmdRows.filter(isBlankRow)).toHaveLength(7); // 7 个空槽
+		expect(isBlankRow(plain[2]!)).toBe(true); // ↑ 常驻：窗口在顶时该行为空占位
+		expect(isBlankRow(plain[13]!)).toBe(true); // ↓ 常驻：3 条全显示无余量 → 空占位（行不消失）
+		app.stop();
+	});
+
+	it("超出 10 条滚动到底：↑ 行显示余量、↓ 行转空占位——行数仍 19", async () => {
+		const r = rig();
+		r.io.slashCommands = () => Array.from({ length: 13 }, (_, i) => ({ name: `/c${String(i).padStart(2, "0")}`, desc: `第${i}`, long: `说明${i}` }));
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		input.emit("data", "\x1b[B".repeat(12)); // ↓ 到底
+		await flush(120);
+		const plain = overlayLines(app).map(stripAnsi);
+		expect(plain).toHaveLength(19);
+		expect(plain[2]).toContain("↑ 还有"); // 头上有余量
+		expect(isBlankRow(plain[13]!)).toBe(true); // 底下没有 → 空占位（不再消失）
 		app.stop();
 	});
 });
