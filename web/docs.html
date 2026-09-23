@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文档 — Orosus 连山</title>
+<meta name="description" content="Orosus 文档中心：README、开发者指南、模块教程、路线图、设计文档——仓库 markdown 在线阅读。">
+<link rel="icon" type="image/webp" href="assets/logo-icon-color.webp">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="docs.css">
+<script>try{if(localStorage.getItem("orosus-theme")==="light")document.documentElement.classList.add("light");if(localStorage.getItem("orosus-lang")==="en"){document.documentElement.classList.add("en");document.documentElement.setAttribute("lang","en")}}catch(e){}</script>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="index.html"><span class="dot"></span>Orosus</a>
+  <div class="links">
+    <a href="index.html#features"><span data-zh>特性</span><span data-en>Features</span></a>
+    <a href="index.html#arch"><span data-zh>架构</span><span data-en>Architecture</span></a>
+    <a href="index.html#quickstart"><span data-zh>上手</span><span data-en>Quickstart</span></a>
+    <a href="tutorial.html"><span data-zh>模块教程</span><span data-en>Tutorial</span></a>
+    <a href="docs.html"><span data-zh>文档</span><span data-en>Docs</span></a>
+    <a href="api/index.html">API</a>
+    <button class="theme-toggle" id="themeBtn" aria-label="切换昼夜">☀</button>
+    <button class="lang-toggle" id="langBtn">EN</button>
+    <a class="gh" href="https://github.com/zhangxyfs/Orosus">GitHub ↗</a>
+  </div>
+</nav>
+
+<div class="docs-layout">
+  <aside class="docs-side">
+    <div class="group"><div class="g-title">项目</div>
+      <a data-file="README.md">README（项目自述）</a>
+      <a data-file="README_EN.md">README (English)</a>
+      <a data-file="docs/ROADMAP.md">路线图 ROADMAP</a>
+    </div>
+    <div class="group"><div class="g-title">开发</div>
+      <a data-file="docs/module-walkthrough.md">模块开发 walkthrough</a>
+      <a data-file="docs/developers.md">模块开发者指南（速查）</a>
+    </div>
+    <div class="group"><div class="g-title">设计文档</div>
+      <a data-file="docs/superpowers/specs/2026-09-14-modular-agent-harness-design.md">主设计文档（v33）</a>
+      <a data-file="docs/superpowers/specs/design-decisions.md">设计决策台账 D1–</a>
+      <a data-file="docs/superpowers/specs/milestone-acceptance.md">里程碑验收</a>
+      <a data-file="docs/superpowers/specs/modules/README.md">模块系列·写法规范</a>
+      <a data-file="docs/superpowers/specs/modules/_inventory.md">基本模块全景清单</a>
+    </div>
+    <div class="group"><div class="g-title">模块设计文档</div>
+      <a data-file="docs/superpowers/specs/modules/subagent.md">subagent（子代理）</a>
+      <a data-file="docs/superpowers/specs/modules/compaction.md">compaction（压缩）</a>
+      <a data-file="docs/superpowers/specs/modules/approval.md">approval（审批门）</a>
+      <a data-file="docs/superpowers/specs/modules/skill.md">skill（技能）</a>
+      <a data-file="docs/superpowers/specs/modules/mcp.md">mcp（MCP 桥接）</a>
+      <a data-file="docs/superpowers/specs/modules/sansheng-liubu.md">sansheng-liubu（构想）</a>
+      <a data-file="docs/superpowers/specs/modules/provider-glm.md">provider-glm</a>
+      <a data-file="docs/superpowers/specs/modules/provider-kimi.md">provider-kimi</a>
+      <a data-file="docs/superpowers/specs/modules/provider-deepseek.md">provider-deepseek</a>
+      <a data-file="docs/superpowers/specs/modules/provider-openai.md">provider-openai</a>
+      <a data-file="docs/superpowers/specs/modules/provider-custom.md">provider-custom</a>
+    </div>
+    <div class="group"><div class="g-title">接口参考</div>
+      <a class="ext" href="api/index.html">API 文档（typedoc）↗</a>
+      <a class="ext" href="tutorial.html">模块教程（网页版）</a>
+    </div>
+  </aside>
+  <main class="docs-main">
+    <div class="docs-status" id="status"></div>
+    <article class="doc md-body" id="content"></article>
+  </main>
+</div>
+
+<footer>
+  <img class="foot-mark" src="assets/logo-icon-mono.webp" alt="Orosus 连山">
+  <div class="poem-line"><span data-zh>群峰连亘而不绝，百脉周流而相通。</span><span data-en>Ranges run on without end; a hundred veins flow as one.</span></div>
+  <div><a href="https://github.com/zhangxyfs/Orosus">GitHub</a> · <a href="index.html"><span data-zh>首页</span><span data-en>Home</span></a> · MIT License</div>
+</footer>
+
+<script src="theme.js"></script>
+<script src="lang.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="docs.js"></script>
+</body>
+</html>

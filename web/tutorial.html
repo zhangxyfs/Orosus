@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模块开发 walkthrough — Orosus 连山</title>
+<meta name="description" content="从零写一个 Orosus（连山）模块：两条通道、目录扫描、信任门、测试模板、转正内置。">
+<meta property="og:title" content="模块开发 walkthrough — Orosus 连山">
+<meta property="og:image" content="assets/logo-icon-color.png">
+<link rel="icon" type="image/webp" href="assets/logo-icon-color.webp">
+<link rel="stylesheet" href="style.css">
+<script>try{if(localStorage.getItem("orosus-theme")==="light")document.documentElement.classList.add("light");if(localStorage.getItem("orosus-lang")==="en"){document.documentElement.classList.add("en");document.documentElement.setAttribute("lang","en")}}catch(e){}</script>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="index.html"><span class="dot"></span>Orosus</a>
+  <div class="links">
+    <a href="index.html#features"><span data-zh>特性</span><span data-en>Features</span></a>
+    <a href="index.html#arch"><span data-zh>架构</span><span data-en>Architecture</span></a>
+    <a href="index.html#quickstart"><span data-zh>上手</span><span data-en>Quickstart</span></a>
+    <a href="tutorial.html"><span data-zh>模块教程</span><span data-en>Tutorial</span></a>
+    <a href="docs.html"><span data-zh>文档</span><span data-en>Docs</span></a>
+    <a href="api/index.html">API</a>
+    <button class="theme-toggle" id="themeBtn" aria-label="切换昼夜">☀</button>
+    <button class="lang-toggle" id="langBtn">EN</button>
+    <a class="gh" href="https://github.com/zhangxyfs/Orosus">GitHub ↗</a>
+  </div>
+</nav>
+
+<article class="doc">
+  <h1>模块开发 walkthrough</h1>
+  <p class="doc-lead">从零到 <code>/reload</code>——一步步做一个真能跑的模块。本文同步于仓库 <a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/module-walkthrough.md">docs/module-walkthrough.md</a>；速查见 <a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/developers.md">developers.md</a>，机制依据见主设计文档（v33）§5/§6/§8。</p>
+
+  <h2>0. 三分钟看懂：模块怎么被模型「看见」</h2>
+  <p>一个模块能被模型感知，只有两条通道，都在 <code>activate(ctx)</code> 里注册：</p>
+  <table>
+    <tr><th>通道</th><th>注册口</th><th>模型看到什么</th></tr>
+    <tr><td>工具</td><td><code>ctx.contribute.tool(...)</code></td><td>请求里的 tools 数组——工具名、描述、参数 schema</td></tr>
+    <tr><td>系统提示词</td><td><code>ctx.contribute.promptSection(...)</code></td><td>系统提示词里的一节——「什么时候用、怎么配合」的引导文字</td></tr>
+  </table>
+  <p>除此之外的注册口（命令、能力槽、事件、日志）都是给<strong>宿主或别的模块</strong>用的，模型看不见。反过来说：模块<strong>加载了不会自动进系统提示词</strong>——你不调 <code>promptSection</code>，一个字都不会进；调了但 text 是空串，装配时也会被过滤掉。想要「加载即注入」，就在 activate 里无条件注册、text 永远返回非空（tool-todo 和 mcp 就是这个形态）。</p>
+  <p>provider 系模块是另一类：它们只往能力槽里塞实现（<code>ctx.provide</code>），是「水管」，模型完全无感。</p>
+
+  <h2>1. 两条路：先外部，后转正</h2>
+  <table>
+    <tr><th></th><th>外部模块</th><th>内置模块</th></tr>
+    <tr><td><strong>放哪</strong></td><td><code>&lt;项目&gt;/.orosus/modules/&lt;name&gt;/</code> 或 <code>~/.orosus/modules/&lt;name&gt;/</code></td><td><code>packages/modules/&lt;name&gt;/</code> + 改 <code>apps/cli/src/builtins.ts</code></td></tr>
+    <tr><td><strong>加载方式</strong></td><td>目录扫描 + jiti 直接吃 TS 源码，<strong>不用构建不用发包</strong></td><td>workspace 包 import</td></tr>
+    <tr><td><strong>信任</strong></td><td>项目级要 <code>orosus module trust &lt;name&gt;</code>；用户级免确认</td><td>仓库内自带信任</td></tr>
+    <tr><td><strong>适合</strong></td><td>试验、项目定制、第三方分发</td><td>稳定后转正、要跑全套测试</td></tr>
+  </table>
+  <p>教程主线走外部模块（门槛最低），<a href="#zhengshi">第 9 节</a>讲怎么转正。</p>
+
+  <h2>2. Step 1：写一个 note 模块</h2>
+  <p>做个最简单但五脏俱全的：<strong>会话便签</strong>——模型跨轮次记中间结论的工具。一个文件搞定，新建 <code>&lt;项目&gt;/.orosus/modules/note/index.ts</code>：</p>
+  <pre><code class="language-ts">import { defineModule } from "@orosus/contracts/module";
+import { defineTool } from "@orosus/contracts/tool";
+import { z } from "zod";
+
+export default defineModule({
+  name: "note",                      // kebab-case，全局唯一（规则 4）
+  version: "0.1.0",
+  description: "会话便签——模型跨轮次的临时记事本",
+  api: 1,
+  config: z.object({                 // 自家配置节 [note]：声明 schema 才读得到
+    maxNotes: z.number().int().min(1).default(20),
+  }),
+  logEvents: ["note/write"],         // 想往会话日志写事件，必须先在这里白名单
+  activate(ctx) {
+    const notes: string[] = [];
+
+    // 通道一：工具（进请求的 tools 数组）
+    ctx.contribute.tool(defineTool({
+      name: "note__add",             // 强制 &lt;module&gt;__&lt;tool&gt; 前缀（规则 4）
+      description: "Add a short note that persists across turns. Use for intermediate facts, not final answers.",
+      parameters: z.object({ text: z.string().min(1) }),
+      resolveExecution: async (input) =&gt; {
+        const { text } = input as { text: string };
+        return {
+          accesses: [],              // 不碰文件/网络/子进程 → 空声明
+          approvalRule: "note__add",
+          execute: async () =&gt; {
+            const { maxNotes } = await ctx.configRead();   // 运行期读自家配置（含 overlay）
+            notes.push(text);
+            if (notes.length &gt; maxNotes) notes.splice(0, notes.length - maxNotes);
+            ctx.session.append("note/write", { notes });   // 落会话日志（TUI/回放可投影）
+            return { output: `Noted (${notes.length}/${maxNotes}): ${text}`, isError: false };
+          },
+        };
+      },
+    }));
+
+    // 通道二：系统提示词节（使用引导——模型看得到"现在有几条便签"）
+    ctx.contribute.promptSection({
+      order: 15,                     // 分配表：skill=0 / todo=10 / mcp=20；领空位，别越 30
+      get text() {                   // getter——每轮请求装配时读最新值
+        return notes.length === 0 ? "" : `## Notes\n${notes.map((n) =&gt; `- ${n}`).join("\n")}`;
+      },
+    });
+  },
+});</code></pre>
+  <p>几件事说透：</p>
+  <ul>
+    <li><strong><code>resolveExecution</code> 和 <code>execute</code> 是两阶段</strong>（§6.3）：前者只做声明（无副作用），内核拿它跑并发调度和审批瀑布；后者是唯一的副作用点。工具出错<strong>不许 reject</strong>，带内返回 <code>{ output, isError: true }</code>。</li>
+    <li><strong><code>accesses</code> 声明资源</strong>：不声明 = <code>{ kind: "all" }</code> 独占（fail-closed）。要读文件就写 <code>[{ kind: "fs.read", path }]</code>，跑命令写 <code>[{ kind: "subprocess" }]</code>。宿主据此做并发分组和审批。</li>
+    <li><strong>promptSection 的 order 是全局分配表</strong>：核心五节永远最前（概念 -100），模块段按 order 排，AGENTS.md 固定拼尾（等价 30）。现有占用 skill=0 / tool-todo=10 / mcp=20，新模块领空位、保持 &lt; 30，别跟别人撞车。</li>
+    <li><strong>第三方依赖</strong>：<code>@orosus/contracts</code> 由宿主钉死（外部模块不用装）；但 <code>zod</code> 这类第三方包按 Node 规则从模块目录向上解析——模块放在本仓库或任何有 node_modules 的目录下没问题，放到「空目录」里要自备（模块目录里 <code>npm i zod</code>）。</li>
+  </ul>
+
+  <h2>3. Step 2：放对地方（目录扫描规则）</h2>
+  <p>内核启动时扫两级目录（§8.3，不递归——子目录本身就是模块）：</p>
+  <ul>
+    <li>项目级：<code>&lt;项目&gt;/.orosus/modules/&lt;name&gt;/</code></li>
+    <li>用户级：<code>~/.orosus/modules/&lt;name&gt;/</code>（同级同名时项目级覆盖用户级，§8.7）</li>
+  </ul>
+  <p>一个目录怎么算模块（§8.4，任一即可）：</p>
+  <ol>
+    <li>有 <code>package.json</code> 且 <code>"orosus": { "module": true }</code>，入口取 <code>exports["./module"]</code> 或 <code>main</code>；</li>
+    <li>没有 package.json，那就找 <code>index.ts</code> / <code>index.js</code>。</li>
+  </ol>
+  <p>不想放进 modules 目录的，也可以在配置里声明路径（§8.2）：</p>
+  <pre><code class="language-bash"># &lt;项目&gt;/.orosus/config.toml（或 ~/.orosus/config.toml）
+[note]
+source = "../wherever/note"    # ./ ~/ file:// 或绝对路径；npm: 前缀是 M3 之后的事</code></pre>
+
+  <h2>4. Step 3：过信任门（项目级模块必看）</h2>
+  <p>项目级模块第一次加载会被拦下（§8.5，防 MCPoison 式投毒）：</p>
+  <pre><code class="language-bash">untrusted（项目级模块未确认——运行 orosus module trust note 后重启生效）</code></pre>
+  <ul>
+    <li>确认一次登记进 <code>~/.orosus/trust.json</code>（内容 hash）；</li>
+    <li>之后<strong>改了入口文件</strong>，hash 对不上 → 重新确认。这是特性不是 bug：项目里的模块代码变了，你应该再看一眼。</li>
+    <li>用户级（<code>~/.orosus/modules/</code>）恒免确认——你自己放的东西自己负责。</li>
+    <li><code>orosus module list</code> 看全量；<code>enable &lt;name&gt;</code> / <code>disable &lt;name&gt;</code> 管开关。</li>
+  </ul>
+
+  <h2>5. Step 4：验证</h2>
+  <pre><code class="language-bash"># ① 冷启动看清单：模块在不在图里、什么状态
+pnpm orosus --dump-modules          # 已安装 CLI 的用户直接 orosus --dump-modules
+
+# ② 会话内热装载（不用重启）
+pnpm orosus
+&gt; /reload                           # 重新扫描+重建模块图
+&gt; 帮我记一下：这个项目的入口是 apps/cli/src/main.ts
+&gt; （模型调 note__add，你会在下轮系统提示词里看到 ## Notes）</code></pre>
+  <p>判断「真的生效了」的三个证据：<code>--dump-modules</code> 清单里有 <code>note</code> 且状态正常；模型真的调了 <code>note__add</code>（工具行可见）；再问一句「便签里有什么」它能答上来（说明 promptSection 活段在喂）。</p>
+  <blockquote>看着「没生效」先查这个：<strong>activate 抛错不会崩启动</strong>，模块只是降级（§10）——在 <code>--dump-modules</code> 里看是不是 failed，原因会写在那里。</blockquote>
+
+  <h2>6. Step 5：写测试（脚本驱动，不用真 provider）</h2>
+  <p>仓库里的标准形态（模板：<code>packages/modules/tool-todo/src/index.test.ts</code>）——<code>fakeProviderModule</code> 按剧本吐 chunk，<code>createHarness</code> 装配全套，断言走会话事件：</p>
+  <pre><code class="language-ts">import { it, expect } from "vitest";
+import { createHarness, InMemorySessionStore } from "@orosus/core";
+import { fakeProviderModule } from "@orosus/testing";
+import type { Chunk } from "@orosus/contracts/provider";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import note from "./index.ts";
+
+it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
+  const dir = mkdtempSync(join(tmpdir(), "orosus-note-"));
+  const script: Chunk[][] = [
+    [
+      { type: "toolcall/argumentsDelta", callId: "c1", name: "note__add",
+        argumentsDelta: JSON.stringify({ text: "入口在 apps/cli" }) },
+      { type: "finish", kind: "toolUse" },
+    ],
+    [{ type: "text/delta", text: "记下了" }, { type: "finish", kind: "stop" }],
+  ];
+  const mem = new InMemorySessionStore();
+  const h = await createHarness({
+    store: mem, diagDir: dir, spillDir: join(dir, "spill"),
+    modules: [note, fakeProviderModule("fake", script)],
+    config: { userFile: join(dir, "n.toml"), projectFile: join(dir, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+  });
+  await h.prompt("记一下：入口在 apps/cli");
+  const sections = h.graph().promptSections();   // close 前读——close 拆图
+  await h.close();
+  expect(sections).toContain("## Notes");
+  expect(h.graph().audit().some((a) =&gt; a.name === "note")).toBe(true);
+});</code></pre>
+  <p>工具逻辑本身还可以更轻：像 tool-todo 那样把工具做成<strong>工厂</strong>（<code>createTodoTool</code> 的形态），单测直接 <code>resolveExecution</code> + <code>execute</code> 驱动，不装配 harness。</p>
+
+  <h2>7. 进阶口速览</h2>
+  <table>
+    <tr><th>口</th><th>干什么</th><th>什么时候用</th></tr>
+    <tr><td><code>ctx.config</code> / <code>configRead()</code></td><td>自家配置节的快照 / 运行期活读</td><td>声明了 <code>config</code>（zod schema）才有；overlay 只作用于 configRead</td></tr>
+    <tr><td><code>ctx.contribute.command</code></td><td>注册 <code>/&lt;module&gt;__&lt;cmd&gt;</code> 命令</td><td>宿主操作面（人用的），不是模型用的</td></tr>
+    <tr><td><code>ctx.contribute.configOverlay</code></td><td>改<strong>别人</strong>配置节的读侧投影</td><td>要按运行态修饰他人配置时；须 <code>uses</code> 含 <code>config.foreign</code></td></tr>
+    <tr><td><code>ctx.session.append</code></td><td>写会话日志事件</td><td>必须先 <code>logEvents</code> 白名单；给 TUI 投影/回放/别的模块读</td></tr>
+    <tr><td><code>ctx.session.messages()</code></td><td>读当前会话的模型消息投影</td><td>要看「模型现在看到什么」的模块（compaction 就吃这个）</td></tr>
+    <tr><td><code>ctx.events.on</code> / <code>emit</code></td><td>监听/发事件</td><td>拦截点白名单 8 个；模块间通知走 <code>&lt;module&gt;/*</code> 命名空间</td></tr>
+    <tr><td><code>ctx.llm.stream</code></td><td>二级 LLM 调用</td><td>摘要、标题生成类；复用当前 provider/model，不带工具</td></tr>
+    <tr><td><code>ctx.provide</code> / <code>ctx.services.get</code></td><td>能力槽：给/取</td><td>模块间解耦协作（fs seam、provider 槽都是这个）</td></tr>
+    <tr><td><code>ctx.ui.ask</code> 等</td><td>宿主注入的交互</td><td>无头环境是拒绝式实现——别指望它一定成功，fail-closed</td></tr>
+  </table>
+  <p>每个字段、每个参数的逐条说明见本文<strong>第 12 节（完整 API 参考）</strong>；更长的语义注释去站点 <a href="api/index.html">API 文档</a>（typedoc 从 contracts 源码生成，<code>pnpm gen-docs</code>，两处同源）。</p>
+
+  <h2>8. 设计一个新模块的正规流程</h2>
+  <p>本仓库对「设计」有治理（<a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/README.md</a>）：一模块一文档、从 <code>_template.md</code> 复制起手、八节模板、六态状态机（构想 → 设计中 → 已定稿 → 实现中 → 已落地）。轻量想法只要求写三节（定位/接口需求/决策点），进入「设计中」才八节写全。</p>
+  <blockquote>核心纪律一条：<strong>模块文档不发明核心机制</strong>——需要核心开新口（比如子代理要够到嵌套 harness），先走主文档流程登记 D 编号，模块文档只在「前置条件」里引用。</blockquote>
+
+  <h2 id="zhengshi">9. 转正：挪进 packages/modules</h2>
+  <p>外部模块稳定后想转正，差异只有三处：</p>
+  <ol>
+    <li>建包 <code>packages/modules/&lt;name&gt;/</code>，package.json 抄邻居（tool-todo 是最小样板）：</li>
+  </ol>
+  <pre><code class="language-bash">{
+  "name": "@orosus/&lt;name&gt;",
+  "version": "0.1.0",
+  "type": "module",
+  "orosus": { "module": true },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@orosus/contracts": "workspace:*", "zod": "^4.0.0" },
+  "devDependencies": { "@orosus/core": "workspace:*", "@orosus/testing": "workspace:*" }
+}</code></pre>
+  <p>入口挪到 <code>src/index.ts</code>，测试文件 <code>src/index.test.ts</code>（vitest 全仓自动收）。</p>
+  <ol start="2">
+    <li><code>apps/cli/src/builtins.ts</code> 里 import 并加进 <code>BUILTIN_MODULES</code>。</li>
+    <li>仓库根 <code>pnpm install</code>（链 workspace）→ <code>pnpm vitest run packages/modules/&lt;name&gt;</code>。</li>
+  </ol>
+  <p>内置模块与外部模块走同一条 kernel 注册管线，没有特权（规则 5）——转正不改变行为，只改变归属：进 CI、进门禁、进 docs/api（如果你的契约进了 contracts）。</p>
+
+  <h2>10. 常见坑（都真实踩过或有出处）</h2>
+  <ol>
+    <li><strong>「没生效」先查降级</strong>：activate 抛错不崩启动，<code>--dump-modules</code> 看状态和原因。</li>
+    <li><strong>工具/命令命名</strong>：强制 <code>&lt;module&gt;__&lt;tool&gt;</code> / <code>&lt;module&gt;__&lt;cmd&gt;</code> 前缀，内核校验会拒收。</li>
+    <li><strong>信任门反复确认</strong>：项目级模块入口内容变了就要重新 trust（hash 机制）；<code>trust.json</code> 别手改（Windows 盘符大小写有归一逻辑，手改容易踩错）。</li>
+    <li><strong>promptSection order ≥ 30</strong>：会排到 AGENTS.md 拼尾位之前，与分配表矛盾——领 0–29 的空位。</li>
+    <li><strong>想「必须注入」结果时有时无</strong>：text 出了空串——空段装配时被过滤；无条件注册 + 永远非空。</li>
+    <li><strong>工具错误 reject 了</strong>：约定是带内 <code>isError</code>（§6.3），reject 会炸整轮回合。</li>
+    <li><strong>config 读不到</strong>：<code>defineModule.config</code> 没声明对应 schema——声明了才有那个节。</li>
+    <li><strong>外部模块的第三方依赖</strong>：contracts 免装（宿主 alias 钉死），zod 等按 Node 规则向上解析，空目录环境自备。</li>
+    <li><strong>验收纪律</strong>：单测全绿 ≠ 能用。改到 CLI/配置/渲染链路的，收尾前按 developers.md 的 HERMETIC 配方真实跑一遍。</li>
+  </ol>
+
+  <h2>11. 文档地图</h2>
+  <table>
+    <tr><th>想干什么</th><th>去哪</th></tr>
+    <tr><td>跟着做一遍模块</td><td>本文</td></tr>
+    <tr><td>查一个口怎么用（签名+示例）</td><td><a href="https://github.com/zhangxyfs/Orosus/tree/master/docs/api">docs/api</a>（typedoc，随源码同步）</td></tr>
+    <tr><td>速查：贡献点/拦截点/错误行为/验收</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/developers.md">developers.md</a></td></tr>
+    <tr><td>机制所以然（为什么这么设计）</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/2026-09-14-modular-agent-harness-design.md">主设计文档</a></td></tr>
+    <tr><td>某个模块的设计取舍</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/</a>（一模块一文档）</td></tr>
+    <tr><td>运行时看装配结果</td><td><code>orosus --dump-modules</code>（= <code>harness.graph().catalogJson()</code>）</td></tr>
+  </table>
+  <h2>12. 附：完整 API 参考</h2>
+  <blockquote>这一节把模块作者的<strong>全部可用面</strong>列全——每个字段、每个参数、它是干什么的。想读更长的语义注释再去 <a href="api/index.html">API 文档</a>（typedoc，与 contracts 源码同步），两处内容同源。</blockquote>
+
+  <h3>12.1 defineModule 全字段</h3>
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>干什么</th></tr>
+    <tr><td><code>name</code></td><td>string</td><td>✓</td><td>模块名 = 命名空间。kebab-case、全局唯一（规则 4）；工具/命令的 <code>&lt;module&gt;__</code> 前缀、日志事件的 <code>&lt;module&gt;/</code> 前缀都由它派生</td></tr>
+    <tr><td><code>version</code></td><td>string</td><td>✓</td><td>语义版本；<code>--dump-modules</code> 的 audit 里可见</td></tr>
+    <tr><td><code>description</code></td><td>string</td><td>✓</td><td>一句话说明；清单与 dump 里展示</td></tr>
+    <tr><td><code>api</code></td><td>number</td><td>✓</td><td>契约主版本。核心兼容窗口支持 N 与 N−1（§8.5），超窗的模块拒绝加载</td></tr>
+    <tr><td><code>dependsOn</code></td><td>Dependency[]</td><td></td><td>依赖的能力 key。两种写法：<code>"fs.read"</code> = 硬依赖（拓扑序保证 activate 时必有值）；<code>{ capability: "x", optional: true }</code> = 可选依赖（不建拓扑边，运行期 <code>getOptional</code> 迟到绑定，可能 undefined）</td></tr>
+    <tr><td><code>provides</code></td><td>string[]</td><td></td><td>自己提供的能力 key 声明。公共短名（如 <code>fs</code>）只能用 contracts 登记过的（规则 1），自有的带模块名前缀；<code>ctx.provide()</code> 的 key 必须 ⊆ 这里，多给会拒收</td></tr>
+    <tr><td><code>defaultEnabled</code></td><td>boolean</td><td></td><td>缺省是否启用（缺省 true）；用户 <code>module enable/disable</code> 与 CLI 开关覆盖在其上</td></tr>
+    <tr><td><code>uses</code></td><td>string[]</td><td></td><td>高权限行为自声明：<code>network</code> / <code>subprocess</code> / <code>fs.write</code> / <code>env</code> / <code>secrets</code> / <code>config.foreign</code>（要 overlay 别人配置节必须声明这个）……信任层 L0 只展示、L1 强制、L2 是 RPC 面；<strong>层由来源+用户选择决定，uses 不决定层</strong>（§8.5）</td></tr>
+    <tr><td><code>mounts</code></td><td>string[]</td><td></td><td>允许的挂点白名单，如 <code>["contribute:tool", "contribute:promptSection"]</code>；缺省不限制。写上是自我约束 + 审读锚点</td></tr>
+    <tr><td><code>config</code></td><td>ZodType&lt;C&gt;</td><td></td><td>自家配置节 <code>[name]</code> 的 schema。<strong>声明了才有 <code>ctx.config</code> / <code>configRead()</code></strong>；配置按纯分层合并（内置 &lt; 用户 &lt; 项目 &lt; CLI）后过 schema 校验、填默认值</td></tr>
+    <tr><td><code>logEvents</code></td><td>string[]</td><td></td><td><code>ctx.session.append()</code> 的事件类型白名单，必须带 <code>&lt;module&gt;/</code> 前缀；没声明的 type 会被拒收</td></tr>
+    <tr><td><code>activate(ctx)</code></td><td>function</td><td>✓</td><td>激活入口，启动/reload 的拓扑序里调一次。可返回 <code>dispose()</code> 或 <code>{ dispose }</code>——模块停用（close / reload 换代 / 回滚）时先于各注册 disposer 调用</td></tr>
+  </table>
+
+  <h3>12.2 activate(ctx)——ModuleContext 全口</h3>
+  <table>
+    <tr><th>口</th><th>签名</th><th>干什么</th></tr>
+    <tr><td><code>ctx.config</code></td><td>readonly C</td><td>activate 期注入的配置<strong>快照</strong>（已校验、带默认值）；overlay 不作用于它。要活读用 <code>configRead()</code></td></tr>
+    <tr><td><code>ctx.configRead()</code></td><td>() =&gt; Promise&lt;C&gt;</td><td>运行期读自家配置：复合各模块 overlay 后重新过 owner schema。<strong>activate 期只保证纯分层值</strong>，依赖 overlay 的读取放运行期</td></tr>
+    <tr><td><code>ctx.log</code></td><td>Logger</td><td>五级：<code>trace/debug/info/warn/error(code, msg, data?)</code>。code 是稳定事件码（点分路径），自动携带模块名；走独立诊断旁路，不进模型上下文</td></tr>
+    <tr><td><code>ctx.ui</code></td><td>CommandUi</td><td>宿主注入的交互口（命令处理器第二参也是它）。见 12.5</td></tr>
+    <tr><td><code>ctx.llm</code></td><td>LlmPort</td><td>二级 LLM 调用（摘要/标题类）。见 12.6</td></tr>
+    <tr><td><code>ctx.services.get</code></td><td>&lt;T&gt;(key) =&gt; Promise&lt;T&gt;</td><td>消费<strong>硬依赖</strong>能力：拓扑序保证 activate 期间必有值，不会 undefined</td></tr>
+    <tr><td><code>ctx.services.getOptional</code></td><td>&lt;T&gt;(key) =&gt; Promise&lt;T | undefined&gt;</td><td>消费可选能力：调用时解析，可能 undefined（提供方迟到你才读）。消费方必须写回落路径</td></tr>
+    <tr><td><code>ctx.provide</code></td><td>(key, impl) =&gt; void</td><td>往能力槽放实现（单所有者槽，重复 provide 报错）。key 须 ⊆ <code>provides</code> 声明；例外：核心保留槽（如 <code>provider:&lt;name&gt;</code>）由核心特许</td></tr>
+    <tr><td><code>ctx.contribute.tool</code></td><td>(t: Tool) =&gt; Disposer</td><td>注册模型可调用的工具。见 12.3</td></tr>
+    <tr><td><code>ctx.contribute.command</code></td><td>(name, handler) =&gt; Disposer</td><td>注册宿主命令 <code>/&lt;module&gt;__&lt;name&gt;</code>。<strong>人用的操作面，模型看不见</strong>。handler <code>(args: string, ui: CommandUi) =&gt; string | Promise&lt;string&gt;</code>，args 是命令后的原始参数串</td></tr>
+    <tr><td><code>ctx.contribute.promptSection</code></td><td>(s) =&gt; Disposer</td><td>注册系统提示词段。见 12.4</td></tr>
+    <tr><td><code>ctx.contribute.configOverlay</code></td><td>(o) =&gt; Disposer</td><td>改<strong>读侧</strong>投影：<code>{ section?, read(value) =&gt; value }</code>，缺省 section = 自家、声明他人 section 须 <code>uses</code> 含 <code>config.foreign</code>。只作用于 <code>configRead()</code>，不作用于 <code>ctx.config</code> 快照、不改盘</td></tr>
+    <tr><td><code>ctx.session.append</code></td><td>(type, payload) =&gt; void</td><td>写会话日志扩展事件。type 须在 <code>logEvents</code> 白名单；payload 任意 JSON。TUI 投影、回放、别的模块都从这里读</td></tr>
+    <tr><td><code>ctx.session.messages?</code></td><td>() =&gt; Promise&lt;ModelMessage[]&gt;</td><td>读当前会话的<strong>模型消息投影</strong>（压缩/裁剪已应用，与 agentLoop 同投影）。可选口——非核心宿主可能不提供，消费方必须带回落</td></tr>
+    <tr><td><code>ctx.events.on</code></td><td>(type, listener) =&gt; Disposer</td><td>订阅事件。listener 返回 <code>undefined</code> = 通过；返回 <code>{ deny: true, reason }</code> 或抛错 = 否决（仅拦截点有否决语义，见 12.7）</td></tr>
+    <tr><td><code>ctx.events.emit</code></td><td>(type, payload) =&gt; Promise&lt;void&gt;</td><td>模块间通知。<strong>仅限 <code>&lt;module&gt;/*</code> 命名空间</strong>，核心事件类型拒绝模块 emit</td></tr>
+  </table>
+
+  <h3>12.3 defineTool——两阶段工具契约</h3>
+  <p><code>defineTool({ name, description, parameters, resolveExecution })</code>，其中 <code>resolveExecution(input): Promise&lt;ToolExecution&gt;</code>：</p>
+  <table>
+    <tr><th>字段</th><th>干什么</th></tr>
+    <tr><td><code>name</code></td><td>强制 <code>&lt;module&gt;__&lt;tool&gt;</code> 前缀（规则 4），内核校验拒收违规名</td></tr>
+    <tr><td><code>description</code></td><td><strong>进模型的</strong>——写清楚干什么、什么时候用、什么时候别用；模型选不选它全看这段</td></tr>
+    <tr><td><code>parameters</code></td><td>zod schema。模型传参先过校验，不合 schema 的调用内核直接拒收；<code>resolveExecution</code> 拿到的 input 已是合法形状</td></tr>
+    <tr><td><code>resolveExecution(input)</code></td><td><strong>阶段一（声明，无副作用）</strong>：看一眼参数，返回本次执行的资源声明与执行闭包。每次调用都会走到，别在这里改状态</td></tr>
+  </table>
+  <p><code>ToolExecution</code>（阶段一返回值）：</p>
+  <table>
+    <tr><th>字段</th><th>干什么</th></tr>
+    <tr><td><code>accesses?</code></td><td>资源访问声明，给并发调度器与审批系统：<code>fs.read / fs.write</code>（带 path）、<code>network</code>（带 host）、<code>subprocess</code>。<strong>缺省 = <code>all</code> 独占</strong>（fail-closed：不声明就当你什么都能碰，别的工具给你让路）。助手函数：<code>Access.fsRead(path)</code> 等</td></tr>
+    <tr><td><code>approvalRule?</code></td><td>审批规则 pattern（数据，如 <code>"tool-shell__bash(git *)"</code>）；缺省 = 需要审批（fail-closed）</td></tr>
+    <tr><td><code>matchesRule?</code></td><td><code>(ruleArgs) =&gt; boolean</code>——带参规则的<strong>工具侧语义判定</strong>（比如路径真的在规则允许的目录下）；缺省 = 不匹配任何带参规则</td></tr>
+    <tr><td><code>execute(ctx)</code></td><td><strong>阶段二：唯一副作用点</strong>。<code>ctx: ToolContext = { callId, signal, log }</code>——callId 关联 tool/call 与 tool/result 日志；signal 是取消信号（长耗时工具必须响应）；log 同 ctx.log</td></tr>
+  </table>
+  <p><code>ToolResult</code>（execute 返回值）：</p>
+  <table>
+    <tr><th>字段</th><th>干什么</th></tr>
+    <tr><td><code>output</code></td><td>string，模型看到的文本。工具出错<strong>不许 reject</strong>——带内返回 <code>{ output: 错误说明, isError: true }</code>（§6.3），reject 会炸整轮回合</td></tr>
+    <tr><td><code>isError</code></td><td>true = 这次调用失败，模型会看到错误并自行决定重试/放弃</td></tr>
+    <tr><td><code>truncated?</code> / <code>spill?</code></td><td>输出超限的截断标记 / 落盘文件 <code>{ path, bytes }</code>（模型可再读全文）</td></tr>
+    <tr><td><code>denied?</code></td><td>被 <code>tool/pre-execute</code> 瀑布否决时由内核置 true（此时 isError 恒 true）——不是工具自己写的</td></tr>
+  </table>
+
+  <h3>12.4 promptSection——系统提示词段</h3>
+  <table>
+    <tr><th>字段</th><th>干什么</th></tr>
+    <tr><td><code>order</code></td><td>全局拼接顺序。核心五节概念 −100 永远最前；现有分配表：skill=0、tool-todo=10、mcp=20；AGENTS.md 等价 30 固定拼尾。<strong>新模块领 0–29 的空位</strong>，≥30 会插到 AGENTS.md 前面与分配表矛盾</td></tr>
+    <tr><td><code>text</code></td><td>string 或 getter。getter 每轮请求装配时求值（活段——todo 面板、mcp 清单都这么做）；<strong>空串段装配时被过滤</strong>——「必须注入」类内容应无条件注册且永远非空</td></tr>
+  </table>
+
+  <h3>12.5 CommandUi——交互口（命令与审批询问共用）</h3>
+  <table>
+    <tr><th>方法</th><th>干什么</th></tr>
+    <tr><td><code>ask(question)</code></td><td>问一个开放问题，返回用户输入</td></tr>
+    <tr><td><code>askSecret(question)</code></td><td>同 ask，宿主应以掩码回显（密钥类）</td></tr>
+    <tr><td><code>choose(title, items)</code></td><td>单选菜单，返回选中项</td></tr>
+    <tr><td><code>confirm(question)</code></td><td>是/否确认</td></tr>
+    <tr><td><code>notice?(text)</code></td><td>瞬时提示（「已切换」类）：全屏宿主走浮动 toast（3s 自消），行模式落单行。<strong>命令体 notice 后返回空串</strong>（静默约定），别把提示当结果文本返回</td></tr>
+  </table>
+  <blockquote>无头环境（<code>--print</code>、测试、嵌入式）注入<strong>拒绝式实现</strong>：三问法抛「无交互环境」→ 命令带内失败，fail-closed。所以命令体要能承受 ui 不可用。</blockquote>
+
+  <h3>12.6 LlmPort——二级模型调用</h3>
+  <table>
+    <tr><th>成员</th><th>干什么</th></tr>
+    <tr><td><code>stream(req)</code></td><td><code>req = { system?, messages, signal?, maxTokens? }</code>，返回 <code>AsyncIterable&lt;Chunk&gt;</code>。<strong>复用 harness 当前 provider/model</strong>（含 /model 运行期覆盖）；不带工具；错误带内（<code>finish{kind:"error"}</code>），不许 reject</td></tr>
+    <tr><td><code>contextWindow</code></td><td>当前模型上下文窗口（token），getter 惰性读；未知 undefined</td></tr>
+    <tr><td><code>lastUsage</code></td><td>最近一次<strong>主循环</strong>请求的真实用量锚点 <code>{ totalTokens, atMessageCount }</code>——其后消息用估算增量。仅运行期调用（activate 期 provider 可能未装配）</td></tr>
+  </table>
+
+  <h3>12.7 事件与拦截点（白名单 8 个，§6.5）</h3>
+  <table>
+    <tr><th>拦截点</th><th>语义</th><th>典型用途</th></tr>
+    <tr><td><code>agent/pre-step</code></td><td>emit</td><td>每轮开始时的观察/通知</td></tr>
+    <tr><td><code>agent/transform-context</code></td><td>reduce</td><td>改写发给模型的上下文（压缩模块在此）</td></tr>
+    <tr><td><code>agent/steering</code></td><td>拦截</td><td>用户转向插入</td></tr>
+    <tr><td><code>agent/follow-up</code></td><td>collect</td><td>收集后续动作建议</td></tr>
+    <tr><td><code>agent/should-stop</code></td><td>布尔 OR</td><td>任何一方说停就停</td></tr>
+    <tr><td><code>tool/pre-execute</code></td><td><strong>waterfall（审批在此）</strong></td><td>审批门、工具冻结、参数审计</td></tr>
+    <tr><td><code>tool/post-execute</code></td><td>emit</td><td>执行结果观察（日志/统计）</td></tr>
+    <tr><td><code>ui/command</code></td><td>emit</td><td>命令路由观察</td></tr>
+  </table>
+  <p>返回 <code>undefined</code> = 放行；<code>{ deny: true, reason }</code> 或抛错 = 否决（仅 waterfall/拦截类有否决语义）。</p>
+
+  <h3>12.8 生命周期速记</h3>
+  <ul>
+    <li><code>activate</code>：拓扑序调用一次；硬依赖在前（§5.2）。</li>
+    <li>一切注册（tool/command/promptSection/events.on…）<strong>返回 Disposer</strong>——模块停用时内核自动逐个调用，不用你记。</li>
+    <li><code>activate</code> 返回的 <code>dispose</code>：注册之外的清理（句柄/子进程），<strong>先于</strong>各注册 disposer 执行。</li>
+    <li>reload 换代：被保留（preserved）的模块不重建、不株连；被换下的走完整拆除。</li>
+    <li><strong>activate 抛错 = 该模块降级，不阻断启动</strong>（§10）；<code>required = true</code>（核心模块专属）才阻断。</li>
+  </ul>
+</article>
+
+<footer>
+  <img class="foot-mark" src="assets/logo-icon-mono.webp" alt="Orosus 连山">
+  <div class="poem-line"><span data-zh>群峰连亘而不绝，百脉周流而相通。</span><span data-en>Ranges run on without end; a hundred veins flow as one.</span></div>
+  <div><a href="https://github.com/zhangxyfs/Orosus">GitHub</a> · <a href="index.html"><span data-zh>首页</span><span data-en>Home</span></a> · MIT License</div>
+</footer>
+
+<script src="theme.js"></script>
+<script src="lang.js"></script>
+<script>
+  // 教程正文暂为中文（与 markdown 源同步）——切到 EN 时送往英文 README 查看器
+  document.getElementById("langBtn").addEventListener("click", function () {
+    var next = window.Lang.toggle();
+    if (next === "en") location.href = "docs.html?file=" + encodeURIComponent("README_EN.md");
+  });
+</script>
+<script src="hl.js"></script>
+</body>
+</html>

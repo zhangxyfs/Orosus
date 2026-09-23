@@ -1,0 +1,39 @@
+# GitHub Pages 部署：把 web/ 目录发布为项目站点。
+# 前置：仓库 Settings → Pages → Source 选「GitHub Actions」。合入 master 即自动发布。
+name: pages
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle API docs and markdown mirror into site
+        run: |
+          cp -r docs/api web/api
+          mkdir -p web/md
+          # git pathspec 的 * 跨目录匹配：docs/*.md 即全量 md；--parents 保留仓库相对路径
+          git ls-files -- 'README.md' 'README_EN.md' 'docs/*.md' 'docs/assets/*' \
+            | grep -v '^docs/api/' \
+            | xargs -d '\n' cp --parents --target-directory=web/md/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

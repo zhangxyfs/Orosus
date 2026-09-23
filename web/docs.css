@@ -1,0 +1,40 @@
+/* docs.html 专用：侧栏 + 正文布局 */
+.docs-layout {
+  display: grid; grid-template-columns: 250px minmax(0, 1fr);
+  gap: 0; max-width: 1240px; margin: 0 auto;
+  min-height: calc(100vh - 200px);
+}
+@media (max-width: 900px) { .docs-layout { grid-template-columns: 1fr; } .docs-side { position: static; border-right: none; border-bottom: 1px solid var(--border); } }
+
+.docs-side {
+  border-right: 1px solid var(--border);
+  padding: 28px 18px 40px 4px;
+  position: sticky; top: 60px; align-self: start;
+  max-height: calc(100vh - 60px); overflow-y: auto;
+}
+.docs-side .group { margin-bottom: 22px; }
+.docs-side .g-title {
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: 2px;
+  color: var(--muted); margin-bottom: 8px; padding-left: 12px;
+}
+.docs-side a {
+  display: block; padding: 5px 12px; border-radius: 7px;
+  color: var(--muted); font-size: 13.5px; cursor: pointer;
+  border: 1px solid transparent;
+}
+.docs-side a:hover { color: var(--fg); background: var(--surface); text-decoration: none; }
+.docs-side a.active { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.docs-side a.ext { color: var(--info); }
+
+.docs-main { padding: 34px clamp(18px, 4vw, 48px) 80px; min-width: 0; }
+.docs-status { color: var(--muted); font-family: var(--mono); font-size: 13px; padding: 8px 0 4px; }
+
+/* markdown 渲染体——tutorial 的 .doc 基础上补 marked 产物的适配 */
+.md-body { max-width: none; padding: 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { scroll-margin-top: 76px; }
+.md-body h2 { border-top: 1px solid var(--border); padding-top: 18px; }
+.md-body hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+.md-body img { max-width: 100%; border-radius: 8px; }
+.md-body table code, .md-body li code { white-space: nowrap; }
+.md-body del, .md-body input[type="checkbox"] { accent-color: var(--accent); }
+.md-body blockquote p { margin: 4px 0; }

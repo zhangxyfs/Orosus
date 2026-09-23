@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-zh="Orosus 连山 — 模块化 AI 编程助手 CLI" data-en="Orosus (Lianshan) — Modular AI Coding Assistant CLI">Orosus 连山 — 模块化 AI 编程助手 CLI</title>
+<meta name="description" content="Orosus（连山）是一个模块化 AI 编程助手 CLI——TypeScript 编写、Node 22+ 直接运行，由核心内核、契约包和一组可插拔模块组成。">
+<meta property="og:title" content="Orosus 连山 — 模块化 AI 编程助手 CLI">
+<meta property="og:description" content="词根 oros（希腊语 ὄρος，山）呼应中文定名「连山」：模块互连、组件层叠、首尾接续。">
+<meta property="og:image" content="assets/logo-icon-color.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<link rel="icon" type="image/webp" href="assets/logo-icon-color.webp">
+<link rel="stylesheet" href="style.css">
+<script>try{if(localStorage.getItem("orosus-theme")==="light")document.documentElement.classList.add("light");if(localStorage.getItem("orosus-lang")==="en"){document.documentElement.classList.add("en");document.documentElement.setAttribute("lang","en")}}catch(e){}</script>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="index.html"><span class="dot"></span>Orosus</a>
+  <div class="links">
+    <a href="#features"><span data-zh>特性</span><span data-en>Features</span></a>
+    <a href="#arch"><span data-zh>架构</span><span data-en>Architecture</span></a>
+    <a href="#quickstart"><span data-zh>上手</span><span data-en>Quickstart</span></a>
+    <a href="tutorial.html"><span data-zh>模块教程</span><span data-en>Tutorial</span></a>
+    <a href="docs.html"><span data-zh>文档</span><span data-en>Docs</span></a>
+    <a href="api/index.html">API</a>
+    <button class="theme-toggle" aria-label="切换昼夜">☀</button>
+    <button class="lang-toggle" onclick="Lang.toggle()">EN</button>
+    <a class="gh" href="https://github.com/zhangxyfs/Orosus">GitHub ↗</a>
+  </div>
+</nav>
+
+<!-- ═══ 首屏 ═══ -->
+<header class="hero">
+  <div class="wrap">
+    <img class="logo" src="assets/logo.png" alt="Orosus">
+    <p class="poem">
+      <span data-zh>玄墨铺底以为架，<b>青玉</b>点窍以为神，<b>石青</b>叠层峦之形，<b>暖金</b>走灵犀之脉，<b>赭石</b>定磐礡之根。<br>群峰连亘而不绝，百脉周流而相通。</span>
+      <span data-en>Ink-black lays the frame; <b>jade</b> lights the spirit; <b>azurite</b> stacks the ranges; <b>warm gold</b> runs the meridians; <b>ochre</b> sets the bedrock.<br>Ranges run on without end; a hundred veins flow as one.</span>
+    </p>
+    <h1><span data-zh>模块化 AI 编程助手 CLI</span><span data-en>A Modular AI Coding Assistant CLI</span></h1>
+    <p class="sub">
+      <span data-zh>TypeScript 编写、Node 22+ 直接运行（无需编译）——核心内核、零依赖契约包、可插拔模块，<br>内置模块与外部模块走<em>同一条注册管线</em>。</span>
+      <span data-en>Written in TypeScript, runs directly on Node 22+ (no build step) — a core kernel, a zero-dependency contracts package, pluggable modules.<br>Built-in and external modules register through <em>the same pipeline</em>.</span>
+    </p>
+    <div class="badges">
+      <img alt="node" src="https://img.shields.io/badge/node-%3E%3D22-339933">
+      <img alt="pnpm" src="https://img.shields.io/badge/pnpm-monorepo-f69220">
+      <img alt="platform" src="https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-0078d6">
+      <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart"><span data-zh>三分钟上手</span><span data-en>Quick Start</span></a>
+      <a class="btn" href="tutorial.html"><span data-zh>写一个模块</span><span data-en>Write a Module</span></a>
+      <a class="btn" href="https://github.com/zhangxyfs/Orosus">GitHub</a>
+    </div>
+
+    <!-- 终端演示：普通终端敲命令 → 清屏进入全屏 TUI（按 orosus-tui-prototype 还原） -->
+    <div class="term" id="heroTerm" title="点击重播 / replay">
+      <div class="bar"><i></i><i></i><i></i><span class="t">orosus — terminal</span></div>
+      <div class="body boot-body" id="bootBody"><span class="t-dim">$</span> <span class="t-fg" id="typedText"></span><span class="cursor"></span></div>
+
+      <!-- 全屏 TUI（FullApp 形态，恒为夜山） -->
+      <div class="tui" id="heroTui" hidden>
+        <div class="tui-main">
+          <div class="tui-banner">
+            <div class="tui-logo"><img src="assets/logo.png" alt="OROSUS"></div>
+            <div class="tui-meta">
+              <div class="ver">v0.1.0 <span class="sep">—</span> <span class="dim">模块化 AI Agent Harness</span></div>
+              <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。</div>
+              <div class="dim">如层峦叠互，灵脉贯通。</div>
+              <div class="dim">Tab 补全 · Shift + Tab 权限 · Alt + E 思考</div>
+              <div class="dim">/ 命令 · Ctrl + T 侧栏 · Alt + V 贴图</div>
+            </div>
+          </div>
+          <div class="tui-notice">
+            <div class="dim">[orosus] 10 个模块已激活；4 个品牌适配器未配 key 静默降级（按需配置 config.toml，明细 --dump-modules）</div>
+            <div class="faint">正在待命</div>
+          </div>
+          <div class="tui-input">
+            <div class="tui-inputbox"><span class="pchar">❯</span><span class="ph">向 Orosus 下达指令，或输入 / 查看命令…</span><span class="cursor"></span></div>
+            <div class="tui-inputhint"><span><span class="mode">◆ Never Ask</span> · Shift + Tab 切换模式</span><span class="dim2">Ctrl + T 侧栏</span></div>
+          </div>
+        </div>
+        <aside class="tui-side">
+          <section class="tui-panel">
+            <div class="phead"><span>运行状态</span><span class="en"><b>1/2</b> · Shift+←→ 翻页</span></div>
+            <dl class="kv">
+              <dt>模型</dt><dd>k3-25.6k</dd>
+              <dt>会话</dt><dd class="info">s_01M36V87YVABTNYJGE6AK</dd>
+              <dt>工作目录</dt><dd class="info">D:\develop\Orosus</dd>
+              <dt>运行时间</dt><dd>34 秒</dd>
+              <dt>Tokens</dt><dd>↑ 0 · ↓ 0</dd>
+            </dl>
+            <div class="ctxrow"><span class="lbl">上下文</span><div class="ctxbar"><i></i></div><span class="lbl">0k/262k</span></div>
+            <div class="subhead"><span>模块挂载</span><span class="en"><b>1/3</b> · MODULES</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">approval</span><span class="mstate">已挂载</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">compaction</span><span class="mstate">已挂载</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">mcp</span><span class="mstate">已挂载</span></div>
+            <div class="mod off"><span class="dot">○</span><span class="mname">provider-anthropic</span><span class="mstate">未挂载</span></div>
+            <div class="mod off"><span class="dot">○</span><span class="mname">provider-custom</span><span class="mstate">未挂载</span></div>
+            <div class="modhint">Shift + ← 翻页</div>
+          </section>
+          <section class="tui-panel tui-todo">
+            <div class="phead"><span>任务清单</span><span class="en"><b>1/1</b></span></div>
+            <div class="todoempty">由 Agent 实时同步 · 任务数: 0/0</div>
+            <div class="modhint">Shift + PgUp/PgDn 翻页 · Esc 返回</div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══ 名字由来 ═══ -->
+<section id="name">
+  <div class="wrap">
+    <div class="section-eyebrow">THE NAME</div>
+    <h2><span data-zh>Orosus，中文叫「连山」</span><span data-en>Orosus — in Chinese, “Lianshan” (连山)</span></h2>
+    <p class="section-lead"><span data-zh>一个名字，两种语言，同一座山。</span><span data-en>One name, two languages, the same mountain.</span></p>
+    <div class="name-grid">
+      <div class="name-icons">
+        <img class="icon-color" src="assets/logo-icon-color.webp" alt="Orosus【连山】">
+      </div>
+      <div class="name-story">
+        <span data-zh>
+          <p>中文「<b>连山</b>」本义：连绵群山，一峰接一峰——象义<b>模块互连、组件层叠、首尾接续</b>。</p>
+          <p><b>Orosus</b> 取自希腊语 <i>oros</i>（ὄρος，山）衍生构词：词根 <code>oros</code> 即山，呼应中文定名「连山」。</p>
+          <p><span class="etym">/ɒˈrəʊsəs/ 英读 · /oʊˈroʊsəs/ 美式</span></p>
+          <p class="dim">群峰连亘而不绝——山是模块的骨架；百脉周流而相通——脉是契约的血络。</p>
+        </span>
+        <span data-en>
+          <p>The Chinese name <b>连山 (Lianshan)</b> literally means “linked mountains” — peak after peak without end — a metaphor for <b>modules interconnecting, components layering, everything chaining from end to end</b>.</p>
+          <p><b>Orosus</b> is coined from Greek <i>oros</i> (ὄρος, mountain): the root <code>oros</code> is the mountain, echoing the Chinese name.</p>
+          <p><span class="etym">/ɒˈrəʊsəs/ UK · /oʊˈroʊsəs/ US</span></p>
+          <p class="dim">Ranges run on without end — mountains are the skeleton of modules; a hundred veins flow as one — contracts are the lifeblood.</p>
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 特性 ═══ -->
+<section id="features">
+  <div class="wrap">
+    <div class="section-eyebrow">FEATURES</div>
+    <h2><span data-zh>特性</span><span data-en>Features</span></h2>
+    <p class="section-lead"><span data-zh>骨架管稳定，契约管边界，模块管能力——每一件都围绕「内核不做模块的事，模块碰不到内核的里子」展开。</span><span data-en>The skeleton keeps things stable, contracts keep boundaries, modules bring capabilities — built on one principle: the kernel never does a module's job, and a module never touches the kernel's internals.</span></p>
+    <div class="grid">
+      <div class="card"><h3><span class="mark"></span><span data-zh>模块化内核</span><span data-en>Modular kernel</span></h3>
+        <p><span data-zh>核心五件（session / loop / tool / provider / kernel）+ 零依赖契约包 <code>@orosus/contracts</code>。模块经拓扑序激活、可热重载、失败降级不阻断启动。</span><span data-en>Five core pieces (session / loop / tool / provider / kernel) + the zero-dependency contracts package <code>@orosus/contracts</code>. Modules activate in topological order, hot-reload, and fail soft without blocking startup.</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>多厂商支持</span><span data-en>Multi-provider</span></h3>
+        <p><span data-zh>Anthropic / GLM / Kimi / DeepSeek / OpenAI 品牌适配器 + 自定义厂商统一入口（OpenAI 兼容端点），运行期 <code>/model</code> 即切。</span><span data-en>Brand adapters for Anthropic / GLM / Kimi / DeepSeek / OpenAI plus a unified custom-endpoint entry (OpenAI compatible); switch anytime with <code>/model</code>.</span></p></div>
+      <div class="card"><h3><span class="mark"></span><span data-zh>工具生态</span><span data-en>Tool ecosystem</span></h3>
+        <p><span data-zh>文件系统、Shell、Todo、Ask 内置工具模块；技能系统与 MCP 桥接。工具强制两阶段：声明（无副作用）→ 执行（唯一副作用点）。</span><span data-en>Built-in tool modules for filesystem, shell, todo and ask; a skill system and an MCP bridge. Every tool is strictly two-phase: declare (no side effects) → execute (the only side-effect point).</span></p></div>
+      <div class="card"><h3><span class="mark warn"></span><span data-zh>审批门</span><span data-en>Approval gate</span></h3>
+        <p><span data-zh><code>tool/pre-execute</code> 瀑布拦截点统一审批；ask-when-needed / yolo / auto 多档模式，手写 deny 规则始终优先。</span><span data-en>One unified approval waterfall at <code>tool/pre-execute</code>; ask-when-needed / yolo / auto modes; handwritten deny rules always win.</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>上下文管理</span><span data-en>Context management</span></h3>
+        <p><span data-zh>自动 / 手动压缩（compaction 模块），read 窗口化 + 截断去重，多模态图片真实喂图。</span><span data-en>Automatic and manual compaction (the compaction module), windowed reads with truncation dedup, real multimodal image feeding.</span></p></div>
+      <div class="card"><h3><span class="mark"></span><span data-zh>TUI 界面</span><span data-en>TUI</span></h3>
+        <p><span data-zh>全屏接管、流式重绘、键盘菜单 / Esc 取消、Markdown 渲染（含 LaTeX），连山主题十色贯穿始终。</span><span data-en>Full-screen takeover, streaming repaint, keyboard menus with Esc, Markdown rendering (LaTeX included) — all in the ten-color Lianshan theme.</span></p></div>
+      <div class="card"><h3><span class="mark warn"></span><span data-zh>数据自治理</span><span data-en>Data self-governance</span></h3>
+        <p><span data-zh>会话 JSONL 可读可 grep；<code>OROSUS_HOME</code> 环境变量 + <code>orosus home migrate</code> 支持整体迁移缓存目录。</span><span data-en>Session JSONL stays human-readable and grep-able; <code>OROSUS_HOME</code> plus <code>orosus home migrate</code> relocates the data directory wholesale.</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>开放扩展</span><span data-en>Open extension</span></h3>
+        <p><span data-zh>往 <code>.orosus/modules/</code> 放一个 TS 文件就是模块——jiti 直接吃源码，不用构建不用发包；项目级信任门防投毒。</span><span data-en>Drop a TS file into <code>.orosus/modules/</code> and it's a module — jiti runs the source directly, no build, no publish; a project-level trust gate guards against poisoning.</span></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 架构 ═══ -->
+<section id="arch">
+  <div class="wrap">
+    <div class="section-eyebrow">ARCHITECTURE</div>
+    <h2><span data-zh>架构</span><span data-en>Architecture</span></h2>
+    <p class="section-lead"><span data-zh>群峰连亘而不绝——分层定根，百脉周流而相通——契约通脉。</span><span data-en>Ranges run on without end — layers set the root; a hundred veins flow as one — contracts connect them.</span></p>
+    <div class="arch">
+      <div class="layer"><span class="tag">APPS</span><b>apps/cli</b><span><span data-zh>唯一前端：REPL + 子命令（provider / module / home）</span><span data-en>the only frontend: REPL + subcommands (provider / module / home)</span></span></div>
+      <div class="arrow"><span data-zh>▲ 模块经同一条 kernel 注册管线装配 ▲</span><span data-en>▲ modules assemble through one kernel registration pipeline ▲</span></div>
+      <div class="layer l2"><span class="tag">MODULES</span><b><span data-zh>14 个内置模块</span><span data-en>14 built-in modules</span></b>
+        <div class="chips"><span class="chip">tool-fs</span><span class="chip">tool-shell</span><span class="chip">tool-todo</span><span class="chip">tool-ask</span><span class="chip">skill</span><span class="chip">mcp</span><span class="chip">approval</span><span class="chip">compaction</span><span class="chip">provider ×6</span></div>
+      </div>
+      <div class="arrow"><span data-zh>▲ 只 import 契约，碰不到内核里子 ▲</span><span data-en>▲ import contracts only — the kernel's internals stay out of reach ▲</span></div>
+      <div class="layer l3"><span class="tag">CONTRACTS</span><b>@orosus/contracts</b><span><span data-zh>零依赖契约，按域分包：module / tool / provider / fs / home</span><span data-en>zero-dependency contracts, split by domain: module / tool / provider / fs / home</span></span></div>
+      <div class="arrow"><span data-zh>▲ 核心件实现契约，禁止 import 任何模块 ▲</span><span data-en>▲ the core implements contracts and never imports modules ▲</span></div>
+      <div class="layer"><span class="tag">CORE</span><b>packages/core</b><span><span data-zh>核心五件 + kernel + 诊断日志 + createHarness 编程式入口</span><span data-en>five core pieces + kernel + diagnostic log + the createHarness programmatic entry</span></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 快速上手 ═══ -->
+<section id="quickstart">
+  <div class="wrap">
+    <div class="section-eyebrow">QUICKSTART</div>
+    <h2><span data-zh>三分钟上手</span><span data-en>Up and running in three minutes</span></h2>
+    <p class="section-lead"><span data-zh>克隆即用——首次启动若没有可用 provider，会自动进入 <code>/provider</code> 向导，按菜单引导完成配置后自动 reload。</span><span data-en>Clone and go — on first launch with no provider configured, the <code>/provider</code> wizard walks you through setup and reloads automatically.</span></p>
+    <div class="steps">
+      <div class="card step"><span class="n">1 · <span data-zh>安装</span><span data-en>Install</span></span>
+<pre><code class="language-bash">git clone https://github.com/zhangxyfs/Orosus.git
+cd Orosus
+pnpm install</code></pre></div>
+      <div class="card step"><span class="n">2 · <span data-zh>启动</span><span data-en>Launch</span></span>
+<pre><code class="language-bash">pnpm orosus</code></pre>
+<p><span data-zh>无 provider 时自动进配置向导。</span><span data-en>Opens the config wizard when no provider is set.</span></p></div>
+      <div class="card step"><span class="n">3 · <span data-zh>日常使用</span><span data-en>Daily use</span></span>
+        <p><span data-zh>直接输入自然语言对话；<code>/</code> 开头是命令（Tab 补全），<code>@</code> 引用文件（支持 <code>@path#L10-L20</code> 行范围），Alt+V 粘贴图片。</span><span data-en>Chat in plain language; <code>/</code> commands (Tab-complete), <code>@</code> file references (line ranges like <code>@path#L10-L20</code>), Alt+V to paste images.</span></p></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3><span data-zh>常用命令</span><span data-en>Common commands</span></h3>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>分类</span><span data-en>Category</span></th><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>命令</span><span data-en>Commands</span></th><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>作用</span><span data-en>What it does</span></th></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>会话</span><span data-en>Session</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/new</code> <code>/fork</code> <code>/sessions</code> <code>/title</code> <code>/quit</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>新会话 / 分叉 / 恢复 / 命名 / 退出</span><span data-en>new / fork / resume / rename / quit</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模型与状态</span><span data-en>Model &amp; state</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/model</code> <code>/reload</code> <code>/summary</code> <code>/help</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>切模型（回答中也可切，下一轮生效）/ 重载模块 / 压缩摘要 / 帮助</span><span data-en>switch model (mid-answer too, next turn) / reload modules / compaction summary / help</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模块命令</span><span data-en>Module commands</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/compact</code> <code>/permission</code> <code>/yolo</code> <code>/auto</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>手动压缩 / 审批模式 / 全自动批准 / 回日常档</span><span data-en>manual compaction / approval mode / approve everything / back to daily defaults</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>信息面板</span><span data-en>Info panel</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/other</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>磁盘占用 / 上下文用量 / Token 用量 / 运行状态</span><span data-en>disk usage / context usage / token usage / run state</span></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 色板 ═══ -->
+<section id="palette">
+  <div class="wrap">
+    <div class="section-eyebrow"><span data-zh>连山主题</span><span data-en>LIANSHAN THEME</span></div>
+    <h2><span data-zh>十色</span><span data-en>Ten colors</span></h2>
+    <p class="section-lead"><span data-zh>官网与 TUI 同源的一套色——玄墨铺底、青玉点窍、石青叠峦、暖金走脉、赭石定根。</span><span data-en>The site and the TUI share one palette — an ink-black base, jade accents, azurite ranges, warm-gold meridians, ochre roots.</span></p>
+    <div class="palette">
+      <div class="swatch"><div class="c" style="background:#0a100e;border-bottom:1px solid var(--border)"></div><div class="m"><b><span data-zh>玄墨</span><span data-en>Ink-black</span></b><span>#0a100e · bg</span></div></div>
+      <div class="swatch"><div class="c" style="background:#121b17"></div><div class="m"><b><span data-zh>玄墨 · 面</span><span data-en>Surface</span></b><span>#121b17 · surface</span></div></div>
+      <div class="swatch"><div class="c" style="background:#e9eee6"></div><div class="m"><b><span data-zh>宣白</span><span data-en>Off-white</span></b><span>#e9eee6 · fg</span></div></div>
+      <div class="swatch"><div class="c" style="background:#97a49a"></div><div class="m"><b><span data-zh>雾灰</span><span data-en>Mist grey</span></b><span>#97a49a · muted</span></div></div>
+      <div class="swatch"><div class="c" style="background:#25352d"></div><div class="m"><b><span data-zh>山脊</span><span data-en>Ridge</span></b><span>#25352d · border</span></div></div>
+      <div class="swatch"><div class="c" style="background:#7cc9a5"></div><div class="m"><b><span data-zh>青玉</span><span data-en>Jade</span></b><span>#7cc9a5 · accent</span></div></div>
+      <div class="swatch"><div class="c" style="background:#84b8cd"></div><div class="m"><b><span data-zh>石青</span><span data-en>Azurite</span></b><span>#84b8cd · info</span></div></div>
+      <div class="swatch"><div class="c" style="background:#d4a25e"></div><div class="m"><b><span data-zh>暖金</span><span data-en>Warm gold</span></b><span>#d4a25e · warn</span></div></div>
+      <div class="swatch"><div class="c" style="background:#d07f70"></div><div class="m"><b><span data-zh>赭石</span><span data-en>Ochre</span></b><span>#d07f70 · err</span></div></div>
+      <div class="swatch"><div class="c" style="background:#4ec87e"></div><div class="m"><b><span data-zh>diff 加</span><span data-en>diff add</span></b><span>#4ec87e · diffAdd</span></div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <img class="foot-mark" src="assets/logo-icon-mono.webp" alt="Orosus 连山">
+  <div class="poem-line"><span data-zh>群峰连亘而不绝，百脉周流而相通。</span><span data-en>Ranges run on without end; a hundred veins flow as one.</span></div>
+  <div><a href="https://github.com/zhangxyfs/Orosus">GitHub</a> · <a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/ROADMAP.md"><span data-zh>路线图</span><span data-en>Roadmap</span></a> · <a href="tutorial.html"><span data-zh>模块教程</span><span data-en>Tutorial</span></a> · MIT License</div>
+</footer>
+
+<script src="theme.js"></script>
+<script src="lang.js"></script>
+<script src="hl.js"></script>
+<script src="tui-demo.js"></script>
+</body>
+</html>
