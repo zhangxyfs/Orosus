@@ -20,21 +20,9 @@ importers:
       '@orosus/core':
         specifier: workspace:*
         version: link:packages/core
-      '@orosus/provider-anthropic':
+      '@orosus/provider-custom':
         specifier: workspace:*
-        version: link:packages/modules/provider-anthropic
-      '@orosus/provider-deepseek':
-        specifier: workspace:*
-        version: link:packages/modules/provider-deepseek
-      '@orosus/provider-glm':
-        specifier: workspace:*
-        version: link:packages/modules/provider-glm
-      '@orosus/provider-kimi':
-        specifier: workspace:*
-        version: link:packages/modules/provider-kimi
-      '@orosus/provider-openai':
-        specifier: workspace:*
-        version: link:packages/modules/provider-openai
+        version: link:packages/modules/provider-custom
       '@orosus/testing':
         specifier: workspace:*
         version: link:packages/testing
@@ -86,24 +74,9 @@ importers:
       '@orosus/mcp':
         specifier: workspace:*
         version: link:../../packages/modules/mcp
-      '@orosus/provider-anthropic':
-        specifier: workspace:*
-        version: link:../../packages/modules/provider-anthropic
       '@orosus/provider-custom':
         specifier: workspace:*
         version: link:../../packages/modules/provider-custom
-      '@orosus/provider-deepseek':
-        specifier: workspace:*
-        version: link:../../packages/modules/provider-deepseek
-      '@orosus/provider-glm':
-        specifier: workspace:*
-        version: link:../../packages/modules/provider-glm
-      '@orosus/provider-kimi':
-        specifier: workspace:*
-        version: link:../../packages/modules/provider-kimi
-      '@orosus/provider-openai':
-        specifier: workspace:*
-        version: link:../../packages/modules/provider-openai
       '@orosus/skill':
         specifier: workspace:*
         version: link:../../packages/modules/skill
@@ -194,15 +167,6 @@ importers:
         specifier: ^4.0.0
         version: 4.6.5
 
-  packages/modules/provider-anthropic:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
   packages/modules/provider-custom:
     dependencies:
       '@orosus/contracts':
@@ -211,42 +175,6 @@ importers:
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/modules/provider-deepseek:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/modules/provider-glm:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/modules/provider-kimi:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../../contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
-
-  packages/modules/provider-openai:
-    dependencies:
-      '@orosus/contracts':
-        specifier: workspace:*
-        version: link:../../contracts
       zod:
         specifier: ^4.0.0
         version: 4.6.5
