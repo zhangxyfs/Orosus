@@ -654,6 +654,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
         const { text: cleaned, attachments } = resolveAtRefs(textNoImg, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
+        // 用户消息回显放在「确认发出」点（2026-09-23 用户拍板：被拦截的消息不留痕迹）——
+        // 上方非 vision/未配置模型两道拦截已 return，走到这里 = 消息真要发了；流区只显示发出的消息。
+        // 原提交即回显（runSubmit）会把被拦截的消息留在流区成孤条。回显原文含图片 chip token，形态不变
+        if (!isCmdLine && tuiMode === "full") dm.userPrompt(text);
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
         // /compact 进度指示（TUI 批 T7）：行模式经 lv 活动行、全屏经 busy spinner 专属形态（2026-09-23 用户拍板：
         // 「上下文压缩中…」石青色）；settle 后行模式 discard 擦除、全屏退出专属形态——结果由下方输出替换。
@@ -1148,10 +1152,6 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     if (!busyExec) {
       inflight = true;
       app.setBusy(true);
-    }
-    const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
-    if (!cmd.startsWith("/")) {
-      dm.userPrompt(text); // 图片 chip 已是文内 token（2026-09-23——不再追加独立 chip 行）
     }
     void (async () => {
       const modelBefore = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：反馈靠前后 diff
