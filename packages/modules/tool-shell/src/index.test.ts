@@ -77,6 +77,28 @@ describe("tool-shell（能力消费者范例：dependsOn [fs]）", () => {
     expect(files.get("out.txt")).toBe("ok");
   });
 
+  // GBK 字节「你好」——cmd 系工具（中文 Windows ANSI 代码页）的输出形态
+  const GBK_CMD = `node -e "process.stdout.write(Buffer.from([0xc4, 0xe3, 0xba, 0xc3]))"`;
+  it.skipIf(process.platform !== "win32")("Windows ANSI 代码页输出回退 GB18030 解码（2026-09-23 走查批图3 乱码前案）", async () => {
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    const r = await run(tools[0]!, { command: GBK_CMD });
+    expect(r.output).toBe("你好"); // 不再是 U+FFFD 问号
+    const ok = await run(tools[0]!, { command: OK_CMD });
+    expect(ok.output).toBe("ok"); // UTF-8 输出不受影响
+  });
+
+  // 混合流（2026-09-23 走查再现实锤）：UTF-8 行（含合法 U+FFFD）+ GBK 行同流——按行各自择优，
+  // 整段二选一必坏一边（旧实现计票被合法 U+FFFD 污染）
+  const MIX_CMD = `node -e "process.stdout.write(Buffer.concat([Buffer.from('中文 UTF-8 行', 'utf8'), Buffer.from([0xef, 0xbf, 0xbd, 0x0a]), Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), Buffer.from([0x0a])]))"`;
+  it.skipIf(process.platform !== "win32")("UTF-8/GBK 混合流按行择优——UTF-8 行不毁、GBK 行可读", async () => {
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    const r = await run(tools[0]!, { command: MIX_CMD });
+    expect(r.output).toContain("中文 UTF-8 行"); // UTF-8 行保持
+    expect(r.output).toContain("你好"); // GBK 行回退解码
+  });
+
   it("matchesRule 迷你 glob：后缀 * 前缀匹配，否则全等", async () => {
     const { ctx, tools } = fakeCtx(new Map());
     await def.activate(ctx);

@@ -28,12 +28,37 @@ const killTree = (child: ReturnType<typeof spawn>): void => {
   }
 };
 
+/** 输出解码（2026-09-23 走查批——图3 乱码前案）：Windows 下 shell:true 走 cmd.exe，报错文本是系统
+ *  ANSI 代码页（中文系统 GBK/GB18030），utf8 直解整屏 U+FFFD 问号。
+ *  三轮修订（走查再现实锤两轮）：①整段二选一在混合流（pnpm UTF-8 + cmd GBK 报错）下必坏一边；
+ *  ②U+FFFD 计票不可靠——UTF-8 输出的合法 U+FFFD 与 GBK 解码的伪中文同样带/不带替换符，计票会误杀。
+ *  终态 = 按行切分 + fatal UTF-8 严格解码：**字节合法 UTF-8**（合法 U+FFFD 也算合法）原样收，
+ *  解码抛错 = 该行不是 UTF-8 → GB18030 兜底。行内编码必然单一（两种编码的多字节序列都不跨 0x0A）。
+ *  已知边角：同一行内 UTF-8 与 GBK 字节真混合时整行落 GBK（实测未见，登记）。 */
+const utf8Strict = new TextDecoder("utf-8", { fatal: true });
+const gbk = new TextDecoder("gb18030");
+function decodeOut(buf: Buffer): string {
+  if (process.platform !== "win32") return buf.toString("utf8");
+  return buf
+    .toString("latin1") // latin1 = 字节 1:1 透传，只为按行切分
+    .split("\n")
+    .map((latin) => {
+      const line = Buffer.from(latin, "latin1");
+      try {
+        return utf8Strict.decode(line);
+      } catch {
+        return gbk.decode(line);
+      }
+    })
+    .join("\n");
+}
+
 /** 执行命令：stdout+stderr 合并；退出码非 0 / 超时 / 中止 → 带内 isError（永不 reject）。 */
 function runBash(input: BashInput, fs: Fs, signal: AbortSignal): Promise<ToolResult> {
   const timeout = input.timeoutMs ?? MAX_TIMEOUT;
   return new Promise((resolvePromise) => {
     const child = spawn(input.command, { shell: true, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
-    let out = "";
+    const chunks: Buffer[] = []; // 原始字节累积——close 后统一解码（decodeOut 编码判定需要全量字节）
     let timedOut = false;
     const finish = (r: ToolResult) => {
       clearTimeout(timer);
@@ -45,12 +70,13 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal): Promise<ToolRes
       timedOut = true;
       killTree(child);
     }, timeout);
-    child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
-    child.stderr.on("data", (d: Buffer) => (out += d.toString("utf8")));
+    child.stdout.on("data", (d: Buffer) => chunks.push(d));
+    child.stderr.on("data", (d: Buffer) => chunks.push(d));
     signal.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => finish({ output: `spawn 失败：${err.message}`, isError: true }));
     child.on("close", (code) => {
       void (async () => {
+        const out = decodeOut(Buffer.concat(chunks));
         if (signal.aborted) return finish({ output: `${out}\n[已中止]`, isError: true });
         if (timedOut) return finish({ output: `${out}\n[超时 ${timeout}ms，已杀进程树]`, isError: true });
         if (input.writeOutputTo !== undefined) {
