@@ -41,7 +41,9 @@ export function inlineToken(t: Token, ctx: InlineStyleContext = defaultInlineSty
 		case "del":
 			return `\x1b[9m${inlineTokens((t as Tokens.Del).tokens ?? [], ctx)}\x1b[29m${ctx.stylePrefix}`;
 		case "codespan":
-			return theme.fg("warn", (t as Tokens.Codespan).text) + ctx.stylePrefix;
+			// 行内码石青（2026-09-23 走查拍板：暖金与用户消息同色——历史里找不到自己发的消息；
+			// 改 info 石青后暖金 = 用户消息专属色）
+			return theme.fg("info", (t as Tokens.Codespan).text) + ctx.stylePrefix;
 		case "latex": {
 			// LaTeX 行内公式（mdpipe 批 T7）：产出必须经上下文 applyText 拼接（T6 管线——
 			// 公式不断标题/引用外层色）；渲染失败（undefined）回退原文，判空 ?? 非 === null

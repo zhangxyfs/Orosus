@@ -61,6 +61,23 @@ export const imageChipLabel = (seq: number, file: string): string => {
   return sz === undefined ? `[image #${seq}]` : `[image #${seq} (${sz.w}×${sz.h})]`;
 };
 
+/** 文内图片 token 提取（2026-09-23 走查拍板：chip 从独立行改为插入输入框光标位——用户可用
+ *  删除键直接删 chip 文本 = 撤销挂图）：[image #N] / [image #N (W×H)] → seqs（出现序、去重）
+ *  + 剥除 token 后的正文（行内空白收敛）。token 被删/改残即不匹配 = 图不随消息发出。 */
+export function extractImageRefs(text: string): { cleaned: string; seqs: number[] } {
+  const seqs: number[] = [];
+  const cleaned = text
+    .replace(/\[image #(\d+)(?: \(\d+×\d+\))?\]/g, (_m, n: string) => {
+      const seq = Number(n);
+      if (!seqs.includes(seq)) seqs.push(seq);
+      return "";
+    })
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return { cleaned, seqs };
+}
+
 /** 从系统剪贴板读取图片（M4-2 T10；M4-2.5 T5 起随消息真实喂图）。
  *  返回保存的 PNG 文件路径；剪贴板无图返回 undefined。
  *  路径以 image part 进 user/message（日志存路径、请求期翻译层转 base64）。 */

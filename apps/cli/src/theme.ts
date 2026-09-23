@@ -17,6 +17,10 @@ const TOKENS = {
 	info: "#84b8cd",
 	warn: "#d4a25e",
 	err: "#d07f70",
+	// diff 专属前景（2026-09-23 走查拍板——err #d07f70 赭石在 256 降级后偏橙被读成「黄」，
+	// 用户要的是明确的红/绿；取 kimi diffAdded #4EC87E / diffRemoved #E85454 同值）
+	diffAdd: "#4ec87e",
+	diffDel: "#e85454",
 	// color-mix 派生色预计算写死
 	accentSoft: "#1a2a23",
 	errSoft: "#26201c",
