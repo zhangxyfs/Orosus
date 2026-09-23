@@ -1,4 +1,5 @@
 import { parseModelsResponse } from "@orosus/contracts/provider";
+import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
 import { detectSameGate, usableCatalogModels, type Catalog, type CatalogEntry, type CatalogModel, type CatalogSource } from "./catalog.ts";
 
@@ -73,9 +74,12 @@ async function verify(
   const url = entry.type === "anthropic" ? `${entry.baseUrl}/v1/models` : `${entry.baseUrl}/models`;
   try {
     const res = await deps.fetchImpl(url, {
-      headers: actualKey !== undefined ? {
-        "x-api-key": actualKey, authorization: `Bearer ${actualKey}`, // D31 双头
-      } : {},
+      headers: {
+        "user-agent": OROSUS_USER_AGENT,
+        ...(actualKey !== undefined ? {
+          "x-api-key": actualKey, authorization: `Bearer ${actualKey}`, // D31 双头
+        } : {}),
+      },
       signal: AbortSignal.timeout(10_000),
     });
     if (res.status === 401 || res.status === 403) return { kind: "auth" };

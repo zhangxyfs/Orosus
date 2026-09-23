@@ -13,7 +13,8 @@
     "./tool": "./src/tool/index.ts",
     "./provider": "./src/provider/index.ts",
     "./fs": "./src/fs/index.ts",
-    "./home": "./src/home/index.ts"
+    "./home": "./src/home/index.ts",
+    "./version": "./src/version.ts"
   },
   "dependencies": {
     "zod": "^4.0.0"

@@ -1,4 +1,5 @@
 import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
+import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState } from "./translate-openai.ts";
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
@@ -13,6 +14,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "user-agent": OROSUS_USER_AGENT,
           // D31 双头：官方 OpenAI 认 Bearer，兼容端点认其一；无 key（本地/内网端点）零鉴权头
           ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}),
         },
@@ -85,7 +87,7 @@ export function createListModels(opts: { apiKey?: string | undefined; baseUrl: s
   const doFetch = opts.fetchImpl ?? fetch;
   return async () => {
     const res = await doFetch(`${opts.baseUrl}/models`, {
-      headers: opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {},
+      headers: { "user-agent": OROSUS_USER_AGENT, ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}) },
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

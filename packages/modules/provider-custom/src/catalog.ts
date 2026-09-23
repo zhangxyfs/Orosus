@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { orosusHome } from "@orosus/contracts/home";
+import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
 import { BUILTIN_SNAPSHOT } from "./builtin-snapshot.ts";
 
@@ -109,7 +110,7 @@ export async function getCatalogWithSource(opts: { registryUrl?: string; fetchIm
   const t = now();
   try {
     const res = await doFetch(opts.registryUrl ?? MODELS_DEV_URL, {
-      headers: { accept: "application/json" },
+      headers: { accept: "application/json", "user-agent": OROSUS_USER_AGENT },
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync, openSync, clos
 import { parse, stringify } from "smol-toml";
 import { defaultCatalogCacheFile, getCatalogWithSource, type Catalog, type CatalogSource } from "@orosus/provider-custom";
 import { resolveWire, adaptBaseUrl } from "@orosus/provider-custom";
+import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 
 /** CLI provider 子命令（D34/D37 配置写器）：import（校验即确认）与 list。 */
 export interface ProviderCmdIo {
@@ -30,7 +31,7 @@ function appendSecret(path: string, key: string, value: string): void {
 async function verify(baseUrl: string, actualKey: string | undefined, fetchImpl: typeof fetch): Promise<"ok" | "auth" | "network" | "unsupported"> {
   try {
     const res = await fetchImpl(`${baseUrl}/models`, {
-      headers: actualKey !== undefined ? { "x-api-key": actualKey, authorization: `Bearer ${actualKey}` } : {},
+      headers: { "user-agent": OROSUS_USER_AGENT, ...(actualKey !== undefined ? { "x-api-key": actualKey, authorization: `Bearer ${actualKey}` } : {}) },
       signal: AbortSignal.timeout(10_000),
     });
     if (res.status === 401 || res.status === 403) return "auth";

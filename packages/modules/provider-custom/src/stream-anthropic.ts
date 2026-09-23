@@ -1,4 +1,5 @@
 import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
+import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapEvent, parseSseBlock, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -16,6 +17,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "user-agent": OROSUS_USER_AGENT,
           // D31 双头：官方 Anthropic 只认 x-api-key（多余头被忽略），Bearer-only 兼容端点（Kimi）与任一可接受端点（GLM）成立
           ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}),
           "anthropic-version": ANTHROPIC_VERSION,
@@ -70,7 +72,7 @@ export function createListModels(opts: { apiKey?: string | undefined; baseUrl: s
   const doFetch = opts.fetchImpl ?? fetch;
   return async () => {
     const res = await doFetch(`${opts.baseUrl}/v1/models`, {
-      headers: opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {},
+      headers: { "user-agent": OROSUS_USER_AGENT, ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}) },
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
