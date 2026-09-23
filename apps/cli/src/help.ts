@@ -73,6 +73,5 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   Ctrl+A      全选输入框；Shift+←/→ 逐字选择
   PgUp/PgDn   回看上方对话内容；面板聚焦时为面板翻页
   Shift+↑/↓   模块面板翻页；Shift+PgUp/PgDn 任务面板翻页
-  （Ctrl+C 不占用——留给终端原生复制；退出用 /quit）
 
 提示：回答进行中 /new /sessions /provider 回车被拦（尾行提示，回答结束后原文再按回车即发）；图片粘贴用 Alt+V；工具改动（diff）用 Alt+O 展开/收起、失败详情用 Alt+F 展开/收起；压缩摘要用 Ctrl+O 查看；输入 / 后按 Tab 补全命令名；@ 后 Tab 补全文件；@path#L10-L20 引用行范围`;
