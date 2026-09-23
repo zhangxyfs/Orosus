@@ -22,9 +22,23 @@ const closeReasoning = (state: RenderState): string => {
   return `${RESET}\n`;
 };
 
+// 401/403/429 排查提示正文（模型发现 T5 走查缺陷③）：校验用输入值、运行用合并链（显式 env > process.env > secrets.env）
+// ——同名环境变量覆盖刚写入的 secrets 是最常见根因，给用户排查方向。管道形带 [提示] 标签、toast 形裸文案（两形共用正文防漂移）
+const HINT_401 = "密钥被拒——若刚更新过 secrets.env，检查同名环境变量是否覆盖（优先级：显式 env > process.env > secrets.env）";
+const HINT_429 = "429 限流或配额不足——错误体含 1113（余额不足或无可用资源包）时，检查套餐窗口配额是否用尽、模型是否在套餐覆盖列表";
+
+/** 模型错误 → toast 文案（2026-09-23 用户拍板：模型错误不再落流区）：无标签纯文本，排查提示跟随。
+ *  全屏浮动 toast（3 行封顶——超长错误体尾部让位）/ 行模式 console 单行同文案。 */
+export function errorMessageText(c: Extract<Chunk, { type: "finish" }>): string {
+  const msg = c.errorMessage ?? "";
+  const hint = /HTTP 40[13]/.test(msg) ? `\n提示：${HINT_401}` : /HTTP 429/.test(msg) ? `\n提示：${HINT_429}` : "";
+  return `模型错误：${msg}${hint}`;
+}
+
 /** 单 Chunk → 终端文案（M4-1 T5/D45：从原 assistant/chunk 事件分支迁来——断流后 chunk 经
  *  liveChunks 旁路到达，不再落日志）。思考（GLM/DeepSeek 方言 reasoning_content、Anthropic
- *  thinking_delta）以暗色 [思考] 块显示，首个正文/工具/结束闭块；401/403/429 带排查提示（走查缺陷③）。 */
+ *  thinking_delta）以暗色 [思考] 块显示，首个正文/工具/结束闭块；401/403/429 带排查提示（走查缺陷③）。
+ *  注：finish kind=error 的本形仅供非 TTY/--print 管道（byte 回归钉 render.test⑥）；TTY 已改走 attachRender onError。 */
 export function renderChunk(c: Chunk, state: RenderState): string {
   if (c.type === "reasoning/delta") {
     if (!state.inReasoning) {
@@ -35,14 +49,8 @@ export function renderChunk(c: Chunk, state: RenderState): string {
   }
   if (c.type === "text/delta") return closeReasoning(state) + c.text;
   if (c.type === "finish" && c.kind === "error") {
-    // 401/403 提示（模型发现 T5）：校验用输入值、运行用合并链（显式 env > process.env > secrets.env）
-    // ——同名环境变量覆盖刚写入的 secrets 是最常见根因，给用户排查方向
     const msg = c.errorMessage ?? "";
-    const hint = /HTTP 40[13]/.test(msg)
-      ? "\n[提示] 密钥被拒——若刚更新过 secrets.env，检查同名环境变量是否覆盖（优先级：显式 env > process.env > secrets.env）\n"
-      : /HTTP 429/.test(msg)
-        ? "\n[提示] 429 限流或配额不足——错误体含 1113（余额不足或无可用资源包）时，检查套餐窗口配额是否用尽、模型是否在套餐覆盖列表\n"
-        : "";
+    const hint = /HTTP 40[13]/.test(msg) ? `\n[提示] ${HINT_401}\n` : /HTTP 429/.test(msg) ? `\n[提示] ${HINT_429}\n` : "";
     return `${closeReasoning(state)}\n[模型错误] ${msg}${hint}`;
   }
   return "";
@@ -169,6 +177,9 @@ export function attachRender(
      *  args 留存供 diff/失败体渲染（Alt+O 折叠）；缺省 = 旧文本形态（行模式/--print 零变化）。 */
     toolCall?(name: string, args: Record<string, unknown> | undefined): void;
     toolResult?(output: unknown, isError: unknown): void;
+    /** 模型错误 toast 口（2026-09-23 用户拍板）：finish kind=error 不再进活动流区——TTY 下改走此口
+     *  （全屏浮动 toast / 行模式单行，文案 errorMessageText）；缺省回落 renderChunk 旧管道形（--print）。 */
+    onError?(text: string): void;
   },
   onEvent?: (e: SessionEvent) => void,
 ): void {
@@ -179,7 +190,12 @@ export function attachRender(
         // 结构化活动面（F2）：kind + 原文——思考/正文边界与着色由 streamview 负责
         if (c.type === "reasoning/delta") io.activity({ kind: "reasoning", text: c.text });
         else if (c.type === "text/delta") io.activity({ kind: "text", text: c.text });
-        else if (c.type === "finish" && c.kind === "error") io.activity({ kind: "text", text: renderChunk(c, createRenderState()) });
+        else if (c.type === "finish" && c.kind === "error") {
+          // 模型错误 toast 化（2026-09-23 用户拍板）：TTY 走 onError（全屏 toast/行模式单行），
+          // 错误体不进活动流区；无 toast 口（兼容面/测试）回落旧 activity 形
+          if (io.onError !== undefined) io.onError(errorMessageText(c));
+          else io.activity({ kind: "text", text: renderChunk(c, createRenderState()) });
+        }
         continue;
       }
       const out = renderChunk(c, state);

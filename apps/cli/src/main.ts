@@ -251,12 +251,16 @@ const pickFace =
         },
       }
     : {};
+/** 瞬时提示统一出口（2026-09-23 用户拍板 toast 化）：全屏 → 浮动 toast（黄字 3s 自消、3 行封顶）；
+ *  行模式 → 单行 console（形态不变）。命令错误/拦截/退役指路/模型错误等瞬时面一律走此口，
+ *  不再落流区（命令结果 md / 会话生命周期回显 / 工具行失败仍带内——见 ROADMAP toast 化条目）。 */
+const notify = (t: string): void => { if (activeApp !== undefined) activeApp.showToast(t); else console.log(t); };
+
 const commandUi = createReadlineUi({
   question,
   secretQuestion,
   ...pickFace,
-  // 瞬时提示出口（批⑧）：全屏 → 浮动 toast；行模式 → 单行
-  notice: (t) => { if (activeApp !== undefined) activeApp.showToast(t); else console.log(t); },
+  notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
 });
 
 const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) =>
@@ -480,7 +484,12 @@ function attachRender(h: Harness): void {
       : {};
   attachRenderTo(
     h,
-    { write: (s) => sinkFor().write(s), ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c) } : {}), ...toolIo },
+    {
+      write: (s) => sinkFor().write(s),
+      // TTY 才挂 activity/onError：非 TTY（--print 管道）错误走 write 旧管道形，console.log 不污染管道输出
+      ...(process.stdout.isTTY === true ? { activity: (c) => sinkFor().activity(c), onError: notify } : {}),
+      ...toolIo,
+    },
     (e) => {
       lastEventId = e.id;
       if (e.type === "turn/end") {
@@ -524,7 +533,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
         if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
         const items = listSessions(sessionsRoot);
-        if (items.length === 0) { out("（暂无会话——发送第一条消息即创建）"); return "again"; }
+        if (items.length === 0) { notify("暂无会话——发送第一条消息即创建"); return "again"; }
         // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
         // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
         // 不再先打印静态表格——picker 自带列表渲染），Esc reject 在 pickSessionNumber 内转 undefined
@@ -553,7 +562,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // 当前会话（或目标解析回当前）走活 harness 写口——批⑦a 破链修复：旁路新建 store 写活文件
         // 会让活 store 内存 lastId/seq 失真，后续事件 parentId 链断裂；序号/sid 指定的非活会话保持旁路（单写者安全）
         const targetSid = directive.target !== undefined ? resolveTarget(directive.target, sessionsRoot) : undefined;
-        if (directive.target !== undefined && targetSid === undefined) { out("[未找到目标会话]"); return "again"; }
+        if (directive.target !== undefined && targetSid === undefined) { notify("未找到目标会话"); return "again"; }
         if (targetSid === undefined || targetSid === h.sessionId) {
           await h.setLabel(directive.name);
           // 命名确认走浮动 toast（2026-09-23 用户拍板——瞬时确认不落流区，/model 切换反馈同族）
@@ -564,13 +573,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           if (r !== undefined) {
             if (activeApp !== undefined) activeApp.showToast(`已命名 ${r.sid} → ${directive.name}`);
             else out(`[已命名 ${r.sid} → ${directive.name}]`);
-          } else out(`[未找到目标会话]`); // 失败保留带内（要可读可回翻）
+          } else notify(`未找到目标会话 ${directive.target}`); // toast 化（2026-09-23 拍板）——目标回显在文案里补上下文
         }
         return "again";
       }
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot);
-        if (sid === undefined) { out(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
+        if (sid === undefined) { notify(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
         await switchTo(sid);
         return "switch";
       }
@@ -611,8 +620,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "again";
       }
       // 退役命令指路（批⑤⑥——打字面肌肉记忆；/paste 先例是干净移除，此二条有明确新家故留一行）
-      if (/^\/usage\s*$/.test(text.trim())) { out("[已退役] /usage 并入 /other → Token 用量"); return "again"; }
-      if (/^\/status\s*$/.test(text.trim())) { out("[已退役] /status 并入 /other → 运行状态"); return "again"; }
+      if (/^\/usage\s*$/.test(text.trim())) { notify("已退役：/usage 并入 /other → Token 用量"); return "again"; }
+      if (/^\/status\s*$/.test(text.trim())) { notify("已退役：/status 并入 /other → 运行状态"); return "again"; }
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
       // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
       const isCmdLine = text.trim().startsWith("/");
@@ -620,7 +629,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         !isCmdLine &&
         needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })
       ) {
-        out("[提示] 还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 选模型），配好后直接提问");
+        notify("还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 选模型），配好后直接提问");
         return "again";
       }
       try {
@@ -637,7 +646,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           const modelNow = realReadModel(process.cwd())() ?? "";
           const vision = lookupModelVision(readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}, modelNow);
           if (vision === false) {
-            out(`[已拦截] 当前模型 ${modelNow || "（未配置）"} 的目录数据显示不支持图片输入——消息未发送，图片仍挂起（/model 换视觉模型后再发，或 /sessions 另起会话）`);
+            notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
             activeApp?.restoreInput(text); // 全屏：输入原文（含 chip token）回挂——提交已清输入框
             return "again";
           }
@@ -681,8 +690,9 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
         // 取消仍以抛错带内表达，仅 REPL 呈现面不再按错误打印。
+        // 其余错误 toast 化（2026-09-23 用户拍板）：未知命令/路由失败等瞬时错误不落流区（消息原文本就自描述）
         if (!(err instanceof Error && err.message === "已取消（Esc）")) {
-          out(`[错误] ${err instanceof Error ? err.message : String(err)}`);
+          notify(err instanceof Error ? err.message : String(err));
         }
       }
   return "again";
@@ -1105,7 +1115,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       void (async () => {
         const img = await pasteImage();
         if (img === undefined) {
-          dm.pushLine(theme.dim(PASTE_EMPTY));
+          notify(PASTE_EMPTY); // toast 化（2026-09-23 拍板）——无图提示不落流区
           return;
         }
         app.insertAtCursor(attachPendingImage(img.file)); // chip token 进输入框光标位（删除键可删 = 撤销挂图）

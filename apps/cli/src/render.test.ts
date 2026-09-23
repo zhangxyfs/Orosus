@@ -1,13 +1,21 @@
 import { describe, it, expect } from "vitest";
 import type { Chunk } from "@orosus/contracts/provider";
-import type { SessionEvent } from "@orosus/core";
-import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage } from "./render.ts";
+import type { Harness, SessionEvent } from "@orosus/core";
+import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage, attachRender, errorMessageText } from "./render.ts";
 
 // M4-1 T5/D45：chunk 渲染迁 renderChunk（断流后 chunk 经 liveChunks 旁路到达，不再落日志/事件流）；
 // 完成事件面仍走 renderEvent——两路共享 RenderState。
 const chunk = (c: unknown): Chunk => c as Chunk;
 const event = (type: string, fields: Record<string, unknown> = {}): SessionEvent =>
   ({ id: "e1", sessionId: "s", ts: 0, seq: 1, type, ...fields }) as unknown as SessionEvent;
+
+// 模型错误 toast 化批（attachRender onError 钉用）：liveChunks 旁路假源 + finish 变体铸型
+const fakeH = (chunks: unknown[]) =>
+  ({
+    liveChunks: async function* () { for (const c of chunks) yield c; },
+    events: async function* () {},
+  }) as unknown as Harness;
+const finishErr = (errorMessage: string) => ({ type: "finish", kind: "error", errorMessage }) as Extract<Chunk, { type: "finish" }>;
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[22m";
@@ -136,5 +144,39 @@ describe("回显图痕（M4-2.5 T5——image part 在 renderHistoryLines 可见
       event("user/message", { content: [{ kind: "image", path: "C:/tmp/q.png", mimeType: "image/png" }] }),
     ], 80);
     expect(imgOnly.some((l) => l.includes("[图片]"))).toBe(true);
+  });
+});
+
+// ——模型错误 toast 化（2026-09-23 用户拍板）：finish error 不再进活动流区，TTY 走 onError toast 口
+describe("模型错误 toast 化（errorMessageText + attachRender onError）", () => {
+  it("① errorMessageText：无标签纯文本，401/429 排查提示跟随、普通错误不带", () => {
+    expect(errorMessageText(finishErr("HTTP 500 boom"))).toBe("模型错误：HTTP 500 boom");
+    expect(errorMessageText(finishErr("HTTP 401 x"))).toContain("\n提示：密钥被拒");
+    expect(errorMessageText(finishErr("HTTP 429 x"))).toContain("\n提示：429 限流");
+  });
+
+  it("② attachRender TTY：finish error 走 onError、不进 activity（错误体退出流区）", async () => {
+    const toasted: string[] = [];
+    let activityErr: string | undefined;
+    attachRender(fakeH([{ type: "finish", kind: "error", errorMessage: "HTTP 401 x" }]), {
+      write: () => {},
+      activity: (c) => { if (c.text.includes("模型错误")) activityErr = c.text; },
+      onError: (t) => toasted.push(t),
+    });
+    await new Promise((r) => setTimeout(r, 20)); // 附着即异步消费旁路流
+    expect(toasted).toHaveLength(1);
+    expect(toasted[0]!).toContain("模型错误：HTTP 401 x");
+    expect(toasted[0]!).toContain("提示：密钥被拒");
+    expect(activityErr).toBeUndefined();
+  });
+
+  it("③ 缺 onError（非 TTY/--print 兼容面）→ 回落 activity 旧管道形（[模型错误] 标签在）", async () => {
+    const act: string[] = [];
+    attachRender(fakeH([{ type: "finish", kind: "error", errorMessage: "HTTP 500" }]), {
+      write: () => {},
+      activity: (c) => act.push(c.text),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(act.join("")).toContain("[模型错误] HTTP 500");
   });
 });
