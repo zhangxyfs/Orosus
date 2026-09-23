@@ -2,17 +2,19 @@ import { z } from "zod";
 import { defineModule, type LlmPort } from "@orosus/contracts/module";
 import type { ModelMessage } from "@orosus/contracts/provider";
 
-const configSchema = z.object({
+export const configSchema = z.object({
   thresholdTokens: z.number().int().positive().default(60_000).describe("回退阈值（窗口未知时的触发线）"),
   thresholdRatio: z.number().min(0.3).max(0.95).default(0.8).describe("窗口已知时的触发比"),
-  keepRecentTokens: z.number().int().positive().default(16_000).describe("尾部保留预算（窗口已知时生效值 = min(本值, floor(窗口×0.25))）"),
-  minKeepMessages: z.number().int().positive().default(2).describe("尾部最少保留条数（预算不足时的保底）"),
+  userMessageTokens: z.number().int().positive().default(20_000).describe("auto：保留用户消息总预算（kimi 同值）"),
+  userMessageHeadTokens: z.number().int().positive().default(2_000).describe("auto：头部预算（尾 = 总 − 头，kimi 同值）"),
   summaryToolResultMaxChars: z.number().int().positive().default(2_000).describe("摘要输入中工具结果截断长度（瞬态，不落日志）"),
   summaryMaxTokens: z.number().int().positive().default(8_192).describe("摘要输出上限（窗口已知取 min(本值, max(512, 窗口/4))）"),
   pruneThresholdChars: z.number().int().positive().default(8_192).describe("工具结果超此长度且超 head+tail 的候选裁剪"),
   pruneHeadChars: z.number().int().positive().default(4_096),
   pruneTailChars: z.number().int().positive().default(1_024),
   backoffGrowthRatio: z.number().min(0).max(1).default(0.05).describe("失败退避：估算再增长此比例才重试"),
+  rapidRefillRounds: z.number().int().positive().default(3).describe("双熔断②：压缩后不足 N 个工具轮即再超阈 = refill"),
+  rapidRefillLimit: z.number().int().positive().default(3).describe("refill 连续 N 次 → 自动压缩本会话停手"),
 });
 
 /** token 估算（启发式，只用于阈值触发，不进日志事实）：CJK 按近似 1:1，其余 4 字符/token。 */
@@ -176,9 +178,12 @@ async function compactOnce(
 
   // ④ 预算切点：溢出 force 收缩至 minKeepMessages（dsh retainTokens=0 同型）；窗口已知时预算封顶 25%（空白 §16）；
   //    手动 /compact 预算减半（M4-2.5 T3/P3——Reasonix 手动 force 减半同款：用户主动要压，尾部保更少）
-  const autoBudget = opts.window !== undefined ? Math.min(cfg.keepRecentTokens, Math.floor(opts.window * 0.25)) : cfg.keepRecentTokens;
+  //    T0 过渡读法：退役键已出 schema（zod 剥离后真链路读不到 → 回落旧缺省值；测试夹具不经 zod 显式传入仍生效）——T2 随本分支删除
+  const legacyKeepRecent = (cfg as Record<string, number | undefined>).keepRecentTokens ?? 16_000;
+  const legacyMinKeep = (cfg as Record<string, number | undefined>).minKeepMessages ?? 2;
+  const autoBudget = opts.window !== undefined ? Math.min(legacyKeepRecent, Math.floor(opts.window * 0.25)) : legacyKeepRecent;
   const budget = opts.force === "overflow" ? 0 : opts.force === "manual" ? Math.floor(autoBudget / 2) : autoBudget;
-  const cut = safeCut(pruned, budget, cfg.minKeepMessages);
+  const cut = safeCut(pruned, budget, legacyMinKeep);
   if (cut <= 0 || cut >= pruned.length) return { kind: "skipped", reason: "no-space", messages: afterPrune(), events }; // 无压缩空间；越界防御（首轮 P1）
 
   const dropped = pruned.slice(0, cut);
@@ -208,8 +213,8 @@ async function compactOnce(
 
 export default defineModule({
   name: "compaction",
-  version: "0.3.0",
-  description: "会话压缩——transformContext 消费方：锚定估算/窗口感知阈值/prune 前置/预算切点/结构化摘要/失败不装+退避+熔断/溢出联动（M3 补强 D44）；/compact 立即执行+结果反馈+手动预算减半（M4-2.5 T3——compactOnce 两路共用、投影缓存零契约）",
+  version: "0.4.0",
+  description: "会话压缩——触发分级（manual 全量 / auto 保留用户消息+恢复指针 / overflow 收紧）+ prune 前置 + 双熔断 + 失败不装+退避（D44）",
   api: 1,
   mounts: ["hook:agent/transform-context", "hook:agent/request-error", "contribute:command"],
   config: configSchema,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { CommandHandler, CommandUi, LlmPort, Listener } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
-import def, { estimateTokens } from "./index.ts";
+import def, { configSchema, estimateTokens } from "./index.ts";
 
 type Ctx = Parameters<NonNullable<typeof def.activate>>[0];
 
@@ -12,11 +12,12 @@ const tr = (id: string, chars: number): ModelMessage => ({ role: "toolResult", c
 const notices: string[] = []; // notice 通道捕获（批⑧——纯提示类结果改走 ui.notice，不落返回串）
 const stubUi: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!, confirm: async () => true, notice: (t) => notices.push(t) };
 
-// schema 全默认值的手写镜像（fake ctx 不经 zod default 管线——kernel 真链路才有）
+// schema 全默认值的手写镜像（fake ctx 不经 zod default 管线——kernel 真链路才有）；T0 换血后 = 12 键形态
 const DEFAULTS = {
-  thresholdTokens: 60_000, thresholdRatio: 0.8, keepRecentTokens: 16_000, minKeepMessages: 2,
+  thresholdTokens: 60_000, thresholdRatio: 0.8, userMessageTokens: 20_000, userMessageHeadTokens: 2_000,
   summaryToolResultMaxChars: 2_000, summaryMaxTokens: 8_192,
   pruneThresholdChars: 8_192, pruneHeadChars: 4_096, pruneTailChars: 1_024, backoffGrowthRatio: 0.05,
+  rapidRefillRounds: 3, rapidRefillLimit: 3,
 };
 
 interface Setup {
@@ -342,6 +343,31 @@ describe("compaction 模块（M3 补强 T6/D44：锚定/窗口/prune 前置/预�
     expect(firstText(r[0])).toContain("短摘要");
     await s.listener([u("问"), u("中"), u("长".repeat(500))]);      // 自动尝试不再被熔断挡
     expect(s.llmRequests).toHaveLength(6);                         // 3 败 + 命令即时 1 + 自动 2（T3 过账：原 5——旧命令只置 force 不调 llm）
+  });
+});
+
+describe("v3 配置换血（T0：退役两键、新增四键、版本 0.4.0——规格 §2）", () => {
+  it("新四键默认值 + 版本号：userMessageTokens=20000 / userMessageHeadTokens=2000 / rapidRefillRounds=3 / rapidRefillLimit=3", () => {
+    const cfg = configSchema.parse({});
+    expect(cfg.userMessageTokens).toBe(20_000);
+    expect(cfg.userMessageHeadTokens).toBe(2_000);
+    expect(cfg.rapidRefillRounds).toBe(3);
+    expect(cfg.rapidRefillLimit).toBe(3);
+    expect(def.version).toBe("0.4.0");
+  });
+
+  it("新键阈值校验：非正整数拒绝", () => {
+    expect(configSchema.safeParse({ rapidRefillRounds: 0 }).success).toBe(false);
+    expect(configSchema.safeParse({ userMessageTokens: 0.5 }).success).toBe(false);
+  });
+
+  it("退役键静默剥离：keepRecentTokens/minKeepMessages 传入不报错且不出现在解析结果", () => {
+    const r = configSchema.safeParse({ keepRecentTokens: 123, minKeepMessages: 5 });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect("keepRecentTokens" in r.data).toBe(false);
+      expect("minKeepMessages" in r.data).toBe(false);
+    }
   });
 });
 

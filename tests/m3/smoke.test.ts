@@ -19,7 +19,6 @@ describe("M3 全链冒烟", () => {
       writeFileSync(join(dir, "config.toml"), [
         "[compaction]",
         "thresholdTokens = 1",
-        "keepRecentTokens = 1",
         "[approval]",
         'mode = "ask-risky"',
         "",
@@ -63,15 +62,16 @@ describe("M3 全链冒烟", () => {
         config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
       });
       const render = (async () => { for await (const _ of h.events()) void _; })();
-      await h.prompt("你好");           // #0
-      await h.prompt("读一下 x.txt");    // 压缩（#1 摘要）→ #2 工具调用（fs.read → ask-risky 放行）→ #3 收尾
+      // 首条造大（≈17500 token > 16000 回落预算——keepRecentTokens 已退役剥离，T0 适配夹具）：保压缩触发与 dropped 数可控
+      await h.prompt(`你好${"x".repeat(70_000)}`); // #0
+      await h.prompt("读一下 x.txt");              // 压缩（#1 摘要，dropped=1 条大消息）→ #2 工具调用（fs.read → ask-risky 放行）→ #3 收尾
       await h.close();
       await render;
       const all = await mem.all();
       // 审批放行（只读不询问、无 approval/requested）且工具真执行了
       expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.output === "文件内容")).toBe(true);
       expect(all.some((e) => e.type === "approval/requested")).toBe(false);
-      // 压缩落日志，且最后一个请求的前缀是摘要
+      // 压缩落日志（cut=1 经 user 边界推进到 2：dropped=[大 user, 第一轮 assistant]），且最后一个请求的前缀是摘要
       expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 2)).toBe(true);
       const last = fp.requests[3]!;
       expect(String((last.messages[0] as { content: { text: string }[] }).content[0]!.text)).toContain("[历史摘要]");
