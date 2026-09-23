@@ -45,6 +45,15 @@ function extractSequences(buffer: string): { sequences: string[]; remainder: str
 			pos += len;
 			continue;
 		}
+		// ESC 后紧跟还是 ESC：没有常用键序列以 ESC ESC 开头——首个 ESC 独立成键，第二个留在
+		// rest 重新断句。否则双击 Esc（快）时两字节被 meta 规则「ESC+单字符=完整」捆成
+		// "\x1b\x1b"，键表不识、alt 兜底有 >= 空格下界也不识 → 原串整吞——双击停止生成
+		// 时好时坏即此（2026-09-23 用户拍板；拆开后两拍正落回 toast→1s 窗口取消的语义）
+		if (rest.length > 1 && rest[1] === ESC) {
+			sequences.push(ESC);
+			pos += 1;
+			continue;
+		}
 		let end = 1;
 		while (end <= rest.length && isCompleteSequence(rest.slice(0, end)) === "incomplete") end++;
 		if (end > rest.length) return { sequences, remainder: rest };

@@ -52,6 +52,25 @@ describe("终端接管层（TUI 批阶段三 F0——pi ProcessTerminal + StdinB
 		expect(output.buf).toContain("\x1b[?2004l"); // stop 关 paste
 		expect(input.lines).toEqual(["raw:true", "raw:false"]);
 	});
+	it("①b ESC ESC 拆分：双击 Esc 同 chunk 不再捆成未知序列整吞（2026-09-23 用户拍板——双击停止生成时好时坏根因）", async () => {
+		const input = fakeInput();
+		const output = fakeOutput();
+		const term = new Term({ input, output }, { escWindowMs: 5 });
+		const got: string[] = [];
+		term.onInput((s) => got.push(s));
+		term.start();
+		input.emit("data", "\x1b\x1b"); // 双击同 chunk：第一拍立即出，第二拍走孤 ESC 时间窗
+		expect(got).toEqual(["\x1b"]);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(got).toEqual(["\x1b", "\x1b"]);
+		input.emit("data", "\x1b\x1b[A"); // Esc 后快按 ↓：首 ESC 独立成键，方向键照常拼装
+		expect(got).toEqual(["\x1b", "\x1b", "\x1b", "\x1b[A"]);
+		input.emit("data", "\x1b\x1b\x1b"); // 三连按：两拍立即 + 一拍时间窗
+		expect(got).toEqual(["\x1b", "\x1b", "\x1b", "\x1b[A", "\x1b", "\x1b"]);
+		await new Promise((r) => setTimeout(r, 20));
+		expect(got).toEqual(["\x1b", "\x1b", "\x1b", "\x1b[A", "\x1b", "\x1b", "\x1b"]);
+		term.stop();
+	});
 	it("② bracketed paste 直通（内容不拆成按键）+ paste 后按键恢复解析", () => {
 		const input = fakeInput();
 		const term = new Term({ input, output: fakeOutput() }, { escWindowMs: 5 });
