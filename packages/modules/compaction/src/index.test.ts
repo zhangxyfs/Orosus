@@ -29,7 +29,7 @@ interface Setup {
   command: CommandHandler;
   appended: { type: string; payload: Record<string, unknown> }[];
   llmRequests: { system?: string; messages: ModelMessage[]; maxTokens?: number }[];
-  warns: { code: string }[];
+  warns: { code: string; msg?: string }[];
   llm: LlmPort & { contextWindow?: number | undefined; lastUsage?: { totalTokens: number; atMessageCount: number } | undefined };
   setLlmChunks(chunks: Chunk[]): void;
 }
@@ -40,7 +40,7 @@ function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; co
   let command: CommandHandler = async () => "";
   const llmRequests: Setup["llmRequests"] = [];
   let chunks: Chunk[] = opts.llmChunks ?? [{ type: "text/delta", text: "这是摘要" } as Chunk, { type: "finish", kind: "stop" } as Chunk];
-  const warns: { code: string }[] = [];
+  const warns: { code: string; msg?: string }[] = [];
   const llm: Setup["llm"] = {
     stream: (req) => {
       llmRequests.push(req);
@@ -53,8 +53,8 @@ function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; co
     configRead: () => Promise.resolve(undefined),
     log: {
       trace() {}, debug() {},
-      info(code: string) { warns.push({ code }); },
-      warn(code: string) { warns.push({ code }); },
+      info(code: string, msg?: string) { warns.push({ code, msg }); },
+      warn(code: string, msg?: string) { warns.push({ code, msg }); },
       error() {},
     },
     ui: stubUi,
@@ -489,6 +489,94 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
       expect(e2.droppedCount).not.toBe(e1.droppedCount); // 第二次基于已压投影（防同前缀双落）
       expect(rAll).toHaveLength(1); // 两次 manual 全量重放后仍是单条摘要
     }
+  });
+});
+
+describe("v3 rapid-refill 熔断（T3：ZCode 状态机形状——压缩后秒填满反复发生时自动停手 + warn）", () => {
+  const small = (): ModelMessage[] => [u("问"), a("答"), u("再")];
+
+  it("① 压缩成功后不足 3 条新 toolResult 又超阈 → 记 refill（未达 3 次仍尝试压缩）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    await s.listener(small());                                       // 首次压缩成功（compactedEver 置位）
+    expect(s.llmRequests).toHaveLength(1);
+    await s.listener([...small(), tr("c1", 10), tr("c2", 10)]);      // sinceCompact 2 < 3 → refill 1 → 仍压
+    expect(s.llmRequests).toHaveLength(2);
+    await s.listener([...small(), tr("c3", 10), tr("c4", 10)]);      // refill 2 → 仍压
+    expect(s.llmRequests).toHaveLength(3);
+    expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
+  });
+
+  it("② 连续 3 次 refill → 自动路径停手 + warn 文案逐字（规格决策 9）；投影透传（undefined）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    await s.listener(small());                            // 压缩 1（成功）
+    await s.listener([...small(), tr("c1", 10)]);         // refill 1（压缩 2）
+    await s.listener([...small(), tr("c2", 10)]);         // refill 2（压缩 3）
+    expect(await s.listener([...small(), tr("c3", 10)])).toBeUndefined(); // refill 3 ≥ limit → 停手：透传、不调 llm、零事件
+    expect(s.llmRequests).toHaveLength(3);
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(3);
+    const w = s.warns.find((x) => x.code === "compaction.rapid-refill");
+    expect(w?.msg).toBe("压缩后上下文被迅速重新填满——建议 /compact 手动深压或 /new 开新会话");
+  });
+
+  it("③ 换来 ≥3 条跑道（3 条新 toolResult）→ refill 计数清零（清零后重新累计）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    await s.listener(small());                                                   // 压缩 1
+    await s.listener([...small(), tr("c1", 10)]);                                // refill 1 → 压缩
+    await s.listener([...small(), tr("c2", 10)]);                                // refill 2 → 压缩
+    await s.listener([...small(), tr("c3", 10), tr("c4", 10), tr("c5", 10)]);    // sinceCompact 3 ≥ rounds → 清零 + 压缩
+    await s.listener([...small(), tr("c6", 10)]);                                // refill 1（清零后重计）→ 仍压
+    await s.listener([...small(), tr("c7", 10)]);                                // refill 2 → 仍压（未达 3 不停）
+    expect(s.llmRequests).toHaveLength(6);
+    expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
+  });
+
+  it("④ manual 旁路：停手后 /compact 仍可压（人工显式意图不受 rapid-refill 约束）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    await s.listener(small());
+    await s.listener([...small(), tr("c1", 10)]);
+    await s.listener([...small(), tr("c2", 10)]);
+    await s.listener([...small(), tr("c3", 10)]);         // 停手
+    expect(s.llmRequests).toHaveLength(3);
+    await s.command("", stubUi);                          // manual 旁路 → 压缩
+    expect(s.llmRequests).toHaveLength(4);
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(4);
+  });
+
+  it("⑤ overflow 受约束（force overflow ≠ manual，rapid-refill 同样拦截溢出补救路径）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    await s.listener(small());
+    await s.listener([...small(), tr("c1", 10)]);
+    await s.listener([...small(), tr("c2", 10)]);
+    await s.listener([...small(), tr("c3", 10)]);       // 停手
+    s.errListener({ code: "context_limit" });           // 溢出联动置 overflow
+    expect(await s.listener([...small(), tr("c4", 10)])).toBeUndefined(); // overflow 被 refill 挡（非 manual 不旁路）
+    expect(s.llmRequests).toHaveLength(3);
+  });
+
+  it("⑥ 计数基重置（防中毒——doc-review 机制推演）：压缩后投影 toolResult 骤降不产生负差值，其后 3 条新 toolResult 即跑道", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    const manyTr = [u("问"), tr("c1", 10), tr("c2", 10), tr("c3", 10), tr("c4", 10), tr("c5", 10), u("尾")];
+    await s.listener(manyTr);                                       // 压缩成功（新投影无 toolResult → total 重置 0；未重置则 now 3 − total 5 = −2 中毒）
+    await s.listener([...small(), tr("n1", 10), tr("n2", 10), tr("n3", 10)]); // sinceCompact 3 ≥ 3 → 跑道、正常压
+    expect(s.llmRequests).toHaveLength(2);
+    expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
+    await s.listener([...small(), tr("n4", 10)]);                   // refill 1（清零后）
+    await s.listener([...small(), tr("n5", 10)]);                   // refill 2 → 未达 3 不停
+    expect(s.llmRequests).toHaveLength(4);
+  });
+
+  it("⑦ 首次压缩前不判 refill（compactedEver 哨兵——从未压缩无『压缩后迅速填满』语义）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    const r = await s.listener([u("问"), tr("c1", 10), tr("c2", 10), u("尾")]); // sinceCompact 2 < 3 但 compactedEver false
+    expect(r).toBeDefined(); // 正常压缩、不误判 refill
+    expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
   });
 });
 

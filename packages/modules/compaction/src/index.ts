@@ -154,13 +154,19 @@ function applyPrunes(messages: ModelMessage[], cfg: { pruneThresholdChars: numbe
 type ForceKind = "manual" | "overflow";
 type Cfg = z.infer<typeof configSchema>;
 interface CompactionEvent { type: string; fields: Record<string, unknown> }
-/** 退避/熔断/锚点共享状态（M4-2.5 T3 抽取：activate 闭包持有、compactOnce 就地更新——两路同一状态防行为漂移）。 */
+/** 退避/熔断/锚点/rapid-refill 共享状态（M4-2.5 T3 抽取：activate 闭包持有、compactOnce 就地更新——两路同一状态防行为漂移）。 */
 interface CompactState {
   failPoint?: number | undefined;
   consecutiveFailures: number;
   anchorStale: boolean;
   seenAnchorAt?: number | undefined;
+  toolResultsTotal?: number | undefined;   // 上次投影的 toolResult 总数（计数基；首轮只见基线不计增量）
+  toolResultsSinceCompact: number;        // 自上次成功压缩起新增的 toolResult 条数（T3——ZCode recordCompletedToolBatch 的批量等价）
+  consecutiveRapidRefills: number;        // 连续 refill 次数（≥ rapidRefillLimit → 自动路径停手）
+  compactedEver: boolean;                 // 首次成功压缩前不判 refill——无「压缩后迅速填满」语义（执行期补）
 }
+
+const countToolResults = (messages: ModelMessage[]): number => messages.reduce((n, m) => n + (m.role === "toolResult" ? 1 : 0), 0);
 interface CompactLog {
   debug(code: string, msg: string, fields?: Record<string, unknown>): void;
   info(code: string, msg: string, fields?: Record<string, unknown>): void;
@@ -242,7 +248,7 @@ export function selectUserMessages(
 type CompactResult =
   | { kind: "none"; events: [] }                                            // 未达阈值（自动路径常态）
   | { kind: "pruned"; messages: ModelMessage[]; events: CompactionEvent[] } // prune 免摘要救援
-  | { kind: "skipped"; reason: "backoff" | "breaker"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
+  | { kind: "skipped"; reason: "backoff" | "breaker" | "rapid-refill"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
   | { kind: "failed"; reason: string; events: CompactionEvent[] }           // 摘要失败/收敛不过（不装占位）
   | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; summaryTokens: number; summary: string } };
 
@@ -286,6 +292,22 @@ async function compactOnce(
   if (opts.force === undefined && opts.state.failPoint !== undefined && est < opts.state.failPoint * (1 + cfg.backoffGrowthRatio)) {
     opts.log.debug("compaction.skipped-backoff", "退避中——估算增长不足不重试", { est, failPoint: opts.state.failPoint });
     return { kind: "skipped", reason: "backoff", messages: afterPrune(), events };
+  }
+
+  // ③b rapid-refill 熔断（v3/T3，ZCode turn-loop-state 状态机形状——规格决策 9）：压缩成功后不足
+  //     rapidRefillRounds 个工具轮（= 新增 toolResult 条数，设计空白 6）又超阈值 = 一次 refill；
+  //     连续 rapidRefillLimit 次 → 本会话自动压缩停手 + warn（ZCode 是 throw 打断 turn——我们取停手不打断）。
+  //     manual 全旁路；换来 ≥ rounds 条跑道 → 清零（ZCode evaluateRapidRefill :154-168 同型）
+  if (opts.force !== "manual") {
+    if (opts.state.compactedEver && opts.state.toolResultsSinceCompact < cfg.rapidRefillRounds) {
+      opts.state.consecutiveRapidRefills++;
+      if (opts.state.consecutiveRapidRefills >= cfg.rapidRefillLimit) {
+        opts.log.warn("compaction.rapid-refill", "压缩后上下文被迅速重新填满——建议 /compact 手动深压或 /new 开新会话", { sinceCompact: opts.state.toolResultsSinceCompact, consecutive: opts.state.consecutiveRapidRefills });
+        return { kind: "skipped", reason: "rapid-refill", messages: afterPrune(), events };
+      }
+    } else if (opts.state.toolResultsSinceCompact >= cfg.rapidRefillRounds) {
+      opts.state.consecutiveRapidRefills = 0;
+    }
   }
 
   // ④ v3 分级保留（D57）：manual 全量零保留（ZCode shouldPreserveRecent 仅 Auto/Reactive）；auto 真实用户
@@ -348,6 +370,11 @@ async function compactOnce(
     const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: COMPACTION_ELISION(tailFirstAt - headLastAt - 1) }] };
     newMessages = [...headKept, elisionMsg, ...tailKept, summaryMsg];
   }
+  // rapid-refill 计数基重置（ZCode recordCompactSuccess :170-178 同点）：漏重置 total 则压缩后投影 toolResult
+  // 骤降（如 100→0），下轮差值 = 大负数——计数基中毒：sinceCompact 长期为负、跑道判据失灵且 refill 误计
+  opts.state.compactedEver = true;
+  opts.state.toolResultsSinceCompact = 0;
+  opts.state.toolResultsTotal = countToolResults(newMessages);
   opts.log.info("compaction.applied", "已压缩", { trigger, dropped: dropped.length, kept: sel.keepUserAt.length });
   return { kind: "compacted", newMessages, events, stats: { dropped: dropped.length, kept: sel.keepUserAt.length, tokensBefore: est, summaryTokens: summaryCost, summary: fullSummary } };
 }
@@ -361,7 +388,7 @@ export default defineModule({
   config: configSchema,
   logEvents: ["turn/compaction", "turn/prune"], // 模块可写核心日志类型（owner 制例外两枚）
   activate(ctx) {
-    const state: CompactState = { consecutiveFailures: 0, anchorStale: false }; // 退避/熔断/锚点（两路共享）
+    const state: CompactState = { consecutiveFailures: 0, anchorStale: false, toolResultsSinceCompact: 0, consecutiveRapidRefills: 0, compactedEver: false }; // 退避/熔断/锚点/rapid-refill（两路共享）
     let forceKind: ForceKind | undefined; // /compact（manual）与溢出触发（overflow）：旁路退避；manual 另旁路熔断
     const cfg = ctx.config as Cfg;
 
@@ -381,6 +408,13 @@ export default defineModule({
 
     ctx.events.on("agent/transform-context", async (value) => {
       const messages = value as ModelMessage[];
+      // rapid-refill 工具轮累计（设计空白 6：投影无批次边界，新增 toolResult 条数为口径——两次投影对比差值）
+      const nowToolResults = countToolResults(messages);
+      if (state.toolResultsTotal === undefined) state.toolResultsTotal = nowToolResults; // 首轮只立基线
+      else {
+        state.toolResultsSinceCompact += nowToolResults - state.toolResultsTotal;
+        state.toolResultsTotal = nowToolResults;
+      }
       const force = forceKind;
       forceKind = undefined; // 消费即复位（手动一次、溢出一次）
       const r = await compactOnce(messages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force, estimate, state, log: ctx.log, sessionId: ctx.session.id });
