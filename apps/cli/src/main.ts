@@ -34,6 +34,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
+import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 
@@ -459,6 +460,8 @@ function tuiSidebarPersist(visible: boolean): void {
 	doc.tui = { ...(doc.tui as Record<string, unknown>), sidebar: visible };
 	writeFileSync(f, stringify(doc), "utf8");
 }
+
+
 
 // Ctrl+T 运行期互切已下线（用户拍板：界面模式只由 --tui 旗标 / [tui] mode 配置在启动时选定）。
 
@@ -896,12 +899,26 @@ const refreshPanel = async (): Promise<void> => {
 		modules: h
 			.graph()
 			.audit()
-			.map((a) => ({
-				name: a.name,
-				desc: a.name === "orosus-core" ? "核心循环" : "",
-				state: a.state === "active" ? ("mounted" as const) : ("off" as const),
-				...(a.name === "orosus-core" ? { locked: true } : {}),
-			})),
+			.map((a) => {
+				// 锁定规则（2026-09-23 用户拍板：不可热插拔的标「· 锁定」灰字，其余回车实时插拔）：
+				// ① orosus-core = 核心本体（伪模块）；② approval = 安全护栏（出厂 required=true，想松绑走 /permission never 正道）；
+				// ③ 当前活跃 provider 模块 = 拔了当场断模型（换 provider 后旧的自动解锁）
+				const activeProviderModule = (() => {
+					const v = realReadModel(process.cwd())() ?? "";
+					return v === "" ? "" : v.split("/")[0]!;
+				})();
+				const lockedReason =
+					a.name === "orosus-core" ? "核心本体，不可插拔"
+					: a.name === "approval" ? "安全护栏模块（出厂 required），放松审批走 /permission never"
+					: a.name === activeProviderModule ? "当前使用的 provider，拔了会断模型（先 /model 换到别的）"
+					: undefined;
+				return {
+					name: a.name,
+					desc: a.name === "orosus-core" ? "核心循环" : "",
+					state: a.state === "active" ? ("mounted" as const) : ("off" as const),
+					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
+				};
+			}),
 		tasks: (lastTodo?.todos ?? []).map((t) => ({
 			text: t.content,
 			state: t.status === "done" ? ("done" as const) : t.status === "in_progress" ? ("active" as const) : ("pending" as const),
@@ -1022,6 +1039,31 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         return;
       }
       app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n")); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
+    },
+    // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
+    toggleModule: (name, lockedReason) => {
+      if (lockedReason !== undefined) {
+        app.showToast(`${name} · 锁定——${lockedReason}`);
+        return;
+      }
+      if (inflight) {
+        app.showToast("回答进行中不可插拔（等本轮结束后再试）");
+        return;
+      }
+      const mounted = panelCache?.modules.find((m) => m.name === name)?.state === "mounted";
+      const target = !mounted;
+      setModuleEnabledInConfig(name, target);
+      void (async () => {
+        try {
+          const r = await h.reload();
+          await refreshPanel();
+          app.showToast(target
+            ? `已挂载 ${name}（reload：added ${r.added.join(",") || "无"}）`
+            : `已卸载 ${name}（reload：removed ${r.removed.join(",") || "无"}）`);
+        } catch (err) {
+          app.showToast(`插拔失败：${err instanceof Error ? err.message : String(err)}（已回写配置，可 /reload 或重启恢复）`);
+        }
+      })();
     },
     thinkOpen: () => dm.thinkOpen,
     toggleThink: () => {

@@ -25,7 +25,7 @@ export interface PanelData {
 	tokens: { input: number; output: number; postCompaction?: boolean }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）；postCompaction = 末条压缩晚于末条 usage，input 为压缩后投影估算（v3：压缩的数字回落不得滞后到下一条消息）
 	startedAt: string | undefined; // 会话首事件 ts（F5 二轮④：运行时间行数据源）
 	contextWindow: number;
-	modules: { name: string; desc: string; state: "mounted" | "loading" | "off"; locked?: boolean }[];
+	modules: { name: string; desc: string; state: "mounted" | "loading" | "off"; locked?: boolean; lockedReason?: string }[]; // locked = 不可热插拔（2026-09-23 用户拍板：名后灰「· 锁定」，回车 toast 锁因）；其余回车实时插拔（宿主写 enabled + reload）
 	tasks: { text: string; state: "done" | "active" | "pending" }[];
 	permission: string; // 当前权限模式原文（ask-always/ask-risky/never）
 	permissionNext(): string; // Shift+Tab 循环的下一档命令（如 "/permission ask-always"）
@@ -76,6 +76,9 @@ export interface FullAppIO {
 	/** Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役，摘要查看唯一入口）。
 	 *  宿主读最近 turn/compaction 的 summary（overlay 文本灰色 muted 由宿主包裹）。 */
 	showCompactionSummary?(): void;
+	/** 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项宿主 toast 锁因；可插拔项宿主写
+	 *  config 的 [模块名] enabled + h.reload()（面板随之刷新）。 */
+	toggleModule?(name: string, lockedReason: string | undefined): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -695,6 +698,10 @@ export class FullApp {
 				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "shift+up" ? -5 : 5)));
 			} else if (key === "shift+left" || key === "shift+right") {
 				s.statePage = s.statePage === 0 ? 1 : 0;
+			} else if (key === "enter") {
+				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload
+				const m = mods[s.moduleSel];
+				if (m !== undefined) this.io.toggleModule?.(m.name, m.locked === true ? (m.lockedReason ?? "锁定") : undefined);
 			}
 		} else if (s.focusIdx === 2) {
 			const tasks = this.io.panelData().tasks;
@@ -966,12 +973,15 @@ export class FullApp {
 
 	private modRow(m: PanelData["modules"][number], selected: boolean, w: number): string {
 		const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
-		const name = m.state === "off" ? theme.fg("muted", m.name) : selected ? theme.fg("accent", m.name) : m.name;
-		const stateText = m.locked ? "锁定" : MOD_STATE_TEXT[m.state]!;
-		const st = m.locked || m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" ? theme.fg("warn", stateText) : theme.dim(stateText);
-		const descBudget = w - (3 + visibleWidth(m.name) + 1 + visibleWidth(stateText) + 1);
+		// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
+		const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
+		const name = (m.state === "off" ? theme.fg("muted", m.name) : selected ? theme.fg("accent", m.name) : m.name) + lockSuffix;
+		const stateText = MOD_STATE_TEXT[m.state]!;
+		const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" ? theme.fg("warn", stateText) : theme.dim(stateText);
+		const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
+		const descBudget = w - (3 + visibleWidth(m.name) + lockW + 1 + visibleWidth(stateText) + 1);
 		const desc = descBudget >= visibleWidth(m.desc) ? theme.dim(m.desc) : descBudget >= 8 ? truncateToWidth(theme.dim(m.desc), descBudget) : "";
-		const leftW = 3 + visibleWidth(m.name) + (desc === "" ? 0 : 1 + visibleWidth(desc));
+		const leftW = 3 + visibleWidth(m.name) + lockW + (desc === "" ? 0 : 1 + visibleWidth(desc));
 		const gap = Math.max(1, w - leftW - visibleWidth(stateText));
 		const row = ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${st}`;
 		return selected ? theme.bg("accentSoft", padToWidth(row, w)) : row;
