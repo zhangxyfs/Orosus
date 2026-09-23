@@ -268,6 +268,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         },
         // 冷投影读口（M5 F5 二轮⑰——/compact 立即执行）：与 agentLoop 同投影函数（deriveMessages 全量重放）
         messages: async () => deriveMessages(await session.all()),
+        id: session.sessionId, // v3 compaction 设计空白 2：恢复页脚会话标识（store 各后端构造时持有）
       },
       events: {
         on: (type, listener) => {

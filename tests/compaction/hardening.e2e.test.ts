@@ -84,11 +84,12 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     await h.prompt("一");
     await h.prompt("二");
     const all = await store.all();
-    expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 2)).toBe(true);
+    expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 3 && e.trigger === "overflow")).toBe(true); // v3：dropped = 全部 3 条（用户消息既进摘要又留原话）
     expect((all.at(-1) as { kind?: string }).kind).toBe("completed");
     expect(fp.requests).toHaveLength(4); // turn1 / 报错请求 / 摘要 / 重试
     const retry = fp.requests[3]!;
-    expect(String((retry.messages[0] as { content: { text: string }[] }).content[0]!.text)).toContain("[历史摘要]");
+    const texts = retry.messages.map((m) => String((m as { content: { text?: string }[] }).content[0]?.text ?? ""));
+    expect(texts.some((t) => t.includes("[历史摘要]"))).toBe(true); // 摘要在投影中（置尾——kimi 形态）
     await h.close();
   });
 
@@ -124,7 +125,7 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     });
     await h.prompt("一");
     await h.prompt("二");
-    expect(render.buf.join("")).toContain("[已压缩：前缀 2 条 → 摘要（/summary 查看）]"); // M4-2.5 T4 过账：文案补 /summary 指针
+    expect(render.buf.join("")).toContain("[已压缩：前缀 3 条 → 摘要（/summary 查看）]"); // v3：dropped = 全部 3 条（渲染行读 droppedCount，代码零改动）
     await h.close();
   });
 

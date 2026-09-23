@@ -55,14 +55,67 @@ const MERGE_ADDENDUM = `
 
 对话开头已有一份前次压缩摘要——把它视作已知背景，与其后内容合并成一份新摘要：保留仍有效的事实，纳入新的进展与决定，删除已被取代的内容；不要出现"前次摘要"这样的引用痕迹。`;
 
+/** 预收缩截断说明（v3 设计空白 10）：摘要输入被裁掉最老段时追加——不装作涵盖了全部历史。 */
+const PRESHRUNK_ADDENDUM = `
+
+注意：由于输入超出摘要预算，你看到的对话已截去最早期部分——不要声称本摘要涵盖了全部历史。`;
+
+/** elision 固定模板（v3 设计空白 4，kimi buildCompactionElisionText 语义、条数口径改投影条目）——
+ *  与核心 convert.ts 同款双写（铁律 2 两份代码），测试钉两侧逐字一致。 */
+const COMPACTION_ELISION = (omitted: number): string =>
+  `[Some messages were omitted here during compaction: ${omitted} messages between the oldest and the most recent user input are covered by the compaction summary at the end.]`;
+
+/** 图片剥占位（v3 设计空白 7，双写——与核心 convert.ts 同款逐字一致）：保留的用户消息进新投影时
+ *  image part 替换为占位文本 part（保路径可 Read 捞回；provider 侧零图片开销）。 */
+function stripImages(m: ModelMessage): ModelMessage {
+  if (m.role !== "user" || !m.content.some((p) => p.kind === "image")) return m;
+  return {
+    ...m,
+    content: m.content.map((p) => p.kind === "image"
+      ? { kind: "text" as const, text: `[image omitted during compaction: ${p.path}]` }
+      : p),
+  };
+}
+
+/** 恢复页脚（v3 设计空白 3——模块确定性拼进 summary 尾部：页脚进事件 summary 字段本身，重放与 /summary
+ *  天然一致，不为页脚单开双写面）。id 缺省只去编号、保留目录指引（D46 一级桶目录下模块拼路径不可靠）。 */
+function recoveryFooter(droppedCount: number, sessionId: string | undefined): string {
+  const where = sessionId !== undefined ? `会话 ${sessionId}（~/.orosus/sessions/ 目录）` : "（历史在 ~/.orosus/sessions/ 目录）";
+  return `\n\n完整历史在会话日志（append-only）：被压缩 ${droppedCount} 条消息；用 Grep/Read 工具检索会话文件捞回细节。${where}，需要细节时去日志查证，不要凭猜测编造。`;
+}
+
+/** 摘要输入预收缩（v3 设计空白 10，kimi preShrinkHistoryToWindowBudget :818-842 吸收）：窗口已知且 dropped
+ *  估算超 (窗口 − 窗口/8) × 0.85 时，摘要输入只保留该预算内最新消息（输出预留 = 窗口/8、安全比 0.85）——
+ *  manual 全量送 200k 历史会把摘要请求自己撑爆，这是保命闸。 */
+function preShrinkSummaryInput(dropped: ModelMessage[], window: number | undefined): { input: ModelMessage[]; truncated: boolean } {
+  if (window === undefined) return { input: dropped, truncated: false };
+  const budget = Math.floor((window - window / 8) * 0.85);
+  if (estimateTokens(dropped) <= budget) return { input: dropped, truncated: false };
+  const input: ModelMessage[] = [];
+  let used = 0;
+  for (let i = dropped.length - 1; i >= 0; i--) {
+    const cost = msgTokens(dropped[i]!);
+    if (used + cost > budget) break;
+    used += cost;
+    input.unshift(dropped[i]!);
+  }
+  return { input, truncated: true };
+}
+
 /** 摘要生成（D44）：失败/空产出/异常 → undefined（不装占位——宁可不压，pi/Reasonix 底线）。
- *  输入瘦身：工具结果超 maxToolChars 截断（瞬态标记，不落日志）；前次摘要检测 → 合并指令。 */
-async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxTokens: number; maxToolChars: number }): Promise<string | undefined> {
+ *  输入瘦身：工具结果超 maxToolChars 截断（瞬态标记，不落日志）；前次摘要检测（v3 origin 标 + v2 前缀兜底
+ *  双路）→ 合并指令；预收缩截断 → 说明追加；focus（manual 命令路径）→ 指令尾「可选用户指令」块（kimi
+ *  compactionInstruction.ts:9-15 同款）。 */
+async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxTokens: number; maxToolChars: number; focus?: string | undefined; truncated?: boolean }): Promise<string | undefined> {
   let system = SUMMARY_SYSTEM;
   const first = dropped[0];
-  if (first?.role === "user" && first.content[0]?.kind === "text" && first.content[0]!.text.startsWith("[历史摘要]")) {
-    system += MERGE_ADDENDUM;
-  }
+  const wasPrevSummary = first?.role === "user" && (
+    first.origin?.kind === "compaction-summary"
+    || (first.content[0]?.kind === "text" && first.content[0]!.text.startsWith("[历史摘要]"))
+  );
+  if (wasPrevSummary) system += MERGE_ADDENDUM;
+  if (opts.truncated) system += PRESHRUNK_ADDENDUM;
+  if (opts.focus !== undefined && opts.focus !== "") system += `\n可选用户指令：\n${opts.focus}`;
   const slimmed = dropped.map((m) => {
     if (m.role !== "toolResult" || m.output.length <= opts.maxToolChars) return m;
     return { ...m, output: `${m.output.slice(0, opts.maxToolChars)}\n[...truncated: original ${m.output.length} chars]` };
@@ -98,21 +151,6 @@ function applyPrunes(messages: ModelMessage[], cfg: { pruneThresholdChars: numbe
   return { messages: out, prunes, prunedChars };
 }
 
-/** 预算切点（D44）：从尾部累计生效预算定保留区起点（minKeepMessages 保底），再推进到 user 边界
- *  ——assistant(toolCalls) 与其 toolResult 不拆开（孤儿防御）；切点推到末尾（cut>=len）由调用方放弃。 */
-function safeCut(messages: ModelMessage[], budget: number, minKeep: number): number {
-  let cut = messages.length;
-  let used = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const cost = msgTokens(messages[i]!);
-    if (used + cost > budget && messages.length - cut >= minKeep) break; // 预算耗尽且已达保底
-    used += cost;
-    cut = i;
-  }
-  while (cut < messages.length && messages[cut]?.role !== "user") cut++;
-  return cut;
-}
-
 type ForceKind = "manual" | "overflow";
 type Cfg = z.infer<typeof configSchema>;
 interface CompactionEvent { type: string; fields: Record<string, unknown> }
@@ -132,12 +170,17 @@ interface CompactLog {
 /** 真实用户消息判定（v3 设计空白 1，kimi compactionUserMessageDisposition 同型——origin 缺省保守保留）：
  *  直敲（无 origin）保留；宿主插队（steering + sourceModule==="host"，busy 期你敲的话）保留；
  *  模块注入的 steering 提醒、压缩摘要（compaction-summary）剥离；v2 旧投影无 origin 且 [历史摘要]
- *  前缀 → 文本兜底剥离（ZCode 冷恢复同款）。谓词只在模块侧执行一次（规格 §4），判定结果以事件下标集固化。 */
+ *  前缀 → 文本兜底剥离（ZCode 冷恢复同款）；v3 elision 模板前缀同款兜底（重放产物是裸 user 文本无 origin，
+ *  不剥则二次压缩误占用户预算——执行期发现）。谓词只在模块侧执行一次（规格 §4），判定结果以事件下标集固化。 */
 export function isRealUserInput(m: ModelMessage): boolean {
   if (m.role !== "user") return false;
   if (m.origin === undefined) {
     const first = m.content[0];
-    return !(first?.kind === "text" && first.text.startsWith("[历史摘要]"));
+    if (first?.kind === "text") {
+      if (first.text.startsWith("[历史摘要]")) return false;
+      if (first.text.startsWith("[Some messages were omitted here during compaction:")) return false;
+    }
+    return true;
   }
   return m.origin.kind === "steering" && m.origin.sourceModule === "host";
 }
@@ -194,15 +237,17 @@ export function selectUserMessages(
   return { keepUserAt, keepUserHead: head.length, keepUserTail: tail.length, elided: true, omittedEntries };
 }
 
-/** compactOnce 结果（M4-2.5 T3）：拦截器与命令两路共用——事件由调用方落盘（先落日志再改值的可重建性契约不变）。 */
+/** compactOnce 结果（M4-2.5 T3）：拦截器与命令两路共用——事件由调用方落盘（先落日志再改值的可重建性契约不变）。
+ *  v3（D57）：no-space 拒绝路径废除（缺陷 A 机制载体）——manual 全量、auto 保用户消息，不存在「没有可压缩空间」。 */
 type CompactResult =
   | { kind: "none"; events: [] }                                            // 未达阈值（自动路径常态）
   | { kind: "pruned"; messages: ModelMessage[]; events: CompactionEvent[] } // prune 免摘要救援
-  | { kind: "skipped"; reason: "backoff" | "breaker" | "no-space"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
+  | { kind: "skipped"; reason: "backoff" | "breaker"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
   | { kind: "failed"; reason: string; events: CompactionEvent[] }           // 摘要失败/收敛不过（不装占位）
   | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; summaryTokens: number; summary: string } };
 
-/** 压缩核心（M4-2.5 T3 从拦截器体抽出）：阈值判定 → prune 前置 → 退避/熔断 → 预算切点 → 摘要 → 收敛检查。
+/** 压缩核心（v3/D57 触发分级重写）：阈值判定 → prune 前置 → 退避/熔断 → 分级保留（manual 全量零保留〔ZCode〕
+ *  / auto 真实用户消息头尾预算〔kimi〕/ overflow 预算减半）→ 摘要（+预收缩保命闸）→ 收敛检查 → 页脚 → 落事件。
  *  纯形状（messages → 结果 + 事件清单）；退避/熔断/锚点状态经 opts.state 由调用方持有（两路共享一份）。 */
 async function compactOnce(
   messages: ModelMessage[],
@@ -210,8 +255,10 @@ async function compactOnce(
   opts: {
     llm: LlmPort; window?: number | undefined; force: ForceKind | undefined;
     estimate: (m: ModelMessage[]) => number; state: CompactState; log: CompactLog;
+    sessionId?: string | undefined; focus?: string | undefined;
   },
 ): Promise<CompactResult> {
+  const trigger = opts.force ?? "auto";
   const threshold = opts.force !== undefined ? 0 : (opts.window !== undefined ? Math.floor(opts.window * cfg.thresholdRatio) : cfg.thresholdTokens);
   let est = opts.estimate(messages);
   if (est <= threshold) return { kind: "none", events: [] };
@@ -241,39 +288,68 @@ async function compactOnce(
     return { kind: "skipped", reason: "backoff", messages: afterPrune(), events };
   }
 
-  // ④ 预算切点：溢出 force 收缩至 minKeepMessages（dsh retainTokens=0 同型）；窗口已知时预算封顶 25%（空白 §16）；
-  //    手动 /compact 预算减半（M4-2.5 T3/P3——Reasonix 手动 force 减半同款：用户主动要压，尾部保更少）
-  //    T0 过渡读法：退役键已出 schema（zod 剥离后真链路读不到 → 回落旧缺省值；测试夹具不经 zod 显式传入仍生效）——T2 随本分支删除
-  const legacyKeepRecent = (cfg as Record<string, number | undefined>).keepRecentTokens ?? 16_000;
-  const legacyMinKeep = (cfg as Record<string, number | undefined>).minKeepMessages ?? 2;
-  const autoBudget = opts.window !== undefined ? Math.min(legacyKeepRecent, Math.floor(opts.window * 0.25)) : legacyKeepRecent;
-  const budget = opts.force === "overflow" ? 0 : opts.force === "manual" ? Math.floor(autoBudget / 2) : autoBudget;
-  const cut = safeCut(pruned, budget, legacyMinKeep);
-  if (cut <= 0 || cut >= pruned.length) return { kind: "skipped", reason: "no-space", messages: afterPrune(), events }; // 无压缩空间；越界防御（首轮 P1）
+  // ④ v3 分级保留（D57）：manual 全量零保留（ZCode shouldPreserveRecent 仅 Auto/Reactive）；auto 真实用户
+  //    消息头尾预算（kimi selectCompactionUserMessages 改编）；overflow 同 auto、总/头预算均减半（设计空白 5）。
+  //    dropped = 全部历史：保留的用户消息既进摘要（供总结）又以原话留在上下文（保意图）——assistant/tool 边界
+  //    问题天然消失（保留集全是 user 角色，v2 的切点安全考量整体退役）
+  const maxUser = trigger === "overflow" ? Math.floor(cfg.userMessageTokens / 2) : cfg.userMessageTokens;
+  const headUser = trigger === "overflow" ? Math.floor(cfg.userMessageHeadTokens / 2) : cfg.userMessageHeadTokens;
+  const users = trigger === "manual" ? [] : collectRealUserMessages(pruned);
+  const sel = selectUserMessages(users, { max: maxUser, head: headUser, totalEntries: pruned.length });
+  const dropped = pruned;
 
-  const dropped = pruned.slice(0, cut);
-  const kept = pruned.slice(cut);
+  // ⑤ 摘要输入预收缩（设计空白 10——kimi preShrink 吸收；manual 全量路径的保命闸）
+  const { input: summaryInput, truncated } = preShrinkSummaryInput(dropped, opts.window);
+
+  // ⑥ 摘要：六小节模板 + 前次合并（v3 标/v2 前缀双路）+ 截断说明 + focus（kimi compactionInstruction 同款）
   const maxTokens = opts.window !== undefined ? Math.min(cfg.summaryMaxTokens, Math.max(512, Math.floor(opts.window / 4))) : cfg.summaryMaxTokens;
-  const summary = await summarize(opts.llm, dropped, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars });
+  const summary = await summarize(opts.llm, summaryInput, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars, focus: opts.focus, truncated });
 
-  // ⑤ 收敛检查（dsh 同款 + 512 显著性门槛）：压后必须更小——但玩具尺寸对话（[历史摘要] 包装 ≈9 token）
+  // ⑦ 收敛检查（dsh 同款 + 512 显著性门槛）：压后必须更小——但玩具尺寸对话（[历史摘要] 包装 ≈9 token）
   // 天然不满足"严格变小"，只对非平凡大摘要（≥512 token，与 maxTokens 公式的 512 下限同源）执行；
   // 超长跑飞摘要照抓。执行期修正（计划⑪与⑮的夹具张力），T8 文档登记
-  const summaryMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: `[历史摘要]\n${summary ?? ""}` }] };
-  const summaryCost = estimateTokens([summaryMsg]);
-  if (summary === undefined || (summaryCost >= estimateTokens(dropped) && summaryCost >= 512)) {
+  if (summary === undefined) {
     opts.state.consecutiveFailures++;
     opts.state.failPoint = est;
-    opts.log.warn("compaction.summary-failed", summary === undefined ? "摘要生成失败——不装占位（宁可不压）" : "收敛检查不过（压后未变小）——不装", { dropped: dropped.length });
-    return { kind: "failed", reason: summary === undefined ? "摘要生成失败（不装占位）" : "收敛检查不过（压后未变小）", events };
+    opts.log.warn("compaction.summary-failed", "摘要生成失败——不装占位（宁可不压）", { dropped: dropped.length });
+    return { kind: "failed", reason: "摘要生成失败（不装占位）", events };
+  }
+  const fullSummary = summary + recoveryFooter(dropped.length, opts.sessionId); // ⑧ 页脚进 summary 字段（设计空白 3）
+  const summaryMsg: ModelMessage = {
+    role: "user",
+    content: [{ kind: "text", text: `[历史摘要]\n${fullSummary}` }],
+    origin: { kind: "compaction-summary" }, // 设计空白 1：摘要带标（下次压缩谓词元数据消费）
+  };
+  const summaryCost = estimateTokens([summaryMsg]);
+  if (summaryCost >= estimateTokens(dropped) && summaryCost >= 512) {
+    opts.state.consecutiveFailures++;
+    opts.state.failPoint = est;
+    opts.log.warn("compaction.summary-failed", "收敛检查不过（压后未变小）——不装", { dropped: dropped.length });
+    return { kind: "failed", reason: "收敛检查不过（压后未变小）", events };
   }
 
   opts.state.consecutiveFailures = 0; // 任一成功清零（熔断与退避同释）
   opts.state.failPoint = undefined;
   opts.state.anchorStale = true; // 压缩改写上下文 → 锚点 stale
-  events.push({ type: "turn/compaction", fields: { summary, keepFrom: cut, droppedCount: dropped.length } });
-  opts.log.info("compaction.applied", "已压缩", { dropped: dropped.length, kept: kept.length });
-  return { kind: "compacted", newMessages: [summaryMsg, ...kept], events, stats: { dropped: dropped.length, kept: kept.length, tokensBefore: est, summaryTokens: summaryCost, summary } };
+  events.push({ type: "turn/compaction", fields: { trigger, summary: fullSummary, keepUserAt: sel.keepUserAt, keepUserHead: sel.keepUserHead, keepUserTail: sel.keepUserTail, droppedCount: dropped.length } });
+
+  // 新投影（与核心 convert.ts v3 分形同款双写——测试钉两侧逐字节一致）：manual/[摘要]；
+  // auto/overflow [头(剥图)…, elision, 尾(剥图)…, 摘要（末尾——kimi 形态：模型读到的最近内容就是交接摘要）]。
+  // elision 恒在——全保留时省略的是 assistant/tool 条目，同样诚实标注
+  let newMessages: ModelMessage[];
+  if (sel.keepUserAt.length === 0) {
+    newMessages = [summaryMsg];
+  } else {
+    const kept = sel.keepUserAt.map((i) => stripImages(pruned[i]!));
+    const headKept = kept.slice(0, sel.keepUserHead);
+    const tailKept = kept.slice(sel.keepUserHead);
+    const headLastAt = sel.keepUserHead > 0 ? sel.keepUserAt[sel.keepUserHead - 1]! : -1;
+    const tailFirstAt = sel.keepUserHead < sel.keepUserAt.length ? sel.keepUserAt[sel.keepUserHead]! : pruned.length;
+    const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: COMPACTION_ELISION(tailFirstAt - headLastAt - 1) }] };
+    newMessages = [...headKept, elisionMsg, ...tailKept, summaryMsg];
+  }
+  opts.log.info("compaction.applied", "已压缩", { trigger, dropped: dropped.length, kept: sel.keepUserAt.length });
+  return { kind: "compacted", newMessages, events, stats: { dropped: dropped.length, kept: sel.keepUserAt.length, tokensBefore: est, summaryTokens: summaryCost, summary: fullSummary } };
 }
 
 export default defineModule({
@@ -307,7 +383,7 @@ export default defineModule({
       const messages = value as ModelMessage[];
       const force = forceKind;
       forceKind = undefined; // 消费即复位（手动一次、溢出一次）
-      const r = await compactOnce(messages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force, estimate, state, log: ctx.log });
+      const r = await compactOnce(messages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force, estimate, state, log: ctx.log, sessionId: ctx.session.id });
       for (const e of r.events) ctx.session.append(e.type, e.fields);
       const out = r.kind === "compacted" ? r.newMessages : (r.kind === "pruned" || r.kind === "skipped") ? r.messages : undefined;
       lastSeenMessages = out ?? messages; // 缓存跟踪变换后结果（v1.4 审修补）
@@ -333,7 +409,7 @@ export default defineModule({
         lastSeenMessages = projected;
       }
       if (lastSeenMessages.length === 0) { ui.notice?.("无可压缩历史（本会话还没有对话）"); return ""; }
-      const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log });
+      const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log, sessionId: ctx.session.id });
       for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
       switch (r.kind) {
         case "none": ui.notice?.("无可压缩历史（本会话还没有对话）"); return "";
@@ -341,9 +417,7 @@ export default defineModule({
           lastSeenMessages = r.messages;
           return `已裁剪 ${(r.events[0]!.fields.prunes as unknown[]).length} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`;
         case "skipped":
-          ui.notice?.(r.reason === "no-space"
-            ? "无可压缩空间：对话尚短，尾部保留区已覆盖全部内容"
-            : `已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`);
+          ui.notice?.(`已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`);
           return "";
         case "failed":
           return `压缩失败：${r.reason}——未产生任何变更（可重试 /compact）`;

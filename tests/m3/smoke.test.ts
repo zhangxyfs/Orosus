@@ -18,7 +18,7 @@ describe("M3 全链冒烟", () => {
     try {
       writeFileSync(join(dir, "config.toml"), [
         "[compaction]",
-        "thresholdTokens = 1",
+        "thresholdTokens = 6", // turn1 est 2 不压；turn2 est 10 压（v3 无 no-space，小对话照压）；turn3 压后投影含 elision/页脚仍超 → 连环压（真实行为）
         "[approval]",
         'mode = "ask-risky"',
         "",
@@ -62,19 +62,19 @@ describe("M3 全链冒烟", () => {
         config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
       });
       const render = (async () => { for await (const _ of h.events()) void _; })();
-      // 首条造大（≈17500 token > 16000 回落预算——keepRecentTokens 已退役剥离，T0 适配夹具）：保压缩触发与 dropped 数可控
-      await h.prompt(`你好${"x".repeat(70_000)}`); // #0
-      await h.prompt("读一下 x.txt");              // 压缩（#1 摘要，dropped=1 条大消息）→ #2 工具调用（fs.read → ask-risky 放行）→ #3 收尾
+      await h.prompt(`你好`);                    // #0（est 2 ≤ 6 不压）
+      await h.prompt("读一下 x.txt");             // 压缩（#1 摘要「工具结果摘要」）→ #2 工具调用（fs.read → ask-risky 放行）→ #3 step2 再压（#3 摘要「读到了」）→ #4 收尾
       await h.close();
       await render;
       const all = await mem.all();
       // 审批放行（只读不询问、无 approval/requested）且工具真执行了
       expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.output === "文件内容")).toBe(true);
       expect(all.some((e) => e.type === "approval/requested")).toBe(false);
-      // 压缩落日志（cut=1 经 user 边界推进到 2：dropped=[大 user, 第一轮 assistant]），且最后一个请求的前缀是摘要
-      expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 2)).toBe(true);
-      const last = fp.requests[3]!;
-      expect(String((last.messages[0] as { content: { text: string }[] }).content[0]!.text)).toContain("[历史摘要]");
+      // 压缩落日志（v3 auto：首条 dropped = turn2 投影全部 3 条——用户消息既进摘要又留原话）；末请求（#4）末条是摘要
+      expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 3 && e.trigger === "auto")).toBe(true);
+      const last = fp.requests[4]!;
+      const lastMsg = last.messages[last.messages.length - 1] as { content: { text?: string }[] };
+      expect(String(lastMsg.content[0]!.text)).toContain("[历史摘要]");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
