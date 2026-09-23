@@ -1257,7 +1257,7 @@ export class FullApp {
 		const en = theme.dim(level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令 `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
-		olines.push(boxRow(""));
+		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」
 		let items: { text: string; mark: string; long: string }[];
 		if (level2) {
 			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);

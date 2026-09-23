@@ -495,17 +495,17 @@ describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
 		input.emit("data", "/");
 		await flush(120);
 		const plain = overlayLines(app).map(stripAnsi);
-		// 结构恒定：标题 + 空 + ↑占位 + 10 行命令 + ↓行 + 分隔 + 2 行说明 + foot + 底框 = 19 行
-		expect(plain).toHaveLength(19);
-		const cmdRows = plain.slice(3, 13);
+		// 结构恒定：标题 + ↑占位 + 10 行命令 + ↓行 + 分隔 + 2 行说明 + foot + 底框 = 18 行（标题下无装饰空行——用户打回）
+		expect(plain).toHaveLength(18);
+		const cmdRows = plain.slice(2, 12);
 		expect(cmdRows.filter((l) => l.includes("/help") || l.includes("/title") || l.includes("/permission"))).toHaveLength(3);
 		expect(cmdRows.filter(isBlankRow)).toHaveLength(7); // 7 个空槽
-		expect(isBlankRow(plain[2]!)).toBe(true); // ↑ 常驻：窗口在顶时该行为空占位
-		expect(isBlankRow(plain[13]!)).toBe(true); // ↓ 常驻：3 条全显示无余量 → 空占位（行不消失）
+		expect(isBlankRow(plain[1]!)).toBe(true); // ↑ 常驻：窗口在顶时该行为空占位
+		expect(isBlankRow(plain[12]!)).toBe(true); // ↓ 常驻：3 条全显示无余量 → 空占位（行不消失）
 		app.stop();
 	});
 
-	it("超出 10 条滚动到底：↑ 行显示余量、↓ 行转空占位——行数仍 19", async () => {
+	it("超出 10 条滚动到底：↑ 行显示余量、↓ 行转空占位——行数仍 18", async () => {
 		const r = rig();
 		r.io.slashCommands = () => Array.from({ length: 13 }, (_, i) => ({ name: `/c${String(i).padStart(2, "0")}`, desc: `第${i}`, long: `说明${i}` }));
 		const { app, input } = r;
@@ -516,9 +516,9 @@ describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
 		input.emit("data", "\x1b[B".repeat(12)); // ↓ 到底
 		await flush(120);
 		const plain = overlayLines(app).map(stripAnsi);
-		expect(plain).toHaveLength(19);
-		expect(plain[2]).toContain("↑ 还有"); // 头上有余量
-		expect(isBlankRow(plain[13]!)).toBe(true); // 底下没有 → 空占位（不再消失）
+		expect(plain).toHaveLength(18);
+		expect(plain[1]).toContain("↑ 还有"); // 头上有余量
+		expect(isBlankRow(plain[12]!)).toBe(true); // 底下没有 → 空占位（不再消失）
 		app.stop();
 	});
 });
