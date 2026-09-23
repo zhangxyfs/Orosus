@@ -1105,7 +1105,9 @@ export class FullApp {
 		const ibc = inputFocused ? "accent" : "border";
 		const screen: string[] = Array.from({ length: rows }, () => "");
 		for (let r = 0; r < streamH; r++) {
-			screen[r] = padToWidth(doc[start + r] ?? "", leftW);
+			// 消息区左内衬 2 列（2026-09-23 用户拍板：文字起始贴屏幕左缘难看）——docmodel 折行口径
+			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐
+			screen[r] = padToWidth(doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`, leftW);
 		}
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
