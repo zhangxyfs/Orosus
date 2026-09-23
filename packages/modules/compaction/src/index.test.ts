@@ -279,7 +279,16 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
         droppedCount: 4,
       },
     }]);
-    expect(s.llmRequests[0]!.messages).toEqual(messages); // v3：摘要输入 = 全部历史（非 v2 的丢弃段）
+    expect(s.llmRequests[0]!.messages).toEqual([...messages, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }]); // v3：摘要输入 = 全部历史 + 尾部显式 user 指令（实机首例根因修复——assistant 结尾的裸投影会让 openai 端点当「继续自己的话」空产出）
+  });
+
+  it("⑪b 摘要请求末条恒为显式 user 指令消息（实机首例回归钉：kimi coding 端点对 assistant 结尾+无 tools 的请求 13~35 token 碎片即停，补尾指令后 710 token 完整摘要——2026-09-23 实测对照）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    const msgs = [u("问"), a("答"), u("再")]; // 末条 user 的输入也补（形态统一，不依赖输入结尾角色）
+    await s.listener(msgs);
+    const last = s.llmRequests[0]!.messages[s.llmRequests[0]!.messages.length - 1]!;
+    expect(last).toEqual({ role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] });
   });
 
   it("⑫ llm 失败 → 不落事件、warn(compaction.summary-failed)、返回 undefined、退避置位", async () => {
@@ -677,14 +686,14 @@ describe("v3 触发分级细节（T2：页脚/预收缩/图片剥占位/前次�
     await def.activate(s.ctx);
     const msgs = [u("问".repeat(900)), u("中".repeat(900)), u("尾".repeat(900))];
     await s.listener(msgs);
-    expect(s.llmRequests[0]!.messages.length).toBeLessThan(msgs.length); // 裁掉最老段
-    expect(s.llmRequests[0]!.messages[s.llmRequests[0]!.messages.length - 1]).toEqual(msgs[msgs.length - 1]); // 保最新
+    expect(s.llmRequests[0]!.messages.length).toBeLessThan(msgs.length + 1); // 裁掉最老段（+1 = 尾指令消息）
+    expect(s.llmRequests[0]!.messages[s.llmRequests[0]!.messages.length - 2]).toEqual(msgs[msgs.length - 1]); // 保最新（末条是尾指令）
     expect(String(s.llmRequests[0]!.system)).toContain("已截去最早期部分");
     // 对照：窗口未知 → 不预收缩
     const s2 = setup({ config: { thresholdTokens: 1 } });
     await def.activate(s2.ctx);
     await s2.listener(msgs);
-    expect(s2.llmRequests[0]!.messages).toEqual(msgs);
+    expect(s2.llmRequests[0]!.messages).toEqual([...msgs, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }]);
     expect(String(s2.llmRequests[0]!.system)).not.toContain("已截去最早期部分");
   });
 

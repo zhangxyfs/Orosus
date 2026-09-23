@@ -102,11 +102,16 @@ function preShrinkSummaryInput(dropped: ModelMessage[], window: number | undefin
   return { input, truncated: true };
 }
 
-/** 摘要生成（D44）：失败/空产出/异常 → undefined（不装占位——宁可不压，pi/Reasonix 底线）。
+/** 摘要生成（D44）：失败/空产出/异常 → { error }（不装占位——宁可不压，pi/Reasonix 底线）；
+ *  成功 → { text }。error 带详情（可观测性——实机首例诊断曾因吞掉 errorMessage 抓瞎）。
  *  输入瘦身：工具结果超 maxToolChars 截断（瞬态标记，不落日志）；前次摘要检测（v3 origin 标 + v2 前缀兜底
  *  双路）→ 合并指令；预收缩截断 → 说明追加；focus（manual 命令路径）→ 指令尾「可选用户指令」块（kimi
- *  compactionInstruction.ts:9-15 同款）。 */
-async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxTokens: number; maxToolChars: number; focus?: string | undefined; truncated?: boolean }): Promise<string | undefined> {
+ *  compactionInstruction.ts:9-15 同款）。
+ *  尾部指令消息（2026-09-23 实机首例根因修复，kimi fullCompaction 原生形态——指令作最后一条 user 消息）：
+ *  摘要输入常以 assistant 消息结尾（对话在 agent 回复后被打断/完成），openai 端点对此形态会忽略 system
+ *  摘要指令、把请求当「继续自己的话」（实测 kimi coding 端点 13~35 token 碎片即停/空产出）——末尾补一条
+ *  显式 user 指令消息后同输入稳定产出完整摘要（710 token 实测对照）。 */
+async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxTokens: number; maxToolChars: number; focus?: string | undefined; truncated?: boolean }): Promise<{ text?: string; error?: string }> {
   let system = SUMMARY_SYSTEM;
   const first = dropped[0];
   const wasPrevSummary = first?.role === "user" && (
@@ -120,18 +125,21 @@ async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxToken
     if (m.role !== "toolResult" || m.output.length <= opts.maxToolChars) return m;
     return { ...m, output: `${m.output.slice(0, opts.maxToolChars)}\n[...truncated: original ${m.output.length} chars]` };
   });
+  const request: ModelMessage[] = [...slimmed, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }];
   try {
     let text = "";
-    let failed = false;
-    for await (const c of llm.stream({ system, messages: slimmed, maxTokens: opts.maxTokens })) {
+    let error: string | undefined;
+    for await (const c of llm.stream({ system, messages: request, maxTokens: opts.maxTokens })) {
       if (c.type === "text/delta") text += c.text;
-      if (c.type === "finish" && c.kind === "error") failed = true;
+      if (c.type === "finish" && c.kind === "error") error = c.errorMessage ?? "流以 error 结束（无详情）";
     }
-    if (!failed && text.trim() !== "") return text.trim();
-  } catch {
+    if (error !== undefined) return { error };
+    if (text.trim() === "") return { error: "空产出（模型未返回正文）" };
+    return { text: text.trim() };
+  } catch (err) {
     // llm 口契约不许 reject（§6.4）——违约者防御性兜底
+    return { error: `流异常：${err instanceof Error ? err.message : String(err)}` };
   }
-  return undefined;
 }
 
 /** prune 变换（模块侧）。与 convert.ts 的 turn/prune 应用是同一变换的双写（铁律 2 下模块不得 import core——
@@ -327,17 +335,19 @@ async function compactOnce(
 
   // ⑥ 摘要：六小节模板 + 前次合并（v3 标/v2 前缀双路）+ 截断说明 + focus（kimi compactionInstruction 同款）
   const maxTokens = opts.window !== undefined ? Math.min(cfg.summaryMaxTokens, Math.max(512, Math.floor(opts.window / 4))) : cfg.summaryMaxTokens;
-  const summary = await summarize(opts.llm, summaryInput, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars, focus: opts.focus, truncated });
+  const summaryResult = await summarize(opts.llm, summaryInput, { maxTokens, maxToolChars: cfg.summaryToolResultMaxChars, focus: opts.focus, truncated });
 
   // ⑦ 收敛检查（dsh 同款 + 512 显著性门槛）：压后必须更小——但玩具尺寸对话（[历史摘要] 包装 ≈9 token）
   // 天然不满足"严格变小"，只对非平凡大摘要（≥512 token，与 maxTokens 公式的 512 下限同源）执行；
   // 超长跑飞摘要照抓。执行期修正（计划⑪与⑮的夹具张力），T8 文档登记
-  if (summary === undefined) {
+  if (summaryResult.error !== undefined || summaryResult.text === undefined) {
     opts.state.consecutiveFailures++;
     opts.state.failPoint = est;
-    opts.log.warn("compaction.summary-failed", "摘要生成失败——不装占位（宁可不压）", { dropped: dropped.length });
-    return { kind: "failed", reason: "摘要生成失败（不装占位）", messages: afterPrune(), events };
+    const error = summaryResult.error ?? "未知失败";
+    opts.log.warn("compaction.summary-failed", "摘要生成失败——不装占位（宁可不压）", { dropped: dropped.length, error });
+    return { kind: "failed", reason: `摘要生成失败：${error}`, messages: afterPrune(), events };
   }
+  const summary = summaryResult.text;
   const fullSummary = summary + recoveryFooter(dropped.length, opts.sessionId); // ⑧ 页脚进 summary 字段（设计空白 3）
   const summaryMsg: ModelMessage = {
     role: "user",
