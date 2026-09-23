@@ -495,17 +495,16 @@ describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
 		input.emit("data", "/");
 		await flush(120);
 		const plain = overlayLines(app).map(stripAnsi);
-		// 结构恒定：标题 + ↑占位 + 10 行命令 + ↓行 + 分隔 + 2 行说明 + foot + 底框 = 18 行（标题下无装饰空行——用户打回）
-		expect(plain).toHaveLength(18);
-		const cmdRows = plain.slice(2, 12);
+		// 结构恒定：标题 + 10 行命令 + ↑↓合行 + 分隔 + 2 行说明 + foot + 底框 = 17 行（标题下无空行、余量提示合一行——用户打回两轮）
+		expect(plain).toHaveLength(17);
+		const cmdRows = plain.slice(1, 11);
 		expect(cmdRows.filter((l) => l.includes("/help") || l.includes("/title") || l.includes("/permission"))).toHaveLength(3);
 		expect(cmdRows.filter(isBlankRow)).toHaveLength(7); // 7 个空槽
-		expect(isBlankRow(plain[1]!)).toBe(true); // ↑ 常驻：窗口在顶时该行为空占位
-		expect(isBlankRow(plain[12]!)).toBe(true); // ↓ 常驻：3 条全显示无余量 → 空占位（行不消失）
+		expect(isBlankRow(plain[11]!)).toBe(true); // 合行常驻：3 条全显示无余量 → 空占位
 		app.stop();
 	});
 
-	it("超出 10 条滚动到底：↑ 行显示余量、↓ 行转空占位——行数仍 18", async () => {
+	it("超出 10 条滚动：合行随窗口位置显示「↑ 还有 N · ↓ 还有 M」，滚到底 ↓ 段消失——行数仍 17", async () => {
 		const r = rig();
 		r.io.slashCommands = () => Array.from({ length: 13 }, (_, i) => ({ name: `/c${String(i).padStart(2, "0")}`, desc: `第${i}`, long: `说明${i}` }));
 		const { app, input } = r;
@@ -513,12 +512,18 @@ describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
 		await flush();
 		input.emit("data", "/");
 		await flush(120);
-		input.emit("data", "\x1b[B".repeat(12)); // ↓ 到底
+		input.emit("data", "\x1b[6~"); // PageDown → sel=10，窗口 [1,11)：上下都有余量
 		await flush(120);
-		const plain = overlayLines(app).map(stripAnsi);
-		expect(plain).toHaveLength(18);
-		expect(plain[1]).toContain("↑ 还有"); // 头上有余量
-		expect(isBlankRow(plain[12]!)).toBe(true); // 底下没有 → 空占位（不再消失）
+		const mid = overlayLines(app).map(stripAnsi);
+		expect(mid).toHaveLength(17);
+		expect(mid[11]).toContain("↑ 还有 1");
+		expect(mid[11]).toContain("↓ 还有 2");
+		input.emit("data", "\x1b[6~"); // PageDown 再一次 → sel=12 到底（↓ 键回绕到顶，fullapp.ts down 取模——故用 PgDn）
+		await flush(120);
+		const bottom = overlayLines(app).map(stripAnsi);
+		expect(bottom).toHaveLength(17);
+		expect(bottom[11]).toContain("↑ 还有 3");
+		expect(bottom[11]).not.toContain("↓"); // 底下没有 → ↓ 段不出现
 		app.stop();
 	});
 });

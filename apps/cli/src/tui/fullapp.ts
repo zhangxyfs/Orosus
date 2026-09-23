@@ -1284,9 +1284,7 @@ export class FullApp {
 		const selI = Math.max(0, Math.min(items.length - 1, s.overlaySel));
 		const winStart = Math.max(0, Math.min(Math.max(0, items.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
 		const win = items.slice(winStart, winStart + OVERLAY_PAGE);
-		// 列表区恒定（2026-09-23 用户拍板：固定防闪烁）——↑↓ 提示行常驻占位（无内容时空行）、
-		// 命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
-		olines.push(boxRow(winStart > 0 ? theme.dim(`   ↑ 还有 ${winStart} 项`) : ""));
+		// 列表区恒定（2026-09-23 用户拍板：固定防闪烁）——命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
 		for (let i = 0; i < OVERLAY_PAGE; i++) {
 			const it = win[i];
 			if (it === undefined) {
@@ -1299,8 +1297,13 @@ export class FullApp {
 			const row = ` ${selPrefix} ${markSeg}${it.text}`;
 			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 		}
+		// 余量提示合并一行常驻（2026-09-23 用户打回：上下两行占 2 行不好看）——上下都有时「↑ 还有 N · ↓ 还有 M」，无余量时空占位
 		const rest = items.length - winStart - win.length;
-		olines.push(boxRow(rest > 0 ? theme.dim(`   ↓ 还有 ${rest} 项`) : ""));
+		const hints = [
+			winStart > 0 ? `↑ 还有 ${winStart} 项` : "",
+			rest > 0 ? `↓ 还有 ${rest} 项` : "",
+		].filter(Boolean).join(" · ");
+		olines.push(boxRow(hints === "" ? "" : theme.dim(`   ${hints}`)));
 		// 详释区恒定 3 行（同拍板）：说明最多 2 行，显示不下第 2 行末尾 "..."（占 3 列），第 3 行操作提示
 		const longW = oInner - 2;
 		const wrapped = wrapText(theme.dim(items[selI]?.long ?? ""), longW);
