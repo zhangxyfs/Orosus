@@ -14,8 +14,13 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         out.push({ role: "user", content: (e.content ?? []) as ContentPart[] });
         break;
       case "agent/steering-message": {
-        const items = (e.messages ?? []) as { text: string }[];
-        for (const m of items) out.push({ role: "user", content: [{ kind: "text", text: m.text }] });
+        const items = (e.messages ?? []) as { text: string; sourceModule?: string }[];
+        for (const m of items) out.push({
+          role: "user",
+          content: [{ kind: "text", text: m.text }],
+          // v3 设计空白 1：steering 注入打标（sourceModule 丢失 → "host" 宿主缺省）——compaction 谓词消费
+          origin: { kind: "steering", sourceModule: String(m.sourceModule ?? "host") },
+        });
         break;
       }
       case "assistant/message": {
@@ -23,8 +28,7 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         const content = ((e.content ?? []) as ContentPart[]).filter((p) => (p as { kind?: string }).kind !== "reasoning");
         out.push({ role: "assistant", content });
         break;
-      }
-      case "tool/call": {
+      }      case "tool/call": {
         seenCalls.add(String(e.callId));
         const last = out[out.length - 1];
         if (last?.role === "assistant") {
@@ -73,5 +77,8 @@ ${summary}` }] }, ...out.slice(keepFrom)];
         break; // session/header、turn/*、request/header、assistant/chunk、<module>/* 扩展事件不进模型投影
     }
   }
-  return out;
+  // 尾滤（2026-09-23 实测修复）：纯 reasoning 的 assistant/message（思考期被取消会落这种）滤掉
+  // reasoning 后 content 空且无 toolCalls——GLM 等 API 直接 400「assistant must not be empty」，不进投影。
+  // 带 toolCalls 的空 content 保留（纯工具回合的合法形态——loop.ts「不放空 text 段」先例）
+  return out.filter((m) => !(m.role === "assistant" && m.content.length === 0 && (m.toolCalls?.length ?? 0) === 0));
 }

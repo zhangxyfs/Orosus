@@ -8,15 +8,36 @@ export type Chunk =
   | { type: "usage"; input: number; output: number }
   | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string; errorCode?: string };
 
+/** 消费 stream 的标准形态（错误带内，不许 reject——§6.4）：
+ *
+ * @example
+ * ```ts
+ * for await (const c of stream(req)) {
+ *   if (c.type === "text/delta") text += c.text;
+ *   if (c.type === "finish") {
+ *     if (c.kind === "error") throw new Error(c.errorMessage);   // 消费侧此刻才升级为异常
+ *     break;
+ *   }
+ * }
+ * ```
+ */
+
 /** 内容块（M4-2.5 T5 扩 image 引用形态）：text 直存；image 只存路径——日志不吃 base64 4/3 膨胀，
  *  请求期由 provider 翻译层读文件转 base64（pi 两段式同款）；文件缺失诚实降级为文本占位。 */
 export type ContentPart =
   | { kind: "text"; text: string }
   | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" };
 
+/** 用户消息出处标记（v3 compaction 设计空白 1，kimi 式元数据）：用户直敲的消息不带 origin；
+ *  steering 注入带 kind + 来源模块（sourceModule === "host" = 宿主 busy 期插队话）；压缩摘要消息带
+ *  compaction-summary。只在内部流转——provider 适配器拼线缆消息只取 role/content/toolCalls，不发给模型厂商。 */
+export type MessageOrigin =
+  | { kind: "steering"; sourceModule: string }
+  | { kind: "compaction-summary" };
+
 /** convertToLlm 投影产出的模型消息（日志投影 → 模型消息，§6.1 铁律）。 */
 export type ModelMessage =
-  | { role: "user"; content: ContentPart[] }
+  | { role: "user"; content: ContentPart[]; origin?: MessageOrigin }
   | { role: "assistant"; content: ContentPart[]; toolCalls?: { callId: string; name: string; args: unknown }[] }
   | { role: "toolResult"; callId: string; output: string; isError: boolean };
 

@@ -39,11 +39,51 @@ describe("deriveMessages（model-visible ⟺ logged 的投影）", () => {
     });
   });
 
-  it("agent/steering-message 投影为 user 消息（先落日志再进请求，§6.2）", async () => {
+  it("agent/steering-message 投影为 user 消息（先落日志再进请求，§6.2）；v3 起带 origin 出处标记", async () => {
     const s = new InMemorySessionStore();
     await s.append("agent/steering-message", { messages: [{ text: "记得先跑测试", sourceModule: "todo" }] });
     const msgs = deriveMessages(await s.all());
-    expect(msgs).toEqual([{ role: "user", content: [{ kind: "text", text: "记得先跑测试" }] }]);
+    expect(msgs).toEqual([{
+      role: "user", content: [{ kind: "text", text: "记得先跑测试" }],
+      origin: { kind: "steering", sourceModule: "todo" },
+    }]);
+  });
+
+  it("steering 缺省 sourceModule 打 host（宿主 busy 期插队话——谓词保留位）；user/message 直投不带 origin（v3 设计空白 1）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("agent/steering-message", { messages: [{ text: "插队" }] });
+    await s.append("user/message", { content: [{ kind: "text", text: "直敲" }] });
+    const msgs = deriveMessages(await s.all());
+    expect(msgs[0]).toMatchObject({ origin: { kind: "steering", sourceModule: "host" } });
+    expect(msgs[1]).toMatchObject({ role: "user" });
+    expect((msgs[1] as { origin?: unknown }).origin).toBeUndefined();
+  });
+
+  it("纯 reasoning 的 assistant/message 投影跳过（2026-09-23 实测：思考期取消会落 reasoning-only 消息，" +
+    "滤掉 reasoning 后 content 为空数组 → GLM 等 API 400『assistant must not be empty』）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("user/message", { content: [{ kind: "text", text: "问" }] });
+    await s.append("assistant/message", { content: [{ kind: "reasoning", text: "只思考没正文" }] }); // 取消于思考期
+    await s.append("assistant/message", { content: [{ kind: "reasoning", text: "思" }, { kind: "text", text: "答" }] }); // 有正文保留
+    const msgs = deriveMessages(await s.all());
+    expect(msgs).toEqual([
+      { role: "user", content: [{ kind: "text", text: "问" }] },
+      { role: "assistant", content: [{ kind: "text", text: "答" }] },
+    ]);
+  });
+
+  it("reasoning-only 但带工具调用的 assistant 保留（工具链不断——tool/call 附挂）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("assistant/message", { content: [{ kind: "reasoning", text: "思" }] });
+    await s.append("tool/call", { callId: "c1", name: "tool-fs__read", args: { path: "a" } });
+    await s.append("tool/result", { callId: "c1", output: "x", isError: false });
+    const msgs = deriveMessages(await s.all());
+    expect(msgs[0]).toEqual({
+      role: "assistant",
+      content: [],
+      toolCalls: [{ callId: "c1", name: "tool-fs__read", args: { path: "a" } }],
+    }); // 带 toolCalls 的空 content 是合法工具回合（Anthropic 拒空 text 块由 content 留空数组先例承载）
+    expect(msgs[1]).toEqual({ role: "toolResult", callId: "c1", output: "x", isError: false });
   });
 });
 

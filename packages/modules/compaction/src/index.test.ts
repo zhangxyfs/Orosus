@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { CommandHandler, CommandUi, LlmPort, Listener } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
-import def, { configSchema, estimateTokens } from "./index.ts";
+import def, { collectRealUserMessages, configSchema, estimateTokens, isRealUserInput, selectUserMessages } from "./index.ts";
 
 type Ctx = Parameters<NonNullable<typeof def.activate>>[0];
 
@@ -343,6 +343,79 @@ describe("compaction 模块（M3 补强 T6/D44：锚定/窗口/prune 前置/预�
     expect(firstText(r[0])).toContain("短摘要");
     await s.listener([u("问"), u("中"), u("长".repeat(500))]);      // 自动尝试不再被熔断挡
     expect(s.llmRequests).toHaveLength(6);                         // 3 败 + 命令即时 1 + 自动 2（T3 过账：原 5——旧命令只置 force 不调 llm）
+  });
+});
+
+describe("v3 真实用户消息谓词（T1 设计空白 1：kimi 式 origin 元数据 + v2 文本兜底）", () => {
+  const su = (t: string, origin?: { kind: "steering"; sourceModule: string } | { kind: "compaction-summary" }): ModelMessage =>
+    ({ role: "user", content: [{ kind: "text", text: t }], ...(origin !== undefined ? { origin } : {}) });
+
+  it("① 直投（无 origin）保留——用户直接敲的", () => {
+    expect(isRealUserInput(u("hi"))).toBe(true);
+  });
+  it("② host steering 保留——busy 期用户插队话（kimi inTurn 同位）", () => {
+    expect(isRealUserInput(su("插队", { kind: "steering", sourceModule: "host" }))).toBe(true);
+  });
+  it("③ 模块注入的 steering 剥离——todo 提醒等", () => {
+    expect(isRealUserInput(su("记得喝水", { kind: "steering", sourceModule: "reminder" }))).toBe(false);
+  });
+  it("④ compaction-summary 剥离——上次的压缩摘要", () => {
+    expect(isRealUserInput(su("[历史摘要]\n旧", { kind: "compaction-summary" }))).toBe(false);
+  });
+  it("⑤ v2 旧投影无 origin 且 [历史摘要] 前缀 → 文本兜底剥离", () => {
+    expect(isRealUserInput(u("[历史摘要]\n旧摘要"))).toBe(false);
+    expect(isRealUserInput(u("[历史摘要]"))).toBe(false);
+  });
+  it("⑥ collectRealUserMessages 下标与输入对齐：只收真实用户消息、at 为投影下标", () => {
+    const msgs = [u("问1"), a("答"), su("插队", { kind: "steering", sourceModule: "host" }), su("提醒", { kind: "steering", sourceModule: "todo" }), u("问2")];
+    expect(collectRealUserMessages(msgs).map((x) => x.at)).toEqual([0, 2, 4]);
+  });
+});
+
+describe("v3 头尾预算选择（T1：kimi selectCompactionUserMessages 改编——整条粒度、下标集输出）", () => {
+  const big = (n: number): ModelMessage => u("x".repeat(n * 4)); // 拉丁 4:1 → 整 n token
+  it("① 总量不超预算 → 全保留、无 elision", () => {
+    const users = [big(10), big(10), big(10)].map((m, at) => ({ at, m }));
+    const sel = selectUserMessages(users, { max: 40, head: 5, totalEntries: 3 });
+    expect(sel).toMatchObject({ keepUserAt: [0, 1, 2], keepUserHead: 3, keepUserTail: 3, elided: false });
+  });
+  it("② 超限尾部整条装填：从最新往回、装不下整条就停（不截断）", () => {
+    const users = [big(10), big(10), big(10), big(10)].map((m, at) => ({ at, m }));
+    const sel = selectUserMessages(users, { max: 25, head: 5, totalEntries: 5 }); // tailBudget 20 → 尾 2 条
+    expect(sel.keepUserAt).toEqual([2, 3]);
+    expect(sel.keepUserHead).toBe(0); // 头预算 5 < 单条 10 → 头空（末下标 −1）
+    expect(sel.elided).toBe(true);
+    expect(sel.omittedEntries).toBe(2); // 尾段首 2 − 头段末 (−1) − 1
+  });
+  it("③ 头部装填：从最老往新装 head 预算", () => {
+    const users = [big(3), big(3), big(3), big(3)].map((m, at) => ({ at, m }));
+    const sel = selectUserMessages(users, { max: 8, head: 4, totalEntries: 4 }); // tailBudget 4 → 尾 1 条；head 4 → 头 1 条
+    expect(sel.keepUserAt).toEqual([0, 3]);
+    expect(sel).toMatchObject({ keepUserHead: 1, keepUserTail: 1, elided: true, omittedEntries: 2 }); // 3 − 0 − 1
+  });
+  it("④ 整条粒度边界：单条超全部预算 → 不进任何段（全进摘要），省略段到投影末", () => {
+    const users = [{ at: 0, m: big(100) }];
+    const sel = selectUserMessages(users, { max: 50, head: 10, totalEntries: 6 });
+    expect(sel.keepUserAt).toEqual([]);
+    expect(sel.omittedEntries).toBe(6); // 尾空 → totalEntries − (−1) − 1
+    expect(sel.elided).toBe(true);
+  });
+  it("⑤ 图片按 1000 token/张占位估算（estimateTokens 同口径）", () => {
+    const imgUser: ModelMessage = { role: "user", content: [
+      { kind: "text", text: "abcd" },
+      { kind: "image", path: "a.png", mimeType: "image/png" },
+      { kind: "image", path: "b.png", mimeType: "image/png" },
+    ] };
+    expect(estimateTokens([imgUser])).toBe(2001); // 1 + 2×1000
+    const users = [{ at: 0, m: imgUser }, { at: 1, m: big(1) }];
+    const sel = selectUserMessages(users, { max: 2002, head: 0, totalEntries: 2 });
+    expect(sel.keepUserAt).toEqual([0, 1]); // 2001 + 1 ≤ 2002 全保留
+  });
+  it("⑥ 下标集升序且为投影下标（非用户序号）——隔着 assistant/tool 也不受影响", () => {
+    const msgs = [u("问1"), a("答1"), u("问2"), tr("c1", 10), u("问3")];
+    const users = collectRealUserMessages(msgs);
+    const sel = selectUserMessages(users, { max: 999, head: 10, totalEntries: msgs.length });
+    expect(sel.keepUserAt).toEqual([0, 2, 4]);
   });
 });
 

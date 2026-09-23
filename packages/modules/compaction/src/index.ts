@@ -129,6 +129,71 @@ interface CompactLog {
   warn(code: string, msg: string, fields?: Record<string, unknown>): void;
 }
 
+/** 真实用户消息判定（v3 设计空白 1，kimi compactionUserMessageDisposition 同型——origin 缺省保守保留）：
+ *  直敲（无 origin）保留；宿主插队（steering + sourceModule==="host"，busy 期你敲的话）保留；
+ *  模块注入的 steering 提醒、压缩摘要（compaction-summary）剥离；v2 旧投影无 origin 且 [历史摘要]
+ *  前缀 → 文本兜底剥离（ZCode 冷恢复同款）。谓词只在模块侧执行一次（规格 §4），判定结果以事件下标集固化。 */
+export function isRealUserInput(m: ModelMessage): boolean {
+  if (m.role !== "user") return false;
+  if (m.origin === undefined) {
+    const first = m.content[0];
+    return !(first?.kind === "text" && first.text.startsWith("[历史摘要]"));
+  }
+  return m.origin.kind === "steering" && m.origin.sourceModule === "host";
+}
+
+/** 收集真实用户消息（kimi collectCompactableUserMessages :170-174 同型）——带投影下标（keepUserAt 重放锚的基）。 */
+export function collectRealUserMessages(messages: ModelMessage[]): { at: number; m: ModelMessage }[] {
+  const out: { at: number; m: ModelMessage }[] = [];
+  messages.forEach((m, at) => { if (isRealUserInput(m)) out.push({ at, m }); });
+  return out;
+}
+
+/** 头尾预算选择结果（v3）：keepUserAt 为重放锚（升序投影下标集）；keepUserHead 兼任重放期头尾分界锚
+ *  （keepUserAt 相邻下标差 >1 在段内也常态存在——用户消息之间天然隔着 assistant/tool 条目，分界必须由计数定）。 */
+export interface UserSelection {
+  keepUserAt: number[];
+  keepUserHead: number;
+  keepUserTail: number;
+  elided: boolean;
+  omittedEntries: number; // 省略的投影条目数 = 尾段首下标 − 头段末下标 − 1（头段空取 −1；尾段空 = 到投影末）
+}
+
+/** 头尾预算选择（kimi selectCompactionUserMessages :234-297 改编；差异 = 输出下标集、整条粒度不截断——
+ *  keepUserAt 下标锚定容不得截断形态，设计空白 7）。总量不超预算全保留无 elision；超限则尾段从最新
+ *  往回整条装填（max − head）、头段从最老往新整条装填 head。头尾数学上不重叠（ΣH ≤ head、
+ *  ΣT ≤ max − head < total）。totalEntries = 投影条目总数（尾段空时省略段算到投影末）。 */
+export function selectUserMessages(
+  users: { at: number; m: ModelMessage }[],
+  cfg: { max: number; head: number; totalEntries: number },
+): UserSelection {
+  const total = users.reduce((n, x) => n + msgTokens(x.m), 0);
+  if (users.length === 0 || total <= cfg.max) {
+    return { keepUserAt: users.map((x) => x.at), keepUserHead: users.length, keepUserTail: users.length, elided: false, omittedEntries: 0 };
+  }
+  const tailBudget = Math.max(0, cfg.max - cfg.head);
+  const tail: { at: number; m: ModelMessage }[] = [];
+  let used = 0;
+  for (let i = users.length - 1; i >= 0; i--) {
+    const cost = msgTokens(users[i]!.m);
+    if (used + cost > tailBudget) break;
+    used += cost;
+    tail.unshift(users[i]!);
+  }
+  const head: { at: number; m: ModelMessage }[] = [];
+  used = 0;
+  for (let i = 0; i < users.length; i++) {
+    const cost = msgTokens(users[i]!.m);
+    if (used + cost > cfg.head) break;
+    used += cost;
+    head.push(users[i]!);
+  }
+  const keepUserAt = [...head, ...tail].map((x) => x.at).sort((a, b) => a - b);
+  const headLastAt = head.length > 0 ? head[head.length - 1]!.at : -1;
+  const omittedEntries = (tail.length > 0 ? tail[0]!.at : cfg.totalEntries) - headLastAt - 1;
+  return { keepUserAt, keepUserHead: head.length, keepUserTail: tail.length, elided: true, omittedEntries };
+}
+
 /** compactOnce 结果（M4-2.5 T3）：拦截器与命令两路共用——事件由调用方落盘（先落日志再改值的可重建性契约不变）。 */
 type CompactResult =
   | { kind: "none"; events: [] }                                            // 未达阈值（自动路径常态）
