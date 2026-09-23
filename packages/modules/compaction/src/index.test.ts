@@ -406,19 +406,22 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     await s.listener(bigMsgs()); // 预热投影缓存（est < 60000 → 自动不触发、零事件）
     expect(s.appended).toHaveLength(0);
     const out = await s.command("", stubUi);
-    expect(out).toMatch(/已压缩：全部 \d+ 条历史 → 摘要（约 \d+ tokens，压前约 \d+ tokens）/);
-    expect(out).toContain("/summary");
+    expect(out).toMatch(/上下文压缩完成 \(\d+ → \d+ tokens\) \(Ctrl\+O 显示压缩摘要\)/); // 2026-09-23 用户拍板单行形态
     expect(out).not.toContain("保留尾部");
+    expect(out).not.toContain("这是摘要"); // 摘要本文不再进流区（Ctrl+O 查看）
     const ev = s.appended.find((e) => e.type === "turn/compaction")!;
     expect(ev.payload).toMatchObject({ trigger: "manual", keepUserAt: [], keepUserHead: 0, keepUserTail: 0, droppedCount: 40 });
     expect(s.llmRequests).toHaveLength(1); // 立即执行（不等下一条消息——修复前只返回「已安排」）
   });
 
-  it("② 摘要正文在返回文案中", async () => {
+  it("② 摘要本文不进返回文案（2026-09-23 用户拍板——单行完成反馈，摘要经 Ctrl+O 查看）", async () => {
     const s = setup();
     await def.activate(s.ctx);
     await s.listener(bigMsgs());
-    expect(await s.command("", stubUi)).toContain("这是摘要");
+    const out = await s.command("", stubUi);
+    expect(out).not.toContain("这是摘要");
+    // 摘要完整落在事件里（Ctrl+O 的数据源）
+    expect(String(s.appended.find((e) => e.type === "turn/compaction")!.payload.summary)).toContain("这是摘要");
   });
 
   it("③ 只落事件：miniReplay(原始, events) = [摘要] 单条（v3 manual 全量零保留，总量骤减——D20 投影自然应用）", async () => {
@@ -478,7 +481,7 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     await def.activate(s.ctx);
     const out = await s.command("", stubUi);
     expect(out).not.toContain("已安排");
-    expect(out).toContain("已压缩");
+    expect(out).toContain("上下文压缩完成");
     expect(s.llmRequests).toHaveLength(1);
     expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
     await s.command("", stubUi); // 连击：缓存已与已压投影对齐——不再重复压同前缀
@@ -599,7 +602,7 @@ describe("v3 manual 零拒绝 + focus（T6 缺陷 A：任何非空会话 /compac
     const s = setup({ coldProject: cold, config: { thresholdTokens: 60_000 } });
     await def.activate(s.ctx);
     const out = await s.command("", stubUi);
-    expect(out).toMatch(/已压缩：全部 \d+ 条历史/); // v2 现场：保留区找不到用户消息 → 「无可压缩空间」拒绝
+    expect(out).toMatch(/上下文压缩完成 \(\d+ → \d+ tokens\)/); // v2 现场：保留区找不到用户消息 → 「无可压缩空间」拒绝
     expect(s.appended.some((e) => e.type === "turn/compaction" && e.payload.trigger === "manual")).toBe(true);
   });
 
@@ -613,13 +616,12 @@ describe("v3 manual 零拒绝 + focus（T6 缺陷 A：任何非空会话 /compac
     expect(sys.indexOf("可选用户指令：")).toBeGreaterThan(sys.indexOf("## 待办与下一步")); // 追加在模板尾
   });
 
-  it("③ 结果文案 v3（设计空白 8）：报压前规模与摘要体量，「保留尾部」措辞退役；摘要本文走流区（决策 11）", async () => {
+  it("③ 结果文案 v3（2026-09-23 用户拍板单行形态）：压前→压后数字回落立现、「保留尾部」措辞退役；摘要本文不进流区（经 Ctrl+O 查看）", async () => {
     const s = setup({ coldProject: [u("问"), a("答"), u("再")] });
     await def.activate(s.ctx);
     const out = await s.command("", stubUi);
-    expect(out).toMatch(/已压缩：全部 3 条历史 → 摘要（约 \d+ tokens，压前约 \d+ tokens）/);
-    expect(out).toContain("这是摘要"); // 摘要本文在返回文案中（走流区）
-    expect(out).toContain("（/summary 随时可看本摘要）");
+    expect(out).toMatch(/上下文压缩完成 \(\d+ → \d+ tokens\) \(Ctrl\+O 显示压缩摘要\)/);
+    expect(out).not.toContain("这是摘要"); // 摘要本文不进流区
     expect(out).not.toContain("保留尾部");
     expect(out).not.toContain("对话尚短");
   });

@@ -260,7 +260,7 @@ type CompactResult =
   | { kind: "pruned"; messages: ModelMessage[]; events: CompactionEvent[] } // prune 免摘要救援
   | { kind: "skipped"; reason: "backoff" | "breaker" | "rapid-refill"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
   | { kind: "failed"; reason: string; messages?: ModelMessage[] | undefined; events: CompactionEvent[] } // 摘要失败/收敛不过（不装占位；缺陷 B 修：带回 prune 后投影供缓存回写——prune 已真实执行）
-  | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; summaryTokens: number; summary: string } };
+  | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; tokensAfter: number; summaryTokens: number; summary: string } };
 
 /** 压缩核心（v3/D57 触发分级重写）：阈值判定 → prune 前置 → 退避/熔断 → 分级保留（manual 全量零保留〔ZCode〕
  *  / auto 真实用户消息头尾预算〔kimi〕/ overflow 预算减半）→ 摘要（+预收缩保命闸）→ 收敛检查 → 页脚 → 落事件。
@@ -388,7 +388,7 @@ async function compactOnce(
   opts.state.toolResultsSinceCompact = 0;
   opts.state.toolResultsTotal = countToolResults(newMessages);
   opts.log.info("compaction.applied", "已压缩", { trigger, dropped: dropped.length, kept: sel.keepUserAt.length });
-  return { kind: "compacted", newMessages, events, stats: { dropped: dropped.length, kept: sel.keepUserAt.length, tokensBefore: est, summaryTokens: summaryCost, summary: fullSummary } };
+  return { kind: "compacted", newMessages, events, stats: { dropped: dropped.length, kept: sel.keepUserAt.length, tokensBefore: est, tokensAfter: estimateTokens(newMessages), summaryTokens: summaryCost, summary: fullSummary } };
 }
 
 export default defineModule({
@@ -473,8 +473,9 @@ export default defineModule({
           return `压缩失败：${r.reason}——${r.messages !== undefined ? "超长工具结果已裁剪（事件已落），" : ""}未产生摘要变更（可重试 /compact）`;
         case "compacted":
           lastSeenMessages = r.newMessages; // 缓存与已落事件对齐——防连击拿陈旧前缀双落事件（机制要点 1）
-          // v3 文案（设计空白 8）：manual 全量零保留——报压前规模与摘要体量，「保留尾部 N 条原文」措辞随形态退役
-          return `已压缩：全部 ${r.stats.dropped} 条历史 → 摘要（约 ${r.stats.summaryTokens} tokens，压前约 ${r.stats.tokensBefore} tokens）\n\n${r.stats.summary}\n\n（/summary 随时可看本摘要）`;
+          // v3 文案（2026-09-23 用户拍板 UI 形态）：单行完成反馈（数字回落立现），摘要本文不再进流区
+          // （经 Ctrl+O 查看——/summary 命令同批退役）；双色渲染（正文石青/括号灰）由 CLI 侧按括号段拆分
+          return `上下文压缩完成 (${r.stats.tokensBefore} → ${r.stats.tokensAfter} tokens) (Ctrl+O 显示压缩摘要)`;
       }
     });
   },

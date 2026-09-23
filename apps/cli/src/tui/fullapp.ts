@@ -73,6 +73,9 @@ export interface FullAppIO {
 	sidebarInit?(): boolean;
 	/** 侧栏开关变更（F5 十二轮②：宿主持久化 [tui] sidebar）。 */
 	onSidebarChange?(visible: boolean): void;
+	/** Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役，摘要查看唯一入口）。
+	 *  宿主读最近 turn/compaction 的 summary（overlay 文本灰色 muted 由宿主包裹）。 */
+	showCompactionSummary?(): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -93,6 +96,9 @@ interface AppState {
 	statePage: number;
 	scrollBack: number;
 	busy: boolean;
+	/** /compact 执行期（2026-09-23 用户拍板 UI 形态）：busy spinner 切换为「上下文压缩中…」石青（info）色——
+	 *  压缩是命令级动作，与 turn 生成的「正在生成…」区分。 */
+	compacting: boolean;
 	spinIdx: number;
 	sidebarVisible: boolean; // 右侧面板栏开关（Ctrl+T——用户拍板）
 	overlayOpen: boolean;
@@ -235,6 +241,7 @@ export class FullApp {
 			statePage: 0,
 			scrollBack: 0,
 			busy: false,
+			compacting: false,
 			spinIdx: 0,
 			sidebarVisible: io.sidebarInit?.() ?? true,
 			overlayOpen: false,
@@ -307,6 +314,7 @@ export class FullApp {
 		const s = this.state;
 		if (s.busy === b) return;
 		s.busy = b;
+		if (!b) s.compacting = false; // 压缩期随 busy 退出复位（兜底——exit() 正常路径已清）
 		if (b) {
 			this.busyTimer = setInterval(() => {
 				s.spinIdx = (s.spinIdx + 1) % SPIN_FRAMES.length;
@@ -317,6 +325,13 @@ export class FullApp {
 			clearInterval(this.busyTimer);
 			this.busyTimer = undefined;
 		}
+		this.scheduler.requestRender();
+	}
+
+	/** /compact 执行期标志（2026-09-23 用户拍板）：置位时 busy spinner 切「上下文压缩中…」石青（info）色。 */
+	setCompacting(b: boolean): void {
+		if (this.state.compacting === b) return;
+		this.state.compacting = b;
 		this.scheduler.requestRender();
 	}
 
@@ -550,6 +565,13 @@ export class FullApp {
 		}
 		if (key === "alt+v") {
 			this.io.requestPasteImage?.(); // F5 二轮⑬——全屏期 Alt+V 由 FullApp 接管（readline 侧已让位）
+			return;
+		}
+		if (key === "ctrl+o") {
+			// Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板——/summary 命令退役，摘要查看唯一入口；
+			// 无摘要时 toast 提示而非静默）
+			this.io.showCompactionSummary?.();
+			this.scheduler.requestImmediateRender();
 			return;
 		}
 
@@ -902,6 +924,10 @@ export class FullApp {
 		if (this.pendingUi !== undefined) return theme.dim("正在待命");
 		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
 		if (s.busy) {
+			if (s.compacting) {
+				// 压缩期（2026-09-23 用户拍板）：石青（info）色专属文案——与 turn 生成的「正在生成…」区分
+				return `${theme.fg("info", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("info", "上下文压缩中…")}`;
+			}
 			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
 		}
 		return theme.dim("正在待命");

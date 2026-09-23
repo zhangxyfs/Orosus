@@ -240,7 +240,7 @@ export class DocModel {
 				for (const m of msgs) if (typeof m.text === "string" && m.text !== "") this.userPrompt(m.text);
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
-				this.lines.push({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（/summary 查看）]` });
+				this.lines.push({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });
 			}
 		}
 		this.settleActive();

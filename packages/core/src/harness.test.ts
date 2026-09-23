@@ -980,28 +980,8 @@ describe("/context 余量（M4-2 T20/B20——窗口感知 + usage 锚点零新�
   });
 });
 
-describe("/summary 内建命令（M4-2.5 T4——压缩调研 P2：摘要可见性）", () => {
-  it("① 有压缩 → 输出摘要全文与次数/压前缀条数", async () => {
-    const store = new InMemorySessionStore();
-    const h = await makeHarness({ store });
-    await store.append("turn/compaction", { summary: "这是第一份摘要", keepFrom: 4, droppedCount: 4 });
-    const out = await h.prompt("/summary");
-    expect(out).toContain("这是第一份摘要");
-    expect(out).toContain("第 1 次");
-    expect(out).toContain("压前缀 4 条");
-    await h.close();
-  });
-
-  it("② 无压缩 → 提示走 notice 通道（批⑧ toast 化），命令返回静默空串", async () => {
-    const notes: string[] = [];
-    const ui: CommandUi = { ask: async () => "", askSecret: async () => "", choose: async (_t, i) => i[0]!, confirm: async () => true, notice: (t) => notes.push(t) };
-    const h = await makeHarness({ commandUi: ui });
-    const out = await h.prompt("/summary");
-    expect(out).toBe(""); // 静默约定
-    expect(notes.some((t) => t.includes("尚未压缩过") && t.includes("/compact"))).toBe(true);
-    await h.close();
-  });
-});
+// /summary 内建命令已退役（2026-09-23 用户拍板：查看口改 CLI Ctrl+O，读最近 turn/compaction 的
+// summary——h.history() 读口开放零契约损失）；原 ①② 测试随命令移除（/usage /status 退役同先例）
 
 describe("prompt images（M4-2.5 T5——/paste 图进模型上下文，V.2 销账）", () => {
   it("⑦ prompt(text, {images}) → user/message 事件 content 含 image part（path 原样）", async () => {
@@ -1075,5 +1055,47 @@ describe("fork 即刻落盘与 header 兜底（2026-09-22 用户实测：fork �
     expect(events[0]!.type).toBe("session/header"); // 兜底：header 永远第一行
     expect(events[1]!.type).toBe("m/mark");
     expect(verifyChain(events)).toEqual([]);
+  });
+});
+
+describe("steer 宿主注入口（2026-09-23 消息队列批——kimi Ctrl-S 同语义，宿主键位 Ctrl+U）", () => {
+  it("turn 进行中 steer → agent/steering-message 落日志 + 下一请求上下文可见；空闲 → false", async () => {
+    const { defineModule } = await import("@orosus/contracts/module");
+    const { providerSlotKey } = await import("@orosus/contracts/provider");
+    dir = mkdtempSync(join(tmpdir(), "orosus-steer-"));
+    const requests: { messages: unknown }[] = [];
+    let releaseFirst: () => void = () => {};
+    const gate = new Promise<void>((r) => { releaseFirst = r; });
+    // 门控 provider：第一请求挂起（给 steer 留出窗口），第二请求直接放
+    const gated = defineModule({
+      name: "provider-fake", version: "0.1.0", description: "gated", api: 1,
+      activate(ctx) {
+        ctx.provide(providerSlotKey("fake"), (req: { messages: unknown }) => (async function* () {
+          requests.push(req);
+          if (requests.length === 1) await gate;
+          yield { type: "text/delta", text: "ok" } as Chunk;
+          yield { type: "finish", kind: "stop" } as Chunk;
+        })());
+      },
+    });
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [gated],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    expect(h.steer("空闲注入")).toBe(false); // 无进行中 turn
+    const p = h.prompt("hi");
+    while (requests.length === 0) await new Promise((r) => setTimeout(r, 5)); // 等第一请求进门
+    expect(h.steer("补充说明")).toBe(true);
+    releaseFirst();
+    await p;
+    const all = await h.history();
+    const sm = all.find((e) => e.type === "agent/steering-message") as { messages?: { text: string }[] } | undefined;
+    expect(sm?.messages?.[0]?.text).toBe("补充说明"); // 先落日志（铁律）
+    expect(requests.length).toBe(2); // followUp 兜底续 turn——停止边界注入后再跑一轮
+    expect(JSON.stringify(requests[1]!.messages)).toContain("补充说明"); // 投影 = user 消息进上下文
+    await h.close();
   });
 });

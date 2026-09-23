@@ -33,7 +33,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
-import { withCompactHint } from "./compact-hint.ts";
+import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 
@@ -377,9 +377,37 @@ attachAltVPaste({
   },
   enabled: () => activeApp === undefined, // 全屏期 Alt+V 归 FullApp（F5 走查：此处直写 lv 毁屏）
 });
+// Ctrl+O 行模式查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役后的唯一入口；摘要逐行灰色 muted）。
+// keypress 多播同 altpaste 模式；全屏期让位（FullApp 的 ctrl+o 经 io.showCompactionSummary 出 overlay）。
+if (process.stdin.isTTY === true) {
+  process.stdin.on("keypress", (_s, k) => {
+    if (activeApp !== undefined) return;
+    if (k?.name !== "o" || k?.ctrl !== true) return;
+    void (async () => {
+      const last = (await h.history()).filter((e) => e.type === "turn/compaction").at(-1) as { summary?: unknown } | undefined;
+      const lines = last?.summary === undefined
+        ? [theme.fg("info", "本会话还没有压缩摘要（/compact 后可看）")]
+        : String(last.summary).split("\n").map((l) => theme.fg("muted", l));
+      const w = rl as unknown as { line: string; cursor: number };
+      w.line = "";
+      w.cursor = 0;
+      process.stdout.write("\r\x1b[K");
+      for (const l of lines) console.log(l);
+      process.stdout.write("> ");
+    })();
+  });
+}
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
 // 全屏 = DocModel（FullApp 的行源）。模式切换只换 sink 指向，attachRender 订阅每会话一次不重挂。
 let dm = new DocModel();
+
+/** 压缩完成行双色（2026-09-23 用户拍板）：「上下文压缩完成」石青（info）+ 两段括号灰（muted）——
+ *  模块返回纯文本一行（数字与指针），CLI 按括号段拆分上色；不匹配的形态原样返回（防御）。 */
+const renderCompactDoneLine = (s: string): string => {
+  const m = s.match(/^(上下文压缩完成) (\([^)]*\)) (\([^)]*\))$/);
+  if (m === null) return s;
+  return `${theme.fg("info", m[1]!)} ${theme.fg("muted", m[2]!)} ${theme.fg("muted", m[3]!)}`;
+};
 // 全屏流区宽 = 左栏内容宽（F5 三轮②③——此前按整屏宽折行，流区只有左栏，每行尾部被截）
 const streamW = (): number =>
   tuiMode === "full" ? (activeApp?.streamCols ?? process.stdout.columns ?? 80) : (process.stdout.columns ?? 80);
@@ -609,23 +637,37 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         const { text: cleaned, attachments } = resolveAtRefs(textNoImg, process.cwd());
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
-        // /compact 进度指示（TUI 批 T7）：命中时 h.prompt 前经 lv 写指示行，settle 后 discard 擦除——
-        // 结果/错误由下方 console 输出（不经 liveview），视觉上指示行被结果替换；非 TTY 零输出变化。
+        // /compact 进度指示（TUI 批 T7）：行模式经 lv 活动行、全屏经 busy spinner 专属形态（2026-09-23 用户拍板：
+        // 「上下文压缩中…」石青色）；settle 后行模式 discard 擦除、全屏退出专属形态——结果由下方输出替换。
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
         const cmdOut = await withCompactHint(
           text,
-          // 全屏期不走 lv（直写 stdout 毁 alt-screen——F5 走查实证）；忙碌 spinner 已承载进度语义
           {
-            isTTY: process.stdout.isTTY === true && activeApp === undefined,
-            activity: (s) => lv.activity({ kind: "text", text: s }),
-            discard: () => lv.discard(),
+            isTTY: process.stdout.isTTY === true,
+            activity: (s) => { if (activeApp === undefined) lv.activity({ kind: "text", text: s }); },
+            discard: () => { if (activeApp === undefined) lv.discard(); },
+            // 局部捕获（闭包执行时 activeApp 可能已换界——全屏/行模式切换中）：捕获时定钩子归属
+            fullscreen: (() => {
+              const app = activeApp;
+              return app !== undefined
+                ? { enter: () => app.setCompacting(true), exit: () => app.setCompacting(false) }
+                : undefined;
+            })(),
           },
           () => h.prompt(withAt, imagesFor(imgs)), // 挂起的图以 image part 随本条消息发出（M4-2.5 T5；文内 token 形态自 2026-09-23）
         );
         for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
         pendingLineSeqs = [];
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
-        if (cmdOut !== undefined && cmdOut !== "") out(cmdOut);
+        if (cmdOut !== undefined && cmdOut !== "") {
+          // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
+          // 通道不经 md 渲染（pushMd 会吃掉转义序列）；行模式 console 直出同款
+          if (isCompactCommand(text) && cmdOut.startsWith("上下文压缩完成")) {
+            const line = renderCompactDoneLine(cmdOut);
+            if (activeApp !== undefined) dm.pushLine(line);
+            else console.log(line);
+          } else out(cmdOut);
+        }
       } catch (err) {
         // Esc 带内取消（TUI 批 T3/D52③）静默回提示符——「[错误] 已取消（Esc）」行是噪音
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
@@ -800,7 +842,8 @@ const openOtherPanel = async (app: FullApp): Promise<void> => {
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
 const BUSY_EXEC = new Set(["/model", "/permission", "/yolo", "/auto", "/title", "/rename"]); // /auto 与 /yolo 同族（批⑧）
-const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider", "/summary"]);
+// /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
+const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
 
 /** /model 切换反馈（2026-09-22 用户拍板：harness 静默返回，流区不落行）：前后 diff h.status().model——
@@ -879,9 +922,9 @@ const SLASH_ITEMS: SlashItem[] = [
 	{
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：Always Ask 全确认 / Ask When Needed 危险才确认 / Never Ask 全放行。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},
-	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把早期对话折叠成摘要，释放 token 空间。压缩期间显示进度指示，完成后可用 /summary 回看过往摘要。" },
+	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
-	{ name: "/summary", desc: "查看压缩摘要", long: "回看最近一次 /compact 产生的上下文摘要全文。" },
+	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
 		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）。",
 	},
@@ -971,6 +1014,15 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
     sidebarInit: () => tuiSidebarRead(), // 即时读（F5 十四轮：会话切换重建 FullApp——不能用进程启动快照）
     onSidebarChange: (visible) => tuiSidebarPersist(visible), // Ctrl+T 状态持久化
+    // Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役后的唯一入口；摘要文本灰色 muted）
+    showCompactionSummary: async () => {
+      const last = (await h.history()).filter((e) => e.type === "turn/compaction").at(-1) as { summary?: unknown } | undefined;
+      if (last === undefined || last.summary === undefined) {
+        app.showToast("本会话还没有压缩摘要（/compact 后可看）");
+        return;
+      }
+      app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n")); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
+    },
     thinkOpen: () => dm.thinkOpen,
     toggleThink: () => {
       dm.thinkOpen = !dm.thinkOpen;

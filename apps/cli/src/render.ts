@@ -101,7 +101,7 @@ export function toolResultChip(output: unknown, isError: unknown): string {
 export function renderEvent(e: SessionEvent, state: RenderState): string {
   if (e.type === "tool/call") return `${closeReasoning(state)}\n${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd())}\n`;
   if (e.type === "tool/result") return `${toolResultChip(e.output, e.isError)}\n`;
-  if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（/summary 查看）]\n`;
+  if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
   return "";
@@ -141,7 +141,7 @@ export function renderHistoryLines(events: SessionEvent[], width: number): strin
       out.push(`  ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd()).replace("● Using ", "Used ")}`);
     } else if (e.type === "turn/compaction") {
       // 压缩点回显（M4-2.5 T4——压缩调研 §4.2：resume 后压缩点完全隐形是六家独一份的偏差）
-      out.push(`  [已压缩：${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条历史 → 摘要（/summary 查看）]`);
+      out.push(`  [已压缩：${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]`);
     }
   }
   return out;

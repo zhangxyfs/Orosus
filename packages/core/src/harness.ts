@@ -15,6 +15,7 @@ import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 import { diffGraphs, type ReloadReport } from "./kernel/reload.ts";
 import { loadTrustStore, checkTrust } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
+import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
 
@@ -60,6 +61,11 @@ export interface HarnessOptions {
 export interface Harness {
   prompt(text: string, opts?: { images?: string[] | undefined }): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined。images = /paste 挂起图（M4-2.5 T5）
   cancel(): void;
+  /** Steering 注入口（2026-09-23 消息队列批——kimi Ctrl-S 同语义，宿主键位 Ctrl+U）：turn 进行中
+   *  把文本注入当前 turn——loop 下一 step 边界（steering collect 链）或停止边界（followUp 兜底，
+   *  错过窗口不丢消息）作为 agent/steering-message 落日志并进上下文（投影 = user 消息）。
+   *  无进行中 turn → false（调用方回退排队/直接提交）。 */
+  steer(text: string): boolean;
   /** 当前会话 id（/fork 等宿主侧会话操作的消费面，D41/T6）。 */
   readonly sessionId: string;
   /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
@@ -283,6 +289,20 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
+  // steering 宿主口（2026-09-23 消息队列批）：backlog 挂 collect 链——steering 在每个 step 首排空，
+  // followUp 在停止边界兜底（错过窗口的消息仍进本 turn，不丢）。reload 复用同一 bus（reuse），
+  // WeakSet 防重注册；owner 记 "host"（非模块——宿主直挂核心口）
+  const steerBacklog: string[] = [];
+  const steerHooked = new WeakSet<object>();
+  const ensureSteerHook = (bus: EventBus): void => {
+    if (steerHooked.has(bus)) return;
+    steerHooked.add(bus);
+    const drain = (): { text: string; sourceModule: string }[] => steerBacklog.splice(0).map((text) => ({ text, sourceModule: "host" }));
+    bus.on(CORE_POINTS.steering, drain, "host");
+    bus.on(CORE_POINTS.followUp, drain, "host");
+  };
+  ensureSteerHook(graph.bus);
+
   // header 懒写（M4-1 T0/D46 止血）：构造期零落盘——临时会话（CLI 启动即退 / --dump-modules / 引导后未聊）
   // 不再各留一个空壳文件（走查垃圾场 1147 文件的主源头）。首次真实 turn 前补写（命令派发不触发——
   // onboarding 的 /provider、/reload 不落盘），保持 §6.1「文件首行 = session/header」不变量；
@@ -459,17 +479,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const pct = contextWindow !== undefined ? Math.round((used / contextWindow) * 100) : undefined;
       return `模型: ${modelNow}\n窗口: ${contextWindow !== undefined ? `${contextWindow} tokens` : "未知（/provider import --model 可写入）"}\n已用: ~${used} tokens${pct !== undefined ? `（${pct}%）` : ""}`;
     }],
-    ["/summary", async () => {
-      // 压缩摘要查看口（M4-2.5 T4——压缩调研 P2：六家独一份的「摘要不可见」补齐）——直读最近 turn/compaction 事件
-      const compactions = (await store.all()).filter((e) => e.type === "turn/compaction");
-      const last = compactions.at(-1) as { summary?: string; droppedCount?: number } | undefined;
-      if (last === undefined) {
-        // 纯提示走 notice（批⑧：toast 浮动窗/行模式单行，不落流区）+ 空串静默
-        commandUi.notice?.("本会话尚未压缩过——上下文增长到阈值会自动压缩，或随时 /compact 手动压缩");
-        return "";
-      }
-      return `[压缩摘要（本会话第 ${compactions.length} 次，压前缀 ${last.droppedCount ?? "?"} 条）]\n\n${String(last.summary ?? "")}`;
-    }],
+    // /summary 已退役（2026-09-23 用户拍板）：查看口改 CLI Ctrl+O（直读最近 turn/compaction 的
+    // summary——h.history() 读口开放，零契约损失；/usage /status 退役抽读口同先例）
   ]);
 
   // F5 十轮：核心顶层键名 provider（旧 model 键兼容读——分层合并两键都在时 provider 胜）
@@ -604,6 +615,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     cancel() {
       currentTurn?.controller.abort();
+    },
+
+    steer(text) {
+      if (!currentTurn) return false; // 无进行中 turn——调用方回退排队/直接提交
+      steerBacklog.push(text);
+      return true;
     },
 
     events() {
@@ -744,6 +761,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // disposeFn 清理资源——preserved 实例不经此路（句柄被新图沿用）
       await oldGraph.disposeOwners([...removedOrChanged]);
       graph = newGraph;
+      ensureSteerHook(graph.bus); // reuse 同 bus 时 WeakSet 短路；新 bus 兜底重挂
       const d = diffGraphs(oldDefs, newGraph.defs());
       const failed = newGraph.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" }));
       const report: ReloadReport = { added: d.added, removed: d.removed, reloaded: d.reloaded, unchanged: d.unchanged, failed };
