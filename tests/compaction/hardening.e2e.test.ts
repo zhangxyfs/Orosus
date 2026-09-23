@@ -125,7 +125,7 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     });
     await h.prompt("一");
     await h.prompt("二");
-    expect(render.buf.join("")).toContain("[已压缩：前缀 3 条 → 摘要（/summary 查看）]"); // v3：dropped = 全部 3 条（渲染行读 droppedCount，代码零改动）
+    expect(render.buf.join("")).toContain("[已压缩：3 条历史 → 摘要（/summary 查看）]"); // v3：dropped = 全部 3 条（渲染行读 droppedCount；措辞随形态更新）
     await h.close();
   });
 

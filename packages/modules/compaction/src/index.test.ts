@@ -397,8 +397,9 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     await s.listener(bigMsgs()); // 预热投影缓存（est < 60000 → 自动不触发、零事件）
     expect(s.appended).toHaveLength(0);
     const out = await s.command("", stubUi);
-    expect(out).toMatch(/已压缩：前缀 \d+ 条 → 摘要（约 \d+ tokens，压前 \d+）/);
+    expect(out).toMatch(/已压缩：全部 \d+ 条历史 → 摘要（约 \d+ tokens，压前约 \d+ tokens）/);
     expect(out).toContain("/summary");
+    expect(out).not.toContain("保留尾部");
     const ev = s.appended.find((e) => e.type === "turn/compaction")!;
     expect(ev.payload).toMatchObject({ trigger: "manual", keepUserAt: [], keepUserHead: 0, keepUserTail: 0, droppedCount: 40 });
     expect(s.llmRequests).toHaveLength(1); // 立即执行（不等下一条消息——修复前只返回「已安排」）
@@ -579,6 +580,47 @@ describe("v3 rapid-refill 熔断（T3：ZCode 状态机形状——压缩后秒�
     const r = await s.listener([u("问"), tr("c1", 10), tr("c2", 10), u("尾")]); // sinceCompact 2 < 3 但 compactedEver false
     expect(r).toBeDefined(); // 正常压缩、不误判 refill
     expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
+  });
+});
+
+describe("v3 manual 零拒绝 + focus（T6 缺陷 A：任何非空会话 /compact 都能压；可带焦点指令）", () => {
+  it("① 73k 长工作段会话 manual 成功（缺陷 A 回归钉——末条用户消息后全是 agent 工具链，v2 必拒）", async () => {
+    const cold: ModelMessage[] = [u("帮我做迁移")];
+    for (let i = 0; i < 36; i++) cold.push(a(""), tr(`c${i}`, 8_000)); // ≈ 72k token 的纯工具链
+    const s = setup({ coldProject: cold, config: { thresholdTokens: 60_000 } });
+    await def.activate(s.ctx);
+    const out = await s.command("", stubUi);
+    expect(out).toMatch(/已压缩：全部 \d+ 条历史/); // v2 现场：保留区找不到用户消息 → 「无可压缩空间」拒绝
+    expect(s.appended.some((e) => e.type === "turn/compaction" && e.payload.trigger === "manual")).toBe(true);
+  });
+
+  it("② focus 焦点指令进摘要指令尾（kimi/ZCode 两家同款——「可选用户指令：」块）", async () => {
+    const s = setup({ coldProject: [u("问"), a("答"), u("再")] });
+    await def.activate(s.ctx);
+    await s.command("重点保留数据库迁移部分", stubUi);
+    const sys = String(s.llmRequests[0]!.system);
+    expect(sys).toContain("可选用户指令：");
+    expect(sys).toContain("重点保留数据库迁移部分");
+    expect(sys.indexOf("可选用户指令：")).toBeGreaterThan(sys.indexOf("## 待办与下一步")); // 追加在模板尾
+  });
+
+  it("③ 结果文案 v3（设计空白 8）：报压前规模与摘要体量，「保留尾部」措辞退役；摘要本文走流区（决策 11）", async () => {
+    const s = setup({ coldProject: [u("问"), a("答"), u("再")] });
+    await def.activate(s.ctx);
+    const out = await s.command("", stubUi);
+    expect(out).toMatch(/已压缩：全部 3 条历史 → 摘要（约 \d+ tokens，压前约 \d+ tokens）/);
+    expect(out).toContain("这是摘要"); // 摘要本文在返回文案中（走流区）
+    expect(out).toContain("（/summary 随时可看本摘要）");
+    expect(out).not.toContain("保留尾部");
+    expect(out).not.toContain("对话尚短");
+  });
+
+  it("④ 空历史提示保留（唯一提示情形——其余零拒绝，规格决策 10）", async () => {
+    const s = setup({ coldProject: [] });
+    await def.activate(s.ctx);
+    expect(await s.command("", stubUi)).toBe("");
+    expect(notices.some((t) => t.includes("无可压缩历史"))).toBe(true);
+    expect(s.appended).toHaveLength(0);
   });
 });
 

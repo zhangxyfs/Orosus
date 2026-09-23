@@ -430,9 +430,10 @@ export default defineModule({
       if ((p as { code?: string })?.code === "context_limit") forceKind = "overflow";
     });
 
-    ctx.contribute.command("compaction__compact", async (_args, ui) => {
+    ctx.contribute.command("compaction__compact", async (args, ui) => {
       // 纯提示类结果走 ui.notice（批⑧：toast 浮动窗/行模式单行，不落流区）+ 返回空串（静默约定）；
-      // 有实质内容的（摘要本文/失败详情/裁剪结果）仍走流区
+      // 有实质内容的（摘要本文/失败详情/裁剪结果）仍走流区。
+      // args = focus 焦点指令（v3/T6，kimi/ZCode 两家同款：/compact 后剩余文本追加进摘要指令尾）
       if (lastSeenMessages === undefined) {
         // 冷投影重建（M5 F5 二轮⑰ 用户拍板：/compact 必须立即执行，「等下一条」语义废弃）——
         // ctx.session.messages 读口（契约扩展，与 agentLoop 同投影）；宿主无读口才回落旧延期语义
@@ -445,7 +446,8 @@ export default defineModule({
         lastSeenMessages = projected;
       }
       if (lastSeenMessages.length === 0) { ui.notice?.("无可压缩历史（本会话还没有对话）"); return ""; }
-      const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log, sessionId: ctx.session.id });
+      const focus = args.trim();
+      const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log, sessionId: ctx.session.id, focus: focus !== "" ? focus : undefined });
       for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
       switch (r.kind) {
         case "none": ui.notice?.("无可压缩历史（本会话还没有对话）"); return "";
@@ -461,7 +463,8 @@ export default defineModule({
           return `压缩失败：${r.reason}——${r.messages !== undefined ? "超长工具结果已裁剪（事件已落），" : ""}未产生摘要变更（可重试 /compact）`;
         case "compacted":
           lastSeenMessages = r.newMessages; // 缓存与已落事件对齐——防连击拿陈旧前缀双落事件（机制要点 1）
-          return `已压缩：前缀 ${r.stats.dropped} 条 → 摘要（约 ${r.stats.summaryTokens} tokens，压前 ${r.stats.tokensBefore}）\n\n${r.stats.summary}\n\n（保留尾部 ${r.stats.kept} 条原文——/summary 随时可看本摘要）`;
+          // v3 文案（设计空白 8）：manual 全量零保留——报压前规模与摘要体量，「保留尾部 N 条原文」措辞随形态退役
+          return `已压缩：全部 ${r.stats.dropped} 条历史 → 摘要（约 ${r.stats.summaryTokens} tokens，压前约 ${r.stats.tokensBefore} tokens）\n\n${r.stats.summary}\n\n（/summary 随时可看本摘要）`;
       }
     });
   },

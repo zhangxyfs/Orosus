@@ -101,7 +101,7 @@ export function toolResultChip(output: unknown, isError: unknown): string {
 export function renderEvent(e: SessionEvent, state: RenderState): string {
   if (e.type === "tool/call") return `${closeReasoning(state)}\n${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd())}\n`;
   if (e.type === "tool/result") return `${toolResultChip(e.output, e.isError)}\n`;
-  if (e.type === "turn/compaction") return `\n[已压缩：前缀 ${Number(e.droppedCount ?? 0)} 条 → 摘要（/summary 查看）]\n`;
+  if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（/summary 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
   return "";
@@ -141,7 +141,7 @@ export function renderHistoryLines(events: SessionEvent[], width: number): strin
       out.push(`  ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd()).replace("● Using ", "Used ")}`);
     } else if (e.type === "turn/compaction") {
       // 压缩点回显（M4-2.5 T4——压缩调研 §4.2：resume 后压缩点完全隐形是六家独一份的偏差）
-      out.push(`  [已压缩：前缀 ${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条 → 摘要（/summary 查看）]`);
+      out.push(`  [已压缩：${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条历史 → 摘要（/summary 查看）]`);
     }
   }
   return out;
@@ -162,7 +162,14 @@ export function historyPage(lines: string[], page = 30): { shown: string[]; hidd
  *  /--print 零变化）。事件路输出接 io.write（工具行/压缩行直写——混入重绘区会固化序错乱）。 */
 export function attachRender(
   h: Harness,
-  io: { write(s: string): void; activity?(c: StreamChunk): void },
+  io: {
+    write(s: string): void;
+    activity?(c: StreamChunk): void;
+    /** 工具调用结构化口（2026-09-23 走查批）：全屏 DocModel 提供时 tool/call 不再压成一行文本——
+     *  args 留存供 diff/失败体渲染（Alt+O 折叠）；缺省 = 旧文本形态（行模式/--print 零变化）。 */
+    toolCall?(name: string, args: Record<string, unknown> | undefined): void;
+    toolResult?(output: unknown, isError: unknown): void;
+  },
   onEvent?: (e: SessionEvent) => void,
 ): void {
   const state = createRenderState();
@@ -182,6 +189,15 @@ export function attachRender(
   void (async () => {
     for await (const e of h.events()) {
       onEvent?.(e);
+      // 结构化工具口优先（全屏）：tool/call / tool/result 不走文本压行
+      if (e.type === "tool/call" && io.toolCall !== undefined) {
+        io.toolCall(String(e.name), e.args as Record<string, unknown> | undefined);
+        continue;
+      }
+      if (e.type === "tool/result" && io.toolResult !== undefined) {
+        io.toolResult(e.output, e.isError);
+        continue;
+      }
       const out = renderEvent(e, state);
       if (out !== "") io.write(out);
     }
