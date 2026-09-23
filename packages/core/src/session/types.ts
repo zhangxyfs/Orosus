@@ -36,7 +36,7 @@ export const LOG_TYPES = {
   toolCall: "tool/call",
   toolResult: "tool/result",
   requestHeader: "request/header",
-  turnCompaction: "turn/compaction",   // §6.1 压缩：{ summary, keepFrom, droppedCount }——compaction 模块写入（owner 制例外），投影应用
+  turnCompaction: "turn/compaction",   // §6.1 压缩——compaction 模块写入（owner 制例外），投影应用。v2 载荷 { summary, keepFrom, droppedCount }；v3（D57）增 { trigger, keepUserAt, keepUserHead, keepUserTail }（summary/droppedCount 沿用；trigger 缺席走 v2 规则——信封 v:1 后置覆盖抹载荷 v 字段，版本判据用 trigger 在场性）
   turnPrune: "turn/prune",             // §6.1 裁剪（M3 补强 D44）：{ prunes: [{ at, headChars, tailChars }], prunedChars }——compaction 模块写入（owner 制例外第二枚），投影应用
   sessionFork: "session/fork",         // §6.1 结构：fork 记录源 entry id——harness 直写（M3/T6）
   sessionLabel: "session/label",       // §6.1 结构：会话标签——harness 直写（M3/T6 预留）

@@ -1,6 +1,23 @@
 import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
 import type { SessionEvent } from "../session/types.ts";
 
+/** elision 固定模板（v3 设计空白 4，kimi buildCompactionElisionText 语义、条数口径改投影条目）。
+ *  核心确定性生成（重放与 config 无关，D44）；模块侧返回值同款双写（铁律 2 两份代码，测试钉逐字一致）。 */
+const COMPACTION_ELISION = (omitted: number): string =>
+  `[Some messages were omitted here during compaction: ${omitted} messages between the oldest and the most recent user input are covered by the compaction summary at the end.]`;
+
+/** 图片剥占位（v3 设计空白 7，双写——与模块侧同款逐字一致）：保留的用户消息进新投影时 image part
+ *  替换为占位文本 part（保路径可 Read 捞回；provider 侧零图片开销）。 */
+function stripImages(m: ModelMessage): ModelMessage {
+  if (m.role !== "user" || !m.content.some((p) => p.kind === "image")) return m;
+  return {
+    ...m,
+    content: m.content.map((p) => p.kind === "image"
+      ? { kind: "text" as const, text: `[image omitted during compaction: ${p.path}]` }
+      : p),
+  };
+}
+
 /**
  * convertToLlm：日志投影 → 模型消息（§6.1 铁律 "model-visible means logged" 的执行点）。
  * 核心固定实现，不可被模块替换（§6.2）；契约：不许抛异常——未知/不可投影类型跳过。
@@ -40,12 +57,46 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         break;
       }
       case "turn/compaction": {
-        // 投影应用（§6.1/M3）：前缀丢弃换摘要——deriveMessages 是事件的纯函数，keepFrom 计数锚定与 entry 锚定等价；
-        // 重放确定性：同一事件序列两次投影字节一致
+        // 投影应用（§6.1/M3）：前缀丢弃换摘要——deriveMessages 是事件的纯函数；重放确定性：同一事件序列两次投影字节一致。
+        // v2/v3 分界 = trigger 字段缺席（信封 v:1 后置覆盖会抹掉载荷 v 字段——版本判据改用 trigger 在场性，重放仍与 config 无关）
         const summary = String(e.summary ?? "");
-        const keepFrom = Number(e.keepFrom ?? 0);
-        out = [{ role: "user", content: [{ kind: "text", text: `[历史摘要]
+        if (e.trigger === undefined) {
+          // v2 旧事件（现状规则不动——旧会话重放兼容，不重写历史）：keepFrom 计数切尾、摘要置顶、无 origin
+          const keepFrom = Number(e.keepFrom ?? 0);
+          out = [{ role: "user", content: [{ kind: "text", text: `[历史摘要]
 ${summary}` }] }, ...out.slice(keepFrom)];
+          break;
+        }
+        // v3（D57 触发分级）：摘要带 compaction-summary origin（下次压缩谓词消费，设计空白 1）
+        const summaryMsg: ModelMessage = {
+          role: "user",
+          content: [{ kind: "text", text: `[历史摘要]
+${summary}` }],
+          origin: { kind: "compaction-summary" },
+        };
+        // 纯下标取（不重新执行谓词——判定已在落盘时固化，规格 §4）；越界/缺省防御
+        const keepUserAt = (Array.isArray(e.keepUserAt) ? e.keepUserAt : [])
+          .map((x) => Number(x)).filter((i) => Number.isInteger(i) && i >= 0 && i < out.length)
+          .sort((a, b) => a - b);
+        if (String(e.trigger) === "manual" || keepUserAt.length === 0) {
+          out = [summaryMsg]; // manual 全量零保留（ZCode 形态）；auto 但无保留（用户消息全进摘要）同形
+          break;
+        }
+        // auto/overflow：[头用户…, elision, 尾用户…, 摘要（末尾——kimi 形态：模型读到的最近内容就是交接摘要）]。
+        // elision 恒在——全保留时省略的是 assistant/tool 条目，同样诚实标注（头尾分界由 keepUserHead 计数定：
+        // 段内下标差 >1 常态存在〔用户消息之间隔着 assistant/tool〕，不能当分界信号）；
+        // M = 尾段首下标 − 头段末下标 − 1（事件推导不落盘数字——重放与 config 无关）；头段空取 −1、尾段空 = 到投影末
+        const kept = keepUserAt.map((i) => stripImages(out[i]!)); // 图片剥占位（设计空白 7 双写）
+        const keepUserHead = Math.max(0, Math.min(Number(e.keepUserHead ?? 0) || 0, keepUserAt.length));
+        const headKept = kept.slice(0, keepUserHead);
+        const tailKept = kept.slice(keepUserHead);
+        const headLastAt = keepUserHead > 0 ? keepUserAt[keepUserHead - 1]! : -1;
+        const tailFirstAt = keepUserHead < keepUserAt.length ? keepUserAt[keepUserHead]! : out.length;
+        const elisionMsg: ModelMessage = {
+          role: "user",
+          content: [{ kind: "text", text: COMPACTION_ELISION(tailFirstAt - headLastAt - 1) }],
+        };
+        out = [...headKept, elisionMsg, ...tailKept, summaryMsg];
         break;
       }
       case "turn/prune": {

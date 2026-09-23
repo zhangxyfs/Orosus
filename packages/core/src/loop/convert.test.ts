@@ -129,3 +129,111 @@ describe("turn/prune 投影应用（M3 补强 T5/D44）", () => {
     expect(tr.output.endsWith("X".repeat(10))).toBe(true);
   });
 });
+
+describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标重放 + elision 固定模板 + 图片剥占位）", () => {
+  const u = (t: string) => ({ content: [{ kind: "text", text: t }] });
+  const a = (t: string) => ({ content: [{ kind: "text", text: t }] });
+  /** 铺 7 条投影：u0 a1 u2 a3 u4 tr5 u6（tr5 需先 tool/call 建链） */
+  const setupEvents = async (): Promise<InMemorySessionStore> => {
+    const s = new InMemorySessionStore();
+    await s.append("user/message", u("u0"));
+    await s.append("assistant/message", a("a1"));
+    await s.append("user/message", u("u2"));
+    await s.append("assistant/message", a("a3"));
+    await s.append("user/message", u("u4"));
+    await s.append("tool/call", { callId: "c1", name: "m__t", args: {} });
+    await s.append("tool/result", { callId: "c1", output: "tr5", isError: false });
+    await s.append("user/message", u("u6"));
+    return s;
+  };
+  const texts = (msgs: ReturnType<typeof deriveMessages>): string[] =>
+    msgs.map((m) => m.role === "user" ? String((m.content[0] as { text?: string }).text) : `(${m.role})`);
+
+  it("① v2 旧事件（trigger 缺席）走旧规则：keepFrom 切尾、摘要置顶、无 origin（模块谓词文本兜底路径）", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { summary: "旧摘要", keepFrom: 4, droppedCount: 4 });
+    const msgs = deriveMessages(await s.all());
+    expect(texts(msgs)).toEqual(["[历史摘要]\n旧摘要", "u4", "(toolResult)", "u6"]);
+    expect((msgs[0] as { origin?: unknown }).origin).toBeUndefined();
+  });
+
+  it("② v3+manual → 全量零保留：仅一条摘要（ZCode 形态），带 compaction-summary origin", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { trigger: "manual", summary: "全部摘要", keepUserAt: [], keepUserHead: 0, keepUserTail: 0, droppedCount: 8 });
+    const msgs = deriveMessages(await s.all());
+    expect(msgs).toHaveLength(1);
+    expect(texts(msgs)).toEqual(["[历史摘要]\n全部摘要"]);
+    expect((msgs[0] as { origin?: { kind?: string } }).origin).toEqual({ kind: "compaction-summary" });
+  });
+
+  it("③ v3+auto → [头, elision, 尾, 摘要]：纯下标取、assistant/tool 不进保留集、摘要置尾（kimi 形态）；M = 头末与尾首之间的投影条数", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 2, 6], keepUserHead: 1, keepUserTail: 2, droppedCount: 5 });
+    const msgs = deriveMessages(await s.all());
+    expect(texts(msgs)).toEqual(["u0", "[Some messages were omitted here during compaction: 1 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "u2", "u6", "[历史摘要]\nS"]);
+    expect(msgs.every((m) => m.role === "user")).toBe(true); // 全 user 形状
+  });
+
+  it("④ 头尾分界由 keepUserHead 计数定：头段内部下标差 >1（u0 与 u4 间隔 3 条）不得误落段内空档；M 从下标差算", async () => {
+    const s = await setupEvents();
+    // 头段 [0,4]（段内差 4——段内空档不是分界）、尾段 [6]；M = 6 − 4 − 1 = 1（tr5）
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 4, 6], keepUserHead: 2, keepUserTail: 1, droppedCount: 5 });
+    const msgs = deriveMessages(await s.all());
+    expect(texts(msgs)).toEqual([
+      "u0", "u4",
+      "[Some messages were omitted here during compaction: 1 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]",
+      "u6", "[历史摘要]\nS",
+    ]);
+  });
+
+  it("⑤ 越界/缺省防御：keepUserAt 含负值与超界被滤；keepUserHead 越界夹到段长；keepUserAt 缺省 → 仅摘要（auto 无保留同形）", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [-1, 0, 99, 6], keepUserHead: 99, keepUserTail: 0, droppedCount: 6 });
+    let msgs = deriveMessages(await s.all());
+    expect(texts(msgs)).toEqual(["u0", "u6", "[Some messages were omitted here during compaction: 0 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "[历史摘要]\nS"]); // head 夹到 2：头段全量、尾空、elision M=0（尾空 → 到投影末 7−6−1）
+    const s2 = await setupEvents();
+    await s2.append("turn/compaction", { trigger: "auto", summary: "S", droppedCount: 8 }); // keepUserAt 缺省
+    msgs = deriveMessages(await s2.all());
+    expect(texts(msgs)).toEqual(["[历史摘要]\nS"]);
+  });
+
+  it("⑥ 事件未知字段忽略不炸", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { trigger: "manual", summary: "S", keepUserAt: [], keepUserHead: 0, keepUserTail: 0, droppedCount: 8, extraJunk: { x: 1 } });
+    expect(deriveMessages(await s.all())).toHaveLength(1);
+  });
+
+  it("⑦ 保留消息 image part 剥为占位文本（双写核心侧——路径保留可 Read 捞回）；无图消息不动", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("user/message", { content: [
+      { kind: "text", text: "看图" },
+      { kind: "image", path: "shots/a.png", mimeType: "image/png" },
+    ] });
+    await s.append("user/message", u("无图"));
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 1], keepUserHead: 1, keepUserTail: 1, droppedCount: 0 });
+    const msgs = deriveMessages(await s.all());
+    expect((msgs[0] as { content: { kind: string; text?: string }[] }).content).toEqual([
+      { kind: "text", text: "看图" },
+      { kind: "text", text: "[image omitted during compaction: shots/a.png]" },
+    ]);
+    expect(texts(msgs)).toEqual(["看图", "[Some messages were omitted here during compaction: 0 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "无图", "[历史摘要]\nS"]);
+  });
+
+  it("⑧ 摘要消息（v3）带 compaction-summary origin——下次压缩谓词经元数据剥离，不靠前缀", async () => {
+    const s = await setupEvents();
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [6], keepUserHead: 0, keepUserTail: 1, droppedCount: 6 });
+    const msgs = deriveMessages(await s.all());
+    const last = msgs[msgs.length - 1] as { origin?: { kind?: string } };
+    expect(last.origin).toEqual({ kind: "compaction-summary" });
+  });
+
+  it("⑨ 重放确定性：同序列两次投影 JSON 相等（v3 分形全路径）", async () => {
+    const mk = async () => {
+      const s = await setupEvents();
+      await s.append("turn/prune", { prunes: [{ at: 5, headChars: 1, tailChars: 1 }], prunedChars: 1 });
+      await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 2, 6], keepUserHead: 2, keepUserTail: 1, droppedCount: 4 });
+      return deriveMessages(await s.all());
+    };
+    expect(JSON.stringify(await mk())).toBe(JSON.stringify(await mk()));
+  });
+});
