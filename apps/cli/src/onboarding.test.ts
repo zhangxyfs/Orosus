@@ -43,11 +43,18 @@ describe("首启 provider 引导（M3 T10 补——D37/D38 的宿主侧闭环）
     expect(prompts).toEqual(["/provider"]);
   });
 
-  it("真实谓词在全家福下的行为：无 config → true（model 缺失主导）；配 openai model → false", async () => {
+  it("真实谓词在全家福下的行为：无 config → true（model 缺失主导）；配 model → false", async () => {
     const { createHarness } = await import("@orosus/core");
     const { BUILTIN_MODULES } = await import("./builtins.ts");
     const d = tmp();
-    writeFileSync(join(d, "config.toml"), 'model = "openai/gpt-5"\n', "utf8");
+    writeFileSync(join(d, "config.toml"), [
+      'model = "test-x"',
+      "[provider-custom.providers.test-x]",
+      'type = "openai"',
+      'baseUrl = "http://127.0.0.1:1/v1"',
+      'apiKey = "sk-test"',
+      "",
+    ].join("\n"), "utf8");
     const base = (userToml?: string) => ({
       cwd: d,
       builtinModules: BUILTIN_MODULES,
@@ -58,7 +65,7 @@ describe("首启 provider 引导（M3 T10 补——D37/D38 的宿主侧闭环）
     });
     const h1 = await createHarness(base());
     const providers = h1.graph().services.listProviders().map((p) => p.name);
-    expect(providers).toContain("openai"); // openai 无 key 也激活（apiKey 可选）
+    expect(providers).toEqual([]); // provider-custom 唯一 provider（区内厂商级槽——空表时无槽）
     expect(needsProviderSetup({ model: undefined, providers })).toBe(true); // 全新安装：model 缺失
     const h2 = await createHarness(base(join(d, "config.toml")));
     expect(needsProviderSetup({ model: readConfigModel(join(d, "config.toml"), join(d, "n.toml")), providers: h2.graph().services.listProviders().map((p) => p.name) })).toBe(false);

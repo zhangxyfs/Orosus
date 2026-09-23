@@ -59,25 +59,5 @@ describe("首启引导接线（模型发现 T0——M3 T9 欠账：装配层用�
   });
 });
 
-describe("向导品牌引导（M4-2 T16/B8——装了品牌适配器没 key 降级时向导能引导）", () => {
-  it("① 品牌降级 → 引导确认文案含品牌名（anthropic），说明配 key 即启用", async () => {
-    const h = await makeH();
-    let confirmMsg = "";
-    const ui: CommandUi = {
-      ask: async () => "", askSecret: async () => "", choose: async (_t, items) => items[0]!,
-      confirm: async (q) => { confirmMsg = q; return false; }, // 拒绝——只断言文案
-    };
-    const withBrand: Harness = {
-      ...h,
-      graph: (() => {
-        const inner = h.graph();
-        return () => ({ ...inner, audit: () => [...inner.audit(), { name: "provider-anthropic", state: "failed", failReason: "配置校验失败：apiKey: Invalid input: expected string, received undefined" }] });
-      })() as never,
-    };
-    const out = await startupGate({ h: withBrand, ui, readModel: () => undefined, isTty: true });
-    expect(confirmMsg).toContain("anthropic");
-    expect(confirmMsg).toContain("未配 key");
-    expect(out).toContain("已跳过");
-    await h.close();
-  });
-});
+// 向导品牌引导组（M4-2 T16/B8）已随品牌 provider ×5 退役整组拆除（2026-09-23 provider 路线归一：
+// custom + 向导是唯一路线，品牌降级点名与「配 key 即启用」文案不复存在）；startupGate 的通用行为由上组 ①② 覆盖。

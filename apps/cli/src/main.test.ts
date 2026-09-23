@@ -36,16 +36,15 @@ const isolated = (over: { userToml?: string } = {}) => {
 };
 
 describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生态的配合闭环）", () => {
-  it("builtinModules 十模块进图：M2 产物全部可达；未配置密钥的适配器诚实降级", async () => {
+  it("builtinModules 九模块进图（2026-09-23 provider 路线归一：品牌 ×5 退役）；全员 active", async () => {
     const h = await isolated();
     const audit = h.graph().audit();
-    expect(audit).toHaveLength(BUILTIN_MODULES.length); // T5 起 12
+    expect(audit).toHaveLength(BUILTIN_MODULES.length); // 品牌 provider ×5 退役后 9
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "mcp", "provider-custom", "provider-openai", "skill", "tool-ask", "tool-fs", "tool-shell", "tool-todo"], // T3 approval / T5 compaction 入图
+      ["approval", "compaction", "mcp", "provider-custom", "skill", "tool-ask", "tool-fs", "tool-shell", "tool-todo"], // T3 approval / T5 compaction 入图；provider-custom 唯一 provider（空表也 active——区内厂商级校验）
     );
     const failed = audit.filter((a) => a.state === "failed");
-    expect(failed.map((a) => a.name).sort()).toEqual(["provider-anthropic", "provider-deepseek", "provider-glm", "provider-kimi"]);
-    expect(failed.every((a) => (a.failReason ?? "").includes("apiKey"))).toBe(true); // apiKey 必填的适配器空配置下明示原因（§10）
+    expect(failed).toEqual([]); // 品牌降级面已随 ×5 退役消失（banner 品牌分支同拆）
     await h.close();
   });
 

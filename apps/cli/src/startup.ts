@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { CommandUi } from "@orosus/contracts/module";
 import type { Harness } from "@orosus/core";
 import { needsProviderSetup, readConfigModel, runOnboarding } from "./onboarding.ts";
-import { BRAND_NO_KEY } from "./banner.ts";
 
 /** 启动期引导编排（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认 → /provider 向导 → /reload → 复检回显。
  *  抽取为可测面（main.ts 顶层不可 import——render.ts 同款先例）；非交互跳过（既有语义）。
@@ -18,11 +17,7 @@ export async function startupGate(opts: {
   if (!opts.isTty) return undefined;
   const slotNames = () => opts.h.graph().services.listProviders().map((p) => p.name);
   if (!needsProviderSetup({ model: opts.readModel(), providers: slotNames() })) return undefined;
-  // 品牌降级名单（M4-2 T16/B8 宿主层编排——模块不写他人 config，铁律 1）：向导确认文案点名品牌
-  const degradedBrands = opts.h.graph().audit()
-    .filter((a) => a.state === "failed" && a.name.startsWith("provider-") && BRAND_NO_KEY.test(a.failReason ?? ""))
-    .map((a) => a.name.replace(/^provider-/, ""));
-  const wizardOut = await runOnboarding(opts.h, opts.ui, degradedBrands);
+  const wizardOut = await runOnboarding(opts.h, opts.ui);
   await opts.h.prompt("/reload"); // 向导写的是 config 文件——重载生效
   // 复检回显（不阻断——用户可能中途取消）
   const ok = !needsProviderSetup({ model: opts.readModel(), providers: slotNames() });

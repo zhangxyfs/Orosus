@@ -4,18 +4,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
-import openai from "@orosus/provider-openai";
+import providerCustom from "@orosus/provider-custom";
 import type { ModelMessage } from "@orosus/contracts/provider";
 
-/** 图片喂图端到端（M4-2.5 T5）：harness 真链路 → provider-openai 真翻译层 → 线缆 content 数组。 */
+/** 图片喂图端到端（M4-2.5 T5）：harness 真链路 → provider-custom（openai 协议族翻译层）→ 线缆 content 数组。
+ *  2026-09-23 provider 路线归一（品牌 ×5 退役）：改走 custom 区内厂商——用户真实配置同款形态。 */
 describe("图片喂图 e2e（M4-2.5 T5）", () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
-  it("⑨ prompt 带图 → 经真实 provider-openai 翻译后线缆 content 数组含 image_url data URL", async () => {
+  it("⑨ prompt 带图 → 经 provider-custom（type=openai）真翻译层后线缆 content 数组含 image_url data URL", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orosus-t5e2e-")); dirs.push(dir);
     const png = join(dir, "shot.png");
     writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 4, 4]));
+    writeFileSync(join(dir, "user.toml"), [
+      "[provider-custom.providers.test-x]",
+      'type = "openai"',
+      'baseUrl = "http://127.0.0.1:1/v1"',
+      'apiKey = "sk-test"',
+      'defaultModel = "k3-test"',
+      "",
+    ].join("\n"), "utf8");
     const bodies: unknown[] = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
@@ -25,8 +34,8 @@ describe("图片喂图 e2e（M4-2.5 T5）", () => {
     try {
       const h = await createHarness({
         store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
-        builtinModules: [openai],
-        config: { env: {}, cliOverrides: { model: "openai/gpt-test" } },
+        builtinModules: [providerCustom],
+        config: { env: {}, userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), cliOverrides: { model: "test-x" } },
       });
       await h.prompt("这张图里有什么", { images: [png] });
       await h.close();
