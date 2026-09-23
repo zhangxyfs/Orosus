@@ -62,6 +62,42 @@ describe("tool-todo 单元（M4-2 T7/B15）", () => {
   });
 });
 
+// ——全完成终痕（2026-09-23 用户拍板「完成后别清掉，也许用户还想看」）：日志面/模型面双写分叉
+describe("tool-todo 全完成终痕（onWrite 日志面）", () => {
+  const execWithLog = async (steps: Record<string, unknown>[]) => {
+    const seen: { content: string; status: string }[][] = [];
+    const { tool, state } = createTodoTool((todos) => seen.push(todos.map((t) => ({ ...t }))));
+    let last: { output: string; isError: boolean } = { output: "", isError: false };
+    let i = 0;
+    for (const input of steps) {
+      const plan = await tool.resolveExecution(input);
+      last = await plan.execute({ callId: `c${++i}`, signal: new AbortController().signal, log: noLog });
+    }
+    return { last, state, seen };
+  };
+
+  it("⑤ 全部 done → 模型面照旧清空，日志面落全量全 ✓ 终痕（面板收尾有得看）", async () => {
+    const { state, seen } = await execWithLog([{ todos: [
+      { content: "A", status: "done" }, { content: "B", status: "done" },
+    ] }]);
+    expect(state.todos).toEqual([]); // 模型面：提示词不背完成账（测试③口径不动）
+    expect(seen).toEqual([[{ content: "A", status: "done" }, { content: "B", status: "done" }]]); // 日志面终痕
+  });
+
+  it("⑥ 显式 todos=[] → 日志面同落空（真清空面板跟着清，与全完成终痕相区分）", async () => {
+    const { seen } = await execWithLog([
+      { todos: [{ content: "X", status: "pending" }] },
+      { todos: [] },
+    ]);
+    expect(seen[1]).toEqual([]);
+  });
+
+  it("⑦ 省略 todos 查询 → 不触发 onWrite（读不落日志）", async () => {
+    const { seen } = await execWithLog([{}]);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 // ——集成：模块装配 + 脚本驱动工具回合 + promptSection 注入
 describe("tool-todo 模块集成（M4-2 T7/B15）", () => {
   it("⑤ 脚本驱动工具回合 → promptSection 注入 Current Tasks；模块在图中", async () => {

@@ -35,6 +35,7 @@ import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
+import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 
@@ -486,6 +487,11 @@ function attachRender(h: Harness): void {
         sinkFor().end();
         void refreshPanel(); // 面板数据随 turn 刷新（F4）
       }
+      // 任务清单实时投影（2026-09-23 用户拍板）：载荷即全量清单，到一条改一条——不再等 turn 结束检查点。
+      // panelCache 未就绪（启动历史重放先于首刷）跳过，refreshPanel 稍后自会从历史取 .at(-1)；
+      // 全屏 FullApp 秒 tick 自动重绘，行模式无面板，改快照无害
+      const todoTasks = panelTasksFromEvent(e);
+      if (todoTasks !== undefined && panelCache !== undefined) panelCache = { ...panelCache, tasks: todoTasks };
     },
   );
 }
@@ -875,7 +881,7 @@ const refreshPanel = async (): Promise<void> => {
 	const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
 	const permission = lastPolicy?.mode ?? cfg.approvalMode;
 	const lastTodo = events.filter((e) => e.type === "tool-todo/write").at(-1) as
-		| { todos?: { content: string; status: "pending" | "in_progress" | "done" }[] }
+		| { type: string; todos?: unknown }
 		| undefined;
 	const next = PERM_CYCLE[(PERM_CYCLE.indexOf(permission) + 1 + PERM_CYCLE.length) % PERM_CYCLE.length]!;
 	panelCache = {
@@ -919,10 +925,7 @@ const refreshPanel = async (): Promise<void> => {
 					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
 				};
 			}),
-		tasks: (lastTodo?.todos ?? []).map((t) => ({
-			text: t.content,
-			state: t.status === "done" ? ("done" as const) : t.status === "in_progress" ? ("active" as const) : ("pending" as const),
-		})),
+		tasks: (lastTodo !== undefined ? panelTasksFromEvent(lastTodo) : undefined) ?? [],
 		permission,
 		permissionNext: () => `/permission ${next}`,
 	};

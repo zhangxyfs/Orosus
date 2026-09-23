@@ -34,10 +34,13 @@ Do NOT call when nothing changed — query first if unsure. Auto-cleared when AL
           if (newTodos === undefined) {
             return { output: render(state.todos) || "（清单为空）", isError: false };
           }
-          state.todos = newTodos.every((t) => t.status === "done") ? [] : newTodos; // allDone 自动清空（cc-haha）
-          // 任务面板投影读口（TUI 批阶段三 F4——todo/write 事件落日志，全屏任务清单经会话历史投影；
-          // ToolContext 无 session 口（contracts ToolContext = callId/signal/log）——经 onWrite 回调上行
-          onWrite?.(state.todos);
+          // 全完成双写分叉（2026-09-23 用户拍板「完成后别清掉，也许用户还想看」）：
+          // 模型面照旧清空（提示词不背完成账——cc-haha 机理，测试③④口径不动）；
+          // 日志面落全量终痕（全 ✓）——面板投影 .at(-1) 留住完成态，不被自动清空抹掉。
+          // onWrite 上行是面板唯一通道（ToolContext 无 session 口——TUI 批 F4 定的回调面）
+          const allDone = newTodos.length > 0 && newTodos.every((t) => t.status === "done");
+          state.todos = allDone ? [] : newTodos;
+          onWrite?.(allDone ? newTodos : state.todos);
           return { output: state.todos.length === 0 ? "Todo list cleared." : `Todo list updated:\n${render(state.todos)}`, isError: false };
         },
       };
