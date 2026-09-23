@@ -126,6 +126,26 @@ describe("tool-todo 模块集成（M4-2 T7/B15）", () => {
     expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.isError !== true)).toBe(true); // 工具真执行
     expect(sections).toContain("## Current Tasks");
     expect(sections).toContain("读取文件");
+    expect(sections).toContain("Single-step tasks do not need a todo list."); // 引导与清单并存（不因有清单而消失）
     expect(h.graph().audit().some((a) => a.name === "tool-todo")).toBe(true);
+  });
+});
+
+// ——使用时机引导常驻（2026-09-23 ROADMAP ①）：旧版空清单时整段被过滤，模型首用前看不到「该不该用」的引导
+describe("tool-todo 使用时机引导（promptSection 常驻）", () => {
+  it("① 空清单（首次使用前）→ 段仍常驻：含引导文案，无 Current Tasks 头", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-todo-guide-"));
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [toolTodo, fakeProviderModule("fake", [[{ type: "finish", kind: "stop" }]])],
+      config: { userFile: join(dir, "n.toml"), projectFile: join(dir, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    const sections = h.graph().promptSections(); // 不发 turn——挂载即读
+    await h.close();
+    expect(sections).toContain("create a todo list with the tool-todo__todo_write tool"); // 建清单时机 + 工具名
+    expect(sections).toContain("mark items done immediately"); // 完成即标
+    expect(sections).toContain("Single-step tasks do not need a todo list."); // 单步不必
+    expect(sections).not.toContain("## Current Tasks"); // 无清单时不渲染清单头
   });
 });

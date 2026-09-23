@@ -9,6 +9,11 @@ const render = (todos: TodoItem[]): string =>
   todos.length === 0 ? "" : `## Current Tasks\n${todos.map((t, i) =>
     `${i + 1}. ${t.status === "done" ? "✓" : t.status === "in_progress" ? "→" : "□"} ${t.content}`).join("\n")}`;
 
+// 使用时机引导（ROADMAP ①，2026-09-23）：工具 description 只管调用规则（整表替换/完成即标），不管「该不该用」——
+// 多步先建清单、随执行更新、完成即标、单步不必（claude-code 同款口径）；英文 = 核心提示词全英文定案（M4-2 T12/B10）
+const TODO_GUIDANCE = `For multi-step tasks, create a todo list with the tool-todo__todo_write tool before starting work, keep it updated as you go, and mark items done immediately after completing them.
+Single-step tasks do not need a todo list.`;
+
 /** 工厂：工具与状态同闭包——模块侧 promptSection 经 state 读最新值（tool-fs 工厂可测面同款）。 */
 export function createTodoTool(onWrite?: (todos: TodoItem[]) => void): { tool: Tool; state: TodoState } {
   const state: TodoState = { todos: [] };
@@ -60,7 +65,12 @@ export default defineModule({
     ctx.contribute.tool(tool);
     ctx.contribute.promptSection({
       order: 10, // skill=0 之后、mcp=20 之前（M4-2 批 B 分配表）
-      get text() { return render(state.todos); }, // getter——promptSections() 聚合时读最新状态
+      // 引导常驻（ROADMAP ①）：旧版空清单 render 返回空串→整段被 promptSections() 过滤，模型首用前看不到任何引导；
+      // 现段文本 = 引导 +（有清单时）Current Tasks 拼装。引导随模块走（模块关闭整段消失），不进核心五节
+      get text() {
+        const list = render(state.todos); // getter——promptSections() 聚合时读最新状态
+        return list === "" ? TODO_GUIDANCE : `${TODO_GUIDANCE}\n\n${list}`;
+      },
     });
   },
 });
