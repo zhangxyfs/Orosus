@@ -263,8 +263,10 @@ export class FullApp {
 	get streamCols(): number {
 		// 侧栏隐藏 = 左栏占满（与 renderFrame 同口径——F5 十二轮①：此前不看可见性，
 		// 隐藏后 dm 仍按窄宽渲染 = 「回流没修好」的真根因）
+		// 再收 2 列 = 右内衬（2026-09-23 用户拍板：左垫 2 列后右端顶分隔线错位——两端各留 2 列对称；
+		// docmodel 内部再 −2 折行，正文实际占 leftW − 4）
 		const sidebarW = this.state.sidebarVisible ? this.sidebarW() : 0;
-		return Math.max(8, this.io.columns() - sidebarW - 2);
+		return Math.max(8, this.io.columns() - sidebarW - 4);
 	}
 
 	/** 忙碌探针（F5 四轮：宿主排队判定用）。 */
