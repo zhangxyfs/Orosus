@@ -236,4 +236,28 @@ describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标�
     };
     expect(JSON.stringify(await mk())).toBe(JSON.stringify(await mk()));
   });
+
+  it("⑩ prune 守卫用事件 minLen 判定（缺陷 B 修——判据随事件落盘）：产物 5158 ≤ minLen 5162 → 跳过不裁（旧判据 5120 会再裁）；5158 > minLen 5000 → 裁", async () => {
+    const mk = async (minLen: number): Promise<string> => {
+      const s = new InMemorySessionStore();
+      await s.append("user/message", { content: [{ kind: "text", text: "问" }] });
+      await s.append("tool/call", { callId: "c1", name: "m__t", args: {} });
+      await s.append("tool/result", { callId: "c1", output: "x".repeat(5158), isError: false }); // 模拟已裁产物实长（head+tail+标记 ≈5158）
+      await s.append("turn/prune", { prunes: [{ at: 1, headChars: 4096, tailChars: 1024, minLen }], prunedChars: 0 });
+      const msgs = deriveMessages(await s.all());
+      return (msgs[1] as { output: string }).output;
+    };
+    expect(await mk(5_162)).toBe("x".repeat(5158)); // ≤ minLen：认出「已裁过」，跳过
+    expect(await mk(5_000)).toContain("[...pruned: original 5158 chars...]"); // > minLen：照裁
+  });
+
+  it("⑪ 旧 prune 事件（无 minLen）回落旧判据 head+tail 不炸（存量会话兼容）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("user/message", { content: [{ kind: "text", text: "问" }] });
+    await s.append("tool/call", { callId: "c1", name: "m__t", args: {} });
+    await s.append("tool/result", { callId: "c1", output: "x".repeat(5158), isError: false });
+    await s.append("turn/prune", { prunes: [{ at: 1, headChars: 4096, tailChars: 1024 }], prunedChars: 0 }); // v2 旧载荷
+    const msgs = deriveMessages(await s.all());
+    expect((msgs[1] as { output: string }).output).toContain("[...pruned: original 5158 chars...]"); // 旧判据 5120：5158 > 5120 照裁
+  });
 });

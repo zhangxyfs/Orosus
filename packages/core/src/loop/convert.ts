@@ -109,7 +109,12 @@ ${summary}` }],
           if (m === undefined || m.role !== "toolResult") continue; // 防御：越界/非工具结果跳过
           const headChars = Math.max(0, Number((p as { headChars?: unknown })?.headChars ?? 0)); // 负值按 0 夹紧（三轮 P2）
           const tailChars = Math.max(0, Number((p as { tailChars?: unknown })?.tailChars ?? 0));
-          if (m.output.length <= headChars + tailChars) continue; // 防御：过短跳过
+          // 守卫判据用事件 minLen（缺陷 B 修：判据随事件落盘——模块选择判据 max(threshold, head+tail) 与
+          // 重放守卫 head+tail 不是一个数，产物实长 ≈5158 > 5120 认不出「已裁过」→ 反复裁剪嵌套标记）；
+          // 旧事件无 minLen 回落旧判据（head+tail）不炸
+          const minLenRaw = Number((p as { minLen?: unknown })?.minLen);
+          const guard = Number.isFinite(minLenRaw) && minLenRaw > 0 ? minLenRaw : headChars + tailChars;
+          if (m.output.length <= guard) continue; // 防御：过短跳过
           m.output = `${m.output.slice(0, headChars)}\n[...pruned: original ${m.output.length} chars...]\n${m.output.slice(-tailChars)}`;
         }
         break;

@@ -135,16 +135,18 @@ async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxToken
 }
 
 /** prune 变换（模块侧）。与 convert.ts 的 turn/prune 应用是同一变换的双写（铁律 2 下模块不得 import core——
- *  [历史摘要] 包装同型先例）；标记与裁剪参数逐字一致，模块测试钉两侧不漂移。 */
-function applyPrunes(messages: ModelMessage[], cfg: { pruneThresholdChars: number; pruneHeadChars: number; pruneTailChars: number }): { messages: ModelMessage[]; prunes: { at: number; headChars: number; tailChars: number }[]; prunedChars: number } {
-  const prunes: { at: number; headChars: number; tailChars: number }[] = [];
+ *  [历史摘要] 包装同型先例）；标记与裁剪参数逐字一致，模块测试钉两侧不漂移。
+ *  prunes 条目带 minLen（缺陷 B 修：选择判据随事件落盘——核心重放守卫用它，防「产物 5158 > head+tail 5120
+ *  认不出已裁过」的反复裁剪）。 */
+function applyPrunes(messages: ModelMessage[], cfg: { pruneThresholdChars: number; pruneHeadChars: number; pruneTailChars: number }): { messages: ModelMessage[]; prunes: { at: number; headChars: number; tailChars: number; minLen: number }[]; prunedChars: number } {
+  const prunes: { at: number; headChars: number; tailChars: number; minLen: number }[] = [];
   let prunedChars = 0;
   const out = messages.map((m) => ({ ...m }));
   const minLen = Math.max(cfg.pruneThresholdChars, cfg.pruneHeadChars + cfg.pruneTailChars); // 选择条件下限（五轮 P2：防 threshold < head+tail 时空转）
   for (let i = 0; i < out.length; i++) {
     const m = out[i]!;
     if (m.role !== "toolResult" || m.output.length <= minLen) continue;
-    prunes.push({ at: i, headChars: cfg.pruneHeadChars, tailChars: cfg.pruneTailChars });
+    prunes.push({ at: i, headChars: cfg.pruneHeadChars, tailChars: cfg.pruneTailChars, minLen });
     prunedChars += m.output.length - (cfg.pruneHeadChars + cfg.pruneTailChars);
     m.output = `${m.output.slice(0, cfg.pruneHeadChars)}\n[...pruned: original ${m.output.length} chars...]\n${m.output.slice(-cfg.pruneTailChars)}`;
   }
@@ -249,7 +251,7 @@ type CompactResult =
   | { kind: "none"; events: [] }                                            // 未达阈值（自动路径常态）
   | { kind: "pruned"; messages: ModelMessage[]; events: CompactionEvent[] } // prune 免摘要救援
   | { kind: "skipped"; reason: "backoff" | "breaker" | "rapid-refill"; messages?: ModelMessage[] | undefined; events: CompactionEvent[] }
-  | { kind: "failed"; reason: string; events: CompactionEvent[] }           // 摘要失败/收敛不过（不装占位）
+  | { kind: "failed"; reason: string; messages?: ModelMessage[] | undefined; events: CompactionEvent[] } // 摘要失败/收敛不过（不装占位；缺陷 B 修：带回 prune 后投影供缓存回写——prune 已真实执行）
   | { kind: "compacted"; newMessages: ModelMessage[]; events: CompactionEvent[]; stats: { dropped: number; kept: number; tokensBefore: number; summaryTokens: number; summary: string } };
 
 /** 压缩核心（v3/D57 触发分级重写）：阈值判定 → prune 前置 → 退避/熔断 → 分级保留（manual 全量零保留〔ZCode〕
@@ -334,7 +336,7 @@ async function compactOnce(
     opts.state.consecutiveFailures++;
     opts.state.failPoint = est;
     opts.log.warn("compaction.summary-failed", "摘要生成失败——不装占位（宁可不压）", { dropped: dropped.length });
-    return { kind: "failed", reason: "摘要生成失败（不装占位）", events };
+    return { kind: "failed", reason: "摘要生成失败（不装占位）", messages: afterPrune(), events };
   }
   const fullSummary = summary + recoveryFooter(dropped.length, opts.sessionId); // ⑧ 页脚进 summary 字段（设计空白 3）
   const summaryMsg: ModelMessage = {
@@ -347,7 +349,7 @@ async function compactOnce(
     opts.state.consecutiveFailures++;
     opts.state.failPoint = est;
     opts.log.warn("compaction.summary-failed", "收敛检查不过（压后未变小）——不装", { dropped: dropped.length });
-    return { kind: "failed", reason: "收敛检查不过（压后未变小）", events };
+    return { kind: "failed", reason: "收敛检查不过（压后未变小）", messages: afterPrune(), events };
   }
 
   opts.state.consecutiveFailures = 0; // 任一成功清零（熔断与退避同释）
@@ -419,7 +421,7 @@ export default defineModule({
       forceKind = undefined; // 消费即复位（手动一次、溢出一次）
       const r = await compactOnce(messages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force, estimate, state, log: ctx.log, sessionId: ctx.session.id });
       for (const e of r.events) ctx.session.append(e.type, e.fields);
-      const out = r.kind === "compacted" ? r.newMessages : (r.kind === "pruned" || r.kind === "skipped") ? r.messages : undefined;
+      const out = r.kind === "compacted" ? r.newMessages : (r.kind === "pruned" || r.kind === "skipped" || r.kind === "failed") ? r.messages : undefined; // failed 亦回写/返回 prune 后投影（缺陷 B 修——prune 已真实执行）
       lastSeenMessages = out ?? messages; // 缓存跟踪变换后结果（v1.4 审修补）
       return out;
     });
@@ -451,10 +453,12 @@ export default defineModule({
           lastSeenMessages = r.messages;
           return `已裁剪 ${(r.events[0]!.fields.prunes as unknown[]).length} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`;
         case "skipped":
-          ui.notice?.(`已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : "连续失败熔断保护"}`);
+          if (r.messages !== undefined) lastSeenMessages = r.messages; // 缺陷 B 修：prune 后退避/熔断/rapid-refill 跳过也回写（下次不再拿旧投影重裁）
+          ui.notice?.(`已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : r.reason === "rapid-refill" ? "压缩后上下文被迅速重新填满（建议 /new 开新会话或稍后再试）" : "连续失败熔断保护"}`);
           return "";
         case "failed":
-          return `压缩失败：${r.reason}——未产生任何变更（可重试 /compact）`;
+          if (r.messages !== undefined) lastSeenMessages = r.messages; // 缺陷 B 修：失败也回写 prune 后投影（prune 已真实执行、事件已落）
+          return `压缩失败：${r.reason}——${r.messages !== undefined ? "超长工具结果已裁剪（事件已落），" : ""}未产生摘要变更（可重试 /compact）`;
         case "compacted":
           lastSeenMessages = r.newMessages; // 缓存与已落事件对齐——防连击拿陈旧前缀双落事件（机制要点 1）
           return `已压缩：前缀 ${r.stats.dropped} 条 → 摘要（约 ${r.stats.summaryTokens} tokens，压前 ${r.stats.tokensBefore}）\n\n${r.stats.summary}\n\n（保留尾部 ${r.stats.kept} 条原文——/summary 随时可看本摘要）`;

@@ -104,9 +104,11 @@ const miniReplay = (msgs: ModelMessage[], events: { type: string; payload: Recor
   let out = msgs.map((m) => ({ ...m }));
   for (const e of events) {
     if (e.type === "turn/prune") {
-      for (const p of e.payload.prunes as { at: number; headChars: number; tailChars: number }[]) {
+      for (const p of e.payload.prunes as { at: number; headChars: number; tailChars: number; minLen?: number }[]) {
         const m = out[p.at] as { role: string; output: string } | undefined;
-        if (m === undefined || m.role !== "toolResult" || m.output.length <= p.headChars + p.tailChars) continue;
+        if (m === undefined || m.role !== "toolResult") continue;
+        const guard = p.minLen !== undefined && Number.isFinite(p.minLen) && p.minLen > 0 ? p.minLen : p.headChars + p.tailChars; // 缺陷 B 修：守卫判据随事件落盘（与核心 convert.ts 同款双写）
+        if (m.output.length <= guard) continue;
         m.output = `${m.output.slice(0, p.headChars)}\n[...pruned: original ${m.output.length} chars...]\n${m.output.slice(-p.tailChars)}`;
       }
     } else if (e.type === "turn/compaction") {
@@ -577,6 +579,36 @@ describe("v3 rapid-refill 熔断（T3：ZCode 状态机形状——压缩后秒�
     const r = await s.listener([u("问"), tr("c1", 10), tr("c2", 10), u("尾")]); // sinceCompact 2 < 3 但 compactedEver false
     expect(r).toBeDefined(); // 正常压缩、不误判 refill
     expect(s.warns.some((w) => w.code === "compaction.rapid-refill")).toBe(false);
+  });
+});
+
+describe("v3 缺陷 B 三连修（T5：缓存全结局回写 / 条件落事件 / 守卫判据随事件落盘）", () => {
+  it("① 失败后缓存回写：prune 落盘 + 摘要失败 → 再敲 /compact 拿已裁投影——不再产生第二条 prune 事件（缺陷 B 核心）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 }, llmChunks: [{ type: "finish", kind: "error", errorMessage: "boom" } as Chunk] });
+    await def.activate(s.ctx);
+    await s.listener([u("问"), tr("c1", 20_000), u("尾")]); // 预热缓存（est 超 → prune 落 + 摘要失败 → failed 回写 pruned）
+    expect(s.appended.filter((e) => e.type === "turn/prune")).toHaveLength(1);
+    expect((await s.command("", stubUi)).toString()).toContain("压缩失败");
+    expect((await s.command("", stubUi)).toString()).toContain("压缩失败"); // 再敲两次：缓存 = 已裁投影（tr ≈5158 字 ≤ minLen 5162）
+    expect(s.appended.filter((e) => e.type === "turn/prune")).toHaveLength(1); // 不再对同段内容重复裁剪
+    const prunedReplay = (s.appended.find((e) => e.type === "turn/prune")!.payload.prunes as { at: number; minLen: number }[])[0]!;
+    expect(prunedReplay.minLen).toBe(8_192); // 判据随事件落盘（max(threshold 8192, head+tail 5120)——产物 5158 ≤ 8192 认得已裁）
+  });
+
+  it("② 压缩未执行（退避跳过、无 prune 产出）→ 零事件落盘", async () => {
+    const s = setup({ config: { thresholdTokens: 1 }, llmChunks: [{ type: "finish", kind: "error", errorMessage: "x" } as Chunk] });
+    await def.activate(s.ctx);
+    await s.listener([u("问"), u("中"), u("尾")]);              // 失败置退避（无 tr——无 prune）
+    expect(await s.listener([u("问"), u("尾"), u("再")])).toBeUndefined(); // 退避跳过
+    expect(s.appended).toEqual([]);                              // 未执行未产出 → 零事件
+  });
+
+  it("③ 失败文案披露已裁剪事实（同次 compactOnce 里 prune 已真实执行时不再谎称「未产生任何变更」）", async () => {
+    const s = setup({ config: { thresholdTokens: 1 }, llmChunks: [{ type: "finish", kind: "error", errorMessage: "x" } as Chunk], coldProject: [u("问"), tr("c1", 20_000), u("尾")] });
+    await def.activate(s.ctx);
+    const out = await s.command("", stubUi); // 冷读口直压：prune 落 + 摘要失败同次发生
+    expect(out).toContain("已裁剪");
+    expect(out).toContain("压缩失败");
   });
 });
 
