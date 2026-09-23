@@ -1,6 +1,7 @@
 # Orosus 模块开发者指南
 
 > `@orosus/contracts` 是模块开发者的唯一编程面——本文是人类版指南；`catalogJson()` 是运行时机器可读版。
+> 入门教程（从零做一个模块）见 [module-walkthrough.md](module-walkthrough.md)；本文是速查与纪律。
 
 ## 仓库目录地图（§4/§9，v26）
 
@@ -67,7 +68,7 @@ export default defineModule({
 | 能力 key | 契约 | 提供者示例 |
 |---|---|---|
 | `fs` | `@orosus/contracts/fs` 的 `Fs`（read/write） | tool-fs |
-| `provider:<name>` | `@orosus/contracts/provider` 的 `ProviderAdapter`（保留槽，经 `provide` 注册） | provider-anthropic 等 |
+| `provider:<name>` | `@orosus/contracts/provider` 的 `ProviderAdapter`（保留槽，经 `provide` 注册） | provider-custom（唯一 provider——品牌 ×5 已退役 2026-09-23，/provider 向导即完整配置入口） |
 
 ## 贡献点与拦截点
 

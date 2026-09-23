@@ -50,7 +50,25 @@ export interface Tool {
   resolveExecution(input: unknown): Promise<ToolExecution>;
 }
 
-/** 身份函数：类型收窄与作者意图标注。 */
+/** 身份函数：类型收窄与作者意图标注。
+ *
+ * @example
+ * ```ts
+ * const tool = defineTool({
+ *   name: "note__add",                    // 强制 <module>__<tool>（规则 4）
+ *   description: "Add a short note that persists across turns.",
+ *   parameters: z.object({ text: z.string().min(1) }),
+ *   resolveExecution: async (input) => {
+ *     const { text } = input as { text: string };
+ *     return {
+ *       accesses: [],                      // 不碰资源 = 空声明；缺省会按 kind:"all" 独占
+ *       approvalRule: "note__add",
+ *       execute: async () => ({ output: `Noted: ${text}`, isError: false }),
+ *     };
+ *   },
+ * });
+ * ```
+ */
 export function defineTool(t: Tool): Tool {
   return t;
 }
