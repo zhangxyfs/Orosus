@@ -25,6 +25,7 @@ describe("completer + /help（M4-2 T21/B5）", () => {
     expect(HELP_TEXT).not.toContain("\n  /status");
     expect(HELP_TEXT).not.toContain("/paste "); // 批⑤⑥退役清理（Alt+V 提示并入尾部提示行）
     expect(HELP_TEXT).toContain("Alt+V"); // T5 可发现性：图片键位仍在帮助
+    expect(HELP_TEXT).toContain("Ctrl+U"); // 队列批可发现性：steer 键位入帮助（2026-09-23）
     expect(HELP_TEXT).toContain("/permission 查看或切换审批模式");
     expect(HELP_TEXT).toContain("Tab 补全");
     expect(HELP_TEXT).toContain("@ 后 Tab 补全文件"); // T6 可发现性：@ 补全与 #L 语法入提示行
