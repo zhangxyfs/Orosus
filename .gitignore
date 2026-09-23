@@ -4,3 +4,4 @@ dist/
 .idea/
 web/api/
 web/md/
+.orosus-*.log
