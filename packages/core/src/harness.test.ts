@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
-import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
+import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
 import { InMemorySessionStore } from "./session/memory.ts";
 import { JsonlSessionStore } from "./session/jsonl.ts";
 import { verifyChain } from "./session/fork.ts";
@@ -464,6 +464,66 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
     expect(report.unchanged).toContain("llm-consumer");
     expect((await run!()).text).toBe("重载后仍可用"); // 不是"llm 口未注入"
     await h.close();
+  });
+
+  it("⑤ stream model 覆盖（M4-3 T1b/SW-17）：provider/model 限定形路由对应槽；裸值当前槽换模型；webSearch 透传适配器", async () => {
+    const fake1 = fakeProvider([[{ type: "text/delta", text: "a" }, { type: "finish", kind: "stop" }]]);
+    const fake2 = fakeProvider([[{ type: "text/delta", text: "b" }, { type: "finish", kind: "stop" }]]);
+    let llm: LlmPort | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) { llm = ctx.llm; },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("provider-a", []), activate: (ctx) => ctx.provide("provider:a" as never, fake1.stream) },
+        { ...fakeProviderModule("provider-b", []), activate: (ctx) => ctx.provide("provider:b" as never, { stream: fake2.stream, defaultModel: "two" }) },
+        consumer,
+      ],
+      config: { ...hermetic(dir), cliOverrides: { model: "a/one" } },
+    });
+    // 限定形：b/custom-x → 路由 b 槽、model=custom-x、webSearch 透传
+    await collect(llm!.stream({ model: "b/custom-x", webSearch: true, messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }));
+    expect(fake2.requests[0]).toMatchObject({ model: "custom-x", webSearch: true });
+    // 裸值：当前槽（a）上换模型不换槽；未传 webSearch 时请求不带该键
+    await collect(llm!.stream({ model: "bare-model", messages: [{ role: "user", content: [{ kind: "text", text: "y" }] }] }));
+    expect(fake1.requests[0]).toMatchObject({ model: "bare-model" });
+    expect(fake1.requests[0]).not.toHaveProperty("webSearch");
+    // 限定到不存在的槽 → 带内 finish error
+    const bad = await collect(llm!.stream({ model: "ghost/m", messages: [{ role: "user", content: [{ kind: "text", text: "z" }] }] }));
+    expect(bad.finish).toMatchObject({ type: "finish", kind: "error" });
+    await h.close();
+  });
+
+  it("⑥ listModels（M4-3 T1b/SW-17）：跨槽聚合 provider/model 限定形；无一槽有目录能力 → 方法缺省 undefined", async () => {
+    let llm: LlmPort | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) { llm = ctx.llm; },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("provider-a", []), activate: (ctx) => ctx.provide("provider:a" as never, { stream: fakeProvider([[]]).stream, listModels: async () => ["m1", "m2"] }) },
+        { ...fakeProviderModule("provider-b", []), activate: (ctx) => ctx.provide("provider:b" as never, { stream: fakeProvider([[]]).stream, listModels: async () => ["x9"] }) },
+        { ...fakeProviderModule("provider-c", []), activate: (ctx) => ctx.provide("provider:c" as never, fakeProvider([[]]).stream) }, // 无 listModels 能力的槽跳过
+        consumer,
+      ],
+      config: { ...hermetic(dir), cliOverrides: { model: "a/m1" } },
+    });
+    expect(await llm!.listModels!()).toEqual(["a/m1", "a/m2", "b/x9"]);
+    await h.close();
+
+    let llm2: LlmPort | undefined;
+    const consumer2: ModuleDefinition = { ...fakeModule("llm-consumer2"), activate(ctx) { llm2 = ctx.llm; } };
+    const h2 = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("provider-p", []), activate: (ctx) => ctx.provide("provider:p" as never, fakeProvider([[]]).stream) },
+        consumer2,
+      ],
+      config: { ...hermetic(dir), cliOverrides: { model: "p/m" } },
+    });
+    expect(llm2!.listModels).toBeUndefined(); // 无一槽提供目录能力 → 方法缺省（菜单据此灰显）
+    await h2.close();
   });
 });
 

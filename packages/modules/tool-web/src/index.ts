@@ -1,14 +1,18 @@
 import { z } from "zod";
 import { defineModule, type ModuleDefinition } from "@orosus/contracts/module";
 import { fetchTool, type FetchDeps } from "./fetch.ts";
-import { createSearchState, configuredKey, searchTool } from "./search.ts";
+import { createSearchState, searchTool, type SearchConfig, type SearchStateHolder } from "./search.ts";
+import { buildBackends } from "./backends/index.ts";
+import { llmBackend } from "./backends/llm.ts";
 
 export { fetchTool, type FetchDeps } from "./fetch.ts";
 export { defaultHtmlToMarkdown, type HtmlToMarkdown } from "./html-to-md.ts";
 export {
   searchTool, createSearchState, configuredKey,
-  type SearchConfig, type SearchDeps, type SearchResult, type WebSearchBackend,
+  type SearchConfig, type SearchDeps, type SearchResult, type WebSearchBackend, type SearchStateHolder,
 } from "./search.ts";
+export { llmBackend, LlmSearchError, type LlmBackendDeps } from "./backends/llm.ts";
+export { buildBackends } from "./backends/index.ts";
 
 /** [tool-web] 配置节（节名 = 模块名，全局约束 3）：search 子节承载后端选择与 per-backend key 占位符（v4.7——
  *  $ENV: 占位符是模块唯一 secrets 通道，secrets.env 不进 process.env；T1c 配置流写占位符不落真 key）。 */
@@ -23,7 +27,7 @@ const configSchema = z.object({
 export type ToolWebConfig = z.infer<typeof configSchema>;
 
 export interface ToolWebDeps extends FetchDeps {
-  /** 搜索后端链/HTTP 口/超时——测试注假件；缺省按模块 search 活态现构。 */
+  /** 搜索后端链/HTTP 口/超时——测试注假件；缺省 = llm 槽（ctx.llm）+ 按 search 活态现构 key 档。 */
   searchBackends?: Parameters<typeof searchTool>[0]["backends"];
   searchTimeoutMs?: number;
 }
@@ -39,20 +43,25 @@ export const createToolWebModule = (deps: ToolWebDeps = {}): ModuleDefinition<To
     config: configSchema,
     activate(ctx) {
       ctx.contribute.tool(fetchTool(deps));
-      // search 活态：activate 期取纯分层快照，T1c 配置流经 holder.set 改写即时生效（approval apply/persist 同款）
-      const searchState = createSearchState(ctx.config.search ?? {});
-      // T1a 中间态注册门（kimi when 同款）：tavily/brave 任一 key 可用才注册——
-      // T1b llm 槽接入后改恒注册（llm 槽恒可用，SW-15），届时本门连同「中间态全缺不注册」测试一起收口
-      const hasKey = configuredKey(ctx.config.search?.tavilyApiKey) !== undefined
-        || configuredKey(ctx.config.search?.braveApiKey) !== undefined;
-      if (hasKey) {
-        ctx.contribute.tool(searchTool({
-          state: searchState,
-          ...(deps.searchBackends !== undefined ? { backends: deps.searchBackends } : {}),
-          ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
-          ...(deps.searchTimeoutMs !== undefined ? { timeoutMs: deps.searchTimeoutMs } : {}),
-        }));
-      }
+      // search 活态：activate 期取纯分层快照，T1c 配置流经 holder.set 改写即时生效（approval apply/persist 同款）；
+      // SW-19 会话粘性：llm 槽调用点探测失败即置位、auto 链跳过该槽——holder.set（重选后端/模型）时清除
+      const sticky = { llmDowngraded: false };
+      const base = createSearchState(ctx.config.search ?? {});
+      const searchState: SearchStateHolder = {
+        current: base.current,
+        set: (next: SearchConfig) => { sticky.llmDowngraded = false; base.set(next); },
+      };
+      // search 恒注册（SW-15/T1b 收口：llm 槽恒可用——model 未配 = 当前模型承载，v4 拍板零配置即有搜索；
+      // kimi「未配置即藏工具」只对 tavily/brave key 档适用，key 档缺 key 时在调用点跳过不入链）
+      ctx.contribute.tool(searchTool({
+        state: searchState,
+        sticky,
+        backends: deps.searchBackends ?? ((cfg) => [
+          llmBackend({ llm: ctx.llm, cfg: () => searchState.current(), sticky }),
+          ...buildBackends(cfg, deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+        ]),
+        ...(deps.searchTimeoutMs !== undefined ? { timeoutMs: deps.searchTimeoutMs } : {}),
+      }));
     },
   });
 

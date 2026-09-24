@@ -51,7 +51,8 @@ describe("tool-web search 链（M4-3 T1a）", () => {
     const sent = JSON.parse(calls[0]?.body ?? "{}") as Record<string, unknown>;
     expect(sent["max_results"]).toBe(8);
     expect(sent["search_depth"]).toBe("basic");
-    expect(plan.accesses).toEqual([{ kind: "network", host: "api.tavily.com" }]);
+    // auto 链候选全声明（tavily 失败会真实落 brave——两档都可能发请求）
+    expect(plan.accesses).toEqual([{ kind: "network", host: "api.tavily.com" }, { kind: "network", host: "api.search.brave.com" }]);
   });
 
   it("② auto 降级：tavily 缺 key、brave 有 key → 落 brave（GET q/count=8 + X-Subscription-Token 逐字）", async () => {
@@ -124,19 +125,52 @@ describe("tool-web search 链（M4-3 T1a）", () => {
     expect(result.output).toContain("搜索超时");
   });
 
-  it("⑨ T1a 中间态注册门：无 key 只注册 fetch；有 key fetch+search 都注册（T1b 收口改恒注册）", async () => {
+  it("⑨ auto 运行时降级（D4/SW-19）：llm 抛错落 tavily 成功 → 降级前缀透明化 + sticky 置位；第二次调用 llm 直接跳过", async () => {
+    const calls: string[] = [];
+    const llm = fakeBackend("llm", { search: async () => { calls.push("llm"); throw new Error("provider returned no native search results"); } });
+    const tavily = fakeBackend("tavily", { search: async () => { calls.push("tavily"); return [{ title: "T", url: "https://t/1", snippet: "S" }]; } });
+    const sticky = { llmDowngraded: false };
+    const tool = searchTool({ state: createSearchState({}), sticky, backends: () => [llm, tavily] });
+    const run = async () => {
+      const plan = await tool.resolveExecution({ query: "q" });
+      return { plan, result: await plan.execute({ callId: "c1", signal: new AbortController().signal, log: noLog }) };
+    };
+    const first = await run();
+    expect(first.result.isError).toBe(false);
+    expect(first.result.output).toContain("[已降级到 tavily——llm 失败：provider returned no native search results]");
+    expect(first.result.output).toContain("Title: T");
+    expect(sticky.llmDowngraded).toBe(true);
+    expect(calls).toEqual(["llm", "tavily"]);
+    const second = await run();
+    expect(second.result.isError).toBe(false);
+    expect(calls).toEqual(["llm", "tavily", "tavily"]); // sticky 后 llm 不再被触（不重复支付注定失败的调用）
+    expect(second.result.output).not.toContain("已降级"); // llm 根本没进候选，无降级前缀
+    expect(second.plan.accesses).toEqual([{ kind: "network", host: "api.tavily.com" }]); // 候选收缩如实反映
+  });
+
+  it("⑩ auto 全档失败 → 合并报错逐档列原因", async () => {
+    const llm = fakeBackend("llm", { search: async () => { throw new Error("no native results"); } });
+    const tavily = fakeBackend("tavily", { search: async () => { throw new Error("HTTP 401"); } });
+    const { result } = await execSearch({}, [llm, tavily]);
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("llm 失败：no native results");
+    expect(result.output).toContain("tavily 失败：HTTP 401");
+  });
+
+  it("⑪ search 恒注册（SW-15/T1b 收口）：llm 槽恒可用——有无 key 都注册 fetch+search", async () => {
     const capture = (cfg: object) => {
       const tools: string[] = [];
       const fakeCtx = {
         config: cfg, log: noLog,
+        llm: { stream: () => (async function* () { yield* []; })() },
         contribute: { tool: (t: { name: string }) => { tools.push(t.name); return () => {}; } },
       } as unknown as ModuleContext<object>;
       createToolWebModule().activate(fakeCtx as ModuleContext<never>);
       return tools;
     };
-    expect(await capture({})).toEqual(["tool-web__fetch"]);
+    expect(await capture({})).toEqual(["tool-web__fetch", "tool-web__search"]);
     expect(await capture({ search: { tavilyApiKey: "k" } })).toEqual(["tool-web__fetch", "tool-web__search"]);
-    expect(await capture({ search: { braveApiKey: "$ENV:BRAVE_API_KEY" } })).toEqual(["tool-web__fetch"]); // 未解析占位符不算 key
+    expect(await capture({ search: { braveApiKey: "$ENV:BRAVE_API_KEY" } })).toEqual(["tool-web__fetch", "tool-web__search"]); // 未解析占位符不挡恒注册（llm 槽在）
   });
 });
 

@@ -5,6 +5,10 @@ export type Chunk =
   | { type: "text/delta"; text: string }
   | { type: "reasoning/delta"; text: string }
   | { type: "toolcall/argumentsDelta"; callId: string; name?: string; argumentsDelta: string }
+  /** 服务端搜索活动（M4-3 T1b）：适配器把协议层原生搜索块（Anthropic web_search_tool_result /
+   *  OpenAI 系 web_search 字段·web_search_call 事件）归一上报——llm 搜索后端的「真搜过」判据（Reasonix
+   *  web_search_call completed 校验同款思想）。只在请求带 webSearch 时出现；loop 与渲染面默认忽略。 */
+  | { type: "server-search"; hits: { title: string; url: string }[] }
   | { type: "usage"; input: number; output: number }
   | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string; errorCode?: string };
 
@@ -56,6 +60,11 @@ export interface ProviderRequest {
   signal: AbortSignal;
   /** 输出 token 上限（M3 补强 D39 修订）：缺省 = 适配器现行为（openai 线缆不发送、anthropic 线缆用 MAX_TOKENS）。 */
   maxTokens?: number;
+  /** 声明服务端原生搜索（M4-3 T1b，SW-17）：适配器按协议映射为服务端搜索声明（openai 族 =
+   *  tools 追加 {type:"web_search",web_search:{enable:true}}〔2026-09-24 zhipu 端点 spike 实钉的接受形态〕；
+   *  anthropic 族 = web_search_20250305 server tool）。与 tools 的客户端工具正交——二级调用（D39）tools 恒空，
+   *  服务端声明不进会话、模型不可见。 */
+  webSearch?: boolean;
 }
 
 /** Provider SPI 唯一方法（§6.4）。 */

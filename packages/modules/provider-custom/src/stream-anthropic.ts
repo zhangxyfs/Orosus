@@ -27,7 +27,12 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           max_tokens: request.maxTokens ?? MAX_TOKENS,
           system: request.system,
           messages: toAnthropicMessages(request.messages),
-          tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+          tools: [
+            ...request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+            // M4-3 T1b：webSearch=true → 追加 Anthropic 服务端搜索工具（文档形态 web_search_20250305；
+            // 本仓无 anthropic 协议族端点可 spike——形态按官方文档钉，端点不支持时协议错误原样带内）
+            ...(request.webSearch === true ? [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }] : []),
+          ],
           stream: true,
         }),
         signal: request.signal,
@@ -56,7 +61,19 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
         for (const block of blocks) {
           const parsed = parseSseBlock(block);
           if (!parsed) continue;
-          yield* mapEvent(state, parsed.event, JSON.parse(parsed.data));
+          const data = JSON.parse(parsed.data) as Record<string, unknown>;
+          // M4-3 T1b：服务端搜索块归一（web_search_tool_result 的 content = [{title,url,…}]——文档形态）
+          if (parsed.event === "content_block_start") {
+            const cb = data["content_block"] as { type?: unknown; content?: unknown } | undefined;
+            if (cb?.type === "web_search_tool_result") {
+              const hits = (Array.isArray(cb.content) ? cb.content : []).flatMap((it) => {
+                const o = it as { title?: unknown; url?: unknown } | null;
+                return typeof o?.url === "string" ? [{ title: typeof o.title === "string" ? o.title : o.url, url: o.url }] : [];
+              });
+              yield { type: "server-search", hits };
+            }
+          }
+          yield* mapEvent(state, parsed.event, data);
         }
       }
       if (request.signal.aborted) yield { type: "finish", kind: "aborted" };

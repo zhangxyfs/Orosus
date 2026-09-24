@@ -39,8 +39,12 @@ export interface CommandUi {
 
 /** 二级 LLM 调用口（D39）：模块的辅助模型调用（compaction 摘要、标题生成等）。
  *  复用 harness 当前 provider/model 解析（含 /model 运行期覆盖）；错误带内（finish error，不许 reject）；
- *  二级调用不带工具。核心基础设施（与 ctx.log/session 同类）——不是能力槽、不经 services、不可 provide 替换。
+ *  二级调用不带客户端工具（M4-3 T1b 修订：webSearch 声明的是服务端搜索，不是 tools——模型不可见、不进会话）。
+ *  核心基础设施（与 ctx.log/session 同类）——不是能力槽、不经 services、不可 provide 替换。
  *  M3 补强三扩展（D39 修订）：stream 增可选 maxTokens（输出上限）；contextWindow/lastUsage 只读事实，getter 惰性读 holder。
+ *  M4-3 T1b 扩展（SW-17）：stream 增可选 model（缺省 = 当前模型；支持 provider/model 限定形——钉非当前提供商的
+ *  模型时用）与 webSearch（声明服务端原生搜索）；LlmPort 增可选 listModels（模型目录——缺省 undefined = 目录不可用，
+ *  菜单据此灰显模型选择；条目统一 provider/model 限定形，跨槽聚合）。
  *
  * @example
  * ```ts
@@ -53,7 +57,11 @@ export interface CommandUi {
  * ```
  */
 export interface LlmPort {
-  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number }): AsyncIterable<Chunk>;
+  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>;
+  /** 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式）。
+   *  可选——无一槽提供目录能力时读得 undefined（显式 | undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法），
+   *  消费方据此隐藏模型选择项。 */
+  listModels?: (() => Promise<string[]>) | undefined;
   /** 当前模型上下文窗口（token）——harness 解析（config 顶层 contextWindow > provider import 目录写入）；未知 undefined。 */
   readonly contextWindow?: number | undefined;
   /** 最近一次主循环请求的真实用量锚点：totalTokens = input+output（该次请求全上下文）、atMessageCount = 该次请求

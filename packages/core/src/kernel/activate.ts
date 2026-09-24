@@ -207,6 +207,8 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       ui: input.commandUi ?? rejectingUi(),
       llm: {
         stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req), // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
+        // M4-3 T1b（SW-17）：listModels 同款惰性转发——可选方法，当前 impl 无此能力时模块侧读到 undefined（目录不可用）
+        get listModels(): LlmPort["listModels"] { const impl = input.llm?.impl ?? unassignedLlm; return impl.listModels?.bind(impl); },
         get contextWindow() { return (input.llm?.impl ?? unassignedLlm).contextWindow; }, // 补强 T3：同款惰性转发——只转发 stream 透不出只读字段（首轮 P0）
         get lastUsage() { return (input.llm?.impl ?? unassignedLlm).lastUsage; },
       },

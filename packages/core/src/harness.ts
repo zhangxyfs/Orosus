@@ -485,11 +485,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // F5 十轮：核心顶层键名 provider（旧 model 键兼容读——分层合并两键都在时 provider 胜）
   const cfgModelValue = (): unknown => config.core.provider ?? config.core.model;
-  const resolveProvider = (): { stream: StreamFn; model: string } => {
-    const modelValue = modelOverride ?? cfgModelValue();
-    if (typeof modelValue !== "string" || modelValue === "") {
-      throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
-    }
+  const resolveModelValue = (modelValue: string): { stream: StreamFn; model: string } => {
     const { provider, model: explicitModel } = parseModel(modelValue);
     const adapter = graph.services.provider(provider);
     if (!adapter) {
@@ -510,14 +506,25 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
     return { stream: adapter.stream, model };
   };
+  const resolveProvider = (): { stream: StreamFn; model: string } => {
+    const modelValue = modelOverride ?? cfgModelValue();
+    if (typeof modelValue !== "string" || modelValue === "") {
+      throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
+    }
+    return resolveModelValue(modelValue);
+  };
 
-  // ctx.llm 实现（D39/T4 + 补强 T3 三扩展）：调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
+  // ctx.llm 实现（D39/T4 + 补强 T3 三扩展 + M4-3 T1b model/webSearch/listModels 扩展）：
+  // 调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
   llmHolder.impl = {
-    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number }) =>
+    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }) =>
       (async function* (): AsyncGenerator<Chunk> {
         let resolved: { stream: StreamFn; model: string };
         try {
-          resolved = resolveProvider();
+          // SW-17 model 覆盖：provider/model 限定形走全解析（可钉非当前槽）；裸值 = 当前槽上换模型（不换槽）
+          resolved = req.model === undefined ? resolveProvider()
+            : req.model.includes("/") ? resolveModelValue(req.model)
+            : { stream: resolveProvider().stream, model: req.model };
         } catch (err) {
           yield { type: "finish", kind: "error", errorMessage: `llm 口解析失败：${err instanceof Error ? err.message : String(err)}` };
           return;
@@ -526,11 +533,29 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           model: resolved.model,
           system: req.system ?? "",
           messages: req.messages,
-          tools: [], // 二级调用不带工具（D39）
+          tools: [], // 二级调用不带客户端工具（D39）——webSearch 是服务端搜索声明，与 tools 正交（M4-3 T1b）
           ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
+          ...(req.webSearch !== undefined ? { webSearch: req.webSearch } : {}),
           signal: req.signal ?? new AbortController().signal,
         });
       })(),
+    // SW-17 模型目录：无一槽提供目录能力时方法缺省（undefined——菜单据此灰显模型选择）；
+    // 有能力则跨槽聚合，条目统一 provider/model 限定形（钉选值同款格式）。getter 惰性——reload 后按新图重判
+    get listModels(): LlmPort["listModels"] {
+      const capable = graph.services.listProviders().some((s) => graph.services.provider(s.name)?.listModels !== undefined);
+      if (!capable) return undefined;
+      return async (): Promise<string[]> => {
+        const out: string[] = [];
+        for (const s of graph.services.listProviders()) {
+          const slot = graph.services.provider(s.name);
+          if (slot?.listModels === undefined) continue;
+          try {
+            for (const m of await slot.listModels()) out.push(`${s.name}/${m}`);
+          } catch { /* 单槽目录拉取失败跳过——聚合是尽力面 */ }
+        }
+        return out;
+      };
+    },
     get contextWindow() { return contextWindow; }, // getter：reload 后读新值（空白 §5）
     get lastUsage() { return usageAnchor; }, // usage 锚点只读透出（空白 §4）——锚点在 harness 主循环包装，loop 骨架不消费
   };
