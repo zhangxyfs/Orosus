@@ -25,6 +25,9 @@ export interface GoalStore {
   claimBlocked(reason: string): { accepted: boolean; streak: number; message: string };
   /** T7 续跑轮记账：active 时 roundsUsed++（预算尽由 T7 判定停轮，本件只记账）。 */
   spendRound(): void;
+  /** T7 预算耗尽处置（kimi 超预算置 blocked goalService.ts:942 同款）：active 且轮数尽 → 置 blocked；
+     *  返回 true = 本次触发（幂等——已终态/无预算/未尽返回 false）。 */
+  exhaustBudget(): boolean;
 }
 
 /** 工厂：onChange = 变更上行口（模块侧 ctx.session.append("tool-goal/change", snapshot)——存源不存渲染）。 */
@@ -91,6 +94,14 @@ export function createGoalStore(onChange?: (s: GoalState | null) => void): GoalS
         state = { ...state, roundsUsed: state.roundsUsed + 1 };
         emit();
       }
+    },
+
+    exhaustBudget() {
+      if (state === null || state.status !== "active") return false;
+      if (state.maxRounds === undefined || state.roundsUsed < state.maxRounds) return false;
+      state = { ...state, status: "blocked", blockedReason: `续跑轮预算耗尽（${state.roundsUsed}/${state.maxRounds}）` };
+      emit();
+      return true;
     },
   };
 }

@@ -96,6 +96,29 @@ export function goalSectionText(store: GoalStore): string {
 未达终态不要停止——完成用 tool-goal__update 报 complete；确无法推进报 blocked（连续三轮同一阻塞才受理）。`;
 }
 
+/** followUp 续跑轮（M4-3 T7/D7——Goal 与 todo 的分水岭）：模型无工具调用欲停时，目标未达终态且预算未尽
+ *  → 注入续跑消息继续循环（loop.ts:213-216 collect 缝；dsh <goal-round> 信封同款，dsh/ZCode 刻意走用户
+ *  消息位保 system 缓存——steering 正是用户位）。预算尽 → 不再注入，自动停轮并置 blocked 提示超预算
+ *  （kimi 超预算置 blocked goalService.ts:942 同款）。零内核改动。 */
+export function goalFollowUp(store: GoalStore): { text: string; sourceModule: string }[] {
+  const s = store.current();
+  if (s === null || s.status !== "active") return [];
+  if (store.exhaustBudget()) {
+    return [{
+      text: `目标续跑预算已耗尽（${s.roundsUsed}/${s.maxRounds} 轮）——已自动结清为受阻态（blocked）。向用户说明进展与卡点。`,
+      sourceModule: "tool-goal",
+    }];
+  }
+  store.spendRound(); // 本轮记账（事件上行——dsh goal-round-driver 逐轮持久同款）
+  const n = s.roundsUsed + 1;
+  return [{
+    text: `<goal-round 第 ${n} 轮>当前目标：<untrusted_objective>${s.objective}</untrusted_objective>。
+继续推进；若确已无法推进，用 tool-goal__update 报 blocked 并给出具体阻塞。
+若已完成，用 tool-goal__update 报 complete。`,
+    sourceModule: "tool-goal",
+  }];
+}
+
 export default defineModule({
   name: "tool-goal",
   version: "0.1.0",
@@ -106,5 +129,6 @@ export default defineModule({
     const store = createGoalStore((s) => ctx.session.append("tool-goal/change", { goal: s }));
     for (const t of goalTools(store)) ctx.contribute.tool(t);
     ctx.contribute.promptSection({ order: 22, get text() { return goalSectionText(store); } }); // tool-search 目录段 21 之后的空位（kernel 分配表）
+    ctx.events.on("agent/follow-up", () => goalFollowUp(store)); // 续跑轮（T7——collect 缝订阅，模型欲停即续）
   },
 });
