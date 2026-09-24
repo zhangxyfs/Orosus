@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
@@ -6,12 +8,29 @@ import { FS, type Fs } from "@orosus/contracts/fs";
 
 const params = {
   command: z.string().describe("要执行的 shell 命令（Windows=cmd，POSIX=sh）"),
+  workdir: z.string().optional().describe("工作目录（相对路径基于上次记忆的目录解析；成功后记为下次缺省——别用 cd，shell 内 cd 不会被记住）"),
   writeOutputTo: z.string().optional().describe("可选：把原始输出经 fs 能力写入此路径"),
   timeoutMs: z.number().int().positive().max(120_000).optional().describe("超时毫秒，默认 120000，超时杀整个进程树"),
 };
-type BashInput = { command: string; writeOutputTo?: string; timeoutMs?: number };
+type BashInput = { command: string; workdir?: string; writeOutputTo?: string; timeoutMs?: number };
 
 const MAX_TIMEOUT = 120_000;
+
+/** 跨调用目录记忆（M4-3 T2 伪持久第一半）：记「上次 workdir 参数解析后的绝对路径」——不捕获 shell 内部 cd
+ *  （捕获需 shell 感知的 pwd/cd 回写，win32 cmd 与 POSIX 命令不同，SW-9 v1 不做）。 */
+interface ShellMemory { lastWorkdir: string | undefined }
+
+/** cwd 解析链：显式 workdir（相对 → 基于上次记忆；无记忆 → 进程 cwd）> 记忆 > 进程 cwd。
+ *  目标不存在/不是目录 → 回落进程 cwd 并在结果里说明（cc-haha Shell.ts:222-238 同款兜底，SW-9）。 */
+function resolveCwd(input: BashInput, memory: ShellMemory): { cwd: string; fellBackTo: string | undefined } {
+  const base = memory.lastWorkdir ?? process.cwd();
+  if (input.workdir === undefined) return { cwd: base, fellBackTo: undefined };
+  const target = resolve(base, input.workdir);
+  try {
+    if (statSync(target).isDirectory()) return { cwd: target, fellBackTo: undefined };
+  } catch { /* 不存在——落回落 */ }
+  return { cwd: process.cwd(), fellBackTo: target };
+}
 
 /** 杀整个进程树：Windows 下 shell:true 的孙进程不吃 child.kill（只死 cmd 壳），走 taskkill /T /F；
  *  POSIX 靠 detached 进程组，-pid 一发全灭。 */
@@ -53,11 +72,14 @@ function decodeOut(buf: Buffer): string {
     .join("\n");
 }
 
-/** 执行命令：stdout+stderr 合并；退出码非 0 / 超时 / 中止 → 带内 isError（永不 reject）。 */
-function runBash(input: BashInput, fs: Fs, signal: AbortSignal): Promise<ToolResult> {
+/** 执行命令：stdout+stderr 合并；退出码非 0 / 超时 / 中止 → 带内 isError（永不 reject）。
+ *  退出码 0 = 成功 → 记忆本次实际用过的目录（失败命令不改记忆——T2/SW-9）。 */
+function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMemory): Promise<ToolResult> {
   const timeout = input.timeoutMs ?? MAX_TIMEOUT;
+  const { cwd, fellBackTo } = resolveCwd(input, memory);
+  const cwdNote = fellBackTo !== undefined ? `\n[workdir 目标 ${fellBackTo} 不存在——已回落在 ${cwd} 执行]` : "";
   return new Promise((resolvePromise) => {
-    const child = spawn(input.command, { shell: true, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn(input.command, { shell: true, cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     const chunks: Buffer[] = []; // 原始字节累积——close 后统一解码（decodeOut 编码判定需要全量字节）
     let timedOut = false;
     const finish = (r: ToolResult) => {
@@ -86,20 +108,23 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal): Promise<ToolRes
             return finish({ output: `${out}\n[writeOutputTo 失败：${err instanceof Error ? err.message : String(err)}]`, isError: true });
           }
         }
-        if (code === 0) return finish({ output: out, isError: false });
-        finish({ output: `[退出码 ${code ?? "null"}]\n${out}`, isError: true });
+        if (code === 0) {
+          memory.lastWorkdir = cwd; // 记忆 = 本次实际用过的目录（含回落后的 cwd）
+          return finish({ output: `${out}${cwdNote}`, isError: false });
+        }
+        finish({ output: `[退出码 ${code ?? "null"}]\n${out}${cwdNote}`, isError: true });
       })();
     });
   });
 }
 
-function bashTool(fs: Fs): Tool {
+function bashTool(fs: Fs, memory: ShellMemory): Tool {
   return defineTool({
     name: "tool-shell__bash",
-    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.",
+    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not `cd`) to run in a specific directory — it is remembered for the next call.\n`cd` inside a command does NOT carry over (only workdir is remembered).",
     parameters: z.object(params),
     resolveExecution: (input) => {
-      const { command, writeOutputTo, timeoutMs } = input as BashInput;
+      const { command, workdir, writeOutputTo, timeoutMs } = input as BashInput;
       return Promise.resolve({
         accesses: [Access.subprocess()],
         // 带参规则：审批模块（M3）据此匹配，如配置 "tool-shell__bash(git *)" 放行 git 系命令
@@ -107,7 +132,7 @@ function bashTool(fs: Fs): Tool {
         // 迷你 glob：仅支持后缀 *（前缀匹配），否则全等。刻意不做完整 glob——审批语义要一眼看懂
         matchesRule: (ruleArgs: string) =>
           ruleArgs.endsWith("*") ? command.startsWith(ruleArgs.slice(0, -1)) : command === ruleArgs,
-        execute: (tctx) => runBash({ command, ...(writeOutputTo !== undefined ? { writeOutputTo } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) }, fs, tctx.signal),
+        execute: (tctx) => runBash({ command, ...(workdir !== undefined ? { workdir } : {}), ...(writeOutputTo !== undefined ? { writeOutputTo } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) }, fs, tctx.signal, memory),
       });
     },
   });
@@ -122,6 +147,6 @@ export default defineModule({
   uses: ["subprocess"],
   async activate(ctx) {
     const fs = await ctx.services.get<Fs>(FS);
-    ctx.contribute.tool(bashTool(fs));
+    ctx.contribute.tool(bashTool(fs, { lastWorkdir: undefined })); // 记忆随激活生命周期（reload 重建即清零——新配置新起点）
   },
 });

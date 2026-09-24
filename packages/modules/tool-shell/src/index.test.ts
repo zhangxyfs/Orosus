@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { Fs } from "@orosus/contracts/fs";
@@ -108,5 +111,113 @@ describe("tool-shell（能力消费者范例：dependsOn [fs]）", () => {
     expect(exec.matchesRule!("git status")).toBe(true);
     expect(exec.matchesRule!("git")).toBe(false);
     expect(exec.matchesRule!("rm *")).toBe(false);
+  });
+});
+
+// M4-3 T2：workdir 参数 + 跨调用目录记忆（伪持久第一半，SW-9）
+describe("tool-shell workdir + 目录记忆（M4-3 T2）", () => {
+  const CWD_CMD = `node -e "process.stdout.write(process.cwd())"`;
+  const mk = async () => {
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    return tools[0]!;
+  };
+  let dir: string | undefined;
+  const tmp = () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-sh-wd-"));
+    return dir;
+  };
+  afterEach(() => { if (dir !== undefined) { rmSync(dir, { recursive: true, force: true }); dir = undefined; } });
+
+  it("① 缺省继承进程 cwd（无记忆无参数）", async () => {
+    const tool = await mk();
+    const r = await run(tool, { command: CWD_CMD });
+    expect(r.isError).toBe(false);
+    expect(r.output).toBe(process.cwd());
+  });
+
+  it("② 显式 workdir 生效；成功后第二次无参继承记忆（不用每条都 cd）", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const r1 = await run(tool, { command: CWD_CMD, workdir: d });
+    expect(r1.isError).toBe(false);
+    expect(r1.output).toBe(d);
+    const r2 = await run(tool, { command: CWD_CMD });
+    expect(r2.output).toBe(d); // 记忆生效
+  });
+
+  it("③ 相对路径基于上次记忆解析（记忆/a/b + workdir c → /a/b/c）", async () => {
+    const tool = await mk();
+    const d = tmp();
+    mkdirSync(join(d, "sub"));
+    await run(tool, { command: CWD_CMD, workdir: d });
+    const r = await run(tool, { command: CWD_CMD, workdir: "sub" });
+    expect(r.output).toBe(join(d, "sub"));
+  });
+
+  it("④ 无记忆时相对路径基于进程 cwd", async () => {
+    const tool = await mk();
+    const d = tmp();
+    void d;
+    const r = await run(tool, { command: CWD_CMD, workdir: "." });
+    expect(r.output).toBe(process.cwd());
+  });
+
+  it("⑤ 绝对路径 workdir 直接用（不经记忆基址）", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const r = await run(tool, { command: CWD_CMD, workdir: d });
+    expect(r.output).toBe(d);
+  });
+
+  it("⑥ 目录不存在 → 回落进程 cwd + 结果说明（SW-9/cc-haha 同款兜底）", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const ghost = join(d, "ghost");
+    const r = await run(tool, { command: CWD_CMD, workdir: ghost });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("不存在");
+    expect(r.output).toContain("回落");
+    expect(r.output).toContain(process.cwd());
+  });
+
+  it("⑦ workdir 指向文件（非目录）→ 同样回落 + 说明", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const f = join(d, "f.txt");
+    writeFileSync(f, "x");
+    const r = await run(tool, { command: CWD_CMD, workdir: f });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("回落");
+  });
+
+  it("⑧ 失败命令（退出码非 0）不改记忆", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const fail = await run(tool, { command: FAIL_CMD, workdir: d });
+    expect(fail.isError).toBe(true);
+    const r = await run(tool, { command: CWD_CMD });
+    expect(r.output).toBe(process.cwd()); // 记忆未被失败命令污染
+  });
+
+  it("⑨ 超时不改记忆", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const t = await run(tool, { command: `node -e "setTimeout(()=>{},3000)"`, workdir: d, timeoutMs: 200 });
+    expect(t.isError).toBe(true);
+    expect(t.output).toContain("超时");
+    const r = await run(tool, { command: CWD_CMD });
+    expect(r.output).toBe(process.cwd());
+  });
+
+  it("⑩ 记忆链三连：workdir → 继承 → 再相对（同一激活实例跨调用）", async () => {
+    const tool = await mk();
+    const d = tmp();
+    mkdirSync(join(d, "a"));
+    mkdirSync(join(d, "a", "b"));
+    expect((await run(tool, { command: CWD_CMD, workdir: d })).output).toBe(d);
+    expect((await run(tool, { command: CWD_CMD, workdir: "a" })).output).toBe(join(d, "a"));
+    expect((await run(tool, { command: CWD_CMD, workdir: "b" })).output).toBe(join(d, "a", "b"));
+    expect((await run(tool, { command: CWD_CMD })).output).toBe(join(d, "a", "b")); // 无参继承最新
   });
 });
