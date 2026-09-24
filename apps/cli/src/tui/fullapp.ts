@@ -1,7 +1,8 @@
 /** 全屏应用（TUI 批阶段三 F3–F5——原型完整交互面落地；v1.1–v1.11 走查拍板口径）。
  *  布局：无标题栏 + 左栏（stream 滚动区 + 输入框带框多行 ≤5 行超出上滚）+ 右栏双面板
  *  （运行状态/任务清单，真实数据经 io.panelData）+ 末列整列留白（conhost DECAWM 防御）。
- *  交互：Tab 焦点循环（聚焦面板青玉框）/ Shift+Tab 权限循环 / Esc 忙碌时双击停生成（单击 toast 提示防误触）、闲时返回输入 /
+ *  交互：Tab 焦点循环（聚焦面板青玉框；面板聚焦裸键直控〔2026-09-24 拍板，不再借道 Shift〕：←→ 翻页 / PgUp·PgDn 模块·任务翻页 / ↑↓ 选择 / Enter 挂卸）/
+ *  Shift+Tab 权限循环 / Esc 忙碌时双击停生成（单击 toast 提示防误触）、闲时返回输入 /
  *  斜杠菜单全宽浮层（每页 10 条窗口跟随/「还有 N 项」/二级列表 ✓ 当前值/空过滤占位不关窗/长说明）/
  *  输入多行 ≤5 + Alt+Enter 换行 + Ctrl+A 全选 + Shift+←→ 选择 + bracketed paste / Alt+E 思考折叠 / Alt+O 工具明细折叠 / Alt+F 失败体折叠。
  *  Ctrl+C 全屏期不占用（2026-09-23 用户拍板——WT 原生复制让位；退出走 /quit，停生成走双击 Esc）。
@@ -116,6 +117,7 @@ interface AppState {
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
+const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
 const TASK_TICK: Record<string, string> = { done: theme.fg("accent", "✓"), active: theme.fg("warn", "◐"), pending: theme.fg("muted", "○") };
 /** 运行时间格式化（F5 十轮② 用户拍板：精确到秒，随 1s 心跳实时跳）：
@@ -729,17 +731,26 @@ export class FullApp {
 		} else if (key === "shift+tab") {
 			this.io.submit(this.io.panelData().permissionNext());
 			return;
-		} else if (key === "pageUp") {
-			s.scrollBack += Math.max(1, this.io.rows() - 10);
-		} else if (key === "pageDown") {
-			s.scrollBack = Math.max(0, s.scrollBack - Math.max(1, this.io.rows() - 10));
+		} else if (key === "pageUp" || key === "pageDown") {
+			// 面板聚焦时归面板（2026-09-24 拍板——翻页不再借道 Shift）：运行状态=模块翻页、任务清单=任务翻页，
+			// 未聚焦才滚对话流；故此分支必须整体先于下方焦点分支
+			if (s.focusIdx === 1) {
+				const mods = this.io.panelData().modules;
+				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "pageUp" ? -MODULE_SLOTS : MODULE_SLOTS)));
+			} else if (s.focusIdx === 2) {
+				const tasks = this.io.panelData().tasks;
+				const slots = this.taskPageSlots();
+				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "pageUp" ? -slots : slots)));
+			} else if (key === "pageUp") {
+				s.scrollBack += Math.max(1, this.io.rows() - 10);
+			} else {
+				s.scrollBack = Math.max(0, s.scrollBack - Math.max(1, this.io.rows() - 10));
+			}
 		} else if (s.focusIdx === 1) {
 			const mods = this.io.panelData().modules;
 			if (key === "up" || key === "down") {
 				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "up" ? -1 : 1)));
-			} else if (key === "shift+up" || key === "shift+down") {
-				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "shift+up" ? -5 : 5)));
-			} else if (key === "shift+left" || key === "shift+right") {
+			} else if (key === "left" || key === "right") {
 				s.statePage = s.statePage === 0 ? 1 : 0;
 			} else if (key === "enter") {
 				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload
@@ -750,8 +761,6 @@ export class FullApp {
 			const tasks = this.io.panelData().tasks;
 			if (key === "up" || key === "down") {
 				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "up" ? -1 : 1)));
-			} else if (key === "shift+pageUp" || key === "shift+pageDown") {
-				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "shift+pageUp" ? -5 : 5)));
 			}
 		} else {
 			this.onEditKey(key);
@@ -1066,7 +1075,7 @@ export class FullApp {
 				` ${theme.fg("muted", "上下文")} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
 			);
 			content.push(this.sep(inner));
-			const slots = 5;
+			const slots = MODULE_SLOTS;
 			const pages = Math.max(1, Math.ceil(d.modules.length / slots));
 			const page = Math.min(pages - 1, Math.floor(s.moduleSel / slots));
 			const lo = page * slots;
@@ -1076,12 +1085,19 @@ export class FullApp {
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["Shift + ←→ 翻页", "Shift + ↑↓ 翻页 · Enter 挂/卸载"], [this.sep(inner)]);
+			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], [this.sep(inner)]);
 		}
 		const content: string[] = [
 			` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
 		];
-		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["Shift + ←→ 返回运行状态 · Esc 返回"], [this.sep(inner)]);
+		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["←→ 返回运行状态 · Esc 返回"], [this.sep(inner)]);
+	}
+
+	// 任务清单每页行数（翻页步长 = 页大小——步长小于页大小时选中项在页内挪动页号不翻）；
+	// 与 renderFrame 的 statusH/taskH 布局同口径，改布局两处同步
+	private taskPageSlots(): number {
+		const taskH = this.io.rows() - Math.max(8, Math.floor(this.io.rows() * 0.55));
+		return Math.max(2, taskH - 6);
 	}
 
 	private taskRows(w: number, h: number): string[] {
@@ -1090,7 +1106,7 @@ export class FullApp {
 		const focused = s.focusIdx === 2;
 		const inner = w - 2;
 		const done = d.tasks.filter((t) => t.state === "done").length;
-		const slots = Math.max(2, h - 6);
+		const slots = this.taskPageSlots();
 		const pages = Math.max(1, Math.ceil(d.tasks.length / slots));
 		const page = Math.min(pages - 1, Math.floor(s.taskSel / slots));
 		const lo = page * slots;
@@ -1109,7 +1125,7 @@ export class FullApp {
 		const footL = theme.dim(" 由 Agent 实时同步");
 		const footR = theme.dim(`任务数：${done}/${d.tasks.length}`);
 		const footer = [this.sep(inner), footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["Shift + PgUp/PgDn 翻页 · Esc 返回"], footer);
+		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["PgUp/PgDn 翻页 · Esc 返回"], footer);
 	}
 
 	private styleWithSelection(vr: InputRow, sel: { lo: number; hi: number } | undefined): string {

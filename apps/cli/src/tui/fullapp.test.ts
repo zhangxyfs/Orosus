@@ -24,7 +24,7 @@ function fakeTerm(cols = 100, rows = 30): { input: FakeInput; output: FakeOutput
 	return { input, output };
 }
 
-function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
+function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Partial<FullAppIO> = {}) {
 	const submitted: string[] = [];
 	const actions: string[] = [];
 	const queue: string[] = [];
@@ -63,6 +63,7 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30) {
 		toggleThink: () => actions.push("think"),
 		toggleTool: () => actions.push("tool"),
 		toggleErr: () => actions.push("err"),
+		...over,
 	};
 	const { input, output } = fakeTerm(cols, rows);
 	const app = new FullApp(io, { input, output });
@@ -163,6 +164,61 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		input.emit("data", "\x1b[6~"); // PgDn
 		await flush();
 		expect(st.state.scrollBack).toBe(0);
+		app.stop();
+	});
+	it("④b 面板聚焦裸键直控（2026-09-24 拍板——翻页不再借道 Shift）：状态面板 ←→ 翻页 / PgUp·PgDn 模块翻页 / ↑↓ 选择；任务面板 PgUp·PgDn 翻页；聚焦期 PgUp·PgDn 不滚对话流", async () => {
+		const doc = Array.from({ length: 60 }, (_, i) => `第 ${i} 行`);
+		const mods = Array.from({ length: 7 }, (_, i) => ({ name: `mod-${i}`, desc: "测试", state: "mounted" as const }));
+		const tasks = Array.from({ length: 18 }, (_, i) => ({ text: `任务 ${i}`, state: "pending" as const }));
+		// 44 行：状态面板（55% 定高）才装得下底部提示行——30 行终端提示行被 slice 截掉（既有挤压口径）
+		const { app, input, output } = rig(doc, 100, 44, {
+			panelData: () => ({
+				model: "glm-5.3",
+				session: "test-sid",
+				cwd: "D:/x",
+				tokens: { input: 1, output: 1 },
+				startedAt: new Date(Date.now() - 60000).toISOString(),
+				contextWindow: 100000,
+				modules: mods,
+				tasks: tasks,
+				permission: "ask-risky",
+				permissionNext: () => "/permission ask-always",
+			}),
+		});
+		app.start();
+		await flush();
+		const plain = stripAnsi(output.buf); // 首帧提示文案钉（PgUp/PgDn 能放下一行——用户拍板用完整形态）
+		expect(plain).toContain("←→ 翻页 · PgUp/PgDn 模块翻页");
+		expect(plain).toContain("↑↓ 模块选择 · Enter 挂/卸载");
+		expect(plain).toContain("PgUp/PgDn 翻页 · Esc 返回");
+		const st = app as unknown as {
+			state: { scrollBack: number; moduleSel: number; taskSel: number; statePage: number; focusIdx: number };
+		};
+		input.emit("data", "\t"); // 焦点 → 运行状态
+		await flush();
+		expect(st.state.focusIdx).toBe(1);
+		input.emit("data", "\x1b[C"); // → 翻页：运行状态 → 网络 · MCP
+		await flush();
+		expect(st.state.statePage).toBe(1);
+		input.emit("data", "\x1b[D"); // ← 返回运行状态页
+		await flush();
+		expect(st.state.statePage).toBe(0);
+		input.emit("data", "\x1b[6~"); // PgDn → 模块翻页（每页 5）：sel 0 → 5 落第 2 页
+		await flush();
+		expect(st.state.moduleSel).toBe(5);
+		expect(st.state.scrollBack).toBe(0); // 面板聚焦期 PgUp/PgDn 归面板，不滚对话流
+		input.emit("data", "\x1b[B"); // ↓ 模块选择就地 +1
+		await flush();
+		expect(st.state.moduleSel).toBe(6);
+		input.emit("data", "\t"); // 焦点 → 任务清单
+		await flush();
+		expect(st.state.focusIdx).toBe(2);
+		input.emit("data", "\x1b[6~"); // PgDn → 任务翻页（44 行终端 taskH=20 → 每页 14）：sel 0 → 14 落第 2 页
+		await flush();
+		expect(st.state.taskSel).toBe(14);
+		input.emit("data", "\x1b[5~"); // PgUp 翻回第一页
+		await flush();
+		expect(st.state.taskSel).toBe(0);
 		app.stop();
 	});
 	it("⑤ Ctrl+T → 侧栏开关；Ctrl+C 全屏期不占用（2026-09-23 用户拍板：WT 原生复制让位——退出走 /quit）", async () => {

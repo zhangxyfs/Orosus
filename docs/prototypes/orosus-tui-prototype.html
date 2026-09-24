@@ -396,16 +396,16 @@
             </div>
             <div class="inputhint" data-spec="提示行 11.5px · --muted-dim">
               <span><span class="mode-chip" id="mode-chip">◆ 需要时询问</span><span class="hsep">·</span>Shift+Tab 切换模式</span>
-              <span class="gutter-hide">Enter 发送 · / 命令 · Tab 面板焦点 · Shift+←→ / Shift+PgUp·PgDn 翻页 · Esc 返回输入</span>
+              <span class="gutter-hide">Enter 发送 · / 命令 · Tab 面板焦点 · ←→ / PgUp·PgDn 翻页 · Esc 返回输入</span>
             </div>
           </form>
         </div>
 
         <!-- ═══ right sidebar ═══ -->
         <aside class="side">
-          <!-- 右上：运行状态 / 网络·MCP（双页，Shift+←→ 翻页） -->
+          <!-- 右上：运行状态 / 网络·MCP（双页，←→ 翻页） -->
           <section class="panel panel-state" id="panel-state" data-od-id="panel-state" aria-label="运行状态">
-            <div class="panel-head" data-spec="面板标题 11px · ls .16em · --muted"><span id="state-title">运行状态</span><span class="en"><b id="state-page">1/2</b> · Shift+←→ 翻页</span></div>
+            <div class="panel-head" data-spec="面板标题 11px · ls .16em · --muted"><span id="state-title">运行状态</span><span class="en"><b id="state-page">1/2</b> · ←→ 翻页</span></div>
 
             <div class="page" id="state-page-1">
               <dl class="kv" data-spec="键值 12.5px · dt --muted · dd --fg">
@@ -454,7 +454,7 @@
                 </div>
               </div>
 
-              <div class="mod-hint">Shift+↑↓ 翻页</div>
+              <div class="mod-hint">↑↓ 模块选择 · PgUp/PgDn 翻页 · Enter 挂/卸载</div>
             </div>
 
             <div class="page" id="state-page-2" hidden>
@@ -489,13 +489,13 @@
                 <span class="mdesc">模块仓库</span><span class="mstate">未连接</span>
               </div>
 
-              <div class="mod-hint">Shift+←→ 返回运行状态 · Esc 返回输入</div>
+              <div class="mod-hint">←→ 返回运行状态 · Esc 返回输入</div>
             </div>
           </section>
 
-          <!-- 右下：任务清单（固定高度，Shift+PgUp/PgDn 翻页，提示固定底部） -->
+          <!-- 右下：任务清单（固定高度，PgUp/PgDn 翻页，提示固定底部） -->
           <section class="panel panel-todo" id="panel-todo" data-od-id="panel-todo" aria-label="任务清单">
-            <div class="panel-head"><span>任务清单</span><span class="en"><b id="todo-page">1/2</b> · Shift+PgUp/PgDn 翻页</span></div>
+            <div class="panel-head"><span>任务清单</span><span class="en"><b id="todo-page">1/2</b> · PgUp/PgDn 翻页</span></div>
 
             <div class="todo-progress">
               <div class="bar" role="img" aria-label="任务进度"><i id="todo-bar" style="width:38%"></i></div>
@@ -922,9 +922,8 @@
               ['↑ / ↓',              '在命令菜单或已聚焦的面板中移动选中项（任务面板中仅浏览，不可改状态）'],
               ['Enter / Space',      '对选中项执行操作：确认选择、挂载/卸载模块（任务清单只读，由 Agent 同步）'],
               ['Esc',                '关闭菜单，或把焦点从面板退回输入框'],
-              ['Shift+← / →',        '右上面板在「运行状态」与「网络 · MCP」两页之间切换'],
-              ['Shift+↑ / ↓',        '聚焦模块面板时，模块列表内容过多可翻页浏览'],
-              ['Shift+PgUp / PgDn',  '任务清单内容过多时翻页浏览'],
+              ['← / →',              '面板聚焦时在「运行状态」与「网络 · MCP」两页之间切换'],
+              ['PgUp / PgDn',        '面板未聚焦时回看上方对话；聚焦时为面板翻页（模块列表 / 任务清单）'],
               ['Ctrl+Shift+E',       '展开 / 收起 Agent 的思考过程（默认只显示 2 行）'],
               ['Ctrl+Shift+X',       '展开 / 收起 diff 的全部编辑内容（默认只显示 5 行）'],
               ['Ctrl+Shift+G',       '显示 / 隐藏界面设计标注（字号、字重、颜色 token）'],
