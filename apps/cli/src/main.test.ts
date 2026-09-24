@@ -279,3 +279,41 @@ describe("模块命令 Esc 穿透契约（2026-09-24 走查实锤前案回归钉
     await h.close();
   });
 });
+
+describe("/provider 写盘 → reload → 新槽进图（2026-09-24 走查 bug②机制钉——/settings LLM 钉模型清单读活槽）", () => {
+  it("配置中新增平台 + h.reload() → listProviders 含新槽、槽模型经目录聚合可取", async () => {
+    // 机制钉：自动重载钩在 main.ts processReplLine（宿主脚本内件无独立缝——与 Esc 修复同记录在案）；
+    // 本钉锁死其依赖的语义面：reload 后新槽激活进图 + 槽模型目录优选聚合（盘喂盘密封，零网络）；
+    // 跨槽聚合 provider/model 限定形钉在 harness.test.ts ⑤⑥（不重复）
+    const h = await isolated({ userToml: 'model = "fake/m"' + String.fromCharCode(10) }); // tmp 目录即共享 dir
+    const prevHome = process.env["OROSUS_HOME"];
+    process.env["OROSUS_HOME"] = dir; // 目录缓存密封进同一 tmp（listModels 调用期才解析路径）
+    try {
+      mkdirSync(join(dir, "cache"), { recursive: true });
+      writeFileSync(join(dir, "cache", "models-dev.json"), JSON.stringify({
+        fetchedAt: Date.now(),
+        catalog: { newprov: { id: "newprov", name: "NewProv", models: { "nm-1": { id: "nm-1" } } } },
+      }), "utf8");
+      // 中途写盘新增平台（等价 /provider 向导的产物）
+      writeFileSync(join(dir, "config.toml"), [
+        'model = "fake/m"',
+        "",
+        "[provider-custom.providers.newprov]",
+        'type = "openai"',
+        'baseUrl = "https://newprov.example/v1"',
+        'defaultModel = "nm-1"',
+        "",
+      ].join("\n"), "utf8");
+      await h.reload();
+      expect(h.graph().services.listProviders().map((p) => p.name)).toContain("newprov");
+      // 槽级 listModels 数据源直证（目录优选——盘喂盘即中，live 不触网）
+      const { catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels } = await import("@orosus/provider-custom");
+      const list = await catalogPreferredListModels("newprov", openaiListModels({ baseUrl: "https://newprov.example/v1", fetchImpl: (async () => { throw new Error("不该走 live"); }) as typeof fetch }), diskFirstCatalogLoader())();
+      expect(list).toEqual(["nm-1"]);
+      await h.close();
+    } finally {
+      if (prevHome === undefined) delete process.env["OROSUS_HOME"];
+      else process.env["OROSUS_HOME"] = prevHome;
+    }
+  });
+});

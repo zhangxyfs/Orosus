@@ -106,13 +106,13 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     const act = await ui.choose(`${name}`, ["设为当前默认", "更新密钥", "移除", "返回"]);
     if (act === "设为当前默认") {
       await deps.setModel(name); // 裸槽名（F5 十轮）
-      return `已设为当前默认（provider = "${name}"），下个 turn 生效`;
+      return `已设为当前默认（provider = "${name}"）`;
     }
     if (act === "移除") {
       const next = { ...current };
       delete next[name];
       await deps.saveProviders(next);
-      return `已移除 ${name}（重启或 /reload 生效）`;
+      return `已移除 ${name}`;
     }
     return "已返回";
   }
@@ -242,5 +242,5 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
   const banner = v.kind === "unsupported" ? "success（警告：端点可达但无法校验密钥——/models 404/405）" : "success：已写入并完成校验";
   return `${banner}
 ${shown}${ctxNote}${modelNote}
-（重启或 /reload 生效；配置已全量重写，注释已移除）`;
+（配置已全量重写，注释已移除；CLI 宿主写盘后自动重载模块图即生效）`;
 }

@@ -696,6 +696,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         );
         for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
         pendingLineSeqs = [];
+        // /provider 写盘后自动重载模块图（2026-09-24 走查 bug 前案：会话内新加平台不进激活槽——/settings 的
+        // LLM 钉模型清单读活槽，不重载即缺席；「设为当前默认」写的顶层 provider 键同理随重载即时生效）；
+        // 只在写盘结果后重载（success/已设为当前默认/已移除——取消与未写入不动图）
+        if (cmdNameOf(text) === "/provider" && /^(?:success|已设为当前默认|已移除)/.test(cmdOut ?? "")) {
+          await h.reload();
+          notify("平台配置已即时生效（模块图已重载）");
+        }
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
