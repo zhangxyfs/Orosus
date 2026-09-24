@@ -75,10 +75,10 @@ export interface Harness {
   /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
    *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
   liveChunks(): AsyncIterable<Chunk>;
-  /** Token 用量读口（2026-09-22 命令分级批⑤——/usage 内建命令退役，宿主 /other 面板直调）：
+  /** Token 用量读口（2026-09-22 命令分级批⑤——/usage 内建命令退役，宿主 /settings 面板直调）：
    *  当前会话累计恒有；存储后端支持跨会话累计（JsonlStore）时带 lifetime。 */
   usage(): Promise<{ current: { input: number; output: number }; lifetime?: { input: number; output: number; sessions: number } }>;
-  /** 运行状态读口（批⑥——/status 内建命令退役并入 /other）：model（含运行期覆盖标记）、会话 id、模块图三计数。 */
+  /** 运行状态读口（批⑥——/status 内建命令退役并入 /settings）：model（含运行期覆盖标记）、会话 id、模块图三计数。 */
   status(): { model: string; overridden: boolean; sessionId: string; modules: { active: number; failed: number; discovered: number } };
   /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
    *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
@@ -456,7 +456,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       return "";
     }],
     ["/help", async () => {
-      const lines = ["内建命令：", "  /model /help /reload"]; // 批⑤⑥：/usage /status 退役（宿主读口 h.usage()/h.status() 取代，CLI 并入 /other 面板）
+      const lines = ["内建命令：", "  /model /help /reload"]; // 批⑤⑥：/usage /status 退役（宿主读口 h.usage()/h.status() 取代，CLI 并入 /settings 面板）
       lines.push("别名命令：");
       for (const [short, full] of Object.entries(COMMAND_ALIASES)) {
         const present = graph.commands.some((c) => c.name === full);

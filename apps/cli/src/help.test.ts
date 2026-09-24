@@ -21,7 +21,10 @@ describe("completer + /help（M4-2 T21/B5）", () => {
     expect(HELP_TEXT).toContain("内建命令（模型与状态）");
     expect(HELP_TEXT).toContain("模块命令");
     expect(HELP_TEXT).toContain("/new        开始新会话");
-    expect(HELP_TEXT).not.toContain("\n  /usage"); // 行首命令位不再列（/other 行内的「/usage /status 已并入」指路属有意保留）
+    expect(HELP_TEXT).not.toContain("\n  /usage"); // 行首命令位不再列（/settings 行内的「/usage /status 已并入」指路属有意保留）
+    expect(HELP_TEXT).toContain("/settings"); // M4-3 T1c：/other 改名（旧名直接消失——HELP 行首不再列 /other）
+    expect(HELP_TEXT).not.toContain("\n  /other");
+    expect(commandCompleter("/set")[0]).toContain("/settings");
     expect(HELP_TEXT).not.toContain("\n  /status");
     expect(HELP_TEXT).not.toContain("/paste "); // 批⑤⑥退役清理（Alt+V 提示并入尾部提示行）
     expect(HELP_TEXT).toContain("Alt+V"); // T5 可发现性：图片键位仍在帮助

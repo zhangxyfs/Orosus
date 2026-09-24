@@ -4,6 +4,7 @@ import { fetchTool, type FetchDeps } from "./fetch.ts";
 import { createSearchState, searchTool, type SearchConfig, type SearchStateHolder } from "./search.ts";
 import { buildBackends } from "./backends/index.ts";
 import { llmBackend } from "./backends/llm.ts";
+import { createSettingsHandler } from "./settings.ts";
 
 export { fetchTool, type FetchDeps } from "./fetch.ts";
 export { defaultHtmlToMarkdown, type HtmlToMarkdown } from "./html-to-md.ts";
@@ -13,6 +14,7 @@ export {
 } from "./search.ts";
 export { llmBackend, LlmSearchError, type LlmBackendDeps } from "./backends/llm.ts";
 export { buildBackends } from "./backends/index.ts";
+export { createSettingsHandler, persistToolWebSearch, upsertSecret, type SettingsDeps, type SearchPatch } from "./settings.ts";
 
 /** [tool-web] 配置节（节名 = 模块名，全局约束 3）：search 子节承载后端选择与 per-backend key 占位符（v4.7——
  *  $ENV: 占位符是模块唯一 secrets 通道，secrets.env 不进 process.env；T1c 配置流写占位符不落真 key）。 */
@@ -62,6 +64,9 @@ export const createToolWebModule = (deps: ToolWebDeps = {}): ModuleDefinition<To
         ]),
         ...(deps.searchTimeoutMs !== undefined ? { timeoutMs: deps.searchTimeoutMs } : {}),
       }));
+      // 配置流命令（D9：/settings 二级菜单第五项「配置网络搜索」的本体；规则 4 = 全名注册——
+      // kernel commit 期校验 <module>__ 前缀，activate.ts:314，裸名 "settings" 激活期抛错降级）
+      ctx.contribute.command("tool-web__settings", createSettingsHandler({ state: searchState, llm: ctx.llm }));
     },
   });
 

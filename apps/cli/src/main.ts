@@ -610,18 +610,19 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
       if (text === "/help") { out(HELP_TEXT); return "again"; }
-      // /other（F5 十六轮③：config 改名——其他详细信息；磁盘占用 + 上下文用量双子项）；行模式指路
-      if (text === "/other" || text === "/config") {
+      // /settings（M4-3 T1c/D9：/other 改名——别名平移 /config；/other 旧名直接消失〔2026-09-24 用户拍板，
+      // 不留指路不转别名〕——打字面撞「未知命令」即知新家）
+      if (text === "/settings" || text === "/config") {
         if (activeApp !== undefined) {
-          await openOtherPanel(activeApp);
+          await openSettingsPanel(activeApp);
         } else {
-          out("详细信息面板为全屏形态（--tui full 进入）。磁盘占用/上下文用量在行模式可看：du ~/.orosus 与 /context");
+          await openSettingsLine(out);
         }
         return "again";
       }
       // 退役命令指路（批⑤⑥——打字面肌肉记忆；/paste 先例是干净移除，此二条有明确新家故留一行）
-      if (/^\/usage\s*$/.test(text.trim())) { notify("已退役：/usage 并入 /other → Token 用量"); return "again"; }
-      if (/^\/status\s*$/.test(text.trim())) { notify("已退役：/status 并入 /other → 运行状态"); return "again"; }
+      if (/^\/usage\s*$/.test(text.trim())) { notify("已退役：/usage 并入 /settings → Token 用量"); return "again"; }
+      if (/^\/status\s*$/.test(text.trim())) { notify("已退役：/status 并入 /settings → 运行状态"); return "again"; }
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
       // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
       const isCmdLine = text.trim().startsWith("/");
@@ -836,28 +837,58 @@ const ctxUsageText = (): string => {
 	].join("\n");
 };
 
-/** /other 详细信息面板（批⑤⑥：四子项 = 磁盘占用 + 上下文用量 + Token 用量 + 运行状态；
- *  数据源 = harness 读口 h.usage()/h.status()——/usage /status 内建命令已退役）。 */
-const openOtherPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("其他详细信息", ["磁盘占用（各目录大小与清理口径）", "上下文用量（窗口占用与输入输出累计）", "Token 用量（本会话与项目累计）", "运行状态（模型 / 会话 / 模块图）"]);
+/** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
+ *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
+const SETTINGS_ITEMS = [
+	"磁盘占用（各目录大小与清理口径）",
+	"上下文用量（窗口占用与输入输出累计）",
+	"Token 用量（本会话与项目累计）",
+	"运行状态（模型 / 会话 / 模块图）",
+	"配置网络搜索（LLM Web Search / Tavily / Brave）",
+];
+const tokenUsageText = async (): Promise<string> => {
+	try {
+		const u = await h.usage();
+		const lines = [`当前会话：input ${u.current.input} / output ${u.current.output} tokens`];
+		if (u.lifetime !== undefined) lines.push(`累计（当前项目 ${u.lifetime.sessions} 场会话）：input ${u.lifetime.input} / output ${u.lifetime.output} tokens`);
+		return lines.join("\n");
+	} catch (err) {
+		return `[错误] ${err instanceof Error ? err.message : String(err)}`;
+	}
+};
+const runtimeStatusText = (): string => {
+	const st = h.status();
+	return [
+		`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
+		`session: ${st.sessionId}`,
+		`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
+	].join("\n");
+};
+/** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
+const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
+const openSettingsPanel = async (app: FullApp): Promise<void> => {
+	const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
 	else if (picked === 1) app.viewText("上下文用量", ctxUsageText());
-	else if (picked === 2) {
-		try {
-			const u = await h.usage();
-			const lines = [`当前会话：input ${u.current.input} / output ${u.current.output} tokens`];
-			if (u.lifetime !== undefined) lines.push(`累计（当前项目 ${u.lifetime.sessions} 场会话）：input ${u.lifetime.input} / output ${u.lifetime.output} tokens`);
-			app.viewText("Token 用量", lines.join("\n"));
-		} catch (err) {
-			app.viewText("Token 用量", `[错误] ${err instanceof Error ? err.message : String(err)}`);
-		}
-	} else if (picked === 3) {
-		const st = h.status();
-		app.viewText("运行状态", [
-			`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
-			`session: ${st.sessionId}`,
-			`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
-		].join("\n"));
+	else if (picked === 2) app.viewText("Token 用量", await tokenUsageText());
+	else if (picked === 3) app.viewText("运行状态", runtimeStatusText());
+	else if (picked === 4) {
+		const res = await runSearchSettings();
+		if (res !== "") app.viewText("配置网络搜索", res); // 成功路径走 notice/toast 静默约定——非空输出才落面板
+	}
+};
+/** 行模式对等件（2026-09-24 T1c：/other 时代行模式只有指路——配置流两态都要能走，菜单随之对等）：
+ *  同一五项经 commandUi.choose（readline）；面板文本直出（out = processReplLine 的输出通道参数）。 */
+const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
+	const picked = await commandUi.choose("设置", SETTINGS_ITEMS);
+	const idx = SETTINGS_ITEMS.indexOf(picked);
+	if (idx === 0) out(diskUsageText());
+	else if (idx === 1) out(ctxUsageText());
+	else if (idx === 2) out(await tokenUsageText());
+	else if (idx === 3) out(runtimeStatusText());
+	else if (idx === 4) {
+		const res = await runSearchSettings();
+		if (res !== "") out(res);
 	}
 };
 
@@ -960,11 +991,11 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
-		name: "/other", aliases: ["config"], desc: "其他详细信息", long: "详细信息面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）。",
+		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。",
 	},
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
-	// 批⑤⑥：/usage /status 退役出菜单（并入 /other 面板；打字面留指路）
+	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）
 	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
 	{ name: "/fork", desc: "分叉会话", long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
 	{ name: "/title", aliases: ["rename"], desc: "会话命名", long: "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。" },

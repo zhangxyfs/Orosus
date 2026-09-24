@@ -28,9 +28,9 @@ export function commandCompleter(line: string, cwd = process.cwd()): [string[], 
   }
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/rename", "/quit", "/exit", "/q",
-    "/model", "/reload", "/help", "/other", "/config",
+    "/model", "/reload", "/help", "/settings", "/config",
     "/compact", "/permission", "/yolo", "/auto",
-  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /other；/paste 由 Alt+V 覆盖；/context 早并入 /other）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）
+  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）
   return [all.filter((c) => c.startsWith(line)), line];
 }
 
@@ -54,8 +54,8 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /yolo       一键切到从不询问（批准全自动处理——含危险命令；手写 deny 规则仍拦）
   /auto       一键切回日常默认档（Ask When Needed）
 
-信息面板：
-  /other      其他详细信息（磁盘占用 / 上下文用量 / Token 用量 / 运行状态——/usage /status 已并入）
+设置与信息面板：
+  /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 配置网络搜索——/usage /status 已并入；别名 /config）
 
 快捷键（全屏）：
   Enter       发送；回答进行中 = 排队（队列逐条显示在输入框上方，结束后依序发出）

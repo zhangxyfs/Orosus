@@ -163,7 +163,10 @@ describe("tool-web search 链（M4-3 T1a）", () => {
       const fakeCtx = {
         config: cfg, log: noLog,
         llm: { stream: () => (async function* () { yield* []; })() },
-        contribute: { tool: (t: { name: string }) => { tools.push(t.name); return () => {}; } },
+        contribute: {
+          tool: (t: { name: string }) => { tools.push(t.name); return () => {}; },
+          command: () => () => {},
+        },
       } as unknown as ModuleContext<object>;
       createToolWebModule().activate(fakeCtx as ModuleContext<never>);
       return tools;
