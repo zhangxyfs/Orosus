@@ -5,6 +5,36 @@ import { mapEvent, parseSseBlock, toAnthropicMessages, type SseState } from "./t
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 8192;
 
+/** GLM anthropic 面 tool_result 变体 → 搜索命中（2026-09-24 spike）：content 为 JSON 字符串体
+ *  [[{title,link,content,refer}]]；防御式递归走查，认 (title+link) 或 (title+url) 键对，其余忽略。 */
+function parseSearchHitsFromToolResult(content: unknown): { title: string; url: string }[] {
+  if (typeof content !== "string") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  const out: { title: string; url: string }[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item);
+      return;
+    }
+    if (v === null || typeof v !== "object") return;
+    const o = v as Record<string, unknown>;
+    const url = typeof o["link"] === "string" ? o["link"] : typeof o["url"] === "string" ? o["url"] : undefined;
+    const title = typeof o["title"] === "string" ? o["title"] : undefined;
+    if (url !== undefined && title !== undefined) {
+      out.push({ title, url });
+      return;
+    }
+    for (const item of Object.values(o)) walk(item);
+  };
+  walk(parsed);
+  return out;
+}
+
 /** fetch glue（D31）：Anthropic Messages 协议，双头鉴权，错误全带内。vendored 自 provider-anthropic。 */
 export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
@@ -71,6 +101,13 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
                 return typeof o?.url === "string" ? [{ title: typeof o.title === "string" ? o.title : o.url, url: o.url }] : [];
               });
               yield { type: "server-search", hits };
+            } else if (request.webSearch === true && cb?.type === "tool_result") {
+              // GLM anthropic 面变体（2026-09-24 spike 实钉）：结果块 type=tool_result、content = JSON
+              // 字符串体 [[{title,link,content,refer}]]（非标准 web_search_tool_result 数组）。仅在
+              // webSearch 请求（搜索辅助调用，客户端 tools 恒空）解析——主回路的 tool_result 是客户端
+              // 工具结果语义，不得误收。解析失败静默零 hits（:147 门按无原生结果处理，不炸流）。
+              const hits = parseSearchHitsFromToolResult(cb.content);
+              if (hits.length > 0) yield { type: "server-search", hits };
             }
           }
           yield* mapEvent(state, parsed.event, data);

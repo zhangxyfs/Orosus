@@ -113,6 +113,43 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     for await (const _ of a.stream({ model: "m", system: "s", messages: [], tools: [], signal: new AbortController().signal })) void _;
     expect(seen[0]).toBe("http://a/v1/chat/completions");
   });
+
+  // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：webSearch 请求 → 表内 anthropicRoot；
+  // chat 请求与表外端点零变化
+  it("改道路由：openai 槽命中表内端点 → webSearch 请求落 {anthropicRoot}/v1/messages，chat 请求仍走 chat 面", async () => {
+    const seen: string[] = [];
+    const fetchImpl = ((url: string | URL | Request) => {
+      seen.push(String(url));
+      return Promise.resolve(new Response("{}", { status: 401 }));
+    }) as typeof fetch;
+    const a = createAdapters(
+      { providers: { ds: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "k" } } },
+      fetchImpl,
+    ).get("ds")!;
+    const sig = new AbortController().signal;
+    const msgs = [{ role: "user" as const, content: [{ kind: "text" as const, text: "q" }] }];
+    for await (const _ of a.stream({ model: "m", system: "s", messages: msgs, tools: [], webSearch: true, signal: sig })) void _;
+    expect(seen[0]).toBe("https://api.deepseek.com/anthropic/v1/messages");
+    for await (const _ of a.stream({ model: "m", system: "s", messages: msgs, tools: [], signal: sig })) void _;
+    expect(seen[1]).toBe("https://api.deepseek.com/v1/chat/completions");
+  });
+
+  it("改道路由：表外端点 webSearch 请求不改道（仍 chat 面 zhipu 形探测）；kimi /coding/v1 命中同根改道", async () => {
+    const seen: string[] = [];
+    const fetchImpl = ((url: string | URL | Request) => {
+      seen.push(String(url));
+      return Promise.resolve(new Response("{}", { status: 401 }));
+    }) as typeof fetch;
+    const sig = new AbortController().signal;
+    const msgs = [{ role: "user" as const, content: [{ kind: "text" as const, text: "q" }] }];
+    const req = { model: "m", system: "s", messages: msgs, tools: [], webSearch: true as const, signal: sig };
+    const unknown = createAdapters({ providers: { u: { type: "openai", baseUrl: "https://no.example/v1" } } }, fetchImpl).get("u")!;
+    for await (const _ of unknown.stream(req)) void _;
+    expect(seen[0]).toBe("https://no.example/v1/chat/completions");
+    const kimi = createAdapters({ providers: { k: { type: "openai", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "k" } } }, fetchImpl).get("k")!;
+    for await (const _ of kimi.stream(req)) void _;
+    expect(seen[1]).toBe("https://api.kimi.com/coding/v1/messages");
+  });
 });
 
 describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {

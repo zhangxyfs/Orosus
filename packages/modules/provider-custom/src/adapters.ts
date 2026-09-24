@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { StreamFn } from "@orosus/contracts/provider";
 import { createStream as anthropicStream, createListModels as anthropicListModels } from "./stream-anthropic.ts";
 import { createStream as openaiStream, createListModels as openaiListModels } from "./stream-openai.ts";
+import { matchNativeSearchFace } from "./search-endpoints.ts";
 import { defaultCatalogCacheFile, getCatalogWithSource, readCatalogDiskCache, usableCatalogModels, type Catalog, type CatalogSource } from "./catalog.ts";
 
 /** 厂商表 config schema（D33：区内子结构归模块 schema 自由——§6.6 单区制管 section 命名）。 */
@@ -62,8 +63,21 @@ export function createAdapters(
     const glue = { apiKey: p.apiKey, baseUrl: p.baseUrl, ...(fetchImpl !== undefined ? { fetchImpl } : {}) };
     const isAnthropic = p.type === "anthropic";
     const live = isAnthropic ? anthropicListModels(glue) : openaiListModels(glue); // 模型发现 T2：端点真实清单（尽力能力）
+    let stream = isAnthropic ? anthropicStream(glue) : openaiStream(glue);
+    // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：openai 档槽命中 search-endpoints 表 →
+    // 仅 webSearch 请求（tool-web 搜索辅助调用）改道 Anthropic 面发 web_search_20250305（同 key 双头），
+    // chat 请求零变化；anthropic 档槽天然走 web_search_20250305 无需表。Reasonix 对应机制 =
+    // 搜索路由 kind=anthropic + BaseURL 改写（independent_web_search.go:59-65）。模型名经 spike 验证可直透。
+    if (!isAnthropic) {
+      const face = matchNativeSearchFace(p.baseUrl);
+      if (face !== undefined) {
+        const chatStream = stream;
+        const searchStream = anthropicStream({ ...glue, baseUrl: face.anthropicRoot });
+        stream = (request) => (request.webSearch === true ? searchStream(request) : chatStream(request));
+      }
+    }
     out.set(name, {
-      stream: isAnthropic ? anthropicStream(glue) : openaiStream(glue),
+      stream,
       listModels: catalogPreferredListModels(name, live, loadCatalog), // 目录优选——策展覆盖口径优先，live 兜底
       ...(p.defaultModel !== undefined ? { defaultModel: p.defaultModel } : {}),
     });

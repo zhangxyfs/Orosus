@@ -63,4 +63,32 @@ describe("provider-custom webSearch 线缆映射（M4-3 T1b）", () => {
     expect(chunks.find((c) => c.type === "server-search")).toEqual({ type: "server-search", hits: [{ title: "AT", url: "https://a/1" }] });
     expect(chunks.some((c) => c.type === "text/delta" && c.text === "答")).toBe(true); // 常规块映射不受扰
   });
+
+  it("④ GLM anthropic 面 tool_result 变体（2026-09-24 spike 实钉）：content = JSON 字符串体 title+link → server-search", async () => {
+    // 真机流式实录形态：tool_result 块 content 为字符串 "[[{\"title\":…,\"link\":…,\"refer\":…}]]"
+    const content = JSON.stringify([[{ title: "中国气象局- 北京", link: "http://weather.cma.cn", content: "气温 19.6℃", refer: "ref_1" }]]);
+    const sse = [
+      `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_result", tool_use_id: "c1", content } })}\n\n`,
+      "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    ].join("");
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl: (async () => sseResponse(sse)) as typeof fetch })(baseReq({ webSearch: true })));
+    expect(chunks.find((c) => c.type === "server-search")).toEqual({ type: "server-search", hits: [{ title: "中国气象局- 北京", url: "http://weather.cma.cn" }] });
+  });
+
+  it("⑤ tool_result 变体只在 webSearch 请求解析（主回路客户端工具结果不误收）；坏 JSON/非字符串体静默零 hits", async () => {
+    const sseFor = (content: unknown) => [
+      `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_result", tool_use_id: "c1", content } })}\n\n`,
+      "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    ].join("");
+    const streamWith = (body: string, webSearch?: boolean) => {
+      const fetchImpl = (async () => sseResponse(body)) as typeof fetch;
+      return anthropicStream({ baseUrl: "https://x", fetchImpl })(baseReq(webSearch === true ? { webSearch: true } : {}));
+    };
+    // 主回路（无 webSearch）：tool_result 是客户端工具结果语义——不产 server-search
+    const main = await collect(streamWith(sseFor("[[{\"title\":\"T\",\"link\":\"https://a/1\"}]]")));
+    expect(main.find((c) => c.type === "server-search")).toBeUndefined();
+    // webSearch 请求 + 非 JSON 字符串体 → 零 hits 静默（:147 门按无原生结果处理）
+    const bad = await collect(streamWith(sseFor("不是 JSON"), true));
+    expect(bad.find((c) => c.type === "server-search")).toBeUndefined();
+  });
 });
