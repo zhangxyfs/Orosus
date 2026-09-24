@@ -216,8 +216,10 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 本仓库对"设计"有治理（[specs/modules/README.md](superpowers/specs/modules/README.md)）：
 一模块一文档、从 `_template.md` 复制起手、八节模板、六态状态机（构想 → 设计中 → 已定稿 →
 实现中 → 已落地）。轻量想法只要求写三节（定位/接口需求/决策点），进入"设计中"才八节写全。
-核心纪律一条：**模块文档不发明核心机制**——需要核心开新口（比如子代理要够到嵌套 harness），
-先走主文档流程登记 D 编号，模块文档只在"前置条件"里引用。
+核心纪律两条：**模块文档不发明核心机制**——需要核心开新口（比如子代理要够到嵌套 harness），
+先走主文档流程登记 D 编号，模块文档只在"前置条件"里引用；**不动主体代码**——需要什么能力
+先消费既有服务（`ctx.services`）或挂自己的服务（`ctx.provide`）让别的模块来用，contracts 新
+类型走契约窗口攒批，主体 diff 是最后手段（详见 [developers.md 圈地纪律](developers.md#圈地纪律不动主体代码2026-09-24-用户拍板)）。
 
 ## 9. 转正：挪进 packages/modules
 

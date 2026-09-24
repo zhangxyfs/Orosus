@@ -163,6 +163,7 @@ describe("tool-web search 链（M4-3 T1a）", () => {
       const fakeCtx = {
         config: cfg, log: noLog,
         llm: { stream: () => (async function* () { yield* []; })() },
+        provide: () => {}, // tool-web.search-faces 服务挂载（服务倒挂——provider-custom 消费）
         contribute: {
           tool: (t: { name: string }) => { tools.push(t.name); return () => {}; },
           command: () => () => {},
@@ -182,6 +183,7 @@ describe("tool-web search 链（M4-3 T1a）", () => {
       const fakeCtx = {
         config: {}, log: noLog,
         llm: { stream: () => (async function* () { yield* []; })() },
+        provide: () => {}, // tool-web.search-faces 服务挂载（服务倒挂——provider-custom 消费）
         contribute: {
           tool: (t: { name: string; label?: string }) => { tools.push({ name: t.name, label: t.label }); return () => {}; },
           command: () => () => {},

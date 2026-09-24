@@ -5,6 +5,7 @@ import { createSearchState, searchTool, type SearchConfig, type SearchStateHolde
 import { buildBackends } from "./backends/index.ts";
 import { llmBackend, createLlmSticky } from "./backends/llm.ts";
 import { createSettingsHandler } from "./settings.ts";
+import { matchNativeSearchFace } from "./search-endpoints.ts";
 
 export { fetchTool, type FetchDeps } from "./fetch.ts";
 export { defaultHtmlToMarkdown, type HtmlToMarkdown } from "./html-to-md.ts";
@@ -15,6 +16,8 @@ export {
 export { llmBackend, LlmSearchError, createLlmSticky, type LlmBackendDeps, type LlmSticky } from "./backends/llm.ts";
 export { buildBackends } from "./backends/index.ts";
 export { createSettingsHandler, persistToolWebSearch, upsertSecret, type SettingsDeps, type SearchPatch } from "./settings.ts";
+/** 已知可搜端点表（2026-09-24 服务倒挂拍板）：本模块所有、provider-custom 经 tool-web.search-faces 服务消费。 */
+export { NATIVE_SEARCH_FACES, matchNativeSearchFace, type NativeSearchFace } from "./search-endpoints.ts";
 
 /** [tool-web] 配置节（节名 = 模块名，全局约束 3）：search 子节承载后端选择与 per-backend key 占位符（v4.7——
  *  $ENV: 占位符是模块唯一 secrets 通道，secrets.env 不进 process.env；T1c 配置流写占位符不落真 key）。 */
@@ -42,8 +45,11 @@ export const createToolWebModule = (deps: ToolWebDeps = {}): ModuleDefinition<To
     description: "web 工具：web_fetch（网页转 markdown）+ web_search（链式后端 llm→tavily→brave）",
     api: 1,
     uses: ["network"], // tool-shell uses:["subprocess"] 同款声明式权限标注
+    provides: ["tool-web.search-faces"], // 已知可搜端点表服务（2026-09-24 服务倒挂拍板——消费者 provider-custom）
     config: configSchema,
     activate(ctx) {
+      // 端点知识服务（搜索知识归搜索模块——provider-custom 路由时惰性消费，本模块缺席 = 对方自然回落 chat 面）
+      ctx.provide("tool-web.search-faces", { match: matchNativeSearchFace });
       ctx.contribute.tool(fetchTool(deps));
       // search 活态：activate 期取纯分层快照，T1c 配置流经 holder.set 改写即时生效（approval apply/persist 同款）；
       // SW-19 会话粘性：llm 槽调用点探测失败即置位、auto 链跳过该槽——holder.set（重选后端/模型）时清除

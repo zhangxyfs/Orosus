@@ -7,12 +7,14 @@
  *  注释原话 "chat-completions tool contract only supports functions"），官方 chat 账号的搜索请求
  *  整体改写 anthropic 档发同 key 的 /anthropic 面（independent_web_search.go:59-65）。
  *
- *  用法：openai 档槽发 webSearch 请求时按 baseUrl 匹配本表 → 该次搜索请求改道 anthropicRoot
+ *  用法：tool-web 在 activate 把本表挂为服务 `tool-web.search-faces`（{ match }）；provider-custom
+ *  在 webSearch 请求时经 ctx.services.getOptional 惰性消费，命中即把该次搜索请求改道 anthropicRoot
  *  （stream-anthropic 拼 {root}/v1/messages，双头鉴权同 key）。表只服务路由；可搜与否最终仍由
  *  运行期 :147 门（真出原生结果才算数）判定——未验证条目失败即降级 tavily/brave，零额外风险。
  *
- *  落位说明：按用户最初设想放 tool-web，但模块间禁止互 import（check:boundaries）且消费方是
- *  本模块的槽装配层（适配器+密钥所在），tool-web 搜索后端对改道完全透明无需读表——故落 provider-custom。
+ *  落位（2026-09-24 服务倒挂拍板）：搜索端点知识归搜索模块 tool-web 所有，provider-custom 只做
+ *  路由行为、经服务运行时消费——**模块互不 import（check:boundaries），主体代码零改动**。
+ *  服务键与返回形状是双边契约（非 core 路由的公共短名，故不进 contracts；不随主体版本演进）。
  *
  *  2026-09-24 真机 spike（流式、用户在配 key）：deepseek/kimi/glm 三家 anthropic 面均真出原生
  *  搜索结果；模型名直接透传（deepseek-chat→服务端 v4-flash、k3-256k、glm-5.3 均可搜）。 */

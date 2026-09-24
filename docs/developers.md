@@ -69,12 +69,29 @@ export default defineModule({
 |---|---|---|
 | `fs` | `@orosus/contracts/fs` 的 `Fs`（read/write） | tool-fs |
 | `provider:<name>` | `@orosus/contracts/provider` 的 `ProviderAdapter`（保留槽，经 `provide` 注册） | provider-custom（唯一 provider——品牌 ×5 已退役 2026-09-23，/provider 向导即完整配置入口） |
+| `tool-web.search-faces` | `{ match(baseUrl): { anthropicRoot } \| undefined }`（已知可搜端点改道事实；模块自有 key 按规则 1 带名前缀） | tool-web（2026-09-24 服务倒挂首例——provider-custom 路由时惰性消费） |
 
 ## 贡献点与拦截点
 
 - 贡献点：`tool` / `command`（`/<module>__<cmd>`）/ `promptSection`（order ≤ -100 为核心保留区）/ `configOverlay`（读侧，D2）
 - 拦截点（§6.5 白名单 8 个）：`agent/pre-step`（emit）、`agent/transform-context`（reduce）、`agent/steering`、`agent/follow-up`（collect）、`agent/should-stop`（布尔 OR）、`tool/pre-execute`（waterfall，审批在此）、`tool/post-execute`（emit）、`ui/command`（emit）
 - 运行时清单：`harness.graph().catalogJson()`（或 CLI `--dump-modules`）
+
+## 圈地纪律：不动主体代码（2026-09-24 用户拍板）
+
+**写模块时不要随便修改主程序代码（core/contracts/apps）；主体只增接口与服务，功能长在模块里。**
+需要什么能力，先找既有缝，按优先级：
+
+1. **消费既有服务**：`ctx.services.get/getOptional`（可选能力用 getOptional + 缺席降级——tool-web 消费 llm 槽同款）。
+2. **挂载自己的服务给别人用**：`ctx.provide("<模块名>.<能力>")`（规则 1 命名）+ 模块定义 `provides` 声明——
+   知识/能力的权威归功能模块，其他模块运行时消费（服务倒挂：`tool-web.search-faces` 端点事实由 tool-web
+   所有、provider-custom 路由消费，主体零改动）。
+3. **贡献点**：`contribute.tool/command/promptSection/configOverlay`（见上）。
+4. **契约缺口走契约窗口**：确需 contracts 新类型/字段（如 `Tool.label`），攒一批登记 ROADMAP/契约窗口统一动，
+   不为单个模块顺手改主体。
+
+反例即前案：搜索端点表最初放 provider-custom（消费者家）又考虑搬 contracts（主体）——最终按本纪律落
+tool-web 挂服务。判断标准：**知识的家跟权威方走，消费靠服务；主体的 diff 是最后手段。**
 
 ## 错误行为
 

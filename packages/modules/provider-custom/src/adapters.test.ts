@@ -28,6 +28,14 @@ function fakeCtx(config: unknown) {
 }
 
 const entry = { type: "openai" as const, baseUrl: "http://a/v1" };
+
+/** 搜索改道服务假件工厂（消费侧形状——真件由 tool-web 挂载；模块外测试注此形）。 */
+const factsOf = (roots: Record<string, string>) => async () => ({
+  match: (baseUrl: string) => {
+    const root = Object.entries(roots).find(([prefix]) => baseUrl.startsWith(prefix))?.[1];
+    return root === undefined ? undefined : { anthropicRoot: root };
+  },
+});
 const withDm = { type: "anthropic" as const, baseUrl: "http://b", apiKey: "$ENV:X", defaultModel: "pro-32b" };
 /** 目录密封件（测试不打网络）：加载即失败 → 槽值 listModels 走 live 兜底。 */
 const catalogOff = async (): Promise<never> => { throw new Error("catalog off（test）"); };
@@ -114,9 +122,9 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     expect(seen[0]).toBe("http://a/v1/chat/completions");
   });
 
-  // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：webSearch 请求 → 表内 anthropicRoot；
-  // chat 请求与表外端点零变化
-  it("改道路由：openai 槽命中表内端点 → webSearch 请求落 {anthropicRoot}/v1/messages，chat 请求仍走 chat 面", async () => {
+  // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix；服务倒挂——端点知识经 tool-web.search-faces
+  // 服务由 tool-web 挂载，此处注消费侧假件）：webSearch 请求 → 表内 anthropicRoot；chat 请求与缺席零变化
+  it("改道路由：webSearch 请求落 {anthropicRoot}/v1/messages，chat 请求仍走 chat 面", async () => {
     const seen: string[] = [];
     const fetchImpl = ((url: string | URL | Request) => {
       seen.push(String(url));
@@ -125,6 +133,8 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     const a = createAdapters(
       { providers: { ds: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "k" } } },
       fetchImpl,
+      undefined,
+      factsOf({ "https://api.deepseek.com": "https://api.deepseek.com/anthropic" }),
     ).get("ds")!;
     const sig = new AbortController().signal;
     const msgs = [{ role: "user" as const, content: [{ kind: "text" as const, text: "q" }] }];
@@ -134,7 +144,7 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     expect(seen[1]).toBe("https://api.deepseek.com/v1/chat/completions");
   });
 
-  it("改道路由：表外端点 webSearch 请求不改道（仍 chat 面 zhipu 形探测）；kimi /coding/v1 命中同根改道", async () => {
+  it("改道路由：服务缺席 / 表外端点一律 chat 面（kimi /coding/v1 命中同根改道）", async () => {
     const seen: string[] = [];
     const fetchImpl = ((url: string | URL | Request) => {
       seen.push(String(url));
@@ -143,12 +153,25 @@ describe("provider-custom（D33 多槽注册与区内厂商表）", () => {
     const sig = new AbortController().signal;
     const msgs = [{ role: "user" as const, content: [{ kind: "text" as const, text: "q" }] }];
     const req = { model: "m", system: "s", messages: msgs, tools: [], webSearch: true as const, signal: sig };
-    const unknown = createAdapters({ providers: { u: { type: "openai", baseUrl: "https://no.example/v1" } } }, fetchImpl).get("u")!;
+    const absent = createAdapters(
+      { providers: { ds: { type: "openai", baseUrl: "https://api.deepseek.com/v1" } } },
+      fetchImpl,
+      undefined,
+      async () => undefined, // tool-web 未挂载 = 服务缺席——语义正确的回落（没有搜索模块就没有搜索请求）
+    ).get("ds")!;
+    for await (const _ of absent.stream(req)) void _;
+    expect(seen[0]).toBe("https://api.deepseek.com/v1/chat/completions");
+    const unknown = createAdapters({ providers: { u: { type: "openai", baseUrl: "https://no.example/v1" } } }, fetchImpl, undefined, factsOf({ "https://api.deepseek.com": "https://x" })).get("u")!;
     for await (const _ of unknown.stream(req)) void _;
-    expect(seen[0]).toBe("https://no.example/v1/chat/completions");
-    const kimi = createAdapters({ providers: { k: { type: "openai", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "k" } } }, fetchImpl).get("k")!;
+    expect(seen[1]).toBe("https://no.example/v1/chat/completions");
+    const kimi = createAdapters(
+      { providers: { k: { type: "openai", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "k" } } },
+      fetchImpl,
+      undefined,
+      factsOf({ "https://api.kimi.com/coding": "https://api.kimi.com/coding" }),
+    ).get("k")!;
     for await (const _ of kimi.stream(req)) void _;
-    expect(seen[1]).toBe("https://api.kimi.com/coding/v1/messages");
+    expect(seen[2]).toBe("https://api.kimi.com/coding/v1/messages");
   });
 });
 

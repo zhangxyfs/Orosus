@@ -2,8 +2,13 @@ import { z } from "zod";
 import type { StreamFn } from "@orosus/contracts/provider";
 import { createStream as anthropicStream, createListModels as anthropicListModels } from "./stream-anthropic.ts";
 import { createStream as openaiStream, createListModels as openaiListModels } from "./stream-openai.ts";
-import { matchNativeSearchFace } from "./search-endpoints.ts";
 import { defaultCatalogCacheFile, getCatalogWithSource, readCatalogDiskCache, usableCatalogModels, type Catalog, type CatalogSource } from "./catalog.ts";
+
+/** 搜索改道服务（tool-web.search-faces）的消费侧形状——tool-web 所有并挂载，此处按结构类型本地声明
+ *  （模块互不 import；key 与形状为双边契约，登记于 design-decisions 2026-09-24 服务倒挂条目）。 */
+export interface SearchFaceFacts {
+  match(baseUrl: string): { anthropicRoot: string } | undefined;
+}
 
 /** 厂商表 config schema（D33：区内子结构归模块 schema 自由——§6.6 单区制管 section 命名）。 */
 export const configSchema = z.object({
@@ -52,11 +57,14 @@ export function catalogPreferredListModels(slot: string, live: () => Promise<str
   };
 }
 
-/** 按厂商表构建槽值（type 选协议族 → 对应 vendored glue；D34 目录供给复用同一构建口）。 */
+/** 按厂商表构建槽值（type 选协议族 → 对应 vendored glue；D34 目录供给复用同一构建口）。
+ *  facts = 搜索改道服务（tool-web.search-faces）的惰性解析口（index.ts 注入 ctx.services 消费闭包）；
+ *  缺省无服务 = 表外/服务缺席一律 chat 面原行为。 */
 export function createAdapters(
   config: z.infer<typeof configSchema>,
   fetchImpl?: typeof fetch,
   loadCatalog: CatalogLoader = diskFirstCatalogLoader(),
+  facts?: () => Promise<SearchFaceFacts | undefined>,
 ): Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }> {
   const out = new Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }>();
   for (const [name, p] of Object.entries(config.providers)) {
@@ -64,17 +72,26 @@ export function createAdapters(
     const isAnthropic = p.type === "anthropic";
     const live = isAnthropic ? anthropicListModels(glue) : openaiListModels(glue); // 模型发现 T2：端点真实清单（尽力能力）
     let stream = isAnthropic ? anthropicStream(glue) : openaiStream(glue);
-    // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：openai 档槽命中 search-endpoints 表 →
-    // 仅 webSearch 请求（tool-web 搜索辅助调用）改道 Anthropic 面发 web_search_20250305（同 key 双头），
-    // chat 请求零变化；anthropic 档槽天然走 web_search_20250305 无需表。Reasonix 对应机制 =
-    // 搜索路由 kind=anthropic + BaseURL 改写（independent_web_search.go:59-65）。模型名经 spike 验证可直透。
-    if (!isAnthropic) {
-      const face = matchNativeSearchFace(p.baseUrl);
-      if (face !== undefined) {
-        const chatStream = stream;
-        const searchStream = anthropicStream({ ...glue, baseUrl: face.anthropicRoot });
-        stream = (request) => (request.webSearch === true ? searchStream(request) : chatStream(request));
-      }
+    // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：openai 档槽的 webSearch 请求（tool-web 搜索
+    // 辅助调用）命中改道服务 → 改发 {anthropicRoot}/v1/messages（同 key 双头），chat 请求零变化；
+    // anthropic 档槽天然走 web_search_20250305 无需服务。路由 = 本模块行为，端点知识 = tool-web 服务
+    // （服务倒挂——消费在调用时刻惰性解析，激活序先后无关；webSearch 请求只可能来自 tool-web，
+    // 服务缺席时本分支根本不会到达请求）。Reasonix 对应机制 = 搜索路由 kind=anthropic + BaseURL 改写
+    // （independent_web_search.go:59-65）。模型名经 spike 验证可直透。
+    if (!isAnthropic && facts !== undefined) {
+      const chatStream = stream;
+      const factsOf = facts;
+      stream = (request) => {
+        if (request.webSearch !== true) return chatStream(request);
+        return (async function* () {
+          const face = (await factsOf().catch(() => undefined))?.match(p.baseUrl);
+          if (face === undefined) {
+            yield* chatStream(request);
+            return;
+          }
+          yield* anthropicStream({ ...glue, baseUrl: face.anthropicRoot })(request);
+        })();
+      };
     }
     out.set(name, {
       stream,
