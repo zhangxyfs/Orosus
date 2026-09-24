@@ -167,6 +167,7 @@ describe("tool-web search 链（M4-3 T1a）", () => {
         contribute: {
           tool: (t: { name: string }) => { tools.push(t.name); return () => {}; },
           command: () => () => {},
+          promptSection: () => () => {},
         },
       } as unknown as ModuleContext<object>;
       createToolWebModule().activate(fakeCtx as ModuleContext<never>);
@@ -187,6 +188,7 @@ describe("tool-web search 链（M4-3 T1a）", () => {
         contribute: {
           tool: (t: { name: string; label?: string }) => { tools.push({ name: t.name, label: t.label }); return () => {}; },
           command: () => () => {},
+          promptSection: () => () => {},
         },
       } as unknown as ModuleContext<object>;
       createToolWebModule().activate(fakeCtx as ModuleContext<never>);
@@ -197,6 +199,26 @@ describe("tool-web search 链（M4-3 T1a）", () => {
       { name: "tool-web__fetch", label: "Web Fetch" },
       { name: "tool-web__search", label: "Web Search" },
     ]);
+  });
+
+  it("⑬ 系统提示词引导段（2026-09-24 用户拍板，英文写）：order 23 常驻、含两工具注册全名、无 CJK", () => {
+    const sections: { order: number; text: string }[] = [];
+    const fakeCtx = {
+      config: {}, log: noLog,
+      llm: { stream: () => (async function* () { yield* []; })() },
+      provide: () => {},
+      contribute: {
+        tool: () => () => {},
+        command: () => () => {},
+        promptSection: (s: { order: number; text: string }) => { sections.push(s); return () => {}; },
+      },
+    } as unknown as ModuleContext<object>;
+    createToolWebModule().activate(fakeCtx as ModuleContext<never>);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.order).toBe(23); // kernel 分配表：21 tool-search 目录 / 22 goal / 23 web 引导
+    expect(sections[0]!.text).toContain("tool-web__search");
+    expect(sections[0]!.text).toContain("tool-web__fetch");
+    expect(/[\u4e00-\u9fff]/.test(sections[0]!.text)).toBe(false); // 提示词段英文（用户拍板）
   });
 });
 
