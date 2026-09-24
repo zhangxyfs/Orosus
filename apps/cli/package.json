@@ -19,6 +19,7 @@
     "@orosus/skill": "workspace:*",
     "@orosus/tool-ask": "workspace:*",
     "@orosus/tool-fs": "workspace:*",
+    "@orosus/tool-search": "workspace:*",
     "@orosus/tool-shell": "workspace:*",
     "@orosus/tool-todo": "workspace:*",
     "@orosus/tool-web": "workspace:*",

@@ -47,7 +47,25 @@ export interface Tool {
   name: string;
   description: string;
   parameters: ZodType;
+  /** 按需加载标记（M4-3 T4/D6）：真 = 该工具可被 ToolSearch 机制隐藏（schema 不进请求，
+   *  目录只知名+截断描述，经 tool-search__search 搜出并 reveal 后恢复）。tool-search 关态 = 标记
+   *  不生效（SW-26 联动规则——防「标了 deferred 却无 meta 工具可 reveal」永不可达组合）。 */
+  deferred?: boolean;
+  /** 搜索补充关键词（目录呈现与打分的补充语料——cc-haha searchHint 同款）。 */
+  searchHint?: string;
   resolveExecution(input: unknown): Promise<ToolExecution>;
+}
+
+/** ctx.tools.list 的出货形态（M4-3 T4）：目录数据源——只知名/描述/标记/reveal 态，不给 schema。 */
+export interface ToolInfo {
+  name: string;
+  description: string;
+  deferred: boolean;
+  searchHint?: string | undefined;
+  /** 已被 reveal（本轮起 schema 进请求——目录段应略过）。 */
+  revealed: boolean;
+  /** 注册属主模块名（MCP 桥接工具 = "mcp"——打分的 MCP 加权依据）。 */
+  owner: string;
 }
 
 /** 身份函数：类型收窄与作者意图标注。

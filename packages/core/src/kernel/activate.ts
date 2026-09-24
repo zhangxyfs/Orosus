@@ -272,6 +272,21 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         messages: async () => deriveMessages(await session.all()),
         id: session.sessionId, // v3 compaction 设计空白 2：恢复页脚会话标识（store 各后端构造时持有）
       },
+      // ctx.tools 缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；mounts 权限位校验同 contribute:* 现成写法）
+      tools: {
+        reveal: (names) => {
+          if (!allows("tools.reveal")) throw new Error(`mounts 校验：tools.reveal 未在声明（§5.1）`);
+          tools.revealTools(names);
+        },
+        list: (opts2) => {
+          if (!allows("tools.list")) throw new Error(`mounts 校验：tools.list 未在声明（§5.1）`);
+          return tools.toolInfos(opts2);
+        },
+        enable: () => {
+          if (!allows("tools.reveal")) throw new Error(`mounts 校验：tools.reveal 未在声明（§5.1）`); // 机制开关 = 写口同档（SW-26）
+          tools.setDeferredEnabled(true);
+        },
+      },
       events: {
         on: (type, listener) => {
           if (!allows(`hook:${type}`)) throw new Error(`mounts 校验：hook:${type} 未在声明（§5.1）`);

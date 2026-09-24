@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Disposer, Logger } from "@orosus/contracts/module";
-import { Access, type Tool, type ToolExecution, type ToolResult } from "@orosus/contracts/tool";
+import { Access, type Tool, type ToolExecution, type ToolInfo, type ToolResult } from "@orosus/contracts/tool";
 import type { ToolSpec } from "@orosus/contracts/provider";
 import { CORE_POINTS, type EventBus } from "../kernel/bus.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -44,6 +44,12 @@ export interface ToolRegistry {
   execute(planned: PlannedTool, ctx: { signal: AbortSignal }): Promise<ToolResult>;
   /** 合成口（M1 语义不变）：单发调用面。 */
   run(call: { id: string; name: string; args: unknown }, ctx: { signal: AbortSignal }): Promise<ToolResult>;
+  /** ToolSearch 机制面（M4-3 T4）：置 reveal（已加载集合随实例存活——压缩后不清，SW-11）。 */
+  revealTools(names: string[]): void;
+  /** 机制总开关（SW-26：tool-search 启用才置位——关态整门不启，deferred 标记不生效、specs 零过滤）。 */
+  setDeferredEnabled(on: boolean): void;
+  /** ctx.tools.list 数据源：目录条目（不给 schema）。 */
+  toolInfos(opts?: { deferredOnly?: boolean }): ToolInfo[];
 }
 
 /**
@@ -54,6 +60,13 @@ export interface ToolRegistry {
  */
 export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
   const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
+  // ToolSearch 机制态（M4-3 T4）：deferredEnabled = 总开关（SW-26 关态整门不启的前提位）；
+  // revealed = 已加载集合——随 registry 实例存活，压缩/会话裁剪不清（SW-11，cc-haha 同款，kimi 清空是反例）
+  let deferredEnabled = false;
+  const revealed = new Set<string>();
+  /** 藏 schema 判定（前提 = 机制启用；墓碑位不动——§5.5 tools 数组字节稳定优先于隐藏）。 */
+  const hidden = (t: { tool: Tool; tombstoned?: boolean }): boolean =>
+    deferredEnabled && t.tool.deferred === true && !revealed.has(t.tool.name) && t.tombstoned !== true;
 
   return {
     register(tool, owner) {
@@ -94,7 +107,8 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
     },
 
     specs() {
-      return tools.map(({ tool }) => ({
+      // ToolSearch 过滤（M4-3 T4）：机制启用时藏 deferred 未 reveal——关态/无人标 deferred 时逐字节不变（零差异基线钉）
+      return tools.filter((t) => !hidden(t)).map(({ tool }) => ({
         name: tool.name,
         description: tool.description,
         parameters: z.toJSONSchema(tool.parameters) as Record<string, unknown>,
@@ -109,6 +123,11 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       }
       if (!entry) {
         return { ok: false, callId: call.id, result: { output: `未知工具 "${call.name}"（该工具所属模块可能已降级或未安装）`, isError: true } };
+      }
+      // 按需加载拦截（M4-3 T4，kimi toolSelectService.ts:333-338 话术同族）：模型点名了 deferred 未 reveal
+      // 的工具 → 带内指路 meta 工具（体验增强非正确性依赖——幻觉名（未注册）已由上方「未知工具」兜住）
+      if (deferredEnabled && entry.tool.deferred === true && !revealed.has(call.name)) {
+        return { ok: false, callId: call.id, result: { output: `工具 "${call.name}" 处于按需加载目录中，先调 tool-search__search 加载（搜索即加载，下一轮起可调用）`, isError: true } };
       }
       const { tool, owner } = entry;
       const tlog: Logger = createLogger(opts.sink, owner);
@@ -185,6 +204,29 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
     async run(call, ctx) {
       return this.execute(await this.plan(call), ctx);
+    },
+
+    revealTools(names) {
+      const known = new Set(tools.map((t) => t.tool.name));
+      for (const n of names) if (known.has(n)) revealed.add(n); // 未知名静默跳过（契约口径）
+    },
+
+    setDeferredEnabled(on) {
+      deferredEnabled = on;
+    },
+
+    toolInfos(opts2) {
+      return tools
+        .filter((t) => t.tombstoned !== true)
+        .filter((t) => opts2?.deferredOnly === true ? t.tool.deferred === true : true)
+        .map((t) => ({
+          name: t.tool.name,
+          description: t.tool.description,
+          deferred: t.tool.deferred === true,
+          ...(t.tool.searchHint !== undefined ? { searchHint: t.tool.searchHint } : {}),
+          revealed: revealed.has(t.tool.name),
+          owner: t.owner,
+        }));
     },
   };
 }

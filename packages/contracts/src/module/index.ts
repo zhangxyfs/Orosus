@@ -1,5 +1,5 @@
 import type { ZodType } from "zod";
-import type { Tool } from "../tool/index.ts";
+import type { Tool, ToolInfo } from "../tool/index.ts";
 import type { Chunk, ModelMessage } from "../provider/index.ts";
 
 /** 核心模块 API 主版本。核心按主版本做兼容检查（支持 N 与 N-1，见设计 §8.5）。 */
@@ -201,6 +201,21 @@ export interface ModuleContext<C = unknown> {
     /** 会话标识（v3 compaction 设计空白 2——恢复页脚标注「完整历史在哪个会话」；模型用 id +
      *  ~/.orosus/sessions/ 目录指引经 Glob 定位日志文件）。可选——拿不到就省略编号只留目录指引。 */
     readonly id?: string;
+  };
+  /** 工具注册表缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；对标宿主活写口 h.setLabel 先例：
+   *  contracts 加缝 + kernel 接线 + mounts 权限位校验）。模块声明 mounts "tools.reveal"/"tools.list" 后可用
+   *  （allows() 模式同 contribute:*；声明了 mounts 而未列位 → 调用即抛）。 */
+  readonly tools: {
+    /** 写口：把工具置为已加载——下一轮请求的 specs() 带出其 schema（SW-11：当轮不生效、下一轮生效；
+     *  已 reveal 集合随会话存活，压缩后不清）。未知名字静默跳过。 */
+    reveal(names: string[]): void;
+    /** 读口：工具目录（名字/描述/标记/reveal 态/属主——目录段与打分的数据源，不给 schema）。
+     *  deferredOnly = 只看标了 deferred 的工具。 */
+    list(opts?: { deferredOnly?: boolean }): ToolInfo[];
+    /** ToolSearch 机制总开关置位（SW-26：tool-search 模块 activate 且配置启用时调用——关态 = 机制
+     *  整门不启，deferred 标记不生效、specs 零过滤；防「标了 deferred 却无 meta 工具可 reveal」死锁）。
+     *  mounts "tools.reveal" 同档把守（机制开关 = 写口同级）。 */
+    enable(): void;
   };
   readonly events: {
     /** 订阅事件；拦截点返回 { deny: true, reason } 或抛错 = 否决（waterfall 语义，§6.5 白名单 8 个）。

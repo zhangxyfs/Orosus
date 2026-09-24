@@ -36,13 +36,15 @@ const isolated = (over: { userToml?: string } = {}) => {
 };
 
 describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生态的配合闭环）", () => {
-  it("builtinModules 十模块进图（2026-09-24 M4-3 T0：tool-web 入图）；全员 active", async () => {
+  it("builtinModules 十一模块进图（2026-09-24 M4-3：tool-web T0 / tool-search T4 入图）；tool-search 默认关态，余者 active", async () => {
     const h = await isolated();
     const audit = h.graph().audit();
-    expect(audit).toHaveLength(BUILTIN_MODULES.length); // 品牌 ×5 退役后 9 + tool-web（M4-3 T0）= 10
+    expect(audit).toHaveLength(BUILTIN_MODULES.length); // 品牌 ×5 退役后 9 + tool-web + tool-search = 11
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "mcp", "provider-custom", "skill", "tool-ask", "tool-fs", "tool-shell", "tool-todo", "tool-web"], // T3 approval / T5 compaction 入图；provider-custom 唯一 provider（空表也 active——区内厂商级校验）；tool-web 零配置即 active
+      ["approval", "compaction", "mcp", "provider-custom", "skill", "tool-ask", "tool-fs", "tool-shell", "tool-todo", "tool-web"],
     );
+    // SW-26：tool-search 默认关（defaultEnabled:false）= 模块不激活（discovered 未激活态——机制整门不启的正解；[tool-search] enabled=true 开启）
+    expect(audit.find((a) => a.name === "tool-search")?.state).toBe("discovered");
     const failed = audit.filter((a) => a.state === "failed");
     expect(failed).toEqual([]); // 品牌降级面已随 ×5 退役消失（banner 品牌分支同拆）
     await h.close();

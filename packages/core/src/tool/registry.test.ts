@@ -201,3 +201,80 @@ describe("工具输出截断头尾双保留 3:1（M4-2.5 T1——日志调研 P3
     expect(r.output.length).toBeLessThanOrEqual(OUTPUT_LIMIT + 100); // 头+尾+提示行不超信封
   });
 });
+
+// M4-3 T4：ToolSearch 机制层（deferred 过滤 / reveal / 未加载拦截 / SW-26 关态整门不启）
+describe("ToolSearch 机制层（M4-3 T4）", () => {
+  const deferredEcho = (name: string, hint?: string) =>
+    defineTool({
+      name,
+      description: `${name} 的描述`,
+      ...(hint !== undefined ? { searchHint: hint } : {}),
+      deferred: true,
+      parameters: z.object({}),
+      resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+    });
+
+  it("T4-① 零差异基线：关态（机制未启用）下 deferred 标记不生效——specs 全出逐字节不变", () => {
+    const { reg } = setup();
+    reg.register(echo("a__plain"), "a");
+    reg.register(deferredEcho("m__hidden"), "m");
+    const names = reg.specs().map((s) => s.name);
+    expect(names).toEqual(["a__plain", "m__hidden"]); // 关态 = specs 零过滤（SW-26——标记形同虚设）
+  });
+
+  it("T4-② 启用后藏 deferred 未 reveal；reveal 下一轮 specs 带出（SW-11 当轮不生效、下一轮生效语义）", () => {
+    const { reg } = setup();
+    reg.register(echo("a__plain"), "a");
+    reg.register(deferredEcho("m__one"), "m");
+    reg.register(deferredEcho("m__two"), "m");
+    reg.setDeferredEnabled(true);
+    expect(reg.specs().map((s) => s.name)).toEqual(["a__plain"]);
+    reg.revealTools(["m__one", "m__ghost"]); // 未知名静默跳过（契约口径）
+    expect(reg.specs().map((s) => s.name)).toEqual(["a__plain", "m__one"]);
+    expect(reg.specs().map((s) => s.name)).toEqual(["a__plain", "m__one"]); // 集合保持（二次读取不清）
+  });
+
+  it("T4-③ plan 拦截：deferred 未 reveal → 带内指路 meta 工具；reveal 后放行；关态拦截不生效", async () => {
+    const { reg } = setup();
+    reg.register(deferredEcho("m__lazy"), "m");
+    // 关态：标记不生效——plan 照常（SW-26 联动）
+    const off = await reg.plan({ id: "c1", name: "m__lazy", args: {} });
+    expect(off.ok).toBe(true);
+    reg.setDeferredEnabled(true);
+    const blocked = await reg.plan({ id: "c2", name: "m__lazy", args: {} });
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.result.isError).toBe(true);
+      expect(blocked.result.output).toContain("按需加载目录");
+      expect(blocked.result.output).toContain("tool-search__search");
+    }
+    reg.revealTools(["m__lazy"]);
+    const ok = await reg.plan({ id: "c3", name: "m__lazy", args: {} });
+    expect(ok.ok).toBe(true);
+  });
+
+  it("T4-④ 墓碑位不动：deferred + tombstoned 的工具仍留 specs（§5.5 字节稳定优先于隐藏）", () => {
+    const { reg } = setup();
+    reg.register(deferredEcho("m__dead"), "m");
+    reg.setDeferredEnabled(true);
+    reg.tombstone("m__dead");
+    expect(reg.specs().map((s) => s.name)).toEqual(["m__dead"]); // 墓碑不藏
+  });
+
+  it("T4-⑤ toolInfos：目录条目（不给 schema）+ deferredOnly 过滤 + revealed 态 + 墓碑剔除", () => {
+    const { reg } = setup();
+    reg.register(echo("a__plain"), "a");
+    reg.register(deferredEcho("m__x", "备选关键词"), "m");
+    reg.register(deferredEcho("m__y"), "m");
+    reg.setDeferredEnabled(true);
+    reg.revealTools(["m__x"]);
+    const all = reg.toolInfos();
+    expect(all.find((t) => t.name === "m__x")).toMatchObject({ deferred: true, revealed: true, owner: "m", searchHint: "备选关键词" });
+    expect(all.find((t) => t.name === "a__plain")).toMatchObject({ deferred: false, revealed: false });
+    const deferredOnly = reg.toolInfos({ deferredOnly: true });
+    expect(deferredOnly.map((t) => t.name).sort()).toEqual(["m__x", "m__y"]);
+    reg.tombstone("m__y");
+    expect(reg.toolInfos({ deferredOnly: true }).map((t) => t.name)).toEqual(["m__x"]); // 墓碑剔除出目录
+    expect(all[0]).not.toHaveProperty("parameters");
+  });
+});

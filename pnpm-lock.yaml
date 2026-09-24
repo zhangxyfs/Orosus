@@ -86,6 +86,9 @@ importers:
       '@orosus/tool-fs':
         specifier: workspace:*
         version: link:../../packages/modules/tool-fs
+      '@orosus/tool-search':
+        specifier: workspace:*
+        version: link:../../packages/modules/tool-search
       '@orosus/tool-shell':
         specifier: workspace:*
         version: link:../../packages/modules/tool-shell
@@ -215,6 +218,22 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.6.5
+
+  packages/modules/tool-search:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+    devDependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../../testing
 
   packages/modules/tool-shell:
     dependencies:
