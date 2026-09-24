@@ -624,3 +624,76 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		expect(await outcome2).toEqual({ kind: "quit" });
 	});
 });
+
+describe("斜杠菜单过滤：前缀优先、含字殿后（2026-09-24 拍板：/ol 先列 ol 开头，再列含 ol 的 /yolo）", () => {
+	const overlayLines = (app: FullApp): string[] =>
+		(app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[] } }).buildOverlay(80, 24).lines;
+
+	it("① /ol → 前缀命中的 /olap 排前，含字命中的 /yolo 殿后，不含 ol 的不列", async () => {
+		const r = rig();
+		// 注册序故意让 /yolo 在前——列表序必须是「前缀组在前」而非注册序
+		r.io.slashCommands = () => [
+			{ name: "/help", desc: "帮助", long: "说明" },
+			{ name: "/yolo", desc: "免确认", long: "说明" },
+			{ name: "/olap", desc: "分析", long: "说明" },
+		];
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/ol");
+		await flush(120);
+		const plain = overlayLines(app).map(stripAnsi);
+		const idx = (name: string) => plain.findIndex((l) => l.includes(name));
+		expect(idx("/olap")).toBeGreaterThan(-1);
+		expect(idx("/yolo")).toBeGreaterThan(idx("/olap"));
+		expect(idx("/help")).toBe(-1);
+		app.stop();
+	});
+
+	it("② 别名同规则：别名前缀命中排前（/qu → quit→/exit），仅名字含字的 /equip 殿后", async () => {
+		const r = rig();
+		r.io.slashCommands = () => [
+			{ name: "/equip", desc: "装备", long: "说明" },
+			{ name: "/exit", desc: "退出", long: "说明", aliases: ["quit", "q"] },
+		];
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/qu");
+		await flush(120);
+		const plain = overlayLines(app).map(stripAnsi);
+		const idx = (name: string) => plain.findIndex((l) => l.includes(name));
+		expect(idx("/exit")).toBeGreaterThan(-1); // 别名 quit 前缀命中
+		expect(idx("/equip")).toBeGreaterThan(idx("/exit")); // 名字含 "qu"（非前缀）殿后
+		app.stop();
+	});
+
+	it("③ 全不命中 → 空态「无匹配命令」", async () => {
+		const r = rig();
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/zz");
+		await flush(120);
+		expect(overlayLines(app).map(stripAnsi).some((l) => l.includes("无匹配命令"))).toBe(true);
+		app.stop();
+	});
+
+	it("④ 仅含字命中也回车直达：/ol → Enter 提交真名 /yolo", async () => {
+		const r = rig();
+		r.io.slashCommands = () => [
+			{ name: "/help", desc: "帮助", long: "说明" },
+			{ name: "/yolo", desc: "免确认", long: "说明" },
+		];
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/ol");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\r");
+		await flush(120);
+		expect(r.submitted).toEqual(["/yolo"]);
+		app.stop();
+	});
+});

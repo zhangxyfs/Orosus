@@ -951,7 +951,15 @@ export class FullApp {
 	private filteredCommands(): SlashItem[] {
 		const q = normCmd(this.state.input).slice(1).split(" ")[0]!;
 		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
-		return this.io.slashCommands().filter((c) => c.name.startsWith("/" + q) || (c.aliases ?? []).some((a) => a.startsWith(q)));
+		// 前缀命中排前、含字命中殿后（2026-09-24 拍板：/ol 先列 ol 开头，再列含 ol 的 /yolo）——组内保持注册序
+		const hits: SlashItem[] = [];
+		const more: SlashItem[] = [];
+		for (const c of this.io.slashCommands()) {
+			const aliases = c.aliases ?? [];
+			if (c.name.startsWith("/" + q) || aliases.some((a) => a.startsWith(q))) hits.push(c);
+			else if (c.name.slice(1).includes(q) || aliases.some((a) => a.includes(q))) more.push(c);
+		}
+		return [...hits, ...more];
 	}
 
 	// ---------- 布局与渲染 ----------
@@ -1323,7 +1331,7 @@ export class FullApp {
 			const real = this.filteredCommands();
 			items =
 				real.length === 0
-					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有以该前缀开头的命令。继续输入或删除字符修改前缀，Esc 关闭菜单。" }]
+					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有匹配的命令。继续输入或删字修改筛选，Esc 关闭菜单。" }]
 					: real.map((c) => ({
 							text: `${c.name}${c.aliases === undefined ? "" : theme.fg("muted", `（${c.aliases.join(", ")}）`)} ${theme.dim(c.desc)}`,
 							mark: " ",
