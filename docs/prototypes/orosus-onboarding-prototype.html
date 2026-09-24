@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· 首次使用引导弹窗原型</title>
+<style>
+  /* ─── tokens · 连山配色（与 orosus-tui-prototype.html 同源） ────────── */
+  :root {
+    --bg:        #0a100e;   /* 玄墨 */
+    --surface:   #121b17;   /* 层峦 */
+    --surface-2: #18241e;   /* 浮峦 */
+    --fg:        #e9eee6;   /* 宣纸 */
+    --muted:     #97a49a;   /* 山岚 */
+    --border:    #25352d;   /* 叠嶂 */
+    --accent:    #7cc9a5;   /* 青玉 · 主强调 */
+    --info:      #84b8cd;   /* 石青 · 信息 */
+    --warn:      #d4a25e;   /* 暖金 · 进行/注意 */
+    --err:       #d07f70;   /* 赭石 · 错误 */
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Microsoft YaHei', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-body); font-size: 14px; line-height: 1.6;
+  }
+
+  /* ─── 走查说明条（非 TUI 部分） ──────────────────────────────────── */
+  .notebar {
+    max-width: 1180px; margin: 18px auto 10px; padding: 10px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--muted); font-size: 13px;
+  }
+  .notebar b { color: var(--info); font-weight: 600; }
+  .notebar kbd {
+    font-family: var(--font-mono); font-size: 12px; color: var(--fg);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; margin: 0 1px;
+  }
+
+  /* ─── 终端窗体 ──────────────────────────────────────────────────── */
+  .terminal {
+    max-width: 1180px; margin: 0 auto 40px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.75;
+    box-shadow: 0 30px 70px rgba(0,0,0,.6);
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px;
+  }
+  .dots { display: flex; gap: 8px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2c3f36; }
+  .title { flex: 1; text-align: center; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+  .geom { color: #5c6b62; font-size: 11px; }
+
+  .tui-body { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 320px; height: 680px; }
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow-y: auto; padding: 18px 24px; }
+  .banner { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .logo {
+    width: 64px; height: 64px; border-radius: 12px; flex: none;
+    background: linear-gradient(160deg, #143024, #0c1a15);
+    border: 1px solid var(--accent-line, #2d5546); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 700;
+  }
+  .banner h1 { margin: 0; font-size: 17px; letter-spacing: .04em; }
+  .banner p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .ln { white-space: pre-wrap; }
+  .ln .u { color: var(--muted); }
+  .ln .a { color: var(--accent); }
+  .ln .i { color: var(--info); }
+  .ln .w { color: var(--warn); }
+  .ln .e { color: var(--err); }
+
+  .inputwrap { padding: 0 24px 18px; }
+  .inputbox {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+    padding: 9px 14px; color: var(--muted);
+  }
+  .inputbox.live { border-color: #2d5546; color: var(--fg); }
+  .inputbox .cursor { display: inline-block; width: 8px; height: 16px; background: var(--accent); vertical-align: text-bottom; }
+  .hintline { color: #5c6b62; font-size: 12px; margin-top: 6px; }
+
+  .side { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .card { border-bottom: 1px solid var(--border); padding: 14px 16px; }
+  .card:last-child { border-bottom: none; flex: 1; }
+  .card h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--muted); }
+  .kv { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+  .kv b { color: var(--fg); font-weight: 500; }
+
+  /* ─── 引导弹窗：居中、锁焦点、定高防闪烁 ────────────────────────── */
+  .backdrop { position: absolute; inset: 0; background: rgba(4,8,6,.62); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .backdrop.hidden { display: none; }
+  .tui-body.onboarding .stream, .tui-body.onboarding .side { filter: saturate(.75) brightness(.82); }
+
+  .modal {
+    width: 760px; height: 540px;           /* 三页定高——防增删行走闪烁（浮层纪律）；v4.5 走查反馈放大 */
+    background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px;
+    display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  }
+  .modal-head { padding: 16px 22px 10px; border-bottom: 1px solid var(--border); }
+  .modal-head .step { color: var(--info); font-size: 11.5px; letter-spacing: .12em; }
+  .modal-head h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: .03em; }
+  .modal-body { flex: 1; padding: 14px 22px; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-foot {
+    display: flex; gap: 18px; align-items: center; padding: 11px 22px;
+    border-top: 1px solid var(--border); background: var(--surface); border-radius: 0 0 12px 12px;
+    font-size: 12.5px; min-height: 46px;
+  }
+  .key {
+    font-family: var(--font-mono); font-size: 12px; white-space: nowrap;
+    background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 7px; color: var(--fg);
+  }
+  .key.hint-accent { border-color: #2d5546; color: var(--accent); }
+  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .foot-item.off { opacity: .38; }
+  .foot-item .why { color: var(--warn); font-size: 12px; }
+  .foot-spacer { flex: 1; }
+  .foot-note { color: #5c6b62; font-size: 11.5px; }
+
+  /* 页内元素 */
+  .lead { color: var(--muted); margin: 0 0 10px; }
+  .feat { display: flex; gap: 10px; margin: 7px 0; }
+  .feat .dot { color: var(--accent); flex: none; }
+  .feat .t b { color: var(--fg); font-weight: 600; }
+  .feat .t span { color: var(--muted); }
+
+  .plist { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .prow {
+    display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: 13px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+  .prow:last-child { border-bottom: none; }
+  .prow.sel { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .prow .name { min-width: 15ch; }
+  .prow .env { color: #5c6b62; font-size: 11.5px; flex: 1; }
+  .prow .tag { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; color: var(--muted); }
+  .prow .tag.local { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, var(--border)); }
+  .prow .tag.on { color: var(--accent); border-color: #2d5546; }
+  .prow .ok { color: var(--accent); visibility: hidden; }
+  .prow.done .ok { visibility: visible; }
+  .pagebar { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: #5c6b62; font-size: 11.5px; }
+  .pagebar .flex { flex: 1; }
+
+  .keyline { margin-top: 22px; }
+  .keyline .lab { color: var(--muted); font-size: 12.5px; margin-bottom: 5px; }
+  .keyline .lab a { color: var(--info); text-decoration: none; }
+  .keybox {
+    font-family: var(--font-mono); font-size: 13.5px;
+    background: var(--bg); border: 1px solid #2d5546; border-radius: 6px; padding: 7px 12px;
+  }
+  .keybox .cur { display: inline-block; width: 8px; height: 15px; background: var(--accent); vertical-align: text-bottom; }
+  .modal-notice { margin-top: 9px; font-size: 12.5px; color: var(--warn); min-height: 20px; }
+  .modal-notice.ok { color: var(--accent); }
+  .modal-notice.err { color: var(--err); }
+
+  /* 退出遮罩 */
+  .quitveil { position: absolute; inset: 0; background: var(--bg); z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
+  .quitveil.hidden { display: none; }
+  .quitveil .big { color: var(--fg); font-size: 15px; }
+
+  /* toast：全宽无框暖金字行（toast 纪律形态），盖在输入框上方 */
+  .toast {
+    position: absolute; left: 0; right: 320px; bottom: 76px; z-index: 20;
+    padding: 4px 24px; color: var(--warn); font-size: 13px; display: none;
+  }
+  .toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="notebar">
+  <b>走查说明</b> · 本页是「首次使用引导弹窗」交互原型：全程键盘操作——<kbd>↑</kbd><kbd>↓</kbd> 移动（输入态下可直接换行，草稿按行保留）、<kbd>Enter</kbd> 确认、<kbd>Space</kbd> 设为当前使用（第 2 页）、<kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页、<kbd>Ctrl + N</kbd> 下一步 / 完成引导（第 3 页）、<kbd>Ctrl + Q</kbd> 退出（仅第 1 页）。Ctrl + C 全程不占用（不与系统复制冲突）。
+  浏览器可能吞掉 <kbd>Ctrl + N</kbd>/<kbd>Ctrl + Q</kbd>（保留键），此时用 <kbd>Alt + N</kbd>/<kbd>Alt + Q</kbd> 等效演示；真机 TUI 无此问题。
+  触发条件：无 config.toml 或其解析损坏（现状是启动即崩，本批改为降级进引导）。
+</div>
+
+<div class="terminal">
+  <div class="titlebar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="title">orosus · 连山 — D:\develop\Orosus</div>
+    <div class="geom">120 × 30</div>
+  </div>
+
+  <div class="tui-body onboarding" id="tui">
+    <div class="main">
+      <div class="stream" id="stream">
+        <div class="banner">
+          <div class="logo">山</div>
+          <div>
+            <h1>Orosus · 连山</h1>
+            <p>模块互连、组件层叠的本地 Agent Harness —— v35（原型演示背景）</p>
+          </div>
+        </div>
+        <div id="streamlines">
+          <div class="ln u">模型未配置——完成右侧引导后即可开始对话。</div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+      <div class="inputwrap">
+        <div class="inputbox" id="inputbox">引导进行中——输入由引导弹窗接管</div>
+        <div class="hintline">/help 命令清单 · Ctrl + T 侧栏 · Alt + V 附图</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h3>运行状态</h3>
+        <div class="kv"><span>模型</span><b>未配置</b></div>
+        <div class="kv"><span>权限</span><b>ask-risky</b></div>
+        <div class="kv"><span>会话</span><b>new · 未落盘</b></div>
+        <div class="kv"><span>模块</span><b>9 加载</b></div>
+      </div>
+      <div class="card">
+        <h3>任务清单</h3>
+        <div class="kv"><span style="color:#5c6b62">（空——先完成引导）</span></div>
+      </div>
+    </div>
+
+    <div class="backdrop" id="backdrop">
+      <div class="modal" role="dialog" aria-label="首次使用引导">
+        <div class="modal-head">
+          <div class="step" id="m-step">引导 1 / 3</div>
+          <h2 id="m-title">欢迎使用 Orosus（连山）</h2>
+        </div>
+        <div class="modal-body" id="m-body"></div>
+        <div class="modal-foot" id="m-foot"></div>
+      </div>
+    </div>
+
+    <div class="quitveil hidden" id="quitveil">
+      <div class="big">会话已结束（Ctrl + Q = /quit）</div>
+      <div>按任意键重新进入原型</div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ── 内置 models-dev 裁剪快照（原型演示 12 家；实机裁剪规范见方案 SW-21） ── */
+const PROVIDERS = [
+  { id: "anthropic",  name: "Anthropic",     env: "ANTHROPIC_API_KEY",  tag: "在线" },
+  { id: "openai",     name: "OpenAI",        env: "OPENAI_API_KEY",     tag: "在线" },
+  { id: "google",     name: "Google Gemini", env: "GEMINI_API_KEY",     tag: "在线" },
+  { id: "deepseek",   name: "DeepSeek",      env: "DEEPSEEK_API_KEY",   tag: "在线" },
+  { id: "zhipu",      name: "智谱 GLM",      env: "ZHIPU_API_KEY",      tag: "在线" },
+  { id: "moonshot",   name: "月之暗面 Kimi", env: "MOONSHOT_API_KEY",   tag: "在线" },
+  { id: "xai",        name: "xAI Grok",      env: "XAI_API_KEY",        tag: "在线" },
+  { id: "openrouter", name: "OpenRouter",    env: "OPENROUTER_API_KEY", tag: "在线" },
+  { id: "mistral",    name: "Mistral",       env: "MISTRAL_API_KEY",    tag: "在线" },
+  { id: "groq",       name: "Groq",          env: "GROQ_API_KEY",       tag: "在线" },
+  { id: "ollama",     name: "Ollama",        env: "本地服务无需 Key",    tag: "本地", local: true },
+  { id: "vllm",       name: "vLLM",          env: "本地服务无需 Key",    tag: "本地", local: true },
+];
+const PAGE_SIZE = 8;
+
+const S = {
+  page: 1, done: false, quit: false,
+  p2: { sel: 0, pageIdx: 0, mode: "list", drafts: {}, configured: [], active: null, notice: "" },
+  p3: { sel: 0, stage: "opts", keyOpt: null, provOpt: null, drafts: {}, chosen: null, model: null, notice: "" },
+};
+const WEB_OPTS = [
+  { id: "llm",   name: "LLM Web Search", desc: "默认 · 用已配置的模型联网搜索，无需任何 Key" },
+  { id: "tavily",name: "Tavily",         desc: "专业搜索服务 · 需 API Key · tavily.com", url: "https://tavily.com" },
+  { id: "brave", name: "Brave",          desc: "独立索引搜索 · 需 API Key · brave.com/search/api", url: "https://brave.com/search/api" },
+];
+/* 演示用模型清单（实机 = 该提供商的在线模型目录，经既有目录管道拉取；拉取失败回退手动输入行——SW-24） */
+const MODELS = {
+  anthropic: ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
+  openai: ["gpt-5.4", "gpt-5.4-mini", "o5"],
+  google: ["gemini-3.5-pro", "gemini-3.5-flash"],
+  deepseek: ["deepseek-v4", "deepseek-v4-lite"],
+  zhipu: ["glm-5.3", "glm-5.3-air", "glm-4.7-flash"],
+  moonshot: ["kimi-k3", "kimi-k3-air"],
+  xai: ["grok-5", "grok-5-fast"],
+  openrouter: ["openrouter/auto", "anthropic/claude-sonnet-4-6"],
+  mistral: ["mistral-large-3", "mistral-small-4"],
+  groq: ["llama-4-70b", "mixtral-next"],
+  ollama: ["llama4:70b", "qwen4:32b", "deepseek-r2:14b"],
+  vllm: ["qwen4-32b", "deepseek-v4"],
+};
+function provById(id) { return PROVIDERS.find((x) => x.id === id) || { name: id }; }
+function modelsOf(id) { return MODELS[id] || [id + "-main", id + "-lite"]; }
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* 提示行三色语义（v4.5 走查拍板）：成功回执青玉、引导/拒绝提示暖金（基色）、真错误赭石——成功反馈永不用红 */
+function noticeClass(text) {
+  if (!text) return "";
+  if (/已写入|已配置/.test(text)) return "ok";
+  if (/不能为空/.test(text)) return "err";
+  return "";
+}
+
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text; t.classList.add("show");
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => t.classList.remove("show"), 3000);
+}
+
+/* ── 页脚（快捷键行；锁定态置灰 + 原因） ── */
+function foot(items) {
+  $("m-foot").innerHTML = items.map((it) => {
+    if (it.note) return `<div class="foot-note">${it.note}</div>`;
+    return `<div class="foot-item ${it.on ? "" : "off"}">
+      <span class="key ${it.on ? "hint-accent" : ""}">${it.key}</span>
+      <span>${it.label}</span>${!it.on && it.why ? `<span class="why">${it.why}</span>` : ""}</div>`;
+  }).join("") + '<div class="foot-spacer"></div><div class="foot-note">焦点锁定在引导弹窗 · Esc 未占用</div>';
+}
+
+/* ── 第 1 页 · 欢迎 ── */
+function renderP1() {
+  $("m-step").textContent = "引导 1 / 3";
+  $("m-title").textContent = "欢迎使用 Orosus（连山）";
+  $("m-body").innerHTML = `
+    <p class="lead">山夜为底、青绿为峰——一个跑在你终端里的本地 Agent：读写文件、执行命令、管理任务，模型与能力都可插拔。</p>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>联网能力</b><span>——搜索与打开网页，默认用你配置的模型联网，也可以接 Tavily / Brave。</span></div></div>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>任何提供商</b><span>——Anthropic、OpenAI、DeepSeek、智谱、Kimi、Ollama……下一步就能配好。</span></div></div>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>目标驱动</b><span>——给模型一个目标，它没做完不会自己停。</span></div></div>
+    <p class="lead" style="margin-top:12px">名字由来：模块互连如山之连绵，故中文定名「连山」；oros 词根取希腊语「山」。</p>`;
+  foot([
+    { key: "Ctrl + Q", label: "退出", on: true },
+    { key: "Ctrl + N", label: "下一步", on: true },
+  ]);
+}
+
+/* ── 第 2 页 · 选择提供商（可配多家，当前使用仅一家——SW-25） ── */
+function renderP2() {
+  $("m-step").textContent = "引导 2 / 3";
+  $("m-title").textContent = "选择模型提供商";
+  const p2 = S.p2;
+  const keyMode = p2.mode === "key";
+  // Key 输入态下列表收窄为 4 行（窗口跟随选中项）——弹窗定高不顶撑，给 Key 输入区留出间距
+  const vis = keyMode ? 4 : PAGE_SIZE;
+  const start = keyMode
+    ? Math.max(0, Math.min(p2.sel - 1, PROVIDERS.length - vis))
+    : p2.pageIdx * PAGE_SIZE;
+  const rows = PROVIDERS.slice(start, start + vis).map((p, i) => {
+    const gi = start + i;
+    const conf = p2.configured.includes(p.id);
+    return `<div class="prow ${gi === p2.sel ? "sel" : ""} ${conf ? "done" : ""}">
+      <span class="ok">✓</span><span class="name">${p.name}</span>
+      <span class="env">${p.env}</span><span class="tag ${p.local ? "local" : ""}">${p.tag}</span>
+      ${p2.active === p.id ? `<span class="tag on">使用中</span>` : ""}</div>`;
+  }).join("");
+  const pages = Math.ceil(PROVIDERS.length / PAGE_SIZE);
+  let body = `<div class="plist">${rows}</div>
+    <div class="pagebar">${keyMode
+      ? `<span class="flex"></span><span>↑ ↓ 换提供商 · Enter 确认 · Backspace 删除 / 退出输入</span>`
+      : `<span>第 ${p2.pageIdx + 1} / ${pages} 页</span><span class="flex"></span>
+         <span>↑ ↓ 移动 · Enter 输 Key · Space 设当前使用 · PgUp / PgDn 翻页</span>`}</div>`;
+  if (keyMode) {
+    const prov = PROVIDERS[p2.sel];
+    const draft = p2.drafts[prov.id] || "";
+    const conf = p2.configured.includes(prov.id);
+    body += `<div class="keyline">
+      <div class="lab">${prov.local
+        ? `${prov.name} 是本地服务，无需 Key——回车即确认`
+        : `粘贴 ${prov.name} 的 API Key（官网获取，输入以掩码显示${conf ? "；已配置过，回车覆盖" : ""}）`}</div>
+      <div class="keybox">${"●".repeat(draft.length)}<span class="cur"></span></div></div>`;
+  }
+  $("m-body").innerHTML = body;
+  let n = $("m-body").querySelector(".modal-notice");
+  if (!n) { n = document.createElement("div"); n.className = "modal-notice"; $("m-body").appendChild(n); }
+  n.className = "modal-notice " + noticeClass(p2.notice);
+  n.textContent = p2.notice;
+  const ready = p2.active !== null;
+  foot([
+    { key: "Space", label: "设为当前使用", on: true },
+    { key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先配好一家提供商" },
+  ]);
+}
+
+/* ── 第 3 页 · 配置网络搜索 ── */
+function renderP3() {
+  $("m-step").textContent = "引导 3 / 3";
+  $("m-title").textContent = "配置网络搜索";
+  const p = S.p3;
+  let lead = `<p class="lead" style="margin-bottom:8px">搜索后端按「LLM → Tavily → Brave」自动降级；此处选择会写入配置，之后随时可在 /settings 里改。</p>`;
+  let rows = ""; let bar = "↑ ↓ 移动 · Enter 选择";
+  const optRow = (o, i) => `
+    <div class="prow ${i === p.sel ? "sel" : ""} ${p.chosen === o.id ? "done" : ""}">
+      <span class="ok">✓</span><span class="name">${o.name}</span>
+      <span class="env">${o.id === "llm" && p.model ? `已钉住模型：${p.model}` : o.desc}</span></div>`;
+  if (p.stage === "opts") {
+    rows = WEB_OPTS.map(optRow).join("");
+  } else if (p.stage === "llm") {
+    lead += `<p class="lead" style="margin-bottom:8px"><span style="color:var(--info)">LLM Web Search</span> · 选择搜索用的模型</p>`;
+    rows = [
+      { label: `使用上一页配置的模型（${provById(S.p2.active).name} · 默认）`, desc: "与主对话同一模型，零额外配置" },
+      { label: "另选一个模型…", desc: "可跨第 2 页已配置的提供商选择" },
+    ].map((it, i) => `
+      <div class="prow ${i === p.sel ? "sel" : ""}"><span class="ok">✓</span>
+      <span class="name">${it.label}</span><span class="env">${it.desc}</span></div>`).join("");
+    bar = "↑ ↓ 移动 · Enter 选择 · Backspace 返回";
+  } else if (p.stage === "provs") {
+    lead += `<p class="lead" style="margin-bottom:8px"><span style="color:var(--info)">LLM Web Search</span> · 选择提供商（限第 2 页已配置的）</p>`;
+    const conf = PROVIDERS.filter((x) => S.p2.configured.includes(x.id));
+    rows = conf.map((pr, i) => `
+      <div class="prow ${i === p.sel ? "sel" : ""}"><span class="ok">✓</span>
+      <span class="name">${pr.name}</span><span class="env"></span>
+      ${S.p2.active === pr.id ? `<span class="tag on">使用中</span>` : ""}</div>`).join("");
+    bar = "↑ ↓ 移动 · Enter 选提供商 · Backspace 返回";
+  } else if (p.stage === "models") {
+    const list = modelsOf(p.provOpt);
+    lead += `<p class="lead" style="margin-bottom:8px"><span style="color:var(--info)">LLM Web Search</span> · 从 ${provById(p.provOpt).name} 的模型中选择（实机为该提供商在线模型目录）</p>`;
+    rows = list.map((m, i) => `
+      <div class="prow ${i === p.sel ? "sel" : ""}"><span class="ok">✓</span>
+      <span class="name">${m}</span><span class="env"></span></div>`).join("");
+    bar = "↑ ↓ 移动 · Enter 钉住 · Backspace 返回";
+  } else { // key（Tavily / Brave——↑ ↓ 可直接换到其他后端，草稿按行保留——SW-25）
+    const o = WEB_OPTS.find((x) => x.id === p.keyOpt);
+    const draft = p.drafts[o.id] || "";
+    rows = WEB_OPTS.map(optRow).join("");
+    lead += `<div class="keyline">
+      <div class="lab">打开 <a href="${o.url}" target="_blank">${o.url.replace("https://", "")}</a> 免费注册并创建 Key，粘贴到这里（输入以掩码显示）</div>
+      <div class="keybox">${"●".repeat(draft.length)}<span class="cur"></span></div></div>`;
+    bar = "↑ ↓ 换后端 · Enter 确认 · Backspace 删除 / 返回";
+  }
+  $("m-body").innerHTML = `${lead}<div class="plist">${rows}</div>
+    <div class="pagebar"><span class="flex"></span><span>${bar}</span></div>`;
+  let n = $("m-body").querySelector(".modal-notice");
+  if (!n) { n = document.createElement("div"); n.className = "modal-notice"; $("m-body").appendChild(n); }
+  n.className = "modal-notice " + noticeClass(p.notice);
+  n.textContent = p.notice;
+  const ready = p.chosen !== null;
+  foot([
+    { key: "Ctrl + N", label: "完成引导", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" },
+  ]);
+}
+
+function render() {
+  if (S.page === 1) renderP1();
+  else if (S.page === 2) renderP2();
+  else renderP3();
+}
+
+/* ── 完成引导 ── */
+function complete() {
+  S.done = true;
+  $("backdrop").classList.add("hidden");
+  $("tui").classList.remove("onboarding");
+  $("inputbox").classList.add("live");
+  $("inputbox").innerHTML = '你好，介绍一下你自己<span class="cursor"></span>';
+  const lines = $("streamlines");
+  lines.insertAdjacentHTML("beforeend", `
+    <div class="ln"><span class="a">● 引导完成</span> —— 配置已写入，<span class="i">即时生效</span>（provider 与 web search 均为调用时解析）。</div>
+    <div class="ln u">写入：config.toml [provider] / [web] search；secrets.env（如配置了 Tavily / Brave Key）。</div>`);
+  toast("引导完成 · 配置已写入并即时生效");
+}
+
+function quitApp() {
+  S.quit = true;
+  $("quitveil").classList.remove("hidden");
+}
+
+function restart() {
+  S.page = 1; S.done = false; S.quit = false;
+  S.p2 = { sel: 0, pageIdx: 0, mode: "list", drafts: {}, configured: [], active: null, notice: "" };
+  S.p3 = { sel: 0, stage: "opts", keyOpt: null, provOpt: null, drafts: {}, chosen: null, model: null, notice: "" };
+  $("quitveil").classList.add("hidden");
+  $("backdrop").classList.remove("hidden");
+  $("tui").classList.add("onboarding");
+  $("inputbox").classList.remove("live");
+  $("inputbox").textContent = "引导进行中——输入由引导弹窗接管";
+  render();
+}
+
+/* ── 键盘 ── */
+document.addEventListener("keydown", (e) => {
+  if (S.quit) { restart(); e.preventDefault(); return; }
+  if (S.done) return;
+
+  const ctrlQ = (e.ctrlKey || e.altKey) && (e.key === "q" || e.key === "Q");
+  const ctrlN = (e.ctrlKey || e.altKey) && (e.key === "n" || e.key === "N");
+
+  if (ctrlQ) {
+    e.preventDefault();
+    if (S.page === 1) { quitApp(); return; }
+    if (S.page === 2) { S.p2.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
+    else { S.p3.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
+    return;
+  }
+  if (S.page === 1 && ctrlN) { e.preventDefault(); S.page = 2; render(); return; }
+
+  if (S.page === 2) {
+    const p = S.p2, pages = Math.ceil(PROVIDERS.length / PAGE_SIZE);
+    // Space：把选中的已配置提供商设为当前使用（输入态下同样可用——API Key 不含空格）
+    if (e.key === " ") {
+      e.preventDefault();
+      const prov = PROVIDERS[p.sel];
+      if (p.configured.includes(prov.id)) {
+        p.active = prov.id;
+        p.notice = `已写入 config.toml [provider]（provider = ${prov.id}）`;
+      } else {
+        p.notice = `先输入 ${prov.name} 的 Key，再设为当前使用`;
+      }
+      render(); return;
+    }
+    // ↑ ↓：列表态与输入态都可换行（草稿按行保留——SW-25）
+    if (e.key === "ArrowDown") { e.preventDefault(); p.sel = Math.min(p.sel + 1, PROVIDERS.length - 1); p.pageIdx = Math.floor(p.sel / PAGE_SIZE); render(); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); p.sel = Math.max(p.sel - 1, 0); p.pageIdx = Math.floor(p.sel / PAGE_SIZE); render(); return; }
+    if (p.mode === "list") {
+      if (e.key === "PageDown")  { e.preventDefault(); p.pageIdx = Math.min(p.pageIdx + 1, pages - 1); p.sel = p.pageIdx * PAGE_SIZE; render(); return; }
+      if (e.key === "PageUp")    { e.preventDefault(); p.pageIdx = Math.max(p.pageIdx - 1, 0); p.sel = p.pageIdx * PAGE_SIZE; render(); return; }
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const prov = PROVIDERS[p.sel];
+      if (p.mode === "list") {
+        if (!p.drafts[prov.id]) p.drafts[prov.id] = "";
+        p.mode = "key"; p.notice = ""; render(); return;
+      }
+      if (prov.local) {
+        if (!p.configured.includes(prov.id)) p.configured.push(prov.id);
+        if (p.active === null) {
+          p.active = prov.id;
+          p.notice = `已写入 config.toml [provider]（provider = ${prov.id}，本地服务无需 Key）`;
+        } else {
+          p.notice = `${prov.name} 已配置（本地服务无需 Key）`;
+        }
+        render(); return;
+      }
+      const draft = p.drafts[prov.id] || "";
+      if (draft.length === 0) { p.notice = "Key 不能为空——粘贴后回车确认"; render(); return; }
+      const first = p.active === null;
+      if (!p.configured.includes(prov.id)) p.configured.push(prov.id);
+      if (first) {
+        p.active = prov.id;
+        p.notice = `Key 已写入 secrets.env（${prov.env}），并设为当前使用——已写入 config.toml [provider]`;
+      } else {
+        p.notice = `Key 已写入 secrets.env（${prov.env}）——${prov.name} 备用（Space 设为当前使用）`;
+      }
+      render(); return;
+    }
+    if (p.mode === "key") {
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        const id = PROVIDERS[p.sel].id;
+        const draft = p.drafts[id] || "";
+        if (draft) { p.drafts[id] = draft.slice(0, -1); } else { p.mode = "list"; }
+        render(); return;
+      }
+      if (e.key.length === 1 && !ctrlN) {
+        e.preventDefault();
+        const id = PROVIDERS[p.sel].id;
+        p.drafts[id] = (p.drafts[id] || "") + e.key;
+        render(); return;
+      }
+    }
+    if (ctrlN) {
+      e.preventDefault();
+      if (p.active === null) { p.notice = "先配置一个提供商——首个配好的自动设为当前使用"; render(); return; }
+      S.page = 3; render(); return;
+    }
+  }
+
+  if (S.page === 3) {
+    const p = S.p3;
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      if (p.stage === "key") {
+        const cur = p.drafts[p.keyOpt] || "";
+        if (cur) { p.drafts[p.keyOpt] = cur.slice(0, -1); } else { p.stage = "opts"; p.notice = ""; }
+        render(); return;
+      }
+      if (p.stage === "models") { p.stage = "provs"; p.sel = Math.max(0, PROVIDERS.filter((x) => S.p2.configured.includes(x.id)).findIndex((x) => x.id === p.provOpt)); p.notice = ""; render(); return; }
+      if (p.stage === "provs") { p.stage = "llm"; p.sel = 0; p.notice = ""; render(); return; }
+      if (p.stage === "llm") { p.stage = "opts"; p.sel = 0; p.notice = ""; render(); return; }
+      return;
+    }
+    if (p.stage === "opts") {
+      if (e.key === "ArrowDown") { e.preventDefault(); p.sel = Math.min(p.sel + 1, WEB_OPTS.length - 1); render(); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); p.sel = Math.max(p.sel - 1, 0); render(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const o = WEB_OPTS[p.sel];
+        if (o.id === "llm") { p.stage = "llm"; p.sel = 0; p.notice = ""; render(); return; }
+        p.stage = "key"; p.keyOpt = o.id; p.notice = ""; render(); return;
+      }
+    } else if (p.stage === "llm") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); p.sel = 1 - p.sel; render(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (p.sel === 0) {
+          p.chosen = "llm"; p.model = null; p.stage = "opts";
+          p.notice = `已写入 config.toml [web] search（用上一页配置的模型 · ${provById(S.p2.active).name}，失败自动降级 Tavily / Brave）`;
+        } else { p.stage = "provs"; const conf = PROVIDERS.filter((x) => S.p2.configured.includes(x.id)); p.sel = Math.max(0, conf.findIndex((x) => x.id === S.p2.active)); p.notice = ""; }
+        render(); return;
+      }
+    } else if (p.stage === "provs") {
+      const conf = PROVIDERS.filter((x) => S.p2.configured.includes(x.id));
+      if (e.key === "ArrowDown") { e.preventDefault(); p.sel = Math.min(p.sel + 1, conf.length - 1); render(); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); p.sel = Math.max(p.sel - 1, 0); render(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        p.provOpt = conf[p.sel].id; p.stage = "models"; p.sel = 0; p.notice = ""; render(); return;
+      }
+    } else if (p.stage === "models") {
+      const list = modelsOf(p.provOpt);
+      if (e.key === "ArrowDown") { e.preventDefault(); p.sel = Math.min(p.sel + 1, list.length - 1); render(); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); p.sel = Math.max(p.sel - 1, 0); render(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        p.chosen = "llm"; p.model = `${p.provOpt}/${list[p.sel]}`; p.stage = "opts";
+        p.notice = `已写入 config.toml [web] search（钉住 ${p.model}，失败自动降级 Tavily / Brave）`;
+        render(); return;
+      }
+    } else { // key（Tavily / Brave——↑ ↓ 可直接换到其他后端，草稿按行保留——SW-25）
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const d = e.key === "ArrowDown" ? 1 : -1;
+        const ni = WEB_OPTS.findIndex((x) => x.id === p.keyOpt) + d;
+        const target = WEB_OPTS[Math.max(0, Math.min(WEB_OPTS.length - 1, ni))];
+        if (target.id === "llm") { p.stage = "llm"; p.sel = 0; p.notice = ""; }
+        else { p.keyOpt = target.id; }
+        render(); return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const draft = p.drafts[p.keyOpt] || "";
+        if (draft.length === 0) { p.notice = "Key 不能为空——粘贴后回车确认"; render(); return; }
+        p.chosen = p.keyOpt;
+        p.notice = `Key 已写入 secrets.env（${p.keyOpt === "tavily" ? "TAVILY_API_KEY" : "BRAVE_API_KEY"}）——降级链上自动取用`;
+        render(); return;
+      }
+      if (e.key.length === 1 && !ctrlN && e.key !== " ") {
+        e.preventDefault();
+        p.drafts[p.keyOpt] = (p.drafts[p.keyOpt] || "") + e.key;
+        render(); return;
+      }
+    }
+    if (ctrlN) {
+      e.preventDefault();
+      if (p.chosen === null) { p.notice = "请先选择一个搜索后端——LLM 默认零配置，回车即选"; render(); return; }
+      complete(); return;
+    }
+  }
+});
+
+render();
+</script>
+</body>
+</html>
