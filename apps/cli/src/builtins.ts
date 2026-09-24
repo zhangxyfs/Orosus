@@ -3,6 +3,7 @@ import toolFs from "@orosus/tool-fs";
 import toolShell from "@orosus/tool-shell";
 import toolTodo from "@orosus/tool-todo";
 import toolAsk from "@orosus/tool-ask";
+import toolWeb from "@orosus/tool-web";
 import providerCustom from "@orosus/provider-custom";
 import { mcpDef } from "@orosus/mcp";
 import skill from "@orosus/skill";
@@ -19,6 +20,7 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   toolShell,
   toolTodo,
   toolAsk,
+  toolWeb,
   providerCustom,
   mcpDef,
   skill,
