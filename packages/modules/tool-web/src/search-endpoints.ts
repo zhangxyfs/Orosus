@@ -17,7 +17,11 @@
  *  服务键与返回形状是双边契约（非 core 路由的公共短名，故不进 contracts；不随主体版本演进）。
  *
  *  2026-09-24 真机 spike（流式、用户在配 key）：deepseek/kimi/glm 三家 anthropic 面均真出原生
- *  搜索结果；模型名直接透传（deepseek-chat→服务端 v4-flash、k3-256k、glm-5.3 均可搜）。 */
+ *  搜索结果；模型名直接透传（deepseek-chat→服务端 v4-flash、k3-256k、glm-5.3 均可搜）。
+ *
+ *  采信口径（2026-09-24 用户拍板）：Reasonix 产品上市已久、其预设经用户群长年验证——凡其对位
+ *  在案的端点**直接采用，不等逐家复验**。verified 字段只标 Orosus 真机流式复验（数据诚实位），
+ *  false = 采信 Reasonix 在案事实；运行期 :147 门兜底，个别端点不执行搜索即自然降级，零风险。 */
 export interface NativeSearchFace {
   /** openai 档 baseUrl 匹配前缀（origin+path；归一化后整段或「前缀+/' 下一段」命中） */
   chatBase: string;
@@ -87,7 +91,43 @@ export const NATIVE_SEARCH_FACES: NativeSearchFace[] = [
     chatBase: "https://api.xiaomimimo.com",
     anthropicRoot: "https://api.xiaomimimo.com/anthropic",
     verified: false,
-    note: "MiMo API——Reasonix 预设对位（mimo-anthropic），未实机验证；token-plan 区域子域未配对",
+    note: "MiMo API——Reasonix 预设对位（mimo-anthropic），未实机验证",
+  },
+  {
+    chatBase: "https://api.minimaxi.com",
+    anthropicRoot: "https://api.minimaxi.com/anthropic",
+    verified: false,
+    note: "MiniMax CN——Reasonix 预设对位（minimax-cn-api ↔ minimax-cn-anthropic，Bearer 鉴权），未实机验证",
+  },
+  {
+    chatBase: "https://token-plan-cn.xiaomimimo.com",
+    anthropicRoot: "https://token-plan-cn.xiaomimimo.com/anthropic",
+    verified: false,
+    note: "MiMo token plan CN——Reasonix 预设对位（mimo-token-plan-cn-anthropic），未实机验证",
+  },
+  {
+    chatBase: "https://token-plan-sgp.xiaomimimo.com",
+    anthropicRoot: "https://token-plan-sgp.xiaomimimo.com/anthropic",
+    verified: false,
+    note: "MiMo token plan SGP——Reasonix 预设对位（mimo-token-plan-sgp-anthropic），未实机验证",
+  },
+  {
+    chatBase: "https://token-plan-ams.xiaomimimo.com",
+    anthropicRoot: "https://token-plan-ams.xiaomimimo.com/anthropic",
+    verified: false,
+    note: "MiMo token plan AMS——Reasonix 预设对位（mimo-token-plan-ams-anthropic），未实机验证",
+  },
+  {
+    chatBase: "https://api.stepfun.com",
+    anthropicRoot: "https://api.stepfun.com",
+    verified: false,
+    note: "阶跃 StepFun 按量 API——Reasonix 预设对位（stepfun-api openai /v1 ↔ stepfun-api-anthropic 裸根 → /v1/messages）；其 /step_plan 编码套餐面无 chat 对位，不单独路由",
+  },
+  {
+    chatBase: "https://ai-gateway.vercel.sh",
+    anthropicRoot: "https://ai-gateway.vercel.sh",
+    verified: false,
+    note: "Vercel AI Gateway——Reasonix 预设对位（vercel-ai-gateway anthropic 面，Bearer；网关另开 openai 兼容 /v1），未实机验证；模型 id 带厂商前缀（anthropic/…）",
   },
 ];
 
