@@ -14,7 +14,7 @@ export interface ServerConnection {
 }
 
 export interface ActivateMcpOpts {
-  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[] }>;
+  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean }>;
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
 }
@@ -38,7 +38,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
       manifest[name] = list.map((t) => t.name);
       for (const meta of list) {
-        tools.push(toBridgedTool(name, meta, conn.callTool, cfg.accesses as never));
+        tools.push(toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true)); // server 级 deferred 透传（M4-3 T5）
       }
       let instructions: string | undefined;
       try {
@@ -83,11 +83,14 @@ export const mcpDef = defineModule({
       url: z.string().optional(),
       enabled: z.boolean().optional(),
       accesses: z.array(z.unknown()).optional(),
+      // ToolSearch 按需加载（M4-3 T5，kimi server 级开关同款边界——只有 MCP 工具可被隐藏）：
+      // true = 该 server 的桥接工具全标 deferred；tool-search 未启用时标记不生效（SW-26 联动，照常全量进请求）
+      deferred: z.boolean().optional(),
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
   mounts: ["contribute:tool", "contribute:promptSection"],
-  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[] }> }>) {
+  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean }> }>) {
     // M1 SDK 接线：stdio（command/args/env）与 HTTP（url）两 transport——实现期联调，测试注入 fake connect
     const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
     const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");

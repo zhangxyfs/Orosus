@@ -172,6 +172,16 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.6.5
+    devDependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../../testing
+      '@orosus/tool-search':
+        specifier: workspace:*
+        version: link:../tool-search
 
   packages/modules/provider-custom:
     dependencies:

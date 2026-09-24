@@ -27,8 +27,9 @@ export function digest(servers: Record<string, string[]>): string {
   return createHash("sha256").update(normalized).digest("hex");
 }
 
-/** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>；accesses 缺省 fail-closed [all]，server 级声明可放宽。 */
-export function toBridgedTool(server: string, meta: ServerToolMeta, call: ServerCall, accesses?: AccessT[]): Tool {
+/** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>；accesses 缺省 fail-closed [all]，server 级声明可放宽。
+ *  deferred（M4-3 T5）：server 级「按需加载」标记透传——tool-search 未启用时标记不生效（SW-26 联动）。 */
+export function toBridgedTool(server: string, meta: ServerToolMeta, call: ServerCall, accesses?: AccessT[], deferred?: boolean): Tool {
   const clean = sanitizeToolMeta(server, meta.name, meta.description);
   const params = meta.inputSchema !== undefined && meta.inputSchema.type === "object"
     ? z.object({}).passthrough()
@@ -36,6 +37,7 @@ export function toBridgedTool(server: string, meta: ServerToolMeta, call: Server
   return defineTool({
     name: `mcp__${server}__${clean.name}`,
     description: clean.description,
+    ...(deferred === true ? { deferred: true } : {}),
     parameters: params,
     resolveExecution: async (input) => ({
       accesses: accesses ?? [Access.all()],
