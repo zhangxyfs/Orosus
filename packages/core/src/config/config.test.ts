@@ -37,9 +37,19 @@ describe("分层合并（§6.6：默认→用户→项目→env→flag）", () =
 
   it("UTF-8 BOM 的配置文件可解析（Windows PowerShell 5.1 Out-File -Encoding utf8 会写 BOM）", () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
-    writeFileSync(join(dir, "bom.toml"), `\uFEFFmodel = "anthropic/bom"\n`);
+    writeFileSync(join(dir, "bom.toml"), `﻿model = "anthropic/bom"\n`);
     const cfg = loadConfig({ userFile: join(dir, "bom.toml"), env: {} });
     expect(cfg.core.model).toBe("anthropic/bom");
+  });
+
+  it("坏 TOML 不炸穿启动（SW-20）：解析失败层跳过 + warnings 留痕，其余层照常生效", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
+    writeFileSync(join(dir, "bad.toml"), `model = "anthropic/x"\n[unclosed\n`);
+    writeFileSync(join(dir, "good.toml"), `contextWindow = 4096\n`);
+    const cfg = loadConfig({ userFile: join(dir, "bad.toml"), projectFile: join(dir, "good.toml"), env: {} });
+    expect(cfg.core.model).toBeUndefined(); // 坏层被跳过（此前 parse 抛错 = 启动即崩）
+    expect(cfg.core.contextWindow).toBe(4096); // 好层照常
+    expect(cfg.warnings.some((w) => w.includes("bad.toml") && w.includes("解析失败"))).toBe(true);
   });
 
   it("$ENV:VAR 占位解析期替换；缺失变量保留占位并出 warning", () => {

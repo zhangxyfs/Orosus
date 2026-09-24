@@ -26,3 +26,10 @@ export { getCatalog, getCatalogWithSource, defaultCatalogCacheFile, persistCatal
 export { resolveWire, adaptBaseUrl } from "./infer.ts";
 export { runProviderMenu, type MenuUi, type MenuDeps, type ProviderEntry } from "./menu.ts";
 export { defaultMenuDeps } from "./cli-deps.ts";
+// M4-3 T1d 引导弹窗消费面：裁剪快照视图（SW-21）+ 按 provider 实拉模型清单的组合件（SW-24——引导期槽未激活，
+// 用裸条目直组「目录优选 + live 兜底」，与槽内 listModels 同口径）
+export { BUILTIN_SNAPSHOT, snapshotProviderView, type SnapshotProviderView } from "./builtin-snapshot.ts";
+export { catalogPreferredListModels, diskFirstCatalogLoader, type CatalogLoader } from "./adapters.ts";
+export { createListModels as openaiListModels } from "./stream-openai.ts";
+export { createListModels as anthropicListModels } from "./stream-anthropic.ts";
+export { usableCatalogModels } from "./catalog.ts";

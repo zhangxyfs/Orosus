@@ -36,8 +36,9 @@ export function diskFirstCatalogLoader(cacheFile: string = defaultCatalogCacheFi
 /** 槽内清单的目录优选（2026-09-22 /model 清单修复，与 onboarding「目录池优先」同口径——menu.ts）：
  *  全量目录（online/disk）含本槽条目且有可用模型 → 策展清单即覆盖口径（coding-plan 条目只含套餐内模型；
  *  live /models 会把按量模型一并列出，选了就 1113——用户实测）。builtin 裁剪快照 / 条目缺失 /
- *  可用模型滤空 / 目录加载失败 → 回 live 清单（原行为）。匹配键 = 槽名即目录条目 id（目录导入的安装方式天然满足）。 */
-function catalogPreferredListModels(slot: string, live: () => Promise<string[]>, loadCatalog: CatalogLoader): () => Promise<string[]> {
+ *  可用模型滤空 / 目录加载失败 → 回 live 清单（原行为）。匹配键 = 槽名即目录条目 id（目录导入的安装方式天然满足）。
+ *  M4-3 T1d 导出：引导期（槽未激活）按裸条目直组同口径清单（SW-24）。 */
+export function catalogPreferredListModels(slot: string, live: () => Promise<string[]>, loadCatalog: CatalogLoader): () => Promise<string[]> {
   return async () => {
     try {
       const { catalog, source } = await loadCatalog();

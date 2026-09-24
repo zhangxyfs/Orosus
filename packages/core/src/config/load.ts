@@ -93,8 +93,14 @@ export function loadConfig(opts: {
   for (const file of [opts.userFile, opts.projectFile]) {
     if (file && existsSync(file)) {
       // 剥 UTF-8 BOM：Windows PowerShell 5.1 的 Out-File -Encoding utf8 / 旧版记事本会写 BOM，smol-toml 拒收
-      const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-      acc = merge(acc, splitDoc(parse(raw) as Record<string, unknown>));
+      const raw = readFileSync(file, "utf8").replace(/^﻿/, "");
+      // SW-20（M4-3 T1d）：解析失败从炸穿启动改为降级——warnings 记录 + 该层跳过（出厂默认层兜底），
+      // 宿主据此触发首次使用引导（此前 parse 抛错 = 启动即崩，手改坏一行配置整台不可用）
+      try {
+        acc = merge(acc, splitDoc(parse(raw) as Record<string, unknown>));
+      } catch (err) {
+        warnings.push(`配置文件 ${file} 解析失败：${err instanceof Error ? err.message : String(err)}——该层已跳过，按其余层与出厂默认运行（SW-20）`);
+      }
     }
   }
   // env 层：仅核心顶层 key，命名 OROSUS_<KEY>（§6.6）

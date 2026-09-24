@@ -14,6 +14,7 @@ import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import * as theme from "../theme.ts";
 
 // ---------- 接缝类型 ----------
@@ -286,6 +287,12 @@ export class FullApp {
 		this.tickTimer.unref?.();
 		this.term.onInput((seq) => this.onKey(matchKey(seq)));
 		this.term.onPaste((text) => {
+			// 引导期粘贴路由给会话（API Key 的首要输入方式就是粘贴——SW-23 静默盲输的进稿口）
+			if (this.onboarding !== undefined) {
+				this.onboarding.session.handlePaste(text);
+				this.scheduler.requestImmediateRender();
+				return;
+			}
 			this.inputInsert(text);
 			this.afterEdit();
 		});
@@ -297,6 +304,12 @@ export class FullApp {
 	stop(): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		// 引导弹窗随应用停止结算（promise 不永挂——同 pendingUi 纪律）
+		if (this.onboarding !== undefined) {
+			const ob = this.onboarding;
+			this.onboarding = undefined;
+			ob.resolve({ kind: "quit" });
+		}
 		// 挂起的模块询问随应用停止结算为「取消」（F5：Ctrl+T/C 中途离场时 promise 不得永挂——
 		// 否则模块命令侧永远等不到回答）
 		if (this.pendingUi !== undefined) {
@@ -363,6 +376,23 @@ export class FullApp {
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
 		this.pendingUi = { kind: "view", title, lines: text.split("\n"), scroll: 0 };
 		this.scheduler.requestImmediateRender();
+	}
+
+	// ---------- 首次使用引导弹窗（M4-3 T1d，D10——三页定高锁焦点；施工基准 onboarding 原型） ----------
+
+	/** 引导弹窗占用槽：在槽期一切按键/粘贴路由给会话（焦点锁——pendingUi/编辑态全部让位）。 */
+	private onboarding: { session: OnboardingSession; resolve: (o: OnboardingOutcome) => void } | undefined;
+
+	/** 打开引导弹窗（完成/退出即 resolve；宿主在完成态 reload 生效 + toast 留痕）。
+	 *  requestRender 强制接自家帧调度（异步模型清单到达即重绘——宿主传的任何件都被覆盖）。 */
+	runOnboarding(deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null }): Promise<OnboardingOutcome> {
+		return new Promise((resolve) => {
+			this.onboarding = {
+				session: new OnboardingSession({ ...deps, requestRender: () => this.scheduler.requestRender() }, initial),
+				resolve,
+			};
+			this.scheduler.requestImmediateRender();
+		});
 	}
 
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消。自消靠定时器补一帧——
@@ -531,6 +561,17 @@ export class FullApp {
 
 	private onKey(key: string): void {
 		const s = this.state;
+		// 引导弹窗焦点锁（M4-3 T1d）：在槽期一切按键归会话——pendingUi/编辑态/busy-Esc 全部让位
+		if (this.onboarding !== undefined) {
+			const outcome = this.onboarding.session.handleKey(key);
+			if (outcome !== undefined) {
+				const ob = this.onboarding;
+				this.onboarding = undefined;
+				ob.resolve(outcome);
+			}
+			this.scheduler.requestImmediateRender();
+			return;
+		}
 		if (key === "ctrl+t") {
 			s.sidebarVisible = !s.sidebarVisible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
 			if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
@@ -1181,7 +1222,10 @@ export class FullApp {
 		}
 
 		let overlay: OverlayFrame | undefined;
-		if (this.pendingUi?.kind === "pick") {
+		if (this.onboarding !== undefined) {
+			const ob = this.onboarding.session.render(cols, rows); // 居中定高弹窗（三页恒定行数——防闪烁纪律）
+			overlay = { lines: ob.lines, row: ob.row, col: ob.col, width: ob.width };
+		} else if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;
 			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter);
 		} else if (this.pendingUi?.kind === "view") {
@@ -1192,7 +1236,8 @@ export class FullApp {
 		}
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
-		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, inputFocused);
+		// 引导期藏光标（弹窗锁焦点——输入框光标不该在背景里闪）；Key 输入是静默盲输，无光标可指示
+		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, this.onboarding === undefined && inputFocused);
 		return bytes;
 	}
 

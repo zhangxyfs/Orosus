@@ -191,6 +191,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // D37 优先级：显式 env 参数 > process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺
     env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
   });
+  // SW-20：解析失败降级进 warnings——落地即弃可惜，diag 留痕（引导触发判定在 CLI preflight，不靠此路）
+  for (const w of config.warnings) createLogger(sink, "kernel").warn("kernel.config.load-warning", w, {});
 
   // 存储构造分支（D41/T6 + D42/T7）：显式 store > resume > fork > 全新；后端按核心顶层 key sessionStore 选择（缺省 jsonl）
   const sessionsDir = options.sessionsDir ?? join(home, "sessions");

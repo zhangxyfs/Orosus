@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { join } from "node:path";
-import { createHarness, discoverModules, encodeCwd, locateSessionFile } from "@orosus/core";
+import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecretsEnv } from "@orosus/core";
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
@@ -26,8 +26,10 @@ import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 import { parse, stringify } from "smol-toml";
-import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile } from "@orosus/provider-custom";
-import { readFileSync, writeFileSync } from "node:fs";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels } from "@orosus/provider-custom";
+import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
+import type { OnboardingDeps } from "./tui/onboarding.ts";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
@@ -1213,6 +1215,20 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   activeApp = app; // 全屏 CommandUi 适配层激活（模块 choose/ask 经 overlay/输入行接管）
   stdoutEcho.silence(true); // readline 与 FullApp 共用 stdin——全屏期 rl 回显全吞（F5 走查实证毁屏）
   app.start();
+  // 首次使用引导（M4-3 T1d）：触发即开弹窗（一次性——会话切换不重开）；完成 → reload 生效 + toast 留痕
+  if (onboardingTrigger !== null) {
+    const trigger = onboardingTrigger;
+    onboardingTrigger = null;
+    if (trigger.reason === "broken") app.showToast("配置文件无法读取，已按默认配置进入引导"); // SW-20 定案话术
+    else if (trigger.reason === "degraded") app.showToast("部分模块配置无效已降级——已按默认配置进入引导");
+    const outcome = await app.runOnboarding(buildOnboardingDeps(), await onboardingInitial());
+    if (outcome.kind === "quit") {
+      action = "quit"; // Ctrl + Q（仅第 1 页）= /quit 同款
+    } else {
+      await h.reload(); // provider 槽/search 后端进图——配置即时生效（调用时解析的另一翼 = tool-web 闭包活态）
+      app.showToast("引导完成 · 配置已写入并即时生效");
+    }
+  }
   while (action === undefined) {
     await new Promise((r) => setTimeout(r, 40));
   }
@@ -1223,6 +1239,69 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
 };
 
 // REPL（--print 单发模式不进——M4-2 T17：runPrint 已收尾）
+
+// 首次使用引导触发判定（M4-3 T1d，D10/SW-20——推翻 M4-2「空配置直进主窗」旧拍板）：
+// ① config.toml 不存在（fresh）② 解析失败（broken——load.ts 已降级不炸穿，此处独立 preflight 取证）
+// ③ 模块 config 校验失败（degraded——信号 = 激活期失败列表）。仅全屏形态（行模式既有 startupGate 向导路径不动）。
+let onboardingTrigger: { reason: "fresh" | "broken" | "degraded" } | null = null;
+if (tuiMode === "full" && args.print === undefined) {
+	const userConfigPath = join(orosusHome(), "config.toml");
+	if (!existsSync(userConfigPath)) {
+		onboardingTrigger = { reason: "fresh" };
+	} else {
+		try {
+			parse(readFileSync(userConfigPath, "utf8").replace(/^﻿/, ""));
+		} catch {
+			onboardingTrigger = { reason: "broken" };
+		}
+	}
+	if (onboardingTrigger === null && h.graph().audit().some((a) => a.state === "failed")) {
+		onboardingTrigger = { reason: "degraded" };
+	}
+}
+
+/** 引导弹窗副作用接线（写盘全走既有件：menuDeps 闭环 / tool-web persist 面——零平行写路）。 */
+const buildOnboardingDeps = (): OnboardingDeps => {
+	const menuDeps = defaultMenuDeps();
+	const configFile = join(orosusHome(), "config.toml");
+	const secretsFile = join(orosusHome(), "secrets.env");
+	return {
+		providers: snapshotProviderView(),
+		writeProvider: (p) => {
+			void (async () => {
+				const cur = await menuDeps.loadProviders();
+				await menuDeps.saveProviders({
+					...cur,
+					[p.id]: { type: p.type, baseUrl: p.baseUrl, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) },
+				});
+			})();
+		},
+		// secrets 统一走 upsertSecret（原位更新不累积重复行——引导内可重复输同一家 key；
+		// provider/search 两类 key 同享，与 /settings 配置流同落点同语义）
+		appendSecret: (envKey, value) => { upsertSecret(secretsFile, envKey, value); },
+		setModel: (slot) => { void menuDeps.setModel(slot); },
+		writeSearch: (patch) => persistToolWebSearch(configFile, patch),
+		listModels: async (slot) => {
+			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）
+			const entry = (await menuDeps.loadProviders())[slot];
+			if (entry === undefined) throw new Error(`槽 "${slot}" 未配置`);
+			const secrets = loadSecretsEnv(secretsFile).vars;
+			const key = entry.apiKey?.startsWith("$ENV:") ? secrets[entry.apiKey.slice(5)] : entry.apiKey;
+			const glue = { baseUrl: entry.baseUrl, ...(key !== undefined ? { apiKey: key } : {}) };
+			const live = entry.type === "anthropic" ? anthropicListModels(glue) : openaiListModels(glue);
+			return catalogPreferredListModels(slot, live, diskFirstCatalogLoader())();
+		},
+	};
+};
+
+/** 引导初态：已配置槽 + 当前使用槽（顶层 provider 键的首段；指向不存在的槽按 null——损坏降级面）。 */
+const onboardingInitial = async (): Promise<{ configured: string[]; active: string | null }> => {
+	const cur = await defaultMenuDeps().loadProviders();
+	const curModel = realReadModel(process.cwd())();
+	const slot = curModel === undefined || curModel === "" ? null : curModel.split("/")[0]!;
+	return { configured: Object.keys(cur), active: slot !== null && cur[slot] !== undefined ? slot : null };
+};
+
 if (args.print === undefined) try {
   sessionLoop: for (;;) {
     // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）

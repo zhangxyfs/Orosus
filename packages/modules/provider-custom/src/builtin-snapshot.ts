@@ -9,3 +9,25 @@ export const BUILTIN_SNAPSHOT = {
   openrouter: { id: "openrouter", name: "OpenRouter", type: "openai", api: "https://openrouter.ai/api/v1", env: ["OPENROUTER_API_KEY"], models: {} },
   ollama: { id: "ollama", name: "Ollama", type: "openai", api: "http://localhost:11434/v1", env: [], models: {} },
 } as const;
+
+/** 引导第 2 页的 provider 级裁剪视图（M4-3 T1d/SW-21）：仅 id / 名称 / envKey / baseUrl / 本地标记——
+ *  不嵌模型级清单（模型列表仍走既有目录管道）；快照 7 家 ≤ 20 家上限；不做在线刷新（顺延台账）。 */
+export interface SnapshotProviderView {
+  id: string;
+  name: string;
+  envKey?: string;
+  baseUrl: string;
+  type: "openai" | "anthropic";
+  local: boolean;
+}
+
+export function snapshotProviderView(): SnapshotProviderView[] {
+  return Object.values(BUILTIN_SNAPSHOT).map((p) => ({
+    id: p.id,
+    name: p.name,
+    ...(p.env[0] !== undefined ? { envKey: p.env[0] } : {}),
+    baseUrl: p.api,
+    type: p.type,
+    local: p.env.length === 0, // 无 env 声明 = 本地服务免 Key（ollama 现行唯一样本）
+  }));
+}

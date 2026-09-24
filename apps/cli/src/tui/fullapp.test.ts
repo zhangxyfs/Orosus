@@ -563,3 +563,64 @@ describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列�
 		app.stop();
 	});
 });
+
+// M4-3 T1d：引导弹窗 FullApp 集成（焦点锁/键路由/结算/渲染）
+describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
+	const obDeps = (calls: { secrets: [string, string][]; models: string[]; search: Record<string, unknown>[] }) => ({
+		providers: [
+			{ id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://x/v1", type: "openai" as const, local: false },
+			{ id: "ollama", name: "Ollama", baseUrl: "http://localhost:11434/v1", type: "openai" as const, local: true },
+		],
+		writeProvider: () => {},
+		appendSecret: (k: string, v: string) => { calls.secrets.push([k, v]); },
+		setModel: (s: string) => { calls.models.push(s); },
+		writeSearch: (p: Record<string, unknown>) => { calls.search.push(p); },
+		listModels: async () => ["glm-5.3"],
+	});
+
+	it("⑬ 弹窗开 → 焦点锁全键序走通三页 → completed 结算 + 弹窗消退", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
+		const outcome = app.runOnboarding(obDeps(calls));
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("引导 1 / 3");
+		input.emit("data", "\x0e"); // Ctrl + N → p2
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("引导 2 / 3");
+		input.emit("data", "\r"); // 进 key 态（zhipu）
+		input.emit("data", "zk");
+		input.emit("data", "\r"); // 确认 key
+		await flush();
+		expect(calls.secrets).toEqual([["ZHIPU_API_KEY", "zk"]]);
+		expect(calls.models).toEqual(["zhipu"]);
+		input.emit("data", "\x0e"); // → p3
+		await flush();
+		input.emit("data", "\r"); // opts → llm 子态
+		input.emit("data", "\r"); // 默认项选定
+		await flush();
+		input.emit("data", "\x0e"); // 完成
+		await flush();
+		expect(await outcome).toEqual({ kind: "completed" });
+		const tail = stripAnsi(output.buf.slice(-4000));
+		expect(tail).not.toContain("引导 3 / 3"); // 弹窗已消退
+		app.stop();
+	});
+
+	it("⑭ 第 1 页 Ctrl + Q → quit 结算；stop() 兜底结算不永挂", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
+		const outcome = app.runOnboarding(obDeps(calls));
+		await flush();
+		input.emit("data", "\x11"); // Ctrl + Q
+		await flush();
+		expect(await outcome).toEqual({ kind: "quit" });
+		const outcome2 = app.runOnboarding(obDeps(calls));
+		await flush();
+		app.stop(); // 未结算即 stop → quit 兜底（promise 不永挂）
+		expect(await outcome2).toEqual({ kind: "quit" });
+	});
+});
