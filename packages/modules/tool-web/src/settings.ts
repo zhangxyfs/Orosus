@@ -84,13 +84,13 @@ export function createSettingsHandler(deps: SettingsDeps): CommandHandler {
     ]);
     if (top.startsWith("LLM")) {
       const hasCatalog = deps.llm.listModels !== undefined;
-      const subItems = ["用当前模型（零配置·默认）"];
-      subItems.push(hasCatalog ? "钉住指定模型…" : "钉住指定模型…（不可用：当前端点无模型目录）");
+      const subItems = ["自动（零配置·默认）"];
+      subItems.push(hasCatalog ? "指定模型…" : "指定模型…（不可用：当前端点无模型目录）");
       const sub = await ui.choose("LLM Web Search——搜索载体", subItems);
-      if (sub.startsWith("用当前模型")) {
+      if (sub.startsWith("自动（")) {
         persistToolWebSearch(configFile, { backend: "auto", model: undefined });
         applyState({ backend: "auto", model: undefined });
-        ui.notice?.("已保存：LLM Web Search 用当前模型（零配置）——搜索链 llm→tavily→brave 生效");
+        ui.notice?.("已保存：LLM Web Search 自动（零配置）——搜索链 llm→tavily→brave 生效");
         return "";
       }
       if (!hasCatalog) {

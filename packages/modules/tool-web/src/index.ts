@@ -3,7 +3,7 @@ import { defineModule, type ModuleDefinition } from "@orosus/contracts/module";
 import { fetchTool, type FetchDeps } from "./fetch.ts";
 import { createSearchState, searchTool, type SearchConfig, type SearchStateHolder } from "./search.ts";
 import { buildBackends } from "./backends/index.ts";
-import { llmBackend } from "./backends/llm.ts";
+import { llmBackend, createLlmSticky } from "./backends/llm.ts";
 import { createSettingsHandler } from "./settings.ts";
 
 export { fetchTool, type FetchDeps } from "./fetch.ts";
@@ -12,7 +12,7 @@ export {
   searchTool, createSearchState, configuredKey,
   type SearchConfig, type SearchDeps, type SearchResult, type WebSearchBackend, type SearchStateHolder,
 } from "./search.ts";
-export { llmBackend, LlmSearchError, type LlmBackendDeps } from "./backends/llm.ts";
+export { llmBackend, LlmSearchError, createLlmSticky, type LlmBackendDeps, type LlmSticky } from "./backends/llm.ts";
 export { buildBackends } from "./backends/index.ts";
 export { createSettingsHandler, persistToolWebSearch, upsertSecret, type SettingsDeps, type SearchPatch } from "./settings.ts";
 
@@ -47,11 +47,11 @@ export const createToolWebModule = (deps: ToolWebDeps = {}): ModuleDefinition<To
       ctx.contribute.tool(fetchTool(deps));
       // search 活态：activate 期取纯分层快照，T1c 配置流经 holder.set 改写即时生效（approval apply/persist 同款）；
       // SW-19 会话粘性：llm 槽调用点探测失败即置位、auto 链跳过该槽——holder.set（重选后端/模型）时清除
-      const sticky = { llmDowngraded: false };
+      const sticky = createLlmSticky();
       const base = createSearchState(ctx.config.search ?? {});
       const searchState: SearchStateHolder = {
         current: base.current,
-        set: (next: SearchConfig) => { sticky.llmDowngraded = false; base.set(next); },
+        set: (next: SearchConfig) => { sticky.llmDowngraded = false; sticky.workingModel = undefined; sticky.probed.length = 0; base.set(next); },
       };
       // search 恒注册（SW-15/T1b 收口：llm 槽恒可用——model 未配 = 当前模型承载，v4 拍板零配置即有搜索；
       // kimi「未配置即藏工具」只对 tavily/brave key 档适用，key 档缺 key 时在调用点跳过不入链）
