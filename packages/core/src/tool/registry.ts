@@ -224,6 +224,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
           description: t.tool.description,
           deferred: t.tool.deferred === true,
           ...(t.tool.searchHint !== undefined ? { searchHint: t.tool.searchHint } : {}),
+          ...(t.tool.label !== undefined ? { label: t.tool.label } : {}),
           revealed: revealed.has(t.tool.name),
           owner: t.owner,
         }));

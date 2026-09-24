@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
-import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage, attachRender, errorMessageText } from "./render.ts";
+import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage, attachRender, errorMessageText, registerToolLabels, toolDisplayName, toolCallLine } from "./render.ts";
 
 // M4-1 T5/D45：chunk 渲染迁 renderChunk（断流后 chunk 经 liveChunks 旁路到达，不再落日志/事件流）；
 // 完成事件面仍走 renderEvent——两路共享 RenderState。
@@ -178,5 +178,31 @@ describe("模型错误 toast 化（errorMessageText + attachRender onError）", 
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(act.join("")).toContain("[模型错误] HTTP 500");
+  });
+});
+
+describe("工具显示名 label（2026-09-24 用户拍板——Search→Web Search 可读化）", () => {
+  it("① 喂入 label 后 toolDisplayName/toolCallLine 用 label；不喂回落剥前缀（旧行为零漂移）", () => {
+    registerToolLabels([{ name: "tool-web__search", label: "Web Search" }]);
+    expect(toolDisplayName("tool-web__search")).toBe("Web Search");
+    expect(toolCallLine("tool-web__search", { query: "北京天气" }, process.cwd())).toBe("● Using Web Search (北京天气)");
+    expect(toolDisplayName("tool-fs__read")).toBe("Read"); // 无 label 工具照旧
+    registerToolLabels([]); // 清场——全局表不串扰其他用例
+    expect(toolDisplayName("tool-web__search")).toBe("Search");
+  });
+
+  it("② reload 重喂语义：带 label 收录、label 摘除后回落（同位换模块生效）", () => {
+    registerToolLabels([{ name: "m__t", label: "My Tool" }]);
+    expect(toolDisplayName("m__t")).toBe("My Tool");
+    registerToolLabels([{ name: "m__t" }]); // 重喂时无 label = 摘除
+    expect(toolDisplayName("m__t")).toBe("T");
+    registerToolLabels([]);
+  });
+
+  it("③ 历史回显行带 label（renderHistoryLines 同走 toolCallLine）", () => {
+    registerToolLabels([{ name: "tool-web__fetch", label: "Web Fetch" }]);
+    const lines = renderHistoryLines([event("tool/call", { name: "tool-web__fetch", args: { url: "https://e.com" } })], 80);
+    expect(lines[0]).toContain("Used Web Fetch"); // url 不在关键参数提取面——行尾无参数属正常形态
+    registerToolLabels([]);
   });
 });

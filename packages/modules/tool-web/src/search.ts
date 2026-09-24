@@ -114,6 +114,7 @@ export function searchTool(deps: SearchDeps): Tool {
   const localSticky = { llmDowngraded: false }; // 未注入共享 sticky 时的工具级件（测试/直驱场景）
   return defineTool({
     name: "tool-web__search",
+    label: "Web Search",
     // 描述三件套借鉴 Reasonix search.go:38-40（不可信数据 / markdown 引用 / web_fetch 读详情）+ 「查询带上下文」指引
     description: `Search the web for current information. Include relevant context in the query; the search service cannot see this conversation. Returns matching pages with titles, URLs, and snippets.
 

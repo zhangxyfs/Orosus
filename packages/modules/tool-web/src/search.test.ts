@@ -175,6 +175,27 @@ describe("tool-web search 链（M4-3 T1a）", () => {
     expect(await capture({ search: { tavilyApiKey: "k" } })).toEqual(["tool-web__fetch", "tool-web__search"]);
     expect(await capture({ search: { braveApiKey: "$ENV:BRAVE_API_KEY" } })).toEqual(["tool-web__fetch", "tool-web__search"]); // 未解析占位符不挡恒注册（llm 槽在）
   });
+
+  it("⑫ 显示名 label（2026-09-24 用户拍板——Search→Web Search 可读化）：注册对象带 label，模型面 name 不变", () => {
+    const capture = () => {
+      const tools: { name: string; label?: string | undefined }[] = [];
+      const fakeCtx = {
+        config: {}, log: noLog,
+        llm: { stream: () => (async function* () { yield* []; })() },
+        contribute: {
+          tool: (t: { name: string; label?: string }) => { tools.push({ name: t.name, label: t.label }); return () => {}; },
+          command: () => () => {},
+        },
+      } as unknown as ModuleContext<object>;
+      createToolWebModule().activate(fakeCtx as ModuleContext<never>);
+      return tools;
+    };
+    const tools = capture();
+    expect(tools).toMatchObject([
+      { name: "tool-web__fetch", label: "Web Fetch" },
+      { name: "tool-web__search", label: "Web Search" },
+    ]);
+  });
 });
 
 // 集成：harness 装配 + [tool-web] 配置节 + 假 provider 脚本驱动 search 回合

@@ -59,8 +59,20 @@ export function renderChunk(c: Chunk, state: RenderState): string {
 // ---------- 工具行（F5 五轮①——kimi-code 形态调研落地：● Using/Used Tool (关键参数) · N 行） ----------
 // Using → 结果到达后由 DocModel 原位合并成 Used + 行数 chip（行模式转独立 ↳ 行）。
 
-/** 工具显示名：tool-fs__read → Read；无 __ 前缀整体首字母大写。 */
+/** 工具显示名：label 优先（2026-09-24 用户拍板——"Web Search" 类多词显示名，宿主从注册表喂入）；
+ *  缺省回落 = tool-fs__read → Read（剥 <module>__ 前缀、首字母大写，旧行为）。 */
+const toolLabels = new Map<string, string>();
+
+/** 宿主接线（main.ts 启动 + 每次 reload 后重喂）：整表替换——宿主喂的是 toolInfos() 全量，
+ *  被摘除模块的 stale label 随重建自动消失。 */
+export function registerToolLabels(infos: readonly { name: string; label?: string | undefined }[]): void {
+  toolLabels.clear();
+  for (const i of infos) if (i.label !== undefined) toolLabels.set(i.name, i.label);
+}
+
 export function toolDisplayName(name: string): string {
+  const labeled = toolLabels.get(name);
+  if (labeled !== undefined) return labeled;
   const tail = name.includes("__") ? name.split("__").pop()! : name;
   return tail.charAt(0).toUpperCase() + tail.slice(1);
 }

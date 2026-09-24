@@ -20,7 +20,7 @@ import { banner } from "./banner.ts";
 import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
-import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE } from "./render.ts";
+import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE, registerToolLabels } from "./render.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
@@ -275,8 +275,8 @@ const commandUi = createReadlineUi({
   notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
 });
 
-const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) =>
-  createHarness({
+const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
+  const h = await createHarness({
     builtinModules: BUILTIN_MODULES,
     commandUi,
     autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
@@ -291,6 +291,10 @@ const createSession = (extra: { fork?: { parentSessionId: string; atEntryId?: st
       ...(args.model !== undefined ? { cliOverrides: { model: args.model } } : {}),
     },
   });
+  // 工具显示名喂给渲染层（label 优先呈现——2026-09-24 用户拍板）；reload 会换工具集合，四处 reload 位同步重喂
+  registerToolLabels(h.graph().tools.toolInfos());
+  return h;
+};
 
 // 历史回显（B9 走查补 + 分页）：尾页优先（最新对话先可见），TTY 下回车向前翻页、q 结束；
 // 非交互（管道）只出尾页——巨量历史不再刷爆终端（单行截断在 renderHistoryLines）
@@ -703,6 +707,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           await h.reload();
           notify("平台配置已即时生效（模块图已重载）");
         }
+        if (cmdNameOf(text) === "/reload") registerToolLabels(h.graph().tools.toolInfos()); // /reload 走 h.prompt 内建路由——标签表随图重喂
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
@@ -1124,6 +1129,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       void (async () => {
         try {
           const r = await h.reload();
+          registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
           await refreshPanel();
           app.showToast(target
             ? `已挂载 ${name}（reload：added ${r.added.join(",") || "无"}）`
@@ -1249,6 +1255,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       action = "quit"; // Ctrl + Q（仅第 1 页）= /quit 同款
     } else {
       await h.reload(); // provider 槽/search 后端进图——配置即时生效（调用时解析的另一翼 = tool-web 闭包活态）
+      registerToolLabels(h.graph().tools.toolInfos()); // 引导激活的模块（tool-web 等）标签进表
       app.showToast("引导完成 · 配置已写入并即时生效");
     }
   }

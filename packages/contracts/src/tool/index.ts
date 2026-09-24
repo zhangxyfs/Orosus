@@ -47,6 +47,9 @@ export interface Tool {
   name: string;
   description: string;
   parameters: ZodType;
+  /** 人类可读显示名（2026-09-24 用户拍板）：消息窗口工具行优先呈现（如 "Web Search"）——
+   *  模型面永远用 name（调用/审批/配置不受影响）；缺省 = 宿主剥 <module>__ 前缀现算（旧行为）。 */
+  label?: string;
   /** 按需加载标记（M4-3 T4/D6）：真 = 该工具可被 ToolSearch 机制隐藏（schema 不进请求，
    *  目录只知名+截断描述，经 tool-search__search 搜出并 reveal 后恢复）。tool-search 关态 = 标记
    *  不生效（SW-26 联动规则——防「标了 deferred 却无 meta 工具可 reveal」永不可达组合）。 */
@@ -62,6 +65,8 @@ export interface ToolInfo {
   description: string;
   deferred: boolean;
   searchHint?: string | undefined;
+  /** 显示名透传（宿主渲染层消费——目录段不展示）。 */
+  label?: string | undefined;
   /** 已被 reveal（本轮起 schema 进请求——目录段应略过）。 */
   revealed: boolean;
   /** 注册属主模块名（MCP 桥接工具 = "mcp"——打分的 MCP 加权依据）。 */
@@ -73,9 +78,10 @@ export interface ToolInfo {
  * @example
  * ```ts
  * const tool = defineTool({
- *   name: "note__add",                    // 强制 <module>__<tool>（规则 4）
- *   description: "Add a short note that persists across turns.",
- *   parameters: z.object({ text: z.string().min(1) }),
+   *   name: "note__add",                    // 强制 <module>__<tool>（规则 4）
+   *   description: "Add a short note that persists across turns.",
+   *   parameters: z.object({ text: z.string().min(1) }),
+   *   label: "Note Add",                    // 可选：工具行显示名（缺省 = 宿主剥前缀）
  *   resolveExecution: async (input) => {
  *     const { text } = input as { text: string };
  *     return {

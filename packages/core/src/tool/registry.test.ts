@@ -277,4 +277,17 @@ describe("ToolSearch 机制层（M4-3 T4）", () => {
     expect(reg.toolInfos({ deferredOnly: true }).map((t) => t.name)).toEqual(["m__x"]); // 墓碑剔除出目录
     expect(all[0]).not.toHaveProperty("parameters");
   });
+
+  it("label 透传（2026-09-24 用户拍板——工具行显示名）：设了进 ToolInfo，没设字段缺席（宿主回落剥前缀）", () => {
+    const { reg } = setup();
+    reg.register(defineTool({
+      name: "tool-web__search", description: "s", label: "Web Search",
+      parameters: z.object({}),
+      resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+    }), "tool-web");
+    reg.register(echo("tool-fs__read"), "tool-fs");
+    const infos = reg.toolInfos();
+    expect(infos.find((t) => t.name === "tool-web__search")!.label).toBe("Web Search");
+    expect(infos.find((t) => t.name === "tool-fs__read")).not.toHaveProperty("label"); // 缺省 = 无键（exactOptionalPropertyTypes 口径）
+  });
 });

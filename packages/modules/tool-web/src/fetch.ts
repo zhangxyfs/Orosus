@@ -213,6 +213,7 @@ async function executeFetch(rawUrl: string, deps: FetchDeps, signal: AbortSignal
 export function fetchTool(deps: FetchDeps = {}): Tool {
   return defineTool({
     name: "tool-web__fetch",
+    label: "Web Fetch",
     description: `Fetch a web page or document over HTTP(S) and return its content.
 
 HTML pages are converted to markdown (scripts/styles removed); plain text, markdown, and JSON

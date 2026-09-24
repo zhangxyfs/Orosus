@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { DocModel } from "./docmodel.ts";
+import * as theme from "../theme.ts";
 import { stripAnsi } from "./width.ts";
 import { TOOL_MERGE } from "../render.ts";
 
@@ -45,6 +46,28 @@ describe("DocModel 工具行与历史结构化（F5 五轮）", () => {
 		const lines = dm.frameLines(80).map(stripAnsi);
 		expect(lines).toContain("● Used Read (src/main.ts) · 32 行");
 		expect(lines.filter((l) => l.includes("Read (src/main.ts)"))).toHaveLength(1); // 原位合并——单行
+	});
+
+	it("①b 多词 label 工具行（2026-09-24 用户拍板——Search→Web Search 可读化）：合并与配色都吃空格名", () => {
+		const dm = new DocModel();
+		dm.write("● Using Web Search (北京天气)\n", 80);
+		dm.write(TOOL_MERGE + "5 行\n", 80);
+		const lines = dm.frameLines(80);
+		const plain = lines.map(stripAnsi);
+		expect(plain).toContain("● Used Web Search (北京天气) · 5 行"); // 合并手术 slice(8) 对 label 透明
+		// 配色分段精确钉：● 与「Web Search」accent（整段含空格——非贪婪正则吃到「 (」为止），参数/chip 段 dim
+		const colored = lines.find((l) => stripAnsi(l).includes("Web Search"));
+		expect(colored).toBe(
+			theme.fg("accent", "●") + theme.fg("fg", " Used ") + theme.fg("accent", "Web Search") + theme.dim(" (北京天气) · 5 行"),
+		);
+	});
+
+	it("①c label 行无参数直接挂 chip（「 · N 行」前无「 (」）——正则按 chip 分段不吞进显示名", () => {
+		const dm = new DocModel();
+		dm.write("● Using Web Fetch · 3 行\n", 80);
+		const colored = dm.frameLines(80)[0]!;
+		expect(stripAnsi(colored)).toBe("● Using Web Fetch · 3 行");
+		expect(colored).toBe(theme.fg("accent", "●") + theme.fg("fg", " Using ") + theme.fg("accent", "Web Fetch") + theme.dim(" · 3 行"));
 	});
 
 	it("①b pushMd：命令结果通道走 md 管线——/compact /summary 类输出无字面 ** 与反引号（F5 六轮②）", () => {

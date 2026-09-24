@@ -264,9 +264,10 @@ export class DocModel {
 
 	/** 工具行配色（F5 六轮① 用户拍板；2026-09-22 再拍板：动词 Using/Used 白色）：
 	 *  ● 与工具名青玉、动词白、参数/行数灰；failed = ● 与 chip 转 err 红（kimi ✗ 形态——
-	 *  失败卡在流区一眼可辨）。 */
+	 *  失败卡在流区一眼可辨）。显示名可含空格（label 字段 "Web Search"——2026-09-24）：非贪婪
+	 *  吃到「 (参数」「 · chip」或行尾为止，剥前缀旧名（无空格）逐字节同色。 */
 	private styleToolLine(l: string, failed = false): string {
-		const m = /^(●) (Using |Used )([^ ]+)(.*)$/.exec(l);
+		const m = /^(●) (Using |Used )(.+?)(?= \(| · |$)(.*)$/.exec(l);
 		if (m === null) return l;
 		if (failed) return theme.fg("err", m[1]!) + theme.fg("fg", " " + m[2]!) + theme.fg("accent", m[3]!) + theme.fg("err", m[4]!);
 		return theme.fg("accent", m[1]!) + theme.fg("fg", " " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!);
