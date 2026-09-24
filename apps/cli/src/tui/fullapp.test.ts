@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { FullApp, type FullAppIO } from "./fullapp.ts";
-import { stripAnsi } from "./width.ts";
+import { stripAnsi, visibleWidth } from "./width.ts";
 
 type FakeInput = NodeJS.ReadStream;
 type FakeOutput = NodeJS.WriteStream & { buf: string };
@@ -695,5 +695,27 @@ describe("斜杠菜单过滤：前缀优先、含字殿后（2026-09-24 拍板�
 		await flush(120);
 		expect(r.submitted).toEqual(["/yolo"]);
 		app.stop();
+	});
+});
+
+// 2026-09-24 走查实锤前案：/provider 选择平台上下移动大概率残影（黑带+||）——多行项（name\n（url））
+// 进 overlay 行带裸 \n，padToWidth/合成全乱
+describe("pickOverlay 多行项压平（2026-09-24 前案回归钉）", () => {
+	it("① 多行项 → overlay 行零裸换行、行宽不超框宽；选中移动行数不变", () => {
+		const r = rig();
+		const app = r.app;
+		const pick = (sel: number) =>
+			(app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): { lines: string[]; width: number } })
+				.buildPickOverlay(60, 24, "选择平台", [
+					"zhipuai-coding-plan\n（https://open.bigmodel.cn/api/coding/paas/v4）",
+					"kimi-code-plan-cn\n（https://api.kimi.com/coding/v1）",
+					"[取消]",
+				], sel, undefined);
+		const ov = pick(1);
+		for (const l of ov.lines) expect(l).not.toContain("\n");
+		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width);
+		expect(ov.lines.join("\n")).toContain("kimi-code-plan-cn （https://api.kimi.com/coding/v1）"); // 压平形态
+		const ov0 = pick(0);
+		expect(ov0.lines.length).toBe(ov.lines.length); // 移动选中行数恒定（防闪烁纪律同族）
 	});
 });

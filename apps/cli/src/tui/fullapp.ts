@@ -1279,7 +1279,10 @@ export class FullApp {
 		const oInner = ow - 2;
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
-		const shown = filter === undefined ? items : items.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
+		// 多行项压平单行（2026-09-24 走查实锤前案——/provider「名称\n（URL）」双行项：裸 \n 进 overlay 行，
+		// padToWidth 计宽与合成全乱 → 上下移动大概率残影黑带+||；行模式 choose 同款压平 menu.ts:46）
+		const flatItems = items.map((i) => i.replace(/\s*\n\s*/g, " "));
+		const shown = filter === undefined ? flatItems : flatItems.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
 		const olines: string[] = [];
 		const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : `过滤「${filter}」`} ${shown.length}/${items.length} `;
 		const titleSeg = theme.fg("accent", ` ${title} `);
