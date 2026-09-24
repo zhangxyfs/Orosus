@@ -54,7 +54,7 @@ describe("tool-shell（能力消费者范例：dependsOn [fs]）", () => {
     expect(def.uses).toContain("subprocess");
     const { ctx, tools } = fakeCtx(new Map());
     await def.activate(ctx);
-    expect(tools.map((t) => t.name)).toEqual(["tool-shell__bash"]);
+    expect(tools.map((t) => t.name)).toEqual(["tool-shell__bash", "tool-shell__output", "tool-shell__kill"]); // T3 后台作业族三件套
     const exec = await tools[0]!.resolveExecution({ command: OK_CMD });
     expect(exec.approvalRule).toBe(`tool-shell__bash(${OK_CMD})`);
     const r = await run(tools[0]!, { command: OK_CMD });

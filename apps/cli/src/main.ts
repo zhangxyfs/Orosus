@@ -28,6 +28,7 @@ import * as theme from "./theme.ts";
 import { parse, stringify } from "smol-toml";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
+import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
@@ -1347,5 +1348,7 @@ if (args.print === undefined) try {
   }
 } finally {
   rl.close();
+  killAllBackgroundJobs(); // M4-3 T3：退出清杀——/quit、行模式 EOF、全屏 quit 全路径统一收口于此
+                           // （ModuleContext 无退出缝；SIGINT 不在其列——现状只 cancel 当前 turn 不退出，v4.7 定案）
   await h.close();
 }
