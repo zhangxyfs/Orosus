@@ -272,14 +272,19 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
       config: { userFile: join(dir, "n.toml"), projectFile: join(dir, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
     });
     await h.prompt("后台跑一下"); // 第一轮：启动即返 + 脚本 stop（此刻作业大概率未完成——collect 空）
-    // 作业完成时机与脚本消费竞速（首版实锤）：轮外等作业真写完，再驱动第二轮触发 collect
-    await waitFor(() => existsSync(join(dir, "bg")) && readdirSync(join(dir, "bg")).some((f) => readFileSync(join(dir, "bg", f), "utf8").includes("bg-ok")));
-    await h.prompt("第二轮"); // stop 时 collect 到完成通知 → steering 注入 → 第三轮空 collect 收束
+    // 作业完成时机与脚本消费竞速（两连实锤：文件有内容 ≠ close 已置 done——负载下窗口拉开）。
+    // 确定性形态：轮询补发 nudge（fakeProvider 末段重复 text/stop 无害），每轮停顿时 collect 复查，
+    // 作业 done 后下一轮必 steering——上限内必达，不再依赖单次时序
+    let steering = "";
+    for (let nudge = 0; nudge < 10 && steering === ""; nudge++) {
+      await h.prompt("nudge");
+      steering = (await mem.all()).filter((e) => e.type === "agent/steering-message").map((e) => JSON.stringify(e)).join("\n");
+      if (steering === "") await new Promise((r) => setTimeout(r, 120)); // 每轮留一拍给作业 close——nudge 全速冲会跑在作业完成前（三诊实锤）
+    }
     await h.close();
     const all = await mem.all();
     const start = all.find((e) => e.type === "tool/result" && e.callId === "c1");
     expect(String(start && JSON.stringify(start))).toContain("后台作业 bg-");
-    const steering = all.filter((e) => e.type === "agent/steering-message").map((e) => JSON.stringify(e)).join("\n");
     expect(steering).toContain("已结束（退出码 0");
     expect(steering).toContain("bg-");
   });
