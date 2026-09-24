@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· 模块诊断弹窗原型（Ctrl + E）</title>
+<style>
+  /* ─── tokens · 连山配色（与 orosus-onboarding-prototype.html 同源） ────────── */
+  :root {
+    --bg:        #0a100e;   /* 玄墨 */
+    --surface:   #121b17;   /* 层峦 */
+    --surface-2: #18241e;   /* 浮峦 */
+    --fg:        #e9eee6;   /* 宣纸 */
+    --muted:     #97a49a;   /* 山岚 */
+    --border:    #25352d;   /* 叠嶂 */
+    --accent:    #7cc9a5;   /* 青玉 · 主强调 */
+    --info:      #84b8cd;   /* 石青 · 信息 */
+    --warn:      #d4a25e;   /* 暖金 · 进行/注意 */
+    --err:       #d07f70;   /* 赭石 · 错误 */
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Microsoft YaHei', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.6; }
+
+  /* ─── 走查说明条（非 TUI 部分） ──────────────────────────────────── */
+  .notebar {
+    max-width: 1180px; margin: 18px auto 10px; padding: 10px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--muted); font-size: 13px;
+  }
+  .notebar b { color: var(--info); font-weight: 600; }
+  .notebar kbd {
+    font-family: var(--font-mono); font-size: 12px; color: var(--fg); cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; margin: 0 1px;
+  }
+
+  /* ─── 终端窗体 ──────────────────────────────────────────────────── */
+  .terminal {
+    max-width: 1180px; margin: 0 auto 40px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.75;
+    box-shadow: 0 30px 70px rgba(0,0,0,.6);
+  }
+  .titlebar { display: flex; align-items: center; gap: 12px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+  .dots { display: flex; gap: 8px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2c3f36; }
+  .title { flex: 1; text-align: center; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+  .geom { color: #5c6b62; font-size: 11px; }
+
+  .tui-body { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 320px; height: 640px; }
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow: hidden; padding: 16px 24px; }
+  .ln { white-space: pre-wrap; }
+  .ln .u { color: var(--muted); } .ln .a { color: var(--accent); } .ln .i { color: var(--info); } .ln .w { color: var(--warn); } .ln .e { color: var(--err); }
+  .inputwrap { padding: 0 24px 16px; }
+  .inputbox { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 9px 14px; color: var(--muted); }
+  .inputbox .cursor { display: inline-block; width: 8px; height: 16px; background: var(--accent); vertical-align: text-bottom; }
+  .hintline { color: #5c6b62; font-size: 12px; margin-top: 6px; }
+
+  .side { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .card { border-bottom: 1px solid var(--border); padding: 13px 16px; font-size: 12.5px; }
+  .card h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--muted); }
+  .kv { display: flex; justify-content: space-between; color: var(--muted); }
+  .kv b { color: var(--fg); font-weight: 500; }
+  .kv .ok { color: var(--accent); } .kv .bad { color: var(--err); }
+  .card .more { color: #5c6b62; padding-top: 6px; border-top: 1px dashed var(--border); margin-top: 8px; font-size: 11.5px; }
+
+  /* ─── 弹窗族：居中、定高防闪烁（浮层纪律） ───────────────────────── */
+  .backdrop { position: absolute; inset: 0; background: rgba(4,8,6,.62); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .backdrop.hidden { display: none; }
+  .tui-body.diag .stream, .tui-body.diag .side { filter: saturate(.75) brightness(.82); }
+
+  .modal { background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  #lv1 { width: 720px; height: 468px; }                 /* 一级列表：定高 */
+  #lv2 { width: 880px; height: 600px; }                 /* 二级详情：更大，可翻页 */
+  .modal-head { padding: 14px 22px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; }
+  .modal-head h2 { margin: 0; font-size: 16px; letter-spacing: .03em; }
+  .modal-head .sub { flex: 1; color: var(--muted); font-size: 12px; }
+  .modal-head .page { color: var(--info); font-size: 12px; white-space: nowrap; }
+  .modal-body { flex: 1; padding: 10px 22px; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-foot {
+    display: flex; gap: 18px; align-items: center; padding: 10px 22px; min-height: 44px;
+    border-top: 1px solid var(--border); background: var(--surface); border-radius: 0 0 12px 12px; font-size: 12.5px;
+  }
+  .key { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 7px; color: var(--fg); }
+  .key.hint-accent { border-color: #2d5546; color: var(--accent); }
+  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+
+  /* 一级：异常模块列表（行数恒定=8，不足留空——空槽禁装饰） */
+  .diag-list { flex: 1; display: flex; flex-direction: column; }
+  .diag-row {
+    height: 40px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px;
+    border-radius: 8px; color: var(--muted);
+  }
+  .diag-row.sel { background: #1d2c25; color: var(--fg); outline: 1px solid #2d5546; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); flex: none; }
+  .dname { width: 118px; flex: none; color: var(--fg); }
+  .dtag { flex: none; font-size: 11px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--info); }
+  .dreason { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .diag-row.sel .dreason { color: var(--fg); }
+  .dmeta { flex: none; color: #5c6b62; font-size: 12px; }
+  .list-more { height: 26px; flex: none; color: #5c6b62; font-size: 12px; display: flex; align-items: center; padding: 0 10px; }
+
+  /* 二级：详情（大窗，节段落 + 翻页） */
+  .detail { flex: 1; overflow: hidden; font-size: 13px; }
+  .detail .sec { margin-bottom: 12px; }
+  .detail .sec h4 { margin: 0 0 5px; font-size: 12px; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  .detail pre {
+    margin: 0; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+  }
+  .detail pre.e { border-color: #4a3028; color: var(--err); }
+  .detail pre.t { color: var(--muted); }
+  .detail pre.t .ti { color: var(--info); } .detail pre.t .tw { color: var(--warn); } .detail pre.t .te { color: var(--err); }
+  .detail .hintline2 { color: var(--accent); font-size: 12.5px; }
+
+  /* toast（瞬显，右下） */
+  .toast {
+    position: absolute; right: 22px; bottom: 86px; z-index: 20;
+    background: var(--surface-2); border: 1px solid #2d5546; border-radius: 10px;
+    padding: 9px 16px; color: var(--accent); font-size: 13px; box-shadow: 0 12px 30px rgba(0,0,0,.5);
+  }
+  .toast.hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="notebar">
+  <b>模块诊断弹窗 · 原型走查</b>——交互全可按：<kbd>Ctrl + E</kbd> 开/关（浏览器若抢键，点此 <kbd id="kbdToggle">Ctrl + E</kbd>），
+  <kbd>↑</kbd><kbd>↓</kbd> 选模块，<kbd>Enter</kbd> 看该模块全量诊断（二级大窗），
+  <kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页，<kbd>Esc</kbd> 逐级返回。演示数据取自 2026-09-24 真实事故日志。
+  空记录按 <kbd>Ctrl + E</kbd> = toast「模块全部正常」不弹空窗。
+</div>
+
+<div class="terminal">
+  <div class="titlebar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="title">OROSUS — 全屏 · 输入区焦点</div>
+    <div class="geom">118×32</div>
+  </div>
+  <div class="tui-body" id="tui">
+    <div class="main">
+      <div class="stream">
+        <div class="ln"><span class="a">[orosus]</span> 11 个模块已激活</div>
+        <div class="ln"><span class="u">正在待命</span></div>
+        <div class="ln"> </div>
+        <div class="ln"><span class="w">⚠ 检测到 5 条模块诊断记录——按 Ctrl + E 查看</span></div>
+      </div>
+      <div class="inputwrap">
+        <div class="inputbox"><span class="cursor"></span></div>
+        <div class="hintline">/ 命令 · Ctrl + T 侧栏 · Ctrl + E 模块诊断 · Alt + V 贴图</div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="card">
+        <h3>运行状态</h3>
+        <div class="kv"><span>模型</span><b>glm-5.3-flash</b></div>
+        <div class="kv"><span>上下文</span><b>12k/262k</b></div>
+        <div class="kv"><span>模块</span><b>7/12 已激活</b></div>
+      </div>
+      <div class="card">
+        <h3>模块挂载</h3>
+        <div class="kv"><span>tool-todo</span><b class="ok">● 已挂载</b></div>
+        <div class="kv"><span>tool-ask</span><b class="bad">○ 激活失败</b></div>
+        <div class="kv"><span>tool-fs</span><b class="bad">○ 激活失败</b></div>
+        <div class="kv"><span>tool-search</span><b class="bad">○ 激活失败</b></div>
+        <div class="kv"><span>tool-shell</span><b class="bad">○ 级联降级</b></div>
+        <div class="kv"><span>my-weather</span><b class="bad">○ 加载失败</b></div>
+        <div class="more">Ctrl + E 查看诊断 · Enter 挂/卸载</div>
+      </div>
+    </div>
+
+    <!-- 一级弹窗：异常模块列表（定高 8 行，不足留空） -->
+    <div class="backdrop" id="bk1">
+      <div class="modal" id="lv1">
+        <div class="modal-head">
+          <h2>模块诊断</h2>
+          <div class="sub">5 条记录 · 来自本会话诊断日志 · 打开时刷新</div>
+        </div>
+        <div class="modal-body">
+          <div class="diag-list" id="list"></div>
+          <div class="list-more" id="listMore"></div>
+        </div>
+        <div class="modal-foot">
+          <div class="foot-item"><span class="key">↑</span><span class="key">↓</span> 选择</div>
+          <div class="foot-item"><span class="key hint-accent">Enter</span> 查看详情</div>
+          <div class="foot-item"><span class="key">Esc</span> / <span class="key hint-accent">Ctrl + E</span> 关闭</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 二级弹窗：单模块全量诊断（更大、可翻页） -->
+    <div class="backdrop" id="bk2">
+      <div class="modal" id="lv2">
+        <div class="modal-head">
+          <h2 id="dTitle">tool-fs</h2>
+          <div class="sub" id="dSub">builtin · v0.1.0 · 状态:激活失败</div>
+          <div class="page" id="dPage">第 1/3 页</div>
+        </div>
+        <div class="modal-body"><div class="detail" id="detail"></div></div>
+        <div class="modal-foot">
+          <div class="foot-item"><span class="key">PgUp</span>/<span class="key">PgDn</span> 翻页</div>
+          <div class="foot-item"><span class="key">Esc</span> 返回列表</div>
+          <div class="foot-item"><span class="key hint-accent">Ctrl + E</span> 全部关闭</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+  </div>
+</div>
+
+<script>
+// ── 演示数据（取自 2026-09-24 真实事故 + 一条发现期失败样本） ──────────────
+const RECORDS = [
+  { id: "tool-ask", tag: "激活失败", count: 8, last: "09:00:40",
+    reason: "工具重名：tool-ask__ask_user（与旧实例同名冲突——同进程卸载后重挂，旧工具未拆除）",
+    head: "builtin · v0.1.0 · 状态：激活失败（重挂 8 次均失败）",
+    pages: [
+      [["失败原因", "e", "工具重名：tool-ask__ask_user\n\n同进程内先卸载后重挂：卸载时工具未从注册表拆除（enabled 翻转对 reload 不可见），\n重挂时新实例注册同名工具，撞上旧实例残留，注册表精确匹配查重拒绝。"]],
+      [["事件时间线", "t", "<i>08:59:56.607</i>  模块激活（启动，正常）\n<i>09:00:07.794</i>  reload：卸载请求——图无变化（缺陷：工具未拆除）\n<te>09:00:11.348</te>  模块降级：工具重名：tool-ask__ask_user\n<te>09:00:15.306</te>  模块降级：工具重名：tool-ask__ask_user（第 2 次）\n<te>09:00:40.515</te>  模块降级：工具重名：tool-ask__ask_user（最近一次，共 8 次）"]],
+      [["修复指引", "", "<span class=\"hintline2\">· 这是已知内核缺陷（2026-09-24 诊断报告）：等修复批落地后重试挂载即可\n· 临时规避：重启进程（新进程按盘上配置干净激活）\n· 诊断日志：~/.orosus/logs/diagnostic-2026-09-24.jsonl</span>"]],
+    ] },
+  { id: "tool-fs", tag: "激活失败", count: 6, last: "09:00:40",
+    reason: "工具重名：tool-fs__read（与旧实例同名冲突）",
+    head: "builtin · v0.1.0 · 状态：激活失败（重挂 6 次均失败）",
+    pages: [
+      [["失败原因", "e", "工具重名：tool-fs__read\n\n同进程内先卸载后重挂：卸载时 read/write/edit 等工具未从共享注册表拆除，\n重挂时撞名降级。且本模块提供核心能力 \"fs\"——它的降级已连带拖累 tool-shell。"]],
+      [["连带影响", "e", "tool-shell 因硬依赖能力 \"fs\" 的提供者 tool-fs 已降级，被级联降级。\n（依赖它的模块全部不可用，直到本模块恢复）"], ["事件时间线", "t", "<i>08:59:56.608</i>  模块激活（启动，正常）\n<i>09:00:07.794</i>  reload：卸载请求——图无变化（缺陷：工具未拆除，模型仍可调用）\n<te>09:00:16.764</te>  模块降级：工具重名：tool-fs__read\n<te>09:00:40.516</te>  模块降级：工具重名：tool-fs__read（最近一次，共 6 次）"]],
+      [["修复指引", "", "<span class=\"hintline2\">· 已知内核缺陷（2026-09-24 诊断报告）：等修复批落地后重试挂载即可\n· 注意：挂回 tool-fs 后，tool-shell 会在下一次 reload 自动恢复（级联解除）\n· 临时规避：重启进程</span>"]],
+    ] },
+  { id: "tool-search", tag: "激活失败", count: 3, last: "09:00:40",
+    reason: "工具重名：tool-search__search（与旧实例同名冲突）",
+    head: "builtin · v0.1.0 · 状态：激活失败（重挂 3 次均失败）",
+    pages: [
+      [["失败原因", "e", "工具重名：tool-search__search（同族缺陷，见诊断报告）"], ["事件时间线", "t", "<i>08:59:56.609</i>  模块激活（启动，正常）\n<te>09:00:22.842</te>  模块降级：工具重名：tool-search__search\n<te>09:00:40.516</te>  模块降级：工具重名：tool-search__search（最近一次，共 3 次）"]],
+      [["修复指引", "", "<span class=\"hintline2\">· 已知内核缺陷：等修复批落地后重试挂载即可 · 临时规避：重启进程</span>"]],
+    ] },
+  { id: "tool-shell", tag: "级联", count: 6, last: "09:00:40",
+    reason: "硬依赖能力 \"fs\" 的提供者 tool-fs 已降级（级联降级）",
+    head: "builtin · v0.1.0 · 状态：级联降级（被 tool-fs 拖累）",
+    pages: [
+      [["失败原因", "e", "硬依赖能力 \"fs\" 的提供者 tool-fs 已降级（级联降级）\n\n本模块代码无问题——它依赖的 fs 能力没有提供者，安全护栏拒绝激活。"]],
+      [["修复指引", "", "<span class=\"hintline2\">· 根因在 tool-fs（列表第 2 项），恢复 tool-fs 后本模块自动恢复\n· 单独重试本模块无用——依赖不满足，挂不上是护栏在正确工作</span>"]],
+    ] },
+  { id: "my-weather", tag: "加载失败", count: 1, last: "08:59:56",
+    reason: "模块 my-weather 加载失败：SyntaxError: Unexpected token 'export'（index.ts:12）",
+    head: "local · user（~/.orosus/modules/my-weather）· 状态：发现期加载失败（未进图）",
+    pages: [
+      [["失败原因", "e", "模块 my-weather 加载失败：SyntaxError: Unexpected token 'export'\n\n位置：~/.orosus/modules/my-weather/index.ts 第 12 行\n阶段：发现期 import（模块代码从未执行到 activate——宿主把它整个跳过了）"]],
+      [["修复指引", "", "<span class=\"hintline2\">· 第三方模块的语法错误不会影响主程序（本条即证明：宿主正常启动）\n· 修复模块源码后按 Ctrl + E 重开本窗口（或 /reload）即可看到更新\n· 本地模块入口规范：index.{ts,js} 或 package.json 的 exports[\"./module\"]</span>"]],
+    ] },
+];
+
+const LIST_ROWS = 8;           // 一级列表恒定行数（不足留空，防闪烁）
+const S = { open: false, sel: 0, detail: null, page: 0, toastTimer: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+function renderList() {
+  const list = $("list");
+  let html = "";
+  RECORDS.forEach((r, i) => {
+    html += `<div class="diag-row${i === S.sel ? " sel" : ""}"><span class="dot"></span>` +
+      `<span class="dname">${r.id}</span><span class="dtag">${r.tag}</span>` +
+      `<span class="dreason">${esc(r.reason)}</span>` +
+      `<span class="dmeta">${r.count} 次 · ${r.last}</span></div>`;
+  });
+  for (let i = RECORDS.length; i < LIST_ROWS; i++) html += `<div class="diag-row"></div>`; // 空槽留空
+  list.innerHTML = html;
+  const over = RECORDS.length - LIST_ROWS;
+  $("listMore").textContent = S.sel > 0 && S.sel >= LIST_ROWS ? `↑ 还有 ${S.sel - LIST_ROWS + 1} · ↓ 还有 ${over - (S.sel - LIST_ROWS)}${over > 0 ? "" : ""}` : (over > 0 ? `↓ 还有 ${over}` : "");
+}
+
+function renderDetail() {
+  const r = RECORDS[S.detail];
+  $("dTitle").textContent = r.id;
+  $("dSub").textContent = r.head;
+  $("dPage").textContent = `第 ${S.page + 1}/${r.pages.length} 页`;
+  $("detail").innerHTML = r.pages[S.page].map(([title, cls, body]) =>
+    `<div class="sec"><h4>${title}</h4><pre class="${cls}">${body}</pre></div>`).join("");
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(S.toastTimer);
+  S.toastTimer = setTimeout(() => t.classList.add("hidden"), 2400);
+}
+
+function render() {
+  $("tui").classList.toggle("diag", S.open);
+  $("bk1").classList.toggle("hidden", !S.open);
+  $("bk2").classList.toggle("hidden", S.detail === null);
+  if (S.open) renderList();
+  if (S.detail !== null) renderDetail();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && (e.key === "e" || e.key === "E")) {
+    e.preventDefault();
+    if (S.open && S.detail !== null) { S.detail = null; S.open = false; } // 总开关：二级开着 = 全关
+    else if (S.open) S.open = false;
+    else if (RECORDS.length === 0) toast("模块全部正常——没有诊断记录"); // 空态不弹空窗
+    else { S.open = true; S.sel = 0; }
+    render(); return;
+  }
+  if (e.key === "Escape") {
+    if (S.detail !== null) { S.detail = null; render(); return; }  // 二级 → 回一级
+    if (S.open) { S.open = false; render(); return; }              // 一级 → 关
+    return;                                                        // 无弹窗 = 正常 Esc 语义
+  }
+  if (!S.open || S.detail !== null) {
+    if (S.detail !== null && (e.key === "PageDown" || e.key === "PageUp")) {
+      e.preventDefault();
+      const n = RECORDS[S.detail].pages.length;
+      S.page = Math.min(n - 1, Math.max(0, S.page + (e.key === "PageDown" ? 1 : -1)));
+      render();
+    }
+    return;
+  }
+  if (e.key === "ArrowDown") { e.preventDefault(); S.sel = Math.min(S.sel + 1, RECORDS.length - 1); render(); }
+  if (e.key === "ArrowUp")   { e.preventDefault(); S.sel = Math.max(S.sel - 1, 0); render(); }
+  if (e.key === "Enter")     { e.preventDefault(); S.detail = S.sel; S.page = 0; render(); }
+});
+
+$("kbdToggle").addEventListener("click", () => {
+  S.open = !S.open; if (S.open) { S.sel = 0; S.detail = null; }
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
