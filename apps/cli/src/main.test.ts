@@ -1,5 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { spawn } from "node:child_process";
+import { describe, it, expect, afterEach } from "vitest";import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,13 +18,14 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const tmp = (name = "cli"): string => (dir = mkdtempSync(join(tmpdir(), `orosus-${name}-`)));
 
 /** 密封 harness（M1 纪律：测试不碰真实 ~/.orosus）。 */
-const isolated = (over: { userToml?: string } = {}) => {
+const isolated = (over: { userToml?: string; commandUi?: CommandUi } = {}) => {
   const d = tmp();
   const userFile = join(d, "config.toml");
   if (over.userToml !== undefined) writeFileSync(userFile, over.userToml, "utf8");
   return createHarness({
     cwd: d,
     builtinModules: BUILTIN_MODULES,
+    ...(over.commandUi !== undefined ? { commandUi: over.commandUi } : {}),
     secretsFile: join(d, "secrets.env"),
     diagDir: join(d, "logs"),
     sessionsDir: join(d, "sessions"), // 密封（2026-09-19 走查泄漏修复）：此前缺省 = 真实 ~/.orosus/sessions——
@@ -261,4 +261,21 @@ describe("steering 排队锁定（M4-2 T19/B19——cc-haha 排队式：turn 进
       rmSync(d, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe("模块命令 Esc 穿透契约（2026-09-24 走查实锤前案回归钉——/settings 弹窗 Esc 炸穿 exit 7）", () => {
+  it("配置流 choose Esc → h.prompt 原样抛出「已取消（Esc）」+ 零写盘（宿主 catch-all 接住的责任链钉）", async () => {
+    // Esc 穿透是设计契约（/model 收窄 catch 同款——处理器的兜底 catch 不许吞 UI 交互）；
+    // 接住的责任在宿主 processReplLine catch-all + runSubmit 网兜（settleCommandError 同政策）——
+    // 本钉锁死契约本身：穿透若哪天被 harness 吞掉，宿主静默面就失效了
+    const escUi: CommandUi = {
+      ask: async () => "",
+      askSecret: async () => "",
+      choose: async () => { throw new Error("已取消（Esc）"); },
+      confirm: async () => false,
+    };
+    const h = await isolated({ commandUi: escUi });
+    await expect(h.prompt("/tool-web__settings")).rejects.toThrow("已取消（Esc）");
+    await h.close();
+  });
 });

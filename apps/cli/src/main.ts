@@ -259,6 +259,15 @@ const pickFace =
  *  不再落流区（命令结果 md / 会话生命周期回显 / 工具行失败仍带内——见 ROADMAP toast 化条目）。 */
 const notify = (t: string): void => { if (activeApp !== undefined) activeApp.showToast(t); else console.log(t); };
 
+/** 命令面错误统一落点（2026-09-24 M4-3 走查实锤收口——/settings 弹窗 Esc 取消无人接、进程 exit 7 前案）：
+ *  Esc 带内取消静默（TUI 批 T3/D52③ 拍板）+ 其余瞬时错误 toast 化（2026-09-23 拍板）。
+ *  processReplLine catch-all 与 runSubmit 网兜共用此政策——模块命令的 choose/ask Esc 抛错必须穿透
+ *  处理器（/model 收窄 catch 同款约定），接住它们 = 宿主这两处。 */
+const settleCommandError = (err: unknown): void => {
+  if (err instanceof Error && err.message === "已取消（Esc）") return;
+  notify(err instanceof Error ? err.message : String(err));
+};
+
 const commandUi = createReadlineUi({
   question,
   secretQuestion,
@@ -615,14 +624,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       if (text === "/help") { out(HELP_TEXT); return "again"; }
       // /settings（M4-3 T1c/D9：/other 改名——别名平移 /config；/other 旧名直接消失〔2026-09-24 用户拍板，
       // 不留指路不转别名〕——打字面撞「未知命令」即知新家）
-      if (text === "/settings" || text === "/config") {
-        if (activeApp !== undefined) {
-          await openSettingsPanel(activeApp);
-        } else {
-          await openSettingsLine(out);
-        }
-        return "again";
-      }
+      // 注记（同日走查实锤）：本条拦截须在下方 try 的 catch-all 覆盖内——弹窗配置流的 choose/ask Esc
+      // 抛「已取消（Esc）」，try 外无人接 = 进程 exit 7 前案；移入 try 后与 /model 等同政策静默
       // 退役命令指路（批⑤⑥——打字面肌肉记忆；/paste 先例是干净移除，此二条有明确新家故留一行）
       if (/^\/usage\s*$/.test(text.trim())) { notify("已退役：/usage 并入 /settings → Token 用量"); return "again"; }
       if (/^\/status\s*$/.test(text.trim())) { notify("已退役：/status 并入 /settings → 运行状态"); return "again"; }
@@ -633,10 +636,19 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         !isCmdLine &&
         needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })
       ) {
-        notify("还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 选模型），配好后直接提问");
+        notify("还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 配好后直接提问）");
         return "again";
       }
       try {
+        // /settings 拦截在 try 内首条——嵌套模块配置流（tool-web__settings 三级流）的 Esc 抛错落 catch-all 静默
+        if (text === "/settings" || text === "/config") {
+          if (activeApp !== undefined) {
+            await openSettingsPanel(activeApp);
+          } else {
+            await openSettingsLine(out);
+          }
+          return "again";
+        }
         // 图片收集（2026-09-23 走查拍板）：全屏 = 文内 [image #N] token（extractImageRefs 剥除后进正文），
         // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
         const imgRefs = extractImageRefs(text);
@@ -699,9 +711,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
         // 取消仍以抛错带内表达，仅 REPL 呈现面不再按错误打印。
         // 其余错误 toast 化（2026-09-23 用户拍板）：未知命令/路由失败等瞬时错误不落流区（消息原文本就自描述）
-        if (!(err instanceof Error && err.message === "已取消（Esc）")) {
-          notify(err instanceof Error ? err.message : String(err));
-        }
+        settleCommandError(err); // 政策件提取（2026-09-24）——runSubmit 网兜共用同一政策
       }
   return "again";
 };
@@ -1197,6 +1207,11 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           if (r === "switch") action = "switch";
           else if (r === "quit") action = "quit";
         }
+      } catch (err) {
+        // runSubmit 网兜（2026-09-24 走查实锤前案）：void-async 无 rejection 落点 = 进程杀手——
+        // 拦截区（try 覆盖之外的 /help、会话切换等）逃逸的错误此前直通 FullApp 崩溃钩子 exit 7；
+        // 与 processReplLine catch-all 同政策（Esc 静默、其余 toast）
+        settleCommandError(err);
       } finally {
         // busy 即改档不占有/释放 inflight——turn 的 finally 归原属主（条件块形态：finally 里不写 return——oxlint no-unsafe-finally）
         if (!busyExec) {
