@@ -129,8 +129,21 @@ class AnsiTracker {
  *  「c|heck:boundaries」「生成物|diff」被劈半即此）。 */
 const WORD_RUN = /[A-Za-z0-9_./:@#$%&+=~^!?*"-]+/y;
 
+/** CJK 禁则字表（2026-09-24 用户拍板——「名字（长URL）」段落行尾孤「（」+ URL 整词掉行乱象）。
+ *  行尾禁则 = 开括号类不许收尾（断点回退到括号之前，括号随下文下移）；行首禁则 = 闭排印类不许开头
+ *  （把上一断行单元带下去）。参照仓调研（kimi/cc-haha/qwen/opencode/Reasonix/pi/dsh）无一实现——
+ *  cc-haha/qwen 用 wrap-ansi 硬切（URL 劈半）、Reasonix 用 ansi.Hardwrap 同病；此为标准中文排版
+ *  禁则，自研补齐、不抄硬切。 */
+const OPEN_NO_END = /[（［｛「『《【([{]/;
+const CLOSE_NO_START = /[）］｝】〕」』》】，。、；：！？…—·~)\]},;:.!?]/;
+/** ANSI 序列收尾（链接/样式边界）——回拉会切破坏样式配对，保守跳过禁则。
+ *  终端代码合法形态：匹配 ANSI 必须含 ESC 控制符（lint 基线批定点豁免，同 extractAnsiCode）。 */
+// oxlint-disable-next-line no-control-regex
+const ANSI_TAIL = /(?:\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))+$/;
+
 /** 折行：按显示宽折，ANSI 状态跨行延续。断行单元 = ASCII 词连跑（原子）或单 grapheme
- *  （CJK/宽标点/emoji）——词不劈半、CJK 逐字可断（标准中西文混排口径，F5 六轮重写）。 */
+ *  （CJK/宽标点/emoji）——词不劈半、CJK 逐字可断（标准中西文混排口径，F5 六轮重写）；
+ *  叠加 CJK 禁则回拉（开括号不收尾、闭排印不开头，2026-09-24）。 */
 export function wrapText(text: string, width: number): string[] {
 	const w = Math.max(1, width);
 	const out: string[] = [];
@@ -143,10 +156,21 @@ export function wrapText(text: string, width: number): string[] {
 		let cur = "";
 		let curW = 0;
 		let i = 0;
+		const lineUnits: { text: string; w: number }[] = []; // 当前行已装填单元（禁则回拉用）
 		const emit = (): void => {
 			out.push(cur.replace(/ +$/, "") + tracker.resetSuffix());
 			cur = tracker.prefix();
 			curW = 0;
+			lineUnits.length = 0;
+		};
+		const popUnit = (): { text: string; w: number } | undefined => {
+			if (ANSI_TAIL.test(cur)) return undefined; // ANSI 收尾——不回拉
+			const last = lineUnits[lineUnits.length - 1];
+			if (last === undefined || last.text === "" || !cur.endsWith(last.text)) return undefined;
+			cur = cur.slice(0, cur.length - last.text.length);
+			curW -= last.w;
+			lineUnits.pop();
+			return last;
 		};
 		while (i < logical.length) {
 			const a = extractAnsiCode(logical, i);
@@ -160,8 +184,11 @@ export function wrapText(text: string, width: number): string[] {
 			WORD_RUN.lastIndex = i;
 			const wr = WORD_RUN.exec(logical);
 			let gEnd = i + 1;
-			if (wr !== null && wr[0].length > 1) gEnd = i + wr[0].length;
-			else {
+			let isWordRun = false;
+			if (wr !== null && wr[0].length > 1) {
+				gEnd = i + wr[0].length;
+				isWordRun = true;
+			} else {
 				const rest = logical.slice(i);
 				for (const { segment } of segmenter.segment(rest)) {
 					gEnd = i + segment.length;
@@ -178,19 +205,39 @@ export function wrapText(text: string, width: number): string[] {
 					if (curW + sw > w && curW > 0) emit();
 					cur += segment;
 					curW += sw;
+					lineUnits.push({ text: segment, w: sw });
 				}
 				i = gEnd;
 				continue;
 			}
 			if (curW + gw > w && curW > 0) {
+				// 禁则回拉（2026-09-24）：行尾开括号随下文下移；行首闭排印带上前一个单元下移。
+				const carry: { text: string; w: number }[] = [];
+				while (lineUnits.length > 0 && OPEN_NO_END.test(lineUnits[lineUnits.length - 1]!.text)) {
+					const u = popUnit();
+					if (u === undefined) break;
+					carry.unshift(u);
+				}
+				if (carry.length === 0 && !isWordRun && lineUnits.length > 0 && CLOSE_NO_START.test(g)) {
+					const u = popUnit();
+					if (u !== undefined) carry.push(u);
+				}
 				emit();
-				if (g === " ") { // 断点正好落在空格——行首吞掉
+				for (const cu of carry) {
+					cur += cu.text;
+					curW += cu.w;
+					lineUnits.push(cu);
+				}
+				if (g === " ") {
+					// 断点正好落在空格——行首吞掉
 					i = gEnd;
 					continue;
 				}
+				if (curW + gw > w && curW > 0) emit(); // carry 后仍装不下（URL 近满宽的罕见边界）——g 独占下行
 			}
 			cur += g;
 			curW += gw;
+			lineUnits.push({ text: g, w: gw });
 			i = gEnd;
 		}
 		if (cur !== "" || out.length === 0) out.push(cur);
