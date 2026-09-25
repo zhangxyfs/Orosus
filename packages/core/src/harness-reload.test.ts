@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -87,6 +87,58 @@ describe("harness.reload 与 /reload（§5.5/T15）", () => {
     const h = await boot({});
     const out = await h.prompt("/reload");
     expect(out).toContain("unchanged");
+    await h.close();
+  });
+
+  it("⑤ 卸载半圈：enabled 翻 false → reload → removed 含该模块、工具出清单、调用带内被拒、audit 态 discovered", async () => {
+    const extra = fakeModule("m", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(tool("m__t")); } });
+    const h = await boot({ modules: [extra] });
+    expect(h.graph().tools.specs().map((t) => t.name)).toContain("m__t"); // 前置：启动时在
+    writeFileSync(join(dir, "no-user.toml"), "[m]\nenabled = false\n");
+    const report = await h.reload();
+    expect(report.removed).toContain("m"); // 修复口径：diff 两侧按启停过滤后 removed 才含翻转模块
+    expect(h.graph().tools.specs().map((t) => t.name)).not.toContain("m__t");
+    const res = await h.graph().tools.run({ id: "c1", name: "m__t", args: {} }, { signal: new AbortController().signal });
+    expect(res.isError).toBe(true);
+    expect(res.output).toContain("未知工具");
+    expect(h.graph().audit().find((a) => a.name === "m")?.state).toBe("discovered"); // 禁用 ≠ 降级（§5.4）
+    await h.close();
+  });
+
+  it("⑥ 重挂半圈：接⑤再翻 true → reload → added 含该模块、failed 空、工具恢复可执行", async () => {
+    const extra = fakeModule("m", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(tool("m__t")); } });
+    const h = await boot({ modules: [extra] });
+    writeFileSync(join(dir, "no-user.toml"), "[m]\nenabled = false\n");
+    const first = await h.reload();
+    expect(first.removed).toContain("m");
+    writeFileSync(join(dir, "no-user.toml"), "[m]\nenabled = true\n");
+    const second = await h.reload();
+    expect(second.added).toContain("m");
+    expect(second.failed).toEqual([]); // 干净重挂：不撞旧实例同名（假挂载修复的核心断言）
+    const res = await h.graph().tools.run({ id: "c2", name: "m__t", args: {} }, { signal: new AbortController().signal });
+    expect(res.isError).toBe(false);
+    expect(res.output).toBe("out:m__t");
+    await h.close();
+  });
+
+  it("⑦ 启动即停用的模块运行期挂载（回归钉：现状即好，修完不许变坏）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-reload-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "no-user.toml"), "[m]\nenabled = false\n");
+    const extra = fakeModule("m", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(tool("m__t")); } });
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script), extra],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    expect(h.graph().audit().find((a) => a.name === "m")?.state).toBe("discovered"); // 启动即停用
+    writeFileSync(join(dir, "no-user.toml"), "");
+    const report = await h.reload();
+    expect(report.added).toContain("m");
+    expect(report.failed).toEqual([]);
+    const res = await h.graph().tools.run({ id: "c3", name: "m__t", args: {} }, { signal: new AbortController().signal });
+    expect(res.isError).toBe(false);
+    expect(res.output).toBe("out:m__t");
     await h.close();
   });
 });

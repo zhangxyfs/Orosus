@@ -10,6 +10,7 @@ import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
+import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 import { diffGraphs, type ReloadReport } from "./kernel/reload.ts";
@@ -860,6 +861,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
       });
       contextWindow = readContextWindow(config2.core); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
+      const oldResolution = resolveSections(config.sections, oldDefs.map((g) => g.def), cliInput); // 旧配置启停解析——config 覆盖前留存（热插拔修复 T1：启停翻转算进变更）
       config = config2; // 核心顶层 key（model 等）同步更新——修复：reload 后 model/contextWindow 等仍读旧值（走查缺陷③：向导写 model + /reload 后 resolveProvider 仍读旧 config.core.model = undefined → "未配置 model"）
       const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[] = [
         ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
@@ -875,8 +877,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           if (t.ok) defs2.push({ def: m.def, source: "local", ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
         }
       }
+      // 启停翻转算进变更（热插拔修复 T1）：diff 两侧按 resolveSections 各自配置过滤出有效集——
+      // 卸载半圈（有效→停用）走既有移除通路（墓碑 + 拆除旧实例），重挂半圈走既有新增通路（干净激活、墓碑位原位复活）。
+      // 过滤只影响 diff 判定，loadModules 仍喂全量 defs2（停用模块保持「进 records/audit、状态 discovered」语义，§5/§5.4）。
+      const newResolution = resolveSections(config2.sections, defs2.map((d) => d.def), cliInput);
+      const oldEff = oldDefs.filter((g) => oldResolution.isEnabled(g.def));
+      const newEffNames = new Set(defs2.filter((d) => newResolution.isEnabled(d.def)).map((d) => d.def.name));
       // diff 粗判（§5.5 Reloaded 判据：entryHash / def 引用 / 配置自有 key 有效值——三者任一变化即重载）
-      const newNames = new Set(defs2.map((d) => d.def.name));
       const removedOrChanged = new Set<string>();
       const newConfigValue = (name: string): unknown => {
         const next = defs2.find((d) => d.def.name === name);
@@ -886,8 +893,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         const parsed = next.def.config?.safeParse(section);
         return parsed?.success ? parsed.data : undefined;
       };
-      for (const g of oldDefs) {
-        if (!newNames.has(g.def.name)) { removedOrChanged.add(g.def.name); continue; }
+      for (const g of oldEff) {
+        if (!newEffNames.has(g.def.name)) { removedOrChanged.add(g.def.name); continue; }
         const next = defs2.find((d) => d.def.name === g.def.name)!;
         if (g.entryHash !== next.entryHash || g.def !== next.def) { removedOrChanged.add(g.def.name); continue; }
         // 配置自有 key 有效值 deepEqual 失败 → Reloaded（M3 修复：粗判此前漏配置变化——preserved 误含已变模块，
@@ -926,7 +933,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await oldGraph.disposeOwners([...removedOrChanged]);
       graph = newGraph;
       ensureSteerHook(graph.bus); // reuse 同 bus 时 WeakSet 短路；新 bus 兜底重挂
-      const d = diffGraphs(oldDefs, newGraph.defs());
+      const d = diffGraphs(oldEff, newGraph.defs().filter((g) => newEffNames.has(g.def.name))); // 有效集口径——added/removed 如实含启停翻转（toast/回显消费，T2）
       const failed = newGraph.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" }));
       const report: ReloadReport = { added: d.added, removed: d.removed, reloaded: d.reloaded, unchanged: d.unchanged, failed };
       createLogger(sink, "kernel").info("kernel.reload.done", "reload 完成", { added: d.added.length, removed: d.removed.length, reloaded: d.reloaded.length, unchanged: d.unchanged.length });
