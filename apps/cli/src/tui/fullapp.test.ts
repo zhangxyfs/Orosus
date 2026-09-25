@@ -1435,3 +1435,53 @@ describe("面板待确认第四态（m5 T17——渲染 + 回车弹确认窗而�
 		expect(toggleCalls).toEqual(["off-mod"]); // 常规态回车照旧热插拔
 	});
 });
+
+describe("斜杠菜单参数阶段（m5 T15——命令名已定 + 空格后长出参数候选，复用菜单过滤与翻页）", () => {
+	it("① 输入 /note__open + 空格 → 菜单切参数候选；↑↓ 选择 Tab 补全词；Esc 关菜单不清输入", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			slashArgComplete: (cmd, word) => (cmd === "/note__open" ? ["todo.md", "notes.md"].filter((x) => x.startsWith(word)) : undefined),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "/note__open ");
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("todo.md"); // 参数候选上屏
+		expect(b).toContain("notes.md");
+		input.emit("data", "\x1b[B"); // ↓ 到 notes.md
+		await flush();
+		input.emit("data", "\t"); // Tab 补全当前词
+		await flush();
+		expect(app.stateRef.input).toBe("/note__open notes.md ");
+		input.emit("data", "\x1b"); // Esc 关菜单（不清输入）
+		await flush();
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(app.stateRef.input).toBe("/note__open notes.md ");
+	});
+
+	it("② 前缀过滤（输入 n 只剩 notes.md）+ Enter 用选中候选提交", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			slashArgComplete: (_cmd, word) => ["todo.md", "notes.md"].filter((x) => x.startsWith(word)),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "/note__open n");
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("notes.md");
+		expect(b).not.toContain("todo.md"); // 前缀过滤
+		input.emit("data", "\r"); // Enter 提交（选中候选替换当前词）
+		await flush();
+		expect(app.stateRef.input).toBe(""); // 已提交清输入
+	});
+
+	it("③ 无 completeArg 的命令照旧命令名菜单（不误入参数阶段）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/ti"); // /title 未声明补全
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("/title");
+	});
+});

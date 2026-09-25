@@ -66,3 +66,35 @@ describe("@ 文件补全（TUI 批 T6——B18 半项）", () => {
     expect(commandCompleter("看看 @nodir/x", dir)[0]).toEqual([]);
   });
 });
+
+describe("命令参数补全第三职（m5 T15——模块命令 completeArg 委托）", () => {
+	const mods = [
+		{ name: "/note__open", completeArg: (word: string, args: string) => (args.includes("-a") ? ["a1.md", "a2.md"] : ["todo.md", "notes.md", "a1.md"]).filter(() => true).filter((x) => x.startsWith(word)) },
+		{ name: "/plain__cmd" }, // 未声明 completeArg
+		{ name: "/boom__x", completeArg: () => { throw new Error("炸"); } },
+	];
+
+	it("① 委托：行首命令命中声明命令 → completeArg 收（word, args）、候选前缀过滤、第二参 = 当前词段", () => {
+		const [c, seg] = commandCompleter("/note__open no", "/tmp", mods);
+		expect(c).toEqual(["notes.md"]); // word "no" 过滤后只剩 notes.md
+		expect(seg).toBe("no");
+	});
+
+	it("② 未声明 completeArg 的命令：不委托——参数形态回退内建前缀清单（无命中即空）", () => {
+		const [c] = commandCompleter("/plain__cmd ar", "/tmp", mods);
+		expect(c).toEqual([]); // 内建清单无此命令 → 空候选
+	});
+
+	it("③ 抛错当无候选不炸 completer；onModuleError 收到错误", () => {
+		const errs: string[] = [];
+		const [c] = commandCompleter("/boom__x a", "/tmp", mods, (n) => errs.push(n));
+		expect(c).toEqual([]);
+		expect(errs).toEqual(["/boom__x"]);
+	});
+
+	it("④ 命令名阶段（无空格）不受第三职影响", () => {
+		const [c, line] = commandCompleter("/mo", "/tmp", mods);
+		expect(c).toContain("/model");
+		expect(line).toBe("/mo");
+	});
+});

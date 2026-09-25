@@ -82,7 +82,7 @@ export interface PreservedInstance {
   def: ModuleDefinition;
   generation: number;
   services: { key: string; impl: unknown }[];  // 带 impl——新图 services 表重建需要实现值
-  commands: { name: string; handler: CommandHandler; owner: string }[];
+  commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];
   promptSections: { order: number; text: string; owner: string }[];
   cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册物按引用沿用（不展开——widgets getter 现问现答靠它活着）
   disposeFn?: Disposer;                        // 旧实例的模块 dispose（后续 teardown 调用）
@@ -92,7 +92,7 @@ export interface PreservedInstance {
 export interface ActivateOutput {
   records: ModuleRecord[];
   services: ServiceResolver;
-  commands: { name: string; handler: CommandHandler; owner: string }[];
+  commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];
   promptSections: { order: number; text: string; owner: string }[];
   cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册表（按引用存——禁止 {..…spec} 展开拷贝拍平 getter）
   contributes: Map<string, string[]>;

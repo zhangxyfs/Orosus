@@ -351,7 +351,18 @@ export interface ModuleContext<C = unknown> {
      * // 用户输入 /note__clear 触发；args 是命令后的原始参数串
      * ```
      */
-    command(name: string, handler: CommandHandler): Disposer;
+    /**
+     * m5 T15：可选第三参——命令参数补全（Tab/参数阶段）。completeArg 收（当前词, 全参数串）返回候选
+     * 全量（宿主按当前词前缀过滤）；抛错由宿主兜底当无候选。
+     *
+     * @example
+     * ```ts
+     * ctx.contribute.command("open", async (args) => openNote(args), {
+     *   completeArg: (word) => notes.filter((n) => n.startsWith(word)),
+     * });
+     * ```
+     */
+    command(name: string, handler: CommandHandler, opts?: { completeArg?: (word: string, args: string) => string[] }): Disposer;
     /** 注册系统提示词段：order 决定拼接顺序（核心保留 -100；分配表现值 skill=0/todo=10/mcp=20，
      * AGENTS.md 等价 30 拼尾——新段领 0–29 空位）。text 为 getter 时每轮请求装配读最新值；
      * 空串段装配时被过滤——「必须注入」类内容应无条件注册且 text 永远非空。

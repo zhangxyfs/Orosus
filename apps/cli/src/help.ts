@@ -7,7 +7,18 @@ import { resolve } from "node:path";
  *  @ 文件补全（TUI 批 T6/B18 半项）：行尾 @前缀 → 目录列举前缀过滤（目录候选以 / 结尾——补入后
  *  可继续 Tab；候选上限 20，设计空白登记）；第二参 = @ 匹配段（readline 只替换该段，行首文本不动）。
  *  目录列举失败（不存在/无权限）静默空候选；cwd 注入面供测试（生产缺省 process.cwd()）。 */
-export function commandCompleter(line: string, cwd = process.cwd()): [string[], string] {
+/** 模块命令补全面（m5 T15 第三职）：名字带 / 前缀 + 可选 completeArg。 */
+export interface ModuleCommandSpec {
+  name: string; // 含斜杠全形（/note__open）
+  completeArg?: (word: string, args: string) => string[];
+}
+
+export function commandCompleter(
+  line: string,
+  cwd = process.cwd(),
+  moduleCommands: ModuleCommandSpec[] = [],
+  onModuleError?: (name: string, err: unknown) => void,
+): [string[], string] {
   if (!line.startsWith("/")) {
     const at = /(?:^|\s)@([^\s]*)$/.exec(line);
     if (at === null) return [[], line];
@@ -24,6 +35,23 @@ export function commandCompleter(line: string, cwd = process.cwd()): [string[], 
       return [matches, `@${prefix}`];
     } catch {
       return [[], line];
+    }
+  }
+  // 模块命令参数委托（m5 T15）：行首命令名精确命中声明了 completeArg 的模块命令 → 委托给它补当前词（前缀过滤）；
+  // 抛错 = 当无候选（readline 回调节奏里模块异常漏出去是进程级风险——宿主侧 try/catch 兜底）
+  const sp = line.indexOf(" ");
+  if (sp > 0) {
+    const cmd = line.slice(0, sp);
+    const args = line.slice(sp + 1);
+    const word = args.split(/\s+/).pop() ?? "";
+    const m = moduleCommands.find((c) => c.name === cmd && c.completeArg !== undefined);
+    if (m !== undefined) {
+      try {
+        return [m.completeArg!(word, args).filter((x) => x.startsWith(word)), word];
+      } catch (err) {
+        onModuleError?.(cmd, err);
+        return [[], word];
+      }
     }
   }
   const all = [

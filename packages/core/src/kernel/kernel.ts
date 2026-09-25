@@ -48,7 +48,7 @@ export interface ModuleGraph {
   tools: ToolRegistry;
   services: ServiceResolver;
   bus: EventBus;
-  commands: { name: string; handler: CommandHandler; owner: string }[];  // 命令注册表（消费端路由用，D38）
+  commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];  // 命令注册表（消费端路由用，D38）
   cards: { spec: import("@orosus/contracts/module").CardSpec; owner: string }[];  // 卡片注册表（m5 T5——按引用存，widgets getter 现问现答）
   promptSections(): string;
   audit(): AuditEntry[];

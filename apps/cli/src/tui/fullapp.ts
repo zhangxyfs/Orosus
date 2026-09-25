@@ -102,6 +102,9 @@ export interface FullAppIO {
 	diagDetail?(name: string): string;
 	/** 宿主日志口（m5 T2）：弹窗保留键注册即拒等 UI 层事件的留痕（接线 main.ts → harness 日志）。 */
 	logWarn?(code: string, msg: string, data?: Record<string, unknown>): void;
+	/** 斜杠菜单参数阶段数据源（m5 T15）：cmd（含斜杠）→ 参数候选全量（宿主侧调模块 completeArg，
+	 *  抛错兜底当空表 + 日志）；undefined = 该命令无参数补全（菜单照命令名阶段）。 */
+	slashArgComplete?(cmd: string, word: string, args: string): string[] | undefined;
 	/** 待确认模块回车 = 首挂确认弹窗（m5 T17）：宣言面人话清单 → 确认三动作作
 	 *  （trustModule 登记 + 写盘 enabled + reload 一次）；取消零副作用。 */
 	confirmModule?(name: string): void;
@@ -1178,19 +1181,37 @@ export class FullApp {
 		this.scheduler.requestImmediateRender();
 	}
 
+	/** 参数阶段探测（m5 T15）：输入已是「/命令 参数」形态且该命令声明了补全 → 菜单切参数候选。
+	 *  优先于二级列表（children 是菜单选定驱动，参数阶段是文本驱动）。 */
+	private argPhase(): { cmd: string; word: string; args: string; items: string[] } | undefined {
+		const typed = this.state.input; // 原始输入——normCmd 会裁尾空格，而尾空格正是参数阶段的触发形态
+		if (!typed.startsWith("/")) return undefined;
+		const sp = typed.indexOf(" ");
+		if (sp <= 0) return undefined;
+		const cmd = typed.slice(0, sp);
+		const args = typed.slice(sp + 1);
+		const word = args.split(/\s+/).pop() ?? "";
+		const all = this.io.slashArgComplete?.(cmd, word, args);
+		if (all === undefined || all.length === 0) return undefined;
+		return { cmd, word, args, items: all.filter((x) => x.startsWith(word)) };
+	}
+
 	private onOverlayKey(key: string): void {
 		const s = this.state;
 		const level2 = s.overlayCmd !== "";
-		const items: string[] = level2
-			? (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? [])
-			: this.filteredCommands().map((c) => c.name);
+		const ap = this.argPhase();
+		const items: string[] = ap !== undefined
+			? ap.items
+			: level2
+				? (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? [])
+				: this.filteredCommands().map((c) => c.name);
 		if (key === "escape") {
 			if (level2) {
 				s.overlayCmd = "";
 				s.input = "/";
 				s.cursor = 1;
 				s.overlaySel = 0;
-			} else s.overlayOpen = false;
+			} else s.overlayOpen = false; // 参数阶段也走这里：只关菜单不清输入（Esc 回命令名阶段 = 继续编辑参数）
 		} else if (key === "up" && items.length > 0) {
 			s.overlaySel = (s.overlaySel - 1 + items.length) % items.length;
 		} else if (key === "down" && items.length > 0) {
@@ -1199,12 +1220,29 @@ export class FullApp {
 			s.overlaySel = Math.max(0, s.overlaySel - OVERLAY_PAGE);
 		} else if (key === "pageDown" && items.length > 0) {
 			s.overlaySel = Math.min(items.length - 1, s.overlaySel + OVERLAY_PAGE);
+		} else if (key === "tab" && ap !== undefined && items.length > 0) {
+			// 参数阶段 Tab（m5 T15）：选中候选替换当前词 + 空格（可继续补下一词）
+			const picked = items[s.overlaySel] ?? items[0]!;
+			const head = ap.args.slice(0, ap.args.length - ap.word.length);
+			s.input = `${ap.cmd} ${head}${picked} `;
+			s.cursor = s.input.length;
+			s.overlaySel = 0;
 		} else if (key === "tab" && !level2 && items.length > 0) {
 			s.input = items[s.overlaySel] ?? s.input;
 			s.cursor = s.input.length;
 			s.overlayOpen = false;
 		} else if (key === "enter") {
 			if (items.length === 0) {
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			if (ap !== undefined) {
+				// 参数阶段 Enter（m5 T15）：选中候选替换当前词后提交（未选中任何行 = 提交原文）
+				const picked = items[s.overlaySel];
+				const final = picked === undefined ? normCmd(s.input) : `${ap.cmd} ${ap.args.slice(0, ap.args.length - ap.word.length)}${picked}`;
+				s.overlayOpen = false;
+				s.overlayCmd = "";
+				this.submitLine(final);
 				this.scheduler.requestImmediateRender();
 				return;
 			}
@@ -1834,18 +1872,24 @@ export class FullApp {
 
 	private buildOverlay(leftW: number, divRow: number): OverlayFrame {		const s = this.state;
 		const level2 = s.overlayCmd !== "";
+		const ap = this.argPhase();
 		const ow = leftW;
 		const oInner = ow - 2;
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
-		const title = level2 ? theme.fg("accent", ` ${s.overlayCmd} `) : theme.fg("accent", " 斜杠命令 ");
-		const en = theme.dim(level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令 `);
+		const title = ap !== undefined ? theme.fg("accent", ` ${ap.cmd} 参数 `) : level2 ? theme.fg("accent", ` ${s.overlayCmd} `) : theme.fg("accent", " 斜杠命令 ");
+		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令 `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
 		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」
 		let items: { text: string; mark: string; long: string }[];
-		if (level2) {
+		if (ap !== undefined) {
+			// 参数阶段（m5 T15）：候选行与命令菜单同框（恒定行数防闪烁纪律不变）
+			items = ap.items.length === 0
+				? [{ text: theme.dim("无匹配候选"), mark: " ", long: "继续输入或删字修改；Esc 关菜单继续编辑。" }]
+				: ap.items.map((c) => ({ text: c, mark: " ", long: `参数候选：${c}——Tab 补全当前词，Enter 直接提交。` }));
+		} else if (level2) {
 			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);
 			const current = this.io.slashCurrent(s.overlayCmd);
 			items = (cmdDef?.children ?? []).map((c) => {
@@ -1896,7 +1940,7 @@ export class FullApp {
 		const longLines = wrapped.slice(0, 2).map((l) => ` ${l}`);
 		if (wrapped.length > 2) longLines[1] = ` ${truncateToWidth(wrapped[1] ?? "", longW - 4)}...`;
 		while (longLines.length < 2) longLines.push("");
-		const foot = theme.dim(level2 ? " ↑↓ 选择 · Enter 选定 · Esc 返回" : " ↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭");
+		const foot = theme.dim(ap !== undefined ? " ↑↓ 选择 · Tab 补全词 · Enter 提交 · Esc 关菜单" : level2 ? " ↑↓ 选择 · Enter 选定 · Esc 返回" : " ↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭");
 		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
 		for (const l of longLines) olines.push(boxRow(l));
 		olines.push(boxRow(foot));
