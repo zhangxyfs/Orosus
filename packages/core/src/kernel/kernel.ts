@@ -49,6 +49,7 @@ export interface ModuleGraph {
   services: ServiceResolver;
   bus: EventBus;
   commands: { name: string; handler: CommandHandler; owner: string }[];  // 命令注册表（消费端路由用，D38）
+  cards: { spec: import("@orosus/contracts/module").CardSpec; owner: string }[];  // 卡片注册表（m5 T5——按引用存，widgets getter 现问现答）
   promptSections(): string;
   audit(): AuditEntry[];
   catalog(): string;
@@ -197,6 +198,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     services: act.services,
     bus,
     commands: act.commands,
+    cards: act.cards,
     defs: () => graphDefs.map((g) => ({ ...g })),
     preservable: act.preservable,
     /** 选择性拆除（reload 换下实例）：disposers 摘共享 bus 上旧监听 + disposeFn 清理——preserved 不受株连（§5.5）。 */

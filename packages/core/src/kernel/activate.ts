@@ -1,4 +1,4 @@
-import type { CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
+import type { CardSpec, CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -75,6 +75,7 @@ export interface PreservedInstance {
   services: { key: string; impl: unknown }[];  // 带 impl——新图 services 表重建需要实现值
   commands: { name: string; handler: CommandHandler; owner: string }[];
   promptSections: { order: number; text: string; owner: string }[];
+  cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册物按引用沿用（不展开——widgets getter 现问现答靠它活着）
   disposeFn?: Disposer;                        // 旧实例的模块 dispose（后续 teardown 调用）
   record: ModuleRecord;                        // 原记录（generation 不变）
 }
@@ -84,6 +85,7 @@ export interface ActivateOutput {
   services: ServiceResolver;
   commands: { name: string; handler: CommandHandler; owner: string }[];
   promptSections: { order: number; text: string; owner: string }[];
+  cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册表（按引用存——禁止 {..…spec} 展开拷贝拍平 getter）
   contributes: Map<string, string[]>;
   rollbackModule(name: string): Promise<void>;
   disposeAll(): Promise<void>;
@@ -96,6 +98,7 @@ interface Stage {
   tools: Tool[];
   commands: { name: string; handler: CommandHandler }[];
   promptSections: PromptSection[];
+  cards: CardSpec[];
   listeners: { type: string; listener: Listener }[];
 
   overlays: { section: string; read(value: unknown): unknown; owner: string }[];
@@ -120,6 +123,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
   const ownerContribs = new Map<string, OwnerContribs>();
   const committedCommands: ActivateOutput["commands"] = [];
   const committedSections: ActivateOutput["promptSections"] = [];
+  const committedCards: ActivateOutput["cards"] = []; // m5 T5：卡注册表（按引用存——widgets getter 现问现答）
   const contributes = new Map<string, string[]>();
   const activeNames: string[] = []; // 激活序（dispose 时倒序）
   const committedOverlays: { section: string; read(value: unknown): unknown; owner: string }[] = []; // 注册序 = 激活拓扑序（§6.6）
@@ -140,7 +144,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     for (const d of [...c.disposers].reverse()) {
       try { await d(); } catch (err) { klog.error("kernel.dispose.error", "disposer 抛错被记录", { module: name, error: String(err) }); }
     }
-    for (const arr of [committedCommands, committedSections] as const) {
+    for (const arr of [committedCommands, committedSections, committedCards] as const) {
       for (let i = arr.length - 1; i >= 0; i--) if (arr[i]!.owner === name) arr.splice(i, 1);
     }
     const idx = activeNames.indexOf(name);
@@ -165,6 +169,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       for (const { key, impl } of preservedThis.services) committedServices.set(key, { impl, owner: def.name });
       committedCommands.push(...preservedThis.commands);
       committedSections.push(...preservedThis.promptSections);
+      committedCards.push(...preservedThis.cards); // m5 T5：卡注册物沿用（不进沿用清单 = /reload 后保留模块的卡全丢，热重载事故同款根因）
       ownerContribs.set(def.name, { serviceKeys: preservedThis.services.map((x) => x.key), disposers: [], ...(preservedThis.disposeFn !== undefined ? { disposeFn: preservedThis.disposeFn } : {}) });
       contributes.set(def.name, ["(unchanged，句柄沿用)"]);
       activeNames.push(def.name);
@@ -194,7 +199,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       continue;
     }
 
-    const stage: Stage = { services: [], tools: [], commands: [], promptSections: [], listeners: [], overlays: [] };
+    const stage: Stage = { services: [], tools: [], commands: [], promptSections: [], cards: [], listeners: [], overlays: [] };
     const moduleState = { activated: false }; // activate 返回且 commit 后置 true——configRead 据此区分 activate 期（纯分层值，v13）
     const mlog = createLogger(sink, def.name);
     const allows = (m: string): boolean => def.mounts === undefined || def.mounts.includes(m); // mounts 缺省 = 不限制；一经声明 = 白名单（§5.1），未列出的口注册即抛
@@ -275,6 +280,10 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         promptSection: (s) => {
           if (!allows("contribute:promptSection")) throw new Error(`mounts 校验：contribute:promptSection 未在声明（§5.1）`);
           stage.promptSections.push(s); return () => { /* 同上：M1 no-op disposer */ };
+        },
+        card: (spec) => {
+          if (!allows("contribute:card")) throw new Error(`mounts 校验：contribute:card 未在声明（§5.1）`);
+          stage.cards.push(spec); return () => { /* 同上：M1 no-op disposer——卸载拆卡由 kernel 侧 rollback 承担 */ };
         },
       },
       session: {
@@ -360,6 +369,11 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           // （M4-2 T7/T12：todo/mcp 的 promptSection 反映运行期最新状态）
           committedSections.push({ order: s.order, owner: def.name, get text() { return s.text; } });
         }
+        for (const c of stage.cards) {
+          // 按引用存（m5 T5）：禁止 {…spec} 展开拷贝——对象展开会把 widgets getter 拍平成快照 = 现问现答静默失效（promptSection 活段同款坑）
+          committedCards.push({ spec: c, owner: def.name });
+          myContributes.push(`card: ${c.title} (${c.area})`);
+        }
         for (const l of stage.listeners) {
           mine.disposers.push(bus.on(l.type, l.listener, def.name));
         }
@@ -381,7 +395,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         for (const d of [...mine.disposers].reverse()) {
           try { await d(); } catch { /* 已记录于各处 */ }
         }
-        for (const arr of [committedCommands, committedSections] as const) {
+        for (const arr of [committedCommands, committedSections, committedCards] as const) {
           for (let i = arr.length - 1; i >= 0; i--) if (arr[i]!.owner === def.name) arr.splice(i, 1);
         }
         if (result && typeof result === "object" && "dispose" in result && typeof result.dispose === "function") {
@@ -432,6 +446,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     services,
     commands: committedCommands,
     promptSections: committedSections,
+    cards: committedCards,
     contributes,
     rollbackModule,
     /** 旧图 → PreservedInstance 收集口（reload 的 Unchanged 沿用数据源，§5.5）。 */
@@ -447,6 +462,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           services: (c?.serviceKeys ?? []).map((key) => ({ key, impl: committedServices.get(key)!.impl })),
           commands: committedCommands.filter((x) => x.owner === name),
           promptSections: committedSections.filter((x) => x.owner === name),
+          cards: committedCards.filter((x) => x.owner === name),
           ...(c?.disposeFn !== undefined ? { disposeFn: c.disposeFn } : {}),
           record: rec,
         });
