@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { FullApp, diagListLines, type FullAppIO } from "./fullapp.ts";
+import { FullApp, diagListLines, type FullAppIO, type PanelData } from "./fullapp.ts";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg } from "../theme.ts";
 
@@ -25,6 +25,25 @@ function fakeTerm(cols = 100, rows = 30): { input: FakeInput; output: FakeOutput
 	return { input, output };
 }
 
+/** 默认面板数据（m5 T6：rig 与卡组测试共用——测试侧展开后覆写 cards）。 */
+function defaultPanelData(): PanelData {
+	return {
+				model: "glm-5.3",
+				session: "test-sid",
+				cwd: "D:/x",
+				tokens: { input: 12408, output: 3052 },
+				startedAt: new Date(Date.now() - 12 * 60000).toISOString(),
+				contextWindow: 100000,
+				modules: [
+					{ name: "orosus-core", desc: "核心循环", state: "mounted", locked: true },
+					{ name: "orosus-mcp", desc: "MCP 桥接", state: "off" },
+				],
+				tasks: [{ text: "样例任务", state: "active" }],
+				permission: "ask-risky",
+				permissionNext: () => "/permission ask-always",
+	};
+}
+
 function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Partial<FullAppIO> = {}) {
 	const submitted: string[] = [];
 	const actions: string[] = [];
@@ -39,21 +58,7 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Par
 		queueItems: () => [...queue],
 		recallQueued: () => queue.pop(),
 		requestSteer: (texts) => actions.push(`steer:${texts.join("|")}`),
-		panelData: () => ({
-			model: "glm-5.3",
-			session: "test-sid",
-			cwd: "D:/x",
-			tokens: { input: 12408, output: 3052 },
-			startedAt: new Date(Date.now() - 12 * 60000).toISOString(),
-			contextWindow: 100000,
-			modules: [
-				{ name: "orosus-core", desc: "核心循环", state: "mounted", locked: true },
-				{ name: "orosus-mcp", desc: "MCP 桥接", state: "off" },
-			],
-			tasks: [{ text: "样例任务", state: "active" }],
-			permission: "ask-risky",
-			permissionNext: () => "/permission ask-always",
-		}),
+		panelData: () => defaultPanelData(),
 		slashCommands: () => [
 			{ name: "/help", desc: "帮助", long: "长说明" },
 			{ name: "/title", desc: "会话命名", long: "长" },
@@ -1027,5 +1032,120 @@ describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 300
 		expect(app.stateRef.toast?.duration).toBe(1000);
 		app.showToast("太长", 999999);
 		expect(app.stateRef.toast?.duration).toBe(30000);
+	});
+});
+
+describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order、←→ 切卡、单卡页码隐藏、渲染错误边界、卸载自然消失）", () => {
+	it("① 右上卡组翻页：运行状态 → 网络·MCP → top 模块卡（3/3）→ 回绕运行状态", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({
+				...defaultPanelData(),
+				cards: [{ area: "top", order: 60, title: "上卡", widgets: [{ id: "t", kind: "text", text: "上卡内容" }] }],
+			}),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 聚焦面板 1
+		await flush();
+		input.emit("data", "\x1b[C"); // → 网络·MCP
+		await flush();
+		input.emit("data", "\x1b[C"); // → top 模块卡
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("上卡");
+		expect(b).toContain("3/3");
+		expect(b).toContain("上卡内容");
+		input.emit("data", "\x1b[C"); // 回绕运行状态
+		await flush();
+		expect(app.stateRef.statePage).toBe(0);
+	});
+
+	it("② 右下卡组：单卡（无模块卡）页码隐藏；bottom 卡 ←→ 切换与回任务清单", async () => {
+		let cards: { area: "top" | "bottom"; order: number; title: string; widgets: never[] }[] = [];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), cards }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t\t"); // 聚焦面板 2（单卡态）
+		await flush();
+		input.emit("data", "\x1b[C"); // 单卡 → 页号不动（页码隐藏的键序面）
+		await flush();
+		expect(app.stateRef.taskPage).toBe(0);
+		// 帧缓冲是 ANSI 定位序列不按 \n 分行——截「任务清单」框头到框角验证（单卡页码隐藏 = 无数字）
+		const b0 = stripAnsi(output.buf);
+		const t0 = b0.indexOf("任务清单");
+		expect(t0).toBeGreaterThanOrEqual(0);
+		expect(/\d/.test(b0.slice(t0, b0.indexOf("╮", t0)))).toBe(false);
+		cards = [{ area: "bottom", order: 50, title: "下卡", widgets: [] }];
+		input.emit("data", "\x1b[C"); // → bottom 卡（焦点已在面板 2）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("下卡");
+		expect(stripAnsi(output.buf)).toContain("1/2");
+		input.emit("data", "\x1b[D"); // ← 回任务清单
+		await flush();
+		expect(app.stateRef.taskPage).toBe(0);
+	});
+
+	it("③ 渲染错误边界：活值函数抛错 → 当帧占位行不炸侧栏、其余卡照常", async () => {
+		const logs: string[] = [];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			logWarn: (code, msg) => logs.push(`${code}:${msg}`),
+			panelData: () => ({
+				...defaultPanelData(),
+				cards: [
+					{ area: "top", order: 60, title: "好卡", widgets: [{ id: "k", kind: "kv", label: "读数", value: "正常" }] },
+					{ area: "top", order: 70, title: "坏卡", widgets: [{ id: "b", kind: "text", text: () => { throw new Error("活值炸了"); } }] },
+				],
+			}),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 聚焦面板 1
+		await flush();
+		input.emit("data", "\x1b[C\x1b[C"); // → 好卡（第 3 页）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("好卡");
+		expect(stripAnsi(output.buf)).toContain("正常");
+		input.emit("data", "\x1b[C"); // → 坏卡
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("卡片渲染出错");
+		expect(logs.some((l) => l.startsWith("tui.card.render-error"))).toBe(true);
+	});
+
+	it("④ 卸载后卡消失：cards 变空后页号夹回、标题不再上屏（每秒现读——不需要通知）", async () => {
+		let cards: { area: "top"; order: number; title: string; widgets: never[] }[] = [{ area: "top", order: 60, title: "将卸卡", widgets: [] }];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), cards }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C\x1b[C"); // 到卡页
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("将卸卡");
+		cards = []; // 模块卸载——卡注册表自然消失
+		input.emit("data", "\x1b[C"); // 页号 2 越界 → 夹回 0（运行状态）
+		await flush();
+		expect(app.stateRef.statePage).toBe(0);
+		output.buf = "";
+		input.emit("data", "\x1b[B"); // 任意重渲（↓）
+		await flush();
+		expect(stripAnsi(output.buf)).not.toContain("将卸卡");
+	});
+
+	it("⑤ 卡组键序守恒：面板 1 的 ↑↓/Enter 语义不变（模块选择/挂卸不受 ←→ 扩页影响）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 聚焦面板 1
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 到 orosus-mcp
+		await flush();
+		expect(app.stateRef.moduleSel).toBe(1);
+		input.emit("data", "\x1b[C"); // → 翻页不重置选中
+		await flush();
+		expect(app.stateRef.moduleSel).toBe(1);
 	});
 });

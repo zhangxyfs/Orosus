@@ -17,7 +17,8 @@ import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
-import type { PopupKey, PopupLayout } from "@orosus/contracts/module";
+import { renderWidgets } from "./widgets.ts";
+import type { PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import * as theme from "../theme.ts";
 
@@ -34,6 +35,17 @@ export interface PanelData {
 	tasks: { text: string; state: "done" | "active" | "pending" }[];
 	permission: string; // 当前权限模式原文（ask-always/ask-risky/never）
 	permissionNext(): string; // Shift+Tab 循环的下一档命令（如 "/permission ask-always"）
+	/** 模块卡（m5 T6 口子二）：宿主每次现调 getter 装配（不走快照——1 秒 tick 驱动现问现答）；
+	 *  getter 抛错的卡宿主侧已剔除（设计空白 15）。可选——无卡宿主/占位路径不带。 */
+	cards?: ModuleCard[] | undefined;
+}
+
+/** 模块卡的渲染面形态（PanelData.cards 元素）：contribute.card 注册物的投影。 */
+export interface ModuleCard {
+	area: "top" | "bottom";
+	order: number;
+	title: string;
+	widgets: WidgetSpec[];
 }
 
 export interface SlashItem {
@@ -108,6 +120,9 @@ interface AppState {
 	moduleSel: number;
 	taskSel: number;
 	statePage: number;
+	/** 右下卡组页号（m5 T6）：0 = 任务清单（内建在前），≥1 = bottom 模块卡（按 order 排）。
+	 *  与 statePage（右上组同款语义：0 运行状态 / 1 网络·MCP / ≥2 top 模块卡）成对。 */
+	taskPage: number;
 	scrollBack: number;
 	busy: boolean;
 	/** /compact 执行期（2026-09-23 用户拍板 UI 形态）：busy spinner 切换为「上下文压缩中…」石青（info）色——
@@ -288,6 +303,7 @@ export class FullApp {
 			moduleSel: 0,
 			taskSel: 0,
 			statePage: 0,
+			taskPage: 0,
 			scrollBack: 0,
 			busy: false,
 			compacting: false,
@@ -924,16 +940,25 @@ export class FullApp {
 			if (key === "up" || key === "down") {
 				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "up" ? -1 : 1)));
 			} else if (key === "left" || key === "right") {
-				s.statePage = s.statePage === 0 ? 1 : 0;
+				// 右上卡组翻页（m5 T6）：[运行状态, 网络·MCP, ...top 模块卡] 循环；先夹回（卡消失后页号可能越界）
+				const pages = 2 + (this.io.panelData().cards ?? []).filter((c) => c.area === "top").length;
+				s.statePage = (Math.min(s.statePage, pages - 1) + (key === "left" ? -1 : 1) + pages) % pages;
 			} else if (key === "enter") {
 				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload
 				const m = mods[s.moduleSel];
 				if (m !== undefined) this.io.toggleModule?.(m.name, m.locked === true ? (m.lockedReason ?? "锁定") : undefined);
 			}
 		} else if (s.focusIdx === 2) {
-			const tasks = this.io.panelData().tasks;
+			const d = this.io.panelData();
+			const bottomPages = 1 + (d.cards ?? []).filter((c) => c.area === "bottom").length;
 			if (key === "up" || key === "down") {
-				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "up" ? -1 : 1)));
+				if (s.taskPage === 0) {
+					s.taskSel = Math.max(0, Math.min(d.tasks.length - 1, s.taskSel + (key === "up" ? -1 : 1)));
+				}
+				// 卡页无选择项——↑↓ 不落任务选择（防隐性挪动选中）
+			} else if (key === "left" || key === "right") {
+				// 右下卡组翻页（m5 T6）：[任务清单, ...bottom 模块卡] 循环
+				s.taskPage = (Math.min(s.taskPage, bottomPages - 1) + (key === "left" ? -1 : 1) + bottomPages) % bottomPages;
 			}
 		} else {
 			this.onEditKey(key);
@@ -1230,7 +1255,12 @@ export class FullApp {
 		const d = this.io.panelData();
 		const focused = s.focusIdx === 1;
 		const inner = w - 2;
-		if (s.statePage === 0) {
+		// 右上页序数组化（m5 T6，决策点 10 area:"top" 落位）：[运行状态, 网络·MCP, ...top 模块卡（按 order）]——
+		// 内建固定在前、模块卡排后（决策点 12）；页号渲染期夹回（卸载拆卡不需要通知——每秒现读自然消失）
+		const topCards = (d.cards ?? []).filter((c) => c.area === "top");
+		const pages = 2 + topCards.length;
+		const page = Math.min(s.statePage, pages - 1);
+		if (page === 0) {
 			const content: string[] = [];
 			content.push(this.kvRow("模型", theme.fg("info", d.model), inner));
 			content.push(this.kvRow("会话", d.session, inner));
@@ -1254,21 +1284,37 @@ export class FullApp {
 			);
 			content.push(this.sep(inner));
 			const slots = MODULE_SLOTS;
-			const pages = Math.max(1, Math.ceil(d.modules.length / slots));
-			const page = Math.min(pages - 1, Math.floor(s.moduleSel / slots));
-			const lo = page * slots;
+			const modPages = Math.max(1, Math.ceil(d.modules.length / slots));
+			const modPage = Math.min(modPages - 1, Math.floor(s.moduleSel / slots));
+			const lo = modPage * slots;
 			const headL = ` ${theme.fg("muted", "模块挂载")}`;
-			const headR = theme.dim(`${page + 1}/${pages} · MODULES`);
+			const headR = theme.dim(`${modPage + 1}/${modPages} · MODULES`);
 			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [this.sep(inner)]);
+			return this.panelBox("运行状态", `1/${pages}`, focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [this.sep(inner)]);
 		}
-		const content: string[] = [
-			` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
-		];
-		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["←→ 返回运行状态 · Esc 返回"], undefined, [this.sep(inner)]);
+		if (page === 1) {
+			const content: string[] = [
+				` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
+			];
+			return this.panelBox("网络 · MCP", `2/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [this.sep(inner)]);
+		}
+		return this.renderModuleCard(topCards[page - 2]!, w, h, focused, page, pages);
+	}
+
+	/** 模块卡页（m5 T6）：控件清单走只读渲染器；渲染抛错 = 当帧占位行 + 日志（全局约束 4——窗/卡保留）。 */
+	private renderModuleCard(card: ModuleCard, w: number, h: number, focused: boolean, page: number, pages: number): string[] {
+		const inner = w - 2;
+		let content: string[];
+		try {
+			content = renderWidgets(card.widgets, inner);
+		} catch (err) {
+			this.io.logWarn?.("tui.card.render-error", `模块卡渲染抛错，当帧占位：${card.title}`, { error: String(err instanceof Error ? err.message : err) });
+			content = [` ${theme.fg("warn", "（卡片渲染出错——下帧恢复即回，见诊断日志）")}`];
+		}
+		return this.panelBox(card.title, `${page + 1}/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [this.sep(inner)]);
 	}
 
 	// 任务清单每页行数（翻页步长 = 页大小——步长小于页大小时选中项在页内挪动页号不翻）；
@@ -1283,11 +1329,16 @@ export class FullApp {
 		const d = this.io.panelData();
 		const focused = s.focusIdx === 2;
 		const inner = w - 2;
+		// 右下卡组（m5 T6）：[任务清单（内建在前）, ...bottom 模块卡（按 order）]；单卡（无模块卡）时页码隐藏
+		const bottomCards = (d.cards ?? []).filter((c) => c.area === "bottom");
+		const pages = 1 + bottomCards.length;
+		const page = Math.min(s.taskPage, pages - 1);
+		if (page > 0) return this.renderModuleCard(bottomCards[page - 1]!, w, h, focused, page, pages);
 		const done = d.tasks.filter((t) => t.state === "done").length;
 		const slots = this.taskPageSlots();
-		const pages = Math.max(1, Math.ceil(d.tasks.length / slots));
-		const page = Math.min(pages - 1, Math.floor(s.taskSel / slots));
-		const lo = page * slots;
+		const itemPages = Math.max(1, Math.ceil(d.tasks.length / slots));
+		const itemPage = Math.min(itemPages - 1, Math.floor(s.taskSel / slots));
+		const lo = itemPage * slots;
 		const content: string[] = [];
 		for (let i = lo; i < Math.min(d.tasks.length, lo + slots); i++) {
 			const t = d.tasks[i]!;
@@ -1301,9 +1352,10 @@ export class FullApp {
 			content.push(focused && i === s.taskSel ? theme.bg("accentSoft", padToWidth(row, inner - 1)) : row);
 		}
 		const footL = theme.dim(" 由 Agent 实时同步");
-		const footR = theme.dim(`任务数：${done}/${d.tasks.length}`);
+		const pageTag = itemPages > 1 ? ` · 第 ${itemPage + 1}/${itemPages} 页` : ""; // 任务条目分页并进注脚（页码位让给卡组）
+		const footR = theme.dim(`任务数：${done}/${d.tasks.length}${pageTag}`);
 		const footer = [footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["PgUp/PgDn 翻页 · Esc 返回"], footer, [this.sep(inner)]);
+		return this.panelBox("任务清单", pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? ["←→ 切卡 · PgUp/PgDn 任务翻页 · Esc 返回"] : ["PgUp/PgDn 翻页 · Esc 返回"], footer, [this.sep(inner)]);
 	}
 
 	private styleWithSelection(vr: InputRow, sel: { lo: number; hi: number } | undefined): string {

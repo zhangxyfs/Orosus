@@ -1045,6 +1045,21 @@ const refreshPanel = async (): Promise<void> => {
 	};
 };
 
+/** 模块卡现读（m5 T6 口子二）：不走 panelCache 快照——panelData() 每次现调 getter（FullApp 1 秒 tick
+ *  驱动重渲，现问现答）；getter 抛错 = 该卡当帧剔除 + host 日志 warn（设计空白 15——不记黑名单，
+ *  下帧恢复即回）。卸载拆卡不需要通知：卡注册表随 reload 变化，此处每秒现读自然消失。 */
+const moduleCards = (): PanelData["cards"] => {
+	const out: NonNullable<PanelData["cards"]> = [];
+	for (const c of h.graph().cards) {
+		try {
+			out.push({ area: c.spec.area, order: c.spec.order, title: c.spec.title, widgets: c.spec.widgets });
+		} catch (err) {
+			h.log("host.card.read-error", `模块卡读取抛错，当帧剔除：${c.owner}/${c.spec.title}`, { owner: c.owner, title: c.spec.title, error: String(err instanceof Error ? err.message : err) });
+		}
+	}
+	return out.sort((a, b) => a.order - b.order);
+};
+
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
 const SLASH_ITEMS: SlashItem[] = [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
@@ -1132,8 +1147,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     requestCancel: () => {
       h.cancel(); // Esc 忙碌时取消当前 turn（SIGINT 同效——修复轮②）
     },
-    panelData: () =>
-      panelCache ?? {
+    panelData: () => ({
+      ...(panelCache ?? {
         model: "…",
         session: "新会话", // 首刷前占位——未命名口径与 refreshPanel 一致（sid 不可读）
         cwd: shortenPath(process.cwd(), 26),
@@ -1144,7 +1159,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         tasks: [],
         permission: configFace().approvalMode,
         permissionNext: () => "/permission ask-always",
-      },
+      }),
+      cards: moduleCards(), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
+    }),
     slashCommands: () => SLASH_ITEMS,
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
     sidebarInit: () => tuiSidebarRead(), // 即时读（F5 十四轮：会话切换重建 FullApp——不能用进程启动快照）
