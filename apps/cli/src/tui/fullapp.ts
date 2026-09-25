@@ -16,6 +16,8 @@ import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
+import { resolvePopupLayout } from "./popuplayout.ts";
+import type { PopupKey, PopupLayout } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import * as theme from "../theme.ts";
 
@@ -86,6 +88,8 @@ export interface FullAppIO {
 	diagEntries?(): DiagEntry[];
 	/** 二级详情文本（T10）：name → 详情全文（renderDetail 拼装——宿主喂原始日志行）。 */
 	diagDetail?(name: string): string;
+	/** 宿主日志口（m5 T2）：弹窗保留键注册即拒等 UI 层事件的留痕（接线 main.ts → harness 日志）。 */
+	logWarn?(code: string, msg: string, data?: Record<string, unknown>): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -403,11 +407,12 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; lines: string[]; scroll: number }
+		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined }
 		| undefined;
 
 	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
-	 *  顶退会把挂起的审批 resolve(undefined) = 静默否决；暂存后当前挂起结算即自动展开。 */
+	 *  顶退会把挂起的审批 resolve(undefined) = 静默否决；暂存后当前挂起结算即自动展开。
+	 *  m5 T2（设计空白 8）：viewText 从「直接覆槽」并入本队列——连弹两窗后者等前者关（用户可见行为修正）。 */
 	private uiQueue: Array<() => void> = [];
 
 	/** 当前挂起结算后提升队首（无挂起才提——视图/选择/询问任一在位都等待）。 */
@@ -416,11 +421,59 @@ export class FullApp {
 		this.uiQueue.shift()?.();
 	}
 
-	/** 只读文本浮层（F5 二轮⑪——/help 形态：不可选择、↑↓/PgUp/PgDn 翻页、Esc/Enter/q 关闭）。 */
-	viewText(title: string, text: string): void {
-		this.state.overlayOpen = false; // 与斜杠菜单互斥
-		this.pendingUi = { kind: "view", title, lines: text.split("\n"), scroll: 0 };
-		this.scheduler.requestImmediateRender();
+	/** 弹窗保留键（决策点 7）：Esc/Ctrl+C/V/A/S/Z 绝对禁绑；宿主全局键在按键分发里先于弹窗分支消费
+	 *  （fullapp onKey 全局拦截段），绑了永不触发——注册即拒并记日志。 */
+	private static readonly RESERVED_VIEW_KEYS = new Set([
+		"escape", "ctrl+c", "ctrl+v", "ctrl+a", "ctrl+s", "ctrl+z",
+		"ctrl+t", "ctrl+e", "ctrl+o", "ctrl+u", "alt+e", "alt+o", "alt+f", "alt+v",
+	]);
+
+	/** 剔除保留键并记日志（注册即拒——返回 undefined = 无合法键剩下）。 */
+	private filterViewKeys(keys: Record<string, PopupKey> | undefined, owner: string | undefined): Record<string, PopupKey> | undefined {
+		if (keys === undefined) return undefined;
+		const kept: Record<string, PopupKey> = {};
+		for (const [k, v] of Object.entries(keys)) {
+			if (FullApp.RESERVED_VIEW_KEYS.has(k)) {
+				this.io.logWarn?.("tui.viewkey.reserved", `弹窗自定义键被拒（保留键）：${k}`, owner !== undefined ? { owner, key: k } : { key: k });
+				continue;
+			}
+			kept[k] = v;
+		}
+		return Object.keys(kept).length > 0 ? kept : undefined;
+	}
+
+	/** 只读文本浮层（F5 二轮⑪ / m5 T2 口子一）：几何走 resolvePopupLayout（缺省 center80 居中弹窗——
+	 *  五旧窗随之统一新长相）、自定义键（保留键剔除）、排队化。too-small（连保底 8×3 都装不下）不弹窗、
+	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。 */
+	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void {
+		const open = (): void => {
+			if (this.stopped) return;
+			const geo = this.viewGeo(opts?.layout);
+			if (geo.fallbackReason === "too-small") {
+				this.showToast("终端窗口太小，弹窗未打开");
+				this.promoteUi(); // 队列里的下一个照常提（本窗没占槽）
+				return;
+			}
+			const keys = this.filterViewKeys(opts?.keys, opts?.owner);
+			this.state.overlayOpen = false; // 与斜杠菜单互斥
+			this.pendingUi = {
+				kind: "view", title, text, lines: text.split("\n"), scroll: 0,
+				...(opts?.layout !== undefined ? { layout: opts.layout } : {}),
+				...(keys !== undefined ? { keys } : {}),
+				...(opts?.owner !== undefined ? { owner: opts.owner } : {}),
+			};
+			this.scheduler.requestImmediateRender();
+		};
+		if (this.pendingUi !== undefined) {
+			this.uiQueue.push(open);
+			return;
+		}
+		open();
+	}
+
+	/** view 态的窗几何（渲染与按键翻页共用一源——两处漂移即滚动越界）。 */
+	private viewGeo(layout: PopupLayout | undefined): ReturnType<typeof resolvePopupLayout> {
+		return resolvePopupLayout(this.io.columns(), this.io.rows(), layout);
 	}
 
 	// ---------- 首次使用引导弹窗（M4-3 T1d，D10——三页定高锁焦点；施工基准 onboarding 原型） ----------
@@ -630,7 +683,10 @@ export class FullApp {
 				// 二级开着（diagReturn 标记）= 全部关闭（原型定案）：一级、二级、返回标记一起清
 				s.diagOpen = false;
 				s.diagReturn = false;
-				if (this.pendingUi?.kind === "view") this.pendingUi = undefined;
+				if (this.pendingUi?.kind === "view") {
+					this.pendingUi = undefined;
+					this.promoteUi(); // viewText 已排队化（T2）——关掉后队列里的下一个照常提
+				}
 			} else {
 				const entries = this.io.diagEntries?.() ?? [];
 				if (entries.length === 0) {
@@ -691,12 +747,7 @@ export class FullApp {
 		if (this.pendingUi !== undefined) {
 			const pu = this.pendingUi;
 			if (pu.kind === "view") {
-				const page = Math.max(3, this.io.rows() - 12);
-				if (key === "up") pu.scroll = Math.max(0, pu.scroll - 1);
-				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
-				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
-				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
-				else if (key === "escape" || key === "enter" || key === "q") {
+				const closeView = (): void => {
 					this.pendingUi = undefined;
 					// 诊断二级的 Esc 逐级返回（T10/S5）：viewText 自身只管关——「回一级」由标记驱动重开（diagSel 原样保留）
 					if (s.diagReturn) {
@@ -704,6 +755,32 @@ export class FullApp {
 						if (key === "escape") s.diagOpen = true;
 					}
 					this.promoteUi();
+				};
+				// 模块自定义键优先（m5 T2 决策点 7：只保绝对禁绑集——pageUp 等翻页键可被模块占用）
+				const custom = pu.keys?.[key];
+				if (custom !== undefined) {
+					try {
+						const r = custom.run();
+						if (r === "close") closeView();
+						else if (typeof r === "string") {
+							pu.text = r;
+							pu.lines = r.split("\n");
+							pu.scroll = 0; // 整窗替换滚回顶部（设计空白 14）
+						}
+					} catch (err) {
+						// 全局约束 4：模块函数抛错 = 黄字提示且窗保留
+						this.showToast(`弹窗按键处理出错：${err instanceof Error ? err.message : String(err)}`);
+					}
+					this.scheduler.requestImmediateRender();
+					return;
+				}
+				const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+				if (key === "up") pu.scroll = Math.max(0, pu.scroll - 1);
+				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
+				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
+				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
+				else if (key === "escape" || key === "enter" || key === "q") {
+					closeView();
 				}
 				this.scheduler.requestImmediateRender();
 				return;
@@ -1352,7 +1429,7 @@ export class FullApp {
 			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter);
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
-			overlay = this.buildViewOverlay(leftW, divRow, pu.title, pu.lines, pu.scroll);
+			overlay = this.buildViewOverlay(pu);
 		} else if (s.overlayOpen) {
 			overlay = this.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {
@@ -1365,28 +1442,32 @@ export class FullApp {
 		return bytes;
 	}
 
-	/** 只读文本浮层（F5 二轮⑪——/help：全宽青玉框 + 滚动窗口 + 余量指示；不可选择）。 */
-	private buildViewOverlay(leftW: number, divRow: number, title: string, lines: string[], scroll: number): OverlayFrame {
-		const ow = leftW;
+	/** 只读文本浮层（F5 二轮⑪ / m5 T2 新几何）：resolvePopupLayout 居中弹窗（缺省 center80；五旧窗随之
+	 *  统一新长相）。恒定行数防闪烁（斜杠菜单同款纪律）：顶框 + 内容页（高 − 3）+ 余量提示行 + 底框，
+	 *  余量并进提示行不再条件性增删行；自定义键的 label 附在提示行尾。 */
+	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey> }): OverlayFrame {
+		const geo = this.viewGeo(pu.layout);
+		const ow = geo.width;
 		const oInner = ow - 2;
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
-		const titleSeg = theme.fg("accent", ` ${title} `);
+		const titleSeg = theme.fg("accent", ` ${pu.title} `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
-		olines.push(boxRow(""));
-		const page = Math.max(3, divRow - 6); // 浮层不高过输入框顶
-		const maxScroll = Math.max(0, lines.length - page);
-		const sc = Math.max(0, Math.min(maxScroll, scroll));
-		const win = lines.slice(sc, sc + page);
-		if (sc > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${sc} 行`)));
+		const page = Math.max(3, geo.height - 3);
+		const maxScroll = Math.max(0, pu.lines.length - page);
+		const sc = Math.max(0, Math.min(maxScroll, pu.scroll));
+		const win = pu.lines.slice(sc, sc + page);
 		for (const l of win) olines.push(boxRow(" " + truncateToWidth(l, oInner - 2)));
-		const rest = lines.length - sc - win.length;
-		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 行`)));
-		olines.push(boxRow(theme.dim(" ↑↓ / PgUp/PgDn 翻页 · Esc 关闭")));
+		const upN = sc;
+		const downN = pu.lines.length - sc - win.length;
+		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
+		const keyHints = pu.keys === undefined ? "" : Object.values(pu.keys).map((k) => k.label).join(" · ");
+		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ / PgUp/PgDn 翻页${keyHints !== "" ? ` · ${keyHints}` : ""} · Esc 关闭`;
+		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+		return { lines: olines, row: geo.row, col: geo.col, width: ow };
 	}
 
 	/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */

@@ -178,6 +178,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   if (note) createLogger(sink, "kernel").warn("kernel.session.hardening", note);
 
   // 交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）。M3/T2 起经 ctx.ui 同时注入 waterfall 侧（审批询问）
+  // m5 T2 注：可选 UI 口（viewText/insertText/attachImage/dialog、notice 扩参）不在拒绝式四法里——缺省不存在即
+  // 静默丢弃（契约「可选口缺省 undefined」语义，模块判空降级）；核心四法（ask/askSecret/choose/confirm）仍 fail-closed。
   const commandUi: CommandUi = options.commandUi ?? {
     ask: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },
     askSecret: async () => { throw new Error("无交互环境（headless）——交互式命令不可用（D35 fail-closed）"); },

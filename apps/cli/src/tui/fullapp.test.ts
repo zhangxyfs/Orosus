@@ -894,3 +894,115 @@ describe("模块诊断二级详情（T10——viewText 复用、Esc 逐级返回
 		expect(app.stateRef.diagReturn).toBe(false);
 	});
 });
+
+describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + 排队化 + 保留键剔除；diagReturn 逐级返回由既有 T10 ④ 用例覆盖新几何）", () => {
+	it("① 排队：连开两窗后者等前者关（原「直接覆槽顶掉」行为修正——设计空白 8）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.viewText("第一窗", "甲内容");
+		await flush();
+		app.viewText("第二窗", "乙内容");
+		await flush();
+		const buf1 = stripAnsi(output.buf);
+		expect(buf1).toContain("第一窗");
+		expect(buf1).toContain("甲内容");
+		expect(buf1).not.toContain("第二窗"); // 后者排队未上屏
+		input.emit("data", "\x1b"); // Esc 关第一窗 → 队首提升
+		await flush();
+		const buf2 = stripAnsi(output.buf);
+		expect(buf2).toContain("第二窗");
+		expect(buf2).toContain("乙内容");
+		input.emit("data", "\x1b");
+		await flush();
+	});
+
+	it("② 自定义键三态：r 整窗替换、c 关窗、无返回不动；抛错黄字且窗保留（全局约束 4）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.viewText("键窗", "旧内容", {
+			keys: {
+				r: { label: "刷新", run: () => "新内容" },
+				c: { label: "关闭", run: () => "close" as const },
+				n: { label: "不动", run: () => undefined },
+				e: { label: "炸", run: () => { throw new Error("模块炸了"); } },
+			},
+		});
+		await flush();
+		input.emit("data", "n");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("旧内容");
+		input.emit("data", "r");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("新内容");
+		input.emit("data", "e");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("弹窗按键处理出错");
+		expect(stripAnsi(output.buf)).toContain("新内容"); // 窗保留
+		output.buf = "";
+		input.emit("data", "c");
+		await flush();
+		expect(stripAnsi(output.buf)).not.toContain("键窗"); // 窗已关（后续帧无窗体）
+	});
+
+	it("③ 保留键注册即拒并记日志：Esc/Ctrl+C·V·A·S·Z/Ctrl+T·E·O 九例；Ctrl+E 仍走宿主全局键", async () => {
+		const logs: string[] = [];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			logWarn: (code, msg) => logs.push(`${code}:${msg}`),
+			diagEntries: () => [],
+		});
+		app.start();
+		await flush();
+		app.viewText("键窗", "内容", {
+			owner: "mod-x",
+			keys: {
+				escape: { label: "esc", run: () => "不该出现" },
+				"ctrl+c": { label: "c", run: () => "不该出现" },
+				"ctrl+v": { label: "v", run: () => "不该出现" },
+				"ctrl+a": { label: "a", run: () => "不该出现" },
+				"ctrl+s": { label: "s", run: () => "不该出现" },
+				"ctrl+z": { label: "z", run: () => "不该出现" },
+				"ctrl+t": { label: "t", run: () => "不该出现" },
+				"ctrl+e": { label: "e", run: () => "不该出现" },
+				"ctrl+o": { label: "o", run: () => "不该出现" },
+			},
+		});
+		await flush();
+		expect(logs.length).toBe(9);
+		expect(logs.every((l) => l.startsWith("tui.viewkey.reserved"))).toBe(true);
+		expect(logs.some((l) => l.includes("ctrl+e"))).toBe(true);
+		input.emit("data", "\x05"); // Ctrl+E 归宿主全局键（诊断总开关——空态 toast 而非模块键）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("模块全部正常");
+		expect(stripAnsi(output.buf)).not.toContain("不该出现");
+	});
+
+	it("④ 布局参数传到几何：full 弹 99 宽（90+ 连横线）、缺省 center80 弹 79 宽", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.viewText("全屏窗", "x", { layout: "full" });
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("─".repeat(90));
+		input.emit("data", "\x1b");
+		await flush();
+		output.buf = "";
+		app.viewText("居中窗", "x");
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("居中窗");
+		expect(b).not.toContain("─".repeat(90)); // 79 宽弹窗撑不出 90 连横线
+	});
+
+	it("⑤ too-small：8×2 终端连保底都装不下——不弹窗、黄字「终端窗口太小」", async () => {
+		const { app, output } = rig(["# hi"], 8, 2);
+		app.start();
+		await flush();
+		app.viewText("小窗", "内容");
+		await flush();
+		// 8×2 退化布局渲染不出 toast 行——断言落在状态面（窗没开 + toast 已置）
+		expect(app.stateRef.toast?.text).toContain("终端窗口太小");
+		expect(stripAnsi(output.buf)).not.toContain("小窗");
+	});
+});

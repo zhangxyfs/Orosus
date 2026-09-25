@@ -7,7 +7,8 @@ import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { BUILTIN_MODULES } from "./builtins.ts";
-import { createReadlineUi, createSilenceableOutput } from "./menu.ts";
+import { createCliUi } from "./uiface.ts";
+import { createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
@@ -272,11 +273,14 @@ const settleCommandError = (err: unknown): void => {
   notify(err instanceof Error ? err.message : String(err));
 };
 
-const commandUi = createReadlineUi({
+// m5 T2：viewText 上契约（全屏走 FullApp 弹窗——新几何/自定义键/排队；行模式落 console 多行）。
+// 装配件独立在 uiface.ts（main.ts 是顶层脚本 import 即跑——装配层测试进不去）。
+const commandUi = createCliUi({
   question,
   secretQuestion,
   ...pickFace,
   notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
+  activeApp: () => activeApp,
 });
 
 const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
@@ -1213,6 +1217,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       const raw = readDiagRawLines(dir, now).filter((e) => moduleOf(e) === name || e.msg.includes(`的提供者 ${name}`));
       return renderDetail(entry, raw);
     },
+    // 宿主日志口（m5 T2）：UI 层事件留痕——弹窗保留键注册即拒等（h.log 走 host 通道）
+    logWarn: (code, msg, data) => h.log(code, msg, data),
     toggleTool: () => {
       dm.toolOpen = !dm.toolOpen;
     },

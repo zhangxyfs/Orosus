@@ -24,6 +24,15 @@ const unassignedLlm: LlmPort = {
   })(),
 };
 
+/** 属主标注包装（m5 T2 设计空白 7）：把模块名塞进 viewText 的 opts.owner——
+ *  「模块卸载关它的窗」的属主判定全靠它（宿主内建调用无此字段）。
+ *  commandUi 是全体模块共享的单例——属主只能在知道模块名的这一层追加（窗口对象无 getter、展开拷贝安全）。 */
+const ownerTagUi = (ui: CommandUi, owner: string): CommandUi => {
+  if (ui.viewText === undefined) return ui;
+  const inner = ui.viewText;
+  return { ...ui, viewText: (title, text, opts) => inner(title, text, { ...opts, owner }) };
+};
+
 /** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */
 const rejectingUi = (): CommandUi => ({
   ask: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
@@ -210,7 +219,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         return value;
       },
       log: mlog,
-      ui: input.commandUi ?? rejectingUi(),
+      ui: ownerTagUi(input.commandUi ?? rejectingUi(), def.name),
       llm: {
         stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req), // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
         // M4-3 T1b（SW-17）：listModels 同款惰性转发——可选方法，当前 impl 无此能力时模块侧读到 undefined（目录不可用）

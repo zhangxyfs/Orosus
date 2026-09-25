@@ -77,8 +77,10 @@ export interface CommandUi {
    *  主程序自己的提示全走缺省零变化。 */
   notice?(text: string, opts?: { durationMs?: number }): void;
   /** 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式
-   *  静默丢弃。窗排队（一次一窗，后来的等旧窗关）。 */
-  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey> }): void;
+   *  静默丢弃。窗排队（一次一窗，后来的等旧窗关）。
+   *  opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的
+   *  属主判定靠它；模块开发者无须也不应自填（@internal）。 */
+  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃。 */
   insertText?(text: string): void;
   /** 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
