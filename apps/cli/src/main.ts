@@ -262,7 +262,11 @@ const pickFace =
 /** 瞬时提示统一出口（2026-09-23 用户拍板 toast 化）：全屏 → 浮动 toast（黄字 3s 自消、3 行封顶）；
  *  行模式 → 单行 console（形态不变）。命令错误/拦截/退役指路/模型错误等瞬时面一律走此口，
  *  不再落流区（命令结果 md / 会话生命周期回显 / 工具行失败仍带内——见 ROADMAP toast 化条目）。 */
-const notify = (t: string): void => { if (activeApp !== undefined) activeApp.showToast(t); else console.log(t); };
+const notify = (t: string, opts?: { durationMs?: number }): void => {
+  // 行模式无时长概念（console 单行即走）；全屏透传 durationMs（m5 T3——缺省 3000 不变）
+  if (activeApp !== undefined) activeApp.showToast(t, opts?.durationMs);
+  else console.log(t);
+};
 
 /** 命令面错误统一落点（2026-09-24 M4-3 走查实锤收口——/settings 弹窗 Esc 取消无人接、进程 exit 7 前案）：
  *  Esc 带内取消静默（TUI 批 T3/D52③ 拍板）+ 其余瞬时错误 toast 化（2026-09-23 拍板）。

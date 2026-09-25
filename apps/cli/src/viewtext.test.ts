@@ -95,3 +95,19 @@ describe("viewText 装配层（m5 T2——uiface 委托 + 内核属主标注 + �
     await h.close();
   });
 });
+
+describe("notice 时长装配（m5 T3——menu 基座不丢第二参，行模式忽略时长）", () => {
+	it("notice(text, opts) 透传到宿主 notice 出口；旧式单参调用 opts = undefined", () => {
+		const calls: Array<[string, { durationMs?: number } | undefined]> = [];
+		const ui = createCliUi({
+			question: async () => "",
+			secretQuestion: async () => "",
+			notice: (t, opts) => calls.push([t, opts]),
+			activeApp: () => undefined,
+		});
+		ui.notice!("旧式");
+		ui.notice!("停八秒", { durationMs: 8000 });
+		expect(calls[0]).toEqual(["旧式", undefined]);
+		expect(calls[1]).toEqual(["停八秒", { durationMs: 8000 }]);
+	});
+});

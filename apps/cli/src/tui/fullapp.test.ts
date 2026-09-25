@@ -1006,3 +1006,26 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(stripAnsi(output.buf)).not.toContain("小窗");
 	});
 });
+
+describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 30000] 越界钳边界；主程序自家调用全走缺省）", () => {
+	it("时长参数落到 state.toast.duration 并上屏", async () => {
+		const { app, output } = rig();
+		app.start();
+		await flush();
+		app.showToast("停八秒", 8000);
+		expect(app.stateRef.toast?.duration).toBe(8000);
+		await flush(60);
+		expect(stripAnsi(output.buf)).toContain("停八秒");
+	});
+
+	it("缺省不落 duration 字段（3000 路径零变化）；越界钳到 [1000, 30000]", () => {
+		const { app } = rig();
+		app.start();
+		app.showToast("缺省");
+		expect(app.stateRef.toast?.duration).toBeUndefined();
+		app.showToast("太短", 100);
+		expect(app.stateRef.toast?.duration).toBe(1000);
+		app.showToast("太长", 999999);
+		expect(app.stateRef.toast?.duration).toBe(30000);
+	});
+});

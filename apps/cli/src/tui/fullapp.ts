@@ -121,9 +121,8 @@ interface AppState {
 	diagOpen: boolean; // 模块诊断一级列表（T9——独立于斜杠菜单 overlay：语义不同，另起一支）
 	diagSel: number;
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
-	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消——瞬时反馈的统一形式（闸门拒因/模型切换等），
-	 *  取代批④的尾行拒因位（rejectHint）。 */
-	toast: { text: string; at: number } | undefined;
+	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消（duration = 自定义时长毫秒，m5 T3）。 */
+	toast: { text: string; at: number; duration?: number } | undefined;
 }
 
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -493,17 +492,21 @@ export class FullApp {
 		});
 	}
 
-	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消。自消靠定时器补一帧——
-	 *  非 busy 期没有 spinner 心跳，不定时的話旧 toast 会留到下一次按键。 */
-	showToast(text: string): void {
-		this.state.toast = { text, at: Date.now() };
+	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消。自消靠定时器补一帧——
+	 *  非 busy 期没有 spinner 心跳，不定时的話旧 toast 会留到下一次按键。
+	 *  m5 T3：增可选时长毫秒——缺省 3000、允许 [1000, 30000]、越界钳到边界（设计空白 3）；
+	 *  主程序自己的十几处调用全走缺省零变化。 */
+	showToast(text: string, durationMs?: number): void {
+		const duration = Math.max(1000, Math.min(30000, durationMs ?? 3000));
+		this.state.toast = { text, at: Date.now(), ...(duration !== 3000 ? { duration } : {}) };
 		this.scheduler.requestImmediateRender();
+		// 龄检阈值随时长缩放（原 2_900/3_100 双阈值 = 缺省 3s 的同款手法——新 toast 顶掉旧定时器时旧帧不误消）
 		const timer = setTimeout(() => {
-			if (this.state.toast !== undefined && Date.now() - this.state.toast.at >= 2_900) {
+			if (this.state.toast !== undefined && Date.now() - this.state.toast.at >= duration - 100) {
 				this.state.toast = undefined;
 				this.scheduler.requestRender();
 			}
-		}, 3_100);
+		}, duration + 100);
 		timer.unref?.();
 	}
 
@@ -1371,8 +1374,8 @@ export class FullApp {
 
 		// 浮动 toast（2026-09-22 用户拍板终稿：全宽无框——宽度与输入框一致左右顶到头、无包边字符）：
 		// 输入框顶边上方叠黄色文字行（wrapText 折行 ≤3 行、3s 自消），只盖左栏（侧栏追加合并不受影响），
-		// 遮蔽的流区内容随自消还原
-		if (s.toast !== undefined && Date.now() - s.toast.at < 3000) {
+		// 遮蔽的流区内容随自消还原（m5 T3：显示窗长随时长参数——不传 = 缺省 3000）
+		if (s.toast !== undefined && Date.now() - s.toast.at < (s.toast.duration ?? 3000)) {
 			const tLines = wrapText(s.toast.text, Math.max(8, leftW - 2)).slice(0, 3);
 			const top = Math.max(0, divRow - tLines.length);
 			for (let i = 0; i < tLines.length; i++) {
