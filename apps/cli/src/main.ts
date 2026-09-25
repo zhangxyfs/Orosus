@@ -285,6 +285,14 @@ const commandUi = createCliUi({
   ...pickFace,
   notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
   activeApp: () => activeApp,
+  // m5 T4：贴图 = 注册表登记 + chip token 进输入框光标位（Alt+V 同款链路）；路径校验不过走 toast
+  attachImage: (app, path) => {
+    if (!existsSync(path)) {
+      app.showToast(`贴图失败：文件不存在（${path}）`);
+      return;
+    }
+    app.insertAtCursor(attachPendingImage(path));
+  },
 });
 
 const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {

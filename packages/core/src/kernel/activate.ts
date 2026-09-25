@@ -30,7 +30,11 @@ const unassignedLlm: LlmPort = {
 const ownerTagUi = (ui: CommandUi, owner: string): CommandUi => {
   if (ui.viewText === undefined) return ui;
   const inner = ui.viewText;
-  return { ...ui, viewText: (title, text, opts) => inner(title, text, { ...opts, owner }) };
+  // 描述符保真拷贝（不用展开）：CLI 的注入两法（insertText/attachImage）是活 getter——
+  // 行模式读 undefined、全屏期才有函数；展开会把 getter 拍平成包装时刻的快照（promptSection 活段同款坑）
+  const w = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ui)) as CommandUi;
+  w.viewText = (title, text, opts) => inner(title, text, { ...opts, owner });
+  return w;
 };
 
 /** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */

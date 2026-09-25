@@ -81,11 +81,12 @@ export interface CommandUi {
    *  opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的
    *  属主判定靠它；模块开发者无须也不应自填（@internal）。 */
   viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
-  /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃。 */
-  insertText?(text: string): void;
+  /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
+   *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。 */
+  readonly insertText?: ((text: string) => void) | undefined;
   /** 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
-   *  行模式无文内 chip 机制——静默丢弃。 */
-  attachImage?(path: string): void;
+   *  行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。 */
+  readonly attachImage?: ((path: string) => void) | undefined;
   /** 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
    *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。 */
   dialog?(spec: DialogSpec): DialogHandle | undefined;

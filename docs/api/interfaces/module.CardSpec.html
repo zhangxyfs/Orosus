@@ -16,7 +16,7 @@
 </div></section>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">CardSpec</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#area">area</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">&quot;top&quot;</span> <span class="tsd-signature-symbol">|</span> <span class="tsd-signature-type">&quot;bottom&quot;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#order">order</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">number</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#title">title</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#widgets">widgets</a><span class="tsd-signature-symbol">:</span> <a href="../types/module.WidgetSpec.html" class="tsd-signature-type tsd-kind-type-alias">WidgetSpec</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/module/index.ts#L140">module/index.ts:140</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/961d0935e04538d0064e656e74650ac1cffcde0c/packages/contracts/src/module/index.ts#L143">module/index.ts:143</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -38,24 +38,24 @@
 <div class="tsd-comment tsd-typography"><p>投哪个区：top = 右上（运行状态、网络·MCP 后面）；bottom = 右下（任务清单后面）。模块自选，宿主不分配。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/module/index.ts#L142">module/index.ts:142</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/961d0935e04538d0064e656e74650ac1cffcde0c/packages/contracts/src/module/index.ts#L145">module/index.ts:145</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="order"><span>order</span><a href="#order" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">order</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">number</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/module/index.ts#L143">module/index.ts:143</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/961d0935e04538d0064e656e74650ac1cffcde0c/packages/contracts/src/module/index.ts#L146">module/index.ts:146</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="title"><span>title</span><a href="#title" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">title</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/module/index.ts#L144">module/index.ts:144</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/961d0935e04538d0064e656e74650ac1cffcde0c/packages/contracts/src/module/index.ts#L147">module/index.ts:147</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="widgets"><code class="tsd-tag">Readonly</code><span>widgets</span><a href="#widgets" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">widgets</span><span class="tsd-signature-symbol">:</span> <a href="../types/module.WidgetSpec.html" class="tsd-signature-type tsd-kind-type-alias">WidgetSpec</a><span class="tsd-signature-symbol">[]</span></div>
 <div class="tsd-comment tsd-typography"><p>getter 现问现答，宿主每秒重读；抛错 = 当帧剔除该卡 + 模块日志 warn。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/module/index.ts#L146">module/index.ts:146</a></li></ul></aside></section></section></details></div>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/961d0935e04538d0064e656e74650ac1cffcde0c/packages/contracts/src/module/index.ts#L149">module/index.ts:149</a></li></ul></aside></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

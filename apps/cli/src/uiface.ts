@@ -21,6 +21,8 @@ export interface CliUiDeps {
   notice?(text: string, opts?: { durationMs?: number }): void;
   /** 当前全屏应用；undefined = 行模式。调用期现读——activeApp 的生命周期晚于本对象。 */
   activeApp(): FullAppFace | undefined;
+  /** 全屏期贴图链路（宿主图片注册表 + chip token 生成）；路径校验归宿主（不存在 → toast）。 */
+  attachImage?(app: FullAppFace, path: string): void;
 }
 
 export function createCliUi(deps: CliUiDeps): CommandUi {
@@ -40,6 +42,17 @@ export function createCliUi(deps: CliUiDeps): CommandUi {
         return;
       }
       app.viewText(title, text, opts);
+    },
+    // 注入两法（m5 T4）：活 getter——行模式/无全屏期读出来是 undefined（决策点 9 静默丢弃 = 缺省不存在，
+    // 模块判空降级）；getter 语义要求消费侧不得展开拍平（kernel ownerTagUi 已用描述符保真拷贝）。
+    get insertText(): CommandUi["insertText"] {
+      const app = deps.activeApp();
+      return app === undefined ? undefined : (text: string) => app.insertAtCursor(text);
+    },
+    get attachImage(): CommandUi["attachImage"] {
+      const app = deps.activeApp();
+      if (app === undefined || deps.attachImage === undefined) return undefined;
+      return (path: string) => deps.attachImage!(app, path);
     },
   };
 }

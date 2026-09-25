@@ -111,3 +111,43 @@ describe("notice 时长装配（m5 T3——menu 基座不丢第二参，行模�
 		expect(calls[1]).toEqual(["停八秒", { durationMs: 8000 }]);
 	});
 });
+
+describe("输入框注入两法装配（m5 T4——活 getter：全屏期委托、行模式读 undefined 静默丢弃）", () => {
+	it("① insertText 全屏委托到 insertAtCursor；行模式读出来是 undefined", () => {
+		const { app, seen } = fakeApp();
+		const full = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => app });
+		full.insertText!("你好");
+		expect(seen).toContainEqual({ insert: "你好" });
+		const line = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => undefined });
+		expect(line.insertText).toBeUndefined();
+		expect(line.attachImage).toBeUndefined();
+	});
+
+	it("② attachImage 委托宿主链路（app + path 透传）；未提供链路时读 undefined", () => {
+		const { app } = fakeApp();
+		const got: Array<[string, string]> = [];
+		const full = createCliUi({
+			question: async () => "",
+			secretQuestion: async () => "",
+			activeApp: () => app,
+			attachImage: (a, path) => got.push([a === app ? "app" : "other", path]),
+		});
+		full.attachImage!("D:/x.png");
+		expect(got).toEqual([["app", "D:/x.png"]]);
+		const noLink = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => app });
+		expect(noLink.attachImage).toBeUndefined();
+	});
+
+	it("③ 内核 ownerTagUi 不拍平 getter：模块侧 ctx.ui 的注入两法随 activeApp 切换活起来（行模式装载、全屏期可用）", async () => {
+		const { app } = fakeApp();
+		let mode: "line" | "full" = "line";
+		const cli = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => (mode === "full" ? app : undefined) });
+		const cap: { ui?: CommandUi } = {};
+		const h = await isolated({ commandUi: cli, modules: [probeModule(cap)] });
+		expect(cap.ui!.insertText).toBeUndefined(); // 装载期 = 行模式
+		mode = "full"; // 进全屏（同一 commandUi 对象、同一内核包装）
+		expect(typeof cap.ui!.insertText).toBe("function");
+		expect(cap.ui!.viewText).toBeDefined();
+		await h.close();
+	});
+});
