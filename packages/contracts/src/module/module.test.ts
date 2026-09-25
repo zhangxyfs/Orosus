@@ -207,8 +207,8 @@ describe("m5 UI 扩展契约面（T0——四口子一次开全）", () => {
     expect(await ctx.settings!.applyModulePreset("minimal")).toEqual({ failed: [], preset: "minimal" });
     expect(settingsCalls).toContain("model:zhipuai/glm-4.7");
     expect((await ctx.host!.current()).model).toBe("zhipuai/glm-4.7");
-    expect(Object.keys(snapshot).sort()).toEqual(
-      ["contextWindow", "effort", "model", "modelOverridden", "permission", "preset", "sessionLabel", "sidebar", "theme", "usage"].sort(),
+    expect(Object.keys(snapshot).toSorted()).toEqual(
+      ["contextWindow", "effort", "model", "modelOverridden", "permission", "preset", "sessionLabel", "sidebar", "theme", "usage"],
     );
   });
 });
