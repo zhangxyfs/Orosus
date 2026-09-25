@@ -244,8 +244,13 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
     expect(followUp).toHaveLength(1);
     expect(followUp![0]!(undefined)).toEqual([]); // 无作业完成 = 空数组（collect 语义）
     await run(tools[0]!, { command: OK_BG, run_in_background: true });
-    await waitFor(() => readdirSync(join(dir, "bg")).some((f) => readFileSync(join(dir, "bg", f), "utf8").includes("bg-ok")));
-    const notes = followUp![0]!(undefined) as { text: string; sourceModule: string }[];
+    // 完成信号要等 collect 出货本身：job.done 挂在 close 事件上，输出文件有内容 ≠ close 已置（⑮ 同款竞速教训）；
+    // collect 是 drain 语义（一次一报），轮询期间取到的条目就地留存
+    let notes: { text: string; sourceModule: string }[] = [];
+    await waitFor(() => {
+      notes = followUp![0]!(undefined) as typeof notes;
+      return notes.length > 0;
+    });
     expect(notes).toHaveLength(1);
     expect(notes[0]!.sourceModule).toBe("tool-shell");
     expect(notes[0]!.text).toContain("已结束");
