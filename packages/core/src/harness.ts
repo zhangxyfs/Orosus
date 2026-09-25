@@ -85,6 +85,9 @@ export interface Harness {
   /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
    *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
   setLabel(label: string): Promise<void>;
+  /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
+   *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
+  log(code: string, msg: string, data?: Record<string, unknown>): void;
   graph(): ModuleGraph;
   reload(): Promise<ReloadReport>;  // quiesce 后执行（§5.5/T15）
   close(): Promise<void>;
@@ -847,6 +850,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await ensureHeader(); // 命名先于首个 turn 也不出断头文件（/title 新政同 fork 走查批）
       await store.append(LOG_TYPES.sessionLabel, { label: label.slice(0, 200) });
       await store.flush();
+    },
+
+    // 宿主日志口（T4/S10）：createLogger 每次新建实例无妨——写盘队列挂在 sink 闭包上，多 logger 天然共享
+    log(code: string, msg: string, data?: Record<string, unknown>) {
+      createLogger(sink, "host").info(code, msg, data);
     },
 
     async reload() {

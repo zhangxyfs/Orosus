@@ -39,6 +39,7 @@ import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
+import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -957,6 +958,20 @@ const PERM_META: Record<string, { label: string; desc: string; long: string }> =
 };
 let panelCache: PanelData | undefined;
 
+/** 面板锁定规则（2026-09-23 用户拍板 + T4 联动闭包复用）：① orosus-core = 核心本体（伪模块）；
+ *  ② approval = 安全护栏（出厂 required=true，想松绑走 /permission never 正道）；
+ *  ③ 当前活跃 provider 模块 = 拔了当场断模型（换 provider 后旧的自动解锁）。 */
+const lockReasonFor = (name: string): string | undefined => {
+	const activeProviderModule = (() => {
+		const v = realReadModel(process.cwd())() ?? "";
+		return v === "" ? "" : v.split("/")[0]!;
+	})();
+	return name === "orosus-core" ? "核心本体，不可插拔"
+		: name === "approval" ? "安全护栏模块（出厂 required），放松审批走 /permission never"
+		: name === activeProviderModule ? "当前使用的 provider，拔了会断模型（先 /model 换到别的）"
+		: undefined;
+};
+
 /** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
 const refreshPanel = async (): Promise<void> => {
 	const events = await h.history();
@@ -989,18 +1004,7 @@ const refreshPanel = async (): Promise<void> => {
 			.graph()
 			.audit()
 			.map((a) => {
-				// 锁定规则（2026-09-23 用户拍板：不可热插拔的标「· 锁定」灰字，其余回车实时插拔）：
-				// ① orosus-core = 核心本体（伪模块）；② approval = 安全护栏（出厂 required=true，想松绑走 /permission never 正道）；
-				// ③ 当前活跃 provider 模块 = 拔了当场断模型（换 provider 后旧的自动解锁）
-				const activeProviderModule = (() => {
-					const v = realReadModel(process.cwd())() ?? "";
-					return v === "" ? "" : v.split("/")[0]!;
-				})();
-				const lockedReason =
-					a.name === "orosus-core" ? "核心本体，不可插拔"
-					: a.name === "approval" ? "安全护栏模块（出厂 required），放松审批走 /permission never"
-					: a.name === activeProviderModule ? "当前使用的 provider，拔了会断模型（先 /model 换到别的）"
-					: undefined;
+				const lockedReason = lockReasonFor(a.name);
 				return {
 					name: a.name,
 					desc: a.name === "orosus-core" ? "核心循环" : "",
@@ -1128,6 +1132,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n")); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
     },
     // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
+    // T4 联动启停：硬依赖传递闭包——卸载带走依赖者、挂载自动补上提供者；撞锁定拒绝整次（S1）
     toggleModule: (name, lockedReason) => {
       if (lockedReason !== undefined) {
         app.showToast(`${name} · 锁定——${lockedReason}`);
@@ -1139,7 +1144,38 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       }
       const mounted = panelCache?.modules.find((m) => m.name === name)?.state === "mounted";
       const target = !mounted;
-      setModuleEnabledInConfig(name, target);
+      const audit = h.graph().audit();
+      const depRows = audit.map((a) => ({ name: a.name, provides: a.provides, dependsOn: a.dependsOn, state: a.state }));
+      const lockedNames = audit.filter((a) => lockReasonFor(a.name) !== undefined).map((a) => a.name);
+      const closure = target
+        ? computeMountClosure([name], depRows, lockedNames)
+        : computeUnmountClosure([name], depRows, lockedNames);
+      if (!closure.ok) {
+        app.showToast(closure.blocked);
+        return;
+      }
+      const writeList = closure.write;
+      const cascaded = writeList.filter((n) => n !== name);
+      // 写盘段独立 try（与图级 reload 失败两语义分开）：中途失败时已落部分——提示对齐路径，安全方向 = 漏写侧下次 reload 走 topo 降级
+      let written = 0;
+      let writeFailed = false;
+      for (const n of writeList) {
+        try {
+          setModuleEnabledInConfig(n, target);
+          written++;
+        } catch {
+          writeFailed = true;
+          break;
+        }
+      }
+      if (writeFailed) {
+        app.showToast(`配置写盘中途失败（已写 ${written}/${writeList.length} 个模块，可 /reload 或重启对齐）`);
+        return;
+      }
+      if (cascaded.length > 0) {
+        // S10 拍板：toast 只报目标模块（上方 toggleResultText），连带名单写诊断日志——host.module.cascade
+        h.log("host.module.cascade", `联动${target ? "挂载" : "卸载"} ${name}：连带${target ? "启用" : "停用"} ${cascaded.join("、")}`, { action: target ? "mount" : "unmount", target: name, cascaded });
+      }
       void (async () => {
         try {
           const r = await h.reload();
