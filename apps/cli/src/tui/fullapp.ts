@@ -84,6 +84,8 @@ export interface FullAppIO {
 	toggleModule?(name: string, lockedReason: string | undefined): void;
 	/** 模块诊断弹窗数据源（T9——定案「打开时刷新」：每次开 Ctrl + E 现读，不缓存）。 */
 	diagEntries?(): DiagEntry[];
+	/** 二级详情文本（T10）：name → 详情全文（renderDetail 拼装——宿主喂原始日志行）。 */
+	diagDetail?(name: string): string;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -114,6 +116,7 @@ interface AppState {
 	overlayCmd: string; // "" = 一级
 	diagOpen: boolean; // 模块诊断一级列表（T9——独立于斜杠菜单 overlay：语义不同，另起一支）
 	diagSel: number;
+	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消——瞬时反馈的统一形式（闸门拒因/模型切换等），
 	 *  取代批④的尾行拒因位（rejectHint）。 */
 	toast: { text: string; at: number } | undefined;
@@ -294,6 +297,7 @@ export class FullApp {
 			overlayCmd: "",
 			diagOpen: false,
 			diagSel: 0,
+			diagReturn: false,
 			toast: undefined,
 		};
 	}
@@ -624,8 +628,11 @@ export class FullApp {
 		}
 		if (key === "ctrl+e") {
 			// 模块诊断弹窗总开关（T9/S6：全局拦截含输入框编辑态——与 Ctrl+T 同款；keymatch 0x05 无既有消费者）
-			if (s.diagOpen) {
-				s.diagOpen = false; // 再按 = 关（二级开着 = 全关，T10 的 viewText 返回标记侧消费）
+			if (s.diagOpen || s.diagReturn) {
+				// 二级开着（diagReturn 标记）= 全部关闭（原型定案）：一级、二级、返回标记一起清
+				s.diagOpen = false;
+				s.diagReturn = false;
+				if (this.pendingUi?.kind === "view") this.pendingUi = undefined;
 			} else {
 				const entries = this.io.diagEntries?.() ?? [];
 				if (entries.length === 0) {
@@ -691,7 +698,15 @@ export class FullApp {
 				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
 				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
 				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
-				else if (key === "escape" || key === "enter" || key === "q") { this.pendingUi = undefined; this.promoteUi(); }
+				else if (key === "escape" || key === "enter" || key === "q") {
+					this.pendingUi = undefined;
+					// 诊断二级的 Esc 逐级返回（T10/S5）：viewText 自身只管关——「回一级」由标记驱动重开（diagSel 原样保留）
+					if (s.diagReturn) {
+						s.diagReturn = false;
+						if (key === "escape") s.diagOpen = true;
+					}
+					this.promoteUi();
+				}
 				this.scheduler.requestImmediateRender();
 				return;
 			}
@@ -754,7 +769,15 @@ export class FullApp {
 			else if (key === "down") s.diagSel = Math.min(Math.max(0, entries.length - 1), s.diagSel + 1);
 			else if (key === "escape") s.diagOpen = false;
 			else if (key === "enter") {
-				// 二级详情（T10 接线）：本期占位——选中行即目标
+				// 二级详情（T10）：复用 viewText（翻页 + Esc 关闭——现成机制零新建）；Esc 逐级返回靠 diagReturn 标记
+				const e = entries[s.diagSel];
+				const text = e === undefined ? undefined : this.io.diagDetail?.(e.name);
+				if (e !== undefined && text !== undefined) {
+					s.diagReturn = true;
+					s.diagOpen = false;
+					this.viewText(`模块诊断 · ${e.name}`, text);
+					return;
+				}
 			}
 			this.scheduler.requestImmediateRender();
 			return;

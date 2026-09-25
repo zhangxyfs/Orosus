@@ -857,3 +857,40 @@ describe("模块诊断一级列表（T9——Ctrl + E 开关、恒 8 行防闪�
 		expect(stripAnsi(empty.output.buf)).toContain("模块全部正常——没有诊断记录");
 	});
 });
+
+describe("模块诊断二级详情（T10——viewText 复用、Esc 逐级返回、Ctrl + E 全关）", () => {
+	const entries = (n: number) => Array.from({ length: n }, (_, i) => ({
+		name: `mod-${i}`, tag: "激活失败" as const, reason: `失败原因文本 ${i}`, count: 1, last: `2026-09-25T10:0${i}:00.000Z`,
+	}));
+
+	it("④ 一级 Enter 进二级（viewText 开）、二级 Esc 回一级（标记驱动、选中行保留）、二级 Ctrl + E 全关", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			diagEntries: () => entries(3),
+			diagDetail: (n) => `【失败原因】\n${n} 的详情文本`,
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E 开一级
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(true);
+		input.emit("data", "\x1b[B"); // ↓ 到 mod-1
+		await flush();
+		expect(app.stateRef.diagSel).toBe(1);
+		input.emit("data", "\r"); // Enter 进二级
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false);
+		expect(app.stateRef.diagReturn).toBe(true);
+		expect(stripAnsi(output.buf)).toContain("mod-1 的详情文本"); // viewText 渲染详情
+		input.emit("data", "\x1b"); // Esc 逐级返回一级
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(true);
+		expect(app.stateRef.diagReturn).toBe(false);
+		expect(app.stateRef.diagSel).toBe(1); // 选中行保留（S5）
+		input.emit("data", "\r"); // 再进二级
+		await flush();
+		input.emit("data", "\x05"); // 二级开着 Ctrl+E = 全关
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false);
+		expect(app.stateRef.diagReturn).toBe(false);
+	});
+});

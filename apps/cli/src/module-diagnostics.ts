@@ -76,3 +76,81 @@ export function readDiagnostics(dir: string, now: Date): DiagEntry[] {
   }
   return [...byKey.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
 }
+
+/** 原始失败事件行（不聚合）——二级详情的时间线与连带反查数据源（T10）。 */
+export interface DiagLine {
+  ts: string;
+  code: string;
+  msg: string;
+  data?: Record<string, unknown>;
+}
+
+const moduleOf = (e: DiagLine): string | undefined => {
+  const m = e.data?.["module"];
+  return typeof m === "string" && m !== "" ? m : undefined;
+};
+
+/** 读窗口内白名单失败事件的原始行（同 readDiagnostics 的过滤口径，不聚合、不排序）。 */
+export function readDiagRawLines(dir: string, now: Date): DiagLine[] {
+  const days = [now, new Date(now.getTime() - 86_400_000)].map((d) => d.toISOString().slice(0, 10));
+  const out: DiagLine[] = [];
+  for (const day of days) {
+    const file = join(dir, `diagnostic-${day}.jsonl`);
+    if (!existsSync(file)) continue;
+    for (const raw of readFileSync(file, "utf8").split("\n")) {
+      if (raw.trim() === "") continue;
+      let rec: { ts?: unknown; code?: unknown; msg?: unknown; data?: unknown };
+      try {
+        rec = JSON.parse(raw) as typeof rec;
+      } catch {
+        continue;
+      }
+      if (typeof rec.code !== "string" || !COLLECTED_CODES.has(rec.code)) continue;
+      if (typeof rec.msg !== "string" || typeof rec.ts !== "string") continue;
+      if (rec.code === "kernel.discover.skip" && !isLoadFailureSkip(rec.msg)) continue;
+      out.push({ ts: rec.ts, code: rec.code, msg: rec.msg, ...(rec.data !== undefined ? { data: rec.data as Record<string, unknown> } : {}) });
+    }
+  }
+  return out;
+}
+
+/** 二级详情文本拼装（T10/S9）：失败原因全文 / 连带影响 / 事件时间线 / 修复指引（三类模板）。
+ *  rawEvents = 与该模块相关的事件行（本模块的 + 点名该模块的——主犯拖累反查靠后者）。 */
+export function renderDetail(entry: DiagEntry, rawEvents: readonly DiagLine[]): string {
+  const sections: string[] = [];
+  sections.push(`【失败原因】\n${entry.reason}\n（共 ${entry.count} 次 · 最后 ${entry.last.slice(11, 19)}）`);
+
+  // 连带影响：从犯（原因点名提供者）= 被谁拖累；无提供者形态 = 说明；主犯 = 反查点名它的事件
+  const prov = /的提供者 ([^\s（、]+) 不可用|的提供者 ([^\s（、]+) 已降级/.exec(entry.reason);
+  const cascadeLines: string[] = [];
+  if (prov !== null) {
+    const providerName = prov[1] ?? prov[2] ?? "";
+    cascadeLines.push(`因硬依赖能力的提供者 ${providerName} 不可用/已降级，本模块被级联降级（本模块代码无问题）。`);
+    cascadeLines.push(`恢复 ${providerName} 后本模块自动恢复（下次 reload 生效）；单独重试本模块无用——依赖不满足是护栏在正确工作。`);
+  } else if (entry.reason.includes("无可用提供者")) {
+    cascadeLines.push("依赖的能力没有安装提供者（未安装/未声明）。");
+    cascadeLines.push("安装或启用提供该能力的模块后，本模块自动恢复（下次 reload 生效）。");
+  }
+  const victims = [...new Set(rawEvents
+    .filter((e) => e.msg.includes(`的提供者 ${entry.name}`) && moduleOf(e) !== entry.name)
+    .map((e) => moduleOf(e))
+    .filter((n): n is string => n !== undefined))];
+  if (victims.length > 0) {
+    cascadeLines.push(`本模块的失败已连带拖累：${victims.join("、")}（依赖它的模块在本模块恢复前不可用）。`);
+  }
+  if (cascadeLines.length > 0) sections.push(`【连带影响】\n${cascadeLines.join("\n")}`);
+
+  const mine = rawEvents.filter((e) => moduleOf(e) === entry.name).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  if (mine.length > 0) {
+    sections.push(`【事件时间线】\n${mine.map((e) => `${e.ts.slice(11, 19)}  ${e.msg.split("\n")[0] ?? e.msg}`).join("\n")}`);
+  }
+
+  const logHint = "· 诊断日志：~/.orosus/logs/diagnostic-<日期>.jsonl";
+  const guide = entry.tag === "级联"
+    ? "· 根因在它依赖的提供者模块——恢复提供者后本模块自动恢复\n· 单独重试本模块无用——依赖不满足是护栏在正确工作\n· 临时规避：重启进程"
+    : entry.tag === "加载失败"
+      ? "· 发现期加载失败：模块未进图、不影响主程序运行\n· 修复模块源码后 /reload（或重开本窗口）即可看到更新\n· 本地模块入口规范：index.{ts,js} 或 package.json 的 exports[\"./module\"]"
+      : "· 检查模块配置与依赖后重试挂载（模块面板 Enter 或 /reload）\n· 临时规避：重启进程（新进程按盘上配置干净激活）";
+  sections.push(`【修复指引】\n${guide}\n${logHint}`);
+  return sections.join("\n\n");
+}

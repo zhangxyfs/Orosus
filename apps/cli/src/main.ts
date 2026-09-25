@@ -41,7 +41,7 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
-import { readDiagnostics } from "./module-diagnostics.ts";
+import { readDiagnostics, readDiagRawLines, renderDetail } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -1070,9 +1070,9 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
-	// 快捷键导引两行（F5 十二轮③：加 Ctrl + T 侧栏；单行放不下——拆两行，宽 43/38 + 补空 = 内宽 58）
-	theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考") + "               " + theme.fg("accent", "│"),
-	theme.fg("accent", "│") + theme.dim(" / 命令 · Ctrl + T 侧栏 · Alt + V 贴图") + "                    " + theme.fg("accent", "│"),
+  // 快捷键导引两行（F5 十二轮③：加 Ctrl + T 侧栏；单行放不下——拆两行；T10 加 Ctrl + E 诊断段重算补空：行 2 宽 38+16=54 → 补空 4，内宽 58 不变）
+  theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考") + "               " + theme.fg("accent", "│"),
+  theme.fg("accent", "│") + theme.dim(" / 命令 · Ctrl + T 侧栏 · Alt + V 贴图 · Ctrl + E 诊断") + "    " + theme.fg("accent", "│"),
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
 	"",
 ];
@@ -1204,6 +1204,18 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 模块诊断弹窗数据源（T9）：打开时现读（定案）——当天 + 前一天诊断日志过滤聚合（T8 读取器）
     diagEntries: () => readDiagnostics(join(orosusHome(), "logs"), new Date()),
+    // 二级详情文本（T10）：T8 条目 + 原始日志行（本模块事件 + 点名本模块的事件——主犯拖累反查）拼装
+    diagDetail: (name: string): string => {
+      const now = new Date();
+      const dir = join(orosusHome(), "logs");
+      const entry = readDiagnostics(dir, now).find((e) => e.name === name);
+      if (entry === undefined) return "（该模块没有诊断记录）";
+      const raw = readDiagRawLines(dir, now).filter((e) => {
+        const m = typeof e.data?.["module"] === "string" ? (e.data["module"] as string) : undefined;
+        return m === name || e.msg.includes(`的提供者 ${name}`);
+      });
+      return renderDetail(entry, raw);
+    },
     toggleTool: () => {
       dm.toolOpen = !dm.toolOpen;
     },

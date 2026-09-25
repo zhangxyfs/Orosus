@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readDiagnostics } from "./module-diagnostics.ts";
+import { readDiagnostics, renderDetail } from "./module-diagnostics.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -77,5 +77,41 @@ describe("readDiagnostics（T8：弹窗数据源——过滤/聚合/标签/跨�
     expect(got).toHaveLength(1);
     expect(got[0]!.name).toBe("yest");
     expect(got[0]!.reason).toContain("昨天的失败");
+  });
+});
+
+describe("renderDetail（T10/S9：二级详情拼装——四节/时间线排序/连带点名）", () => {
+  const ev = (ts: string, msg: string, module: string): { ts: string; code: string; msg: string; data: Record<string, unknown> } =>
+    ({ ts, code: "kernel.module.failed", msg, data: { module } });
+  const events = [
+    ev("2026-09-25T09:00:40.000Z", "模块降级：晚发生", "tool-fs"),
+    ev("2026-09-25T08:59:56.000Z", "模块降级：早发生", "tool-fs"),
+    ev("2026-09-25T09:00:41.000Z", "模块降级：硬依赖能力 \"fs\" 的提供者 tool-fs 已降级（级联降级）", "tool-shell"),
+    ev("2026-09-25T09:00:35.000Z", "模块降级：硬依赖能力 \"fs\" 无可用提供者（未安装/未声明）", "tool-shell"),
+  ];
+
+  it("⑤ 从犯视角：四节齐、连带节点名提供者、时间线按时间排序", () => {
+    const victim: import("./module-diagnostics.ts").DiagEntry = {
+      name: "tool-shell", tag: "级联", reason: "模块降级：硬依赖能力 \"fs\" 的提供者 tool-fs 已降级（级联降级）", count: 2, last: "2026-09-25T09:00:41.000Z",
+    };
+    const text = renderDetail(victim, events);
+    expect(text).toContain("【失败原因】");
+    expect(text).toContain("【连带影响】");
+    expect(text).toContain("tool-fs"); // 从犯原因点名提供者
+    expect(text).toContain("【事件时间线】");
+    expect(text).toContain("【修复指引】");
+    const tl = text.split("【事件时间线】")[1] ?? "";
+    expect(tl.indexOf("09:00:35")).toBeLessThan(tl.indexOf("09:00:41")); // 时间线节内按 ts 排序（tool-shell 自己的两条）
+    expect(text).toContain("自动恢复"); // 级联模板（S9）
+  });
+
+  it("⑥ 主犯视角反查（谁被我拖累）与加载失败模板（未进图说明）", () => {
+    const provider: import("./module-diagnostics.ts").DiagEntry = { name: "tool-fs", tag: "激活失败", reason: "模块降级：配置校验失败：mode 越界", count: 1, last: "2026-09-25T09:00:40.000Z" };
+    const providerText = renderDetail(provider, events);
+    expect(providerText).toContain("连带拖累：tool-shell"); // tool-shell 的事件点名 tool-fs → 主犯反查
+    const loader: import("./module-diagnostics.ts").DiagEntry = { name: "my-mod", tag: "加载失败", reason: "模块 my-mod 加载失败：SyntaxError", count: 1, last: "2026-09-25T08:59:56.000Z" };
+    const loaderText = renderDetail(loader, []);
+    expect(loaderText).toContain("未进图"); // S9：加载失败模板带「未进图、不影响主程序」
+    expect(loaderText).not.toContain("【连带影响】"); // 加载失败无连带节
   });
 });
