@@ -1290,3 +1290,92 @@ describe("控件窗三①（m5 T7——数据流三路 + 事件回传 + 句柄 +
 		expect(b).toContain("❯ b2");
 	});
 });
+
+describe("控件窗三②交互（m5 T8——input 编辑/提交/换行 + input 事件型）", () => {
+	it("① input 单行：打字触发 input 事件、Enter 触发 activate（enterSubmit 缺省）", async () => {
+		const events: string[] = [];
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "表单",
+			widgets: [{ id: "q", kind: "input", placeholder: "问点啥" }],
+			onEvent: (e) => {
+				events.push(e.type === "input" ? `input:${e.text}` : e.type === "activate" ? "activate" : e.type);
+			},
+		});
+		await flush();
+		input.emit("data", "h");
+		input.emit("data", "i");
+		await flush();
+		expect(events).toEqual(["input:h", "input:hi"]);
+		expect(stripAnsi(output.buf)).toContain("hi");
+		input.emit("data", "\r"); // Enter 提交
+		await flush();
+		expect(events).toEqual(["input:h", "input:hi", "activate"]);
+	});
+
+	it("② input 多行：Alt+Enter 换行（默认 enterSubmit = 多行 false → Enter 也换行）", async () => {
+		const events: string[] = [];
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "多行",
+			widgets: [{ id: "m", kind: "input", multiline: true, lines: 3 }],
+			onEvent: (e) => {
+				events.push(e.type === "input" ? `input:${JSON.stringify(e.text)}` : e.type);
+			},
+		});
+		await flush();
+		input.emit("data", "a");
+		input.emit("data", "\x1b\r"); // Alt+Enter 换行
+		input.emit("data", "b");
+		await flush();
+		expect(events).toEqual(['input:"a"', 'input:"a\\n"', 'input:"a\\nb"']);
+	});
+
+	it("③ 多行 enterSubmit:true 时 Enter = 提交不换行", async () => {
+		const events: string[] = [];
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "提交框",
+			widgets: [{ id: "m", kind: "input", multiline: true, enterSubmit: true }],
+			onEvent: (e) => {
+				events.push(e.type === "input" ? "input" : e.type);
+			},
+		});
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		expect(events).toEqual(["activate"]);
+	});
+
+	it("④ Tab 在输入框与列表间循环；光标键归输入框（列表选中不动）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "混排",
+			widgets: [
+				{ id: "q", kind: "input" },
+				{ id: "l", kind: "list", interactive: true, items: ["x", "y"] },
+			],
+		});
+		await flush();
+		input.emit("data", "a"); // 焦点默认在 q（首个交互控件）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("[a");
+		input.emit("data", "\t"); // 焦点 q → l
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 动列表
+		await flush();
+		input.emit("data", "\t"); // l → q
+		await flush();
+		input.emit("data", "b"); // 回到输入框继续打字
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("[ab");
+	});
+});

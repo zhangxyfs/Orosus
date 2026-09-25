@@ -423,7 +423,7 @@ export class FullApp {
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined }
-		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; onEvent?: DialogSpec["onEvent"] }
+		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
 	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
@@ -495,10 +495,19 @@ export class FullApp {
 
 	// ---------- 控件窗（m5 T7 口子三①——数据流三路：开窗快照 / onEvent 回新清单 / update 句柄） ----------
 
-	/** 控件清单里的交互列表 id（Tab 焦点序）。 */
+	/** 控件清单里的交互列表 id（只计 list——选中逻辑专用）。 */
 	private dialogListIds(widgets: readonly WidgetSpec[]): string[] {
 		const ids: string[] = [];
 		for (const wd of widgets) if (wd.kind === "list" && wd.interactive === true) ids.push(wd.id);
+		return ids;
+	}
+
+	/** 可焦点控件 id（m5 T8：交互列表 + 输入框，Tab 焦点循环序）。 */
+	private dialogInteractiveIds(widgets: readonly WidgetSpec[]): string[] {
+		const ids: string[] = [];
+		for (const wd of widgets) {
+			if ((wd.kind === "list" && wd.interactive === true) || wd.kind === "input") ids.push(wd.id);
+		}
 		return ids;
 	}
 
@@ -506,7 +515,7 @@ export class FullApp {
 	 *  句柄闭包查属主与存活——窗已关/模块已卸载后调用 = 无操作不报错；
 	 *  排队期（窗还没开）的 update/close 同款无操作。 */
 	openDialog(spec: DialogSpec, owner?: string): DialogHandle | undefined {
-		const lists = this.dialogListIds(spec.widgets);
+		const lists = this.dialogInteractiveIds(spec.widgets);
 		let installed: (typeof this.pendingUi) & { kind: "dialog" } | undefined;
 		const open = (): void => {
 			if (this.stopped) return;
@@ -526,6 +535,7 @@ export class FullApp {
 				...(owner !== undefined ? { owner } : {}),
 				...(lists.length > 0 ? { focusedId: lists[0] } : {}),
 				selById: {},
+				inputById: {},
 				...(spec.onEvent !== undefined ? { onEvent: spec.onEvent } : {}),
 			};
 			installed = e;
@@ -548,8 +558,9 @@ export class FullApp {
 				if (installed === undefined || this.pendingUi !== installed) return; // 路 3：句柄更新——换清单滚回顶部（设计空白 14）
 				installed.widgets = widgets;
 				installed.selById = {};
+				installed.inputById = {};
 				installed.scroll = 0;
-				const ids = this.dialogListIds(widgets);
+				const ids = this.dialogInteractiveIds(widgets);
 				installed.focusedId = ids.length > 0 ? ids[0] : undefined; // 无交互控件 = 无焦点（exactOptional 收窄）
 				this.scheduler.requestImmediateRender();
 			},
@@ -579,15 +590,16 @@ export class FullApp {
 
 	/** dialog 事件回传（m5 T7）：模块 onEvent 抛错 = 黄字提示且窗保留（全局约束 4）；
 	 *  返回新清单 = 整窗替换滚回顶部（路 2）。 */
-	private fireDialogEvent(pu: { widgets: WidgetSpec[]; selById: Record<string, number>; scroll: number; focusedId?: string | undefined; onEvent?: DialogSpec["onEvent"] }, e: DialogEvent): void {
+	private fireDialogEvent(pu: { widgets: WidgetSpec[]; selById: Record<string, number>; inputById?: Record<string, { text: string; cursor: number }>; scroll: number; focusedId?: string | undefined; onEvent?: DialogSpec["onEvent"] }, e: DialogEvent): void {
 		if (pu.onEvent === undefined) return;
 		try {
 			const next = pu.onEvent(e);
 			if (next !== undefined) {
 				pu.widgets = next;
 				pu.selById = {};
+				pu.inputById = {};
 				pu.scroll = 0;
-				const ids = this.dialogListIds(next);
+				const ids = this.dialogInteractiveIds(next);
 				pu.focusedId = ids.length > 0 ? ids[0] : undefined;
 			}
 		} catch (err) {
@@ -922,7 +934,7 @@ export class FullApp {
 				return;
 			}
 			if (pu.kind === "dialog") {
-				const ids = this.dialogListIds(pu.widgets);
+				const ids = this.dialogInteractiveIds(pu.widgets);
 				if (key === "escape") {
 					this.pendingUi = undefined;
 					this.promoteUi();
@@ -932,6 +944,7 @@ export class FullApp {
 				} else if (ids.length > 0) {
 					const id = pu.focusedId ?? ids[0]!;
 					const list = pu.widgets.find((wd): wd is Extract<WidgetSpec, { kind: "list" }> => wd.kind === "list" && wd.id === id && wd.interactive === true);
+					const input = pu.widgets.find((wd): wd is Extract<WidgetSpec, { kind: "input" }> => wd.kind === "input" && wd.id === id);
 					if (list !== undefined) {
 						const cur = pu.selById[id] ?? 0;
 						const step = key === "up" ? -1 : key === "down" ? 1 : key === "pageUp" ? -OVERLAY_PAGE : key === "pageDown" ? OVERLAY_PAGE : 0;
@@ -943,8 +956,38 @@ export class FullApp {
 								this.dialogFollowSel(pu);
 							}
 						} else if (key === "enter") {
-							this.fireDialogEvent(pu, { type: "activate", id, index: cur }); // 事件三型：activate（input 型在 T8）
+							this.fireDialogEvent(pu, { type: "activate", id, index: cur }); // 事件三型：activate
 						}
+					} else if (input !== undefined) {
+						// 输入框编辑（m5 T8）：方向键归输入框移光标（决策点 15）；每键 input 事件；
+						// Enter 语义：enterSubmit 缺省 = 单行提交 / 多行换行；Alt+Enter 多行恒换行
+						const ed = pu.inputById[id] ?? (pu.inputById[id] = { text: "", cursor: 0 });
+						const fireInput = (): void => this.fireDialogEvent(pu, { type: "input", id, text: ed.text }); // 事件三型：input
+						const submitOnEnter = input.enterSubmit ?? input.multiline !== true;
+						if (key === "enter" && (submitOnEnter || input.multiline !== true)) {
+							this.fireDialogEvent(pu, { type: "activate", id }); // 单行/显式 submit：Enter 激活（无 index）
+						} else if ((key === "enter" && input.multiline === true) || (key === "alt+enter" && input.multiline === true)) {
+							ed.text = ed.text.slice(0, ed.cursor) + "\n" + ed.text.slice(ed.cursor);
+							ed.cursor += 1;
+							fireInput();
+						} else if (key.length === 1 && isPrintable(key)) {
+							ed.text = ed.text.slice(0, ed.cursor) + key + ed.text.slice(ed.cursor);
+							ed.cursor += key.length;
+							fireInput();
+						} else if (key === "backspace" && ed.cursor > 0) {
+							ed.text = ed.text.slice(0, ed.cursor - 1) + ed.text.slice(ed.cursor);
+							ed.cursor -= 1;
+							fireInput();
+						} else if (key === "left") {
+							ed.cursor = Math.max(0, ed.cursor - 1);
+						} else if (key === "right") {
+							ed.cursor = Math.min(ed.text.length, ed.cursor + 1);
+						} else if (key === "home") {
+							ed.cursor = 0;
+						} else if (key === "end") {
+							ed.cursor = ed.text.length;
+						}
+						// 上下键在多行输入框 = 光标行间移动的简化口径（单行不消费）——v1 不做行间跳转，滚动跟随焦点控件不适用输入框
 					}
 				}
 				this.scheduler.requestImmediateRender();
@@ -1676,7 +1719,7 @@ export class FullApp {
 
 	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
 	 *  （交互列表带选中标记与焦点高亮）；恒定行数防闪烁（余量并进提示行——view 窗同款纪律）。 */
-	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number> }): OverlayFrame {
+	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }> }): OverlayFrame {
 		const geo = this.viewGeo(pu.layout);
 		const ow = geo.width;
 		const inner = ow - 2;
@@ -1689,7 +1732,7 @@ export class FullApp {
 		const page = Math.max(3, geo.height - 3);
 		let content: string[];
 		try {
-			content = renderWidgetLines(pu.widgets, inner, { selById: pu.selById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines;
+			content = renderWidgetLines(pu.widgets, inner, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines;
 		} catch (err) {
 			this.io.logWarn?.("tui.dialog.render-error", `控件窗渲染抛错：${pu.title}`, { error: String(err instanceof Error ? err.message : err) });
 			content = [` ${theme.fg("warn", "（控件渲染出错——见诊断日志）")}`];
