@@ -9,7 +9,7 @@ import type { Harness, SessionEvent } from "@orosus/core";
 import type { HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createCliUi } from "./uiface.ts";
-import { computeModulePreset, presetBaseline } from "./modpreset.ts";
+import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
 import { createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
@@ -382,6 +382,62 @@ const hostInfo: HostInfo = {
   },
 };
 
+/** 挂载预设状态（m5 T10，设计空白 16）：极简模式自己关掉的模块名单（会话内存）——
+ *  切回完整只恢复这批（用户手动关过的不会被误开）；undefined = 从未切过极简。 */
+let minimalClosed: Set<string> | undefined;
+
+/** applyModulePreset 实现（m5 T10）：算关闭集（纯计划器）→ 硬依赖级联闭包展开 →
+ *  逐模块写盘（单节失败记日志继续，失败清单带内返回——决策点 21）→ 统一 reload 一次
+ *  （关消失模块的挂起窗、面板刷新、标签表重喂——toggleModule 链同款收尾）。 */
+const applyModulePresetImpl = async (preset: "full" | "minimal"): Promise<{ failed: string[] }> => {
+  const audit = h.graph().audit();
+  const providerV = realReadModel(process.cwd())() ?? "";
+  const baseline = presetBaseline(providerV === "" ? "" : providerV.split("/")[0]!);
+  const plan = planModulePreset({
+    preset,
+    activeNames: audit.filter((a) => a.state === "active").map((a) => a.name),
+    baseline,
+    minimalClosed,
+  });
+  if (plan.writes.length === 0) return { failed: plan.failed };
+  let writeList: string[];
+  if (preset === "minimal") {
+    // 级联：卸载带走依赖者（computeUnmountClosure——toggleModule 同款）；撞锁定（保底成了被拔者的依赖）拒绝整次带拒因
+    const depRows = audit.map((a) => ({ name: a.name, provides: a.provides, dependsOn: a.dependsOn, state: a.state }));
+    const lockedNames = audit.filter((a) => lockReasonFor(a.name) !== undefined).map((a) => a.name);
+    const closure = computeUnmountClosure(plan.writes.map((w) => w.name), depRows, lockedNames);
+    if (!closure.ok) return { failed: [closure.blocked] };
+    writeList = closure.write;
+  } else {
+    writeList = plan.writes.map((w) => w.name);
+  }
+  const failed: string[] = [];
+  for (const name of writeList) {
+    try {
+      setModuleEnabledInConfig(name, preset === "minimal" ? false : true);
+    } catch (err) {
+      h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) });
+      failed.push(name);
+    }
+  }
+  if (preset === "minimal") {
+    minimalClosed = new Set(writeList); // 幂等：空关闭集不到这里（早退）——不覆盖原记录
+  } else {
+    minimalClosed = undefined; // 恢复完清记录（再切 minimal 重新记）
+  }
+  const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
+  try {
+    await h.reload();
+  } catch (err) {
+    h.log("host.preset.reload-failed", `预设 reload 失败（已写盘——可 /reload 或重启对齐）`, { preset, error: String(err instanceof Error ? err.message : err) });
+    return { failed: [...failed, "(reload)"] };
+  }
+  closeGoneModuleUi(namesBefore);
+  registerToolLabels(h.graph().tools.toolInfos());
+  await refreshPanel();
+  return { failed };
+};
+
 /** 设置服务（m5 T9 骨架）：setModel/setEffort/setLabel 走 harness 同源出口（单一写者）；
  *  setTheme/applyModulePreset 为必选成员占位——本批 T12/T10 落地（中间提交拒绝带明话）；
  *  setSidebar/readClipboard 可选成员不装（T11 落地时装配）。 */
@@ -398,8 +454,12 @@ const settingsService: SettingsService = {
   setTheme: async () => {
     throw new Error("主题机制尚未启用（本批 T12 落地）");
   },
-  applyModulePreset: async () => {
-    throw new Error("挂载预设尚未启用（本批 T10 落地）");
+  applyModulePreset: async (preset) => {
+    const { failed } = await applyModulePresetImpl(preset);
+    notify(failed.length > 0
+      ? `预设切换部分失败：${failed.join("、")}（已写盘部分可 /reload 对齐）`
+      : preset === "minimal" ? "已切到极简模式（核心 + 审批 + 当前模型）" : "已切回完整模式");
+    return { failed };
   },
   setLabel: (label) => h.setLabel(label),
 };
