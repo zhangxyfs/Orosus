@@ -28,9 +28,9 @@ export function commandCompleter(line: string, cwd = process.cwd()): [string[], 
   }
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/rename", "/quit", "/exit", "/q",
-    "/model", "/reload", "/help", "/settings", "/config",
+    "/model", "/effort", "/reload", "/help", "/settings", "/config",
     "/compact", "/permission", "/yolo", "/auto",
-  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）
+  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）；2026-09-25 /effort 入列
   return [all.filter((c) => c.startsWith(line)), line];
 }
 
@@ -43,6 +43,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
 
 内建命令（模型与状态）：
   /model      切换当前模型（回答进行中也可执行，下一轮生效）
+  /effort     思考投入档位（推理深度/自检/多方案推演；档位来自模型目录；回答进行中也可执行，下一轮生效）
   /reload     重新加载模块配置
   /help       显示此帮助
 

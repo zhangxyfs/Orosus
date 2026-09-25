@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { detectSameGate, getCatalog, getCatalogWithSource, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
+import { detectSameGate, getCatalog, getCatalogWithSource, lookupModelThinking, modelThinking, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -494,5 +494,51 @@ describe("目录拉取代理提示（M4-2 T3/B2 spike 降级——undici 不可 
     } finally {
       delete process.env.HTTPS_PROXY;
     }
+  });
+});
+
+describe("modelThinking / lookupModelThinking（/effort 思考声明解析——2026-09-25 三轮 kimi 同构）", () => {
+  const cat: Catalog = {
+    "zhipuai-coding-plan": {
+      api: "https://open.bigmodel.cn/api/coding/paas/v4",
+      models: {
+        "glm-5.3": { id: "glm-5.3", reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }, // always-on 型
+        "glm-4.6v": { id: "glm-4.6v", reasoning_options: [{ type: "toggle" }] },                                 // 纯开关型
+      },
+    },
+    zhipuai: {
+      api: "https://open.bigmodel.cn/api/paas/v4",
+      models: { "glm-5.3": { id: "glm-5.3", name: "GLM-5.3", reasoning_options: [{ type: "effort", values: ["high", "max"] }] } }, // 同名模型异档——命中条目决定口径
+    },
+    deepseek: {
+      api: "https://api.deepseek.com",
+      models: {
+        "deepseek-flash": { id: "deepseek-flash", reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["low", "high", "max"] }] },  // toggle+档位 → segments 带 off
+        "deepseek-none": { id: "deepseek-none", reasoning_options: [{ type: "effort", values: ["none", "high", "max"] }] },                        // 显式 none 关档
+        "deepseek-null": { id: "deepseek-null", reasoning_options: [{ type: "effort", values: [null, "high"] }] },                                 // null 关档位惯例
+      },
+    },
+  };
+
+  it("modelThinking：efforts 滤 none 白名单过滤；offEffort 恒 none（显式 none/null 位）；toggle 型 efforts 空", () => {
+    expect(modelThinking(cat["zhipuai-coding-plan"]!.models!["glm-5.3"])).toEqual({ efforts: ["low", "high", "max"], hasToggle: false });
+    expect(modelThinking(cat.deepseek!.models!["deepseek-flash"])).toEqual({ efforts: ["low", "high", "max"], hasToggle: true });
+    expect(modelThinking(cat.deepseek!.models!["deepseek-none"])).toEqual({ efforts: ["high", "max"], offEffort: "none", hasToggle: false });
+    expect(modelThinking(cat.deepseek!.models!["deepseek-null"])).toEqual({ efforts: ["high"], offEffort: "none", hasToggle: false });
+    expect(modelThinking(cat["zhipuai-coding-plan"]!.models!["glm-4.6v"])).toEqual({ efforts: [], hasToggle: true });
+    expect(modelThinking({ id: "x" })).toBeUndefined(); // 无声明 = 无信息
+    expect(modelThinking({ id: "x", reasoning_options: [{ type: "effort", values: ["low", 'a"b', 42, null] }] })).toEqual({ efforts: ["low"], offEffort: "none", hasToggle: false }); // 白名单滤脏 + null 位产 offEffort；有效档位仍在
+    expect(modelThinking({ id: "x", reasoning_options: [{ type: "effort", values: ['a"b', 42] }] })).toBeUndefined(); // 全滤空 + toggle 缺席 = 无信息
+  });
+
+  it("lookupModelThinking 三级：槽名 → api 精确（尾斜杠归一）→ 同主机字典序；皆空 undefined", () => {
+    expect(lookupModelThinking(cat, "zhipuai-coding-plan", "glm-5.3")).toEqual({ efforts: ["low", "high", "max"], hasToggle: false });
+    expect(lookupModelThinking(cat, "zhipuai-coding-plan", "zhipuai-coding-plan/glm-5.3")).toEqual({ efforts: ["low", "high", "max"], hasToggle: false }); // 全名
+    expect(lookupModelThinking(cat, "zhipuai", "GLM-5.3")).toEqual({ efforts: ["high", "max"], hasToggle: false }); // name 口径（异条目异档——不串）
+    expect(lookupModelThinking(cat, "my-glm", "glm-5.3", "https://open.bigmodel.cn/api/paas/v4")).toEqual({ efforts: ["high", "max"], hasToggle: false }); // api 精确
+    expect(lookupModelThinking(cat, "my-glm", "glm-5.3", "https://open.bigmodel.cn/api/coding/paas/v4/")).toEqual({ efforts: ["low", "high", "max"], hasToggle: false }); // 尾斜杠归一精确命中
+    expect(lookupModelThinking(cat, "my-glm", "glm-5.3", "https://open.bigmodel.cn/gw")).toEqual({ efforts: ["high", "max"], hasToggle: false }); // 主机兜底：zhipuai < zhipuai-coding-plan 先中
+    expect(lookupModelThinking(cat, "my-glm", "glm-5.3", "https://elsewhere.example/v1")).toBeUndefined();
+    expect(lookupModelThinking(cat, "my-glm", "glm-5.3")).toBeUndefined();
   });
 });

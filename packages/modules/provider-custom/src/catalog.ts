@@ -11,6 +11,10 @@ export interface CatalogModel {
   limit?: { context?: number; output?: number };
   release_date?: string; // models.dev 元数据：新→旧排序与菜单标签用
   tool_call?: boolean;   // false = 纯生成模型（视频/图像），agent harness 不该给选
+  /** 思考控制形态声明（models.dev reasoning_options，/effort 档位数据源）：toggle = 开关型（on/off）；
+   *  effort = 分档型（values = ["low","high","max",…] 字符串数组，"none"/null 位是关档）。宽形状——
+   *  目录当不受信输入，消费侧（modelThinking）白名单过滤。 */
+  reasoning_options?: { type?: string; values?: unknown[] }[];
 }
 export interface CatalogEntry {
   name?: string; type?: string; npm?: string; id?: string;
@@ -36,6 +40,77 @@ export function lookupModelVision(catalog: Catalog, model: string): boolean | un
         if (m.modalities?.input !== undefined) return m.modalities.input.includes("image");
         if (m.attachment !== undefined) return m.attachment;
         return undefined; // 命中条目但无能力字段——不知道
+      }
+    }
+  }
+  return undefined;
+}
+
+/** 模型思考控制声明（models.dev reasoning_options → kimi modelsDevThinkingOptions 同构，/effort 数据源）：
+ *  efforts = effort 型档位（白名单字符串，滤 "none"）；offEffort = 关档线缆值（values 显式含 "none"
+ *  或 null 关档位 → 恒 "none"）；hasToggle = toggle 型声明在场。efforts 与 hasToggle 双空 → undefined
+ *  （目录对该模型无思考信息）。 */
+export interface ModelThinkingInfo {
+  efforts: string[];
+  offEffort?: string;
+  hasToggle: boolean;
+}
+
+export function modelThinking(model: CatalogModel | undefined): ModelThinkingInfo | undefined {
+  if (model?.reasoning_options === undefined) return undefined;
+  let efforts: string[] | undefined;
+  let offEffort: string | undefined;
+  let hasToggle = false;
+  for (const opt of model.reasoning_options) {
+    if (opt?.type === "toggle") {
+      hasToggle = true;
+      continue;
+    }
+    if (opt?.type !== "effort" || !Array.isArray(opt.values)) continue;
+    const levels = opt.values.filter((v): v is string => typeof v === "string" && /^[A-Za-z0-9._-]+$/.test(v));
+    const none = levels.find((v) => v.toLowerCase() === "none");
+    if (none !== undefined) offEffort = none;
+    else if (opt.values.some((v) => v === null)) offEffort = "none"; // null 关档位（models.dev 惯例）
+    const selectable = levels.filter((v) => v.toLowerCase() !== "none");
+    if (selectable.length > 0) efforts = selectable;
+  }
+  if (efforts === undefined && !hasToggle) return undefined;
+  return { efforts: efforts ?? [], ...(offEffort !== undefined ? { offEffort } : {}), hasToggle };
+}
+
+const hostOf = (url: string | undefined): string | undefined => {
+  if (typeof url !== "string" || url === "") return undefined;
+  try { return new URL(url).host; } catch { return undefined; }
+};
+
+const stripTrailingSlash = (url: string): string => url.replace(/\/+$/, "");
+
+/** 槽 + 模型 → 思考声明（/effort 二级菜单数据源，kimi thinkingAvailability 同源思想）。匹配三级
+ *  （自上而下，命中即返）：① 槽名 = 目录条目 id（目录导入安装的天然口径——本机三槽
+ *  zhipuai-coding-plan/kimi-code-plan-cn/deepseek 全命中）；② 条目 api = 槽 baseUrl（尾斜杠归一——
+ *  自起槽名但端点即目录条目）；③ 同主机条目（同厂异门——coding/paas 共 host，id 字典序取首个含该
+ *  模型的，确定性）。模型匹配口径同 lookupModelVision（全名/尾段/id/name）。
+ *  三级皆空 → undefined（目录不认识，命令侧提示手输 `/effort <档位>` 兜底）。 */
+export function lookupModelThinking(catalog: Catalog, slot: string, model: string, baseUrl?: string): ModelThinkingInfo | undefined {
+  const bare = model.includes("/") ? model.split("/").pop()! : model;
+  const matchIn = (entry: CatalogEntry | undefined): CatalogModel | undefined => {
+    for (const [key, m] of Object.entries(entry?.models ?? {})) {
+      if (key === model || key === bare || key.endsWith(`/${bare}`) || m.id === model || m.id === bare || m.name === bare) return m;
+    }
+    return undefined;
+  };
+  const hit = matchIn(catalog[slot]);
+  if (hit !== undefined) return modelThinking(hit);
+  if (baseUrl !== undefined) {
+    const exact = Object.values(catalog).find((e) => typeof e?.api === "string" && stripTrailingSlash(e.api) === stripTrailingSlash(baseUrl));
+    const exactHit = matchIn(exact);
+    if (exactHit !== undefined) return modelThinking(exactHit);
+    const host = hostOf(baseUrl);
+    if (host !== undefined) {
+      for (const id of Object.keys(catalog).toSorted()) {
+        if (hostOf(catalog[id]?.api) !== host) continue;
+        const h = matchIn(catalog[id]);
+        if (h !== undefined) return modelThinking(h);
       }
     }
   }

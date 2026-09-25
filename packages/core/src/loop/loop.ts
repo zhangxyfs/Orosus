@@ -17,6 +17,9 @@ export interface LoopOptions {
   system: string;
   signal: AbortSignal;
   sink: DiagSink;
+  /** 思考投入档位（/effort 2026-09-25）：透传 ProviderRequest.reasoningEffort——provider 翻译层按协议族
+   *  落线缆参数（openai reasoning_effort / anthropic thinking）。turn 内恒定（harness 在 prompt 开头捕获）。 */
+  reasoningEffort?: string;
   /** 实时旁路（M4-1 T4/D45）：流式 Chunk 的内存投递口（harness liveChunks 通道）。
    *  T4 并存态：assistantChunk 照落日志 + livePush 双投；T5 断流后仅剩 livePush。 */
   livePush?: (chunk: Chunk) => void;
@@ -88,6 +91,7 @@ async function* executeGroups(
  */
 export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent> {
   const { session, bus, tools, provider, model, system, signal, sink } = opts;
+  const reasoningEffort = opts.reasoningEffort;
   const turnStart = await session.append(LOG_TYPES.turnStart, { model });
   const log = createLogger(sink, "loop").withCtx({ sess: session.sessionId, turn: turnStart.id });
   let lastRequestSig: string | null = null;
@@ -123,10 +127,10 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
 
     // request/header 变化检测的作用域 = 本 turn（lastRequestSig 是 loop 局部量）：同 turn 内 tools/system 稳定只落
     // 一条；跨 turn 恒落一条（新 turn 即新请求序列）。tools 以名称近似"字节稳定"（§6.3）——M1 无热更新，足够
-    const requestSig = hash(JSON.stringify({ model, system: hash(system), tools: tools.specs().map((t) => t.name) }));
+    const requestSig = hash(JSON.stringify({ model, system: hash(system), tools: tools.specs().map((t) => t.name), ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}) }));
     if (requestSig !== lastRequestSig) {
       lastRequestSig = requestSig;
-      yield* emit(LOG_TYPES.requestHeader, { model, systemHash: hash(system), toolsCount: tools.list().length });
+      yield* emit(LOG_TYPES.requestHeader, { model, systemHash: hash(system), toolsCount: tools.list().length, ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}) });
     }
 
     log.debug("loop.provider.stream-start", "provider 流式开始", { messages: messages.length });
@@ -137,7 +141,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     let finish: Extract<Chunk, { type: "finish" }> = { type: "finish", kind: "stop" };
 
     try {
-      for await (const chunk of provider({ model, system, messages, tools: tools.specs(), signal })) {
+      for await (const chunk of provider({ model, system, messages, tools: tools.specs(), signal, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) })) {
         // 断流（T5/D45）：assistantChunk 不再落日志——实时经 livePush 旁路；完成事件 = assistant/message 一条
         opts.livePush?.(chunk);
         if (signal.aborted) {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { FullApp, type FullAppIO } from "./fullapp.ts";
 import { stripAnsi, visibleWidth } from "./width.ts";
+import { fg } from "../theme.ts";
 
 type FakeInput = NodeJS.ReadStream;
 type FakeOutput = NodeJS.WriteStream & { buf: string };
@@ -773,5 +774,19 @@ describe("pickOverlay 多行项压平（2026-09-24 前案回归钉）", () => {
 		expect(ov.lines.join("\n")).toContain("kimi-code-plan-cn （https://api.kimi.com/coding/v1）"); // 压平形态
 		const ov0 = pick(0);
 		expect(ov0.lines.length).toBe(ov.lines.length); // 移动选中行数恒定（防闪烁纪律同族）
+	});
+});
+
+describe("pickOverlay 当前值项染色（2026-09-25 用户拍板——/effort /model 菜单当前档用选中色）", () => {
+	it("① 「 ✓」尾标项整项染青玉 accent；普通项保持素色；行宽不超框", () => {
+		const r = rig();
+		const app = r.app;
+		const ov = (app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): { lines: string[]; width: number } })
+			.buildPickOverlay(60, 24, "选择思考档位（glm-5.3 · 当前 high）", ["low", "high ✓", "max"], 0, undefined);
+		const text = ov.lines.join("\n");
+		expect(text).toContain(fg("accent", "high ✓")); // 当前档整项青玉（选中色）
+		expect(text).not.toContain(fg("accent", "low")); // 普通项不染
+		expect(stripAnsi(text)).toContain(" low"); // 普通项仍在
+		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width); // ANSI 计宽不炸框
 	});
 });

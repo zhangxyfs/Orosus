@@ -1000,7 +1000,7 @@ export class FullApp {
 		return theme.dim("正在待命");
 	}
 
-	private panelBox(title: string, en: string, focused: boolean, w: number, h: number, content: string[], hints: string[], footer?: string[]): string[] {
+	private panelBox(title: string, en: string, focused: boolean, w: number, h: number, content: string[], hints: string[], footer?: string[], footTop?: string[]): string[] {
 		const bc = focused ? "accent" : "border";
 		const inner = w - 2;
 		const titleSeg = focused ? theme.fg("accent", ` ${title} `) : theme.fg("muted", ` ${title} `);
@@ -1014,11 +1014,16 @@ export class FullApp {
 		const rows: string[] = [top, pane("")];
 		for (const l of content) rows.push(pane(l));
 		const footRows = footer ?? [];
+		const topRows = footTop ?? [];
 		// 提示行超内宽折行不截字（F5 十一轮②：窄侧栏下「Enter 挂载/卸载」曾截成「挂载/卸」）
 		const hintLines = hints.flatMap((hl) => wrapText(theme.dim(" " + hl), inner));
-		while (rows.length < h - 2 - footRows.length - hintLines.length) rows.push(pane(""));
-		for (const l of footRows) rows.push(pane(l));
+		// 填充目标含顶框（2026-09-24 走查：原 h-2 漏算顶框 1 行——面板恒矮一行，底框比输入框高，
+		// 与输入框下边缘错位）；底部分三段（同日用户拍板）：footTop 分隔线贴提示区上沿 → 操作提示 →
+		// footer 注脚贴底框——填充空行恒在分隔线上方，终端再高分隔线也不与提示行脱节
+		while (rows.length < h - 1 - topRows.length - footRows.length - hintLines.length) rows.push(pane(""));
+		for (const l of topRows) rows.push(pane(l));
 		for (const hl of hintLines) rows.push(pane(hl));
+		for (const l of footRows) rows.push(pane(l));
 		rows.push(theme.fg(bc, "╰" + "─".repeat(inner) + "╯"));
 		return rows.slice(0, h);
 	}
@@ -1085,12 +1090,12 @@ export class FullApp {
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], [this.sep(inner)]);
+			return this.panelBox("运行状态", "1/2", focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [this.sep(inner)]);
 		}
 		const content: string[] = [
 			` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
 		];
-		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["←→ 返回运行状态 · Esc 返回"], [this.sep(inner)]);
+		return this.panelBox("网络 · MCP", "2/2", focused, w, h, content, ["←→ 返回运行状态 · Esc 返回"], undefined, [this.sep(inner)]);
 	}
 
 	// 任务清单每页行数（翻页步长 = 页大小——步长小于页大小时选中项在页内挪动页号不翻）；
@@ -1124,8 +1129,8 @@ export class FullApp {
 		}
 		const footL = theme.dim(" 由 Agent 实时同步");
 		const footR = theme.dim(`任务数：${done}/${d.tasks.length}`);
-		const footer = [this.sep(inner), footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["PgUp/PgDn 翻页 · Esc 返回"], footer);
+		const footer = [footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
+		return this.panelBox("任务清单", `${page + 1}/${pages}`, focused, w, h, content, ["PgUp/PgDn 翻页 · Esc 返回"], footer, [this.sep(inner)]);
 	}
 
 	private styleWithSelection(vr: InputRow, sel: { lo: number; hi: number } | undefined): string {
@@ -1311,7 +1316,10 @@ export class FullApp {
 		if (winStart > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${winStart} 项`)));
 		for (let i = 0; i < win.length; i++) {
 			const gi = winStart + i;
-			const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${win[i]!}`;
+			// 当前值项（" ✓" 尾标——/model /effort 命令层约定）整项染青玉 accent（2026-09-25 用户拍板：
+			// 当前档用选中色区分——与斜杠菜单二级 ✓ mark 同族口径）
+			const label = win[i]!.endsWith(" ✓") ? theme.fg("accent", win[i]!) : win[i]!;
+			const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${label}`;
 			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 		}
 		const rest = shown.length - winStart - win.length;

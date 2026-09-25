@@ -885,6 +885,7 @@ const runtimeStatusText = (): string => {
 	const st = h.status();
 	return [
 		`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
+		...(st.effort !== undefined ? [`effort: ${st.effort}`] : []), // /effort 已设才显示（2026-09-25）
 		`session: ${st.sessionId}`,
 		`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
 	].join("\n");
@@ -920,7 +921,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/model", "/permission", "/yolo", "/auto", "/title", "/rename"]); // /auto 与 /yolo 同族（批⑧）
+const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename"]); // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
@@ -931,6 +932,17 @@ const reportModelSwitch = (before: string): void => {
 	const now = h.status().model;
 	if (now === before) return; // Esc/原样选择 = 未切换，零反馈
 	const msg = `模型已切换 → ${now}（已写入 config）`;
+	if (activeApp !== undefined) activeApp.showToast(msg);
+	else console.log(`[${msg}]`);
+};
+
+/** /effort 切换反馈（/model 同约，2026-09-25）：前后 diff h.status().effort——含「首设」「清除」两态的措辞分野。 */
+const reportEffortSwitch = (before: string | undefined): void => {
+	const now = h.status().effort;
+	if (now === before) return; // Esc/原样重选 = 未变化，零反馈
+	const msg = now === undefined
+		? "思考档位已清除（回端点默认，已写入 config）"
+		: before === undefined ? `思考档位已设为 ${now}（已写入 config）` : `思考档位已切换 ${before} → ${now}（已写入 config）`;
 	if (activeApp !== undefined) activeApp.showToast(msg);
 	else console.log(`[${msg}]`);
 };
@@ -964,9 +976,9 @@ const refreshPanel = async (): Promise<void> => {
 			return slot?.defaultModel ?? v;
 		})(),
     session: (() => {
-      // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名回退 sid
+      // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名显示「新会话」直到 /title 或 fork 命名
       const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
-      return lastLabel?.label ?? h.sessionId;
+      return lastLabel?.label ?? "新会话";
     })(),
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),
@@ -1008,6 +1020,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/auto", desc: "一键日常默认档", long: "权限模式直达「Ask When Needed」（只读放行、危险确认）。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
 	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
+	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：Always Ask 全确认 / Ask When Needed 危险才确认 / Never Ask 全放行。", children: [...PERM_CYCLE], childMeta: PERM_META,
@@ -1090,7 +1103,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     panelData: () =>
       panelCache ?? {
         model: "…",
-        session: h.sessionId,
+        session: "新会话", // 首刷前占位——未命名口径与 refreshPanel 一致（sid 不可读）
         cwd: shortenPath(process.cwd(), 26),
         tokens: { input: 0, output: 0 },
         startedAt: undefined,
@@ -1212,10 +1225,13 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     }
     void (async () => {
       const modelBefore = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：反馈靠前后 diff
+      const effortCmd = cmdNameOf(text) === "/effort" || cmdNameOf(text) === "/model"; // /effort 反馈 + /model 档位跟随重解析播报（首设态 before=undefined 也要反馈——布尔门区分「未捕获」）
+      const effortBefore = effortCmd ? h.status().effort : undefined;
       try {
         const emit = busyExec ? (s: string) => dm.pushLine(s) : (s: string) => dm.pushMd(s, streamW()); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
         const r = await processReplLine(text, emit);
         if (modelBefore !== undefined) reportModelSwitch(modelBefore);
+        if (effortCmd) reportEffortSwitch(effortBefore);
         if (!busyExec) {
           if (r === "switch") action = "switch";
           else if (r === "quit") action = "quit";
@@ -1367,8 +1383,11 @@ if (args.print === undefined) try {
       const text = line.trim();
       if (text === "") continue;
       const mb = cmdNameOf(text) === "/model" ? h.status().model : undefined; // /model 静默化：切换反馈 diff 前后值
+      const effortCmd = cmdNameOf(text) === "/effort" || cmdNameOf(text) === "/model"; // 行模式反馈同全屏（/effort 切档 + /model 档位跟随重解析）
+      const effortBefore = effortCmd ? h.status().effort : undefined;
       const r = await processReplLine(text, (s) => console.log(s));
       if (mb !== undefined) reportModelSwitch(mb);
+      if (effortCmd) reportEffortSwitch(effortBefore);
       if (r === "quit") break sessionLoop;
       if (r === "switch") continue sessionLoop;
       // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）

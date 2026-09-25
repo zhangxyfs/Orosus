@@ -59,7 +59,7 @@ describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生�
     // T3 接通后：/permission 别名不再带「未安装」尾注
     expect(help).toContain("/permission → approval__permission");
     expect(help).not.toContain("未安装对应模块");
-    expect(help).toContain("/model /help /reload"); // 内建清单含 /reload（补账；批⑤⑥：/status /usage 退役出内建表）
+    expect(help).toContain("/model /effort /help /reload"); // 内建清单含 /reload（补账；批⑤⑥：/status /usage 退役出内建表；2026-09-25 /effort 入内建表）
     await h.close();
   });
 

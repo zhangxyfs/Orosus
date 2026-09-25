@@ -78,8 +78,9 @@ export interface Harness {
   /** Token 用量读口（2026-09-22 命令分级批⑤——/usage 内建命令退役，宿主 /settings 面板直调）：
    *  当前会话累计恒有；存储后端支持跨会话累计（JsonlStore）时带 lifetime。 */
   usage(): Promise<{ current: { input: number; output: number }; lifetime?: { input: number; output: number; sessions: number } }>;
-  /** 运行状态读口（批⑥——/status 内建命令退役并入 /settings）：model（含运行期覆盖标记）、会话 id、模块图三计数。 */
-  status(): { model: string; overridden: boolean; sessionId: string; modules: { active: number; failed: number; discovered: number } };
+  /** 运行状态读口（批⑥——/status 内建命令退役并入 /settings）：model（含运行期覆盖标记）、会话 id、模块图三计数；
+   *  effort = 思考档位（/effort 2026-09-25——未设时缺省，宿主 toast diff 消费）。 */
+  status(): { model: string; overridden: boolean; sessionId: string; effort?: string; modules: { active: number; failed: number; discovered: number } };
   /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
    *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
   setLabel(label: string): Promise<void>;
@@ -387,6 +388,23 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   let currentTurn: { controller: AbortController; done: Promise<void> } | null = null;
   let closed = false;
   let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
+  let effortOverride: string | undefined; // /effort 运行期覆盖（/model 同款双轨：会话内存 + 写盘）；未设 = 跟随配置，配置也没有 = 目录默认档（kimi「从不不指定」——effort 型模型恒有解析值）
+
+  // 行级写 user config 顶层键（/model 2026-09-25 抽取共用，/effort 同款落点）：无 TOML 库的节区感知写
+  //（2026-09-22 启动阻断实证：裸键追加在文件末尾会落进最后一个 [节]——approval strict 校验直接拒启动）。
+  // 顶层区 = 首个节头之前；filterRe 命中的旧键行只在顶层区清除；kv 给定则新行写顶层区末尾（缺省 = 只删不写）。
+  const upsertTopLevelKey = (filterRe: RegExp, kv?: { line: string }): void => {
+    const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
+    const cfgLines = before.split("\n");
+    const firstSection = cfgLines.findIndex((l) => /^\s*\[/.test(l));
+    const headEnd = firstSection === -1 ? cfgLines.length : firstSection;
+    const head = cfgLines.slice(0, headEnd).filter((l) => !filterRe.test(l));
+    while (head.length > 0 && head[head.length - 1]!.trim() === "") head.pop(); // 尾空行收拢
+    if (kv !== undefined) head.push(kv.line);
+    const after = [...head, "", ...cfgLines.slice(headEnd)].join("\n").replace(/\n{3,}/g, "\n\n");
+    mkdirSync(dirname(userConfigFile), { recursive: true }); // 目录缺省即建（批⑧确认制废除后写盘无条件化——宿主/测试自定义路径不得 ENOENT）
+    writeFileSync(userConfigFile, after, "utf8");
+  };
 
   // 内建别名表（D38）：短名 → 模块命令名；目标不存在提示安装对应模块
   const COMMAND_ALIASES: Record<string, string> = {
@@ -437,28 +455,79 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       }
       // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
       // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
+      const prevModelValue = modelOverride ?? (typeof cfgModelValue() === "string" ? (cfgModelValue() as string) : undefined);
       modelOverride = next;
       // 持久化（2026-09-22 用户拍板，推翻 T14/D38「显式确认才写盘」）：选定即写盘永久生效——
       // 「要不要永久」是工具该自己处理的琐事，不该问用户。行级写 user config 顶层 provider 键
       // （无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
-      const before = existsSync(userConfigFile) ? readFileSync(userConfigFile, "utf8") : "";
-      // TOML 顶层锚定（2026-09-22 启动阻断实证：裸键追加在文件末尾会落进最后一个 [节]——approval strict 校验
-      // 直接拒启动）。节区感知：顶层区 = 首个节头之前；旧 model/provider 行只在顶层区清除，新键写到顶层区末尾
-      const cfgLines = before.split("\n");
-      const firstSection = cfgLines.findIndex((l) => /^\s*\[/.test(l));
-      const headEnd = firstSection === -1 ? cfgLines.length : firstSection;
-      const head = cfgLines.slice(0, headEnd).filter((l) => !/^\s*(model|provider)\s*=/.test(l));
-      while (head.length > 0 && head[head.length - 1]!.trim() === "") head.pop(); // 尾空行收拢
-      head.push(`provider = "${next}"`); // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行已随上方过滤清除
-      const after = [...head, "", ...cfgLines.slice(headEnd)].join("\n").replace(/\n{3,}/g, "\n\n");
-      mkdirSync(dirname(userConfigFile), { recursive: true }); // 目录缺省即建（批⑧确认制废除后写盘无条件化——宿主/测试自定义路径不得 ENOENT）
-      writeFileSync(userConfigFile, after, "utf8");
+      // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行随过滤清除
+      upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = "${next}"` });
+      // 档位跟随重解析（2026-09-25 二轮，kimi-code /model draftFor 机制对齐）：已设档且换了模型 →
+      // 新模型 segments（kimi segmentsFor——含 off 档）含旧档 → 保留（「设置过就尊重」）；不含 → 落默认档
+      // （kimi middleOf 取法 values[Math.floor(len/2)]——GLM 双档 [high,max] 中位即 max）；目录不认识新模型
+      // → lenient 保留原样发（端点 400 自证）。未设档不动作——effective 自动 = 新模型默认档（解析链天然跟随，
+      // 比 kimi 写死更干净）。重选原模型不触发。
+      const prevEffort = effortOverride ?? cfgEffortValue();
+      if (prevEffort !== undefined && next !== prevModelValue) {
+        const { provider: nextSlot, model: nextExplicit } = parseModel(next);
+        const nextAdapter = graph.services.provider(nextSlot);
+        const nextBare = nextExplicit ?? nextAdapter?.defaultModel ?? next;
+        const info = await thinkingInfoOf(nextSlot, nextBare);
+        if (info !== undefined && !segmentsOf(info).includes(prevEffort)) {
+          const reEffort = defaultEffortOf(info);
+          effortOverride = reEffort;
+          upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${reEffort}"` });
+        }
+      }
       // 静默返回（2026-09-22 用户拍板：切换反馈由宿主侧浮动 toast 承担——diff h.status() 前后值得知；
       // 空串 = 不落流区的管线约定，同 /permission /yolo）
       return "";
     }],
+    ["/effort", async (args: string) => {
+      // 思考投入档位（2026-09-25）：档位清单 = 当前槽 provider 适配器的模型目录（provider-custom 读
+      // models.dev reasoning_options——契约 ProviderAdapter.listThinking，槽名/端点/主机三级匹配）。
+      // 选定即写盘 + 会话内存覆盖（/model 同款双轨）；下发 = 主轮请求 reasoningEffort（provider 翻译层
+      // 落线缆参数：openai 族 reasoning_effort〔on/off = silent〕、anthropic 族 thinking 映射）。二级调用
+      // （ctx.llm）不带档位——辅助面（压缩/搜索/标题）不吃重思考档。菜单 = kimi segments（off/…档位，
+      // always-on 才省 off）；未设档 = 默认档（中位）——kimi「从不不指定」；/effort auto = 回默认档。
+      const parts = currentModelParts();
+      if (parts === undefined) return "未配置模型——先用 /model 或 /provider 选模型";
+      const { slotName, bare } = parts;
+      const info = await thinkingInfoOf(slotName, bare);
+      const current = await resolveStoredEffort();
+      const arg = args.trim().toLowerCase();
+      if (arg !== "") {
+        // 直达形态 /effort <档位>：不查 segments（自定义端点模型可不在目录）——原样收；auto = 回默认档
+        //（清覆盖 + 清盘上 effort 行，effective 回落目录默认——kimi 无此态，Orosus 保留为「跟随目录默认」口）
+        if (!/^[a-z0-9._-]+$/.test(arg)) return `档位名 "${arg}" 不合法（仅限字母数字与 . _ -）`;
+        if (arg === "auto") {
+          effortOverride = undefined;
+          upsertTopLevelKey(/^\s*effort\s*=/);
+        } else {
+          effortOverride = arg;
+          upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${arg}"` });
+        }
+        return ""; // 静默：反馈由宿主 toast diff h.status().effort（/model 同约）
+      }
+      if (info === undefined) {
+        const capable = graph.services.provider(slotName)?.listThinking !== undefined;
+        return capable
+          ? `模型 ${bare} 无思考档位信息（目录未声明 effort 档——开关型思考或不支持）——可直敲 /effort <档位> 手动指定`
+          : `平台 ${slotName} 不提供思考档位目录——可直敲 /effort <档位> 手动指定（原样发送）`;
+      }
+      const segments = segmentsOf(info);
+      const items = segments.map((v) => (v === current ? `${v} ✓` : v)); // 当前值勾标（/model /permission 二级列表同族）
+      // choose 在 try 外：Esc 的「已取消（Esc）」带内抛错穿透（/model 同款定案）
+      // 标题带当前档（2026-09-25 用户拍板：菜单要体现当前是什么档——含目录外手设档的 lenient 情形也能看到）
+      const pick = (await commandUi.choose(`选择思考档位（${bare}${current !== undefined ? ` · 当前 ${current}` : ""}）`, items)).replace(/ ✓$/, "");
+      if (pick !== current) {
+        effortOverride = pick;
+        upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${pick}"` });
+      }
+      return ""; // 原样重选当前档 = 无操作零反馈（host diff 不变即无 toast）
+    }],
     ["/help", async () => {
-      const lines = ["内建命令：", "  /model /help /reload"]; // 批⑤⑥：/usage /status 退役（宿主读口 h.usage()/h.status() 取代，CLI 并入 /settings 面板）
+      const lines = ["内建命令：", "  /model /effort /help /reload"]; // 批⑤⑥：/usage /status 退役（宿主读口 h.usage()/h.status() 取代，CLI 并入 /settings 面板）；2026-09-25 /effort 入列
       lines.push("别名命令：");
       for (const [short, full] of Object.entries(COMMAND_ALIASES)) {
         const present = graph.commands.some((c) => c.name === full);
@@ -487,6 +556,68 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // F5 十轮：核心顶层键名 provider（旧 model 键兼容读——分层合并两键都在时 provider 胜）
   const cfgModelValue = (): unknown => config.core.provider ?? config.core.model;
+  // /effort 配置读口：核心顶层 effort 键（/effort 命令写盘；OROSUS_EFFORT 环境层免费生效——§6.6 核心顶层命名）
+  const cfgEffortValue = (): string | undefined => {
+    const v = config.core.effort;
+    return typeof v === "string" && v !== "" ? v : undefined;
+  };
+
+  // ---- 思考档位解析链（2026-09-25 三轮，kimi-code 对齐：segmentsFor / defaultThinkingEffortForModel /
+  // resolveThinkingEffort 三件同构）----
+  // 目录声明（契约 ProviderAdapter.listThinking）会话内 memo——disk-first 目录读毫秒级但仍按 (槽,模型) 记忆，
+  // 免去每 turn 重读 1.6MB JSON；目录新鲜度由 /provider 在线链路 + /reload（重建 harness）负责
+  type ThinkingInfo = { efforts: string[]; offEffort?: string; hasToggle: boolean };
+  const thinkingMemo = new Map<string, ThinkingInfo | undefined>();
+  const currentModelParts = (): { slotName: string; bare: string } | undefined => {
+    const mv = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : undefined);
+    if (mv === undefined || mv === "") return undefined;
+    const { provider: slotName, model: explicit } = parseModel(mv);
+    const bare = explicit ?? graph.services.provider(slotName)?.defaultModel ?? mv;
+    return { slotName, bare };
+  };
+  const thinkingInfoOf = async (slotName: string, bare: string): Promise<ThinkingInfo | undefined> => {
+    const key = `${slotName}/${bare}`;
+    if (thinkingMemo.has(key)) return thinkingMemo.get(key);
+    let info: ThinkingInfo | undefined;
+    try {
+      info = (await graph.services.provider(slotName)?.listThinking?.(bare)) ?? undefined;
+    } catch { info = undefined; } // 目录读失败 = 无信息（lenient 面）
+    thinkingMemo.set(key, info);
+    return info;
+  };
+  const middleOf = (values: readonly string[]): string => values[Math.floor(values.length / 2)]!; // kimi middleOf——GLM 双档 [high,max] 中位即 max
+  // kimi segmentsFor（models.dev 口径）：有档位 → always-on（有档无 toggle 无 none）只列档位；否则前面加 off；
+  // 纯 toggle 型 → on/off 开关两项
+  const segmentsOf = (info: ThinkingInfo): string[] =>
+    info.efforts.length > 0
+      ? (info.offEffort === undefined && !info.hasToggle ? [...info.efforts] : ["off", ...info.efforts])
+      : ["on", "off"];
+  // kimi defaultThinkingEffortForModel：声明 defaultEffort 优先（models.dev 不携带）→ 缺省中位；toggle 型默认 on
+  const defaultEffortOf = (info: ThinkingInfo): string => (info.efforts.length > 0 ? middleOf(info.efforts) : "on");
+  let effortDefaultMemo: string | undefined; // 最近一次解析的默认档（status() 同步读口用；prompt//effort 路径填充）
+  // 用户视角的当前档（未设 → 配置 → 目录默认档；目录无信息 → undefined = 不指定，lenient 面）
+  const resolveStoredEffort = async (): Promise<string | undefined> => {
+    const stored = effortOverride ?? cfgEffortValue();
+    if (stored !== undefined) return stored;
+    const parts = currentModelParts();
+    if (parts === undefined) return undefined;
+    const info = await thinkingInfoOf(parts.slotName, parts.bare);
+    if (info === undefined) return undefined;
+    const d = defaultEffortOf(info);
+    effortDefaultMemo = d;
+    return d;
+  };
+  // 线缆语义值（kimi resolveThinkingEffort）：'on' 原样传（openai 面 silent/anthropic 面 enabled）；
+  // 'off' 有 offEffort 声明 → 发该值（恒 "none"），否则原样 'off'（openai 面 silent）
+  const resolveEffortForWire = async (): Promise<string | undefined> => {
+    const stored = await resolveStoredEffort();
+    if (stored === undefined) return undefined;
+    if (stored !== "off") return stored;
+    const parts = currentModelParts();
+    const info = parts !== undefined ? await thinkingInfoOf(parts.slotName, parts.bare) : undefined;
+    return info?.offEffort ?? "off";
+  };
+  void resolveStoredEffort().catch(() => undefined); // 预热默认档 memo——status() 同步读口在首次 turn 前即可见
   const resolveModelValue = (modelValue: string): { stream: StreamFn; model: string } => {
     const { provider, model: explicitModel } = parseModel(modelValue);
     const adapter = graph.services.provider(provider);
@@ -598,6 +729,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       currentTurn = { controller, done };
       try {
         const { stream, model } = resolveProvider();
+        // 思考档位（/effort）：turn 开头一次性捕获（/model 同款——busy 期切档下一轮生效）。
+        // 未设档 → 目录默认档（kimi「从不不指定」——effort 型模型恒发解析值；目录无信息 → 不带字段）
+        const effort = await resolveEffortForWire();
         // usage 锚点（补强 T3/空白 §4）：包装主循环 stream 记录最近一次真实用量——loop 骨架仍不消费 usage（零策略口径闭合）
         const trackedStream: StreamFn = (req) => (async function* () {
           for await (const c of stream(req)) {
@@ -618,6 +752,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         for await (const e of agentLoop({
             session: store, bus: graph.bus, tools: graph.tools,
             provider: trackedStream, model, system: graph.promptSections(),
+            ...(effort !== undefined ? { reasoningEffort: effort } : {}),
             signal: controller.signal, sink,
             livePush: (c) => live.push(c), // 双投并存（T4/D45）：落日志（assistantChunk）+ 旁路——T5 断流后仅旁路
           })) {
@@ -687,10 +822,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     status() {
       const audit = graph.audit();
       const configured = typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : "（未配置）";
+      const effort = effortOverride ?? cfgEffortValue() ?? effortDefaultMemo; // /effort 读口（宿主 toast diff 与运行状态卡消费；memo 默认档由 prompt//effort 路径预热）
       return {
         model: modelOverride ?? configured,
         overridden: modelOverride !== undefined,
         sessionId: store.sessionId,
+        ...(effort !== undefined ? { effort } : {}),
         modules: {
           active: audit.filter((a) => a.state === "active").length,
           failed: audit.filter((a) => a.state === "failed").length,

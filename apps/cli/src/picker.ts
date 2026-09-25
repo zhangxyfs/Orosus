@@ -1,5 +1,6 @@
 import type { KeyEvent } from "./keys.ts";
 import { moveUp, clearLine, reverse } from "./ansi.ts";
+import { fg } from "./theme.ts";
 
 /** 视口计算（TUI 批 T2/B5 厂商目录分页）——纯函数：窗口由选中项派生（选中项置底边滚入、
  *  首部贴顶、尾部贴底），pick 渲染每帧经它取 [start, end)；PageUp/PageDown 把选中项
@@ -52,7 +53,10 @@ export function pick(
       if (vpHeight !== undefined) lines.push(`…（第 ${win.start + 1}–${win.end} 项，共 ${items.length} 项）`);
       for (let i = win.start; i < win.end; i++) {
         const text = items[i]!.replace(/\n/g, " ");
-        lines.push(i === selected ? reverse(text) : text);
+        // 当前值项（" ✓" 尾标——/model /effort 命令层约定）染青玉 accent（2026-09-25 用户拍板：当前档用
+        // 选中色区分——与全屏 choose 浮层/斜杠菜单二级 ✓ mark 同形）。非 TTY 编号回落不加色（管道保旧 byte 形）
+        const label = text.endsWith(" ✓") ? fg("accent", text) : text;
+        lines.push(i === selected ? reverse(label) : label);
       }
       lines.push(hint);
       return lines;

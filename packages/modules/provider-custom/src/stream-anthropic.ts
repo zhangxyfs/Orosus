@@ -1,6 +1,6 @@
 import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
-import { mapEvent, parseSseBlock, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
+import { mapEvent, parseSseBlock, thinkingParamFor, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 8192;
@@ -63,6 +63,8 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             // 本仓无 anthropic 协议族端点可 spike——形态按官方文档钉，端点不支持时协议错误原样带内）
             ...(request.webSearch === true ? [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }] : []),
           ],
+          // /effort：档位 → thinking 开关/budget 映射（kimi-code 同款，translate-anthropic.ts thinkingParamFor）
+          ...(request.reasoningEffort !== undefined ? { thinking: thinkingParamFor(request.reasoningEffort) } : {}),
           stream: true,
         }),
         signal: request.signal,

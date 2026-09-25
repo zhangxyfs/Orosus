@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createKeyParser, type KeyEvent } from "./keys.ts";
 import { pick, viewportOf } from "./picker.ts";
+import { fg } from "./theme.ts";
 
 /** 测试夹具（T1/T2 共用）：keys 逐条喂给 T0 解析器（parseOnce = createKeyParser 单例的 feed 包装），
  *  按键耗尽后按回车兜底；w 收集全部写面输出供渲染断言。 */
@@ -43,6 +44,14 @@ describe("键盘菜单 picker（TUI 批 T1——B5 第 2 层）", () => {
   });
   it("④ 数字直达：按 2 直接选中第二项", async () => {
     expect(await pick(["a", "b", "c"], fakeIo(["2"]))).toBe(1);
+  });
+  it("④b 当前值项（「 ✓」尾标）染青玉 accent、普通项素色（2026-09-25 用户拍板——与全屏 choose 浮层同形）", async () => {
+    const w: string[] = [];
+    await pick(["low", "high ✓", "max"], fakeIo(["\r"], w));
+    const out = w.join("");
+    expect(out).toContain(fg("accent", "high ✓"));
+    expect(out).not.toContain(fg("accent", "low"));
+    expect(out).toContain("\x1b[7m"); // 光标行反色高亮原样（reverse 包裹彩色项共存）
   });
   it("⑤ 非 TTY → 回落现状编号版（numberQuestion 路径）", async () => {
     const io = { ...fakeIo(["\r"]), isTTY: false, numberQuestion: async () => "1" };

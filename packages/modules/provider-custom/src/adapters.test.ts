@@ -208,6 +208,40 @@ describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
     await last(adapters.get("i")!.stream, req());
     expect("max_tokens" in captured!).toBe(false);
   });
+
+  it("reasoningEffort 线缆映射（/effort 2026-09-25）：openai 族 reasoning_effort 原样；anthropic 族 thinking 映射（kimi-code 口径）；缺省两族都不带", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return new Response("", { status: 200 }); }) as typeof fetch;
+    const adapters = createAdapters({ providers: { i: { ...entry, apiKey: "k" }, a: withDm } }, fetchImpl);
+    const effortReq = (reasoningEffort?: string) => ({
+      model: "m", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    });
+    await last(adapters.get("i")!.stream, effortReq("max"));
+    expect(captured!.reasoning_effort).toBe("max"); // openai 面：档位原样透传
+    expect(captured!.thinking).toBeUndefined();
+    await last(adapters.get("i")!.stream, effortReq("none"));
+    expect(captured!.reasoning_effort).toBe("none"); // offEffort 具体值（core 已解析）原样发
+    await last(adapters.get("i")!.stream, effortReq("on"));
+    expect("reasoning_effort" in captured!).toBe(false); // 语义档 on = silent（kimi resolveThinkingEffort）
+    await last(adapters.get("i")!.stream, effortReq("off"));
+    expect("reasoning_effort" in captured!).toBe(false); // 语义档 off（无 offEffort 声明）= silent
+    await last(adapters.get("i")!.stream, effortReq());
+    expect("reasoning_effort" in captured!).toBe(false); // 缺省不发送（端点默认）
+    await last(adapters.get("a")!.stream, effortReq("low"));
+    expect(captured!.thinking).toEqual({ type: "enabled", budget_tokens: 1024 }); // anthropic 面：预算映射
+    expect(captured!.reasoning_effort).toBeUndefined();
+    await last(adapters.get("a")!.stream, effortReq("none"));
+    expect(captured!.thinking).toEqual({ type: "disabled" }); // offEffort 值 "none"（core 对 off 的解析产物）→ 关思考
+    await last(adapters.get("a")!.stream, effortReq("on"));
+    expect(captured!.thinking).toEqual({ type: "enabled" }); // 语义档 on = 开思考不钉预算
+    await last(adapters.get("a")!.stream, effortReq("off"));
+    expect(captured!.thinking).toEqual({ type: "disabled" }); // 语义档 off（无 offEffort 声明）= 关思考
+    await last(adapters.get("a")!.stream, effortReq("max"));
+    expect(captured!.thinking).toEqual({ type: "enabled" }); // 未钉预算档名：只开思考（端点自定档深）
+    await last(adapters.get("a")!.stream, effortReq());
+    expect("thinking" in captured!).toBe(false);
+  });
 });
 
 describe("listModels（模型发现 T2/D32 修订——createAdapters 随槽装配）", () => {
@@ -228,6 +262,26 @@ describe("listModels（模型发现 T2/D32 修订——createAdapters 随槽装�
     expect(seen[1]!.url).toBe("http://b/v1/models");
     expect(seen[1]!.headers["authorization"]).toBe("Bearer $ENV:X"); // $ENV 占位原样作为 key 传递（解析在 env 层）
     await expect(adapters.get("i")!.listModels!()).rejects.toThrow("HTTP 404");
+  });
+
+  it("listThinking 装配（/effort 2026-09-25）：槽名命中目录 → 思考声明；无信息模型/目录失败 → undefined（核心走 lenient 指引）", async () => {
+    const cat = async () => ({
+      source: "online" as const,
+      catalog: {
+        "zhipuai-coding-plan": {
+          models: {
+            "glm-5.3": { id: "glm-5.3", reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["low", "high", "max"] }] },
+            "glm-4.6v": { id: "glm-4.6v", reasoning_options: [{ type: "toggle" }] },
+          },
+        },
+      },
+    });
+    const adapters = createAdapters({ providers: { "zhipuai-coding-plan": entry } }, undefined, cat);
+    expect(await adapters.get("zhipuai-coding-plan")!.listThinking!("glm-5.3")).toEqual({ efforts: ["low", "high", "max"], hasToggle: true });
+    expect(await adapters.get("zhipuai-coding-plan")!.listThinking!("glm-4.6v")).toEqual({ efforts: [], hasToggle: true }); // 纯开关型（核心 segments = on/off）
+    expect(await adapters.get("zhipuai-coding-plan")!.listThinking!("glm-unknown")).toBeUndefined(); // 目录不认识
+    const off = createAdapters({ providers: { "zhipuai-coding-plan": entry } }, undefined, catalogOff);
+    expect(await off.get("zhipuai-coding-plan")!.listThinking!("glm-5.3")).toBeUndefined(); // 目录不可用不 throw
   });
 
   it("目录优选：全量目录（online）含本槽条目 → 策展清单为覆盖口径且不发端点请求（2026-09-22 /model 清单修复——live 按量池混入套餐外模型，选了就 1113；deprecated/非 tool_call 过滤随目录口径）", async () => {

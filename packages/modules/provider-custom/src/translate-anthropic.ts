@@ -25,6 +25,19 @@ export function mapStopReason(reason: string | null): "stop" | "length" | "toolU
   return "stop"; // end_turn / null / 未知
 }
 
+/** /effort 档位 → anthropic 面 thinking 线缆参数（kimi-code encodeThinking 同款映射）：
+ *  "off"/"none" = 关档（thinking disabled——语义档与 offEffort 值两形都收）；low/medium/high = 开思考并钉
+ *  budget_tokens（1024/4096/32000，kimi-code budgetTokensForEffort 原值）；"on" 与其余档名（max/xhigh/minimal…）
+ *  只开思考不钉预算（端点自定档深）。大小写不敏感。 */
+export function thinkingParamFor(effort: string): { type: "enabled" } | { type: "enabled"; budget_tokens: number } | { type: "disabled" } {
+  const e = effort.toLowerCase();
+  if (e === "off" || e === "none") return { type: "disabled" };
+  if (e === "low") return { type: "enabled", budget_tokens: 1024 };
+  if (e === "medium") return { type: "enabled", budget_tokens: 4096 };
+  if (e === "high") return { type: "enabled", budget_tokens: 32_000 };
+  return { type: "enabled" };
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- 线缆格式按运行时形状窄化 */
 export function mapEvent(state: SseState, event: string, raw: unknown): Chunk[] {
   const data = raw as any;

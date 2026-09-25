@@ -275,4 +275,22 @@ describe("溢出恢复（M3 补强 T4/D43：agent/request-error 广播 + 数据�
     expect(all.some((e) => e.type === "assistant/message")).toBe(true); // 半截文本已物化
     expect((all.at(-1) as { kind?: string }).kind).toBe("error");
   });
+
+  it("④ reasoningEffort 透传（/effort 2026-09-25）：请求带字段 + request/header 记 effort；缺省不带", async () => {
+    const s = sink();
+    const bus = createEventBus(s);
+    const tools = createToolRegistry({ bus, sink: s, spillDir: "/tmp/orosus-loop-spill" });
+    const session = new InMemorySessionStore();
+    const provider = fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]);
+    for await (const _e of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s, reasoningEffort: "high" })) { void _e; }
+    expect(provider.requests[0]!.reasoningEffort).toBe("high"); // 主轮请求透传（provider 翻译层落线缆参数）
+    const header = (await session.all()).find((e) => e.type === "request/header") as { effort?: string };
+    expect(header.effort).toBe("high"); // 审计面记档
+    // 缺省路径：不传 reasoningEffort → 请求与 header 都无字段（端点默认行为）
+    const session2 = new InMemorySessionStore();
+    const provider2 = fakeProvider([[{ type: "finish", kind: "stop" }]]);
+    for await (const _e of agentLoop({ session: session2, bus, tools, provider: provider2.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s })) { void _e; }
+    expect("reasoningEffort" in provider2.requests[0]!).toBe(false);
+    expect(((await session2.all()).find((e) => e.type === "request/header") as { effort?: string }).effort).toBeUndefined();
+  });
 });

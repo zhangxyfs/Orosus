@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { StreamFn } from "@orosus/contracts/provider";
 import { createStream as anthropicStream, createListModels as anthropicListModels } from "./stream-anthropic.ts";
 import { createStream as openaiStream, createListModels as openaiListModels } from "./stream-openai.ts";
-import { defaultCatalogCacheFile, getCatalogWithSource, readCatalogDiskCache, usableCatalogModels, type Catalog, type CatalogSource } from "./catalog.ts";
+import { defaultCatalogCacheFile, getCatalogWithSource, lookupModelThinking, readCatalogDiskCache, usableCatalogModels, type Catalog, type CatalogSource } from "./catalog.ts";
 
 /** 搜索改道服务（tool-web.search-faces）的消费侧形状——tool-web 所有并挂载，此处按结构类型本地声明
  *  （模块互不 import；key 与形状为双边契约，登记于 design-decisions 2026-09-24 服务倒挂条目）。 */
@@ -65,8 +65,8 @@ export function createAdapters(
   fetchImpl?: typeof fetch,
   loadCatalog: CatalogLoader = diskFirstCatalogLoader(),
   facts?: () => Promise<SearchFaceFacts | undefined>,
-): Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }> {
-  const out = new Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> }>();
+): Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> }> {
+  const out = new Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> }>();
   for (const [name, p] of Object.entries(config.providers)) {
     const glue = { apiKey: p.apiKey, baseUrl: p.baseUrl, ...(fetchImpl !== undefined ? { fetchImpl } : {}) };
     const isAnthropic = p.type === "anthropic";
@@ -96,6 +96,14 @@ export function createAdapters(
     out.set(name, {
       stream,
       listModels: catalogPreferredListModels(name, live, loadCatalog), // 目录优选——策展覆盖口径优先，live 兜底
+      listThinking: async (model: string): Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> => { // /effort 数据源：目录三级匹配（catalog.ts），读不到/不认识 → undefined（核心走 lenient 指引）
+        try {
+          const { catalog } = await loadCatalog();
+          return lookupModelThinking(catalog, name, model, p.baseUrl);
+        } catch {
+          return undefined;
+        }
+      },
       ...(p.defaultModel !== undefined ? { defaultModel: p.defaultModel } : {}),
     });
   }

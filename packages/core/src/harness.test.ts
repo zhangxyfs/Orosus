@@ -234,6 +234,176 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 
+  // /effort（2026-09-25 三轮 kimi 同构）：菜单 = segmentsOf（off/…档位——kimi segmentsFor）+ 默认档
+  // （kimi middleOf）+ 线缆（on/off 语义档）。双轨 = effortOverride 会话内存 + user config 顶层 effort 键。
+  const effortHarness = async (extra: {
+    listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined>;
+    configEffort?: string;
+    uiChoose?: (items: string[]) => string;
+  } = {}) => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-"));
+    const store = new InMemorySessionStore();
+    const fake = fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]);
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fake.stream,
+          defaultModel: "m1",
+          listModels: async () => ["m1"],
+          ...(extra.listThinking !== undefined ? { listThinking: extra.listThinking } : {}),
+        });
+      },
+    };
+    const chosen: string[][] = [];
+    const fakeUi: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
+      choose: async (_t, items) => { chosen.push(items); return extra.uiChoose !== undefined ? extra.uiChoose(items) : items[0]!; },
+      confirm: async () => true,
+    };
+    const cfgFile = join(dir, "no-user.toml"); // hermetic 同路径——节区感知靶场：顶层键须落 [approval] 之前
+    writeFileSync(cfgFile, 'model = "fake/m1"\n\n[approval]\nmode = "ask"\n', "utf8");
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi, modules: [prov],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m1", ...(extra.configEffort !== undefined ? { effort: extra.configEffort } : {}) } },
+    });
+    return { h, store, fake, chosen, cfgFile };
+  };
+
+  it("⑦b /effort 菜单 = segments（always-on 型只列档位）+ 当前档 = 默认档中位勾标；选定写盘（节区感知）+ 下轮带 reasoningEffort", async () => {
+    const { h, store, fake, chosen, cfgFile } = await effortHarness({
+      listThinking: async (m) => (m === "m1" ? { efforts: ["low", "high", "max"], hasToggle: false } : undefined),
+      uiChoose: (items) => items.find((x) => x === "max")!,
+    });
+    await h.prompt("hi"); // 未设档直接聊 → 默认档发送（kimi「从不不指定」）：中位 = ["low","high","max"][1] = "high"
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("high");
+    expect(await h.prompt("/effort")).toBe(""); // 静默约定（反馈归宿主 toast diff）
+    expect(chosen[0]).toEqual(["low", "high ✓", "max"]); // always-on 型无 off 档；默认档中位带勾标
+    expect(h.status().effort).toBe("max");
+    const cfg = readFileSync(cfgFile, "utf8");
+    expect(cfg.indexOf('effort = "max"')).toBeGreaterThan(-1);
+    expect(cfg.indexOf('effort = "max"')).toBeLessThan(cfg.indexOf("[approval]")); // 落顶层区（节区感知——裸追加会炸启动）
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("max"); // 主轮下发
+    const header = (await store.all()).filter((e) => e.type === "request/header").at(-1) as { effort?: string };
+    expect(header.effort).toBe("max"); // 审计面
+    await h.close();
+  });
+
+  it("⑦c /effort toggle 型：segments 前置 off 档；选 off → 存 off、线缆 silent（无 offEffort 声明）", async () => {
+    const { h, fake, chosen, cfgFile } = await effortHarness({
+      listThinking: async () => ({ efforts: ["low", "high"], hasToggle: true }), // deepseek-flash 形：segments = off/low/high
+      uiChoose: (items) => items.find((x) => x === "off")!,
+    });
+    await h.prompt("/effort");
+    expect(chosen[0]).toEqual(["off", "low", "high ✓"]); // off 前置 + 默认档 = 中位 high 勾标
+    expect(h.status().effort).toBe("off");
+    expect(readFileSync(cfgFile, "utf8")).toMatch(/^effort = "off"$/m);
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("off"); // 语义档 off 传适配器（openai 面 silent 由 stream-openai 负责——线缆测试在 adapters.test）
+    await h.close();
+  });
+
+  it("⑦d /effort offEffort 声明：off 线缆发 none（kimi resolveThinkingEffort）；auto 回默认档（清覆盖 + 盘上 effort 行删除）", async () => {
+    const { h, fake, cfgFile } = await effortHarness({
+      listThinking: async () => ({ efforts: ["high", "max"], offEffort: "none", hasToggle: false }), // segments = off/high/max；默认 = 中位 max
+    });
+    expect(await h.prompt("/effort off")).toBe(""); // 直达 off
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("none"); // offEffort 声明 → 发 "none"（kimi 同款）
+    await h.prompt("/effort auto"); // 回默认档：清覆盖 + 删盘上行
+    expect(h.status().effort).toBe("max"); // 默认档 = 中位（["high","max"][1]）
+    expect(readFileSync(cfgFile, "utf8")).not.toMatch(/^effort =/m);
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("max"); // 默认档发送
+    await h.close();
+  });
+
+  it("⑦e /effort 已设档（配置层）：菜单当前值 ✓ 勾标；重选当前档 = 无操作不写盘；目录无信息给指引文案", async () => {
+    const { h, chosen, cfgFile } = await effortHarness({
+      listThinking: async (m) => (m === "m1" ? { efforts: ["low", "high", "max"], hasToggle: false } : undefined),
+      configEffort: "low",
+      uiChoose: (items) => items.find((x) => x === "low ✓")!,
+    });
+    const before = readFileSync(cfgFile, "utf8");
+    await h.prompt("/effort");
+    expect(chosen[0]).toEqual(["low ✓", "high", "max"]); // 勾标（无 auto 项——auto 走直达形态）
+    expect(readFileSync(cfgFile, "utf8")).toBe(before); // 原样重选 = 零写盘
+    expect(h.status().effort).toBe("low");
+    await h.close();
+    // 目录无信息模型：菜单路径给指引；直达 lenient 原样收
+    const { h: h2, fake: fake2 } = await effortHarness({ listThinking: async () => undefined });
+    const out = await h2.prompt("/effort");
+    expect(out).toContain("无思考档位信息");
+    expect(out).toContain("/effort <档位>");
+    expect(await h2.prompt("/effort xhigh")).toBe(""); // 目录外档位原样收（lenient——端点 400 自证）
+    await h2.prompt("hi");
+    expect(fake2.requests.at(-1)!.reasoningEffort).toBe("xhigh");
+    await h2.close();
+  });
+
+  it("⑦f /model 切模型档位跟随重解析（kimi draftFor）：segments 不含旧档→默认档写盘；目录不认识→lenient 保留；含旧档→保留", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-"));
+    const store = new InMemorySessionStore();
+    const fake = fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]);
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fake.stream,
+          defaultModel: "m1",
+          listModels: async () => ["m1", "m2", "m3"],
+          listThinking: async (m: string) =>
+            m === "m1" ? { efforts: ["low", "medium", "high"], hasToggle: false }
+              : m === "m2" ? { efforts: ["low", "high"], hasToggle: true } // segments = off/low/high
+              : undefined, // m3 = 目录不认识
+        });
+      },
+    };
+    let pickModel = "m2";
+    const fakeUi: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
+      choose: async (_t, items) => items.find((x) => x === pickModel) ?? items[0]!,
+      confirm: async () => true,
+    };
+    const cfgFile = join(dir, "no-user.toml");
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi, modules: [prov],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m1", effort: "max" } },
+    });
+    // ① m1 → m2（segments off/low/high 不含 max）→ 默认档 = 中位 ["low","high"][1] = "high"
+    await h.prompt("/model");
+    expect(h.status().model).toBe("fake/m2");
+    expect(h.status().effort).toBe("high");
+    expect(readFileSync(cfgFile, "utf8")).toMatch(/^effort = "high"$/m); // 重解析结果写盘
+    // ② m2 → m3（目录不认识）→ lenient 保留 "high" 原样发
+    pickModel = "m3";
+    await h.prompt("/model");
+    expect(h.status().effort).toBe("high");
+    // ③ m3 → m1（segments low/medium/high 含 high）→ 保留（「设置过就尊重」）
+    pickModel = "m1";
+    await h.prompt("/model");
+    expect(h.status().effort).toBe("high");
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.model).toBe("m1");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("high"); // 主轮下发重解析后的档
+    await h.close();
+  });
+
+  it("⑦g 未设档：有目录信息 → 默认档自动发送（状态卡同步显示）；无目录信息 → 不带字段（lenient 面不变）", async () => {
+    const { h, fake } = await effortHarness({ listThinking: async () => ({ efforts: ["low", "high", "max"], hasToggle: false }) });
+    expect(h.status().effort).toBe("high"); // 预热后 status 即见默认档 = 中位（kimi「从不不指定」——未设也有解析值）
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("high"); // 默认档自动发送
+    await h.close();
+    const { h: h2, fake: fake2 } = await effortHarness({}); // 无 listThinking 能力
+    await h2.prompt("hi");
+    expect("reasoningEffort" in fake2.requests.at(-1)!).toBe(false); // 目录无信息 → 不指定（lenient 面）
+    await h2.close();
+  });
+
   it("⑧ /help：按类分组输出且含三层全部命令（批⑤⑥：/usage /status 退役后不再列）", async () => {
     const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
     const out = await h.prompt("/help");

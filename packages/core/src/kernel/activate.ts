@@ -37,8 +37,8 @@ export interface ServiceResolver {
   getOptional(key: string): Promise<unknown | undefined>;
   /** 枚举 provider 槽（/model 等内建命令的消费面，D38）——归一化形态。 */
   listProviders(): { name: string; defaultModel?: string }[];
-  /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32；模型发现修订：透传 listModels 尽力能力） */
-  provider(name: string): { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> } | undefined;
+  /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32；模型发现修订：透传 listModels 尽力能力；/effort 2026-09-25：透传 listThinking） */
+  provider(name: string): { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> } | undefined;
 }
 
 export interface ActivateInput {

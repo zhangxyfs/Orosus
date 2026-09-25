@@ -65,6 +65,11 @@ export interface ProviderRequest {
    *  anthropic 族 = web_search_20250305 server tool）。与 tools 的客户端工具正交——二级调用（D39）tools 恒空，
    *  服务端声明不进会话、模型不可见。 */
   webSearch?: boolean;
+  /** 思考投入档位（/effort 命令，2026-09-25）：值 = 模型目录（models.dev）reasoning_options 里
+   *  effort 型的档位字符串（low/high/max/none…），原样透传——适配器按协议族落线缆参数（openai 族 =
+   *  reasoning_effort；anthropic 族 = thinking 开关与 budget_tokens 映射，kimi-code 同款口径）。
+   *  缺省不发送（端点默认行为）。值不做端点级校验（lenient——kimi-code 定案：不在清单也原样发，端点 400 自证）。 */
+  reasoningEffort?: string;
 }
 
 /** Provider SPI 唯一方法（§6.4）。 */
@@ -92,7 +97,11 @@ export function classifyContextLimit(status: number, body: string): boolean {
 /** Provider 适配器槽值（D32；模型发现修订）：裸函数或带默认模型/模型清单能力的对象——核心按形状归一化。 */
 export type ProviderAdapter =
   | StreamFn
-  | { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]> };
+  | { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; /** 模型思考控制声明（/effort 消费，kimi thinkingAvailability 同构）：
+   *  给定模型名（裸 id）返回目录声明的思考信息（efforts = 档位清单，offEffort = 关档线缆值，hasToggle =
+   *  开关型）；目录无该模型思考信息 → undefined（不 throw——命令侧据此走 lenient 指引）。segments 与
+   *  默认档的派生归核心（kimi segmentsFor / middleOf 口径），目录侧只交原始声明。 */
+    listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> };
 
 /** 模型 id 白名单（模型发现 T1）：端点是不可信数据源——白名单外字符/超限（>128）的 id 丢弃（dsh 密钥格式校验同思路）。 */
 const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
