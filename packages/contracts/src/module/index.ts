@@ -74,22 +74,51 @@ export interface CommandUi {
    *  行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。
    *  缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。
    *  m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 30000]，越界按边界值算——不传即缺省，
-   *  主程序自己的提示全走缺省零变化。 */
+   *  主程序自己的提示全走缺省零变化。
+   *
+   *  @example
+   *  ```ts
+   *  await ui.notice?.("已导出 3 条便签", { durationMs: 8000 }); // 停 8 秒
+   *  ```
+   */
   notice?(text: string, opts?: { durationMs?: number }): void;
   /** 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式
    *  静默丢弃。窗排队（一次一窗，后来的等旧窗关）。
    *  opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的
-   *  属主判定靠它；模块开发者无须也不应自填（@internal）。 */
+   *  属主判定靠它；模块开发者无须也不应自填（@internal）。
+   *
+   *  @example
+   *  ```ts
+   *  ui.viewText?.("便签", notes.join("
+"), { layout: { height: 20, marginTop: 2 } });
+   *  ```
+   */
   viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
-   *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。 */
+   *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。
+   *  @example
+   *  ```ts
+   *  ui.insertText?.("已填入模板");
+   *  ```
+   */
   readonly insertText?: ((text: string) => void) | undefined;
   /** 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
-   *  行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。 */
+   *  行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。
+   *  @example
+   *  ```ts
+   *  ui.attachImage?.("D:/shots/2026-09-25.png"); // chip [image #N] 进输入框
+   *  ```
+   */
   readonly attachImage?: ((path: string) => void) | undefined;
   /** 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
    *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。
-   *  属性式 | undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。 */
+   *  属性式 | undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。
+   *  @example
+   *  ```ts
+   *  const h = ui.dialog?.({ title: "作业", widgets: [{ id: "p", kind: "progress", value: () => done, max: total }] });
+   *  // 完成后：h?.close()
+   *  ```
+   */
   readonly dialog?: ((spec: DialogSpec) => DialogHandle | undefined) | undefined;
 }
 

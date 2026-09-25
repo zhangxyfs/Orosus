@@ -17,7 +17,7 @@
 </div></section>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">CommandUi</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#attachimage">attachImage</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">path</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">void</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#dialog">dialog</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">spec</span><span class="tsd-signature-symbol">:</span> <a href="module.DialogSpec.html" class="tsd-signature-type tsd-kind-interface">DialogSpec</a><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <a href="module.DialogHandle.html" class="tsd-signature-type tsd-kind-interface">DialogHandle</a><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#inserttext">insertText</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">text</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">void</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#ask-1">ask</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">question</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#asksecret-1">askSecret</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">question</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#choose-1">choose</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">title</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <span class="tsd-kind-parameter">items</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#confirm-1">confirm</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">question</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">boolean</span><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#notice-1">notice</a><span class="tsd-signature-symbol">?</span><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">text</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <span class="tsd-kind-parameter">opts</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">{</span> <span class="tsd-kind-property">durationMs</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">number</span> <span class="tsd-signature-symbol">}</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">void</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#viewtext-1">viewText</a><span class="tsd-signature-symbol">?</span><span class="tsd-signature-symbol">(</span><br/>        <span class="tsd-kind-parameter">title</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span><br/>        <span class="tsd-kind-parameter">text</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span><br/>        <span class="tsd-kind-parameter">opts</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">{</span><br/>            <span class="tsd-kind-property">keys</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">Record</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <a href="module.PopupKey.html" class="tsd-signature-type tsd-kind-interface">PopupKey</a><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/>            <span class="tsd-kind-property">layout</span><span class="tsd-signature-symbol">?:</span> <a href="../types/module.PopupLayout.html" class="tsd-signature-type tsd-kind-type-alias">PopupLayout</a><span class="tsd-signature-symbol">;</span><br/>            <span class="tsd-kind-property">owner</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>        <span class="tsd-signature-symbol">}</span><span class="tsd-signature-symbol">,</span><br/>    <span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">void</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L67">module/index.ts:67</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L67">module/index.ts:67</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -46,26 +46,44 @@
 <div class="tsd-signature"><span class="tsd-kind-property">attachImage</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">path</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">void</span></div>
 <div class="tsd-comment tsd-typography"><p>贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
 行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。</p>
-</div><aside class="tsd-sources">
+</div>
+<div class="tsd-comment tsd-typography">
+<div class="tsd-tag-example">
+<h4 class="tsd-anchor-link" id="example">Example<a href="#example" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h4><pre><code class="ts"><span class="hl-0"> </span><span class="hl-1">ui</span><span class="hl-0">.</span><span class="hl-2">attachImage</span><span class="hl-0">?.(</span><span class="hl-3">&quot;D:/shots/2026-09-25.png&quot;</span><span class="hl-0">); </span><span class="hl-4">// chip [image #N] 进输入框</span>
+</code><button type="button">Copy</button></pre>
+
+</div></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L89">module/index.ts:89</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L112">module/index.ts:112</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="dialog"><code class="tsd-tag">Optional</code> <code class="tsd-tag">Readonly</code><span>dialog</span><a href="#dialog" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">dialog</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">spec</span><span class="tsd-signature-symbol">:</span> <a href="module.DialogSpec.html" class="tsd-signature-type tsd-kind-interface">DialogSpec</a><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <a href="module.DialogHandle.html" class="tsd-signature-type tsd-kind-interface">DialogHandle</a></div>
 <div class="tsd-comment tsd-typography"><p>控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
 不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。
 属性式 | undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。</p>
-</div><aside class="tsd-sources">
+</div>
+<div class="tsd-comment tsd-typography">
+<div class="tsd-tag-example">
+<h4 class="tsd-anchor-link" id="example-1">Example<a href="#example-1" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h4><pre><code class="ts"><span class="hl-0"> </span><span class="hl-5">const</span><span class="hl-0"> </span><span class="hl-6">h</span><span class="hl-0"> = </span><span class="hl-1">ui</span><span class="hl-0">.</span><span class="hl-2">dialog</span><span class="hl-0">?.({ </span><span class="hl-1">title:</span><span class="hl-0"> </span><span class="hl-3">&quot;作业&quot;</span><span class="hl-0">, </span><span class="hl-1">widgets:</span><span class="hl-0"> [{ </span><span class="hl-1">id:</span><span class="hl-0"> </span><span class="hl-3">&quot;p&quot;</span><span class="hl-0">, </span><span class="hl-1">kind:</span><span class="hl-0"> </span><span class="hl-3">&quot;progress&quot;</span><span class="hl-0">, </span><span class="hl-2">value</span><span class="hl-1">:</span><span class="hl-0"> () </span><span class="hl-5">=&gt;</span><span class="hl-0"> </span><span class="hl-1">done</span><span class="hl-0">, </span><span class="hl-1">max:</span><span class="hl-0"> </span><span class="hl-1">total</span><span class="hl-0"> }] });</span><br/><span class="hl-0"> </span><span class="hl-4">// 完成后：h?.close()</span>
+</code><button type="button">Copy</button></pre>
+
+</div></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L93">module/index.ts:93</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L122">module/index.ts:122</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="inserttext"><code class="tsd-tag">Optional</code> <code class="tsd-tag">Readonly</code><span>insert<wbr/>Text</span><a href="#inserttext" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">insertText</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">text</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">void</span></div>
 <div class="tsd-comment tsd-typography"><p>往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
 （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。</p>
-</div><aside class="tsd-sources">
+</div>
+<div class="tsd-comment tsd-typography">
+<div class="tsd-tag-example">
+<h4 class="tsd-anchor-link" id="example-2">Example<a href="#example-2" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h4><pre><code class="ts"><span class="hl-0"> </span><span class="hl-1">ui</span><span class="hl-0">.</span><span class="hl-2">insertText</span><span class="hl-0">?.(</span><span class="hl-3">&quot;已填入模板&quot;</span><span class="hl-0">);</span>
+</code><button type="button">Copy</button></pre>
+
+</div></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L86">module/index.ts:86</a></li></ul></aside></section></section></details>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L104">module/index.ts:104</a></li></ul></aside></section></section></details>
 <details class="tsd-panel-group tsd-member-group tsd-accordion" open><summary class="tsd-accordion-summary" data-key="section-Methods"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
 <h2 class="tsd-anchor-link" id="methods-1">Methods<a href="#methods-1" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h2></summary>
 <section>
@@ -81,7 +99,7 @@
 <li><span><span class="tsd-kind-parameter">question</span>: <span class="tsd-signature-type">string</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L68">module/index.ts:68</a></li></ul></aside></div></li></ul></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L68">module/index.ts:68</a></li></ul></aside></div></li></ul></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="asksecret"><span>ask<wbr/>Secret</span><a href="#asksecret" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul class="tsd-signatures">
@@ -96,7 +114,7 @@
 <li><span><span class="tsd-kind-parameter">question</span>: <span class="tsd-signature-type">string</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L70">module/index.ts:70</a></li></ul></aside></div></li></ul></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L70">module/index.ts:70</a></li></ul></aside></div></li></ul></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="choose"><span>choose</span><a href="#choose" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul class="tsd-signatures">
@@ -110,7 +128,7 @@
 <li><span><span class="tsd-kind-parameter">items</span>: <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">[]</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L71">module/index.ts:71</a></li></ul></aside></div></li></ul></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L71">module/index.ts:71</a></li></ul></aside></div></li></ul></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="confirm"><span>confirm</span><a href="#confirm" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul class="tsd-signatures">
@@ -123,7 +141,7 @@
 <li><span><span class="tsd-kind-parameter">question</span>: <span class="tsd-signature-type">string</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">boolean</span><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L72">module/index.ts:72</a></li></ul></aside></div></li></ul></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L72">module/index.ts:72</a></li></ul></aside></div></li></ul></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="notice"><code class="tsd-tag">Optional</code><span>notice</span><a href="#notice" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul class="tsd-signatures">
@@ -141,9 +159,15 @@ m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 3000
 <ul class="tsd-parameter-list">
 <li><span><span class="tsd-kind-parameter">text</span>: <span class="tsd-signature-type">string</span></span></li>
 <li><span><code class="tsd-tag">Optional</code><span class="tsd-kind-parameter">opts</span>: <span class="tsd-signature-symbol">{</span> <span class="tsd-kind-property">durationMs</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">number</span> <span class="tsd-signature-symbol">}</span></span></li></ul></div>
-<h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">void</span></h4><aside class="tsd-sources">
+<h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">void</span></h4>
+<div class="tsd-comment tsd-typography">
+<div class="tsd-tag-example">
+<h4 class="tsd-anchor-link" id="example-3">Example<a href="#example-3" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h4><pre><code class="ts"><span class="hl-0"> </span><span class="hl-7">await</span><span class="hl-0"> </span><span class="hl-1">ui</span><span class="hl-0">.</span><span class="hl-2">notice</span><span class="hl-0">?.(</span><span class="hl-3">&quot;已导出 3 条便签&quot;</span><span class="hl-0">, { </span><span class="hl-1">durationMs:</span><span class="hl-0"> </span><span class="hl-8">8000</span><span class="hl-0"> }); </span><span class="hl-4">// 停 8 秒</span>
+</code><button type="button">Copy</button></pre>
+
+</div></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L78">module/index.ts:78</a></li></ul></aside></div></li></ul></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L84">module/index.ts:84</a></li></ul></aside></div></li></ul></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="viewtext"><code class="tsd-tag">Optional</code><span>view<wbr/>Text</span><a href="#viewtext" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <ul class="tsd-signatures">
@@ -161,9 +185,15 @@ opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = und
 <li><span><span class="tsd-kind-parameter">title</span>: <span class="tsd-signature-type">string</span></span></li>
 <li><span><span class="tsd-kind-parameter">text</span>: <span class="tsd-signature-type">string</span></span></li>
 <li><span><code class="tsd-tag">Optional</code><span class="tsd-kind-parameter">opts</span>: <span class="tsd-signature-symbol">{</span> <span class="tsd-kind-property">keys</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">Record</span><span class="tsd-signature-symbol">&lt;</span><span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">,</span> <a href="module.PopupKey.html" class="tsd-signature-type tsd-kind-interface">PopupKey</a><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span> <span class="tsd-kind-property">layout</span><span class="tsd-signature-symbol">?:</span> <a href="../types/module.PopupLayout.html" class="tsd-signature-type tsd-kind-type-alias">PopupLayout</a><span class="tsd-signature-symbol">;</span> <span class="tsd-kind-property">owner</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span> <span class="tsd-signature-symbol">}</span></span></li></ul></div>
-<h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">void</span></h4><aside class="tsd-sources">
+<h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">void</span></h4>
+<div class="tsd-comment tsd-typography">
+<div class="tsd-tag-example">
+<h4 class="tsd-anchor-link" id="example-4">Example<a href="#example-4" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h4><pre><code class="ts"><span class="hl-0"> </span><span class="hl-1">ui</span><span class="hl-0">.</span><span class="hl-2">viewText</span><span class="hl-0">?.(</span><span class="hl-3">&quot;便签&quot;</span><span class="hl-0">, </span><span class="hl-1">notes</span><span class="hl-0">.</span><span class="hl-2">join</span><span class="hl-0">(</span><span class="hl-3">&quot;</span><br/><span class="hl-3">&quot;</span><span class="hl-0">), { </span><span class="hl-1">layout:</span><span class="hl-0"> { </span><span class="hl-1">height:</span><span class="hl-0"> </span><span class="hl-8">20</span><span class="hl-0">, </span><span class="hl-1">marginTop:</span><span class="hl-0"> </span><span class="hl-8">2</span><span class="hl-0"> } });</span>
+</code><button type="button">Copy</button></pre>
+
+</div></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/2083f5460d68ecf339c71ab84c5c44839fe927af/packages/contracts/src/module/index.ts#L83">module/index.ts:83</a></li></ul></aside></div></li></ul></section></section></details></div>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/module/index.ts#L96">module/index.ts:96</a></li></ul></aside></div></li></ul></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

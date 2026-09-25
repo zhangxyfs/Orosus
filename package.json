@@ -13,7 +13,8 @@
     "lint": "oxlint .",
     "check:boundaries": "node --experimental-strip-types scripts/check-boundaries.mts",
     "build": "pnpm -r build",
-    "docs:check": "pnpm gen-docs && git diff --exit-code docs/api",
+    "docs:check": "pnpm gen-docs && pnpm gen-extension-catalog && git diff --exit-code docs/api docs/extension-catalog.md",
+    "gen-extension-catalog": "node --experimental-strip-types scripts/gen-extension-catalog.mts",
     "gen-docs": "node --experimental-strip-types scripts/gen-api-docs.mts"
   },
   "devDependencies": {

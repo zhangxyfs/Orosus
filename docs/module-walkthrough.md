@@ -1,5 +1,8 @@
 # 模块开发 walkthrough：从零到 /reload
 
+
+> **给 AI 的提示**：帮用户写模块前先读 `docs/extension-catalog.md`（机器生成的扩展点目录——
+> 每个口子一句人话 + 声明形态 + 可抄示例，与契约源永远同步）。
 > 这是**教程层**——把人领进门，一步步做一个真能跑的模块。写完之后：
 > 速查去 [developers.md](developers.md)，接口签名与逐口示例去 [docs/api](api/index.html)，
 > 单个模块的设计取舍去 [superpowers/specs/modules/](superpowers/specs/modules/README.md)。
