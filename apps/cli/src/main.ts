@@ -38,6 +38,7 @@ import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
+import { toggleResultText } from "./module-toggle-result.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -1144,9 +1145,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           const r = await h.reload();
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
           await refreshPanel();
-          app.showToast(target
-            ? `已挂载 ${name}（reload：added ${r.added.join(",") || "无"}）`
-            : `已卸载 ${name}（reload：removed ${r.removed.join(",") || "无"}）`);
+          app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
         } catch (err) {
           app.showToast(`插拔失败：${err instanceof Error ? err.message : String(err)}（已回写配置，可 /reload 或重启恢复）`);
         }

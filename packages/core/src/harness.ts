@@ -541,7 +541,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }],
     ["/reload", async () => {
       const r = await harnessImpl.reload();
-      return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length}`;
+      // failed 段（T2 修谎）：回显报失败清单——失败模块明说原因首行，不再只报四段计数
+      const failedText = r.failed.length === 0
+        ? " 无"
+        : `：${r.failed.map((f) => `${f.name}（${f.reason.split("\n")[0] ?? f.reason}）`).join("、")}`;
+      return `reload 完成：added ${r.added.join(",") || "无"} / removed ${r.removed.join(",") || "无"} / reloaded ${r.reloaded.join(",") || "无"} / unchanged ${r.unchanged.length} / failed${failedText}`;
     }],
     ["/context", async () => {
       // 三行余量（M4-2 T20/B20）：窗口 = 核心顶层 contextWindow（D44）；已用 = usage 锚点（D39 修订透出），

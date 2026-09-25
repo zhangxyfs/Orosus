@@ -87,6 +87,7 @@ describe("harness.reload 与 /reload（§5.5/T15）", () => {
     const h = await boot({});
     const out = await h.prompt("/reload");
     expect(out).toContain("unchanged");
+    expect(out).toContain("failed 无"); // failed 段（T2）：回显报失败清单——空态显式「无」
     await h.close();
   });
 
