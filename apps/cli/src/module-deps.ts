@@ -15,8 +15,9 @@ const hardCaps = (row: ModuleDepRow): string[] => row.dependsOn.filter((d) => !d
 
 /**
  * 卸载闭包（T4/诊断方向 5）：卸 A 时硬依赖 A 所提供能力的模块跟着停——传递闭包（BFS）。
- * 只沿 active 依赖者走（停用/失败的依赖者无需再写停用）；闭包撞锁定模块 → 拒绝整次操作
- * （S1 拍板：卸了它运行就报错，宁可不动不可半拆）。
+ * 沿 active 与 failed 依赖者扩展（failed = 级联降级态，事故后常态——它的 enabled 仍 true，
+ * 不收进闭包则降级噪音照旧）；已停用（discovered）的依赖者无需再写停用。闭包撞锁定模块 →
+ * 拒绝整次操作（S1 拍板：卸了它运行就报错，宁可不动不可半拆）。
  */
 export function computeUnmountClosure(names: string[], modules: ModuleDepRow[], lockedNames: string[]): ClosureResult {
   const locked = new Set(lockedNames);
@@ -28,7 +29,7 @@ export function computeUnmountClosure(names: string[], modules: ModuleDepRow[], 
     closure.add(cur);
     const caps = new Set(modules.find((m) => m.name === cur)?.provides ?? []);
     for (const row of modules) {
-      if (row.state !== "active" || closure.has(row.name)) continue;
+      if ((row.state !== "active" && row.state !== "failed") || closure.has(row.name)) continue;
       if (hardCaps(row).some((c) => caps.has(c))) queue.push(row.name);
     }
   }

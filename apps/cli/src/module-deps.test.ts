@@ -68,3 +68,16 @@ describe("硬依赖联动闭包（T4/S1）", () => {
     }
   });
 });
+
+describe("卸载闭包的降级态收编（code-review 修复：failed 依赖者也写盘）", () => {
+  it("依赖方处于 failed（级联降级态、enabled 仍 true）→ 照样进闭包写盘（消除降级噪音）", () => {
+    const rows = [
+      row("a", ["cap-a"], []),
+      row("b", ["cap-b"], ["cap-a"], "failed"), // 事故后常态：被降级但 enabled=true
+      row("c-off", ["cap-c"], ["cap-a"], "discovered"), // 已停用：无需再写
+    ];
+    const r = computeUnmountClosure(["a"], rows, []);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect([...r.write].sort()).toEqual(["a", "b"]); // failed 收编、discovered 不收
+  });
+});

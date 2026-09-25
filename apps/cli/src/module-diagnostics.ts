@@ -46,32 +46,17 @@ function tagOf(code: string, reason: string): DiagTag {
  * 输出按 last 倒序。
  */
 export function readDiagnostics(dir: string, now: Date): DiagEntry[] {
-  const days = [now, new Date(now.getTime() - 86_400_000)].map((d) => d.toISOString().slice(0, 10));
   const byKey = new Map<string, DiagEntry>();
-  for (const day of days) {
-    const file = join(dir, `diagnostic-${day}.jsonl`);
-    if (!existsSync(file)) continue; // 缺文件静默跳过
-    for (const raw of readFileSync(file, "utf8").split("\n")) {
-      if (raw.trim() === "") continue;
-      let rec: { ts?: unknown; code?: unknown; msg?: unknown; data?: unknown };
-      try {
-        rec = JSON.parse(raw) as typeof rec;
-      } catch {
-        continue;
-      }
-      if (typeof rec.code !== "string" || !COLLECTED_CODES.has(rec.code)) continue;
-      if (typeof rec.msg !== "string") continue;
-      if (rec.code === "kernel.discover.skip" && !isLoadFailureSkip(rec.msg)) continue;
-      const name = extractModuleName(rec);
-      if (name === undefined || typeof rec.ts !== "string") continue;
-      const key = `${name}\u0000${rec.msg}`;
-      const existing = byKey.get(key);
-      if (existing !== undefined) {
-        existing.count++;
-        if (rec.ts > existing.last) existing.last = rec.ts;
-      } else {
-        byKey.set(key, { name, tag: tagOf(rec.code, rec.msg), reason: rec.msg, count: 1, last: rec.ts });
-      }
+  for (const rec of iterCollectedLines(dir, now)) {
+    const name = extractModuleName(rec);
+    if (name === undefined) continue;
+    const key = `${name}\u0000${rec.msg}`;
+    const existing = byKey.get(key);
+    if (existing !== undefined) {
+      existing.count++;
+      if (rec.ts > existing.last) existing.last = rec.ts;
+    } else {
+      byKey.set(key, { name, tag: tagOf(rec.code, rec.msg), reason: rec.msg, count: 1, last: rec.ts });
     }
   }
   return [...byKey.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
@@ -85,33 +70,37 @@ export interface DiagLine {
   data?: Record<string, unknown>;
 }
 
-const moduleOf = (e: DiagLine): string | undefined => {
+/** 事件行的结构化模块名（data.module——T5/T7 已补；缺省时 undefined，msg 前缀兜底只在聚合读取器做）。 */
+export const moduleOf = (e: DiagLine): string | undefined => {
   const m = e.data?.["module"];
   return typeof m === "string" && m !== "" ? m : undefined;
 };
 
-/** 读窗口内白名单失败事件的原始行（同 readDiagnostics 的过滤口径，不聚合、不排序）。 */
-export function readDiagRawLines(dir: string, now: Date): DiagLine[] {
+/** S2 两日窗口内白名单失败事件的原始行遍历（readDiagnostics 与 readDiagRawLines 共享——窗口/坏行/白名单/skip 分叉同口径）。 */
+function* iterCollectedLines(dir: string, now: Date): Generator<DiagLine> {
   const days = [now, new Date(now.getTime() - 86_400_000)].map((d) => d.toISOString().slice(0, 10));
-  const out: DiagLine[] = [];
   for (const day of days) {
     const file = join(dir, `diagnostic-${day}.jsonl`);
-    if (!existsSync(file)) continue;
+    if (!existsSync(file)) continue; // 缺文件静默跳过
     for (const raw of readFileSync(file, "utf8").split("\n")) {
       if (raw.trim() === "") continue;
       let rec: { ts?: unknown; code?: unknown; msg?: unknown; data?: unknown };
       try {
         rec = JSON.parse(raw) as typeof rec;
       } catch {
-        continue;
+        continue; // 坏行跳过
       }
       if (typeof rec.code !== "string" || !COLLECTED_CODES.has(rec.code)) continue;
       if (typeof rec.msg !== "string" || typeof rec.ts !== "string") continue;
       if (rec.code === "kernel.discover.skip" && !isLoadFailureSkip(rec.msg)) continue;
-      out.push({ ts: rec.ts, code: rec.code, msg: rec.msg, ...(rec.data !== undefined ? { data: rec.data as Record<string, unknown> } : {}) });
+      yield { ts: rec.ts, code: rec.code, msg: rec.msg, ...(rec.data !== undefined ? { data: rec.data as Record<string, unknown> } : {}) };
     }
   }
-  return out;
+}
+
+/** 读窗口内白名单失败事件的原始行（不聚合、不排序）。 */
+export function readDiagRawLines(dir: string, now: Date): DiagLine[] {
+  return [...iterCollectedLines(dir, now)];
 }
 
 /** 二级详情文本拼装（T10/S9）：失败原因全文 / 连带影响 / 事件时间线 / 修复指引（三类模板）。

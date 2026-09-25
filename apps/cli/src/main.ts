@@ -41,7 +41,7 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
-import { readDiagnostics, readDiagRawLines, renderDetail } from "./module-diagnostics.ts";
+import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -1210,10 +1210,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       const dir = join(orosusHome(), "logs");
       const entry = readDiagnostics(dir, now).find((e) => e.name === name);
       if (entry === undefined) return "（该模块没有诊断记录）";
-      const raw = readDiagRawLines(dir, now).filter((e) => {
-        const m = typeof e.data?.["module"] === "string" ? (e.data["module"] as string) : undefined;
-        return m === name || e.msg.includes(`的提供者 ${name}`);
-      });
+      const raw = readDiagRawLines(dir, now).filter((e) => moduleOf(e) === name || e.msg.includes(`的提供者 ${name}`));
       return renderDetail(entry, raw);
     },
     toggleTool: () => {

@@ -14,7 +14,7 @@ import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
-import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import * as theme from "../theme.ts";
@@ -164,7 +164,7 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 		const head = ` ${mark} ${theme.fg("err", "●")} ${e.name} ${theme.fg("info", e.tag)} `;
 		const time = e.last.slice(11, 19); // ISO 时分秒（与日志同口径）
 		const right = `${e.count} 次 · ${time}`;
-		const headW = visibleWidth(stripAnsiOf(head));
+		const headW = visibleWidth(stripAnsi(head));
 		const reasonW = innerW - headW - right.length - 2;
 		const reason = reasonW >= 3 ? truncateToWidth(e.reason, reasonW) : "";
 		const pad = Math.max(1, innerW - headW - right.length - visibleWidth(reason));
@@ -177,8 +177,6 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 	return { lines, selRow: sel - wstart };
 }
 
-/** stripAnsi 就地别名（width.ts 未导出该函数——此处只为计宽）。 */
-const stripAnsiOf = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 const PERM_LABEL: Record<string, string> = { "ask-always": "Always Ask", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
 
