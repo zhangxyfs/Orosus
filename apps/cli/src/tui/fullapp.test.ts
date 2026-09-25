@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { FullApp, diagListLines, type FullAppIO, type PanelData } from "./fullapp.ts";
+import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg } from "../theme.ts";
 
@@ -1147,5 +1148,145 @@ describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order�
 		input.emit("data", "\x1b[C"); // → 翻页不重置选中
 		await flush();
 		expect(app.stateRef.moduleSel).toBe(1);
+	});
+});
+
+describe("控件窗三①（m5 T7——数据流三路 + 事件回传 + 句柄 + 卸载关窗；input 事件型在 T8）", () => {
+	const listSpec = (items: string[]): DialogSpec => ({
+		title: "后台作业",
+		widgets: [
+			{ id: "t", kind: "text", text: "作业列表", style: "accent" },
+			{ id: "l", kind: "list", interactive: true, items },
+		],
+	});
+
+	it("① 路一开窗快照：控件清单直渲染（文本 + 交互列表带选中标记）", async () => {
+		const { app, output } = rig();
+		app.start();
+		await flush();
+		app.openDialog(listSpec(["跑着", "排队", "完成"]));
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("后台作业");
+		expect(b).toContain("作业列表");
+		expect(b).toContain("跑着");
+	});
+
+	it("② 事件三型之 select/activate：↓ 触发 select、Enter 触发 activate——onEvent 收到 index", async () => {
+		const events: string[] = [];
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "后台作业",
+			widgets: [{ id: "l", kind: "list", interactive: true, items: ["a", "b", "c"] }],
+			onEvent: (e) => {
+				events.push(e.type === "select" || e.type === "activate" ? `${e.type}:${e.id}:${e.index}` : e.type);
+			},
+		});
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ → select index 1
+		await flush();
+		input.emit("data", "\r"); // Enter → activate index 1
+		await flush();
+		expect(events).toEqual(["select:l:1", "activate:l:1"]);
+	});
+
+	it("③ 路二 onEvent 回新清单 = 整窗替换（滚回顶部）；路三 update 句柄换清单", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		let mode = "列表态";
+		const h = app.openDialog({
+			title: "作业",
+			widgets: [{ id: "l", kind: "list", interactive: true, items: ["x", "y"] }],
+			onEvent: (e) => {
+				if (e.type === "activate") {
+					mode = "激活态";
+					return [{ id: "done", kind: "text", text: "已激活：完成", style: "accent" }];
+				}
+				return undefined;
+			},
+		});
+		await flush();
+		expect(h).toBeDefined();
+		input.emit("data", "\r"); // activate → onEvent 回新清单（路二）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("已激活：完成");
+		h!.update([{ id: "u", kind: "kv", label: "状态", value: "句柄更新" }]); // 路 3
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("句柄更新");
+		expect(mode).toBe("激活态");
+	});
+
+	it("④ Esc 关窗 + 句柄作废：关窗后 update/close 无操作不报错", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		const h = app.openDialog(listSpec(["a"]));
+		await flush();
+		input.emit("data", "\x1b"); // Esc
+		await flush();
+		output.buf = "";
+		h!.update([{ id: "x", kind: "text", text: "不应出现" }]);
+		await flush();
+		expect(stripAnsi(output.buf)).not.toContain("不应出现");
+		expect(() => h!.close()).not.toThrow();
+	});
+
+	it("⑤ 卸载关窗：closeModuleUi(owner) 关在屏窗 + toast；句柄随之作废", async () => {
+		const { app, output } = rig();
+		app.start();
+		await flush();
+		const h = app.openDialog(listSpec(["a"]), "job-mod");
+		await flush();
+		app.closeModuleUi("job-mod");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("模块 job-mod 已卸载");
+		output.buf = "";
+		h!.update([{ id: "x", kind: "text", text: "不应出现" }]);
+		await flush();
+		expect(stripAnsi(output.buf)).not.toContain("不应出现");
+	});
+
+	it("⑥ onEvent 抛错 = 黄字提示且窗保留（全局约束 4）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "炸窗",
+			widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }],
+			onEvent: () => {
+				throw new Error("模块炸了");
+			},
+		});
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("控件窗事件处理出错");
+		expect(b).toContain("炸窗"); // 窗保留
+	});
+
+	it("⑦ Tab 焦点循环：两个交互列表间换焦点，↑↓ 只动焦点列表", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "双列表",
+			widgets: [
+				{ id: "a", kind: "list", interactive: true, items: ["a1", "a2"] },
+				{ id: "b", kind: "list", interactive: true, items: ["b1", "b2"] },
+			],
+		});
+		await flush();
+		input.emit("data", "\t"); // 焦点 a → b
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 动 b 列表（b1 → b2）
+		await flush();
+		// 断言走输出：b2 被选中（焦点列表选中行带 ❯ 且高亮）——检查 b2 行含选中标记
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("双列表");
+		expect(b).toContain("❯ b2");
 	});
 });

@@ -4,14 +4,15 @@
  *  行模式降级语义：viewText 落 console 多行（内容承载不丢弃）；insertText/attachImage 等注入口
  *  静默丢弃（决策点 9——行模式无文内 chip 机制）。 */
 
-import type { CommandUi, PopupKey, PopupLayout } from "@orosus/contracts/module";
+import type { CommandUi, DialogHandle, DialogSpec, PopupKey, PopupLayout } from "@orosus/contracts/module";
 import { createReadlineUi } from "./menu.ts";
 
 /** 装配层需要的 FullApp 最小面（结构类型兼容——FullApp 实例直接可传）。 */
 export interface FullAppFace {
   viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
+  openDialog(spec: DialogSpec, owner?: string): DialogHandle | undefined;
   insertAtCursor(text: string): void;
-  showToast(text: string): void;
+  showToast(text: string, durationMs?: number): void;
 }
 
 export interface CliUiDeps {
@@ -53,6 +54,11 @@ export function createCliUi(deps: CliUiDeps): CommandUi {
       const app = deps.activeApp();
       if (app === undefined || deps.attachImage === undefined) return undefined;
       return (path: string) => deps.attachImage!(app, path);
+    },
+    // 控件窗（m5 T7 口子三）：同款活 getter——行模式/无全屏宿主无控件窗，模块判空降级（如回退 viewText）
+    get dialog(): CommandUi["dialog"] {
+      const app = deps.activeApp();
+      return app === undefined ? undefined : (spec: DialogSpec) => app.openDialog(spec, spec.owner);
     },
   };
 }

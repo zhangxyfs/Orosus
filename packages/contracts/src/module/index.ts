@@ -88,8 +88,9 @@ export interface CommandUi {
    *  行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。 */
   readonly attachImage?: ((path: string) => void) | undefined;
   /** 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
-   *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。 */
-  dialog?(spec: DialogSpec): DialogHandle | undefined;
+   *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。
+   *  属性式 | undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。 */
+  readonly dialog?: ((spec: DialogSpec) => DialogHandle | undefined) | undefined;
 }
 
 /** 控件（m5 口子二/三共用）——「给数据不给画面」：模块交控件清单，画永远是宿主画。八种：
@@ -131,6 +132,8 @@ export interface DialogSpec {
   layout?: PopupLayout;
   widgets: WidgetSpec[];
   onEvent?(e: DialogEvent): WidgetSpec[] | void;
+  /** 内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」属主判定用（@internal，模块勿自填）。 */
+  owner?: string;
 }
 
 /** 控件窗句柄：update 换整份清单（滚回顶部）；close 关窗。窗已关或模块已卸载后再调 = 无操作不报错。 */

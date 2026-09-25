@@ -17,6 +17,10 @@ const fakeApp = (): { app: FullAppFace; seen: Array<Record<string, unknown>> } =
   const seen: Array<Record<string, unknown>> = [];
   const app: FullAppFace = {
     viewText: (title, text, opts) => seen.push({ title, text, opts }),
+    openDialog: (spec, owner) => {
+      seen.push({ dialog: spec.title, owner });
+      return { update: () => {}, close: () => {} };
+    },
     insertAtCursor: (t) => seen.push({ insert: t }),
     showToast: (t) => seen.push({ toast: t }),
   };
@@ -148,6 +152,28 @@ describe("输入框注入两法装配（m5 T4——活 getter：全屏期委托�
 		mode = "full"; // 进全屏（同一 commandUi 对象、同一内核包装）
 		expect(typeof cap.ui!.insertText).toBe("function");
 		expect(cap.ui!.viewText).toBeDefined();
+		await h.close();
+	});
+});
+
+describe("dialog 装配（m5 T7——活 getter：全屏期委托 openDialog 带 owner、行模式 undefined）", () => {
+	it("① 全屏委托：ui.dialog(spec) → app.openDialog(spec, owner)；行模式读 undefined（判空降级）", () => {
+		const { app, seen } = fakeApp();
+		const full = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => app });
+		const handle = full.dialog!({ title: "作业", widgets: [{ id: "l", kind: "list", items: ["x"] }] });
+		expect(handle).toBeDefined();
+		expect(seen).toContainEqual({ dialog: "作业", owner: undefined });
+		const line = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => undefined });
+		expect(line.dialog).toBeUndefined();
+	});
+
+	it("② 内核属主标注：模块经 ctx.ui 调 dialog，spec.owner = 模块名", async () => {
+		const { app, seen } = fakeApp();
+		const cli = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => app });
+		const cap: { ui?: CommandUi } = {};
+		const h = await isolated({ commandUi: cli, modules: [probeModule(cap)] });
+		cap.ui!.dialog!({ title: "模块窗", widgets: [] });
+		expect(seen).toContainEqual({ dialog: "模块窗", owner: "ui-probe" });
 		await h.close();
 	});
 });

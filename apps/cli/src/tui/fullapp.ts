@@ -17,8 +17,8 @@ import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
-import { renderWidgets } from "./widgets.ts";
-import type { PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
+import { renderWidgetLines, renderWidgets } from "./widgets.ts";
+import type { DialogEvent, DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import * as theme from "../theme.ts";
 
@@ -379,10 +379,10 @@ export class FullApp {
 		if (this.pendingUi !== undefined) {
 			const pu = this.pendingUi;
 			this.pendingUi = undefined;
-			if (pu.kind !== "view") pu.resolve(undefined); // view 无 promise 可结
+			if (pu.kind === "pick" || pu.kind === "ask") pu.resolve(undefined); // view/dialog 无 promise 可结
 		}
 		// 暂存队列一并排空（批③②——thunk 内自查 stopped 即 resolve(undefined)，promise 不永挂）
-		for (const run of this.uiQueue.splice(0)) run();
+		for (const q of this.uiQueue.splice(0)) q.run();
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
 		if (this.tickTimer) clearInterval(this.tickTimer);
@@ -423,17 +423,19 @@ export class FullApp {
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined }
+		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
 	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
 	 *  顶退会把挂起的审批 resolve(undefined) = 静默否决；暂存后当前挂起结算即自动展开。
-	 *  m5 T2（设计空白 8）：viewText 从「直接覆槽」并入本队列——连弹两窗后者等前者关（用户可见行为修正）。 */
-	private uiQueue: Array<() => void> = [];
+	 *  m5 T2（设计空白 8）：viewText 从「直接覆槽」并入本队列——连弹两窗后者等前者关（用户可见行为修正）。
+	 *  m5 T7：队列项带 owner——closeModuleUi 时该模块的排队窗一并丢弃（不止在屏的）。 */
+	private uiQueue: Array<{ run: () => void; owner?: string }> = [];
 
 	/** 当前挂起结算后提升队首（无挂起才提——视图/选择/询问任一在位都等待）。 */
 	private promoteUi(): void {
 		if (this.pendingUi !== undefined) return;
-		this.uiQueue.shift()?.();
+		this.uiQueue.shift()?.run();
 	}
 
 	/** 弹窗保留键（决策点 7）：Esc/Ctrl+C/V/A/S/Z 绝对禁绑；宿主全局键在按键分发里先于弹窗分支消费
@@ -480,7 +482,7 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 		};
 		if (this.pendingUi !== undefined) {
-			this.uiQueue.push(open);
+			this.uiQueue.push({ run: open, ...(opts?.owner !== undefined ? { owner: opts.owner } : {}) });
 			return;
 		}
 		open();
@@ -489,6 +491,121 @@ export class FullApp {
 	/** view 态的窗几何（渲染与按键翻页共用一源——两处漂移即滚动越界）。 */
 	private viewGeo(layout: PopupLayout | undefined): ReturnType<typeof resolvePopupLayout> {
 		return resolvePopupLayout(this.io.columns(), this.io.rows(), layout);
+	}
+
+	// ---------- 控件窗（m5 T7 口子三①——数据流三路：开窗快照 / onEvent 回新清单 / update 句柄） ----------
+
+	/** 控件清单里的交互列表 id（Tab 焦点序）。 */
+	private dialogListIds(widgets: readonly WidgetSpec[]): string[] {
+		const ids: string[] = [];
+		for (const wd of widgets) if (wd.kind === "list" && wd.interactive === true) ids.push(wd.id);
+		return ids;
+	}
+
+	/** 开控件窗：几何走 T1（不另算）；排队同 viewText（单槽 FIFO）。
+	 *  句柄闭包查属主与存活——窗已关/模块已卸载后调用 = 无操作不报错；
+	 *  排队期（窗还没开）的 update/close 同款无操作。 */
+	openDialog(spec: DialogSpec, owner?: string): DialogHandle | undefined {
+		const lists = this.dialogListIds(spec.widgets);
+		let installed: (typeof this.pendingUi) & { kind: "dialog" } | undefined;
+		const open = (): void => {
+			if (this.stopped) return;
+			const geo = this.viewGeo(spec.layout);
+			if (geo.fallbackReason === "too-small") {
+				this.showToast("终端窗口太小，弹窗未打开");
+				this.promoteUi();
+				return;
+			}
+			this.state.overlayOpen = false; // 与斜杠菜单互斥
+			const e = {
+				kind: "dialog" as const,
+				title: spec.title,
+				widgets: spec.widgets, // 开窗快照（路 1）——活值字段渲染期现读（与卡片同款）
+				scroll: 0,
+				...(spec.layout !== undefined ? { layout: spec.layout } : {}),
+				...(owner !== undefined ? { owner } : {}),
+				...(lists.length > 0 ? { focusedId: lists[0] } : {}),
+				selById: {},
+				...(spec.onEvent !== undefined ? { onEvent: spec.onEvent } : {}),
+			};
+			installed = e;
+			this.pendingUi = e;
+			this.scheduler.requestImmediateRender();
+		};
+		if (this.pendingUi !== undefined) {
+			this.uiQueue.push({ run: open, ...(owner !== undefined ? { owner } : {}) });
+			return {
+				update: () => {}, // 窗未开前的句柄调用 = 无操作（开窗后的更新走已安装的闭包）
+				close: () => {
+				const i = this.uiQueue.findIndex((q) => q.run === open);
+				if (i >= 0) this.uiQueue.splice(i, 1); // 还在排队里——直接退队
+				},
+			};
+		}
+		open();
+		return {
+			update: (widgets) => {
+				if (installed === undefined || this.pendingUi !== installed) return; // 路 3：句柄更新——换清单滚回顶部（设计空白 14）
+				installed.widgets = widgets;
+				installed.selById = {};
+				installed.scroll = 0;
+				const ids = this.dialogListIds(widgets);
+				installed.focusedId = ids.length > 0 ? ids[0] : undefined; // 无交互控件 = 无焦点（exactOptional 收窄）
+				this.scheduler.requestImmediateRender();
+			},
+			close: () => {
+				if (installed === undefined || this.pendingUi !== installed) return;
+				this.pendingUi = undefined;
+				this.promoteUi();
+				this.scheduler.requestImmediateRender();
+			},
+		};
+	}
+
+	/** 按 owner 关模块的挂起窗（m5 T7——reload removed 名单通知的接收口）：
+	 *  在屏的 view/dialog 属主匹配即关 + 排队里它的窗一并丢弃 + toast “模块已卸载”。 */
+	closeModuleUi(owner: string): void {
+		const pu = this.pendingUi;
+		if (pu !== undefined && (pu.kind === "view" || pu.kind === "dialog") && pu.owner === owner) {
+			this.pendingUi = undefined;
+			this.showToast(`模块 ${owner} 已卸载——其窗口已关闭`);
+			this.promoteUi();
+			this.scheduler.requestImmediateRender();
+		}
+		for (let i = this.uiQueue.length - 1; i >= 0; i--) {
+			if (this.uiQueue[i]!.owner === owner) this.uiQueue.splice(i, 1);
+		}
+	}
+
+	/** dialog 事件回传（m5 T7）：模块 onEvent 抛错 = 黄字提示且窗保留（全局约束 4）；
+	 *  返回新清单 = 整窗替换滚回顶部（路 2）。 */
+	private fireDialogEvent(pu: { widgets: WidgetSpec[]; selById: Record<string, number>; scroll: number; focusedId?: string | undefined; onEvent?: DialogSpec["onEvent"] }, e: DialogEvent): void {
+		if (pu.onEvent === undefined) return;
+		try {
+			const next = pu.onEvent(e);
+			if (next !== undefined) {
+				pu.widgets = next;
+				pu.selById = {};
+				pu.scroll = 0;
+				const ids = this.dialogListIds(next);
+				pu.focusedId = ids.length > 0 ? ids[0] : undefined;
+			}
+		} catch (err) {
+			this.showToast(`控件窗事件处理出错：${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/** 选中项行位跟随（窗口滚动针对焦点列表的选中项最小平移）。 */
+	private dialogFollowSel(pu: { widgets: readonly WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number> }): void {
+		if (pu.focusedId === undefined) return;
+		const geo = this.viewGeo(pu.layout);
+		const wl = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, focusedId: pu.focusedId });
+		const li = wl.lists.find((l) => l.id === pu.focusedId);
+		if (li === undefined) return;
+		const line = li.baseLine + (pu.selById[li.id] ?? 0);
+		const page = Math.max(3, geo.height - 3);
+		const lo = Math.max(0, line - page + 1);
+		pu.scroll = Math.max(lo, Math.min(line, pu.scroll));
 	}
 
 	// ---------- 首次使用引导弹窗（M4-3 T1d，D10——三页定高锁焦点；施工基准 onboarding 原型） ----------
@@ -560,10 +677,10 @@ export class FullApp {
 	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
 	pickOverlay(title: string, items: string[]): Promise<number | undefined> {
 		if (this.pendingUi !== undefined) {
-			return new Promise((resolve) => this.uiQueue.push(() => {
+			return new Promise((resolve) => this.uiQueue.push({ run: () => {
 				if (this.stopped) { resolve(undefined); return; }
 				void this.pickOverlay(title, items).then(resolve);
-			}));
+			} }));
 		}
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
 		return new Promise((resolve) => {
@@ -584,10 +701,10 @@ export class FullApp {
 	 *  单槽占用期 FIFO 暂存（同 pickOverlay——批③②）。 */
 	promptInput(question: string, secret: boolean): Promise<string | undefined> {
 		if (this.pendingUi !== undefined) {
-			return new Promise((resolve) => this.uiQueue.push(() => {
+			return new Promise((resolve) => this.uiQueue.push({ run: () => {
 				if (this.stopped) { resolve(undefined); return; }
 				void this.promptInput(question, secret).then(resolve);
-			}));
+			} }));
 		}
 		const prev = { input: this.state.input, cursor: this.state.cursor };
 		this.state.input = "";
@@ -800,6 +917,35 @@ export class FullApp {
 				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
 				else if (key === "escape" || key === "enter" || key === "q") {
 					closeView();
+				}
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			if (pu.kind === "dialog") {
+				const ids = this.dialogListIds(pu.widgets);
+				if (key === "escape") {
+					this.pendingUi = undefined;
+					this.promoteUi();
+				} else if (key === "tab" && ids.length > 1) {
+					const i = Math.max(0, ids.indexOf(pu.focusedId ?? ids[0]!));
+					pu.focusedId = ids[(i + 1) % ids.length]!;
+				} else if (ids.length > 0) {
+					const id = pu.focusedId ?? ids[0]!;
+					const list = pu.widgets.find((wd): wd is Extract<WidgetSpec, { kind: "list" }> => wd.kind === "list" && wd.id === id && wd.interactive === true);
+					if (list !== undefined) {
+						const cur = pu.selById[id] ?? 0;
+						const step = key === "up" ? -1 : key === "down" ? 1 : key === "pageUp" ? -OVERLAY_PAGE : key === "pageDown" ? OVERLAY_PAGE : 0;
+						if (step !== 0) {
+							const next = Math.max(0, Math.min(list.items.length - 1, cur + step));
+							if (next !== cur) {
+								pu.selById[id] = next;
+								this.fireDialogEvent(pu, { type: "select", id, index: next }); // 事件三型：select
+								this.dialogFollowSel(pu);
+							}
+						} else if (key === "enter") {
+							this.fireDialogEvent(pu, { type: "activate", id, index: cur }); // 事件三型：activate（input 型在 T8）
+						}
+					}
 				}
 				this.scheduler.requestImmediateRender();
 				return;
@@ -1485,6 +1631,9 @@ export class FullApp {
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
 			overlay = this.buildViewOverlay(pu);
+		} else if (this.pendingUi?.kind === "dialog") {
+			const pu = this.pendingUi;
+			overlay = this.buildDialogOverlay(pu);
 		} else if (s.overlayOpen) {
 			overlay = this.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {
@@ -1522,6 +1671,39 @@ export class FullApp {
 		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ / PgUp/PgDn 翻页${keyHints !== "" ? ` · ${keyHints}` : ""} · Esc 关闭`;
 		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
+		return { lines: olines, row: geo.row, col: geo.col, width: ow };
+	}
+
+	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
+	 *  （交互列表带选中标记与焦点高亮）；恒定行数防闪烁（余量并进提示行——view 窗同款纪律）。 */
+	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number> }): OverlayFrame {
+		const geo = this.viewGeo(pu.layout);
+		const ow = geo.width;
+		const inner = ow - 2;
+		const bc = "accent";
+		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
+		const olines: string[] = [];
+		const titleSeg = theme.fg("accent", ` ${pu.title} `);
+		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
+		const page = Math.max(3, geo.height - 3);
+		let content: string[];
+		try {
+			content = renderWidgetLines(pu.widgets, inner, { selById: pu.selById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines;
+		} catch (err) {
+			this.io.logWarn?.("tui.dialog.render-error", `控件窗渲染抛错：${pu.title}`, { error: String(err instanceof Error ? err.message : err) });
+			content = [` ${theme.fg("warn", "（控件渲染出错——见诊断日志）")}`];
+		}
+		const maxScroll = Math.max(0, content.length - page);
+		const sc = Math.max(0, Math.min(maxScroll, pu.scroll));
+		const win = content.slice(sc, sc + page);
+		for (const l of win) olines.push(boxRow(l));
+		const upN = sc;
+		const downN = content.length - sc - win.length;
+		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
+		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`;
+		olines.push(boxRow(theme.dim(hint)));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(inner) + "╯")));
 		return { lines: olines, row: geo.row, col: geo.col, width: ow };
 	}
 

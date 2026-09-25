@@ -28,12 +28,19 @@ const unassignedLlm: LlmPort = {
  *  「模块卸载关它的窗」的属主判定全靠它（宿主内建调用无此字段）。
  *  commandUi 是全体模块共享的单例——属主只能在知道模块名的这一层追加（窗口对象无 getter、展开拷贝安全）。 */
 const ownerTagUi = (ui: CommandUi, owner: string): CommandUi => {
-  if (ui.viewText === undefined) return ui;
-  const inner = ui.viewText;
+  if (ui.viewText === undefined && ui.dialog === undefined) return ui;
   // 描述符保真拷贝（不用展开）：CLI 的注入两法（insertText/attachImage）是活 getter——
   // 行模式读 undefined、全屏期才有函数；展开会把 getter 拍平成包装时刻的快照（promptSection 活段同款坑）
   const w = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ui)) as CommandUi;
-  w.viewText = (title, text, opts) => inner(title, text, { ...opts, owner });
+  if (ui.viewText !== undefined) {
+    const inner = ui.viewText;
+    w.viewText = (title, text, opts) => inner(title, text, { ...opts, owner });
+  }
+  if (ui.dialog !== undefined) {
+    const inner = ui.dialog;
+    // DialogSpec 是开窗快照（widgets 普通属性、无 getter 语义）——展开追加 owner 安全
+    Object.defineProperty(w, "dialog", { value: (spec: import("@orosus/contracts/module").DialogSpec) => inner({ ...spec, owner }), writable: true, configurable: true, enumerable: true });
+  }
   return w;
 };
 

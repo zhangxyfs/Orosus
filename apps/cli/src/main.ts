@@ -711,6 +711,9 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // /compact 进度指示（TUI 批 T7）：行模式经 lv 活动行、全屏经 busy spinner 专属形态（2026-09-23 用户拍板：
         // 「上下文压缩中…」石青色）；settle 后行模式 discard 擦除、全屏退出专属形态——结果由下方输出替换。
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
+        // /reload 走 h.prompt 内建路由（报表不透出到 CLI 调用点）——m5 T7 关消失模块挂起窗：
+        // 进 prompt 前快照活跃集，回来后 diff 关窗（报表解析口径不一，直接 diff 激活集更稳）
+        const reloadShot = cmdNameOf(text) === "/reload" ? activeModuleNames() : undefined;
         const cmdOut = await withCompactHint(
           text,
           {
@@ -733,10 +736,13 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // LLM 钉模型清单读活槽，不重载即缺席；「设为当前默认」写的顶层 provider 键同理随重载即时生效）；
         // 只在写盘结果后重载（success/已设为当前默认/已移除——取消与未写入不动图）
         if (cmdNameOf(text) === "/provider" && /^(?:success|已设为当前默认|已移除)/.test(cmdOut ?? "")) {
+          const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
           await h.reload();
+          closeGoneModuleUi(namesBefore);
           notify("平台配置已即时生效（模块图已重载）");
         }
-        if (cmdNameOf(text) === "/reload") registerToolLabels(h.graph().tools.toolInfos()); // /reload 走 h.prompt 内建路由——标签表随图重喂
+        if (reloadShot !== undefined) closeGoneModuleUi(reloadShot);
+        if (cmdNameOf(text) === "/reload") registerToolLabels(h.graph().tools.toolInfos()); // 标签表随图重喂
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
@@ -999,6 +1005,16 @@ const lockReasonFor = (name: string): string | undefined => {
 		: undefined;
 };
 
+/** reload 后关消失模块的挂起窗（m5 T7——/reload、toggleModule、applyModulePreset 三处 reload 调用点共用）：
+ *  拆卡不需要通知（panelData 每秒现读自然消失），窗是持久态必须主动关。
+ *  比对 reload 前后的活跃集（报表解析在各调用点口径不一，直接 diff 激活集更稳）。 */
+const activeModuleNames = (): Set<string> => new Set(h.graph().audit().filter((a) => a.state === "active").map((a) => a.name));
+const closeGoneModuleUi = (before: Set<string>): void => {
+  if (activeApp === undefined) return;
+  const after = activeModuleNames();
+  for (const n of before) if (!after.has(n)) activeApp.closeModuleUi(n);
+};
+
 /** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
 const refreshPanel = async (): Promise<void> => {
 	const events = await h.history();
@@ -1222,7 +1238,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       }
       void (async () => {
         try {
+          const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
           const r = await h.reload();
+          closeGoneModuleUi(namesBefore);
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
           await refreshPanel();
           app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
