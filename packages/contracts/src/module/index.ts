@@ -23,6 +23,45 @@ export type CapabilityKey<T> = string & { readonly __capability?: T };
 /** 斜杠命令处理器：/<module>__<command>。第二参 ui 为宿主注入的交互抽象（D35）——纯函数命令可忽略。 */
 export type CommandHandler = (args: string, ui: CommandUi) => Promise<string> | string;
 
+/** 弹窗布局（m5 口子一/三共用）：预设名或自定义数字。
+ *  预设两个——"center80"（占窗 80% 居中，缺省值）与 "full"（全屏）。自定义形态：width/height 为
+ *  百分比串（"80%"）或固定格数（数字），四边距（marginStart/End/Top/Bottom）从对应边往中间推，
+ *  对边同给 = 居中。非法值（负数边距、百分比出界、装不进终端）整体回退 "center80" 重算——
+ *  连 center80 都装不下时调用方不弹窗、黄字提示「终端窗口太小」。
+ *
+ * @example
+ * ```ts
+ * ui.viewText?.("便签", text, { layout: { height: 20, marginTop: 2, marginStart: 4 } });
+ * ```
+ */
+export type PopupLayout =
+  | "center80"
+  | "full"
+  | {
+      width?: string | number;
+      height?: string | number;
+      marginStart?: number;
+      marginEnd?: number;
+      marginTop?: number;
+      marginBottom?: number;
+    };
+
+/** 弹窗自定义键：键名用 keymatch 规范化名（"r"、"alt+r"、"pageUp"）。绝对禁绑 = Esc、Ctrl+C/V/A/S/Z
+ *  与宿主全局键（Ctrl+T/E/O 等）——注册即拒并记模块日志。run 三种返回：返回字符串 = 窗内容整体替换
+ *  并滚回顶部（其中字符串恰为 "close" = 关窗）；无返回 = 内容不动。
+ *
+ * @example
+ * ```ts
+ * ui.viewText?.("便签", notes.join("\n"), {
+ *   keys: { "alt+r": { label: "刷新", run: () => notes.join("\n") } },
+ * });
+ * ```
+ */
+export interface PopupKey {
+  label: string;
+  run(): string | "close" | void;
+}
+
 /** 命令交互 UI 抽象（D35）：ask/choose/confirm——宿主注入 readline 实现；无头环境注入拒绝式
  *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。 */
 export interface CommandUi {
@@ -33,8 +72,78 @@ export interface CommandUi {
   confirm(question: string): Promise<boolean>;
   /** 瞬时提示（2026-09-22 批⑧，可选）：「无可压缩/已切换」类一次性反馈——全屏宿主走浮动 toast（3s 自消），
    *  行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。
-   *  缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。 */
-  notice?(text: string): void;
+   *  缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。
+   *  m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 30000]，越界按边界值算——不传即缺省，
+   *  主程序自己的提示全走缺省零变化。 */
+  notice?(text: string, opts?: { durationMs?: number }): void;
+  /** 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式
+   *  静默丢弃。窗排队（一次一窗，后来的等旧窗关）。 */
+  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey> }): void;
+  /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃。 */
+  insertText?(text: string): void;
+  /** 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
+   *  行模式无文内 chip 机制——静默丢弃。 */
+  attachImage?(path: string): void;
+  /** 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
+   *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。 */
+  dialog?(spec: DialogSpec): DialogHandle | undefined;
+}
+
+/** 控件（m5 口子二/三共用）——「给数据不给画面」：模块交控件清单，画永远是宿主画。八种：
+ *  text 一段文字（可带样式与折行开关）/ kv 一行「标签: 值」/ sep 分隔线 / list 列表（interactive =
+ *  可选中，选中变化回事件）/ progress 进度条（value/max）/ input 输入框（multiline 多行、lines 高度、
+ *  enterSubmit 回车即提交）/ columns 多列（cols 每列又是控件清单，可嵌套）/ table 表格。
+ *  text/value/progress 的 value 字段给函数 = 活值：宿主渲染期现读（卡片每秒、控件窗每帧）。
+ *
+ * @example
+ * ```ts
+ * const widgets: WidgetSpec[] = [
+ *   { id: "head", kind: "text", text: "后台作业", style: "accent" },
+ *   { id: "p", kind: "progress", value: () => done / total, max: 1 },
+ * ];
+ * ```
+ */
+export type WidgetSpec =
+  | { id: string; kind: "text"; text: string | (() => string); style?: "muted" | "accent" | "warn"; wrap?: "auto" | "none" }
+  | { id: string; kind: "kv"; label: string; value: string | (() => string) }
+  | { id: string; kind: "sep" }
+  | { id: string; kind: "list"; interactive?: boolean; items: string[] }
+  | { id: string; kind: "progress"; value: number | (() => number); max: number }
+  | { id: string; kind: "input"; multiline?: boolean; lines?: number; enterSubmit?: boolean; placeholder?: string }
+  | { id: string; kind: "columns"; cols: WidgetSpec[][]; widths?: number[] }
+  | { id: string; kind: "table"; head: string[]; rows: string[][] };
+
+/** 控件窗事件三型：input（输入框内容变化，每键一回）/ select（可交互列表选中变化）/ activate（回车激活——
+ *  列表带 index，输入框不带）。每按一次键立刻回传事件并整窗重画（不防抖——窗小重画便宜，攒着反而迟钝）。 */
+export type DialogEvent =
+  | { type: "input"; id: string; text: string }
+  | { type: "select"; id: string; index: number }
+  | { type: "activate"; id: string; index?: number };
+
+/** 控件窗清单（m5 口子三）。widgets 是开窗快照（静态清单直接给；活值走字段级函数或 update 句柄——
+ *  整份清单「现问现答」是卡片专属，dialog 有 update 句柄不需要）。onEvent 返回新清单 = 整窗替换并滚回顶部；
+ *  返回 undefined = 不动。 */
+export interface DialogSpec {
+  title: string;
+  layout?: PopupLayout;
+  widgets: WidgetSpec[];
+  onEvent?(e: DialogEvent): WidgetSpec[] | void;
+}
+
+/** 控件窗句柄：update 换整份清单（滚回顶部）；close 关窗。窗已关或模块已卸载后再调 = 无操作不报错。 */
+export interface DialogHandle {
+  update(widgets: WidgetSpec[]): void;
+  close(): void;
+}
+
+/** 卡片清单（m5 口子二）。widgets 建议用 getter——宿主每秒重读，模块侧改个变量卡片就自己跳。 */
+export interface CardSpec {
+  /** 投哪个区：top = 右上（运行状态、网络·MCP 后面）；bottom = 右下（任务清单后面）。模块自选，宿主不分配。 */
+  area: "top" | "bottom";
+  order: number;
+  title: string;
+  /** getter 现问现答，宿主每秒重读；抛错 = 当帧剔除该卡 + 模块日志 warn。 */
+  readonly widgets: WidgetSpec[];
 }
 
 /** 二级 LLM 调用口（D39）：模块的辅助模型调用（compaction 摘要、标题生成等）。
@@ -80,6 +189,87 @@ export type Listener = (payload: unknown) => unknown | Promise<unknown>;
 
 /** 依赖声明：字符串 = 硬依赖；{ capability, optional: true } = 可选依赖（不建拓扑边）。 */
 export type Dependency = string | { capability: string; optional?: boolean };
+
+/** 宿主设置服务（m5 口子四）——「写」面：改模型、改思考力度、切挂载预设、改会话名、开关侧栏、切主题。
+ *  ctx.settings 可选直挂（决策点 18）：全屏宿主装、老宿主/无头 = undefined（模块判空降级）。
+ *  声明了 mounts 的模块须列 "settings" 才可调（allows 白名单）；读运行值不走它——看 ctx.host。
+ *  错误口径：setModel/setEffort/setLabel 等单值写失败 = Promise reject（模块自行 catch 提示）；
+ *  applyModulePreset 批量写 = 带内返回失败清单（决策点 21：全部尝试完再统一 reload 一次）。
+ *
+ * @example
+ * ```ts
+ * if (ctx.settings) {
+ *   await ctx.settings.setModel("zhipuai/glm-4.7");   // 换模型（/model 同源写路径）
+ *   const { failed } = await ctx.settings.applyModulePreset("minimal");  // 极简模式
+ *   if (failed.length > 0) ctx.log.warn("note.preset", "部分模块写盘失败", { failed });
+ * }
+ * ```
+ */
+export interface SettingsService {
+  /** 切当前模型（qualified 全形 "provider/model"；与 /model 命令同源写路径：运行期覆盖 + 写盘）。 */
+  setModel(qualified: string): Promise<void>;
+  /** 切思考档位（与 /effort 同源：三级覆盖写入，"auto" = 回目录默认）。 */
+  setEffort(level: string): Promise<void>;
+  /** 切主题——未知主题名 = Promise reject（本批仓内仅一套主题，纯机制就绪）。 */
+  setTheme(name: string): Promise<void>;
+  /** 批量切挂载预设：minimal = 只留核心 + 审批 + 当前活跃 provider；full = 恢复极简模式关掉的那些。
+   *  中途失败不回滚——全部尝试完统一 reload 一次，失败模块名带内返回。 */
+  applyModulePreset(preset: "full" | "minimal"): Promise<{ failed: string[] }>;
+  /** 改会话名（与 /title 同源活写口，立即落盘）。 */
+  setLabel(label: string): Promise<void>;
+  /** 开关侧栏（Ctrl+T 的程序化版本，持久化）。可选——行模式宿主无侧栏不装。 */
+  setSidebar?(visible: boolean): Promise<void>;
+  /** 读剪贴板文本。可选——剪贴板通道平台相关，宿主不支持就不装（模块判空降级）。 */
+  readClipboard?(): Promise<string | undefined>;
+}
+
+/** 宿主状态快照（m5 口子四读面，决策点 24）——current() 一次拿全，不分逐字段 get（照 h.status() 先例）。
+ *  异步：权限/会话名/用量是事件投影，要翻一次历史。busy 不在快照里——走 ctx.events.on("turn/start"/"turn/end") 自推。
+ *  故意不给三件：终端尺寸（布局是宿主的事）、输入框当前内容（insertText 是写口，读回 = 偷用户输入）、
+ *  屏幕缓冲/渲染态（渲染权铁律）。 */
+export interface HostSnapshot {
+  /** 当前模型（qualified 全形，如 "zhipuai/glm-4.7"）与是否运行期覆盖（false = 配置原样）。 */
+  model: string;
+  modelOverridden: boolean;
+  /** 当前思考档位；未设 = undefined（跟随模型目录默认档）。 */
+  effort?: string | undefined;
+  /** 挂载模式现算三态：启用集 ⊆ 保底名单 → "minimal"；全启用 → "full"；其余 → "custom"
+   *  （现算不靠记忆——用户切完极简又手动插拔，「上次切的档」会撒谎，现算永远诚实）。 */
+  preset: "full" | "minimal" | "custom";
+  /** 当前主题名（本批仓内仅一套 = 恒 "连山"；主题注册表落地后读 active 名）。 */
+  theme: string;
+  /** 权限模式（approval/policy 投影——面板运行状态卡同款算法）。 */
+  permission: string;
+  /** 会话名；未命名 = undefined（显示侧自定「新会话」或 sid）。 */
+  sessionLabel?: string | undefined;
+  /** 侧栏可见性；行模式宿主无侧栏 = undefined。 */
+  sidebar?: boolean | undefined;
+  /** 上下文窗口 token 数；未知 = undefined（与 ctx.llm.contextWindow 契约口同源）。 */
+  contextWindow?: number | undefined;
+  /** token 用量：current = 本会话；lifetime = 全量（可能缺）。 */
+  usage: {
+    current: { input: number; output: number };
+    lifetime?: { input: number; output: number; sessions: number };
+  };
+}
+
+/** 宿主状态读面（m5 口子四读侧）——「问宿主」独立命名空间：不占 mounts "settings" 写闸、零声明摩擦
+ *  （照 ctx.session.messages?() 无闸读口先例）。无订阅机制：要新值再调一次 current()；喂卡片等同步
+ *  getter 的标准接法 = 模块自己缓存（activate 拉首份 + turn 事件刷新，getter 读缓存）。
+ *
+ * @example
+ * ```ts
+ * let snap: HostSnapshot | undefined;
+ * ctx.host?.current().then((s) => { snap = s; });              // activate 拉首份
+ * ctx.events.on("turn/end", () => { ctx.host?.current().then((s) => { snap = s; }); });  // 事件刷新
+ * // 卡片 getter 读缓存（同步）：
+ * ctx.contribute.card({ area: "top", order: 60, title: "状态",
+ *   get widgets() { return snap ? [{ id: "m", kind: "kv", label: "模型", value: snap!.model }] : []; } });
+ * ```
+ */
+export interface HostInfo {
+  current(): Promise<HostSnapshot>;
+}
 
 /** 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。 */
 export interface ModuleContext<C = unknown> {
@@ -183,6 +373,25 @@ export interface ModuleContext<C = unknown> {
      * ```
      */
     configOverlay(o: { section?: string; read(value: unknown): unknown }): Disposer;
+    /** 投一张常驻卡片进右侧卡片区（m5 口子二）：area 自选 "top"（右上区域，运行状态/网络·MCP 后面）
+     *  或 "bottom"（右下区域，任务清单后面）；内建卡固定在前，模块卡按 order 排后；数量不设上限
+     *  （翻页天然容纳）。widgets 是 getter 时宿主每秒现读（现问现答）；getter 抛错 = 该卡当帧剔除
+     *  + 模块日志 warn，其余卡照常。卸载/reload 自动拆卡。给数据不给画面——文字不许夹终端上色控制码。
+     *  可选——无 UI 能力的宿主（行模式/无头）不装，消费方判空降级（与 CommandUi 弹窗口同款语义）。
+     *
+     * @example
+     * ```ts
+     * ctx.contribute.card({
+     *   area: "bottom",
+     *   order: 50,
+     *   title: "便签",
+     *   get widgets() {
+     *     return notes.length === 0 ? [] : [{ id: "n", kind: "kv", label: "条数", value: String(notes.length) }];
+     *   },
+     * });
+     * ```
+     */
+    card?(spec: CardSpec): Disposer;
   };
   readonly session: {
     /** 写会话日志扩展事件；type 须已在 logEvents 声明（白名单）。
@@ -241,6 +450,25 @@ export interface ModuleContext<C = unknown> {
      */
     emit(type: string, payload: unknown): Promise<void>;
   };
+  /** 宿主设置服务（m5 口子四，可选直挂）：全屏宿主提供 SettingsService；老宿主/无头 = undefined，
+   *  模块判空降级。声明了 mounts 的模块须列 "settings" 才可调（allows 白名单）。
+   *
+   * @example
+   * ```ts
+   * await ctx.settings?.setEffort("high");   // 判空调用：没装就静默跳过
+   * ```
+   */
+  readonly settings?: SettingsService | undefined;
+  /** 宿主状态读面（m5 口子四读侧，可选）：ctx.host.current() 拿运行值快照（模型/力度/挂载模式/权限/用量）。
+   *  读不占 mounts 写闸——零声明摩擦（决策点 24）；无 = undefined 判空降级。
+   *
+   * @example
+   * ```ts
+   * const snap = await ctx.host?.current();
+   * if (snap) ctx.log.info("note.host", "当前模型", { model: snap.model, preset: snap.preset });
+   * ```
+   */
+  readonly host?: HostInfo | undefined;
 }
 
 /** 模块定义（§5.1 完整形态）。声明式：activate 之前全部静态信息可读。 */

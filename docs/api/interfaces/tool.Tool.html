@@ -16,7 +16,7 @@
 </div></section>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">Tool</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#deferred">deferred</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">boolean</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#description">description</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#label">label</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#name">name</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#parameters">parameters</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">ZodType</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#searchhint">searchHint</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#resolveexecution-1">resolveExecution</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">input</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">unknown</span><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="tool.ToolExecution.html" class="tsd-signature-type tsd-kind-interface">ToolExecution</a><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L46">tool/index.ts:46</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L46">tool/index.ts:46</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -46,12 +46,12 @@
 不生效（SW-26 联动规则——防「标了 deferred 却无 meta 工具可 reveal」永不可达组合）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L56">tool/index.ts:56</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L56">tool/index.ts:56</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="description"><span>description</span><a href="#description" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">description</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L48">tool/index.ts:48</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L48">tool/index.ts:48</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="label"><code class="tsd-tag">Optional</code><span>label</span><a href="#label" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">label</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
@@ -59,24 +59,24 @@
 模型面永远用 name（调用/审批/配置不受影响）；缺省 = 宿主剥 <module>__ 前缀现算（旧行为）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L52">tool/index.ts:52</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L52">tool/index.ts:52</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="name"><span>name</span><a href="#name" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">name</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L47">tool/index.ts:47</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L47">tool/index.ts:47</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="parameters"><span>parameters</span><a href="#parameters" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">parameters</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">ZodType</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L49">tool/index.ts:49</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L49">tool/index.ts:49</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="searchhint"><code class="tsd-tag">Optional</code><span>search<wbr/>Hint</span><a href="#searchhint" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">searchHint</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
 <div class="tsd-comment tsd-typography"><p>搜索补充关键词（目录呈现与打分的补充语料——cc-haha searchHint 同款）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L58">tool/index.ts:58</a></li></ul></aside></section></section></details>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L58">tool/index.ts:58</a></li></ul></aside></section></section></details>
 <details class="tsd-panel-group tsd-member-group tsd-accordion" open><summary class="tsd-accordion-summary" data-key="section-Methods"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
 <h2 class="tsd-anchor-link" id="methods-1">Methods<a href="#methods-1" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h2></summary>
 <section>
@@ -92,7 +92,7 @@
 <li><span><span class="tsd-kind-parameter">input</span>: <span class="tsd-signature-type">unknown</span></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="tool.ToolExecution.html" class="tsd-signature-type tsd-kind-interface">ToolExecution</a><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3fc06e8f61df55627a300168008f61cd026f9f0d/packages/contracts/src/tool/index.ts#L59">tool/index.ts:59</a></li></ul></aside></div></li></ul></section></section></details></div>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/3b898ad6c8d750b5d8fea7b8406c1cd9494431f9/packages/contracts/src/tool/index.ts#L59">tool/index.ts:59</a></li></ul></aside></div></li></ul></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">
