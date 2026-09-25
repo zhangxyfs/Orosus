@@ -230,14 +230,13 @@ ctx.session.append("note/write", { notes });
 
 ### services.get / provide
 
-提供能力实现（单所有者槽）；key 须 ⊆ 声明区 provides（唯一例外：核心保留槽 key）。
+挂能力实现（单所有者槽）。
 
 ```ts
 provide(key: string, impl: unknown): void;
 ```
 
 ```ts
-ctx.provide("my-module.store", { get: () => value, set: (v) => { value = v; } });
-// 消费方（另一模块）经 dependsOn: ["my-module.store"] + ctx.services.get 解析
+ctx.provide("my-module.store", { get: () => v, set: (x) => { v = x; } });
 ```
 

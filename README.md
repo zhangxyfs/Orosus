@@ -99,14 +99,14 @@ pnpm typecheck          # tsc 全仓类型检查
 pnpm lint               # oxlint
 pnpm check:boundaries   # 包边界检查（核心件不得 import 模块等）
 pnpm build              # tsdown 全仓构建
-pnpm gen-docs           # typedoc 生成 API 文档（docs/api）
+pnpm gen-docs           # 生成 API 参考文档（docs/api，Markdown 人话版）
 ```
 
 | 文档 | 位置 |
 |------|------|
 | 路线图（之后做什么，单一事实源） | [docs/ROADMAP.md](docs/ROADMAP.md) |
 | 模块开发者指南（最小模块示例 / 贡献点 / 拦截点） | [docs/developers.md](docs/developers.md) |
-| API 文档（typedoc 生成） | [docs/api/](docs/api/) |
+| API 文档（Markdown 生成） | [docs/api/README.md](docs/api/README.md) |
 
 ## License
 

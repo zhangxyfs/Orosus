@@ -52,6 +52,13 @@ export interface ToolSpec {
   parameters: Record<string, unknown>;
 }
 
+/**
+ * 主循环/二级调用的统一请求体：适配器把它翻译成协议族线缆参数（openai chat / anthropic messages）。
+ * @example
+ * ```ts
+ * stream({ model: "glm-4.7", system: "sys", messages, tools: [], signal });
+ * ```
+ */
 export interface ProviderRequest {
   model: string;
   system: string;
@@ -88,6 +95,12 @@ const CONTEXT_LIMIT_PATTERNS = [
   "request too large",       // 兼容端点/网关 413
 ] as const;
 
+/**
+ * 判定 HTTP 错误是否为上下文超限（溢出重试与压缩触发的判据，D43）。
+ * @param status - HTTP 状态码（只看 400/413，其余恒 false）。
+ * @param body - 错误响应体原文（大小写不敏感匹配关键词表）。
+ * @returns true = 上下文超限（可重试/可压缩）。
+ */
 export function classifyContextLimit(status: number, body: string): boolean {
   if (status !== 400 && status !== 413) return false;
   const lower = body.toLowerCase();
@@ -108,6 +121,11 @@ const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
 
 /** 解析 GET /models 响应（openai 族 {baseUrl}/models 与 anthropic 族 {baseUrl}/v1/models 同为 `{data:[{id},…]}` 形）。
  *  sanitize（白名单+限长，三轮 P2②）→ 去重 → 排序（菜单稳定序）；非数组 / 全被滤空 → throw（调用方 catch 回退）。 */
+/**
+ * 解析 openai 形 /models 响应为模型 id 清单（模型目录能力的消费端）。
+ * @param body - 响应 JSON（形如 { data: [{ id: "glm-4.7" }, ...] }；形状不符或无合法 id 抛错）。
+ * @returns 模型 id 去重清单（版本号大的排前，合法 id 仅限字母数字与 . _ / - ）。
+ */
 export function parseModelsResponse(body: unknown): string[] {
   const data = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) throw new Error("models 响应形状不符（缺 data 数组）");
@@ -121,6 +139,11 @@ export function parseModelsResponse(body: unknown): string[] {
 }
 
 /** 核心保留槽 key（§7.2）：provider 适配器经 provide(providerSlotKey(name), fn) 注册。 */
+/**
+ * 提供商能力槽的标准 key（"provider:<名>"）。
+ * @param name - 提供商名（与 provide/获取两侧同名对齐；大小写敏感）。
+ * @returns "`provider:<name>`" 形字符串。
+ */
 export function providerSlotKey(name: string): string {
   return `provider:${name}`;
 }

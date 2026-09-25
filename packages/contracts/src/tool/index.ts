@@ -1,13 +1,22 @@
 import type { ZodType } from "zod";
 import type { Logger } from "../module/index.ts";
 
-/** 单次工具调用的资源访问声明（§6.3）：给并发调度器与审批系统。缺省 = { kind: "all" }（独占）。 */
+/**
+ * 单次工具调用的资源访问声明（§6.3）：给并发调度器与审批系统。缺省 = { kind: "all" }（独占）。
+ * 四形态：文件读（fs.read + path）/文件写（fs.write + path）/网络（network + host）/子进程（subprocess）。
+ * @example
+ * ```ts
+ * // 读一个文件 + 访一个域名
+ * accesses: [Access.fsRead("/tmp/a.txt"), Access.network("api.example.com")]
+ * ```
+ */
 export type Access =
   | { kind: "fs.read" | "fs.write"; path: string }
   | { kind: "network"; host: string }
   | { kind: "subprocess" }
   | { kind: "all" };
 
+/** Access 四形态的便捷构造器（与上方联合类型同名导出。 */
 export const Access = {
   fsRead: (path: string): Access => ({ kind: "fs.read", path }),
   fsWrite: (path: string): Access => ({ kind: "fs.write", path }),
@@ -37,8 +46,16 @@ export interface ToolExecution {
   accesses?: Access[];
   /** 审批规则 pattern（数据），如 "tool-shell__bash(rm -rf*)"；缺省 = 需要审批（fail-closed）。 */
   approvalRule?: string;
-  /** 规则参数的工具侧语义判定；缺省 = 不匹配任何带参规则（fail-closed）。 */
+  /**
+   * 规则参数的工具侧语义判定；缺省 = 不匹配任何带参规则（fail-closed）。
+   * @param ruleArgs - 审批规则后括号内的参数串（如 "rm -rf*"）；返回 true = 本次调用匹配该规则。
+   */
   matchesRule?: (ruleArgs: string) => boolean;
+  /**
+   * 执行（唯一副作用点）。错误带内——不许 reject，返回 { output, isError: true }。
+   * @param ctx - 执行期上下文（取消信号必须响应——长耗时工具要监听 ctx.signal；callId 关联日志；log 记过程）。
+   * @returns 统一结果形状（见 ToolResult；超大输出走 spill 落盘）。
+   */
   execute(ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -56,6 +73,11 @@ export interface Tool {
   deferred?: boolean;
   /** 搜索补充关键词（目录呈现与打分的补充语料——cc-haha searchHint 同款）。 */
   searchHint?: string;
+  /**
+   * 阶段一：声明（无副作用）——内核拿它跑并发调度与审批水缑；不许在此产生副作用。
+   * @param input - 模型给的参数（已过 parameters schema 校验；自行 as 收窄类型）。
+   * @returns 阶段二产出（accesses/approvalRule/execute——见 ToolExecution）。
+   */
   resolveExecution(input: unknown): Promise<ToolExecution>;
 }
 
@@ -92,6 +114,10 @@ export interface ToolInfo {
  *   },
  * });
  * ```
+ */
+/**
+ * @param t - 工具定义（字段含义与范围见 Tool；name 强制 <module>__<tool> 前缀）。
+ * @returns 原定义对象（类型收窄 + 意图标注，不做运行期处理）。
  */
 export function defineTool(t: Tool): Tool {
   return t;

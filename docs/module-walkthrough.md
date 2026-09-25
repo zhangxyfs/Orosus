@@ -4,7 +4,7 @@
 > **给 AI 的提示**：帮用户写模块前先读 `docs/extension-catalog.md`（机器生成的扩展点目录——
 > 每个口子一句人话 + 声明形态 + 可抄示例，与契约源永远同步）。
 > 这是**教程层**——把人领进门，一步步做一个真能跑的模块。写完之后：
-> 速查去 [developers.md](developers.md)，接口签名与逐口示例去 [docs/api](api/index.html)，
+> 速查去 [developers.md](developers.md)，接口签名与逐口示例去 [docs/api](api/README.md)，
 > 单个模块的设计取舍去 [superpowers/specs/modules/](superpowers/specs/modules/README.md)。
 > 机制依据：主设计文档（v33）§5/§6/§8。
 
@@ -320,7 +320,7 @@ ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
 | `ctx.provide` / `ctx.services.get` | 能力槽：给/取 | 模块间解耦协作（fs seam、provider 槽都是这个） |
 | `ctx.ui.ask` / `choose` / `confirm` / `notice` | 宿主注入的交互 | 无头环境是拒绝式实现——别指望它一定成功，fail-closed |
 
-每个字段、每个参数的逐条说明见本文**第 13 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/index.html)（`pnpm gen-docs` 从 contracts 源码生成，两处同源）。
+每个字段、每个参数的逐条说明见本文**第 13 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/README.md)（`pnpm gen-docs` 从 contracts 源生成——含每个参数的 @param 含义与范围，两处同源）。
 
 ## 9. 设计一个新模块的正规流程
 
@@ -406,7 +406,7 @@ ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
 | 想干什么 | 去哪 |
 |---|---|
 | 跟着做一遍模块 | 本文 |
-| 查一个口怎么用（签名+示例） | [docs/api](api/index.html)（typedoc，随源码同步） |
+| 查一个口怎么用（签名+示例） | [docs/api](api/README.md)（typedoc，随源码同步） |
 | 速查：贡献点/拦截点/错误行为/验收 | [developers.md](developers.md) |
 | 机制所以然（为什么这么设计） | [superpowers/specs/2026-09-14-modular-agent-harness-design.md](superpowers/specs/2026-09-14-modular-agent-harness-design.md) |
 | 某个模块的设计取舍 | [superpowers/specs/modules/](superpowers/specs/modules/README.md)（一模块一文档） |
@@ -415,7 +415,7 @@ ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
 ## 14. 附：完整 API 参考
 
 > 这一节把模块作者的**全部可用面**列全——每个字段、每个参数、它是干什么的。想读更长的语义注释
-> 再去 [docs/api](api/index.html)（typedoc 从 contracts 源码生成），两处内容同源。
+> 再去 [docs/api](api/README.md)（typedoc 从 contracts 源码生成），两处内容同源。
 
 ### 14.1 defineModule 全字段
 

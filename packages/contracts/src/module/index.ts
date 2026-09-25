@@ -8,12 +8,48 @@ export const MODULE_API_VERSION = 1;
 /** 注册即返回的注销句柄（规则 3：一切注册返回 disposer）。 */
 export type Disposer = () => void | Promise<void>;
 
-/** 模块级诊断 logger（§11.9）。code 为稳定事件码，点分路径；实现自动携带模块名。 */
+/** 模块级诊断 logger（§11.9）——Ctrl + E 诊断弹窗与诊断日志的数据源。五个方法只是级别不同，形状一致。
+ *
+ * @example
+ * ```ts
+ * ctx.log.warn("note.overflow", "便签超上限被裁剪", { kept: 20, dropped: 3 });
+ * ```
+ */
 export interface Logger {
+  /**
+   * 最细粒度跟踪（通常不落盘——级别开关在宿主）。
+   * @param code - 稳定事件码，点分路径（约定 `<模块名>.<事件>`，如 "note.write"）；只进日志不做 i18n。
+   * @param msg - 人话一句话（中文）；模块名由实现自动携带，不用自己写。
+   * @param data - 附带数据键值对；小体量事实（计数/路径/错误串），单条 ≤ 2KB。
+   */
   trace(code: string, msg: string, data?: Record<string, unknown>): void;
+  /**
+   * 调试细节（开发期排查用）。
+   * @param code - 稳定事件码，点分路径（约定 `<模块名>.<事件>`，如 "note.write"）；只进日志不做 i18n。
+   * @param msg - 人话一句话（中文）；模块名由实现自动携带，不用自己写。
+   * @param data - 附带数据键值对；小体量事实（计数/路径/错误串），单条 ≤ 2KB。
+   */
   debug(code: string, msg: string, data?: Record<string, unknown>): void;
+  /**
+   * 常规信息（模块激活/正常状态变迁）。
+   * @param code - 稳定事件码，点分路径（约定 `<模块名>.<事件>`，如 "note.write"）；只进日志不做 i18n。
+   * @param msg - 人话一句话（中文）；模块名由实现自动携带，不用自己写。
+   * @param data - 附带数据键值对；小体量事实（计数/路径/错误串），单条 ≤ 2KB。
+   */
   info(code: string, msg: string, data?: Record<string, unknown>): void;
+  /**
+   * 异常但已降级处理（本模块功能受影响，不影响别人）。
+   * @param code - 稳定事件码，点分路径（约定 `<模块名>.<事件>`，如 "note.write"）；只进日志不做 i18n。
+   * @param msg - 人话一句话（中文）；模块名由实现自动携带，不用自己写。
+   * @param data - 附带数据键值对；小体量事实（计数/路径/错误串），单条 ≤ 2KB。
+   */
   warn(code: string, msg: string, data?: Record<string, unknown>): void;
+  /**
+   * 错误（本模块功能不可用）。
+   * @param code - 稳定事件码，点分路径（约定 `<模块名>.<事件>`，如 "note.write"）；只进日志不做 i18n。
+   * @param msg - 人话一句话（中文）；模块名由实现自动携带，不用自己写。
+   * @param data - 附带数据键值对；小体量事实（计数/路径/错误串），单条 ≤ 2KB。
+   */
   error(code: string, msg: string, data?: Record<string, unknown>): void;
 }
 
@@ -58,23 +94,60 @@ export type PopupLayout =
  * ```
  */
 export interface PopupKey {
+  /** 键位显示名（窗底部提示行展示，如「刷新」）；空串也合法（不显示）。 */
   label: string;
+  /** 按键动作。返回字符串 = 窗内容整体替换并滚回顶部；恰好返回 "close" = 关窗；无返回 = 内容不动。抛错 = 黄字提示且窗保留。 */
   run(): string | "close" | void;
 }
 
 /** 命令交互 UI 抽象（D35）：ask/choose/confirm——宿主注入 readline 实现；无头环境注入拒绝式
- *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。 */
+ *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。
+ *
+ 命令交互 UI 抽象（D35）：命令处理器第二参 + waterfall 监听者共用。宿主注入实现——
+ *  全屏 = 浮层/接管输入行；行模式 = readline；无头 = 拒绝式（核心四法抛"无交互环境"，fail-closed；
+ *  m5 可选口缺省不存在，判空降级）。Esc 取消统一映射「已取消（Esc）」带内抛错穿透处理器。
+ *
+ * @example
+ * ```ts
+ * const name = await ui.choose("选一条便签", notes);
+ * await ui.notice?.(`已选中：${name}`);
+ * ```
+ */
 export interface CommandUi {
+  /**
+   * 问一句（自由文本）。
+   * @param question - 提示语（人话一句话；宿主负责渲染与回显）。
+   * @returns 用户输入（宿主可能 trim）；Esc 取消 = 抛「已取消（Esc）」。
+   */
   ask(question: string): Promise<string>;
-  /** 敏感输入（密钥等）：语义同 ask，宿主应以掩码回显（*）——headless 拒绝式实现同 ask。 */
+  /**
+   * 敏感输入（密钥等）：语义同 ask，宿主以静默盲输/掩码回显。
+   * @param question - 提示语。
+   * @returns 用户输入；Esc 取消 = 抛「已取消（Esc）」。
+   */
   askSecret(question: string): Promise<string>;
+  /**
+   * 列表单选（≥12 项宿主自动带输入过滤）。
+   * @param title - 标题（显示在浮层头）。
+   * @param items - 候选清单（每项单行文本——多行项宿主压平；中文/emoji 可）。
+   * @returns 选中的项原文；Esc 取消 = 抛「已取消（Esc）」。
+   */
   choose(title: string, items: string[]): Promise<string>;
+  /**
+   * 是/否确认。
+   * @param question - 问句（宿主显示为 `question [y/N]` 形态）。
+   * @returns true = 确认；false = 否认或 Esc（Esc 折为 false——语义内 fail-closed，不抛错）。
+   */
   confirm(question: string): Promise<boolean>;
   /** 瞬时提示（2026-09-22 批⑧，可选）：「无可压缩/已切换」类一次性反馈——全屏宿主走浮动 toast（3s 自消），
    *  行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。
    *  缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。
    *  m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 30000]，越界按边界值算——不传即缺省，
    *  主程序自己的提示全走缺省零变化。
+   *
+   *  @param text - 提示文本（单行语义；过长宿主折行 ≤ 3 行）。
+   *  @param opts - 可选项。
+   *  @param opts.durationMs - 停留毫秒；缺省 3000，范围 [1000, 30000]，越界钳到边界。不传 = 缺省。
    *
    *  @example
    *  ```ts
@@ -87,6 +160,13 @@ export interface CommandUi {
    *  opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的
    *  属主判定靠它；模块开发者无须也不应自填（@internal）。
    *
+   *  @param title - 窗标题（顶框展示；单行）。
+   *  @param text - 正文（\n 分行；可含宿主题色语义串——宿主按看得见的宽度折行/截断，不许夹终端控制码）。
+   *  @param opts - 可选项。
+   *  @param opts.layout - 布局；缺省 "center80"。非法值整体回退 center80；终端装不下 = 不弹 + 黄字。
+   *  @param opts.keys - 自定义键（键名 → 动作）；键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"），保留键注册即拒。
+   *  @param opts.owner - 内核自动标注的模块名（@internal——模块勿自填）。
+   *
    *  @example
    *  ```ts
    *  ui.viewText?.("便签", notes.join("
@@ -96,6 +176,8 @@ export interface CommandUi {
   viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
    *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。
+   *  @param text - 插入文本（与用户手打等效——可退格删除；多行文本宿主按编辑器规则并入）。
+   *
    *  @example
    *  ```ts
    *  ui.insertText?.("已填入模板");
@@ -104,6 +186,8 @@ export interface CommandUi {
   readonly insertText?: ((text: string) => void) | undefined;
   /** 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。
    *  行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。
+   *  @param path - 图片文件绝对路径（PNG/JPEG/WebP/GIF）；不存在 = 黄字提示；随下一条消息发送（需 vision 模型）。
+   *
    *  @example
    *  ```ts
    *  ui.attachImage?.("D:/shots/2026-09-25.png"); // chip [image #N] 进输入框
@@ -113,6 +197,9 @@ export interface CommandUi {
   /** 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()；
    *  不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。
    *  属性式 | undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。
+   *  @param spec - 控件窗清单（标题 + widgets 开窗快照 + onEvent 回传 + 可选布局）。owner 由内核标注（@internal）。
+   *  @returns 句柄（update/close）；宿主不支持控件窗 = undefined——判空降级（如回退 viewText）。
+   *
    *  @example
    *  ```ts
    *  const h = ui.dialog?.({ title: "作业", widgets: [{ id: "p", kind: "progress", value: () => done, max: total }] });
@@ -155,27 +242,69 @@ export type DialogEvent =
 
 /** 控件窗清单（m5 口子三）。widgets 是开窗快照（静态清单直接给；活值走字段级函数或 update 句柄——
  *  整份清单「现问现答」是卡片专属，dialog 有 update 句柄不需要）。onEvent 返回新清单 = 整窗替换并滚回顶部；
- *  返回 undefined = 不动。 */
+ *  返回 undefined = 不动。
+ *
+ * @example
+ * ```ts
+ * const h = ui.dialog?.({
+ *   title: "作业",
+ *   widgets: [{ id: "p", kind: "progress", value: () => done, max: total }],
+ * });
+ * // 完成后：h?.close()
+ * ```
+ */
 export interface DialogSpec {
+  /** 窗标题（顶框展示；单行）。 */
   title: string;
+  /** 弹窗布局；缺省 "center80"。 */
   layout?: PopupLayout;
+  /** 开窗快照（静态清单直接给；活值走字段级函数或 update 句柄——整份清单现问现答是卡片专属）。 */
   widgets: WidgetSpec[];
+  /**
+   * 用户操作回传（每键立即一回，不防拖）。
+   * @param e - 事件（input/select/activate 三型，见 DialogEvent）。
+   * @returns 新控件清单 = 整窗替换滚回顶部；undefined/无返回 = 不动。抛错 = 黄字提示且窗保留。
+   */
   onEvent?(e: DialogEvent): WidgetSpec[] | void;
   /** 内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」属主判定用（@internal，模块勿自填）。 */
   owner?: string;
 }
 
-/** 控件窗句柄：update 换整份清单（滚回顶部）；close 关窗。窗已关或模块已卸载后再调 = 无操作不报错。 */
+/** 控件窗句柄：update 换整份清单（滚回顶部）；close 关窗。窗已关或模块已卸载后再调 = 无操作不报错。
+ *
+ * @example
+ * ```ts
+ * const h = ui.dialog?.({ title: "作业", widgets });
+ * later(() => h?.update(newWidgets)); // 异步完成推新清单
+ * h?.close();
+ * ```
+ */
 export interface DialogHandle {
+  /**
+   * 换整份清单（滚回顶部）。
+   * @param widgets - 新控件清单（与开窗参数同形状）。
+   */
   update(widgets: WidgetSpec[]): void;
+  /** 关窗。窗已关/模块已卸载后调用 = 静默无操作不报错。 */
   close(): void;
 }
 
-/** 卡片清单（m5 口子二）。widgets 建议用 getter——宿主每秒重读，模块侧改个变量卡片就自己跳。 */
+/** 卡片清单（m5 口子二）。widgets 建议用 getter——宿主每秒重读，模块侧改个变量卡片就自己跳。
+ *
+ * @example
+ * ```ts
+ * ctx.contribute.card?.({
+ *   area: "bottom", order: 50, title: "便签",
+ *   get widgets() { return [{ id: "n", kind: "kv", label: "条数", value: String(notes.length) }]; },
+ * });
+ * ```
+ */
 export interface CardSpec {
   /** 投哪个区：top = 右上（运行状态、网络·MCP 后面）；bottom = 右下（任务清单后面）。模块自选，宿主不分配。 */
   area: "top" | "bottom";
+  /** 同区内排序：内建卡恒在前，模块卡按此值升序排后；建议 40–990（别越核心保留段）。 */
   order: number;
+  /** 卡标题（卡框头展示；单行）。 */
   title: string;
   /** getter 现问现答，宿主每秒重读；抛错 = 当帧剔除该卡 + 模块日志 warn。 */
   readonly widgets: WidgetSpec[];
@@ -201,6 +330,16 @@ export interface CardSpec {
  * ```
  */
 export interface LlmPort {
+  /**
+   * 二级流式调用（错误带内——finish error，不许 reject）。
+   * @param req - 请求体。
+   * @param req.system - 系统提示词（可省）。
+   * @param req.messages - 对话消息（ModelMessage 形状）。
+   * @param req.signal - 取消信号（中断流；可省）。
+   * @param req.maxTokens - 输出上限 token 数（正整数；可省 = 不限）。
+   * @param req.model - 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型）。
+   * @param req.webSearch - 声明服务端原生搜索（端点不支持时被忽略；可省）。
+   */
   stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>;
   /** 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式）。
    *  可选——无一槽提供目录能力时读得 undefined（显式 | undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法），
@@ -213,9 +352,17 @@ export interface LlmPort {
   readonly lastUsage?: { totalTokens: number; atMessageCount: number } | undefined;
 }
 
-/** 系统 prompt 段：order 决定拼接顺序（核心保留 -100 为 harness 身份），单段 ≤ 32KB。 */
+/** 系统 prompt 段：order 决定拼接顺序（核心保留 -100 为 harness 身份），单段 ≤ 32KB。
+ *
+ * @example
+ * ```ts
+ * ctx.contribute.promptSection({ order: 15, get text() { return notes.length === 0 ? "" : `## Notes`; } });
+ * ```
+ */
 export interface PromptSection {
+  /** 拼接序：核心保留 ≤ -100；模块分配表 skill=0 / todo=10 / mcp=20，新段领 0–29 空位且保持 < 30（≥ 30 会插到 AGENTS.md 前与分配表矛盾）。 */
   order: number;
+  /** 段正文（单段 ≤ 32KB，全局合计 ≤ 64KB）；getter 时每轮装配现读；空串段装配时被过滤。 */
   text: string;
 }
 
@@ -242,17 +389,36 @@ export type Dependency = string | { capability: string; optional?: boolean };
  */
 export interface SettingsService {
   /** 切当前模型（qualified 全形 "provider/model"；与 /model 命令同源写路径：运行期覆盖 + 写盘）。 */
+  /**
+   * @param qualified - 模型全形 "provider/model"（提供商名与模型名斜杠分隔；必须是已配置的提供商名，未知名 reject）。
+   */
   setModel(qualified: string): Promise<void>;
   /** 切思考档位（与 /effort 同源：三级覆盖写入，"auto" = 回目录默认）。 */
+  /**
+   * @param level - 档位名（小写字母数字与 . _ -；目录外模型原样发送不校验；"auto" = 回目录默认档）。
+   */
   setEffort(level: string): Promise<void>;
   /** 切主题——未知主题名 = Promise reject（本批仓内仅一套主题，纯机制就绪）。 */
+  /**
+   * @param name - 主题名（未知名 reject——错误带外，模块自行 catch）。
+   */
   setTheme(name: string): Promise<void>;
   /** 批量切挂载预设：minimal = 只留核心 + 审批 + 当前活跃 provider；full = 恢复极简模式关掉的那些。
    *  中途失败不回滚——全部尝试完统一 reload 一次，失败模块名带内返回。 */
+  /**
+   * @param preset - "minimal" = 只留核心 + 审批 + 当前活跃 provider；"full" = 恢复极简模式自己关掉的那批（从未切过 = 无操作）。
+   * @returns failed - 写盘失败的模块名清单（全部尝试完才统一 reload 一次，中途失败不回滚）。
+   */
   applyModulePreset(preset: "full" | "minimal"): Promise<{ failed: string[] }>;
   /** 改会话名（与 /title 同源活写口，立即落盘）。 */
+  /**
+   * @param label - 会话名（截至 200 字符；空串合法 = 清名回未命名）。
+   */
   setLabel(label: string): Promise<void>;
   /** 开关侧栏（Ctrl+T 的程序化版本，持久化）。可选——行模式宿主无侧栏不装。 */
+  /**
+   * @param visible - true = 显示右侧面板；false = 隐藏（Ctrl+T 同款，持久化；行模式宿主未装本口）。
+   */
   setSidebar?(visible: boolean): Promise<void>;
   /** 读剪贴板文本。可选——剪贴板通道平台相关，宿主不支持就不装（模块判空降级）。 */
   readClipboard?(): Promise<string | undefined>;
@@ -261,10 +427,18 @@ export interface SettingsService {
 /** 宿主状态快照（m5 口子四读面，决策点 24）——current() 一次拿全，不分逐字段 get（照 h.status() 先例）。
  *  异步：权限/会话名/用量是事件投影，要翻一次历史。busy 不在快照里——走 ctx.events.on("turn/start"/"turn/end") 自推。
  *  故意不给三件：终端尺寸（布局是宿主的事）、输入框当前内容（insertText 是写口，读回 = 偷用户输入）、
- *  屏幕缓冲/渲染态（渲染权铁律）。 */
+ *  屏幕缓冲/渲染态（渲染权铁律）。
+ *
+ * @example
+ * ```ts
+ * const snap = await ctx.host?.current();
+ * if (snap) ctx.log.info("note.host", "当前状态", { model: snap.model, preset: snap.preset });
+ * ```
+ */
 export interface HostSnapshot {
   /** 当前模型（qualified 全形，如 "zhipuai/glm-4.7"）与是否运行期覆盖（false = 配置原样）。 */
   model: string;
+  /** 是否运行期覆盖（false = 配置原样，true = 本次会话内 /model 或设置服务改过）。 */
   modelOverridden: boolean;
   /** 当前思考档位；未设 = undefined（跟随模型目录默认档）。 */
   effort?: string | undefined;
@@ -303,15 +477,30 @@ export interface HostSnapshot {
  * ```
  */
 export interface HostInfo {
+  /**
+   * 拿当前快照（无订阅机制——要新值再调一次；善个异步事件投影）。返回 Promise；同步 getter 的标准接法 = 模块自己缓存。
+   * @returns 十字段运行状态快照（见 HostSnapshot；busy 不在快照——走 turn/start·turn/end 事件自推）。
+   */
   current(): Promise<HostSnapshot>;
 }
 
-/** 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。 */
+/** 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。
+ *
+ * @example
+ * ```ts
+ * activate(ctx) {
+ *   const { maxNotes } = await ctx.configRead();
+ *   ctx.contribute.tool(myTool);
+ *   ctx.ui.notice?.("note 已就绪");
+ * }
+ * ```
+ */
 export interface ModuleContext<C = unknown> {
   /** activate 时注入的纯分层合并快照（已校验、带默认值；overlay 不作用于它）。 */
   readonly config: C;
   /** 运行期读取自身配置（无 section 参数——只能读自己的 section）。 */
   configRead(): Promise<C>;
+  /** 诊断日志（五级别同形状；码表纪律见 Logger）。 */
   readonly log: Logger;
   /** 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。
    *  无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
@@ -319,6 +508,7 @@ export interface ModuleContext<C = unknown> {
   /** 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。
    *  compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。 */
   readonly llm: LlmPort;
+  /** 能力解析（硬依赖 get／可选 getOptional——迟到绑定，判空降级）。 */
   readonly services: {
     /** 硬依赖能力：拓扑序保证 activate 期间必有值。
      *
@@ -349,7 +539,18 @@ export interface ModuleContext<C = unknown> {
    * // 消费方（另一模块）经 dependsOn: ["my-module.store"] + ctx.services.get 解析
    * ```
    */
+  /**
+   * 挂能力实现（单所有者槽）。
+   * @param key - 能力 key；必须 ⊆ provides 声明（唯一例外 = 核心保留槽）；建议 `<模块名>.<能力>`。
+   * @param impl - 实现对象（消费方自行声明接口形状）。
+   *
+   * @example
+   * ```ts
+   * ctx.provide("my-module.store", { get: () => v, set: (x) => { v = x; } });
+   * ```
+   */
   provide(key: string, impl: unknown): void;
+  /** 贡献面（工具/命令/提示词段/配置修饰/卡片——都返 Disposer；声明了 mounts 须列 "contribute:*" 位）。 */
   readonly contribute: {
     /** 注册模型可调用的工具（进请求的 tools 数组）。
      *
@@ -439,6 +640,7 @@ export interface ModuleContext<C = unknown> {
      */
     card?(spec: CardSpec): Disposer;
   };
+  /** 会话面（append 落日志、messages 冷投影读口、id 会话标识）。 */
   readonly session: {
     /** 写会话日志扩展事件；type 须已在 logEvents 声明（白名单）。
      *
@@ -472,6 +674,7 @@ export interface ModuleContext<C = unknown> {
      *  mounts "tools.reveal" 同档把守（机制开关 = 写口同级）。 */
     enable(): void;
   };
+  /** 事件总线（on 订阅 / emit 自有命名空间；声明了 mounts 须列 "hook:<事件>" 与 "emit" 位）。 */
   readonly events: {
     /** 订阅事件；拦截点返回 { deny: true, reason } 或抛错 = 否决（waterfall 语义，§6.5 白名单 8 个）。
      *
@@ -517,25 +720,54 @@ export interface ModuleContext<C = unknown> {
   readonly host?: HostInfo | undefined;
 }
 
-/** 模块定义（§5.1 完整形态）。声明式：activate 之前全部静态信息可读。 */
+/** 模块定义（§5.1 完整形态）。声明式：activate 之前全部静态信息可读。
+ *
+ * @example
+ * ```ts
+ * export default defineModule({
+ *   name: "note", version: "0.1.0", description: "会话便签", api: 1,
+ *   logEvents: ["note/write"],
+ *   activate(ctx) { ctx.contribute.tool(myTool); },
+ * });
+ * ```
+ */
 export interface ModuleDefinition<C = unknown> {
+  /** 模块名（kebab-case，全局唯一——重名降级；工具/命令名前缀也用它）。 */
   name: string;
+  /** 版本号（semver形如 "0.1.0"；诊断面与审计展示）。 */
   version: string;
+  /** 一句话描述（人话——面板/帮助里给用户看）。 */
   description: string;
+  /** 契约主版本（恰为 MODULE_API_VERSION＝1；不匹配拒载）。 */
   api: number;
+  /** 依赖声明（字符串 = 硬依赖；{ capability, optional: true } = 可选不建拓扑边；可省 = 无）。 */
   dependsOn?: Dependency[];
+  /** 自己提供的能力 key 清单（ctx.provide 的合法域；建议 `<模块名>.<能力>`；可省）。 */
   provides?: string[];
+  /** 缺省启用与否（缺省 true；配置 [模块名] enabled 可覆盖）。 */
   defaultEnabled?: boolean;
+  /** 声明使用的非能力标记（如 "config.foreign" = 要 overlay 别人 section；可省）。 */
   uses?: string[];
+  /** 宿主口白名单（一经声明 = 只能用列出的口；缺省 = 不限制）。可用位："settings"、"contribute:tool"、"contribute:command"、"contribute:promptSection"、"contribute:configOverlay"、"contribute:card"、"tools.reveal"、"tools.list"、"emit"、"hook:<事件名>"、"provide"、"get"。 */
   mounts?: string[];
+  /** 自家配置节的 zod schema（声明了才读得到 [模块名] 节；校验带默认值；可省）。 */
   config?: ZodType<C>;
+  /** session.append 的事件类型白名单（未列的类型调用即抛；可省）。 */
   logEvents?: string[];
+  /**
+   * 激活体（拓扑序调用一次；抛错 = 模块降级不阻断启动）。
+   * @param ctx - 模块上下文（见 ModuleContext；注册/订阅/服务都在这里；activate 期 provider 可能未装酅——llm 只在运行期调）。
+   * @returns 可选 { dispose } 卸载清理钩子（注册物自动拆除——dispose 管注册之外的资源）。
+   */
   activate(ctx: ModuleContext<C>): void | { dispose?: Disposer } | Promise<void | { dispose?: Disposer }>;
 }
 
 /** 身份函数：仅做类型收窄与作者意图标注，不做运行期处理（校验在 kernel，§4.2 第 4 步）。
  *
- * @example
+ * @param def - 模块定义（字段逐个的含义与范围见 ModuleDefinition；建议配合 zod schema 与 logEvents 白名单）。
+ * @returns 原定义对象（类型收窄 + 意图标注，不做运行期处理）。
+ *
+  * @example
  * ```ts
  * export default defineModule({
  *   name: "note",                     // kebab-case，全局唯一（规则 4）
