@@ -28,6 +28,38 @@ const TOKENS = {
 
 export type TokenName = keyof typeof TOKENS;
 
+// ---- 主题可切机制（m5 T12）：当前主题集可变 + 注册表 + 缓存失效——导出函数签名全不变（调用面 301 处零改动）。
+// 本批仓内仅连山一套（决策点 20：主题包缓——机制先就绪，注册口供测试与将来主题包）。
+
+/** 主题集形状（连山同构；值宽化为 string——外部主题包不必匹配字面量类型）。 */
+export type ThemeTokens = { [K in TokenName]: string };
+
+/** 主题注册表：名 → 色集。 */
+export const THEMES = new Map<string, ThemeTokens>([["连山", TOKENS]]);
+
+let activeName = "连山";
+let active: ThemeTokens = TOKENS;
+
+/** 注册主题（m5 T12：测试与将来主题包的入口）。 */
+export function registerTheme(name: string, tokens: ThemeTokens): void {
+  THEMES.set(name, tokens);
+}
+
+/** 切主题：换当前集 + 缓存失效；未知名抛错（设置服务转 reject——模块自行 catch）。
+ *  效应只对新渲染面：流区已画出的历史行带着旧色值落在屏幕缓冲里不重刷（设计空白 11 披露）。 */
+export function setTheme(name: string): void {
+  const t = THEMES.get(name);
+  if (t === undefined) throw new Error(`未知主题 "${name}"（可用：${[...THEMES.keys()].join("、")}）`);
+  activeName = name;
+  active = t;
+  cache.clear();
+}
+
+/** 当前主题名（host 快照 theme 字段的数据源）。 */
+export function activeThemeName(): string {
+  return activeName;
+}
+
 function hexToRgb(hex: string): [number, number, number] {
 	return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
 }
@@ -73,7 +105,7 @@ const cache = new Map<string, { fg: string; bg: string }>();
 function seq(name: TokenName): { fg: string; bg: string } {
 	let hit = cache.get(name);
 	if (hit) return hit;
-	const rgb = hexToRgb(TOKENS[name]);
+	const rgb = hexToRgb(active[name] as string); // 当前主题集（m5 T12——缓存随 setTheme 失效重算）
 	hit = truecolor
 		? { fg: `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`, bg: `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m` }
 		: { fg: `\x1b[38;5;${nearest256(rgb)}m`, bg: `\x1b[48;5;${nearest256(rgb)}m` };

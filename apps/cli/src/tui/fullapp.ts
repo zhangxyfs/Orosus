@@ -146,7 +146,9 @@ const OVERLAY_PAGE = 10;
 const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
 const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
-const TASK_TICK: Record<string, string> = { done: theme.fg("accent", "✓"), active: theme.fg("warn", "◐"), pending: theme.fg("muted", "○") };
+// 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
+const taskTick = (state: "done" | "active" | "pending"): string =>
+	state === "done" ? theme.fg("accent", "✓") : state === "active" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 /** 运行时间格式化（F5 十轮② 用户拍板：精确到秒，随 1s 心跳实时跳）：
  *  <60s「N 秒」；<1 时「M 分 SS 秒」；<1 天「H 时 MM 分 SS 秒」；否则「D 天 H 时」。 */
 export function elapsedText(startedAt: string | undefined, now: number = Date.now()): string {
@@ -412,6 +414,11 @@ export class FullApp {
 
 	/** 侧栏开关公共出口（m5 T11，候选 A-4「Ctrl+T 的程序化版本」）：toggle + 持久化回调 + 重画三件套——
 	 *  Ctrl+T 与设置服务（ctx.settings.setSidebar）两处共用（原先内联在 onKey 无公共出口）。幂等短路：已在目标态时不发回调不重画。 */
+	/** 重画一帧（m5 T12：设置服务切主题后的刷帧口——新渲染面用新色，历史行旧色不重刷是预期披露）。 */
+	repaint(): void {
+		this.scheduler.requestImmediateRender();
+	}
+
 	setSidebar(visible: boolean): void {
 		const s = this.state;
 		if (s.sidebarVisible === visible) return;
@@ -1545,7 +1552,7 @@ export class FullApp {
 					: t.state === "active"
 						? theme.fg("warn", t.text)
 						: theme.fg("fg", t.text);
-			const row = ` ${TASK_TICK[t.state]} ${truncateToWidth(text, inner - 4)}`;
+			const row = ` ${taskTick(t.state)} ${truncateToWidth(text, inner - 4)}`;
 			content.push(focused && i === s.taskSel ? theme.bg("accentSoft", padToWidth(row, inner - 1)) : row);
 		}
 		const footL = theme.dim(" 由 Agent 实时同步");

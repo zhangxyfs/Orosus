@@ -372,7 +372,7 @@ const hostInfo: HostInfo = {
       modelOverridden: st.overridden,
       ...(st.effort !== undefined ? { effort: st.effort } : {}),
       preset: modulePresetOf(),
-      theme: "连山", // T12 注册表落地后换读 active 名（T12 Files 已留位）
+      theme: theme.activeThemeName(), // m5 T12：注册表 active 名（本批仓内恒「连山」）
       permission: permissionOf(events, cfg.approvalMode),
       ...(label !== undefined ? { sessionLabel: label } : {}),
       ...(activeApp !== undefined ? { sidebar: activeApp.stateRef.sidebarVisible } : {}),
@@ -451,8 +451,10 @@ const settingsService: SettingsService = {
     h.setEffort(level);
     notify(level === "auto" ? "思考档位：跟随目录默认" : `思考档位：${level}`);
   },
-  setTheme: async () => {
-    throw new Error("主题机制尚未启用（本批 T12 落地）");
+  setTheme: async (name) => {
+    theme.setTheme(name); // 未知名抛错 = reject（模块自行 catch；契约口径——本批仓内仅连山一套，机制就绪）
+    activeApp?.repaint(); // 新渲染面换新色（历史行旧色不重刷——设计空白 11 预期行为）
+    notify(`主题已切换：${name}`);
   },
   applyModulePreset: async (preset) => {
     const { failed } = await applyModulePresetImpl(preset);
