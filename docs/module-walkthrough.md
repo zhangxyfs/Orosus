@@ -209,7 +209,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 | `ctx.provide` / `ctx.services.get` | 能力槽：给/取 | 模块间解耦协作（fs seam、provider 槽都是这个） |
 | `ctx.ui.ask` / `choose` / `confirm` / `notice` | 宿主注入的交互 | 无头环境是拒绝式实现——别指望它一定成功，fail-closed |
 
-每个字段、每个参数的逐条说明见本文**第 12 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/index.html)（`pnpm gen-docs` 从 contracts 源码生成，两处同源）。
+每个字段、每个参数的逐条说明见本文**第 13 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/index.html)（`pnpm gen-docs` 从 contracts 源码生成，两处同源）。
 
 ## 8. 设计一个新模块的正规流程
 
@@ -247,7 +247,35 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 内置模块与外部模块走同一条 kernel 注册管线，没有特权（规则 5）——转正不改变行为，
 只改变归属：进 CI、进门禁、进 docs/api（如果你的契约进了 contracts）。
 
-## 10. 常见坑（都真实踩过或有出处）
+## 10. 容错契约：你的模块坏了会怎样（第三方开发者必读）
+
+**承诺**：第三方模块出任何问题，止于模块自身——你的模块做不到让程序起不来或运行崩溃（启动有顶层兜底错误面，坏包坏入口在发现期就被跳过，根本进不了图）。
+
+各阶段待遇（坏了会怎样、去哪看）：
+
+| 你的模块怎么坏 | 阶段 | 宿主的处置 | 去哪看 |
+|---|---|---|---|
+| `package.json` 写坏 / 入口文件读不了 | 发现期 | 跳过该模块，程序照常启动 | Ctrl + E 弹窗「加载失败」；日志 `kernel.discover.skip` |
+| 入口代码语法错 / import 期炸 | 发现期 | 同上 | 同上；日志 `kernel.discover.fail` |
+| `defineModule` 形状不对（如 provides key 没带 `<模块名>.` 前缀） | 静态校验 | 该模块降级不激活，其余照常 | Ctrl + E「激活失败」 |
+| `activate()` 抛错 | 激活期 | 该模块降级，工具/命令不注册，其余照常 | Ctrl + E「激活失败」（详情带堆栈） |
+| 硬依赖的能力没有提供者 | 拓扑/激活期 | 级联降级（不激活）；提供者恢复后下次 reload 自动恢复 | Ctrl + E「级联」 |
+| 项目级模块没过信任门 | 信任门 | 不纳图（untrusted） | 启动横幅 / `--dump-modules` |
+
+两条运行期拦不住的边界（知情自查）：
+
+1. **顶层代码只做定义，副作用进 `activate()`**。模块顶层在信任门**之前**执行——顶层就抛错的模块宿主拦不住（原理层面：得先执行它才知道它是什么）。最小反例：
+   ```ts
+   // ❌ 顶层副作用：文件一缺失，宿主直接炸
+   const config = JSON.parse(readFileSync("notes.json", "utf8"));
+   export default defineModule({ name: "note", /* ... */ activate() {} });
+   ```
+   正解：读文件挪进 `activate()`——它有降级护栏（上表第 4 行）。
+2. **`activate()` 别挂死**。全内核无超时是既有定案（reload 的 quiesce 等 turn 边界，挂死的等待由用户 Ctrl-C 中止）——你的 activate 永不返回，reload 就一直等。最小反例：`await new Promise(() => {})`。正解：每个 await 都有出路（超时 / 取消信号）。
+
+> 内置模块不享受这层宽容：它们是宿主静态 import，import 期炸等于宿主自己残废（typecheck 门 + 提交纪律兜底）——这也是「转正」（§9）比做外部模块要求高的原因之一。
+
+## 11. 常见坑（都真实踩过或有出处）
 
 1. **"没生效"先查降级**：activate 抛错不崩启动，`--dump-modules` 看状态和原因。
 2. **工具/命令命名**：强制 `<module>__<tool>` / `<module>__<cmd>` 前缀，内核校验会拒收。
@@ -262,7 +290,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 9. **验收纪律**：单测全绿 ≠ 能用。改到 CLI/配置/渲染链路的，收尾前按 developers.md 的
    HERMETIC 配方真实跑一遍。
 
-## 11. 文档地图
+## 12. 文档地图
 
 | 想干什么 | 去哪 |
 |---|---|
@@ -273,12 +301,12 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 | 某个模块的设计取舍 | [superpowers/specs/modules/](superpowers/specs/modules/README.md)（一模块一文档） |
 | 运行时看装配结果 | `orosus --dump-modules`（= `harness.graph().catalogJson()`） |
 
-## 12. 附：完整 API 参考
+## 13. 附：完整 API 参考
 
 > 这一节把模块作者的**全部可用面**列全——每个字段、每个参数、它是干什么的。想读更长的语义注释
 > 再去 [docs/api](api/index.html)（typedoc 从 contracts 源码生成），两处内容同源。
 
-### 12.1 defineModule 全字段
+### 13.1 defineModule 全字段
 
 ```ts
 defineModule({ name, version, description, api, dependsOn?, provides?, defaultEnabled?,
@@ -300,28 +328,28 @@ defineModule({ name, version, description, api, dependsOn?, provides?, defaultEn
 | `logEvents` | string[] |  | `ctx.session.append()` 的事件类型白名单，必须带 `<module>/` 前缀；没声明的 type 会被拒收 |
 | `activate(ctx)` | function | ✓ | 激活入口，启动/reload 的拓扑序里调一次。可返回 `dispose()` 或 `{ dispose }`——模块停用（close / reload 换代 / 回滚）时先于各注册 disposer 调用 |
 
-### 12.2 activate(ctx)——ModuleContext 全口
+### 13.2 activate(ctx)——ModuleContext 全口
 
 | 口 | 签名 | 干什么 |
 |---|---|---|
 | `ctx.config` | `readonly C` | activate 期注入的配置**快照**（已校验、带默认值）；overlay 不作用于它。要活读用 `configRead()` |
 | `ctx.configRead()` | `() => Promise<C>` | 运行期读自家配置：复合各模块 overlay 后重新过 owner schema。**activate 期只保证纯分层值**，依赖 overlay 的读取放运行期 |
 | `ctx.log` | `Logger` | 五级：`trace/debug/info/warn/error(code, msg, data?)`。code 是稳定事件码（点分路径，如 `my.cache-hit`），实现自动携带模块名；走独立诊断日志旁路，不进模型上下文 |
-| `ctx.ui` | `CommandUi` | 宿主注入的交互口（命令处理器第二参也是它）。方法见 12.5 |
-| `ctx.llm` | `LlmPort` | 二级 LLM 调用（摘要/标题类）。见 12.6 |
+| `ctx.ui` | `CommandUi` | 宿主注入的交互口（命令处理器第二参也是它）。方法见 13.5 |
+| `ctx.llm` | `LlmPort` | 二级 LLM 调用（摘要/标题类）。见 13.6 |
 | `ctx.services.get` | `<T>(key) => Promise<T>` | 消费**硬依赖**能力：拓扑序保证 activate 期间必有值，get 不会 undefined |
 | `ctx.services.getOptional` | `<T>(key) => Promise<T \| undefined>` | 消费可选能力：调用时解析，可能 undefined（提供方迟到你才读）。消费方必须写回落路径 |
 | `ctx.provide` | `(key, impl) => void` | 往能力槽放实现（单所有者槽，先到先得，重复 provide 报错）。key 须 ⊆ `provides` 声明；例外：核心保留槽（如 `provider:<name>`）由核心特许 |
-| `ctx.contribute.tool` | `(t: Tool) => Disposer` | 注册模型可调用的工具。见 12.3 |
+| `ctx.contribute.tool` | `(t: Tool) => Disposer` | 注册模型可调用的工具。见 13.3 |
 | `ctx.contribute.command` | `(name, handler) => Disposer` | 注册宿主命令 `/<module>__<name>`。**人用的操作面，模型看不见**。handler `(args: string, ui: CommandUi) => string \| Promise<string>`，args 是命令后的原始参数串 |
-| `ctx.contribute.promptSection` | `(s: PromptSection) => Disposer` | 注册系统提示词段。见 12.4 |
+| `ctx.contribute.promptSection` | `(s: PromptSection) => Disposer` | 注册系统提示词段。见 13.4 |
 | `ctx.contribute.configOverlay` | `(o) => Disposer` | 改**读侧**投影：`{ section?: string, read(value) => value }`，缺省 section = 自家、声明他人 section 须 `uses` 含 `config.foreign`。只作用于 `configRead()`，不作用于 `ctx.config` 快照、不改盘 |
 | `ctx.session.append` | `(type, payload) => void` | 写会话日志扩展事件。type 须在 `logEvents` 白名单；payload 是任意 JSON 对象。TUI 投影、回放、别的模块都从这里读 |
 | `ctx.session.messages?` | `() => Promise<ModelMessage[]>` | 读当前会话的**模型消息投影**（压缩/裁剪事件已应用，与 agentLoop 同投影）。可选口——非核心宿主可能不提供，消费方必须带回落 |
 | `ctx.events.on` | `(type, listener) => Disposer` | 订阅事件。listener 返回 `undefined` = 通过；返回 `{ deny: true, reason }` 或抛错 = 否决（仅拦截点有否决语义，见下表） |
 | `ctx.events.emit` | `(type, payload) => Promise<void>` | 模块间通知。**仅限 `<module>/*` 命名空间**，核心事件类型拒绝模块 emit |
 
-### 12.3 defineTool——两阶段工具契约
+### 13.3 defineTool——两阶段工具契约
 
 ```ts
 defineTool({ name, description, parameters, resolveExecution(input): Promise<ToolExecution> })
@@ -352,14 +380,14 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 | `truncated?` / `spill?` | 输出超限时截断标记 / 落盘文件 `{ path, bytes }`（模型可再读全文） |
 | `denied?` | 被 `tool/pre-execute` 瀑布否决时由内核置 true（此时 isError 恒 true）——不是工具自己写的 |
 
-### 12.4 promptSection——系统提示词段
+### 13.4 promptSection——系统提示词段
 
 | 字段 | 干什么 |
 |---|---|
 | `order` | 全局拼接顺序。核心五节概念 -100 永远最前；现有分配表：skill=0、tool-todo=10、mcp=20；AGENTS.md 等价 30 固定拼尾。**新模块领 0–29 的空位**，≥30 会插进 AGENTS.md 前面与分配表矛盾 |
 | `text` | string 或 getter。getter 每轮请求装配时求值（活段——todo 面板、mcp 清单都是这么做的）；**空串段装配时被过滤**——「必须注入」类内容应无条件注册且永远非空 |
 
-### 12.5 CommandUi——交互口（命令与审批询问共用）
+### 13.5 CommandUi——交互口（命令与审批询问共用）
 
 | 方法 | 干什么 |
 |---|---|
@@ -371,7 +399,7 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 
 > 无头环境（`--print`、测试、嵌入式）注入**拒绝式实现**：三问法抛「无交互环境」→ 命令带内失败，fail-closed。所以命令体要能承受 ui 不可用。
 
-### 12.6 LlmPort——二级模型调用
+### 13.6 LlmPort——二级模型调用
 
 | 成员 | 干什么 |
 |---|---|
@@ -379,7 +407,7 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 | `contextWindow` | 当前模型上下文窗口（token），getter 惰性读；未知 undefined |
 | `lastUsage` | 最近一次**主循环**请求的真实用量锚点 `{ totalTokens, atMessageCount }`——其后消息用估算增量。仅运行期调用（activate 期 provider 可能未装配） |
 
-### 12.7 事件与拦截点（白名单 8 个，§6.5）
+### 13.7 事件与拦截点（白名单 8 个，§6.5）
 
 | 拦截点 | 语义 | 典型用途 |
 |---|---|---|
@@ -394,7 +422,7 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 
 返回 `undefined` = 放行；`{ deny: true, reason }` 或抛错 = 否决（仅 waterfall/拦截类有否决语义）。
 
-### 12.8 生命周期速记
+### 13.8 生命周期速记
 
 - `activate`：拓扑序调用一次；硬依赖在前（§5.2）。
 - 一切注册（tool/command/promptSection/events.on…）**返回 Disposer**——模块停用时内核自动逐个调用，不用你记。

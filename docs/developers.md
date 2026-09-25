@@ -93,6 +93,9 @@ export default defineModule({
 反例即前案：搜索端点表最初放 provider-custom（消费者家）又考虑搬 contracts（主体）——最终按本纪律落
 tool-web 挂服务。判断标准：**知识的家跟权威方走，消费靠服务；主体的 diff 是最后手段。**
 
+> 你的模块各种坏法的待遇（发现期跳过 / 激活期降级 / 信任门不纳图）与两条运行期边界，
+> 见 [module-walkthrough.md 第 10 节「容错契约」](module-walkthrough.md)。
+
 ## 错误行为
 
 - StreamFn 不许 reject——错误编码为 `finish{kind:"error"}`（§6.4）
