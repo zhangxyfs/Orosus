@@ -35,7 +35,7 @@ describe("工具注册表（§6.3）", () => {
     const { reg } = setup();
     expect(() => reg.register(echo("other__x"), "tool-a")).toThrow(/前缀/);
     reg.register(echo("tool-a__x"), "tool-a");
-    expect(() => reg.register(echo("tool-a__x"), "tool-a")).toThrow(/重名/);
+    expect(() => reg.register(echo("tool-a__x"), "tool-a")).toThrow(/工具注册冲突/); // T3 正名：同名只可能是同一模块两世相撞（前缀规则保证跨模块不重名）
   });
 
   it("specs() 产出 JSON Schema 且按注册序冻结", () => {

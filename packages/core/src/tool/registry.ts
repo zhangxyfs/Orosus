@@ -75,7 +75,8 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       }
       const existing = tools.find((t) => t.tool.name === tool.name);
       if (existing !== undefined && !existing.tombstoned) {
-        throw new Error(`工具重名：${tool.name}`);
+        // 工具名必须带 <owner>__ 前缀（上方校验）——跨模块构造上不可能重名，同名只可能是同一模块的两世相撞（旧工具未拆除）
+        throw new Error(`工具注册冲突：${tool.name}（与旧实例同名冲突——旧工具未拆除）`);
       }
       if (existing !== undefined) {
         // 墓碑位重注册（reload 的 Reloaded 模块）：同位新对象顶替，保持注册序（tools 数组字节稳定，§6.3）。
