@@ -1,4 +1,4 @@
-import type { CardSpec, CommandHandler, CapabilityKey, CommandUi, Disposer, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection } from "@orosus/contracts/module";
+import type { CardSpec, CommandHandler, CapabilityKey, CommandUi, Disposer, HostInfo, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection, SettingsService } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -69,6 +69,8 @@ export interface ActivateInput {
   bus: EventBus;
   tools: ToolRegistry;
   commandUi?: CommandUi;                        // 宿主交互 UI（D35 M3/T2：ctx.ui——审批询问等 waterfall 侧消费）
+  settings?: SettingsService;                   // m5 T9 口子四：设置服务写面——逐方法包 allows("settings") 校验（照 ctx.tools 缝）
+  host?: HostInfo;                              // m5 T9 读面：快照口直挂无 mounts 位（决策点 24——读不占写闸）
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
@@ -336,6 +338,23 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           await bus.emit(type, payload);
         },
       },
+      // ctx.settings（m5 T9 口子四，决策点 18 可选直挂）：逐方法包 allows("settings") 白名单校验
+      //（照 ctx.tools 缝——activate 入参接实现对象；写面宿主独占，模块不可替换）；实现不在 = undefined 判空降级
+      ...(input.settings !== undefined
+        ? {
+            settings: {
+              setModel: (q: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setModel(q); },
+              setEffort: (l: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setEffort(l); },
+              setTheme: (n: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setTheme(n); },
+              applyModulePreset: (p: "full" | "minimal") => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.applyModulePreset(p); },
+              setLabel: (l: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setLabel(l); },
+              ...(input.settings.setSidebar !== undefined ? { setSidebar: (v: boolean) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setSidebar!(v); } } : {}),
+              ...(input.settings.readClipboard !== undefined ? { readClipboard: () => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.readClipboard!(); } } : {}),
+            } satisfies SettingsService,
+          }
+        : {}),
+      // ctx.host（m5 T9 读面，决策点 24）：无 mounts 位直挂——读是「问宿主」不占写闸，照 session.messages? 无闸读口先例
+      ...(input.host !== undefined ? { host: input.host } : {}),
     };
 
     try {

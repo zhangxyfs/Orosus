@@ -6,8 +6,10 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecre
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
+import type { HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createCliUi } from "./uiface.ts";
+import { computeModulePreset, presetBaseline } from "./modpreset.ts";
 import { createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
@@ -299,6 +301,8 @@ const createSession = async (extra: { fork?: { parentSessionId: string; atEntryI
   const h = await createHarness({
     builtinModules: BUILTIN_MODULES,
     commandUi,
+    settings: settingsService, // m5 T9 口子四：经内核装配成 ctx.settings（mounts "settings" 门）
+    host: hostInfo,             // m5 T9 读面：ctx.host 直挂无门
     autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
     sessionsDir: extra.sessionsDir ?? activeDir,
     ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
@@ -346,6 +350,60 @@ let pendingEcho: { notice: string; history: boolean } | undefined;
 // 顶层兜底 catch（T6/S7）：createHarness 抛错（坏配置 TOML、required 护栏阻断、T5 没盖住的）不再裸堆栈退出。
 // 模块顶层 await——catch 内不能 return、也不能只设 exitCode 放行（后续 REPL 带着未初始化的 h 继续跑），
 // process.exit(1) 直接拦住（同文件 --dump-modules 的 exit(0) 先例）
+// ---- 口子四：设置服务写面 + 宿主状态读面（m5 T9；h 经模块级 let 引用——服务闭包调用期现读活会话）----
+
+/** 挂载模式现算三态（设计空白 17）：启用集 ⊆ 保底名单 → minimal；全启用 → full；其余 → custom。
+ *  现算不靠记忆——用户切完极简又手动插拔，「上次切的档」会撒谎。保底名单 = lockReasonFor 三款同款（核心 + approval + 当前活跃 provider）。 */
+const modulePresetOf = (): "full" | "minimal" | "custom" => {
+  const providerV = realReadModel(process.cwd())() ?? "";
+  return computeModulePreset(h.graph().audit(), presetBaseline(providerV === "" ? "" : providerV.split("/")[0]!));
+};
+
+/** 宿主状态快照（m5 T9 读面，决策点 24）：harness 现成读口 + 提纯投影 + preset 现算——零新增读口。 */
+const hostInfo: HostInfo = {
+  current: async () => {
+    const st = h.status();
+    const events = await h.history();
+    const cfg = configFace();
+    const usage = await h.usage();
+    const label = sessionLabelOf(events);
+    return {
+      model: st.model,
+      modelOverridden: st.overridden,
+      ...(st.effort !== undefined ? { effort: st.effort } : {}),
+      preset: modulePresetOf(),
+      theme: "连山", // T12 注册表落地后换读 active 名（T12 Files 已留位）
+      permission: permissionOf(events, cfg.approvalMode),
+      ...(label !== undefined ? { sessionLabel: label } : {}),
+      ...(activeApp !== undefined ? { sidebar: activeApp.stateRef.sidebarVisible } : {}),
+      ...(cfg.contextWindow !== undefined ? { contextWindow: cfg.contextWindow } : {}),
+      usage,
+    };
+  },
+};
+
+/** 设置服务（m5 T9 骨架）：setModel/setEffort/setLabel 走 harness 同源出口（单一写者）；
+ *  setTheme/applyModulePreset 为必选成员占位——本批 T12/T10 落地（中间提交拒绝带明话）；
+ *  setSidebar/readClipboard 可选成员不装（T11 落地时装配）。 */
+const settingsService: SettingsService = {
+  setModel: async (qualified) => {
+    const before = h.status().model;
+    await h.setModel(qualified);
+    notify(`模型已切换：${before} → ${qualified}`); // reportModelSwitch 同族——toast diff
+  },
+  setEffort: async (level) => {
+    h.setEffort(level);
+    notify(level === "auto" ? "思考档位：跟随目录默认" : `思考档位：${level}`);
+  },
+  setTheme: async () => {
+    throw new Error("主题机制尚未启用（本批 T12 落地）");
+  },
+  applyModulePreset: async () => {
+    throw new Error("挂载预设尚未启用（本批 T10 落地）");
+  },
+  setLabel: (label) => h.setLabel(label),
+};
+
 let h: Awaited<ReturnType<typeof createSession>>;
 try {
   h = await createSession();
@@ -1015,12 +1073,22 @@ const closeGoneModuleUi = (before: Set<string>): void => {
   for (const n of before) if (!after.has(n)) activeApp.closeModuleUi(n);
 };
 
+/** 权限投影（m5 T9 从 refreshPanel 提纯共用——host.current() 同源）：末条 approval/policy 事件 ?? 配置档。 */
+const permissionOf = (events: { type: string; mode?: unknown }[], fallback: string): string => {
+  const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
+  return lastPolicy?.mode ?? fallback;
+};
+/** 会话名投影（同款提纯）：末条 session/label 事件；未命名 = undefined（显示侧自定「新会话」）。 */
+const sessionLabelOf = (events: { type: string; label?: unknown }[]): string | undefined => {
+  const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
+  return lastLabel?.label;
+};
+
 /** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
 const refreshPanel = async (): Promise<void> => {
 	const events = await h.history();
 	const cfg = configFace();
-	const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
-	const permission = lastPolicy?.mode ?? cfg.approvalMode;
+	const permission = permissionOf(events, cfg.approvalMode); // m5 T9：提纯投影（host.current() 共用）
 	const lastTodo = events.filter((e) => e.type === "tool-todo/write").at(-1) as
 		| { type: string; todos?: unknown }
 		| undefined;
@@ -1036,8 +1104,7 @@ const refreshPanel = async (): Promise<void> => {
 		})(),
     session: (() => {
       // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名显示「新会话」直到 /title 或 fork 命名
-      const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
-      return lastLabel?.label ?? "新会话";
+      return sessionLabelOf(events) ?? "新会话";
     })(),
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),

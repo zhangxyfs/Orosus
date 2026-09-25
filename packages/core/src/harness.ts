@@ -1,7 +1,7 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { CommandUi, LlmPort, ModuleDefinition } from "@orosus/contracts/module";
+import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./session/jsonl.ts";
@@ -39,6 +39,8 @@ export interface HarnessOptions {
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
+  settings?: SettingsService;              // m5 T9 口子四：设置服务实现（写面）——经内核装配成 ctx.settings（mounts "settings" 白名单校验）；缺省不装（模块读 undefined 降级）
+  host?: HostInfo;                         // m5 T9 读面：宿主状态快照——ctx.host 直挂无 mounts 位（决策点 24）；缺省不装
   autoTitle?: boolean;                     // 会话自动标题（M4-2 B9 拉前）：首轮 completed 后生成 session/label。核心缺省关（保守——宿主显式开；CLI 装配 true）
   resume?: { sessionId: string };           // 打开既有会话继续（D41/T6）：已有事件非空则不落重复 header
   fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; // 复合存储新会话（D41/T6）：header 带 parentSession + 首事件 session/fork；parentDir（M4-1 T1/D46）= 父会话所在目录（跨桶/平铺 fork 时由宿主定位填入，缺省同 sessionsDir）
@@ -85,6 +87,10 @@ export interface Harness {
   /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
    *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
   setLabel(label: string): Promise<void>;
+  /** 设置服务后端（m5 T9 口子四）：换模型——/model 同源核心动作（覆盖槽 + 写盘 + 档位跟随重解析），单一写者不双写；busy 期可调、下一轮生效。 */
+  setModel(qualified: string): Promise<void>;
+  /** 设置服务后端（m5 T9）：切思考档位——/effort 同源；"auto" = 回目录默认档；非法档名抛错。 */
+  setEffort(level: string): void;
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
   log(code: string, msg: string, data?: Record<string, unknown>): void;
@@ -295,6 +301,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     cwd: options.cwd ?? process.cwd(),
     commandUi,
     llm: llmHolder,
+    ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
+    ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
@@ -412,6 +420,45 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     writeFileSync(userConfigFile, after, "utf8");
   };
 
+  // ---- /model //effort 核心动作（m5 T9 抽共用）：命令与设置服务（ctx.settings）同源——单一写者，不双写 ----
+
+  /** /model 核心：覆盖槽 + 写盘 + 档位跟随重解析（2026-09-25 二轮 kimi draftFor 对齐）。 */
+  const applyModelOverride = async (next: string): Promise<void> => {
+    const prevModelValue = modelOverride ?? (typeof cfgModelValue() === "string" ? (cfgModelValue() as string) : undefined);
+    modelOverride = next;
+    // 持久化（2026-09-22 用户拍板）：选定即写盘永久生效。行级写 user config 顶层 provider 键
+    // （无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↮模块违铁律 3）
+    // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行随过滤清除
+    upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = "${next}"` });
+    // 档位跟随重解析：已设档且换了模型 → 新模型 segments 含旧档 → 保留（「设置过就尊重」）；
+    // 不含 → 落默认档（kimi middleOf 取法）；目录不认识新模型 → lenient 保留原样发（端点 400 自证）。
+    // 未设档不动作——effective 自动 = 新模型默认档（解析链天然跟随）。重选原模型不触发。
+    const prevEffort = effortOverride ?? cfgEffortValue();
+    if (prevEffort !== undefined && next !== prevModelValue) {
+      const { provider: nextSlot, model: nextExplicit } = parseModel(next);
+      const nextAdapter = graph.services.provider(nextSlot);
+      const nextBare = nextExplicit ?? nextAdapter?.defaultModel ?? next;
+      const info = await thinkingInfoOf(nextSlot, nextBare);
+      if (info !== undefined && !segmentsOf(info).includes(prevEffort)) {
+        const reEffort = defaultEffortOf(info);
+        effortOverride = reEffort;
+        upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${reEffort}"` });
+      }
+    }
+  };
+
+  /** /effort 核心：覆盖 + 写盘；"auto" = 清覆盖清盘行回目录默认。非法档名抛错（设置服务同规）。 */
+  const applyEffortOverride = (level: string): void => {
+    if (!/^[a-z0-9._-]+$/.test(level)) throw new Error(`档位名 "${level}" 不合法（仅限字母数字与 . _ -）`);
+    if (level === "auto") {
+      effortOverride = undefined;
+      upsertTopLevelKey(/^\s*effort\s*=/);
+    } else {
+      effortOverride = level;
+      upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${level}"` });
+    }
+  };
+
   // 内建别名表（D38）：短名 → 模块命令名；目标不存在提示安装对应模块
   const COMMAND_ALIASES: Record<string, string> = {
     provider: "provider-custom__provider",
@@ -461,32 +508,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       }
       // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
       // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
-      const prevModelValue = modelOverride ?? (typeof cfgModelValue() === "string" ? (cfgModelValue() as string) : undefined);
-      modelOverride = next;
-      // 持久化（2026-09-22 用户拍板，推翻 T14/D38「显式确认才写盘」）：选定即写盘永久生效——
-      // 「要不要永久」是工具该自己处理的琐事，不该问用户。行级写 user config 顶层 provider 键
-      // （无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↛模块违铁律 3）
-      // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行随过滤清除
-      upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = "${next}"` });
-      // 档位跟随重解析（2026-09-25 二轮，kimi-code /model draftFor 机制对齐）：已设档且换了模型 →
-      // 新模型 segments（kimi segmentsFor——含 off 档）含旧档 → 保留（「设置过就尊重」）；不含 → 落默认档
-      // （kimi middleOf 取法 values[Math.floor(len/2)]——GLM 双档 [high,max] 中位即 max）；目录不认识新模型
-      // → lenient 保留原样发（端点 400 自证）。未设档不动作——effective 自动 = 新模型默认档（解析链天然跟随，
-      // 比 kimi 写死更干净）。重选原模型不触发。
-      const prevEffort = effortOverride ?? cfgEffortValue();
-      if (prevEffort !== undefined && next !== prevModelValue) {
-        const { provider: nextSlot, model: nextExplicit } = parseModel(next);
-        const nextAdapter = graph.services.provider(nextSlot);
-        const nextBare = nextExplicit ?? nextAdapter?.defaultModel ?? next;
-        const info = await thinkingInfoOf(nextSlot, nextBare);
-        if (info !== undefined && !segmentsOf(info).includes(prevEffort)) {
-          const reEffort = defaultEffortOf(info);
-          effortOverride = reEffort;
-          upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${reEffort}"` });
-        }
-      }
-      // 静默返回（2026-09-22 用户拍板：切换反馈由宿主侧浮动 toast 承担——diff h.status() 前后值得知；
-      // 空串 = 不落流区的管线约定，同 /permission /yolo）
+      await applyModelOverride(next); // m5 T9：核心动作抽共用——命令与设置服务同源（不双写）
       return "";
     }],
     ["/effort", async (args: string) => {
@@ -506,13 +528,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         // 直达形态 /effort <档位>：不查 segments（自定义端点模型可不在目录）——原样收；auto = 回默认档
         //（清覆盖 + 清盘上 effort 行，effective 回落目录默认——kimi 无此态，Orosus 保留为「跟随目录默认」口）
         if (!/^[a-z0-9._-]+$/.test(arg)) return `档位名 "${arg}" 不合法（仅限字母数字与 . _ -）`;
-        if (arg === "auto") {
-          effortOverride = undefined;
-          upsertTopLevelKey(/^\s*effort\s*=/);
-        } else {
-          effortOverride = arg;
-          upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${arg}"` });
-        }
+        applyEffortOverride(arg); // m5 T9：核心动作抽共用（auto = 清覆盖回目录默认）
         return ""; // 静默：反馈由宿主 toast diff h.status().effort（/model 同约）
       }
       if (info === undefined) {
@@ -526,10 +542,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // choose 在 try 外：Esc 的「已取消（Esc）」带内抛错穿透（/model 同款定案）
       // 标题带当前档（2026-09-25 用户拍板：菜单要体现当前是什么档——含目录外手设档的 lenient 情形也能看到）
       const pick = (await commandUi.choose(`选择思考档位（${bare}${current !== undefined ? ` · 当前 ${current}` : ""}）`, items)).replace(/ ✓$/, "");
-      if (pick !== current) {
-        effortOverride = pick;
-        upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${pick}"` });
-      }
+      if (pick !== current) applyEffortOverride(pick);
       return ""; // 原样重选当前档 = 无操作零反馈（host diff 不变即无 toast）
     }],
     ["/help", async () => {
@@ -848,6 +861,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     // 批⑦a：/title 当前会话改名走活 store（单写者——旁路新建 store 写活文件会破 parentId 链/seq 单调）。
     // append 后立即 flush（2026-09-22 用户实测：label 滞留写缓冲时 /sessions 读盘看不到新名——改名必须即落盘）
+    // m5 T9：设置服务后端出口（命令同源核心动作）——CLI 在 main.ts 拼 SettingsService 后经本接口转发
+    async setModel(qualified: string) {
+      await applyModelOverride(qualified);
+    },
+    setEffort(level: string) {
+      applyEffortOverride(level);
+    },
+
     async setLabel(label: string) {
       await ensureHeader(); // 命名先于首个 turn 也不出断头文件（/title 新政同 fork 走查批）
       await store.append(LOG_TYPES.sessionLabel, { label: label.slice(0, 200) });
@@ -934,6 +955,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           cwd: options.cwd ?? process.cwd(),
           commandUi,
           llm: llmHolder,
+          ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：reload 同款透传（新图 ctx 装配不缺件）
+          ...(options.host !== undefined ? { host: options.host } : {}),
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
           preserved,
           generations,

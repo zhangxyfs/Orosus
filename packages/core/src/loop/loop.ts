@@ -93,6 +93,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
   const { session, bus, tools, provider, model, system, signal, sink } = opts;
   const reasoningEffort = opts.reasoningEffort;
   const turnStart = await session.append(LOG_TYPES.turnStart, { model });
+  await bus.emit("turn/start", { turnId: turnStart.id, model }); // m5 T9（设计空白 17）：busy 自推事件面——turn 事件上总线（此前只进 session 流，模块照方订阅永不触发）
   const log = createLogger(sink, "loop").withCtx({ sess: session.sessionId, turn: turnStart.id });
   let lastRequestSig: string | null = null;
   let overflowRetried = false; // 溢出重试每 turn 至多一次（D43：重试后仍超限即终局，防打转）
@@ -256,6 +257,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
 
   if (signal.aborted && endKind === "completed") endKind = "interrupted"; // 预中止（请求未发出）也记 interrupted，与流中 abort 同语义
   yield* emit(LOG_TYPES.turnEnd, { kind: endKind, ...(endDetail !== undefined ? { errorMessage: endDetail } : {}) });
+  await bus.emit("turn/end", { kind: endKind }); // m5 T9：busy 自推事件面（与 turn/start 成对）
   log.info("loop.turn.end", `turn 结束：${endKind}`);
   await session.flush();
 }

@@ -70,6 +70,8 @@ export interface LoadModulesInput {
   spillDir: string;
   cwd?: string;            // 核心五节 Environment 与 AGENTS.md 发现的工作目录（M4-2 T12；缺省 process.cwd()）
   commandUi?: CommandUi;   // 宿主交互 UI（D35 M3/T2：ctx.ui 注入，审批询问消费）
+  settings?: import("@orosus/contracts/module").SettingsService;  // m5 T9：设置服务写面（ctx.settings 装配，mounts "settings" 门）
+  host?: import("@orosus/contracts/module").HostInfo;              // m5 T9：宿主状态读面（ctx.host 直挂无门）
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   blocked?: { def: ModuleDefinition; source: string; reason: string }[];
   reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
@@ -137,6 +139,8 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
     sources: sourcePathByName, // T7：failed 事件的 sourcePath 数据源
     ...(input.commandUi !== undefined ? { commandUi: input.commandUi } : {}),
+    ...(input.settings !== undefined ? { settings: input.settings } : {}), // m5 T9
+    ...(input.host !== undefined ? { host: input.host } : {}),             // m5 T9
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),

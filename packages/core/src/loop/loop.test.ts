@@ -294,3 +294,17 @@ describe("溢出恢复（M3 补强 T4/D43：agent/request-error 广播 + 数据�
     expect(((await session2.all()).find((e) => e.type === "request/header") as { effort?: string }).effort).toBeUndefined();
   });
 });
+
+describe("turn 事件上总线（m5 T9 设计空白 17——busy 自推事件面）", () => {
+	it("turn/start·turn/end 广播到模块总线（此前只进 session 流——照方订阅永不触发）", async () => {
+		const { bus, run } = setup([[
+			{ type: "text/delta", text: "好" },
+			{ type: "finish", kind: "stop" },
+		]]);
+		const seen: string[] = [];
+		bus.on("turn/start", (p) => { seen.push(`start:${(p as { model: string }).model}`); }, "observer");
+		bus.on("turn/end", (p) => { seen.push(`end:${(p as { kind: string }).kind}`); }, "observer");
+		await run();
+		expect(seen).toEqual(["start:fake/m", "end:completed"]); // turn 级终态 = completed（finish stop 的上层语义）
+	});
+});
