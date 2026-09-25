@@ -1379,3 +1379,24 @@ describe("控件窗三②交互（m5 T8——input 编辑/提交/换行 + input 
 		expect(stripAnsi(output.buf)).toContain("[ab");
 	});
 });
+
+describe("侧栏开关公共出口（m5 T11——Ctrl+T 与设置服务共用，原内联三件套提纯）", () => {
+	it("① setSidebar(false)：持久化回调收到、焦点回输入区、幂等短路（同值不再回调）", async () => {
+		const changes: boolean[] = [];
+		const { app, input } = rig(["# hi"], 100, 30, { onSidebarChange: (v) => changes.push(v) });
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 焦点到面板
+		await flush();
+		input.emit("data", "\x14"); // Ctrl+T 关侧栏（公共出口）
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(false);
+		expect(app.stateRef.focusIdx).toBe(0); // 面板隐藏——焦点回输入区
+		expect(changes).toEqual([false]);
+		app.setSidebar(false); // 幂等短路：不再回调
+		expect(changes).toEqual([false]);
+		app.setSidebar(true); // 设置服务路径同款出口
+		await flush();
+		expect(changes).toEqual([false, true]);
+	});
+});

@@ -410,6 +410,17 @@ export class FullApp {
 		this.scheduler.requestRender();
 	}
 
+	/** 侧栏开关公共出口（m5 T11，候选 A-4「Ctrl+T 的程序化版本」）：toggle + 持久化回调 + 重画三件套——
+	 *  Ctrl+T 与设置服务（ctx.settings.setSidebar）两处共用（原先内联在 onKey 无公共出口）。幂等短路：已在目标态时不发回调不重画。 */
+	setSidebar(visible: boolean): void {
+		const s = this.state;
+		if (s.sidebarVisible === visible) return;
+		s.sidebarVisible = visible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
+		if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
+		this.io.onSidebarChange?.(s.sidebarVisible); // 持久化（F5 十二轮②）
+		this.scheduler.requestImmediateRender();
+	}
+
 	/** /compact 执行期标志（2026-09-23 用户拍板）：置位时 busy spinner 切「上下文压缩中…」石青（info）色。 */
 	setCompacting(b: boolean): void {
 		if (this.state.compacting === b) return;
@@ -819,10 +830,7 @@ export class FullApp {
 			return;
 		}
 		if (key === "ctrl+t") {
-			s.sidebarVisible = !s.sidebarVisible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
-			if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
-			this.io.onSidebarChange?.(s.sidebarVisible); // 持久化（F5 十二轮②）
-			this.scheduler.requestImmediateRender();
+			this.setSidebar(!s.sidebarVisible); // m5 T11：公共出口（设置服务共用——原内联三件套提纯）
 			return;
 		}
 		if (key === "ctrl+e") {

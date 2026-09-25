@@ -25,3 +25,20 @@ describe("图片粘贴（M4-2 T10；M4-2.5 T5 升真实附着）", () => {
     expect(extractImageRefs("纯文本")).toEqual({ cleaned: "纯文本", seqs: [] });
   });
 });
+
+describe("剪贴板纯文本（m5 T11——设计空白 13 取证通过：Get-Clipboard 不带 -Format 即文本）", () => {
+	it("① 归一：剥一个尾换行、空串 = undefined", async () => {
+		const { normalizeClipboardText } = await import("./paste.ts");
+		expect(normalizeClipboardText("hello\r\n")).toBe("hello");
+		expect(normalizeClipboardText("hello")).toBe("hello");
+		expect(normalizeClipboardText("")).toBeUndefined();
+		expect(normalizeClipboardText("\r\n")).toBeUndefined();
+	});
+
+	it("② 读取烟测：真机剪贴板（有工具）返回 string | undefined 且不抛错", async () => {
+		const { readClipboardText } = await import("./paste.ts");
+		await expect(readClipboardText()).resolves.not.toThrow;
+		const r = await readClipboardText();
+		expect(typeof r === "string" || r === undefined).toBe(true);
+	});
+});

@@ -97,3 +97,29 @@ export async function pasteImage(): Promise<{ file: string } | undefined> {
   } catch { /* 平台命令失败 → 无图 */ }
   return existsSync(tmp) && isMeaningfulImage(statSync(tmp).size) ? { file: tmp } : undefined;
 }
+
+/** 剪贴板文本归一（m5 T11，设计空白 13 取证通过——Get-Clipboard 不带 -Format 即纯文本）：
+ *  剥一个尾换行（PS -Raw 带尾 CRLF）；空串 = undefined（空剪贴板与读不到同语义——模块判空降级）。 */
+export const normalizeClipboardText = (raw: string): string | undefined => {
+  const t = raw.replace(/\r?\n$/, "");
+  return t === "" ? undefined : t;
+};
+
+/** 剪贴板纯文本读取（m5 T11）：Windows Get-Clipboard -Raw / macOS pbpaste / Linux xclip·wl-paste
+ *  （贴图链路同款 execFile 手法——文本版）。无剪贴板工具/失败返回 undefined（不抛错——降级语义）。 */
+export async function readClipboardText(): Promise<string | undefined> {
+  try {
+    if (process.platform === "win32") {
+      const { stdout } = await execFileAsync("powershell", ["-NoProfile", "-Command", "Get-Clipboard -Raw"]);
+      return normalizeClipboardText(stdout);
+    }
+    if (process.platform === "darwin") {
+      const { stdout } = await execFileAsync("pbpaste", []);
+      return normalizeClipboardText(stdout);
+    }
+    const { stdout } = await execFileAsync("sh", ["-c", "xclip -selection clipboard -o 2>/dev/null || wl-paste 2>/dev/null"]);
+    return normalizeClipboardText(stdout);
+  } catch {
+    return undefined;
+  }
+}

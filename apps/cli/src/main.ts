@@ -34,7 +34,7 @@ import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel } from "./paste.ts";
+import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel, readClipboardText } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
@@ -462,6 +462,11 @@ const settingsService: SettingsService = {
     return { failed };
   },
   setLabel: (label) => h.setLabel(label),
+  setSidebar: async (visible) => {
+    // 行模式无侧栏——静默无操作（契约可选口降级语义；全屏期 Ctrl+T 同款公共出口，m5 T11）
+    activeApp?.setSidebar(visible);
+  },
+  readClipboard: () => readClipboardText(),
 };
 
 let h: Awaited<ReturnType<typeof createSession>>;
