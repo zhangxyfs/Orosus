@@ -254,7 +254,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   let contextWindow = readContextWindow(config.core);
   let usageAnchor: { totalTokens: number; atMessageCount: number } | undefined; // usage 锚点（空白 §4）：主循环 stream 包装记录，二级调用不更新
 
-  const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local" }[] = [
+  const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; root?: string; layer?: "user" | "project" }[] = [
     ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
     ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
   ];
@@ -269,7 +269,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     for (const m of discovered) {
       const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
       if (t.ok) {
-        defs.push({ def: m.def, source: "local" as const });
+        defs.push({ def: m.def, source: "local" as const, root: m.root, layer: m.layer }); // root/layer 透传（T7：failed 事件来源标识）
       } else {
         blocked.push({ def: m.def, source: "local", reason: t.reason === "unconfirmed" ? "untrusted（项目级模块未确认——运行 orosus module trust <name> 后重启生效，§8.5）" : "untrusted（项目级模块内容 hash 已变化，须重新确认，§8.5/MCPoison）" });
       }
@@ -875,7 +875,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       contextWindow = readContextWindow(config2.core); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
       const oldResolution = resolveSections(config.sections, oldDefs.map((g) => g.def), cliInput); // 旧配置启停解析——config 覆盖前留存（热插拔修复 T1：启停翻转算进变更）
       config = config2; // 核心顶层 key（model 等）同步更新——修复：reload 后 model/contextWindow 等仍读旧值（走查缺陷③：向导写 model + /reload 后 resolveProvider 仍读旧 config.core.model = undefined → "未配置 model"）
-      const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[] = [
+      const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string; root?: string; layer?: "user" | "project" }[] = [
         ...(options.builtinModules ?? []).map((def) => ({ def, source: "builtin" as const })),
         ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
       ];
@@ -886,7 +886,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         const trustStore = loadTrustStore(options.discovery?.trustFile ?? join(home2, "trust.json"));
         for (const m of discovered) {
           const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
-          if (t.ok) defs2.push({ def: m.def, source: "local", ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
+          if (t.ok) defs2.push({ def: m.def, source: "local", root: m.root, layer: m.layer, ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
         }
       }
       // 启停翻转算进变更（热插拔修复 T1）：diff 两侧按 resolveSections 各自配置过滤出有效集——

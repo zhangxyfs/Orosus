@@ -61,7 +61,7 @@ export interface ModuleGraph {
 }
 
 export interface LoadModulesInput {
-  defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string }[];   // entryHash 供 defs()/reload diff（T15）
+  defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string; root?: string; layer?: "user" | "project" }[];   // entryHash 供 defs()/reload diff（T15）；root/layer 供诊断日志来源标识（T7）
   cli: { enable?: string[]; disable?: string[]; noModules?: boolean; module?: string[] };
   sections: Map<string, Record<string, unknown>>;
   session: SessionStore;
@@ -84,6 +84,15 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   for (const orphan of sections.orphanSections) {
     log.warn("kernel.config.orphan-section", `配置 section [${orphan}] 无对应已安装模块（拼写错误或卸载残留）`);
   }
+  // 来源标识（T7）：builtin/inline 直书；local 带 layer 与目录——failed 事件的 sourcePath 数据源
+  const sourcePathByName = new Map<string, string>();
+  for (const d of input.defs) {
+    sourcePathByName.set(d.def.name, d.source === "local" && d.root !== undefined ? `local·${d.layer ?? "user"}（${d.root}）` : d.source);
+  }
+  const failedData = (name: string): Record<string, unknown> => {
+    const sp = sourcePathByName.get(name);
+    return sp === undefined ? { module: name } : { module: name, sourcePath: sp };
+  };
 
   // 启停过滤（§5.4）+ 重名检查（§5.1 name 字段）
   const disabled = new Set<string>();
@@ -108,8 +117,16 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     }
     candidates.push(def);
   }
+  // staticFailed 补发射（T7）：静态校验失败原本只进 records 不落日志——弹窗数据源按事件码过滤时这类问题整个消失
+  for (const f of staticFailed) {
+    log.warn("kernel.module.failed", `模块降级：${f.reason}`, failedData(f.name));
+  }
 
   const { order, degraded } = resolveTopo({ defs: candidates, disabled });
+  // topo 级联降级补发射（T7）：degraded 原本只在 reload 报告的内存数组里活一瞬（kernel 不落日志）——弹窗看不见级联失败
+  for (const dg of degraded) {
+    log.warn("kernel.module.failed", `模块降级：${dg.reason}`, failedData(dg.name));
+  }
   // reuse 接线（走查修复：曾无视 reuse 每图新建——/reload 后 preserved 模块工具丢失（toolsCount 0、
   // 模型"没有文件系统模块"）、ctx.events 监听器孤儿化（compaction/approval 拦截器静默失效））：
   // reload 传当前实例复用（T14/T15 既定）；启动路径缺省新建不变
@@ -117,6 +134,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   const tools = input.reuse?.tools ?? createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir });
   const act = await activateModules({
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
+    sources: sourcePathByName, // T7：failed 事件的 sourcePath 数据源
     ...(input.commandUi !== undefined ? { commandUi: input.commandUi } : {}),
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),

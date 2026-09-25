@@ -104,3 +104,54 @@ describe("catalogJson（T19，§6.5 机器可读导出）", () => {
     await g.dispose();
   });
 });
+
+describe("诊断日志增强（T7：failed 事件带堆栈/来源；级联与 staticFailed 补发射）", () => {
+  it("① 激活抛错 → kernel.module.failed 的 data 含 stack（≤800）与 sourcePath（local·layer）", async () => {
+    const s = sink();
+    const bad = mod("bad-mod", { activate() { throw new Error("激活炸了"); } });
+    const g = await loadModules({
+      defs: [{ def: bad, source: "local", root: "/tmp/orosus/modules/bad-mod", layer: "user" }],
+      cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    const failed = s.records.filter((r) => r.code === "kernel.module.failed");
+    expect(failed).toHaveLength(1);
+    const data = failed[0]!.data as Record<string, unknown>;
+    expect(data["module"]).toBe("bad-mod");
+    expect(String(data["sourcePath"])).toContain("local·user");
+    expect(String(data["sourcePath"])).toContain("bad-mod");
+    const stack = String(data["stack"]);
+    expect(stack).toContain("Error"); // 栈顶可定位（不进 UI 只进日志，S12 截 800）
+    expect(stack.length).toBeLessThanOrEqual(800);
+    await g.dispose();
+  });
+
+  it("② topo 级联：提供者被禁用、B 硬依赖 → B 也有一条 kernel.module.failed（topo 层原本零发射）", async () => {
+    const s = sink();
+    const a = mod("prov-a", { provides: ["prov-a.cap"], activate() {} });
+    const b = mod("cons-b", { dependsOn: ["prov-a.cap"], activate() {} });
+    const g = await loadModules({
+      defs: [{ def: b, source: "builtin" }, { def: a, source: "builtin" }],
+      cli: {}, sections: new Map([["prov-a", { enabled: false }]]),
+      session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    const failed = s.records.filter((r) => r.code === "kernel.module.failed");
+    expect(failed).toHaveLength(1); // 只有 B（A 是禁用 discovered 非失败）
+    const bRec = failed.find((r) => (r.data as Record<string, unknown>)["module"] === "cons-b");
+    expect(bRec).toBeDefined();
+    expect(bRec!.msg).toContain("无可用提供者"); // topo 降级文案（S4 级联判据第三形态的来源）
+    await g.dispose();
+  });
+
+  it("③ 静态校验违规（provides key 非公共且缺模块名前缀）→ 也有一条 kernel.module.failed", async () => {
+    const s = sink();
+    const bad = mod("weird-mod", { provides: ["noprefix-key"] }); // 非公共能力、无 "weird-mod." 前缀 → 违规
+    const g = await loadModules({
+      defs: [{ def: bad, source: "builtin" }],
+      cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    const hit = s.records.find((r) => r.code === "kernel.module.failed" && (r.data as Record<string, unknown>)["module"] === "weird-mod");
+    expect(hit).toBeDefined(); // staticFailed 原本零日志发射（弹窗盲区）
+    expect(hit!.msg).toContain("noprefix-key");
+    await g.dispose();
+  });
+});

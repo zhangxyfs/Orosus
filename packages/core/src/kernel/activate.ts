@@ -52,6 +52,7 @@ export interface ActivateInput {
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
+  sources?: Map<string, string>;                // T7：name → 来源标识（builtin / local·layer（dir））——failed 事件的 sourcePath
 }
 
 /** reload 保留实例（§5.5 Unchanged）：kernel 侧从旧图收集（preservable()），新图直接沿用。 */
@@ -133,10 +134,15 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     if (idx >= 0) activeNames.splice(idx, 1);
   };
 
-  const fail = (def: ModuleDefinition, reason: string): void => {
+  const fail = (def: ModuleDefinition, reason: string, stack?: string): void => {
     failed.set(def.name, reason);
     records.push({ def, name: def.name, source: "inline", state: "failed", failReason: reason, generation: (input.generations?.get(def.name) ?? 0) + 1 });
-    klog.warn("kernel.module.failed", `模块降级：${reason}`, { module: def.name });
+    // T7：data 补 sourcePath（来源标识）与 stack（激活抛错时栈顶可定位——只进日志不进 UI，S12 截 800 防触 DATA_BUDGET 2048）
+    const data: Record<string, unknown> = { module: def.name };
+    const sp = input.sources?.get(def.name);
+    if (sp !== undefined) data.sourcePath = sp;
+    if (stack !== undefined) data.stack = stack.slice(0, 800);
+    klog.warn("kernel.module.failed", `模块降级：${reason}`, data);
   };
 
   for (const def of input.ordered) {
@@ -382,7 +388,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       records.push({ def, name: def.name, source: "inline", state: "active", generation: (input.generations?.get(def.name) ?? 0) + 1 });
       klog.info("kernel.module.active", "模块激活", { module: def.name });
     } catch (err) {
-      fail(def, String(err instanceof Error ? err.message : err));
+      fail(def, String(err instanceof Error ? err.message : err), err instanceof Error ? err.stack : undefined);
     }
   }
 
