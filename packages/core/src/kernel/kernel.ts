@@ -73,7 +73,7 @@ export interface LoadModulesInput {
   settings?: import("@orosus/contracts/module").SettingsService;  // m5 T9：设置服务写面（ctx.settings 装配，mounts "settings" 门）
   host?: import("@orosus/contracts/module").HostInfo;              // m5 T9：宿主状态读面（ctx.host 直挂无门）
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
-  blocked?: { def: ModuleDefinition; source: string; reason: string }[];
+  blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
   reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
   preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
   generations?: Map<string, number>;               // reload：旧代际基线（透传 activate）
@@ -181,7 +181,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
       })),
     ...(input.blocked ?? []).map((b) => ({
       def: b.def, name: b.def.name, source: "local" as const,
-      state: "failed" as const, failReason: b.reason, generation: 1,
+      state: "pending-confirm" as const, failReason: b.reason, generation: 1, // m5 T17：待确认桶——不进 failed 计数（是待决不是失败）
     })),
     ...[...disabledNames].map((name) => ({
       def: byName.get(name)!.def, name, source: byName.get(name)!.source,

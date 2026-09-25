@@ -1400,3 +1400,38 @@ describe("侧栏开关公共出口（m5 T11——Ctrl+T 与设置服务共用，
 		expect(changes).toEqual([false, true]);
 	});
 });
+
+describe("面板待确认第四态（m5 T17——渲染 + 回车弹确认窗而非热插拔）", () => {
+	it("① 渲染「待确认」文案；回车走 confirmModule 出口（不 toggle）；off 态回车照旧 toggle", async () => {
+		const confirmCalls: string[] = [];
+		const toggleCalls: string[] = [];
+		const panel = () => ({
+			...defaultPanelData(),
+			modules: [
+				{ name: "orosus-core", desc: "核心循环", state: "mounted" as const, locked: true },
+				{ name: "new-mod", desc: "", state: "pendingConfirm" as const },
+				{ name: "off-mod", desc: "", state: "off" as const },
+			],
+		});
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: panel,
+			confirmModule: (n) => confirmCalls.push(n),
+			toggleModule: (n) => toggleCalls.push(n),
+		});
+		app.start();
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("待确认");
+		input.emit("data", "\t"); // 聚焦面板 1
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 到 new-mod（待确认）
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		expect(confirmCalls).toEqual(["new-mod"]);
+		input.emit("data", "\x1b[B"); // ↓ 到 off-mod
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		expect(toggleCalls).toEqual(["off-mod"]); // 常规态回车照旧热插拔
+	});
+});

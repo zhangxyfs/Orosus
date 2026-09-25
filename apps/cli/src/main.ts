@@ -10,6 +10,8 @@ import type { HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createCliUi } from "./uiface.ts";
 import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
+import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.ts";
+import { trustModule } from "@orosus/core";
 import { createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
@@ -1185,7 +1187,7 @@ const refreshPanel = async (): Promise<void> => {
 				return {
 					name: a.name,
 					desc: a.name === "orosus-core" ? "核心循环" : "",
-					state: a.state === "active" ? ("mounted" as const) : ("off" as const),
+					state: a.state === "active" ? ("mounted" as const) : a.state === "pending-confirm" ? ("pendingConfirm" as const) : ("off" as const), // m5 T17 第四态
 					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
 				};
 			}),
@@ -1400,6 +1402,37 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 宿主日志口（m5 T2）：UI 层事件留痕——弹窗保留键注册即拒等（h.log 走 host 通道）
     logWarn: (code, msg, data) => h.log(code, msg, data),
+    // 待确认模块回车 = 首挂确认弹窗（m5 T17）：声明面人话清单 → 确认 = trustModule 登记 + 写盘 enabled +
+    // reload 一次（三动作照 toggleModule 链）；取消零副作用（Esc 关窗即取消）。行模式回退 CLI 提示。
+    confirmModule: (name) => {
+      const info = h.pendingConfirms().find((p) => p.name === name);
+      if (info === undefined) return;
+      if (activeApp === undefined) {
+        notify(`行模式请在终端运行：orosus module trust ${name}`);
+        return;
+      }
+      const handle = activeApp.openDialog({
+        title: `启用模块 ${name}？`,
+        widgets: confirmDialogWidgets(info satisfies PendingModuleInfo & Record<string, unknown>),
+        onEvent: (e) => {
+          if (e.type !== "activate" || e.index !== 0) return undefined;
+          void (async () => {
+            try {
+              trustModule(join(orosusHome(), "trust.json"), info.root, info.entryHash); // 动作 1：登记（项目级 hash 门/用户级认登记共用 trust.json——零新存储）
+              setModuleEnabledInConfig(name, true); // 动作 2：写盘 enabled
+              await h.reload(); // 动作 3：重跑信任判定 → 挂载
+              registerToolLabels(h.graph().tools.toolInfos());
+              await refreshPanel();
+              notify(`已确认并启用 ${name}`);
+            } catch (err) {
+              notify(`确认失败：${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
+          handle?.close();
+          return undefined;
+        },
+      });
+    },
     toggleTool: () => {
       dm.toolOpen = !dm.toolOpen;
     },
@@ -1612,6 +1645,11 @@ if (args.print === undefined) try {
       }
     }
     void refreshPanel(); // 面板首刷（F4）
+  // m5 T17：启动期一次性 toast——待确认第三方存在时提示（config 已 enabled 但未确认的也在此列：保持不挂载，回车确认后才启用）
+  {
+    const pending = h.pendingConfirms();
+    if (pending.length > 0) notify(`${pending.length} 个模块待确认——面板选中后回车查看声明并确认（或 orosus module trust）`);
+  }
     for (;;) {
       // 全屏模式（F3）：FullApp 接管终端（alt-screen 双栏）；返回后按动作分流
       if (tuiMode === "full") {

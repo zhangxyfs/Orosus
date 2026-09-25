@@ -91,6 +91,9 @@ export interface Harness {
   setModel(qualified: string): Promise<void>;
   /** 设置服务后端（m5 T9）：切思考档位——/effort 同源；"auto" = 回目录默认档；非法档名抛错。 */
   setEffort(level: string): void;
+  /** 待确认第三方模块清单（m5 T17）：未过信任门的 local 模块（项目级 hash 门
+   *  / 用户级一次性确认）——面板「待确认」桶与首挂确认弹窗的数据源（layer + 目录路径弹窗要显示）。 */
+  pendingConfirms(): { name: string; version: string; layer: "user" | "project"; root: string; reason: string; entryHash: string; def: import("@orosus/contracts/module").ModuleDefinition }[];
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
   log(code: string, msg: string, data?: Record<string, unknown>): void;
@@ -267,7 +270,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(options.modules ?? []).map((def) => ({ def, source: "inline" as const })),
   ];
   // 目录扫描 + 项目级信任门（§8.3/§8.5/T11-T12）：通过者并入 defs（source local），未过者 blocked（failed untrusted，不激活）
-  const blocked: { def: import("@orosus/contracts/module").ModuleDefinition; source: string; reason: string }[] = [];
+  // 待确认第三方桶（m5 T17，决策点 25/设计空白 19/20）：项目级 hash 门 + 用户级一次性确认——
+  // 未过信任门的 local 模块不激活、不进 failed 计数（进「待确认」态），面板可见 + 回车弹确认窗；
+  // reload 重跑发现与信任判定（确认 → h.reload() 即挂载的链路口）。内建/inline 模块不经此环（永免）。
+  let blocked: { def: import("@orosus/contracts/module").ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string; entryHash?: string }[] = [];
   {
     const userDir = options.discovery?.userDir ?? join(home, "modules");
     const projectDir = options.discovery?.projectDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules");
@@ -279,7 +285,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       if (t.ok) {
         defs.push({ def: m.def, source: "local" as const, root: m.root, layer: m.layer }); // root/layer 透传（T7：failed 事件来源标识）
       } else {
-        blocked.push({ def: m.def, source: "local", reason: t.reason === "unconfirmed" ? "untrusted（项目级模块未确认——运行 orosus module trust <name> 后重启生效，§8.5）" : "untrusted（项目级模块内容 hash 已变化，须重新确认，§8.5/MCPoison）" });
+        blocked.push({
+          def: m.def,
+          source: "local",
+          layer: m.layer,
+          ...(m.root !== undefined ? { root: m.root } : {}),
+          ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}),
+          reason:
+            m.layer === "project" && t.reason === "hash-changed"
+              ? "untrusted（项目级模块代码已变更，须重新确认，§8.5/MCPoison）"
+              : m.layer === "project"
+                ? "untrusted（项目级模块未确认，§8.5）"
+                : "unconfirmed（用户级模块首次挂载待确认）",
+        });
       }
     }
   }
@@ -861,6 +879,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     // 批⑦a：/title 当前会话改名走活 store（单写者——旁路新建 store 写活文件会破 parentId 链/seq 单调）。
     // append 后立即 flush（2026-09-22 用户实测：label 滞留写缓冲时 /sessions 读盘看不到新名——改名必须即落盘）
+    // m5 T17：待确认桶读口（blocked 随 reload 重算——返回当前态）
+    pendingConfirms() {
+      return blocked.map((b) => ({
+        name: b.def.name,
+        version: b.def.version,
+        layer: b.layer ?? "project",
+        root: b.root ?? "",
+        reason: b.reason,
+        entryHash: b.entryHash ?? "",
+        def: b.def, // 声明面数据源（provides/dependsOn/mounts/uses——activate 之前全部静态可读）
+      }));
+    },
     // m5 T9：设置服务后端出口（命令同源核心动作）——CLI 在 main.ts 拼 SettingsService 后经本接口转发
     async setModel(qualified: string) {
       await applyModelOverride(qualified);
@@ -907,9 +937,24 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         const projectDir = options.discovery?.projectDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules");
         const discovered = await discoverModules({ userDir, projectDir, ...(options.config?.userFile !== undefined ? { userFile: options.config.userFile } : {}), sink });
         const trustStore = loadTrustStore(options.discovery?.trustFile ?? join(home2, "trust.json"));
+        blocked = []; // m5 T17：待确认桶随 reload 重算（确认→reload 即出桶挂载；入口文件变更→回桶重问）
         for (const m of discovered) {
           const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
           if (t.ok) defs2.push({ def: m.def, source: "local", root: m.root, layer: m.layer, ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) });
+          else
+            blocked.push({
+              def: m.def,
+              source: "local",
+              layer: m.layer,
+              ...(m.root !== undefined ? { root: m.root } : {}),
+          ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}),
+              reason:
+                m.layer === "project" && t.reason === "hash-changed"
+                  ? "untrusted（项目级模块代码已变更，须重新确认，§8.5/MCPoison）"
+                  : m.layer === "project"
+                    ? "untrusted（项目级模块未确认，§8.5）"
+                    : "unconfirmed（用户级模块首次挂载待确认）",
+            });
         }
       }
       // 启停翻转算进变更（热插拔修复 T1）：diff 两侧按 resolveSections 各自配置过滤出有效集——
@@ -957,6 +1002,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           llm: llmHolder,
           ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：reload 同款透传（新图 ctx 装配不缺件）
           ...(options.host !== undefined ? { host: options.host } : {}),
+          ...(blocked.length > 0 ? { blocked } : {}), // m5 T17：待确认桶随新图可见（重算后的 blocked）
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
           preserved,
           generations,

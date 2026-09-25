@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "../index.ts";
 import { fakeModule } from "@orosus/testing";
-import { loadTrustStore, saveTrustStore, checkTrust } from "./trust.ts";
+import { loadTrustStore, saveTrustStore, checkTrust, trustModule } from "./trust.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -12,9 +12,15 @@ const md = (p: string) => mkdirSync(p, { recursive: true });
 const mk = () => { const d = mkdtempSync(join(tmpdir(), "orosus-trust-")); dirs.push(d); return d; };
 
 describe("项目级信任门（§8.5，内容 hash + fail-closed）", () => {
-  it("① 用户级模块恒过（亲手放置即隐式确认）", () => {
-    const store = loadTrustStore(join(mk(), "absent.json"));
-    expect(checkTrust({ layer: "user", root: "C:\\x\\m", entryHash: "h", store })).toEqual({ ok: true });
+  it("① 用户级三态（m5 T17 修订：从恒免到一次性确认不追 hash）：未登记 = 待确认、有登记 = 过、内容变了不重问", () => {
+    const dir = mk();
+    const file = join(dir, "trust.json");
+    const empty = loadTrustStore(join(dir, "absent.json"));
+    expect(checkTrust({ layer: "user", root: "C:/x/m", entryHash: "h", store: empty })).toEqual({ ok: false, reason: "unconfirmed" }); // 未登记 = 待确认（进弹窗确认流）
+    trustModule(file, "C:/x/m", "h1"); // 登记一次
+    const store = loadTrustStore(file);
+    expect(checkTrust({ layer: "user", root: "C:/x/m", entryHash: "h1", store })).toEqual({ ok: true });
+    expect(checkTrust({ layer: "user", root: "C:/x/m", entryHash: "改了内容", store })).toEqual({ ok: true }); // 不追 hash——自己地盘改动不烦
   });
 
   it("② 项目级未登记 → unconfirmed", () => {
@@ -69,9 +75,13 @@ export default defineModule({ name: "evil-mod", version: "0.1.0", description: "
     });
     const audit = h.graph().audit();
     const evil = audit.find((a) => a.name === "evil-mod");
-    expect(evil?.state).toBe("failed");
+    expect(evil?.state).toBe("pending-confirm"); // m5 T17：待确认桶（不进 failed 计数——待决不是失败）
     expect(evil?.failReason).toContain("untrusted");
     expect(audit.find((a) => a.name === "good-mod")?.state).toBe("active");
+    const pending = h.pendingConfirms();
+    expect(pending.map((x) => `${x.name}:${x.layer}`)).toEqual(["evil-mod:project"]); // 载荷带 layer + root（弹窗显示来源用）
+    expect(pending[0]!.root).toContain("evil-mod");
+    expect(h.status().modules.failed).toBe(0); // 待确认不进 failed 计数
     await h.close();
   });
 });

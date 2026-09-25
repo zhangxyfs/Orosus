@@ -31,7 +31,7 @@ export interface PanelData {
 	tokens: { input: number; output: number; postCompaction?: boolean }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）；postCompaction = 末条压缩晚于末条 usage，input 为压缩后投影估算（v3：压缩的数字回落不得滞后到下一条消息）
 	startedAt: string | undefined; // 会话首事件 ts（F5 二轮④：运行时间行数据源）
 	contextWindow: number;
-	modules: { name: string; desc: string; state: "mounted" | "loading" | "off"; locked?: boolean; lockedReason?: string }[]; // locked = 不可热插拔（2026-09-23 用户拍板：名后灰「· 锁定」，回车 toast 锁因）；其余回车实时插拔（宿主写 enabled + reload）
+	modules: { name: string; desc: string; state: "mounted" | "loading" | "off" | "pendingConfirm"; locked?: boolean; lockedReason?: string }[]; // locked = 不可热插拔；pendingConfirm = m5 T17 待确认第三方（回车弹确认窗）（2026-09-23 用户拍板：名后灰「· 锁定」，回车 toast 锁因）；其余回车实时插拔（宿主写 enabled + reload）
 	tasks: { text: string; state: "done" | "active" | "pending" }[];
 	permission: string; // 当前权限模式原文（ask-always/ask-risky/never）
 	permissionNext(): string; // Shift+Tab 循环的下一档命令（如 "/permission ask-always"）
@@ -102,6 +102,9 @@ export interface FullAppIO {
 	diagDetail?(name: string): string;
 	/** 宿主日志口（m5 T2）：弹窗保留键注册即拒等 UI 层事件的留痕（接线 main.ts → harness 日志）。 */
 	logWarn?(code: string, msg: string, data?: Record<string, unknown>): void;
+	/** 待确认模块回车 = 首挂确认弹窗（m5 T17）：宣言面人话清单 → 确认三动作作
+	 *  （trustModule 登记 + 写盘 enabled + reload 一次）；取消零副作用。 */
+	confirmModule?(name: string): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -145,7 +148,7 @@ const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
 const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
 const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
-const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
+const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载", pendingConfirm: "待确认" }; // pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
 const taskTick = (state: "done" | "active" | "pending"): string =>
 	state === "done" ? theme.fg("accent", "✓") : state === "active" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
@@ -1148,9 +1151,13 @@ export class FullApp {
 				const pages = 2 + (this.io.panelData().cards ?? []).filter((c) => c.area === "top").length;
 				s.statePage = (Math.min(s.statePage, pages - 1) + (key === "left" ? -1 : 1) + pages) % pages;
 			} else if (key === "enter") {
-				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload
+				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload；
+				// 待确认项（m5 T17）：回车弹首挂确认窗（声明面人话清单→确认三动作）
 				const m = mods[s.moduleSel];
-				if (m !== undefined) this.io.toggleModule?.(m.name, m.locked === true ? (m.lockedReason ?? "锁定") : undefined);
+				if (m !== undefined) {
+					if (m.state === "pendingConfirm") this.io.confirmModule?.(m.name);
+					else this.io.toggleModule?.(m.name, m.locked === true ? (m.lockedReason ?? "锁定") : undefined);
+				}
 			}
 		} else if (s.focusIdx === 2) {
 			const d = this.io.panelData();
@@ -1439,12 +1446,12 @@ export class FullApp {
 	}
 
 	private modRow(m: PanelData["modules"][number], selected: boolean, w: number): string {
-		const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
+		const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 		// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
 		const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
 		const name = (m.state === "off" ? theme.fg("muted", m.name) : selected ? theme.fg("accent", m.name) : m.name) + lockSuffix;
 		const stateText = MOD_STATE_TEXT[m.state]!;
-		const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" ? theme.fg("warn", stateText) : theme.dim(stateText);
+		const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", stateText) : theme.dim(stateText);
 		const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
 		const descBudget = w - (3 + visibleWidth(m.name) + lockW + 1 + visibleWidth(stateText) + 1);
 		const desc = descBudget >= visibleWidth(m.desc) ? theme.dim(m.desc) : descBudget >= 8 ? truncateToWidth(theme.dim(m.desc), descBudget) : "";

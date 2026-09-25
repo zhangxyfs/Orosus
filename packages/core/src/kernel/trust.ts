@@ -37,16 +37,19 @@ export function saveTrustStore(file: string, store: TrustStore): void {
   writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
 }
 
-/** 信任判定（§8.5）：用户级恒过（亲手放置）；项目级按内容 hash——未登记 unconfirmed / 变更 hash-changed。 */
+/** 信任判定（§8.5 / m5 T17 决策点 25、设计空白 19）：
+ *  项目级按内容 hash——未登记 unconfirmed / 变更 hash-changed（入口文件变了重确认，防 MCPoison 投毒）；
+ *  用户级从「恒免」修订为「一次性确认不追 hash」——认登记不看内容（自己地盘，改动不烦；
+ *  walkthrough 旧规「用户级恒免确认」就此修订）；未登记 = unconfirmed（进面板「待确认」桶走首挂弹窗）。 */
 export function checkTrust(opts: {
   layer: "user" | "project";
   root: string;
   entryHash: string;
   store: TrustStore;
 }): { ok: true } | { ok: false; reason: "unconfirmed" | "hash-changed" } {
-  if (opts.layer === "user") return { ok: true };
   const key = normalizeTrustKey(opts.root);
   const entry = opts.store.entries[key];
+  if (opts.layer === "user") return entry === undefined ? { ok: false, reason: "unconfirmed" } : { ok: true };
   if (entry === undefined) return { ok: false, reason: "unconfirmed" };
   if (entry.hash !== opts.entryHash) return { ok: false, reason: "hash-changed" };
   return { ok: true };
