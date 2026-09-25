@@ -16,7 +16,7 @@
 </div></section>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">ToolExecution</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#accesses">accesses</a><span class="tsd-signature-symbol">?:</span> <a href="../types/tool.Access.html" class="tsd-signature-type tsd-kind-type-alias">Access</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#approvalrule">approvalRule</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#matchesrule">matchesRule</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">ruleArgs</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">boolean</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-call-signature" href="#execute-1">execute</a><span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">ctx</span><span class="tsd-signature-symbol">:</span> <a href="tool.ToolContext.html" class="tsd-signature-type tsd-kind-interface">ToolContext</a><span class="tsd-signature-symbol">)</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="tool.ToolResult.html" class="tsd-signature-type tsd-kind-interface">ToolResult</a><span class="tsd-signature-symbol">&gt;</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/tool/index.ts#L36">tool/index.ts:36</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/tool/index.ts#L36">tool/index.ts:36</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -39,21 +39,21 @@
 <h3 class="tsd-anchor-link" id="accesses"><code class="tsd-tag">Optional</code><span>accesses</span><a href="#accesses" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">accesses</span><span class="tsd-signature-symbol">?:</span> <a href="../types/tool.Access.html" class="tsd-signature-type tsd-kind-type-alias">Access</a><span class="tsd-signature-symbol">[]</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/tool/index.ts#L37">tool/index.ts:37</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/tool/index.ts#L37">tool/index.ts:37</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="approvalrule"><code class="tsd-tag">Optional</code><span>approval<wbr/>Rule</span><a href="#approvalrule" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">approvalRule</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
 <div class="tsd-comment tsd-typography"><p>审批规则 pattern（数据），如 &quot;tool-shell__bash(rm -rf*)&quot;；缺省 = 需要审批（fail-closed）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/tool/index.ts#L39">tool/index.ts:39</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/tool/index.ts#L39">tool/index.ts:39</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="matchesrule"><code class="tsd-tag">Optional</code><span>matches<wbr/>Rule</span><a href="#matchesrule" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">matchesRule</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-symbol">(</span><span class="tsd-kind-parameter">ruleArgs</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">)</span> <span class="tsd-signature-symbol">=&gt;</span> <span class="tsd-signature-type">boolean</span></div>
 <div class="tsd-comment tsd-typography"><p>规则参数的工具侧语义判定；缺省 = 不匹配任何带参规则（fail-closed）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/tool/index.ts#L41">tool/index.ts:41</a></li></ul></aside></section></section></details>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/tool/index.ts#L41">tool/index.ts:41</a></li></ul></aside></section></section></details>
 <details class="tsd-panel-group tsd-member-group tsd-accordion" open><summary class="tsd-accordion-summary" data-key="section-Methods"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
 <h2 class="tsd-anchor-link" id="methods-1">Methods<a href="#methods-1" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h2></summary>
 <section>
@@ -69,7 +69,7 @@
 <li><span><span class="tsd-kind-parameter">ctx</span>: <a href="tool.ToolContext.html" class="tsd-signature-type tsd-kind-interface">ToolContext</a></span></li></ul></div>
 <h4 class="tsd-returns-title">Returns <span class="tsd-signature-type">Promise</span><span class="tsd-signature-symbol">&lt;</span><a href="tool.ToolResult.html" class="tsd-signature-type tsd-kind-interface">ToolResult</a><span class="tsd-signature-symbol">&gt;</span></h4><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/tool/index.ts#L42">tool/index.ts:42</a></li></ul></aside></div></li></ul></section></section></details></div>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/tool/index.ts#L42">tool/index.ts:42</a></li></ul></aside></div></li></ul></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

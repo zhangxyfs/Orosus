@@ -33,7 +33,7 @@ provider 系模块是另一类：它们只往能力槽里塞实现（`ctx.provid
 | 信任 | 项目级要 `orosus module trust <name>`；用户级免确认 | 仓库内自带信任 |
 | 适合 | 试验、项目定制、第三方分发 | 稳定后转正、要跑全套测试 |
 
-教程主线走外部模块（门槛最低），转正见第 9 节。
+教程主线走外部模块（门槛最低），转正见第 10 节。
 
 ## 2. Step 1：写一个 note 模块
 
@@ -156,7 +156,7 @@ pnpm orosus
 判断"真的生效了"的三个证据：`--dump-modules` 清单里有 `note` 且状态正常；模型真的调了
 `note__add`（工具行可见）；再问一句"便签里有什么"它能答上来（说明 promptSection 活段在喂）。
 
-看着"没生效"先查这个：**activate 抛错不会崩启动**，模块只是降级（§10）——在
+看着"没生效"先查这个：**activate 抛错不会崩启动**，模块只是降级（§11）——在
 `--dump-modules` 里看是不是 failed，原因会写在那里。
 
 ## 6. Step 5：写测试（脚本驱动，不用真 provider）
@@ -201,7 +201,112 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 工具逻辑本身还可以更轻：像 tool-todo 那样把工具做成**工厂**（`createTodoTool` 的形态），
 单测直接 `resolveExecution` + `execute` 驱动，不装配 harness。
 
-## 7. 进阶口速览（每个都是两三句话 + 文档指针）
+## 7. 给模块做界面（m5 起：弹窗 / 卡片 / 控件窗 / 设置）
+
+m5 之前模块在界面上只能"给内容"（工具行、斜杠命令、黄字提示）；m5 起能"给界面"了——四条路：
+**弹窗**（只读文本窗）、**卡片**（右侧面板常驻卡）、**控件窗**（列表/进度条/输入框，用户操作变事件）、
+**设置服务与读面**（改模型/切挂载预设 + 看运行状态）。铁律只有一条：**你给数据，宿主画**——
+文字不许夹终端颜色控制码（宿主按看得见的宽度算折行，夹了必炸）。
+
+### 7.1 UI 怎么写：弹窗与卡片
+
+弹窗（`ctx.ui.viewText`）与卡片（`ctx.contribute.card`）都是 activate 期注册、运行期随时调：
+
+```ts
+// 在 note 模块的 activate 里接着加——命令：弹窗查看全部便签（带自定义键 r 刷新）
+ctx.contribute.command("show", async (_args, ui) => {
+  if (notes.length === 0) { await ui.notice?.("还没有便签"); return ""; }
+  ui.viewText?.("便签", notes.map((n, i) => `${i + 1}. ${n}`).join("
+"), {
+    keys: { r: { label: "刷新", run: () => notes.map((n, i) => `${i + 1}. ${n}`).join("
+") } },
+  });
+  return "";
+});
+// 用户敲 /note__show 开窗；窗内按 r 整窗换新内容；Esc 关窗。
+// 键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"）；Esc 和 Ctrl+C/V/A/S/Z 是保留键，注册会被拒。
+
+// 卡片：右侧面板常驻一张（widgets 是 getter——宿主每秒现读，改个变量卡片自己跳）
+ctx.contribute.card?.({
+  area: "bottom",                  // "top" = 右上（运行状态那排后面）；"bottom" = 右下（任务清单后面）
+  order: 50,                       // 内建卡固定在前，模块卡按 order 排后
+  title: "便签",
+  get widgets() {
+    return notes.length === 0 ? [] : [
+      { id: "count", kind: "kv", label: "条数", value: String(notes.length) },
+      { id: "latest", kind: "text", text: notes[notes.length - 1]!, style: "muted" },
+    ];
+  },
+});
+// 卡片声明 mounts：["contribute:card"] 才能注册（见下方"门"说明）。
+```
+
+**门（mounts）**：模块一旦声明了 `mounts` 数组，它就是白名单——用哪个口就得列哪个。
+卡片要列 `"contribute:card"`；设置服务要列 `"settings"`；没声明 mounts 的模块不受限。
+窗是排队的一次一窗（连弹两窗后者等前者关）；模块被卸载时它的窗和卡会被自动关掉/拆掉。
+
+### 7.2 控件怎么用：控件窗与事件
+
+控件窗（`ctx.ui.dialog`）交一份控件清单，宿主代画；用户的操作变成事件回传给你：
+
+```ts
+// 命令：便签管理窗（列表选中 + 回车删除 + 进度条显示容量）
+ctx.contribute.command("manage", async (_args, ui) => {
+  const refresh = () => [
+    { id: "list", kind: "list", interactive: true, items: notes.map((n, i) => `${i + 1}. ${n}`) },
+    { id: "cap", kind: "progress", value: () => notes.length, max: 20 },  // 上限演示用固定值——正式代码读 ctx.configRead()
+  ];
+  const h = ui.dialog?.({
+    title: "便签管理",
+    widgets: refresh(),
+    onEvent: (e) => {
+      if (e.type === "activate" && e.id === "list") {   // 回车激活列表项
+        notes.splice(e.index ?? 0, 1);
+        return refresh();                                // 回新清单 = 整窗替换
+      }
+      return undefined;                                  // 无返回 = 不动
+    },
+  });
+  if (h === undefined) { await ui.notice?.("当前宿主不支持控件窗"); return ""; }
+  // 句柄在异步处也能用：h.update(新清单)、h.close()——窗关了再调是无操作不报错
+  return "";
+});
+```
+
+事件三型：`input`（输入框内容变，每键一回）/ `select`（列表选中变）/ `activate`（回车）。
+控件八种：text（文字）/ kv（标签值）/ sep（分隔线）/ list（列表）/ progress（进度条）/
+input（输入框，单行或多行）/ columns（多列，可嵌套）/ table（表格）。文字字段可以给函数
+（活值）——渲染期现读，进度条自己跳就是它。输入框聚焦时方向键归输入框（移光标），Tab 换焦点。
+
+### 7.3 数据怎么绑：读面与缓存惯例
+
+看运行状态（当前模型/力度/挂载模式/权限/用量）走 `ctx.host.current()`——只读、不用声明 mounts：
+
+```ts
+let snap: import("@orosus/contracts/module").HostSnapshot | undefined;
+ctx.host?.current().then((v) => { snap = v; });                 // activate 拉首份
+ctx.events.on("turn/end", () => { void ctx.host?.current().then((v) => { snap = v; }); });  // 事件刷新
+ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
+  get widgets() {   // 同步 getter 读缓存——快照是异步的，卡片是同步的，中间靠模块自己缓存
+    return snap ? [{ id: "m", kind: "kv", label: "模型", value: snap.model }] : [];
+  },
+});
+```
+
+这就是标准接法：**activate 拉首份 + 事件刷新（turn/start·turn/end 等），同步 getter 读缓存**。
+改设置走 `ctx.settings`（声明 mounts: ["settings"]）：setModel/setEffort/applyModulePreset
+（"full"/"minimal" 极简模式）/setLabel/setSidebar/readClipboard；busy 期可调、下一轮生效。
+
+### 7.4 规矩清单（界面贡献的边界）
+
+- **给数据不给画面**：不夹控制码、不自己算布局；渲染权、宽度、主题、防闪烁全归宿主。
+- **Esc 永远关窗**；Ctrl+C/V/A/S/Z 与宿主全局键（Ctrl+T/E/O 等）是保留键，注册即拒。
+- **一次一窗**（后来的排队）；模块卸载 = 窗关、卡拆、句柄作废（之后调句柄静默无操作）。
+- **出错诚实降级**：你的函数抛错 = 该卡当帧剔除/窗保留 + 黄字提示，别的不受牵连。
+- **宿主可能没有这些口**（行模式/无头）：全部判空调用（`ui.viewText?.(...)`、`if (ctx.settings)`），
+  降级路径自己想好（比如回退 notice）。
+
+## 8. 进阶口速览（每个都是两三句话 + 文档指针）
 
 | 口 | 干什么 | 什么时候用 |
 |---|---|---|
@@ -217,7 +322,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 
 每个字段、每个参数的逐条说明见本文**第 13 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/index.html)（`pnpm gen-docs` 从 contracts 源码生成，两处同源）。
 
-## 8. 设计一个新模块的正规流程
+## 9. 设计一个新模块的正规流程
 
 本仓库对"设计"有治理（[specs/modules/README.md](superpowers/specs/modules/README.md)）：
 一模块一文档、从 `_template.md` 复制起手、八节模板、六态状态机（构想 → 设计中 → 已定稿 →
@@ -227,7 +332,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 先消费既有服务（`ctx.services`）或挂自己的服务（`ctx.provide`）让别的模块来用，contracts 新
 类型走契约窗口攒批，主体 diff 是最后手段（详见 [developers.md 圈地纪律](developers.md#圈地纪律不动主体代码2026-09-24-用户拍板)）。
 
-## 9. 转正：挪进 packages/modules
+## 10. 转正：挪进 packages/modules
 
 外部模块稳定后想转正，差异只有三处：
 
@@ -253,7 +358,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 内置模块与外部模块走同一条 kernel 注册管线，没有特权（规则 5）——转正不改变行为，
 只改变归属：进 CI、进门禁、进 docs/api（如果你的契约进了 contracts）。
 
-## 10. 容错契约：你的模块坏了会怎样（第三方开发者必读）
+## 11. 容错契约：你的模块坏了会怎样（第三方开发者必读）
 
 **承诺**：第三方模块出任何问题，止于模块自身——你的模块做不到让程序起不来或运行崩溃（启动有顶层兜底错误面，坏包坏入口在发现期就被跳过，根本进不了图）。
 
@@ -279,9 +384,9 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
    正解：读文件挪进 `activate()`——它有降级护栏（上表第 4 行）。
 2. **`activate()` 别挂死**。全内核无超时是既有定案（reload 的 quiesce 等 turn 边界，挂死的等待由用户 Ctrl-C 中止）——你的 activate 永不返回，reload 就一直等。最小反例：`await new Promise(() => {})`。正解：每个 await 都有出路（超时 / 取消信号）。
 
-> 内置模块不享受这层宽容：它们是宿主静态 import，import 期炸等于宿主自己残废（typecheck 门 + 提交纪律兜底）——这也是「转正」（§9）比做外部模块要求高的原因之一。
+> 内置模块不享受这层宽容：它们是宿主静态 import，import 期炸等于宿主自己残废（typecheck 门 + 提交纪律兜底）——这也是「转正」（§10）比做外部模块要求高的原因之一。
 
-## 11. 常见坑（都真实踩过或有出处）
+## 12. 常见坑（都真实踩过或有出处）
 
 1. **"没生效"先查降级**：activate 抛错不崩启动，`--dump-modules` 看状态和原因。
 2. **工具/命令命名**：强制 `<module>__<tool>` / `<module>__<cmd>` 前缀，内核校验会拒收。
@@ -296,7 +401,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 9. **验收纪律**：单测全绿 ≠ 能用。改到 CLI/配置/渲染链路的，收尾前按 developers.md 的
    HERMETIC 配方真实跑一遍。
 
-## 12. 文档地图
+## 13. 文档地图
 
 | 想干什么 | 去哪 |
 |---|---|
@@ -307,12 +412,12 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () => {
 | 某个模块的设计取舍 | [superpowers/specs/modules/](superpowers/specs/modules/README.md)（一模块一文档） |
 | 运行时看装配结果 | `orosus --dump-modules`（= `harness.graph().catalogJson()`） |
 
-## 13. 附：完整 API 参考
+## 14. 附：完整 API 参考
 
 > 这一节把模块作者的**全部可用面**列全——每个字段、每个参数、它是干什么的。想读更长的语义注释
 > 再去 [docs/api](api/index.html)（typedoc 从 contracts 源码生成），两处内容同源。
 
-### 13.1 defineModule 全字段
+### 14.1 defineModule 全字段
 
 ```ts
 defineModule({ name, version, description, api, dependsOn?, provides?, defaultEnabled?,
@@ -334,7 +439,7 @@ defineModule({ name, version, description, api, dependsOn?, provides?, defaultEn
 | `logEvents` | string[] |  | `ctx.session.append()` 的事件类型白名单，必须带 `<module>/` 前缀；没声明的 type 会被拒收 |
 | `activate(ctx)` | function | ✓ | 激活入口，启动/reload 的拓扑序里调一次。可返回 `dispose()` 或 `{ dispose }`——模块停用（close / reload 换代 / 回滚）时先于各注册 disposer 调用 |
 
-### 13.2 activate(ctx)——ModuleContext 全口
+### 14.2 activate(ctx)——ModuleContext 全口
 
 | 口 | 签名 | 干什么 |
 |---|---|---|
@@ -355,7 +460,7 @@ defineModule({ name, version, description, api, dependsOn?, provides?, defaultEn
 | `ctx.events.on` | `(type, listener) => Disposer` | 订阅事件。listener 返回 `undefined` = 通过；返回 `{ deny: true, reason }` 或抛错 = 否决（仅拦截点有否决语义，见下表） |
 | `ctx.events.emit` | `(type, payload) => Promise<void>` | 模块间通知。**仅限 `<module>/*` 命名空间**，核心事件类型拒绝模块 emit |
 
-### 13.3 defineTool——两阶段工具契约
+### 14.3 defineTool——两阶段工具契约
 
 ```ts
 defineTool({ name, description, parameters, resolveExecution(input): Promise<ToolExecution> })
@@ -386,14 +491,14 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 | `truncated?` / `spill?` | 输出超限时截断标记 / 落盘文件 `{ path, bytes }`（模型可再读全文） |
 | `denied?` | 被 `tool/pre-execute` 瀑布否决时由内核置 true（此时 isError 恒 true）——不是工具自己写的 |
 
-### 13.4 promptSection——系统提示词段
+### 14.4 promptSection——系统提示词段
 
 | 字段 | 干什么 |
 |---|---|
 | `order` | 全局拼接顺序。核心五节概念 -100 永远最前；现有分配表：skill=0、tool-todo=10、mcp=20；AGENTS.md 等价 30 固定拼尾。**新模块领 0–29 的空位**，≥30 会插进 AGENTS.md 前面与分配表矛盾 |
 | `text` | string 或 getter。getter 每轮请求装配时求值（活段——todo 面板、mcp 清单都是这么做的）；**空串段装配时被过滤**——「必须注入」类内容应无条件注册且永远非空 |
 
-### 13.5 CommandUi——交互口（命令与审批询问共用）
+### 14.5 CommandUi——交互口（命令与审批询问共用）
 
 | 方法 | 干什么 |
 |---|---|
@@ -405,7 +510,7 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 
 > 无头环境（`--print`、测试、嵌入式）注入**拒绝式实现**：三问法抛「无交互环境」→ 命令带内失败，fail-closed。所以命令体要能承受 ui 不可用。
 
-### 13.6 LlmPort——二级模型调用
+### 14.6 LlmPort——二级模型调用
 
 | 成员 | 干什么 |
 |---|---|
@@ -413,7 +518,7 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 | `contextWindow` | 当前模型上下文窗口（token），getter 惰性读；未知 undefined |
 | `lastUsage` | 最近一次**主循环**请求的真实用量锚点 `{ totalTokens, atMessageCount }`——其后消息用估算增量。仅运行期调用（activate 期 provider 可能未装配） |
 
-### 13.7 事件与拦截点（白名单 8 个，§6.5）
+### 14.7 事件与拦截点（白名单 8 个，§6.5）
 
 | 拦截点 | 语义 | 典型用途 |
 |---|---|---|
@@ -428,10 +533,10 @@ defineTool({ name, description, parameters, resolveExecution(input): Promise<Too
 
 返回 `undefined` = 放行；`{ deny: true, reason }` 或抛错 = 否决（仅 waterfall/拦截类有否决语义）。
 
-### 13.8 生命周期速记
+### 14.8 生命周期速记
 
 - `activate`：拓扑序调用一次；硬依赖在前（§5.2）。
 - 一切注册（tool/command/promptSection/events.on…）**返回 Disposer**——模块停用时内核自动逐个调用，不用你记。
 - `activate` 返回的 `dispose`：注册之外的清理（句柄/子进程），**先于**各注册 disposer 执行。
 - reload 换代：被保留（preserved）的模块不重建、不株连；被换下的走完整拆除。
-- **activate 抛错 = 该模块降级，不阻断启动**（§10）；`required = true`（核心模块专属）才阻断。
+- **activate 抛错 = 该模块降级，不阻断启动**（§11）；`required = true`（核心模块专属）才阻断。

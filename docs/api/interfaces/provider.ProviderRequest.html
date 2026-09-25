@@ -13,7 +13,7 @@
 <h1>Interface ProviderRequest</h1></div>
 <div class="tsd-signature"><span class="tsd-signature-keyword">interface</span> <span class="tsd-kind-interface">ProviderRequest</span> <span class="tsd-signature-symbol">{</span><br/>    <a class="tsd-kind-property" href="#maxtokens">maxTokens</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">number</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#messages">messages</a><span class="tsd-signature-symbol">:</span> <a href="../types/provider.ModelMessage.html" class="tsd-signature-type tsd-kind-type-alias">ModelMessage</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#model">model</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#reasoningeffort">reasoningEffort</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#signal">signal</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">AbortSignal</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#system">system</a><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#tools">tools</a><span class="tsd-signature-symbol">:</span> <a href="provider.ToolSpec.html" class="tsd-signature-type tsd-kind-interface">ToolSpec</a><span class="tsd-signature-symbol">[]</span><span class="tsd-signature-symbol">;</span><br/>    <a class="tsd-kind-property" href="#websearch">webSearch</a><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">boolean</span><span class="tsd-signature-symbol">;</span><br/><span class="tsd-signature-symbol">}</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L55">provider/index.ts:55</a></li></ul></aside>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L55">provider/index.ts:55</a></li></ul></aside>
 <section class="tsd-panel-group tsd-index-group">
 <section class="tsd-panel tsd-index-panel">
 <details class="tsd-index-content tsd-accordion" open><summary class="tsd-accordion-summary tsd-index-summary"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><use href="../assets/icons.svg#icon-chevronDown"></use></svg>
@@ -39,17 +39,17 @@
 <div class="tsd-comment tsd-typography"><p>输出 token 上限（M3 补强 D39 修订）：缺省 = 适配器现行为（openai 线缆不发送、anthropic 线缆用 MAX_TOKENS）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L62">provider/index.ts:62</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L62">provider/index.ts:62</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="messages"><span>messages</span><a href="#messages" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">messages</span><span class="tsd-signature-symbol">:</span> <a href="../types/provider.ModelMessage.html" class="tsd-signature-type tsd-kind-type-alias">ModelMessage</a><span class="tsd-signature-symbol">[]</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L58">provider/index.ts:58</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L58">provider/index.ts:58</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="model"><span>model</span><a href="#model" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">model</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L56">provider/index.ts:56</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L56">provider/index.ts:56</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="reasoningeffort"><code class="tsd-tag">Optional</code><span>reasoning<wbr/>Effort</span><a href="#reasoningeffort" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">reasoningEffort</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">string</span></div>
@@ -59,22 +59,22 @@ reasoning_effort；anthropic 族 = thinking 开关与 budget_tokens 映射，kim
 缺省不发送（端点默认行为）。值不做端点级校验（lenient——kimi-code 定案：不在清单也原样发，端点 400 自证）。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L72">provider/index.ts:72</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L72">provider/index.ts:72</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="signal"><span>signal</span><a href="#signal" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">signal</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">AbortSignal</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L60">provider/index.ts:60</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L60">provider/index.ts:60</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="system"><span>system</span><a href="#system" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">system</span><span class="tsd-signature-symbol">:</span> <span class="tsd-signature-type">string</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L57">provider/index.ts:57</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L57">provider/index.ts:57</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="tools"><span>tools</span><a href="#tools" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">tools</span><span class="tsd-signature-symbol">:</span> <a href="provider.ToolSpec.html" class="tsd-signature-type tsd-kind-interface">ToolSpec</a><span class="tsd-signature-symbol">[]</span></div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L59">provider/index.ts:59</a></li></ul></aside></section>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L59">provider/index.ts:59</a></li></ul></aside></section>
 <section class="tsd-panel tsd-member">
 <h3 class="tsd-anchor-link" id="websearch"><code class="tsd-tag">Optional</code><span>web<wbr/>Search</span><a href="#websearch" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="../assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <div class="tsd-signature"><span class="tsd-kind-property">webSearch</span><span class="tsd-signature-symbol">?:</span> <span class="tsd-signature-type">boolean</span></div>
@@ -84,7 +84,7 @@ anthropic 族 = web_search_20250305 server tool）。与 tools 的客户端工�
 服务端声明不进会话、模型不可见。</p>
 </div><aside class="tsd-sources">
 <ul>
-<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/219f28db4650ed9b09201bd6b10197c1e487fa48/packages/contracts/src/provider/index.ts#L67">provider/index.ts:67</a></li></ul></aside></section></section></details></div>
+<li>Defined in <a href="https://github.com/zhangxyfs/Orosus/blob/ba5d621a49262ab6698c19fb485690fd30c9ad89/packages/contracts/src/provider/index.ts#L67">provider/index.ts:67</a></li></ul></aside></section></section></details></div>
 <div class="col-sidebar">
 <div class="page-menu">
 <div class="tsd-navigation settings">

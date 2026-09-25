@@ -94,7 +94,22 @@ export default defineModule({
 tool-web 挂服务。判断标准：**知识的家跟权威方走，消费靠服务；主体的 diff 是最后手段。**
 
 > 你的模块各种坏法的待遇（发现期跳过 / 激活期降级 / 信任门不纳图）与两条运行期边界，
-> 见 [module-walkthrough.md 第 10 节「容错契约」](module-walkthrough.md)。
+> 见 [module-walkthrough.md 第 11 节「容错契约」](module-walkthrough.md)。
+
+### 界面贡献（m5 起）：给数据不给画面
+
+模块能往界面上放四样东西：弹窗（`ui.viewText`）、卡片（`contribute.card`）、控件窗（`ui.dialog`）、
+设置与读面（`ctx.settings` / `ctx.host`）。规矩：
+
+- **渲染权留宿主**：模块交控件清单/文本/布局数字，画永远是宿主画（宽度、主题、防闪烁是全局纪律）；
+  文字不许夹终端颜色控制码。
+- **面板铁律**：Esc 永远关窗；Ctrl+C/V/A/S/Z 与宿主全局键永不开放；一次一窗（排队）；
+  两卡区域的切卡/翻页键永不开放。
+- **出错降级**：模块函数抛错 = 该卡当帧剔除 / 窗保留 + 黄字提示，不牵连别的；模块卸载 = 关窗拆卡、
+  句柄作废。
+- 教程与控件清单见 [module-walkthrough.md 第 7 节「给模块做界面」](module-walkthrough.md)；
+  机器可读的口子目录（喂给帮人写模块的 AI）见 [extension-catalog.md](extension-catalog.md)。
+
 
 ## 错误行为
 
