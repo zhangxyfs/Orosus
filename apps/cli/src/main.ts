@@ -507,8 +507,8 @@ function attachRender(h: Harness): void {
   const toolIo =
     tuiMode === "full"
       ? {
-          toolCall: (name: string, args: Record<string, unknown> | undefined) => dm.toolCall(name, args),
-          toolResult: (output: unknown, isError: unknown) => dm.toolResult(output, isError),
+          toolCall: (name: string, args: Record<string, unknown> | undefined, callId?: string) => dm.toolCall(name, args, callId),
+          toolResult: (output: unknown, isError: unknown, callId?: string) => dm.toolResult(output, isError, callId),
         }
       : {};
   attachRenderTo(

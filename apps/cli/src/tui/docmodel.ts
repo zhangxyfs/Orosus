@@ -23,7 +23,7 @@ type Entry =
 	| { k: "md"; src: string; cache?: { w: number; lines: string[] } } // markdown 源——按宽度渲染（缓存）
 	| { k: "user"; src: string } // 用户消息块（❯ 暖金）
 	| { k: "think"; src: string } // 思考块（Alt+E 折叠态随 frameLines 当下渲染）
-	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[] }; // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存——帧心跳不重算）
+	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[] }; // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存——帧心跳不重算；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
@@ -114,18 +114,30 @@ export class DocModel {
 	}
 
 	/** 工具调用结构化摄入（2026-09-23 走查批——args 留存供 diff 渲染；renderEvent 的一行文本形态
-	 *  只服务行模式，全屏走本口）。 */
-	toolCall(name: string, args: Record<string, unknown> | undefined): void {
+	 *  只服务行模式，全屏走本口）。callId = 与 tool/result 的配对键（事件载荷在场，loop 落盘即带）。 */
+	toolCall(name: string, args: Record<string, unknown> | undefined, callId?: string): void {
 		this.settleActive();
-		this.lines.push({ k: "tool", name, args });
+		this.lines.push({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
 	}
 
-	/** 工具结果原位合并：挂到最近一条未完结的工具条目（write() 的 TOOL_MERGE 哨兵同语义的结构化版）。 */
-	toolResult(output: unknown, isError: unknown): void {
+	/** 工具结果原位合并：callId 在场 → 精确配对（并发乱序不交叉挂错——2026-09-25 用户实机错配修复：
+	 *  旧「最近未完结」启发式在后发先完成时把快工具的结果挂到慢工具行上）；缺席（旧会话日志）→
+	 *  回退最近未完结（write() 的 TOOL_MERGE 哨兵同语义的结构化版）。 */
+	toolResult(output: unknown, isError: unknown, callId?: string): void {
 		this.settleActive();
 		const text = typeof output === "string" ? output : String(output ?? "");
 		let n = 0;
-		for (const l of text.split("\n")) if (l.trim() !== "") n++;
+		for (const l of text.split("\n")) if (l.trim().length > 0) n++;
+		if (callId !== undefined) {
+			for (let i = this.lines.length - 1; i >= 0; i--) {
+				const prev = this.lines[i]!;
+				if (prev.k === "tool" && prev.callId === callId) {
+					if (prev.result === undefined) prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+					return; // callId 唯一：已有结果不覆盖，无则挂上
+				}
+			}
+			return; // 无匹配 call 条目（call 行未入列——如压缩裁剪后）——宁可不挂也不错挂
+		}
 		for (let i = this.lines.length - 1; i >= 0; i--) {
 			const prev = this.lines[i]!;
 			if (prev.k === "tool" && prev.result === undefined) {
@@ -231,9 +243,9 @@ export class DocModel {
 					this.lines.push({ k: "md", src: text });
 				}
 			} else if (e.type === "tool/call") {
-				this.toolCall(String(e.name), e.args as Record<string, unknown> | undefined);
+				this.toolCall(String(e.name), e.args as Record<string, unknown> | undefined, typeof e.callId === "string" ? e.callId : undefined);
 			} else if (e.type === "tool/result") {
-				this.toolResult(e.output, e.isError);
+				this.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined);
 			} else if (e.type === "agent/steering-message") {
 				// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
 				const msgs = (e.messages ?? []) as { text?: string }[];

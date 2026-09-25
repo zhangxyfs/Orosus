@@ -86,7 +86,7 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
 function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry): Tool {
   return defineTool({
     name: "tool-shell__bash",
-    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not `cd`) to run in a specific directory — it is remembered for the next call.\n`cd` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed).",
+    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nOn Windows the shell is cmd.exe: chain commands with `&&` (NOT `;` — semicolons are not command separators there) and avoid bash-only syntax.\nDefault timeout 120 seconds.\nUse the workdir parameter (not `cd`) to run in a specific directory — it is remembered for the next call.\n`cd` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed).",
     parameters: z.object(params),
     resolveExecution: (input) => {
       const { command, workdir, writeOutputTo, timeoutMs, run_in_background } = input as BashInput;

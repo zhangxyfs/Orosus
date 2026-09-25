@@ -193,3 +193,27 @@ describe("DocModel 用户消息折行与工具明细（2026-09-23 走查批）",
 		expect(o.some((l) => l.includes("堆栈第四行"))).toBe(true); // 展开全量
 	});
 });
+
+describe("工具结果按 callId 配对（2026-09-25 用户实机错配修复）", () => {
+	it("① 并发乱序：后发起的先完成——结果各归各行（callId 精确配对，不交叉挂错）", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__glob", { pattern: "*" }, "g1");
+		dm.toolCall("tool-shell__bash", { command: 'git status; echo "---"; git log --oneline -15' }, "b1");
+		// 完成序与发起序相反（快工具后发起先完成）：bash 慢、glob 快——glob 的 result 先到
+		dm.toolResult("file1.ts\nfile2.ts", false, "g1");
+		dm.toolResult("[退出码 1]\ngit: 'status;' is not a git command", true, "b1");
+		const lines = dm.frameLines(100).map(stripAnsi);
+		expect(lines.some((l) => l.includes("Used Glob (*)") && l.includes("2 行"))).toBe(true); // glob 挂行数
+		expect(lines.some((l) => l.includes("Used Bash") && l.includes("失败"))).toBe(true); // bash 挂失败——修前 glob 的 result 会先挂到 bash 行、bash 的失败挂到 glob 行
+		expect(lines.some((l) => l.includes("Used Glob") && l.includes("失败"))).toBe(false);
+	});
+
+	it("② callId 缺席（旧会话日志兼容）：回退最近未完结条目（现状行为保持）", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__glob", { pattern: "*" });
+		dm.toolCall("tool-shell__bash", { command: "git status" });
+		dm.toolResult("a.ts", false); // 无 id → 最近未完结 = bash（旧启发式）
+		const lines = dm.frameLines(100).map(stripAnsi);
+		expect(lines.some((l) => l.includes("Used Bash") && l.includes("1 行"))).toBe(true);
+	});
+});

@@ -187,8 +187,8 @@ export function attachRender(
     activity?(c: StreamChunk): void;
     /** 工具调用结构化口（2026-09-23 走查批）：全屏 DocModel 提供时 tool/call 不再压成一行文本——
      *  args 留存供 diff/失败体渲染（Alt+O 折叠）；缺省 = 旧文本形态（行模式/--print 零变化）。 */
-    toolCall?(name: string, args: Record<string, unknown> | undefined): void;
-    toolResult?(output: unknown, isError: unknown): void;
+    toolCall?(name: string, args: Record<string, unknown> | undefined, callId?: string): void;
+    toolResult?(output: unknown, isError: unknown, callId?: string): void;
     /** 模型错误 toast 口（2026-09-23 用户拍板）：finish kind=error 不再进活动流区——TTY 下改走此口
      *  （全屏浮动 toast / 行模式单行，文案 errorMessageText）；缺省回落 renderChunk 旧管道形（--print）。 */
     onError?(text: string): void;
@@ -217,13 +217,13 @@ export function attachRender(
   void (async () => {
     for await (const e of h.events()) {
       onEvent?.(e);
-      // 结构化工具口优先（全屏）：tool/call / tool/result 不走文本压行
+      // 结构化工具口优先（全屏）：tool/call / tool/result 不走文本压行——callId 透传（结果精确配对）
       if (e.type === "tool/call" && io.toolCall !== undefined) {
-        io.toolCall(String(e.name), e.args as Record<string, unknown> | undefined);
+        io.toolCall(String(e.name), e.args as Record<string, unknown> | undefined, typeof e.callId === "string" ? e.callId : undefined);
         continue;
       }
       if (e.type === "tool/result" && io.toolResult !== undefined) {
-        io.toolResult(e.output, e.isError);
+        io.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined);
         continue;
       }
       const out = renderEvent(e, state);
