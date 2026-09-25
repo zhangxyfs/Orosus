@@ -23,13 +23,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Bundle API docs and markdown mirror into site
+      - name: Bundle markdown mirror into site
         run: |
-          cp -r docs/api web/api
           mkdir -p web/md
-          # git pathspec 的 * 跨目录匹配：docs/*.md 即全量 md；--parents 保留仓库相对路径
+          # git pathspec 的 * 跨目录匹配：docs/*.md 即全量 md（含 docs/api/*.md——2026-09-25 API 参考
+          # 重做为 Markdown，全走 docs.html 查看器，typedoc HTML 退役、web/api 拷贝步删除）；
+          # --parents 保留仓库相对路径
           git ls-files -- 'README.md' 'README_EN.md' 'docs/*.md' 'docs/assets/*' \
-            | grep -v '^docs/api/' \
             | xargs -d '\n' cp --parents --target-directory=web/md/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

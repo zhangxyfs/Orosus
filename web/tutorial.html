@@ -21,7 +21,7 @@
     <a href="index.html#quickstart"><span data-zh>上手</span><span data-en>Quickstart</span></a>
     <a href="tutorial.html"><span data-zh>模块教程</span><span data-en>Tutorial</span></a>
     <a href="docs.html"><span data-zh>文档</span><span data-en>Docs</span></a>
-    <a href="api/index.html">API</a>
+    <a href="docs.html?file=docs%2Fapi%2FREADME.md">API</a>
     <button class="theme-toggle" id="themeBtn" aria-label="切换昼夜">☀</button>
     <button class="lang-toggle" id="langBtn">EN</button>
     <a class="gh" href="https://github.com/zhangxyfs/Orosus">GitHub ↗</a>
@@ -194,7 +194,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td><code>ctx.provide</code> / <code>ctx.services.get</code></td><td>能力槽：给/取</td><td>模块间解耦协作（fs seam、provider 槽都是这个）</td></tr>
     <tr><td><code>ctx.ui.ask</code> 等</td><td>宿主注入的交互</td><td>无头环境是拒绝式实现——别指望它一定成功，fail-closed</td></tr>
   </table>
-  <p>每个字段、每个参数的逐条说明见本文<strong>第 12 节（完整 API 参考）</strong>；更长的语义注释去站点 <a href="api/index.html">API 文档</a>（typedoc 从 contracts 源码生成，<code>pnpm gen-docs</code>，两处同源）。</p>
+  <p>每个字段、每个参数的逐条说明见本文<strong>第 12 节（完整 API 参考）</strong>；更长的语义注释、参数范围与示例去 <a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（从 contracts 源生成的 Markdown，含每个参数的 @param 说明，两处同源）。</p>
 
   <h2>8. 设计一个新模块的正规流程</h2>
   <p>本仓库对「设计」有治理（<a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/README.md</a>）：一模块一文档、从 <code>_template.md</code> 复制起手、八节模板、六态状态机（构想 → 设计中 → 已定稿 → 实现中 → 已落地）。轻量想法只要求写三节（定位/接口需求/决策点），进入「设计中」才八节写全。</p>
@@ -239,14 +239,14 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
   <table>
     <tr><th>想干什么</th><th>去哪</th></tr>
     <tr><td>跟着做一遍模块</td><td>本文</td></tr>
-    <tr><td>查一个口怎么用（签名+示例）</td><td><a href="https://github.com/zhangxyfs/Orosus/tree/master/docs/api">docs/api</a>（typedoc，随源码同步）</td></tr>
+    <tr><td>查一个口怎么用（签名+参数范围+示例）</td><td><a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（Markdown，随源码同步生成）</td></tr>
     <tr><td>速查：贡献点/拦截点/错误行为/验收</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/developers.md">developers.md</a></td></tr>
     <tr><td>机制所以然（为什么这么设计）</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/2026-09-14-modular-agent-harness-design.md">主设计文档</a></td></tr>
     <tr><td>某个模块的设计取舍</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/</a>（一模块一文档）</td></tr>
     <tr><td>运行时看装配结果</td><td><code>orosus --dump-modules</code>（= <code>harness.graph().catalogJson()</code>）</td></tr>
   </table>
   <h2>12. 附：完整 API 参考</h2>
-  <blockquote>这一节把模块作者的<strong>全部可用面</strong>列全——每个字段、每个参数、它是干什么的。想读更长的语义注释再去 <a href="api/index.html">API 文档</a>（typedoc，与 contracts 源码同步），两处内容同源。</blockquote>
+  <blockquote>这一节把模块作者的<strong>全部可用面</strong>列全——每个字段、每个参数、它是干什么的。想读更长的语义注释、参数范围与示例再去 <a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（与 contracts 源码同步生成），两处内容同源。</blockquote>
 
   <h3>12.1 defineModule 全字段</h3>
   <table>

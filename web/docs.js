@@ -1,5 +1,5 @@
-/* docs.html 逻辑：拉取 md 镜像 → marked 渲染 → 链接改写（站内 .md 继续走查看器，
- * docs/api/ 指向站点 /api/，其余相对资源指向 md/ 镜像）。 */
+/* docs.html 逻辑：拉取 md 镜像 → marked 渲染 → 链接改写（站内 .md 继续走查看器——
+ * 含 docs/api/*.md，其余相对资源指向 md/ 镜像）。 */
 (function () {
   "use strict";
   var content = document.getElementById("content");
@@ -43,8 +43,7 @@
       }
       if (/^https?:\/\//.test(href)) { a.target = "_blank"; a.rel = "noopener"; return; }
       var p = resolve(dirname(filePath), href);
-      if (p.indexOf("docs/api/") === 0) { a.href = p.slice("docs/".length); a.target = "_blank"; return; } // 站点 /api/
-      if (/\.md$/i.test(p)) { a.href = "docs.html?file=" + encodeURIComponent(p); return; }
+      if (/\.md$/i.test(p)) { a.href = "docs.html?file=" + encodeURIComponent(p); return; } // docs/api/*.md 同路（2026-09-25 API 参考重做 Markdown——typedoc /api/ 改写分支已删）
       a.href = "md/" + p; a.target = "_blank"; // 其他资源（图片等）走镜像原文件
     });
     box.querySelectorAll("img[src]").forEach(function (im) {
