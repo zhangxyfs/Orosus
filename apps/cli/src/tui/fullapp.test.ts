@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { FullApp, type FullAppIO } from "./fullapp.ts";
+import { FullApp, diagListLines, type FullAppIO } from "./fullapp.ts";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg } from "../theme.ts";
 
@@ -788,5 +788,72 @@ describe("pickOverlay 当前值项染色（2026-09-25 用户拍板——/effort 
 		expect(text).not.toContain(fg("accent", "low")); // 普通项不染
 		expect(stripAnsi(text)).toContain(" low"); // 普通项仍在
 		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width); // ANSI 计宽不炸框
+	});
+});
+
+describe("模块诊断一级列表（T9——Ctrl + E 开关、恒 8 行防闪烁、↑↓ 选择）", () => {
+	const entries = (n: number) => Array.from({ length: n }, (_, i) => ({
+		name: `mod-${i}`, tag: (i % 3 === 0 ? "激活失败" : i % 3 === 1 ? "级联" : "加载失败") as "激活失败" | "级联" | "加载失败",
+		reason: `失败原因文本 ${i}`, count: i + 1, last: `2026-09-25T10:0${i % 10}:00.000Z`,
+	}));
+
+	it("① 定高：5 条记录渲染 8 行区（3 空槽真空白无装饰）+ 行含状态点/名/标签/计次/最后时间", () => {
+		const { lines } = diagListLines(entries(5), 0, 76);
+		expect(lines).toHaveLength(9); // 8 内容行 + 1 余量行（恒定——条件性增删行即闪烁源）
+		const plain = lines.map((l) => stripAnsi(l));
+		expect(plain[0]).toContain("mod-0");
+		expect(plain[4]).toContain("mod-4");
+		expect(plain[5]).toBe(""); // 空槽真空白（禁装饰占位）
+		expect(plain[6]).toBe("");
+		expect(plain[7]).toBe("");
+		expect(plain[8]).toBe(""); // 无余量 → 空白占位
+		expect(lines[0]).toContain(fg("err", "●")); // 赭石状态点
+		expect(lines[0]).toContain(fg("info", "激活失败")); // 石青标签
+		expect(plain[0]).toContain("1 次 · 10:00:00");
+	});
+
+	it("② 超页：12 条记录出现「↓ 还有 N」合一行提示；选中第 10 条时窗口尾随（↑↓ 都提示）", () => {
+		const first = diagListLines(entries(12), 0, 76);
+		expect(stripAnsi(first.lines[8] ?? "")).toContain("↓ 还有 4");
+		const at10 = diagListLines(entries(12), 9, 76);
+		expect(stripAnsi(at10.lines[8] ?? "")).toContain("↑ 还有 2");
+		expect(stripAnsi(at10.lines[8] ?? "")).toContain("↓ 还有 2");
+		expect(stripAnsi(at10.lines[7] ?? "")).toContain("mod-9"); // 选中行恒可见（窗口尾随）
+		expect(at10.lines).toHaveLength(9); // 行区仍恒 8 行
+	});
+
+	it("③ 键路由：ctrl+e 开（空态走 toast 不弹窗）、再按关、↑↓ 夹紧、Esc 关", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, { diagEntries: () => entries(3) });
+		app.start();
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E 开
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(true);
+		expect(stripAnsi(output.buf)).toContain("mod-0");
+		input.emit("data", "\x1b[B"); // ↓
+		input.emit("data", "\x1b[B"); // ↓（到 2）
+		input.emit("data", "\x1b[B"); // ↓（夹紧在 2）
+		await flush();
+		expect(app.stateRef.diagSel).toBe(2);
+		input.emit("data", "\x1b[A"); // ↑
+		await flush();
+		expect(app.stateRef.diagSel).toBe(1);
+		input.emit("data", "\x1b"); // Esc 关
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false);
+		input.emit("data", "\x05"); // 再开
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E 再按 = 关
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false);
+
+		// 空态：不弹窗，toast 提示
+		const empty = rig(["# hi"], 100, 30, { diagEntries: () => [] });
+		empty.app.start();
+		await flush();
+		empty.input.emit("data", "\x05");
+		await flush();
+		expect(empty.app.stateRef.diagOpen).toBe(false);
+		expect(stripAnsi(empty.output.buf)).toContain("模块全部正常——没有诊断记录");
 	});
 });

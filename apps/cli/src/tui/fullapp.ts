@@ -16,6 +16,7 @@ import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
+import type { DiagEntry } from "../module-diagnostics.ts";
 import * as theme from "../theme.ts";
 
 // ---------- 接缝类型 ----------
@@ -81,6 +82,8 @@ export interface FullAppIO {
 	/** 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项宿主 toast 锁因；可插拔项宿主写
 	 *  config 的 [模块名] enabled + h.reload()（面板随之刷新）。 */
 	toggleModule?(name: string, lockedReason: string | undefined): void;
+	/** 模块诊断弹窗数据源（T9——定案「打开时刷新」：每次开 Ctrl + E 现读，不缓存）。 */
+	diagEntries?(): DiagEntry[];
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -109,7 +112,9 @@ interface AppState {
 	overlayOpen: boolean;
 	overlaySel: number;
 	overlayCmd: string; // "" = 一级
-	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消——瞬时反馈的统一形态（闸门拒因/模型切换等），
+	diagOpen: boolean; // 模块诊断一级列表（T9——独立于斜杠菜单 overlay：语义不同，另起一支）
+	diagSel: number;
+	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、3s 自消——瞬时反馈的统一形式（闸门拒因/模型切换等），
 	 *  取代批④的尾行拒因位（rejectHint）。 */
 	toast: { text: string; at: number } | undefined;
 }
@@ -117,6 +122,7 @@ interface AppState {
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
+const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
 const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载" };
 const TASK_TICK: Record<string, string> = { done: theme.fg("accent", "✓"), active: theme.fg("warn", "◐"), pending: theme.fg("muted", "○") };
@@ -137,6 +143,39 @@ export function elapsedText(startedAt: string | undefined, now: number = Date.no
 	if (total < 86400) return `${hr} 时 ${p2(min)} 分 ${p2(sec)} 秒`;
 	return `${day} 天 ${hr} 时`;
 }
+
+/** 诊断一级列表行拼装（T9，原型一级）：❯ ● 模块名 [标签] 原因……… N 次 · HH:MM:SS。
+ *  恒 DIAG_LIST_ROWS 行不足留空（防闪烁纪律）+ 末行余量提示合一行（斜杠菜单同款）；窗口尾随选中行。
+ *  返回 lines 长 DIAG_LIST_ROWS + 1（余量行——空时留空占位，条件性增删行即闪烁源）。 */
+export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW: number): { lines: string[]; selRow: number } {
+	const wstart = sel <= DIAG_LIST_ROWS - 1 ? 0 : sel - (DIAG_LIST_ROWS - 1);
+	const lines: string[] = [];
+	for (let i = 0; i < DIAG_LIST_ROWS; i++) {
+		const idx = wstart + i;
+		const e = entries[idx];
+		if (e === undefined) {
+			lines.push("");
+			continue;
+		}
+		const mark = idx === sel ? theme.fg("accent", "❯") : " ";
+		const head = ` ${mark} ${theme.fg("err", "●")} ${e.name} ${theme.fg("info", e.tag)} `;
+		const time = e.last.slice(11, 19); // ISO 时分秒（与日志同口径）
+		const right = `${e.count} 次 · ${time}`;
+		const headW = visibleWidth(stripAnsiOf(head));
+		const reasonW = innerW - headW - right.length - 2;
+		const reason = reasonW >= 3 ? truncateToWidth(e.reason, reasonW) : "";
+		const pad = Math.max(1, innerW - headW - right.length - visibleWidth(reason));
+		lines.push(`${head}${theme.dim(reason)}${" ".repeat(pad)}${theme.dim(right)}`);
+	}
+	const restUp = wstart;
+	const restDown = entries.length - wstart - DIAG_LIST_ROWS;
+	const hints = [restUp > 0 ? `↑ 还有 ${restUp}` : "", restDown > 0 ? `↓ 还有 ${restDown}` : ""].filter(Boolean).join(" · ");
+	lines.push(hints === "" ? "" : theme.dim(`   ${hints}`));
+	return { lines, selRow: sel - wstart };
+}
+
+/** stripAnsi 就地别名（width.ts 未导出该函数——此处只为计宽）。 */
+const stripAnsiOf = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 const PERM_LABEL: Record<string, string> = { "ask-always": "Always Ask", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
 
@@ -253,6 +292,8 @@ export class FullApp {
 			overlayOpen: false,
 			overlaySel: 0,
 			overlayCmd: "",
+			diagOpen: false,
+			diagSel: 0,
 			toast: undefined,
 		};
 	}
@@ -581,6 +622,23 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
+		if (key === "ctrl+e") {
+			// 模块诊断弹窗总开关（T9/S6：全局拦截含输入框编辑态——与 Ctrl+T 同款；keymatch 0x05 无既有消费者）
+			if (s.diagOpen) {
+				s.diagOpen = false; // 再按 = 关（二级开着 = 全关，T10 的 viewText 返回标记侧消费）
+			} else {
+				const entries = this.io.diagEntries?.() ?? [];
+				if (entries.length === 0) {
+					this.showToast("模块全部正常——没有诊断记录"); // 空态不弹空窗（原型同款）
+				} else {
+					s.overlayOpen = false; // 与斜杠菜单互斥
+					s.diagOpen = true;
+					s.diagSel = 0; // 打开时刷新（定案）：entries 每开现读
+				}
+			}
+			this.scheduler.requestImmediateRender();
+			return;
+		}
 		if (key === "alt+e") {
 			this.io.toggleThink();
 			this.scheduler.requestImmediateRender();
@@ -683,6 +741,20 @@ export class FullApp {
 			} else {
 				this.onEditKey(key);
 				return;
+			}
+			this.scheduler.requestImmediateRender();
+			return;
+		}
+
+		// 诊断一级列表态（T9）：弹窗焦点锁——↑↓ 选择（边界夹紧）、Enter 进二级（T10）、Esc 关；
+		// 其余键吞掉不落编辑态。先于 busy-Esc：弹窗开着时 Esc 关弹窗、不触发「再按停止生成」
+		if (s.diagOpen) {
+			const entries = this.io.diagEntries?.() ?? [];
+			if (key === "up") s.diagSel = Math.max(0, s.diagSel - 1);
+			else if (key === "down") s.diagSel = Math.min(Math.max(0, entries.length - 1), s.diagSel + 1);
+			else if (key === "escape") s.diagOpen = false;
+			else if (key === "enter") {
+				// 二级详情（T10 接线）：本期占位——选中行即目标
 			}
 			this.scheduler.requestImmediateRender();
 			return;
@@ -1262,6 +1334,8 @@ export class FullApp {
 			overlay = this.buildViewOverlay(leftW, divRow, pu.title, pu.lines, pu.scroll);
 		} else if (s.overlayOpen) {
 			overlay = this.buildOverlay(leftW, divRow);
+		} else if (s.diagOpen) {
+			overlay = this.buildDiagOverlay(leftW, divRow);
 		}
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
@@ -1329,8 +1403,32 @@ export class FullApp {
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
 
-	private buildOverlay(leftW: number, divRow: number): OverlayFrame {
+	/** 模块诊断一级列表浮层（T9，原型一级）：赭石标题 + 恒 8 行列表 + 余量提示 + 键提示行（浮层高度恒定防闪烁）。 */
+	private buildDiagOverlay(leftW: number, divRow: number): OverlayFrame {
 		const s = this.state;
+		const entries = this.io.diagEntries?.() ?? [];
+		const ow = leftW;
+		const oInner = ow - 2;
+		const bc = "accent";
+		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+		const olines: string[] = [];
+		const title = theme.fg("err", " 模块诊断 ");
+		const en = theme.dim(` ${entries.length} 个模块出过问题 `);
+		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
+		const selI = Math.max(0, Math.min(entries.length - 1, s.diagSel));
+		const { lines, selRow } = diagListLines(entries, selI, oInner - 1);
+		for (let i = 0; i < DIAG_LIST_ROWS + 1; i++) {
+			// 选中行青玉软底（斜杠菜单同款）；余量行（第 9 行）不参与高亮
+			olines.push(i === selRow ? boxRow(theme.bg("accentSoft", padToWidth(lines[i] ?? "", oInner - 1))) : boxRow(lines[i] ?? ""));
+		}
+		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
+		olines.push(boxRow(theme.dim(" ↑↓ 选择 · Enter 详情 · Esc 关闭")));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
+		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+	}
+
+	private buildOverlay(leftW: number, divRow: number): OverlayFrame {		const s = this.state;
 		const level2 = s.overlayCmd !== "";
 		const ow = leftW;
 		const oInner = ow - 2;

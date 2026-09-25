@@ -41,6 +41,7 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
+import { readDiagnostics } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -1201,6 +1202,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     toggleThink: () => {
       dm.thinkOpen = !dm.thinkOpen;
     },
+    // 模块诊断弹窗数据源（T9）：打开时现读（定案）——当天 + 前一天诊断日志过滤聚合（T8 读取器）
+    diagEntries: () => readDiagnostics(join(orosusHome(), "logs"), new Date()),
     toggleTool: () => {
       dm.toolOpen = !dm.toolOpen;
     },
