@@ -40,6 +40,7 @@ import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
+import { formatStartupError } from "./startup-error.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -325,7 +326,16 @@ const echoHistory = async (h: Harness, out: (s: string) => void = (s) => console
 // 当场回显等于写进即弃的旧 dm（用户实测：/sessions 切换后历史「没加载」）。
 let pendingEcho: { notice: string; history: boolean } | undefined;
 
-let h = await createSession();
+// 顶层兜底 catch（T6/S7）：createHarness 抛错（坏配置 TOML、required 护栏阻断、T5 没盖住的）不再裸堆栈退出。
+// 模块顶层 await——catch 内不能 return、也不能只设 exitCode 放行（后续 REPL 带着未初始化的 h 继续跑），
+// process.exit(1) 直接拦住（同文件 --dump-modules 的 exit(0) 先例）
+let h: Awaited<ReturnType<typeof createSession>>;
+try {
+  h = await createSession();
+} catch (err) {
+  console.error(formatStartupError(err, orosusHome(), new Date()));
+  process.exit(1);
+}
 if (args.dumpModules) {
   console.log(h.graph().catalog());
   await h.close();
