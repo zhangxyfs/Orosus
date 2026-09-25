@@ -17,23 +17,32 @@ export interface DiscoveredModule {
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
-/** 入口探测（§8.4）：package.json 的 exports["./module"] → main → index.{ts,js}；无 package.json → index.{ts,js}。 */
-function probeEntry(root: string): string | undefined {
+/** 入口探测结果（T5）：pkg-read = package.json 读不了/解析不了（坏包）；no-entry = 无模块入口（良性）。 */
+type ProbeResult = { ok: true; entry: string } | { ok: false; kind: "pkg-read"; detail: string } | { ok: false; kind: "no-entry" };
+
+/** 入口探测（§8.4）：package.json 的 exports["./module"] → main → index.{ts,js}；无 package.json → index.{ts,js}。
+ *  T5：package.json 的读取/解析自兜——坏包返回 pkg-read（调用侧 warn 跳过），异常不再穿 createHarness 炸启动。 */
+function probeEntry(root: string): ProbeResult {
   const pkgPath = join(root, "package.json");
   if (existsSync(pkgPath)) {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+    let pkg: {
       orosus?: { module?: boolean };
       exports?: Record<string, string>;
       main?: string;
     };
-    if (pkg.orosus?.module !== true) return undefined; // 有 package.json 但非模块包 → 跳过（warn 由调用侧）
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    } catch (err) {
+      return { ok: false, kind: "pkg-read", detail: err instanceof Error ? err.message : String(err) };
+    }
+    if (pkg.orosus?.module !== true) return { ok: false, kind: "no-entry" }; // 有 package.json 但非模块包 → 跳过（warn 由调用侧）
     const fromPkg = pkg.exports?.["./module"] ?? pkg.main;
-    if (fromPkg !== undefined && existsSync(join(root, fromPkg))) return fromPkg;
+    if (fromPkg !== undefined && existsSync(join(root, fromPkg))) return { ok: true, entry: fromPkg };
   }
   for (const idx of ["index.ts", "index.js"]) {
-    if (existsSync(join(root, idx))) return idx;
+    if (existsSync(join(root, idx))) return { ok: true, entry: idx };
   }
-  return undefined;
+  return { ok: false, kind: "no-entry" };
 }
 
 async function scanDir(dir: string, layer: "user" | "project", log: ReturnType<typeof createLogger>): Promise<DiscoveredModule[]> {
@@ -42,17 +51,25 @@ async function scanDir(dir: string, layer: "user" | "project", log: ReturnType<t
   for (const sub of readdirSync(dir).sort()) {
     const root = join(dir, sub);
     if (!statSync(root).isDirectory()) continue; // 不递归（§8.3）——子目录本身即模块
-    const entry = probeEntry(root);
-    if (entry === undefined) {
-      log.warn("kernel.discover.skip", `目录 ${sub} 无模块入口（无 orosus.module 声明且无 index.{ts,js}），跳过`);
+    const probed = probeEntry(root);
+    if (!probed.ok) {
+      if (probed.kind === "pkg-read") log.warn("kernel.discover.skip", `目录 ${sub} 的包描述读取失败（package.json：${probed.detail}），跳过`, { module: sub });
+      else log.warn("kernel.discover.skip", `目录 ${sub} 无模块入口（无 orosus.module 声明且无 index.{ts,js}），跳过`, { module: sub });
       continue;
     }
-    const entryHash = sha256(readFileSync(join(root, entry), "utf8"));
+    // T5：入口读取 + 哈希自兜（文件被占用/指错形状时 warn 跳过，不再穿 try 外炸启动）
+    let entryHash: string;
     try {
-      const def = await loadExternalModule(root, entry);
-      found.push({ def, source: "local", layer, root, entry, entryHash });
+      entryHash = sha256(readFileSync(join(root, probed.entry), "utf8"));
     } catch (err) {
-      log.warn("kernel.discover.fail", `模块 ${sub} 加载失败：${String(err instanceof Error ? err.message : err)}`);
+      log.warn("kernel.discover.skip", `目录 ${sub} 入口读取失败（${probed.entry}：${err instanceof Error ? err.message : String(err)}），跳过`, { module: sub });
+      continue;
+    }
+    try {
+      const def = await loadExternalModule(root, probed.entry);
+      found.push({ def, source: "local", layer, root, entry: probed.entry, entryHash });
+    } catch (err) {
+      log.warn("kernel.discover.fail", `模块 ${sub} 加载失败：${String(err instanceof Error ? err.message : err)}`, { module: sub });
     }
   }
   return found;
@@ -91,20 +108,21 @@ async function scanConfigSources(file: string | undefined, layer: "user" | "proj
       continue;
     }
     if (!existsSync(root)) {
-      log.warn("kernel.discover.missing", `模块 ${name} 的 source 路径不存在：${root}`);
+      log.warn("kernel.discover.missing", `模块 ${name} 的 source 路径不存在：${root}`, { module: name });
       continue;
     }
-    const entry = probeEntry(root);
-    if (entry === undefined) {
-      log.warn("kernel.discover.skip", `模块 ${name}（source 目录）无入口，跳过`);
+    const probed = probeEntry(root);
+    if (!probed.ok) {
+      if (probed.kind === "pkg-read") log.warn("kernel.discover.skip", `模块 ${name} 的包描述读取失败（package.json：${probed.detail}），跳过`, { module: name });
+      else log.warn("kernel.discover.skip", `模块 ${name}（source 目录）无入口，跳过`, { module: name });
       continue;
     }
     try {
-      const def = await loadExternalModule(root, entry);
+      const def = await loadExternalModule(root, probed.entry);
       if (def.name !== name) log.warn("kernel.discover.name-mismatch", `配置 section [${name}] 声明的 source 加载出模块 "${def.name}"——以制品名为准`);
-      found.push({ def, source: "local", layer, root, entry, entryHash: sha256(readFileSync(join(root, entry), "utf8")) });
+      found.push({ def, source: "local", layer, root, entry: probed.entry, entryHash: sha256(readFileSync(join(root, probed.entry), "utf8")) });
     } catch (err) {
-      log.warn("kernel.discover.fail", `模块 ${name}（source）加载失败：${String(err instanceof Error ? err.message : err)}`);
+      log.warn("kernel.discover.fail", `模块 ${name}（source）加载失败：${String(err instanceof Error ? err.message : err)}`, { module: name });
     }
   }
   return found;

@@ -101,4 +101,53 @@ export default defineModule({ name: "m-alias", version: "0.1.0", description: "d
     expect(found.map((f) => f.def.name)).toEqual(["u-mod"]);
     expect(found[0]!.layer).toBe("user");
   });
+
+  // T5 加载期补口：坏包/坏入口不炸启动——异常止于 discover 层（跳过 + warn），不穿 createHarness
+  const capturingSink = () => {
+    const recs: { lvl: string; code: string; msg: string; data?: Record<string, unknown> }[] = [];
+    return { recs, sink: { write: (r: (typeof recs)[number]) => { recs.push(r); }, flush: async () => {}, close: async () => {} } as never };
+  };
+
+  it("⑨ 目录扫描：坏 JSON 的 package.json → 跳过不抛，warn 含「包描述读取失败」+ 目录名 + data.module", async () => {
+    const user = mk();
+    md(join(user, "mods", "bad-json"));
+    writeFileSync(join(user, "mods", "bad-json", "package.json"), "{ 这不是合法 JSON !!");
+    const { recs, sink: s } = capturingSink();
+    const found = await discoverModules({ userDir: join(user, "mods"), projectDir: join(user, "none"), sink: s });
+    expect(found).toHaveLength(0);
+    const skip = recs.find((r) => r.code === "kernel.discover.skip");
+    expect(skip).toBeDefined();
+    expect(skip!.msg).toContain("包描述读取失败"); // S3 机械判据锚公共子串「读取失败」的正向形态
+    expect(skip!.msg).toContain("bad-json");
+    expect(skip!.data?.["module"]).toBe("bad-json"); // 结构化模块名（T8 优先读 data.module）
+  });
+
+  it("⑩ 配置 source 路径指向坏 JSON 包 → 同待遇跳过（第二调用点的钉）", async () => {
+    const home = mk();
+    md(join(home, "mods", "bad-src"));
+    writeFileSync(join(home, "mods", "bad-src", "package.json"), "}}broken");
+    writeFileSync(join(home, "config.toml"), '[my-mod]\nsource = "./mods/bad-src"\n');
+    const { recs, sink: s } = capturingSink();
+    const found = await discoverModules({ userDir: join(home, "no"), projectDir: join(home, "no"), userFile: join(home, "config.toml"), sink: s });
+    expect(found).toHaveLength(0);
+    const skip = recs.find((r) => r.code === "kernel.discover.skip");
+    expect(skip).toBeDefined();
+    expect(skip!.msg).toContain("包描述读取失败");
+    expect(skip!.msg).toContain("my-mod");
+    expect(skip!.data?.["module"]).toBe("my-mod");
+  });
+
+  it("⑪ 入口存在但读取抛错（目录被 exports 指为入口 → readFileSync EISDIR）→ 跳过不抛，warn 含「入口读取失败」", async () => {
+    const user = mk();
+    md(join(user, "mods", "dir-entry", "entry")); // entry 是目录：existsSync 过、readFileSync 抛
+    writeFileSync(join(user, "mods", "dir-entry", "package.json"), JSON.stringify({ orosus: { module: true }, exports: { "./module": "./entry" } }));
+    const { recs, sink: s } = capturingSink();
+    const found = await discoverModules({ userDir: join(user, "mods"), projectDir: join(user, "none"), sink: s });
+    expect(found).toHaveLength(0);
+    const skip = recs.find((r) => r.code === "kernel.discover.skip");
+    expect(skip).toBeDefined();
+    expect(skip!.msg).toContain("入口读取失败"); // S3 五轮补钉：坏入口文案别与「无模块入口」良性形态混同
+    expect(skip!.msg).toContain("dir-entry");
+    expect(skip!.data?.["module"]).toBe("dir-entry");
+  });
 });
