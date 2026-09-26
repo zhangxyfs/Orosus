@@ -262,7 +262,7 @@ describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () =>
     expect(out.conclusion).toBe("子代理结论");
     // 子代理首个请求（requests[0] = 主对话那轮）：messages = 主对话历史 + 任务书末位
     const agentReq = lastRequests[1]!;
-    const roles = agentReq.messages.map((m) => `${m.role}:${((m.content ?? []) as { kind?: string; text?: string }[]).map((p) => p.text ?? "").join("")}`);
+    const roles = agentReq.messages.map((m) => `${m.role}:${((m.content as { kind?: string; text?: string }[]).map((p) => p.text ?? "").join("")}`);
     expect(roles[0]).toContain("你好");
     expect(roles[1]).toContain("主对话回复");
     expect(roles.at(-1)).toContain("照上面聊的做 X");
