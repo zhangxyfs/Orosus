@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { fakeProvider } from "@orosus/testing";
 import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/provider";
-import type { CommandUi, ModuleDefinition, SubagentOutcome, SubagentPort, SubagentSpawnRequest } from "@orosus/contracts/module";
+import type { CommandUi, ModuleDefinition, SubagentPort, SubagentSpawnRequest } from "@orosus/contracts/module";
 import approval from "@orosus/approval";
 import toolSubagent, { subagentTools } from "./index.ts";
 import type { RoleDirs } from "./roles.ts";
