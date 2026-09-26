@@ -40,6 +40,7 @@ export const LOG_TYPES = {
   turnPrune: "turn/prune",             // §6.1 裁剪（M3 补强 D44）：{ prunes: [{ at, headChars, tailChars }], prunedChars }——compaction 模块写入（owner 制例外第二枚），投影应用
   sessionFork: "session/fork",         // §6.1 结构：fork 记录源 entry id——harness 直写（M3/T6）
   sessionLabel: "session/label",       // §6.1 结构：会话标签——harness 直写（M3/T6 预留）
+  subagentUsage: "session/subagent-usage", // M4.5 子代理批：词元记主会话账上（设计空白口径）——runner 直写 {agentId, usage}；投影跳过（不进模型上下文）
 } as const;
 
 /** ULID 风格 id：48bit 时间 + 80bit 随机，base32，字典序 = 时间序（单调可排序）。 */

@@ -76,6 +76,13 @@ export function sumUsage(events: SessionEvent[]): { input: number; output: numbe
   let input = 0;
   let output = 0;
   for (const e of events) {
+    // M4.5 子代理批：子代理用量记在主会话账上（session/subagent-usage——不进投影，只进统计）
+    if (e.type === "session/subagent-usage") {
+      const u = e.usage as { input?: number; output?: number } | undefined;
+      input += u?.input ?? 0;
+      output += u?.output ?? 0;
+      continue;
+    }
     if (e.type === "assistant/chunk") {
       const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
       if (c?.type === "usage") {

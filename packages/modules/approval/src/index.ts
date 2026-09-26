@@ -25,7 +25,11 @@ interface PreExecutePayload {
   approvalRule: string;
   matchesRule?: (ruleArgs: string) => boolean;
   mode?: import("./decide.ts").PermissionMode;
-  subagent?: { agentId: string; depth: 1 | 2; parentId?: string; background: boolean; label: string };
+  subagent?: {
+    agentId: string; depth: 1 | 2; parentId?: string; background: boolean; label: string;
+    /** 后台 Ask 档挂起审批（M4.5 T8 / 决策 3）：不抢占——park 登记待批，用户有空再答；被停自动按拒绝收场。 */
+    park?: (info: { tool: string; reason: string }) => Promise<boolean>;
+  };
 }
 
 export default defineModule({
@@ -85,6 +89,24 @@ export default defineModule({
         ctx.session.append("approval/resolved", { callId: p.callId, name: p.name, decision: "deny", source: d.source, reason: d.reason });
         ctx.log.info("approval.deny", "规则拒绝", { callId: p.callId, name: p.name, rule: d.reason });
         return { deny: true, reason: `审批拒绝（${d.reason}）` };
+      }
+      // 后台子代理的 ask（决策 3 第二层）：不弹窗不抢占——park 挂起（花名册记待批，用户有空再答）；
+      // 前台子代理与主对话照旧走 ctx.ui 串行队列。park 返回 false（被停自动回绝）= 拒绝收场。
+      if (d.effect === "ask" && p.subagent?.background === true && p.subagent.park !== undefined) {
+        ctx.session.append("approval/requested", {
+          callId: p.callId, name: p.name, approvalRule: p.approvalRule,
+          reason: d.reason, mode: p.mode ?? state.modeOverride ?? cfg.mode,
+          subagent: p.subagent.label, background: true,
+        });
+        const allowed = await p.subagent.park({ tool: p.name, reason: d.reason });
+        ctx.session.append("approval/resolved", {
+          callId: p.callId, name: p.name,
+          decision: allowed ? "allow-once" : "deny",
+          source: allowed ? "user" : "auto-deny",
+          ...(allowed ? {} : { reason: "后台子代理被停止——未答审批按拒绝收场" }),
+        });
+        if (!allowed) return { deny: true, reason: `后台子代理审批未通过（${p.name}——被停止自动回绝或用户拒绝）` };
+        return undefined;
       }
       // ask：请求先落日志（UI 经日志投影看到，§6.7），询问经 ctx.ui（D35 M3：waterfall 侧交互口）
       ctx.session.append("approval/requested", {

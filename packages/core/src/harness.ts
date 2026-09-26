@@ -108,6 +108,11 @@ export interface Harness {
   setEffort(level: string): void;
   /** 待确认第三方模块清单（m5 T17）：未过信任门的 local 模块（项目级 hash 门
    *  / 用户级一次性确认）——面板「待确认」桶与首挂确认弹窗的数据源（layer + 目录路径弹窗要显示）。 */
+  /** 子代理花名册快照（M4.5 T8/T10/T11——界面三件套数据口）：子+孙同册（孙带 parentId），
+   *  进行中全列 + 已结束保留最近 32 条；pendingApproval = 后台 Ask 档挂起的审批（answerSubagentApproval 应答）。 */
+  subagents(): import("@orosus/contracts/module").SubagentRosterEntry[];
+  /** 应答后台子代理的挂起审批（M4.5 T8/决策 3）：不抢占的问——用户有空再批；会话关闭/停止自动按拒绝。 */
+  answerSubagentApproval(agentId: string, allow: boolean): boolean;
   pendingConfirms(): { name: string; version: string; layer: "user" | "project"; root: string; reason: string; entryHash: string; def: import("@orosus/contracts/module").ModuleDefinition }[];
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
@@ -966,6 +971,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     // 批⑦a：/title 当前会话改名走活 store（单写者——旁路新建 store 写活文件会破 parentId 链/seq 单调）。
     // append 后立即 flush（2026-09-22 用户实测：label 滞留写缓冲时 /sessions 读盘看不到新名——改名必须即落盘）
+    // M4.5 T8：花名册读口 + 挂起审批应答口（界面三件套 / /tasks 的数据源）
+    subagents() {
+      return subagentRunner.list();
+    },
+    answerSubagentApproval(agentId: string, allow: boolean) {
+      return subagentRunner.answerApproval(agentId, allow);
+    },
     // m5 T17：待确认桶读口（blocked 随 reload 重算——返回当前态）
     pendingConfirms() {
       return blocked.map((b) => ({
@@ -1120,6 +1132,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     async close() {
       if (closed) return; // 幂等
       closed = true;
+      subagentRunner.stopAll(); // 会话关闭全停（决策 12）：子代理在跑/排队/挂起审批全部收场
       currentTurn?.controller.abort();
       await currentTurn?.done.catch(() => undefined);
       await graph.dispose();
