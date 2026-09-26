@@ -315,6 +315,15 @@ const createSession = async (extra: { fork?: { parentSessionId: string; atEntryI
     autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
     sessionsDir: extra.sessionsDir ?? activeDir,
     sessionsRoot, // 会话树批 T1：fork 祖先链跨桶定位兜底（存量跨桶链只读兼容；新链恒同桶走快路径）
+    // 会话树批 T11：宿主切换缝（ctx.session.switchTo 背后）——立即返回语义（决策点 9）：返回 true = 已受理，
+    // 切换异步走（void 不等待——等待 = 永远等不到，调用方 harness 即将随切换销毁）；#17 桶闸：locate 限当前
+    // 项目桶，他桶/不存在 = false（契约「false = 会话不存在」的唯一出处——模块不能借 switchTo 跳进别项目）
+    sessionSwitch: async (sid: string) => {
+      const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
+      if (loc === undefined) return false;
+      void switchTo(sid);
+      return true;
+    },
     ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
     ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
     config: {

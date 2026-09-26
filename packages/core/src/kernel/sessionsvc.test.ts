@@ -97,4 +97,32 @@ describe("ctx.session 三缝装配（会话树批 T10）", () => {
     expect(g.audit().every((a) => a.state === "active")).toBe(true);
     await g.dispose();
   });
+
+  it("④ harness 端到端注入：sessionSwitch 传入 → 模块经 ctx.session.switchTo 调到（mounts 列位）；未注入 = undefined", async () => {
+    const { createHarness } = await import("../index.ts");
+    const mk = (mod: ModuleDefinition, over: Parameters<typeof createHarness>[0]) =>
+      createHarness({
+        cwd: "/tmp/x", diagDir: "/tmp/x", spillDir: "/tmp/x/s", // 密封路径不真写（模块只读 switchTo 存在性）
+        modules: [mod], config: { env: {}, cliOverrides: { model: "fake/x" } }, ...over,
+      });
+    let got: boolean | undefined;
+    const calls: string[] = [];
+    const h = await mk(
+      defineModule({
+        name: "t-sw", version: "0.0.1", description: "x", api: 1, mounts: ["session.switch"],
+        async activate(ctx) { got = await ctx.session.switchTo?.("s_target"); },
+      }),
+      { sessionSwitch: async (sid) => { calls.push(sid); return true; } },
+    );
+    expect(got).toBe(true);
+    expect(calls).toEqual(["s_target"]);
+    await h.close();
+    let bare: unknown = "unset";
+    const h2 = await mk(
+      defineModule({ name: "t-sw2", version: "0.0.1", description: "x", api: 1, activate(ctx) { bare = ctx.session.switchTo; } }),
+      {},
+    );
+    expect(bare).toBeUndefined(); // 未注入（无头/老宿主）
+    await h2.close();
+  });
 });
