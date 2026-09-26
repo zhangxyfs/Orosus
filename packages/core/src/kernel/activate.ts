@@ -71,6 +71,9 @@ export interface ActivateInput {
   commandUi?: CommandUi;                        // 宿主交互 UI（D35 M3/T2：ctx.ui——审批询问等 waterfall 侧消费）
   settings?: SettingsService;                   // m5 T9 口子四：设置服务写面——逐方法包 allows("settings") 校验（照 ctx.tools 缝）
   host?: HostInfo;                              // m5 T9 读面：快照口直挂无 mounts 位（决策点 24——读不占写闸）
+  sessionForkOut?: (opts?: { atEntryId?: string }) => Promise<{ sessionId: string }>; // 会话树批 T10 缝一：h.fork 出口（mounts "session.fork" 门）
+  treeOut?: () => Promise<import("@orosus/contracts/module").SessionTreeNode[]>;      // 会话树批 T10 缝二：h.tree 出口（只读无门）
+  sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10 缝三：宿主切换缝（mounts "session.switch" 门；T11 宿主接线）
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
@@ -308,6 +311,27 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         // 冷投影读口（M5 F5 二轮⑰——/compact 立即执行）：与 agentLoop 同投影函数（deriveMessages 全量重放）
         messages: async () => deriveMessages(await session.all()),
         id: session.sessionId, // v3 compaction 设计空白 2：恢复页脚会话标识（store 各后端构造时持有）
+        // 会话树批 T10 三缝：fork/switchTo 包 allows 门（决策点 7——重副作用要门），tree 只读无门直通；
+        // 三项未注入 = 不挂该口（老宿主/无头判空降级）
+        ...(input.sessionForkOut !== undefined
+          ? {
+              fork: (opts?: { atEntryId?: string }) => {
+                if (!allows("session.fork")) throw new Error(`mounts 校验：session.fork 未在声明（§5.1）`);
+                return input.sessionForkOut!(opts);
+              },
+            }
+          : {}),
+        ...(input.treeOut !== undefined
+          ? { tree: () => input.treeOut!() }
+          : {}),
+        ...(input.sessionSwitch !== undefined
+          ? {
+              switchTo: (targetId: string) => {
+                if (!allows("session.switch")) throw new Error(`mounts 校验：session.switch 未在声明（§5.1）`);
+                return input.sessionSwitch!(targetId);
+              },
+            }
+          : {}),
       },
       // ctx.tools 缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；mounts 权限位校验同 contribute:* 现成写法）
       tools: {
