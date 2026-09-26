@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { scanSessionFiles, locateSessionFile, type SessionFileEntry } from "@orosus/core";
 
 /** 会话列表条目（M4-2 B9 用户拉前，2026-09-19 走查人性化）：title 优先 session/label（首轮问答自动标题），
@@ -60,9 +61,11 @@ export function relativeTime(then: number, now = Date.now()): string {
 
 /** /sessions 列表（B9 形态）：按创建时间倒序（最新在最前）取前 10，带标题与创建时间。
  *  创建时间 = min(birthtime, mtime)——正常时 birth ≤ mtime 恒取 birth；mtime 被倒拨（迁移/测试）时
- *  取倒拨值，保持「创建早于一切修改」语义。 */
-export function listSessions(root: string): SessionListItem[] {
+ *  取倒拨值，保持「创建早于一切修改」语义。
+ *  bucket（会话树批 #17 项目内封闭）：传 = 只列当前项目桶；不传 = 全域（测试与宿主级消费）。 */
+export function listSessions(root: string, bucket?: string): SessionListItem[] {
   return scanSessionFiles(root)
+    .filter((e) => bucket === undefined || e.bucket === bucket)
     .map((e) => {
       let createdAtMs = e.mtimeMs;
       try {
@@ -78,9 +81,9 @@ export function listSessions(root: string): SessionListItem[] {
 const BOLD_CYAN = "\x1b[1;36m";
 const RESET = "\x1b[0m";
 
-/** 列表展示：`标题 · N 分钟前`，当前会话整行加粗青色（走查要求：加重/换色）。 */
-export function formatSessions(root: string, currentSessionId?: string): string {
-  const sessions = listSessions(root);
+/** 列表展示：`标题 · N 分钟前`，当前会话整行加粗青色（走查要求：加重/换色）。bucket = 当前项目桶（#17）。 */
+export function formatSessions(root: string, currentSessionId?: string, bucket?: string): string {
+  const sessions = listSessions(root, bucket);
   if (sessions.length === 0) return "（暂无会话——发送第一条消息即创建）";
   return sessions
     .map((s, i) => {
@@ -171,25 +174,27 @@ export async function pickSessionNumber(
 }
 
 /** 序号/sid → 会话 id（pick 选中或直达共用）。序号按当前列表（创建时间倒序前 10）；
- *  sid 经双层定位（不限前 10）。 */
-export function resolveTarget(target: string, root: string): string | undefined {
+ *  sid 经扫描定位（不限前 10）。bucket（#17）= 当前项目桶——他桶会话序号不可见、sid 直达落空。 */
+export function resolveTarget(target: string, root: string, bucket?: string): string | undefined {
   if (/^\d+$/.test(target)) {
     const n = Number(target);
-    const list = listSessions(root);
+    const list = listSessions(root, bucket);
     return n >= 1 && n <= list.length ? list[n - 1]!.id : undefined;
   }
-  return locateSessionFile(root, target) !== undefined ? target : undefined;
+  return locateSessionFile(root, target, bucket !== undefined ? { bucket } : undefined) !== undefined ? target : undefined;
 }
 
-/** /title 命名（M4-2 T0）：当前会话或指定会话追加 session/label。截断 200 字符（kimi 同款）。 */
+/** /title 命名（M4-2 T0）：当前会话或指定会话追加 session/label。截断 200 字符（kimi 同款）。
+ *  会话树批 T2/T5：定位带当前桶（#17）；store 的 dir 参数语义是桶 = 会话目录的父目录（dirname）——
+ *  直接喂 scan 条目 dir 会嵌套出 <桶>/<sid>/<sid>/agents/ 假会话文件。 */
 export async function setTitle(
-  root: string, currentSid: string, target: string | undefined, name: string,
+  root: string, currentSid: string, target: string | undefined, name: string, bucket?: string,
 ): Promise<{ sid: string } | undefined> {
-  const sid = target !== undefined ? (resolveTarget(target, root) ?? currentSid) : currentSid;
-  const loc = locateSessionFile(root, sid);
+  const sid = target !== undefined ? (resolveTarget(target, root, bucket) ?? currentSid) : currentSid;
+  const loc = locateSessionFile(root, sid, bucket !== undefined ? { bucket } : undefined);
   if (loc === undefined) return undefined;
   const { JsonlSessionStore } = await import("@orosus/core");
-  const store = new JsonlSessionStore({ dir: loc.dir, sessionId: sid });
+  const store = new JsonlSessionStore({ dir: dirname(loc.dir), sessionId: sid });
   await store.append("session/label", { label: name.slice(0, 200) });
   await store.close();
   return { sid };

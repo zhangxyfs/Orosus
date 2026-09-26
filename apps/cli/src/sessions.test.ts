@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listSessions, formatSessions, harnessOptionsFor, relativeTime, resolveTarget, sessionCommand, readTitle } from "./sessions.ts";
@@ -10,43 +10,57 @@ const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-sessions-"
 
 const ev = (id: string, type: string, fields: Record<string, unknown> = {}): string =>
   JSON.stringify({ v: 1, id, parentId: null, seq: 1, ts: "2026-09-01T00:00:00Z", type, ...fields });
-const sessionFile = (root: string, sid: string, lines: string[], bucket?: string, ageDays?: number): void => {
-  const target = bucket === undefined ? root : join(root, bucket);
-  mkdirSync(target, { recursive: true });
-  writeFileSync(join(target, `${sid}.jsonl`), lines.join("\n") + "\n");
+/** 新形态夹具（会话树批 T2 目录化）：<root>/<bucket>/<sid>/agents/session.jsonl。返回主文件路径。 */
+const sessionFile = (root: string, sid: string, lines: string[], bucket = "B-main", ageDays?: number): string => {
+  const agents = join(root, bucket, sid, "agents");
+  mkdirSync(agents, { recursive: true });
+  const file = join(agents, "session.jsonl");
+  writeFileSync(file, lines.join("\n") + "\n");
   if (ageDays !== undefined) {
     const t = new Date(Date.now() - ageDays * 86_400_000);
-    utimesSync(join(target, `${sid}.jsonl`), t, t);
+    utimesSync(file, t, t);
   }
+  return file;
 };
 const { setTitle } = await import("./sessions.ts");
 
 describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对时间/倒序/当前高亮/无黑话）", () => {
   it("① readTitle 三级：session/label 优先 → 首问文本兜底 → sid 兜底", () => {
     const root = fresh();
-    sessionFile(root, "s_labeled", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "问个好" }] }), ev("e3", "session/label", { label: "问候测试" })]);
-    sessionFile(root, "s_fallback", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "这是一个特别长的首问文本应该被截断到二十个字符以内才对" }] })]);
-    sessionFile(root, "s_empty", [ev("e1", "session/header")]);
-    expect(readTitle(join(root, "s_labeled.jsonl"), "s_labeled")).toBe("问候测试");
-    expect(readTitle(join(root, "s_fallback.jsonl"), "s_fallback")).toBe("这是一个特别长的首问文本应该被截断到二十");
-    expect(readTitle(join(root, "s_empty.jsonl"), "s_empty")).toBe("s_empty");
+    const f1 = sessionFile(root, "s_labeled", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "问个好" }] }), ev("e3", "session/label", { label: "问候测试" })]);
+    const f2 = sessionFile(root, "s_fallback", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "这是一个特别长的首问文本应该被截断到二十个字符以内才对" }] })]);
+    const f3 = sessionFile(root, "s_empty", [ev("e1", "session/header")]);
+    expect(readTitle(f1, "s_labeled")).toBe("问候测试");
+    expect(readTitle(f2, "s_fallback")).toBe("这是一个特别长的首问文本应该被截断到二十");
+    expect(readTitle(f3, "s_empty")).toBe("s_empty");
   });
 
-  it("② listSessions：双层可见、按创建时间倒序（最新在最前）、带标题", () => {
+  it("② listSessions：目录形态可见、按创建时间倒序（最新在最前）、带标题", () => {
     const root = fresh();
-    sessionFile(root, "s_old", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "旧会话" }] })], undefined, 5);
-    mkdirSync(join(root, "D--proj-a1b2c3d4"), { recursive: true });
-    writeFileSync(join(root, "D--proj-a1b2c3d4", "s_new.jsonl"), [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "新会话" }] }), ev("e3", "session/label", { label: "新标题" })].join("\n") + "\n");
+    sessionFile(root, "s_old", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "旧会话" }] })], "B-main", 5);
+    sessionFile(root, "s_new", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "新会话" }] }), ev("e3", "session/label", { label: "新标题" })]);
     const list = listSessions(root);
     expect(list.map((s) => s.id)).toEqual(["s_new", "s_old"]); // 最新最前（创建时间倒序）
     expect(list[0]!.title).toBe("新标题");
     expect(list[1]!.title).toBe("旧会话");
   });
 
+  it("②b 桶过滤（#17 项目内封闭）：传 bucket 只列当前桶、他桶不进列表；平铺遗留不识别", () => {
+    const root = fresh();
+    sessionFile(root, "s_mine", [ev("e1", "session/header")], "B-mine");
+    sessionFile(root, "s_other", [ev("e1", "session/header")], "B-other");
+    mkdirSync(join(root, "B-mine"), { recursive: true });
+    writeFileSync(join(root, "B-mine", "s_flat.jsonl"), "{}\n"); // 平铺遗留——拍板不识别
+    const mine = listSessions(root, "B-mine");
+    expect(mine.map((s) => s.id)).toEqual(["s_mine"]); // 他桶与平铺都不进
+    expect(formatSessions(root, "s_mine", "B-mine")).toContain("s_mine");
+    expect(listSessions(root, "B-mine").every((s) => s.bucket === "B-mine")).toBe(true);
+  });
+
   it("③ formatSessions：标题 + 相对时间；当前会话加粗青色；不再出现［平铺］等开发黑话", () => {
     const root = fresh();
     sessionFile(root, "s_cur", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "当前" }] }), ev("e3", "session/label", { label: "当前会话标题" })]);
-    sessionFile(root, "s_old", [ev("e1", "session/header")], undefined, 3);
+    sessionFile(root, "s_old", [ev("e1", "session/header")], "B-main", 3);
     const out = formatSessions(root, "s_cur");
     expect(out).toContain("当前会话标题 · 刚刚");
     expect(out).toContain("3 天前");
@@ -83,14 +97,17 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(sessionCommand("/  sessions", { sessionId: "s1" })).toEqual({ kind: "pick" });
   });
 
-  it("⑥ resolveTarget：序号按列表、sid 双层定位（不限前 10）、未命中 undefined；harnessOptionsFor resume 形状", () => {
+  it("⑥ resolveTarget：序号按列表、sid 扫描定位（不限前 10）、未命中 undefined；bucket 限定拒他桶（#17）", () => {
     const root = fresh();
     sessionFile(root, "s_a", [ev("e1", "session/header")]);
-    sessionFile(root, "s_b", [ev("e1", "session/header")], undefined, 1);
-    expect(resolveTarget("1", root)).toBe("s_a"); // 最新最前
-    expect(resolveTarget("s_b", root)).toBe("s_b");
-    expect(resolveTarget("s_nope", root)).toBeUndefined();
-    expect(resolveTarget("99", root)).toBeUndefined();
+    sessionFile(root, "s_b", [ev("e1", "session/header")], "B-main", 1);
+    sessionFile(root, "s_far", [ev("e1", "session/header")], "B-other");
+    expect(resolveTarget("1", root, "B-main")).toBe("s_a"); // 最新最前
+    expect(resolveTarget("s_b", root, "B-main")).toBe("s_b");
+    expect(resolveTarget("s_far", root, "B-main")).toBeUndefined(); // #17：他桶 sid 直达落空
+    expect(resolveTarget("s_far", root)).toBe("s_far"); // 不传桶 = 全域（宿主级消费）
+    expect(resolveTarget("s_nope", root, "B-main")).toBeUndefined();
+    expect(resolveTarget("99", root, "B-main")).toBeUndefined();
     expect(harnessOptionsFor({ kind: "resume", sessionId: "s_x" })).toEqual({ resume: { sessionId: "s_x" } });
     expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s_p" }, { parentDir: "/bucket/x" })).toEqual(
       { fork: { parentSessionId: "s_p", parentDir: "/bucket/x" } },
@@ -104,30 +121,30 @@ describe("/title 会话手动命名（M4-2 T0/B9 剩余——session/label 预�
     expect(sessionCommand("/rename", { sessionId: "s1" })).toEqual({ kind: "title" }); // 别名
   });
 
-  it("② /title 名 → setTitle 落 session/label（截断 200 字符）", async () => {
+  it("② /title 名 → setTitle 落 session/label 进会话目录原文件（截断 200 字符；盘上无嵌套假文件）", async () => {
     const root = fresh();
     sessionFile(root, "s_target", [ev("e1", "session/header")]);
-    const r = await setTitle(root, "s_target", undefined, "我的调试会话");
+    const r = await setTitle(root, "s_target", undefined, "我的调试会话", "B-main");
     expect(r).toEqual({ sid: "s_target" });
-    const lines = readFileSync(join(root, "s_target.jsonl"), "utf8").trim().split("\n");
-    expect(JSON.parse(lines[1]!)).toMatchObject({ type: "session/label", label: "我的调试会话" });
-    // 截断测试
+    const lines = readFileSync(join(root, "B-main", "s_target", "agents", "session.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(lines[lines.length - 1]!)).toMatchObject({ type: "session/label", label: "我的调试会话" });
     const long = "很长的名字".repeat(50);
-    await setTitle(root, "s_target", undefined, long);
-    const lines2 = readFileSync(join(root, "s_target.jsonl"), "utf8").trim().split("\n");
+    await setTitle(root, "s_target", undefined, long, "B-main");
+    const lines2 = readFileSync(join(root, "B-main", "s_target", "agents", "session.jsonl"), "utf8").trim().split("\n");
     const last = JSON.parse(lines2[lines2.length - 1]!);
     expect(last.label.length).toBeLessThanOrEqual(200);
+    expect(existsSync(join(root, "B-main", "s_target", "s_target"))).toBe(false); // 无嵌套假会话目录（T5 对号③钉）
   });
 
-  it("③ /title 2 名 → resolveTarget 定位第二会话追加 label", async () => {
+  it("③ /title 2 名 → resolveTarget 定位第二会话追加 label（桶内序号、落原文件）", async () => {
     const root = fresh();
-    sessionFile(root, "s_first", [ev("e1", "session/header")], undefined, 5); // 旧
+    sessionFile(root, "s_first", [ev("e1", "session/header")], "B-main", 5); // 旧
     sessionFile(root, "s_second", [ev("e1", "session/header")]); // 新
     // listSessions 倒序 → 1=s_second 2=s_first
-    const r = await setTitle(root, "s_current", "2", "指定命名");
+    const r = await setTitle(root, "s_current", "2", "指定命名", "B-main");
     expect(r).toEqual({ sid: "s_first" }); // 序号 2 = 较旧的 s_first
-    const lines = readFileSync(join(root, "s_first.jsonl"), "utf8").trim().split("\n");
-    expect(JSON.parse(lines[1]!)).toMatchObject({ type: "session/label", label: "指定命名" });
+    const lines = readFileSync(join(root, "B-main", "s_first", "agents", "session.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(lines[lines.length - 1]!)).toMatchObject({ type: "session/label", label: "指定命名" });
   });
 
   it("④ sessionCommand 解析 /title 有参形态（名 / 序号+名）；成对引号剥离（批⑦c）", () => {
@@ -147,13 +164,13 @@ describe("/title 会话手动命名（M4-2 T0/B9 剩余——session/label 预�
 
   it("⑤ 多枚 session/label → readTitle 取最后（手动 /title 覆盖自动标题——T0 走查实录回归钉）", () => {
     const root = fresh();
-    sessionFile(root, "s_multi", [
+    const f = sessionFile(root, "s_multi", [
       ev("e1", "session/header"),
       ev("e2", "user/message", { content: [{ kind: "text", text: "问" }] }),
       ev("e3", "session/label", { label: "自动标题" }),
       ev("e4", "session/label", { label: "手动命名" }),
     ]);
-    expect(readTitle(join(root, "s_multi.jsonl"), "s_multi")).toBe("手动命名");
+    expect(readTitle(f, "s_multi")).toBe("手动命名");
   });
 });
 
@@ -185,18 +202,17 @@ describe("readTitle 读取预算（M4-2.5 T2——日志调研 P5：列表不被
   it("① 无 label 无对话的超大文件 → 64 行/16KB 内退化为 sid", () => {
     const root = fresh();
     const noise = Array.from({ length: 200 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] }));
-    sessionFile(root, "s_noise", noise); // 无 label、无 user/message——现状要读完 200 行
-    expect(readTitle(join(root, "s_noise.jsonl"), "s_noise")).toBe("s_noise"); // 预算内无命中 → sid
-  });
+    const f = sessionFile(root, "s_noise", noise); // 无 label、无 user/message——现状要读完 200 行
+    expect(readTitle(f, "s_noise")).toBe("s_noise"); // 预算内无命中 → sid
+  })
   it("② 预算是硬上限不是软提示：label 越预算退 sid、预算内正常命中", () => {
     const root = fresh();
     // label 在第 100 行（预算外）也退 sid
     const withLabel = [...Array.from({ length: 100 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] })), ev("l", "session/label", { label: "百行之后" })];
-    sessionFile(root, "s_label_late", withLabel);
-    expect(readTitle(join(root, "s_label_late.jsonl"), "s_label_late")).toBe("s_label_late");
+    const f1 = sessionFile(root, "s_label_late", withLabel);
+    expect(readTitle(f1, "s_label_late")).toBe("s_label_late");
     // 对照：label 在前 64 行内 → 正常命中
-    const early = [ev("e1", "session/header"), ev("e2", "session/label", { label: "早标签" })];
-    sessionFile(root, "s_label_early", early);
-    expect(readTitle(join(root, "s_label_early.jsonl"), "s_label_early")).toBe("早标签");
+    const f2 = sessionFile(root, "s_label_early", [ev("e1", "session/header"), ev("e2", "session/label", { label: "早标签" })]);
+    expect(readTitle(f2, "s_label_early")).toBe("早标签");
   });
 });

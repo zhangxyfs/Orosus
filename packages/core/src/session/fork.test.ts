@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -252,14 +252,16 @@ describe("链式 fork 断代修复（会话树批 T1）", () => {
 
   it("④a 祖先链成环 = visited 拦截止断 + warn", async () => {
     const d = tmp();
-    // 手工构造 A ↔ B 互指环：A.parentSession=B、B.parentSession=A
+    // 手工构造 A ↔ B 互指环：A.parentSession=B、B.parentSession=A（新形态：会话目录内 agents/session.jsonl）
     const mk = (id: string, parent: string, at: string, tag: string): void => {
+      const agents = join(d, id, "agents");
+      mkdirSync(agents, { recursive: true });
       const lines = [
         JSON.stringify({ v: 1, id: `${id}-h`, parentId: null, seq: 1, ts: "t", type: "session/header", parentSession: parent }),
         JSON.stringify({ v: 1, id: `${id}-f`, parentId: `${id}-h`, seq: 2, ts: "t", type: "session/fork", sourceEntryId: at, parentSession: parent }),
         JSON.stringify({ v: 1, id: `${id}-q`, parentId: `${id}-f`, seq: 3, ts: "t", type: "user/message", content: [{ kind: "text", text: tag }] }),
       ];
-      writeFileSync(join(d, `${id}.jsonl`), lines.join("\n") + "\n", "utf8");
+      writeFileSync(join(agents, "session.jsonl"), lines.join("\n") + "\n", "utf8");
     };
     mk("sa", "sb", "sb-q", "环甲");
     mk("sb", "sa", "sa-q", "环乙");

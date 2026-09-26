@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { buildPrunePlan, isSessionsSubcommand, parsePruneFlags, runPruneSubcommand, type PruneEntry } from "./prune.ts";
 
 let dir: string | undefined;
@@ -11,7 +11,7 @@ const DAY = 86_400_000;
 const NOW = 1_800_000_000_000;
 
 const entry = (over: Partial<PruneEntry> & { id: string }): PruneEntry => ({
-  file: `/x/${over.id}.jsonl`, dir: "/x", mtimeMs: NOW - 10 * DAY, eventCount: 5, ...over,
+  file: `/x/${over.id}/agents/session.jsonl`, dir: `/x/${over.id}`, bucket: "B", mtimeMs: NOW - 10 * DAY, eventCount: 5, ...over,
 });
 
 describe("buildPrunePlan（D47 纯函数：清单+事件数+mtime → 保留/删除计划）", () => {
@@ -58,38 +58,44 @@ describe("子命令解析与装配（硬约束 1——拿掉 isSessionsSubcomman
     expect(() => parsePruneFlags(["--wat"])).toThrow();
   });
 
-  it("④ dry-run 不删文件（缺省）；--apply 删过期与空、保留最新、清空桶目录", async () => {
+  it("④ dry-run 不删文件（缺省）；--apply 删过期与空（整会话目录含 spill/）、保留最新", async () => {
     const root = fresh();
-    writeFileSync(join(root, "s_old.jsonl"), "h\nu\na\n"); // 有事件但过期
-    utimesSync(join(root, "s_old.jsonl"), new Date(NOW - 40 * DAY), new Date(NOW - 40 * DAY));
-    writeFileSync(join(root, "s_empty.jsonl"), "h\n"); // 仅 header——空
-    const bucket = "D--proj-a1b2c3d4";
-    mkdirSync(join(root, bucket));
-    writeFileSync(join(root, bucket, "s_new.jsonl"), "h\nu\na\n"); // 最新（当前会话代理）
-    utimesSync(join(root, bucket, "s_new.jsonl"), new Date(NOW - 1 * DAY), new Date(NOW - 1 * DAY));
+    // 新形态夹具（会话树批 T2 目录化）：<桶>/<sid>/agents/session.jsonl + <sid>/spill/
+    const seed = (bucket: string, sid: string, content: string, ageDays?: number): void => {
+      const file = join(root, bucket, sid, "agents", "session.jsonl");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+      mkdirSync(join(root, bucket, sid, "spill"), { recursive: true });
+      if (ageDays !== undefined) utimesSync(file, new Date(NOW - ageDays * DAY), new Date(NOW - ageDays * DAY));
+    };
+    seed("B-a", "s_old", "h\nu\na\n", 40);   // 有事件但过期
+    seed("B-a", "s_empty", "h\n");            // 仅 header——空
+    seed("B-b", "s_new", "h\nu\na\n", 1);     // 最新（当前会话代理）
     const lines: string[] = [];
     const dry = await runPruneSubcommand(["sessions", "prune"], { out: (s) => lines.push(s), root, now: NOW });
     expect(dry).toBe(0);
     expect(lines.some((l) => l.includes("dry-run"))).toBe(true);
-    expect(existsSync(join(root, "s_old.jsonl"))).toBe(true); // 未删
+    expect(existsSync(join(root, "B-a", "s_old"))).toBe(true); // 未删
     lines.length = 0;
     const code = await runPruneSubcommand(["sessions", "prune", "--apply"], { out: (s) => lines.push(s), root, now: NOW });
     expect(code).toBe(0);
-    expect(existsSync(join(root, "s_old.jsonl"))).toBe(false); // 过期删
-    expect(existsSync(join(root, "s_empty.jsonl"))).toBe(false); // 空删
-    expect(existsSync(join(root, bucket, "s_new.jsonl"))).toBe(true); // 最新不动
+    expect(existsSync(join(root, "B-a", "s_old"))).toBe(false); // 过期删——整会话目录（含 agents/ 与 spill/）
+    expect(existsSync(join(root, "B-a", "s_empty"))).toBe(false); // 空删
+    expect(existsSync(join(root, "B-b", "s_new", "agents", "session.jsonl"))).toBe(true); // 最新不动
     expect(lines.some((l) => l.includes("已删除 2"))).toBe(true);
   });
 
   it("⑤ --apply 后桶目录清空则目录一并移除（不留空壳桶）", async () => {
     const root = fresh();
-    const bucket = "D--dead-b0b0b0b0";
-    mkdirSync(join(root, bucket));
-    writeFileSync(join(root, bucket, "s_stale.jsonl"), "h\nu\na\n");
-    utimesSync(join(root, bucket, "s_stale.jsonl"), new Date(NOW - 60 * DAY), new Date(NOW - 60 * DAY));
-    writeFileSync(join(root, "s_keeper.jsonl"), "h\nu\na\n"); // 最新
-    utimesSync(join(root, "s_keeper.jsonl"), new Date(NOW - 1 * DAY), new Date(NOW - 1 * DAY));
+    const seed = (bucket: string, sid: string, ageDays: number): void => {
+      const file = join(root, bucket, sid, "agents", "session.jsonl");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "h\nu\na\n");
+      utimesSync(file, new Date(NOW - ageDays * DAY), new Date(NOW - ageDays * DAY));
+    };
+    seed("D--dead-b0b0b0b0", "s_stale", 60);
+    seed("D--live-a1b2c3d4", "s_keeper", 1); // 最新
     await runPruneSubcommand(["sessions", "prune", "--apply"], { out: () => {}, root, now: NOW });
-    expect(readdirSync(root)).toEqual(["s_keeper.jsonl"]); // 空桶目录已移除
+    expect(readdirSync(root).toSorted()).toEqual(["D--live-a1b2c3d4"]); // 空桶目录已移除
   });
 });

@@ -54,7 +54,7 @@ describe("M4-1 T6：新形状下的 fork / resume / 自修复复核", () => {
   it("② resume 旧格式（含 chunk 与旧 message）投影正常：chunk 被跳过、新旧 message 并存、链校验零问题", async () => {
     const d = fresh();
     const sid = "s_legacy";
-    mkdirSync(join(d, "sessions"), { recursive: true });
+    mkdirSync(join(d, "sessions", sid, "agents"), { recursive: true });
     const lines = [
       { v: 1, id: "e1", parentId: null, seq: 1, ts: "2026-09-01T00:00:00Z", type: "session/header", format: 1, cwd: "/old", parentSession: null },
       { v: 1, id: "e2", parentId: "e1", seq: 2, ts: "2026-09-01T00:00:01Z", type: "user/message", content: [{ kind: "text", text: "旧问" }] },
@@ -62,7 +62,7 @@ describe("M4-1 T6：新形状下的 fork / resume / 自修复复核", () => {
       { v: 1, id: "e4", parentId: "e3", seq: 4, ts: "2026-09-01T00:00:03Z", type: "assistant/message", content: [{ kind: "text", text: "旧答" }] },
       { v: 1, id: "e5", parentId: "e4", seq: 5, ts: "2026-09-01T00:00:04Z", type: "turn/end", kind: "completed" },
     ];
-    writeFileSync(join(d, "sessions", `${sid}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    writeFileSync(join(d, "sessions", sid, "agents", "session.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
     const h = await mk(d, { store: new JsonlSessionStore({ dir: join(d, "sessions"), sessionId: sid }), resume: { sessionId: sid } });
     await h.prompt("续问");
     const u = await h.usage(); // 批⑤：/usage 命令退役 → 读口

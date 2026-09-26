@@ -60,13 +60,13 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
   it("旧 header（含 moduleGraph 全列表）读取兼容：resume 不炸、不落重复 header（M4-1 T3）", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-t3-"));
     const sid = "s_legacy";
-    mkdirSync(join(dir, "sessions"), { recursive: true });
+    mkdirSync(join(dir, "sessions", sid, "agents"), { recursive: true });
     const legacy = JSON.stringify({
       v: 1, id: "e_root", parentId: null, seq: 1, ts: "2026-09-01T00:00:00.000Z", type: "session/header",
       format: 1, cwd: "/old", parentSession: null,
       moduleGraph: { active: ["provider-anthropic", "tool-fs", "tool-shell"], degraded: [] }, // 旧形状
     });
-    writeFileSync(join(dir, "sessions", `${sid}.jsonl`), `${legacy}\n`);
+    writeFileSync(join(dir, "sessions", sid, "agents", "session.jsonl"), `${legacy}\n`);
     const store = new JsonlSessionStore({ dir: join(dir, "sessions"), sessionId: sid });
     const h = await createHarness({
       store,
@@ -1021,7 +1021,7 @@ describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）"
     const { h, store } = await mkJsonl(d);
     await h.prompt("hi");
     await h.close();
-    const recs = readFileSync(join(d, "sessions", `${store.sessionId}.jsonl`), "utf8").trim().split("\n")
+    const recs = readFileSync(join(d, "sessions", store.sessionId, "agents", "session.jsonl"), "utf8").trim().split("\n")
       .map((l) => JSON.parse(l) as { type: string; seq: number });
     expect(recs[0]!.type).toBe("session/header");
     expect(recs.map((r) => r.seq)).toEqual(recs.map((_, i) => i + 1));
@@ -1043,13 +1043,13 @@ describe("临时会话零落盘（M4-1 T0/D46 止血：session/header 懒写）"
       fork: { parentSessionId: parent.sessionId },
     });
     // 即刻落盘：零 turn 子文件已存在且链完好（旧懒写断言「仅父文件」随语义推翻退役）
-    const recs = readFileSync(join(d, "sessions", `${hc.sessionId}.jsonl`), "utf8").trim().split("\n")
+    const recs = readFileSync(join(d, "sessions", hc.sessionId, "agents", "session.jsonl"), "utf8").trim().split("\n")
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(recs[0]).toMatchObject({ type: "session/header", parentSession: parent.sessionId });
     expect(recs[1]).toMatchObject({ type: "session/fork", sourceEntryId: tailId, parentSession: parent.sessionId });
     await hc.prompt("子问题");
     await hc.close();
-    const after = readFileSync(join(d, "sessions", `${hc.sessionId}.jsonl`), "utf8").trim().split("\n");
+    const after = readFileSync(join(d, "sessions", hc.sessionId, "agents", "session.jsonl"), "utf8").trim().split("\n");
     expect(after.length).toBeGreaterThan(2); // 后续事件续接在 fork 事件后
   });
 });
