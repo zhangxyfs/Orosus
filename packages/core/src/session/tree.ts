@@ -101,6 +101,27 @@ export function readSqliteHead(file: string): SessionHead | undefined {
   }
 }
 
+/** 由扫描条目构造树节点（会话树批 T9 抽出——buildSessionTree 与 TreeIndex 的重读源/纯读兜底共用）。
+ *  读法按主文件名分派（T8）：session.jsonl 文本行读 / session.sqlite 开库查询；坏文件 = undefined 跳过。 */
+export function nodeFromEntry(entry: { id: string; file: string; mtimeMs: number }): SessionTreeNode | undefined {
+  const head = entry.file.endsWith(".sqlite") ? readSqliteHead(entry.file) : readSessionHead(entry.file);
+  if (head === undefined || head.parentSession === undefined) return undefined;
+  let createdAtMs = entry.mtimeMs;
+  try {
+    const b = statSync(entry.file).birthtimeMs; // listSessions 手法：min(birth, mtime)——「创建早于一切修改」
+    if (b > 0 && Number.isFinite(b)) createdAtMs = Math.min(b, entry.mtimeMs);
+  } catch { /* mtime 回退 */ }
+  return {
+    sessionId: entry.id,
+    parentSession: head.parentSession,
+    sourceEntryId: head.sourceEntryId ?? null,
+    ...(head.label !== undefined ? { label: head.label } : {}),
+    createdAtMs,
+    updatedAtMs: entry.mtimeMs,
+    ownEvents: head.ownLines,
+  };
+}
+
 /** 构建当前项目桶的全量树快照（会话树批 T7——缝二内核半边）：扫描 + 每会话读元数据，现读现建。
  *  会话文件是唯一事实源；孤立节点（parentSession 指向的会话不在扫描集——含存量跨桶链的他桶父）
  *  原样返回不修复不剔除（树视图标记「根缺失」）。只扫传入桶（#17 项目内封闭——调用方传当前项目桶）。
@@ -108,22 +129,8 @@ export function readSqliteHead(file: string): SessionHead | undefined {
 export async function buildSessionTree(bucketDir: string): Promise<SessionTreeNode[]> {
   const nodes: SessionTreeNode[] = [];
   for (const entry of scanBucketSessions(bucketDir)) {
-    const head = entry.file.endsWith(".sqlite") ? readSqliteHead(entry.file) : readSessionHead(entry.file);
-    if (head === undefined || head.parentSession === undefined) continue;
-    let createdAtMs = entry.mtimeMs;
-    try {
-      const b = statSync(entry.file).birthtimeMs; // listSessions 手法：min(birth, mtime)——「创建早于一切修改」
-      if (b > 0 && Number.isFinite(b)) createdAtMs = Math.min(b, entry.mtimeMs);
-    } catch { /* mtime 回退 */ }
-    nodes.push({
-      sessionId: entry.id,
-      parentSession: head.parentSession,
-      sourceEntryId: head.sourceEntryId ?? null,
-      ...(head.label !== undefined ? { label: head.label } : {}),
-      createdAtMs,
-      updatedAtMs: entry.mtimeMs,
-      ownEvents: head.ownLines,
-    });
+    const node = nodeFromEntry(entry);
+    if (node !== undefined) nodes.push(node);
   }
   return nodes;
 }
