@@ -179,7 +179,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
           subagent: { agentId: id, depth, parentId, background: req.background === true, label: req.label },
         });
         return veto ?? undefined;
-      });
+      }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
 
       for await (const e of agentLoop({
         session: agentStore,
