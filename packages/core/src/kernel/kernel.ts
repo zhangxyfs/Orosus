@@ -75,6 +75,7 @@ export interface LoadModulesInput {
   sessionForkOut?: (opts?: { atEntryId?: string }) => Promise<{ sessionId: string }>;  // 会话树批 T10：h.fork 出口（mounts "session.fork" 门）
   treeOut?: () => Promise<import("@orosus/contracts/module").SessionTreeNode[]>;      // 会话树批 T10：h.tree 出口（只读无门）
   sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10：宿主切换缝（mounts "session.switch" 门）
+  subagent?: import("@orosus/contracts/module").SubagentPort;                        // M4.5 子代理批：内核派单执行口（ctx.subagent 装配，mounts "subagent" 门）——harness 闭包构造后注入；缺省不装
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
   reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
@@ -147,6 +148,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ...(input.sessionForkOut !== undefined ? { sessionForkOut: input.sessionForkOut } : {}), // 会话树批 T10
     ...(input.treeOut !== undefined ? { treeOut: input.treeOut } : {}),                       // 会话树批 T10
     ...(input.sessionSwitch !== undefined ? { sessionSwitch: input.sessionSwitch } : {}),     // 会话树批 T10
+    ...(input.subagent !== undefined ? { subagent: input.subagent } : {}),                    // M4.5 子代理批：派单执行口透传
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),

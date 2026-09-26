@@ -74,6 +74,7 @@ export interface ActivateInput {
   sessionForkOut?: (opts?: { atEntryId?: string }) => Promise<{ sessionId: string }>; // 会话树批 T10 缝一：h.fork 出口（mounts "session.fork" 门）
   treeOut?: () => Promise<import("@orosus/contracts/module").SessionTreeNode[]>;      // 会话树批 T10 缝二：h.tree 出口（只读无门）
   sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10 缝三：宿主切换缝（mounts "session.switch" 门；T11 宿主接线）
+  subagent?: import("@orosus/contracts/module").SubagentPort;                        // M4.5 子代理缝：内核派单执行口（ctx.subagent 装配，mounts "subagent" 门）；缺省不装（老宿主/无头 = 模块判空降级）
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
@@ -348,6 +349,27 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           tools.setDeferredEnabled(true);
         },
       },
+      // ctx.subagent（M4.5 子代理缝）：内核派单执行口——逐方法包 allows("subagent") 白名单校验
+      //（照 ctx.settings 缝——activate 入参接实现对象；实现不在 = undefined 判空降级，模块不贡献派活工具）
+      ...(input.subagent !== undefined
+        ? {
+            subagent: {
+              spawn: (req: import("@orosus/contracts/module").SubagentSpawnRequest, caller?: { signal?: AbortSignal }) => {
+                if (!allows("subagent")) throw new Error(`mounts 校验：subagent 未在声明（§5.1）`);
+                return input.subagent!.spawn(req, caller);
+              },
+              list: () => {
+                if (!allows("subagent")) throw new Error(`mounts 校验：subagent 未在声明（§5.1）`);
+                return input.subagent!.list();
+              },
+              stop: (id: string) => {
+                if (!allows("subagent")) throw new Error(`mounts 校验：subagent 未在声明（§5.1）`);
+                return input.subagent!.stop(id);
+              },
+            } satisfies import("@orosus/contracts/module").SubagentPort,
+          }
+        : {}),
+      // ctx.events（§6.5）：on 订阅（mounts "hook:<type>" 门）/ emit 自有命名空间
       events: {
         on: (type, listener) => {
           if (!allows(`hook:${type}`)) throw new Error(`mounts 校验：hook:${type} 未在声明（§5.1）`);
