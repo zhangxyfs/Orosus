@@ -44,6 +44,10 @@ else
     echo "  确认后：删 $(git rev-parse --git-dir)/publish-github-base 并删 $PUB 分支重来（远端需再强推一次）。" >&2
     exit 1
   fi
+  if ! git show-ref --verify --quiet "refs/heads/$PUB"; then
+    echo "✗ 有 base 记录但没有 $PUB 分支，状态不一致，先人工确认再跑。" >&2
+    exit 1
+  fi
   range=("$base..$src_tip")
 fi
 
@@ -55,6 +59,10 @@ fi
 
 # sha → 净化后 sha 的映射表；父提交不在表里就中止——宁死不把旧历史链回来
 declare -A mapped=()
+if [ -n "$base" ]; then
+  # 增量模式：上轮同步点映射到现有 public 头，本轮首个提交的父链才接得上
+  mapped[$base]=$(git rev-parse "$PUB")
+fi
 tip=""
 kept=0
 total=${#commits[@]}

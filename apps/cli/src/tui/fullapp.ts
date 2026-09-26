@@ -204,7 +204,7 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 }
 
 
-const PERM_LABEL: Record<string, string> = { "ask-always": "Always Ask", "ask-risky": "Ask When Needed", never: "Never Ask" }; // 英文档名（F5 十轮⑤ 用户拍板）
+const PERM_LABEL: Record<string, string> = { "ask-always": "每次都询问", "ask-risky": "需要时候询问", never: "从不询问" }; // 显示名（2026-09-26 拍板改中文——F5 十轮⑤ 英文档名由本次取代）
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
 

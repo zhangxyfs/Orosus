@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { resolveShell, type ShellSpec } from "./shell.ts";
 
 /** 杀整个进程树（win32 taskkill /T /F——shell:true 的孙进程不吃 child.kill；POSIX detached 进程组 -pid 一发全灭）。
  *  从 index.ts 平移（作业注册表与前台 bash 共用）。 */
@@ -58,8 +59,10 @@ const notificationText = (job: BgJob): string =>
 export class JobRegistry {
   private jobs = new Map<string, BgJob>();
   readonly dir: string;
-  constructor(dir: string) {
+  private readonly shell: ShellSpec;
+  constructor(dir: string, shell: ShellSpec = resolveShell()) {
     this.dir = dir; // strip-only 不支持 constructor 参数属性语法（在案坑）——显式声明+赋值
+    this.shell = shell; // 前台/后台共用同一壳结论（走查批 2026-09-26——后台 bash 作业与前台同方言）
   }
 
   /** 启动作业：立即返回登记项（不等命令完成——输出经文件描述符直接落盘，内存零累积）。 */
@@ -68,12 +71,19 @@ export class JobRegistry {
     const id = `bg-${randomUUID().slice(0, 8)}`;
     const file = join(this.dir, `${id}.output`);
     const fd = openSync(file, "a");
-    const child = spawn(command, {
-      shell: true,
-      ...(cwd !== undefined ? { cwd } : {}),
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
+    const child =
+      this.shell.kind === "bash"
+        ? spawn(this.shell.bashPath, ["-c", command], {
+            ...(cwd !== undefined ? { cwd } : {}),
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: false, // win32 专用分支——taskkill /T 管整树
+          })
+        : spawn(command, {
+            shell: true,
+            ...(cwd !== undefined ? { cwd } : {}),
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: process.platform !== "win32",
+          });
     const job: BgJob = { id, child, file, command, startedAt: Date.now(), notified: false };
     child.stdout.on("data", (d: Buffer) => writeSync(fd, d));
     child.stderr.on("data", (d: Buffer) => writeSync(fd, d));

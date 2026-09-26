@@ -64,10 +64,10 @@ export function createPermissionHandler(opts: {
       return `用户规则（优先于模式基线，配置序首条命中即止）：\n${lines.join("\n")}`;
     }
     const modes: { label: string; value: PermissionMode }[] = [
-      // 英文档名（F5 十轮⑤ 用户拍板，与全屏菜单同源）：档名 + 短解 + 值
-      { label: "Always Ask——每次工具调用都确认（ask-always）", value: "ask-always" },
-      { label: "Ask When Needed——仅危险操作确认（ask-risky，默认）", value: "ask-risky" },
-      { label: "Never Ask——全部自动放行，批准自动处理（never）", value: "never" },
+      // 档名 + 短解 + 值（2026-09-26 拍板显示名改中文，与全屏菜单同源——F5 十轮⑤ 英文档名由本次取代）
+      { label: "每次都询问——每次工具调用都确认", value: "ask-always" },
+      { label: "需要时候询问——仅危险操作确认", value: "ask-risky" },
+      { label: "从不询问——批准自动处理，就算有问题也是模型自行判断", value: "never" },
     ];
     // 直参直达（F5 用户实测：全屏二级菜单已选定模式，无参菜单再弹一次 = 三级弹窗）——
     // `/permission ask-always` 跳过 choose 直接生效；无参才进菜单

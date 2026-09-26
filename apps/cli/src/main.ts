@@ -1127,11 +1127,11 @@ const reportEffortSwitch = (before: string | undefined): void => {
 };
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
-/** 权限三档元数据（F5 十轮⑤ 用户拍板：英文档名 + 短解释 + 详细解释——菜单/芯片同源）。 */
+/** 权限三档元数据（F5 十轮⑤ 拍板：档名 + 短解释 + 详细解释——菜单/芯片同源；2026-09-26 拍板显示名改中文，内部档名不变）。 */
 const PERM_META: Record<string, { label: string; desc: string; long: string }> = {
-	"ask-always": { label: "Always Ask", desc: "每次工具调用都确认", long: "最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。" },
-	"ask-risky": { label: "Ask When Needed", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
-	never: { label: "Never Ask", desc: "全部自动放行", long: "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。" },
+	"ask-always": { label: "每次都询问", desc: "每次工具调用都确认", long: "最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。" },
+	"ask-risky": { label: "需要时候询问", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
+	never: { label: "从不询问", desc: "全自动，有问题模型自行判断", long: "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；就算有问题也是模型自行判断，不会向你提问。只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。" },
 };
 let panelCache: PanelData | undefined;
 
@@ -1233,13 +1233,14 @@ const moduleCards = (): PanelData["cards"] => {
 const SLASH_ITEMS: SlashItem[] = [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
 	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」：所有工具批准自动处理（含危险命令；手写 deny 规则仍拦）。等同于 /permission never。回答进行中也可执行，本轮生效。" },
-	{ name: "/auto", desc: "一键日常默认档", long: "权限模式直达「Ask When Needed」（只读放行、危险确认）。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
+	// 2026-09-26 拍板：/auto 文案按「从不询问」档名表述（D8 显示名），语义 = 就算有问题也是模型自行判断；行为换绑 never 由本批 T2 落地（D1 拍板），沿革见 ROADMAP 走查三批与 m3b 方案
+	{ name: "/auto", desc: "从不询问模式", long: "从不打断你，一切运行并自动决定——就算有问题也是模型自行判断。" },
 	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
-		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：Always Ask 全确认 / Ask When Needed 危险才确认 / Never Ask 全放行。", children: [...PERM_CYCLE], childMeta: PERM_META,
+		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},
 	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
