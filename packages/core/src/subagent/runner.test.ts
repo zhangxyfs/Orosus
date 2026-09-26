@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Chunk } from "@orosus/contracts/provider";
+import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
+import { providerSlotKey } from "@orosus/contracts/provider";
 import { defineTool } from "@orosus/contracts/tool";
 import type { ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
-import { fakeModule, fakeProviderModule } from "@orosus/testing";
+import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { InMemorySessionStore } from "../session/memory.ts";
 import { createHarness } from "../index.ts";
+import { isSpawnClassTool, spawnAllowedAtDepth } from "./runner.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -16,6 +18,10 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const hermetic = (d: string) => ({ userFile: join(d, "no-user.toml"), projectFile: join(d, "no-proj.toml"), env: {} });
 
 const textChunk = (text: string): Chunk[] => [{ type: "text/delta", text }, { type: "finish", kind: "stop" }];
+const toolCallChunk = (callId: string, name: string): Chunk[] => [
+  { type: "toolcall/argumentsDelta", callId, name, argumentsDelta: "{}" },
+  { type: "finish", kind: "stop" },
+];
 
 let port: SubagentPort | undefined;
 /** 消费者模块：声明 mounts ["subagent"]，把内核缝捕获进测试作用域。 */
@@ -23,6 +29,11 @@ const consumer = (): ModuleDefinition => fakeModule("consumer", {
   mounts: ["subagent"],
   activate(ctx) { port = ctx.subagent; },
 });
+
+/** 捕获型 provider 模块（占 "fake" 槽）：requests 收集全部请求——子代理的工具面从这里断言。 */
+let lastRequests: ProviderRequest[] = [];
+const providerModuleOf = (name: string, stream: StreamFn): ModuleDefinition =>
+  fakeModule(`provider-${name}`, { activate(ctx) { ctx.provide(providerSlotKey(name), stream); } });
 
 interface SetupOpts {
   script?: Chunk[][];
@@ -33,12 +44,14 @@ const setup = async (opts: SetupOpts = {}) => {
   dir = mkdtempSync(join(tmpdir(), "orosus-subagent-"));
   const userFile = join(dir, "user.toml");
   if (opts.configToml !== undefined) writeFileSync(userFile, opts.configToml, "utf8");
+  const provider = fakeProvider(opts.script ?? [textChunk("子代理结论")]);
+  lastRequests = provider.requests;
   const h = await createHarness({
     store: new InMemorySessionStore(),
     sessionsDir: join(dir, "sessions"),
     diagDir: dir,
     spillDir: join(dir, "spill"),
-    modules: [fakeProviderModule("fake", opts.script ?? [textChunk("子代理结论")]), fakeProviderModule("fake2", [textChunk("二号模型结论")]), consumer(), ...(opts.extraModules ?? [])],
+    modules: [providerModuleOf("fake", provider.stream), fakeProviderModule("fake2", [textChunk("二号模型结论")]), consumer(), ...(opts.extraModules ?? [])],
     config: { ...hermetic(dir), userFile, cliOverrides: { model: "fake/m" } },
   });
   return h;
@@ -156,5 +169,81 @@ describe("子代理内核缝 T1（开子会话 + 跑循环 + 取结论 + 8 位�
     expect(await modelOf2({ label: "跟父", prompt: "a" })).toBe("m"); // 父 = cliOverrides fake/m
     expect(await modelOf2({ label: "工种声明", prompt: "b", model: "fake2/m2" })).toBe("m2");
     await h2.close();
+  });
+});
+
+describe("子代理 T2（工具过滤：按工种减 + 到顶剥 + 双层门控）", () => {
+  const mkTool = (name: string, onRun?: () => void, result = "ok") =>
+    defineTool({
+      name, description: name, parameters: z.object({}),
+      resolveExecution: () => Promise.resolve({
+        accesses: [], approvalRule: name,
+        execute: () => { onRun?.(); return Promise.resolve({ output: result, isError: false }); },
+      }),
+    });
+
+  it("⑤ 工种过滤：allowedTools 只留白名单（未知名静默无效——只能减不能加）；disallowedTools 再减", async () => {
+    const h = await setup({
+      extraModules: [
+        fakeModule("echo", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(mkTool("echo__hi")); } }),
+        fakeModule("gate", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(mkTool("gate__wait")); } }),
+      ],
+    });
+    await port!.spawn({ label: "白名单", prompt: "go", allowedTools: ["echo__hi", "nope__x"] });
+    expect(lastRequests[0]!.tools.map((t) => t.name)).toEqual(["echo__hi"]); // nope__x 静默无效
+    await port!.spawn({ label: "黑名单", prompt: "go2", disallowedTools: ["echo__hi"] });
+    expect(lastRequests.at(-1)!.tools.map((t) => t.name)).toEqual(["gate__wait"]);
+    await h.close();
+  });
+
+  it("⑥ 到顶剥（双层门控同一函数）：子代理面含派活类工具，孙代理面剥净；亲缘 header 挂父代理编号；谓词两态", async () => {
+    expect(spawnAllowedAtDepth(1)).toBe(true);
+    expect(spawnAllowedAtDepth(2)).toBe(false);
+    expect(isSpawnClassTool("tool-subagent__spawn")).toBe(true);
+    expect(isSpawnClassTool("tool-fs__read")).toBe(false);
+
+    let grandId: string | undefined;
+    let grandConclusion = "";
+    const fakeSpawnModule = fakeModule("tool-subagent", { // 假派活类工具（T6 前占位）——注册面到顶剥的对象
+      mounts: ["contribute:tool"],
+      activate(ctx) { ctx.contribute.tool(mkTool("tool-subagent__spawn", undefined, "spawned")); },
+    });
+    const spawner = fakeModule("spawner", { // 从子代理循环内派孙代理（深度自证走 ALS）
+      mounts: ["contribute:tool", "subagent"],
+      activate(ctx) {
+        const p = ctx.subagent!;
+        ctx.contribute.tool(defineTool({
+          name: "spawner__go", description: "派孙", parameters: z.object({}),
+          resolveExecution: () => Promise.resolve({
+            accesses: [], approvalRule: "spawner__go",
+            execute: () => {
+              const r = p.spawn({ label: "孙代理", prompt: "孙代任务" }) as Promise<SubagentOutcome>;
+              return r.then((out) => { grandId = out.id; grandConclusion = out.conclusion; return { output: `孙代理 ${out.id}：${out.conclusion}`, isError: false }; });
+            },
+          }),
+        }));
+      },
+    });
+    const h = await setup({
+      script: [toolCallChunk("c1", "spawner__go"), textChunk("父代结论")],
+      extraModules: [fakeSpawnModule, spawner],
+    });
+    const out = (await port!.spawn({ label: "父代", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(out.conclusion).toBe("父代结论");
+    expect(grandId).toMatch(/^[0-9a-f]{8}$/);
+    expect(grandConclusion).toBe("父代结论"); // 孙代理跑完取末条文本（脚本耗尽重复末条）
+    // 子代理（depth 1）工具面：含派活类 + spawner；孙代理（depth 2）面：派活类剥净
+    const parentFace = lastRequests[0]!.tools.map((t) => t.name);
+    expect(parentFace).toContain("tool-subagent__spawn");
+    expect(parentFace).toContain("spawner__go");
+    const grandFace = lastRequests.filter((r) => !r.tools.some((t) => t.name === "tool-subagent__spawn")).map((r) => r.tools.map((t) => t.name)).at(-1);
+    expect(grandFace).toBeDefined();
+    expect(grandFace).not.toContain("tool-subagent__spawn");
+    expect(grandFace).toContain("spawner__go"); // 只剥派活类——孙代理干活能力完整（决策 4）
+    // 亲缘：孙代理会话文件 header.parentSession = 父代理编号（决策 19 同册同理）
+    const grandHeader = eventsOf(agentFile(h, grandId!))[0]!;
+    expect(grandHeader.parentSession).toBe(`agents_${out.id}`);
+    await h.close();
   });
 });
