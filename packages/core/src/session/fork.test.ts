@@ -6,7 +6,7 @@ import type { Chunk } from "@orosus/contracts/provider";
 import { fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { JsonlSessionStore } from "./jsonl.ts";
 import { repairFile } from "./jsonl.ts";
-import { ForkedSessionStore, verifyChain } from "./fork.ts";
+import { ForkedSessionStore, openSessionView, verifyChain } from "./fork.ts";
 import { InMemorySessionStore } from "./memory.ts";
 import { createHarness } from "../index.ts";
 import { deriveMessages } from "../loop/convert.ts";
@@ -171,5 +171,155 @@ describe("fork/resume（M3 T6，D41）", () => {
     // 修复后投影合法：deriveMessages 无孤儿、无缺对
     expect(verifyChain(repaired as never).filter((i) => i.includes("tool"))).toEqual([]);
     expect(deriveMessages(repaired as never).some((m) => m.role === "toolResult")).toBe(true);
+  });
+});
+
+describe("链式 fork 断代修复（会话树批 T1）", () => {
+  /** 种一个根会话：header + 一问。返回 { id, tail }（tail = 自己段最后事件 id，作子层分叉点）。 */
+  const seedRoot = async (d: string, tag: string): Promise<{ id: string; tail: string }> => {
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: null });
+    const q = await s.append("user/message", { content: [{ kind: "text", text: tag }] });
+    await s.flush();
+    const id = s.sessionId;
+    await s.close();
+    return { id, tail: q.id };
+  };
+
+  /** 种一个 fork 子体文件：header{parentSession} + session/fork{sourceEntryId} + 一问。 */
+  const seedForkChild = async (d: string, parentId: string, atEntryId: string, tag: string): Promise<{ id: string; tail: string }> => {
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: parentId });
+    await s.append("session/fork", { sourceEntryId: atEntryId, parentSession: parentId });
+    const q = await s.append("user/message", { content: [{ kind: "text", text: tag }] });
+    await s.flush();
+    const id = s.sessionId;
+    await s.close();
+    return { id, tail: q.id };
+  };
+
+  const makeJsonl = (sessionId: string, bucket: string): JsonlSessionStore => new JsonlSessionStore({ dir: bucket, sessionId });
+  const sameBucketLocate = (d: string) => (sid: string) => (sid === "s-missing" ? undefined : { bucket: d });
+
+  it("① 孙代投影含祖代前缀——B.all() = R 段 + A 段 + B 段，逐 id 断言（回归钉）", async () => {
+    const d = tmp();
+    const root = await seedRoot(d, "祖代问");
+    const a = await seedForkChild(d, root.id, root.tail, "子代问");
+    const b = await seedForkChild(d, a.id, a.tail, "孙代问");
+    const view = await openSessionView({ sessionId: b.id, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d) });
+    const all = await view.store.all();
+    expect(all.map((e) => (e.content as { text?: string }[] | undefined)?.[0]?.text ?? e.type)).toEqual([
+      "session/header", "祖代问",           // R 段（2）
+      "session/header", "session/fork", "子代问", // A 段（3）
+      "session/header", "session/fork", "孙代问", // B 段（3）
+    ]);
+    expect(view.chain).toEqual([root.id, a.id, b.id]); // 自上而下祖先链
+    await view.store.close();
+  });
+
+  it("② 四代链投影四段齐——最深层的视图含全部祖先段", async () => {
+    const d = tmp();
+    const r = await seedRoot(d, "一代");
+    const a = await seedForkChild(d, r.id, r.tail, "二代");
+    const b = await seedForkChild(d, a.id, a.tail, "三代");
+    const c = await seedForkChild(d, b.id, b.tail, "四代");
+    const view = await openSessionView({ sessionId: c.id, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d) });
+    const all = await view.store.all();
+    expect(all.filter((e) => e.type === "user/message")).toHaveLength(4);
+    expect(view.chain).toEqual([r.id, a.id, b.id, c.id]);
+    await view.store.close();
+  });
+
+  it("③ 祖先文件缺失 = 就地截断（最近可得段）+ warn 报告缺口", async () => {
+    const d = tmp();
+    const root = await seedRoot(d, "祖代问");
+    await seedForkChild(d, root.id, root.tail, "子代问");
+    // B 的父指向不存在的 s-missing——locate 落空 → 截断
+    const b = await seedForkChild(d, "s-missing", "e-void", "孙代问");
+    const warns: string[] = [];
+    const view = await openSessionView({
+      sessionId: b.id, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d),
+      sink: { warn: (code) => warns.push(code) },
+    });
+    const all = await view.store.all();
+    expect(all.map((e) => (e.content as { text?: string }[] | undefined)?.[0]?.text ?? e.type)).toEqual([
+      "session/header", "session/fork", "孙代问", // 只剩 B 自己段
+    ]);
+    expect(view.chain).toEqual([b.id]);
+    expect(warns).toContain("session.fork-parent-missing");
+    await view.store.close();
+  });
+
+  it("④a 祖先链成环 = visited 拦截止断 + warn", async () => {
+    const d = tmp();
+    // 手工构造 A ↔ B 互指环：A.parentSession=B、B.parentSession=A
+    const mk = (id: string, parent: string, at: string, tag: string): void => {
+      const lines = [
+        JSON.stringify({ v: 1, id: `${id}-h`, parentId: null, seq: 1, ts: "t", type: "session/header", parentSession: parent }),
+        JSON.stringify({ v: 1, id: `${id}-f`, parentId: `${id}-h`, seq: 2, ts: "t", type: "session/fork", sourceEntryId: at, parentSession: parent }),
+        JSON.stringify({ v: 1, id: `${id}-q`, parentId: `${id}-f`, seq: 3, ts: "t", type: "user/message", content: [{ kind: "text", text: tag }] }),
+      ];
+      writeFileSync(join(d, `${id}.jsonl`), lines.join("\n") + "\n", "utf8");
+    };
+    mk("sa", "sb", "sb-q", "环甲");
+    mk("sb", "sa", "sa-q", "环乙");
+    const warns: string[] = [];
+    const view = await openSessionView({
+      sessionId: "sa", bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d),
+      sink: { warn: (code) => warns.push(code) },
+    });
+    const all = await view.store.all();
+    expect(all.filter((e) => e.type === "user/message").map((e) => (e.content as { text: string }[])[0]!.text).length).toBeLessThanOrEqual(2); // 截断——不无限展开
+    expect(warns.some((c) => c === "session.fork-chain-truncated")).toBe(true);
+    await view.store.close();
+  });
+
+  it("④b 祖先链深超 32 = 就地截断 + warn（最近 32 层可用）", async () => {
+    const d = tmp();
+    const r = await seedRoot(d, "顶");
+    let prev = r;
+    for (let i = 0; i < 34; i++) prev = await seedForkChild(d, prev.id, prev.tail, `层${i}`);
+    const warns: string[] = [];
+    const view = await openSessionView({
+      sessionId: prev.id, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d),
+      sink: { warn: (code) => warns.push(code) },
+    });
+    expect(warns.some((c) => c === "session.fork-chain-truncated")).toBe(true);
+    // 深度上限 32：视图含 32 层（最深 32 个祖先段 + …）——链总长 35，截去最顶几层
+    expect(view.chain.length).toBe(33); // 自身 + 32 代祖先
+    await view.store.close();
+  });
+
+  it("⑤ 非 fork 会话原样返回裸 store（不包复合存储）", async () => {
+    const d = tmp();
+    const root = await seedRoot(d, "根问");
+    const view = await openSessionView({ sessionId: root.id, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d) });
+    expect(view.store).toBeInstanceOf(JsonlSessionStore);
+    expect(view.store).not.toBeInstanceOf(ForkedSessionStore);
+    expect(view.chain).toEqual([root.id]);
+    await view.store.close();
+  });
+
+  it("⑥ harness 端到端：fork 自「fork 子体」→ 请求投影含祖辈对话（现状 bug 的回归钉）", async () => {
+    const d = tmp();
+    const root = await seedRoot(d, "祖代问");
+    const a = await seedForkChild(d, root.id, root.tail, "子代问");
+    const fp = fakeProvider(script);
+    const h = await createHarness({
+      cwd: d,
+      fork: { parentSessionId: a.id },
+      sessionsDir: d,
+      diagDir: d,
+      spillDir: join(d, "spill"),
+      modules: [{ ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) }],
+      config: { userFile: join(d, "u.toml"), projectFile: join(d, "p.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+      discovery: { userDir: join(d, "m"), projectDir: join(d, "pm"), trustFile: join(d, "t.json") },
+      secretsFile: join(d, "s.env"),
+    });
+    await h.prompt("孙代新问");
+    const texts = JSON.stringify(fp.requests[0]!.messages);
+    expect(texts).toContain("祖代问"); // 断代修复主断言：祖辈前缀不再丢
+    expect(texts).toContain("子代问"); // 父自己段照常在
+    await h.close();
   });
 });

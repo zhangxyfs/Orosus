@@ -6,9 +6,10 @@ import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contrac
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./session/jsonl.ts";
 import { SqliteSessionStore } from "./session/sqlite.ts";
-import { ForkedSessionStore, verifyChain } from "./session/fork.ts";
+import { ForkedSessionStore, openSessionView, verifyChain } from "./session/fork.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
+import { locateSessionBucket } from "./session/dir.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
@@ -35,6 +36,7 @@ export interface HarnessOptions {
   cwd?: string;
   store?: SessionStore;
   sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
+  sessionsRoot?: string;                    // 会话根目录（会话树批 T1）：fork 祖先链跨桶定位兜底用（locateSessionBucket 全根扫描）；#17 封闭后新链祖先恒同桶，只为存量跨桶链只读兼容；缺省 = 只走同桶快路径
   diagDir?: string;
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
@@ -225,9 +227,20 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   } else if (options.resume !== undefined) {
     baseStore = makeStore(options.resume.sessionId);
   } else if (options.fork !== undefined) {
+    // 会话树批 T1 断代修复：父视图经 openSessionView 递归拼装——父若是 fork 子体，其投影含祖辈段
+    //（旧实现平铺打开父自己那份文件，孙代丢祖辈前缀）。parentDir 缺省同桶（REPL /fork）；跨桶父由宿主定位后填入（D46）。
+    const forkBucket = options.fork.parentDir ?? sessionsDir;
+    const parentView = await openSessionView({
+      sessionId: options.fork.parentSessionId,
+      bucket: forkBucket,
+      makeStore,
+      locate: (sid) => {
+        const b = locateSessionBucket(options.sessionsRoot, sid, forkBucket);
+        return b === undefined ? undefined : { bucket: b };
+      },
+    });
     baseStore = new ForkedSessionStore({
-      // 父会话定位（T1/D46）：parentDir 缺省同桶（REPL /fork 同会话目录）；跨桶/平铺父由宿主经 locateSessionFile 定位后填入
-      parent: makeStore(options.fork.parentSessionId, options.fork.parentDir ?? sessionsDir),
+      parent: parentView.store,
       ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
       own: makeStore(),
     });

@@ -312,6 +312,7 @@ const createSession = async (extra: { fork?: { parentSessionId: string; atEntryI
     host: hostInfo,             // m5 T9 读面：ctx.host 直挂无门
     autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
     sessionsDir: extra.sessionsDir ?? activeDir,
+    sessionsRoot, // 会话树批 T1：fork 祖先链跨桶定位兜底（存量跨桶链只读兼容；新链恒同桶走快路径）
     ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
     ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
     config: {

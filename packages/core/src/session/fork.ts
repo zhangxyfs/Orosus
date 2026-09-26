@@ -43,6 +43,53 @@ export class ForkedSessionStore implements SessionStore {
   }
 }
 
+/** 祖先链深度上限（会话树批 T1）：超限就地截断——防御性降级优于崩溃（同款宽松降级哲学见 all() 的 atEntryId 注释）。 */
+const FORK_CHAIN_MAX_DEPTH = 32;
+
+/** 打开「会话的完整视图」（会话树批 T1——链式 fork 断代修复）：目标会话若是 fork 子体，递归拼装
+ *  「祖先链投影 + 自身段」。祖先按 header.parentSession 逐级上溯（每层经 locate 定位所在桶——同桶链
+ *  hint 快路径、跨桶存量链全根扫描兜底），分叉点取该层 session/fork.sourceEntryId（fork 即刻落盘保证
+ *  恒在自己文件前两行）；深度上限 32 + 已访问集合防环（超限/成环就地截断并 warn）。祖先文件找不到 =
+ *  就地截断（只用最近可得的段）——链缺口由 verifyChain 报告，调用方看到的是「最近可得的完整投影」。
+ *  async 原因：读祖辈元数据须等 store.all()（jsonl 构造期全读、all() 出内存镜像）。 */
+export async function openSessionView(opts: {
+  /** 目标会话 id（顶层由调用方保证存在——不存在时 all() 为空、按裸 store 返回，父前缀为空，与旧语义一致）。 */
+  sessionId: string;
+  /** 目标会话所在桶目录（store 构造的 dir 参数语义是桶，D46）。 */
+  bucket: string;
+  makeStore: (sessionId: string, bucket: string) => SessionStore;
+  /** 祖先定位：返回祖先所在桶；找不到 undefined = 截断（通常 = dir.ts locateSessionBucket 包一层）。 */
+  locate: (sessionId: string) => { bucket: string } | undefined;
+  sink?: { warn: (code: string, msg: string, data?: Record<string, unknown>) => void };
+}): Promise<{ store: SessionStore; chain: string[] }> {
+  const chain: string[] = []; // 自上而下祖先 id 链（诊断日志用）
+  const visited = new Set<string>();
+  const openFrom = async (sessionId: string, bucket: string, depth: number): Promise<SessionStore> => {
+    const store = opts.makeStore(sessionId, bucket);
+    const own = await store.all();
+    const header = own.find((e) => e.type === "session/header");
+    const forkEvent = own.find((e) => e.type === "session/fork");
+    chain.unshift(sessionId);
+    const parentId = (header as { parentSession?: unknown } | undefined)?.parentSession;
+    if (header === undefined || parentId === null || parentId === undefined || forkEvent === undefined) return store; // 非子体：裸 store 原样返回
+    const parent = String(parentId);
+    if (depth >= FORK_CHAIN_MAX_DEPTH || visited.has(parent)) {
+      opts.sink?.warn("session.fork-chain-truncated", depth >= FORK_CHAIN_MAX_DEPTH ? `祖先链深超 ${FORK_CHAIN_MAX_DEPTH}，就地截断` : "祖先链成环，就地截断", { sessionId, parentSession: parent });
+      return store;
+    }
+    visited.add(sessionId);
+    const parentLoc = opts.locate(parent);
+    if (parentLoc === undefined) {
+      opts.sink?.warn("session.fork-parent-missing", "祖代会话文件找不到，就地截断（最近可得的段）", { sessionId, parentSession: parent });
+      return store;
+    }
+    const parentView = await openFrom(parent, parentLoc.bucket, depth + 1);
+    const at = (forkEvent as { sourceEntryId?: unknown }).sourceEntryId;
+    return new ForkedSessionStore({ parent: parentView, ...(typeof at === "string" ? { atEntryId: at } : {}), own: store });
+  };
+  return { store: await openFrom(opts.sessionId, opts.bucket, 0), chain };
+}
+
 /** 读侧自修复 pass（§6.1，D41）：parentId 链断裂 / seq 非单调 / 孤儿 tool/result / 未闭合 tool/call
  *  ——返回问题描述清单（调用方 sink.warn 逐条诊断；可自动修复的撕裂尾部归 repairFile）。 */
 export function verifyChain(events: SessionEvent[]): string[] {

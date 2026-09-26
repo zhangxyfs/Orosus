@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** 会话目录按项目分桶（D46）：cwd 编码为安全目录名——非 [A-Za-z0-9._-] 一律替换为 "-"，
@@ -49,4 +49,18 @@ export function scanSessionFiles(root: string): SessionFileEntry[] {
 /** 定位既有会话（双层）——resume/fork 跨桶定位 sid 的统一入口；未找到 undefined（调用方决定报错口径）。 */
 export function locateSessionFile(root: string, sessionId: string): SessionFileEntry | undefined {
   return scanSessionFiles(root).find((e) => e.id === sessionId);
+}
+
+/** 会话主文件是否存在于该桶（会话树批 T1——同桶快路径判据；路径形态随目录化批演进，T3 后改会话目录内 agents/）。 */
+export function sessionFileExists(bucket: string, sessionId: string): boolean {
+  return existsSync(join(bucket, `${sessionId}.jsonl`)) || existsSync(join(bucket, `${sessionId}.sqlite`));
+}
+
+/** 祖先定位（会话树批 T1 断代修复）：hintBucket 命中直返（同桶链快路径——免全根扫描）；否则全根扫描兜底
+ *  （存量跨桶链只读兼容）。返回桶目录路径；找不到 undefined。平铺形态下 scan 条目 dir 即桶——目录化批（T2/T5）改 dirname。 */
+export function locateSessionBucket(root: string | undefined, sessionId: string, hintBucket?: string): string | undefined {
+  if (hintBucket !== undefined && sessionFileExists(hintBucket, sessionId)) return hintBucket;
+  if (root === undefined) return undefined;
+  const loc = locateSessionFile(root, sessionId);
+  return loc === undefined ? undefined : loc.dir;
 }
