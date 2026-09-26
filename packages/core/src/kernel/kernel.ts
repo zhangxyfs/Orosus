@@ -72,6 +72,9 @@ export interface LoadModulesInput {
   commandUi?: CommandUi;   // 宿主交互 UI（D35 M3/T2：ctx.ui 注入，审批询问消费）
   settings?: import("@orosus/contracts/module").SettingsService;  // m5 T9：设置服务写面（ctx.settings 装配，mounts "settings" 门）
   host?: import("@orosus/contracts/module").HostInfo;              // m5 T9：宿主状态读面（ctx.host 直挂无门）
+  sessionForkOut?: (opts?: { atEntryId?: string }) => Promise<{ sessionId: string }>;  // 会话树批 T10：h.fork 出口（mounts "session.fork" 门）
+  treeOut?: () => Promise<import("@orosus/contracts/module").SessionTreeNode[]>;      // 会话树批 T10：h.tree 出口（只读无门）
+  sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10：宿主切换缝（mounts "session.switch" 门）
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
   reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
@@ -141,6 +144,9 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ...(input.commandUi !== undefined ? { commandUi: input.commandUi } : {}),
     ...(input.settings !== undefined ? { settings: input.settings } : {}), // m5 T9
     ...(input.host !== undefined ? { host: input.host } : {}),             // m5 T9
+    ...(input.sessionForkOut !== undefined ? { sessionForkOut: input.sessionForkOut } : {}), // 会话树批 T10
+    ...(input.treeOut !== undefined ? { treeOut: input.treeOut } : {}),                       // 会话树批 T10
+    ...(input.sessionSwitch !== undefined ? { sessionSwitch: input.sessionSwitch } : {}),     // 会话树批 T10
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),

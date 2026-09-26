@@ -39,6 +39,7 @@ export interface HarnessOptions {
   sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
   sessionsRoot?: string;                    // 会话根目录（会话树批 T1）：fork 祖先链跨桶定位兜底用（locateSessionBucket 全根扫描）；#17 封闭后新链祖先恒同桶，只为存量跨桶链只读兼容；缺省 = 只走同桶快路径
   treeIndexFile?: string;                   // 会话树批 T9：树索引库落点（缺省 ~/.orosus/db/session-tree.sqlite——索引是缓存可删可重建）；测试密封注入 tmp
+  sessionSwitch?: (sessionId: string) => Promise<boolean>; // 会话树批 T10/T11 缝三：宿主切换缝（CLI 注入 switchTo 链路 + 桶闸；立即返回语义——决策点 9）；缺省不装（ctx.session.switchTo = undefined）
   diagDir?: string;
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
@@ -334,6 +335,38 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   };
   const spillDirUsed = options.spillDir ?? join(sessionsDir, store.sessionId, "spill");
   const llmHolder: { impl?: LlmPort } = {}; // D39/T4：loadModules 后装配——Unchanged 模块的旧闭包经同一 holder 读到新解析
+  // 会话树批 T6/T10：三缝内核半边提取为独立函数——harness 返回对象与 ctx.session 装配（loadModules
+  // 转发）共用同一实现。graph 是 loadModules 的返回值、闭包捕获 let 变量（调用期读最新值）——activate
+  // 期调 fork 会拿 undefined，与 llm「运行期调」同纪律（activate 期 provider 可能未装配同款）。
+  const sessionForkFn = async (forkOpts?: { atEntryId?: string }): Promise<{ sessionId: string }> => {
+    const events = await store.all();
+    const at = forkOpts?.atEntryId ?? events[events.length - 1]?.id;
+    if (at === undefined || !events.some((e) => e.id === at)) {
+      throw new Error(`fork 分叉点不在当前投影内：${String(forkOpts?.atEntryId ?? "（投影为空，无缺省分叉点）")}`);
+    }
+    const own = makeStore();
+    try {
+      await own.append(LOG_TYPES.sessionHeader, {
+        format: 1,
+        cwd: options.cwd ?? process.cwd(),
+        parentSession: store.sessionId,
+        moduleSummary: { // 照 ensureHeader 现口径（三计数）
+          active: graph.records.filter((r) => r.state === "active").length,
+          failed: graph.records.filter((r) => r.state === "failed").length,
+          discovered: graph.records.filter((r) => r.state === "discovered").length,
+        },
+      });
+      await own.append(LOG_TYPES.sessionFork, { sourceEntryId: at, parentSession: store.sessionId });
+      await own.flush();
+      return { sessionId: own.sessionId };
+    } finally {
+      await own.close();
+    }
+  };
+  const treeFn = (): Promise<import("@orosus/contracts/module").SessionTreeNode[]> => {
+    treeIndexHolder.index ??= new TreeIndex({ file: options.treeIndexFile ?? join(orosusHome(), "db", "session-tree.sqlite") });
+    return treeIndexHolder.index.refresh(options.sessionsRoot ?? dirname(sessionsDir), { bucket: basename(sessionsDir) });
+  };
   let graph = await loadModules({
     defs,
     cli: cliInput,
@@ -344,8 +377,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     cwd: options.cwd ?? process.cwd(),
     commandUi,
     llm: llmHolder,
+    sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
+    treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
     ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
     ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
+    ...(options.sessionSwitch !== undefined ? { sessionSwitch: options.sessionSwitch } : {}), // 会话树批 T10/T11：宿主切换缝
     ...(blocked.length > 0 ? { blocked } : {}),
   });
 
@@ -930,45 +966,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await store.flush();
     },
 
-    // 会话树批 T6：落盘式分叉出口——独立 own store 写 header + session/fork 即刻落盘，全程不触碰当前活
-    // store（不能拿 ForkedSessionStore 包活 store——它的 close() 会连父一起关，把活会话关了）
-    async fork(forkOpts?: { atEntryId?: string }) {
-      const events = await store.all();
-      const at = forkOpts?.atEntryId ?? events[events.length - 1]?.id;
-      if (at === undefined || !events.some((e) => e.id === at)) {
-        throw new Error(`fork 分叉点不在当前投影内：${String(forkOpts?.atEntryId ?? "（投影为空，无缺省分叉点）")}`);
-      }
-      const own = makeStore();
-      try {
-        await own.append(LOG_TYPES.sessionHeader, {
-          format: 1,
-          cwd: options.cwd ?? process.cwd(),
-          parentSession: store.sessionId,
-          moduleSummary: { // 照 ensureHeader 现口径（三计数）
-            active: graph.records.filter((r) => r.state === "active").length,
-            failed: graph.records.filter((r) => r.state === "failed").length,
-            discovered: graph.records.filter((r) => r.state === "discovered").length,
-          },
-        });
-        await own.append(LOG_TYPES.sessionFork, { sourceEntryId: at, parentSession: store.sessionId });
-        await own.flush();
-        return { sessionId: own.sessionId };
-      } finally {
-        await own.close();
-      }
-    },
+    // 会话树批 T6/T10：落盘式分叉出口（实现提取为 sessionForkFn——与 ctx.session.fork 装配共用）
+    fork: sessionForkFn,
 
     // 宿主日志口（T4/S10）：createLogger 每次新建实例无妨——写盘队列挂在 sink 闭包上，多 logger 天然共享
     log(code: string, msg: string, data?: Record<string, unknown>) {
       createLogger(sink, "host").info(code, msg, data);
     },
 
-    // 会话树批 T7/T9：树快照出口——走索引缓存路径（~/.orosus/db/session-tree.sqlite：mtime+size 增量
-    // 刷新、坏库删重建、node:sqlite 不可用降级纯读）；#17 索引全域维护、查询按当前项目桶过滤
-    tree() {
-      treeIndexHolder.index ??= new TreeIndex({ file: options.treeIndexFile ?? join(orosusHome(), "db", "session-tree.sqlite") });
-      return treeIndexHolder.index.refresh(options.sessionsRoot ?? dirname(sessionsDir), { bucket: basename(sessionsDir) });
-    },
+    // 会话树批 T7/T9/T10：树快照出口（实现提取为 treeFn——与 ctx.session.tree 装配共用；索引缓存路径）
+    tree: treeFn,
 
     async reload() {
       if (closed) throw new Error("harness 已关闭");
