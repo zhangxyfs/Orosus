@@ -301,4 +301,39 @@ describe("read 缺省窗口 + mtime 去重（M4-2.5 T0——日志体积调研 P
     expect(r.output).toContain("2→y");
     expect(r.output).not.toContain("file_unchanged");
   });
+
+  it("㉓ 写前比对（M4.5 T7②/决策 24④）：读→他改→写被拦要求重读；mtime 漂移内容未变→放行；写后连续写不拦；edit 同拦", async () => {
+    writeFileSync(join(dir, "guard.txt"), "v1\nline2\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const read = tools[0]!;   // tool-fs__read
+    const write = tools[1]!;  // tool-fs__write
+    const edit = tools[2]!;   // tool-fs__edit
+    await run(read, { path: "guard.txt" }); // 模型读过（全量）
+
+    // ① 读后被别人改 → 写被拦（要求重读）
+    writeFileSync(join(dir, "guard.txt"), "别人改过的内容\nline2\n");
+    utimesSync(join(dir, "guard.txt"), new Date(Date.now() + 10_000), new Date(Date.now() + 10_000)); // 强制 mtime 前移（不赌时序）
+    const blocked = await run(write, { path: "guard.txt", content: "按旧印象覆盖" });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.output).toContain("读取后被修改过");
+    const blockedEdit = await run(edit, { path: "guard.txt", edits: [{ oldText: "line2", newText: "x" }] });
+    expect(blockedEdit.isError).toBe(true); // edit 同拦（模型侧读记录为准，edit 自带现读不豁免）
+
+    // ② 重读后写 → 放行；随后连续写（write→edit）不被自己的写拦
+    await run(read, { path: "guard.txt" });
+    const ok = await run(write, { path: "guard.txt", content: "新内容\ntail\n" });
+    expect(ok.isError).toBe(false);
+    const chain = await run(edit, { path: "guard.txt", edits: [{ oldText: "tail", newText: "尾" }] });
+    expect(chain.isError).toBe(false);
+
+    // ③ Windows mtime 漂移但内容没变（全量读过回退内容比对）→ 放行
+    utimesSync(join(dir, "guard.txt"), new Date(Date.now() + 20_000), new Date(Date.now() + 20_000));
+    const drift = await run(write, { path: "guard.txt", content: "漂移后照写\n" });
+    expect(drift.isError).toBe(false);
+
+    // ④ 从没读过的文件直接写（新建）→ 不拦
+    const fresh = await run(write, { path: "brand-new.txt", content: "新建\n" });
+    expect(fresh.isError).toBe(false);
+  });
 });
