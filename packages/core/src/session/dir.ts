@@ -12,12 +12,14 @@ export function encodeCwd(cwd: string): string {
 }
 
 /** 扫描条目（会话树批 T2 目录化）：id = 会话目录名、file = agents/ 内主文件、dir = 会话目录本身
- *  （要桶路径 = dirname(dir)——store 构造的 dir 参数语义是桶，D46）、bucket = 桶目录名。 */
+ *  （要桶路径 = dirname(dir)——store 构造的 dir 参数语义是桶，D46）、bucket = 桶目录名。
+ *  size = 主文件字节数（T9 索引 mtime+size 增量判据）。 */
 export interface SessionFileEntry {
   id: string;
   file: string;
   dir: string;
   mtimeMs: number;
+  size: number;
   bucket: string;
 }
 
@@ -39,7 +41,7 @@ export function scanBucketSessions(bucketDir: string, bucket?: string): SessionF
     let st;
     try { st = statSync(file); } catch { continue; }
     if (!st.isFile()) continue;
-    out.push({ id: sid.name, file, dir: join(bucketDir, sid.name), mtimeMs: st.mtimeMs, bucket: bucketName });
+    out.push({ id: sid.name, file, dir: join(bucketDir, sid.name), mtimeMs: st.mtimeMs, size: st.size, bucket: bucketName });
   }
   return out;
 }

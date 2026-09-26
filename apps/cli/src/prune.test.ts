@@ -11,7 +11,7 @@ const DAY = 86_400_000;
 const NOW = 1_800_000_000_000;
 
 const entry = (over: Partial<PruneEntry> & { id: string }): PruneEntry => ({
-  file: `/x/${over.id}/agents/session.jsonl`, dir: `/x/${over.id}`, bucket: "B", mtimeMs: NOW - 10 * DAY, eventCount: 5, ...over,
+  file: `/x/${over.id}/agents/session.jsonl`, dir: `/x/${over.id}`, bucket: "B", mtimeMs: NOW - 10 * DAY, size: 100, eventCount: 5, ...over,
 });
 
 describe("buildPrunePlan（D47 纯函数：清单+事件数+mtime → 保留/删除计划）", () => {

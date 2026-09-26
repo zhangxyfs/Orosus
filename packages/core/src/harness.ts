@@ -1,5 +1,5 @@
 import { orosusHome } from "@orosus/contracts/home";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
@@ -10,7 +10,7 @@ import { ForkedSessionStore, openSessionView, verifyChain } from "./session/fork
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
-import { buildSessionTree } from "./session/tree.ts";
+import { TreeIndex } from "./session/treeindex.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
@@ -38,6 +38,7 @@ export interface HarnessOptions {
   store?: SessionStore;
   sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
   sessionsRoot?: string;                    // 会话根目录（会话树批 T1）：fork 祖先链跨桶定位兜底用（locateSessionBucket 全根扫描）；#17 封闭后新链祖先恒同桶，只为存量跨桶链只读兼容；缺省 = 只走同桶快路径
+  treeIndexFile?: string;                   // 会话树批 T9：树索引库落点（缺省 ~/.orosus/db/session-tree.sqlite——索引是缓存可删可重建）；测试密封注入 tmp
   diagDir?: string;
   spillDir?: string;
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
@@ -258,6 +259,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     baseStore = makeStore();
   }
   const channel = new Channel<SessionEvent>();
+  const treeIndexHolder: { index?: TreeIndex } = {}; // 会话树批 T9：树索引懒持有（首次 tree() 建实例——避免构造期碰 ~/.orosus/db/）
   const live = new LiveChannel(); // 实时旁路（T4/D45）：Chunk 级内存投递，断连即弃
   const store = forwardingStore(baseStore, channel);
 
@@ -961,9 +963,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       createLogger(sink, "host").info(code, msg, data);
     },
 
-    // 会话树批 T7：树快照出口——一行委托 buildSessionTree（当前项目桶 = sessionsDir；#17 只扫本桶）
+    // 会话树批 T7/T9：树快照出口——走索引缓存路径（~/.orosus/db/session-tree.sqlite：mtime+size 增量
+    // 刷新、坏库删重建、node:sqlite 不可用降级纯读）；#17 索引全域维护、查询按当前项目桶过滤
     tree() {
-      return buildSessionTree(sessionsDir);
+      treeIndexHolder.index ??= new TreeIndex({ file: options.treeIndexFile ?? join(orosusHome(), "db", "session-tree.sqlite") });
+      return treeIndexHolder.index.refresh(options.sessionsRoot ?? dirname(sessionsDir), { bucket: basename(sessionsDir) });
     },
 
     async reload() {
