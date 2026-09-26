@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSessionTree, readSessionHead } from "./tree.ts";
+import { sqliteAvailable } from "./sqlite.ts";
 
 let dir: string | undefined;
 const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-tree-")));
@@ -83,5 +84,46 @@ describe("buildSessionTree（T7——当前项目桶全量树快照，jsonl 读�
     expect(await buildSessionTree(d)).toEqual([]);
     const empty = fresh();
     expect(await buildSessionTree(empty)).toEqual([]);
+  });
+});
+
+describe("sqlite 后端树快照读法（会话树批 T8——混合后端同树共览）", () => {
+  it.skipIf(!sqliteAvailable())("① sqlite 会话进树且字段与 jsonl 同构（header/fork/label/COUNT 四查）", async () => {
+    const d = fresh();
+    const { SqliteSessionStore } = await import("./sqlite.ts");
+    const root = new SqliteSessionStore({ dir: d, sessionId: "s_root" });
+    await root.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await root.append("user/message", { content: [{ kind: "text", text: "根问" }] });
+    await root.close();
+    const kid = new SqliteSessionStore({ dir: d, sessionId: "s_kid" });
+    await kid.append("session/header", { format: 1, cwd: d, parentSession: "s_root" });
+    await kid.append("session/fork", { sourceEntryId: "e-x", parentSession: "s_root" });
+    await kid.append("session/label", { label: "子枝名" });
+    await kid.close();
+    const nodes = await buildSessionTree(d);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.find((n) => n.sessionId === "s_root")).toMatchObject({ parentSession: null, sourceEntryId: null, ownEvents: 2 });
+    expect(nodes.find((n) => n.sessionId === "s_kid")).toMatchObject({ parentSession: "s_root", sourceEntryId: "e-x", label: "子枝名", ownEvents: 3 });
+  });
+
+  it.skipIf(!sqliteAvailable())("② 混合后端目录同树共览（jsonl 根 + sqlite 子同桶一树）", async () => {
+    const d = fresh();
+    const { SqliteSessionStore } = await import("./sqlite.ts");
+    seed(d, "s_j", [ev("e1", "session/header", { parentSession: null })]);
+    const sq = new SqliteSessionStore({ dir: d, sessionId: "s_q" });
+    await sq.append("session/header", { format: 1, cwd: d, parentSession: "s_j" });
+    await sq.close();
+    const nodes = await buildSessionTree(d);
+    expect(nodes.map((n) => n.sessionId).sort()).toEqual(["s_j", "s_q"]);
+  });
+
+  it.skipIf(!sqliteAvailable())("③ 损坏库跳过不炸整体（垃圾 .sqlite 文件 → 该节点缺席、他节点照常）", async () => {
+    const d = fresh();
+    const agents = join(d, "s_bad", "agents");
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, "session.sqlite"), "this is not a sqlite database at all\n");
+    seed(d, "s_ok", [ev("e1", "session/header", { parentSession: null })]);
+    const nodes = await buildSessionTree(d);
+    expect(nodes.map((n) => n.sessionId)).toEqual(["s_ok"]); // 坏库节点跳过、好节点照常
   });
 });

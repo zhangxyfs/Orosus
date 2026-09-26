@@ -24,7 +24,8 @@ export function setSqliteProbeForTest(p?: () => boolean): void {
   probe = p ?? defaultProbe;
 }
 
-function openDatabase(file: string): import("node:sqlite").DatabaseSync {
+/** 开库（会话树批 T8 起树快照读法复用——tree.ts 按主文件名分派到这里）。 */
+export function openDatabase(file: string): import("node:sqlite").DatabaseSync {
   const require = createRequire(import.meta.url);
   const mod = require("node:sqlite") as NodeSqlite;
   return new mod.DatabaseSync(file);
