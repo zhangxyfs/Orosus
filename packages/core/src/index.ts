@@ -8,8 +8,10 @@ export { InMemorySessionStore } from "./session/memory.ts";
 export { JsonlSessionStore, hardeningNote } from "./session/jsonl.ts";
 export { SqliteSessionStore, sqliteAvailable } from "./session/sqlite.ts";
 export type { SessionEvent, SessionStore } from "./session/types.ts";
-export { encodeCwd, scanSessionFiles, locateSessionFile } from "./session/dir.ts";
+export { encodeCwd, scanSessionFiles, scanBucketSessions, locateSessionFile } from "./session/dir.ts";
 export type { SessionFileEntry } from "./session/dir.ts";
+// 会话树批 T7：树快照统一件（宿主列表 readTitle 薄封装同源）——预算读件与树构建落 core
+export { buildSessionTree, readSessionHead, type SessionHead } from "./session/tree.ts";
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
 export { verifyChain } from "./session/fork.ts"; // 宿主面（M4-1 T6 复核用）：复合投影链校验
 export { repairFile } from "./session/jsonl.ts"; // 宿主面（M4-1 T6 复核用）：撕裂尾修复

@@ -10,6 +10,7 @@ import { ForkedSessionStore, openSessionView, verifyChain } from "./session/fork
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
+import { buildSessionTree } from "./session/tree.ts";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
@@ -95,6 +96,9 @@ export interface Harness {
    *  全量父前缀」宽松降级只属于盘上链重建，不属于活 API）。新会话日后被打开时，祖先链视图由
    *  openSessionView 递归重建（T1）。 */
   fork(opts?: { atEntryId?: string }): Promise<{ sessionId: string }>;
+  /** 当前项目桶全量树快照（会话树批 T7，缝二内核半边）：扫描 + 预算读元数据，现读现建——
+   *  委托 buildSessionTree（jsonl 读法 T7 / sqlite T8 / 索引缓存 T9）。孤立节点原样返回。 */
+  tree(): Promise<import("@orosus/contracts/module").SessionTreeNode[]>;
   /** 设置服务后端（m5 T9 口子四）：换模型——/model 同源核心动作（覆盖槽 + 写盘 + 档位跟随重解析），单一写者不双写；busy 期可调、下一轮生效。 */
   setModel(qualified: string): Promise<void>;
   /** 设置服务后端（m5 T9）：切思考档位——/effort 同源；"auto" = 回目录默认档；非法档名抛错。 */
@@ -955,6 +959,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // 宿主日志口（T4/S10）：createLogger 每次新建实例无妨——写盘队列挂在 sink 闭包上，多 logger 天然共享
     log(code: string, msg: string, data?: Record<string, unknown>) {
       createLogger(sink, "host").info(code, msg, data);
+    },
+
+    // 会话树批 T7：树快照出口——一行委托 buildSessionTree（当前项目桶 = sessionsDir；#17 只扫本桶）
+    tree() {
+      return buildSessionTree(sessionsDir);
     },
 
     async reload() {
