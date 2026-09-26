@@ -484,6 +484,34 @@ export interface HostInfo {
   current(): Promise<HostSnapshot>;
 }
 
+/** 树节点快照（ctx.session.tree 的出货形态）——会话文件是唯一事实源，现读现建；索引库（若有）只是
+ *  加速缓存，可删可重建。
+ *
+ * @example
+ * ```ts
+ * const nodes = await ctx.session.tree?.();
+ * for (const n of nodes ?? []) {
+ *   ctx.log.info("my.tree", "节点", { id: n.sessionId, parent: n.parentSession, own: n.ownEvents });
+ * }
+ * ```
+ */
+export interface SessionTreeNode {
+  /** 会话 id（= 会话目录名）。 */
+  sessionId: string;
+  /** 父会话 id；根会话 = null。 */
+  parentSession: string | null;
+  /** 分叉点：本会话继承父投影截至该事件（含）；根 = null。 */
+  sourceEntryId: string | null;
+  /** 会话名（/title 或 fork 自动命名）；未命名 = undefined——显示侧自定（如「新会话」）。 */
+  label?: string | undefined;
+  /** 创建时间（毫秒时间戳）。 */
+  createdAtMs: number;
+  /** 最后更新时间（毫秒时间戳）。 */
+  updatedAtMs: number;
+  /** 自身文件的事件条数（不含继承前缀——前缀体量看 sourceEntryId 在父投影中的位置）。 */
+  ownEvents: number;
+}
+
 /** 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。
  *
  * @example
@@ -640,7 +668,7 @@ export interface ModuleContext<C = unknown> {
      */
     card?(spec: CardSpec): Disposer;
   };
-  /** 会话面（append 落日志、messages 冷投影读口、id 会话标识）。 */
+  /** 会话面（append 落日志、messages 冷投影读口、id 会话标识；m5 会话树批增 fork/tree/switchTo 三可选口）。 */
   readonly session: {
     /** 写会话日志扩展事件；type 须已在 logEvents 声明（白名单）。
      *
@@ -658,6 +686,46 @@ export interface ModuleContext<C = unknown> {
     /** 会话标识（v3 compaction 设计空白 2——恢复页脚标注「完整历史在哪个会话」；模型用 id +
      *  ~/.orosus/sessions/ 目录指引经 Glob 定位日志文件）。可选——拿不到就省略编号只留目录指引。 */
     readonly id?: string;
+    /** 建分支（落盘式，m5 会话树缝一）：以当前会话为父开一个新会话文件（header + session/fork 即刻写盘），
+     *  不切换——当前会话原地不动，切换走 switchTo。可选——老宿主/无头 = undefined 判空降级。
+     *  mounts 门："session.fork"（声明了 mounts 的模块须列该位）。
+     *
+     *  @param opts - 可选项。
+     *  @param opts.atEntryId - 分叉点事件 id（继承父投影截至该事件含）；缺省 = 当前投影最后一条。
+     *  @returns 新会话 id（之后可用 switchTo 跳入、tree 里看到）。
+     *  @throws atEntryId 不在当前投影 = 抛错不写盘。
+     *
+     *  @example
+     *  ```ts
+     *  const { sessionId } = await ctx.session.fork?.();  // 在当前位置分一枝
+     *  ```
+     */
+    fork?(opts?: { atEntryId?: string }): Promise<{ sessionId: string }>;
+    /** 当前项目桶的全量树快照（m5 会话树缝二，只读无 mounts 门）：每个会话一个节点（父子关系 +
+     *  分叉点 + 标题 + 时间 + 自身事件数）。只扫当前项目桶（终端在当前目录打开 = 只看当前项目的会话）；
+     *  现读现建，孤立环与断链按原样返回（不修复不剔除）。可选——老宿主/无头 = undefined。
+     *
+     *  @example
+     *  ```ts
+     *  const nodes = await ctx.session.tree?.() ?? [];
+     *  const roots = nodes.filter((n) => n.parentSession === null);
+     *  ```
+     */
+    tree?(): Promise<SessionTreeNode[]>;
+    /** 请求宿主切换到目标会话（m5 会话树缝三，异步完成）——切换 = 销毁当前 harness（调用模块自身随旧
+     *  会话一起销毁，dispose 链照走）并打开目标会话。**立即返回**：返回后不得再使用自身任何句柄
+     *  （等切换完再返回 = 永远等不到，自己先被销毁）。mounts 门："session.switch"。可选——老宿主/无头
+     *  = undefined 判空降级；只认当前项目桶的会话（跨项目拒绝）。
+     *
+     *  @param sessionId - 目标会话 id（通常来自 tree() 的节点）。
+     *  @returns true = 已受理（切换异步完成中）；false = 拒绝（会话不存在或不在当前项目桶）。
+     *
+     *  @example
+     *  ```ts
+     *  const ok = await ctx.session.switchTo?.(targetId);  // 返回后本模块可能随时被销毁
+     *  ```
+     */
+    switchTo?(sessionId: string): Promise<boolean>;
   };
   /** 工具注册表缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；对标宿主活写口 h.setLabel 先例：
    *  contracts 加缝 + kernel 接线 + mounts 权限位校验）。模块声明 mounts "tools.reveal"/"tools.list" 后可用

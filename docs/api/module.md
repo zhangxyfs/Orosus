@@ -470,6 +470,35 @@ ctx.contribute.card({ area: "top", order: 60, title: "状态",
   get widgets() { return snap ? [{ id: "m", kind: "kv", label: "模型", value: snap!.model }] : []; } });
 ```
 
+## SessionTreeNode（接口）
+
+树节点快照（ctx.session.tree 的出货形态）——会话文件是唯一事实源，现读现建；索引库（若有）只是
+加速缓存，可删可重建。
+
+```ts
+export interface SessionTreeNode { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `sessionId` | `sessionId: string` | 会话 id（= 会话目录名）。 |
+| `parentSession` | `parentSession: string \| null` | 父会话 id；根会话 = null。 |
+| `sourceEntryId` | `sourceEntryId: string \| null` | 分叉点：本会话继承父投影截至该事件（含）；根 = null。 |
+| `label?` | `label?: string \| undefined` | 会话名（/title 或 fork 自动命名）；未命名 = undefined——显示侧自定（如「新会话」）。 |
+| `createdAtMs` | `createdAtMs: number` | 创建时间（毫秒时间戳）。 |
+| `updatedAtMs` | `updatedAtMs: number` | 最后更新时间（毫秒时间戳）。 |
+| `ownEvents` | `ownEvents: number` | 自身文件的事件条数（不含继承前缀——前缀体量看 sourceEntryId 在父投影中的位置）。 |
+**示例**
+
+```ts
+const nodes = await ctx.session.tree?.();
+for (const n of nodes ?? []) {
+  ctx.log.info("my.tree", "节点", { id: n.sessionId, parent: n.parentSession, own: n.ownEvents });
+}
+```
+
 ## ModuleContext（接口）
 
 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。
@@ -490,7 +519,7 @@ export interface ModuleContext<C = unknown> { … }
 | `services` | `readonly services: {` | 能力解析（硬依赖 get／可选 getOptional——迟到绑定，判空降级）。 |
 | `provide` | `provide(key: string, impl: unknown): void` | 挂能力实现（单所有者槽）。 |
 | `contribute` | `readonly contribute: {` | 贡献面（工具/命令/提示词段/配置修饰/卡片——都返 Disposer；声明了 mounts 须列 "contribute:*" 位）。 |
-| `session` | `readonly session: {` | 会话面（append 落日志、messages 冷投影读口、id 会话标识）。 |
+| `session` | `readonly session: {` | 会话面（append 落日志、messages 冷投影读口、id 会话标识；m5 会话树批增 fork/tree/switchTo 三可选口）。 |
 | `tools` | `readonly tools: {` | 工具注册表缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；对标宿主活写口 h.setLabel 先例： contracts 加缝 + kernel 接线 + mounts 权限位校验）。模块声明 mounts "tools.reveal"/"tools.list" 后可用 （allows() 模式同 contribute:*；声明了 mounts 而未列位 → 调用即抛）。 |
 | `events` | `readonly events: {` | 事件总线（on 订阅 / emit 自有命名空间；声明了 mounts 须列 "hook:<事件>" 与 "emit" 位）。 |
 | `settings?` | `readonly settings?: SettingsService \| undefined` | 宿主设置服务（m5 口子四，可选直挂）：全屏宿主提供 SettingsService；老宿主/无头 = undefined， 模块判空降级。声明了 mounts 的模块须列 "settings" 才可调（allows 白名单）。 |

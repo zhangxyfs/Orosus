@@ -9,6 +9,7 @@ import type {
   HostSnapshot,
   ModuleContext,
   PopupLayout,
+  SessionTreeNode,
   WidgetSpec,
 } from "./index.ts";
 
@@ -210,5 +211,66 @@ describe("m5 UI 扩展契约面（T0——四口子一次开全）", () => {
     expect(Object.keys(snapshot).toSorted()).toEqual(
       ["contextWindow", "effort", "model", "modelOverridden", "permission", "preset", "sessionLabel", "sidebar", "theme", "usage"],
     );
+  });
+});
+
+describe("会话树契约面（T0——三缝一次开全）", () => {
+  it("ctx.session 三缝可选口缺省 undefined——老宿主只装 append/messages/id 即合法", () => {
+    const session = {
+      append: () => {},
+      messages: async () => [],
+      id: "s1",
+    } as unknown as ModuleContext["session"];
+    expect(session.fork).toBeUndefined();
+    expect(session.tree).toBeUndefined();
+    expect(session.switchTo).toBeUndefined();
+  });
+
+  it("SessionTreeNode 七字段齐——label 可缺省 undefined（未命名会话由显示侧自定）", () => {
+    const node: SessionTreeNode = {
+      sessionId: "s2",
+      parentSession: "s1",
+      sourceEntryId: "e9",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      ownEvents: 3,
+    };
+    expect(node.label).toBeUndefined();
+    const root: SessionTreeNode = {
+      sessionId: "s1",
+      parentSession: null,
+      sourceEntryId: null,
+      label: "根会话",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      ownEvents: 10,
+    };
+    expect(root.parentSession).toBeNull();
+    expect(root.sourceEntryId).toBeNull();
+  });
+
+  it("三缝装上后可调——fork 出 sessionId、tree 出节点清单、switchTo 出 boolean", async () => {
+    const nodes: SessionTreeNode[] = [
+      { sessionId: "s1", parentSession: null, sourceEntryId: null, label: "根", createdAtMs: 1, updatedAtMs: 2, ownEvents: 4 },
+      { sessionId: "s2", parentSession: "s1", sourceEntryId: "e2", createdAtMs: 3, updatedAtMs: 4, ownEvents: 2 },
+    ];
+    const calls: string[] = [];
+    const session = {
+      append: () => {},
+      fork: async (opts?: { atEntryId?: string }) => {
+        calls.push(`fork:${opts?.atEntryId ?? "尾"}`);
+        return { sessionId: "s3" };
+      },
+      tree: async () => nodes,
+      switchTo: async (sid: string) => {
+        calls.push(`switch:${sid}`);
+        return true;
+      },
+    } as unknown as ModuleContext["session"];
+    expect(await session.fork!()).toEqual({ sessionId: "s3" });
+    expect(await session.fork!({ atEntryId: "e2" })).toEqual({ sessionId: "s3" });
+    expect(await session.tree!()).toHaveLength(2);
+    expect(await session.switchTo!("s2")).toBe(true);
+    expect(calls).toEqual(["fork:尾", "fork:e2", "switch:s2"]);
   });
 });
