@@ -10,6 +10,7 @@ import { ForkedSessionStore, openSessionView, verifyChain } from "./fork.ts";
 import { InMemorySessionStore } from "./memory.ts";
 import { createHarness } from "../index.ts";
 import { deriveMessages } from "../loop/convert.ts";
+import { scanBucketSessions } from "./dir.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -322,6 +323,80 @@ describe("链式 fork 断代修复（会话树批 T1）", () => {
     const texts = JSON.stringify(fp.requests[0]!.messages);
     expect(texts).toContain("祖代问"); // 断代修复主断言：祖辈前缀不再丢
     expect(texts).toContain("子代问"); // 父自己段照常在
+    await h.close();
+  });
+});
+
+describe("h.fork 落盘式分叉出口（会话树批 T6——缝一内核半边）", () => {
+  const mkHarness = async (d: string) => {
+    const fp = fakeProvider(script);
+    const h = await createHarness({
+      cwd: d,
+      sessionsDir: d,
+      diagDir: d,
+      spillDir: join(d, "spill"),
+      modules: [{ ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) }],
+      config: { userFile: join(d, "u.toml"), projectFile: join(d, "p.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+      discovery: { userDir: join(d, "m"), projectDir: join(d, "pm"), trustFile: join(d, "t.json") },
+      secretsFile: join(d, "s.env"),
+    });
+    return { h, fp };
+  };
+  const readOwn = async (d: string, sid: string) =>
+    (await new JsonlSessionStore({ dir: d, sessionId: sid }).all());
+
+  it("① fork 落盘不激活：当前会话文件不变、新文件前两行 = header{parentSession} + session/fork{sourceEntryId=缺省尾}", async () => {
+    const d = tmp();
+    const { h, fp } = await mkHarness(d);
+    await h.prompt("第一问");
+    const before = await readOwn(d, h.sessionId);
+    const { sessionId } = await h.fork();
+    expect(sessionId).not.toBe(h.sessionId);
+    const after = await readOwn(d, h.sessionId);
+    expect(after).toHaveLength(before.length); // 当前会话原地不动
+    const own = await readOwn(d, sessionId);
+    expect(own[0]).toMatchObject({ type: "session/header", parentSession: h.sessionId });
+    expect(own[1]).toMatchObject({ type: "session/fork", sourceEntryId: before[before.length - 1]!.id, parentSession: h.sessionId });
+    expect(fp.requests).toHaveLength(1); // fork 不发请求、不切换
+    await h.close();
+  });
+
+  it("② 指定 atEntryId = 分叉点；连续 fork 两次出两枝（互不影响）", async () => {
+    const d = tmp();
+    const { h } = await mkHarness(d);
+    await h.prompt("问一");
+    const events = await h.history();
+    const cut = events.find((e) => e.type === "user/message")!.id;
+    const b1 = await h.fork({ atEntryId: cut });
+    const b2 = await h.fork(); // 缺省 = 投影尾
+    const o1 = await readOwn(d, b1.sessionId);
+    const o2 = await readOwn(d, b2.sessionId);
+    expect(o1[1]).toMatchObject({ type: "session/fork", sourceEntryId: cut });
+    expect(o2[1]!.sourceEntryId).not.toBe(cut);
+    expect(b1.sessionId).not.toBe(b2.sessionId);
+    await h.close();
+  });
+
+  it("③ 新会话在扫描面可见（/sessions 能列出——落盘即树成员）", async () => {
+    const d = tmp();
+    const { h } = await mkHarness(d);
+    await h.prompt("问一");
+    const { sessionId } = await h.fork();
+    // scanSessionFiles(root) 的 root = 桶父目录；这里 sessionsDir=d 本身是桶——直接扫桶
+        const ids = scanBucketSessions(d).map((e) => e.id);
+    expect(ids).toContain(h.sessionId);
+    expect(ids).toContain(sessionId);
+    await h.close();
+  });
+
+  it("④ atEntryId 不在当前投影 = 抛错且不写盘（防 fork.ts 宽松降级静默变全量前缀——T12 b 键兜底）", async () => {
+    const d = tmp();
+    const { h } = await mkHarness(d);
+    await h.prompt("问一");
+    const before = scanBucketSessions(d).length;
+    await expect(h.fork({ atEntryId: "e-nonexistent" })).rejects.toThrow(/分叉点/);
+    const after = scanBucketSessions(d).length;
+    expect(after).toBe(before); // 抛错路径零写盘
     await h.close();
   });
 });
