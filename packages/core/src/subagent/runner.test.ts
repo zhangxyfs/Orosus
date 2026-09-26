@@ -257,7 +257,7 @@ describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () =>
     await h.prompt("你好");
     const history = await h.history();
     const at = history[history.length - 1]!.id;
-    const out = (await port!.spawn({ label: "带历史", prompt: "照上面聊的做 X", forkFromEntryId: at })) as SubagentOutcome;
+    const out = (await port!.spawn({ label: "带历史", prompt: "照上面聊的做 X", forkFrom: at })) as SubagentOutcome;
     expect(out.status).toBe("completed");
     expect(out.conclusion).toBe("子代理结论");
     // 子代理首个请求（requests[0] = 主对话那轮）：messages = 主对话历史 + 任务书末位
@@ -276,7 +276,7 @@ describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () =>
 
   it("⑪ forkFrom 分叉点不在主会话投影内 → spawn 抛错（活 API 严校验，不走盘上链重建的宽松降级）", async () => {
     const h = await setup();
-    await expect(port!.spawn({ label: "坏分叉", prompt: "x", forkFromEntryId: "e_不存在" })).rejects.toThrow("投影");
+    await expect(port!.spawn({ label: "坏分叉", prompt: "x", forkFrom: "e_不存在" })).rejects.toThrow("投影");
     await h.close();
   });
 

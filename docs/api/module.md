@@ -521,7 +521,7 @@ export interface SubagentSpawnRequest { … }
 | `model?` | `model?: string` | 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 |
 | `maxTurns?` | `maxTurns?: number` | 轮数上限（保险丝）；有效值 = min(此值, 40)。 |
 | `writePaths?` | `writePaths?: string[]` | 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 |
-| `forkFromEntryId?` | `forkFromEntryId?: string` | 带聊天记录开局（决策 6）：继承父会话投影截至该事件 id（含）；缺省 = 空白开局。 |
+| `forkFrom?` | `forkFrom?: boolean \| string` | 带聊天记录开局（决策 6）：true = 继承主会话投影到当前末尾（模块侧拿不到事件 id——内核解析尾部）； 字符串 = 精确到某事件 id（含）；缺省 = 空白开局。 |
 | `background?` | `background?: boolean` | 后台跑（入册即回编号，结论经 followUp 缝送回）；缺省 = 前台（等结论）。 |
 **示例**
 

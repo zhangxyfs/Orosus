@@ -144,13 +144,18 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
       else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
     }
 
-    // 带聊天记录开局（决策 6）：forkFromEntryId 在主会话投影内才合法（照 sessionForkFn 严校验——
-    // ForkedSessionStore 自身的「找不到 → 全量前缀」宽松降级只属盘上链重建，不属活 API）。
-    // 坏参数 = 拒绝（单子从未开跑），不走带内 failed。
-    if (req.forkFromEntryId !== undefined) {
+    // 带聊天记录开局（决策 6）：forkFrom 字符串 = 精确分叉点（在主会话投影内才合法——照 sessionForkFn
+    // 严校验；ForkedSessionStore 的「找不到 → 全量前缀」宽松降级只属盘上链重建，不属活 API）；
+    // true = 到当前末尾（模块侧拿不到事件 id，内核解析尾部）。坏参数 = 拒绝（单子从未开跑），不走带内 failed。
+    let forkAt: string | undefined;
+    if (req.forkFrom !== undefined && req.forkFrom !== false) {
       const parentEvents = await deps.mainStore.all();
-      if (!parentEvents.some((e) => e.id === req.forkFromEntryId)) {
-        throw new Error(`forkFrom 分叉点不在主会话投影内：${req.forkFromEntryId}`);
+      if (req.forkFrom === true) {
+        forkAt = parentEvents.at(-1)?.id; // 主会话还没有任何消息 = 没什么可带，退空白开局
+      } else if (!parentEvents.some((e) => e.id === req.forkFrom)) {
+        throw new Error(`forkFrom 分叉点不在主会话投影内：${req.forkFrom}`);
+      } else {
+        forkAt = req.forkFrom;
       }
     }
 
@@ -160,11 +165,11 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
         cwd: deps.cwd,
         parentSession: parentId ?? deps.mainStore.sessionId, // 亲缘：孙代理挂父代理编号、子代理挂主会话（决策 19 同册同理）
       });
-      // forkFrom 已在上文预检（投影内才走到这里）；own 文件记分叉点，复合投影经 ForkedSessionStore 拼装
+      // forkFrom 已在上文预检（尾部解析或精确 id 校验）；own 文件记分叉点，复合投影经 ForkedSessionStore 拼装
       let forkSession: SessionStore = agentStore;
-      if (req.forkFromEntryId !== undefined) {
-        await agentStore.append(LOG_TYPES.sessionFork, { sourceEntryId: req.forkFromEntryId, parentSession: deps.mainStore.sessionId });
-        forkSession = new ForkedSessionStore({ parent: deps.mainStore, atEntryId: req.forkFromEntryId, own: agentStore });
+      if (forkAt !== undefined) {
+        await agentStore.append(LOG_TYPES.sessionFork, { sourceEntryId: forkAt, parentSession: deps.mainStore.sessionId });
+        forkSession = new ForkedSessionStore({ parent: deps.mainStore, atEntryId: forkAt, own: agentStore });
       }
       await agentStore.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text: req.prompt }] });
 
