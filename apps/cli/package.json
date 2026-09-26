@@ -19,6 +19,7 @@
     "@orosus/skill": "workspace:*",
     "@orosus/tool-ask": "workspace:*",
     "@orosus/tool-fs": "workspace:*",
+    "@orosus/session-tree": "workspace:*",
     "@orosus/tool-goal": "workspace:*",
     "@orosus/tool-search": "workspace:*",
     "@orosus/tool-shell": "workspace:*",

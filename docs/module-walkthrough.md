@@ -322,6 +322,20 @@ ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
 
 每个字段、每个参数的逐条说明见本文**第 13 节（完整 API 参考）**；更长的语义注释去 [docs/api](api/README.md)（`pnpm gen-docs` 从 contracts 源生成——含每个参数的 @param 含义与范围，两处同源）。
 
+## 8b. 会话树三口：分叉、看树、跳枝（会话树批起）
+
+模块可以管理**分支对话**——像文件树一样看「这个会话分过几岔、每岔聊到哪」，还能开新枝、跳进另一条枝。三个口都在 `ctx.session` 上，全部可选（老宿主/无头 = `undefined`，判空降级）：
+
+| 口 | 干什么 | 门 |
+|---|---|---|
+| `ctx.session.fork(opts?)` | **建枝**：以当前会话为父开一个新会话文件并立即落盘——当前会话原地不动（切换是宿主的事）。`opts.atEntryId` = 分叉点（继承父投影截至该事件），缺省 = 当前末尾；不在当前投影 = 抛错不写盘 | mounts 须列 `"session.fork"` |
+| `ctx.session.tree()` | **看树**：当前项目桶的全量树快照（每会话一个节点：父子关系、分叉点、标题、时间、自身事件条数）。只读现读现建——不含任何聊天内容 | 无门（读不占闸） |
+| `ctx.session.switchTo(sid)` | **跳枝**：请求宿主切到目标会话。**立即返回** true = 已受理——切换异步完成，调用方自己的 harness 随之销毁，返回后不得再用自身任何句柄 | mounts 须列 `"session.switch"` |
+
+人话注意三条：`fork` 建的枝要用 `switchTo` 才进得去（先建多枝再挑一根切）；`tree()` 的节点 `label` 未命名时是 `undefined`（显示侧自定「新会话」）；`switchTo` 拒绝他项目桶的会话（终端 = 当前项目的工作区）。
+
+第一方示例就是内置的 `session-tree` 模块（`/session-tree__view` 看树跳枝、`/session-tree__branch <序号|sid>` 建枝）——`packages/modules/session-tree/src/index.ts` 全文不到两百行，是最好的抄写模板。
+
 ## 9. 设计一个新模块的正规流程
 
 本仓库对"设计"有治理（[specs/modules/README.md](superpowers/specs/modules/README.md)）：
