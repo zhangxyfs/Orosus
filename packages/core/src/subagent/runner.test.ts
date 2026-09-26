@@ -247,3 +247,47 @@ describe("子代理 T2（工具过滤：按工种减 + 到顶剥 + 双层门控�
     await h.close();
   });
 });
+
+describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () => {
+  it("⑩ forkFrom：子代理首个请求含主对话历史（前半段）+ 任务书末位；own 文件带 session/fork 记分叉点", async () => {
+    // 剧本：script[0] = 主对话一轮（"你好" → "主对话回复"）；script[1] = 子代理一轮
+    const h = await setup({
+      script: [textChunk("主对话回复"), textChunk("子代理结论")],
+    });
+    await h.prompt("你好");
+    const history = await h.history();
+    const at = history[history.length - 1]!.id;
+    const out = (await port!.spawn({ label: "带历史", prompt: "照上面聊的做 X", forkFromEntryId: at })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(out.conclusion).toBe("子代理结论");
+    // 子代理首个请求（requests[0] = 主对话那轮）：messages = 主对话历史 + 任务书末位
+    const agentReq = lastRequests[1]!;
+    const roles = agentReq.messages.map((m) => `${m.role}:${((m.content ?? []) as { kind?: string; text?: string }[]).map((p) => p.text ?? "").join("")}`);
+    expect(roles[0]).toContain("你好");
+    expect(roles[1]).toContain("主对话回复");
+    expect(roles.at(-1)).toContain("照上面聊的做 X");
+    // own 文件：header → session/fork（sourceEntryId = 分叉点）→ user/message 任务书
+    const events = eventsOf(agentFile(h, out.id));
+    expect(events[0]!.type).toBe("session/header");
+    expect(events[1]!.type).toBe("session/fork");
+    expect(events[1]!.sourceEntryId).toBe(at);
+    await h.close();
+  });
+
+  it("⑪ forkFrom 分叉点不在主会话投影内 → spawn 抛错（活 API 严校验，不走盘上链重建的宽松降级）", async () => {
+    const h = await setup();
+    await expect(port!.spawn({ label: "坏分叉", prompt: "x", forkFromEntryId: "e_不存在" })).rejects.toThrow("投影");
+    await h.close();
+  });
+
+  it("⑫ 空白开局对照（决策 6 默认）：不带 forkFrom 的子代理只见任务书，主对话历史不泄漏", async () => {
+    const h = await setup({ script: [textChunk("主对话回复"), textChunk("子代理结论")] });
+    await h.prompt("你好");
+    await port!.spawn({ label: "空白", prompt: "独立任务" });
+    const agentReq = lastRequests[1]!;
+    expect(agentReq.messages.length).toBe(1);
+    expect(JSON.stringify(agentReq.messages)).not.toContain("你好");
+    expect(JSON.stringify(agentReq.messages)).not.toContain("主对话回复");
+    await h.close();
+  });
+});
