@@ -106,7 +106,47 @@ const pathParam = { path: z.string().describe("相对工作目录的路径") };
 /** read 缺省窗口（M4-2.5 T0，opencode/pi 同款）：模型得连贯首段+续读提示；日志侧坍缩靠 mtime 去重。 */
 const READ_DEFAULT_WINDOW = 2000;
 
-function readTool(fs: LocalFs): Tool {
+/**
+ * 写前比对状态（M4.5 T7②——决策 24④，cc readFileState 同族）：path → 上次读取时的 mtime（+全量读的内容快照）。
+ * 模块级共享（read 记 / write·edit 查并刷新）——主对话与所有子代理同图同工具实例，天然互相看得见：
+ * A 读过、B 改了、A 再写 = 被拦要求重读（「读后被改还按旧印象覆盖」正是写乱的主因）。
+ * 写成功后刷新记录——自己连续写（write→edit）不会被自己的写拦住。
+ */
+type ReadState = Map<string, { mtimeMs: number; content?: string }>;
+
+/** 写前比对：目标文件修改时间跟「上次读它时记的」对不上就拒绝、要求重读。
+ *  Windows 修改时间偶尔漂移——全量读过的回退内容比对（一致 = 漂移，放行并刷新记录）。 */
+const writeGuard = async (fs: LocalFs, path: string, readState: ReadState): Promise<string | undefined> => {
+  const prior = readState.get(path);
+  if (prior === undefined) return undefined; // 从没读过（新建文件）——没有「旧印象」可覆盖，不拦
+  let mtime: number;
+  try {
+    mtime = statSync(fs.resolveAbs(path)).mtimeMs;
+  } catch {
+    return undefined; // 文件已不在（删后重写）——旧印象无对象
+  }
+  if (mtime === prior.mtimeMs) return undefined;
+  if (prior.content !== undefined) {
+    try {
+      if ((await fs.read(path)) === prior.content) {
+        readState.set(path, { mtimeMs: mtime, content: prior.content }); // mtime 漂移但内容没变——刷新记录放行
+        return undefined;
+      }
+    } catch { /* 读失败 → 走拦截 */ }
+  }
+  return `文件在读取后被修改过（${path}）——先重新读取最新内容再写（防按旧印象覆盖别人的改动）`;
+};
+
+/** 写成功后刷新记录：mtime 记新值（后续写不拦），内容快照记刚写的已知内容（漂移回退可比对）。 */
+const noteWrite = (fs: LocalFs, path: string, readState: ReadState, knownContent?: string): void => {
+  try {
+    readState.set(path, { mtimeMs: statSync(fs.resolveAbs(path)).mtimeMs, ...(knownContent !== undefined ? { content: knownContent } : {}) });
+  } catch {
+    readState.delete(path);
+  }
+};
+
+function readTool(fs: LocalFs, readState: ReadState): Tool {
   // mtime 去重状态（cc readFileState 同款）：键 = path+offset+limit，值 = mtimeMs——文件被改即失效
   const lastRead = new Map<string, number>();
   return defineTool({
@@ -143,6 +183,8 @@ function readTool(fs: LocalFs): Tool {
               ? `\n(共 ${lines.length} 行，已显示 ${start + 1}-${start + slice.length}——续读请带 offset=${start + slice.length + 1}，或 offset+limit 读区间)`
               : `\n(第 ${start + 1}-${start + slice.length} 行，共 ${lines.length} 行)`;
             lastRead.set(key, mtime);
+            const wholeFile = start === 0 && !truncatedTail; // 全量读过 → 记内容快照（写前比对的漂移回退用）
+            readState.set(path, { mtimeMs: mtime, ...(wholeFile ? { content } : {}) });
             return { output: numbered + footer, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
@@ -153,7 +195,7 @@ function readTool(fs: LocalFs): Tool {
   });
 }
 
-function writeTool(fs: LocalFs): Tool {
+function writeTool(fs: LocalFs, readState: ReadState): Tool {
   return defineTool({
     name: "tool-fs__write",
     description: "Create a new file or completely replace an existing file's contents.\nUse this tool — not shell echo/redirection or heredocs — to create or overwrite files.\nFor targeted changes to existing files, prefer edit instead (read the file first).",
@@ -165,7 +207,10 @@ function writeTool(fs: LocalFs): Tool {
         approvalRule: "tool-fs__write",
         execute: async () => {
           try {
+            const guard = await writeGuard(fs, path, readState); // 写前比对（决策 24④）
+            if (guard !== undefined) return { output: guard, isError: true };
             await fs.write(path, content);
+            noteWrite(fs, path, readState, content);
             return { output: `已写入 ${path}（${content.length}B）`, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
@@ -176,7 +221,7 @@ function writeTool(fs: LocalFs): Tool {
   });
 }
 
-function editTool(fs: LocalFs): Tool {
+function editTool(fs: LocalFs, readState: ReadState): Tool {
   return defineTool({
     name: "tool-fs__edit",
     description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.",
@@ -195,6 +240,8 @@ function editTool(fs: LocalFs): Tool {
         approvalRule: "tool-fs__edit",
         execute: async () => {
           try {
+            const guard = await writeGuard(fs, path, readState); // 写前比对（决策 24④）——edit 自带的现读不替代模型侧的读记录
+            if (guard !== undefined) return { output: guard, isError: true };
             const before = await fs.read(path);
             const positions: { start: number; end: number; newText: string; index: number }[] = [];
             for (let i = 0; i < edits.length; i++) {
@@ -229,6 +276,7 @@ function editTool(fs: LocalFs): Tool {
               if (e.replaceAll === true) result = result.split(e.oldText).join(e.newText);
             }
             await fs.write(path, result);
+            noteWrite(fs, path, readState, result);
             const count = positions.length + edits.filter((e) => e.replaceAll === true).length;
             return { output: `已编辑 ${path}（${count} 处）`, isError: false };
           } catch (err) {
@@ -315,10 +363,11 @@ export default defineModule({
   activate(ctx) {
     // M1：根 = 进程 cwd；root 配置项待真实需求出现时经本模块 config schema 加入
     const fs = new LocalFs(process.cwd());
+    const readState: ReadState = new Map(); // 写前比对共享状态（read 记 / write·edit 查——M4.5 T7②）
     ctx.provide(FS, fs);
-    ctx.contribute.tool(readTool(fs));
-    ctx.contribute.tool(writeTool(fs));
-    ctx.contribute.tool(editTool(fs));
+    ctx.contribute.tool(readTool(fs, readState));
+    ctx.contribute.tool(writeTool(fs, readState));
+    ctx.contribute.tool(editTool(fs, readState));
     ctx.contribute.tool(globTool(fs));
     ctx.contribute.tool(grepTool(fs));
   },

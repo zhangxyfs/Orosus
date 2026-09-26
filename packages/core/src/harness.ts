@@ -414,6 +414,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   };
   ensureSteerHook(graph.bus);
 
+  // 主对话写预约（M4.5 T7 / 决策 24②尾）：主对话自己要写文件时对子代理写报备做同样检查——
+  // 不占子代理的并发位，撞了立即让那一步失败重试而不是干等。子代理转发的载荷不进此门（它的报备已占闸）。
+  graph.bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
+    const p = payload as { accesses?: { kind: string; path?: string }[]; subagent?: unknown };
+    if (p.subagent !== undefined) return undefined;
+    const writes = (p.accesses ?? []).filter((a): a is { kind: string; path: string } => a.kind === "fs.write" && typeof a.path === "string").map((a) => a.path);
+    if (writes.length === 0) return undefined;
+    const chk = subagentRunner.gate.checkMainWrite(writes);
+    return chk.ok ? undefined : { deny: true, reason: chk.error };
+  }, "host");
+
   // header 懒写（M4-1 T0/D46 止血）：构造期零落盘——临时会话（CLI 启动即退 / --dump-modules / 引导后未聊）
   // 不再各留一个空壳文件（走查垃圾场 1147 文件的主源头）。首次真实 turn 前补写（命令派发不触发——
   // onboarding 的 /provider、/reload 不落盘），保持 §6.1「文件首行 = session/header」不变量；
