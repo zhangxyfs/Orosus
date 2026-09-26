@@ -95,6 +95,9 @@ importers:
       '@orosus/tool-shell':
         specifier: workspace:*
         version: link:../../packages/modules/tool-shell
+      '@orosus/tool-subagent':
+        specifier: workspace:*
+        version: link:../../packages/modules/tool-subagent
       '@orosus/tool-todo':
         specifier: workspace:*
         version: link:../../packages/modules/tool-todo
@@ -305,6 +308,9 @@ importers:
         specifier: ^4.0.0
         version: 4.6.5
     devDependencies:
+      '@orosus/approval':
+        specifier: workspace:*
+        version: link:../approval
       '@orosus/core':
         specifier: workspace:*
         version: link:../../core

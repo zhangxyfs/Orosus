@@ -543,8 +543,9 @@ export interface SubagentSpawnRequest {
   maxTurns?: number;
   /** 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 */
   writePaths?: string[];
-  /** 带聊天记录开局（决策 6）：继承父会话投影截至该事件 id（含）；缺省 = 空白开局。 */
-  forkFromEntryId?: string;
+  /** 带聊天记录开局（决策 6）：true = 继承主会话投影到当前末尾（模块侧拿不到事件 id——内核解析尾部）；
+   *  字符串 = 精确到某事件 id（含）；缺省 = 空白开局。 */
+  forkFrom?: boolean | string;
   /** 后台跑（入册即回编号，结论经 followUp 缝送回）；缺省 = 前台（等结论）。 */
   background?: boolean;
 }
