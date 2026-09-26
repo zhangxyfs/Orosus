@@ -89,6 +89,12 @@ export interface Harness {
   /** 当前会话命名写口（批⑦a——/title 破链修复）：经活 store 追加 session/label（单写者纪律——
    *  旁路新建 store 写活文件会让活 store 的内存 lastId/seq 失真，后续事件 parentId 链断裂/seq 撞号）。 */
   setLabel(label: string): Promise<void>;
+  /** 落盘式分叉（会话树批 T6，缝一内核半边）：以当前会话为父创建新会话文件并立即写盘（header +
+   *  session/fork），当前会话原地不动——切换由宿主 switchTo 承担（决策点 8：只落盘不激活）。
+   *  atEntryId 须在当前投影内，不在 = 抛错不写盘（校验在本方法——fork.ts 的「找不到 atEntryId →
+   *  全量父前缀」宽松降级只属于盘上链重建，不属于活 API）。新会话日后被打开时，祖先链视图由
+   *  openSessionView 递归重建（T1）。 */
+  fork(opts?: { atEntryId?: string }): Promise<{ sessionId: string }>;
   /** 设置服务后端（m5 T9 口子四）：换模型——/model 同源核心动作（覆盖槽 + 写盘 + 档位跟随重解析），单一写者不双写；busy 期可调、下一轮生效。 */
   setModel(qualified: string): Promise<void>;
   /** 设置服务后端（m5 T9）：切思考档位——/effort 同源；"auto" = 回目录默认档；非法档名抛错。 */
@@ -916,6 +922,34 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await ensureHeader(); // 命名先于首个 turn 也不出断头文件（/title 新政同 fork 走查批）
       await store.append(LOG_TYPES.sessionLabel, { label: label.slice(0, 200) });
       await store.flush();
+    },
+
+    // 会话树批 T6：落盘式分叉出口——独立 own store 写 header + session/fork 即刻落盘，全程不触碰当前活
+    // store（不能拿 ForkedSessionStore 包活 store——它的 close() 会连父一起关，把活会话关了）
+    async fork(forkOpts?: { atEntryId?: string }) {
+      const events = await store.all();
+      const at = forkOpts?.atEntryId ?? events[events.length - 1]?.id;
+      if (at === undefined || !events.some((e) => e.id === at)) {
+        throw new Error(`fork 分叉点不在当前投影内：${String(forkOpts?.atEntryId ?? "（投影为空，无缺省分叉点）")}`);
+      }
+      const own = makeStore();
+      try {
+        await own.append(LOG_TYPES.sessionHeader, {
+          format: 1,
+          cwd: options.cwd ?? process.cwd(),
+          parentSession: store.sessionId,
+          moduleSummary: { // 照 ensureHeader 现口径（三计数）
+            active: graph.records.filter((r) => r.state === "active").length,
+            failed: graph.records.filter((r) => r.state === "failed").length,
+            discovered: graph.records.filter((r) => r.state === "discovered").length,
+          },
+        });
+        await own.append(LOG_TYPES.sessionFork, { sourceEntryId: at, parentSession: store.sessionId });
+        await own.flush();
+        return { sessionId: own.sessionId };
+      } finally {
+        await own.close();
+      }
     },
 
     // 宿主日志口（T4/S10）：createLogger 每次新建实例无妨——写盘队列挂在 sink 闭包上，多 logger 天然共享
