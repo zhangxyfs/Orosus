@@ -499,6 +499,157 @@ for (const n of nodes ?? []) {
 }
 ```
 
+## SubagentSpawnRequest（接口）
+
+子代理派单请求（M4.5「模块 + 内核服务缝」）：模块校验/展开完毕后交给内核执行的单子。
+子代理 = 独立上下文的临时帮手——空白开局（除非带 forkFromEntryId）、只交最终结论。
+
+```ts
+export interface SubagentSpawnRequest { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `label` | `label: string` | 简述（展示用：状态行 / 列表 / 送回行；建议 ≤ 60 字符）。 |
+| `prompt` | `prompt: string` | 任务书（自包含——子代理看不到主对话；批量单须已按条目展开，每条一份）。 |
+| `rolePrompt?` | `rolePrompt?: string` | 工种正文（系统提示词主体）；缺省 = 通用帮手角色段。 |
+| `roleName?` | `roleName?: string` | 工种名（显示用，如 "review"）。 |
+| `allowedTools?` | `allowedTools?: string[]` | 工种工具白名单（模块全名如 tool-fs__read）；只能减不能加——不在主对话工具面里的名字无效。 |
+| `disallowedTools?` | `disallowedTools?: string[]` | 工种工具黑名单（从主对话工具面里再减掉）。 |
+| `model?` | `model?: string` | 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 |
+| `maxTurns?` | `maxTurns?: number` | 轮数上限（保险丝）；有效值 = min(此值, 40)。 |
+| `writePaths?` | `writePaths?: string[]` | 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 |
+| `forkFromEntryId?` | `forkFromEntryId?: string` | 带聊天记录开局（决策 6）：继承父会话投影截至该事件 id（含）；缺省 = 空白开局。 |
+| `background?` | `background?: boolean` | 后台跑（入册即回编号，结论经 followUp 缝送回）；缺省 = 前台（等结论）。 |
+**示例**
+
+```ts
+await ctx.subagent?.spawn({
+  label: "调研竞品功能",
+  prompt: "调研 X 产品的导入功能，输出对比表",
+  writePaths: ["docs/"],           // 要写文件必须报备（决策 24）
+});
+```
+
+## SubagentOutcome（接口）
+
+前台结论（决策 15）：状态 + 编号 + 轮数 + 结论 + 错误摘要 + 越界回执。被停/超轮数 = failed。
+
+```ts
+export interface SubagentOutcome { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `id` | `id: string` | 8 位编号（全系统唯一同源——列表/会话文件夹/结果报告/查看窗同一串）。 |
+| `status` | `status: "completed" \| "failed"` | completed = 跑完取到结论；failed = 出错/被停/审批拒收场。 |
+| `turns` | `turns: number` | 实际跑的轮数（模型往返次数）。 |
+| `conclusion` | `conclusion: string` | 最后一条回复正文（保尾 3.2 万字符）。 |
+| `error?` | `error?: string` | 失败原因摘要（failed 时在）。 |
+| `outOfBounds?` | `outOfBounds?: string[]` | 越界回执（决策 24⑤）：实际写过但不在报备内的路径（含被拦下的越界尝试）；宿主自己记的，模型伪造不了。 |
+| `bashCommands?` | `bashCommands?: string[]` | bash 命令串备查（实际写路径不可从命令串还原，原样附上）。 |
+**示例**
+
+```ts
+const r = await ctx.subagent?.spawn({ label: "跑测试", prompt: "…" });
+if (r && "status" in r) ctx.log.info("my.done", "结论", { id: r.id, turns: r.turns });
+```
+
+## SubagentTicket（接口）
+
+后台回执：入册即返（决策 12——后台不阻塞调用方）。
+
+```ts
+export interface SubagentTicket { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `id` | `id: string` | 8 位编号（后续 stop/list 与送回行引用同一串）。 |
+**示例**
+
+```ts
+const t = await ctx.subagent?.spawn({ label: "后台调研", prompt: "…", background: true });
+if (t && "id" in t && !("status" in t)) ctx.log.info("my.bg", "已入册", { id: t.id });
+```
+
+## SubagentRosterEntry（接口）
+
+花名册条目（决策 19/21——list() 出货形态，宿主界面三件套同源）：
+子代理与孙代理（深度两层内）全记同一本花名册，孙代理带 parentId。
+
+```ts
+export interface SubagentRosterEntry { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `id` | `id: string` | 8 位编号（唯一同源）。 |
+| `depth` | `depth: 1 \| 2` | 深度：1 = 子代理（父是主对话）；2 = 孙代理（父是子代理——防套娃 2 层到顶）。 |
+| `parentId?` | `parentId?: string` | 孙代理的父编号（depth 2 时在；depth 1 无）。 |
+| `label` | `label: string` | 简述（spawn 时的 label）。 |
+| `status` | `status: "queued" \| "running" \| "completed" \| "failed"` | queued = 排队（并发位/写闸）；running = 跑着；completed = 跑完；failed = 出错/被停（被停算失败）。 |
+| `background` | `background: boolean` | 是否后台。 |
+| `roleName?` | `roleName?: string` | 工种名（spawn 时给了才有）。 |
+| `model?` | `model?: string` | 实际解析出的模型值。 |
+| `turns` | `turns: number` | 已跑轮数。 |
+| `enqueuedAt` | `enqueuedAt: string` | 入队时间（ISO 串）。 |
+| `startedAt?` | `startedAt?: string` | 开跑时间（ISO 串；还在排队 = undefined）。 |
+| `endedAt?` | `endedAt?: string` | 结束时间（ISO 串；还在跑 = undefined）。 |
+| `error?` | `error?: string` | 失败原因（failed 时在）。 |
+| `pendingApproval?` | `pendingApproval?: { callId: string; tool: string; reason: string }` | 待审批（后台 Ask 档挂起的工具调用——回答面在宿主；被停自动按拒绝收场）。 |
+| `writeClaim?` | `writeClaim?: { paths: string[]; wholeRepo: boolean }` | 写报备归一结果（决策 24：wholeRepo = bash/未报备算整仓）。 |
+**示例**
+
+```ts
+for (const a of ctx.subagent?.list() ?? []) {
+  ctx.log.info("my.tasks", "在册", { id: a.id, depth: a.depth, status: a.status });
+}
+```
+
+## SubagentPort（接口）
+
+内核子代理缝（M4.5——「模块 + 内核服务缝」第五次应用）：宿主注入的派单执行口，
+tool-subagent 模块消费（mounts "subagent" 门——声明了 mounts 的模块须列该位）。
+调用方上下文（是否子代理在派孙代理、取消信号）由内核经执行上下文自证——模块不用传深度。
+
+```ts
+export interface SubagentPort { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `spawn` | `spawn(req: SubagentSpawnRequest, caller?: { signal?: AbortSignal }): Promise<SubagentOutcome \| SubagentTicket>` | 派单：前台（background 缺省）跑到完返回结论；后台入册即回编号（结论经 followUp 送回主对话）。 |
+| `list` | `list(): SubagentRosterEntry[]` | 花名册快照（子+孙同册；已结束的在册保留最近 32 条，更早去会话文件——决策 19/21）。 |
+| `stop` | `stop(id: string): boolean` | 停单个（决策 12）：在跑的按失败收场（含挂起审批自动按拒绝回绝）；排队的不在册跑。 |
+
+**方法参数**
+
+| 方法 | 参 | 说明 |
+|---|---|---|
+| `spawn` | `req` | 派单请求（见 SubagentSpawnRequest；批量展开由调用方完成）。 |
+| `spawn` | `caller` | 调用方执行上下文。signal = 前台取消链（跟主对话取消信号走——决策 11）；后台忽略。 |
+| `stop` | `id` | 8 位编号。 |
+
+**示例**
+
+```ts
+activate(ctx) {
+  if (ctx.subagent === undefined) return;   // 老宿主/无头 = 缝不在，判空降级
+  ctx.contribute.tool(spawnTool(ctx.subagent));
+}
+```
+
 ## ModuleContext（接口）
 
 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。
@@ -521,6 +672,7 @@ export interface ModuleContext<C = unknown> { … }
 | `contribute` | `readonly contribute: {` | 贡献面（工具/命令/提示词段/配置修饰/卡片——都返 Disposer；声明了 mounts 须列 "contribute:*" 位）。 |
 | `session` | `readonly session: {` | 会话面（append 落日志、messages 冷投影读口、id 会话标识；m5 会话树批增 fork/tree/switchTo 三可选口）。 |
 | `tools` | `readonly tools: {` | 工具注册表缝（M4-3 T4/D6——ToolSearch 机制的唯一模块通道；对标宿主活写口 h.setLabel 先例： contracts 加缝 + kernel 接线 + mounts 权限位校验）。模块声明 mounts "tools.reveal"/"tools.list" 后可用 （allows() 模式同 contribute:*；声明了 mounts 而未列位 → 调用即抛）。 |
+| `subagent?` | `readonly subagent?: SubagentPort \| undefined` | 内核子代理缝（M4.5，可选）：宿主注入的派单执行口（spawn/list/stop——见 SubagentPort）。 tool-subagent 模块消费；mounts 门："subagent"（声明了 mounts 的模块须列该位）。 老宿主/无头 = undefined，模块判空降级（不贡献派活工具）。 |
 | `events` | `readonly events: {` | 事件总线（on 订阅 / emit 自有命名空间；声明了 mounts 须列 "hook:<事件>" 与 "emit" 位）。 |
 | `settings?` | `readonly settings?: SettingsService \| undefined` | 宿主设置服务（m5 口子四，可选直挂）：全屏宿主提供 SettingsService；老宿主/无头 = undefined， 模块判空降级。声明了 mounts 的模块须列 "settings" 才可调（allows 白名单）。 |
 | `host?` | `readonly host?: HostInfo \| undefined` | 宿主状态读面（m5 口子四读侧，可选）：ctx.host.current() 拿运行值快照（模型/力度/挂载模式/权限/用量）。 读不占 mounts 写闸——零声明摩擦（决策点 24）；无 = undefined 判空降级。 |

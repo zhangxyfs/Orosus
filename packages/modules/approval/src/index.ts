@@ -15,7 +15,8 @@ const configSchema = z.object({
   projectConfigFile: z.string().optional().describe("生效层判定的项目层配置路径（缺省 <cwd>/.orosus/config.toml；含 [approval] 节时模式写项目层，五轮 P1）"),
 });
 
-/** waterfall 载荷形状（core registry 产出，D40 增 matchesRule）。 */
+/** waterfall 载荷形状（core registry 产出，D40 增 matchesRule；M4.5 子代理批增 mode/subagent——
+ *  mode = 子代理转发给的档提示（需要时候询问语义），subagent = 派单方身份（后台挂起审批用）。 */
 interface PreExecutePayload {
   callId: string;
   name: string;
@@ -23,6 +24,8 @@ interface PreExecutePayload {
   accesses: { kind: string; path?: string; host?: string }[];
   approvalRule: string;
   matchesRule?: (ruleArgs: string) => boolean;
+  mode?: import("./decide.ts").PermissionMode;
+  subagent?: { agentId: string; depth: 1 | 2; parentId?: string; background: boolean; label: string };
 }
 
 export default defineModule({
@@ -30,7 +33,8 @@ export default defineModule({
   version: "0.1.0",
   description: "审批/权限模块——tool/pre-execute waterfall 首个消费方（D36 三档 + 规则链 + 会话记忆，出厂 required=true）",
   api: 1,
-  mounts: ["hook:tool/pre-execute", "contribute:command"],
+  mounts: ["hook:tool/pre-execute", "contribute:command", "provide"],
+  provides: ["approval.current-mode"],
   config: configSchema,
   logEvents: ["approval/requested", "approval/resolved", "approval/policy"],
   activate(ctx) {
@@ -40,6 +44,9 @@ export default defineModule({
       sessionMemory: new Set<string>(),                       // "本会话始终允许"（会话结束失效，不落配置）
     };
     let askChain: Promise<unknown> = Promise.resolve();       // FIFO 串行化：并行工具组内的询问逐个发起（readline 非并发安全）
+
+    // 运行期档读口（M4.5 子代理批——服务倒挂）：内核子代理缝解析「跟随主对话」时运行期取（覆盖 > 配置）
+    ctx.provide("approval.current-mode", () => state.modeOverride ?? cfg.mode);
 
     ctx.events.on("tool/pre-execute", async (payload) => {
       const p = payload as PreExecutePayload;
@@ -60,7 +67,9 @@ export default defineModule({
           }
         : undefined;
       const d = decide({
-        mode: state.modeOverride ?? cfg.mode,
+        // M4.5 子代理批：载荷档提示优先（子代理 ask 档转发带 ask-risky——「需要时候询问」语义；
+        // 主对话更严档不因此放宽到全自动，规则链照走）；无提示 = 主对话原路径不变
+        mode: p.mode ?? state.modeOverride ?? cfg.mode,
         rules: cfg.rules,
         name: p.name,
         approvalRule: p.approvalRule,

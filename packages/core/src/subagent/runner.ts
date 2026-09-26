@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -8,7 +9,7 @@ import type {
   SubagentSpawnRequest,
 } from "@orosus/contracts/module";
 import type { StreamFn } from "@orosus/contracts/provider";
-import { createEventBus } from "../kernel/bus.ts";
+import { CORE_POINTS, createEventBus } from "../kernel/bus.ts";
 import { createToolRegistry } from "../tool/registry.ts";
 import { agentLoop } from "../loop/loop.ts";
 import { LOG_TYPES, type SessionEvent, type SessionStore } from "../session/types.ts";
@@ -35,6 +36,30 @@ export interface SubagentDeps {
   /** 限定形模型解析（settings/工种给的值——resolveModelValue 同款，支持钉槽）。 */
   resolveModel: (value: string) => { stream: StreamFn; model: string };
 }
+
+/** 派活类工具前缀（决策 1：tool-subagent__* 族）。 */
+const SPAWN_TOOL_PREFIX = "tool-subagent__";
+
+/** 派活类工具判定（决策 4 双层门控共用同一函数——注册面过滤与运行时拦截都走它，防两处逻辑漂移）。 */
+export const isSpawnClassTool = (name: string): boolean => name.startsWith(SPAWN_TOOL_PREFIX);
+
+/** 该深度允不允许派活类工具：子代理（1 层）可再派孙代理；孙代理（2 层）到顶。 */
+export const spawnAllowedAtDepth = (depth: 1 | 2): boolean => depth < 2;
+
+/** 执行上下文（M4.5）：当前异步链跑在哪个子代理的循环里——深度自证（模块不用传深度，
+ *  孙代理派单经 ALS 自然拿到父上下文）。主对话执行的工具 = 无 store（深度 1）。 */
+const execContext = new AsyncLocalStorage<{ agentId: string; depth: 1 | 2 }>();
+
+/** 审批模式解析（决策 3 第一层：手动配置 > 跟随主对话 > 默认 Ask）。
+ *  跟随 = 主对话运行期档 never（从不询问）→ 子代理 auto；否则 ask。
+ *  主对话运行期档经 approval 模块服务 approval.current-mode 读取（服务倒挂——approval 模块挂、内核运行期取）。 */
+const resolveApprovalMode = async (deps: SubagentDeps): Promise<"auto" | "ask"> => {
+  const cfgMode = deps.configSections().get("tool-subagent")?.approvalMode;
+  if (cfgMode === "auto" || cfgMode === "ask") return cfgMode; // 手动配置优先
+  const svc = await deps.graph().services.getOptional("approval.current-mode");
+  const mainMode = typeof svc === "function" ? (svc as () => string)() : undefined;
+  return mainMode === "never" ? "auto" : "ask"; // 跟随主对话；无 approval 模块/无服务 = 默认 Ask
+};
 
 /** 8 位编号（决策 20：唯一同源；撞活动册或撞盘上既有目录都重生成）。 */
 const allocId = (taken: Set<string>, agentsDir: string): string => {
@@ -95,6 +120,8 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
   const runOne = async (
     req: SubagentSpawnRequest,
     id: string,
+    depth: 1 | 2,
+    parentId: string | undefined,
     callerSignal: AbortSignal | undefined,
   ): Promise<SubagentOutcome> => {
     const agentsDir = agentsDirOf();
@@ -102,6 +129,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
     const agentStore = deps.makeStore(agentSid, agentsDir);
     const spillDir = join(agentsDir, agentSid, "spill"); // 显式传——默认拼装 join(sessionsDir, sid, "spill") 会落错位（harness.ts spill 同款坑）
     const maxTurns = Math.min(req.maxTurns ?? SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS);
+    const approvalMode = await resolveApprovalMode(deps); // spawn 时定格（决策 3 第一层）
     let turns = 0;
     let lastText = "";
     let endKind = "completed";
@@ -119,18 +147,39 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
       await agentStore.append(LOG_TYPES.sessionHeader, {
         format: 1,
         cwd: deps.cwd,
-        parentSession: deps.mainStore.sessionId, // 文件头亲缘——树扫描不递归、不当独立会话
+        parentSession: parentId ?? deps.mainStore.sessionId, // 亲缘：孙代理挂父代理编号、子代理挂主会话（决策 19 同册同理）
       });
       await agentStore.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text: req.prompt }] });
 
       const resolved = resolveAgentModel(deps, req);
-      // 工具面：抄主对话活工具（墓碑不复活——toolInfos 名单 ∩ list；T2 起按工种减 + 到顶剥派活类）
+      // 工具面：抄主对话活工具（墓碑不复活——toolInfos 名单 ∩ list）→ 到顶剥派活类（决策 4①）
+      // → 按工种减（只能减不能加——allowedTools 里的未知名静默无效）→ 再减黑名单
       const liveNames = new Set(deps.graph().tools.toolInfos().map((t) => t.name));
-      const bus = createEventBus(deps.sink); // 子代理独立 bus：steering/followUp/审批都不串主对话（T2 在此接审批回主关卡）
+      const allowed = req.allowedTools !== undefined ? new Set(req.allowedTools) : undefined;
+      const disallowed = req.disallowedTools !== undefined ? new Set(req.disallowedTools) : undefined;
+      const bus = createEventBus(deps.sink); // 子代理独立 bus：steering/followUp 不串主对话
       const tools = createToolRegistry({ bus, sink: deps.sink, spillDir });
       for (const t of deps.graph().tools.list().filter((t2) => liveNames.has(t2.name))) {
+        if (isSpawnClassTool(t.name) && !spawnAllowedAtDepth(depth)) continue; // 到顶剥（决策 4①）——模型看不见就不会浪费一轮
+        if (allowed !== undefined && !allowed.has(t.name)) continue;
+        if (disallowed !== undefined && disallowed.has(t.name)) continue;
         tools.register(t, t.name.split("__")[0]!);
       }
+      // 审批关卡（决策 3 第二层，T2）：agent bus 的 toolPreExecute → 运行时双层门控第二道（决策 4②）
+      // + 模式分流——auto 照单放行；ask 转发主对话关卡（带 ask-risky 档提示与子代理身份，主对话在问时弹串行队列）
+      bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
+        const p = payload as { name: string; [k: string]: unknown };
+        if (isSpawnClassTool(p.name) && !spawnAllowedAtDepth(depth)) {
+          return { deny: true, reason: "嵌套已达两层上限——孙代理不能再派子代理（决策 4）" };
+        }
+        if (approvalMode === "auto") return undefined; // 从不询问：不过主关卡
+        const veto = await deps.graph().bus.waterfall(CORE_POINTS.toolPreExecute, {
+          ...p,
+          mode: "ask-risky", // 需要时候询问（决策 3：AWN 档语义——主对话更严档不放宽到此档之下）
+          subagent: { agentId: id, depth, parentId, background: req.background === true, label: req.label },
+        });
+        return veto ?? undefined;
+      });
 
       for await (const e of agentLoop({
         session: agentStore,
@@ -175,11 +224,22 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
 
   return {
     async spawn(req, caller) {
+      const ctx = execContext.getStore();
+      // 运行时门控（决策 4②：与注册面同一个判断函数——缓存/通配/幻觉漏出的派活调用在此拦截）
+      if (ctx !== undefined && !spawnAllowedAtDepth(ctx.depth)) {
+        throw new Error("嵌套已达两层上限——孙代理不能再派子代理（决策 4）");
+      }
+      // 嵌套一律前台（决策 4③：孙代理收不到后台完成通知——qwen 教训）
+      if (ctx !== undefined && req.background === true) {
+        throw new Error("嵌套子代理（孙代理）一律前台——不支持后台（决策 4③）");
+      }
+      const depth: 1 | 2 = ctx === undefined ? 1 : 2;
+      const id = allocId(takenIds, agentsDirOf());
       if (req.background === true) {
         throw new Error("后台跑法未落地（M4.5 T8 接入）");
       }
-      const id = allocId(takenIds, agentsDirOf());
-      return runOne(req, id, caller?.signal);
+      // 亲缘挂父代理会话 id（agents_<编号>——JsonlStore sessionId 形态；主对话派单 = 主会话 id）
+      return execContext.run({ agentId: id, depth }, () => runOne(req, id, depth, ctx !== undefined ? `agents_${ctx.agentId}` : undefined, caller?.signal));
     },
     list(): SubagentRosterEntry[] {
       return []; // 花名册在 M4.5 T8 落地（子+孙同册、保留 32 条已结束）
