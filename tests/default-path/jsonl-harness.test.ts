@@ -31,7 +31,7 @@ describe("默认路径：JsonlSessionStore × createHarness（真实 CLI 同款�
     await h.prompt("hi");
     await h.close();
     h = undefined;
-    const file = join(dir, "sessions", `${store.sessionId}.jsonl`);
+    const file = join(dir, "sessions", store.sessionId, "agents", "session.jsonl");
     expect(existsSync(file)).toBe(true);
     const recs = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { type: string; seq: number });
     const types = recs.map((r) => r.type);

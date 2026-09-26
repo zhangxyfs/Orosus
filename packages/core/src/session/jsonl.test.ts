@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore, repairFile } from "./jsonl.ts";
@@ -14,20 +14,22 @@ describe("JsonlSessionStore", () => {
     await s.append("session/header", { format: 1, cwd: "/r", parentSession: null });
     await s.append("user/message", { content: [] });
     await s.flush();
-    const lines = readFileSync(join(dir, `${s.sessionId}.jsonl`), "utf8").trim().split("\n");
+    const lines = readFileSync(join(dir, s.sessionId, "agents", "session.jsonl"), "utf8").trim().split("\n");
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!).type).toBe("session/header");
     expect(JSON.parse(lines[1]!).seq).toBe(2);
     await s.close();
   });
 
-  it("POSIX 上文件权限为 0o600；Windows 降级不报错", async () => {
+  it("POSIX 上文件权限为 0o600、会话目录与 agents/ 0o700；Windows 降级不报错", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-"));
     const s = new JsonlSessionStore({ dir });
     await s.append("x");
     await s.flush();
     if (process.platform !== "win32") {
-      expect(statSync(join(dir, `${s.sessionId}.jsonl`)).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, s.sessionId, "agents", "session.jsonl")).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, s.sessionId, "agents")).mode & 0o777).toBe(0o700);
+      expect(statSync(join(dir, s.sessionId)).mode & 0o777).toBe(0o700);
     }
     await s.close();
   });
@@ -71,6 +73,22 @@ describe("JsonlSessionStore", () => {
     const all = await s2.all();
     expect(all.map((e) => e.type)).toEqual(["session/header", "user/message"]);
     expect(await s2.append("x")).toMatchObject({ seq: 3, parentId: all[1]!.id }); // 恢复后 seq/parentId 链延续
+    await s2.close();
+  });
+
+  it("会话树批 T3 目录化：新会话落 <桶>/<sid>/agents/session.jsonl；懒建保持——零 append 零落盘连会话目录也不建", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-tree-"));
+    const s = new JsonlSessionStore({ dir, sessionId: "s_lazy" });
+    expect(existsSync(join(dir, "s_lazy"))).toBe(false); // 懒建：连会话目录也不建（D46 语义保持）
+    await s.append("session/header", { format: 1 });
+    await s.flush();
+    expect(existsSync(join(dir, "s_lazy", "agents", "session.jsonl"))).toBe(true); // 首写建目录 + 主文件
+    await s.close();
+    // resume 打开既有目录形态会话原位续写
+    const s2 = new JsonlSessionStore({ dir, sessionId: "s_lazy" });
+    expect(await s2.append("user/message", { content: [] })).toMatchObject({ seq: 2 }); // 原文件续写（seq 延续）
+    await s2.flush();
+    expect(readFileSync(join(dir, "s_lazy", "agents", "session.jsonl"), "utf8").trim().split("\n")).toHaveLength(2);
     await s2.close();
   });
 

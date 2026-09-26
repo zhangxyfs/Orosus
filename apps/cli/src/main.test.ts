@@ -195,18 +195,21 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     expect(harnessOptionsFor({ kind: "fork", parentSessionId: "s1", atEntryId: "e7" })).toEqual({ fork: { parentSessionId: "s1", atEntryId: "e7" } });
   });
 
-  it("⑩ /sessions：列出会话目录最近会话（mtime 降序、jsonl/sqlite 双后缀、空目录友好）", async () => {
+  it("⑩ /sessions：列出会话目录最近会话（mtime 降序、jsonl/sqlite 双主文件、空目录友好；T2 目录化新形态）", async () => {
     const { listSessions, formatSessions } = await import("./sessions.ts");
     const d = tmp("sess");
     const empty = join(d, "none");
     expect(listSessions(empty)).toEqual([]);
     expect(formatSessions(empty)).toContain("暂无会话");
     const sessDir = join(d, "sessions");
-    mkdirSync(sessDir, { recursive: true });
-    writeFileSync(join(sessDir, "s_old.jsonl"), "{}", "utf8");
+    const seed = (sid: string, ext: "jsonl" | "sqlite"): void => {
+      mkdirSync(join(sessDir, "B", sid, "agents"), { recursive: true });
+      writeFileSync(join(sessDir, "B", sid, "agents", `session.${ext}`), "{}", "utf8");
+    };
+    seed("s_old", "jsonl");
     await new Promise((r) => setTimeout(r, 30));
-    writeFileSync(join(sessDir, "s_new.jsonl"), "{}", "utf8");
-    writeFileSync(join(sessDir, "s_db.sqlite"), "{}", "utf8");
+    seed("s_new", "jsonl");
+    seed("s_db", "sqlite");
     const ids = listSessions(sessDir).map((x) => x.id);
     expect(ids[0]).toBe("s_db"); // 最新写入在前
     expect(new Set(ids)).toEqual(new Set(["s_old", "s_new", "s_db"]));

@@ -1,11 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { sqliteAvailable, setSqliteProbeForTest, SqliteSessionStore } from "./sqlite.ts";
 import { verifyChain } from "./fork.ts";
+import { scanBucketSessions } from "./dir.ts";
 import { createHarness } from "../index.ts";
 import type { SessionEvent } from "./types.ts";
 
@@ -76,13 +77,13 @@ describe("SqliteSessionStore（M3 T7，D42）", () => {
     const a = await mk('sessionStore = "sqlite"');
     await a.h.prompt("hi");
     await a.h.close();
-    const sessionFiles = (d: string): string[] => readdirSync(d).filter((f) => f.startsWith("s_")); // 会话文件 s_ 前缀（诊断日志也是 .jsonl，需区分）
-    expect(sessionFiles(a.d).some((f) => f.endsWith(".sqlite"))).toBe(true);
-    expect(sessionFiles(a.d).some((f) => f.endsWith(".jsonl"))).toBe(false);
+    // 会话树批 T3 目录化：主文件落 <桶>/<sid>/agents/——经 scanBucketSessions 枚举（s_ 前缀区分诊断日志）
+    const sessionMains = (d: string): string[] => scanBucketSessions(d).filter((e) => e.id.startsWith("s_")).map((e) => e.file);
+    expect(sessionMains(a.d).some((f) => f.endsWith("session.sqlite"))).toBe(true);
     const b = await mk(undefined); // 缺省 jsonl
     await b.h.prompt("hi");
     await b.h.close();
-    expect(sessionFiles(b.d).some((f) => f.endsWith(".jsonl"))).toBe(true);
+    expect(sessionMains(b.d).some((f) => f.endsWith("session.jsonl"))).toBe(true);
     await expect(mk('sessionStore = "oracle"')).rejects.toThrow(/sessionStore 配置非法/);
   });
 

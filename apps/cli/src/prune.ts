@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { orosusHome } from "@orosus/contracts/home";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { scanSessionFiles, type SessionFileEntry } from "@orosus/core";
 
 /** `orosus sessions prune`（M4-1 T2/D47）：显式清理会话文件——缺省 dry-run，`--apply` 才删；
@@ -77,18 +77,20 @@ export async function runPruneSubcommand(
   const plan = buildPrunePlan(entries, { days: opts.days, now });
   const empty = plan.deletions.filter((d) => d.reason === "empty").length;
   const stale = plan.deletions.length - empty;
-  io.out(`扫描 ${entries.length} 个会话文件（根平铺 + 项目桶，清理器 T2/D47）`);
+  io.out(`扫描 ${entries.length} 个会话文件（项目桶，会话树批 T2 目录化）`);
   io.out(`计划删除 ${plan.deletions.length} 个：空文件（0 字节或仅 header）${empty} 个 + 超过 ${opts.days} 天 ${stale} 个；保留 ${plan.kept} 个（含 mtime 最新的当前会话）。`);
   for (const d of plan.deletions) io.out(`  将删 ${d.id}［${d.reason === "empty" ? "空" : "过期"}］`);
   if (!opts.apply) {
     io.out("dry-run（缺省）——未删除任何文件；确认后加 --apply 执行。");
     return 0;
   }
-  for (const d of plan.deletions) rmSync(d.file);
-  // 桶目录卫生：删后变空的桶目录一并移除（不递归、只动本次涉及目录）
-  for (const dirNow of new Set(plan.deletions.map((d) => d.dir))) {
-    try { if (readdirSync(dirNow).length === 0) rmdirSync(dirNow); } catch { /* 并发变化则留待下轮 */ }
+  // 会话树批 T4（设计空白 16）：删除粒度 = 整会话目录（含 agents/ 与 spill/）——会话既删、其日志与溢写文件同灭；
+  // spill 的绝对路径引用随日志一起消失，「不搬动 spill」约束保护的是存活会话，不挡死会话的清理
+  for (const d of plan.deletions) rmSync(d.dir, { recursive: true });
+  // 桶目录卫生（判据改桶 = dirname(会话目录)，删后变空的桶一并移除——不递归、只动本次涉及目录）
+  for (const bucketDir of new Set(plan.deletions.map((d) => dirname(d.dir)))) {
+    try { if (readdirSync(bucketDir).length === 0) rmdirSync(bucketDir); } catch { /* 并发变化则留待下轮 */ }
   }
-  io.out(`已删除 ${plan.deletions.length} 个文件。`);
+  io.out(`已删除 ${plan.deletions.length} 个会话（含整会话目录）。`);
   return 0;
 }

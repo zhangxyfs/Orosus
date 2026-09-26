@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
@@ -43,9 +43,17 @@ export class SqliteSessionStore implements SessionStore {
     if (!sqliteAvailable()) {
       throw new Error("SQLite 后端需要 Node ≥22.5 的 node:sqlite（当前运行时不可用）——请用默认 jsonl 后端（sessionStore 配置，§7.2/D42）");
     }
-    mkdirSync(opts.dir, { recursive: true });
+    mkdirSync(opts.dir, { recursive: true }); // 桶目录（D46 既有语义）
     this.sessionId = opts.sessionId ?? newId("s");
-    const db = openDatabase(join(opts.dir, `${this.sessionId}.sqlite`));
+    // 会话树批 T3 目录化：每会话一目录——库文件落 <桶>/<sid>/agents/session.sqlite（决策点 4/16，与 jsonl 对称）。
+    // 构造期直建（本后端无懒建语义）；WAL 伴生 -wal/-shm 文件天然收进会话目录。目录权限 0o700（决策点 5，Windows 跳过）。
+    const sessionDir = join(opts.dir, this.sessionId, "agents");
+    mkdirSync(sessionDir, { recursive: true });
+    if (process.platform !== "win32") {
+      chmodSync(sessionDir, 0o700);
+      chmodSync(join(opts.dir, this.sessionId), 0o700);
+    }
+    const db = openDatabase(join(sessionDir, "session.sqlite"));
     this.db = db;
     db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     db.exec(

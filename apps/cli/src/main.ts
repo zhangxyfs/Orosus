@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecretsEnv } from "@orosus/core";
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
@@ -96,10 +96,12 @@ import { setLatexEnabled } from "./md/latex.ts";
 const args = parseArgs(process.argv.slice(2));
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
 const sessionsRoot = join(orosusHome(), "sessions");
-const sessionsDir = join(sessionsRoot, encodeCwd(process.cwd()));
-// --resume 双层定位（T1/D46）：旧平铺/他桶会话在原位续写（新事件仍进原文件）；找不到 = 全新空会话（M3 既有语义）
-const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId) : undefined;
-let activeDir = resumeLoc?.dir ?? sessionsDir; // 当前 harness 的会话目录（/fork 的父定位依据）
+const currentBucket = encodeCwd(process.cwd()); // 会话树批 #17：交互面只认当前项目桶
+const sessionsDir = join(sessionsRoot, currentBucket);
+// --resume 定位（会话树批 T2 目录化 + #17 桶限定）：只认当前项目桶的新形态会话；找不到 = 全新空会话（M3 既有语义）
+const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId, { bucket: currentBucket }) : undefined;
+// activeDir 语义 = 桶目录（/fork 父定位与 createSession 回退的写侧桶）——目录化后 scan 条目 dir 是会话目录，取其父
+let activeDir = (resumeLoc !== undefined ? dirname(resumeLoc.dir) : undefined) ?? sessionsDir;
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
@@ -685,13 +687,13 @@ function attachRender(h: Harness): void {
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
-// 恢复会话（B9 拉前）：双层定位 → 原位续写（新事件仍进原文件——平铺/他桶均在原位）
+// 恢复会话（B9 拉前 → 会话树批 T2/#17）：当前桶定位 → 续写；scan 条目 dir 是会话目录，store 要桶 = dirname
 const switchTo = async (sid: string, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
-  const loc = locateSessionFile(sessionsRoot, sid);
+  const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
   if (loc === undefined) { out(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
   await h.close();
-  h = await createSession({ resume: { sessionId: sid }, sessionsDir: loc.dir });
-  activeDir = loc.dir;
+  h = await createSession({ resume: { sessionId: sid }, sessionsDir: dirname(loc.dir) });
+  activeDir = dirname(loc.dir);
   const notice = `[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`;
   if (tuiMode === "full") {
     pendingEcho = { notice, history: true }; // 延期到 dm 重建后（F5 二轮⑯）
@@ -709,8 +711,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       if (directive.kind === "quit") return "quit"; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
       if (directive.kind === "pick") {
         // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
-        if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
-        const items = listSessions(sessionsRoot);
+        if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId, currentBucket) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
+        const items = listSessions(sessionsRoot, currentBucket);
         if (items.length === 0) { notify("暂无会话——发送第一条消息即创建"); return "again"; }
         // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
         // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
@@ -739,7 +741,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         if (directive.name === undefined) return "again";
         // 当前会话（或目标解析回当前）走活 harness 写口——批⑦a 破链修复：旁路新建 store 写活文件
         // 会让活 store 内存 lastId/seq 失真，后续事件 parentId 链断裂；序号/sid 指定的非活会话保持旁路（单写者安全）
-        const targetSid = directive.target !== undefined ? resolveTarget(directive.target, sessionsRoot) : undefined;
+        const targetSid = directive.target !== undefined ? resolveTarget(directive.target, sessionsRoot, currentBucket) : undefined;
         if (directive.target !== undefined && targetSid === undefined) { notify("未找到目标会话"); return "again"; }
         if (targetSid === undefined || targetSid === h.sessionId) {
           await h.setLabel(directive.name);
@@ -747,7 +749,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           if (activeApp !== undefined) activeApp.showToast(`已命名 → ${directive.name}`);
           else out(`[已命名 → ${directive.name}]`);
         } else {
-          const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name);
+          const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name, currentBucket);
           if (r !== undefined) {
             if (activeApp !== undefined) activeApp.showToast(`已命名 ${r.sid} → ${directive.name}`);
             else out(`[已命名 ${r.sid} → ${directive.name}]`);
@@ -756,7 +758,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "again";
       }
       if (directive.kind === "resume") {
-        const sid = resolveTarget(directive.sessionId, sessionsRoot);
+        const sid = resolveTarget(directive.sessionId, sessionsRoot, currentBucket);
         if (sid === undefined) { notify(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
         await switchTo(sid);
         return "switch";
@@ -766,7 +768,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // fork 自动命名（2026-09-22 用户拍板）：「fork <父标题>」——/sessions 里父子一眼可辨；
         // 经 h.setLabel 活写口（header 已由 harness fork 分支即刻落盘，链序 header→fork→label）
         const parentTitle = from !== undefined
-          ? (() => { const loc = locateSessionFile(sessionsRoot, from); return loc !== undefined ? readTitle(loc.file, from) : from; })()
+          ? (() => { const loc = locateSessionFile(sessionsRoot, from, { bucket: currentBucket }); return loc !== undefined ? readTitle(loc.file, from) : from; })()
           : undefined;
         await h.close();
         // 新会话/fork 子会话一律落当前项目桶；fork 父会话按 activeDir 定位（可能在平铺或他桶——resume 旧会话后 /fork）

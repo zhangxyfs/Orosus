@@ -1,6 +1,7 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, closeSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
+import { scanBucketSessions } from "./dir.ts";
 
 /** POSIX 专属硬化在 Windows 上降级（§6.1）：审计标记，不静默弱化。 */
 export function hardeningNote(): string | null {
@@ -113,7 +114,9 @@ export function lastUsageTotal(events: SessionEvent[]): number | undefined {
   return undefined;
 }
 
-/** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。 */
+/** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。
+ *  会话树批 T3 目录化：每会话一目录——主文件落 <桶>/<sid>/agents/session.jsonl（决策点 4/16）。
+ *  懒建语义保持（D46）：零 append 零落盘，连会话目录也不建；首写时递归建目录（0o700）+ 文件（0o600）。 */
 export class JsonlSessionStore implements SessionStore {
   readonly sessionId: string;
   private readonly file: string;
@@ -126,10 +129,10 @@ export class JsonlSessionStore implements SessionStore {
   private closed = false;
 
   constructor(opts: { dir: string; sessionId?: string }) {
-    mkdirSync(opts.dir, { recursive: true });
+    mkdirSync(opts.dir, { recursive: true }); // 桶目录构造期建（D46 既有语义——装配层保证桶在）
     this.sessionId = opts.sessionId ?? newId("s");
     this.dir = opts.dir;
-    this.file = join(opts.dir, `${this.sessionId}.jsonl`);
+    this.file = join(opts.dir, this.sessionId, "agents", "session.jsonl");
     repairFile(this.file);
     if (existsSync(this.file)) {
       this.fileEnsured = true;
@@ -154,10 +157,17 @@ export class JsonlSessionStore implements SessionStore {
   private devIno: string | null = null;
   private fileEnsured = false;
 
-  /** 首写前懒建文件（0o600——构造期预建的权限硬化语义原样移到此处）。 */
+  /** 首写前懒建：会话目录 + agents/（0o700，含既有目录权限校正）→ 文件（0o600——构造期预建的权限硬化语义原样移到此处）。 */
   private ensureFile(): void {
     if (this.fileEnsured) return;
     this.fileEnsured = true;
+    const sessionDir = join(this.dir, this.sessionId);
+    const agentsDir = join(sessionDir, "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    if (process.platform !== "win32") {
+      chmodSync(agentsDir, 0o700);
+      chmodSync(sessionDir, 0o700); // 既有目录权限校正（决策点 5——目录与文件同档硬化）
+    }
     const fd = openSync(this.file, "a", 0o600);
     closeSync(fd);
     if (process.platform !== "win32") chmodSync(this.file, 0o600);
@@ -200,7 +210,9 @@ export class JsonlSessionStore implements SessionStore {
   /** 跨会话累计（/usage 口径修复：重启后此前会话的用量不归零）。当前会话取内存镜像——
    *  buffer 可能未 drain；其余会话读盘，坏行（torn tail）跳过不炸。会话数按文件计（有用量才算）。
    *  fork 子体整文件跳过（M4-2 T4/B3）：header.parentSession 非空 = fork 子体，其 usage 不入累计
-   *  ——lineage 以父计（cc-haha 同款）；当前会话自身是子体时同样跳过（父文件仍在同目录被计入）。 */
+   *  ——lineage 以父计（cc-haha 同款）；当前会话自身是子体时同样跳过（父文件仍在同桶被计入）。
+   *  会话树批 T4：兄弟枚举改「本桶全会话目录 agents/ 内 session.jsonl」（scanBucketSessions 统一件）——
+   *  口径不变，只换路径方式（决策点 13）。 */
   async lifetimeUsage(): Promise<{ input: number; output: number; sessions: number }> {
     let input = 0;
     let output = 0;
@@ -215,13 +227,15 @@ export class JsonlSessionStore implements SessionStore {
       output += u.output;
       if (u.input > 0 || u.output > 0) sessions++;
     }
-    for (const name of readdirSync(this.dir).filter((n) => n.endsWith(".jsonl")).toSorted((a, b) => a.localeCompare(b))) {
-      if (name === `${this.sessionId}.jsonl`) continue; // 当前会话已按内存镜像计（或为 fork 子体跳过）
+    const siblings = scanBucketSessions(this.dir)
+      .filter((e) => e.file.endsWith(".jsonl") && e.id !== this.sessionId) // 当前会话已按内存镜像计（或为 fork 子体跳过）
+      .toSorted((a, b) => a.id.localeCompare(b.id));
+    for (const sibling of siblings) {
       let fileInput = 0;
       let fileOutput = 0;
       let isForkChild = false;
       let seenFirst = false;
-      for (const line of readFileSync(join(this.dir, name), "utf8").split("\n")) {
+      for (const line of readFileSync(sibling.file, "utf8").split("\n")) {
         if (line === "") continue;
         let e: SessionEvent;
         try {
