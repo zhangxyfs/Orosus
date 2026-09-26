@@ -81,7 +81,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /compact    手动压缩对话历史
   /permission 查看或切换审批模式（回答进行中也可执行，本轮生效；rules 子参数看规则清单）
   /yolo       一键切到从不询问（批准全自动处理——含危险命令；手写 deny 规则仍拦）
-  /auto       一键切回日常默认档（Ask When Needed）
+  /auto       从不询问模式（从不打断你，就算有问题也是模型自行判断）
 
 设置与信息面板：
   /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 配置网络搜索——/usage /status 已并入；别名 /config）

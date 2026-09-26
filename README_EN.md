@@ -47,7 +47,7 @@ Type natural language to chat. Commands start with `/` (press Tab after `/` to c
 |----------|---------|-------------|
 | Sessions | `/new` `/fork` `/sessions` (`/resume`) `/title` (`/rename`) `/quit` | New session / fork / list & resume history / rename / quit |
 | Model & state | `/model` `/reload` `/summary` `/help` | Switch model (works mid-answer, applies next turn) / reload modules / view compaction summary / help |
-| Module commands | `/compact` `/permission` `/yolo` `/auto` | Compact history / view or switch approval mode / full auto-approve / back to default ask mode |
+| Module commands | `/compact` `/permission` `/yolo` `/auto` | Compact history / view or switch approval mode / full auto-approve / never-ask mode |
 | Settings | `/settings` (alias `/config`) | Disk usage / context usage / token usage / runtime status / web search setup |
 
 ## Features

@@ -7,16 +7,10 @@ import { orosusHome } from "@orosus/contracts/home";
 import { Access, defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
 import { JobRegistry, killTree, decodeOut } from "./jobs.ts";
+import { resolveShell, lintCmdCommand, classifyFailure, type ShellSpec } from "./shell.ts";
 
 export { JobRegistry, type BgJob } from "./jobs.ts";
 
-const params = {
-  command: z.string().describe("要执行的 shell 命令（Windows=cmd，POSIX=sh）"),
-  workdir: z.string().optional().describe("工作目录（相对路径基于上次记忆的目录解析；成功后记为下次缺省——别用 cd，shell 内 cd 不会被记住）"),
-  writeOutputTo: z.string().optional().describe("可选：把原始输出经 fs 能力写入此路径"),
-  timeoutMs: z.number().int().positive().max(120_000).optional().describe("超时毫秒，默认 120000，超时杀整个进程树"),
-  run_in_background: z.boolean().optional().describe("true = 后台执行：立即返回作业 id 与输出文件路径，完成自动通知（勿轮询——进度用 tool-shell__output 读，停运用 tool-shell__kill）"),
-};
 type BashInput = { command: string; workdir?: string; writeOutputTo?: string; timeoutMs?: number; run_in_background?: boolean };
 
 const MAX_TIMEOUT = 120_000;
@@ -38,13 +32,18 @@ function resolveCwd(input: BashInput, memory: ShellMemory): { cwd: string; fellB
 }
 
 /** 执行命令：stdout+stderr 合并；退出码非 0 / 超时 / 中止 → 带内 isError（永不 reject）。
- *  退出码 0 = 成功 → 记忆本次实际用过的目录（失败命令不改记忆——T2/SW-9）。 */
-function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMemory): Promise<ToolResult> {
+ *  退出码 0 = 成功 → 记忆本次实际用过的目录（失败命令不改记忆——T2/SW-9）。
+ *  壳由 resolveShell 决定（走查批 2026-09-26）：bash = 显式 argv（bin\bash.exe 自带 /usr/bin 前置，
+ *  POSIX 命令直通）；cmd/sh = shell:true 现状。 */
+function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMemory, shell: ShellSpec): Promise<ToolResult> {
   const timeout = input.timeoutMs ?? MAX_TIMEOUT;
   const { cwd, fellBackTo } = resolveCwd(input, memory);
   const cwdNote = fellBackTo !== undefined ? `\n[workdir 目标 ${fellBackTo} 不存在——已回落在 ${cwd} 执行]` : "";
   return new Promise((resolvePromise) => {
-    const child = spawn(input.command, { shell: true, cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child =
+      shell.kind === "bash"
+        ? spawn(shell.bashPath, ["-c", input.command], { cwd, stdio: ["ignore", "pipe", "pipe"], detached: false }) // win32 专用分支——taskkill /T 管整树
+        : spawn(input.command, { shell: true, cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     const chunks: Buffer[] = []; // 原始字节累积——close 后统一解码（decodeOut 编码判定需要全量字节）
     let timedOut = false;
     const finish = (r: ToolResult) => {
@@ -77,17 +76,48 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
           memory.lastWorkdir = cwd; // 记忆 = 本次实际用过的目录（含回落后的 cwd）
           return finish({ output: `${out}${cwdNote}`, isError: false });
         }
-        finish({ output: `[退出码 ${code ?? "null"}]\n${out}${cwdNote}`, isError: true });
+        // 失败双注记：分类线（cmd 壳「命令不存在」就地翻译——护栏漏网时的第二道线）
+        // + 产出标注（有输出却非零退出——模型要的数据多半已在，别盲目重试）
+        const missNote = shell.kind === "cmd" ? classifyFailure(out) : undefined;
+        const prodNote = out.trim() !== "" ? "\n[注意：退出码非 0 但上方已有产出——先读输出再决定是否重试]" : "";
+        finish({ output: `[退出码 ${code ?? "null"}]\n${out}${missNote !== undefined ? `\n${missNote}` : ""}${prodNote}${cwdNote}`, isError: true });
       })();
     });
   });
 }
 
-function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry): Tool {
+/** 工具文案随壳方言走（模型对工具描述的遵守度远高于泛泛系统提醒——「告诉过」≠「会照做」）。 */
+function dialectTexts(shell: ShellSpec): { description: string; commandHint: string } {
+  const base =
+    shell.kind === "bash"
+      ? "Execute a shell command via Git Bash (`bash -c`). POSIX syntax works: head/tail/grep/sed/awk/ls/cat are available.\nReturns combined stdout/stderr."
+      : shell.kind === "cmd"
+        ? "Execute a shell command. Returns combined stdout/stderr.\nThe shell on Windows is cmd.exe: chain commands with `&&` (NOT `;`). POSIX commands DO NOT exist in cmd (head/tail/grep/sed/awk/ls/cat/wc/less) — use cmd equivalents (grep→findstr /I, ls→dir) or PowerShell (`... | Select-Object -First N` for truncation). Do NOT swallow stderr with 2>nul."
+        : "Execute a shell command via POSIX sh. Returns combined stdout/stderr.";
+  const commandHint =
+    shell.kind === "bash"
+      ? "要执行的 shell 命令（本机经 Git Bash 执行——POSIX 语法可用）"
+      : shell.kind === "cmd"
+        ? "要执行的 shell 命令（Windows=cmd：无 head/grep 等 POSIX 命令；POSIX=sh）"
+        : "要执行的 shell 命令（POSIX sh）";
+  return {
+    description: `${base}\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not \`cd\`) to run in a specific directory — it is remembered for the next call.\n\`cd\` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed).`,
+    commandHint,
+  };
+}
+
+function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: ShellSpec): Tool {
+  const { description, commandHint } = dialectTexts(shell);
   return defineTool({
     name: "tool-shell__bash",
-    description: "Execute a shell command. Returns combined stdout/stderr.\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nOn Windows the shell is cmd.exe: chain commands with `&&` (NOT `;` — semicolons are not command separators there) and avoid bash-only syntax.\nDefault timeout 120 seconds.\nUse the workdir parameter (not `cd`) to run in a specific directory — it is remembered for the next call.\n`cd` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed).",
-    parameters: z.object(params),
+    description,
+    parameters: z.object({
+      command: z.string().describe(commandHint),
+      workdir: z.string().optional().describe("工作目录（相对路径基于上次记忆的目录解析；成功后记为下次缺省——别用 cd，shell 内 cd 不会被记住）"),
+      writeOutputTo: z.string().optional().describe("可选：把原始输出经 fs 能力写入此路径"),
+      timeoutMs: z.number().int().positive().max(120_000).optional().describe("超时毫秒，默认 120000，超时杀整个进程树"),
+      run_in_background: z.boolean().optional().describe("true = 后台执行：立即返回作业 id 与输出文件路径，完成自动通知（勿轮询——进度用 tool-shell__output 读，停运用 tool-shell__kill）"),
+    }),
     resolveExecution: (input) => {
       const { command, workdir, writeOutputTo, timeoutMs, run_in_background } = input as BashInput;
       return Promise.resolve({
@@ -99,6 +129,10 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry): Tool {
         matchesRule: (ruleArgs: string) =>
           ruleArgs.endsWith("*") ? command.startsWith(ruleArgs.slice(0, -1)) : command === ruleArgs,
         execute: (tctx) => {
+          // cmd 方言护栏（走查批 2026-09-26）：POSIX 命令在 cmd 必炸——执行前拦截并教学，
+          // 前台/后台同拦（后台只是执行形态，方言问题相同）。bash/sh 壳不拦。
+          const guard = shell.kind === "cmd" ? lintCmdCommand(command) : undefined;
+          if (guard !== undefined) return Promise.resolve({ output: guard, isError: true });
           if (run_in_background === true) {
             // 后台（M4-3 T3）：spawn 登记即返回——输出落盘、完成自动通知、勿轮询（kimi bashTool.ts:412-436 同款指引）。
             // cwd 同样走解析链，但不改记忆（命令成败未知——T2 规矩 = 退出码 0 才记）。
@@ -111,7 +145,7 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry): Tool {
               isError: false,
             });
           }
-          return runBash({ command, ...(workdir !== undefined ? { workdir } : {}), ...(writeOutputTo !== undefined ? { writeOutputTo } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) }, fs, tctx.signal, memory);
+          return runBash({ command, ...(workdir !== undefined ? { workdir } : {}), ...(writeOutputTo !== undefined ? { writeOutputTo } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) }, fs, tctx.signal, memory, shell);
         },
       });
     },
@@ -197,9 +231,10 @@ export default defineModule({
   uses: ["subprocess"],
   async activate(ctx) {
     const fs = await ctx.services.get<Fs>(FS);
-    const registry = new JobRegistry(defaultBgDir());
+    const shell = resolveShell(); // 激活期一次解析（reload 重建即重探）；前台/后台/文案共用同一结论
+    const registry = new JobRegistry(defaultBgDir(), shell);
     activeRegistry = registry;
-    ctx.contribute.tool(bashTool(fs, { lastWorkdir: undefined }, registry)); // 记忆随激活生命周期（reload 重建即清零——新配置新起点）
+    ctx.contribute.tool(bashTool(fs, { lastWorkdir: undefined }, registry, shell)); // 记忆随激活生命周期（reload 重建即清零——新配置新起点）
     ctx.contribute.tool(outputTool(registry));
     ctx.contribute.tool(killTool(registry));
     // 完成通知 = followUp 收集点订阅（loop.ts:213-216：模型无工具调用欲停时 collect，

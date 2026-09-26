@@ -61,7 +61,7 @@ pnpm orosus
 |------|------|------|
 | 会话 | `/new` `/fork` `/sessions`（`/resume`） `/title`（`/rename`） `/quit` | 新会话 / 分叉 / 恢复历史会话 / 命名 / 退出 |
 | 模型与状态 | `/model` `/reload` `/summary` `/help` | 切换模型（回答中也可执行，下一轮生效）/ 重载模块配置 / 查看压缩摘要 / 帮助 |
-| 模块命令 | `/compact` `/permission` `/yolo` `/auto` | 手动压缩历史 / 查看或切换审批模式 / 一键全自动批准 / 一键回日常默认档 |
+| 模块命令 | `/compact` `/permission` `/yolo` `/auto` | 手动压缩历史 / 查看或切换审批模式 / 一键全自动批准 / 永不询问模式 |
 | 设置 | `/settings`（别名 `/config`） | 磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 配置网络搜索 |
 
 ## 特性

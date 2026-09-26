@@ -6,6 +6,7 @@ import type { ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { Fs } from "@orosus/contracts/fs";
 import def from "./index.ts";
+import { resolveShell } from "./shell.ts";
 
 /** 最小 fake ctx：tool-shell 用到 services.get（消费 fs 能力）+ contribute.tool。 */
 function fakeCtx(files: Map<string, string>): { ctx: ModuleContext; tools: Tool[] } {
@@ -219,5 +220,79 @@ describe("tool-shell workdir + 目录记忆（M4-3 T2）", () => {
     expect((await run(tool, { command: CWD_CMD, workdir: "a" })).output).toBe(join(d, "a"));
     expect((await run(tool, { command: CWD_CMD, workdir: "b" })).output).toBe(join(d, "a", "b"));
     expect((await run(tool, { command: CWD_CMD })).output).toBe(join(d, "a", "b")); // 无参继承最新
+  });
+});
+
+// 走查批 2026-09-26：壳解析（Git Bash 优先）+ cmd 方言护栏整合接线
+describe("tool-shell 壳解析 + cmd 方言护栏接线（走查批 2026-09-26）", () => {
+  let prevShell: string | undefined;
+  const useShell = (override?: string) => {
+    if (prevShell === undefined) prevShell = process.env["OROSUS_TOOL_SHELL"];
+    if (override === undefined) delete process.env["OROSUS_TOOL_SHELL"];
+    else process.env["OROSUS_TOOL_SHELL"] = override;
+  };
+  const activateWith = async (override?: string) => {
+    useShell(override);
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    return tools[0]!;
+  };
+  afterEach(() => {
+    if (prevShell === undefined) delete process.env["OROSUS_TOOL_SHELL"];
+    else process.env["OROSUS_TOOL_SHELL"] = prevShell;
+    prevShell = undefined;
+  });
+
+  // 本机 Git Bash 是否可探测（⑥⑦ 的门槛：cmd 回落机上这两个 bash 壳用例无意义）
+  const hasBash = process.platform === "win32" && resolveShell().kind === "bash";
+
+  it.skipIf(process.platform !== "win32")("① cmd 壳：POSIX 管道在执行前拦截（教学文案，不真跑）", async () => {
+    const tool = await activateWith("cmd");
+    const r = await run(tool, { command: "git status | head -5" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("未执行");
+    expect(r.output).toContain("head");
+    expect(r.output).toContain("Select-Object");
+  });
+
+  it.skipIf(process.platform !== "win32")("② cmd 壳：后台请求同样先过护栏（不登记作业）", async () => {
+    const tool = await activateWith("cmd");
+    const r = await run(tool, { command: "git status | head -5", run_in_background: true });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("未执行");
+  });
+
+  it.skipIf(process.platform !== "win32")("③ cmd 壳：护栏漏网的命令不存在 → 退出码 + 就地翻译点名", async () => {
+    const tool = await activateWith("cmd");
+    const r = await run(tool, { command: "definitely_missing_cmd_xyz" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("退出码");
+    expect(r.output).toContain("命令不存在");
+    expect(r.output).toContain("definitely_missing_cmd_xyz");
+  });
+
+  it.skipIf(!hasBash)("④ 描述随方言：cmd 壳给黑名单替换表；bash 壳明说 Git Bash", async () => {
+    const cmdTool = await activateWith("cmd");
+    expect(cmdTool.description).toContain("cmd.exe");
+    expect(cmdTool.description).toContain("findstr");
+    const bashTool = await activateWith("bash");
+    expect(bashTool.description).toContain("Git Bash");
+  });
+
+  it("⑤ 失败但有产出 → 标注「先读输出再决定重试」（不分壳方言）", async () => {
+    const tool = await activateWith();
+    const r = await run(tool, { command: FAIL_CMD });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("[退出码 3]");
+    expect(r.output).toContain("boom");
+    expect(r.output).toContain("先读输出");
+  });
+
+  it.skipIf(!hasBash)("⑥ bash 壳直通 POSIX 语法（环境变量前缀——cmd 方言必炸的形态）", async () => {
+    const tool = await activateWith();
+    const r = await run(tool, {
+      command: `OROSUS_SHELL_PROBE=x node -e "process.stdout.write(process.env.OROSUS_SHELL_PROBE ?? 'none')"`,
+    });
+    expect(r.output).toBe("x");
   });
 });

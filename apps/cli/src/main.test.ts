@@ -97,7 +97,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
   });
   const choices: string[] = [];
 
-  it("① 菜单选『Never Ask——全部自动放行，批准自动处理（never）』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
+  it("① 菜单选『从不询问——批准自动处理，就算有问题也是模型自行判断（never）』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
     const d = tmp("perm");
     const writeTarget = join(d, "written.toml");
     const cfgLine = "[approval]\nmode = \"ask-risky\"\nconfigFile = '";
@@ -106,7 +106,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
       ask: async () => { throw new Error("不应 ask"); },
       askSecret: async () => "",
       confirm: async () => { throw new Error("不应 confirm"); },
-      choose: async (_t, items) => { choices.push(items.join("|")); return items.find((i) => i.includes("Never Ask"))!; },
+      choose: async (_t, items) => { choices.push(items.join("|")); return items.find((i) => i.includes("从不询问"))!; },
     };
     const h = await createHarness({
       cwd: d, builtinModules: BUILTIN_MODULES, modules: [subToolModule(), fakeProv()], commandUi: ui,
@@ -122,7 +122,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     await h.prompt("run"); // ask-risky 下本应询问——override 后零询问直通
     await h.close();
     await render;
-    expect(choices).toEqual(["Always Ask——每次工具调用都确认（ask-always）|Ask When Needed——仅危险操作确认（ask-risky，默认）|Never Ask——全部自动放行，批准自动处理（never）"]); // F5 十轮⑤：英文档名 // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
+    expect(choices).toEqual(["每次都询问——每次工具调用都确认（ask-always）|需要时候询问——仅危险操作确认（ask-risky，默认）|从不询问——批准自动处理，就算有问题也是模型自行判断（never）"]); // 2026-09-26 拍板：显示名改中文（内部档名括注保留） // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
   });
 
   it("② 出厂 required：activate 抛错的 approval 替身 → createHarness reject（§10 安全护栏 e2e）", async () => {
@@ -156,7 +156,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
       ask: async () => { throw new Error("不应 ask"); },
       askSecret: async () => "",
       confirm: async () => false,
-      choose: async (_t, items) => items.find((i) => i.includes("Never Ask"))!,
+      choose: async (_t, items) => items.find((i) => i.includes("从不询问"))!,
     };
     const h = await createHarness({
       cwd: d, builtinModules: BUILTIN_MODULES, commandUi: ui,
