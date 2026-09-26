@@ -21,6 +21,7 @@ import { CORE_POINTS } from "./kernel/bus.ts";
 import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
+import { createSubagentRunner } from "./subagent/runner.ts";
 
 /** 扩展名 → MIME（M4-2.5 T5）：/paste 产物即 png；未知缺省 image/png。 */
 function imageMimeOf(path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" {
@@ -367,6 +368,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     treeIndexHolder.index ??= new TreeIndex({ file: options.treeIndexFile ?? join(orosusHome(), "db", "session-tree.sqlite") });
     return treeIndexHolder.index.refresh(options.sessionsRoot ?? dirname(sessionsDir), { bucket: basename(sessionsDir) });
   };
+  // M4.5 子代理批 T1：内核派单执行口（开子会话 + 跑循环 + 取结论）——deps 全闭包引用（graph/config
+  // 是 let、resolve* 是后置 const——调用期读最新值，与 sessionForkFn 同纪律）
+  const subagentRunner = createSubagentRunner({
+    mainStore: store,
+    sessionsDir,
+    sink,
+    cwd: options.cwd ?? process.cwd(),
+    makeStore: (sid, dir) => makeStore(sid, dir),
+    graph: () => graph,
+    configSections: () => config.sections,
+    resolveParentModel: () => resolveProvider(),
+    resolveModel: (v) => resolveModelValue(v),
+  });
   let graph = await loadModules({
     defs,
     cli: cliInput,
@@ -379,6 +393,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     llm: llmHolder,
     sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
     treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
+    subagent: subagentRunner,      // M4.5 子代理批：ctx.subagent 装配（mounts "subagent" 门）
     ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
     ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
     ...(options.sessionSwitch !== undefined ? { sessionSwitch: options.sessionSwitch } : {}), // 会话树批 T10/T11：宿主切换缝
@@ -1069,6 +1084,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           llm: llmHolder,
           ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：reload 同款透传（新图 ctx 装配不缺件）
           ...(options.host !== undefined ? { host: options.host } : {}),
+          subagent: subagentRunner, // M4.5 子代理批：reload 后重激活模块的 ctx.subagent 不缺件
           ...(blocked.length > 0 ? { blocked } : {}), // m5 T17：待确认桶随新图可见（重算后的 blocked）
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
           preserved,
