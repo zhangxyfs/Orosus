@@ -13,6 +13,7 @@ import { CORE_POINTS, createEventBus } from "../kernel/bus.ts";
 import { createToolRegistry } from "../tool/registry.ts";
 import { agentLoop } from "../loop/loop.ts";
 import { LOG_TYPES, type SessionEvent, type SessionStore } from "../session/types.ts";
+import { ForkedSessionStore } from "../session/fork.ts";
 import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_ID_LEN, SUBAGENT_MAX_TURNS } from "./constants.ts";
 import type { ModuleGraph } from "../kernel/kernel.ts";
 import type { DiagSink } from "../diag/logger.ts";
@@ -143,12 +144,28 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
       else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
     }
 
+    // 带聊天记录开局（决策 6）：forkFromEntryId 在主会话投影内才合法（照 sessionForkFn 严校验——
+    // ForkedSessionStore 自身的「找不到 → 全量前缀」宽松降级只属盘上链重建，不属活 API）。
+    // 坏参数 = 拒绝（单子从未开跑），不走带内 failed。
+    if (req.forkFromEntryId !== undefined) {
+      const parentEvents = await deps.mainStore.all();
+      if (!parentEvents.some((e) => e.id === req.forkFromEntryId)) {
+        throw new Error(`forkFrom 分叉点不在主会话投影内：${req.forkFromEntryId}`);
+      }
+    }
+
     try {
       await agentStore.append(LOG_TYPES.sessionHeader, {
         format: 1,
         cwd: deps.cwd,
         parentSession: parentId ?? deps.mainStore.sessionId, // 亲缘：孙代理挂父代理编号、子代理挂主会话（决策 19 同册同理）
       });
+      // forkFrom 已在上文预检（投影内才走到这里）；own 文件记分叉点，复合投影经 ForkedSessionStore 拼装
+      let forkSession: SessionStore = agentStore;
+      if (req.forkFromEntryId !== undefined) {
+        await agentStore.append(LOG_TYPES.sessionFork, { sourceEntryId: req.forkFromEntryId, parentSession: deps.mainStore.sessionId });
+        forkSession = new ForkedSessionStore({ parent: deps.mainStore, atEntryId: req.forkFromEntryId, own: agentStore });
+      }
       await agentStore.append(LOG_TYPES.userMessage, { content: [{ kind: "text", text: req.prompt }] });
 
       const resolved = resolveAgentModel(deps, req);
@@ -182,7 +199,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort {
       }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
 
       for await (const e of agentLoop({
-        session: agentStore,
+        session: forkSession, // 带历史开局 = 复合投影（父前缀 + own 追加）；空白开局 = 纯 own
         bus,
         tools,
         provider: resolved.stream,
