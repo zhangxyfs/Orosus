@@ -36,12 +36,12 @@ const isolated = (over: { userToml?: string; commandUi?: CommandUi } = {}) => {
 };
 
 describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生态的配合闭环）", () => {
-  it("builtinModules 十二模块进图（2026-09-24 M4-3：tool-web T0 / tool-search T4 / tool-goal T6 入图）；tool-search 默认关态，余者 active", async () => {
+  it("builtinModules 十三模块进图（会话树批 T12：session-tree 入图）；tool-search 默认关态，余者 active", async () => {
     const h = await isolated();
     const audit = h.graph().audit();
     expect(audit).toHaveLength(BUILTIN_MODULES.length); // 品牌 ×5 退役后 9 + tool-web + tool-search + tool-goal = 12
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "mcp", "provider-custom", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-shell", "tool-todo", "tool-web"],
+      ["approval", "compaction", "mcp", "provider-custom", "session-tree", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-shell", "tool-todo", "tool-web"],
     );
     // SW-26：tool-search 默认关（defaultEnabled:false）= 模块不激活（discovered 未激活态——机制整门不启的正解；[tool-search] enabled=true 开启）
     expect(audit.find((a) => a.name === "tool-search")?.state).toBe("discovered");
