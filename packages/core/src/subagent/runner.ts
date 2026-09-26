@@ -15,7 +15,7 @@ import { agentLoop } from "../loop/loop.ts";
 import { LOG_TYPES, type SessionEvent, type SessionStore } from "../session/types.ts";
 import { ForkedSessionStore } from "../session/fork.ts";
 import { claimContains, createWriteGate, normalizeClaimPath, type WriteGate } from "./writegate.ts";
-import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_ID_LEN, SUBAGENT_MAX_TURNS } from "./constants.ts";
+import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_CONCURRENCY, SUBAGENT_ID_LEN, SUBAGENT_MAX_TURNS, SUBAGENT_ROSTER_KEEP } from "./constants.ts";
 import type { ModuleGraph } from "../kernel/kernel.ts";
 import type { DiagSink } from "../diag/logger.ts";
 
@@ -180,17 +180,119 @@ function buildReceipt(rec: WriteRecords, declaredPaths: string[] | undefined, cw
   };
 }
 
+/** 花名册条目（内核态——决策 19/21：子+孙同册；对外快照形态走 SubagentRosterEntry）。 */
+interface RosterEntry {
+  id: string;
+  depth: 1 | 2;
+  parentId?: string;
+  label: string;
+  background: boolean;
+  roleName?: string;
+  model?: string;
+  status: "queued" | "running" | "completed" | "failed";
+  turns: number;
+  enqueuedAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  error?: string;
+  conclusion?: string;
+  outOfBounds?: string[];
+  bashCommands?: string[];
+  pendingApproval?: { callId: string; tool: string; reason: string; resolve: (allow: boolean) => void } | undefined;
+  writeClaim?: { paths: string[]; wholeRepo: boolean };
+  controller?: AbortController | undefined;   // running 时在——stop 全停的靶
+  cancel?: (() => void) | undefined;           // 各等待阶段的取消口（并发位排队/写闸排队/审批挂起）
+  usageTotal?: { input: number; output: number }; // 词元累计（结束记主会话账）
+}
+
 /**
  * 内核子代理执行口（M4.5 T1：开子会话 + 跑对话循环 + 取结论）。
  * 会话文件落主会话文件夹（决策 19：树扫描天然免疫——scanBucketSessions 不递归）；
  * 工具面 = 主对话活工具抄一份（到顶剥派活类 + 按工种减）+ 写记账皮；审批走子代理独立 bus 接回主关卡。
  * 写协调闸（决策 24）一 harness 一实例——主对话写预约经 harness 挂主 bus 检查（gate 出口透出）。
+ * T8：并发位 8（嵌套满载快败）→ 写闸（等待期间位不撒手）→ 跑；花名册同册管子+孙（保留 32 条已结束）；
+ * 后台入册即返；stop/会话关闭全停（挂起审批自动回绝）。
  */
-export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate: WriteGate } {
+export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
+  gate: WriteGate;
+  answerApproval: (agentId: string, allow: boolean) => boolean;
+  stopAll: () => void;
+} {
   const takenIds = new Set<string>();
   const gate = createWriteGate(deps.cwd);
+  const roster = new Map<string, RosterEntry>(); // 入队序（孙代理天然紧跟其父之后入册）
+  let runningSlots = 0;
+  const slotQueue: { agentId: string; enter: () => void; reject: (err: Error) => void }[] = [];
 
   const agentsDirOf = (): string => join(deps.sessionsDir, deps.mainStore.sessionId, "agents");
+
+  /** 并发位（决策 5：硬上限 8，含前台后台孙代理；排队的先来先服务；嵌套满载立即失败不排队——决策 4③）。 */
+  const acquireSlot = (id: string, depth: 1 | 2): Promise<void> => {
+    if (runningSlots < SUBAGENT_CONCURRENCY) {
+      runningSlots++;
+      return Promise.resolve();
+    }
+    if (depth === 2) {
+      return Promise.reject(new Error(`嵌套满载：${SUBAGENT_CONCURRENCY} 个并发位已满——孙代理立即失败不排队（防父子互等槽位，决策 4③）`));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const w = {
+        agentId: id,
+        enter: () => { runningSlots++; resolve(); },
+        reject,
+      };
+      slotQueue.push(w);
+    });
+  };
+  const releaseSlot = (): void => {
+    runningSlots--;
+    const next = slotQueue.shift();
+    if (next !== undefined) next.enter();
+  };
+
+  const snapshotEntry = (e: RosterEntry): SubagentRosterEntry => ({
+    id: e.id,
+    depth: e.depth,
+    ...(e.parentId !== undefined ? { parentId: e.parentId } : {}),
+    label: e.label,
+    status: e.status,
+    background: e.background,
+    ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+    ...(e.model !== undefined ? { model: e.model } : {}),
+    turns: e.turns,
+    enqueuedAt: e.enqueuedAt,
+    ...(e.startedAt !== undefined ? { startedAt: e.startedAt } : {}),
+    ...(e.endedAt !== undefined ? { endedAt: e.endedAt } : {}),
+    ...(e.error !== undefined ? { error: e.error } : {}),
+    ...(e.pendingApproval !== undefined ? { pendingApproval: { callId: e.pendingApproval.callId, tool: e.pendingApproval.tool, reason: e.pendingApproval.reason } } : {}),
+    ...(e.writeClaim !== undefined ? { writeClaim: e.writeClaim } : {}),
+  });
+
+  /** 在册清单：全部进行中 + 最近 SUBAGENT_ROSTER_KEEP 条已结束（更早只留会话文件——决策 19）。 */
+  const listInternal = (): SubagentRosterEntry[] => {
+    const active: RosterEntry[] = [];
+    const finished: RosterEntry[] = [];
+    for (const e of roster.values()) (e.status === "queued" || e.status === "running" ? active : finished).push(e);
+    const kept = finished.slice(-SUBAGENT_ROSTER_KEEP);
+    return [...active, ...kept].map(snapshotEntry);
+  };
+
+  const settle = (entry: RosterEntry, outcome: SubagentOutcome): void => {
+    entry.status = outcome.status;
+    entry.endedAt = new Date().toISOString();
+    entry.conclusion = outcome.conclusion;
+    if (outcome.error !== undefined) entry.error = outcome.error;
+    if (outcome.outOfBounds !== undefined) entry.outOfBounds = outcome.outOfBounds;
+    if (outcome.bashCommands !== undefined) entry.bashCommands = outcome.bashCommands;
+    entry.controller = undefined;
+    entry.cancel = undefined;
+    entry.pendingApproval?.resolve(false); // 兜底（正常路径已清）
+    entry.pendingApproval = undefined;
+    // 词元记主会话账上（设计空白口径）：不入模型投影（deriveMessages 不识此类型），只进统计
+    if (entry.usageTotal !== undefined) {
+      deps.mainStore.append(LOG_TYPES.subagentUsage, { agentId: entry.id, usage: entry.usageTotal }).catch(() => undefined);
+    }
+  };
 
   const runOne = async (
     req: SubagentSpawnRequest,
@@ -198,6 +300,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate:
     depth: 1 | 2,
     parentAgentId: string | undefined,
     callerSignal: AbortSignal | undefined,
+    entry: RosterEntry,
   ): Promise<SubagentOutcome> => {
     const agentsDir = agentsDirOf();
     const agentSid = `agents_${id}`;
@@ -216,6 +319,8 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate:
     const abortedByCap = (): boolean => turns >= maxTurns;
 
     const controller = new AbortController();
+    entry.controller = controller;
+    entry.cancel = () => controller.abort(); // running 阶段的取消口（排队阶段由 spawn 编排层覆写）
     if (callerSignal !== undefined) {
       // 前台取消链（决策 11：跟主对话取消信号走——主 turn 的 signal 打断即打断）
       if (callerSignal.aborted) controller.abort();
@@ -278,19 +383,32 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate:
       // 写协调闸（决策 24②）：先报备归一——报备了的按路径占闸；没报备但工具面含会写的（bash/写工具）
       // = 算整仓（保守排队，③）；纯只读代理不占闸。同血缘撞车快败在闸内判定。等待期间不撒手（并发位纪律在调用方）。
       const wholeRepo = declaredPaths === undefined && [...faceNames].some((n) => WRITE_CAPABLE_TOOLS.has(n));
+      entry.writeClaim = { paths: declaredPaths ?? [], wholeRepo };
       await gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors);
       // 审批关卡（决策 3 第二层，T2）：agent bus 的 toolPreExecute → 运行时双层门控第二道（决策 4②）
-      // + 模式分流——auto 照单放行；ask 转发主对话关卡（带 ask-risky 档提示与子代理身份，主对话在问时弹串行队列）
+      // + 模式分流——auto 照单放行；ask 转发主对话关卡（带 ask-risky 档提示与子代理身份，主对话在问时弹串行队列）。
+      // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停自动按拒绝收场）。
       bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
-        const p = payload as { name: string; [k: string]: unknown };
+        const p = payload as { name: string; callId: string; [k: string]: unknown };
         if (isSpawnClassTool(p.name) && !spawnAllowedAtDepth(depth)) {
           return { deny: true, reason: "嵌套已达两层上限——孙代理不能再派子代理（决策 4）" };
         }
         if (approvalMode === "auto") return undefined; // 从不询问：不过主关卡
+        const background = req.background === true;
+        const park = background
+          ? (info: { tool: string; reason: string }): Promise<boolean> => new Promise((resolve) => {
+              entry.pendingApproval = {
+                callId: String(p.callId),
+                tool: info.tool,
+                reason: info.reason,
+                resolve: (allow) => { entry.pendingApproval = undefined; resolve(allow); },
+              };
+            })
+          : undefined; // 前台：照常弹在主界面串行审批队列（主关卡 ctx.ui 直问）
         const veto = await deps.graph().bus.waterfall(CORE_POINTS.toolPreExecute, {
           ...p,
           mode: "ask-risky", // 需要时候询问（决策 3：AWN 档语义——主对话更严档不放宽到此档之下）
-          subagent: { agentId: id, depth, parentId: parentAgentId, background: req.background === true, label: req.label },
+          subagent: { agentId: id, depth, parentId: parentAgentId, background, label: req.label, ...(park !== undefined ? { park } : {}) },
         });
         return veto ?? undefined;
       }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
@@ -307,10 +425,15 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate:
       })) {
         if (e.type === LOG_TYPES.turnStep) {
           turns++;
+          entry.turns = turns;
           if (abortedByCap()) controller.abort(); // 轮数保险丝（决策 10）：到顶即停，结论取最后回复
         } else if (e.type === LOG_TYPES.assistantMessage) {
           const t = textOf(e);
           if (t !== "") lastText = t;
+          const u = (e as { usage?: { input: number; output: number } }).usage;
+          if (u !== undefined) {
+            entry.usageTotal = { input: (entry.usageTotal?.input ?? 0) + u.input, output: (entry.usageTotal?.output ?? 0) + u.output };
+          }
         } else if (e.type === LOG_TYPES.turnEnd) {
           endKind = String((e as { kind?: unknown }).kind ?? "completed");
           const em = (e as { errorMessage?: unknown }).errorMessage;
@@ -351,18 +474,98 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & { gate:
         throw new Error("嵌套子代理（孙代理）一律前台——不支持后台（决策 4③）");
       }
       const depth: 1 | 2 = ctx === undefined ? 1 : 2;
-      const id = allocId(takenIds, agentsDirOf());
-      if (req.background === true) {
-        throw new Error("后台跑法未落地（M4.5 T8 接入）");
+      // 坏参数 = 拒绝（单子从未开跑、不入册）：forkFrom 分叉点与写报备归一都在编排前校验（runOne 内同款校验兜底）
+      if (typeof req.forkFrom === "string") {
+        const parentEvents = await deps.mainStore.all();
+        if (!parentEvents.some((e) => e.id === req.forkFrom)) {
+          throw new Error(`forkFrom 分叉点不在主会话投影内：${req.forkFrom}`);
+        }
       }
-      return execContext.run({ agentId: id, depth }, () => runOne(req, id, depth, ctx?.agentId, caller?.signal));
+      if (req.writePaths !== undefined) {
+        for (const p of req.writePaths) {
+          const n = normalizeClaimPath(deps.cwd, p);
+          if (!n.ok) throw new Error(n.error);
+        }
+      }
+      const id = allocId(takenIds, agentsDirOf());
+      const entry: RosterEntry = {
+        id, depth,
+        ...(ctx !== undefined ? { parentId: ctx.agentId } : {}),
+        label: req.label,
+        background: req.background === true,
+        ...(req.roleName !== undefined ? { roleName: req.roleName } : {}),
+        status: "queued",
+        turns: 0,
+        enqueuedAt: new Date().toISOString(),
+      };
+      roster.set(id, entry);
+
+      // 单子全流程：并发位（嵌套满载快败）→ 写闸（等待期间位不撒手——先占 8 位之一再排闸）→ 跑 → 记册
+      const run = async (): Promise<SubagentOutcome> => {
+        await acquireSlot(id, depth); // 排队期被停 = reject（编排层统一 settle）
+        entry.status = "running";
+        entry.startedAt = new Date().toISOString();
+        try {
+          return await execContext.run({ agentId: id, depth }, () => runOne(req, id, depth, ctx?.agentId, caller?.signal, entry));
+        } finally {
+          releaseSlot();
+        }
+      };
+
+      if (req.background === true) {
+        // 后台：入册即返编号（决策 12——拿到编号继续聊）；结论经送回缝进对话（T9），出错不静默——记册 + 诊断日志
+        void run().then(
+          (outcome) => settle(entry, outcome),
+          (err) => settle(entry, { id, status: "failed", turns: entry.turns, conclusion: "", error: err instanceof Error ? err.message : String(err) }),
+        );
+        return { id };
+      }
+      try {
+        const outcome = await run();
+        settle(entry, outcome);
+        return outcome;
+      } catch (err) {
+        // runOne 的错误已带内化为 failed outcome；这里只剩编排层拒绝（并发位/排队被停）——转 outcome 给工具层
+        const outcome: SubagentOutcome = { id, status: "failed", turns: entry.turns, conclusion: "", error: err instanceof Error ? err.message : String(err) };
+        settle(entry, outcome);
+        return outcome;
+      }
     },
-    list(): SubagentRosterEntry[] {
-      return []; // 花名册在 M4.5 T8 落地（子+孙同册、保留 32 条已结束）
-    },
-    stop(): boolean {
-      return false; // 停止口在 M4.5 T8 落地
+    list: listInternal,
+    stop(id) {
+      const entry = roster.get(id);
+      if (entry === undefined || entry.status === "completed" || entry.status === "failed") return false;
+      entry.pendingApproval?.resolve(false); // 未答审批自动按「拒绝」收场（决策 3/12——绝不卡死）
+      entry.pendingApproval = undefined;
+      if (entry.status === "queued") {
+        // 排队中（并发位或写闸）：并发位队列直接移出拒绝；写闸队列走 gate.release 的 reject 路径。
+        // settle 由编排层的拒绝路径统一做（这里不直接收场——防双记账）。
+        const idx = slotQueue.findIndex((w) => w.agentId === id);
+        if (idx >= 0) {
+          const w = slotQueue.splice(idx, 1)[0]!;
+          w.reject(new Error("已被停止——排队中的单子按失败收场"));
+          return true;
+        }
+        gate.release(id); // 写闸排队者：reject → runOne catch → failed outcome → settle
+        entry.cancel?.();
+        return true;
+      }
+      entry.cancel?.(); // running：打断循环 → interrupted → failed outcome → settle
+      return true;
     },
     gate, // 写协调闸出口（M4.5 T7——harness 挂主对话写预约检查用）
+    answerApproval(agentId, allow) {
+      const entry = roster.get(agentId);
+      if (entry === undefined || entry.pendingApproval === undefined) return false;
+      entry.pendingApproval.resolve(allow);
+      return true;
+    },
+    stopAll() {
+      // 会话关闭全停（决策 12）：在跑/排队/挂起审批全部收场——挂起审批按拒绝，绝不留活口
+      for (const entry of roster.values()) {
+        if (entry.status === "completed" || entry.status === "failed") continue;
+        this.stop(entry.id);
+      }
+    },
   };
 }
