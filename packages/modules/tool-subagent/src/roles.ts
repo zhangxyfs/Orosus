@@ -108,7 +108,7 @@ export function parseRoleFile(text: string, file: string): ParseResult {
   const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(normalized);
   if (m === null) return { error: `${file}：缺 frontmatter（须以 --- 开头的 YAML 头 + 收口 ---，正文随后）` };
   const fm = parseFrontmatter(m[1]!, file);
-  if ("error" in fm) return fm;
+  if ("error" in fm) return { error: (fm as { error: string }).error };
   const prompt = normalized.slice(m[0].length).trim();
   if (prompt === "") return { error: `${file}：正文为空——正文就是工种的系统提示词` };
 

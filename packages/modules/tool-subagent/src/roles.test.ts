@@ -71,20 +71,21 @@ describe("工种文件加载 T3（决策 8/9：frontmatter 七键 + 四级目录
   });
 
   it("⑤ 四级优先级同名覆盖：项目品牌 > 项目通用 > 用户品牌 > 用户通用（同名取最高优先级那份）", () => {
-    dir = mkdtempSync(join(tmpdir(), "orosus-roles-"));
+    const d = mkdtempSync(join(tmpdir(), "orosus-roles-"));
+    dir = d;
     const mk = (sub: string, name: string, marker: string): void => {
-      mkdirSync(join(dir, sub), { recursive: true });
-      writeFileSync(join(dir, sub, `${name}.md`), `---\nname: ${name}\ndescription: ${marker}\n---\n${marker} 正文`, "utf8");
+      mkdirSync(join(d, sub), { recursive: true });
+      writeFileSync(join(d, sub, `${name}.md`), `---\nname: ${name}\ndescription: ${marker}\n---\n${marker} 正文`, "utf8");
     };
     mk("user-generic", "same", "用户通用版");
     mk("user-brand", "same", "用户品牌版");
     mk("proj-generic", "same", "项目通用版");
     mk("proj-brand", "same", "项目品牌版");
     const { roles, warnings } = loadRoles({
-      projectBrand: join(dir, "proj-brand"),
-      projectGeneric: join(dir, "proj-generic"),
-      userBrand: join(dir, "user-brand"),
-      userGeneric: join(dir, "user-generic"),
+      projectBrand: join(d, "proj-brand"),
+      projectGeneric: join(d, "proj-generic"),
+      userBrand: join(d, "user-brand"),
+      userGeneric: join(d, "user-generic"),
     });
     expect(warnings).toEqual([]);
     expect(roles.size).toBe(1);
@@ -92,17 +93,18 @@ describe("工种文件加载 T3（决策 8/9：frontmatter 七键 + 四级目录
   });
 
   it("⑥ 不同名共存：四个目录多个工种全进表", () => {
-    dir = mkdtempSync(join(tmpdir(), "orosus-roles-"));
+    const d = mkdtempSync(join(tmpdir(), "orosus-roles-"));
+    dir = d;
     const dirs = ["proj-brand", "proj-generic", "user-brand", "user-generic"];
     dirs.forEach((sub, i) => {
-      mkdirSync(join(dir, sub), { recursive: true });
-      writeFileSync(join(dir, sub, `role-${i}.md`), `---\nname: role-${i}\ndescription: d${i}\n---\n正文 ${i}`, "utf8");
+      mkdirSync(join(d, sub), { recursive: true });
+      writeFileSync(join(d, sub, `role-${i}.md`), `---\nname: role-${i}\ndescription: d${i}\n---\n正文 ${i}`, "utf8");
     });
     const { roles } = loadRoles({
-      projectBrand: join(dir, "proj-brand"),
-      projectGeneric: join(dir, "proj-generic"),
-      userBrand: join(dir, "user-brand"),
-      userGeneric: join(dir, "user-generic"),
+      projectBrand: join(d, "proj-brand"),
+      projectGeneric: join(d, "proj-generic"),
+      userBrand: join(d, "user-brand"),
+      userGeneric: join(d, "user-generic"),
     });
     expect([...roles.keys()].sort()).toEqual(["role-0", "role-1", "role-2", "role-3"]);
   });
