@@ -248,8 +248,13 @@ export class DocModel {
 				this.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined);
 			} else if (e.type === "agent/steering-message") {
 				// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
-				const msgs = (e.messages ?? []) as { text?: string }[];
-				for (const m of msgs) if (typeof m.text === "string" && m.text !== "") this.userPrompt(m.text);
+				const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
+				for (const m of msgs) {
+					if (typeof m.text !== "string" || m.text === "") continue;
+					// M4.5 T9：子代理送回走灰色系统行（sourceModule 标记——非用户块；行文自带 [非用户输入] 头防伪装）
+					if (m.sourceModule === "tool-subagent") this.pushLine(theme.fg("muted", m.text));
+					else this.userPrompt(m.text);
+				}
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
 				this.lines.push({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });

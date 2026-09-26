@@ -37,6 +37,8 @@ export interface SubagentDeps {
   resolveParentModel: () => { stream: StreamFn; model: string };
   /** 限定形模型解析（settings/工种给的值——resolveModelValue 同款，支持钉槽）。 */
   resolveModel: (value: string) => { stream: StreamFn; model: string };
+  /** 后台单子收场送回（M4.5 T9/决策 17）：harness 侧积压 + 闲时自动送回轮；缺省不装（测试/无头不送）。 */
+  onBackgroundDelivery?: (line: string) => void;
 }
 
 /** 派活类工具前缀（决策 1：tool-subagent__* 族）。 */
@@ -291,6 +293,12 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     // 词元记主会话账上（设计空白口径）：不入模型投影（deriveMessages 不识此类型），只进统计
     if (entry.usageTotal !== undefined) {
       deps.mainStore.append(LOG_TYPES.subagentUsage, { agentId: entry.id, usage: entry.usageTotal }).catch(() => undefined);
+    }
+    // 送回行（决策 17 + 设计空白文案）：[非用户输入] 头防伪装；结论/错误取首行；失败单子也送（用户须知）
+    if (entry.background && deps.onBackgroundDelivery !== undefined) {
+      const firstLine = (outcome.conclusion !== "" ? outcome.conclusion : outcome.error ?? "").split("\n")[0]!.slice(0, 200);
+      const verdict = outcome.status === "completed" ? "完成" : "失败";
+      deps.onBackgroundDelivery(`[非用户输入] 后台子代理 ${entry.label} ${verdict}：${firstLine}`);
     }
   };
 

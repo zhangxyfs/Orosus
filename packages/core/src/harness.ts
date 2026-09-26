@@ -375,6 +375,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   };
   // M4.5 子代理批 T1：内核派单执行口（开子会话 + 跑循环 + 取结论）——deps 全闭包引用（graph/config
   // 是 let、resolve* 是后置 const——调用期读最新值，与 sessionForkFn 同纪律）
+  // M4.5 T9 送回回调：后台单子收场 → 积压行 + 闲时自动开送回轮（忙时由主 turn 停止边界收）
+  const pushDelivery = (line: string): void => {
+    deliveryBacklog.push(line);
+    deliverSubagentTurn();
+  };
   const subagentRunner = createSubagentRunner({
     mainStore: store,
     sessionsDir,
@@ -385,6 +390,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     configSections: () => config.sections,
     resolveParentModel: () => resolveProvider(),
     resolveModel: (v) => resolveModelValue(v),
+    onBackgroundDelivery: pushDelivery,
   });
   let graph = await loadModules({
     defs,
@@ -509,7 +515,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
   }
 
-  let currentTurn: { controller: AbortController; done: Promise<void> } | null = null;
+  let currentTurn: { controller: AbortController; done: Promise<void>; internal?: boolean } | null = null;
   let closed = false;
   let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
   let effortOverride: string | undefined; // /effort 运行期覆盖（/model 同款双轨：会话内存 + 写盘）；未设 = 跟随配置，配置也没有 = 目录默认档（kimi「从不不指定」——effort 型模型恒有解析值）
@@ -826,6 +832,66 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     get lastUsage() { return usageAnchor; }, // usage 锚点只读透出（空白 §4）——锚点在 harness 主循环包装，loop 骨架不消费
   };
 
+  // ---- M4.5 T9：后台子代理结论送回（决策 17——followUp 缝 + 忙时排队 + 闲时自动续跑） ----
+  // 送回积压：忙时由主 turn 停止边界经 bus followUp collect 注入（Goal 续跑同缝）；闲时自动开一轮
+  // 无用户消息的「送回轮」消费（loop 首 step 的 steering collect 收积压 → 注入 → 模型接话）。
+  // 送回行 sourceModule = "tool-subagent"——渲染层据此走灰色系统行（非用户块），行文带 [非用户输入] 头防伪装。
+  const deliveryBacklog: string[] = [];
+  const deliveryDrain = (): { text: string; sourceModule: string }[] =>
+    deliveryBacklog.splice(0).map((text) => ({ text, sourceModule: "tool-subagent" }));
+  const deliveryHooked = new WeakSet<object>();
+  const hookDelivery = (bus: EventBus): void => {
+    if (deliveryHooked.has(bus)) return;
+    deliveryHooked.add(bus);
+    bus.on(CORE_POINTS.followUp, deliveryDrain, "host");
+  };
+  hookDelivery(graph.bus);
+
+  /** 共通 turn 驱动（M4.5 T9 从 prompt 抽出）：usage 锚点/档位捕获/事件循环同款——用户轮与送回轮共用。 */
+  const driveTurn = async (controller: AbortController): Promise<SessionEvent | undefined> => {
+    const { stream, model } = resolveProvider();
+    // 思考档位（/effort）：turn 开头一次性捕获（/model 同款——busy 期切档下一轮生效）
+    const effort = await resolveEffortForWire();
+    // usage 锚点（补强 T3/空白 §4）：包装主循环 stream 记录最近一次真实用量——loop 骨架仍不消费 usage
+    const trackedStream: StreamFn = (req) => (async function* () {
+      for await (const c of stream(req)) {
+        if (c.type === "usage") usageAnchor = { totalTokens: c.input + c.output, atMessageCount: req.messages.length };
+        yield c;
+      }
+    })();
+    let lastTurnEvent: SessionEvent | undefined;
+    for await (const e of agentLoop({
+      session: store, bus: graph.bus, tools: graph.tools,
+      provider: trackedStream, model, system: graph.promptSections(),
+      ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+      signal: controller.signal, sink,
+      livePush: (c) => live.push(c), // 双投并存（T4/D45）：旁路投递——T5 断流后仅旁路
+    })) {
+      lastTurnEvent = e; // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
+    }
+    return lastTurnEvent;
+  };
+
+  /** 闲时送回轮（决策 17 自动送回）：无用户消息自动续跑；用户轮进行中让位（忙时由其停止边界收）。 */
+  const deliverSubagentTurn = (): void => {
+    if (closed || currentTurn !== null || deliveryBacklog.length === 0) return;
+    const controller = new AbortController();
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => { settle = resolve; });
+    currentTurn = { controller, done, internal: true };
+    void (async () => {
+      try {
+        await ensureHeader();
+        await driveTurn(controller);
+      } catch { /* 送回轮失败静默——积压已消费；下一条用户消息照常 */ }
+      finally {
+        currentTurn = null;
+        settle();
+        if (deliveryBacklog.length > 0) deliverSubagentTurn(); // 排队中的下一批（忙时排队）
+      }
+    })();
+  };
+
   const harnessImpl: Harness = {
     sessionId: store.sessionId,
 
@@ -853,7 +919,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         }
         return await cmd.handler(args, commandUi);
       }
-      if (currentTurn) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
+      // 送回轮让路（M4.5 T9）：内部送回轮进行中 = 等它收尾紧接进（不打断打字）；用户轮进行中照旧抛
+      for (;;) {
+        if (currentTurn === null) break;
+        if (currentTurn.internal !== true) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
+        await currentTurn.done.catch(() => undefined);
+      }
       const controller = new AbortController();
       let settle!: () => void;
       const done = new Promise<void>((resolve) => { settle = resolve; });
@@ -861,17 +932,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // close()/cancel() 在窗口期也拿不到真句柄。deferred done 让 close() 任何时刻等到的都是同一个 promise
       currentTurn = { controller, done };
       try {
-        const { stream, model } = resolveProvider();
-        // 思考档位（/effort）：turn 开头一次性捕获（/model 同款——busy 期切档下一轮生效）。
-        // 未设档 → 目录默认档（kimi「从不不指定」——effort 型模型恒发解析值；目录无信息 → 不带字段）
-        const effort = await resolveEffortForWire();
-        // usage 锚点（补强 T3/空白 §4）：包装主循环 stream 记录最近一次真实用量——loop 骨架仍不消费 usage（零策略口径闭合）
-        const trackedStream: StreamFn = (req) => (async function* () {
-          for await (const c of stream(req)) {
-            if (c.type === "usage") usageAnchor = { totalTokens: c.input + c.output, atMessageCount: req.messages.length };
-            yield c;
-          }
-        })();
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
         await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
         // user/message content 构造（M4-2.5 T5）：text part 在前、image part 引用形态在后（日志只存路径）
@@ -881,19 +941,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         ];
         await store.append(LOG_TYPES.userMessage, { content: content.length > 0 ? content : [{ kind: "text", text: "" }] });
         try {
-        let lastTurnEvent: SessionEvent | undefined;
-        for await (const e of agentLoop({
-            session: store, bus: graph.bus, tools: graph.tools,
-            provider: trackedStream, model, system: graph.promptSections(),
-            ...(effort !== undefined ? { reasoningEffort: effort } : {}),
-            signal: controller.signal, sink,
-            livePush: (c) => live.push(c), // 双投并存（T4/D45）：落日志（assistantChunk）+ 旁路——T5 断流后仅旁路
-          })) {
-          lastTurnEvent = e;
-          // 事件经 forwardingStore 在 append 时即转发，此处仅驱动迭代
-        }
+        // turn 机械（M4.5 T9 抽 driveTurn 共用——用户轮与送回轮同款 usage 锚点/档位/事件循环）
+        const lastTurnEvent = await driveTurn(controller);
         // 会话自动标题（M4-2 B9 用户拉前，2026-09-19 走查）：首轮问答完成后总结短标题落 session/label
-        // （M3/T6 预留类型首次消费）；LLM 失败兜底 = 首问文本截断。宿主显式 opt-in（核心缺省关）。
+        // （M3/T6 预留类型首次消费）；LLM 失败兜底 = 首问截断。宿主显式 opt-in（核心缺省关）。
         if (options.autoTitle === true && lastTurnEvent?.type === "turn/end" && (lastTurnEvent as { kind?: string }).kind === "completed") {
           await maybeTitle();
         }
@@ -1122,6 +1173,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       await oldGraph.disposeOwners([...removedOrChanged]);
       graph = newGraph;
       ensureSteerHook(graph.bus); // reuse 同 bus 时 WeakSet 短路；新 bus 兜底重挂
+      hookDelivery(graph.bus);    // M4.5 T9：送回 followUp drain 同款防重挂
       const d = diffGraphs(oldEff, newGraph.defs().filter((g) => newEffNames.has(g.def.name))); // 有效集口径——added/removed 如实含启停翻转（toast/回显消费，T2）
       const failed = newGraph.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" }));
       const report: ReloadReport = { added: d.added, removed: d.removed, reloaded: d.reloaded, unchanged: d.unchanged, failed };
