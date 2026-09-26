@@ -217,3 +217,20 @@ describe("工具结果按 callId 配对（2026-09-25 用户实机错配修复）
 		expect(lines.some((l) => l.includes("Used Bash") && l.includes("1 行"))).toBe(true);
 	});
 });
+
+describe("子代理送回行渲染（M4.5 T9——灰色系统行，非用户块）", () => {
+	it("㉝ sourceModule=tool-subagent 的 steering 走灰色 raw 行；普通 steer 照旧用户块", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "agent/steering-message", messages: [{ text: "[非用户输入] 后台子代理 调研 完成：结论首行", sourceModule: "tool-subagent" }] },
+			{ type: "agent/steering-message", messages: [{ text: "用户 steer 的话", sourceModule: "host" }] },
+		], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("后台子代理 调研 完成：结论首行"))).toBe(true);
+		expect(lines.some((l) => l.includes("用户 steer 的话"))).toBe(true); // 普通 steer 照旧回显
+		// 灰色形态：送回行带 muted 色码（区别于用户块形态）——用带色原文断言
+		const colored = dm.frameLines(80).find((l) => l.includes("后台子代理 调研"));
+		expect(colored).toBeDefined();
+		expect(colored! !== stripAnsi(colored!)).toBe(true);
+	});
+});
