@@ -1120,6 +1120,19 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     expect(third.match(/系统提醒：今天是/g)?.length).toBe(2); // 两行并存——靠最新一行
     await h.close();
   });
+
+  it("④ Coding 节（m4-6 T9）：贴合周边风格/默认无注释/不臆测库可用/最小改动 + Working Tree 三句并节尾（位置在 Safety 之后）", async () => {
+    const h = await makeHarness();
+    const sections = h.graph().promptSections();
+    expect(sections).toContain("## Coding");
+    expect(sections).toContain("Default to writing no comments");
+    expect(sections).toContain("Do not assume a library or framework is available because it is common");
+    expect(sections).toContain("three similar lines of code are better than a premature abstraction");
+    expect(sections).toContain("never revert or overwrite them"); // Working Tree 并节尾（codex 铁律）
+    expect(sections).toContain("Never run destructive commands (`git reset --hard`, `git checkout --`)");
+    expect(sections.indexOf("## Coding")).toBeGreaterThan(sections.indexOf("## Safety"));
+    await h.close();
+  });
 });
 
 describe("/model 持久化（2026-09-22 批⑧——选定即写盘不再问，推翻 T14/D38 确认制：「要不要永久」是工具自己的琐事）", () => {
