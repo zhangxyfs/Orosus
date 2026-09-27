@@ -43,7 +43,7 @@ import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { agentEventsFromFile, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
-import { subagentStatusLines } from "./subagent-status.ts";
+import { backgroundRunningCount, subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -1557,6 +1557,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     queueItems: () => [...pendingSubmits],
     // M4.5 T10：子代理状态行（前台实时块——1 秒 tick 现读花名册；后台不进状态行走 T13 计数）
     subagentStatus: () => subagentStatusLines(h.subagents(), Date.now()),
+    // M4.5 T13：输入行「N 任务正在执行」——只数后台运行中（前台走状态行）；为零整段消失
+    subagentRunningCount: () => backgroundRunningCount(h.subagents()),
     recallQueued: () => pendingSubmits.pop(), // LIFO 队尾召回（kimi recallLastQueued 同语义）
     requestSteer: (texts) => {
       if (!inflight) { // 无进行中 turn：首条直接发、其余照旧排队（kimi Ctrl-S 空闲 = 直接提交）

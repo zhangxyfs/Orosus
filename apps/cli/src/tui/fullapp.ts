@@ -84,6 +84,8 @@ export interface FullAppIO {
 	/** 子代理状态行（M4.5 T10——决策 13）：前台子/孙实时状态块（首行+子行、三色），位于流区与
 	 *  队列区之间；空数组 = 整段不占行（1 秒 tick 现读——轮数/时长随帧自更）。 */
 	subagentStatus?(): string[];
+	/** 输入行计数（M4.5 T13——决策 13）：后台运行中的任务数（只后台、为零整段消失——提示行右侧拼接）。 */
+	subagentRunningCount?(): number;
 	/** ↑ 召回队尾（LIFO——kimi recallLastQueued 同语义）；空队列 → undefined。 */
 	recallQueued(): string | undefined;
 	/** Ctrl+U = steer（kimi Ctrl-S 改键位——Ctrl+S 是终端流控 XOFF 冲突回避）：排队消息 + 当前草稿
@@ -149,6 +151,7 @@ interface AppState {
 	toast: { text: string; at: number; duration?: number } | undefined;
 }
 
+import { subagentCountHint } from "../subagent-status.ts";
 const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
@@ -1717,7 +1720,9 @@ export class FullApp {
 		const d = this.io.panelData();
 		// 档色语义（2026-09-22 用户拍板）：Never Ask = 全自动放行危险档 → 警示黄；确认类档保持青玉
 		const chip = theme.fg(d.permission === "never" ? "warn" : "accent", `◆ ${PERM_LABEL[d.permission] ?? d.permission}`);
-		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}`;
+		const subCnt = this.io.subagentRunningCount?.() ?? 0;
+		const subHint = subagentCountHint(subCnt);
+		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}${subHint !== "" ? theme.dim(" · ") + subHint : ""}`;
 		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
 		const hintW = leftW - 2;
 		const gap = hintW - visibleWidth(leftHint) - visibleWidth(rightHint) - 1;

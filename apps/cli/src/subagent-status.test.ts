@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
-import { subagentStatusLines } from "./subagent-status.ts";
+import { backgroundRunningCount, subagentCountHint, subagentStatusLines } from "./subagent-status.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 const NOW = Date.parse("2026-09-26T12:00:00Z");
@@ -65,6 +65,24 @@ describe("主窗口子代理状态行 T10（拍板要素：首行+子行、完�
     expect(flash.length).toBe(1); // 5 秒前结束——还在闪
     const gone = subagentStatusLines([T({ status: "completed", endedAt: "2026-09-26T11:59:00Z" })], NOW);
     expect(gone).toEqual([]); // 60 秒前——已消失
-    expect(subagentStatusLines([], NOW)).toEqual([]); // 空态整段消失
+    expect(subagentStatusLi
+describe("输入行计数 T13（只后台运行中；为零整段消失；青绿色）", () => {
+  it("㊽ backgroundRunningCount 口径：只数后台·运行中——前台/排队/已结束都不算", () => {
+    expect(backgroundRunningCount([
+      T({ status: "running", background: true }),
+      T({ id: "bbbb0001", label: "前台运行", status: "running" }),
+      T({ id: "bbbb0002", label: "后台排队", background: true, status: "queued" }),
+      T({ id: "bbbb0003", label: "后台完成", background: true, status: "completed" }),
+      T({ id: "bbbb0004", label: "后台失败", background: true, status: "failed" }),
+    ])).toBe(1);
+    expect(backgroundRunningCount([])).toBe(0);
+  });
+
+  it("㊾ 文案与颜色：「N 任务正在执行」青绿；为零 = 空串整段消失", () => {
+    const hint = subagentCountHint(3);
+    expect(hint).toContain("3 任务正在执行");
+    expect(hint).toContain(theme.fg("accent", "3 任务正在执行"));
+    expect(subagentCountHint(0)).toBe("");
+    expect(subagentCountHint(-1)).toBe("");
   });
 });

@@ -61,3 +61,14 @@ export function subagentStatusLines(entries: readonly SubagentRosterEntry[], now
   }
   return lines;
 }
+
+/** 输入行计数口径（M4.5 T13 / 设计空白）：只统计后台运行中——前台走状态行（T10）、排队不算「正在执行」。 */
+export function backgroundRunningCount(entries: readonly SubagentRosterEntry[]): number {
+  return entries.filter((e) => e.background && e.status === "running").length;
+}
+
+/** 输入行计数文案（T13）：「N 任务正在执行」青绿色；为零 = 空串（整段消失）。 */
+export function subagentCountHint(count: number): string {
+  if (count <= 0) return "";
+  return theme.fg("accent", `${count} 任务正在执行`);
+}
