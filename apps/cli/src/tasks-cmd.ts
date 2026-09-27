@@ -45,6 +45,11 @@ export function tasksListRows(entries: readonly SubagentRosterEntry[]): string[]
   return rows;
 }
 
+/** 空册占位行（用户拍板：/tasks 无条件开列表——空态也开，占位行说明怎么派活）。 */
+export function emptyTasksRow(): string {
+  return theme.dim("（暂无在册子代理——对模型说「派个子代理去 …」后这里会列出；后台跑完结论自动送回对话）");
+}
+
 /** 行选中解析：彩色行 → 编号（choose 回串解析用）。 */
 export function taskIdOfRow(row: string): string | undefined {
   const m = /\] (?:[0-9a-f]{8} - )?([0-9a-f]{8}) /.exec(stripAnsi(row));
