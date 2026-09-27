@@ -1739,4 +1739,120 @@ describe("滚轮路由（m5 鼠标批 T2——onWheel 窗口栈版：主流区�
 	});
 });
 
+describe("主窗文本选择（m5 鼠标批 T5——拖选反白 + 松开即复制；不再需要按住 Shift）", () => {
+	// SGR 按钮序列辅助（坐标 0 起 → SGR 1 起编码）
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<32;${x + 1};${y + 1}M`); };
+	const releaseAt = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}m`); };
+	const doc100 = Array.from({ length: 100 }, (_, i) => `第${i + 1}行内容`);
+	type SelState = { mselAnchor: { docIdx: number; col: number } | undefined; mselFocus: { docIdx: number; col: number } | undefined };
+
+	it("T5-1 pointToDoc 映射：屏行→doc 行（scrollBack 0 时 start=75）、左内衬 2 列、流区外/面板列 undefined", async () => {
+		const { app } = rig(doc100);
+		app.start();
+		await flush();
+		const ptd = (app as unknown as { pointToDoc(x: number, y: number): { docIdx: number; col: number } | undefined }).pointToDoc.bind(app);
+		expect(ptd(5, 0)).toEqual({ docIdx: 75, col: 3 }); // 屏行 0 = doc 尾屏首行；x−2 = 左内衬
+		expect(ptd(0, 0)).toEqual({ docIdx: 75, col: 0 }); // x 负值钳 0
+		expect(ptd(5, 26)).toBeUndefined(); // y >= streamH（30−4）= 输入框区 → 不选
+		expect(ptd(70, 0)).toBeUndefined(); // x >= leftW（100−34−2=64）= 右侧面板 → 不选（防幻影锚点）
+		app.stop();
+	});
+	it("T5-2 selectionText：单行区间/跨行区间提取纯文本（ANSI 色码剥离、列区间按显示宽切）", async () => {
+		const lines = [
+			"\x1b[31m红色第一行\x1b[0m",
+			"second line",
+			"third",
+		];
+		const { app } = rig(lines);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		const sel = (app as unknown as { selectionText(): string | undefined }).selectionText.bind(app);
+		st.mselAnchor = { docIdx: 0, col: 2 }; // 「红色第一行」列位（汉字 2 列）：红0-1 色2-3 第4-5 一6-7 行8-9
+		st.mselFocus = { docIdx: 0, col: 8 };
+		expect(sel()).toBe("色第一"); // 单行列区间 + 色码剥离
+		st.mselAnchor = { docIdx: 0, col: 0 };
+		st.mselFocus = { docIdx: 1, col: 6 }; // 反向跨行（focus 在后）
+		expect(sel()).toBe("红色第一行\nsecond");
+		st.mselAnchor = { docIdx: 1, col: 6 };
+		st.mselFocus = { docIdx: 0, col: 0 }; // 正向（anchor 在后）——排序后同上
+		expect(sel()).toBe("红色第一行\nsecond");
+		st.mselAnchor = undefined;
+		st.mselFocus = undefined;
+		expect(sel()).toBeUndefined(); // 无选区
+		app.stop();
+	});
+	it("T5-3 渲染反白：选区行含 \\x1b[7m 反白段、非选区行不含", async () => {
+		const { app, input, output } = rig(doc100);
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		press(input, 4, 0); // docIdx 75 col 2
+		dragTo(input, 10, 0);
+		await flush();
+		const frame = output.buf.slice(before);
+		expect(frame).toContain("\x1b[7m"); // 反白段（theme.inverse）
+		app.stop();
+	});
+	it("T5-4 按下-拖动-松开全链：writeClipboard 被调且 toast「已复制 N 行」；失败走 OSC 52 兜底提示", async () => {
+		const writes: string[] = [];
+		const { app, input } = rig(doc100, 100, 30, { writeClipboard: async (t: string) => { writes.push(t); return true; } });
+		app.start();
+		await flush();
+		press(input, 4, 0); // docIdx 75 col 2「第76行内容」的「7」附近
+		dragTo(input, 20, 1); // docIdx 76 col 18——跨行
+		releaseAt(input, 20, 1);
+		await flush();
+		expect(writes).toHaveLength(1);
+		expect(writes[0]).toContain("76行内容"); // 提取的是 doc 内容（press col 2 恰从「第76」的 7 起——左内衬 2 列 + 汉字 2 列宽）
+		expect(writes[0]).toContain("\n"); // 跨行
+		expect(app.stateRef.toast?.text).toMatch(/^已复制 2 行$/);
+		app.stop();
+	});
+	it("T5-5 空点击（按下-松开无拖动）= 清空选区（决策点 12）", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		press(input, 4, 0);
+		dragTo(input, 10, 0);
+		releaseAt(input, 10, 0); // 有选区的松开——非空选区保留反白
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		expect(st.mselAnchor).toBeDefined(); // 非空选区保留
+		press(input, 4, 5); // 空点击（新按下即折叠）
+		releaseAt(input, 4, 5);
+		await flush();
+		expect(st.mselAnchor).toBeUndefined(); // 松开即消
+		expect(st.mselFocus).toBeUndefined();
+		app.stop();
+	});
+	it("T5-6 非流区按下（面板列/输入框行）不建选区", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		press(input, 70, 0); // 面板列
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		expect(st.mselAnchor).toBeUndefined(); // 不建幻影锚点（清选区语义）
+		press(input, 5, 28); // 输入框行（y >= streamH=26）
+		await flush();
+		expect(st.mselAnchor).toBeUndefined();
+		app.stop();
+	});
+	it("T5-7 writeClipboardText 失败落 OSC 52 兜底：终端收到 52 复制口令 + toast 未确认提示", async () => {
+		const { app, input, output } = rig(doc100, 100, 30, { writeClipboard: async () => false });
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		press(input, 4, 0);
+		dragTo(input, 10, 0);
+		releaseAt(input, 10, 0);
+		await flush();
+		expect(output.buf.slice(before)).toContain("\x1b]52;c;"); // OSC 52 逃生口
+		expect(app.stateRef.toast?.text).toBe("已发终端复制口令（系统剪贴板未确认）");
+		app.stop();
+	});
+});
+
 });
