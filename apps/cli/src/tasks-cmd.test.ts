@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
-import { agentEventsFromFile, renderAgentView, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, renderAgentView, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 let dir: string | undefined;
@@ -84,4 +84,14 @@ describe("/tasks 列表与查看窗 T11（决策 21/22：亲缘分组 + 三色 +
     const waiting = renderAgentView(T({ pendingApproval: { callId: "c", tool: "boom__run", reason: "subprocess" }, background: true }), []);
     expect(stripAnsi(waiting).split("\n")[0]).toContain("运行中 · 等审批 · 3 轮 · 后台");
   });
+describe("/tasks 空态（2026-09-27 用户拍板：无条件开列表）", () => {
+  it("㊺b 空册占位行：含派活指引与送回说明；灰色；taskIdOfRow 不误认", () => {
+    const row = emptyTasksRow();
+    expect(row).toContain("暂无在册子代理");
+    expect(row).toContain("派个子代理去");
+    expect(row).toContain("自动送回");
+    expect(row.startsWith(theme.dim("（暂无"))).toBe(true); // 弱化（dim）形态
+    expect(taskIdOfRow(row)).toBeUndefined(); // 不是任务行——选中也不进查看窗
+  });
+});
 });

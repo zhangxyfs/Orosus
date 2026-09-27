@@ -42,7 +42,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { agentEventsFromFile, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount, subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -829,8 +829,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           }
           return "again";
         }
-        // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答
-        if (text === "/tasks") {
+        // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
+        if (text === "/tasks" || text === "/task") {
           await openTasks(activeApp, out);
           return "again";
         }
@@ -1095,18 +1095,16 @@ const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-w
  *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。 */
 const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Promise<void> => {
 	const entries = h.subagents();
-	if (entries.length === 0) {
-		notify("当前没有在册子代理——派活后可用 /tasks 查看进度与结论");
-		return;
-	}
-	const rows = tasksListRows(entries);
+	// 空册也开列表（用户拍板 2026-09-27：/tasks 无条件开）——占位行说明派活方式，回车无事发生
+	const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
 	let idx: number;
 	if (app !== undefined) {
 		const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
-		if (picked === undefined) return; // Esc
+		if (picked === undefined || entries.length === 0) return; // Esc / 空态占位行
 		idx = picked;
 	} else {
 		const picked = await commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
+		if (entries.length === 0) return;
 		idx = rows.indexOf(picked);
 		if (idx < 0) return;
 	}
@@ -1332,7 +1330,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{
 		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。",
 	},
-	{ name: "/tasks", desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
+	{ name: "/tasks", aliases: ["task"], desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）
