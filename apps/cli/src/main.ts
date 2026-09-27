@@ -706,6 +706,15 @@ function attachRender(h: Harness): void {
         sinkFor().end();
         void refreshPanel(); // 面板数据随 turn 刷新（F4）
       }
+      // m4-7 T5：压缩完成点清 skill 模块去重集——skill__load 正文是 tool result，compact 会被压掉，
+      // 去重集不清 = 模型重调只得到确认句却没有正文（qwen 明确处理的坑）。/compact 手动与阈值自动
+      // 同型走本口；会话边界免挂（换会话 createSession → loadModules 模块重建，内存态自然清零）。
+      // getOptional 惰性取——skill 模块不在则跳过（优雅降级）
+      if (e.type === "turn/compaction") {
+        void h.graph().services.getOptional("skill.resetLoaded").then((reset) => {
+          if (typeof reset === "function") (reset as () => void)();
+        });
+      }
       // 任务清单实时投影（2026-09-23 用户拍板）：载荷即全量清单，到一条改一条——不再等 turn 结束检查点。
       // panelCache 未就绪（启动历史重放先于首刷）跳过，refreshPanel 稍后自会从历史取 .at(-1)；
       // 全屏 FullApp 秒 tick 自动重绘，行模式无面板，改快照无害
