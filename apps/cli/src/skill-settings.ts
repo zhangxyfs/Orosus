@@ -121,7 +121,7 @@ export function truncateAtWord(text: string, w: number): string {
 /** 列表页行（原型图 2）：三列——名（左）/描述（中，词原子截断）/状态（右，「停用」灰、「启用」常规色）。
  *  w = 宿主从 pickRowWidth() 拿的行可用宽（左栏内宽——拼行与 pick 渲染同源，防超宽推错右框）。 */
 export function skillListRow(w: number, row: SkillCatalogRow): string {
-  const status = row.disabled ? fg("muted", "停用") : "启用";
+  const status = row.disabled ? fg("muted", "停用") : fg("accent", "启用"); // 启用绿/停用灰（2026-09-27 用户走查拍板）
   const statusW = 4; // 启用/停用两字（ANSI 不占宽）
   const nameW = Math.min(20, Math.max(8, Math.floor((w - statusW - 4) / 3)));
   const name = row.name.length > nameW ? `${row.name.slice(0, nameW - 1)}…` : row.name.padEnd(nameW);

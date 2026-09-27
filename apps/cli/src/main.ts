@@ -1213,7 +1213,10 @@ const openSkillsPanel = async (app: FullApp): Promise<void> => {
 		}
 		// 行宽与 pick 渲染同源（m4-7 走查修 2026-09-27：原按全终端列数拼行——侧栏在场时超宽把右框 │ 推错位）
 		const w = app.pickRowWidth();
-		const picked = await app.pickOverlay("技能（回车查看详情）", rows.map((r) => skillListRow(w, r)), selAt);
+		// items 数组长期持有（2026-09-27 用户走查拍板「改变状态后要更新上一级列表」）：详情 Alt + K 后
+		// 原地重拼该行——Esc 回列表顶上的正是这个排队的 pickOverlay（持同数组引用），状态列即时新
+		const items = rows.map((r) => skillListRow(w, r));
+		const picked = await app.pickOverlay("技能（回车查看详情）", items, selAt);
 		if (picked === undefined || picked < 0 || picked >= rows.length) return; // Esc 返回设置
 		selAt = picked;
 		const row = rows[picked]!;
@@ -1225,6 +1228,7 @@ const openSkillsPanel = async (app: FullApp): Promise<void> => {
 					run: (): string => {
 						const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
 						row.disabled = nowDisabled;
+						items[picked] = skillListRow(w, row); // 上一级列表行原地更新（回列表即见新状态）
 						const toast = afterSkillToggle(app, row.name, nowDisabled);
 						if (toast !== "") app.showToast(toast); // busy 缓后（图 4）
 						return detail(); // 状态行即时翻转（内容替换）
