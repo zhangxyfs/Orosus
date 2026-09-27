@@ -1530,27 +1530,70 @@ describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定
 		app.stop();
 	});
 describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底部）", () => {
-	it("㊿-8 viewText bottom：初始滚到末页；live 刷新贴底跟随；用户上翻即脱钉", async () => {
+	/** 查看窗渲染层断言口径（T1 迁移）：直接调 buildViewOverlay 拿浮层行——不再读内部 scroll 字段。 */
+	const viewLines = (app: FullApp): string[] => {
+		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
+		return (app as unknown as { buildViewOverlay(pu: unknown): { lines: string[] } }).buildViewOverlay(pu).lines.map(stripAnsi);
+	};
+	const rows = (n: number): string => Array.from({ length: n }, (_, i) => `行${i + 1}`).join("\n");
+
+	it("㊿-8 viewText bottom：初始渲染末页；live 变长贴底跟随（断言走渲染层口径——T1 pinned 迁移）", async () => {
 		const { app } = rig();
 		app.start();
 		await flush();
-		const rows = (n: number): string => Array.from({ length: n }, (_, i) => `行${i + 1}`).join("\n");
 		let body = rows(60);
 		app.viewText("查看", body, { layout: "full", bottom: true, live: () => body });
 		await flush(80);
-		const pu = (app as unknown as { pendingUi: { kind: string; scroll: number; lines: string[]; layout?: string; bottom?: boolean } }).pendingUi;
-		expect(pu.kind).toBe("view");
-		expect(pu.layout).toBe("full");
-		expect(pu.bottom).toBe(true);
-		expect(pu.scroll).toBeGreaterThanOrEqual(pu.lines.length - 30); // 初值在末页（60 行 / 30 行屏）
+		let lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行60"))).toBe(true); // 首帧渲染末页（60 行 / page 27）
+		expect(lines.some((l) => l.includes("行34"))).toBe(true); // 末页首行 = 行34（60−27 起）
+		expect(lines.some((l) => l.includes("行33"))).toBe(false);
 		body = rows(80); // live 长内容
 		await flush(1200); // 跨一个 tick 帧让 live 刷新
-		expect(pu.lines.length).toBe(80);
-		expect(pu.scroll).toBeGreaterThanOrEqual(pu.lines.length - 30); // 贴底跟随到新末页
-		pu.scroll = 5; // 用户上翻
+		lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行80"))).toBe(true); // 贴底跟随到新末页
+		app.stop();
+	});
+	it("T1-a 首按 ↑ 立即上移一行（死区消除——旧哨兵形态要连按 29 次才动）且 live 刷新不抢回贴底", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		let body = rows(80);
+		app.viewText("查看", body, { layout: "full", bottom: true, live: () => body });
+		await flush(80);
+		input.emit("data", "\x1b[A"); // ↑
+		await flush(80);
+		let lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行79"))).toBe(true);
+		expect(lines.some((l) => l.includes("行80"))).toBe(false); // 立即上移（落地 53 后 −1 = 52 → 行53..79）
 		body = rows(100);
 		await flush(1200);
-		expect(pu.scroll).toBe(5); // 脱钉——不抢用户滚动位置
+		lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行79"))).toBe(true);
+		expect(lines.some((l) => l.includes("行100"))).toBe(false); // 脱钉——live 不抢用户滚动位置
+		app.stop();
+	});
+	it("T1-b 贴底时按 ↓ 钳在末页不动（语义不变）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.viewText("查看", rows(60), { layout: "full", bottom: true });
+		await flush(80);
+		input.emit("data", "\x1b[B"); // ↓
+		await flush(80);
+		const lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行60"))).toBe(true); // 仍在末页
+		app.stop();
+	});
+	it("T1-c 非 bottom 窗照旧从顶开始（pinned 不影响缺省窗）", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.viewText("查看", rows(60), { layout: "full" });
+		await flush(80);
+		const lines = viewLines(app);
+		expect(lines.some((l) => l.includes("行1"))).toBe(true);
+		expect(lines.some((l) => l.includes("行60"))).toBe(false); // 未满一屏多的部分不出现在首帧
 		app.stop();
 	});
 });
