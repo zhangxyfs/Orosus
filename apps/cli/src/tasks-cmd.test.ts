@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
-import { stripAnsi } from "./tui/width.ts";
+import { stripAnsi, visibleWidth } from "./tui/width.ts";
 import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
@@ -110,4 +110,17 @@ describe("卸载 tool-subagent 守卫（2026-09-27：在跑/排队/挂审批不�
     expect(subagentUnloadBlock([])).toBeUndefined();
   });
 });
+describe("查看窗折行宽度（2026-09-27 拍板：折行跟全窗口大小走）", () => {
+	it("㊺e renderAgentView 的 width 生效：同一条长消息 40 宽折行数多于 100 宽", () => {
+		const long = "这是一条非常长的子代理任务书文本".repeat(30); // ~450 显示宽
+		const entry = T({ status: "completed" });
+		const events = [{ type: "user/message", content: [{ kind: "text", text: long }] }];
+		const narrow = renderAgentView(entry, events, 40).split("\n");
+		const wide = renderAgentView(entry, events, 100).split("\n");
+		const textLines = (ls: string[]): number => ls.filter((l) => stripAnsi(l).includes("任务书文本")).length;
+		expect(textLines(narrow)).toBeGreaterThan(textLines(wide)); // 窄宽折更多
+		expect(narrow.every((l) => l === "" || visibleWidth(l) <= 44)).toBe(true); // 窄宽不超框（40 + 头行前缀容差）
+	});
+});
+
 });

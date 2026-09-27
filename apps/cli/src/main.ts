@@ -1122,11 +1122,13 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 		notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
 		return;
 	}
-	// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）
+	// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
+	// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
+	const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
 	const live = entry.status === "queued" || entry.status === "running"
-		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id))
+		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW())
 		: undefined;
-	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id));
+	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW());
 	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(live !== undefined ? { live } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
 	else out(body);
 };
