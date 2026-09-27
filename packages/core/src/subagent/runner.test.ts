@@ -267,6 +267,25 @@ describe("子代理 T2（工具过滤：按工种减 + 到顶剥 + 双层门控�
     expect(grandHeader.parentSession).toBe(`agents_${out.id}`);
     await h.close();
   });
+
+  it("⑥b 嵌套规则进描述（m4-6 T3，Reasonix 定式——规则写进当刻可见的描述）：深度 1 的派活工具描述带嵌套句；主对话注册面与孙代理面不带", async () => {
+    const fakeSpawnModule = fakeModule("tool-subagent", {
+      mounts: ["contribute:tool"],
+      activate(ctx) { ctx.contribute.tool(mkTool("tool-subagent__spawn")); },
+    });
+    const h = await setup({ extraModules: [fakeSpawnModule] });
+    await port!.spawn({ label: "父代", prompt: "go" });
+    // 深度 1 面：spawn 描述尾部带嵌套句
+    const face = lastRequests[0]!.tools.find((t) => t.name === "tool-subagent__spawn");
+    expect(face).toBeDefined();
+    expect(face!.description).toContain("嵌套规则");
+    expect(face!.description).toContain("孙代理不支持后台");
+    expect(face!.description).toContain("立即失败不排队");
+    // 主对话注册面：模块本体描述不动（包装是注册期副本，不回写）
+    const mainTool = h.graph().tools.list().find((t) => t.name === "tool-subagent__spawn");
+    expect((mainTool?.description ?? "")).not.toContain("嵌套规则");
+    await h.close();
+  });
 });
 
 describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () => {
