@@ -1489,7 +1489,7 @@ describe("斜杠菜单参数阶段（m5 T15——命令名已定 + 空格后长�
 describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定案）", () => {
 	it("㊿ 空闲 + 焦点输入框 + 有子代理在册：双击（1 秒窗口）全停；单击只提示；无子代理零行为改动", async () => {
 		const { app, input, actions } = rig([], 100, 30, {
-			subagentStatus: () => ["[38;5;115m◆ 子代理 a3f9c2e1 修复登录页 · 运行中 3 轮[39m"],
+			subagentActive: () => true,
 			stopAllSubagents: () => actions.push("stopall"),
 		});
 		app.start();

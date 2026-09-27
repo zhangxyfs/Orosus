@@ -393,6 +393,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     resolveParentModel: () => resolveProvider(),
     resolveModel: (v) => resolveModelValue(v),
     onBackgroundDelivery: pushDelivery,
+    resolveEffort: () => resolveEffortForWire(), // M4.5：子代理跟随 /effort 档（agent 组 <思考> 段）
   });
   let graph = await loadModules({
     defs,

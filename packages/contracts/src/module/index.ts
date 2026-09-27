@@ -629,6 +629,12 @@ export interface SubagentRosterEntry {
   pendingApproval?: { callId: string; tool: string; reason: string };
   /** 写报备归一结果（决策 24：wholeRepo = bash/未报备算整仓）。 */
   writeClaim?: { paths: string[]; wholeRepo: boolean };
+  /** 已发出的工具调用数（agent 组显示用——2026-09-27 用户拍板格式）。 */
+  toolCalls?: number;
+  /** 词元累计（input+output 分列——agent 组行显示用）。 */
+  usage?: { input: number; output: number };
+  /** 思考档位（跟随 /effort 解析——缺省未解析）。 */
+  effort?: string;
 }
 
 /** 内核子代理缝（M4.5——「模块 + 内核服务缝」第五次应用）：宿主注入的派单执行口，

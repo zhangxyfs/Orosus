@@ -39,6 +39,8 @@ export interface SubagentDeps {
   resolveModel: (value: string) => { stream: StreamFn; model: string };
   /** 后台单子收场送回（M4.5 T9/决策 17）：harness 侧积压 + 闲时自动送回轮；缺省不装（测试/无头不送）。 */
   onBackgroundDelivery?: (line: string) => void;
+  /** 思考档位解析（M4.5 / 2026-09-27：子代理跟随 /effort 档——agent 组行显示 <思考> 段）；缺省不带。 */
+  resolveEffort?: () => Promise<string | undefined>;
 }
 
 /** 派活类工具前缀（决策 1：tool-subagent__* 族）。 */
@@ -205,6 +207,8 @@ interface RosterEntry {
   controller?: AbortController | undefined;   // running 时在——stop 全停的靶
   cancel?: (() => void) | undefined;           // 各等待阶段的取消口（并发位排队/写闸排队/审批挂起）
   usageTotal?: { input: number; output: number }; // 词元累计（结束记主会话账）
+  toolCalls?: number;                          // 已发出的工具调用数（agent 组行显示）
+  effort?: string;                             // 思考档位（跟随 /effort 解析）
 }
 
 /**
@@ -268,6 +272,9 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     ...(e.error !== undefined ? { error: e.error } : {}),
     ...(e.pendingApproval !== undefined ? { pendingApproval: { callId: e.pendingApproval.callId, tool: e.pendingApproval.tool, reason: e.pendingApproval.reason } } : {}),
     ...(e.writeClaim !== undefined ? { writeClaim: e.writeClaim } : {}),
+    ...(e.toolCalls !== undefined ? { toolCalls: e.toolCalls } : {}),
+    ...(e.usageTotal !== undefined ? { usage: e.usageTotal } : {}),
+    ...(e.effort !== undefined ? { effort: e.effort } : {}),
   });
 
   /** 在册清单：全部进行中 + 最近 SUBAGENT_ROSTER_KEEP 条已结束（更早只留会话文件——决策 19）。 */
@@ -425,6 +432,9 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         return veto ?? undefined;
       }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
 
+      // 思考档位（2026-09-27）：子代理跟随 /effort 解析（与主对话同链）；记册供 agent 组行显示
+      const effort = deps.resolveEffort !== undefined ? await deps.resolveEffort() : undefined;
+      if (effort !== undefined) entry.effort = effort;
       for await (const e of agentLoop({
         session: forkSession, // 带历史开局 = 复合投影（父前缀 + own 追加）；空白开局 = 纯 own
         bus,
@@ -432,10 +442,13 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         provider: resolved.stream,
         model: resolved.model,
         system: buildSystemPrompt(req),
+        ...(effort !== undefined ? { reasoningEffort: effort } : {}),
         signal: controller.signal,
         sink: deps.sink,
       })) {
-        if (e.type === LOG_TYPES.turnStep) {
+        if (e.type === LOG_TYPES.toolCall) {
+          entry.toolCalls = (entry.toolCalls ?? 0) + 1;
+        } else if (e.type === LOG_TYPES.turnStep) {
           turns++;
           entry.turns = turns;
           if (abortedByCap()) controller.abort(); // 轮数保险丝（决策 10）：到顶即停，结论取最后回复

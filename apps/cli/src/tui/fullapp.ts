@@ -81,9 +81,8 @@ export interface FullAppIO {
 	requestPasteImage?(): void;
 	/** 消息队列（2026-09-23 队列批——kimi QueuePane 同族）：busy 期排队的消息列表（输入框上方逐条显示）。 */
 	queueItems(): string[];
-	/** 子代理状态行（M4.5 T10——决策 13）：前台子/孙实时状态块（首行+子行、三色），位于流区与
-	 *  队列区之间；空数组 = 整段不占行（1 秒 tick 现读——轮数/时长随帧自更）。 */
-	subagentStatus?(): string[];
+	/** 子代理在跑门槛（M4.5 2026-09-27 改版——前台显示已移入流区 agent 组，此口只供双击 Esc 全停判定）。 */
+	subagentActive?(): boolean;
 	/** 输入行计数（M4.5 T13——决策 13）：后台运行中的任务数（只后台、为零整段消失——提示行右侧拼接）。 */
 	subagentRunningCount?(): number;
 	/** 双击 Esc 全停（M4.5 T14——决策 12）：焦点在输入框空闲态双击 = 停止全部子代理（未答审批自动回绝）；
@@ -409,9 +408,9 @@ export class FullApp {
 		if (FullApp.activeInstance === this) FullApp.activeInstance = undefined;
 	}
 
-	/** 子代理在册可见（M4.5 T14）：状态行有内容或有后台在跑——空闲双击 Esc 的全停门槛。 */
+	/** 子代理在册可见（M4.5 T14 / 2026-09-27 改版）：宿主直判口或有后台在跑——空闲双击 Esc 的全停门槛。 */
 	private subagentsVisible(): boolean {
-		return (this.io.subagentStatus?.().length ?? 0) > 0 || (this.io.subagentRunningCount?.() ?? 0) > 0;
+		return this.io.subagentActive?.() === true || (this.io.subagentRunningCount?.() ?? 0) > 0;
 	}
 
 	setBusy(b: boolean): void {
@@ -1662,10 +1661,8 @@ export class FullApp {
 		// 队列区（2026-09-23 队列批——kimi QueuePane 同族）：busy 期排队消息逐条单行摘要 +
 		// 操作 hint 行，位于流区与输入框之间；空队列不占行
 		const queue = this.io.queueItems();
-		// 子代理状态行（M4.5 T10——决策 13）：前台子/孙实时块，位于流区与队列区之间；空 = 整段不占行
-		const subagent = this.io.subagentStatus?.() ?? [];
 		const queueH = queue.length === 0 ? 0 : queue.length + 1;
-		const streamH = rows - inputH - queueH - subagent.length;
+		const streamH = rows - inputH - queueH;
 
 		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
 		const statusH = Math.max(8, Math.floor(rows * 0.55));
@@ -1687,19 +1684,15 @@ export class FullApp {
 			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐
 			screen[r] = padToWidth(doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`, leftW);
 		}
-		// 子代理状态块（已带 ANSI 三色——padToWidth 对齐左栏宽；行内容自带长度约束：简述≤60/错误首行 40）
-		for (let i = 0; i < subagent.length; i++) {
-			screen[streamH + i] = padToWidth(` ${subagent[i]!}`, leftW);
-		}
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
 				const oneLine = queue[i]!.replace(/\s+/g, " ").trim(); // 单行摘要（kimi QueuePane 同形态）
-				screen[streamH + subagent.length + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.dim(truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
+				screen[streamH + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.dim(truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
 			}
 			// 两行都 pad 到左栏宽——不补齐则右侧面板分隔线/内容左移错位（走查实锤）
-			screen[streamH + subagent.length + queue.length] = padToWidth(theme.dim("  ↑ 召回队尾 · Ctrl + U 立即注入本轮 · 回答结束后依序发送"), leftW);
+			screen[streamH + queue.length] = padToWidth(theme.dim("  ↑ 召回队尾 · Ctrl + U 立即注入本轮 · 回答结束后依序发送"), leftW);
 		}
-		const divRow = streamH + queueH + subagent.length;
+		const divRow = streamH + queueH;
 		// 模块询问挂起期：问题写进输入框顶边标题（F5——placeholder 只在空输入时可见，用户一打字问题就消失）
 		if (this.pendingUi?.kind === "ask") {
 			const qSeg = theme.fg("accent", ` ${this.pendingUi.question} `);
