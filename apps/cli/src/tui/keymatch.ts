@@ -5,7 +5,7 @@
 
 const KEY_TABLE: Record<string, string> = {
 	"\r": "enter",
-	"\n": "enter",
+	"\n": "shift+enter", // 裸 LF = Shift+Enter 的可区分形态（裸 VT 无协议协商下多数终端如此；Ctrl+J 同达——同为换行语义无害）。原映射 "enter" 会让 Shift+Enter 误提交
 	"\x7f": "backspace",
 	"\x08": "backspace",
 	"\t": "tab",
@@ -43,6 +43,7 @@ const KEY_TABLE: Record<string, string> = {
 	"\x15": "ctrl+u",
 	"\x17": "ctrl+w",
 	"\x1b\r": "alt+enter", // Alt+Enter 换行（多行输入）
+	"\x1b[13;2u": "shift+enter", // Shift+Enter 的 CSI-u 形（win32-input / kitty 键盘模式的终端）
 };
 
 /** 规范化：先查表；`\x1b<单字符>` → alt+ch；单可打印字符原样；其余 → 原串（调用方吞掉）。 */

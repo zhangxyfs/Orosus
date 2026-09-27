@@ -4,7 +4,7 @@
  *  交互：Tab 焦点循环（聚焦面板青玉框；面板聚焦裸键直控〔2026-09-24 拍板，不再借道 Shift〕：←→ 翻页 / PgUp·PgDn 模块·任务翻页 / ↑↓ 选择 / Enter 挂卸）/
  *  Shift+Tab 权限循环 / Esc 忙碌时双击停生成（单击 toast 提示防误触）、闲时返回输入 /
  *  斜杠菜单全宽浮层（每页 10 条窗口跟随/「还有 N 项」/二级列表 ✓ 当前值/空过滤占位不关窗/长说明）/
- *  输入多行 ≤5 + Alt+Enter 换行 + Ctrl+A 全选 + Shift+←→ 选择 + bracketed paste / Alt+E 思考折叠 / Alt+O 工具明细折叠 / Alt+F 失败体折叠。
+ *  输入多行 ≤5 + Alt+Enter / Shift+Enter 换行 + Ctrl+A 全选 + Shift+←→ 选择 + bracketed paste / Alt+E 思考折叠 / Alt+O 工具明细折叠 / Alt+F 失败体折叠。
  *  Ctrl+C 全屏期不占用（2026-09-23 用户拍板——WT 原生复制让位；退出走 /quit，停生成走双击 Esc）。
  *  崩溃恢复（spike 判据 4）：exit 钩子同步直写恢复序列 + uncaughtException 先恢复再抛。
  *  鼠标接管关闭（用户拍板 2026-09-21——重开 = fullscreen.ts ENTER_ALT 追加 ?1000/?1006）。 */
@@ -1005,7 +1005,7 @@ export class FullApp {
 						const submitOnEnter = input.enterSubmit ?? input.multiline !== true;
 						if (key === "enter" && (submitOnEnter || input.multiline !== true)) {
 							this.fireDialogEvent(pu, { type: "activate", id }); // 单行/显式 submit：Enter 激活（无 index）
-						} else if ((key === "enter" && input.multiline === true) || (key === "alt+enter" && input.multiline === true)) {
+						} else if ((key === "enter" || key === "alt+enter" || key === "shift+enter") && input.multiline === true) {
 							ed.text = ed.text.slice(0, ed.cursor) + "\n" + ed.text.slice(ed.cursor);
 							ed.cursor += 1;
 							fireInput();
@@ -1063,7 +1063,8 @@ export class FullApp {
 				this.scheduler.requestImmediateRender();
 				return;
 			}
-			// ask/askSecret：复用编辑器键，Enter 结算、Esc 取消
+			// ask/askSecret：复用编辑器键，Enter 结算、Esc 取消；Shift+Enter 吞掉（单行问答不收换行——
+			// 否则换行符悄悄进答案字符串，askSecret 里更荒诞）
 			if (key === "enter") {
 				const v = this.state.input;
 				this.pendingUi = undefined;
@@ -1075,7 +1076,7 @@ export class FullApp {
 				this.pendingUi = undefined;
 				pu.resolve(undefined);
 				this.promoteUi();
-			} else {
+			} else if (key !== "shift+enter") {
 				this.onEditKey(key);
 				return;
 			}
@@ -1315,6 +1316,7 @@ export class FullApp {
 				if (normCmd(s.input) !== "") this.submitLine(normCmd(s.input));
 				break;
 			case "alt+enter":
+			case "shift+enter": // Shift+Enter = 换行（2026-09-27 用户拍板；keymatch 两形态：裸 LF / CSI-u）
 				this.inputInsert("\n");
 				break;
 			case "ctrl+a":

@@ -78,7 +78,9 @@ export function toolDisplayName(name: string): string {
 }
 
 const capArg = (s: string, max = 60): string => {
-  const t = s.replace(/\\s+/g, " ").trim();
+  // 折叠一切空白（含换行/制表）：命令带真换行（python -c 内嵌 \n）不折叠会带着换行进 ● 行，
+  // styleToolLine 的 . 不吃换行 → 整行失配退白色（2026-09-27 用户实机白行根因；TUI 批出生即误写 \\s）
+  const t = s.replace(/\s+/g, " ").trim();
   return t.length <= max ? t : `${t.slice(0, max - 12)}…${t.slice(-10)}`;
 };
 

@@ -206,3 +206,16 @@ describe("工具显示名 label（2026-09-24 用户拍板——Search→Web Sear
     registerToolLabels([]);
   });
 });
+
+describe("工具行参数空白折叠（2026-09-27 白行根因修复——capArg 误写 \\s 出生即带）", () => {
+  it("① 命令含真换行（python -c 内嵌 \n）→ 折叠成单行空格，● 行不带换行 → styleToolLine 正常着色", () => {
+    const line = toolCallLine("tool-shell__bash", { command: 'python -c "import sys\nfor line in sys.stdin:\n    print(line)\n"' }, process.cwd());
+    expect(line.includes("\n")).toBe(false); // 无真换行——styleToolLine 的 . 不吃换行即整行失色（用户实机白行）
+    expect(line).toContain("import sys for line");
+  });
+  it("② 长命令中段截断保留头尾（原行为回归钉）", () => {
+    const line = toolCallLine("tool-shell__bash", { command: "a".repeat(80) + "tail" }, process.cwd());
+    expect(line).toContain("…");
+    expect(line.endsWith("tail)") || line.includes("tail")).toBe(true);
+  });
+});

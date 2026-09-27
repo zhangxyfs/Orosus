@@ -397,12 +397,17 @@ export class DocModel {
 			if (e.k === "think") {
 				out.push(...this.thinkBlock(e.src, width));
 			} else if (e.k === "user") {
-				// 用户消息折行（2026-09-23 走查批①：此前逐逻辑行直推不折行，长提问被终端硬截）
+				// 用户消息折行（2026-09-23 走查批①：此前逐逻辑行直推不折行，长提问被终端硬截）。
+				// 一个块只画一个 ❯（2026-09-27 拍板：多行提问/子代理任务书整块一段——换行与折行续行
+				// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）
 				out.push("");
 				const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
+				let first = true;
 				for (const l of e.src.split("\n")) {
-					for (const [i, wl] of wrapText(l, uw).entries())
-						out.push(i === 0 ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
+					for (const wl of wrapText(l, uw)) {
+						out.push(first ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
+						first = false;
+					}
 				}
 				out.push("");
 			} else if (e.k === "tool") {

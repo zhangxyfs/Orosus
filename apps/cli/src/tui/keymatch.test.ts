@@ -21,4 +21,10 @@ describe("按键匹配表（TUI 批阶段三 F0——T0 解析器的 shift 修�
 		expect(isPrintable("\x7f")).toBe(false);
 		expect(isPrintable("\x1b[A")).toBe(false);
 	});
+	it("③ Shift+Enter 换行（2026-09-27 用户拍板）：裸 LF 与 CSI-u 两形态 → shift+enter；\\r 仍 = enter（提交）", () => {
+		expect(matchKey("\n")).toBe("shift+enter"); // 裸 VT 多数终端 Shift+Enter 落 LF；原映射 enter 会误提交
+		expect(matchKey("\x1b[13;2u")).toBe("shift+enter"); // win32-input / kitty 键盘模式的终端
+		expect(matchKey("\r")).toBe("enter"); // 提交键不变
+		expect(matchKey("\x1b\r")).toBe("alt+enter"); // Alt+Enter 换行原键保留
+	});
 });

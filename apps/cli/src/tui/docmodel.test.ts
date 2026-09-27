@@ -118,15 +118,24 @@ describe("DocModel 宽度回流（F5 十一轮——Ctrl+T 侧栏开关后内容
 });
 
 describe("DocModel 用户消息折行与工具明细（2026-09-23 走查批）", () => {
-	it("① 用户长提问按流区宽折行——首行 ❯ 前缀、续行缩进，无超宽行", () => {
-		const dm = new DocModel();
-		dm.userPrompt("这是一个很长的提问需要自动折行不然在消息窗口里会被截断看不到后面的内容".repeat(2));
-		const plain = dm.frameLines(40).map(stripAnsi).filter((l) => l !== "");
-		expect(plain.length).toBeGreaterThan(2); // 折出多行
-		expect(plain[0]).toMatch(/^❯ /);
-		expect(plain[1]).toMatch(/^ {2}\S/); // 续行缩进对齐正文
-		for (const l of plain) expect([...l].length).toBeLessThanOrEqual(42); // CJK 2 列——字数上限 40+余量
-	});
+		it("① 用户长提问按流区宽折行——首行 ❯ 前缀、续行缩进，无超宽行", () => {
+			const dm = new DocModel();
+			dm.userPrompt("这是一个很长的提问需要自动折行不然在消息窗口里会被截断看不到后面的内容".repeat(2));
+			const plain = dm.frameLines(40).map(stripAnsi).filter((l) => l !== "");
+			expect(plain.length).toBeGreaterThan(2); // 折出多行
+			expect(plain[0]).toMatch(/^❯ /);
+			expect(plain[1]).toMatch(/^ {2}\S/); // 续行缩进对齐正文
+			for (const l of plain) expect([...l].length).toBeLessThanOrEqual(42); // CJK 2 列——字数上限 40+余量
+		});
+
+		it("①b 多行消息块只画一个 ❯（2026-09-27 拍板：换行/折行续行同为缩进续行——旧实现逐逻辑行各画 ❯，多行子代理任务书满屏箭头）", () => {
+			const dm = new DocModel();
+			dm.userPrompt("你是项目文档分析专家。分析这个项目。\n\n请阅读：\n- README.md\n- docs/ROADMAP.md\n输出：三段总结。");
+			const plain = dm.frameLines(60).map(stripAnsi).filter((l) => l !== "");
+			expect(plain.filter((l) => l.includes("❯"))).toHaveLength(1); // 整块一个箭头
+			expect(plain[0]).toMatch(/^❯ /);
+			expect(plain[1]).toMatch(/^ {2}/); // 其余逻辑行/折行都是缩进续行
+		});
 
 	it("② Edit 工具：收起帽 10 行 + Alt+O 提示，展开态全量（删 -/增 +/行号栏；chip 按内容计增删）", () => {
 		const dm = new DocModel();
