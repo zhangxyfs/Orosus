@@ -44,11 +44,13 @@ describe("剪贴板纯文本（m5 T11——设计空白 13 取证通过：Get-Cl
 });
 
 describe("剪贴板纯文本写入（m5 鼠标批 T5——选择松开即复制）", () => {
-	it("① clipboardWriteCommand 三平台：win 走 stdin（$input | Set-Clipboard 防命令行长度限）、mac pbcopy、linux xclip→wl-copy 兜底链", async () => {
+	it("① clipboardWriteCommand 三平台：win 走 stdin 且前置 InputEncoding=UTF8（PS5 按系统 GBK 解 stdin 是复制乱码根因）、mac pbcopy、linux xclip→wl-copy 兜底链", async () => {
 		const { clipboardWriteCommand } = await import("./paste.ts");
 		const win = clipboardWriteCommand("win32");
 		expect(win.file).toBe("powershell");
-		expect(win.args.join(" ")).toContain("$input | Set-Clipboard"); // 文本走 stdin 不进命令行
+		const winCmd = win.args.join(" ");
+		expect(winCmd).toContain("$input | Set-Clipboard"); // 文本走 stdin 不进命令行
+		expect(winCmd).toContain("[Console]::InputEncoding"); // stdin 解码显式 UTF-8（2026-09-27 走查：粘贴出「锘挎」乱码 = UTF-8 被按 GBK 解）
 		const mac = clipboardWriteCommand("darwin");
 		expect(mac.file).toBe("pbcopy");
 		expect(mac.args).toEqual([]);

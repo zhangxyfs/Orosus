@@ -110,7 +110,8 @@ export const normalizeClipboardText = (raw: string): string | undefined => {
 export async function readClipboardText(): Promise<string | undefined> {
   try {
     if (process.platform === "win32") {
-      const { stdout } = await execFileAsync("powershell", ["-NoProfile", "-Command", "Get-Clipboard -Raw"]);
+      // OutputEncoding 同坑（对称面）：PS stdout 默认 OEM 码页，中文读回也是乱码
+      const { stdout } = await execFileAsync("powershell", ["-NoProfile", "-Command", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard -Raw"]);
       return normalizeClipboardText(stdout);
     }
     if (process.platform === "darwin") {
@@ -125,9 +126,11 @@ export async function readClipboardText(): Promise<string | undefined> {
 }
 
 /** 剪贴板写入命令构造（m5 鼠标批 T5——纯函数可测；psCommandFor 同款手法）。
- *  文本一律走 stdin 喂入：Windows `$input | Set-Clipboard` 防命令行长度限与引号转义歧义。 */
+ *  文本一律走 stdin 喂入：Windows `$input | Set-Clipboard` 防命令行长度限与引号转义歧义。
+ *  win 坑（2026-09-27 走查实锤）：PowerShell 5.x 按系统 OEM 码页（中文系统 GBK）解 stdin，
+ *  Node 写的是 UTF-8——不显式设 InputEncoding 则中文进剪贴板即乱码（粘贴出「锘挎」形态）。 */
 export function clipboardWriteCommand(platform: NodeJS.Platform): { file: string; args: string[] } {
-  if (platform === "win32") return { file: "powershell", args: ["-NoProfile", "-Command", "$input | Set-Clipboard"] };
+  if (platform === "win32") return { file: "powershell", args: ["-NoProfile", "-Command", "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; $input | Set-Clipboard"] };
   if (platform === "darwin") return { file: "pbcopy", args: [] };
   return { file: "sh", args: ["-c", "xclip -selection clipboard 2>/dev/null || wl-copy 2>/dev/null"] };
 }
