@@ -8,6 +8,7 @@ import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
+import { compactionSummaryView } from "./compaction-view.ts";
 import { createCliUi } from "./uiface.ts";
 import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
 import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.ts";
@@ -578,15 +579,15 @@ attachAltVPaste({
 });
 // Ctrl+O 行模式查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役后的唯一入口；摘要逐行灰色 muted）。
 // keypress 多播同 altpaste 模式；全屏期让位（FullApp 的 ctrl+o 经 io.showCompactionSummary 出 overlay）。
-if (process.stdin.isTTY === true) {
+  if (process.stdin.isTTY === true) {
   process.stdin.on("keypress", (_s, k) => {
     if (activeApp !== undefined) return;
     if (k?.name !== "o" || k?.ctrl !== true) return;
     void (async () => {
-      const last = (await h.history()).filter((e) => e.type === "turn/compaction").at(-1) as { summary?: unknown } | undefined;
-      const lines = last?.summary === undefined
+      const view = compactionSummaryView(await h.history(), { width: Math.max(20, (process.stdout.columns ?? 80) - 6) }); // 2026-09-27：与全屏口同源——全部历史列出 + 按终端宽预折行
+      const lines = view === undefined
         ? [theme.fg("info", "本会话还没有压缩摘要（/compact 后可看）")]
-        : String(last.summary).split("\n").map((l) => theme.fg("muted", l));
+        : view.text.split("\n");
       const w = rl as unknown as { line: string; cursor: number };
       w.line = "";
       w.cursor = 0;
@@ -1633,13 +1634,14 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     onSidebarChange: (visible) => tuiSidebarPersist(visible), // Ctrl+T 状态持久化
     // Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役后的唯一入口；摘要文本灰色 muted）
     showCompactionSummary: async () => {
-      const last = (await h.history()).filter((e) => e.type === "turn/compaction").at(-1) as { summary?: unknown } | undefined;
-      if (last === undefined || last.summary === undefined) {
+      const view = compactionSummaryView(await h.history(), { width: Math.max(20, (process.stdout.columns ?? 80) - 6) });
+      if (view === undefined) {
         app.showToast("本会话还没有压缩摘要（/compact 后可看）");
         return;
       }
-      // 全屏窗形态（2026-09-27 用户拍板：参照子代理查看窗）；摘要静态文档自顶读——不贴底（bottom 是 live 跟随用的）
-      app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n"), { layout: "full" }); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
+      // 全屏窗形态（2026-09-27 用户拍板：参照子代理查看窗）；全部压缩历史最新在最上、静态文档自顶读——
+      // 不贴底（bottom 是 live 跟随用的）。折行宽 = full 弹窗内容区（ow−2 内衬 −2 内容边 −1 前导空格 = cols−6）
+      app.viewText(view.title, view.text, { layout: "full" });
     },
     // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
     // T4 联动启停：硬依赖传递闭包——卸载带走依赖者、挂载自动补上提供者；撞锁定拒绝整次（S1）

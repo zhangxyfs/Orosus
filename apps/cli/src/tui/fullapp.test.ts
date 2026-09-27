@@ -2343,6 +2343,8 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 	it("T10-1 thumbGeometry 纯函数：不超一屏 undefined；超屏拇指高 ≥2 且四则位置正确", async () => {
 		const { thumbGeometry } = await import("./fullapp.ts");
 		expect(thumbGeometry(26, 20, 0)).toBeUndefined(); // 总 20 ≤ 视口 26——不显示
+		expect(thumbGeometry(14, 16, 0)!.height).toBe(7); // 半轨上限（2026-09-27 用户走查）：略超一屏比例值 12 钳到 7——满轨拇指看不出位置
+		expect(thumbGeometry(26, 52, 0)!.height).toBe(13); // 恰两屏 = 上限临界（比例值恰等于半轨，钳而不改）
 		const g = thumbGeometry(26, 101, 75)!; // 101 行 26 视口、首行 75（末页）
 		expect(g.height).toBeGreaterThanOrEqual(2); // 最小高 2（kimi layout.ts:288）
 		expect(g.height).toBeLessThanOrEqual(26);
@@ -2452,6 +2454,30 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		releaseAt(input, trackX, 2);
 		await flush();
 		expect(st.scrollbarDrag).toBeUndefined();
+		app.stop();
+	});
+	it("T10-9 查看窗恒宽 + 轨道实心化（2026-09-27 用户走查二轮：dim │ 字形虚线与右边框虚线交叠成锯齿——「画歪了」）：行宽恒等、轨道列无细竖线", async () => {
+		const { app, output } = rig(["占位"]);
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		const lines = [`${"汉".repeat(200)}`, `${"x".repeat(300)}`, ...Array.from({ length: 60 }, (_, i) => `短行${i}`)];
+		app.viewText("压缩摘要", lines.join("\n"), { layout: "full" });
+		await flush(80);
+		// 行级 diff 增量流按光标定位序列切行（T10-7 同口径）——full 弹窗 100 列 rig → 行宽恒 99
+		const parts = output.buf.slice(before).split(/\x1b\[\d+;1H\x1b\[2K/).slice(1);
+		const rows = parts.map((p) => stripAnsi(p)).filter((l) => visibleWidth(l) === 99);
+		let contentRows = 0;
+		let thumbSeen = false;
+		for (const l of rows) {
+			if (l.endsWith("╮") || l.endsWith("╯")) continue; // 顶框/底框
+			expect(l.endsWith("│")).toBe(true);
+			expect(l).not.toMatch(/│ ││$/); // 轨道列不再画细竖线（实心底格或 █）——两列虚线锯齿根除
+			contentRows++;
+			if (l.endsWith("█│")) thumbSeen = true;
+		}
+		expect(contentRows).toBeGreaterThan(20); // 内容行真的切出来了
+		expect(thumbSeen).toBe(true); // 拇指照常渲染
 		app.stop();
 	});
 });
