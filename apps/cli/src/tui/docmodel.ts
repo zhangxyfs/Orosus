@@ -37,6 +37,10 @@ export class DocModel {
 	errOpen = false;
 	/** 花名册现读口（agent 组条目每帧取数——main.ts 注入 h.subagents()；无 = 组条目退化空）。 */
 	agentProvider: (() => readonly SubagentRosterEntry[]) | undefined = undefined;
+	/** 静默调用集（2026-09-27 拍板：tasks 纯查询行收进 agent 组）：tasks 的 call/result 整对吞掉——
+	 *  记 callId 供 result 侧精确丢弃；旧日志无 callId 用一次性旗标兜（防孤儿结果错挂到别的工具行）。 */
+	private ghostCalls = new Set<string>();
+	private ghostNoId = false;
 
 	/** 子代理 agent 组摄入（2026-09-27 用户拍板）：spawn 工具调用的替代显示——绝不走「Using Spawn」通用行。
 	 *  连续 spawn 合成一组（末组还有活动条目就复用；全终态后下一次 spawn 开新组）。 */
@@ -152,6 +156,12 @@ export class DocModel {
 	 *  只服务行模式，全屏走本口）。callId = 与 tool/result 的配对键（事件载荷在场，loop 落盘即带）。 */
 	toolCall(name: string, args: Record<string, unknown> | undefined, callId?: string): void {
 		this.settleActive();
+		// tasks 纯查询不占流区行（进度已在 agent 组里实时可见——2026-09-27 拍板；行模式 renderEvent 同幅抑制）
+		if (name === "tool-subagent__tasks") {
+			if (callId !== undefined) this.ghostCalls.add(callId);
+			else this.ghostNoId = true;
+			return;
+		}
 		this.lines.push({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
 	}
 
@@ -160,6 +170,15 @@ export class DocModel {
 	 *  回退最近未完结（write() 的 TOOL_MERGE 哨兵同语义的结构化版）。 */
 	toolResult(output: unknown, isError: unknown, callId?: string): void {
 		this.settleActive();
+		// 静默对的另一半：tasks 的结果随 call 一起吞（agent 组已实时显示同款信息——不刷屏）
+		if (callId !== undefined && this.ghostCalls.has(callId)) {
+			this.ghostCalls.delete(callId);
+			return;
+		}
+		if (callId === undefined && this.ghostNoId) {
+			this.ghostNoId = false;
+			return; // 旧日志（无 callId）：吞掉紧跟静默 call 的孤儿结果，防错挂
+		}
 		const text = typeof output === "string" ? output : String(output ?? "");
 		let n = 0;
 		for (const l of text.split("\n")) if (l.trim().length > 0) n++;

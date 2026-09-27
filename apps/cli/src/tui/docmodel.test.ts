@@ -264,4 +264,23 @@ describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行�
 	});
 });
 
+describe("tasks 纯查询行静默（2026-09-27 拍板：收进 agent 组，不一行行刷屏）", () => {
+	it("㊿-9 tasks 的 call+result 整对吞掉：不占行、不错挂到其他工具行；旧日志无 callId 旗标兜底", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-subagent__tasks", {}, "t1");
+		dm.toolResult("- aaaa · 运行中", false, "t1");
+		dm.toolCall("tool-shell__bash", { command: "ls" }, "b1");
+		dm.toolResult("ok", false, "b1");
+		let lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("Tasks"))).toBe(false); // tasks 无影
+		expect(lines.some((l) => l.includes("Bash"))).toBe(true);   // 其他工具照常
+		expect(lines.some((l) => l.includes("运行中"))).toBe(false); // tasks 结果也没串进别人的行
+		// 旧日志（无 callId）：call 吞后紧跟的孤儿结果也吞——不落到 Bash 行上
+		dm.toolCall("tool-subagent__tasks", {});
+		dm.toolResult("- bbbb · 运行中", false);
+		lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("bbbb"))).toBe(false);
+	});
+});
+
 });

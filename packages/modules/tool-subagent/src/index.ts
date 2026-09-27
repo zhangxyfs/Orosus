@@ -12,7 +12,7 @@ export { defaultRoleDirs, loadRoles, parseRoleFile, type RoleDirs, type RoleFile
 export const SUBAGENT_LIST_MAX = 128;
 
 /** 派活工具说明（决策 5 / 设计空白权威文本——三处引用同一份，勿散抄）。 */
-const SPAWN_GUIDANCE = "派出独立上下文的子代理，只返回最终结论。任务书自包含。相互独立的任务并行派出：一次至少 2 个、最多 8 个，按任务量自行判断。要写文件的子代理必须报备 writePaths。";
+const SPAWN_GUIDANCE = "派出独立上下文的子代理，只返回最终结论。任务书自包含。相互独立的任务并行派出：一次至少 2 个、最多 8 个，按任务量自行判断。要写文件的子代理必须报备 writePaths。后台子代理完成时结论会自动送回对话——不要轮询任务列表等待结果。";
 
 const STATUS_TEXT: Record<SubagentOutcome["status"], string> = { completed: "完成", failed: "失败" };
 
@@ -87,7 +87,7 @@ export function subagentTools(port: SubagentPort, dirsOf: DirsOf, log?: (code: s
     }),
     defineTool({
       name: "tool-subagent__tasks",
-      description: "List current sub-agents (id, depth, parent, label, status, turns) — foreground and background, all in one roster.",
+      description: "List current sub-agents (id, depth, parent, label, status, turns) — foreground and background, all in one roster. Background conclusions are delivered automatically on completion — do NOT poll this tool to wait; call only when you truly need the roster snapshot.",
       parameters: z.object({}),
       resolveExecution: () => Promise.resolve({
         accesses: [],
