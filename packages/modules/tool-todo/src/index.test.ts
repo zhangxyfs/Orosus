@@ -118,15 +118,17 @@ describe("tool-todo 模块集成（M4-2 T7/B15）", () => {
       modules: [toolTodo, fakeProviderModule("fake", script)],
       config: { userFile: join(dir, "n.toml"), projectFile: join(dir, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
     });
+    const before = h.graph().promptSections(); // m4-6 T5 稳定性钉：todo_write 前后系统提示词全等（前缀缓存不被清单击穿）
     await h.prompt("帮我建清单"); // 普通 turn 返回 undefined——最终文本从会话事件断言
     const sections = h.graph().promptSections(); // close 前读——close 拆图
     await h.close();
     const all = await mem.all();
     expect(all.filter((e) => e.type === "assistant/message").map((e) => JSON.stringify(e)).join("\n")).toContain("清单已建立");
     expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.isError !== true)).toBe(true); // 工具真执行
-    expect(sections).toContain("## Current Tasks");
-    expect(sections).toContain("读取文件");
-    expect(sections).toContain("Single-step tasks do not need a todo list."); // 引导与清单并存（不因有清单而消失）
+    // m4-6 T5：清单不进提示词（随 todo_write 工具结果回显全表）；引导常驻段恒静态
+    expect(sections).not.toContain("## Current Tasks");
+    expect(sections).toEqual(before); // 写清单前后全等——缓存稳定
+    expect(sections).toContain("Single-step tasks do not need a todo list."); // 引导仍在（不因去清单而消失）
     expect(h.graph().audit().some((a) => a.name === "tool-todo")).toBe(true);
   });
 });
