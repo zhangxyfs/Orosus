@@ -114,6 +114,23 @@ describe("激活管线（§4.2 第 6 步）", () => {
     expect(out.records[0]!.failReason).toContain("保留区");
   });
 
+  it("promptSection order 越出模块引导带（≥ 30）→ 不降级、落越带告警（m4-6 T8：0-29 模块带 / 30 AGENTS.md 拼尾 / ≥40 预留带未启用）", async () => {
+    const m = mod("m", { activate(ctx) { ctx.contribute.promptSection({ order: 40, text: "hi" }); } });
+    const { input, s } = setup([m]);
+    const out = await activateModules(input);
+    expect(out.records[0]!.state).toBe("active"); // warn-only 不拦截
+    expect(s.records.some((r) => r.code === "kernel.promptsection.band")).toBe(true);
+  });
+
+  it("promptSection 全局超预算 64KB → 激活期降级（m4-6 T8 补测试钉——kimi 同值预算，现行为比 kimi 跳过+告警更严：超限模块降级）", async () => {
+    const big = (name: string) => mod(name, { activate(ctx) { ctx.contribute.promptSection({ order: 5, text: "x".repeat(22000) }); } });
+    const { input } = setup([big("b1"), big("b2"), big("b3")]); // 3×22000 = 66000 > 65536——第三个撞全局预算
+    const out = await activateModules(input);
+    expect(out.records.find((r) => r.name === "b3")!.state).toBe("failed");
+    expect(out.records.find((r) => r.name === "b3")!.failReason).toContain("全局超预算");
+    expect(out.records.find((r) => r.name === "b1")!.state).toBe("active"); // 未超限段照常
+  });
+
   it("mounts 校验：注册超出声明 → 激活失败降级（§5.1）", async () => {
     const m = mod("m", {
       mounts: ["contribute:tool"],
