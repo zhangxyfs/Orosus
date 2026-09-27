@@ -1157,6 +1157,43 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 	});
 });
 
+describe("技能管理面（m4-7 T8/T9——/settings → 技能 列表/详情，原型图 2/3/4）", () => {
+	it("① pickOverlay 初始选中参数（详情 Esc 回列表——选中行回到该技能）+ view 窗自定义键 alt+k 内容替换翻转", async () => {
+		const r = rig(["# hi"], 100, 30);
+		const { app, input, output } = r;
+		app.start();
+		await flush();
+		const outText = (): string => stripAnsi(output.buf);
+		// selAt：列表重开时选中第 3 行（技能详情返回列表场景）——pendingUi 私有，断言走渲染形态
+		const p = app.pickOverlay("技能（回车查看详情）", ["pdf 生成 PDF 文件 启用", "docx 生成 Word 文档 启用", "ok-wiki 维基条目收录 停用"], 2);
+		await flush(120);
+		expect(outText()).toContain("技能（回车查看详情）");
+		input.emit("data", "\r"); // Enter——回传选中索引（selAt 钳在可选行上）
+		await flush(120);
+		await expect(p).resolves.toBe(2); // selAt=2 的行被选中
+		// view 窗 alt+k：run 返回串 = 窗内容整体替换（状态行翻转的机制底座）
+		let on = false;
+		app.viewText("技能详情", "状态    启用", {
+			keys: {
+				"alt+k": {
+					label: "Alt + K 启用或停用",
+					run: (): string => {
+						on = !on;
+						return `状态    ${on ? "停用" : "启用"}`;
+					},
+				},
+			},
+		});
+		await flush(120);
+		expect(outText()).toContain("技能详情");
+		input.emit("data", "\x1bk"); // Alt+K
+		await flush(120);
+		expect(on).toBe(true); // 键触发
+		expect(outText()).toContain("停用"); // 返回串替换窗内容（状态行翻转后重渲上屏）
+		app.stop();
+	});
+});
+
 describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 30000] 越界钳边界；主程序自家调用全走缺省）", () => {
 	it("时长参数落到 state.toast.duration 并上屏", async () => {
 		const { app, output } = rig();
