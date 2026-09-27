@@ -42,6 +42,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
+import { readSkillDisabled, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
 import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -1095,6 +1096,7 @@ const SETTINGS_ITEMS = [
 	"Token 用量（本会话与项目累计）",
 	"运行状态（模型 / 会话 / 模块图）",
 	"子代理（模型 / 审批模式 / 轮数上限）",
+	"技能（查看 / 启停——四轨目录全部技能）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
 const tokenUsageText = async (): Promise<string> => {
@@ -1169,6 +1171,89 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 	}
 };
 
+/** /settings → 技能（m4-7 T8/T9，原型图 2/3/4）：列表页（全收口径——含停用与仅手动者）→ 详情页
+ *  （五字段 + Alt + K 启停）。数据源 = skill.catalog 服务现取（与 T7 菜单同链）+ disabled 现读盘覆盖
+ *  （busy 期 reload 缓挂、catalog 停用快照滞后——盘是 Alt + K 即时写的，以盘为准）。 */
+const skillCatalogRows = async (): Promise<SkillCatalogRow[]> => {
+	const catalog = await h.graph().services.getOptional("skill.catalog");
+	const rows = typeof catalog === "function" ? (catalog as () => SkillCatalogRow[])() : [];
+	const disabledNow = new Set(readSkillDisabled(subagentConfigFile()));
+	for (const r of rows) r.disabled = disabledNow.has(r.name);
+	return rows;
+};
+/** Alt + K 写配置后的收尾（T9）：空闲走 /reload 同链（清单即刻生效——/reload 自有完成反馈不另 toast）；
+ *  busy 不 reload 只 toast（图 4 三要素：动作 · 原因 · 出路）。返回 toast 文案（空 = 空闲路径无 toast）。
+ *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
+ *  /settings 在 busy 期排队到 turn 结束才执行——走到这里必然空闲，直接 reload 安全。 */
+const afterSkillToggle = (app: FullApp | undefined, name: string, nowDisabled: boolean): string => {
+	if (app === undefined || !app.stateRef.busy) {
+		void (async () => {
+			try {
+				const namesBefore = activeModuleNames();
+				await h.reload();
+				closeGoneModuleUi(namesBefore);
+				registerToolLabels(h.graph().tools.toolInfos());
+				void refreshSkillMenu();
+				await refreshPanel();
+			} catch (err) {
+				(app ?? activeApp)?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
+			}
+		})();
+		return "";
+	}
+	return `${nowDisabled ? "已停用" : "已启用"} ${name} · 有任务在执行，稍后请输入 /reload 重新加载`;
+};
+const openSkillsPanel = async (app: FullApp): Promise<void> => {
+	let selAt = 0; // 详情 Esc 回列表——选中行回到该技能（原型图 3 要点；pickOverlay selAt 参数）
+	for (;;) {
+		const rows = await skillCatalogRows();
+		if (rows.length === 0) {
+			app.showToast("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）");
+			return;
+		}
+		const w = Math.max(40, (process.stdout.columns ?? 80)) - 2;
+		const picked = await app.pickOverlay("技能（回车查看详情）", rows.map((r) => skillListRow(w, r)), selAt);
+		if (picked === undefined || picked < 0 || picked >= rows.length) return; // Esc 返回设置
+		selAt = picked;
+		const row = rows[picked]!;
+		const detail = (): string => skillDetailText(74, row); // center80 弹窗内宽预算
+		app.viewText("技能详情", detail(), {
+			keys: {
+				"alt+k": {
+					label: "Alt + K 启用或停用",
+					run: (): string => {
+						const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
+						row.disabled = nowDisabled;
+						const toast = afterSkillToggle(app, row.name, nowDisabled);
+						if (toast !== "") app.showToast(toast); // busy 缓后（图 4）
+						return detail(); // 状态行即时翻转（内容替换）
+					},
+				},
+			},
+		});
+		// viewText 入队不 await——Esc 关详情后循环重入的 pickOverlay 排队顶上（回列表；openTasks 同款结构）
+	}
+};
+/** 行模式对等件（m4-7 T8/T9）：列表 choose → 详情文本直出 → 动作菜单（停用/启用 · 返回列表）。 */
+const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
+	for (;;) {
+		const rows = await skillCatalogRows();
+		if (rows.length === 0) { out("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）"); return; }
+		const names = rows.map((r) => skillListRow(76, r));
+		const picked = await commandUi.choose("技能（回车查看详情）", names);
+		const i = names.indexOf(picked);
+		if (i < 0) return;
+		const row = rows[i]!;
+		out(skillDetailText(76, row));
+		const action = await commandUi.choose(row.name, [row.disabled ? "启用" : "停用（Alt + K 同款）", "返回列表"]);
+		if (action === "启用" || action === "停用（Alt + K 同款）") {
+			const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
+			const toast = afterSkillToggle(undefined, row.name, nowDisabled);
+			out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
+		}
+	}
+};
+
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
@@ -1194,7 +1279,8 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 			if (res !== "") app.showToast(res);
 		}
 	}
-	else if (picked === 5) {
+	else if (picked === 5) await openSkillsPanel(app);
+	else if (picked === 6) {
 		const res = await runSearchSettings();
 		if (res !== "") app.viewText("配置网络搜索", res); // 成功路径走 notice/toast 静默约定——非空输出才落面板
 	}
@@ -1222,7 +1308,8 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 			if (res !== "") out(res);
 		}
 	}
-	else if (idx === 5) {
+	else if (idx === 5) await openSkillsLine(out);
+	else if (idx === 6) {
 		const res = await runSearchSettings();
 		if (res !== "") out(res);
 	}
@@ -1231,7 +1318,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25）
+const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();

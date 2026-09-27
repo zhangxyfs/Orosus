@@ -837,11 +837,11 @@ export class FullApp {
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
 	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
-	pickOverlay(title: string, items: string[]): Promise<number | undefined> {
+	pickOverlay(title: string, items: string[], selAt = 0): Promise<number | undefined> {
 		if (this.pendingUi !== undefined) {
 			return new Promise((resolve) => this.uiQueue.push({ run: () => {
 				if (this.stopped) { resolve(undefined); return; }
-				void this.pickOverlay(title, items).then(resolve);
+				void this.pickOverlay(title, items, selAt).then(resolve);
 			} }));
 		}
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
@@ -851,7 +851,7 @@ export class FullApp {
 				kind: "pick",
 				title,
 				items,
-				sel: 0,
+				sel: Math.max(0, Math.min(items.length - 1, selAt)), // m4-7 T9：初始选中（详情 Esc 回列表选中行回到该技能）
 				resolve,
 				...(items.length >= 12 ? { filter: "" } : {}),
 			};
