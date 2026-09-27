@@ -9,6 +9,8 @@
  *  用户消息块按流区宽折行（此前直推不折行）。 */
 
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
+import { agentGroupLines } from "../subagent-status.ts";
+import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
 import { TOOL_MERGE, toolCallLine } from "../render.ts";
@@ -23,7 +25,8 @@ type Entry =
 	| { k: "md"; src: string; cache?: { w: number; lines: string[] } } // markdown 源——按宽度渲染（缓存）
 	| { k: "user"; src: string } // 用户消息块（❯ 暖金）
 	| { k: "think"; src: string } // 思考块（Alt+E 折叠态随 frameLines 当下渲染）
-	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[] }; // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存——帧心跳不重算；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
+	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[] } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存——帧心跳不重算；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
+	| { k: "group"; ids: string[] }; // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算（kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
@@ -32,6 +35,38 @@ export class DocModel {
 	toolOpen = false;
 	/** 工具失败体折叠态（Alt+F 全局切换——二轮走查拍板：错误默认全收起、头行带提示，与 diff 分键）。 */
 	errOpen = false;
+	/** 花名册现读口（agent 组条目每帧取数——main.ts 注入 h.subagents()；无 = 组条目退化空）。 */
+	agentProvider: (() => readonly SubagentRosterEntry[]) | undefined = undefined;
+
+	/** 子代理 agent 组摄入（2026-09-27 用户拍板）：spawn 工具调用的替代显示——绝不走「Using Spawn」通用行。
+	 *  连续 spawn 合成一组（末组还有活动条目就复用；全终态后下一次 spawn 开新组）。 */
+	agentGroupCall(): void {
+		this.settleActive();
+		const last = [...this.lines].reverse().find((e) => e.k === "group");
+		if (last !== undefined && last.k === "group") {
+			const roster = this.agentProvider?.() ?? [];
+			const alive = last.ids.some((id) => {
+				const e = roster.find((r) => r.id === id);
+				return e !== undefined && (e.status === "queued" || e.status === "running");
+			});
+			if (alive) return; // 末组还活着——并入它
+		}
+		this.lines.push({ k: "group", ids: [] });
+	}
+
+	/** 末组认领新条目（渲染期现算——老组只渲染既有 ids，新面孔归末组；kimi「同 step 断组」的等价实现）。 */
+	private claimAgents(): void {
+		if (this.agentProvider === undefined) return;
+		const groups = this.lines.filter((e): e is Entry & { k: "group" } => e.k === "group");
+		if (groups.length === 0) return;
+		const claimed = new Set(groups.flatMap((g) => g.ids));
+		const last = groups[groups.length - 1]!;
+		for (const e of this.agentProvider()) {
+			if (claimed.has(e.id)) continue;
+			last.ids.push(e.id);
+			claimed.add(e.id);
+		}
+	}
 	private lines: Entry[] = [];
 	private mdText = "";
 	private thinkText = "";
@@ -243,7 +278,14 @@ export class DocModel {
 					this.lines.push({ k: "md", src: text });
 				}
 			} else if (e.type === "tool/call") {
-				this.toolCall(String(e.name), e.args as Record<string, unknown> | undefined, typeof e.callId === "string" ? e.callId : undefined);
+				const name = String(e.name);
+				if (name === "tool-subagent__spawn") {
+					// 回放无活 roster——agent 组退化静态一行（结论看下方结果行）
+					this.settleActive();
+					this.lines.push({ k: "raw", s: theme.fg("muted", "  ● 派出子代理（结果见下）") });
+					continue;
+				}
+				this.toolCall(name, e.args as Record<string, unknown> | undefined, typeof e.callId === "string" ? e.callId : undefined);
 			} else if (e.type === "tool/result") {
 				this.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined);
 			} else if (e.type === "agent/steering-message") {
@@ -292,8 +334,15 @@ export class DocModel {
 
 	/** 当前完整行源（定格条目 + 活动块）——按调用方当前宽度渲染：宽度变化即回流（F5 十一轮）。 */
 	frameLines(width: number): string[] {
+		this.claimAgents();
+		const roster = this.agentProvider?.() ?? [];
 		const out: string[] = [];
 		for (const e of this.lines) {
+			if (e.k === "group") {
+				const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
+				out.push(...agentGroupLines(mine)); // 每帧现算——状态/时长/词元随心跳自更
+				continue;
+			}
 			if (e.k === "think") {
 				out.push(...this.thinkBlock(e.src, width));
 			} else if (e.k === "user") {

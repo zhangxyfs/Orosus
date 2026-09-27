@@ -43,7 +43,7 @@ import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
-import { backgroundRunningCount, subagentStatusLines } from "./subagent-status.ts";
+import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -667,10 +667,15 @@ function attachRender(h: Harness): void {
   // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 sink.end() 定格终稿
   // 全屏追加工具结构化口（2026-09-23 走查批）：tool/call / tool/result 带 args/output 进 DocModel
   // （diff/失败体渲染）；行模式不传 = renderEvent 文本形态不变
+  // M4.5（2026-09-27 拍板）：spawn 工具行合并为 agent 组（kimi 定式——绝不显示「Using Spawn」）
+  if (tuiMode === "full") dm.agentProvider = () => h.subagents();
   const toolIo =
     tuiMode === "full"
       ? {
-          toolCall: (name: string, args: Record<string, unknown> | undefined, callId?: string) => dm.toolCall(name, args, callId),
+          toolCall: (name: string, args: Record<string, unknown> | undefined, callId?: string) => {
+            if (name === "tool-subagent__spawn") dm.agentGroupCall();
+            else dm.toolCall(name, args, callId);
+          },
           toolResult: (output: unknown, isError: unknown, callId?: string) => dm.toolResult(output, isError, callId),
         }
       : {};
@@ -1182,7 +1187,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename"]); // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25）
+const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
@@ -1562,8 +1567,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 消息队列三件套（2026-09-23 队列批——kimi 方案改 Ctrl+U）：队列区数据源 / ↑ 召回队尾 / steer 注入
     queueItems: () => [...pendingSubmits],
-    // M4.5 T10：子代理状态行（前台实时块——1 秒 tick 现读花名册；后台不进状态行走 T13 计数）
-    subagentStatus: () => subagentStatusLines(h.subagents(), Date.now()),
+    // M4.5（2026-09-27 改版）：前台显示走流区 agent 组（DocModel 组条目）；此口只剩双击 Esc 全停门槛判定
+    subagentActive: () => h.subagents().some((a) => a.status === "queued" || a.status === "running"),
     // M4.5 T13：输入行「N 任务正在执行」——只数后台运行中（前台走状态行）；为零整段消失
     subagentRunningCount: () => backgroundRunningCount(h.subagents()),
     // M4.5 T14：双击 Esc 全停（空闲有子代理 = 全停；忙时 = 停生成 + 全停）——未答审批自动回绝

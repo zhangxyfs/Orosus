@@ -607,6 +607,9 @@ export interface SubagentRosterEntry { … }
 | `error?` | `error?: string` | 失败原因（failed 时在）。 |
 | `pendingApproval?` | `pendingApproval?: { callId: string; tool: string; reason: string }` | 待审批（后台 Ask 档挂起的工具调用——回答面在宿主；被停自动按拒绝收场）。 |
 | `writeClaim?` | `writeClaim?: { paths: string[]; wholeRepo: boolean }` | 写报备归一结果（决策 24：wholeRepo = bash/未报备算整仓）。 |
+| `toolCalls?` | `toolCalls?: number` | 已发出的工具调用数（agent 组显示用——2026-09-27 用户拍板格式）。 |
+| `usage?` | `usage?: { input: number; output: number }` | 词元累计（input+output 分列——agent 组行显示用）。 |
+| `effort?` | `effort?: string` | 思考档位（跟随 /effort 解析——缺省未解析）。 |
 **示例**
 
 ```ts

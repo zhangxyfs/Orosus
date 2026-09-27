@@ -233,4 +233,35 @@ describe("子代理送回行渲染（M4.5 T9——灰色系统行，非用户块
 		expect(colored).toBeDefined();
 		expect(colored! !== stripAnsi(colored!)).toBe(true);
 	});
+describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行合并为组——绝不显示 Using Spawn）", () => {
+	it("㊿-6 组条目：agentGroupCall 开组、provider 现算行、连续 spawn 并一组、终态后新组", () => {
+		const dm = new DocModel();
+		const roster: import("@orosus/contracts/module").SubagentRosterEntry[] = [];
+		dm.agentProvider = () => roster;
+		dm.agentGroupCall(); // 第一次 spawn
+		roster.push({ id: "aaaa1111", depth: 1, label: "调研", status: "running", background: false, turns: 1, enqueuedAt: "t" } as never);
+		let lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("● 1 general agents 运行中"))).toBe(true);
+		expect(lines.some((l) => l.includes("Using"))).toBe(false); // 绝不显示 Using Spawn
+		dm.agentGroupCall(); // 末组活着 → 并组
+		expect(dm.frameLines(80).filter((l) => l.includes("agents")).length).toBe(1); // 仍只有一组
+		roster[0] = { ...roster[0]!, status: "completed" } as never;
+		dm.agentGroupCall(); // 末组全终态 → 开新组
+		roster.push({ id: "bbbb2222", depth: 1, label: "第二波", status: "running", background: false, turns: 0, enqueuedAt: "t" } as never);
+		lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.filter((l) => l.includes("agents ")).length).toBe(2); // 两组各自渲染
+	});
+
+	it("㊿-7 回放：spawn 工具调用退化为静态灰行（无活 roster），非 spawn 工具调用照常", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c1", args: {} },
+			{ type: "tool/call", name: "tool-fs__read", callId: "c2", args: { path: "a.ts" } },
+		], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("派出子代理（结果见下）"))).toBe(true);
+		expect(lines.some((l) => l.includes("Using"))).toBe(true); // 非 spawn 照常工具行
+	});
+});
+
 });
