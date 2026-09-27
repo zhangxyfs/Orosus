@@ -1617,6 +1617,22 @@ describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底�
 	});
 });
 
+describe("斜杠命令大小写（2026-09-27 用户走查拍板：命令英文忽略大小写）", () => {
+	it("输入 /HE 与 /HELP 都能筛出 /help；Enter 提交的是菜单真名（小写规范化）", async () => {
+		const { app, input, submitted } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/HE");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		expect(app.stateRef.overlaySel).toBe(0);
+		input.emit("data", "\r"); // Enter 执行选中项
+		await flush(120);
+		expect(submitted).toEqual(["/help"]); // 提交真名——不带大写过滤串
+		app.stop();
+	});
+});
+
 describe("滚轮路由（m5 鼠标批 T2——onWheel 窗口栈版：主流区兜底直绑 scrollBack，与键盘焦点无关）", () => {
 	const wheel = (input: FakeInput, dir: "up" | "down", alt = false): void => {
 		const code = 64 + (dir === "up" ? 0 : 1) + (alt ? 8 : 0);

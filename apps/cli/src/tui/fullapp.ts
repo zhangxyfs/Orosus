@@ -2005,15 +2005,18 @@ export class FullApp {
 	}
 
 	private filteredCommands(): SlashItem[] {
-		const q = normCmd(this.state.input).slice(1).split(" ")[0]!;
+		// 命令词忽略大小写（2026-09-27 用户走查拍板）：/He /HELP 都能筛出 /help——q 与命令名/别名
+		// 统一小写比较；Enter 提交菜单真名（picked），不带过滤串的大小写进输入
+		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
 		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
 		// 前缀命中排前、含字命中殿后（2026-09-24 拍板：/ol 先列 ol 开头，再列含 ol 的 /yolo）——组内保持注册序
 		const hits: SlashItem[] = [];
 		const more: SlashItem[] = [];
 		for (const c of this.io.slashCommands()) {
-			const aliases = c.aliases ?? [];
-			if (c.name.startsWith("/" + q) || aliases.some((a) => a.startsWith(q))) hits.push(c);
-			else if (c.name.slice(1).includes(q) || aliases.some((a) => a.includes(q))) more.push(c);
+			const lowerName = c.name.toLowerCase();
+			const aliases = (c.aliases ?? []).map((a) => a.toLowerCase());
+			if (lowerName.startsWith("/" + q) || aliases.some((a) => a.startsWith(q))) hits.push(c);
+			else if (lowerName.slice(1).includes(q) || aliases.some((a) => a.includes(q))) more.push(c);
 		}
 		return [...hits, ...more];
 	}

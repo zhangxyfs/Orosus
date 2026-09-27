@@ -84,16 +84,19 @@ const QUIT_COMMANDS = new Set(["/quit", "/exit", "/q"]);
  *  trim + 斜杠后空格抹除 + 连续空白折叠为单空格（不认就当聊天发出是缺陷，不是特性）。 */
 export function sessionCommand(input: string, current: { sessionId: string; lastEventId?: string | undefined }): SessionDirective | { kind: "none" } {
   const t = input.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
-  if (QUIT_COMMANDS.has(t)) return { kind: "quit" };
-  if (t === "/new") return { kind: "new" };
-  if (t === "/fork") return { kind: "fork", parentSessionId: current.sessionId, ...(current.lastEventId !== undefined ? { atEntryId: current.lastEventId } : {}) };
+  // 命令词忽略大小写（2026-09-27 用户走查拍板）：无参命令整串小写比较；带参命令正则加 i
+  // （参数从捕获组取原样——名字不大写化）
+  const lower = t.toLowerCase();
+  if (QUIT_COMMANDS.has(lower)) return { kind: "quit" };
+  if (lower === "/new") return { kind: "new" };
+  if (lower === "/fork") return { kind: "fork", parentSessionId: current.sessionId, ...(current.lastEventId !== undefined ? { atEntryId: current.lastEventId } : {}) };
   // /session 单数同义（F5 用户实测：少打个 s 被路由成「未知命令」气泡，观感 = 消息被吞）
-  const m = /^\/(sessions?|resume)(?:\s+(\S+))?$/.exec(t);
+  const m = /^\/(sessions?|resume)(?:\s+(\S+))?$/i.exec(t);
   if (m !== null) {
     const arg = m[2];
     return arg === undefined ? { kind: "pick" } : { kind: "resume", sessionId: arg };
   }
-  const tm = /^\/(title|rename)(?:\s+([\s\S]+))?$/.exec(t);
+  const tm = /^\/(title|rename)(?:\s+([\s\S]+))?$/i.exec(t);
   if (tm !== null) {
     const raw = tm[2]?.trim();
     if (raw === undefined || raw === "") return { kind: "title" };
