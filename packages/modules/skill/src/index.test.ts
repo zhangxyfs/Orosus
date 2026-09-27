@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModuleContext, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
+import { z } from "zod";
 import def from "./index.ts";
 
 type Ctx = Parameters<typeof def.activate>[0];
@@ -292,6 +293,16 @@ describe("skill 模块（m4-7 T6——停用清单）", () => {
     expect(row.disabled).toBe(true);
     expect(row.modelInvocable).toBe(false);
   });
+});
+
+describe("skill 模块（m4-7 走查修——config schema：内核规则未声明 schema 拒收额外键，disabled 一写盘模块即 failed、启动冒引导弹窗）", () => {
+	it("① schema 放行 disabled 与注轨键、strip 未知键（z.object 缺省语义）——真实启动校验路径的形态钉", async () => {
+		const { configSchema } = await import("./index.ts") as unknown as { configSchema: z.ZodType };
+		const parsed = configSchema.parse({ disabled: ["a", "b"], userAgentsDir: "D:/x", projectAgentsDirs: ["D:/y"], ghost: 1 });
+		expect(parsed).toEqual({ disabled: ["a", "b"], userAgentsDir: "D:/x", projectAgentsDirs: ["D:/y"] }); // ghost 被 strip
+		expect(configSchema.parse({})).toEqual({}); // 空节合法
+		expect(() => configSchema.parse({ disabled: "a" })).toThrow(); // 非数组拒收
+	});
 });
 
 describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能）", () => {
