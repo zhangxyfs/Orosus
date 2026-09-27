@@ -2619,8 +2619,9 @@ export class FullApp {
 			const real = this.filteredCommands();
 			const sk = this.filteredSkills();
 			// m4-7 T7（原型图 1）：技能条目殿后于全部命中命令；分隔行「── 技能 ──」仅技能区非空时出现——
-			// 无技能环境此处与原实现逐字节一致（验收点 3）
-			const sepRow = { text: theme.fg("border", `── 技能 ${"─".repeat(Math.max(1, oInner - 12))}`), mark: " ", long: "", kind: "sep" as const };
+			// 无技能环境此处与原实现逐字节一致（验收点 3）；muted（2026-09-27 用户走查打回：border 边框色
+			// #25352d 深底上几乎不可见——换灰绿与描述文字同色独占一行可读；不用 accent 避免与选中行抢权重）
+			const sepRow = { text: theme.fg("muted", `── 技能 ${"─".repeat(Math.max(1, oInner - 12))}`), mark: " ", long: "", kind: "sep" as const };
 			const skillRow = (c: SlashItem) => {
 				// 主标签固定格式「skill : 名」（类别前缀，冒号两侧空格照写——与命令 /xxx 视觉区分）+
 				// 行内短说明 = description（超宽截断不折行，原型要点）
