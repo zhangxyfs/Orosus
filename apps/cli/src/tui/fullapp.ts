@@ -15,6 +15,7 @@ import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { parseWheel, isMouseSequence, type WheelEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
 import { renderWidgetLines, renderWidgets } from "./widgets.ts";
@@ -159,6 +160,8 @@ const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
 const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
 const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
+const WHEEL_STEP = 1; // 滚轮每格滚动行数（m5 鼠标批设计空白 1——kimi 生产默认同款 tui-alt-screen.ts:264 ?? 1）
+const ALT_WHEEL_MULTIPLIER = 5; // Alt+滚轮加速倍数（设计空白 2——kimi :75 同名常量同值）
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载", pendingConfirm: "待确认" }; // pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
 const taskTick = (state: "done" | "active" | "pending"): string =>
@@ -365,7 +368,17 @@ export class FullApp {
 		// 1s 心跳重绘（F5 九轮⑤：运行时间等时钟性行实时——diff 后只动变化行）
 		this.tickTimer = setInterval(() => this.scheduler.requestRender(), 1000);
 		this.tickTimer.unref?.();
-		this.term.onInput((seq) => this.onKey(matchKey(seq)));
+		this.term.onInput((seq) => {
+			// 鼠标分流（m5 鼠标批 T2）：滚轮走 onWheel 路由；其余鼠标事件识别后整吞
+			// （kimi :708 consume 同款——T4 起按钮事件在此分流给处理器）；剩下的才是按键流
+			const wheel = parseWheel(seq);
+			if (wheel !== undefined) {
+				this.onWheel(wheel);
+				return;
+			}
+			if (isMouseSequence(seq)) return;
+			this.onKey(matchKey(seq));
+		});
 		this.term.onPaste((text) => {
 			// 引导期粘贴路由给会话（API Key 的首要输入方式就是粘贴——SW-23 静默盲输的进稿口）
 			if (this.onboarding !== undefined) {
@@ -850,6 +863,44 @@ export class FullApp {
 
 	private lastEscCancel = 0; // 双击 Esc 停止生成窗口（2026-09-23 走查拍板——防误触，qwen-code 1s 同口径）
 
+	/** 滚轮路由（m5 鼠标批 T2——kimi routeWheel :986-998 的窗口栈版）：滚轮给当前最上层可滚面，
+	 *  与键盘焦点无关；主流区是兜底（= kimi 未落在可滚组件时兜底主视图）。主窗直绑 scrollBack
+	 *  字段不绑翻页键（决策点 5：翻页键吃面板焦点而滚轮不吃——面板聚焦期滚轮仍滚主流区）。 */
+	private onWheel(w: WheelEvent): void {
+		const s = this.state;
+		const lines = WHEEL_STEP * (w.alt ? ALT_WHEEL_MULTIPLIER : 1); // kimi :981-983 同式
+		const up = w.direction === -1;
+		if (this.onboarding !== undefined) return; // 引导焦点锁（同 onKey）
+		const pu = this.pendingUi;
+		if (pu?.kind === "view") {
+			const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+			if (pu.pinned === true) { pu.scroll = Math.max(0, pu.lines.length - page); pu.pinned = false; } // T1 落地再滚
+			pu.scroll = Math.max(0, Math.min(Math.max(0, pu.lines.length - page), pu.scroll + (up ? -lines : lines)));
+		} else if (pu?.kind === "dialog") {
+			// dialog 型没有 lines 字段（控件渲染出 content）——内容行数走 renderWidgetLines 渲染口径，
+			// 与 buildDialogOverlay 同源调用；滚轮写 scroll 是本批新增的手动滚动，渲染切片面现成
+			const geo = this.viewGeo(pu.layout);
+			const page = Math.max(3, geo.height - 3);
+			const total = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
+			pu.scroll = Math.max(0, Math.min(Math.max(0, total - page), pu.scroll + (up ? -lines : lines)));
+		} else if (pu?.kind === "pick") {
+			// 与键盘同一张过滤清单——过滤激活时按 filtered 钳，否则滚轮可越过过滤尾致 Enter 错位
+			const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));
+			pu.sel = Math.max(0, Math.min(filtered.length - 1, pu.sel + (up ? -lines : lines))); // 到头停（决策点 6——不学键盘回绕）
+		} else if (pu !== undefined) {
+			return; // ask——没有可滚面
+		} else if (s.overlayOpen) {
+			const items = this.overlayItems();
+			s.overlaySel = Math.max(0, Math.min(items.length - 1, s.overlaySel + (up ? -lines : lines)));
+		} else if (s.diagOpen) {
+			const entries = this.io.diagEntries?.() ?? [];
+			s.diagSel = Math.max(0, Math.min(Math.max(0, entries.length - 1), s.diagSel + (up ? -lines : lines)));
+		} else {
+			s.scrollBack = Math.max(0, s.scrollBack + (up ? lines : -lines)); // 上滚=回看历史（PgUp 同向）；上界渲染帧已钳
+		}
+		this.scheduler.requestImmediateRender();
+	}
+
 	private onKey(key: string): void {
 		const s = this.state;
 		// 引导弹窗焦点锁（M4-3 T1d）：在槽期一切按键归会话——pendingUi/编辑态/busy-Esc 全部让位
@@ -1239,15 +1290,23 @@ export class FullApp {
 		return { cmd, word, args, items: all.filter((x) => x.startsWith(word)) };
 	}
 
-	private onOverlayKey(key: string): void {
+	/** 斜杠菜单当前候选清单（onOverlayKey 与滚轮路由共用一源——两处过滤口径漂移即选中越界/Enter 错位）。 */
+	private overlayItems(): string[] {
 		const s = this.state;
 		const level2 = s.overlayCmd !== "";
 		const ap = this.argPhase();
-		const items: string[] = ap !== undefined
+		return ap !== undefined
 			? ap.items
 			: level2
 				? (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? [])
 				: this.filteredCommands().map((c) => c.name);
+	}
+
+	private onOverlayKey(key: string): void {
+		const s = this.state;
+		const level2 = s.overlayCmd !== "";
+		const ap = this.argPhase();
+		const items = this.overlayItems();
 		if (key === "escape") {
 			if (level2) {
 				s.overlayCmd = "";

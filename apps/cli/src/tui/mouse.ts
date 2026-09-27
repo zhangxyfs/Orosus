@@ -9,6 +9,7 @@ export interface WheelEvent {
 }
 
 export function parseWheel(seq: string): WheelEvent | undefined {
+	// eslint-disable-next-line no-control-regex -- 鼠标序列本身就是控制字符转义序列（\x1b 起）
 	const sgr = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(seq);
 	if (sgr) {
 		const button = Number.parseInt(sgr[1]!, 10);
@@ -35,5 +36,6 @@ export function parseWheel(seq: string): WheelEvent | undefined {
 
 /** 是否鼠标序列（含非滚轮：点击/拖动/释放）——识别后调用方整吞（kimi :708 consume 同款）。 */
 export function isMouseSequence(seq: string): boolean {
+	// eslint-disable-next-line no-control-regex -- 鼠标序列本身就是控制字符转义序列（\x1b 起）
 	return /^\x1b\[<[0-9;]*[Mm]$/.test(seq) || (seq.startsWith("\x1b[M") && seq.length === 6); // X10 恒 6 字节——切分器特判保证原子性
 }

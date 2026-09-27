@@ -1598,4 +1598,145 @@ describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底�
 	});
 });
 
+describe("滚轮路由（m5 鼠标批 T2——onWheel 窗口栈版：主流区兜底直绑 scrollBack，与键盘焦点无关）", () => {
+	const wheel = (input: FakeInput, dir: "up" | "down", alt = false): void => {
+		const code = 64 + (dir === "up" ? 0 : 1) + (alt ? 8 : 0);
+		input.emit("data", `\x1b[<${code};10;5M`);
+	};
+	const longDoc = Array.from({ length: 100 }, (_, i) => `第${i + 1}行`);
+
+	it("T2-1 主流区：上滚 scrollBack 增、下滚减、到 0 钳住", async () => {
+		const { app, input } = rig(longDoc);
+		app.start();
+		await flush();
+		wheel(input, "up"); wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(2);
+		wheel(input, "down");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(1);
+		wheel(input, "down"); wheel(input, "down");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(0); // 0 钳住不越界
+		app.stop();
+	});
+	it("T2-2 同字段等价（拍板钉子）：滚 3 格恰 +3；再按 PgUp 在此之上 +页步长——滚轮与翻页键写同一字段只是步长不同", async () => {
+		const { app, input } = rig(longDoc);
+		app.start();
+		await flush();
+		wheel(input, "up"); wheel(input, "up"); wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(3);
+		input.emit("data", "\x1b[5~"); // PgUp：页步长 = rows−10 = 20
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(23);
+		app.stop();
+	});
+	it("T2-3 Alt+滚轮 ×5 步长", async () => {
+		const { app, input } = rig(longDoc);
+		app.start();
+		await flush();
+		wheel(input, "up", true);
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(5);
+		app.stop();
+	});
+	it("T2-4 busy 期照滚（生成中回看历史）", async () => {
+		const { app, input } = rig(longDoc);
+		app.start();
+		await flush();
+		app.setBusy(true);
+		wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(1);
+		app.setBusy(false);
+		app.stop();
+	});
+	it("T2-5 面板聚焦期滚轮仍滚主流区（对照 ④b：同场景 PgUp 归面板而滚轮不归）", async () => {
+		const { app, input } = rig(longDoc);
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 焦点 → 运行状态面板
+		await flush();
+		expect(app.stateRef.focusIdx).toBe(1);
+		wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(1); // 滚轮不吃面板焦点
+		app.stop();
+	});
+	it("T2-6 查看窗：滚轮滚查看窗与 PgUp 同字段（先滚 2 格再 PgUp，scroll 在 −2 基础上 −页步长；pinned 窗首滚即脱钉）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.viewText("查看", Array.from({ length: 80 }, (_, i) => `行${i + 1}`).join("\n"), { layout: "full", bottom: true });
+		await flush(80);
+		wheel(input, "up"); wheel(input, "up"); // pinned 落地 maxScroll（80−27=53）后 −2 = 51
+		await flush(80);
+		const pu = (app as unknown as { pendingUi: { scroll: number; pinned?: boolean } }).pendingUi;
+		expect(pu.pinned).toBe(false); // 首滚即脱钉
+		expect(pu.scroll).toBe(51);
+		input.emit("data", "\x1b[5~"); // PgUp：−27
+		await flush(80);
+		expect(pu.scroll).toBe(24); // 同字段在此之上 −页步长
+		app.stop();
+	});
+	it("T2-7 pick 开着：滚轮翻选中且到头停（不回绕）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		void app.pickOverlay("选择", ["a", "b", "c"]);
+		await flush();
+		wheel(input, "down"); wheel(input, "down"); wheel(input, "down"); wheel(input, "down");
+		await flush();
+		const pu = (app as unknown as { pendingUi: { sel: number } }).pendingUi;
+		expect(pu.sel).toBe(2); // 到底停（决策点 6——键盘 ↑↓ 取模回绕，滚轮不学）
+		wheel(input, "up");
+		await flush();
+		expect(pu.sel).toBe(1);
+		app.stop();
+	});
+	it("T2-8 斜杠菜单开着：滚轮翻选中", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/"); // 开菜单（3 条命令）
+		await flush(120);
+		wheel(input, "down"); wheel(input, "down");
+		await flush(120);
+		expect(app.stateRef.overlaySel).toBe(2);
+		wheel(input, "down"); // 到头停
+		await flush(120);
+		expect(app.stateRef.overlaySel).toBe(2);
+		app.stop();
+	});
+	it("T2-9 onboarding 期与 ask 期滚轮无效果", async () => {
+		const r = rig(longDoc);
+		const { app, input } = r;
+		app.start();
+		await flush();
+		(app as unknown as { onboarding: unknown }).onboarding = { session: {}, resolve: () => {} }; // 旁路挂引导态（滚轮只看在场性）
+		wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(0); // 引导锁
+		(app as unknown as { onboarding: unknown }).onboarding = undefined;
+		void app.promptInput("问题？", false); // ask 挂起
+		await flush();
+		wheel(input, "up");
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(0); // ask 没有可滚面
+		app.stop();
+	});
+	it("T2-10 非滚轮鼠标事件整吞不漏：点击/拖动/释放序列 emit 后输入框内容不变", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "\x1b[<0;10;5M"); // 左键按下
+		input.emit("data", "\x1b[<32;12;6M"); // 拖动
+		input.emit("data", "\x1b[<0;12;6m"); // 释放
+		await flush();
+		expect(app.stateRef.input).toBe(""); // 不漏字符进输入框
+		app.stop();
+	});
+});
+
 });
