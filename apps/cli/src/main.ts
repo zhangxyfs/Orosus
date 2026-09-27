@@ -41,6 +41,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
+import { subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -1470,6 +1471,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 消息队列三件套（2026-09-23 队列批——kimi 方案改 Ctrl+U）：队列区数据源 / ↑ 召回队尾 / steer 注入
     queueItems: () => [...pendingSubmits],
+    // M4.5 T10：子代理状态行（前台实时块——1 秒 tick 现读花名册；后台不进状态行走 T13 计数）
+    subagentStatus: () => subagentStatusLines(h.subagents(), Date.now()),
     recallQueued: () => pendingSubmits.pop(), // LIFO 队尾召回（kimi recallLastQueued 同语义）
     requestSteer: (texts) => {
       if (!inflight) { // 无进行中 turn：首条直接发、其余照旧排队（kimi Ctrl-S 空闲 = 直接提交）
