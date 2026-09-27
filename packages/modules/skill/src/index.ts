@@ -115,21 +115,26 @@ function skillTracks(cfg: {
   ];
 }
 
-interface SkillConfig {
-  userAgentsDir?: string;
-  userOrosusDir?: string;
-  projectAgentsDirs?: string[];
-  projectOrosusDir?: string;
-  bundledDir?: string;
-  disabled?: string[];
-}
+/** 模块 config schema（m4-7 走查修 2026-09-27）：内核规则 = 模块未声明 schema 时拒收一切额外键——
+ *  [skill] disabled 一写盘，skill 模块启动校验即失败（audit failed → 引导弹窗 degraded 冒出，用户实机踩中）。
+ *  声明后按 z.object 缺省 strip 语义放行已知键（tool-subagent 同款纪律）。 */
+export const configSchema = z.object({
+  /** 停用清单（T6/D4）：宿主 /settings → 技能 Alt + K 写回；键缺席 = 无停用。 */
+  disabled: z.array(z.string()).optional(),
+  /** 测试注轨 / 高级覆盖：四轨目录显式指定（缺省 = 真实 home / git 根解析）。 */
+  userAgentsDir: z.string().optional(),
+  userOrosusDir: z.string().optional(),
+  projectAgentsDirs: z.array(z.string()).optional(),
+  projectOrosusDir: z.string().optional(),
+  bundledDir: z.string().optional(),
+});
 
 /** 第五轨内置目录（m4-7 T11）：skill 模块自带 bundled/ 随包分发（包根下，src 的上一级）——
  *  优先级垫底（低于 ~/.agents，skillTracks 首位），用户/项目同名技能可覆盖内置版（九仓惯例）。 */
 const bundledSkillsDir = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
 
 /** 缺省目录解析（config 注入可全覆盖——测试注轨不走真实 home/cwd）。 */
-function resolveDirs(cfg: SkillConfig | undefined): {
+function resolveDirs(cfg: z.infer<typeof configSchema> | undefined): {
   userAgentsDir: string;
   userOrosusDir: string;
   projectAgentsDirs: string[];
@@ -225,8 +230,9 @@ export default defineModule({
   api: 1,
   uses: ["fs.read"],
   provides: ["skill.catalog", "skill.resetLoaded"], // 宿主菜单/管理面/compact 重置消费（服务倒挂——websearch:endpoints 先例）
+  config: configSchema,
   activate(ctx) {
-    const cfg = ctx.config as SkillConfig | undefined;
+    const cfg = ctx.config as z.infer<typeof configSchema> | undefined;
     const dirs = resolveDirs(cfg);
     const tracks = skillTracks(dirs);
     const disabled = new Set(cfg?.disabled ?? []);
