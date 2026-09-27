@@ -57,4 +57,12 @@ describe("剪贴板纯文本写入（m5 鼠标批 T5——选择松开即复制�
 		expect(linux.args.join(" ")).toContain("xclip -selection clipboard");
 		expect(linux.args.join(" ")).toContain("wl-copy"); // 无 xclip 时兜底
 	});
+	it("② openUrlCommand 三平台（m5 鼠标批 T7——设计空白 13）：win cmd /c start、mac open、linux xdg-open；openUrl 非 http 方案拒开返回 false", async () => {
+		const { openUrlCommand, openUrl } = await import("./paste.ts");
+		expect(openUrlCommand("win32", "https://x.com")).toEqual({ file: "cmd", args: ["/c", "start", "", "https://x.com"] });
+		expect(openUrlCommand("darwin", "https://x.com")).toEqual({ file: "open", args: ["https://x.com"] });
+		expect(openUrlCommand("linux", "https://x.com")).toEqual({ file: "xdg-open", args: ["https://x.com"] });
+		await expect(openUrl("file:///etc/passwd")).resolves.toBe(false); // 注入面防线：链接来自模型输出
+		await expect(openUrl("ftp://x.com")).resolves.toBe(false);
+	});
 });

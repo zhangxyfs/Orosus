@@ -53,7 +53,10 @@ export function inlineToken(t: Token, ctx: InlineStyleContext = defaultInlineSty
 		case "link": {
 			const lt = t as Tokens.Link;
 			const label = inlineTokens(lt.tokens ?? [], ctx);
-			return theme.fg("info", theme.underline(label)) + theme.dim(` (${lt.href})`) + ctx.stylePrefix;
+			// OSC 8 包裹（m5 鼠标批 T7 设计空白 14）：只服务点击探测（自产自销），配色保持现状
+			// （决策点 18——info 下划线 + 灰 href 后缀一行不动）；宽度计算不受影响（extractAnsiCode 已认 OSC）
+			const wrapped = `\x1b]8;;${lt.href}\x07${theme.fg("info", theme.underline(label))}\x1b]8;;\x07`;
+			return wrapped + theme.dim(` (${lt.href})`) + ctx.stylePrefix;
 		}
 		case "br":
 			return "\n";

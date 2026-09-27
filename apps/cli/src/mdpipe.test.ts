@@ -39,6 +39,14 @@ describe("markdown 新管线（TUI 批阶段三 F1——九条挂账缺陷验收
 		expect(plain(lines)).toContain("▎ 引用");
 		expect(plain(lines)).toContain("────");
 	});
+	it("④b OSC 8 超链接包裹（m5 鼠标批 T7）：md 链接与 gfm autolink 裸 URL 都包 `\x1b]8;;url\x07…\x1b]8;;\x07`；配色不变", () => {
+		const lines = renderMarkdown("看 [标题](https://x.com/a?b=1) 和 https://y.org/z 两个", 80);
+		const joined = lines.join("\n");
+		expect(joined).toContain("\x1b]8;;https://x.com/a?b=1\x07"); // md 链接开对
+		expect(joined).toContain("\x1b]8;;\x07"); // 闭对
+		expect(joined).toContain("\x1b]8;;https://y.org/z\x07"); // 裸 URL 也产 link token（gfm autolink）被包裹
+		expect(joined).toContain("\x1b[4m"); // 链接下划线仍在（配色不动——决策点 18）
+	});
 	it("⑤ 行内码内标记不误剥（缺陷：粗体替换先行于行内码）", () => {
 		const lines = renderMarkdown("代码 `**不解析**` 和 **真粗体**", 60);
 		const p = plain(lines);
