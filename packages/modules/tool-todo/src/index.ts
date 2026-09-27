@@ -67,12 +67,10 @@ export default defineModule({
     ctx.contribute.tool(tool);
     ctx.contribute.promptSection({
       order: 10, // skill=0 之后、mcp=20 之前（M4-2 批 B 分配表）
-      // 引导常驻（ROADMAP ①）：旧版空清单 render 返回空串→整段被 promptSections() 过滤，模型首用前看不到任何引导；
-      // 现段文本 = 引导 +（有清单时）Current Tasks 拼装。引导随模块走（模块关闭整段消失），不进核心五节
-      get text() {
-        const list = render(state.todos); // getter——promptSections() 聚合时读最新状态
-        return list === "" ? TODO_GUIDANCE : `${TODO_GUIDANCE}\n\n${list}`;
-      },
+      // 段恒静态（m4-6 T5 缓存稳定）：旧版 getter 镜像活动清单——每次 todo_write 都改系统提示词、击穿供应商前缀缓存。
+      // 清单本就随每次 todo_write 工具结果回显全表（render 留给工具结果与 onWrite 面板日志），模型不丢信息；
+      // 引导常驻随模块走（模块关闭整段消失），不进核心五节。
+      text: TODO_GUIDANCE,
     });
   },
 });
