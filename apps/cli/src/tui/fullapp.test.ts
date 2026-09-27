@@ -1529,5 +1529,30 @@ describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定
 		expect(actions).toEqual(["cancel", "stopall"]); // 两件都做、顺序 = 停生成先
 		app.stop();
 	});
+describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底部）", () => {
+	it("㊿-8 viewText bottom：初始滚到末页；live 刷新贴底跟随；用户上翻即脱钉", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		const rows = (n: number): string => Array.from({ length: n }, (_, i) => `行${i + 1}`).join("\n");
+		let body = rows(60);
+		app.viewText("查看", body, { layout: "full", bottom: true, live: () => body });
+		await flush(80);
+		const pu = (app as unknown as { pendingUi: { kind: string; scroll: number; lines: string[]; layout?: string; bottom?: boolean } }).pendingUi;
+		expect(pu.kind).toBe("view");
+		expect(pu.layout).toBe("full");
+		expect(pu.bottom).toBe(true);
+		expect(pu.scroll).toBeGreaterThanOrEqual(pu.lines.length - 30); // 初值在末页（60 行 / 30 行屏）
+		body = rows(80); // live 长内容
+		await flush(1200); // 跨一个 tick 帧让 live 刷新
+		expect(pu.lines.length).toBe(80);
+		expect(pu.scroll).toBeGreaterThanOrEqual(pu.lines.length - 30); // 贴底跟随到新末页
+		pu.scroll = 5; // 用户上翻
+		body = rows(100);
+		await flush(1200);
+		expect(pu.scroll).toBe(5); // 脱钉——不抢用户滚动位置
+		app.stop();
+	});
 });
 
+});
