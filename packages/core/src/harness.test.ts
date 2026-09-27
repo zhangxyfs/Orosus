@@ -1133,6 +1133,18 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     expect(sections.indexOf("## Coding")).toBeGreaterThan(sections.indexOf("## Safety"));
     await h.close();
   });
+
+  it("⑤ Delivery 节（m4-6 T10）：按用户将收到的形态验证/测试红着不许说完成 + 诚实汇报（不为绿压失败、真过了直说不对冲）", async () => {
+    const h = await makeHarness();
+    const sections = h.graph().promptSections();
+    expect(sections).toContain("## Delivery");
+    expect(sections).toContain("verify it in the form the user will receive it");
+    expect(sections).toContain("must work end to end");
+    expect(sections).toContain("never suppress a failing check to manufacture a green result");
+    expect(sections).toContain("an accurate report, not a defensive one");
+    expect(sections.indexOf("## Delivery")).toBeGreaterThan(sections.indexOf("## Coding")); // Coding 之后
+    await h.close();
+  });
 });
 
 describe("/model 持久化（2026-09-22 批⑧——选定即写盘不再问，推翻 T14/D38 确认制：「要不要永久」是工具自己的琐事）", () => {
