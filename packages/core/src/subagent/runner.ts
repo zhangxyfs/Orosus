@@ -98,6 +98,9 @@ const textOf = (e: SessionEvent): string =>
     .map((p) => p.text ?? "")
     .join("");
 
+/** 嵌套规则句（m4-6 T3 设计空白 4——中文区，随工具描述走）：追加在深度 1 可见的派活工具描述尾部。 */
+const NESTED_RULES_NOTE = "（嵌套规则：你派出的下一层子代理一律前台——孙代理不支持后台；并发位满时孙代理立即失败不排队。）";
+
 /** 子代理系统提示词（决策 14：角色段 → 工种正文 → 扩展位〔空位注释〕）。v2（m4-6 T2）：+ Environment（spawn 定格；env 用子代理
  *  自有内联类型，不引用 PromptEnv——T7 删 PromptEnv.date 不牵连此处）+ Project Instructions（AGENTS.md 有才出，免责行与主对话逐字同文）+ 禁猜句（Reasonix 定式）。 */
 const buildSystemPrompt = (
@@ -426,7 +429,11 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         if (allowed !== undefined && !allowed.has(t.name)) continue;
         if (disallowed !== undefined && disallowed.has(t.name)) continue;
         faceNames.add(t.name);
-        tools.register(wrapForWriteReceipt(t, declaredPaths, records, deps.cwd), t.name.split("__")[0]!);
+        // 嵌套边界进描述（m4-6 T3，Reasonix 定式）：深度 1 看到的派活工具追加嵌套句——孙代理一律前台/满载快败提前可见（注册期副本，不回写模块本体）
+        const face = isSpawnClassTool(t.name) && depth === 1
+          ? { ...t, description: `${t.description}${NESTED_RULES_NOTE}` }
+          : t;
+        tools.register(wrapForWriteReceipt(face, declaredPaths, records, deps.cwd), t.name.split("__")[0]!);
       }
       // 写协调闸（决策 24②）：先报备归一——报备了的按路径占闸；没报备但工具面含会写的（bash/写工具）
       // = 算整仓（保守排队，③）；纯只读代理不占闸。同血缘撞车快败在闸内判定。等待期间不撒手（并发位纪律在调用方）。
