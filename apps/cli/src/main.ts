@@ -42,7 +42,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { agentEventsFromFile, emptyTasksRow, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount, subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -1452,6 +1452,15 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       }
       const mounted = panelCache?.modules.find((m) => m.name === name)?.state === "mounted";
       const target = !mounted;
+      // 卸载 tool-subagent 守卫（2026-09-27）：在跑/排队/挂审批的子代理在册不许卸——
+      // 内核 runner 不随模块死，但派活/停止工具面会消失，模型侧就管不着了
+      if (!target && name === "tool-subagent") {
+        const block = subagentUnloadBlock(h.subagents());
+        if (block !== undefined) {
+          app.showToast(block);
+          return;
+        }
+      }
       const audit = h.graph().audit();
       const depRows = audit.map((a) => ({ name: a.name, provides: a.provides, dependsOn: a.dependsOn, state: a.state }));
       const lockedNames = audit.filter((a) => lockReasonFor(a.name) !== undefined).map((a) => a.name);
