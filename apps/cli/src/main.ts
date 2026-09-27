@@ -1380,7 +1380,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/reload", desc: "重载模块", long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
 ];
 
-/** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行）。 */
+/** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行 + 框下快捷键导引一行）。 */
 const ASCII_BANNER = (VERSION: string): string[] => [
 	"",
 	theme.fg("accent", "╭──────────────────────────────────────────────────────────╮"),
@@ -1394,10 +1394,10 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
-  // 快捷键导引两行（F5 十二轮③：加 Ctrl + T 侧栏；单行放不下——拆两行；T10 加 Ctrl + E 诊断段重算补空：行 2 宽 38+16=54 → 补空 4，内宽 58 不变）
-  theme.fg("accent", "│") + theme.dim(" Tab 焦点 · Shift + Tab 权限 · Alt + E 思考") + "               " + theme.fg("accent", "│"),
-  theme.fg("accent", "│") + theme.dim(" / 命令 · Ctrl + T 侧栏 · Alt + V 贴图 · Ctrl + E 诊断") + "    " + theme.fg("accent", "│"),
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
+	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头）
+	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"),
+	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断"),
 	"",
 ];
 
