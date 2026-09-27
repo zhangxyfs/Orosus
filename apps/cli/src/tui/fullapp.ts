@@ -86,6 +86,9 @@ export interface FullAppIO {
 	subagentStatus?(): string[];
 	/** 输入行计数（M4.5 T13——决策 13）：后台运行中的任务数（只后台、为零整段消失——提示行右侧拼接）。 */
 	subagentRunningCount?(): number;
+	/** 双击 Esc 全停（M4.5 T14——决策 12）：焦点在输入框空闲态双击 = 停止全部子代理（未答审批自动回绝）；
+	 *  忙时双击 = 停生成 + 全停（叠合语义定案——设计空白 T14 条）。 */
+	stopAllSubagents?(): void;
 	/** ↑ 召回队尾（LIFO——kimi recallLastQueued 同语义）；空队列 → undefined。 */
 	recallQueued(): string | undefined;
 	/** Ctrl+U = steer（kimi Ctrl-S 改键位——Ctrl+S 是终端流控 XOFF 冲突回避）：排队消息 + 当前草稿
@@ -404,6 +407,11 @@ export class FullApp {
 		if (this.full.isActive) this.full.exit();
 		this.term.stop();
 		if (FullApp.activeInstance === this) FullApp.activeInstance = undefined;
+	}
+
+	/** 子代理在册可见（M4.5 T14）：状态行有内容或有后台在跑——空闲双击 Esc 的全停门槛。 */
+	private subagentsVisible(): boolean {
+		return (this.io.subagentStatus?.().length ?? 0) > 0 || (this.io.subagentRunningCount?.() ?? 0) > 0;
 	}
 
 	setBusy(b: boolean): void {
@@ -1103,14 +1111,14 @@ export class FullApp {
 					this.lastEscCancel = 0;
 					s.toast = undefined; // 二次确认即消提示（走查拍板——toast 留着会误解为「还没停」）
 					this.io.requestCancel();
+					this.io.stopAllSubagents?.(); // T14 叠合定案：忙时双击 = 停生成 + 全停子代理（一次操作两件事）
 				} else {
 					this.lastEscCancel = Date.now();
-					this.showToast("再按一次 Esc 停止生成");
+					this.showToast("再按一次 Esc 停止生成与全部子代理");
 				}
 				this.scheduler.requestImmediateRender();
 				return;
 			}
-			this.lastEscCancel = 0;
 			if (s.overlayOpen) {
 				if (s.overlayCmd !== "") {
 					s.overlayCmd = "";
@@ -1121,6 +1129,21 @@ export class FullApp {
 				this.scheduler.requestImmediateRender();
 				return;
 			}
+			// M4.5 T14：焦点在输入框且有子代理在册（跑着/排队/闪现）→ 双击 Esc 全停（1 秒窗口——
+			// 与忙时停生成同款判定；判定在前不被下方 reset 冲掉；无子代理时零改动——直接回焦点）
+			if (s.focusIdx === 0 && this.subagentsVisible()) {
+				if (Date.now() - this.lastEscCancel < 1000) {
+					this.lastEscCancel = 0;
+					s.toast = undefined;
+					this.io.stopAllSubagents?.();
+				} else {
+					this.lastEscCancel = Date.now();
+					this.showToast("再按一次 Esc 停止全部子代理");
+				}
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			this.lastEscCancel = 0;
 			s.focusIdx = 0;
 			this.scheduler.requestImmediateRender();
 			return;

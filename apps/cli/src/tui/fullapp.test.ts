@@ -1485,3 +1485,49 @@ describe("斜杠菜单参数阶段（m5 T15——命令名已定 + 空格后长�
 		expect(b).toContain("/title");
 	});
 });
+
+describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定案）", () => {
+	it("㊿ 空闲 + 焦点输入框 + 有子代理在册：双击（1 秒窗口）全停；单击只提示；无子代理零行为改动", async () => {
+		const { app, input, actions } = rig([], 100, 30, {
+			subagentStatus: () => ["[38;5;115m◆ 子代理 a3f9c2e1 修复登录页 · 运行中 3 轮[39m"],
+			stopAllSubagents: () => actions.push("stopall"),
+		});
+		app.start();
+		await flush();
+		input.emit("data", ""); // 空闲首按：只提示不动作
+		await flush(80);
+		expect(actions).toEqual([]);
+		expect(app.stateRef.toast?.text).toContain("再按一次 Esc 停止全部子代理");
+		input.emit("data", ""); // 窗口内再按：全停
+		await flush(80);
+		expect(actions).toEqual(["stopall"]);
+		app.stop();
+	});
+
+	it("㊿b 无子代理在册：空闲双击不触发全停（界面规矩零改动——第二按也只回焦点）", async () => {
+		const { app, input, actions } = rig([], 100, 30, { stopAllSubagents: () => actions.push("stopall") });
+		app.start();
+		await flush();
+		input.emit("data", "");
+		await flush(80);
+		input.emit("data", "");
+		await flush(80);
+		expect(actions).toEqual([]); // 无子代理——不进入全停分支
+		app.stop();
+	});
+
+	it("㊿c 忙时双击叠合（T14 定案）：停生成 + 全停子代理一次双击两件事", async () => {
+		const { app, input, actions } = rig([], 100, 30, { stopAllSubagents: () => actions.push("stopall") });
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "");
+		await flush(80);
+		expect(app.stateRef.toast?.text).toContain("停止生成与全部子代理");
+		input.emit("data", "");
+		await flush(80);
+		expect(actions).toEqual(["cancel", "stopall"]); // 两件都做、顺序 = 停生成先
+		app.stop();
+	});
+});
+

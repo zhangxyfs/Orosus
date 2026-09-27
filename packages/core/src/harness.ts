@@ -113,6 +113,8 @@ export interface Harness {
   subagents(): import("@orosus/contracts/module").SubagentRosterEntry[];
   /** 应答后台子代理的挂起审批（M4.5 T8/决策 3）：不抢占的问——用户有空再批；会话关闭/停止自动按拒绝。 */
   answerSubagentApproval(agentId: string, allow: boolean): boolean;
+  /** 双击 Esc 全停（M4.5 T14/决策 12）：停止全部子代理（在跑/排队），未答审批自动按拒绝收场。 */
+  stopAllSubagents(): void;
   pendingConfirms(): { name: string; version: string; layer: "user" | "project"; root: string; reason: string; entryHash: string; def: import("@orosus/contracts/module").ModuleDefinition }[];
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
@@ -1028,6 +1030,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     },
     answerSubagentApproval(agentId: string, allow: boolean) {
       return subagentRunner.answerApproval(agentId, allow);
+    },
+    stopAllSubagents() {
+      subagentRunner.stopAll();
     },
     // m5 T17：待确认桶读口（blocked 随 reload 重算——返回当前态）
     pendingConfirms() {

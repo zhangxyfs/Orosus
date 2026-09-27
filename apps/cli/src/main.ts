@@ -1559,6 +1559,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     subagentStatus: () => subagentStatusLines(h.subagents(), Date.now()),
     // M4.5 T13：输入行「N 任务正在执行」——只数后台运行中（前台走状态行）；为零整段消失
     subagentRunningCount: () => backgroundRunningCount(h.subagents()),
+    // M4.5 T14：双击 Esc 全停（空闲有子代理 = 全停；忙时 = 停生成 + 全停）——未答审批自动回绝
+    stopAllSubagents: () => h.stopAllSubagents(),
     recallQueued: () => pendingSubmits.pop(), // LIFO 队尾召回（kimi recallLastQueued 同语义）
     requestSteer: (texts) => {
       if (!inflight) { // 无进行中 turn：首条直接发、其余照旧排队（kimi Ctrl-S 空闲 = 直接提交）
