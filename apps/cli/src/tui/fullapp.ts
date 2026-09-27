@@ -204,10 +204,12 @@ const DOUBLE_CLICK_INTERVAL_MS = 500; // 双击判定窗口（m5 鼠标批 T6 �
 
 /** 滚动条几何（m5 鼠标批 T10——kimi layout.ts:285-292 getScrollbarGeometry 同式，设计空白 7/8）：
  *  不超一屏 undefined；拇指最小高 2；拇指顶 = round(首行/(总−视口) × (视口−拇指高))。
+ *  拇指上限半轨（2026-09-27 用户走查：内容略超一屏时面积比例拇指≈满轨，看不出位置——近溢出区钳半轨；
+ *  超两屏后 round(视口²/总) ≤ 视口/2，上限不再起作用，比例语义原样）。
  *  top/height 都是视口内行偏移（渲染与拖动映射共用一源）。 */
 export function thumbGeometry(viewportH: number, total: number, first: number): { top: number; height: number } | undefined {
 	if (total <= viewportH) return undefined; // 不超一屏不显示
-	const h = Math.max(Math.min(2, viewportH), Math.min(viewportH, Math.round((viewportH * viewportH) / total)));
+	const h = Math.max(Math.min(2, viewportH), Math.min(Math.floor(viewportH / 2), Math.round((viewportH * viewportH) / total)));
 	const maxOff = viewportH - h;
 	return { top: Math.round((first / Math.max(1, total - viewportH)) * maxOff), height: h };
 }
@@ -2485,15 +2487,23 @@ export class FullApp {
 		// 滚动条（T10）：右缘 1 列轨道/拇指覆盖在内容最右列上
 		const vthumb = thumbGeometry(page, pu.lines.length, sc);
 		for (let i = 0; i < win.length; i++) {
-			const raw = " " + truncateToWidth(win[i]!, oInner - 2);
+			// 前导空格算进截断预算（oInner−3）：满宽文字 + 前导空格恰占满内容区——与主窗
+			// 212e891「截断与 pad 同目标」恒宽口径一致（原截 oInner−2 靠 padToWidth 转截断兜底）
+			const raw = " " + truncateToWidth(win[i]!, oInner - 3);
 			const styled = this.styleDocSelection("view", sc + i, raw);
 			if (vthumb !== undefined) {
 				const onThumb = i >= vthumb.top && i < vthumb.top + vthumb.height;
-				const ch = onThumb
-					? theme.fg(this.state.scrollbarHover === "view" ? "accent" : "muted", "█")
-					: theme.dim("│");
-				// 文字与轨道间空 1 列（2026-09-27 用户走查两轮定稿——与主窗滚动条同口径）
-				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 2) + " " + ch + theme.fg(bc, "│")));
+				// 轨道格 = 深底空格、拇指 = █（2026-09-27 用户走查二轮：dim │ 细竖线字形上下有留缝、
+				// 渲染成虚线，与右侧 1 列的 accent 边框虚线交叠成锯齿——「画歪了」实锤。bg 块与 █
+				// 同为满格实心字形，虚线观感消除；主窗轨道是末列无邻线故无此症，不改）
+				const bar = onThumb
+					? theme.paint(this.state.scrollbarHover === "view" ? "accent" : "muted", "surface2", "█")
+					: theme.bg("surface", " ");
+				// 文字与轨道间空 1 列；各段显式带底色（theme.bg 收尾 49m 清外层底色——整行单包会漏）
+				olines.push(
+					theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 2)) +
+					theme.bg("surface2", " ") + bar + theme.bg("surface2", theme.fg(bc, "│")),
+				);
 			} else {
 				olines.push(boxRow(styled));
 			}
@@ -2505,7 +2515,7 @@ export class FullApp {
 		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ / PgUp/PgDn 翻页${keyHints !== "" ? ` · ${keyHints}` : ""} · Esc 关闭`;
 		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: geo.row, col: geo.col, width: ow };
+		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };
 	}
 
 	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
