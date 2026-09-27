@@ -459,7 +459,7 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined }
+		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
@@ -499,7 +499,7 @@ export class FullApp {
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 口子一）：几何走 resolvePopupLayout（缺省 center80 居中弹窗——
 	 *  五旧窗随之统一新长相）、自定义键（保留键剔除）、排队化。too-small（连保底 8×3 都装不下）不弹窗、
 	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。 */
-	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string; live?: () => string }): void {
+	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean }): void {
 		const open = (): void => {
 			if (this.stopped) return;
 			const geo = this.viewGeo(opts?.layout);
@@ -509,13 +509,17 @@ export class FullApp {
 				return;
 			}
 			const keys = this.filterViewKeys(opts?.keys, opts?.owner);
+			const initLines = text.split("\n");
 			this.state.overlayOpen = false; // 与斜杠菜单互斥
 			this.pendingUi = {
-				kind: "view", title, text, lines: text.split("\n"), scroll: 0,
+				// bottom（2026-09-27 用户拍板：查看窗自动滚到底）——初始滚到末页；down/pageDown 天然钳制在 max
+				kind: "view", title, text, lines: initLines,
+				scroll: opts?.bottom === true ? Math.max(0, initLines.length - 1) : 0,
 				...(opts?.layout !== undefined ? { layout: opts.layout } : {}),
 				...(keys !== undefined ? { keys } : {}),
 				...(opts?.owner !== undefined ? { owner: opts.owner } : {}),
 				...(opts?.live !== undefined ? { live: opts.live } : {}), // M4.5 T11 查看窗实时流——每帧现调（1 秒 tick 自更）
+				...(opts?.bottom === true ? { bottom: true } : {}),
 			};
 			this.scheduler.requestImmediateRender();
 		};

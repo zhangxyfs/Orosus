@@ -1127,7 +1127,7 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id))
 		: undefined;
 	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id));
-	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, ...(live !== undefined ? [{ live }] : []));
+	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(live !== undefined ? { live } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
 	else out(body);
 };
 
