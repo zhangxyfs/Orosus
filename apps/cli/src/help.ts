@@ -57,7 +57,7 @@ export function commandCompleter(
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/rename", "/quit", "/exit", "/q",
     "/model", "/effort", "/reload", "/help", "/settings", "/config",
-    "/compact", "/permission", "/yolo", "/auto",
+    "/compact", "/permission", "/yolo", "/auto", "/tasks",
   ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）；2026-09-25 /effort 入列
   return [all.filter((c) => c.startsWith(line)), line];
 }
@@ -85,6 +85,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
 
 设置与信息面板：
   /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 配置网络搜索——/usage /status 已并入；别名 /config）
+  /tasks      子代理任务列表（父编号-孙编号亲缘标注；回车进消息查看窗；挂着审批的行回车即可批准或拒绝）
 
 快捷键（全屏）：
   Enter       发送；回答进行中 = 排队（队列逐条显示在输入框上方，结束后依序发出）

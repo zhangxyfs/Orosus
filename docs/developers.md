@@ -111,6 +111,27 @@ tool-web 挂服务。判断标准：**知识的家跟权威方走，消费靠服
   机器可读的口子目录（喂给帮人写模块的 AI）见 [extension-catalog.md](extension-catalog.md)。
 
 
+## 子代理缝（M4.5 / 决策 1-24——完整方案见 docs/superpowers/plans/2026-09-26-m4-5-subagent.md）
+
+模块经 `ctx.subagent`（可选缝，mounts 声明 `"subagent"`）拿内核派单执行口：
+
+```ts
+// 模块里派一个子代理（前台等到结论；background: true 入册即返编号，结论自动送回对话）
+const out = await ctx.subagent?.spawn({
+  label: "调研竞品",           // 状态行 / 任务列表 / 送回行的显示名
+  prompt: "调研 X 并输出对比表", // 任务书自包含（子代理看不到本对话，除非 forkFrom: true）
+  writePaths: ["docs/"],        // 要写文件必须报备（决策 24：撞车排队；bash/未报备 = 算整仓）
+  // rolePrompt / roleName / allowedTools / disallowedTools / model / maxTurns / forkFrom / background
+});
+```
+
+- 会话文件嵌主会话目录（`<桶>/<主sid>/agents/agents_<编号>/agents/session.jsonl`）——树扫描天然免疫；
+  子+孙同本花名册（宿主读口 `h.subagents()`，挂起审批应答 `h.answerSubagentApproval`）。
+- 派活工具族在 tool-subagent 模块（`tool-subagent__spawn/tasks/stop`，免审批）；工种文件四级目录
+  （项目 `.orosus/agents/` > 项目 `.agents/agents/` > 用户 `~/.orosus/agents/` > 用户 `~/.agents/agents/`），
+  内置 research（只读调研）/ general（通用，缺省）两工种，文件压过内置。
+- 双击 Esc 全停（忙时 = 停生成 + 全停）；/tasks 看列表与查看窗；/settings → 子代理 配模型与审批模式。
+
 ## 错误行为
 
 - StreamFn 不许 reject——错误编码为 `finish{kind:"error"}`（§6.4）
