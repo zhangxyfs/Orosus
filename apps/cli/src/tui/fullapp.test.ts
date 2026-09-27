@@ -1883,12 +1883,12 @@ describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同�
 		press(input, 6, 0); // docIdx 75 列 6（b 处）——第一击 count 1
 		press(input, 6, 0); // 同点第二击 count 2 → 词区间
 		await flush();
-		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 4 });
-		expect(st.mselFocus).toEqual({ docIdx: 75, col: 12 });
+		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 4 });
+		expect(st.mselFocus).toEqual({ scope: "main", docIdx: 75, col: 12 });
 		press(input, 6, 0); // 第三击 count 3 → 整行
 		await flush();
-		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 0 });
-		expect(st.mselFocus?.docIdx).toBe(75);
+		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 0 });
+		expect(st.mselFocus?.docIdx).toBe(75); // 整行选区（scope main）
 		app.stop();
 	});
 	it("T6-3 双击后向上拖：锚点切到初始区间尾端（智能扩选反向）；向下拖按词对齐", async () => {
@@ -1901,8 +1901,8 @@ describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同�
 		await flush();
 		dragTo(input, 6, 0); // 拖到上一行（docIdx 75 列 6）——反向
 		await flush();
-		expect(st.mselAnchor).toEqual({ docIdx: 76, col: 10 }); // 锚点切到初始区间尾端（well-known [0,10]）
-		expect(st.mselFocus).toEqual({ docIdx: 75, col: 4 }); // 按当前行词起点对齐（a/b/c.ts [4,12] 的 start）
+		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 76, col: 10 }); // 锚点切到初始区间尾端（well-known [0,10]）
+		expect(st.mselFocus).toEqual({ scope: "main", docIdx: 75, col: 4 }); // 按当前行词起点对齐（a/b/c.ts [4,12] 的 start）
 		app.stop();
 	});
 	it("T6-4 连击重置：异词第二击归 1（字符锚点折叠）；超窗后同点再击也归 1", async () => {
@@ -1916,7 +1916,7 @@ describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同�
 		press(input, 16, 0); // 同行异词（ok 的 k——x16 = doc col 14）——count 归 1 字符锚点
 		await flush();
 		expect(st.mselAnchor).toEqual(st.mselFocus); // 折叠锚点
-		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 14 });
+		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 14 });
 		press(input, 1, 0); // 回 "see" 第一击（前一击是异词——count 从 1 起算）
 		press(input, 1, 0); // 同词再击（500ms 窗口内——升 count 2）
 		await flush();
@@ -1972,6 +1972,67 @@ describe("URL 点击打开（m5 鼠标批 T7——渲染侧 OSC 8 自产 + 点�
 		releaseAt(input, 5, 0);
 		await flush();
 		expect(opened).toHaveLength(0); // 双击不开链接（选词语义）
+		app.stop();
+	});
+});
+
+describe("查看窗文本选择（m5 鼠标批 T8——T5/T6/T7 机制全复用，坐标系换查看窗盒；关窗选区整组清空）", () => {
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<32;${x + 1};${y + 1}M`); };
+	const releaseAt = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}m`); };
+	const doc100 = Array.from({ length: 100 }, (_, i) => `第${i + 1}行内容`);
+	const viewBody = Array.from({ length: 80 }, (_, i) => `窗行${i + 1}内容`).join("\n");
+	type SelState = { mselAnchor: { scope: string; docIdx: number; col: number } | undefined; mselFocus: { scope: string; docIdx: number; col: number } | undefined };
+
+	it("T8-1 查看窗内拖选：提取 pu.lines 文本（非主窗 doc——同名行区分）+ toast 已复制", async () => {
+		const writes: string[] = [];
+		const { app, input } = rig(doc100, 100, 30, { writeClipboard: async (t: string) => { writes.push(t); return true; } });
+		app.start();
+		await flush();
+		app.viewText("查看", viewBody, { layout: "full" }); // full：盒 row0/col0、内容行 y1 起、内衬 2 列
+		await flush(80);
+		press(input, 4, 1); // pu.lines[0] col 2
+		dragTo(input, 10, 2); // pu.lines[1] col 8
+		releaseAt(input, 10, 2);
+		await flush();
+		expect(writes).toHaveLength(1);
+		expect(writes[0]).toContain("行1内容"); // 提取的是查看窗内容（press col 2 切掉首字窗——列语义诚实）
+		expect(writes[0]).toContain("窗行2");
+		expect(writes[0]).not.toContain("第76行"); // 不是主窗 doc
+		expect(app.stateRef.toast?.text).toMatch(/^已复制 2 行$/);
+		app.stop();
+	});
+	it("T8-2 查看窗选区反白渲染（boxRow 行内 inverse 段）", async () => {
+		const { app, input, output } = rig(doc100);
+		app.start();
+		await flush();
+		app.viewText("查看", viewBody, { layout: "full" });
+		await flush(80);
+		const before = output.buf.length;
+		press(input, 4, 1);
+		dragTo(input, 12, 3);
+		await flush();
+		expect(output.buf.slice(before)).toContain("\x1b[7m");
+		app.stop();
+	});
+	it("T8-3 查看窗外（浮层周边主窗流区）按下仍选主窗；Esc 关窗后选区整组清空（防残留误映射下一窗）", async () => {
+		const { app, input } = rig(doc100); // center80 布局：盒 row3/col10 宽80 高24——y0 是主窗流区
+		app.start();
+		await flush();
+		app.viewText("查看", viewBody); // 缺省 center80
+		await flush(80);
+		press(input, 5, 0); // 盒外主窗流区（y=0 < 盒顶 3）
+		await flush(80);
+		const st = app.stateRef as unknown as SelState;
+		expect(st.mselAnchor?.scope).toBe("main"); // 仍选主窗
+		// 查看窗内建选区后关窗 → 守卫清空
+		press(input, 14, 4); // 盒内（col 14-10=4、row 4-3-1=0）
+		await flush(80);
+		expect(st.mselAnchor?.scope).toBe("view");
+		input.emit("data", "\x1b"); // Esc 关窗
+		await flush(80);
+		expect(st.mselAnchor).toBeUndefined(); // 关窗即清（渲染守卫）
+		expect(st.mselFocus).toBeUndefined();
 		app.stop();
 	});
 });
