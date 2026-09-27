@@ -6,7 +6,7 @@ import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecre
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
-import type { HostInfo, SettingsService } from "@orosus/contracts/module";
+import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { createCliUi } from "./uiface.ts";
 import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
@@ -667,8 +667,21 @@ function attachRender(h: Harness): void {
   // 非 TTY 只传 write = 现状等价。onEvent 升级完整事件——turn/end 驱动 sink.end() 定格终稿
   // 全屏追加工具结构化口（2026-09-23 走查批）：tool/call / tool/result 带 args/output 进 DocModel
   // （diff/失败体渲染）；行模式不传 = renderEvent 文本形态不变
-  // M4.5（2026-09-27 拍板）：spawn 工具行合并为 agent 组（kimi 定式——绝不显示「Using Spawn」）
-  if (tuiMode === "full") dm.agentProvider = () => h.subagents();
+  // M4.5（2026-09-27 拍板）：spawn 工具行合并为 agent 组（kimi 定式——绝不显示「Using Spawn」）。
+  // 取数 = 活名册 + 盘上历史按需补挂（重载后回放组全员终态，条目从盘上 agents/ 目录重建）——
+  // 只补 DocModel 组实际引用的编号（groupIds 现算）：未引用的历史条目不进 provider，防
+  // claimAgents 把旧面孔错认领进末组；盘读每会话一次备忘（attachRender 随会话切换重建，天然失效）
+  let histRoster: { sid: string; entries: SubagentRosterEntry[] } | undefined;
+  if (tuiMode === "full")
+    dm.agentProvider = () => {
+      const live = h.subagents();
+      const want = dm.groupIds();
+      if (want.size === 0) return live;
+      const liveIds = new Set(live.map((e) => e.id));
+      if (histRoster?.sid !== h.sessionId) histRoster = { sid: h.sessionId, entries: loadHistoricalSubagents(sessionsDir, h.sessionId) };
+      const extra = histRoster.entries.filter((e) => want.has(e.id) && !liveIds.has(e.id));
+      return extra.length > 0 ? [...live, ...extra] : live;
+    };
   const toolIo =
     tuiMode === "full"
       ? {
@@ -1097,45 +1110,54 @@ const runtimeStatusText = (): string => {
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
- *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。 */
+ *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。
+ *  2026-09-27 拍板：查看窗 Esc 关闭后回列表页（不是一路关到底）——全屏循环里查看窗之后的
+ *  pickOverlay 落 m5 T2 的 FIFO 队列（pendingUi 被查看窗占着），关窗即自动回列表；行模式无弹窗栈，一轮即止。 */
 const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Promise<void> => {
-	// 名册合并（2026-09-27 拍板：不删旧数据就得能查看）：活名册（本进程）∪ 盘上历史（agents/ 目录重建，
-	// 简述/后台/工种从主会话 spawn 调用回查），按 id 去重——活名册优先（状态新鲜带 truncated）；
-	// 排序最新在最上（用户拍板：第一页永远是最新，上一轮对话的派单自然沉为历史）
-	const live = h.subagents();
-	const liveIds = new Set(live.map((e) => e.id));
-	const entries = sortNewestFirst([...live, ...loadHistoricalSubagents(sessionsDir, h.sessionId).filter((e) => !liveIds.has(e.id))]);
-	// 空册也开列表（用户拍板 2026-09-27：/tasks 无条件开）——占位行说明派活方式，回车无事发生
-	const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
-	let idx: number;
-	if (app !== undefined) {
-		const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
-		if (picked === undefined || entries.length === 0) return; // Esc / 空态占位行
-		idx = picked;
-	} else {
-		const picked = await commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
-		if (entries.length === 0) return;
-		idx = rows.indexOf(picked);
-		if (idx < 0) return;
+	for (;;) {
+		// 名册合并（2026-09-27 拍板：不删旧数据就得能查看）：活名册（本进程）∪ 盘上历史（agents/ 目录重建，
+		// 简述/后台/工种从主会话 spawn 调用回查），按 id 去重——活名册优先（状态新鲜带 truncated）；
+		// 排序最新在最上（用户拍板：第一页永远是最新，上一轮对话的派单自然沉为历史）。每轮现取——
+		// 查看窗停留期间状态会变（跑完/新增），回列表该是新鲜册
+		const live = h.subagents();
+		const liveIds = new Set(live.map((e) => e.id));
+		const entries = sortNewestFirst([...live, ...loadHistoricalSubagents(sessionsDir, h.sessionId).filter((e) => !liveIds.has(e.id))]);
+		// 空册也开列表（用户拍板 2026-09-27：/tasks 无条件开）——占位行说明派活方式，回车无事发生
+		const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
+		let idx: number;
+		if (app !== undefined) {
+			const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
+			if (picked === undefined || entries.length === 0) return; // Esc / 空态占位行
+			idx = picked;
+		} else {
+			const picked = await commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
+			if (entries.length === 0) return;
+			idx = rows.indexOf(picked);
+			if (idx < 0) return;
+		}
+		const entry = entries[idx]!;
+		// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）——应答完回列表
+		if (entry.pendingApproval !== undefined) {
+			const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
+			const allow = ans === "批准一次";
+			h.answerSubagentApproval(entry.id, allow);
+			notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
+			continue;
+		}
+		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
+		// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
+		const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
+		const liveView = entry.status === "queued" || entry.status === "running"
+			? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW())
+			: undefined;
+		const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW());
+		if (app !== undefined) {
+			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(liveView !== undefined ? { live: liveView } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
+			continue; // 查看窗排在 pendingUi——Esc 关窗后队里的列表自动顶上（回列表页拍板）
+		}
+		out(body);
+		return; // 行模式一轮即止（无弹窗栈可回）
 	}
-	const entry = entries[idx]!;
-	// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）
-	if (entry.pendingApproval !== undefined) {
-		const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
-		const allow = ans === "批准一次";
-		h.answerSubagentApproval(entry.id, allow);
-		notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
-		return;
-	}
-	// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
-	// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
-	const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
-	const liveView = entry.status === "queued" || entry.status === "running"
-		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW())
-		: undefined;
-	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW());
-	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(liveView !== undefined ? { live: liveView } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
-	else out(body);
 };
 
 const openSettingsPanel = async (app: FullApp): Promise<void> => {

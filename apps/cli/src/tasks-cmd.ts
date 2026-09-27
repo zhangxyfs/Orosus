@@ -152,8 +152,14 @@ export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): S
   return out;
 }
 
+/** spawn 结果文本 → 8 位子代理编号（/tasks 历史重建与 DocModel 回放组共用一口——两处口径必须一致，
+ *  否则同一结果抠出的编号集合不同会错挂：前台「- <id> · …」/后台「…：<id>、<id>」两形态都覆盖）。 */
+export function spawnIdsIn(output: string): string[] {
+  return [...String(output ?? "").matchAll(/[0-9a-f]{8}/g)].map((m) => m[0]!);
+}
+
 /** 主会话文件 → spawn 调用元数据（id → 简述/后台/工种）：call 事件记参数、result 事件按 callId 配对，
- *  结果文本里抠 8 位编号（前台「- <id> · …」/后台「…：<id>、<id>」两形态都覆盖）。 */
+ *  结果文本里抠 8 位编号（spawnIdsIn 共用口）。 */
 function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<string, { label: string; background: boolean; roleName?: string }> {
   let raw: string;
   try {
@@ -181,8 +187,8 @@ function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<str
       });
     } else if (e.type === "tool/result" && typeof e.callId === "string" && calls.has(e.callId)) {
       const c = calls.get(e.callId)!;
-      for (const id of String(e.output ?? "").matchAll(/[0-9a-f]{8}/g)) {
-        out.set(id[0]!, { label: c.description ?? "（历史任务）", background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
+      for (const id of spawnIdsIn(String(e.output ?? ""))) {
+        out.set(id, { label: c.description ?? "（历史任务）", background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
       }
     }
   }

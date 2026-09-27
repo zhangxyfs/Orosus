@@ -252,15 +252,29 @@ describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行�
 		expect(lines.filter((l) => l.includes("agents ")).length).toBe(2); // 两组各自渲染
 	});
 
-	it("㊿-7 回放：spawn 工具调用退化为静态灰行（无活 roster），非 spawn 工具调用照常", () => {
+	it("㊿-7 回放：spawn 重建 agent 组（callId 配对从 result 抠编号）——同轮连续 spawn 并组、轮边界断组；spawn 不出工具行、非 spawn 照常", () => {
 		const dm = new DocModel();
+		const roster: import("@orosus/contracts/module").SubagentRosterEntry[] = [
+			{ id: "aaaa1111", depth: 1, label: "调研", status: "completed", background: false, turns: 3, enqueuedAt: "t" } as never,
+			{ id: "bbbb2222", depth: 1, label: "检索", status: "completed", background: true, turns: 2, enqueuedAt: "t" } as never,
+		];
+		dm.agentProvider = () => roster;
 		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: "去查" }] },
+			{ type: "assistant/message", content: [] },
 			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c1", args: {} },
-			{ type: "tool/call", name: "tool-fs__read", callId: "c2", args: { path: "a.ts" } },
+			{ type: "tool/result", callId: "c1", output: "- aaaa1111 · 完成\n结论：略" },
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c2", args: {} }, // 同轮（无 assistant 边界）→ 并组
+			{ type: "tool/result", callId: "c2", output: "已派出后台子代理：bbbb2222" },
+			{ type: "tool/call", name: "tool-fs__read", callId: "c3", args: { path: "a.ts" } },
 		], 80);
 		const lines = dm.frameLines(80).map(stripAnsi);
-		expect(lines.some((l) => l.includes("派出子代理（结果见下）"))).toBe(true);
-		expect(lines.some((l) => l.includes("Using"))).toBe(true); // 非 spawn 照常工具行
+		expect(lines.filter((l) => l.includes("agents ")).length).toBe(1); // 同轮两 spawn 并一组
+		expect(lines.some((l) => l.includes("调研"))).toBe(true);          // 组员 = result 抠出的编号现算
+		expect(lines.some((l) => l.includes("检索"))).toBe(true);
+		expect(lines.some((l) => l.includes("Using"))).toBe(true);         // 非 spawn 照常工具行
+		expect(lines.some((l) => l.includes("Spawn"))).toBe(false);        // spawn 绝不出工具行
+		expect(lines.some((l) => l.includes("结论：略"))).toBe(false);      // spawn result 不落行（组里已有）
 	});
 });
 
