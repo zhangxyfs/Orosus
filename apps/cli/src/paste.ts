@@ -123,3 +123,26 @@ export async function readClipboardText(): Promise<string | undefined> {
     return undefined;
   }
 }
+
+/** 剪贴板写入命令构造（m5 鼠标批 T5——纯函数可测；psCommandFor 同款手法）。
+ *  文本一律走 stdin 喂入：Windows `$input | Set-Clipboard` 防命令行长度限与引号转义歧义。 */
+export function clipboardWriteCommand(platform: NodeJS.Platform): { file: string; args: string[] } {
+  if (platform === "win32") return { file: "powershell", args: ["-NoProfile", "-Command", "$input | Set-Clipboard"] };
+  if (platform === "darwin") return { file: "pbcopy", args: [] };
+  return { file: "sh", args: ["-c", "xclip -selection clipboard 2>/dev/null || wl-copy 2>/dev/null"] };
+}
+
+/** 剪贴板纯文本写入（m5 鼠标批 T5——拖选松开即复制）：三平台 execFile 同读侧手法；
+ *  失败返回 false 不抛错（调用方落 OSC 52 逃生口）。 */
+export async function writeClipboardText(text: string): Promise<boolean> {
+  try {
+    const { file, args } = clipboardWriteCommand(process.platform);
+    await new Promise<void>((resolve, reject) => {
+      const child = execFile(file, args, (err) => (err !== null ? reject(err) : resolve()));
+      child.stdin?.end(text);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}

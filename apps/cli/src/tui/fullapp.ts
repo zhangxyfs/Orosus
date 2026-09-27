@@ -10,11 +10,12 @@
  *  鼠标接管关闭（用户拍板 2026-09-21——重开 = fullscreen.ts ENTER_ALT 追加 ?1000/?1006）。 */
 
 import { writeSync } from "node:fs";
+import { writeClipboardText } from "../paste.ts";
 import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
-import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { padToWidth, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
@@ -116,6 +117,9 @@ export interface FullAppIO {
 	/** 待确认模块回车 = 首挂确认弹窗（m5 T17）：宣言面人话清单 → 确认三动作作
 	 *  （trustModule 登记 + 写盘 enabled + reload 一次）；取消零副作用。 */
 	confirmModule?(name: string): void;
+	/** 剪贴板纯文本写入（m5 鼠标批 T5——拖选松开即复制）：缺省 paste.ts writeClipboardText；
+	 *  测试注入 stub。返回 false = 写入失败（调用方落 OSC 52 逃生口）。 */
+	writeClipboard?(text: string): Promise<boolean>;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -152,6 +156,10 @@ interface AppState {
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消（duration = 自定义时长毫秒，m5 T3）。 */
 	toast: { text: string; at: number; duration?: number } | undefined;
+	/** 鼠标选区端点（m5 鼠标批 T5）：存 doc 绝对行索引（设计空白 9——内容追加不漂移；压缩重建 doc
+	 *  后选区可能错位，不跨压缩保真已登记不修）；undefined = 无选区。流区外/面板按下 = 折叠清空。 */
+	mselAnchor: { docIdx: number; col: number } | undefined;
+	mselFocus: { docIdx: number; col: number } | undefined;
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
@@ -335,6 +343,8 @@ export class FullApp {
 			diagSel: 0,
 			diagReturn: false,
 			toast: undefined,
+			mselAnchor: undefined,
+			mselFocus: undefined,
 		};
 	}
 
@@ -906,12 +916,90 @@ export class FullApp {
 		this.scheduler.requestImmediateRender();
 	}
 
-	/** 按钮事件处理器（m5 鼠标批 T4 接线——T5 起填肉：选择状态机/URL 点击/滚动条拖动/自动滚）。
-	 *  空挂形态 = 安全吞（识别后不进按键流）；引导锁与右键忽略先落（T5 的常量语义前置）。 */
+	/** 按钮事件处理器（m5 鼠标批 T5 填肉）：按下建锚（空点击 = 折叠选区）、拖动扩焦（越界钳流区
+	 *  边界——T9 自动滚落地后压边缘改走脉冲）、松开结算复制（kimi handleSelectionMouseEvent
+	 *  :1314-1383 同构）。空点击清选区；非空选区保留反白，下次按下清（kimi 选区保续同款）。 */
 	private onButton(e: ButtonEvent): void {
 		if (this.onboarding !== undefined) return; // 引导锁（同 onWheel）
 		if (e.button !== 0) return; // v1 只左键；Shift+拖选走终端原生让路（shift 位解析了不消费）
-		void e; // T5 填肉前的占位消费（安全吞）
+		const s = this.state;
+		if (e.kind === "press") {
+			const p = this.pointToDoc(e.x, e.y);
+			s.mselAnchor = p; // 流区外/面板列 → undefined = 清选区（决策点 10/12：不建幻影锚点）
+			s.mselFocus = p;
+		} else if (e.kind === "drag") {
+			if (s.mselAnchor === undefined) return;
+			const { streamH, leftW } = this.layoutFrame();
+			const p = this.pointToDoc(Math.min(e.x, leftW - 1), Math.max(0, Math.min(streamH - 1, e.y))); // 越界钳流区边界
+			if (p) s.mselFocus = p;
+		} else if (e.kind === "release") {
+			const text = this.selectionText();
+			if (text !== undefined) void this.copySelection(text); // 已复制 N 行（决策点 8）
+			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
+		}
+		this.scheduler.requestImmediateRender();
+	}
+
+	/** 指针屏坐标 → doc 行列（T5——与 renderFrame 同源几何 layoutFrame；左内衬 2 列）。 */
+	private pointToDoc(x: number, y: number): { docIdx: number; col: number } | undefined {
+		const { streamH, start, doc, leftW } = this.layoutFrame();
+		if (y < 0 || y >= streamH) return undefined; // 流区外（输入框/队列区）→ 不选
+		if (x >= leftW) return undefined; // 右侧面板与流区同 y 段，按 x 排除（侧栏按下 = 清选区不建幻影锚点）
+		const idx = start + y;
+		if (idx >= doc.length) return undefined;
+		return { docIdx: idx, col: Math.max(0, x - 2) };
+	}
+
+	/** 选区端点排序（anchor/focus → lo/hi）。 */
+	private mselRange(): { lo: { docIdx: number; col: number }; hi: { docIdx: number; col: number } } | undefined {
+		const { mselAnchor: a, mselFocus: f } = this.state;
+		if (a === undefined || f === undefined) return undefined;
+		if (a.docIdx < f.docIdx || (a.docIdx === f.docIdx && a.col <= f.col)) return { lo: a, hi: f };
+		return { lo: f, hi: a };
+	}
+
+	/** 选区纯文本提取（kimi getActiveSelectionText :1432-1454 同构）：逐行 sliceByColumn（ANSI 感知）
+	 *  + stripAnsi + trimEnd；空选区/全空白 → undefined。 */
+	private selectionText(): string | undefined {
+		const r = this.mselRange();
+		if (r === undefined) return undefined;
+		const { doc } = this.layoutFrame();
+		const lines: string[] = [];
+		for (let i = r.lo.docIdx; i <= r.hi.docIdx; i++) {
+			const line = doc[i] ?? "";
+			const startCol = i === r.lo.docIdx ? r.lo.col : 0;
+			const endCol = i === r.hi.docIdx ? r.hi.col : visibleWidth(line);
+			lines.push(stripAnsi(sliceByColumn(line, startCol, Math.max(0, endCol - startCol))).trimEnd());
+		}
+		const text = lines.join("\n");
+		return text.trim() === "" ? undefined : text;
+	}
+
+	/** doc 渲染行按选区反白（T5——theme.inverse 与输入框选区 styleWithSelection 同手法；
+	 *  入参是已带左内衬的渲染行，列区间 +2 对齐）。 */
+	private styleDocSelection(docIdx: number, renderedLine: string): string {
+		const r = this.mselRange();
+		if (r === undefined) return renderedLine;
+		if (docIdx < r.lo.docIdx || docIdx > r.hi.docIdx) return renderedLine;
+		const lineStart = docIdx === r.lo.docIdx ? r.lo.col + 2 : 0;
+		const lineEnd = docIdx === r.hi.docIdx ? r.hi.col + 2 : visibleWidth(renderedLine);
+		if (lineEnd <= lineStart) return renderedLine;
+		const left = sliceByColumn(renderedLine, 0, lineStart);
+		const mid = sliceByColumn(renderedLine, lineStart, lineEnd - lineStart);
+		const right = sliceByColumn(renderedLine, lineEnd, Math.max(0, visibleWidth(renderedLine) - lineEnd));
+		return left + theme.inverse(mid) + right;
+	}
+
+	/** 选区复制结算（决策点 8）：真剪贴板优先（paste.ts 三平台），失败落 OSC 52 逃生口再提示。 */
+	private async copySelection(text: string): Promise<void> {
+		const write = this.io.writeClipboard ?? writeClipboardText;
+		const ok = await write(text);
+		if (ok) {
+			this.showToast(`已复制 ${text.split("\n").length} 行`);
+		} else {
+			this.term.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
+			this.showToast("已发终端复制口令（系统剪贴板未确认）");
+		}
 	}
 
 	private onKey(key: string): void {
@@ -1733,13 +1821,19 @@ export class FullApp {
 		return vr.text.slice(0, a) + theme.inverse(vr.text.slice(a, b)) + vr.text.slice(b);
 	}
 
-	private renderFrame(): number {
+	/** 流区几何与行源（m5 鼠标批 T5 提取——renderFrame 与鼠标映射 pointToDoc 共用一源，
+	 *  两处漂移即选区错位；方案级纪律）。输入框/队列区行数一并带出（streamH 的计算依赖，
+	 *  renderFrame 直接消费）。 */
+	private layoutFrame(): {
+		cols: number; rows: number; leftW: number; streamH: number; start: number;
+		doc: string[]; inputRows: InputRow[]; cursorPos: { row: number; col: number };
+		showRows: number; queue: string[]; queueH: number;
+	} {
 		const cols = this.io.columns();
 		const rows = this.io.rows();
 		const s = this.state;
 		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0; // 隐藏 = 左栏占满（无分隔线/无面板）
 		const leftW = cols - sidebarW - 2;
-
 		const innerW = Math.max(8, leftW - 4);
 		const inputRows = layoutInputRows(s.input, innerW);
 		const cursorPos = locateCursor(inputRows, s.cursor);
@@ -1750,26 +1844,34 @@ export class FullApp {
 		const queue = this.io.queueItems();
 		const queueH = queue.length === 0 ? 0 : queue.length + 1;
 		const streamH = rows - inputH - queueH;
-
-		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
-		const statusH = Math.max(8, Math.floor(rows * 0.55));
-		const taskH = rows - statusH;
-		const status = s.sidebarVisible ? this.statusRows(sidebarW, statusH) : [];
-		const tasks = s.sidebarVisible ? this.taskRows(sidebarW, taskH) : [];
-
 		const doc = [...this.io.doc(), this.tailLine()];
 		const maxScroll = Math.max(0, doc.length - streamH);
 		s.scrollBack = Math.min(s.scrollBack, maxScroll);
 		const end = doc.length - s.scrollBack;
 		const start = Math.max(0, end - streamH);
+		return { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH };
+	}
+
+	private renderFrame(): number {
+		const { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
+		const s = this.state;
+
+		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
+		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0;
+		const statusH = Math.max(8, Math.floor(rows * 0.55));
+		const taskH = rows - statusH;
+		const status = s.sidebarVisible ? this.statusRows(sidebarW, statusH) : [];
+		const tasks = s.sidebarVisible ? this.taskRows(sidebarW, taskH) : [];
 
 		const inputFocused = s.focusIdx === 0;
 		const ibc = inputFocused ? "accent" : "border";
 		const screen: string[] = Array.from({ length: rows }, () => "");
 		for (let r = 0; r < streamH; r++) {
 			// 消息区左内衬 2 列（2026-09-23 用户拍板：文字起始贴屏幕左缘难看）——docmodel 折行口径
-			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐
-			screen[r] = padToWidth(doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`, leftW);
+			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐；
+			// 选区行反白合入（m5 鼠标批 T5）
+			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
+			screen[r] = padToWidth(this.styleDocSelection(start + r, raw), leftW);
 		}
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
