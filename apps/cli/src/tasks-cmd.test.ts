@@ -38,7 +38,7 @@ describe("/tasks 列表与查看窗 T11（决策 21/22：亲缘分组 + 三色 +
     expect(rows[0]!.startsWith(theme.fg("muted", "[子代理]").replace(/\[39m$/, ""))).toBe(true); // 行首色码（整行一次包色）
     expect(rows[1]!.startsWith(theme.fg("err", "[子代理]").replace(/\[39m$/, ""))).toBe(true);
     expect(rows[2]!.startsWith(theme.fg("accent", "[孙代理]").replace(/\[39m$/, ""))).toBe(true);
-    expect(stripAnsi(rows[2])).toContain("dddd0000 孤儿孙");
+    expect(stripAnsi(rows[2]!)).toContain("dddd0000 孤儿孙");
   });
 
   it("㊶ taskIdOfRow：子/孙两形都能解析出编号", () => {
@@ -82,6 +82,6 @@ describe("/tasks 列表与查看窗 T11（决策 21/22：亲缘分组 + 三色 +
     expect(stripAnsi(failed).split("\n")[0]).toContain("失败 · 3 轮 · 已被取消（子代理被停止）");
     expect(failed.startsWith(theme.fg("err", "状态").replace(/\[39m$/, ""))).toBe(true); // 顶栏失败红
     const waiting = renderAgentView(T({ pendingApproval: { callId: "c", tool: "boom__run", reason: "subprocess" }, background: true }), []);
-    expect(stripAnsi(waiting).split("\n")[0]).toContain("运行中 · 等审批 · 后台");
+    expect(stripAnsi(waiting).split("\n")[0]).toContain("运行中 · 等审批 · 3 轮 · 后台");
   });
 });
