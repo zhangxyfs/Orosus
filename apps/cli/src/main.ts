@@ -1211,14 +1211,15 @@ const openSkillsPanel = async (app: FullApp): Promise<void> => {
 			app.showToast("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）");
 			return;
 		}
-		const w = Math.max(40, (process.stdout.columns ?? 80)) - 2;
+		// 行宽与 pick 渲染同源（m4-7 走查修 2026-09-27：原按全终端列数拼行——侧栏在场时超宽把右框 │ 推错位）
+		const w = app.pickRowWidth();
 		const picked = await app.pickOverlay("技能（回车查看详情）", rows.map((r) => skillListRow(w, r)), selAt);
 		if (picked === undefined || picked < 0 || picked >= rows.length) return; // Esc 返回设置
 		selAt = picked;
 		const row = rows[picked]!;
-		const detail = (): string => skillDetailText(74, row); // center80 弹窗内宽预算
-		app.viewText("技能详情", detail(), {
-			keys: {
+		const detail = (): string => skillDetailText(w, row); // dock 窗（贴输入框上缘、左栏同宽）行预算
+		// dock（2026-09-27 用户拍板：原 center80 居中弹窗位置/宽度都不对——贴输入框上边缘 + 与输入框同宽）
+		app.viewText("技能详情", detail(), { layout: "dock", keys: {
 				"alt+k": {
 					label: "Alt + K 启用或停用",
 					run: (): string => {

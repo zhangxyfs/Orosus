@@ -1192,6 +1192,33 @@ describe("技能管理面（m4-7 T8/T9——/settings → 技能 列表/详情�
 		expect(outText()).toContain("停用"); // 返回串替换窗内容（状态行翻转后重渲上屏）
 		app.stop();
 	});
+
+	it("② dock 布局（m4-7 走查修 2026-09-27 用户拍板「贴输入框上边缘 + 与输入框同宽」）：col 0 起左栏宽、row 贴输入框上缘、高度内容自适应", async () => {
+		const r = rig(["# hi"], 100, 30);
+		const { app, input } = r;
+		app.start();
+		await flush();
+		app.viewText("技能详情", ["名称    pdf", "描述    d", "范围    个人（用户级）", "状态    启用", "文件    p"].join("\n"), { layout: "dock" });
+		await flush(120);
+		const f = (app as unknown as { buildViewOverlay(pu: unknown, leftW: number, divRow: number): { lines: string[]; row: number; col: number; width: number } });
+		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
+		// 直调传模拟几何（leftW=80、divRow=24）——渲染期真实值同式
+		const frame = f.buildViewOverlay(pu, 80, 24);
+		expect(frame.width).toBe(80); // 与输入框（左栏）同宽
+		expect(frame.col).toBe(0); // 左起对齐输入框
+		expect(frame.row).toBe(24 - frame.lines.length); // 底缘贴输入框上缘（divRow 之上）
+		expect(frame.lines.length).toBe(8); // 5 行内容 + 框顶 + 提示行 + 框底——内容自适应（不是居中弹窗的定高）
+		// 超高内容封顶可滚：20 行内容在 divRow=24 上方封页不越屏顶（先关第一窗——单槽 FIFO）
+		input.emit("data", "\x1b"); // Esc
+		await flush(120);
+		app.viewText("技能详情", Array.from({ length: 20 }, (_, i) => `行${i}`).join("\n"), { layout: "dock" });
+		await flush(120);
+		const pu2 = (app as unknown as { pendingUi: unknown }).pendingUi;
+		const frame2 = f.buildViewOverlay(pu2, 80, 24);
+		expect(frame2.row).toBe(1); // 封顶不越屏：高度 23（20 内容+框 3）钳在 divRow 24 内，底缘仍贴输入框（24−23=1）
+		expect(frame2.lines.length).toBeLessThanOrEqual(24);
+		app.stop();
+	});
 });
 
 describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 30000] 越界钳边界；主程序自家调用全走缺省）", () => {
