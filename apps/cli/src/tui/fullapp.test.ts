@@ -1855,4 +1855,78 @@ describe("主窗文本选择（m5 鼠标批 T5——拖选反白 + 松开即复�
 	});
 });
 
+describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同款：500ms 窗口 + 词/行边界连击计数）", () => {
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<32;${x + 1};${y + 1}M`); };
+	type SelState = { mselAnchor: { docIdx: number; col: number } | undefined; mselFocus: { docIdx: number; col: number } | undefined; lastClick: { at: number; count: number; docIdx: number; wordStart: number; wordEnd: number } | undefined };
+	// 可视区 docIdx 75 起（100 行 doc + tailLine、streamH 26、scrollBack 0）
+	const mkDoc = (): string[] => {
+		const d = Array.from({ length: 100 }, () => "filler");
+		d[75] = "see a/b/c.ts ok";
+		d[76] = "well-known done";
+		return d;
+	};
+
+	it("T6-1 词区间纯函数 wordRangeAt：连接符贪心拼接（a/b/c.ts、well-known 整词）；空白段 undefined", async () => {
+		const { wordRangeAt } = await import("./fullapp.ts");
+		expect(wordRangeAt("see a/b/c.ts ok", 1)).toEqual({ start: 0, end: 3 }); // "see"
+		expect(wordRangeAt("see a/b/c.ts ok", 4)).toEqual({ start: 4, end: 12 }); // 路径整词（点 a）
+		expect(wordRangeAt("see a/b/c.ts ok", 10)).toEqual({ start: 4, end: 12 }); // 点 c.ts 也整词
+		expect(wordRangeAt("well-known done", 3)).toEqual({ start: 0, end: 10 }); // 连字符整词（4+1+5 字符）
+		expect(wordRangeAt("see a/b/c.ts ok", 3)).toBeUndefined(); // 空白段
+	});
+	it("T6-2 双击选词：500ms 内同词两击 → 选区恰为词区间；三击 → 整行", async () => {
+		const { app, input } = rig(mkDoc());
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		press(input, 6, 0); // docIdx 75 列 6（b 处）——第一击 count 1
+		press(input, 6, 0); // 同点第二击 count 2 → 词区间
+		await flush();
+		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 4 });
+		expect(st.mselFocus).toEqual({ docIdx: 75, col: 12 });
+		press(input, 6, 0); // 第三击 count 3 → 整行
+		await flush();
+		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 0 });
+		expect(st.mselFocus?.docIdx).toBe(75);
+		app.stop();
+	});
+	it("T6-3 双击后向上拖：锚点切到初始区间尾端（智能扩选反向）；向下拖按词对齐", async () => {
+		const { app, input } = rig(mkDoc());
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		press(input, 4, 1); // docIdx 76「well-known done」列 4——第一击
+		press(input, 4, 1); // count 2 → 词 [0,11]
+		await flush();
+		dragTo(input, 6, 0); // 拖到上一行（docIdx 75 列 6）——反向
+		await flush();
+		expect(st.mselAnchor).toEqual({ docIdx: 76, col: 10 }); // 锚点切到初始区间尾端（well-known [0,10]）
+		expect(st.mselFocus).toEqual({ docIdx: 75, col: 4 }); // 按当前行词起点对齐（a/b/c.ts [4,12] 的 start）
+		app.stop();
+	});
+	it("T6-4 连击重置：异词第二击归 1（字符锚点折叠）；超窗后同点再击也归 1", async () => {
+		const { app, input } = rig(mkDoc());
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		press(input, 1, 0); // "see" 第一击
+		press(input, 1, 0); // count 2 → "see" 词选区
+		await flush();
+		press(input, 16, 0); // 同行异词（ok 的 k——x16 = doc col 14）——count 归 1 字符锚点
+		await flush();
+		expect(st.mselAnchor).toEqual(st.mselFocus); // 折叠锚点
+		expect(st.mselAnchor).toEqual({ docIdx: 75, col: 14 });
+		press(input, 1, 0); // 回 "see" 第一击（前一击是异词——count 从 1 起算）
+		press(input, 1, 0); // 同词再击（500ms 窗口内——升 count 2）
+		await flush();
+		expect(st.mselAnchor).not.toEqual(st.mselFocus); // 词选区 [0,3]（anchor {75,0} ≠ focus {75,3}）
+		st.lastClick = st.lastClick !== undefined ? { ...st.lastClick, at: Date.now() - 1000 } : undefined;
+		press(input, 1, 0); // 超窗同词再击 → count 归 1（折叠）而非 3
+		await flush();
+		expect(st.mselAnchor).toEqual(st.mselFocus);
+		app.stop();
+	});
+});
+
 });
