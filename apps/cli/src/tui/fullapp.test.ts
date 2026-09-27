@@ -2170,6 +2170,23 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 			}
 		}
 		expect(thumbRows).toBeGreaterThan(0); // 确认拇指真的渲染了（上面循环非空转）
+	});
+	it("T10-7 满宽汉字行行宽恒齐（2026-09-27 用户走查打回：截断点落汉字中间时行超 1 列——分隔线/滚动条逐行错开 1 列的界面错乱根因）：拇指列 index 全部相同", async () => {
+		const wide = Array.from({ length: 100 }, () => "字".repeat(40)); // 80 列满宽汉字行——每行都触发跨界截断
+		const { app, input, output } = rig(wide);
+		app.start();
+		await flush();
+		input.emit("data", "[5~"); // PgUp → 滚动条出现
+		await flush();
+		// output.buf 是行级 diff 增量流（无换行符）——按光标定位序列 \x1b[{r};1H\x1b[2K 切出渲染行
+		const parts = output.buf.split(/\x1b\[\d+;1H\x1b\[2K/);
+		const idxes = new Set<number>();
+		for (const seg of parts.slice(1)) {
+			// 拇指位置按显示列比较（stripAnsi 字符序对宽字符行不可比——汉字 1 字符 2 列）
+			const plain = stripAnsi(seg);
+			for (const mm of plain.matchAll(/█│/g)) idxes.add(visibleWidth(plain.slice(0, mm.index ?? 0)));
+		}
+		expect(idxes.size).toBe(1); // 拇指列恒定 = 所有流区行同宽（含滚动条版行）
 		app.stop();
 	});
 	it("T10-5 拖动跟手：drag 沿轨道下移两步 → scrollBack 单调增；release 清拖动态", async () => {
