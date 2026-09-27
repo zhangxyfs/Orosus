@@ -159,10 +159,12 @@ interface AppState {
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消（duration = 自定义时长毫秒，m5 T3）。 */
 	toast: { text: string; at: number; duration?: number } | undefined;
-	/** 鼠标选区端点（m5 鼠标批 T5）：存 doc 绝对行索引（设计空白 9——内容追加不漂移；压缩重建 doc
-	 *  后选区可能错位，不跨压缩保真已登记不修）；undefined = 无选区。流区外/面板按下 = 折叠清空。 */
-	mselAnchor: { docIdx: number; col: number } | undefined;
-	mselFocus: { docIdx: number; col: number } | undefined;
+	/** 鼠标选区端点（m5 鼠标批 T5/T8）：存绝对行索引（设计空白 9——内容追加不漂移；压缩重建 doc
+	 *  后选区可能错位，不跨压缩保真已登记不修）；undefined = 无选区。流区外/面板按下 = 折叠清空。
+	 *  scope：main = 主窗 doc 行；view = 查看窗内容行（T8——行索引随 pu.scroll 平移天然稳定）；
+	 *  窗关闭选区整组清空（渲染守卫——防行索引误映射下一窗内容）。 */
+	mselAnchor: { scope: "main" | "view"; docIdx: number; col: number } | undefined;
+	mselFocus: { scope: "main" | "view"; docIdx: number; col: number } | undefined;
 	/** 选区粒度（T6）：双击 word / 三击 line / 拖动 character——drag 分支按粒度对齐扩选。 */
 	selGranularity: "character" | "word" | "line";
 	/** 双击/三击的初始区间（T6 智能扩选）：扩到反侧时锚点切到初始区间另一端。 */
@@ -958,18 +960,20 @@ export class FullApp {
 		this.scheduler.requestImmediateRender();
 	}
 
-	/** 按钮事件处理器（m5 鼠标批 T5 填肉）：按下建锚（空点击 = 折叠选区）、拖动扩焦（越界钳流区
-	 *  边界——T9 自动滚落地后压边缘改走脉冲）、松开结算复制（kimi handleSelectionMouseEvent
-	 *  :1314-1383 同构）。空点击清选区；非空选区保留反白，下次按下清（kimi 选区保续同款）。 */
+	/** 按钮事件处理器（m5 鼠标批 T5 填肉 / T6 粒度 / T7 链接 / T8 查看窗）：按下建锚（空点击 =
+	 *  折叠选区）、拖动扩焦（越界钳边界）、松开结算复制（kimi handleSelectionMouseEvent
+	 *  :1314-1383 同构）。查看窗在位且指针在盒内 → 选查看窗内容（T8，坐标系 = 盒内衬 2 列）。 */
 	private onButton(e: ButtonEvent): void {
 		if (this.onboarding !== undefined) return; // 引导锁（同 onWheel）
 		if (e.button !== 0) return; // v1 只左键；Shift+拖选走终端原生让路（shift 位解析了不消费）
 		const s = this.state;
 		if (e.kind === "press") {
-			// 连击计数 + 粒度（T6——kimi :1376-1384 次序）：count 2 → 词区间、count 3 → 行区间、
-			// count 1 → 字符锚点；点到流区外/空白 = 清选区且连击不计数
-			const p = this.pointToDoc(e.x, e.y);
-			const plain = p !== undefined ? stripAnsi(this.layoutFrame().doc[p.docIdx] ?? "") : undefined;
+			// 查看窗盒内优先（T8）——主流区 pointToDoc 之前判 viewGeo 盒命中
+			const vp = this.pointToView(e.x, e.y);
+			const p = vp !== undefined
+				? { scope: "view" as const, docIdx: vp.docIdx, col: vp.col }
+				: (() => { const m = this.pointToDoc(e.x, e.y); return m === undefined ? undefined : { scope: "main" as const, docIdx: m.docIdx, col: m.col }; })();
+			const plain = p !== undefined ? stripAnsi(this.selLineText(p.scope, p.docIdx)) : undefined;
 			const word = p !== undefined && plain !== undefined ? wordRangeAt(plain, p.col) : undefined;
 			const count = this.clickCount(p, word);
 			const range = p === undefined ? undefined
@@ -980,21 +984,19 @@ export class FullApp {
 			s.selInitialRange = p !== undefined && range !== undefined
 				? { start: { docIdx: p.docIdx, col: range.start }, end: { docIdx: p.docIdx, col: range.end } }
 				: undefined;
-			s.mselAnchor = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.start };
-			s.mselFocus = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.end };
+			s.mselAnchor = p === undefined ? undefined : range === undefined ? p : { scope: p.scope, docIdx: p.docIdx, col: range.start };
+			s.mselFocus = p === undefined ? undefined : range === undefined ? p : { scope: p.scope, docIdx: p.docIdx, col: range.end };
 			// 链接探测（T7——kimi :1385-1390）：单击（count 1）才记 URL，双击/三击走选词不探测
 			s.pressedUrl = count === 1 && p !== undefined
 				? (() => {
-					const rawLine = this.layoutFrame().doc[p.docIdx] ?? "";
-					const url = osc8LinkAtColumn(rawLine, p.col);
+					const url = osc8LinkAtColumn(this.selLineText(p.scope, p.docIdx), p.col);
 					return url === undefined ? undefined : { url, x: e.x, y: e.y };
 				})()
 				: undefined;
 		} else if (e.kind === "drag") {
 			s.pressedUrl = undefined; // 拖动即作废（误拖保护）
 			if (s.mselAnchor === undefined) return;
-			const { streamH, leftW } = this.layoutFrame();
-			const p = this.pointToDoc(Math.min(e.x, leftW - 1), Math.max(0, Math.min(streamH - 1, e.y))); // 越界钳流区边界
+			const p = this.clampedSelPoint(e.x, e.y); // 越界钳所在 scope 的边界
 			if (p === undefined) return;
 			// 粒度感知扩选（T6——kimi updateSelectionFocus :1213-1231）：词/行粒度下 focus 对齐到
 			// 当前点的词/行区间；扩到初始区间反侧时锚点切到初始区间的另一端
@@ -1002,14 +1004,14 @@ export class FullApp {
 			if (s.selGranularity !== "character" && initial !== undefined) {
 				const before = p.docIdx < initial.start.docIdx || (p.docIdx === initial.start.docIdx && p.col < initial.start.col);
 				if (s.selGranularity === "word") {
-					const plain = stripAnsi(this.layoutFrame().doc[p.docIdx] ?? "");
+					const plain = stripAnsi(this.selLineText(p.scope, p.docIdx));
 					const r = wordRangeAt(plain, p.col) ?? { start: p.col, end: p.col };
-					s.mselAnchor = before ? initial.end : initial.start;
-					s.mselFocus = { docIdx: p.docIdx, col: before ? r.start : r.end };
+					s.mselAnchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
+					s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? r.start : r.end };
 				} else {
-					const lineEnd = visibleWidth(stripAnsi(this.layoutFrame().doc[p.docIdx] ?? ""));
-					s.mselAnchor = before ? initial.end : initial.start;
-					s.mselFocus = { docIdx: p.docIdx, col: before ? 0 : lineEnd };
+					const lineEnd = visibleWidth(stripAnsi(this.selLineText(p.scope, p.docIdx)));
+					s.mselAnchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
+					s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? 0 : lineEnd };
 				}
 			} else {
 				s.mselFocus = p;
@@ -1024,6 +1026,47 @@ export class FullApp {
 			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
 		}
 		this.scheduler.requestImmediateRender();
+	}
+
+	/** 拖动点钳制（T8）：按当前选区 scope 钳在对应窗口边界——view 钳查看窗盒、main 钳主流区。 */
+	private clampedSelPoint(x: number, y: number): { scope: "main" | "view"; docIdx: number; col: number } | undefined {
+		if (this.state.mselAnchor?.scope === "view") {
+			const pu = this.pendingUi;
+			if (pu?.kind !== "view") return undefined;
+			const geo = this.viewGeo(pu.layout);
+			const cx = Math.max(geo.col, Math.min(geo.col + geo.width - 1, x));
+			const cy = Math.max(geo.row + 1, Math.min(geo.row + geo.height - 1, y)); // 顶框让位
+			return (() => { const p = this.pointToView(cx, cy); return p === undefined ? undefined : { scope: "view" as const, ...p }; })();
+		}
+		const { streamH, leftW } = this.layoutFrame();
+		const p = this.pointToDoc(Math.min(x, leftW - 1), Math.max(0, Math.min(streamH - 1, y)));
+		return p === undefined ? undefined : { scope: "main", ...p };
+	}
+
+	/** 选区行文本（T8 scope 感知）：main → doc（含 tailLine）；view → pu.lines。 */
+	private selLineText(scope: "main" | "view", idx: number): string {
+		if (scope === "view") {
+			const pu = this.pendingUi;
+			return pu?.kind === "view" ? (pu.lines[idx] ?? "") : "";
+		}
+		return this.layoutFrame().doc[idx] ?? "";
+	}
+
+	/** 指针 → 查看窗内容行列（T8）：viewGeo 盒内才命中；行索引随渲染 sc 同源（滚动平移天然稳定）；
+	 *  盒内衬 = │ + 空格共 2 列。 */
+	private pointToView(x: number, y: number): { docIdx: number; col: number } | undefined {
+		const pu = this.pendingUi;
+		if (pu?.kind !== "view") return undefined;
+		const geo = this.viewGeo(pu.layout);
+		if (y < geo.row || y >= geo.row + geo.height || x < geo.col || x >= geo.col + geo.width) return undefined;
+		const page = Math.max(3, geo.height - 3);
+		const maxScroll = Math.max(0, pu.lines.length - page);
+		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll));
+		const row = y - geo.row - 1; // 顶框占 1 行
+		if (row < 0 || row >= page) return undefined;
+		const idx = sc + row;
+		if (idx >= pu.lines.length) return undefined;
+		return { docIdx: idx, col: Math.max(0, x - geo.col - 2) };
 	}
 
 	/** 连击计数（T6——kimi getClickCount :1233-1257）：500ms 窗口内 + 同行 + 同词边界才 +1
@@ -1065,14 +1108,13 @@ export class FullApp {
 	}
 
 	/** 选区纯文本提取（kimi getActiveSelectionText :1432-1454 同构）：逐行 sliceByColumn（ANSI 感知）
-	 *  + stripAnsi + trimEnd；空选区/全空白 → undefined。 */
+	 *  + stripAnsi + trimEnd；行源按 scope（T8：view → pu.lines、main → doc）；空选区/全空白 → undefined。 */
 	private selectionText(): string | undefined {
 		const r = this.mselRange();
 		if (r === undefined) return undefined;
-		const { doc } = this.layoutFrame();
 		const lines: string[] = [];
 		for (let i = r.lo.docIdx; i <= r.hi.docIdx; i++) {
-			const line = doc[i] ?? "";
+			const line = this.selLineText(r.lo.scope, i);
 			const startCol = i === r.lo.docIdx ? r.lo.col : 0;
 			const endCol = i === r.hi.docIdx ? r.hi.col : visibleWidth(line);
 			lines.push(stripAnsi(sliceByColumn(line, startCol, Math.max(0, endCol - startCol))).trimEnd());
@@ -1081,11 +1123,11 @@ export class FullApp {
 		return text.trim() === "" ? undefined : text;
 	}
 
-	/** doc 渲染行按选区反白（T5——theme.inverse 与输入框选区 styleWithSelection 同手法；
-	 *  入参是已带左内衬的渲染行，列区间 +2 对齐）。 */
-	private styleDocSelection(docIdx: number, renderedLine: string): string {
+	/** 渲染行按选区反白（T5——theme.inverse 与输入框选区 styleWithSelection 同手法；
+	 *  入参是已带内衬的渲染行，列区间 +2 对齐；scope 匹配才作用〔T8——主窗/查看窗各自渲染〕）。 */
+	private styleDocSelection(scope: "main" | "view", docIdx: number, renderedLine: string): string {
 		const r = this.mselRange();
-		if (r === undefined) return renderedLine;
+		if (r === undefined || r.lo.scope !== scope) return renderedLine;
 		if (docIdx < r.lo.docIdx || docIdx > r.hi.docIdx) return renderedLine;
 		const lineStart = docIdx === r.lo.docIdx ? r.lo.col + 2 : 0;
 		const lineEnd = docIdx === r.hi.docIdx ? r.hi.col + 2 : visibleWidth(renderedLine);
@@ -1094,6 +1136,16 @@ export class FullApp {
 		const mid = sliceByColumn(renderedLine, lineStart, lineEnd - lineStart);
 		const right = sliceByColumn(renderedLine, lineEnd, Math.max(0, visibleWidth(renderedLine) - lineEnd));
 		return left + theme.inverse(mid) + right;
+	}
+
+	/** 选区一致性守卫（T8）：scope=view 的选区只在查看窗在位时有效——窗关闭首帧即整组清空
+	 *  （防行索引残留误映射下一窗内容）。 */
+	private selectionGuard(): void {
+		const s = this.state;
+		if ((s.mselAnchor?.scope ?? s.mselFocus?.scope) === "view" && this.pendingUi?.kind !== "view") {
+			s.mselAnchor = undefined;
+			s.mselFocus = undefined;
+		}
 	}
 
 	/** 选区复制结算（决策点 8）：真剪贴板优先（paste.ts 三平台），失败落 OSC 52 逃生口再提示。 */
@@ -1971,6 +2023,7 @@ export class FullApp {
 	}
 
 	private renderFrame(): number {
+		this.selectionGuard(); // T8：关窗首帧清 scope=view 残留选区
 		const { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
 		const s = this.state;
 
@@ -1989,7 +2042,7 @@ export class FullApp {
 			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐；
 			// 选区行反白合入（m5 鼠标批 T5）
 			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
-			screen[r] = padToWidth(this.styleDocSelection(start + r, raw), leftW);
+			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
 		}
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
@@ -2105,7 +2158,11 @@ export class FullApp {
 		const maxScroll = Math.max(0, pu.lines.length - page);
 		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
 		const win = pu.lines.slice(sc, sc + page);
-		for (const l of win) olines.push(boxRow(" " + truncateToWidth(l, oInner - 2)));
+		// 选区反白合入（T8）：行索引与 pointToView 同源（sc + 行号——滚动平移天然稳定）
+		for (let i = 0; i < win.length; i++) {
+			const raw = " " + truncateToWidth(win[i]!, oInner - 2);
+			olines.push(boxRow(this.styleDocSelection("view", sc + i, raw)));
+		}
 		const upN = sc;
 		const downN = pu.lines.length - sc - win.length;
 		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
