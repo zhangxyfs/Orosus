@@ -123,6 +123,17 @@ export default defineModule({
 source = "../wherever/note"    # ./ ~/ file:// 或绝对路径；npm: 前缀是 M3 之后的事
 ```
 
+### 顺带说技能（skills）放哪（m4-7 起四轨目录）
+
+技能不是模块——一个目录一个 `SKILL.md`（frontmatter：`name` / `description` 必需，`when_to_use` / `disable-model-invocation` 可选），不放代码只放知识。四轨扫描目录（弱→强，同名后入者胜 = 项目压用户、品牌压通用）：
+
+1. `~/.agents/skills/`——用户级·通用（.agents 生态互操作目录，agentskills.io 约定）
+2. `~/.orosus/skills/`——用户级·品牌
+3. `<项目>/.agents/skills/`——项目级·通用（从 cwd 逐层向上到 git 根，monorepo 子目录捡得到仓库根技能）
+4. `<项目根>/.orosus/skills/`——项目级·品牌（只认项目根本身，防逐层同名多版本）
+
+模型经 `skill__load` 按需加载全文；用户在全屏输入 `/` 的菜单技能区（`skill : 名`）回车即以用户消息加载；`/settings → 技能` 可看全部技能并 Alt + K 启停（停用 = 模型清单与菜单双摘，管理面照收）。
+
 ## 4. Step 3：过信任门（第三方模块必看，m5 T17 起首挂确认）
 
 第三方模块（用户级或项目级）第一次出现都会被拦下——**默认不挂载**，面板模块区显示「待确认」；
