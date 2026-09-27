@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { FullApp, diagListLines, type FullAppIO, type PanelData } from "./fullapp.ts";
+import { FullApp, diagListLines, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg } from "../theme.ts";
@@ -1025,6 +1025,135 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(b).toContain("压缩摘要");
 		expect(b).toContain("摘要正文一行");
 		expect(b).toContain("─".repeat(90)); // full 布局（④ 同款判据：90+ 连横线）
+	});
+});
+
+describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 注入）", () => {
+	const SK = (name: string, desc: string, usage?: string): SlashItem => ({
+		name: `skill : ${name}`, desc, long: desc, skill: name, ...(usage !== undefined ? { usage } : {}),
+	});
+	const overlayOf = (app: FullApp): string[] =>
+		(app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[] } }).buildOverlay(80, 24).lines;
+
+	it("① 技能条目「skill : 名」殿后于全部命中命令 + 分隔行「── 技能 ──」+ 标题计数并注技能段", async () => {
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "生成 PDF 文件", "需要交付 PDF 文件时"), SK("review-pr", "审查拉取请求")],
+			skillInject: (n) => `INJ:${n}`,
+		});
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/"); // q 为空 = 命令技能全显
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		const plain = overlayOf(app).map(stripAnsi);
+		const joined = plain.join("\n");
+		const cmdPos = joined.indexOf("/help");
+		const sepPos = joined.indexOf("── 技能");
+		const skillPos = joined.indexOf("skill : pdf");
+		expect(cmdPos).toBeGreaterThanOrEqual(0);
+		expect(sepPos).toBeGreaterThan(cmdPos); // 分隔行在命令之后
+		expect(skillPos).toBeGreaterThan(sepPos); // 技能条目殿后于分隔行
+		expect(joined.indexOf("skill : review-pr")).toBeGreaterThan(skillPos); // 技能组内保持注册序
+		expect(joined).toContain("生成 PDF 文件"); // 行内短说明 = description
+		expect(joined).toContain("3 个命令 · 2 个技能"); // 标题计数（rig 自带 3 命令）
+		app.stop();
+	});
+
+	it("② 详释恒 3 行：技能选中 = 说明折行 + 第 3 行「适用：…」；无 when_to_use 第 3 行整行留空（不删行不回退操作提示）", async () => {
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "根据用户需求生成 PDF 文档，支持从 markdown 转换、中文字体嵌入与目录生成", "需要交付 PDF 文件时"), SK("plain", "无适用说明的技能")],
+			skillInject: (n) => `INJ:${n}`,
+		});
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		input.emit("data", "\x1b[B"); // ↓ ×3：/help → /title → /permission →（跳过 sep）pdf
+		input.emit("data", "\x1b[B");
+		input.emit("data", "\x1b[B");
+		await flush(120);
+		let plain = overlayOf(app).map(stripAnsi);
+		let third = plain[plain.length - 2]!; // 倒数第 2 内容行 = 详释第 3 行（框底之上）
+		expect(third).toContain("适用：需要交付 PDF 文件时");
+		const hWithUsage = plain.length;
+		input.emit("data", "\x1b[B"); // ↓ → plain（无 usage）
+		await flush(120);
+		plain = overlayOf(app).map(stripAnsi);
+		third = plain[plain.length - 2]!;
+		expect(third.replace(/│/g, "").trim()).toBe(""); // 整行留空（不删行——高度恒定纪律）
+		expect(plain.length).toBe(hWithUsage); // 有无适用行高度不变
+		app.stop();
+	});
+
+	it("③ 无技能环境菜单与现状一致——不多分隔行、标题无技能计数段（验收点 3）", async () => {
+		const r = rig(["# hi"], 100, 30); // 不接 skillItems 口 = 宿主零技能形态
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		const plain = overlayOf(app).map(stripAnsi);
+		expect(plain.some((l) => l.includes("技能"))).toBe(false); // 无「── 技能 ──」分隔行
+		expect(plain.join("\n")).toContain("3 个命令"); // 计数照旧，无「 · N 个技能」段
+		app.stop();
+	});
+
+	it("④ Enter = 用户触发注入：skillInject 拿真名、submit 收注入全文、菜单关；Tab 对技能条目不补全（留菜单）", async () => {
+		const injected: string[] = [];
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "生成 PDF 文件")],
+			skillInject: (n) => { injected.push(n); return `（用户通过菜单手动加载技能 "${n}"）\n<skill name="${n}">\n正文\n</skill>`; },
+		});
+		const { app, input, submitted } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		input.emit("data", "\x1b[B"); // ↓ ×3 →（3 命令后跳 sep）pdf
+		input.emit("data", "\x1b[B");
+		input.emit("data", "\x1b[B");
+		await flush(120);
+		input.emit("data", "\t"); // Tab：技能不可补全——菜单仍开、输入仍 "/"
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		expect(app.stateRef.input).toBe("/");
+		input.emit("data", "\r"); // Enter → 注入提交
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(injected).toEqual(["pdf"]); // 真名（非 skill : 名 显示文本）
+		expect(submitted).toHaveLength(1);
+		expect(submitted[0]).toContain('<skill name="pdf">');
+		expect(submitted[0]).toContain("正文");
+		app.stop();
+	});
+
+	it("⑤ 过滤两档：q=「re」→ 技能 review-pr 命中（pdf 不含不显）；命令零命中技能有货不显示「无匹配命令」；↑ 跨分隔行回绕不停 sep", async () => {
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "生成 PDF 文件"), SK("review-pr", "审查拉取请求")],
+			skillInject: (n) => `INJ:${n}`,
+		});
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		input.emit("data", "re"); // q = re：rig 三命令（/help /title /permission）零命中
+		await flush(120);
+		let plain = overlayOf(app).map(stripAnsi);
+		const joined = plain.join("\n");
+		expect(app.stateRef.overlayOpen).toBe(true); // 空过滤占位不关窗（既有纪律，技能命中同理）
+		expect(joined).toContain("skill : review-pr");
+		expect(joined).not.toContain("skill : pdf"); // 不含 q 不显
+		expect(joined).not.toContain("无匹配命令"); // 技能有货不算全空
+		expect(joined).toContain("0 个命令 · 1 个技能");
+		expect(app.stateRef.input).toBe("/re");
+		input.emit("data", "\x1b[A"); // ↑ 回绕：唯一可选行 review-pr（sep 在 0 位被跳过不停）
+		await flush(120);
+		plain = overlayOf(app).map(stripAnsi);
+		expect(plain[plain.length - 2]!.includes("适用")).toBe(false); // 仍选中 review-pr（无 usage 第 3 行空）——未停在 sep
+		app.stop();
 	});
 });
 

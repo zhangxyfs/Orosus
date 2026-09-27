@@ -57,6 +57,8 @@ export interface SlashItem {
 	children?: string[]; // 有二级列表的命令（当前值 ✓ 标记——当前值由 io.slashCurrent 提供）
 	aliases?: string[]; // 别名（F5 十六轮①：过滤/展示用——路由层早已直达，菜单按别名可筛出真实命令）
 	childMeta?: Record<string, { label: string; desc: string; long: string }>; // 二级项元数据（F5 十轮⑤：档名/短解/详释）
+	usage?: string; // m4-7 技能条目：详释第 3 行「适用：…」（when_to_use；无则整行留空不删行——高度恒定纪律）
+	skill?: string; // m4-7 技能条目标记 = 技能真名（Enter 走 skillInject 注入，不走命令管线）
 }
 
 export interface FullAppIO {
@@ -123,6 +125,12 @@ export interface FullAppIO {
 	/** 打开 URL（m5 鼠标批 T7——链接单击）：缺省 paste.ts openUrl（三平台命令、只开 http/https）；
 	 *  测试注入 stub。返回 false = 拒开或失败。 */
 	openUrl?(url: string): Promise<boolean>;
+	/** 斜杠菜单技能区数据源（m4-7 T7）：宿主从 skill.catalog 服务惰性取并缓存（同步渲染口）；
+	 *  缺省/空数组 = 无技能区（菜单与现状逐字节一致——验收点 3）。条目须带 skill 字段（真名）。 */
+	skillItems?(): SlashItem[];
+	/** 技能条目 Enter 注入（m4-7 T7）：返回以用户消息提交的全文（宿主拼 <skill> 块，剥 frontmatter）；
+	 *  undefined = 正文读取失败（菜单提示，不提交）。 */
+	skillInject?(name: string): string | undefined;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -975,7 +983,7 @@ export class FullApp {
 			return; // ask——没有可滚面
 		} else if (s.overlayOpen) {
 			const items = this.overlayItems();
-			s.overlaySel = Math.max(0, Math.min(items.length - 1, s.overlaySel + (up ? -lines : lines)));
+			s.overlaySel = this.selToSelectable(items, s.overlaySel + (up ? -lines : lines));
 		} else if (s.diagOpen) {
 			const entries = this.io.diagEntries?.() ?? [];
 			s.diagSel = Math.max(0, Math.min(Math.max(0, entries.length - 1), s.diagSel + (up ? -lines : lines)));
@@ -1787,16 +1795,38 @@ export class FullApp {
 		return { cmd, word, args, items: all.filter((x) => x.startsWith(word)) };
 	}
 
-	/** 斜杠菜单当前候选清单（onOverlayKey 与滚轮路由共用一源——两处过滤口径漂移即选中越界/Enter 错位）。 */
-	private overlayItems(): string[] {
+	/** 斜杠菜单当前候选清单（onOverlayKey 与滚轮路由共用一源——两处过滤口径漂移即选中越界/Enter 错位）。
+	 *  m4-7 T7：一级含技能区（sep 分隔行 + 技能条目殿后于命中命令）；key 一级命令 = 命令名、技能 = 真名。 */
+	private overlayItems(): { key: string; kind: "cmd" | "skill" | "sep" }[] {
 		const s = this.state;
 		const level2 = s.overlayCmd !== "";
 		const ap = this.argPhase();
-		return ap !== undefined
-			? ap.items
-			: level2
-				? (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? [])
-				: this.filteredCommands().map((c) => c.name);
+		if (ap !== undefined) return ap.items.map((c) => ({ key: c, kind: "cmd" as const }));
+		if (level2) return (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? []).map((c) => ({ key: c, kind: "cmd" as const }));
+		const cmds = this.filteredCommands().map((c) => ({ key: c.name, kind: "cmd" as const }));
+		const skills = this.filteredSkills().map((c) => ({ key: c.skill ?? c.name, kind: "skill" as const }));
+		return skills.length > 0 ? [...cmds, { key: "", kind: "sep" as const }, ...skills] : cmds;
+	}
+
+	/** 技能区过滤（m4-7 T7，原型图 1）：技能名两档（前缀排前、含字殿后）殿后于全部命中命令；
+	 *  技能组整体不插进命令组（「追加在全部命中命令之后」）。q 为空 = 全显。 */
+	private filteredSkills(): SlashItem[] {
+		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
+		const hits: SlashItem[] = [];
+		const more: SlashItem[] = [];
+		for (const c of this.io.skillItems?.() ?? []) {
+			const n = (c.skill ?? c.name).toLowerCase();
+			if (n.startsWith(q)) hits.push(c);
+			else if (n.includes(q)) more.push(c);
+		}
+		return [...hits, ...more];
+	}
+
+	/** overlaySel 夹到可选行（sep 不可选——重置 0/滚窗后落 sep 时沿向下让位）。 */
+	private selToSelectable(rows: { kind: string }[], from: number): number {
+		let i = Math.max(0, Math.min(rows.length - 1, from));
+		while (i < rows.length - 1 && rows[i] !== undefined && rows[i]!.kind === "sep") i++;
+		return i;
 	}
 
 	private onOverlayKey(key: string): void {
@@ -1804,6 +1834,12 @@ export class FullApp {
 		const level2 = s.overlayCmd !== "";
 		const ap = this.argPhase();
 		const items = this.overlayItems();
+		// 循环步进跳过 sep（m4-7 技能分隔行不可选——up/down 回绕也越不过它停上去）
+		const step = (from: number, delta: number): number => {
+			let i = from;
+			do { i = (i + delta + items.length) % items.length; } while (items[i] !== undefined && items[i]!.kind === "sep");
+			return i;
+		};
 		if (key === "escape") {
 			if (level2) {
 				s.overlayCmd = "";
@@ -1812,24 +1848,27 @@ export class FullApp {
 				s.overlaySel = 0;
 			} else s.overlayOpen = false; // 参数阶段也走这里：只关菜单不清输入（Esc 回命令名阶段 = 继续编辑参数）
 		} else if (key === "up" && items.length > 0) {
-			s.overlaySel = (s.overlaySel - 1 + items.length) % items.length;
+			s.overlaySel = step(s.overlaySel, -1);
 		} else if (key === "down" && items.length > 0) {
-			s.overlaySel = (s.overlaySel + 1) % items.length;
+			s.overlaySel = step(s.overlaySel, 1);
 		} else if (key === "pageUp" && items.length > 0) {
-			s.overlaySel = Math.max(0, s.overlaySel - OVERLAY_PAGE);
+			s.overlaySel = this.selToSelectable(items, s.overlaySel - OVERLAY_PAGE);
 		} else if (key === "pageDown" && items.length > 0) {
-			s.overlaySel = Math.min(items.length - 1, s.overlaySel + OVERLAY_PAGE);
+			s.overlaySel = this.selToSelectable(items, s.overlaySel + OVERLAY_PAGE);
 		} else if (key === "tab" && ap !== undefined && items.length > 0) {
 			// 参数阶段 Tab（m5 T15）：选中候选替换当前词 + 空格（可继续补下一词）
 			const picked = items[s.overlaySel] ?? items[0]!;
 			const head = ap.args.slice(0, ap.args.length - ap.word.length);
-			s.input = `${ap.cmd} ${head}${picked} `;
+			s.input = `${ap.cmd} ${head}${picked.key} `;
 			s.cursor = s.input.length;
 			s.overlaySel = 0;
 		} else if (key === "tab" && !level2 && items.length > 0) {
-			s.input = items[s.overlaySel] ?? s.input;
-			s.cursor = s.input.length;
-			s.overlayOpen = false;
+			// 技能条目不可 Tab 补全（它不是可输入命令——skill : 名进输入框无路由意义）：无操作留菜单
+			if (items[s.overlaySel]?.kind !== "skill") {
+				s.input = items[s.overlaySel]?.key ?? s.input;
+				s.cursor = s.input.length;
+				s.overlayOpen = false;
+			}
 		} else if (key === "enter") {
 			if (items.length === 0) {
 				this.scheduler.requestImmediateRender();
@@ -1838,14 +1877,30 @@ export class FullApp {
 			if (ap !== undefined) {
 				// 参数阶段 Enter（m5 T15）：选中候选替换当前词后提交（未选中任何行 = 提交原文）
 				const picked = items[s.overlaySel];
-				const final = picked === undefined ? normCmd(s.input) : `${ap.cmd} ${ap.args.slice(0, ap.args.length - ap.word.length)}${picked}`;
+				const final = picked === undefined ? normCmd(s.input) : `${ap.cmd} ${ap.args.slice(0, ap.args.length - ap.word.length)}${picked.key}`;
 				s.overlayOpen = false;
 				s.overlayCmd = "";
 				this.submitLine(final);
 				this.scheduler.requestImmediateRender();
 				return;
 			}
-			const picked = items[s.overlaySel]!;
+			const row = items[s.overlaySel]!;
+			if (row.kind === "skill") {
+				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）：正文以用户消息注入当前轮
+				// （pi/kimi 同款——走主输入口，busy 期照排队语义，不打断 turn 机制）
+				const name = row.key;
+				const text = this.io.skillInject?.(name);
+				if (text === undefined) {
+					this.showToast(`技能 "${name}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
+				} else {
+					s.overlayOpen = false;
+					s.overlayCmd = "";
+					this.submitLine(text);
+				}
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			const picked = row.key;
 			const slash = this.io.slashCommands().find((c) => c.name === picked);
 			if (!level2 && slash?.children !== undefined) {
 				s.overlayCmd = picked;
@@ -1868,7 +1923,7 @@ export class FullApp {
 					s.cursor--;
 				}
 			} else this.inputInsert(key);
-			if (normCmd(s.input).startsWith("/")) s.overlaySel = 0;
+			if (normCmd(s.input).startsWith("/")) s.overlaySel = this.selToSelectable(items, 0);
 			else s.overlayOpen = false;
 		}
 		this.scheduler.requestImmediateRender();
@@ -2536,17 +2591,18 @@ export class FullApp {
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
+		const skillCount = ap === undefined && !level2 ? this.filteredSkills().length : 0;
 		const title = ap !== undefined ? theme.fg("accent", ` ${ap.cmd} 参数 `) : level2 ? theme.fg("accent", ` ${s.overlayCmd} `) : theme.fg("accent", " 斜杠命令 ");
-		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令 `);
+		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
 		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」
-		let items: { text: string; mark: string; long: string }[];
+		let items: { text: string; mark: string; long: string; kind: "cmd" | "skill" | "sep"; usage?: string }[];
 		if (ap !== undefined) {
 			// 参数阶段（m5 T15）：候选行与命令菜单同框（恒定行数防闪烁纪律不变）
 			items = ap.items.length === 0
-				? [{ text: theme.dim("无匹配候选"), mark: " ", long: "继续输入或删字修改；Esc 关菜单继续编辑。" }]
-				: ap.items.map((c) => ({ text: c, mark: " ", long: `参数候选：${c}——Tab 补全当前词，Enter 直接提交。` }));
+				? [{ text: theme.dim("无匹配候选"), mark: " ", long: "继续输入或删字修改；Esc 关菜单继续编辑。", kind: "cmd" as const }]
+				: ap.items.map((c) => ({ text: c, mark: " ", long: `参数候选：${c}——Tab 补全当前词，Enter 直接提交。`, kind: "cmd" as const }));
 		} else if (level2) {
 			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);
 			const current = this.io.slashCurrent(s.overlayCmd);
@@ -2556,23 +2612,41 @@ export class FullApp {
 					text: meta === undefined ? c : `${theme.fg("fg", meta.label)} ${theme.dim(`——${meta.desc}`)} ${theme.dim(`(${c})`)}`,
 					mark: c === current ? theme.fg("accent", "✓") : " ",
 					long: meta?.long ?? `${s.overlayCmd} 二级项：${c}——回车选定。`,
+					kind: "cmd" as const,
 				};
 			});
 		} else {
 			const real = this.filteredCommands();
+			const sk = this.filteredSkills();
+			// m4-7 T7（原型图 1）：技能条目殿后于全部命中命令；分隔行「── 技能 ──」仅技能区非空时出现——
+			// 无技能环境此处与原实现逐字节一致（验收点 3）
+			const sepRow = { text: theme.fg("border", `── 技能 ${"─".repeat(Math.max(1, oInner - 12))}`), mark: " ", long: "", kind: "sep" as const };
+			const skillRow = (c: SlashItem) => {
+				// 主标签固定格式「skill : 名」（类别前缀，冒号两侧空格照写——与命令 /xxx 视觉区分）+
+				// 行内短说明 = description（超宽截断不折行，原型要点）
+				const label = `skill : ${c.skill ?? c.name}`;
+				const budget = oInner - 4 - visibleWidth(label) - 1;
+				const desc = budget >= 8 ? ` ${theme.dim(truncateToWidth(c.desc, budget))}` : "";
+				return { text: truncateToWidth(`${label}${desc}`, oInner - 4), mark: " ", long: c.long, kind: "skill" as const, ...(c.usage !== undefined ? { usage: c.usage } : {}) };
+			};
 			items =
-				real.length === 0
-					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有匹配的命令。继续输入或删字修改筛选，Esc 关闭菜单。" }]
-					: real.map((c) => ({
-							text: `${c.name}${c.aliases === undefined ? "" : theme.fg("muted", `（${c.aliases.join(", ")}）`)} ${theme.dim(c.desc)}`,
-							mark: " ",
-							long: c.long,
-						}));
+				real.length === 0 && sk.length === 0
+					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有匹配的命令。继续输入或删字修改筛选，Esc 关闭菜单。", kind: "cmd" as const }]
+					: [
+							...real.map((c) => ({
+								text: `${c.name}${c.aliases === undefined ? "" : theme.fg("muted", `（${c.aliases.join(", ")}）`)} ${theme.dim(c.desc)}`,
+								mark: " ",
+								long: c.long,
+								kind: "cmd" as const,
+							})),
+							...(sk.length > 0 ? [sepRow] : []),
+							...sk.map(skillRow),
+						];
 		}
 		const selI = Math.max(0, Math.min(items.length - 1, s.overlaySel));
 		const winStart = Math.max(0, Math.min(Math.max(0, items.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
 		const win = items.slice(winStart, winStart + OVERLAY_PAGE);
-		// 列表区恒定（2026-09-23 用户拍板：固定防闪烁）——命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
+		// 列表区恒定（2023-09-23 用户拍板：固定防闪烁）——命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
 		for (let i = 0; i < OVERLAY_PAGE; i++) {
 			const it = win[i];
 			if (it === undefined) {
@@ -2580,6 +2654,11 @@ export class FullApp {
 				continue;
 			}
 			const gi = winStart + i;
+			if (it.kind === "sep") {
+				// 分隔行不可选不高亮（占 1 行参与窗口分页——滚出视野即不见）
+				olines.push(boxRow(` ${it.text}`));
+				continue;
+			}
 			const selPrefix = gi === selI ? theme.fg("accent", "❯") : " ";
 			const markSeg = it.mark === " " ? "" : `${it.mark} `;
 			const row = ` ${selPrefix} ${markSeg}${it.text}`;

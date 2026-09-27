@@ -921,7 +921,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           notify("平台配置已即时生效（模块图已重载）");
         }
         if (reloadShot !== undefined) closeGoneModuleUi(reloadShot);
-        if (cmdNameOf(text) === "/reload") registerToolLabels(h.graph().tools.toolInfos()); // 标签表随图重喂
+        if (cmdNameOf(text) === "/reload") { registerToolLabels(h.graph().tools.toolInfos()); void refreshSkillMenu(); } // 标签表与技能菜单缓存随图重喂
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
@@ -1389,6 +1389,54 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/reload", desc: "重载模块", long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
 ];
 
+// ---------- 技能菜单（m4-7 T7——服务倒挂：宿主消费 skill.catalog，模块不在优雅降级为零技能） ----------
+
+/** catalog 行消费面类型（圈地纪律：消费侧类型结构本地声明）。 */
+interface SkillMenuRow {
+	name: string;
+	description: string;
+	whenToUse?: string;
+	disabled: boolean;
+	file: string;
+}
+let skillMenu: SlashItem[] = [];
+const skillFiles = new Map<string, string>(); // 技能真名 → SKILL.md 实路径（Enter 注入读正文用）
+let skillMenuAt = 0;
+/** 菜单缓存刷新：catalog 是 Promise 口而菜单渲染同步——TTL 惰性（skillItems 被调时隔 5s 触发一次）
+ *  + 显式点（/reload 收尾、模块插拔 reload 后、启动）。disabled 不进菜单（D7：停用双摘；
+ *  disable-model-invocation 照显——用户手动路径不受限）。 */
+const refreshSkillMenu = async (): Promise<void> => {
+	const catalog = await h.graph().services.getOptional("skill.catalog");
+	if (typeof catalog !== "function") {
+		skillMenu = [];
+		skillFiles.clear();
+		return;
+	}
+	const rows = (catalog as () => SkillMenuRow[])();
+	skillFiles.clear();
+	for (const r of rows) skillFiles.set(r.name, r.file);
+	skillMenu = rows.filter((r) => !r.disabled).map((r) => ({
+		name: `skill : ${r.name}`,
+		desc: r.description,
+		long: r.description, // 详释行 1-2 = description 折行截断（原型图 1）
+		...(r.whenToUse !== undefined ? { usage: r.whenToUse } : {}),
+		skill: r.name,
+	}));
+};
+
+/** 技能条目 Enter 注入（D3 拍板）：正文剥 frontmatter 后包 <skill> 块，以用户消息提交——
+ *  pi/kimi 同款形态，走主输入口零新机制（busy 期照排队语义，不打断 turn）。读不到 = undefined（菜单提示）。 */
+const skillInjectText = (name: string): string | undefined => {
+	const file = skillFiles.get(name);
+	if (file === undefined) return undefined;
+	try {
+		const body = readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, ""); // 剥 frontmatter
+		return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}">\n${body}\n</skill>`;
+	} catch {
+		return undefined;
+	}
+};
+
 /** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行 + 框下快捷键导引一行）。 */
 const ASCII_BANNER = (VERSION: string): string[] => [
 	"",
@@ -1412,6 +1460,7 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 
 const runFullScreen = async (): Promise<"switch" | "quit"> => {
   let action: "switch" | "quit" | undefined;
+  void refreshSkillMenu(); // m4-7 T7：技能菜单首刷（异步先取，菜单首开即有数据；后续走 TTL + reload 显式点）
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
     rows: () => process.stdout.rows ?? 24,
@@ -1465,6 +1514,17 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       cards: moduleCards(), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
     }),
     slashCommands: () => SLASH_ITEMS,
+    // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
+    // /reload 收尾与模块插拔后另有显式刷新点
+    skillItems: () => {
+      const now = Date.now();
+      if (now - skillMenuAt > 5000) {
+        skillMenuAt = now;
+        void refreshSkillMenu();
+      }
+      return skillMenu;
+    },
+    skillInject: skillInjectText,
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
     // 参数阶段数据源（m5 T15）：graph 现读模块命令的 completeArg；抛错兜底空表 + host 日志（菜单层当无候选）
     slashArgComplete: (cmd, word, args) => {
@@ -1549,6 +1609,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           const r = await h.reload();
           closeGoneModuleUi(namesBefore);
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
+          void refreshSkillMenu(); // m4-7 T7：技能菜单缓存随图刷新（停用后插拔即时生效）
           await refreshPanel();
           app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
         } catch (err) {
