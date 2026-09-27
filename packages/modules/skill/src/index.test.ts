@@ -43,9 +43,6 @@ function fakeCtx(cfg: Record<string, unknown> = {}) {
   return { ctx, services, tools, sections };
 }
 
-const SKILL_MD = (name: string, desc: string, body: string) =>
-  `---\nname: ${name}\ndescription: ${desc}\n---\n\n${body}\n`;
-
 const put = (dir: string, name: string, desc: string, body: string, extra = "") => {
   md(join(dir, name));
   writeFileSync(join(dir, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${desc}${extra}\n---\n\n${body}\n`);
