@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ModuleContext, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import def from "./index.ts";
@@ -56,12 +57,13 @@ const runLoad = async (tools: Tool[], name: string) => {
   return exec.execute({ callId: "c", signal: new AbortController().signal, log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} } });
 };
 
-/** 四轨全注（绕开真实 home/git 探测——探测链另测）。 */
+/** 四轨全注（绕开真实 home/git 探测——探测链另测；bundled 注空目录——第五轨真身另测）。 */
 const fourTrackCfg = () => ({
   userAgentsDir: join(user, ".agents", "skills"),
   userOrosusDir: join(user, ".orosus", "skills"),
   projectAgentsDirs: [join(proj, ".agents", "skills")],
   projectOrosusDir: join(proj, ".orosus", "skills"),
+  bundledDir: join(user, "bundled-empty"),
 });
 
 describe("skill 模块（m4-7 T1/T2——四轨目录 + frontmatter 扩集）", () => {
@@ -121,7 +123,7 @@ describe("skill 模块（m4-7 T1/T2——四轨目录 + frontmatter 扩集）", 
     process.chdir(appDir);
     put(join(proj, ".agents", "skills"), "root-skill", "根技能", "根正文");
     put(join(appDir, ".agents", "skills"), "root-skill", "就近同名", "就近正文");
-    const { ctx, sections } = fakeCtx({ userOrosusDir: join(user, "none1"), userAgentsDir: join(user, "none2") });
+    const { ctx, sections } = fakeCtx({ userOrosusDir: join(user, "none1"), userAgentsDir: join(user, "none2"), bundledDir: join(user, "none3") });
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
     const summary = sections[0]!.text;
     expect(summary).toContain("root-skill"); // 根技能被子目录 cwd 捡到（monorepo 场景）
@@ -135,7 +137,7 @@ describe("skill 模块（m4-7 T1/T2——四轨目录 + frontmatter 扩集）", 
     md(appDir);
     process.chdir(appDir);
     put(join(appDir, ".orosus", "skills"), "sub-brand", "子目录品牌", "子目录正文");
-    const { ctx, sections } = fakeCtx({ userOrosusDir: join(user, "none1"), userAgentsDir: join(user, "none2") });
+    const { ctx, sections } = fakeCtx({ userOrosusDir: join(user, "none1"), userAgentsDir: join(user, "none2"), bundledDir: join(user, "none3") });
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
     expect(sections).toHaveLength(0); // app/.orosus 不在轨道上；根 .orosus 也没内容
   });
@@ -292,5 +294,48 @@ describe("skill 模块（m4-7 T6——停用清单）", () => {
     const row = catalog().find((x) => x.name === "both")!;
     expect(row.disabled).toBe(true);
     expect(row.modelInvocable).toBe(false);
+  });
+});
+
+describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能）", () => {
+  /** 模块自带 bundled/ 真身（包根下，src 的上一级）——其余轨道注空保隔离。 */
+  const bundledOnlyCfg = () => ({
+    userAgentsDir: join(user, "none-agents"),
+    userOrosusDir: join(user, "none-orosus"),
+    projectAgentsDirs: [join(proj, "none-pagents")],
+    projectOrosusDir: join(proj, "none-porosus"),
+    bundledDir: join(dirname(fileURLToPath(import.meta.url)), "..", "bundled"),
+  });
+
+  it("① 出厂技能可发现可加载：skill-creator 进清单、正文可读、catalog 范围 = 内置（bundled）", async () => {
+    const { ctx, sections, tools, services } = fakeCtx(bundledOnlyCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    expect(sections[0]!.text).toContain("skill-creator");
+    const r = await runLoad(tools, "skill-creator");
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("Progressive disclosure");
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string; layer: string; source: string }>;
+    const row = catalog().find((x) => x.name === "skill-creator")!;
+    expect(row.layer).toBe("bundled");
+    expect(row.source).toBe("bundled");
+  });
+
+  it("② 垫底可覆盖：~/.agents 同名 skill-creator 压过内置版（九仓惯例——出厂技能用户同名可覆盖）", async () => {
+    put(join(user, "none-agents"), "skill-creator", "用户自定义版", "用户自定义正文 XYZ");
+    const { ctx, tools } = fakeCtx(bundledOnlyCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const r = await runLoad(tools, "skill-creator");
+    expect(r.output).toContain("用户自定义正文 XYZ");
+  });
+
+  it("③ 停用对内置技能同样适用：disabled 含 skill-creator → 清单摘除、load 拒绝、catalog 在册带标志", async () => {
+    const { ctx, sections, tools, services } = fakeCtx({ ...bundledOnlyCfg(), disabled: ["skill-creator"] });
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    expect(sections).toHaveLength(0);
+    const r = await runLoad(tools, "skill-creator");
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("已停用");
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string; disabled: boolean }>;
+    expect(catalog().find((x) => x.name === "skill-creator")!.disabled).toBe(true);
   });
 });

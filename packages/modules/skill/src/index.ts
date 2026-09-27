@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { orosusHome } from "@orosus/contracts/home";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
@@ -123,12 +124,17 @@ interface SkillConfig {
   disabled?: string[];
 }
 
+/** 第五轨内置目录（m4-7 T11）：skill 模块自带 bundled/ 随包分发（包根下，src 的上一级）——
+ *  优先级垫底（低于 ~/.agents，skillTracks 首位），用户/项目同名技能可覆盖内置版（九仓惯例）。 */
+const bundledSkillsDir = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
+
 /** 缺省目录解析（config 注入可全覆盖——测试注轨不走真实 home/cwd）。 */
 function resolveDirs(cfg: SkillConfig | undefined): {
   userAgentsDir: string;
   userOrosusDir: string;
   projectAgentsDirs: string[];
   projectOrosusDir: string;
+  bundledDir: string;
 } {
   const cwd = process.cwd();
   const root = gitRootOf(cwd);
@@ -137,6 +143,7 @@ function resolveDirs(cfg: SkillConfig | undefined): {
     userOrosusDir: cfg?.userOrosusDir ?? join(orosusHome(), "skills"),
     projectAgentsDirs: cfg?.projectAgentsDirs ?? chainTo(root, cwd).map((d) => join(d, ".agents", "skills")),
     projectOrosusDir: cfg?.projectOrosusDir ?? join(root, ".orosus", "skills"),
+    bundledDir: cfg?.bundledDir ?? bundledSkillsDir(),
   };
 }
 
@@ -221,7 +228,7 @@ export default defineModule({
   activate(ctx) {
     const cfg = ctx.config as SkillConfig | undefined;
     const dirs = resolveDirs(cfg);
-    const tracks = skillTracks({ ...dirs, ...(cfg?.bundledDir !== undefined ? { bundledDir: cfg.bundledDir } : {}) });
+    const tracks = skillTracks(dirs);
     const disabled = new Set(cfg?.disabled ?? []);
     const loaded = new Set<string>();
     const skills = scanSkills(tracks);
