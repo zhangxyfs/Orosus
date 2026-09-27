@@ -148,4 +148,20 @@ describe("tool-todo 使用时机引导（promptSection 常驻）", () => {
     expect(sections).toContain("Single-step tasks do not need a todo list."); // 单步不必
     expect(sections).not.toContain("## Current Tasks"); // 无清单时不渲染清单头
   });
+
+  it("② 并行例外与反包装句（m4-6 T4——todo 语义跟着并发模型走：dsh 并行版 + qwen 反包装句）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-todo-par-"));
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [toolTodo, fakeProviderModule("fake", [[{ type: "finish", kind: "stop" }]])],
+      config: { userFile: join(dir, "n.toml"), projectFile: join(dir, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    const sections = h.graph().promptSections();
+    await h.close();
+    expect(sections).toContain("multiple in_progress items are legitimate"); // 并行期多个进行中合法
+    expect(sections).toContain("Do not create a todo list merely to wrap a single delegation"); // 反包装句
+    const { tool } = createTodoTool();
+    expect(tool.description).toContain("multiple in_progress is fine while parallel sub-agents or background tasks are running");
+  });
 });

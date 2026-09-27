@@ -12,7 +12,9 @@ const render = (todos: TodoItem[]): string =>
 // 使用时机引导（ROADMAP ①，2026-09-23）：工具 description 只管调用规则（整表替换/完成即标），不管「该不该用」——
 // 多步先建清单、随执行更新、完成即标、单步不必（claude-code 同款口径）；英文 = 核心提示词全英文定案（M4-2 T12/B10）
 const TODO_GUIDANCE = `For multi-step tasks, create a todo list with the tool-todo__todo_write tool before starting work, keep it updated as you go, and mark items done immediately after completing them.
-Single-step tasks do not need a todo list.`;
+Single-step tasks do not need a todo list.
+While genuinely parallel work is underway (concurrent sub-agents or background tasks), multiple in_progress items are legitimate.
+Do not create a todo list merely to wrap a single delegation — track your own sequential work here.`;
 
 /** 工厂：工具与状态同闭包——模块侧 promptSection 经 state 读最新值（tool-fs 工厂可测面同款）。 */
 export function createTodoTool(onWrite?: (todos: TodoItem[]) => void): { tool: Tool; state: TodoState } {
@@ -22,7 +24,7 @@ export function createTodoTool(onWrite?: (todos: TodoItem[]) => void): { tool: T
     description: `Track progress on multi-step tasks. Send the ENTIRE list every call (whole-list replacement).
 You can reorder, remove, add, or modify items freely.
 Omit todos to READ the current list. Send [] to clear.
-Mark tasks done IMMEDIATELY (do not batch). Keep exactly one in_progress when work is underway.
+Mark tasks done IMMEDIATELY (do not batch). Keep exactly one in_progress when you work sequentially; multiple in_progress is fine while parallel sub-agents or background tasks are running.
 Do NOT call when nothing changed — query first if unsure. Auto-cleared when ALL items are done.`,
     parameters: z.object({
       todos: z.array(z.object({
