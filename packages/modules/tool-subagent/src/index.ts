@@ -18,7 +18,12 @@ const STATUS_TEXT: Record<SubagentOutcome["status"], string> = { completed: "完
 
 /** 单条结论的行格式（决策 15：状态 + 编号 + 轮数 + 结论 + 错误摘要）。 */
 const fmtOutcome = (o: SubagentOutcome): string => {
-  const head = `- ${o.id} · ${STATUS_TEXT[o.status]} · ${o.turns} 轮`;
+  // 截断收尾标注（双保险丝批 2026-09-27）：不是失败——撞限/超时交卷的结论照送，标注给父代理拆任务的依据
+  const capNote = o.truncated === "max_turns"
+    ? `（已达轮数上限——强制收尾轮交卷，未完成部分见结论）`
+    : o.truncated === "inactivity" ? `（不活动超时收尾——结论为最后回复）`
+    : o.truncated === "total_timeout" ? `（总时长超时收尾——结论为最后回复）` : "";
+  const head = `- ${o.id} · ${STATUS_TEXT[o.status]} · ${o.turns} 轮${capNote}`;
   // 越界回执与 bash 备查（决策 24⑤——列进结果报告，模型与用户都看得见）
   const receipt: string[] = [];
   if (o.outOfBounds !== undefined && o.outOfBounds.length > 0) {
@@ -179,9 +184,15 @@ async function runSpawn(
 }
 
 const configSchema = z.object({
-  /** 以下两键由内核子代理缝消费（模型三来源 / 审批模式解析）——模块 schema 在此只为通过配置校验。 */
+  /** 以下三键由内核子代理缝消费（模型三来源 / 审批模式 / 轮数上限解析）——模块 schema 在此只为通过配置校验。 */
   model: z.string().optional(),
   approvalMode: z.enum(["auto", "ask"]).optional(),
+  /** 轮数上限（双保险丝批 2026-09-27）：-1 = 不限（仅时长兜底）；正整数 [1, 200]。解析序 本键 > 工种 > 默认 100。 */
+  maxTurns: z.number().int().refine((v) => v === -1 || (v >= 1 && v <= 200), "maxTurns 须为 -1（不限）或 1-200").optional(),
+  /** 不活动超时毫秒（ZCode 定式）：-1 = 关；缺省 600_000。 */
+  inactivityTimeoutMs: z.number().int().refine((v) => v === -1 || v >= 1000, "inactivityTimeoutMs 须为 -1（关）或 ≥1000").optional(),
+  /** 总时长兜底毫秒（kimi 定式）：-1 = 关；缺省 7_200_000（2 小时）。 */
+  totalTimeoutMs: z.number().int().refine((v) => v === -1 || v >= 1000, "totalTimeoutMs 须为 -1（关）或 ≥1000").optional(),
   /** 测试密封 / 高级覆盖：工种目录的两根（缺省 = 进程 cwd / orosusHome）。 */
   projectRoot: z.string().optional(),
   userRoot: z.string().optional(),

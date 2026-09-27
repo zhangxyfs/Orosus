@@ -539,7 +539,7 @@ export interface SubagentSpawnRequest {
   disallowedTools?: string[];
   /** 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 */
   model?: string;
-  /** 轮数上限（保险丝）；有效值 = min(此值, 40)。 */
+  /** 轮数上限（保险丝）：-1 = 不限（仅时长兜底）；正整数钳位 [1, 200]。解析序 settings > 工种 > 默认 100。 */
   maxTurns?: number;
   /** 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 */
   writePaths?: string[];
@@ -573,6 +573,9 @@ export interface SubagentOutcome {
   outOfBounds?: string[];
   /** bash 命令串备查（实际写路径不可从命令串还原，原样附上）。 */
   bashCommands?: string[];
+  /** 截断收尾标注（双保险丝批 2026-09-27）：max_turns = 轮数到顶强制收尾轮交卷；inactivity/total_timeout =
+   *  不活动/总时长到点收尾。**不是失败**——结论照送（为截断时的最后回复/强制总结），父代理可据此拆任务续派。 */
+  truncated?: "max_turns" | "inactivity" | "total_timeout";
 }
 
 /** 后台回执：入册即返（决策 12——后台不阻塞调用方）。

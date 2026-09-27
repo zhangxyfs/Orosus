@@ -41,7 +41,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
-import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
+import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -1072,7 +1072,7 @@ const SETTINGS_ITEMS = [
 	"上下文用量（窗口占用与输入输出累计）",
 	"Token 用量（本会话与项目累计）",
 	"运行状态（模型 / 会话 / 模块图）",
-	"子代理（模型与审批模式）",
+	"子代理（模型 / 审批模式 / 轮数上限）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
 const tokenUsageText = async (): Promise<string> => {
@@ -1139,7 +1139,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	else if (picked === 3) app.viewText("运行状态", runtimeStatusText());
 	else if (picked === 4) {
 		// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名
-		const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式"]);
+		const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式", "轮数上限"]);
 		const chooseVia = async (t: string, items: string[]): Promise<string> => {
 			const i = await app.pickOverlay(t, items);
 			if (i === undefined) throw new Error("已取消（Esc）");
@@ -1150,6 +1150,9 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 			if (res !== "") app.showToast(res);
 		} else if (sub === 1) {
 			const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
+			if (res !== "") app.showToast(res);
+		} else if (sub === 2) {
+			const res = await runSubagentMaxTurnsSetting(chooseVia, (t) => app.promptInput(t, false).then((v) => { if (v === undefined) throw new Error("已取消（Esc）"); return v; }), subagentConfigFile());
 			if (res !== "") app.showToast(res);
 		}
 	}
@@ -1169,12 +1172,15 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 	else if (idx === 3) out(runtimeStatusText());
 	else if (idx === 4) {
 		// M4.5 T12 行模式对等件：子代理分组（模型 / 审批模式）
-		const subIdx = await commandUi.choose("子代理", ["子代理模型", "审批模式"]);
+		const subIdx = await commandUi.choose("子代理", ["子代理模型", "审批模式", "轮数上限"]);
 		if (subIdx === "子代理模型") {
 			const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList());
 			if (res !== "") out(res);
 		} else if (subIdx === "审批模式") {
 			const res = await runSubagentApprovalSetting((t, items) => commandUi.choose(t, items), subagentConfigFile());
+			if (res !== "") out(res);
+		} else if (subIdx === "轮数上限") {
+			const res = await runSubagentMaxTurnsSetting((t, items) => commandUi.choose(t, items), (t) => commandUi.ask(t), subagentConfigFile());
 			if (res !== "") out(res);
 		}
 	}
@@ -1333,7 +1339,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
-		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。",
+		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。「子代理」组内配模型 / 审批模式 / 轮数上限。",
 	},
 	{ name: "/tasks", aliases: ["task"], desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },

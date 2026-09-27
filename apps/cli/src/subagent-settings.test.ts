@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSubagentConfig, runSubagentApprovalSetting, runSubagentModelSetting, writeSubagentConfigKey } from "./subagent-settings.ts";
+import { readSubagentConfig, runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting, writeSubagentConfigKey } from "./subagent-settings.ts";
 
 let dir: string | undefined;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
@@ -77,4 +77,43 @@ describe("/settings 子代理分组 T12（决策 7/23：模型 + 审批模式 �
     const noSlots = await runSubagentModelSetting(pickFirst, cfg(), []);
     expect(noSlots).toContain("暂无可选平台"); // 无平台 = 指路 /provider，不配置也能用（跟父）
   });
+describe("子代理轮数上限设置（双保险丝批 2026-09-27：/settings → 子代理 → 轮数上限）", () => {
+	it("㊺d 菜单四档 + 自定义：跟随默认删键；不限写 -1；自定义 1-200；越值拒；数值键不带引号可读回", async () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-t12b-"));
+		writeFileSync(cfg(), "", "utf8");
+		const chooseLog: { title: string; items: string[] }[] = [];
+		let askReply = "";
+		const choose = async (title: string, items: string[]): Promise<string> => {
+			chooseLog.push({ title, items });
+			if (title.includes("轮数上限")) {
+				if (askReply === "") return items.find((i) => i.startsWith("不限"))!;
+			 return items.find((i) => i.startsWith("自定义"))!;
+			}
+			return items[0]!;
+		};
+		const ask = async (_t: string): Promise<string> => askReply;
+
+		let r = await runSubagentMaxTurnsSetting(choose, ask, cfg());
+		expect(r).toContain("不限（仅时长兜底）");
+		expect(readSubagentConfig(cfg()).maxTurns).toBe(-1);
+		const raw = readFileSync(cfg(), "utf8");
+		expect(raw).toContain("maxTurns = -1"); // 数值键不带引号
+
+		askReply = "250"; // 越值 → 拒
+		r = await runSubagentMaxTurnsSetting(choose, ask, cfg());
+		expect(r).toContain("不在值域");
+
+		askReply = "120"; // 合法自定义
+		r = await runSubagentMaxTurnsSetting(choose, ask, cfg());
+		expect(r).toContain("120 轮");
+		expect(readSubagentConfig(cfg()).maxTurns).toBe(120);
+
+		// 跟随默认（菜单第一档）= 删键
+		const chooseDefault = async (_t: string, items: string[]): Promise<string> => items.find((i) => i.startsWith("跟随默认"))!;
+		r = await runSubagentMaxTurnsSetting(chooseDefault, ask, cfg());
+		expect(r).toContain("跟随默认（100）——配置键已清除");
+		expect(readSubagentConfig(cfg()).maxTurns).toBeUndefined();
+	});
+});
+
 });

@@ -55,6 +55,9 @@ describe("工种文件加载 T3（决策 8/9：frontmatter 七键 + 四级目录
   it("③ 值域校验：maxTurns 非正整数报错；空列表键报错；frontmatter 行不认识报错（fail-closed 不静默丢字段）", () => {
     expect("error" in parseRoleFile("---\nname: a\ndescription: d\nmaxTurns: abc\n---\n正文", "/x/a.md")).toBe(true);
     expect("error" in parseRoleFile("---\nname: a\ndescription: d\nmaxTurns: 0\n---\n正文", "/x/b.md")).toBe(true);
+		const unlimited = parseRoleFile("---\nname: a\ndescription: d\nmaxTurns: -1\n---\n正文", "/x/d1.md");
+		expect("error" in unlimited).toBe(false); // -1 = 不限（双保险丝批 2026-09-27）
+		if (!("error" in unlimited)) expect(unlimited.maxTurns).toBe(-1);
     expect("error" in parseRoleFile("---\nname: a\ndescription: d\ntools:\n---\n正文", "/x/c.md")).toBe(true);
     expect("error" in parseRoleFile("---\nname: a\ndescription: d\n嵌套: [a, b]\n---\n正文", "/x/d.md")).toBe(true);
     expect("error" in parseRoleFile("---\n- 孤儿列表项\n---\n正文", "/x/e.md")).toBe(true);

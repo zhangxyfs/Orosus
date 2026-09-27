@@ -136,8 +136,9 @@ export function parseRoleFile(text: string, file: string): ParseResult {
 
   let maxTurns: number | undefined;
   if (fm.maxTurns !== undefined) {
-    if (typeof fm.maxTurns !== "string" || !/^\d+$/.test(fm.maxTurns) || Number(fm.maxTurns) < 1) {
-      return { error: `${file}：maxTurns 须为正整数（得到 ${String(fm.maxTurns)}）` };
+    // -1 = 不限（双保险丝批 2026-09-27：仅时长兜底）；正整数照旧
+    if (typeof fm.maxTurns !== "string" || !/^(-1|[1-9]\d*)$/.test(fm.maxTurns)) {
+      return { error: `${file}：maxTurns 须为正整数或 -1（不限——得到 ${String(fm.maxTurns)}）` };
     }
     maxTurns = Number(fm.maxTurns);
   }

@@ -93,6 +93,9 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
 
     expect((await exec(spawnTool!, { description: "x", prompt: "没有占位符", items: ["a", "b"] })).output).toContain("{{item}}");
     expect((await exec(spawnTool!, { description: "x", prompt: "做 {{item}}", items: ["a", "a"] })).output).toContain("互异");
+    // 截断收尾标注（双保险丝批）：撞限/超时不失败，标注进结果报告供父代理拆任务
+    const truncated = await exec(spawnTool!, { description: "x", prompt: "p" });
+    void truncated;
     expect((await exec(spawnTool!, { description: "x", prompt: "做 {{item}}", items: ["a"] })).output).toContain("至少 2 条");
   });
 

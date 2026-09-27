@@ -519,7 +519,7 @@ export interface SubagentSpawnRequest { … }
 | `allowedTools?` | `allowedTools?: string[]` | 工种工具白名单（模块全名如 tool-fs__read）；只能减不能加——不在主对话工具面里的名字无效。 |
 | `disallowedTools?` | `disallowedTools?: string[]` | 工种工具黑名单（从主对话工具面里再减掉）。 |
 | `model?` | `model?: string` | 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 |
-| `maxTurns?` | `maxTurns?: number` | 轮数上限（保险丝）；有效值 = min(此值, 40)。 |
+| `maxTurns?` | `maxTurns?: number` | 轮数上限（保险丝）：-1 = 不限（仅时长兜底）；正整数钳位 [1, 200]。解析序 settings > 工种 > 默认 100。 |
 | `writePaths?` | `writePaths?: string[]` | 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 |
 | `forkFrom?` | `forkFrom?: boolean \| string` | 带聊天记录开局（决策 6）：true = 继承主会话投影到当前末尾（模块侧拿不到事件 id——内核解析尾部）； 字符串 = 精确到某事件 id（含）；缺省 = 空白开局。 |
 | `background?` | `background?: boolean` | 后台跑（入册即回编号，结论经 followUp 缝送回）；缺省 = 前台（等结论）。 |
@@ -552,6 +552,7 @@ export interface SubagentOutcome { … }
 | `error?` | `error?: string` | 失败原因摘要（failed 时在）。 |
 | `outOfBounds?` | `outOfBounds?: string[]` | 越界回执（决策 24⑤）：实际写过但不在报备内的路径（含被拦下的越界尝试）；宿主自己记的，模型伪造不了。 |
 | `bashCommands?` | `bashCommands?: string[]` | bash 命令串备查（实际写路径不可从命令串还原，原样附上）。 |
+| `truncated?` | `truncated?: "max_turns" \| "inactivity" \| "total_timeout"` | 截断收尾标注（双保险丝批 2026-09-27）：max_turns = 轮数到顶强制收尾轮交卷；inactivity/total_timeout = 不活动/总时长到点收尾。**不是失败**——结论照送（为截断时的最后回复/强制总结），父代理可据此拆任务续派。 |
 **示例**
 
 ```ts
