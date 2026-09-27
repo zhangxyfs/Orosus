@@ -2270,10 +2270,11 @@ export class FullApp {
 			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
 			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
 		}
-		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指；文字截在 leftW−3、与轨道间
-		// 空 2 列（2026-09-27 用户走查拍板：文字离滚动条多空一个字的距离——满宽行不贴轨道）。
-		// 截断必须用 truncateToWidth（严格语义——宽字符跨界整体让位）：sliceByColumn 是相交
-		// 语义、截点落汉字中间时行超 1 列，分隔线/滚动条逐行错开 1 列即界面错乱（走查打回实锤）
+		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指；文字截在 leftW−2、与轨道间
+		// 空 1 列（2026-09-27 用户走查两轮定稿：先一个字（2 列）、后收窄为 1 列——满宽行不贴轨道）。
+		// 截断必须 truncateToWidth（严格语义——宽字符跨界整体让位）+ padToWidth 补齐恒宽：
+		// sliceByColumn 相交语义截点落汉字中间时行超 1 列、严格截断在汉字边界让位 1 列不补齐则
+		// 满宽行与短行差 1 列——两种不齐都会让分隔线/滚动条逐行错开即界面错乱（走查打回实锤）
 		const mthumb = thumbGeometry(streamH, doc.length, start);
 		if (mthumb !== undefined) {
 			for (let r = 0; r < streamH; r++) {
@@ -2281,9 +2282,7 @@ export class FullApp {
 				const ch = onThumb
 					? theme.fg(s.scrollbarHover === "main" ? "accent" : "muted", "█")
 					: theme.dim("│");
-				// 截断再补齐恒宽 leftW−3：严格截断在汉字边界会让位 1 列（产物可短不可超），
-				// 不补齐则满宽行与短行差 1 列——行宽不齐即界面错位
-				screen[r] = padToWidth(truncateToWidth(screen[r] ?? "", leftW - 3), leftW - 3) + "  " + ch;
+				screen[r] = padToWidth(truncateToWidth(screen[r] ?? "", leftW - 2), leftW - 2) + " " + ch;
 			}
 		}
 		if (queueH > 0) {
@@ -2411,8 +2410,8 @@ export class FullApp {
 				const ch = onThumb
 					? theme.fg(this.state.scrollbarHover === "view" ? "accent" : "muted", "█")
 					: theme.dim("│");
-				// 文字与轨道间空 2 列（2026-09-27 用户走查拍板——与主窗滚动条同口径）
-				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 3) + "  " + ch + theme.fg(bc, "│")));
+				// 文字与轨道间空 1 列（2026-09-27 用户走查两轮定稿——与主窗滚动条同口径）
+				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 2) + " " + ch + theme.fg(bc, "│")));
 			} else {
 				olines.push(boxRow(styled));
 			}
