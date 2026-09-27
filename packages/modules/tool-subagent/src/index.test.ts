@@ -185,4 +185,23 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     const [, tasks2] = subagentTools(emptyPort, dirs);
     expect((await exec(tasks2!, {})).output).toContain("暂无在册子代理");
   });
+
+  it("⑱ 前后台判据句 + 后台三禁 + 后台返回行教育（m4-6 T1）", async () => {
+    const { dirs } = tmpDirs();
+    const port = stubPort();
+    const [spawnTool] = subagentTools(port, dirs);
+    // 判据句（kimi 定式）+ 三禁（qwen 收窄到我们机制：禁猜/禁替身/禁轮询）
+    expect(spawnTool!.description).toContain("前台");
+    expect(spawnTool!.description).toContain("另派");
+    expect(spawnTool!.description).toContain("编造");
+    // 后台单子：返回行带教育句（ZCode 定式——教模型的话写在返回值里，出现在刚发起后台的那一轮）
+    const bgPort = stubPort({ spawn: async (req) => { bgPort.calls.push(req); return { id: "dddd4444" }; } });
+    const [bgTool] = subagentTools(bgPort, dirs);
+    const out = await exec(bgTool!, { description: "跑批", prompt: "整理笔记", background: true });
+    expect(out.isError).toBe(false);
+    expect(bgPort.calls[0]!.background).toBe(true);
+    expect(out.output).toContain("后台已入册");
+    expect(out.output).toContain("去做别的独立工作");
+    expect(out.output).toContain("重派替身");
+  });
 });

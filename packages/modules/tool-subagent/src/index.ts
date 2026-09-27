@@ -11,8 +11,8 @@ export { defaultRoleDirs, loadRoles, parseRoleFile, type RoleDirs, type RoleFile
 /** 一张任务清单的最多条数（决策 5——内核并发上限 8 与清单上限 128 是两件事：128 是申报、8 是同时跑）。 */
 export const SUBAGENT_LIST_MAX = 128;
 
-/** 派活工具说明（决策 5 / 设计空白权威文本——三处引用同一份，勿散抄）。 */
-const SPAWN_GUIDANCE = "派出独立上下文的子代理，只返回最终结论。任务书自包含。相互独立的任务并行派出：一次至少 2 个、最多 8 个，按任务量自行判断。要写文件的子代理必须报备 writePaths。后台子代理完成时结论会自动送回对话——不要轮询任务列表等待结果。";
+/** 派活工具说明（决策 5 / 设计空白权威文本——三处引用同一份，勿散抄）。v2（m4-6 T1）：前后台判据句（kimi 定式）+ 后台三禁（qwen 收窄到我们机制）。 */
+const SPAWN_GUIDANCE = "派出独立上下文的子代理，只返回最终结论。任务书自包含。相互独立的任务并行派出：一次至少 2 个、最多 8 个，按任务量自行判断。要写文件的子代理必须报备 writePaths。\n前台还是后台：下一步需要它的结论才能继续就不传 background（前台，结论当场返回）；它跑着期间你另有独立工作可做才传 background。不要后台发起后立刻干等它——轮询任务列表、休眠、反复查进度都算；需要结论就直接前台。\n后台三禁：后台子代理跑完，结论以系统送回行自动送回对话——送回行没到就是还在跑；不要自己预测或编造结论，不要另派一个子代理重跑同一任务，不要轮询任务列表等进度。";
 
 const STATUS_TEXT: Record<SubagentOutcome["status"], string> = { completed: "完成", failed: "失败" };
 
@@ -74,7 +74,7 @@ export function subagentTools(port: SubagentPort, dirsOf: DirsOf, log?: (code: s
         prompt: z.string().min(1).describe("任务书——自包含（子代理看不到本对话，除非 forkFrom）。批量时每条按 {{item}} 展开"),
         items: z.array(z.string().min(1)).max(SUBAGENT_LIST_MAX).optional().describe(`批量清单（2-${SUBAGENT_LIST_MAX} 条、条目互异；任务书须含 {{item}}）`),
         role: z.string().optional().describe("工种名：research（只读调研）/ general（通用，缺省）/ 工种文件自定义名"),
-        background: z.boolean().optional().describe("true = 后台跑：立即返回编号，跑完结论自动送回对话"),
+        background: z.boolean().optional().describe("true = 后台跑：立即返回编号，跑完结论自动送回对话——仅当你另有独立工作可做时用；需要结论才能继续就别传（前台当场返回）"),
         forkFrom: z.boolean().optional().describe("true = 带上主对话聊天记录到当前为止（「照上面聊的做 X」）"),
         writePaths: z.array(z.string().min(1)).optional().describe("要写文件的子代理必须报备的写路径（相对工作目录；目录含其下一切）——给了则以本参数为准（压过工种预声明）"),
       }),
@@ -174,7 +174,7 @@ async function runSpawn(
       parts.push(`子代理完成（${okCount}/${done.length}）：\n${done.map(fmtOutcome).join("\n")}`);
     }
     if (tickets.length > 0) {
-      parts.push(`后台已入册（${tickets.length} 个，跑完自动送回）：${tickets.map((t) => t.id).join("、")}`);
+      parts.push(`后台已入册（${tickets.length} 个，跑完自动送回）：${tickets.map((t) => t.id).join("、")}。期间去做别的独立工作——送回行没到 = 还在跑：不要轮询、不要预测结论、不要重派替身。`);
     }
     return { output: parts.join("\n\n"), isError: done.length > 0 && done.every((o) => o.status === "failed") };
   } catch (err) {
