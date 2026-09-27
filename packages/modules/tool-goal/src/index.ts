@@ -86,13 +86,13 @@ blocked: ONLY when truly stuck — requires the SAME blocker reported on 3 conse
 }
 
 /** 状态段文本（getter 活读——active 提醒；无目标/终态空串被过滤不占预算；objective 包防注入标记
- *  ZCode <untrusted_objective> target.ts:131 同款）。 */
+ *  ZCode <untrusted_objective> target.ts:131 同款）。m4-6 T6：段内不带轮次计数——目标活跃期段恒定，
+ *  前缀缓存不每轮击穿；轮次随每轮 <goal-round> 消息注入（goalFollowUp，消息位）。 */
 export function goalSectionText(store: GoalStore): string {
   const s = store.current();
   if (s === null || s.status !== "active") return "";
-  const rounds = s.maxRounds !== undefined ? `第 ${s.roundsUsed + 1}/${s.maxRounds} 轮` : `第 ${s.roundsUsed + 1} 轮`;
   return `## Current Goal
-当前目标（续跑 ${rounds}）：<untrusted_objective>${s.objective}</untrusted_objective>
+当前目标（续跑）：<untrusted_objective>${s.objective}</untrusted_objective>
 未达终态不要停止——完成用 tool-goal__update 报 complete；确无法推进报 blocked（连续三轮同一阻塞才受理）。`;
 }
 
