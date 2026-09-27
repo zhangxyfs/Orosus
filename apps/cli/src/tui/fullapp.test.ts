@@ -1530,6 +1530,24 @@ describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定
 		expect(actions).toEqual(["cancel", "stopall"]); // 两件都做、顺序 = 停生成先
 		app.stop();
 	});
+describe("浮层期硬件光标隐藏（2026-09-27 用户走查：子代理查看窗里浮着个光标——浮层是字符层盖不住物理光标）", () => {
+	it("view/pick/dialog 浮层在位时 placeCursor 写隐藏序列（?25l）；ask 输入行接管与斜杠菜单期仍显示（?25h）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		expect(output.buf).toMatch(/H\[\?25h/); // 稳态：光标显示（placeCursor visible 形态）
+		const beforeView = output.buf.length;
+		app.viewText("查看", "一行内容");
+		await flush(80);
+		// 只查查看窗后的增量（ENTER_ALT 自带 [H[?25l 会污染全量匹配）
+		expect(output.buf.slice(beforeView)).toMatch(/H\[\?25l/); // 查看窗盖住输入框 → 光标隐藏
+		input.emit("data", ""); // Esc 关窗
+		await flush(80);
+		expect(output.buf.slice(-400)).toMatch(/H\[\?25h/); // 关窗回输入 → 光标恢复
+		app.stop();
+	});
+});
+
 describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底部）", () => {
 	/** 查看窗渲染层断言口径（T1 迁移）：直接调 buildViewOverlay 拿浮层行——不再读内部 scroll 字段。 */
 	const viewLines = (app: FullApp): string[] => {

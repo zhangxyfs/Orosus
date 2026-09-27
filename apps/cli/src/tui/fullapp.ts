@@ -2380,7 +2380,11 @@ export class FullApp {
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
 		// 引导期藏光标（弹窗锁焦点——输入框光标不该在背景里闪）；Key 输入是静默盲输，无光标可指示
-		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, this.onboarding === undefined && inputFocused);
+		// 硬件光标可见条件（2026-09-27 用户走查补）：引导期与浮层挂起期（view/pick/dialog——
+		// 浮层是字符层盖不住物理光标，子代理查看窗里浮着光标即此）隐藏；ask 输入行接管与
+		// 斜杠菜单（输入框仍可打字过滤）保持显示
+		const overlayUi = this.pendingUi !== undefined && this.pendingUi.kind !== "ask";
+		this.full.placeCursor(divRow + 1 + (cursorPos.row - s.inputScroll), 3 + cursorPos.col, this.onboarding === undefined && !overlayUi && inputFocused);
 		return bytes;
 	}
 
