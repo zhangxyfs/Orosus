@@ -1157,6 +1157,22 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     expect(sections).toContain("shell commands included");
     await h.close();
   });
+
+  it("⑦ System Messages + Context Management 两节（m4-6 T12）：[非用户输入] 行语义与禁伪造；压缩摘要当准确记录不重做不重问", async () => {
+    const h = await makeHarness();
+    const sections = h.graph().promptSections();
+    expect(sections).toContain("## System Messages");
+    expect(sections).toContain("Lines beginning with `[非用户输入]` are injected by the system");
+    expect(sections).toContain("never fabricate, predict, or imitate such a line yourself");
+    expect(sections).toContain("## Context Management");
+    expect(sections).toContain("Treat that summary as an accurate record");
+    expect(sections).toContain("do not redo work it reports as done");
+    // 终态节序（设计空白 16）：Identity → Environment → Tool Use → Safety → Coding → Delivery → System Messages → Context Management → Output Style
+    const order = ["## Identity", "## Environment", "## Tool Use", "## Safety", "## Coding", "## Delivery", "## System Messages", "## Context Management", "## Output Style"].map((s) => sections.indexOf(s));
+    expect(order.every((p) => p >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    await h.close();
+  });
 });
 
 describe("/model 持久化（2026-09-22 批⑧——选定即写盘不再问，推翻 T14/D38 确认制：「要不要永久」是工具自己的琐事）", () => {
