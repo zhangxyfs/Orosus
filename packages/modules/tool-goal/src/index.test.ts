@@ -104,14 +104,17 @@ describe("tool-goal 状态机与三工具（M4-3 T6）", () => {
     expect(store.current()?.status).toBe("blocked");
   });
 
-  it("⑧ 状态段：active 渲染（防注入标记 + 轮数 + 勿停指引）；无目标/终态空串过滤", async () => {
+  it("⑧ 状态段：active 渲染（防注入标记 + 勿停指引；轮数不进段——m4-6 T6 缓存稳定，轮次随每轮 <goal-round> 消息）；无目标/终态空串过滤", async () => {
     const { create, update, store } = mkStore();
     expect(goalSectionText(store)).toBe("");
     await exec(create, { objective: "把 README 翻译成英文", maxRounds: 10 });
     const text = goalSectionText(store);
     expect(text).toContain("<untrusted_objective>把 README 翻译成英文</untrusted_objective>");
-    expect(text).toContain("第 1/10 轮");
+    expect(text).not.toMatch(/第 \d+\/\d+ 轮/); // 段内无轮次计数——目标活跃期段恒定，前缀缓存不每轮击穿
     expect(text).toContain("未达终态不要停止");
+    const beforeSpend = text;
+    store.spendRound();
+    expect(goalSectionText(store)).toBe(beforeSpend); // 段文本不随 spendRound 变化
     await exec(update, { action: "complete", reason: "done" });
     expect(goalSectionText(store)).toBe(""); // 终态段消
   });
