@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DocModel } from "./docmodel.ts";
 import * as theme from "../theme.ts";
 import { stripAnsi } from "./width.ts";
 import { TOOL_MERGE } from "../render.ts";
+import { loadHistoricalSubagents } from "../tasks-cmd.ts";
 
 describe("DocModel 思考块与流区折行（F5 三轮）", () => {
 	it("① 收起态显示思考尾部（最新内容）——流式追加后尾行跟随", () => {
@@ -275,6 +279,50 @@ describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行�
 		expect(lines.some((l) => l.includes("Using"))).toBe(true);         // 非 spawn 照常工具行
 		expect(lines.some((l) => l.includes("Spawn"))).toBe(false);        // spawn 绝不出工具行
 		expect(lines.some((l) => l.includes("结论：略"))).toBe(false);      // spawn result 不落行（组里已有）
+	});
+});
+
+describe("回放 agent 组重建集成（2026-09-27：重载后与实时同形——盘上布局 → 历史名册 → 回放组 → 渲染）", () => {
+	let dir: string | undefined;
+	it("㊿-8 真盘布局：spawn call/result 落主会话文件 + agents/ 目录在盘 → loadHistoricalSubagents 喂 provider → historyFrom 回放出完整组（两端抠编号口径一致）", () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-replay-"));
+		const mainSid = "main-sid";
+		// 主会话文件：一轮 user→assistant→spawn call→result（结果文本含 8 位编号——回放组与历史重建都从这抠）
+		const mainEvents = [
+			{ type: "user/message", content: [{ kind: "text", text: "查一下" }] },
+			{ type: "assistant/message", content: [] },
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c1", args: { description: "调研依赖", background: true } },
+			{ type: "tool/result", callId: "c1", output: "后台已入册（1 个，跑完自动送回）：a3f9c2e1" },
+		];
+		mkdirSync(join(dir, mainSid, "agents"), { recursive: true }); // 主会话文件 = JsonlStore 原生形状 <sid>/agents/session.jsonl
+		writeFileSync(join(dir, mainSid, "agents", "session.jsonl"), mainEvents.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		// 子代理会话文件（决策 19 落盘形状）：header 带 parentSession、turn/step、turn/end completed、usage
+		const agentEvents = [
+			{ type: "session/header", parentSession: mainSid },
+			{ type: "turn/step", ts: "2026-09-27T10:00:00Z" },
+			{ type: "tool/call", name: "tool-fs__read" },
+			{ type: "turn/end", kind: "completed", ts: "2026-09-27T10:00:05Z", usage: { input: 100, output: 50 } },
+		];
+		const agentDir = join(dir, mainSid, "agents", "agents_a3f9c2e1", "agents");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "session.jsonl"), agentEvents.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		// 宿主 provider 合并形态（main.ts attachRender 同款）：活名册空 + 盘上历史按组引用补挂
+		const hist = loadHistoricalSubagents(dir, mainSid);
+		expect(hist.length).toBe(1);
+		expect(hist[0]!.id).toBe("a3f9c2e1");
+		const dm = new DocModel();
+		dm.agentProvider = () => {
+			const want = dm.groupIds();
+			return hist.filter((e) => want.has(e.id));
+		};
+		dm.historyFrom(JSON.parse(JSON.stringify(mainEvents)) as { type: string }[], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("● 1 general agents 完成"))).toBe(true); // 组头（全终态聚合态）
+		expect(lines.some((l) => l.includes("调研依赖"))).toBe(true);                 // 简述从 spawn 参数回查
+		expect(lines.some((l) => l.includes("后台"))).toBe(true);                     // 后台标注
+		expect(lines.some((l) => l.includes("Spawn"))).toBe(false);                   // spawn 不出工具行
+		rmSync(dir, { recursive: true, force: true });
+		dir = undefined;
 	});
 });
 
