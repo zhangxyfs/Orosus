@@ -173,6 +173,11 @@ interface AppState {
 	lastClick: { at: number; count: number; docIdx: number; wordStart: number; wordEnd: number } | undefined;
 	/** 链接按下暂存（T7——kimi pressedUrl :224 同族）：count 1 的按下记 URL 与坐标，松开未拖动同点才打开。 */
 	pressedUrl: { url: string; x: number; y: number } | undefined;
+	/** 拖选自动滚三件（T9——kimi :216-218 同族）：方向必落 state（脉冲从 state 读）；50ms 一格、
+	 *  每格 1 行；滚到头/回界内/松手自停。 */
+	autoScrollDir: -1 | 0 | 1;
+	autoScrollTimer: NodeJS.Timeout | undefined;
+	dragPointer: { x: number; y: number } | undefined;
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
@@ -389,6 +394,9 @@ export class FullApp {
 			selInitialRange: undefined,
 			lastClick: undefined,
 			pressedUrl: undefined,
+			autoScrollDir: 0,
+			autoScrollTimer: undefined,
+			dragPointer: undefined,
 		};
 	}
 
@@ -456,6 +464,7 @@ export class FullApp {
 	stop(): void {
 		if (this.stopped) return;
 		this.stopped = true;
+		this.stopAutoScroll(); // 拖选自动滚定时器不随实例陪葬（T9）
 		// 引导弹窗随应用停止结算（promise 不永挂——同 pendingUi 纪律）
 		if (this.onboarding !== undefined) {
 			const ob = this.onboarding;
@@ -996,27 +1005,22 @@ export class FullApp {
 		} else if (e.kind === "drag") {
 			s.pressedUrl = undefined; // 拖动即作废（误拖保护）
 			if (s.mselAnchor === undefined) return;
-			const p = this.clampedSelPoint(e.x, e.y); // 越界钳所在 scope 的边界
-			if (p === undefined) return;
-			// 粒度感知扩选（T6——kimi updateSelectionFocus :1213-1231）：词/行粒度下 focus 对齐到
-			// 当前点的词/行区间；扩到初始区间反侧时锚点切到初始区间的另一端
-			const initial = s.selInitialRange;
-			if (s.selGranularity !== "character" && initial !== undefined) {
-				const before = p.docIdx < initial.start.docIdx || (p.docIdx === initial.start.docIdx && p.col < initial.start.col);
-				if (s.selGranularity === "word") {
-					const plain = stripAnsi(this.selLineText(p.scope, p.docIdx));
-					const r = wordRangeAt(plain, p.col) ?? { start: p.col, end: p.col };
-					s.mselAnchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
-					s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? r.start : r.end };
-				} else {
-					const lineEnd = visibleWidth(stripAnsi(this.selLineText(p.scope, p.docIdx)));
-					s.mselAnchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
-					s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? 0 : lineEnd };
-				}
+			this.extendSelection(e.x, e.y);
+			// 拖选自动滚（T9——kimi updateSelectionAutoScroll :1259-1285）：压到所在窗口上/下边缘
+			// → 50ms 一格滚 + 指针重映射续选；方向必落 state（脉冲从 state 读——两字段号相反见 pulse）
+			s.dragPointer = { x: e.x, y: e.y };
+			const dir = this.autoScrollDirFor(e.y);
+			if (dir === 0) {
+				this.stopAutoScroll();
 			} else {
-				s.mselFocus = p;
+				s.autoScrollDir = dir;
+				if (s.autoScrollTimer === undefined) {
+					s.autoScrollTimer = setInterval(() => this.autoScrollPulse(), 50); // 设计空白 12
+					s.autoScrollTimer.unref?.();
+				}
 			}
 		} else if (e.kind === "release") {
+			this.stopAutoScroll(); // 松手即停（kimi :1322 同位）
 			// 链接打开（T7——kimi :1330-1336 次序）：未拖动（pressedUrl 未被 drag 作废）且同点才打开
 			const pu = s.pressedUrl;
 			if (pu !== undefined && pu.x === e.x && pu.y === e.y) void this.openLink(pu.url);
@@ -1026,6 +1030,99 @@ export class FullApp {
 			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
 		}
 		this.scheduler.requestImmediateRender();
+	}
+
+	/** 扩选到指针点（T9 提取——drag 分支与自动滚脉冲共用）：越界按 scope 钳边界（clampedSelPoint）
+	 *  + 粒度感知（T6 逻辑原样：词/行粒度 focus 对齐区间、反侧锚点切换）。 */
+	private extendSelection(x: number, y: number): void {
+		const s = this.state;
+		const p = this.clampedSelPoint(x, y);
+		if (p === undefined) return;
+		const initial = s.selInitialRange;
+		if (s.selGranularity !== "character" && initial !== undefined) {
+			const before = p.docIdx < initial.start.docIdx || (p.docIdx === initial.start.docIdx && p.col < initial.start.col);
+			const anchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
+			if (s.selGranularity === "word") {
+				const plain = stripAnsi(this.selLineText(p.scope, p.docIdx));
+				const r = wordRangeAt(plain, p.col) ?? { start: p.col, end: p.col };
+				s.mselAnchor = anchor;
+				s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? r.start : r.end };
+			} else {
+				const lineEnd = visibleWidth(stripAnsi(this.selLineText(p.scope, p.docIdx)));
+				s.mselAnchor = anchor;
+				s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? 0 : lineEnd };
+			}
+		} else {
+			s.mselFocus = p;
+		}
+	}
+
+	/** 自动滚方向判定（T9）：按选区 scope 的窗口界——压上边缘 -1 / 压下边缘 +1 / 界内 0。 */
+	private autoScrollDirFor(y: number): -1 | 0 | 1 {
+		if (this.state.mselAnchor?.scope === "view") {
+			const pu = this.pendingUi;
+			if (pu?.kind === "view") {
+				const geo = this.viewGeo(pu.layout);
+				if (y <= geo.row + 1) return -1; // 内容区顶（顶框让 1 行）
+				if (y >= geo.row + geo.height - 2) return 1; // 内容区底（提示行/底框让位）
+				return 0;
+			}
+			return 0;
+		}
+		const { streamH } = this.layoutFrame();
+		if (y <= 0) return -1;
+		if (y >= streamH - 1) return 1;
+		return 0;
+	}
+
+	/** 自动滚脉冲（T9——kimi autoScrollSelection :1287-1303）：每 tick 滚 1 行、滚到头自停、
+	 *  滚完指针重映射续选（内容滚过指针 = 选区吃进滚过的行）。方向号按 scope：主窗 scrollBack -= dir
+	 *  （压底 = 向新 = scrollBack 减）、查看窗 pu.scroll += dir——两字段号相反，统一 += 必有一窗反向。 */
+	private autoScrollPulse(): void {
+		const s = this.state;
+		const { dragPointer, autoScrollDir } = s;
+		if (dragPointer === undefined || autoScrollDir === 0) {
+			this.stopAutoScroll();
+			return;
+		}
+		if (s.mselAnchor?.scope === "view") {
+			const pu = this.pendingUi;
+			if (pu?.kind !== "view") {
+				this.stopAutoScroll();
+				return;
+			}
+			const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+			const maxScroll = Math.max(0, pu.lines.length - page);
+			if (pu.pinned === true) { pu.scroll = maxScroll; pu.pinned = false; } // 脱钉再滚（与滚轮/翻页键三处同款）
+			const before = pu.scroll;
+			pu.scroll = Math.max(0, Math.min(maxScroll, pu.scroll + autoScrollDir));
+			if (pu.scroll === before) {
+				this.stopAutoScroll();
+				return;
+			}
+		} else {
+			const { streamH, doc } = this.layoutFrame();
+			const maxScroll = Math.max(0, doc.length - streamH);
+			const before = s.scrollBack;
+			s.scrollBack = Math.max(0, Math.min(maxScroll, s.scrollBack - autoScrollDir));
+			if (s.scrollBack === before) {
+				this.stopAutoScroll();
+				return;
+			}
+		}
+		this.extendSelection(dragPointer.x, dragPointer.y); // 指针重映射：start 变了映射点随行
+		this.scheduler.requestImmediateRender();
+	}
+
+	/** 停自动滚（T9）：松开/回界内/滚到头/窗关闭四路共用。 */
+	private stopAutoScroll(): void {
+		const s = this.state;
+		if (s.autoScrollTimer !== undefined) {
+			clearInterval(s.autoScrollTimer);
+			s.autoScrollTimer = undefined;
+		}
+		s.autoScrollDir = 0;
+		s.dragPointer = undefined;
 	}
 
 	/** 拖动点钳制（T8）：按当前选区 scope 钳在对应窗口边界——view 钳查看窗盒、main 钳主流区。 */
@@ -1139,12 +1236,14 @@ export class FullApp {
 	}
 
 	/** 选区一致性守卫（T8）：scope=view 的选区只在查看窗在位时有效——窗关闭首帧即整组清空
-	 *  （防行索引残留误映射下一窗内容）。 */
+	 *  （防行索引残留误映射下一窗内容）；并同步停自动滚（T9——否则拖着选区关窗后 50ms 脉冲
+	 *  继续跑、按主窗几何对空气重映射）。 */
 	private selectionGuard(): void {
 		const s = this.state;
 		if ((s.mselAnchor?.scope ?? s.mselFocus?.scope) === "view" && this.pendingUi?.kind !== "view") {
 			s.mselAnchor = undefined;
 			s.mselFocus = undefined;
+			this.stopAutoScroll();
 		}
 	}
 
