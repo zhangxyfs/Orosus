@@ -65,7 +65,10 @@ describe("主窗口子代理状态行 T10（拍板要素：首行+子行、完�
     expect(flash.length).toBe(1); // 5 秒前结束——还在闪
     const gone = subagentStatusLines([T({ status: "completed", endedAt: "2026-09-26T11:59:00Z" })], NOW);
     expect(gone).toEqual([]); // 60 秒前——已消失
-    expect(subagentStatusLi
+    expect(subagentStatusLines([], NOW)).toEqual([]); // 空态整段消失
+  });
+});
+
 describe("输入行计数 T13（只后台运行中；为零整段消失；青绿色）", () => {
   it("㊽ backgroundRunningCount 口径：只数后台·运行中——前台/排队/已结束都不算", () => {
     expect(backgroundRunningCount([
