@@ -41,6 +41,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
+import { agentEventsFromFile, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
 import { subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -827,6 +828,11 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           }
           return "again";
         }
+        // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答
+        if (text === "/tasks") {
+          await openTasks(activeApp, out);
+          return "again";
+        }
         // 图片收集（2026-09-23 走查拍板）：全屏 = 文内 [image #N] token（extractImageRefs 剥除后进正文），
         // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
         const imgRefs = extractImageRefs(text);
@@ -1072,6 +1078,43 @@ const runtimeStatusText = (): string => {
 };
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
+/** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
+ *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。 */
+const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Promise<void> => {
+	const entries = h.subagents();
+	if (entries.length === 0) {
+		notify("当前没有在册子代理——派活后可用 /tasks 查看进度与结论");
+		return;
+	}
+	const rows = tasksListRows(entries);
+	let idx: number;
+	if (app !== undefined) {
+		const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
+		if (picked === undefined) return; // Esc
+		idx = picked;
+	} else {
+		const picked = await commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
+		idx = rows.indexOf(picked);
+		if (idx < 0) return;
+	}
+	const entry = entries[idx]!;
+	// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）
+	if (entry.pendingApproval !== undefined) {
+		const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
+		const allow = ans === "批准一次";
+		h.answerSubagentApproval(entry.id, allow);
+		notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
+		return;
+	}
+	// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）
+	const live = entry.status === "queued" || entry.status === "running"
+		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id))
+		: undefined;
+	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id));
+	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, ...(live !== undefined ? [{ live }] : []));
+	else out(body);
+};
+
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
 	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
@@ -1249,6 +1292,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{
 		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。",
 	},
+	{ name: "/tasks", desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）
