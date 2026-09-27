@@ -90,7 +90,7 @@ describe("/tasks 空态（2026-09-27 用户拍板：无条件开列表）", () =
     expect(row).toContain("暂无在册子代理");
     expect(row).toContain("派个子代理去");
     expect(row).toContain("自动送回");
-    expect(row.startsWith(theme.dim("（暂无"))).toBe(true); // 弱化（dim）形态
+    expect(row).toContain("[2m"); // 弱化（dim）形态——整行置灰非彩色
     expect(taskIdOfRow(row)).toBeUndefined(); // 不是任务行——选中也不进查看窗
   });
 });
