@@ -38,6 +38,7 @@ const KEY_TABLE: Record<string, string> = {
 	"\x05": "ctrl+e",
 	"\x0b": "ctrl+k",
 	"\x0e": "ctrl+n", // M4-3 T1d 引导弹窗「下一步/完成」（SW-22 统一语义）
+	"\x0f": "ctrl+o", // 压缩摘要查看口（2026-09-27 修复：onKey 侧 4cfdf1e 早已登记、字节映射漏入表——全屏模式 Ctrl+O 出生即静默失效）
 	"\x11": "ctrl+q", // M4-3 T1d 引导弹窗退出（仅第 1 页可用——/quit 同款）
 	"\x14": "ctrl+t",
 	"\x15": "ctrl+u",

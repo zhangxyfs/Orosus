@@ -1477,7 +1477,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         app.showToast("本会话还没有压缩摘要（/compact 后可看）");
         return;
       }
-      app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n")); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
+      // 全屏窗形态（2026-09-27 用户拍板：参照子代理查看窗）；摘要静态文档自顶读——不贴底（bottom 是 live 跟随用的）
+      app.viewText("压缩摘要", String(last.summary).split("\n").map((l) => theme.fg("muted", l)).join("\n"), { layout: "full" }); // 逐行包灰（viewText 按 split("\n") 渲染——整段包一次会在行间丢色）
     },
     // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
     // T4 联动启停：硬依赖传递闭包——卸载带走依赖者、挂载自动补上提供者；撞锁定拒绝整次（S1）

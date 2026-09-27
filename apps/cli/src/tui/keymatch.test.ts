@@ -13,6 +13,7 @@ describe("按键匹配表（TUI 批阶段三 F0——T0 解析器的 shift 修�
 		expect(matchKey("\r")).toBe("enter");
 		expect(matchKey("\x01")).toBe("ctrl+a");
 		expect(matchKey("\x0e")).toBe("ctrl+n"); // M4-3 T1d 引导「下一步/完成」
+		expect(matchKey("\x0f")).toBe("ctrl+o"); // 2026-09-27 修复回归钉：压缩摘要查看口字节映射曾漏表——全屏 Ctrl+O 出生即静默失效
 		expect(matchKey("\x11")).toBe("ctrl+q"); // M4-3 T1d 引导退出（仅第 1 页）
 	});
 	it("② 可打印判定：普通字符/CJK 可打印，控制码与转义序列不可打印", () => {
