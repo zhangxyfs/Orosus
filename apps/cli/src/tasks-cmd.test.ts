@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
-import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 let dir: string | undefined;
@@ -120,6 +120,67 @@ describe("查看窗折行宽度（2026-09-27 拍板：折行跟全窗口大小�
 		const textLines = (ls: string[]): number => ls.filter((l) => stripAnsi(l).includes("任务书文本")).length;
 		expect(textLines(narrow)).toBeGreaterThan(textLines(wide)); // 窄宽折更多
 		expect(narrow.every((l) => l === "" || visibleWidth(l) <= 44)).toBe(true); // 窄宽不超框（40 + 头行前缀容差）
+	});
+});
+
+describe("历史子代理名册（2026-09-27 拍板：不删旧数据就得能查看——盘上重建 + 最新在最上）", () => {
+	it("㊺f 从 agents/ 目录重建：状态按 turn/end 推断、轮数/工具数/词元/起止时间齐、简述/后台/工种从主会话 spawn 调用回查、孙代带 parentId", () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-hist-"));
+		const sid = "s_main01";
+		const mkAgent = (id: string, parentSession: string | null, endKind: string, steps: number): void => {
+			mkdirSync(join(dir!, "sessions", sid, "agents", `agents_${id}`, "agents"), { recursive: true });
+			const evs = [
+				{ v: 1, id: "e1", ts: "2026-09-27T10:00:00.000Z", type: "session/header", parentSession },
+				{ v: 1, id: "e2", ts: "2026-09-27T10:00:01.000Z", type: "user/message", content: [{ kind: "text", text: "任务" }] },
+				...Array.from({ length: steps }, (_, i) => ({ v: 1, id: `s${i}`, ts: `2026-09-27T10:00:0${2 + i}.000Z`, type: "turn/step" })),
+				{ v: 1, id: "e3", ts: "2026-09-27T10:00:30.000Z", type: "tool/call", callId: "t1", name: "tool-fs__read", args: {} },
+				{ v: 1, id: "e4", ts: "2026-09-27T10:01:00.000Z", type: "assistant/message", content: [{ kind: "text", text: "结论" }], usage: { input: 100, output: 50 } },
+				{ v: 1, id: "e5", ts: "2026-09-27T10:01:01.000Z", type: "turn/end", kind: endKind },
+			];
+			writeFileSync(join(dir!, "sessions", sid, "agents", `agents_${id}`, "agents", "session.jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		};
+		mkAgent("aaaa0001", null, "completed", 3);
+		mkAgent("bbbb0002", null, "interrupted", 2);
+		mkAgent("cccc0003", "agents_aaaa0001", "completed", 1);
+		// 主会话：spawn 调用 + 结果（前台结论含 id / 后台入册含 id 两形态）
+		const main = [
+			{ v: 1, id: "m1", ts: "t0", type: "tool/call", callId: "c1", name: "tool-subagent__spawn", args: { description: "调研竞品", role: "research" } },
+			{ v: 1, id: "m2", ts: "t0", type: "tool/result", callId: "c1", output: "子代理完成（1/1）：\n- aaaa0001 · 完成 · 3 轮\n结论：好" },
+			{ v: 1, id: "m3", ts: "t0", type: "tool/call", callId: "c2", name: "tool-subagent__spawn", args: { description: "后台跑测", background: true } },
+			{ v: 1, id: "m4", ts: "t0", type: "tool/result", callId: "c2", output: "后台已入册（1 个，跑完自动送回）：bbbb0002" },
+		];
+		mkdirSync(join(dir!, "sessions", sid, "agents"), { recursive: true });
+		writeFileSync(join(dir!, "sessions", sid, "agents", "session.jsonl"), main.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		const hist = loadHistoricalSubagents(join(dir, "sessions"), sid);
+		expect(hist.length).toBe(3);
+		const a = hist.find((e) => e.id === "aaaa0001")!;
+		expect(a.status).toBe("completed");
+		expect(a.turns).toBe(3);
+		expect(a.toolCalls).toBe(1);
+		expect(a.usage).toEqual({ input: 100, output: 50 });
+		expect(a.label).toBe("调研竞品");
+		expect(a.roleName).toBe("research");
+		expect(a.depth).toBe(1);
+		expect(a.endedAt).toBe("2026-09-27T10:01:01.000Z");
+		const b = hist.find((e) => e.id === "bbbb0002")!;
+		expect(b.status).toBe("failed"); // interrupted → 失败（历史推断口径）
+		expect(b.background).toBe(true);
+		expect(b.label).toBe("后台跑测");
+		const c = hist.find((e) => e.id === "cccc0003")!;
+		expect(c.depth).toBe(2);
+		expect(c.parentId).toBe("aaaa0001");
+	});
+
+	it("㊺g 排序最新在最上 + 查看窗可进（历史条目喂 renderAgentView 走同一渲染）", () => {
+		const entries = sortNewestFirst([
+			T({ id: "aaaa0001", label: "旧的", enqueuedAt: "2026-09-27T10:00:00Z", startedAt: "2026-09-27T10:00:01Z" }),
+			T({ id: "bbbb0002", label: "新的", enqueuedAt: "2026-09-27T11:00:00Z", startedAt: "2026-09-27T11:00:01Z" }),
+			T({ id: "cccc0003", label: "最新的", enqueuedAt: "2026-09-27T12:00:00Z", startedAt: "2026-09-27T12:00:01Z" }),
+		]);
+		expect(entries.map((e) => e.id)).toEqual(["cccc0003", "bbbb0002", "aaaa0001"]); // 最新在最上（用户拍板）
+		// 历史条目（含 endedAt 的终态）进查看窗：顶栏照常渲染
+		const view = renderAgentView(T({ id: "dddd0004", status: "completed", endedAt: "2026-09-27T12:30:00Z" }), [{ type: "user/message", content: [{ kind: "text", text: "历史任务" }] }]);
+		expect(stripAnsi(view).split("\n")[0]).toContain("完成");
 	});
 });
 

@@ -42,7 +42,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -1099,7 +1099,12 @@ const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-w
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
  *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。 */
 const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Promise<void> => {
-	const entries = h.subagents();
+	// 名册合并（2026-09-27 拍板：不删旧数据就得能查看）：活名册（本进程）∪ 盘上历史（agents/ 目录重建，
+	// 简述/后台/工种从主会话 spawn 调用回查），按 id 去重——活名册优先（状态新鲜带 truncated）；
+	// 排序最新在最上（用户拍板：第一页永远是最新，上一轮对话的派单自然沉为历史）
+	const live = h.subagents();
+	const liveIds = new Set(live.map((e) => e.id));
+	const entries = sortNewestFirst([...live, ...loadHistoricalSubagents(sessionsDir, h.sessionId).filter((e) => !liveIds.has(e.id))]);
 	// 空册也开列表（用户拍板 2026-09-27：/tasks 无条件开）——占位行说明派活方式，回车无事发生
 	const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
 	let idx: number;
@@ -1125,11 +1130,11 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 	// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
 	// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
 	const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
-	const live = entry.status === "queued" || entry.status === "running"
+	const liveView = entry.status === "queued" || entry.status === "running"
 		? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW())
 		: undefined;
 	const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW());
-	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(live !== undefined ? { live } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
+	if (app !== undefined) app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(liveView !== undefined ? { live: liveView } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
 	else out(body);
 };
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
@@ -90,4 +90,111 @@ export function renderAgentView(entry: SubagentRosterEntry, events: readonly { t
     (entry.error !== undefined ? ` · ${(entry.error.split("\n")[0] ?? "").slice(0, 60)}` : "");
   const head = theme.fg(STATUS_COLOR[entry.status], `状态：${stat}${entry.roleName !== undefined ? ` · 工种 ${entry.roleName}` : ""}${entry.background ? " · 后台" : ""}`);
   return [head, ...dm.frameLines(width)].join("\n");
+}
+
+/**
+ * 历史子代理名册（2026-09-27 用户拍板：不删旧数据就得能查看——/tasks 列出盘上历史，最新在最上）。
+ * 从主会话文件夹的 agents/ 目录重建：状态/轮数/工具调用/词元/起止时间取自各子代理会话文件；
+ * 简述/后台/工种取自主会话文件里 spawn 工具调用的参数（callId 配对结果文本中的 8 位编号）。
+ * 一期口径注记：状态按最后 turn/end 推断（completed→已完成，其余→失败）——截断收尾（撞限/超时）
+ * 在旧文件里同为 interrupted，归入失败；新单子由活名册展示（带 truncated 标注），不在此纠偏。
+ */
+export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): SubagentRosterEntry[] {
+  const agentsDir = join(sessionsDir, mainSid, "agents");
+  let dirs: string[];
+  try {
+    dirs = readdirSync(agentsDir).filter((d) => /^agents_[0-9a-f]{8}$/.test(d));
+  } catch {
+    return [];
+  }
+  const meta = spawnMetaFromMainSession(sessionsDir, mainSid);
+  const out: SubagentRosterEntry[] = [];
+  for (const d of dirs) {
+    const id = d.slice("agents_".length);
+    let events: { type: string; ts?: string; [k: string]: unknown }[];
+    try {
+      events = readFileSync(join(agentsDir, d, "agents", "session.jsonl"), "utf8")
+        .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as { type: string; ts?: string });
+    } catch {
+      continue;
+    }
+    if (events.length === 0) continue;
+    const header = events[0] as { parentSession?: string };
+    const steps = events.filter((e) => e.type === "turn/step").length;
+    const toolCalls = events.filter((e) => e.type === "tool/call").length;
+    const lastEnd = [...events].reverse().find((e) => e.type === "turn/end") as { kind?: string } | undefined;
+    const status: SubagentRosterEntry["status"] = lastEnd?.kind === "completed" ? "completed" : "failed";
+    const usage = events.reduce(
+      (acc, e) => {
+        const u = (e as { usage?: { input?: number; output?: number } }).usage;
+        return u === undefined ? acc : { input: acc.input + (u.input ?? 0), output: acc.output + (u.output ?? 0) };
+      },
+      { input: 0, output: 0 },
+    );
+    const parent = typeof header.parentSession === "string" && header.parentSession.startsWith("agents_")
+      ? header.parentSession.slice("agents_".length) : undefined;
+    const m = meta.get(id);
+    out.push({
+      id,
+      depth: parent !== undefined ? 2 : 1,
+      ...(parent !== undefined ? { parentId: parent } : {}),
+      label: m?.label ?? "（历史任务）",
+      status,
+      background: m?.background ?? false,
+      ...(m?.roleName !== undefined ? { roleName: m.roleName } : {}),
+      turns: steps,
+      ...(toolCalls > 0 ? { toolCalls } : {}),
+      ...(usage.input + usage.output > 0 ? { usage } : {}),
+      enqueuedAt: events[0]?.ts ?? "",
+      ...(events[events.length - 1]?.ts !== undefined ? { endedAt: events[events.length - 1]!.ts } : {}),
+    });
+  }
+  return out;
+}
+
+/** 主会话文件 → spawn 调用元数据（id → 简述/后台/工种）：call 事件记参数、result 事件按 callId 配对，
+ *  结果文本里抠 8 位编号（前台「- <id> · …」/后台「…：<id>、<id>」两形态都覆盖）。 */
+function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<string, { label: string; background: boolean; roleName?: string }> {
+  let raw: string;
+  try {
+    raw = readFileSync(join(sessionsDir, mainSid, "agents", "session.jsonl"), "utf8");
+  } catch {
+    return new Map();
+  }
+  const calls = new Map<string, { description?: string; background?: boolean; role?: string }>();
+  const out = new Map<string, { label: string; background: boolean; roleName?: string }>();
+  for (const l of raw.split("\n")) {
+    if (l.trim() === "") continue;
+    let e: { type?: string; callId?: string; name?: string; args?: Record<string, unknown>; output?: string };
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (e.type === "tool/call" && e.name === "tool-subagent__spawn" && typeof e.callId === "string") {
+      const desc = typeof e.args?.description === "string" ? (e.args.description as string) : undefined;
+      const role = typeof e.args?.role === "string" ? (e.args.role as string) : undefined;
+      calls.set(e.callId, {
+        ...(desc !== undefined ? { description: desc } : {}),
+        background: e.args?.background === true,
+        ...(role !== undefined ? { role } : {}),
+      });
+    } else if (e.type === "tool/result" && typeof e.callId === "string" && calls.has(e.callId)) {
+      const c = calls.get(e.callId)!;
+      for (const id of String(e.output ?? "").matchAll(/[0-9a-f]{8}/g)) {
+        out.set(id[0]!, { label: c.description ?? "（历史任务）", background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
+      }
+    }
+  }
+  return out;
+}
+
+/** /tasks 列表排序（2026-09-27 拍板：最新在最上、第一页永远是最新）：按开跑/入队时间倒序，
+ *  活名册与历史名册合并后统一排；孙代理不参与顶层排序（渲染时紧跟父行——决策 21 分组保持）。 */
+export function sortNewestFirst(entries: readonly SubagentRosterEntry[]): SubagentRosterEntry[] {
+  const t = (e: SubagentRosterEntry): number => {
+    const v = Date.parse(e.startedAt ?? e.enqueuedAt);
+    return Number.isNaN(v) ? 0 : v;
+  };
+  return [...entries].sort((a, b) => t(b) - t(a));
 }
