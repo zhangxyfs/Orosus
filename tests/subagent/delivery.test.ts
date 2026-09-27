@@ -84,12 +84,14 @@ describe("后台结论送回 T9（决策 17：followUp 缝 + 忙时排队 + 自�
     await waitUntil(() => s.h.subagents().find((a) => a.id === t)?.status === "completed");
     await waitUntil(async () => (await eventsOf(s.h)).some((e) => e.type === "assistant/message"), 5000);
     const evts = await eventsOf(s.h);
-    const steer = evts.find((e) => e.type === "agent/steering-message") as { messages?: { text?: string; sourceModule?: string }[] } | undefined;
-    expect(steer).toBeDefined();
-    const line = steer!.messages![0]!;
-    expect(line.text).toContain("[非用户输入]");
-    expect(line.text).toContain("闲时调研 完成：后台的结论是好的");
-    expect(line.sourceModule).toBe("tool-subagent");
+    // m4-6 T7 后会话首条 steering 是日期系统行（host 源）——送回行按内容找（sourceModule = tool-subagent）
+    const steerLines = evts.filter((e) => e.type === "agent/steering-message")
+      .flatMap((e) => ((e as { messages?: { text?: string; sourceModule?: string }[] }).messages ?? []));
+    const line = steerLines.find((m) => (m.text ?? "").includes("闲时调研"));
+    expect(line).toBeDefined();
+    expect(line!.text).toContain("[非用户输入]");
+    expect(line!.text).toContain("闲时调研 完成：后台的结论是好的");
+    expect(line!.sourceModule).toBe("tool-subagent");
     expect(evts.some((e) => e.type === "user/message")).toBe(false); // 送回轮不落用户消息
     const final = evts.filter((e) => e.type === "assistant/message").at(-1) as { content?: { kind: string; text: string }[] };
     expect(final.content!.some((p) => p.text.includes("收到结论"))).toBe(true);
@@ -105,13 +107,15 @@ describe("后台结论送回 T9（决策 17：followUp 缝 + 忙时排队 + 自�
     await waitUntil(() => s.h.subagents().find((a) => a.id === t)?.status === "completed");
     await new Promise((r) => setTimeout(r, 100)); // 送回落积压（主 turn 在跑——不自动开轮）
     const evtsBusy = await eventsOf(s.h);
-    expect(evtsBusy.some((e) => e.type === "agent/steering-message")).toBe(false); // 排队中未注入
+    expect(evtsBusy.some((e) => e.type === "agent/steering-message" && JSON.stringify(e).includes("忙时调研"))).toBe(false); // 排队中未注入（m4-6 T7 后首轮有日期系统行——不断言零 steering）
     s.releaseHang();
     await promptP;
     const evts = await eventsOf(s.h);
-    const steer = evts.find((e) => e.type === "agent/steering-message") as { messages?: { text?: string }[] } | undefined;
-    expect(steer).toBeDefined();
-    expect(steer!.messages![0]!.text).toContain("忙时调研 完成：后台结论");
+    const steerLine = evts.filter((e) => e.type === "agent/steering-message")
+      .flatMap((e) => ((e as { messages?: { text?: string }[] }).messages ?? []))
+      .find((m) => (m.text ?? "").includes("忙时调研"));
+    expect(steerLine).toBeDefined();
+    expect(steerLine!.text).toContain("忙时调研 完成：后台结论");
     const final = evts.filter((e) => e.type === "assistant/message").at(-1) as { content?: { kind: string; text: string }[] };
     expect(final.content!.some((p) => p.text.includes("忙时也收到"))).toBe(true);
     await s.h.close();
@@ -124,9 +128,11 @@ describe("后台结论送回 T9（决策 17：followUp 缝 + 忙时排队 + 自�
       text("送回轮接话"),
     ]);
     await s.port.spawn({ label: "失败单", prompt: "干", background: true });
-    await waitUntil(async () => (await eventsOf(s.h)).some((e) => e.type === "agent/steering-message"), 5000);
-    const steer = (await eventsOf(s.h)).find((e) => e.type === "agent/steering-message") as { messages?: { text?: string }[] };
-    expect(steer.messages![0]!.text).toContain("失败单 失败：端点炸了");
+    await waitUntil(async () => (await eventsOf(s.h)).some((e) => e.type === "agent/steering-message" && JSON.stringify(e).includes("失败单")), 5000);
+    const steerLine = (await eventsOf(s.h)).filter((e) => e.type === "agent/steering-message")
+      .flatMap((e) => ((e as { messages?: { text?: string }[] }).messages ?? []))
+      .find((m) => (m.text ?? "").includes("失败单"));
+    expect(steerLine!.text).toContain("失败单 失败：端点炸了");
     await s.h.close();
   }, 15000);
 

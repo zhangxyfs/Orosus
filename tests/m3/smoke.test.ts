@@ -18,7 +18,7 @@ describe("M3 全链冒烟", () => {
     try {
       writeFileSync(join(dir, "config.toml"), [
         "[compaction]",
-        "thresholdTokens = 6", // turn1 est 2 不压；turn2 est 10 压（v3 无 no-space，小对话照压）；turn3 压后投影含 elision/页脚仍超 → 连环压（真实行为）
+        "thresholdTokens = 22", // m4-6 T7 后历史含日期系统行（est +16）：turn1 est 18 不压；turn2 est 26 压（v3 无 no-space，小对话照压）；turn3 压后投影含 elision/页脚仍超 → 连环压（真实行为）
         "[approval]",
         'mode = "ask-risky"',
         "",
@@ -70,8 +70,8 @@ describe("M3 全链冒烟", () => {
       // 审批放行（只读不询问、无 approval/requested）且工具真执行了
       expect(all.some((e) => e.type === "tool/result" && e.callId === "c1" && e.output === "文件内容")).toBe(true);
       expect(all.some((e) => e.type === "approval/requested")).toBe(false);
-      // 压缩落日志（v3 auto：首条 dropped = turn2 投影全部 3 条——用户消息既进摘要又留原话）；末请求（#4）末条是摘要
-      expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 3 && e.trigger === "auto")).toBe(true);
+      // 压缩落日志（v3 auto：首条 dropped = turn2 投影全部 4 条——含 m4-6 T7 日期系统行；用户消息既进摘要又留原话）；末请求（#4）末条是摘要
+      expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 4 && e.trigger === "auto")).toBe(true);
       const last = fp.requests[4]!;
       const lastMsg = last.messages[last.messages.length - 1] as { content: { text?: string }[] };
       expect(String(lastMsg.content[0]!.text)).toContain("[历史摘要]");

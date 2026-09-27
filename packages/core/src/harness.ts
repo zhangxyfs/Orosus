@@ -36,6 +36,7 @@ export interface HarnessOptions {
   modules?: ModuleDefinition[];
   builtinModules?: ModuleDefinition[];
   cwd?: string;
+  dateSource?: () => Date;                   // m4-6 T7：日期源可注入（测同日不重复/跨日再注入）；核心 Environment 节已无 date——日期走消息位系统行
   store?: SessionStore;
   sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
   sessionsRoot?: string;                    // 会话根目录（会话树批 T1）：fork 祖先链跨桶定位兜底用（locateSessionBucket 全根扫描）；#17 封闭后新链祖先恒同桶，只为存量跨桶链只读兼容；缺省 = 只走同桶快路径
@@ -427,6 +428,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     bus.on(CORE_POINTS.followUp, drain, "host");
   };
   ensureSteerHook(graph.bus);
+
+  // 日期系统行（m4-6 T7，kimi/cc/qwen 缓存友好派）：核心节去 date 后模型仍需知道今天几号——轮首比对，
+  // 首轮或跨日往宿主 steering backlog 推一行（每步首排空、先落 session 再投影——消息位不伤请求前缀缓存；
+  // host 源顺带获得压缩保留语义）。同日不重复；子代理侧不走这里（它的提示词 spawn 时自带定格 date）。
+  const dateSource = options.dateSource ?? ((): Date => new Date());
+  let lastSteeredDate: string | undefined;
+  const maybeSteerDateLine = (): void => {
+    const today = dateSource().toISOString().slice(0, 10);
+    if (today !== lastSteeredDate) {
+      lastSteeredDate = today;
+      steerBacklog.push(`[非用户输入] 系统提醒：今天是 ${today}。`);
+    }
+  };
 
   // 主对话写预约（M4.5 T7 / 决策 24②尾）：主对话自己要写文件时对子代理写报备做同样检查——
   // 不占子代理的并发位，撞了立即让那一步失败重试而不是干等。子代理转发的载荷不进此门（它的报备已占闸）。
@@ -852,6 +866,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   /** 共通 turn 驱动（M4.5 T9 从 prompt 抽出）：usage 锚点/档位捕获/事件循环同款——用户轮与送回轮共用。 */
   const driveTurn = async (controller: AbortController): Promise<SessionEvent | undefined> => {
+    maybeSteerDateLine(); // 日期系统行（m4-6 T7）：本轮首步 steering 排空时进请求
     const { stream, model } = resolveProvider();
     // 思考档位（/effort）：turn 开头一次性捕获（/model 同款——busy 期切档下一轮生效）
     const effort = await resolveEffortForWire();

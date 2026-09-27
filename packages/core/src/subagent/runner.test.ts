@@ -304,7 +304,7 @@ describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () =>
     const agentReq = lastRequests[1]!;
     const roles = agentReq.messages.map((m) => `${m.role}:${("content" in m ? (m.content as { kind?: string; text?: string }[]) : []).map((p) => p.text ?? "").join("")}`);
     expect(roles[0]).toContain("你好");
-    expect(roles[1]).toContain("主对话回复");
+    expect(roles.some((r) => r.includes("主对话回复"))).toBe(true); // m4-6 T7 后主对话历史夹着日期系统行（user 位）——按内容找
     expect(roles.at(-1)).toContain("照上面聊的做 X");
     // own 文件：header → session/fork（sourceEntryId = 分叉点）→ user/message 任务书
     const events = eventsOf(agentFile(h, out.id));

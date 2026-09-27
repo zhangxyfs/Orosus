@@ -281,10 +281,10 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
     // 确定性形态：轮询补发 nudge（fakeProvider 末段重复 text/stop 无害），每轮停顿时 collect 复查，
     // 作业 done 后下一轮必 steering——上限内必达，不再依赖单次时序
     let steering = "";
-    for (let nudge = 0; nudge < 10 && steering === ""; nudge++) {
+    for (let nudge = 0; nudge < 10 && !steering.includes("已结束"); nudge++) { // m4-6 T7 后首轮必有一条日期系统行——以「作业通知已到」为循环出口
       await h.prompt("nudge");
       steering = (await mem.all()).filter((e) => e.type === "agent/steering-message").map((e) => JSON.stringify(e)).join("\n");
-      if (steering === "") await new Promise((r) => setTimeout(r, 120)); // 每轮留一拍给作业 close——nudge 全速冲会跑在作业完成前（三诊实锤）
+      if (!steering.includes("已结束")) await new Promise((r) => setTimeout(r, 120)); // 每轮留一拍给作业 close——nudge 全速冲会跑在作业完成前（三诊实锤）
     }
     await h.close();
     const all = await mem.all();

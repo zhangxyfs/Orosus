@@ -717,9 +717,9 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
         stateModule(),
       ],
     });
-    await h.prompt("hi"); // 主循环请求 = 1 条消息，产出 usage{100,20}
+    await h.prompt("hi"); // 主循环请求 = 2 条消息（用户 hi + 日期系统行〔m4-6 T7 走 steering 注入〕），产出 usage{100,20}
     const state = JSON.parse((await h.prompt("/llm-probe__state")) as string) as { lastUsage: { totalTokens: number; atMessageCount: number } | null };
-    expect(state.lastUsage).toEqual({ totalTokens: 120, atMessageCount: 1 });
+    expect(state.lastUsage).toEqual({ totalTokens: 120, atMessageCount: 2 });
     await h.close();
   });
 
@@ -1061,6 +1061,7 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     expect(sections).toContain("## Identity");
     expect(sections).toContain("## Environment");
     expect(sections).toContain("Working directory: /test/dir");
+    expect(sections).not.toMatch(/Date: \d{4}-\d{2}-\d{2}/); // m4-6 T7：日期出核心节（走消息位系统行，见③）——段外形恒定
     expect(sections).toContain("## Tool Use");
     expect(sections).toContain("## Safety");
     expect(sections).toContain("## Output Style");
@@ -1095,6 +1096,29 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     } finally {
       rmSync(d2, { recursive: true, force: true });
     }
+  });
+
+  it("③ 日期系统行（m4-6 T7）：核心节无 Date；首轮注入一次、同日不重复、跨日再注入（可注入日期源）", async () => {
+    let fakeNow = new Date("2026-09-27T10:00:00.000Z");
+    const fake = fakeProvider([
+      [{ type: "text/delta", text: "好" }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "好" }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "好" }, { type: "finish", kind: "stop" }],
+    ]);
+    const prov: ModuleDefinition = { ...fakeModule("provider-fake"), activate: (ctx) => ctx.provide("provider:fake" as never, fake.stream) };
+    const h = await makeHarness({ modules: [prov], dateSource: () => fakeNow });
+    const sections = h.graph().promptSections();
+    expect(sections).not.toMatch(/Date: \d{4}-\d{2}-\d{2}/);
+    await h.prompt("第一句");
+    expect(JSON.stringify(fake.requests[0]!.messages)).toContain("[非用户输入] 系统提醒：今天是 2026-09-27。"); // 首轮注入
+    await h.prompt("第二句");
+    expect(JSON.stringify(fake.requests[1]!.messages).match(/系统提醒：今天是/g)?.length).toBe(1); // 同日不重复（历史仍一行）
+    fakeNow = new Date("2026-09-28T00:05:00.000Z");
+    await h.prompt("第三句");
+    const third = JSON.stringify(fake.requests[2]!.messages);
+    expect(third).toContain("系统提醒：今天是 2026-09-28。"); // 跨日再注入
+    expect(third.match(/系统提醒：今天是/g)?.length).toBe(2); // 两行并存——靠最新一行
+    await h.close();
   });
 });
 
@@ -1322,8 +1346,8 @@ describe("steer 宿主注入口（2026-09-23 消息队列批——kimi Ctrl-S �
     releaseFirst();
     await p;
     const all = await h.history();
-    const sm = all.find((e) => e.type === "agent/steering-message") as { messages?: { text: string }[] } | undefined;
-    expect(sm?.messages?.[0]?.text).toBe("补充说明"); // 先落日志（铁律）
+    const sms = all.filter((e) => e.type === "agent/steering-message") as { messages?: { text: string }[] }[];
+    expect(sms.some((e) => e.messages?.[0]?.text === "补充说明")).toBe(true); // 先落日志（铁律）——m4-6 T7 后首条 steering 是日期系统行，插话行按内容找
     expect(requests.length).toBe(2); // followUp 兜底续 turn——停止边界注入后再跑一轮
     expect(JSON.stringify(requests[1]!.messages)).toContain("补充说明"); // 投影 = user 消息进上下文
     await h.close();

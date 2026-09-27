@@ -268,10 +268,12 @@ describe("端到端十三场景 T15", () => {
       [text("后台的结论甲")],
     );
     await s.h.prompt("派后台速完");
-    await waitUntil(async () => (await histOf(s.h)).some((e) => e.type === "agent/steering-message"), 8000);
-    const steer = (await histOf(s.h)).find((e) => e.type === "agent/steering-message") as { messages?: { text?: string; sourceModule?: string }[] };
-    expect(steer.messages![0]!.text).toContain("[非用户输入] 后台子代理 后台速完 完成：后台的结论甲");
-    expect(steer.messages![0]!.sourceModule).toBe("tool-subagent");
+    await waitUntil(async () => (await histOf(s.h)).some((e) => e.type === "agent/steering-message" && JSON.stringify(e).includes("后台速完")), 8000);
+    const line = (await histOf(s.h)).filter((e) => e.type === "agent/steering-message") // m4-6 T7 后首条 steering 是日期系统行——送回行按内容找
+      .flatMap((e) => ((e as { messages?: { text?: string; sourceModule?: string }[] }).messages ?? []))
+      .find((m) => (m.text ?? "").includes("后台速完"));
+    expect(line!.text).toContain("[非用户输入] 后台子代理 后台速完 完成：后台的结论甲");
+    expect(line!.sourceModule).toBe("tool-subagent");
     await s.h.close();
   }, 15000);
 
