@@ -331,11 +331,29 @@ describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能�
   it("③ 停用对内置技能同样适用：disabled 含 skill-creator → 清单摘除、load 拒绝、catalog 在册带标志", async () => {
     const { ctx, sections, tools, services } = fakeCtx({ ...bundledOnlyCfg(), disabled: ["skill-creator"] });
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
-    expect(sections).toHaveLength(0);
+    expect(sections[0]!.text).not.toContain("skill-creator"); // 摘除该件（其余出厂件照常在册——非单件时代不再断言整段为空）
     const r = await runLoad(tools, "skill-creator");
     expect(r.isError).toBe(true);
     expect(r.output).toContain("已停用");
     const catalog = services.get("skill.catalog") as () => Array<{ name: string; disabled: boolean }>;
     expect(catalog().find((x) => x.name === "skill-creator")!.disabled).toBe(true);
+  });
+
+  it("④ 出厂十件全量走查（T13-T21 自举验收——explore 按 T21 前置跳过：tool-subagent 内置 research 工种已覆盖其只读探索语义）：每件进清单、正文可加载非空、简单说明齐", async () => {
+    const EXPECTED = ["batch", "code-review", "commit", "doc-review", "doc-writer", "goal-draft", "research", "simplify", "skill-creator", "update-config"];
+    const { ctx, sections, tools, services } = fakeCtx(bundledOnlyCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const summary = sections[0]!.text;
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string; whenToUse?: string }>;
+    const names = catalog().map((r) => r.name);
+    for (const n of EXPECTED) {
+      expect(names).toContain(n);
+      expect(summary).toContain(n);
+      const r = await runLoad(tools, n);
+      expect(r.isError).toBe(false);
+      expect((r.output as string).trim().length).toBeGreaterThan(200); // 正文非占位
+    }
+    expect(catalog().every((r) => r.whenToUse !== undefined)).toBe(true); // 每件都写了简单说明（菜单详释第 3 行）
+    expect(names).toHaveLength(EXPECTED.length); // 无意外多余件
   });
 });
