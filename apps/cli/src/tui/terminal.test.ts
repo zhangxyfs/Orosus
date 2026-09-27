@@ -84,4 +84,16 @@ describe("终端接管层（TUI 批阶段三 F0——pi ProcessTerminal + StdinB
 		expect(keys).toEqual(["a", "b"]);
 		term.stop();
 	});
+	it("③ X10 鼠标序列原子性：\\x1b[M + 3 载荷字节到达 inputCb 时是一个 6 字节序列而非 4 个（m5 鼠标批 T0——载荷多为可打印 ASCII，切分器 3 字节即判完整会逐个漏进输入框）", () => {
+		const input = fakeInput();
+		const term = new Term({ input, output: fakeOutput() }, { escWindowMs: 5 });
+		const got: string[] = [];
+		term.onInput((s) => got.push(s));
+		term.start();
+		input.emit("data", "\x1b[M`!!"); // X10 滚轮：M 落在 CSI 终字节区间，不带特判会切成 "\x1b[M" + "`" + "!" + "!"
+		expect(got).toEqual(["\x1b[M`!!"]);
+		input.emit("data", "\x1b[M  !"); // 载荷含空格（X10 左键按下：button 0x20、坐标 0x20/0x21）也不散
+		expect(got).toEqual(["\x1b[M`!!", "\x1b[M  !"]);
+		term.stop();
+	});
 });

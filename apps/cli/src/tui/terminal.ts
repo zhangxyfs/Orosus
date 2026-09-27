@@ -22,6 +22,10 @@ function isCompleteSequence(data: string): "complete" | "incomplete" {
 	if (after.startsWith("[")) {
 		// CSI：终字节 0x40–0x7E
 		if (data.length < 3) return "incomplete";
+		// X10 鼠标特判（m5 鼠标批 T0）：\x1b[M 的 M 落在 CSI 终字节区间，不带此判 3 字节即「完整」
+		// 交付、随后的 3 个载荷字节（多为可打印 ASCII）逐个以「可打印字符」漏进输入框——
+		// 凑满 6 字节即完整（载荷字节不必是终字节区间，走 CSI 终判恒 incomplete 挂死）
+		if (data.startsWith("\x1b[M")) return data.length >= 6 ? "complete" : "incomplete";
 		const c = data.charCodeAt(data.length - 1);
 		return c >= 0x40 && c <= 0x7e ? "complete" : "incomplete";
 	}
