@@ -28,8 +28,8 @@ export function buildCorePromptSections(env: PromptEnv): string[] {
 }
 
 /** AGENTS.md 发现（kimi 同款，调研底稿 §1.4）：project <cwd>/.orosus/AGENTS.md 优先 → 用户 ~/.orosus/AGENTS.md。
- *  32KB 截断上限（kimi 推荐值）；空文件/不存在 → undefined。 */
-function readAgentsMd(cwd: string): { text: string; source: string } | undefined {
+ *  32KB 截断上限（kimi 推荐值）；空文件/不存在 → undefined。M4-6 T2 起导出——子代理提示词用同一份规约（圈地纪律：主体只加接口）。 */
+export function readAgentsMd(cwd: string): { text: string; source: string } | undefined {
   const candidates: [string, string][] = [
     [join(cwd, ".orosus", "AGENTS.md"), "project"],
     [join(orosusHome(), "AGENTS.md"), "user"],
