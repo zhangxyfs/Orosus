@@ -220,9 +220,11 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
 
     promptSections() {
       const all = [...act.promptSections].sort((a, b) => a.order - b.order);
-      // 核心五节永远最前（概念 order -100——直接拼接，不入模块段列表）；AGENTS.md 拼尾（等价 order 30）。
-      // 不变式：全部模块 promptSection order < 30（skill=0/todo=10/mcp=20）；未来模块 ≥40 会插到 AGENTS.md
-      // 之前与分配表矛盾——届时须改为真 promptSection 注入（order 30），此处留注记不预做（M4-2 T12）。
+      // 分带表（m4-6 T8 成文，developers.md 同步）：
+      //   ≤ −100 核心保留区（harness 身份段——activate 侧激活期降级硬守卫）
+      //   0-29    模块引导带（现役：0 skill / 10 todo / 20 mcp / 21 tool-search / 22 tool-goal / 23 tool-web）
+      //   30      AGENTS.md 拼尾（等价 order 30，不入模块段列表）
+      //   ≥ 40    预留工具带（未启用——启用前须改真 promptSection 注入；越出 0-29 注册会落越带告警，单段 32KB/全局 64KB 超限激活期降级）
       const cwd = input.cwd ?? process.cwd();
       const core = buildCorePromptSections({ cwd, platform: process.platform });
       const agentsMd = readAgentsMd(cwd);

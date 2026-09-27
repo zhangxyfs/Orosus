@@ -435,6 +435,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         for (const s of stage.promptSections) {
           if (s.order <= -100) throw new Error(`promptSection order ${s.order} 侵入核心保留区（≤ -100 为 harness 身份段，§6.5）`);
           if (s.text.length > PROMPT_SECTION_LIMIT) throw new Error(`promptSection 单段超预算 32KB（§6.5）`);
+          if (s.order >= 30) klog.warn("kernel.promptsection.band", `promptSection order ${s.order} 越出模块引导带（0-29；30 = AGENTS.md 拼尾、≥40 预留带未启用）——防撞带告警不拦截（m4-6 T8）`, { module: def.name });
           const total = committedSections.reduce((n, x) => n + x.text.length, 0) + s.text.length;
           if (total > PROMPT_TOTAL_LIMIT) throw new Error(`promptSection 全局超预算 64KB（§6.5）`);
           // 不用 { ...s } 展开——会拍平 getter 成快照字符串；经 getter 透传保持惰性读取

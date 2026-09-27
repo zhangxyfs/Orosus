@@ -73,7 +73,7 @@ export default defineModule({
 
 ## 贡献点与拦截点
 
-- 贡献点：`tool` / `command`（`/<module>__<cmd>`）/ `promptSection`（order ≤ -100 为核心保留区）/ `configOverlay`（读侧，D2）
+- 贡献点：`tool` / `command`（`/<module>__<cmd>`）/ `promptSection` / `configOverlay`（读侧，D2）。promptSection 分带（m4-6 T8 成文）：≤ −100 核心保留区（激活期降级）；**0-29 模块引导带**（现役 0 skill / 10 todo / 20 mcp / 21 tool-search / 22 tool-goal / 23 tool-web）；30 AGENTS.md 拼尾；≥ 40 预留带未启用——越出 0-29 注册落越带告警（不拦截），单段 32KB / 全局 64KB 超限激活期降级
 - 拦截点（§6.5 白名单 8 个）：`agent/pre-step`（emit）、`agent/transform-context`（reduce）、`agent/steering`、`agent/follow-up`（collect）、`agent/should-stop`（布尔 OR）、`tool/pre-execute`（waterfall，审批在此）、`tool/post-execute`（emit）、`ui/command`（emit）
 - 运行时清单：`harness.graph().catalogJson()`（或 CLI `--dump-modules`）
 
