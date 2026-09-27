@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSkillDisabled, toggleSkillDisabled, skillScopeLabel, skillListRow, skillDetailText, type SkillCatalogRow } from "./skill-settings.ts";
+import { readSkillDisabled, toggleSkillDisabled, skillScopeLabel, skillListRow, skillDetailText, truncateAtWord, type SkillCatalogRow } from "./skill-settings.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
 
 /** m4-7 T8/T9：技能停用配置读写（[skill] disabled 数组键）+ 列表行/详情文本纯函数（原型图 2/3）。 */
@@ -79,7 +79,7 @@ describe("技能列表行与详情文本（m4-7 T8/T9——原型图 2/3）", ()
 		expect(visibleWidth(long)).toBeLessThanOrEqual(w - 1);
 	});
 
-	it("⑥ 详情五字段竖排：名称/描述/范围/状态/文件 + 超宽折行续行缩进", () => {
+	it("⑥ 详情五字段竖排：名称/描述/范围/状态/文件；超宽不折行——词原子截断末尾加 …（2026-09-27 用户拍板）", () => {
 		const text = skillDetailText(74, row());
 		const plain = stripAnsi(text);
 		expect(plain).toContain("名称    pdf");
@@ -88,10 +88,16 @@ describe("技能列表行与详情文本（m4-7 T8/T9——原型图 2/3）", ()
 		expect(plain).toContain("状态    启用");
 		expect(plain).toContain("文件    C:\\Users\\me\\.agents\\skills\\pdf\\SKILL.md");
 		const longText = skillDetailText(74, row({ description: "超长描述内容。".repeat(30) }));
-		expect(stripAnsi(longText).split("\n").length).toBeGreaterThan(5); // 描述折出多行
-		for (const l of longText.split("\n").slice(1)) {
-			if (l.trim() === "") continue;
-			expect(visibleWidth(l)).toBeLessThanOrEqual(74); // 折行不溢出弹窗内宽
-		}
+		const ls = stripAnsi(longText).split("\n");
+		expect(ls).toHaveLength(5); // 不折行——恒五字段五行
+		const descLine = ls[1]!;
+		expect(descLine).toMatch(/…$/); // 末尾省略号
+		for (const l of longText.split("\n")) expect(visibleWidth(l)).toBeLessThanOrEqual(74); // 不溢出
+	});
+
+	it("⑦ 词原子截断：ASCII 词不劈半 + CJK 整字 + 省略号占位（m4-7 走查修断词问题）", () => {
+		expect(truncateAtWord("deployment batching 详解", 14)).toBe("deployment…");
+		expect(truncateAtWord("超长的中文描述内容在这里", 10)).toBe("超长的中…"); // 预算 9 列 = 4 个 CJK + …
+		expect(truncateAtWord("short", 10)).toBe("short"); // 不超宽原样
 	});
 });

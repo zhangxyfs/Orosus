@@ -99,59 +99,50 @@ export function skillScopeLabel(layer: SkillCatalogRow["layer"]): string {
   return "内置（出厂自带）";
 }
 
-/** 列表页行（原型图 2）：三列——名（左）/描述首行截断（中）/状态（右，「停用」灰、「启用」常规色）。
- *  w = 弹窗内宽（全宽 pickOverlay：终端列数 − 2）；行显示宽 = w − 1（pick 渲染再拼「 ❯ 」前缀列）。 */
+/** 词原子截断（m4-7 走查修 2026-09-27 用户拍板「显示不下就在最后 …」）：在词边界截断加省略号——
+ *  CJK 单字原子、ASCII 词/路径段整词不劈半；预算留 1 列给 …。 */
+export function truncateAtWord(text: string, w: number): string {
+  if (visibleWidth(text) <= w) return text;
+  if (w < 4) return truncateToWidth(text, w);
+  const atoms = text.match(/[A-Za-z0-9_./\\:-]+|\s|[^\sA-Za-z0-9_./\\:-]/g) ?? [];
+  let cur = "";
+  let curW = 0;
+  let last = ""; // 最后一个以非空白收尾的完整串
+  for (const a of atoms) {
+    const aw = [...a].reduce((n, ch) => n + (ch.charCodeAt(0) > 0xff ? 2 : 1), 0); // 初值 0 必带——缺省时首字符当累加器（字符串拼接，宽全乱）
+    if (curW + aw > w - 1) break;
+    cur += a;
+    curW += aw;
+    if (!/\s$/.test(cur)) last = cur; // /\s*$/ 零宽恒真——必须 /\s$/（末尾恰一个空白才排除该累积态）
+  }
+  return last === "" ? truncateToWidth(text, w) : `${last}…`;
+}
+
+/** 列表页行（原型图 2）：三列——名（左）/描述（中，词原子截断）/状态（右，「停用」灰、「启用」常规色）。
+ *  w = 宿主从 pickRowWidth() 拿的行可用宽（左栏内宽——拼行与 pick 渲染同源，防超宽推错右框）。 */
 export function skillListRow(w: number, row: SkillCatalogRow): string {
   const status = row.disabled ? fg("muted", "停用") : "启用";
   const statusW = 4; // 启用/停用两字（ANSI 不占宽）
   const nameW = Math.min(20, Math.max(8, Math.floor((w - statusW - 4) / 3)));
   const name = row.name.length > nameW ? `${row.name.slice(0, nameW - 1)}…` : row.name.padEnd(nameW);
   const descW = w - 8 - nameW; // 行首 1 + 名后 1 + 状态前 ≥1 空隙 + 状态 4 + 冗余 1——描述预算扣足保证行宽 = w−1
-  const desc = descW >= 6 ? truncateToWidth(row.description.split("\n")[0] ?? "", descW) : "";
+  const desc = descW >= 6 ? truncateAtWord(row.description.split("\n")[0] ?? "", descW) : "";
   const leftW = 1 + nameW + (desc === "" ? 0 : 1 + visibleWidth(desc));
   const gap = Math.max(1, w - 1 - leftW - statusW);
   return ` ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${status}`;
 }
 
-/** 详情页文本（原型图 3）：五字段竖排——名称/描述/范围/状态/文件；描述与文件超宽折行（纯值先折再拼标签，
- *  ANSI 标签不进宽计算）。底部键位行由 viewText keys 的 label 自动显示（Alt + K 启用或停用 · Esc 关闭=返回列表）。 */
+/** 详情页文本（原型图 3 + m4-7 走查修 2026-09-27 用户拍板）：五字段竖排——名称/描述/范围/状态/文件；
+ *  值超宽不折行、词原子截断末尾加 …（截断值是纯文本——ANSI 标签不进宽计算）。
+ *  底部键位行由 viewText keys 的 label 自动显示（Alt + K 启用或停用 · Esc 关闭=返回列表）。 */
 export function skillDetailText(w: number, row: SkillCatalogRow): string {
   const label = (s: string) => `${fg("muted", s)}    `; // 标签两字 + 4 空格（标签列 8 列，原型图 3 形态）
-  const indent = "        "; // 续行缩进（对齐标签列）
-  const field = (name: string, value: string): string[] => {
-    const segs = wrapPlain(value, w - 2 - indent.length, w - 2 - indent.length * 2);
-    return [`${label(name)}${segs[0] ?? value}`, ...segs.slice(1).map((s) => `${indent}${s}`)];
-  };
+  const field = (name: string, value: string): string => `${label(name)}${truncateAtWord(value, w - 2 - 8)}`;
   return [
-    ...field("名称", row.name),
-    ...field("描述", row.description === "" ? "（无描述）" : row.description),
-    ...field("范围", skillScopeLabel(row.layer)),
-    ...field("状态", row.disabled ? "停用" : "启用"),
-    ...field("文件", row.file),
+    field("名称", row.name),
+    field("描述", row.description === "" ? "（无描述）" : row.description),
+    field("范围", skillScopeLabel(row.layer)),
+    field("状态", row.disabled ? "停用" : "启用"),
+    field("文件", row.file),
   ].join("\n");
-}
-
-/** 纯文本折行（CJK 宽感知，词原子不劈半——mdpipe wrapText 的无 ANSI 简化版）。
- *  firstW = 首行宽、restW = 续行宽（续行缩进由调用方在宽里扣）。 */
-function wrapPlain(text: string, firstW: number, restW: number): string[] {
-  if (firstW < 4 || restW < 4) return [text];
-  const atoms = text.match(/[A-Za-z0-9_./\\:-]+|\s|[^\sA-Za-z0-9_./\\:-]/g) ?? []; // ASCII 词/路径段整词，CJK 单字原子
-  const out: string[] = [];
-  let cur = "";
-  let curW = 0;
-  let budget = firstW;
-  for (const a of atoms) {
-    const aw = [...a].reduce((n, ch) => n + (ch.charCodeAt(0) > 0xff ? 2 : 1), 0);
-    if (curW + aw > budget && cur.trim() !== "") {
-      out.push(cur);
-      cur = a.trim() === "" ? "" : a;
-      curW = cur === "" ? 0 : aw;
-      budget = restW;
-    } else {
-      cur += a;
-      curW += aw;
-    }
-  }
-  if (cur.trim() !== "" || out.length === 0) out.push(cur);
-  return out;
 }

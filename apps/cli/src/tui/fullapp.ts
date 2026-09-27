@@ -564,7 +564,7 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined }
+		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined; viewPage?: number }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
@@ -603,15 +603,19 @@ export class FullApp {
 
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 口子一）：几何走 resolvePopupLayout（缺省 center80 居中弹窗——
 	 *  五旧窗随之统一新长相）、自定义键（保留键剔除）、排队化。too-small（连保底 8×3 都装不下）不弹窗、
-	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。 */
-	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean }): void {
+	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。
+	 *  layout "dock"（m4-7 走查修，宿主内部值——模块契约 PopupLayout 不含）：贴输入框上缘 + 左栏同宽，
+	 *  内容自适应封顶可滚（渲染期 buildViewOverlay 算几何，不走 resolvePopupLayout）。 */
+	viewText(title: string, text: string, opts?: { layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean }): void {
 		const open = (): void => {
 			if (this.stopped) return;
-			const geo = this.viewGeo(opts?.layout);
-			if (geo.fallbackReason === "too-small") {
-				this.showToast("终端窗口太小，弹窗未打开");
-				this.promoteUi(); // 队列里的下一个照常提（本窗没占槽）
-				return;
+			if (opts?.layout !== "dock") { // dock 不走居中几何——too-small 检查仅对弹窗布局有意义
+				const geo = this.viewGeo(opts?.layout);
+				if (geo.fallbackReason === "too-small") {
+					this.showToast("终端窗口太小，弹窗未打开");
+					this.promoteUi(); // 队列里的下一个照常提（本窗没占槽）
+					return;
+				}
 			}
 			const keys = this.filterViewKeys(opts?.keys, opts?.owner);
 			const initLines = text.split("\n");
@@ -619,7 +623,7 @@ export class FullApp {
 			this.pendingUi = {
 				// bottom（2026-09-27 用户拍板：查看窗自动滚到底）——T1 pinned 重构：scroll 恒诚实值（0 起），
 				// 贴底走显式标志每帧渲染钳到末页；旧「哨兵大数 + 渲染钳制」形态首按 ↑ 要连按
-				// （哨兵 − 真实最大滚动）次才动（m5 鼠标批修的真 bug——滚轮/自动滚写字段前置）
+				// （哨兵 − 真实最大滚动）次才动（m5 鼠标批修的真 bug——滚轮/扫轮写字段前置）
 				kind: "view", title, text, lines: initLines,
 				scroll: 0,
 				...(opts?.bottom === true ? { pinned: true } : {}), // 初值贴底——首帧渲染钳到末页
@@ -639,8 +643,9 @@ export class FullApp {
 	}
 
 	/** view 态的窗几何（渲染与按键翻页共用一源——两处漂移即滚动越界）。 */
-	private viewGeo(layout: PopupLayout | undefined): ReturnType<typeof resolvePopupLayout> {
-		return resolvePopupLayout(this.io.columns(), this.io.rows(), layout);
+	private viewGeo(layout: PopupLayout | "dock" | undefined): ReturnType<typeof resolvePopupLayout> {
+		// dock 不走居中几何（渲染期 buildViewOverlay 另算）——viewGeo 调用方一律回 center80 缺省
+		return resolvePopupLayout(this.io.columns(), this.io.rows(), layout === "dock" ? undefined : layout);
 	}
 
 	// ---------- 控件窗（m5 T7 口子三①——数据流三路：开窗快照 / onEvent 回新清单 / update 句柄） ----------
@@ -837,6 +842,12 @@ export class FullApp {
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
 	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
+	/** pick 列表行的可用显示宽（m4-7 走查修 2026-09-27）：左栏宽 − 框 2 列 − 「 ❯ 」前缀 4 列——
+	 *  宿主拼行（如技能列表三列）按此截断，防超宽把右框 │ 推错位。侧栏随 cols 现算（与渲染同源）。 */
+	pickRowWidth(): number {
+		return Math.max(8, this.io.columns() - this.sidebarW() - 1) - 2 - 4;
+	}
+
 	pickOverlay(title: string, items: string[], selAt = 0): Promise<number | undefined> {
 		if (this.pendingUi !== undefined) {
 			return new Promise((resolve) => this.uiQueue.push({ run: () => {
@@ -965,7 +976,7 @@ export class FullApp {
 		if (this.onboarding !== undefined) return; // 引导焦点锁（同 onKey）
 		const pu = this.pendingUi;
 		if (pu?.kind === "view") {
-			const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+			const page = pu.viewPage ?? Math.max(3, this.viewGeo(pu.layout).height - 3); // viewPage = 渲染期回写（dock 与渲染同源；m4-7 走查修）
 			if (pu.pinned === true) { pu.scroll = Math.max(0, pu.lines.length - page); pu.pinned = false; } // T1 落地再滚
 			pu.scroll = Math.max(0, Math.min(Math.max(0, pu.lines.length - page), pu.scroll + (up ? -lines : lines)));
 		} else if (pu?.kind === "dialog") {
@@ -1136,7 +1147,7 @@ export class FullApp {
 				this.stopAutoScroll();
 				return;
 			}
-			const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+			const page = pu.viewPage ?? Math.max(3, this.viewGeo(pu.layout).height - 3); // viewPage = 渲染期回写（dock 与渲染同源；m4-7 走查修）
 			const maxScroll = Math.max(0, pu.lines.length - page);
 			if (pu.pinned === true) { pu.scroll = maxScroll; pu.pinned = false; } // 脱钉再滚（与滚轮/翻页键三处同款）
 			const before = pu.scroll;
@@ -1292,6 +1303,7 @@ export class FullApp {
 		const geo = this.viewGeo(pu.layout);
 		if (y < geo.row || y >= geo.row + geo.height || x < geo.col || x >= geo.col + geo.width) return undefined;
 		const page = Math.max(3, geo.height - 3);
+		pu.viewPage = page; // 渲染期回写——翻页/滚轮页大小与窗几何同源（dock 不走 viewGeo，m4-7 走查修）
 		const maxScroll = Math.max(0, pu.lines.length - page);
 		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll));
 		const row = y - geo.row - 1; // 顶框占 1 行
@@ -1520,7 +1532,7 @@ export class FullApp {
 					this.scheduler.requestImmediateRender();
 					return;
 				}
-				const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+				const page = pu.viewPage ?? Math.max(3, this.viewGeo(pu.layout).height - 3); // viewPage = 渲染期回写（dock 与渲染同源；m4-7 走查修）
 				// pinned 窗先落地再滚（T1）：scroll 写到真实末页再脱钉——首按 ↑ 立即从末页上移（旧哨兵
 				// 大数形态首按无效，要连按哨兵差值次才动）；↓/PgDn 落地后钳在 max 不动，语义不变
 				if (pu.pinned === true) {
@@ -2426,7 +2438,7 @@ export class FullApp {
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
 			if (pu.live !== undefined) pu.lines = pu.live().split("\n"); // M4.5 T11：实时查看窗——每帧现算（滚动钳制在 build 内）
-			overlay = this.buildViewOverlay(pu);
+			overlay = this.buildViewOverlay(pu, leftW, divRow);
 		} else if (this.pendingUi?.kind === "dialog") {
 			const pu = this.pendingUi;
 			overlay = this.buildDialogOverlay(pu);
@@ -2449,8 +2461,13 @@ export class FullApp {
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 新几何）：resolvePopupLayout 居中弹窗（缺省 center80；五旧窗随之
 	 *  统一新长相）。恒定行数防闪烁（斜杠菜单同款纪律）：顶框 + 内容页（高 − 3）+ 余量提示行 + 底框，
 	 *  余量并进提示行不再条件性增删行；自定义键的 label 附在提示行尾。 */
-	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout; keys?: Record<string, PopupKey> }): OverlayFrame {
-		const geo = this.viewGeo(pu.layout);
+	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; viewPage?: number }, leftW?: number, divRow?: number): OverlayFrame {
+		// dock（m4-7 走查修 2026-09-27 用户拍板）：贴输入框上缘 + 与输入框（左栏）同宽——技能详情窗形态，
+		// 内容自适应封顶可滚（高度 = min(内容行数, 输入框上方可用高)）；不走 resolvePopupLayout 居中几何
+		const dock = pu.layout === "dock" && leftW !== undefined && divRow !== undefined;
+		const geo = dock
+			? { row: 0, col: 0, width: leftW, height: Math.max(6, Math.min(pu.lines.length + 3, divRow)) }
+			: this.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
 		const ow = geo.width;
 		const oInner = ow - 2;
 		const bc = "accent";
@@ -2460,6 +2477,7 @@ export class FullApp {
 		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
 		const page = Math.max(3, geo.height - 3);
+		pu.viewPage = page; // 渲染期回写——翻页/滚轮页大小与窗几何同源（dock 不走 viewGeo，m4-7 走查修）
 		const maxScroll = Math.max(0, pu.lines.length - page);
 		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
 		const win = pu.lines.slice(sc, sc + page);
