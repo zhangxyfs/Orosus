@@ -160,6 +160,12 @@ interface AppState {
 	 *  后选区可能错位，不跨压缩保真已登记不修）；undefined = 无选区。流区外/面板按下 = 折叠清空。 */
 	mselAnchor: { docIdx: number; col: number } | undefined;
 	mselFocus: { docIdx: number; col: number } | undefined;
+	/** 选区粒度（T6）：双击 word / 三击 line / 拖动 character——drag 分支按粒度对齐扩选。 */
+	selGranularity: "character" | "word" | "line";
+	/** 双击/三击的初始区间（T6 智能扩选）：扩到反侧时锚点切到初始区间另一端。 */
+	selInitialRange: { start: { docIdx: number; col: number }; end: { docIdx: number; col: number } } | undefined;
+	/** 连击计数状态（T6——kimi :1233-1257）：count 必带（(prev%3)+1 的 prev 就存这里）。 */
+	lastClick: { at: number; count: number; docIdx: number; wordStart: number; wordEnd: number } | undefined;
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
@@ -170,6 +176,33 @@ const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8
 const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
 const WHEEL_STEP = 1; // 滚轮每格滚动行数（m5 鼠标批设计空白 1——kimi 生产默认同款 tui-alt-screen.ts:264 ?? 1）
 const ALT_WHEEL_MULTIPLIER = 5; // Alt+滚轮加速倍数（设计空白 2——kimi :75 同名常量同值）
+const DOUBLE_CLICK_INTERVAL_MS = 500; // 双击判定窗口（m5 鼠标批 T6 设计空白 10——kimi :79 同值）
+const WORD_JOINERS = new Set(["/", "-"]); // 词连接符（设计空白 11——kimi :82 同集：a/b/c.ts、well-known 当一个词）
+const wordSegmenter = new Intl.Segmenter("en", { granularity: "word" });
+
+type WordSeg = { seg: string; start: number; end: number; selectable: boolean; joiner: boolean };
+
+/** 词区间（m5 鼠标批 T6——kimi getWordSelection :1169-1204 精简；显示列口径）：Intl.Segmenter 分段，
+ *  段分 selectable（词like）与 joiner（/ -）；点中段向两侧贪心拼接（邻段双方可选内容且至少一方
+ *  joiner 才并）。空白/标点段 → undefined（连击不计数）。 */
+export function wordRangeAt(plain: string, col: number): { start: number; end: number } | undefined {
+	const segs: WordSeg[] = [];
+	for (const s of wordSegmenter.segment(plain)) {
+		segs.push({ seg: s.segment, start: s.index, end: s.index + s.segment.length, selectable: s.isWordLike === true, joiner: WORD_JOINERS.has(s.segment) });
+	}
+	const colOf = (idx: number): number => visibleWidth(plain.slice(0, idx)); // 字符索引 → 显示列（CJK 2 列）
+	const hitIdx = segs.findIndex((s) => col >= colOf(s.start) && col < colOf(s.end));
+	if (hitIdx === -1) return undefined;
+	const hit = segs[hitIdx]!;
+	if (!hit.selectable && !hit.joiner) return undefined;
+	const canJoin = (a: WordSeg, b: WordSeg): boolean =>
+		(a.selectable || a.joiner) && (b.selectable || b.joiner) && (a.joiner || b.joiner); // kimi :1184-1187 同式
+	let lo = hitIdx;
+	let hi = hitIdx;
+	while (lo - 1 >= 0 && canJoin(segs[lo - 1]!, segs[lo]!)) lo--;
+	while (hi + 1 < segs.length && canJoin(segs[hi]!, segs[hi + 1]!)) hi++;
+	return { start: colOf(segs[lo]!.start), end: colOf(segs[hi]!.end) };
+}
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载", pendingConfirm: "待确认" }; // pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
 const taskTick = (state: "done" | "active" | "pending"): string =>
@@ -345,6 +378,9 @@ export class FullApp {
 			toast: undefined,
 			mselAnchor: undefined,
 			mselFocus: undefined,
+			selGranularity: "character",
+			selInitialRange: undefined,
+			lastClick: undefined,
 		};
 	}
 
@@ -924,20 +960,71 @@ export class FullApp {
 		if (e.button !== 0) return; // v1 只左键；Shift+拖选走终端原生让路（shift 位解析了不消费）
 		const s = this.state;
 		if (e.kind === "press") {
+			// 连击计数 + 粒度（T6——kimi :1376-1384 次序）：count 2 → 词区间、count 3 → 行区间、
+			// count 1 → 字符锚点；点到流区外/空白 = 清选区且连击不计数
 			const p = this.pointToDoc(e.x, e.y);
-			s.mselAnchor = p; // 流区外/面板列 → undefined = 清选区（决策点 10/12：不建幻影锚点）
-			s.mselFocus = p;
+			const plain = p !== undefined ? stripAnsi(this.layoutFrame().doc[p.docIdx] ?? "") : undefined;
+			const word = p !== undefined && plain !== undefined ? wordRangeAt(plain, p.col) : undefined;
+			const count = this.clickCount(p, word);
+			const range = p === undefined ? undefined
+				: count === 3 ? { start: 0, end: visibleWidth(plain ?? "") }
+				: count === 2 ? word
+				: undefined;
+			s.selGranularity = range === undefined ? "character" : count === 2 ? "word" : "line";
+			s.selInitialRange = p !== undefined && range !== undefined
+				? { start: { docIdx: p.docIdx, col: range.start }, end: { docIdx: p.docIdx, col: range.end } }
+				: undefined;
+			s.mselAnchor = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.start };
+			s.mselFocus = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.end };
 		} else if (e.kind === "drag") {
 			if (s.mselAnchor === undefined) return;
 			const { streamH, leftW } = this.layoutFrame();
 			const p = this.pointToDoc(Math.min(e.x, leftW - 1), Math.max(0, Math.min(streamH - 1, e.y))); // 越界钳流区边界
-			if (p) s.mselFocus = p;
+			if (p === undefined) return;
+			// 粒度感知扩选（T6——kimi updateSelectionFocus :1213-1231）：词/行粒度下 focus 对齐到
+			// 当前点的词/行区间；扩到初始区间反侧时锚点切到初始区间的另一端
+			const initial = s.selInitialRange;
+			if (s.selGranularity !== "character" && initial !== undefined) {
+				const before = p.docIdx < initial.start.docIdx || (p.docIdx === initial.start.docIdx && p.col < initial.start.col);
+				if (s.selGranularity === "word") {
+					const plain = stripAnsi(this.layoutFrame().doc[p.docIdx] ?? "");
+					const r = wordRangeAt(plain, p.col) ?? { start: p.col, end: p.col };
+					s.mselAnchor = before ? initial.end : initial.start;
+					s.mselFocus = { docIdx: p.docIdx, col: before ? r.start : r.end };
+				} else {
+					const lineEnd = visibleWidth(stripAnsi(this.layoutFrame().doc[p.docIdx] ?? ""));
+					s.mselAnchor = before ? initial.end : initial.start;
+					s.mselFocus = { docIdx: p.docIdx, col: before ? 0 : lineEnd };
+				}
+			} else {
+				s.mselFocus = p;
+			}
 		} else if (e.kind === "release") {
 			const text = this.selectionText();
 			if (text !== undefined) void this.copySelection(text); // 已复制 N 行（决策点 8）
 			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
 		}
 		this.scheduler.requestImmediateRender();
+	}
+
+	/** 连击计数（T6——kimi getClickCount :1233-1257）：500ms 窗口内 + 同行 + 同词边界才 +1
+	 *  （1→2→3 循环）；点到空白/流区外连击不记。 */
+	private clickCount(point: { docIdx: number; col: number } | undefined, word: { start: number; end: number } | undefined): number {
+		const s = this.state;
+		const lc = s.lastClick;
+		const now = Date.now();
+		if (point !== undefined && word !== undefined && lc !== undefined
+			&& now - lc.at <= DOUBLE_CLICK_INTERVAL_MS
+			&& lc.docIdx === point.docIdx
+			&& lc.wordStart === word.start && lc.wordEnd === word.end) {
+			const count = (lc.count % 3) + 1;
+			s.lastClick = { at: now, count, docIdx: point.docIdx, wordStart: word.start, wordEnd: word.end };
+			return count;
+		}
+		s.lastClick = point !== undefined && word !== undefined
+			? { at: now, count: 1, docIdx: point.docIdx, wordStart: word.start, wordEnd: word.end }
+			: undefined; // 空白/流区外——连击状态清空
+		return 1;
 	}
 
 	/** 指针屏坐标 → doc 行列（T5——与 renderFrame 同源几何 layoutFrame；左内衬 2 列）。 */
