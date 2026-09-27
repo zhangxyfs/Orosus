@@ -178,6 +178,10 @@ interface AppState {
 	autoScrollDir: -1 | 0 | 1;
 	autoScrollTimer: NodeJS.Timeout | undefined;
 	dragPointer: { x: number; y: number } | undefined;
+	/** 滚动条拖动态（T10）：grabOffset = 指针 Y 相对拇指顶的偏移（拖动跟手映射用）。 */
+	scrollbarDrag: { scope: "main" | "view"; grabOffset: number } | undefined;
+	/** 滚动条悬停（T10——?1003 全动跟踪的 hover 事件驱动）：换亮色渲染用。 */
+	scrollbarHover: "main" | "view" | undefined;
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
@@ -189,6 +193,16 @@ const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻
 const WHEEL_STEP = 1; // 滚轮每格滚动行数（m5 鼠标批设计空白 1——kimi 生产默认同款 tui-alt-screen.ts:264 ?? 1）
 const ALT_WHEEL_MULTIPLIER = 5; // Alt+滚轮加速倍数（设计空白 2——kimi :75 同名常量同值）
 const DOUBLE_CLICK_INTERVAL_MS = 500; // 双击判定窗口（m5 鼠标批 T6 设计空白 10——kimi :79 同值）
+
+/** 滚动条几何（m5 鼠标批 T10——kimi layout.ts:285-292 getScrollbarGeometry 同式，设计空白 7/8）：
+ *  不超一屏 undefined；拇指最小高 2；拇指顶 = round(首行/(总−视口) × (视口−拇指高))。
+ *  top/height 都是视口内行偏移（渲染与拖动映射共用一源）。 */
+export function thumbGeometry(viewportH: number, total: number, first: number): { top: number; height: number } | undefined {
+	if (total <= viewportH) return undefined; // 不超一屏不显示
+	const h = Math.max(Math.min(2, viewportH), Math.min(viewportH, Math.round((viewportH * viewportH) / total)));
+	const maxOff = viewportH - h;
+	return { top: Math.round((first / Math.max(1, total - viewportH)) * maxOff), height: h };
+}
 const WORD_JOINERS = new Set(["/", "-"]); // 词连接符（设计空白 11——kimi :82 同集：a/b/c.ts、well-known 当一个词）
 const wordSegmenter = new Intl.Segmenter("en", { granularity: "word" });
 
@@ -397,6 +411,8 @@ export class FullApp {
 			autoScrollDir: 0,
 			autoScrollTimer: undefined,
 			dragPointer: undefined,
+			scrollbarDrag: undefined,
+			scrollbarHover: undefined,
 		};
 	}
 
@@ -974,9 +990,23 @@ export class FullApp {
 	 *  :1314-1383 同构）。查看窗在位且指针在盒内 → 选查看窗内容（T8，坐标系 = 盒内衬 2 列）。 */
 	private onButton(e: ButtonEvent): void {
 		if (this.onboarding !== undefined) return; // 引导锁（同 onWheel）
-		if (e.button !== 0) return; // v1 只左键；Shift+拖选走终端原生让路（shift 位解析了不消费）
+		if (e.button !== 0 && e.kind !== "hover") return; // v1 只左键；hover 恒无按钮（?1003 纯移动）
 		const s = this.state;
+		if (e.kind === "hover") {
+			// 悬停检测（T10）：指针在轨道列上 → 记 scope 供渲染换亮色（tmux 降级档无 ?1003 →
+			// 无 hover 事件恒不高亮，属预期披露）
+			s.scrollbarHover = this.scrollbarTrackHit(e.x, e.y)?.scope;
+			this.scheduler.requestImmediateRender();
+			return;
+		}
 		if (e.kind === "press") {
+			// 滚动条优先于选区（kimi :1102-1112 次序）：命中轨道列 → 拖动状态机（点轨道非拇指先跳位）
+			const track = this.scrollbarTrackHit(e.x, e.y);
+			if (track !== undefined) {
+				this.scrollbarPress(track, e.y);
+				this.scheduler.requestImmediateRender();
+				return;
+			}
 			// 查看窗盒内优先（T8）——主流区 pointToDoc 之前判 viewGeo 盒命中
 			const vp = this.pointToView(e.x, e.y);
 			const p = vp !== undefined
@@ -1003,6 +1033,12 @@ export class FullApp {
 				})()
 				: undefined;
 		} else if (e.kind === "drag") {
+			// 滚动条拖动跟手优先（T10——拖动态在位时不再扩选）
+			if (s.scrollbarDrag !== undefined) {
+				this.scrollbarDragTo(e.y);
+				this.scheduler.requestImmediateRender();
+				return;
+			}
 			s.pressedUrl = undefined; // 拖动即作废（误拖保护）
 			if (s.mselAnchor === undefined) return;
 			this.extendSelection(e.x, e.y);
@@ -1020,6 +1056,7 @@ export class FullApp {
 				}
 			}
 		} else if (e.kind === "release") {
+			s.scrollbarDrag = undefined; // 滚动条拖动结算（T10）
 			this.stopAutoScroll(); // 松手即停（kimi :1322 同位）
 			// 链接打开（T7——kimi :1330-1336 次序）：未拖动（pressedUrl 未被 drag 作废）且同点才打开
 			const pu = s.pressedUrl;
@@ -1123,6 +1160,96 @@ export class FullApp {
 		}
 		s.autoScrollDir = 0;
 		s.dragPointer = undefined;
+	}
+
+	// ---------- 滚动条（T10——kimi :1037-1052 命中 / :1115-1118 跳位 / :1075-1078 拖动映射） ----------
+
+	/** 滚动条基座几何：scope → 视口高/总行数/首行/轨道顶行/当前拇指。 */
+	private scrollbarTrackBase(scope: "main" | "view"): {
+		total: number; viewportH: number; first: number; trackTop: number; thumb: { top: number; height: number };
+	} | undefined {
+		if (scope === "view") {
+			const pu = this.pendingUi;
+			if (pu?.kind !== "view") return undefined;
+			const geo = this.viewGeo(pu.layout);
+			const page = Math.max(3, geo.height - 3);
+			const maxScroll = Math.max(0, pu.lines.length - page);
+			const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll));
+			const thumb = thumbGeometry(page, pu.lines.length, sc);
+			if (thumb === undefined) return undefined;
+			return { total: pu.lines.length, viewportH: page, first: sc, trackTop: geo.row + 1, thumb };
+		}
+		const { streamH, start, doc } = this.layoutFrame();
+		const thumb = thumbGeometry(streamH, doc.length, start);
+		if (thumb === undefined) return undefined;
+		return { total: doc.length, viewportH: streamH, first: start, trackTop: 0, thumb };
+	}
+
+	/** 轨道命中判定（T10）：指针在轨道列（主窗 = leftW−1 / 查看窗 = 盒内右列）且在轨道行范围内。 */
+	private scrollbarTrackHit(x: number, y: number): { scope: "main" | "view" } & ReturnType<NonNullable<FullApp["scrollbarTrackBase"]>> | undefined {
+		const pu = this.pendingUi;
+		if (pu?.kind === "view") {
+			const geo = this.viewGeo(pu.layout);
+			const t = this.scrollbarTrackBase("view");
+			if (t === undefined) return undefined;
+			if (x === geo.col + geo.width - 2 && y >= t.trackTop && y < t.trackTop + t.viewportH) {
+				return { scope: "view", ...t };
+			}
+			return undefined;
+		}
+		const { streamH, leftW } = this.layoutFrame();
+		const t = this.scrollbarTrackBase("main");
+		if (t === undefined) return undefined;
+		if (x === leftW - 1 && y >= 0 && y < streamH) {
+			return { scope: "main", ...t };
+		}
+		return undefined;
+	}
+
+	/** 轨道按下（T10——kimi :1115-1118）：点轨道非拇指先把拇指中心跳到指针行，再记抓取偏移。 */
+	private scrollbarPress(t: { scope: "main" | "view"; total: number; viewportH: number; first: number; trackTop: number; thumb: { top: number; height: number } }, y: number): void {
+		const s = this.state;
+		const scrollRange = Math.max(1, t.total - t.viewportH);
+		const maxOff = Math.max(1, t.viewportH - t.thumb.height);
+		const rel = y - t.trackTop;
+		if (rel < t.thumb.top || rel >= t.thumb.top + t.thumb.height) {
+			// 点轨道非拇指 → 跳位（指针行居中成新拇指中心）
+			const first = Math.max(0, Math.min(t.total - t.viewportH, Math.round(((rel - t.thumb.height / 2) / maxOff) * scrollRange)));
+			this.setScrollFirst(t.scope, first);
+		}
+		const th = this.scrollbarTrackBase(t.scope)?.thumb ?? t.thumb; // 跳位后重算
+		s.scrollbarDrag = { scope: t.scope, grabOffset: y - (t.trackTop + th.top) };
+	}
+
+	/** 拖动跟手（T10——kimi :1075-1078 四则式）：指针 Y − 抓取偏移 → 拇指顶 → 滚动位置。 */
+	private scrollbarDragTo(y: number): void {
+		const s = this.state;
+		const drag = s.scrollbarDrag;
+		if (drag === undefined) return;
+		const t = this.scrollbarTrackBase(drag.scope);
+		if (t === undefined) {
+			s.scrollbarDrag = undefined;
+			return;
+		}
+		const scrollRange = Math.max(1, t.total - t.viewportH);
+		const maxOff = Math.max(1, t.viewportH - t.thumb.height);
+		const first = Math.max(0, Math.min(t.total - t.viewportH, Math.round(((y - drag.grabOffset - t.trackTop) / maxOff) * scrollRange)));
+		this.setScrollFirst(drag.scope, first);
+	}
+
+	/** 写滚动位置（T10——与滚轮/翻页键/自动滚四源同汇同一字段）。主窗 first 是 start 口径
+	 *  （拇指映射视角），scrollBack = maxScroll − first。 */
+	private setScrollFirst(scope: "main" | "view", first: number): void {
+		if (scope === "view") {
+			const pu = this.pendingUi;
+			if (pu?.kind === "view") {
+				pu.pinned = false;
+				pu.scroll = first;
+			}
+			return;
+		}
+		const { streamH, doc } = this.layoutFrame();
+		this.state.scrollBack = Math.max(0, Math.min(Math.max(0, doc.length - streamH), doc.length - streamH - first));
 	}
 
 	/** 拖动点钳制（T8）：按当前选区 scope 钳在对应窗口边界——view 钳查看窗盒、main 钳主流区。 */
@@ -2143,6 +2270,17 @@ export class FullApp {
 			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
 			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
 		}
+		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指覆盖在正文最右列上
+		const mthumb = thumbGeometry(streamH, doc.length, start);
+		if (mthumb !== undefined) {
+			for (let r = 0; r < streamH; r++) {
+				const onThumb = r >= mthumb.top && r < mthumb.top + mthumb.height;
+				const ch = onThumb
+					? theme.fg(s.scrollbarHover === "main" ? "accent" : "muted", "█")
+					: theme.dim("│");
+				screen[r] = sliceByColumn(screen[r] ?? "", 0, leftW - 1) + ch;
+			}
+		}
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
 				const oneLine = queue[i]!.replace(/\s+/g, " ").trim(); // 单行摘要（kimi QueuePane 同形态）
@@ -2257,10 +2395,21 @@ export class FullApp {
 		const maxScroll = Math.max(0, pu.lines.length - page);
 		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
 		const win = pu.lines.slice(sc, sc + page);
-		// 选区反白合入（T8）：行索引与 pointToView 同源（sc + 行号——滚动平移天然稳定）
+		// 选区反白合入（T8）：行索引与 pointToView 同源（sc + 行号——滚动平移天然稳定）；
+		// 滚动条（T10）：右缘 1 列轨道/拇指覆盖在内容最右列上
+		const vthumb = thumbGeometry(page, pu.lines.length, sc);
 		for (let i = 0; i < win.length; i++) {
 			const raw = " " + truncateToWidth(win[i]!, oInner - 2);
-			olines.push(boxRow(this.styleDocSelection("view", sc + i, raw)));
+			const styled = this.styleDocSelection("view", sc + i, raw);
+			if (vthumb !== undefined) {
+				const onThumb = i >= vthumb.top && i < vthumb.top + vthumb.height;
+				const ch = onThumb
+					? theme.fg(this.state.scrollbarHover === "view" ? "accent" : "muted", "█")
+					: theme.dim("│");
+				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 1) + ch + theme.fg(bc, "│")));
+			} else {
+				olines.push(boxRow(styled));
+			}
 		}
 		const upN = sc;
 		const downN = pu.lines.length - sc - win.length;

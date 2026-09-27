@@ -2092,4 +2092,88 @@ describe("拖选自动滚（m5 鼠标批 T9——压边缘 50ms 一格 + 指针�
 	});
 });
 
+describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指，超一屏才显示，点轨道跳位 + 拖动跟手）", () => {
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `[<32;${x + 1};${y + 1}M`); };
+	const releaseAt = (input: FakeInput, x: number, y: number): void => { input.emit("data", `[<0;${x + 1};${y + 1}m`); };
+	const doc100 = Array.from({ length: 100 }, (_, i) => `第${i + 1}行内容`);
+
+	it("T10-1 thumbGeometry 纯函数：不超一屏 undefined；超屏拇指高 ≥2 且四则位置正确", async () => {
+		const { thumbGeometry } = await import("./fullapp.ts");
+		expect(thumbGeometry(26, 20, 0)).toBeUndefined(); // 总 20 ≤ 视口 26——不显示
+		const g = thumbGeometry(26, 101, 75)!; // 101 行 26 视口、首行 75（末页）
+		expect(g.height).toBeGreaterThanOrEqual(2); // 最小高 2（kimi layout.ts:288）
+		expect(g.height).toBeLessThanOrEqual(26);
+		expect(g.top).toBe(26 - g.height); // 末页拇指贴底
+		const top = thumbGeometry(26, 101, 0)!;
+		expect(top.top).toBe(0); // 首页贴顶
+		const mid = thumbGeometry(26, 101, 38)!; // 37.5 → round(75/75×(26-h)) ≈ 中部
+		expect(mid.top).toBeGreaterThan(0);
+		expect(mid.top).toBeLessThan(26 - mid.height);
+	});
+	it("T10-2 主窗渲染右缘出现拇指（█）且位置随 scrollBack 移动", async () => {
+		const { app, input, output } = rig(doc100);
+		app.start();
+		await flush();
+		let before = output.buf.length;
+		input.emit("data", "[5~"); // PgUp → scrollBack = 20（拇指离顶）
+		await flush();
+		let frame = stripAnsi(output.buf.slice(before));
+		expect(frame).toContain("█"); // 拇指出现在主窗右缘
+		before = output.buf.length;
+		input.emit("data", "[5~"); // 再翻 → 拇指移动
+		await flush();
+		frame = stripAnsi(output.buf.slice(before));
+		expect(frame).toContain("█");
+		app.stop();
+	});
+	it("T10-3 查看窗右缘同款滚动条", async () => {
+		const { app, output } = rig(doc100);
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		app.viewText("查看", Array.from({ length: 80 }, (_, i) => `窗行${i + 1}`).join("\n"), { layout: "full" });
+		await flush(80); // 首帧即含滚动条（80 行 > 27 页）
+		const frame = stripAnsi(output.buf.slice(before));
+		expect(frame).toContain("█");
+		app.stop();
+	});
+	it("T10-4 点轨道跳位：press 在轨道下半 → scrollBack 按比例变化（拇指中心跳到指针行）", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as { scrollBack: number };
+		const trackX = 64 - 1; // leftW = 100−34−2 = 64 → 轨道列 63
+		press(input, trackX, 10); // 点轨道第 10 行（非拇指区——初始拇指贴底 19-25）
+		await flush();
+		expect(st.scrollBack).toBeGreaterThan(0); // 跳位：拇指中心跳到指针行 → first ≈ 26 → scrollBack ≈ 49
+		expect(st.scrollBack).toBeLessThanOrEqual(75);
+		releaseAt(input, trackX, 10);
+		await flush();
+		app.stop();
+	});
+	it("T10-5 拖动跟手：drag 沿轨道下移两步 → scrollBack 单调增；release 清拖动态", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as { scrollBack: number; scrollbarDrag: unknown };
+		const trackX = 63;
+		press(input, trackX, 13); // 点轨道中部跳位（非拇指区）
+		await flush();
+		const s1 = st.scrollBack;
+		dragTo(input, trackX, 8); // 上移 → 回看更深（start 减 = scrollBack 增）
+		await flush();
+		const s2 = st.scrollBack;
+		dragTo(input, trackX, 2);
+		await flush();
+		const s3 = st.scrollBack;
+		expect(s2).toBeGreaterThan(s1); // 拖动跟手单调
+		expect(s3).toBeGreaterThan(s2);
+		releaseAt(input, trackX, 2);
+		await flush();
+		expect(st.scrollbarDrag).toBeUndefined();
+		app.stop();
+	});
+});
+
 });
