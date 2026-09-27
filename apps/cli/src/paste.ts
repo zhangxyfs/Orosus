@@ -146,3 +146,23 @@ export async function writeClipboardText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/** 打开 URL 命令构造（m5 鼠标批 T7——设计空白 13，纯函数可测）。 */
+export function openUrlCommand(platform: NodeJS.Platform, url: string): { file: string; args: string[] } {
+  if (platform === "win32") return { file: "cmd", args: ["/c", "start", "", url] };
+  if (platform === "darwin") return { file: "open", args: [url] };
+  return { file: "xdg-open", args: [url] };
+}
+
+/** 用系统默认程序打开 URL（m5 鼠标批 T7）：只开 http/https——链接文本来自模型输出，
+ *  file:// 等方案拒开是注入面防线（决策点 17）。失败/拒开返回 false。 */
+export async function openUrl(url: string): Promise<boolean> {
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    const { file, args } = openUrlCommand(process.platform, url);
+    await execFileAsync(file, args);
+    return true;
+  } catch {
+    return false;
+  }
+}

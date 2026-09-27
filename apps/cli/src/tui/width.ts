@@ -317,3 +317,33 @@ export function dispLines(text: string, columns: number): number {
 		.split("\n")
 		.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / c)), 0);
 }
+
+/** OSC 8 超链接探测（m5 鼠标批 T7——kimi utils.ts:344-366 精简）：扫渲染行的 ANSI 码，遇
+ *  \x1b]8;;URI\x07 设「当前链接」，指针列落在其文本上即返回 URI——只认行内 OSC 8 码（自产自销，
+ *  与终端支持无关；决策点 16 不做裸文本正则兜底）。 */
+export function osc8LinkAtColumn(line: string, column: number): string | undefined {
+	let active: string | undefined;
+	let col = 0;
+	let i = 0;
+	while (i < line.length) {
+		const a = extractAnsiCode(line, i);
+		if (a !== null) {
+			// eslint-disable-next-line no-control-regex -- OSC 转义序列本身含控制字符
+			const m = /^\x1b\]8;[^;]*;([^\x07\x1b]*)(?:\x07|\x1b\\)$/.exec(a.code);
+			if (m !== null) active = m[1] === "" ? undefined : m[1]; // 空参数闭对 = 链接结束
+			i += a.length;
+			continue;
+		}
+		const rest = line.slice(i);
+		let g = rest[0]!;
+		for (const { segment } of segmenter.segment(rest)) {
+			g = segment;
+			break;
+		}
+		const gw = graphemeWidth(g);
+		if (col <= column && column < col + gw) return active;
+		col += gw;
+		i += g.length;
+	}
+	return undefined;
+}

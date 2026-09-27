@@ -1929,4 +1929,51 @@ describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同�
 	});
 });
 
+describe("URL 点击打开（m5 鼠标批 T7——渲染侧 OSC 8 自产 + 点击侧解析 + 三平台命令；只开 http/https）", () => {
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<32;${x + 1};${y + 1}M`); };
+	const releaseAt = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}m`); };
+	const mkDoc = (): string[] => {
+		const d = Array.from({ length: 100 }, () => "filler");
+		d[75] = "看 \x1b]8;;https://x.com/a\x07链接\x1b]8;;\x07 完"; // 模块上色行同款：渲染行含自产 OSC 8
+		d[76] = "行 \x1b]8;;file:///etc/passwd\x07本地\x1b]8;;\x07 完"; // 非 http 方案
+		return d;
+	};
+
+	it("T7-1 http 链接单击打开（stub 注入被调 + toast「已打开链接」）；非 http 拒开 toast", async () => {
+		const opened: string[] = [];
+		const { app, input } = rig(mkDoc(), 100, 30, { openUrl: async (u: string) => { opened.push(u); return true; } });
+		app.start();
+		await flush();
+		press(input, 5, 0); // docIdx 75、屏幕列 5 = doc col 3「链」（看0-1 空格2 链3-4）
+		releaseAt(input, 5, 0);
+		await flush();
+		expect(opened).toEqual(["https://x.com/a"]);
+		expect(app.stateRef.toast?.text).toBe("已打开链接");
+		press(input, 5, 1); // docIdx 76 col 3「本」——file:// 拒开
+		releaseAt(input, 5, 1);
+		await flush();
+		expect(opened).toHaveLength(1); // 未再开
+		expect(app.stateRef.toast?.text).toBe("仅支持打开 http/https 链接");
+		app.stop();
+	});
+	it("T7-2 拖动后松开不打开（误拖保护）；双击（count 2）不探测链接", async () => {
+		const opened: string[] = [];
+		const { app, input } = rig(mkDoc(), 100, 30, { openUrl: async (u: string) => { opened.push(u); return true; } });
+		app.start();
+		await flush();
+		press(input, 5, 0);
+		dragTo(input, 8, 0); // 拖动即作废
+		releaseAt(input, 5, 0); // 松开回原点也不开
+		await flush();
+		expect(opened).toHaveLength(0);
+		press(input, 5, 0); // count 1（记录链接）
+		press(input, 5, 0); // count 2 双击选词——不探测（kimi :1385-1390）
+		releaseAt(input, 5, 0);
+		await flush();
+		expect(opened).toHaveLength(0); // 双击不开链接（选词语义）
+		app.stop();
+	});
+});
+
 });

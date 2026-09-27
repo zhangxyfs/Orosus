@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dispLines, stripAnsi, visibleWidth, wrapText } from "./width.ts";
+import { dispLines, osc8LinkAtColumn, stripAnsi, visibleWidth, wrapText } from "./width.ts";
 
 describe("宽度引擎（TUI 批阶段三 F0——pi-tui utils 零依赖移植）", () => {
 	it("① CJK 折行：12 个全角字在 10 列宽折 3 行（24 显示宽 ÷ 10 列向上取整）", () => {
@@ -45,5 +45,18 @@ describe("CJK 禁则（2026-09-24 用户拍板——「名字（长URL）」段�
 		const linked = "看（\x1b]8;;http://x.example/a/b\x07http://x.example/a/b\x1b]8;;\x07）完";
 		const lines = wrapText(linked, 20);
 		expect(stripAnsi(lines.join(""))).toBe("看（http://x.example/a/b）完"); // OSC 链接内容无损
+	});
+});
+
+describe("OSC 8 链接探测（m5 鼠标批 T7——kimi utils.ts:344-366 精简：只认行内 OSC 8 码自产自销）", () => {
+	const line = "前缀 \x1b]8;;https://x.com/a\x07链接字\x1b]8;;\x07 后缀";
+	it("① 命中链接文本列返回 URL；非链接列与闭合后区域 undefined", () => {
+		expect(osc8LinkAtColumn(line, 5)).toBe("https://x.com/a"); // 「链」列（前缀 = 前0-1 缀2-3 空格4）
+		expect(osc8LinkAtColumn(line, 7)).toBe("https://x.com/a"); // 「字」列
+		expect(osc8LinkAtColumn(line, 0)).toBeUndefined(); // 前缀段
+		expect(osc8LinkAtColumn(line, 11)).toBeUndefined(); // 闭合后（空格10 + 后缀段）
+	});
+	it("② 宽度地基：OSC 8 包裹行 visibleWidth 与裸文本一致（extractAnsiCode 已认 OSC）", () => {
+		expect(visibleWidth(line)).toBe(visibleWidth(stripAnsi(line)));
 	});
 });

@@ -10,12 +10,12 @@
  *  鼠标接管关闭（用户拍板 2026-09-21——重开 = fullscreen.ts ENTER_ALT 追加 ?1000/?1006）。 */
 
 import { writeSync } from "node:fs";
-import { writeClipboardText } from "../paste.ts";
+import { writeClipboardText, openUrl } from "../paste.ts";
 import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
-import { padToWidth, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { padToWidth, osc8LinkAtColumn, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
@@ -120,6 +120,9 @@ export interface FullAppIO {
 	/** 剪贴板纯文本写入（m5 鼠标批 T5——拖选松开即复制）：缺省 paste.ts writeClipboardText；
 	 *  测试注入 stub。返回 false = 写入失败（调用方落 OSC 52 逃生口）。 */
 	writeClipboard?(text: string): Promise<boolean>;
+	/** 打开 URL（m5 鼠标批 T7——链接单击）：缺省 paste.ts openUrl（三平台命令、只开 http/https）；
+	 *  测试注入 stub。返回 false = 拒开或失败。 */
+	openUrl?(url: string): Promise<boolean>;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -166,6 +169,8 @@ interface AppState {
 	selInitialRange: { start: { docIdx: number; col: number }; end: { docIdx: number; col: number } } | undefined;
 	/** 连击计数状态（T6——kimi :1233-1257）：count 必带（(prev%3)+1 的 prev 就存这里）。 */
 	lastClick: { at: number; count: number; docIdx: number; wordStart: number; wordEnd: number } | undefined;
+	/** 链接按下暂存（T7——kimi pressedUrl :224 同族）：count 1 的按下记 URL 与坐标，松开未拖动同点才打开。 */
+	pressedUrl: { url: string; x: number; y: number } | undefined;
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
@@ -381,6 +386,7 @@ export class FullApp {
 			selGranularity: "character",
 			selInitialRange: undefined,
 			lastClick: undefined,
+			pressedUrl: undefined,
 		};
 	}
 
@@ -976,7 +982,16 @@ export class FullApp {
 				: undefined;
 			s.mselAnchor = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.start };
 			s.mselFocus = p === undefined ? undefined : range === undefined ? p : { docIdx: p.docIdx, col: range.end };
+			// 链接探测（T7——kimi :1385-1390）：单击（count 1）才记 URL，双击/三击走选词不探测
+			s.pressedUrl = count === 1 && p !== undefined
+				? (() => {
+					const rawLine = this.layoutFrame().doc[p.docIdx] ?? "";
+					const url = osc8LinkAtColumn(rawLine, p.col);
+					return url === undefined ? undefined : { url, x: e.x, y: e.y };
+				})()
+				: undefined;
 		} else if (e.kind === "drag") {
+			s.pressedUrl = undefined; // 拖动即作废（误拖保护）
 			if (s.mselAnchor === undefined) return;
 			const { streamH, leftW } = this.layoutFrame();
 			const p = this.pointToDoc(Math.min(e.x, leftW - 1), Math.max(0, Math.min(streamH - 1, e.y))); // 越界钳流区边界
@@ -1000,6 +1015,10 @@ export class FullApp {
 				s.mselFocus = p;
 			}
 		} else if (e.kind === "release") {
+			// 链接打开（T7——kimi :1330-1336 次序）：未拖动（pressedUrl 未被 drag 作废）且同点才打开
+			const pu = s.pressedUrl;
+			if (pu !== undefined && pu.x === e.x && pu.y === e.y) void this.openLink(pu.url);
+			s.pressedUrl = undefined;
 			const text = this.selectionText();
 			if (text !== undefined) void this.copySelection(text); // 已复制 N 行（决策点 8）
 			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
@@ -1087,6 +1106,18 @@ export class FullApp {
 			this.term.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
 			this.showToast("已发终端复制口令（系统剪贴板未确认）");
 		}
+	}
+
+	/** 打开链接（T7 决策点 17）：只开 http/https——链接文本来自模型输出，file:// 等方案
+	 *  拒开是注入面防线；toast 文案族（设计空白 6）。 */
+	private async openLink(url: string): Promise<void> {
+		if (!/^https?:\/\//i.test(url)) {
+			this.showToast("仅支持打开 http/https 链接");
+			return;
+		}
+		const open = this.io.openUrl ?? openUrl;
+		const ok = await open(url);
+		this.showToast(ok ? "已打开链接" : "打开链接失败");
 	}
 
 	private onKey(key: string): void {
