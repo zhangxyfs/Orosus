@@ -2152,6 +2152,26 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		await flush();
 		app.stop();
 	});
+	it("T10-6 文字与滚动条间距（2026-09-27 用户走查：文字离滚动条多空一个字的距离）：拇指/轨道行中 █/│ 前恒 ≥2 空格（一个全角字 = 2 列）", async () => {
+		const { app, input, output } = rig(doc100);
+		app.start();
+		await flush();
+		input.emit("data", "[5~"); // PgUp → 滚动条出现
+		await flush();
+		const text = stripAnsi(output.buf);
+		// 拇指形态断言：滚动条拇指行 = "  █" + 侧栏分隔线（█ 紧跟 │）——前恒 2 空格（满宽文字行
+		// 不贴轨道）；面板「上下文」进度条的 █▊ 形态不同不误伤，轨道 │ 由同一行实现保证
+		let thumbRows = 0;
+		for (const l of text.split("\n")) {
+			for (const m of l.matchAll(/█│/g)) {
+				const i = m.index ?? 0;
+				thumbRows++;
+				if (i >= 2) expect(l.slice(i - 2, i)).toBe("  ");
+			}
+		}
+		expect(thumbRows).toBeGreaterThan(0); // 确认拇指真的渲染了（上面循环非空转）
+		app.stop();
+	});
 	it("T10-5 拖动跟手：drag 沿轨道下移两步 → scrollBack 单调增；release 清拖动态", async () => {
 		const { app, input } = rig(doc100);
 		app.start();

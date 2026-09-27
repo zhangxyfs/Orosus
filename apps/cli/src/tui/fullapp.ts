@@ -2270,7 +2270,8 @@ export class FullApp {
 			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
 			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
 		}
-		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指覆盖在正文最右列上
+		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指；文字截在 leftW−3、与轨道间
+		// 空 2 列（2026-09-27 用户走查拍板：文字离滚动条多空一个字的距离——满宽行不贴轨道）
 		const mthumb = thumbGeometry(streamH, doc.length, start);
 		if (mthumb !== undefined) {
 			for (let r = 0; r < streamH; r++) {
@@ -2278,7 +2279,7 @@ export class FullApp {
 				const ch = onThumb
 					? theme.fg(s.scrollbarHover === "main" ? "accent" : "muted", "█")
 					: theme.dim("│");
-				screen[r] = sliceByColumn(screen[r] ?? "", 0, leftW - 1) + ch;
+				screen[r] = sliceByColumn(screen[r] ?? "", 0, leftW - 3) + "  " + ch;
 			}
 		}
 		if (queueH > 0) {
@@ -2406,7 +2407,8 @@ export class FullApp {
 				const ch = onThumb
 					? theme.fg(this.state.scrollbarHover === "view" ? "accent" : "muted", "█")
 					: theme.dim("│");
-				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 1) + ch + theme.fg(bc, "│")));
+				// 文字与轨道间空 2 列（2026-09-27 用户走查拍板——与主窗滚动条同口径）
+				olines.push(theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 3) + "  " + ch + theme.fg(bc, "│")));
 			} else {
 				olines.push(boxRow(styled));
 			}
