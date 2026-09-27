@@ -2680,7 +2680,13 @@ export class FullApp {
 		const foot = theme.dim(ap !== undefined ? " ↑↓ 选择 · Tab 补全词 · Enter 提交 · Esc 关菜单" : level2 ? " ↑↓ 选择 · Enter 选定 · Esc 返回" : " ↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭");
 		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
 		for (const l of longLines) olines.push(boxRow(l));
-		olines.push(boxRow(foot));
+		// 详释第 3 行（m4-7 T7 / 原型图 1 验收点 2）：技能选中 = when_to_use 简单说明（无则整行留空不删行——
+		// 高度恒定纪律）；命令/参数/二级维持操作提示行（技能的 Enter/Esc 键位与命令同，操作行省去不损可发现性）
+		const selItem = items[selI];
+		const third = selItem !== undefined && selItem.kind === "skill"
+			? (selItem.usage !== undefined && selItem.usage !== "" ? ` ${theme.dim(`适用：${truncateToWidth(selItem.usage, longW - 4)}`)}` : "")
+			: foot;
+		olines.push(boxRow(third));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
