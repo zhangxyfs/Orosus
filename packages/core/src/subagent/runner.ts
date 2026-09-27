@@ -15,7 +15,7 @@ import { agentLoop } from "../loop/loop.ts";
 import { LOG_TYPES, type SessionEvent, type SessionStore } from "../session/types.ts";
 import { ForkedSessionStore } from "../session/fork.ts";
 import { claimContains, createWriteGate, normalizeClaimPath, type WriteGate } from "./writegate.ts";
-import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_CONCURRENCY, SUBAGENT_ID_LEN, SUBAGENT_MAX_TURNS, SUBAGENT_ROSTER_KEEP } from "./constants.ts";
+import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_CONCURRENCY, SUBAGENT_ID_LEN, SUBAGENT_INACTIVITY_TIMEOUT_MS, SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS_CEILING, SUBAGENT_ROSTER_KEEP, SUBAGENT_TOTAL_TIMEOUT_MS } from "./constants.ts";
 import type { ModuleGraph } from "../kernel/kernel.ts";
 import type { DiagSink } from "../diag/logger.ts";
 
@@ -55,6 +55,13 @@ export const spawnAllowedAtDepth = (depth: 1 | 2): boolean => depth < 2;
 /** 静态可判的「会写的工具」名册（决策 24③）：bash 一律算写整仓；未报备的写手算整仓。
  *  名单外工具静态判不了（第三方写工具不占闸——越界回执仍会抓到实际写）。 */
 export const WRITE_CAPABLE_TOOLS: ReadonlySet<string> = new Set(["tool-fs__write", "tool-fs__edit", "tool-shell__bash"]);
+
+/** [tool-subagent] 限值键读取（双保险丝批 2026-09-27）：maxTurns / inactivityTimeoutMs / totalTimeoutMs。
+ *  手改文件未经 schema 校验——validate 谓词兜底（不合法视同未配置）。 */
+const readLimitConfig = (deps: SubagentDeps, key: string, validate: (v: number) => boolean): number | undefined => {
+  const v = deps.configSections().get("tool-subagent")?.[key];
+  return typeof v === "number" && validate(v) ? v : undefined;
+};
 
 /** 执行上下文（M4.5）：当前异步链跑在哪个子代理的循环里——深度自证（模块不用传深度，
  *  孙代理派单经 ALS 自然拿到父上下文）。主对话执行的工具 = 无 store（深度 1）。 */
@@ -321,7 +328,14 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     const agentSid = `agents_${id}`;
     const agentStore = deps.makeStore(agentSid, agentsDir);
     const spillDir = join(agentsDir, agentSid, "spill"); // 显式传——默认拼装 join(sessionsDir, sid, "spill") 会落错位（harness.ts spill 同款坑）
-    const maxTurns = Math.min(req.maxTurns ?? SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS);
+    // 轮数保险丝解析（2026-09-27 双保险丝批）：[tool-subagent].maxTurns（settings）> 工种 req.maxTurns > 默认 100；
+    // -1 = 不限（仅时长兜底）；显式数值钳位 [1, 200]
+    const cfgTurns = readLimitConfig(deps, "maxTurns", (v) => v === -1 || (Number.isInteger(v) && v >= 1 && v <= SUBAGENT_MAX_TURNS_CEILING));
+    const reqTurns = req.maxTurns !== undefined && (req.maxTurns === -1 || (Number.isInteger(req.maxTurns) && req.maxTurns >= 1))
+      ? Math.min(req.maxTurns, SUBAGENT_MAX_TURNS_CEILING) : undefined;
+    const maxTurns = cfgTurns ?? reqTurns ?? SUBAGENT_MAX_TURNS; // -1 = 不限
+    const inactivityMs = readLimitConfig(deps, "inactivityTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_INACTIVITY_TIMEOUT_MS;
+    const totalMs = readLimitConfig(deps, "totalTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_TOTAL_TIMEOUT_MS;
     const approvalMode = await resolveApprovalMode(deps); // spawn 时定格（决策 3 第一层）
     const records: WriteRecords = { actual: new Set(), attempts: new Set(), bashCommands: [] };
     let declaredPaths: string[] | undefined;
@@ -331,8 +345,17 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     let lastText = "";
     let endKind = "completed";
     let endError: string | undefined;
-    const abortedByCap = (): boolean => turns >= maxTurns;
+    let truncated: "max_turns" | "inactivity" | "total_timeout" | undefined;
+    let abortReason: "user" | "inactivity" | "total_timeout" | "grace_exhausted" = "user";
+    // 读取经函数（定时器闭包里的赋值不参与外层流窄化——直接比较会被 TS 误判无交集）
+    const abortReasonOf = (): "user" | "inactivity" | "total_timeout" | "grace_exhausted" => abortReason;
+    // 收尾轮（2026-09-27 拍板，opencode MAX_STEPS_PROMPT / Reasonix grace round 定式）：到顶不掐死——
+    // 注入「工具已禁用，必须文字总结」再给恰一轮；模型还调工具就 veto；仍未停才真断
+    let graceArmed = false;
+    let graceConsumed = false;
 
+    // 时长保险丝句柄（try 外声明——try/catch/finally 各自块作用域，finally 里清不到 try 内的 const）
+    let fuseTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController();
     entry.controller = controller;
     entry.cancel = () => controller.abort(); // running 阶段的取消口（排队阶段由 spawn 编排层覆写）
@@ -431,7 +454,34 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         });
         return veto ?? undefined;
       }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
+      // 收尾轮双监听：steering 一次性注入总结指令（loop 每 step 首收）；工具全禁（waterfall 任一 deny 即终局）
+      bus.on(CORE_POINTS.steering, () => {
+        if (!graceArmed || graceConsumed) return [];
+        graceConsumed = true;
+        return [{
+          text: `已达到轮数上限（${maxTurns}）。所有工具从现在起已禁用。请立即输出最终文字总结：已完成的工作、未完成的部分、对下一步的建议。不要再尝试调用任何工具。`,
+          sourceModule: "kernel",
+        }];
+      }, `subagent-grace:${id}`);
+      bus.on(CORE_POINTS.toolPreExecute, () => (graceConsumed
+        ? { deny: true, reason: "轮数上限收尾轮——工具已禁用，请直接输出文字总结" }
+        : undefined), `subagent-grace:${id}`);
 
+      // 时长双保险丝（2026-09-27 拍板）：不活动 600s（活动重置——ZCode 定式，治挂死不误杀长调研）
+      // + 总时长 2h（kimi 定式）；到点「超时收尾」不标失败——结论=最后回复+truncated 标注
+      let lastActivity = Date.now();
+      const startedAtMs = Date.now();
+      fuseTimer = inactivityMs === -1 && totalMs === -1
+        ? undefined
+        : setInterval(() => {
+            if (inactivityMs !== -1 && Date.now() - lastActivity > inactivityMs) {
+              abortReason = "inactivity";
+              controller.abort();
+            } else if (totalMs !== -1 && Date.now() - startedAtMs > totalMs) {
+              abortReason = "total_timeout";
+              controller.abort();
+            }
+          }, Math.max(1000, Math.min(inactivityMs === -1 ? totalMs : inactivityMs, 30_000) / 2));
       // 思考档位（2026-09-27）：子代理跟随 /effort 解析（与主对话同链）；记册供 agent 组行显示
       const effort = deps.resolveEffort !== undefined ? await deps.resolveEffort() : undefined;
       if (effort !== undefined) entry.effort = effort;
@@ -446,12 +496,18 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         signal: controller.signal,
         sink: deps.sink,
       })) {
+        lastActivity = Date.now(); // 心跳（不活动保险丝）：任何事件都算在动
         if (e.type === LOG_TYPES.toolCall) {
           entry.toolCalls = (entry.toolCalls ?? 0) + 1;
         } else if (e.type === LOG_TYPES.turnStep) {
           turns++;
           entry.turns = turns;
-          if (abortedByCap()) controller.abort(); // 轮数保险丝（决策 10）：到顶即停，结论取最后回复
+          if (maxTurns !== -1 && turns >= maxTurns && !graceArmed) {
+            graceArmed = true; // 收尾轮：下一 step 首注入总结指令 + 工具全禁（不再 abort）
+          } else if (maxTurns !== -1 && turns > maxTurns + 1) {
+            abortReason = "grace_exhausted"; // 收尾轮后还在调工具——真断（防无限收尾）
+            controller.abort();
+          }
         } else if (e.type === LOG_TYPES.assistantMessage) {
           const t = textOf(e);
           if (t !== "") lastText = t;
@@ -469,6 +525,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       endKind = "error";
       endError = err instanceof Error ? err.message : String(err);
     } finally {
+      if (fuseTimer !== undefined) clearInterval(fuseTimer);
       gate.release(id); // 闸随持闸者结束释放（决策 24②：完成/失败/被停都算——被停占闸不放就是另一种死锁）
       await agentStore.flush().catch(() => undefined);
       await agentStore.close().catch(() => undefined);
@@ -477,12 +534,20 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     // 越界回执（决策 24⑤）：实际写/被拦尝试 ∉ 报备 → 列入（宿主自己记的，模型伪造不了）；bash 命令串备查
     const receipt = buildReceipt(records, declaredPaths, deps.cwd);
     const conclusion = lastText.slice(-SUBAGENT_CONCLUSION_TAIL); // 保尾（决策 10）
-    if (endKind === "completed" && !abortedByCap()) {
-      return { id, status: "completed", turns, conclusion, ...receipt };
+    // 到顶/超时 = 截断收尾不标失败（2026-09-27 拍板）：轮数到顶经收尾轮交卷；不活动/总时长到点取最后回复
+    if (graceConsumed && (endKind === "completed" || (endKind === "interrupted" && abortReasonOf() !== "user" && abortReasonOf() !== "grace_exhausted"))) {
+      truncated = "max_turns";
+    } else if (endKind === "interrupted" && (abortReasonOf() === "inactivity" || abortReasonOf() === "total_timeout")) {
+      truncated = abortReasonOf() === "inactivity" ? "inactivity" : "total_timeout";
+    }
+    if (endKind === "completed" || truncated !== undefined) {
+      return { id, status: "completed", turns, conclusion, ...(truncated !== undefined ? { truncated } : {}), ...receipt };
     }
     const error =
       endKind === "interrupted"
-        ? abortedByCap() ? `已达轮数上限 ${maxTurns}，结论为最后回复` : "已被取消（子代理被停止）"
+        ? abortReasonOf() === "grace_exhausted"
+          ? `已达轮数上限 ${maxTurns} 且收尾轮后仍未停止——强制中断`
+          : "已被取消（子代理被停止）"
         : endError ?? "子代理执行失败";
     return { id, status: "failed", turns, conclusion, error, ...receipt };
   };

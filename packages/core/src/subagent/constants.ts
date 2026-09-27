@@ -7,8 +7,19 @@ export const SUBAGENT_CONCURRENCY = 8;
 /** 一张任务清单的最多条数（kimi Swarm 128 申报上限同款）。 */
 export const SUBAGENT_LIST_MAX = 128;
 
-/** 轮数上限（模型往返）；工种文件 maxTurns 只能更低（min 生效）。 */
-export const SUBAGENT_MAX_TURNS = 40;
+/** 轮数默认上限（模型往返；2026-09-27 双保险丝批 40→100——九仓调研：无一家默认低于此，收尾轮兜住撞限）。
+ *  工种/settings 可声明 -1 = 不限（仅时长保险丝兜底）；显式数值钳位 [1, SUBAGENT_MAX_TURNS_CEILING]。 */
+export const SUBAGENT_MAX_TURNS = 100;
+
+/** 显式声明的轮数上限钳位（工种/设置写更高按此截）。 */
+export const SUBAGENT_MAX_TURNS_CEILING = 200;
+
+/** 不活动超时（ZCode inactivityTimeoutMs 600s 同款）：子代理无任何事件超过此时长 → 超时收尾。
+ *  [tool-subagent] inactivityTimeoutMs 可覆盖；-1 = 关。 */
+export const SUBAGENT_INACTIVITY_TIMEOUT_MS = 600_000;
+
+/** 总时长兜底（kimi 2h 同款）：从入跑起算的墙钟上限 → 超时收尾。[tool-subagent] totalTimeoutMs 可覆盖；-1 = 关。 */
+export const SUBAGENT_TOTAL_TIMEOUT_MS = 7_200_000;
 
 /** 结论保尾字符数（qwen 32K 截断保尾同款）。 */
 export const SUBAGENT_CONCLUSION_TAIL = 32000;
