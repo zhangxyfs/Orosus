@@ -119,7 +119,12 @@ export function toolResultChip(output: unknown, isError: unknown): string {
 /** 单事件 → 终端文案（完成事件面——T5 断流后 assistant/chunk 不在此列）。
  *  压缩/裁剪对用户可见（三轮 P1：此前零渲染）；四家参考均有可见提示。 */
 export function renderEvent(e: SessionEvent, state: RenderState): string {
-  if (e.type === "tool/call") return `${closeReasoning(state)}\n${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd())}\n`;
+  if (e.type === "tool/call") {
+    if (String(e.name) === "tool-subagent__tasks") return ""; // 纯查询行不进流区（进度看 agent 组——2026-09-27 拍板）
+    return `${closeReasoning(state)}
+${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd())}
+`;
+  }
   if (e.type === "tool/result") return `${toolResultChip(e.output, e.isError)}\n`;
   if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
