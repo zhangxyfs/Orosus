@@ -2037,4 +2037,59 @@ describe("查看窗文本选择（m5 鼠标批 T8——T5/T6/T7 机制全复用�
 	});
 });
 
+describe("拖选自动滚（m5 鼠标批 T9——压边缘 50ms 一格 + 指针重映射续选，kimi :1259-1312 三件套）", () => {
+	const press = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}M`); };
+	const dragTo = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<32;${x + 1};${y + 1}M`); };
+	const releaseAt = (input: FakeInput, x: number, y: number): void => { input.emit("data", `\x1b[<0;${x + 1};${y + 1}m`); };
+	const doc100 = Array.from({ length: 100 }, (_, i) => `第${i + 1}行内容`);
+	type AutoState = { scrollBack: number; autoScrollDir: number; autoScrollTimer: NodeJS.Timeout | undefined; mselFocus: { scope: string; docIdx: number; col: number } | undefined };
+
+	it("T9-1 拖到流区顶压边：50ms 脉冲递增 scrollBack 且选区吃进滚入的新行（指针重映射续选）", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as AutoState;
+		press(input, 6, 10); // 流区中部起锚（docIdx 75+10=85）
+		dragTo(input, 6, 0); // 压顶（y=0 ≤ 顶）——启动向上自动滚
+		await flush(180); // ≥3 个脉冲
+		expect(st.scrollBack).toBeGreaterThanOrEqual(3); // 50ms 一格（kimi :1283）
+		expect(st.mselFocus?.scope).toBe("main");
+		expect((st.mselFocus?.docIdx ?? 0)).toBeLessThan(85); // focus 随内容上滚吃进历史行（指针没动内容动了）
+		releaseAt(input, 6, 0); // 松手即停
+		await flush(120);
+		expect(st.autoScrollTimer).toBeUndefined();
+		app.stop();
+	});
+	it("T9-2 指针回界内停表：drag 回中部后 scrollBack 不再变", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as AutoState;
+		press(input, 6, 10);
+		dragTo(input, 6, 0);
+		await flush(120); // 滚几格
+		expect(st.scrollBack).toBeGreaterThan(0);
+		dragTo(input, 6, 10); // 回界内
+		await flush(20);
+		expect(st.autoScrollTimer).toBeUndefined(); // 停表
+		const frozen = st.scrollBack;
+		await flush(150);
+		expect(st.scrollBack).toBe(frozen); // 不再动
+		app.stop();
+	});
+	it("T9-3 滚到头自停：scrollBack 逼近 maxScroll 后脉冲钳制不变即清定时器", async () => {
+		const { app, input } = rig(doc100);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as AutoState;
+		st.scrollBack = 74; // maxScroll = 101−26 = 75——一格到顶
+		press(input, 6, 10);
+		dragTo(input, 6, 0); // 压顶继续向上
+		await flush(150);
+		expect(st.scrollBack).toBe(75); // 恰到顶
+		expect(st.autoScrollTimer).toBeUndefined(); // 钳制不变即自停（无悬挂句柄）
+		app.stop();
+	});
+});
+
 });
