@@ -1100,7 +1100,7 @@ export class FullApp {
 	}
 
 	/** 选区端点排序（anchor/focus → lo/hi）。 */
-	private mselRange(): { lo: { docIdx: number; col: number }; hi: { docIdx: number; col: number } } | undefined {
+	private mselRange(): { lo: { scope: "main" | "view"; docIdx: number; col: number }; hi: { scope: "main" | "view"; docIdx: number; col: number } } | undefined {
 		const { mselAnchor: a, mselFocus: f } = this.state;
 		if (a === undefined || f === undefined) return undefined;
 		if (a.docIdx < f.docIdx || (a.docIdx === f.docIdx && a.col <= f.col)) return { lo: a, hi: f };
