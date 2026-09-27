@@ -308,8 +308,9 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		input.emit("data", "\x1b[D"); // 方向键触发一帧（不改文本）
 		await flush();
 		const qLine = stripAnsi(lastScreen.find((l) => stripAnsi(l).includes("› 第一条排队"))!);
-		// 分隔线必须落在左栏宽处（队列行未补齐则 │ 左移错位——2026-09-23 走查实锤回归钉；CJK 计宽用 visibleWidth）
-		expect(visibleWidth(qLine.slice(0, qLine.indexOf("│")))).toBe(100 - (app as unknown as { sidebarW(): number }).sidebarW() - 2);
+		// 面板边框必须落在左栏宽处（队列行未补齐则面板边框左移错位——2026-09-23 走查实锤回归钉；
+		// 2026-09-27 分隔线退役后此处钉的是面板自身边框 = 左栏宽 leftW = cols − sidebarW − 1；CJK 计宽用 visibleWidth）
+		expect(visibleWidth(qLine.slice(0, qLine.indexOf("│")))).toBe(100 - (app as unknown as { sidebarW(): number }).sidebarW() - 1);
 		input.emit("data", "\x15"); // Ctrl+U = steer：队列 + 草稿一起给宿主
 		await flush();
 		expect(actions).toEqual(["steer:第一条排队|第二条排队|草稿内容"]);
@@ -2143,7 +2144,7 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		app.start();
 		await flush();
 		const st = app.stateRef as unknown as { scrollBack: number };
-		const trackX = 64 - 1; // leftW = 100−34−2 = 64 → 轨道列 63
+		const trackX = 65 - 1; // leftW = 100−34−1 = 65（分隔线列并入——2026-09-27）→ 轨道列 64
 		press(input, trackX, 10); // 点轨道第 10 行（非拇指区——初始拇指贴底 19-25）
 		await flush();
 		expect(st.scrollBack).toBeGreaterThan(0); // 跳位：拇指中心跳到指针行 → first ≈ 26 → scrollBack ≈ 49
@@ -2195,7 +2196,7 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		app.start();
 		await flush();
 		const st = app.stateRef as unknown as { scrollBack: number; scrollbarDrag: unknown };
-		const trackX = 63;
+		const trackX = 64; // 轨道列 = leftW−1 = 64（leftW 65——分隔线退役后左栏扩 1 列）
 		press(input, trackX, 13); // 点轨道中部跳位（非拇指区）
 		await flush();
 		const s1 = st.scrollBack;

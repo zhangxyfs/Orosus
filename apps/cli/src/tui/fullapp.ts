@@ -428,7 +428,7 @@ export class FullApp {
 		// 再收 2 列 = 右内衬（2026-09-23 用户拍板：左垫 2 列后右端顶分隔线错位——两端各留 2 列对称；
 		// docmodel 内部再 −2 折行，正文实际占 leftW − 4）
 		const sidebarW = this.state.sidebarVisible ? this.sidebarW() : 0;
-		return Math.max(8, this.io.columns() - sidebarW - 4);
+		return Math.max(8, this.io.columns() - sidebarW - 3);
 	}
 
 	/** 忙碌探针（F5 四轮：宿主排队判定用）。 */
@@ -2228,8 +2228,10 @@ export class FullApp {
 		const cols = this.io.columns();
 		const rows = this.io.rows();
 		const s = this.state;
-		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0; // 隐藏 = 左栏占满（无分隔线/无面板）
-		const leftW = cols - sidebarW - 2;
+		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0; // 隐藏 = 左栏占满（无面板）
+		// 2026-09-27 用户走查拍板：左栏与侧栏间的分隔线退役——原分隔线列并入左栏（左栏 +1 列，
+		// 输入框与滚动条随之右扩；面板紧贴左栏、自身宽度不变）
+		const leftW = cols - sidebarW - 1;
 		const innerW = Math.max(8, leftW - 4);
 		const inputRows = layoutInputRows(s.input, innerW);
 		const cursorPos = locateCursor(inputRows, s.cursor);
@@ -2349,10 +2351,10 @@ export class FullApp {
 		screen[divRow + 2 + showRows] = theme.fg(ibc, "╰" + "─".repeat(Math.max(1, leftW - 2)) + "╯");
 
 		if (s.sidebarVisible) {
+			// 2026-09-27 用户走查拍板：左栏-侧栏分隔线退役——面板直接拼接（自带框线不缺分隔感）
 			for (let r = 0; r < rows; r++) {
-				const sep = theme.fg("border", "│");
 				const right = r < statusH ? (status[r] ?? "") : (tasks[r - statusH] ?? "");
-				screen[r] = (screen[r] ?? "") + sep + right;
+				screen[r] = (screen[r] ?? "") + right;
 			}
 		}
 
