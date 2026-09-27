@@ -8,12 +8,32 @@
  *  Windows conhost 两条防御（spike 执行期发现⑤，验证报告在案）：
  *  ① conhost 不实现 DECAWM（`?7l` 被忽略）——底行右角格永不写满（截到 cols−1 防滚屏）；
  *  ② 全帧重写逐行绝对寻址不用 `\r\n` 推进（写满任一末列后 `\r\n` 推进两行、整帧错位下移）。
- *  鼠标上报曾随 spike 第五轮开启（?1000/?1006），2026-09-21 用户拍板关闭待重开。 */
+ *  鼠标上报曾随 spike 第五轮开启（?1000/?1006），2026-09-21 拍板关闭；m5 鼠标批（2026-09-27）重开（方案 docs/superpowers/plans/2026-09-27-m5-mouse-wheel-scroll.md）。 */
 
 import { padToWidth, sliceByColumn, visibleWidth } from "./width.ts";
 
-export const ENTER_ALT = "\x1b[?1049h\x1b[?7l\x1b[2J\x1b[H\x1b[?25l";
-export const EXIT_ALT = "\x1b[?2026h\x1b[?1049l\x1b[?7h\x1b[0m\x1b[?25h\x1b[?2026l";
+/** 鼠标上报开关串（m5 鼠标批 T3——kimi tui-alt-screen.ts:65-67 + :354-364 两档照抄）：
+ *  全动档含 ?1003（T10 滚动条悬停需要无按键移动事件；拖选只需按钮级跟踪）；多路复用器下
+ *  降级去 ?1003（转发压力）。kimi 另开的 ?1004 焦点事件无消费面，两档都不开。 */
+export const MOUSE_ON_ALL_MOTION = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+export const MOUSE_ON_BUTTON_MOTION = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+/** 全关四段（未开的段关掉无害——一次串管所有档的退出）。 */
+export const MOUSE_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+
+/** 按环境选档：tmux/screen/zellij（或 TERM 前缀）→ 按钮级；否则全动。 */
+export function mouseOnFor(env: NodeJS.ProcessEnv): string {
+	const term = env["TERM"]?.toLowerCase() ?? "";
+	return env["TMUX"] !== undefined || env["ZELLIJ"] !== undefined || env["STY"] !== undefined
+		|| term.startsWith("tmux") || term.startsWith("screen")
+		? MOUSE_ON_BUTTON_MOTION : MOUSE_ON_ALL_MOTION;
+}
+
+/** 崩溃恢复串（m5 鼠标批 T3——与 fullapp exit 钩子同源）：光标/bracketed paste/折行/鼠标四段恢复；
+ *  ?1049l 退屏段由钩子按 isActive 追加。 */
+export const CRASH_RESTORE = "\x1b[?25h\x1b[?2004l\x1b[?7h" + MOUSE_OFF;
+
+export const ENTER_ALT = "\x1b[?1049h\x1b[?7l\x1b[2J\x1b[H\x1b[?25l" + mouseOnFor(process.env);
+export const EXIT_ALT = "\x1b[?2026h" + MOUSE_OFF + "\x1b[?1049l\x1b[?7h\x1b[0m\x1b[?25h\x1b[?2026l";
 
 const SYNC_ON = "\x1b[?2026h";
 const SYNC_OFF = "\x1b[?2026l";

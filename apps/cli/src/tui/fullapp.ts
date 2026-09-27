@@ -12,7 +12,7 @@
 import { writeSync } from "node:fs";
 import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
-import { FullScreen, type OverlayFrame } from "./fullscreen.ts";
+import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, isMouseSequence, type WheelEvent } from "./mouse.ts";
@@ -2065,7 +2065,9 @@ export class FullApp {
 		process.on("exit", () => {
 			try {
 				const cur = FullApp.activeInstance;
-				writeSync(1, "\x1b[?25h\x1b[?2004l\x1b[?7h" + (cur?.full.isActive === true ? "\x1b[?1049l" : ""));
+				// CRASH_RESTORE（m5 鼠标批 T3）：恢复串提为 fullscreen.ts 导出常量与 MOUSE_OFF 同源——
+				// 开了鼠标上报后这里漏关段就是「崩溃后滚轮失灵到 reset」事故；?1049l 段按 isActive 追加
+				writeSync(1, CRASH_RESTORE + (cur?.full.isActive === true ? "\x1b[?1049l" : ""));
 			} catch {
 				/* noop */
 			}
