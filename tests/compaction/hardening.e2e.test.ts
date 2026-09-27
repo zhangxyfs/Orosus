@@ -84,7 +84,7 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     await h.prompt("一");
     await h.prompt("二");
     const all = await store.all();
-    expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 3 && e.trigger === "overflow")).toBe(true); // v3：dropped = 全部 3 条（用户消息既进摘要又留原话）
+    expect(all.some((e) => e.type === "turn/compaction" && e.droppedCount === 4 && e.trigger === "overflow")).toBe(true); // v3：dropped = 全部 4 条（含 m4-6 T7 日期系统行；用户消息既进摘要又留原话）
     expect((all.at(-1) as { kind?: string }).kind).toBe("completed");
     expect(fp.requests).toHaveLength(4); // turn1 / 报错请求 / 摘要 / 重试
     const retry = fp.requests[3]!;
@@ -125,7 +125,7 @@ describe("compaction 强化端到端（M3 补强 T8/D44）", () => {
     });
     await h.prompt("一");
     await h.prompt("二");
-    expect(render.buf.join("")).toContain("[已压缩：3 条历史 → 摘要（Ctrl+O 查看）]"); // v3：dropped = 全部 3 条（渲染行读 droppedCount；措辞随形态更新）
+    expect(render.buf.join("")).toContain("[已压缩：4 条历史 → 摘要（Ctrl+O 查看）]"); // v3：dropped = 全部 4 条（含日期系统行；渲染行读 droppedCount）
     await h.close();
   });
 

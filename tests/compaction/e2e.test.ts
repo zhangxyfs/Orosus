@@ -13,7 +13,7 @@ describe("compaction 端到端（M3 T5/T9）", () => {
   it("压缩后主请求 messages 前缀为摘要消息，被压缩的原文不再进请求", async () => {
     const dir = mkdtempSync(join(tmpdir(), "orosus-compaction-"));
     try {
-      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 1\n", "utf8");
+      writeFileSync(join(dir, "config.toml"), "[compaction]\nthresholdTokens = 100\n", "utf8"); // m4-6 T7 后 turn1 历史含日期系统行——阈值抬到 100 保「turn1 不压、turn2 压」脚本对位
       const big = "A".repeat(70_000); // v3：大内容放 assistant 侧——auto 保留策略收用户原话、assistant 全摘要
       const fp = fakeProvider([
         [{ type: "text/delta", text: big }, { type: "finish", kind: "stop" }] as Chunk[],
@@ -35,8 +35,8 @@ describe("compaction 端到端（M3 T5/T9）", () => {
         discovery: { userDir: join(dir, "m"), projectDir: join(dir, "p"), trustFile: join(dir, "t.json") },
         config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
       });
-      await h.prompt("hi");     // 历史 1 条 est 1 ≤ 1 不触发；主请求 #0
-      await h.prompt("more");   // 历史 3 条 est ≈17500 > 1 → 压缩：llm 摘要（请求 #1）→ 主请求 #2 = [hi, more, elision, 摘要(尾)]
+      await h.prompt("hi");     // 历史 2 条（hi + 日期系统行〔m4-6 T7〕）est ≤ 100 不触发；主请求 #0
+      await h.prompt("more");   // 历史 4 条 est ≈17500 > 100 → 压缩：llm 摘要（请求 #1）→ 主请求 #2 = [date, hi, more, elision, 摘要(尾)]
       const last = fp.requests[2]!;
       const texts = last.messages.map((m) => String((m as { content: { text?: string }[] }).content[0]?.text ?? ""));
       expect(texts[texts.length - 1]).toContain("[历史摘要]");
