@@ -449,7 +449,7 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined }
+		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
@@ -489,7 +489,7 @@ export class FullApp {
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 口子一）：几何走 resolvePopupLayout（缺省 center80 居中弹窗——
 	 *  五旧窗随之统一新长相）、自定义键（保留键剔除）、排队化。too-small（连保底 8×3 都装不下）不弹窗、
 	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。 */
-	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void {
+	viewText(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string; live?: () => string }): void {
 		const open = (): void => {
 			if (this.stopped) return;
 			const geo = this.viewGeo(opts?.layout);
@@ -505,6 +505,7 @@ export class FullApp {
 				...(opts?.layout !== undefined ? { layout: opts.layout } : {}),
 				...(keys !== undefined ? { keys } : {}),
 				...(opts?.owner !== undefined ? { owner: opts.owner } : {}),
+				...(opts?.live !== undefined ? { live: opts.live } : {}), // M4.5 T11 查看窗实时流——每帧现调（1 秒 tick 自更）
 			};
 			this.scheduler.requestImmediateRender();
 		};
@@ -1742,6 +1743,7 @@ export class FullApp {
 			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter);
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
+			if (pu.live !== undefined) pu.lines = pu.live().split("\n"); // M4.5 T11：实时查看窗——每帧现算（滚动钳制在 build 内）
 			overlay = this.buildViewOverlay(pu);
 		} else if (this.pendingUi?.kind === "dialog") {
 			const pu = this.pendingUi;
