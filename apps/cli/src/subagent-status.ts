@@ -26,7 +26,7 @@ const durText = (ms: number): string => {
   return `${Math.floor(total / 3600)} 时 ${String(Math.floor(total / 60) % 60).padStart(2, "0")} 分`;
 };
 
-const statusText = (e: SubagentRosterEntry, now: number): string => {
+const statusText = (e: SubagentRosterEntry): string => {
   if (e.status === "queued") return e.pendingApproval !== undefined ? "排队中 · 等审批" : "排队中";
   if (e.status === "running") return e.pendingApproval !== undefined ? `运行中 ${e.turns} 轮 · 等审批` : `运行中 ${e.turns} 轮`;
   // 完成时带括号统计段（拍板要素）：轮数 + 时长；失败带错误首行
@@ -48,16 +48,16 @@ export function subagentStatusLines(entries: readonly SubagentRosterEntry[], now
   const lines: string[] = [];
   for (const parent of visible.filter((e) => e.depth === 1)) {
     const color = STATUS_COLOR[parent.status];
-    lines.push(theme.fg(color, `◆ 子代理 ${parent.id} ${parent.label} · ${statusText(parent, now)}`));
+    lines.push(theme.fg(color, `◆ 子代理 ${parent.id} ${parent.label} · ${statusText(parent)}`));
     for (const child of visible.filter((e) => e.depth === 2 && e.parentId === parent.id)) {
       const ccolor = STATUS_COLOR[child.status];
-      lines.push(theme.fg(ccolor, `  └ ${child.id} ${child.label} · ${statusText(child, now)}`));
+      lines.push(theme.fg(ccolor, `  └ ${child.id} ${child.label} · ${statusText(child)}`));
     }
   }
   // 孤儿孙代理（父已出闪现窗口）不丢——顶层显示
   for (const orphan of visible.filter((e) => e.depth === 2 && !visible.some((p) => p.id === e.parentId))) {
     const color = STATUS_COLOR[orphan.status];
-    lines.push(theme.fg(color, `◆ 孙代理 ${orphan.id} ${orphan.label} · ${statusText(orphan, now)}`));
+    lines.push(theme.fg(color, `◆ 孙代理 ${orphan.id} ${orphan.label} · ${statusText(orphan)}`));
   }
   return lines;
 }

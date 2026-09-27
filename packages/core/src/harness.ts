@@ -953,10 +953,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         } finally {
           currentTurn = null;
           settle();
+          // M4.5 T9 竞态兜底：送回若落在「停止边界已收过、currentTurn 未清」的窗口里进来，此处补触发
+          if (deliveryBacklog.length > 0) deliverSubagentTurn();
         }
       } catch (err) {
         currentTurn = null;
         settle();
+        if (deliveryBacklog.length > 0) deliverSubagentTurn();
         throw err;
       }
     },

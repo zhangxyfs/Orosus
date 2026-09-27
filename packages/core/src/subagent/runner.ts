@@ -391,8 +391,12 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       // 写协调闸（决策 24②）：先报备归一——报备了的按路径占闸；没报备但工具面含会写的（bash/写工具）
       // = 算整仓（保守排队，③）；纯只读代理不占闸。同血缘撞车快败在闸内判定。等待期间不撒手（并发位纪律在调用方）。
       const wholeRepo = declaredPaths === undefined && [...faceNames].some((n) => WRITE_CAPABLE_TOOLS.has(n));
-      entry.writeClaim = { paths: declaredPaths ?? [], wholeRepo };
-      await gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors);
+      // 纯只读代理不占闸（空报备 + 非整仓）：不排队、不冲突、不受同血缘快败——「改派只读孙代理」的正解形态
+      const holdsGate = wholeRepo || (declaredPaths ?? []).length > 0;
+      if (holdsGate) {
+        entry.writeClaim = { paths: declaredPaths ?? [], wholeRepo };
+        await gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors);
+      }
       // 审批关卡（决策 3 第二层，T2）：agent bus 的 toolPreExecute → 运行时双层门控第二道（决策 4②）
       // + 模式分流——auto 照单放行；ask 转发主对话关卡（带 ask-risky 档提示与子代理身份，主对话在问时弹串行队列）。
       // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停自动按拒绝收场）。

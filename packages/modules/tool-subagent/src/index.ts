@@ -19,9 +19,18 @@ const STATUS_TEXT: Record<SubagentOutcome["status"], string> = { completed: "完
 /** 单条结论的行格式（决策 15：状态 + 编号 + 轮数 + 结论 + 错误摘要）。 */
 const fmtOutcome = (o: SubagentOutcome): string => {
   const head = `- ${o.id} · ${STATUS_TEXT[o.status]} · ${o.turns} 轮`;
-  if (o.status === "completed") return `${head}\n结论：${o.conclusion}`;
+  // 越界回执与 bash 备查（决策 24⑤——列进结果报告，模型与用户都看得见）
+  const receipt: string[] = [];
+  if (o.outOfBounds !== undefined && o.outOfBounds.length > 0) {
+    receipt.push(`越界回执（实际写过/试图写、不在报备内——宿主记账）：${o.outOfBounds.join("、")}`);
+  }
+  if (o.bashCommands !== undefined && o.bashCommands.length > 0) {
+    receipt.push(`bash 命令备查（实际写路径不可还原）：${o.bashCommands.map((c) => c.slice(0, 80)).join(" | ")}`);
+  }
+  const receiptText = receipt.length > 0 ? `\n${receipt.join("\n")}` : "";
+  if (o.status === "completed") return `${head}\n结论：${o.conclusion}${receiptText}`;
   const tail = o.conclusion !== "" ? `\n最后回复：${o.conclusion}` : "";
-  return `${head}\n错误：${o.error ?? "未知"}${tail}`;
+  return `${head}\n错误：${o.error ?? "未知"}${tail}${receiptText}`;
 };
 
 /** 批量三校验（决策 18）：任务书必含 {{item}}；展开互异；清单至少 2 条（上限 128 由 schema .max 拦）。 */

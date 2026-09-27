@@ -35,6 +35,9 @@ importers:
       '@orosus/tool-shell':
         specifier: workspace:*
         version: link:packages/modules/tool-shell
+      '@orosus/tool-subagent':
+        specifier: workspace:*
+        version: link:packages/modules/tool-subagent
       '@orosus/tool-todo':
         specifier: workspace:*
         version: link:packages/modules/tool-todo

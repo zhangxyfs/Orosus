@@ -123,7 +123,7 @@ describe("后台结论送回 T9（决策 17：followUp 缝 + 忙时排队 + 自�
       [{ type: "finish", kind: "error", errorMessage: "端点炸了" }],
       text("送回轮接话"),
     ]);
-    const t = ((await s.port.spawn({ label: "失败单", prompt: "干", background: true })) as { id: string }).id;
+    await s.port.spawn({ label: "失败单", prompt: "干", background: true });
     await waitUntil(async () => (await eventsOf(s.h)).some((e) => e.type === "agent/steering-message"), 5000);
     const steer = (await eventsOf(s.h)).find((e) => e.type === "agent/steering-message") as { messages?: { text?: string }[] };
     expect(steer.messages![0]!.text).toContain("失败单 失败：端点炸了");
