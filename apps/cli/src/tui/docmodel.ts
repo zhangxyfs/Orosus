@@ -10,6 +10,7 @@
 
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import { agentGroupLines } from "../subagent-status.ts";
+import { spawnIdsIn } from "../tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
@@ -41,6 +42,9 @@ export class DocModel {
 	 *  记 callId 供 result 侧精确丢弃；旧日志无 callId 用一次性旗标兜（防孤儿结果错挂到别的工具行）。 */
 	private ghostCalls = new Set<string>();
 	private ghostNoId = false;
+	/** 回放期 spawn 配对（重载后 agent 组重建）：callId → 组条目引用——result 到场时把编号抠进组。
+	 *  回放专用状态（实时路走 claimAgents 末组认领，不用精确配对）。 */
+	private pendingSpawnResults = new Map<string, { k: "group"; ids: string[] }>();
 
 	/** 子代理 agent 组摄入（2026-09-27 用户拍板）：spawn 工具调用的替代显示——绝不走「Using Spawn」通用行。
 	 *  连续 spawn 合成一组（末组还有活动条目就复用；全终态后下一次 spawn 开新组）。 */
@@ -56,6 +60,13 @@ export class DocModel {
 			if (alive) return; // 末组还活着——并入它
 		}
 		this.lines.push({ k: "group", ids: [] });
+	}
+
+	/** 全部 agent 组引用的编号集合（宿主 provider 据此补挂盘上历史条目——回放组的渲染取数口）。 */
+	groupIds(): Set<string> {
+		const s = new Set<string>();
+		for (const e of this.lines) if (e.k === "group") for (const id of e.ids) s.add(id);
+		return s;
 	}
 
 	/** 末组认领新条目（渲染期现算——老组只渲染既有 ids，新面孔归末组；kimi「同 step 断组」的等价实现）。 */
@@ -278,13 +289,20 @@ export class DocModel {
 
 	/** 历史结构化摄入（F5 五轮②③④）：与实时流同形（暖金提问/md 渲染/think marker/工具 Used 行）。 */
 	historyFrom(events: { type: string; [k: string]: unknown }[], _width: number): void {
+		// 回放期 agent 组重建（2026-09-27：重载后与实时同形——不再退化静态占位行）。同一轮 assistant
+		// 的连续 spawn 并一组（组引用到 user/assistant 消息边界即断）——与实时路「末组活着才并入」等价：
+		// 回放全员终态，轮边界即断组点。组员编号从 spawn 的 result 里抠（callId 精确配对，spawnIdsIn
+		// 与 /tasks 历史重建同口径）。
+		let group: { k: "group"; ids: string[] } | undefined;
 		for (const e of events) {
 			if (e.type === "user/message") {
+				group = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
 				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
 				const imgs = parts.filter((p) => p.kind === "image").length;
 				if (text !== "" || imgs > 0) this.userPrompt(text + (imgs > 0 ? `  [图片${imgs > 1 ? `×${imgs}` : ""}]` : ""));
 			} else if (e.type === "assistant/message") {
+				group = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
 				const think = parts.filter((p) => p.kind === "reasoning").map((p) => p.text ?? "").join("");
 				if (think !== "") {
@@ -298,15 +316,26 @@ export class DocModel {
 				}
 			} else if (e.type === "tool/call") {
 				const name = String(e.name);
+				const callId = typeof e.callId === "string" ? e.callId : undefined;
 				if (name === "tool-subagent__spawn") {
-					// 回放无活 roster——agent 组退化静态一行（结论看下方结果行）
 					this.settleActive();
-					this.lines.push({ k: "raw", s: theme.fg("muted", "  ● 派出子代理（结果见下）") });
+					if (group === undefined) {
+						group = { k: "group", ids: [] };
+						this.lines.push(group);
+					}
+					if (callId !== undefined) this.pendingSpawnResults.set(callId, group);
 					continue;
 				}
-				this.toolCall(name, e.args as Record<string, unknown> | undefined, typeof e.callId === "string" ? e.callId : undefined);
+				this.toolCall(name, e.args as Record<string, unknown> | undefined, callId);
 			} else if (e.type === "tool/result") {
-				this.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined);
+				const callId = typeof e.callId === "string" ? e.callId : undefined;
+				const grp = callId !== undefined ? this.pendingSpawnResults.get(callId) : undefined;
+				if (grp !== undefined && callId !== undefined) {
+					this.pendingSpawnResults.delete(callId);
+					for (const id of spawnIdsIn(String(e.output ?? ""))) if (!grp.ids.includes(id)) grp.ids.push(id);
+					continue; // spawn 结果不落行——进度/结论都在 agent 组里（实时路同款：无配对工具行，静默丢弃）
+				}
+				this.toolResult(e.output, e.isError, callId);
 			} else if (e.type === "agent/steering-message") {
 				// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
 				const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
@@ -360,6 +389,9 @@ export class DocModel {
 			if (e.k === "group") {
 				const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
 				out.push(...agentGroupLines(mine)); // 每帧现算——状态/时长/词元随心跳自更
+				// 兜底：组员编号在场但花名册解析不出（fork 会话 agents/ 留在原会话、盘上文件被清）——
+				// 留一行痕迹而不是整组消失（spawn 行已吞，无此行这段历史就空了）
+				if (mine.length === 0 && e.ids.length > 0) out.push(theme.fg("muted", "  ● 派出子代理（本会话无可查名册——/tasks 可试）"));
 				continue;
 			}
 			if (e.k === "think") {
