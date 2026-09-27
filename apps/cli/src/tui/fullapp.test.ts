@@ -1012,6 +1012,20 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(app.stateRef.toast?.text).toContain("终端窗口太小");
 		expect(stripAnsi(output.buf)).not.toContain("小窗");
 	});
+	it("⑥ Ctrl+O 字节直达（2026-09-27 修复回归钉）：\\x0f → showCompactionSummary → 全屏摘要窗", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			// 宿主接线同款（main.ts showCompactionSummary → viewText 全屏窗）——此处验「字节 → 键名 → 宿主全局键」这条断链
+			showCompactionSummary: () => app.viewText("压缩摘要", "摘要正文一行", { layout: "full" }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\x0f");
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("压缩摘要");
+		expect(b).toContain("摘要正文一行");
+		expect(b).toContain("─".repeat(90)); // full 布局（④ 同款判据：90+ 连横线）
+	});
 });
 
 describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 30000] 越界钳边界；主程序自家调用全走缺省）", () => {
