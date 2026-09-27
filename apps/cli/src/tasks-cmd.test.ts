@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
-import { agentEventsFromFile, emptyTasksRow, renderAgentView, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, renderAgentView, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 let dir: string | undefined;
@@ -92,6 +92,22 @@ describe("/tasks 空态（2026-09-27 用户拍板：无条件开列表）", () =
     expect(row).toContain("自动送回");
     expect(row).toContain("[2m"); // 弱化（dim）形态——整行置灰非彩色
     expect(taskIdOfRow(row)).toBeUndefined(); // 不是任务行——选中也不进查看窗
+  });
+});
+
+describe("卸载 tool-subagent 守卫（2026-09-27：在跑/排队/挂审批不许卸）", () => {
+  it("㊺c 三态：在跑拦（含挂审批计数文案）；排队也拦；全结束/空册不拦", () => {
+    const msg = subagentUnloadBlock([
+      T({ status: "running" }),
+      T({ id: "aaaa0002", label: "排队的", status: "queued" }),
+      T({ id: "bbbb0003", label: "挂审批的", status: "running", background: true, pendingApproval: { callId: "c", tool: "boom__run", reason: "subprocess" } }),
+      T({ id: "cccc0004", label: "完成的", status: "completed" }),
+    ]);
+    expect(msg).toContain("有 3 个子代理在跑（含 1 个挂起审批）");
+    expect(msg).toContain("/tasks");
+    expect(msg).toContain("双击 Esc");
+    expect(subagentUnloadBlock([T({ id: "dddd0005", label: "只剩结束的", status: "failed", error: "x" })])).toBeUndefined();
+    expect(subagentUnloadBlock([])).toBeUndefined();
   });
 });
 });

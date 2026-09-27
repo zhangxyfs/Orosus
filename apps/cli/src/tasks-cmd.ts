@@ -50,6 +50,16 @@ export function emptyTasksRow(): string {
   return theme.dim("（暂无在册子代理——对模型说「派个子代理去 …」后这里会列出；后台跑完结论自动送回对话）");
 }
 
+/** 卸载 tool-subagent 的守卫（2026-09-27 用户拍板）：有在跑/排队/挂审批的子代理不许卸——
+ *  内核 runner 不随模块卸载死，但派活工具面会消失，在跑的单子就没人派得出停工具、模型也管不着了。
+ *  拦下并指路（/tasks 逐个停或双击 Esc 全停）；空闲册（含已结束保留条目）不拦。 */
+export function subagentUnloadBlock(entries: readonly SubagentRosterEntry[]): string | undefined {
+  const active = entries.filter((e) => e.status === "queued" || e.status === "running");
+  if (active.length === 0) return undefined;
+  const pending = active.filter((e) => e.pendingApproval !== undefined).length;
+  return `有 ${active.length} 个子代理在跑${pending > 0 ? `（含 ${pending} 个挂起审批）` : ""}——先停掉再卸载：/tasks 逐个停，或双击 Esc 全停`;
+}
+
 /** 行选中解析：彩色行 → 编号（choose 回串解析用）。 */
 export function taskIdOfRow(row: string): string | undefined {
   const m = /\] (?:[0-9a-f]{8} - )?([0-9a-f]{8}) /.exec(stripAnsi(row));
