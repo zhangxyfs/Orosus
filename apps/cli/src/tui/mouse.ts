@@ -39,3 +39,36 @@ export function isMouseSequence(seq: string): boolean {
 	// eslint-disable-next-line no-control-regex -- 鼠标序列本身就是控制字符转义序列（\x1b 起）
 	return /^\x1b\[<[0-9;]*[Mm]$/.test(seq) || (seq.startsWith("\x1b[M") && seq.length === 6); // X10 恒 6 字节——切分器特判保证原子性
 }
+
+/** SGR 按钮事件（m5 鼠标批 T4——kimi parseSgrMouseEvent :1000-1009 同形）：按下建锚 / 拖动扩选 /
+ *  松开结算。修饰位值：Shift=4 / Alt=8 / Ctrl=16（kimi :811-813 同式）——Shift+拖选走终端原生
+ *  的让路口，本批解析不消费但解出备查。 */
+export interface ButtonEvent {
+	kind: "press" | "drag" | "release";
+	button: number; // 主键号（0 左键 / 1 中键 / 2 右键）
+	x: number; // 0 起列
+	y: number; // 0 起行
+	shift: boolean;
+	alt: boolean;
+	ctrl: boolean;
+}
+
+export function parseButton(seq: string): ButtonEvent | undefined {
+	// eslint-disable-next-line no-control-regex -- 鼠标序列本身就是控制字符转义序列（\x1b 起）
+	const m = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(seq);
+	if (!m) return undefined;
+	const code = Number.parseInt(m[1]!, 10);
+	if (code & 64) return undefined; // 滚轮/横滚归 parseWheel，不在此报
+	const release = m[4] === "m";
+	const motion = (code & 32) !== 0;
+	if (release && motion) return undefined; // 释放+motion 组合不存在的防御
+	return {
+		kind: release ? "release" : motion ? "drag" : "press",
+		button: code & 3,
+		x: Number.parseInt(m[2]!, 10) - 1,
+		y: Number.parseInt(m[3]!, 10) - 1,
+		shift: (code & 4) !== 0,
+		alt: (code & 8) !== 0,
+		ctrl: (code & 16) !== 0,
+	};
+}

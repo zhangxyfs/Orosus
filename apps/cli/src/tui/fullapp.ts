@@ -15,7 +15,7 @@ import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
-import { parseWheel, isMouseSequence, type WheelEvent } from "./mouse.ts";
+import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
 import { renderWidgetLines, renderWidgets } from "./widgets.ts";
@@ -369,11 +369,16 @@ export class FullApp {
 		this.tickTimer = setInterval(() => this.scheduler.requestRender(), 1000);
 		this.tickTimer.unref?.();
 		this.term.onInput((seq) => {
-			// 鼠标分流（m5 鼠标批 T2）：滚轮走 onWheel 路由；其余鼠标事件识别后整吞
-			// （kimi :708 consume 同款——T4 起按钮事件在此分流给处理器）；剩下的才是按键流
+			// 鼠标分流（m5 鼠标批 T2/T4）：滚轮走 onWheel 路由；按钮事件（按下/拖动/松开）交
+			// onButton 处理器（T5 起填肉——此间空挂安全吞）；其余鼠标序列整吞（kimi :708 同款）
 			const wheel = parseWheel(seq);
 			if (wheel !== undefined) {
 				this.onWheel(wheel);
+				return;
+			}
+			const button = parseButton(seq);
+			if (button !== undefined) {
+				this.onButton(button);
 				return;
 			}
 			if (isMouseSequence(seq)) return;
@@ -899,6 +904,14 @@ export class FullApp {
 			s.scrollBack = Math.max(0, s.scrollBack + (up ? lines : -lines)); // 上滚=回看历史（PgUp 同向）；上界渲染帧已钳
 		}
 		this.scheduler.requestImmediateRender();
+	}
+
+	/** 按钮事件处理器（m5 鼠标批 T4 接线——T5 起填肉：选择状态机/URL 点击/滚动条拖动/自动滚）。
+	 *  空挂形态 = 安全吞（识别后不进按键流）；引导锁与右键忽略先落（T5 的常量语义前置）。 */
+	private onButton(e: ButtonEvent): void {
+		if (this.onboarding !== undefined) return; // 引导锁（同 onWheel）
+		if (e.button !== 0) return; // v1 只左键；Shift+拖选走终端原生让路（shift 位解析了不消费）
+		void e; // T5 填肉前的占位消费（安全吞）
 	}
 
 	private onKey(key: string): void {

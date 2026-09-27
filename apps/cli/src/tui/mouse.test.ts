@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseWheel, isMouseSequence } from "./mouse.ts";
+import { parseWheel, parseButton, isMouseSequence } from "./mouse.ts";
 
 describe("鼠标序列解析件（m5 鼠标批 T0——kimi parseWheelEvent 精简独立）", () => {
 	it("① SGR 滚轮向上（button 64）→ direction -1 + 坐标 0 起", () => {
@@ -32,5 +32,23 @@ describe("鼠标序列解析件（m5 鼠标批 T0——kimi parseWheelEvent 精�
 		expect(isMouseSequence("\x1b[A")).toBe(false);
 		expect(isMouseSequence("a")).toBe(false);
 		expect(isMouseSequence("\x1b[<0;1;1Mx")).toBe(false); // 尾巴多字节不是完整鼠标序列
+	});
+	it("⑦ parseButton 左键按下（0+M）→ press/button 0 + 坐标 0 起", () => {
+		expect(parseButton("\x1b[<0;10;5M")).toEqual({ kind: "press", button: 0, x: 9, y: 4, shift: false, alt: false, ctrl: false });
+	});
+	it("⑧ parseButton 按住移动（motion 位 32）→ drag；松开（m 尾）→ release", () => {
+		expect(parseButton("\x1b[<32;10;5M")?.kind).toBe("drag");
+		expect(parseButton("\x1b[<0;10;5m")).toEqual({ kind: "release", button: 0, x: 9, y: 4, shift: false, alt: false, ctrl: false });
+	});
+	it("⑨ 修饰位：Shift=值 4 / Alt=值 8 / Ctrl=值 16（kimi :811-813 同式——Shift+拖选走终端原生让路口，本批解析不消费）", () => {
+		expect(parseButton("\x1b[<4;1;1M")).toMatchObject({ shift: true, alt: false, ctrl: false });
+		expect(parseButton("\x1b[<8;1;1M")).toMatchObject({ shift: false, alt: true, ctrl: false });
+		expect(parseButton("\x1b[<16;1;1M")).toMatchObject({ shift: false, alt: false, ctrl: true });
+		expect(parseButton("\x1b[<28;1;1M")).toMatchObject({ shift: true, alt: true, ctrl: true }); // 4+8+16 合并 + motion 位
+	});
+	it("⑩ parseButton 与 parseWheel 不重叠：滚轮码（64/65）在 parseButton 恒 undefined；释放+motion 防御 undefined", () => {
+		expect(parseButton("\x1b[<64;1;1M")).toBeUndefined(); // 滚轮归 parseWheel
+		expect(parseButton("\x1b[<65;1;1M")).toBeUndefined();
+		expect(parseButton("\x1b[<32;1;1m")).toBeUndefined(); // 释放+motion 组合不存在的防御
 	});
 });
