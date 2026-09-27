@@ -41,6 +41,7 @@ import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
+import { runSubagentApprovalSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { agentEventsFromFile, renderAgentView, tasksListRows } from "./tasks-cmd.ts";
 import { subagentStatusLines } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -1050,11 +1051,23 @@ const ctxUsageText = (): string => {
 
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
  *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
+/** 子代理配置文件（M4.5 T12）：用户层 config.toml——[tool-subagent] 节 model/approvalMode 两键。 */
+const subagentConfigFile = (): string => join(orosusHome(), "config.toml");
+/** 模型槽清单（子代理模型菜单数据源——/model 同源换写盘目标）。 */
+const modelSlotList = (): { name: string; defaultModel?: string; listModels?: () => Promise<string[]> }[] =>
+	h.graph().services.listProviders().map((x) => ({
+		name: x.name,
+		...(x.defaultModel !== undefined ? { defaultModel: x.defaultModel } : {}),
+		...(h.graph().services.provider(x.name)?.listModels !== undefined ? { listModels: h.graph().services.provider(x.name)!.listModels! } : {}),
+	}));
+
+
 const SETTINGS_ITEMS = [
 	"磁盘占用（各目录大小与清理口径）",
 	"上下文用量（窗口占用与输入输出累计）",
 	"Token 用量（本会话与项目累计）",
 	"运行状态（模型 / 会话 / 模块图）",
+	"子代理（模型与审批模式）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
 const tokenUsageText = async (): Promise<string> => {
@@ -1122,6 +1135,22 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	else if (picked === 2) app.viewText("Token 用量", await tokenUsageText());
 	else if (picked === 3) app.viewText("运行状态", runtimeStatusText());
 	else if (picked === 4) {
+		// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名
+		const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式"]);
+		const chooseVia = async (t: string, items: string[]): Promise<string> => {
+			const i = await app.pickOverlay(t, items);
+			if (i === undefined) throw new Error("已取消（Esc）");
+			return items[i] ?? "";
+		};
+		if (sub === 0) {
+			const res = await runSubagentModelSetting(chooseVia, subagentConfigFile(), modelSlotList());
+			if (res !== "") app.showToast(res);
+		} else if (sub === 1) {
+			const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
+			if (res !== "") app.showToast(res);
+		}
+	}
+	else if (picked === 5) {
 		const res = await runSearchSettings();
 		if (res !== "") app.viewText("配置网络搜索", res); // 成功路径走 notice/toast 静默约定——非空输出才落面板
 	}
@@ -1136,6 +1165,17 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 	else if (idx === 2) out(await tokenUsageText());
 	else if (idx === 3) out(runtimeStatusText());
 	else if (idx === 4) {
+		// M4.5 T12 行模式对等件：子代理分组（模型 / 审批模式）
+		const subIdx = await commandUi.choose("子代理", ["子代理模型", "审批模式"]);
+		if (subIdx === "子代理模型") {
+			const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList());
+			if (res !== "") out(res);
+		} else if (subIdx === "审批模式") {
+			const res = await runSubagentApprovalSetting((t, items) => commandUi.choose(t, items), subagentConfigFile());
+			if (res !== "") out(res);
+		}
+	}
+	else if (idx === 5) {
 		const res = await runSearchSettings();
 		if (res !== "") out(res);
 	}
