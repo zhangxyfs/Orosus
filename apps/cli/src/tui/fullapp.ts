@@ -459,7 +459,7 @@ export class FullApp {
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
 		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined }
+		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
 
@@ -512,9 +512,12 @@ export class FullApp {
 			const initLines = text.split("\n");
 			this.state.overlayOpen = false; // 与斜杠菜单互斥
 			this.pendingUi = {
-				// bottom（2026-09-27 用户拍板：查看窗自动滚到底）——初始滚到末页；down/pageDown 天然钳制在 max
+				// bottom（2026-09-27 用户拍板：查看窗自动滚到底）——T1 pinned 重构：scroll 恒诚实值（0 起），
+				// 贴底走显式标志每帧渲染钳到末页；旧「哨兵大数 + 渲染钳制」形态首按 ↑ 要连按
+				// （哨兵 − 真实最大滚动）次才动（m5 鼠标批修的真 bug——滚轮/自动滚写字段前置）
 				kind: "view", title, text, lines: initLines,
-				scroll: opts?.bottom === true ? Math.max(0, initLines.length - 1) : 0,
+				scroll: 0,
+				...(opts?.bottom === true ? { pinned: true } : {}), // 初值贴底——首帧渲染钳到末页
 				...(opts?.layout !== undefined ? { layout: opts.layout } : {}),
 				...(keys !== undefined ? { keys } : {}),
 				...(opts?.owner !== undefined ? { owner: opts.owner } : {}),
@@ -962,6 +965,12 @@ export class FullApp {
 					return;
 				}
 				const page = Math.max(3, this.viewGeo(pu.layout).height - 3);
+				// pinned 窗先落地再滚（T1）：scroll 写到真实末页再脱钉——首按 ↑ 立即从末页上移（旧哨兵
+				// 大数形态首按无效，要连按哨兵差值次才动）；↓/PgDn 落地后钳在 max 不动，语义不变
+				if (pu.pinned === true) {
+					pu.scroll = Math.max(0, pu.lines.length - page);
+					pu.pinned = false;
+				}
 				if (key === "up") pu.scroll = Math.max(0, pu.scroll - 1);
 				else if (key === "down") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + 1);
 				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
@@ -1790,7 +1799,7 @@ export class FullApp {
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 新几何）：resolvePopupLayout 居中弹窗（缺省 center80；五旧窗随之
 	 *  统一新长相）。恒定行数防闪烁（斜杠菜单同款纪律）：顶框 + 内容页（高 − 3）+ 余量提示行 + 底框，
 	 *  余量并进提示行不再条件性增删行；自定义键的 label 附在提示行尾。 */
-	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; layout?: PopupLayout; keys?: Record<string, PopupKey> }): OverlayFrame {
+	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout; keys?: Record<string, PopupKey> }): OverlayFrame {
 		const geo = this.viewGeo(pu.layout);
 		const ow = geo.width;
 		const oInner = ow - 2;
@@ -1802,7 +1811,7 @@ export class FullApp {
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
 		const page = Math.max(3, geo.height - 3);
 		const maxScroll = Math.max(0, pu.lines.length - page);
-		const sc = Math.max(0, Math.min(maxScroll, pu.scroll));
+		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
 		const win = pu.lines.slice(sc, sc + page);
 		for (const l of win) olines.push(boxRow(" " + truncateToWidth(l, oInner - 2)));
 		const upN = sc;
