@@ -80,6 +80,8 @@ export function agentEventsFromFile(sessionsDir: string, mainSid: string, id: st
 }
 
 /** 查看窗文本：顶栏状态行 + 消息流回放（DocModel 主窗口同款渲染——跑完的结论就是流的末条）。 */
+// width = 折行列宽：宿主（main.ts openTasks）传「终端宽 − 盒框 4 列」——查看窗全屏时折行跟全窗口走；
+// 78 只是纯函数/行模式的缺省口径。
 export function renderAgentView(entry: SubagentRosterEntry, events: readonly { type: string; [k: string]: unknown }[], width = 78): string {
   const dm = new DocModel();
   dm.historyFrom([...events], width);
