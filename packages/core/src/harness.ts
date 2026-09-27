@@ -922,8 +922,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // 守卫只挡聊天消息。注意：core 不设 busy 白名单——「哪些命令 turn 安全」是宿主分级职责（/compact 这类改历史的仍须排队）
       const cmdText = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmdText.startsWith("/")) {
-        const m = /^\/([a-z0-9][a-z0-9-]*(?:__[a-z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(cmdText);
-        const name = m?.[1];
+        // 命令词忽略大小写（2026-09-27 用户走查拍板）：正则收 A-Z、name 归一小写后查表——
+        // 参数部分原样（/title 名字 不大写化）
+        const m = /^\/([a-zA-Z0-9][a-zA-Z0-9-]*(?:__[a-zA-Z0-9-]+)?)(?:\s([\s\S]*))?$/.exec(cmdText);
+        const name = m?.[1]?.toLowerCase();
         const args = (m?.[2] ?? "").trim();
         if (name === undefined) throw new Error(`无法解析命令 "${text}"——输入 /help 查看可用命令`);
         const builtin = builtinCommands.get(`/${name}`);

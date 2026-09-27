@@ -79,6 +79,12 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(relativeTime(now - 800 * 86_400_000, now)).toBe("2 年前");
   });
 
+  it("⑤b 命令词忽略大小写（2026-09-27 用户走查拍板）：/NEW /RESUME 2 /Title 名字 /EXIT 全路由；参数保持原样", () => {
+    expect(sessionCommand("/NEW", { sessionId: "s1" })).toEqual({ kind: "new" });
+    expect(sessionCommand("/RESUME 2", { sessionId: "s1" })).toEqual({ kind: "resume", sessionId: "2" });
+    expect(sessionCommand("/Title MyName", { sessionId: "s1" })).toEqual({ kind: "title", name: "MyName" }); // 名字不大写化
+    expect(sessionCommand("/EXIT", { sessionId: "s1" })).toEqual({ kind: "quit" });
+  });
   it("⑤ sessionCommand：/resume 无参=pick、/resume 2 与 /sessions abc=直达、既有命令不变", () => {
     expect(sessionCommand("/resume", { sessionId: "s1" })).toEqual({ kind: "pick" });
     expect(sessionCommand("/sessions", { sessionId: "s1" })).toEqual({ kind: "pick" });

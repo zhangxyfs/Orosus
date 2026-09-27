@@ -417,6 +417,15 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 
+  it("⑧b 命令词忽略大小写（2026-09-27 用户走查拍板）：/HELP 与 /M__CMD 都路由成功——参数保持原样", async () => {
+    const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", (a) => `got:${a}`)] });
+    const help = await h.prompt("/HELP");
+    expect(help).toContain("内建"); // 大写命令词命中内建表（归一小写后查）
+    const mod = await h.prompt("/M__CMD SomeArg");
+    expect(mod).toContain("got:SomeArg"); // 模块命令命中 + 参数原样不大写化
+    await h.close();
+  });
+
   it("⑨ h.status() 读口（批⑥——/status 命令退役）：model 含覆盖标记、会话 id、模块图三计数", async () => {
     const h = await makeHarness({});
     const st = h.status();
