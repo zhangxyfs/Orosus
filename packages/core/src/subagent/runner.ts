@@ -257,8 +257,10 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
 
   const agentsDirOf = (): string => join(deps.sessionsDir, deps.mainStore.sessionId, "agents");
 
-  /** 并发位（决策 5：硬上限 8，含前台后台孙代理；排队的先来先服务；嵌套满载立即失败不排队——决策 4③）。 */
-  const acquireSlot = (id: string, depth: 1 | 2): Promise<void> => {
+  /** 并发位（决策 5：硬上限 8，含前台后台孙代理；排队的先来先服务；嵌套满载立即失败不排队——决策 4③）。
+   *  CX-05 修复（2026-09-28 code review）：排队接调用方取消信号（仅前台——后台不接，CX-04）——abort 即
+   *  移出队列按「已被停止」失败收场（与 stop() 内联路径同文案），Esc 后派生 turn 不再挂死等位。 */
+  const acquireSlot = (id: string, depth: 1 | 2, signal?: AbortSignal): Promise<void> => {
     if (runningSlots < SUBAGENT_CONCURRENCY) {
       runningSlots++;
       return Promise.resolve();
@@ -267,12 +269,23 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       return Promise.reject(new Error(`嵌套满载：${SUBAGENT_CONCURRENCY} 个并发位已满——孙代理立即失败不排队（防父子互等槽位，决策 4③）`));
     }
     return new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        const idx = slotQueue.findIndex((x) => x.agentId === id);
+        if (idx < 0) return; // 已递补上位——起跑后的打断归 runOne 的前台信号链接管（不双收）
+        slotQueue.splice(idx, 1);
+        reject(new Error("已被停止——排队中的单子按失败收场"));
+      };
+      if (signal !== undefined && signal.aborted) { // abort 事件已过（新 listener 接不上）——直接按停单收场
+        reject(new Error("已被停止——排队中的单子按失败收场"));
+        return;
+      }
       const w = {
         agentId: id,
-        enter: () => { runningSlots++; resolve(); },
+        enter: () => { runningSlots++; if (signal !== undefined) signal.removeEventListener("abort", onAbort); resolve(); },
         reject,
       };
       slotQueue.push(w);
+      if (signal !== undefined) signal.addEventListener("abort", onAbort, { once: true });
     });
   };
   const releaseSlot = (): void => {
@@ -380,8 +393,10 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     const controller = new AbortController();
     entry.controller = controller;
     entry.cancel = () => controller.abort(); // running 阶段的取消口（排队阶段由 spawn 编排层覆写）
-    if (callerSignal !== undefined) {
-      // 前台取消链（决策 11：跟主对话取消信号走——主 turn 的 signal 打断即打断）
+    // 前台取消链（决策 11：跟主对话取消信号走——主 turn 的 signal 打断即打断）。
+    // CX-04 修复（2026-09-28 code review）：后台单不接派生 turn 的取消信号——主 turn 被 Esc 打断
+    // 不误杀在跑的后台代理（决策 12 独立生命周期），取消只来自 stop()/保险丝；前台照旧被打断。
+    if (callerSignal !== undefined && req.background !== true) {
       if (callerSignal.aborted) controller.abort();
       else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
     }
@@ -450,7 +465,33 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       const holdsGate = wholeRepo || (declaredPaths ?? []).length > 0;
       if (holdsGate) {
         entry.writeClaim = { paths: declaredPaths ?? [], wholeRepo };
-        await gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors);
+        // CX-05 修复（2026-09-28 code review）：写闸排队接取消信号——abort 即 gate.release 让位，按
+        // 「已被停止」失败收场（reject 文案经闸内透传，与 stop() 的排队收场同款）。挂 controller.signal：
+        // 前台 = 派生 turn 取消链（CX-04 修复后后台不接派生信号——此路只余 stop()/保险丝，同样该让闸走人）。
+        // 起跑时信号已断 = 不入闸直接按停单收场（abort 事件不重发，后挂的 listener 接不上）。
+        if (controller.signal.aborted) {
+          throw new Error("已被停止——排队中的单子按失败收场");
+        }
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const onAbort = (): void => {
+            if (settled) return;
+            if (gate.snapshot().holders.some((hh) => hh.agentId === id)) return; // 已持闸（理论时序窗）——打断交给循环信号链，不误放闸
+            gate.release(id); // 排队者：闸内移出并 reject——「已被停止——排队中的写单子按失败收场」经 err 分支透传
+          };
+          const finish = (ok: boolean, err?: unknown): void => {
+            if (settled) return;
+            settled = true;
+            controller.signal.removeEventListener("abort", onAbort);
+            if (ok) resolve();
+            else reject(err);
+          };
+          gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors).then(
+            () => finish(true),
+            (err: unknown) => finish(false, err),
+          );
+          controller.signal.addEventListener("abort", onAbort, { once: true });
+        });
       }
       // 审批关卡（决策 3 第二层，T2；CX-01/02 修复 2026-09-28）：agent bus 的 toolPreExecute → 运行时
       // 双层门控第二道（决策 4②）。auto 档不再整门跳过——照转主关卡但档提示带 never（decide 规则链先于
@@ -618,7 +659,8 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
 
       // 单子全流程：并发位（嵌套满载快败）→ 写闸（等待期间位不撒手——先占 8 位之一再排闸）→ 跑 → 记册
       const run = async (): Promise<SubagentOutcome> => {
-        await acquireSlot(id, depth); // 排队期被停 = reject（编排层统一 settle）
+        // 排队期被停 = reject（编排层统一 settle）；CX-05：前台排队接调用方信号——abort 即按「已被停止」收场
+        await acquireSlot(id, depth, req.background === true ? undefined : caller?.signal);
         entry.status = "running";
         entry.startedAt = new Date().toISOString();
         try {

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore, repairFile } from "./jsonl.ts";
@@ -128,6 +128,50 @@ describe("sumUsage / lifetimeUsage 双形态（M4-1 T5/D45：新形态 usage 落
     await cur.append("assistant/message", { content: [{ kind: "text", text: "续" }], usage: { input: 5, output: 1 } });
     expect(await cur.lifetimeUsage()).toEqual({ input: 15, output: 5, sessions: 2 });
     await cur.close();
+  });
+});
+
+describe("CS-02 写失败不毒化写队列（2026-09-28 code review）：drain 失败 → append reject 非假成功；盘恢复后队列自愈", () => {
+  it("① 目标文件名撞目录：该次 append reject 且错误可见、后续 append 的 drain 照常执行；② 删占位后滞留批 + 新事件全量落盘、seq 链完整、flush/close 恢复 resolve", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs02-"));
+    const s = new JsonlSessionStore({ dir, sessionId: "s_heal" });
+    const placeholder = join(dir, "s_heal", "agents", "session.jsonl");
+    mkdirSync(placeholder, { recursive: true }); // 占位形态跨平台：文件名撞目录（drain 的 openSync/appendFileSync 必失败）
+    // ① 失败窗口：两次 append 都 reject——第一次证明不假成功（旧实现 Promise.resolve(event)），
+    // 第二次证明队列没被毒化（旧实现 queue 永久 rejected，后续 drain 全跳过、append 照样假成功）
+    const errs: string[] = [];
+    for (const [type, fields] of [["session/header", { format: 1 }], ["user/message", { content: [] }]] as const) {
+      await s.append(type, fields).then(
+        () => { throw new Error("append 假成功（CS-02 旧行为）"); },
+        (e: unknown) => { errs.push(String((e as Error).message)); },
+      );
+    }
+    expect(errs).toHaveLength(2);
+    expect(errs.every((m) => m.length > 0)).toBe(true); // 错误可见：真实 fs 错误带出调用侧，非静默滞留内存
+    await expect(s.flush()).rejects.toThrow(); // flush 不谎报完成：buffer 仍有滞留
+    // ② 自愈：删掉占位 → 下一次 append 的 drain 原样重试成功，失败批滞留事件一并补写
+    rmSync(placeholder, { recursive: true });
+    await s.append("turn/start", { model: "m" });
+    await s.flush(); // 旧实现：queue 永久 rejected，此步恒抛、文件永不重建
+    const events = readFileSync(placeholder, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 3]); // 滞留批 + 自愈批全量落盘：内存镜像与磁盘归一、链完整
+    expect(events.map((e) => e.type)).toEqual(["session/header", "user/message", "turn/start"]);
+    expect((await s.all()).map((e) => e.seq)).toEqual([1, 2, 3]);
+    await s.close(); // close 恢复 resolve（buffer 已清空）
+  });
+
+  it("ensureFile 失败窗口（CS-02 顺修）：agents 路径被文件占位 → append reject；移除后懒建重试成功（旧实现 fileEnsured 先置位，一次失败后永不重试）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs02b-"));
+    const s = new JsonlSessionStore({ dir, sessionId: "s_block" });
+    mkdirSync(join(dir, "s_block"), { recursive: true });
+    const blocker = join(dir, "s_block", "agents");
+    writeFileSync(blocker, "x"); // agents 该是目录的位置放文件——ensureFile 的 mkdirSync 抛
+    await expect(s.append("session/header", { format: 1 })).rejects.toThrow();
+    rmSync(blocker);
+    await s.append("user/message", { content: [] }); // 懒建重试：mkdir 重跑、文件建起（旧实现跳过懒建恒 ENOENT）
+    const events = readFileSync(join(blocker, "session.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.seq)).toEqual([1, 2]);
+    await s.close();
   });
 });
 

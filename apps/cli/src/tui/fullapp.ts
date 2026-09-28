@@ -1970,8 +1970,12 @@ export class FullApp {
 			case "backspace":
 				this.exitHistoryBrowse();
 				if (!this.deleteSelection() && s.cursor > 0) {
+					// CTU-02 修复（2026-09-28 code review）：光标前一位（cursor-1）落在代理对的低代理
+					// （0xdc00–0xdfff）且再前一位是高代理 → 整对删除。原判定区间写反（按高代理
+					// 0xd800–0xdbff 判），emoji 退格一次只删低代理、残留孤立高代理——对齐 moveCursor 的写法
 					const cp = s.input.codePointAt(s.cursor - 1)!;
-					const w = cp >= 0xd800 && cp <= 0xdbff ? 2 : 1;
+					const prev2 = s.input.charCodeAt(s.cursor - 2);
+					const w = cp >= 0xdc00 && cp <= 0xdfff && prev2 >= 0xd800 && prev2 <= 0xdbff ? 2 : 1;
 					s.input = s.input.slice(0, s.cursor - w) + s.input.slice(s.cursor);
 					s.cursor -= w;
 				}

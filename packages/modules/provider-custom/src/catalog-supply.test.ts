@@ -424,6 +424,43 @@ describe("/provider 多级菜单（D37）", () => {
   });
 });
 
+// MP-01 回归（报告条目：既有槽列表用 displayName 中文显示名渲染，sel.split("\n")[0] 反解把显示名当槽 key——
+// setModel("深度求索") 写坏配置、delete next["深度求索"] 假成功。修复：选中按下标反查回槽 key 真名）
+describe("/provider 既有槽管理（MP-01：显示名渲染 / 真名反查）", () => {
+  const providers = { deepseek: { type: "openai" as const, baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY" } };
+  /** 第一级选首项（显示名「深度求索\n（…）」——displayName 命中 DISPLAY_NAMES 的最常见目录槽名），第二级选指定动作 */
+  const pickUi = (act: string): MenuUi => {
+    let call = 0;
+    return {
+      choose: async (_t, items) => { call++; return call === 1 ? items[0]! : act; },
+      ask: async () => "",
+      askSecret: async () => "",
+      confirm: async () => false,
+    };
+  };
+
+  it("① 设为当前默认：选中中文显示名项 → setModel 收槽 key 真名 deepseek（非「深度求索」）", async () => {
+    const deps = fakeDeps({ loadProviders: async () => providers });
+    const out = await runProviderMenu(pickUi("设为当前默认"), deps);
+    expect(deps.state.setModels).toEqual(["deepseek"]); // MP-01 前：setModel("深度求索") → config 写入显示名，下一轮 provider 解析失败
+    expect(out).toContain('provider = "deepseek"');
+  });
+
+  it("② 移除：选中中文显示名项 → 槽真删（MP-01 前：delete next[显示名] 对 {deepseek:…} 是 no-op 假成功）", async () => {
+    const deps = fakeDeps({ loadProviders: async () => providers });
+    const out = await runProviderMenu(pickUi("移除"), deps);
+    expect(deps.state.saved).toEqual({}); // deepseek 真删（此前 saveProviders 原样回写）
+    expect(out).toContain("已移除");
+    expect(out).toContain("deepseek");
+  });
+
+  it("③ 未命中 DISPLAY_NAMES 的槽名（displayName 回退 id 本身）同样按真名管理", async () => {
+    const deps = fakeDeps({ loadProviders: async () => ({ "my-gateway": providers.deepseek! }) });
+    await runProviderMenu(pickUi("设为当前默认"), deps);
+    expect(deps.state.setModels).toEqual(["my-gateway"]);
+  });
+});
+
 describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai 提示两入口）", () => {
   it("① detectSameGate：同前缀互指、无同前缀 undefined、不污染入参（纯函数）", () => {
     const catalog = {

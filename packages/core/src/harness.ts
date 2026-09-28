@@ -630,9 +630,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     if (level === "auto") {
       effortOverride = undefined;
       upsertTopLevelKey(/^\s*effort\s*=/);
+      // CH-03：内存快照同步清——cfgEffortValue 读的是启动/reload 固化的 config.core.effort；
+      // 不清则配置层来源的档位在 auto 后仍滞留（「回目录默认档」静默失效）
+      delete config.core.effort;
     } else {
       effortOverride = level;
       upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${level}"` });
+      config.core.effort = level; // CH-03：双轨一致（盘上与内存快照同值）
     }
   };
 
@@ -1147,7 +1151,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       secrets = loadSecretsEnv(options.secretsFile ?? join(home2, "secrets.env")).vars; // 重读 secrets（向导等运行期写入后 reload 必须看到）
       const config2 = loadConfig({
         userFile: options.config?.userFile ?? join(home2, "config.toml"),
-        projectFile: join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
+        // CH-02：与启动路径（228 行）对齐——尊重注入的 projectFile；旧实现硬编码 cwd 缺省路径，
+        // reload 后项目层整层静默丢失 + 误读不该读的真实 cwd 文件（测试密封性/嵌入式宿主隔离被打破）
+        projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
         ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
         env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
       });
@@ -1230,7 +1236,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           ...(options.host !== undefined ? { host: options.host } : {}),
           subagent: subagentRunner, // M4.5 子代理批：reload 后重激活模块的 ctx.subagent 不缺件
           ...(blocked.length > 0 ? { blocked } : {}), // m5 T17：待确认桶随新图可见（重算后的 blocked）
-          reuse: { bus: oldGraph.bus, tools: oldGraph.tools },
+          reuse: { bus: oldGraph.bus, tools: oldGraph.tools, overlays: oldGraph.overlays }, // overlays 跨代共享（CK-04：换下模块的 overlay 摘除对所有代 ctx 生效）
           preserved,
           generations,
         });

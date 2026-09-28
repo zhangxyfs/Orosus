@@ -40,6 +40,26 @@ describe("mapSseChunk usage 提取（/usage 走查：GLM 方言 usage 与 finish
   });
 });
 
+// MP-03 回归（报告条目：网关在已 200 的 SSE 流里推 data: {"error":{…}} 错误帧——无 choices 无 usage
+// 落返 [] 被静默吞，流结束兜底 stop 把截断回复冒充完整）
+describe("mapSseChunk 错误帧（MP-03：{\"error\":…} 帧 → finish{kind:\"error\"} 带内终局）", () => {
+  it("⑤ 错误帧 → finish error；message 优先，code/type 递补，空对象给兜底文案", () => {
+    expect(mapSseChunk(state(), { error: { message: "quota exceeded", code: 429 } }))
+      .toEqual([{ type: "finish", kind: "error", errorMessage: "流错误：quota exceeded" }]);
+    expect(mapSseChunk(state(), { error: { code: 429 } }))
+      .toEqual([{ type: "finish", kind: "error", errorMessage: "流错误：code 429" }]);
+    expect(mapSseChunk(state(), { error: { type: "insufficient_quota" } }))
+      .toEqual([{ type: "finish", kind: "error", errorMessage: "流错误：insufficient_quota" }]);
+    expect(mapSseChunk(state(), { error: {} }))
+      .toEqual([{ type: "finish", kind: "error", errorMessage: "流错误：网关错误帧" }]);
+  });
+
+  it("⑥ error:null 方言不受扰（include_usage 中间帧同形）——正常 choices 照常映射（回归）", () => {
+    expect(mapSseChunk(state(), { choices: [{ delta: { content: "hi" } }], error: null }))
+      .toEqual([{ type: "text/delta", text: "hi" }]);
+  });
+});
+
 // M4-2.5 T5：图片映射（ContentPart image 引用形态——日志存路径、请求期转 base64）
 const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
 const { tmpdir } = await import("node:os");

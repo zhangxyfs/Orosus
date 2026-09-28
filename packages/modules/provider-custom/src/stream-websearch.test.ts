@@ -92,3 +92,40 @@ describe("provider-custom webSearch 线缆映射（M4-3 T1b）", () => {
     expect(bad.find((c) => c.type === "server-search")).toBeUndefined();
   });
 });
+
+// MP-03 回归（报告条目：两族流内错误帧被静默吞——anthropic error 事件落 default 返 [] 后零 finish、
+// openai 错误帧返 [] 后 [DONE] 兜底补 stop，截断回复均冒充完整答复）。e2e 钉错误帧全链产出 finish error。
+describe("流内错误帧带内终局（MP-03：半截回复不再冒充完整）", () => {
+  it("① anthropic 族：正文 delta 后接 event:error（过载关流，无 message_stop）→ finish error 且无 stop 终局", async () => {
+    const sse = [
+      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"半截\"}}\n\n",
+      "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+    ].join("");
+    const fetchImpl = (async () => sseResponse(sse)) as typeof fetch;
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl })(baseReq()));
+    expect(chunks.some((c) => c.type === "text/delta" && c.text === "半截")).toBe(true); // 已产出正文保留
+    expect(chunks.filter((c) => c.type === "finish")).toEqual([{ type: "finish", kind: "error", errorMessage: "overloaded_error：Overloaded" }]); // 唯一终局 = error（无 stop 冒充）
+  });
+
+  it("② openai 族：正文 delta 后接 {\"error\":…} 帧再 [DONE] → 错误帧压过兜底 stop（sawFinish 语义）", async () => {
+    const sse = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"半截\"}}]}\n\n",
+      "data: {\"error\":{\"message\":\"upstream timeout\",\"code\":504}}\n\n",
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchImpl = (async () => sseResponse(sse)) as typeof fetch;
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl })(baseReq()));
+    expect(chunks.some((c) => c.type === "text/delta" && c.text === "半截")).toBe(true);
+    expect(chunks.filter((c) => c.type === "finish")).toEqual([{ type: "finish", kind: "error", errorMessage: "流错误：upstream timeout" }]); // [DONE] 兜底 stop 不再触发
+  });
+
+  it("③ 无 event: 行方言（data.type=error）同判错误；error:null 中间帧不受扰（回归）", async () => {
+    const sse = "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
+    const fetchImpl = (async () => sseResponse(sse)) as typeof fetch;
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl })(baseReq()));
+    expect(chunks.at(-1)).toEqual({ type: "finish", kind: "error", errorMessage: "overloaded_error：Overloaded" });
+    const sse2 = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"error\":null}\n\ndata: [DONE]\n\n";
+    const ok = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl: (async () => sseResponse(sse2)) as typeof fetch })(baseReq()));
+    expect(ok.at(-1)).toEqual({ type: "finish", kind: "stop" }); // error:null 不误伤正常流
+  });
+});

@@ -8,8 +8,10 @@ const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 const md = (p: string) => mkdirSync(p, { recursive: true });
 
-describe("信任门端到端（T20）：未确认降级 → trust → 重启生效", () => {
-  it("项目级模块未确认 → failed(untrusted)；module trust 登记后新 harness 激活", async () => {
+describe("信任门端到端（T20）：项目级 fail-closed 拦截 + 真 hash 登记放行", () => {
+  // TS-01 回归钉背景：原断言 `state === "pending-confirm" || state === "active"` 析取恒真——
+  // 信任门若退化成「登记即过、不验 hash」（被穿透）该测试照样绿。拆成两个互斥方向分别钉死单态。
+  const setup = () => {
     const dir = mkdtempSync(join(tmpdir(), "orosus-trust-")); dirs.push(dir);
     md(join(dir, "mods", "proj-mod"));
     writeFileSync(join(dir, "mods", "proj-mod", "index.ts"), `import { defineModule } from "@orosus/contracts/module";
@@ -21,15 +23,33 @@ export default defineModule({ name: "proj-mod", version: "0.1.0", description: "
       discovery: { userDir: join(dir, "no-user"), projectDir: join(dir, "mods"), trustFile },
       config: { userFile: join(dir, "no.toml"), projectFile: join(dir, "no2.toml"), env: {} },
     });
+    return { dir, trustFile, boot };
+  };
+
+  it("TS-01 拦截方向：登记 hash 与入口不匹配（hash-changed）→ 仍拦（pending-confirm 单态，reason 带「变更」）", async () => {
+    const { dir, trustFile, boot } = setup();
     const h1 = await boot();
     expect(h1.graph().records.find((r) => r.name === "proj-mod")?.state).toBe("pending-confirm"); // m5 T17：待确认桶（原 failed(untrusted)——不进 failed 计数）
     await h1.close();
-    // module trust（非交互登记）→ hash 入册 → 重启生效
-    trustModule(trustFile, join(dir, "mods", "proj-mod"), "placeholder"); // hash 由发现管线算——此处经二次发现拿真 hash
+    // 登记一个必然不匹配的 hash → 重启后仍拦（hash-changed → 待确认桶带「代码已变更」）
+    trustModule(trustFile, join(dir, "mods", "proj-mod"), "placeholder");
     const h2 = await boot();
     const rec = h2.graph().records.find((r) => r.name === "proj-mod");
-    // placeholder hash 不匹配 → 仍拦（hash-changed → 待确认桶带「代码已变更」）；真 hash 需从 discovery 算——本用例验 fail-closed 方向
-    expect(rec?.state === "pending-confirm" || rec?.state === "active").toBe(true);
+    expect(rec?.state).toBe("pending-confirm"); // 单态钉死：不匹配 = 拦（原析取式在「错误放行为 active」时也绿）
+    expect(rec?.failReason ?? h2.pendingConfirms().find((p) => p.name === "proj-mod")?.reason ?? "").toContain("变更"); // hash-changed 文案
+    await h2.close();
+  });
+
+  it("TS-01 放行方向：用发现管线算出的真 hash 登记 → 重启后激活（原套件项目级「信任→激活」方向零覆盖）", async () => {
+    const { trustFile, boot } = setup();
+    const h1 = await boot();
+    const pending = h1.pendingConfirms().find((p) => p.name === "proj-mod")!; // 首挂弹窗的数据源——entryHash 由发现管线算出
+    expect(pending).toBeDefined();
+    expect(pending.layer).toBe("project");
+    trustModule(trustFile, pending.root, pending.entryHash); // 真 hash 入册
+    await h1.close();
+    const h2 = await boot();
+    expect(h2.graph().records.find((r) => r.name === "proj-mod")?.state).toBe("active"); // 单态钉死：匹配 = 放行
     await h2.close();
   });
 });

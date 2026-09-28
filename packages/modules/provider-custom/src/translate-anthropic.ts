@@ -25,17 +25,28 @@ export function mapStopReason(reason: string | null): "stop" | "length" | "toolU
   return "stop"; // end_turn / null / 未知
 }
 
-/** /effort 档位 → anthropic 面 thinking 线缆参数（kimi-code encodeThinking 同款映射）：
+/** /effort 档位 → anthropic 面 thinking 线缆参数（MP-02 修复后口径）：
+ *  官方 Messages API 约束——thinking.type="enabled" 时 budget_tokens 必填（≥1024）且 max_tokens 必须
+ *  大于 budget_tokens，裸 {type:"enabled"} 即 400 invalid_request_error。因此 enabled 恒钉预算：
  *  "off"/"none" = 关档（thinking disabled——语义档与 offEffort 值两形都收）；low/medium/high = 开思考并钉
- *  budget_tokens（1024/4096/32000，kimi-code budgetTokensForEffort 原值）；"on" 与其余档名（max/xhigh/minimal…）
- *  只开思考不钉预算（端点自定档深）。大小写不敏感。 */
-export function thinkingParamFor(effort: string): { type: "enabled" } | { type: "enabled"; budget_tokens: number } | { type: "disabled" } {
+ *  budget_tokens（1024/4096/32000，kimi-code budgetTokensForEffort 原值）；"on" 与其余档名（max/xhigh/
+ *  minimal…）对齐 kimi-code 'on' 档钉 32000（思考开 + 端点档深未知 → 取高档安全预算，不再裸 enabled）。
+ *  max_tokens > budget 由 stream-anthropic 构造点保证（预算 + 8192 输出余量）。大小写不敏感。 */
+export function thinkingParamFor(effort: string): { type: "enabled"; budget_tokens: number } | { type: "disabled" } {
   const e = effort.toLowerCase();
   if (e === "off" || e === "none") return { type: "disabled" };
   if (e === "low") return { type: "enabled", budget_tokens: 1024 };
   if (e === "medium") return { type: "enabled", budget_tokens: 4096 };
-  if (e === "high") return { type: "enabled", budget_tokens: 32_000 };
-  return { type: "enabled" };
+  return { type: "enabled", budget_tokens: 32_000 }; // high / on / 未知档（MP-02：官方必填约束——enabled 不裸发）
+}
+
+/** MP-03：流内 error 事件（官方 SSE 终局事件——过载/限流时服务端发出后关流，message_stop 不到达）→ 带内
+ *  错误终局。此前落 default 返 [] 被静默吞，半截回复经 loop 缺省 stop 冒充完整答复。 */
+function errorFinishChunks(err: unknown): Chunk[] {
+  const e = err as { type?: unknown; message?: unknown } | null | undefined;
+  const t = typeof e?.type === "string" && e.type !== "" ? e.type : "error";
+  const m = typeof e?.message === "string" && e.message !== "" ? e.message : "服务端流内错误";
+  return [{ type: "finish", kind: "error", errorMessage: `${t}：${m}` }];
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- 线缆格式按运行时形状窄化 */
@@ -73,7 +84,10 @@ export function mapEvent(state: SseState, event: string, raw: unknown): Chunk[] 
       return [{ type: "usage", input: state.inputTokens, output: data?.usage?.output_tokens ?? 0 }];
     case "message_stop":
       return [{ type: "finish", kind: mapStopReason(state.pendingStop) }];
+    case "error":
+      return errorFinishChunks(data?.error);
     default:
+      if (data?.type === "error") return errorFinishChunks(data?.error); // 无 event: 行的方言（parseSseBlock 默认 message）
       return []; // ping 等忽略
   }
 }

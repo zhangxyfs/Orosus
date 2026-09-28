@@ -78,7 +78,16 @@ export interface ActivateInput {
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
+  overlays?: OverlayEntry[];                    // CK-04：跨代共享 overlay 注册表（reload 换代沿用；缺省本轮新建——启动路径不变）
   sources?: Map<string, string>;                // T7：name → 来源标识（builtin / local·layer（dir））——failed 事件的 sourcePath
+}
+
+/** 配置 overlay 注册物（§6.6）：read 改写函数 + 归属。reload 换代经 reuse 共享同一数组（与 bus/tools 同纪律，
+ *  CK-04：每代私有数组曾使 Unchanged 模块的 overlay 换代即丢——重激活消费者读不到、被换下者的条目成僵尸）。 */
+export interface OverlayEntry {
+  section: string;
+  read(value: unknown): unknown;
+  owner: string;
 }
 
 /** reload 保留实例（§5.5 Unchanged）：kernel 侧从旧图收集（preservable()），新图直接沿用。 */
@@ -89,6 +98,8 @@ export interface PreservedInstance {
   commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];
   promptSections: { order: number; text: string; owner: string }[];
   cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册物按引用沿用（不展开——widgets getter 现问现答靠它活着）
+  disposers: Disposer[];                       // CK-03：跨代安全 disposer（bus 监听 detach / 工具注册 remove / overlay 摘除）——换代后换下时由当代 rollback 统一执行
+  staleFlag: { staled: boolean };              // CK-03：实例级 stale 标记（按引用跨代共享）——名字 keyed 的每代 Set 会打错代（preserved 的活 ctx 闭包在出生代）
   disposeFn?: Disposer;                        // 旧实例的模块 dispose（后续 teardown 调用）
   record: ModuleRecord;                        // 原记录（generation 不变）
 }
@@ -99,9 +110,13 @@ export interface ActivateOutput {
   commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];
   promptSections: { order: number; text: string; owner: string }[];
   cards: { spec: CardSpec; owner: string }[];  // m5 T5：卡注册表（按引用存——禁止 {..…spec} 展开拷贝拍平 getter）
+  overlays: OverlayEntry[];                    // CK-04：overlay 注册表（reuse 传入时为跨代共享数组——reload 沿用同一引用）
   contributes: Map<string, string[]>;
   rollbackModule(name: string): Promise<void>;
   disposeAll(): Promise<void>;
+  /** CK-02：只回滚本轮新激活的模块（跳过 borrowed 的 preserved 实例——它们借自旧图，required 失败时旧图须继续运行）。
+   *  commit 成功后的全量停用仍走 disposeAll（borrowed 届时已过户归本图）。 */
+  disposeActivated(): Promise<void>;
 
   preservable(): Map<string, PreservedInstance>;
 }
@@ -114,13 +129,15 @@ interface Stage {
   cards: CardSpec[];
   listeners: { type: string; listener: Listener }[];
 
-  overlays: { section: string; read(value: unknown): unknown; owner: string }[];
+  overlays: OverlayEntry[];
 }
 
 interface OwnerContribs {
   serviceKeys: string[];
   disposers: Disposer[];
   disposeFn?: Disposer;
+  staleFlag: { staled: boolean }; // CK-03：实例级 stale 标记——ctx.services.get 检查它；preserved 时随实例按引用过户（跨代可见）
+  borrowed?: boolean;             // CK-02：preserved 借入实例（归旧图）——required 失败路径的 disposeActivated 跳过
 }
 
 const isReservedSlot = (key: string): boolean =>
@@ -139,15 +156,15 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
   const committedCards: ActivateOutput["cards"] = []; // m5 T5：卡注册表（按引用存——widgets getter 现问现答）
   const contributes = new Map<string, string[]>();
   const activeNames: string[] = []; // 激活序（dispose 时倒序）
-  const committedOverlays: { section: string; read(value: unknown): unknown; owner: string }[] = []; // 注册序 = 激活拓扑序（§6.6）
-
-  const staledModules = new Set<string>(); // 换下实例标记：其 ctx.services.get 抛 stale（§5.5）
+  // CK-04：overlay 注册表换代共享（reuse 传入沿用旧图数组——与 bus/tools 同纪律）；启动路径缺省新建。
+  // 共享使「被换下模块的 overlay 摘除」对所有代的 ctx.configRead 同时生效（私有数组时旧代 ctx 读到僵尸条目）。
+  const committedOverlays: OverlayEntry[] = input.overlays ?? []; // 注册序 = 激活拓扑序（§6.6）
 
   const rollbackModule = async (name: string): Promise<void> => {
-    staledModules.add(name);
     const c = ownerContribs.get(name);
     if (!c) return;
     ownerContribs.delete(name);
+    c.staleFlag.staled = true; // CK-03：实例级标记（按引用共享）——跨代换下时旧代活 ctx 也能看到（每代 Set 打错代的修复）
     contributes.delete(name); // 审计不展示模块已不持有的贡献
     // 回滚顺序（§5.2 规则 3）：先调模块 dispose()（注册之外的清理），再按注册逆序调各 disposer
     if (c.disposeFn) {
@@ -183,7 +200,16 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       committedCommands.push(...preservedThis.commands);
       committedSections.push(...preservedThis.promptSections);
       committedCards.push(...preservedThis.cards); // m5 T5：卡注册物沿用（不进沿用清单 = /reload 后保留模块的卡全丢，热重载事故同款根因）
-      ownerContribs.set(def.name, { serviceKeys: preservedThis.services.map((x) => x.key), disposers: [], ...(preservedThis.disposeFn !== undefined ? { disposeFn: preservedThis.disposeFn } : {}) });
+      // CK-02/CK-03：borrowed 标记 + 旧实例的 disposers/staleFlag 原样过户——本代 rollbackModule 换下时统一执行/标记；
+      // required 失败路径（disposeActivated）跳过 borrowed（实例归旧图，§5.5 事务性——旧图继续运行的前提）。
+      // overlay 条目不在此重登记：committedOverlays 是跨代共享数组（reuse），条目从未离开。
+      ownerContribs.set(def.name, {
+        serviceKeys: preservedThis.services.map((x) => x.key),
+        disposers: preservedThis.disposers,
+        staleFlag: preservedThis.staleFlag,
+        borrowed: true,
+        ...(preservedThis.disposeFn !== undefined ? { disposeFn: preservedThis.disposeFn } : {}),
+      });
       contributes.set(def.name, ["(unchanged，句柄沿用)"]);
       activeNames.push(def.name);
       records.push({ ...preservedThis.record, state: "active" });
@@ -214,6 +240,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
 
     const stage: Stage = { services: [], tools: [], commands: [], promptSections: [], cards: [], listeners: [], overlays: [] };
     const moduleState = { activated: false }; // activate 返回且 commit 后置 true——configRead 据此区分 activate 期（纯分层值，v13）
+    const staleFlag = { staled: false }; // CK-03：本实例的 stale 位（commit 进 ownerContribs；preserved 换代按引用过户）
     const mlog = createLogger(sink, def.name);
     const allows = (m: string): boolean => def.mounts === undefined || def.mounts.includes(m); // mounts 缺省 = 不限制；一经声明 = 白名单（§5.1），未列出的口注册即抛
 
@@ -251,7 +278,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       },
       services: {
         get: (<T>(key: CapabilityKey<T>) => {
-          if (staledModules.has(def.name)) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);
+          if (staleFlag.staled) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);
           const s = committedServices.get(key as string);
           if (!s) throw new Error(`能力 "${String(key)}" 无可用提供者（提供者缺失/已降级）`);
           return Promise.resolve(s.impl as T);
@@ -407,7 +434,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       const result = await def.activate(ctx);
 
       // ---- commit（任一步失败 → 回滚本次已提交 + discard 其余）----
-      const mine: OwnerContribs = { serviceKeys: [], disposers: [] };
+      const mine: OwnerContribs = { serviceKeys: [], disposers: [], staleFlag };
       const myContributes: string[] = [];
       try {
         for (const { key, impl } of stage.services) {
@@ -520,6 +547,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     commands: committedCommands,
     promptSections: committedSections,
     cards: committedCards,
+    overlays: committedOverlays,
     contributes,
     rollbackModule,
     /** 旧图 → PreservedInstance 收集口（reload 的 Unchanged 沿用数据源，§5.5）。 */
@@ -536,6 +564,9 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           commands: committedCommands.filter((x) => x.owner === name),
           promptSections: committedSections.filter((x) => x.owner === name),
           cards: committedCards.filter((x) => x.owner === name),
+          // CK-03：disposers/staleFlag 带走（disposers 拷一份快照——ownerContribs 记录随本代图丢弃，引用不失联即可）
+          disposers: [...(c?.disposers ?? [])],
+          staleFlag: c?.staleFlag ?? { staled: false },
           ...(c?.disposeFn !== undefined ? { disposeFn: c.disposeFn } : {}),
           record: rec,
         });
@@ -547,6 +578,14 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
         await rollbackModule(name);
         const rec = records.find((r) => r.name === name && r.state === "active");
         if (rec) rec.state = "disposed"; // 审计可信：停用后 records 不再谎报 active
+      }
+    },
+    disposeActivated: async () => {
+      for (const name of [...activeNames].reverse()) {
+        if (ownerContribs.get(name)?.borrowed === true) continue; // CK-02：借来的 preserved 实例归旧图——本轮新激活失败不株连
+        await rollbackModule(name);
+        const rec = records.find((r) => r.name === name && r.state === "active");
+        if (rec) rec.state = "disposed";
       }
     },
   };

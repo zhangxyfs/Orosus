@@ -9,7 +9,7 @@ import { createEventBus, type EventBus } from "./bus.ts";
 import { createToolRegistry, type ToolRegistry } from "../tool/registry.ts";
 import { validateModule } from "./validate.ts";
 import { resolveTopo } from "./topo.ts";
-import { activateModules, type ServiceResolver } from "./activate.ts";
+import { activateModules, type OverlayEntry, type ServiceResolver } from "./activate.ts";
 import { resolveSections } from "../config/validate.ts";
 import type { AuditEntry, ModuleRecord } from "./types.ts";
 
@@ -56,6 +56,7 @@ export interface ModuleGraph {
   bus: EventBus;
   commands: { name: string; handler: CommandHandler; owner: string; completeArg?: (word: string, args: string) => string[] }[];  // 命令注册表（消费端路由用，D38）
   cards: { spec: import("@orosus/contracts/module").CardSpec; owner: string }[];  // 卡片注册表（m5 T5——按引用存，widgets getter 现问现答）
+  overlays: OverlayEntry[];   // CK-04：overlay 注册表——reuse 换代时与 bus/tools 同为跨代共享（reload 侧 oldGraph.overlays 透传）
   promptSections(): string;
   audit(): AuditEntry[];
   catalog(): string;
@@ -84,7 +85,7 @@ export interface LoadModulesInput {
   subagent?: import("@orosus/contracts/module").SubagentPort;                        // M4.5 子代理批：内核派单执行口（ctx.subagent 装配，mounts "subagent" 门）——harness 闭包构造后注入；缺省不装
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
-  reuse?: { bus: EventBus; tools: ToolRegistry };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）
+  reuse?: { bus: EventBus; tools: ToolRegistry; overlays?: OverlayEntry[] };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）；overlays 跨代共享（CK-04）
   preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
   generations?: Map<string, number>;               // reload：旧代际基线（透传 activate）
 }
@@ -158,6 +159,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),
+    ...(input.reuse?.overlays !== undefined ? { overlays: input.reuse.overlays } : {}), // CK-04：跨代共享 overlay 注册表
   });
 
   // required 安全护栏（§10）：失败分级在启动处阻断
@@ -168,7 +170,9 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   ];
   const requiredFailed = allFailed.filter((f) => sections.isRequired(f.name));
   if (requiredFailed.length > 0) {
-    await act.disposeAll();
+    // CK-02：只回滚本轮新激活——preserved（borrowed）实例借自旧图，disposeAll 会误调其旧 disposeFn，
+    // 击穿「reload 失败旧图继续运行」的事务性承诺（旧图半死：MCP 子进程/句柄被拆）
+    await act.disposeActivated();
     throw new Error(
       `required = true 的模块失败，阻断启动（§10 安全护栏）：${requiredFailed.map((f) => `${f.name}（${f.reason}）`).join("、")}`,
     );
@@ -217,6 +221,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     bus,
     commands: act.commands,
     cards: act.cards,
+    overlays: act.overlays,
     defs: () => graphDefs.map((g) => ({ ...g })),
     preservable: act.preservable,
     /** 选择性拆除（reload 换下实例）：disposers 摘共享 bus 上旧监听 + disposeFn 清理——preserved 不受株连（§5.5）。 */

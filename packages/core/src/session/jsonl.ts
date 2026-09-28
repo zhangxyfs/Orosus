@@ -130,8 +130,11 @@ export class JsonlSessionStore implements SessionStore {
   private readonly dir: string;
   private seq = 0;
   private lastId: string | null = null;
-  private queue: Promise<void> = Promise.resolve(); // 每文件写队列：seq 单调的串行化保证
+  private queue: Promise<void> = Promise.resolve(); // 每文件写队列：seq 单调的串行化保证（链上永不 reject——见 append 的 CS-02 注）
   private buffer: string[] = [];
+  /** 本轮未决 append 的 settle 手柄（CS-02）：drain 结局逐个带回调用方——成功 resolve(event)、失败 reject。 */
+  private pending: { event: SessionEvent; resolve: (e: SessionEvent) => void; reject: (err: Error) => void }[] = [];
+  private drainError: Error | null = null; // 最近一次 drain 失败：buffer 仍有滞留期间 flush/close 复抛（不许谎报已落盘）
   private events: SessionEvent[] = []; // 内存镜像：all() 供 loop 投影（§6.2）；重开实例时从磁盘恢复
   private closed = false;
 
@@ -164,10 +167,10 @@ export class JsonlSessionStore implements SessionStore {
   private devIno: string | null = null;
   private fileEnsured = false;
 
-  /** 首写前懒建：会话目录 + agents/（0o700，含既有目录权限校正）→ 文件（0o600——构造期预建的权限硬化语义原样移到此处）。 */
+  /** 首写前懒建：会话目录 + agents/（0o700，含既有目录权限校正）→ 文件（0o600——构造期预建的权限硬化语义原样移到此处）。
+   *  CS-02 顺修：fileEnsured 在 mkdir/open 全部成功后才置位——旧实现先置位再建，一次失败后懒建被永久跳过、追加恒失败。 */
   private ensureFile(): void {
     if (this.fileEnsured) return;
-    this.fileEnsured = true;
     const sessionDir = join(this.dir, this.sessionId);
     const agentsDir = join(sessionDir, "agents");
     mkdirSync(agentsDir, { recursive: true });
@@ -178,6 +181,7 @@ export class JsonlSessionStore implements SessionStore {
     const fd = openSync(this.file, "a", 0o600);
     closeSync(fd);
     if (process.platform !== "win32") chmodSync(this.file, 0o600);
+    this.fileEnsured = true;
   }
 
   append(type: string, fields: Record<string, unknown> = {}): Promise<SessionEvent> {
@@ -193,10 +197,39 @@ export class JsonlSessionStore implements SessionStore {
       type,
     };
     this.lastId = event.id;
-    this.events.push(event);
+    this.events.push(event); // 入队即入镜像：all()/投影不等落盘（§6.7 前半——UI 可见性不构成持久化承诺）
     this.buffer.push(JSON.stringify(event) + "\n");
-    this.queue = this.queue.then(() => this.drain());
-    return Promise.resolve(event); // 转发先于 drain（§6.7：UI 可见性不构成持久化承诺）
+    // CS-02 修复（2026-09-28 code review）：旧实现 queue 只链 .then 且 append 即刻假成功——drain 一次抛错
+    // （盘满/文件被占/prune 删档）后 queue 永久 rejected：后续 drain 全跳过、buffer 滞留内存、每次 append
+    // 又在被拒链上挂 .then 产生无人接的 rejection 崩进程。现在 drain 的结局收拢到本批 pending：
+    // 失败时 append reject（错误带内到调用侧——与 store closed 同一 reject 约定，不假成功；模块面
+    // fire-and-forget 由 kernel 包装 catch 进诊断），事件保留在 buffer/镜像（已转发不回滚，seq/parentId
+    // 链不破），下一次 append 的 drain 原样重试——盘恢复后自愈落盘。队列链本身永不 reject。
+    const settled = new Promise<SessionEvent>((resolve, reject) => {
+      this.pending.push({ event, resolve, reject });
+    });
+    this.queue = this.queue
+      .then(() => this.drain())
+      .then(
+        () => this.settlePending(undefined),
+        (err: unknown) => this.settlePending(err),
+      );
+    return settled;
+  }
+
+  /** drain 结局分发给本批 pending append：成功逐个 resolve（事件已落盘）；失败统一 reject 并保留 buffer
+   *  待下次 drain 重试（drain 内 throw 均为同步 fs 错误，此处只收拢、不向上抛——队列不因写失败毒化）。 */
+  private settlePending(err: unknown): void {
+    const batch = this.pending;
+    this.pending = [];
+    if (err === undefined) {
+      this.drainError = null;
+      for (const p of batch) p.resolve(p.event);
+      return;
+    }
+    const e = err instanceof Error ? err : new Error(String(err));
+    this.drainError = e;
+    for (const p of batch) p.reject(e);
   }
 
   private drain(): void {
@@ -282,11 +315,13 @@ export class JsonlSessionStore implements SessionStore {
   }
 
   async flush(): Promise<void> {
-    await this.queue;
+    await this.queue; // 队列链永不 reject（失败收拢在 settlePending）——但 buffer 仍有滞留 = 落盘未完成
+    if (this.buffer.length > 0) throw this.drainError ?? new Error("session log 未落盘（drain 失败后滞留）");
   }
 
   async close(): Promise<void> {
     this.closed = true;
     await this.queue;
+    if (this.buffer.length > 0) throw this.drainError ?? new Error("session log 未落盘（drain 失败后滞留）");
   }
 }

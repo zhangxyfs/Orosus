@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { renderMarkdown } from "../mdpipe.ts";
 import * as theme from "../theme.ts";
+import { stripAnsi } from "../tui/width.ts";
 
 const openOf = (fn: (t: string) => string): string => fn("\u0000").split("\u0000")[0]!;
 
@@ -28,5 +29,20 @@ describe("md/ 行内嵌套样式断色根修（mdpipe 批 T6——stylePrefix �
 		expect(joined).not.toContain("\u0000");
 		expect(joined).toContain("普通段落");
 		expect(joined).toContain("收尾");
+	});
+	it("4. CMD-01 链接 href 消毒：角括号 href 携带 BEL/ESC 渲染产物无裸控制字符（终端转义注入）", () => {
+		// marked 对 [x](<…>) 角括号形式放行除 \n < > \ 外的任意字节——实测含 BEL/ESC 原样进 lt.href。
+		// 未消毒时 href 里的 \x07 提前闭合 OSC 8，其后 \x1b]52;c;… 被终端当独立序列执行（OSC 52 剪贴板劫持）
+		const lines = renderMarkdown("[x](<http://a\x07\x1b]52;c;pwn\x07>)", 60);
+		const joined = lines.join("\n");
+		expect(joined).toContain("x"); // 链接标签照常渲染
+		// 钉法：剥掉全部合法成对序列（SGR/OSC 8 自产装饰）后，明文里不得再有裸 ESC/BEL——
+		// 未消毒时 href 后缀 " (…)" 里的 BEL 是明文字符，剥不干净
+		const plain = stripAnsi(joined);
+		expect(plain).not.toContain("\x07");
+		expect(plain).not.toContain("\x1b");
+		expect(plain).toContain("(http://a]52;c;pwn)"); // 控制 除净、常规 URL 字符保留
+		// 消毒后的 OSC 8 闭对仍在（点击探测依赖的自产序列不受影响）
+		expect(joined).toContain("\x1b]8;;\x07");
 	});
 });

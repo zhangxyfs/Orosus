@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness } from "@orosus/core";
-import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
+import type { CommandUi, ModuleDefinition, SubagentRosterEntry } from "@orosus/contracts/module";
 import { Access, defineTool } from "@orosus/contracts/tool";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeProvider } from "@orosus/testing";
@@ -12,6 +12,7 @@ import { z } from "zod";
 const repoRoot = (): string => join(import.meta.dirname, "..", "..", "..");
 import approvalDef from "@orosus/approval";
 import { BUILTIN_MODULES } from "./builtins.ts";
+import { stripAnsi } from "./tui/width.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -231,7 +232,19 @@ describe("steering 排队锁定（M4-2 T19/B19——cc-haha 排队式：turn 进
   it("① 子进程管道两条消息 → 两轮完整回复、退出码 0、无「已有进行中的 turn」（回归钉：并发 REPL/丢队列将变红）", async () => {
     const d = mkdtempSync(join(tmpdir(), "orosus-steer-"));
     try {
-      const env = { ...process.env, USERPROFILE: join(d, "home"), MOCK_PORT: "8765" } as Record<string, string>;
+      // 密封家目录（CM-03 修复）：HOME（POSIX homedir）+ USERPROFILE（Windows）双覆盖 + OROSUS_HOME
+      // 单一解析点直指 tmp 的 .orosus——此前只设 USERPROFILE，POSIX 上子进程读真实 ~/.orosus（往真实
+      // sessions 漏会话文件、真实 provider 配置出向）；OROSUS_HOME 还挡掉外层环境已设的同名变量
+      // （...process.env 展开不洗它）。HOME 同时封住 homedir() 系其余读点（如技能扫描 ~/.agents/skills）。
+      const env = {
+        ...process.env,
+        USERPROFILE: join(d, "home"),
+        HOME: join(d, "home"),
+        OROSUS_HOME: join(d, "home", ".orosus"),
+        MOCK_PORT: "8765",
+      } as Record<string, string>;
+      const { orosusHome } = await import("@orosus/contracts/home");
+      expect(orosusHome(env)).toBe(join(d, "home", ".orosus")); // 密封钉：子进程数据目录解析进 tmp（夹具漏 HOME 时 POSIX 上读真实家，此处变红）
       // 家目录喂 mock provider 配置（进程外 mock 端点需可达——本机 8765 由走查环境持有；不可达时跳过断言网络内容，仅锁定退出码与无并发错误）
       mkdirSync(join(d, "home", ".orosus"), { recursive: true });
       const configOk = await fetch("http://127.0.0.1:8765/models").then((r) => r.ok, () => false);
@@ -264,6 +277,38 @@ describe("steering 排队锁定（M4-2 T19/B19——cc-haha 排队式：turn 进
       rmSync(d, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe("/tasks 选中行 → 条目反查（CM-02 回归钉——rows 亲缘重排后显示行下标 ≠ 名册位次）", () => {
+  it("孙代理最新时选中任意行，落到的是选中那行自己的条目（旧实现 entries[idx] 在此名册上选 A 执行 B）", async () => {
+    // 机制钉（openTasks 是 main.ts 装配内件无独立缝——与 Esc 契约同记录方式）：钉死其选中解析依赖的
+    // 语义面——taskIdOfRow(tasksListRows(entries)[i]) 必须指认该行渲染的那条，供 openTasks 按 id 回查
+    const { sortNewestFirst, tasksListRows, taskIdOfRow } = await import("./tasks-cmd.ts");
+    const T = (over: Partial<SubagentRosterEntry>): SubagentRosterEntry => ({
+      id: "1111aaaa", depth: 1, label: "父代理一", status: "running", background: false, turns: 2, enqueuedAt: "t",
+      ...over,
+    } as SubagentRosterEntry);
+    // 名册：父一（最早）+ 后台父二 + 孙（父一的娃，最新）——含后台子代理（背景标注进行文案）
+    const entries = sortNewestFirst([
+      T({ id: "1111aaaa", label: "父代理一", enqueuedAt: "2026-09-27T10:00:00Z" }),
+      T({ id: "2222bbbb", label: "后台调研", background: true, enqueuedAt: "2026-09-27T11:00:00Z" }),
+      T({ id: "3333cccc", depth: 2, parentId: "1111aaaa", label: "孙查日志", turns: 1, enqueuedAt: "2026-09-27T12:00:00Z" }),
+    ]);
+    expect(entries.map((e) => e.id)).toEqual(["3333cccc", "2222bbbb", "1111aaaa"]); // 时间序：孙最新在最上
+    const rows = tasksListRows(entries).map(stripAnsi);
+    expect(rows).toEqual([
+      "[子代理] 2222bbbb 后台调研 · 运行中 · 后台",
+      "[子代理] 1111aaaa 父代理一 · 运行中",
+      "[孙代理] 1111aaaa - 3333cccc 孙查日志 · 运行中",
+    ]); // 显示序：孙行紧跟父行——与 entries 位次整体错开（错位前提实锤：旧实现 entries[0] 是孙，第 0 行却是后台调研）
+    expect(taskIdOfRow(rows[0]!)).toBe("2222bbbb"); // 选中的第 0 行 → 后台调研的编号（不是位次 0 的孙）
+    for (const row of rows) {
+      const id = taskIdOfRow(row);
+      expect(id).toBeDefined();
+      const entry = entries.find((e) => e.id === id)!;
+      expect(row).toContain(entry.label); // 行 → 编号 → 条目往返自洽：每一行指认的都是自己渲染的那条
+    }
+  });
 });
 
 describe("模块命令 Esc 穿透契约（2026-09-24 走查实锤前案回归钉——/settings 弹窗 Esc 炸穿 exit 7）", () => {

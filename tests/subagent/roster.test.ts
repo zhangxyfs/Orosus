@@ -200,7 +200,9 @@ describe("后台跑法与花名册 T8（决策 5/12/19/3）", () => {
     const { h, port } = await setup({ script: [call("c1", "gate__wait")] });
     const a = ((await port.spawn({ label: "挂到关会话", prompt: "等", background: true })) as { id: string }).id;
     await waitUntil(() => h.subagents().find((x) => x.id === a)?.status === "running");
-    await h.close(); // 决策 12：会话关闭全停
-    expect(h.subagents().find((x) => x.id === a)?.status).toBe("failed");
+    await h.close(); // 决策 12：会话关闭全停（close 本身不等各后台 settle 跑完）
+    // settle 是异步链（stopAll 打断 → 工具带内返回 → 落盘收尾 → 记册）：CS-02 后 jsonl append 等真实
+    // drain 才 resolve，close 返回时链条可尚未走完——用 waitUntil 钉「必收场且不悬挂」（超时即失败）。
+    await waitUntil(() => h.subagents().find((x) => x.id === a)?.status === "failed");
   });
 });

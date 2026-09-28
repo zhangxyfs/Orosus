@@ -57,6 +57,17 @@ export function toOpenAITools(tools: ToolSpec[]): ApiMessage[] {
  *  usage 两种方言都接：OpenAI 官方空 choices 尾包（include_usage），以及 GLM/DeepSeek 与最后一个
  *  finish 帧同帧到达（不带 stream_options 也发）——只认空 choices 会把后者整帧丢掉，/usage 恒 0。 */
 export function mapSseChunk(state: OaiStreamState, obj: Record<string, unknown>): Chunk[] {
+  // MP-03：网关/兼容端点在已 200 的 SSE 流里推错误帧（data: {"error":{…}}——qwen-code 所称 gateway
+  // error frame，既无 status 也无 socket code）。此前落入「无 choices 无 usage 返 []」被静默吞，流结束
+  // 兜底 stop 把截断回复冒充完整。error 对象在场即带内错误终局；error:null 方言（include_usage 中间帧）不受扰。
+  if (typeof obj.error === "object" && obj.error !== null) {
+    const e = obj.error as { message?: unknown; code?: unknown; type?: unknown };
+    const msg = typeof e.message === "string" && e.message !== "" ? e.message
+      : typeof e.code === "string" || typeof e.code === "number" ? `code ${String(e.code)}`
+        : typeof e.type === "string" && e.type !== "" ? e.type
+          : "网关错误帧";
+    return [{ type: "finish", kind: "error", errorMessage: `流错误：${msg}` }];
+  }
   const usage = obj.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
   const choices = obj.choices as Array<Record<string, unknown>> | undefined;
   const choice = choices?.[0];
