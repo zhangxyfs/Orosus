@@ -50,7 +50,7 @@ import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
-import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)
+import { loadConfig, sectionPath } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -346,6 +346,16 @@ const commandUi = createCliUi({
   },
 });
 
+/** 模块节配置路由（m4-8 T3）：模块节 → modules.d/<名>.toml（sectionPath 负责建目录与带节头文件）；
+ *  留守节 → config.toml。isModule = 内置 ∪ 当前图在册（audit 含第三方）。含 source 的模块节若被
+ *  写 enabled 到 modules.d，与 config.toml 里的 [名] 节由加载层 CH-07 深合并兜底合体（§3.2）。 */
+const moduleConfigFileFor = (name: string): string =>
+  sectionPath(name, {
+    userConfig: join(orosusHome(), "config.toml"),
+    modulesDir: join(orosusHome(), "modules.d"),
+    isModule: (n) => BUILTIN_MODULES.some((m) => m.name === n) || h.graph().audit().some((a) => a.name === n),
+  });
+
 const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
   // m4-8 T2 存量迁移（D1 自动搬）：老 config.toml 里的模块节整节搬 modules.d/<名>.toml（.bak 备份、幂等、
   // 白名单 = 内置模块名——第三方已挂载模块发现后才知名，首轮不搬、下轮启动自然补搬）；
@@ -492,7 +502,7 @@ const applyModulePresetImpl = async (preset: "full" | "minimal"): Promise<{ fail
   const failed: string[] = [];
   for (const name of writeList) {
     try {
-      setModuleEnabledInConfig(name, preset === "minimal" ? false : true);
+      setModuleEnabledInConfig(name, preset === "minimal" ? false : true, moduleConfigFileFor(name));
     } catch (err) {
       h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) });
       failed.push(name);
@@ -1807,7 +1817,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       let writeFailed = false;
       for (const n of writeList) {
         try {
-          setModuleEnabledInConfig(n, target);
+          setModuleEnabledInConfig(n, target, moduleConfigFileFor(n));
           written++;
         } catch {
           writeFailed = true;
@@ -1870,7 +1880,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           void (async () => {
             try {
               trustModule(join(orosusHome(), "trust.json"), info.root, info.entryHash); // 动作 1：登记（项目级 hash 门/用户级认登记共用 trust.json——零新存储）
-              setModuleEnabledInConfig(name, true); // 动作 2：写盘 enabled
+              setModuleEnabledInConfig(name, true, moduleConfigFileFor(name)); // 动作 2：写盘 enabled
               await h.reload(); // 动作 3：重跑信任判定 → 挂载
               registerToolLabels(h.graph().tools.toolInfos());
               await refreshPanel();

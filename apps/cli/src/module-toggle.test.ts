@@ -46,6 +46,6 @@ describe("setModuleEnabledInConfig（行级写 TOML——节区感知）", () =>
     expect(out).toContain("\r\n\r\n[tool-todo]\r\nenabled = true");
     const f2 = join(dir, "absent.toml");
     setModuleEnabledInConfig("skill", true, f2);
-    expect(readFileSync(f2, "utf8")).toBe("[skill]\nenabled = true");
+    expect(readFileSync(f2, "utf8")).toBe("[skill]\nenabled = true\n"); // m4-8 T3:统一写口恒带文件尾换行(TOML 文本规范形态)
   });
 });

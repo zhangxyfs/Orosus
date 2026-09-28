@@ -25,19 +25,20 @@ function makeIo(config = "") {
 }
 
 describe("CLI module 子命令（§8.6 配置写器）", () => {
-  it("① module enable x → section enabled=true（存在则改，不存在则新建仅含 enabled 的 section——目录扫描模块首次启停路径）", async () => {
-    const io = makeIo('model = "openai/gpt-4.1"\n\n[tool-fs]\nmaxFileSize = "10MB"\n');
+  it("① module enable x → modules.d/<名>.toml 新建带 enabled=true（m4-8 T3 路由——config.toml 不再进模块节）", async () => {
+    const raw = 'model = "openai/gpt-4.1"\n\n[tool-fs]\nmaxFileSize = "10MB"\n';
+    const io = makeIo(raw);
     expect(await runModuleSubcommand(["module", "enable", "scanned-mod"], io)).toBe(0);
-    const toml = readFileSync(io.configPath, "utf8");
-    expect(toml).toContain("[scanned-mod]");
-    expect(toml).toContain("enabled = true");
-    expect(toml).toContain("[tool-fs]"); // 既有 section 保留
+    expect(readFileSync(join(dir, "modules.d", "scanned-mod.toml"), "utf8")).toContain("enabled = true");
+    expect(readFileSync(io.configPath, "utf8")).toBe(raw); // 单文件层原文不动
   });
 
-  it("② module disable x 同理", async () => {
-    const io = makeIo("[tool-fs]\nenabled = true\n");
+  it("② module disable x → 同路由新家（config.toml 不变；加载层目录后读胜——新家 enabled 生效）", async () => {
+    const raw = "[tool-fs]\nenabled = true\n";
+    const io = makeIo(raw);
     expect(await runModuleSubcommand(["module", "disable", "tool-fs"], io)).toBe(0);
-    expect(readFileSync(io.configPath, "utf8")).toContain("enabled = false");
+    expect(readFileSync(join(dir, "modules.d", "tool-fs.toml"), "utf8")).toContain("enabled = false");
+    expect(readFileSync(io.configPath, "utf8")).toBe(raw);
   });
 
   it("③ module list → 已发现模块含状态（active/failed/untrusted/discovered）", async () => {
@@ -76,14 +77,12 @@ describe("CLI module 子命令（§8.6 配置写器）", () => {
     expect(lines.join("\n")).toContain("my-pack: active（用户级·已确认）");
   });
 
-  it("⑥ CM-14：enable/disable 行级写——注释与既有键保留（迁 module-toggle 同件），不再全量重写洗注释", async () => {
-    const io = makeIo("# 顶部注释\n[tool-fs]\n# 节内注释\nmaxFileSize = \"10MB\"\nenabled = true\n");
+  it("⑥ CM-14（m4-8 T3 翻向）：模块节已路由新家——config.toml 注释与既有键整个不动（行级写语义由 core/config/write.test ① 钉）", async () => {
+    const raw = "# 顶部注释\n[tool-fs]\n# 节内注释\nmaxFileSize = \"10MB\"\nenabled = true\n";
+    const io = makeIo(raw);
     expect(await runModuleSubcommand(["module", "disable", "tool-fs"], io)).toBe(0);
-    const toml = readFileSync(io.configPath, "utf8");
-    expect(toml).toContain("# 顶部注释");                  // 旧 parse→stringify：注释全灭
-    expect(toml).toContain("# 节内注释");
-    expect(toml).toContain('maxFileSize = "10MB"');        // 节内既有键不动
-    expect(toml).toContain("enabled = false");             // 目标键原位改
-    expect(io.lines.join("\n")).toContain("注释与键序保留");
+    expect(readFileSync(io.configPath, "utf8")).toBe(raw); // 单文件层分毫不动
+    expect(readFileSync(join(dir, "modules.d", "tool-fs.toml"), "utf8")).toContain("enabled = false");
+    expect(io.lines.join("\n")).toContain("modules.d");
   });
 });
