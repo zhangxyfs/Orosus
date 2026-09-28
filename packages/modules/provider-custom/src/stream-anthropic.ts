@@ -37,6 +37,14 @@ function parseSearchHitsFromToolResult(content: unknown): { title: string; url: 
   return out;
 }
 
+/** 流空闲超时缺省（毫秒）——两协议面同源共用，stream-openai 引用同值。
+ *  2026-09-28 学 kimi 拍板 60s→300s：kimi 不自设超时、实际生效保护 = Node fetch（undici）底层
+ *  bodyTimeout/headersTimeout 默认 300s（每字节复位，与本实现同构）；codex stream_idle_timeout /
+ *  opencode chunkTimeout 显式同值。旧值 60s 误杀「输出完短文本后进入超长生成（不推增量字节）」的流
+ *  （GLM 实锤一例：91k 上下文写 ARCHITECTURE.md，正文后 60s 零字节被杀）。
+ *  kimi 另有 SDK 默认 600s 总超时——刻意不加：超 10 分钟连续长输出（整份文档生成）会被它误杀。 */
+export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
+
 /** fetch glue（D31）：Anthropic Messages 协议，双头鉴权，错误全带内。vendored 自 provider-anthropic。 */
 export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
@@ -47,7 +55,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     // 内终局（此前端点保持连接但零字节时 reader.read() 无限等待，turn 挂死到用户手动中断）。重试/退避刻意
     // 不在本层做：流已产出正文后重发会重复投递（qwen-code 以专门 stream-transport-retry 模块处理该边界），
     // 429/5xx 的重试归调用方策略层（loop 现仅 context_limit 单次重试）——取舍注明而非静默。idleTimeoutMs 供测试注入。
-    const idleMs = opts.idleTimeoutMs ?? 60_000;
+    const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     const idle = new AbortController();
     let idleFired = false;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;

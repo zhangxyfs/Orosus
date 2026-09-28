@@ -835,6 +835,9 @@ describe("v3 真实用户消息谓词（T1 设计空白 1：kimi 式 origin 元�
   it("② host steering 保留——busy 期用户插队话（kimi inTurn 同位）", () => {
     expect(isRealUserInput(su("插队", { kind: "steering", sourceModule: "host" }))).toBe(true);
   });
+  it("②b host/date 日期系统行保留（2026-09-28：sourceModule 独立后压缩语义不变——压掉则同日模型看不到日期）", () => {
+    expect(isRealUserInput(su("[非用户输入] 系统提醒：今天是 2026-09-28。", { kind: "steering", sourceModule: "host/date" }))).toBe(true);
+  });
   it("③ 模块注入的 steering 剥离——todo 提醒等", () => {
     expect(isRealUserInput(su("记得喝水", { kind: "steering", sourceModule: "reminder" }))).toBe(false);
   });

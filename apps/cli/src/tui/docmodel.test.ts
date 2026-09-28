@@ -103,6 +103,104 @@ describe("DocModel 工具行与历史结构化（F5 五轮）", () => {
 	});
 });
 
+describe("DocModel 技能手动加载行（2026-09-28 用户拍板：技能正文不打印进对话流）", () => {
+	const skillText = (name: string, body: string): string =>
+		`（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}">\n${body}\n</skill>`;
+
+	it("① 实时路径：userPrompt 吃到技能标记消息 → 单行紧凑标记，正文与 <skill> 标签都不出现", () => {
+		const dm = new DocModel();
+		dm.userPrompt(skillText("ask-matt", "# 超长技能正文\n逐行都是 markdown 原文"));
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.join("\n")).toContain("已加载技能 ask-matt");
+		expect(plain.join("\n")).not.toContain("超长技能正文"); // 正文不进对话流
+		expect(plain.join("\n")).not.toContain("<skill"); // 标签也不裸露
+		expect(plain.filter((l) => l.trim() !== "").length).toBe(1); // 单行（无用户块的空行包裹）
+	});
+
+	it("② 回放路径：historyFrom 的 user/message 同标记 → 同款单行（与实时同形）；普通用户消息不受影响", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: skillText("pdf", "正文原文") }] },
+			{ type: "user/message", content: [{ kind: "text", text: "普通提问" }] },
+		], 80);
+		const plain = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(plain).toContain("已加载技能 pdf");
+		expect(plain).not.toContain("正文原文");
+		expect(plain).toContain("❯ 普通提问"); // 普通用户消息照旧整块渲染
+	});
+});
+
+
+describe("DocModel 条目级渲染缓存（bash 卡顿批 A——帧心跳不重排全史）", () => {
+	it("① 二次 frameLines 行引用相同 = 缓存命中（think/user/raw/tool/md 定格条目都不重算）", () => {
+		const dm = new DocModel();
+		dm.activity({ kind: "reasoning", text: "一段定稿的推理内容，涵盖多个视觉行宽度的文本。" }, 80);
+		dm.activity({ kind: "text", text: "定稿回答" }, 80);
+		dm.end(80);
+		dm.userPrompt("一条较长的用户提问，".repeat(8));
+		dm.pushLine("● Using Read (src/a.ts)");
+		dm.pushLine("一行普通提示文字");
+		dm.toolCall("tool-fs__read", { path: "src/a.ts" }, "c1");
+		dm.toolResult("a\nb\nc", false, "c1");
+		const a = dm.frameLines(80);
+		const b = dm.frameLines(80);
+		expect(b.length).toBe(a.length);
+		for (let i = 0; i < a.length; i++) expect(b[i]).toBe(a[i]); // toBe = 引用相等：重算会产出新字符串对象
+	});
+
+	it("② 宽度变化击穿缓存重排（键含宽度）——内容完整、窄宽必折行、回宽再排仍完整", () => {
+		const dm = new DocModel();
+		dm.userPrompt("这是一条很长的用户提问，".repeat(20)); // ~220 显示宽
+		dm.frameLines(120); // 先按宽渲染入缓存
+		const narrow = dm.frameLines(30);
+		expect(narrow.length).toBeGreaterThan(3); // 30 列下必折成多行
+		const tail = "这是一条很长的用户提问，".repeat(20).slice(-6);
+		expect(narrow.map(stripAnsi).join("")).toContain(tail); // 尾部内容在档（回流未丢）
+		expect(dm.frameLines(120).map(stripAnsi).join("")).toContain(tail); // 回宽再排仍完整
+	});
+
+	it("③ thinkOpen 切换击穿缓存（键含折叠态）——展开见全文、切回与首次收起同形", () => {
+		const dm = new DocModel();
+		dm.activity({ kind: "reasoning", text: "推理全文。".repeat(60) }, 80);
+		dm.end(80);
+		const collapsed1 = dm.frameLines(80);
+		dm.thinkOpen = true;
+		const opened = dm.frameLines(80);
+		expect(opened.map(stripAnsi).join(" ")).toContain("推理全文");
+		expect(opened.length).toBeGreaterThan(collapsed1.length);
+		dm.thinkOpen = false;
+		expect(dm.frameLines(80).length).toBe(collapsed1.length); // 切回 = 重排回收起形态
+	});
+
+	it("④ tool result 挂上击穿缓存（键含 result 在场）——Using → Used · 行数 chip", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "src/a.ts" }, "c1");
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("● Using Read (src/a.ts)");
+		dm.toolResult("a\nb\nc", false, "c1");
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("● Used Read (src/a.ts) · 3 行");
+	});
+
+	it("⑤ errOpen 切换击穿缓存（键含失败体折叠态）——展开见错误详情", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-shell__bash", { command: "ping -t x" }, "c1");
+		dm.toolResult("命令输出 boom 失败详情", true, "c1");
+		const collapsed = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(collapsed).toContain("Alt + F");
+		expect(collapsed).not.toContain("boom"); // 默认全收起
+		dm.errOpen = true;
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("boom");
+	});
+
+	it("⑥ 原位合并替换条目对象不带旧缓存——TOOL_MERGE 后 Used 行即刻可见", () => {
+		const dm = new DocModel();
+		dm.write("● Using Read (src/a.ts)\n", 80);
+		dm.frameLines(80); // Using 行已入缓存
+		dm.write(TOOL_MERGE + "32 行\n", 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines).toContain("● Used Read (src/a.ts) · 32 行");
+		expect(lines.filter((l) => l.includes("Read (src/a.ts)"))).toHaveLength(1); // 原位合并——单行
+	});
+});
 
 describe("DocModel 宽度回流（F5 十一轮——Ctrl+T 侧栏开关后内容按新宽重排）", () => {
 	it("md 块与用户消息在宽度变化后重新折行（窄宽折的行在宽下回流）", () => {
@@ -273,6 +371,17 @@ describe("子代理送回行渲染（M4.5 T9——灰色系统行，非用户块
 		const colored = dm.frameLines(80).find((l) => l.includes("后台子代理 调研"));
 		expect(colored).toBeDefined();
 		expect(colored! !== stripAnsi(colored!)).toBe(true);
+	});
+	it("㉝b host/date 日期系统行回放不渲染（2026-09-28 修复：resume 后流区不冒「系统提醒：今天是…」——对齐实时路 renderEvent 不渲染）", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: "用技能干活" }] },
+			{ type: "agent/steering-message", messages: [{ text: "[非用户输入] 系统提醒：今天是 2026-09-28。", sourceModule: "host/date" }] },
+			{ type: "assistant/message", content: [{ kind: "text", text: "好" }] },
+		], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("系统提醒"))).toBe(false); // 日期行不显示
+		expect(lines.some((l) => l.includes("用技能干活"))).toBe(true); // 前后消息照常
 	});
 describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行合并为组——绝不显示 Using Spawn）", () => {
 	it("㊿-6 组条目：agentGroupCall 开组、provider 现算行、连续 spawn 并一组、终态后新组", () => {

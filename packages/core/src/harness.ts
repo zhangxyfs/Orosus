@@ -507,12 +507,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // steering 宿主口（2026-09-23 消息队列批）：backlog 挂 collect 链——steering 在每个 step 首排空，
   // followUp 在停止边界兜底（错过窗口的消息仍进本 turn，不丢）。reload 复用同一 bus（reuse），
   // WeakSet 防重注册；owner 记 "host"（非模块——宿主直挂核心口）
-  const steerBacklog: string[] = [];
+  const steerBacklog: { text: string; sourceModule: string }[] = [];
   const steerHooked = new WeakSet<object>();
   const ensureSteerHook = (bus: EventBus): void => {
     if (steerHooked.has(bus)) return;
     steerHooked.add(bus);
-    const drain = (): { text: string; sourceModule: string }[] => steerBacklog.splice(0).map((text) => ({ text, sourceModule: "host" }));
+    const drain = (): { text: string; sourceModule: string }[] => steerBacklog.splice(0);
     bus.on(CORE_POINTS.steering, drain, "host");
     bus.on(CORE_POINTS.followUp, drain, "host");
   };
@@ -520,14 +520,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // 日期系统行（m4-6 T7，kimi/cc/qwen 缓存友好派）：核心节去 date 后模型仍需知道今天几号——轮首比对，
   // 首轮或跨日往宿主 steering backlog 推一行（每步首排空、先落 session 再投影——消息位不伤请求前缀缓存；
-  // host 源顺带获得压缩保留语义）。同日不重复；子代理侧不走这里（它的提示词 spawn 时自带定格 date）。
+  // host/date 源顺带获得压缩保留语义）。同日不重复；子代理侧不走这里（它的提示词 spawn 时自带定格 date）。
+  // sourceModule 用独立 "host/date"（非 "host"）：宿主注入的系统行 ≠ 用户 steer——回放渲染与输入召回
+  // 历史据此跳过（2026-09-28 修复：resume 回放曾把它当用户块显示）；压缩保留谓词两值同认。
   const dateSource = options.dateSource ?? ((): Date => new Date());
   let lastSteeredDate: string | undefined;
   const maybeSteerDateLine = (): void => {
     const today = dateSource().toISOString().slice(0, 10);
     if (today !== lastSteeredDate) {
       lastSteeredDate = today;
-      steerBacklog.push(`[非用户输入] 系统提醒：今天是 ${today}。`);
+      steerBacklog.push({ text: `[非用户输入] 系统提醒：今天是 ${today}。`, sourceModule: "host/date" });
     }
   };
 
@@ -722,43 +724,53 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // 走查缺陷②逻辑内移——槽已选定，多槽歧义报错随之消失）
       const candidates = slots.filter((x) => x.defaultModel !== undefined);
       if (candidates.length === 0) return "无可切换的平台——先用 /provider 添加平台（含默认模型）";
-      // 单槽直达（F5 用户实测：只有一个平台时还问「选哪个」是废问——/model 语义是换模型不是换平台）
-      const slotName = candidates.length === 1
-        ? candidates[0]!.name
-        : (await commandUi.choose("选择平台", candidates.map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`))).split("（")[0]!;
-      let next = slotName;
-      const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
-      if (slot?.listModels !== undefined) {
-        let models: string[] = [];
-        try {
-          models = await slot.listModels();
-        } catch (err) {
-          createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
-          const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
-          if (manual !== "") next = manual;
+      // 两段选循环（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：模型列表 Esc → 回平台列表；
+      // 平台列表（根）的 Esc 照旧穿透——整条取消。单槽直达（F5 用户实测：只有一个平台时还问
+      // 「选哪个」是废问——/model 语义是换模型不是换平台）：无上级可回，Esc 后直接重列模型
+      for (;;) {
+        const slotName = candidates.length === 1
+          ? candidates[0]!.name
+          : (await commandUi.choose("选择平台", candidates.map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`))).split("（")[0]!;
+        let next = slotName;
+        const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
+        if (slot?.listModels !== undefined) {
+          let models: string[] = [];
+          try {
+            models = await slot.listModels();
+          } catch (err) {
+            createLogger(sink, "kernel").debug("kernel.model.listmodels-failed", "端点模型清单拉取失败——回退手输", { slot: slotName, error: String(err) });
+            const manual = (await commandUi.ask(`model（端点清单拉取失败：${err instanceof Error ? err.message : String(err)}——输入全名，或回车用默认 ${slot.defaultModel ?? "未设"}）`)).trim();
+            if (manual !== "") next = manual;
+          }
+          // choose 在 try 外：Esc 的「已取消（Esc）」带内抛错必须穿透——曾在兜底 catch 内被吞成「拉取失败」
+          // 而回落手输（2026-09-22 用户实测：Esc 后仍问模型名）。清单来源随槽值目录优选（provider-custom），标题不标注来源
+          if (models.length > 0) {
+            // 清单 = 纯模型项（2026-09-22 用户拍板：「手动输入…」项退役——清单就是全部可达路径；
+            // 手输兜底只剩 listModels 失败时的 catch 分支）。当前模型勾标（与 /permission 二级列表 ✓ 当前值同族）：
+            // 全名取首斜杠后模型段比对；裸槽名值经槽 defaultModel 解析（面板同口径）
+            const curRaw = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : undefined);
+            // CT-02（2026-09-28 code review P3）：模型段切分改首斜杠（indexOf("/") 前段 = 槽名、其余整体 = 模型 id，
+            // 与 contracts CT-02 新口径、parseModel 同口径）——嵌套 id deepseek/openai/gpt 旧取尾段 .pop() 得 "gpt"，
+            // 与清单项 "openai/gpt" 永不相等，勾标永不点亮
+            const curBare = curRaw === undefined ? undefined
+              : curRaw.includes("/") ? curRaw.slice(curRaw.indexOf("/") + 1)
+              : curRaw === slotName ? slot.defaultModel
+              : curRaw;
+            let mpick: string;
+            try {
+              mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
+            } catch (err) {
+              if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回平台列表
+              throw err;
+            }
+            next = `${slotName}/${mpick.replace(/ ✓$/, "")}`;
+          }
         }
-        // choose 在 try 外：Esc 的「已取消（Esc）」带内抛错必须穿透——曾在兜底 catch 内被吞成「拉取失败」
-        // 而回落手输（2026-09-22 用户实测：Esc 后仍问模型名）。清单来源随槽值目录优选（provider-custom），标题不标注来源
-        if (models.length > 0) {
-          // 清单 = 纯模型项（2026-09-22 用户拍板：「手动输入…」项退役——清单就是全部可达路径；
-          // 手输兜底只剩 listModels 失败时的 catch 分支）。当前模型勾标（与 /permission 二级列表 ✓ 当前值同族）：
-          // 全名取首斜杠后模型段比对；裸槽名值经槽 defaultModel 解析（面板同口径）
-          const curRaw = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : undefined);
-          // CT-02（2026-09-28 code review P3）：模型段切分改首斜杠（indexOf("/") 前段 = 槽名、其余整体 = 模型 id，
-          // 与 contracts CT-02 新口径、parseModel 同口径）——嵌套 id deepseek/openai/gpt 旧取尾段 .pop() 得 "gpt"，
-          // 与清单项 "openai/gpt" 永不相等，勾标永不点亮
-          const curBare = curRaw === undefined ? undefined
-            : curRaw.includes("/") ? curRaw.slice(curRaw.indexOf("/") + 1)
-            : curRaw === slotName ? slot.defaultModel
-            : curRaw;
-          const mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
-          next = `${slotName}/${mpick.replace(/ ✓$/, "")}`;
-        }
+        // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
+        // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
+        await applyModelOverride(next); // m5 T9：核心动作抽共用——命令与设置服务同源（不双写）
+        return "";
       }
-      // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
-      // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
-      await applyModelOverride(next); // m5 T9：核心动作抽共用——命令与设置服务同源（不双写）
-      return "";
     }],
     ["/effort", async (args: string) => {
       // 思考投入档位（2026-09-25）：档位清单 = 当前槽 provider 适配器的模型目录（provider-custom 读
@@ -1134,7 +1146,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     steer(text) {
       if (!currentTurn) return false; // 无进行中 turn——调用方回退排队/直接提交
-      steerBacklog.push(text);
+      steerBacklog.push({ text, sourceModule: "host" }); // 用户插队 = host 源（压缩保留 + 回放按用户块回显）
       return true;
     },
 
