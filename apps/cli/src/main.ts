@@ -49,6 +49,7 @@ import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgen
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
+import { migrateModulesSections } from "./config-migrate.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -345,6 +346,22 @@ const commandUi = createCliUi({
 });
 
 const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
+  // m4-8 T2 存量迁移（D1 自动搬）：老 config.toml 里的模块节整节搬 modules.d/<名>.toml（.bak 备份、幂等、
+  // 白名单 = 内置模块名——第三方已挂载模块发现后才知名，首轮不搬、下轮启动自然补搬）；
+  // OROSUS_NO_MIGRATE 非空可关。用户层与项目层各迁一次（层各自的 config.toml 与 modules.d）
+  if (process.env.OROSUS_NO_MIGRATE === undefined || process.env.OROSUS_NO_MIGRATE === "") {
+    const knownNames = BUILTIN_MODULES.map((m) => m.name);
+    for (const [cfg, modDir] of [
+      [join(orosusHome(), "config.toml"), join(orosusHome(), "modules.d")],
+      [join(process.cwd(), ".orosus", "config.toml"), join(process.cwd(), ".orosus", "modules.d")],
+    ] as const) {
+      try {
+        migrateModulesSections(cfg, modDir, knownNames);
+      } catch (err) {
+        console.error(`[迁移跳过] ${cfg}：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
   const h = await createHarness({
     builtinModules: BUILTIN_MODULES,
     commandUi,
