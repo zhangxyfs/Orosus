@@ -1,4 +1,6 @@
 import { trustModule, loadTrustStore, checkTrust } from "@orosus/core";
+import { join, dirname } from "node:path";
+import { sectionPath } from "@orosus/core";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 
 /** CLI module 子命令（§8.6）：enable/disable/list/trust——配置与信任的写器（非交互入口，§8.5 确认门的命令式路径）。 */
@@ -57,8 +59,9 @@ export async function runModuleSubcommand(argv: string[], io: ModuleCmdIo): Prom
     // CM-14（2026-09-28 code review）：写盘迁 module-toggle.ts 的行级节区感知写——与 /permission、
     // 模块面板热插拔同一件（旧 parse→stringify 全量重写洗掉用户注释与键序，输出文案自认，与仓内
     // 「行级写 TOML 必须节区感知」铁律两口径）。语义不变：[name] 节内 enabled 键改/插，节外一概不动
-    setModuleEnabledInConfig(name, cmd === "enable", io.configPath);
-    io.out(`${name} 已${cmd === "enable" ? "启用" : "禁用"}（重启或 /reload 生效；行级写——注释与键序保留）`);
+    // m4-8 T3：模块节路由 modules.d/<名>.toml（本命令只对模块名操作——isModule 恒真；目录/文件由 sectionPath 建）
+    setModuleEnabledInConfig(name, cmd === "enable", sectionPath(name, { userConfig: io.configPath, modulesDir: join(dirname(io.configPath), "modules.d"), isModule: () => true }));
+    io.out(`${name} 已${cmd === "enable" ? "启用" : "禁用"}（重启或 /reload 生效；配置已写入 modules.d/${name}.toml）`);
     return 0;
   }
 
