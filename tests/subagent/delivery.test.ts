@@ -9,8 +9,13 @@ import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/pr
 import { defineTool } from "@orosus/contracts/tool";
 import type { ModuleDefinition, SubagentPort } from "@orosus/contracts/module";
 
-let dir: string | undefined;
-afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+let cur: Awaited<ReturnType<typeof createHarness>> | undefined; // 当前活跃 harness——测试体末尾显式 close 照旧，断言中途失败由 afterEach 兜底（close 幂等）
+const dirs: string[] = [];
+afterEach(async () => {
+  await cur?.close();
+  cur = undefined;
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 const text = (t: string): Chunk[] => [{ type: "text/delta", text: t }, { type: "finish", kind: "stop" }];
 const call = (callId: string, name: string): Chunk[] => [
@@ -34,7 +39,8 @@ interface Setup {
 
 /** hang__hold 工具：挂起直到外部放行（忙时送回的「主 turn 在跑」道具）。 */
 const setup = async (script: Chunk[][]): Promise<Setup> => {
-  dir = mkdtempSync(join(tmpdir(), "orosus-delivery-"));
+  const dir = mkdtempSync(join(tmpdir(), "orosus-delivery-"));
+  dirs.push(dir);
   let port: SubagentPort | undefined;
   let startedResolve!: () => void;
   const started = new Promise<void>((r) => { startedResolve = r; });
@@ -70,6 +76,7 @@ const setup = async (script: Chunk[][]): Promise<Setup> => {
     modules: [providerMod, consumer, hang],
     config: { userFile: join(dir, "no.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
+  cur = h; // TS-13：登记当前 harness，afterEach 兜底 close
   return { h, port: port!, hangStarted: () => started, releaseHang: release };
 };
 

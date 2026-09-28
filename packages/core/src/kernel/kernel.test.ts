@@ -44,6 +44,78 @@ describe("kernel 门面（§4.2 第 4–7 步串接）", () => {
     ).rejects.toThrow(/required/);
   });
 
+  it("CK-10 回归钉①：required=true 且配置禁用（enabled:false）→ 阻断启动（旧实现静默落空：disabled 不进 allFailed）", async () => {
+    const m = mod("approval", {});
+    await expect(
+      loadModules({
+        defs: [{ def: m, source: "builtin" }],
+        cli: {}, sections: new Map([["approval", { required: true, enabled: false }]]),
+        session: new InMemorySessionStore(), sink: sink(), spillDir: "/tmp/s",
+      }),
+    ).rejects.toThrow(/required|禁用/);
+  });
+
+  it("CK-10 回归钉②：CLI 显式禁用（--disable / --no-modules）→ 不阻断、required-absent 告警（纯净模式逃生口——approval 出厂即 required=true）", async () => {
+    const m = mod("approval", {});
+    const s = sink();
+    const g = await loadModules({
+      defs: [{ def: m, source: "builtin" }],
+      cli: { disable: ["approval"] }, sections: new Map([["approval", { required: true }]]),
+      session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    expect(g.audit().find((a) => a.name === "approval")!.state).toBe("discovered"); // 不阻断：CLI 是明确意图非配置失误
+    expect(s.records.some((r) => r.code === "kernel.config.required-absent")).toBe(true);
+    await g.dispose();
+    const s2 = sink();
+    const g2 = await loadModules({
+      defs: [{ def: m, source: "builtin" }],
+      cli: { noModules: true }, sections: new Map([["approval", { required: true }]]),
+      session: new InMemorySessionStore(), sink: s2, spillDir: "/tmp/s",
+    });
+    expect(g2.audit().find((a) => a.name === "approval")!.state).toBe("discovered");
+    expect(s2.records.some((r) => r.code === "kernel.config.required-absent")).toBe(true);
+    await g2.dispose();
+  });
+
+  it("CK-10 回归钉③：required 模块在待确认桶 → 不阻断（确认流需要本图先起来）、required-absent 告警", async () => {
+    const s = sink();
+    const g = await loadModules({
+      defs: [{ def: mod("ok-mod", {}), source: "builtin" }],
+      blocked: [{ def: mod("approval", {}), source: "local", reason: "unconfirmed" }],
+      cli: {}, sections: new Map([["approval", { required: true }]]),
+      session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    expect(g.audit().find((a) => a.name === "approval")!.state).toBe("pending-confirm");
+    expect(s.records.some((r) => r.code === "kernel.config.required-absent")).toBe(true);
+    await g.dispose();
+  });
+
+  it("CK-09 回归钉：blocked 与启用模块重名——审计来源以启用侧为准（不被覆写成 local）+ name-conflict warn；pending-confirm 条目保留", async () => {
+    const s = sink();
+    const active = mod("dup-mod", { provides: ["dup-mod.x"], activate(ctx) { ctx.provide("dup-mod.x", 1); } });
+    const g = await loadModules({
+      defs: [{ def: active, source: "builtin" }],
+      blocked: [{ def: mod("dup-mod", {}), source: "local", reason: "untrusted（项目级模块未确认，§8.5）" }],
+      cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: s, spillDir: "/tmp/s",
+    });
+    const audit = g.audit();
+    expect(audit.find((a) => a.name === "dup-mod" && a.state === "active")!.source).toBe("builtin"); // 旧实现：被 blocked 条目覆写成 local
+    expect(audit.find((a) => a.name === "dup-mod" && a.state === "pending-confirm")).toBeDefined(); // 双同名条目保留（待确认可见性有意）
+    expect(s.records.some((r) => r.code === "kernel.blocked.name-conflict" && (r.data as Record<string, unknown>)["module"] === "dup-mod")).toBe(true);
+    await g.dispose();
+  });
+
+  it("CK-11 回归钉：static 失败模块的合成 record 代际随 reload 基线递增（旧实现写死 1——持续失败模块每次 reload 代际归 1）", async () => {
+    const bad = mod("bad-ver", { version: "x.y.z" }); // 静态校验必败（非 semver）
+    const g = await loadModules({
+      defs: [{ def: bad, source: "builtin" }],
+      cli: {}, sections: new Map(), session: new InMemorySessionStore(), sink: sink(), spillDir: "/tmp/s",
+      generations: new Map([["bad-ver", 3]]), // harness 透传旧图 records 的代际（§5.5 reload 基线）
+    });
+    expect(g.records.find((r) => r.name === "bad-ver")!.generation).toBe(4); // 基线 3 + 1（旧实现：恒 1）
+    await g.dispose();
+  });
+
   it("catalog() 输出模块表（--dump-modules，§6.5）", async () => {
     const m = mod("m", { provides: ["m.x"], activate(ctx) { ctx.provide("m.x", {}); } });
     const g = await loadModules({

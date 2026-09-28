@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
  * 「品牌 + 通用双目录」照 kimi 模式——通用目录让一份工种文件被多个工具共用。
  *
  * YAML 解析是自写子集（不新增第三方依赖）：只认单行 `key: value` 与紧随的 `- 条目` 列表——
- * 工种文件七键全在这个子集内；超出子集的行报错（fail-closed，不静默丢字段）。
+ * 工种文件七键全在这个子集内；超出子集的行与重复键报错（fail-closed，不静默丢字段、不静默覆盖——MV-08）。
  */
 
 /** 工种文件解析产物（spawn 请求的数据源——字段与 SubagentSpawnRequest 对齐）。 */
@@ -82,15 +82,21 @@ function parseFrontmatter(fm: string, file: string): Record<string, string | str
       }
       const item = unquote(line.slice(2));
       if (item === "") return { error: `${file}：frontmatter 列表项为空串（${currentListKey}）` };
-      const cur = out[currentListKey];
-      if (Array.isArray(cur)) cur.push(item);
-      else return { error: `${file}：键 "${currentListKey}" 先给了标量又给列表` };
+      // 不变式：currentListKey 只与 out[key] = []（下方空值分支）锁步置位——走到这里 out[currentListKey] 恒为数组；
+      // 原「先给了标量又给列表」分支不可达（MV-08 校验备注实测），已清理。标量后跟裸列表项会因
+      // currentListKey 已清空撞上方「任何键之前」报错；同键重给（无论标量/列表头）撞下方重复键检查
+      (out[currentListKey] as string[]).push(item);
       continue;
     }
     const m = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(line);
     if (m === null) return { error: `${file}：frontmatter 行不认识（"${line}"）——只认 "key: value" 与 "- 条目" 列表` };
     const key = m[1]!;
     const value = m[2]!.trim();
+    // MV-08：重复键 fail-closed——两个赋值点（空值列表头 / 标量）统一在此拦截。原实现后值静默覆盖前值
+    // （标量重复、列表被标量整体丢弃、空值重申重置列表）。Object.hasOwn 避开 Object.prototype 键误报
+    if (Object.hasOwn(out, key)) {
+      return { error: `${file}：frontmatter 键 "${key}" 重复定义（后值不再静默覆盖前值——删多余行或检查键名拼写）` };
+    }
     if (value === "") {
       out[key] = []; // 空值 = 列表开头（待 "- 条目" 填充；若最终仍空数组则键校验报错）
       currentListKey = key;

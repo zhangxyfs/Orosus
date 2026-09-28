@@ -75,9 +75,13 @@ ${summary}` }],
           origin: { kind: "compaction-summary" },
         };
         // 纯下标取（不重新执行谓词——判定已在落盘时固化，规格 §4）；越界/缺省防御
+        // CL-09（2026-09-28 code review）：排序后去重——重复下标（正常路径不可达，仅损坏/手改日志触发，
+        // 与下方孤儿 tool/result 防御同场景）旧实现使同一消息重复进投影，且相邻重复处 M = −1
+        //（elision 文案「omitted: -1 messages」）
         const keepUserAt = (Array.isArray(e.keepUserAt) ? e.keepUserAt : [])
           .map((x) => Number(x)).filter((i) => Number.isInteger(i) && i >= 0 && i < out.length)
-          .sort((a, b) => a - b);
+          .sort((a, b) => a - b)
+          .filter((x, i, a) => i === 0 || x !== a[i - 1]!);
         if (String(e.trigger) === "manual" || keepUserAt.length === 0) {
           out = [summaryMsg]; // manual 全量零保留（ZCode 形态）；auto 但无保留（用户消息全进摘要）同形
           break;
@@ -85,16 +89,17 @@ ${summary}` }],
         // auto/overflow：[头用户…, elision, 尾用户…, 摘要（末尾——kimi 形态：模型读到的最近内容就是交接摘要）]。
         // elision 恒在——全保留时省略的是 assistant/tool 条目，同样诚实标注（头尾分界由 keepUserHead 计数定：
         // 段内下标差 >1 常态存在〔用户消息之间隔着 assistant/tool〕，不能当分界信号）；
-        // M = 尾段首下标 − 头段末下标 − 1（事件推导不落盘数字——重放与 config 无关）；头段空取 −1、尾段空 = 到投影末
+        // MI-12（2026-09-28 code review P3）：M = 总条目 − 保留用户条目（out.length − keepUserAt.length——与模块侧
+        // compaction selectUserMessages 的 omittedEntries 同口径；重放时 out.length ≡ 模块侧 pruned.length，两式同值）。
+        // 旧「尾首 − 头末 − 1」头尾间隙口径漏计段内空档与全保留时的 assistant/tool——热路径与冷重放数字分叉
+        //（tests/compaction/dualwrite.test.ts 钉红）。事件推导不落盘数字——重放与 config 无关
         const kept = keepUserAt.map((i) => stripImages(out[i]!)); // 图片剥占位（设计空白 7 双写）
         const keepUserHead = Math.max(0, Math.min(Number(e.keepUserHead ?? 0) || 0, keepUserAt.length));
         const headKept = kept.slice(0, keepUserHead);
         const tailKept = kept.slice(keepUserHead);
-        const headLastAt = keepUserHead > 0 ? keepUserAt[keepUserHead - 1]! : -1;
-        const tailFirstAt = keepUserHead < keepUserAt.length ? keepUserAt[keepUserHead]! : out.length;
         const elisionMsg: ModelMessage = {
           role: "user",
-          content: [{ kind: "text", text: COMPACTION_ELISION(tailFirstAt - headLastAt - 1) }],
+          content: [{ kind: "text", text: COMPACTION_ELISION(out.length - keepUserAt.length) }],
         };
         out = [...headKept, elisionMsg, ...tailKept, summaryMsg];
         break;

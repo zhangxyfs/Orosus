@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { orosusHome } from "@orosus/contracts/home";
@@ -54,8 +54,16 @@ export function upsertSecret(secretsFile: string, name: string, value: string): 
     while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
     lines.push(`${name}=${value}`);
   }
+  // CM-13（2026-09-28 code review）：join 前统一收拢尾空行——replace 分支保留下 split 的尾空串，写回又补
+  // 一个 "\n"，每次换 key 文件净增一个空行（N 轮更新 N 行空白）；append 分支上方已收拢此处为 no-op，
+  // 两分支同一收拢点（中间空行不动——只收尾部）
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
   mkdirSync(dirname(secretsFile), { recursive: true });
   writeFileSync(secretsFile, `${lines.join("\n")}\n`, { mode: 0o600 });
+  // MV-05：writeFileSync 的 mode 仅在新建时生效——既有宽权限文件（手建 0644 等）不会被收紧，
+  // 无条件 chmodSync 兜底到 0o600。Windows 上 chmod 只拨只读位不抛错；个别不支持 chmod 的
+  // 文件系统（网络盘等）吞错放行——权限收紧是加固不是落盘门槛，key 本身不能因它失败
+  try { chmodSync(secretsFile, 0o600); } catch { /* 平台不支持——mode 尽力 */ }
 }
 
 const CURRENT_DESC: Record<string, string> = {

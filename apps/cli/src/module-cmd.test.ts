@@ -75,4 +75,15 @@ describe("CLI module 子命令（§8.6 配置写器）", () => {
     expect(await runModuleSubcommand(["module", "list"], io)).toBe(0);
     expect(lines.join("\n")).toContain("my-pack: active（用户级·已确认）");
   });
+
+  it("⑥ CM-14：enable/disable 行级写——注释与既有键保留（迁 module-toggle 同件），不再全量重写洗注释", async () => {
+    const io = makeIo("# 顶部注释\n[tool-fs]\n# 节内注释\nmaxFileSize = \"10MB\"\nenabled = true\n");
+    expect(await runModuleSubcommand(["module", "disable", "tool-fs"], io)).toBe(0);
+    const toml = readFileSync(io.configPath, "utf8");
+    expect(toml).toContain("# 顶部注释");                  // 旧 parse→stringify：注释全灭
+    expect(toml).toContain("# 节内注释");
+    expect(toml).toContain('maxFileSize = "10MB"');        // 节内既有键不动
+    expect(toml).toContain("enabled = false");             // 目标键原位改
+    expect(io.lines.join("\n")).toContain("注释与键序保留");
+  });
 });

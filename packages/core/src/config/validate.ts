@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { ModuleDefinition } from "@orosus/contracts/module";
 
 export interface SectionResolution {
@@ -50,8 +49,12 @@ export function resolveSections(
       if (!parsed.success) {
         return { ok: false, error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
       }
-      if (def.config instanceof z.ZodObject) {
-        const unknown = Object.keys(section).filter((k) => !(k in (parsed.data as Record<string, unknown>)));
+      // CH-14② 修复（2026-09-28 code review）：instanceof z.ZodObject 跨 zod 副本失效（jiti 加载的 local
+      // 模块若打包了自己的 zod——类实例不同）→ strict 未知 key 检查静默跳过、typo 键被 strip 吞掉。
+      // 改鸭式判定：safeParse 产物是对象即做检查（zod strip/passthrough 语义照旧——未知 key 不在 data
+      // 即报错；标量 schema 产物非对象，本就无 section 键可对照）。
+      if (parsed.data !== null && (typeof parsed.data === "object" || typeof parsed.data === "function")) {
+        const unknown = Object.keys(section).filter((k) => !(k in (parsed.data as object)));
         if (unknown.length > 0) return { ok: false, error: `未知配置 key（strict）：${unknown.join(", ")}` };
       }
       return { ok: true, value: parsed.data };

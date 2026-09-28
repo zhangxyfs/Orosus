@@ -38,12 +38,20 @@ function parsePattern(pattern: string): { name: string; args?: string } {
 const nameMatches = (patternName: string, name: string): boolean =>
   patternName.endsWith("*") ? name.startsWith(patternName.slice(0, -1)) : patternName === name;
 
-function ruleMatches(rule: ApprovalRule, input: DecideInput): boolean {
+/** 规则命中判定：hit = 命中（全名/后缀通配/带参经 matchesRule）；miss = 不匹配；
+ *  indeterminate = 带参 deny 且工具未提供 matchesRule——拒绝面无法验证（MA-11）。 */
+function ruleOutcome(rule: ApprovalRule, input: DecideInput): "hit" | "miss" | "indeterminate" {
   const { name, args } = parsePattern(rule.tool);
-  if (!nameMatches(name, input.name)) return false;
-  if (args === undefined) return true;
-  // 带参规则交回工具侧判定（§6.3，携 effect）；无 matchesRule 的带参规则不匹配——fail-closed
-  return input.matchesRule?.(args, rule.effect) === true;
+  if (!nameMatches(name, input.name)) return "miss";
+  if (args === undefined) return "hit";
+  if (input.matchesRule === undefined) {
+    // 无 matchesRule 的带参规则：allow/ask 不匹配（fail-closed）；deny 不可验证——拒绝意图不可静默落空。
+    // MA-11 防御（2026-09-28 code review）：contracts 允许第三方工具声明带参规则而不给匹配器
+    // （两者皆可选）——此时带参 deny 若按「不匹配」放行 = fail-open，只剩模式基线兜底
+    return rule.effect === "deny" ? "indeterminate" : "miss";
+  }
+  // 带参规则交回工具侧判定（§6.3，携 effect）
+  return input.matchesRule(args, rule.effect) ? "hit" : "miss";
 }
 
 /** 从 approvalRule 提取括号内的命令串（无括号返回 null）。 */
@@ -94,15 +102,24 @@ function dangerousGate(input: DecideInput): Decision | undefined {
  *  ask-risky 的 network 按 D36 表字面语义放行（已定案 2026-09-17）——需要收紧用 rules。 */
 export function decide(input: DecideInput): Decision {
   for (const rule of input.rules) {
-    if (!ruleMatches(rule, input)) continue;
+    const outcome = ruleOutcome(rule, input);
+    if (outcome === "miss") continue;
+    if (outcome === "indeterminate") {
+      // MA-11：带参 deny 无法验证 → fail-closed 询问（deny 是最强意图——never 档同样到达此处，kimi 链序
+      // deny 优先于 auto 兜底）；memoryKey=null——deny 意图不许被「本会话始终允许」翻成放行
+      return { effect: "ask", source: "rule", reason: `带参 deny 规则无法验证（工具未提供参数匹配器）：${rule.tool}`, memoryKey: null };
+    }
     if (rule.effect === "allow") return { effect: "allow", source: "rule", reason: `规则放行：${rule.tool}` };
     if (rule.effect === "deny") return { effect: "deny", source: "rule", reason: `规则拒绝：${rule.tool}` };
     if (input.sessionAllowed(rule.tool)) return { effect: "allow", source: "memory", reason: `本会话已允许：${rule.tool}` };
     return { effect: "ask", source: "rule", reason: `规则要求询问：${rule.tool}`, memoryKey: rule.tool };
   }
 
+  // MA-08 注释修（2026-09-28 code review）：到达此处必非 never——dangerousGate 对 never 已整门短路
+  //（75 行，2026-09-22 修订），危险/不可分析询问只属 ask-always/ask-risky；规则链在前：
+  // 用户显式 allow/ask/deny 是最强意图（旧注释「三档均如此——含 never」是语义翻转前残留）
   const dangerous = dangerousGate(input);
-  if (dangerous !== undefined) return dangerous; // 三档均如此——含 never（规则优先于危险门：用户显式 allow 是最强意图）
+  if (dangerous !== undefined) return dangerous;
 
   if (input.mode === "never") return { effect: "allow", source: "mode", reason: "never 模式全自动放行（含危险/不可分析命令——kimi auto 语义，2026-09-22 修订）" };
   if (input.mode === "ask-always") {

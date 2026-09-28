@@ -38,6 +38,23 @@ describe("能力解析与拓扑排序（§5.2 规则 2）", () => {
     expect(degraded[0]!.reason).toContain("环");
   });
 
+  it("CK-15 回归钉：两环之间的过路节点不再误标环上——c（环 a↔b 的下游、环 p↔q 的上游）按级联降级，环描述不含 c（降级集合不变）", () => {
+    const a = mod("a", { provides: ["a.x"], dependsOn: ["b.y"] });
+    const b = mod("b", { provides: ["b.y"], dependsOn: ["a.x"] });
+    const c = mod("c", { provides: ["c.z"], dependsOn: ["a.x"] }); // 过路节点：依赖环1、喂环2——旧迭代剔除法永不剔它
+    const p = mod("p", { provides: ["p.w"], dependsOn: ["c.z", "q.v"] });
+    const q = mod("q", { provides: ["q.v"], dependsOn: ["p.w"] });
+    const { order, degraded } = resolveTopo({ defs: [a, b, c, p, q], disabled: new Set() });
+    expect(order).toEqual([]);
+    expect(degraded.map((d) => d.name).sort()).toEqual(["a", "b", "c", "p", "q"]); // 降级集合不变（过路节点由级联步兜住）
+    expect(degraded.find((d) => d.name === "c")!.reason).toContain("级联"); // 旧实现：c 被记「硬循环依赖（环上模块全部降级）」——文案失实
+    expect(degraded.find((d) => d.name === "c")!.reason).not.toContain("环");
+    const cyc = degraded.find((d) => d.name === "a")!.reason;
+    expect(cyc).toContain("环");
+    expect(cyc).not.toContain("→ c"); // 环描述不把过路节点编成环成员（误导排障）
+    expect(cyc).not.toContain("c →");
+  });
+
   it("软环合法：optional 不建边", () => {
     const git = mod("git", { provides: ["git"], dependsOn: [{ capability: "github.pr", optional: true }] });
     const github = mod("github", { provides: ["github.pr"], dependsOn: ["git"] });

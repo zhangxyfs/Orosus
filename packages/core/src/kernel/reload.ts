@@ -16,7 +16,10 @@ export interface ReloadReport {
   failed: { name: string; reason: string }[];
 }
 
-const stableStringify = (v: unknown): string => {
+/** key 序稳定的序列化（diffGraphs 的 configValue 比较基座）。CK-08 起导出：reload 的 configValue「变化」判定
+ *  必须全链同一实现（harness 粗判若各写一份 JSON.stringify，z.record/.passthrough() 类保留输入 key 序的
+ *  schema 会在用户重排配置 key 序（无语义变化）时误判 Reloaded——模块无谓重激活、generation 虚增）。 */
+export const stableStringify = (v: unknown): string => {
   if (v === undefined) return "undefined";
   if (typeof v !== "object" || v === null) return JSON.stringify(v) ?? String(v);
   if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;

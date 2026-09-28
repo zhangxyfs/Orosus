@@ -1,0 +1,41 @@
+# CI 四门（doc/17 TS-10）：此前 test / lint / typecheck / check:boundaries 全靠人跑，无自动承载。
+# 触发：合入 master（含 publish-github.sh 净化推送后的公开树）与所有 PR。
+# 本文件不含 superpowers/doc 内容，天然落在 publish 净化范围内（随公开仓库分发）。
+# 平台口径：本地 Windows 开发、CI 跑 Linux——win32 专属用例经 it.skipIf 平台守卫自然跳过
+# （CK-17），cmd 方言用例在 Linux 走 POSIX 分支：两平台各覆盖一半方言面，互补不重复。
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0 # 与本仓开发环境一致（lockfileVersion 9.0）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm typecheck
+      - name: lint
+        run: pnpm lint
+      - name: check-boundaries
+        run: pnpm check:boundaries
+      - name: test
+        run: pnpm test

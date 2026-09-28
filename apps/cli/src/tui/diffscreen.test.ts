@@ -149,4 +149,23 @@ describe("滚动流渲染器（TUI 批阶段三 F0——行级 diff + append 快
 		expect(visibleWidth(row)).toBeLessThanOrEqual(20);
 		expect(noOrphan(row)).toBe(true);
 	});
+	it("⑦ CTW-11 收缩到空帧：第 0 行残留清净 + 空帧不再被当首帧哨兵（旧下一帧无定位直写 → \"xbcdefgh\" 永久残留）", () => {
+		const { d, frames } = rig();
+		const t = term();
+		d.render(["abcdefgh"], 80);
+		d.render([], 80); // 收缩到完全空——旧实现「先 \r\n 再清」漏掉第 0 行、cursorRow 记到 -1
+		d.render(["x"], 80); // 空帧后再渲染——旧实现 previousLines.length===0 误判首帧、直写覆在残留行上
+		for (const f of frames) t.feed(f);
+		expect(t.rows()).toEqual(["x"]); // 旧终态：["xbcdefgh"]
+	});
+	it("⑧ CTW-11 多行帧收缩到空帧：全行清净（含第 0 行）、后续帧不再错位——不借多下移一行凑数（帧底 \\r\n 会触发终端滚动）", () => {
+		const { d, frames } = rig();
+		const t = term();
+		d.render(["a", "b", "c"], 80);
+		d.render([], 80);
+		d.render(["x"], 80);
+		d.render(["x", "y"], 80); // 空帧恢复后再追加——基线（cursorRow）正确才不出错行
+		for (const f of frames) t.feed(f);
+		expect(t.rows()).toEqual(["x", "y", ""]); // 旧终态：["xa", "y", ""]——第 0 行 "a" 漏清、"x" 覆写其上（"bc" 已清净、错位不再扩大）
+	});
 });

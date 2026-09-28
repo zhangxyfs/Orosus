@@ -1,3 +1,4 @@
+import { isSafeSessionId } from "./dir.ts";
 import type { SessionEvent, SessionStore } from "./types.ts";
 
 /** fork 复合存储（D41）：投影 = 父会话截至 atEntryId（含）的前缀 + 自身追加；写只进 own。
@@ -6,14 +7,28 @@ export class ForkedSessionStore implements SessionStore {
   readonly sessionId: string;
   private readonly parentStore: SessionStore;
   private readonly atEntryId?: string | undefined;
+  /** CS-05（2026-09-28 code review）：atEntryId 在父投影中找不到时的降级口径——默认 throw（活 API 语义），
+   *  "fullPrefix" 只属盘上链重建（openSessionView——撕裂/截断后 sourceEntryId 可能已不在父投影）。 */
+  private readonly onMissing: "throw" | "fullPrefix";
   private readonly ownStore: SessionStore;
   private parentCache: SessionEvent[] | undefined;
+  /** CS-10（2026-09-28 code review）：own 后端带 lifetimeUsage（jsonl）才透传——条件挂载与 forwardingStore
+   *  「缺省不挂」同款（types.ts 注：内存/SQLite 后端可缺省，调用方回退当前会话口径；声明须可选属性，
+   *  exactOptionalPropertyTypes 下「缺席」≠「值为 undefined」）。own 是 JsonlSessionStore 时天然带 fork
+   *  子体跳过口径（子体自身不计、父文件按兄弟计入），语义恰好正确；旧实现不透传——fork 会话存活期间
+   *  h.usage() 的 lifetime 恒 undefined，退出再 resume 又出现，两种口径无说明。 */
+  readonly lifetimeUsage?: NonNullable<SessionStore["lifetimeUsage"]>;
 
-  constructor(opts: { parent: SessionStore; atEntryId?: string; own: SessionStore }) {
+  constructor(opts: { parent: SessionStore; atEntryId?: string; onMissing?: "throw" | "fullPrefix"; own: SessionStore }) {
     this.parentStore = opts.parent;
     this.ownStore = opts.own;
     this.atEntryId = opts.atEntryId;
+    this.onMissing = opts.onMissing ?? "throw";
     this.sessionId = opts.own.sessionId;
+    if (opts.own.lifetimeUsage !== undefined) {
+      const own = opts.own;
+      this.lifetimeUsage = () => own.lifetimeUsage!(); // 经对象调用保 this（解构裸函数会丢接收者）
+    }
   }
 
   async all(): Promise<SessionEvent[]> {
@@ -21,8 +36,15 @@ export class ForkedSessionStore implements SessionStore {
       let events = await this.parentStore.all();
       if (this.atEntryId !== undefined) {
         const i = events.findIndex((e) => e.id === this.atEntryId);
-        if (i >= 0) events = events.slice(0, i + 1);
-        // 找不到 atEntryId → 全量父前缀（宽松降级；孤儿结果由投影防御性跳过，链问题由 verifyChain 报告）
+        // CS-05（2026-09-28 code review）：旧实现找不到 atEntryId 无条件宽松降级全量父前缀——运行期出口
+        // （h.fork）早已校验并钉为 bug 口径（fork.test「防宽松降级静默变全量前缀」），启动期出口
+        // （createHarness fork 分支、subagent forkFrom）却静默吞坏分叉点，两出口校验不对称。默认改为 throw
+        // 统一口径；盘上链重建（openSessionView）显式传 onMissing:"fullPrefix" 保持宽容（见构造器注）。
+        if (i < 0) {
+          if (this.onMissing === "throw") throw new Error(`fork 分叉点不在父会话投影内：${this.atEntryId}`);
+        } else {
+          events = events.slice(0, i + 1);
+        }
       }
       this.parentCache = events;
     }
@@ -79,6 +101,13 @@ export async function openSessionView(opts: {
     // 缺席时以全量父前缀投影 + warn 显式留痕（比静默退化为自身段好）。
     if (header === undefined || parentId === null || parentId === undefined) return store; // 非子体：裸 store 原样返回
     const parent = String(parentId);
+    // CS-12（2026-09-28 code review）：parentSession 出自文件内容（可篡改面）——旧实现直接交给 locate/
+    // makeStore 的路径 join，含 "../" 段可逃逸会话桶（实测桶外建目录文件）。不合形按「找不到祖先」处理
+    //（截断 + warn），不炸打开。
+    if (!isSafeSessionId(parent)) {
+      opts.sink?.warn("session.fork-parent-invalid", `header.parentSession 非法（${JSON.stringify(parent)}），按找不到祖先处理、就地截断`, { sessionId, parentSession: parent });
+      return store;
+    }
     if (forkEvent === undefined) {
       opts.sink?.warn("session.fork-event-missing", "fork 事件缺失（header 与 session/fork 两次 append 间的崩溃窗口，或撕裂尾被 repairFile 截断），按全量父前缀投影", { sessionId, parentSession: parent });
     }
@@ -94,7 +123,9 @@ export async function openSessionView(opts: {
     }
     const parentView = await openFrom(parent, parentLoc.bucket, depth + 1);
     const at = forkEvent === undefined ? undefined : (forkEvent as { sourceEntryId?: unknown }).sourceEntryId;
-    return new ForkedSessionStore({ parent: parentView, ...(typeof at === "string" ? { atEntryId: at } : {}), own: store });
+    // CS-05：onMissing:"fullPrefix" 显式保留盘上链重建的宽容降级——sourceEntryId 指向的事件可能已被
+    // 撕裂截断/修复移出父投影，此时按全量父前缀投影优于让会话打不开（活 API 出口走默认 throw）。
+    return new ForkedSessionStore({ parent: parentView, ...(typeof at === "string" ? { atEntryId: at } : {}), onMissing: "fullPrefix", own: store });
   };
   return { store: await openFrom(opts.sessionId, opts.bucket, 0), chain };
 }

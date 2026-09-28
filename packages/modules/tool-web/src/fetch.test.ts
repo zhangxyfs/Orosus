@@ -165,6 +165,34 @@ describe("tool-web fetch 单元（M4-3 T0）", () => {
     expect(r2.isError).toBe(true);
     expect(r2.output).toContain("HTTP 403");
   });
+
+  it("⑪b MV-04 回归钉：honestUa 仅换 host 的重定向跳后复位——同 host 跳转沿用诚实 UA，跨 host 跳转复位回伪装 UA", async () => {
+    // 同 host：/a 撞 CF challenge 换诚实 UA 过 → 302 /b（同 host）→ 仍用诚实 UA（原实现每跳无条件复位，多一趟再试探）
+    const sameHost: FetchCall[] = [];
+    const sameFetch = stubFetch([
+      new Response("cf", { status: 403, headers: { "cf-mitigated": "challenge" } }),
+      new Response(null, { status: 302, headers: { location: "/b" } }),
+      new Response("ok", { headers: { "content-type": "text/plain" } }),
+    ], sameHost);
+    const r1 = await exec({ fetchImpl: sameFetch, lookupImpl: PUBLIC_LOOKUP }, "https://example.com/a");
+    expect(r1.result.isError).toBe(false);
+    expect(r1.result.output).toBe("ok");
+    expect(sameHost.map((c) => c.url)).toEqual(["https://example.com/a", "https://example.com/a", "https://example.com/b"]);
+    expect(sameHost[2]?.ua).toBe("Orosus-WebFetch"); // 同 host 跳转不复位
+    // 跨 host：302 到 cdn.example.com → 诚实 UA 复位，新 host 重新从伪装 UA 起步
+    const crossHost: FetchCall[] = [];
+    const crossFetch = stubFetch([
+      new Response("cf", { status: 403, headers: { "cf-mitigated": "challenge" } }),
+      new Response(null, { status: 302, headers: { location: "https://cdn.example.com/final" } }),
+      new Response("ok", { headers: { "content-type": "text/plain" } }),
+    ], crossHost);
+    const r2 = await exec({ fetchImpl: crossFetch, lookupImpl: PUBLIC_LOOKUP }, "https://example.com/a");
+    expect(r2.result.isError).toBe(false);
+    expect(r2.result.output).toBe("ok");
+    expect(crossHost[2]?.ua).toBe(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 (Orosus-WebFetch)",
+    );
+  });
 });
 
 // 集成：模块装配（经工厂注假 fetch，hermetic）+ 假 provider 脚本驱动工具回合

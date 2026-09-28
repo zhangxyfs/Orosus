@@ -69,7 +69,8 @@ const readLimitConfig = (deps: SubagentDeps, key: string, validate: (v: number) 
  *  孙代理派单经 ALS 自然拿到父上下文）。主对话执行的工具 = 无 store（深度 1）。 */
 const execContext = new AsyncLocalStorage<{ agentId: string; depth: 1 | 2 }>();
 
-/** 审批转发档解析（决策 3 第一层 + CX-01/02 修复 2026-09-28 code review P1，spawn 时定格）：
+/** 审批转发档解析（决策 3 第一层 + CX-01/02 修复 2026-09-28 code review P1，起跑时定格——runOne 入口
+ *  解析（并发位排队之后、写闸排队之前），后台单排队久时定格点晚于 spawn——CX-15 措辞对齐）：
  *  旧实现载荷钉死 ask-risky——主对话 ask-always 档被降档、子代理写文件静默放行；auto 档整门跳过
  *  主关卡——手写 deny 规则对子代理失效。
  *  auto（手动配置或跟随主 never）→ "never"：主对话 decide 规则链先于档位基线——手写 deny/ask 规则对
@@ -158,12 +159,18 @@ function wrapForWriteReceipt(t: import("@orosus/contracts/tool").Tool, declaredP
     resolveExecution: async (input) => {
       const exec = await t.resolveExecution(input);
       if (exec.accesses === undefined || exec.accesses.every((a) => a.kind !== "fs.write")) {
-        // bash 命令串备查（不透明写——回执附原文）
-        if (t.name === "tool-shell__bash") {
-          const cmd = (input as { command?: unknown }).command;
-          if (typeof cmd === "string" && cmd !== "") rec.bashCommands.push(cmd);
-        }
-        return exec;
+        if (t.name !== "tool-shell__bash") return exec;
+        // bash 命令串备查（不透明写——回执附原文）。CX-11 修复（2026-09-28 code review）：记账挪进 execute
+        // 包装（审批后）——与写路径 attempts 同点同口径，被审批否决、从未执行的命令不再进回执
+        // （旧实现记在 resolveExecution〔plan 阶段〕，早于 waterfall 审批——把「想跑」记成「跑了」）。
+        return {
+          ...exec,
+          execute: async (tc) => {
+            const cmd = (input as { command?: unknown }).command;
+            if (typeof cmd === "string" && cmd !== "") rec.bashCommands.push(cmd);
+            return await exec.execute(tc);
+          },
+        };
       }
       return {
         ...exec,
@@ -192,10 +199,13 @@ function wrapForWriteReceipt(t: import("@orosus/contracts/tool").Tool, declaredP
   };
 }
 
-/** 写路径折叠比较（归一同款：resolve〔相对工作目录〕+ win32 大小写折叠——声明路径已归一，写目标现场归一到同基）。 */
-function foldPath(cwd: string, target: string): string {
+/** 写路径折叠比较（归一同款：resolve〔相对工作目录〕+ win32 大小写折叠——声明路径已归一，写目标现场归一到同基）。
+ *  CX-12 修复（2026-09-28 code review）：POSIX 下 `\` 是合法文件名字符——只按 `/` 切分（与 normalizeClaimPath
+ *  的 sep 切分对齐：报备 `x\y` 与写目标 `x\y` 同形，写绑定双向不再误判；旧实现全平台双分隔符折叠，把
+ *  `d\..\x` 这类单文件名误折成目录链）。win32 才双分隔符折叠（resolve 已归一成 `\`，`/` 一并折掉防混用）。 */
+export function foldPath(cwd: string, target: string): string {
   const r = resolve(cwd, target);
-  return (process.platform === "win32" ? r.toLowerCase() : r).split(/[\\/]/).join("/");
+  return process.platform === "win32" ? r.toLowerCase().split(/[\\/]/).join("/") : r;
 }
 
 /** 越界回执组装（决策 24⑤）：actual ∪ attempts 逐条比对报备——不在报备内的列入；未报备（整仓）= 全部列入。 */
@@ -231,7 +241,11 @@ interface RosterEntry {
   pendingApproval?: { callId: string; tool: string; reason: string; resolve: (allow: boolean) => void } | undefined;
   writeClaim?: { paths: string[]; wholeRepo: boolean };
   controller?: AbortController | undefined;   // running 时在——stop 全停的靶
-  cancel?: (() => void) | undefined;           // 各等待阶段的取消口（并发位排队/写闸排队/审批挂起）
+  cancel?: (() => void) | undefined;           // running 阶段的取消口（controller.abort）。CX-17 措辞对齐：
+                                               // 排队阶段不经此口——并发位排队由 acquireSlot 的调用方信号
+                                               // 监听 + stop() 的队列移除拒绝收场（CX-05），写闸排队由 runOne
+                                               // 内 abort 竞速 gate.release（CX-05），审批挂起由 park 的 signal
+                                               // 竞速（CX-07）；不存在「spawn 编排层覆写 cancel」的机制。
   usageTotal?: { input: number; output: number }; // 词元累计（结束记主会话账）
   toolCalls?: number;                          // 已发出的工具调用数（agent 组行显示）
   effort?: string;                             // 思考档位（跟随 /effort 解析）
@@ -384,9 +398,11 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     const maxTurns = cfgTurns ?? reqTurns ?? SUBAGENT_MAX_TURNS; // -1 = 不限
     const inactivityMs = readLimitConfig(deps, "inactivityTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_INACTIVITY_TIMEOUT_MS;
     const totalMs = readLimitConfig(deps, "totalTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_TOTAL_TIMEOUT_MS;
-    // CX-01/02 修复（2026-09-28 code review P1）：转发档 spawn 时定格解析（沿用旧代码的解析时机——
-    // 每事件现解析会在「早 abort 撞上主总线 waterfall 等待窗」时拖过 close 收尾，roster ㉘ 实证回归；
-    // 档位运行期切换对在跑子代理不追溯、下一 spawn 生效 = 既有定格语义〔CX-15 在档〕）。
+    // CX-01/02 修复（2026-09-28 code review P1）：转发档起跑时定格（runOne 入口、并发位排队之后——沿用旧
+    // 代码的解析时机；每事件现解析会在「早 abort 撞上主总线 waterfall 等待窗」时拖过 close 收尾，roster ㉘
+    // 实证回归；档位运行期切换对在跑子代理不追溯、下一 spawn 生效 = 既有定格语义〔CX-15：定格点为起跑
+    // 时刻而非 spawn 时刻，不跟随运行期切档是拍板保留的现状——kimi 曾把「不跟随」当 bug 修，方向相反，此处
+    // 以 ㉘ 收尾实证优先〕）。
     const forwardMode = await resolveForwardMode(deps);
     const records: WriteRecords = { actual: new Set(), attempts: new Set(), bashCommands: [] };
     let declaredPaths: string[] | undefined;
@@ -409,7 +425,9 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     let fuseTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController();
     entry.controller = controller;
-    entry.cancel = () => controller.abort(); // running 阶段的取消口（排队阶段由 spawn 编排层覆写）
+    entry.cancel = () => controller.abort(); // running 阶段的取消口（CX-17：排队期取消不经此口——并发位排队
+    // 由 acquireSlot 的信号监听/stop() 移出队列，写闸排队由下方 abort 竞速 release；原注释所称「排队阶段由
+    // spawn 编排层覆写」的机制不存在，排队期取消已由 CX-05 的信号接线承接）。
     // 前台取消链（决策 11：跟主对话取消信号走——主 turn 的 signal 打断即打断）。
     // CX-04 修复（2026-09-28 code review）：后台单不接派生 turn 的取消信号——主 turn 被 Esc 打断
     // 不误杀在跑的后台代理（决策 12 独立生命周期），取消只来自 stop()/保险丝；前台照旧被打断。
@@ -513,7 +531,8 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       // 审批关卡（决策 3 第二层，T2；CX-01/02 修复 2026-09-28）：agent bus 的 toolPreExecute → 运行时
       // 双层门控第二道（决策 4②）。auto 档不再整门跳过——照转主关卡但档提示带 never（decide 规则链先于
       // 基线：手写 deny/ask 规则对子代理照常生效，基线从不询问不自发弹窗）；ask 档转发主对话真实运行期档
-      // 与 ask-risky 地板取严（旧实现钉死 ask-risky——主对话 ask-always 被降档静默放行）。档位 spawn 定格。
+      // 与 ask-risky 地板取严（旧实现钉死 ask-risky——主对话 ask-always 被降档静默放行）。档位起跑时定格
+      // （runOne 入口解析；运行期切档不追溯、下一 spawn 生效——CX-15 措辞对齐）。
       // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停/保险丝 abort 自动按拒绝收场——CX-07）。
       bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
         const p = payload as { name: string; callId: string; [k: string]: unknown };
@@ -643,6 +662,31 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     return { id, status: "failed", turns, conclusion, error, ...receipt };
   };
 
+  // CX-14 修复（2026-09-28 code review）：stop/stopAll 全闭包化——旧实现 stopAll 内走 this.stop，对象方法
+  // 经解构传递后 this 为 undefined 直接 TypeError（本文件其余方法均为闭包风格，这两个是例外；当前调用点
+  // 恰好都是方法调用形态才没炸——对未来接线是暗坑）。
+  const stop = (id: string): boolean => {
+    const entry = roster.get(id);
+    if (entry === undefined || entry.status === "completed" || entry.status === "failed") return false;
+    entry.pendingApproval?.resolve(false); // 未答审批自动按「拒绝」收场（决策 3/12——绝不卡死）
+    entry.pendingApproval = undefined;
+    if (entry.status === "queued") {
+      // 排队中（并发位或写闸）：并发位队列直接移出拒绝；写闸队列走 gate.release 的 reject 路径。
+      // settle 由编排层的拒绝路径统一做（这里不直接收场——防双记账）。
+      const idx = slotQueue.findIndex((w) => w.agentId === id);
+      if (idx >= 0) {
+        const w = slotQueue.splice(idx, 1)[0]!;
+        w.reject(new Error("已被停止——排队中的单子按失败收场"));
+        return true;
+      }
+      gate.release(id); // 写闸排队者：reject → runOne catch → failed outcome → settle
+      entry.cancel?.();
+      return true;
+    }
+    entry.cancel?.(); // running：打断循环 → interrupted → failed outcome → settle
+    return true;
+  };
+
   return {
     async spawn(req, caller) {
       const ctx = execContext.getStore();
@@ -714,27 +758,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       }
     },
     list: listInternal,
-    stop(id) {
-      const entry = roster.get(id);
-      if (entry === undefined || entry.status === "completed" || entry.status === "failed") return false;
-      entry.pendingApproval?.resolve(false); // 未答审批自动按「拒绝」收场（决策 3/12——绝不卡死）
-      entry.pendingApproval = undefined;
-      if (entry.status === "queued") {
-        // 排队中（并发位或写闸）：并发位队列直接移出拒绝；写闸队列走 gate.release 的 reject 路径。
-        // settle 由编排层的拒绝路径统一做（这里不直接收场——防双记账）。
-        const idx = slotQueue.findIndex((w) => w.agentId === id);
-        if (idx >= 0) {
-          const w = slotQueue.splice(idx, 1)[0]!;
-          w.reject(new Error("已被停止——排队中的单子按失败收场"));
-          return true;
-        }
-        gate.release(id); // 写闸排队者：reject → runOne catch → failed outcome → settle
-        entry.cancel?.();
-        return true;
-      }
-      entry.cancel?.(); // running：打断循环 → interrupted → failed outcome → settle
-      return true;
-    },
+    stop,
     gate, // 写协调闸出口（M4.5 T7——harness 挂主对话写预约检查用）
     answerApproval(agentId, allow) {
       const entry = roster.get(agentId);
@@ -744,9 +768,10 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     },
     stopAll() {
       // 会话关闭全停（决策 12）：在跑/排队/挂起审批全部收场——挂起审批按拒绝，绝不留活口
+      // （CX-14：走闭包 stop——不依赖 this，解构调用安全）
       for (const entry of roster.values()) {
         if (entry.status === "completed" || entry.status === "failed") continue;
-        this.stop(entry.id);
+        stop(entry.id);
       }
     },
   };

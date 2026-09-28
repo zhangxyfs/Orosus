@@ -70,7 +70,10 @@ export function subagentTools(port: SubagentPort, dirsOf: DirsOf, log?: (code: s
       name: "tool-subagent__spawn",
       description: SPAWN_GUIDANCE,
       parameters: z.object({
-        description: z.string().min(1).describe("简述（≤60 字符——状态行 / 任务列表 / 送回行的显示名）"),
+        // MV-07：describe 承诺的「≤60 字符」落进校验层（原仅文案无 .max，超限静默通过撑长状态行/送回行）。
+        // 契约层 SubagentSpawnRequest.label 是「建议」级——本工具面从建议升格为硬界，带内拒话术指路压缩
+        description: z.string().min(1).max(60, { message: "简述超过 60 字符上限——它是状态行/任务列表/送回行的显示名，压缩到一句话（任务细节写进 prompt）" })
+          .describe("简述（≤60 字符——状态行 / 任务列表 / 送回行的显示名）"),
         prompt: z.string().min(1).describe("任务书——自包含（子代理看不到本对话，除非 forkFrom）。批量时每条按 {{item}} 展开"),
         items: z.array(z.string().min(1)).max(SUBAGENT_LIST_MAX).optional().describe(`批量清单（2-${SUBAGENT_LIST_MAX} 条、条目互异；任务书须含 {{item}}）`),
         role: z.string().optional().describe("工种名：research（只读调研）/ general（通用，缺省）/ 工种文件自定义名"),

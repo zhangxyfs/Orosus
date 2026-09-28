@@ -116,7 +116,10 @@ export type ProviderAdapter =
    *  默认档的派生归核心（kimi segmentsFor / middleOf 口径），目录侧只交原始声明。 */
     listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> };
 
-/** 模型 id 白名单（模型发现 T1）：端点是不可信数据源——白名单外字符/超限（>128）的 id 丢弃（dsh 密钥格式校验同思路）。 */
+/** 模型 id 白名单（模型发现 T1）：端点是不可信数据源——白名单外字符/超限（>128）的 id 丢弃（dsh 密钥格式校验同思路）。
+ *  有意放行 "/" 与 ":"（CT-02 钉）：OpenRouter 族端点真实产出嵌套 id（如 openai/gpt-4o）——与
+ *  "provider/model" 限定形相容（限定形按首个 "/" 切分：前 = 提供商名，其余整体 = 模型 id，嵌套段
+ *  原样保留），白名单不因分隔符撞车收紧（收紧属破坏性变更）。 */
 const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
 
 /** 菜单排序比较器（CT-01 修复）：numeric 感知——数字段按数值比较（glm-10 > glm-9.1 > glm-4.7），纯字典序
@@ -129,7 +132,7 @@ const MODEL_ORDER = new Intl.Collator("en", { numeric: true });
 /**
  * 解析 openai 形 /models 响应为模型 id 清单（模型目录能力的消费端）。
  * @param body - 响应 JSON（形如 { data: [{ id: "glm-4.7" }, ...] }；形状不符或无合法 id 抛错）。
- * @returns 模型 id 去重清单（版本号大的排前，合法 id 仅限字母数字与 . _ / - ）。
+ * @returns 模型 id 去重清单（版本号大的排前，合法 id 仅限字母数字与 . _ : / -）。
  */
 export function parseModelsResponse(body: unknown): string[] {
   const data = (body as { data?: unknown } | null)?.data;

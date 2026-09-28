@@ -5,10 +5,22 @@ import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
-/** PowerShell 取图参数（纯函数——可测）。路径转正斜杠防 PS 双引号转义歧义。 */
+/** PowerShell 取图参数（纯函数——可测）。路径转正斜杠防 PS 双引号转义歧义；
+ *  单引号串内 ' → ''（CR-08（2026-09-28 code review）：此前只转反斜杠——路径含 '（用户目录带撇号）
+ *  即越出 PS 单引号串字面量，Save 落点被切歪/注入两险；PS 单引号串唯一转义就是成对双写）。 */
 export function psCommandFor(tmp: string): string[] {
+  const psPath = tmp.replace(/\\/g, "/").replace(/'/g, "''");
   return ["-NoProfile", "-Command",
-    `Get-Clipboard -Format Image | ForEach-Object { $_.Save('${tmp.replace(/\\/g, "/")}', 'PNG') }`];
+    `Get-Clipboard -Format Image | ForEach-Object { $_.Save('${psPath}', 'PNG') }`];
+}
+
+/** macOS 取图 osascript 参数（CR-08 纯函数——可测）：on run argv 传参——路径作为独立命令行参数
+ *  交给脚本（item 1 of argv），不再插进 AppleScript 双引号串（旧形 `open for access "${tmp}"` 的
+ *  " 与 \ 需转义而未转，路径带引号/反斜杠即断链；逐参传递零转义面，原样直达）。 */
+export function osascriptArgsFor(tmp: string): string[] {
+  return ["-e",
+    "on run argv\n  write (the clipboard as «class PNGf») to (open for access (item 1 of argv) with write permission)\nend run",
+    tmp];
 }
 
 /** 最小有效字节数 100（纯函数——可测；防 PowerShell 输出空文件被误认有图）。 */
@@ -88,8 +100,7 @@ export async function pasteImage(): Promise<{ file: string } | undefined> {
     if (process.platform === "win32") {
       await execFileAsync("powershell", psCommandFor(tmp));
     } else if (process.platform === "darwin") {
-      await execFileAsync("osascript", ["-e",
-        `write (the clipboard as «class PNGf») to (open for access "${tmp}" with write permission)`]);
+      await execFileAsync("osascript", osascriptArgsFor(tmp));
     } else {
       await execFileAsync("sh", ["-c",
         `xclip -selection clipboard -t image/png -o > "${tmp}" 2>/dev/null || wl-paste --type image/png > "${tmp}" 2>/dev/null`]);

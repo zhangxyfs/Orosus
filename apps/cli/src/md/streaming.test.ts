@@ -91,4 +91,26 @@ describe("md/ 流式定稿 token 边界（mdpipe 批 T2——P0-② 根治）", 
 		);
 		expect(f2.slice(0, 2).map(stripAnsi)).toEqual(f1.slice(0, 2).map(stripAnsi)); // plain head 两行冻结零漂移
 	});
+	// CMD-04 回归钉（doc/16）：isCompleteCode 旧口径两处漏——① 开/闭合正则缺 ` {0,3}` 缩进
+	// 前缀，缩进围栏（列表项内代码块常态）恒进不了「闭合即定格」通道；② 闭合行后的尾换行
+	// 使末行为空串（EOF 处 marked 把尾 \n 并入 code raw——实测），带尾换行的顶格围栏同样
+	// 不即刻冻结（报告原「带换行不是缺陷」括注被实测推翻，冻结缺席面比报告宽）。钉法同
+	// highlight.test.ts ④：高亮语言下闭合帧内容行带 ANSI = 已冻结（transient 跳高亮纯文本）。
+	it("9. CMD-04：带尾换行的顶格围栏闭合帧即刻冻结（内容行已着色非 transient）", () => {
+		const sm = createStreamingMarkdown(60);
+		const closed = sm.render("```ts\nconst x = 1;\n```\n"); // 闭合行后带换行——常见流式帧形态
+		const line = closed.find((l) => stripAnsi(l).includes("const x"))!;
+		// oxlint-disable-next-line no-control-regex -- 终端断言合法形态：断言冻结着色存在需匹配 ESC
+		expect(line).toMatch(/\x1b\[/); // 修复前：尾 \n 使末行为空串 → 不冻结 → 纯文本
+	});
+	it("10. CMD-04：缩进 2 空格围栏闭合帧即刻冻结，后续帧前缀逐行一致", () => {
+		const body = "  ```ts\n  const x = 1;\n  ```\n";
+		const sm = createStreamingMarkdown(60);
+		const closed = sm.render(body);
+		const line = closed.find((l) => stripAnsi(l).includes("const x"))!;
+		// oxlint-disable-next-line no-control-regex -- 终端断言合法形态：断言冻结着色存在需匹配 ESC
+		expect(line).toMatch(/\x1b\[/); // 修复前：开栏正则不认前导空格 → 恒不冻结 → 纯文本
+		const after = sm.render(`${body}\nafter para`);
+		expect(after.slice(0, closed.length)).toEqual(closed); // 冻结段零重渲零漂移
+	});
 });

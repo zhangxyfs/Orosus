@@ -20,7 +20,7 @@ describe("写协调闸 T7（决策 24：报备归一 + 撞车排队 + 同血缘�
     expect(claimContains(b.path, b.path)).toBe(true);
   });
 
-  it("⑲ 撞车排队 FIFO + 闸随结束释放：重叠后到者等待；不重叠并行；持闸者释放即放行队首；被停的排队者按失败收场", async () => {
+  it("⑲ 撞车排队（冲突序——CX-10）+ 闸随结束释放：重叠后到者等待；不重叠并行；持闸者释放即放行队首；被停的排队者按失败收场", async () => {
     const g = gate();
     const a = paths("src/");
     const b = paths("src/a.ts"); // 重叠（包含）
@@ -90,5 +90,22 @@ describe("写协调闸 T7（决策 24：报备归一 + 撞车排队 + 同血缘�
     if (!hit.ok) expect(hit.error).toContain("m1");
     expect(g.checkMainWrite([join("docs", "b.txt")]).ok).toBe(true);
     g.release("m1");
+  });
+
+  it("㉑b CX-10 冲突序钉：先到的冲突排队者未启动时，不冲突的后来者先行持闸（非严格 FIFO——细粒度报备的并发意义，头注释同款口径）", async () => {
+    const g = gate();
+    await g.acquire("h", paths("src/"), []);             // 持闸：src/
+    const waitB = g.acquire("b", paths("src/a.ts"), []); // 先到：与 h 冲突 → 排队
+    await new Promise((r) => setTimeout(r, 5));
+    let dStarted = false;
+    const waitD = g.acquire("d", paths("docs/"), []).then(() => { dStarted = true; }); // 后到：与 h 不冲突
+    await new Promise((r) => setTimeout(r, 5));
+    expect(dStarted).toBe(true);                         // 后来者越过排队的 b 先行持闸——冲突序，非严格 FIFO
+    expect(g.snapshot().queue.map((w) => w.agentId)).toEqual(["b"]);
+    g.release("h");                                      // b 的冲突源消失 → 放行
+    await waitB;
+    await waitD;                                         // d 早已持闸（thèn 已 resolve）——清场对齐 ⑲ 风格
+    g.release("b");
+    g.release("d");
   });
 });

@@ -114,7 +114,10 @@ function renderPlainWidget(wd: WidgetSpec, w: number, _base: number): string[] {
 			const total = Math.max(0, Math.min(barW, Math.round(ratio * barW * 8) / 8));
 			const full = Math.floor(total);
 			const frac = total - full;
-			const fracCh = frac > 0 ? FRACS[Math.min(7, Math.ceil(frac * 8) - 1)] : ratio > 0 ? "▏" : "";
+			// CTW-05（2026-09-28）：total 已量化到 1/8 整数倍 → frac*8 是精确整数 k，直接取 FRACS[k]。
+			// 旧「ceil 减一」把 k/8 档映到 FRACS[k-1]——每档系统性少显 1/8 格；frac=1/8 取到空串整格消失、
+			// FRACS[7]▉ 永不可达。k ∈ [1,7]（frac>0 且 total≤barW），天然不越界
+			const fracCh = frac > 0 ? FRACS[Math.ceil(frac * 8)] : ratio > 0 ? "▏" : "";
 			out.push(
 				` ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
 			);

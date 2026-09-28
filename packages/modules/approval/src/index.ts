@@ -122,7 +122,9 @@ export default defineModule({
       // ask：请求先落日志（UI 经日志投影看到，§6.7），询问经 ctx.ui（D35 M3：waterfall 侧交互口）
       ctx.session.append("approval/requested", {
         callId: p.callId, name: p.name, approvalRule: p.approvalRule,
-        reason: d.reason, mode: state.modeOverride ?? cfg.mode,
+        // MA-09 修复（2026-09-28 code review）：前台路径对齐后台（98 行）记 p.mode——M4.5 加子代理转发
+        // 档时只更新了后台分支，前台事件丢档提示致日志投影与实际生效档不一致
+        reason: d.reason, mode: p.mode ?? state.modeOverride ?? cfg.mode,
       });
       const ask = async (): Promise<{ deny: true; reason: string } | undefined> => {
         // 第四选「始终允许（写规则落盘）」（M4-2 T9）：仅可分段命令提供（不可分段/危险 → 与现状同视觉）
@@ -152,9 +154,16 @@ export default defineModule({
           // 多段 → 单条 bash(<段1> && <段2>) 段列原样（复合精确）——写生效层 + 会话内即时生效
           const pattern = segs.length === 1 ? `${p.name}(${segs[0]!} *)` : `${p.name}(${segs.join(" && ")})`;
           try {
-            persistAllowRule(cfg.configFile ?? defaultConfigFile(), pattern, cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"));
-            cfg.rules.push({ effect: "allow", tool: pattern }); // 本会话即时生效（盘上规则 reload 后复检）
-            ctx.log.info("approval.rule.persisted", "始终允许规则已落盘", { callId: p.callId, pattern });
+            // MA-10 修复（2026-09-28 code review）：落盘结果回传——盘上同 pattern 异 effect（deny/ask）规则
+            // 在时不写不 push（会话内 push 的 allow 会被配置序首条命中的既有规则压住，且层间规则集不一致、
+            // 重启后行为反转），warn 提示用户处理冲突；盘上同 pattern allow = 幂等成功（不重复写，会话照常生效）
+            const persisted = persistAllowRule(cfg.configFile ?? defaultConfigFile(), pattern, cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"));
+            if (persisted.added || persisted.existingEffect === "allow") {
+              cfg.rules.push({ effect: "allow", tool: pattern }); // 本会话即时生效（盘上规则 reload 后复检）
+              ctx.log.info("approval.rule.persisted", persisted.added ? "始终允许规则已落盘" : "同 pattern allow 规则已在盘，无需重复落盘", { callId: p.callId, pattern });
+            } else {
+              ctx.log.warn("approval.rule.conflict", `盘上已存在同 pattern 的 ${persisted.existingEffect} 规则，allow 未落盘——请在生效层 [approval] rules 处理冲突`, { callId: p.callId, pattern, existingEffect: persisted.existingEffect });
+            }
           } catch (err) {
             ctx.log.warn("approval.rule.persist-failed", "规则落盘失败（本次仍仅会话级放行）", { callId: p.callId, error: String(err) });
             if (d.memoryKey !== null) state.sessionMemory.add(d.memoryKey); // 落盘失败回退会话记忆，不白选

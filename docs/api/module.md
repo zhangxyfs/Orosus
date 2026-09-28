@@ -86,11 +86,31 @@ export type PopupLayout =
 ui.viewText?.("便签", text, { layout: { height: 20, marginTop: 2, marginStart: 4 } });
 ```
 
+## POPUP_CLOSE（常量）
+
+PopupKey.run 的关窗哨兵字面量（CT-08 钉）：值恒为 "close"——宿主判定统一引用本常量，与宿主现行
+`r === "close"` 字面量判定同值兼容（宿主不引用也不破）。改值属破坏性变更：须同步全部宿主判定处。
+
+```ts
+export const POPUP_CLOSE = "close"
+```
+
+## PopupRunResult（类型）
+
+PopupKey.run 的返回三态（CT-08 收窄命名）：POPUP_CLOSE 哨兵居前（= 关窗）| string（窗内容整体
+替换并滚回顶部）| void（内容不动）。注意：TS 的 string 会吸收 "close" 字面量——类型层排除不了
+「内容恰为 close」的串（哨兵约束存在于本注与宿主 === 判定，返回该串同样关窗，模块作者勿以它为正文）；
+判别联合改造（如 string | { close: true }）属破坏性变更，留待未来 API 修订与宿主同步迁移。
+
+```ts
+export type PopupRunResult = typeof POPUP_CLOSE | string | void
+```
+
 ## PopupKey（接口）
 
 弹窗自定义键：键名用 keymatch 规范化名（"r"、"alt+r"、"pageUp"）。绝对禁绑 = Esc、Ctrl+C/V/A/S/Z
 与宿主全局键（Ctrl+T/E/O 等）——注册即拒并记模块日志。run 三种返回：返回字符串 = 窗内容整体替换
-并滚回顶部（其中字符串恰为 "close" = 关窗）；无返回 = 内容不动。
+并滚回顶部（其中字符串恰为 "close" = 关窗，见 PopupRunResult——哨兵占内容空间的已知脆弱点）；无返回 = 内容不动。
 
 ```ts
 export interface PopupKey { … }
@@ -101,7 +121,7 @@ export interface PopupKey { … }
 | 名 | 形态 | 说明 |
 |---|---|---|
 | `label` | `label: string` | 键位显示名（窗底部提示行展示，如「刷新」）；空串也合法（不显示）。 |
-| `run` | `run(): string \| "close" \| void` | 按键动作。返回字符串 = 窗内容整体替换并滚回顶部；恰好返回 "close" = 关窗；无返回 = 内容不动。抛错 = 黄字提示且窗保留。 |
+| `run` | `run(): PopupRunResult` | 按键动作。返回字符串 = 窗内容整体替换并滚回顶部；恰好返回 "close"（= POPUP_CLOSE）= 关窗；无返回 = 内容不动。抛错 = 黄字提示且窗保留。 |
 **示例**
 
 ```ts
@@ -112,11 +132,10 @@ ui.viewText?.("便签", notes.join("\n"), {
 
 ## CommandUi（接口）
 
-命令交互 UI 抽象（D35）：ask/choose/confirm——宿主注入 readline 实现；无头环境注入拒绝式
-（三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。
-命令交互 UI 抽象（D35）：命令处理器第二参 + waterfall 监听者共用。宿主注入实现——
-全屏 = 浮层/接管输入行；行模式 = readline；无头 = 拒绝式（核心四法抛"无交互环境"，fail-closed；
-m5 可选口缺省不存在，判空降级）。Esc 取消统一映射「已取消（Esc）」带内抛错穿透处理器。
+命令交互 UI 抽象（D35）：命令处理器第二参 + waterfall 监听者共用。宿主注入实现——全屏 = 浮层/
+接管输入行；行模式 = readline；无头 = 拒绝式（核心四法 ask/askSecret/choose/confirm 抛
+"无交互环境"→ 命令带内失败，fail-closed；m5 可选口缺省不存在，判空降级）。多级菜单 = 命令内
+嵌套调用。Esc 取消统一映射「已取消（Esc）」带内抛错穿透处理器。
 
 ```ts
 export interface CommandUi { … }
@@ -304,7 +323,7 @@ export interface LlmPort { … }
 | 名 | 形态 | 说明 |
 |---|---|---|
 | `stream` | `stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>` | 二级流式调用（错误带内——finish error，不许 reject）。 |
-| `listModels?` | `listModels?: (() => Promise<string[]>) \| undefined` | 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式）。 可选——无一槽提供目录能力时读得 undefined（显式 \| undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法）， 消费方据此隐藏模型选择项。 |
+| `listModels?` | `listModels?: (() => Promise<string[]>) \| undefined` | 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式； 切分口径同 stream.model（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id，嵌套 id 不截断—— 显示层取尾段会丢前缀，消费方须按此口径切分）。 可选——无一槽提供目录能力时读得 undefined（显式 \| undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法）， 消费方据此隐藏模型选择项。 |
 | `contextWindow?` | `readonly contextWindow?: number \| undefined` | 当前模型上下文窗口（token）——harness 解析（config 顶层 contextWindow > provider import 目录写入）；未知 undefined。 |
 | `lastUsage?` | `readonly lastUsage?: { totalTokens: number; atMessageCount: number } \| undefined` | 最近一次主循环请求的真实用量锚点：totalTokens = input+output（该次请求全上下文）、atMessageCount = 该次请求 messages 条数——其后消息用估算增量（compaction 消费；锚点有效性三态规则见 M3 补强方案空白 §4）。 |
 
@@ -317,7 +336,7 @@ export interface LlmPort { … }
 | `stream` | `req.messages` | 对话消息（ModelMessage 形状）。 |
 | `stream` | `req.signal` | 取消信号（中断流；可省）。 |
 | `stream` | `req.maxTokens` | 输出上限 token 数（正整数；可省 = 不限）。 |
-| `stream` | `req.model` | 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型）。 |
+| `stream` | `req.model` | 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型。切分口径（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id——嵌套 id 如 openai/gpt-4o 原样保留，与核心 parseModel 同口径）。 |
 | `stream` | `req.webSearch` | 声明服务端原生搜索（端点不支持时被忽略；可省）。 |
 
 **示例**
@@ -395,7 +414,7 @@ export interface SettingsService { … }
 
 | 方法 | 参 | 说明 |
 |---|---|---|
-| `setModel` | `qualified` | 模型全形 "provider/model"（提供商名与模型名斜杠分隔；必须是已配置的提供商名，未知名 reject）。 |
+| `setModel` | `qualified` | 模型全形 "provider/model"（提供商名与模型名斜杠分隔，首个 "/" 前 = 提供商名、其余整体 = 模型 id（CT-02 钉，嵌套 id 原样保留）；必须是已配置的提供商名，未知名 reject）。 |
 | `setEffort` | `level` | 档位名（小写字母数字与 . _ -；目录外模型原样发送不校验；"auto" = 回目录默认档）。 |
 | `setTheme` | `name` | 主题名（未知名 reject——错误带外，模块自行 catch）。 |
 | `applyModulePreset` | `preset` | "minimal" = 只留核心 + 审批 + 当前活跃 provider；"full" = 恢复极简模式自己关掉的那批（从未切过 = 无操作）。 |
@@ -458,7 +477,7 @@ export interface HostInfo { … }
 
 | 名 | 形态 | 说明 |
 |---|---|---|
-| `current` | `current(): Promise<HostSnapshot>` | 拿当前快照（无订阅机制——要新值再调一次；善个异步事件投影）。返回 Promise；同步 getter 的标准接法 = 模块自己缓存。 |
+| `current` | `current(): Promise<HostSnapshot>` | 拿当前快照（无订阅机制——要新值再调一次；是个异步事件投影）。返回 Promise；同步 getter 的标准接法 = 模块自己缓存。 |
 **示例**
 
 ```ts
@@ -518,7 +537,7 @@ export interface SubagentSpawnRequest { … }
 | `roleName?` | `roleName?: string` | 工种名（显示用，如 "review"）。 |
 | `allowedTools?` | `allowedTools?: string[]` | 工种工具白名单（模块全名如 tool-fs__read）；只能减不能加——不在主对话工具面里的名字无效。 |
 | `disallowedTools?` | `disallowedTools?: string[]` | 工种工具黑名单（从主对话工具面里再减掉）。 |
-| `model?` | `model?: string` | 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 |
+| `model?` | `model?: string` | 工种文件声明的模型（provider/model 限定形——首个 "/" 前 = 提供商名、其余整体 = 模型 id（CT-02 钉）——或裸名）；三来源之一：settings 配置 > 工种 > 父。 |
 | `maxTurns?` | `maxTurns?: number` | 轮数上限（保险丝）：-1 = 不限（仅时长兜底）；正整数钳位 [1, 200]。解析序 settings > 工种 > 默认 100。 |
 | `writePaths?` | `writePaths?: string[]` | 写路径报备（决策 24①）：相对工作目录；目录 = 目录包含；不报备的写手 = 算整仓（保守排队）。 |
 | `forkFrom?` | `forkFrom?: boolean \| string` | 带聊天记录开局（决策 6）：true = 继承主会话投影到当前末尾（模块侧拿不到事件 id——内核解析尾部）； 字符串 = 精确到某事件 id（含）；缺省 = 空白开局。 |
@@ -669,7 +688,7 @@ export interface ModuleContext<C = unknown> { … }
 | `config` | `readonly config: C` | activate 时注入的纯分层合并快照（已校验、带默认值；overlay 不作用于它）。 |
 | `configRead` | `configRead(): Promise<C>` | 运行期读取自身配置（无 section 参数——只能读自己的 section）。 |
 | `log` | `readonly log: Logger` | 诊断日志（五级别同形状；码表纪律见 Logger）。 |
-| `ui` | `readonly ui: CommandUi` | 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。 无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 |
+| `ui` | `readonly ui: CommandUi` | 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。 无头环境为拒绝式实现（核心四法 ask/askSecret/choose/confirm 抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 |
 | `llm` | `readonly llm: LlmPort` | 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。 compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。 |
 | `services` | `readonly services: {` | 能力解析（硬依赖 get／可选 getOptional——迟到绑定，判空降级）。 |
 | `provide` | `provide(key: string, impl: unknown): void` | 挂能力实现（单所有者槽）。 |
@@ -727,7 +746,7 @@ export interface ModuleDefinition<C = unknown> { … }
 
 | 方法 | 参 | 说明 |
 |---|---|---|
-| `activate` | `ctx` | 模块上下文（见 ModuleContext；注册/订阅/服务都在这里；activate 期 provider 可能未装酅——llm 只在运行期调）。 |
+| `activate` | `ctx` | 模块上下文（见 ModuleContext；注册/订阅/服务都在这里；activate 期 provider 可能未装配——llm 只在运行期调）。 |
 
 **示例**
 

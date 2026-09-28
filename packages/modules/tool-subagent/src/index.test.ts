@@ -99,6 +99,17 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     expect((await exec(spawnTool!, { description: "x", prompt: "做 {{item}}", items: ["a"] })).output).toContain("至少 2 条");
   });
 
+  it("⑭b MV-07 回归钉：description 上限 60 字符落进 schema（原仅 describe 文案承诺，超限静默通过撑长显示行）", async () => {
+    const { dirs } = tmpDirs();
+    const port = stubPort();
+    const [spawnTool] = subagentTools(port, dirs);
+    expect(spawnTool!.parameters.safeParse({ description: "x".repeat(60), prompt: "p" }).success).toBe(true); // 恰好 60 在线内
+    const over = spawnTool!.parameters.safeParse({ description: "x".repeat(61), prompt: "p" });
+    expect(over.success).toBe(false); // registry safeParse 门带内拒
+    if (!over.success) expect(over.error.issues.some((i) => i.message.includes("60 字符"))).toBe(true);
+    expect(port.calls.length).toBe(0); // 未过门不派单
+  });
+
   it("⑮ 工种解析三路：未知名报错带可用清单；文件工种按白名单/writePaths 生效；spawn 的 writePaths 压过工种预声明", async () => {
     const root = mkdtempSync(join(tmpdir(), "orosus-t6-"));
     dir = root;

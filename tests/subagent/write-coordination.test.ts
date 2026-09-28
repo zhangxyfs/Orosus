@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -8,6 +8,7 @@ import { fakeProvider } from "@orosus/testing";
 import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/provider";
 import { Access, defineTool } from "@orosus/contracts/tool";
 import type { ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
+import approval from "@orosus/approval";
 
 let dir: string | undefined;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
@@ -21,12 +22,14 @@ const call = (callId: string, name: string, args: string): Chunk[] => [
 ];
 const text = (t: string): Chunk[] => [{ type: "text/delta", text: t }, { type: "finish", kind: "stop" }];
 
-interface Setup { h: Awaited<ReturnType<typeof createHarness>>; port: SubagentPort; writes: Map<string, string> }
+interface Setup { h: Awaited<ReturnType<typeof createHarness>>; port: SubagentPort; writes: Map<string, string>; bashRan: () => number }
 
-const setup = async (script: Chunk[][]): Promise<Setup> => {
+const setup = async (script: Chunk[][], opts: { configToml?: string; extraModules?: ModuleDefinition[] } = {}): Promise<Setup> => {
   dir = mkdtempSync(join(tmpdir(), "orosus-writecoord-"));
   const writes = new Map<string, string>();
+  let bashRan = 0;
   let port: SubagentPort | undefined;
+  if (opts.configToml !== undefined) writeFileSync(join(dir, "user.toml"), opts.configToml, "utf8");
   const provider = fakeProvider(script);
   const providerMod: ModuleDefinition = {
     name: "provider-fake", version: "0.1.0", description: "f", api: 1,
@@ -60,7 +63,7 @@ const setup = async (script: Chunk[][]): Promise<Setup> => {
           const { command } = input as { command: string };
           return Promise.resolve({
             accesses: [Access.subprocess()], approvalRule: "tool-shell__bash",
-            execute: () => Promise.resolve({ output: `ran: ${command}`, isError: false }),
+            execute: () => { bashRan++; return Promise.resolve({ output: `ran: ${command}`, isError: false }); },
           });
         },
       }));
@@ -72,10 +75,10 @@ const setup = async (script: Chunk[][]): Promise<Setup> => {
     diagDir: dir,
     spillDir: join(dir, "spill"),
     cwd: dir,
-    modules: [providerMod, consumer, saveTool, fakeBash],
-    config: { userFile: join(dir, "no.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    modules: [providerMod, consumer, saveTool, fakeBash, ...(opts.extraModules ?? [])],
+    config: { userFile: join(dir, opts.configToml !== undefined ? "user.toml" : "no.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
-  return { h, port: port!, writes };
+  return { h, port: port!, writes, bashRan: () => bashRan };
 };
 
 describe("写绑定与越界回执（决策 24①⑤——端到端）", () => {
@@ -103,6 +106,26 @@ describe("写绑定与越界回执（决策 24①⑤——端到端）", () => {
     const out2 = (await s2.port.spawn({ label: "bash 手", prompt: "跑构建" })) as SubagentOutcome;
     expect(out2.status).toBe("completed");
     expect(out2.bashCommands).toEqual(["npm run build"]); // 备查（bash 实际写不可从命令串还原）
+    expect(s2.bashRan()).toBe(1);                         // 放行后真执行了（记账与执行同口径的对照锚）
     await s2.h.close();
+  });
+
+  it("CX-11 bash 记账在审批后：被 deny 规则拦下的命令不进回执（旧实现记在 plan 阶段——被否决、从未执行的命令也备查，把「想跑」记成「跑了」）", async () => {
+    // 主 never + deny 规则 → 子代理转发主关卡被拦（CX-02 后 auto/never 照走规则链）——命令从未执行
+    const s = await setup(
+      [
+        call("b1", "tool-shell__bash", JSON.stringify({ command: "rm -rf node_modules" })),
+        text("被拦了但照常交差"),
+      ],
+      {
+        configToml: '[approval]\nmode = "never"\n\n[[approval.rules]]\neffect = "deny"\ntool = "tool-shell__bash"\n',
+        extraModules: [approval],
+      },
+    );
+    const out = (await s.port.spawn({ label: "bash 被否", prompt: "跑删除" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");            // 工具被拒是带内结果——模型照常收尾
+    expect(s.bashRan()).toBe(0);                     // 命令从未执行
+    expect(out.bashCommands).toBeUndefined();        // 旧实现：plan 阶段已记账 → ["rm -rf node_modules"] 进回执
+    await s.h.close();
   });
 });

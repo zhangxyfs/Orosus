@@ -169,18 +169,45 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ...act.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" })),
   ];
   const requiredFailed = allFailed.filter((f) => sections.isRequired(f.name));
-  if (requiredFailed.length > 0) {
+  // CK-10：护栏盲区——被禁用/待确认的 required 模块不进 allFailed（禁用走 discovered、blocked 走 pending-confirm），
+  // required=true 且禁用的矛盾配置下护栏静默落空。分档处置：配置层矛盾（enabled:false / defaultEnabled=false，
+  // 无 CLI 意图）与失败同级阻断；CLI 显式意图（--no-modules 纯净模式 / --disable）与待确认（信任确认流需要本图
+  // 先起来才能确认）不阻断但显著告警——「没启动」与「被明确关掉」不是同一种失败
+  const cliDisabledIntent = (name: string): boolean =>
+    (input.cli.disable ?? []).includes(name) ||
+    (input.cli.noModules === true && !(input.cli.module ?? []).includes(name));
+  const requiredDisabled = [...disabledNames].filter((n) => sections.isRequired(n));
+  const requiredMisconfigured = requiredDisabled.filter((n) => !cliDisabledIntent(n));
+  for (const name of requiredDisabled.filter((n) => cliDisabledIntent(n))) {
+    log.warn("kernel.config.required-absent", `required=true 的模块 "${name}" 被 CLI（--no-modules/--disable）显式禁用——护栏降级为告警`, { module: name });
+  }
+  for (const b of input.blocked ?? []) {
+    if (sections.isRequired(b.def.name)) {
+      log.warn("kernel.config.required-absent", `required=true 的模块 "${b.def.name}" 在待确认桶（pending-confirm）——确认后方生效`, { module: b.def.name });
+    }
+  }
+  if (requiredFailed.length > 0 || requiredMisconfigured.length > 0) {
     // CK-02：只回滚本轮新激活——preserved（borrowed）实例借自旧图，disposeAll 会误调其旧 disposeFn，
     // 击穿「reload 失败旧图继续运行」的事务性承诺（旧图半死：MCP 子进程/句柄被拆）
     await act.disposeActivated();
     throw new Error(
-      `required = true 的模块失败，阻断启动（§10 安全护栏）：${requiredFailed.map((f) => `${f.name}（${f.reason}）`).join("、")}`,
+      `required = true 的模块缺席，阻断启动（§10 安全护栏）：${[
+        ...requiredFailed.map((f) => `${f.name}（${f.reason}）`),
+        ...requiredMisconfigured.map((n) => `${n}（required=true 但被 enabled=false/defaultEnabled=false 禁用，CK-10）`),
+      ].join("、")}`,
     );
   }
 
   const byName = new Map(input.defs.map((d) => [d.def.name, d]));
   const entryHashByName = new Map(input.defs.map((d) => [d.def.name, d.entryHash]));
   for (const b of input.blocked ?? []) {
+    // CK-09：重名检查只盖 input.defs——blocked 与启用模块同名时无条件覆写会把启用条目的 source 错标
+    // （builtin 被改成 local）且 byName 查找结果不确定。启用侧已有同名 → 跳过覆写 + warn；
+    // records 双同名条目保留（pending-confirm 可见性是有意的）
+    if (byName.has(b.def.name)) {
+      log.warn("kernel.blocked.name-conflict", `待确认模块与启用模块重名 "${b.def.name}"——审计来源以启用侧为准（blocked 不覆写）`, { module: b.def.name });
+      continue;
+    }
     byName.set(b.def.name, { def: b.def, source: b.source === "local" ? "local" : "inline" });
   }
   // 原地回填 source（不展开复制）：disposeAll 原地改 state，graph.records 必须与 act.records 共享对象，
@@ -195,15 +222,18 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
       .filter((f) => !act.records.some((r) => r.name === f.name))
       .map((f) => ({
         def: byName.get(f.name)!.def, name: f.name, source: byName.get(f.name)!.source,
-        state: "failed" as const, failReason: f.reason, generation: 1,
+        // CK-11：static/topo 失败的合成 record 此前写死 1——持续失败模块每次 reload 代际归 1，违背
+        // 「reload 起递增」（types.ts §5.5）。与激活路径同式：generations 基线 +1（harness 透传旧图全量 records 的代际）
+        state: "failed" as const, failReason: f.reason, generation: (input.generations?.get(f.name) ?? 0) + 1,
       })),
     ...(input.blocked ?? []).map((b) => ({
       def: b.def, name: b.def.name, source: "local" as const,
-      state: "pending-confirm" as const, failReason: b.reason, generation: 1, // m5 T17：待确认桶——不进 failed 计数（是待决不是失败）
+      // m5 T17：待确认桶——不进 failed 计数（是待决不是失败）；generation 恒 1：无实例不递增（§5.5 代际按实例计）
+      state: "pending-confirm" as const, failReason: b.reason, generation: 1,
     })),
     ...[...disabledNames].map((name) => ({
       def: byName.get(name)!.def, name, source: byName.get(name)!.source,
-      state: "discovered" as const, failReason: "未启用（defaultEnabled=false 或配置/CLI 禁用，§5.4）", generation: 1,
+      state: "discovered" as const, failReason: "未启用（defaultEnabled=false 或配置/CLI 禁用，§5.4）", generation: 1, // 同上：无实例不递增
     })),
   ];
 

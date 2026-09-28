@@ -80,4 +80,30 @@ describe("md/ 表格完整化（mdpipe 批 T4——P1-④：全边框网格 + �
 		// 多行单元格的非末行片段以样式归零序列收尾（pi wrapCellText 同款）
 		expect(lines.join("\n")).toContain("\x1b[22;23;24;25;27;28;29;39m");
 	});
+	// CMD-06 回归钉（doc/16）：含 \n 的单元格（br / 行内多行公式产物）natural 列宽按行取
+	// 最宽，非整串累加——\n 计宽 1 且跨行相加（"第一行\n第二行" 计 13 而真实行宽 6）。
+	// 合成 br token 同 ⑤ 手法，宽 60 走网格路径（⑤ 的宽 20 走降级线，不覆盖此面）。
+	it("7. CMD-06：含换行单元格按最宽行计列宽（整串累加则值列被撑到 13 宽）", () => {
+		const table = {
+			type: "table",
+			raw: "",
+			header: [cellOf("键"), cellOf("值")],
+			rows: [[cellOf("a"), cellOf("第一行", [{ type: "br", raw: "  \n" } as unknown as Tokens.Generic, { type: "text", raw: "第二行", text: "第二行" } as unknown as Tokens.Generic])]],
+			align: [null, null],
+		} as unknown as Tokens.Table;
+		const out: string[] = [];
+		renderTable(table, out, 60);
+		const p = stripAnsi(out.join("\n"));
+		// 值列段 = 最宽行 6 + 边框 2 = 8 短横（整串计宽口径为 13+2=15）
+		expect(p).toContain("┌────┬────────┐");
+		expect(p).toContain("第一行");
+		expect(p).toContain("第二行"); // 内容两行正常落格
+		expect(p).not.toMatch(/─{9,}/); // 无被撑宽的框线段
+	});
+	// CMD-06 同口径另一落点：多行标题下划线（setext 跨行文本带 \n）按最宽行计宽
+	it("8. CMD-06：多行标题下划线按最宽行计宽（共用 widestLineWidth 口径）", () => {
+		const lines = renderMarkdown("第一行\n第二行\n===\n", 60);
+		const underline = lines.find((l) => l.includes("═"))!;
+		expect(stripAnsi(underline)).toBe("═".repeat(6)); // 最宽行 6（整串累加口径为 13）
+	});
 });

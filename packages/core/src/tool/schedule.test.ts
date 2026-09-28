@@ -69,4 +69,18 @@ describe("scheduleByAccesses（D40 贪心分组：最早无冲突组，确定性
       { accesses: [Access.subprocess()] },
     ])).toEqual([[0], [1], [2]]);
   });
+
+  it("CX-16：注入 cwd 锚定相对路径——同相对路径跨不同 cwd 判冲/分组不串（缺省 process.cwd 兼容旧行为）", () => {
+    const isWin = process.platform === "win32";
+    const cwdA = isWin ? "D:\\proj-a" : "/proj-a";
+    const cwdB = isWin ? "D:\\proj-b" : "/proj-b";
+    const abs = isWin ? "D:\\proj-a\\x.ts" : "/proj-a/x.ts";
+    // accessConflict 三参形态：相对 "x.ts" 在 cwdA 下与绝对路径同文件 → 冲突；锚到 cwdB 则是另一文件
+    expect(accessConflict(Access.fsWrite("x.ts"), Access.fsWrite(abs), cwdA)).toBe(true);
+    expect(accessConflict(Access.fsWrite("x.ts"), Access.fsWrite(abs), cwdB)).toBe(false);
+    // 分组同口径：cwdA → 同文件分错开（串行）；cwdB → 互不相干同组（并行）。
+    // 旧实现裸 process.cwd：相对路径永远锚主进程 cwd，嵌入宿主/注入 cwd 场景下判冲错组
+    expect(scheduleByAccesses([{ accesses: [Access.fsWrite("x.ts")] }, { accesses: [Access.fsWrite(abs)] }], cwdA)).toEqual([[0], [1]]);
+    expect(scheduleByAccesses([{ accesses: [Access.fsWrite("x.ts")] }, { accesses: [Access.fsWrite(abs)] }], cwdB)).toEqual([[0, 1]]);
+  });
 });

@@ -9,10 +9,11 @@ import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
 
 /**
  * skill 模块（M2 T17 最小版 → m4-7 升级为九仓标准形态）：
- * 扫描四轨目录（弱→强：~/.agents/skills → ~/.orosus/skills → 项目 .agents 逐层 → 项目根 .orosus；
+ * 扫描五轨目录（弱→强：bundled 内置轨〔模块自带 bundled/ 随包分发，垫底——用户/项目同名可覆盖出厂件，
+ * m4-7 T11〕→ ~/.agents/skills → ~/.orosus/skills → 项目 .agents 逐层 → 项目根 .orosus；
  * 后入表者胜 = 项目压用户〔随仓库分发的技能对齐协作者环境〕+ 品牌压通用〔用户亲手放自家目录的优先〕）。
- * 每子目录一个 SKILL.md（YAML frontmatter 手写 key: value 行解析；name/description 必需，
- * when_to_use 简单说明与 disable-model-invocation 可选——m4-7 T2；未知键丢弃，宽松派）。
+ * 每子目录一个 SKILL.md（YAML frontmatter 手写 key: value 行解析；name 必需，
+ * description（缺省空串）/when_to_use 简单说明/disable-model-invocation 可选——m4-7 T2；未知键丢弃，宽松派）。
  * 贡献：promptSection（可用技能摘要，order 0 区，4000 字符预算超限降级仅名——T3）+
  * 工具 skill__load（读全文；执行时重扫 + 运行时去重——T4）+ 服务 skill.catalog / skill.resetLoaded
  * （宿主斜杠菜单与 /settings 管理面 / compact 后去重集重置——服务倒挂先例 websearch:endpoints）。
@@ -143,7 +144,7 @@ function skillTracks(cfg: {
 export const configSchema = z.object({
   /** 停用清单（T6/D4）：宿主 /settings → 技能 Alt + K 写回；键缺席 = 无停用。 */
   disabled: z.array(z.string()).optional(),
-  /** 测试注轨 / 高级覆盖：四轨目录显式指定（缺省 = 真实 home / git 根解析）。 */
+  /** 测试注轨 / 高级覆盖：五轨目录显式指定（缺省 = 真实 home / git 根解析 / 包内 bundled）。 */
   userAgentsDir: z.string().optional(),
   userOrosusDir: z.string().optional(),
   projectAgentsDirs: z.array(z.string()).optional(),
@@ -213,16 +214,22 @@ function catalogRow(s: Skill, disabled: Set<string>): {
 }
 
 function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, warn: ScanWarn): Tool {
+  // MI-16 修复（2026-09-28 code review P3）：accesses 改常量声明。旧实现 resolveExecution（声明期）调
+  // hit() 做五轨全量 fs 扫描取「命中技能真实 file」——违契约①「声明期无副作用」，且与 execute 的重扫
+  // 构成双扫 TOCTOU（审批等待窗内同名技能被更强轨覆盖 → 审批声明的路径 A ≠ 实读正文的文件 B）。
+  // 改按契约 CT-04 的搜索根纪律：fsRead 只收字面路径（无 glob），搜索类工具应声明整个搜索根——五轨根
+  // 常量声明后，execute 重扫命中的任何 <root>/<sub>/SKILL.md 都在声明集内（子目录名 ≠ frontmatter
+  // name 的技能也覆盖），声明/执行两阶段不再有 IO 缝隙。
+  const trackRoots = tracks.map((t) => Access.fsRead(t.dir));
   return defineTool({
     name: "skill__load",
     description: "读取指定技能的完整内容（摘要常驻系统提示，本文按需加载）",
     parameters: z.object({ name: z.string().describe("技能名（见系统提示中的可用技能列表）") }),
     resolveExecution: async (input) => {
       const { name } = input as { name: string };
-      const hit = () => scanSkills(tracks, warn).find((x) => x.name === name); // MI-09：重扫同样容错（坏轨只损该轨）
+      const hit = () => scanSkills(tracks, warn).find((x) => x.name === name); // MI-09：重扫同样容错（坏轨只损该轨）——只归 execute 期用（MI-16）
       return {
-        // accesses 按命中技能真实 file 声明（m4-7 修 bug：原写死 ~/.orosus/skills/<名>，项目级路径对不上）
-        accesses: [Access.fsRead((hit() ?? { file: `~/.orosus/skills/${name}/SKILL.md` }).file)],
+        accesses: trackRoots, // 常量声明（MI-16）：声明期零 IO——真实文件的读取发生在 execute 重扫之后，恒在声明集内
         approvalRule: "skill__load",
         execute: async () => {
           if (disabled.has(name)) {
@@ -248,7 +255,7 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, w
 export default defineModule({
   name: "skill",
   version: "0.2.0",
-  description: "skills 内容系统——四轨目录扫描 SKILL.md，摘要进系统提示 + skill__load 按需加载全文",
+  description: "skills 内容系统——五轨目录扫描 SKILL.md（bundled 垫底 → ~/.agents → ~/.orosus → 项目 .agents → 项目根 .orosus），摘要进系统提示 + skill__load 按需加载全文",
   api: 1,
   uses: ["fs.read"],
   provides: ["skill.catalog", "skill.resetLoaded"], // 宿主菜单/管理面/compact 重置消费（服务倒挂——websearch:endpoints 先例）

@@ -77,7 +77,9 @@ blocked: ONLY when truly stuck — requires the SAME blocker reported on 3 conse
               return Promise.resolve({ output: r.ok ? `目标已结清为完成：${reason.slice(0, 200)}` : r.message, isError: !r.ok });
             }
             const r = store.claimBlocked(reason);
-            return Promise.resolve({ output: r.message, isError: false }); // 打回不是错误——是「继续」的指引（方案 T6 接口注记）
+            // MV-06：streak 未满的打回不是错误——是「继续」的指引（方案 T6 接口注记）；但「无活动目标」
+            // 是前置条件失败（与 complete 路径同构的时序错误），豁免不再无差别覆盖到它
+            return Promise.resolve({ output: r.message, isError: r.noActiveGoal === true });
           },
         });
       },

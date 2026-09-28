@@ -149,8 +149,25 @@ describe("agentLoop 工具并发调度（M3，§6.3/D40）", () => {
         },
       }),
     });
+  /** CL-10（2026-09-28 code review）：执行窗口记录版——并发判据用「两任务执行窗口是否重叠」替代
+   *  墙钟余量断言（旧断言余量仅 ~60ms，CI 高负载/定时器漂移即与代码正确性无关地红；串行侧的
+   *  ≥150ms 下限断言则恒真、不构成对称保护）。 */
+  const timedTool = (windows: Record<string, { start: number; end: number }>, name: string, accesses: Access[]) =>
+    defineTool({
+      name, description: name, parameters: z.object({}),
+      resolveExecution: async () => ({
+        accesses,
+        approvalRule: name,
+        execute: async () => {
+          const start = Date.now();
+          await new Promise((r) => setTimeout(r, DELAY));
+          windows[name] = { start, end: Date.now() };
+          return { output: `${name}-ok`, isError: false };
+        },
+      }),
+    });
 
-  it("无冲突工具并行：总耗时 ≈ max 而非 sum（§6.3 分组并发）", async () => {
+  it("无冲突工具并行：两任务执行窗口重叠（§6.3 分组并发；CL-10 重叠判据）", async () => {
     const { run, tools, session } = setup([
       [
         { type: "toolcall/argumentsDelta", callId: "c1", name: "m__a", argumentsDelta: "{}" } as Chunk,
@@ -159,17 +176,19 @@ describe("agentLoop 工具并发调度（M3，§6.3/D40）", () => {
       ],
       [{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }] as Chunk[],
     ]);
-    tools.register(delayedTool("m__a", [Access.fsRead("/a")]), "m");
-    tools.register(delayedTool("m__b", [Access.fsRead("/b")]), "m");
-    const t0 = Date.now();
+    const windows: Record<string, { start: number; end: number }> = {};
+    tools.register(timedTool(windows, "m__a", [Access.fsRead("/a")]), "m");
+    tools.register(timedTool(windows, "m__b", [Access.fsRead("/b")]), "m");
     await run();
-    expect(Date.now() - t0).toBeLessThan(DELAY * 2 - 30); // 串行 ≥ 180ms；并行 ≈ 90ms + 流水开销
+    // 对称判据之并行侧：各自开始时刻都在对方结束之前（调度退化为串行时两条同时失败）
+    expect(windows["m__a"]!.start).toBeLessThan(windows["m__b"]!.end);
+    expect(windows["m__b"]!.start).toBeLessThan(windows["m__a"]!.end);
     const all = await session.all();
     expect(all.filter((e) => e.type === "tool/result" && e.output === "m__a-ok")).toHaveLength(1);
     expect(all.filter((e) => e.type === "tool/result" && e.output === "m__b-ok")).toHaveLength(1);
   });
 
-  it("冲突工具串行（耗时 ≈ sum）；同组否决不影响其他成员（denied 与 ok 并存）", async () => {
+  it("冲突工具串行（b 的开始不早于 a 的结束）；同组否决不影响其他成员（denied 与 ok 并存）", async () => {
     const { run, tools, session, bus } = setup([
       [
         { type: "toolcall/argumentsDelta", callId: "c1", name: "m__a", argumentsDelta: "{}" } as Chunk,
@@ -179,17 +198,18 @@ describe("agentLoop 工具并发调度（M3，§6.3/D40）", () => {
       ],
       [{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }] as Chunk[],
     ]);
-    tools.register(delayedTool("m__a", [Access.fsWrite("/same")]), "m");
-    tools.register(delayedTool("m__b", [Access.fsWrite("/same")]), "m"); // 与 a 冲突 → 分组串行
-    tools.register(delayedTool("m__c", [Access.fsRead("/c")]), "m");     // 与 a/b 不冲突 → 同组并行
+    const windows: Record<string, { start: number; end: number }> = {};
+    tools.register(timedTool(windows, "m__a", [Access.fsWrite("/same")]), "m");
+    tools.register(timedTool(windows, "m__b", [Access.fsWrite("/same")]), "m"); // 与 a 冲突 → 分组串行
+    tools.register(delayedTool("m__c", [Access.fsRead("/c")]), "m");            // 与 a/b 不冲突 → 同组并行
     bus.on(CORE_POINTS.toolPreExecute, (p) => {
       const payload = p as { name?: string };
       if (payload.name === "m__c") return { deny: true, reason: "审批否决（并行组内）" };
       return undefined;
     }, "approval");
-    const t0 = Date.now();
     await run();
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(DELAY * 2 - 30); // a、b 串行
+    // 对称判据之串行侧（CL-10）：窗口不重叠——b 的开始 ≥ a 的结束（与并行侧断言互为镜像）
+    expect(windows["m__b"]!.start).toBeGreaterThanOrEqual(windows["m__a"]!.end);
     const all = await session.all();
     const results = all.filter((e) => e.type === "tool/result");
     expect(results.some((e) => e.output === "m__a-ok" && e.isError !== true)).toBe(true);
@@ -365,5 +385,58 @@ describe("流终止帧缺失 / max_tokens 截断（CL-02/CL-03——2026-09-28 c
 		expect(msg?.finishKind).toBe("length"); // per-step 精确记档（中间步骤截断也可见）
 		const end = all.at(-1) as { type: string; kind?: string; finishKind?: string };
 		expect(end).toMatchObject({ type: "turn/end", kind: "completed", finishKind: "length" }); // turn 正常完成，但截断留痕
+	});
+});
+
+describe("停止边界 followUp 处理（CL-07——2026-09-28 code review）", () => {
+	it("CL-07 回归钉：stops=true 时 followUps 照常落 agent/steering-message 但不续跑（旧实现 collect 后静默丢弃——splice 式 drain 排空即丢，用户插队话/子代理结论无声消失）", async () => {
+		const { run, bus, session, provider } = setup([[{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }]]);
+		let drained = 0;
+		bus.on(CORE_POINTS.shouldStop, () => true, "stopper");
+		bus.on(CORE_POINTS.followUp, () => { drained++; return [{ text: "插队话", sourceModule: "m" }]; }, "m");
+		await run();
+		expect(drained).toBe(1); // 停止边界确实 collect（排空——积压不滞留，防与送回轮补触发形成空转链）
+		const all = await session.all();
+		expect(all.some((e) => e.type === "agent/steering-message" && JSON.stringify(e).includes("插队话"))).toBe(true); // 内容落日志（进后续投影）——旧实现零痕迹
+		expect(provider.requests).toHaveLength(1); // 未续跑（模块已喊停）
+		expect(all.at(-1)).toMatchObject({ type: "turn/end", kind: "completed" }); // 终局语义不变
+	});
+
+	it("CL-07 对照：无 shouldStop（或 false）→ followUp 续跑一轮（既有行为不变；监听器 splice 式一次性排空——真实 drain 语义，非恒产出）", async () => {
+		const { run, bus, provider } = setup([
+			[{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }],
+			[{ type: "text/delta", text: "续" }, { type: "finish", kind: "stop" }],
+		]);
+		const backlog = [{ text: "插队话", sourceModule: "m" }];
+		bus.on(CORE_POINTS.shouldStop, () => false, "stopper");
+		bus.on(CORE_POINTS.followUp, () => backlog.splice(0), "m");
+		await run();
+		expect(provider.requests).toHaveLength(2); // 续跑一轮
+		expect(provider.requests[1]!.messages.some((m) => m.role === "user" && (m.content[0] as { text?: string }).text === "插队话")).toBe(true);
+	});
+});
+
+describe("request/header 审计口径（CL-05——2026-09-28 code review）", () => {
+	it("CL-05 回归钉：toolsCount 与实际发送同源（specs——ToolSearch 藏 deferred 未 reveal 时不虚报；旧实现记 list().length）", async () => {
+		const s = sink();
+		const bus = createEventBus(s);
+		const tools = createToolRegistry({ bus, sink: s, spillDir: "/tmp/orosus-loop-spill" });
+		const session = new InMemorySessionStore();
+		const provider = fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]);
+		tools.register(defineTool({
+			name: "m__plain", description: "p", parameters: z.object({}),
+			resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+		}), "m");
+		tools.register(defineTool({
+			name: "m__lazy", description: "l", deferred: true, parameters: z.object({}),
+			resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+		}), "m");
+		tools.setDeferredEnabled(true);
+		expect(tools.list()).toHaveLength(2); // list 不过滤（目录口径）——制造两数分歧
+		expect(tools.specs()).toHaveLength(1); // specs 滤 hidden（发送口径）
+        for await (const e of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s })) { void e; }
+		expect(provider.requests[0]!.tools).toHaveLength(1); // 实际发送 = specs
+		const header = (await session.all()).find((e) => e.type === "request/header") as { toolsCount?: number };
+		expect(header.toolsCount).toBe(1); // 旧实现记 list().length = 2——审计口径与实发数失真
 	});
 });

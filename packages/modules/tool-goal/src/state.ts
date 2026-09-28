@@ -23,7 +23,9 @@ export interface GoalStore {
   current(): GoalState | null;
   create(input: { objective: string; maxRounds?: number | undefined; replace?: boolean | undefined }): { ok: true } | { ok: false; message: string };
   complete(reason: string): { ok: true } | { ok: false; message: string };
-  claimBlocked(reason: string): { accepted: boolean; streak: number; message: string };
+  /** noActiveGoal = 前置条件失败（无活动目标——调用时序错误，工具侧据此置 isError:true，MV-06）；
+   *  其余 accepted:false 是 streak 未满的打回（指引继续，不是错误）。 */
+  claimBlocked(reason: string): { accepted: boolean; streak: number; message: string; noActiveGoal?: boolean };
   /** T7 续跑轮记账：active 时 roundsUsed++（预算尽由 T7 判定停轮，本件只记账）。
    *  MV-02：roundsUsed 同时是 blocked 三连的轮界维度（claimBlocked 按它门控）。 */
   spendRound(): void;
@@ -75,7 +77,8 @@ export function createGoalStore(onChange?: (s: GoalState | null) => void): GoalS
 
     claimBlocked(reason) {
       if (state === null || state.status !== "active") {
-        return { accepted: false, streak: 0, message: `当前无活动目标（状态：${state?.status ?? "无"}）` };
+        // MV-06：与 complete 的前置失败同构（时序错误而非打回）——带判别字段供调用侧置 isError:true
+        return { accepted: false, streak: 0, noActiveGoal: true, message: `当前无活动目标（状态：${state?.status ?? "无"}）——先 tool-goal__create 立目标` };
       }
       const r = reason.trim();
       if (r === "") return { accepted: false, streak: state.blockedStreak, message: "blocked 需要具体阻塞原因（什么挡着你、试过什么）" };

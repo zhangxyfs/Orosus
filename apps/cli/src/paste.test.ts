@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { psCommandFor, isMeaningfulImage, imagesFor, extractImageRefs } from "./paste.ts";
+import { psCommandFor, osascriptArgsFor, isMeaningfulImage, imagesFor, extractImageRefs } from "./paste.ts";
 
 describe("图片粘贴（M4-2 T10；M4-2.5 T5 升真实附着）", () => {
   it("① psCommandFor + isMeaningfulImage——PS 参数正确；≤100 字节无效（空文件防御）", () => {
@@ -9,6 +9,22 @@ describe("图片粘贴（M4-2 T10；M4-2.5 T5 升真实附着）", () => {
     expect(isMeaningfulImage(99)).toBe(false);
     expect(isMeaningfulImage(10)).toBe(false);
     expect(isMeaningfulImage(4096)).toBe(true);
+  });
+
+  it("①a CR-08：psCommandFor 单引号转义（' → ''）——路径含撇号不越出 PS 单引号串；反斜杠照转正斜杠", () => {
+    const args = psCommandFor("C:\\Users\\o'brien\\.orosus\\tmp\\paste-1.png");
+    expect(args.join(" ")).toContain("C:/Users/o''brien/.orosus/tmp/paste-1.png"); // 成对双写 = PS 单引号串唯一转义
+    expect(args.join(" ")).not.toContain("o'brien"); // 未转义形不再出现（旧实现只转反斜杠，' 即断出串外）
+  });
+
+  it("①b CR-08：osascriptArgsFor 走 on run argv——路径独立逐参传递，绝不进 AppleScript 脚本体（旧形 \"${tmp}\" 的 \" 与 \\ 零转义面前案）", () => {
+    const nasty = "/Users/o'brien/a\"b\\c 粘贴.png"; // 撇号 + 双引号 + 反斜杠 + 非 ASCII 全齐
+    const args = osascriptArgsFor(nasty);
+    expect(args[0]).toBe("-e");
+    expect(args[1]).toContain("on run argv"); // 脚本体只含骨架
+    expect(args[1]).toContain("(item 1 of argv)"); // 落点取参不取字面量
+    expect(args[1]).not.toContain("/Users/"); // 路径不进脚本体（进了就是转义面回归）
+    expect(args[2]).toBe(nasty); // 原样独立参数——execFile 逐参传递零转义
   });
 
   it("② imagesFor——pendingImage 构造 prompt images opts；无图 undefined（M4-2.5 T5 装配锚，1:1 换 withImageRef 例）", () => {

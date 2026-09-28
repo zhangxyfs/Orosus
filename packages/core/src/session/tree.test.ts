@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSessionTree, readSessionHead } from "./tree.ts";
@@ -125,5 +125,25 @@ describe("sqlite 后端树快照读法（会话树批 T8——混合后端同树
     seed(d, "s_ok", [ev("e1", "session/header", { parentSession: null })]);
     const nodes = await buildSessionTree(d);
     expect(nodes.map((n) => n.sessionId)).toEqual(["s_ok"]); // 坏库节点跳过、好节点照常
+  });
+
+  it.skipIf(!sqliteAvailable())("④ CS-09（2026-09-28 code review）：readSqliteHead 走 openSessionDbReadOnly（busy_timeout 5000 对齐 store + readOnly 优先/回退兜底）——clean-close（无 -wal/-shm）与活实例两形态节点都不缺席", async () => {
+    const d = fresh();
+    const { SqliteSessionStore } = await import("./sqlite.ts");
+    // 形态一：clean close 后 -wal/-shm 已清——只读开库若撞 WAL 只读限制必须回退读写开（节点不得缺席）
+    const a = new SqliteSessionStore({ dir: d, sessionId: "s_closed" });
+    await a.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await a.append("session/label", { label: "关过的" });
+    await a.close();
+    expect(existsSync(join(d, "s_closed", "agents", "session.sqlite-wal"))).toBe(false); // 前提钉：clean close 无 WAL 残留
+    // 形态二：活实例（句柄在场、可能正被写）——树刷新与之并发（旧实现裸开库无 busy_timeout，撞
+    // checkpoint/恢复窗口 SQLITE_BUSY → 该节点静默缺席本次快照）
+    const b = new SqliteSessionStore({ dir: d, sessionId: "s_live" });
+    await b.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await b.append("session/label", { label: "活着的" });
+    const nodes = await buildSessionTree(d);
+    expect(nodes.find((n) => n.sessionId === "s_closed")?.label).toBe("关过的");
+    expect(nodes.find((n) => n.sessionId === "s_live")?.label).toBe("活着的");
+    await b.close();
   });
 });

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecretsEnv } from "@orosus/core";
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
@@ -761,6 +761,12 @@ const switchTo = async (sid: string, out: (s: string) => void = (s) => console.l
   await h.close();
   h = await createSession({ resume: { sessionId: sid }, sessionsDir: dirname(loc.dir) });
   activeDir = dirname(loc.dir);
+  // CS-05①（2026-09-28 code review）：换会话重置 lastEventId——它只经 attachRender 的 onEvent 喂（切回的
+  // 会话存量历史不重放事件流），不重置则切会话后立即 /fork 会把上一会话的事件 id 当 atEntryId 带进新
+  // 会话；session 域已把投影外 atEntryId 从宽容降级改为 throw（fork.ts CS-05），此路径会响亮报错。
+  // 重置为 undefined = /fork 走「父投影尾事件」缺省（createHarness fork 分支与 h.fork 两出口同款兜底），
+  // 语义恰是 /fork 的「从最新位置分叉」。sessionSwitch 缝（ctx.session.switchTo）背后也走本函数，同点覆盖。
+  lastEventId = undefined;
   const notice = `[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`;
   if (tuiMode === "full") {
     pendingEcho = { notice, history: true }; // 延期到 dm 重建后（F5 二轮⑯）
@@ -845,6 +851,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           : { sessionsDir });
         if (from !== undefined && parentTitle !== undefined) await h.setLabel(`fork ${parentTitle}`);
         activeDir = sessionsDir;
+        // CS-05②：/new 与 /fork 换会话同款重置——/new 的新会话尚无事件（header 懒写），残留旧会话尾事件
+        // id 时立即 /fork 必 throw（投影外 atEntryId）；/fork 分支的重置是口径统一（父尾 id 虽仍在子投影
+        // 内合法，统一回 undefined 走尾缺省——三处换会话缝一个口径，勿再单点漏）
+        lastEventId = undefined;
         clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
         const notice = from !== undefined
           ? `[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]` // fork 继承父上下文（ForkedSessionStore 投影实证）——回显让继承可见
@@ -857,7 +867,10 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "switch"; // 重挂横幅与渲染（新事件流）
       }
       // /help（M4-2 T21）：CLI 层拦截带说明版（D38 第一层——core 简版被遮蔽，非 CLI 宿主仍走 core 版）
-      if (text === "/help") { out(HELP_TEXT); return "again"; }
+      // CM-15①（2026-09-28 code review）：精确小写等值改走 cmdNameOf（归一 + 小写）——/HELP、/Help、
+      // "/ help"（斜杠后空格抹除）与 core 路由口径一致（core 2026-09-27 起命令词忽略大小写），不再漏到
+      // 「未知命令」；非命令文本（无斜杠）cmdNameOf 原样返回不匹配，直通不受影响
+      if (cmdNameOf(text) === "/help") { out(HELP_TEXT); return "again"; }
       // /settings（M4-3 T1c/D9：/other 改名——别名平移 /config；/other 旧名直接消失〔2026-09-24 用户拍板，
       // 不留指路不转别名〕——打字面撞「未知命令」即知新家）
       // 注记（同日走查实锤）：本条拦截须在下方 try 的 catch-all 覆盖内——弹窗配置流的 choose/ask Esc
@@ -877,7 +890,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       }
       try {
         // /settings 拦截在 try 内首条——嵌套模块配置流（tool-web__settings 三级流）的 Esc 抛错落 catch-all 静默
-        if (text === "/settings" || text === "/config") {
+        // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款——大小写/斜杠后空格归一）
+        if (cmdNameOf(text) === "/settings" || cmdNameOf(text) === "/config") {
           if (activeApp !== undefined) {
             await openSettingsPanel(activeApp);
           } else {
@@ -886,7 +900,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           return "again";
         }
         // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
-        if (text === "/tasks" || text === "/task") {
+        // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款）
+        if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
           await openTasks(activeApp, out);
           return "again";
         }
@@ -942,8 +957,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         pendingLineSeqs = [];
         // /provider 写盘后自动重载模块图（2026-09-24 走查 bug 前案：会话内新加平台不进激活槽——/settings 的
         // LLM 钉模型清单读活槽，不重载即缺席；「设为当前默认」写的顶层 provider 键同理随重载即时生效）；
-        // 只在写盘结果后重载（success/已设为当前默认/已移除——取消与未写入不动图）
-        if (cmdNameOf(text) === "/provider" && /^(?:success|已设为当前默认|已移除)/.test(cmdOut ?? "")) {
+        // 只在写盘结果后重载（取消与未写入不动图）
+        if (cmdNameOf(text) === "/provider" && PROVIDER_WRITE_DONE.test(cmdOut ?? "")) {
           const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
           await h.reload();
           closeGoneModuleUi(namesBefore);
@@ -983,12 +998,14 @@ const shortenPath = (p: string, maxW: number): string => {
 	if (p === home || p.startsWith(home + "\\") || p.startsWith(home + "/")) s2 = "~" + p.slice(home.length);
 	if (s2.length <= maxW) return s2;
 	const parts = s2.split(/[\\/]/); // F5 走查实修：原 /[\/]/ 只劈正斜杠，Windows 路径整串落入「…\+全路径」
-	const tail = parts.slice(-2).join("\\");
+	// CM-16②（2026-09-28 code review）：两档模板此前硬编码 "\\"——POSIX 上压缩形把反斜杠混进正斜杠
+	// 路径（面板 cwd 不可读）；join 与两处模板统一走 node:path 的 sep（Windows 输出逐字节不变）
+	const tail = parts.slice(-2).join(sep);
 	if (parts.length > 3) {
-		const cand = parts[0] + "\\…\\" + tail; // 头+…+尾两段（F5 二轮：旧模板 \$ 把插值转义成字面量——rig 实证 C:…${tail}）
+		const cand = parts[0] + sep + "…" + sep + tail; // 头+…+尾两段（F5 二轮：旧模板 \$ 把插值转义成字面量——rig 实证 C:…${tail}）
 		if (cand.length <= maxW) return cand;
 	}
-	return "…\\" + tail;
+	return "…" + sep + tail;
 };
 
 /** 末条 usage 输入/输出分拆（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。
@@ -1087,8 +1104,11 @@ const ctxUsageText = (): string => {
 	const model = (() => {
 		const v = realReadModel(process.cwd())() ?? "";
 		if (v === "") return "（未配置）";
-		if (v.includes("/")) return v.split("/").pop()!;
-		return v;
+		// CT-02（2026-09-28 code review）：首斜杠切分取模型段——嵌套模型 id（目录侧 openrouter 族真实产出
+		// 如 openai/gpt-4o）旧 split("/").pop() 只剩尾段丢前缀；与 contracts 新口径一致（首个 "/" 前 =
+		// 提供商名、其余整体 = 模型 id）
+		const slash = v.indexOf("/");
+		return slash >= 0 ? v.slice(slash + 1) : v;
 	})();
 	const used = p?.tokens.input ?? 0;
 	const pct = cfg.contextWindow > 0 ? Math.min(100, Math.round((used / cfg.contextWindow) * 100)) : 0;
@@ -1362,6 +1382,13 @@ const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto",
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
+/** /provider 写盘成功回报的输出前缀（CM-19③（2026-09-28 code review）抽常量——原正则内联在 processReplLine）。
+ *  来源三处，改动须与本清单同步：provider-custom 向导 runProviderMenu（packages/modules/provider-custom/src/menu.ts）
+ *  「设为当前默认」→ `已设为当前默认（provider = …）`、「移除」→ `已移除 <名>（…）`、
+ *  添加平台校验通过 → `success：已写入并完成校验`；CLI 子命令面 provider-cmd import 的
+ *  `success：已写入 …`（apps/cli/src/provider-cmd.ts）共用 success 前缀。取消/未写入回报（「已取消」「未更新…」）
+ *  不在清单内——不动模块图。 */
+const PROVIDER_WRITE_DONE = /^(?:success|已设为当前默认|已移除)/;
 
 /** /model 切换反馈（2026-09-22 用户拍板：harness 静默返回，流区不落行）：前后 diff h.status().model——
  *  变了才反馈；全屏走浮动 toast（输入框上边缘黄字 3s 自消），行模式单行打印。面板「运行状态」卡随 refreshPanel 同步。 */
@@ -1629,9 +1656,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       const c = cmdNameOf(text);
       return inflight && BUSY_BLOCK.has(c) ? `回答进行中——${c} 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）` : undefined;
     },
-    requestExit: () => {
-      action = "quit";
-    },
+    // CTU-11（2026-09-28 code review）：requestExit 死接口三方删除（本实现 + fullapp.ts 声明 + 测试桩）——
+    // 2026-09-23 拍板 Ctrl+C 不占用、退出走 /quit 后成遗迹，全仓 grep 零真实调用方
     requestCancel: () => {
       h.cancel(); // Esc 忙碌时取消当前 turn（SIGINT 同效——修复轮②）
     },

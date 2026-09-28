@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
 import type { ModuleDefinition } from "@orosus/contracts/module";
@@ -111,9 +112,12 @@ function resolveSourceSpec(spec: string, configRoot: string): string | undefined
   return expanded;
 }
 
+// CK-16：换 node:url fileURLToPath（loader.ts 同款）——自实现只处理 Windows 盘符、不解百分号编码，
+// 含空格路径的 file:// source（…/my%20mod）pathname 保留字面 %20 → existsSync 失败 → 静默 missing 跳过。
+// 失败（非 file:// scheme / 带 host / 坏 URL）退回原字符串——调用侧 existsSync 后照常 warn，行为兜底不变
 function fileURLToPathSafe(u: string): string {
   try {
-    return new URL(u).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+    return fileURLToPath(u);
   } catch {
     return u;
   }

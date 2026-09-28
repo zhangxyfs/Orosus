@@ -138,6 +138,14 @@ export function loadConfig(opts: {
   acc = merge(acc, { core: envCore, sections: {} });
   acc = merge(acc, { core: opts.cliOverrides ?? {}, sections: {} });
   acc = resolveEnvPlaceholders(acc, env, warnings);
+  // CH-14① 修复（2026-09-28 code review）：section 的 enabled 存在但非布尔（如手误 enabled = "false"——
+  // TOML 字符串/数字）此前被 isEnabled 静默忽略（typeof 守卫跳过——模块照常启用、零提示）。走
+  // config.warnings 通道留痕（布尔值不出 warning）；启停判定本身不变（非布尔仍按未写处理）。
+  for (const [name, section] of Object.entries(acc.sections)) {
+    if (section.enabled !== undefined && typeof section.enabled !== "boolean") {
+      warnings.push(`section [${name}] 的 enabled = ${JSON.stringify(section.enabled)} 非布尔——已忽略（合法值 true/false，§6.6）`);
+    }
+  }
   return { core: acc.core, sections: new Map(Object.entries(acc.sections)), warnings };
 }
 
@@ -154,7 +162,15 @@ export function loadSecretsEnv(file: string): { vars: Record<string, string>; ba
       badLines++;
       continue;
     }
-    vars[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+    const raw = t.slice(i + 1).trim();
+    // CH-15 修复（2026-09-28 code review）：剥成对单/双引号——dotenv 心智下手编辑 KEY="v" 后值带引号
+    // 原样进适配器 → 密钥静默失效（401）且零提示。双引号内 \n 类转义不展开（最小面——D37 只承诺
+    // KEY=VALUE 格式；不成对引号按字面量保留，交由坏值自然报错暴露）。
+    const unquoted = raw.length >= 2
+      && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
+      ? raw.slice(1, -1)
+      : raw;
+    vars[t.slice(0, i).trim()] = unquoted;
   }
   return { vars, badLines };
 }

@@ -30,4 +30,13 @@ describe("InMemorySessionStore", () => {
     await expect(s.flush()).resolves.toBeUndefined();
     await expect(s.close()).resolves.toBeUndefined();
   });
+
+  it("CS-13（2026-09-28 code review）：close 后 append 拒绝 store closed——与 jsonl/sqlite 后端语义对齐（旧实现照常成功，替身跑出的测试会掩盖「关闭后仍写」类 bug）；all() 仍可读、重复 close 幂等", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("x");
+    await s.close();
+    await expect(s.append("y")).rejects.toThrow(/store closed/); // 同 jsonl.ts/sqlite.ts 的拒绝语义与文案
+    expect((await s.all()).map((e) => e.type)).toEqual(["x"]); // 读面不受影响
+    await expect(s.close()).resolves.toBeUndefined(); // 幂等
+  });
 });

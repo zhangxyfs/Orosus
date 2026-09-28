@@ -18,11 +18,15 @@ import toolSubagent from "@orosus/tool-subagent";
  * 后台单子的请求与主轮续行不共享 fake 流抢序。
  */
 
-let dir: string | undefined;
+let dir: string | undefined;      // 最近一次 setup 的目录（测试体内的路径引用取它）
+const dirs: string[] = [];        // 本用例建过的全部目录（s4/s14 多次 setup、s12a 手建、s13 的 root）——统一清，不再只清最后一个
 let savedCwd: string | undefined;
-afterEach(() => {
-  if (savedCwd !== undefined) process.chdir(savedCwd);
-  if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+let cur: Setup["h"] | undefined;  // 当前活跃 harness——断言中途失败时 afterEach 兜底先 close 再删目录（close 幂等）
+afterEach(async () => {
+  await cur?.close();
+  cur = undefined;
+  if (savedCwd !== undefined) process.chdir(savedCwd); // 先切回原 cwd 再删目录（win32 上删不掉进程 cwd）
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   dir = undefined;
 });
 
@@ -57,6 +61,7 @@ const tomlWithAgentModel = (extra: string): string => {
 
 const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { approval?: boolean; ui?: CommandUi; configToml?: string; extraModules?: ModuleDefinition[] } = {}): Promise<Setup> => {
   dir = mkdtempSync(join(tmpdir(), "orosus-e2e-"));
+  dirs.push(dir); // 同一用例多次 setup（s4/s14）的目录全登记——afterEach 统一清
   writeFileSync(join(dir, "user.toml"), tomlWithAgentModel(opts.configToml ?? ""), "utf8");
   let port: SubagentPort | undefined;
   const writes = new Map<string, string>();
@@ -133,6 +138,7 @@ const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { appr
     modules: [providerMod, consumer, toolSubagent, writeMod, gateMod, bashMod, toolFs, ...(opts.approval === true ? [approval] : []), ...(opts.extraModules ?? [])],
     config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
+  cur = h; // TS-13：登记当前 harness——测试体末尾的显式 close 照旧，失败路径由 afterEach 兜底
   return { h, port: port!, writes, gate, bashCommands };
 };
 
@@ -354,6 +360,7 @@ describe("端到端十三场景 T15", () => {
   it("s12a 报备重叠串行 e2e：两个写 docs/ 的子代理先后落笔（无交错）+ 闸随结束释放", async () => {
     const order: string[] = [];
     dir = mkdtempSync(join(tmpdir(), "orosus-e2e-"));
+    dirs.push(dir); // 手建目录同样登记——afterEach 统一清
     writeFileSync(join(dir, "user.toml"), tomlWithAgentModel(""), "utf8");
     const main = [
       spawnCall("c1", { description: "写手甲", prompt: "写A", background: true, writePaths: ["docs/"] }),
@@ -400,6 +407,7 @@ describe("端到端十三场景 T15", () => {
       modules: [providerMod, consumer, toolSubagent, writeSlow],
       config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
     });
+    cur = h; // 手建 harness 同样登记——afterEach 兜底 close
     await h.prompt("派两个写手");
     await waitUntil(() => h.subagents().length === 2 && h.subagents().every((a) => a.status === "completed"), 8000);
     expect(order).toEqual(["begin:A", "end:A", "begin:B", "end:B"]); // 串行：A 完整落笔后 B 才开始
@@ -442,6 +450,7 @@ describe("端到端十三场景 T15", () => {
   it("s13 写前比对 e2e（真 tool-fs）：主对话读过 → 子代理改了 → 主对话再写被拦要求重读", async () => {
     savedCwd = process.cwd();
     const root = mkdtempSync(join(tmpdir(), "orosus-e2e-fs-")); // 注意：setup 会另建并覆写 dir——真文件操作全用 root
+    dirs.push(root); // root 也登记——旧写法从不清理，每次运行泄一个含文件的目录（TS-12）
     process.chdir(root); // tool-fs 根 = 进程 cwd（tool-fs 测试同款隔离法）
     writeFileSync(join(root, "shared.txt"), "初版\n");
     const s = await setup(

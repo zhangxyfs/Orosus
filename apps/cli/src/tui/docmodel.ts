@@ -27,7 +27,7 @@ type Entry =
 	| { k: "md"; src: string; cache?: { w: number; lines: string[] } } // markdown 源——按宽度渲染（缓存）
 	| { k: "user"; src: string } // 用户消息块（❯ 暖金）
 	| { k: "think"; src: string } // 思考块（Alt+E 折叠态随 frameLines 当下渲染）
-	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[] } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存——帧心跳不重算；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
+	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[] } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
 	| { k: "group"; ids: string[] }; // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算（kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 
 export class DocModel {
@@ -40,9 +40,13 @@ export class DocModel {
 	/** 花名册现读口（agent 组条目每帧取数——main.ts 注入 h.subagents()；无 = 组条目退化空）。 */
 	agentProvider: (() => readonly SubagentRosterEntry[]) | undefined = undefined;
 	/** 静默调用集（2026-09-27 拍板：tasks 纯查询行收进 agent 组）：tasks 的 call/result 整对吞掉——
-	 *  记 callId 供 result 侧精确丢弃；旧日志无 callId 用一次性旗标兜（防孤儿结果错挂到别的工具行）。 */
+	 *  记 callId 供 result 侧精确丢弃；旧日志无 callId 用位置感知旗标兜（仅吞摄入流中紧随静默 call
+	 *  的结果——防孤儿结果错挂到别的工具行，乱序日志不吞错〔CTW-10〕）。 */
 	private ghostCalls = new Set<string>();
-	private ghostNoId = false;
+	// CTW-10（2026-09-28）：记静默 call 时刻的条目序（lines.length），结果到达时序不变才吞。
+	// 旧一次性布尔旗标不校验归属：乱序旧日志（tasks call → bash call → bash result → tasks result）
+	// 把 bash 的结果吞掉、tasks 的孤儿结果再错挂到 bash 行——吞错 + 错挂双重错位
+	private ghostNoIdAt: number | undefined;
 	/** 回放期 spawn 配对（重载后 agent 组重建）：callId → 组条目引用——result 到场时把编号抠进组。
 	 *  回放专用状态（实时路走 claimAgents 末组认领，不用精确配对）。 */
 	private pendingSpawnResults = new Map<string, { k: "group"; ids: string[] }>();
@@ -171,7 +175,7 @@ export class DocModel {
 		// tasks 纯查询不占流区行（进度已在 agent 组里实时可见——2026-09-27 拍板；行模式 renderEvent 同幅抑制）
 		if (name === "tool-subagent__tasks") {
 			if (callId !== undefined) this.ghostCalls.add(callId);
-			else this.ghostNoId = true;
+			else this.ghostNoIdAt = this.lines.length; // CTW-10：位置感知——记静默 call 时刻条目序
 			return;
 		}
 		this.lines.push({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
@@ -187,9 +191,12 @@ export class DocModel {
 			this.ghostCalls.delete(callId);
 			return;
 		}
-		if (callId === undefined && this.ghostNoId) {
-			this.ghostNoId = false;
-			return; // 旧日志（无 callId）：吞掉紧跟静默 call 的孤儿结果，防错挂
+		if (callId === undefined && this.ghostNoIdAt !== undefined) {
+			// 旧日志（无 callId）：仅当结果紧随静默 call（期间无新条目入列——条目序未动）才吞，一次性窗口。
+			// 乱序日志中间必夹其他 call/消息条目 → 条目序已变 → 走正常回退路径，不吞别人的结果（CTW-10）
+			const adjacent = this.lines.length === this.ghostNoIdAt;
+			this.ghostNoIdAt = undefined;
+			if (adjacent) return;
 		}
 		const text = typeof output === "string" ? stripDangerEsc(output) : stripDangerEsc(String(output ?? "")); // CR-01：工具输出是外部文字——摄入净化（会话文件仍存原文）
 		let n = 0;
@@ -232,9 +239,11 @@ export class DocModel {
 		const out = [this.styleToolLine(head, e.result?.isError === true)];
 		if (e.result?.isError === true) {
 			if (!this.errOpen) return out;
-			const body = errorLines(e.result.output).slice(0, 60);
-			for (const l of body) for (const wl of wrapText(l, Math.max(8, width - 2))) out.push("  " + theme.fg("err", wl));
-			if (errorLines(e.result.output).length > 60) out.push(theme.dim("  … 其余从略（完整内容在会话文件）"));
+			// CTW-09（2026-09-28）：错误体入场一次解析缓存（hl/detail 同纪律）——errorLines 是
+			// JSON.parse 尝试 + 全文 split + 逐行 cleanLine，失败体可达数百 KB，展开期帧心跳不重算
+			e.errLines ??= errorLines(e.result.output);
+			for (const l of e.errLines.slice(0, 60)) for (const wl of wrapText(l, Math.max(8, width - 2))) out.push("  " + theme.fg("err", wl));
+			if (e.errLines.length > 60) out.push(theme.dim("  … 其余从略（完整内容在会话文件）"));
 			return out;
 		}
 		// Write = 内容预览（kimi 形态：dim 行号 + 语法高亮正文，无 +/- 记号——高亮一次入缓存，

@@ -110,6 +110,14 @@ for sha in "${commits[@]}"; do
   echo "  [$kept/$total 保留] $(git log -1 --format=%h "$sha") → ${new:0:7}"
 done
 
+# 全剪枝轮：本轮提交全部只动隐藏路径 → tip 未被赋值，update-ref 拿空 sha 必炸（fatal: not a valid SHA1）
+# 此时 public 树无需推进，但 base 必须前移——否则这些提交下轮又被无谓重放一遍
+if [ -z "$tip" ]; then
+  echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
+  echo "本轮 $total 个提交全部只涉及 ${HIDE_PATHS[*]}，已剪枝——$PUB 不动，仅推进 base。"
+  exit 0
+fi
+
 git update-ref "refs/heads/$PUB" "$tip"
 echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
 echo "✓ $PUB 分支已更新：本轮重放 $total 个提交，保留 $kept 个（只改隐藏路径 ${HIDE_PATHS[*]} 的提交被剪枝）。"

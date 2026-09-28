@@ -23,7 +23,7 @@ export type Access =
   | { kind: "subprocess" }
   | { kind: "all" };
 
-/** Access 四形态的便捷构造器（与上方联合类型同名导出。 */
+/** Access 四形态的便捷构造器（与上方联合类型同名导出）。 */
 export const Access = {
   /** fsRead/fsWrite 的 path 语义见联合类型 path 字段注释（CT-04：字面路径、建议绝对、不支持 glob）。 */
   fsRead: (path: string): Access => ({ kind: "fs.read", path }),
@@ -82,7 +82,7 @@ export interface Tool {
   /** 搜索补充关键词（目录呈现与打分的补充语料——cc-haha searchHint 同款）。 */
   searchHint?: string;
   /**
-   * 阶段一：声明（无副作用）——内核拿它跑并发调度与审批水缑；不许在此产生副作用。
+   * 阶段一：声明（无副作用）——内核拿它跑并发调度与审批漏斗；不许在此产生副作用。
    * @param input - 模型给的参数（已过 parameters schema 校验；自行 as 收窄类型）。
    * @returns 阶段二产出（accesses/approvalRule/execute——见 ToolExecution）。
    */

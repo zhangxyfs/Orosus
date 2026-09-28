@@ -149,7 +149,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     const requestSig = hash(JSON.stringify({ model, system: hash(system), tools: tools.specs().map((t) => t.name), ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}) }));
     if (requestSig !== lastRequestSig) {
       lastRequestSig = requestSig;
-      yield* emit(LOG_TYPES.requestHeader, { model, systemHash: hash(system), toolsCount: tools.list().length, ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}) });
+      yield* emit(LOG_TYPES.requestHeader, { model, systemHash: hash(system), toolsCount: tools.specs().length, ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}) }); // CL-05：审计口径与实际发送同源（specs 滤 ToolSearch 未 reveal 的 deferred；旧实现记 list().length——机制启用时虚报大于实发数）
     }
 
     log.debug("loop.provider.stream-start", "provider 流式开始", { messages: messages.length });
@@ -253,9 +253,14 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
       // 本可停止：follow-up collect 链（§6.2）；should-stop 走 any（布尔 OR，D29）
       const stops = await bus.any(CORE_POINTS.shouldStop);
       const followUps = await bus.collect<{ text: string; sourceModule: string }>(CORE_POINTS.followUp);
-      if (followUps.length > 0 && !stops) {
+      // CL-07 修复（2026-09-28 code review）：stops=true 时旧实现把已 collect 的 followUps 静默丢弃
+      //（harness 的 steerBacklog/deliveryDrain 都是 splice 式排空——排空即丢：用户插队话/子代理结论
+      // 无声消失）。现照常落 agent/steering-message（内容进日志与后续投影）但不续跑（模块已喊停）。
+      // 刻意不用「先判 stops 再 collect」：停止边界不排空积压会与 harness 送回轮收尾的补触发形成
+      // 空转链——每轮送回立即再起一轮、积压永不被消费。
+      if (followUps.length > 0) {
         yield* emit(LOG_TYPES.steeringMessage, { messages: followUps });
-        continue;
+        if (!stops) continue;
       }
       break outer;
     }
@@ -279,6 +284,9 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     for (const { call, args } of parsedCalls) {
       plans.push(await tools.plan({ id: call.callId, name: call.name, args }));
     }
+    // CX-16 留档（2026-09-28 code review P3）：scheduleByAccesses 已支持注入 cwd（相对 fs 路径锚点，
+    // 缺省 process.cwd 兼容），但 LoopOptions 无 cwd 字段——harness 的注入 cwd（createHarness options.cwd）
+    // 不下穿到 loop，此处无来源可传，不硬造；待 loop opts 补 cwd 后由此传入即可
     const groups = scheduleByAccesses(plans.map((p) => ({ accesses: p.ok ? p.accesses : [] })));
     const executedIds = yield* executeGroups(groups, plans, parsedCalls, { signal, session, bus, tools, log });
     // 中止时给未执行的 call 补 interrupted 结果——日志里不许出现无结果的 tool/call（投影完整性）

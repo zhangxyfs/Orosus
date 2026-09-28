@@ -63,6 +63,26 @@ describe("工种文件加载 T3（决策 8/9：frontmatter 七键 + 四级目录
     expect("error" in parseRoleFile("---\n- 孤儿列表项\n---\n正文", "/x/e.md")).toBe(true);
   });
 
+  it("③b 重复键 fail-closed（MV-08）：标量重复 / 列表后又标量 / 标量后空值重申 / 列表后空值重申 均报错不静默覆盖", () => {
+    // 形态①：同标量键出现两次（原：后值静默覆前值）
+    const dupScalar = parseRoleFile("---\nname: a\ndescription: 第一\ndescription: 第二\n---\n正文", "/x/f1.md") as { error: string };
+    expect(dupScalar.error).toContain("重复定义");
+    expect(dupScalar.error).toContain("description");
+    // 形态②：先列表再给同名标量（原：已积累列表被整体丢弃）
+    const listThenScalar = parseRoleFile("---\nname: a\ndescription: d\ntools:\n  - tool-fs__read\ntools: tool-shell__bash\n---\n正文", "/x/f2.md") as { error: string };
+    expect(listThenScalar.error).toContain("重复定义");
+    // 形态③：先标量后空值重申为列表（原：标量被静默丢弃、列表重新起算）
+    const scalarThenList = parseRoleFile("---\nname: a\ndescription: d\ntools: x\ntools:\n  - tool-fs__read\n---\n正文", "/x/f3.md") as { error: string };
+    expect(scalarThenList.error).toContain("重复定义");
+    // 形态④：先列表后空值重申（原：旧列表被整体重置）
+    const listThenList = parseRoleFile("---\nname: a\ndescription: d\ntools:\n  - tool-fs__read\ntools:\n  - tool-fs__glob\n---\n正文", "/x/f4.md") as { error: string };
+    expect(listThenList.error).toContain("重复定义");
+    expect(listThenList.error).toContain("/x/f4.md"); // 错误信息带文件定位
+    // 反向钉：不重复的正常文件不受影响（FULL_FILE 已由 ① 覆盖，此处再钉多列表键并存的合法形态）
+    const ok = parseRoleFile("---\nname: a\ndescription: d\ntools:\n  - tool-fs__read\nwritePaths:\n  - docs/\n---\n正文", "/x/f5.md");
+    expect("error" in ok).toBe(false);
+  });
+
   it("④ 引号与 BOM：值带引号剥壳；UTF-8 BOM 头剥掉不炸", () => {
     const r = parseRoleFile('---\nname: a\ndescription: "说明"\ntools:\n  - \'tool-fs__read\'\n---\n正文', "/x/a.md");
     expect("error" in r).toBe(false);

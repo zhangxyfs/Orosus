@@ -80,12 +80,20 @@ describe("tool-goal 状态机与三工具（M4-3 T6）", () => {
     expect((await exec(create, { objective: "g2" })).isError).toBe(false); // 终态不挡新目标
   });
 
-  it("⑥ 无目标 update（complete/blocked）均带内报错", async () => {
+  it("⑥ 无目标 update（complete/blocked）均带内报错（MV-06 修复：blocked 打回豁免不覆盖前置失败——两 action 的 isError 已对齐）", async () => {
     const { update } = mkStore();
     expect((await exec(update, { action: "complete", reason: "x" })).isError).toBe(true);
-    expect((await exec(update, { action: "blocked", reason: "x" })).isError).toBe(false);
-    const r = await exec(update, { action: "blocked", reason: "x" });
-    expect(r.output).toContain("无活动目标");
+    const blocked = await exec(update, { action: "blocked", reason: "x" });
+    expect(blocked.isError).toBe(true); // 无活动目标 = 时序错误（原为 false——与 complete 不对称）
+    expect(blocked.output).toContain("无活动目标");
+    expect(blocked.output).toContain("tool-goal__create"); // 修复指引补齐（与 complete 话术同构）
+    // 终态（blocked）后再报 blocked 同为前置失败——isError:true
+    const { create } = mkStore();
+    await exec(create, { objective: "g" });
+    await exec(update, { action: "complete", reason: "done" });
+    const afterTerminal = await exec(update, { action: "blocked", reason: "x" });
+    expect(afterTerminal.isError).toBe(true);
+    expect(afterTerminal.output).toContain("无活动目标");
   });
 
   it("⑦ blocked 三连按续跑轮（MV-02 修复）：同轮连发不加账（最多 1/3）；跨轮同 reason 才推进；变词清零重计", async () => {
@@ -93,7 +101,9 @@ describe("tool-goal 状态机与三工具（M4-3 T6）", () => {
     await exec(create, { objective: "g" });
     // MV-02 回归钉：同一轮（roundsUsed=0，零 followUp）连发 3 次同 reason——原实现按调用计数三连即受理，
     // 现每轮最多记 1，单轮零重试逃逸续跑循环的路径被堵死
-    expect((await exec(update, { action: "blocked", reason: "接口 401" })).output).toContain("1/3");
+    const first = await exec(update, { action: "blocked", reason: "接口 401" });
+    expect(first.output).toContain("1/3");
+    expect(first.isError).toBe(false); // MV-06：streak 打回不是错误（与无目标时序错误区分的另一半钉）
     const repeat = await exec(update, { action: "blocked", reason: "接口 401" });
     expect(repeat.output).toContain("同轮重复申报不累计"); // 同轮重复 = 指引等下一轮，不加账
     await exec(update, { action: "blocked", reason: "接口 401" });

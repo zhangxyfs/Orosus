@@ -70,7 +70,8 @@ export interface FullAppIO {
 	/** 提交闸门（批④——busy 期拒收档拦在回车前）：返回拒因 = 拦截（输入保留、不进历史、不写流区，
 	 *  拒因尾行瞬显自消）；undefined = 放行。宿主侧复用 inflight + 拒收名单单一数据源。 */
 	submitGate?(text: string): string | undefined;
-	requestExit(): void;
+	// CTU-11（2026-09-28 code review）：requestExit 死接口已三方删除（本声明 + main.ts 宿主实现 +
+	// fullapp.test.ts 桩）——2026-09-23 拍板 Ctrl+C 不占用、退出走 /quit 后成遗迹，全仓 grep 零真实调用方。
 	requestCancel(): void; // Esc 忙碌时取消当前 turn（h.cancel）
 	panelData(): PanelData;
 	slashCommands(): SlashItem[];
@@ -578,7 +579,7 @@ export class FullApp {
 
 	private pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
-		| { kind: "ask"; question: string; secret: boolean; resolve: (v: string | undefined) => void }
+		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined; viewPage?: number }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
 		| undefined;
@@ -908,6 +909,7 @@ export class FullApp {
 				kind: "ask",
 				question,
 				secret,
+				prev, // CTU-07：接管前草稿快照——Enter/Esc 两结算路径共读（成功路径不再丢草稿）
 				resolve: (v) => {
 					if (v === undefined) {
 						this.state.input = prev.input;
@@ -1545,6 +1547,8 @@ export class FullApp {
 							pu.text = r;
 							pu.lines = r.split("\n");
 							pu.scroll = 0; // 整窗替换滚回顶部（设计空白 14）
+							pu.pinned = false; // CTU-06（2026-09-28 code review）：同步脱钉——pinned 每帧把 scroll 钳回末页会否决
+							// 滚回顶部（bottom 窗注释承诺与行为矛盾的修复；键盘/滚轮/自动滚三路径都有「落地脱钉」，此处补齐）
 						}
 					} catch (err) {
 						// 全局约束 4：模块函数抛错 = 黄字提示且窗保留
@@ -1612,13 +1616,23 @@ export class FullApp {
 							ed.cursor += key.length;
 							fireInput();
 						} else if (key === "backspace" && ed.cursor > 0) {
-							ed.text = ed.text.slice(0, ed.cursor - 1) + ed.text.slice(ed.cursor);
-							ed.cursor -= 1;
+							// CTU-10（2026-09-28 code review）：退格整对删代理对——主编辑器 onEditKey backspace 同款
+							// 判定（光标前一位落低代理 0xdc00–0xdfff 且再前一位是高代理 → 删 2 码元；原按码元
+							// 步进删非 BMP 字符一半，残留孤立代理串）
+							const cp = ed.text.codePointAt(ed.cursor - 1)!;
+							const prev2 = ed.text.charCodeAt(ed.cursor - 2);
+							const w = cp >= 0xdc00 && cp <= 0xdfff && prev2 >= 0xd800 && prev2 <= 0xdbff ? 2 : 1;
+							ed.text = ed.text.slice(0, ed.cursor - w) + ed.text.slice(ed.cursor);
+							ed.cursor -= w;
 							fireInput();
 						} else if (key === "left") {
-							ed.cursor = Math.max(0, ed.cursor - 1);
+							// CTU-10：左移按码点跨越（主编辑器 moveCursor 同款——光标不落进代理对中间）
+							const prev = ed.text.codePointAt(ed.cursor - 1)!;
+							ed.cursor = Math.max(0, ed.cursor - (prev >= 0xdc00 && prev <= 0xdfff && ed.cursor > 1 ? 2 : 1));
 						} else if (key === "right") {
-							ed.cursor = Math.min(ed.text.length, ed.cursor + 1);
+							// CTU-10：右移按码点跨越（cp > 0xffff = 代理对高代理 → 跳 2 码元）
+							const cp = ed.text.codePointAt(ed.cursor)!;
+							ed.cursor = Math.min(ed.text.length, ed.cursor + (cp > 0xffff ? 2 : 1));
 						} else if (key === "home") {
 							ed.cursor = 0;
 						} else if (key === "end") {
@@ -1631,8 +1645,11 @@ export class FullApp {
 				return;
 			}
 			if (pu.kind === "pick") {
-				// 过滤列表（F5 九轮①）：可打印/退格编辑过滤串——子串匹配 includes（非 startsWith）
-				const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));
+				// 过滤列表（F5 九轮①）：可打印/退格编辑过滤串——子串匹配 includes（非 startsWith）。
+				// CTU-08（2026-09-28 code review）：过滤携带原始索引——Enter 结算不再 indexOf 按值回查
+				// （重复文本项会错拿首个同值项；choose 是模块契约面，契约未禁止重复项）
+				const pairs = pu.items.map((t, i) => ({ t, i }));
+				const filtered = pu.filter === undefined ? pairs : pairs.filter((x) => x.t.toLowerCase().includes(pu.filter!.toLowerCase()));
 				if (pu.filter !== undefined && key.length === 1 && isPrintable(key)) { // 单字符才入过滤——键名串（backspace 等）不得混入
 					pu.filter += key;
 					pu.sel = 0;
@@ -1651,7 +1668,7 @@ export class FullApp {
 				else if (key === "pageDown" && filtered.length > 0) pu.sel = Math.min(filtered.length - 1, pu.sel + OVERLAY_PAGE);
 				else if (key === "enter" && filtered.length > 0) {
 					this.pendingUi = undefined;
-					pu.resolve(pu.items.indexOf(filtered[pu.sel]!));
+					pu.resolve(filtered[pu.sel]!.i); // 按携带索引结算（CTU-08——重复项不回查错位）
 					this.promoteUi(); // 结算即提升暂存队首（批③②）
 				} else if (key === "escape") {
 					this.pendingUi = undefined;
@@ -1666,8 +1683,10 @@ export class FullApp {
 			if (key === "enter") {
 				const v = this.state.input;
 				this.pendingUi = undefined;
-				this.state.input = "";
-				this.state.cursor = 0;
+				// CTU-07（2026-09-28 code review）：成功结算同样恢复接管前草稿——与 Esc 对称（答案已读出入 v，
+				// 恢复无副作用；原实现清空丢弃：busy 期答完模块询问回来，正在写的草稿无声消失）
+				this.state.input = pu.prev.input;
+				this.state.cursor = pu.prev.cursor;
 				pu.resolve(v);
 				this.promoteUi();
 			} else if (key === "escape") {
@@ -2148,7 +2167,10 @@ export class FullApp {
 	private panelBox(title: string, en: string, focused: boolean, w: number, h: number, content: string[], hints: string[], footer?: string[], footTop?: string[]): string[] {
 		const bc = focused ? "accent" : "border";
 		const inner = w - 2;
-		const titleSeg = focused ? theme.fg("accent", ` ${title} `) : theme.fg("muted", ` ${title} `);
+		// CTU-09（2026-09-28 code review）：顶框标题源头截断（card.title 模块供给可超长——原靠 padToWidth
+		// 兜底会把右侧框角 ╮ 切掉）。预算 = w − ╭─(2) − 首尾空格(2) − 最小 fill(1) − 最小 en 段(4) ─╮(2)
+		const titleFit = truncateToWidth(title, Math.max(4, w - 11));
+		const titleSeg = focused ? theme.fg("accent", ` ${titleFit} `) : theme.fg("muted", ` ${titleFit} `);
 		const enSeg = theme.dim(` ${en} `);
 		const titleW = visibleWidth(titleSeg);
 		const enBudget = Math.max(4, w - 4 - titleW - 1);
@@ -2185,13 +2207,16 @@ export class FullApp {
 		const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 		// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
 		const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
-		const name = (m.state === "off" ? theme.fg("muted", m.name) : selected ? theme.fg("accent", m.name) : m.name) + lockSuffix;
 		const stateText = MOD_STATE_TEXT[m.state]!;
 		const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", stateText) : theme.dim(stateText);
 		const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
-		const descBudget = w - (3 + visibleWidth(m.name) + lockW + 1 + visibleWidth(stateText) + 1);
+		// CTU-09（2026-09-28 code review）：模块名源头截断（注册面供给可超长——原 padToWidth 兜底把行尾
+		// 状态字切掉）。预算 = w − 前缀「 ● 」(3) − 锁定后缀 − 状态字 − 最小 gap(1)
+		const nameTxt = truncateToWidth(m.name, Math.max(4, w - 3 - lockW - visibleWidth(stateText) - 1));
+		const name = (m.state === "off" ? theme.fg("muted", nameTxt) : selected ? theme.fg("accent", nameTxt) : nameTxt) + lockSuffix;
+		const descBudget = w - (3 + visibleWidth(nameTxt) + lockW + 1 + visibleWidth(stateText) + 1);
 		const desc = descBudget >= visibleWidth(m.desc) ? theme.dim(m.desc) : descBudget >= 8 ? truncateToWidth(theme.dim(m.desc), descBudget) : "";
-		const leftW = 3 + visibleWidth(m.name) + lockW + (desc === "" ? 0 : 1 + visibleWidth(desc));
+		const leftW = 3 + visibleWidth(nameTxt) + lockW + (desc === "" ? 0 : 1 + visibleWidth(desc));
 		const gap = Math.max(1, w - leftW - visibleWidth(stateText));
 		const row = ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${st}`;
 		return selected ? theme.bg("accentSoft", padToWidth(row, w)) : row;
@@ -2348,7 +2373,30 @@ export class FullApp {
 		return { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH };
 	}
 
+	/** 帧级错误边界（CTU-12 2026-09-28 code review）：主渲染帧每帧现调宿主回调（io.doc/panelData——其
+	 *  cards getter 自述已知会抛/queueItems），无防护时异常沿 scheduler 定时器/nextTick 逃逸为
+	 *  uncaughtException 杀进程。与 fireDialogEvent/renderModuleCard 的全局约束 4 同款降级：失败帧
+	 *  logWarn + 占位错误帧——渲染期异常从进程级降为帧级，宿主下一帧恢复即回。 */
 	private renderFrame(): number {
+		try {
+			return this.renderFrameInner();
+		} catch (err) {
+			this.io.logWarn?.("tui.render.frame-error", "渲染帧抛错，占位帧兜底", { error: String(err instanceof Error ? err.message : err) });
+			let rows = 24;
+			let cols = 80;
+			try {
+				rows = Math.max(4, this.io.rows());
+				cols = Math.max(8, this.io.columns());
+			} catch {
+				/* 宿主连尺寸口都抛——缺省几何尽力画 */
+			}
+			const screen: string[] = Array.from({ length: rows }, () => "");
+			screen[0] = truncateToWidth(theme.fg("warn", " 渲染出错——下一帧自动恢复，详见诊断日志（Ctrl + E）"), cols);
+			return this.full.render(screen, rows, cols, undefined);
+		}
+	}
+
+	private renderFrameInner(): number {
 		this.selectionGuard(); // T8：关窗首帧清 scope=view 残留选区
 		const { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
 		const s = this.state;
@@ -2501,7 +2549,9 @@ export class FullApp {
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
-		const titleSeg = theme.fg("accent", ` ${pu.title} `);
+		// CTU-09（2026-09-28 code review）：标题源头截断（模块供给可超长——原靠 padToWidth 兜底切掉右框角；
+		// 预算 = ow − ╭─(2) − 首尾空格(2) ─╮(2) − 最小 fill(1)）
+		const titleSeg = theme.fg("accent", ` ${truncateToWidth(pu.title, Math.max(4, ow - 7))} `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
 		const page = Math.max(3, geo.height - 3);
@@ -2553,7 +2603,9 @@ export class FullApp {
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
-		const titleSeg = theme.fg("accent", ` ${pu.title} `);
+		// CTU-09（2026-09-28 code review）：标题源头截断（spec.title 模块供给可超长——原靠 padToWidth 兜底
+		// 切掉右框角；预算 = ow − ╭─(2) − 首尾空格(2) ─╮(2) − 最小 fill(1)）
+		const titleSeg = theme.fg("accent", ` ${truncateToWidth(pu.title, Math.max(4, ow - 7))} `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
 		const page = Math.max(3, geo.height - 3);
@@ -2589,7 +2641,9 @@ export class FullApp {
 		const shown = filter === undefined ? flatItems : flatItems.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
 		const olines: string[] = [];
 		const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : `过滤「${filter}」`} ${shown.length}/${items.length} `;
-		const titleSeg = theme.fg("accent", ` ${title} `);
+		// CTU-09（2026-09-28 code review）：标题源头截断（choose 标题模块供给可超长——原靠 padToWidth 兜底
+		// 切掉右框角；预算扣除过滤段实测宽）
+		const titleSeg = theme.fg("accent", ` ${truncateToWidth(title, Math.max(4, ow - 7 - visibleWidth(theme.dim(filterSeg))))} `);
 		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg) - visibleWidth(theme.dim(filterSeg)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.dim(filterSeg) + theme.fg(bc, "─╮")));
 		olines.push(boxRow(""));
@@ -2621,8 +2675,10 @@ export class FullApp {
 		const bc = "accent";
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
-		const title = theme.fg("err", " 模块诊断 ");
 		const en = theme.dim(` ${entries.length} 个模块出过问题 `);
+		// CTU-09（2026-09-28 code review）：标题源头截断（本窗标题为内建定长——窄终端下 en 段挤爆顶框时的
+		// 防线，与其余四窗拼行点同式；预算扣除 en 段实测宽）
+		const title = theme.fg("err", truncateToWidth(" 模块诊断 ", Math.max(4, ow - 7 - visibleWidth(en))));
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
 		const selI = Math.max(0, Math.min(entries.length - 1, s.diagSel));
@@ -2646,8 +2702,11 @@ export class FullApp {
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
 		const skillCount = ap === undefined && !level2 ? this.filteredSkills().length : 0;
-		const title = ap !== undefined ? theme.fg("accent", ` ${ap.cmd} 参数 `) : level2 ? theme.fg("accent", ` ${s.overlayCmd} `) : theme.fg("accent", " 斜杠命令 ");
 		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
+		// CTU-09（2026-09-28 code review）：标题源头截断（overlayCmd/ap.cmd 是用户输入可超长——原靠
+		// padToWidth 兜底切掉右框角；预算扣除 en 段实测宽）
+		const titleText = ap !== undefined ? ` ${ap.cmd} 参数 ` : level2 ? ` ${s.overlayCmd} ` : " 斜杠命令 ";
+		const title = theme.fg("accent", truncateToWidth(titleText, Math.max(4, ow - 7 - visibleWidth(en))));
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
 		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」

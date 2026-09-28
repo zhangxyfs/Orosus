@@ -1,8 +1,8 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SessionTreeNode } from "@orosus/contracts/module";
-import { scanSessionFiles } from "./dir.ts";
-import { openDatabase, sqliteAvailable } from "./sqlite.ts";
+import { scanSessionFiles, type SessionFileEntry } from "./dir.ts";
+import { openDatabase, removeSqliteDbFiles, sqliteAvailable } from "./sqlite.ts";
 import { nodeFromEntry } from "./tree.ts";
 
 interface NodeRow {
@@ -38,10 +38,14 @@ const rowToNode = (r: NodeRow): SessionTreeNode => ({
 export class TreeIndex {
   private readonly file: string;
   private readonly probe: () => boolean;
+  /** CS-08（2026-09-28 code review）：删库重建的留痕通道——旧 catch 无条件静默吞一切异常再删库，瞬时错误
+   *  删掉健康索引也无迹可查。可注入诊断回调（harness 侧接 sink.warn）；缺省不挂、行为不变。 */
+  private readonly diag: ((err: unknown) => void) | undefined;
 
-  constructor(opts: { file: string; probe?: () => boolean }) {
+  constructor(opts: { file: string; probe?: () => boolean; diag?: (err: unknown) => void }) {
     this.file = opts.file;
     this.probe = opts.probe ?? sqliteAvailable;
+    this.diag = opts.diag;
   }
 
   private open(): import("node:sqlite").DatabaseSync {
@@ -63,10 +67,10 @@ export class TreeIndex {
     }
   }
 
-  /** 纯读路径（probe 不可用 / 库失败兜底）：直读源出节点。 */
-  private async pureRead(root: string, bucket?: string): Promise<SessionTreeNode[]> {
+  /** 纯读路径（probe 不可用 / 库失败兜底）：直读源出节点。entries 由调用方扫好传入（refresh 只扫一次）。 */
+  private pureRead(entries: SessionFileEntry[], bucket?: string): SessionTreeNode[] {
     const nodes: SessionTreeNode[] = [];
-    for (const entry of scanSessionFiles(root)) {
+    for (const entry of entries) {
       if (bucket !== undefined && entry.bucket !== bucket) continue;
       const node = nodeFromEntry(entry);
       if (node !== undefined) nodes.push(node);
@@ -76,11 +80,14 @@ export class TreeIndex {
 
   /** 刷新缓存并返回节点清单（opts.bucket = 桶名过滤——#17 索引全域维护、查询按当前桶；缺省全量）。 */
   async refresh(root: string, opts?: { bucket?: string }): Promise<SessionTreeNode[]> {
-    if (!this.probe()) return this.pureRead(root, opts?.bucket); // 设计空白 13：整层跳过
+    if (!this.probe()) return this.pureRead(scanSessionFiles(root), opts?.bucket); // 设计空白 13：整层跳过
+    // CS-08（2026-09-28 code review）：扫描移出库 try——扫描自身全程容错（readdir/stat 均内裹 try），
+    // 旧实现把它圈进「库失败删重建」的 catch 面，理论上的瞬时 fs 错误也会误删健康索引再全量重建。
+    // 扫一次全 refresh 复用（旧实现重建路径还会二次全扫）。
+    const entries = scanSessionFiles(root);
     let db: import("node:sqlite").DatabaseSync | undefined;
     try {
       db = this.open();
-      const entries = scanSessionFiles(root);
       const cached = new Map(
         (db.prepare("SELECT session_id, mtime_ms, size FROM nodes").all() as { session_id: string; mtime_ms: number; size: number }[])
           .map((r) => [r.session_id, r]),
@@ -108,18 +115,19 @@ export class TreeIndex {
       }
       const rows = db.prepare("SELECT * FROM nodes").all() as unknown as NodeRow[];
       return rows.filter((r) => opts?.bucket === undefined || r.bucket === opts.bucket).map(rowToNode);
-    } catch {
+    } catch (err) {
       // 库打不开/查询报错 = 删文件重建（fail-open）：本次纯读返回 + 全量灌进重建库——下次 refresh 走缓存路径
+      this.diag?.(err); // CS-08：删库前留诊断痕——不再无条件静默吞
       try { db?.close(); } catch { /* 已坏 */ }
-      try { rmSync(this.file, { force: true }); } catch { /* 删不掉（占用等）——纯读兜底已保证返回 */ }
-      const nodes = await this.pureRead(root, opts?.bucket);
+      removeSqliteDbFiles(this.file); // CS-08：连带 -wal/-shm（SQLite 官方要求删库连 WAL 一起——旧实现只删主库，残留 WAL 可能按 salt 链应用到重建库、混入上一化身陈旧行）
+      const nodes = this.pureRead(entries, opts?.bucket);
       try {
         db = this.open();
         const upsert = db.prepare(
           "INSERT OR REPLACE INTO nodes (session_id, bucket, parent_session, source_entry_id, label, created_at_ms, updated_at_ms, own_events, mtime_ms, size)" +
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         );
-        for (const entry of scanSessionFiles(root)) {
+        for (const entry of entries) {
           const node = nodeFromEntry(entry);
           if (node === undefined) continue;
           upsert.run(

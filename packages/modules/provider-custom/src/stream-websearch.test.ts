@@ -243,3 +243,45 @@ describe("空闲读超时（MP-07 最小实现）", () => {
     expect(last.errorMessage).toContain("空闲超时"); // 不是「网络错误」——超时语义单独可辨
   });
 });
+
+// MP-08 回归（报告条目：openai 族对块内每行独立 JSON.parse——SSE 规范同一事件的多条 data: 行须以 \n
+// 拼接后才是完整载荷，端点把 JSON 在载荷空白处合法拆行时逐行 parse 全失败走坏帧跳过，帧静默丢零正文；
+// anthropic 族 parseSseBlock 一直是拼接口径，两族不一）。修复：先按块聚合 data 行再单次 parse。
+describe("openai 族多行 data 帧拼接（MP-08：对齐 anthropic 族口径）", () => {
+  it("① 单个 JSON 载荷拆成两条 data: 行（SSE 规范合法）→ 拼接后正文与终局正常产出（MP-08 前：帧静默丢、兜底空 stop）", async () => {
+    // 载荷在字符串外的空白处拆开（JSON 里换行是合法空白）——join("\n") 后才是可 parse 的完整帧
+    const sse = [
+      "data: {\"choices\":[\n", // 第一条 data: 行（帧未完）
+      "data: {\"delta\":{\"content\":\"拼接帧\"}}]}\n\n",
+      "data: {\"choices\":[\n",
+      "data: {\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchImpl = (async () => sseResponse(sse)) as typeof fetch;
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl })(baseReq()));
+    expect(chunks.filter((c) => c.type === "text/delta").map((c) => (c as { text: string }).text)).toEqual(["拼接帧"]); // MP-08 前：两半各自 parse 失败/无 choices，正文静默丢
+    expect(chunks.filter((c) => c.type === "finish")).toEqual([{ type: "finish", kind: "stop" }]); // finish_reason 经拼帧到达（非 [DONE] 兜底）
+  });
+
+  it("② 多行 data 帧边界切半投递（分块撕裂）→ 块级组装后同样拼接产出；拆行帧里的 usage 同帧到达（回归）", async () => {
+    const whole = [
+      "data: {\"usage\":\n",
+      "data: {\"prompt_tokens\":3,\"completion_tokens\":0},\"choices\":[{\"delta\":{\"content\":\"U\"}}]}\n\n",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    ].join("");
+    const chunked = new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const p of [whole.slice(0, 30), whole.slice(30)]) c.enqueue(new TextEncoder().encode(p)); // 分块边界切在拆行帧内部
+          c.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl: (async () => chunked) as typeof fetch })(baseReq()));
+    expect(chunks.some((c) => c.type === "text/delta" && (c as { text: string }).text === "U")).toBe(true);
+    expect(chunks.some((c) => c.type === "usage" && (c as { input: number }).input === 3)).toBe(true); // 拆行帧里的 usage 字段同帧到达也产出
+    expect(chunks.at(-1)).toEqual({ type: "finish", kind: "stop" });
+  });
+});
+

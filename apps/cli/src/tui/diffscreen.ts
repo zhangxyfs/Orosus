@@ -17,6 +17,10 @@ export class DiffScreen {
 	private previousLines: string[] = [];
 	private previousWidth = 0;
 	private cursorRow = 0; // 终端光标当前所在的内容行下标
+	// CTW-11（2026-09-28）：首帧哨兵独立化——previousLines.length === 0 曾兼任「尚未渲染」判据，但渲染过
+	// 空帧后它同样为空：下一非空帧被误判首帧走「干净屏幕假设」无定位直写，写进残留行原位（旧行比新行长
+	// 时尾部残字永久留屏，只能靠宽度变化全量重绘自愈）
+	private hasRendered = false;
 	private write: (data: string) => void;
 
 	constructor(write: (data: string) => void) {
@@ -29,7 +33,7 @@ export class DiffScreen {
 	render(newLines: string[], width: number): number {
 		let out = SYNC_ON;
 
-		if (this.previousLines.length === 0) {
+		if (!this.hasRendered) {
 			// 首帧：干净屏幕假设，直接全量写（CTW-02：超宽行同样过显示列截断守卫——
 			// 行源不全是「先折成物理行再进帧」的组件产物，write 直写行可超宽）
 			for (let i = 0; i < newLines.length; i++) {
@@ -112,8 +116,19 @@ export class DiffScreen {
 				out += `\x1b[${down}B`;
 				finalRow = newLines.length - 1;
 			}
-			for (let i = 0; i < extra; i++) out += "\r\n\x1b[2K";
-			out += `\x1b[${extra}A`;
+			if (renderEnd < 0) {
+				// CTW-11（2026-09-28）：收缩到完全空帧——待清基线应为 renderEnd+1 = 0 行，但光标已被
+				// CTW-01 钳制钉在物理 0 行：第 0 行原位清 + 下移清 extra-1 行。旧循环「先 \r\n 再清」
+				// 永远漏掉第 0 行；也不能按旧次数多下移一行凑数——帧底再 \r\n 会触发终端滚动把整帧
+				// 顶走。finalRow 钳回物理行 0：cursorRow 记 -1 会让下一帧相对位移整体错一行（CTW-01 同族）
+				out += "\x1b[2K";
+				for (let i = 1; i < extra; i++) out += "\r\n\x1b[2K";
+				if (extra > 1) out += `\x1b[${extra - 1}A`;
+				finalRow = 0;
+			} else {
+				for (let i = 0; i < extra; i++) out += "\r\n\x1b[2K";
+				out += `\x1b[${extra}A`;
+			}
 		}
 
 		out += SYNC_OFF;
@@ -126,6 +141,7 @@ export class DiffScreen {
 	private commit(lines: string[], width: number): void {
 		this.previousLines = lines;
 		this.previousWidth = width;
+		this.hasRendered = true; // CTW-11：首帧哨兵与 previousLines 是否为空解耦（空帧也是「已渲染」）
 	}
 
 	/** 终态收尾：光标移到内容末行之下（退出前调用，防壳提示符覆写内容）。 */
@@ -143,5 +159,6 @@ export class DiffScreen {
 		this.previousLines = [];
 		this.previousWidth = 0;
 		this.cursorRow = 0;
+		this.hasRendered = false; // CTW-11：重置回「干净屏幕假设」
 	}
 }

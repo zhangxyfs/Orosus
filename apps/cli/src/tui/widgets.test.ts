@@ -98,3 +98,17 @@ describe("交互列表两段式（2026-09-28 用户拍板——子界面与斜�
 		expect(sel2).toContain(`${fg("accent", "磁盘占用")}${dim("（各目录大小与清理口径）")}`); // 选中带说明项：标题青玉、说明灰
 	});
 });
+
+describe("progress 分数块档位（CTW-05 回归钉 2026-09-28——FRACS 索引 off-by-one：k/8 档被映到 FRACS[k-1]，每档少显 1/8 格）", () => {
+	it("⑨ frac=1/8 渲染 ▏（旧实现取 FRACS[0] 空串——1/8 进度整格凭空消失）；frac=7/8 渲染 ▉（旧 ▊、FRACS[7] 永不可达）", () => {
+		// w=20 → barW = max(6, 20-4-pctText.len-1)
+		// 1/8 边界：value=1/max=64（pctText 4 字符 → barW=11）→ ratio*barW*8 = 1.375 → round → total = 1/8（full=0）
+		const e8th = renderWidgetLines([{ id: "p", kind: "progress", value: 1, max: 64 }], 20).lines[0]!;
+		expect(stripAnsi(e8th)).toBe(" ▏░░░░░░░░░░ 1/64"); // 亮段恰 1/8 格 ▏（旧：全 ░ 空串）
+		expect(e8th).toContain("▏");
+		// 7/8 边界：value=23/max=80 → ratio*barW*8 = 23 → total = 2 + 7/8（full=2）
+		const s8th = renderWidgetLines([{ id: "p", kind: "progress", value: 23, max: 80 }], 20).lines[0]!;
+		expect(stripAnsi(s8th)).toBe(" ██▉░░░░░░░ 23/80"); // 亮段 = 2 整格 + 7/8 格 ▉（旧：▊ = 6/8 档）
+		expect(s8th).not.toContain("▊");
+	});
+});

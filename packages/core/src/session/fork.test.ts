@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -12,8 +12,8 @@ import { createHarness } from "../index.ts";
 import { deriveMessages } from "../loop/convert.ts";
 import { scanBucketSessions } from "./dir.ts";
 
-let dir: string;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+let dir: string | undefined;
+afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
 const tmp = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-fork-")));
 const script: Chunk[][] = [[{ type: "text/delta", text: "继续" }, { type: "finish", kind: "stop" }]];
 
@@ -347,6 +347,126 @@ describe("链式 fork 断代修复（会话树批 T1）", () => {
     expect(texts).toContain("残缺子代问");
     expect(view.chain).toEqual([root.id, childId]); // 上溯发生——与树视图（header.parentSession）口径一致
     expect(warns).toContain("session.fork-event-missing"); // 显式留痕：fork 事件缺失 + 全量前缀降级
+    await view.store.close();
+  });
+});
+
+describe("CS-05 两出口校验对称（2026-09-28 code review）：atEntryId 缺席降级显式化——默认 throw，盘上链重建显式 fullPrefix", () => {
+  const mkStore = (sessionId: string, bucket: string): JsonlSessionStore => new JsonlSessionStore({ dir: bucket, sessionId });
+  const seedRootLocal = async (d: string): Promise<string> => {
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await s.append("user/message", { content: [{ kind: "text", text: "祖代问" }] });
+    const id = s.sessionId;
+    await s.flush();
+    await s.close();
+    return id;
+  };
+
+  it("① 默认（活 API 口径）：atEntryId 不在父投影 → all() reject，不再静默全量父前缀（旧实现无条件宽松降级）", async () => {
+    const parent = new InMemorySessionStore();
+    await parent.append("session/header", {});
+    await parent.append("user/message", { content: [] });
+    const own = new InMemorySessionStore();
+    const forked = new ForkedSessionStore({ parent, atEntryId: "e-nonexistent", own });
+    await expect(forked.all()).rejects.toThrow(/分叉点不在父会话投影内/);
+  });
+
+  it("② onMissing:\"fullPrefix\"（显式选择）：缺席 → 全量父前缀（旧宽松语义只留给点名要它的调用方）", async () => {
+    const parent = new InMemorySessionStore();
+    await parent.append("session/header", {});
+    await parent.append("user/message", { content: [{ kind: "text", text: "a" }] });
+    const own = new InMemorySessionStore();
+    const forked = new ForkedSessionStore({ parent, atEntryId: "e-nonexistent", onMissing: "fullPrefix", own });
+    const all = await forked.all();
+    expect(all).toHaveLength(2); // 父全量（2）+ own 空
+  });
+
+  it("③ 启动期出口（createHarness fork 分支）坏 atEntryId 响亮拒绝——与 h.fork（下节 ④）口径对称（旧实现：坏分叉点静默变全量父前缀、session/fork.sourceEntryId 落一条不在父链上的 id）", async () => {
+    const d = tmp();
+    const sid = await seedSession(d);
+    const fp = fakeProvider(script);
+    await expect(createHarness({
+      cwd: d,
+      fork: { parentSessionId: sid, atEntryId: "e-nonexistent" },
+      sessionsDir: d,
+      diagDir: d,
+      spillDir: join(d, "spill"),
+      modules: [{ ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) }],
+      config: { userFile: join(d, "u.toml"), projectFile: join(d, "p.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+      discovery: { userDir: join(d, "m"), projectDir: join(d, "pm"), trustFile: join(d, "t.json") },
+      secretsFile: join(d, "s.env"),
+    })).rejects.toThrow(/分叉点/);
+  });
+
+  it("④ openSessionView 读路径（盘上链重建）：sourceEntryId 已被撕裂/截断移出父投影 → 全量父前缀投影、不抛（宽容降级只属读侧）", async () => {
+    const d = tmp();
+    const rootId = await seedRootLocal(d);
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: rootId });
+    await s.append("session/fork", { sourceEntryId: "e-gone", parentSession: rootId }); // 指向不存在的事件（模拟撕裂截断后的失配）
+    await s.append("user/message", { content: [{ kind: "text", text: "子代问" }] });
+    const childId = s.sessionId;
+    await s.flush();
+    await s.close();
+    const view = await openSessionView({ sessionId: childId, bucket: d, makeStore: mkStore, locate: () => ({ bucket: d }) });
+    const texts = (await view.store.all()).map((e) => (e.content as { text?: string }[] | undefined)?.[0]?.text ?? e.type);
+    expect(texts).toContain("祖代问"); // 全量父前缀——读侧宽容（不因 sourceEntryId 失配让会话打不开）
+    await view.store.close();
+  });
+});
+
+describe("CS-10 ForkedSessionStore 透传 lifetimeUsage（2026-09-28 code review）：活 fork 会话 /usage 不再缺 lifetime 行", () => {
+  it("① own=jsonl（带跨会话口径）：方法在场且口径 = 子体跳过 + 父按兄弟计入（旧实现：不透传——存活期间恒 undefined，退出 resume 又出现）", async () => {
+    const d = tmp();
+    const parent = new JsonlSessionStore({ dir: d, sessionId: "s_p" });
+    await parent.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await parent.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 10, output: 4 } });
+    await parent.close();
+    const child = new JsonlSessionStore({ dir: d, sessionId: "s_c" });
+    await child.append("session/header", { format: 1, cwd: d, parentSession: "s_p" });
+    await child.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 5, output: 1 } });
+    const forked = new ForkedSessionStore({ parent, own: child });
+    expect(forked.lifetimeUsage).toBeDefined(); // 旧实现：缺省不挂
+    expect(await forked.lifetimeUsage!()).toEqual({ input: 10, output: 4, sessions: 1 }); // 子体自身 5/1 跳过（lineage 以父计）、父 10/4 按兄弟计入
+    await forked.close();
+  });
+
+  it("② own=InMemory（无跨会话口径后端）：照旧缺省不挂（不假装有 lifetime——调用方回退当前会话口径）", async () => {
+    const parent = new InMemorySessionStore();
+    await parent.append("session/header", {});
+    const own = new InMemorySessionStore();
+    const forked = new ForkedSessionStore({ parent, own });
+    expect(forked.lifetimeUsage).toBeUndefined();
+  });
+});
+
+describe("CS-12 祖先指针格式闸（2026-09-28 code review）：header.parentSession 出自文件内容——非法形态不进路径 join", () => {
+  it("parentSession 含 \"../\" → warn + 按找不到祖先就地截断（自身段照常、桶外零创建）", async () => {
+    const d = tmp();
+    // 合法根落桶（证明截断不是「桶空」造成），子体父指针却指向 ../evil-cs12
+    const root = new JsonlSessionStore({ dir: d });
+    await root.append("session/header", { format: 1, cwd: d, parentSession: null });
+    await root.flush();
+    await root.close();
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: "../evil-cs12" });
+    await s.append("user/message", { content: [{ kind: "text", text: "子代问" }] });
+    const childId = s.sessionId;
+    await s.flush();
+    await s.close();
+    const warns: string[] = [];
+    // locate 直返（不走 sessionFileExists 出口闸）——验证 openFrom 内的格式闸独立于 locate 生效
+    const view = await openSessionView({
+      sessionId: childId, bucket: d,
+      makeStore: (sid, bucket) => new JsonlSessionStore({ dir: bucket, sessionId: sid }),
+      locate: () => ({ bucket: d }),
+      sink: { warn: (code) => warns.push(code) },
+    });
+    const texts = (await view.store.all()).map((e) => (e.content as { text?: string }[] | undefined)?.[0]?.text ?? e.type);
+    expect(texts).toEqual(["session/header", "子代问"]); // 只剩自身段（截断）
+    expect(warns).toContain("session.fork-parent-invalid");
+    expect(existsSync(join(d, "..", "evil-cs12"))).toBe(false); // 桶外零逃逸（旧实现会把 ../evil-cs12 喂进 makeStore 的 join）
     await view.store.close();
   });
 });

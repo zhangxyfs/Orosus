@@ -105,21 +105,27 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           yield c;
         }
       };
-      // 单块行遍历（抽出成函数供 done 后残块冲刷〔MP-06〕复用；行分隔容忍 CRLF）
+      // 单块帧解析（抽出成函数供 done 后残块冲刷〔MP-06〕复用；行分隔容忍 CRLF）
       const handleBlock = function* (block: string): Generator<Chunk> {
+        // MP-08：SSE 规范——同一事件内多条 data: 行以 \n 拼接后才是完整载荷（anthropic 族 parseSseBlock
+        // 一直是对的口径，translate-anthropic.ts:14-19）。此前对块内每行独立 JSON.parse：端点把一个 JSON
+        // 拆成多行 data（规范合法，载荷内空白处拆分）时每行 parse 都失败走坏帧跳过——帧静默丢、零正文。
+        const dataLines: string[] = [];
         for (const line of block.split(/\r?\n/)) {
           const trimmed = line.trim();
           if (!trimmed.startsWith("data:")) continue;
-          const data = trimmed.slice(5).trim();
-          if (data === "" || data === "[DONE]") continue;
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(data);
-          } catch {
-            continue; // 坏行跳过
-          }
-          yield* handle(parsed as Record<string, unknown>);
+          dataLines.push(trimmed.slice(5).trim());
         }
+        if (dataLines.length === 0) return; // 无 data 行（注释/心跳）忽略
+        const data = dataLines.join("\n");
+        if (data === "" || data === "[DONE]") return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          return; // 坏帧跳过（MP-04 口径——不炸流）
+        }
+        yield* handle(parsed as Record<string, unknown>);
       };
       try {
         for (;;) {

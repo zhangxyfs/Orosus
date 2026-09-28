@@ -71,7 +71,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
   const hidden = (t: { tool: Tool; tombstoned?: boolean }): boolean =>
     deferredEnabled && t.tool.deferred === true && !revealed.has(t.tool.name) && t.tombstoned !== true;
 
-  return {
+  const registry: ToolRegistry = {
     register(tool, owner) {
       if (!tool.name.startsWith(`${owner}__`)) {
         throw new Error(`工具名 "${tool.name}" 未带 "${owner}__" 前缀（规则 4）`);
@@ -225,7 +225,11 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
     },
 
     async run(call, ctx) {
-      return this.execute(await this.plan(call), ctx);
+      // CX-14（2026-09-28 code review P3）：run 是最常被转发/解构的合成口（const { run } = reg、回调直传
+      // 都丢 this 绑定）——旧形态 this.plan/this.execute 在此场景即 TypeError。改经闭包自引用取 registry
+      //（调用时字面量已完成求值），不依赖调用方的 this
+      const planned = await registry.plan(call);
+      return registry.execute(planned, ctx);
     },
 
     revealTools(names) {
@@ -252,4 +256,5 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         }));
     },
   };
+  return registry;
 }

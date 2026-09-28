@@ -90,3 +90,16 @@ describe("sliceByColumn 严格语义 + 起点前 SGR 回放（CTW-03 回归钉 2
 		expect(mid).toContain("\x1b]8;;https://x.com/a\x07"); // 起点前的链接开码随回放进切片
 	});
 });
+
+describe("wrapText 幽灵行与末行收尾（CTW-07 回归钉 2026-09-28——断点空格被吞后 cur 只剩 SGR 前缀：零宽幽灵行 + 裸色串色）", () => {
+	it("⑫ 尾随空格恰落断点且 ANSI 激活：不推零可见宽幽灵行（旧实现推出一条仅含 SGR 前缀的空行）", () => {
+		// 「abcde」顶满 5 宽 → 空格触发折行且被吞 → 循环结束时 cur = "\x1b[31m\x1b[39m"（零可见宽）
+		// 旧：["\x1b[31mabcde\x1b[0m", "\x1b[31m\x1b[39m"]（第二行幽灵——多一个视觉空行）
+		expect(wrapText("\x1b[31mabcde \x1b[39m", 5)).toEqual(["\x1b[31mabcde\x1b[0m"]);
+		expect(wrapText("abcde ", 5)).toEqual(["abcde"]); // 无色变体行为不变（旧也无幽灵）
+	});
+	it("⑬ 末行补 reset 收尾：与 emit() 同口径（旧末行裸推无收尾——非自闭合输入串色到下一逻辑行）", () => {
+		const lines = wrapText("\x1b[31mabcdef", 5); // 裸色输入（无 39m 自闭合）
+		expect(lines).toEqual(["\x1b[31mabcde\x1b[0m", "\x1b[31mf\x1b[0m"]); // 末行同补收尾
+	});
+});

@@ -39,12 +39,40 @@ describe("项目级信任门（§8.5，内容 hash + fail-closed）", () => {
 
   it("④ hash 变化 → hash-changed（MCPoison 教训：信任绑定内容而非名字/路径）", () => {
     const dir4 = mk();
+    // CK-17：真实绝对路径替代原字面量 c:\x\m——POSIX 上它非绝对路径（resolve 成 cwd 相对），键永不命中、断言必败
+    const root = join(dir4, "m");
+    const store = loadTrustStore(join(dir4, "t.json"));
+    store.entries[normalizeTrustKeyExport(root)] = { hash: "h1", confirmedAt: "t" };
+    expect(checkTrust({ layer: "project", root, entryHash: "h2", store })).toEqual({ ok: false, reason: "hash-changed" });
+  });
+
+  it.skipIf(process.platform !== "win32")("④b CK-17 平台钉（win32 专属）：小写登记键、原大小写路径查询命中——大小写归一仅 win32 生效（trust.ts normalizeTrustKey）", () => {
+    const dir4 = mk();
     const store = loadTrustStore(join(dir4, "t.json"));
     store.entries["c:\\x\\m"] = { hash: "h1", confirmedAt: "t" }; // 归一化键（win32 小写）
     expect(checkTrust({ layer: "project", root: "C:\\x\\m", entryHash: "h2", store })).toEqual({ ok: false, reason: "hash-changed" });
   });
 
-  it("⑤ trust.json roundtrip（含 Windows 盘符大小写归一化：D:\\ 与 d:\\ 命中同一条目）", () => {
+  it("⑤ trust.json roundtrip：登记 → 落盘 → 读回命中（读入侧键归一；POSIX 恒等、win32 小写）；坏文件留档（CK-07）", () => {
+    const dir = mk();
+    const file = join(dir, "trust.json");
+    // CK-17：临时目录真实路径替代原字面量 D:\develop\...（win32 专属形态拆去 ⑤b）——全平台成立
+    const root = join(dir, "mods", "m");
+    const store = loadTrustStore(file);
+    store.entries[root] = { hash: "h", confirmedAt: "t" };
+    saveTrustStore(file, store);
+    const reloaded = loadTrustStore(file);
+    expect(reloaded.entries[normalizeTrustKeyExport(root)]?.hash).toBe("h"); // 读入侧已归一——同一归一函数读回必命中
+    expect(checkTrust({ layer: "project", root, entryHash: "h", store: reloaded })).toEqual({ ok: true });
+    // 解析失败视为空 store（全部重新确认，fail-closed 方向）——坏文件被留档改名（CK-07⑦），原路径不复存在
+    const bad = join(dir, "bad.json");
+    writeFileSync(bad, "{not json");
+    const emptied = loadTrustStore(bad);
+    expect(Object.keys(emptied.entries)).toHaveLength(0);
+    expect(readdirSync(dir).some((f) => f.startsWith("bad.json.corrupt-"))).toBe(true); // CK-07：留档不无痕抹掉
+  });
+
+  it.skipIf(process.platform !== "win32")("⑤b CK-17 平台钉（win32 专属）：D:\\ 与 d:\\ 命中同一条目（盘符大小写归一——POSIX 无此归一，该断言必败）", () => {
     const dir = mk();
     const file = join(dir, "trust.json");
     const store = loadTrustStore(file);
@@ -53,12 +81,6 @@ describe("项目级信任门（§8.5，内容 hash + fail-closed）", () => {
     const reloaded = loadTrustStore(file);
     expect(reloaded.entries["d:\\develop\\mods\\m"]?.hash).toBe("h"); // 读入侧已归一（win32 小写）
     expect(checkTrust({ layer: "project", root: "d:\\DEVELOP\\mods\\m", entryHash: "h", store: reloaded })).toEqual({ ok: true }); // 大小写归一
-    // 解析失败视为空 store（全部重新确认，fail-closed 方向）——坏文件被留档改名（CK-07⑦），原路径不复存在
-    const bad = join(dir, "bad.json");
-    writeFileSync(bad, "{not json");
-    const emptied = loadTrustStore(bad);
-    expect(Object.keys(emptied.entries)).toHaveLength(0);
-    expect(readdirSync(dir).some((f) => f.startsWith("bad.json.corrupt-"))).toBe(true); // CK-07：留档不无痕抹掉
   });
 
   it("⑦ CK-07 回归钉·原子写：tmp+rename 后目录里只有目标文件（无 .tmp 残留）、覆写不截断；POSIX 下权限无条件 0600（含既有宽权限文件）", () => {

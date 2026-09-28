@@ -1,12 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { JsonlSessionStore, repairFile } from "./jsonl.ts";
+import { JsonlSessionStore, repairFile, sessionAppendFlag } from "./jsonl.ts";
+import { sqliteAvailable } from "./sqlite.ts";
 
-let dir: string;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+let dir: string | undefined;
+afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
 
 describe("JsonlSessionStore", () => {
   it("append 落盘为 JSONL，flush 后可全量读回", async () => {
@@ -242,6 +243,99 @@ describe("CS-02 写失败不毒化写队列（2026-09-28 code review）：drain 
     const events = readFileSync(join(blocker, "session.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(events.map((e) => e.seq)).toEqual([1, 2]);
     await s.close();
+  });
+});
+
+describe("CS-11 repairFile 最小写面（2026-09-28 code review）：修复 = 原地截断/追加，不再全文覆写", () => {
+  it("① 仅缺尾换行 → 只追加 \"\\n\"，原始字节保真（旧实现 writeFileSync 全文重写——非规范排版的行会被重序列化，覆写中途崩溃丢整段历史）", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs11-"));
+    const file = join(dir, "s_a.jsonl");
+    // 刻意带空格的非规范 JSON 排版：旧全文覆写会把它重序列化为紧凑形态（字节被改写）
+    const original = '{ "v": 1, "id": "e_1", "parentId": null, "seq": 1, "ts": "t", "type": "session/header" }';
+    writeFileSync(file, original);
+    expect(repairFile(file)).toEqual({ truncated: false, interruptedClosed: false });
+    expect(readFileSync(file, "utf8")).toBe(original + "\n"); // 前缀逐字节不动，仅尾部补换行
+  });
+
+  it("② torn tail → ftruncate 精确截到坏行起点：好行与空行字节原样保留 + 未闭合 turn 补事件走追加", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs11b-"));
+    const file = join(dir, "s_b.jsonl");
+    const l1 = '{"v":1,"id":"e1","parentId":null,"seq":1,"ts":"t","type":"session/header"}';
+    const l2 = '{"v":1,"id":"e2","parentId":"e1","seq":2,"ts":"t","type":"turn/start"}';
+    writeFileSync(file, `${l1}\n\n${l2}\n{"v":1,"id":"e3","ty`); // 中间空行（旧覆写会丢）+ 撕裂尾
+    const r = repairFile(file);
+    expect(r.truncated).toBe(true);
+    expect(r.interruptedClosed).toBe(true); // turn/start 未闭合——补 turn/end
+    const after = readFileSync(file, "utf8");
+    const prefix = `${l1}\n\n${l2}\n`;
+    expect(after.startsWith(prefix)).toBe(true); // 前缀逐字节保真（含空行——旧 good.join("\n") 重排会抹掉）
+    const appended = after.slice(prefix.length).trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({ type: "turn/end", kind: "interrupted" });
+  });
+
+  it("③ 未闭合 turn（无撕裂）→ 纯追加补事件，前缀字节不动", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs11c-"));
+    const file = join(dir, "s_c.jsonl");
+    const l1 = '{"v":1,"id":"e1","parentId":null,"seq":1,"ts":"t","type":"session/header"}';
+    const l2 = '{"v":1,"id":"e2","parentId":"e1","seq":2,"ts":"t","type":"turn/start"}';
+    writeFileSync(file, `${l1}\n${l2}\n`);
+    const r = repairFile(file);
+    expect(r.truncated).toBe(false);
+    expect(r.interruptedClosed).toBe(true);
+    const after = readFileSync(file, "utf8");
+    expect(after.startsWith(`${l1}\n${l2}\n`)).toBe(true); // 不截断、不改写——只追加
+    expect(after.trim().split("\n")).toHaveLength(3);
+  });
+});
+
+describe("CS-07 写入硬化补口（2026-09-28 code review）：O_NOFOLLOW 数值旗标 + 重建兜底权限", () => {
+  it("sessionAppendFlag：Windows 降级字符串 'a'；POSIX = O_APPEND|O_NOFOLLOW|O_CREAT 数值组合（§6.1 硬化 (b) 承诺——字符串旗标表达不了 O_NOFOLLOW）", () => {
+    expect(sessionAppendFlag("win32")).toBe("a");
+    const f = sessionAppendFlag("linux");
+    expect(typeof f).toBe("number");
+    expect((f as number) & constants.O_APPEND).toBe(constants.O_APPEND);
+    expect((f as number) & constants.O_CREAT).toBe(constants.O_CREAT);
+    if (constants.O_NOFOLLOW !== undefined) { // win32 宿主常量缺 O_NOFOLLOW（=undefined）——POSIX CI 上钉位
+      expect((f as number) & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
+    }
+    expect(sessionAppendFlag("darwin")).toBe(sessionAppendFlag("linux")); // POSIX 族同组合
+  });
+});
+
+describe("CS-12 会话 id 格式闸（2026-09-28 code review）：sessionId 直接进路径 join——旧实现 \"../escaped\" 一次 append 即桶外建目录文件", () => {
+  it("构造器非法 id 响亮抛错、桶内桶外零创建；真实 id 形态照常通过", () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cs12-"));
+    dir = d;
+    for (const bad of ["../escaped-cs12", "a/b", "a\\b", "..", ".", " s", "s\t"]) {
+      expect(() => new JsonlSessionStore({ dir: d, sessionId: bad })).toThrow(/会话 id 非法/);
+    }
+    expect(readdirSync(d)).toEqual([]); // 桶内零残留
+    expect(existsSync(join(d, "..", "escaped-cs12"))).toBe(false); // 桶外零逃逸
+    expect(() => new JsonlSessionStore({ dir: d, sessionId: "agents_1" })).not.toThrow(); // 子代理目录形态通过
+  });
+});
+
+describe("CS-14 lifetimeUsage 混合后端桶（2026-09-28 code review）：sqlite 兄弟不再静默漏计", () => {
+  it.skipIf(!sqliteAvailable())("sqlite 兄弟按同口径聚合（usageDelta + fork 子体整库跳过）——jsonl 当前会话视角补齐项目累计", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs14-"));
+    const { SqliteSessionStore } = await import("./sqlite.ts");
+    // sqlite 根会话（磁盘态）：message 用量 + 子代理账
+    const sqRoot = new SqliteSessionStore({ dir, sessionId: "s_sq_root" });
+    await sqRoot.append("session/header", { format: 1, cwd: dir, parentSession: null });
+    await sqRoot.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 10, output: 4 } });
+    await sqRoot.append("session/subagent-usage", { agentId: "sa_1", usage: { input: 7, output: 3 } });
+    await sqRoot.close();
+    // sqlite fork 子体：lineage 以父计——整库跳过（含 sessions 计数）
+    const sqKid = new SqliteSessionStore({ dir, sessionId: "s_sq_kid" });
+    await sqKid.append("session/header", { format: 1, cwd: dir, parentSession: "s_sq_root" });
+    await sqKid.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 100, output: 50 } });
+    await sqKid.close();
+    // jsonl 当前会话：旧实现 filter(.jsonl) 把上面两个 sqlite 会话全漏（/usage 项目累计静默缺斤少两）
+    const cur = new JsonlSessionStore({ dir, sessionId: "s_cur" });
+    await cur.append("session/header", { format: 1 });
+    expect(await cur.lifetimeUsage()).toEqual({ input: 17, output: 7, sessions: 1 }); // sqlite 根 10+7/4+3；sqlite 子体跳过
+    await cur.close();
   });
 });
 

@@ -250,7 +250,10 @@ export function wrapText(text: string, width: number): string[] {
 			lineUnits.push({ text: g, w: gw });
 			i = gEnd;
 		}
-		if (cur !== "" || out.length === 0) out.push(cur);
+		// CTW-07（2026-09-28）：按可见内容判定收尾（与 emit() 收尾口径一致——补 resetSuffix 防裸色串色）。
+		// 旧 `cur !== ""` 字符串判定：断点空格被吞后 cur 只剩 SGR 前缀（零可见宽）→ 推出幽灵空行；
+		// 输入非自闭合（裸色码）时该行无 reset 收尾还会把颜色漏到下一逻辑行
+		if (stripAnsi(cur) !== "" || out.length === 0) out.push(cur + tracker.resetSuffix());
 	}
 	return out.length > 0 ? out : [""];
 }

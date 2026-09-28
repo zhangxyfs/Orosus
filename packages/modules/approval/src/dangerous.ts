@@ -39,7 +39,8 @@ const PRIVILEGE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-r", "--role", "-t", "--type",
 ]);
 
-const NESTED_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "dash", "zsh", "ksh", "ash"]);
+/** 导出供 decompose.ts 的 -c 补集检测复用（MA-07 2026-09-28 code review：嵌套 shell 命令名单口径与 AST 层同源）。 */
+export const NESTED_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "dash", "zsh", "ksh", "ash"]);
 const LAUNCH_WRAPPERS: ReadonlySet<string> = new Set(["env", "command", "exec", "nohup", "builtin", "nice"]);
 const WRAPPER_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "-n", "--adjustment",
@@ -292,7 +293,8 @@ function analyzeInvocation(
   return undefined;
 }
 
-function normalizeCommandName(raw: string): string {
+/** 导出供 decompose.ts 复用（MA-07）：正则补集层与 AST 层的命令名归一口径一致（剥路径/.exe/小写）。 */
+export function normalizeCommandName(raw: string): string {
   let name = raw;
   const separator = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"));
   if (separator >= 0) name = name.slice(separator + 1);
