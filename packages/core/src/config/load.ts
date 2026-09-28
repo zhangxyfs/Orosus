@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { parse } from "smol-toml";
 
 export interface EffectiveConfig {
@@ -104,17 +104,45 @@ function resolveEnvPlaceholders(doc: Doc, env: NodeJS.ProcessEnv, warnings: stri
   };
 }
 
-/** §6.6 分层合并：内置默认 → 全局用户 → 项目 → 环境变量（仅核心顶层）→ CLI flag。 */
+/** modules.d 目录层（m4-8）：每层「config.toml 先、目录 *.toml 按文件名 ASCII 序后读」——后读覆盖先读,
+ *  合并走现行 merge(含 CH-07 深合并兜底;一模块一文件本不撞同名节)。坏文件跳过 + warning,不炸该层。
+ *  非 .toml 后缀忽略;目录不存在 = 该层无贡献(新装机器常态)。 */
+function mergeModulesDir(dir: string | undefined, mergeInto: (doc: Doc) => void, warnings: string[]): void {
+  if (dir === undefined || !existsSync(dir)) return;
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".toml")).sort();
+  } catch {
+    return; // 目录不可读——该层无贡献(与「目录不存在」同处置)
+  }
+  for (const name of names) {
+    const file = `${dir}/${name}`;
+    try {
+      mergeInto(splitDoc(parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Record<string, unknown>));
+    } catch (err) {
+      warnings.push(`配置文件 ${file} 解析失败：${err instanceof Error ? err.message : String(err)}——该文件已跳过，按其余配置运行（modules.d 容错，SW-20 同款）`);
+    }
+  }
+}
+
+/** §6.6 分层合并：内置默认 → 全局用户 → 项目 → 环境变量（仅核心顶层）→ CLI flag。
+ *  用户层与项目层各可带 modules.d 目录（m4-8：单文件先读、目录后读——层内后读覆盖先读）。 */
 export function loadConfig(opts: {
   userFile?: string;
   projectFile?: string;
+  userModulesDir?: string;
+  projectModulesDir?: string;
   cliOverrides?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
 }): EffectiveConfig {
   const env = opts.env ?? process.env;
   const warnings: string[] = [];
   let acc = defaults();
-  for (const file of [opts.userFile, opts.projectFile]) {
+  const layers: Array<{ file: string | undefined; dir: string | undefined }> = [
+    { file: opts.userFile, dir: opts.userModulesDir },
+    { file: opts.projectFile, dir: opts.projectModulesDir },
+  ];
+  for (const { file, dir } of layers) {
     if (file && existsSync(file)) {
       // 剥 UTF-8 BOM：Windows PowerShell 5.1 的 Out-File -Encoding utf8 / 旧版记事本会写 BOM，smol-toml 拒收
       const raw = readFileSync(file, "utf8").replace(/^﻿/, "");
@@ -126,6 +154,8 @@ export function loadConfig(opts: {
         warnings.push(`配置文件 ${file} 解析失败：${err instanceof Error ? err.message : String(err)}——该层已跳过，按其余层与出厂默认运行（SW-20）`);
       }
     }
+    // 单文件层之后读 modules.d 目录层（m4-8：层内后读覆盖先读——目录里改的赢过单文件残留）
+    mergeModulesDir(dir, (doc) => { acc = merge(acc, doc); }, warnings);
   }
   // env 层：仅核心顶层 key，命名 OROSUS_<KEY>（§6.6）；camelCase 键查表归一（CH-06）
   const envCore: Record<string, unknown> = {};
