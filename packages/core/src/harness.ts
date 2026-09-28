@@ -80,6 +80,8 @@ export interface HarnessOptions {
   config?: {
     userFile?: string;
     projectFile?: string;
+    userModulesDir?: string;                // modules.d 目录层（m4-8）——缺省 ~/.orosus/modules.d/
+    projectModulesDir?: string;             // 缺省 <cwd>/.orosus/modules.d/
     cliOverrides?: Record<string, unknown>;
     enableModules?: string[];
     disableModules?: string[];
@@ -270,9 +272,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   let secrets = secretsLoad.vars; // reload 需重读（向导等运行期写入 secrets.env 后 reload 须看到新值——修复：启动快照导致 $ENV 占位符解析不到 → 字面量当 key → 401）
   if (secretsLoad.badLines > 0) createLogger(sink, "kernel").warn("kernel.secrets.badline", "secrets.env 坏行被跳过（KEY=VALUE 格式）", { badLines: secretsLoad.badLines });
   const userConfigFile = options.config?.userFile ?? join(home, "config.toml"); // /model 持久化落点（M4-2 T14）
+  const projectConfigFile = options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml");
   let config = loadConfig({
     userFile: userConfigFile,
-    projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
+    projectFile: projectConfigFile,
+    // modules.d 目录层（m4-8）：缺省 = 各配置文件同级的 modules.d/（注入可覆盖——测试密封）
+    userModulesDir: options.config?.userModulesDir ?? join(home, "modules.d"),
+    projectModulesDir: options.config?.projectModulesDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules.d"),
     ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
     // D37 优先级：显式 env 参数 > process.env > secrets.env——显式环境是用户当下意图，secrets 只补缺
     env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
@@ -1290,6 +1296,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       secrets = loadSecretsEnv(options.secretsFile ?? join(home2, "secrets.env")).vars; // 重读 secrets（向导等运行期写入后 reload 必须看到）
       const config2 = loadConfig({
         userFile: options.config?.userFile ?? join(home2, "config.toml"),
+        userModulesDir: options.config?.userModulesDir ?? join(home2, "modules.d"),
+        projectModulesDir: options.config?.projectModulesDir ?? join(options.cwd ?? process.cwd(), ".orosus", "modules.d"),
         // CH-02：与启动路径（228 行）对齐——尊重注入的 projectFile；旧实现硬编码 cwd 缺省路径，
         // reload 后项目层整层静默丢失 + 误读不该读的真实 cwd 文件（测试密封性/嵌入式宿主隔离被打破）
         projectFile: options.config?.projectFile ?? join(options.cwd ?? process.cwd(), ".orosus", "config.toml"),
