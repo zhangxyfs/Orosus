@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { parse } from "smol-toml";
+import { existsSync } from "node:fs";
+import { loadConfig } from "@orosus/core";
 import type { CommandUi } from "@orosus/contracts/module";
 
 /** 首启检测（M3 T10 补空白）：model 未配置或指向不可用 provider 槽 → 需要引导。
@@ -18,18 +18,12 @@ export function providerSetupReason(opts: { model: string | undefined; providers
 }
 
 /** 读取配置文件声明的 model（user → project，后者胜——§6.6 分层在 CLI 侧的只读镜像）。
- *  坏 TOML / 无文件 → undefined（引导降级为"未配置"，不因手改坏文件炸首启）。 */
+ *  坏 TOML / 无文件 → undefined（引导降级为"未配置"，不因手改坏文件炸首启）。
+ *  m4-8 T2.5 收口 loadConfig（读配置单一事实源）：分层序与旧实现同（项目压用户）；
+ *  merge 的模型键归一保证 core 里 provider/model 至多一个，?? 兜底 model 旧名。 */
 export function readConfigModel(userFile: string, projectFile: string): string | undefined {
-  const read = (f: string): unknown => {
-    if (!existsSync(f)) return undefined;
-    try {
-      const doc = parse(readFileSync(f, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
-      return (doc["provider"] ?? doc["model"]) as string | undefined; // F5 十轮：键名 provider（model 旧名兼容读）
-    } catch {
-      return undefined;
-    }
-  };
-  const v = read(projectFile) ?? read(userFile);
+  const core = loadConfig({ userFile, projectFile }).core;
+  const v = core.provider ?? core.model;
   return typeof v === "string" ? v : undefined;
 }
 
