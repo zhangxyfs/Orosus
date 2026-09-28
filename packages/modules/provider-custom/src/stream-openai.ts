@@ -44,7 +44,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const armIdle = (): void => {
       if (idleTimer !== undefined) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { idleFired = true; idle.abort(); }, idleMs);
+      idleTimer = setTimeout(() => { idleFired = true; idle.abort(); }, idleMs); idleTimer.unref?.(); // unref:不阻塞进程退出(超时保护照常触发)——c51e5f5 后 300s 无 unref 把测试收尾拖满 5 分钟
     };
     const wireSignal = AbortSignal.any([request.signal, idle.signal]);
     try {
