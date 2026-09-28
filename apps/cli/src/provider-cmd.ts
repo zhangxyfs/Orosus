@@ -28,6 +28,10 @@ function appendSecret(path: string, key: string, value: string): void {
   appendFileSync(path, `${key}=${value}\n`);
 }
 
+const hostOf = (u: string): string | undefined => {
+  try { return new URL(u).host; } catch { return undefined; }
+};
+
 async function verify(baseUrl: string, actualKey: string | undefined, fetchImpl: typeof fetch): Promise<"ok" | "auth" | "network" | "unsupported"> {
   try {
     const res = await fetchImpl(`${baseUrl}/models`, {
@@ -99,12 +103,25 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     const finalBaseUrl = adaptBaseUrl(baseUrl, wire.wire);
     const envKey = entry.env?.[0];
     const flagKey = flag("--key");
-    const actualKey = (envKey !== undefined ? io.env[envKey] : undefined) ?? flagKey;
+    const envValue = envKey !== undefined ? io.env[envKey] : undefined;
+    // CM-07 修复（2026-09-28 code review P1）：环境密钥只外发到默认目录声明的官方端点（host 一致）。
+    // 自定义 --registry 的目录数据与 --baseUrl 指定的第三方端点都不可信——旧实现 verify 先行把真实
+    // 环境密钥（x-api-key + Bearer 双头）发往任意 baseUrl，零确认即泄。非官方端点要验证须 --key 显式提供
+    //（用户亲手输入的密钥发给用户亲手指定的端点 = 显式意图）。
+    const targetHost = hostOf(finalBaseUrl);
+    const officialEndpoint = registry === undefined && envValue !== undefined
+      && targetHost !== undefined && targetHost === hostOf(entry.api ?? "");
+    const actualKey = flagKey ?? (officialEndpoint ? envValue : undefined);
+    if (envValue !== undefined && actualKey === undefined) {
+      io.out(`[安全] 环境密钥 ${envKey} 未外发——目标端点非目录官方端点（${finalBaseUrl}${registry !== undefined ? "，自定义 registry" : ""}）；如需验证请用 --key 显式提供`);
+    }
 
     // 校验即确认（D37 修订）：2xx 自动写入 / 401 报错不写 / 网络错报错 / 404 警告后写入
     const v = await verify(finalBaseUrl, actualKey, doFetch);
     if (v === "auth") {
-      io.out("密钥无效（401/403）——未产生任何配置变更");
+      io.out(actualKey !== undefined
+        ? "密钥无效（401/403）——未产生任何配置变更"
+        : "端点要求鉴权但密钥未外发/未提供——未产生任何配置变更（如需验证可用 --key 显式提供）");
       return 1;
     }
     if (v === "network") {

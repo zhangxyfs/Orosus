@@ -48,7 +48,12 @@ export function createDiagSink(opts: { dir: string }): DiagSink {
   return {
     write(rec) {
       const file = fileFor();
-      queue = queue.then(() => void appendFileSync(file, JSON.stringify(rec) + "\n"));
+      // CH-04 修复（2026-09-28 code review P1）：一次写盘失败（盘满/文件被锁/文件名撞目录）不得毒化整条
+      // 队列——旧实现 rejected 链使后续 write 回调全跳过（静默丢日志）、尾部无人接的 rejection 崩进程、
+      // flush/close 永拒（harness close 中断）。单条失败就地吞（诊断是旁路不是事实源，降级可用），链继续。
+      queue = queue
+        .then(() => void appendFileSync(file, JSON.stringify(rec) + "\n"))
+        .catch(() => undefined);
     },
     async flush() {
       await queue;

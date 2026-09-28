@@ -1899,6 +1899,9 @@ export class FullApp {
 				this.scheduler.requestImmediateRender();
 				return;
 			}
+			// CTU-01 修复（2026-09-28 code review P0）：粘贴收缩清单/技能清单 5s TTL 异步换数组后 overlaySel
+			// 可越界（渲染侧只算不回写），消费侧就地钳制——selToSelectable 夹回 [0, len-1] 并避开 sep 行
+			s.overlaySel = this.selToSelectable(items, s.overlaySel);
 			const row = items[s.overlaySel]!;
 			if (row.kind === "skill") {
 				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）：正文以用户消息注入当前轮

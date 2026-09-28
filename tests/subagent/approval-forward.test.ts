@@ -24,6 +24,7 @@ interface Ctx {
   port: SubagentPort;
   requests: ProviderRequest[];
   uiCalls: { title: string; items: string }[];
+  boomRan: () => number;
 }
 
 const setup = async (configToml: string, answer: string | "throw"): Promise<Ctx> => {
@@ -77,7 +78,7 @@ const setup = async (configToml: string, answer: string | "throw"): Promise<Ctx>
     config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
   void boomRan;
-  return { h, port: port!, requests: provider.requests, uiCalls };
+  return { h, port: port!, requests: provider.requests, uiCalls, boomRan: () => boomRan };
 };
 
 describe("子代理审批接回（决策 3：手动配置 > 跟随主对话 > 默认 Ask）", () => {
@@ -105,11 +106,32 @@ describe("子代理审批接回（决策 3：手动配置 > 跟随主对话 > �
     expect(c.uiCalls.length).toBe(0);
     await c.h.close();
 
-    // D. 手动 ask 压过主 never（手动值优先——严格方向不放宽）：转发带 ask-risky 档提示仍问
+    // D. 手动 ask 压过主 never（手动值优先——严格方向不放宽）：转发带 ask-risky 地板仍问
     const d = await setup('[approval]\nmode = "never"\n\n[tool-subagent]\napprovalMode = "ask"\n', "拒绝");
     const outD = (await d.port.spawn({ label: "手动 ask", prompt: "go" })) as SubagentOutcome;
     expect(d.uiCalls.length).toBe(1);
     expect(outD.conclusion).toBe("干完了"); // 工具被拒后模型照常收尾（脚本末条文本）——拒绝链路在 T15 场景 3 细验
     await d.h.close();
+  });
+
+  it("⑧ CX-01：主对话 ask-always → 子代理工具照问（旧实现载荷钉死 ask-risky——子代理写操作静默放行）", async () => {
+    const e = await setup('[approval]\nmode = "ask-always"\n', "批准一次");
+    const outE = (await e.port.spawn({ label: "严档跟随", prompt: "go" })) as SubagentOutcome;
+    expect(outE.status).toBe("completed");
+    expect(e.uiCalls.length).toBe(1); // 旧实现：ask-risky 提示降档 → subprocess「常规读写放行」零询问
+    expect(e.boomRan()).toBe(1);
+    await e.h.close();
+  });
+
+  it("⑨ CX-02：主对话 never + 手写 deny 规则 → 子代理调用被拦（旧实现 auto 档整门跳过——deny 对子代理失效）", async () => {
+    const f = await setup(
+      '[approval]\nmode = "never"\n\n[[approval.rules]]\neffect = "deny"\ntool = "boom__run"\n',
+      "throw", // 从不询问 + deny 命中 → 不该有任何弹窗
+    );
+    const outF = (await f.port.spawn({ label: "deny 照拦", prompt: "go" })) as SubagentOutcome;
+    expect(outF.status).toBe("completed");
+    expect(f.uiCalls.length).toBe(0); // auto 语义不自发弹窗
+    expect(f.boomRan()).toBe(0);      // 但 deny 规则照拦——工具没跑（旧实现 boomRan=1）
+    await f.h.close();
   });
 });

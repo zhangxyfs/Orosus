@@ -17,7 +17,8 @@ export interface DecideInput {
   name: string;                // 工具全名，如 "tool-shell__bash"
   approvalRule: string;        // 阶段一声明的规则串，如 "tool-shell__bash(git status)"
   accesses: Access[];
-  matchesRule?: (ruleArgs: string) => boolean;
+  /** 带参规则判定（MA-01：携带规则 effect——不可分段命令只有 deny 才许走朴素回退）。 */
+  matchesRule?: (ruleArgs: string, effect: "allow" | "ask" | "deny") => boolean;
   sessionAllowed: (key: string) => boolean;
 }
 
@@ -41,8 +42,8 @@ function ruleMatches(rule: ApprovalRule, input: DecideInput): boolean {
   const { name, args } = parsePattern(rule.tool);
   if (!nameMatches(name, input.name)) return false;
   if (args === undefined) return true;
-  // 带参规则交回工具侧判定（§6.3）；无 matchesRule 的带参规则不匹配——fail-closed
-  return input.matchesRule?.(args) === true;
+  // 带参规则交回工具侧判定（§6.3，携 effect）；无 matchesRule 的带参规则不匹配——fail-closed
+  return input.matchesRule?.(args, rule.effect) === true;
 }
 
 /** 从 approvalRule 提取括号内的命令串（无括号返回 null）。 */

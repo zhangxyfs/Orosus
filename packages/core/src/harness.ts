@@ -246,7 +246,21 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   if (options.store !== undefined) {
     baseStore = options.store;
   } else if (options.resume !== undefined) {
-    baseStore = makeStore(options.resume.sessionId);
+    // CS-01 修复（2026-09-28 code review P0）：resume 的会话可能是 fork 子体——旧实现平铺打开自己那份
+    // 文件，投影丢掉全部父辈历史（/sessions 回车、switchTo、--resume 三条入口全命中）。统一经
+    // openSessionView：普通会话 = 裸 store（与旧 makeStore 语义一致），子体 = 递归拼装祖辈前缀（同 fork 分支）。
+    baseStore = (
+      await openSessionView({
+        sessionId: options.resume.sessionId,
+        bucket: sessionsDir,
+        makeStore,
+        locate: (sid) => {
+          const b = locateSessionBucket(options.sessionsRoot, sid, sessionsDir);
+          return b === undefined ? undefined : { bucket: b };
+        },
+        sink: { warn: (code, msg, data) => createLogger(sink, "session").warn(code, msg, data ?? {}) },
+      })
+    ).store;
   } else if (options.fork !== undefined) {
     // 会话树批 T1 断代修复：父视图经 openSessionView 递归拼装——父若是 fork 子体，其投影含祖辈段
     //（旧实现平铺打开父自己那份文件，孙代丢祖辈前缀）。parentDir 缺省同桶（REPL /fork）；跨桶父由宿主定位后填入（D46）。
@@ -259,6 +273,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         const b = locateSessionBucket(options.sessionsRoot, sid, forkBucket);
         return b === undefined ? undefined : { bucket: b };
       },
+      sink: { warn: (code, msg, data) => createLogger(sink, "session").warn(code, msg, data ?? {}) },
     });
     baseStore = new ForkedSessionStore({
       parent: parentView.store,
@@ -396,24 +411,44 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     onBackgroundDelivery: pushDelivery,
     resolveEffort: () => resolveEffortForWire(), // M4.5：子代理跟随 /effort 档（agent 组 <思考> 段）
   });
-  let graph = await loadModules({
-    defs,
-    cli: cliInput,
-    sections: config.sections,
-    session: sessionGuarded, // header 兜底面——模块事件先于首个 turn 落盘时先补 header（断头文件实证修复）
-    sink,
-    spillDir: spillDirUsed,
-    cwd: options.cwd ?? process.cwd(),
-    commandUi,
-    llm: llmHolder,
-    sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
-    treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
-    subagent: subagentRunner,      // M4.5 子代理批：ctx.subagent 装配（mounts "subagent" 门）
-    ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
-    ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
-    ...(options.sessionSwitch !== undefined ? { sessionSwitch: options.sessionSwitch } : {}), // 会话树批 T10/T11：宿主切换缝
-    ...(blocked.length > 0 ? { blocked } : {}),
-  });
+  // CH-01 修复（2026-09-28 code review P1）：装配中段失败零清理——loadModules 抛 / 激活后 store.all() 读到
+  // 坏行抛时，store 句柄（sqlite 已开库）、已激活模块（含 MCP 子进程）、diag sink 全悬空到进程死。
+  // 镜像 close() 序列对「构造期已存在的件」best-effort 拆除后原样上抛（清理失败不掩盖原始异常）。
+  const cleanupStartup = async (g: { dispose(): Promise<void> } | undefined): Promise<void> => {
+    try {
+      if (g !== undefined) await g.dispose();
+      await store.close();
+      live.close();
+      await sink.flush();
+      await sink.close();
+      channel.close();
+    } catch { /* 清理失败不掩盖原始装配异常 */ }
+  };
+  let graph = await (async () => {
+    try {
+      return await loadModules({
+        defs,
+        cli: cliInput,
+        sections: config.sections,
+        session: sessionGuarded, // header 兜底面——模块事件先于首个 turn 落盘时先补 header（断头文件实证修复）
+        sink,
+        spillDir: spillDirUsed,
+        cwd: options.cwd ?? process.cwd(),
+        commandUi,
+        llm: llmHolder,
+        sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
+        treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
+        subagent: subagentRunner,      // M4.5 子代理批：ctx.subagent 装配（mounts "subagent" 门）
+        ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
+        ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
+        ...(options.sessionSwitch !== undefined ? { sessionSwitch: options.sessionSwitch } : {}), // 会话树批 T10/T11：宿主切换缝
+        ...(blocked.length > 0 ? { blocked } : {}),
+      });
+    } catch (err) {
+      await cleanupStartup(undefined); // 图未成（required 失败时 kernel 已自行 disposeAll——这里补 store/sink 面）
+      throw err;
+    }
+  })();
 
   // steering 宿主口（2026-09-23 消息队列批）：backlog 挂 collect 链——steering 在每个 step 首排空，
   // followUp 在停止边界兜底（错过窗口的消息仍进本 turn，不丢）。reload 复用同一 bus（reuse），
@@ -458,7 +493,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // onboarding 的 /provider、/reload 不落盘），保持 §6.1「文件首行 = session/header」不变量；
   // resume 的既有文件已带 header（不重复落）；模块图摘要取写入时刻的图（onboarding 在首聊前 /reload，
   // 捕获的是会话真正开工时的图——比构造期快照更真）。fork 的 sourceEntryId 仍在 fork 时刻取父尾（语义不变）。
-  const existingEvents = await store.all();
+  const existingEvents = await (async () => {
+    try {
+      return await store.all();
+    } catch (err) {
+      // CH-01：激活成功后读侧炸（jsonl 坏行 JSON.parse / sqlite 坏库）——模块已激活（含 MCP 子进程），
+      // 旧实现全部悬空。拆图 + store/sink 面后原样上抛。
+      await cleanupStartup(graph);
+      throw err;
+    }
+  })();
   let headerPending = options.resume === undefined || existingEvents.length === 0;
   const pendingForkSourceEntryId = headerPending && options.fork !== undefined
     ? options.fork.atEntryId ?? existingEvents[existingEvents.length - 1]?.id

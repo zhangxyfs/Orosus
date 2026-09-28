@@ -35,8 +35,12 @@ describe("双后端 fork/resume 冒烟", () => {
     const h3 = await createHarness({ ...base, resume: { sessionId: h2.sessionId } });
     await h3.prompt("再继续");
     await h3.close();
-    // resume 的投影含分叉前的历史（fake provider 断言）
-    expect(JSON.stringify(fp.requests[fp.requests.length - 1]!.messages)).toContain("分叉继续");
+    // resume 的投影含分叉前的历史（fake provider 断言）——CS-01 回归钉（2026-09-28 code review P0）：
+    // h2 是 fork 子体，resume(h2) 的投影必须带祖辈段「第一轮」（旧实现平铺打开子体自己那份文件，
+    // 祖辈历史全丢——只含「分叉继续」）
+    const msgs = JSON.stringify(fp.requests[fp.requests.length - 1]!.messages);
+    expect(msgs).toContain("分叉继续");
+    expect(msgs).toContain("第一轮");
     return readdirSync(dir).filter((f) => f.endsWith(".jsonl") || f.endsWith(".sqlite")).map((f) => f.split(".").pop()!);
   };
 

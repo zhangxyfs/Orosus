@@ -59,21 +59,38 @@ async function* executeGroups(
       const { call } = parsedCalls[i]!;
       const planned = plans[i]!;
       opts.log.debug("loop.tool.call", "工具调用", { call: call.callId, name: call.name });
-      const result = await opts.tools.execute(planned, { signal: opts.signal });
       executedIds.add(call.callId);
-      const e = await opts.session.append(LOG_TYPES.toolResult, {
-        callId: call.callId,
-        output: result.output,
-        isError: result.isError,
-        ...(result.denied !== undefined ? { denied: result.denied } : {}),
-        ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
-        ...(result.spill !== undefined ? { spill: result.spill } : {}),
-      });
-      await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
-      queue.push(e);
-      notify();
+      // CL-01/CX-03 修复（2026-09-28 code review P1）：工具契约是「错误带内——不许 reject」，但任何旁路
+      // 异常一旦穿透，旧实现任务 IIFE 无 catch——finished 永不置位（生成器 :80 死等无唤醒源）+ 漂浮
+      // Promise.all 拒绝无人接（Node ≥15 默认崩进程）。兜底合成带内错误结果，保证组照常收尾。
+      try {
+        const result = await opts.tools.execute(planned, { signal: opts.signal });
+        const e = await opts.session.append(LOG_TYPES.toolResult, {
+          callId: call.callId,
+          output: result.output,
+          isError: result.isError,
+          ...(result.denied !== undefined ? { denied: result.denied } : {}),
+          ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
+          ...(result.spill !== undefined ? { spill: result.spill } : {}),
+        });
+        await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
+        queue.push(e);
+      } catch (err) {
+        opts.log.error("loop.tool.task-crash", "工具任务契约外抛出（兜底带内错误结果）", { call: call.callId, name: call.name, error: String(err instanceof Error ? err.message : err) });
+        try {
+          queue.push(await opts.session.append(LOG_TYPES.toolResult, {
+            callId: call.callId,
+            output: `工具执行异常（契约外抛出，已兜底）：${err instanceof Error ? err.message : String(err)}`,
+            isError: true,
+          }));
+        } catch { /* append 也炸——事件不可得，仅留日志（notify 仍保证组收尾） */ }
+      } finally {
+        notify();
+      }
     })());
-    const all = (async () => { await Promise.all(tasks); finished = true; notify(); })();
+    const all = (async () => { await Promise.all(tasks); })()
+      .catch(() => undefined) // 双保险：任务已各自兜底，此处防线防「兜底自身」失手
+      .finally(() => { finished = true; notify(); });
     for (;;) {
       while (queue.length > 0) yield queue.shift()!;
       if (finished) break;

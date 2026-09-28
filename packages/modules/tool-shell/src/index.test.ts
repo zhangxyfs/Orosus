@@ -63,6 +63,19 @@ describe("tool-shell（能力消费者范例：dependsOn [fs]）", () => {
     expect(r.output).toBe("ok");
   });
 
+  it("MB-01 前台捕获上限：>512KB 失控输出 → 头尾各 256KB + 中段截断标注（旧实现无界累积 OOM）", async () => {
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    // 2MB 输出（node -e 跨壳一致）；首尾带标记验证头尾保留正确
+    const cmd = `node -e "process.stdout.write('HEADMARK');process.stdout.write('x'.repeat(2*1024*1024));process.stdout.write('TAILMARK')"`;
+    const r = await run(tools[0]!, { command: cmd });
+    expect(r.isError).toBe(false);
+    expect(r.output.startsWith("HEADMARK")).toBe(true);   // 头部原样
+    expect(r.output.endsWith("TAILMARK")).toBe(true);     // 尾部滚动保留
+    expect(r.output).toContain("中段截断");                // 如实标注
+    expect(r.output.length).toBeLessThan(600_000);        // 成品钉在 ~512KB + 标注
+  });
+
   it("退出码非 0 → isError + [退出码 N]，stderr 并入输出", async () => {
     const { ctx, tools } = fakeCtx(new Map());
     await def.activate(ctx);

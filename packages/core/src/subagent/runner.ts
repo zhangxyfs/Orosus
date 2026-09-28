@@ -68,15 +68,20 @@ const readLimitConfig = (deps: SubagentDeps, key: string, validate: (v: number) 
  *  孙代理派单经 ALS 自然拿到父上下文）。主对话执行的工具 = 无 store（深度 1）。 */
 const execContext = new AsyncLocalStorage<{ agentId: string; depth: 1 | 2 }>();
 
-/** 审批模式解析（决策 3 第一层：手动配置 > 跟随主对话 > 默认 Ask）。
- *  跟随 = 主对话运行期档 never（从不询问）→ 子代理 auto；否则 ask。
+/** 审批转发档解析（决策 3 第一层 + CX-01/02 修复 2026-09-28 code review P1，spawn 时定格）：
+ *  旧实现载荷钉死 ask-risky——主对话 ask-always 档被降档、子代理写文件静默放行；auto 档整门跳过
+ *  主关卡——手写 deny 规则对子代理失效。
+ *  auto（手动配置或跟随主 never）→ "never"：主对话 decide 规则链先于档位基线——手写 deny/ask 规则对
+ *  子代理照常生效，基线「从不询问」语义不变（不自发弹窗）；ask → 主对话真实运行期档与 ask-risky 地板
+ *  取严（主 ask-always 不被降档；手动 ask 压过主 never 仍问——严格方向不放宽）。
  *  主对话运行期档经 approval 模块服务 approval.current-mode 读取（服务倒挂——approval 模块挂、内核运行期取）。 */
-const resolveApprovalMode = async (deps: SubagentDeps): Promise<"auto" | "ask"> => {
+const resolveForwardMode = async (deps: SubagentDeps): Promise<"ask-always" | "ask-risky" | "never"> => {
   const cfgMode = deps.configSections().get("tool-subagent")?.approvalMode;
-  if (cfgMode === "auto" || cfgMode === "ask") return cfgMode; // 手动配置优先
+  if (cfgMode === "auto") return "never";
   const svc = await deps.graph().services.getOptional("approval.current-mode");
   const mainMode = typeof svc === "function" ? (svc as () => string)() : undefined;
-  return mainMode === "never" ? "auto" : "ask"; // 跟随主对话；无 approval 模块/无服务 = 默认 Ask
+  if (cfgMode === "ask") return mainMode === "ask-always" ? "ask-always" : "ask-risky"; // 手动 ask：地板 ask-risky
+  return mainMode === "never" ? "never" : mainMode === "ask-always" ? "ask-always" : "ask-risky";
 };
 
 /** 8 位编号（决策 20：唯一同源；撞活动册或撞盘上既有目录都重生成）。 */
@@ -349,7 +354,10 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     const maxTurns = cfgTurns ?? reqTurns ?? SUBAGENT_MAX_TURNS; // -1 = 不限
     const inactivityMs = readLimitConfig(deps, "inactivityTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_INACTIVITY_TIMEOUT_MS;
     const totalMs = readLimitConfig(deps, "totalTimeoutMs", (v) => v === -1 || (Number.isInteger(v) && v >= 1000)) ?? SUBAGENT_TOTAL_TIMEOUT_MS;
-    const approvalMode = await resolveApprovalMode(deps); // spawn 时定格（决策 3 第一层）
+    // CX-01/02 修复（2026-09-28 code review P1）：转发档 spawn 时定格解析（沿用旧代码的解析时机——
+    // 每事件现解析会在「早 abort 撞上主总线 waterfall 等待窗」时拖过 close 收尾，roster ㉘ 实证回归；
+    // 档位运行期切换对在跑子代理不追溯、下一 spawn 生效 = 既有定格语义〔CX-15 在档〕）。
+    const forwardMode = await resolveForwardMode(deps);
     const records: WriteRecords = { actual: new Set(), attempts: new Set(), bashCommands: [] };
     let declaredPaths: string[] | undefined;
     // 同血缘判定（决策 24②快败）：父代理编号（两层内先代只有父）
@@ -444,15 +452,16 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         entry.writeClaim = { paths: declaredPaths ?? [], wholeRepo };
         await gate.acquire(id, { paths: declaredPaths ?? [], wholeRepo }, ancestors);
       }
-      // 审批关卡（决策 3 第二层，T2）：agent bus 的 toolPreExecute → 运行时双层门控第二道（决策 4②）
-      // + 模式分流——auto 照单放行；ask 转发主对话关卡（带 ask-risky 档提示与子代理身份，主对话在问时弹串行队列）。
+      // 审批关卡（决策 3 第二层，T2；CX-01/02 修复 2026-09-28）：agent bus 的 toolPreExecute → 运行时
+      // 双层门控第二道（决策 4②）。auto 档不再整门跳过——照转主关卡但档提示带 never（decide 规则链先于
+      // 基线：手写 deny/ask 规则对子代理照常生效，基线从不询问不自发弹窗）；ask 档转发主对话真实运行期档
+      // 与 ask-risky 地板取严（旧实现钉死 ask-risky——主对话 ask-always 被降档静默放行）。档位 spawn 定格。
       // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停自动按拒绝收场）。
       bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
         const p = payload as { name: string; callId: string; [k: string]: unknown };
         if (isSpawnClassTool(p.name) && !spawnAllowedAtDepth(depth)) {
           return { deny: true, reason: "嵌套已达两层上限——孙代理不能再派子代理（决策 4）" };
         }
-        if (approvalMode === "auto") return undefined; // 从不询问：不过主关卡
         const background = req.background === true;
         const park = background
           ? (info: { tool: string; reason: string }): Promise<boolean> => new Promise((resolve) => {
@@ -466,7 +475,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
           : undefined; // 前台：照常弹在主界面串行审批队列（主关卡 ctx.ui 直问）
         const veto = await deps.graph().bus.waterfall(CORE_POINTS.toolPreExecute, {
           ...p,
-          mode: "ask-risky", // 需要时候询问（决策 3：AWN 档语义——主对话更严档不放宽到此档之下）
+          mode: forwardMode,
           subagent: { agentId: id, depth, parentId: parentAgentId, background, label: req.label, ...(park !== undefined ? { park } : {}) },
         });
         return veto ?? undefined;

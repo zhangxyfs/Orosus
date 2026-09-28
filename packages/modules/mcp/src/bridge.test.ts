@@ -69,7 +69,7 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
   });
 
   it("⑧ server 连接失败 → 该 server 工具组零注册 + 模块不整体降级", async () => {
-    
+
     const out = await activateMcp({
       servers: {
         good: { command: "x" },
@@ -84,5 +84,30 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     const names = collectTools(out).map((t: { name: string }) => t.name);
     expect(names).toEqual(["mcp__good__ok_tool"]); // bad 的工具零注册
     expect(out.failedServers).toEqual(["bad"]); // 记录失败但不整体降级
+  });
+
+  it("⑨ MI-02 连接清理：out.close() 逐个关成功连接且幂等；失败 server 不拖垮 close（旧实现 reload 换代 MCP 子进程全泄漏）", async () => {
+    const closedLog: string[] = [];
+    const out = await activateMcp({
+      servers: {
+        a: { command: "x" },
+        b: { url: "http://b" },
+        c: { command: "bad" },
+      },
+      connect: async (name: string) => {
+        if (name === "c") throw new Error("连不上");
+        return {
+          listTools: async () => [],
+          callTool: async () => ({ content: [] }),
+          close: async () => { closedLog.push(name); },
+        };
+      },
+      sessionAppend: () => {},
+    });
+    expect(out.failedServers).toEqual(["c"]);
+    await out.close();
+    expect([...closedLog].sort()).toEqual(["a", "b"]); // 成功连接逐个关（stdio 随之杀子进程）
+    await out.close(); // 幂等——重复触达不二次关
+    expect(closedLog).toHaveLength(2);
   });
 });

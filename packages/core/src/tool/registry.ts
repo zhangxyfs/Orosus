@@ -183,20 +183,31 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       }
 
       if (result.output.length > OUTPUT_LIMIT) {
-        mkdirSync(opts.spillDir, { recursive: true });
-        const path = join(opts.spillDir, `spill-${planned.callId}.txt`);
-        writeFileSync(path, result.output, { mode: 0o600 });
-        const bytes = result.output.length;
-        // 头尾双保留 3:1（M4-2.5 T1）：头 24576 保调用上下文、尾 8192 保报错摘要（命令报错常在尾部），
-        // 总量不变；中缝提示溢写全文位置。kimi 4:1 同思路，本批略偏头。
-        const head = result.output.slice(0, HEAD_KEEP);
-        const tail = result.output.slice(-TAIL_KEEP);
-        result = {
-          ...result,
-          output: `${head}\n[…中间截断 ${bytes - HEAD_KEEP - TAIL_KEEP} 字符——全文已溢写 ${path}…]\n${tail}`,
-          truncated: true,
-          spill: { path, bytes },
-        };
+        // CX-03 修复（2026-09-28 code review P1）：溢写三步在 execute 的 try 之外——mkdirSync/writeFileSync
+        // 同步抛（spillDir 不可写/被占位文件挡住）会穿透成 rejection，违反「错误带内」契约并打死 loop 组调度
+        //（CL-01）。溢写失败降级 = 就地截断无 spill 标注，不抛。
+        try {
+          mkdirSync(opts.spillDir, { recursive: true });
+          const path = join(opts.spillDir, `spill-${planned.callId}.txt`);
+          writeFileSync(path, result.output, { mode: 0o600 });
+          const bytes = result.output.length;
+          // 头尾双保留 3:1（M4-2.5 T1）：头 24576 保调用上下文、尾 8192 保报错摘要（命令报错常在尾部），
+          // 总量不变；中缝提示溢写全文位置。kimi 4:1 同思路，本批略偏头。
+          const head = result.output.slice(0, HEAD_KEEP);
+          const tail = result.output.slice(-TAIL_KEEP);
+          result = {
+            ...result,
+            output: `${head}\n[…中间截断 ${bytes - HEAD_KEEP - TAIL_KEEP} 字符——全文已溢写 ${path}…]\n${tail}`,
+            truncated: true,
+            spill: { path, bytes },
+          };
+        } catch (err) {
+          planned.log.warn("kernel.tool.spill-failed", `溢写失败（${err instanceof Error ? err.message : String(err)}）——降级就地截断`, { call: planned.callId });
+          const bytes = result.output.length;
+          const head = result.output.slice(0, HEAD_KEEP);
+          const tail = result.output.slice(-TAIL_KEEP);
+          result = { ...result, output: `${head}\n[…中间截断 ${bytes - HEAD_KEEP - TAIL_KEEP} 字符——溢写失败，全文未落盘…]\n${tail}`, truncated: true };
+        }
       }
 
       planned.log.debug("kernel.tool.result", "执行完成", { call: planned.callId, isError: result.isError, truncated: result.truncated ?? false });

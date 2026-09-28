@@ -18,6 +18,7 @@ import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
 import { parseArgs } from "./args.ts";
+import { tuiSidebarPersist, tuiSidebarRead } from "./tui-config.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isHomeSubcommand, runHomeSubcommand } from "./home-cmd.ts";
 import { execFileSync } from "node:child_process";
@@ -31,12 +32,12 @@ import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
-import { parse, stringify } from "smol-toml";
+import { parse } from "smol-toml";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel, readClipboardText } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
@@ -636,29 +637,8 @@ let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdo
 // LaTeX 数学渲染开关（mdpipe 批 T7，设计空白 #12/#13）：[tui] latex 缺省开，启动读一次注入，
 // 改配置重启生效（/reload 热切换不做——本仓配置面无热读口，诚实登记）
 setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
-// 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见
-function tuiSidebarRead(): boolean {
-	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
-		try {
-			const doc = parse(readFileSync(f, "utf8")) as { tui?: { sidebar?: unknown } };
-			if (typeof doc.tui?.sidebar === "boolean") return doc.tui.sidebar;
-		} catch {
-			/* 缺文件/解析失败用缺省 */
-		}
-	}
-	return true;
-}
-function tuiSidebarPersist(visible: boolean): void {
-	const f = join(orosusHome(), "config.toml");
-	let doc: Record<string, unknown> = {};
-	try {
-		doc = parse(readFileSync(f, "utf8")) as Record<string, unknown>;
-	} catch {
-		/* 缺文件从空起 */
-	}
-	doc.tui = { ...(doc.tui as Record<string, unknown>), sidebar: visible };
-	writeFileSync(f, stringify(doc), "utf8");
-}
+// 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见。
+// 实现抽 tui-config.ts（CM-01 修复：读盘剥 BOM + 解析失败拒写防整盘覆写毁配置）。
 
 
 

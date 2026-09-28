@@ -153,15 +153,16 @@ describe("decide——会话记忆（kimi-code session-approval-history 同款�
 
 import { decomposeCommand, isUnanalyzable } from "./decompose.ts";
 
-describe("decomposeCommand 纯函数（M4-2 T9/B12——Reasonix bash_decompose 参照）", () => {
-  it("① git 复合命令拆段——各取前两词", () => {
+describe("decomposeCommand 纯函数（M4-2 T9/B12——Reasonix bash_decompose 参照；MA-02/03 起段保留完整文本）", () => {
+  it("① git 复合命令拆段——各段完整文本（MA-02：前缀匹配对全段做，不再截前两词）", () => {
     expect(decomposeCommand("git add . && git push origin main"))
-      .toEqual(["git add", "git push"]);
+      .toEqual(["git add .", "git push origin main"]);
   });
 
-  it("② 包管理器 run 取三词", () => {
+  it("② 长命令不折叠（MA-03：npm test --watch 不再折叠成 npm test）", () => {
     expect(decomposeCommand("npm run build")).toEqual(["npm run build"]);
     expect(decomposeCommand("pnpm run test:unit")).toEqual(["pnpm run test:unit"]);
+    expect(decomposeCommand("npm test --watch")).toEqual(["npm test --watch"]);
   });
 
   it("③ eval/xargs/嵌套 -c → 返回空数组（require-human）", () => {

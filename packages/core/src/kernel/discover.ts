@@ -12,10 +12,33 @@ export interface DiscoveredModule {
   layer: "user" | "project"; // 信任待遇不同（§8.3/§8.5：项目级须过确认门）
   root: string;              // 模块目录绝对路径
   entry: string;             // 入口文件相对 root 的路径
-  entryHash: string;         // 入口内容 sha256（信任登记与 reload diff 用）
+  entryHash: string;         // 模块树内容 sha256（CK-05：整目录非仅入口——信任登记与 reload diff 用）
 }
 
-const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
+/** 模块树哈希（CK-05 修复 2026-09-28 code review P1）：整目录内容（相对路径 + 文件字节，字典序）拼接后
+ *  sha256——sibling 文件投毒（入口不变、改同目录被 import 的文件）同样触发 hash-changed 重确认
+ *  （旧实现只 hash 入口文件，MCPoison 场景换 sibling 即绕过信任门）。排除 node_modules（依赖树由包管理器
+ *  管辖、体量不现实；依赖面投毒走锁文件审计，不在此门）；符号链接文件按字节入哈希但不跟随目录。 */
+function hashModuleTree(root: string): string {
+  const h = createHash("sha256");
+  const walk = (dir: string, prefix: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      if (name === "node_modules") continue;
+      const full = join(dir, name);
+      const st = statSync(full, { throwIfNoEntry: false });
+      if (st === undefined) continue; // 竞态消失条目——跳过（fail-open 只对本条，哈希仍覆盖其余内容）
+      if (st.isDirectory()) {
+        h.update(`d:${prefix}${name}\n`);
+        walk(full, `${prefix}${name}/`);
+      } else if (st.isFile()) {
+        h.update(`f:${prefix}${name}\n`);
+        h.update(readFileSync(full));
+      }
+    }
+  };
+  walk(root, "");
+  return h.digest("hex");
+}
 
 /** 入口探测结果（T5）：pkg-read = package.json 读不了/解析不了（坏包）；no-entry = 无模块入口（良性）。 */
 type ProbeResult = { ok: true; entry: string } | { ok: false; kind: "pkg-read"; detail: string } | { ok: false; kind: "no-entry" };
@@ -57,10 +80,12 @@ async function scanDir(dir: string, layer: "user" | "project", log: ReturnType<t
       else log.warn("kernel.discover.skip", `目录 ${sub} 无模块入口（无 orosus.module 声明且无 index.{ts,js}），跳过`, { module: sub });
       continue;
     }
-    // T5：入口读取 + 哈希自兜（文件被占用/指错形状时 warn 跳过，不再穿 try 外炸启动）
+    // T5：入口可读性先验 + 内容哈希自兜（文件被占用/目录被指为入口时 warn 跳过，不再穿 try 外炸启动）。
+    // CK-05：哈希改整模块树（含入口文件自身）——sibling 投毒也触发重确认
     let entryHash: string;
     try {
-      entryHash = sha256(readFileSync(join(root, probed.entry), "utf8"));
+      readFileSync(join(root, probed.entry), "utf8"); // 先验：exports 指目录 → EISDIR 走本 warn（⑪ 钉）
+      entryHash = hashModuleTree(root);
     } catch (err) {
       log.warn("kernel.discover.skip", `目录 ${sub} 入口读取失败（${probed.entry}：${err instanceof Error ? err.message : String(err)}），跳过`, { module: sub });
       continue;
@@ -120,7 +145,7 @@ async function scanConfigSources(file: string | undefined, layer: "user" | "proj
     try {
       const def = await loadExternalModule(root, probed.entry);
       if (def.name !== name) log.warn("kernel.discover.name-mismatch", `配置 section [${name}] 声明的 source 加载出模块 "${def.name}"——以制品名为准`);
-      found.push({ def, source: "local", layer, root, entry: probed.entry, entryHash: sha256(readFileSync(join(root, probed.entry), "utf8")) });
+      found.push({ def, source: "local", layer, root, entry: probed.entry, entryHash: hashModuleTree(root) });
     } catch (err) {
       log.warn("kernel.discover.fail", `模块 ${name}（source）加载失败：${String(err instanceof Error ? err.message : err)}`, { module: name });
     }

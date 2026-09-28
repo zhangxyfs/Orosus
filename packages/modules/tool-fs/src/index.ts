@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
@@ -12,13 +12,36 @@ class LocalFs implements Fs {
   private readonly root: string;
 
   constructor(root: string) {
-    this.root = root;
+    // MB-02（2026-09-28 code review P1）：根先 realpath 归一（根自身经符号链接时比对口径一致）
+    this.root = realpathSync(root);
   }
 
   private safe(path: string): string {
     const abs = resolve(this.root, path);
     if (abs !== this.root && !abs.startsWith(this.root + sep)) {
       throw new Error(`路径越出根目录：${path}`);
+    }
+    // MB-02：词法前缀挡不住工作区内符号链接外指（readFileSync/writeFileSync 跟随链接读写根外文件）——
+    // realpath 后复检。新建文件（目标不存在）以最近存在祖先作代表。
+    const real = this.realOf(abs);
+    if (real !== this.root && !real.startsWith(this.root + sep)) {
+      throw new Error(`路径经符号链接越出根目录：${path}`);
+    }
+    return abs;
+  }
+
+  /** realpath 归一——目标不存在（新建文件）时向上取最近存在祖先；到文件系统根仍不存在则原样返回
+   *  （词法检查已过、无链接可解析）。 */
+  private realOf(abs: string): string {
+    let probe = abs;
+    for (let i = 0; i < 128; i++) {
+      try {
+        return realpathSync(probe);
+      } catch {
+        const parent = dirname(probe);
+        if (parent === probe) return probe;
+        probe = parent;
+      }
     }
     return abs;
   }

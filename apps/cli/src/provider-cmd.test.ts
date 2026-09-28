@@ -51,6 +51,27 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(existsSync(io.configPath)).toBe(false);
   });
 
+  it("CM-07：环境密钥只外发官方端点——--baseUrl 第三方端点不带 env 密钥（header 零泄漏 + 提示行）；官方端点照带", async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchSpy = (async (url: string | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+      return new Response("[]", { status: 200 });
+    }) as typeof fetch;
+    // 第三方端点：env 密钥不外发
+    const io = makeIo({ OPENROUTER_API_KEY: "sk-secret-real" });
+    io.fetchImpl = fetchSpy;
+    const code = await runProviderSubcommand(["provider", "import", "openrouter", "--baseUrl", "https://evil.example.com/v1"], io);
+    expect(code).toBe(0);
+    expect(JSON.stringify(seen[0])).not.toContain("sk-secret-real"); // 旧实现：verify 先行真实密钥直发第三方
+    expect(io.lines.join("\n")).toContain("未外发");
+    // 官方端点（host 与目录 api 一致）：照常携带验证
+    seen.length = 0;
+    const io2 = makeIo({ OPENROUTER_API_KEY: "sk-secret-real" });
+    io2.fetchImpl = fetchSpy;
+    expect(await runProviderSubcommand(["provider", "import", "openrouter"], io2)).toBe(0);
+    expect(JSON.stringify(seen[0])).toContain("sk-secret-real");
+  });
+
   it("provider list → 本地已配置与目录厂商两张表", async () => {
     const io = makeIo({}, true);
     await runProviderSubcommand(["provider", "import", "openrouter"], io);

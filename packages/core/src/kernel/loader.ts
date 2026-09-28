@@ -19,7 +19,11 @@ function getJiti(): ReturnType<typeof createJiti> {
       "@orosus/contracts/fs": join(CONTRACTS_SRC, "fs", "index.ts"),
       "@orosus/contracts": join(CONTRACTS_SRC, "module", "index.ts"),
     },
-    moduleCache: true,
+    // CK-01 修复（2026-09-28 code review P0）：moduleCache:true 时 jiti 复用进程级 require 缓存——
+    // 外部模块 /reload 永远拿到旧对象（热重载对外部模块静默失效）。改 false：import 前 jiti 主动清
+    // 对应 require 缓存条目、重读磁盘；TS 变换产物仍走 jiti fsCache（默认开）磁盘缓存，重载成本可控。
+    // contracts 别名随之每载一实例——本就结构化兼容（见上注）。
+    moduleCache: false,
   });
   return jiti;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -157,6 +157,22 @@ describe("工具注册表（§6.3）", () => {
     expect(r.spill!.bytes).toBe(OUTPUT_LIMIT + 5000);
     expect(readFileSync(r.spill!.path, "utf8")).toBe("y".repeat(OUTPUT_LIMIT + 5000));
     expect(r.output.length).toBeLessThan(OUTPUT_LIMIT + 5000);
+  });
+
+  it("CX-03 溢写失败降级：spillDir 被占位文件挡住 → 就地截断不抛（旧实现 mkdir 同步抛穿透成 rejection，违反错误带内契约）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-spill-block-"));
+    const blocked = join(dir, "blocked");
+    writeFileSync(blocked, "占位文件——mkdirSync 必炸", "utf8");
+    const s = sink();
+    const bus = createEventBus(s);
+    const reg = createToolRegistry({ bus, sink: s, spillDir: blocked });
+    reg.register(echo("m__big", "y".repeat(OUTPUT_LIMIT + 5000)), "m");
+    const r = await reg.run({ id: "c1", name: "m__big", args: {} }, { signal: new AbortController().signal });
+    expect(r.truncated).toBe(true);
+    expect(r.spill).toBeUndefined();        // 降级 = 无溢写文件
+    expect(r.isError).toBe(false);          // 不是错误——只是全文未落盘
+    expect(r.output).toContain("溢写失败"); // 中缝如实提示
+    expect(s.records.some((x) => x.code === "kernel.tool.spill-failed")).toBe(true);
   });
 
   it("register 返回 disposer：注销后工具消失（规则 3）", () => {

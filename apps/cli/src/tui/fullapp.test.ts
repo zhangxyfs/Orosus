@@ -1194,6 +1194,23 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 	});
 });
 
+describe("斜杠菜单 Enter 越界钳制（CTU-01 回归钉 2026-09-28——粘贴收缩/技能清单 5s TTL 异步换数组后 overlaySel 陈旧越界，旧实现在此 TypeError 沿 stdin 链炸进程）", () => {
+	it("① 越界索引 + Enter：钳到有效行照常提交，不崩", async () => {
+		const r = rig(["# hi"], 100, 30);
+		const { app, input, submitted } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/h"); // 只剩 /help 一条
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		(app.stateRef as { overlaySel: number }).overlaySel = 5; // 模拟清单收缩后的陈旧索引
+		input.emit("data", "\r");
+		await flush(120);
+		expect(submitted).toEqual(["/help"]); // 旧行为：items[5]!.kind 读 undefined 崩进程
+		app.stop();
+	});
+});
+
 describe("技能管理面（m4-7 T8/T9——/settings → 技能 列表/详情，原型图 2/3/4）", () => {
 	it("① pickOverlay 初始选中参数（详情 Esc 回列表——选中行回到该技能）+ view 窗自定义键 alt+k 内容替换翻转", async () => {
 		const r = rig(["# hi"], 100, 30);
@@ -2461,6 +2478,7 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		input.emit("data", "[5~"); // PgUp → 滚动条出现
 		await flush();
 		// output.buf 是行级 diff 增量流（无换行符）——按光标定位序列 \x1b[{r};1H\x1b[2K 切出渲染行
+		// eslint-disable-next-line no-control-regex -- 终端断言正则按形态写（\x1b 控制序列是断言对象本身）
 		const parts = output.buf.split(/\x1b\[\d+;1H\x1b\[2K/);
 		const idxes = new Set<number>();
 		for (const seg of parts.slice(1)) {
@@ -2502,6 +2520,7 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		app.viewText("压缩摘要", lines.join("\n"), { layout: "full" });
 		await flush(80);
 		// 行级 diff 增量流按光标定位序列切行（T10-7 同口径）——full 弹窗 100 列 rig → 行宽恒 99
+		// eslint-disable-next-line no-control-regex -- 终端断言正则按形态写（\x1b 控制序列是断言对象本身）
 		const parts = output.buf.slice(before).split(/\x1b\[\d+;1H\x1b\[2K/).slice(1);
 		const rows = parts.map((p) => stripAnsi(p)).filter((l) => visibleWidth(l) === 99);
 		let contentRows = 0;

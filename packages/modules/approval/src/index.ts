@@ -58,21 +58,30 @@ export default defineModule({
       // 规则前缀才放行——`git status; rm -rf /` 这类危险尾巴不再搭 `bash(git *)` 的车（fail-closed）。
       const segs = decomposeCommand(commandOf(p.approvalRule) ?? "");
       const matchesRule = p.matchesRule !== undefined
-        ? (ruleArgs: string): boolean => {
+        ? (ruleArgs: string, effect: "allow" | "ask" | "deny"): boolean => {
             if (!p.matchesRule) return false;
-            if (segs.length === 0) return p.matchesRule(ruleArgs) === true; // 不可分段 → 原判定
+            if (segs.length === 0) {
+              // MA-01 修复（2026-09-28 code review P1）：不可分段命令（$/反引号/eval/xargs/-c——静态前缀
+              // 匹配不了运行期展开值）不许搭 allow/ask 规则的便车短路危险门（旧实现 `git $(evil)` 命中
+              // allow bash(git *) 零询问执行）；deny 保留朴素判定——拦多是安全方向，never 档「手写 deny
+              // 仍拦」承诺不破
+              return effect === "deny" && p.matchesRule(ruleArgs) === true;
+            }
             const ruleSegs = decomposeCommand(ruleArgs);
             if (ruleSegs.length > 1) {
               // 复合规则（⑩ 生成的 bash(seg1 && seg2)）：段列全等才命中
               return ruleSegs.length === segs.length && ruleSegs.every((rs, i) => rs === segs[i]);
             }
+            // MA-02/03：段为完整文本——`bash(git push *)` 命中 `git push origin main`，
+            // `bash(npm test)` 不再误吞 `npm test --watch`
             const prefix = ruleArgs.endsWith("*") ? ruleArgs.slice(0, -1) : null;
             return segs.every((seg) => prefix !== null ? seg.startsWith(prefix) : seg === ruleArgs);
           }
         : undefined;
       const d = decide({
-        // M4.5 子代理批：载荷档提示优先（子代理 ask 档转发带 ask-risky——「需要时候询问」语义；
-        // 主对话更严档不因此放宽到全自动，规则链照走）；无提示 = 主对话原路径不变
+        // M4.5 子代理批 + CX-01/02 修复（2026-09-28）：载荷档 = 子代理侧解析出的转发档——auto → never
+        //（规则链先于基线：手写 deny/ask 对子代理照常生效，基线不自发弹窗）、ask → 主对话真实运行期档与
+        // ask-risky 地板取严（主对话更严档不再被降档）；无提示 = 主对话原路径不变
         mode: p.mode ?? state.modeOverride ?? cfg.mode,
         rules: cfg.rules,
         name: p.name,
