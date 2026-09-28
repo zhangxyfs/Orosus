@@ -1262,10 +1262,11 @@ const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
 
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
-	if (picked === 0) app.viewText("磁盘占用", diskUsageText());
-	else if (picked === 1) app.viewText("上下文用量", ctxUsageText());
-	else if (picked === 2) app.viewText("Token 用量", await tokenUsageText());
-	else if (picked === 3) app.viewText("运行状态", runtimeStatusText());
+	// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
+	if (picked === 0) app.viewText("磁盘占用", diskUsageText(), { layout: "dock" });
+	else if (picked === 1) app.viewText("上下文用量", ctxUsageText(), { layout: "dock" });
+	else if (picked === 2) app.viewText("Token 用量", await tokenUsageText(), { layout: "dock" });
+	else if (picked === 3) app.viewText("运行状态", runtimeStatusText(), { layout: "dock" });
 	else if (picked === 4) {
 		// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名
 		const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式", "轮数上限"]);
@@ -1288,7 +1289,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	else if (picked === 5) await openSkillsPanel(app);
 	else if (picked === 6) {
 		const res = await runSearchSettings();
-		if (res !== "") app.viewText("配置网络搜索", res); // 成功路径走 notice/toast 静默约定——非空输出才落面板
+		if (res !== "") app.viewText("配置网络搜索", res, { layout: "dock" }); // 成功路径走 notice/toast 静默约定——非空输出才落面板
 	}
 };
 /** 行模式对等件（2026-09-24 T1c：/other 时代行模式只有指路——配置流两态都要能走，菜单随之对等）：
