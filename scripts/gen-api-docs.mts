@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export interface DomainSpec {
   /** 域名（输出件名与标题）。 */
@@ -400,9 +400,10 @@ export function buildApiDocs(read: (p: string) => string): BuildResult {
 }
 
 // ---- 脚本入口（测试 import 时不执行） ----
-const selfPath = fileURLToPath(import.meta.url).split("\\").join("/").split("/").pop() ?? "";
-const argvPath = (process.argv[1] ?? "").split("\\").join("/").split("/").pop() ?? "";
-if (process.env.VITEST === undefined && selfPath === argvPath) {
+// TS-15（2026-09-28 code review）：入口判定统一全路径（与 check-boundaries.mts 同款 resolve 比对）——
+// 原 basename 比对（split("/").pop()）只认尾段：同名不同目录的脚本会误认入口（vitest 内 VITEST 守卫
+// 恰好挡住、直接 node 执行时则可能双跑）；VITEST 守卫语义保留（测试 import 零执行）。
+if (process.argv[1] !== undefined && process.env.VITEST === undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const root = join(fileURLToPath(new URL("..", import.meta.url)));
   try {
     const { files, symbols } = buildApiDocs((p) => readFileSync(join(root, p), "utf8"));

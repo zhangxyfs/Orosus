@@ -8,7 +8,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** 目录条目：id = 目录名（人话锚），decl = 源内声明行的匹配正则。 */
 export interface CatalogEntry {
@@ -68,8 +68,13 @@ export interface CatalogResult {
   entries: number;
 }
 
-/** 生成目录（纯函数）：任一条目缺注释或缺 @example → 抛错（fail-loud——门禁非零退出的底座）。 */
+/** 生成目录（纯函数）：任一条目缺注释或缺 @example → 抛错（fail-loud——门禁非零退出的底座）。
+ *  入口先做 CRLF 归一（readToml 剥 BOM 同款读侧防御）：exampleOf 的围栏正则要求 ```ts 后紧跟 \n，
+ *  工作树文件整文件 CRLF 时（Windows autocrlf 检出形态或写盘工具所致——2026-09-28 实录：
+ *  module/index.ts 落盘为 CRLF，门禁 17 条目「@example 围栏解析失败」集体假红）；
+ *  LF 源零变化（归一只剥 \r\n 的 \r，内容不动）。 */
 export function buildCatalog(source: string): CatalogResult {
+  source = source.replace(/\r\n/g, "\n");
   const sections = new Map<string, string[]>();
   const problems: string[] = [];
   for (const e of CATALOG_ENTRIES) {
@@ -135,9 +140,11 @@ export function buildCatalog(source: string): CatalogResult {
 }
 
 // ---- 脚本入口（测试 import 时不执行——VITEST 环境变量守卫 + 直接执行判定） ----
-const selfPath = fileURLToPath(import.meta.url).split("\\").join("/").split("/").pop() ?? "";
-const argvPath = (process.argv[1] ?? "").split("\\").join("/").split("/").pop() ?? "";
-const isMain = process.env.VITEST === undefined && selfPath === argvPath;
+// TS-15（2026-09-28 code review）：入口判定统一全路径（与 check-boundaries.mts 同款 resolve 比对）——
+// 原 basename 比对（split("/").pop()）只认尾段：同名不同目录的脚本会误认入口（vitest 内 VITEST 守卫
+// 恰好挡住、直接 node 执行时则可能双跑）；VITEST 守卫语义保留（测试 import 零执行）。
+const isMain = process.argv[1] !== undefined && process.env.VITEST === undefined
+  && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMain) {
   const root = join(fileURLToPath(new URL("..", import.meta.url)));
   const source = readFileSync(join(root, "packages/contracts/src/module/index.ts"), "utf8");

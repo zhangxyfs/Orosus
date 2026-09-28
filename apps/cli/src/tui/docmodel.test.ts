@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DocModel } from "./docmodel.ts";
+import * as toolview from "./toolview.ts";
 import * as theme from "../theme.ts";
 import { stripAnsi } from "./width.ts";
 import { TOOL_MERGE } from "../render.ts";
@@ -205,6 +206,33 @@ describe("DocModel 用户消息折行与工具明细（2026-09-23 走查批）",
 		expect(o.join("\n")).not.toContain('"code"'); // 原始 JSON 不上屏
 		expect(o.some((l) => l.includes("堆栈第四行"))).toBe(true); // 展开全量
 	});
+
+	it("③d CTW-09 展开错误体入场一次解析缓存：帧心跳不再每帧重算 errorLines（hl/detail 同纪律——旧实现每帧两次现算）", () => {
+		const spy = vi.spyOn(toolview, "errorLines");
+		try {
+			const dm = new DocModel();
+			dm.toolCall("tool-shell__run", { command: "pnpm test" });
+			dm.toolResult("ENOENT: boom\nat somewhere (f.js:1)", true);
+			dm.errOpen = true;
+			dm.frameLines(80); // 首帧入场解析一次
+			dm.frameLines(80);
+			dm.frameLines(80);
+			expect(spy).toHaveBeenCalledTimes(1); // 旧实现 slice(0,60) + length 各调一次 → 每帧 2 次 × 3 帧 = 6
+			expect(dm.frameLines(80).map(stripAnsi).some((l) => l.includes("ENOENT"))).toBe(true); // 缓存后渲染不变形
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("③e CTW-08 Write 尾多 \\n：chip 行数与同卡预览行数同口径（旧：chip「· 4 行」vs 预览 2 行——同卡两口径自相矛盾）", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__write", { path: "y.ts", content: "l1\nl2\n\n\n" });
+		dm.toolResult("已写入 y.ts（70B）", false);
+		dm.toolOpen = true;
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain[0]).toBe("● Used Write (y.ts) · 2 行"); // chip = 剥净全部尾空段后的内容行数（旧：4）
+		expect(plain.filter((l) => /^ +\d+ {2}l\d$/.test(l)).length).toBe(2); // 预览恰 2 行——两口径一致
+	});
 });
 
 describe("工具结果按 callId 配对（2026-09-25 用户实机错配修复）", () => {
@@ -351,6 +379,20 @@ describe("tasks 纯查询行静默（2026-09-27 拍板：收进 agent 组，不�
 		dm.toolResult("- bbbb · 运行中", false);
 		lines = dm.frameLines(80).map(stripAnsi);
 		expect(lines.some((l) => l.includes("bbbb"))).toBe(false);
+	});
+
+	it("㊿-10 CTW-10 旧日志乱序：tasks 静默 call 后夹其他工具的 call/result——中间结果不被吞、不错挂（位置感知旗标）", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "tool/call", name: "tool-subagent__tasks", args: {} }, // 静默 call（无 callId）
+			{ type: "tool/call", name: "tool-shell__bash", args: { command: "ls" } }, // 乱序实存（2026-09-25 前旧会话）：并发后发先完成
+			{ type: "tool/result", output: "file1\nfile2", isError: false }, // bash 的结果——旧：被 tasks 旗标吞掉、Bash 行永显 Using
+			{ type: "tool/result", output: "- aaaa · 运行中", isError: false }, // tasks 的孤儿结果——旧：错挂到 bash 行（1 行 chip）
+		], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("Used Bash") && l.includes("2 行"))).toBe(true); // bash 结果各归各行
+		expect(lines.some((l) => l.includes("Using Bash"))).toBe(false); // 不再因吞错而冻结 Using
+		expect(lines.some((l) => l.includes("运行中"))).toBe(false); // 孤儿无处可挂不落屏（宁可不挂不错挂）
 	});
 });
 

@@ -38,6 +38,17 @@ describe("toolview diff 行（2026-09-23 走查批——Edit/Write 明细渲染�
 		]);
 		expect(toolDiffRows("tool-fs__read", { path: "z.ts" })).toBeUndefined();
 	});
+
+	it("③b CTW-08 write 多 \\n 结尾：尾空段全部剥净（与 docmodel Write 预览的 replace(/\\n+$/、空串) 同口径）——旧 filter 只剥一行", () => {
+		// "l1\nl2\n\n\n" split 得 ["l1","l2","","",""]：旧「仅末元素可剥」留 4 行 → chip「· 4 行」vs 预览 2 行
+		expect(toolDiffRows("tool-fs__write", { content: "l1\nl2\n\n\n" })).toEqual([
+			{ tag: "add", no: 1, text: "l1" },
+			{ tag: "add", no: 2, text: "l2" },
+		]);
+		expect(toolChangeStats("tool-fs__write", { content: "l1\nl2\n\n\n" })).toEqual({ adds: 2, dels: 0, lines: 2 }); // 旧：lines 4
+		expect(toolDiffRows("tool-fs__write", { content: "" })).toBeUndefined(); // 全空退化不变
+		expect(toolDiffRows("tool-fs__write", { content: "\n\n\n" })).toBeUndefined(); // 全尾空 → 剥净后无内容
+	});
 });
 
 describe("toolview 错误体解析（失败工具调用展开内容——JSON 壳剥掉）", () => {

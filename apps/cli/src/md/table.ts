@@ -21,6 +21,13 @@ const MAX_ROW_LINES = 4;
  *  hidden/strike/前景 全复位——防列间串色）。 */
 const STYLE_RESET = "\x1b[22;23;24;25;27;28;29;39m";
 
+/** 多行文本的最宽行显示宽（CMD-06 计宽口径，2026-09-28 code review）：单元格内 br /
+ *  行内多行公式产 `\n` 时整串 visibleWidth 会把 \n 计 1 且跨行累加（"第一行\n第二行"
+ *  计 13 而真实行宽 6），列宽被高估——按行取 max。标题下划线（blocks.ts）同口径共用。 */
+export function widestLineWidth(text: string): number {
+	return Math.max(...text.split("\n").map((line) => visibleWidth(line)));
+}
+
 /** 最长词显示宽（\s+ 分词，cap 30）。 */
 function longestWordWidth(text: string): number {
 	let longest = 0;
@@ -68,7 +75,8 @@ export function renderTable(t: Tokens.Table, out: string[], width: number, ctx?:
 	const borderOverhead = 3 * cols + 1;
 	const availableForCells = width - borderOverhead;
 
-	const natural = head.map((h, c) => Math.max(visibleWidth(h), ...rows.map((r) => visibleWidth(r[c] ?? ""))));
+	// CMD-06：natural 按行取最宽（单元格含 \n 时整串计宽高估列宽）
+	const natural = head.map((h, c) => Math.max(widestLineWidth(h), ...rows.map((r) => widestLineWidth(r[c] ?? ""))));
 	const minWord = head.map((h, c) => Math.max(1, longestWordWidth(h), ...rows.map((r) => longestWordWidth(r[c] ?? ""))));
 	const minCellsWidth = minWord.reduce((a, b) => a + b, 0);
 

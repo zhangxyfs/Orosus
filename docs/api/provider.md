@@ -129,7 +129,7 @@ export function parseModelsResponse(body: unknown): string[];
 |---|---|
 | `body` | 响应 JSON（形如 { data: [{ id: "glm-4.7" }, ...] }；形状不符或无合法 id 抛错）。 |
 
-**返回**：模型 id 去重清单（版本号大的排前，合法 id 仅限字母数字与 . _ / - ）。
+**返回**：模型 id 去重清单（版本号大的排前，合法 id 仅限字母数字与 . _ : / -）。
 
 ## providerSlotKey（函数）
 

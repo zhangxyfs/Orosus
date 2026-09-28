@@ -24,6 +24,15 @@ export function sanitizeToolMeta(server: string, name: string, description: unkn
   return { name, description: tagged.slice(0, DESCRIPTIION_LIMIT) };
 }
 
+/** server instructions 不受信输入消毒（MI-15 修复，2026-09-28 code review P3）：initialize 的 instructions 与
+ *  tool description 同源同险（MCP tool poisoning 的注入通道），但旧实现原样直进系统提示段——无来源标记、
+ *  无长度上限（仅外层 promptSection 32KB 段帽兜底）。对齐 sanitizeToolDescription 纪律：`[mcp:<server>]`
+ *  来源前缀 + 4096 截断；非 string / 空串 → undefined（回落工具清单行，不装占位）。 */
+export function sanitizeServerInstructions(server: string, raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw === "") return undefined;
+  return `[mcp:${server}] ${raw}`.slice(0, DESCRIPTIION_LIMIT);
+}
+
 /** MI-07 修复（2026-09-28 code review P2，kimi sanitizeMcpNamePart 同款）：server id（用户 config 键）与
  *  工具名（server 清单原样名）都是不受信输入——非法字符（./空格/CJK）或超长直拼 mcp__{server}__{name}
  *  会令 provider 拒收**每个**请求；消毒后撞名在 registry throw 则整个 mcp 模块降级（比 400 更重）。

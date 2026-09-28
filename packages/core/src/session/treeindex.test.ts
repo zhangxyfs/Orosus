@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TreeIndex } from "./treeindex.ts";
@@ -121,5 +121,22 @@ describe("TreeIndex（会话树批 T9——~/.orosus/db/session-tree.sqlite 持�
     expect(nodes[0]!.label).toBe("我的");
     expect((await h.tree()).map((n) => n.sessionId)).toEqual(["s_m"]); // 二刷命中缓存路径不炸
     await h.close();
+  });
+
+  it("⑧ CS-08（2026-09-28 code review）：坏库删重建连带 -wal/-shm 伴生 + diag 删库前留痕（旧实现只删主库——残留 WAL 可能被重建库应用上身；catch 无条件静默吞异常）", async () => {
+    const root = fresh();
+    seed(root, "B", "s_ok", [ev("e1", "session/header", { parentSession: null }), ev("e2", "session/label", { label: "名" })]);
+    const file = join(root, "db", "t.sqlite");
+    mkdirSync(join(root, "db"), { recursive: true });
+    writeFileSync(file, "garbage not a sqlite db");
+    writeFileSync(`${file}-wal`, "stale wal bytes"); // 上一化身的 WAL 残留
+    writeFileSync(`${file}-shm`, "stale shm bytes");
+    const diags: unknown[] = [];
+    const idx = new TreeIndex({ file, diag: (e) => diags.push(e) });
+    const nodes = await idx.refresh(root);
+    expect(nodes.map((n) => n.sessionId)).toEqual(["s_ok"]); // fail-open 返回不变（不阻塞 tree()）
+    expect(diags.length).toBeGreaterThan(0); // 删库前留痕——不再无条件静默吞
+    expect(existsSync(`${file}-wal`)).toBe(false); // 伴生连删
+    expect(existsSync(`${file}-shm`)).toBe(false);
   });
 });

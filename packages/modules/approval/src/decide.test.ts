@@ -66,7 +66,7 @@ describe("decide——用户规则（优先于模式，配置序首条命中即�
     })).toMatchObject({ effect: "allow", source: "rule" });
   });
 
-  it("带参规则经 matchesRule 判定：命中 allow 放行；不匹配回基线；无 matchesRule 的带参规则不匹配（fail-closed）", () => {
+  it("带参规则经 matchesRule 判定：命中 allow 放行；不匹配回基线；无 matchesRule 的带参 allow 规则不匹配（fail-closed——deny 方向另见 MA-11 钉）", () => {
     expect(run({
       mode: "ask-risky", accesses: [Access.subprocess()], name: "tool-shell__bash", approvalRule: "tool-shell__bash(git status)",
       rules: [{ effect: "allow", tool: "tool-shell__bash(git *)" }],
@@ -82,6 +82,36 @@ describe("decide——用户规则（优先于模式，配置序首条命中即�
       mode: "ask-risky", accesses: [Access.subprocess()], name: "tool-shell__bash",
       rules: [{ effect: "allow", tool: "tool-shell__bash(git *)" }], // 工具未提供 matchesRule
     })).toMatchObject({ effect: "ask", source: "mode" });
+  });
+
+  it("MA-11 回归钉（2026-09-28 code review）：带参 deny 无 matchesRule → 无法验证的拒绝面 fail-closed 询问（memoryKey=null，会话记忆翻不成放行；never 档也到达——deny 是最强意图）", () => {
+    // 工具未提供 matchesRule 的带参 deny：旧实现按「不匹配」放行 = 拒绝意图静默落空（latent——
+    // contracts 允许第三方工具声明带参规则而不给匹配器）；现按「无法判定 → 询问」处理
+    expect(run({
+      mode: "ask-risky", accesses: [Access.subprocess()], name: "tool-shell__bash",
+      approvalRule: "tool-shell__bash(git push origin main)",
+      rules: [{ effect: "deny", tool: "tool-shell__bash(git push *)" }],
+    })).toMatchObject({ effect: "ask", source: "rule", memoryKey: null });
+    // memoryKey=null——会话记忆救不回（deny 意图不许被「本会话始终允许」翻成放行）
+    expect(run({
+      mode: "ask-risky", accesses: [Access.subprocess()], name: "tool-shell__bash",
+      approvalRule: "tool-shell__bash(git push origin main)",
+      rules: [{ effect: "deny", tool: "tool-shell__bash(git push *)" }],
+      sessionAllowed: () => true,
+    })).toMatchObject({ effect: "ask", memoryKey: null });
+    // never 档同样询问（kimi 链序：UserConfiguredDeny 优先于 auto 兜底——不可验证的 deny 不因全自动档落空）
+    expect(run({
+      mode: "never", accesses: [Access.subprocess()], name: "tool-shell__bash",
+      approvalRule: "tool-shell__bash(git push origin main)",
+      rules: [{ effect: "deny", tool: "tool-shell__bash(git push *)" }],
+    })).toMatchObject({ effect: "ask", source: "rule", memoryKey: null });
+    // 对照：带 matchesRule 的 deny 命中照常直接拒绝
+    expect(run({
+      mode: "ask-risky", accesses: [Access.subprocess()], name: "tool-shell__bash",
+      approvalRule: "tool-shell__bash(git push origin main)",
+      rules: [{ effect: "deny", tool: "tool-shell__bash(git push *)" }],
+      matchesRule: (a) => "git push origin main".startsWith(a.slice(0, -1)),
+    })).toMatchObject({ effect: "deny", source: "rule" });
   });
 });
 
@@ -211,5 +241,32 @@ describe("decomposeCommand 纯函数（M4-2 T9/B12——Reasonix bash_decompose 
     expect(isUnanalyzable("ls `pwd`")).toBe(true);
     expect(isUnanalyzable("cat *.txt")).toBe(true);
     expect(isUnanalyzable("git status")).toBe(false);
+  });
+
+  it("⑤ MA-07 回归钉（2026-09-28 code review）：-c 判定限定嵌套 shell 语境——gcc/clang -c、git -c 配置覆盖可分段；shell 名（含路径/.exe/包装前缀/短选项簇）后的 -c 仍不可分段不可分析", () => {
+    // 旧正则 \s-c\s 无命令名语境：gcc -c foo.c 每次两选询问且永不可记忆（诱导转 never 的摩擦点）
+    expect(decomposeCommand("gcc -c foo.c")).toEqual(["gcc -c foo.c"]);
+    expect(decomposeCommand("clang -c src/foo.c -o foo.o")).toEqual(["clang -c src/foo.c -o foo.o"]);
+    expect(decomposeCommand("git -c http.sslVerify=false push origin main")).toEqual(["git -c http.sslVerify=false push origin main"]); // git -c 是配置覆盖（MA-06 同口径）
+    expect(isUnanalyzable("gcc -c foo.c")).toBe(false);
+    expect(isUnanalyzable("git -c http.sslVerify=false push origin main")).toBe(false);
+    // 嵌套 shell 全形态保持 fail-closed（AST 层按命令名递归载荷，正则补集对齐口径）
+    expect(decomposeCommand("sh -c 'echo hi'")).toEqual([]);
+    expect(decomposeCommand("/bin/bash -c 'x'")).toEqual([]);
+    expect(decomposeCommand("bash.exe -xc 'x'")).toEqual([]);
+    expect(decomposeCommand("sudo env bash -c 'x'")).toEqual([]);
+    expect(isUnanalyzable("sh -c 'echo hi'")).toBe(true);
+    expect(isUnanalyzable("/usr/bin/sh -c 'x'")).toBe(true);
+    expect(isUnanalyzable("bash -xc 'x'")).toBe(true);
+  });
+
+  it("⑥ MA-07 回归钉（decide 管线口径）：gcc -c 走常规 subprocess 询问（memoryKey=approvalRule 可记忆）；sh -c 仍 unanalyzable memoryKey=null（会话记忆也拦不住）", () => {
+    expect(run({
+      mode: "ask-risky", name: "tool-shell__bash", approvalRule: "tool-shell__bash(gcc -c foo.c)", accesses: [Access.subprocess()],
+    })).toMatchObject({ effect: "ask", memoryKey: "tool-shell__bash(gcc -c foo.c)" }); // 旧：unanalyzable → memoryKey null
+    expect(run({
+      mode: "ask-risky", name: "tool-shell__bash", approvalRule: "tool-shell__bash(sh -c 'echo hi')", accesses: [Access.subprocess()],
+      sessionAllowed: () => true,
+    })).toMatchObject({ effect: "ask", memoryKey: null });
   });
 });

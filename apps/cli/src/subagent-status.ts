@@ -45,19 +45,21 @@ const statusWord = (e: SubagentRosterEntry): string => {
   return base + (e.pendingApproval !== undefined ? "·等审批" : "") + (e.background ? "·后台" : "");
 };
 
-const rowDur = (e: SubagentRosterEntry, now: number): number => {
+const rowDur = (e: SubagentRosterEntry, now: number): number | undefined => {
   const start = Date.parse(e.startedAt ?? e.enqueuedAt);
+  if (Number.isNaN(start)) return undefined; // CR-10①：盘上损坏的非法日期串——时长段跳过（rowStats 缺段先例同款）
   const end = e.endedAt !== undefined ? Date.parse(e.endedAt) : now;
-  return end - start;
+  return Number.isNaN(end) ? undefined : end - start;
 };
 
 /** 子行统计段：模型·思考·工具调用数·运行时间·词元（缺省段跳过——kimi 同款）。 */
 const rowStats = (e: SubagentRosterEntry, now: number): string => {
+  const dur = rowDur(e, now);
   const segs = [
     e.model,
     e.effort,
     e.toolCalls !== undefined ? `${e.toolCalls}次` : undefined,
-    fmtDur(rowDur(e, now)),
+    dur !== undefined ? fmtDur(dur) : undefined, // CR-10①：非法日期 → 段缺失，不显「NaN时NaN分」
     e.usage !== undefined ? fmtTok(e.usage.input + e.usage.output) : undefined,
   ].filter((x): x is string => x !== undefined && x !== "");
   return segs.join("·");
@@ -110,8 +112,10 @@ export function agentGroupLines(entries: readonly SubagentRosterEntry[], now: nu
     const tok = entries.reduce((n, e) => n + (e.usage !== undefined ? e.usage.input + e.usage.output : 0), 0);
     const starts = entries.map((e) => Date.parse(e.startedAt ?? e.enqueuedAt));
     const ends = entries.map((e) => Date.parse(e.endedAt ?? e.startedAt ?? e.enqueuedAt));
-    const span = Math.max(0, Math.max(...ends) - Math.min(...starts));
-    header += theme.dim(`（${tools} 工具调用 · ${fmtTok(tok)} 词元 · ${fmtDur(span)}）`);
+    const span = Math.max(...ends) - Math.min(...starts);
+    // CR-10①：任一端非法日期（盘上损坏重放）→ 总时长段跳过，不显「NaN时NaN分」
+    const durSeg = Number.isFinite(span) ? ` · ${fmtDur(Math.max(0, span))}` : "";
+    header += theme.dim(`（${tools} 工具调用 · ${fmtTok(tok)} 词元${durSeg}）`);
   }
 
   // ── 子行：父子摊平树（父行 ├─/└─，孙行嵌套 │/空续接）→ 分桶挑选 → 连接符按显示序现算 ──
@@ -127,11 +131,14 @@ export function agentGroupLines(entries: readonly SubagentRosterEntry[], now: nu
   for (let i = 0; i < shown.length; i++) {
     const e = shown[i]!;
     const d = depthOf(e);
-    // 同级末位判定：显示序里此后还有同级 → ├─，否则 └─；孙行的父级续接前缀（父行之后还有父级同行 → │）
-    const hasSameAfter = shown.slice(i + 1).some((x) => depthOf(x) === d);
+    // 同级末位判定（CR-10②：按 parentId 分组——显示序后续还有「同级」→ ├─）：孙行只认同父的后续孙；
+    // 旧判定不分父，两父各一孙时前孙被误画 ├─（实为其父的末孙，应 └─）。父行间互为同级（组根之孙）。
+    const hasSameAfter = shown.slice(i + 1).some((x) => depthOf(x) === d && (d === 0 || x.parentId === e.parentId));
     const branch = hasSameAfter ? "├─" : "└─";
     const prefix = d === 1 && shown.slice(i + 1).some((x) => depthOf(x) === 0) ? "│  " : d === 1 ? "   " : "";
-    const title = e.label.length > TITLE_MAX ? `${e.label.slice(0, TITLE_MAX)}…` : e.label;
+    // 标题截断按码点切（CR-10③：UTF-16 码元 slice 可把代理对（emoji）切成孤立高位项 → 终端显示替换符）
+    const cps = [...e.label];
+    const title = cps.length > TITLE_MAX ? `${cps.slice(0, TITLE_MAX).join("")}…` : e.label;
     const name = theme.fg("accent", `${e.roleName ?? "general"} ${title}`);
     const stats = theme.dim(`  ${rowStats(e, now)}`);
     const st = theme.fg(STATUS_COLOR[e.status], statusWord(e));

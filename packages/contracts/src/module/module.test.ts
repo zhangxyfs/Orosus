@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defineModule, MODULE_API_VERSION } from "./index.ts";
+import { defineModule, MODULE_API_VERSION, POPUP_CLOSE } from "./index.ts";
 import type {
   CardSpec,
   CommandUi,
@@ -8,6 +8,7 @@ import type {
   DialogSpec,
   HostSnapshot,
   ModuleContext,
+  PopupKey,
   PopupLayout,
   SessionTreeNode,
   WidgetSpec,
@@ -80,6 +81,16 @@ describe("m5 UI 扩展契约面（T0——四口子一次开全）", () => {
     ui.viewText!("窗二", "内容");
     expect(calls[0]).toEqual({ title: "窗一", layout: "full", keys: ["alt+r"] });
     expect(calls[1]).toEqual({ title: "窗二" });
+  });
+
+  it("CT-08 回归钉：POPUP_CLOSE 哨兵值恒为 \"close\"（宿主 fullapp 按字面量 === 判定——改值属破坏性、须同步宿主）；run 三态返回均合法", () => {
+    expect(POPUP_CLOSE).toBe("close");
+    const close: PopupKey = { label: "关", run: () => POPUP_CLOSE }; // 哨兵返回 = 关窗
+    expect(close.run()).toBe("close");
+    const content: PopupKey = { label: "刷新", run: () => "新内容" }; // 内容串返回 = 整窗替换
+    expect(content.run()).toBe("新内容");
+    const noop: PopupKey = { label: "无", run() {} }; // void 返回 = 内容不动
+    expect(noop.run()).toBeUndefined();
   });
 
   it("WidgetSpec 八种控件形状齐、活值字段接受函数（现问现答）", () => {

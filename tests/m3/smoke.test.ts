@@ -62,7 +62,7 @@ describe("M3 全链冒烟", () => {
         config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "n.toml"), env: {}, cliOverrides: { model: "fake/x" } },
       });
       const render = (async () => { for await (const _ of h.events()) void _; })();
-      await h.prompt(`你好`);                    // #0（est 2 ≤ 6 不压）
+      await h.prompt(`你好`);                    // #0（est 18 ≤ 22 不压——阈值与轮次口径见上 thresholdTokens 注释）
       await h.prompt("读一下 x.txt");             // 压缩（#1 摘要「工具结果摘要」）→ #2 工具调用（fs.read → ask-risky 放行）→ #3 step2 再压（#3 摘要「读到了」）→ #4 收尾
       await h.close();
       await render;

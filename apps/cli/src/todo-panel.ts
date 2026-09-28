@@ -5,13 +5,18 @@
  */
 
 /** todo/write 事件 → 面板任务行；非 todo 事件 / 载荷缺失或非数组 → undefined（调用方跳过不改）。
- *  空数组返回 []——全完成自动清空（tool-todo 模块规矩）的落点，面板同步清空是语义不是丢数据。 */
+ *  空数组返回 []——全完成自动清空（tool-todo 模块规矩）的落点，面板同步清空是语义不是丢数据。
+ *  元素级防御（CR-12）：会话事件面无 schema 强制（第三方模块误 append 同名事件、盘上损坏重放），
+ *  null/非对象/无 content 的元素过滤跳过——不让 TypeError 沿 attachRender onEvent 链上抛崩进程。 */
 export function panelTasksFromEvent(
 	e: { type: string; todos?: unknown },
 ): { text: string; state: "done" | "active" | "pending" }[] | undefined {
 	if (e.type !== "tool-todo/write" || !Array.isArray(e.todos)) return undefined;
-	return (e.todos as { content: string; status: "pending" | "in_progress" | "done" }[]).map((t) => ({
-		text: t.content,
-		state: t.status === "done" ? "done" : t.status === "in_progress" ? "active" : "pending",
-	}));
+	return (e.todos as unknown[])
+		.filter((t): t is { content: string; status?: unknown } =>
+			typeof t === "object" && t !== null && typeof (t as { content?: unknown }).content === "string")
+		.map((t) => ({
+			text: t.content,
+			state: t.status === "done" ? "done" : t.status === "in_progress" ? "active" : "pending",
+		}));
 }

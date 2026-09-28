@@ -62,15 +62,24 @@ export function scanSessionFiles(root: string): SessionFileEntry[] {
   return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+/** CS-12（2026-09-28 code review）：会话 id 进路径 join 前的统一格式闸——首字符字母/数字、其余只许
+ *  [A-Za-z0-9._-] 且不含 ".."（挡住 "../"、分隔符、盘符冒号、控制字符等桶逃逸形态；真实 id 形态
+ *  s_<base32>/agents_<编号> 天然通过）。出口语义：定位/存在性按「找不到」处理，构造器侧响亮抛错。 */
+export function isSafeSessionId(id: string): boolean {
+  return id.length > 0 && id.length <= 128 && !id.includes("..") && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
+}
+
 /** 定位既有会话（新形态）——resume/fork 定位 sid 的统一入口；未找到 undefined（调用方决定报错口径）。
  *  opts.bucket = 桶名限定（会话树批 #17 项目内封闭：交互面只认当前项目桶；prune/祖先定位等宿主级消费不传 = 全域）。 */
 export function locateSessionFile(root: string, sessionId: string, opts?: { bucket?: string }): SessionFileEntry | undefined {
+  if (!isSafeSessionId(sessionId)) return undefined; // CS-12：不合形 = 找不到（不给路径穿越形态进 join 的机会）
   return scanSessionFiles(root).find((e) => e.id === sessionId && (opts?.bucket === undefined || e.bucket === opts.bucket));
 }
 
 /** 会话主文件是否存在于该桶（会话树批 T1——同桶快路径判据；T2 目录化后按新形态查 agents/ 内主文件）。 */
 export function sessionFileExists(bucket: string, sessionId: string): boolean {
-  return existsSync(join(bucket, sessionId, "agents", "session.jsonl")) || existsSync(join(bucket, sessionId, "agents", "session.sqlite"));
+  return isSafeSessionId(sessionId) // CS-12：同 locate——不合形直接 false，join 不吃逃逸段
+    && (existsSync(join(bucket, sessionId, "agents", "session.jsonl")) || existsSync(join(bucket, sessionId, "agents", "session.sqlite")));
 }
 
 /** 祖先定位（会话树批 T1 断代修复）：hintBucket 命中直返（同桶链快路径——免全根扫描）；否则全根扫描兜底

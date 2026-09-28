@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeCwd, locateSessionBucket, locateSessionFile, scanSessionFiles } from "./dir.ts";
+import { encodeCwd, isSafeSessionId, locateSessionBucket, locateSessionFile, scanSessionFiles, sessionFileExists } from "./dir.ts";
 
 let dir: string | undefined;
 const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-dir-")));
@@ -102,5 +102,26 @@ describe("scanSessionFiles 目录化新形态（会话树批 T2——只认 <桶
     // 两路都落空
     expect(locateSessionBucket(root, "s_nope", join(root, "B-two"))).toBeUndefined();
     expect(locateSessionBucket(undefined, "s_a")).toBeUndefined();
+  });
+});
+
+describe("CS-12 会话 id 格式闸（2026-09-28 code review）：定位/存在性出口统一断言——路径 join 前不给穿越形态机会", () => {
+  it("① isSafeSessionId：真实 id 形态（s_<base32>/agents_<编号>/测试简名）通过；穿越/分隔/盘符/控制字符全拒", () => {
+    for (const ok of ["s_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "agents_1", "s_fixed", "s-missing", "s"]) {
+      expect(isSafeSessionId(ok)).toBe(true);
+    }
+    for (const bad of ["../escaped", "..", ".", "a/b", "a\\b", "C:x", "", " s", "s\t", "s/x/../y", "s\u0000"]) {
+      expect(isSafeSessionId(bad)).toBe(false);
+    }
+  });
+
+  it("② locateSessionFile / sessionFileExists：不合形 = 找不到（即使真有目录叫那个名字也不认）；合法 id 照常", () => {
+    const root = fresh();
+    seedSession(root, "B", "s_a");
+    expect(locateSessionFile(root, "../evil")).toBeUndefined();
+    expect(locateSessionFile(root, "a/b")).toBeUndefined();
+    expect(locateSessionFile(root, "s_a")?.id).toBe("s_a"); // 合法路径不受闸影响
+    expect(sessionFileExists(join(root, "B"), "../evil")).toBe(false);
+    expect(sessionFileExists(join(root, "B"), "s_a")).toBe(true);
   });
 });

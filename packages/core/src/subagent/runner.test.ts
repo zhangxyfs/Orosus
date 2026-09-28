@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
 import { providerSlotKey } from "@orosus/contracts/provider";
@@ -10,7 +10,10 @@ import type { ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/co
 import { fakeModule, fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { InMemorySessionStore } from "../session/memory.ts";
 import { createHarness } from "../index.ts";
-import { isSpawnClassTool, spawnAllowedAtDepth } from "./runner.ts";
+import { isSpawnClassTool, spawnAllowedAtDepth, foldPath, createSubagentRunner } from "./runner.ts";
+import { createEventBus } from "../kernel/bus.ts";
+import type { ModuleGraph } from "../kernel/kernel.ts";
+import type { DiagSink } from "../diag/logger.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -329,5 +332,76 @@ describe("子代理 T5（带聊天记录开局 forkFrom——决策 6）", () =>
     expect(JSON.stringify(agentReq.messages)).not.toContain("你好");
     expect(JSON.stringify(agentReq.messages)).not.toContain("主对话回复");
     await h.close();
+  });
+});
+
+describe("CX-12 foldPath 平台对齐（POSIX 下反斜杠是合法文件名字符——只按 / 切分，与 normalizeClaimPath 的 sep 切分同口径）", () => {
+  it("win32：双分隔符折叠 + 大小写折叠（docs\\A.TXT 与 docs/a.txt 同形）；POSIX：反斜杠原样保留为文件名字符（旧实现全平台折叠——报备 `x\\y` 的合法写入被误报越界、`d\\..\\x` 单文件名被误折成目录链）", () => {
+    const base = resolve(tmpdir(), "foldpath-probe");
+    if (process.platform === "win32") {
+      expect(foldPath(base, "docs\\A.TXT")).toBe(foldPath(base, "docs/a.txt")); // 双分隔符 + 大小写折叠
+    }
+    // POSIX 分支：临时改 platform（path 模块行为在加载期已按宿主平台定型——resolve 不受影响，只切 foldPath 分支）
+    const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      const f = foldPath(base, "x\\y");
+      expect(f).toBe(resolve(base, "x\\y")); // 原样返回——不切、不折叠（旧实现折成 / 分隔的目录链）
+      expect(f).toContain("\\");            // 反斜杠留在段内 = 文件名字符，不是分隔符
+    } finally {
+      Object.defineProperty(process, "platform", orig);
+    }
+  });
+});
+
+describe("CX-14 stop/stopAll 解构安全（直测 createSubagentRunner——activate 门只透 spawn/list/stop，原始 runner 不经 ctx.subagent 暴露）", () => {
+  it("const { stopAll, list } = runner 裸调用照常全停（旧实现 stopAll 内走 this.stop——解构后 this 为 undefined 直接 TypeError，停不成也无收场）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-subagent-cx14-"));
+    let toolStarted!: () => void;
+    const started = new Promise<void>((r) => { toolStarted = r; });
+    const gateTool = defineTool({
+      name: "gate__wait", description: "挂起等信号", parameters: z.object({}),
+      resolveExecution: () => Promise.resolve({
+        accesses: [], approvalRule: "gate__wait",
+        execute: (tc) => new Promise((res) => {
+          toolStarted();
+          if (tc.signal.aborted) { res({ output: "[已中止]", isError: true }); return; }
+          tc.signal.addEventListener("abort", () => res({ output: "[已中止]", isError: true }), { once: true });
+        }),
+      }),
+    });
+    let streamCalls = 0;
+    const stream: StreamFn = async function* () {
+      streamCalls++; // 每次模型往返都派 gate__wait——挂到 stopAll 打断
+      yield { type: "toolcall/argumentsDelta", callId: "c1", name: "gate__wait", argumentsDelta: "{}" };
+      yield { type: "finish", kind: "stop" };
+    };
+    const sink: DiagSink = { write: () => undefined, flush: () => Promise.resolve(), close: () => Promise.resolve() };
+    const graph = {
+      tools: { toolInfos: () => [{ name: "gate__wait" }], list: () => [gateTool] },
+      services: { getOptional: () => Promise.resolve(undefined) },
+      bus: createEventBus(sink),
+    } as unknown as ModuleGraph;
+    const runner = createSubagentRunner({
+      mainStore: new InMemorySessionStore(),
+      sessionsDir: join(dir, "sessions"),
+      sink,
+      cwd: dir,
+      makeStore: (sid) => new InMemorySessionStore(sid),
+      graph: () => graph,
+      configSections: () => new Map(),
+      resolveParentModel: () => ({ stream, model: "m" }),
+      resolveModel: () => ({ stream, model: "m" }),
+    });
+    const t = await runner.spawn({ label: "挂到解构停", prompt: "等", background: true });
+    await started;
+    expect(streamCalls).toBeGreaterThanOrEqual(1); // 模型往返确实发生（挂起点已到）
+    const { stopAll, list } = runner; // 解构——与方法调用形态相对
+    stopAll();                        // 无 this 裸调用：旧实现此处 TypeError，单子停不掉
+    const deadline = Date.now() + 8000;
+    while (list().find((e) => e.id === t.id)?.status !== "failed") {
+      if (Date.now() > deadline) throw new Error("stopAll 裸调用未收场（8s）");
+      await new Promise((r) => setTimeout(r, 10));
+    }
   });
 });

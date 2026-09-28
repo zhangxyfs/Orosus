@@ -125,21 +125,27 @@ export function resolveTopo(input: TopoInput): TopoResult {
     }
   }
 
-  // 4. 剩余 = 硬环及其下游：先精确找出环节点（迭代剔除剩余集中无出度的下游节点），
-  //    环上模块全部记环因（§5.2 规则 2 机制 3："发现环即把环上模块全部降级，审计打印整条环"），再级联其消费者
-  const remaining = new Set([...active.keys()].filter((n) => !emitted.has(n)));
-  for (;;) {
-    let trimmed = false;
-    const snapshot = [...remaining]; // 快照迭代：本轮剔除中删除元素不影响本轮遍历集
-    for (const n of snapshot) {
-      if (![...(outEdges.get(n) ?? [])].some((m) => remaining.has(m))) {
-        remaining.delete(n);
-        trimmed = true;
-      }
+  // 4. 剩余 = 硬环及其下游：精确找出环节点（§5.2 规则 2 机制 3："发现环即把环上模块全部降级，审计打印整条环"），
+  //    再级联其消费者。CK-15：旧迭代剔除法（剔剩余集中无出度节点）保留的是「能在剩余集内到达环」的节点——
+  //    两环之间的过路节点（环1 的下游同时是环2 的上游）永不被剔除，被误记「环上模块」并编进环描述、误导排障；
+  //    降级集合本身不变（过路节点由下方级联步兜住），变的是审计文案如实。精确判据：n 在环上 ⟺ 从 n 的出边
+  //    出发能回到 n。逐点 DFS——模块图每图数十节点，O(V·(V+E)) 足够
+  const nonEmitted = [...active.keys()].filter((n) => !emitted.has(n));
+  const inRemaining = new Set(nonEmitted);
+  const selfReachable = (n: string): boolean => {
+    const stack: string[] = [];
+    const seen = new Set<string>();
+    for (const m of outEdges.get(n) ?? []) if (inRemaining.has(m)) stack.push(m);
+    while (stack.length > 0) {
+      const m = stack.pop()!;
+      if (m === n) return true;
+      if (seen.has(m)) continue;
+      seen.add(m);
+      for (const x of outEdges.get(m) ?? []) if (inRemaining.has(x) && !seen.has(x)) stack.push(x);
     }
-    if (!trimmed) break;
-  }
-  const inCycle = [...remaining].sort();
+    return false;
+  };
+  const inCycle = nonEmitted.filter(selfReachable).sort();
   if (inCycle.length > 0) {
     const cycleDesc = inCycle
       .map((n) => {

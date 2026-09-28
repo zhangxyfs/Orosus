@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CommandHandler, CommandUi, LlmPort, Listener } from "@orosus/contracts/module";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
 import def, { collectRealUserMessages, configSchema, estimateTokens, isRealUserInput, selectUserMessages } from "./index.ts";
@@ -131,9 +134,10 @@ const miniReplay = (msgs: ModelMessage[], events: { type: string; payload: Recor
       const keepUserHead = Math.max(0, Math.min(Number(e.payload.keepUserHead ?? 0) || 0, keepUserAt.length));
       const headKept = kept.slice(0, keepUserHead);
       const tailKept = kept.slice(keepUserHead);
-      const headLastAt = keepUserHead > 0 ? keepUserAt[keepUserHead - 1]! : -1;
-      const tailFirstAt = keepUserHead < keepUserAt.length ? keepUserAt[keepUserHead]! : out.length;
-      const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: replayElision(tailFirstAt - headLastAt - 1) }] };
+      // MI-12：真省略数 = 压前条目 − 保留用户条目。⚠️ 跨域留档：本迷你重放镜像核心 convert.ts 的重放分形，
+      // 公式已按 MI-12 新口径更新——核心 convert.ts:93-98 须同步对齐（out.length − keepUserAt.length），否则
+      // 钉子与真核心行为脱钩（热路径与冷重放的 elision 数字分叉，双写逐字一致被打破）。
+      const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: replayElision(out.length - keepUserAt.length) }] };
       out = [...headKept, elisionMsg, ...tailKept, summaryMsg];
     }
   }
@@ -852,27 +856,27 @@ describe("v3 头尾预算选择（T1：kimi selectCompactionUserMessages 改编�
   it("① 总量不超预算 → 全保留、无 elision", () => {
     const users = [big(10), big(10), big(10)].map((m, at) => ({ at, m }));
     const sel = selectUserMessages(users, { max: 40, head: 5, totalEntries: 3 });
-    expect(sel).toMatchObject({ keepUserAt: [0, 1, 2], keepUserHead: 3, keepUserTail: 3, elided: false });
+    expect(sel).toMatchObject({ keepUserAt: [0, 1, 2], keepUserHead: 3, keepUserTail: 3, elided: false, omittedEntries: 0 }); // MI-12：全用户条目无夹缝 → 真省略 0
   });
   it("② 超限尾部整条装填：从最新往回、装不下整条就停（不截断）", () => {
     const users = [big(10), big(10), big(10), big(10)].map((m, at) => ({ at, m }));
     const sel = selectUserMessages(users, { max: 25, head: 5, totalEntries: 5 }); // tailBudget 20 → 尾 2 条
     expect(sel.keepUserAt).toEqual([2, 3]);
-    expect(sel.keepUserHead).toBe(0); // 头预算 5 < 单条 10 → 头空（末下标 −1）
+    expect(sel.keepUserHead).toBe(0); // 头预算 5 < 单条 10 → 头空
     expect(sel.elided).toBe(true);
-    expect(sel.omittedEntries).toBe(2); // 尾段首 2 − 头段末 (−1) − 1
+    expect(sel.omittedEntries).toBe(3); // MI-12 真省略数：totalEntries 5 − 保留 2（旧间隙口径 2——漏数保留集内夹缝）
   });
   it("③ 头部装填：从最老往新装 head 预算", () => {
     const users = [big(3), big(3), big(3), big(3)].map((m, at) => ({ at, m }));
     const sel = selectUserMessages(users, { max: 8, head: 4, totalEntries: 4 }); // tailBudget 4 → 尾 1 条；head 4 → 头 1 条
     expect(sel.keepUserAt).toEqual([0, 3]);
-    expect(sel).toMatchObject({ keepUserHead: 1, keepUserTail: 1, elided: true, omittedEntries: 2 }); // 3 − 0 − 1
+    expect(sel).toMatchObject({ keepUserHead: 1, keepUserTail: 1, elided: true, omittedEntries: 2 }); // 4 − 2（MI-12：与旧口径同值——夹缝在下标 1/2 恰为间隙）
   });
   it("④ 整条粒度边界：单条超全部预算 → 不进任何段（全进摘要），省略段到投影末", () => {
     const users = [{ at: 0, m: big(100) }];
     const sel = selectUserMessages(users, { max: 50, head: 10, totalEntries: 6 });
     expect(sel.keepUserAt).toEqual([]);
-    expect(sel.omittedEntries).toBe(6); // 尾空 → totalEntries − (−1) − 1
+    expect(sel.omittedEntries).toBe(6); // MI-12：totalEntries 6 − 保留 0（与旧口径同值）
     expect(sel.elided).toBe(true);
   });
   it("⑤ 图片按 1000 token/张占位估算（estimateTokens 同口径）", () => {
@@ -891,6 +895,28 @@ describe("v3 头尾预算选择（T1：kimi selectCompactionUserMessages 改编�
     const users = collectRealUserMessages(msgs);
     const sel = selectUserMessages(users, { max: 999, head: 10, totalEntries: msgs.length });
     expect(sel.keepUserAt).toEqual([0, 2, 4]);
+  });
+});
+
+describe("MI-12 elision 真省略数（2026-09-28 code review P3——头段用户消息间夹的 assistant/tool 同样被省略，旧「头尾间隙」口径漏数）", () => {
+  it("① 全保留场景（elided=false，elision 恒在）：8 条投影 3 用户夹 5 条 agent 条目 → 报 5（旧口径只数头尾段间隙报 1，夹缝 4 条漏数）；双写钉 miniReplay 字节一致", async () => {
+    const s = setup({ config: { thresholdTokens: 1 } }); // 用户预算默认 20000 → 全保留（elided false，keepUserHead=3）
+    await def.activate(s.ctx);
+    const msgs = [u("问"), a("答"), u("再"), a("答"), a("答"), a("答"), u("尾问"), a("收尾")]; // 用户 0/2/6，agent 1/3/4/5/7
+    const r = (await s.listener(msgs)) as ModelMessage[];
+    expect(r).toHaveLength(5); // [问, 再, 尾问, elision, 摘要]
+    expect(firstText(r[3])).toContain(`${ELISION_PREFIX} 5 messages`); // 真省略 = 8 − 3（旧口径 8 − 6 − 1 = 1）
+    expect(JSON.stringify(miniReplay(msgs, s.appended))).toBe(JSON.stringify(r)); // 双写钉（miniReplay 已按新口径——convert.ts 对齐前为留档镜像，见跨域注）
+  });
+
+  it("② elided 场景：头段保留用户之间夹的 assistant 计入——5 条投影保留 [u0,u2] 报 3（旧口径报 2，下标 1 夹缝漏数）", async () => {
+    const s = setup({ config: { thresholdTokens: 1, userMessageTokens: 2, userMessageHeadTokens: 2 } }); // total 3 > max 2 → 尾预算 0、头恰装 u0+u2
+    await def.activate(s.ctx);
+    const msgs = [u("问"), a("夹缝"), u("再"), a("答"), u("超")]; // 用户 0/2/4（各 1 token）；头装 [0,2]、尾空
+    const r = (await s.listener(msgs)) as ModelMessage[];
+    expect(r).toHaveLength(4); // [问, 再, elision, 摘要]
+    expect(firstText(r[2])).toContain(`${ELISION_PREFIX} 3 messages`); // 真省略 = 5 − 2（旧口径 5 − 2 − 1 = 2）
+    expect(JSON.stringify(miniReplay(msgs, s.appended))).toBe(JSON.stringify(r));
   });
 });
 
@@ -916,5 +942,11 @@ describe("v3 配置换血（T0：退役两键、新增四键、版本 0.4.0—�
       expect("keepRecentTokens" in r.data).toBe(false);
       expect("minKeepMessages" in r.data).toBe(false);
     }
+  });
+
+  it("MI-13 版本两面钉：package.json 与模块 version 一致（内核审计/日志看模块版、发包与依赖解析看包版——旧 0.1.0/0.4.0 漂移使 v3→v4 配置换血在包版本上不可见）", () => {
+    const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")) as { version: string };
+    expect(pkg.version).toBe(def.version);
+    expect(def.version).toBe("0.4.0");
   });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import { fakeProvider, fakeProviderModule } from "@orosus/testing";
-import { sqliteAvailable, setSqliteProbeForTest, SqliteSessionStore } from "./sqlite.ts";
+import { removeSqliteDbFiles, sqliteAvailable, setSqliteProbeForTest, SqliteSessionStore } from "./sqlite.ts";
 import { verifyChain } from "./fork.ts";
 import { scanBucketSessions } from "./dir.ts";
 import { createHarness } from "../index.ts";
@@ -98,5 +98,21 @@ describe("SqliteSessionStore（M3 T7，D42）", () => {
     }
     expect(typeof sqliteAvailable()).toBe("boolean");
     void ({} as SessionEvent);
+  });
+
+  it.skipIf(!sqliteAvailable())("⑥ CS-12（2026-09-28 code review）：非法 sessionId 构造即抛——库文件路径含 join(this.dir, sid, …)，桶外零创建", () => {
+    const d = tmp();
+    expect(() => new SqliteSessionStore({ dir: d, sessionId: "../escaped" })).toThrow(/会话 id 非法/);
+    expect(existsSync(join(d, "..", "escaped"))).toBe(false);
+  });
+
+  it.skipIf(!sqliteAvailable())("⑦ CS-08（2026-09-28 code review）：removeSqliteDbFiles 连删 -wal/-shm 伴生（SQLite 官方要求删库连 WAL 一起——TreeIndex 重建路径消费）", () => {
+    const d = tmp();
+    const f = join(d, "t.sqlite");
+    for (const n of [f, `${f}-wal`, `${f}-shm`]) writeFileSync(n, "x");
+    removeSqliteDbFiles(f);
+    expect(existsSync(f)).toBe(false);
+    expect(existsSync(`${f}-wal`)).toBe(false);
+    expect(existsSync(`${f}-shm`)).toBe(false);
   });
 });

@@ -114,6 +114,15 @@ describe("工具注册表（§6.3）", () => {
     expect(missing.isError).toBe(true);
   });
 
+  it("CX-14：run 合成口可安全解构转发——const { run } = reg 脱离 this 绑定仍走全管线（旧形态 this.plan 即 TypeError）", async () => {
+    const { reg } = setup();
+    reg.register(echo("m__t", "via-destructured-run"), "m");
+    const { run } = reg; // 解构——this 丢失（回调直传同型）
+    const r = await run({ id: "c1", name: "m__t", args: {} }, { signal: new AbortController().signal });
+    expect(r.isError).toBe(false);
+    expect(r.output).toBe("via-destructured-run");
+  });
+
   it("waterfall 否决 → denied + isError，execute 未被调用（fail-closed）", async () => {
     const { reg, bus } = setup();
     let executed = false;

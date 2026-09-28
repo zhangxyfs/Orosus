@@ -61,7 +61,10 @@ const PRESHRUNK_ADDENDUM = `
 注意：由于输入超出摘要预算，你看到的对话已截去最早期部分——不要声称本摘要涵盖了全部历史。`;
 
 /** elision 固定模板（v3 设计空白 4，kimi buildCompactionElisionText 语义、条数口径改投影条目）——
- *  与核心 convert.ts 同款双写（铁律 2 两份代码），测试钉两侧逐字一致。 */
+ *  与核心 convert.ts 同款双写（铁律 2 两份代码），测试钉两侧逐字一致。
+ *  MI-12 修复（2026-09-28 code review P3）：omitted 取真省略数（压前条目 − 保留用户条目）。旧口径只数
+ *  头尾段间隙（尾段首下标 − 头段末下标 − 1）——头段保留用户消息之间夹着的 assistant/tool 条目同样被
+ *  省略却不计入（全保留场景下旧口径甚至报 0），给模型的数字系统性偏小。模板文本不动（两侧逐字一致钉）。 */
 const COMPACTION_ELISION = (omitted: number): string =>
   `[Some messages were omitted here during compaction: ${omitted} messages between the oldest and the most recent user input are covered by the compaction summary at the end.]`;
 
@@ -259,20 +262,23 @@ export interface UserSelection {
   keepUserHead: number;
   keepUserTail: number;
   elided: boolean;
-  omittedEntries: number; // 省略的投影条目数 = 尾段首下标 − 头段末下标 − 1（头段空取 −1；尾段空 = 到投影末）
+  /** 真省略的投影条目数 = totalEntries − keepUserAt.length（MI-12：含头段用户消息间夹的 assistant/tool
+   *  与末位用户之后的条目——旧口径「尾段首 − 头段末 − 1」漏数保留集内部夹缝，全保留场景恒报 0）。 */
+  omittedEntries: number;
 }
 
 /** 头尾预算选择（kimi selectCompactionUserMessages :234-297 改编；差异 = 输出下标集、整条粒度不截断——
  *  keepUserAt 下标锚定容不得截断形态，设计空白 7）。总量不超预算全保留无 elision；超限则尾段从最新
  *  往回整条装填（max − head）、头段从最老往新整条装填 head。头尾数学上不重叠（ΣH ≤ head、
- *  ΣT ≤ max − head < total）。totalEntries = 投影条目总数（尾段空时省略段算到投影末）。 */
+ *  ΣT ≤ max − head < total）。totalEntries = 投影条目总数（真省略数基数，MI-12）。 */
 export function selectUserMessages(
   users: { at: number; m: ModelMessage }[],
   cfg: { max: number; head: number; totalEntries: number },
 ): UserSelection {
   const total = users.reduce((n, x) => n + msgTokens(x.m), 0);
   if (users.length === 0 || total <= cfg.max) {
-    return { keepUserAt: users.map((x) => x.at), keepUserHead: users.length, keepUserTail: users.length, elided: false, omittedEntries: 0 };
+    // 全保留也恒有省略（assistant/tool 夹缝条目不进新投影）——omittedEntries 同一真省略口径（MI-12）
+    return { keepUserAt: users.map((x) => x.at), keepUserHead: users.length, keepUserTail: users.length, elided: false, omittedEntries: cfg.totalEntries - users.length };
   }
   const tailBudget = Math.max(0, cfg.max - cfg.head);
   const tail: { at: number; m: ModelMessage }[] = [];
@@ -292,8 +298,8 @@ export function selectUserMessages(
     head.push(users[i]!);
   }
   const keepUserAt = [...head, ...tail].map((x) => x.at).sort((a, b) => a - b);
-  const headLastAt = head.length > 0 ? head[head.length - 1]!.at : -1;
-  const omittedEntries = (tail.length > 0 ? tail[0]!.at : cfg.totalEntries) - headLastAt - 1;
+  // MI-12：真省略数 = 投影总条目 − 保留用户条目（旧「间隙宽度」漏算保留集内部的夹缝条目）
+  const omittedEntries = cfg.totalEntries - keepUserAt.length;
   return { keepUserAt, keepUserHead: head.length, keepUserTail: tail.length, elided: true, omittedEntries };
 }
 
@@ -429,9 +435,12 @@ async function compactOnce(
     const kept = sel.keepUserAt.map((i) => stripImages(pruned[i]!));
     const headKept = kept.slice(0, sel.keepUserHead);
     const tailKept = kept.slice(sel.keepUserHead);
-    const headLastAt = sel.keepUserHead > 0 ? sel.keepUserAt[sel.keepUserHead - 1]! : -1;
-    const tailFirstAt = sel.keepUserHead < sel.keepUserAt.length ? sel.keepUserAt[sel.keepUserHead]! : pruned.length;
-    const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: COMPACTION_ELISION(tailFirstAt - headLastAt - 1) }] };
+    // MI-12：真省略数（pruned.length − 保留用户条目 = sel.omittedEntries，selectUserMessages 同口径）。
+    // ⚠️ 跨域留档（2026-09-28 code review P3，本批只修模块侧）：核心 convert.ts 的 turn/compaction 分形
+    // （packages/core/src/loop/convert.ts:93-98）仍持旧间隙公式 `tailFirstAt − headLastAt − 1`——core 域须
+    // 同步改为 `out.length − keepUserAt.length`（重放时 out.length ≡ 模块侧 pruned.length，两式同值），并删
+    // headLastAt/tailFirstAt 两行死变量；模板文本两侧不动。对齐前热路径与冷重放的 elision 数字分叉。
+    const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: COMPACTION_ELISION(sel.omittedEntries) }] };
     newMessages = [...headKept, elisionMsg, ...tailKept, summaryMsg];
   }
   // rapid-refill 计数基重置（ZCode recordCompactSuccess :170-178 同点）：漏重置 total 则压缩后投影 toolResult

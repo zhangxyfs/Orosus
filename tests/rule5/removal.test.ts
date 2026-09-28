@@ -8,11 +8,11 @@ import toolShell from "@orosus/tool-shell";
 import providerCustom from "@orosus/provider-custom";
 import type { ModuleDefinition } from "@orosus/contracts/module";
 
-let dir: string;
 let h: Harness | undefined;
+const dirs: string[] = []; // 四轮循环各建一个 tmpdir——全员登记，afterEach 统一清（旧写法单变量覆写只清最后一轮，每跑泄 3 个）
 afterEach(async () => {
   await h?.close();
-  rmSync(dir, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 /** 夹具模块池（2026-09-23 provider 路线归一：品牌 ×5 退役，provider 位换 provider-custom——
@@ -33,7 +33,8 @@ describe("规则 5 验收：核心不依赖任何模块（运行期半；编译�
       [],                                  // 全拿掉——裸核心也必须能起
     ];
     for (const keep of subsets) {
-      dir = mkdtempSync(join(tmpdir(), "orosus-rule5-"));
+      const dir = mkdtempSync(join(tmpdir(), "orosus-rule5-"));
+      dirs.push(dir);
       h = await createHarness({
         store: new InMemorySessionStore(),
         diagDir: dir,

@@ -6,7 +6,7 @@ import { defineModule } from "@orosus/contracts/module";
 import { orosusHome } from "@orosus/contracts/home";
 import { Access, defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
-import { JobRegistry, killTree, decodeOut } from "./jobs.ts";
+import { JobRegistry, killTree, decodeOut, type BgJob } from "./jobs.ts";
 import { resolveShell, lintCmdCommand, classifyFailure, type ShellSpec } from "./shell.ts";
 
 export { JobRegistry, type BgJob } from "./jobs.ts";
@@ -163,7 +163,18 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: She
             // cwd 同样走解析链，但不改记忆（命令成败未知——T2 规矩 = 退出码 0 才记）。
             // 与 turn 取消脱钩：作业不归 tctx.signal 管（Esc 取消回答不杀后台作业——脱离语义）。
             const { cwd, fellBackTo } = resolveCwd({ command, ...(workdir !== undefined ? { workdir } : {}) }, memory);
-            const job = registry.start(command, cwd);
+            // MB-05（2026-09-28 code review P3）：registry.start 的 mkdirSync/openSync 是同步抛错点（目录不可写/
+            // ENOSPC/EMFILE/权限）——不带内会把同步异常抛出 execute，违反「错误带内返回」契约、只能靠核侧
+            // catch-all 兜底且报错无恢复指引；这里自己接住带内返回。
+            let job: BgJob;
+            try {
+              job = registry.start(command, cwd);
+            } catch (err) {
+              return Promise.resolve({
+                output: `后台作业启动失败：${err instanceof Error ? err.message : String(err)}——检查输出目录 ${registry.dir} 可写（磁盘空间/权限）后重试，或去掉 run_in_background 改前台执行`,
+                isError: true,
+              });
+            }
             const note = fellBackTo !== undefined ? `（workdir 目标 ${fellBackTo} 不存在——已回落在 ${cwd} 执行）` : "";
             return Promise.resolve({
               output: `后台作业 ${job.id} 已启动${note}，输出文件 ${job.file}，完成会自动通知，勿轮询。用 tool-shell__output 读取进度。`,
@@ -199,7 +210,11 @@ Returns the tail of the job's output file plus its state (running / exited). Def
           const r = registry.readTail(id, want);
           if (r === undefined) return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx）`, isError: true });
           const state = r.state === "running" ? "运行中" : `已结束（退出码 ${r.code ?? "null"}）`;
-          const header = `[${id} · ${state} · 尾部 ${r.text.length}/${r.totalChars} 字符]`;
+          // MB-13（2026-09-28 code review P3）：运行中 totalChars = 文件字节数近似（非精确字符数）——状态头如实
+          // 标「约 N 字节」，不再用「尾部 X/Y 字符」把窗口值冒充总量；已结束才用精确字符分母
+          const header = r.state === "running"
+            ? `[${id} · ${state} · 尾部 ${r.text.length} 字符 / 输出已积累约 ${r.totalChars} 字节]`
+            : `[${id} · ${state} · 尾部 ${r.text.length}/${r.totalChars} 字符]`;
           return Promise.resolve({ output: r.text === "" ? `${header}\n（尚无输出）` : `${header}\n${r.text}`, isError: false });
         },
       });
@@ -211,7 +226,7 @@ Returns the tail of the job's output file plus its state (running / exited). Def
 function killTool(registry: JobRegistry): Tool {
   return defineTool({
     name: "tool-shell__kill",
-    description: "Stop a background shell job by id (kills the whole process tree). Only jobs started by this session can be killed.",
+    description: "Stop a background shell job by id (kills the whole process tree). Only jobs started by this session can be killed.\nIf the job already finished on its own, the result says so — nothing is killed.",
     parameters: z.object({
       id: z.string().describe("要停止的后台作业 id（bg-…）"),
     }),
@@ -223,12 +238,16 @@ function killTool(registry: JobRegistry): Tool {
         accesses: [],
         approvalRule: "tool-shell__kill",
         execute: () => {
-          const ok = registry.kill(id);
-          return Promise.resolve(
-            ok
-              ? { output: `已停止后台作业 ${id}（进程树已杀；完成通知照常送达）`, isError: false }
-              : { output: `无此后台作业："${id}"（本会话未登记或已结束清理——id 形如 bg-xxxxxxxx）`, isError: true },
-          );
+          // MB-12（2026-09-28 code review P3）：三态如实——已自然结束的作业报「已自行结束」，
+          // 不再谎报「进程树已杀」（模型会误以为是自己终止的）
+          const r = registry.kill(id);
+          if (r.state === "killed") {
+            return Promise.resolve({ output: `已停止后台作业 ${id}（进程树已杀；完成通知照常送达）`, isError: false });
+          }
+          if (r.state === "already-done") {
+            return Promise.resolve({ output: `后台作业 ${id} 已自行结束（退出码 ${r.code ?? "null"}），无需停止——如需输出用 tool-shell__output 读取`, isError: false });
+          }
+          return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx）`, isError: true });
         },
       });
     },
@@ -258,6 +277,7 @@ export default defineModule({
     const fs = await ctx.services.get<Fs>(FS);
     const shell = resolveShell(); // 激活期一次解析（reload 重建即重探）；前台/后台/文案共用同一结论
     const registry = new JobRegistry(defaultBgDir(), shell);
+    registry.cleanupStaleOutputs(); // MB-14：启动清陈旧（>7 天的 bg-*.output）——bg 目录不再跨会话无限累积
     activeRegistry = registry;
     ctx.contribute.tool(bashTool(fs, { lastWorkdir: undefined }, registry, shell)); // 记忆随激活生命周期（reload 重建即清零——新配置新起点）
     ctx.contribute.tool(outputTool(registry));

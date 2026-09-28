@@ -14,11 +14,13 @@ interface Harness {
   listener: (payload: unknown) => Promise<unknown>;
   events: { type: string; payload: Record<string, unknown> }[];
   uiCalls: { title: string; items: string[] }[];
+  warns: string[]; // log.warn 的 message 参（MA-10 冲突日志断言）
   commands: Map<string, CmdHandler>;
 }
 
 function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknown> } = {}): Harness {
   const events: Harness["events"] = [];
+  const warns: string[] = [];
   let listener: Harness["listener"] = async () => undefined;
   const uiCalls: Harness["uiCalls"] = [];
   const commands = new Map<string, CmdHandler>();
@@ -32,7 +34,7 @@ function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknow
   const ctx = {
     config: { mode: "ask-risky", rules: [], ...opts.config },
     configRead: () => Promise.resolve(undefined),
-    log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} },
+    log: { trace() {}, debug() {}, info() {}, warn: (...args: unknown[]) => { warns.push(String(args[1] ?? "")); }, error() {} },
     ui,
     services: { get: () => Promise.reject(new Error("no")), getOptional: () => Promise.resolve(undefined) },
     provide: () => {},
@@ -48,7 +50,7 @@ function fakeCtx(opts: { ui?: Partial<CommandUi>; config?: Record<string, unknow
       emit: () => Promise.resolve(),
     },
   } as unknown as Ctx;
-  return { ctx, get listener() { return listener; }, set listener(l) { listener = l; }, events, uiCalls, commands };
+  return { ctx, get listener() { return listener; }, set listener(l) { listener = l; }, events, uiCalls, warns, commands };
 }
 
 const bashPayload = (command: string) => ({
@@ -129,6 +131,14 @@ describe("approval 模块（waterfall 首个消费方）", () => {
     await Promise.all([p1, p2]);
     expect(order).toHaveLength(2);
   });
+
+  it("MA-09 回归钉（2026-09-28 code review）：前台 approval/requested 事件记子代理转发档 p.mode（与后台路径同口径）", async () => {
+    const h = fakeCtx({ ui: { choose: async () => "批准一次" } });
+    await def.activate(h.ctx);
+    await h.listener({ ...bashPayload("ls"), mode: "ask-always" }); // 前台子代理转发档（background 未置——不进 park 路径）
+    // 旧实现：前台事件只记 modeOverride ?? cfg.mode（= ask-risky）——日志投影与实际生效档（决策用了 p.mode）不一致
+    expect(h.events[0]).toMatchObject({ type: "approval/requested", payload: { mode: "ask-always" } });
+  });
 });
 
 describe("审批硬化（M4-2 T9/B12）", () => {
@@ -186,6 +196,17 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     await def.activate(h.ctx);
     await h.listener(bashPayload("eval $(dangerous)"));
     expect(h.uiCalls[0]!.items).toEqual(["批准一次", "拒绝"]);
+  });
+
+  it("⑮ MA-07 回归钉（2026-09-28 code review）：gcc -c 面板恢复四选（可记忆可落盘——旧 \\s-c\\s 误伤致永久两选）；sh -c 仍两选（嵌套 shell fail-closed 不变）", async () => {
+    const h = fakeCtx({ ui: { choose: async (title, items) => { h.uiCalls.push({ title, items }); return "批准一次"; } } });
+    await def.activate(h.ctx);
+    await h.listener(bashPayload("gcc -c foo.c"));
+    expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]);
+    const h2 = fakeCtx({ ui: { choose: async (title, items) => { h2.uiCalls.push({ title, items }); return "批准一次"; } } });
+    await def.activate(h2.ctx);
+    await h2.listener(bashPayload("sh -c 'echo hi'"));
+    expect(h2.uiCalls[0]!.items).toEqual(["批准一次", "拒绝"]);
   });
 
   it("⑬ MA-01 不可分段命令不搭规则便车：git $(curl …) 在 allow bash(git *) 下仍询问；deny 朴素回退保留（never 档手写 deny 仍拦）", async () => {
@@ -264,6 +285,31 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     expect(await h.listener(bashPayload("git status"))).toBeUndefined();
     expect(readFileSync(projectFile, "utf8")).toContain('tool = "tool-shell__bash(git status *)"'); // 写项目层（MA-04 收窄口径）
     expect(existsSync(userFile)).toBe(false);                                                // 用户层不动（未创建）
+  });
+
+  it("⑯ MA-10 回归钉（2026-09-28 code review）：盘上同 pattern deny → allow 不写不 push、warn 提示冲突、会话内再次询问；盘上同 pattern allow → 幂等单条 + 会话即时生效", async () => {
+    const base = freshDir();
+    const denyFile = join(base, "deny.toml");
+    const allowFile = join(base, "allow.toml");
+    writeFileSync(denyFile, '[approval]\nmode = "ask-risky"\n\n[[approval.rules]]\neffect = "deny"\ntool = "tool-shell__bash(git status *)"\n', "utf8");
+    writeFileSync(allowFile, '[approval]\n\n[[approval.rules]]\neffect = "allow"\ntool = "tool-shell__bash(git status *)"\n', "utf8");
+    // cfg.rules 刻意不含盘上规则（模拟盘改于会话启动后——若会话已加载 deny，decide 先拒、面板根本不出现）
+    const h = fakeCtx({ config: { configFile: denyFile, projectConfigFile: join(base, "no-proj.toml") }, ui: { choose: async (title: string, items: string[]) => { h.uiCalls.push({ title, items }); return "始终允许（写规则落盘）"; } } });
+    await def.activate(h.ctx);
+    expect(await h.listener(bashPayload("git status"))).toBeUndefined(); // 本次批准照常执行（询问已过）
+    const onDisk = readFileSync(denyFile, "utf8");
+    expect(onDisk).not.toContain('effect = "allow"'); // 旧实现：dedup 只比 tool 也跳写——但 info 谎报「已落盘」且会话内 push allow（层间不一致，重启后反转）
+    expect(onDisk.match(/tool = "tool-shell__bash\(git status \*\)"/g)).toHaveLength(1);
+    expect(h.warns.some((m) => m.includes("未落盘"))).toBe(true);
+    expect(await h.listener(bashPayload("git status"))).toBeUndefined();
+    expect(h.uiCalls).toHaveLength(2); // 未 push 会话 allow——同命令再次询问（会话规则集与盘一致）
+    // 对照：盘上同 pattern allow → 幂等（不重复写）+ push 会话规则即时生效
+    const h2 = fakeCtx({ config: { configFile: allowFile, projectConfigFile: join(base, "no-proj.toml") }, ui: { choose: async (title: string, items: string[]) => { h2.uiCalls.push({ title, items }); return "始终允许（写规则落盘）"; } } });
+    await def.activate(h2.ctx);
+    expect(await h2.listener(bashPayload("git status"))).toBeUndefined();
+    expect(readFileSync(allowFile, "utf8").match(/tool = "tool-shell__bash\(git status \*\)"/g)).toHaveLength(1);
+    expect(await h2.listener(bashPayload("git status"))).toBeUndefined();
+    expect(h2.uiCalls).toHaveLength(1);
   });
 });
 

@@ -74,6 +74,7 @@ describe("子命令解析与装配（硬约束 1——拿掉 isSessionsSubcomman
     const lines: string[] = [];
     const dry = await runPruneSubcommand(["sessions", "prune"], { out: (s) => lines.push(s), root, now: NOW });
     expect(dry).toBe(0);
+    expect(lines[0]).toBe("扫描 3 个会话文件（全域——所有项目桶与根平铺，不限于当前项目）"); // CM-18：文案诚实——全域扫描（旧「项目桶」误导爆炸半径）
     expect(lines.some((l) => l.includes("dry-run"))).toBe(true);
     expect(existsSync(join(root, "B-a", "s_old"))).toBe(true); // 未删
     lines.length = 0;

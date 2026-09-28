@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
-import { toBridgedTool, digest, type ServerToolMeta, type ServerCall } from "./bridge.ts";
+import { toBridgedTool, digest, sanitizeServerInstructions, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 
-export { toBridgedTool, sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
+export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 
 /** 测试与 activate 共用的连接口：listTools 一次（清单快照语义）+ callTool 按调。 */
 export interface ServerConnection {
@@ -25,7 +25,8 @@ export interface ActivateMcpOpts {
 export interface McpActivateOut {
   tools: Tool[];
   failedServers: string[];
-  /** 连接成功登记（M4-2 T12）：config 声明但未连的不列——promptSection 只写真连接。 */
+  /** 连接成功登记（M4-2 T12）：config 声明但未连的不列——promptSection 只写真连接。
+   *  instructions 已过 MI-15 消毒（`[mcp:<server>]` 来源前缀 + 4096 截断）——promptSection 消费即安全。 */
   connected: { name: string; tools: string[]; instructions?: string }[];
   /** MI-07：消毒后撞名被跳过的工具（带内记录——不进 registry〔重名 throw 会降级整个模块〕）。
    *  如 server 清单同时提供 "a.b" 与 "a_b"——两段消毒后同注册名，保留首个、跳过后来者。 */
@@ -61,9 +62,11 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
         if (tool.name !== `mcp__${name}__${meta.name}`) (mapping[name] ??= {})[meta.name] = tool.name;
         tools.push(tool);
       }
+      // MI-15：instructions 不受信消毒（来源前缀 + 4096 截断——与 tool description 的 §8.5 纪律同款），
+      // 在采集点一次性收口（promptSection 段渲染直接消费 connected，不再有裸通道）
       let instructions: string | undefined;
       try {
-        instructions = (await conn.instructions?.()) ?? undefined;
+        instructions = sanitizeServerInstructions(name, await conn.instructions?.());
       } catch { /* 指令取不到不株连连接 */ }
       connected.push({ name, tools: manifest[name]!, ...(instructions !== undefined ? { instructions } : {}) });
     } catch {
@@ -90,13 +93,6 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
     },
   };
 }
-
-/** fake ctx session.append 捕获（测试用）。 */
-export const appendLog = {
-  capture(): Array<{ t: string; p: Record<string, unknown> }> {
-    return [];
-  },
-};
 
 export const collectTools = (out: McpActivateOut): Tool[] => out.tools;
 

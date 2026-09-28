@@ -61,4 +61,12 @@ describe("--print 三格式（M4-2 T17/B17）", () => {
     expect(badOutcome.turnEndKind).toBe("error"); // 非 completed → main 置退出码 1（CM-04③ 的判定输入）
     expect(badOut.join("")).not.toContain("你好，世界"); // 空正文——退出码是唯一失败信号
   });
+
+  it("⑤ CM-20：json 的 model 读 harness 读口——未传 --model 键不再消失（取实际生效模型，含 override 语义）", async () => {
+    const h = await mkH(); // 夹具 cliOverrides.model = "fake/m"（等价 config 生效模型——无 --model 场景）
+    const out: string[] = [];
+    await runPrint(h, "打个招呼", { outputFormat: "json" }, (s) => out.push(s)); // args.model 缺席
+    const parsed = JSON.parse(out.join("")) as { model?: string };
+    expect(parsed.model).toBe("fake/m"); // 旧：取 args.model=undefined → JSON.stringify 整键消失
+  });
 });

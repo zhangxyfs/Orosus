@@ -81,9 +81,14 @@ export function toolDiffRows(name: string, args: Record<string, unknown> | undef
 	}
 	if (tail === "write") {
 		const content = typeof args?.content === "string" ? args.content : "";
-		const lines = content.split("\n").map(cleanLine).filter((_, i, arr) => i < arr.length - 1 || arr[i] !== ""); // 去尾空段（tool-fs read 同口径）
-		if (lines.length === 0) return undefined;
-		return dedent(lines.map((l, i) => ({ tag: "add" as const, no: i + 1, text: l })));
+		const lines = content.split("\n").map(cleanLine);
+		// CTW-08（2026-09-28）：去尾空段 = 剥掉全部尾空行——与 docmodel Write 预览的
+		// replace(/\n+$/, "") 同口径。旧 filter「仅末元素可剥」只剥一个换行：content 尾多 \n 时
+		// chip「· N 行」与同卡 Write 预览行数自相矛盾（"l1\nl2\n\n\n" → chip 4 行 vs 预览 2 行）
+		let end = lines.length;
+		while (end > 0 && lines[end - 1] === "") end--;
+		if (end === 0) return undefined;
+		return dedent(lines.slice(0, end).map((l, i) => ({ tag: "add" as const, no: i + 1, text: l })));
 	}
 	return undefined;
 }

@@ -110,3 +110,31 @@ describe("shift 修饰扩表（TUI 批阶段三 F0——T0 预留扩展位兑现
     ]);
   });
 });
+
+describe("bracketed paste 识别（CR-09——[200~/[201~ 包裹段聚合为原子 paste 事件）", () => {
+  it("⑩ 完整包裹段 → 单个 paste 事件；正文不落 char（数字 1-9 不再可触发 picker 数字直达误选）", () => {
+    const p = createKeyParser({ escWindowMs: 0 });
+    expect(p.feed(Buffer.from("\x1b[200~选第 3 项\x1b[201~"))).toEqual([{ type: "paste", text: "选第 3 项" }]);
+    expect(p.feed(Buffer.from("\x1b[200~\x1b[201~"))).toEqual([]); // 空段不发事件（无语义）
+  });
+
+  it("⑪ 开/合标记与正文跨 chunk 拆包（含 CJK 与标记中缝拆半）→ 仍聚合成一个 paste 事件", () => {
+    const p = createKeyParser({ escWindowMs: 1000 });
+    expect(p.feed(Buffer.from("\x1b[20"))).toEqual([]); // 开标记拆半
+    expect(p.feed(Buffer.from("0~中\x1b["))).toEqual([]); // 正文 + 合标记开头拆半
+    expect(p.feed(Buffer.from("201~\r"))).toEqual([{ type: "paste", text: "中" }, { type: "enter" }]); // 后续按键恢复常轨
+  });
+
+  it("⑫ 态外孤立 [201~ 整体吞掉（保守面不变）；粘贴后按键流不受污染", () => {
+    const p = createKeyParser({ escWindowMs: 0 });
+    expect(p.feed(Buffer.from("\x1b[201~x\x1b[A"))).toEqual([
+      { type: "char", ch: "x" }, { type: "arrow", dir: "up" },
+    ]);
+  });
+
+  it("⑬ 流关闭时 paste 未闭合 → 已收字节整段冲刷为 paste 事件（数据不丢）", () => {
+    const p = createKeyParser({ escWindowMs: 0 });
+    expect(p.feed(Buffer.from("\x1b[200~abc"))).toEqual([]);
+    expect(p.settle()).toEqual([{ type: "paste", text: "abc" }]);
+  });
+});

@@ -8,7 +8,7 @@ import { createToolRegistry } from "../tool/registry.ts";
 import { resolveSections } from "../config/validate.ts";
 import { activateModules, type ActivateOutput, type OverlayEntry, type PreservedInstance } from "./activate.ts";
 import { loadModules } from "./kernel.ts";
-import { diffGraphs, type GraphDef } from "./reload.ts";
+import { diffGraphs, stableStringify, type GraphDef } from "./reload.ts";
 import type { DiagSink } from "../diag/logger.ts";
 
 const sink = (): DiagSink => ({ write: () => {}, flush: () => Promise.resolve(), close: () => Promise.resolve() });
@@ -44,6 +44,12 @@ describe("diffGraphs（§5.5 判定规则）", () => {
     expect(r.added).toEqual(["y"]);
     expect(r.unchanged).toEqual(["x"]);
   });
+  it("⑤b CK-08 回归钉：stableStringify 导出——key 序不敏感（z.record/passthrough 类 schema 保留输入 key 序，重排配置不判变）；嵌套与 undefined 语义钉死", () => {
+    expect(stableStringify({ a: 1, b: { x: 2, y: 3 } })).toBe(stableStringify({ b: { y: 3, x: 2 }, a: 1 })); // JSON.stringify 两份会不等——harness 粗判复用本函数（CK-08）
+    expect(JSON.stringify({ a: 1, b: 2 }) === JSON.stringify({ b: 2, a: 1 })).toBe(false); // 前提展示：原生 stringify key 序敏感
+    expect(stableStringify(undefined)).toBe("undefined"); // undefined 基线（configValue 无效化为 undefined 时的比较语义）
+    expect(stableStringify([{ b: 1, a: 2 }, 3])).toBe(stableStringify([{ a: 2, b: 1 }, 3]));
+  });
   it("⑤b CH-05 连带回归钉：local 模块 def 引用逐次新对象（jiti moduleCache:false）不再误判 Reloaded——entryHash 相等 + 来源层相等 = Unchanged；来源层翻转（local↔inline）才判变", () => {
     const h1 = "same-hash";
     const oldLocal = gd("m", { source: "local", entryHash: h1 });
@@ -66,7 +72,7 @@ const tool = (name: string) =>
 interface Round {
   out: ActivateOutput;
   activateCount: () => number;
-  ctxOf: (name: string) => { services: { get(key: string): Promise<unknown> } } | undefined;
+  ctxOf: (name: string) => { services: { get(key: string): Promise<unknown>; getOptional(key: string): Promise<unknown> } } | undefined;
 }
 
 async function round(defs: ModuleDefinition[], opts: { preserved?: Parameters<typeof activateModules>[0]["preserved"]; generations?: Map<string, number>; reuse?: { bus: ReturnType<typeof createEventBus>; tools: ReturnType<typeof createToolRegistry> } } = {}): Promise<Round> {
@@ -74,7 +80,7 @@ async function round(defs: ModuleDefinition[], opts: { preserved?: Parameters<ty
   const bus = opts.reuse?.bus ?? createEventBus(s);
   const tools = opts.reuse?.tools ?? createToolRegistry({ bus, sink: s, spillDir: "/tmp/s" });
   let count = 0;
-  const ctxs = new Map<string, { services: { get(key: string): Promise<unknown> } }>();
+  const ctxs = new Map<string, { services: { get(key: string): Promise<unknown>; getOptional(key: string): Promise<unknown> } }>();
   const wrapped = defs.map((d) => {
     if (opts.preserved?.has(d.name)) return d; // preserved 的 def 不包装——保持引用同一性（Unchanged 判定依据）
     return mod(d.name, {
@@ -150,13 +156,15 @@ describe("preserved / 代际 / stale / 墓碑 / 注册表复用", () => {
     expect(r2.out.records.find((x) => x.name === "boom")!.state).toBe("failed");
   });
 
-  it("⑩ 换下实例的 ctx.services.get → stale 错误（§5.5）", async () => {
+  it("⑩ 换下实例的 ctx.services.get → stale 错误（§5.5）；CK-12：getOptional 同款守卫", async () => {
     const provider = mod("p10", { provides: ["p10.x"], activate(ctx) { ctx.provide("p10.x", 1); } });
     const consumer = mod("c10", { dependsOn: ["p10.x"] });
     const r = await round([provider, consumer]);
     const pctx = r.ctxOf("p10");
     await r.out.rollbackModule("p10");
     await expect((async () => pctx!.services.get("p10.x"))()).rejects.toThrow(/stale|过期/);
+    await expect((async () => pctx!.services.getOptional("p10.x"))()).rejects.toThrow(/stale|过期/); // CK-12：旧实现静默读当代册——换下实例经 getOptional 绕过 stale 语义
+    await expect((async () => pctx!.services.getOptional("no.such-key"))()).rejects.toThrow(/stale|过期/); // 守卫在查册之前——无该能力也先撞 stale（与 get 判定序一致）
   });
 
   it("⑪ 端到端：Unchanged 模块的工具在 reload（共用注册表 + preserved）后仍可调用", async () => {

@@ -144,6 +144,37 @@ describe("section 校验（§6.6 单区制 + 保留 key + strict）", () => {
     const c = r.configFor(m);
     expect(c.ok).toBe(false);
   });
+
+  it("CH-14② 回归钉：非 instanceof z.ZodObject 的 schema（jiti 双 zod 副本形态——鸭式 safeParse）同样做 strict 未知 key 检查", () => {
+    // 模拟 local 模块自带另一份 zod 的形态：有 safeParse 但不是本进程 z.ZodObject 实例
+    const duckSchema = {
+      safeParse(input: unknown) {
+        const data: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(input as Record<string, unknown>)) if (k === "known") data[k] = v; // strip 语义：未知 key 不进 data
+        return { success: true as const, data };
+      },
+    };
+    const m = mod("duck", { config: duckSchema as never });
+    const bad = resolveSections(new Map([["duck", { known: 1, typoKey: 2 }]]), [m], {});
+    const c = bad.configFor(m);
+    expect(c.ok).toBe(false); // 旧实现：instanceof 假 → strict 检查静默跳过 → ok:true、typoKey 被 strip 吞掉
+    if (!c.ok) expect(c.error).toContain("typoKey");
+    const ok = resolveSections(new Map([["duck", { known: 1 }]]), [m], {});
+    expect(ok.configFor(m)).toEqual({ ok: true, value: { known: 1 } });
+  });
+
+  it("CH-14① 回归钉：enabled 非布尔（手误字符串/数字）→ warnings 留痕且按未写处理；布尔值不出 warning", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
+    writeFileSync(join(dir, "user.toml"), `[m]\nenabled = "false"\n[n]\nenabled = 1\n[ok]\nenabled = false\n`);
+    const cfg = loadConfig({ userFile: join(dir, "user.toml"), env: {} });
+    expect(cfg.warnings.some((w) => w.includes("[m]") && w.includes("enabled"))).toBe(true); // 旧实现：typeof 守卫静默忽略、零提示
+    expect(cfg.warnings.some((w) => w.includes("[n]") && w.includes("enabled"))).toBe(true);
+    expect(cfg.warnings.some((w) => w.includes("[ok]"))).toBe(false); // 布尔值合法——不出 warning
+    const defs = [mod("m", {}), mod("n", {}), mod("ok", {})];
+    const r = resolveSections(cfg.sections, defs, {});
+    expect(r.isEnabled(defs[0]!)).toBe(true); // 非布尔被忽略 → 回 defaultEnabled（判定口径不变）
+    expect(r.isEnabled(defs[2]!)).toBe(false); // 真布尔照常生效
+  });
 });
 
 describe("secrets.env（D37）", () => {
@@ -156,5 +187,13 @@ describe("secrets.env（D37）", () => {
     expect(badLines).toBeGreaterThan(0);
     expect(mergeEnvLayer({ X: "proc" }, { X: "sec", Y: "sec" })).toEqual({ X: "proc", Y: "sec" });
     expect(mergeEnvLayer({}, { Z: "s" })).toEqual({ Z: "s" });
+  });
+
+  it("CH-15 回归钉：值剥成对单/双引号（dotenv 心智手编辑 KEY=\"v\"——旧实现值带引号进适配器 → 密钥静默 401）；不成对引号原样；空引号对 = 空串", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-sec-"));
+    const f = join(dir, "secrets.env");
+    writeFileSync(f, 'A="sk-1"\nB=\'sk-2\'\nC=sk-3\nD="单边\nE=""\n');
+    const { vars } = loadSecretsEnv(f);
+    expect(vars).toEqual({ A: "sk-1", B: "sk-2", C: "sk-3", D: '"单边', E: "" });
   });
 });

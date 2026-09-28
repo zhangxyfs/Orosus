@@ -161,6 +161,27 @@ describe("harness.reload 与 /reload（§5.5/T15）", () => {
     expect(h.graph().audit().find((a) => a.name === "m")?.state).toBe("discovered");
     await h.close();
   });
+
+  it("⑨ CK-08 回归钉：配置 key 序重排（语义不变）reload 判 Unchanged——粗判比较基座 stableStringify（旧 JSON.stringify key 序敏感，z.record 类保留输入 key 序的 schema 误判 Reloaded）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-reload-ck08-"));
+    dirs.push(dir);
+    const extra = fakeModule("m", {
+      config: z.record(z.string(), z.string()), // 保留输入 key 序的 schema——key 序敏感性放大器（stableStringify 注释同款场景）
+      activate() {},
+    });
+    const projFile = join(dir, "proj.toml");
+    writeFileSync(projFile, "[m]\nzz = \"1\"\naa = \"2\"\n");
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script), extra],
+      config: { userFile: join(dir, "no-user.toml"), projectFile: projFile, env: {} },
+    });
+    writeFileSync(projFile, "[m]\naa = \"2\"\nzz = \"1\"\n"); // 仅重排 key 序——有效值不变
+    const report = await h.reload();
+    expect(report.unchanged).toContain("m"); // 旧实现：JSON.stringify 两序不等 → 误判 Reloaded（重激活 + generation 虚增）
+    expect(report.reloaded).toEqual([]);
+    await h.close();
+  });
 });
 
 // ---- 本地（目录扫描）模块基建：CH-05/CK-06/CH-09 回归钉共用 ----

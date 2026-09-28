@@ -48,4 +48,27 @@ describe("md/ 列表与引用悬挂缩进（mdpipe 批 T3——P1-③）", () =>
 		expect(stripAnsi(joined)).toContain("码");
 		expect(stripAnsi(joined)).toContain("链 (https://e.com)");
 	});
+	// CMD-07 回归钉（doc/16）：marked 对 "0." 起始解析 start=0，旧 `(l.start || 1)` 把 0
+	// 起始改写成 1。0 是合法起始序号须保留；start 缺省（marked 给 ""）才兜底 1。
+	it("7. CMD-07：0 起始有序列表保留 0 序号（|| 兜底会改写成 1）", () => {
+		const p = renderMarkdown("0. zero\n1. one", 40).map(stripAnsi);
+		expect(p[0]).toMatch(/^0\. zero/); // 修复前："1. zero"
+		expect(p[1]).toMatch(/^1\. one/); // 修复前："2. one"（随 start 改写整体偏移）
+		const q = renderMarkdown("3. three\n4. four", 40).map(stripAnsi); // 非 0/非 1 起始不受影响
+		expect(q[0]).toMatch(/^3\. three/);
+		expect(q[1]).toMatch(/^4\. four/);
+	});
+	// CMD-08 回归钉（doc/16）：列表项/引用内的块间空行旧版被 continue/filter 丢弃——
+	// 松散列表项双段落、`> a\n>\n> b` 多段落视觉粘连，与顶层段落间空行口径不一致。
+	// 修复：空行透传为带前缀的空物理行（列表贴 continuationPrefix 纯空格、引用贴 ▎ 前缀）。
+	it("8. CMD-08：松散列表项双段落块间空行透传（贴续行前缀空行）", () => {
+		const p = renderMarkdown("- 甲段\n\n  乙段", 40).map(stripAnsi);
+		expect(p[0]).toMatch(/^• 甲段/);
+		expect(p[1]).toBe("  "); // 块间空行 = marker 等宽空格的续行前缀（修复前乙段直接粘连在续行）
+		expect(p[2]).toMatch(/^ {2}乙段/);
+	});
+	it("9. CMD-08：引用内多段落块间空行保留 ▎ 前缀（不再相邻粘连）", () => {
+		const p = renderMarkdown("> 甲段\n>\n> 乙段", 40).map(stripAnsi);
+		expect(p.filter((l) => l.startsWith("▎"))).toEqual(["▎ 甲段", "▎ ", "▎ 乙段"]);
+	});
 });

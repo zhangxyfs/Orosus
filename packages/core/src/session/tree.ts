@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import type { SessionTreeNode } from "@orosus/contracts/module";
 import { scanBucketSessions } from "./dir.ts";
-import { openDatabase, sqliteAvailable } from "./sqlite.ts";
+import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
 
 /** 预算读件（会话树批 T7 从 apps/cli/sessions.ts readTitle 下沉 core——core 禁反向 import apps，
  *  树构建与 CLI 列表共用同一实现）：64 行或 16KB 先到先赢（M4-2.5 T2 日志调研 P5——标题尽力而为、
@@ -62,11 +62,15 @@ export function readSessionHead(file: string): SessionHead | undefined {
 
 /** sqlite 读法（会话树批 T8，决策点 15）：开库四查——header（parentSession）/ session/fork
  *  （sourceEntryId）/ 末条 session/label / COUNT(*)（自身事件数）。库打不开/表不存在/查询报错 =
- *  undefined（该节点跳过 + 与「孤立节点保留」同族口径——不炸整体）。 */
+ *  undefined（该节点跳过 + 与「孤立节点保留」同族口径——不炸整体）。
+ *  CS-09（2026-09-28 code review）：开库改走 openSessionDbReadOnly——busy_timeout 对齐 SqliteSessionStore
+ *  （5000ms；旧裸开库撞上活实例 checkpoint/恢复窗口的 SQLITE_BUSY → 该节点静默缺席本次树快照），
+ *  readOnly 优先避免读路径的 -wal/-shm/恢复写副作用（开不了回退读写）。 */
 export function readSqliteHead(file: string): SessionHead | undefined {
   if (!sqliteAvailable()) return undefined;
   try {
-    const db = openDatabase(file);
+    const db = openSessionDbReadOnly(file);
+    if (db === undefined) return undefined;
     try {
       const query = (sql: string): Record<string, unknown> | undefined =>
         db.prepare(sql).get() as Record<string, unknown> | undefined;

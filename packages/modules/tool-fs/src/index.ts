@@ -83,7 +83,9 @@ class LocalFs implements Fs {
       for (const e of entries) {
         if (skip.has(e.name)) continue;
         const child = rel === "" ? e.name : `${rel}/${e.name}`;
-        if (re.test(child)) out.push(this.safe(child));
+        // MB-10（2026-09-28 code review P3）：只推文件——目录不进结果（description 的 "file paths only" 落实；
+        // Dirent.isFile() 对符号链接为 false（lstat 语义），链接目标不跟随——与沙箱 realpath 口径不冲突）
+        if (e.isFile() && re.test(child)) out.push(this.safe(child));
         if (e.isDirectory()) walk(child);
       }
     };
@@ -92,28 +94,43 @@ class LocalFs implements Fs {
   }
 
   /** 内容正则搜索（T16 起）：结构化命中（file 绝对路径 / 1-based 行号 / 行文本截断 200）；
-   *  跳过二进制（替换率粗判）与超大文件（>1MB）。三输出模式由工具层渲染（M4-2 T6）。 */
-  async grepMatches(regex: string): Promise<{ file: string; lineNo: number; text: string }[]> {
+   *  跳过二进制（替换率粗判）与超大文件（>1MB）。三输出模式由工具层渲染（M4-2 T6）。
+   *  MB-09：返回 { matches, truncated }——命中达 GREP_MAX_MATCHES 提前停扫，truncated 供工具层标注。 */
+  async grepMatches(regex: string): Promise<{ matches: { file: string; lineNo: number; text: string }[]; truncated: boolean }> {
     const re = compileGrepRegex(regex); // MB-06：先验——非法正则/嵌套量词形态在此带内抛错，不进扫描
     const out: { file: string; lineNo: number; text: string }[] = [];
-    for (const p of await this.globFiles("**/*")) {
+    let truncated = false;
+    scan: for (const p of await this.globFiles("**/*")) {
+      // MB-09（2026-09-28 code review P3）：大小闸前置于读取（read 工具 MB-07 三闸同款）——
+      // >1MB 的文件不再白读一遍+utf8 解码后才判跳过；stat 失败（扫描间隙文件消失）按跳过
+      try {
+        if (statSync(p).size > GREP_MAX_FILE_BYTES) continue;
+      } catch {
+        continue;
+      }
       let content: string;
       try {
         content = readFileSync(p, "utf8");
       } catch {
         continue;
       }
-      if (content.length > 1_048_576) continue;
+      if (content.length > GREP_MAX_FILE_BYTES) continue; // stat 与读之间文件被写大的竞态兜底（字节≥字符，同数口径偏严不偏漏）
       const lines = content.split("\n");
       const bad = lines.filter((l) => l.includes("\uFFFD")).length;
       if (lines.length > 0 && bad > lines.length / 4) continue; // 二进制粗判
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
         if (line.length > GREP_MAX_LINE) continue; // MB-06：超长行（minified/bundle）跳过——病态正则工作量上界
-        if (re.test(line)) out.push({ file: p, lineNo: i + 1, text: line.slice(0, 200) });
+        if (re.test(line)) {
+          out.push({ file: p, lineNo: i + 1, text: line.slice(0, 200) });
+          if (out.length >= GREP_MAX_MATCHES) { // MB-09：达命中上限停扫——宽匹配的结果集与内存都有界
+            truncated = true;
+            break scan;
+          }
+        }
       }
     }
-    return out;
+    return { matches: out, truncated };
   }
 }
 
@@ -194,6 +211,13 @@ function quantifierAt(source: string, i: number): { len: number; bounded: boolea
 
 /** MB-06：grep 单行匹配长度上限——超长行（minified/bundle 常态）跳过，工作量与多项式病态正则的基都被压住。 */
 const GREP_MAX_LINE = 4096;
+
+/** MB-09（2026-09-28 code review）：grep 文件大小闸（字节）——statSync 前置于 readFileSync（>1MB 跳过，
+ *  与 read 整读上限 READ_MAX_BYTES 同口径）：大文件不再整读+解码一遍之后才判跳过（白读）。 */
+const GREP_MAX_FILE_BYTES = 1_048_576;
+
+/** MB-09：grep 命中条数上限——宽匹配（pattern="."）不再攒出数十万条命中与拼接串；达限停扫，工具层标注截断。 */
+const GREP_MAX_MATCHES = 200;
 
 /** glob 模式 → 锚定正则：** 跨段、* 单段内、? 单字符（相对根的 posix 风格路径）。 */
 function globToRegExp(pattern: string): RegExp {
@@ -420,17 +444,23 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
                 };
               }
             }
-            // 从原文件一次性应用（不基于中间结果）
+            // 从原文件一次性应用（不基于中间结果）。MB-11（2026-09-28 code review P3）：replaceAll 同样基于
+            // 原文件——只作用于位置编辑未触及的原文区段：位置编辑插入的 newText 不被二次替换、replaceAll 的
+            // 匹配不跨位置编辑接缝拼串（与 description「All edits are matched against the ORIGINAL file
+            // simultaneously」对齐；旧实现对已应用位置编辑的结果串再跑 split/join，是增量的）
+            const applyReplaceAll = (segment: string): string => {
+              for (const e of edits) {
+                if (e.replaceAll === true) segment = segment.split(e.oldText).join(e.newText);
+              }
+              return segment;
+            };
             let result = "";
             let cursor = 0;
             for (const p of positions) {
-              result += before.slice(cursor, p.start) + p.newText;
+              result += applyReplaceAll(before.slice(cursor, p.start)) + p.newText;
               cursor = p.end;
             }
-            result += before.slice(cursor);
-            for (const e of edits) {
-              if (e.replaceAll === true) result = result.split(e.oldText).join(e.newText);
-            }
+            result += applyReplaceAll(before.slice(cursor));
             await fs.write(path, result);
             noteWrite(fs, path, readState, result);
             const count = positions.length + edits.filter((e) => e.replaceAll === true).length;
@@ -447,7 +477,7 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
 function globTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__glob",
-    description: "Find files by glob pattern. Results are file paths only.\nUse this tool — not shell find or ls — to discover files by name pattern.\nRespects .gitignore. head_limit to cap results (default 100).",
+    description: "Find files by glob pattern. Results are file paths only (directories excluded).\nUse this tool — not shell find or ls — to discover files by name pattern.\nSkips node_modules and .git directories only — other ignore rules are NOT applied (dist/ and coverage/ are traversed). head_limit to cap results (default 100).",
     parameters: z.object({
       pattern: z.string().describe("glob 模式"),
       head_limit: z.number().int().positive().optional().describe("返回的最大条数（缺省 100）"),
@@ -477,7 +507,7 @@ function globTool(fs: LocalFs): Tool {
 function grepTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__grep",
-    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.",
+    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.\nFiles over 1MB are skipped; matches are capped at 200 (truncated with a note — narrow the pattern).",
     parameters: z.object({
       pattern: z.string().describe("JavaScript 正则"),
       output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
@@ -490,7 +520,7 @@ function grepTool(fs: LocalFs): Tool {
         approvalRule: "tool-fs__grep",
         execute: async () => {
           try {
-            const matches = await fs.grepMatches(pattern);
+            const { matches, truncated } = await fs.grepMatches(pattern);
             let body: string;
             if (output_mode === "files_with_matches") {
               body = [...new Set(matches.map((m) => m.file))].join("\n");
@@ -501,7 +531,11 @@ function grepTool(fs: LocalFs): Tool {
             } else {
               body = matches.map((m) => `${m.file}:${m.lineNo}:${m.text}`).join("\n");
             }
-            return { output: body !== "" ? body : "（无匹配）", isError: false };
+            // MB-09：命中达上限时的截断标注（truncated ⇒ body 必非空；count/files 模式的数字同样基于截断集）
+            const note = truncated
+              ? `\n(命中过多：已达 ${GREP_MAX_MATCHES} 条上限，仅保留先扫到的部分——请收窄 pattern 或改用更精确的定位)`
+              : "";
+            return { output: (body !== "" ? body : "（无匹配）") + note, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
@@ -514,7 +548,7 @@ function grepTool(fs: LocalFs): Tool {
 export default defineModule({
   name: "tool-fs",
   version: "0.1.0",
-  description: "本地文件系统工具（read/write/edit）与 fs 能力",
+  description: "本地文件系统工具（read/write/edit/glob/grep）与 fs 能力",
   api: 1,
   provides: [FS],
   uses: ["fs.read", "fs.write"],

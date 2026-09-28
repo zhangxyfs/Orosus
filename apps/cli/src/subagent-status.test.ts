@@ -82,6 +82,38 @@ describe("agent 组显示（2026-09-27 用户拍板格式——kimi agent-group 
   });
 });
 
+describe("CR-10 三小修：非法日期段跳过 / 同级判定按 parentId / 标题按码点截断", () => {
+  it("CR-10① 非法日期串：子行时长段跳过（不显「NaN时NaN分」）；首行括号段总时长同理", () => {
+    const running = agentGroupLines([T({ startedAt: "not-a-date" })], NOW);
+    expect(stripAnsi(running[1]!)).toBe("  └─  explore 调研竞品  glm-4.7·high·5次·3.2k·运行中"); // 时长段缺失、其余段原样
+    expect(running.join("")).not.toContain("NaN");
+    const done = agentGroupLines([T({ status: "completed", endedAt: "corrupt" })], NOW);
+    expect(stripAnsi(done[0]!)).toBe("● 1 explore agents 完成（5 工具调用 · 3.2k 词元）"); // 总时长段跳过
+    expect(done.join("")).not.toContain("NaN");
+  });
+
+  it("CR-10② 两父各一孙：前父的孙也是其父末孙 → └─（旧判定按显示序误画 ├─）", () => {
+    const lines = agentGroupLines([
+      T({ id: "aaaa1111", status: "running" }),
+      T({ id: "cccc3333", depth: 2, parentId: "aaaa1111", label: "孙一", status: "running" }),
+      T({ id: "bbbb2222", label: "另一个父", status: "running" }),
+      T({ id: "dddd4444", depth: 2, parentId: "bbbb2222", label: "孙二", status: "running" }),
+    ], NOW);
+    const plain = lines.map(stripAnsi);
+    expect(plain[2]!).toContain("│  └─  explore 孙一"); // 同父无后续孙 → └─；父行后还有父级 → │ 续接
+    expect(plain[2]!).not.toContain("├─"); // 旧缺陷形态：│  ├─（把别父的孙当同级行）
+    expect(plain[4]!).toContain("   └─  explore 孙二"); // 末父的末孙：└─ + 空续接（无 │）
+  });
+
+  it("CR-10③ 标题截断按码点：代理对不切断；恰 20 码点的含 emoji 标题不截断", () => {
+    const keep = agentGroupLines([T({ label: `${"a".repeat(19)}🚀` })], NOW); // 20 码点 = 上限内
+    // 整行精确钉：旧 slice(0,20) 会把 🚀 切成孤立高位代理（终端显示替换符），整行必不相等
+    expect(stripAnsi(keep[1]!)).toBe(`  └─  explore ${"a".repeat(19)}🚀  glm-4.7·high·5次·9秒·3.2k·运行中`);
+    const cut = agentGroupLines([T({ label: `${"b".repeat(19)}🚀尾` })], NOW); // 21 码点 → 截到 20
+    expect(stripAnsi(cut[1]!)).toContain(`${"b".repeat(19)}🚀…`); // emoji 整体保留 + 省略号
+  });
+});
+
 describe("输入行计数 T13（只后台运行中；为零整段消失；青绿色）", () => {
   it("㊽ backgroundRunningCount 口径：只数后台·运行中——前台/排队/已结束都不算", () => {
     expect(backgroundRunningCount([

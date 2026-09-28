@@ -82,9 +82,19 @@ export type PopupLayout =
       marginBottom?: number;
     };
 
+/** PopupKey.run 的关窗哨兵字面量（CT-08 钉）：值恒为 "close"——宿主判定统一引用本常量，与宿主现行
+ *  `r === "close"` 字面量判定同值兼容（宿主不引用也不破）。改值属破坏性变更：须同步全部宿主判定处。 */
+export const POPUP_CLOSE = "close";
+
+/** PopupKey.run 的返回三态（CT-08 收窄命名）：POPUP_CLOSE 哨兵居前（= 关窗）| string（窗内容整体
+ *  替换并滚回顶部）| void（内容不动）。注意：TS 的 string 会吸收 "close" 字面量——类型层排除不了
+ *  「内容恰为 close」的串（哨兵约束存在于本注与宿主 === 判定，返回该串同样关窗，模块作者勿以它为正文）；
+ *  判别联合改造（如 string | { close: true }）属破坏性变更，留待未来 API 修订与宿主同步迁移。 */
+export type PopupRunResult = typeof POPUP_CLOSE | string | void;
+
 /** 弹窗自定义键：键名用 keymatch 规范化名（"r"、"alt+r"、"pageUp"）。绝对禁绑 = Esc、Ctrl+C/V/A/S/Z
  *  与宿主全局键（Ctrl+T/E/O 等）——注册即拒并记模块日志。run 三种返回：返回字符串 = 窗内容整体替换
- *  并滚回顶部（其中字符串恰为 "close" = 关窗）；无返回 = 内容不动。
+ *  并滚回顶部（其中字符串恰为 "close" = 关窗，见 PopupRunResult——哨兵占内容空间的已知脆弱点）；无返回 = 内容不动。
  *
  * @example
  * ```ts
@@ -96,16 +106,14 @@ export type PopupLayout =
 export interface PopupKey {
   /** 键位显示名（窗底部提示行展示，如「刷新」）；空串也合法（不显示）。 */
   label: string;
-  /** 按键动作。返回字符串 = 窗内容整体替换并滚回顶部；恰好返回 "close" = 关窗；无返回 = 内容不动。抛错 = 黄字提示且窗保留。 */
-  run(): string | "close" | void;
+  /** 按键动作。返回字符串 = 窗内容整体替换并滚回顶部；恰好返回 "close"（= POPUP_CLOSE）= 关窗；无返回 = 内容不动。抛错 = 黄字提示且窗保留。 */
+  run(): PopupRunResult;
 }
 
-/** 命令交互 UI 抽象（D35）：ask/choose/confirm——宿主注入 readline 实现；无头环境注入拒绝式
- *  （三方法抛"无交互环境"→ 命令带内失败，fail-closed）。多级菜单 = 命令内嵌套调用。
- *
- 命令交互 UI 抽象（D35）：命令处理器第二参 + waterfall 监听者共用。宿主注入实现——
- *  全屏 = 浮层/接管输入行；行模式 = readline；无头 = 拒绝式（核心四法抛"无交互环境"，fail-closed；
- *  m5 可选口缺省不存在，判空降级）。Esc 取消统一映射「已取消（Esc）」带内抛错穿透处理器。
+/** 命令交互 UI 抽象（D35）：命令处理器第二参 + waterfall 监听者共用。宿主注入实现——全屏 = 浮层/
+ *  接管输入行；行模式 = readline；无头 = 拒绝式（核心四法 ask/askSecret/choose/confirm 抛
+ *  "无交互环境"→ 命令带内失败，fail-closed；m5 可选口缺省不存在，判空降级）。多级菜单 = 命令内
+ *  嵌套调用。Esc 取消统一映射「已取消（Esc）」带内抛错穿透处理器。
  *
  * @example
  * ```ts
@@ -167,11 +175,10 @@ export interface CommandUi {
    *  @param opts.keys - 自定义键（键名 → 动作）；键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"），保留键注册即拒。
    *  @param opts.owner - 内核自动标注的模块名（@internal——模块勿自填）。
    *
-   *  @example
-   *  ```ts
-   *  ui.viewText?.("便签", notes.join("
-"), { layout: { height: 20, marginTop: 2 } });
-   *  ```
+ *  @example
+ *  ```ts
+ *  ui.viewText?.("便签", notes.join("\n"), { layout: { height: 20, marginTop: 2 } });
+ *  ```
    */
   viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
@@ -337,11 +344,13 @@ export interface LlmPort {
    * @param req.messages - 对话消息（ModelMessage 形状）。
    * @param req.signal - 取消信号（中断流；可省）。
    * @param req.maxTokens - 输出上限 token 数（正整数；可省 = 不限）。
-   * @param req.model - 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型）。
+   * @param req.model - 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型。切分口径（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id——嵌套 id 如 openai/gpt-4o 原样保留，与核心 parseModel 同口径）。
    * @param req.webSearch - 声明服务端原生搜索（端点不支持时被忽略；可省）。
    */
   stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>;
-  /** 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式）。
+  /** 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式；
+   *  切分口径同 stream.model（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id，嵌套 id 不截断——
+   *  显示层取尾段会丢前缀，消费方须按此口径切分）。
    *  可选——无一槽提供目录能力时读得 undefined（显式 | undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法），
    *  消费方据此隐藏模型选择项。 */
   listModels?: (() => Promise<string[]>) | undefined;
@@ -390,7 +399,7 @@ export type Dependency = string | { capability: string; optional?: boolean };
 export interface SettingsService {
   /** 切当前模型（qualified 全形 "provider/model"；与 /model 命令同源写路径：运行期覆盖 + 写盘）。 */
   /**
-   * @param qualified - 模型全形 "provider/model"（提供商名与模型名斜杠分隔；必须是已配置的提供商名，未知名 reject）。
+   * @param qualified - 模型全形 "provider/model"（提供商名与模型名斜杠分隔，首个 "/" 前 = 提供商名、其余整体 = 模型 id（CT-02 钉，嵌套 id 原样保留）；必须是已配置的提供商名，未知名 reject）。
    */
   setModel(qualified: string): Promise<void>;
   /** 切思考档位（与 /effort 同源：三级覆盖写入，"auto" = 回目录默认）。 */
@@ -478,7 +487,7 @@ export interface HostSnapshot {
  */
 export interface HostInfo {
   /**
-   * 拿当前快照（无订阅机制——要新值再调一次；善个异步事件投影）。返回 Promise；同步 getter 的标准接法 = 模块自己缓存。
+   * 拿当前快照（无订阅机制——要新值再调一次；是个异步事件投影）。返回 Promise；同步 getter 的标准接法 = 模块自己缓存。
    * @returns 十字段运行状态快照（见 HostSnapshot；busy 不在快照——走 turn/start·turn/end 事件自推）。
    */
   current(): Promise<HostSnapshot>;
@@ -537,7 +546,7 @@ export interface SubagentSpawnRequest {
   allowedTools?: string[];
   /** 工种工具黑名单（从主对话工具面里再减掉）。 */
   disallowedTools?: string[];
-  /** 工种文件声明的模型（provider/model 限定形或裸名）；三来源之一：settings 配置 > 工种 > 父。 */
+  /** 工种文件声明的模型（provider/model 限定形——首个 "/" 前 = 提供商名、其余整体 = 模型 id（CT-02 钉）——或裸名）；三来源之一：settings 配置 > 工种 > 父。 */
   model?: string;
   /** 轮数上限（保险丝）：-1 = 不限（仅时长兜底）；正整数钳位 [1, 200]。解析序 settings > 工种 > 默认 100。 */
   maxTurns?: number;
@@ -692,7 +701,7 @@ export interface ModuleContext<C = unknown> {
   /** 诊断日志（五级别同形状；码表纪律见 Logger）。 */
   readonly log: Logger;
   /** 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。
-   *  无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
+   *  无头环境为拒绝式实现（核心四法 ask/askSecret/choose/confirm 抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
   readonly ui: CommandUi;
   /** 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。
    *  compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。
@@ -1004,7 +1013,7 @@ export interface ModuleDefinition<C = unknown> {
   logEvents?: string[];
   /**
    * 激活体（拓扑序调用一次；抛错 = 模块降级不阻断启动）。
-   * @param ctx - 模块上下文（见 ModuleContext；注册/订阅/服务都在这里；activate 期 provider 可能未装酅——llm 只在运行期调）。
+   * @param ctx - 模块上下文（见 ModuleContext；注册/订阅/服务都在这里；activate 期 provider 可能未装配——llm 只在运行期调）。
    * @returns 可选 { dispose } 卸载清理钩子（注册物自动拆除——dispose 管注册之外的资源）。
    */
   activate(ctx: ModuleContext<C>): void | { dispose?: Disposer } | Promise<void | { dispose?: Disposer }>;

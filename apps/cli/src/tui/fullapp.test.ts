@@ -54,7 +54,7 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Par
 		rows: () => rows,
 		doc: () => docLines,
 		submit: (t) => submitted.push(t),
-		requestExit: () => actions.push("exit"),
+		// CTU-11：requestExit 死接口已三方删除（fullapp.ts 声明 + main.ts 实现 + 本桩）
 		requestCancel: () => actions.push("cancel"),
 		queueItems: () => [...queue],
 		recallQueued: () => queue.pop(),
@@ -1810,6 +1810,8 @@ describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定
 		expect(actions).toEqual(["cancel", "stopall"]); // 两件都做、顺序 = 停生成先
 		app.stop();
 	});
+});
+
 describe("浮层期硬件光标隐藏（2026-09-27 用户走查：子代理查看窗里浮着个光标——浮层是字符层盖不住物理光标）", () => {
 	it("view/pick/dialog 浮层在位时 placeCursor 写隐藏序列（?25l）；ask 输入行接管与斜杠菜单期仍显示（?25h）", async () => {
 		const { app, input, output } = rig();
@@ -2653,4 +2655,213 @@ describe("选区切片消费方（CTW-03 回归钉 2026-09-28——sliceByColumn
 	});
 });
 
+describe("查看窗自定义键整窗替换脱钉（CTU-06 回归钉 2026-09-28——bottom 窗 pinned 每帧把 scroll 钳回末页：替换写 scroll=0 不清 pinned 即被否决，「滚回顶部」承诺落空。键盘/滚轮/自动滚三路径都有「落地脱钉」，唯自定义键路径漏）", () => {
+	it("bottom 窗自定义键返回新文本：替换后回顶（首行可见、末页不可见——旧实现仍贴底）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		const oldText = Array.from({ length: 50 }, (_, i) => `旧行${i + 1}`).join("\n");
+		const fresh = ["首行甲", ...Array.from({ length: 40 }, (_, i) => `中行${i}`), "末行乙"].join("\n");
+		app.viewText("贴底窗", oldText, { bottom: true, keys: { r: { label: "刷新", run: () => fresh } } });
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("旧行50"); // pinned 初值贴底——末页可见
+		input.emit("data", "r"); // 自定义键整窗替换（新文本同样超一页——两态可区分）
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("首行甲"); // 回顶（scroll=0 不再被 pinned 每帧钳回末页）
+		expect(b).not.toContain("末行乙"); // 旧实现：替换后仍贴底——首行不可见、末行可见
+		app.stop();
+	});
+});
+
+describe("promptInput 草稿恢复对称（CTU-07 回归钉 2026-09-28——Esc 取消恢复接管前草稿、Enter 结算却清空：busy 期答完模块询问回来草稿无声消失。统一为两路径都恢复）", () => {
+	it("① Enter 提交答案后接管前草稿回输入框（旧实现此处为空串）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "正在写的草稿");
+		await flush();
+		const answered = app.promptInput("补充理由", false);
+		await flush();
+		expect(app.stateRef.input).toBe(""); // 接管期清空（答案输入位）
+		input.emit("data", "答");
+		await flush();
+		input.emit("data", "\r"); // Enter 结算
+		await flush();
+		await expect(answered).resolves.toBe("答");
+		expect(app.stateRef.input).toBe("正在写的草稿"); // 草稿恢复（与 Esc 对称）
+		app.stop();
+	});
+	it("② Esc 取消恢复草稿（既有行为——钉住不回归）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "草稿X");
+		await flush();
+		const canceled = app.promptInput("问", false);
+		await flush();
+		input.emit("data", "\x1b");
+		await flush();
+		await expect(canceled).resolves.toBeUndefined();
+		expect(app.stateRef.input).toBe("草稿X");
+		app.stop();
+	});
+});
+
+describe("pickOverlay 重复文本项索引（CTU-08 回归钉 2026-09-28——Enter 结算 indexOf 按值回查拿首个同值项而非实际选中项；choose 是模块契约面、契约未禁止重复项。修复 = 过滤携带原始索引按引用结算）", () => {
+	it("① 两同值项：↓ 到第二项 Enter → resolve 1（旧实现恒 0）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		const picked = app.pickOverlay("选", ["同值", "同值"]);
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 第二项
+		await flush();
+		input.emit("data", "\r");
+		await expect(picked).resolves.toBe(1);
+		app.stop();
+	});
+	it("② 过滤态同理（≥12 项启用过滤——过滤后索引仍指原清单位次）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		const items = ["甲", ...Array.from({ length: 10 }, (_, i) => `备${i}`), "甲"]; // 12 项 → 过滤激活
+		const picked = app.pickOverlay("选", items);
+		await flush();
+		input.emit("data", "甲"); // 过滤串
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓ 第二个甲（原索引 11）
+		await flush();
+		input.emit("data", "\r");
+		await expect(picked).resolves.toBe(11); // 旧实现：indexOf("甲") 恒回 0
+		app.stop();
+	});
+});
+
+describe("弹窗/面板标题与模块名源头截断（CTU-09 回归钉 2026-09-28——模块/用户供给的超长标题与模块名原靠 padToWidth 兜底，右框角 ╮ 与行尾状态字被切；七个拼行点源头 visibleWidth 截断）", () => {
+	/** 顶框行判据：剥 ANSI 后显示宽 ≤ 框宽且右端收 ╮（截断发生在标题内，不在框角）。 */
+	const topOk = (line: string, w: number): boolean => visibleWidth(stripAnsi(line)) <= w && stripAnsi(line).endsWith("╮");
+	it("① viewText 超长标题：顶框行宽收在框宽内（诊断二级「模块诊断 · 名」同路）", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.viewText("题".repeat(200), "内容");
+		await flush();
+		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
+		const ov = (app as unknown as { buildViewOverlay(pu: unknown): { lines: string[]; width: number } }).buildViewOverlay(pu);
+		expect(topOk(ov.lines[0]!, ov.width)).toBe(true); // 旧实现：顶框行 ≈ 207 列远超 79
+		app.stop();
+	});
+	it("② 控件窗超长标题同款", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.openDialog({ title: "题".repeat(200), widgets: [{ id: "q", kind: "input" }] });
+		await flush();
+		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
+		const ov = (app as unknown as { buildDialogOverlay(pu: unknown): { lines: string[]; width: number } }).buildDialogOverlay(pu);
+		expect(topOk(ov.lines[0]!, ov.width)).toBe(true);
+		app.stop();
+	});
+	it("③ pick 超长标题同款（过滤段在场）", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		const ov = (app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): { lines: string[]; width: number } })
+			.buildPickOverlay(60, 20, "题".repeat(200), ["a"], 0, "词");
+		expect(topOk(ov.lines[0]!, ov.width)).toBe(true);
+		app.stop();
+	});
+	it("④ 斜杠菜单二级超长命令名同款（overlayCmd 是用户输入）", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.stateRef.overlayOpen = true;
+		app.stateRef.overlayCmd = "/" + "题".repeat(100);
+		const ov = (app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[]; width: number } }).buildOverlay(60, 20);
+		expect(topOk(ov.lines[0]!, ov.width)).toBe(true);
+		app.stop();
+	});
+	it("⑤ 模块卡超长 title：panelBox 顶框行宽收在面板宽内", async () => {
+		const { app } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), cards: [{ area: "top", order: 0, title: "题".repeat(60), widgets: [] }] }),
+		});
+		app.start();
+		await flush();
+		app.stateRef.statePage = 2; // 翻到 top 模块卡页
+		const rows = (app as unknown as { statusRows(w: number, h: number): string[] }).statusRows(34, 16);
+		expect(visibleWidth(stripAnsi(rows[0]!))).toBeLessThanOrEqual(34); // 旧实现：标题 122 列把行顶爆
+		expect(stripAnsi(rows[0]!).endsWith("╮")).toBe(true);
+		app.stop();
+	});
+	it("⑥ 超长模块名：行尾状态字不被挤掉（截断发生在名字内）", async () => {
+		const { app } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), modules: [{ name: "巨".repeat(60), desc: "", state: "mounted" }] }),
+		});
+		app.start();
+		await flush();
+		const rows = (app as unknown as { statusRows(w: number, h: number): string[] }).statusRows(34, 16);
+		const row = rows.find((r) => stripAnsi(r).includes("巨"));
+		expect(row).toBeDefined();
+		expect(stripAnsi(row!)).toContain("已挂载"); // 旧实现：120 列名字把状态字顶出内宽、padToWidth 截掉
+		app.stop();
+	});
+});
+
+describe("控件窗 input 编辑器代理对（CTU-10 回归钉 2026-09-28——退格/左右移原按 UTF-16 码元步进，非 BMP 字符被割裂成孤立代理；对齐主编辑器整对处理）", () => {
+	type DialogPu = { inputById: Record<string, { text: string; cursor: number }> };
+	const puOf = (app: FullApp): DialogPu => (app as unknown as { pendingUi?: DialogPu }).pendingUi!;
+	it("① 退格整对删 emoji：事件回传无孤立高代理", async () => {
+		const events: string[] = [];
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.openDialog({
+			title: "表单",
+			widgets: [{ id: "q", kind: "input" }],
+			onEvent: (e) => { if (e.type === "input") events.push(JSON.stringify(e.text)); },
+		});
+		await flush();
+		puOf(app).inputById["q"] = { text: "a😀", cursor: 3 };
+		input.emit("data", "\x7f"); // 退格删 emoji
+		await flush();
+		expect(events).toEqual([JSON.stringify("a")]); // 旧实现：text 变 "a\ud83d"（孤立高代理）
+		app.stop();
+	});
+	it("② 左右移按码点跨越代理对（光标不落 emoji 内部）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		app.openDialog({ title: "表单", widgets: [{ id: "q", kind: "input" }] });
+		await flush();
+		puOf(app).inputById["q"] = { text: "a😀b", cursor: 4 };
+		input.emit("data", "\x1b[D"); // left：b 前 → 3
+		input.emit("data", "\x1b[D"); // left：跨过 emoji → 1（旧实现：2 落进代理对中间）
+		await flush();
+		expect(puOf(app).inputById["q"]!.cursor).toBe(1);
+		puOf(app).inputById["q"]!.cursor = 1;
+		input.emit("data", "\x1b[C"); // right：跨过 emoji → 3（旧实现：2 落进中间）
+		await flush();
+		expect(puOf(app).inputById["q"]!.cursor).toBe(3);
+		app.stop();
+	});
+});
+
+describe("renderFrame 帧级错误边界（CTU-12 回归钉 2026-09-28——主渲染帧每帧现调宿主回调 io.doc/panelData/queueItems 无防护：异常沿 scheduler 定时器/nextTick 逃逸 uncaughtException 杀进程。对照 fireDialogEvent/renderModuleCard 全局约束 4 同款降级为帧级）", () => {
+	it("io.doc() 抛错：logWarn + 占位错误帧，进程不死、宿主恢复后下一帧即回", async () => {
+		const logs: string[] = [];
+		let boom = true;
+		const { app, output } = rig(["恢复后的内容"], 100, 30, {
+			doc: () => { if (boom) throw new Error("宿主 doc 炸了"); return ["恢复后的内容"]; },
+			logWarn: (code) => logs.push(code),
+		});
+		app.start();
+		await flush(); // 首帧即抛（immediate 渲染路径）
+		expect(logs).toContain("tui.render.frame-error");
+		expect(stripAnsi(output.buf)).toContain("渲染出错"); // 占位帧（旧实现：uncaughtException 直接炸测试进程）
+		boom = false;
+		await flush(1100); // 1s 心跳重绘驱动下一帧——宿主恢复即回
+		expect(stripAnsi(output.buf)).toContain("恢复后的内容");
+		app.stop();
+	});
 });

@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { parse, stringify } from "smol-toml";
 import { trustModule, loadTrustStore, checkTrust } from "@orosus/core";
+import { setModuleEnabledInConfig } from "./module-toggle.ts";
 
 /** CLI module 子命令（§8.6）：enable/disable/list/trust——配置与信任的写器（非交互入口，§8.5 确认门的命令式路径）。 */
 export interface ModuleCmdIo {
@@ -8,11 +7,6 @@ export interface ModuleCmdIo {
   trustFile: string;
   discovered: { name: string; root: string; entryHash: string; layer?: "user" | "project" }[];
   out(line: string): void;
-}
-
-function readConfig(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  return parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
 }
 
 export function isModuleSubcommand(argv: string[]): boolean {
@@ -60,12 +54,11 @@ export async function runModuleSubcommand(argv: string[], io: ModuleCmdIo): Prom
       io.out(`用法: orosus module ${cmd} <name>`);
       return 1;
     }
-    const config = readConfig(io.configPath);
-    const section = (config[name] as Record<string, unknown> | undefined) ?? {};
-    section["enabled"] = cmd === "enable";
-    config[name] = section;
-    writeFileSync(io.configPath, stringify(config), "utf8");
-    io.out(`${name} 已${cmd === "enable" ? "启用" : "禁用"}（重启或 /reload 生效；配置已全量重写，注释已移除）`);
+    // CM-14（2026-09-28 code review）：写盘迁 module-toggle.ts 的行级节区感知写——与 /permission、
+    // 模块面板热插拔同一件（旧 parse→stringify 全量重写洗掉用户注释与键序，输出文案自认，与仓内
+    // 「行级写 TOML 必须节区感知」铁律两口径）。语义不变：[name] 节内 enabled 键改/插，节外一概不动
+    setModuleEnabledInConfig(name, cmd === "enable", io.configPath);
+    io.out(`${name} 已${cmd === "enable" ? "启用" : "禁用"}（重启或 /reload 生效；行级写——注释与键序保留）`);
     return 0;
   }
 

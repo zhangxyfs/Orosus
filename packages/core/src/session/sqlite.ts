@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { isSafeSessionId } from "./dir.ts";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 
 type NodeSqlite = typeof import("node:sqlite");
@@ -24,11 +25,49 @@ export function setSqliteProbeForTest(p?: () => boolean): void {
   probe = p ?? defaultProbe;
 }
 
-/** 开库（会话树批 T8 起树快照读法复用——tree.ts 按主文件名分派到这里）。 */
-export function openDatabase(file: string): import("node:sqlite").DatabaseSync {
+/** 开库（会话树批 T8 起树快照读法复用——tree.ts 按主文件名分派到这里）。
+ *  CS-09（2026-09-28 code review）：opts.readOnly 供只读消费方（树快照读头/用量聚合）避免读写开库的
+ *  -wal/-shm 创建与恢复等写副作用；缺省保持读写（store/索引自身的开法不变）。 */
+export function openDatabase(file: string, opts?: { readOnly?: boolean }): import("node:sqlite").DatabaseSync {
   const require = createRequire(import.meta.url);
   const mod = require("node:sqlite") as NodeSqlite;
-  return new mod.DatabaseSync(file);
+  // Node 24 校验：options 显式传 undefined 也报「must be an object」——读写开不传第二参
+  return opts?.readOnly === true ? new mod.DatabaseSync(file, { readOnly: true }) : new mod.DatabaseSync(file);
+}
+
+/** CS-09（2026-09-28 code review）：只读意图的会话库打开——busy_timeout 对齐 SqliteSessionStore（5000ms；
+ *  旧 readSqliteHead 裸开库无超时，树刷新撞上活实例 checkpoint/恢复窗口的 SQLITE_BUSY → 该节点静默缺席）。
+ *  readOnly 优先，探针查询逼出打开期错误（WAL 无 -shm 时只读开不了等）后回退读写开；任何失败 → undefined
+ *  （调用方按「该会话跳过」处理——与树快照坏文件跳过同族容错）。 */
+export function openSessionDbReadOnly(file: string): import("node:sqlite").DatabaseSync | undefined {
+  const withTimeout = (db: import("node:sqlite").DatabaseSync): import("node:sqlite").DatabaseSync => {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    return db;
+  };
+  try {
+    const db = openDatabase(file, { readOnly: true });
+    try {
+      withTimeout(db);
+      db.prepare("SELECT count(*) FROM sqlite_schema").get();
+      return db;
+    } catch {
+      try { db.close(); } catch { /* 已坏 */ }
+    }
+  } catch { /* readOnly 开不可用（旧 Node / WAL 只读限制）——回退读写开 */ }
+  try {
+    return withTimeout(openDatabase(file));
+  } catch {
+    return undefined;
+  }
+}
+
+/** CS-08（2026-09-28 code review）：删库连带 -wal/-shm 伴生文件（SQLite 官方要求删库连同 WAL 一起——
+ *  旧实现只删主库，残留 WAL 可能被重建库按 salt 链应用、混入上一化身的陈旧行）。force：不存在不炸；
+ *  单个删不掉（占用等）不炸其余——调用方自有兜底。 */
+export function removeSqliteDbFiles(file: string): void {
+  for (const f of [file, `${file}-wal`, `${file}-shm`]) {
+    try { rmSync(f, { force: true }); } catch { /* 删不掉——fail-open 兜底在调用方 */ }
+  }
 }
 
 /** SQLite 后端（§7.2，D42）：Node 内置 node:sqlite、零原生依赖；WAL；同步事务（无写队列——
@@ -45,7 +84,11 @@ export class SqliteSessionStore implements SessionStore {
       throw new Error("SQLite 后端需要 Node ≥22.5 的 node:sqlite（当前运行时不可用）——请用默认 jsonl 后端（sessionStore 配置，§7.2/D42）");
     }
     mkdirSync(opts.dir, { recursive: true }); // 桶目录（D46 既有语义）
-    this.sessionId = opts.sessionId ?? newId("s");
+    const sid = opts.sessionId ?? newId("s");
+    // CS-12（2026-09-28 code review）：sessionId 直接进 join(this.dir, sid, "agents", "session.sqlite")——
+    // 旧实现无格式校验，"../escaped" 类 id 构造即在桶外建目录建库（--resume 旗标无存在性闸直透此处）。不合形响亮抛错。
+    if (!isSafeSessionId(sid)) throw new Error(`会话 id 非法：${JSON.stringify(sid)}（只许 [A-Za-z0-9._-] 且首字符为字母数字——防桶逃逸，CS-12）`);
+    this.sessionId = sid;
     // 会话树批 T3 目录化：每会话一目录——库文件落 <桶>/<sid>/agents/session.sqlite（决策点 4/16，与 jsonl 对称）。
     // 构造期直建（本后端无懒建语义）；WAL 伴生 -wal/-shm 文件天然收进会话目录。目录权限 0o700（决策点 5，Windows 跳过）。
     const sessionDir = join(opts.dir, this.sessionId, "agents");

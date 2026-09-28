@@ -7,7 +7,7 @@ import { lex } from "./lex.ts";
 import { inlineTokens, stylePrefixOf, type InlineStyleContext } from "./inline.ts";
 import { highlightLines } from "./highlight.ts";
 import { renderLatex } from "./latex.ts";
-import { renderTable } from "./table.ts";
+import { renderTable, widestLineWidth } from "./table.ts";
 
 /** 渲染期可选项（mdpipe 批 T1）：transient = 流式尾段形态——代码块跳过高亮（纯文本行）。 */
 export interface RenderOpts {
@@ -33,8 +33,9 @@ export function renderBlock(
 			const text = inlineTokens(h.tokens ?? [], headingCtx);
 			if (h.depth <= 2) {
 				out.push(theme.bold(theme.fg("accent", text)));
-				// CJK 下划线按显示宽（缺陷⑥修复点——repeat 用可见宽非 UTF-16 长；前缀序列零宽）
-				out.push(theme.dim((h.depth === 1 ? "═" : "─").repeat(Math.max(1, visibleWidth(text)))));
+				// CJK 下划线按显示宽（缺陷⑥修复点——repeat 用可见宽非 UTF-16 长；前缀序列零宽）；
+				// CMD-06：多行标题（setext 跨行/行内公式产 \n）按最宽行计宽，非整串累加
+				out.push(theme.dim((h.depth === 1 ? "═" : "─").repeat(Math.max(1, widestLineWidth(text)))));
 			} else {
 				// h3+：加粗 info、不带字面 ###（缺陷③修复点）
 				out.push(theme.bold(theme.fg("info", text)));
@@ -53,7 +54,10 @@ export function renderBlock(
 			const l = t as Tokens.List;
 			const pad = "  ".repeat(depth);
 			l.items.forEach((item, idx) => {
-				const bullet = l.ordered ? `${(l.start || 1) + idx}. ` : "• ";
+				// CMD-07：start 为数字即保留（marked 对 "0." 解析 start=0——合法序号；旧 `|| 1`
+				// 把 0 起始改写成 1），缺省（marked 给 ""）才兜底 1
+				const start = typeof l.start === "number" ? l.start : 1;
+				const bullet = l.ordered ? `${start + idx}. ` : "• ";
 				const task = item.task ? `[${item.checked ? "x" : " "}] ` : "";
 				const marker = bullet + task;
 				const firstPrefix = `${pad}${theme.fg("accent", marker)}`;
@@ -62,8 +66,19 @@ export function renderBlock(
 				const sub: string[] = [];
 				for (const tok of item.tokens) renderBlock(tok, sub, depth + 1, itemWidth, opts, ctx);
 				let first = true;
+				let gap = false;
 				for (const x of sub) {
-					if (x === "") continue;
+					// CMD-08：项内块间空行透传为贴 continuationPrefix 的空物理行（与顶层段落
+					// 口径一致——旧 continue 整体丢弃使松散项多段落视觉粘连）；首块前/末块后
+					// 的空行不产生（项间分隔由列表自身负责）
+					if (x === "") {
+						if (!first) gap = true;
+						continue;
+					}
+					if (gap) {
+						out.push(continuationPrefix);
+						gap = false;
+					}
 					for (const phys of wrapText(x, itemWidth)) {
 						out.push(first ? `${firstPrefix}${phys}` : `${continuationPrefix}${phys}`);
 						first = false;
@@ -98,10 +113,23 @@ export function renderBlock(
 			};
 			const sub: string[] = [];
 			for (const tok of (t as Tokens.Blockquote).tokens) renderBlock(tok, sub, depth, Math.max(1, width - 2), opts, quoteCtx);
-			for (const line of sub.filter((x) => x !== "")) {
+			// CMD-08：引用内块间空行透传为 ▎ 前缀空行（与顶层段落口径一致——旧 filter 整体
+			// 丢弃使 `> a\n>\n> b` 渲染成相邻两行）；首块前/末块后的空行不产生
+			let quoted = false;
+			let gap = false;
+			for (const line of sub) {
+				if (line === "") {
+					if (quoted) gap = true;
+					continue;
+				}
+				if (gap) {
+					out.push(theme.fg("muted", "▎ "));
+					gap = false;
+				}
 				for (const phys of wrapText(line, Math.max(1, width - 2))) {
 					out.push(theme.fg("muted", `▎ ${phys}`));
 				}
+				quoted = true;
 			}
 			out.push("");
 			break;

@@ -22,7 +22,7 @@ accesses: [Access.fsRead("/tmp/a.txt"), Access.network("api.example.com")]
 
 ## Access（常量）
 
-Access 四形态的便捷构造器（与上方联合类型同名导出。
+Access 四形态的便捷构造器（与上方联合类型同名导出）。
 
 ```ts
 export const Access =
@@ -102,7 +102,7 @@ export interface Tool { … }
 | `label?` | `label?: string` | 人类可读显示名（2026-09-24 用户拍板）：消息窗口工具行优先呈现（如 "Web Search"）—— 模型面永远用 name（调用/审批/配置不受影响）；缺省 = 宿主剥 <module>__ 前缀现算（旧行为）。 |
 | `deferred?` | `deferred?: boolean` | 按需加载标记（M4-3 T4/D6）：真 = 该工具可被 ToolSearch 机制隐藏（schema 不进请求， 目录只知名+截断描述，经 tool-search__search 搜出并 reveal 后恢复）。tool-search 关态 = 标记 不生效（SW-26 联动规则——防「标了 deferred 却无 meta 工具可 reveal」永不可达组合）。 |
 | `searchHint?` | `searchHint?: string` | 搜索补充关键词（目录呈现与打分的补充语料——cc-haha searchHint 同款）。 |
-| `resolveExecution` | `resolveExecution(input: unknown): Promise<ToolExecution>` | 阶段一：声明（无副作用）——内核拿它跑并发调度与审批水缑；不许在此产生副作用。 |
+| `resolveExecution` | `resolveExecution(input: unknown): Promise<ToolExecution>` | 阶段一：声明（无副作用）——内核拿它跑并发调度与审批漏斗；不许在此产生副作用。 |
 
 **方法参数**
 

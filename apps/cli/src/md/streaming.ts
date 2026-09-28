@@ -38,15 +38,23 @@ function hasRefUse(t: Token): boolean {
 }
 
 /** 完整闭合的 code token 判定（围栏行 = 同围栏字符且长度 ≥ 开栏，允许尾随空白）。
- *  raw 必须含换行：光杆开栏行（EOF 处只有 ~~~）形状与闭合行相同，会误判。 */
+ *  CMD-04 修正（2026-09-28 code review）两点口径对齐 CommonMark/marked fences 规则：
+ *  ① 开栏与闭合行都允许 ≤3 空格行首缩进——原正则只认顶格，缩进围栏（列表项内代码块
+ *  常态）恒不满足「闭合即定格」，流式期间长尾 transient 每帧全尾重 lex；
+ *  ② 闭合行后的尾换行不改变判定——EOF 处 marked 把该换行并入 code raw（实测
+ *  `"```\ncode\n```\n"` 的 raw 含尾 \n，末行为空串恒不匹配），带尾换行的顶格围栏同样
+ *  须即刻冻结。光杆开栏守卫同步升级：剥尾换行后至少须有两行（EOF 处只有 ~~~ 时剥后
+ *  单行，其形状与闭合行相同会误判——原 includes("\n") 守卫的同一防御）。 */
 function isCompleteCode(t: Token): boolean {
 	if (t.type !== "code") return false;
 	const raw = (t as Tokens.Code).raw;
 	if (!raw.includes("\n")) return false;
-	const open = /^(`{3,}|~{3,})/.exec(raw)?.[1];
+	const lines = (raw.endsWith("\n") ? raw.slice(0, -1) : raw).split("\n");
+	if (lines.length < 2) return false;
+	const open = /^ {0,3}(`{3,}|~{3,})/.exec(lines[0]!)?.[1];
 	if (!open) return false;
-	const last = raw.split("\n").pop() ?? "";
-	return new RegExp(`^${open[0] === "`" ? "`" : "~"}{${open.length},}[ \\t]*$`).test(last);
+	const close = lines[lines.length - 1] ?? "";
+	return new RegExp(`^ {0,3}${open[0] === "`" ? "`" : "~"}{${open.length},}[ \\t]*$`).test(close);
 }
 
 /** 半截闭合围栏修剪（pi markdown.ts:146-169 移植，MIT）：末 token 为 code 且最后一行是开栏

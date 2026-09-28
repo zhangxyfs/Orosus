@@ -1,7 +1,36 @@
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
-import { scanBucketSessions } from "./dir.ts";
+import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
+import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
+
+/** CS-07（2026-09-28 code review）：追加路径的打开旗标——POSIX 用数值 O_APPEND|O_NOFOLLOW|O_CREAT
+ *  （§6.1「写入硬化三件套」(b) 承诺的 O_NOFOLLOW：字符串旗标表达不了，须数值组合；符号链接终点直接
+ *  ELOOP 拒开），Windows 无 O_NOFOLLOW 等价物、降级字符串 "a"（hardeningNote 同款审计口径）。纯函数
+ *  （platform 可注入）——跨平台可测。 */
+export function sessionAppendFlag(platform: NodeJS.Platform = process.platform): string | number {
+  if (platform === "win32") return "a";
+  return constants.O_APPEND | (constants.O_NOFOLLOW ?? 0) | constants.O_CREAT; // O_NOFOLLOW 个别宿主未定义 → 0（退化为 O_APPEND|O_CREAT，不炸）
+}
+
+/** CS-07：硬化追加——POSIX 数值旗标路径经 fd 写（appendFileSync 的 options.flag 类型只收字符串，数值
+ *  组合开不了），O_APPEND 保证偏移原子；mode 0o600 只在建文件时生效（活会话文件被外部删除后重建不再
+ *  落到 umask 缺省 0o644——硬化静默丢失的次级后果）。 */
+function appendHardened(file: string, data: string): void {
+  const flags = sessionAppendFlag();
+  if (typeof flags === "string") {
+    appendFileSync(file, data, { flag: flags, mode: 0o600 });
+    return;
+  }
+  const fd = openSync(file, flags, 0o600);
+  try {
+    const buf = Buffer.from(data, "utf8");
+    let off = 0;
+    while (off < buf.length) off += writeSync(fd, buf, off, buf.length - off);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** POSIX 专属硬化在 Windows 上降级（§6.1）：审计标记，不静默弱化。 */
 export function hardeningNote(): string | null {
@@ -29,7 +58,12 @@ function readLockPid(file: string): number | null {
   }
 }
 
-/** 崩溃修复（§6.1）：torn tail 截断 + 未闭合 turn 补 turn/end{kind:"interrupted"}。 */
+/** 崩溃修复（§6.1）：torn tail 截断 + 未闭合 turn 补 turn/end{kind:"interrupted"}。
+ *  CS-11（2026-09-28 code review）：修复动作改为「最小写面」——旧实现一旦要修就 writeFileSync 全文覆写，
+ *  覆写中途再崩溃丢整段会话历史；且 openSessionView 上溯祖先时每层构造 JsonlSessionStore 都触发修复性
+ *  改写（读意图写盘、暴露面随链长放大）。现在：torn tail 用 ftruncate 原地截断（字节偏移精确到坏行起点）、
+ *  补事件/补缺尾换行用 appendFileSync 追加——任何时刻崩溃只留下「更短但合法」的文件，下次 repairFile
+ *  幂等续修；好行的原始字节一概不动（旧覆写会顺带重排/重序列化，现为保真）。 */
 export function repairFile(path: string): { truncated: boolean; interruptedClosed: boolean } {
   if (!existsSync(path)) return { truncated: false, interruptedClosed: false };
   const raw = readFileSync(path, "utf8");
@@ -39,13 +73,18 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
   const lines = raw.split("\n");
   const good: string[] = [];
   let truncated = false;
+  let cutChar: number | undefined; // torn tail 起点（raw 内字符偏移；截断长度经 Buffer.byteLength 换算——中文等多字节内容 char≠byte）
+  let pos = 0;
   for (const line of lines) {
+    const start = pos;
+    pos += line.length + 1; // +1 = 行尾 "\n"（末行无换行则越界 1，仅在未被 break 命中时发生、无消费方）
     if (line === "") continue;
     try {
       JSON.parse(line);
       good.push(line);
     } catch {
       truncated = true;
+      cutChar = start;
       break; // torn tail：截掉该行及之后一切
     }
   }
@@ -53,6 +92,7 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
   const events = good.map((l) => JSON.parse(l) as SessionEvent);
   const lastTurnStart = events.map((e, i) => (e.type === "turn/start" ? i : -1)).filter((i) => i >= 0).pop();
   const hasTurnEndAfter = lastTurnStart !== undefined && events.slice(lastTurnStart).some((e) => e.type === "turn/end");
+  const synthesized: SessionEvent[] = [];
   if (lastTurnStart !== undefined && !hasTurnEndAfter) {
     // 未闭合 turn：先补 turn 内缺 tool/result 的 call（M3/D41——日志里不许出现无结果的 tool/call），
     // 再补 turn/end{interrupted}
@@ -74,8 +114,9 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
         isError: true,
       };
       events.push(last);
+      synthesized.push(last);
     }
-    events.push({
+    const end: SessionEvent = {
       v: 1,
       id: newId("e"),
       parentId: last.id,
@@ -83,12 +124,23 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
       ts: new Date().toISOString(),
       type: "turn/end",
       kind: "interrupted",
-    });
+    };
+    events.push(end);
+    synthesized.push(end);
     interruptedClosed = true;
   }
-  if (truncated || interruptedClosed || needsNewline) {
-    writeFileSync(path, events.map((e) => JSON.stringify(e)).join("\n") + "\n", { mode: 0o600 });
+  if (truncated && cutChar !== undefined) {
+    // 原地截断到坏行起点（该点之前必然以 "\n" 收尾或为文件头——截后文件保持行完整性）
+    const fd = openSync(path, "r+");
+    try {
+      ftruncateSync(fd, Buffer.byteLength(raw.slice(0, cutChar), "utf8"));
+    } finally {
+      closeSync(fd);
+    }
   }
+  const tail =
+    (!truncated && needsNewline ? "\n" : "") + synthesized.map((e) => JSON.stringify(e) + "\n").join("");
+  if (tail !== "") appendFileSync(path, tail);
   return { truncated, interruptedClosed };
 }
 
@@ -146,6 +198,36 @@ export function lastUsageTotal(events: SessionEvent[]): number | undefined {
   return undefined;
 }
 
+/** sqlite 兄弟会话的用量聚合（CS-14，2026-09-28 code review）：openSessionDbReadOnly 只读开库（busy_timeout
+ *  对齐 store、避免读路径写副作用），全量行走 usageDelta——与 jsonl 兄弟循环同口径（subagent-usage 双形态都计）。
+ *  fork 子体判定同 jsonl：首事件 header.parentSession 非空 = 子体整库跳过（lineage 以父计）。
+ *  库不可读/无 header/查询报错 = undefined（调用方跳过该会话，坏库不炸累计——torn-tail 跳行同族容错）。 */
+function sqliteSiblingUsage(file: string): { input: number; output: number; isForkChild: boolean } | undefined {
+  if (!sqliteAvailable()) return undefined;
+  const db = openSessionDbReadOnly(file);
+  if (db === undefined) return undefined;
+  try {
+    const headerRow = db.prepare("SELECT json FROM events WHERE type = 'session/header' ORDER BY seq LIMIT 1").get() as { json?: string } | undefined;
+    if (headerRow === undefined) return undefined; // 无 header = 非会话库/空库
+    const h = JSON.parse(String(headerRow.json)) as { parentSession?: unknown };
+    const isForkChild = h.parentSession !== null && h.parentSession !== undefined;
+    let input = 0;
+    let output = 0;
+    for (const row of db.prepare("SELECT json FROM events ORDER BY seq").all() as { json: string }[]) {
+      const d = usageDelta(JSON.parse(row.json) as SessionEvent);
+      if (d !== undefined) {
+        input += d.input;
+        output += d.output;
+      }
+    }
+    return { input, output, isForkChild };
+  } catch {
+    return undefined;
+  } finally {
+    try { db.close(); } catch { /* 已坏 */ }
+  }
+}
+
 /** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。
  *  会话树批 T3 目录化：每会话一目录——主文件落 <桶>/<sid>/agents/session.jsonl（决策点 4/16）。
  *  懒建语义保持（D46）：零 append 零落盘，连会话目录也不建；首写时递归建目录（0o700）+ 文件（0o600）。 */
@@ -166,8 +248,13 @@ export class JsonlSessionStore implements SessionStore {
   private lockHeld = false;
 
   constructor(opts: { dir: string; sessionId?: string }) {
+    const sid = opts.sessionId ?? newId("s");
+    // CS-12（2026-09-28 code review）：sessionId 直接进 join(this.dir, sid, "agents", "session.jsonl")——
+    // 旧实现无格式校验，"../escaped" 类 id 一次 append 即在桶外建目录与文件（--resume 旗标无存在性/格式闸
+    // 直透 makeStore 到此处，实测桶外逃逸）。不合形响亮抛错（真实 id 形态 s_<base32>/agents_<编号> 天然通过）。
+    if (!isSafeSessionId(sid)) throw new Error(`会话 id 非法：${JSON.stringify(sid)}（只许 [A-Za-z0-9._-] 且首字符为字母数字——防桶逃逸，CS-12）`);
     mkdirSync(opts.dir, { recursive: true }); // 桶目录构造期建（D46 既有语义——装配层保证桶在）
-    this.sessionId = opts.sessionId ?? newId("s");
+    this.sessionId = sid;
     this.dir = opts.dir;
     this.file = join(opts.dir, this.sessionId, "agents", "session.jsonl");
     this.lockFile = join(opts.dir, this.sessionId, "agents", "session.lock");
@@ -196,7 +283,10 @@ export class JsonlSessionStore implements SessionStore {
   private fileEnsured = false;
 
   /** 首写前懒建：会话目录 + agents/（0o700，含既有目录权限校正）→ 文件（0o600——构造期预建的权限硬化语义原样移到此处）。
-   *  CS-02 顺修：fileEnsured 在 mkdir/open 全部成功后才置位——旧实现先置位再建，一次失败后懒建被永久跳过、追加恒失败。 */
+   *  CS-02 顺修：fileEnsured 在 mkdir/open 全部成功后才置位——旧实现先置位再建，一次失败后懒建被永久跳过、追加恒失败。
+   *  CS-07 顺修：打开用 sessionAppendFlag（POSIX = O_APPEND|O_NOFOLLOW|O_CREAT——懒建/重建不再吃符号链接），
+   *  建成即 statSync 补记 dev/ino——旧实现只记构造期已存在的文件，懒建的新会话（多数会话）终身
+   *  devIno === null、drain 的替换校验恒假（§6.1 硬化承诺对新会话零覆盖）。 */
   private ensureFile(): void {
     if (this.fileEnsured) return;
     const sessionDir = join(this.dir, this.sessionId);
@@ -206,9 +296,13 @@ export class JsonlSessionStore implements SessionStore {
       chmodSync(agentsDir, 0o700);
       chmodSync(sessionDir, 0o700); // 既有目录权限校正（决策点 5——目录与文件同档硬化）
     }
-    const fd = openSync(this.file, "a", 0o600);
+    const fd = openSync(this.file, sessionAppendFlag(), 0o600);
     closeSync(fd);
-    if (process.platform !== "win32") chmodSync(this.file, 0o600);
+    if (process.platform !== "win32") {
+      chmodSync(this.file, 0o600);
+      const st = statSync(this.file);
+      this.devIno = `${st.dev}:${st.ino}`; // 懒建同样记录身份
+    }
     this.fileEnsured = true;
   }
 
@@ -310,7 +404,7 @@ export class JsonlSessionStore implements SessionStore {
       const st = statSync(this.file);
       if (`${st.dev}:${st.ino}` !== this.devIno) throw new Error("log file replaced (symlink attack?)");
     }
-    appendFileSync(this.file, this.buffer.join(""));
+    appendHardened(this.file, this.buffer.join("")); // CS-07：O_NOFOLLOW 数值旗标（POSIX）+ 重建兜底 mode 0o600
     this.buffer = [];
   }
 
@@ -339,9 +433,20 @@ export class JsonlSessionStore implements SessionStore {
       if (u.input > 0 || u.output > 0) sessions++;
     }
     const siblings = scanBucketSessions(this.dir)
-      .filter((e) => e.file.endsWith(".jsonl") && e.id !== this.sessionId) // 当前会话已按内存镜像计（或为 fork 子体跳过）
+      .filter((e) => e.id !== this.sessionId) // 当前会话已按内存镜像计（或为 fork 子体跳过）
       .toSorted((a, b) => a.id.localeCompare(b.id));
     for (const sibling of siblings) {
+      // CS-14（2026-09-28 code review）：旧 filter 只留 .jsonl——sessionStore 从 jsonl 切 sqlite 后同桶并存
+      // 两种后端（tree.test「混合后端同树共览」明确支持），/usage 项目累计静默丢掉全部 sqlite 会话。sqlite
+      // 兄弟走同口径聚合（usageDelta + fork 子体跳过），jsonl 兄弟走原逐行循环（torn tail 跳坏行）。
+      if (sibling.file.endsWith(".sqlite")) {
+        const agg = sqliteSiblingUsage(sibling.file);
+        if (agg === undefined || agg.isForkChild) continue; // 子体整库跳过——含 sessions 计数
+        input += agg.input;
+        output += agg.output;
+        if (agg.input > 0 || agg.output > 0) sessions++;
+        continue;
+      }
       let fileInput = 0;
       let fileOutput = 0;
       let isForkChild = false;

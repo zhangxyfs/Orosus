@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
@@ -111,16 +111,16 @@ describe("JobRegistry 后台作业注册表（M4-3 T3）", () => {
   it("⑤ kill → 进程树死 + done 置位 + 完成通知照发（含退出码）", async () => {
     const reg = new JobRegistry(dir);
     const job = reg.start(`node -e "setTimeout(()=>{},60000)"`);
-    expect(reg.kill(job.id)).toBe(true);
+    expect(reg.kill(job.id)).toEqual({ state: "killed" }); // MB-12：三态——活作业杀进程树
     await waitFor(() => job.done !== undefined);
     const notes = reg.drainNotifications();
     expect(notes).toHaveLength(1);
     expect(notes[0]!.text).toContain("已结束");
   });
 
-  it("⑥ kill 未知 id → false；readTail 未知 id → undefined", () => {
+  it("⑥ kill 未知 id → unknown 三态；readTail 未知 id → undefined", () => {
     const reg = new JobRegistry(dir);
-    expect(reg.kill("bg-ghost00")).toBe(false);
+    expect(reg.kill("bg-ghost00")).toEqual({ state: "unknown" }); // MB-12：旧 boolean 语义拆为三态
     expect(reg.readTail("bg-ghost00", 100)).toBeUndefined();
   });
 
@@ -152,6 +152,42 @@ describe("JobRegistry 后台作业注册表（M4-3 T3）", () => {
       .then((exec) => exec.execute({ callId: "c10", signal: new AbortController().signal, log: noLog }));
     killAllBackgroundJobs();
     ret2?.dispose?.();
+  });
+
+  it("⑰ MB-12 kill 已自然结束的作业 → already-done（退出码如实带出，不进 killTree）", async () => {
+    const reg = new JobRegistry(dir);
+    const job = reg.start(OK_BG);
+    await waitFor(() => job.done !== undefined);
+    expect(reg.kill(job.id)).toEqual({ state: "already-done", code: 0 }); // 旧实现：true（调用方据此谎报进程树已杀）
+  });
+
+  it("⑱ MB-13 readTail 运行中 totalChars = 输出文件字节数（近似总量）——不再拿已读窗口字符数冒充分母", async () => {
+    const reg = new JobRegistry(dir);
+    const job = reg.start(`node -e "process.stdout.write('x'.repeat(1000)); setTimeout(()=>{},3000)"`);
+    await waitFor(() => statSync(job.file).size >= 1000);
+    const r = reg.readTail(job.id, 100)!; // 窗口只装 ~400 字符：旧实现分母=窗口值(~400)，新=文件字节 1000
+    expect(r.state).toBe("running");
+    expect(r.text).toBe("x".repeat(100));
+    expect(r.totalChars).toBe(1000);
+    expect(reg.kill(job.id)).toEqual({ state: "killed" }); // 收尾：不留活进程
+    await waitFor(() => job.done !== undefined);
+  });
+
+  it("⑲ MB-14 cleanupStaleOutputs：>7 天的 bg-*.output 删除；新鲜/非 bg 命名/非 8 位 hex 不动；目录缺失不抛", () => {
+    const bgDir = join(dir, "bg");
+    mkdirSync(bgDir, { recursive: true });
+    writeFileSync(join(bgDir, "bg-deadbeef.output"), "陈年");
+    writeFileSync(join(bgDir, "bg-cafe0001.output"), "新鲜");
+    writeFileSync(join(bgDir, "keep.txt"), "非 bg 命名");
+    writeFileSync(join(bgDir, "bg-xyz.output"), "非 8 位 hex");
+    const old = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    for (const f of ["bg-deadbeef.output", "keep.txt", "bg-xyz.output"]) utimesSync(join(bgDir, f), old, old);
+    new JobRegistry(bgDir).cleanupStaleOutputs();
+    expect(existsSync(join(bgDir, "bg-deadbeef.output"))).toBe(false); // 陈旧 bg 输出被清
+    expect(existsSync(join(bgDir, "bg-cafe0001.output"))).toBe(true); // 新鲜保留
+    expect(existsSync(join(bgDir, "keep.txt"))).toBe(true); // 非 bg 命名不碰（即使陈旧）
+    expect(existsSync(join(bgDir, "bg-xyz.output"))).toBe(true); // 不匹配 bg-<8 hex> 命名不碰
+    expect(() => new JobRegistry(join(dir, "nope")).cleanupStaleOutputs()).not.toThrow(); // 目录缺失静默
   });
 });
 
@@ -302,6 +338,50 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
     const id = /bg-[0-9a-f]{8}/.exec(r.output)![0]!;
     ctl.abort(); // turn 取消
     await waitFor(() => readFileSync(join(dir, "bg", `${id}.output`), "utf8").includes("late")); // 作业照跑
+    dispose?.();
+  });
+
+  it("⑳ MB-05 后台启动失败（输出目录路径被文件占位 → mkdirSync 同步抛）→ 带内 isError，不靠核侧 catch-all", async () => {
+    writeFileSync(join(dir, "bg"), "占位文件——bg 目录路径被顶住，registry.start 的 mkdirSync 同步抛");
+    const { tools, dispose } = await mkTools();
+    const r = await run(tools[0]!, { command: OK_BG, run_in_background: true });
+    expect(r.isError).toBe(true); // 旧实现：同步异常逃逸出 execute（违「错误带内」契约）
+    expect(r.output).toContain("后台作业启动失败");
+    expect(r.output).toContain(join(dir, "bg")); // 恢复指引带目录定位
+    dispose?.();
+  });
+
+  it("㉑ MB-12 kill 工具对已自然结束的作业 → 如实报「已自行结束」，不谎报「进程树已杀」", async () => {
+    const { tools, listeners, dispose } = await mkTools();
+    const kill = tools.find((t) => t.name === "tool-shell__kill")!;
+    const r = await run(tools[0]!, { command: OK_BG, run_in_background: true });
+    const id = /bg-[0-9a-f]{8}/.exec(r.output)![0]!;
+    // 确定性等待 done 置位：drain 出含本作业 id 的完成通知（文件有内容 ≠ close 已置——⑭ 同款竞速教训）
+    const followUp = listeners.get("agent/follow-up")!;
+    await waitFor(() =>
+      (followUp[0]!(undefined) as { text: string }[]).some((n) => n.text.includes(id)));
+    const done = await run(kill, { id });
+    expect(done.isError).toBe(false);
+    expect(done.output).toContain("已自行结束");
+    expect(done.output).toContain("退出码 0");
+    expect(done.output).toContain("无需停止");
+    expect(done.output).not.toContain("进程树已杀"); // 旧文案对已结束作业是谎报
+    dispose?.();
+  });
+
+  it("㉒ MB-13 output 状态头：运行中分母用「约 N 字节」（文件字节数近似），不再拿窗口值冒充总量", async () => {
+    const { tools, dispose } = await mkTools();
+    const output = tools.find((t) => t.name === "tool-shell__output")!;
+    const bg = await run(tools[0]!, { command: `node -e "process.stdout.write('x'.repeat(1000)); setTimeout(()=>{},3000)"`, run_in_background: true });
+    const id = /bg-[0-9a-f]{8}/.exec(bg.output)![0]!;
+    await waitFor(() => statSync(join(dir, "bg", `${id}.output`)).size >= 1000);
+    const r = await run(output, { id, chars: 100 }); // 窗口 100 字符、文件 1000 字节
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("运行中");
+    expect(r.output).toMatch(/输出已积累约 \d+ 字节/); // 如实标「约 + 字节」
+    expect(r.output).not.toMatch(/尾部 \d+\/\d+ 字符/); // 旧「尾部 X/Y 字符」形态不再用于运行中
+    const k = await run(tools.find((t) => t.name === "tool-shell__kill")!, { id }); // 收尾
+    expect(k.isError).toBe(false);
     dispose?.();
   });
 });

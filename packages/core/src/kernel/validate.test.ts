@@ -13,6 +13,14 @@ describe("defineModule 静态校验（§4.2 第 4 步）", () => {
     expect(validateModule(defineModule({ ...base, name: "Tool_X" })).length).toBeGreaterThan(0);
   });
 
+  it("CK-14 回归钉：version 尾锚——尾随垃圾拒收、prerelease/build 后缀放行（旧正则只配前缀，\"1.2.3garbage\" 放行进 audit/catalog）", () => {
+    expect(validateModule(defineModule({ ...base, name: "a", version: "1.2.3garbage" })).some((m) => m.includes("semver"))).toBe(true);
+    expect(validateModule(defineModule({ ...base, name: "a", version: "1.2.3-呵呵" })).some((m) => m.includes("semver"))).toBe(true);
+    expect(validateModule(defineModule({ ...base, name: "a", version: "1.2.3" })).filter((m) => m.includes("semver"))).toEqual([]);
+    expect(validateModule(defineModule({ ...base, name: "a", version: "1.2.3-beta.1" })).filter((m) => m.includes("semver"))).toEqual([]); // semver prerelease 合法形态
+    expect(validateModule(defineModule({ ...base, name: "a", version: "1.2.3+build.7" })).filter((m) => m.includes("semver"))).toEqual([]); // build 元数据
+  });
+
   it("api 主版本不兼容 → 违规", () => {
     const v = validateModule(defineModule({ ...base, name: "a", api: 99 }));
     expect(v.some((m) => m.includes("api"))).toBe(true);

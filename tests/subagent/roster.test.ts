@@ -10,8 +10,15 @@ import { Access, defineTool } from "@orosus/contracts/tool";
 import type { CommandUi, ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
 import approval from "@orosus/approval";
 
-let dir: string | undefined;
-afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+let dir: string | undefined;      // 最近一次 setup 的目录（㉙ 读诊断文件用）
+const dirs: string[] = [];        // setup 每次新建的 tmpdir 全登记（㉗ 一用例双 setup——只盯单变量会漏清第一个）
+let cur: Awaited<ReturnType<typeof createHarness>> | undefined; // 当前活跃 harness——断言中途失败由 afterEach 兜底 close（close 幂等）
+afterEach(async () => {
+  await cur?.close();
+  cur = undefined;
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  dir = undefined;
+});
 
 const text = (t: string): Chunk[] => [{ type: "text/delta", text: t }, { type: "usage", input: 5, output: 7 }, { type: "finish", kind: "stop" }];
 const call = (callId: string, name: string, argsJson = "{}"): Chunk[] => [
@@ -63,6 +70,7 @@ const makeGateTool = (): { mod: ModuleDefinition; started: () => Promise<void>; 
 
 const setup = async (opts: { script?: Chunk[][]; modules?: ModuleDefinition[]; ui?: CommandUi } = {}): Promise<Setup> => {
   dir = mkdtempSync(join(tmpdir(), "orosus-roster-"));
+  dirs.push(dir); // 同一用例多次 setup（㉗）的目录全登记——afterEach 统一清
   const gateTool = makeGateTool();
   let port: SubagentPort | undefined;
   const provider = fakeProvider(opts.script ?? [text("后台结论")]);
@@ -84,6 +92,7 @@ const setup = async (opts: { script?: Chunk[][]; modules?: ModuleDefinition[]; u
     modules: [providerMod, consumer, gateTool.mod, ...(opts.modules ?? [])],
     config: { userFile: join(dir, "no.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
+  cur = h; // TS-13：登记当前 harness，afterEach 兜底 close
   return { h, port: port!, gate: { started: gateTool.started, count: gateTool.count } };
 };
 

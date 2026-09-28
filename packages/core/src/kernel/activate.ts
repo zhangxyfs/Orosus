@@ -44,7 +44,7 @@ const ownerTagUi = (ui: CommandUi, owner: string): CommandUi => {
   return w;
 };
 
-/** 无头缺省交互 UI（D35 fail-closed）：三方法抛"无交互环境"——waterfall 监听者抛错即否决。 */
+/** 无头缺省交互 UI（D35 fail-closed）：四法抛"无交互环境"（CT-07 对齐 contracts 口径：ask/askSecret/choose/confirm）——waterfall 监听者抛错即否决。 */
 const rejectingUi = (): CommandUi => ({
   ask: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
   askSecret: async () => { throw new Error("无交互环境（headless）——交互不可用（D35 fail-closed）"); },
@@ -136,7 +136,7 @@ interface OwnerContribs {
   serviceKeys: string[];
   disposers: Disposer[];
   disposeFn?: Disposer;
-  staleFlag: { staled: boolean }; // CK-03：实例级 stale 标记——ctx.services.get 检查它；preserved 时随实例按引用过户（跨代可见）
+  staleFlag: { staled: boolean }; // CK-03：实例级 stale 标记——ctx.services.get/getOptional 检查它（CK-12 起两口一致）；preserved 时随实例按引用过户（跨代可见）
   borrowed?: boolean;             // CK-02：preserved 借入实例（归旧图）——required 失败路径的 disposeActivated 跳过
 }
 
@@ -283,7 +283,12 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
           if (!s) throw new Error(`能力 "${String(key)}" 无可用提供者（提供者缺失/已降级）`);
           return Promise.resolve(s.impl as T);
         }),
-        getOptional: (<T>(key: CapabilityKey<T>) => Promise.resolve(committedServices.get(key as string)?.impl as T | undefined)),
+        // CK-12：getOptional 与 get 同款 stale 守卫（同抛错口径）——旧实现直读当代册，换下实例经它静默读到
+        // 当代实现/undefined，绕过 §5.5 stale 语义；同接口两方法两种判定，模块作者无法预期
+        getOptional: (<T>(key: CapabilityKey<T>) => {
+          if (staleFlag.staled) throw new Error(`句柄已过期（模块 "${def.name}" 已在 reload 中停用，stale——§5.5）`);
+          return Promise.resolve(committedServices.get(key as string)?.impl as T | undefined);
+        }),
       },
       provide: (key, impl) => {
         if (!allows("provide")) throw new Error(`mounts 校验：provide 未在声明（§5.1）`);

@@ -34,4 +34,11 @@ describe("任务清单面板实时投影（tool-todo/write → 面板任务行�
 	it("空数组返回 []——全完成自动清空的落点，面板同步清空是语义不是丢数据", () => {
 		expect(panelTasksFromEvent(ev("tool-todo/write", { todos: [] }))).toEqual([]);
 	});
+
+	it("CR-12：todos 元素 null/非对象/无 content → 过滤跳过，不抛 TypeError 崩 attachRender 链", () => {
+		expect(panelTasksFromEvent(ev("tool-todo/write", {
+			todos: [null, 42, "文本", { status: "done" }, { content: "合法项", status: "pending" }],
+		}))).toEqual([{ text: "合法项", state: "pending" }]);
+		expect(panelTasksFromEvent(ev("tool-todo/write", { todos: [null] }))).toEqual([]); // 全畸形 → 空清单非崩
+	});
 });

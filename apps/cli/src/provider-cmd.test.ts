@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "smol-toml";
 import { runProviderSubcommand } from "./provider-cmd.ts";
 import type { Catalog } from "@orosus/provider-custom";
 
@@ -133,6 +134,87 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(await runProviderSubcommand(["provider", "import", "bad-win-vendor", "--model", "m-tiny"], io3)).toBe(0); // <1024 → 拒
     expect(readFileSync(io3.configPath, "utf8")).not.toContain("contextWindow");
     expect(io3.lines.some((l) => l.includes("无效"))).toBe(true);
+  });
+
+  it("CM-13：重复 import --key → secrets.env 原位更新不累积；值含换行 / 目录 env 名非法 → 拒绝且零写盘", async () => {
+    const io = makeIo({}, false, "cm13a");
+    io.secretsPath = join(dir, "cm13a", "secrets.env"); // 独立文件——断言整文件内容
+    expect(await runProviderSubcommand(["provider", "import", "openrouter", "--key", "sk-one"], io)).toBe(0);
+    expect(await runProviderSubcommand(["provider", "import", "openrouter", "--key", "sk-two"], io)).toBe(0);
+    // 注：不定长整文件字节——upsertSecret（tool-web 域）replace 分支对尾空行的收拢有既存毛刺（每次
+    // 原位更新多留一个空行，loadSecretsEnv 不受影响）；此处钉 CM-13 的功能契约：单行、无旧密钥滞留
+    const secret = readFileSync(io.secretsPath, "utf8");
+    expect(secret.split("\n").filter((l) => l.startsWith("OPENROUTER_API_KEY="))).toEqual(["OPENROUTER_API_KEY=sk-two"]); // 旧 appendSecret：两行累积
+    expect(secret).not.toContain("sk-one"); // 历代旧密钥明文不再滞留
+    // 值含换行（多行粘贴/注入面）——发网与写盘之前拒绝
+    const io2 = makeIo({}, false, "cm13b");
+    expect(await runProviderSubcommand(["provider", "import", "openrouter", "--key", "sk-a\nEVIL=1"], io2)).toBe(1);
+    expect(io2.lines.join("\n")).toContain("换行");
+    expect(existsSync(io2.secretsPath)).toBe(false);
+    expect(existsSync(io2.configPath)).toBe(false);
+    // 目录声明的 env 名非常规形态（不受信目录数据，CM-07 同源）——拒绝落盘
+    const io3 = makeIo({}, false, "cm13c");
+    io3.getCatalog = async () => ({
+      catalog: { poison: { name: "Poison", type: "openai", api: "https://p.example/v1", env: ["BAD\nNAME"] } } as Catalog,
+      source: "online" as const,
+    });
+    expect(await runProviderSubcommand(["provider", "import", "poison", "--key", "sk-x"], io3)).toBe(1);
+    expect(io3.lines.join("\n")).toContain("非常规形态");
+    expect(existsSync(io3.secretsPath)).toBe(false);
+    expect(existsSync(io3.configPath)).toBe(false);
+  });
+
+  it("CM-14：import 行级节区写——注释/既有键保留、条目与顶层键原位更新；异形（inline table）自动回退全量重写", async () => {
+    // ① 常态：注释与用户既有配置全保——旧 parse→stringify 全灭
+    const d = join(dir, "cm14a");
+    mkdirSync(d, { recursive: true });
+    const configPath = join(d, "config.toml");
+    writeFileSync(configPath, [
+      "# 用户注释——顶层",
+      'model = "openai/gpt-4.1"',
+      "",
+      "[approval]",
+      "# 节内注释",
+      'mode = "ask"',
+      "",
+      "[provider-custom.providers.openrouter]",
+      "type = \"openai\"",
+      "baseUrl = \"https://old.example/v1\"",
+      "apiKey = \"$ENV:OPENROUTER_API_KEY\"",
+      "",
+    ].join("\n"), "utf8");
+    const lines: string[] = [];
+    const io = {
+      configPath, secretsPath: join(d, "s.env"), env: {},
+      getCatalog: async () => ({ catalog: CATALOG, source: "online" as const }),
+      fetchImpl: (async () => new Response("[]", { status: 200 })) as typeof fetch,
+      out: (l: string) => void lines.push(l),
+    };
+    expect(await runProviderSubcommand(["provider", "import", "openrouter", "--model", "m-x"], io)).toBe(0);
+    const toml = readFileSync(configPath, "utf8");
+    expect(toml).toContain("# 用户注释——顶层");          // 注释保留（旧路径：全量重写洗掉）
+    expect(toml).toContain("# 节内注释");
+    expect(toml).toContain('model = "openai/gpt-4.1"');   // 用户既有键不动
+    expect(toml).toContain('baseUrl = "https://openrouter.ai/api/v1"'); // 条目原位更新
+    expect(toml).not.toContain("https://old.example");
+    expect((toml.match(/\[provider-custom\.providers\.openrouter\]/g) ?? []).length).toBe(1); // 不重复建节
+    expect(lines.join("\n")).toContain("注释与键序保留");
+    const doc = parse(toml) as Record<string, unknown>;   // 写后语义 = 旧全量重写等价
+    const got = ((doc["provider-custom"] as Record<string, unknown>)["providers"] as Record<string, unknown>)["openrouter"];
+    expect(got).toEqual({ type: "openai", baseUrl: "https://openrouter.ai/api/v1", apiKey: "$ENV:OPENROUTER_API_KEY", defaultModel: "m-x" });
+    expect(doc["provider"]).toBe("openrouter/m-x");       // 顶层键 upsert（首节头之前）
+    // ② 异形：inline table 形态的 provider-custom 行级匹配不到 → parse 验证失败 → 回退旧全量重写（不产出坏配置）
+    const d2 = join(dir, "cm14b");
+    mkdirSync(d2, { recursive: true });
+    const configPath2 = join(d2, "config.toml");
+    writeFileSync(configPath2, '# 注释会没\nprovider-custom = { providers = { openrouter = { type = "openai", baseUrl = "https://x.example/v1" } } }\n', "utf8");
+    const lines2: string[] = [];
+    const io2 = { ...io, configPath: configPath2, out: (l: string) => void lines2.push(l) };
+    expect(await runProviderSubcommand(["provider", "import", "openrouter"], io2)).toBe(0);
+    expect(lines2.join("\n")).toContain("注释已移除");     // 回退路径文案明示
+    const doc2 = parse(readFileSync(configPath2, "utf8")) as Record<string, unknown>;
+    const got2 = ((doc2["provider-custom"] as Record<string, unknown>)["providers"] as Record<string, unknown>)["openrouter"];
+    expect(got2).toEqual({ type: "openai", baseUrl: "https://openrouter.ai/api/v1", apiKey: "$ENV:OPENROUTER_API_KEY" });
   });
 });
 

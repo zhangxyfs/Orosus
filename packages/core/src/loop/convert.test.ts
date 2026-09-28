@@ -166,22 +166,22 @@ describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标�
     expect((msgs[0] as { origin?: { kind?: string } }).origin).toEqual({ kind: "compaction-summary" });
   });
 
-  it("③ v3+auto → [头, elision, 尾, 摘要]：纯下标取、assistant/tool 不进保留集、摘要置尾（kimi 形态）；M = 头末与尾首之间的投影条数", async () => {
+  it("③ v3+auto → [头, elision, 尾, 摘要]：纯下标取、assistant/tool 不进保留集、摘要置尾（kimi 形态）；M = 总条目 − 保留用户条目（MI-12）", async () => {
     const s = await setupEvents();
     await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 2, 6], keepUserHead: 1, keepUserTail: 2, droppedCount: 5 });
     const msgs = deriveMessages(await s.all());
-    expect(texts(msgs)).toEqual(["u0", "[Some messages were omitted here during compaction: 1 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "u2", "u6", "[历史摘要]\nS"]);
+    expect(texts(msgs)).toEqual(["u0", "[Some messages were omitted here during compaction: 4 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "u2", "u6", "[历史摘要]\nS"]); // MI-12：M = 7 − 3 = 4（旧间隙式 1）
     expect(msgs.every((m) => m.role === "user")).toBe(true); // 全 user 形状
   });
 
-  it("④ 头尾分界由 keepUserHead 计数定：头段内部下标差 >1（u0 与 u4 间隔 3 条）不得误落段内空档；M 从下标差算", async () => {
+  it("④ 头尾分界由 keepUserHead 计数定：头段内部下标差 >1（u0 与 u4 间隔 3 条）不得误落段内空档；M = 总条目 − 保留数（MI-12）", async () => {
     const s = await setupEvents();
-    // 头段 [0,4]（段内差 4——段内空档不是分界）、尾段 [6]；M = 6 − 4 − 1 = 1（tr5）
+    // 头段 [0,4]（段内差 4——段内空档不是分界）、尾段 [6]；M = 7 − 3 = 4（MI-12 同口径——段内空档与 tr5 一并计入）
     await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 4, 6], keepUserHead: 2, keepUserTail: 1, droppedCount: 5 });
     const msgs = deriveMessages(await s.all());
     expect(texts(msgs)).toEqual([
       "u0", "u4",
-      "[Some messages were omitted here during compaction: 1 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]",
+      "[Some messages were omitted here during compaction: 4 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]",
       "u6", "[历史摘要]\nS",
     ]);
   });
@@ -190,7 +190,7 @@ describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标�
     const s = await setupEvents();
     await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [-1, 0, 99, 6], keepUserHead: 99, keepUserTail: 0, droppedCount: 6 });
     let msgs = deriveMessages(await s.all());
-    expect(texts(msgs)).toEqual(["u0", "u6", "[Some messages were omitted here during compaction: 0 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "[历史摘要]\nS"]); // head 夹到 2：头段全量、尾空、elision M=0（尾空 → 到投影末 7−6−1）
+    expect(texts(msgs)).toEqual(["u0", "u6", "[Some messages were omitted here during compaction: 5 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", "[历史摘要]\nS"]); // head 夹到 2：头段全量、尾空；M = 7 − 2 = 5（MI-12）
     const s2 = await setupEvents();
     await s2.append("turn/compaction", { trigger: "auto", summary: "S", droppedCount: 8 }); // keepUserAt 缺省
     msgs = deriveMessages(await s2.all());
@@ -259,5 +259,17 @@ describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标�
     await s.append("turn/prune", { prunes: [{ at: 1, headChars: 4096, tailChars: 1024 }], prunedChars: 0 }); // v2 旧载荷
     const msgs = deriveMessages(await s.all());
     expect((msgs[1] as { output: string }).output).toContain("[...pruned: original 5158 chars...]"); // 旧判据 5120：5158 > 5120 照裁
+  });
+
+  it("⑫ CL-09 回归钉：keepUserAt 重复下标去重——消息不重复进投影、elision 计数不为负（正常路径不可达，损坏/手改日志防御，与孤儿 tool/result 防御同场景）", async () => {
+    const s = await setupEvents();
+    // [0,0,6] + head=1：旧实现头段 [u0]、尾段 [u0,u6]（u0 重复进投影），且 M = keepUserAt[1]−keepUserAt[0]−1 = −1
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 0, 6], keepUserHead: 1, keepUserTail: 2, droppedCount: 5 });
+    const msgs = deriveMessages(await s.all());
+    expect(texts(msgs)).toEqual([
+      "u0",
+      "[Some messages were omitted here during compaction: 5 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", // 去重后 M = 7 − 2 = 5（MI-12；旧：-1）
+      "u6", "[历史摘要]\nS",
+    ]);
   });
 });

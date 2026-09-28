@@ -12,7 +12,7 @@ export function needsProviderSetup(opts: { model: string | undefined; providers:
 /** 引导原因（走查缺陷①：区分两种情况给不同文案）——null = 不需要引导。 */
 export function providerSetupReason(opts: { model: string | undefined; providers: string[] }): "no-model" | "model-provider-missing" | null {
   const model = opts.model?.trim();
-  if (model === undefined || model === "") return opts.providers.length > 0 ? "no-model" : "no-model"; // 统一 no-model——文案由调用方按 providers.length 区分
+  if (model === undefined || model === "") return "no-model"; // 统一 no-model——文案由调用方按 providers.length 区分（CM-17：旧同值三元已拆——退役原因码的残留壳）
   const provider = model.includes("/") ? model.slice(0, model.indexOf("/")) : model; // 裸名 = provider 本身（D32）
   return opts.providers.includes(provider) ? null : "model-provider-missing";
 }

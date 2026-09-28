@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { discoverModules } from "./discover.ts";
 
 const dirs: string[] = [];
@@ -165,5 +166,15 @@ export default defineModule({ name: "m-alias", version: "0.1.0", description: "d
     writeFileSync(join(user, "mods", "m-sib", "node_modules", "dep", "x.js"), "1");
     const h3 = (await discoverModules(opts))[0]!.entryHash;
     expect(h3).toBe(h2);
+  });
+
+  it("⑬ CK-16 回归钉：file:// source 百分号编码解码——含空格目录可加载（旧自实现 pathname 保留字面 %20 → existsSync 失败 → kernel.discover.missing 静默跳过）", async () => {
+    const home = mk();
+    md(join(home, "my mods", "m-url")); // 目录含空格——file URL 形态为 my%20mods
+    writeFileSync(join(home, "my mods", "m-url", "index.ts"), MODULE_SRC("m-url"));
+    writeFileSync(join(home, "config.toml"), `[m-url]\nsource = "${pathToFileURL(join(home, "my mods", "m-url")).href}"\n`);
+    const found = await discoverModules({ userDir: join(home, "no"), projectDir: join(home, "no"), userFile: join(home, "config.toml"), sink });
+    expect(found.map((f) => f.def.name)).toEqual(["m-url"]);
+    expect(found[0]!.root).toBe(join(home, "my mods", "m-url")); // 解码后的真实路径（非字面 %20）
   });
 });

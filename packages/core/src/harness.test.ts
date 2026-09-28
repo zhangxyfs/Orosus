@@ -926,6 +926,32 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     await h.close();
   });
 
+  it("③c CT-02 回归钉：嵌套模型 id 的勾标按首斜杠切分取整段——deepseek/openai/gpt 型当前值在 openai/gpt 清单项上点亮", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-model-ct02-"));
+    const seenItems: string[][] = [];
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake", {}),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "ok" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "m0",
+          listModels: async () => ["m0", "openai/gpt"], // OpenRouter 族嵌套 id 形（CT-02 钉的真实产出）
+        });
+      },
+    };
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      commandUi: { choose: async (_t, items) => { seenItems.push(items); return items[0]!; }, ask: async () => "", askSecret: async () => "", confirm: async () => true },
+      modules: [prov],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/openai/gpt" } },
+    });
+    await h.prompt("/model");
+    // 旧实现：curRaw.split("/").pop() 得 "gpt" ≠ 清单项 "openai/gpt" → 勾标永不点亮；
+    // 新口径首斜杠切分（与 contracts CT-02、parseModel 同口径）取 "openai/gpt" 整段
+    expect(seenItems[0]).toEqual(["m0", "openai/gpt ✓"]);
+    await h.close();
+  });
+
   it("④ 无带默认模型的槽 → 直接提示走 /provider（不弹空菜单、不触发 ui）", async () => {
     const h = await makeHarness({}); // fakeProviderModule 无 defaultModel——一级列表为空
     const out = await h.prompt("/model");
@@ -1548,6 +1574,110 @@ describe("主对话写预约 subprocess（CX-09——bash/不透明执行按整�
     await new Promise((r) => setTimeout(r, 60)); // 子代理 turn 收尾 + release（收尾必然发生的有界等待）
     expect(streamEntered).toBeGreaterThanOrEqual(1); // 自检：子代理确已起跑（循环步数是实现细节，不作判据）
     expect(await wf([{ kind: "subprocess" }])).toBeUndefined();
+    await h.close();
+  });
+});
+
+describe("送回轮失败留痕与等待有界（CH-12——2026-09-28 code review）", () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  /** 主 store 武装器：armed 期间 append 全炸（模拟盘满/库损坏——送回轮 ensureHeader/driveTurn 命中即抛）；throws 计数供轮询。once = 只炸第一次。 */
+  const armedStore = (once: boolean) => {
+    const store = new InMemorySessionStore();
+    const state = { armed: false, throws: 0 };
+    const orig = store.append.bind(store);
+    (store as unknown as { append: (t: string, f?: Record<string, unknown>) => Promise<unknown> }).append = async (t, f) => {
+      if (state.armed) {
+        state.throws++;
+        if (once) state.armed = false;
+        throw new Error("盘满（append 失败）");
+      }
+      return orig(t, f ?? {});
+    };
+    return { store, state };
+  };
+
+  it("CH-12① 回归钉：送回轮失败（落盘炸）→ diag 落 kernel.subagent.delivery-failed（旧实现空 catch 零留痕）；重试后送回行进模型、harness 不卡死", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-ch12a-"));
+    const { defineModule } = await import("@orosus/contracts/module");
+    const { providerSlotKey } = await import("@orosus/contracts/provider");
+    const requests: { messages: unknown }[] = [];
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => { releaseGate = r; });
+    const providerMod = defineModule({
+      name: "provider-fake", version: "0.1.0", description: "held", api: 1,
+      activate(ctx) {
+        ctx.provide(providerSlotKey("fake"), (req: { messages: unknown }) => (async function* () {
+          requests.push(req);
+          if (JSON.stringify(req.messages).includes("甲待命")) await gate; // 子代理首请求挂起——armed 置位前不推进
+          yield { type: "text/delta", text: "结论甲" } as Chunk;
+          yield { type: "finish", kind: "stop" } as Chunk;
+        })());
+      },
+    });
+    const spawner = fakeModule("spawnmod", {
+      mounts: ["subagent", "contribute:command"],
+      activate(ctx) {
+        ctx.contribute.command("spawnmod__go", async () => {
+          await ctx.subagent!.spawn({ label: "甲", prompt: "甲待命", model: "fake/m", background: true });
+          return "spawned";
+        });
+      },
+    });
+    const { store, state } = armedStore(true); // 只炸第一次——失败留痕后补触发可恢复
+    const h = await createHarness({ store, diagDir: dir, spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
+    await h.prompt("/spawnmod__go"); // 命令不建 turn、不落主 store（header 懒写）
+    while (!requests.some((r) => JSON.stringify(r.messages).includes("甲待命"))) await sleep(5); // 子代理已起跑到门
+    state.armed = true; // 主 store 此后第一次 append = 送回轮 ensureHeader（首个落盘点）
+    releaseGate();      // 子代理收场 → pushDelivery → 送回轮起跑 → ensureHeader 落盘炸
+    while (state.throws === 0) await sleep(5); // 首次送回尝试已失败（warn 已落）
+    // CH-12② 的宏任务补触发在 disarm（once）后恢复：送回行最终进模型请求
+    while (!requests.some((r) => JSON.stringify(r.messages).includes("后台子代理 甲"))) await sleep(5);
+    await h.prompt("后续问题"); // harness 未卡死（「失败不外溢」语义保持）
+    await h.close();
+    const diag = readdirSync(dir).filter((f) => f.startsWith("diagnostic-"));
+    const text = readFileSync(join(dir, diag[0]!), "utf8");
+    expect(text.includes("kernel.subagent.delivery-failed")).toBe(true); // 旧实现：空 catch——诊断零痕迹
+  });
+
+  it("CH-12② 回归钉：送回轮反复失败（落盘恒炸）时等待中的用户 prompt 有界——让位后即起跑（旧实现 finally 同步再占坑：prompt 永远等不到坑，用例超时红）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-ch12b-"));
+    const { defineModule } = await import("@orosus/contracts/module");
+    const { providerSlotKey } = await import("@orosus/contracts/provider");
+    const requests: { messages: unknown }[] = [];
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => { releaseGate = r; });
+    const providerMod = defineModule({
+      name: "provider-fake", version: "0.1.0", description: "held", api: 1,
+      activate(ctx) {
+        ctx.provide(providerSlotKey("fake"), (req: { messages: unknown }) => (async function* () {
+          requests.push(req);
+          if (JSON.stringify(req.messages).includes("乙待命")) await gate;
+          yield { type: "text/delta", text: "结论乙" } as Chunk;
+          yield { type: "finish", kind: "stop" } as Chunk;
+        })());
+      },
+    });
+    const spawner = fakeModule("spawnmod", {
+      mounts: ["subagent", "contribute:command"],
+      activate(ctx) {
+        ctx.contribute.command("spawnmod__go", async () => {
+          await ctx.subagent!.spawn({ label: "乙", prompt: "乙待命", model: "fake/m", background: true });
+          return "spawned";
+        });
+      },
+    });
+    const { store, state } = armedStore(false); // 恒炸——送回失败链持续
+    const h = await createHarness({ store, diagDir: dir, spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
+    await h.prompt("/spawnmod__go");
+    while (!requests.some((r) => JSON.stringify(r.messages).includes("乙待命"))) await sleep(5);
+    state.armed = true;
+    releaseGate();
+    while (state.throws === 0) await sleep(5); // 失败链已起（宏任务节流——每 tick 一次补触发重试）
+    const p = h.prompt("用户来话"); // 等待送回轮收尾
+    await expect(p).rejects.toThrow(/盘满/); // 让位后用户 turn 即起跑——其落盘同炸（失败面外显，不吞）；旧实现：永不返回
+    state.armed = false; // 解除——补触发链恢复，送回行最终送达模型
+    while (!requests.some((r) => JSON.stringify(r.messages).includes("后台子代理 乙"))) await sleep(5);
     await h.close();
   });
 });

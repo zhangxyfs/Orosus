@@ -113,12 +113,9 @@ function normalizeOutput(value: string): string {
 }
 
 // ---------- 布局节点（display 模式算符上下标 / cases / 矩阵的多行机制——pi :667-836 移植） ----------
-
-interface FractionNode {
-	type: "fraction";
-	numerator: string;
-	denominator: string;
-}
+// CMD-05（2026-09-28 code review）：竖排分式节点 FractionNode 与 renderLayout 分式分支已删——
+// \frac 恒走 formatFraction 单行（文件头修法口径①：竖排堆叠路径整支摘除），布局侧不存在分式形态，
+// 残留的不可达分支只会误导读者以为竖排分式仍可能发生。
 
 interface OperatorNode {
 	type: "operator";
@@ -139,7 +136,7 @@ interface MatrixNode {
 	baseline: number;
 }
 
-type LayoutNode = FractionNode | OperatorNode | ScriptNode | MatrixNode;
+type LayoutNode = OperatorNode | ScriptNode | MatrixNode;
 
 interface Layout {
 	lines: string[];
@@ -209,21 +206,7 @@ function renderLayout(source: string, nodes: readonly LayoutNode[]): Layout {
 						: "";
 				layouts.push({ lines: [text], width: visibleWidth(text), baseline: 0 });
 			}
-			if (node.type === "fraction") {
-				const numerator = renderLayout(node.numerator, nodes);
-				const denominator = renderLayout(node.denominator, nodes);
-				const contentWidth = Math.max(numerator.width, denominator.width, 1);
-				const width = contentWidth + 2;
-				layouts.push({
-					lines: [
-						...numerator.lines.map((line) => padLayoutLine(line, width, true)),
-						` ${"─".repeat(contentWidth)} `,
-						...denominator.lines.map((line) => padLayoutLine(line, width, true)),
-					],
-					width,
-					baseline: numerator.lines.length,
-				});
-			} else if (node.type === "operator") {
+			if (node.type === "operator") {
 				const contentWidth = Math.max(
 					visibleWidth(node.operator),
 					node.lower === undefined ? 0 : visibleWidth(node.lower),

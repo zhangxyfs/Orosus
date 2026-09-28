@@ -14,6 +14,10 @@ export async function runPrint(
   write: (s: string) => void,
 ): Promise<PrintOutcome> {
   const events: SessionEvent[] = [];
+  // CM-20（2026-09-28 code review）：json 的 model 改读 harness 读口（含 override 语义）——旧取 args.model，
+  // 未传 --model 时 undefined 经 JSON.stringify 整键消失，而脚本消费方最想记录的恰是「实际生效模型」
+  //（可能来自 config）。在 close 前取（读内存态，不依赖 close 后行为）
+  const effectiveModel = h.status().model;
   // CM-04①：collect 吞 rejection——prompt 抛错（并发守卫/store IO）后事件通道若再 reject，
   // 残留 promise 无人 await = unhandledRejection 崩进程；收集失败按「已收即所得」，错误仍由 prompt 原样上抛
   const collect = (async () => { for await (const e of h.events()) events.push(e); })().catch(() => {});
@@ -28,7 +32,7 @@ export async function runPrint(
     ? (lastAssistant.content ?? []).filter((p) => p.kind === "text").map((p) => p.text ?? "").join("")
     : "";
   if (args.outputFormat === "json") {
-    write(JSON.stringify({ sessionId: h.sessionId, model: args.model, usage: lastAssistant?.usage, content: text }));
+    write(JSON.stringify({ sessionId: h.sessionId, model: effectiveModel, usage: lastAssistant?.usage, content: text }));
   } else if (args.outputFormat === "stream-json") {
     for (const e of events) write(JSON.stringify(e));
   } else {

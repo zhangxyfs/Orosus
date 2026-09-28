@@ -156,7 +156,7 @@ async function executeFetch(rawUrl: string, deps: FetchDeps, signal: AbortSignal
   const fail = (msg: string): ToolResult => ({ output: msg, isError: true });
   try {
     let current = normalizeUrl(rawUrl).toString();
-    let honestUa = false; // CF challenge 后换诚实 UA（换 host 的重定向跳后复位）
+    let honestUa = false; // CF challenge 后换诚实 UA（换 host 的重定向跳后才复位——MV-04：同 host 跳转沿用诚实 UA，省一趟再试探）
     let redirects = 0;
     for (;;) {
       await assertPublicTarget(current, { lookupImpl, ...deps });
@@ -183,8 +183,11 @@ async function executeFetch(rawUrl: string, deps: FetchDeps, signal: AbortSignal
           await res.body?.cancel().catch(() => {});
           if (redirects >= MAX_REDIRECT_HOPS) return fail(`重定向超过 ${MAX_REDIRECT_HOPS} 跳上限（抓取 "${rawUrl}"）`);
           redirects += 1;
-          current = normalizeUrl(new URL(location, current)).toString(); // 相对 Location 基于当前跳解析（kimi :149）
-          honestUa = false;
+          const next = normalizeUrl(new URL(location, current)); // 相对 Location 基于当前跳解析（kimi :149）
+          // MV-04：兑现「换 host 才复位」——原实现每跳无条件复位，同 host 重定向链中 CF 已放行的诚实 UA
+          // 被打回伪装 UA，每跳多花一次挑战-重试探。URL.hostname 恒小写，比较无需再归一
+          if (next.hostname !== new URL(current).hostname) honestUa = false;
+          current = next.toString();
           continue;
         }
       }

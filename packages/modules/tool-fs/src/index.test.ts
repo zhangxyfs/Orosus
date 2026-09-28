@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
@@ -482,5 +482,91 @@ describe("code review P1 批（2026-09-28）", () => {
     const t = await setup();
     const grepEx = await t.grep.resolveExecution({ pattern: "anything" });
     expect(grepEx.accesses).toEqual([{ kind: "fs.read", path: realpathSync(dir) }]);
+  });
+});
+
+// code review P3 批（2026-09-28）：MB-09/MB-10/MB-11/MB-15
+describe("code review P3 批（2026-09-28）", () => {
+  const setup = async () => {
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    return { tools, edit: tools[2]!,
+      glob: tools.find((t) => t.name === "tool-fs__glob")!,
+      grep: tools.find((t) => t.name === "tool-fs__grep")! };
+  };
+
+  it("MB-09 ① >1MB 文件跳过 grep（大小闸 statSync 前置于读取——大文件不再白读一遍才判跳过）", async () => {
+    writeFileSync(join(dir, "fatgrep.log"), `TARGET${"x".repeat(1_100_000)}\n`);
+    const t = await setup();
+    const r = await run(t.grep, { pattern: "TARGET" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toBe("（无匹配）"); // 超限文件被跳过（即使内容本可命中）
+  });
+
+  it("MB-09 ② 命中达 200 上限 → 停扫 + 截断标注（宽匹配不再攒数十万条命中）", async () => {
+    writeFileSync(join(dir, "wide.txt"), `${Array.from({ length: 250 }, (_, i) => `hit number ${i}`).join("\n")}\n`);
+    const t = await setup();
+    const r = await run(t.grep, { pattern: "hit" });
+    expect(r.isError).toBe(false);
+    const hits = r.output.split("\n").filter((l) => l.includes("wide.txt:"));
+    expect(hits).toHaveLength(200); // 恰好 200 条
+    expect(r.output).toContain("hit number 199"); // 第 200 条在
+    expect(r.output).not.toContain("hit number 200"); // 第 201 条起不再扫
+    expect(r.output).toContain("命中过多"); // 如实标注截断
+  });
+
+  it("MB-10 ① glob 结果只含文件不含目录（description 的 file paths only 落实）", async () => {
+    writeFileSync(join(dir, "f1.txt"), "x");
+    mkdirSync(join(dir, "subdir"));
+    writeFileSync(join(dir, "subdir", "inner.txt"), "x");
+    const t = await setup();
+    const r = await run(t.glob, { pattern: "*" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("f1.txt");
+    expect(r.output).not.toContain("subdir"); // 顶层目录不进结果
+    const r2 = await run(t.glob, { pattern: "**/*" });
+    expect(r2.output).toContain("inner.txt"); // 目录内文件照常命中
+    expect(r2.output.split("\n").some((l) => l.endsWith("subdir"))).toBe(false); // 目录名本身不占结果行
+  });
+
+  it("MB-10 ② glob description 不再谎称 Respects .gitignore——如实写跳过集", async () => {
+    const t = await setup();
+    expect(t.glob.description).not.toContain(".gitignore"); // 旧文案承诺不实的根源
+    expect(t.glob.description).toContain("node_modules"); // 如实声明跳过集
+    expect(t.glob.description).toContain("directories excluded");
+  });
+
+  it("MB-11 ① 混合编辑：位置编辑插入的 newText 不被 replaceAll 二次替换（全部基于原文件同时匹配）", async () => {
+    writeFileSync(join(dir, "mix.txt"), "keep old keep\n");
+    const t = await setup();
+    const r = await run(t.edit, {
+      path: "mix.txt",
+      edits: [
+        { oldText: "keep old keep", newText: "FOO old BAR" }, // 插入文本含 replaceAll 的 oldText
+        { oldText: "old", newText: "NEW", replaceAll: true },
+      ],
+    });
+    expect(r.isError).toBe(false);
+    // 旧实现（replaceAll 作用于位置编辑后的结果串）：插入的 old 被二次替换 → "FOO NEW BAR"
+    expect(readFileSync(join(dir, "mix.txt"), "utf8")).toBe("FOO old BAR\n");
+  });
+
+  it("MB-11 ② replaceAll 仍作用于位置编辑之外的原文区段（修序不废全替换）", async () => {
+    writeFileSync(join(dir, "mix2.txt"), "old X old\n");
+    const t = await setup();
+    const r = await run(t.edit, {
+      path: "mix2.txt",
+      edits: [
+        { oldText: "X", newText: "MID" },
+        { oldText: "old", newText: "NEW", replaceAll: true },
+      ],
+    });
+    expect(r.isError).toBe(false);
+    expect(readFileSync(join(dir, "mix2.txt"), "utf8")).toBe("NEW MID NEW\n"); // 两侧原文区段的 old 照常全替换
+  });
+
+  it("MB-15 模块 description 补全五工具（read/write/edit/glob/grep——README 同步）", () => {
+    expect(def.description).toContain("glob");
+    expect(def.description).toContain("grep");
   });
 });

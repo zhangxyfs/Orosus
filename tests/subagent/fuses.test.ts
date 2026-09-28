@@ -9,8 +9,13 @@ import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/pr
 import { defineTool } from "@orosus/contracts/tool";
 import type { ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
 
-let dir: string | undefined;
-afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
+let cur: Awaited<ReturnType<typeof createHarness>> | undefined; // 当前活跃 harness——测试体末尾显式 close 照旧，断言中途失败由 afterEach 兜底（close 幂等）
+const dirs: string[] = []; // setup 每次新建的 tmpdir 全登记（㊿-11 一用例双 setup——只盯单变量会漏清第一个）
+afterEach(async () => {
+  await cur?.close();
+  cur = undefined;
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 const text = (t: string): Chunk[] => [{ type: "text/delta", text: t }, { type: "finish", kind: "stop" }];
 const call = (callId: string, name: string, args = "{}"): Chunk[] => [
@@ -22,7 +27,8 @@ const call = (callId: string, name: string, args = "{}"): Chunk[] => [
  *  不活动超时短值可测（config inactivityTimeoutMs 覆盖）；-1 不限透传。 */
 
 const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], configToml: string): Promise<{ h: Awaited<ReturnType<typeof createHarness>>; port: SubagentPort }> => {
-  dir = mkdtempSync(join(tmpdir(), "orosus-fuse-"));
+  const dir = mkdtempSync(join(tmpdir(), "orosus-fuse-"));
+  dirs.push(dir);
   writeFileSync(join(dir, "user.toml"), configToml, "utf8");
   let port: SubagentPort | undefined;
   const provider = fakeProvider(mainScript);
@@ -71,6 +77,7 @@ const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], configToml: 
     modules: [providerMod, consumer, tickMod, gateMod],
     config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
+  cur = h; // TS-13：登记当前 harness，afterEach 兜底 close
   return { h, port: port! };
 };
 

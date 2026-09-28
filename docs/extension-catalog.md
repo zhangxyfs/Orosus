@@ -121,8 +121,7 @@ viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Rec
 ```
 
 ```ts
-ui.viewText?.("便签", notes.join("
-"), { layout: { height: 20, marginTop: 2 } });
+ui.viewText?.("便签", notes.join("\n"), { layout: { height: 20, marginTop: 2 } });
 ```
 
 

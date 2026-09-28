@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandUi, LlmPort } from "@orosus/contracts/module";
@@ -120,5 +120,39 @@ describe("tool-web__settings 配置流（M4-3 T1c）", () => {
     const doc = readFileSync(configFile, "utf8");
     expect(doc).not.toContain("model");
     expect(doc).toContain('tavilyApiKey = "$ENV:TAVILY_API_KEY"'); // 他键不受影响
+  });
+
+  it.skipIf(process.platform === "win32")("⑦ MV-05 回归钉：既有宽权限 secrets.env 经 upsert 收紧到 0o600（writeFileSync mode 仅新建生效——chmodSync 兜底）", () => {
+    // POSIX 权限位 Windows 无对应（chmod 只拨只读位）——本钉只在有真实 mode 位的平台跑
+    writeFileSync(secretsFile, "OTHER=x\n", { mode: 0o644 });
+    expect(statSync(secretsFile).mode & 0o777).toBe(0o644); // 前置：宽权限文件在档（原实现 upsert 后仍 644）
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "k1");
+    expect(statSync(secretsFile).mode & 0o777).toBe(0o600); // 收紧兑现
+    expect(readSecrets()).toContain("TAVILY_API_KEY=k1");
+    expect(readSecrets()).toContain("OTHER=x"); // 他行不受影响
+    // 换 key 原地更新路径同样保持 0o600
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "k2");
+    expect(statSync(secretsFile).mode & 0o777).toBe(0o600);
+    expect(readSecrets()).toContain("TAVILY_API_KEY=k2");
+  });
+
+  it("⑧ CM-13 回归钉：replace 分支收拢尾空行——二次/三次更新文件行数不变（旧实现每轮净增一个空行）", () => {
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "k1");
+    const once = readSecrets();
+    expect(once).toBe("TAVILY_API_KEY=k1\n"); // 单行 + 单收尾换行
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "k2");
+    const twice = readSecrets();
+    expect(twice).toBe("TAVILY_API_KEY=k2\n"); // 旧实现此处已是 "…k2\n\n"（split 尾空串 + 写回补 \n）
+    expect(twice.split("\n")).toHaveLength(once.split("\n").length); // 行数不变钉
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "k3");
+    expect(readSecrets().split("\n")).toHaveLength(2); // 三轮仍是 2 元素（内容行 + 尾空串）——旧实现 2/3/4 递增
+    // 中间空行不受收拢（只收尾部）：两键夹一空行的既有文件，更新首键后形态保持
+    writeFileSync(secretsFile, "A=1\n\nTAVILY_API_KEY=old\n", "utf8");
+    upsertSecret(secretsFile, "TAVILY_API_KEY", "new");
+    expect(readSecrets()).toBe("A=1\n\nTAVILY_API_KEY=new\n");
+    // 空文件（split 得 [""]）append 不留前导空行——append 分支 push 前收拢保持原位
+    writeFileSync(secretsFile, "", "utf8");
+    upsertSecret(secretsFile, "BRAVE_API_KEY", "b1");
+    expect(readSecrets()).toBe("BRAVE_API_KEY=b1\n");
   });
 });

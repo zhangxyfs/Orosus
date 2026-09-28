@@ -205,13 +205,28 @@ describe("skill 模块（m4-7 T3——清单预算与降级）", () => {
 });
 
 describe("skill 模块（m4-7 T4/T5——skill__load 三修 + 去重重置口）", () => {
-  it("① accesses 按命中技能真实 file 声明（修 bug：原写死 ~/.orosus/skills/<名>，项目级路径对不上）", async () => {
+  it("① MI-16 accesses 常量声明：声明期零 fs 扫描（契约①「声明期无副作用」）——五轨搜索根 fsRead（CT-04 搜索类工具纪律：fsRead 只收字面路径，搜索根整段声明），execute 重扫命中的真实文件恒在声明集内", async () => {
     put(join(proj, ".orosus", "skills"), "proj-skill", "d", "b");
-    const { ctx, tools } = fakeCtx(fourTrackCfg());
+    writeFileSync(join(user, "not-a-dir"), "x"); // 坏轨（ENOTDIR）：旧实现声明期 hit() 即扫——声明阶段就多一次扫描副作用
+    const cfg = { ...fourTrackCfg(), userAgentsDir: join(user, "not-a-dir") };
+    const { ctx, tools, warns } = fakeCtx(cfg);
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const scanWarns = (): number => warns.filter((w) => w.code === "skill.track-scan-failed").length;
+    expect(scanWarns()).toBe(1); // activate 期固有的一次扫描（清单用）
     const load = tools.find((t) => t.name === "skill__load")!;
     const exec = await load.resolveExecution({ name: "proj-skill" });
-    expect(exec.accesses?.[0]).toMatchObject({ path: join(proj, ".orosus", "skills", "proj-skill", "SKILL.md") });
+    // 五轨根常量声明（tracks 序：bundled 垫底首位）——不随技能名/命中结果变化
+    expect(exec.accesses).toEqual([
+      { kind: "fs.read", path: cfg.bundledDir },
+      { kind: "fs.read", path: join(user, "not-a-dir") },
+      { kind: "fs.read", path: cfg.userOrosusDir },
+      { kind: "fs.read", path: cfg.projectAgentsDirs[0] },
+      { kind: "fs.read", path: cfg.projectOrosusDir },
+    ]);
+    expect(scanWarns()).toBe(1); // 核心钉：声明期零扫描（旧实现 hit() 再扫一次坏轨 → 2，且违契约①）
+    const r = await exec.execute({ callId: "c", signal: new AbortController().signal, log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} } });
+    expect(r.output).toContain("b"); // execute 重扫照常命中真实文件（在声明集内——TOCTOU 缝隙闭合）
+    expect(scanWarns()).toBe(2); // 扫描副作用归位执行阶段
   });
 
   it("② 执行时重扫（ZCode）：activate 后新放的技能指名即加载，无需 reload", async () => {

@@ -48,7 +48,8 @@ export interface DiagSink {
   close(): Promise<void>;
 }
 
-/** 诊断文件 sink：fire-and-forget 队列 + flush，不阻塞热路径（§11.9）。 */
+/** 诊断文件 sink：微任务排队 + flush（§11.9）。CH-13：写盘本身是同步 appendFileSync——只推迟到
+ *  微任务、仍阻塞事件循环（每条一次 open/write/close）；诊断量级小接受该形态，注释不宣称「不阻塞热路径」。 */
 export function createDiagSink(opts: { dir: string }): DiagSink {
   mkdirSync(opts.dir, { recursive: true });
   // 文件名按写入当日计算（§11.9 diagnostic-<日期>）：跨天运行的长进程自然滚动到新文件

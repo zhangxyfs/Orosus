@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync, unlinkSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 
 let atomicSeq = 0;
 
@@ -28,7 +28,7 @@ export interface TrustStore {
 
 /** 路径归一化：resolve 后 Windows 侧再 toLowerCase（盘符 D:\ 与 d:\ 失配会让已确认模块反复重确认——M1 check-boundaries 同款坑）。 */
 export function normalizeTrustKey(root: string): string {
-  const abs = isAbsolute(root) ? resolve(root) : resolve(root);
+  const abs = resolve(root); // CK-13：resolve 对相对/绝对输入同途——原 isAbsolute 三元两分支相同（重构残余死代码）
   return process.platform === "win32" ? abs.toLowerCase() : abs;
 }
 

@@ -441,3 +441,113 @@ describe("/provider 写盘 → reload → 新槽进图（2026-09-24 走查 bug�
     }
   });
 });
+
+describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM-15① 行为钉（管道 REPL e2e）", () => {
+  // 密封家目录（CM-03 三变量覆盖同款）：子进程数据目录解析进 tmp；交互行经行队列逐条消费（顺序保证）
+  const sealedEnv = (d: string): Record<string, string> => ({
+    ...process.env,
+    USERPROFILE: join(d, "home"),
+    HOME: join(d, "home"),
+    OROSUS_HOME: join(d, "home", ".orosus"),
+  }) as Record<string, string>;
+  const runRepl = (d: string, lines: string[], config?: string): Promise<{ code: number; out: string; err: string }> => {
+    if (config !== undefined) {
+      mkdirSync(join(d, "home", ".orosus"), { recursive: true });
+      writeFileSync(join(d, "home", ".orosus", "config.toml"), config, "utf8");
+    }
+    const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
+      cwd: d, env: sealedEnv(d), stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = ""; let err = "";
+    child.stdout.on("data", (c) => { out += String(c); });
+    child.stderr.on("data", (c) => { err += String(c); });
+    child.stdin.write(lines.map((l) => `${l}\n`).join("")); // 单块写入：全部行先进待处理队列（命令逐条串行消费）
+    child.stdin.end();
+    return new Promise((resolve) => { child.on("exit", (c) => resolve({ code: c ?? -1, out, err })); });
+  };
+
+  it("CS-05①：/new 换会话后立即 /fork——不再把上一会话的事件 id 当分叉点（残留即「fork 分叉点不在父会话投影内」崩进程）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cs05a-"));
+    try {
+      // /title 落 label 事件（lastEventId 被喂）→ /new（新会话零事件）→ /fork：atEntryId 必须已重置为
+      // undefined（fork 走父投影尾缺省）；旧实现携带 s1 的 label 事件 id → ForkedSessionStore.all() 在
+      // createSession 内 throw（session 域 CS-05 把投影外 atEntryId 从宽容降级改为 throw）→ 行模式
+      // processReplLine 拦截区外无 catch → 进程崩（exit 1 + 栈）
+      const r = await runRepl(d, ["/title 甲", "/new", "/fork", "/quit"]);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("[新会话");
+      expect(r.out).toContain("[已从"); // /fork 成功（分叉自 /new 换出的新会话）
+      expect(`${r.out}${r.err}`).not.toContain("fork 分叉点不在父会话投影内");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("CS-05②：/resume 切回旧会话（switchTo）后立即 /fork——lastEventId 重置，不携带他会话事件 id", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cs05b-"));
+    try {
+      // s1 命名「甲」→ /new 出 s2 命名「乙」（lastEventId 被喂成 s2 的 label 事件）→ /resume 2 切回 s1
+      // （列表创建时间倒序：s2 最新 #1、s1 #2——恢复标题「甲」断言锚定切的就是 s1）→ /fork：分叉点
+      // 必须走 s1 投影尾；旧实现 lastEventId 仍是 s2 的事件 id，∉ s1 投影 → 同 CS-05① 崩溃面
+      const r = await runRepl(d, ["/title 甲", "/new", "/title 乙", "/resume 2", "/fork", "/quit"]);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("[已命名 → 甲]");
+      expect(r.out).toContain("[已恢复 甲（"); // 序号 2 落在「甲」会话（非最新的「乙」）——切回目标锚定
+      expect(r.out).toContain("[已从"); // switchTo 后 /fork 成功
+      expect(`${r.out}${r.err}`).not.toContain("fork 分叉点不在父会话投影内");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("CM-15① + CT-02：/HELP 大写命令归一命中 CLI 层拦截；/context 上下文用量模型段按首斜杠切分（嵌套 id 不丢前缀）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-ct02-"));
+    try {
+      // model = prov/m/n（嵌套模型 id）：/context 面模型行 = 首个 "/" 后整体 "m/n"（CT-02 新口径，与
+      // contracts 一致）；旧 split("/").pop() 只剩 "n"。/HELP：cmdNameOf 归一（小写 + 斜杠后空格抹除）
+      // 命中 CLI 层带快捷键的 HELP_TEXT；旧精确等值漏到 core 简版 /help（无「快捷键（全屏）」节）
+      const cfg = [
+        'model = "prov/m/n"',
+        "",
+        "[provider-custom.providers.prov]",
+        'type = "openai"',
+        'baseUrl = "http://127.0.0.1:1"',
+        'defaultModel = "m/n"',
+        "",
+      ].join("\n");
+      const r = await runRepl(d, ["/HELP", "/settings", "2", "/quit"], cfg);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("快捷键（全屏）"); // CM-15①：大写 /HELP 命中 CLI 层说明版（core 简版无此节）
+      const modelLine = r.out.split("\n").find((l) => l.startsWith("模型"));
+      expect(modelLine).toBeDefined();
+      expect(modelLine!.endsWith("m/n")).toBe(true); // CT-02：模型段 = 首斜杠后整体（旧实现只剩 "n"）
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 45_000);
+});
+
+describe("P3 批跨域收尾——CM-16② / CM-19③ 源面钉（main.ts 内件无独立缝且渲染面行模式不可达）", () => {
+  // shortenPath 只喂全屏面板 cwd（管道行模式无渲染面）、PROVIDER_WRITE_DONE 是 processReplLine 内联门——
+  // 两处均无法经 import/子进程观测（与 CM-02 机制钉同困境，但无外部语义面可钉），退而钉源面：
+  // 关键形态复发（硬编码分隔符 / 前缀正则内联）即红
+  const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+  const fnSeg = (start: string, end: string): string => src.slice(src.indexOf(start), src.indexOf(end));
+
+  it("CM-16②：shortenPath 两档模板 + join 全走 path.sep——旧硬编码模板复发即红（Windows 输出不变，POSIX 修正）", () => {
+    const seg = fnSeg("const shortenPath", "const lastUsageOf");
+    expect(seg).toContain("join(sep)");
+    expect(seg).toContain(`parts[0] + sep + "…" + sep + tail`);
+    expect(seg).toContain(`"…" + sep + tail`);
+    // 旧形逐字钉（split(/[\\/]/ 的合法双反斜杠不含在内）：join("\\") / "…\\" / "\\…\\" 复发即红
+    expect(seg).not.toContain('join("\\\\")');
+    expect(seg).not.toContain('"…\\\\"');
+    expect(seg).not.toContain('"\\\\…\\\\"');
+  });
+
+  it("CM-19③：/provider 重载门的前缀正则单点常量化——内联回归即红", () => {
+    expect(src).toContain("const PROVIDER_WRITE_DONE = /^(?:success|已设为当前默认|已移除)/"); // 定义带清单（来源注释同点）
+    expect(src).toContain("PROVIDER_WRITE_DONE.test(cmdOut"); // 消费走常量
+    expect((src.match(/\^\(\?:success\|已设为当前默认\|已移除\)/g) ?? []).length).toBe(1); // 正则字面量只此一处——内联 = 二处即红
+  });
+});

@@ -15,7 +15,7 @@ import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
 import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
-import { diffGraphs, type ReloadReport } from "./kernel/reload.ts";
+import { diffGraphs, stableStringify, type ReloadReport } from "./kernel/reload.ts";
 import { loadTrustStore, checkTrust, atomicWriteTextSync } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import type { EventBus } from "./kernel/bus.ts";
@@ -742,10 +742,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         if (models.length > 0) {
           // 清单 = 纯模型项（2026-09-22 用户拍板：「手动输入…」项退役——清单就是全部可达路径；
           // 手输兜底只剩 listModels 失败时的 catch 分支）。当前模型勾标（与 /permission 二级列表 ✓ 当前值同族）：
-          // 全名取尾段比对；裸槽名值经槽 defaultModel 解析（面板同口径）
+          // 全名取首斜杠后模型段比对；裸槽名值经槽 defaultModel 解析（面板同口径）
           const curRaw = modelOverride ?? (typeof cfgModelValue() === "string" && cfgModelValue() !== "" ? (cfgModelValue() as string) : undefined);
+          // CT-02（2026-09-28 code review P3）：模型段切分改首斜杠（indexOf("/") 前段 = 槽名、其余整体 = 模型 id，
+          // 与 contracts CT-02 新口径、parseModel 同口径）——嵌套 id deepseek/openai/gpt 旧取尾段 .pop() 得 "gpt"，
+          // 与清单项 "openai/gpt" 永不相等，勾标永不点亮
           const curBare = curRaw === undefined ? undefined
-            : curRaw.includes("/") ? curRaw.split("/").pop()
+            : curRaw.includes("/") ? curRaw.slice(curRaw.indexOf("/") + 1)
             : curRaw === slotName ? slot.defaultModel
             : curRaw;
           const mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
@@ -1003,6 +1006,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     return lastTurnEvent;
   };
 
+  // CH-12②（2026-09-28 code review）：等待内部轮/reload 的用户 prompt 计数 + 宏任务补触发。旧实现
+  // 送回轮 finally 里同步再占坑——后台子代理密集完成（或送回反复失败）时，等待中的用户 prompt 要
+  // 串行等完每一轮送回（失败链上永不轮到）。现双管：①有等待者即让位（积压不丢——由用户轮停止边界
+  // 的 followUp collect 收口，与「忙时由主 turn 停止边界收」同路径）；②补触发走 setTimeout(0) 宏任务
+  //（失败链旧形态是纯微任务自旋——送回轮反复失败时事件循环被饿死，等待中的 prompt 永远进不了守卫）。
+  let waitingUserPrompts = 0;
+  const retryDelivery = (): void => {
+    if (waitingUserPrompts > 0) return; // 有 prompt 在等——不抢坑
+    setTimeout(() => { if (!closed) deliverSubagentTurn(); }, 0);
+  };
+
   /** 闲时送回轮（决策 17 自动送回）：无用户消息自动续跑；用户轮进行中让位（忙时由其停止边界收）。 */
   const deliverSubagentTurn = (): void => {
     // CH-09：reload 进行中不让路给送回轮（同 turn 排队——收尾由 reload 的 finally 补触发）
@@ -1015,11 +1029,16 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       try {
         await ensureHeader();
         await driveTurn(controller);
-      } catch { /* 送回轮失败静默——积压已消费；下一条用户消息照常 */ }
+      } catch (err) {
+        // CH-12①（2026-09-28 code review）：旧实现空 catch 零留痕——积压已消费但落盘/模型调用失败
+        //（盘满/断网/配额）时送回无声丢失（花名册有记录、对话面永远缺这条送回）。补 diag warn；
+        // 「不抛出」语义保持（下一条用户消息照常），未消费积压由 finally 的补触发重试。
+        createLogger(sink, "kernel").warn("kernel.subagent.delivery-failed", "后台子代理结论送回轮失败——未消费积压保留待重试", { error: err instanceof Error ? err.message : String(err) });
+      }
       finally {
         currentTurn = null;
         settle();
-        if (deliveryBacklog.length > 0) deliverSubagentTurn(); // 排队中的下一批（忙时排队）
+        if (deliveryBacklog.length > 0) retryDelivery(); // 排队中的下一批（CH-12②：有等待者让位 + 宏任务）
       }
     })();
   };
@@ -1056,14 +1075,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // 送回轮让路（M4.5 T9）：内部送回轮进行中 = 等它收尾紧接进（不打断打字）；用户轮进行中照旧抛。
       // CH-09 ②：reload 进行中同锁排队——起 turn 前等它收尾（循环重查而非一次性 await：并发等待者
       // 依次醒来后须重新过单并发守卫，否则会越过先醒者直接覆盖 currentTurn 占坑）
+      // CH-12②：等待期间计数（waitingUserPrompts）——送回轮收尾的补触发据此让位：等待有界（最多
+      // 等完当前这轮送回），积压不丢（本 turn 停止边界 followUp collect 收口）
       for (;;) {
         if (currentTurn !== null) {
           if (currentTurn.internal !== true) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
-          await currentTurn.done.catch(() => undefined);
+          waitingUserPrompts++;
+          try { await currentTurn.done.catch(() => undefined); } finally { waitingUserPrompts--; }
           continue;
         }
         if (reloadInFlight !== undefined) {
-          await reloadInFlight.catch(() => undefined); // reload 失败旧图继续运行（§5.5 事务性）——照常起 turn
+          waitingUserPrompts++;
+          try { await reloadInFlight.catch(() => undefined); } finally { waitingUserPrompts--; }
           continue;
         }
         break;
@@ -1223,7 +1246,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       if (reloadInFlight !== undefined) return reloadInFlight;
       const p = doReload().finally(() => {
         reloadInFlight = undefined;
-        if (deliveryBacklog.length > 0) deliverSubagentTurn(); // CH-09：reload 期间让路的送回轮补触发
+        if (deliveryBacklog.length > 0) retryDelivery(); // CH-09：reload 期间让路的送回轮补触发（CH-12②：有等待者让位 + 宏任务）
       });
       reloadInFlight = p;
       return p;
@@ -1317,8 +1340,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         const defChanged = g.source === "local" || next.source === "local" ? g.source !== next.source : g.def !== next.def;
         if (g.entryHash !== next.entryHash || defChanged) { removedOrChanged.add(g.def.name); continue; }
         // 配置自有 key 有效值 deepEqual 失败 → Reloaded（M3 修复：粗判此前漏配置变化——preserved 误含已变模块，
-        // required 模块的坏配置在 reload 中被静默沿用旧实例，安全护栏失效）
-        if (JSON.stringify(g.configValue) !== JSON.stringify(newConfigValue(g.def.name))) removedOrChanged.add(g.def.name);
+        // required 模块的坏配置在 reload 中被静默沿用旧实例，安全护栏失效）。
+        // CK-08（2026-09-28 code review P3）：比较基座改 stableStringify（kernel/reload.ts 全链同一实现）——
+        // 旧 JSON.stringify 对 key 序敏感，z.record/.passthrough() 类保留输入 key 序的 schema 在用户
+        // 重排配置 key 序（无语义变化）时误判 Reloaded：模块无谓重激活、generation 虚增
+        if (stableStringify(g.configValue) !== stableStringify(newConfigValue(g.def.name))) removedOrChanged.add(g.def.name);
       }
       const preserved = new Map([...oldGraph.preservable()].filter(([name]) => !removedOrChanged.has(name)));
       const generations = new Map(oldGraph.records.map((r) => [r.name, r.generation]));

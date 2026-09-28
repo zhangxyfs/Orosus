@@ -6,6 +6,10 @@
  *  框架化阶段需要时在已知表扩展（KeyEvent 穷举的是本批消费形态）。
  *  【阶段三 F0 已扩】shiftTab / shiftArrow / shiftPage 三类修饰事件入表（盲输态方向键仍不误取消——
  *  watchEsc 只判 esc 与可打印，修饰事件与「吞掉」同效）。
+ *  【CR-09 已扩】bracketed paste：[200~/[201~ 开合标记识别 + paste 态——态内字节聚合为一个
+ *  { type: "paste", text } 原子事件，不再逐字节落 char（粘贴正文里的 1-9 不再触发 picker 数字
+ *  直达误选、正文里的孤立 ESC 不再误判 Alt）。触发前提 = 外部使能（终端/复用器强制 ?2004h）——
+ *  行模式下 Orosus 自身不开启（全屏 Terminal 的 ?2004h 走 tui/keymatch 另一条路，不经本解析器）。
  *  模态接管 = readable 拉取 + keypress 摘听（T8 走查修正二则：① 挂 'readable' 监听即自动停
  *  flowing，且**不可显式 pause()**——readline/promises 的 question 流过之后，pause 会把底层
  *  句柄读一起杀掉且不再拉起（winpty/conhost 实测：pause+readable 下按键零到达），而 readable
@@ -27,9 +31,41 @@ export type KeyEvent =
   | { type: "tab" }
   | { type: "shiftTab" } // Shift+Tab（[Z——框架化全屏键位模型消费，TUI 批阶段三 F0 扩表）
   | { type: "shiftArrow"; dir: "up" | "down" | "left" | "right" } // [1;2A 系与 [a-d 旧形态
-  | { type: "shiftPage"; dir: "up" | "down" }; // [5;2~ / [6;2~
+  | { type: "shiftPage"; dir: "up" | "down" } // [5;2~ / [6;2~
+  | { type: "paste"; text: string }; // bracketed paste 原子段（CR-09：[200~/[201~ 包裹的整段粘贴）
 
 const ESC = 0x1b;
+
+/** bracketed paste 终止标记 \x1b[201~ 的字节串（开标记 [200~ 在 CSI 分支识别后进 paste 态）。
+ *  态内字节是数据不是按键——只扫终止标记，聚合为一个 paste 事件：消费方 picker 按未知类型
+ *  忽略（「粘贴正文里的 1-9 数字直达误选」从根上免疫），未来的行编辑器整段插入。 */
+const PASTE_END = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e];
+
+/** buf 中 PASTE_END 的起始下标（找不到 -1）。 */
+const findPasteEnd = (buf: number[]): number => {
+  outer: for (let i = 0; i + PASTE_END.length <= buf.length; i++) {
+    for (let j = 0; j < PASTE_END.length; j++) {
+      if (buf[i + j] !== PASTE_END[j]!) continue outer;
+    }
+    return i;
+  }
+  return -1;
+};
+
+/** buf 尾部与 PASTE_END 前缀重合的字节数（跨 chunk 拆半的标记尾巴——留在 pending 等下包）。 */
+const pasteEndPrefixLen = (buf: number[]): number => {
+  for (let k = Math.min(PASTE_END.length - 1, buf.length); k > 0; k--) {
+    let hit = true;
+    for (let j = 0; j < k; j++) {
+      if (buf[buf.length - k + j] !== PASTE_END[j]!) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit) return k;
+  }
+  return 0;
+};
 
 /** 已知 CSI 表（去 \x1b 前缀的序列 → 事件）；未收录序列整体吞掉（见文件头注）。 */
 const CSI_TABLE: Readonly<Record<string, KeyEvent>> = {
@@ -79,6 +115,8 @@ export function createKeyParser(opts?: {
   let pending: number[] = [];
   let flushed: KeyEvent[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let pasting = false; // CR-09：bracketed paste 态——[200~ 起、[201~ 止，态内字节聚合不落 char 流
+  let pasteBuf: number[] = [];
 
   const cancelTimer = (): void => {
     if (timer !== undefined) {
@@ -103,6 +141,24 @@ export function createKeyParser(opts?: {
   const drain = (): KeyEvent[] => {
     const out: KeyEvent[] = [];
     for (;;) {
+      // CR-09 paste 态：字节是数据不是按键——只扫终止标记，标记前的整段聚合为一个 paste 事件
+      if (pasting) {
+        const end = findPasteEnd(pending);
+        if (end === -1) {
+          // 标记未齐：除「尾部可能是拆半标记前缀」外的字节先行入聚合缓冲，等下个 chunk
+          const keep = pasteEndPrefixLen(pending);
+          for (let i = 0; i < pending.length - keep; i++) pasteBuf.push(pending[i]!);
+          pending = pending.slice(pending.length - keep);
+          break;
+        }
+        for (let i = 0; i < end; i++) pasteBuf.push(pending[i]!);
+        pending = pending.slice(end + PASTE_END.length);
+        pasting = false;
+        const text = Buffer.from(pasteBuf).toString("utf8");
+        pasteBuf = [];
+        if (text !== "") out.push({ type: "paste", text }); // 空段不发（无语义的事件）
+        continue;
+      }
       const b0 = pending[0];
       if (b0 === undefined) break;
       if (b0 === ESC) {
@@ -130,6 +186,13 @@ export function createKeyParser(opts?: {
             break; // 序列未齐——等下个 chunk
           }
           const seq = Buffer.from(pending.slice(0, end + 1)).toString("latin1").slice(1);
+          if (seq === "[200~") {
+            // CR-09：bracketed paste 开标记——进聚合态，后续字节走 paste 分支（不进 CSI 表：
+            // 表值是单事件，开标记是态迁移）。态外孤立 [201~ 走下面的未知吞掉（保守不动现状）
+            pasting = true;
+            pending = pending.slice(end + 1);
+            continue;
+          }
           const ev = CSI_TABLE[seq];
           if (ev !== undefined) out.push(ev); // 未知 CSI 整体吞掉
           pending = pending.slice(end + 1);
@@ -176,12 +239,24 @@ export function createKeyParser(opts?: {
 
   return {
     feed(buf: Buffer): KeyEvent[] {
-      pending.push(...buf);
+      for (const b of buf) pending.push(b); // 逐字节入列——大段粘贴（十万级字节）下 spread 推参会顶爆调用栈（CR-09 顺带加固）
       return [...flushed.splice(0), ...drain()];
     },
     settle(): KeyEvent[] {
       cancelTimer();
       const out = flushed.splice(0);
+      if (pasting) {
+        // 流关闭时 paste 未闭合（外部使能方异常）——已收字节整段冲刷为 paste 事件：数据不丢，
+        // 消费方按 paste 语义自处（picker 忽略）；含拆半标记尾巴的保守面
+        const all: number[] = [];
+        for (const b of pasteBuf) all.push(b);
+        for (const b of pending) all.push(b);
+        pasting = false;
+        pasteBuf = [];
+        pending = [];
+        const text = Buffer.from(all).toString("utf8");
+        if (text !== "") out.push({ type: "paste", text });
+      }
       if (pending[0] === ESC) {
         pending.shift();
         out.push({ type: "esc" });

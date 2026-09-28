@@ -8,7 +8,8 @@ export const CORE_RESERVED_SLOT_PREFIXES = ["provider:"] as const;
 export const CORE_RESERVED_SLOT_KEYS = ["auth.apikey", "loop.next-turn"] as const;
 
 const KEBAB = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-const SEMVER = /^\d+\.\d+\.\d+/;
+// CK-14：尾锚必须——旧 /^\d+\.\d+\.\d+/ 只配前缀，"1.2.3garbage" 放行进 audit/catalog；prerelease/build 后缀按 semver 放行
+const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
 /** §4.2 第 4 步静态校验。返回违规清单（空 = 通过）；校验失败 → 该模块降级，不阻断其余。 */
 export function validateModule(def: ModuleDefinition): string[] {
