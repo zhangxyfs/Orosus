@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { renderMarkdown } from "./mdpipe.ts";
+import { stripDangerEsc } from "./ansi-guard.ts";
 import type { StreamChunk } from "./tui/streamview.ts";
 
 const DIM = "\x1b[2m";
@@ -30,7 +31,7 @@ const HINT_429 = "429 限流或配额不足——错误体含 1113（余额不�
 /** 模型错误 → toast 文案（2026-09-23 用户拍板：模型错误不再落流区）：无标签纯文本，排查提示跟随。
  *  全屏浮动 toast（3 行封顶——超长错误体尾部让位）/ 行模式 console 单行同文案。 */
 export function errorMessageText(c: Extract<Chunk, { type: "finish" }>): string {
-  const msg = c.errorMessage ?? "";
+  const msg = stripDangerEsc(c.errorMessage ?? ""); // CR-01：错误体来自端点/网关（外部文字）——危险序列不进终端
   const hint = /HTTP 40[13]/.test(msg) ? `\n提示：${HINT_401}` : /HTTP 429/.test(msg) ? `\n提示：${HINT_429}` : "";
   return `模型错误：${msg}${hint}`;
 }
@@ -41,15 +42,16 @@ export function errorMessageText(c: Extract<Chunk, { type: "finish" }>): string 
  *  注：finish kind=error 的本形仅供非 TTY/--print 管道（byte 回归钉 render.test⑥）；TTY 已改走 attachRender onError。 */
 export function renderChunk(c: Chunk, state: RenderState): string {
   if (c.type === "reasoning/delta") {
+    const text = stripDangerEsc(c.text); // CR-01：模型正文/思考是外部文字——危险序列入口净化（SGR 颜色保留）
     if (!state.inReasoning) {
       state.inReasoning = true;
-      return `\n${DIM}[思考] ${c.text}`;
+      return `\n${DIM}[思考] ${text}`;
     }
-    return c.text;
+    return text;
   }
-  if (c.type === "text/delta") return closeReasoning(state) + c.text;
+  if (c.type === "text/delta") return closeReasoning(state) + stripDangerEsc(c.text);
   if (c.type === "finish" && c.kind === "error") {
-    const msg = c.errorMessage ?? "";
+    const msg = stripDangerEsc(c.errorMessage ?? "");
     const hint = /HTTP 40[13]/.test(msg) ? `\n[提示] ${HINT_401}\n` : /HTTP 429/.test(msg) ? `\n[提示] ${HINT_429}\n` : "";
     return `${closeReasoning(state)}\n[模型错误] ${msg}${hint}`;
   }
@@ -80,7 +82,8 @@ export function toolDisplayName(name: string): string {
 const capArg = (s: string, max = 60): string => {
   // 折叠一切空白（含换行/制表）：命令带真换行（python -c 内嵌 \n）不折叠会带着换行进 ● 行，
   // styleToolLine 的 . 不吃换行 → 整行失配退白色（2026-09-27 用户实机白行根因；TUI 批出生即误写 \\s）
-  const t = s.replace(/\s+/g, " ").trim();
+  // CR-01：工具参数是外部文字——先净化危险序列再折叠（SGR 保留）
+  const t = stripDangerEsc(s).replace(/\s+/g, " ").trim();
   return t.length <= max ? t : `${t.slice(0, max - 12)}…${t.slice(-10)}`;
 };
 
@@ -143,10 +146,12 @@ const HISTORY_LINE_MAX = 2000;
 export function renderHistoryLines(events: SessionEvent[], width: number): string[] {
   const out: string[] = [];
   const textBlocks = (e: SessionEvent): string =>
-    ((e.content ?? []) as { kind?: string; text?: string }[])
-      .filter((p) => p.kind === "text")
-      .map((p) => p.text ?? "")
-      .join("");
+    stripDangerEsc( // CR-01：历史回显同是外部文字面（resume 的存量正文）——入口净化后再入 md 管线
+      ((e.content ?? []) as { kind?: string; text?: string }[])
+        .filter((p) => p.kind === "text")
+        .map((p) => p.text ?? "")
+        .join(""),
+    );
   const cap = (s: string): string => (s.length > HISTORY_LINE_MAX ? `${s.slice(0, HISTORY_LINE_MAX)}…（超长截断——完整原文在会话文件）` : s);
   for (const e of events) {
     if (e.type === "user/message") {
@@ -215,8 +220,9 @@ export function attachRender(
     for await (const c of h.liveChunks()) {
       if (io.activity !== undefined) {
         // 结构化活动面（F2）：kind + 原文——思考/正文边界与着色由 streamview 负责
-        if (c.type === "reasoning/delta") io.activity({ kind: "reasoning", text: c.text });
-        else if (c.type === "text/delta") io.activity({ kind: "text", text: c.text });
+        // CR-01：模型 chunk 是外部文字——入口净化（危险序列剥净、SGR 保留，流式 md 管线不受扰）
+        if (c.type === "reasoning/delta") io.activity({ kind: "reasoning", text: stripDangerEsc(c.text) });
+        else if (c.type === "text/delta") io.activity({ kind: "text", text: stripDangerEsc(c.text) });
         else if (c.type === "finish" && c.kind === "error") {
           // 模型错误 toast 化（2026-09-23 用户拍板）：TTY 走 onError（全屏 toast/行模式单行），
           // 错误体不进活动流区；无 toast 口（兼容面/测试）回落旧 activity 形

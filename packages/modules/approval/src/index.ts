@@ -73,9 +73,11 @@ export default defineModule({
               return ruleSegs.length === segs.length && ruleSegs.every((rs, i) => rs === segs[i]);
             }
             // MA-02/03：段为完整文本——`bash(git push *)` 命中 `git push origin main`，
-            // `bash(npm test)` 不再误吞 `npm test --watch`
+            // `bash(npm test)` 不再误吞 `npm test --watch`。MA-04 配套：前缀匹配按词边界
+            //（`${seg} ` 补尾空格）——裸命令 `git status` 也命中 `bash(git status *)`，且
+            // `git statusfoo` 这类同前缀异词不误中
             const prefix = ruleArgs.endsWith("*") ? ruleArgs.slice(0, -1) : null;
-            return segs.every((seg) => prefix !== null ? seg.startsWith(prefix) : seg === ruleArgs);
+            return segs.every((seg) => prefix !== null ? `${seg} `.startsWith(prefix) : seg === ruleArgs);
           }
         : undefined;
       const d = decide({
@@ -145,9 +147,10 @@ export default defineModule({
         }
         if (choice === "本会话始终允许" && d.memoryKey !== null) state.sessionMemory.add(d.memoryKey);
         if (choice === "始终允许（写规则落盘）" && offerPersist) {
-          // 规则生成：单段 → bash(<首词> *)——「批准一次 git 后不弹窗」的用户价值（走查定案）；
+          // 规则生成：单段 → bash(<段1> *)——MA-04 收窄一档（2026-09-28 拍板，推翻旧走查「首词全家放行」定案）：
+          // 批准 git status 落 bash(git status *)——同命令带参数不再问，换子命令（git push）仍会问；
           // 多段 → 单条 bash(<段1> && <段2>) 段列原样（复合精确）——写生效层 + 会话内即时生效
-          const pattern = segs.length === 1 ? `${p.name}(${segs[0]!.split(" ")[0]} *)` : `${p.name}(${segs.join(" && ")})`;
+          const pattern = segs.length === 1 ? `${p.name}(${segs[0]!} *)` : `${p.name}(${segs.join(" && ")})`;
           try {
             persistAllowRule(cfg.configFile ?? defaultConfigFile(), pattern, cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"));
             cfg.rules.push({ effect: "allow", tool: pattern }); // 本会话即时生效（盘上规则 reload 后复检）

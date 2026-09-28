@@ -1,9 +1,11 @@
 /** 工具明细视图（2026-09-23 走查批——工具行 diff/错误体的纯函数面，DocModel 渲染期调用）。
- *  形态（2026-09-23 二轮走查拍板，kimi/pi 同族）：行号栏暗色 + 删行 err 文字 / 增行 accent 文字
+ *  形态（2023-09-23 二轮走查拍板，kimi/pi 同族）：行号栏暗色 + 删行 err 文字 / 增行 accent 文字
  *  （不铺底色）、公共前导缩进剥除、tab 展开为 2 空格（tab 在终端是变宽跳格——visibleWidth 计 1
  *  而终端跳到 8 倍数列，实宽漂移把面板行冲破的前案）、超宽折行归渲染层。
  *  数据源 = tool/call 事件的 args（tool-fs__edit 的 edits[].oldText/newText、tool-fs__write 的
  *  content）与 tool/result 的 output（失败体）——此前在 renderEvent 被压成一行文本丢失。 */
+
+import { stripDangerEsc } from "../ansi-guard.ts";
 
 /** diff 行：ctx 上下文 / del 删除 / add 新增 / gap 省略隔断；no = 块内 1 基行号（删行与上下文按
  *  旧文本计、增行按新文本计——真实文件行号调用面不可得，登记为已知口径）。 */
@@ -13,9 +15,10 @@ export interface DiffRow {
 	text: string;
 }
 
-/** tab → 2 空格（终端跳格变宽，计宽与实显必漂移）；剥行尾空白。 */
+/** tab → 2 空格（终端跳格变宽，计宽与实显必漂移）；剥行尾空白；CR-01——Write/Edit 正文是模型手笔
+ *  （外部文字），diff 行入口净化（危险序列剥净、SGR 保留）。 */
 function cleanLine(l: string): string {
-	return l.replace(/\t/g, "  ").trimEnd();
+	return stripDangerEsc(l).replace(/\t/g, "  ").trimEnd();
 }
 
 /** 剥除一组行的公共前导空白（deep indent 白占流区宽——二轮走查图2 拍板）；gap 行不参与。 */
