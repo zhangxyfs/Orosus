@@ -30,7 +30,10 @@ interface Skill {
 }
 
 const parseFrontmatter = (raw: string): Omit<Skill, "file" | "layer" | "source"> | undefined => {
-  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+  // MI-10 修复（2026-09-28 code review P2）：`\r?` 容忍 CRLF——Windows/别家工具写进来的 SKILL.md（首行实为
+  // `---\r\n`）旧正则整体不匹配 → 技能静默从清单消失（主打 .agents 互操作生态的模块不能只认 LF）。
+  // 行内 `trim()` 已兜字段尾的 `\r`，body 原样透传。
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
   if (m === null) return undefined;
   const [, head, body] = m;
   const fields = new Map<string, string>();
@@ -58,17 +61,36 @@ interface Track {
   source: Skill["source"];
 }
 
-/** 扫描轨道入表（弱→强，后入表者胜）；目录不存在或条目缺 SKILL.md / name 自然跳过。 */
-function scanSkills(tracks: Track[]): Skill[] {
+/** 坏轨/坏条目告警口（MI-09）：scanSkills 逐层容错的观测面——activate 期抛出会按契约③把整个模块降级
+ *  （五轨全丢：内置技能、清单段、load 工具一起消失），运行期抛出也会打断 catalog/load。 */
+type ScanWarn = (code: string, msg: string, fields?: Record<string, unknown>) => void;
+
+/** 扫描轨道入表（弱→强，后入表者胜）；目录不存在或条目缺 SKILL.md / name 自然跳过。
+ *  MI-09 修复（2026-09-28 code review P2）：单轨/单条目级 try/catch——existsSync 为 true 但不可读
+ *  （EACCES）、路径是文件而非目录（ENOTDIR）、SKILL.md 是目录（EISDIR）/读到一半被删（ENOENT）都只
+ *  跳过该轨/该条并经 onWarn 报告；一处坏文件系统状态不再拖垮全部技能。 */
+function scanSkills(tracks: Track[], onWarn?: ScanWarn): Skill[] {
   const byName = new Map<string, Skill>();
   for (const { dir, layer, source } of tracks) {
-    if (!existsSync(dir)) continue;
-    for (const sub of readdirSync(dir).sort()) {
+    let subs: string[];
+    try {
+      if (!existsSync(dir)) continue;
+      subs = readdirSync(dir).sort();
+    } catch (err) {
+      onWarn?.("skill.track-scan-failed", `轨道目录不可读，跳过该轨：${dir}`, { dir, error: String(err) });
+      continue;
+    }
+    for (const sub of subs) {
       const file = join(dir, sub, "SKILL.md");
-      if (!existsSync(file)) continue;
-      const parsed = parseFrontmatter(readFileSync(file, "utf8"));
-      if (parsed === undefined) continue;
-      byName.set(parsed.name, { ...parsed, file, layer, source });
+      try {
+        if (!existsSync(file)) continue;
+        const parsed = parseFrontmatter(readFileSync(file, "utf8"));
+        if (parsed === undefined) continue;
+        byName.set(parsed.name, { ...parsed, file, layer, source });
+      } catch (err) {
+        onWarn?.("skill.entry-scan-failed", `技能文件不可读，跳过该条：${file}`, { file, error: String(err) });
+        continue;
+      }
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -190,14 +212,14 @@ function catalogRow(s: Skill, disabled: Set<string>): {
   };
 }
 
-function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>): Tool {
+function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, warn: ScanWarn): Tool {
   return defineTool({
     name: "skill__load",
     description: "读取指定技能的完整内容（摘要常驻系统提示，本文按需加载）",
     parameters: z.object({ name: z.string().describe("技能名（见系统提示中的可用技能列表）") }),
     resolveExecution: async (input) => {
       const { name } = input as { name: string };
-      const hit = () => scanSkills(tracks).find((x) => x.name === name);
+      const hit = () => scanSkills(tracks, warn).find((x) => x.name === name); // MI-09：重扫同样容错（坏轨只损该轨）
       return {
         // accesses 按命中技能真实 file 声明（m4-7 修 bug：原写死 ~/.orosus/skills/<名>，项目级路径对不上）
         accesses: [Access.fsRead((hit() ?? { file: `~/.orosus/skills/${name}/SKILL.md` }).file)],
@@ -208,7 +230,7 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>): 
           }
           const s = hit(); // 执行时重扫（ZCode）：会话中用户新放的技能指名即加载，清单滞后不碍事
           if (s === undefined) {
-            const names = scanSkills(tracks).map((x) => x.name).join("、");
+            const names = scanSkills(tracks, warn).map((x) => x.name).join("、");
             return { output: `技能 "${name}" 不存在（可用：${names || "无"}）`, isError: true };
           }
           if (loaded.has(name)) {
@@ -237,13 +259,15 @@ export default defineModule({
     const tracks = skillTracks(dirs);
     const disabled = new Set(cfg?.disabled ?? []);
     const loaded = new Set<string>();
-    const skills = scanSkills(tracks);
+    // MI-09：坏轨/坏条目经模块日志报告（scanSkills 容错 + 可观测——不静默吞，也不抛出降级）
+    const warn: ScanWarn = (code, msg, fields) => ctx.log.warn(code, msg, fields);
+    const skills = scanSkills(tracks, warn);
     const listed = skills.filter((s) => !s.disableModelInvocation && !disabled.has(s.name)); // 模型清单两剔除（T2/T6）
     if (listed.length > 0) ctx.contribute.promptSection({ order: 0, text: listingText(listed) });
     // 工具无条件注册（原「无技能零贡献」只省提示段）：执行时重扫要求会话中途新放技能也可指名加载
-    ctx.contribute.tool(loadTool(tracks, disabled, loaded));
+    ctx.contribute.tool(loadTool(tracks, disabled, loaded, warn));
     // 目录现读（每次调用重扫磁盘——UI 面 / 清单口径可不同步于 activate 快照，菜单/列表页天然活数据）
-    ctx.provide("skill.catalog", () => scanSkills(tracks).map((s) => catalogRow(s, disabled)));
+    ctx.provide("skill.catalog", () => scanSkills(tracks, warn).map((s) => catalogRow(s, disabled)));
     // 去重集重置口：宿主 compact 完成点惰性调用（正文被压掉后重调必须重新给正文）；会话边界经模块重建自然清零
     ctx.provide("skill.resetLoaded", () => { loaded.clear(); });
   },

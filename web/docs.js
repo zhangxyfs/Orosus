@@ -1,5 +1,8 @@
-/* docs.html 逻辑：拉取 md 镜像 → marked 渲染 → 链接改写（站内 .md 继续走查看器——
- * 含 docs/api/*.md，其余相对资源指向 md/ 镜像）。 */
+/* docs.html 逻辑：拉取 md 镜像 → marked 渲染 → 消毒 → 链接改写（站内 .md 继续走查看器——
+ * 含 docs/api/*.md，其余相对资源指向 md/ 镜像）。
+ * 安全面（XSS）：marked 输出不直接进 innerHTML——DOMParser 静态解析（不执行脚本/不拉资源）后
+ * 消毒（删脚本类元素、剥 on* 内联事件、中和 javascript:/vbscript: URL）；?file= 参数只接受
+ * 站内相对 .md 路径——站内任意文件不得进「当 markdown 解析 → DOM 注入」管线。 */
 (function () {
   "use strict";
   var content = document.getElementById("content");
@@ -23,9 +26,36 @@
     return out.join("/");
   }
 
+  // ?file= 形状校验：只放行站内相对 .md 路径（拒绝 .. 段、反斜杠、绝对路径、协议/盘符形）。
+  // 白名单不可行——正文内相对 .md 链接（如 docs/api/*.md）也要走查看器，形状约束即最小面。
+  function safeFile(f) {
+    if (typeof f !== "string" || f === "" || !/\.md$/i.test(f)) return null;
+    if (f.indexOf("\\") >= 0 || f.charAt(0) === "/" || /^[a-z][a-z0-9+.-]*:/i.test(f)) return null;
+    var parts = f.split("/");
+    for (var i = 0; i < parts.length; i++) if (parts[i] === "..") return null;
+    return f;
+  }
+
+  // marked 输出消毒（不引外部库的最小面，README badge 等良性原始 HTML 保留）：
+  // script/iframe/object/embed/base/form 整删；所有元素剥 on* 内联事件属性；
+  // URL 属性值（剥空白后）形如 javascript:/vbscript: 的整删。
+  function sanitize(root) {
+    root.querySelectorAll("script, iframe, object, embed, base, form").forEach(function (el) { el.remove(); });
+    root.querySelectorAll("*").forEach(function (el) {
+      for (var i = el.attributes.length - 1; i >= 0; i--) {
+        var a = el.attributes[i];
+        var name = (a.name || "").toLowerCase();
+        var val = (a.value || "").replace(/\s+/g, "");
+        if (name.indexOf("on") === 0 || /^(javascript|vbscript):/i.test(val)) el.removeAttribute(a.name);
+      }
+    });
+  }
+
   function rewrite(html, filePath) {
     var box = document.createElement("div");
-    box.innerHTML = html;
+    var parsed = new DOMParser().parseFromString(html, "text/html");
+    sanitize(parsed.body);
+    while (parsed.body.firstChild) box.appendChild(parsed.body.firstChild);
     // 标题加 id（锚点跳转用）
     box.querySelectorAll("h1, h2, h3, h4").forEach(function (h, i) {
       if (!h.id) h.id = "h-" + (h.textContent || "").trim().replace(/\s+/g, "-").toLowerCase() + "-" + i;
@@ -61,8 +91,15 @@
     });
   }
 
-  function load(file) {
-    status.textContent = (EN ? "Loading " : "加载 ") + file + (EN ? " …" : " …");
+  function load(file0) {
+    var file = safeFile(file0);
+    if (file === null) {
+      // 非法 ?file=（越界/非 .md）回落默认文档——不把站内任意文件送进 markdown 渲染管线
+      file = EN ? "README_EN.md" : "README.md";
+      status.textContent = (EN ? "Invalid file parameter (site-relative .md only) — falling back to " : "文件参数不合法（仅限站内 .md），回落 ") + file;
+    } else {
+      status.textContent = (EN ? "Loading " : "加载 ") + file + (EN ? " …" : " …");
+    }
     fetch("md/" + file, { cache: "no-cache" }).then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
@@ -88,7 +125,7 @@
   });
 
   // 语言切换：偏好存 localStorage；当前文档有对照版就跳对照版，否则回落到该语言的 README
-  var q = new URLSearchParams(location.search).get("file");
+  var q = safeFile(new URLSearchParams(location.search).get("file"));
   var currentFile = q || (EN ? "README_EN.md" : "README.md");
   var btn = document.getElementById("langBtn");
   if (btn) {

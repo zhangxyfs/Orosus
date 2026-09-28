@@ -1,14 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import { createHarness, InMemorySessionStore, scanBucketSessions } from "@orosus/core";
 import { fakeProvider } from "@orosus/testing";
 import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/provider";
 import { Access, defineTool } from "@orosus/contracts/tool";
 import toolFs from "@orosus/tool-fs";
-import type { CommandUi, ModuleDefinition, SubagentPort } from "@orosus/contracts/module";
+import type { CommandUi, ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
 import approval from "@orosus/approval";
 import toolSubagent from "@orosus/tool-subagent";
 
@@ -55,7 +55,7 @@ const tomlWithAgentModel = (extra: string): string => {
   return '[tool-subagent]\nmodel = "fake2/agent-m"\n\n' + extra;
 };
 
-const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { approval?: boolean; ui?: CommandUi; configToml?: string } = {}): Promise<Setup> => {
+const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { approval?: boolean; ui?: CommandUi; configToml?: string; extraModules?: ModuleDefinition[] } = {}): Promise<Setup> => {
   dir = mkdtempSync(join(tmpdir(), "orosus-e2e-"));
   writeFileSync(join(dir, "user.toml"), tomlWithAgentModel(opts.configToml ?? ""), "utf8");
   let port: SubagentPort | undefined;
@@ -130,7 +130,7 @@ const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { appr
     spillDir: join(dir, "spill"),
     cwd: dir,
     ...(opts.ui !== undefined ? { commandUi: opts.ui } : {}),
-    modules: [providerMod, consumer, toolSubagent, writeMod, gateMod, bashMod, toolFs, ...(opts.approval === true ? [approval] : [])],
+    modules: [providerMod, consumer, toolSubagent, writeMod, gateMod, bashMod, toolFs, ...(opts.approval === true ? [approval] : []), ...(opts.extraModules ?? [])],
     config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
   return { h, port: port!, writes, gate, bashCommands };
@@ -483,4 +483,55 @@ describe("端到端十三场景 T15", () => {
     expect(s.writes.has("src/main.ts")).toBe(false);
     await s.h.close();
   }, 20000);
+
+  it("s14 CX-06 spill 文件名消毒：恶意 callId（穿越串/win32 非法字符/同 id 复用）不逃出子代理 spillDir，全文落盘可读", async () => {
+    const big = "溢".repeat(33000); // > OUTPUT_LIMIT（字节按 length 近似口径）
+    const bigMod: ModuleDefinition = {
+      name: "big", version: "0.1.0", description: "大输出", api: 1, mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "big__out", description: "大", parameters: z.object({}),
+          resolveExecution: () => Promise.resolve({
+            accesses: [], approvalRule: "big__out",
+            execute: () => Promise.resolve({ output: big, isError: false }),
+          }),
+        }));
+      },
+    };
+    const spillRootOf = (h: Setup["h"], id: string): string => join(dir!, "sessions", h.sessionId, "agents", `agents_${id}`, "spill");
+    const spillPathOf = (h: Setup["h"], id: string): string => {
+      const raw = readFileSync(join(dir!, "sessions", h.sessionId, "agents", `agents_${id}`, "agents", "session.jsonl"), "utf8");
+      const tr = raw.split("\n").filter((l) => l.trim() !== "")
+        .map((l) => JSON.parse(l) as { type?: string; output?: string }).find((e) => e.type === "tool/result");
+      const m = /全文已溢写 (.+?)…/u.exec(tr?.output ?? "");
+      expect(m).not.toBeNull(); // 溢写成功（旧实现在此就分叉：非法字符炸盘降级「溢写失败」）
+      return m![1]!;
+    };
+    // A. 穿越串：≥3 个 ".." 的 callId 在旧实现下经 join 归一逃出 spillDir（CX-06 校验备注实测口径）
+    const s = await setup([text("主对话收尾")], [call("../../../../../evil", "big__out", "{}"), text("完")], { extraModules: [bigMod] });
+    const outA = (await s.port.spawn({ label: "穿越溢写", prompt: "跑" })) as SubagentOutcome;
+    expect(outA.status).toBe("completed");
+    const pathA = spillPathOf(s.h, outA.id);
+    const relA = relative(spillRootOf(s.h, outA.id), pathA);
+    expect(relA.startsWith("..")).toBe(false);   // 落在该子代理 spillDir 内（旧实现：spill-../../.. 直接写出到 sessions/ 层）
+    expect(isAbsolute(relA)).toBe(false);
+    expect(readFileSync(pathA, "utf8")).toBe(big); // 全文完整落盘
+    await s.h.close();
+    // B. win32 非法字符（:*?"<>|）：旧实现 writeFileSync 抛 → CX-03 后降级丢溢写；消毒后照常落盘（独立 harness——fakeProvider 顺序消费不共享）
+    const s2 = await setup([text("主对话收尾")], [call('bad:*?"<>|name', "big__out", "{}"), text("完")], { extraModules: [bigMod] });
+    const outB = (await s2.port.spawn({ label: "非法字符溢写", prompt: "跑" })) as SubagentOutcome;
+    expect(outB.status).toBe("completed");
+    const pathB = spillPathOf(s2.h, outB.id);
+    expect(readFileSync(pathB, "utf8")).toBe(big);
+    await s2.h.close();
+    // C. 同 callId 两次超限：序号防覆写——两份全文都在（旧实现第二次覆写第一次，前文丢失）
+    const s3 = await setup([text("主对话收尾")], [call("dup", "big__out", "{}"), call("dup", "big__out", "{}"), text("完")], { extraModules: [bigMod] });
+    const outC = (await s3.port.spawn({ label: "复用溢写", prompt: "跑" })) as SubagentOutcome;
+    expect(outC.status).toBe("completed");
+    const rootC = spillRootOf(s3.h, outC.id);
+    const files = readdirSync(rootC).filter((f) => f.endsWith(".txt"));
+    expect(files.length).toBe(2); // spill-<序号>-dup.txt × 2——同 callId 不互相覆写
+    for (const f of files) expect(readFileSync(join(rootC, f), "utf8")).toBe(big);
+    await s3.h.close();
+  }, 45000);
 });

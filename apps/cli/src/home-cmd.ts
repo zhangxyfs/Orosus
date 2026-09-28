@@ -1,5 +1,5 @@
 import { cpSync, existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 
 /** `orosus home path` / `orosus home migrate <目标> [--dry-run|--apply]`（M4-2.5 T6——ROADMAP 迁移 ②）。
  *  纪律与 prune 同款：移动性操作当删除性对待——缺省 dry-run、显式 --apply 才动；
@@ -60,6 +60,12 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
   const dest = resolve(target);
   if (dest === resolve(source)) { io.out(`目标与源相同：${dest}`); return 1; }
   if (!existsSync(source)) { io.out(`源目录不存在：${source}（先启动一次 orosus 生成，或检查 OROSUS_HOME）`); return 1; }
+  // CM-10（2026-09-28 code review）：目标在源内 → 前置人话拒绝（fs.cp 自拷贝会拒，但报错形态不友好且
+  // 在无兜底期直接裸抛）；win32 路径大小写不敏感受理
+  const insideSource = process.platform === "win32"
+    ? dest.toLowerCase().startsWith(resolve(source).toLowerCase() + sep)
+    : dest.startsWith(resolve(source) + sep);
+  if (insideSource) { io.out(`目标在源目录内，拒绝：${dest}（迁移目标必须是源之外的位置）`); return 1; }
   if (existsSync(dest)) {
     if (!dirEmpty(dest)) { io.out(`目标已存在且非空，拒绝：${dest}（不会覆盖任何已有数据）`); return 1; }
   }
@@ -74,17 +80,30 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
   }
 
   // apply：复制 → 双侧校验 → 校验过才改名留证
-  if (io.copy !== undefined) io.copy(source, dest);
-  else cpSync(source, dest, { recursive: true });
-  const got = walk(dest);
-  if (got.files !== plan.files || got.bytes !== plan.bytes) {
-    rmSync(dest, { recursive: true, force: true });
-    io.out(`校验失败：目标 ${got.files} 文件/${got.bytes} 字节 ≠ 源 ${plan.files} 文件/${plan.bytes} 字节——目标已清理，源未动`);
-    return 1;
-  }
+  // CM-10：复制/校验/改名任一步抛错（盘满、EACCES、长路径、Windows 目录占用 EPERM/EBUSY）此前直接穿透
+  // = 裸堆栈退出 + 已复制目标残留盘上 + 退出码不可控——文件头「任一步失败清理目标已复制部分、源不动、
+  // 退出码 1」的承诺在此兑现。rename 失败必在生效前抛（同步操作无半完成态），catch 内源恒未动
   const ts = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const renamed = `${source}.pre-migrate-${ts}`;
-  renameSync(source, renamed);
+  try {
+    if (io.copy !== undefined) io.copy(source, dest);
+    else cpSync(source, dest, { recursive: true });
+    const got = walk(dest);
+    if (got.files !== plan.files || got.bytes !== plan.bytes) {
+      rmSync(dest, { recursive: true, force: true });
+      io.out(`校验失败：目标 ${got.files} 文件/${got.bytes} 字节 ≠ 源 ${plan.files} 文件/${plan.bytes} 字节——目标已清理，源未动`);
+      return 1;
+    }
+    renameSync(source, renamed);
+  } catch (err) {
+    try {
+      rmSync(dest, { recursive: true, force: true }); // 清理已复制部分（清理自身失败不掩盖原始错误）
+    } catch {
+      io.out(`（目标自动清理失败——请手动删除 ${dest}）`);
+    }
+    io.out(`迁移失败：${err instanceof Error ? err.message : String(err)}——目标已清理，源未动`);
+    return 1;
+  }
   io.out(`迁移完成：${plan.files} 个文件/${plan.bytes} 字节 → ${dest}`);
   io.out(`源已改名留证（绝不删，确认无误后可自行删除）：${renamed}`);
   // 生效指引：env 写入失败不回滚迁移（目标完好+源留证，数据双份安全）——改打印手动行

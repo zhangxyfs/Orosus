@@ -112,10 +112,15 @@ export function decide(input: DecideInput): Decision {
   }
 
   // ask-risky（出厂默认）
-  if (input.accesses.some((a) => a.kind === "fs.write" && isSensitivePath(a.path))) {
-    const key = `sensitive:${input.name}`;
-    if (input.sessionAllowed(key)) return { effect: "allow", source: "memory", reason: "本会话已允许敏感路径写" };
-    return { effect: "ask", source: "mode", reason: "敏感路径写入", memoryKey: key };
+  // MA-05 修复（2026-09-28 code review）：敏感路径写的会话记忆键带路径——旧键 `sensitive:<工具名>` 按工具
+  // 不按路径，批准一次写 .env 后同会话 ~/.ssh/id_rsa、~/.aws/credentials 等全部敏感写共享一把钥匙静默放行；
+  // 现改为 `sensitive:<工具名>:<首个敏感写路径>`（win32 小写归一与 isSensitivePath 同款，键稳定），文案带路径
+  for (const a of input.accesses) {
+    if (a.kind !== "fs.write" || !isSensitivePath(a.path)) continue;
+    const norm = process.platform === "win32" ? a.path.toLowerCase() : a.path;
+    const key = `sensitive:${input.name}:${norm}`;
+    if (input.sessionAllowed(key)) return { effect: "allow", source: "memory", reason: `本会话已允许敏感路径写：${norm.slice(0, 80)}` };
+    return { effect: "ask", source: "mode", reason: `敏感路径写入：${a.path.slice(0, 80)}`, memoryKey: key };
   }
   if (input.accesses.some((a) => a.kind === "subprocess" || a.kind === "all")) {
     if (input.sessionAllowed(input.approvalRule)) return { effect: "allow", source: "memory", reason: "本会话已允许" };

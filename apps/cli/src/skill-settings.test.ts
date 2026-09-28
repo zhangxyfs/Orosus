@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "smol-toml";
 import { readSkillDisabled, toggleSkillDisabled, skillScopeLabel, skillListRow, skillDetailText, truncateAtWord, type SkillCatalogRow } from "./skill-settings.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
 
@@ -42,6 +43,20 @@ describe("技能停用配置（m4-7 T8——[skill] 节 disabled 数组键，行
 		expect(raw).toContain("# 注释");
 		expect(raw).toContain('userDir = "D:/my-skills"');
 		expect(raw).toContain('disabled = ["pdf"]');
+	});
+
+	it("⑧ CM-11：技能名含引号/换行（目录名可合法含）→ disabled 数组转义写入、读回还原、smol-toml 可解析（无新行注入）", () => {
+		dir = mkdtempSync(join(tmpdir(), "skill-cm11-"));
+		const evil = 'a"b\nc';
+		expect(toggleSkillDisabled(evil, cfgFile())).toBe(true);
+		const raw = readFileSync(cfgFile(), "utf8");
+		expect(raw).toContain('disabled = ["a\\"b\\nc"]'); // 引号/换行转成字面量转义序列——单行、无裸换行（旧实现可注入新节）
+		expect(readSkillDisabled(cfgFile())).toEqual([evil]); // 读侧还原成对
+		expect(() => parse(raw)).not.toThrow(); // 落盘产物是真 TOML
+		expect((parse(raw) as { skill?: { disabled?: string[] } }).skill?.disabled).toEqual([evil]);
+		// 再翻一个正常名：数组整替不丢已转义项
+		expect(toggleSkillDisabled("pdf", cfgFile())).toBe(true);
+		expect(readSkillDisabled(cfgFile())).toEqual([evil, "pdf"]);
 	});
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore, repairFile } from "./jsonl.ts";
@@ -128,6 +129,75 @@ describe("sumUsage / lifetimeUsage 双形态（M4-1 T5/D45：新形态 usage 落
     await cur.append("assistant/message", { content: [{ kind: "text", text: "续" }], usage: { input: 5, output: 1 } });
     expect(await cur.lifetimeUsage()).toEqual({ input: 15, output: 5, sessions: 2 });
     await cur.close();
+  });
+});
+
+describe("CS-06 兄弟会话 subagent-usage 计入口径（2026-09-28 code review）", () => {
+  it("兄弟会话文件的 session/subagent-usage 行计入 lifetimeUsage——与当前会话口径（sumUsage）一致，重启后不再丢失", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs06-"));
+    // 兄弟会话（磁盘态）：message 用量 + 子代理账
+    const sibling = new JsonlSessionStore({ dir, sessionId: "s_sib" });
+    await sibling.append("session/header", { format: 1 });
+    await sibling.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input: 10, output: 4 } });
+    await sibling.append("session/subagent-usage", { agentId: "sa_1", usage: { input: 7, output: 3 } }); // 旧实现：兄弟循环落穿不计
+    await sibling.close();
+    // 当前会话（内存镜像态）：自己的子代理账走 sumUsage 路径——两路径共用 usageDelta 后口径钉死
+    const cur = new JsonlSessionStore({ dir, sessionId: "s_cur" });
+    await cur.append("session/header", { format: 1 });
+    await cur.append("session/subagent-usage", { agentId: "sa_2", usage: { input: 2, output: 1 } });
+    expect(await cur.lifetimeUsage()).toEqual({ input: 19, output: 8, sessions: 2 }); // (10+7)+(2) / (4+3)+(1)：兄弟 17/7 + 当前 2/1
+    await cur.close();
+  });
+});
+
+describe("CS-03 单写者锁（2026-09-28 code review）：同 sessionId 双实例并发写——锁互斥 + stale 回收 + close 释放", () => {
+  it("① 双实例并发 append：第二实例 reject 且错误指向双开，文件零交织（旧实现：双方从同尾巴读出相同 seq/lastId，重复 seq + 两链交织静默落盘）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs03-"));
+    const a = new JsonlSessionStore({ dir, sessionId: "s_lock" });
+    await a.append("session/header", { format: 1 }); // 首写抢锁（await = drain 已完成 = 锁确在盘上——确定性面，无时序竞态）
+    const b = new JsonlSessionStore({ dir, sessionId: "s_lock" });
+    await expect(b.append("user/message", { content: [] })).rejects.toThrow(/另一实例/); // 同进程双实例：锁 pid = 本进程 pid，活着 → 拒
+    await expect(b.close()).rejects.toThrow(); // close 诚实拒绝：b 的事件从未落盘（CS-02 语义——不谎报完成）
+    await a.append("user/message", { content: [] });
+    await a.close();
+    const events = readFileSync(join(dir, "s_lock", "agents", "session.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.seq)).toEqual([1, 2]); // 撞号零发生、单链完整
+  });
+
+  it("② close 释放锁：首实例 close 后第二实例 append 成功、seq 延续", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs03b-"));
+    const a = new JsonlSessionStore({ dir, sessionId: "s_rel" });
+    await a.append("session/header", { format: 1 });
+    await a.append("user/message", { content: [] });
+    await a.close();
+    expect(existsSync(join(dir, "s_rel", "agents", "session.lock"))).toBe(false); // close 释放
+    const b = new JsonlSessionStore({ dir, sessionId: "s_rel" });
+    expect(await b.append("x")).toMatchObject({ seq: 3 }); // 释放后第二实例接管
+    await b.close();
+  });
+
+  it("③ stale 锁回收：持有者 pid 已死（崩溃残留）→ 回收重建、append 成功自愈", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs03c-"));
+    const dead = spawnSync(process.execPath, ["-e", ""]); // 同步等它退出——pid 确定已死（确定性面，不依赖时序）
+    expect(dead.pid).toBeGreaterThan(0);
+    const lockPath = join(dir, "s_stale", "agents", "session.lock");
+    mkdirSync(join(dir, "s_stale", "agents"), { recursive: true });
+    writeFileSync(lockPath, `${dead.pid}\n`); // 模拟进程崩溃未 close 的锁残留
+    const s = new JsonlSessionStore({ dir, sessionId: "s_stale" });
+    await s.append("session/header", { format: 1 }); // 不炸——stale 回收（坏锁文件同样按 stale 处理，不许死锁后续打开）
+    expect(readFileSync(lockPath, "utf8").startsWith(String(process.pid))).toBe(true); // 锁已易主
+    await s.close();
+  });
+
+  it("④ 只读第二实例不受锁影响：构造 + all() 照常（锁只在首写抢——树扫描/fork 祖先视图/测试第二实例零变化）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cs03d-"));
+    const a = new JsonlSessionStore({ dir, sessionId: "s_ro" });
+    await a.append("session/header", { format: 1 });
+    await a.append("user/message", { content: [{ kind: "text", text: "q" }] });
+    const b = new JsonlSessionStore({ dir, sessionId: "s_ro" }); // a 活着、锁在手
+    expect((await b.all()).map((e) => e.type)).toEqual(["session/header", "user/message"]); // 读路径零影响
+    await b.close(); // 无锁可释——正常 resolve
+    await a.close();
   });
 });
 

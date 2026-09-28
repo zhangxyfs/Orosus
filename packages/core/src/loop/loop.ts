@@ -126,6 +126,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
 
   let endKind: "completed" | "interrupted" | "error" = "completed";
   let endDetail: string | undefined;
+  let lengthHit = false; // CL-03：本 turn 任一 step 的 finish.kind === "length"（max_tokens 截断）——turn/end 带内记档
 
   outer: while (!signal.aborted) {
     yield* emit(LOG_TYPES.turnStep);
@@ -157,6 +158,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     let usage: { input: number; output: number } | undefined;
     const pending = new Map<string, PendingToolCall>();
     let finish: Extract<Chunk, { type: "finish" }> = { type: "finish", kind: "stop" };
+    let sawFinish = false; // CL-02：流结束前是否收到 finish 块（provider 契约要求必有——缺块 = 截断/违约）
 
     try {
       for await (const chunk of provider({ model, system, messages, tools: tools.specs(), signal, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) })) {
@@ -185,6 +187,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
           }
           case "finish":
             finish = chunk;
+            sawFinish = true;
             break;
           default:
             break;
@@ -193,6 +196,22 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     } catch (err) {
       // provider 契约是不许 reject（§6.4）；违约者按带内错误同等处理
       finish = { type: "finish", kind: "error", errorMessage: String(err) };
+    }
+    // CL-02 修复（2026-09-28 code review）：provider 流干净 EOF 但全程无 finish 块（经网关/代理的 SSE 被
+    // 中间层干净切断的常见形态——契约要求必有 finish，缺块即截断/违约）时，旧实现沿用预置 kind:"stop"
+    // 静默收尾：半截 text 物化为 assistant/message、turn/end{completed}，截断对用户不可见。现改按带内错误
+    // 收尾（abort 除外——已有 interrupted 语义；provider 抛错除外——已是 error）。注：产出侧放大器
+    // provider-custom/stream-anthropic.ts 干净 EOF 不补 finish 属该域，留档由其修——loop 侧先保证消费面诚实。
+    if (!sawFinish && !signal.aborted && finish.kind !== "error") {
+      finish = { type: "finish", kind: "error", errorMessage: "流在 finish 块前结束（响应可能被截断）" };
+    }
+    // CL-03 修复（2026-09-28 code review）：finish.kind "length"（max_tokens 截断）此前全仓零消费——按
+    // completed 静默收尾，截断对用户与后续轮次均不可见、日志零痕迹。现带内记档：assistant/message 与
+    // turn/end 落 finishKind:"length"（渲染面/后续消费可据此提示「输出达上限被截断」），诊断面同步 warn。
+    // 不做自动续写（length 当可续跑信号经 followUp 注入「继续」是策略行为——零策略骨架，留给模块装配层）。
+    if (finish.kind === "length") {
+      lengthHit = true;
+      log.warn("loop.finish.length", "输出达 max_tokens 上限被截断（finishKind=length 已落 assistant/message 与 turn/end）");
     }
     log.debug("loop.provider.stream-finish", "provider 流式结束", { kind: finish.kind });
 
@@ -205,6 +224,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
           ...(text !== "" ? [{ kind: "text", text }] : []),
         ],
         ...(usage !== undefined ? { usage } : {}),
+        ...(finish.kind === "length" ? { finishKind: "length" } : {}), // CL-03：截断记档（per-step 精确）
       });
     }
 
@@ -273,7 +293,11 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
   }
 
   if (signal.aborted && endKind === "completed") endKind = "interrupted"; // 预中止（请求未发出）也记 interrupted，与流中 abort 同语义
-  yield* emit(LOG_TYPES.turnEnd, { kind: endKind, ...(endDetail !== undefined ? { errorMessage: endDetail } : {}) });
+  yield* emit(LOG_TYPES.turnEnd, {
+    kind: endKind,
+    ...(endDetail !== undefined ? { errorMessage: endDetail } : {}),
+    ...(lengthHit ? { finishKind: "length" } : {}), // CL-03：本 turn 曾按 max_tokens 截断——终局事件带内记档（completed 语义不变）
+  });
   await bus.emit("turn/end", { kind: endKind }); // m5 T9：busy 自推事件面（与 turn/start 成对）
   log.info("loop.turn.end", `turn 结束：${endKind}`);
   await session.flush();

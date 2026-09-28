@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dispLines, osc8LinkAtColumn, stripAnsi, visibleWidth, wrapText } from "./width.ts";
+import { dispLines, osc8LinkAtColumn, sliceByColumn, stripAnsi, visibleWidth, wrapText } from "./width.ts";
 
 describe("宽度引擎（TUI 批阶段三 F0——pi-tui utils 零依赖移植）", () => {
 	it("① CJK 折行：12 个全角字在 10 列宽折 3 行（24 显示宽 ÷ 10 列向上取整）", () => {
@@ -58,5 +58,35 @@ describe("OSC 8 链接探测（m5 鼠标批 T7——kimi utils.ts:344-366 精简
 	});
 	it("② 宽度地基：OSC 8 包裹行 visibleWidth 与裸文本一致（extractAnsiCode 已认 OSC）", () => {
 		expect(visibleWidth(line)).toBe(visibleWidth(stripAnsi(line)));
+	});
+});
+
+describe("sliceByColumn 严格语义 + 起点前 SGR 回放（CTW-03 回归钉 2026-09-28——左跨界宽字符双端计入 + 切点前样式丢失，消费方：选区三段切/overlay 合成）", () => {
+	it("⑧ 左跨界宽字符不再双端计入：「汉abc」切 [0,1)+[1,3) 合计显示宽 4 = 窗宽 [0,4)（旧相交语义同一「汉」进两段、合计 6 > 4）", () => {
+		const a = sliceByColumn("汉abc", 0, 1); // 汉起点 col 0 ∈ [0,1) → 计入（整字 2 列）
+		const b = sliceByColumn("汉abc", 1, 3); // 汉起点 col 0 < 1 → 严格排除（旧：相交计入 → 同字两屏）
+		expect(stripAnsi(a)).toBe("汉");
+		expect(stripAnsi(b)).toBe("ab");
+		expect(visibleWidth(a) + visibleWidth(b)).toBe(4); // 两段拼回恰好铺满窗 [0,4)——旧 2+4=6
+	});
+	it("⑨ 逐列切分重组无损：起点对齐 grapheme 边界的切片拼接 = 原行可见文本（选区三段切的地基）", () => {
+		const line = "汉abcde";
+		const segs = [sliceByColumn(line, 0, 2), sliceByColumn(line, 2, 3), sliceByColumn(line, 5, 99)];
+		expect(segs.map((s) => stripAnsi(s)).join("")).toBe("汉abcde");
+	});
+	it("⑩ 起点前 SGR 回放：切点落在着色段中间，切片自带切点前激活样式（pi pendingAnsi 同构；旧实现 mid/after 段掉色）", () => {
+		const line = "前\x1b[31m红字\x1b[39m尾"; // 前[0,2) 红[2,4) 字[4,6) 尾[6,7)
+		const mid = sliceByColumn(line, 4, 2); // 从「字」起——31m 在切点前
+		expect(mid.startsWith("\x1b[31m")).toBe(true); // 回放起点前样式
+		expect(stripAnsi(mid)).toBe("字");
+		const after = sliceByColumn(line, 6, 5); // 「尾」段——同样回放（overlay 合成 after 段不掉色）
+		expect(after.startsWith("\x1b[31m")).toBe(true);
+		expect(stripAnsi(after)).toBe("尾");
+	});
+	it("⑪ OSC 8 链接态随回放带入：切点落在链接文本中间，切片仍是可点击链接", () => {
+		const line = "前缀\x1b]8;;https://x.com/a\x07链接字\x1b]8;;\x07后缀";
+		const mid = sliceByColumn(line, 6, 2); // 「接」字（链接开码在切点前 → pending 回放）
+		expect(stripAnsi(mid)).toBe("接");
+		expect(mid).toContain("\x1b]8;;https://x.com/a\x07"); // 起点前的链接开码随回放进切片
 	});
 });

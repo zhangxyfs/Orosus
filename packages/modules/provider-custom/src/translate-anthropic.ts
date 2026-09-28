@@ -8,11 +8,11 @@ export interface SseState {
   pendingStop: string | null;
 }
 
-/** 解析一个 SSE 块（"event: x\ndata: y"）；无 data → null（注释/心跳忽略）。 */
+/** 解析一个 SSE 块（"event: x\ndata: y"）；无 data → null（注释/心跳忽略）。行分隔容忍 CRLF（MP-06——块内 \r 不残留在 data 值里）。 */
 export function parseSseBlock(block: string): { event: string; data: string } | null {
   let event = "message";
   const dataLines: string[] = [];
-  for (const line of block.split("\n")) {
+  for (const line of block.split(/\r?\n/)) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
   }

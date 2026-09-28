@@ -4,9 +4,10 @@
  *  缩进围栏）天然留作单个 token，块边界永远安全——旧 stableCut 只认行首三反引号，~~~ 围栏内的
  *  空行被当冻结点劈块、后半段成裸段落且终态定格错误（P0-② 根治即此）。
  *  加固三件：① 完整闭合的 code token 即刻计入冻结（「闭合即定格着色」——T1 transient 钉的
- *  观察前提）；② 引用式链接定义守卫（opencode 同式正则 + 行首 [ 潜在定义半截加固——本仓
- *  持久冻结面下，逐字到达的中间态也须护住）；③ trimPartialClosingFences（pi markdown.ts
- *  移植）：末尾半截闭合围栏从 token 内容修掉，防闭合围栏逐字到达时代码块高度抖动。 */
+ *  观察前提）；② 引用式链接守卫双面（opencode 同式尾部正则 + 行首 [ 潜在定义半截加固 +
+ *  CMD-02 先行引用候选拦冻结——本仓持久冻结面下，逐字到达的中间态与定义后到场景都须护住）；
+ *  ③ trimPartialClosingFences（pi markdown.ts 移植）：末尾半截闭合围栏从 token 内容修掉，
+ *  防闭合围栏逐字到达时代码块高度抖动。 */
 import type { Token, Tokens } from "marked";
 import { lex } from "./lex.ts";
 import { renderLines, renderTokens } from "./blocks.ts";
@@ -18,11 +19,22 @@ export interface StreamingMarkdown {
 /** 引用式链接定义完整形态（opencode markdown-stream.ts 同式——设计空白 #9）。 */
 const REF_DEF = /^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:\S+|\r?\n[ \t]+\S+)/m;
 
-/** 冻结前进守卫：未稳定尾含完整定义或「行首 [ 起头的潜在定义半截」→ 本轮不前进。
+/** 引用式链接「使用候选」（CMD-02）：非转义、非空、非行内链接 `[x](url)` 形态的 `[]` 组。
+ *  marked 未在 links 表命中时渲染为字面 `[x]`，而后到的 `[x]: url` 定义可把它改写成链接
+ *  （标签可任意后到——CommonMark 定义与使用顺序无关），故含候选的段一旦冻结即有发散风险。 */
+const REF_USE = /(?:^|[^\\])\[[^[\]\n]+\](?!\()/;
+
+/** 冻结前进守卫（尾部面）：未稳定尾含完整定义或「行首 [ 起头的潜在定义半截」→ 本轮不前进。
  *  机理：后到的定义会改变前面链接的渲染，定义到齐（或确定不是定义）前整段不冻结。 */
 function holdsForRefDefs(unstable: string): boolean {
 	if (!unstable.includes("[")) return false; // opencode 同式短路：零成本跳过
 	return REF_DEF.test(unstable) || /^[ \t]{0,3}\[/m.test(unstable);
+}
+
+/** 待冻结 token 是否含引用使用候选（CMD-02 段前面）：代码/HTML 原样透传，定义改不动其渲染。 */
+function hasRefUse(t: Token): boolean {
+	if (t.type === "code" || t.type === "html") return false;
+	return t.raw.includes("[") && REF_USE.test(t.raw);
 }
 
 /** 完整闭合的 code token 判定（围栏行 = 同围栏字符且长度 ≥ 开栏，允许尾随空白）。
@@ -80,8 +92,18 @@ export function createStreamingMarkdown(width: number): StreamingMarkdown {
 			// 完整闭合的 code 即刻完整；否则末 token 恒视为生长中（cc-haha 保守规则——
 			// 段落/标题等还可能被后到内容改写形态，如 setext 下划线，不动）
 			const upto = lastIdx >= 0 && isCompleteCode(tokens[lastIdx]!) ? lastIdx + 1 : lastIdx;
+			// CMD-02（段前面）：待冻结序列里出现首个引用使用候选 token 时，只冻结到它之前——
+			// 候选段此刻以字面 [x] 渲染，冻结即永久字面化；保持尾段（逐帧全量重 lex）才能在
+			// 定义后到帧自动改写成链接，与终态 renderMarkdown 保持一致。无候选则整段照常前进。
+			let freezeUpto = upto;
+			for (let i = 0; i < upto; i++) {
+				if (hasRefUse(tokens[i]!)) {
+					freezeUpto = i;
+					break;
+				}
+			}
 			let adv = 0;
-			for (let i = 0; i < upto; i++) adv += tokens[i]!.raw.length;
+			for (let i = 0; i < freezeUpto; i++) adv += tokens[i]!.raw.length;
 			if (adv > 0 && holdsForRefDefs(full.slice(frozenUpto + adv))) adv = 0;
 			let tailTokens = tokens;
 			if (adv > 0) {

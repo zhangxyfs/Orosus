@@ -7,6 +7,12 @@ type Ctx = Parameters<NonNullable<typeof def.activate>>[0];
 
 const u = (t: string): ModelMessage => ({ role: "user", content: [{ kind: "text", text: t }] });
 const a = (t: string): ModelMessage => ({ role: "assistant", content: t === "" ? [] : [{ kind: "text", text: t }] });
+/** assistant + toolCalls（配对夹具——MI-05 后摘要请求修复孤儿 result，单测 tr 须有 call 出处）。 */
+const ac = (calls: { callId: string; name?: string; args?: unknown }[]): ModelMessage => ({
+  role: "assistant",
+  content: [],
+  toolCalls: calls.map((c) => ({ callId: c.callId, name: c.name ?? "t", args: c.args ?? {} })),
+});
 const tr = (id: string, chars: number): ModelMessage => ({ role: "toolResult", callId: id, output: "x".repeat(chars), isError: false });
 const su = (t: string, origin?: { kind: "steering"; sourceModule: string } | { kind: "compaction-summary" }): ModelMessage =>
   ({ role: "user", content: [{ kind: "text", text: t }], ...(origin !== undefined ? { origin } : {}) });
@@ -166,6 +172,22 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
     expect(r3).toHaveLength(6);
   });
 
+  it("②b MI-04 锚点计数语义（契约 atMessageCount = 条数 N，harness 赋 req.messages.length——锚后新增 = slice(N)）：锚后恰好 1 条大消息必须计入估算（旧实现 slice(N+1) 恒漏锚后第一条 → 低估迟触发）", async () => {
+    // 阈值 2000；锚点 { totalTokens: 1000, atMessageCount: 3 }；投影 = 锚定 3 条 + 锚后新增 1 条 ≈1500 token
+    const s = setup({ config: { thresholdTokens: 2_000 } });
+    await def.activate(s.ctx);
+    s.llm.lastUsage = { totalTokens: 1_000, atMessageCount: 3 };
+    const grown = [u("一"), a("答"), u("二"), a("x".repeat(6_000))]; // 锚后恰好 1 条（≈1500 token 大 assistant）
+    const r = (await s.listener(grown)) as ModelMessage[]; // 1000 + 1500 > 2000 → 应触发（旧实现漏估 → 1000 < 2000 不触发）
+    expect(firstText(r[r.length - 1])).toContain("[历史摘要]");
+    expect(s.llmRequests).toHaveLength(1);
+    // 反向钉：投影长度恰等于锚计数 N（无新增）→ est = totalTokens + slice(N)=0，不因下标越界走纯估算
+    const s2 = setup({ config: { thresholdTokens: 1_000 } });
+    await def.activate(s2.ctx);
+    s2.llm.lastUsage = { totalTokens: 900, atMessageCount: 3 };
+    expect(await s2.listener([u("一"), a("答"), u("二")])).toBeUndefined(); // 900 + 0 < 1000：锚定零新增不触发
+  });
+
   it("③ 窗口感知：contextWindow 已知时阈值 = floor(窗口×ratio)；未知回退 thresholdTokens；trigger=auto 落盘", async () => {
     const s = setup({ contextWindow: 1024 }); // 阈值 819
     await def.activate(s.ctx);
@@ -229,8 +251,9 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
   it("⑧ 摘要输入瘦身：dropped 中超 summaryToolResultMaxChars 的工具结果截断后才进 llm（瞬态标记，不落日志）", async () => {
     const s = setup({ config: { thresholdTokens: 1, summaryToolResultMaxChars: 100 } });
     await def.activate(s.ctx);
-    await s.listener([u("问"), tr("c1", 500), u("尾")]);
-    const got = (s.llmRequests[0]!.messages[1] as { output: string }).output;
+    // 配对形态（call 出处 + result）——MI-05 修复后孤儿 toolResult 不再进摘要请求，夹具须成对
+    await s.listener([u("问"), ac([{ callId: "c1" }]), tr("c1", 500), u("尾")]);
+    const got = (s.llmRequests[0]!.messages[2] as { output: string }).output;
     expect(got.startsWith("x".repeat(100))).toBe(true);
     expect(got).toContain("[...truncated: original 500 chars]");
     expect(got.length).toBeLessThan(200);
@@ -516,6 +539,19 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
       expect(rAll).toHaveLength(1); // 两次 manual 全量重放后仍是单条摘要
     }
   });
+
+  it("⑨ MI-06 滞留 overflow 清除：手动 /compact 成功后一次性溢出标志必须随命令清掉——下一条 transform-context 不再以 threshold=0 误触发（旧实现：对刚压好的摘要再压一次「摘要的摘要」+ 误计 rapid-refill）", async () => {
+    const s = setup({ config: { thresholdTokens: 60_000 } });
+    await def.activate(s.ctx);
+    await s.listener(bigMsgs()); // est≈36000 < 60000：自动不触发、预热缓存
+    expect(s.appended).toHaveLength(0);
+    s.errListener({ code: "context_limit" }); // 溢出联动置 overflow（一次性标志，等下一次 transform-context 消费）
+    expect(await s.command("", stubUi)).toContain("上下文压缩完成"); // 手动 /compact 成功（v3 manual 全量）
+    expect(s.llmRequests).toHaveLength(1);
+    await s.listener([u("[历史摘要]\n这是摘要……"), u("新问题")]); // 旧实现：消费滞留 overflow → threshold=0 → 再压
+    expect(s.llmRequests).toHaveLength(1); // 核心钉：overflow 已随命令清除，小上下文不触发
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1); // 无第二次压缩事件
+  });
 });
 
 describe("v3 rapid-refill 熔断（T3：ZCode 状态机形状——压缩后秒填满反复发生时自动停手 + warn）", () => {
@@ -708,6 +744,43 @@ describe("v3 触发分级细节（T2：页脚/预收缩/图片剥占位/前次�
     await s2.listener(msgs);
     expect(s2.llmRequests[0]!.messages).toEqual([...msgs, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }]);
     expect(String(s2.llmRequests[0]!.system)).not.toContain("已截去最早期部分");
+  });
+
+  it("②b MI-05 预收缩切对修复：切点落在 call/result 之间 → 摘要请求不得以孤儿 toolResult 开头（旧实现原样发 → OpenAI/Anthropic 系「tool 消息前无匹配 tool_calls」400）", async () => {
+    // 窗口 2048：预算 = floor((2048−256)×0.85) = 1523。从最新装填：u尾(1) + tr_c2(200) 入、a_c2 大参数(≈2005) 止
+    // → 保留侧 = [tr(c2), u尾]——tr 的 call 已被切掉（孤儿开头，正是旧实现直发的形状）
+    const s = setup({ contextWindow: 2048, config: { thresholdRatio: 0.3 } }); // 阈值 floor(2048×0.3)=614 < est≈2409
+    await def.activate(s.ctx);
+    const big = ac([{ callId: "c2", args: { blob: "y".repeat(8_000) } }]); // ≈2005 token 的 toolCalls 参数
+    await s.listener([u("问"), ac([{ callId: "c1" }]), tr("c1", 800), u("中"), big, tr("c2", 800), u("尾")]);
+    const req = s.llmRequests[0]!.messages;
+    expect(req[0]!.role).toBe("user"); // 核心钉：请求首条不是孤儿 toolResult
+    expect(req.filter((m) => m.role === "toolResult")).toEqual([]); // 孤儿 c2 result 已剔除
+    expect(req[req.length - 1]).toEqual({ role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }); // 尾指令仍在
+    expect(String(s.llmRequests[0]!.system)).toContain("已截去最早期部分"); // 确走的是预收缩路径（非全量对照）
+  });
+
+  it("②c MI-05 悬挂 toolCalls 修复：abort 的 turn 留下无 result 的调用 → 摘要请求截断悬挂（部分悬挂只剔悬挂项；纯工具回合整条丢弃）", async () => {
+    // 末尾悬挂（convert.ts 只修孤儿 result 不修悬挂 call——投影原生可带）
+    const s = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s.ctx);
+    const dangling: ModelMessage = { role: "assistant", content: [{ kind: "text", text: "跑一半被打断" }], toolCalls: [{ callId: "c9", name: "tool-shell__bash", args: { cmd: "x" } }] };
+    await s.listener([u("问"), dangling, u("再")]);
+    const req = s.llmRequests[0]!.messages;
+    expect(req.some((m) => m.role === "assistant" && m.toolCalls !== undefined)).toBe(false); // 悬挂 callId 已剔
+    expect(firstText(req.find((m) => m.role === "assistant"))).toContain("跑一半被打断"); // 文本 content 保留（不整条丢）
+    // 部分悬挂：同批 [c1 已答, c8 悬挂] → 只留 c1
+    const s2 = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s2.ctx);
+    const mixed: ModelMessage = { role: "assistant", content: [], toolCalls: [{ callId: "c1", name: "t", args: {} }, { callId: "c8", name: "t", args: {} }] };
+    await s2.listener([u("问"), mixed, tr("c1", 10), u("再")]);
+    const kept = (s2.llmRequests[0]!.messages.find((m) => m.role === "assistant") as { toolCalls?: { callId: string }[] }).toolCalls!;
+    expect(kept.map((tc) => tc.callId)).toEqual(["c1"]); // 已答的留下、悬挂的剔除
+    // 纯工具回合（content 空 + 全悬挂）→ 整条丢弃（空 assistant 消息同 400）
+    const s3 = setup({ config: { thresholdTokens: 1 } });
+    await def.activate(s3.ctx);
+    await s3.listener([u("问"), ac([{ callId: "c7" }]), u("再")]);
+    expect(s3.llmRequests[0]!.messages.some((m) => m.role === "assistant")).toBe(false);
   });
 
   it("③ 图片剥占位（设计空白 7 双写模块侧）：保留的用户消息 image part → 占位文本（路径保留）；无图消息不动", async () => {

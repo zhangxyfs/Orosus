@@ -119,6 +119,11 @@ export type ProviderAdapter =
 /** 模型 id 白名单（模型发现 T1）：端点是不可信数据源——白名单外字符/超限（>128）的 id 丢弃（dsh 密钥格式校验同思路）。 */
 const MODEL_ID_OK = /^[A-Za-z0-9._:/-]{1,128}$/;
 
+/** 菜单排序比较器（CT-01 修复）：numeric 感知——数字段按数值比较（glm-10 > glm-9.1 > glm-4.7），纯字典序
+ *  会把双位数版本沉底；locale 钉 "en" 保证跨机器一致（排序承诺是"菜单稳定序"，裸 localeCompare 依赖运行环境
+ *  ICU/默认区域设置，不同机器可能不一致）。 */
+const MODEL_ORDER = new Intl.Collator("en", { numeric: true });
+
 /** 解析 GET /models 响应（openai 族 {baseUrl}/models 与 anthropic 族 {baseUrl}/v1/models 同为 `{data:[{id},…]}` 形）。
  *  sanitize（白名单+限长，三轮 P2②）→ 去重 → 排序（菜单稳定序）；非数组 / 全被滤空 → throw（调用方 catch 回退）。 */
 /**
@@ -133,7 +138,7 @@ export function parseModelsResponse(body: unknown): string[] {
     data
       .map((m) => (m as { id?: unknown } | null)?.id)
       .filter((id): id is string => typeof id === "string" && MODEL_ID_OK.test(id)),
-  )).sort((a, b) => b.localeCompare(a)); // 倒序（走查缺陷②）：版本号大的（新模型）排前——glm-5.3 在 glm-4.7 前
+  )).sort((a, b) => MODEL_ORDER.compare(b, a)); // 倒序（走查缺陷②；CT-01 修复 numeric 感知）：版本号大的（新模型）排前——glm-10 在 glm-9.1 前
   if (ids.length === 0) throw new Error("models 响应无合法 id");
   return ids;
 }

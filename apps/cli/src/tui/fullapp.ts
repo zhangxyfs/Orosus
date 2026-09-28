@@ -15,7 +15,7 @@ import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
-import { padToWidth, osc8LinkAtColumn, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { graphemeSpans, padToWidth, osc8LinkAtColumn, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
@@ -167,7 +167,7 @@ interface AppState {
 	diagSel: number;
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消（duration = 自定义时长毫秒，m5 T3）。 */
-	toast: { text: string; at: number; duration?: number } | undefined;
+	toast: { id: number; text: string; at: number; duration?: number } | undefined;
 	/** 鼠标选区端点（m5 鼠标批 T5/T8）：存绝对行索引（设计空白 9——内容追加不漂移；压缩重建 doc
 	 *  后选区可能错位，不跨压缩保真已登记不修）；undefined = 无选区。流区外/面板按下 = 折叠清空。
 	 *  scope：main = 主窗 doc 行；view = 查看窗内容行（T8——行索引随 pu.scroll 平移天然稳定）；
@@ -296,6 +296,11 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 const PERM_LABEL: Record<string, string> = { "ask-always": "每次都询问", "ask-risky": "需要时候询问", never: "从不询问" }; // 显示名（2026-09-26 拍板改中文——F5 十轮⑤ 英文档名由本次取代）
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
+// CTU-04（2026-09-28 修复）：宽度口径统一走 width.ts grapheme/EAW（graphemeSpans）。原私有 cpw
+// 按首码点区间计宽，与 visibleWidth 在四类字符上分歧（前轮实测：❤️ 3/2、谚文 Jamo ᄀ 1/2、
+// ZWJ 家族 👨‍👩‍👧 8/2、tab 1/3）——折行（layoutInputRows/indexAtRowCol 用 cpw）与光标列
+// （locateCursor 用 visibleWidth）两口径错位：多算提前折行、少算行超框被 paneIn 截尾、硬件光标
+// 列与编辑点视觉偏移。删 cpw，折行/定位/回映射三口一源（width.ts 是全仓唯一计宽权威）。
 
 interface InputRow {
 	text: string;
@@ -303,12 +308,7 @@ interface InputRow {
 	srcEnd: number;
 }
 
-function cpw(ch: string): number {
-	const cp = ch.codePointAt(0)!;
-	return cp >= 0x2e80 || cp >= 0x20000 || (cp >= 0x1f000 && cp <= 0x1faff) ? 2 : 1;
-}
-
-function layoutInputRows(input: string, w: number): InputRow[] {
+export function layoutInputRows(input: string, w: number): InputRow[] {
 	const rows: InputRow[] = [];
 	let base = 0;
 	for (const logical of input.split("\n")) {
@@ -318,47 +318,56 @@ function layoutInputRows(input: string, w: number): InputRow[] {
 			rows.push({ text: "", srcStart: lineStart, srcEnd: lineStart });
 			continue;
 		}
-		let j = 0;
-		while (j < logical.length) {
-			let tw = 0;
-			let k = j;
-			while (k < logical.length) {
-				const cp = logical.codePointAt(k)!;
-				const gw = cpw(String.fromCodePoint(cp));
-				if (tw + gw > w && tw > 0) break;
-				tw += gw;
-				k += cp > 0xffff ? 2 : 1;
+		let pos = 0; // 已装填码元游标
+		let rowStart = 0; // 当前行起点（码元）
+		let tw = 0; // 当前行累计显示宽（grapheme 口径）
+		for (const sp of graphemeSpans(logical)) {
+			if (tw > 0 && tw + sp.w > w) {
+				rows.push({ text: logical.slice(rowStart, pos), srcStart: lineStart + rowStart, srcEnd: lineStart + pos });
+				rowStart = pos;
+				tw = 0;
 			}
-			rows.push({ text: logical.slice(j, k), srcStart: lineStart + j, srcEnd: lineStart + k });
-			j = k;
+			tw += sp.w;
+			pos += sp.text.length;
 		}
+		rows.push({ text: logical.slice(rowStart), srcStart: lineStart + rowStart, srcEnd: lineStart + logical.length });
 	}
 	return rows.length > 0 ? rows : [{ text: "", srcStart: 0, srcEnd: 0 }];
 }
 
-function locateCursor(rows: InputRow[], cursor: number): { row: number; col: number } {
+/** 行内码元偏移 → 显示列（graphemeSpans 同口径累计；偏移落在 grapheme 中段时列停在该段前）。 */
+function spanColAt(text: string, offset: number): number {
+	let col = 0;
+	let used = 0;
+	for (const sp of graphemeSpans(text)) {
+		if (used + sp.text.length > offset) break;
+		col += sp.w;
+		used += sp.text.length;
+	}
+	return col;
+}
+
+export function locateCursor(rows: InputRow[], cursor: number): { row: number; col: number } {
 	for (let i = 0; i < rows.length; i++) {
 		const r = rows[i]!;
 		if (cursor >= r.srcStart && cursor < r.srcEnd) {
-			return { row: i, col: visibleWidth(r.text.slice(0, cursor - r.srcStart)) };
+			return { row: i, col: spanColAt(r.text, cursor - r.srcStart) };
 		}
 		if (cursor === r.srcEnd && i === rows.length - 1) {
-			return { row: i, col: visibleWidth(r.text) };
+			return { row: i, col: spanColAt(r.text, r.text.length) };
 		}
 	}
 	return { row: 0, col: 0 };
 }
 
-function indexAtRowCol(rows: InputRow[], row: number, targetCol: number): number {
+export function indexAtRowCol(rows: InputRow[], row: number, targetCol: number): number {
 	const r = rows[Math.max(0, Math.min(rows.length - 1, row))]!;
 	let w = 0;
 	let i = r.srcStart;
-	while (i < r.srcEnd) {
-		const cp = r.text.codePointAt(i - r.srcStart)!;
-		const gw = cpw(String.fromCodePoint(cp));
-		if (w + gw > targetCol) break;
-		w += gw;
-		i += cp > 0xffff ? 2 : 1;
+	for (const sp of graphemeSpans(r.text)) {
+		if (w + sp.w > targetCol) break;
+		w += sp.w;
+		i += sp.text.length;
 	}
 	return i;
 }
@@ -377,6 +386,8 @@ export class FullApp {
 	private busyTimer: NodeJS.Timeout | undefined;
 	private watchdogTimer: NodeJS.Timeout | undefined;
 	private tickTimer: NodeJS.Timeout | undefined;
+	private toastTimer: NodeJS.Timeout | undefined; // CTU-03：toast 自消定时器统一登记（顶替即清）
+	private toastSeq = 0; // CTU-03：toast 身份令牌序列（定时器闭包捕获 id，与时长解耦）
 	private stopped = false;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
@@ -510,6 +521,7 @@ export class FullApp {
 		if (this.busyTimer) clearInterval(this.busyTimer);
 		if (this.watchdogTimer) clearInterval(this.watchdogTimer);
 		if (this.tickTimer) clearInterval(this.tickTimer);
+		if (this.toastTimer) clearTimeout(this.toastTimer); // CTU-03：toast 自消定时器随实例停止清理
 		this.scheduler.stop();
 		if (this.full.isActive) this.full.exit();
 		this.term.stop();
@@ -798,19 +810,25 @@ export class FullApp {
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消。自消靠定时器补一帧——
 	 *  非 busy 期没有 spinner 心跳，不定时的話旧 toast 会留到下一次按键。
 	 *  m5 T3：增可选时长毫秒——缺省 3000、允许 [1000, 30000]、越界钳到边界（设计空白 3）；
-	 *  主程序自己的十几处调用全走缺省零变化。 */
+	 *  主程序自己的十几处调用全走缺省零变化。
+	 *  CTU-03（2026-09-28 修复）：toast 发身份令牌 + 定时器单槽登记清理。旧实现每 toast 新建
+	 *  setTimeout 从不取消，旧定时器按闭包里的旧时长做龄检——任何在新 toast 顶上后 200ms 窗口内
+	 *  创建的 toast 都会被旧定时器按旧时长误消（混时长实测：3000ms 宿主 toast 后 100ms 顶上
+	 *  8000ms 模块 notice，~3.1s 被杀，应停 8s）。令牌判身份与时长彻底解耦，顶替时旧定时器直接作废。 */
 	showToast(text: string, durationMs?: number): void {
 		const duration = Math.max(1000, Math.min(30000, durationMs ?? 3000));
-		this.state.toast = { text, at: Date.now(), ...(duration !== 3000 ? { duration } : {}) };
+		if (this.toastTimer !== undefined) clearTimeout(this.toastTimer); // 旧定时器随顶替作废（单槽登记）
+		const id = ++this.toastSeq;
+		this.state.toast = { id, text, at: Date.now(), ...(duration !== 3000 ? { duration } : {}) };
 		this.scheduler.requestImmediateRender();
-		// 龄检阈值随时长缩放（原 2_900/3_100 双阈值 = 缺省 3s 的同款手法——新 toast 顶掉旧定时器时旧帧不误消）
 		const timer = setTimeout(() => {
-			if (this.state.toast !== undefined && Date.now() - this.state.toast.at >= duration - 100) {
-				this.state.toast = undefined;
-				this.scheduler.requestRender();
-			}
+			this.toastTimer = undefined;
+			if (this.state.toast?.id !== id) return; // 身份不符（已被顶替）——不看时长直接退出
+			this.state.toast = undefined;
+			this.scheduler.requestRender();
 		}, duration + 100);
 		timer.unref?.();
+		this.toastTimer = timer;
 	}
 
 	/** 文本插入输入框光标位（2026-09-23 走查拍板——图片 chip [image #N (宽×高)] 从独立 chip 行

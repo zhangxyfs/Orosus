@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -205,4 +205,27 @@ describe("后台跑法与花名册 T8（决策 5/12/19/3）", () => {
     // drain 才 resolve，close 返回时链条可尚未走完——用 waitUntil 钉「必收场且不悬挂」（超时即失败）。
     await waitUntil(() => h.subagents().find((x) => x.id === a)?.status === "failed");
   });
+
+  it("㉙ CX-08 存储侧淘汰：已结束条目超 32 按入册序出册（旧实现 roster Map 只 set 不 delete——视图裁了数据常驻，每条 32KB conclusion 累积）", async () => {
+    const { h, port } = await setup(); // 默认剧本 1 轮文本速完
+    const ids: string[] = [];
+    for (let i = 0; i < 35; i++) {
+      ids.push(((await port.spawn({ label: `速完 ${i}`, prompt: "干", background: true })) as { id: string }).id);
+    }
+    await waitUntil(() => h.subagents().every((a) => a.status === "completed" || a.status === "failed"), 30000);
+    expect(h.subagents().length).toBe(32); // 视图口径不变：进行中全列 + 最近 32 条已结束
+    const listed = new Set(h.subagents().map((a) => a.id));
+    expect(listed.has(ids[0]!)).toBe(false); // 最老 3 条（入册序）不在册——视图本就看不到
+    expect(listed.has(ids[2]!)).toBe(false);
+    expect(listed.has(ids[34]!)).toBe(true); // 最新在册
+    expect(port.stop(ids[0]!)).toBe(false);  // 出册条目操作幂等 false（不炸——与「已结束」同答复）
+    await h.close(); // close 排空诊断队列后读淘汰记录（fire-and-forget sink）
+    const diag = readFileSync(join(dir!, `diagnostic-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8");
+    const dropped = new Set(diag.split("\n").filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as { code?: string; data?: { ids?: string[] } })
+      .filter((r) => r.code === "kernel.subagent.roster-evict").flatMap((r) => r.data?.ids ?? []));
+    expect(dropped.has(ids[0]!)).toBe(true);  // 存储侧真删了（诊断记录为证——不是只裁 listInternal 视图）
+    expect(dropped.has(ids[2]!)).toBe(true);
+    expect(dropped.has(ids[34]!)).toBe(false);
+  }, 45000);
 });

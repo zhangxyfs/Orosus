@@ -337,3 +337,33 @@ describe("工具任务契约外抛出的兜底（CL-01/CX-03——2026-09-28 cod
 		expect(provider.requests[1]!.messages.some((m) => m.role === "toolResult")).toBe(true); // 模型下一轮照常拿到带内结果
 	});
 });
+
+describe("流终止帧缺失 / max_tokens 截断（CL-02/CL-03——2026-09-28 code review）", () => {
+	it("CL-02 provider 干净 EOF 无 finish 块 → turn/end{kind:error} 且 errorMessage 指明截断（旧实现沿用预置 kind:\"stop\" 静默收尾，半截回答被当完整答案）", async () => {
+		const { run, session } = setup([[{ type: "text/delta", text: "半截" }]]); // 剧本刻意无 finish 块——流干净结束
+		const types = await run();
+		expect(types).toContain("assistant/message"); // 半截产出仍物化（诚实保留，不因收尾改判而丢弃）
+		const end = (await session.all()).at(-1) as { type: string; kind?: string; errorMessage?: string };
+		expect(end).toMatchObject({ type: "turn/end", kind: "error" }); // 旧实现：kind:"completed"、零截断痕迹
+		expect(end.errorMessage).toContain("截断");
+	});
+
+	it("CL-02 对照：正常 stop（finish 块在场）不受影响——不误报截断", async () => {
+		const { run, session } = setup([[{ type: "text/delta", text: "完整" }, { type: "finish", kind: "stop" }]]);
+		await run();
+		const end = (await session.all()).at(-1) as { kind?: string; errorMessage?: string; finishKind?: string };
+		expect(end.kind).toBe("completed");
+		expect(end.errorMessage).toBeUndefined();
+		expect(end.finishKind).toBeUndefined();
+	});
+
+	it("CL-03 finish kind:length → assistant/message 与 turn/end 落 finishKind:\"length\" 带内记档（completed 语义不变；旧实现全仓零 length 消费、截断不可见）", async () => {
+		const { run, session } = setup([[{ type: "text/delta", text: "被切断的" }, { type: "finish", kind: "length" }]]);
+		await run();
+		const all = await session.all();
+		const msg = all.find((e) => e.type === "assistant/message") as { finishKind?: string };
+		expect(msg?.finishKind).toBe("length"); // per-step 精确记档（中间步骤截断也可见）
+		const end = all.at(-1) as { type: string; kind?: string; finishKind?: string };
+		expect(end).toMatchObject({ type: "turn/end", kind: "completed", finishKind: "length" }); // turn 正常完成，但截断留痕
+	});
+});

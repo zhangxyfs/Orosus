@@ -126,17 +126,51 @@ describe("decide——危险命令与敏感路径（ask-risky 细化）", () => 
     expect(analyzeDangerous("del C:/single.txt")).toBeUndefined(); // 无 /s 递归标志——非危险
   });
 
-  it("敏感路径写询问（可记忆）；普通写放行；敏感读不触发（D36 表：敏感路径写）", () => {
+  it("AST ⑤ MA-06 回归钉（2026-09-28 code review）：git 取值选项 / chmod 长格式递归旗标逃逸——三形态判危险", () => {
+    // MA-06①：`git -C /repo push --force`——旧实现取「首个非 - 参数」把 -C 的值 /repo 当子命令，判安全（实测 undefined）
+    expect(analyzeDangerous("git -C /repo push --force")).toMatchObject({ kind: "dangerous", command: "git push --force" });
+    // MA-06②：`git --git-dir /x push -f` 同形态（长格式取值选项，实测 undefined）
+    expect(analyzeDangerous("git --git-dir /x push -f")).toMatchObject({ kind: "dangerous", command: "git push --force" });
+    // MA-06③：`chmod --recursive 777 /data`——旧正则 /^-[a-zA-Z]*R/ 不匹配 GNU 长选项（实测 undefined）
+    expect(analyzeDangerous("chmod --recursive 777 /data")).toMatchObject({ kind: "dangerous", command: "chmod -R" });
+    expect(analyzeDangerous("chown --recursive u:g /data")).toMatchObject({ kind: "dangerous", command: "chown -R" });
+    // 对照组（修复前即判危险——运行时验证过的既有行为，防回归）
+    expect(analyzeDangerous("git push --force")).toMatchObject({ kind: "dangerous" });
+    expect(analyzeDangerous("git reset --hard")).toMatchObject({ kind: "dangerous" });
+    expect(analyzeDangerous("chmod -R 777 /data")).toMatchObject({ kind: "dangerous" });
+    expect(analyzeDangerous("chown -R u:g /data")).toMatchObject({ kind: "dangerous" });
+    // 防误伤：取值选项后的良性 git（status / 无 force 的 push / -c 配置覆盖）、非递归 chmod 仍安全
+    expect(analyzeDangerous("git -C /repo status")).toBeUndefined();
+    expect(analyzeDangerous("git --git-dir=/x/.git status")).toBeUndefined(); // = 自带值形态
+    expect(analyzeDangerous("git -c http.sslVerify=false push origin main")).toBeUndefined();
+    expect(analyzeDangerous("git commit -m 'push --force text'")).toBeUndefined();
+    expect(analyzeDangerous("chmod 644 a.txt")).toBeUndefined();
+    // decide 管线口径：逃逸形态照常走危险门——memoryKey=null（永不进会话记忆），全会话记忆也拦不住询问
+    const d = run({
+      mode: "ask-risky", name: "tool-shell__bash", approvalRule: "tool-shell__bash(git -C /repo push --force)",
+      accesses: [Access.subprocess()], sessionAllowed: () => true,
+    });
+    expect(d).toMatchObject({ effect: "ask", memoryKey: null });
+  });
+
+  it("敏感路径写询问（可记忆，MA-05：记忆键逐路径）；普通写放行；敏感读不触发（D36 表：敏感路径写）", () => {
     expect(isSensitivePath("/repo/.env")).toBe(true);
     expect(isSensitivePath("/repo/.env.local")).toBe(true);
     expect(isSensitivePath("/home/u/.ssh/id_rsa")).toBe(true);
     expect(isSensitivePath("/repo/.git/config")).toBe(true);
     expect(isSensitivePath("/repo/src/a.ts")).toBe(false);
-    expect(run({ mode: "ask-risky", accesses: [Access.fsWrite("/repo/.env")] })).toMatchObject({ effect: "ask", memoryKey: "sensitive:m__t" });
+    // MA-05 回归钉（2026-09-28 code review）：记忆键带路径 `sensitive:<工具名>:<路径>`——
+    // 旧键 sensitive:m__t 按工具不按路径，批一次 .env 后同会话 .ssh/.aws 写共享一把钥匙静默放行
+    expect(run({ mode: "ask-risky", accesses: [Access.fsWrite("/repo/.env")] })).toMatchObject({ effect: "ask", memoryKey: "sensitive:m__t:/repo/.env" });
     expect(run({
       mode: "ask-risky", accesses: [Access.fsWrite("/repo/.env")],
-      sessionAllowed: (k) => k === "sensitive:m__t",
+      sessionAllowed: (k) => k === "sensitive:m__t:/repo/.env",
     })).toMatchObject({ effect: "allow", source: "memory" });
+    // MA-05 回归钉：.env 的会话记忆不覆盖 ~/.ssh/id_rsa——另一条敏感写键不同，仍询问
+    expect(run({
+      mode: "ask-risky", accesses: [Access.fsWrite("/home/u/.ssh/id_rsa")],
+      sessionAllowed: (k) => k === "sensitive:m__t:/repo/.env",
+    })).toMatchObject({ effect: "ask", memoryKey: "sensitive:m__t:/home/u/.ssh/id_rsa" });
     expect(run({ mode: "ask-risky", accesses: [Access.fsWrite("/repo/src/a.ts")] })).toMatchObject({ effect: "allow" });
     expect(run({ mode: "ask-risky", accesses: [Access.fsRead("/repo/.env")] })).toMatchObject({ effect: "allow" });
   });

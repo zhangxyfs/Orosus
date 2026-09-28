@@ -83,9 +83,28 @@ describe("tool-web llm 后端（M4-3 T1b）", () => {
     await expect(mkBackend(hanging, { timeoutMs: 50 }).search("q", new AbortController().signal)).rejects.toThrow("llm 搜索超时");
   });
 
-  it("⑥ query 超 4096 字节 → 直接拒（SW-14 界）", async () => {
-    const { llm } = fakeLlm([[]]);
-    await expect(mkBackend(llm).search("x".repeat(4097), new AbortController().signal)).rejects.toThrow("4096");
+  it("⑥ query 超 4096 字节 → 入口即拒（SW-14 界；MV-01：独立 kind query-too-long 不污染端点错误、零网络零遍历不置粘性）", async () => {
+    const { llm, requests } = fakeLlm([[]]);
+    const sticky = createLlmSticky();
+    const b = mkBackend(llm, { sticky });
+    const err = await b.search("x".repeat(4097), new AbortController().signal).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmSearchError);
+    expect((err as LlmSearchError).kind).toBe("query-too-long"); // 原为 endpoint-error——本地校验失败不再伪装端点错误
+    expect(String(err)).toContain("4096");
+    expect(requests).toHaveLength(0); // 校验前置 search 入口——未发任何探测调用（原实现自动档会把这条确定性失败当「探测全灭」逐商空探）
+    expect(sticky.llmDowngraded).toBe(false);
+  });
+
+  it("⑥b MV-03 回归钉：CJK 字节界——1365 汉字（4095 字节）合法过 llm 槽；1366 汉字（4098 字节）拒", async () => {
+    const { llm } = fakeLlm([[
+      { type: "server-search", hits: [{ title: "A", url: "https://a/1" }] },
+      { type: "text/delta", text: "摘要" },
+      { type: "finish", kind: "stop" },
+    ]]);
+    const b = mkBackend(llm);
+    const hits = await b.search("汉".repeat(1365), new AbortController().signal);
+    expect(hits.some((h) => h.url === "https://a/1")).toBe(true);
+    await expect(b.search("汉".repeat(1366), new AbortController().signal)).rejects.toThrow("4096");
   });
 });
 

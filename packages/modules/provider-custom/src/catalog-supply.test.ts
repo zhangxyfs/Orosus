@@ -461,6 +461,54 @@ describe("/provider 既有槽管理（MP-01：显示名渲染 / 真名反查）"
   });
 });
 
+// MP-05 回归（报告条目：「更新密钥」菜单项无处理分支——选中直接落「已返回」，密钥不变功能空转，
+// 用户要到下一次 401 才发现）。修复：接通真实交互流——$ENV: 引用定位 env key → askSecret → appendSecret → verify 复验
+describe("/provider 既有槽更新密钥（MP-05：真实交互流接通）", () => {
+  const providers = { deepseek: { type: "openai" as const, baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY" } };
+  /** 第一级选首项（deepseek 显示名项），第二级选「更新密钥」，askSecret 按队列出值 */
+  const keyUi = (askSecrets: string[]): MenuUi => {
+    let call = 0;
+    const q = [...askSecrets];
+    return {
+      choose: async (_t, items) => { call++; return call === 1 ? items[0]! : "更新密钥"; },
+      ask: async () => "",
+      askSecret: async () => q.shift() ?? "",
+      confirm: async () => false,
+    };
+  };
+
+  it("① $ENV 槽：粘贴新值 → appendSecret(envKey, 新值) + verify 复验 2xx → 校验通过文案", async () => {
+    const deps = fakeDeps({ loadProviders: async () => providers }); // fetchImpl 默认 200 → verify kind ok
+    const out = await runProviderMenu(keyUi(["sk-new"]), deps);
+    expect(deps.state.secrets).toEqual([["DEEPSEEK_API_KEY", "sk-new"]]); // 真写入（MP-05 前：零副作用直接「已返回」）
+    expect(out).toContain("已更新");
+    expect(out).toContain("校验通过");
+  });
+
+  it("② 回车取消 → 密钥零变更（appendSecret 不被调用）", async () => {
+    const deps = fakeDeps({ loadProviders: async () => providers });
+    expect(await runProviderMenu(keyUi([""]), deps)).toContain("已取消");
+    expect(deps.state.secrets).toHaveLength(0);
+  });
+
+  it("③ 新密钥 401 → 已写入但如实报告校验未过（不再静默假成功）", async () => {
+    const deps = fakeDeps({
+      loadProviders: async () => providers,
+      fetchImpl: (async () => new Response("nope", { status: 401 })) as typeof fetch,
+    });
+    const out = await runProviderMenu(keyUi(["sk-bad"]), deps);
+    expect(deps.state.secrets).toEqual([["DEEPSEEK_API_KEY", "sk-bad"]]); // 写入已发生
+    expect(out).toContain("校验未过"); // 401 如实上报
+  });
+
+  it("④ 非 $ENV 槽（明文 key / 无密钥）→ 如实告知无法经菜单更新（不猜 env key、零副作用）", async () => {
+    const plain = fakeDeps({ loadProviders: async () => ({ gw: { type: "openai" as const, baseUrl: "https://g", apiKey: "sk-plain" } }) });
+    const out = await runProviderMenu(keyUi(["sk-x"]), plain);
+    expect(out).toContain("未更新");
+    expect(plain.state.secrets).toHaveLength(0);
+  });
+});
+
 describe("同厂两门区分（M4-2 T2/B1——走查 429 根因：选 zhipuai 提示两入口）", () => {
   it("① detectSameGate：同前缀互指、无同前缀 undefined、不污染入参（纯函数）", () => {
     const catalog = {

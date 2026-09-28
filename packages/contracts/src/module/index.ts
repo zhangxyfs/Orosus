@@ -695,7 +695,16 @@ export interface ModuleContext<C = unknown> {
    *  无头环境为拒绝式实现（三方法抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 */
   readonly ui: CommandUi;
   /** 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。
-   *  compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。 */
+   *  compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。
+   *
+   * @example
+   * ```ts
+   * let text = "";
+   * for await (const c of ctx.llm.stream({ system: "你是摘要器", messages })) {
+   *   if (c.type === "text/delta") text += c.text;
+   * }
+   * ```
+   */
   readonly llm: LlmPort;
   /** 能力解析（硬依赖 get／可选 getOptional——迟到绑定，判空降级）。 */
   readonly services: {

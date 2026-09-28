@@ -28,93 +28,124 @@ function extractServerSearch(obj: Record<string, unknown>): Chunk | undefined {
 }
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
     ({ type: "finish", kind: "error", errorMessage, ...(errorCode !== undefined ? { errorCode } : {}) });
-    let res: Response;
-    try {
-      // M4-3 T1b：webSearch=true → 线缆 tools 追加服务端搜索声明（zhipu 接受形态——2026-09-24 spike 实钉：
-      // 裸 {type:"web_search"} 被 400「tools[0].web_search 不能为空」拒；带 web_search 参数对象放行）。
-      // 与客户端 tools 正交合发；端点不支持时协议错误原样带内（kimi 端点 400 实录在案）。
-      const clientTools = request.tools.length > 0 ? toOpenAITools(request.tools) : [];
-      const tools = request.webSearch === true
-        ? [...clientTools, { type: "web_search", web_search: { enable: true } }]
-        : clientTools;
-      res = await doFetch(`${opts.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "user-agent": OROSUS_USER_AGENT,
-          // D31 双头：官方 OpenAI 认 Bearer，兼容端点认其一；无 key（本地/内网端点）零鉴权头
-          ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: request.model,
-          messages: toOpenAIMessages(request.system, request.messages),
-          ...(tools.length > 0 ? { tools } : {}),
-          ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
-          // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
-          // 也照发（lenient，端点 400 自证）；'on'/'off' 语义档 = silent（不发字段：on = 端点默认开思考，
-          // off = 无 offEffort 声明时的关思考形态；有声明时 core 已换发 "none" 等具体值）
-          ...(request.reasoningEffort !== undefined && request.reasoningEffort !== "on" && request.reasoningEffort !== "off" ? { reasoning_effort: request.reasoningEffort } : {}),
-          stream: true,
-          stream_options: { include_usage: true },
-        }),
-        signal: request.signal,
-      });
-    } catch (err) {
-      yield request.signal.aborted ? { type: "finish", kind: "aborted" } : fail(`网络错误：${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    if (!res.ok || !res.body) {
-      const body = await res.text().catch(() => "");
-      // 分类以响应全文判定（D43）——slice(0,500) 只用于 errorMessage 文案；网络/流读取错误不打码
-      yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`, classifyContextLimit(res.status, body) ? "context_limit" : undefined);
-      return;
-    }
-    const state: OaiStreamState = { calls: new Map() };
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let sawFinish = false;
-    const handle = function* (obj: Record<string, unknown>): Generator<Chunk> {
-      const serverSearch = extractServerSearch(obj); // 服务端搜索块先于常规映射上报（webSearch 请求才可能出现，无则 undefined）
-      if (serverSearch !== undefined) yield serverSearch;
-      for (const c of mapSseChunk(state, obj)) {
-        if (c.type === "finish") sawFinish = true;
-        yield c;
-      }
+    // MP-07 最小可靠性（与 stream-anthropic 同款）：请求级空闲超时——连接/响应头/块间任一阶段无进展字节即
+    // abort 带内终局（此前挂起网关下 reader.read() 无限等待）。重试/退避刻意不在本层做：流已产出正文后重发
+    // 会重复投递，429/5xx 的重试归调用方策略层（loop 现仅 context_limit 单次重试）——取舍注明而非静默。
+    const idleMs = opts.idleTimeoutMs ?? 60_000;
+    const idle = new AbortController();
+    let idleFired = false;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const armIdle = (): void => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { idleFired = true; idle.abort(); }, idleMs);
     };
+    const wireSignal = AbortSignal.any([request.signal, idle.signal]);
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          for (const line of block.split("\n")) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const data = trimmed.slice(5).trim();
-            if (data === "" || data === "[DONE]") continue;
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(data);
-            } catch {
-              continue; // 坏行跳过
-            }
-            yield* handle(parsed as Record<string, unknown>);
-          }
+      let res: Response;
+      try {
+        armIdle(); // 头阶段计入空闲——连接/响应头挂起同样超时（MP-07）
+        // M4-3 T1b：webSearch=true → 线缆 tools 追加服务端搜索声明（zhipu 接受形态——2026-09-24 spike 实钉：
+        // 裸 {type:"web_search"} 被 400「tools[0].web_search 不能为空」拒；带 web_search 参数对象放行）。
+        // 与客户端 tools 正交合发；端点不支持时协议错误原样带内（kimi 端点 400 实录在案）。
+        const clientTools = request.tools.length > 0 ? toOpenAITools(request.tools) : [];
+        const tools = request.webSearch === true
+          ? [...clientTools, { type: "web_search", web_search: { enable: true } }]
+          : clientTools;
+        res = await doFetch(`${opts.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "user-agent": OROSUS_USER_AGENT,
+            // D31 双头：官方 OpenAI 认 Bearer，兼容端点认其一；无 key（本地/内网端点）零鉴权头
+            ...(opts.apiKey !== undefined ? { "x-api-key": opts.apiKey, authorization: `Bearer ${opts.apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            model: request.model,
+            messages: toOpenAIMessages(request.system, request.messages),
+            ...(tools.length > 0 ? { tools } : {}),
+            ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
+            // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
+            // 也照发（lenient，端点 400 自证）；'on'/'off' 语义档 = silent（不发字段：on = 端点默认开思考，
+            // off = 无 offEffort 声明时的关思考形态；有声明时 core 已换发 "none" 等具体值）
+            ...(request.reasoningEffort !== undefined && request.reasoningEffort !== "on" && request.reasoningEffort !== "off" ? { reasoning_effort: request.reasoningEffort } : {}),
+            stream: true,
+            stream_options: { include_usage: true },
+          }),
+          signal: wireSignal,
+        });
+      } catch (err) {
+        yield request.signal.aborted
+          ? { type: "finish", kind: "aborted" }
+          : idleFired
+            ? fail(`空闲超时：${Math.round(idleMs / 1000)}s 无进展——已中止连接`)
+            : fail(`网络错误：${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const body = await res.text().catch(() => "");
+        // 分类以响应全文判定（D43）——slice(0,500) 只用于 errorMessage 文案；网络/流读取错误不打码
+        yield fail(`HTTP ${res.status}：${body.slice(0, 500)}`, classifyContextLimit(res.status, body) ? "context_limit" : undefined);
+        return;
+      }
+      const state: OaiStreamState = { calls: new Map() };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let sawFinish = false;
+      const handle = function* (obj: Record<string, unknown>): Generator<Chunk> {
+        const serverSearch = extractServerSearch(obj); // 服务端搜索块先于常规映射上报（webSearch 请求才可能出现，无则 undefined）
+        if (serverSearch !== undefined) yield serverSearch;
+        for (const c of mapSseChunk(state, obj)) {
+          if (c.type === "finish") sawFinish = true;
+          yield c;
         }
+      };
+      // 单块行遍历（抽出成函数供 done 后残块冲刷〔MP-06〕复用；行分隔容忍 CRLF）
+      const handleBlock = function* (block: string): Generator<Chunk> {
+        for (const line of block.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === "" || data === "[DONE]") continue;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue; // 坏行跳过
+          }
+          yield* handle(parsed as Record<string, unknown>);
+        }
+      };
+      try {
+        for (;;) {
+          armIdle(); // 块间空闲计时——每块到达即复位（MP-07）
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/); // MP-06：SSE 规范行尾三态（CRLF 端点合法）——此前只认 \n\n，纯 CRLF 流整流零事件
+          buffer = blocks.pop() ?? "";
+          for (const block of blocks) yield* handleBlock(block);
+        }
+        buffer += decoder.decode(); // 多字节残尾冲刷（decode() 无 stream:true 即终结态）
+        // MP-06：done 后残 buffer 冲刷——「最后一帧不带结尾空行」的端点此前静默丢尾帧；残块 finish 计入 sawFinish（不重复兜底）
+        if (!request.signal.aborted && buffer.trim() !== "") yield* handleBlock(buffer);
+        if (!sawFinish) {
+          yield request.signal.aborted ? { type: "finish", kind: "aborted" } : { type: "finish", kind: "stop" }; // [DONE] 前无 finish_reason → stop 兜底
+        }
+      } catch (err) {
+        yield request.signal.aborted
+          ? { type: "finish", kind: "aborted" }
+          : idleFired
+            ? fail(`空闲超时：${Math.round(idleMs / 1000)}s 无进展——已中止连接`)
+            : fail(`流读取错误：${err instanceof Error ? err.message : String(err)}`);
       }
-      if (!sawFinish) {
-        yield request.signal.aborted ? { type: "finish", kind: "aborted" } : { type: "finish", kind: "stop" }; // [DONE] 前无 finish_reason → stop 兜底
-      }
-    } catch (err) {
-      yield request.signal.aborted ? { type: "finish", kind: "aborted" } : fail(`流读取错误：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer); // 计时器必清——挂起 timer 会拖住事件循环（提前 break/异常路径同样覆盖）
     }
   };
 }

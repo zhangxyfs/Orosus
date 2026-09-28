@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { FullApp, diagListLines, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
+import { FullApp, diagListLines, indexAtRowCol, layoutInputRows, locateCursor, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg, dim } from "../theme.ts";
@@ -2553,6 +2553,102 @@ describe("滚动条（m5 鼠标批 T10——主窗/查看窗右缘轨道+拇指�
 		}
 		expect(contentRows).toBeGreaterThan(20); // 内容行真的切出来了
 		expect(thumbSeen).toBe(true); // 拇指照常渲染
+		app.stop();
+	});
+});
+
+describe("toast 定时器令牌化（CTU-03 回归钉 2026-09-28——旧实现每 toast 新建 setTimeout 从不清理，旧定时器按闭包旧时长做龄检：新 toast 在旧 toast 顶替后 200ms 内创建即被旧定时器按旧时长误消。实测：A@1000ms 后 ~100ms 顶上 B@8000ms，B 于 ~1007ms 被 A 的旧定时器杀，应活 8s——混时长来源 ui.notice → session-tree 8000ms notice 真实存在）", () => {
+	it("① 短 toast 顶替后长 toast 不被旧定时器误消：A@1000 顶上 B@8000，越过 A 的触发点 B 仍在", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.showToast("A", 1000);
+		await flush(60); // 60ms 后顶替（落在 200ms 误消窗口内）
+		app.showToast("B", 8000);
+		await flush(1150); // 越过 A 定时器触发点（1000 + 100）
+		expect(app.stateRef.toast?.text).toBe("B"); // 旧实现：B 在 ~1007ms 被误消（toast === undefined）
+		app.stop();
+	});
+	it("② 自消路径不受令牌影响：短 toast 到时自清（身份相符照常消）", async () => {
+		const { app } = rig();
+		app.start();
+		await flush();
+		app.showToast("自消", 1000);
+		await flush(1250);
+		expect(app.stateRef.toast).toBeUndefined();
+		app.stop();
+	});
+});
+
+describe("输入区宽度口径统一 width.ts（CTU-04 回归钉 2026-09-28——旧私有 cpw 按首码点区间计宽，与 grapheme/EAW 权威在四类样本分歧：❤️ 3/2、谚文 Jamo ᄀ 1/2、ZWJ 家族 👨‍👩‍👧 8/2、tab 1/3。折行/列回映射用 cpw、光标列用 visibleWidth → 折行点错、硬件光标列与编辑点错位。修复：layoutInputRows/locateCursor/indexAtRowCol 三口一源走 graphemeSpans）", () => {
+	it("① VS16 emoji：❤️×5 在 8 列折 4+1 两行（❤️ 实宽 2；旧 cpw 计 3 → 提前折 2+2+1 三行）、光标列按 2 累计", () => {
+		const rows = layoutInputRows("❤️".repeat(5), 8);
+		expect(rows.map((r) => r.text)).toEqual(["❤️".repeat(4), "❤️"]);
+		expect(locateCursor(rows, 10)).toEqual({ row: 1, col: 2 }); // 行尾光标 = 1 个 ❤️ = 2 列
+	});
+	it("② 谚文 Jamo（macOS 韩文文件名 NFD 粘贴即中）：单字宽 2（旧 cpw 计 1），夹 ASCII 时 4 列折「aᄀbᄁ」→「aᄀb | ᄁ」（旧计 4 全进一行 → 显示宽 6 超框被截）", () => {
+		const rows = layoutInputRows("aᄀbᄁ", 4);
+		expect(rows.map((r) => r.text)).toEqual(["aᄀb", "ᄁ"]);
+		expect(locateCursor(rows, 2)).toEqual({ row: 0, col: 3 }); // a(1) + ᄀ(2) = 3 列（旧 cpw 口径 2）
+	});
+	it("③ ZWJ 家族 emoji：👨‍👩‍👧 整体一个 grapheme 宽 2（旧 cpw 按码点计 8）；列回映射不落进家族内部", () => {
+		const rows = layoutInputRows("👨‍👩‍👧x", 8);
+		expect(rows).toHaveLength(1);
+		expect(locateCursor(rows, 8)).toEqual({ row: 0, col: 2 }); // 光标在 x 前 = 列 2（旧 8）
+		expect(indexAtRowCol(rows, 0, 1)).toBe(0); // 目标列 1 落家族左半格 → 回映射停在家族起点
+	});
+	it("④ tab 宽 3（旧 cpw 计 1）：a\\tb 在 3 列折 a | \\t | b 三行；单行内 tab 后光标列 = 前文 + 3", () => {
+		const rows = layoutInputRows("a\tb", 3);
+		expect(rows.map((r) => r.text)).toEqual(["a", "\t", "b"]); // 旧 cpw：3 码元全进一行，终端渲染 5 列超框
+		expect(locateCursor(rows, 1)).toEqual({ row: 1, col: 0 }); // 非末行行尾 → 下行行首（折行边界语义保留）
+		const wide = layoutInputRows("ab\tc", 8); // 6 列不折行
+		expect(wide.map((r) => r.text)).toEqual(["ab\tc"]);
+		expect(locateCursor(wide, 3)).toEqual({ row: 0, col: 5 }); // a+b+tab = 5 列（旧 cpw 折行口径 3）
+	});
+	it("⑤ locateCursor ↔ indexAtRowCol 互逆：grapheme 边界偏移列→码元→列 roundtrip 不丢（↑↓ 行间移动目标列同口径）", () => {
+		const input = "ab❤️ᄀcd\nxy👨‍👩‍👧z\tw";
+		const rows = layoutInputRows(input, 8);
+		for (const off of [0, 1, 2, 4, 5, 6, 8, 9, 10, 18, 20]) {
+			const loc = locateCursor(rows, off);
+			expect(indexAtRowCol(rows, loc.row, loc.col), `offset ${off}`).toBe(off);
+		}
+	});
+	it("⑥ 集成：谚文 Jamo 夹 ASCII（显示宽 15）在 innerW=8 窄栏折两行全可见（旧 cpw 计 10 → 折点错、首行显示宽 12 超 8 列预算被截、ᄃ 不上屏）", async () => {
+		const { app, output } = rig(["# hi"], 18, 30); // sidebarW=5 → leftW=12 → 输入行预算 innerW=8
+		app.start();
+		await flush();
+		app.insertAtCursor("ᄀaᄁaᄂaᄃaᄅa");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("ᄃ"); // 旧实现：首行截到 8 列（ᄀaᄁaᄂ），ᄃ 被截掉
+		app.stop();
+	});
+});
+
+describe("选区切片消费方（CTW-03 回归钉 2026-09-28——sliceByColumn 左跨界宽字符双端计入 + 起点前 SGR 丢失，消费方 styleDocSelection 三段反白 / selectionText 提取）", () => {
+	type SelState = { mselAnchor: { scope?: "main" | "view"; docIdx: number; col: number } | undefined; mselFocus: { scope?: "main" | "view"; docIdx: number; col: number } | undefined };
+	it("① 拖选起点落在汉字后半格：提取文本不含该字（严格语义整字让位，不双端计入——旧相交语义同一「汉」进提取段）", async () => {
+		const { app } = rig(["汉abcdef"]);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		const sel = (app as unknown as { selectionText(): string | undefined }).selectionText.bind(app);
+		st.mselAnchor = { scope: "main", docIdx: 0, col: 1 }; // 汉 [0,2) 的后半格
+		st.mselFocus = { scope: "main", docIdx: 0, col: 8 }; // 行尾（行宽 8）
+		expect(sel()).toBe("abcdef"); // 旧：相交语义把汉计入 → "汉abcdef"
+		app.stop();
+	});
+	it("② 反白 mid 段带切点前着色：\\x1b[7m 后紧跟切点前的 \\x1b[31m（旧实现 mid 丢色，反白段回默认前景）", async () => {
+		const { app, input, output } = rig(["\x1b[31m汉abcdef\x1b[39m"]);
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		input.emit("data", "\x1b[<0;6;1M"); // 按下 x=5 → col 3（汉 [2,4) 后半格 + 左内衬 2）
+		input.emit("data", "\x1b[<32;9;1M"); // 拖到 x=8 → col 6：mid = bcd、right = ef（行中收尾，right 有内容）
+		await flush();
+		const frame = output.buf.slice(before);
+		expect(frame).toContain("\x1b[7m\x1b[31m"); // 反白段自带切点前红色（旧："\x1b[7mb" 直接裸字掉色）
+		expect(frame).toContain("\x1b[7m\x1b[31mbcd"); // mid = b..d，色在字前
+		expect(frame).toContain("\x1b[27m\x1b[31mef"); // right 段同样回放切点前样式（overlay 合成 after 段同机制）
 		app.stop();
 	});
 });

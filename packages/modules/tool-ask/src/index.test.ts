@@ -50,6 +50,27 @@ describe("tool-ask 单元（M4-2 T8/B16）", () => {
     expect(r.output).toContain("无交互用户");
     expect(r.output).toContain("最佳判断");
   });
+
+  // MB-08（2026-09-28 code review）回归钉：取消 ≠ 无头——Esc 抛「已取消（Esc）」（D35/apps-cli 钉死文案），
+  // 与 description「Stop and wait」对齐；catch-all 吞取消再教模型「继续+替用户选」的自相矛盾不复存在
+  it("③b MB-08 choose 中 Esc 取消 → 「停下等指示」文案，不再误报无交互用户", async () => {
+    const r = await execAsk(mkUi({
+      choose: async () => { throw new Error("已取消（Esc）"); },
+    }), { questions: [{ text: "选", options: ["A", "B"] }] });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("用户取消了本次提问");
+    expect(r.output).toContain("停下等用户");
+    expect(r.output).not.toContain("无交互用户"); // 旧实现：取消也被吞成「无交互用户…继续」
+  });
+
+  it("③c MB-08 ask 自由输入路径的 Esc 同分流；非取消异常仍走无头回退", async () => {
+    const cancelled = await execAsk(mkUi({ ask: async () => { throw new Error("已取消（Esc）"); } }),
+      { questions: [{ text: "自由输入" }] });
+    expect(cancelled.output).toContain("用户取消了本次提问");
+    const other = await execAsk(mkUi({ ask: async () => { throw new Error("readline 崩了"); } }),
+      { questions: [{ text: "自由输入" }] });
+    expect(other.output).toContain("无交互用户"); // 真异常/无头 → 保留 Reasonix 回退语义
+  });
 });
 
 // 集成：模块装配 + commandUi 注入 + 脚本驱动工具回合（T7 同款两轮脚本）

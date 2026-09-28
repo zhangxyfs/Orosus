@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createStreamingMarkdown } from "../mdpipe.ts";
+import { createStreamingMarkdown, renderMarkdown } from "../mdpipe.ts";
 import { stripAnsi } from "../tui/width.ts";
 
 const plain = (lines: string[]): string => stripAnsi(lines.join("\n"));
@@ -57,5 +57,38 @@ describe("md/ 流式定稿 token 边界（mdpipe 批 T2——P0-② 根治）", 
 		const out = sm.render("全新短文");
 		expect(plain(out)).toContain("全新短文");
 		expect(plain(out)).not.toContain("标题");
+	});
+	// CMD-02 回归钉（doc/16）：帧 N「para1 含 [a] + para2 已到」时 para1 可冻结，旧守卫只查
+	// 冻结点之后的尾（无 [ 则放行）→ para1 被冻结成字面 [a]，帧 N+1 定义后到也永不重渲，
+	// 流式输出与终态 renderMarkdown 持续发散（修复前 after 仍字面 [a]）。修复口径：待冻结段
+	// 含引用使用候选时只冻结到首个候选 token 之前，候选段保持尾段逐帧重 lex 自愈。
+	it("7. CMD-02：先行引用段不冻结成字面——定义后到帧链接即成形，流式与终态一致", () => {
+		const sm = createStreamingMarkdown(60);
+		const frameN = "see [a] here\n\nnext para\n\n";
+		const mid = sm.render(frameN); // 帧 N：para1 已可冻结且含引用候选 [a]
+		expect(plain(mid)).toContain("[a]"); // 定义未到：字面形态 == 当时一次性终态
+		expect(plain(mid)).toBe(plain(renderMarkdown(frameN, 60))); // 不发散承诺的帧级钉法
+		const after = sm.render("see [a] here\n\nnext para\n\n[a]: https://e.com"); // 帧 N+1：定义后到
+		expect(plain(after)).toContain("a (https://e.com)"); // 修复前：冻结段保持字面 [a]
+		expect(plain(after)).not.toContain("[a]");
+		expect(plain(after)).toBe(plain(renderMarkdown("see [a] here\n\nnext para\n\n[a]: https://e.com", 60)));
+	});
+	// CMD-02 边界补充：候选之前的段落照常冻结（守卫只拦候选段起，不整体躺平），
+	// 且行内链接 [x](url) 不构成候选（后到定义改不动它）不拦冻结。
+	it("8. CMD-02：候选段之前的段落照常冻结；行内链接不误拦", () => {
+		const sm = createStreamingMarkdown(60);
+		const frameN = "plain head\n\nsee [a] here\n\nnext para\n\n";
+		sm.render(frameN); // 帧 N：候选守卫下 plain head 冻结、候选段留尾
+		const after = sm.render(frameN + "[a]: https://e.com");
+		expect(plain(after)).toContain("a (https://e.com)");
+		expect(plain(after)).toBe(plain(renderMarkdown(frameN + "[a]: https://e.com", 60)));
+		// 行内链接段：无候选 → 该帧已把 plain head 冻结（冻结面不被行内链接拖住——由后帧一致性保障）
+		const sm2 = createStreamingMarkdown(60);
+		const f1 = sm2.render("plain head\n\nsee [a](https://e.com) here\n\nnext para\n\n");
+		const f2 = sm2.render("plain head\n\nsee [a](https://e.com) here\n\nnext para\n\nmore");
+		expect(plain(f1)).toBe(
+			plain(renderMarkdown("plain head\n\nsee [a](https://e.com) here\n\nnext para\n\n", 60)),
+		);
+		expect(f2.slice(0, 2).map(stripAnsi)).toEqual(f1.slice(0, 2).map(stripAnsi)); // plain head 两行冻结零漂移
 	});
 });

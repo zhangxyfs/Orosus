@@ -6,6 +6,8 @@
 
 ## orosusHome（函数）
 
+展开为用户主目录、分隔符与尾斜杠归一；不再拼接子目录；未设/空白 = ~/.orosus）。
+
 ```ts
 export function orosusHome(env: NodeJS.ProcessEnv = process.env): string;
 ```
@@ -14,6 +16,6 @@ export function orosusHome(env: NodeJS.ProcessEnv = process.env): string;
 
 | 名 | 说明 |
 |---|---|
-| `env` | 环境变量表（缺省 process.env；测试注入隔离表）。读 OROSUS_HOME，空串视为未设。 |
+| `env` | 环境变量表（缺省 process.env；测试注入隔离表）。读 OROSUS_HOME，值先 trim——空白串视为未设。 |
 
-**返回**：数据目录绝对路径（env 值原样使用——不再拼接子目录；未设 = ~/.orosus）。
+**返回**：数据目录绝对路径（CT-03 修复：env 值 trim 后 resolve 归一——相对路径按进程 cwd 固化、开头的 ~

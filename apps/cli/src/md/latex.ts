@@ -287,6 +287,11 @@ function renderLayout(source: string, nodes: readonly LayoutNode[]): Layout {
 
 // ---------- 解析器（pi :838-1477 移植；stackFractions 路径摘除——文件头修法口径①） ----------
 
+/** 嵌套深度闸（CMD-03）：实测 Node 默认栈下连续 `{` 约 8 千层、`\frac` 链约 2 千层即
+ *  RangeError（本机 Node 24 实测 5000 层 `{` 仍正常、8000 层抛），正常数学式嵌套为个位
+ *  数量级；200 层 × 每层 3-5 帧递归 ≈ 千帧，距爆栈留近一个数量级余量。 */
+const MAX_NESTING_DEPTH = 200;
+
 class LatexParser {
 	private readonly source: string;
 	private readonly layoutNodes: LayoutNode[];
@@ -294,11 +299,14 @@ class LatexParser {
 	private position = 0;
 	private supported = true;
 	private scriptDepth = 0;
+	/** 当前嵌套深度（CMD-03）：环境嵌套每层新开 parser，须跨 parser 传递否则闸失效。 */
+	private depth: number;
 
-	constructor(source: string, layoutNodes: LayoutNode[], display: boolean) {
+	constructor(source: string, layoutNodes: LayoutNode[], display: boolean, depth = 0) {
 		this.source = source;
 		this.layoutNodes = layoutNodes;
 		this.display = display;
+		this.depth = depth;
 	}
 
 	render(): string | undefined {
@@ -310,16 +318,25 @@ class LatexParser {
 	}
 
 	private parseSequence(endCharacter?: string): string {
+		// CMD-03 深度闸：嵌套超限置 unsupported，走既有 undefined 回退通道（零新错误路径），
+		// 防深嵌套 { / \frac / 环境递归打穿默认栈抛 RangeError 逃逸。
+		if (this.depth >= MAX_NESTING_DEPTH) {
+			this.supported = false;
+			return "";
+		}
+		this.depth++;
 		let result = "";
 		while (this.position < this.source.length) {
 			const character = this.source[this.position];
 			if (endCharacter && character === endCharacter) {
 				this.position++;
+				this.depth--;
 				return result;
 			}
 
 			if (character === "}") {
 				this.supported = false;
+				this.depth--;
 				return result;
 			}
 
@@ -394,6 +411,7 @@ class LatexParser {
 		if (endCharacter) {
 			this.supported = false;
 		}
+		this.depth--;
 		return result;
 	}
 
@@ -905,7 +923,8 @@ class LatexParser {
 	}
 
 	private renderNested(source: string, display = this.display): string {
-		const rendered = new LatexParser(source, this.layoutNodes, display).render();
+		// CMD-03：深度跨 parser 传递（环境嵌套每层 renderNested 新开 parser，计数不共享则闸失效）
+		const rendered = new LatexParser(source, this.layoutNodes, display, this.depth + 1).render();
 		if (rendered === undefined) {
 			this.supported = false;
 			return source;
@@ -922,27 +941,35 @@ export interface RenderLatexOptions {
 }
 
 /** 把基础 LaTeX 数学式渲染为终端友好的 Unicode 文本。
- *  含不支持或畸形语法时返回 undefined（调用方回退原文，判空用 `??`——不是 `=== null`）。
+ *  含不支持或畸形语法时返回 undefined（调用方回退原文，判空用 `??`——不是 `=== null`）；
+ *  深嵌套超限（CMD-03 深度闸）与任何解析期逃逸异常（入口兜底）同样归一为 undefined。
  *  开关关闭（setLatexEnabled(false)）时恒 undefined = 原样透传。 */
 export function renderLatex(source: string, options: RenderLatexOptions = {}): string | undefined {
 	if (!latexEnabled) return undefined;
-	const layoutNodes: LayoutNode[] = [];
-	const rendered = new LatexParser(source, layoutNodes, options.display === true).render();
-	if (rendered === undefined) {
+	// CMD-03 入口兜底：深度闸之外的任何逃逸异常（极端输入的 RangeError 等）在此归一为
+	// undefined = 回退原文——两个调用点（blocks/inline）与其消费方（render/streamview）均无
+	// try/catch，异常上抛会打断帧渲染循环；渲染路径对本函数的承诺是「永不抛」。
+	try {
+		const layoutNodes: LayoutNode[] = [];
+		const rendered = new LatexParser(source, layoutNodes, options.display === true).render();
+		if (rendered === undefined) {
+			return undefined;
+		}
+		if (layoutNodes.length === 0) {
+			return rendered.replaceAll(PROTECTED_SPACE, " ");
+		}
+		const lines = renderLayout(rendered, layoutNodes).lines;
+		const indentation = Math.min(
+			...lines.filter((line) => line.trim()).map((line) => line.length - line.trimStart().length),
+		);
+		return lines
+			.map((line) => line.slice(indentation).trimEnd())
+			.join("\n")
+			.trimEnd()
+			.replaceAll(PROTECTED_SPACE, " ");
+	} catch {
 		return undefined;
 	}
-	if (layoutNodes.length === 0) {
-		return rendered.replaceAll(PROTECTED_SPACE, " ");
-	}
-	const lines = renderLayout(rendered, layoutNodes).lines;
-	const indentation = Math.min(
-		...lines.filter((line) => line.trim()).map((line) => line.length - line.trimStart().length),
-	);
-	return lines
-		.map((line) => line.slice(indentation).trimEnd())
-		.join("\n")
-		.trimEnd()
-		.replaceAll(PROTECTED_SPACE, " ");
 }
 
 /* 原件版权注记（pi 仓库 packages/tui/src/latex.ts 与 packages/tui/src/components/markdown.ts，MIT License）：

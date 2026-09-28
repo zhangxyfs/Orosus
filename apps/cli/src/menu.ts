@@ -20,7 +20,10 @@ export function createSilenceableOutput(inner: { write(s: string): void }): Writ
  *  askSecret 经宿主的静默 question（回显全吞——粘贴密钥无感，手输为盲输）。
  *  choose 的 TTY 键盘引擎（TUI 批 T1）：宿主注入 pick 面即走上下键菜单（picker.ts）；
  *  缺省 = 现状编号读序号（非 TTY 回落/测试注入面）。Esc 取消经机制③带内抛错——
- *  pick 面以 reject 表达，此处统一映射「已取消（Esc）」（D35 无头拒绝式同族）。
+ *  pick 面（picker.ts Esc / main.ts pickFace 归一）以既定字面量 reject「已取消（Esc）」，
+ *  原样穿透即被 settleCommandError 文案匹配静默；其余异常 = pick 面真实故障，同样原样
+ *  上抛不再改写（CR-04：无差别映射会把故障伪装成用户取消——上游对取消静默，零痕迹）。
+ *  空列表显式拒绝「无可选项」（CR-05：编号回落 `n <= 0` 永假会无限重问挂死脚本/CI）。
  *  ask/askSecret 的 Esc（TUI 批 T3）：宿主 question/secretQuestion 面抛同款错，天然穿透；
  *  confirm 的 Esc 按契约语义内「非确认」折为 false（不抛错——审批 false 即否决，同向 fail-closed）。 */
 export function createReadlineUi(io: {
@@ -35,12 +38,15 @@ export function createReadlineUi(io: {
     ask: async (q) => (await io.question(`${q}: `)).trim(),
     askSecret: async (q) => (await io.secretQuestion(q)).trim(),
     choose: async (title, items) => {
+      // CR-05：空列表入口即拒——编号回落 `n >= 1 && n <= 0` 永假 → 无限重问挂死（脚本/CI）；
+      // pick 面路径回车/环绕会拿到 0/NaN 假下标 → items[NaN] 伪装成合法选择（picker 入口同判双保险）
+      if (items.length === 0) throw new Error("无可选项");
       if (io.pick !== undefined) {
-        try {
-          return items[await io.pick(title, items)]!;
-        } catch {
-          throw new Error("已取消（Esc）");
-        }
+        // CR-04：不再无差别 catch 改写「已取消（Esc）」——那会把 pick 面真实故障（模态接管异常/
+        // 写面抛错/NaN 索引等）伪装成用户取消，而上游 settleCommandError 对取消静默 return，
+        // 故障零痕迹。取消字面量本就统一（picker.ts Esc / main.ts pickFace 归一），reject
+        // 原样穿透即可；其余异常同穿透（与下方 confirm 的按消息鉴别同效）
+        return items[await io.pick(title, items)]!;
       }
       for (;;) {
         const lines = [`== ${title} ==`, ...items.map((x, i) => `${i + 1}. ${x.replace(/\n/g, " ")}`)];

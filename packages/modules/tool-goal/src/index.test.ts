@@ -88,19 +88,23 @@ describe("tool-goal 状态机与三工具（M4-3 T6）", () => {
     expect(r.output).toContain("无活动目标");
   });
 
-  it("⑦ blocked 三连：同 reason 三轮才接受（打回带 N/3 计数）；变词清零重计（qwen 加严语义）", async () => {
+  it("⑦ blocked 三连按续跑轮（MV-02 修复）：同轮连发不加账（最多 1/3）；跨轮同 reason 才推进；变词清零重计", async () => {
     const { create, update, store } = mkStore();
     await exec(create, { objective: "g" });
-    const r1 = await exec(update, { action: "blocked", reason: "接口 401" });
-    expect(r1.output).toContain("1/3");
-    expect(store.current()?.status).toBe("active");
-    const r2 = await exec(update, { action: "blocked", reason: "接口 401" });
-    expect(r2.output).toContain("2/3");
-    const swap = await exec(update, { action: "blocked", reason: "权限不够" }); // 变词 → 清零
-    expect(swap.output).toContain("1/3");
-    await exec(update, { action: "blocked", reason: "权限不够" });
-    const r3 = await exec(update, { action: "blocked", reason: "权限不够" });
-    expect(r3.output).toContain("已接受 blocked");
+    // MV-02 回归钉：同一轮（roundsUsed=0，零 followUp）连发 3 次同 reason——原实现按调用计数三连即受理，
+    // 现每轮最多记 1，单轮零重试逃逸续跑循环的路径被堵死
+    expect((await exec(update, { action: "blocked", reason: "接口 401" })).output).toContain("1/3");
+    const repeat = await exec(update, { action: "blocked", reason: "接口 401" });
+    expect(repeat.output).toContain("同轮重复申报不累计"); // 同轮重复 = 指引等下一轮，不加账
+    await exec(update, { action: "blocked", reason: "接口 401" });
+    expect(store.current()?.status).toBe("active"); // 三连同轮不受理
+    // 变词清零（qwen 加严语义保留）：同轮改口 = 新原因本轮起算
+    expect((await exec(update, { action: "blocked", reason: "权限不够" })).output).toContain("1/3");
+    // 跨轮推进：每个续跑轮的首次申报 +1，第 3 个申报轮才受理
+    goalFollowUp(store); // 第 1 轮
+    expect((await exec(update, { action: "blocked", reason: "权限不够" })).output).toContain("2/3");
+    goalFollowUp(store); // 第 2 轮
+    expect((await exec(update, { action: "blocked", reason: "权限不够" })).output).toContain("已接受 blocked");
     expect(store.current()?.status).toBe("blocked");
   });
 
@@ -246,8 +250,12 @@ describe("tool-goal followUp 续跑轮（M4-3 T7）", () => {
     await exec(update, { action: "complete", reason: "done" });
     expect(goalFollowUp(store)).toEqual([]); // complete 终态
     await exec(create, { objective: "g2" });
+    // MV-02 后三连需跨三个申报轮——逐轮 goalFollowUp 推进轮界后申报（同轮连发不再凑数）
+    goalFollowUp(store);
     await exec(update, { action: "blocked", reason: "卡" });
+    goalFollowUp(store);
     await exec(update, { action: "blocked", reason: "卡" });
+    goalFollowUp(store);
     await exec(update, { action: "blocked", reason: "卡" });
     expect(goalFollowUp(store)).toEqual([]); // blocked 终态
   });

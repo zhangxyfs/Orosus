@@ -68,3 +68,22 @@ describe("@ 行范围引用（TUI 批 T6——B18 半项）", () => {
     expect(whole).toContain("row30"); // 无范围形态回归：整文件
   });
 });
+
+describe("引用移除按匹配位置（CR-03——text.replace 删首个出现会误啃非引用文本）", () => {
+  it("① 非引用同名文本先于真引用出现：「看 x@rows.txt 和 @rows.txt」只删真引用——x@ 片段原样、真引用不残留正文", () => {
+    writeFileSync(join(dir, "rows.txt"), Array.from({ length: 30 }, (_, i) => `row${i + 1}`).join("\n"), "utf8");
+    const r = resolveAtRefs("看 x@rows.txt 和 @rows.txt", dir);
+    expect(r.attachments).toHaveLength(1); // 真引用只附着一次（x@ 片段不是引用——无边界不匹配）
+    expect(r.attachments[0]).toContain("row1"); // 附着的是真文件内容
+    // 旧实现产出「看 x 和 @rows.txt」：非引用被啃成 x、真引用残留（附件+正文语义重复）
+    expect(r.text).toBe("看 x@rows.txt 和 ");
+  });
+  it("② 多处真引用按各自匹配位置整删（从后往前套删——索引不漂移）、附着保持原文顺序", () => {
+    writeFileSync(join(dir, "a.txt"), "AAA", "utf8");
+    writeFileSync(join(dir, "b.txt"), "BBB", "utf8");
+    const r = resolveAtRefs("@a.txt 中 @b.txt 尾", dir);
+    expect(r.attachments[0]).toContain("AAA"); // 附着顺序随原文出现序
+    expect(r.attachments[1]).toContain("BBB");
+    expect(r.text).toBe(" 中  尾"); // 两处整删（各含边界空格归属正确，无互相误伤）
+  });
+});

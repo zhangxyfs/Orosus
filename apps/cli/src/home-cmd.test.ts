@@ -91,4 +91,31 @@ describe("orosus home migrate（M4-2.5 T6）", () => {
     expect(existsSync(src)).toBe(true);                              // 源不动
     expect(statSync(join(src, "config.toml")).size).toBeGreaterThan(0);
   });
+
+  it("⑨ CM-10：复制抛错（盘满/EACCES 路径）→ 人话 + 清理已复制目标 + 源不动 + 退出码 1（不裸堆栈穿透）", async () => {
+    const src = mkSource();
+    const dst = mkTarget();
+    const lines: string[] = [];
+    const code = await runHomeSubcommand(["home", "migrate", dst, "--apply"], {
+      ...io(src),
+      out: (l) => lines.push(l),
+      copy: () => {
+        mkdirSync(join(dst, "sessions"), { recursive: true }); // 已复制部分残留的前提
+        throw new Error("EACCES（测试注入）");
+      },
+    });
+    expect(code).toBe(1);
+    expect(lines.some((l) => l.includes("迁移失败"))).toBe(true);    // 人话（非裸堆栈）
+    expect(existsSync(dst)).toBe(false);                            // 已复制部分已清理——文件头承诺兑现
+    expect(existsSync(join(src, "config.toml"))).toBe(true);        // 源不动
+  });
+
+  it("⑩ CM-10：目标在源内 → 前置人话拒绝（退出码 1、零复制——不靠 fs.cp 自拷贝报错）", async () => {
+    const src = mkSource();
+    const lines: string[] = [];
+    const code = await runHomeSubcommand(["home", "migrate", join(src, "inside"), "--apply"], { ...io(src), out: (l) => lines.push(l) });
+    expect(code).toBe(1);
+    expect(lines.some((l) => l.includes("源目录内"))).toBe(true);
+    expect(existsSync(join(src, "inside"))).toBe(false);            // 零复制
+  });
 });

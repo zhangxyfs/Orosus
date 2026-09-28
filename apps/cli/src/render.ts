@@ -181,6 +181,14 @@ export function historyPage(lines: string[], page = 30): { shown: string[]; hidd
   return { shown: lines.slice(lines.length - page), hiddenBefore: lines.length - page };
 }
 
+// CR-07 网兜出口：附着即忘（void）的异步循环被消费回调（io.activity/io.write/onEvent/toolCall…）
+// 抛错打断时，未接管的 rejection 在 Node 22+ 默认直接崩进程。两路各兜一层：诊断落 stderr 后
+// 该路循环退出（渲染面降级不拖垮进程——与契约③「模块降级不阻断」同向）。不走 io.write 面
+// 报错——写面本身可能正是抛错方。
+const reportRenderFailure = (lane: string, err: unknown): void => {
+  console.error(`[render] ${lane}渲染循环异常退出：${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+};
+
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
  *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 streamview 的 turn/end 判定——
  *  chunk 无事件 id，不受影响）。两路共享同一 RenderState（思考块的闭合可来自任一路）。
@@ -220,7 +228,7 @@ export function attachRender(
       const out = renderChunk(c, state);
       if (out !== "") io.write(out);
     }
-  })();
+  })().catch((err) => reportRenderFailure("实时 chunk", err)); // CR-07
   void (async () => {
     for await (const e of h.events()) {
       onEvent?.(e);
@@ -236,5 +244,5 @@ export function attachRender(
       const out = renderEvent(e, state);
       if (out !== "") io.write(out);
     }
-  })();
+  })().catch((err) => reportRenderFailure("完成事件", err)); // CR-07
 }

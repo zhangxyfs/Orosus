@@ -78,6 +78,16 @@ function graphemeWidth(g: string): number {
 	return w;
 }
 
+/** 逐 grapheme 段（text + 显示宽）——输入区折行/光标定位的累计口径（CTU-04 2026-09-28：
+ *  与 visibleWidth 同一 grapheme/EAW 权威；fullapp 原私有 cpw 按首码点区间计宽，两口径在
+ *  VS16 emoji（❤️ 3/2）/谚文 Jamo（1/2）/ZWJ 家族（8/2）/tab（1/3）四类分歧 → 折行点与
+ *  硬件光标列错位——本出口即唯一计宽权威的逐段形态）。 */
+export function graphemeSpans(str: string): { text: string; w: number }[] {
+	const spans: { text: string; w: number }[] = [];
+	for (const { segment } of segmenter.segment(str)) spans.push({ text: segment, w: graphemeWidth(segment) });
+	return spans;
+}
+
 const isAsciiPrintable = (s: string): boolean => {
 	for (let i = 0; i < s.length; i++) {
 		const c = s.charCodeAt(i);
@@ -281,16 +291,32 @@ export function padToWidth(text: string, width: number): string {
 	return w >= width ? truncateToWidth(text, width) : text + " ".repeat(width - w);
 }
 
-/** 抽取显示列区间 [startCol, startCol+len)（overlay 合成用——pi sliceByColumn 同构精简）。 */
+/** 抽取显示列区间 [startCol, startCol+len)（overlay 合成/选区切分用——pi sliceByColumn 同构）。
+ *  CTW-03（2026-09-28）对齐 pi sliceWithWidth 双机制：
+ *  ① 计入条件严格化（起点前跨界宽字符不再双端计入）——旧相交语义 `col+gw > startCol` 把起点在
+ *    startCol 之前的宽字符同时计入前后两段（「汉abc」切 [0,1)+[1,3) 合计 6 > 窗宽 4，选区反白
+ *    同字两屏、行宽虚增界面错位）；严格语义 = 起点 col ∈ [startCol, startCol+len) 才计入，截点落
+ *    宽字中间时整字让位（truncateToWidth 同款口径，fullapp 滚动条路径 2026-09-27 走查拍板）。
+ *  ② 起点前的 ANSI 累积为 pending、随首个入列内容前回放（pi pendingAnsi 同构）——mid/after 段
+ *    不再丢切点前的着色上下文（拖选经过 dim/彩色行右侧掉色、overlay 右侧掉色）。 */
 export function sliceByColumn(line: string, startCol: number, len: number): string {
 	let out = "";
 	let col = 0;
 	let i = 0;
 	let leaked = "";
+	let pending = ""; // startCol 前的 ANSI（含 OSC 8 链接态）——首个入列内容前整段回放
 	while (i < line.length) {
 		const a = extractAnsiCode(line, i);
 			if (a) {
-				if (col >= startCol) out += a.code;
+				if (col >= startCol) {
+					if (out === "" && pending !== "") {
+						out += pending;
+						pending = "";
+					}
+					out += a.code;
+				} else {
+					pending += a.code;
+				}
 				if (a.code.endsWith("m")) leaked = a.code === "\x1b[0m" ? "" : "\x1b[0m";
 			i += a.length;
 			continue;
@@ -302,7 +328,13 @@ export function sliceByColumn(line: string, startCol: number, len: number): stri
 			break;
 		}
 		const gw = graphemeWidth(g);
-		if (col + gw > startCol && col < startCol + len) out += g;
+		if (col >= startCol && col < startCol + len) {
+			if (out === "" && pending !== "") {
+				out += pending;
+				pending = "";
+			}
+			out += g;
+		}
 		col += gw;
 		if (col >= startCol + len) break;
 		i += g.length;

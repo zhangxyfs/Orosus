@@ -34,6 +34,8 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
   { id: "events.on / events.emit", area: "基础设施", decl: /^\s*on\(type: string, listener: Listener\): Disposer;/m },
   { id: "session.append / session.messages", area: "基础设施", decl: /^\s*append\(type: string, payload: Record<string, unknown>\): void;/m },
   { id: "services.get / provide", area: "基础设施", decl: /^\s*provide\(key: string, impl: unknown\): void;/m },
+  { id: "ctx.llm", area: "基础设施", decl: /^\s*readonly llm: LlmPort;/m },
+  { id: "ctx.subagent", area: "基础设施", decl: /^\s*readonly subagent\?: SubagentPort \| undefined;/m },
 ];
 
 /** 取声明行前的文档注释块（斜杠星围栏）——找不到返回 undefined。 */

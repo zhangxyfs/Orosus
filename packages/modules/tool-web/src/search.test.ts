@@ -6,7 +6,7 @@ import type { ModuleContext } from "@orosus/contracts/module";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolWebModule, searchTool, createSearchState } from "./index.ts";
+import { createToolWebModule, searchTool, createSearchState, LlmSearchError } from "./index.ts";
 import type { SearchConfig, WebSearchBackend } from "./search.ts";
 
 let dir: string | undefined;
@@ -21,11 +21,12 @@ const fakeBackend = (kind: WebSearchBackend["kind"], over: Partial<WebSearchBack
   ...over,
 });
 
-const execSearch = async (stateCfg: SearchConfig, backends: WebSearchBackend[], query = "q", timeoutMs?: number) => {
+const execSearch = async (stateCfg: SearchConfig, backends: WebSearchBackend[], query = "q", timeoutMs?: number, sticky?: { llmDowngraded: boolean }) => {
   const tool = searchTool({
     state: createSearchState(stateCfg),
     backends: () => backends,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(sticky !== undefined ? { sticky } : {}),
   });
   const plan = await tool.resolveExecution({ query });
   return { plan, result: await plan.execute({ callId: "c1", signal: new AbortController().signal, log: noLog }) };
@@ -125,9 +126,10 @@ describe("tool-web search 链（M4-3 T1a）", () => {
     expect(result.output).toContain("搜索超时");
   });
 
-  it("⑨ auto 运行时降级（D4/SW-19）：llm 抛错落 tavily 成功 → 降级前缀透明化 + sticky 置位；第二次调用 llm 直接跳过", async () => {
+  it("⑨ auto 运行时降级（D4/SW-19）：llm 抛能力判定类错（no-native-results）落 tavily 成功 → 降级前缀透明化 + sticky 置位；第二次调用 llm 直接跳过", async () => {
     const calls: string[] = [];
-    const llm = fakeBackend("llm", { search: async () => { calls.push("llm"); throw new Error("provider returned no native search results"); } });
+    // MV-01 后链层按 LlmSearchError.kind 判性质——真后端只会抛 LlmSearchError（裸 Error 不再置粘性）
+    const llm = fakeBackend("llm", { search: async () => { calls.push("llm"); throw new LlmSearchError("no-native-results", "provider returned no native search results"); } });
     const tavily = fakeBackend("tavily", { search: async () => { calls.push("tavily"); return [{ title: "T", url: "https://t/1", snippet: "S" }]; } });
     const sticky = { llmDowngraded: false };
     const tool = searchTool({ state: createSearchState({}), sticky, backends: () => [llm, tavily] });
@@ -219,6 +221,54 @@ describe("tool-web search 链（M4-3 T1a）", () => {
     expect(sections[0]!.text).toContain("tool-web__search");
     expect(sections[0]!.text).toContain("tool-web__fetch");
     expect(/[\u4e00-\u9fff]/.test(sections[0]!.text)).toBe(false); // 提示词段英文（用户拍板）
+  });
+
+  it("⑭ MV-01 回归钉：auto + 钉住模型单次瞬时失败（endpoint-error）→ 不置粘性，下一次调用仍先走 llm 槽", async () => {
+    const calls: string[] = [];
+    // 钉住模型（cfg.model 有值、backend 仍 auto）= llm 后端单发不遍历（llm.ts 钉死语义）——
+    // 网络抖动/ECONNRESET 表现为单次 endpoint-error 抛到链层
+    const llm = fakeBackend("llm", { search: async () => { calls.push("llm"); throw new LlmSearchError("endpoint-error", "llm 搜索调用失败：ECONNRESET"); } });
+    const tavily = fakeBackend("tavily", { search: async () => { calls.push("tavily"); return [{ title: "T", url: "https://t/1", snippet: "S" }]; } });
+    const sticky = { llmDowngraded: false };
+    const tool = searchTool({ state: createSearchState({ model: "zhipuai-coding-plan/glm-5.3" }), sticky, backends: () => [llm, tavily] });
+    const run = async () => (await tool.resolveExecution({ query: "q" })).execute({ callId: "c1", signal: new AbortController().signal, log: noLog });
+    const first = await run();
+    expect(first.isError).toBe(false); // 瞬时失败按链降级到 tavily（降级前缀透明化）
+    expect(first.output).toContain("[已降级到 tavily");
+    expect(sticky.llmDowngraded).toBe(false); // 端点瞬时故障 ≠ 整槽不可用——不置粘性（原 :172 无条件置位已修）
+    const second = await run();
+    expect(second.isError).toBe(false);
+    expect(calls).toEqual(["llm", "tavily", "llm", "tavily"]); // 钉住的模型未被静默抛弃——下次仍先试 llm 槽
+  });
+
+  it("⑮ MV-01 回归钉：llm 档超时只记 failures 不置粘性（原 :168 一刀切置位已除），链落 tavily", async () => {
+    const hanging = fakeBackend("llm", {
+      search: async (_q, signal) => new Promise((_res, rej) => signal.addEventListener("abort", () => rej(new Error("aborted")))),
+    });
+    const tavily = fakeBackend("tavily", { search: async () => [{ title: "T", url: "https://t/1", snippet: "S" }] });
+    const sticky = { llmDowngraded: false };
+    const { result } = await execSearch({}, [hanging, tavily], "q", 50, sticky);
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain("已降级到 tavily");
+    expect(result.output).toContain("搜索超时");
+    expect(sticky.llmDowngraded).toBe(false);
+  });
+
+  it("⑯ MV-01 回归钉：能力判定类失败（client-tool-requested）仍置粘性——SW-19「整槽不可用」本义保留", async () => {
+    const llm = fakeBackend("llm", { search: async () => { throw new LlmSearchError("client-tool-requested", "search provider requested an unsupported client tool"); } });
+    const sticky = { llmDowngraded: false };
+    await execSearch({}, [llm], "q", undefined, sticky);
+    expect(sticky.llmDowngraded).toBe(true);
+  });
+
+  it("⑰ MV-03 回归钉：query 上限按 UTF-8 字节计（schema 与 llm 后端同口径）——1366 汉字拒、1365 汉字/4096 ASCII 过", () => {
+    const tool = searchTool({ state: createSearchState({}) });
+    // 1366 汉字 = 4098 字节：过 .max(4096) 字符帽、炸字节界——原实现此处必漏进 llm 槽确定性失败
+    const over = tool.parameters.safeParse({ query: "汉".repeat(1366) });
+    expect(over.success).toBe(false);
+    if (!over.success) expect(over.error.issues.some((i) => i.message.includes("4096 字节"))).toBe(true); // 带内拒话术含字节单位
+    expect(tool.parameters.safeParse({ query: "汉".repeat(1365) }).success).toBe(true); // 4095 字节恰好在线内
+    expect(tool.parameters.safeParse({ query: "x".repeat(4096) }).success).toBe(true); // ASCII 4096 字符 = 4096 字节不变
   });
 });
 

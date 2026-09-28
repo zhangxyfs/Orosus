@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHarness, sqliteAvailable } from "@orosus/core";
+import { createHarness, scanBucketSessions, sqliteAvailable } from "@orosus/core";
 import { fakeProvider } from "@orosus/testing";
 import type { ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -32,6 +32,7 @@ describe("双后端 fork/resume 冒烟", () => {
     await h1.close();
     const h2 = await createHarness({ ...base, fork: { parentSessionId: parent } });
     await h2.prompt("分叉继续");
+    await h2.close(); // CS-03 同步（2026-09-28 code review）：单写者锁纪律——h2 活着时 h3 resume 同 sid 会撞锁
     const h3 = await createHarness({ ...base, resume: { sessionId: h2.sessionId } });
     await h3.prompt("再继续");
     await h3.close();
@@ -41,7 +42,13 @@ describe("双后端 fork/resume 冒烟", () => {
     const msgs = JSON.stringify(fp.requests[fp.requests.length - 1]!.messages);
     expect(msgs).toContain("分叉继续");
     expect(msgs).toContain("第一轮");
-    return readdirSync(dir).filter((f) => f.endsWith(".jsonl") || f.endsWith(".sqlite")).map((f) => f.split(".").pop()!);
+    // TS-02 修复（2026-09-28 code review）：旧断言 readdirSync(dir) 顶层收 .jsonl/.sqlite——目录化（会话树批
+    // T3）后会话文件在 <sid>/agents/ 下，顶层只见 sid 目录名 → exts 恒 [] → every() 恒真（后端被换/落盘
+    // 失败照样绿）。改走核心扫描口 scanBucketSessions（<sid>/agents/session.* 形态、tests/subagent 同款），
+    // 并加空数组护栏——空 every 恒真是所有 every 断言的通用反钉。
+    const exts = scanBucketSessions(dir).map((e) => e.file.split(".").pop()!);
+    expect(exts.length).toBeGreaterThan(0); // 空数组护栏：防扫描形态再漂移时 every 又恒真
+    return exts;
   };
 
   it("jsonl（缺省）：fork → resume 链路", async () => {

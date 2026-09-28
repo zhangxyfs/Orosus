@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "smol-toml";
 import { readSubagentConfig, runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting, writeSubagentConfigKey } from "./subagent-settings.ts";
 
 let dir: string | undefined;
@@ -76,6 +77,22 @@ describe("/settings 子代理分组 T12（决策 7/23：模型 + 审批模式 �
     expect(readSubagentConfig(cfg()).model).toBe("custom/m-two");
     const noSlots = await runSubagentModelSetting(pickFirst, cfg(), []);
     expect(noSlots).toContain("暂无可选平台"); // 无平台 = 指路 /provider，不配置也能用（跟父）
+  });
+
+  it("CM-11：model 值含引号/反斜杠/换行（厂商/目录网络数据）→ 写入转义、读回还原、整文件仍可被 smol-toml 解析（无新行注入）", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cm11-"));
+    writeFileSync(cfg(), "# 注释\n[tool-subagent]\n", "utf8");
+    const evil = 'x"\\y\n[evil]\nenabled = "1';
+    writeSubagentConfigKey("model", evil, cfg());
+    const raw = readFileSync(cfg(), "utf8");
+    expect(raw).toContain("# 注释"); // 行级写纪律不回退
+    expect(raw.match(/^model = /gm)).toHaveLength(1); // 换行被转义成 \n 字面量——无注入新行（旧实现可写出 [evil] 节）
+    expect(raw).not.toMatch(/^\[evil\]$/m);
+    expect(readSubagentConfig(cfg()).model).toBe(evil); // 读侧还原成对（转义不丢数据）
+    expect(() => parse(raw)).not.toThrow(); // 落盘产物是真 TOML（旧实现含裸引号即损坏，下次解析失败）
+    expect((parse(raw) as { "tool-subagent"?: { model?: string } })["tool-subagent"]?.model).toBe(evil);
+    // maxTurns 数值口设防（CM-11 同源）：非法值前置拒绝，不走不带引号的注入路
+    expect(() => writeSubagentConfigKey("maxTurns", '1" injection', cfg())).toThrow(/maxTurns 非法值/);
   });
 describe("子代理轮数上限设置（双保险丝批 2026-09-27：/settings → 子代理 → 轮数上限）", () => {
 	it("㊺d 菜单四档 + 自定义：跟随默认删键；不限写 -1；自定义 1-200；越值拒；数值键不带引号可读回", async () => {

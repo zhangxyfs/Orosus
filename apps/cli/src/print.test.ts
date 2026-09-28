@@ -10,9 +10,8 @@ import { runPrint } from "./print.ts";
 let dir: string | undefined;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
 
-const mkH = async () => {
+const mkH = async (script: Chunk[][] = [[{ type: "text/delta", text: "你好，世界" }, { type: "usage", input: 10, output: 2 }, { type: "finish", kind: "stop" }]]) => {
   dir = mkdtempSync(join(tmpdir(), "orosus-print-"));
-  const script: Chunk[][] = [[{ type: "text/delta", text: "你好，世界" }, { type: "usage", input: 10, output: 2 }, { type: "finish", kind: "stop" }]];
   return createHarness({
     store: new InMemorySessionStore(),
     diagDir: dir, spillDir: join(dir, "spill"),
@@ -47,5 +46,19 @@ describe("--print 三格式（M4-2 T17/B17）", () => {
     const events = out.map((l) => JSON.parse(l) as { type?: string });
     expect(events.some((e) => e.type === "turn/end")).toBe(true);
     expect(events.every((e) => typeof e.type === "string")).toBe(true);
+  });
+
+  it("④ CM-04：turn 终态可见——正常完成 = completed；provider 错误（finish kind error）= error——main 按此置退出码（脚本可分辨失败，空正文不再静默 exit 0）", async () => {
+    const ok = await mkH();
+    const okOut: string[] = [];
+    const okOutcome = await runPrint(ok, "打个招呼", {}, (s) => okOut.push(s));
+    expect(okOutcome.turnEndKind).toBe("completed");
+    await ok.close(); // runPrint 已关（事件收集收口件）——此处幂等，与 main 的 finally 兜底同契约
+    rmSync(dir!, { recursive: true, force: true }); // mkH 复用模块级 dir——腾位给第二台 harness 的 afterEach 清理
+    const bad = await mkH([[{ type: "finish", kind: "error", errorMessage: "HTTP 401（测试注入）" }]]);
+    const badOut: string[] = [];
+    const badOutcome = await runPrint(bad, "打个招呼", {}, (s) => badOut.push(s));
+    expect(badOutcome.turnEndKind).toBe("error"); // 非 completed → main 置退出码 1（CM-04③ 的判定输入）
+    expect(badOut.join("")).not.toContain("你好，世界"); // 空正文——退出码是唯一失败信号
   });
 });
