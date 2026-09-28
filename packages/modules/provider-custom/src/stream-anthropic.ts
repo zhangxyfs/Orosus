@@ -4,6 +4,8 @@ import { mapEvent, parseSseBlock, thinkingParamFor, toAnthropicMessages, type Ss
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 8192;
+/** MP-02：官方约束 max_tokens 必须大于 thinking.budget_tokens——思考启用时 max_tokens 至少抬到预算 + 此输出余量 */
+const THINKING_OUTPUT_MARGIN = 8192;
 
 /** GLM anthropic 面 tool_result 变体 → 搜索命中（2026-09-24 spike）：content 为 JSON 字符串体
  *  [[{title,link,content,refer}]]；防御式递归走查，认 (title+link) 或 (title+url) 键对，其余忽略。 */
@@ -42,6 +44,12 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
     ({ type: "finish", kind: "error", errorMessage, ...(errorCode !== undefined ? { errorCode } : {}) });
     let res: Response;
+    // /effort：档位 → thinking 开关/budget 映射（translate-anthropic.ts thinkingParamFor——MP-02 后 enabled 恒钉预算）。
+    // MP-02：max_tokens 必须 > budget_tokens（缺省 8192 < 32000 恒 400）——思考启用时抬到预算 + 输出余量，用户值更大则保留
+    const thinking = request.reasoningEffort !== undefined ? thinkingParamFor(request.reasoningEffort) : undefined;
+    const maxTokens = thinking !== undefined && thinking.type === "enabled"
+      ? Math.max(request.maxTokens ?? MAX_TOKENS, thinking.budget_tokens + THINKING_OUTPUT_MARGIN)
+      : request.maxTokens ?? MAX_TOKENS;
     try {
       res = await doFetch(`${opts.baseUrl}/v1/messages`, {
         method: "POST",
@@ -54,7 +62,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
         },
         body: JSON.stringify({
           model: request.model,
-          max_tokens: request.maxTokens ?? MAX_TOKENS,
+          max_tokens: maxTokens,
           system: request.system,
           messages: toAnthropicMessages(request.messages),
           tools: [
@@ -63,8 +71,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             // 本仓无 anthropic 协议族端点可 spike——形态按官方文档钉，端点不支持时协议错误原样带内）
             ...(request.webSearch === true ? [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }] : []),
           ],
-          // /effort：档位 → thinking 开关/budget 映射（kimi-code 同款，translate-anthropic.ts thinkingParamFor）
-          ...(request.reasoningEffort !== undefined ? { thinking: thinkingParamFor(request.reasoningEffort) } : {}),
+          ...(thinking !== undefined ? { thinking } : {}),
           stream: true,
         }),
         signal: request.signal,

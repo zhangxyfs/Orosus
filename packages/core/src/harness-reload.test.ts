@@ -142,4 +142,22 @@ describe("harness.reload 与 /reload（§5.5/T15）", () => {
     expect(res.output).toBe("out:m__t");
     await h.close();
   });
+
+  it("⑧ CH-02 回归钉：reload 重读配置尊重注入的 projectFile——项目层启停 reload 后仍生效（旧实现硬编码 cwd 缺省路径，项目层整层丢失）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-reload-ch02-"));
+    dirs.push(dir);
+    const extra = fakeModule("m", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(tool("m__t")); } });
+    const projFile = join(dir, "proj.toml"); // 显式注入的 projectFile（≠ cwd/.orosus/config.toml 缺省路径）
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", script), extra],
+      config: { userFile: join(dir, "no-user.toml"), projectFile: projFile, env: {} },
+    });
+    expect(h.graph().audit().find((a) => a.name === "m")?.state).toBe("active"); // 前置：启动读注入的 projectFile
+    writeFileSync(projFile, "[m]\nenabled = false\n");
+    const report = await h.reload();
+    expect(report.removed).toContain("m"); // 旧实现：projectFile 丢失 → reload 落回 cwd 缺省路径（不存在）→ 项目层不生效
+    expect(h.graph().audit().find((a) => a.name === "m")?.state).toBe("discovered");
+    await h.close();
+  });
 });

@@ -8,7 +8,7 @@
  *  行数组下标对齐、折行由组件层 wrapText 先折成物理行再进帧缓冲，终端折行不进账
  *  （spike §四 对照实验：唯一标记全历史计数恰好 1）。 */
 
-import { visibleWidth } from "./width.ts";
+import { truncateToWidth } from "./width.ts";
 
 const SYNC_ON = "\x1b[?2026h";
 const SYNC_OFF = "\x1b[?2026l";
@@ -30,10 +30,11 @@ export class DiffScreen {
 		let out = SYNC_ON;
 
 		if (this.previousLines.length === 0) {
-			// 首帧：干净屏幕假设，直接全量写
+			// 首帧：干净屏幕假设，直接全量写（CTW-02：超宽行同样过显示列截断守卫——
+			// 行源不全是「先折成物理行再进帧」的组件产物，write 直写行可超宽）
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) out += "\r\n";
-				out += newLines[i];
+				out += truncateToWidth(newLines[i]!, width);
 			}
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			out += SYNC_OFF;
@@ -43,11 +44,12 @@ export class DiffScreen {
 		}
 
 		if (this.previousWidth !== width) {
-			// 宽度变化 → 折行全变，全量重绘（清屏 + 清滚动回退）
+			// 宽度变化 → 折行全变，全量重绘（清屏 + 清滚动回退）；CTW-02：重绘行过显示列截断守卫
+			// （定格行按旧宽冻结、不随宽度回流，原样写出会硬折行 → 物理行数 > 数组行数、记账失准）
 			out += "\x1b[2J\x1b[H\x1b[3J";
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) out += "\r\n";
-				out += newLines[i];
+				out += truncateToWidth(newLines[i]!, width);
 			}
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			out += SYNC_OFF;
@@ -82,18 +84,23 @@ export class DiffScreen {
 
 		// append 快路径：变化区间全部在旧内容之后 → 只追加（pi appendStart 同构）
 		const appendStart = appended && firstChanged === this.previousLines.length && firstChanged > 0;
-		const targetRow = appendStart ? firstChanged - 1 : firstChanged;
+		const renderEnd = Math.min(lastChanged, newLines.length - 1);
+		// CTW-01 修复（2026-09-28 code review）：纯前缀收缩（firstChanged > renderEnd、写循环零迭代）时
+		// targetRow 原取 firstChanged，比清尾不变式的基线（renderEnd）低一行——首条残留行恰在
+		// firstChanged 行被跳过不清，且 cursorRow 记账与物理光标永久差一行。钳到 renderEnd 对齐
+		// 「清尾循环从最后已写内容之下开始清」的不变式（正常区间 firstChanged ≤ renderEnd，取 min 不变行为）
+		const targetRow = appendStart ? firstChanged - 1 : Math.max(0, Math.min(firstChanged, renderEnd));
 		const lineDiff = targetRow - this.cursorRow;
 		if (lineDiff > 0) out += `\x1b[${lineDiff}B`;
 		else if (lineDiff < 0) out += `\x1b[${-lineDiff}A`;
 		out += appendStart ? "\r\n" : "\r";
 
-		const renderEnd = Math.min(lastChanged, newLines.length - 1);
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) out += "\r\n";
 			const line = newLines[i]!;
-			// 超宽行截断防御（pi 直接 throw+crash log——框架化 F2 接线时定严格策略）
-			out += "\x1b[2K" + (visibleWidth(line) > width ? line.slice(0, width) : line);
+			// CTW-02 修复：超宽行按显示列截断（原 line.slice(0, width) 按 UTF-16 码元切——CJK 行实际
+			// 显示宽可达 2×width 列、代理对与 SGR 序列可被拦腰劈断）；truncateToWidth 末尾补 reset 防色漏
+			out += "\x1b[2K" + truncateToWidth(line, width);
 		}
 		let finalRow = renderEnd;
 

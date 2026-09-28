@@ -419,6 +419,19 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h2.close();
   });
 
+  it("⑦h CH-03 回归钉：配置层来源的档位（cliOverrides effort）→ /effort auto 后回目录默认档（旧实现读启动固化快照，auto 静默无效）", async () => {
+    const { h, fake } = await effortHarness({
+      listThinking: async () => ({ efforts: ["low", "high", "max"], hasToggle: false }), // 默认档 = 中位 high
+      configEffort: "low",
+    });
+    expect(h.status().effort).toBe("low"); // 前置：档位来自配置层
+    expect(await h.prompt("/effort auto")).toBe(""); // 清覆盖 + 删盘行 + 清内存快照
+    await h.prompt("hi");
+    expect(fake.requests.at(-1)!.reasoningEffort).toBe("high"); // 线缆回目录默认档（旧实现：cfgEffortValue 读固化 config.core.effort="low" → 仍发 low）
+    expect(h.status().effort).toBe("high"); // 状态卡同步（prompt 后默认档 memo 已预热）
+    await h.close();
+  });
+
   it("⑧ /help：按类分组输出且含三层全部命令（批⑤⑥：/usage /status 退役后不再列）", async () => {
     const h = await makeHarness({ modules: [cmdModule("m", "m__cmd", () => "x")] });
     const out = await h.prompt("/help");

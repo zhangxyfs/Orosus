@@ -234,13 +234,37 @@ describe("errorCode 与 maxTokens（M3 补强 T2/D43）", () => {
     await last(adapters.get("a")!.stream, effortReq("none"));
     expect(captured!.thinking).toEqual({ type: "disabled" }); // offEffort 值 "none"（core 对 off 的解析产物）→ 关思考
     await last(adapters.get("a")!.stream, effortReq("on"));
-    expect(captured!.thinking).toEqual({ type: "enabled" }); // 语义档 on = 开思考不钉预算
+    expect(captured!.thinking).toEqual({ type: "enabled", budget_tokens: 32_000 }); // MP-02：语义档 on 钉预算（kimi-code 'on' 同款；裸 enabled 违反官方必填约束即 400）
     await last(adapters.get("a")!.stream, effortReq("off"));
     expect(captured!.thinking).toEqual({ type: "disabled" }); // 语义档 off（无 offEffort 声明）= 关思考
     await last(adapters.get("a")!.stream, effortReq("max"));
-    expect(captured!.thinking).toEqual({ type: "enabled" }); // 未钉预算档名：只开思考（端点自定档深）
+    expect(captured!.thinking).toEqual({ type: "enabled", budget_tokens: 32_000 }); // MP-02：未钉预算档名取高档安全预算（不再裸 enabled）
     await last(adapters.get("a")!.stream, effortReq());
     expect("thinking" in captured!).toBe(false);
+  });
+
+  // MP-02 回归（报告条目：on 档裸 {type:"enabled"} 违反官方必填约束；high 档预算 32000 超缺省 max_tokens 8192——官方端点恒 400）
+  it("MP-02：thinking enabled 恒钉 budget_tokens 且 max_tokens 恒大于预算（官方 API 约束的请求形状钉样）", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => { captured = JSON.parse(String(init!.body)); return new Response("", { status: 200 }); }) as typeof fetch;
+    const a = createAdapters({ providers: { a: withDm } }, fetchImpl).get("a")!;
+    const ereq = (effort?: string, maxTokens?: number) => ({
+      model: "m", system: "s", messages: [], tools: [], signal: new AbortController().signal,
+      ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    });
+    await last(a.stream, ereq("on")); // on（原裸 enabled）→ 钉 32000；缺省 max_tokens 8192 < 32000 → 抬到预算 + 8192 余量
+    expect(captured!.thinking).toEqual({ type: "enabled", budget_tokens: 32_000 });
+    expect(captured!.max_tokens).toBe(40_192);
+    await last(a.stream, ereq("high", 4096)); // 用户 maxTokens 低于预算 → 抬升优先（保 > 预算不变量，否则恒 400）
+    expect(captured!.max_tokens).toBe(40_192);
+    await last(a.stream, ereq("low", 100_000)); // 用户 max_tokens 高于预算 + 余量 → 保留用户值
+    expect(captured!.max_tokens).toBe(100_000);
+    await last(a.stream, ereq("off")); // 关档 → 不抬（缺省 8192）
+    expect(captured!.max_tokens).toBe(8192);
+    expect(captured!.thinking).toEqual({ type: "disabled" });
+    await last(a.stream, ereq("minimal")); // 未知档名 → 安全预算 32000（不裸发 enabled）
+    expect(captured!.thinking).toEqual({ type: "enabled", budget_tokens: 32_000 });
   });
 });
 

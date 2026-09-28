@@ -45,7 +45,7 @@ import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { readSkillDisabled, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
-import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -1128,7 +1128,13 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 			idx = rows.indexOf(picked);
 			if (idx < 0) return;
 		}
-		const entry = entries[idx]!;
+		// 选中行 → 名册条目（CM-02 修复）：rows 经 tasksListRows 亲缘重排（孙行紧跟父行、孤儿孙补位），
+		// 显示行下标与 entries（sortNewestFirst 时间序）位次错开——孙代理在场时 entries[idx] 是另一条
+		// （选 A 执行 B：查看窗开错会话流、审批答错子代理）。经 taskIdOfRow 从选中行反查编号、再按 id
+		// 找真条目（tasks-cmd 既有件，行模式 choose 回串解析同源）。
+		const pickedId = taskIdOfRow(rows[idx]!);
+		const entry = pickedId === undefined ? undefined : entries.find((e) => e.id === pickedId);
+		if (entry === undefined) return; // 行解析不出编号（理论不可达）——安全退出而非错配条目
 		// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）——应答完回列表
 		if (entry.pendingApproval !== undefined) {
 			const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);

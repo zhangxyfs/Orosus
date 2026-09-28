@@ -94,25 +94,29 @@ async function verify(
 /** /provider 多级菜单主流程（D37 规格，语言约定：一级英文命令、二级起中文）。 */
 export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<string> {
   const current = await deps.loadProviders();
+  const names = Object.keys(current); // 槽 key 并行数组（MP-01 修复）：列表文案用 displayName 渲染，选中按下标反查回真名
   const items = [
-    ...Object.entries(current).map(([n, p]) => `${displayName(n, { name: n })}\n（${p.baseUrl}）`),
+    ...names.map((n) => `${displayName(n, { name: n })}\n（${current[n]!.baseUrl}）`),
     "[添加新平台]",
     "[取消]",
   ];
   const sel = await ui.choose("选择平台", items);
   if (sel === "[取消]") return "已取消";
   if (sel !== "[添加新平台]") {
-    const name = sel.split("\n")[0]!;
-    const act = await ui.choose(`${name}`, ["设为当前默认", "更新密钥", "移除", "返回"]);
+    // MP-01：不得从显示文案反解——displayName 会把 deepseek/moonshot 等目录槽名译成中文显示名，
+    // split("\n")[0] 拿回的是显示名，当槽 key 用则 setModel(显示名) 写坏配置、delete next[显示名] 假成功
+    const name = names[items.indexOf(sel)];
+    if (name === undefined) return "已取消"; // 选中项不在列表（宿主 ui 异常返回）——不猜
+    const act = await ui.choose(displayName(name, { name }), ["设为当前默认", "更新密钥", "移除", "返回"]);
     if (act === "设为当前默认") {
-      await deps.setModel(name); // 裸槽名（F5 十轮）
+      await deps.setModel(name); // 裸槽名（F5 十轮）——真名（MP-01 前：显示名写入，provider 解析必失败）
       return `已设为当前默认（provider = "${name}"）`;
     }
     if (act === "移除") {
       const next = { ...current };
-      delete next[name];
+      delete next[name]; // 真名删除（MP-01 前：delete next[显示名] 对槽表是 no-op，回报「已移除」假成功）
       await deps.saveProviders(next);
-      return `已移除 ${name}`;
+      return `已移除 ${displayName(name, { name })}（${name}）`;
     }
     return "已返回";
   }

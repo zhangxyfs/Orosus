@@ -55,8 +55,14 @@ export function inlineToken(t: Token, ctx: InlineStyleContext = defaultInlineSty
 			const label = inlineTokens(lt.tokens ?? [], ctx);
 			// OSC 8 包裹（m5 鼠标批 T7 设计空白 14）：只服务点击探测（自产自销），配色保持现状
 			// （决策点 18——info 下划线 + 灰 href 后缀一行不动）；宽度计算不受影响（extractAnsiCode 已认 OSC）
-			const wrapped = `\x1b]8;;${lt.href}\x07${theme.fg("info", theme.underline(label))}\x1b]8;;\x07`;
-			return wrapped + theme.dim(` (${lt.href})`) + ctx.stylePrefix;
+			// CMD-01 修复（2026-09-28 code review）：marked 角括号 href 可携带 ESC/BEL 等控制字符（模型
+			// 输出可注入），原样拼进 OSC 8 会提前闭对、其后字节被终端当独立序列执行（OSC 52 剪贴板劫持等）。
+			// 嵌入前剥控制字符（C0 除制表外 + DEL + C1，保留常规 URL 字符），OSC 8 与明文后缀共用消毒结果
+			// 终端安全消毒：正则必须匹配控制字符（lint 基线批定点豁免）
+			// oxlint-disable-next-line no-control-regex
+			const safeHref = lt.href.replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f]/g, "");
+			const wrapped = `\x1b]8;;${safeHref}\x07${theme.fg("info", theme.underline(label))}\x1b]8;;\x07`;
+			return wrapped + theme.dim(` (${safeHref})`) + ctx.stylePrefix;
 		}
 		case "br":
 			return "\n";

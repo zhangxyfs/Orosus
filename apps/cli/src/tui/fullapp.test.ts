@@ -147,6 +147,25 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		expect(app.stateRef.input).toBe("草\n稿");
 		app.stop();
 	});
+	it("CTU-02 emoji 退格整对删除（2026-09-28 code review）：输入 😀ab 逐次退格清空，无孤立代理残留", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "😀ab");
+		await flush();
+		expect([...app.stateRef.input]).toEqual(["😀", "a", "b"]); // 码点展开——插入路径未被劈开
+		input.emit("data", "\x7f"); // 退格删 b
+		await flush();
+		expect(app.stateRef.input).toBe("😀a");
+		input.emit("data", "\x7f"); // 退格删 a
+		await flush();
+		expect([...app.stateRef.input]).toEqual(["😀"]);
+		input.emit("data", "\x7f"); // 退格删 emoji——整对删除（原 bug：判定区间写反只删低代理，残留孤立高代理 \ud83d）
+		await flush();
+		expect(app.stateRef.input).toBe(""); // 码元级断言——\ud83d 残留时此处为 "\ud83d" 而非空串
+		expect(app.stateRef.cursor).toBe(0);
+		app.stop();
+	});
 	it("③b Alt + O / Alt + F 触发工具明细/失败体折叠切换（io.toggleTool / io.toggleErr——2026-09-23 走查批）", async () => {
 		const { app, input, actions } = rig();
 		app.start();
