@@ -22,6 +22,7 @@ import { resolvePopupLayout } from "./popuplayout.ts";
 import { renderWidgetLines, renderWidgets } from "./widgets.ts";
 import type { DialogEvent, DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
+import { pickLabel } from "../picker.ts";
 import * as theme from "../theme.ts";
 
 // ---------- 接缝类型 ----------
@@ -2573,9 +2574,9 @@ export class FullApp {
 		if (winStart > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${winStart} 项`)));
 		for (let i = 0; i < win.length; i++) {
 			const gi = winStart + i;
-			// 当前值项（" ✓" 尾标——/model /effort 命令层约定）整项染青玉 accent（2026-09-25 用户拍板：
-			// 当前档用选中色区分——与斜杠菜单二级 ✓ mark 同族口径）
-			const label = win[i]!.endsWith(" ✓") ? theme.fg("accent", win[i]!) : win[i]!;
+			// 两段式渲染（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；「 ✓」当前值项
+			// 标题青玉 + 说明仍灰。说明拆分三形态见 pickLabel；已带 ANSI 的行（技能/任务列表）原样）
+			const label = pickLabel(win[i]!);
 			const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${label}`;
 			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 		}
@@ -2635,9 +2636,9 @@ export class FullApp {
 			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);
 			const current = this.io.slashCurrent(s.overlayCmd);
 			items = (cmdDef?.children ?? []).map((c) => {
-				const meta = cmdDef?.childMeta?.[c]; // F5 十轮⑤：档名 + 短解（详释区用 long）
+				const meta = cmdDef?.childMeta?.[c]; // F5 十轮⑤：档名 + 短解（详释区用 long）；内部档值括注已删（2026-09-28 用户走查打回——中文档名自足）
 				return {
-					text: meta === undefined ? c : `${theme.fg("fg", meta.label)} ${theme.dim(`——${meta.desc}`)} ${theme.dim(`(${c})`)}`,
+					text: meta === undefined ? c : `${theme.fg("fg", meta.label)} ${theme.dim(`——${meta.desc}`)}`,
 					mark: c === current ? theme.fg("accent", "✓") : " ",
 					long: meta?.long ?? `${s.overlayCmd} 二级项：${c}——回车选定。`,
 					kind: "cmd" as const,

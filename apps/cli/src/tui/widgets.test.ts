@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { renderWidgetLines } from "./widgets.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
 import { stripAnsi } from "./width.ts";
+import { fg, dim } from "../theme.ts";
 
 describe("控件渲染器三②（m5 T8——input/columns/table 纯渲染面）", () => {
 	it("① input：未聚焦灰显占位、聚焦带光标块", () => {
@@ -82,5 +83,18 @@ describe("控件渲染器三②（m5 T8——input/columns/table 纯渲染面）
 		const kvPlain = stripAnsi(kv.join("\n"));
 		expect(kvPlain).toContain("名:");
 		expect(kvPlain).not.toContain("┌"); // 降级无网格
+	});
+});
+
+describe("交互列表两段式（2026-09-28 用户拍板——子界面与斜杠主菜单同形：标题白/说明灰）", () => {
+	it("⑧ 未选中项说明段灰；选中项标题青玉、说明仍灰（纯标题项整项青玉不变）", () => {
+		const widgets: WidgetSpec[] = [{ id: "l", kind: "list", interactive: true, items: ["磁盘占用（各目录大小与清理口径）", "运行状态"] }];
+		const st = { focusedId: "l", selById: { l: 1 } };
+		const out = renderWidgetLines(widgets, 40, st).lines.join("\n");
+		expect(out).toContain(`磁盘占用${dim("（各目录大小与清理口径）")}`); // 未选中：标题白 + 说明灰
+		expect(out).toContain(fg("accent", "运行状态")); // 选中纯标题项整项青玉（原行为）
+		expect(stripAnsi(out)).toContain("磁盘占用（各目录大小与清理口径）"); // 可见形态不变
+		const sel2 = renderWidgetLines(widgets, 40, { focusedId: "l", selById: { l: 0 } }).lines.join("\n");
+		expect(sel2).toContain(`${fg("accent", "磁盘占用")}${dim("（各目录大小与清理口径）")}`); // 选中带说明项：标题青玉、说明灰
 	});
 });

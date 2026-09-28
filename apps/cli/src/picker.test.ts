@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createKeyParser, type KeyEvent } from "./keys.ts";
-import { pick, viewportOf } from "./picker.ts";
-import { fg } from "./theme.ts";
+import { pick, pickLabel, viewportOf } from "./picker.ts";
+import { fg, dim } from "./theme.ts";
+import { stripAnsi } from "./tui/width.ts";
 
 /** 测试夹具（T1/T2 共用）：keys 逐条喂给 T0 解析器（parseOnce = createKeyParser 单例的 feed 包装），
  *  按键耗尽后按回车兜底；w 收集全部写面输出供渲染断言。 */
@@ -60,6 +61,22 @@ describe("键盘菜单 picker（TUI 批 T1——B5 第 2 层）", () => {
   it("⑥ 超 9 项不数字直达（两位数字会与导航冲突——与设计空白「≤9 项数字直达」同口径）——数字键被忽略、仍导航", async () => {
     const items = Array.from({ length: 12 }, (_, i) => `i${i}`);
     expect(await pick(items, fakeIo(["1", "\x1b[B", "\r"]))).toBe(1);
+  });
+  it("⑦ 两段式渲染（2026-09-28 用户拍板——与斜杠主菜单/全屏 choose 同形）：标题白、说明灰", async () => {
+    const w: string[] = [];
+    await pick(["磁盘占用（各目录大小与清理口径）", "需要时候询问——有问题就先问用户"], fakeIo(["\r"], w));
+    const out = w.join("");
+    expect(out).toContain(`磁盘占用${dim("（各目录大小与清理口径）")}`);
+    expect(out).toContain(`需要时候询问 ${dim("——有问题就先问用户")}`);
+    expect(stripAnsi(out)).toContain("磁盘占用（各目录大小与清理口径）"); // 可见形态不变
+  });
+  it("⑧ pickLabel 拆分边界：多行项/括注让位/✓ 与说明并存/纯标题与已着色行原样", () => {
+    expect(pickLabel("name\n（https://api.kimi.com/coding/v1）")).toBe(`name ${dim("（https://api.kimi.com/coding/v1）")}`);
+    expect(pickLabel("技能（查看 / 启停——四轨目录全部技能）")).toBe(`技能${dim("（查看 / 启停——四轨目录全部技能）")}`); // —— 在括注组内归说明
+    expect(pickLabel("每次都询问——有问题就先问用户 ✓")).toBe(`${fg("accent", "每次都询问")} ${dim("——有问题就先问用户")} ${fg("accent", "✓")}`);
+    expect(pickLabel("high ✓")).toBe(fg("accent", "high ✓")); // 纯标题当前项整项青玉（拍板原样）
+    expect(pickLabel("[取消]")).toBe("[取消]"); // 纯标题不动
+    expect(pickLabel(`\x1b[2m已着色行\x1b[22m`)).toBe(`\x1b[2m已着色行\x1b[22m`); // 调用方自拼样式的行原样
   });
 });
 

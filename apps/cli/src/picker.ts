@@ -1,6 +1,71 @@
 import type { KeyEvent } from "./keys.ts";
 import { moveUp, clearLine, reverse } from "./ansi.ts";
-import { fg } from "./theme.ts";
+import { fg, dim } from "./theme.ts";
+
+/** 尾部完整括注组定位（两段式拆分③）：串尾（忽略尾随空白）是 `（…）`/`(…)` 整组时返回
+ *  { coreStart }——组前还有内容才算两段（整项即括号组不算）。只认同类配对（全角配全角）。 */
+function trailingParenStart(s: string): number | undefined {
+	const t = s.replace(/[ \t]+$/, "");
+	const close = t.endsWith("）") ? "）" : t.endsWith(")") ? ")" : undefined;
+	if (close === undefined) return undefined;
+	const open = close === "）" ? "（" : "(";
+	let depth = 0;
+	for (let i = t.length - 1; i >= 0; i--) {
+		const ch = t[i]!;
+		if (ch === close) depth++;
+		else if (ch === open) {
+			depth--;
+			if (depth === 0) return i > 0 ? i : undefined; // i=0 → 整项即括号组
+		}
+	}
+	return undefined;
+}
+
+/** choose/pick 列表项两段式渲染（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白、副题/说明灰）。
+ *  拆分三形态（只翻译样式、可见字符不增删）：
+ *  ① 多行项首行 = 标题、其余折单行为说明（/provider「名称\n（URL）」——2026-09-24 压平前案的形态升级）；
+ *  ② 首个「——」后为说明（审批三档/搜索后端「标题——说明」形态）———— 落在尾部括注组内则让位③
+ *    （设置菜单「技能（查看 / 启停——…）」的 —— 本就是说明的一部分）；
+ *  ③ 尾部完整括注组（…）/（…）为说明（「标题（说明）」形态——设置菜单/厂商目录/数据源）。
+ *  「 ✓」当前值尾标保持 2026-09-25 拍板：纯标题项整项青玉；带说明项 = 标题青玉 + 说明灰 + 尾标青玉。
+ *  已含 ANSI 的行原样返回（调用方自拼样式的行——技能列表/任务列表）；纯标题项原样返回。 */
+export function pickLabel(raw: string, opts?: { current?: boolean }): string {
+	if (raw.includes("\x1b[")) return raw;
+	const cm = /^(.*?)[ \t]*✓[ \t]*$/.exec(raw);
+	const cur = opts?.current === true || cm !== null;
+	const core = cm?.[1] ?? raw;
+	// 形态拆分（在去掉 ✓ 尾标的核心上找——尾标不属于标题也不属于说明）
+	let title = "";
+	let desc = "";
+	let spaced = false; // true = 标题与说明间补一个空格（主菜单「label ——desc」同形）；括注直贴不补
+	const nl = core.indexOf("\n");
+	if (nl >= 0) {
+		title = core.slice(0, nl).trimEnd();
+		desc = core.slice(nl + 1).replace(/\s*\n\s*/g, " ").trim();
+		spaced = true;
+	} else {
+		const ps = trailingParenStart(core);
+		const di = core.indexOf("——");
+		if (di > 0 && (ps === undefined || di < ps)) {
+			title = core.slice(0, di).trimEnd();
+			desc = core.slice(di).trimStart();
+			spaced = true;
+		} else if (ps !== undefined && core.slice(0, ps).trim() !== "") {
+			title = core.slice(0, ps); // 括注直贴：保留标题尾的原有空格（折平项「名 （URL）」不丢字距）
+			desc = core.slice(ps).trimStart();
+		} else {
+			title = core;
+		}
+	}
+	if (desc === "") {
+		// 纯标题项：✓ 尾标只在串里本来就有时还原（控件窗选中行 current 不发明数据里没有的尾标）
+		if (cm === null) return cur ? fg("accent", core) : raw;
+		return cur ? fg("accent", `${core} ✓`) : raw;
+	}
+	const titleSeg = cur ? fg("accent", title) : title;
+	const markSeg = cm !== null ? ` ${fg("accent", "✓")}` : "";
+	return `${titleSeg}${spaced ? " " : ""}${dim(desc)}${markSeg}`;
+}
 
 /** 视口计算（TUI 批 T2/B5 厂商目录分页）——纯函数：窗口由选中项派生（选中项置底边滚入、
  *  首部贴顶、尾部贴底），pick 渲染每帧经它取 [start, end)；PageUp/PageDown 把选中项
@@ -52,10 +117,9 @@ export function pick(
       const lines: string[] = [];
       if (vpHeight !== undefined) lines.push(`…（第 ${win.start + 1}–${win.end} 项，共 ${items.length} 项）`);
       for (let i = win.start; i < win.end; i++) {
-        const text = items[i]!.replace(/\n/g, " ");
-        // 当前值项（" ✓" 尾标——/model /effort 命令层约定）染青玉 accent（2026-09-25 用户拍板：当前档用
-        // 选中色区分——与全屏 choose 浮层/斜杠菜单二级 ✓ mark 同形）。非 TTY 编号回落不加色（管道保旧 byte 形）
-        const label = text.endsWith(" ✓") ? fg("accent", text) : text;
+        // 两段式渲染（2026-09-28 用户拍板：标题白/说明灰 + 「 ✓」当前值项青玉——与全屏 choose 浮层同形）；
+        // 多行项由 pickLabel 就地折平（原「先 replace 再判尾标」两步合一）。非 TTY 编号回落不加色（管道保旧 byte 形）
+        const label = pickLabel(items[i]!);
         lines.push(i === selected ? reverse(label) : label);
       }
       lines.push(hint);
