@@ -252,3 +252,23 @@ describe("工具行参数空白折叠（2026-09-27 白行根因修复——capAr
     expect(line.endsWith("tail)") || line.includes("tail")).toBe(true);
   });
 });
+
+describe("CR-01 外部文字危险序列入口净化（2026-09-28 拍板「只堵危险子集」）", () => {
+  it("① 模型 chunk 夹带清屏/OSC 剪贴板序列 → 剥净；自带 SGR 颜色保留", () => {
+    const st = createRenderState();
+    const evil = renderChunk(chunk({ type: "text/delta", text: "答\x1b[2J案\x1b]52;c;steal\x07完" }), st);
+    // eslint-disable-next-line no-control-regex -- 终端断言正则按形态写（\x1b 控制序列是断言对象本身）
+    expect(evil).not.toMatch(/\x1b\[2J|\x1b\]52/);
+    expect(evil).toContain("答案完");
+    const colored = renderChunk(chunk({ type: "text/delta", text: "\x1b[31m红\x1b[0m字" }), createRenderState());
+    expect(colored).toContain("\x1b[31m红\x1b[0m"); // 颜色码原样过
+  });
+  it("② 历史回显同净化：assistant 存量正文里的光标定位序列不进 md 管线", () => {
+    const lines = renderHistoryLines([
+      { type: "assistant/message", content: [{ kind: "text", text: "旧回复\x1b[10;5H带毒" }] },
+    ] as unknown as SessionEvent[], 80);
+    // eslint-disable-next-line no-control-regex -- 同上：断言对象是控制序列本身
+    expect(lines.join("\n")).not.toMatch(/\x1b\[10;5H/);
+    expect(lines.join("\n")).toContain("旧回复带毒");
+  });
+});

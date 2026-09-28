@@ -143,18 +143,27 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     expect(h.uiCalls[0]!.items).toEqual(["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]);
   });
 
-  it("⑥ 选「始终允许」→ config [approval] rules 含生成规则（单段 git status → bash(git *)）", async () => {
+  it("⑥ 选「始终允许」→ 生成规则收窄一档（单段 git status → bash(git status *)——MA-04 2026-09-28 拍板）；裸命令重跑零询问、换子命令仍问、同前缀异词不误中", async () => {
     const base = freshDir();
     const configFile = join(base, "config.toml");
     const h = fakeCtx({ config: { configFile }, ui: { choose: async (title: string, items: string[]) => { h.uiCalls.push({ title, items }); return "始终允许（写规则落盘）"; } } });
     await def.activate(h.ctx);
     expect(await h.listener(bashPayload("git status"))).toBeUndefined();
     const cfg = readFileSync(configFile, "utf8");
-    expect(cfg).toContain('tool = "tool-shell__bash(git *)"');
+    expect(cfg).toContain('tool = "tool-shell__bash(git status *)"'); // 旧口径：bash(git *)——首词全家放行
     expect(cfg).toContain('effect = "allow"');
-    // 会话内即时生效：同命令二次零询问
+    // 会话内即时生效：同命令（裸形态与带参形态）二次零询问
     expect(await h.listener(bashPayload("git status"))).toBeUndefined();
+    expect(await h.listener(bashPayload("git status -s"))).toBeUndefined();
     expect(h.uiCalls).toHaveLength(1);
+    // MA-04 核心：换子命令（git push）不被 git status 的规则罩住——仍询问
+    const h2 = fakeCtx({ config: { rules: [{ effect: "allow", tool: "tool-shell__bash(git status *)" }] }, ui: { choose: async () => "拒绝" } });
+    await def.activate(h2.ctx);
+    const veto = await h2.listener(bashPayload("git push origin main"));
+    expect(veto).toEqual({ deny: true, reason: expect.stringContaining("用户拒绝") }); // 旧口径：命中 bash(git *) 零询问
+    // 词边界：git statusfoo 不是 git status 家族——仍询问
+    const veto2 = await h2.listener(bashPayload("git statusfoo"));
+    expect(veto2).toEqual({ deny: true, reason: expect.stringContaining("用户拒绝") });
   });
 
   it("⑦ 分段防搭车——git status; rm -rf / 在 bash(git *) 规则下仍询问；纯 git 复合零询问（核心增量）", async () => {
@@ -253,7 +262,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     const h = fakeCtx({ config: { configFile: userFile, projectConfigFile: projectFile }, ui: { choose: async () => "始终允许（写规则落盘）" } });
     await def.activate(h.ctx);
     expect(await h.listener(bashPayload("git status"))).toBeUndefined();
-    expect(readFileSync(projectFile, "utf8")).toContain('tool = "tool-shell__bash(git *)"'); // 写项目层
+    expect(readFileSync(projectFile, "utf8")).toContain('tool = "tool-shell__bash(git status *)"'); // 写项目层（MA-04 收窄口径）
     expect(existsSync(userFile)).toBe(false);                                                // 用户层不动（未创建）
   });
 });

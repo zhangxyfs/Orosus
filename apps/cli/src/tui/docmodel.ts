@@ -9,6 +9,7 @@
  *  用户消息块按流区宽折行（此前直推不折行）。 */
 
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
+import { stripDangerEsc } from "../ansi-guard.ts";
 import { agentGroupLines } from "../subagent-status.ts";
 import { spawnIdsIn } from "../tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
@@ -190,7 +191,7 @@ export class DocModel {
 			this.ghostNoId = false;
 			return; // 旧日志（无 callId）：吞掉紧跟静默 call 的孤儿结果，防错挂
 		}
-		const text = typeof output === "string" ? output : String(output ?? "");
+		const text = typeof output === "string" ? stripDangerEsc(output) : stripDangerEsc(String(output ?? "")); // CR-01：工具输出是外部文字——摄入净化（会话文件仍存原文）
 		let n = 0;
 		for (const l of text.split("\n")) if (l.trim().length > 0) n++;
 		if (callId !== undefined) {
@@ -240,7 +241,7 @@ export class DocModel {
 		// 折行按帧宽即时；wrapText 是 ANSI 感知折行，高亮序列跨行续色）
 		const wc = writeContentFor(e.name, e.args);
 		if (wc !== undefined) {
-			if (e.hl === undefined) e.hl = highlightLines(wc.content.replace(/\n+$/, ""), langForPath(wc.path));
+			if (e.hl === undefined) e.hl = highlightLines(stripDangerEsc(wc.content).replace(/\n+$/, ""), langForPath(wc.path)); // CR-01：Write 正文是模型手笔（外部文字）——高亮前净化
 			const CAP = 10;
 			const shown = this.toolOpen ? e.hl.slice(0, 200) : e.hl.slice(0, CAP);
 			for (const [i, l] of shown.entries()) {
