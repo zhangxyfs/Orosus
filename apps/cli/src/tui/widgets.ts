@@ -6,6 +6,7 @@
 
 import type { WidgetSpec } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
+import { pickLabel } from "../picker.ts";
 import { padToWidth, truncateToWidth, wrapText } from "./width.ts";
 
 const resolveText = (v: string | (() => string)): string => (typeof v === "function" ? v() : v);
@@ -45,7 +46,8 @@ export function renderWidgetLines(
 					lists.push({ id: wd.id, baseLine: lines.length, count: wd.items.length });
 					for (let i = 0; i < wd.items.length; i++) {
 						const mark = i === sel ? (focused ? theme.fg("accent", "❯") : theme.dim("❯")) : theme.dim(" ");
-						const text = i === sel ? theme.fg("accent", wd.items[i]!) : wd.items[i]!;
+						// 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；选中行标题青玉、说明仍灰）
+						const text = pickLabel(wd.items[i]!, { current: i === sel });
 						lines.push(` ${mark} ${truncateToWidth(text, Math.max(1, w - 3))}`);
 					}
 					break;

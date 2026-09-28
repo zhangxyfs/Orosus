@@ -205,7 +205,7 @@ describe("审批硬化（M4-2 T9/B12）", () => {
     const h = fakeCtx({ config: { configFile: join(base, "config.toml") } });
     await def.activate(h.ctx);
     const handler = h.commands.get("approval__permission")!;
-    const answers = ["每次都询问——每次工具调用都确认（ask-always）"]; // 2026-09-26 拍板：显示名改中文 + 短解
+    const answers = ["每次都询问——每次工具调用都确认"]; // 2026-09-26 拍板：显示名改中文 + 短解（纯中文无英文括号——2026-09-28 走查修在途红）
     const ui: CommandUi = {
       ask: async () => { throw new Error("不应 ask"); },
       askSecret: async () => { throw new Error("不应 askSecret"); },
@@ -247,7 +247,7 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
   it("① /permission 无参 → 直接三档菜单（无顶级菜单、无规则清单项）", async () => {
     const h = fakeCtx({ config: { configFile: join(base, "c1.toml"), projectConfigFile: join(base, "no-proj.toml") } });
     await def.activate(h.ctx);
-    const { u, asked } = mkUi(["每次都询问——每次工具调用都确认（ask-always）"]); // 2026-09-26 显示名改中文
+    const { u, asked } = mkUi(["每次都询问——每次工具调用都确认"]); // 2026-09-26 显示名改中文（2026-09-28 走查修在途红：旧串带英文括号不匹配）
     const out = await h.commands.get("approval__permission")!("", u);
     expect(asked).toHaveLength(1); // 一级直达——不再「切换权限模式」二级跳
     expect(asked[0]).toContain("当前权限模式：ask-risky");
@@ -281,25 +281,25 @@ describe("/permission 直达三档 + /yolo（用户走查 2026-09-19：顶级菜
     expect(bad).toContain("未知权限模式");
   });
 
-  it("③ /yolo（approval__yolo）→ 零交互直接 never + 写盘 + policy 事件", async () => {
+  it("③ /yolo（approval__yolo，2026-09-26 拍板 D2 交叉互换）→ 零交互直接 ask-risky + 写盘 + policy 事件", async () => {
     const h = fakeCtx({ config: { configFile: join(base, "c3.toml"), projectConfigFile: join(base, "no-proj.toml") } });
     await def.activate(h.ctx);
     const { u, asked } = mkUi([]);
     const out = await h.commands.get("approval__yolo")!("", u);
     expect(asked).toHaveLength(0); // 一键——无菜单
     expect(out).toBe(""); // 静默钉同上
-    expect(readFileSync(join(base, "c3.toml"), "utf8")).toContain('mode = "never"');
-    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "never")).toBe(true);
+    expect(readFileSync(join(base, "c3.toml"), "utf8")).toContain('mode = "ask-risky"');
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-risky")).toBe(true);
   });
 
-  it("④ /auto（approval__auto，2026-09-22 用户拍板）→ 零交互直接 ask-risky + 写盘 + policy 事件（/yolo 镜像——回日常默认档的直达键）", async () => {
+  it("④ /auto（approval__auto，2026-09-26 拍板 D1：/auto==从不询问）→ 零交互直接 never + 写盘 + policy 事件", async () => {
     const h = fakeCtx({ config: { configFile: join(base, "c4.toml"), projectConfigFile: join(base, "no-proj.toml") } });
     await def.activate(h.ctx);
     const { u, asked } = mkUi([]);
     const out = await h.commands.get("approval__auto")!("", u);
     expect(asked).toHaveLength(0);
     expect(out).toBe(""); // 静默钉同上
-    expect(readFileSync(join(base, "c4.toml"), "utf8")).toContain('mode = "ask-risky"');
-    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "ask-risky")).toBe(true);
+    expect(readFileSync(join(base, "c4.toml"), "utf8")).toContain('mode = "never"');
+    expect(h.events.some((e) => e.type === "approval/policy" && e.payload.mode === "never")).toBe(true);
   });
 });

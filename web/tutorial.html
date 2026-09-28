@@ -47,7 +47,7 @@
     <tr><th></th><th>外部模块</th><th>内置模块</th></tr>
     <tr><td><strong>放哪</strong></td><td><code>&lt;项目&gt;/.orosus/modules/&lt;name&gt;/</code> 或 <code>~/.orosus/modules/&lt;name&gt;/</code></td><td><code>packages/modules/&lt;name&gt;/</code> + 改 <code>apps/cli/src/builtins.ts</code></td></tr>
     <tr><td><strong>加载方式</strong></td><td>目录扫描 + jiti 直接吃 TS 源码，<strong>不用构建不用发包</strong></td><td>workspace 包 import</td></tr>
-    <tr><td><strong>信任</strong></td><td>项目级要 <code>orosus module trust &lt;name&gt;</code>；用户级免确认</td><td>仓库内自带信任</td></tr>
+    <tr><td><strong>信任</strong></td><td>首挂确认（居中弹窗看声明面，或 <code>orosus module trust &lt;name&gt;</code>）；项目级追内容 hash、用户级一次性</td><td>仓库内自带信任</td></tr>
     <tr><td><strong>适合</strong></td><td>试验、项目定制、第三方分发</td><td>稳定后转正、要跑全套测试</td></tr>
   </table>
   <p>教程主线走外部模块（门槛最低），<a href="#zhengshi">第 9 节</a>讲怎么转正。</p>
@@ -124,13 +124,23 @@ export default defineModule({
 [note]
 source = "../wherever/note"    # ./ ~/ file:// 或绝对路径；npm: 前缀是 M3 之后的事</code></pre>
 
-  <h2>4. Step 3：过信任门（项目级模块必看）</h2>
-  <p>项目级模块第一次加载会被拦下（§8.5，防 MCPoison 式投毒）：</p>
-  <pre><code class="language-bash">untrusted（项目级模块未确认——运行 orosus module trust note 后重启生效）</code></pre>
+  <h3>顺带说技能（skills）放哪（m4-7 起四轨目录）</h3>
+  <p>技能不是模块——一个目录一个 <code>SKILL.md</code>（frontmatter：<code>name</code> / <code>description</code> 必需，<code>when_to_use</code> / <code>disable-model-invocation</code> 可选），不放代码只放知识。四轨扫描目录（弱→强，同名后入者胜 = 项目压用户、品牌压通用）：</p>
+  <ol>
+    <li><code>~/.agents/skills/</code>——用户级·通用（.agents 生态互操作目录，agentskills.io 约定）</li>
+    <li><code>~/.orosus/skills/</code>——用户级·品牌</li>
+    <li><code>&lt;项目&gt;/.agents/skills/</code>——项目级·通用（从 cwd 逐层向上到 git 根，monorepo 子目录捡得到仓库根技能）</li>
+    <li><code>&lt;项目根&gt;/.orosus/skills/</code>——项目级·品牌（只认项目根本身，防逐层同名多版本）</li>
+  </ol>
+  <p>模型经 <code>skill__load</code> 按需加载全文；用户在全屏输入 <code>/</code> 的菜单技能区（<code>skill : 名</code>）回车即以用户消息加载；<code>/settings → 技能</code> 可看全部技能并 Alt + K 启停（停用 = 模型清单与菜单双摘，管理面照收）。</p>
+
+  <h2>4. Step 3：过信任门（第三方模块必看，m5 T17 起首挂确认）</h2>
+  <p>第三方模块（用户级或项目级）第一次出现都会被拦下——<strong>默认不挂载</strong>，面板模块区显示「待确认」；选中回车弹一个居中确认窗，列出它的声明面（提供什么服务 / 依赖什么能力 / 用哪些宿主口），确认开启才真正激活。行模式回退 CLI：<code>orosus module trust &lt;name&gt;</code>。</p>
   <ul>
-    <li>确认一次登记进 <code>~/.orosus/trust.json</code>（内容 hash）；</li>
-    <li>之后<strong>改了入口文件</strong>，hash 对不上 → 重新确认。这是特性不是 bug：项目里的模块代码变了，你应该再看一眼。</li>
-    <li>用户级（<code>~/.orosus/modules/</code>）恒免确认——你自己放的东西自己负责。</li>
+    <li><strong>弹窗长什么样</strong>：模块名 / 版本 / 来源（哪层目录）+ 声明面人话清单 + 两句诚实行（工具/命令/卡片要激活时才注册，确认前看不到；声明面只覆盖契约口）。Enter 确认 / Esc 取消（取消零副作用）。</li>
+    <li><strong>确认后存在哪</strong>：<code>~/.orosus/trust.json</code>（全局一份，跨项目共用）——每个模块目录一条登记。</li>
+    <li><strong>代码变了会怎样</strong>：分层——项目级（<code>&lt;项目&gt;/.orosus/modules/</code>）追内容 hash：改了入口文件就重新弹窗（顶部多一行「⚠ 代码已变更，须重新确认」）——这是特性不是 bug：项目里的模块代码变了，你应该再看一眼（防 MCPoison 式投毒）；用户级（<code>~/.orosus/modules/</code>）<strong>一次性确认不追 hash</strong>——自己地盘自己负责，改动不烦。</li>
+    <li>确认过再 disable → enable 不重弹（登记还在）；启动时已有待确认模块 → 不挂载 + 一次性提示。</li>
     <li><code>orosus module list</code> 看全量；<code>enable &lt;name&gt;</code> / <code>disable &lt;name&gt;</code> 管开关。</li>
   </ul>
 
@@ -144,7 +154,7 @@ pnpm orosus
 &gt; 帮我记一下：这个项目的入口是 apps/cli/src/main.ts
 &gt; （模型调 note__add，你会在下轮系统提示词里看到 ## Notes）</code></pre>
   <p>判断「真的生效了」的三个证据：<code>--dump-modules</code> 清单里有 <code>note</code> 且状态正常；模型真的调了 <code>note__add</code>（工具行可见）；再问一句「便签里有什么」它能答上来（说明 promptSection 活段在喂）。</p>
-  <blockquote>看着「没生效」先查这个：<strong>activate 抛错不会崩启动</strong>，模块只是降级（§10）——在 <code>--dump-modules</code> 里看是不是 failed，原因会写在那里。</blockquote>
+  <blockquote>看着「没生效」先查这个：<strong>activate 抛错不会崩启动</strong>，模块只是降级（§11）——在 <code>--dump-modules</code> 里看是不是 failed，原因会写在那里。</blockquote>
 
   <h2>6. Step 5：写测试（脚本驱动，不用真 provider）</h2>
   <p>仓库里的标准形态（模板：<code>packages/modules/tool-todo/src/index.test.ts</code>）——<code>fakeProviderModule</code> 按剧本吐 chunk，<code>createHarness</code> 装配全套，断言走会话事件：</p>
@@ -181,7 +191,84 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
 });</code></pre>
   <p>工具逻辑本身还可以更轻：像 tool-todo 那样把工具做成<strong>工厂</strong>（<code>createTodoTool</code> 的形态），单测直接 <code>resolveExecution</code> + <code>execute</code> 驱动，不装配 harness。</p>
 
-  <h2>7. 进阶口速览</h2>
+  <h2>7. 给模块做界面（m5 起：弹窗 / 卡片 / 控件窗 / 设置）</h2>
+  <p>m5 之前模块在界面上只能「给内容」（工具行、斜杠命令、黄字提示）；m5 起能「给界面」了——四条路：<strong>弹窗</strong>（只读文本窗）、<strong>卡片</strong>（右侧面板常驻卡）、<strong>控件窗</strong>（列表/进度条/输入框，用户操作变事件）、<strong>设置服务与读面</strong>（改模型/切挂载预设 + 看运行状态）。铁律只有一条：<strong>你给数据，宿主画</strong>——文字不许夹终端颜色控制码（宿主按看得见的宽度算折行，夹了必炸）。</p>
+
+  <h3>7.1 UI 怎么写：弹窗与卡片</h3>
+  <p>弹窗（<code>ctx.ui.viewText</code>）与卡片（<code>ctx.contribute.card</code>）都是 activate 期注册、运行期随时调：</p>
+  <pre><code class="language-ts">// 在 note 模块的 activate 里接着加——命令：弹窗查看全部便签（带自定义键 r 刷新）
+ctx.contribute.command("show", async (_args, ui) =&gt; {
+  if (notes.length === 0) { await ui.notice?.("还没有便签"); return ""; }
+  ui.viewText?.("便签", notes.map((n, i) =&gt; `${i + 1}. ${n}`).join("\n"), {
+    keys: { r: { label: "刷新", run: () =&gt; notes.map((n, i) =&gt; `${i + 1}. ${n}`).join("\n") } },
+  });
+  return "";
+});
+// 用户敲 /note__show 开窗；窗内按 r 整窗换新内容；Esc 关窗。
+// 键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"）；Esc 和 Ctrl+C/V/A/S/Z 是保留键，注册会被拒。
+
+// 卡片：右侧面板常驻一张（widgets 是 getter——宿主每秒现读，改个变量卡片自己跳）
+ctx.contribute.card?.({
+  area: "bottom",                  // "top" = 右上（运行状态那排后面）；"bottom" = 右下（任务清单后面）
+  order: 50,                       // 内建卡固定在前，模块卡按 order 排后
+  title: "便签",
+  get widgets() {
+    return notes.length === 0 ? [] : [
+      { id: "count", kind: "kv", label: "条数", value: String(notes.length) },
+      { id: "latest", kind: "text", text: notes[notes.length - 1]!, style: "muted" },
+    ];
+  },
+});
+// 卡片声明 mounts：["contribute:card"] 才能注册（见下方「门」说明）。</code></pre>
+  <p><strong>门（mounts）</strong>：模块一旦声明了 <code>mounts</code> 数组，它就是白名单——用哪个口就得列哪个。卡片要列 <code>"contribute:card"</code>；设置服务要列 <code>"settings"</code>；没声明 mounts 的模块不受限。窗是排队的一次一窗（连弹两窗后者等前者关）；模块被卸载时它的窗和卡会被自动关掉/拆掉。</p>
+
+  <h3>7.2 控件怎么用：控件窗与事件</h3>
+  <p>控件窗（<code>ctx.ui.dialog</code>）交一份控件清单，宿主代画；用户的操作变成事件回传给你：</p>
+  <pre><code class="language-ts">// 命令：便签管理窗（列表选中 + 回车删除 + 进度条显示容量）
+ctx.contribute.command("manage", async (_args, ui) =&gt; {
+  const refresh = () =&gt; [
+    { id: "list", kind: "list", interactive: true, items: notes.map((n, i) =&gt; `${i + 1}. ${n}`) },
+    { id: "cap", kind: "progress", value: () =&gt; notes.length, max: 20 },  // 上限演示用固定值——正式代码读 ctx.configRead()
+  ];
+  const h = ui.dialog?.({
+    title: "便签管理",
+    widgets: refresh(),
+    onEvent: (e) =&gt; {
+      if (e.type === "activate" &amp;&amp; e.id === "list") {   // 回车激活列表项
+        notes.splice(e.index ?? 0, 1);
+        return refresh();                                // 回新清单 = 整窗替换
+      }
+      return undefined;                                  // 无返回 = 不动
+    },
+  });
+  if (h === undefined) { await ui.notice?.("当前宿主不支持控件窗"); return ""; }
+  // 句柄在异步处也能用：h.update(新清单)、h.close()——窗关了再调是无操作不报错
+  return "";
+});</code></pre>
+  <p>事件三型：<code>input</code>（输入框内容变，每键一回）/ <code>select</code>（列表选中变）/ <code>activate</code>（回车）。控件八种：text（文字）/ kv（标签值）/ sep（分隔线）/ list（列表）/ progress（进度条）/ input（输入框，单行或多行）/ columns（多列，可嵌套）/ table（表格）。文字字段可以给函数（活值）——渲染期现读，进度条自己跳就是它。输入框聚焦时方向键归输入框（移光标），Tab 换焦点。</p>
+
+  <h3>7.3 数据怎么绑：读面与缓存惯例</h3>
+  <p>看运行状态（当前模型/力度/挂载模式/权限/用量）走 <code>ctx.host.current()</code>——只读、不用声明 mounts：</p>
+  <pre><code class="language-ts">let snap: import("@orosus/contracts/module").HostSnapshot | undefined;
+ctx.host?.current().then((v) =&gt; { snap = v; });                 // activate 拉首份
+ctx.events.on("turn/end", () =&gt; { void ctx.host?.current().then((v) =&gt; { snap = v; }); });  // 事件刷新
+ctx.contribute.card?.({ area: "top", order: 60, title: "状态",
+  get widgets() {   // 同步 getter 读缓存——快照是异步的，卡片是同步的，中间靠模块自己缓存
+    return snap ? [{ id: "m", kind: "kv", label: "模型", value: snap.model }] : [];
+  },
+});</code></pre>
+  <p>这就是标准接法：<strong>activate 拉首份 + 事件刷新（turn/start·turn/end 等），同步 getter 读缓存</strong>。改设置走 <code>ctx.settings</code>（声明 mounts: ["settings"]）：setModel/setEffort/applyModulePreset（"full"/"minimal" 极简模式）/setLabel/setSidebar/readClipboard；busy 期可调、下一轮生效。</p>
+
+  <h3>7.4 规矩清单（界面贡献的边界）</h3>
+  <ul>
+    <li><strong>给数据不给画面</strong>：不夹控制码、不自己算布局；渲染权、宽度、主题、防闪烁全归宿主。</li>
+    <li><strong>Esc 永远关窗</strong>；Ctrl+C/V/A/S/Z 与宿主全局键（Ctrl+T/E/O 等）是保留键，注册即拒。</li>
+    <li><strong>一次一窗</strong>（后来的排队）；模块卸载 = 窗关、卡拆、句柄作废（之后调句柄静默无操作）。</li>
+    <li><strong>出错诚实降级</strong>：你的函数抛错 = 该卡当帧剔除/窗保留 + 黄字提示，别的不受牵连。</li>
+    <li><strong>宿主可能没有这些口</strong>（行模式/无头）：全部判空调用（<code>ui.viewText?.(...)</code>、<code>if (ctx.settings)</code>），降级路径自己想好（比如回退 notice）。</li>
+  </ul>
+
+  <h2>8. 进阶口速览</h2>
   <table>
     <tr><th>口</th><th>干什么</th><th>什么时候用</th></tr>
     <tr><td><code>ctx.config</code> / <code>configRead()</code></td><td>自家配置节的快照 / 运行期活读</td><td>声明了 <code>config</code>（zod schema）才有；overlay 只作用于 configRead</td></tr>
@@ -194,13 +281,24 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td><code>ctx.provide</code> / <code>ctx.services.get</code></td><td>能力槽：给/取</td><td>模块间解耦协作（fs seam、provider 槽都是这个）</td></tr>
     <tr><td><code>ctx.ui.ask</code> 等</td><td>宿主注入的交互</td><td>无头环境是拒绝式实现——别指望它一定成功，fail-closed</td></tr>
   </table>
-  <p>每个字段、每个参数的逐条说明见本文<strong>第 12 节（完整 API 参考）</strong>；更长的语义注释、参数范围与示例去 <a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（从 contracts 源生成的 Markdown，含每个参数的 @param 说明，两处同源）。</p>
+  <p>每个字段、每个参数的逐条说明见本文<strong>第 14 节（完整 API 参考）</strong>；更长的语义注释、参数范围与示例去 <a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（从 contracts 源生成的 Markdown，含每个参数的 @param 说明，两处同源）。</p>
 
-  <h2>8. 设计一个新模块的正规流程</h2>
+  <h2>8b. 会话树三口：分叉、看树、跳枝（会话树批起）</h2>
+  <p>模块可以管理<strong>分支对话</strong>——像文件树一样看「这个会话分过几岔、每岔聊到哪」，还能开新枝、跳进另一条枝。三个口都在 <code>ctx.session</code> 上，全部可选（老宿主/无头 = <code>undefined</code>，判空降级）：</p>
+  <table>
+    <tr><th>口</th><th>干什么</th><th>门</th></tr>
+    <tr><td><code>ctx.session.fork(opts?)</code></td><td><strong>建枝</strong>：以当前会话为父开一个新会话文件并立即落盘——当前会话原地不动（切换是宿主的事）。<code>opts.atEntryId</code> = 分叉点（继承父投影截至该事件），缺省 = 当前末尾；不在当前投影 = 抛错不写盘</td><td>mounts 须列 <code>"session.fork"</code></td></tr>
+    <tr><td><code>ctx.session.tree()</code></td><td><strong>看树</strong>：当前项目桶的全量树快照（每会话一个节点：父子关系、分叉点、标题、时间、自身事件条数）。只读现读现建——不含任何聊天内容</td><td>无门（读不占闸）</td></tr>
+    <tr><td><code>ctx.session.switchTo(sid)</code></td><td><strong>跳枝</strong>：请求宿主切到目标会话。<strong>立即返回</strong> true = 已受理——切换异步完成，调用方自己的 harness 随之销毁，返回后不得再用自身任何句柄</td><td>mounts 须列 <code>"session.switch"</code></td></tr>
+  </table>
+  <p>人话注意三条：<code>fork</code> 建的枝要用 <code>switchTo</code> 才进得去（先建多枝再挑一根切）；<code>tree()</code> 的节点 <code>label</code> 未命名时是 <code>undefined</code>（显示侧自定「新会话」）；<code>switchTo</code> 拒绝他项目桶的会话（终端 = 当前项目的工作区）。</p>
+  <p>第一方示例就是内置的 <code>session-tree</code> 模块（<code>/session-tree__view</code> 看树跳枝、<code>/session-tree__branch &lt;序号|sid&gt;</code> 建枝）——<code>packages/modules/session-tree/src/index.ts</code> 全文不到两百行，是最好的抄写模板。</p>
+
+  <h2>9. 设计一个新模块的正规流程</h2>
   <p>本仓库对「设计」有治理（<a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/README.md</a>）：一模块一文档、从 <code>_template.md</code> 复制起手、八节模板、六态状态机（构想 → 设计中 → 已定稿 → 实现中 → 已落地）。轻量想法只要求写三节（定位/接口需求/决策点），进入「设计中」才八节写全。</p>
-  <blockquote>核心纪律一条：<strong>模块文档不发明核心机制</strong>——需要核心开新口（比如子代理要够到嵌套 harness），先走主文档流程登记 D 编号，模块文档只在「前置条件」里引用。</blockquote>
+  <p>核心纪律两条：<strong>模块文档不发明核心机制</strong>——需要核心开新口（比如子代理要够到嵌套 harness），先走主文档流程登记 D 编号，模块文档只在「前置条件」里引用；<strong>不动主体代码</strong>——需要什么能力先消费既有服务（<code>ctx.services</code>）或挂自己的服务（<code>ctx.provide</code>）让别的模块来用，contracts 新类型走契约窗口攒批，主体 diff 是最后手段（详见 <a href="docs.html?file=docs%2Fdevelopers.md">developers.md 圈地纪律</a>）。</p>
 
-  <h2 id="zhengshi">9. 转正：挪进 packages/modules</h2>
+  <h2 id="zhengshi">10. 转正：挪进 packages/modules</h2>
   <p>外部模块稳定后想转正，差异只有三处：</p>
   <ol>
     <li>建包 <code>packages/modules/&lt;name&gt;/</code>，package.json 抄邻居（tool-todo 是最小样板）：</li>
@@ -222,7 +320,26 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
   </ol>
   <p>内置模块与外部模块走同一条 kernel 注册管线，没有特权（规则 5）——转正不改变行为，只改变归属：进 CI、进门禁、进 docs/api（如果你的契约进了 contracts）。</p>
 
-  <h2>10. 常见坑（都真实踩过或有出处）</h2>
+  <h2>11. 容错契约：你的模块坏了会怎样（第三方开发者必读）</h2>
+  <p><strong>承诺</strong>：第三方模块出任何问题，止于模块自身——你的模块做不到让程序起不来或运行崩溃（启动有顶层兜底错误面，坏包坏入口在发现期就被跳过，根本进不了图）。</p>
+  <p>各阶段待遇（坏了会怎样、去哪看）：</p>
+  <table>
+    <tr><th>你的模块怎么坏</th><th>阶段</th><th>宿主的处置</th><th>去哪看</th></tr>
+    <tr><td><code>package.json</code> 写坏 / 入口文件读不了</td><td>发现期</td><td>跳过该模块，程序照常启动</td><td>Ctrl + E 弹窗「加载失败」；日志 <code>kernel.discover.skip</code></td></tr>
+    <tr><td>入口代码语法错 / import 期炸</td><td>发现期</td><td>同上</td><td>同上；日志 <code>kernel.discover.fail</code></td></tr>
+    <tr><td><code>defineModule</code> 形状不对（如 provides key 没带 <code>&lt;模块名&gt;.</code> 前缀）</td><td>静态校验</td><td>该模块降级不激活，其余照常</td><td>Ctrl + E「激活失败」</td></tr>
+    <tr><td><code>activate()</code> 抛错</td><td>激活期</td><td>该模块降级，工具/命令不注册，其余照常</td><td>Ctrl + E「激活失败」（详情带堆栈）</td></tr>
+    <tr><td>硬依赖的能力没有提供者</td><td>拓扑/激活期</td><td>级联降级（不激活）；提供者恢复后下次 reload 自动恢复</td><td>Ctrl + E「级联」</td></tr>
+    <tr><td>项目级模块没过信任门</td><td>信任门</td><td>不纳图（untrusted）</td><td>启动横幅 / <code>--dump-modules</code></td></tr>
+  </table>
+  <p>两条运行期拦不住的边界（知情自查）：</p>
+  <ol>
+    <li><strong>顶层代码只做定义，副作用进 <code>activate()</code></strong>。模块顶层在信任门<strong>之前</strong>执行——顶层就抛错的模块宿主拦不住（原理层面：得先执行它才知道它是什么）。最小反例：顶层 <code>JSON.parse(readFileSync(...))</code>——文件一缺失宿主直接炸；正解是读文件挪进 <code>activate()</code>，它有降级护栏（上表第 4 行）。</li>
+    <li><strong><code>activate()</code> 别挂死</strong>。全内核无超时是既有定案（reload 的 quiesce 等 turn 边界，挂死的等待由用户 Ctrl-C 中止）——你的 activate 永不返回，reload 就一直等。正解：每个 await 都有出路（超时 / 取消信号）。</li>
+  </ol>
+  <blockquote>内置模块不享受这层宽容：它们是宿主静态 import，import 期炸等于宿主自己残废（typecheck 门 + 提交纪律兜底）——这也是「转正」（第 10 节）比做外部模块要求高的原因之一。</blockquote>
+
+  <h2>12. 常见坑（都真实踩过或有出处）</h2>
   <ol>
     <li><strong>「没生效」先查降级</strong>：activate 抛错不崩启动，<code>--dump-modules</code> 看状态和原因。</li>
     <li><strong>工具/命令命名</strong>：强制 <code>&lt;module&gt;__&lt;tool&gt;</code> / <code>&lt;module&gt;__&lt;cmd&gt;</code> 前缀，内核校验会拒收。</li>
@@ -235,7 +352,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <li><strong>验收纪律</strong>：单测全绿 ≠ 能用。改到 CLI/配置/渲染链路的，收尾前按 developers.md 的 HERMETIC 配方真实跑一遍。</li>
   </ol>
 
-  <h2>11. 文档地图</h2>
+  <h2>13. 文档地图</h2>
   <table>
     <tr><th>想干什么</th><th>去哪</th></tr>
     <tr><td>跟着做一遍模块</td><td>本文</td></tr>
@@ -245,10 +362,10 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td>某个模块的设计取舍</td><td><a href="https://github.com/zhangxyfs/Orosus/blob/master/docs/superpowers/specs/modules/README.md">specs/modules/</a>（一模块一文档）</td></tr>
     <tr><td>运行时看装配结果</td><td><code>orosus --dump-modules</code>（= <code>harness.graph().catalogJson()</code>）</td></tr>
   </table>
-  <h2>12. 附：完整 API 参考</h2>
+  <h2>14. 附：完整 API 参考</h2>
   <blockquote>这一节把模块作者的<strong>全部可用面</strong>列全——每个字段、每个参数、它是干什么的。想读更长的语义注释、参数范围与示例再去 <a href="docs.html?file=docs%2Fapi%2FREADME.md">API 参考</a>（与 contracts 源码同步生成），两处内容同源。</blockquote>
 
-  <h3>12.1 defineModule 全字段</h3>
+  <h3>14.1 defineModule 全字段</h3>
   <table>
     <tr><th>字段</th><th>类型</th><th>必填</th><th>干什么</th></tr>
     <tr><td><code>name</code></td><td>string</td><td>✓</td><td>模块名 = 命名空间。kebab-case、全局唯一（规则 4）；工具/命令的 <code>&lt;module&gt;__</code> 前缀、日志事件的 <code>&lt;module&gt;/</code> 前缀都由它派生</td></tr>
@@ -265,28 +382,28 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td><code>activate(ctx)</code></td><td>function</td><td>✓</td><td>激活入口，启动/reload 的拓扑序里调一次。可返回 <code>dispose()</code> 或 <code>{ dispose }</code>——模块停用（close / reload 换代 / 回滚）时先于各注册 disposer 调用</td></tr>
   </table>
 
-  <h3>12.2 activate(ctx)——ModuleContext 全口</h3>
+  <h3>14.2 activate(ctx)——ModuleContext 全口</h3>
   <table>
     <tr><th>口</th><th>签名</th><th>干什么</th></tr>
     <tr><td><code>ctx.config</code></td><td>readonly C</td><td>activate 期注入的配置<strong>快照</strong>（已校验、带默认值）；overlay 不作用于它。要活读用 <code>configRead()</code></td></tr>
     <tr><td><code>ctx.configRead()</code></td><td>() =&gt; Promise&lt;C&gt;</td><td>运行期读自家配置：复合各模块 overlay 后重新过 owner schema。<strong>activate 期只保证纯分层值</strong>，依赖 overlay 的读取放运行期</td></tr>
     <tr><td><code>ctx.log</code></td><td>Logger</td><td>五级：<code>trace/debug/info/warn/error(code, msg, data?)</code>。code 是稳定事件码（点分路径），自动携带模块名；走独立诊断旁路，不进模型上下文</td></tr>
-    <tr><td><code>ctx.ui</code></td><td>CommandUi</td><td>宿主注入的交互口（命令处理器第二参也是它）。见 12.5</td></tr>
-    <tr><td><code>ctx.llm</code></td><td>LlmPort</td><td>二级 LLM 调用（摘要/标题类）。见 12.6</td></tr>
+    <tr><td><code>ctx.ui</code></td><td>CommandUi</td><td>宿主注入的交互口（命令处理器第二参也是它）。见 14.5</td></tr>
+    <tr><td><code>ctx.llm</code></td><td>LlmPort</td><td>二级 LLM 调用（摘要/标题类）。见 14.6</td></tr>
     <tr><td><code>ctx.services.get</code></td><td>&lt;T&gt;(key) =&gt; Promise&lt;T&gt;</td><td>消费<strong>硬依赖</strong>能力：拓扑序保证 activate 期间必有值，不会 undefined</td></tr>
     <tr><td><code>ctx.services.getOptional</code></td><td>&lt;T&gt;(key) =&gt; Promise&lt;T | undefined&gt;</td><td>消费可选能力：调用时解析，可能 undefined（提供方迟到你才读）。消费方必须写回落路径</td></tr>
     <tr><td><code>ctx.provide</code></td><td>(key, impl) =&gt; void</td><td>往能力槽放实现（单所有者槽，重复 provide 报错）。key 须 ⊆ <code>provides</code> 声明；例外：核心保留槽（如 <code>provider:&lt;name&gt;</code>）由核心特许</td></tr>
-    <tr><td><code>ctx.contribute.tool</code></td><td>(t: Tool) =&gt; Disposer</td><td>注册模型可调用的工具。见 12.3</td></tr>
+    <tr><td><code>ctx.contribute.tool</code></td><td>(t: Tool) =&gt; Disposer</td><td>注册模型可调用的工具。见 14.3</td></tr>
     <tr><td><code>ctx.contribute.command</code></td><td>(name, handler) =&gt; Disposer</td><td>注册宿主命令 <code>/&lt;module&gt;__&lt;name&gt;</code>。<strong>人用的操作面，模型看不见</strong>。handler <code>(args: string, ui: CommandUi) =&gt; string | Promise&lt;string&gt;</code>，args 是命令后的原始参数串</td></tr>
-    <tr><td><code>ctx.contribute.promptSection</code></td><td>(s) =&gt; Disposer</td><td>注册系统提示词段。见 12.4</td></tr>
+    <tr><td><code>ctx.contribute.promptSection</code></td><td>(s) =&gt; Disposer</td><td>注册系统提示词段。见 14.4</td></tr>
     <tr><td><code>ctx.contribute.configOverlay</code></td><td>(o) =&gt; Disposer</td><td>改<strong>读侧</strong>投影：<code>{ section?, read(value) =&gt; value }</code>，缺省 section = 自家、声明他人 section 须 <code>uses</code> 含 <code>config.foreign</code>。只作用于 <code>configRead()</code>，不作用于 <code>ctx.config</code> 快照、不改盘</td></tr>
     <tr><td><code>ctx.session.append</code></td><td>(type, payload) =&gt; void</td><td>写会话日志扩展事件。type 须在 <code>logEvents</code> 白名单；payload 任意 JSON。TUI 投影、回放、别的模块都从这里读</td></tr>
     <tr><td><code>ctx.session.messages?</code></td><td>() =&gt; Promise&lt;ModelMessage[]&gt;</td><td>读当前会话的<strong>模型消息投影</strong>（压缩/裁剪已应用，与 agentLoop 同投影）。可选口——非核心宿主可能不提供，消费方必须带回落</td></tr>
-    <tr><td><code>ctx.events.on</code></td><td>(type, listener) =&gt; Disposer</td><td>订阅事件。listener 返回 <code>undefined</code> = 通过；返回 <code>{ deny: true, reason }</code> 或抛错 = 否决（仅拦截点有否决语义，见 12.7）</td></tr>
+    <tr><td><code>ctx.events.on</code></td><td>(type, listener) =&gt; Disposer</td><td>订阅事件。listener 返回 <code>undefined</code> = 通过；返回 <code>{ deny: true, reason }</code> 或抛错 = 否决（仅拦截点有否决语义，见 14.7）</td></tr>
     <tr><td><code>ctx.events.emit</code></td><td>(type, payload) =&gt; Promise&lt;void&gt;</td><td>模块间通知。<strong>仅限 <code>&lt;module&gt;/*</code> 命名空间</strong>，核心事件类型拒绝模块 emit</td></tr>
   </table>
 
-  <h3>12.3 defineTool——两阶段工具契约</h3>
+  <h3>14.3 defineTool——两阶段工具契约</h3>
   <p><code>defineTool({ name, description, parameters, resolveExecution })</code>，其中 <code>resolveExecution(input): Promise&lt;ToolExecution&gt;</code>：</p>
   <table>
     <tr><th>字段</th><th>干什么</th></tr>
@@ -312,14 +429,14 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td><code>denied?</code></td><td>被 <code>tool/pre-execute</code> 瀑布否决时由内核置 true（此时 isError 恒 true）——不是工具自己写的</td></tr>
   </table>
 
-  <h3>12.4 promptSection——系统提示词段</h3>
+  <h3>14.4 promptSection——系统提示词段</h3>
   <table>
     <tr><th>字段</th><th>干什么</th></tr>
     <tr><td><code>order</code></td><td>全局拼接顺序。核心五节概念 −100 永远最前；现有分配表：skill=0、tool-todo=10、mcp=20；AGENTS.md 等价 30 固定拼尾。<strong>新模块领 0–29 的空位</strong>，≥30 会插到 AGENTS.md 前面与分配表矛盾</td></tr>
     <tr><td><code>text</code></td><td>string 或 getter。getter 每轮请求装配时求值（活段——todo 面板、mcp 清单都这么做）；<strong>空串段装配时被过滤</strong>——「必须注入」类内容应无条件注册且永远非空</td></tr>
   </table>
 
-  <h3>12.5 CommandUi——交互口（命令与审批询问共用）</h3>
+  <h3>14.5 CommandUi——交互口（命令与审批询问共用）</h3>
   <table>
     <tr><th>方法</th><th>干什么</th></tr>
     <tr><td><code>ask(question)</code></td><td>问一个开放问题，返回用户输入</td></tr>
@@ -330,7 +447,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
   </table>
   <blockquote>无头环境（<code>--print</code>、测试、嵌入式）注入<strong>拒绝式实现</strong>：三问法抛「无交互环境」→ 命令带内失败，fail-closed。所以命令体要能承受 ui 不可用。</blockquote>
 
-  <h3>12.6 LlmPort——二级模型调用</h3>
+  <h3>14.6 LlmPort——二级模型调用</h3>
   <table>
     <tr><th>成员</th><th>干什么</th></tr>
     <tr><td><code>stream(req)</code></td><td><code>req = { system?, messages, signal?, maxTokens? }</code>，返回 <code>AsyncIterable&lt;Chunk&gt;</code>。<strong>复用 harness 当前 provider/model</strong>（含 /model 运行期覆盖）；不带工具；错误带内（<code>finish{kind:"error"}</code>），不许 reject</td></tr>
@@ -338,7 +455,7 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
     <tr><td><code>lastUsage</code></td><td>最近一次<strong>主循环</strong>请求的真实用量锚点 <code>{ totalTokens, atMessageCount }</code>——其后消息用估算增量。仅运行期调用（activate 期 provider 可能未装配）</td></tr>
   </table>
 
-  <h3>12.7 事件与拦截点（白名单 8 个，§6.5）</h3>
+  <h3>14.7 事件与拦截点（白名单 8 个，§6.5）</h3>
   <table>
     <tr><th>拦截点</th><th>语义</th><th>典型用途</th></tr>
     <tr><td><code>agent/pre-step</code></td><td>emit</td><td>每轮开始时的观察/通知</td></tr>
@@ -352,13 +469,13 @@ it("note__add 写入 → promptSection 出现 Notes 节", async () =&gt; {
   </table>
   <p>返回 <code>undefined</code> = 放行；<code>{ deny: true, reason }</code> 或抛错 = 否决（仅 waterfall/拦截类有否决语义）。</p>
 
-  <h3>12.8 生命周期速记</h3>
+  <h3>14.8 生命周期速记</h3>
   <ul>
     <li><code>activate</code>：拓扑序调用一次；硬依赖在前（§5.2）。</li>
     <li>一切注册（tool/command/promptSection/events.on…）<strong>返回 Disposer</strong>——模块停用时内核自动逐个调用，不用你记。</li>
     <li><code>activate</code> 返回的 <code>dispose</code>：注册之外的清理（句柄/子进程），<strong>先于</strong>各注册 disposer 执行。</li>
     <li>reload 换代：被保留（preserved）的模块不重建、不株连；被换下的走完整拆除。</li>
-    <li><strong>activate 抛错 = 该模块降级，不阻断启动</strong>（§10）；<code>required = true</code>（核心模块专属）才阻断。</li>
+    <li><strong>activate 抛错 = 该模块降级，不阻断启动</strong>（§11）；<code>required = true</code>（核心模块专属）才阻断。</li>
   </ul>
 </article>
 

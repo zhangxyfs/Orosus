@@ -93,26 +93,9 @@ export function createPermissionHandler(opts: {
   };
 }
 
-/** /auto 命令（2026-09-22 用户拍板）：一键切「Ask When Needed」（ask-risky——日常默认档）。/yolo 镜像件。 */
+/** /auto 命令（2026-09-26 拍板 D1：/auto==从不询问，kimi auto 语义）：一键切「从不询问」（never）。
+ *  2026-09-28 走查修：行为从 ask-risky 换绑 never——此前文案已先行表述「从不询问」，行为侧一直没跟上。 */
 export function createAutoHandler(opts: {
-  apply(next: PermissionMode): void;
-  configPath: string;
-  projectConfigPath?: string;
-}): CommandHandler {
-  return async () => {
-    opts.apply("ask-risky");
-    try {
-      persistMode(opts.configPath, "ask-risky", opts.projectConfigPath);
-    } catch (err) {
-      return `权限模式已切换：ask-risky（/auto，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
-    }
-    return ""; // 静默生效（同 /permission /yolo——面板 chip 即时反映）
-  };
-}
-
-/** /yolo 命令（用户走查 2026-09-19）：一键切「从不询问」（never——危险命令仍确认，D36 修订语义）。
- *  零交互直达：无菜单无确认——就是「别问了」的显式表达。 */
-export function createYoloHandler(opts: {
   apply(next: PermissionMode): void;
   configPath: string;
   projectConfigPath?: string;
@@ -122,8 +105,26 @@ export function createYoloHandler(opts: {
     try {
       persistMode(opts.configPath, "never", opts.projectConfigPath);
     } catch (err) {
-      return `权限模式已切换：never（/yolo，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
+      return `权限模式已切换：never（/auto，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
     }
-    return ""; // 静默生效（2026-09-22 用户拍板，同 /permission——面板 chip 即时反映；never 语义在 /permission 菜单项内已注明）
+    return ""; // 静默生效（同 /permission /yolo——面板 chip 即时反映）
+  };
+}
+
+/** /yolo 命令（2026-09-26 拍板 D2：/yolo==需要时候询问，与 /auto 交叉互换）：一键切「需要时候询问」（ask-risky）。
+ *  零交互直达：无菜单无确认——常规编辑和命令自动跑，风险操作仍弹确认。 */
+export function createYoloHandler(opts: {
+  apply(next: PermissionMode): void;
+  configPath: string;
+  projectConfigPath?: string;
+}): CommandHandler {
+  return async () => {
+    opts.apply("ask-risky");
+    try {
+      persistMode(opts.configPath, "ask-risky", opts.projectConfigPath);
+    } catch (err) {
+      return `权限模式已切换：ask-risky（/yolo，本会话即时生效）——但持久化失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+    return ""; // 静默生效（2026-09-22 用户拍板，同 /permission——面板 chip 即时反映）
   };
 }

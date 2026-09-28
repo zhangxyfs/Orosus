@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
-import { fg } from "./theme.ts";
+import { fg, dim } from "./theme.ts";
 import { truncateToWidth, visibleWidth } from "./tui/width.ts";
 
 /**
@@ -119,14 +119,15 @@ export function truncateAtWord(text: string, w: number): string {
 }
 
 /** 列表页行（原型图 2）：三列——名（左）/描述（中，词原子截断）/状态（右，「停用」灰、「启用」常规色）。
- *  w = 宿主从 pickRowWidth() 拿的行可用宽（左栏内宽——拼行与 pick 渲染同源，防超宽推错右框）。 */
+ *  w = 宿主从 pickRowWidth() 拿的行可用宽（左栏内宽——拼行与 pick 渲染同源，防超宽推错右框）。
+ *  描述列灰（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白、简单说明灰）。 */
 export function skillListRow(w: number, row: SkillCatalogRow): string {
   const status = row.disabled ? fg("muted", "停用") : fg("accent", "启用"); // 启用绿/停用灰（2026-09-27 用户走查拍板）
   const statusW = 4; // 启用/停用两字（ANSI 不占宽）
   const nameW = Math.min(20, Math.max(8, Math.floor((w - statusW - 4) / 3)));
   const name = row.name.length > nameW ? `${row.name.slice(0, nameW - 1)}…` : row.name.padEnd(nameW);
   const descW = w - 8 - nameW; // 行首 1 + 名后 1 + 状态前 ≥1 空隙 + 状态 4 + 冗余 1——描述预算扣足保证行宽 = w−1
-  const desc = descW >= 6 ? truncateAtWord(row.description.split("\n")[0] ?? "", descW) : "";
+  const desc = descW >= 6 ? dim(truncateAtWord(row.description.split("\n")[0] ?? "", descW)) : "";
   const leftW = 1 + nameW + (desc === "" ? 0 : 1 + visibleWidth(desc));
   const gap = Math.max(1, w - 1 - leftW - statusW);
   return ` ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${status}`;

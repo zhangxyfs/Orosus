@@ -171,7 +171,7 @@ export default defineModule({
       configPath: cfg.configFile ?? defaultConfigFile(),
       projectConfigPath: cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"), // 生效层判定（五轮 P1）
     }));
-    // /yolo（用户走查 2026-09-19）：一键 never——apply 复用 permission 的闭包（policy 事件随之落）
+    // /yolo（2026-09-26 拍板 D2 交叉互换，2026-09-28 落地）：一键 ask-risky——apply 复用 permission 的闭包（policy 事件随之落）
     ctx.contribute.command("approval__yolo", createYoloHandler({
       apply: (next) => {
         state.modeOverride = next;
@@ -180,7 +180,7 @@ export default defineModule({
       configPath: cfg.configFile ?? defaultConfigFile(),
       projectConfigPath: cfg.projectConfigFile ?? join(process.cwd(), ".orosus", "config.toml"),
     }));
-    // /auto（2026-09-22 用户拍板）：一键 ask-risky——/yolo 镜像件（回日常默认档的直达键）
+    // /auto（2026-09-26 拍板 D1：/auto==从不询问，kimi auto 语义）：一键 never（2026-09-28 落地换绑，此前行为是 ask-risky）
     ctx.contribute.command("approval__auto", createAutoHandler({
       apply: (next) => {
         state.modeOverride = next;

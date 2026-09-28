@@ -763,7 +763,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           items.length,
           async () => {
             const labels = items.map(
-              (s, i) => `${i + 1}. ${s.title} · ${relativeTime(s.createdAtMs)}${s.id === h.sessionId ? "（当前）" : ""}`,
+              // 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形）——标题白、相对时间灰、「（当前）」标记青玉
+              (s, i) => `${i + 1}. ${s.title} ${theme.dim(`· ${relativeTime(s.createdAtMs)}`)}${s.id === h.sessionId ? theme.fg("accent", "（当前）") : ""}`,
             );
             // 全屏期走 FullApp overlay（F5 走查实证：readline picker 的 modal 与 FullApp 抢 stdin 卡死）
             const n0 = activeApp !== undefined
@@ -1457,7 +1458,8 @@ const moduleCards = (): PanelData["cards"] => {
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
 const SLASH_ITEMS: SlashItem[] = [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
-	{ name: "/yolo", desc: "一键从不询问", long: "权限模式直达「从不询问」：所有工具批准自动处理（含危险命令；手写 deny 规则仍拦）。等同于 /permission never。回答进行中也可执行，本轮生效。" },
+	// 2026-09-26 拍板 D2 交叉互换（2026-09-28 走查修）：/yolo==需要时候询问（ask-risky）——详细文案用户拍板原文，档名对齐 /permission 菜单显示名
+	{ name: "/yolo", desc: "仅危险操作确认", long: "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
 	// 2026-09-26 拍板：/auto 文案按「从不询问」档名表述（D8 显示名），语义 = 就算有问题也是模型自行判断；行为换绑 never 由本批 T2 落地（D1 拍板），沿革见 ROADMAP 走查三批与 m3b 方案
 	{ name: "/auto", desc: "从不询问模式", long: "从不打断你，一切运行并自动决定——就算有问题也是模型自行判断。" },
 	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },

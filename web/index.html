@@ -70,17 +70,17 @@
               <div class="ver">v0.1.0 <span class="sep">—</span> <span class="dim">模块化 AI Agent Harness</span></div>
               <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。</div>
               <div class="dim">如层峦叠互，灵脉贯通。</div>
-              <div class="dim">Tab 补全 · Shift + Tab 权限 · Alt + E 思考</div>
-              <div class="dim">/ 命令 · Ctrl + T 侧栏 · Alt + V 贴图</div>
+              <div class="dim">Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考</div>
+              <div class="dim">/ 命令与技能 · Ctrl + T 侧栏 · Alt + V 贴图 · Ctrl + O 压缩摘要</div>
             </div>
           </div>
           <div class="tui-notice">
-            <div class="dim">[orosus] 10 个模块已激活；4 个品牌适配器未配 key 静默降级（按需配置 config.toml，明细 --dump-modules）</div>
+            <div class="dim">[orosus] 14 个模块已激活 · 10 件出厂技能就绪（明细 --dump-modules）</div>
             <div class="faint">正在待命</div>
           </div>
           <div class="tui-input">
-            <div class="tui-inputbox"><span class="pchar">❯</span><span class="ph">向 Orosus 下达指令，或输入 / 查看命令…</span><span class="cursor"></span></div>
-            <div class="tui-inputhint"><span><span class="mode">◆ Never Ask</span> · Shift + Tab 切换模式</span><span class="dim2">Ctrl + T 侧栏</span></div>
+            <div class="tui-inputbox"><span class="pchar">❯</span><span class="ph">向 Orosus 下达指令，或输入 / 查看命令与技能…</span><span class="cursor"></span></div>
+            <div class="tui-inputhint"><span><span class="mode">◆ 从不询问</span> · Shift + Tab 切换模式</span><span class="dim2">Ctrl + T 侧栏</span></div>
           </div>
         </div>
         <aside class="tui-side">
@@ -95,11 +95,11 @@
             </dl>
             <div class="ctxrow"><span class="lbl">上下文</span><div class="ctxbar"><i></i></div><span class="lbl">0k/262k</span></div>
             <div class="subhead"><span>模块挂载</span><span class="en"><b>1/3</b> · MODULES</span></div>
-            <div class="mod"><span class="dot">●</span><span class="mname">approval</span><span class="mstate">已挂载</span></div>
-            <div class="mod"><span class="dot">●</span><span class="mname">compaction</span><span class="mstate">已挂载</span></div>
-            <div class="mod"><span class="dot">●</span><span class="mname">mcp</span><span class="mstate">已挂载</span></div>
-            <div class="mod off"><span class="dot">○</span><span class="mname">provider-anthropic</span><span class="mstate">未挂载</span></div>
-            <div class="mod off"><span class="dot">○</span><span class="mname">provider-custom</span><span class="mstate">未挂载</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">skill</span><span class="mstate">已挂载</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">tool-subagent</span><span class="mstate">已挂载</span></div>
+            <div class="mod"><span class="dot">●</span><span class="mname">tool-web</span><span class="mstate">已挂载</span></div>
+            <div class="mod off"><span class="dot">○</span><span class="mname">session-tree</span><span class="mstate">未挂载</span></div>
+            <div class="mod off"><span class="dot">○</span><span class="mname">mcp</span><span class="mstate">未挂载</span></div>
             <div class="modhint">Shift + ← 翻页</div>
           </section>
           <section class="tui-panel tui-todo">
@@ -151,19 +151,27 @@
       <div class="card"><h3><span class="mark"></span><span data-zh>模块化内核</span><span data-en>Modular kernel</span></h3>
         <p><span data-zh>核心五件（session / loop / tool / provider / kernel）+ 零依赖契约包 <code>@orosus/contracts</code>。模块经拓扑序激活、可热重载、失败降级不阻断启动。</span><span data-en>Five core pieces (session / loop / tool / provider / kernel) + the zero-dependency contracts package <code>@orosus/contracts</code>. Modules activate in topological order, hot-reload, and fail soft without blocking startup.</span></p></div>
       <div class="card"><h3><span class="mark info"></span><span data-zh>多厂商支持</span><span data-en>Multi-provider</span></h3>
-        <p><span data-zh>Anthropic / GLM / Kimi / DeepSeek / OpenAI 品牌适配器 + 自定义厂商统一入口（OpenAI 兼容端点），运行期 <code>/model</code> 即切。</span><span data-en>Brand adapters for Anthropic / GLM / Kimi / DeepSeek / OpenAI plus a unified custom-endpoint entry (OpenAI compatible); switch anytime with <code>/model</code>.</span></p></div>
-      <div class="card"><h3><span class="mark"></span><span data-zh>工具生态</span><span data-en>Tool ecosystem</span></h3>
-        <p><span data-zh>文件系统、Shell、Todo、Ask 内置工具模块；技能系统与 MCP 桥接。工具强制两阶段：声明（无副作用）→ 执行（唯一副作用点）。</span><span data-en>Built-in tool modules for filesystem, shell, todo and ask; a skill system and an MCP bridge. Every tool is strictly two-phase: declare (no side effects) → execute (the only side-effect point).</span></p></div>
-      <div class="card"><h3><span class="mark warn"></span><span data-zh>审批门</span><span data-en>Approval gate</span></h3>
-        <p><span data-zh><code>tool/pre-execute</code> 瀑布拦截点统一审批；ask-when-needed / yolo / auto 多档模式，手写 deny 规则始终优先。</span><span data-en>One unified approval waterfall at <code>tool/pre-execute</code>; ask-when-needed / yolo / auto modes; handwritten deny rules always win.</span></p></div>
-      <div class="card"><h3><span class="mark info"></span><span data-zh>上下文管理</span><span data-en>Context management</span></h3>
-        <p><span data-zh>自动 / 手动压缩（compaction 模块），read 窗口化 + 截断去重，多模态图片真实喂图。</span><span data-en>Automatic and manual compaction (the compaction module), windowed reads with truncation dedup, real multimodal image feeding.</span></p></div>
-      <div class="card"><h3><span class="mark"></span><span data-zh>TUI 界面</span><span data-en>TUI</span></h3>
-        <p><span data-zh>全屏接管、流式重绘、键盘菜单 / Esc 取消、Markdown 渲染（含 LaTeX），连山主题十色贯穿始终。</span><span data-en>Full-screen takeover, streaming repaint, keyboard menus with Esc, Markdown rendering (LaTeX included) — all in the ten-color Lianshan theme.</span></p></div>
-      <div class="card"><h3><span class="mark warn"></span><span data-zh>数据自治理</span><span data-en>Data self-governance</span></h3>
+        <p><span data-zh>自定义厂商统一入口（OpenAI 兼容端点）+ <code>/provider</code> 交互式向导 + 内置厂商目录（端点 / 模型 / 思考档位），运行期 <code>/model</code> <code>/effort</code> 即切。</span><span data-en>A unified custom-endpoint entry (OpenAI-compatible) with an interactive <code>/provider</code> wizard and a built-in vendor catalog; switch at runtime with <code>/model</code> and <code>/effort</code>.</span></p></div>
+      <div class="card"><h3><span class="mark warn"></span><span data-zh>子代理</span><span data-en>Subagents</span></h3>
+        <p><span data-zh>模型经委派工具开子会话并行干活：前台以 agent 组展示、后台任务完成自动送回，孙代理隔代嵌套；<code>/tasks</code> 查看与应答审批；轮数 / 不活动 / 总时长三道保险丝，撞限走收尾轮交卷不硬断。</span><span data-en>The model delegates into parallel sub-sessions: foreground ones render as agent groups, background ones report back when done, grandchildren nest one level. <code>/tasks</code> lists them and answers approvals; three fuses end runaways with a wrap-up turn instead of a hard cut.</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>技能系统</span><span data-en>Skill system</span></h3>
+        <p><span data-zh>一个目录一份 <code>SKILL.md</code> 纯知识——四轨目录（用户 / 项目 × 通用 / 品牌）扫描，同名项目压用户；模型按需加载，用户走斜杠菜单技能区；<code>/settings</code> 里 Alt+K 启停；出厂自带十件。</span><span data-en>One <code>SKILL.md</code> per directory, pure knowledge — four search tracks (user/project × generic/brand), project overrides user; the model loads on demand, users load via the slash-menu skill section; toggle with Alt+K in <code>/settings</code>; ten factory skills included.</span></p></div>
+      <div class="card"><h3><span class="mark"></span><span data-zh>联网能力</span><span data-en>Web access</span></h3>
+        <p><span data-zh>Web 搜索与抓取：原生搜索协议面 / Tavily / Brave 多后端自动遍历，零配置即可起搜；抓取的网页进上下文窗口化管理。</span><span data-en>Web search &amp; fetch: native-search protocol faces / Tavily / Brave backends traversed automatically — searches work with zero configuration; fetched pages enter windowed context management.</span></p></div>
+      <div class="card"><h3><span class="mark warn"></span><span data-zh>工具生态</span><span data-en>Tool ecosystem</span></h3>
+        <p><span data-zh>文件系统、Shell（工作目录记忆 + 后台作业）、Todo、Ask 内置工具；Goal 长任务续跑三工具；ToolSearch 大工具集按需检索；MCP 桥接。工具强制两阶段：声明（无副作用）→ 执行（唯一副作用点）。</span><span data-en>Built-in modules for filesystem, shell (working-directory memory + background jobs), todo and ask; a Goal trio for long-running task continuation; ToolSearch for on-demand lookup in large tool sets; an MCP bridge. Every tool is strictly two-phase: declare (no side effects) → execute (the only side-effect point).</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>审批门</span><span data-en>Approval gate</span></h3>
+        <p><span data-zh><code>tool/pre-execute</code> 瀑布拦截点统一审批；三档模式（每次都询问 / 需要时候询问 / 从不询问），手写 deny 规则始终优先。</span><span data-en>One unified approval waterfall at <code>tool/pre-execute</code>; three modes (ask-every-time / ask-when-needed / never-ask); handwritten deny rules always win.</span></p></div>
+      <div class="card"><h3><span class="mark"></span><span data-zh>上下文管理</span><span data-en>Context management</span></h3>
+        <p><span data-zh>自动 / 手动压缩（compaction 模块），read 窗口化 + 截断去重，压缩摘要 Ctrl+O 全屏回看；多模态图片真实喂图。</span><span data-en>Automatic and manual compaction, windowed reads with truncation dedup, full-screen Ctrl+O summary review, real multimodal image feeding.</span></p></div>
+      <div class="card"><h3><span class="mark warn"></span><span data-zh>会话树</span><span data-en>Session tree</span></h3>
+        <p><span data-zh><code>/fork</code> 分叉落盘成树——<code>/session-tree__view</code> 全屏看树跳枝、<code>/session-tree__branch</code> 在任意节点建新枝，项目内封闭。</span><span data-en><code>/fork</code> forks persist as a tree — view and jump branches with <code>/session-tree__view</code>, branch at any node with <code>/session-tree__branch</code>, scoped to the project.</span></p></div>
+      <div class="card"><h3><span class="mark info"></span><span data-zh>TUI 界面</span><span data-en>TUI</span></h3>
+        <p><span data-zh>全屏接管、流式重绘、Markdown 渲染（表格 / 代码高亮 / LaTeX）；键盘 + 鼠标双操作面——滚轮滚动、拖选即复制、双击选词 / 三击选行、URL 单击打开、滚动条。</span><span data-en>Full-screen takeover, streaming repaint, Markdown rendering (tables / code highlighting / LaTeX) — keyboard and mouse both work: wheel scrolling, drag-select copies, double-click selects words, click opens URLs, scrollbar included.</span></p></div>
+      <div class="card"><h3><span class="mark"></span><span data-zh>数据自治理</span><span data-en>Data self-governance</span></h3>
         <p><span data-zh>会话 JSONL 可读可 grep；<code>OROSUS_HOME</code> 环境变量 + <code>orosus home migrate</code> 支持整体迁移缓存目录。</span><span data-en>Session JSONL stays human-readable and grep-able; <code>OROSUS_HOME</code> plus <code>orosus home migrate</code> relocates the data directory wholesale.</span></p></div>
       <div class="card"><h3><span class="mark info"></span><span data-zh>开放扩展</span><span data-en>Open extension</span></h3>
-        <p><span data-zh>往 <code>.orosus/modules/</code> 放一个 TS 文件就是模块——jiti 直接吃源码，不用构建不用发包；项目级信任门防投毒。</span><span data-en>Drop a TS file into <code>.orosus/modules/</code> and it's a module — jiti runs the source directly, no build, no publish; a project-level trust gate guards against poisoning.</span></p></div>
+        <p><span data-zh>往 <code>.orosus/modules/</code> 放一个 TS 文件就是模块——jiti 直接吃源码，不用构建不用发包；首挂确认信任门 + 声明面清单防投毒。</span><span data-en>Drop a TS file into <code>.orosus/modules/</code> and it's a module — jiti runs the source directly, no build, no publish; a first-mount trust gate with a declared-surface list guards against poisoning.</span></p></div>
     </div>
   </div>
 </section>
@@ -178,7 +186,7 @@
       <div class="layer"><span class="tag">APPS</span><b>apps/cli</b><span><span data-zh>唯一前端：REPL + 子命令（provider / module / home）</span><span data-en>the only frontend: REPL + subcommands (provider / module / home)</span></span></div>
       <div class="arrow"><span data-zh>▲ 模块经同一条 kernel 注册管线装配 ▲</span><span data-en>▲ modules assemble through one kernel registration pipeline ▲</span></div>
       <div class="layer l2"><span class="tag">MODULES</span><b><span data-zh>14 个内置模块</span><span data-en>14 built-in modules</span></b>
-        <div class="chips"><span class="chip">tool-fs</span><span class="chip">tool-shell</span><span class="chip">tool-todo</span><span class="chip">tool-ask</span><span class="chip">skill</span><span class="chip">mcp</span><span class="chip">approval</span><span class="chip">compaction</span><span class="chip">provider ×6</span></div>
+        <div class="chips"><span class="chip">tool-fs</span><span class="chip">tool-shell</span><span class="chip">tool-todo</span><span class="chip">tool-ask</span><span class="chip">tool-web</span><span class="chip">tool-search</span><span class="chip">tool-goal</span><span class="chip">tool-subagent</span><span class="chip">skill</span><span class="chip">mcp</span><span class="chip">session-tree</span><span class="chip">approval</span><span class="chip">compaction</span><span class="chip">provider-custom</span></div>
       </div>
       <div class="arrow"><span data-zh>▲ 只 import 契约，碰不到内核里子 ▲</span><span data-en>▲ import contracts only — the kernel's internals stay out of reach ▲</span></div>
       <div class="layer l3"><span class="tag">CONTRACTS</span><b>@orosus/contracts</b><span><span data-zh>零依赖契约，按域分包：module / tool / provider / fs / home</span><span data-en>zero-dependency contracts, split by domain: module / tool / provider / fs / home</span></span></div>
@@ -203,16 +211,19 @@ pnpm install</code></pre></div>
 <pre><code class="language-bash">pnpm orosus</code></pre>
 <p><span data-zh>无 provider 时自动进配置向导。</span><span data-en>Opens the config wizard when no provider is set.</span></p></div>
       <div class="card step"><span class="n">3 · <span data-zh>日常使用</span><span data-en>Daily use</span></span>
-        <p><span data-zh>直接输入自然语言对话；<code>/</code> 开头是命令（Tab 补全），<code>@</code> 引用文件（支持 <code>@path#L10-L20</code> 行范围），Alt+V 粘贴图片。</span><span data-en>Chat in plain language; <code>/</code> commands (Tab-complete), <code>@</code> file references (line ranges like <code>@path#L10-L20</code>), Alt+V to paste images.</span></p></div>
+        <p><span data-zh>直接输入自然语言对话；<code>/</code> 开头是命令（Tab 补全，菜单里技能区殿后），<code>@</code> 引用文件（支持 <code>@path#L10-L20</code> 行范围），Alt+V 粘贴图片，Alt+Enter / Shift+Enter 换行，Ctrl+O 回看压缩摘要，滚轮直接滚动对话。</span><span data-en>Chat in plain language; <code>/</code> commands (Tab-complete, skills listed at the bottom of the menu), <code>@</code> file references (line ranges like <code>@path#L10-L20</code>), Alt+V to paste images, Alt+Enter / Shift+Enter to break the line, Ctrl+O for compaction summaries, and the mouse wheel scrolls the conversation.</span></p></div>
     </div>
     <div class="card" style="margin-top:16px">
       <h3><span data-zh>常用命令</span><span data-en>Common commands</span></h3>
       <table style="width:100%;border-collapse:collapse;font-size:14px">
         <tr><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>分类</span><span data-en>Category</span></th><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>命令</span><span data-en>Commands</span></th><th style="padding:8px 12px;text-align:left;border:1px solid var(--border);background:var(--surface2)"><span data-zh>作用</span><span data-en>What it does</span></th></tr>
         <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>会话</span><span data-en>Session</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/new</code> <code>/fork</code> <code>/sessions</code> <code>/title</code> <code>/quit</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>新会话 / 分叉 / 恢复 / 命名 / 退出</span><span data-en>new / fork / resume / rename / quit</span></td></tr>
-        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模型与状态</span><span data-en>Model &amp; state</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/model</code> <code>/reload</code> <code>/summary</code> <code>/help</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>切模型（回答中也可切，下一轮生效）/ 重载模块 / 压缩摘要 / 帮助</span><span data-en>switch model (mid-answer too, next turn) / reload modules / compaction summary / help</span></td></tr>
-        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模块命令</span><span data-en>Module commands</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/compact</code> <code>/permission</code> <code>/yolo</code> <code>/auto</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>手动压缩 / 审批模式 / 全自动批准 / 回日常档</span><span data-en>manual compaction / approval mode / approve everything / back to daily defaults</span></td></tr>
-        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>信息面板</span><span data-en>Info panel</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/other</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>磁盘占用 / 上下文用量 / Token 用量 / 运行状态</span><span data-en>disk usage / context usage / token usage / run state</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>会话树</span><span data-en>Session tree</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/session-tree__view</code> <code>/session-tree__branch</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>全屏看分叉树、回车跳枝 / 在选中节点建新枝</span><span data-en>full-screen tree view, Enter to jump / branch at the selected node</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模型与状态</span><span data-en>Model &amp; state</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/model</code> <code>/effort</code> <code>/reload</code> <code>/help</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>切模型（回答中也可切，下一轮生效）/ 思考档位 / 重载模块 / 帮助</span><span data-en>switch model (mid-answer too) / effort level / reload modules / help</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>模块命令</span><span data-en>Module commands</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/compact</code> <code>/permission</code> <code>/yolo</code> <code>/auto</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>手动压缩 / 审批三档 / 一键需要时候询问 / 从不询问模式</span><span data-en>manual compaction / approval modes / one-shot ask-when-needed / never-ask mode</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>子代理</span><span data-en>Subagents</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/tasks</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>子代理任务列表——回车进消息查看窗，挂审批的行回车即可批 / 拒</span><span data-en>subagent task list — Enter opens the message view; pending approvals answered right there</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>设置</span><span data-en>Settings</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/settings</code></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 技能管理 / 子代理配置 / 网络搜索</span><span data-en>disk / context / token usage, runtime status, skill management, subagent config, web search</span></td></tr>
+        <tr><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh>技能</span><span data-en>Skills</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><code>/</code> <span data-zh>菜单技能区</span><span data-en>menu skill section</span></td><td style="padding:8px 12px;border:1px solid var(--border)"><span data-zh"><code>skill : 名</code> 回车即加载全文；<code>/settings → 技能</code> Alt+K 启停（出厂自带十件）</span><span data-en><code>skill : name</code> loads the full text on Enter; toggle with Alt+K in <code>/settings → Skills</code> (ten factory skills included)</span></td></tr>
       </table>
     </div>
   </div>

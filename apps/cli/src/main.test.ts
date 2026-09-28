@@ -97,7 +97,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
   });
   const choices: string[] = [];
 
-  it("① 菜单选『从不询问——批准自动处理，就算有问题也是模型自行判断（never）』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
+  it("① 菜单选『从不询问——批准自动处理，就算有问题也是模型自行判断』→ configFile 写回 + 运行期立即生效（subprocess 零询问直通）", async () => {
     const d = tmp("perm");
     const writeTarget = join(d, "written.toml");
     const cfgLine = "[approval]\nmode = \"ask-risky\"\nconfigFile = '";
@@ -122,7 +122,7 @@ describe("/permission 接入 CLI（M3 T3）", () => {
     await h.prompt("run"); // ask-risky 下本应询问——override 后零询问直通
     await h.close();
     await render;
-    expect(choices).toEqual(["每次都询问——每次工具调用都确认（ask-always）|需要时候询问——仅危险操作确认（ask-risky，默认）|从不询问——批准自动处理，就算有问题也是模型自行判断（never）"]); // 2026-09-26 拍板：显示名改中文（内部档名括注保留） // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
+    expect(choices).toEqual(["每次都询问——每次工具调用都确认|需要时候询问——仅危险操作确认|从不询问——批准自动处理，就算有问题也是模型自行判断"]); // 2026-09-26 拍板：显示名改中文（纯中文无英文括注——2026-09-28 走查修在途红） // 顶级菜单退役（2026-09-19 用户走查）——一级直达三档
   });
 
   it("② 出厂 required：activate 抛错的 approval 替身 → createHarness reject（§10 安全护栏 e2e）", async () => {

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { FullApp, diagListLines, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
-import { fg } from "../theme.ts";
+import { fg, dim } from "../theme.ts";
 
 type FakeInput = NodeJS.ReadStream;
 type FakeOutput = NodeJS.WriteStream & { buf: string };
@@ -778,9 +778,46 @@ describe("pickOverlay 多行项压平（2026-09-24 前案回归钉）", () => {
 		const ov = pick(1);
 		for (const l of ov.lines) expect(l).not.toContain("\n");
 		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width);
-		expect(ov.lines.join("\n")).toContain("kimi-code-plan-cn （https://api.kimi.com/coding/v1）"); // 压平形态
+		// 两段式（2026-09-28 用户拍板）：URL 括注折平后为说明段——灰；可见形态仍「名 （URL）」
+		const joined = ov.lines.join("\n");
+		expect(stripAnsi(joined)).toContain("kimi-code-plan-cn （https://api.kimi.com/coding/v1）"); // 压平形态
+		expect(joined).toContain(`kimi-code-plan-cn ${dim("（https://api.kimi.com/coding/v1）")}`); // 说明段灰
 		const ov0 = pick(0);
 		expect(ov0.lines.length).toBe(ov.lines.length); // 移动选中行数恒定（防闪烁纪律同族）
+	});
+});
+
+// 2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白、副题/说明灰（walk 截图实锤：全屏 choose 项整行白）
+describe("pickOverlay 两段式渲染（标题白/说明灰）", () => {
+	// 宽 100——审批档全文 30+ 字（60 列浮窗会右截断，拍板断言要看完整说明段）
+	const build = (items: string[], sel: number): { lines: string[]; width: number } =>
+		(rig().app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): { lines: string[]; width: number } })
+			.buildPickOverlay(100, 24, "测试", items, sel, undefined);
+
+	it("① 尾部括注形态（「标题（说明）」——设置菜单/厂商目录）：说明段灰、标题保持素色", () => {
+		const ov = build(["磁盘占用（各目录大小与清理口径）", "[取消]"], 0);
+		const text = ov.lines.join("\n");
+		expect(text).toContain(`磁盘占用${dim("（各目录大小与清理口径）")}`);
+		expect(stripAnsi(text)).toContain("磁盘占用（各目录大小与清理口径）"); // 可见形态不变
+		expect(stripAnsi(text)).toContain("[取消]"); // 纯标题项不动（无发明拆分）
+	});
+
+	it("② 「——」形态（审批三档/搜索后端「标题——说明」）与尾注让位：—— 在括注组内时整组为说明", () => {
+		const ov = build([
+			"需要时候询问——走主对话关卡——规则链照常、危险操作弹窗询问",
+			"技能（查看 / 启停——四轨目录全部技能）",
+		], 0);
+		const text = ov.lines.join("\n");
+		expect(text).toContain(`需要时候询问 ${dim("——走主对话关卡——规则链照常、危险操作弹窗询问")}`); // 首 —— 拆分
+		expect(text).toContain(`技能${dim("（查看 / 启停——四轨目录全部技能）")}`); // 括注组优先
+	});
+
+	it("③ 「 ✓」当前值 + 说明并存：标题青玉、说明仍灰、尾标青玉（纯标题项整项青玉不变）", () => {
+		const ov = build(["low", "high ✓", "每次都询问——有问题就先问用户 ✓"], 0);
+		const text = ov.lines.join("\n");
+		expect(text).toContain(fg("accent", "high ✓")); // 纯标题当前项整项青玉（2026-09-25 拍板原样）
+		expect(text).toContain(`${fg("accent", "每次都询问")} ${dim("——有问题就先问用户")} ${fg("accent", "✓")}`);
+		expect(stripAnsi(text)).toContain(" low"); // 普通项素色
 	});
 });
 
