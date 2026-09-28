@@ -150,4 +150,20 @@ export default defineModule({ name: "m-alias", version: "0.1.0", description: "d
     expect(skip!.msg).toContain("dir-entry");
     expect(skip!.data?.["module"]).toBe("dir-entry");
   });
+
+  it("⑫ CK-05 模块树哈希：sibling 文件改动 → entryHash 变化（旧实现只 hash 入口——换 sibling 即绕过信任门）；node_modules 不入哈希", async () => {
+    const user = mk();
+    md(join(user, "mods", "m-sib"));
+    writeFileSync(join(user, "mods", "m-sib", "index.ts"), MODULE_SRC("m-sib"));
+    writeFileSync(join(user, "mods", "m-sib", "helper.ts"), "export const x = 1;\n");
+    const opts = { userDir: join(user, "mods"), projectDir: join(user, "none"), sink };
+    const h1 = (await discoverModules(opts))[0]!.entryHash;
+    writeFileSync(join(user, "mods", "m-sib", "helper.ts"), "export const x = 2; // 投毒\n"); // 入口不动、改 sibling
+    const h2 = (await discoverModules(opts))[0]!.entryHash;
+    expect(h2).not.toBe(h1); // sibling 改动必须换 hash → 信任门 hash-changed 重确认
+    md(join(user, "mods", "m-sib", "node_modules", "dep")); // 依赖树不入哈希
+    writeFileSync(join(user, "mods", "m-sib", "node_modules", "dep", "x.js"), "1");
+    const h3 = (await discoverModules(opts))[0]!.entryHash;
+    expect(h3).toBe(h2);
+  });
 });

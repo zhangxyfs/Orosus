@@ -15,7 +15,7 @@ export function compactionSummaryView(
 ): { title: string; text: string } | undefined {
 	const width = Math.max(20, opts.width ?? 80);
 	const all = events.filter((e) => e.type === "turn/compaction") as { summary?: unknown; ts?: string; trigger?: unknown; droppedCount?: unknown }[];
-	if (all.length === 0 || all.every((e) => e.summary === undefined)) return undefined;
+	if (all.every((e) => e.summary === undefined)) return undefined; // 空表 every 恒真——零事件同走这里（TS-17：冗余长度检查清掉）
 	const sections = [...all].reverse().map((e, rev) => {
 		const meta = [
 			typeof e.ts === "string" ? relativeTime(new Date(e.ts).getTime()) : "",

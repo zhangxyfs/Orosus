@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
@@ -84,6 +84,29 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     const r = await run(tools[0]!, { path: "../../../../etc/passwd" });
     expect(r.isError).toBe(true);
     expect(r.output).toContain("越出");
+  });
+
+  it("MB-02 符号链接逃逸拦截：工作区内链接指向根外 → read/write/edit 被拒（词法前缀挡不住链接外指）", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-out-"));
+    writeFileSync(join(outside, "secret.txt"), "TOP SECRET", "utf8");
+    try {
+      symlinkSync(join(outside, "secret.txt"), join(dir, "leak.txt"));
+    } catch {
+      rmSync(outside, { recursive: true, force: true });
+      return; // 本机无符号链接权限（Windows 非 dev-mode）——POSIX/dev-mode 上有效，静默跳过
+    }
+    try {
+      symlinkSync(outside, join(dir, "linkdir"), "junction"); // 目录链接（Windows junction 免权限；POSIX 忽略类型）
+      const { ctx, services, tools } = fakeCtx();
+      await def.activate(ctx);
+      const fs = services.get("fs") as Fs;
+      expect(() => fs.read("linkdir/secret.txt")).toThrow(/符号链接越出根目录/); // 旧实现：读到根外 TOP SECRET（readFileSync 跟随链接）
+      expect(() => fs.write("linkdir/secret.txt", "x")).toThrow(/符号链接越出根目录/);
+      expect(() => fs.write("linkdir/new.txt", "x")).toThrow(/符号链接越出根目录/); // 新建文件经链接目录——最近存在祖先（linkdir）解析到根外，同拦
+      expect((await run(tools[1]!, { path: "linkdir/secret.txt", content: "x" })).isError).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

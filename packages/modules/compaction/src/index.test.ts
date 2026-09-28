@@ -466,6 +466,17 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(0);
   });
 
+  it("⑥b MI-01 预收缩空输入：单条消息独超窗口预算 → 宁可不压——零 LLM 请求零事件（旧实现发零对话摘要请求，幻觉摘要替换全部历史）", async () => {
+    const s = setup({ contextWindow: 1000 }); // 预算 floor((1000-125)*0.85) ≈ 743 token
+    await def.activate(s.ctx);
+    await s.listener([u(`巨 ${"x".repeat(8000)}`)]); // 单条 ≈2000 token 独超预算
+    const out = await s.command("", stubUi);
+    expect(out).toContain("压缩失败"); // 走同一失败面（宁可不压）
+    expect(out).toContain("摘要输入预收缩后为空");
+    expect(s.llmRequests).toHaveLength(0); // 核心钉：空输入绝不发摘要请求
+    expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(0);
+  });
+
   it("⑦ resume 冷缓存回落：缓存未预热 → 「已安排」+ forceKind 置位（下一条消息发出前压缩）", async () => {
     const s = setup(); // 未 fire listener——lastSeenMessages undefined（ctx.session 无读口，模块拿不到冷投影）
     await def.activate(s.ctx);

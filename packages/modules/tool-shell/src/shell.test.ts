@@ -116,6 +116,13 @@ describe("classifyFailure（第二道线：护栏漏网的「命令不存在」�
     expect(note).toContain("head");
   });
 
+  it("①b cmd 英文 locale 文案 → 同翻译（tool-shell ③ 全套件红根因：英文 Windows 上旧模式永不命中）", () => {
+    const note = classifyFailure("'definitely_missing_cmd_xyz' is not recognized as an internal or external command,\r\noperable program or batch file.");
+    expect(note).toBeDefined();
+    expect(note).toContain("命令不存在");
+    expect(note).toContain("definitely_missing_cmd_xyz");
+  });
+
   it("② bash 文案 → 命令不存在 + 点名", () => {
     const note = classifyFailure("bash: jq: command not found");
     expect(note).toBeDefined();

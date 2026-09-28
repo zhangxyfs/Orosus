@@ -308,3 +308,32 @@ describe("turn 事件上总线（m5 T9 设计空白 17——busy 自推事件面
 		expect(seen).toEqual(["start:fake/m", "end:completed"]); // turn 级终态 = completed（finish stop 的上层语义）
 	});
 });
+
+describe("工具任务契约外抛出的兜底（CL-01/CX-03——2026-09-28 code review P1）", () => {
+	it("execute reject → 组照常收尾：turn/end 照落、带内错误 toolResult、下一轮照常携带（旧实现生成器死等 + unhandledRejection 崩进程）", async () => {
+		const { run, tools, session, provider } = setup([
+			[
+				{ type: "toolcall/argumentsDelta", callId: "c1", name: "m__t", argumentsDelta: "{}" },
+				{ type: "finish", kind: "toolUse" },
+			],
+			[{ type: "text/delta", text: "done" }, { type: "finish", kind: "stop" }],
+		]);
+		tools.register(defineTool({
+			name: "m__t", description: "t", parameters: z.object({}),
+			resolveExecution: async () => ({ execute: async () => ({ output: "ok", isError: false }) }),
+		}), "m");
+		const reg = tools as unknown as { execute: (p: unknown, c: unknown) => Promise<{ output: string; isError: boolean }> };
+		const orig = reg.execute.bind(tools);
+		reg.execute = async (p, c) => {
+			if ((p as { ok?: boolean; name?: string }).name === "m__t") throw new Error("契约外炸了");
+			return orig(p, c);
+		};
+		const types = await run(); // 旧实现：此处永不返回（finished 永不置位）或进程崩
+		expect(types).toContain("turn/end");
+		const all = await session.all();
+		const tr = all.find((e) => e.type === "tool/result");
+		expect(tr?.isError).toBe(true);
+		expect(String(tr?.output)).toContain("契约外炸了");
+		expect(provider.requests[1]!.messages.some((m) => m.role === "toolResult")).toBe(true); // 模型下一轮照常拿到带内结果
+	});
+});

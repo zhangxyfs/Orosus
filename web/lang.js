@@ -7,7 +7,7 @@
   var KEY = "orosus-lang";
 
   function cur() {
-    try { return localStorage.getItem(KEY) === "en" ? "en" : "zh"; } catch (e) { return "zh"; }
+    try { return localStorage.getItem(KEY) === "en" ? "en" : "zh"; } catch { return "zh"; }
   }
 
   function apply(lang) {
@@ -22,7 +22,7 @@
   }
 
   function set(lang) {
-    try { localStorage.setItem(KEY, lang); } catch (e) { /* 隐私模式等：偏好丢就丢 */ }
+    try { localStorage.setItem(KEY, lang); } catch { /* 隐私模式等：偏好丢就丢 */ }
     apply(lang);
   }
 

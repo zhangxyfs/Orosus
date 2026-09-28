@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDiagSink, createLogger } from "./logger.ts";
@@ -8,6 +8,17 @@ let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("诊断日志（§11.9）", () => {
+  it("CH-04 写盘失败不毒化队列：坏文件后续 write 照排队、flush/close 不再永拒（旧实现 rejected 链静默丢日志 + 崩进程）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-diag-"));
+    const sink = createDiagSink({ dir });
+    // 当日文件名撞目录 → appendFileSync 必炸（模拟盘满/被锁的持久失败形态）
+    mkdirSync(join(dir, `diagnostic-${new Date().toISOString().slice(0, 10)}.jsonl`));
+    const log = createLogger(sink, "kernel");
+    log.info("t.a", "第一条（失败被吞）");
+    log.info("t.b", "第二条（旧实现此条被跳过）");
+    await expect(sink.flush()).resolves.toBeUndefined(); // 旧实现：reject
+    await expect(sink.close()).resolves.toBeUndefined();
+  });
   it("记录带 v/ts/lvl/code/module/msg；写独立 JSONL 文件", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-diag-"));
     const sink = createDiagSink({ dir });

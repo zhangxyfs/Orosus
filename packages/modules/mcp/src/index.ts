@@ -11,6 +11,9 @@ export interface ServerConnection {
   callTool: ServerCall;
   /** server 指令（MCP initialize 的 instructions 字段）——M4-2 T12 promptSection 用；缺省无。 */
   instructions?(): Promise<string | undefined>;
+  /** MI-02（2026-09-28 code review P1）：连接生命周期收尾——模块 dispose（reload 换代/停用）时关
+   *  client（stdio transport 随之杀子进程）。缺省无（fake 连接无需）。 */
+  close?(): Promise<void>;
 }
 
 export interface ActivateMcpOpts {
@@ -24,6 +27,8 @@ export interface McpActivateOut {
   failedServers: string[];
   /** 连接成功登记（M4-2 T12）：config 声明但未连的不列——promptSection 只写真连接。 */
   connected: { name: string; tools: string[]; instructions?: string }[];
+  /** MI-02：逐个关成功建立的连接（close 缺省的 fake 连接跳过）；单个失败不株连其余。 */
+  close(): Promise<void>;
 }
 
 export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut> {
@@ -31,11 +36,13 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   const failedServers: string[] = [];
   const connected: { name: string; tools: string[]; instructions?: string }[] = [];
   const manifest: Record<string, string[]> = {};
+  const conns: ServerConnection[] = [];
   for (const [name, cfg] of Object.entries(opts.servers)) {
     if (cfg.enabled === false) continue;
     try {
       const conn = await opts.connect(name, cfg);
       const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
+      conns.push(conn);
       manifest[name] = list.map((t) => t.name);
       for (const meta of list) {
         tools.push(toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true)); // server 级 deferred 透传（M4-3 T5）
@@ -52,7 +59,16 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   if (Object.keys(manifest).length > 0) {
     opts.sessionAppend("mcp/manifest", { digest: digest(manifest), servers: manifest }); // 计划补空白的 digest 落点
   }
-  return { tools, failedServers, connected };
+  // MI-02：close 幂等（重复调用无二次副作用）——模块 dispose 与装配失败清理都可能触达
+  let closed = false;
+  return {
+    tools, failedServers, connected,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      for (const c of conns) await c.close?.().catch(() => undefined);
+    },
+  };
 }
 
 /** fake ctx session.append 捕获（测试用）。 */
@@ -102,7 +118,12 @@ export const mcpDef = defineModule({
           ? new StreamableHTTPClientTransport(new URL(cfg.url))
           : new StdioClientTransport({ command: cfg.command!, args: cfg.args ?? [], ...(cfg.env !== undefined ? { env: cfg.env } : {}) });
         const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
-        await client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
+        try {
+          await client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
+        } catch (err) {
+          await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败也收尾）
+          throw err;
+        }
         return {
           listTools: async () => {
             const res = await client.listTools({});
@@ -113,6 +134,7 @@ export const mcpDef = defineModule({
             return res as never;
           },
           instructions: async () => (client as unknown as { getServerInstructions?: () => string | undefined }).getServerInstructions?.(),
+          close: async () => { await client.close(); }, // MI-02：stdio transport 随 close 杀子进程
         };
       },
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
@@ -129,5 +151,8 @@ export const mcpDef = defineModule({
         ).join("\n\n")}`;
       },
     });
+    // MI-02 修复（2026-09-28 code review P1）：旧实现 activate 无 dispose——reload 换代/停用时 MCP 子进程
+    // 全量泄漏（每次 reload 漏一批 stdio client）。返回 close 口挂进内核既有拆除链。
+    return { dispose: () => out.close() };
   },
 });

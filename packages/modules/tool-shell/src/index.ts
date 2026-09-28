@@ -14,6 +14,10 @@ export { JobRegistry, type BgJob } from "./jobs.ts";
 type BashInput = { command: string; workdir?: string; writeOutputTo?: string; timeoutMs?: number; run_in_background?: boolean };
 
 const MAX_TIMEOUT = 120_000;
+/** 前台输出捕获上限（MB-01）：头/尾各 256KB——中段丢弃。足够覆盖溢写截断口径（32KB）两个数量级，
+ *  同时把失控命令的内存占用钉死在 ~512KB。 */
+const CAPTURE_HEAD = 256 * 1024;
+const CAPTURE_TAIL = 256 * 1024;
 
 /** 跨调用目录记忆（M4-3 T2 伪持久第一半）：记「上次 workdir 参数解析后的绝对路径」——不捕获 shell 内部 cd
  *  （捕获需 shell 感知的 pwd/cd 回写，win32 cmd 与 POSIX 命令不同，SW-9 v1 不做）。 */
@@ -44,7 +48,28 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
       shell.kind === "bash"
         ? spawn(shell.bashPath, ["-c", input.command], { cwd, stdio: ["ignore", "pipe", "pipe"], detached: false }) // win32 专用分支——taskkill /T 管整树
         : spawn(input.command, { shell: true, cwd, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
-    const chunks: Buffer[] = []; // 原始字节累积——close 后统一解码（decodeOut 编码判定需要全量字节）
+    // MB-01 修复（2026-09-28 code review P1）：前台捕获上限——失控命令（yes 死循环等）无界累积可 OOM 整个
+    // CLI。头 256KB 原样 + 尾 256KB 滚动保留、中段丢弃并如实标注；上限内零改动（字节序完全一致）。
+    const headBufs: Buffer[] = [];
+    let headUsed = 0;
+    const tailBufs: Buffer[] = [];
+    let tailUsed = 0;
+    let droppedBytes = 0;
+    const onChunk = (d: Buffer): void => {
+      if (droppedBytes === 0 && headUsed + d.length <= CAPTURE_HEAD) { headBufs.push(d); headUsed += d.length; return; }
+      tailBufs.push(d);
+      tailUsed += d.length;
+      while (tailUsed > CAPTURE_TAIL) { // 滚动：丢最老的超额字节（= 中段）
+        const first = tailBufs[0]!;
+        const over = tailUsed - CAPTURE_TAIL;
+        if (first.length <= over) { tailBufs.shift(); tailUsed -= first.length; droppedBytes += first.length; }
+        else { tailBufs[0] = first.subarray(over); droppedBytes += over; tailUsed -= over; }
+      }
+    };
+    const captureOut = (): string =>
+      droppedBytes > 0
+        ? `${decodeOut(Buffer.concat(headBufs))}\n[…中段截断 ${droppedBytes} 字节——前台捕获上限：头尾各 ${CAPTURE_HEAD / 1024}KB…]\n${decodeOut(Buffer.concat(tailBufs))}`
+        : decodeOut(Buffer.concat([...headBufs, ...tailBufs]));
     let timedOut = false;
     const finish = (r: ToolResult) => {
       clearTimeout(timer);
@@ -56,13 +81,13 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
       timedOut = true;
       killTree(child);
     }, timeout);
-    child.stdout.on("data", (d: Buffer) => chunks.push(d));
-    child.stderr.on("data", (d: Buffer) => chunks.push(d));
+    child.stdout.on("data", onChunk);
+    child.stderr.on("data", onChunk);
     signal.addEventListener("abort", onAbort, { once: true });
     child.on("error", (err) => finish({ output: `spawn 失败：${err.message}`, isError: true }));
     child.on("close", (code) => {
       void (async () => {
-        const out = decodeOut(Buffer.concat(chunks));
+        const out = captureOut();
         if (signal.aborted) return finish({ output: `${out}\n[已中止]`, isError: true });
         if (timedOut) return finish({ output: `${out}\n[超时 ${timeout}ms，已杀进程树]`, isError: true });
         if (input.writeOutputTo !== undefined) {

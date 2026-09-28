@@ -6,7 +6,7 @@
   var KEY = "orosus-theme";
 
   function cur() {
-    try { return localStorage.getItem(KEY) === "light" ? "light" : "dark"; } catch (e) { return "dark"; }
+    try { return localStorage.getItem(KEY) === "light" ? "light" : "dark"; } catch { return "dark"; }
   }
 
   function apply(theme) {
@@ -19,7 +19,7 @@
 
   window.Theme = {
     cur: cur,
-    set: function (t) { try { localStorage.setItem(KEY, t); } catch (e) { /* 忽略 */ } apply(t); },
+    set: function (t) { try { localStorage.setItem(KEY, t); } catch { /* 忽略 */ } apply(t); },
     toggle: function () { var n = cur() === "light" ? "dark" : "light"; this.set(n); return n; },
   };
 

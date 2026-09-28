@@ -332,6 +332,14 @@ async function compactOnce(
 
   // ⑤ 摘要输入预收缩（设计空白 10——kimi preShrink 吸收；manual 全量路径的保命闸）
   const { input: summaryInput, truncated } = preShrinkSummaryInput(dropped, opts.window);
+  // MI-01 修复（2026-09-28 code review P1）：最新单条消息独超预算时预收缩产出空输入——旧实现照发摘要
+  // 请求（载荷只有一条指令、零对话），模型幻觉出的「摘要」替换全部历史。宁可不压（同 ⑦ 失败底线）。
+  if (summaryInput.length === 0) {
+    opts.state.consecutiveFailures++;
+    opts.state.failPoint = est;
+    opts.log.warn("compaction.summary-failed", "预收缩后摘要输入为空（最新单条消息已超窗口预算）——不装占位（宁可不压）", { dropped: dropped.length });
+    return { kind: "failed", reason: "摘要输入预收缩后为空——本轮不压缩（最新单条消息已超窗口预算）", messages: afterPrune(), events };
+  }
 
   // ⑥ 摘要：六小节模板 + 前次合并（v3 标/v2 前缀双路）+ 截断说明 + focus（kimi compactionInstruction 同款）
   const maxTokens = opts.window !== undefined ? Math.min(cfg.summaryMaxTokens, Math.max(512, Math.floor(opts.window / 4))) : cfg.summaryMaxTokens;

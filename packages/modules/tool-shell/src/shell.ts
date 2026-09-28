@@ -76,9 +76,10 @@ export function lintCmdCommand(command: string): string | undefined {
 }
 
 /** 第二道线（护栏漏网的「命令不存在」就地翻译）：只认 cmd/bash 的 not-found 文案本身，
- *  普通失败（git fatal 等）不画蛇添足。 */
+ *  普通失败（git fatal 等）不画蛇添足。cmd 文案双语（中文/英文 locale 的 cmd.exe 各一——
+ *  tool-shell ③ 全套件红根因：英文 Windows 上旧模式永不命中，第二道线整线失效）。 */
 export function classifyFailure(out: string): string | undefined {
-  const cmd = /'([^'\r\n]+)' 不是内部或外部命令/.exec(out);
+  const cmd = /'([^'\r\n]+)' (?:不是内部或外部命令|is not recognized as an internal or external command)/.exec(out);
   if (cmd) {
     return `[命令不存在："${cmd[1]}"——cmd.exe 没有这个命令；POSIX 命令需 Git Bash（已装则本工具自动启用），或改用 cmd/PowerShell 等价命令]`;
   }

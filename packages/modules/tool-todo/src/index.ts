@@ -63,7 +63,7 @@ export default defineModule({
   api: 1,
   logEvents: ["tool-todo/write"], // 任务面板投影读口（TUI 批阶段三 F4——append 白名单前置）
   activate(ctx) {
-    const { tool, state } = createTodoTool((todos) => ctx.session.append("tool-todo/write", { todos }));
+    const { tool } = createTodoTool((todos) => ctx.session.append("tool-todo/write", { todos }));
     ctx.contribute.tool(tool);
     ctx.contribute.promptSection({
       order: 10, // skill=0 之后、mcp=20 之前（M4-2 批 B 分配表）

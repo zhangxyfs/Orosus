@@ -35,6 +35,21 @@ const makeHarness = async (extra: Parameters<typeof createHarness>[0] = {}) => {
 };
 
 describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => {
+  it("CH-01 装配失败清理：激活后 store.all() 抛（坏行）→ 已激活模块 dispose + store.close（旧实现句柄/MCP 子进程全悬空）", async () => {
+    const trail: string[] = [];
+    const badStore = new InMemorySessionStore();
+    (badStore as unknown as { all: () => Promise<never> }).all = async () => { throw new Error("坏行 JSON 炸"); };
+    (badStore as unknown as { close: () => Promise<void> }).close = async () => { trail.push("store-closed"); };
+    const mod: ModuleDefinition = {
+      name: "m-leak", version: "0.1.0", description: "leak", api: 1,
+      activate: () => ({ dispose: () => { trail.push("mod-disposed"); } }),
+    };
+    await expect(makeHarness({ store: badStore, modules: [fakeProviderModule("fake", script), mod] }))
+      .rejects.toThrow(/坏行/);
+    expect(trail).toContain("mod-disposed"); // 旧实现：模块不 dispose
+    expect(trail).toContain("store-closed"); // 旧实现：store 句柄不关
+  });
+
   it("prompt 一轮：事件流 = 日志实时投影，session/header 含模块计数摘要（M4-1 T3 瘦身：全列表 → 三数字）", async () => {
     const h = await makeHarness();
     const seen: string[] = [];
