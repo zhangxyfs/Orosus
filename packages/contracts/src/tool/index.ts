@@ -11,13 +11,21 @@ import type { Logger } from "../module/index.ts";
  * ```
  */
 export type Access =
-  | { kind: "fs.read" | "fs.write"; path: string }
+  | {
+      kind: "fs.read" | "fs.write";
+      /** 目标路径（CT-04 契约钉）：须为**字面**文件系统路径，不支持 glob 等模式——glob/搜索类工具按语义
+       *  应声明整个搜索根（Access.fsRead(root)）或退 Access.all()。建议绝对路径：并发调度器把 path 按进程
+       *  cwd resolve 归一后做目录边界前缀比较（§6.3 读写冲突判定），相对路径应由工具自行 resolve 到自身
+       *  root 再填——cwd ≠ root 时冲突判定会对错文件。 */
+      path: string;
+    }
   | { kind: "network"; host: string }
   | { kind: "subprocess" }
   | { kind: "all" };
 
 /** Access 四形态的便捷构造器（与上方联合类型同名导出。 */
 export const Access = {
+  /** fsRead/fsWrite 的 path 语义见联合类型 path 字段注释（CT-04：字面路径、建议绝对、不支持 glob）。 */
   fsRead: (path: string): Access => ({ kind: "fs.read", path }),
   fsWrite: (path: string): Access => ({ kind: "fs.write", path }),
   network: (host: string): Access => ({ kind: "network", host }),

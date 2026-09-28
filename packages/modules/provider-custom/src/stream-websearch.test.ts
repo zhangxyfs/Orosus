@@ -129,3 +129,117 @@ describe("流内错误帧带内终局（MP-03：半截回复不再冒充完整�
     expect(ok.at(-1)).toEqual({ type: "finish", kind: "stop" }); // error:null 不误伤正常流
   });
 });
+
+// MP-04 回归（报告条目：anthropic 族 JSON.parse(parsed.data) 无局部 try——兼容端点发一帧非 JSON data
+// （截断帧/[DONE] 式哨兵/网关插播文本）异常即逃逸外层 catch，整条流被误标「流读取错误」终局；openai 族
+// 同位置是局部 try + 坏行跳过，两族口径不一。修复：块级 try 跳过 + [DONE] 哨兵检查（对齐 openai 族）
+describe("anthropic 族坏帧容忍（MP-04：坏帧跳过不炸流——对齐 openai 族口径）", () => {
+  it("① 截断 JSON 帧与 [DONE] 哨兵帧混在正常帧之间 → 坏帧跳过，前后正文完好、终局仍是 message_stop 的 stop", async () => {
+    const sse = [
+      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"前\"}}\n\n",
+      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_de", // 截断帧（无结尾）
+      "\n\n",
+      "data: [DONE]\n\n", // openai 式哨兵（兼容网关混发——anthropic 协议无此事件）
+      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"后\"}}\n\n",
+      "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    ].join("");
+    const fetchImpl = (async () => sseResponse(sse)) as typeof fetch;
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl })(baseReq()));
+    expect(chunks.some((c) => c.type === "text/delta" && c.text === "前")).toBe(true);
+    expect(chunks.some((c) => c.type === "text/delta" && c.text === "后")).toBe(true); // MP-04 前：坏帧杀流，「后」永不到达
+    expect(chunks.filter((c) => c.type === "finish")).toEqual([{ type: "finish", kind: "stop" }]); // 终局 = message_stop 正常 stop（非「流读取错误」）
+  });
+});
+
+// MP-06 回归（报告条目：两族 SSE 切块只认 \n\n——CRLF 端点（规范合法）整流零事件静默空答复；done 后残
+// buffer 不冲刷，「最后一帧不带结尾空行」的端点丢尾帧）。假流按字节拼块（分块边界切在帧中间）钉分块组装
+describe("SSE 行尾三态与残块冲刷（MP-06）", () => {
+  const chunkedResponse = (parts: string[]): Response => new Response(
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const p of parts) c.enqueue(new TextEncoder().encode(p));
+        c.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+
+  it("① anthropic 族纯 CRLF 流 + 帧边界切半投递 → 全事件产出；尾帧无结尾空行经残块冲刷（message_stop 不丢）", async () => {
+    const whole = [
+      "event: content_block_delta\r\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"CRLF\"}}\r\n\r\n",
+      "event: message_stop\r\ndata: {\"type\":\"message_stop\"}", // 无结尾空行——靠 done 后残块冲刷
+    ].join("");
+    const fetchImpl = (async () => chunkedResponse([whole.slice(0, 80), whole.slice(80)])) as typeof fetch; // 边界切在帧中间
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl })(baseReq()));
+    expect(chunks.filter((c) => c.type === "text/delta").map((c) => (c as { text: string }).text)).toEqual(["CRLF"]); // MP-06 前：纯 CRLF 整流零事件
+    expect(chunks.at(-1)).toEqual({ type: "finish", kind: "stop" }); // 尾帧冲刷——message_stop 到达（此前静默丢、loop 缺省 stop 冒充）
+  });
+
+  it("② openai 族纯 CRLF 流：finish_reason 帧是残块（无结尾空行）→ 冲刷产出唯一 stop（sawFinish 计入，无重复兜底）", async () => {
+    const whole = [
+      "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\r\n\r\n", // 首块在循环内正常分块
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}", // 残块——done 后冲刷
+    ].join("");
+    const fetchImpl = (async () => chunkedResponse([whole.slice(0, 40), whole.slice(40)])) as typeof fetch;
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl })(baseReq()));
+    expect(chunks.filter((c) => c.type === "text/delta")).toEqual([{ type: "text/delta", text: "OK" }]); // MP-06 前：纯 CRLF 整流零事件
+    expect(chunks.filter((c) => c.type === "finish")).toEqual([{ type: "finish", kind: "stop" }]); // 残块 finish 冲刷 + 不重复兜底 stop
+  });
+
+  it("③ 残块是撕裂 JSON（截断流尾）→ 静默跳过不炸流（无错误终局冒出）", async () => {
+    const torn = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_de";
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl: (async () => chunkedResponse([torn])) as typeof fetch })(baseReq()));
+    expect(chunks).toEqual([]); // 坏残块跳过：无正文也无「流读取错误」（对齐 MP-04 坏帧口径）
+  });
+});
+
+// MP-07 回归（报告条目：chat 面零重试零退避零空闲超时——端点保持连接但零字节时 reader.read() 无限等待，
+// turn 挂死到用户手动中断。最小实现：请求级空闲超时（连接/响应头/块间任一阶段无进展即 abort 带内终局）；
+// 重试/退避刻意不在本层做——流已产出正文后重发会重复投递，归调用方策略层（取舍在 stream-*.ts 注明））
+describe("空闲读超时（MP-07 最小实现）", () => {
+  it("① openai 族：首块后断流（零字节挂起）→ 空闲超时 abort；已产出正文保留、终局为带内错误（非挂死）", async () => {
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      const signal = init!.signal!;
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode("data: {\"choices\":[{\"delta\":{\"content\":\"前半\"}}]}\n\n"));
+          // 挂起不再产出——read() 悬置到 abort
+          signal.addEventListener("abort", () => c.error(signal.reason), { once: true }); // undici 同款：fetch signal abort → body 流 error
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl, idleTimeoutMs: 30 })(baseReq()));
+    expect(chunks.some((c) => c.type === "text/delta" && c.text === "前半")).toBe(true); // 超时前已产出正文保留
+    const last = chunks.at(-1) as { type: string; kind: string; errorMessage?: string };
+    expect(last).toMatchObject({ type: "finish", kind: "error" });
+    expect(last.errorMessage).toContain("空闲超时"); // MP-07 前：read() 永久挂起，无任何终局
+  });
+
+  it("② anthropic 族：连接建立后零字节（挂起网关）→ 同超时终局", async () => {
+    const fetchImpl = (async (_u: unknown, init?: RequestInit) => {
+      const signal = init!.signal!;
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          // 零字节挂起——read() 悬置到 abort
+          signal.addEventListener("abort", () => c.error(signal.reason), { once: true });
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+    const chunks = await collect(anthropicStream({ baseUrl: "https://x", fetchImpl, idleTimeoutMs: 30 })(baseReq()));
+    expect(chunks.at(-1)).toMatchObject({ type: "finish", kind: "error" });
+    expect((chunks.at(-1) as { errorMessage?: string }).errorMessage).toContain("空闲超时");
+  });
+
+  it("③ 头阶段挂起（fetch 永不返回响应）→ 超时同样覆盖连接/响应头阶段", async () => {
+    const fetchImpl = (async (_u: unknown, init?: RequestInit): Promise<Response> => {
+      await new Promise<never>((_, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason)));
+      throw new Error("unreachable"); // await never 悬置——abort 前永不走到（类型收尾）
+    }) as typeof fetch;
+    const chunks = await collect(openaiStream({ baseUrl: "https://x/v1", fetchImpl, idleTimeoutMs: 30 })(baseReq()));
+    const last = chunks.at(-1) as { kind: string; errorMessage?: string };
+    expect(last.kind).toBe("error");
+    expect(last.errorMessage).toContain("空闲超时"); // 不是「网络错误」——超时语义单独可辨
+  });
+});

@@ -14,11 +14,46 @@ export type ServerCall = (name: string, args: unknown, signal: AbortSignal) => P
 
 const DESCRIPTIION_LIMIT = 4096; // §8.5 不受信消毒：4KB 截断
 
+/** 桥接工具名上限（MI-07）：OpenAI/Anthropic 工具名约束 ^[a-zA-Z0-9_-]{1,64}$——超长即每个请求 400。 */
+const TOOL_NAME_LIMIT = 64;
+
 /** description 不受信输入（§8.5）：非 string 归空、超长截断、来源标记前缀（防 tool poisoning 的可见性标记）。 */
 export function sanitizeToolMeta(server: string, name: string, description: unknown): { name: string; description: string } {
   const raw = typeof description === "string" ? description : "";
   const tagged = raw === "" ? `[mcp:${server}]` : `[mcp:${server}] ${raw}`;
   return { name, description: tagged.slice(0, DESCRIPTIION_LIMIT) };
+}
+
+/** MI-07 修复（2026-09-28 code review P2，kimi sanitizeMcpNamePart 同款）：server id（用户 config 键）与
+ *  工具名（server 清单原样名）都是不受信输入——非法字符（./空格/CJK）或超长直拼 mcp__{server}__{name}
+ *  会令 provider 拒收**每个**请求；消毒后撞名在 registry throw 则整个 mcp 模块降级（比 400 更重）。
+ *  规则：[^a-zA-Z0-9_-] → `_`、空段保底 `_`；整名超 64 截断 + sha256 短哈希后缀（防截断碰撞）。 */
+export function sanitizeMcpNamePart(part: string): string {
+  const clean = part.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return clean === "" ? "_" : clean;
+}
+
+/** 桥接工具注册名（消毒后——模型面/审批规则/注册表都只见这个名；server 调用仍用原样名）。 */
+export function bridgedToolName(server: string, tool: string): string {
+  const full = `mcp__${sanitizeMcpNamePart(server)}__${sanitizeMcpNamePart(tool)}`;
+  if (full.length <= TOOL_NAME_LIMIT) return full;
+  const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
+  return `${full.slice(0, TOOL_NAME_LIMIT - 9)}_${hash}`;
+}
+
+/** server inputSchema → zod meta 透传（MI-03 修复，2026-09-28 code review P1）。
+ *  契约 parameters: ZodType 强制 zod，而 zod 4.x 无 JSON-Schema 包装类型（z.jsonSchema 不存在）——但核心
+ *  specs() 的 z.toJSONSchema 会把 .meta() 注册键作为 **sibling 字段**输出：properties/required 覆写空对象
+ *  基线，模型因此在 tools[].parameters 里看到真实参数（不再是空参数面）。只透传这两个可见性键——
+ *  additionalProperties 等会与 zod 自身输出撞键（谁赢无定义），不冒险。本地校验保持宽松 passthrough：
+ *  server 侧自校验才是权威，JSON-Schema→zod 全量转换的误差可能误拒合法调用。 */
+function schemaMetaOf(inputSchema: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (inputSchema === undefined || inputSchema.type !== "object") return undefined;
+  const meta: Record<string, unknown> = {};
+  const props = inputSchema.properties;
+  if (props !== undefined && typeof props === "object" && !Array.isArray(props)) meta.properties = props;
+  if (Array.isArray(inputSchema.required)) meta.required = inputSchema.required;
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 /** server 清单 digest（§6.3 清单快照——mcp/manifest 事件载荷；确定性：名称排序后哈希）。 */
@@ -27,24 +62,27 @@ export function digest(servers: Record<string, string[]>): string {
   return createHash("sha256").update(normalized).digest("hex");
 }
 
-/** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>；accesses 缺省 fail-closed [all]，server 级声明可放宽。
+/** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>（MI-07：两段消毒后拼装——注册/审批/模型面
+ *  用注册名，server 调用用原样名）；accesses 缺省 fail-closed [all]，server 级声明可放宽。
  *  deferred（M4-3 T5）：server 级「按需加载」标记透传——tool-search 未启用时标记不生效（SW-26 联动）。 */
 export function toBridgedTool(server: string, meta: ServerToolMeta, call: ServerCall, accesses?: AccessT[], deferred?: boolean): Tool {
   const clean = sanitizeToolMeta(server, meta.name, meta.description);
-  const params = meta.inputSchema !== undefined && meta.inputSchema.type === "object"
-    ? z.object({}).passthrough()
-    : z.object({}).passthrough(); // inputSchema 透传不做强 schema（server 侧自校验；缺省宽松收集）
+  const toolName = bridgedToolName(server, meta.name); // MI-07：注册名消毒（server 调用仍用 meta.name）
+  // MI-03：inputSchema 有效（type:object 且带 properties/required）→ .meta() sibling 透传进 specs() 参数面；
+  // 缺省/无效 → 宽松收集（server 侧自校验）。旧实现两分支同为空 object（inputSchema 两条路都丢——模型看不到参数）。
+  const loose = z.object({}).passthrough();
+  const schemaMeta = schemaMetaOf(meta.inputSchema);
   return defineTool({
-    name: `mcp__${server}__${clean.name}`,
+    name: toolName,
     description: clean.description,
     ...(deferred === true ? { deferred: true } : {}),
-    parameters: params,
+    parameters: schemaMeta !== undefined ? loose.meta(schemaMeta) : loose,
     resolveExecution: async (input) => ({
       accesses: accesses ?? [Access.all()],
-      approvalRule: `mcp__${server}__${clean.name}`,
+      approvalRule: toolName,
       execute: async (tctx): Promise<ToolResult> => {
         try {
-          const result = await call(clean.name, input, tctx.signal);
+          const result = await call(meta.name, input, tctx.signal);
           const text = result.content
             .map((c) => (typeof c === "string" ? c : ((c as { text?: unknown }).text !== undefined ? String((c as { text: string }).text) : JSON.stringify(c))))
             .join("\n");

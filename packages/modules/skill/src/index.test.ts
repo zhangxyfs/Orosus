@@ -27,10 +27,11 @@ function fakeCtx(cfg: Record<string, unknown> = {}) {
   const services = new Map<string, unknown>();
   const tools: Tool[] = [];
   const sections: PromptSection[] = [];
+  const warns: { code: string; msg?: string | undefined }[] = []; // MI-09：坏轨/坏条目告警捕获
   const ctx = {
     config: cfg,
     configRead: () => Promise.resolve(undefined),
-    log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} },
+    log: { trace() {}, debug() {}, info() {}, warn(code: string, msg?: string) { warns.push({ code, msg }); }, error() {} },
     services: { get: () => Promise.reject(new Error("no")), getOptional: () => Promise.resolve(undefined) },
     provide: (k: string, impl: unknown) => void services.set(k, impl),
     contribute: {
@@ -41,7 +42,7 @@ function fakeCtx(cfg: Record<string, unknown> = {}) {
     session: { append: () => {} },
     events: { on: () => () => {}, emit: () => Promise.resolve() },
   } as unknown as Ctx;
-  return { ctx, services, tools, sections };
+  return { ctx, services, tools, sections, warns };
 }
 
 const put = (dir: string, name: string, desc: string, body: string, extra = "") => {
@@ -363,5 +364,72 @@ describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能�
     }
     expect(catalog().every((r) => r.whenToUse !== undefined)).toBe(true); // 每件都写了简单说明（菜单详释第 3 行）
     expect(names).toHaveLength(EXPECTED.length); // 无意外多余件
+  });
+});
+
+describe("MI-09 扫描容错（单轨/单条目级 try/catch——一处坏文件系统状态不再拖垮整个 skill 模块）", () => {
+  it("① 轨道目录本身是文件（ENOTDIR）→ 该轨跳过、其余轨道照常、模块不降级（旧实现 readdirSync 直抛 → activate 失败五轨全丢：内置技能/清单段/load 工具一起消失）", async () => {
+    writeFileSync(join(user, "not-a-dir"), "x"); // 存在但不可 readdir 的「轨道」
+    put(join(user, ".orosus", "skills"), "healthy", "好技能", "好正文");
+    const { ctx, sections, tools, warns } = fakeCtx({ ...fourTrackCfg(), userAgentsDir: join(user, "not-a-dir") });
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>); // 旧实现这里直接抛
+    expect(sections[0]!.text).toContain("healthy"); // 其余轨道照常
+    expect(tools.map((t) => t.name)).toContain("skill__load"); // 工具照常注册
+    expect(warns.some((w) => w.code === "skill.track-scan-failed")).toBe(true); // 坏轨经 warn 可观测（不静默吞）
+  });
+
+  it("② 单条目 SKILL.md 不可读（EISDIR——SKILL.md 是目录）→ 跳过该条、同轨其余技能照常", async () => {
+    md(join(user, ".orosus", "skills", "broken"));
+    mkdirSync(join(user, ".orosus", "skills", "broken", "SKILL.md")); // 目录占名——readFileSync 抛 EISDIR
+    put(join(user, ".orosus", "skills"), "sibling", "同伴技能", "同伴正文");
+    const { ctx, sections, warns } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    expect(sections[0]!.text).toContain("sibling"); // 同轨同伴不受株连
+    expect(sections[0]!.text).not.toContain("broken");
+    expect(warns.some((w) => w.code === "skill.entry-scan-failed")).toBe(true);
+  });
+
+  it("③ 运行期面同样容错：skill.catalog 现读与 skill__load 执行时重扫遇坏轨不炸（宿主菜单/工具调用不受损）", async () => {
+    writeFileSync(join(user, "not-a-dir"), "x");
+    put(join(user, ".orosus", "skills"), "healthy", "好技能", "好正文");
+    const { ctx, services, tools } = fakeCtx({ ...fourTrackCfg(), userAgentsDir: join(user, "not-a-dir") });
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string }>;
+    expect(catalog().map((r) => r.name)).toEqual(["healthy"]); // 现读服务不炸
+    const r = await runLoad(tools, "healthy"); // load 工具的重扫路径同样不炸
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("好正文");
+  });
+});
+
+describe("MI-10 CRLF frontmatter（Windows/互操作生态——别家工具写进来的 SKILL.md 不再静默消失）", () => {
+  it("① CRLF 全文照常解析：清单见名与描述、正文可加载、字段行尾 \\r 被 trim 吃掉（旧实现 ^---\\n 不匹配 → 整文件静默跳过）", async () => {
+    md(join(user, ".orosus", "skills", "crlf-skill"));
+    writeFileSync(
+      join(user, ".orosus", "skills", "crlf-skill", "SKILL.md"),
+      "---\r\nname: crlf-skill\r\ndescription: Windows 换行技能\r\nwhen_to_use: 需要 CRLF 时\r\n---\r\n\r\nCRLF 正文内容",
+    );
+    const { ctx, sections, tools, services } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    expect(sections[0]!.text).toContain("crlf-skill"); // 核心钉：不再静默消失
+    expect(sections[0]!.text).toContain("Windows 换行技能");
+    const r = await runLoad(tools, "crlf-skill");
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("CRLF 正文内容");
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string; whenToUse?: string }>;
+    expect(catalog().find((x) => x.name === "crlf-skill")!.whenToUse).toBe("需要 CRLF 时"); // 行尾 \r 已 trim
+  });
+
+  it("② 混合换行（CRLF 头 + LF 正文）与 bare `---` 收尾（无尾换行）均不炸——宽松回归钉", async () => {
+    md(join(user, ".orosus", "skills", "mixed-skill"));
+    writeFileSync(join(user, ".orosus", "skills", "mixed-skill", "SKILL.md"), "---\r\nname: mixed-skill\r\ndescription: 混合\r\n---\n正文");
+    const { ctx, sections } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    expect(sections[0]!.text).toContain("mixed-skill");
+    md(join(user, ".orosus", "skills", "bare-end"));
+    writeFileSync(join(user, ".orosus", "skills", "bare-end", "SKILL.md"), "---\nname: bare-end\ndescription: 裸尾\n---");
+    const s2 = fakeCtx(fourTrackCfg());
+    await def.activate(s2.ctx as ModuleContext<Record<string, unknown>>);
+    expect(s2.sections[0]!.text).toContain("bare-end"); // 收尾 `---` 后无换行：\r?\n? 全可选——照常解析
   });
 });

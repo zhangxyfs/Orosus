@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
@@ -133,13 +133,15 @@ describe("glob/grep（T16，§12 M2）", () => {
     expect(r.output).not.toContain("g2.ts");
   });
 
-  it("③ accesses 声明 fs.read + 沙箱边界（越出 → isError，同 read）", async () => {
+  it("③ accesses 整根读声明 + 沙箱边界（越出 → isError，同 read）", async () => {
     writeFileSync(join(dir, "in.txt"), "x");
     const { ctx, tools } = fakeCtx();
     await def.activate(ctx);
     const glob = tools.find((t) => t.name === "tool-fs__glob")!;
     const exec = await glob.resolveExecution({ pattern: "**/*.ts" });
-    expect(exec.accesses).toEqual([{ kind: "fs.read", path: "**/*.ts" }]); // fs.read 声明（路径以 pattern 近似——M1 同款口径）
+    // CT-04（2026-09-28 code review）：pattern 不再当路径塞进声明——glob/grep 按「整根读」声明字面绝对根路径，
+    // 调度器前缀比较恢复真实语义（原 <cwd>/**/* 字面串与一切 fs.write 恒不冲突，串行承诺被绕开）
+    expect(exec.accesses).toEqual([{ kind: "fs.read", path: realpathSync(dir) }]);
     const r = await run(glob, { pattern: "../../etc/**/*.conf" });
     expect(r.isError).toBe(true);
     expect(r.output).toContain("越出");
@@ -358,5 +360,127 @@ describe("read 缺省窗口 + mtime 去重（M4-2.5 T0——日志体积调研 P
     // ④ 从没读过的文件直接写（新建）→ 不拦
     const fresh = await run(write, { path: "brand-new.txt", content: "新建\n" });
     expect(fresh.isError).toBe(false);
+  });
+});
+
+// MB-03/MB-06/MB-07/CT-04（2026-09-28 code review）回归钉
+// 强制 mtime 前移——不赌时序（同毫秒两次写在快速机器上可能同 mtimeMs）
+const bumpMtime = (p: string, deltaMs = 10_000): void =>
+  utimesSync(p, new Date(Date.now() + deltaMs), new Date(Date.now() + deltaMs));
+
+describe("code review P1 批（2026-09-28）", () => {
+  const setup = async () => {
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    return { tools, read: tools[0]!, write: tools[1]!, edit: tools[2]!,
+      glob: tools.find((t) => t.name === "tool-fs__glob")!,
+      grep: tools.find((t) => t.name === "tool-fs__grep")! };
+  };
+
+  it("MB-03 拼写变体同键（写前比对）：read('v.txt') 后外部改，write('./v.txt') 被拦——原始字符串键会被 ./ 变体绕过", async () => {
+    writeFileSync(join(dir, "v.txt"), "v1\n");
+    const t = await setup();
+    await run(t.read, { path: "v.txt" }); // 模型读过（键 = 归一绝对路径）
+    writeFileSync(join(dir, "v.txt"), "别人改过的内容\n");
+    bumpMtime(join(dir, "v.txt"));
+    const blocked = await run(t.write, { path: "./v.txt", content: "按旧印象覆盖" }); // ./ 变体拼写
+    expect(blocked.isError).toBe(true);
+    expect(blocked.output).toContain("读取后被修改过");
+    const blockedEdit = await run(t.edit, { path: "./v.txt", edits: [{ oldText: "内容", newText: "x" }] });
+    expect(blockedEdit.isError).toBe(true); // edit 同口径（键归一后变体也拦）
+  });
+
+  it("MB-03 拼写变体同键（mtime 去重）：read('d.txt') 后 read('./d.txt') → file_unchanged（原实现两键白注入全文）", async () => {
+    writeFileSync(join(dir, "d.txt"), "content\n");
+    const t = await setup();
+    await run(t.read, { path: "d.txt" });
+    const r2 = await run(t.read, { path: "./d.txt" });
+    expect(r2.isError).toBe(false);
+    expect(r2.output).toContain("file_unchanged");
+  });
+
+  it("MB-06 ① 非法正则 → 带内明确报错（不裸抛）", async () => {
+    writeFileSync(join(dir, "g.ts"), "x\n");
+    const t = await setup();
+    const r = await run(t.grep, { pattern: "([" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("正则无效");
+  });
+
+  it("MB-06 ② 病态正则 (a+)+ → 静态拒绝并指引改写（ReDoS 先验——确定性单例，不赌时序）", async () => {
+    writeFileSync(join(dir, "g.ts"), "x\n");
+    const t = await setup();
+    const r = await run(t.grep, { pattern: "(a+)+b" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("嵌套量词");
+  });
+
+  it("MB-06 ③ 合法量词组不受误伤：(?:ab)+ 与 (a|b)+ 正常命中", async () => {
+    writeFileSync(join(dir, "ok.ts"), "ab ab\nzz\n");
+    const t = await setup();
+    const r1 = await run(t.grep, { pattern: "(?:ab)+" });
+    expect(r1.isError).toBe(false);
+    expect(r1.output).toContain("ok.ts:1");
+    const r2 = await run(t.grep, { pattern: "(a|b)+" });
+    expect(r2.isError).toBe(false);
+    expect(r2.output).toContain("ok.ts:1");
+  });
+
+  it("MB-06 ④ 超长行（>4096 字符）跳过匹配——病态正则工作量上界（minified/bundle 行不进 test）", async () => {
+    writeFileSync(join(dir, "min.js"), `NEEDLE${"x".repeat(5000)}\nshort NEEDLE line\n`);
+    const t = await setup();
+    const r = await run(t.grep, { pattern: "NEEDLE" });
+    expect(r.isError).toBe(false);
+    expect(r.output).not.toContain(":1:"); // 超长第 1 行被跳过
+    expect(r.output).toContain(":2:short NEEDLE line"); // 短行照常命中
+  });
+
+  it("MB-07 ① 大文件闸：>1MB 拒绝整读，指引 grep/shell（statSync 前置于 readFileSync）", async () => {
+    writeFileSync(join(dir, "fat.log"), `${"x".repeat(1_100_000)}\n`);
+    const t = await setup();
+    const r = await run(t.read, { path: "fat.log" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("文件过大");
+    expect(r.output).toContain("grep");
+  });
+
+  it("MB-07 ② 二进制判定：含 NUL 字节 → 明确提示不注入乱码", async () => {
+    writeFileSync(join(dir, "img.bin"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x01]));
+    const t = await setup();
+    const r = await run(t.read, { path: "img.bin" });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("二进制");
+  });
+
+  it("MB-07 ③ 单行超长（>8KB）截断并标注（minified 行不整行注入）", async () => {
+    const longLine = `console.log("${"a".repeat(9000)}");`;
+    writeFileSync(join(dir, "oneline.js"), `${longLine}\n`);
+    const t = await setup();
+    const r = await run(t.read, { path: "oneline.js" });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain(`已截断：原 ${longLine.length} 字符`);
+    expect(r.output.length).toBeLessThan(8192 + 500); // 输出主体 = 截断行（8192）+ 标注，不随行长膨胀
+  });
+
+  it("CT-04 ① read/write/edit 声明：Access.path 以 resolveAbs 绝对路径填充（./ 与 …/… 变体同声明，不再按 cwd 错位）", async () => {
+    const t = await setup();
+    const readEx = await t.read.resolveExecution({ path: "./sub/../c.ts" });
+    expect(readEx.accesses).toEqual([{ kind: "fs.read", path: join(realpathSync(dir), "c.ts") }]);
+    const writeEx = await t.write.resolveExecution({ path: "./w.ts", content: "x" });
+    expect(writeEx.accesses).toEqual([{ kind: "fs.write", path: join(realpathSync(dir), "w.ts") }]);
+    const editEx = await t.edit.resolveExecution({ path: "e.ts", edits: [{ oldText: "a", newText: "b" }] });
+    expect(editEx.accesses).toEqual([{ kind: "fs.write", path: join(realpathSync(dir), "e.ts") }]);
+  });
+
+  it("CT-04 ② 越出根的声明回落原始串（声明阶段不抛，execute 内自会带内报错）", async () => {
+    const t = await setup();
+    const readEx = await t.read.resolveExecution({ path: "../../outside.txt" });
+    expect(readEx.accesses).toEqual([{ kind: "fs.read", path: "../../outside.txt" }]);
+  });
+
+  it("CT-04 ③ grep 声明整根读（字面绝对路径），与根内写真实冲突（调度器前缀比较口径）", async () => {
+    const t = await setup();
+    const grepEx = await t.grep.resolveExecution({ pattern: "anything" });
+    expect(grepEx.accesses).toEqual([{ kind: "fs.read", path: realpathSync(dir) }]);
   });
 });

@@ -19,4 +19,13 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--nope"])).toThrow(/用法/);
     expect(() => parseArgs(["--model"])).toThrow(/用法/);
   });
+
+  // CL-04 回归钉（2026-09-28 code review）：--fork 死旗标移除——解析出的 args.fork 全仓零消费
+  //（main.ts 只透传 extra.fork = 交互 /fork 指令路径，启动旗标从未接线 createHarness）。移除后走
+  // default 分支按未知参数响亮报错——不再静默吞掉「--fork 启动分叉」的意图（此前解析成功但不生效）。
+  it("CL-04：--fork 已移除（死旗标）——按未知参数报错，不再静默解析成功", () => {
+    expect(() => parseArgs(["--fork"])).toThrow(/未知参数/);
+    expect(() => parseArgs(["--fork", "s_1"])).toThrow(/未知参数/);
+    expect(() => parseArgs(["--fork", "s_1:e_9"])).toThrow(/未知参数/);
+  });
 });

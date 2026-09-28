@@ -78,6 +78,23 @@ describe("键盘菜单 picker（TUI 批 T1——B5 第 2 层）", () => {
     expect(pickLabel("[取消]")).toBe("[取消]"); // 纯标题不动
     expect(pickLabel(`\x1b[2m已着色行\x1b[22m`)).toBe(`\x1b[2m已着色行\x1b[22m`); // 调用方自拼样式的行原样
   });
+  // CR-05 回归钉：空表 TTY 回车返回 0/方向环绕 (0-1+0)%0=NaN 都是伪装合法下标（items[NaN]
+  // → undefined 落给调用方）；非 TTY 编号回落 `n <= 0` 永假 → 无限重问挂死脚本/CI
+  it("⑨ CR-05 空表：TTY/非 TTY 均显式拒绝「无可选项」——不再返回 NaN/0 假下标、不再死循环", async () => {
+    await expect(pick([], fakeIo(["\r"]))).rejects.toThrow("无可选项"); // 旧版回车返回 0（items[0] 伪装合法）
+    await expect(pick([], { ...fakeIo(["\r"]), isTTY: false, numberQuestion: async () => "1" })).rejects.toThrow("无可选项"); // 旧版在此无限重问
+  });
+  // CR-06 回归钉：重绘 moveUp 的 N 必须按视觉行数（ansi.ts 头注硬约定）——CJK 双宽使超宽行
+  // 折成多个物理行，按逻辑行数 lines.length 少移 → 每次导航错位一行 + 折行残影
+  it("⑩ CR-06 视觉行数口径：折行帧的重绘上移按视觉行数（\\x1b[4A 而非 \\x1b[3A）", async () => {
+    const w: string[] = [];
+    // 20 列窄终端：两项各 5 个 CJK 字（显示宽 10 ≤ 20 → 各 1 视觉行），提示行显示宽约 40 > 20 → 折 2 行；
+    // 逻辑 3 行 / 视觉 4 行——下键导航后的重绘 moveUp 必须上移 4 行（旧版 \x1b[3A 少移一行 → 残影）
+    await pick(["菜单甲项一", "菜单乙项二"], { ...fakeIo(["\x1b[B", "\r"], w), columns: 20 });
+    const out = w.join("");
+    expect(out).toContain("\x1b[4A");
+    expect(out).not.toContain("\x1b[3A");
+  });
 });
 
 describe("滚动窗口（TUI 批 T2——B5 厂商目录分页）", () => {

@@ -29,7 +29,15 @@ export async function runModuleSubcommand(argv: string[], io: ModuleCmdIo): Prom
     for (const m of io.discovered) {
       const layer = m.layer ?? "project";
       const t = checkTrust({ layer, root: m.root, entryHash: m.entryHash, store });
-      const status = layer === "user" ? "active（用户级）" : t.ok ? "active（已确认）" : t.reason === "unconfirmed" ? "failed (untrusted——module trust 后生效)" : "failed (untrusted——hash 已变化，须重新确认)";
+      // CM-09（2026-09-28 code review）：用户级模块同样要确认（trust.ts：user 层未登记 = unconfirmed →
+      // pending-confirm 不挂载；m5 T17 首挂弹窗与 main 的「项目级 hash 门/用户级认登记共用 trust.json」同源）——
+      // 旧硬编码 "active（用户级）" 把从未确认的用户级模块误报为已激活（信任决策面误导）。两层统一走 t.ok
+      // 判定，仅文案分层；project 层既有 untrusted 两态（unconfirmed / hash 变化）保持不变
+      const status = t.ok
+        ? layer === "user" ? "active（用户级·已确认）" : "active（已确认）"
+        : t.reason === "unconfirmed"
+          ? layer === "user" ? "pending-confirm（用户级——module trust 后生效）" : "failed (untrusted——module trust 后生效)"
+          : "failed (untrusted——hash 已变化，须重新确认)";
       io.out(`  ${m.name}: ${status}`);
     }
     if (io.discovered.length === 0) io.out("  （无）");

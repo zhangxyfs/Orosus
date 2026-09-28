@@ -1,6 +1,6 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
@@ -16,7 +16,7 @@ import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 import { diffGraphs, type ReloadReport } from "./kernel/reload.ts";
-import { loadTrustStore, checkTrust } from "./kernel/trust.ts";
+import { loadTrustStore, checkTrust, atomicWriteTextSync } from "./kernel/trust.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
@@ -30,6 +30,27 @@ function imageMimeOf(path: string): "image/png" | "image/jpeg" | "image/webp" | 
   if (ext === "webp") return "image/webp";
   if (ext === "gif") return "image/gif";
   return "image/png";
+}
+
+/** TOML 基本串写侧转义（CH-08 修复）：模型名/档位可能来自端点清单（网络数据）或 listModels 失败时的
+ *  手输（任意文本）——裸拼进 `provider = "..."` 会在值含引号/换行时写坏 user config，下次启动 SW-20
+ *  降级跳过整个用户层（approval/provider 等全部静默丢失）。控制字符统一 \uXXXX，其余按 TOML 规范短转义。 */
+function tomlBasicString(v: string): string {
+  let out = "";
+  for (const ch of v) {
+    switch (ch) {
+      case "\\": out += "\\\\"; break;
+      case '"': out += '\\"'; break;
+      case "\n": out += "\\n"; break;
+      case "\r": out += "\\r"; break;
+      case "\t": out += "\\t"; break;
+      case "\b": out += "\\b"; break;
+      case "\f": out += "\\f"; break;
+      default:
+        out += ch < " " || ch === "\u007f" ? `\\u${ch.codePointAt(0)!.toString(16).padStart(4, "0")}` : ch;
+    }
+  }
+  return `"${out}"`;
 }
 
 export interface HarnessOptions {
@@ -78,7 +99,8 @@ export interface Harness {
   steer(text: string): boolean;
   /** 当前会话 id（/fork 等宿主侧会话操作的消费面，D41/T6）。 */
   readonly sessionId: string;
-  /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。 */
+  /** 单订阅者（M1）：Channel 逐 waiter 派发，多订阅者会瓜分事件；广播需求出现时再升级。
+   *  CH-10：不订阅不无界占用内存——缓冲只保留最近 256 条（drop-oldest），完整历史走 history()。 */
   events(): AsyncIterable<SessionEvent>;
   /** 会话历史（宿主显示面，B9 走查补）：全部持久事件（resume 回显用；含 reasoning 块——显示方自行取舍）。 */
   history(): Promise<SessionEvent[]>;
@@ -125,15 +147,40 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-/** 无锁异步通道：events() 订阅端与 turn 生产端的缓冲。 */
+/** events() 缓冲上限（CH-10）：零订阅者时只保留最近 N 条（drop-oldest）——旧实现无界 push，
+ *  嵌入式宿主（只用 prompt/history、从不订阅 events()）整个会话历史（含完整消息体）在 channel.buf
+ *  里再存一份、进程级累积。与 LiveChannel「断连即弃」同纪律：旁路通道不承担无限回放，完整历史走
+ *  history()/会话文件（events() 迟订阅最多拿到最近 N 条，JSDoc 已注明）。 */
+const EVENTS_CHANNEL_CAP = 256;
+
+/** 无锁异步通道：events() 订阅端与 turn 生产端的缓冲（单订阅者，M1）。 */
 class Channel<T> {
   private buf: T[] = [];
   private waiters: ((r: IteratorResult<T>) => void)[] = [];
   private done = false;
+  private overflowWarned = false;
+  // 显式字段赋值，刻意不用 constructor 参数属性：参数属性是非可擦除语法，node --experimental-strip-types
+  // （CLI 的运行方式）加载即抛 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX；vitest 走 esbuild 全转换测不出（tool-fs 同款注记）
+  private readonly cap: number;
+  private readonly onOverflow: ((total: number) => void) | undefined;
+  constructor(cap: number, onOverflow?: (total: number) => void) {
+    this.cap = cap;
+    this.onOverflow = onOverflow;
+  }
   push(v: T): void {
     const w = this.waiters.shift();
-    if (w) w({ value: v, done: false });
-    else this.buf.push(v);
+    if (w) {
+      w({ value: v, done: false });
+      return;
+    }
+    if (this.buf.length >= this.cap) {
+      this.buf.shift(); // CH-10：无等待者且满——丢最旧（迟订阅者拿最近 cap 条，新事件永不因满被拒）
+      if (!this.overflowWarned) {
+        this.overflowWarned = true;
+        this.onOverflow?.(1);
+      }
+    }
+    this.buf.push(v);
   }
   close(): void {
     this.done = true;
@@ -283,7 +330,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   } else {
     baseStore = makeStore();
   }
-  const channel = new Channel<SessionEvent>();
+  const channel = new Channel<SessionEvent>(EVENTS_CHANNEL_CAP, () => {
+    createLogger(sink, "kernel").warn("kernel.events.dropped", `events() 无订阅者且缓冲已满（上限 ${EVENTS_CHANNEL_CAP}）——最旧事件被丢弃，完整历史走 history()`); // 首次溢出留痕一次（后续照丢不再刷日志）
+  });
   const treeIndexHolder: { index?: TreeIndex } = {}; // 会话树批 T9：树索引懒持有（首次 tree() 建实例——避免构造期碰 ~/.orosus/db/）
   const live = new LiveChannel(); // 实时旁路（T4/D45）：Chunk 级内存投递，断连即弃
   const store = forwardingStore(baseStore, channel);
@@ -308,7 +357,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // 窗口语义（M3 补强空白 §5）：核心顶层 contextWindow——正整数才生效；非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）
   const readContextWindow = (core: Record<string, unknown>): number | undefined => {
     const v = core.contextWindow;
-    if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+    // CH-06 连带：env 层（OROSUS_CONTEXTWINDOW）值恒为字符串——纯数字串等价接受（键名映射在
+    // config/load.ts ENV_CORE_KEYS；非数字串照旧 warn + 忽略）
+    const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
+    if (typeof n === "number" && Number.isInteger(n) && n > 0) return n;
     if (v !== undefined) createLogger(sink, "kernel").warn("kernel.config.contextwindow", `contextWindow 配置非法（${String(v)}）——须为正整数，已忽略`);
     return undefined;
   };
@@ -333,7 +385,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     for (const m of discovered) {
       const t = checkTrust({ layer: m.layer, root: m.root, entryHash: m.entryHash, store: trustStore });
       if (t.ok) {
-        defs.push({ def: m.def, source: "local" as const, root: m.root, layer: m.layer }); // root/layer 透传（T7：failed 事件来源标识）
+        // CH-05 修复：entryHash 与 reload 侧（defs2 组装）同款透传——旧实现启动 defs 不带 hash，
+        // 首次 /reload 因 undefined≠hash 把全部信任 local 模块误判 Reloaded（副作用重跑/内存态丢失）
+        defs.push({ def: m.def, source: "local" as const, root: m.root, layer: m.layer, ...(m.entryHash !== undefined ? { entryHash: m.entryHash } : {}) }); // root/layer 透传（T7：failed 事件来源标识）
       } else {
         blocked.push({
           def: m.def,
@@ -482,9 +536,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   graph.bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
     const p = payload as { accesses?: { kind: string; path?: string }[]; subagent?: unknown };
     if (p.subagent !== undefined) return undefined;
-    const writes = (p.accesses ?? []).filter((a): a is { kind: string; path: string } => a.kind === "fs.write" && typeof a.path === "string").map((a) => a.path);
-    if (writes.length === 0) return undefined;
-    const chk = subagentRunner.gate.checkMainWrite(writes);
+    const accesses = p.accesses ?? [];
+    const writes = accesses.filter((a): a is { kind: string; path: string } => a.kind === "fs.write" && typeof a.path === "string").map((a) => a.path);
+    // CX-09 修复（2026-09-28 code review P1）：subprocess / all = 不透明执行（bash 无法预知会写哪）——
+    // 按整仓过闸，与子代理侧「bash 一律算写整仓」（runner WRITE_CAPABLE_TOOLS）对称；旧实现只过滤
+    // fs.write，主对话 npm install / git checkout . 与子代理写报备零检查并发。checkMainWrite 空数组
+    // 即整仓语义（writegate rawPaths.length === 0 → wholeRepo）；只读 accesses（fs.read/network/空）不进闸
+    const opaque = accesses.some((a) => a.kind === "subprocess" || a.kind === "all");
+    if (writes.length === 0 && !opaque) return undefined;
+    const chk = subagentRunner.gate.checkMainWrite(opaque ? [] : writes);
     return chk.ok ? undefined : { deny: true, reason: chk.error };
   }, "host");
 
@@ -578,6 +638,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   let currentTurn: { controller: AbortController; done: Promise<void>; internal?: boolean } | null = null;
   let closed = false;
+  // reload 互斥（CK-06/CH-09 修复，2026-09-28 code review P1）：in-flight promise——并发 reload 折叠为
+  // 同一次执行（双跑会在共享 bus/tools 上双激活 + 监听器双挂 + 工具注册冲突降级）；prompt 起 turn 前
+  // 与后台送回轮同以它排队（quiesce 只排水不关门——reload 进行中的新 prompt 不再吃墓碑/中途换图）
+  let reloadInFlight: Promise<ReloadReport> | undefined;
   let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
   let effortOverride: string | undefined; // /effort 运行期覆盖（/model 同款双轨：会话内存 + 写盘）；未设 = 跟随配置，配置也没有 = 目录默认档（kimi「从不不指定」——effort 型模型恒有解析值）
 
@@ -594,7 +658,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     if (kv !== undefined) head.push(kv.line);
     const after = [...head, "", ...cfgLines.slice(headEnd)].join("\n").replace(/\n{3,}/g, "\n\n");
     mkdirSync(dirname(userConfigFile), { recursive: true }); // 目录缺省即建（批⑧确认制废除后写盘无条件化——宿主/测试自定义路径不得 ENOENT）
-    writeFileSync(userConfigFile, after, "utf8");
+    atomicWriteTextSync(userConfigFile, after); // CH-08：tmp+rename 原子写（崩溃不留半截文件——SW-20 兜底是跳过整层，代价太大）
   };
 
   // ---- /model //effort 核心动作（m5 T9 抽共用）：命令与设置服务（ctx.settings）同源——单一写者，不双写 ----
@@ -606,7 +670,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // 持久化（2026-09-22 用户拍板）：选定即写盘永久生效。行级写 user config 顶层 provider 键
     // （无 TOML 库；不复用 provider-custom setModel——模块层装配闭包，core↮模块违铁律 3）
     // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行随过滤清除
-    upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = "${next}"` });
+    // CH-08：tomlBasicString 写侧转义（next 可能是端点清单/手输的任意文本）
+    upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = ${tomlBasicString(next)}` });
     // 档位跟随重解析：已设档且换了模型 → 新模型 segments 含旧档 → 保留（「设置过就尊重」）；
     // 不含 → 落默认档（kimi middleOf 取法）；目录不认识新模型 → lenient 保留原样发（端点 400 自证）。
     // 未设档不动作——effective 自动 = 新模型默认档（解析链天然跟随）。重选原模型不触发。
@@ -619,7 +684,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       if (info !== undefined && !segmentsOf(info).includes(prevEffort)) {
         const reEffort = defaultEffortOf(info);
         effortOverride = reEffort;
-        upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${reEffort}"` });
+        upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = ${tomlBasicString(reEffort)}` }); // CH-08：目录数据同走转义
       }
     }
   };
@@ -635,7 +700,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       delete config.core.effort;
     } else {
       effortOverride = level;
-      upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = "${level}"` });
+      upsertTopLevelKey(/^\s*effort\s*=/, { line: `effort = ${tomlBasicString(level)}` }); // level 有正则闸（上方），转义兜底统一出口
       config.core.effort = level; // CH-03：双轨一致（盘上与内存快照同值）
     }
   };
@@ -940,7 +1005,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   /** 闲时送回轮（决策 17 自动送回）：无用户消息自动续跑；用户轮进行中让位（忙时由其停止边界收）。 */
   const deliverSubagentTurn = (): void => {
-    if (closed || currentTurn !== null || deliveryBacklog.length === 0) return;
+    // CH-09：reload 进行中不让路给送回轮（同 turn 排队——收尾由 reload 的 finally 补触发）
+    if (closed || reloadInFlight !== undefined || currentTurn !== null || deliveryBacklog.length === 0) return;
     const controller = new AbortController();
     let settle!: () => void;
     const done = new Promise<void>((resolve) => { settle = resolve; });
@@ -987,11 +1053,20 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         }
         return await cmd.handler(args, commandUi);
       }
-      // 送回轮让路（M4.5 T9）：内部送回轮进行中 = 等它收尾紧接进（不打断打字）；用户轮进行中照旧抛
+      // 送回轮让路（M4.5 T9）：内部送回轮进行中 = 等它收尾紧接进（不打断打字）；用户轮进行中照旧抛。
+      // CH-09 ②：reload 进行中同锁排队——起 turn 前等它收尾（循环重查而非一次性 await：并发等待者
+      // 依次醒来后须重新过单并发守卫，否则会越过先醒者直接覆盖 currentTurn 占坑）
       for (;;) {
-        if (currentTurn === null) break;
-        if (currentTurn.internal !== true) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
-        await currentTurn.done.catch(() => undefined);
+        if (currentTurn !== null) {
+          if (currentTurn.internal !== true) throw new Error("已有进行中的 turn（M1 单并发；取消请调 cancel()）");
+          await currentTurn.done.catch(() => undefined);
+          continue;
+        }
+        if (reloadInFlight !== undefined) {
+          await reloadInFlight.catch(() => undefined); // reload 失败旧图继续运行（§5.5 事务性）——照常起 turn
+          continue;
+        }
+        break;
       }
       const controller = new AbortController();
       let settle!: () => void;
@@ -1142,6 +1217,35 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     async reload() {
       if (closed) throw new Error("harness 已关闭");
+      // CK-06/CH-09 修复：in-flight 折叠——并发 reload（/reload 连击、确认→自动 reload 链路）共享同一次
+      // 执行。旧实现双跑：共享 bus/tools 上双激活 + 监听器双挂 + 工具注册冲突降级（且 last-wins 丢前轮
+      // 监听器）；收尾补触发让路中的送回轮
+      if (reloadInFlight !== undefined) return reloadInFlight;
+      const p = doReload().finally(() => {
+        reloadInFlight = undefined;
+        if (deliveryBacklog.length > 0) deliverSubagentTurn(); // CH-09：reload 期间让路的送回轮补触发
+      });
+      reloadInFlight = p;
+      return p;
+    },
+
+    async close() {
+      if (closed) return; // 幂等
+      closed = true;
+      subagentRunner.stopAll(); // 会话关闭全停（决策 12）：子代理在跑/排队/挂起审批全部收场
+      currentTurn?.controller.abort();
+      await currentTurn?.done.catch(() => undefined);
+      await graph.dispose();
+      await store.close();
+      live.close();
+      await sink.flush();
+      await sink.close();
+      channel.close();
+    },
+  };
+
+  /** reload 本体（CK-06/CH-09）：由 harnessImpl.reload 以 in-flight 互斥调用——不直接暴露。 */
+  const doReload = async (): Promise<ReloadReport> => {
       // quiesce（§5.5，无超时定案——挂死 turn 由用户 cancel()/Ctrl-C 中止，中止即达边界）
       if (currentTurn !== null) await currentTurn.done.catch(() => undefined);
       const oldGraph = graph;
@@ -1208,7 +1312,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       for (const g of oldEff) {
         if (!newEffNames.has(g.def.name)) { removedOrChanged.add(g.def.name); continue; }
         const next = defs2.find((d) => d.def.name === g.def.name)!;
-        if (g.entryHash !== next.entryHash || g.def !== next.def) { removedOrChanged.add(g.def.name); continue; }
+        // CH-05：def 引用判据对 local 无意义（jiti moduleCache:false 逐次新对象——引用恒不等），
+        // local 侧代码变化由 entryHash（整目录 hash）承载，退化为来源层比较（与 kernel/reload.ts diffGraphs 同口径）
+        const defChanged = g.source === "local" || next.source === "local" ? g.source !== next.source : g.def !== next.def;
+        if (g.entryHash !== next.entryHash || defChanged) { removedOrChanged.add(g.def.name); continue; }
         // 配置自有 key 有效值 deepEqual 失败 → Reloaded（M3 修复：粗判此前漏配置变化——preserved 误含已变模块，
         // required 模块的坏配置在 reload 中被静默沿用旧实例，安全护栏失效）
         if (JSON.stringify(g.configValue) !== JSON.stringify(newConfigValue(g.def.name))) removedOrChanged.add(g.def.name);
@@ -1255,21 +1362,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       const report: ReloadReport = { added: d.added, removed: d.removed, reloaded: d.reloaded, unchanged: d.unchanged, failed };
       createLogger(sink, "kernel").info("kernel.reload.done", "reload 完成", { added: d.added.length, removed: d.removed.length, reloaded: d.reloaded.length, unchanged: d.unchanged.length });
       return report;
-    },
-
-    async close() {
-      if (closed) return; // 幂等
-      closed = true;
-      subagentRunner.stopAll(); // 会话关闭全停（决策 12）：子代理在跑/排队/挂起审批全部收场
-      currentTurn?.controller.abort();
-      await currentTurn?.done.catch(() => undefined);
-      await graph.dispose();
-      await store.close();
-      live.close();
-      await sink.flush();
-      await sink.close();
-      channel.close();
-    },
   };
   return harnessImpl;
 }

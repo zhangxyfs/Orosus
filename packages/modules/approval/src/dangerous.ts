@@ -48,6 +48,13 @@ const WRAPPER_VALUE_OPTIONS: ReadonlySet<string> = new Set([
 const SYSTEMCTL_DANGEROUS_SUBCOMMANDS: ReadonlySet<string> = new Set(["poweroff", "reboot", "halt", "kexec"]);
 const SYSTEMCTL_VALUE_OPTIONS: ReadonlySet<string> = new Set(["-H", "--host", "-M", "--machine"]);
 
+/** git 全局取值选项（MA-06 修复 2026-09-28 code review）：取值形态 `-C <path>` / `--git-dir <path>` 等——
+ *  取子命令前先剥，否则 `-C` 的值被「首个非 - 参数」误判为子命令。`=` 自带值形态（--git-dir=/x）由
+ *  dropLeadingOptions 的 includes("=") 分支天然跳过；`-c` 是 git 的 name=value 配置覆盖，非 shell -c。 */
+const GIT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+]);
+
 const DD_SAFE_DEVICE_TARGETS: ReadonlySet<string> = new Set([
   "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
   "/dev/stdin", "/dev/stdout", "/dev/stderr",
@@ -226,21 +233,27 @@ function analyzeInvocation(
     return dropped ? { kind: "unanalyzable" } : undefined;
   }
   if (name === "git") {
-    // 正则 v1 清单的保留项（我们比 kimi 骨架多的部分）：不可逆 git 操作
-    const sub = args.find((arg) => !arg.startsWith("-"));
-    if (sub === "push" && args.some((arg) => /^(-f|--force(=(push|all))?)$/.test(arg))) {
+    // 正则 v1 清单的保留项（我们比 kimi 骨架多的部分）：不可逆 git 操作。
+    // MA-06 修复（2026-09-28 code review）：先剥全局取值选项（-C/-c/--git-dir/--work-tree/--namespace/
+    // --config-env）再取子命令——旧「首个非 - 参数」把 `git -C /repo push --force` 里 -C 的值 /repo
+    // 当成子命令，push/reset/clean/checkout 判定整体落空，逃逸为普通询问（可被会话记忆/落盘规则永久放行）
+    const rest = dropLeadingOptions(args, GIT_VALUE_OPTIONS);
+    const sub = rest[0];
+    if (sub === "push" && rest.some((arg) => /^(-f|--force(=(push|all))?)$/.test(arg))) {
       return { kind: "dangerous", command: "git push --force" };
     }
-    if (sub === "reset" && args.includes("--hard")) return { kind: "dangerous", command: "git reset --hard" };
-    if (sub === "clean" && args.some((arg) => /^-[a-zA-Z]*f/.test(arg))) return { kind: "dangerous", command: "git clean -f" };
-    if (sub === "checkout" && args.includes("--")) {
+    if (sub === "reset" && rest.includes("--hard")) return { kind: "dangerous", command: "git reset --hard" };
+    if (sub === "clean" && rest.some((arg) => /^-[a-zA-Z]*f/.test(arg))) return { kind: "dangerous", command: "git clean -f" };
+    if (sub === "checkout" && rest.includes("--")) {
       // checkout -- <path> 丢弃未提交修改——保守询问（UNSAFE_OPERAND 已过滤通配）
       return dropped ? { kind: "unanalyzable" } : undefined;
     }
     return dropped ? { kind: "unanalyzable" } : undefined;
   }
   if (name === "chmod" || name === "chown") {
-    if (args.includes("-R") || args.some((arg) => /^-[a-zA-Z]*R/.test(arg))) {
+    // MA-06 修复（2026-09-28 code review）：GNU 长选项 --recursive 与 -R 同判——旧正则 /^-[a-zA-Z]*R/
+    // 罩不住 `chmod --recursive 777 /data` 这类长格式
+    if (args.includes("-R") || args.includes("--recursive") || args.some((arg) => /^-[a-zA-Z]*R/.test(arg))) {
       return { kind: "dangerous", command: `${name} -R` };
     }
     return dropped ? { kind: "unanalyzable" } : undefined;

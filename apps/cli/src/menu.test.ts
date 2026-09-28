@@ -8,16 +8,41 @@ describe("readline 版 CommandUi（menu 组件，D35/D38 语言约定注记）",
     const picked = await ui.choose("选择平台", ["甲", "乙", "丙"]);
     expect(picked).toBe("乙");
   });
-  it("choose：TTY 引擎注入面——pick 面 reject 统一映射「已取消（Esc）」（机制③统一文案的装配层钉，硬约束 1）", async () => {
+  it("choose：TTY 引擎注入面——pick 面以既定字面量 reject「已取消（Esc）」时穿透为取消（机制③统一文案的装配层钉，硬约束 1）", async () => {
     const ui = createReadlineUi({
       // question 恒给合法序号：未接 pick 面的旧实现会正常返回（断言随之失败）而非死循环重问
       question: async () => "1",
       secretQuestion: async () => "",
       pick: async () => {
-        throw new Error("注入的取消");
+        throw new Error("已取消（Esc）");
       },
     });
     await expect(ui.choose("选择平台", ["甲"])).rejects.toThrow("已取消（Esc）");
+  });
+  // CR-04 回归钉：旧版无差别 catch 把 pick 面任何异常改写成「已取消（Esc）」——真实故障被伪装
+  // 成用户取消，而上游 settleCommandError 对取消静默 return → 故障零痕迹（「菜单没反应」无排查线索）
+  it("choose：CR-04——pick 面真实故障原样上抛，不再被改写成「已取消（Esc）」", async () => {
+    const ui = createReadlineUi({
+      question: async () => "1",
+      secretQuestion: async () => "",
+      pick: async () => {
+        throw new Error("picker 内部爆炸（模态接管失败）");
+      },
+    });
+    await expect(ui.choose("选择平台", ["甲"])).rejects.toThrow("picker 内部爆炸");
+  });
+  // CR-05 回归钉：空列表编号回落 `n >= 1 && n <= 0` 永假 → 无限重问挂死脚本/CI；入口即拒不再进循环
+  it("choose：CR-05——空列表显式拒绝「无可选项」（编号回落/pick 面两路同判）", async () => {
+    let asked = 0;
+    const ui = createReadlineUi({ question: async () => { asked++; return "1"; }, secretQuestion: async () => "" });
+    await expect(ui.choose("空目录", [])).rejects.toThrow("无可选项");
+    expect(asked).toBe(0); // 入口即拒——不进编号重问循环（旧版会在此无限重问）
+    const ui2 = createReadlineUi({
+      question: async () => "1",
+      secretQuestion: async () => "",
+      pick: async () => { throw new Error("不可达——入口先拒"); },
+    });
+    await expect(ui2.choose("空目录", [])).rejects.toThrow("无可选项"); // pick 面路径同款
   });
   it("confirm：y/Y 为真，其余为假；ask 原样返回 trim 后输入；askSecret 走掩码询问口", async () => {
     const answers = ["y", "n", "  hello  "];

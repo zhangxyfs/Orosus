@@ -1,5 +1,5 @@
 import type { KeyEvent } from "./keys.ts";
-import { moveUp, clearLine, reverse } from "./ansi.ts";
+import { moveUp, clearLine, reverse, dispLines } from "./ansi.ts";
 import { fg, dim } from "./theme.ts";
 
 /** 尾部完整括注组定位（两段式拆分③）：串尾（忽略尾随空白）是 `（…）`/`(…)` 整组时返回
@@ -81,18 +81,27 @@ export function viewportOf(count: number, selected: number, height: number): { s
  *  T2 起支持滚动视口：io.height 注入且项数超窗时只画 [start, end) + 顶部范围提示行
  *  （…（第 X–Y 项，共 N 项）——帧高恒定，重绘算术不漂移），PageUp/PageDown 整屏翻页。
  *  非 TTY 回落现状编号读序号（脚本/CI 消费方零破坏，退化矩阵登记）。
+ *  空表显式拒绝「无可选项」（CR-05：回车返回 0/环绕 NaN 都是伪装合法下标——items[NaN] 落给
+ *  调用方是 undefined；非 TTY 编号回落 `n <= 0` 永假无限重问挂死脚本/CI）。
  *  重绘 = 「上移 N 行 + 逐行清行 + 重写」——T4 起序列常量走 ansi.ts 公共件
- *  （moveUp/clearLine/reverse——字节形态不变，测试零改动）。 */
+ *  （moveUp/clearLine/reverse——字节形态不变，测试零改动）；N 按视觉行数（CR-06：CJK 双宽
+ *  折行后逻辑行数 ≠ 视觉行数，按 lines.length 少移即错位残影——ansi.ts 头注硬约定）。
+ *  列宽经 io.columns 注入；缺省读真终端 process.stdout.columns（每帧现读，resize 即生效），
+ *  再缺省 80（非 TTY/哑终端/测试面）——宿主接线不改造也能拿到正确口径。 */
 export function pick(
   items: string[],
   io: {
     isTTY: boolean;
     height?: number;
+    /** 终端列宽（CR-06 视觉行数口径的折行宽度）；缺省 process.stdout.columns ?? 80 */
+    columns?: number;
     runModal<T>(fn: (readKey: () => Promise<KeyEvent>) => Promise<T>): Promise<T>;
     write(s: string): void;
     numberQuestion(q: string): Promise<string>; // 非 TTY 回落路径（现状编号版）
   },
 ): Promise<number | undefined> {
+  // CR-05：空表入口即拒（TTY/非 TTY 两路同断）——伪装合法下标与死循环都在身后绝路
+  if (items.length === 0) return Promise.reject(new Error("无可选项"));
   if (!io.isTTY) {
     return (async () => {
       for (;;) {
@@ -125,12 +134,15 @@ export function pick(
       lines.push(hint);
       return lines;
     };
-    let drawn = 0;
+    let drawn = 0; // 上一帧的视觉行数（moveUp 的唯一口径）
     const render = (): void => {
       const lines = frameLines();
+      // CR-06：视觉行数口径（ansi.ts 头注硬约定）——CJK 双宽使超宽逻辑行折成多个物理行，
+      // 按 lines.length 上移会少移 → 重绘错位 + 折行残影。dispLines 剥 ANSI 后按列宽折算
+      const rows = dispLines(lines.join("\n"), io.columns ?? process.stdout.columns ?? 80);
       if (drawn > 0) io.write(moveUp(drawn));
       for (const l of lines) io.write(`${clearLine}${l}\n`);
-      drawn = lines.length;
+      drawn = rows;
     };
     render();
     for (;;) {

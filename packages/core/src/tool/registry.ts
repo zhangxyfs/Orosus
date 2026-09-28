@@ -60,6 +60,9 @@ export interface ToolRegistry {
  */
 export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
   const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
+  // CX-06 修复（2026-09-28 code review）：溢写文件序号（registry 实例内单调）——callId 是 provider 流的
+  // 外部可控值，部分厂商/桥接层会跨轮复用同一 id，原样做文件名会互相覆写（前一次溢写全文丢失）。
+  let spillSeq = 0;
   // ToolSearch 机制态（M4-3 T4）：deferredEnabled = 总开关（SW-26 关态整门不启的前提位）；
   // revealed = 已加载集合——随 registry 实例存活，压缩/会话裁剪不清（SW-11，cc-haha 同款，kimi 清空是反例）
   let deferredEnabled = false;
@@ -188,7 +191,14 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         //（CL-01）。溢写失败降级 = 就地截断无 spill 标注，不抛。
         try {
           mkdirSync(opts.spillDir, { recursive: true });
-          const path = join(opts.spillDir, `spill-${planned.callId}.txt`);
+          // CX-06 修复（2026-09-28 code review）：callId 来自 provider 流（外部可控），原样拼文件名有三重风险——
+          // ① 路径穿越：≥3 个 ".." 的 callId 经 join 归一逃出 spillDir（内容部分可控的任意写）；
+          // ② win32 非法字符（:*? 等）炸 writeFileSync（CX-03 后降级丢溢写）；③ 同 callId 跨轮复用互相覆写。
+          // 文件名侧消毒：非 [A-Za-z0-9_-] 一律折 "_"（点也折——拼不出 ".." 段）、截 64 字符防超长，
+          // 前缀单调序号保证唯一（防覆写）。原始 callId 留在会话 tool/call 日志与诊断记录里——文件名只需
+          // 可辨认同源，不需保真。
+          const safe = planned.callId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "call";
+          const path = join(opts.spillDir, `spill-${++spillSeq}-${safe}.txt`);
           writeFileSync(path, result.output, { mode: 0o600 });
           const bytes = result.output.length;
           // 头尾双保留 3:1（M4-2.5 T1）：头 24576 保调用上下文、尾 8192 保报错摘要（命令报错常在尾部），

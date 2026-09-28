@@ -102,6 +102,46 @@ function preShrinkSummaryInput(dropped: ModelMessage[], window: number | undefin
   return { input, truncated: true };
 }
 
+/** 摘要输入配对修复（MI-05 修复，2026-09-28 code review P2；kimi dropLeadingToolResults 同款边界纪律）。
+ *  摘要输入是原始投影的切割副本，不经 convert.ts 的孤儿防御：①预收缩从前端下刀，切点落在
+ *  assistant.toolCalls ↔ toolResult 之间时保留侧带孤儿 toolResult；②被 abort 的 turn 会在投影里留下
+ *  无 result 的悬挂 toolCalls（convert.ts 只修孤儿 result 不修悬挂 call）。OpenAI/Anthropic 系端点对
+ *  「tool 消息前无匹配 tool_calls / tool_calls 后无 tool 消息」直接 400——恰在「历史接近满窗、工具链
+ *  密集」（预收缩激活的典型场景）下摘要请求失败率升高。瞬态修复：只影响发往 provider 的摘要请求，
+ *  不落日志不进投影（双写面不动）。
+ *  规则：孤儿 toolResult（数组内无对应 toolCalls 出处）丢弃；悬挂 callId（无后续 toolResult）从
+ *  assistant.toolCalls 剔除，剔空则去字段，content 与 toolCalls 双空的 assistant 整条丢弃（空 assistant
+ *  消息同 400）。 */
+function repairToolPairs(messages: ModelMessage[]): ModelMessage[] {
+  const callIds = new Set<string>();
+  const resultIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolCalls !== undefined) for (const tc of m.toolCalls) callIds.add(tc.callId);
+    if (m.role === "toolResult") resultIds.add(m.callId);
+  }
+  const out: ModelMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "toolResult") {
+      if (callIds.has(m.callId)) out.push(m); // 孤儿 result（切点遗留）丢弃
+      continue;
+    }
+    if (m.role === "assistant" && m.toolCalls !== undefined) {
+      const kept = m.toolCalls.filter((tc) => resultIds.has(tc.callId));
+      if (kept.length === 0) {
+        if (m.content.length === 0) continue; // 纯工具回合整条丢弃（空 assistant + 无 toolCalls 同 400）
+        const { toolCalls: _dangling, ...rest } = m; // exactOptionalPropertyTypes：解构去字段而非赋 undefined
+        out.push(rest);
+        continue;
+      }
+      if (kept.length < m.toolCalls.length) { out.push({ ...m, toolCalls: kept }); continue; }
+      out.push(m);
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 /** 摘要生成（D44）：失败/空产出/异常 → { error }（不装占位——宁可不压，pi/Reasonix 底线）；
  *  成功 → { text }。error 带详情（可观测性——实机首例诊断曾因吞掉 errorMessage 抓瞎）。
  *  输入瘦身：工具结果超 maxToolChars 截断（瞬态标记，不落日志）；前次摘要检测（v3 origin 标 + v2 前缀兜底
@@ -125,7 +165,11 @@ async function summarize(llm: LlmPort, dropped: ModelMessage[], opts: { maxToken
     if (m.role !== "toolResult" || m.output.length <= opts.maxToolChars) return m;
     return { ...m, output: `${m.output.slice(0, opts.maxToolChars)}\n[...truncated: original ${m.output.length} chars]` };
   });
-  const request: ModelMessage[] = [...slimmed, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }];
+  // MI-05：摘要请求配对修复（瞬态）——孤儿 toolResult / 悬挂 toolCalls 直发会被严格端点 400。
+  // 修复后全空 = 输入全是拆散工具链（现实不可达的防御位）→ 同 MI-01 底线：宁可不压，不拿零对话骗摘要。
+  const repaired = repairToolPairs(slimmed);
+  if (repaired.length === 0) return { error: "配对修复后摘要输入为空（孤儿工具链）" };
+  const request: ModelMessage[] = [...repaired, { role: "user", content: [{ kind: "text", text: "请输出上述对话的交接摘要。" }] }];
   try {
     let text = "";
     let error: string | undefined;
@@ -415,10 +459,14 @@ export default defineModule({
     const estimate = (messages: ModelMessage[]): number => {
       const a = ctx.llm.lastUsage;
       if (a === undefined || a.totalTokens <= 0) return estimateTokens(messages);
-      const lengthOk = messages.length >= a.atMessageCount + 1;
+      // MI-04 修复（2026-09-28 code review P2）：契约 atMessageCount = 该次请求 messages **条数** N（计数，
+      // 非 0-based 末下标；harness 赋值 req.messages.length）——锚后新增 = messages.slice(N)、长度判据
+      // lengthOk = length >= N。旧实现 slice(N+1) 恒漏锚后第一条消息（常是含 toolCalls 大参数的 assistant
+      // 回复），系统性低估一条 → 阈值触发比应有时刻晚一步。
+      const lengthOk = messages.length >= a.atMessageCount;
       if (a.atMessageCount !== state.seenAnchorAt && lengthOk) state.anchorStale = false; // 新锚点到达且长度判据满足 → 清 stale
       state.seenAnchorAt = a.atMessageCount;
-      if (!state.anchorStale && lengthOk) return a.totalTokens + estimateTokens(messages.slice(a.atMessageCount + 1));
+      if (!state.anchorStale && lengthOk) return a.totalTokens + estimateTokens(messages.slice(a.atMessageCount));
       return estimateTokens(messages); // stale / 长度判据不过（压缩后变短） → 纯估算
     };
 
@@ -465,6 +513,11 @@ export default defineModule({
       }
       if (lastSeenMessages.length === 0) { ui.notice?.("无可压缩历史（本会话还没有对话）"); return ""; }
       const focus = args.trim();
+      // MI-06 修复（2026-09-28 code review P2）：命令路径不清 forceKind → 溢出置位的 overflow 在手动 /compact
+      // 成功后仍滞留，被下一次 transform-context 消费（threshold=0 误触发——对刚压好的摘要再压一次摘要的
+      // 摘要，且 overflow ≠ manual 会误计一次 rapid-refill）。命令即显式人工意图：执行前清掉一次性溢出标志
+      // （上方「已安排」延期路径在其后自行置 manual，不受影响；手动失败后若真溢出，request-error 会重新置位）。
+      forceKind = undefined;
       const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log, sessionId: ctx.session.id, focus: focus !== "" ? focus : undefined });
       for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
       switch (r.kind) {

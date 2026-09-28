@@ -31,6 +31,11 @@ describe("finish.errorCode 与 classifyContextLimit（M3 补强 T1/D43）", () =
     expect(() => parseModelsResponse({ data: [{ id: "bad id" }] })).toThrow(); // 全滤空
   });
 
+  it("CT-01 回归钉：numeric 感知倒序——双位数版本号大的排前（纯字典序会把 glm-10 沉底到末位）", () => {
+    expect(parseModelsResponse({ data: [{ id: "glm-4.7" }, { id: "glm-10" }, { id: "glm-9.1" }] })).toEqual(["glm-10", "glm-9.1", "glm-4.7"]);
+    expect(parseModelsResponse({ data: [{ id: "glm-9.1" }, { id: "glm-9.10" }] })).toEqual(["glm-9.10", "glm-9.1"]); // 小数段也按数值比较
+  });
+
   it("ProviderAdapter 对象形带 listModels 是合法槽值（D32 修订——尽力能力，缺省则消费方回退）", () => {
     const adapter: import("./index.ts").ProviderAdapter = {
       stream: () => (async function* () { yield { type: "finish", kind: "stop" }; })(),

@@ -174,12 +174,13 @@ describe("/permission 接入 CLI（M3 T3）", () => {
 });
 
 describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
-  it("⑧ --resume/--fork flag 解析（含 <id>:<entryId> 冒号语法）", async () => {
+  // CL-04 同步（2026-09-28 code review）：--fork 死旗标已从 args.ts 移除（args.fork 全仓零消费——CLI fork
+  // 实际全部走交互 /fork → extra.fork 路径）；本用例原三行 --fork 断言随旗标退役，改钉「未知参数」口径。
+  // 详钉在 args.test.ts（CL-04 回归钉）。
+  it("⑧ --resume flag 解析；--fork 已移除（CL-04 死旗标——未知参数报错）", async () => {
     const { parseArgs } = await import("./args.ts");
     expect(parseArgs(["--resume", "s_123"])).toMatchObject({ resume: { sessionId: "s_123" } });
-    expect(parseArgs(["--fork", "s_1:e_9"])).toMatchObject({ fork: { parentSessionId: "s_1", atEntryId: "e_9" } });
-    expect(parseArgs(["--fork", "s_1"])).toMatchObject({ fork: { parentSessionId: "s_1" } });
-    expect(() => parseArgs(["--fork"])).toThrow(/缺值/);
+    expect(() => parseArgs(["--fork", "s_1"])).toThrow(/未知参数/);
   });
 
   it("⑨ sessionCommand/harnessOptionsFor：/new 与 /fork 的会话切换指令", async () => {
@@ -326,6 +327,81 @@ describe("模块命令 Esc 穿透契约（2026-09-24 走查实锤前案回归钉
     await expect(h.prompt("/tool-web__settings")).rejects.toThrow("已取消（Esc）");
     await h.close();
   });
+});
+
+describe("CLI 顶层错误面与 --print 收尾（CM-04/05/06 回归钉——2026-09-28 code review）", () => {
+  // 密封家目录（CM-03 修复同款三变量覆盖）：子进程数据目录解析进 tmp
+  const sealedEnv = (d: string): Record<string, string> => ({
+    ...process.env,
+    USERPROFILE: join(d, "home"),
+    HOME: join(d, "home"),
+    OROSUS_HOME: join(d, "home", ".orosus"),
+  }) as Record<string, string>;
+  const runCli = (d: string, cliArgs: string[]): { child: ReturnType<typeof spawn>; done: Promise<{ code: number; out: string; err: string }> } => {
+    const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts"), ...cliArgs], {
+      cwd: d, env: sealedEnv(d), stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = ""; let err = "";
+    child.stdout.on("data", (c) => { out += String(c); });
+    child.stderr.on("data", (c) => { err += String(c); });
+    child.stdin.end();
+    const done = new Promise<{ code: number; out: string; err: string }>((resolve) => {
+      child.on("exit", (c) => resolve({ code: c ?? -1, out, err }));
+    });
+    return { child, done };
+  };
+
+  it("CM-05：未知 flag → 人话错误 + 用法 + 退出码 2（不再穿透模块求值打印 Node 裸堆栈）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cm05-"));
+    try {
+      const { done } = runCli(d, ["--bogus-flag"]);
+      const r = await done;
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("未知参数 --bogus-flag");
+      expect(r.err).toContain("用法"); // message 携带 USAGE（args.ts throw 原文）
+      expect(`${r.out}${r.err}`).not.toMatch(/^\s+at\s/m); // 无 Node 堆栈帧
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("CM-06：`provider list` 遇坏 TOML → 人话 + 退出码 1（readConfig 抛错不再裸堆栈穿透子命令分发）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cm06-"));
+    try {
+      mkdirSync(join(d, "home", ".orosus"), { recursive: true });
+      writeFileSync(join(d, "home", ".orosus", "config.toml"), 'model = "unterminated\n', "utf8");
+      const { done } = runCli(d, ["provider", "list"]);
+      const r = await done;
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("子命令失败"); // CM-06① 兜底文案
+      expect(`${r.out}${r.err}`).not.toMatch(/^\s+at\s/m);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("CM-04：--print 坏端点 → turn error 空正文 + 退出码 1（脚本消费方可分辨失败，不再静默 exit 0）", async () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-cm04-"));
+    try {
+      mkdirSync(join(d, "home", ".orosus"), { recursive: true });
+      // mock 槽指向必然连接拒绝的端口：provider 网络错 → 适配器 finish{kind:error} → turn/end{kind:error}
+      // → main 按 CM-04③ 置退出码 1（旧实现：空正文 + exit 0）
+      writeFileSync(join(d, "home", ".orosus", "config.toml"), [
+        'model = "mock/mock-1"',
+        "[provider-custom.providers.mock]",
+        'type = "openai"',
+        'baseUrl = "http://127.0.0.1:1"',
+        'apiKey = "mock-key"',
+        "",
+      ].join("\n"), "utf8");
+      const { done } = runCli(d, ["--print", "打个招呼"]);
+      const r = await done;
+      expect(r.code).toBe(1);
+      expect(`${r.out}${r.err}`).not.toMatch(/^\s+at\s/m); // 错误走 formatStartupError 人话面/带内收口，非裸堆栈
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("/provider 写盘 → reload → 新槽进图（2026-09-24 走查 bug②机制钉——/settings LLM 钉模型清单读活槽）", () => {

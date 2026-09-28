@@ -28,7 +28,16 @@ const DATA_BUDGET = 2048;
 
 function capData(data: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (data === undefined) return undefined;
-  const json = JSON.stringify(data);
+  let json: string;
+  try {
+    json = JSON.stringify(data);
+  } catch {
+    // CH-11 修复：循环引用/BigInt 等不可序列化 data——日志路径纪律「永不抛」：降级标记 + 安全预览
+    //（String() 也可能被自定义 toString 抛——双层兜底到 Object 原生标签，永不越界）
+    let preview: string;
+    try { preview = String(data); } catch { preview = Object.prototype.toString.call(data); }
+    return { _unserializable: true, preview: preview.slice(0, DATA_BUDGET) };
+  }
   if (json.length <= DATA_BUDGET) return data;
   return { _truncated: true, preview: json.slice(0, DATA_BUDGET) };
 }
@@ -48,11 +57,19 @@ export function createDiagSink(opts: { dir: string }): DiagSink {
   return {
     write(rec) {
       const file = fileFor();
+      // CH-11 连带：绕过 capData 直写 sink 的坏 data（BigInt/循环引用）——同款降级兜底，
+      // 整记录保住、data 换标记（该降级记录自身恒可序列化，二次 stringify 不会抛）
+      let line: string;
+      try {
+        line = JSON.stringify(rec);
+      } catch {
+        line = JSON.stringify({ ...rec, data: { _unserializable: true } });
+      }
       // CH-04 修复（2026-09-28 code review P1）：一次写盘失败（盘满/文件被锁/文件名撞目录）不得毒化整条
       // 队列——旧实现 rejected 链使后续 write 回调全跳过（静默丢日志）、尾部无人接的 rejection 崩进程、
       // flush/close 永拒（harness close 中断）。单条失败就地吞（诊断是旁路不是事实源，降级可用），链继续。
       queue = queue
-        .then(() => void appendFileSync(file, JSON.stringify(rec) + "\n"))
+        .then(() => void appendFileSync(file, line + "\n"))
         .catch(() => undefined);
     },
     async flush() {

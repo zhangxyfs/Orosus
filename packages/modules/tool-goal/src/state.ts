@@ -8,7 +8,8 @@ export interface GoalState {
   roundsUsed: number;
   /** 轮数预算（SW-12 缺省无限——预算是保险丝不是门槛）。 */
   maxRounds?: number | undefined;
-  /** 连续同一阻塞声明的轮数（三连判定账本——dsh blockedAfterConsecutiveRounds=3 同款，同 reason 加严取 qwen 语义）。 */
+  /** 连续同一阻塞声明的轮数（三连判定账本——dsh blockedAfterConsecutiveRounds=3 同款，同 reason 加严取 qwen 语义。
+   *  MV-02：按「续跑轮」计数不按调用次数——同轮重复申报不加账，账本轮界见 createGoalStore 内 lastBlockedRound）。 */
   blockedStreak: number;
   blockedReason?: string | undefined;
   completeReason?: string | undefined;
@@ -23,7 +24,8 @@ export interface GoalStore {
   create(input: { objective: string; maxRounds?: number | undefined; replace?: boolean | undefined }): { ok: true } | { ok: false; message: string };
   complete(reason: string): { ok: true } | { ok: false; message: string };
   claimBlocked(reason: string): { accepted: boolean; streak: number; message: string };
-  /** T7 续跑轮记账：active 时 roundsUsed++（预算尽由 T7 判定停轮，本件只记账）。 */
+  /** T7 续跑轮记账：active 时 roundsUsed++（预算尽由 T7 判定停轮，本件只记账）。
+   *  MV-02：roundsUsed 同时是 blocked 三连的轮界维度（claimBlocked 按它门控）。 */
   spendRound(): void;
   /** T7 预算耗尽处置（kimi 超预算置 blocked goalService.ts:942 同款）：active 且轮数尽 → 置 blocked；
      *  返回 true = 本次触发（幂等——已终态/无预算/未尽返回 false）。 */
@@ -33,6 +35,9 @@ export interface GoalStore {
 /** 工厂：onChange = 变更上行口（模块侧 ctx.session.append("tool-goal/change", snapshot)——存源不存渲染）。 */
 export function createGoalStore(onChange?: (s: GoalState | null) => void): GoalStore {
   let state: GoalState | null = null;
+  /** MV-02 轮界账本：上次受理 blocked 申报时的 roundsUsed 快照。undefined = 本目标尚未申报过（首轮申报即受理起算）。
+   *  闭包件而非 GoalState 字段——纯门控内态，不进 tool-goal/change 快照（存源不存渲染）。 */
+  let lastBlockedRound: number | undefined;
   const emit = () => onChange?.(state === null ? null : { ...state });
   return {
     current: () => (state === null ? null : { ...state }),
@@ -54,6 +59,7 @@ export function createGoalStore(onChange?: (s: GoalState | null) => void): GoalS
         blockedStreak: 0,
         createdAt: new Date().toISOString(),
       };
+      lastBlockedRound = undefined; // MV-02：新目标（含 replace 覆盖）重置轮界账本
       emit();
       return { ok: true };
     },
@@ -73,7 +79,19 @@ export function createGoalStore(onChange?: (s: GoalState | null) => void): GoalS
       }
       const r = reason.trim();
       if (r === "") return { accepted: false, streak: state.blockedStreak, message: "blocked 需要具体阻塞原因（什么挡着你、试过什么）" };
-      // 三连判定：同 reason 计数 +1，变词清零重计（qwen 同 reason 加严语义——SW 映射表 Goal 节）
+      // MV-02 修复：三连判定按「续跑轮」不按「调用次数」（index.ts:64/96 承诺 3 consecutive continuation rounds）。
+      // 仅当相对上次受理申报跨了轮（roundsUsed 前进过）才推进 streak——同轮连发 N 次（并行工具调用/同轮顺序调用）
+      // 最多记 1，单轮零重试逃逸续跑循环的路径被堵死。同轮改口（换 reason）= 以新原因本轮重新起算（变词清零保留）。
+      const round = state.roundsUsed;
+      if (lastBlockedRound === round && state.blockedReason === r) {
+        return {
+          accepted: false,
+          streak: state.blockedStreak,
+          message: `本轮已申报过同一阻塞（第 ${state.blockedStreak}/${BLOCKED_STREAK_REQUIRED} 轮）——同轮重复申报不累计；下一续跑轮再以同一原因报 blocked`,
+        };
+      }
+      lastBlockedRound = round;
+      // 三连判定：跨轮后同 reason 计数 +1，变词清零重计（qwen 同 reason 加严语义——SW 映射表 Goal 节）
       if (state.blockedReason === r) state.blockedStreak += 1;
       else { state = { ...state, blockedReason: r, blockedStreak: 1 }; }
       if (state.blockedStreak >= BLOCKED_STREAK_REQUIRED) {

@@ -61,4 +61,32 @@ describe("诊断日志（§11.9）", () => {
     expect(rec.call).toBe("c_1");
     await sink.close();
   });
+
+  it("CH-11 回归钉·循环引用 data：日志调用不抛（旧实现 JSON.stringify 同步 TypeError 逃逸进热路径）、降级 _unserializable + 预览", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-diag-"));
+    const sink = createDiagSink({ dir });
+    const log = createLogger(sink, "kernel");
+    const cyc: Record<string, unknown> = { code: "err.context" };
+    cyc.self = cyc; // Error 携带自引用 state 的常见形态
+    expect(() => log.error("kernel.module.crash", "循环引用数据", cyc)).not.toThrow();
+    await sink.flush();
+    const rec = JSON.parse(readFileSync(join(dir, readdirSync(dir)[0]!), "utf8").trim());
+    expect(rec.data["_unserializable"]).toBe(true);
+    expect(typeof rec.data.preview).toBe("string");
+    await sink.close();
+  });
+
+  it("CH-11 回归钉·BigInt data 同款不抛 + 降级；直写 sink 的坏 data 记录也兜底（不毒化队列）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-diag-"));
+    const sink = createDiagSink({ dir });
+    const log = createLogger(sink, "kernel");
+    expect(() => log.warn("kernel.usage", "BigInt 用量", { totalTokens: 1n })).not.toThrow();
+    // 绕过 capData 直写 sink 的坏记录（防御纵深——write 侧 stringify 同病同治）
+    expect(() => sink.write({ v: 1, ts: "t", lvl: "debug", code: "x", module: "m", msg: "m", data: { b: 2n } })).not.toThrow();
+    await expect(sink.flush()).resolves.toBeUndefined();
+    await expect(sink.close()).resolves.toBeUndefined();
+    const lines = readFileSync(join(dir, readdirSync(dir)[0]!), "utf8").trim().split("\n");
+    const parsed = lines.map((l) => JSON.parse(l));
+    expect(parsed.every((r) => r.data["_unserializable"] === true)).toBe(true);
+  });
 });

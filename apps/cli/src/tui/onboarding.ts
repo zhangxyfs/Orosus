@@ -340,10 +340,18 @@ export class OnboardingSession {
 
   /* ── 渲染（定高防闪烁纪律：三页/各状态下总行数恒定） ── */
   render(cols: number, rows: number): { lines: string[]; row: number; col: number; width: number } {
-    // 760×540 原型值按字符栅格等比适配（SW-22）：96×24 基准，小终端等比收窄下限 40×12
-    const mw = Math.max(40, Math.min(96, cols - 8));
-    const mh = Math.max(12, Math.min(24, rows - 2));
-    const inner = mw - 2;
+    // 760×540 原型值按字符栅格等比适配（SW-22）：96×24 基准，小终端等比收窄。
+    // CTU-05（2026-09-28 修复）：下限钳制不得把「最小设计尺寸」置于「终端实际尺寸」之上——
+    // 旧 max(40,…) 在 cols≤40 时 mw=40 ≥ cols、col=0 → 合成行写满底行右角格，conhost 防御①
+    // （fullscreen 底行截断在 overlay 合成之前，合成层不受 cols−1 约束）失守；实测 cols≤40 且
+    // rows 9–14 全档末行宽 = cols。改为两分支各自 ≤ cols−1 / ≤ rows 再取 max（popuplayout 的
+    // availW = cols−1 同口径），cols≤40 时取 cols−1（弹窗占 0..cols−2 列）。任意终端尺寸恒有
+    // col+width ≤ cols−1；行向 body 裁剪后 lines = 6 + max(0, mh−7) ≤ mh ≤ rows（rows < 7 的
+    // 极小终端退化成 6 行纯框，被 fullscreen 的 r ≥ rows 裁剪安全吞掉——横向不变量与 conhost
+    // 防御不受影响）。cols≥41 / rows≥13 与旧口径完全一致（收窄只在小终端生效）。
+    const mw = Math.max(Math.min(40, cols - 1), Math.min(96, cols - 8));
+    const mh = Math.max(Math.min(12, rows), Math.min(24, rows - 2));
+    const inner = Math.max(0, mw - 2);
     const bodyH = mh - 7; // 框 2 + 头 2 + 头下分隔 1 + 脚下分隔 1 + 脚 1
     const bc = "accent";
     const box = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
@@ -352,6 +360,7 @@ export class OnboardingSession {
     else if (this.page === 2) this.bodyP2(body, bodyH, inner);
     else this.bodyP3(body, bodyH, inner);
     while (body.length < bodyH) body.push(""); // 定高垫行——条件性增删行即闪烁源（浮层纪律）
+    if (body.length > bodyH) body.length = Math.max(0, bodyH); // CTU-05：P1 body 恒推 7 行，bodyH 不足时裁尾（旧「只垫不裁」让 lines 超 mh 预算顶穿底行——rows≤12 时底框/键位行整行被裁不可见）
     const step = theme.fg("info", `引导 ${this.page} / 3`);
     const title = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置网络搜索"][this.page - 1]!;
     const lines = [

@@ -17,7 +17,7 @@ import { createSilenceableOutput } from "./menu.ts";
 import { createModal, watchEsc, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
-import { parseArgs } from "./args.ts";
+import { parseArgs, type CliArgs } from "./args.ts";
 import { tuiSidebarPersist, tuiSidebarRead } from "./tui-config.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isHomeSubcommand, runHomeSubcommand } from "./home-cmd.ts";
@@ -57,49 +57,81 @@ import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 
+/** CM-06②（2026-09-28 code review）：console 输出在管道/重定向下是异步写——`process.exit` 立即退可能
+ *  赶在缓冲 flush 之前截断尾部输出（provider list 全量目录恰是大输出；--print 路径的 exitCode 自然退出
+ *  是正解，子命令拦截面之后还有整段 REPL 装配、不能自然流过）。先排空 stdout/stderr 再退。
+ *  kimi-code 同款教训（其 main.ts 注释原话：an immediate process.exit could terminate before buffered
+ *  output is flushed when the command is piped——headless 一律 exitCode + 排空）。 */
+const exitCli = async (code: number): Promise<never> => {
+  process.exitCode = code;
+  await Promise.all([
+    new Promise<void>((resolve) => process.stdout.write("", () => resolve())),
+    new Promise<void>((resolve) => process.stderr.write("", () => resolve())),
+  ]);
+  process.exit(code);
+};
+
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收
 {
   const argv = process.argv.slice(2);
   const homeDir = orosusHome();
-  if (isProviderSubcommand(argv)) {
-    process.exit(await runProviderSubcommand(argv, {
-      configPath: join(homeDir, "config.toml"),
-      secretsPath: join(homeDir, "secrets.env"),
-      env: process.env,
-      out: (l) => console.log(l),
-    }));
-  }
-  // `orosus sessions prune`（M4-1 T2/D47）：显式清理——缺省 dry-run、--apply 才删、不做启动自动 GC
-  if (isSessionsSubcommand(argv)) {
-    process.exit(await runPruneSubcommand(argv, { out: (l) => console.log(l) }));
-  }
-  // `orosus home path|migrate`（M4-2.5 T6）：OROSUS_HOME 单一解析点 + 一键迁移（dry-run/apply、留证不删）
-  if (isHomeSubcommand(argv)) {
-    process.exit(await runHomeSubcommand(argv, {
-      sourceHome: orosusHome(),
-      env: process.env,
-      out: (l) => console.log(l),
-      ...(process.platform === "win32" ? { setEnv: (v) => { execFileSync("setx", ["OROSUS_HOME", v], { stdio: "ignore" }); } } : {}),
-    }));
-  }
-  if (isModuleSubcommand(argv)) {
-    const discovered = await discoverModules({
-      userDir: join(homeDir, "modules"),
-      projectDir: join(process.cwd(), ".orosus", "modules"),
-      userFile: join(homeDir, "config.toml"),
-      sink: { write: () => {}, flush: () => Promise.resolve(), close: () => Promise.resolve() },
-    });
-    process.exit(await runModuleSubcommand(argv, {
-      configPath: join(homeDir, "config.toml"),
-      trustFile: join(homeDir, "trust.json"),
-      discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
-      out: (l) => console.log(l),
-    }));
+  try {
+    if (isProviderSubcommand(argv)) {
+      // CM-06①：处理器抛错（坏 TOML parse/IO 拒绝）此前穿透模块顶层 = Node 裸堆栈——整块兜底转人话 + 退出码 1
+      await exitCli(await runProviderSubcommand(argv, {
+        configPath: join(homeDir, "config.toml"),
+        secretsPath: join(homeDir, "secrets.env"),
+        env: process.env,
+        out: (l) => console.log(l),
+      }));
+    }
+    // `orosus sessions prune`（M4-1 T2/D47）：显式清理——缺省 dry-run、--apply 才删、不做启动自动 GC
+    if (isSessionsSubcommand(argv)) {
+      await exitCli(await runPruneSubcommand(argv, { out: (l) => console.log(l) }));
+    }
+    // `orosus home path|migrate`（M4-2.5 T6）：OROSUS_HOME 单一解析点 + 一键迁移（dry-run/apply、留证不删）
+    if (isHomeSubcommand(argv)) {
+      await exitCli(await runHomeSubcommand(argv, {
+        sourceHome: orosusHome(),
+        env: process.env,
+        out: (l) => console.log(l),
+        ...(process.platform === "win32" ? { setEnv: (v) => { execFileSync("setx", ["OROSUS_HOME", v], { stdio: "ignore" }); } } : {}),
+      }));
+    }
+    if (isModuleSubcommand(argv)) {
+      const discovered = await discoverModules({
+        userDir: join(homeDir, "modules"),
+        projectDir: join(process.cwd(), ".orosus", "modules"),
+        userFile: join(homeDir, "config.toml"),
+        sink: { write: () => {}, flush: () => Promise.resolve(), close: () => Promise.resolve() },
+      });
+      await exitCli(await runModuleSubcommand(argv, {
+        configPath: join(homeDir, "config.toml"),
+        trustFile: join(homeDir, "trust.json"),
+        discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
+        out: (l) => console.log(l),
+      }));
+    }
+  } catch (err) {
+    // CM-06①：兜底面按「harness 创建」划界的旧口径漏掉子命令——坏 config 遇 `provider list` 即裸堆栈；
+    // 政策与 formatStartupError 同族（人话 + 非零退出，不带栈）
+    console.error(`[错误] 子命令失败：${err instanceof Error ? err.message : String(err)}`);
+    await exitCli(1);
   }
 }
 
-const args = parseArgs(process.argv.slice(2));
+// CM-05（2026-09-28 code review）：parseArgs 对未知 flag/缺值/非法枚举同步 throw，此前在模块顶层裸调——
+// 错误穿透整段模块求值，用户看到 Node 完整调用栈而非「错误 + 用法 + 退出码」（formatStartupError 口径的
+// 界外漏网）。args.ts 非本修域，兜底落位本处；参数错 = 退出码 2（kimi-code validateOptions 同族形态）
+let args: CliArgs;
+try {
+  args = parseArgs(process.argv.slice(2));
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err)); // message 已含 USAGE（args.ts throw 原文）
+  await exitCli(2);
+  throw err; // 不可达（exitCli 已排空并 process.exit）——只为满足明确赋值分析
+}
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
 const sessionsRoot = join(orosusHome(), "sessions");
 const currentBucket = encodeCwd(process.cwd()); // 会话树批 #17：交互面只认当前项目桶
@@ -327,7 +359,10 @@ const createSession = async (extra: { fork?: { parentSessionId: string; atEntryI
     sessionSwitch: async (sid: string) => {
       const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
       if (loc === undefined) return false;
-      void switchTo(sid);
+      // CM-12①（2026-09-28 code review）：switchTo 内 createSession 可抛（桶目录 mkdir 失败、配置在会话间
+      // 被改坏）——void-async 无 rejection 落点 = 进程杀手（runSubmit 网兜同源认知，1851 一带先例注释的推广）；
+      // 契约已先返回 true（受理），失败面走 settleCommandError（Esc 静默、其余 toast/单行），宿主进程不崩
+      void switchTo(sid).catch((err) => settleCommandError(err));
       return true;
     },
     ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
@@ -511,10 +546,21 @@ if (args.dumpModules) {
 
 // --print（M4-2 T17）：非交互单发——三格式输出后以 exitCode 收尾，不进 REPL、不触发首启引导/历史回显
 if (args.print !== undefined) {
-  await runPrint(h, args.print, args, (s) => console.log(s));
-  rl.close();
-  await h.close();
-  process.exitCode = 0;
+  // CM-04（2026-09-28 code review）：无头旁路此前不在任何 try/finally 内——h.prompt reject（并发守卫/
+  // store IO 失败）时收尾三件套全跳过、模块顶层裸堆栈退出；且 killAllBackgroundJobs 只挂 sessionLoop 的
+  // finally，print 不进循环——模型 spawn 的后台 shell 作业进程退出后成孤儿。收口对齐 sessionLoop 同款。
+  try {
+    const outcome = await runPrint(h, args.print, args, (s) => console.log(s));
+    // CM-04③：查 turn 终态——provider 401/网络错误空正文不再静默 exit 0（脚本消费方靠退出码分辨失败）
+    process.exitCode = outcome.turnEndKind === undefined || outcome.turnEndKind === "completed" ? 0 : 1;
+  } catch (err) {
+    console.error(formatStartupError(err, orosusHome(), new Date()));
+    process.exitCode = 1;
+  } finally {
+    rl.close();
+    killAllBackgroundJobs(); // 无头一轮的后台作业同样收杀（与 sessionLoop finally 同收口——此前 print 独漏）
+    await h.close(); // runPrint 内部已 close（事件收集收口件）——此处幂等兜底错误路径
+  }
 } else if (args.resume !== undefined) {
   // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）；
   // 全屏模式延期到 dm 重建后（F5 二轮⑯——tuiMode 此时未定，按 TTY 实况同口径预判）
@@ -1488,22 +1534,31 @@ let skillMenuAt = 0;
  *  + 显式点（/reload 收尾、模块插拔 reload 后、启动）。disabled 不进菜单（D7：停用双摘；
  *  disable-model-invocation 照显——用户手动路径不受限）。 */
 const refreshSkillMenu = async (): Promise<void> => {
-	const catalog = await h.graph().services.getOptional("skill.catalog");
-	if (typeof catalog !== "function") {
+	// CM-12②（2026-09-28 code review）：catalog 是模块代码——同步抛错使本 Promise reject，而五个调用点全是
+	// void 调用 = unhandledRejection 直崩进程（Node 22 起缺省 throw）；与 moduleCards「模块卡读取抛错当帧剔除」
+	// 同政策：失败 = 菜单清空 + host 日志，技能面降级不带走宿主
+	try {
+		const catalog = await h.graph().services.getOptional("skill.catalog");
+		if (typeof catalog !== "function") {
+			skillMenu = [];
+			skillFiles.clear();
+			return;
+		}
+		const rows = (catalog as () => SkillMenuRow[])();
+		skillFiles.clear();
+		for (const r of rows) skillFiles.set(r.name, r.file);
+		skillMenu = rows.filter((r) => !r.disabled).map((r) => ({
+			name: `skill : ${r.name}`,
+			desc: r.description,
+			long: r.description, // 详释行 1-2 = description 折行截断（原型图 1）
+			...(r.whenToUse !== undefined ? { usage: r.whenToUse } : {}),
+			skill: r.name,
+		}));
+	} catch (err) {
 		skillMenu = [];
 		skillFiles.clear();
-		return;
+		h.log("host.skillmenu.error", `技能菜单刷新抛错，当帧清空：${err instanceof Error ? err.message : String(err)}`);
 	}
-	const rows = (catalog as () => SkillMenuRow[])();
-	skillFiles.clear();
-	for (const r of rows) skillFiles.set(r.name, r.file);
-	skillMenu = rows.filter((r) => !r.disabled).map((r) => ({
-		name: `skill : ${r.name}`,
-		desc: r.description,
-		long: r.description, // 详释行 1-2 = description 折行截断（原型图 1）
-		...(r.whenToUse !== undefined ? { usage: r.whenToUse } : {}),
-		skill: r.name,
-	}));
 };
 
 /** 技能条目 Enter 注入（D3 拍板）：正文剥 frontmatter 后包 <skill> 块，以用户消息提交——
@@ -1912,18 +1967,23 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 	return {
 		providers: snapshotProviderView(),
 		writeProvider: (p) => {
+			// CM-12③（2026-09-28 code review）：引导写盘 void 裸奔——IO 拒绝（EACCES/ENOSPC）即 unhandledRejection
+			// 崩进程，用户视角「填完密钥程序炸了」；rejection 落 toast（notify：全屏=引导弹窗外浮层、行模式=单行），进程存活
 			void (async () => {
 				const cur = await menuDeps.loadProviders();
 				await menuDeps.saveProviders({
 					...cur,
 					[p.id]: { type: p.type, baseUrl: p.baseUrl, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) },
 				});
-			})();
+			})().catch((err) => notify(`平台配置写盘失败：${err instanceof Error ? err.message : String(err)}`));
 		},
 		// secrets 统一走 upsertSecret（原位更新不累积重复行——引导内可重复输同一家 key；
 		// provider/search 两类 key 同享，与 /settings 配置流同落点同语义）
 		appendSecret: (envKey, value) => { upsertSecret(secretsFile, envKey, value); },
-		setModel: (slot) => { void menuDeps.setModel(slot); },
+		setModel: (slot) => {
+			// CM-12③：同上——setModel 写盘失败落 toast，不崩引导
+			void menuDeps.setModel(slot).catch((err) => notify(`默认平台写盘失败：${err instanceof Error ? err.message : String(err)}`));
+		},
 		writeSearch: (patch) => persistToolWebSearch(configFile, patch),
 		listModels: async (slot) => {
 			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）

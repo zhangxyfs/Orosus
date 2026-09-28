@@ -35,6 +35,19 @@ describe("分层合并（§6.6：默认→用户→项目→env→flag）", () =
     expect(cfg.core.model).toBe("openai/gpt-x");
   });
 
+  it("CH-06 回归钉：camelCase 核心键经 OROSUS_* 可达（OROSUS_CONTEXTWINDOW→contextWindow、OROSUS_SESSIONSTORE→sessionStore）；表外未知键仍按小写透传", () => {
+    const cfg = loadConfig({ env: {
+      OROSUS_CONTEXTWINDOW: "65536",
+      OROSUS_SESSIONSTORE: "sqlite",
+      OROSUS_MODEL: "x/m",
+      OROSUS_UNKNOWNKEY: "v",
+    } });
+    expect(cfg.core.contextWindow).toBe("65536"); // 旧实现落 contextwindow——读侧 camelCase 恒 undefined（静默无效）
+    expect(cfg.core.sessionStore).toBe("sqlite");
+    expect(cfg.core.model).toBe("x/m"); // 全小写键行为不变
+    expect(cfg.core.unknownkey).toBe("v"); // 开放面维持：表外键原样小写
+  });
+
   it("UTF-8 BOM 的配置文件可解析（Windows PowerShell 5.1 Out-File -Encoding utf8 会写 BOM）", () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
     writeFileSync(join(dir, "bom.toml"), `﻿model = "anthropic/bom"\n`);
@@ -68,6 +81,29 @@ describe("分层合并（§6.6：默认→用户→项目→env→flag）", () =
     expect(cfg4.core.note).toBe("$ENV:MISSING_VAR");
     expect(cfg4.warnings.some((w) => w.includes("MISSING_VAR"))).toBe(true);
     void cfg2;
+  });
+
+  it("CH-07 回归钉：section 嵌套对象跨层深合并——项目层加一个 provider 不再整键替换用户层 providers 表", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
+    writeFileSync(join(dir, "user.toml"), `[provider-custom.providers.zhipuai]\napiKey = "u1"\n[provider-custom.providers.openai]\napiKey = "u2"\n`);
+    writeFileSync(join(dir, "proj.toml"), `[provider-custom.providers.projonly]\napiKey = "p1"\n`);
+    const cfg = loadConfig({ userFile: join(dir, "user.toml"), projectFile: join(dir, "proj.toml"), env: {} });
+    expect((cfg.sections.get("provider-custom") as Record<string, unknown>).providers).toEqual({
+      zhipuai: { apiKey: "u1" },
+      openai: { apiKey: "u2" },
+      projonly: { apiKey: "p1" }, // 旧实现（单层 spread）：用户层两家被项目层整键替换——静默丢失
+    });
+  });
+
+  it("CH-07 回归钉·口径：标量与数组仍整值替换（数组不拼接）、嵌套标量覆盖、下层独有嵌套键保留", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cfg-"));
+    writeFileSync(join(dir, "user.toml"), `[m]\nlist = [1, 2]\nkeep = "u"\n[m.inner]\na = 1\nb = "user-b"\n`);
+    writeFileSync(join(dir, "proj.toml"), `[m]\nlist = [3]\n[m.inner]\na = 2\n`);
+    const cfg = loadConfig({ userFile: join(dir, "user.toml"), projectFile: join(dir, "proj.toml"), env: {} });
+    const m = cfg.sections.get("m") as Record<string, unknown>;
+    expect(m.list).toEqual([3]); // 数组替换（拼接口径未采纳——无消费方需要，去重/序是新问题）
+    expect(m.keep).toBe("u"); // 标量：下层独有保留
+    expect(m.inner).toEqual({ a: 2, b: "user-b" }); // 嵌套对象：逐键覆盖而非整表替换
   });
 });
 

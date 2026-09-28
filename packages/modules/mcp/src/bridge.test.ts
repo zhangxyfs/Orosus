@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeToolMeta, digest, toBridgedTool } from "./bridge.ts";
+import { z } from "zod";
+import { sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest, toBridgedTool } from "./bridge.ts";
 import { activateMcp, collectTools, runTool } from "./index.ts";
 import type { Tool } from "@orosus/contracts/tool";
 
@@ -109,5 +110,70 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     expect([...closedLog].sort()).toEqual(["a", "b"]); // 成功连接逐个关（stdio 随之杀子进程）
     await out.close(); // 幂等——重复触达不二次关
     expect(closedLog).toHaveLength(2);
+  });
+
+  it("⑩ MI-03 inputSchema 透传：server 参数面进 specs 出口（z.toJSONSchema 出 properties/required——旧实现两分支同为空 object，模型看不到任何参数）", () => {
+    const inputSchema = {
+      type: "object",
+      properties: { owner: { type: "string", description: "仓库属主" }, repo: { type: "string" } },
+      required: ["owner", "repo"],
+    };
+    const tool = toBridgedTool("gh", { name: "create_issue", description: "d", inputSchema }, async () => ({ content: [] }));
+    // 核心 specs() 同款出口（registry.ts z.toJSONSchema(tool.parameters)）：.meta() sibling 覆写空对象基线
+    const emitted = z.toJSONSchema(tool.parameters) as { properties?: Record<string, unknown>; required?: string[] };
+    expect(emitted.properties).toEqual(inputSchema.properties);
+    expect(emitted.required).toEqual(["owner", "repo"]);
+    // 本地校验保持宽松：缺 required 也放行（server 侧自校验是权威——schema→zod 全量转换的误差会误拒合法调用）
+    expect(tool.parameters.safeParse({}).success).toBe(true);
+    expect(tool.parameters.safeParse({ owner: "o", extra: 1 }).success).toBe(true);
+    // 缺省 / 非 object 型 inputSchema → 空 object 参数面（无 schema 不编造）
+    const t1 = toBridgedTool("s", { name: "t", description: "d" }, async () => ({ content: [] }));
+    const t2 = toBridgedTool("s", { name: "t", description: "d", inputSchema: { type: "string" } }, async () => ({ content: [] }));
+    for (const t of [t1, t2]) expect((z.toJSONSchema(t.parameters) as { properties?: unknown }).properties).toEqual({});
+  });
+
+  it("⑪ MI-07 工具名消毒：非法字符 → `_`、超 64 截断 + 短哈希后缀防碰撞；注册名消毒、server 调用仍用原样名", async () => {
+    expect(sanitizeMcpNamePart("my.server id")).toBe("my_server_id");
+    expect(sanitizeMcpNamePart("工具")).toBe("__");
+    expect(sanitizeMcpNamePart("")).toBe("_"); // 空段保底——不产出空名
+    expect(bridgedToolName("gh", "create.issue")).toBe("mcp__gh__create_issue");
+    expect(bridgedToolName("a b", "t")).toBe("mcp__a_b__t");
+    // 两个仅尾段不同的超长名：截断后同前缀，短哈希区分（防「截断即撞名」互踩）
+    const longA = bridgedToolName("s", `t${"a".repeat(80)}`);
+    const longB = bridgedToolName("s", `t${"a".repeat(79)}b`);
+    expect(longA).toHaveLength(64); // provider 工具名约束 ^[a-zA-Z0-9_-]{1,64}$
+    expect(longB).toHaveLength(64);
+    expect(longA).not.toBe(longB);
+    expect(longA).toMatch(/^[a-zA-Z0-9_-]{64}$/);
+    // 桥接工具：注册名/审批规则用消毒名；wire 调用用 server 原样名（消毒只影响我们的注册面）
+    const calls: string[] = [];
+    const tool = toBridgedTool("gh", { name: "create.issue", description: "d" }, async (n) => { calls.push(n); return { content: [{ type: "text", text: "ok" }] }; });
+    expect(tool.name).toBe("mcp__gh__create_issue");
+    expect((await tool.resolveExecution({})).approvalRule).toBe("mcp__gh__create_issue");
+    const r = await runTool(tool, {});
+    expect(r.output).toBe("ok");
+    expect(calls).toEqual(["create.issue"]); // server 收到的仍是它自己宣告的原样名
+  });
+
+  it("⑫ MI-07 撞名带内跳过：同 server 清单消毒后撞名 → 首个保留、后来者跳过记录（旧实现两工具同注册名 → registry throw → 整个 mcp 模块降级）", async () => {
+    const logged: Array<{ t: string; p: Record<string, unknown> }> = [];
+    const out = await activateMcp({
+      servers: { gh: { command: "x" } },
+      connect: async () => ({
+        listTools: async () => [
+          { name: "create.issue", description: "d1" },
+          { name: "create_issue", description: "d2" }, // 消毒后与上面同注册名
+          { name: "ok", description: "d3" },
+        ],
+        callTool: async () => ({ content: [] }),
+      }),
+      sessionAppend: (t: string, p: Record<string, unknown>) => void logged.push({ t, p }),
+    });
+    expect(out.tools.map((t) => t.name).toSorted()).toEqual(["mcp__gh__create_issue", "mcp__gh__ok"]); // 不炸模块、正常工具照常注册
+    expect(out.skippedTools).toEqual([{ server: "gh", tool: "create_issue", reason: expect.stringContaining("撞车") }]);
+    const manifest = logged.find((x: { t: string }) => x.t === "mcp/manifest")!;
+    expect(manifest.p.servers).toEqual({ gh: ["create.issue", "create_issue", "ok"] }); // server 原样清单（与 server 侧可对账）
+    expect(manifest.p.mapping).toEqual({ gh: { "create.issue": "mcp__gh__create_issue" } }); // 改名映射随事件落盘
+    expect(manifest.p.skipped).toEqual(out.skippedTools); // 跳过清单同样可观测
   });
 });

@@ -102,12 +102,45 @@ export interface SymbolDoc {
   signature: string; // 声明首行（人可读形态）
   doc: DocComment;
   members: MemberDoc[]; // interface 成员
+  /** 函数参数名清单（声明全形态配平提取——跨行参数列表也入审计；TS-05）。非函数导出不填。 */
+  params?: string[] | undefined;
+  /** interface 体内有实质内容但零成员解析（缩进/成员形态漂移信号——审计点名，防成员级审计空转；TS-05）。 */
+  membersSuspect?: boolean | undefined;
+}
+
+/** 参数名清单：顶层逗号分割（跟踪 {}<>[] 深度），剥类型/缺省/可选/余参标记；
+ *  非 \w 形（解构参数等拿不出参数名）不入审计。 */
+function splitTopLevelParams(raw: string): string[] {
+  const segs: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of raw) {
+    if (ch === "{" || ch === "<" || ch === "[") depth++;
+    else if (ch === "}" || ch === ">" || ch === "]") depth--;
+    if (ch === "," && depth === 0) {
+      segs.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur.trim() !== "") segs.push(cur);
+  return segs
+    .map((x) => x.trim().split(/[:\s=]/)[0]!.replace(/^\.\.\./, "").replace(/\?$/, ""))
+    .filter((x) => /^\w+$/.test(x));
+}
+
+/** 首行签名拆参（旧路径——手工构造 SymbolDoc 无 params 字段时的回退）。 */
+function paramsFromSignature(signature: string): string[] {
+  const fp = signature.slice(signature.indexOf("(") + 1, signature.lastIndexOf(")"));
+  return fp.split(",").map((p) => p.trim().split(/[:\s=]/)[0]!.replace(/^\.\.\./, "")).filter((p) => p !== "");
 }
 
 /** 解析契约源文件 → 顶层 export 清单（doc/成员/签名）。 */
 export function parseContractFile(source: string): SymbolDoc[] {
   const out: SymbolDoc[] = [];
-  const declRe = /^export (?:async )?(function|interface|type|const|class)\s+(\w+)(<[^>]*>)?/gm;
+  // declare/default 前缀也认（TS-05）——`export declare function`/`export default function` 不再静默漏解析；
+  // 真正解析不了的形态（export {…} 重导出、export * 、export default 表达式）由 buildApiDocs 的
+  // export 总数对账兜底点名，漏解析与「无缺口」不再不可区分
+  const declRe = /^export (?:declare )?(?:default )?(?:async )?(function|interface|type|const|class)\s+(\w+)(<[^>]*>)?/gm;
   for (let m = declRe.exec(source); m !== null; m = declRe.exec(source)) {
     const kind = m[1] as SymKind;
     const name = m[2]!;
@@ -121,7 +154,31 @@ export function parseContractFile(source: string): SymbolDoc[] {
     }
     const lineEnd = source.indexOf("\n", declStart);
     const signature = source.slice(declStart, lineEnd).trim();
+    // 函数参数全形态提取（TS-05）：审计不再截声明首行——从声明扫首个深度 0 的 "("（泛型约束里的
+    // 括号在 <> 深度内不算），配平到对应 ")"，跨行参数列表同样完整入审计
+    let fnParams: string[] | undefined;
+    if (kind === "function") {
+      let depth = 0;
+      let open = -1;
+      let close = -1;
+      for (let i = declStart; i < source.length; i++) {
+        const ch = source[i]!;
+        if (ch === "(") {
+          if (depth === 0) open = i;
+          depth++;
+        } else if (ch === ")") {
+          depth--;
+          if (open >= 0 && depth === 0) {
+            close = i;
+            break;
+          }
+        } else if (ch === "<" || ch === "{") depth++;
+        else if (ch === ">" || ch === "}") depth--;
+      }
+      if (open >= 0 && close > open) fnParams = splitTopLevelParams(source.slice(open + 1, close));
+    }
     const members: MemberDoc[] = [];
+    let membersSuspect = false;
     if (kind === "interface") {
       const bodyStart = source.indexOf("{", declStart);
       let depth = 0;
@@ -185,29 +242,18 @@ export function parseContractFile(source: string): SymbolDoc[] {
             raw = fn2?.[1] ?? fn1?.[1];
           }
           if (raw !== undefined && raw.trim() !== "") {
-            // 顶层逗号分割（跟踪 {} <> 深度）
-            const segs: string[] = [];
-            let depth = 0;
-            let cur = "";
-            for (const ch of raw) {
-              if (ch === "{" || ch === "<" || ch === "[") depth++;
-              else if (ch === "}" || ch === ">" || ch === "]") depth--;
-              if (ch === "," && depth === 0) {
-                segs.push(cur);
-                cur = "";
-              } else cur += ch;
-            }
-            if (cur.trim() !== "") segs.push(cur);
-            params = segs
-              .map((x) => x.trim().split(/[:\s=]/)[0]!.replace(/^\.\.\./, "").replace(/\?$/, ""))
-              .filter((x) => x !== "");
+            params = splitTopLevelParams(raw);
           }
         }
         const typeText = mLine.replace(/\/\/.*$/, "").replace(/[,;]\s*$/, "").trim();
         members.push({ name: mName, optional: mOpt, typeText, params, doc: mDoc });
       }
+      // 零成员护栏（TS-05）：体内有实质内容（剥注释后非空）却零成员解析 = 缩进/形态漂移，
+      // 成员级 @param 审计随之空转——标记后由 auditSymbols 点名，不许静默放行
+      const bodyContent = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "").trim();
+      if (members.length === 0 && bodyContent !== "") membersSuspect = true;
     }
-    out.push({ name, kind, signature, doc: doc ?? { body: [], params: [] }, members });
+    out.push({ name, kind, signature, doc: doc ?? { body: [], params: [] }, members, params: fnParams, membersSuspect });
   }
   return out;
 }
@@ -231,9 +277,11 @@ export function auditSymbols(syms: SymbolDoc[], domain: DomainSpec): string[] {
       }
     };
     if (s.kind === "function") {
-      const fp = s.signature.slice(s.signature.indexOf("(") + 1, s.signature.lastIndexOf(")"));
-      const params = fp.split(",").map((p) => p.trim().split(/[:\s=]/)[0]!.replace(/^\.\.\./, "")).filter((p) => p !== "");
-      checkParams(s.name, params, s.doc);
+      // 参数面优先用全形态提取（跨行签名完整入审计，TS-05）；params 字段缺省时回退首行拆分
+      checkParams(s.name, s.params ?? paramsFromSignature(s.signature), s.doc);
+    }
+    if (s.membersSuspect === true) {
+      problems.push(`${domain.name}/${s.name}：interface 体内有内容但零成员解析（缩进/成员形态漂移——成员级审计空转）`);
     }
     for (const mem of s.members) {
       if (mem.params.length > 0 && mem.doc !== undefined) {
@@ -318,8 +366,17 @@ export function buildApiDocs(read: (p: string) => string): BuildResult {
   const files: { path: string; content: string }[] = [];
   let total = 0;
   for (const d of DOMAINS) {
-    const syms = parseContractFile(read(d.file));
+    const source = read(d.file);
+    const syms = parseContractFile(source);
     total += syms.length;
+    // export 总数对账（TS-05）：解析是 best-effort 的，审计必须 complete——源内 export 声明数
+    // 与解析符号数不一致即 fail-loud 点名差额，re-export / export default 表达式等未覆盖形态
+    // 不再让「漏解析」伪装成「无缺口」（export {} 空模块惯用法不计）
+    const exportCount =
+      (source.match(/^export\b/gm) ?? []).length - (source.match(/^export\s*\{\s*\}\s*;?\s*$/gm) ?? []).length;
+    if (exportCount !== syms.length) {
+      problems.push(`${d.name}：源内 ${exportCount} 个 export 声明，只解析出 ${syms.length} 个符号——${exportCount - syms.length} 个未解析（re-export/export default 等形态需扩展 declRe 或补登记）`);
+    }
     problems.push(...auditSymbols(syms, d));
     files.push({ path: `docs/api/${d.name}.md`, content: renderDomain(d, syms) });
   }

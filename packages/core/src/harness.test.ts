@@ -9,6 +9,8 @@ import { InMemorySessionStore } from "./session/memory.ts";
 import { JsonlSessionStore } from "./session/jsonl.ts";
 import { verifyChain } from "./session/fork.ts";
 import { createHarness } from "./index.ts";
+import { loadConfig } from "./config/load.ts";
+import { CORE_POINTS } from "./kernel/bus.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -778,6 +780,18 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
     expect((await state("contextWindow = 0\n")).contextWindow).toBeNull();
   });
 
+  it("②b CH-06 回归钉：OROSUS_CONTEXTWINDOW（字符串 env 值）→ contextWindow 生效——键名映射 + 读侧数字串等价接受，两层缺一不可达", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-cw-env-"));
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", []), stateModule()],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" }, env: { OROSUS_CONTEXTWINDOW: "65536" } },
+    });
+    // 旧实现两处断点：env 层 toLowerCase 落 contextwindow（≠contextWindow）；读侧只认 number（字符串恒被忽略）
+    expect(JSON.parse((await h.prompt("/llm-probe__state")) as string).contextWindow).toBe(65536);
+    await h.close();
+  });
+
   it("③ reload 更新：改 config 文件后 /reload → contextWindow 读到新值（getter 代际正确性）", async () => {
     dir = mkdtempSync(join(tmpdir(), "orosus-harness-cwr-"));
     const userFile = join(dir, "user.toml");
@@ -923,6 +937,20 @@ describe("/model 二级菜单与裸名补全（模型发现 T3/D32 修订）", (
     const { h, askCalls } = await mk({ listModels: async () => ["m1", "m2"], escChoose: true });
     await expect(h.prompt("/model")).rejects.toThrow("已取消（Esc）");
     expect(askCalls()).toBe(0); // 取消后不得再问「输入模型名」
+    await h.close();
+  });
+
+  it("⑥ CH-08 回归钉：手输模型名含引号/换行 → user config 仍合法 TOML（写侧转义）且值精确回读——旧实现裸拼接写坏文件，下次启动 SW-20 跳过整个用户层", async () => {
+    const { h, uiAnswers } = await mk({ listModels: async () => { throw new Error("HTTP 404"); } });
+    const hostile = 'x"\n[approval]\nmode="ask'; // 触发链原文：引号 + 换行 + 伪节头
+    uiAnswers.ask.push(hostile);
+    await h.prompt("/model");
+    expect(h.status().model).toBe(hostile); // 生效面不受转义影响
+    const cfg = loadConfig({ userFile: join(dir, "no-user.toml"), projectFile: join(dir, "no2.toml"), env: {} });
+    expect(cfg.warnings).toEqual([]); // 合法 TOML——SW-20 不触发（旧实现：解析失败 + 整层跳过 + 出厂默认）
+    expect(cfg.core.provider).toBe(hostile); // 转义后语义精确还原（引号/换行/反斜杠都在）
+    // level 侧既有正则闸同场钉住（报告认定安全的那一处）：非法档位名在写盘前即抛
+    expect(() => h.setEffort('a"b')).toThrow(/不合法/);
     await h.close();
   });
 });
@@ -1440,6 +1468,86 @@ describe("steer 宿主注入口（2026-09-23 消息队列批——kimi Ctrl-S �
     expect(sms.some((e) => e.messages?.[0]?.text === "补充说明")).toBe(true); // 先落日志（铁律）——m4-6 T7 后首条 steering 是日期系统行，插话行按内容找
     expect(requests.length).toBe(2); // followUp 兜底续 turn——停止边界注入后再跑一轮
     expect(JSON.stringify(requests[1]!.messages)).toContain("补充说明"); // 投影 = user 消息进上下文
+    await h.close();
+  });
+});
+
+describe("events() 有界缓冲（CH-10——零订阅者不再进程级无界积压）", () => {
+  it("CH-10 回归钉：300 条事件零订阅 → 迟订阅只拿到最近 256 条（drop-oldest、最新保留），首次溢出落一次 warn", async () => {
+    const h = await makeHarness();
+    for (let i = 0; i < 300; i++) await h.setLabel(`L${i}`); // setLabel 每调一条 session/label 事件（不经 turn）
+    // 总量 1 header + 300 label = 301 > 256 → 缓冲 = 最近 256（header 与前 44 条 label 被丢）
+    const got: { type: string; label?: unknown }[] = [];
+    const iter = h.events()[Symbol.asyncIterator]();
+    for (let i = 0; i < 256; i++) got.push((await iter.next()).value as never); // 缓冲内 next 恒立即resolve——不触碰等待分支
+    expect(got).toHaveLength(256);
+    expect(got[0]!.type).toBe("session/label");
+    expect(got[0]!.label).toBe("L44"); // 最旧保留 = 第 45 条 label（301-256=45 已丢）
+    expect(got[255]!.label).toBe("L299"); // 最新永不因满被拒
+    await h.close();
+    const diag = readdirSync(dir).filter((f) => f.startsWith("diagnostic-"));
+    const text = readFileSync(join(dir, diag[0]!), "utf8");
+    expect(text.includes("kernel.events.dropped")).toBe(true); // 溢出留痕一次
+  });
+});
+
+describe("主对话写预约 subprocess（CX-09——bash/不透明执行按整仓过闸，与子代理侧对称）", () => {
+  it("CX-09 回归钉：子代理持 src/ 报备在跑时——主侧 subprocess/all 载荷被拒（带内重试文案）；非重叠 fs.write 与只读 accesses 照常放行；子代理收尾后恢复", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cx09-"));
+    // 挂起 provider：子代理首个 LLM 请求进门即挂——「进门」即写闸已占的确定性信号（acquire 先于 loop 起跑）
+    let releaseStream!: () => void;
+    const held = new Promise<void>((r) => { releaseStream = r; });
+    let streamEntered = 0;
+    let signalEnter!: () => void;
+    const enterP = new Promise<void>((r) => { signalEnter = r; });
+    const hangProvider: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, () => (async function* () {
+          streamEntered++;
+          signalEnter();
+          await held;
+          yield { type: "text/delta", text: "子代理结论" } as Chunk;
+          yield { type: "finish", kind: "stop" } as Chunk;
+        })() as never);
+      },
+    };
+    const spawner: ModuleDefinition = {
+      ...fakeModule("cx09"), // 模块名 = 命令前缀（规则 4）：命令注册名须带 "<module>__" 前缀
+      mounts: ["subagent", "contribute:command"],
+      activate(ctx) {
+        ctx.contribute.command("cx09__go", async () => {
+          await ctx.subagent!.spawn({ label: "占闸写手", prompt: "等", model: "fake/m", writePaths: ["src"], background: true });
+          return "spawned";
+        });
+      },
+    };
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"), cwd: dir,
+      modules: [hangProvider, spawner],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    await h.prompt("/cx09__go"); // 命令派发 spawn（命令不建 turn）
+    await enterP; // 子代理 loop 已起 = 写闸已占（writePaths ["src"] 报备）
+    const wf = (accesses: { kind: string; path?: string }[]) =>
+      h.graph().bus.waterfall(CORE_POINTS.toolPreExecute, { callId: "c", name: "tool-shell__bash", args: {}, accesses });
+    // ① subprocess（bash 声明形态）：整仓撞车 → 拒（旧实现 writes=[] 直接放行——npm install/git checkout 零检查并发）
+    const veto = await wf([{ kind: "subprocess" }]);
+    expect(veto?.deny).toBe(true);
+    expect(veto?.reason).toContain("写报备撞车");
+    expect(veto?.reason).toContain("src"); // 撞的是持闸者的具体报备
+    // ② all（fail-closed 缺省 accesses 形态，MCP 未声明面）同款整仓
+    expect((await wf([{ kind: "all" }]))?.deny).toBe(true);
+    // ③ 非重叠 fs.write：细粒度报备的意义——放行
+    expect(await wf([{ kind: "fs.write", path: join(dir, "docs", "a.md") }])).toBeUndefined();
+    // ④ 只读（fs.read / 空 accesses）：不进闸
+    expect(await wf([{ kind: "fs.read", path: join(dir, "src", "x.ts") }])).toBeUndefined();
+    expect(await wf([])).toBeUndefined();
+    // ⑤ 子代理收尾放闸后 subprocess 恢复放行（主侧是检查不是占闸——决策 24②尾）
+    releaseStream();
+    await new Promise((r) => setTimeout(r, 60)); // 子代理 turn 收尾 + release（收尾必然发生的有界等待）
+    expect(streamEntered).toBeGreaterThanOrEqual(1); // 自检：子代理确已起跑（循环步数是实现细节，不作判据）
+    expect(await wf([{ kind: "subprocess" }])).toBeUndefined();
     await h.close();
   });
 });

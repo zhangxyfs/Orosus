@@ -6,7 +6,8 @@ export interface CliArgs {
   dumpModules: boolean;
   model?: string;
   resume?: { sessionId: string };                         // --resume <id>（D41/T6）
-  fork?: { parentSessionId: string; atEntryId?: string }; // --fork <id>[:<entryId>]（D41/T6）
+  // CL-04（2026-09-28 code review）：--fork 死旗标已移除——解析出的 args.fork 全仓零消费（main.ts 只透传
+  // extra.fork = 交互 /fork 指令，启动旗标从未接线 createHarness），留着只会让「--fork 启动分叉」静默失效。
   print?: string;                                          // --print <prompt> / -p（非交互单发，M4-2 T17）
   outputFormat?: "text" | "json" | "stream-json";         // --output-format（仅 --print 模式）
   tui?: "line" | "full";                                   // --tui：界面模式（TUI 批阶段三 F3——full 全屏双栏为 TTY 缺省，line 滚动流降级）
@@ -53,14 +54,6 @@ export function parseArgs(argv: string[]): CliArgs {
         if (v !== "line" && v !== "full") throw new Error(`--tui 非法值 "${v}"（合法：line | full）
 ${USAGE}`);
         args.tui = v;
-        break;
-      }
-      case "--fork": {
-        const v = takeValue(i, "--fork"); i++;
-        const [parentSessionId, atEntryId] = v.split(":", 2);
-        if (parentSessionId === undefined || parentSessionId === "") throw new Error(`--fork 缺会话 id
-${USAGE}`);
-        args.fork = { parentSessionId, ...(atEntryId !== undefined && atEntryId !== "" ? { atEntryId } : {}) };
         break;
       }
       default: throw new Error(`未知参数 ${argv[i]}\n${USAGE}`);

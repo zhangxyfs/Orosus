@@ -18,6 +18,7 @@ import { ForkedSessionStore } from "../session/fork.ts";
 import { claimContains, createWriteGate, normalizeClaimPath, type WriteGate } from "./writegate.ts";
 import { SUBAGENT_CONCLUSION_TAIL, SUBAGENT_CONCURRENCY, SUBAGENT_ID_LEN, SUBAGENT_INACTIVITY_TIMEOUT_MS, SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS_CEILING, SUBAGENT_ROSTER_KEEP, SUBAGENT_TOTAL_TIMEOUT_MS } from "./constants.ts";
 import type { ModuleGraph } from "../kernel/kernel.ts";
+import { createLogger } from "../diag/logger.ts";
 import type { DiagSink } from "../diag/logger.ts";
 
 /** runner 依赖（createHarness 闭包注入——照 sessionForkFn 先例：调用期读最新值，激活期不可用）。 */
@@ -252,6 +253,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
   const takenIds = new Set<string>();
   const gate = createWriteGate(deps.cwd);
   const roster = new Map<string, RosterEntry>(); // 入队序（孙代理天然紧跟其父之后入册）
+  const rlog = createLogger(deps.sink, "subagent"); // 花名册侧诊断（CX-08 淘汰记录等——§11.9 核心码 kernel.* 前缀）
   let runningSlots = 0;
   const slotQueue: { agentId: string; enter: () => void; reject: (err: Error) => void }[] = [];
 
@@ -315,7 +317,8 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     ...(e.effort !== undefined ? { effort: e.effort } : {}),
   });
 
-  /** 在册清单：全部进行中 + 最近 SUBAGENT_ROSTER_KEEP 条已结束（更早只留会话文件——决策 19）。 */
+  /** 在册清单：全部进行中 + 最近 SUBAGENT_ROSTER_KEEP 条已结束（更早只留会话文件——决策 19；
+   *  存储侧 settle 后同步淘汰（CX-08），这里的视图裁剪留作纵深——淘汰漏网时兜住读口）。 */
   const listInternal = (): SubagentRosterEntry[] => {
     const active: RosterEntry[] = [];
     const finished: RosterEntry[] = [];
@@ -344,6 +347,20 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       const firstLine = (outcome.conclusion !== "" ? outcome.conclusion : outcome.error ?? "").split("\n")[0]!.slice(0, 200);
       const verdict = outcome.status === "completed" ? "完成" : "失败";
       deps.onBackgroundDelivery(`[非用户输入] 后台子代理 ${entry.label} ${verdict}：${firstLine}`);
+    }
+    // CX-08 修复（2026-09-28 code review）：存储侧淘汰——旧实现 roster Map 只 set 不 delete（ROSTER_KEEP 只裁
+    // listInternal 视图），批量派活 + 长会话下每条目 32KB conclusion/bashCommands/outOfBounds 全量常驻内存。
+    // 已结束条目超 KEEP 按入册序（Map 迭代序）删最老者——与视图口径一致（被删者恰是视图本就看不到的条目），
+    // 更早只留会话文件（决策 19）。takenIds 不随之清：8 位 hex 撞码成本极低，防编号复用（agents_ 目录 + 盘上
+    // 会话文件都在）比省这点内存重要。
+    const finishedIds: string[] = [];
+    for (const [fid, fe] of roster) {
+      if (fe.status === "completed" || fe.status === "failed") finishedIds.push(fid);
+    }
+    if (finishedIds.length > SUBAGENT_ROSTER_KEEP) {
+      const drop = finishedIds.slice(0, finishedIds.length - SUBAGENT_ROSTER_KEEP);
+      for (const fid of drop) roster.delete(fid);
+      rlog.info("kernel.subagent.roster-evict", `已结束条目超 ${SUBAGENT_ROSTER_KEEP}——最老 ${drop.length} 条出册（更早只留会话文件，决策 19）`, { ids: drop });
     }
   };
 
@@ -497,21 +514,28 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       // 双层门控第二道（决策 4②）。auto 档不再整门跳过——照转主关卡但档提示带 never（decide 规则链先于
       // 基线：手写 deny/ask 规则对子代理照常生效，基线从不询问不自发弹窗）；ask 档转发主对话真实运行期档
       // 与 ask-risky 地板取严（旧实现钉死 ask-risky——主对话 ask-always 被降档静默放行）。档位 spawn 定格。
-      // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停自动按拒绝收场）。
+      // 后台 Ask 档的询问走 park（挂起不抢占——花名册记 pendingApproval，宿主有空再批；被停/保险丝 abort 自动按拒绝收场——CX-07）。
       bus.on(CORE_POINTS.toolPreExecute, async (payload) => {
         const p = payload as { name: string; callId: string; [k: string]: unknown };
         if (isSpawnClassTool(p.name) && !spawnAllowedAtDepth(depth)) {
           return { deny: true, reason: "嵌套已达两层上限——孙代理不能再派子代理（决策 4）" };
         }
         const background = req.background === true;
+        // CX-07 修复（2026-09-28 code review）：park 与 controller.signal 竞速——旧实现只登记 resolve，保险丝/
+        // stop 的 abort 打不进「registry.execute → 子代理 bus waterfall → 主 bus waterfall → park」await 链，
+        // 后台挂起审批永久占并发位（用户一直不答 = 唯一挂死场景，双保险丝声明要治却对之无效）。abort 穿透
+        // 按拒绝收场（与 stop() 同口径——被停/超时都算「未答审批自动回绝」）。
         const park = background
           ? (info: { tool: string; reason: string }): Promise<boolean> => new Promise((resolve) => {
-              entry.pendingApproval = {
-                callId: String(p.callId),
-                tool: info.tool,
-                reason: info.reason,
-                resolve: (allow) => { entry.pendingApproval = undefined; resolve(allow); },
+              const finish = (allow: boolean): void => {
+                entry.pendingApproval = undefined; // 摘牌（幂等——answerApproval/stop/settle 兜底与 abort 竞速双清无害）
+                controller.signal.removeEventListener("abort", onAbort);
+                resolve(allow);
               };
+              const onAbort = (): void => finish(false);
+              entry.pendingApproval = { callId: String(p.callId), tool: info.tool, reason: info.reason, resolve: finish };
+              if (controller.signal.aborted) finish(false); // abort 事件已过（后挂 listener 接不上）——直接按拒绝收场
+              else controller.signal.addEventListener("abort", onAbort, { once: true });
             })
           : undefined; // 前台：照常弹在主界面串行审批队列（主关卡 ctx.ui 直问）
         const veto = await deps.graph().bus.waterfall(CORE_POINTS.toolPreExecute, {

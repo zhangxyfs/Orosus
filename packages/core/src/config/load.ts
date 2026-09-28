@@ -30,6 +30,19 @@ function defaults(): Doc {
   return { core: {}, sections: { approval: { required: true } } };
 }
 
+/** section 值级深合并（CH-07 修复）：嵌套纯对象递归——上层不再整键替换下层嵌套表（现实例：
+ *  [provider-custom] 的 providers 表，项目层加一家不再抹掉用户层其余家）。数组与标量整值替换
+ *  （口径定案：拼接会引入去重/序问题且无消费方需要——替换与标量「后者覆盖前者」同语义；Date
+ *  非纯对象不递归）。 */
+function mergeDeep(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const prev = out[k];
+    out[k] = isPlainObject(prev) && isPlainObject(v) ? mergeDeep(prev, v) : v;
+  }
+  return out;
+}
+
 function merge(base: Doc, over: Doc): Doc {
   const core = { ...base.core, ...over.core };
   // 模型键分层归一（F5 十轮）：上层出现 provider/model 任一键即删除下层另一键——
@@ -41,11 +54,22 @@ function merge(base: Doc, over: Doc): Doc {
     sections: Object.fromEntries(
       [...new Set([...Object.keys(base.sections), ...Object.keys(over.sections)])].map((k) => [
         k,
-        { ...base.sections[k], ...over.sections[k] },
+        mergeDeep(base.sections[k] ?? {}, over.sections[k] ?? {}), // CH-07：深合并（旧实现单层 spread——嵌套键整键替换）
       ]),
     ),
   };
 }
+
+/** env 层核心顶层键名归一（CH-06 修复）：OROSUS_<KEY> 去前缀小写后查表——camelCase 读侧键
+ *  （contextWindow/sessionStore，§6.6/D15）此前恒不可达（OROSUS_CONTEXTWINDOW → contextwindow
+ *  ≠ contextWindow，环境变量设置后静默无效）；表外键按原样小写透传（全小写键约定不变）。 */
+const ENV_CORE_KEYS: Record<string, string> = {
+  model: "model",
+  provider: "provider",
+  effort: "effort",
+  contextwindow: "contextWindow",
+  sessionstore: "sessionStore",
+};
 
 const ENV_PLACEHOLDER = /^\$ENV:([A-Z][A-Z0-9_]*)$/;
 
@@ -103,10 +127,13 @@ export function loadConfig(opts: {
       }
     }
   }
-  // env 层：仅核心顶层 key，命名 OROSUS_<KEY>（§6.6）
+  // env 层：仅核心顶层 key，命名 OROSUS_<KEY>（§6.6）；camelCase 键查表归一（CH-06）
   const envCore: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(env)) {
-    if (k.startsWith("OROSUS_") && v !== undefined) envCore[k.slice(7).toLowerCase()] = v;
+    if (k.startsWith("OROSUS_") && v !== undefined) {
+      const raw = k.slice(7).toLowerCase();
+      envCore[ENV_CORE_KEYS[raw] ?? raw] = v;
+    }
   }
   acc = merge(acc, { core: envCore, sections: {} });
   acc = merge(acc, { core: opts.cliOverrides ?? {}, sections: {} });

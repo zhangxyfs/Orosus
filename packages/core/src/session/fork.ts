@@ -71,8 +71,17 @@ export async function openSessionView(opts: {
     const forkEvent = own.find((e) => e.type === "session/fork");
     chain.unshift(sessionId);
     const parentId = (header as { parentSession?: unknown } | undefined)?.parentSession;
-    if (header === undefined || parentId === null || parentId === undefined || forkEvent === undefined) return store; // 非子体：裸 store 原样返回
+    // CS-04 修复（2026-09-28 code review）：旧判据四条全中才拼装（含 session/fork 事件在场）——但 header 与
+    // session/fork 是两次独立 append（两次 drain 批次间可崩溃），撕裂尾部切断 session/fork 行时 repairFile
+    // 也会把它当 torn tail 截掉，两种形态都留下「header{parentSession} 在场、fork 事件缺席」的子体文件；
+    // 打开它被当根会话、父前缀静默丢失，verifyChain 不报（自身段链内自洽），而树视图（只看 header.
+    // parentSession）仍显示它有父——行为自相矛盾。放宽为 header.parentSession 非空即按子体上溯；fork 事件
+    // 缺席时以全量父前缀投影 + warn 显式留痕（比静默退化为自身段好）。
+    if (header === undefined || parentId === null || parentId === undefined) return store; // 非子体：裸 store 原样返回
     const parent = String(parentId);
+    if (forkEvent === undefined) {
+      opts.sink?.warn("session.fork-event-missing", "fork 事件缺失（header 与 session/fork 两次 append 间的崩溃窗口，或撕裂尾被 repairFile 截断），按全量父前缀投影", { sessionId, parentSession: parent });
+    }
     if (depth >= FORK_CHAIN_MAX_DEPTH || visited.has(parent)) {
       opts.sink?.warn("session.fork-chain-truncated", depth >= FORK_CHAIN_MAX_DEPTH ? `祖先链深超 ${FORK_CHAIN_MAX_DEPTH}，就地截断` : "祖先链成环，就地截断", { sessionId, parentSession: parent });
       return store;
@@ -84,7 +93,7 @@ export async function openSessionView(opts: {
       return store;
     }
     const parentView = await openFrom(parent, parentLoc.bucket, depth + 1);
-    const at = (forkEvent as { sourceEntryId?: unknown }).sourceEntryId;
+    const at = forkEvent === undefined ? undefined : (forkEvent as { sourceEntryId?: unknown }).sourceEntryId;
     return new ForkedSessionStore({ parent: parentView, ...(typeof at === "string" ? { atEntryId: at } : {}), own: store });
   };
   return { store: await openFrom(opts.sessionId, opts.bucket, 0), chain };

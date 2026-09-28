@@ -103,6 +103,22 @@ describe("CLI provider 子命令（D34/D37 配置写器）", () => {
     expect(readFileSync(io.configPath, "utf8")).toContain("$ENV:OPENROUTER_API_KEY");
   });
 
+  it("CM-08：目录条目无 env 字段 + --key → 派生 OROSUS_<ID>_KEY 落盘（secrets + $ENV: 引用 + 输出明示），不再静默蒸发", async () => {
+    const io = makeIo({}, false, "cm08");
+    const code = await runProviderSubcommand(
+      ["provider", "import", "no-endpoint-vendor", "--baseUrl", "https://self.example/v1", "--key", "sk-selfhost"],
+      io,
+    );
+    expect(code).toBe(0);
+    // 旧实现：两个落盘分支都只沿 envKey 走——flagKey 蒸发、输出仍 success、运行时 401
+    const secret = readFileSync(io.secretsPath, "utf8");
+    expect(secret).toContain("OROSUS_NO_ENDPOINT_VENDOR_KEY=sk-selfhost"); // id 规范大写、非字母数字转 _
+    const toml = readFileSync(io.configPath, "utf8");
+    expect(toml).toContain('apiKey = "$ENV:OROSUS_NO_ENDPOINT_VENDOR_KEY"');
+    expect(toml).not.toContain("sk-selfhost"); // 铁律：config 不落明文
+    expect(io.lines.join("\n")).toContain("OROSUS_NO_ENDPOINT_VENDOR_KEY"); // 输出明示派生键名（用户可查）
+  });
+
   it("import --model：目录 limit.context 写入 contextWindow（≥1024 整数）；无 limit / 无效值不写 + 提示（四轮校验钉子）", async () => {
     const io = makeIo({}, false, "c1");
     expect(await runProviderSubcommand(["provider", "import", "win-vendor", "--model", "m-big"], io)).toBe(0);

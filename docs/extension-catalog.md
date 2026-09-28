@@ -240,3 +240,32 @@ provide(key: string, impl: unknown): void;
 ctx.provide("my-module.store", { get: () => v, set: (x) => { v = x; } });
 ```
 
+
+### ctx.llm
+
+二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。
+
+```ts
+readonly llm: LlmPort;
+```
+
+```ts
+let text = "";
+for await (const c of ctx.llm.stream({ system: "你是摘要器", messages })) {
+  if (c.type === "text/delta") text += c.text;
+}
+```
+
+
+### ctx.subagent
+
+内核子代理缝（M4.5，可选）：宿主注入的派单执行口（spawn/list/stop——见 SubagentPort）。
+
+```ts
+readonly subagent?: SubagentPort | undefined;
+```
+
+```ts
+const r = await ctx.subagent?.spawn({ label: "调研", prompt: "…" });
+```
+

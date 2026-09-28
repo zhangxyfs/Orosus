@@ -325,6 +325,30 @@ describe("链式 fork 断代修复（会话树批 T1）", () => {
     expect(texts).toContain("子代问"); // 父自己段照常在
     await h.close();
   });
+
+  it("⑦ CS-04 崩溃窗口子体（header{parentSession} 在场、session/fork 缺席）→ 仍按子体上溯：全量父前缀 + warn（旧实现当根会话，父前缀静默丢失且 verifyChain 不报）", async () => {
+    const d = tmp();
+    const root = await seedRoot(d, "祖代问");
+    // 模拟崩溃窗口：header 与 session/fork 是两次独立 append（两次 drain 批次间崩溃，或撕裂尾切断
+    // session/fork 行被 repairFile 截掉）——手工落「有 header{parentSession}、无 session/fork」的子体文件
+    const s = new JsonlSessionStore({ dir: d });
+    await s.append("session/header", { format: 1, cwd: d, parentSession: root.id });
+    await s.append("user/message", { content: [{ kind: "text", text: "残缺子代问" }] });
+    const childId = s.sessionId;
+    await s.flush();
+    await s.close();
+    const warns: string[] = [];
+    const view = await openSessionView({
+      sessionId: childId, bucket: d, makeStore: makeJsonl, locate: sameBucketLocate(d),
+      sink: { warn: (code) => warns.push(code) },
+    });
+    const texts = (await view.store.all()).map((e) => (e.content as { text?: string }[] | undefined)?.[0]?.text ?? e.type);
+    expect(texts).toContain("祖代问"); // 父前缀在（旧实现：判据四条不全中 → 当根会话，只剩自身段）
+    expect(texts).toContain("残缺子代问");
+    expect(view.chain).toEqual([root.id, childId]); // 上溯发生——与树视图（header.parentSession）口径一致
+    expect(warns).toContain("session.fork-event-missing"); // 显式留痕：fork 事件缺失 + 全量前缀降级
+    await view.store.close();
+  });
 });
 
 describe("h.fork 落盘式分叉出口（会话树批 T6——缝一内核半边）", () => {

@@ -1,10 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, chmodSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "../index.ts";
 import { fakeModule } from "@orosus/testing";
-import { loadTrustStore, saveTrustStore, checkTrust, trustModule } from "./trust.ts";
+import { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrustKey as normalizeTrustKeyExport } from "./trust.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -53,10 +53,48 @@ describe("项目级信任门（§8.5，内容 hash + fail-closed）", () => {
     const reloaded = loadTrustStore(file);
     expect(reloaded.entries["d:\\develop\\mods\\m"]?.hash).toBe("h"); // 读入侧已归一（win32 小写）
     expect(checkTrust({ layer: "project", root: "d:\\DEVELOP\\mods\\m", entryHash: "h", store: reloaded })).toEqual({ ok: true }); // 大小写归一
-    // 解析失败视为空 store（全部重新确认，fail-closed 方向）
+    // 解析失败视为空 store（全部重新确认，fail-closed 方向）——坏文件被留档改名（CK-07⑦），原路径不复存在
     const bad = join(dir, "bad.json");
     writeFileSync(bad, "{not json");
-    expect(Object.keys(loadTrustStore(bad).entries)).toHaveLength(0);
+    const emptied = loadTrustStore(bad);
+    expect(Object.keys(emptied.entries)).toHaveLength(0);
+    expect(readdirSync(dir).some((f) => f.startsWith("bad.json.corrupt-"))).toBe(true); // CK-07：留档不无痕抹掉
+  });
+
+  it("⑦ CK-07 回归钉·原子写：tmp+rename 后目录里只有目标文件（无 .tmp 残留）、覆写不截断；POSIX 下权限无条件 0600（含既有宽权限文件）", () => {
+    const dir = mk();
+    const file = join(dir, "trust.json");
+    // 既有宽权限文件（模拟用户手建 644）——旧实现 0o600 只在新建分支生效，永不纠正
+    writeFileSync(file, JSON.stringify({ entries: { a: { hash: "h1", confirmedAt: "t" } } }, null, 2));
+    if (process.platform !== "win32") chmodSync(file, 0o666);
+    saveTrustStore(file, { entries: { b: { hash: "h2", confirmedAt: "t2" } } }); // 覆写
+    const names = readdirSync(dir);
+    expect(names).toEqual(["trust.json"]); // tmp 文件随 rename 消失——无半截/残留
+    const back = loadTrustStore(file);
+    expect(back.entries[normalizeTrustKeyExport("b")]?.hash).toBe("h2"); // 覆写完整（读入侧键归一）
+    if (process.platform !== "win32") {
+      expect(statSync(file).mode & 0o777).toBe(0o600); // ③ 修复：覆写也钉 0600（旧实现手建 644 永宽）
+    }
+  });
+
+  it("⑧ CK-07 回归钉·坏 JSON 不丢既有登记面：坏文件字节留档可查、后续登记照常落盘、留档不被覆盖", () => {
+    const dir = mk();
+    const file = join(dir, "trust.json");
+    const badBytes = '{"entries": {"kept": {"hash": "h"'; // 手改半截——旧实现视为空后一次 save 就无痕抹掉
+    writeFileSync(file, badBytes);
+    expect(Object.keys(loadTrustStore(file).entries)).toHaveLength(0); // fail-closed：按空走
+    const backupName = readdirSync(dir).find((f) => f.startsWith("trust.json.corrupt-"))!;
+    expect(backupName).toBeDefined();
+    expect(readFileSync(join(dir, backupName), "utf8")).toBe(badBytes); // 原样留档——登记可手工恢复
+    trustModule(file, "C:\\x\\new", "h-new"); // 后续确认照常（新文件落盘）
+    const after = loadTrustStore(file);
+    expect(after.entries[normalizeTrustKeyExport("C:\\x\\new")]?.hash).toBe("h-new");
+    expect(readdirSync(dir).some((f) => f === backupName)).toBe(true); // 留档仍在——未被新写覆盖
+    // 连续登记（读-改-写全同步，进程内串行）：两条都在——丢登记面只存在于跨进程并发
+    trustModule(file, "C:\\x\\second", "h-2");
+    const final = loadTrustStore(file);
+    expect(final.entries[normalizeTrustKeyExport("C:\\x\\new")]?.hash).toBe("h-new");
+    expect(final.entries[normalizeTrustKeyExport("C:\\x\\second")]?.hash).toBe("h-2");
   });
 
   it("⑥ harness 集成：项目级未确认模块 audit 为 failed(untrusted)，其余照常激活不阻断", async () => {

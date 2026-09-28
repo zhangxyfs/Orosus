@@ -41,8 +41,17 @@ Do NOT pick an option for them. Stop and wait for the user's next message.`,
               }
             }
             return { output: answers.join("\n"), isError: false };
-          } catch {
-            // Reasonix 回退语义：不阻塞——模型假设 + 声明 + 选最安全可逆
+          } catch (err) {
+            // MB-08（2026-09-28 code review）：取消 ≠ 无头，不能共用一个回退——
+            // 宿主面 Esc 按 D35 约定抛「已取消（Esc）」（apps/cli menu/picker 已钉死该文案）：
+            // 与 description「Stop and wait」对齐，取消 = 用户拒绝作答，不替用户选、停下等指示。
+            if (err instanceof Error && err.message.includes("已取消")) {
+              return {
+                output: "用户取消了本次提问（Esc）——这不是回答：不要自行假设答案或替用户选选项，停下等用户的下一步指示。",
+                isError: true,
+              };
+            }
+            // 真无头（环境不可用）才走 Reasonix 回退语义：不阻塞——模型假设 + 声明 + 选最安全可逆
             return {
               output: "无交互用户——这是模型假设回退，不是用户回答。用你的最佳判断继续，声明你做的假设，选最安全的可逆选项。",
               isError: true,

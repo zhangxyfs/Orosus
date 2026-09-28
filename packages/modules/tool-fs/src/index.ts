@@ -51,6 +51,12 @@ class LocalFs implements Fs {
     return this.safe(path);
   }
 
+  /** 根的绝对路径（CT-04 2026-09-28 code review）：glob/grep 的「整根读」声明用字面绝对路径，
+   *  替代把星号 pattern 当路径塞进 Access——调度器按 cwd resolve 后做前缀比较，模式串不参与。 */
+  absRoot(): string {
+    return this.root;
+  }
+
   read(path: string): Promise<string> {
     return Promise.resolve(readFileSync(this.safe(path), "utf8"));
   }
@@ -88,7 +94,7 @@ class LocalFs implements Fs {
   /** 内容正则搜索（T16 起）：结构化命中（file 绝对路径 / 1-based 行号 / 行文本截断 200）；
    *  跳过二进制（替换率粗判）与超大文件（>1MB）。三输出模式由工具层渲染（M4-2 T6）。 */
   async grepMatches(regex: string): Promise<{ file: string; lineNo: number; text: string }[]> {
-    const re = new RegExp(regex);
+    const re = compileGrepRegex(regex); // MB-06：先验——非法正则/嵌套量词形态在此带内抛错，不进扫描
     const out: { file: string; lineNo: number; text: string }[] = [];
     for (const p of await this.globFiles("**/*")) {
       let content: string;
@@ -102,12 +108,92 @@ class LocalFs implements Fs {
       const bad = lines.filter((l) => l.includes("\uFFFD")).length;
       if (lines.length > 0 && bad > lines.length / 4) continue; // 二进制粗判
       for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i]!)) out.push({ file: p, lineNo: i + 1, text: lines[i]!.slice(0, 200) });
+        const line = lines[i]!;
+        if (line.length > GREP_MAX_LINE) continue; // MB-06：超长行（minified/bundle）跳过——病态正则工作量上界
+        if (re.test(line)) out.push({ file: p, lineNo: i + 1, text: line.slice(0, 200) });
       }
     }
     return out;
   }
 }
+
+/** MB-06（2026-09-28 code review）：grep 正则先验——模型可控正则的两道低成本拒绝（子进程 rg 化待真实需求）：
+ *  ①非法语法（new RegExp 抛 SyntaxError）→ 明确报错而非裸抛；
+ *  ②嵌套量词形态（组内含量词、组本身又被量词修饰，如 (a+)+、((a|b)*)+）——V8 回溯不可中断，
+ *    30 字符级行长即可指数爆炸冻结事件循环，静态检出并指引改写。合法形态（(?:ab)+、(a|b)+ 等）不受影响。 */
+function compileGrepRegex(regex: string): RegExp {
+  let re: RegExp;
+  try {
+    re = new RegExp(regex);
+  } catch (err) {
+    throw new Error(`正则无效（${String(err instanceof Error ? err.message : err)}）——请检查转义与语法`, { cause: err });
+  }
+  if (hasNestedQuantifier(regex)) {
+    throw new Error("正则含嵌套量词（带量词的组又被量词修饰，如 (a+)+）——灾难性回溯会冻结整个进程，请改写：展开嵌套（a+）、去掉外层量词，或拆成多次搜索");
+  }
+  return re;
+}
+
+/** MB-06：静态检测嵌套量词——扫描源串跟踪组嵌套：某组体内出现过量词（含深层）且该组后跟量词即命中。
+ *  字符类 [...] 内与转义字符跳过（其中的 *+?{ 是字面量）；括号不平衡交给 new RegExp 报语法错。 */
+function hasNestedQuantifier(source: string): boolean {
+  const stack: boolean[] = []; // 进入各组前「外层序列是否已出现量词」
+  let quantified: boolean = false; // 当前层序列中是否出现过量词
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!;
+    if (c === "\\") { i++; continue; }
+    if (c === "[") { // 字符类整段跳过（^ 与紧随的 ] 均为字面量）
+      i++;
+      if (source[i] === "^") i++;
+      if (source[i] === "]") i++;
+      while (i < source.length && source[i] !== "]") { if (source[i] === "\\") i++; i++; }
+      continue;
+    }
+    if (c === "(") {
+      stack.push(quantified);
+      quantified = false;
+      if (source[i + 1] === "?") { // 组前缀（(?: (?= (?! (?<= (?<! (?<name>）——其中的 ? 不是量词
+        i++;
+        const n = source[i + 1];
+        if (n === ":" || n === "=" || n === "!" || n === "<") i++;
+      }
+      continue;
+    }
+    if (c === ")") {
+      const outer = stack.pop();
+      if (outer === undefined) continue; // 不平衡——new RegExp 自会报错
+      const bodyQuantified: boolean = quantified;
+      const q = quantifierAt(source, i + 1);
+      // 量词化的组、组内又含量词 → 嵌套；外层带 ≤10 显式上界（{3}/{1,4}——多项式级非指数）放行
+      if (q.len > 0 && bodyQuantified && !q.bounded) return true;
+      quantified = outer || bodyQuantified || q.len > 0;
+      i += q.len > 0 ? q.len - 1 : 0;
+      continue;
+    }
+    const q = quantifierAt(source, i);
+    if (q.len > 0) { quantified = true; i += q.len - 1; }
+  }
+  return false;
+}
+
+/** MB-06：位置 i 起是否为量词（* + ? 或成形的 {n}/{n,}/{n,m}——不成形的 { 是字面量）。
+ *  len = 占用长度（0 = 非量词）；bounded = 有 ≤10 的显式重复上界——外层有界的嵌套是多项式级（如 IPv4 的
+ *  (\d+\.){3}\d+），不是指数回溯，放行。 */
+function quantifierAt(source: string, i: number): { len: number; bounded: boolean } {
+  const c = source[i];
+  if (c === "*" || c === "+" || c === "?") return { len: 1, bounded: false };
+  if (c === "{") {
+    const m = /^\{(\d+)(,\d*)?\}/.exec(source.slice(i));
+    if (m) {
+      const upper = m[2] === undefined ? Number(m[1]) : m[2] === "," ? Number.POSITIVE_INFINITY : Number(m[2]!.slice(1));
+      return { len: m[0].length, bounded: upper <= 10 };
+    }
+  }
+  return { len: 0, bounded: false };
+}
+
+/** MB-06：grep 单行匹配长度上限——超长行（minified/bundle 常态）跳过，工作量与多项式病态正则的基都被压住。 */
+const GREP_MAX_LINE = 4096;
 
 /** glob 模式 → 锚定正则：** 跨段、* 单段内、? 单字符（相对根的 posix 风格路径）。 */
 function globToRegExp(pattern: string): RegExp {
@@ -129,6 +215,22 @@ const pathParam = { path: z.string().describe("相对工作目录的路径") };
 /** read 缺省窗口（M4-2.5 T0，opencode/pi 同款）：模型得连贯首段+续读提示；日志侧坍缩靠 mtime 去重。 */
 const READ_DEFAULT_WINDOW = 2000;
 
+/** MB-07（2026-09-28 code review）：read 整读大小闸——>1MB（1_048_576B，与 grep 跳过口径一致）拒绝整读改指引。 */
+const READ_MAX_BYTES = 1_048_576;
+
+/** MB-07：read 单行输出上限——>8KB（8192 字符）截断并标注（报告建议值）。 */
+const READ_MAX_LINE = 8192;
+
+/** CT-04（2026-09-28 code review）：Access.path 语义 = 字面文件系统路径（绝对或按声明方 root 归一）——
+ *  本模块统一 resolveAbs 成绝对路径再声明；解析失败（越出根等）回落原始串，execute 内自会带内报错。 */
+const declaredPath = (fs: LocalFs, path: string): string => {
+  try {
+    return fs.resolveAbs(path);
+  } catch {
+    return path;
+  }
+};
+
 /**
  * 写前比对状态（M4.5 T7②——决策 24④，cc readFileState 同族）：path → 上次读取时的 mtime（+全量读的内容快照）。
  * 模块级共享（read 记 / write·edit 查并刷新）——主对话与所有子代理同图同工具实例，天然互相看得见：
@@ -138,21 +240,24 @@ const READ_DEFAULT_WINDOW = 2000;
 type ReadState = Map<string, { mtimeMs: number; content?: string }>;
 
 /** 写前比对：目标文件修改时间跟「上次读它时记的」对不上就拒绝、要求重读。
- *  Windows 修改时间偶尔漂移——全量读过的回退内容比对（一致 = 漂移，放行并刷新记录）。 */
+ *  Windows 修改时间偶尔漂移——全量读过的回退内容比对（一致 = 漂移，放行并刷新记录）。
+ *  MB-03（2026-09-28 code review）：键统一经 resolveAbs 归一为绝对路径——read("a.ts") 记的记录，
+ *  write("./a.ts")（拼写变体）查的是同一条，不再绕过写前比对。 */
 const writeGuard = async (fs: LocalFs, path: string, readState: ReadState): Promise<string | undefined> => {
-  const prior = readState.get(path);
+  const abs = fs.resolveAbs(path);
+  const prior = readState.get(abs);
   if (prior === undefined) return undefined; // 从没读过（新建文件）——没有「旧印象」可覆盖，不拦
   let mtime: number;
   try {
-    mtime = statSync(fs.resolveAbs(path)).mtimeMs;
+    mtime = statSync(abs).mtimeMs;
   } catch {
     return undefined; // 文件已不在（删后重写）——旧印象无对象
   }
   if (mtime === prior.mtimeMs) return undefined;
   if (prior.content !== undefined) {
     try {
-      if ((await fs.read(path)) === prior.content) {
-        readState.set(path, { mtimeMs: mtime, content: prior.content }); // mtime 漂移但内容没变——刷新记录放行
+      if ((await fs.read(abs)) === prior.content) {
+        readState.set(abs, { mtimeMs: mtime, content: prior.content }); // mtime 漂移但内容没变——刷新记录放行
         return undefined;
       }
     } catch { /* 读失败 → 走拦截 */ }
@@ -160,21 +265,28 @@ const writeGuard = async (fs: LocalFs, path: string, readState: ReadState): Prom
   return `文件在读取后被修改过（${path}）——先重新读取最新内容再写（防按旧印象覆盖别人的改动）`;
 };
 
-/** 写成功后刷新记录：mtime 记新值（后续写不拦），内容快照记刚写的已知内容（漂移回退可比对）。 */
+/** 写成功后刷新记录：mtime 记新值（后续写不拦），内容快照记刚写的已知内容（漂移回退可比对）。
+ *  MB-03：键同 writeGuard——resolveAbs 归一的绝对路径（拼写变体同键）。 */
 const noteWrite = (fs: LocalFs, path: string, readState: ReadState, knownContent?: string): void => {
+  let abs: string;
   try {
-    readState.set(path, { mtimeMs: statSync(fs.resolveAbs(path)).mtimeMs, ...(knownContent !== undefined ? { content: knownContent } : {}) });
+    abs = fs.resolveAbs(path);
   } catch {
-    readState.delete(path);
+    return; // 键解析失败（越出根等）——无键可记（写路径自身会带内报错，这里不二次抛）
+  }
+  try {
+    readState.set(abs, { mtimeMs: statSync(abs).mtimeMs, ...(knownContent !== undefined ? { content: knownContent } : {}) });
+  } catch {
+    readState.delete(abs);
   }
 };
 
 function readTool(fs: LocalFs, readState: ReadState): Tool {
-  // mtime 去重状态（cc readFileState 同款）：键 = path+offset+limit，值 = mtimeMs——文件被改即失效
+  // mtime 去重状态（cc readFileState 同款）：键 = 归一绝对路径+offset+limit，值 = mtimeMs——文件被改即失效
   const lastRead = new Map<string, number>();
   return defineTool({
     name: "tool-fs__read",
-    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFor large files, use offset+limit to read sections rather than the whole file.",
+    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFiles larger than 1MB are rejected (use grep to locate content or shell tools to read sections); binary files are rejected.\nLines longer than 8KB are truncated.",
     parameters: z.object({
       ...pathParam,
       offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
@@ -183,16 +295,33 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
     resolveExecution: async (input) => {
       const { path, offset, limit } = input as { path: string; offset?: number; limit?: number };
       return {
-        accesses: [Access.fsRead(path)],
+        // CT-04（2026-09-28 code review）：Access.path 收字面文件系统路径——相对路径按本模块 root 归一为绝对路径再声明，
+        // 不与调度器按 cwd 归一的基准错位；解析失败回落原始串（execute 内自会带内报错）
+        accesses: [Access.fsRead(declaredPath(fs, path))],
         approvalRule: "tool-fs__read",
         execute: async () => {
           try {
-            const mtime = statSync(fs.resolveAbs(path)).mtimeMs;
-            const key = `${path}:${offset ?? 1}:${limit ?? "d"}`;
-            if (lastRead.get(key) === mtime) {
+            const abs = fs.resolveAbs(path); // MB-03：状态键统一绝对路径（拼写变体同键）
+            const st = statSync(abs);
+            const key = `${abs}:${offset ?? 1}:${limit ?? "d"}`; // MB-03：去重键以归一路径为基
+            if (lastRead.get(key) === st.mtimeMs) {
               return { output: `(file_unchanged：${path} 内容与上次读取相同，未重复注入——重看请换行区间)`, isError: false };
             }
-            const content = await fs.read(path);
+            // MB-07（2026-09-28 code review）：大文件闸——statSync 前置于整读，>1MB（与 grep 跳过口径一致）不整读，
+            // 带内指引改道（巨型日志/minified bundle 的同步阻塞与内存翻倍从入口掐断）
+            if (st.size > READ_MAX_BYTES) {
+              return {
+                output: `文件过大（${(st.size / 1_048_576).toFixed(1)}MB，超过 1MB 整读上限）——已跳过读取。请用 tool-fs__grep 定位内容，或 shell 分段读取（head/tail/sed -n '起,止p'）`,
+                isError: true,
+              };
+            }
+            const content = await fs.read(abs);
+            // MB-07：二进制判定——首 8KB 含 NUL 或 U+FFFD 替换率过高（grep 同款粗判）→ 明确提示，不注入乱码
+            const head = content.slice(0, 8192);
+            const bad = head.match(/\uFFFD/g)?.length ?? 0;
+            if (head.includes("\u0000") || bad > head.length / 4) {
+              return { output: `文件疑似二进制（${path}）——read 只处理文本；请用 glob 确认文件后改用 shell 或专用工具`, isError: true };
+            }
             const lines = content.split("\n").filter((_, i, arr) => i < arr.length - 1 || arr[i] !== ""); // 去尾空段
             const start = (offset ?? 1) - 1;
             if (start >= lines.length) {
@@ -201,13 +330,17 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
             const effectiveLimit = limit ?? Math.min(READ_DEFAULT_WINDOW, lines.length - start);
             const slice = lines.slice(start, start + effectiveLimit);
             const truncatedTail = start + slice.length < lines.length;
-            const numbered = slice.map((text, i) => `${start + i + 1}→${text}`).join("\n");
+            // MB-07：单行超长（>8KB，minified 常态）截断并标注——不整行注入
+            const numbered = slice.map((text, i) => {
+              const shown = text.length > READ_MAX_LINE ? text.slice(0, READ_MAX_LINE) + `…（行超长，已截断：原 ${text.length} 字符）` : text;
+              return `${start + i + 1}→${shown}`;
+            }).join("\n");
             const footer = truncatedTail
               ? `\n(共 ${lines.length} 行，已显示 ${start + 1}-${start + slice.length}——续读请带 offset=${start + slice.length + 1}，或 offset+limit 读区间)`
               : `\n(第 ${start + 1}-${start + slice.length} 行，共 ${lines.length} 行)`;
-            lastRead.set(key, mtime);
+            lastRead.set(key, st.mtimeMs);
             const wholeFile = start === 0 && !truncatedTail; // 全量读过 → 记内容快照（写前比对的漂移回退用）
-            readState.set(path, { mtimeMs: mtime, ...(wholeFile ? { content } : {}) });
+            readState.set(abs, { mtimeMs: st.mtimeMs, ...(wholeFile ? { content } : {}) }); // MB-03：键 = 归一绝对路径
             return { output: numbered + footer, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
@@ -226,7 +359,7 @@ function writeTool(fs: LocalFs, readState: ReadState): Tool {
     resolveExecution: async (input) => {
       const { path, content } = input as { path: string; content: string };
       return {
-        accesses: [Access.fsWrite(path)],
+        accesses: [Access.fsWrite(declaredPath(fs, path))], // CT-04：字面绝对路径声明（按本模块 root 归一）
         approvalRule: "tool-fs__write",
         execute: async () => {
           try {
@@ -259,7 +392,7 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
     resolveExecution: async (input) => {
       const { path, edits } = input as { path: string; edits: { oldText: string; newText: string; replaceAll?: boolean }[] };
       return {
-        accesses: [Access.fsWrite(path)],
+        accesses: [Access.fsWrite(declaredPath(fs, path))], // CT-04：字面绝对路径声明（按本模块 root 归一）
         approvalRule: "tool-fs__edit",
         execute: async () => {
           try {
@@ -322,7 +455,8 @@ function globTool(fs: LocalFs): Tool {
     resolveExecution: async (input) => {
       const { pattern, head_limit } = input as { pattern: string; head_limit?: number };
       return {
-        accesses: [Access.fsRead(pattern)],
+        // CT-04：pattern 不是文件系统路径——按「整根读」声明字面绝对路径（根），调度器前缀比较恢复真实语义
+        accesses: [Access.fsRead(fs.absRoot())],
         approvalRule: "tool-fs__glob",
         execute: async () => {
           try {
@@ -343,7 +477,7 @@ function globTool(fs: LocalFs): Tool {
 function grepTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__grep",
-    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.",
+    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.",
     parameters: z.object({
       pattern: z.string().describe("JavaScript 正则"),
       output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
@@ -351,7 +485,8 @@ function grepTool(fs: LocalFs): Tool {
     resolveExecution: async (input) => {
       const { pattern, output_mode } = input as { pattern: string; output_mode?: "content" | "files_with_matches" | "count" };
       return {
-        accesses: [Access.fsRead("**/*")],
+        // CT-04：grep 扫全根——声明字面绝对根路径（原 **/* 被调度器 resolve 成 <cwd>/**/* 字面串，恒不与写冲突）
+        accesses: [Access.fsRead(fs.absRoot())],
         approvalRule: "tool-fs__grep",
         execute: async () => {
           try {

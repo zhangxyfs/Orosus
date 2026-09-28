@@ -44,6 +44,18 @@ describe("diffGraphs（§5.5 判定规则）", () => {
     expect(r.added).toEqual(["y"]);
     expect(r.unchanged).toEqual(["x"]);
   });
+  it("⑤b CH-05 连带回归钉：local 模块 def 引用逐次新对象（jiti moduleCache:false）不再误判 Reloaded——entryHash 相等 + 来源层相等 = Unchanged；来源层翻转（local↔inline）才判变", () => {
+    const h1 = "same-hash";
+    const oldLocal = gd("m", { source: "local", entryHash: h1 });
+    const newLocal = gd("m", { source: "local", entryHash: h1, def: mod("m") }); // 全新 def 对象（模拟二次发现）
+    expect(diffGraphs([oldLocal], [newLocal]).unchanged).toEqual(["m"]); // 旧实现：def 引用恒不等 → 每次全量误重载
+    expect(diffGraphs([gd("m", { source: "local", entryHash: h1 })], [gd("m", { source: "local", entryHash: "h2" })]).reloaded).toEqual(["m"]); // 代码变了（hash 变）照判 Reloaded
+    expect(diffGraphs([gd("m", { source: "local", entryHash: h1 })], [gd("m", { source: "inline", entryHash: h1 })]).reloaded).toEqual(["m"]); // 换源（local→inline）判变
+    // 引用判据对 inline/builtin 语义不变：同引用 Unchanged、新对象判变
+    const sameInline = gd("m");
+    expect(diffGraphs([sameInline], [{ ...sameInline, def: sameInline.def }]).unchanged).toEqual(["m"]);
+    expect(diffGraphs([gd("m")], [gd("m", { def: mod("m") })]).reloaded).toEqual(["m"]);
+  });
 });
 
 // ---- activate 级：preserved / generation / stale / tombstone / 复用注册表 ----

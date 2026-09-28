@@ -2,7 +2,7 @@ import type { LlmPort } from "@orosus/contracts/module";
 import type { SearchConfig, SearchResult, WebSearchBackend } from "../search.ts";
 
 /** SW-14 常量区（Reasonix search.go:18-25 六值逐字平移）。 */
-const MAX_QUERY_BYTES = 4096;
+export const MAX_QUERY_BYTES = 4096; // MV-03：导出供 search.ts schema 同源引用（单位口径唯一处）
 const MAX_SUMMARY_CHARS = 12_000; // Reasonix 按字节帽；本件按字符帽（CJK 不劈半——超帽场景差异可忽略，登记）
 const MAX_SOURCES = 8;
 const MAX_SOURCE_SNIPPET_CHARS = 2048;
@@ -15,7 +15,8 @@ const instruction = (query: string): string =>
 
 /** llm 搜索失败的原因袋——链降级判定与话术拼装都靠它（search.ts 链据此决定落下一档）。 */
 export class LlmSearchError extends Error {
-  readonly kind: "endpoint-error" | "no-native-results" | "client-tool-requested" | "interrupted" | "timeout";
+  /** MV-01：query-too-long = 本地输入校验失败（客户端问题，非端点能力判定）——链层/遍历层均不据此置粘性。 */
+  readonly kind: "endpoint-error" | "no-native-results" | "client-tool-requested" | "interrupted" | "timeout" | "query-too-long";
   constructor(kind: LlmSearchError["kind"], message: string) {
     super(message);
     this.kind = kind;
@@ -51,10 +52,6 @@ export function llmBackend(deps: LlmBackendDeps): WebSearchBackend {
 
   /** 单次探测调用：出原生搜索结果 → hits；否则抛 LlmSearchError。 */
   const attempt = async (query: string, model: string | undefined, signal: AbortSignal): Promise<SearchResult[]> => {
-    const queryBytes = Buffer.byteLength(query, "utf8");
-    if (queryBytes < 1 || queryBytes > MAX_QUERY_BYTES) {
-      throw new LlmSearchError("endpoint-error", `query 长度 ${queryBytes} 字节超出 1..${MAX_QUERY_BYTES} 界（SW-14）`);
-    }
     const timeoutSig = AbortSignal.timeout(timeoutMs);
     const combined = AbortSignal.any([signal, timeoutSig]);
     let summary = "";
@@ -117,6 +114,12 @@ export function llmBackend(deps: LlmBackendDeps): WebSearchBackend {
     kind: "llm",
     available: () => true,
     search: async (query, signal): Promise<SearchResult[]> => {
+      // MV-01 修复：字节校验前置到 search 入口 + 独立 kind（原 endpoint-error 会污染端点错误统计，
+      // 且自动档遍历会把这条确定性的本地失败当「探测全灭」记账置粘性）。入口即抛 = 零网络零遍历。
+      const queryBytes = Buffer.byteLength(query, "utf8");
+      if (queryBytes < 1 || queryBytes > MAX_QUERY_BYTES) {
+        throw new LlmSearchError("query-too-long", `query 长度 ${queryBytes} 字节超出 1..${MAX_QUERY_BYTES} 界（SW-14）`);
+      }
       const cfg = deps.cfg();
       const pinned = cfg.model !== undefined && cfg.model.trim() !== "" ? cfg.model.trim() : undefined;
       // 钉住 = 单发不遍历（SW-15 钉死语义——用户显式选的模型失败即带内报错，不降级不遍历）

@@ -3,7 +3,7 @@ import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, digest, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 
-export { toBridgedTool, sanitizeToolMeta, digest } from "./bridge.ts";
+export { toBridgedTool, sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 
 /** 测试与 activate 共用的连接口：listTools 一次（清单快照语义）+ callTool 按调。 */
 export interface ServerConnection {
@@ -27,6 +27,9 @@ export interface McpActivateOut {
   failedServers: string[];
   /** 连接成功登记（M4-2 T12）：config 声明但未连的不列——promptSection 只写真连接。 */
   connected: { name: string; tools: string[]; instructions?: string }[];
+  /** MI-07：消毒后撞名被跳过的工具（带内记录——不进 registry〔重名 throw 会降级整个模块〕）。
+   *  如 server 清单同时提供 "a.b" 与 "a_b"——两段消毒后同注册名，保留首个、跳过后来者。 */
+  skippedTools: { server: string; tool: string; reason: string }[];
   /** MI-02：逐个关成功建立的连接（close 缺省的 fake 连接跳过）；单个失败不株连其余。 */
   close(): Promise<void>;
 }
@@ -37,6 +40,9 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   const connected: { name: string; tools: string[]; instructions?: string }[] = [];
   const manifest: Record<string, string[]> = {};
   const conns: ServerConnection[] = [];
+  const skippedTools: McpActivateOut["skippedTools"] = [];
+  const seenNames = new Set<string>(); // 注册名去重（MI-07）：registry 对非墓碑重名 throw → 整模块降级
+  const mapping: Record<string, Record<string, string>> = {}; // MI-07：消毒改名映射（原样名 → 注册名），manifest 事件可观测
   for (const [name, cfg] of Object.entries(opts.servers)) {
     if (cfg.enabled === false) continue;
     try {
@@ -45,7 +51,15 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       conns.push(conn);
       manifest[name] = list.map((t) => t.name);
       for (const meta of list) {
-        tools.push(toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true)); // server 级 deferred 透传（M4-3 T5）
+        const tool = toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）
+        if (seenNames.has(tool.name)) {
+          // MI-07 带内跳过：消毒后撞名——进 registry 会 throw（整模块降级），跳过后来者并记录
+          skippedTools.push({ server: name, tool: meta.name, reason: `消毒后注册名撞车：${tool.name}` });
+          continue;
+        }
+        seenNames.add(tool.name);
+        if (tool.name !== `mcp__${name}__${meta.name}`) (mapping[name] ??= {})[meta.name] = tool.name;
+        tools.push(tool);
       }
       let instructions: string | undefined;
       try {
@@ -57,12 +71,18 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
     }
   }
   if (Object.keys(manifest).length > 0) {
-    opts.sessionAppend("mcp/manifest", { digest: digest(manifest), servers: manifest }); // 计划补空白的 digest 落点
+    // 计划补空白的 digest 落点；MI-07：消毒改名映射与跳过清单随事件落盘（digest 仍按 server 原样清单算——与 server 侧可对账）
+    opts.sessionAppend("mcp/manifest", {
+      digest: digest(manifest),
+      servers: manifest,
+      ...(Object.keys(mapping).length > 0 ? { mapping } : {}),
+      ...(skippedTools.length > 0 ? { skipped: skippedTools } : {}),
+    });
   }
   // MI-02：close 幂等（重复调用无二次副作用）——模块 dispose 与装配失败清理都可能触达
   let closed = false;
   return {
-    tools, failedServers, connected,
+    tools, failedServers, connected, skippedTools,
     close: async () => {
       if (closed) return;
       closed = true;
@@ -140,6 +160,8 @@ export const mcpDef = defineModule({
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
     });
     for (const t of out.tools) ctx.contribute.tool(t);
+    // MI-07：撞名跳过的带内可观测面（registry 不再因重名 throw——模块不降级，但用户须能看到少了哪些工具）
+    for (const sk of out.skippedTools) ctx.log.warn("mcp.tool-skipped", `工具 "${sk.tool}"（server ${sk.server}）未注册：${sk.reason}`, { server: sk.server, tool: sk.tool });
     // server 指令节（M4-2 T12，order 20——todo=10 之后、AGENTS.md 拼尾之前）：
     // 有 instructions 用 instructions，否则列工具清单；零连接 = 空段（getter 活读——T7 起段注册保 getter）
     ctx.contribute.promptSection({

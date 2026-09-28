@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { OnboardingSession, type OnboardingDeps, type OnboardingProvider } from "./onboarding.ts";
+import { visibleWidth } from "./width.ts";
 
 const PROVIDERS: OnboardingProvider[] = [
   { id: "openai", name: "OpenAI", envKey: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", type: "openai", local: false },
@@ -253,5 +254,47 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.stateRef.p2.drafts["openai"]).toBe("sk-live-123");
     s.handleKey("enter");
     expect(s.stateRef.p2.configured).toContain("openai");
+  });
+});
+
+describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最小设计尺寸 40×12」置于终端实际尺寸之上：cols≤40 时 mw=40 ≥ cols、col=0 合成行写满底行右角格，conhost 无 DECAWM 自动换行滚屏；P1 body 恒 7 行只垫不裁使 lines 超 mh 预算。修复后 col+width ≤ cols−1 恒成立〔popuplayout availW=cols−1 同口径〕、body 裁到 bodyH）", () => {
+  // 合成末行宽 = col + 可见行宽（fullscreen overlay 合成后不再受底行 cols−1 截断——防御①只在文本层）
+  const composedLastRowW = (g: { lines: string[]; row: number; col: number; width: number }): number =>
+    g.col + Math.max(...g.lines.map((l) => visibleWidth(l)));
+
+  it("① 边界矩阵：cols×rows 全档（含旧口径全数越界的 cols≤40 × rows 9–14）合成末行宽 ≤ cols−1、行不越屏", () => {
+    const { deps } = mkDeps();
+    for (const page of [1, 2, 3] as const) {
+      const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+      for (let p = 1; p < page; p++) s.handleKey("ctrl+n");
+      if (page === 2) s.handleKey("enter"); // key 输入态（body 行数最多的一档）
+      for (const cols of [12, 20, 30, 36, 40, 41, 44, 60, 96, 110]) {
+        for (const rows of [7, 9, 10, 11, 12, 13, 14, 15, 20, 30]) {
+          const g = s.render(cols, rows);
+          expect(g.col + g.width, `p${page} ${cols}×${rows} 宽`).toBeLessThanOrEqual(cols - 1);
+          expect(composedLastRowW(g), `p${page} ${cols}×${rows} 合成末行`).toBeLessThanOrEqual(cols - 1);
+          expect(g.row + g.lines.length, `p${page} ${cols}×${rows} 高`).toBeLessThanOrEqual(Math.max(rows, 6));
+        }
+      }
+    }
+  });
+
+  it("② 具体边界钉：cols=36 弹窗宽 = cols−1 = 35（旧 40 越界）；rows=10 行数 ≤ 10（旧 P1 body 溢出 13 行）", () => {
+    const { deps } = mkDeps();
+    const s = new OnboardingSession(deps);
+    const g36 = s.render(36, 30);
+    expect(g36.width).toBe(35); // 旧：max(40, 28) = 40 > cols
+    expect(g36.col).toBe(0);
+    const g = s.render(36, 10);
+    expect(g.lines.length).toBeLessThanOrEqual(10); // 旧：mh=12、body 只垫不裁 → 13 行
+    expect(g.lines.length).toBeGreaterThanOrEqual(6); // 退化也保住框结构（顶框/头/底框可见）
+  });
+
+  it("③ 大终端零变化：cols≥46 / rows≥15 与旧口径同值（96×24 基准不回归）", () => {
+    const { deps } = mkDeps();
+    const s = new OnboardingSession(deps);
+    expect(s.render(104, 26).width).toBe(96); // max(40, min(96, 96)) 同旧
+    expect(s.render(60, 30).width).toBe(52); // max(40, 52) 同旧
+    expect(s.render(104, 20).lines).toHaveLength(17); // mh=18 → bodyH=11 ≥ P1 的 7 行：定高结构同旧
   });
 });

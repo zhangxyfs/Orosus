@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { Harness, SessionEvent } from "@orosus/core";
 import { createRenderState, renderChunk, renderEvent, renderHistoryLines, historyPage, attachRender, errorMessageText, registerToolLabels, toolDisplayName, toolCallLine } from "./render.ts";
@@ -178,6 +178,39 @@ describe("模型错误 toast 化（errorMessageText + attachRender onError）", 
     });
     await new Promise((r) => setTimeout(r, 20));
     expect(act.join("")).toContain("[模型错误] HTTP 500");
+  });
+});
+
+// ——CR-07 网兜：两个 void 异步循环（liveChunks/events）此前无 catch——消费回调抛错即未接管
+// rejection，Node 22+ 默认直接崩进程。两路各兜一层：诊断落 stderr、该路循环退出（进程不崩）
+describe("attachRender 网兜（CR-07——消费回调抛错不再裸奔成 unhandled rejection）", () => {
+  it("① chunk 路写面抛错 → 捕获落 stderr 诊断、该路退出（进程不崩）", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      attachRender(fakeH([{ type: "text/delta", text: "hi" }]), {
+        write: () => { throw new Error("写面炸了"); },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(String(errSpy.mock.calls[0]?.[0])).toContain("写面炸了");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+  it("② 事件路 onEvent 抛错 → 同款网兜（不再 unhandled rejection）", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const h = {
+        liveChunks: async function* () {},
+        events: async function* () { yield event("turn/end"); },
+      } as unknown as Harness;
+      attachRender(h, { write: () => {} }, () => { throw new Error("onEvent 炸了"); });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(String(errSpy.mock.calls[0]?.[0])).toContain("onEvent 炸了");
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 

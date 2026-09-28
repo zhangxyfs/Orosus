@@ -112,6 +112,24 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
       await deps.setModel(name); // 裸槽名（F5 十轮）——真名（MP-01 前：显示名写入，provider 解析必失败）
       return `已设为当前默认（provider = "${name}"）`;
     }
+    if (act === "更新密钥") {
+      // MP-05：接通真实交互流（此前菜单数组提供该项但处理链无分支——选中直接落「已返回」，密钥不变，
+      // 用户要到下一次 401 才发现更新没生效）。槽密钥经 $ENV: 引用 secrets.env——据此定位 env key；
+      // 非 $ENV 槽（明文 key / 无密钥）如实告知，不猜目标 key、零副作用。
+      const ref = current[name]!.apiKey;
+      const envKey = ref !== undefined && ref.startsWith("$ENV:") ? ref.slice(5) : undefined;
+      if (envKey === undefined) {
+        return "未更新：该槽未使用 $ENV: 密钥引用（明文 key 或无密钥槽——请直接编辑 config.toml / secrets.env）";
+      }
+      const pasted = (await ui.askSecret(`请粘贴 ${envKey} 的新值（回车取消）`)).trim();
+      if (pasted === "") return "已取消（密钥未变更）";
+      await deps.appendSecret(envKey, pasted); // 后写覆盖语义（loadSecretsEnv 后者覆盖）——CLI 宿主写盘后重载即生效
+      const v = await verify(deps, current[name]!, pasted); // 校验即确认（与添加流程同款，GET /models 零 token 消耗）
+      if (v.kind === "ok") return `已更新 ${displayName(name, { name })} 的密钥并校验通过`;
+      if (v.kind === "auth") return "已写入但新密钥校验未过（401/403）——可重选「更新密钥」再试";
+      if (v.kind === "unsupported") return "已写入（端点不支持校验接口——新密钥已生效，下次对话即使用）";
+      return "已写入但端点暂不可达（网络错误）——新密钥已生效，下次对话即使用";
+    }
     if (act === "移除") {
       const next = { ...current };
       delete next[name]; // 真名删除（MP-01 前：delete next[显示名] 对槽表是 no-op，回报「已移除」假成功）

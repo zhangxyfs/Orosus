@@ -32,6 +32,15 @@ const hostOf = (u: string): string | undefined => {
   try { return new URL(u).host; } catch { return undefined; }
 };
 
+/** CM-08（2026-09-28 code review）：目录条目无 env 字段（自架/keyless 厂商常见）而用户显式传 --key 时，
+ *  旧实现的两个落盘分支（appendSecret / apiKey $ENV:）都只沿 envKey 走——密钥被静默丢弃、输出仍 success，
+ *  运行时 401。修法（落盘口径）：派生 OROSUS_<ID>_KEY 键名落 secrets.env + config 写 $ENV: 引用——
+ *  仓内铁律 config 不落明文（provider-cmd.test 回归钉），success 输出必须等于密钥已持久。 */
+const deriveEnvKey = (id: string): string => {
+  const norm = id.toUpperCase().replaceAll(/[^A-Z0-9_]/g, "_");
+  return `OROSUS_${norm === "" ? "CUSTOM" : norm}_KEY`;
+};
+
 async function verify(baseUrl: string, actualKey: string | undefined, fetchImpl: typeof fetch): Promise<"ok" | "auth" | "network" | "unsupported"> {
   try {
     const res = await fetchImpl(`${baseUrl}/models`, {
@@ -130,7 +139,12 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     }
     if (v === "unsupported") io.out("警告：端点可达但不支持校验接口（/models 404/405），密钥未验证，仍写入");
 
-    if (flagKey !== undefined && envKey !== undefined) appendSecret(io.secretsPath, envKey, flagKey);
+    // CM-08：落盘键名 = 目录声明的 env 名；无声明且带 --key → 派生键（不静默吞密钥，见 deriveEnvKey 注释）
+    const envKeyForWrite = envKey ?? (flagKey !== undefined ? deriveEnvKey(id) : undefined);
+    if (flagKey !== undefined && envKeyForWrite !== undefined) {
+      appendSecret(io.secretsPath, envKeyForWrite, flagKey);
+      if (envKey === undefined) io.out(`该目录条目未声明密钥环境变量名——--key 已按派生键 ${envKeyForWrite} 落 secrets.env`);
+    }
 
     const config = readConfig(io.configPath);
     const pc = (config["provider-custom"] as Record<string, unknown> | undefined) ?? {};
@@ -139,7 +153,7 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     providers[id] = {
       type: wire.wire,
       baseUrl: finalBaseUrl,
-      ...(envKey !== undefined ? { apiKey: `$ENV:${envKey}` } : {}),
+      ...(envKeyForWrite !== undefined ? { apiKey: `$ENV:${envKeyForWrite}` } : {}),
       ...(modelFlag !== undefined ? { defaultModel: modelFlag } : {}), // D32 裸名路由锚——与向导 setModel 同口径（M4-2 T1）
     };
     pc["providers"] = providers;
