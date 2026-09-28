@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 发布到 GitHub 公开仓库：把 master 的新提交剔除 docs/superpowers 后同步到 public 分支并推送。
+# 发布到 GitHub 公开仓库：把 master 的新提交剔除内部文档路径后同步到 public 分支并推送。
 #
-# 两个远端的分工（2026-09-26 拍板）：
-#   origin (GitHub, 公开) —— 只收净化历史，绝不出现 docs/superpowers（内部设计文档）
+# 两个远端的分工（2026-09-26 拍板；2026-09-28 扩面）：
+#   origin (GitHub, 公开) —— 只收净化历史，绝不出现 docs/superpowers（内部设计文档）与 doc/（code review 报告）
 #   gitea (Gitea, 私有)   —— 收全量 master，日常 git push gitea master
 #
 # 用法：
@@ -18,7 +18,7 @@ set -euo pipefail
 
 SRC=master
 PUB=public
-HIDE=docs/superpowers
+HIDE_PATHS=(docs/superpowers doc)
 REMOTE=origin
 PUSH=1
 if [ "${1:-}" = "--no-push" ]; then PUSH=0; fi
@@ -36,7 +36,7 @@ if [ -z "$base" ]; then
     echo "✗ 已有 $PUB 分支但没有 base 记录，状态不一致，先人工确认再跑。" >&2
     exit 1
   fi
-  echo "（首次：全量重放 $SRC 全历史，剔除 $HIDE）"
+  echo "（首次：全量重放 $SRC 全历史，剔除 ${HIDE_PATHS[*]}）"
   range=("$src_tip")
 else
   if ! git merge-base --is-ancestor "$base" "$src_tip"; then
@@ -71,7 +71,7 @@ for sha in "${commits[@]}"; do
   idx="$(git rev-parse --git-dir)/publish-idx"
   GIT_INDEX_FILE=$idx git read-tree "$sha"
   # -f 必带：临时索引与工作区天然不一致，rm 的安全检查必拦；--cached 保证绝不碰工作区文件
-  GIT_INDEX_FILE=$idx git rm -rqf --cached --ignore-unmatch "$HIDE"
+  GIT_INDEX_FILE=$idx git rm -rqf --cached --ignore-unmatch "${HIDE_PATHS[@]}"
   tree=$(GIT_INDEX_FILE=$idx git write-tree)
   rm -f "$idx"
 
@@ -112,7 +112,7 @@ done
 
 git update-ref "refs/heads/$PUB" "$tip"
 echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
-echo "✓ $PUB 分支已更新：本轮重放 $total 个提交，保留 $kept 个（只改 $HIDE 的提交被剪枝）。"
+echo "✓ $PUB 分支已更新：本轮重放 $total 个提交，保留 $kept 个（只改隐藏路径 ${HIDE_PATHS[*]} 的提交被剪枝）。"
 
 if [ "$PUSH" -eq 1 ]; then
   git push "$REMOTE" "refs/heads/$PUB:refs/heads/master"
