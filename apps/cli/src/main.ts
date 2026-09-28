@@ -50,6 +50,7 @@ import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
+import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -1051,46 +1052,29 @@ const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; p
   return result;
 };
 
-/** 配置面读数（contextWindow + approval.mode 缺省——用户层 → 项目层同 §6.6 分层）。 */
+/** 配置面读数（m4-8 T2.5 收口 loadConfig——modules.d/env 层自动生效;散读旁路作废）。
+ *  env 层语义对齐(方案空白 7):OROSUS_CONTEXTWINDOW 现在真的生效(旧散读旁路了分层)。 */
 const configFace = (): { contextWindow: number; approvalMode: string } => {
-	let contextWindow = 200000;
-	let approvalMode = "ask-risky";
-	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
-		try {
-			const doc = parse(readFileSync(f, "utf8")) as { contextWindow?: number; approval?: { mode?: string } };
-			if (typeof doc.contextWindow === "number") contextWindow = doc.contextWindow;
-			if (typeof doc.approval?.mode === "string") approvalMode = doc.approval.mode;
-		} catch {
-			/* 缺文件/解析失败用缺省 */
-		}
-	}
-	return { contextWindow, approvalMode };
+	const cfg = loadConfig({});
+	const cw = cfg.core.contextWindow;
+	const mode = (cfg.sections.get("approval") as { mode?: unknown } | undefined)?.mode;
+	return {
+		contextWindow: typeof cw === "number" ? cw : 200000,
+		approvalMode: typeof mode === "string" ? mode : "ask-risky",
+	};
 };
 
-/** [tui] latex 读数（mdpipe 批 T7）：boolean | undefined；分层同 configFaceTui。 */
+/** [tui] 三键读数（m4-8 T2.5 收口 loadConfig——modules.d 自动生效）。
+ *  分层对齐(方案空白 9):旧散读是「用户层优先」,收口统一为 §6.6 权威「项目压用户」——tui 键
+ *  几乎总在用户层,真机感知面近零;登记为有意对齐。function 声明——早处初始化要用(hoisting)。 */
 function configFaceTuiLatex(): boolean | undefined {
-	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
-		try {
-			const doc = parse(readFileSync(f, "utf8")) as { tui?: { latex?: unknown } };
-			if (typeof doc.tui?.latex === "boolean") return doc.tui.latex;
-		} catch {
-			/* 缺文件/解析失败用缺省 */
-		}
-	}
-	return undefined;
+	const v = (loadConfig({}).sections.get("tui") as { latex?: unknown } | undefined)?.latex;
+	return typeof v === "boolean" ? v : undefined;
 }
 
-/** [tui] mode 读数（用户层 → 项目层同 §6.6 分层；F6）。function 声明——早处初始化要用（hoisting）。 */
 function configFaceTui(): string | undefined {
-	for (const f of [join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml")]) {
-		try {
-			const doc = parse(readFileSync(f, "utf8")) as { tui?: { mode?: string } };
-			if (typeof doc.tui?.mode === "string") return doc.tui.mode;
-		} catch {
-			/* 缺文件/解析失败用缺省 */
-		}
-	}
-	return undefined;
+	const v = (loadConfig({}).sections.get("tui") as { mode?: unknown } | undefined)?.mode;
+	return typeof v === "string" ? v : undefined;
 }
 
 /** 磁盘占用视图文本（F6——ROADMAP 缓存目录条目③销账面）。 */
@@ -2047,11 +2031,10 @@ if (tuiMode === "full" && args.print === undefined) {
 	if (!existsSync(userConfigPath)) {
 		onboardingTrigger = { reason: "fresh" };
 	} else {
-		try {
-			parse(readFileSync(userConfigPath, "utf8").replace(/^﻿/, ""));
-		} catch {
-			onboardingTrigger = { reason: "broken" };
-		}
+		// m4-8 T2.5 收口 loadConfig：warnings 本就产出解析失败信号(SW-20);modules.d 坏文件走目录层
+		// 容错字样不计入 broken(设计 §3.6——目录坏文件只降级不触发引导)
+		const broken = loadConfig({ userFile: userConfigPath }).warnings.some((w) => w.includes(userConfigPath) && w.includes("解析失败"));
+		if (broken) onboardingTrigger = { reason: "broken" };
 	}
 	if (onboardingTrigger === null && h.graph().audit().some((a) => a.state === "failed")) {
 		onboardingTrigger = { reason: "degraded" };
