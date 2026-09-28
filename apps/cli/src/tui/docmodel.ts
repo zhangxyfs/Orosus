@@ -6,7 +6,9 @@
  *  当前宽度即时渲染（md 块带宽度缓存防每帧重排）——侧栏开关改变流区宽后，历史内容
  *  下一帧即按新宽回流（旧实现渲染结果入库，宽度变化后折行定格不回流）。
  *  2026-09-23 走查批：tool 条目结构化（args/结果留存）——Edit/Write diff 与失败体 Alt+O 折叠渲染；
- *  用户消息块按流区宽折行（此前直推不折行）。 */
+ *  用户消息块按流区宽折行（此前直推不折行）。
+ *  2026-09-28 卡顿批 A：定格条目全部宽度级缓存（此前仅 md）——frameLines 单帧成本从 O(会话文本)
+ *  降为拼引用；kimi「字符串引用没变复用上帧结果」的条目级等价物（见 LineCache 注释）。 */
 
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import { stripDangerEsc } from "../ansi-guard.ts";
@@ -22,13 +24,21 @@ import type { StreamChunk } from "./streamview.ts";
 
 type ToolResult = { isError: boolean; output?: string | undefined; lines: number }; // output 仅失败留存（成功体可巨大）
 
+/** 定格条目渲染缓存（bash 卡顿批 A，2026-09-28）：frameLines 每帧跑、单帧成本曾 = O(会话文本)
+ *  （think 收起态照付全文 wrapText），busy 心跳 10Hz 全帧叠上 bash 子进程抢 CPU 即用户可感的卡顿。
+ *  键 = 宽度 + 折叠态 + result 在场——命中即拼引用不重排；宽度变化（Ctrl+T/resize）/开关切换/
+ *  result 挂上/条目替换（write 的 TOOL_MERGE 换新对象，不带旧缓存）天然击穿。主题切换不击穿
+ *  （历史行旧色不重刷 = m5 T12 已披露口径，缓存后行为反而一致）。活动块（流式中的 think/md）不缓存。 */
+type LineCache = { w: number; lines: string[] };
+
 type Entry =
-	| { k: "raw"; s: string } // 工具/事件/横幅/提示行——超宽时 wrapText 兜底
-	| { k: "md"; src: string; cache?: { w: number; lines: string[] } } // markdown 源——按宽度渲染（缓存）
-	| { k: "user"; src: string } // 用户消息块（❯ 暖金）
-	| { k: "think"; src: string } // 思考块（Alt+E 折叠态随 frameLines 当下渲染）
-	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[] } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕）
-	| { k: "group"; ids: string[] }; // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算（kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
+	| { k: "raw"; s: string; cache?: LineCache } // 工具/事件/横幅/提示行——超宽时 wrapText 兜底（宽度级缓存）
+	| { k: "md"; src: string; cache?: LineCache } // markdown 源——按宽度渲染（缓存）
+	| { k: "user"; src: string; cache?: LineCache } // 用户消息块（❯ 暖金）——宽度级缓存
+	| { k: "think"; src: string; cache?: { w: number; open: boolean; lines: string[] } } // 思考块——键含 thinkOpen（收起态旧口径每帧付全文 wrapText）
+	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存）
+	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
+	| { k: "skill"; name: string }; // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
@@ -353,6 +363,9 @@ export class DocModel {
 					if (typeof m.text !== "string" || m.text === "") continue;
 					// M4.5 T9：子代理送回走灰色系统行（sourceModule 标记——非用户块；行文自带 [非用户输入] 头防伪装）
 					if (m.sourceModule === "tool-subagent") this.pushLine(theme.fg("muted", m.text));
+					// 日期系统行（host/date）不回显：实时路 renderEvent 本就不渲染它，回放对齐——
+					// resume 后流区不该冒出「[非用户输入] 系统提醒：今天是 …」（2026-09-28 修复，落盘与请求侧不动）
+					else if (m.sourceModule === "host/date") continue;
 					else this.userPrompt(m.text);
 				}
 			} else if (e.type === "turn/compaction") {
@@ -363,8 +376,16 @@ export class DocModel {
 		this.settleActive();
 	}
 
-	/** 用户消息块（❯ 青玉 + 暖金加粗正文 + 前后各空一行）。 */
+	/** 用户消息块（❯ 青玉 + 暖金加粗正文 + 前后各空一行）。
+	 *  技能手动加载消息（斜杠菜单 Enter 注入的 <skill> 全文）单行紧凑化（2026-09-28 用户拍板：正文
+	 *  不打印进对话流——kimi「Activated skill」/pi「[skill] name」同款；全文照发模型上下文）。按宿主
+	 *  skillInjectText 的机器标记行鉴别——实时回显与 historyFrom 回放同走本口，两路同形。 */
 	userPrompt(text: string): void {
+		const m = /^（用户通过菜单手动加载技能 "(.+?)"——请按该技能正文行事）/.exec(text);
+		if (m !== null) {
+			this.lines.push({ k: "skill", name: m[1]! });
+			return;
+		}
 		this.lines.push({ k: "user", src: text });
 	}
 
@@ -405,30 +426,45 @@ export class DocModel {
 				continue;
 			}
 			if (e.k === "think") {
-				out.push(...this.thinkBlock(e.src, width));
+				if (e.cache?.w !== width || e.cache.open !== this.thinkOpen)
+					e.cache = { w: width, open: this.thinkOpen, lines: this.thinkBlock(e.src, width) };
+				out.push(...e.cache.lines);
 			} else if (e.k === "user") {
 				// 用户消息折行（2026-09-23 走查批①：此前逐逻辑行直推不折行，长提问被终端硬截）。
 				// 一个块只画一个 ❯（2026-09-27 拍板：多行提问/子代理任务书整块一段——换行与折行续行
-				// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）
-				out.push("");
-				const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
-				let first = true;
-				for (const l of e.src.split("\n")) {
-					for (const wl of wrapText(l, uw)) {
-						out.push(first ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
-						first = false;
+				// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）。宽度级缓存（A 批）。
+				if (e.cache?.w !== width) {
+					const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
+					const lines: string[] = [""];
+					let first = true;
+					for (const l of e.src.split("\n")) {
+						for (const wl of wrapText(l, uw)) {
+							lines.push(first ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
+							first = false;
+						}
 					}
+					lines.push("");
+					e.cache = { w: width, lines };
 				}
-				out.push("");
+				out.push(...e.cache.lines);
 			} else if (e.k === "tool") {
-				out.push(...this.toolLines(e, width));
+				const done = e.result !== undefined;
+				if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done)
+					e.cache = { w: width, open: this.toolOpen, err: this.errOpen, done, lines: this.toolLines(e, width) };
+				out.push(...e.cache.lines);
+			} else if (e.k === "skill") {
+				// 技能加载行：● 与技能名青玉、说明灰（工具行配色同族——2026-09-28 用户拍板：技能正文不进对话流）
+				out.push(theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文"));
 			} else if (e.k === "md") {
 				if (e.cache?.w !== width) e.cache = { w: width, lines: renderMarkdown(e.src, width) };
 				out.push(...e.cache.lines);
 			} else {
-				const shown = e.s.startsWith("● ") ? this.styleToolLine(e.s) : e.s; // 工具行渲染期上色（存储留纯文本供合并）
-				if (visibleWidth(shown) > width) out.push(...wrapText(shown, width));
-				else out.push(shown);
+				// raw 行：工具行渲染期上色（存储留纯文本供合并）；超宽 wrapText 兜底——宽度级缓存（A 批）
+				if (e.cache?.w !== width) {
+					const shown = e.s.startsWith("● ") ? this.styleToolLine(e.s) : e.s;
+					e.cache = { w: width, lines: visibleWidth(shown) > width ? wrapText(shown, width) : [shown] };
+				}
+				out.push(...e.cache.lines);
 			}
 		}
 		if (this.thinkText !== "") out.push(...this.thinkBlock(this.thinkText, width));

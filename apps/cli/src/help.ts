@@ -89,7 +89,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
 
 技能（四轨目录：~/.agents/skills → ~/.orosus/skills → 项目 .agents/skills → 项目 .orosus/skills，同名后入者胜——项目压用户）：
   输入 /      斜杠菜单技能区殿后于命令（skill : 名 格式；详释三行 = 说明两行 + 适用一行），
-              Enter = 以用户消息加载该技能全文（模型自动调用走 skill__load，需时自行加载）
+              Enter = 加载该技能（正文注入模型上下文，对话流只留「已加载技能」单行标记；模型自动调用走 skill__load）
   /settings → 技能    全部技能列表（含已停用）→ 回车进详情（名称 / 描述 / 范围 / 状态 / 文件），
               Alt + K 启用或停用（空闲自动重载生效；回答进行中改完稍后 /reload）
 

@@ -231,10 +231,12 @@ interface CompactLog {
 }
 
 /** 真实用户消息判定（v3 设计空白 1，kimi compactionUserMessageDisposition 同型——origin 缺省保守保留）：
- *  直敲（无 origin）保留；宿主插队（steering + sourceModule==="host"，busy 期你敲的话）保留；
- *  模块注入的 steering 提醒、压缩摘要（compaction-summary）剥离；v2 旧投影无 origin 且 [历史摘要]
- *  前缀 → 文本兜底剥离（ZCode 冷恢复同款）；v3 elision 模板前缀同款兜底（重放产物是裸 user 文本无 origin，
- *  不剥则二次压缩误占用户预算——执行期发现）。谓词只在模块侧执行一次（规格 §4），判定结果以事件下标集固化。 */
+ *  直敲（无 origin）保留；宿主插队（steering + sourceModule==="host"，busy 期你敲的话）保留；宿主日期
+ *  系统行（"host/date"，harness 注入）同为保留——跨压缩活着，否则 lastSteeredDate 已记当天、模型到跨日
+ *  前都看不到日期；模块注入的 steering 提醒、压缩摘要（compaction-summary）剥离；v2 旧投影无 origin 且
+ *  [历史摘要] 前缀 → 文本兜底剥离（ZCode 冷恢复同款）；v3 elision 模板前缀同款兜底（重放产物是裸 user
+ *  文本无 origin，不剥则二次压缩误占用户预算——执行期发现）。谓词只在模块侧执行一次（规格 §4），
+ *  判定结果以事件下标集固化。 */
 export function isRealUserInput(m: ModelMessage): boolean {
   if (m.role !== "user") return false;
   if (m.origin === undefined) {
@@ -245,7 +247,7 @@ export function isRealUserInput(m: ModelMessage): boolean {
     }
     return true;
   }
-  return m.origin.kind === "steering" && m.origin.sourceModule === "host";
+  return m.origin.kind === "steering" && (m.origin.sourceModule === "host" || m.origin.sourceModule === "host/date");
 }
 
 /** 收集真实用户消息（kimi collectCompactableUserMessages :170-174 同型）——带投影下标（keepUserAt 重放锚的基）。 */

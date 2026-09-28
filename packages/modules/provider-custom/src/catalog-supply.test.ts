@@ -164,11 +164,25 @@ function fakeDeps(over: Partial<MenuDeps> = {}): MenuDeps & { state: DepsState }
     env: {},
     getCatalog: async () => ({ catalog: { deepseek: { name: "DeepSeek", type: "openai", api: "https://api.deepseek.com/v1", env: ["DEEPSEEK_API_KEY"], models: { "deepseek-chat": { id: "deepseek-chat" } } } } as unknown as Catalog, source: "online" as const }),
     loadLocalCatalog: async () => ({}),
+    readCacheCatalog: () => undefined, // HERMETIC：缺省视同无缓存——不读真实 home 的 ~/.orosus/cache
     fetchImpl: (async () => new Response("[]", { status: 200 })) as typeof fetch,
     ...over,
   };
   return Object.assign(deps, { state }) as MenuDeps & { state: DepsState };
 }
+
+/** 剧本式 ui（Esc 逐级返回钉具）：answers 逐项消费，null = 该次 choose 抛带内取消字面量；titles 记录问过的菜单。 */
+const scriptedUi = (answers: (string | null)[], titles: string[]): MenuUi => ({
+  choose: async (title, _items) => {
+    titles.push(String(title));
+    const a = answers.shift();
+    if (a === null) throw new Error("已取消（Esc）");
+    return a ?? "取消";
+  },
+  ask: async () => "",
+  askSecret: async () => "",
+  confirm: async () => false,
+});
 
 describe("/provider 多级菜单（D37）", () => {
   it("添加流程：选数据源→选厂商→env_key 已设零输入→校验 2xx→自动写入", async () => {
@@ -252,6 +266,65 @@ describe("/provider 多级菜单（D37）", () => {
     deps3.loadLocalCatalog = async () => { throw new Error("ENOENT: no such file"); };
     const out2 = await runProviderMenu(ui2, deps3); // 第二次调用需重新排队 choose（首项仍是已关联平台列表）
     expect(out2).toContain("读取本地目录失败");
+  });
+
+  it("本地文件缓存直读（2026-09-28 用户拍板）：~/.orosus/cache/models-dev.json 在场 → 不问路径直读，厂商标题标注数据源", async () => {
+    let asked = 0;
+    let vendorTitle = "";
+    const deps = fakeDeps({
+      readCacheCatalog: () => ({ cachedvendor: { name: "Cached", type: "openai", api: "https://cache.example/v1" } } as unknown as Catalog),
+    });
+    const ui: MenuUi = {
+      choose: async (title, _items) => {
+        if (String(title).includes("厂商")) { vendorTitle = String(title); return "取消"; }
+        if (title === "数据源") return "本地文件（api.json）";
+        return title === "选择平台" ? "[添加新平台]" : "取消";
+      },
+      ask: async () => { asked++; return "should-not-be-asked"; },
+      askSecret: async () => "",
+      confirm: async () => false,
+    };
+    await runProviderMenu(ui, deps);
+    expect(asked).toBe(0); // 缓存在场不问路径——原「api.json 路径」输入行形态被否
+    expect(vendorTitle).toContain("本地缓存");
+    expect(vendorTitle).toContain("models-dev.json");
+  });
+
+  it("Esc 逐级返回（2026-09-28 用户拍板）：数据源 Esc → 回平台列表；厂商 Esc → 回数据源；动作菜单 Esc → 回平台列表；根列表 Esc 穿透", async () => {
+    // ① 数据源层 Esc → 下一次 choose 又是「选择平台」（回根）
+    const t1: string[] = [];
+    await runProviderMenu(scriptedUi(["[添加新平台]", null, "[取消]"], t1), fakeDeps());
+    expect(t1).toEqual(["选择平台", "数据源", "选择平台"]);
+
+    // ② 厂商层 Esc → 下一次回到「数据源」（源级重问）
+    const t2: string[] = [];
+    await runProviderMenu(scriptedUi(["[添加新平台]", "在线目录（https://models.dev/api.json）", null, "取消"], t2), fakeDeps());
+    expect(t2).toEqual(["选择平台", "数据源", "选择厂商", "数据源"]);
+
+    // ③ 动作菜单 Esc（单槽平台的二级）→ 回「选择平台」
+    const t3: string[] = [];
+    await runProviderMenu(
+      scriptedUi(["深度求索\n（https://a）", null, "[取消]"], t3),
+      fakeDeps({ loadProviders: async () => ({ deepseek: { type: "openai", baseUrl: "https://a" } }) }),
+    );
+    expect(t3).toEqual(["选择平台", "深度求索", "选择平台"]);
+
+    // ④ 根列表 Esc → 穿透出函数（宿主 settleCommandError 静默——整体取消）
+    const t4: string[] = [];
+    await expect(runProviderMenu(scriptedUi([null], t4), fakeDeps())).rejects.toThrow("已取消（Esc）");
+  });
+
+  it("模型选择 Esc → 回厂商列表（probe 重跑零 token；厂商重选后走完写入）", async () => {
+    const deps = fakeDeps({ env: { DEEPSEEK_API_KEY: "sk-live" } });
+    const titles: string[] = [];
+    const out = await runProviderMenu(scriptedUi([
+      "[添加新平台]", "在线目录（https://models.dev/api.json）", "deepseek（深度求索）",
+      null, // 模型选择处 Esc → 回厂商列表
+      "deepseek（深度求索）", "deepseek-chat",
+    ], titles), deps);
+    expect(titles.filter((t) => t.includes("厂商"))).toHaveLength(2); // Esc 后重问厂商
+    expect(deps.state.saved).toMatchObject({ deepseek: { defaultModel: "deepseek-chat" } });
+    expect(out).toContain("success");
   });
 
   it("T4① 目录降级（builtin 快照）时 live 清单兜底挑默认模型：verify 响应体解析 → 所选写入 defaultModel（非 models[0]）+ setModel 裸名", async () => {

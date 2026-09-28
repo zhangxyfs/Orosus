@@ -136,7 +136,51 @@ describe("tool-web__settings 配置流（M4-3 T1c）", () => {
     expect(readSecrets()).toContain("TAVILY_API_KEY=k2");
   });
 
-  it("⑧ CM-13 回归钉：replace 分支收拢尾空行——二次/三次更新文件行数不变（旧实现每轮净增一个空行）", () => {
+  it("⑧ Esc 逐级返回（2026-09-28 用户拍板）：载体 Esc → 回顶层；钉模型 Esc → 回载体；key 输入 Esc → 回顶层；顶层 Esc 穿透", async () => {
+    // ① 载体菜单 Esc（第 2 次 choose）→ 下一次 choose 又是顶层后端菜单；随后走 Tavily 空输入收场
+    const e1 = mkUi();
+    let n1 = 0;
+    e1.ui.choose = async (title) => {
+      e1.chooses.push(title);
+      n1++;
+      if (n1 === 2) throw new Error("已取消（Esc）");
+      return n1 === 1 ? "LLM Web Search——借你已配模型的联网能力（零新 key）" : "Tavily——搜索 API（官网 tavily.com，需 key）";
+    };
+    const state1 = createSearchState({});
+    const out1 = await createSettingsHandler({ state: state1, llm: fakeLlm(["a/m1"]), configFile, secretsFile })("", e1.ui);
+    expect(e1.chooses.map((t) => t.slice(0, 7))).toEqual(["配置网络搜索（", "LLM Web", "配置网络搜索（"]);
+    expect(out1).toBe("已取消");
+
+    // ② 钉模型 Esc（第 3 次）→ 回载体菜单；随后选「自动」走完
+    const e2 = mkUi();
+    let n2 = 0;
+    e2.ui.choose = async (title, items) => {
+      e2.chooses.push(title);
+      n2++;
+      if (n2 === 3) throw new Error("已取消（Esc）");
+      return n2 === 1 ? "LLM Web Search——借你已配模型的联网能力（零新 key）" : n2 === 2 ? "指定模型…" : items[0]!; // 载体层 items[0] = 自动
+    };
+    const state2 = createSearchState({});
+    await createSettingsHandler({ state: state2, llm: fakeLlm(["a/m1"]), configFile, secretsFile })("", e2.ui);
+    expect(e2.chooses.map((t) => t.slice(0, 7))).toEqual(["配置网络搜索（", "LLM Web", "钉住搜索模型（", "LLM Web"]);
+    expect(state2.current().model).toBeUndefined(); // 「自动」落盘
+
+    // ③ key 输入 Esc（askSecret 抛）→ 回顶层菜单；顶层再 Esc = 整体取消（穿透）
+    const e3 = mkUi({ chooses: ["Tavily——搜索 API（官网 tavily.com，需 key）"] });
+    e3.ui.askSecret = async () => { throw new Error("已取消（Esc）"); };
+    let n3 = 0;
+    const choose3 = e3.ui.choose;
+    e3.ui.choose = async (title, items) => {
+      n3++;
+      if (n3 === 2) throw new Error("已取消（Esc）");
+      return choose3(title, items);
+    };
+    const state3 = createSearchState({});
+    await expect(createSettingsHandler({ state: state3, llm: fakeLlm(), configFile, secretsFile })("", e3.ui)).rejects.toThrow("已取消（Esc）");
+    expect(existsSync(secretsFile)).toBe(false); // Esc 路径零写入
+  });
+
+  it("⑧b CM-13 回归钉：replace 分支收拢尾空行——二次/三次更新文件行数不变（旧实现每轮净增一个空行）", () => {
     upsertSecret(secretsFile, "TAVILY_API_KEY", "k1");
     const once = readSecrets();
     expect(once).toBe("TAVILY_API_KEY=k1\n"); // 单行 + 单收尾换行

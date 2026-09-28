@@ -29,6 +29,9 @@ const makeHarness = async (extra: Parameters<typeof createHarness>[0] = {}) => {
   const base = {
     store: new InMemorySessionStore(),
     diagDir: dir,
+    // sessionsDir 必须密封：子代理转录落 join(sessionsDir, sid, "agents")——缺省值是真实 ~/.orosus/sessions
+    // （2026-09-28 事故：三处直连构造漏注入，一天泄漏 44 个垃圾会话文件夹进用户 home）
+    sessionsDir: join(dir, "sessions"),
     spillDir: join(dir, "spill"),
     modules: [fakeProviderModule("fake", script)],
     config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
@@ -253,6 +256,57 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
 
   // /effort（2026-09-25 三轮 kimi 同构）：菜单 = segmentsOf（off/…档位——kimi segmentsFor）+ 默认档
   // （kimi middleOf）+ 线缆（on/off 语义档）。双轨 = effortOverride 会话内存 + user config 顶层 effort 键。
+  it("⑦e /model 模型列表 Esc 回平台列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）；平台列表 Esc 整体取消", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-"));
+    const store = new InMemorySessionStore();
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "m1",
+          listModels: async () => ["m1"],
+        });
+        ctx.provide("provider:fake2" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "n1",
+          listModels: async () => ["n1", "n2"],
+        });
+      },
+    };
+    const calls: string[] = [];
+    const fakeUi: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
+      choose: async (t, items) => {
+        calls.push(t);
+        if (calls.length === 2) throw new Error("已取消（Esc）"); // 模型列表处 Esc → 回平台列表
+        if (calls.length === 1 || calls.length === 3) return items.find((x) => x.startsWith("fake2")) ?? items[0]!;
+        return items.find((x) => x === "n2") ?? items[0]!;
+      },
+      confirm: async () => true,
+    };
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi,
+      modules: [prov], config: { ...hermetic(dir), cliOverrides: { model: "fake/m1" } },
+    });
+    await h.prompt("/model");
+    await h.prompt("hi");
+    const headers = (await store.all()).filter((e) => e.type === "request/header");
+    expect(headers.at(-1)!.model).toBe("n2"); // Esc 回平台列表换槽后选定 n2
+    expect(calls).toEqual(["选择平台", "选择模型（fake2）", "选择平台", "选择模型（fake2）"]);
+    // 平台列表（根）Esc：整条取消——不写覆盖
+    calls.length = 0;
+    const ui2: CommandUi = { ...fakeUi, choose: async (t) => { calls.push(t); throw new Error("已取消（Esc）"); } };
+    const h2 = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"), commandUi: ui2,
+      modules: [prov], config: { ...hermetic(dir), cliOverrides: { model: "fake/m1" } },
+    });
+    await expect(h2.prompt("/model")).rejects.toThrow("已取消（Esc）");
+    await h.close();
+    await h2.close();
+  });
+
   const effortHarness = async (extra: {
     listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined>;
     configEffort?: string;
@@ -1209,6 +1263,13 @@ describe("系统提示词五节 + 动态管线（M4-2 T12/B10）", () => {
     const third = JSON.stringify(fake.requests[2]!.messages);
     expect(third).toContain("系统提醒：今天是 2026-09-28。"); // 跨日再注入
     expect(third.match(/系统提醒：今天是/g)?.length).toBe(2); // 两行并存——靠最新一行
+    // 落盘标记（2026-09-28 修复）：日期行走独立 sourceModule "host/date"（≠用户 steer 的 "host"）——
+    // 回放渲染与输入召回历史据此跳过；投影/请求内容不受影响（上面断言已盖）
+    const steered = (await h.history()).filter((e) => e.type === "agent/steering-message");
+    expect(steered.length).toBe(2);
+    const dateLines = steered.flatMap((e) => (e.messages ?? []) as { text?: string; sourceModule?: string }[]).filter((m) => (m.text ?? "").includes("系统提醒"));
+    expect(dateLines).toHaveLength(2);
+    expect(dateLines.every((m) => m.sourceModule === "host/date")).toBe(true);
     await h.close();
   });
 
@@ -1549,7 +1610,7 @@ describe("主对话写预约 subprocess（CX-09——bash/不透明执行按整�
       },
     };
     const h = await createHarness({
-      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"), cwd: dir,
+      store: new InMemorySessionStore(), diagDir: dir, sessionsDir: join(dir, "sessions"), spillDir: join(dir, "spill"), cwd: dir,
       modules: [hangProvider, spawner],
       config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
     });
@@ -1625,7 +1686,7 @@ describe("送回轮失败留痕与等待有界（CH-12——2026-09-28 code revi
       },
     });
     const { store, state } = armedStore(true); // 只炸第一次——失败留痕后补触发可恢复
-    const h = await createHarness({ store, diagDir: dir, spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
+    const h = await createHarness({ store, diagDir: dir, sessionsDir: join(dir, "sessions"), spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
     await h.prompt("/spawnmod__go"); // 命令不建 turn、不落主 store（header 懒写）
     while (!requests.some((r) => JSON.stringify(r.messages).includes("甲待命"))) await sleep(5); // 子代理已起跑到门
     state.armed = true; // 主 store 此后第一次 append = 送回轮 ensureHeader（首个落盘点）
@@ -1668,7 +1729,7 @@ describe("送回轮失败留痕与等待有界（CH-12——2026-09-28 code revi
       },
     });
     const { store, state } = armedStore(false); // 恒炸——送回失败链持续
-    const h = await createHarness({ store, diagDir: dir, spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
+    const h = await createHarness({ store, diagDir: dir, sessionsDir: join(dir, "sessions"), spillDir: join(dir, "spill"), modules: [providerMod, spawner], config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } });
     await h.prompt("/spawnmod__go");
     while (!requests.some((r) => JSON.stringify(r.messages).includes("乙待命"))) await sleep(5);
     state.armed = true;

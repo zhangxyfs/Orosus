@@ -73,9 +73,16 @@ const CURRENT_DESC: Record<string, string> = {
   brave: "钉死 brave",
 };
 
+/** 子菜单 Esc 判别（2026-09-28 用户拍板「Esc 返回上一级」）：宿主 choose/ask 面的取消 = 带内抛错，
+ *  字面量「已取消（Esc）」由 apps/cli（menu.ts / picker.ts / pickFace）钉死——只认这一个字面量，
+ *  其余异常原样穿透（CR-04 纪律）。 */
+const isEscCancel = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
+
 /** 三级配置流（SW-18 定案）：LLM Web Search（选模型当搜索载体——Reasonix web_search_model 思想）/
  *  Tavily / Brave（显官网 + askSecret 掩码输 key）。写盘后 holder.set 即时生效（清 SW-19 粘性）；
- *  成功反馈走 notice（静默约定——不落流区；SW-22 成功语义永不用错误通道）。 */
+ *  成功反馈走 notice（静默约定——不落流区；SW-22 成功语义永不用错误通道）。
+ *  Esc 逐级返回（2026-09-28 用户拍板）：载体菜单/钉模型/key 输入的 Esc → 回上级菜单；顶层菜单的
+ *  Esc 穿透（/settings 挂接时回设置根列表，直敲命令时宿主静默收场）。 */
 export function createSettingsHandler(deps: SettingsDeps): CommandHandler {
   const configFile = deps.configFile ?? join(orosusHome(), "config.toml");
   const secretsFile = deps.secretsFile ?? join(orosusHome(), "secrets.env");
@@ -83,49 +90,72 @@ export function createSettingsHandler(deps: SettingsDeps): CommandHandler {
     deps.state.set({ ...deps.state.current(), ...patch });
   };
   return async (_args, ui) => {
-    const cur = deps.state.current();
-    const curDesc = `当前：${CURRENT_DESC[cur.backend ?? "auto"] ?? cur.backend}${cur.model !== undefined && cur.model !== "" ? `，搜索模型 ${cur.model}` : ""}`;
-    const top = await ui.choose(`配置网络搜索（${curDesc}）——选择要配置的后端`, [
-      "LLM Web Search——借你已配模型的联网能力（零新 key）",
-      "Tavily——搜索 API（官网 tavily.com，需 key）",
-      "Brave——搜索 API（官网 brave.com/search/api，需 key）",
-    ]);
-    if (top.startsWith("LLM")) {
-      const hasCatalog = deps.llm.listModels !== undefined;
-      const subItems = ["自动（零配置·默认）"];
-      subItems.push(hasCatalog ? "指定模型…" : "指定模型…（不可用：当前端点无模型目录）");
-      const sub = await ui.choose("LLM Web Search——搜索载体", subItems);
-      if (sub.startsWith("自动（")) {
-        persistToolWebSearch(configFile, { backend: "auto", model: undefined });
-        applyState({ backend: "auto", model: undefined });
-        ui.notice?.("已保存：LLM Web Search 自动（零配置）——搜索链 llm→tavily→brave 生效");
-        return "";
+    for (;;) { // 顶层循环：载体菜单/Tavily·Brake key 输入 Esc 的回退落点
+      const cur = deps.state.current();
+      const curDesc = `当前：${CURRENT_DESC[cur.backend ?? "auto"] ?? cur.backend}${cur.model !== undefined && cur.model !== "" ? `，搜索模型 ${cur.model}` : ""}`;
+      const top = await ui.choose(`配置网络搜索（${curDesc}）——选择要配置的后端`, [
+        "LLM Web Search——借你已配模型的联网能力（零新 key）",
+        "Tavily——搜索 API（官网 tavily.com，需 key）",
+        "Brave——搜索 API（官网 brave.com/search/api，需 key）",
+      ]);
+      if (top.startsWith("LLM")) {
+        for (;;) { // 载体级循环：钉模型 Esc 的回退落点；break = 回顶层后端菜单
+          const hasCatalog = deps.llm.listModels !== undefined;
+          const subItems = ["自动（零配置·默认）"];
+          subItems.push(hasCatalog ? "指定模型…" : "指定模型…（不可用：当前端点无模型目录）");
+          let sub: string;
+          try {
+            sub = await ui.choose("LLM Web Search——搜索载体", subItems);
+          } catch (err) {
+            if (isEscCancel(err)) break; // Esc → 回顶层后端菜单
+            throw err;
+          }
+          if (sub.startsWith("自动（")) {
+            persistToolWebSearch(configFile, { backend: "auto", model: undefined });
+            applyState({ backend: "auto", model: undefined });
+            ui.notice?.("已保存：LLM Web Search 自动（零配置）——搜索链 llm→tavily→brave 生效");
+            return "";
+          }
+          if (!hasCatalog) {
+            ui.notice?.("当前端点没有模型目录——可手写 config.toml 的 [tool-web] search.model 钉模型");
+            return "";
+          }
+          const models = await deps.llm.listModels!();
+          if (models.length === 0) {
+            ui.notice?.("模型目录为空——可手写 config.toml 的 [tool-web] search.model 钉模型");
+            return "";
+          }
+          let picked: string;
+          try {
+            picked = await ui.choose("钉住搜索模型（provider/model）", models);
+          } catch (err) {
+            if (isEscCancel(err)) continue; // Esc → 回载体菜单
+            throw err;
+          }
+          persistToolWebSearch(configFile, { backend: "auto", model: picked });
+          applyState({ backend: "auto", model: picked });
+          ui.notice?.(`已保存：LLM Web Search 钉住 ${picked}——搜索链 llm→tavily→brave 生效`);
+          return "";
+        }
+        continue; // 载体级 break → 重问顶层
       }
-      if (!hasCatalog) {
-        ui.notice?.("当前端点没有模型目录——可手写 config.toml 的 [tool-web] search.model 钉模型");
-        return "";
+      const isTavily = top.startsWith("Tavily");
+      const envName = isTavily ? "TAVILY_API_KEY" : "BRAVE_API_KEY";
+      const site = isTavily ? "tavily.com" : "brave.com/search/api";
+      let key: string;
+      try {
+        key = (await ui.askSecret(`${isTavily ? "Tavily" : "Brave"} API key（官网 ${site} 注册获取——输入不显示，回车提交，空输入取消）`)).trim();
+      } catch (err) {
+        if (isEscCancel(err)) continue; // Esc → 回顶层后端菜单
+        throw err;
       }
-      const models = await deps.llm.listModels!();
-      if (models.length === 0) {
-        ui.notice?.("模型目录为空——可手写 config.toml 的 [tool-web] search.model 钉模型");
-        return "";
-      }
-      const picked = await ui.choose("钉住搜索模型（provider/model）", models);
-      persistToolWebSearch(configFile, { backend: "auto", model: picked });
-      applyState({ backend: "auto", model: picked });
-      ui.notice?.(`已保存：LLM Web Search 钉住 ${picked}——搜索链 llm→tavily→brave 生效`);
+      if (key === "") return "已取消";
+      upsertSecret(secretsFile, envName, key); // 真 key 只落 secrets.env（掩码输入，不落日志）
+      const placeholder = `$ENV:${envName}`; // config 只写占位符——$ENV: 是模块唯一 secrets 通道（v4.7 机制钉）
+      persistToolWebSearch(configFile, isTavily ? { backend: "auto", tavilyApiKey: placeholder } : { backend: "auto", braveApiKey: placeholder });
+      applyState(isTavily ? { backend: "auto", tavilyApiKey: placeholder } : { backend: "auto", braveApiKey: placeholder });
+      ui.notice?.(`已保存：${isTavily ? "Tavily" : "Brave"} key——搜索链 llm→tavily→brave 生效`);
       return "";
     }
-    const isTavily = top.startsWith("Tavily");
-    const envName = isTavily ? "TAVILY_API_KEY" : "BRAVE_API_KEY";
-    const site = isTavily ? "tavily.com" : "brave.com/search/api";
-    const key = (await ui.askSecret(`${isTavily ? "Tavily" : "Brave"} API key（官网 ${site} 注册获取——输入不显示，回车提交，空输入取消）`)).trim();
-    if (key === "") return "已取消";
-    upsertSecret(secretsFile, envName, key); // 真 key 只落 secrets.env（掩码输入，不落日志）
-    const placeholder = `$ENV:${envName}`; // config 只写占位符——$ENV: 是模块唯一 secrets 通道（v4.7 机制钉）
-    persistToolWebSearch(configFile, isTavily ? { backend: "auto", tavilyApiKey: placeholder } : { backend: "auto", braveApiKey: placeholder });
-    applyState(isTavily ? { backend: "auto", tavilyApiKey: placeholder } : { backend: "auto", braveApiKey: placeholder });
-    ui.notice?.(`已保存：${isTavily ? "Tavily" : "Brave"} key——搜索链 llm→tavily→brave 生效`);
-    return "";
   };
 }

@@ -1201,12 +1201,18 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 		const pickedId = taskIdOfRow(rows[idx]!);
 		const entry = pickedId === undefined ? undefined : entries.find((e) => e.id === pickedId);
 		if (entry === undefined) return; // 行解析不出编号（理论不可达）——安全退出而非错配条目
-		// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）——应答完回列表
+		// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）——应答完回列表；
+		// 应答菜单的 Esc 不答也不退出（2026-09-28 拍板「Esc 返回上一级」）——回任务列表
 		if (entry.pendingApproval !== undefined) {
-			const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
-			const allow = ans === "批准一次";
-			h.answerSubagentApproval(entry.id, allow);
-			notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
+			try {
+				const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
+				const allow = ans === "批准一次";
+				h.answerSubagentApproval(entry.id, allow);
+				notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
+			} catch (err) {
+				if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回列表（审批保持挂起）
+				throw err;
+			}
 			continue;
 		}
 		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
@@ -1304,74 +1310,121 @@ const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
 		if (i < 0) return;
 		const row = rows[i]!;
 		out(skillDetailText(76, row));
-		const action = await commandUi.choose(row.name, [row.disabled ? "启用" : "停用（Alt + K 同款）", "返回列表"]);
-		if (action === "启用" || action === "停用（Alt + K 同款）") {
-			const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
-			const toast = afterSkillToggle(undefined, row.name, nowDisabled);
-			out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
+		try {
+			const action = await commandUi.choose(row.name, [row.disabled ? "启用" : "停用（Alt + K 同款）", "返回列表"]);
+			if (action === "启用" || action === "停用（Alt + K 同款）") {
+				const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
+				const toast = afterSkillToggle(undefined, row.name, nowDisabled);
+				out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
+			}
+		} catch (err) {
+			if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回技能列表（2026-09-28 拍板）
+			throw err;
 		}
 	}
 };
 
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
-	const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
-	// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
-	if (picked === 0) app.viewText("磁盘占用", diskUsageText(), { layout: "dock" });
-	else if (picked === 1) app.viewText("上下文用量", ctxUsageText(), { layout: "dock" });
-	else if (picked === 2) app.viewText("Token 用量", await tokenUsageText(), { layout: "dock" });
-	else if (picked === 3) app.viewText("运行状态", runtimeStatusText(), { layout: "dock" });
-	else if (picked === 4) {
-		// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名
-		const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式", "轮数上限"]);
-		const chooseVia = async (t: string, items: string[]): Promise<string> => {
-			const i = await app.pickOverlay(t, items);
-			if (i === undefined) throw new Error("已取消（Esc）");
-			return items[i] ?? "";
-		};
-		if (sub === 0) {
-			const res = await runSubagentModelSetting(chooseVia, subagentConfigFile(), modelSlotList());
-			if (res !== "") app.showToast(res);
-		} else if (sub === 1) {
-			const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
-			if (res !== "") app.showToast(res);
-		} else if (sub === 2) {
-			const res = await runSubagentMaxTurnsSetting(chooseVia, (t) => app.promptInput(t, false).then((v) => { if (v === undefined) throw new Error("已取消（Esc）"); return v; }), subagentConfigFile());
-			if (res !== "") app.showToast(res);
+	// 子菜单/子窗 Esc 返回根列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：根列表本身的 Esc = 收面。
+	// 只读子窗走 /tasks 同款 FIFO——viewText 占槽期循环重入的 pickOverlay 排队，关窗即自动顶上回根列表
+	for (;;) {
+		const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
+		if (picked === undefined) return; // 根列表 Esc：整面收起
+		// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
+		if (picked === 0) app.viewText("磁盘占用", diskUsageText(), { layout: "dock" });
+		else if (picked === 1) app.viewText("上下文用量", ctxUsageText(), { layout: "dock" });
+		else if (picked === 2) app.viewText("Token 用量", await tokenUsageText(), { layout: "dock" });
+		else if (picked === 3) app.viewText("运行状态", runtimeStatusText(), { layout: "dock" });
+		else if (picked === 4) {
+			// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名。
+			// 子菜单循环：子项内的 Esc 回子菜单（配置未写零副作用），子菜单的 Esc 回设置根列表
+			for (;;) {
+				const sub = await app.pickOverlay("子代理", ["子代理模型", "审批模式", "轮数上限"]);
+				if (sub === undefined) break; // Esc → 回设置根列表
+				const chooseVia = async (t: string, items: string[]): Promise<string> => {
+					const i = await app.pickOverlay(t, items);
+					if (i === undefined) throw new Error("已取消（Esc）");
+					return items[i] ?? "";
+				};
+				try {
+					if (sub === 0) {
+						const res = await runSubagentModelSetting(chooseVia, subagentConfigFile(), modelSlotList());
+						if (res !== "") app.showToast(res);
+					} else if (sub === 1) {
+						const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
+						if (res !== "") app.showToast(res);
+					} else if (sub === 2) {
+						const res = await runSubagentMaxTurnsSetting(chooseVia, (t) => app.promptInput(t, false).then((v) => { if (v === undefined) throw new Error("已取消（Esc）"); return v; }), subagentConfigFile());
+						if (res !== "") app.showToast(res);
+					}
+				} catch (err) {
+					if (err instanceof Error && err.message === "已取消（Esc）") continue; // 子项内 Esc → 回子菜单
+					throw err;
+				}
+			}
 		}
-	}
-	else if (picked === 5) await openSkillsPanel(app);
-	else if (picked === 6) {
-		const res = await runSearchSettings();
-		if (res !== "") app.viewText("配置网络搜索", res, { layout: "dock" }); // 成功路径走 notice/toast 静默约定——非空输出才落面板
+		else if (picked === 5) await openSkillsPanel(app); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
+		else if (picked === 6) {
+			// 顶层后端菜单的 Esc → 回设置根列表（更深的 Esc 已在 tool-web 模块内逐级返回）
+			try {
+				const res = await runSearchSettings();
+				if (res !== "") app.viewText("配置网络搜索", res, { layout: "dock" }); // 成功路径走 notice/toast 静默约定——非空输出才落面板
+			} catch (err) {
+				if (err instanceof Error && err.message === "已取消（Esc）") continue;
+				throw err;
+			}
+		}
 	}
 };
 /** 行模式对等件（2026-09-24 T1c：/other 时代行模式只有指路——配置流两态都要能走，菜单随之对等）：
  *  同一五项经 commandUi.choose（readline）；面板文本直出（out = processReplLine 的输出通道参数）。 */
 const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
-	const picked = await commandUi.choose("设置", SETTINGS_ITEMS);
-	const idx = SETTINGS_ITEMS.indexOf(picked);
-	if (idx === 0) out(diskUsageText());
-	else if (idx === 1) out(ctxUsageText());
-	else if (idx === 2) out(await tokenUsageText());
-	else if (idx === 3) out(runtimeStatusText());
-	else if (idx === 4) {
-		// M4.5 T12 行模式对等件：子代理分组（模型 / 审批模式）
-		const subIdx = await commandUi.choose("子代理", ["子代理模型", "审批模式", "轮数上限"]);
-		if (subIdx === "子代理模型") {
-			const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList());
-			if (res !== "") out(res);
-		} else if (subIdx === "审批模式") {
-			const res = await runSubagentApprovalSetting((t, items) => commandUi.choose(t, items), subagentConfigFile());
-			if (res !== "") out(res);
-		} else if (subIdx === "轮数上限") {
-			const res = await runSubagentMaxTurnsSetting((t, items) => commandUi.choose(t, items), (t) => commandUi.ask(t), subagentConfigFile());
-			if (res !== "") out(res);
+	// Esc 逐级返回（2026-09-28 用户拍板，全屏对等件）：根菜单 Esc 穿透（宿主静默）；子级 Esc 回上级
+	const isEsc = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
+	for (;;) {
+		const picked = await commandUi.choose("设置", SETTINGS_ITEMS); // 根 Esc 穿透——整面收起
+		const idx = SETTINGS_ITEMS.indexOf(picked);
+		if (idx === 0) out(diskUsageText());
+		else if (idx === 1) out(ctxUsageText());
+		else if (idx === 2) out(await tokenUsageText());
+		else if (idx === 3) out(runtimeStatusText());
+		else if (idx === 4) {
+			// M4.5 T12 行模式对等件：子代理分组（模型 / 审批模式 / 轮数上限）——子级 Esc 回子菜单，子菜单 Esc 回根
+			for (;;) {
+				let subIdx: string;
+				try {
+					subIdx = await commandUi.choose("子代理", ["子代理模型", "审批模式", "轮数上限"]);
+				} catch (err) {
+					if (isEsc(err)) break; // Esc → 回设置根菜单
+					throw err;
+				}
+				try {
+					if (subIdx === "子代理模型") {
+						const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList());
+						if (res !== "") out(res);
+					} else if (subIdx === "审批模式") {
+						const res = await runSubagentApprovalSetting((t, items) => commandUi.choose(t, items), subagentConfigFile());
+						if (res !== "") out(res);
+					} else if (subIdx === "轮数上限") {
+						const res = await runSubagentMaxTurnsSetting((t, items) => commandUi.choose(t, items), (t) => commandUi.ask(t), subagentConfigFile());
+						if (res !== "") out(res);
+					}
+				} catch (err) {
+					if (isEsc(err)) continue; // 子项内 Esc → 回子菜单
+					throw err;
+				}
+			}
 		}
-	}
-	else if (idx === 5) await openSkillsLine(out);
-	else if (idx === 6) {
-		const res = await runSearchSettings();
-		if (res !== "") out(res);
+		else if (idx === 5) await openSkillsLine(out);
+		else if (idx === 6) {
+			try {
+				const res = await runSearchSettings();
+				if (res !== "") out(res);
+			} catch (err) {
+				if (isEsc(err)) continue; // 顶层后端菜单 Esc → 回设置根菜单（更深的已在模块内逐级返回）
+				throw err;
+			}
+		}
 	}
 };
 
@@ -1630,10 +1683,11 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     rows: () => process.stdout.rows ?? 24,
     doc: () => dm.frameLines(streamW()),
     submit: (text) => {
-      // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡
+      // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡。
+      // dock（2026-09-28 用户拍板）：贴输入框上缘 + 与输入框同宽同左缘——左右边框与输入框连成直线
       const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmd === "/help") {
-        app.viewText("帮助", HELP_TEXT);
+        app.viewText("帮助", HELP_TEXT, { layout: "dock" });
         return;
       }
       // busy 命令策略（批①②④⑦d 重构）：/quit 族立即打断退出；即改档（BUSY_EXEC）busy 期直接执行；
@@ -1886,7 +1940,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         const { cleaned } = extractImageRefs(t);
         if (cleaned !== "") seedTexts.push(cleaned);
       } else if (e.type === "agent/steering-message") {
-        for (const m of (e.messages ?? []) as { text?: string }[]) if (typeof m.text === "string" && m.text !== "") seedTexts.push(m.text);
+        // 用户 steer 的话可召回；日期系统行（host/date）不进输入历史——↑ 翻出「系统提醒：今天是…」是系统噪音（2026-09-28）
+        for (const m of (e.messages ?? []) as { text?: string; sourceModule?: string }[])
+          if (typeof m.text === "string" && m.text !== "" && m.sourceModule !== "host/date") seedTexts.push(m.text);
       }
     }
     app.seedHistory(seedTexts);

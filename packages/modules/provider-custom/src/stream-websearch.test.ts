@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Chunk, ProviderRequest } from "@orosus/contracts/provider";
 import { createStream as openaiStream } from "./stream-openai.ts";
-import { createStream as anthropicStream } from "./stream-anthropic.ts";
+import { createStream as anthropicStream, DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 
 const baseReq = (over: Partial<ProviderRequest> = {}): ProviderRequest => ({
   model: "m", system: "", messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }],
@@ -241,6 +241,13 @@ describe("空闲读超时（MP-07 最小实现）", () => {
     const last = chunks.at(-1) as { kind: string; errorMessage?: string };
     expect(last.kind).toBe("error");
     expect(last.errorMessage).toContain("空闲超时"); // 不是「网络错误」——超时语义单独可辨
+  });
+
+  it("④ 缺省阈值 300s（2026-09-28 学 kimi 拍板 60s→300s）——两协议面同源常量，防无意回紧", () => {
+    // 依据：kimi 实际生效保护 = undici bodyTimeout/headersTimeout 默认 300s；codex/opencode 显式同值。
+    // 旧 60s 误杀「短文本后进入超长生成（端点不推增量字节）」的流——GLM 91k 上下文写 ARCHITECTURE.md 实锤一例。
+    // 钉值不跑真 300s：行为路径①②③已覆盖（注入 30ms），此处只锁数字。
+    expect(DEFAULT_IDLE_TIMEOUT_MS).toBe(300_000);
   });
 });
 
