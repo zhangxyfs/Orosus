@@ -1038,10 +1038,17 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(logs.length).toBe(9);
 		expect(logs.every((l) => l.startsWith("tui.viewkey.reserved"))).toBe(true);
 		expect(logs.some((l) => l.includes("ctrl+e"))).toBe(true);
-		input.emit("data", "\x05"); // Ctrl+E 归宿主全局键（诊断总开关——空态 toast 而非模块键）
+		// 走查⑤（2026-09-29 用户拍板「焦点在弹窗 → 主界面快捷键不可用」）推翻旧断言「Ctrl+E 仍走
+		// 宿主全局键」：弹窗聚焦期 Ctrl+E 静默不可用（不开诊断、无空态 toast）；Esc 关窗后恢复主窗语义
+		input.emit("data", "\x05"); // Ctrl+E——弹窗期吞
+		await flush();
+		expect(stripAnsi(output.buf)).not.toContain("模块全部正常");
+		expect(stripAnsi(output.buf)).not.toContain("不该出现");
+		input.emit("data", "\x1b"); // Esc 关模块窗
+		await flush();
+		input.emit("data", "\x05"); // 关窗后 Ctrl+E 恢复主窗语义（诊断空态 toast）
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("模块全部正常");
-		expect(stripAnsi(output.buf)).not.toContain("不该出现");
 	});
 
 	it("④ 布局参数传到几何：full 弹 99 宽（90+ 连横线）、缺省 center80 弹 79 宽", async () => {
@@ -3034,12 +3041,13 @@ describe("主窗滚动钉住（m5-render-perf 真机走查①修——流式增�
 });
 
 describe("查看窗全局键让位（m5-render-perf 走查④修——宿主查看窗聚焦期主窗叠窗键不穿透）", () => {
-	it("查看窗打开期 Ctrl+E 不开诊断、查看窗不被顶掉；Ctrl+O 不入队摘要；Esc 关窗后 Ctrl+E 恢复主窗语义", async () => {
-		const diag: string[] = [];
+	it("查看窗打开期 Ctrl+E 不开诊断、查看窗不被顶掉；Ctrl+O 不入队摘要、Ctrl+T 不切侧栏（走查⑤）；Esc 关窗后 Ctrl+E 恢复主窗语义", async () => {
 		const summaries: string[] = [];
+		const sidebars: boolean[] = [];
 		const { app, input, output } = rig(["# hi"], 100, 30, {
 			diagEntries: () => [{ at: "2026-09-29T00:00:00Z", code: "m.x", msg: "样例诊断" } as never],
 			showCompactionSummary: () => summaries.push("called"),
+			onSidebarChange: (v) => sidebars.push(v),
 		});
 		app.start();
 		await flush();
@@ -3052,6 +3060,10 @@ describe("查看窗全局键让位（m5-render-perf 走查④修——宿主查�
 		input.emit("data", "\x0f"); // Ctrl+O——不入队摘要
 		await flush();
 		expect(summaries).toEqual([]);
+		input.emit("data", "\x14"); // Ctrl+T——弹窗聚焦期不切侧栏（走查⑤）
+		await flush(600); // 冷却余量（防前次切换干扰）
+		expect(app.stateRef.sidebarVisible).toBe(true);
+		expect(sidebars).toEqual([]);
 		input.emit("data", "\x1b"); // Esc 关查看窗
 		await flush();
 		input.emit("data", "\x05"); // Ctrl+E 恢复主窗语义——诊断开
@@ -3062,7 +3074,7 @@ describe("查看窗全局键让位（m5-render-perf 走查④修——宿主查�
 });
 
 describe("查看窗内容快捷键与主窗一致（走查④续——Alt+E/O/F 窗内优先，不穿透主窗折叠态）", () => {
-	it("查看窗注册 alt+e → 键落窗内（内容替换、主窗 toggleThink 不触发）；未注册的 alt+o 照旧主窗语义", async () => {
+	it("查看窗注册 alt+e → 键落窗内（内容替换、主窗 toggleThink 不触发）；未注册的 alt+o 弹窗期也不可用（走查⑤），关窗后恢复", async () => {
 		const actions: string[] = [];
 		const { app, input, output } = rig(["# hi"], 100, 30, {
 			toggleThink: () => actions.push("think"),
@@ -3076,11 +3088,16 @@ describe("查看窗内容快捷键与主窗一致（走查④续——Alt+E/O/F 
 			keys: { "alt+e": { label: "思考", run: () => "状态：已完成\n展开形态的思考全文" } },
 		});
 		await flush();
-		input.emit("data", "\x1be"); // Alt+E
+		input.emit("data", "\x1be"); // Alt+E——窗内注册键
 		await flush();
 		expect(actions).toEqual([]); // 主窗 toggleThink 没触发（让位）
 		expect(stripAnsi(output.buf)).toContain("展开形态的思考全文"); // 窗内容已替换
-		input.emit("data", "\x1bo"); // Alt+O——查看窗未注册 → 主窗语义照旧
+		input.emit("data", "\x1bo"); // Alt+O——查看窗未注册：弹窗聚焦期主窗折叠态不可用（走查⑤）
+		await flush();
+		expect(actions).toEqual([]);
+		input.emit("data", "\x1b"); // Esc 关查看窗
+		await flush();
+		input.emit("data", "\x1bo"); // 关窗后恢复主窗语义
 		await flush();
 		expect(actions).toEqual(["tool"]);
 		app.stop();
