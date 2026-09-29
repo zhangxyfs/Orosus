@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { loadConfig, writeSectionKey, sectionPath } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
 import { fg, dim } from "./theme.ts";
 import { truncateToWidth, visibleWidth } from "./tui/width.ts";
@@ -23,91 +23,24 @@ export interface SkillCatalogRow {
   modelInvocable: boolean;
 }
 
-/** CM-11（2026-09-28 code review）：disabled 数组项 = 技能目录名（POSIX 下目录名可合法含 `"` 与换行）——
- *  行级写不转义即损坏 TOML 或注入新节。与 subagent-settings 同款成对件：写转义（tomlEscape）/
- *  读还原（tomlUnescape）；basic string 形态，控制字符走 \uXXXX。 */
-// oxlint-disable-next-line no-control-regex -- 转义件的职责就是匹配控制字符（\uXXXX 转出合法 TOML），非误用
-const tomlEscape = (v: string): string => v.replace(/["\\\n\r\t\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, (c) => {
-  if (c === '"') return '\\"';
-  if (c === "\\") return "\\\\";
-  if (c === "\n") return "\\n";
-  if (c === "\r") return "\\r";
-  if (c === "\t") return "\\t";
-  return `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
-});
-const tomlUnescape = (v: string): string => v.replace(/\\(u[0-9a-fA-F]{4}|["\\nrt])/g, (m, g: string) => {
-  if (g[0] === "u") return String.fromCharCode(Number.parseInt(g.slice(1), 16));
-  const map: Record<string, string> = { '"': '"', "\\": "\\", n: "\n", r: "\r", t: "\t" };
-  return map[g]!;
-});
 
-/** 读 [skill] 节 disabled 数组键（缺文件/缺节/缺键/坏值 = 空表）。 */
+
+/** 读 [skill] 节 disabled 数组键（缺文件/缺节/缺键/坏值 = 空表）。
+ *  m4-8 T4 收口 loadConfig（读配置单一事实源；modules.d 新家同读——转义还原交 smol-toml，
+ *  CM-11 手写 unescape 成对件退役）。 */
 export function readSkillDisabled(filePath = join(orosusHome(), "config.toml")): string[] {
-  let raw: string;
-  try {
-    raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  } catch {
-    return [];
-  }
-  const sectionRe = /^\s*\[\s*([^\]#]+?)\s*\]/;
-  let inSection = false;
-  for (const line of raw.split(/\r?\n/)) {
-    const sm = line.match(sectionRe);
-    if (sm !== null) {
-      inSection = sm[1] === "skill";
-      continue;
-    }
-    if (!inSection) continue;
-    const km = line.match(/^\s*disabled\s*=\s*\[(.*)\]/);
-    if (km === null) continue;
-    // CM-11：数组项可含转义序列（写入侧成对）——旧 `[^"]*` 遇 `\"` 截断读歪
-    return (km[1] ?? "").match(/"((?:[^"\\]|\\.)*)"/g)?.map((s) => tomlUnescape(s.slice(1, -1))) ?? [];
-  }
-  return [];
+  const v = (loadConfig({ userFile: filePath, userModulesDir: join(dirname(filePath), "modules.d") }).sections.get("skill") as { disabled?: unknown } | undefined)?.disabled;
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** 翻转停用态：增/删单名后整替 disabled 键（空表 = 删键回缺省态）；返回翻转后的停用态。 */
+/** 翻转停用态：增/删单名后整替 disabled 键（空表 = 删键回缺省态）；返回翻转后的停用态。
+ *  m4-8 T4 收口统一写口（行级/转义活在 core/config/write.ts）+ 路由内建（[skill] → modules.d/skill.toml）。 */
 export function toggleSkillDisabled(name: string, filePath = join(orosusHome(), "config.toml")): boolean {
   const cur = readSkillDisabled(filePath);
   const next = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
   const nowDisabled = next.includes(name);
-  let raw = "";
-  try {
-    raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  } catch {
-    /* 缺文件从空起 */
-  }
-  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
-  const lines = raw === "" ? [] : raw.split(/\r?\n/);
-  const sectionRe = /^\s*\[\s*([^\]#]+?)\s*\]/;
-  const kvLine = next.length === 0 ? null : `disabled = [${next.map((n) => `"${tomlEscape(n)}"`).join(", ")}]`; // CM-11：数组项转义
-  let inSection = false;
-  let insertAt = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(sectionRe);
-    if (m !== null) {
-      if (inSection) { insertAt = i; break; }
-      inSection = m[1] === "skill";
-    } else if (inSection && /^\s*disabled\s*=/.test(lines[i]!)) {
-      if (kvLine === null) {
-        lines.splice(i, 1); // 空表删键（回缺省态）
-        i--;
-      } else {
-        lines[i] = kvLine; // 整替（数组键无部分编辑）
-      }
-      writeFileSync(filePath, lines.join(eol), "utf8");
-      return nowDisabled;
-    }
-  }
-  if (kvLine === null) return nowDisabled; // 删空（键本就不在）
-  if (inSection && insertAt === -1) insertAt = lines.length; // 目标节是最后一节
-  if (insertAt === -1) {
-    if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
-    lines.push("[skill]", kvLine);
-  } else {
-    lines.splice(insertAt, 0, kvLine);
-  }
-  writeFileSync(filePath, lines.join(eol), "utf8");
+  const target = sectionPath("skill", { userConfig: filePath, modulesDir: join(dirname(filePath), "modules.d"), isModule: () => true });
+  writeSectionKey(target, "skill", "disabled", next.length === 0 ? null : next);
   return nowDisabled;
 }
 

@@ -22,34 +22,35 @@ describe("技能停用配置（m4-7 T8——[skill] 节 disabled 数组键，行
 		expect(readSkillDisabled(cfgFile())).toEqual([]);
 	});
 
-	it("② 翻转：增名写键（建节）、再翻整替、清空删键回缺省态", () => {
+	it("② 翻转：增名写键（建节）、再翻整替、清空删键回缺省态（m4-8 T4：[skill] 已路由新家 modules.d/skill.toml）", () => {
 		dir = mkdtempSync(join(tmpdir(), "skill-cfg-"));
+		const home = (): string => join(dir!, "modules.d", "skill.toml");
 		expect(toggleSkillDisabled("pdf", cfgFile())).toBe(true);
-		expect(readFileSync(cfgFile(), "utf8")).toContain('[skill]');
-		expect(readFileSync(cfgFile(), "utf8")).toContain('disabled = ["pdf"]');
+		expect(readFileSync(home(), "utf8")).toContain('[skill]');
+		expect(readFileSync(home(), "utf8")).toContain('disabled = ["pdf"]');
 		expect(toggleSkillDisabled("ok-wiki", cfgFile())).toBe(true);
-		expect(readFileSync(cfgFile(), "utf8")).toContain('disabled = ["pdf", "ok-wiki"]'); // 整替追加
+		expect(readFileSync(home(), "utf8")).toContain('disabled = ["pdf", "ok-wiki"]'); // 整替追加
 		expect(toggleSkillDisabled("pdf", cfgFile())).toBe(false);
-		expect(readFileSync(cfgFile(), "utf8")).toContain('disabled = ["ok-wiki"]');
+		expect(readFileSync(home(), "utf8")).toContain('disabled = ["ok-wiki"]');
 		expect(toggleSkillDisabled("ok-wiki", cfgFile())).toBe(false);
-		expect(readFileSync(cfgFile(), "utf8")).not.toContain("disabled"); // 空表删键
+		expect(readFileSync(home(), "utf8")).not.toContain("disabled"); // 空表删键
 	});
 
-	it("③ 翻转不动 [skill] 节其他键与注释（不洗配置的铁律）", () => {
+	it("③ 翻转不动单文件层与老 [skill] 节（不洗配置的铁律——新家由路由建，老家分毫不动；加载层目录后读胜）", () => {
 		dir = mkdtempSync(join(tmpdir(), "skill-cfg-"));
-		writeFileSync(cfgFile(), '# 注释\n[skill]\nuserDir = "D:/my-skills"\n', "utf8");
+		const raw0 = '# 注释\n[skill]\nuserDir = "D:/my-skills"\n';
+		writeFileSync(cfgFile(), raw0, "utf8");
 		toggleSkillDisabled("pdf", cfgFile());
-		const raw = readFileSync(cfgFile(), "utf8");
-		expect(raw).toContain("# 注释");
-		expect(raw).toContain('userDir = "D:/my-skills"');
-		expect(raw).toContain('disabled = ["pdf"]');
+		expect(readFileSync(cfgFile(), "utf8")).toBe(raw0); // 单文件层分毫不动
+		expect(readFileSync(join(dir!, "modules.d", "skill.toml"), "utf8")).toContain('disabled = ["pdf"]');
+		expect(readSkillDisabled(cfgFile())).toEqual(["pdf"]); // 读侧合并两家
 	});
 
 	it("⑧ CM-11：技能名含引号/换行（目录名可合法含）→ disabled 数组转义写入、读回还原、smol-toml 可解析（无新行注入）", () => {
 		dir = mkdtempSync(join(tmpdir(), "skill-cm11-"));
 		const evil = 'a"b\nc';
 		expect(toggleSkillDisabled(evil, cfgFile())).toBe(true);
-		const raw = readFileSync(cfgFile(), "utf8");
+		const raw = readFileSync(join(dir!, "modules.d", "skill.toml"), "utf8"); // m4-8 T4：新家
 		expect(raw).toContain('disabled = ["a\\"b\\nc"]'); // 引号/换行转成字面量转义序列——单行、无裸换行（旧实现可注入新节）
 		expect(readSkillDisabled(cfgFile())).toEqual([evil]); // 读侧还原成对
 		expect(() => parse(raw)).not.toThrow(); // 落盘产物是真 TOML

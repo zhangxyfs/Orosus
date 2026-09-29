@@ -2076,7 +2076,9 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			// CM-12③：同上——setModel 写盘失败落 toast，不崩引导
 			void menuDeps.setModel(slot).catch((err) => notify(`默认平台写盘失败：${err instanceof Error ? err.message : String(err)}`));
 		},
-		writeSearch: (patch) => persistToolWebSearch(configFile, patch),
+		// m4-8 T4/C5：[tool-web] 路由新家 modules.d/tool-web.toml（D7 例外——模块侧写动作保持，
+		// 目标路径由宿主按 sectionPath 算好传入；模块不 import core）
+		writeSearch: (patch) => persistToolWebSearch(moduleConfigFileFor("tool-web"), patch),
 		listModels: async (slot) => {
 			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）
 			const entry = (await menuDeps.loadProviders())[slot];
