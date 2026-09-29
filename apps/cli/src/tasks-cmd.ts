@@ -82,8 +82,19 @@ export function agentEventsFromFile(sessionsDir: string, mainSid: string, id: st
 /** 查看窗文本：顶栏状态行 + 消息流回放（DocModel 主窗口同款渲染——跑完的结论就是流的末条）。 */
 // width = 折行列宽：宿主（main.ts openTasks）传「终端宽 − 盒框 4 列」——查看窗全屏时折行跟全窗口走；
 // 78 只是纯函数/行模式的缺省口径。
-export function renderAgentView(entry: SubagentRosterEntry, events: readonly { type: string; [k: string]: unknown }[], width = 78): string {
+// fold（走查④，2026-09-29）：查看窗内容快捷键与主窗一致——Alt+E/O/F 的折叠态由查看窗 keys
+// 持有（闭包跨 live 刷新保持），渲染侧只是把三态设进一次性 DocModel（主窗同款折叠语义零新逻辑）。
+export interface AgentViewFoldState {
+	thinkOpen: boolean;
+	toolOpen: boolean;
+	errOpen: boolean;
+}
+
+export function renderAgentView(entry: SubagentRosterEntry, events: readonly { type: string; [k: string]: unknown }[], width = 78, fold: AgentViewFoldState = { thinkOpen: false, toolOpen: false, errOpen: false }): string {
   const dm = new DocModel();
+  dm.thinkOpen = fold.thinkOpen;
+  dm.toolOpen = fold.toolOpen;
+  dm.errOpen = fold.errOpen;
   dm.historyFrom([...events], width);
   const stat =
     `${STATUS_TEXT[entry.status]}${entry.pendingApproval !== undefined ? " · 等审批" : ""} · ${entry.turns} 轮` +

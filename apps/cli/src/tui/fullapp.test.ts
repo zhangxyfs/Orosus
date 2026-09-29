@@ -3060,3 +3060,29 @@ describe("查看窗全局键让位（m5-render-perf 走查④修——宿主查�
 		app.stop();
 	});
 });
+
+describe("查看窗内容快捷键与主窗一致（走查④续——Alt+E/O/F 窗内优先，不穿透主窗折叠态）", () => {
+	it("查看窗注册 alt+e → 键落窗内（内容替换、主窗 toggleThink 不触发）；未注册的 alt+o 照旧主窗语义", async () => {
+		const actions: string[] = [];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			toggleThink: () => actions.push("think"),
+			toggleTool: () => actions.push("tool"),
+		});
+		app.start();
+		await flush();
+		app.viewText("子代理消息", "状态：已完成\n收起形态的内容", {
+			layout: "full",
+			bottom: true,
+			keys: { "alt+e": { label: "思考", run: () => "状态：已完成\n展开形态的思考全文" } },
+		});
+		await flush();
+		input.emit("data", "\x1be"); // Alt+E
+		await flush();
+		expect(actions).toEqual([]); // 主窗 toggleThink 没触发（让位）
+		expect(stripAnsi(output.buf)).toContain("展开形态的思考全文"); // 窗内容已替换
+		input.emit("data", "\x1bo"); // Alt+O——查看窗未注册 → 主窗语义照旧
+		await flush();
+		expect(actions).toEqual(["tool"]);
+		app.stop();
+	});
+});
