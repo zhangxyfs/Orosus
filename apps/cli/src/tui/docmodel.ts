@@ -427,6 +427,12 @@ export class DocModel {
 		return theme.fg("accent", m[1]!) + theme.fg("fg", " " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!);
 	}
 
+	/** 折行调用观测口（m5-render-perf T6 性能钉二数据源）：renderEntry 实际执行折行/渲染
+	 *  （wrapText/thinkBlock/toolLines/renderMarkdown）的次数——缓存命中不计；group 活体行
+	 *  与 skill 单行不计（前者恒现算、后者无折行）。测试复位读取，防「稳态帧被接回全量物化」。
+	 *  生产路径零读取，仅观测。 */
+	debugWrapCalls = 0;
+
 	/** 单条目渲染（行内容缓存键控照旧——m5-render-perf T4 从 frameLines 循环体提取，
 	 *  frameLines 与 frameWindow 共用；group 活体行每帧现算不缓存）。 */
 	private renderEntry(e: Entry, width: number, roster: readonly SubagentRosterEntry[]): string[] {
@@ -439,8 +445,10 @@ export class DocModel {
 			return out;
 		}
 		if (e.k === "think") {
-			if (e.cache?.w !== width || e.cache.open !== this.thinkOpen)
+			if (e.cache?.w !== width || e.cache.open !== this.thinkOpen) {
+				this.debugWrapCalls++;
 				e.cache = { w: width, open: this.thinkOpen, lines: this.thinkBlock(e.src, width) };
+			}
 			return e.cache.lines;
 		}
 		if (e.k === "user") {
@@ -448,6 +456,7 @@ export class DocModel {
 			// 一个块只画一个 ❯（2026-09-27 拍板：多行提问/子代理任务书整块一段——换行与折行续行
 			// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）。宽度级缓存（A 批）。
 			if (e.cache?.w !== width) {
+				this.debugWrapCalls++;
 				const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
 				const lines: string[] = [""];
 				let first = true;
@@ -464,8 +473,10 @@ export class DocModel {
 		}
 		if (e.k === "tool") {
 			const done = e.result !== undefined;
-			if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done)
+			if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done) {
+				this.debugWrapCalls++;
 				e.cache = { w: width, open: this.toolOpen, err: this.errOpen, done, lines: this.toolLines(e, width) };
+			}
 			return e.cache.lines;
 		}
 		if (e.k === "skill") {
@@ -473,11 +484,15 @@ export class DocModel {
 			return [theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文")];
 		}
 		if (e.k === "md") {
-			if (e.cache?.w !== width) e.cache = { w: width, lines: renderMarkdown(e.src, width) };
+			if (e.cache?.w !== width) {
+				this.debugWrapCalls++;
+				e.cache = { w: width, lines: renderMarkdown(e.src, width) };
+			}
 			return e.cache.lines;
 		}
 		// raw 行：工具行渲染期上色（存储留纯文本供合并）；超宽 wrapText 兜底——宽度级缓存（A 批）
 		if (e.cache?.w !== width) {
+			this.debugWrapCalls++;
 			const shown = e.s.startsWith("● ") ? this.styleToolLine(e.s) : e.s;
 			e.cache = { w: width, lines: visibleWidth(shown) > width ? wrapText(shown, width) : [shown] };
 		}

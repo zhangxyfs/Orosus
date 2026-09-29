@@ -647,3 +647,82 @@ describe("DocModel 视口窗口化（m5-render-perf T4——条目级行数账�
 		expect(dm.totalLines(80)).toBe(dm.frameLines(80).length);
 	});
 });
+
+describe("DocModel 性能回归钉二（m5-render-perf T6——防三处退化：稳态帧全量物化/窗口超预算/冷却失效）", () => {
+	it("① 稳态帧零折行：缓存热后连续 frameWindow/totalLines 的 debugWrapCalls 增量为 0（group/skill 除外——前者活体恒现算后者无折行）", () => {
+		const dm = new DocModel();
+		for (let i = 0; i < 40; i++) {
+			dm.userPrompt(`用户第 ${i} 问 `.repeat(6));
+			dm.activity({ kind: "reasoning", text: `推理 ${i} `.repeat(40) }, 80);
+			dm.activity({ kind: "text", text: `**答** ${i} 一段正文内容加长以触发折行路径。`.repeat(4) }, 80);
+			dm.end(80);
+			dm.toolCall("tool-fs__read", { path: `src/f${i}.ts` }, `c${i}`);
+			dm.toolResult("a\nb", false, `c${i}`);
+			dm.pushLine(`提示行 ${i} ` + "文本 ".repeat(15));
+		}
+		dm.frameWindow(80, 0, 50); // 热缓存（首帧全量渲染）
+		const base = dm.debugWrapCalls;
+		expect(base).toBeGreaterThan(0); // 首帧确实折过（自证观测口活着）
+		dm.frameWindow(80, 0, 50);
+		dm.frameWindow(80, 30, 25);
+		dm.totalLines(80);
+		expect(dm.debugWrapCalls).toBe(base); // 稳态三连帧零折行——被接回全量物化则必红
+	});
+
+	it("② 每帧物化行数 ≤ 请求 maxLines；500ms 内二次宽度变化只重折一次（护栏②接线——fullapp 冷却吞 = DocModel 不见第二次换宽）", async () => {
+		const dm = new DocModel();
+		for (let i = 0; i < 60; i++) dm.pushLine(`历史行 ${i} ${"内容".repeat(i % 12)}`);
+		for (const [s, m] of [[0, 10], [20, 40], [55, 5]] as const) {
+			expect(dm.frameWindow(80, s, m).length).toBeLessThanOrEqual(m); // 返回侧不超预算
+		}
+		// 冷却护栏（fullapp 级接线验证——DocModel 真例行源 rig）：
+		const { FullApp } = await import("./fullapp.ts");
+		const { EventEmitter } = await import("node:events");
+		const input = new EventEmitter() as unknown as NodeJS.ReadStream;
+		(input as unknown as { isTTY: boolean }).isTTY = true;
+		(input as unknown as { setRawMode: unknown }).setRawMode = () => input;
+		(input as unknown as { setEncoding: unknown }).setEncoding = () => input;
+		(input as unknown as { resume: unknown }).resume = () => input;
+		(input as unknown as { pause: unknown }).pause = () => input;
+		const output = new EventEmitter() as unknown as NodeJS.WriteStream & { buf: string };
+		(output as unknown as { buf: string }).buf = "";
+		(output as unknown as { columns: number }).columns = 100;
+		(output as unknown as { rows: number }).rows = 30;
+		output.write = ((s: string) => {
+			(output as unknown as { buf: string }).buf += s;
+			return true;
+		}) as NodeJS.WriteStream["write"];
+		const w = (): number => appRef?.streamCols ?? 96; // 生产同源：streamCols 随 sidebarVisible 变（宽度链真通）
+		let appRef: import("./fullapp.ts").FullApp | undefined;
+		const app = new FullApp({
+			columns: () => 100,
+			rows: () => 30,
+			docTotal: () => dm.totalLines(w()),
+			docWindow: (s, c) => dm.frameWindow(w(), s, c),
+			submit: () => {},
+			requestCancel: () => {},
+			panelData: () => ({ model: "m", session: "s", cwd: "d", tokens: { input: 0, output: 0 }, startedAt: new Date().toISOString(), modules: [], tasks: [], permission: "never" }),
+			slashCommands: () => [],
+			slashCurrent: () => "",
+			thinkOpen: () => false,
+			toggleThink: () => {},
+			toggleTool: () => {},
+			toggleErr: () => {},
+			queueItems: () => [],
+			recallQueued: () => undefined,
+			requestSteer: () => {},
+		}, { input, output });
+		appRef = app;
+		app.start();
+		await new Promise((r) => setTimeout(r, 40));
+		dm.debugWrapCalls = 0;
+		expect(app.setSidebar(false)).toBe(true); // 第一次切换：宽度变化 → 全量重折
+		await new Promise((r) => setTimeout(r, 60));
+		const afterFirst = dm.debugWrapCalls;
+		expect(afterFirst).toBeGreaterThan(0); // 重折确实发生（换宽击穿缓存）
+		expect(app.setSidebar(true)).toBe(false); // 冷却内被吞——不切 = 不换宽
+		await new Promise((r) => setTimeout(r, 60));
+		expect(dm.debugWrapCalls).toBe(afterFirst); // 没有第二次全量重折（护栏②生效）
+		app.stop();
+	});
+});
