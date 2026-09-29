@@ -807,3 +807,20 @@ describe("DocModel kimi 式轮次滑窗 + 远区缓存淘汰（m5-render-perf T7
 		expect(dm.totalLines(80)).toBe(before.length); // 计数未丢
 	});
 });
+
+describe("工具失败体展开帽（m5-render-perf 走查③修——旧帽 60 整屏 err 色，对齐 kimi RESULT_PREVIEW_LINES 预览哲学）", () => {
+	it("Alt+F 展开态：错误体只显前 10 行 + 「其余 N 行从略」提示；收起态照旧仅头行", () => {
+		const dm = new DocModel();
+		const output = Array.from({ length: 15 }, (_, i) => `输出行 ${i}`).join("\n");
+		dm.toolCall("tool-shell__bash", { command: "npm create vite" }, "c1");
+		dm.toolResult(output, true, "c1");
+		const collapsed = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(collapsed).toContain("● Used Bash"); // 头行在
+		expect(collapsed).not.toContain("输出行 0"); // 收起态零正文
+		dm.errOpen = true;
+		const opened = dm.frameLines(80).map(stripAnsi);
+		const body = opened.filter((l) => l.includes("输出行"));
+		expect(body).toHaveLength(10); // 帽 10（旧帽 60 则 15 行全铺）
+		expect(opened.some((l) => l.includes("其余 5 行从略"))).toBe(true); // 提示行带余量数
+	});
+});
