@@ -286,9 +286,12 @@ export class DocModel {
 			if (!this.errOpen) return out;
 			// CTW-09（2026-09-28）：错误体入场一次解析缓存（hl/detail 同纪律）——errorLines 是
 			// JSON.parse 尝试 + 全文 split + 逐行 cleanLine，失败体可达数百 KB，展开期帧心跳不重算
+			// 展开帽 10（m5-render-perf 走查③修，2026-09-29 用户报「一大堆」——旧帽 60 整屏 err 色；
+			// kimi RESULT_PREVIEW_LINES=3 同哲学：预览给够、完整内容有专门出口，其 ctrl+o = 我们会话文件）
 			e.errLines ??= errorLines(e.result.output);
-			for (const l of e.errLines.slice(0, 60)) for (const wl of wrapText(l, Math.max(8, width - 2))) out.push("  " + theme.fg("err", wl));
-			if (e.errLines.length > 60) out.push(theme.dim("  … 其余从略（完整内容在会话文件）"));
+			const ERR_CAP = 10; // 与 diff/Write 收起帽同族（CAP 10）
+			for (const l of e.errLines.slice(0, ERR_CAP)) for (const wl of wrapText(l, Math.max(8, width - 2))) out.push("  " + theme.fg("err", wl));
+			if (e.errLines.length > ERR_CAP) out.push(theme.dim(`  … 其余 ${e.errLines.length - ERR_CAP} 行从略（完整内容在会话文件）`));
 			return out;
 		}
 		// Write = 内容预览（kimi 形态：dim 行号 + 语法高亮正文，无 +/- 记号——高亮一次入缓存，
