@@ -1492,9 +1492,16 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
+		// 弹窗聚焦期主窗快捷键不可用（走查⑤，2026-09-29 用户拍板「焦点在弹窗上 → 主界面快捷键
+		// 应为不可用」）：查看/选择/询问/控件窗、诊断弹窗、斜杠菜单任一在场，主窗全局键不触发主窗
+		// 功能。例外 = 弹窗自己的键：查看窗注册键（viewHasKey 让位，落窗内分发）与诊断开关
+		// （Ctrl+E 在 diagOpen 期是诊断窗的关窗键）。旧铁律「模块窗期 Ctrl+E 仍走宿主全局键」随之
+		// 作废（保留键注册即拒不动——模块依然不能绑这些键）；吞键静默，Esc 关弹窗后恢复。
+		const popupFocused = this.pendingUi !== undefined || s.diagOpen || s.diagReturn || s.overlayOpen;
 		if (key === "ctrl+t") {
 			// m5-render-perf T5 护栏①（D8 定案）：生成中拒绝切换——宽度变化全量重折的尖峰削频，
 			// toast 明示（设计空白 #9 文案）；冷却期连击由 setSidebar 静默吞（预检后到达的都是真实切换意图）
+			if (popupFocused) return;
 			if (s.busy) {
 				this.showToast("生成中不能切换侧栏，回答结束后再试");
 				return;
@@ -1504,11 +1511,6 @@ export class FullApp {
 		}
 		if (key === "ctrl+e") {
 			// 模块诊断弹窗总开关（T9/S6：全局拦截含输入框编辑态——与 Ctrl+T 同款；keymatch 0x05 无既有消费者）
-			// 宿主查看窗让位（m5-render-perf 走查④修，2026-09-29）：宿主自建查看窗（无 owner——如子代理
-			// 消息窗）聚焦期 Ctrl+E 不穿透开诊断——叠窗打断阅读还顶掉查看窗（用户实机报）。模块窗
-			// （owner 在场）不适用——m5 UI 批铁律「宿主全局键 Ctrl+T/E/O 优先于模块窗内自定义键」保持；
-			// 诊断自身二级窗（diagOpen/diagReturn 在场）的关闭流程同样不受影响。
-			if (this.pendingUi?.kind === "view" && this.pendingUi.owner === undefined && !s.diagOpen && !s.diagReturn) return;
 			if (s.diagOpen || s.diagReturn) {
 				// 二级开着（diagReturn 标记）= 全部关闭（原型定案）：一级、二级、返回标记一起清
 				s.diagOpen = false;
@@ -1518,6 +1520,7 @@ export class FullApp {
 					this.promoteUi(); // viewText 已排队化（T2）——关掉后队列里的下一个照常提
 				}
 			} else {
+				if (popupFocused) return; // 弹窗聚焦期不开诊断（吞——走查⑤；诊断自开关在上分支不受影响）
 				const entries = this.io.diagEntries?.() ?? [];
 				if (entries.length === 0) {
 					this.showToast("模块全部正常——没有诊断记录"); // 空态不弹空窗（原型同款）
@@ -1531,23 +1534,27 @@ export class FullApp {
 			return;
 		}
 		if (key === "alt+e" && !this.viewHasKey(key)) {
+			if (popupFocused) return; // 弹窗期主窗折叠态不可用（走查⑤）——查看窗注册键已让位落窗内
 			this.io.toggleThink();
 			this.scheduler.requestImmediateRender();
 			return;
 		}
 		if (key === "alt+o" && !this.viewHasKey(key)) {
+			if (popupFocused) return;
 			this.io.toggleTool();
 			this.scheduler.requestImmediateRender();
 			return;
 		}
 		if (key === "alt+f" && !this.viewHasKey(key)) {
+			if (popupFocused) return;
 			this.io.toggleErr();
 			this.scheduler.requestImmediateRender();
 			return;
 		}
 		if (key === "ctrl+u") {
-			// Ctrl+U = steer（2026-09-23 队列批——kimi Ctrl-S 改键位，Ctrl+S 是终端 XOFF 流控）：
+			// Ctrl+U = steer（2026-09-23 队列批——kimi Ctrl-S 改键位，Ctrl+S 是终端 XOFF 流控冲突回避）：
 			// 排队消息 + 当前草稿一起注入/提交；输入框清空（宿主把不可 steer 项留队）
+			if (popupFocused) return; // 弹窗聚焦期 steer 不可用（走查⑤）
 			const texts = [...this.io.queueItems(), ...(s.input.trim() !== "" ? [s.input] : [])];
 			if (texts.length > 0) {
 				s.input = "";
@@ -1561,15 +1568,14 @@ export class FullApp {
 			return;
 		}
 		if (key === "alt+v") {
+			if (popupFocused) return; // 弹窗聚焦期贴图不可用（走查⑤）
 			this.io.requestPasteImage?.(); // F5 二轮⑬——全屏期 Alt+V 由 FullApp 接管（readline 侧已让位）
 			return;
 		}
 		if (key === "ctrl+o") {
 			// Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板——/summary 命令退役，摘要查看唯一入口；
 			// 无摘要时 toast 提示而非静默）
-			// 宿主查看窗让位（同走查④修）：无 owner 的宿主查看窗聚焦期不叠摘要窗（viewText 排队、
-			// 关窗后突然冒出也是键位混乱）——静默吞，Esc 关查看窗后可再按；模块窗铁律同 Ctrl+E 保持穿透。
-			if (this.pendingUi?.kind === "view" && this.pendingUi.owner === undefined) return;
+			if (popupFocused) return; // 弹窗聚焦期不叠摘要窗（走查④起，走查⑤扩到全部弹窗形态）
 			this.io.showCompactionSummary?.();
 			this.scheduler.requestImmediateRender();
 			return;
