@@ -32,7 +32,7 @@ import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
-import { parse } from "smol-toml";
+
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
@@ -2054,7 +2054,6 @@ if (tuiMode === "full" && args.print === undefined) {
 /** 引导弹窗副作用接线（写盘全走既有件：menuDeps 闭环 / tool-web persist 面——零平行写路）。 */
 const buildOnboardingDeps = (): OnboardingDeps => {
 	const menuDeps = defaultMenuDeps();
-	const configFile = join(orosusHome(), "config.toml");
 	const secretsFile = join(orosusHome(), "secrets.env");
 	return {
 		providers: snapshotProviderView(),
