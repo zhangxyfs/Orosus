@@ -407,7 +407,7 @@ export interface SettingsService { … }
 | `setTheme` | `setTheme(name: string): Promise<void>` |  |
 | `applyModulePreset` | `applyModulePreset(preset: "full" \| "minimal"): Promise<{ failed: string[] }>` |  |
 | `setLabel` | `setLabel(label: string): Promise<void>` |  |
-| `setSidebar?` | `setSidebar?(visible: boolean): Promise<void>` |  |
+| `setSidebar?` | `setSidebar?(visible: boolean): Promise<boolean>` |  |
 | `readClipboard?` | `readClipboard?(): Promise<string \| undefined>` | 读剪贴板文本。可选——剪贴板通道平台相关，宿主不支持就不装（模块判空降级）。 |
 
 **方法参数**
