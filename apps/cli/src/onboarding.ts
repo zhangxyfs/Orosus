@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { loadConfig } from "@orosus/core";
 import type { CommandUi } from "@orosus/contracts/module";
 
