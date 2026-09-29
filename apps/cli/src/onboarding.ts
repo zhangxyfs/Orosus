@@ -39,6 +39,6 @@ export async function runOnboarding(
     ? `已配置 ${providers.length} 个平台（${providers.join("、")}）但尚未选择 model——现在选吗？（进入 /provider 向导）`
     : `尚未配置任何模型提供商——现在配置吗？（进入 /provider 向导：选平台 → 粘贴 apiKey 即用）`;
   const go = await ui.confirm(msg);
-  if (!go) return "已跳过——随时输入 /provider 配置（或参照 docs/developers.md 手写 config.toml）";
+  if (!go) return "已跳过——随时输入 /provider 配置（或参照 docs/developers.md 手写 config.toml（模块配置在 modules.d/））";
   return (await h.prompt("/provider")) ?? "（/provider 不可用——请确认 provider-custom 模块已启用）";
 }

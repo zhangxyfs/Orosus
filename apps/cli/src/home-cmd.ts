@@ -43,7 +43,7 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
   if (sub === "path") {
     const home = io.sourceHome; // main 接线 orosusHome() 的解析结果（env 已在接线时消费）
     io.out(`OROSUS_HOME 解析结果: ${home}`);
-    for (const [name, rel] of [["config", "config.toml"], ["sessions", "sessions"], ["cache", "cache"]] as const) {
+    for (const [name, rel] of [["config", "config.toml"], ["modules（模块配置目录）", "modules.d"], ["sessions", "sessions"], ["cache", "cache"]] as const) {
       const p = `${home}/${rel}`;
       io.out(`  ${name}: ${p}${existsSync(p) ? "" : "（不存在）"}`);
     }
