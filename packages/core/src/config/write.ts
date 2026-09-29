@@ -12,9 +12,21 @@ import { join } from "node:path";
 
 type SectionValue = string | number | boolean | string[] | null;
 
+/** CM-11 转义（subagent 版整体搬入升级——并一份时吸收；值来自网络返回如模型名，不设防即注入面）：
+ *  引号/反斜杠/换行/制表/其余控制字符全部转出 TOML 合法形态（\uXXXX），不产出多行。 */
+// oxlint-disable-next-line no-control-regex -- 转义件的职责就是匹配控制字符，非误用
+const tomlEscape = (v: string): string => v.replace(/["\\\n\r\t\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, (c) => {
+  if (c === '"') return '\\"';
+  if (c === "\\") return "\\\\";
+  if (c === "\n") return "\\n";
+  if (c === "\r") return "\\r";
+  if (c === "\t") return "\\t";
+  return `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+});
+
 const serialize = (v: Exclude<SectionValue, null>): string => {
-  if (typeof v === "string") return `"${v}"`;
-  if (Array.isArray(v)) return `[${v.map((x) => `"${x}"`).join(", ")}]`;
+  if (typeof v === "string") return `"${tomlEscape(v)}"`;
+  if (Array.isArray(v)) return `[${v.map((x) => `"${tomlEscape(x)}"`).join(", ")}]`;
   return String(v);
 };
 

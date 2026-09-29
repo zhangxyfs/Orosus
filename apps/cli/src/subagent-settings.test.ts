@@ -27,22 +27,30 @@ describe("/settings 子代理分组 T12（决策 7/23：模型 + 审批模式 �
     ].join("\n"), "utf8");
     writeSubagentConfigKey("model", "custom/new-m", cfg()); // 既有节内改
     writeSubagentConfigKey("approvalMode", "auto", cfg());  // 既有节内插（下一节头之前）
-    const after = readFileSync(cfg(), "utf8");
-    expect(after).toContain("# 用户注释——行级写不许洗掉");
+    // m4-8 T4：[tool-subagent] 已路由新家 modules.d/tool-subagent.toml——config.toml 分毫不动
+    const after = readFileSync(join(dir!, "modules.d", "tool-subagent.toml"), "utf8");
+    expect(readFileSync(cfg(), "utf8")).toContain("# 用户注释——行级写不许洗掉");
     expect(after).toContain('model = "custom/new-m"');
     expect(after).toContain('approvalMode = "auto"');
     expect(after.indexOf("approvalMode")).toBeGreaterThan(after.indexOf("[tool-subagent]"));
-    expect(after.indexOf("approvalMode")).toBeLessThan(after.indexOf("[compaction]")); // 插在节内不落到别节
+    expect(after.trimEnd().endsWith('approvalMode = "auto"')).toBe(true); // 节尾收（新家独占文件）
     expect(readSubagentConfig(cfg())).toEqual({ model: "custom/new-m", approvalMode: "auto" });
 
     writeSubagentConfigKey("approvalMode", null, cfg()); // 删键 = 回跟随
     expect(readSubagentConfig(cfg()).approvalMode).toBeUndefined();
     expect(readSubagentConfig(cfg()).model).toBe("custom/new-m"); // 邻键不伤
 
-    writeSubagentConfigKey("approvalMode", "auto", join(dir!, "fresh.toml")); // 缺文件 = 尾新建节
-    const fresh = readFileSync(join(dir!, "fresh.toml"), "utf8");
+    const freshDir = mkdtempSync(join(tmpdir(), "orosus-t12f-")); // m4-8 T4：缺文件 = 路由建新家文件
+    writeSubagentConfigKey("approvalMode", "auto", join(freshDir, "fresh.toml"));
+    const fresh = readFileSync(join(freshDir, "modules.d", "tool-subagent.toml"), "utf8");
+    rmSync(freshDir, { recursive: true, force: true });
     expect(fresh).toContain("[tool-subagent]");
-    expect(readSubagentConfig(join(dir!, "no-such.toml"))).toEqual({}); // 读缺文件 = 空
+    const bareDir = mkdtempSync(join(tmpdir(), "orosus-t12b-")); // 真空目录（无 config 也无 modules.d——同目录有新家时读到它是正确语义）
+    try {
+      expect(readSubagentConfig(join(bareDir, "no-such.toml"))).toEqual({}); // 读缺文件 = 空
+    } finally {
+      rmSync(bareDir, { recursive: true, force: true });
+    }
   });
 
   it("㊻ 两档设置流：审批三档菜单（当前值 ✓ / 跟随删键文案）+ 模型两段选（清除项回跟父）", async () => {
@@ -84,8 +92,8 @@ describe("/settings 子代理分组 T12（决策 7/23：模型 + 审批模式 �
     writeFileSync(cfg(), "# 注释\n[tool-subagent]\n", "utf8");
     const evil = 'x"\\y\n[evil]\nenabled = "1';
     writeSubagentConfigKey("model", evil, cfg());
-    const raw = readFileSync(cfg(), "utf8");
-    expect(raw).toContain("# 注释"); // 行级写纪律不回退
+    const raw = readFileSync(join(dir!, "modules.d", "tool-subagent.toml"), "utf8"); // m4-8 T4：新家
+    expect(readFileSync(cfg(), "utf8")).toContain("# 注释"); // 单文件层不动（新家是独占文件无注释）
     expect(raw.match(/^model = /gm)).toHaveLength(1); // 换行被转义成 \n 字面量——无注入新行（旧实现可写出 [evil] 节）
     expect(raw).not.toMatch(/^\[evil\]$/m);
     expect(readSubagentConfig(cfg()).model).toBe(evil); // 读侧还原成对（转义不丢数据）
@@ -113,7 +121,7 @@ describe("子代理轮数上限设置（双保险丝批 2026-09-27：/settings �
 		let r = await runSubagentMaxTurnsSetting(choose, ask, cfg());
 		expect(r).toContain("不限（仅时长兜底）");
 		expect(readSubagentConfig(cfg()).maxTurns).toBe(-1);
-		const raw = readFileSync(cfg(), "utf8");
+		const raw = readFileSync(join(dir!, "modules.d", "tool-subagent.toml"), "utf8"); // m4-8 T4：新家
 		expect(raw).toContain("maxTurns = -1"); // 数值键不带引号
 
 		askReply = "250"; // 越值 → 拒

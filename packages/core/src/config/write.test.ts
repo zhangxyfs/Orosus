@@ -36,6 +36,13 @@ describe("writeSectionKey（m4-8 T3 统一写口）", () => {
     expect(after).toContain("\r\n");
   });
 
+  it("①-b CM-11 注入防线：字符串值带引号/反斜杠/换行 → 转义写出单行，不产生额外 TOML 行", () => {
+    const p = cfg(BASE);
+    writeSectionKey(p, "tui", "mode", 'a"b\\c\nd');
+    expect(readFileSync(p, "utf8")).toContain('mode = "a\\"b\\\\c\\nd"');
+    expect(readFileSync(p, "utf8").split("\n").filter((l) => l.startsWith("mode")).length).toBe(1); // 单行
+  });
+
   it("② 删键：null 删行——节内中段删、节尾唯一键删、键不在场 = 无操作", () => {
     const p = cfg(BASE);
     writeSectionKey(p, "tui", "mode", null); // 节内中段（sidebar 在后）

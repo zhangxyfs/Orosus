@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { loadConfig, writeSectionKey, sectionPath } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
 
 /**
@@ -11,26 +11,6 @@ import { orosusHome } from "@orosus/contracts/home";
 /** 审批模式配置值：auto = 从不询问（照单放行）、ask = 需要时候询问（转主关卡）；键缺席 = 跟随主对话。 */
 export type SubagentApprovalMode = "auto" | "ask";
 
-/** CM-11（2026-09-28 code review）：行级 TOML 写的最小转义——model 值是 `${slotName}/${final}`，其中
- *  final 来自 slot.listModels()（厂商端点 / models.dev 目录的网络返回数据）；含 `"` 即产出非法 TOML
- *  （下次解析失败 → 配置面降级），含换行可注入任意节（`x"\n[evil]\n…` 实测）。行级写为保注释绕过了
- *  smol-toml stringify，同时绕过了它的转义——这里补回同款语义（basic string 形态）。
- *  写转义（tomlEscape）与读还原（tomlUnescape）必须成对；裸反斜杠序列按 TOML 规范语义还原。 */
-// oxlint-disable-next-line no-control-regex -- 转义件的职责就是匹配控制字符（\uXXXX 转出合法 TOML），非误用
-const tomlEscape = (v: string): string => v.replace(/["\\\n\r\t\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, (c) => {
-  if (c === '"') return '\\"';
-  if (c === "\\") return "\\\\";
-  if (c === "\n") return "\\n";
-  if (c === "\r") return "\\r";
-  if (c === "\t") return "\\t";
-  return `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`; // 其余控制字符——TOML 合法的 \uXXXX 形态
-});
-const tomlUnescape = (v: string): string => v.replace(/\\(u[0-9a-fA-F]{4}|["\\nrt])/g, (m, g: string) => {
-  if (g[0] === "u") return String.fromCharCode(Number.parseInt(g.slice(1), 16));
-  const map: Record<string, string> = { '"': '"', "\\": "\\", n: "\n", r: "\r", t: "\t" };
-  return map[g]!;
-});
-
 export interface SubagentConfig {
   model?: string;
   approvalMode?: SubagentApprovalMode;
@@ -39,83 +19,28 @@ export interface SubagentConfig {
 
 /** 读 [tool-subagent] 节两键（缺文件/缺节/缺键 = undefined——跟随态）。 */
 export function readSubagentConfig(filePath = join(orosusHome(), "config.toml")): SubagentConfig {
-  let raw: string;
-  try {
-    raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  } catch {
-    return {};
-  }
-  const sectionRe = /^\s*\[\s*([^\]#]+?)\s*\]/;
-  // CM-11：值可含转义序列（写入侧 tomlEscape 成对）——旧正则 `[^"#]*` 假定值不含引号，遇 `\"` 截断读歪
-  const kvRe = /^\s*(model|approvalMode|maxTurns)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^"#]*))/;
+  // m4-8 T4 收口 loadConfig（读配置单一事实源；转义还原交 smol-toml——CM-11 手写 unescape 退役；
+  // modules.d 新家同读——路由后的 tool-subagent.toml 自动可见）
+  const sec = (loadConfig({ userFile: filePath, userModulesDir: join(dirname(filePath), "modules.d") }).sections.get("tool-subagent") ?? {}) as {
+    model?: unknown; approvalMode?: unknown; maxTurns?: unknown;
+  };
   const out: SubagentConfig = {};
-  let inSection = false;
-  for (const line of raw.split(/\r?\n/)) {
-    const sm = line.match(sectionRe);
-    if (sm !== null) {
-      inSection = sm[1] === "tool-subagent";
-      continue;
-    }
-    if (!inSection) continue;
-    const km = line.match(kvRe);
-    if (km === null) continue;
-    const v = km[2] !== undefined ? tomlUnescape(km[2]) : (km[3] ?? ""); // CM-11：带引号侧还原转义
-    if (km[1] === "model" && v !== "") out.model = v;
-    if (km[1] === "approvalMode" && (v === "auto" || v === "ask")) out.approvalMode = v;
-    if (km[1] === "maxTurns" && /^(-1|[1-9]\d*)$/.test(v)) out.maxTurns = Number(v);
-  }
+  if (typeof sec.model === "string" && sec.model !== "") out.model = sec.model;
+  if (sec.approvalMode === "auto" || sec.approvalMode === "ask") out.approvalMode = sec.approvalMode;
+  if (typeof sec.maxTurns === "number" && Number.isInteger(sec.maxTurns)) out.maxTurns = sec.maxTurns;
   return out;
 }
 
 /** 写/删 [tool-subagent] 节单键：value = null 删键（审批模式回「跟随」）；返回是否落到盘上。 */
 export function writeSubagentConfigKey(key: "model" | "approvalMode" | "maxTurns", value: string | null, filePath = join(orosusHome(), "config.toml")): void {
-  // CM-11：maxTurns 走不带引号的数值形态——导出件不设防时引号/换行可从这条路注入，按读侧同款值域前置拒绝
+  // m4-8 T4 收口统一写口（行级逻辑活在 core/config/write.ts）；CM-11 值域前置与转义由写口承担。
+  // maxTurns 数值裸、字符串带引号——经 Number/类型自然分派
   if (key === "maxTurns" && value !== null && !/^(-1|[1-9]\d*)$/.test(value)) {
     throw new Error(`maxTurns 非法值（须为 -1 或 1-200 整数）：${value}`);
   }
-  let raw = "";
-  try {
-    raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  } catch {
-    /* 缺文件从空起 */
-  }
-  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
-  const lines = raw === "" ? [] : raw.split(/\r?\n/);
-  const sectionRe = /^\s*\[\s*([^\]#]+?)\s*\]/;
-  const keyRe = new RegExp(`^\\s*${key}\\s*=`);
-  let inSection = false;
-  let insertAt = -1;
-  let removed = false;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i]!.match(sectionRe);
-    if (m !== null) {
-      if (inSection) { insertAt = i; break; }
-      inSection = m[1] === "tool-subagent";
-    } else if (inSection && keyRe.test(lines[i]!)) {
-      if (value === null) {
-        lines.splice(i, 1); // 删键 = 回跟随（缺省态）
-        i--;
-        removed = true;
-      } else {
-        lines[i] = key === "maxTurns" ? `${key} = ${value}` : `${key} = "${tomlEscape(value)}"`; // 数值键不带引号；字符串键 CM-11 转义
-      }
-      writeFileSync(filePath, lines.join(eol), "utf8");
-      return;
-    }
-  }
-  if (value === null) {
-    if (removed) writeFileSync(filePath, lines.join(eol), "utf8"); // 已删（唯一键在节尾时此处收尾）
-    return; // 键本就不在——无事可做
-  }
-  if (inSection && insertAt === -1) insertAt = lines.length; // 目标节是最后一节
-  const kvLine = key === "maxTurns" ? `${key} = ${value}` : `${key} = "${tomlEscape(value)}"`; // CM-11：新插行同款转义
-  if (insertAt === -1) {
-    if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
-    lines.push("[tool-subagent]", kvLine);
-  } else {
-    lines.splice(insertAt, 0, kvLine);
-  }
-  writeFileSync(filePath, lines.join(eol), "utf8");
+  // 路由内建（m4-8 T4）：模块节落 modules.d/tool-subagent.toml（目录/文件 sectionPath 建；留守节不会到这）
+  const target = sectionPath("tool-subagent", { userConfig: filePath, modulesDir: join(dirname(filePath), "modules.d"), isModule: () => true });
+  writeSectionKey(target, "tool-subagent", key, value === null ? null : key === "maxTurns" ? Number(value) : value);
 }
 
 /** 审批模式菜单三档（决策 3/23 + m3b D8 中文名）：值 = null 表示「跟随主对话」（键缺席）。 */

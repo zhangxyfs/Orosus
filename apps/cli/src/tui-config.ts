@@ -1,8 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
-import { parse, stringify } from "smol-toml";
-import { loadConfig } from "@orosus/core";
+import { loadConfig, writeSectionKey } from "@orosus/core";
 
 /** [tui] sidebar 读写（F5 十二轮② 拍板：Ctrl+T 状态跨会话保留）。读 = 用户层优先、项目层兜底；写只落用户层。
  *  CM-01 修复（2026-09-28 code review P0）：① 读盘剥 BOM（v17 平台注记同源——Windows 工具常写 BOM，
@@ -17,13 +15,7 @@ export function tuiSidebarRead(userFile = join(orosusHome(), "config.toml"), pro
 }
 
 export function tuiSidebarPersist(visible: boolean, userFile = join(orosusHome(), "config.toml")): void {
-	let doc: Record<string, unknown> = {};
-	try {
-		doc = parse(readFileSync(userFile, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
-	} catch {
-		/* 缺文件从空起；文件在但读不懂（坏 TOML/BOM 后仍坏）→ 拒写防毁配置（CM-01） */
-		if (existsSync(userFile)) return;
-	}
-	doc.tui = { ...(doc.tui as Record<string, unknown>), sidebar: visible };
-	writeFileSync(userFile, stringify(doc), "utf8");
+	// m4-8 T4 收口统一写口：行级节区感知写（CM-01 的 stringify 毁配置风险被行级写天然消除——
+	// 行级写不 parse 整文件，坏 TOML 的其他行原样不动；[tui] 留守节 → 直写原文件）
+	writeSectionKey(userFile, "tui", "sidebar", visible);
 }
