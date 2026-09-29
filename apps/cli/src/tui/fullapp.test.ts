@@ -2981,3 +2981,54 @@ describe("fullapp 窗口化行源 + 侧栏护栏（m5-render-perf T5——D8 定
 		app.stop();
 	});
 });
+
+describe("主窗滚动钉住（m5-render-perf 真机走查①修——流式增长不顶走已上滚的视口）", () => {
+	it("上滚后内容增长：视口起点不动（正读的行钉住）、新尾部不闯入；跟随模式（scrollBack=0）照旧自动滚", async () => {
+		let docLines = Array.from({ length: 50 }, (_, i) => `行 ${String(i).padStart(3, "0")} · 标记 m${i}x`);
+		const { app, output } = rig(docLines, 100, 30, {
+			docTotal: () => docLines.length,
+			docWindow: (s, c) => docLines.slice(s, s + c),
+		});
+		app.start();
+		await flush();
+		app.stateRef.scrollBack = 10; // 用户上滚脱钉
+		app.repaint();
+		await flush();
+		const before = output.buf.length;
+		docLines = [...docLines, ...Array.from({ length: 30 }, (_, i) => `新尾部 ${i} · 标记 new${i}x`)]; // 流式增长 30 行
+		app.repaint();
+		await flush();
+		const frame = stripAnsi(output.buf.slice(before));
+		// 视口起点不动（diff 更新帧只重写变化行——钉住的证据 = scrollBack 补偿精确 + 视口外行不闯入）
+		expect(app.stateRef.scrollBack).toBe(40); // 10 + 30：钉住补偿精确（start 恒 ≈ 15）
+		expect(frame).not.toContain("m048x"); // 无补偿时视口会被顶到 [45,71)——该段行不出现
+		expect(frame).not.toContain("new0x"); // 新尾部不闯入视口
+		// 跟随模式：滚回底部（scrollBack=0）再增长 → 自动滚（新尾部进视口）
+		app.stateRef.scrollBack = 0;
+		app.repaint();
+		await flush();
+		docLines = [...docLines, "最新一行 · 标记 newest"];
+		app.repaint();
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("newest");
+		app.stop();
+	});
+
+	it("收缩（滑窗裁剪形：total 减少）不触发补偿——scrollBack 只被钳制不增", async () => {
+		let docLines = Array.from({ length: 50 }, (_, i) => `行 ${i} · s${i}x`);
+		const { app } = rig(docLines, 100, 30, {
+			docTotal: () => docLines.length,
+			docWindow: (s, c) => docLines.slice(s, s + c),
+		});
+		app.start();
+		await flush();
+		app.stateRef.scrollBack = 10;
+		app.repaint();
+		await flush();
+		docLines = docLines.slice(7); // 头部移除 7 行（T7 裁剪形）
+		app.repaint();
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(10); // 不补偿（内容本就不动，行号平移语义）
+		app.stop();
+	});
+});
