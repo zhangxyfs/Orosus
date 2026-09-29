@@ -53,7 +53,16 @@ fi
 
 mapfile -t commits < <(git rev-list --reverse --topo-order "${range[@]}")
 if [ "${#commits[@]}" -eq 0 ]; then
-  echo "没有新提交，无需发布。"
+  # 自愈：base 已同步但 public 领先远端（上次推送网络失败的残留）时补推
+  pub_tip=$(git rev-parse -q --verify "refs/heads/$PUB")
+  org_tip=$(git rev-parse -q --verify "refs/remotes/$REMOTE/master")
+  if [ -n "$pub_tip" ] && [ "$pub_tip" != "$org_tip" ]; then
+    echo "没有新提交，但 $PUB 领先远端——补推上次未送达的发布。"
+    git push "$REMOTE" "refs/heads/$PUB:refs/heads/master"
+    echo "✓ 补推完成（$REMOTE/master → ${pub_tip:0:7}）。"
+  else
+    echo "没有新提交，无需发布。"
+  fi
   exit 0
 fi
 
@@ -111,20 +120,28 @@ for sha in "${commits[@]}"; do
 done
 
 # 全剪枝轮：本轮提交全部只动隐藏路径 → tip 未被赋值，update-ref 拿空 sha 必炸（fatal: not a valid SHA1）
-# 此时 public 树无需推进，但 base 必须前移——否则这些提交下轮又被无谓重放一遍
+# 此时 public 树无需推进；但仍落到下方统一推送尾巴——顺带覆盖「上轮推送失败的补推」
+ALL_PRUNED=0
 if [ -z "$tip" ]; then
-  echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
-  echo "本轮 $total 个提交全部只涉及 ${HIDE_PATHS[*]}，已剪枝——$PUB 不动，仅推进 base。"
-  exit 0
+  echo "本轮 $total 个提交全部只涉及 ${HIDE_PATHS[*]}，已剪枝——$PUB 不动。"
+  ALL_PRUNED=1
 fi
 
-git update-ref "refs/heads/$PUB" "$tip"
-echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
-echo "✓ $PUB 分支已更新：本轮重放 $total 个提交，保留 $kept 个（只改隐藏路径 ${HIDE_PATHS[*]} 的提交被剪枝）。"
+if [ "$ALL_PRUNED" -eq 0 ]; then
+  git update-ref "refs/heads/$PUB" "$tip"
+  echo "✓ $PUB 分支已更新：本轮重放 $total 个提交，保留 $kept 个（只改隐藏路径 ${HIDE_PATHS[*]} 的提交被剪枝）。"
+fi
 
 if [ "$PUSH" -eq 1 ]; then
-  git push "$REMOTE" "refs/heads/$PUB:refs/heads/master"
-  echo "✓ 已推送到 $REMOTE/master。"
+  # base 落盘必须在推送成功之后——失败时下次重跑会确定性重放出相同提交（树/身份/日期同源 → 同 sha）并自动重试
+  if git push "$REMOTE" "refs/heads/$PUB:refs/heads/master"; then
+    echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
+    echo "✓ 已推送到 $REMOTE/master（base 已落盘）。"
+  else
+    echo "✗ 推送失败（网络/权限）——base 未落盘，恢复后重跑本脚本即自动重发全部未推内容。" >&2
+    exit 1
+  fi
 else
+  echo "$src_tip" > "$(git rev-parse --git-dir)/publish-github-base"
   echo "（--no-push：本轮未推送。首推需人工：git push --force-with-lease origin public:master）"
 fi
