@@ -61,6 +61,32 @@ describe("存量迁移（m4-8 T2）", () => {
     expect(existsSync(join(modulesDir, "note.toml"))).toBe(false);
   });
 
+  it("③-b 留守排除（真机踩中补钉 2026-09-29）：approval/compaction/provider-custom 是内置模块但留守——白名单含其名也不搬；provider 子节（provider-custom.providers.x）同留守", () => {
+    const raw = '[approval]\nmode = "never"\n\n[compaction]\nenabled = true\n\n[skill]\ndisabled = []\n\n[provider-custom]\nenabled = true\n\n[provider-custom.providers.deepseek]\nbaseUrl = "x"\n';
+    const { configPath, modulesDir } = setup(raw);
+    const r = migrateModulesSections(configPath, modulesDir, ["approval", "compaction", "provider-custom", "skill"]);
+    expect(r.moved).toEqual(["skill"]);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("[approval]");
+    expect(after).toContain("[compaction]");
+    expect(after).toContain("[provider-custom]");
+    expect(after).toContain("[provider-custom.providers.deepseek]");
+    expect(existsSync(join(modulesDir, "approval.toml"))).toBe(false);
+    expect(existsSync(join(modulesDir, "provider-custom.toml"))).toBe(false);
+  });
+
+  it("③-c 子节随父节同搬（真机踩中补钉）：[tool-web.search] 按第一段 tool-web 判归属——与父节同进 tool-web.toml，不留孤儿", () => {
+    const raw = '[tool-web]\nenabled = true\n\n[tool-web.search]\nbackend = "auto"\n';
+    const { configPath, modulesDir } = setup(raw);
+    const r = migrateModulesSections(configPath, modulesDir, ["tool-web"]);
+    expect(r.moved.sort()).toEqual(["tool-web", "tool-web.search"]);
+    const home = readFileSync(join(modulesDir, "tool-web.toml"), "utf8");
+    expect(home).toContain("[tool-web]");
+    expect(home).toContain("[tool-web.search]");
+    expect(home).toContain("backend");
+    expect(readFileSync(configPath, "utf8")).not.toContain("tool-web");
+  });
+
   it("④ 配置文件不存在 = 空手归（新装机器）;无模块节也空手", () => {
     const d = mkdtempSync(join(tmpdir(), "m48-mig2-"));
     dir = d;
