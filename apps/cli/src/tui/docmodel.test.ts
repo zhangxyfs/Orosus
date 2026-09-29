@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DocModel } from "./docmodel.ts";
 import * as toolview from "./toolview.ts";
 import * as theme from "../theme.ts";
-import { stripAnsi } from "./width.ts";
+import { stripAnsi, wrapText } from "./width.ts";
 import { TOOL_MERGE } from "../render.ts";
 import { loadHistoricalSubagents } from "../tasks-cmd.ts";
 
@@ -505,4 +505,64 @@ describe("tasks 纯查询行静默（2026-09-27 拍板：收进 agent 组，不�
 	});
 });
 
+});
+
+describe("DocModel 活动思考块增量折行（m5-render-perf T1——LiveWrap 接线，热点 (a)）", () => {
+	/** 旧路径参照实现（docmodel.ts thinkBlock 的原样拷贝——接线后行为须与之逐字节相等）。 */
+	const legacyThink = (text: string, w: number, open: boolean): string[] => {
+		const raw = wrapText(text, Math.max(8, w - 2));
+		if (!open) {
+			const head = theme.dim("[思考] · Alt + E 展开");
+			return [head, ...raw.slice(-2).map((l) => theme.dim("  " + l))];
+		}
+		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
+	};
+	const thinkSource =
+		"先分析问题的结构再决定方案。\n" +
+		"考虑边界：check:boundaries 与 https://example.com/long/path/component?query=1 的词原子。\n\n" +
+		"中文与 English 混排的长段落，用来覆盖超宽折行与 CJK 禁则（括号「」【】不许收尾开头）的各类断点形态，" +
+		"再加 ❤️ emoji 与组合字符的重度混合。".repeat(3);
+
+	it("① 全链路等价：逐 delta 喂入每步 frameLines == 该时刻旧路径（wrapText + 现有样式），收起/展开两态", () => {
+		for (const open of [false, true]) {
+			const dm = new DocModel();
+			dm.thinkOpen = open;
+			let acc = "";
+			let prev = 0;
+			for (const n of [3, 11, 5, 27, 9, 40, 2, 16, 33, 8, 21, 60, 4]) {
+				acc = thinkSource.slice(0, Math.min(thinkSource.length, acc.length + n));
+				dm.activity({ kind: "reasoning", text: acc.slice(prev) }, 80);
+				prev = acc.length;
+				const got = dm.frameLines(80);
+				expect(got, `open=${open} len=${acc.length}`).toEqual(legacyThink(acc, 80, open));
+			}
+		}
+	});
+
+	it("② Alt+E 流中切换：同一累积文本下收起/展开两态各自与旧路径一致（一份裸行缓存两态共用）", () => {
+		const dm = new DocModel();
+		let acc = "";
+		for (const n of [15, 30, 45, 60]) {
+			const prev = acc.length;
+			acc = thinkSource.slice(0, acc.length + n);
+			dm.activity({ kind: "reasoning", text: acc.slice(prev) }, 80);
+			dm.thinkOpen = false;
+			expect(dm.frameLines(80)).toEqual(legacyThink(acc, 80, false));
+			dm.thinkOpen = true;
+			expect(dm.frameLines(80)).toEqual(legacyThink(acc, 80, true));
+		}
+	});
+
+	it("③ end() 定格行 == 定格前最后一帧活动块行（含 ANSI 逐字节）——LiveWrap 路径与 thinkBlock 定格路径同形", () => {
+		const dm = new DocModel();
+		dm.thinkOpen = true;
+		dm.activity({ kind: "reasoning", text: thinkSource }, 80);
+		const before = dm.frameLines(80); // 活动块最后一帧（LiveWrap 路径）
+		dm.end(80); // settleActive → think 条目（thinkBlock 一次折行路径）
+		expect(dm.frameLines(80)).toEqual(before);
+		dm.thinkOpen = false; // 收起态也同形（样式在两路径共用 styleWrappedThink）
+		const b2 = dm.frameLines(80);
+		dm.discard();
+		expect(b2).toEqual(legacyThink(thinkSource, 80, false));
+	});
 });
