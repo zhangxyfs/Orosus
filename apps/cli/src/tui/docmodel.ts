@@ -39,7 +39,8 @@ type Entry =
 	| { k: "think"; src: string; cache?: { w: number; open: boolean; lines: string[] } } // 思考块——键含 thinkOpen（收起态旧口径每帧付全文 wrapText）
 	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存）
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
-	| { k: "skill"; name: string }; // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
+	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
+	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
@@ -75,7 +76,7 @@ export class DocModel {
 			});
 			if (alive) return; // 末组还活着——并入它
 		}
-		this.lines.push({ k: "group", ids: [] });
+		this.pushE({ k: "group", ids: [] });
 	}
 
 	/** 全部 agent 组引用的编号集合（宿主 provider 据此补挂盘上历史条目——回放组的渲染取数口）。 */
@@ -108,6 +109,25 @@ export class DocModel {
 	 *  替代旧路径每帧对全文 wrapText（docmodel.ts 热点 (a)）；settleActive/discard 重置。 */
 	private thinkLive = new LiveWrap();
 
+	// ---------- kimi 式轮次滑窗（m5-render-perf T7——D11/D12/D13） ----------
+	/** 滑窗开关：主窗实例显式启用（main.ts）；renderAgentView 等一次性渲染实例不启用不裁剪
+	 *  （查看窗自有 500 条帽，不叠第二轮窗——doc-review 定案：滑窗不得做成 historyFrom 无条件副作用）。 */
+	turnWindowEnabled = false;
+	/** 视口探针（阅读保护——D11）：宿主注入当前视口行区间（fullapp.layoutFrame 投影）；
+	 *  被裁段与视口相交 → 本轮整批顺延（不做部分裁剪——中段移除破坏底部锚定几何：
+	 *  fullapp end = total − scrollBack 只在恒头部移除下视口纹丝不动、scrollBack 无需修正）。 */
+	viewportProbe: (() => { start: number; end: number } | undefined) | undefined = undefined;
+	private turnOf: number[] = []; // 与 lines 平行：每条目轮号（turn/end 边界——一轮 = 两条用户消息之间的全部条目）
+	private curTurn = 0;
+	private foldedTurns = 0; // 累计已裁轮数（fold 行文案 N）
+	private lastEvictAt = 0; // 远区淘汰 1Hz 节流（设计空白 #8 两可——落地取节流档，随 T8 回写登记）
+
+	/** 条目统一入列（T7）：lines/turnOf 同步 push（轮号 = curTurn）；counts 由 reconcile 补尾覆盖。 */
+	private pushE(e: Entry): void {
+		this.lines.push(e);
+		this.turnOf.push(this.curTurn);
+	}
+
 	private thinkBlock(text: string, w: number): string[] {
 		return this.styleWrappedThink(wrapText(text, Math.max(8, w - 2)), this.thinkOpen);
 	}
@@ -135,13 +155,13 @@ export class DocModel {
 	 *  md → 源文本入列（渲染归 frameLines，宽度变化可回流）。 */
 	private settleActive(): void {
 		if (this.thinkText !== "") {
-			this.lines.push({ k: "think", src: this.thinkText });
+			this.pushE({ k: "think", src: this.thinkText });
 			this.thinkText = "";
 			this.inThink = false;
 			this.thinkLive = new LiveWrap(); // 下一块思考从头缓存
 		}
 		if (this.mdText !== "") {
-			this.lines.push({ k: "md", src: this.mdText });
+			this.pushE({ k: "md", src: this.mdText });
 			this.mdText = "";
 			this.mdStream = undefined;
 		}
@@ -150,7 +170,7 @@ export class DocModel {
 	activity(c: StreamChunk, _width: number): void {
 		if (c.kind === "reasoning") {
 			if (!this.inThink && this.mdText !== "") {
-				this.lines.push({ k: "md", src: this.mdText });
+				this.pushE({ k: "md", src: this.mdText });
 				this.mdText = "";
 				this.mdStream = undefined;
 			}
@@ -180,7 +200,7 @@ export class DocModel {
 				}
 				continue;
 			}
-			this.lines.push({ k: "raw", s: l });
+			this.pushE({ k: "raw", s: l });
 		}
 	}
 
@@ -199,7 +219,7 @@ export class DocModel {
 			else this.ghostNoIdAt = this.lines.length; // CTW-10：位置感知——记静默 call 时刻条目序
 			return;
 		}
-		this.lines.push({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
+		this.pushE({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
 	}
 
 	/** 工具结果原位合并：callId 在场 → 精确配对（并发乱序不交叉挂错——2026-09-25 用户实机错配修复：
@@ -323,6 +343,67 @@ export class DocModel {
 		this.thinkLive = new LiveWrap();
 	}
 
+	/** turn 结束 = 轮边界（一轮 = 两条用户消息之间的全部条目，kimi 同义）。宿主在 onEvent
+	 *  turn/end 的 sink.end()（settleActive）之后调用；historyFrom 装载期走 turnEnd(false)
+	 *  只记账、尾部统一裁剪一次（resume 即裁）。 */
+	turnEnd(trim = true): void {
+		this.curTurn++;
+		if (trim) this.trimTurns();
+	}
+
+	/** 滑窗裁剪（kimi transcript-window 同参数：保留最近 15 轮、滞回 +5——超 20 轮才裁到 15；
+	 *  env OROSUS_TUI_MAX_TURNS 覆盖、0 = 不裁逃生阀）。被裁轮次条目整块销毁（源+缓存释放，
+	 *  治持仓），原地一行折叠提示（D12）。阅读保护：被裁段与视口相交 → 本轮整批顺延（不做
+	 *  部分裁剪——中段移除破坏底部锚定几何；滚回底部后下一次触发再裁）。 */
+	private trimTurns(): void {
+		if (!this.turnWindowEnabled) return;
+		const keep = Number(process.env.OROSUS_TUI_MAX_TURNS ?? 15);
+		if (!Number.isFinite(keep) || keep <= 0) return; // 0 = 不裁（逃生阀）
+		const HYST = 5; // 滞回：减少折叠行频繁进出的抖动（kimi 同值）
+		if (this.curTurn + 1 <= keep + HYST) return; // 未超 keep+5 不裁
+		const oldest = this.curTurn - keep + 1; // 保留 [oldest, curTurn] 共 keep 轮
+		let cut = 0;
+		while (cut < this.lines.length && (this.lines[cut]!.k === "fold" || this.turnOf[cut]! < oldest)) cut++;
+		if (cut === 0) return;
+		if (this.viewportProbe !== undefined) {
+			const vp = this.viewportProbe();
+			if (vp !== undefined) {
+				let cutLines = 0;
+				for (let i = 0; i < cut; i++) cutLines += Math.max(0, this.counts[i] ?? 0);
+				if (cutLines > vp.start) return; // 被裁段 [0, cutLines) 与视口 [vp.start, vp.end) 相交——整批顺延
+			}
+		}
+		this.foldedTurns = oldest; // 已折叠 = 轮 0..oldest-1（轮号恒连续）
+		this.lines.splice(0, cut);
+		this.turnOf.splice(0, cut);
+		this.counts.splice(0, cut);
+		this.lines.unshift({ k: "fold", turns: this.foldedTurns });
+		this.turnOf.unshift(0);
+		this.counts.unshift(1); // fold 恒 1 行（账本即时精确）
+	}
+
+	/** 远区缓存淘汰（设计空白 #8——落地取节流档）：距视口所在轮 > 3 轮的条目丢渲染缓存，
+	 *  源与账本精确计数保留（滚回即重渲、几何不变——T4 账本使「丢缓存不丢几何」成立）。
+	 *  frameWindow 尾部 1Hz 节流调用；测试可直调。 */
+	evictFarCaches(viewportStartLine: number): void {
+		if (this.turnOf.length === 0 || this.lines.length === 0) return;
+		let acc = 0;
+		let vTurn = this.curTurn;
+		for (let i = 0; i < this.lines.length; i++) {
+			const e = this.lines[i]!;
+			if (e.k !== "group") acc += Math.max(0, this.counts[i] ?? 0); // group 活体行不占账（近似定位淘汰边界，宽带有余量）
+			if (acc > viewportStartLine) {
+				vTurn = this.turnOf[i] ?? this.curTurn;
+				break;
+			}
+		}
+		for (let i = 0; i < this.lines.length; i++) {
+			if (vTurn - (this.turnOf[i] ?? 0) <= 3) continue;
+			const e = this.lines[i]!;
+			if (e.k === "raw" || e.k === "md" || e.k === "user" || e.k === "think" || e.k === "tool") delete e.cache;
+		}
+	}
+
 	/** 历史结构化摄入（F5 五轮②③④）：与实时流同形（暖金提问/md 渲染/think marker/工具 Used 行）。 */
 	historyFrom(events: { type: string; [k: string]: unknown }[], _width: number): void {
 		// 回放期 agent 组重建（2026-09-27：重载后与实时同形——不再退化静态占位行）。同一轮 assistant
@@ -343,12 +424,12 @@ export class DocModel {
 				const think = parts.filter((p) => p.kind === "reasoning").map((p) => p.text ?? "").join("");
 				if (think !== "") {
 					this.settleActive();
-					this.lines.push({ k: "think", src: think });
+					this.pushE({ k: "think", src: think });
 				}
 				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
 				if (text !== "") {
 					this.settleActive();
-					this.lines.push({ k: "md", src: text });
+					this.pushE({ k: "md", src: text });
 				}
 			} else if (e.type === "tool/call") {
 				const name = String(e.name);
@@ -357,7 +438,7 @@ export class DocModel {
 					this.settleActive();
 					if (group === undefined) {
 						group = { k: "group", ids: [] };
-						this.lines.push(group);
+						this.pushE(group);
 					}
 					if (callId !== undefined) this.pendingSpawnResults.set(callId, group);
 					continue;
@@ -386,10 +467,13 @@ export class DocModel {
 				}
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
-				this.lines.push({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });
+				this.pushE({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });
+			} else if (e.type === "turn/end") {
+				this.turnEnd(false); // 装载期只记账不逐次裁剪——尾部统一一次（T7 轮次记账补分支）
 			}
 		}
 		this.settleActive();
+		if (this.turnWindowEnabled) this.trimTurns(); // resume 即裁：装载完立即裁到保留窗（大会话恢复首帧与内存双收益——这正是恢复秒开的来源）
 	}
 
 	/** 用户消息块（❯ 青玉 + 暖金加粗正文 + 前后各空一行）。
@@ -399,21 +483,21 @@ export class DocModel {
 	userPrompt(text: string): void {
 		const m = /^（用户通过菜单手动加载技能 "(.+?)"——请按该技能正文行事）/.exec(text);
 		if (m !== null) {
-			this.lines.push({ k: "skill", name: m[1]! });
+			this.pushE({ k: "skill", name: m[1]! });
 			return;
 		}
-		this.lines.push({ k: "user", src: text });
+		this.pushE({ k: "user", src: text });
 	}
 
 	/** markdown 渲染推入（F5 六轮②）：命令结果通道——/compact /summary 等输出含 md。 */
 	pushMd(text: string, _width: number): void {
 		this.settleActive();
-		this.lines.push({ k: "md", src: text });
+		this.pushE({ k: "md", src: text });
 	}
 
 	/** 直接推一行（宿主带内输出——横幅/提示语的流区呈现；超宽由 frameLines 折行兜底）。 */
 	pushLine(s: string): void {
-		for (const l of s.replace(/\n$/, "").split("\n")) this.lines.push({ k: "raw", s: l });
+		for (const l of s.replace(/\n$/, "").split("\n")) this.pushE({ k: "raw", s: l });
 	}
 
 	/** 工具行配色（F5 六轮① 用户拍板；2026-09-22 再拍板：动词 Using/Used 白色）：
@@ -436,6 +520,10 @@ export class DocModel {
 	/** 单条目渲染（行内容缓存键控照旧——m5-render-perf T4 从 frameLines 循环体提取，
 	 *  frameLines 与 frameWindow 共用；group 活体行每帧现算不缓存）。 */
 	private renderEntry(e: Entry, width: number, roster: readonly SubagentRosterEntry[]): string[] {
+		if (e.k === "fold") {
+			// 滑窗折叠行（D12）：单行 dim 提示，与压缩提示行/工具截断行同族排版——去向 = 会话文件
+			return [theme.dim(`┄ 已折叠更早的 ${e.turns} 轮对话 · 完整内容在会话文件`)];
+		}
 		if (e.k === "group") {
 			const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
 			const out = agentGroupLines(mine); // 每帧现算——状态/时长/词元随心跳自更
@@ -609,6 +697,11 @@ export class DocModel {
 		}
 		let all: string[] = [];
 		for (let k = segs.length - 1; k >= 0; k--) all = all.concat(segs[k]!); // [lo, total) 的行
+		// 远区缓存淘汰（T7 设计空白 #8——节流档）：距视口所在轮 > 3 轮的条目丢渲染缓存（源与计数保留）
+		if (this.turnWindowEnabled && Date.now() - this.lastEvictAt >= 1000) {
+			this.lastEvictAt = Date.now();
+			this.evictFarCaches(start);
+		}
 		return all.slice(start - lo, start - lo + (end - start));
 	}
 
