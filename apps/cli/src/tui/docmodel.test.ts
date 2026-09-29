@@ -726,3 +726,84 @@ describe("DocModel 性能回归钉二（m5-render-perf T6——防三处退化�
 		app.stop();
 	});
 });
+
+describe("DocModel kimi 式轮次滑窗 + 远区缓存淘汰（m5-render-perf T7——D11-D13）", () => {
+	/** 造 n 轮对话：每轮 user 提问 + 定格回答（md）+ 帧渲染（counts 热——贴近宿主每帧渲染时序，
+	 *  裁剪判定的行账本生产恒热）+ turnEnd。 */
+	const turns = (dm: DocModel, n: number, from = 0): void => {
+		for (let i = from; i < from + n; i++) {
+			dm.userPrompt(`第 ${i} 轮提问`);
+			dm.activity({ kind: "text", text: `第 ${i} 轮回答内容，`.repeat(6) }, 80);
+			dm.end(80);
+			dm.frameLines(80);
+			dm.turnEnd();
+		}
+	};
+
+	it("① 轮次记账与裁剪触发：21 轮裁到 15 轮 + 折叠行在头部 + 第 8 轮起内容完整；env 0 = 不裁", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		turns(dm, 21); // 轮号 0..20，第 21 个 turnEnd 后 curTurn=21 → 22 轮 > 20 裁到 15（保留轮 7..21）
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.some((l) => l.includes("已折叠更早的") && l.includes("轮对话"))).toBe(true); // 折叠行（D12 文案）
+		expect(plain.join("\n")).not.toContain("第 3 轮提问"); // 早期轮已销毁
+		expect(plain.join("\n")).toContain("第 7 轮提问"); // 保留窗最老轮（15 轮 = 7..21）
+		expect(plain.join("\n")).toContain("第 20 轮回答"); // 最新轮完整
+		// env 0 = 逃生阀不裁
+		const dm2 = new DocModel();
+		dm2.turnWindowEnabled = true;
+		process.env.OROSUS_TUI_MAX_TURNS = "0";
+		try {
+			turns(dm2, 25);
+			const p2 = dm2.frameLines(80).map(stripAnsi).join("\n");
+			expect(p2).toContain("第 0 轮提问"); // 全保留
+			expect(p2).not.toContain("已折叠更早的");
+		} finally {
+			delete process.env.OROSUS_TUI_MAX_TURNS;
+		}
+	});
+
+	it("② 阅读保护：视口在最老轮（head）时整批顺延不裁；滚回底部后下一次触发再裁（几何安全前提 = 恒头部移除）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		let head = true; // 视口钉在头部（最老轮上方）
+		dm.viewportProbe = () => (head ? { start: 0, end: 8 } : { start: dm.totalLines(80) - 8, end: dm.totalLines(80) });
+		turns(dm, 21); // 22 轮超阈——但被裁段与视口相交 → 整批顺延
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("第 0 轮提问"); // 没裁
+		head = false; // 滚回底部
+		turns(dm, 1, 21); // 下一轮触发再裁（from=21：新一轮文案与被裁旧轮不撞名）
+		const plain = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(plain).not.toContain("第 0 轮提问"); // 这才裁掉
+		expect(plain).toContain("已折叠更早的");
+	});
+
+	it("③ resume 即裁：historyFrom 喂 30 轮事件后 = 最近 15 轮 + 折叠行（大会话恢复只物化最近窗）", () => {
+		const events: { type: string; [k: string]: unknown }[] = [];
+		for (let i = 0; i < 30; i++) {
+			events.push({ type: "user/message", content: [{ kind: "text", text: `历史问 ${i}` }] });
+			events.push({ type: "assistant/message", content: [{ kind: "text", text: `历史答 ${i} `.repeat(10) }] });
+			events.push({ type: "turn/end" });
+		}
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		dm.historyFrom(events, 80);
+		const plain = dm.frameLines(80).map(stripAnsi).join("\n");
+		expect(plain).not.toContain("历史问 5"); // 早轮裁掉（30 轮 → 保留 15..29... 轮号判定见实现）
+		expect(plain).toContain("已折叠更早的");
+		expect(plain).toContain("历史问 29"); // 最新轮在
+	});
+
+	it("④ 远区缓存淘汰：距视口 > 3 轮的条目丢渲染缓存——滚回该区输出与淘汰前逐字节一致（计数未丢、几何不变）", () => {
+		const dm = new DocModel();
+		for (let i = 0; i < 10; i++) {
+			dm.userPrompt(`轮 ${i} 提问`);
+			dm.pushLine(`轮 ${i} 提示行内容 `.repeat(3));
+			dm.turnEnd();
+		}
+		const before = dm.frameWindow(80, 0, 10_000); // 全量基线（渲染热）
+		dm.evictFarCaches(dm.totalLines(80) - 2); // 视口在最新轮（轮 9）——距 3 轮外（轮 ≤ 5）淘汰
+		const after = dm.frameWindow(80, 0, 10_000);
+		expect(after).toEqual(before); // 源与 counts 保留——重渲逐字节一致
+		expect(dm.totalLines(80)).toBe(before.length); // 计数未丢
+	});
+});

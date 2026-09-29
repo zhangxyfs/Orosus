@@ -676,6 +676,17 @@ attachAltVPaste({
 // 渲染汇点多路复用（F3 双模式）：sink 指向当前模式的渲染出口——滚动流 = lv（streamview/DiffScreen），
 // 全屏 = DocModel（FullApp 的行源）。模式切换只换 sink 指向，attachRender 订阅每会话一次不重挂。
 let dm = new DocModel();
+// kimi 式轮次滑窗（m5-render-perf T7）：主窗实例显式启用（renderAgentView 一次性渲染实例
+// 不启用不裁剪——查看窗自有 500 条帽不叠第二轮窗）；视口探针 = fullapp layoutFrame 投影（阅读保护）
+dm.turnWindowEnabled = true;
+dm.viewportProbe = () => activeApp?.viewportRange();
+/** 新会话重建 dm 时保持滑窗启用（sessionLoop 顶——同款三行收口一处）。 */
+const newMainDocModel = (): DocModel => {
+  const d = new DocModel();
+  d.turnWindowEnabled = true;
+  d.viewportProbe = () => activeApp?.viewportRange();
+  return d;
+};
 
 /** 压缩完成行双色（2026-09-23 用户拍板）：「上下文压缩完成」石青（info）+ 两段括号灰（muted）——
  *  模块返回纯文本一行（数字与指针），CLI 按括号段拆分上色；不匹配的形态原样返回（防御）。 */
@@ -761,6 +772,7 @@ function attachRender(h: Harness): void {
       lastEventId = e.id;
       if (e.type === "turn/end") {
         sinkFor().end();
+        if (tuiMode === "full") dm.turnEnd(); // 轮边界记账 + 滑窗裁剪（T7——settle 之后条目已定格）
         void refreshPanel(); // 面板数据随 turn 刷新（F4）
       }
       // m4-7 T5：压缩完成点清 skill 模块去重集——skill__load 正文是 tool result，compact 会被压掉，
@@ -2106,7 +2118,7 @@ const onboardingInitial = async (): Promise<{ configured: string[]; active: stri
 if (args.print === undefined) try {
   sessionLoop: for (;;) {
     // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）
-    dm = new DocModel();
+    dm = newMainDocModel();
     if (tuiMode === "full") for (const l of ASCII_BANNER(OROSUS_VERSION)) dm.pushLine(l); // ASCII 字 banner（修复轮①）
     for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) {
       if (tuiMode === "full") dm.pushLine(line);

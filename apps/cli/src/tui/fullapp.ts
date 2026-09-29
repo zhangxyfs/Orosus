@@ -464,6 +464,13 @@ export class FullApp {
 		return this.state.busy;
 	}
 
+	/** 视口行区间探针（m5-render-perf T7 阅读保护）：layoutFrame 投影——main.ts 注入
+	 *  DocModel.viewportProbe，裁剪时判被裁段与视口相交则整批顺延。 */
+	viewportRange(): { start: number; end: number } {
+		const { streamH, start, dmTotal } = this.layoutFrame();
+		return { start, end: Math.min(dmTotal, start + streamH) };
+	}
+
 	start(): void {
 		this.full.enter();
 		this.term.start();
