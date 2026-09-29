@@ -2669,8 +2669,8 @@ describe("选区切片消费方（CTW-03 回归钉 2026-09-28——sliceByColumn
 	});
 });
 
-describe("查看窗自定义键整窗替换脱钉（CTU-06 回归钉 2026-09-28——bottom 窗 pinned 每帧把 scroll 钳回末页：替换写 scroll=0 不清 pinned 即被否决，「滚回顶部」承诺落空。键盘/滚轮/自动滚三路径都有「落地脱钉」，唯自定义键路径漏）", () => {
-	it("bottom 窗自定义键返回新文本：替换后回顶（首行可见、末页不可见——旧实现仍贴底）", async () => {
+describe("查看窗自定义键内容替换的滚动语义（走查⑥ 2026-09-29 改钉——用户报「折叠键按完直接置顶」；旧 CTU-06 钉的「替换即回顶」承诺被推翻：学 kimi agent-activity-viewer ctrl+o 折叠切换不动滚动、followTail 贴底窗继续贴底）", () => {
+	it("bottom 窗（pinned）自定义键返回新文本：替换后保持贴底（末页可见、首行不可见——折叠/刷新不顶飞视口）", async () => {
 		const { app, input, output } = rig();
 		app.start();
 		await flush();
@@ -2679,11 +2679,30 @@ describe("查看窗自定义键整窗替换脱钉（CTU-06 回归钉 2026-09-28�
 		app.viewText("贴底窗", oldText, { bottom: true, keys: { r: { label: "刷新", run: () => fresh } } });
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("旧行50"); // pinned 初值贴底——末页可见
-		input.emit("data", "r"); // 自定义键整窗替换（新文本同样超一页——两态可区分）
+		input.emit("data", "r"); // 自定义键整窗替换（新文本同样超一页）
 		await flush();
 		const b = stripAnsi(output.buf);
-		expect(b).toContain("首行甲"); // 回顶（scroll=0 不再被 pinned 每帧钳回末页）
-		expect(b).not.toContain("末行乙"); // 旧实现：替换后仍贴底——首行不可见、末行可见
+		expect(b).toContain("末行乙"); // 贴底保持（followTail 语义）
+		expect(b).not.toContain("首行甲"); // 不回顶
+		app.stop();
+	});
+	it("普通窗自定义键返回新文本：scroll 保持、仅钳到新范围（内容变短超界才动）", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		const long = Array.from({ length: 60 }, (_, i) => `行${i}`).join("\n");
+		const short = ["甲", "乙", "丙"].join("\n");
+		let text = long;
+		app.viewText("普通窗", long, { keys: { r: { label: "换短", run: () => (text = short) } } });
+		await flush();
+		// 滚到中部（非顶部非底部）
+		const pu0 = (app as unknown as { pendingUi: { scroll: number } }).pendingUi;
+		pu0.scroll = 30;
+		app.repaint();
+		await flush();
+		input.emit("data", "r"); // 替换为 3 行短文本——scroll=30 超界钳到 0
+		await flush();
+		expect((app as unknown as { pendingUi: { scroll: number; text: string } }).pendingUi.scroll).toBe(0); // 钳到范围内（3 行窗 max=0）
 		app.stop();
 	});
 });
@@ -3021,21 +3040,31 @@ describe("主窗滚动钉住（m5-render-perf 真机走查①修——流式增�
 		app.stop();
 	});
 
-	it("收缩（滑窗裁剪形：total 减少）不触发补偿——scrollBack 只被钳制不增", async () => {
+	it("走查⑦统一补偿：尾部收缩也钉住（start 保持）；头部平移（滑窗裁剪形，经 docHeadShift 差分）不补", async () => {
 		let docLines = Array.from({ length: 50 }, (_, i) => `行 ${i} · s${i}x`);
+		let headShift = 0;
 		const { app } = rig(docLines, 100, 30, {
 			docTotal: () => docLines.length,
 			docWindow: (s, c) => docLines.slice(s, s + c),
+			docHeadShift: () => headShift,
 		});
 		app.start();
 		await flush();
 		app.stateRef.scrollBack = 10;
 		app.repaint();
 		await flush();
-		docLines = docLines.slice(7); // 头部移除 7 行（T7 裁剪形）
+		// 尾部收缩 5 行（合并/discard/重折变短形）——视口 start 保持：scrollBack 跟着缩
+		docLines = docLines.slice(0, 45);
 		app.repaint();
 		await flush();
-		expect(app.stateRef.scrollBack).toBe(10); // 不补偿（内容本就不动，行号平移语义）
+		expect(app.stateRef.scrollBack).toBe(5); // 10 − 5：钉住（旧实现不补收缩 → 视口上跳）
+		// 头部平移（T7 裁剪形：移除 removed 行 + fold 回插 1 行 = 净头移 removed−1；total 同步变 −(removed−1)）
+		const removed = 7;
+		docLines = ["┄ 已折叠", ...docLines.slice(removed)];
+		headShift += removed - 1; // dm.headShiftTotal 同口径（cut 行 − fold 1 行）
+		app.repaint();
+		await flush();
+		expect(app.stateRef.scrollBack).toBe(5); // 行号平移不补（视口内容本就不动——T7 几何论证）
 		app.stop();
 	});
 });
