@@ -17,6 +17,7 @@ import { spawnIdsIn } from "../tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
+import { LiveWrap } from "./live-wrap.ts";
 import { TOOL_MERGE, toolCallLine } from "../render.ts";
 import { toolDiffRows, toolChangeStats, writeContentFor, langForPath, errorLines, type DiffRow } from "./toolview.ts";
 import { highlightLines } from "../md/highlight.ts";
@@ -103,10 +104,18 @@ export class DocModel {
 	private inThink = false;
 	private mdStream: StreamingMarkdown | undefined;
 	private streamWidth = -1;
+	/** 活动思考块增量折行缓存（m5-render-perf T1）——每帧只折最后一条未完行，
+	 *  替代旧路径每帧对全文 wrapText（docmodel.ts 热点 (a)）；settleActive/discard 重置。 */
+	private thinkLive = new LiveWrap();
 
 	private thinkBlock(text: string, w: number): string[] {
-		const raw = wrapText(text, Math.max(8, w - 2));
-		if (!this.thinkOpen) {
+		return this.styleWrappedThink(wrapText(text, Math.max(8, w - 2)), this.thinkOpen);
+	}
+
+	/** 思考块样式（m5-render-perf T1 提取——LiveWrap 裸行与 thinkBlock 全量行共用同一上色段：
+	 *  先折行后上色与现状同序，D4——收起/展开两态吃同一份裸行缓存）。 */
+	private styleWrappedThink(raw: string[], open: boolean): string[] {
+		if (!open) {
 			// 收起 = 尾部 2 视觉行 + 展开提示（F5 三轮①：流式观看语义 = 永远最新内容）
 			const head = theme.dim("[思考] · Alt + E 展开");
 			return [head, ...raw.slice(-2).map((l) => theme.dim("  " + l))];
@@ -129,6 +138,7 @@ export class DocModel {
 			this.lines.push({ k: "think", src: this.thinkText });
 			this.thinkText = "";
 			this.inThink = false;
+			this.thinkLive = new LiveWrap(); // 下一块思考从头缓存
 		}
 		if (this.mdText !== "") {
 			this.lines.push({ k: "md", src: this.mdText });
@@ -305,6 +315,7 @@ export class DocModel {
 		this.thinkText = "";
 		this.inThink = false;
 		this.mdStream = undefined;
+		this.thinkLive = new LiveWrap();
 	}
 
 	/** 历史结构化摄入（F5 五轮②③④）：与实时流同形（暖金提问/md 渲染/think marker/工具 Used 行）。 */
@@ -467,7 +478,7 @@ export class DocModel {
 				out.push(...e.cache.lines);
 			}
 		}
-		if (this.thinkText !== "") out.push(...this.thinkBlock(this.thinkText, width));
+		if (this.thinkText !== "") out.push(...this.styleWrappedThink(this.thinkLive.feed(this.thinkText, Math.max(8, width - 2)), this.thinkOpen));
 		if (this.mdText !== "") out.push(...this.mdRender(this.mdText, width));
 		return out;
 	}
