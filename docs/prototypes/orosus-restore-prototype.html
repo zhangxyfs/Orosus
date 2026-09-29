@@ -326,7 +326,7 @@ function renderPrompt() {
       <div class="s"><b>${DB_SIZE}</b><span>备份库大小</span></div>
     </div>
     <p class="lead">检测到消息备份数据库（backup.sqlite），但本地会话目录（~/.orosus/sessions）是空的——比如目录被误删、或被清理工具清空。</p>
-    <div class="feat"><span class="dot">◆</span><div class="t"><b>恢复什么</b><span>——把备份里的事件流重建成 jsonl 会话文件（子代理对话一并恢复），/sessions 回看、resume 照常可用。</span></div></div>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>恢复什么</b><span>——把备份里的事件流重建成 jsonl 会话文件（子代理对话一并恢复，工具大输出溢写文件也一并写回），/sessions 回看、resume 照常可用。</span></div></div>
     <div class="feat"><span class="dot">◆</span><div class="t"><b>不碰什么</b><span>——备份数据库本身只读不动；jsonl 仍是唯一主存储，恢复完照常双写。</span></div></div>
     <div class="feat"><span class="dot">◆</span><div class="t"><b>可挑选</b><span>——下一步可以按空格多选要恢复的会话，也可以 Alt + A 一键全选。</span></div></div>`;
   foot([
