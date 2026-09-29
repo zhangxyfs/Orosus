@@ -128,7 +128,6 @@ describe("streamview 活动思考块增量折行（m5-render-perf T2——LiveWr
 		await flush();
 		sv.write("[tool] Read\n"); // write 触发 settleActive——思考块定格进 lines
 		await flush();
-		const settled = writes.length;
 		sv.activity({ kind: "reasoning", text: "第二段新思考" }); // 新块（liveWrap 已重置）
 		await flush();
 		sv.end();
