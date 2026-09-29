@@ -1492,6 +1492,11 @@ export class FullApp {
 		}
 		if (key === "ctrl+e") {
 			// 模块诊断弹窗总开关（T9/S6：全局拦截含输入框编辑态——与 Ctrl+T 同款；keymatch 0x05 无既有消费者）
+			// 宿主查看窗让位（m5-render-perf 走查④修，2026-09-29）：宿主自建查看窗（无 owner——如子代理
+			// 消息窗）聚焦期 Ctrl+E 不穿透开诊断——叠窗打断阅读还顶掉查看窗（用户实机报）。模块窗
+			// （owner 在场）不适用——m5 UI 批铁律「宿主全局键 Ctrl+T/E/O 优先于模块窗内自定义键」保持；
+			// 诊断自身二级窗（diagOpen/diagReturn 在场）的关闭流程同样不受影响。
+			if (this.pendingUi?.kind === "view" && this.pendingUi.owner === undefined && !s.diagOpen && !s.diagReturn) return;
 			if (s.diagOpen || s.diagReturn) {
 				// 二级开着（diagReturn 标记）= 全部关闭（原型定案）：一级、二级、返回标记一起清
 				s.diagOpen = false;
@@ -1550,6 +1555,9 @@ export class FullApp {
 		if (key === "ctrl+o") {
 			// Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板——/summary 命令退役，摘要查看唯一入口；
 			// 无摘要时 toast 提示而非静默）
+			// 宿主查看窗让位（同走查④修）：无 owner 的宿主查看窗聚焦期不叠摘要窗（viewText 排队、
+			// 关窗后突然冒出也是键位混乱）——静默吞，Esc 关查看窗后可再按；模块窗铁律同 Ctrl+E 保持穿透。
+			if (this.pendingUi?.kind === "view" && this.pendingUi.owner === undefined) return;
 			this.io.showCompactionSummary?.();
 			this.scheduler.requestImmediateRender();
 			return;
