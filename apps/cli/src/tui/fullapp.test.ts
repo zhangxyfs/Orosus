@@ -3032,3 +3032,31 @@ describe("主窗滚动钉住（m5-render-perf 真机走查①修——流式增�
 		app.stop();
 	});
 });
+
+describe("查看窗全局键让位（m5-render-perf 走查④修——宿主查看窗聚焦期主窗叠窗键不穿透）", () => {
+	it("查看窗打开期 Ctrl+E 不开诊断、查看窗不被顶掉；Ctrl+O 不入队摘要；Esc 关窗后 Ctrl+E 恢复主窗语义", async () => {
+		const diag: string[] = [];
+		const summaries: string[] = [];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			diagEntries: () => [{ at: "2026-09-29T00:00:00Z", code: "m.x", msg: "样例诊断" } as never],
+			showCompactionSummary: () => summaries.push("called"),
+		});
+		app.start();
+		await flush();
+		app.viewText("子代理消息", "状态：已完成 · 3 轮\n子代理的输出内容");
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E（0x05）——查看窗聚焦期
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false); // 诊断没开（穿透修掉）
+		expect(stripAnsi(output.buf)).toContain("子代理的输出内容"); // 查看窗还在（未被顶掉）
+		input.emit("data", "\x0f"); // Ctrl+O——不入队摘要
+		await flush();
+		expect(summaries).toEqual([]);
+		input.emit("data", "\x1b"); // Esc 关查看窗
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E 恢复主窗语义——诊断开
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(true);
+		app.stop();
+	});
+});
