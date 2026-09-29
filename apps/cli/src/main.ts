@@ -50,7 +50,7 @@ import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
-import { loadConfig, sectionPath } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)
+import { loadConfig, sectionPath, modelsDevCacheFile, resolveContextWindow } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)/窗口兜底链(2026-09-29)
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -1075,11 +1075,20 @@ const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; p
   return result;
 };
 
-/** 配置面读数（m4-8 T2.5 收口 loadConfig——modules.d/env 层自动生效;散读旁路作废）。
- *  env 层语义对齐(方案空白 7):OROSUS_CONTEXTWINDOW 现在真的生效(旧散读旁路了分层)。 */
+/** 配置面读数（m4-8 T2.5 收口 loadConfig；2026-09-29 修空参——此前 loadConfig({}) 一层文件都没读：
+ *  contextWindow 恒落 200k 硬编码、[approval]/[tui] 盘上值恒不可达）。窗口链 = config 显式值 >
+ *  models-dev 目录兜底（resolveContextWindow）> 200k 显示缺省。env 层语义对齐(方案空白 7)不变。 */
+function configFacePaths(): { userFile: string; projectFile: string; userModulesDir: string; projectModulesDir: string } {
+	return {
+		userFile: join(orosusHome(), "config.toml"),
+		projectFile: join(process.cwd(), ".orosus", "config.toml"),
+		userModulesDir: join(orosusHome(), "modules.d"),
+		projectModulesDir: join(process.cwd(), ".orosus", "modules.d"),
+	};
+}
 const configFace = (): { contextWindow: number; approvalMode: string } => {
-	const cfg = loadConfig({});
-	const cw = cfg.core.contextWindow;
+	const cfg = loadConfig(configFacePaths());
+	const cw = resolveContextWindow(cfg.core, { catalogFile: modelsDevCacheFile(orosusHome()) });
 	const mode = (cfg.sections.get("approval") as { mode?: unknown } | undefined)?.mode;
 	return {
 		contextWindow: typeof cw === "number" ? cw : 200000,
@@ -1087,16 +1096,16 @@ const configFace = (): { contextWindow: number; approvalMode: string } => {
 	};
 };
 
-/** [tui] 三键读数（m4-8 T2.5 收口 loadConfig——modules.d 自动生效）。
+/** [tui] 三键读数（m4-8 T2.5 收口 loadConfig——modules.d 自动生效；2026-09-29 补文件路径，此前空参恒 undefined）。
  *  分层对齐(方案空白 9):旧散读是「用户层优先」,收口统一为 §6.6 权威「项目压用户」——tui 键
  *  几乎总在用户层,真机感知面近零;登记为有意对齐。function 声明——早处初始化要用(hoisting)。 */
 function configFaceTuiLatex(): boolean | undefined {
-	const v = (loadConfig({}).sections.get("tui") as { latex?: unknown } | undefined)?.latex;
+	const v = (loadConfig(configFacePaths()).sections.get("tui") as { latex?: unknown } | undefined)?.latex;
 	return typeof v === "boolean" ? v : undefined;
 }
 
 function configFaceTui(): string | undefined {
-	const v = (loadConfig({}).sections.get("tui") as { mode?: unknown } | undefined)?.mode;
+	const v = (loadConfig(configFacePaths()).sections.get("tui") as { mode?: unknown } | undefined)?.mode;
 	return typeof v === "string" ? v : undefined;
 }
 
@@ -1242,12 +1251,25 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
 		// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
 		const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
-		const liveView = entry.status === "queued" || entry.status === "running"
-			? () => renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW())
-			: undefined;
-		const body = renderAgentView(entry, agentEventsFromFile(sessionsDir, h.sessionId, entry.id), viewW());
+		// 内容快捷键与主窗一致（走查④，2026-09-29）：Alt+E/O/F 切查看窗内思考/工具明细/失败体折叠态——
+		// 折叠态在闭包（跨 live 刷新保持，每次开窗默认收起与主窗同）；键提示行显示「思考 · 明细 · 失败」
+		const fold: import("./tasks-cmd.ts").AgentViewFoldState = { thinkOpen: false, toolOpen: false, errOpen: false };
+		const eventsNow = (): readonly { type: string; [k: string]: unknown }[] => agentEventsFromFile(sessionsDir, h.sessionId, entry.id);
+		const renderNow = (): string =>
+			renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, eventsNow(), viewW(), fold);
+		const liveView = entry.status === "queued" || entry.status === "running" ? () => renderNow() : undefined;
+		const body = renderNow();
 		if (app !== undefined) {
-			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, { layout: "full", bottom: true, ...(liveView !== undefined ? { live: liveView } : {}) }); // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
+			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, {
+				layout: "full",
+				bottom: true, // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
+				...(liveView !== undefined ? { live: liveView } : {}),
+				keys: {
+					"alt+e": { label: "思考", run: () => { fold.thinkOpen = !fold.thinkOpen; return renderNow(); } },
+					"alt+o": { label: "明细", run: () => { fold.toolOpen = !fold.toolOpen; return renderNow(); } },
+					"alt+f": { label: "失败", run: () => { fold.errOpen = !fold.errOpen; return renderNow(); } },
+				},
+			});
 			continue; // 查看窗排在 pendingUi——Esc 关窗后队里的列表自动顶上（回列表页拍板）
 		}
 		out(body);

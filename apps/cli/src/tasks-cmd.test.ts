@@ -185,3 +185,20 @@ describe("历史子代理名册（2026-09-27 拍板：不删旧数据就得能�
 });
 
 });
+
+  it("走查④：fold 折叠态参——Alt+E/O/F 与主窗一致（think 收起→展开全文、tool/err 折叠切换），缺省不传 = 全收起现状", () => {
+    const events = [
+      { type: "session/header", format: 1, cwd: "/x", parentSession: "main" },
+      { type: "user/message", content: [{ kind: "text", text: "任务" }] },
+      { type: "assistant/message", content: [{ kind: "reasoning", text: "思考开头标记甲。" + "中间推理内容。".repeat(30) + "思考结尾标记乙。" }, { kind: "text", text: "结论" }] },
+      { type: "tool/call", name: "tool-fs__read", args: { path: "src/a.ts" } },
+      { type: "tool/result", output: "x\ny", isError: false },
+    ];
+    const collapsed = renderAgentView(T({ status: "completed" }), events, 80);
+    expect(stripAnsi(collapsed)).toContain("[思考]"); // 收起态头行
+    const collapsedPlain = stripAnsi(collapsed);
+    expect(collapsedPlain.includes("思考开头标记甲")).toBe(false); // 默认收起只显尾 2 行（头部不在）
+    expect(collapsedPlain.includes("思考结尾标记乙")).toBe(true); // 尾 2 行在（流式观看语义 = 永远最新）
+    const opened = renderAgentView(T({ status: "completed" }), events, 80, { thinkOpen: true, toolOpen: false, errOpen: false });
+    expect(stripAnsi(opened)).toContain("思考开头标记甲"); // Alt+E 展开全文
+  });

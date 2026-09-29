@@ -621,10 +621,14 @@ export class FullApp {
 	}
 
 	/** 弹窗保留键（决策点 7）：Esc/Ctrl+C/V/A/S/Z 绝对禁绑；宿主全局键在按键分发里先于弹窗分支消费
-	 *  （fullapp onKey 全局拦截段），绑了永不触发——注册即拒并记日志。 */
+	 *  （fullapp onKey 全局拦截段），绑了永不触发——注册即拒并记日志。
+	 *  走查④（2026-09-29）：alt+e/alt+o/alt+f 移出保留集——查看窗可注册（窗内优先，onKey 全局段
+	 *  按 viewHasKey 让位）——子代理消息窗的内容快捷键与主窗一致即用此路。铁律只锁 Ctrl+T/E/O
+	 *  （m5 UI 批「宿主全局键优先于模块窗自定义键」原样保持——这三键仍注册即拒）。alt+v 保留
+	 *  （贴图全局功能，查看窗无占用场景）。 */
 	private static readonly RESERVED_VIEW_KEYS = new Set([
 		"escape", "ctrl+c", "ctrl+v", "ctrl+a", "ctrl+s", "ctrl+z",
-		"ctrl+t", "ctrl+e", "ctrl+o", "ctrl+u", "alt+e", "alt+o", "alt+f", "alt+v",
+		"ctrl+t", "ctrl+e", "ctrl+o", "ctrl+u", "alt+v",
 	]);
 
 	/** 剔除保留键并记日志（注册即拒——返回 undefined = 无合法键剩下）。 */
@@ -1230,6 +1234,14 @@ export class FullApp {
 
 	// ---------- 滚动条（T10——kimi :1037-1052 命中 / :1115-1118 跳位 / :1075-1078 拖动映射） ----------
 
+	/** 查看窗键让位判定（走查④）：查看窗注册了该键 → 窗内优先——Alt+E/O/F 等内容键落到查看窗
+	 *  自己的 keys 分发（子代理消息窗的内容快捷键与主窗一致），主窗全局段不拦截（穿透到
+	 *  pendingUi 分支）。查看窗未注册的键照旧走主窗语义。 */
+	private viewHasKey(key: string): boolean {
+		const pu = this.pendingUi;
+		return pu?.kind === "view" && pu.keys?.[key] !== undefined;
+	}
+
 	/** 滚动条基座几何：scope → 视口高/总行数/首行/轨道顶行/当前拇指。 */
 	private scrollbarTrackBase(scope: "main" | "view"): {
 		total: number; viewportH: number; first: number; trackTop: number; thumb: { top: number; height: number };
@@ -1518,17 +1530,17 @@ export class FullApp {
 			this.scheduler.requestImmediateRender();
 			return;
 		}
-		if (key === "alt+e") {
+		if (key === "alt+e" && !this.viewHasKey(key)) {
 			this.io.toggleThink();
 			this.scheduler.requestImmediateRender();
 			return;
 		}
-		if (key === "alt+o") {
+		if (key === "alt+o" && !this.viewHasKey(key)) {
 			this.io.toggleTool();
 			this.scheduler.requestImmediateRender();
 			return;
 		}
-		if (key === "alt+f") {
+		if (key === "alt+f" && !this.viewHasKey(key)) {
 			this.io.toggleErr();
 			this.scheduler.requestImmediateRender();
 			return;
