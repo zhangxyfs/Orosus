@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· 会话恢复弹窗原型</title>
+<style>
+  /* ─── tokens · 连山配色（与 orosus-onboarding-prototype.html 同源） ────────── */
+  :root {
+    --bg:        #0a100e;   /* 玄墨 */
+    --surface:   #121b17;   /* 层峦 */
+    --surface-2: #18241e;   /* 浮峦 */
+    --fg:        #e9eee6;   /* 宣纸 */
+    --muted:     #97a49a;   /* 山岚 */
+    --border:    #25352d;   /* 叠嶂 */
+    --accent:    #7cc9a5;   /* 青玉 · 主强调 */
+    --info:      #84b8cd;   /* 石青 · 信息 */
+    --warn:      #d4a25e;   /* 暖金 · 进行/注意 */
+    --err:       #d07f70;   /* 赭石 · 错误 */
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Microsoft YaHei', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-body); font-size: 14px; line-height: 1.6;
+  }
+
+  /* ─── 走查说明条（非 TUI 部分） ──────────────────────────────────── */
+  .notebar {
+    max-width: 1180px; margin: 18px auto 10px; padding: 10px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--muted); font-size: 13px;
+  }
+  .notebar b { color: var(--info); font-weight: 600; }
+  .notebar kbd {
+    font-family: var(--font-mono); font-size: 12px; color: var(--fg);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; margin: 0 1px;
+  }
+
+  /* ─── 终端窗体 ──────────────────────────────────────────────────── */
+  .terminal {
+    max-width: 1180px; margin: 0 auto 40px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.75;
+    box-shadow: 0 30px 70px rgba(0,0,0,.6);
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px;
+  }
+  .dots { display: flex; gap: 8px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2c3f36; }
+  .title { flex: 1; text-align: center; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+  .geom { color: #5c6b62; font-size: 11px; }
+
+  .tui-body { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 320px; height: 680px; }
+  .tui-body.locked .stream, .tui-body.locked .side { filter: saturate(.75) brightness(.82); }
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow-y: auto; padding: 18px 24px; }
+  .banner { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .logo {
+    width: 64px; height: 64px; border-radius: 12px; flex: none;
+    background: linear-gradient(160deg, #143024, #0c1a15);
+    border: 1px solid #2d5546; color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 700;
+  }
+  .banner h1 { margin: 0; font-size: 17px; letter-spacing: .04em; }
+  .banner p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .ln { white-space: pre-wrap; }
+  .ln .u { color: var(--muted); }
+  .ln .a { color: var(--accent); }
+  .ln .i { color: var(--info); }
+  .ln .w { color: var(--warn); }
+
+  .inputwrap { padding: 0 24px 18px; }
+  .inputbox {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+    padding: 9px 14px; color: var(--muted);
+  }
+  .inputbox.live { border-color: #2d5546; color: var(--fg); }
+  .inputbox .cursor { display: inline-block; width: 8px; height: 16px; background: var(--accent); vertical-align: text-bottom; }
+  .hintline { color: #5c6b62; font-size: 12px; margin-top: 6px; }
+
+  .side { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .card { border-bottom: 1px solid var(--border); padding: 14px 16px; }
+  .card:last-child { border-bottom: none; flex: 1; }
+  .card h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--muted); }
+  .kv { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+  .kv b { color: var(--fg); font-weight: 500; }
+
+  /* ─── 恢复弹窗：居中、锁焦点、定高防闪烁（仿引导弹窗同壳 760×540） ── */
+  .backdrop { position: absolute; inset: 0; background: rgba(4,8,6,.62); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .backdrop.hidden { display: none; }
+  .modal {
+    width: 760px; height: 540px;
+    background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px;
+    display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  }
+  .modal-head { padding: 16px 22px 10px; border-bottom: 1px solid var(--border); }
+  .modal-head .step { color: var(--info); font-size: 11.5px; letter-spacing: .12em; }
+  .modal-head h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: .03em; }
+  .modal-body { flex: 1; padding: 14px 22px; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-foot {
+    display: flex; gap: 18px; align-items: center; padding: 11px 22px;
+    border-top: 1px solid var(--border); background: var(--surface); border-radius: 0 0 12px 12px;
+    font-size: 12.5px; min-height: 46px;
+  }
+  .key {
+    font-family: var(--font-mono); font-size: 12px; white-space: nowrap;
+    background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 7px; color: var(--fg);
+  }
+  .key.hint-accent { border-color: #2d5546; color: var(--accent); }
+  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .foot-item.off { opacity: .38; }
+  .foot-item .why { color: var(--warn); font-size: 12px; }
+  .foot-spacer { flex: 1; }
+  .foot-note { color: #5c6b62; font-size: 11.5px; }
+
+  .lead { color: var(--muted); margin: 0 0 10px; }
+  .stat { display: flex; gap: 22px; margin: 6px 0 10px; }
+  .stat .s { display: flex; flex-direction: column; }
+  .stat .s b { color: var(--fg); font-size: 20px; font-weight: 600; line-height: 1.3; }
+  .stat .s span { color: #5c6b62; font-size: 11.5px; }
+  .feat { display: flex; gap: 10px; margin: 7px 0; }
+  .feat .dot { color: var(--accent); flex: none; }
+  .feat .t b { color: var(--fg); font-weight: 600; }
+  .feat .t span { color: var(--muted); }
+
+  .plist { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .prow {
+    display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: 13px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+    white-space: nowrap;
+  }
+  .prow:last-child { border-bottom: none; }
+  .prow.sel { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .prow .chk { color: var(--accent); visibility: hidden; flex: none; }
+  .prow.checked .chk { visibility: visible; }
+  .prow .box { color: #5c6b62; flex: none; }
+  .prow.checked .box { color: var(--accent); }
+  .prow .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .prow .time { color: var(--muted); flex: none; font-size: 12px; }
+  .pagebar { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: #5c6b62; font-size: 11.5px; }
+  .pagebar .flex { flex: 1; }
+
+  /* 进度条（文本块形态——真机同款 █/░） */
+  .progwrap { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .progbar {
+    font-family: var(--font-mono); font-size: 15px; letter-spacing: 1px;
+    background: var(--bg); border: 1px solid #2d5546; border-radius: 6px; padding: 10px 14px;
+    white-space: nowrap; overflow: hidden;
+  }
+  .progbar .fill { color: var(--accent); }
+  .progbar .rest { color: #2c3f36; }
+  .progmeta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12.5px; }
+  .progcur { color: var(--fg); font-size: 13.5px; }
+  .progcur .n { color: var(--accent); }
+  .modal-notice { margin-top: 9px; font-size: 12.5px; color: var(--warn); min-height: 20px; }
+  .modal-notice.ok { color: var(--accent); }
+  .modal-notice.err { color: var(--err); }
+
+  .donebox { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+  .donebox .big { color: var(--accent); font-size: 15px; }
+  .donebox .d { color: var(--muted); font-size: 13px; }
+  .donebox .d b { color: var(--fg); font-weight: 600; }
+
+  /* toast：全宽无框暖金字行（toast 纪律形态），盖在输入框上方 */
+  .toast {
+    position: absolute; left: 0; right: 320px; bottom: 76px; z-index: 20;
+    padding: 4px 24px; color: var(--warn); font-size: 13px; display: none;
+  }
+  .toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="notebar">
+  <b>走查说明</b> · 本页是「会话恢复」交互原型（m5b 批）。触发条件：备份数据库存在且含会话，而 <code>~/.orosus/sessions</code> 目录为空（例如整目录误删/换机）——启动时弹<b>恢复询问</b>（居中弹窗）。
+  三幕全程键盘操作：<kbd>Ctrl + N</kbd> 确认/开始恢复 · <kbd>Esc</kbd> 暂不恢复/逐级返回 · <kbd>↑</kbd><kbd>↓</kbd><kbd>PgUp</kbd>/<kbd>PgDn</kbd> 列表移动翻页 · <kbd>Space</kbd> 勾选/取消勾选 · <kbd>Alt + A</kbd> 全选/全不选（再按 <kbd>Ctrl + N</kbd> 即全部恢复）。
+  恢复进行中为<b>模态</b>——进度弹窗锁定全部按键，不允许做别的事；完成后 <kbd>Enter</kbd> 返回主界面。
+  浏览器可能吞掉 <kbd>Ctrl + N</kbd>（保留键），此时用 <kbd>Alt + N</kbd> 等效演示；真机 TUI 无此问题。进入主界面后按 <kbd>R</kbd> 可重新演示。Ctrl + C 全程不占用。
+</div>
+
+<div class="terminal">
+  <div class="titlebar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="title">orosus · 连山 — D:\develop\Orosus</div>
+    <div class="geom">120 × 30</div>
+  </div>
+
+  <div class="tui-body locked" id="tui">
+    <div class="main">
+      <div class="stream" id="stream">
+        <div class="banner">
+          <div class="logo">山</div>
+          <div>
+            <h1>Orosus · 连山</h1>
+            <p>模块互连、组件层叠的本地 Agent Harness —— v35（原型演示背景）</p>
+          </div>
+        </div>
+        <div id="streamlines">
+          <div class="ln u">启动检测：消息备份数据库在场（backup.sqlite）· 会话目录为空 —— 已进入恢复询问。</div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+      <div class="inputwrap">
+        <div class="inputbox" id="inputbox">恢复流程进行中——输入由恢复弹窗接管</div>
+        <div class="hintline">/help 命令清单 · Ctrl + T 侧栏 · Alt + V 附图</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h3>运行状态</h3>
+        <div class="kv"><span>模型</span><b>zhipuai/glm-5.3</b></div>
+        <div class="kv"><span>权限</span><b>ask-risky</b></div>
+        <div class="kv"><span>会话</span><b id="kv-sessions">0 场 · 目录为空</b></div>
+        <div class="kv"><span>备份</span><b>已开启</b></div>
+      </div>
+      <div class="card">
+        <h3>任务清单</h3>
+        <div class="kv"><span style="color:#5c6b62">（空——恢复后回到你的会话）</span></div>
+      </div>
+    </div>
+
+    <div class="backdrop" id="backdrop">
+      <div class="modal" role="dialog" aria-label="会话恢复">
+        <div class="modal-head">
+          <div class="step" id="m-step">恢复 1 / 3</div>
+          <h2 id="m-title">恢复会话？</h2>
+        </div>
+        <div class="modal-body" id="m-body"></div>
+        <div class="modal-foot" id="m-foot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ── 演示数据：备份库里的 37 场会话（标题 + 最近更新时间 + 自身事件数；时间倒序） ── */
+const SESSIONS = [
+  { t: "m5b 消息备份方案 doc-review 二轮", time: "09-29 14:32", ev: 86 },
+  { t: "恢复流程原型设计", time: "09-29 11:08", ev: 42 },
+  { t: "m4-8 模块配置分家收官", time: "09-29 09:15", ev: 214 },
+  { t: "lint 基线清零清扫", time: "09-28 22:47", ev: 38 },
+  { t: "/auto 对齐批走查修", time: "09-28 19:03", ev: 121 },
+  { t: "日期行回放泄漏修复", time: "09-28 16:22", ev: 57 },
+  { t: "m5b 方案起草（消息备份）", time: "09-28 13:40", ev: 96 },
+  { t: "子代理并发九仓调研", time: "09-27 20:11", ev: 268 },
+  { t: "技能系统升级走查修四", time: "09-27 15:36", ev: 143 },
+  { t: "Ctrl+O 全屏失效诊断", time: "09-27 10:24", ev: 31 },
+  { t: "m5 鼠标接管批收官", time: "09-26 21:52", ev: 187 },
+  { t: "会话协同九仓调研", time: "09-26 17:19", ev: 233 },
+  { t: "模块隔离八仓调研", time: "09-26 12:47", ev: 205 },
+  { t: "/btw 斜杠命令调研", time: "09-26 09:33", ev: 94 },
+  { t: "m4-7 技能菜单走查", time: "09-25 23:05", ev: 88 },
+  { t: "UI 扩展方案五轮终验", time: "09-25 19:41", ev: 176 },
+  { t: "树状 fork 对话评估", time: "09-25 14:28", ev: 65 },
+  { t: "全局快捷键定案 A-1", time: "09-25 10:16", ev: 52 },
+  { t: "设置服务读面盲区评估", time: "09-25 08:59", ev: 47 },
+  { t: "m5 UI 扩展批收官对账", time: "09-24 22:34", ev: 158 },
+  { t: "热插拔假挂载修复批", time: "09-24 16:07", ev: 201 },
+  { t: "真机走查六修（m4-3）", time: "09-24 11:43", ev: 119 },
+  { t: "生态先行批收官登记", time: "09-24 09:21", ev: 84 },
+  { t: "模块能力通路评估", time: "09-23 20:15", ev: 61 },
+  { t: "provider 家族存废拍板", time: "09-23 15:48", ev: 133 },
+  { t: "compaction v3 落地", time: "09-23 10:29", ev: 245 },
+  { t: "todo 引导与实时刷新", time: "09-22 18:56", ev: 92 },
+  { t: "mdpipe 重构批收官", time: "09-22 14:11", ev: 177 },
+  { t: "/model 两 bug 修复", time: "09-22 09:37", ev: 43 },
+  { t: "busy 期命令分级落地", time: "09-21 21:26", ev: 108 },
+  { t: "TUI 界面批收官", time: "09-21 16:44", ev: 289 },
+  { t: "Esc 停不下来诊断修复", time: "09-20 13:18", ev: 76 },
+  { t: "M4-2.5 收官 + UX 实测", time: "09-19 19:52", ev: 154 },
+  { t: "markdown 复杂版渲染选型", time: "09-19 10:06", ev: 97 },
+  { t: "首次上手与四门跑通", time: "09-18 15:23", ev: 58 },
+  { t: "新会话", time: "09-18 09:02", ev: 12 },
+  { t: "初始配置与环境探查", time: "09-17 14:50", ev: 46 },
+];
+const SUBAGENT_COUNT = 15;                       // 演示口径：37 场主会话另带 15 场子代理会话
+const TOTAL_EVENTS = SESSIONS.reduce((n, s) => n + s.ev, 0);
+const DB_SIZE = "8.2 MB";
+const VIS = 10;                                  // 列表可见行数（定高壳内滚动窗）
+
+const S = {
+  phase: "prompt",                               // prompt | list | progress | done | main
+  skipped: false,
+  sel: 0, checked: new Set(),
+  notice: "",
+  prog: { idx: 0, evDone: 0, curTitle: "", doneCount: 0 },
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (n) => n.toLocaleString("en-US");
+
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text; t.classList.add("show");
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => t.classList.remove("show"), 3600);
+}
+
+function foot(items) {
+  $("m-foot").innerHTML = items.map((it) => {
+    if (it.note) return `<div class="foot-note">${it.note}</div>`;
+    return `<div class="foot-item ${it.on ? "" : "off"}">
+      <span class="key ${it.on ? "hint-accent" : ""}">${it.key}</span>
+      <span>${it.label}</span>${!it.on && it.why ? `<span class="why">${it.why}</span>` : ""}</div>`;
+  }).join("") + '<div class="foot-spacer"></div><div class="foot-note">焦点锁定在恢复弹窗 · Ctrl + C 不占用</div>';
+}
+
+/* ── 第 1 幕 · 恢复询问 ── */
+function renderPrompt() {
+  $("m-step").textContent = "恢复 1 / 3 · 询问";
+  $("m-title").textContent = "恢复会话？";
+  $("m-body").innerHTML = `
+    <div class="stat">
+      <div class="s"><b>${SESSIONS.length}</b><span>场会话</span></div>
+      <div class="s"><b>${fmt(TOTAL_EVENTS)}</b><span>条事件</span></div>
+      <div class="s"><b>${DB_SIZE}</b><span>备份库大小</span></div>
+    </div>
+    <p class="lead">检测到消息备份数据库（backup.sqlite），但本地会话目录（~/.orosus/sessions）是空的——比如目录被误删、或你换了一台机器。</p>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>恢复什么</b><span>——把备份里的事件流重建成 jsonl 会话文件（子代理对话一并恢复），/sessions 回看、resume 照常可用。</span></div></div>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>不碰什么</b><span>——备份数据库本身只读不动；jsonl 仍是唯一主存储，恢复完照常双写。</span></div></div>
+    <div class="feat"><span class="dot">◆</span><div class="t"><b>可挑选</b><span>——下一步可以按空格多选要恢复的会话，也可以 Alt + A 一键全选。</span></div></div>`;
+  foot([
+    { key: "Ctrl + N", label: "从备份恢复…", on: true },
+    { key: "Esc", label: "暂不恢复", on: true },
+  ]);
+}
+
+/* ── 第 2 幕 · 会话列表（标题 + 时间 · 空格多选） ── */
+function renderList() {
+  $("m-step").textContent = "恢复 2 / 3 · 选择";
+  $("m-title").textContent = "选择要恢复的会话";
+  // 滚动窗跟随选中项（选中行尽量保持在窗内）
+  let start = Math.max(0, Math.min(S.sel - (VIS - 1), SESSIONS.length - VIS));
+  if (S.sel < start) start = S.sel;
+  const rows = SESSIONS.slice(start, start + VIS).map((s, i) => {
+    const gi = start + i;
+    const on = S.checked.has(gi);
+    return `<div class="prow ${gi === S.sel ? "sel" : ""} ${on ? "checked" : ""}">
+      <span class="chk">✓</span><span class="box">${on ? "▣" : "▢"}</span>
+      <span class="name">${esc(s.t)}</span><span class="time">${s.time}</span></div>`;
+  }).join("");
+  const n = S.checked.size;
+  $("m-body").innerHTML = `
+    <p class="lead" style="margin-bottom:8px">从备份选择要恢复的会话——只列标题与最近更新时间（新在前）；子代理对话随所属会话一并恢复。</p>
+    <div class="plist">${rows}</div>
+    <div class="pagebar"><span>已选 <b style="color:var(--accent)">${n}</b> / ${SESSIONS.length} 场</span><span class="flex"></span>
+      <span>↑ ↓ 移动 · Space 勾选 · PgUp / PgDn 翻页</span></div>
+    <div class="modal-notice ${S.notice && S.notice.startsWith("已") ? "ok" : ""}">${S.notice}</div>`;
+  foot([
+    { key: "Space", label: "勾选 / 取消", on: true },
+    { key: "Alt + A", label: "全选 / 全不选", on: true },
+    { key: "Ctrl + N", label: "开始恢复", on: n > 0, why: n > 0 ? "" : "先勾选至少一场" },
+    { key: "Esc", label: "返回", on: true },
+  ]);
+}
+
+/* ── 第 3 幕 · 恢复进度（模态：全部按键禁用） ── */
+function renderProgress(finished) {
+  $("m-step").textContent = finished ? "恢复完成" : "恢复 3 / 3 · 进行";
+  $("m-title").textContent = finished ? "恢复完成" : "正在恢复会话…";
+  const p = S.prog;
+  const BAR = 28;
+  const filled = finished ? BAR : Math.floor((p.doneCount / S.checked.size) * BAR);
+  const bar = `<span class="fill">${"█".repeat(filled)}</span><span class="rest">${"░".repeat(BAR - filled)}</span>`;
+  if (finished) {
+    $("m-body").innerHTML = `
+      <div class="donebox">
+        <div class="big">● 已从备份恢复 ${S.checked.size} 场会话（另含子代理会话 ${SUBAGENT_COUNT} 场）</div>
+        <div class="d">共写入 <b>${fmt(p.evTotal)}</b> 条事件 · jsonl 主存储已重建，<b>/sessions</b> 可回看、resume 照常可用。</div>
+        <div class="d">备份库只读未动——之后的新消息继续照常双写进备份。</div>
+      </div>`;
+    foot([{ key: "Enter", label: "返回主界面", on: true }]);
+    return;
+  }
+  $("m-body").innerHTML = `
+    <div class="progwrap">
+      <div class="progbar">${bar}</div>
+      <div class="progmeta"><span>${p.doneCount} / ${S.checked.size} 场会话</span><span>${Math.round((p.doneCount / S.checked.size) * 100)}%</span></div>
+      <div class="progcur">正在恢复：<span class="n">${esc(p.curTitle)}</span></div>
+      <div class="progmeta"><span>已写入 ${fmt(p.evDone)} / ${fmt(p.evTotal)} 条事件</span><span>${DB_SIZE} · 只读源</span></div>
+    </div>
+    <div class="modal-notice">恢复进行中——弹窗锁定全部按键，不允许做别的事（Esc 已禁用）。</div>`;
+  foot([{ note: "恢复进行中 · 全部按键已禁用" }]);
+}
+
+function render() {
+  if (S.phase === "prompt") renderPrompt();
+  else if (S.phase === "list") renderList();
+  else renderProgress(S.phase === "done");
+}
+
+/* ── 恢复模拟（真机 = 从 events 表逐会话重建 jsonl，写盘异步、进度实时上报） ── */
+let progTimer = null;
+function startRestore() {
+  const order = [...S.checked].sort((a, b) => a - b);
+  const evTotal = order.reduce((n, i) => n + SESSIONS[i].ev, 0);   // 分母 = 已勾选会话的事件合计（非全库）
+  S.prog = { order, oi: 0, idx: 0, evDone: 0, evTotal, curTitle: SESSIONS[order[0]].t, doneCount: 0 };
+  S.phase = "progress";
+  render();
+  const step = () => {
+    const p = S.prog;
+    const s = SESSIONS[p.order[p.oi]];
+    if (s === undefined) { finishRestore(); return; }
+    p.curTitle = s.t;
+    // 每场会话分 2~3 拍写完（演示节奏；真机按事件批次落盘）
+    const chunk = Math.ceil(s.ev / (2 + (p.oi % 2)));
+    p.idx += 1;
+    p.evDone = Math.min(evTotal, p.evDone + chunk);
+    if (p.idx >= 2 + (p.oi % 2)) {
+      p.idx = 0; p.doneCount += 1; p.oi += 1;
+    }
+    render();
+    progTimer = setTimeout(step, 55 + (p.oi % 3) * 20);
+  };
+  progTimer = setTimeout(step, 260);
+}
+function finishRestore() {
+  clearTimeout(progTimer);
+  S.phase = "done";
+  render();
+}
+
+/* ── 收尾：回主界面 ── */
+function enterMain() {
+  $("backdrop").classList.add("hidden");
+  $("tui").classList.remove("locked");
+  $("inputbox").classList.add("live");
+  $("inputbox").innerHTML = '继续昨天的工作……<span class="cursor"></span>';
+  $("kv-sessions").textContent = `${SESSIONS.length} 场 · 已恢复`;
+  const lines = $("streamlines");
+  if (S.skipped) {
+    lines.insertAdjacentHTML("beforeend", `
+      <div class="ln"><span class="w">● 已跳过恢复</span> —— 会话目录仍为空；下次启动若条件不变会再次询问。</div>
+      <div class="ln u">备份库未受影响（backup.sqlite 只读未动）。之后想恢复：清空会话目录重启即可再触发本询问。</div>`);
+    toast("已跳过恢复——下次启动若会话目录仍为空会再次询问");
+  } else {
+    lines.insertAdjacentHTML("beforeend", `
+      <div class="ln"><span class="a">● 已从备份恢复 ${S.checked.size} 场会话</span>（另含子代理会话 ${SUBAGENT_COUNT} 场）—— jsonl 主存储已重建。</div>
+      <div class="ln u">/sessions 回看 · resume 照常 · 新消息继续双写进备份库。</div>`);
+    toast(`恢复完成 · ${S.checked.size} 场会话已回到本地`);
+  }
+  S.phase = "main";
+}
+
+function restart() {
+  clearTimeout(progTimer);
+  S.phase = "prompt"; S.skipped = false; S.sel = 0; S.checked = new Set(); S.notice = "";
+  $("backdrop").classList.remove("hidden");
+  $("tui").classList.add("locked");
+  $("inputbox").classList.remove("live");
+  $("inputbox").textContent = "恢复流程进行中——输入由恢复弹窗接管";
+  $("kv-sessions").textContent = "0 场 · 目录为空";
+  $("streamlines").innerHTML = '<div class="ln u">启动检测：消息备份数据库在场（backup.sqlite）· 会话目录为空 —— 已进入恢复询问。</div>';
+  render();
+}
+
+/* ── 键盘 ── */
+document.addEventListener("keydown", (e) => {
+  const ctrlN = (e.ctrlKey || e.altKey) && (e.key === "n" || e.key === "N");   // 浏览器吞 Ctrl+N → Alt+N 等效
+  const altA = e.altKey && !e.ctrlKey && (e.key === "a" || e.key === "A");
+
+  if (S.phase === "main") {
+    if (e.key === "r" || e.key === "R") { e.preventDefault(); restart(); }
+    return;
+  }
+  if (S.phase === "progress") {
+    e.preventDefault();                                                        // 模态：一切按键吞掉（Esc 也禁用）
+    return;
+  }
+  if (S.phase === "done") {
+    if (e.key === "Enter") { e.preventDefault(); enterMain(); }
+    return;
+  }
+  if (S.phase === "prompt") {
+    if (ctrlN) { e.preventDefault(); S.phase = "list"; S.notice = ""; render(); return; }
+    if (e.key === "Escape") { e.preventDefault(); S.skipped = true; enterMain(); return; }
+    return;
+  }
+  if (S.phase === "list") {
+    if (e.key === "ArrowDown") { e.preventDefault(); S.sel = Math.min(S.sel + 1, SESSIONS.length - 1); render(); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); S.sel = Math.max(S.sel - 1, 0); render(); return; }
+    if (e.key === "PageDown")  { e.preventDefault(); S.sel = Math.min(S.sel + VIS, SESSIONS.length - 1); render(); return; }
+    if (e.key === "PageUp")    { e.preventDefault(); S.sel = Math.max(S.sel - VIS, 0); render(); return; }
+    if (e.key === " ") {                                                       // Space：勾选 / 取消当前行
+      e.preventDefault();
+      if (S.checked.has(S.sel)) { S.checked.delete(S.sel); S.notice = `已取消「${SESSIONS[S.sel].t}」`; }
+      else { S.checked.add(S.sel); S.notice = `已勾选 ${S.checked.size} 场`; }
+      render(); return;
+    }
+    if (altA) {                                                                 // Alt + A：全选 / 全不选（两段式——防误触发长任务）
+      e.preventDefault();
+      if (S.checked.size === SESSIONS.length) { S.checked = new Set(); S.notice = "已全不选"; }
+      else { S.checked = new Set(SESSIONS.map((_, i) => i)); S.notice = `已全选 ${SESSIONS.length} 场——Ctrl + N 开始恢复（即全部恢复）`; }
+      render(); return;
+    }
+    if (e.key === "Enter") {                                                    // 引导：Enter 不承担勾选/开始（Space/Ctrl+N 才是）
+      e.preventDefault();
+      S.notice = "用 Space 勾选、Ctrl + N 开始恢复（Alt + A 全选）";
+      render(); return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); S.phase = "prompt"; S.notice = ""; render(); return; }
+    if (ctrlN) {
+      e.preventDefault();
+      if (S.checked.size === 0) { S.notice = "先勾选至少一场（Space 勾选，Alt + A 全选）"; render(); return; }
+      startRestore(); return;
+    }
+  }
+});
+
+render();
+</script>
+</body>
+</html>
