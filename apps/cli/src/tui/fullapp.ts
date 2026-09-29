@@ -70,6 +70,9 @@ export interface FullAppIO {
 	 *  count 行（短返回合法）。main.ts 侧接 DocModel.totalLines/frameWindow。 */
 	docTotal(): number;
 	docWindow(start: number, count: number): string[];
+	/** 头部净平移累计（走查⑦，可选）：滑窗裁剪造成的行号整体平移——滚动补偿据此区分
+	 *  「行号平移」（视口内容本就不动，不补）与「尾部增缩」（保视口 start，要补）。 */
+	docHeadShift?(): number;
 	submit(text: string): void;
 	/** 提交闸门（批④——busy 期拒收档拦在回车前）：返回拒因 = 拦截（输入保留、不进历史、不写流区，
 	 *  拒因尾行瞬显自消）；undefined = 放行。宿主侧复用 inflight + 拒收名单单一数据源。 */
@@ -1604,9 +1607,15 @@ export class FullApp {
 						else if (typeof r === "string") {
 							pu.text = r;
 							pu.lines = r.split("\n");
-							pu.scroll = 0; // 整窗替换滚回顶部（设计空白 14）
-							pu.pinned = false; // CTU-06（2026-09-28 code review）：同步脱钉——pinned 每帧把 scroll 钳回末页会否决
-							// 滚回顶部（bottom 窗注释承诺与行为矛盾的修复；键盘/滚轮/自动滚三路径都有「落地脱钉」，此处补齐）
+							// 走查⑥（2026-09-29 用户报「折叠键按完直接置顶」）：内容替换不再滚回顶部
+							// （旧「替换即置顶」是设计空白 14 为模块刷新内容定的语义，折叠切换被顶飞不合
+							// 理）。学 kimi agent-activity-viewer :106-110（ctrl+o 折叠切换不动滚动）+
+							// :292/:337-339（内容更新只做两件事：followTail 贴底 / scrollTop 超界才钳）：
+							// 贴底窗（bottom → pinned）继续贴底；普通窗保持 scroll 仅钳到新范围——视口稳定。
+							if (pu.pinned !== true) {
+								const page = pu.viewPage ?? Math.max(3, this.viewGeo(pu.layout).height - 3);
+								pu.scroll = Math.max(0, Math.min(Math.max(0, pu.lines.length - page), pu.scroll));
+							}
 						}
 					} catch (err) {
 						// 全局约束 4：模块函数抛错 = 黄字提示且窗保留
@@ -2428,13 +2437,18 @@ export class FullApp {
 		const streamH = rows - inputH - queueH;
 		const dmTotal = this.io.docTotal() + 1; // + 尾行（spinner/待命——恒 1 行，tailLine 并入窗口尾）
 		const maxScroll = Math.max(0, dmTotal - streamH);
-		// 滚动钉住（m5-render-perf 真机走查①修，2026-09-29）：scrollBack 是「距底行数」（底部锚定），
-		// 流式增长 Δ 行时视口会被新内容顶起（end = total − scrollBack 随涨，正读的行往上滚走）——用户已
-		// 上滚脱钉（scrollBack > 0）时把 Δ 补进 scrollBack，视口起点不动 = 正在读的行钉住（kimi/cc 查看窗
-		// pinned 的主窗同义）。跟随模式（scrollBack = 0）不补照旧自动滚；收缩（滑窗裁剪头部移除）不补——
-		// 行号平移后内容本就不动（T7 几何论证），min 钳制兜底。
-		if (this.lastTotal >= 0 && dmTotal > this.lastTotal && s.scrollBack > 0) {
-			s.scrollBack = Math.min(maxScroll, s.scrollBack + (dmTotal - this.lastTotal));
+		// 滚动钉住（走查①修，走查⑦统一式）：scrollBack 是「距底行数」，内容增缩都会顶走视口——
+		// 统一补偿 tailDelta = 总变化 − 头部平移（增长补正、收缩补负，恒保视口 start；学 kimi
+		// agent-activity-viewer 的顶锚免疫：其 scrollTop 从顶数、内容更新只做 followTail 贴底/超界钳制）。
+		// 头部平移（滑窗裁剪，经 docHeadShift 差分）不补——行号平移后视口内容本就不动（T7 几何论证）。
+		// 跟随态（scrollBack = 0）不补照旧贴底。
+		if (this.lastTotal >= 0 && s.scrollBack > 0) {
+			const headNow = this.io.docHeadShift?.() ?? 0;
+			const tailDelta = dmTotal - this.lastTotal + (headNow - this.lastHeadShift);
+			this.lastHeadShift = headNow;
+			if (tailDelta !== 0) s.scrollBack = Math.max(0, Math.min(maxScroll, s.scrollBack + tailDelta));
+		} else if (this.io.docHeadShift !== undefined) {
+			this.lastHeadShift = this.io.docHeadShift();
 		}
 		this.lastTotal = dmTotal;
 		s.scrollBack = Math.min(s.scrollBack, maxScroll);
@@ -2446,6 +2460,8 @@ export class FullApp {
 
 	/** 上一帧总行数（滚动钉住的增量基准）。 */
 	private lastTotal = -1;
+	/** 上次头部平移累计（tailDelta 差分基准——走查⑦）。 */
+	private lastHeadShift = 0;
 
 	/** 行源窗口：dm 行 + 尾行并入（旧 [...io.doc(), tailLine()] 的窗口化形态——尾行恒 1 行，
 	 *  dm 短返回时补上）。 */

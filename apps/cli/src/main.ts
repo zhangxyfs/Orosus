@@ -1731,6 +1731,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // 经 DocModel.reconcile 键失配自动全量重折（D8 定案，几何立即全对）
     docTotal: () => dm.totalLines(streamW()),
     docWindow: (start, count) => dm.frameWindow(streamW(), start, count),
+    docHeadShift: () => dm.headShiftTotal(), // 走查⑦：滑窗裁剪的头部平移——主窗滚动补偿区分平移与尾部增缩
     submit: (text) => {
       // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡。
       // dock（2026-09-28 用户拍板）：贴输入框上缘 + 与输入框同宽同左缘——左右边框与输入框连成直线

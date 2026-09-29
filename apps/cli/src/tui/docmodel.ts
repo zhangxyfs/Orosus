@@ -121,6 +121,7 @@ export class DocModel {
 	private curTurn = 0;
 	private foldedTurns = 0; // 累计已裁轮数（fold 行文案 N）
 	private lastEvictAt = 0; // 远区淘汰 1Hz 节流（设计空白 #8 两可——落地取节流档，随 T8 回写登记）
+	private headTrimmedNet = 0; // 头部净平移累计（走查⑦：裁剪 cut 行 − fold 回插 1 行 = cut−1）——fullapp 滚动补偿区分「行号平移」与「尾部增缩」
 
 	/** 条目统一入列（T7）：lines/turnOf 同步 push（轮号 = curTurn）；counts 由 reconcile 补尾覆盖。 */
 	private pushE(e: Entry): void {
@@ -383,6 +384,13 @@ export class DocModel {
 		this.lines.unshift({ k: "fold", turns: this.foldedTurns });
 		this.turnOf.unshift(0);
 		this.counts.unshift(1); // fold 恒 1 行（账本即时精确）
+		this.headTrimmedNet += cut - 1; // 头部净平移：移除 cut 行 − 回插 fold 1 行（走查⑦滚动补偿用）
+	}
+
+	/** 头部净平移累计读口（走查⑦）：滑窗裁剪造成的行号整体平移量——fullapp 据此把总行数变化
+	 *  分解为「行号平移（视口内容本就不动，不补偿）」与「尾部增缩（保视口 start 要补偿）」。 */
+	headShiftTotal(): number {
+		return this.headTrimmedNet;
 	}
 
 	/** 远区缓存淘汰（设计空白 #8——落地取节流档）：距视口所在轮 > 3 轮的条目丢渲染缓存，
