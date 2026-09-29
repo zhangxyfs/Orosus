@@ -223,6 +223,7 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, w
   const trackRoots = tracks.map((t) => Access.fsRead(t.dir));
   return defineTool({
     name: "skill__load",
+    label: "Skill_load", // 工具行显示名（2026-09-29 用户走查报「Used Load」不可辨——缺 label 走默认剥前缀名 Load；模型/审批面仍用 name）
     description: "读取指定技能的完整内容（摘要常驻系统提示，本文按需加载）",
     parameters: z.object({ name: z.string().describe("技能名（见系统提示中的可用技能列表）") }),
     resolveExecution: async (input) => {
