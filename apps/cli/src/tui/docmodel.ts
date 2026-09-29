@@ -173,6 +173,7 @@ export class DocModel {
 					const prev = this.lines[i]!;
 					if (prev.k === "raw" && prev.s.startsWith("● Using ")) {
 						this.lines[i] = { k: "raw", s: `● Used ${prev.s.slice(8)} · ${chip}` };
+						this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
 						break;
 					}
 					if (prev.k === "raw" && prev.s.trim() !== "") break; // 工具行不紧邻（理论不至）——不合并
@@ -225,7 +226,10 @@ export class DocModel {
 			for (let i = this.lines.length - 1; i >= 0; i--) {
 				const prev = this.lines[i]!;
 				if (prev.k === "tool" && prev.callId === callId) {
-					if (prev.result === undefined) prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+					if (prev.result === undefined) {
+						prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+						this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
+					}
 					return; // callId 唯一：已有结果不覆盖，无则挂上
 				}
 			}
@@ -235,6 +239,7 @@ export class DocModel {
 			const prev = this.lines[i]!;
 			if (prev.k === "tool" && prev.result === undefined) {
 				prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+				this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
 				return;
 			}
 			if (prev.k !== "tool") break; // 工具行不紧邻（理论不至）——不合并
@@ -422,64 +427,179 @@ export class DocModel {
 		return theme.fg("accent", m[1]!) + theme.fg("fg", " " + m[2]!) + theme.fg("accent", m[3]!) + theme.dim(m[4]!);
 	}
 
-	/** 当前完整行源（定格条目 + 活动块）——按调用方当前宽度渲染：宽度变化即回流（F5 十一轮）。 */
-	frameLines(width: number): string[] {
-		this.claimAgents();
-		const roster = this.agentProvider?.() ?? [];
-		const out: string[] = [];
-		for (const e of this.lines) {
-			if (e.k === "group") {
-				const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
-				out.push(...agentGroupLines(mine)); // 每帧现算——状态/时长/词元随心跳自更
-				// 兜底：组员编号在场但花名册解析不出（fork 会话 agents/ 留在原会话、盘上文件被清）——
-				// 留一行痕迹而不是整组消失（spawn 行已吞，无此行这段历史就空了）
-				if (mine.length === 0 && e.ids.length > 0) out.push(theme.fg("muted", "  ● 派出子代理（本会话无可查名册——/tasks 可试）"));
-				continue;
-			}
-			if (e.k === "think") {
-				if (e.cache?.w !== width || e.cache.open !== this.thinkOpen)
-					e.cache = { w: width, open: this.thinkOpen, lines: this.thinkBlock(e.src, width) };
-				out.push(...e.cache.lines);
-			} else if (e.k === "user") {
-				// 用户消息折行（2026-09-23 走查批①：此前逐逻辑行直推不折行，长提问被终端硬截）。
-				// 一个块只画一个 ❯（2026-09-27 拍板：多行提问/子代理任务书整块一段——换行与折行续行
-				// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）。宽度级缓存（A 批）。
-				if (e.cache?.w !== width) {
-					const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
-					const lines: string[] = [""];
-					let first = true;
-					for (const l of e.src.split("\n")) {
-						for (const wl of wrapText(l, uw)) {
-							lines.push(first ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
-							first = false;
-						}
-					}
-					lines.push("");
-					e.cache = { w: width, lines };
-				}
-				out.push(...e.cache.lines);
-			} else if (e.k === "tool") {
-				const done = e.result !== undefined;
-				if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done)
-					e.cache = { w: width, open: this.toolOpen, err: this.errOpen, done, lines: this.toolLines(e, width) };
-				out.push(...e.cache.lines);
-			} else if (e.k === "skill") {
-				// 技能加载行：● 与技能名青玉、说明灰（工具行配色同族——2026-09-28 用户拍板：技能正文不进对话流）
-				out.push(theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文"));
-			} else if (e.k === "md") {
-				if (e.cache?.w !== width) e.cache = { w: width, lines: renderMarkdown(e.src, width) };
-				out.push(...e.cache.lines);
-			} else {
-				// raw 行：工具行渲染期上色（存储留纯文本供合并）；超宽 wrapText 兜底——宽度级缓存（A 批）
-				if (e.cache?.w !== width) {
-					const shown = e.s.startsWith("● ") ? this.styleToolLine(e.s) : e.s;
-					e.cache = { w: width, lines: visibleWidth(shown) > width ? wrapText(shown, width) : [shown] };
-				}
-				out.push(...e.cache.lines);
-			}
+	/** 单条目渲染（行内容缓存键控照旧——m5-render-perf T4 从 frameLines 循环体提取，
+	 *  frameLines 与 frameWindow 共用；group 活体行每帧现算不缓存）。 */
+	private renderEntry(e: Entry, width: number, roster: readonly SubagentRosterEntry[]): string[] {
+		if (e.k === "group") {
+			const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
+			const out = agentGroupLines(mine); // 每帧现算——状态/时长/词元随心跳自更
+			// 兜底：组员编号在场但花名册解析不出（fork 会话 agents/ 留在原会话、盘上文件被清）——
+			// 留一行痕迹而不是整组消失（spawn 行已吞，无此行这段历史就空了）
+			if (mine.length === 0 && e.ids.length > 0) out.push(theme.fg("muted", "  ● 派出子代理（本会话无可查名册——/tasks 可试）"));
+			return out;
 		}
+		if (e.k === "think") {
+			if (e.cache?.w !== width || e.cache.open !== this.thinkOpen)
+				e.cache = { w: width, open: this.thinkOpen, lines: this.thinkBlock(e.src, width) };
+			return e.cache.lines;
+		}
+		if (e.k === "user") {
+			// 用户消息折行（2026-09-23 走查批①：此前逐逻辑行直推不折行，长提问被终端硬截）。
+			// 一个块只画一个 ❯（2026-09-27 拍板：多行提问/子代理任务书整块一段——换行与折行续行
+			// 同为 2 空格缩进；旧实现逐逻辑行各画 ❯，多行任务书满屏箭头）。宽度级缓存（A 批）。
+			if (e.cache?.w !== width) {
+				const uw = Math.max(8, width - 2); // 「❯ 」前缀 2 列计入折行宽
+				const lines: string[] = [""];
+				let first = true;
+				for (const l of e.src.split("\n")) {
+					for (const wl of wrapText(l, uw)) {
+						lines.push(first ? `${theme.fg("accent", "❯")} ${theme.bold(theme.fg("warn", wl))}` : `  ${theme.bold(theme.fg("warn", wl))}`);
+						first = false;
+					}
+				}
+				lines.push("");
+				e.cache = { w: width, lines };
+			}
+			return e.cache.lines;
+		}
+		if (e.k === "tool") {
+			const done = e.result !== undefined;
+			if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done)
+				e.cache = { w: width, open: this.toolOpen, err: this.errOpen, done, lines: this.toolLines(e, width) };
+			return e.cache.lines;
+		}
+		if (e.k === "skill") {
+			// 技能加载行：● 与技能名青玉、说明灰（工具行配色同族——2026-09-28 用户拍板：技能正文不进对话流）
+			return [theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文")];
+		}
+		if (e.k === "md") {
+			if (e.cache?.w !== width) e.cache = { w: width, lines: renderMarkdown(e.src, width) };
+			return e.cache.lines;
+		}
+		// raw 行：工具行渲染期上色（存储留纯文本供合并）；超宽 wrapText 兜底——宽度级缓存（A 批）
+		if (e.cache?.w !== width) {
+			const shown = e.s.startsWith("● ") ? this.styleToolLine(e.s) : e.s;
+			e.cache = { w: width, lines: visibleWidth(shown) > width ? wrapText(shown, width) : [shown] };
+		}
+		return e.cache.lines;
+	}
+
+	/** 账本（m5-render-perf T4）：与 lines 平行的定格条目行数。渲染即计（cache.lines.length），
+	 *  帧入口 reconcile 校验宽度/折叠态键 + 脏行重算 + 补尾——任何消费点恒精确（D9：无估计值
+	 *  无收敛过程；可惰性的只有行内容缓存）。group 活体行不入账（roster 心跳每变、恒现算）；
+	 *  活动块（thinkText/mdText）是帧尾动态段同样不入账。-1 = 脏（toolResult 挂上/TOOL_MERGE
+	 *  改行——条目原位变更，下次 reconcile 即时重算）。 */
+	private counts: number[] = [];
+	private ledgerWidth = -1;
+	private ledgerThinkOpen = false;
+	private ledgerToolOpen = false;
+	private ledgerErrOpen = false;
+
+	/** 帧入口账本维护：键失配（宽度/Ctrl+T 或 Alt+E/O/F 折叠态）→ 全量重折（refoldAll 语义）；
+	 *  脏行重算；新入列条目补尾（渲染入 cache 顺便计数——计数精确不依赖先被窗口扫到）。 */
+	private reconcile(width: number): void {
+		if (this.ledgerWidth !== width || this.ledgerThinkOpen !== this.thinkOpen || this.ledgerToolOpen !== this.toolOpen || this.ledgerErrOpen !== this.errOpen) {
+			this.ledgerWidth = width;
+			this.ledgerThinkOpen = this.thinkOpen;
+			this.ledgerToolOpen = this.toolOpen;
+			this.ledgerErrOpen = this.errOpen;
+			this.counts = [];
+		}
+		const roster = this.agentProvider?.() ?? [];
+		for (let i = 0; i < this.counts.length; i++) {
+			if (this.counts[i] === -1) this.counts[i] = this.renderEntry(this.lines[i]!, width, roster).length;
+		}
+		while (this.counts.length < this.lines.length) {
+			this.counts.push(this.renderEntry(this.lines[this.counts.length]!, width, roster).length);
+		}
+	}
+
+	/** 显式全量重折（D8 定案）：宽度变化时由 fullapp 调用——保留窗内条目按新宽重折、
+	 *  账本与缓存整体换宽，几何从此恒精确（无双态、无跳顶解锁）。 */
+	refoldAll(width: number): void {
+		this.ledgerWidth = -1;
+		this.counts = [];
+		this.reconcile(width);
+	}
+
+	/** 条目原位变更标脏（toolResult 挂上/TOOL_MERGE 改行）——计数先于下次渲染精确化。 */
+	private markCountDirty(i: number): void {
+		if (i < this.counts.length) this.counts[i] = -1;
+	}
+
+	/** 活动块尾段（帧尾动态段，不入账本——每帧现算一次，行数与内容同源）。 */
+	private activeTail(width: number): string[] {
+		const out: string[] = [];
 		if (this.thinkText !== "") out.push(...this.styleWrappedThink(this.thinkLive.feed(this.thinkText, Math.max(8, width - 2)), this.thinkOpen));
 		if (this.mdText !== "") out.push(...this.mdRender(this.mdText, width));
 		return out;
+	}
+
+	/** 总行数（定格账本求和 + group 现算 + 活动块尾段）——O(条目数) 纯加法，不物化行。 */
+	totalLines(width: number): number {
+		this.claimAgents();
+		this.reconcile(width);
+		const roster = this.agentProvider?.() ?? [];
+		let total = this.activeTail(width).length;
+		for (let i = 0; i < this.lines.length; i++) {
+			const e = this.lines[i]!;
+			if (e.k === "group") total += this.renderEntry(e, width, roster).length; // 活体行现算
+			else total += Math.max(0, this.counts[i]!);
+		}
+		return total;
+	}
+
+	/** 视口窗口（m5-render-perf T4 热点 (b) 存储侧）：第 startLine 行起最多 maxLines 行——
+	 *  从尾部往头部走账本累加定位（尾部是热区，跟随模式只碰尾部），只物化窗口覆盖到的条目，
+	 *  窗口外条目一个都不碰（group 活体行例外：行数随心跳变，定位期须现算——kimi 同限）。
+	 *  返回与 frameLines 同源的行切片（含活动块尾段）。 */
+	frameWindow(width: number, startLine: number, maxLines: number): string[] {
+		this.claimAgents();
+		this.reconcile(width);
+		const roster = this.agentProvider?.() ?? [];
+		const tail = this.activeTail(width);
+		// 总行数（group 现算行数缓存共用——定位与输出一次）
+		const groupLines = new Map<number, string[]>();
+		let total = tail.length;
+		for (let i = 0; i < this.lines.length; i++) {
+			const e = this.lines[i]!;
+			if (e.k === "group") {
+				const gl = this.renderEntry(e, width, roster);
+				groupLines.set(i, gl);
+				total += gl.length;
+			} else total += Math.max(0, this.counts[i]!);
+		}
+		const start = Math.max(0, Math.min(startLine, Math.max(0, total)));
+		if (start >= total || maxLines <= 0) return [];
+		const end = Math.min(total, start + maxLines);
+		// 逆序收集：尾段先，定格条目从后往前直到覆盖 start（跟随模式 start ≈ total-视口 → 段数少；
+		// 滚到顶 = 一次性全量拼装，渲染缓存命中为引用操作）
+		const segs: string[][] = [];
+		let lo = total;
+		if (lo > start && tail.length > 0) {
+			segs.push(tail);
+			lo -= tail.length;
+		}
+		for (let i = this.lines.length - 1; i >= 0 && lo > start; i--) {
+			const e = this.lines[i]!;
+			if (e.k === "group") {
+				const gl = groupLines.get(i)!;
+				segs.push(gl);
+				lo -= gl.length;
+				continue;
+			}
+			const n = Math.max(0, this.counts[i]!);
+			if (n > 0) segs.push(this.renderEntry(e, width, roster));
+			lo -= n;
+		}
+		let all: string[] = [];
+		for (let k = segs.length - 1; k >= 0; k--) all = all.concat(segs[k]!); // [lo, total) 的行
+		return all.slice(start - lo, start - lo + (end - start));
+	}
+
+	/** 当前完整行源（定格条目 + 活动块）——按调用方当前宽度渲染：宽度变化即回流（F5 十一轮）。
+	 *  T4 起为兼容包装（D10：/tasks 等一次性消费面保留全量 API），内部走窗口路径拼满。 */
+	frameLines(width: number): string[] {
+		return this.frameWindow(width, 0, Number.MAX_SAFE_INTEGER);
 	}
 }

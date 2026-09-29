@@ -566,3 +566,84 @@ describe("DocModel 活动思考块增量折行（m5-render-perf T1——LiveWrap
 		expect(b2).toEqual(legacyThink(thinkSource, 80, false));
 	});
 });
+
+describe("DocModel 视口窗口化（m5-render-perf T4——条目级行数账本 + frameWindow 只物化窗口）", () => {
+	/** 随机文档构造器：混合 user/md/think(收起+展开)/tool(含 result/失败)/raw/skill/group 条目。 */
+	const buildDoc = (seed: number): DocModel => {
+		let s = seed >>> 0;
+		const rnd = (): number => ((s = (s * 1664525 + 1013904223) >>> 0) / 0x100000000);
+		const dm = new DocModel();
+		dm.agentProvider = () => [
+			{ id: "a1", label: "探索", status: "completed", spawnedAt: 0, model: "fake/m" },
+			{ id: "a2", label: "实现", status: "running", spawnedAt: 0, model: "fake/m" },
+		] as unknown as readonly import("@orosus/contracts/module").SubagentRosterEntry[];
+		const n = 6 + Math.floor(rnd() * 8);
+		for (let i = 0; i < n; i++) {
+			const kind = Math.floor(rnd() * 7);
+			if (kind === 0) dm.userPrompt(`用户提问 ${i} `.repeat(1 + Math.floor(rnd() * 30)));
+			else if (kind === 1) { dm.activity({ kind: "reasoning", text: `推理 ${i} `.repeat(1 + Math.floor(rnd() * 50)) }, 80); dm.end(80); }
+			else if (kind === 2) { dm.activity({ kind: "text", text: `**回答** ${i} 一段 markdown 正文，含长词 check:boundaries 与列表：\n- 甲\n- 乙`.repeat(1 + Math.floor(rnd() * 3)) }, 80); dm.end(80); }
+			else if (kind === 3) { dm.write(`● Using Read (src/file${i}.ts)\n`, 80); if (rnd() < 0.7) dm.write(TOOL_MERGE + `${1 + Math.floor(rnd() * 40)} 行\n`, 80); }
+			else if (kind === 4) { const c = `c${i}`; dm.toolCall("tool-fs__read", { path: `src/f${i}.ts` }, c); dm.toolResult("a\nb\nc", rnd() < 0.3, c); }
+			else if (kind === 5) dm.pushLine(`一行提示 ${i} ` + "普通文本 ".repeat(Math.floor(rnd() * 30)));
+			else dm.agentGroupCall();
+		}
+		return dm;
+	};
+
+	it("① 窗口等价性质：随机文档多组 (s,m)——frameWindow == frameLines.slice 且 totalLines == frameLines.length", () => {
+		for (const open of [false, true]) {
+			const dm = buildDoc(7);
+			dm.thinkOpen = open;
+			dm.toolOpen = open;
+			const full = dm.frameLines(60); // 先全量（兼容包装内部也走窗口路径）
+			expect(dm.totalLines(60)).toBe(full.length);
+			let st = 12345;
+			const rnd = (): number => ((st = (st * 1664525 + 1013904223) >>> 0) / 0x100000000);
+			for (let k = 0; k < 30; k++) {
+				const s0 = Math.floor(rnd() * full.length);
+				const m = 1 + Math.floor(rnd() * 25);
+				const got = dm.frameWindow(60, s0, m);
+				expect(got, `open=${open} s=${s0} m=${m}`).toEqual(full.slice(s0, s0 + m));
+			}
+			// 窗口起点超尾：空数组
+			expect(dm.frameWindow(60, full.length + 10, 5)).toEqual([]);
+		}
+	});
+
+	it("② refoldAll 后几何恒精确：换宽全量重折——totalLines == 新宽全量长度、窗口切片 == 新宽 frameLines 切片（无双态无收敛）", () => {
+		const dm = buildDoc(11);
+		dm.frameLines(80); // 旧宽入账
+		dm.refoldAll(30);
+		const fresh = (() => { const d2 = buildDoc(11); d2.thinkOpen = dm.thinkOpen; return d2.frameLines(30); })(); // 独立新例按 30 宽全量渲染
+		expect(dm.totalLines(30)).toBe(fresh.length); // == Σ精确计数（无估计值）
+		expect(dm.frameWindow(30, 0, fresh.length)).toEqual(fresh);
+		expect(dm.frameWindow(30, Math.floor(fresh.length / 3), 7)).toEqual(fresh.slice(Math.floor(fresh.length / 3), Math.floor(fresh.length / 3) + 7));
+		// 回宽仍精确
+		dm.refoldAll(80);
+		expect(dm.totalLines(80)).toBe(dm.frameLines(80).length);
+	});
+
+	it("③ 新入列条目计数即时精确——不依赖先被渲染过（totalLines 读口自动补账）", () => {
+		const dm = new DocModel();
+		dm.userPrompt("第一问");
+		const n1 = dm.totalLines(80);
+		expect(n1).toBe(dm.frameLines(80).length);
+		dm.pushLine("后来追加的一行提示"); // 未渲染——计数须即时
+		dm.pushMd("追加的 **markdown** 段", 80);
+		expect(dm.totalLines(80)).toBe(dm.frameLines(80).length); // 补账后恒等
+		expect(dm.totalLines(80)).toBeGreaterThan(n1);
+	});
+
+	it("④ 条目原位变更（toolResult 挂上）后账本行更新、窗口内容反映变更", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "src/a.ts" }, "c1");
+		dm.frameLines(80); // Using 态入账
+		dm.toolResult("line1\nline2\nline3", false, "c1"); // 挂 result → Using 变 Used + chip
+		expect(dm.totalLines(80)).toBe(dm.frameLines(80).length); // 账本恒精确（计数已反映变更）
+		expect(dm.frameWindow(80, 0, 10).map(stripAnsi).join("\n")).toContain("● Used Read (src/a.ts)"); // 窗口内容反映变更
+		// 失败体展开态走键校验重折（errOpen 在帧入口捕获）——同样恒精确
+		dm.errOpen = true;
+		expect(dm.totalLines(80)).toBe(dm.frameLines(80).length);
+	});
+});
