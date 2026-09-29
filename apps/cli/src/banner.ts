@@ -16,7 +16,7 @@ export function banner(h: { graph(): { audit(): AuditRow[] } }, opts: { dumpModu
   const providerUsable = opts.modelConfigured ?? active.some((a) => a.name.startsWith("provider-"));
   if (!providerUsable && failed.length === 0) {
     // 零配置首跑——不是降级，是没开始（M4-2 T15/B7 剩余）
-    return ["[orosus] 尚未配置任何模型提供商——运行 /provider 开始配置（选平台 → 粘贴 apiKey 即用），或参照 docs/developers.md 手写 config.toml"];
+    return ["[orosus] 尚未配置任何模型提供商——运行 /provider 开始配置（选平台 → 粘贴 apiKey 即用），或参照 docs/developers.md 手写 config.toml（模块配置在 modules.d/ 每模块一文件）"];
   }
   if (failed.length > 0) {
     const lines = [`⚠ ${failed.length} 个模块降级（完整表：orosus --dump-modules）：`];

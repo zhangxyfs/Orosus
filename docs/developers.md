@@ -77,6 +77,17 @@ export default defineModule({
 - 拦截点（§6.5 白名单 8 个）：`agent/pre-step`（emit）、`agent/transform-context`（reduce）、`agent/steering`、`agent/follow-up`（collect）、`agent/should-stop`（布尔 OR）、`tool/pre-execute`（waterfall，审批在此）、`tool/post-execute`（emit）、`ui/command`（emit）
 - 运行时清单：`harness.graph().catalogJson()`（或 CLI `--dump-modules`）
 
+## 配置的读写单一事实源（m4-8 起）
+
+配置分两家：`config.toml` 只放宿主自己的设置（顶层 provider/effort/model/contextWindow、`[tui]`、`[approval]`、`[compaction]`、`[provider-custom]`）；**模块配置在 `modules.d/` 目录**——一个模块一个文件（`modules.d/skill.toml` 里只有 `[skill]` 一节），老 config.toml 里的模块节会在启动时自动搬过去（原文件留 `.bak`）。
+
+代码侧两条铁律：
+
+- **读配置只调 `loadConfig()`**（`@orosus/core` 导出）：返回顶层键 core、节表 sections、warnings；modules.d 目录合并、分层（用户→项目→环境变量→CLI）、`$ENV` 占位符都活在它内部。不要自己 `parse(readFileSync(config.toml))`。
+- **写配置只调 `writeSectionKey` / `sectionPath`**（`@orosus/core` 导出）：给节名和键值，行级写保注释保键序、转义防注入（CM-11）、自动路由到该节的家（模块节 → modules.d/<名>.toml）。顶层键的写留在 harness 内部（upsertTopLevelKey）。
+
+例外两处（模块侧不能 import core）：`tool-web` 的 persist 由宿主算好路径传入；`approval` 的规则写留守 config.toml。模块要读自身配置走 `ctx.config` / `configRead()`（契约面，见上节）。
+
 ## 圈地纪律：不动主体代码（2026-09-24 用户拍板）
 
 **写模块时不要随便修改主程序代码（core/contracts/apps）；主体只增接口与服务，功能长在模块里。**
