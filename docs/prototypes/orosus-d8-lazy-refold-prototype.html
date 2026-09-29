@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· D8 懒重折错位演示原型（m5-render-perf）</title>
+<style>
+  /* ─── tokens · 连山配色（与 orosus-onboarding-prototype.html 同源） ────────── */
+  :root {
+    --bg:        #0a100e;
+    --surface:   #121b17;
+    --surface-2: #18241e;
+    --fg:        #e9eee6;
+    --muted:     #97a49a;
+    --border:    #25352d;
+    --accent:    #7cc9a5;
+    --info:      #84b8cd;
+    --warn:      #d4a25e;
+    --err:       #d07f70;
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Microsoft YaHei', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.6; }
+
+  .notebar {
+    max-width: 1180px; margin: 18px auto 10px; padding: 10px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--muted); font-size: 13px;
+  }
+  .notebar b { color: var(--fg); }
+  .notebar .proto { color: var(--warn); }
+
+  .wrap { max-width: 1180px; margin: 0 auto 40px; padding: 0 14px; }
+
+  /* ─── 顶栏：模式与状态 ──────────────────────────────────────────── */
+  .topbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: var(--surface); color: var(--muted); border: 0; padding: 6px 14px; cursor: pointer; font-size: 13px; font-family: inherit; }
+  .seg button.on { background: var(--surface-2); color: var(--fg); }
+  .seg button.on.lazy { color: var(--accent); }
+  .chip { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+  .chip b { color: var(--fg); font-weight: 600; }
+
+  /* ─── 主区三列 ──────────────────────────────────────────────────── */
+  .main { display: grid; grid-template-columns: 250px 1fr 330px; gap: 12px; align-items: stretch; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .card h3 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .05em; }
+
+  /* 左列：会话全景 + 滚动条 */
+  .minimap-row { display: flex; gap: 8px; }
+  .minimap { position: relative; flex: 1; height: 360px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+  .block { position: absolute; left: 6px; right: 6px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-family: var(--font-mono); color: #0a100e; overflow: hidden; white-space: nowrap; transition: top .25s, height .25s, background .25s; }
+  .block.exact { background: var(--accent); }
+  .block.stale { background: var(--warn); }
+  .block.flash { outline: 2px solid var(--fg); }
+  .vpbox { position: absolute; left: 0; right: 0; border: 2px solid var(--info); border-radius: 4px; pointer-events: none; transition: bottom .2s, height .25s; box-shadow: 0 0 0 999px rgba(10,16,14,.0); }
+  .sbtrack { position: relative; width: 14px; height: 360px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+  .sbthumb { position: absolute; left: 2px; right: 2px; background: var(--info); border-radius: 5px; transition: bottom .2s, height .25s; }
+
+  /* 中列：终端所见 */
+  .driftline { font-family: var(--font-mono); font-size: 12px; color: var(--muted); margin-bottom: 6px; min-height: 18px; }
+  .driftline b { color: var(--accent); }
+  .driftline .bad { color: var(--warn); }
+  .term { border: 1px solid var(--border); border-radius: 6px; background: #0d1411; font-family: var(--font-mono); font-size: 12px; }
+  .term .row { display: flex; gap: 8px; padding: 3px 10px; white-space: nowrap; overflow: hidden; }
+  .term .row .id { color: var(--muted); flex: none; width: 88px; }
+  .term .row .txt { color: var(--fg); overflow: hidden; }
+  .term .row.refold { background: rgba(212,162,94,.16); }
+  .term .row.refold .id::after { content: " ⚡"; color: var(--warn); }
+  .term .row.newtop { background: rgba(130,127,240,.0); border-top: 1px dashed var(--info); }
+
+  /* 右列：账本 / 数字 / 日志 */
+  table.ledger { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11.5px; }
+  table.ledger th { text-align: left; color: var(--muted); font-weight: 600; padding: 2px 4px; border-bottom: 1px solid var(--border); }
+  table.ledger td { padding: 2px 4px; border-bottom: 1px solid rgba(37,53,45,.5); }
+  .st-exact { color: var(--accent); }
+  .st-stale { color: var(--warn); }
+  tr.changed td { background: rgba(212,162,94,.14); }
+  .nums { font-family: var(--font-mono); font-size: 12px; }
+  .nums .row { display: flex; justify-content: space-between; padding: 2px 0; color: var(--muted); }
+  .nums .row b { color: var(--fg); font-weight: 600; }
+  .nums .row b.err-pos { color: var(--warn); }
+  .nums .row b.err-zero { color: var(--accent); }
+  .log { font-family: var(--font-mono); font-size: 11.5px; max-height: 150px; overflow-y: auto; }
+  .log div { padding: 1px 0; color: var(--muted); border-bottom: 1px dashed rgba(37,53,45,.4); }
+  .log .a { color: var(--info); }
+  .log .r { color: var(--warn); }
+  .log .k { color: var(--err); }
+
+  /* ─── 控制条 ────────────────────────────────────────────────────── */
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  .controls button, .scenes button {
+    background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px; font-family: inherit;
+  }
+  .controls button:hover, .scenes button:hover { border-color: var(--accent); }
+  .controls button:disabled { opacity: .45; cursor: default; }
+  .controls .key { color: var(--muted); font-size: 11px; }
+
+  /* ─── 三幕剧本 ──────────────────────────────────────────────────── */
+  .scenes { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .caption {
+    background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 14px; min-height: 66px; margin-bottom: 12px; font-size: 13.5px;
+  }
+  .caption .step { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+
+  /* ─── 全量假死遮罩 ─────────────────────────────────────────────── */
+  .freeze {
+    position: fixed; inset: 0; background: rgba(10,16,14,.82); display: flex;
+    align-items: center; justify-content: center; z-index: 50; flex-direction: column; gap: 8px;
+  }
+  .freeze .box { background: var(--surface); border: 1px solid var(--err); border-radius: 10px; padding: 18px 28px; font-family: var(--font-mono); }
+  .freeze .box h2 { margin: 0 0 6px; color: var(--err); font-size: 15px; }
+  .freeze .box p { margin: 0; color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="notebar">
+  <b>D8 懒重折「错位」演示原型</b> · 一次性演示件（<span class="proto">PROTOTYPE — 只回答一个问题：Ctrl + T 之后往上滚，错位到底长什么样</span>）。
+  <b style="color:var(--err)">走查结论（2026-09-29 用户拍板）：跳转落点偏短 + 分步解锁不可接受 → 懒重折推翻，resize 回九仓先例的全量重折 + busy 拒绝切换 + 500ms 冷却；本件保留为决策记录，勿再按此实施。</b>
+  场景是简化模型：10 个条目、视口 12 行、流区两档宽（侧栏开 46 列 / 关 84 列），折行按「每字 1 列、按宽向上取整」模拟。
+  机理与施工方案 T4/T5 一致——<b>从尾部走账本定位窗口，滚到的条目当场按新宽重折并更新计数</b>；本页的模拟逻辑已用 Node 桌面验证过。
+  走查：先点下方三幕按钮看引导，再用控制条自由复现（键盘 PageUp / PageDown 滚轮、Alt + T 开关侧栏、Home 跳顶、End 回底）。
+</div>
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="seg" id="modeSeg">
+      <button id="mFull">现状 · 全量重折</button>
+      <button id="mLazy" class="lazy on">D8 · 懒重折</button>
+    </div>
+    <span class="chip">侧栏 <b id="chipSb">开</b></span>
+    <span class="chip">流区宽 <b id="chipW">46</b> 列</span>
+    <span class="chip">scrollBack <b id="chipSb2">0</b></span>
+    <span class="chip hidden" id="chipBusy" style="color: var(--err)">全量重折假死中…</span>
+  </div>
+
+  <div class="scenes">
+    <b style="font-size:13px;color:var(--muted)">引导三幕：</b>
+    <button data-scene="1">幕一 · Ctrl + T 的两种世界</button>
+    <button data-scene="2">幕二 · 关侧栏后往上滚（比预想稳）</button>
+    <button data-scene="3">幕三 · 开侧栏后拖滚动条跳顶（代价面）</button>
+    <button id="sceneStop">停止</button>
+  </div>
+  <div class="caption" id="caption"><span class="step">READY</span><br>点上面任一幕开始引导走查，或直接用下方控制条自由把玩。</div>
+
+  <div class="controls">
+    <button id="btnT">Ctrl + T 开关侧栏 <span class="key">(Alt + T)</span></button>
+    <button id="btnUp">滚轮 ↑ 一档（4 行）<span class="key">(PageUp)</span></button>
+    <button id="btnDn">滚轮 ↓ 一档 <span class="key">(PageDown)</span></button>
+    <button id="btnHome">拖滚动条跳到顶 <span class="key">(Home)</span></button>
+    <button id="btnEnd">回到底部 <span class="key">(End)</span></button>
+    <button id="btnReset">重置场景</button>
+  </div>
+
+  <div class="main">
+    <div class="card">
+      <h3>会话全景（账本视角）</h3>
+      <div class="minimap-row">
+        <div class="minimap" id="minimap"></div>
+        <div class="sbtrack" id="sbtrack"><div class="sbthumb" id="sbthumb"></div></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;font-family:var(--font-mono)">
+        <span style="color:var(--accent)">■ 精确@当前宽</span> ·
+        <span style="color:var(--warn)">■ 旧宽计数（未重折）</span> ·
+        <span style="color:var(--info)">▢ 视口</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>终端所见（视口 12 行，底行=会话末尾）</h3>
+      <div class="driftline" id="drift">顶行漂移读数：—</div>
+      <div class="term" id="term"></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px">
+        行标 = 条目·逻辑行·折行序；<span style="color:var(--warn)">⚡ 橙底</span> = 本帧刚按新宽重折的条目。
+        漂移读数：上翻比对上一帧顶行、下翻比对上一帧底行——正数 = 画面比按键多跳了（错位），0 = 内容一格不错，跳转后不比较。
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>账本</h3>
+      <table class="ledger">
+        <thead><tr><th>条目</th><th>状态</th><th>账本行数</th><th>真实行数</th></tr></thead>
+        <tbody id="ledgerBody"></tbody>
+      </table>
+      <h3 style="margin-top:12px">关键数字</h3>
+      <div class="nums" id="nums"></div>
+      <h3 style="margin-top:12px">事件日志</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<div class="freeze hidden" id="freeze">
+  <div class="box">
+    <h2>全量重折中……（示意 ~900ms 假死）</h2>
+    <p id="freezeDetail">10 个条目 · 全部行从头重折一遍</p>
+    <p>几万行的会话，这一下就是几百毫秒——界面完全无响应</p>
+  </div>
+</div>
+
+<script>
+/* ═══ 模拟核心（与 Node 桌面验证版同算法） ═══════════════════════════════ */
+const STREAM_H = 12, W_NARROW = 46, W_WIDE = 84, WHEEL = 4;
+let seed = 42;
+const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+const ENTRIES = [];
+for (let i = 1; i <= 10; i++) {
+  const n = 5 + Math.floor(rnd() * 8);
+  const lens = [];
+  for (let j = 0; j < n; j++) lens.push(24 + Math.floor(rnd() * 130));
+  ENTRIES.push({ name: `轮次 ${i}`, lens });
+}
+const foldCount = (e, w) => e.lens.reduce((s, L) => s + Math.ceil(L / w), 0);
+
+let state, sidebarOpen, scrollBack, mode = "lazy", prevTopId, prevBottomId, lastStep, busy = false;
+let sceneRun = 0;
+
+function resetState(open, keepLog) {
+  sidebarOpen = open; scrollBack = 0; prevTopId = null; prevBottomId = null; lastStep = 0;
+  const w = open ? W_NARROW : W_WIDE;
+  state = ENTRIES.map((e) => ({ kind: "exact", w, count: foldCount(e, w) }));
+  if (!keepLog) document.getElementById("log").innerHTML = "";
+  log(`重置：侧栏${open ? "开" : "关"}（${w} 列），10 条目全部精确@${w}，共 ${mixedTotal()} 行`, "a");
+  pass("reset");
+}
+const width = () => (sidebarOpen ? W_NARROW : W_WIDE);
+const mixedTotal = () => state.reduce((s, x) => s + x.count, 0);
+const realTotal = () => ENTRIES.reduce((s, e) => s + foldCount(e, width()), 0);
+
+function iterPhys(e, w, cb) {
+  let p = 0;
+  for (let j = 0; j < e.lens.length; j++)
+    for (let r = 0; r < Math.ceil(e.lens[j] / w); r++) cb(j, r, p++);
+}
+
+/** 渲染帧：从尾部走账本定位窗口；滚到的旧宽条目当场重折（= 施工算法）。 */
+function pass(reasonLabel) {
+  const W = width();
+  const refolded = [];
+  const build = () => {
+    const need = scrollBack + STREAM_H;
+    let acc = 0;
+    const touched = [];
+    for (let i = ENTRIES.length - 1; i >= 0 && acc < need; i--) {
+      if (state[i].kind === "stale" || state[i].w !== W) {
+        const nw = foldCount(ENTRIES[i], W);
+        refolded.push({ i, old: state[i].count, nw });
+        state[i] = { kind: "exact", w: W, count: nw };
+      }
+      touched.push({ i, fromTail: acc });
+      acc += state[i].count;
+    }
+    const win = [];
+    for (const t of touched)
+      iterPhys(ENTRIES[t.i], W, (j, r, p) => {
+        const g = t.fromTail + p;
+        if (g >= scrollBack && g < scrollBack + STREAM_H)
+          win.push({ e: t.i, j, r, id: `${t.i}:${j}:${r}` });
+      });
+    return win;
+  };
+  let win = build();
+  let clamped = false;
+  const maxScroll = Math.max(0, mixedTotal() - STREAM_H);
+  if (scrollBack > maxScroll) { scrollBack = maxScroll; clamped = true; win = build(); }
+
+  // 漂移读数：上翻比上一帧顶行（无漂移应在第 STREAM_H-步长 行）、下翻比上一帧底行（应在第 步长 行）
+  let driftText = "—";
+  if (reasonLabel !== "reset" && lastStep !== 0) {
+    const up = lastStep > 0;
+    const ref = up ? prevTopId : prevBottomId;
+    if (ref !== null) {
+      const idx = win.findIndex((l) => l.id === ref);
+      if (idx < 0) driftText = `<span class="bad">参照行已滚出窗口</span>（跳转后不比较）`;
+      else {
+        const expect = up ? STREAM_H - 1 - lastStep : -lastStep;
+        const extra = up ? expect - idx : idx - expect;
+        driftText = extra === 0
+          ? `<b>0 行——内容一格不错</b>`
+          : `<span class="bad">${extra > 0 ? "+" : ""}${extra} 行（${extra > 0 ? "比按键多跳" : "比按键少走"} ${Math.abs(extra)} 行）</span>`;
+      }
+    }
+  }
+  prevTopId = win.length ? win[win.length - 1].id : null;
+  prevBottomId = win.length ? win[0].id : null;
+  render(win, refolded, driftText, clamped);
+  return { refolded, win, clamped };
+}
+
+function ctrlT() {
+  sidebarOpen = !sidebarOpen;
+  const W = width();
+  log(`Ctrl + T：侧栏${sidebarOpen ? "开" : "关"}，流区 → ${W} 列`, "a");
+  if (mode === "lazy") {
+    for (const s of state) if (s.w !== W) s.kind = "stale";
+    lastStep = 0; prevTopId = null; prevBottomId = null; // 跨重折不比较顶行（重排后窗口内容必然不同，非漂移）
+    const { refolded } = pass("ctrlT");
+    log(`懒重折：本帧只重折视口触及的 ${refolded.length} 条（${refolded.map((r) => `轮${r.i + 1} ${r.old}→${r.nw}`).join("、") || "无"}）——秒开`, "r");
+  } else {
+    busy = true; setControls();
+    document.getElementById("freeze").classList.remove("hidden");
+    document.getElementById("freezeDetail").textContent =
+      `${ENTRIES.length} 个条目 · ${mixedTotal()} 行全部按新宽重折`;
+    setTimeout(() => {
+      state = ENTRIES.map((e) => ({ kind: "exact", w: W, count: foldCount(e, W) }));
+      document.getElementById("freeze").classList.add("hidden");
+      busy = false; setControls();
+      lastStep = 0; prevTopId = null; prevBottomId = null;
+      pass("ctrlT");
+      log(`全量重折完成：几何立刻精确，代价 = 刚才那一下假死`, "k");
+    }, 900);
+  }
+}
+
+const pageUp = () => { if (busy) return; scrollBack += WHEEL; lastStep = WHEEL; const p = pass("scroll"); if (p.refolded.length) log(`上翻：重折 ${p.refolded.map((r) => `轮${r.i + 1} ${r.old}→${r.nw}`).join("、")}`, "r"); };
+const pageDn = () => { if (busy) return; scrollBack = Math.max(0, scrollBack - WHEEL); lastStep = -WHEEL; const p = pass("scroll"); };
+const jumpTop = () => { if (busy) return; scrollBack = Math.max(0, mixedTotal() - STREAM_H); lastStep = 0; prevTopId = null; prevBottomId = null; const p = pass("jump"); if (p.refolded.length) log(`跳顶：一帧重折途经 ${p.refolded.length} 条（长拖的代价 = 按拖过距离付）`, "r"); };
+const toEnd = () => { if (busy) return; scrollBack = 0; lastStep = 0; prevTopId = null; prevBottomId = null; pass("jump"); };
+
+/* ═══ 渲染 ═══════════════════════════════════════════════════════════════ */
+function log(msg, cls) {
+  const el = document.getElementById("log");
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = msg;
+  el.prepend(d);
+  while (el.children.length > 30) el.lastChild.remove();
+}
+
+function render(win, refolded, driftText, clamped) {
+  const W = width();
+  const mixed = mixedTotal(), real = realTotal();
+  const maxScroll = Math.max(0, mixed - STREAM_H);
+  const refoldSet = new Set((refolded || []).map((r) => r.i));
+  win = win || [];
+
+  document.getElementById("chipSb").textContent = sidebarOpen ? "开" : "关";
+  document.getElementById("chipW").textContent = W;
+  document.getElementById("chipSb2").textContent = `${scrollBack} / ${maxScroll}`;
+  document.getElementById("chipBusy").classList.add("hidden");
+  document.getElementById("drift").innerHTML = `顶行漂移读数：${driftText || "—"}`;
+
+  // 会话全景
+  const mm = document.getElementById("minimap");
+  mm.innerHTML = "";
+  let top = 0;
+  for (let i = 0; i < ENTRIES.length; i++) {
+    const h = Math.max(8, (state[i].count / mixed) * (360 - 20));
+    const b = document.createElement("div");
+    b.className = "block " + (state[i].kind === "stale" ? "stale" : "exact") + (refoldSet.has(i) ? " flash" : "");
+    b.style.top = top + "px"; b.style.height = (h - 2) + "px";
+    b.textContent = `轮${i + 1} · ${state[i].count}行${state[i].kind === "stale" ? " @旧宽" : ""}`;
+    mm.appendChild(b);
+    top += h;
+  }
+  const vp = document.createElement("div");
+  vp.className = "vpbox";
+  vp.style.height = Math.max(14, (STREAM_H / mixed) * (360 - 20)) + "px";
+  vp.style.bottom = (scrollBack / mixed) * (360 - 20) + "px";
+  mm.appendChild(vp);
+
+  // 滚动条
+  const th = document.getElementById("sbthumb");
+  const thH = Math.max(12, (STREAM_H / mixed) * 358);
+  th.style.height = thH + "px";
+  th.style.bottom = maxScroll > 0 ? (scrollBack / maxScroll) * (358 - thH) + "px" : "0px";
+
+  // 终端所见
+  const term = document.getElementById("term");
+  term.innerHTML = "";
+  for (let k = 0; k < STREAM_H; k++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const line = win[k];
+    if (!line) { row.innerHTML = `<span class="id"></span><span class="txt" style="color:var(--muted)">（已到顶，上方无内容）</span>`; }
+    else {
+      if (refoldSet.has(line.e)) row.classList.add("refold");
+      const fill = Math.min(ENTRIES[line.e].lens[line.j] - line.r * W, W);
+      row.innerHTML = `<span class="id">轮${line.e + 1}·L${line.j + 1}·${line.r + 1}</span><span class="txt">${"·".repeat(Math.max(4, Math.ceil(fill / 3)))}</span>`;
+    }
+    term.appendChild(row);
+  }
+
+  // 账本
+  const tb = document.getElementById("ledgerBody");
+  tb.innerHTML = "";
+  for (let i = 0; i < ENTRIES.length; i++) {
+    const tr = document.createElement("tr");
+    if (refoldSet.has(i)) tr.className = "changed";
+    const st = state[i].kind === "stale" ? `<span class="st-stale">旧宽@${state[i].w}</span>` : `<span class="st-exact">精确@${state[i].w}</span>`;
+    const real = foldCount(ENTRIES[i], W);
+    tr.innerHTML = `<td>轮次 ${i + 1}</td><td>${st}</td><td>${state[i].count}</td><td>${real}${real !== state[i].count ? ` <span style="color:var(--err)">差${state[i].count - real > 0 ? "+" : ""}${state[i].count - real}</span>` : ""}</td>`;
+    tb.appendChild(tr);
+  }
+
+  // 关键数字
+  const err = mixed - real;
+  document.getElementById("nums").innerHTML = `
+    <div class="row"><span>混合总行数（滚动几何用）</span><b>${mixed}</b></div>
+    <div class="row"><span>真实总行数@${W} 列</span><b>${real}</b></div>
+    <div class="row"><span>几何误差（混合 − 真实）</span><b class="${err === 0 ? "err-zero" : "err-pos"}">${err > 0 ? "+" : ""}${err}${err === 0 ? "（已收敛）" : ""}</b></div>
+    <div class="row"><span>scrollBack / 最大可滚</span><b>${scrollBack} / ${maxScroll}${clamped ? "（钳到顶）" : ""}</b></div>
+    <div class="row"><span>本帧重折条目</span><b>${(refolded || []).length}</b></div>`;
+}
+
+function setControls() {
+  for (const b of document.querySelectorAll(".controls button")) b.disabled = busy;
+}
+
+/* ═══ 三幕引导 ═══════════════════════════════════════════════════════════ */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function caption(step, html) {
+  document.getElementById("caption").innerHTML = `<span class="step">${step}</span><br>${html}`;
+  await sleep(60);
+}
+const SCENES = {
+  1: [
+    ["幕一 · 1/4", `场景准备：侧栏开（流区 46 列），10 个条目全部按 46 列折好，共 207 行，视口贴在底部。先看<b>现状 · 全量重折</b>。`, async () => { mode = "full"; setModeSeg(); resetState(true, true); }],
+    ["幕一 · 2/4", `按 Ctrl + T 关侧栏——<b>现状的全部条目在下一帧从头重折</b>。几万行的会话，这一下就是几百毫秒假死（上面的遮罩是示意）。换来的是：几何从此恒精确。`, async () => { ctrlT(); await sleep(1300); }],
+    ["幕一 · 3/4", `换 <b>D8 · 懒重折</b>，同样的场景再来一次。`, async () => { mode = "lazy"; setModeSeg(); resetState(true, true); }],
+    ["幕一 · 4/4", `同一个 Ctrl + T：<b>秒开</b>——本帧只重折视口触及的 1 条（轮次 10：22→15 行）。屏外 9 条还挂着 46 列的旧行数（账本里橙色的「旧宽@46」），滚动几何暂时用混合数（误差 +65 行）。接下来两幕看这点误差什么时候咬人。`, async () => { ctrlT(); await sleep(500); }],
+  ],
+  2: [
+    ["幕二 · 1/6", `场景：懒模式，侧栏开（46 列）→ Ctrl + T 关掉（变 84 列）。屏外条目全是旧宽计数。现在开始滚轮上翻（一档 4 行）。`, async () => { mode = "lazy"; setModeSeg(); resetState(true, true); ctrlT(); await sleep(400); }],
+    ["幕二 · 2/6", `连续上翻。盯两个读数：<b>顶行漂移</b>（中列顶部）和<b>几何误差</b>（右列）。`, async () => { for (let k = 0; k < 3; k++) { pageUp(); await sleep(650); } }],
+    ["幕二 · 3/6", `注意：滚到的条目当场重折（⚡ 橙底），账本从旧宽转精确，误差 +65 → +60 → +50 一路收敛——但<b>顶行漂移恒为 0：内容一格不错</b>。`, async () => { for (let k = 0; k < 3; k++) { pageUp(); await sleep(650); } }],
+    ["幕二 · 4/6", `这是桌面验证推翻预判的地方：<b>滚轮渐进滚动零内容漂移</b>——因为窗口从尾部走账本定位，路径上全是精确计数；旧宽计数只在「还没走到的地方」。`, async () => { for (let k = 0; k < 3; k++) { pageUp(); await sleep(600); } }],
+    ["幕二 · 5/6", `用户能看见的唯一痕迹：<b>滚动条拇指</b>随误差收敛悄悄轻移（左列蓝条），以及全景图里橙色块逐个变绿（已收敛到 +32）。`, async () => { for (let k = 0; k < 3; k++) { pageUp(); await sleep(550); } }],
+    ["幕二 · 6/6", `结论①：<b>方案里担心的「翻页多跳几行」不发生</b>。D8 对滚轮滚动完全无感，代价集中在下一幕——跳转。`, async () => {}],
+  ],
+  3: [
+    ["幕三 · 1/5", `反方向：懒模式，侧栏关（84 列）→ Ctrl + T 打开（变 46 列）。这次旧宽计数<b>偏小</b>（宽列数少、窄列数多），几何低估。`, async () => { mode = "lazy"; setModeSeg(); resetState(false, true); ctrlT(); await sleep(400); }],
+    ["幕三 · 2/5", `拖滚动条<b>跳到顶</b>。落点 scrollBack = 130——但真正的顶在 195：<b>没到顶</b>！而且滚动条此刻显示的「最大可滚 181」本身也还是低估的。跳转用的是低估的混合总数。`, async () => { jumpTop(); await sleep(900); }],
+    ["幕三 · 3/5", `这一帧还顺手重折了途经的 7 个条目（账本橙转绿，误差 −65 → −14）——<b>长跳的代价 = 按拖过的距离付</b>，拖到顶 = 最坏接近全量一次（但只在显式跳转时发生，滚轮永远只付一档）。`, async () => { await sleep(400); }],
+    ["幕三 · 4/5", `继续上翻：再翻 7 档时轮次 2 转精确、最大可滚解锁一截（181 → 189）；再翻 12 档时轮次 1 也转精确，<b>误差归零</b>，几步后贴到真正的顶（194 / 195）。`, async () => { for (let k = 0; k < 16; k++) { pageUp(); await sleep(240); } }],
+    ["幕三 · 5/5", `结论②：D8 的真实代价面 = <b>跳转落点偏短（低估方向）＋跳转帧一批重折</b>。若嫌烦，实施备选 = 宽度变化时对旧宽条目按新宽做一遍<b>纯算术重估</b>（只算行数不折行，微秒级），误差可压到个位数——已作为 T5 的备选小活记入方案。`, async () => {}],
+  ],
+};
+async function runScene(n) {
+  sceneRun++;
+  const my = sceneRun;
+  for (const b of document.querySelectorAll(".scenes button")) b.disabled = true;
+  for (const [step, html, act] of SCENES[n]) {
+    if (my !== sceneRun) return;
+    await caption(step, html);
+    await act();
+    await sleep(1250);
+  }
+  for (const b of document.querySelectorAll(".scenes button")) b.disabled = false;
+}
+document.querySelectorAll(".scenes button[data-scene]").forEach((b) =>
+  b.addEventListener("click", () => runScene(Number(b.dataset.scene))));
+document.getElementById("sceneStop").addEventListener("click", () => { sceneRun++; for (const b of document.querySelectorAll(".scenes button")) b.disabled = false; caption("STOPPED", "引导已停止，可继续自由把玩或重开一幕。"); });
+
+/* ═══ 控件与键盘 ════════════════════════════════════════════════════════ */
+function setModeSeg() {
+  document.getElementById("mFull").classList.toggle("on", mode === "full");
+  document.getElementById("mLazy").classList.toggle("on", mode === "lazy");
+}
+document.getElementById("mFull").onclick = () => { mode = "full"; setModeSeg(); log("切换模式：现状 · 全量重折", "a"); };
+document.getElementById("mLazy").onclick = () => { mode = "lazy"; setModeSeg(); log("切换模式：D8 · 懒重折", "a"); };
+document.getElementById("btnT").onclick = () => !busy && ctrlT();
+document.getElementById("btnUp").onclick = pageUp;
+document.getElementById("btnDn").onclick = pageDn;
+document.getElementById("btnHome").onclick = jumpTop;
+document.getElementById("btnEnd").onclick = toEnd;
+document.getElementById("btnReset").onclick = () => { sceneRun++; resetState(true); caption("READY", "场景已重置。"); };
+window.addEventListener("keydown", (e) => {
+  if (e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); if (!busy) ctrlT(); }
+  else if (e.key === "PageUp") { e.preventDefault(); pageUp(); }
+  else if (e.key === "PageDown") { e.preventDefault(); pageDn(); }
+  else if (e.key === "Home") { e.preventDefault(); jumpTop(); }
+  else if (e.key === "End") { e.preventDefault(); toEnd(); }
+});
+
+resetState(true);
+</script>
+</body>
+</html>
