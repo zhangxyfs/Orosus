@@ -95,7 +95,7 @@
   .backdrop { position: absolute; inset: 0; background: rgba(4,8,6,.62); display: flex; align-items: center; justify-content: center; z-index: 10; }
   .backdrop.hidden { display: none; }
   .modal {
-    width: 760px; height: 540px;
+    width: min(920px, calc(100% - 48px)); height: 540px;   /* 2026-09-29 走查加宽：760 底部键位区折行、下缘文字被裁 */
     background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px;
     display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55);
   }
@@ -114,11 +114,11 @@
     border-radius: 4px; padding: 1px 7px; color: var(--fg);
   }
   .key.hint-accent { border-color: #2d5546; color: var(--accent); }
-  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); white-space: nowrap; }
   .foot-item.off { opacity: .38; }
   .foot-item .why { color: var(--warn); font-size: 12px; }
   .foot-spacer { flex: 1; }
-  .foot-note { color: #5c6b62; font-size: 11.5px; }
+  .foot-note { color: #5c6b62; font-size: 11.5px; white-space: nowrap; }
 
   .lead { color: var(--muted); margin: 0 0 10px; }
   .stat { display: flex; gap: 22px; margin: 6px 0 10px; }
@@ -142,8 +142,8 @@
   .prow.checked .chk { visibility: visible; }
   .prow .box { color: #5c6b62; flex: none; }
   .prow.checked .box { color: var(--accent); }
-  .prow .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
-  .prow .time { color: var(--muted); flex: none; font-size: 12px; }
+  .prow .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  /* 标题永不折行：超宽省略截断 */
+  .prow .time { color: var(--muted); flex: none; font-size: 12px; white-space: nowrap; }                 /* 时间恒右对齐，不被标题顶动 */
   .pagebar { display: flex; align-items: center; gap: 10px; margin-top: 8px; color: #5c6b62; font-size: 11.5px; }
   .pagebar .flex { flex: 1; }
 
@@ -325,7 +325,7 @@ function renderPrompt() {
       <div class="s"><b>${fmt(TOTAL_EVENTS)}</b><span>条事件</span></div>
       <div class="s"><b>${DB_SIZE}</b><span>备份库大小</span></div>
     </div>
-    <p class="lead">检测到消息备份数据库（backup.sqlite），但本地会话目录（~/.orosus/sessions）是空的——比如目录被误删、或你换了一台机器。</p>
+    <p class="lead">检测到消息备份数据库（backup.sqlite），但本地会话目录（~/.orosus/sessions）是空的——比如目录被误删、或被清理工具清空。</p>
     <div class="feat"><span class="dot">◆</span><div class="t"><b>恢复什么</b><span>——把备份里的事件流重建成 jsonl 会话文件（子代理对话一并恢复），/sessions 回看、resume 照常可用。</span></div></div>
     <div class="feat"><span class="dot">◆</span><div class="t"><b>不碰什么</b><span>——备份数据库本身只读不动；jsonl 仍是唯一主存储，恢复完照常双写。</span></div></div>
     <div class="feat"><span class="dot">◆</span><div class="t"><b>可挑选</b><span>——下一步可以按空格多选要恢复的会话，也可以 Alt + A 一键全选。</span></div></div>`;
@@ -355,9 +355,8 @@ function renderList() {
     <div class="plist">${rows}</div>
     <div class="pagebar"><span>已选 <b style="color:var(--accent)">${n}</b> / ${SESSIONS.length} 场</span><span class="flex"></span>
       <span>↑ ↓ 移动 · Space 勾选 · PgUp / PgDn 翻页</span></div>
-    <div class="modal-notice ${S.notice && S.notice.startsWith("已") ? "ok" : ""}">${S.notice}</div>`;
+    <div class="modal-notice ${S.notice && S.notice.startsWith("已全") ? "ok" : ""}">${S.notice}</div>`;
   foot([
-    { key: "Space", label: "勾选 / 取消", on: true },
     { key: "Alt + A", label: "全选 / 全不选", on: true },
     { key: "Ctrl + N", label: "开始恢复", on: n > 0, why: n > 0 ? "" : "先勾选至少一场" },
     { key: "Esc", label: "返回", on: true },
@@ -491,10 +490,11 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "ArrowUp")   { e.preventDefault(); S.sel = Math.max(S.sel - 1, 0); render(); return; }
     if (e.key === "PageDown")  { e.preventDefault(); S.sel = Math.min(S.sel + VIS, SESSIONS.length - 1); render(); return; }
     if (e.key === "PageUp")    { e.preventDefault(); S.sel = Math.max(S.sel - VIS, 0); render(); return; }
-    if (e.key === " ") {                                                       // Space：勾选 / 取消当前行
+    if (e.key === " ") {                                                       // Space：勾选 / 取消当前行（计数由页内「已选 N」行报，notice 不双报）
       e.preventDefault();
-      if (S.checked.has(S.sel)) { S.checked.delete(S.sel); S.notice = `已取消「${SESSIONS[S.sel].t}」`; }
-      else { S.checked.add(S.sel); S.notice = `已勾选 ${S.checked.size} 场`; }
+      if (S.checked.has(S.sel)) S.checked.delete(S.sel);
+      else S.checked.add(S.sel);
+      S.notice = "";
       render(); return;
     }
     if (altA) {                                                                 // Alt + A：全选 / 全不选（两段式——防误触发长任务）
