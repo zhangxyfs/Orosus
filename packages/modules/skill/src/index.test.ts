@@ -448,3 +448,13 @@ describe("MI-10 CRLF frontmatter（Windows/互操作生态——别家工具写�
     expect(s2.sections[0]!.text).toContain("bare-end"); // 收尾 `---` 后无换行：\r?\n? 全可选——照常解析
   });
 });
+
+describe("skill 工具行显示名 label（2026-09-29 用户走查报「Used Load」不可辨——label 契约补齐）", () => {
+  it("skill__load 带 label「Skill_load」——工具行显示可辨，模型/审批面 name 不变", async () => {
+    const { ctx, tools } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const load = tools.find((t) => t.name === "skill__load")!;
+    expect(load).toBeDefined();
+    expect((load as unknown as { label?: string }).label).toBe("Skill_load");
+  });
+});
