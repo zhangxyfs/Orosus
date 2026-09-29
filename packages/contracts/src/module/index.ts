@@ -424,11 +424,15 @@ export interface SettingsService {
    * @param label - 会话名（截至 200 字符；空串合法 = 清名回未命名）。
    */
   setLabel(label: string): Promise<void>;
-  /** 开关侧栏（Ctrl+T 的程序化版本，持久化）。可选——行模式宿主无侧栏不装。 */
+  /** 开关侧栏（Ctrl+T 的程序化版本，持久化）。可选——行模式宿主无侧栏不装。
+   *  m5-render-perf T5 加宽 Promise<boolean>：true = 切换成功（幂等短路——已在目标态亦 true）；
+   *  false = 被拒或不可切（生成中 busy 拒绝；行模式无全屏 app）。消费方向后兼容（await 后
+   *  多一个值不破坏既有用法）；实现侧仅 main.ts 一处，kernel activate.ts 包装器自动透传。 */
   /**
    * @param visible - true = 显示右侧面板；false = 隐藏（Ctrl+T 同款，持久化；行模式宿主未装本口）。
+   * @returns true = 成功（含幂等）；false = 生成中被拒或无侧栏可切。
    */
-  setSidebar?(visible: boolean): Promise<void>;
+  setSidebar?(visible: boolean): Promise<boolean>;
   /** 读剪贴板文本。可选——剪贴板通道平台相关，宿主不支持就不装（模块判空降级）。 */
   readClipboard?(): Promise<string | undefined>;
 }

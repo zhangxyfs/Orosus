@@ -553,8 +553,9 @@ const settingsService: SettingsService = {
   },
   setLabel: (label) => h.setLabel(label),
   setSidebar: async (visible) => {
-    // 行模式无侧栏——静默无操作（契约可选口降级语义；全屏期 Ctrl+T 同款公共出口，m5 T11）
-    activeApp?.setSidebar(visible);
+    // 行模式无侧栏 = false（无全屏 app 或被拒均 false——契约加宽 Promise<boolean>，m5-render-perf T5：
+    // 消费方向后兼容，模块拿到明确拒绝；kernel activate.ts 包装器自动透传返回值）
+    return activeApp?.setSidebar(visible) ?? false;
   },
   readClipboard: () => readClipboardText(),
 };
@@ -1692,7 +1693,10 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
     rows: () => process.stdout.rows ?? 24,
-    doc: () => dm.frameLines(streamW()),
+    // m5-render-perf T5 窗口化行源：全量整拷退役——streamW() 现值传入，宽度变化（Ctrl+T/resize）
+    // 经 DocModel.reconcile 键失配自动全量重折（D8 定案，几何立即全对）
+    docTotal: () => dm.totalLines(streamW()),
+    docWindow: (start, count) => dm.frameWindow(streamW(), start, count),
     submit: (text) => {
       // /help（F5 二轮⑪）：只读翻页浮层（↑↓/PgUp/PgDn 翻页、Esc 关闭），不进命令管线不留气泡。
       // dock（2026-09-28 用户拍板）：贴输入框上缘 + 与输入框同宽同左缘——左右边框与输入框连成直线

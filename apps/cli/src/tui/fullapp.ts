@@ -65,7 +65,11 @@ export interface SlashItem {
 export interface FullAppIO {
 	columns(): number;
 	rows(): number;
-	doc(): string[];
+	/** 流区行源（m5-render-perf T5 窗口化：旧 doc(): string[] 全量整拷退役）——
+	 *  docTotal = 总行数（含将来并入的尾行由 fullapp 侧加 1），docWindow = 第 start 行起最多
+	 *  count 行（短返回合法）。main.ts 侧接 DocModel.totalLines/frameWindow。 */
+	docTotal(): number;
+	docWindow(start: number, count: number): string[];
 	submit(text: string): void;
 	/** 提交闸门（批④——busy 期拒收档拦在回车前）：返回拒因 = 拦截（输入保留、不进历史、不写流区，
 	 *  拒因尾行瞬显自消）；undefined = 放行。宿主侧复用 inflight + 拒收名单单一数据源。 */
@@ -203,6 +207,7 @@ const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻
 const WHEEL_STEP = 1; // 滚轮每格滚动行数（m5 鼠标批设计空白 1——kimi 生产默认同款 tui-alt-screen.ts:264 ?? 1）
 const ALT_WHEEL_MULTIPLIER = 5; // Alt+滚轮加速倍数（设计空白 2——kimi :75 同名常量同值）
 const DOUBLE_CLICK_INTERVAL_MS = 500; // 双击判定窗口（m5 鼠标批 T6 设计空白 10——kimi :79 同值）
+const SIDEBAR_SWITCH_COOLDOWN_MS = 500; // 侧栏切换冷却（m5-render-perf T5 护栏②——D8 设计空白 #9：连击静默吞）
 
 /** 滚动条几何（m5 鼠标批 T10——kimi layout.ts:285-292 getScrollbarGeometry 同式，设计空白 7/8）：
  *  不超一屏 undefined；拇指最小高 2；拇指顶 = round(首行/(总−视口) × (视口−拇指高))。
@@ -553,20 +558,32 @@ export class FullApp {
 	}
 
 	/** 侧栏开关公共出口（m5 T11，候选 A-4「Ctrl+T 的程序化版本」）：toggle + 持久化回调 + 重画三件套——
-	 *  Ctrl+T 与设置服务（ctx.settings.setSidebar）两处共用（原先内联在 onKey 无公共出口）。幂等短路：已在目标态时不发回调不重画。 */
+	 *  Ctrl+T 与设置服务（ctx.settings.setSidebar）两处共用。
+	 *  m5-render-perf T5（D8 两道护栏 + 契约加宽 Promise<boolean>）：
+	 *  - busy 拒绝：生成中返回 false（宽度变化全量重折的尖峰削频——键路 Ctrl+T 预检发 toast）；
+	 *  - 500ms 冷却：最近一次成功切换后冷却期内重复切换静默忽略（不发 toast——连击多为误操作）；
+	 *  - 幂等短路：已在目标态 = 无事可做即已达成，返回 true。 */
+
 	/** 重画一帧（m5 T12：设置服务切主题后的刷帧口——新渲染面用新色，历史行旧色不重刷是预期披露）。 */
 	repaint(): void {
 		this.scheduler.requestImmediateRender();
 	}
 
-	setSidebar(visible: boolean): void {
+	setSidebar(visible: boolean): boolean {
 		const s = this.state;
-		if (s.sidebarVisible === visible) return;
+		if (s.busy) return false; // 护栏①：生成中拒绝（想调宽度等本轮结束）
+		if (s.sidebarVisible === visible) return true; // 幂等短路亦 true
+		if (Date.now() - this.lastSidebarSwitch < SIDEBAR_SWITCH_COOLDOWN_MS) return false; // 护栏②：冷却静默吞
 		s.sidebarVisible = visible; // 显示/隐藏右侧两个面板（用户拍板——比数据流互切有意义）
 		if (!s.sidebarVisible) s.focusIdx = 0; // 面板隐藏——焦点回输入区
+		this.lastSidebarSwitch = Date.now();
 		this.io.onSidebarChange?.(s.sidebarVisible); // 持久化（F5 十二轮②）
 		this.scheduler.requestImmediateRender();
+		return true;
 	}
+
+	/** 侧栏切换冷却时间戳（护栏②——设计空白 #9：500ms）。 */
+	private lastSidebarSwitch = Number.NaN;
 
 	/** /compact 执行期标志（2026-09-23 用户拍板）：置位时 busy spinner 切「上下文压缩中…」石青（info）色。 */
 	setCompacting(b: boolean): void {
@@ -1180,8 +1197,8 @@ export class FullApp {
 				return;
 			}
 		} else {
-			const { streamH, doc } = this.layoutFrame();
-			const maxScroll = Math.max(0, doc.length - streamH);
+			const { streamH, dmTotal } = this.layoutFrame();
+			const maxScroll = Math.max(0, dmTotal - streamH);
 			const before = s.scrollBack;
 			s.scrollBack = Math.max(0, Math.min(maxScroll, s.scrollBack - autoScrollDir));
 			if (s.scrollBack === before) {
@@ -1221,10 +1238,10 @@ export class FullApp {
 			if (thumb === undefined) return undefined;
 			return { total: pu.lines.length, viewportH: page, first: sc, trackTop: geo.row + 1, thumb };
 		}
-		const { streamH, start, doc } = this.layoutFrame();
-		const thumb = thumbGeometry(streamH, doc.length, start);
+		const { streamH, start, dmTotal } = this.layoutFrame();
+		const thumb = thumbGeometry(streamH, dmTotal, start);
 		if (thumb === undefined) return undefined;
-		return { total: doc.length, viewportH: streamH, first: start, trackTop: 0, thumb };
+		return { total: dmTotal, viewportH: streamH, first: start, trackTop: 0, thumb };
 	}
 
 	/** 轨道命中判定（T10）：指针在轨道列（主窗 = leftW−1 / 查看窗 = 盒内右列）且在轨道行范围内。 */
@@ -1290,8 +1307,8 @@ export class FullApp {
 			}
 			return;
 		}
-		const { streamH, doc } = this.layoutFrame();
-		this.state.scrollBack = Math.max(0, Math.min(Math.max(0, doc.length - streamH), doc.length - streamH - first));
+		const { streamH, dmTotal } = this.layoutFrame();
+		this.state.scrollBack = Math.max(0, Math.min(Math.max(0, dmTotal - streamH), dmTotal - streamH - first));
 	}
 
 	/** 拖动点钳制（T8）：按当前选区 scope 钳在对应窗口边界——view 钳查看窗盒、main 钳主流区。 */
@@ -1309,13 +1326,15 @@ export class FullApp {
 		return p === undefined ? undefined : { scope: "main", ...p };
 	}
 
-	/** 选区行文本（T8 scope 感知）：main → doc（含 tailLine）；view → pu.lines。 */
+	/** 选区行文本（T8 scope 感知）：main → doc（含 tailLine）；view → pu.lines。
+	 *  窗口化（T5）：doc 是窗口局部数组——全局下标 − start 取局部（窗口外回退空串）。 */
 	private selLineText(scope: "main" | "view", idx: number): string {
 		if (scope === "view") {
 			const pu = this.pendingUi;
 			return pu?.kind === "view" ? (pu.lines[idx] ?? "") : "";
 		}
-		return this.layoutFrame().doc[idx] ?? "";
+		const { start, doc } = this.layoutFrame();
+		return doc[idx - start] ?? "";
 	}
 
 	/** 指针 → 查看窗内容行列（T8）：viewGeo 盒内才命中；行索引随渲染 sc 同源（滚动平移天然稳定）；
@@ -1358,11 +1377,11 @@ export class FullApp {
 
 	/** 指针屏坐标 → doc 行列（T5——与 renderFrame 同源几何 layoutFrame；左内衬 2 列）。 */
 	private pointToDoc(x: number, y: number): { docIdx: number; col: number } | undefined {
-		const { streamH, start, doc, leftW } = this.layoutFrame();
+		const { streamH, start, dmTotal, leftW } = this.layoutFrame();
 		if (y < 0 || y >= streamH) return undefined; // 流区外（输入框/队列区）→ 不选
 		if (x >= leftW) return undefined; // 右侧面板与流区同 y 段，按 x 排除（侧栏按下 = 清选区不建幻影锚点）
 		const idx = start + y;
-		if (idx >= doc.length) return undefined;
+		if (idx >= dmTotal) return undefined;
 		return { docIdx: idx, col: Math.max(0, x - 2) };
 	}
 
@@ -1455,6 +1474,12 @@ export class FullApp {
 			return;
 		}
 		if (key === "ctrl+t") {
+			// m5-render-perf T5 护栏①（D8 定案）：生成中拒绝切换——宽度变化全量重折的尖峰削频，
+			// toast 明示（设计空白 #9 文案）；冷却期连击由 setSidebar 静默吞（预检后到达的都是真实切换意图）
+			if (s.busy) {
+				this.showToast("生成中不能切换侧栏，回答结束后再试");
+				return;
+			}
 			this.setSidebar(!s.sidebarVisible); // m5 T11：公共出口（设置服务共用——原内联三件套提纯）
 			return;
 		}
@@ -2342,10 +2367,13 @@ export class FullApp {
 
 	/** 流区几何与行源（m5 鼠标批 T5 提取——renderFrame 与鼠标映射 pointToDoc 共用一源，
 	 *  两处漂移即选区错位；方案级纪律）。输入框/队列区行数一并带出（streamH 的计算依赖，
-	 *  renderFrame 直接消费）。 */
+	 *  renderFrame 直接消费）。
+	 *  m5-render-perf T5 窗口化：不再持有全量行数组——dmTotal = 宿主总行数 + 尾行 1，
+	 *  doc = 视口窗口（streamH + 余量 streamH，设计空白 #6 视口×2），start 语义不变（全局首行
+	 *  下标）；消费面全部走「dmTotal 当总长 / doc 局部下标 = 全局下标 − start」。 */
 	private layoutFrame(): {
 		cols: number; rows: number; leftW: number; streamH: number; start: number;
-		doc: string[]; inputRows: InputRow[]; cursorPos: { row: number; col: number };
+		dmTotal: number; doc: string[]; inputRows: InputRow[]; cursorPos: { row: number; col: number };
 		showRows: number; queue: string[]; queueH: number;
 	} {
 		const cols = this.io.columns();
@@ -2365,12 +2393,21 @@ export class FullApp {
 		const queue = this.io.queueItems();
 		const queueH = queue.length === 0 ? 0 : queue.length + 1;
 		const streamH = rows - inputH - queueH;
-		const doc = [...this.io.doc(), this.tailLine()];
-		const maxScroll = Math.max(0, doc.length - streamH);
+		const dmTotal = this.io.docTotal() + 1; // + 尾行（spinner/待命——恒 1 行，tailLine 并入窗口尾）
+		const maxScroll = Math.max(0, dmTotal - streamH);
 		s.scrollBack = Math.min(s.scrollBack, maxScroll);
-		const end = doc.length - s.scrollBack;
+		const end = dmTotal - s.scrollBack;
 		const start = Math.max(0, end - streamH);
-		return { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH };
+		const doc = this.docRows(start, streamH * 2); // 视口 ×2 余量：滚动一帧内不重算边界（#6）
+		return { cols, rows, leftW, streamH, start, dmTotal, doc, inputRows, cursorPos, showRows, queue, queueH };
+	}
+
+	/** 行源窗口：dm 行 + 尾行并入（旧 [...io.doc(), tailLine()] 的窗口化形态——尾行恒 1 行，
+	 *  dm 短返回时补上）。 */
+	private docRows(start: number, count: number): string[] {
+		const out = this.io.docWindow(start, count);
+		if (out.length < count && start + out.length === this.io.docTotal()) out.push(this.tailLine());
+		return out;
 	}
 
 	/** 帧级错误边界（CTU-12 2026-09-28 code review）：主渲染帧每帧现调宿主回调（io.doc/panelData——其
@@ -2398,7 +2435,7 @@ export class FullApp {
 
 	private renderFrameInner(): number {
 		this.selectionGuard(); // T8：关窗首帧清 scope=view 残留选区
-		const { cols, rows, leftW, streamH, start, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
+		const { cols, rows, leftW, streamH, start, dmTotal, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
 		const s = this.state;
 
 		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
@@ -2414,8 +2451,8 @@ export class FullApp {
 		for (let r = 0; r < streamH; r++) {
 			// 消息区左内衬 2 列（2026-09-23 用户拍板：文字起始贴屏幕左缘难看）——docmodel 折行口径
 			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐；
-			// 选区行反白合入（m5 鼠标批 T5）
-			const raw = doc[start + r] === undefined ? "" : `  ${doc[start + r]!}`;
+			// 选区行反白合入（m5 鼠标批 T5）。窗口化（T5）：doc[r] 即全局 start+r 行（窗口从 start 起）
+			const raw = doc[r] === undefined ? "" : `  ${doc[r]!}`;
 			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
 		}
 		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指；文字截在 leftW−2、与轨道间
@@ -2423,7 +2460,7 @@ export class FullApp {
 		// 截断必须 truncateToWidth（严格语义——宽字符跨界整体让位）+ padToWidth 补齐恒宽：
 		// sliceByColumn 相交语义截点落汉字中间时行超 1 列、严格截断在汉字边界让位 1 列不补齐则
 		// 满宽行与短行差 1 列——两种不齐都会让分隔线/滚动条逐行错开即界面错乱（走查打回实锤）
-		const mthumb = thumbGeometry(streamH, doc.length, start);
+		const mthumb = thumbGeometry(streamH, dmTotal, start);
 		if (mthumb !== undefined) {
 			for (let r = 0; r < streamH; r++) {
 				const onThumb = r >= mthumb.top && r < mthumb.top + mthumb.height;

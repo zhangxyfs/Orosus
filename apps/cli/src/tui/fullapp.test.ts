@@ -52,7 +52,8 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Par
 	const io: FullAppIO = {
 		columns: () => cols,
 		rows: () => rows,
-		doc: () => docLines,
+		docTotal: () => docLines.length,
+		docWindow: (s, c) => docLines.slice(s, s + c),
 		submit: (t) => submitted.push(t),
 		// CTU-11：requestExit 死接口已三方删除（fullapp.ts 声明 + main.ts 实现 + 本桩）
 		requestCancel: () => actions.push("cancel"),
@@ -436,7 +437,9 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 			{ type: "assistant/message", content: [{ kind: "text", text: "答一" }] },
 		], 80);
 		const r = rig();
-		r.io.doc = () => dm.frameLines(96); // loop 顶重建后 FullApp 的行源
+		// m5-render-perf T5：行源两口替换（旧 io.doc 整拷退役）
+		r.io.docTotal = () => dm.totalLines(96);
+		r.io.docWindow = (s, c) => dm.frameWindow(96, s, c);
 		r.app.start();
 		await flush();
 		const frame = stripAnsi(r.output.buf);
@@ -1676,7 +1679,11 @@ describe("侧栏开关公共出口（m5 T11——Ctrl+T 与设置服务共用，
 		expect(changes).toEqual([false]);
 		app.setSidebar(false); // 幂等短路：不再回调
 		expect(changes).toEqual([false]);
-		app.setSidebar(true); // 设置服务路径同款出口
+		app.setSidebar(true); // 冷却内（T5 护栏②——500ms 连击静默吞）
+		await flush();
+		expect(changes).toEqual([false]);
+		await flush(600); // 过冷却再切——设置服务路径同款出口
+		app.setSidebar(true);
 		await flush();
 		expect(changes).toEqual([false, true]);
 	});
@@ -2852,7 +2859,8 @@ describe("renderFrame 帧级错误边界（CTU-12 回归钉 2026-09-28——主�
 		const logs: string[] = [];
 		let boom = true;
 		const { app, output } = rig(["恢复后的内容"], 100, 30, {
-			doc: () => { if (boom) throw new Error("宿主 doc 炸了"); return ["恢复后的内容"]; },
+			docTotal: () => { if (boom) throw new Error("宿主 doc 炸了"); return 1; },
+			docWindow: (): string[] => { if (boom) throw new Error("宿主 doc 炸了"); return ["恢复后的内容"]; },
 			logWarn: (code) => logs.push(code),
 		});
 		app.start();
@@ -2862,6 +2870,114 @@ describe("renderFrame 帧级错误边界（CTU-12 回归钉 2026-09-28——主�
 		boom = false;
 		await flush(1100); // 1s 心跳重绘驱动下一帧——宿主恢复即回
 		expect(stripAnsi(output.buf)).toContain("恢复后的内容");
+		app.stop();
+	});
+});
+
+describe("fullapp 窗口化行源 + 侧栏护栏（m5-render-perf T5——D8 定案两道护栏 + 契约加宽）", () => {
+	const bigDoc = Array.from({ length: 200 }, (_, i) => `行 ${String(i).padStart(3, "0")} · 唯一标记 m${i}x`);
+
+	it("① 整帧等价：窗口行源拼屏行序正确（scrollBack=0 尾部跟随 / 中部滚动两态——标记有序覆盖验证 start 换算）", async () => {
+		// 窗口化后屏行 = doc[r]（窗口局部下标，窗口从 start 起）——若 start 换算错位/漏行，
+		// 下列「标记按行序严格递增出现在写流」断言必红（每行唯一标记 m<N>x）。
+		// streamH = 30 −（1+3）− 0 = 26；total = 200 + 尾行 1 = 201。
+		const assertOrdered = (frame: string, from: number, to: number): void => {
+			let last = -1;
+			for (let i = from; i <= to; i++) {
+				const p = frame.indexOf(`m${i}x`);
+				expect(p, `行 ${i} 的标记应在屏上且晚于前行`).toBeGreaterThan(last);
+				last = p;
+			}
+		};
+		// 跟随（scrollBack=0）：首帧即尾部 26 行（175-200 为尾行让位——尾行 200 是 tailLine；175..199 为 doc 行）
+		const follow = rig(bigDoc, 100, 30, { docTotal: () => bigDoc.length, docWindow: (s, c) => bigDoc.slice(s, s + c) });
+		follow.app.start();
+		await flush();
+		follow.app.stop();
+		assertOrdered(stripAnsi(follow.output.buf), 175, 199);
+		// 中部滚动（scrollBack=120）：start = 201 − 120 − 26 = 55 → 55..80
+		const mid = rig(bigDoc, 100, 30, { docTotal: () => bigDoc.length, docWindow: (s, c) => bigDoc.slice(s, s + c) });
+		mid.app.start();
+		await flush();
+		mid.app.stateRef.scrollBack = 120;
+		mid.app.repaint();
+		await flush();
+		mid.app.stop();
+		const midFrame = stripAnsi(mid.output.buf);
+		assertOrdered(midFrame, 55, 80);
+		expect(midFrame).not.toContain("m081x"); // 窗口精确到 start+streamH−1：越界行不上屏
+		// 窗口请求量被钳制：docWindow 收到的 count ≤ streamH×2（视口余量 #6）且 start 与滚动位置一致
+		const calls: Array<{ s: number; c: number }> = [];
+		const probe = rig(bigDoc, 100, 30, {
+			docTotal: () => bigDoc.length,
+			docWindow: (s, c) => {
+				calls.push({ s, c });
+				return bigDoc.slice(s, s + c);
+			},
+		});
+		probe.app.start();
+		await flush();
+		probe.app.stop();
+		expect(calls.length).toBeGreaterThan(0);
+		for (const { s, c } of calls) {
+			expect(c).toBeLessThanOrEqual(26 * 2); // 每帧物化行数 ≤ 视口 ×2
+			expect(s).toBeGreaterThanOrEqual(0);
+		}
+	});
+
+	it("② 宽度变化后几何立即精确：DocModel 真例行源 + setSidebar 切换——dmTotal == 新宽全量长度、滚动钳制无混合态", async () => {
+		const { DocModel } = await import("./docmodel.ts");
+		const dm = new DocModel();
+		for (let i = 0; i < 60; i++) dm.pushLine(`历史行 ${i} ${"内容".repeat(i % 20)}`); // 多宽度敏感行
+		const w = (): number => 96; // 简化：dm 按 96 折行（窗口化只验几何链路——宽度重折本身 T4 ②已钉）
+		const { app } = rig([], 100, 30, {
+			docTotal: () => dm.totalLines(w()),
+			docWindow: (s, c) => dm.frameWindow(w(), s, c),
+		});
+		app.start();
+		await flush();
+		app.stateRef.scrollBack = 5;
+		app.setSidebar(false); // 宽度变化（左栏变宽）——护栏下正常切换
+		await flush(600); // 冷却余量
+		// 几何恒精确：fullapp 侧总长 = dm.totalLines + 尾行 1，与新宽全量一致（无混合计数）
+		const dmN = dm.totalLines(w());
+		const probe = app.stateRef.scrollBack;
+		expect(probe).toBeLessThanOrEqual(Math.max(0, dmN + 1 - (30 - 8))); // 钳制按新几何（streamH≈rows-inputH）
+		expect(dm.frameWindow(w(), 0, 1_000_000).length).toBe(dmN); // 窗口全量 == totalLines（自洽）
+		app.stop();
+	});
+
+	it("③ busy 期双口被拒：Ctrl+T 键路 toast、setSidebar 返回 false；非 busy 期正常切换", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30);
+		app.start();
+		await flush();
+		app.setBusy(true);
+		await flush();
+		input.emit("data", "\x14"); // Ctrl+T
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(true); // 没切
+		expect(stripAnsi(output.buf)).toContain("生成中不能切换侧栏"); // toast 文案（设计空白 #9）
+		expect(app.setSidebar(false)).toBe(false); // 模块路径：明确拒绝
+		expect(app.stateRef.sidebarVisible).toBe(true);
+		app.setBusy(false);
+		await flush(600); // 冷却无关（busy 期未成功切换过）——直接切
+		expect(app.setSidebar(false)).toBe(true); // 非 busy 正常
+		expect(app.stateRef.sidebarVisible).toBe(false);
+		app.stop();
+	});
+
+	it("④ 500ms 冷却：第二次切换被吞、超过冷却恢复；幂等短路返回 true（契约定值）", async () => {
+		const changes: boolean[] = [];
+		const { app } = rig(["# hi"], 100, 30, { onSidebarChange: (v) => changes.push(v) });
+		app.start();
+		await flush();
+		expect(app.setSidebar(false)).toBe(true); // 成功
+		expect(app.setSidebar(true)).toBe(false); // 冷却吞
+		expect(app.setSidebar(false)).toBe(true); // 幂等短路 = 已在目标态亦 true（无事可做即已达成）
+		expect(changes).toEqual([false]); // 幂等不再回调
+		await flush(600);
+		expect(app.setSidebar(true)).toBe(true); // 过冷却恢复
+		expect(changes).toEqual([false, true]);
 		app.stop();
 	});
 });
