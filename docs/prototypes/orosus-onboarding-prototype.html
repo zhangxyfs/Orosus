@@ -97,7 +97,7 @@
   .tui-body.onboarding .stream, .tui-body.onboarding .side { filter: saturate(.75) brightness(.82); }
 
   .modal {
-    width: 760px; height: 540px;           /* 三页定高——防增删行走闪烁（浮层纪律）；v4.5 走查反馈放大 */
+    width: 760px; height: 540px;           /* 四页定高——防增删行走闪烁（浮层纪律）；v4.5 走查反馈放大；v5（m5b 批）加第四页 */
     background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px;
     display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55);
   }
@@ -174,7 +174,7 @@
 <body>
 
 <div class="notebar">
-  <b>走查说明</b> · 本页是「首次使用引导弹窗」交互原型：全程键盘操作——<kbd>↑</kbd><kbd>↓</kbd> 移动（输入态下可直接换行，草稿按行保留）、<kbd>Enter</kbd> 确认、<kbd>Space</kbd> 设为当前使用（第 2 页）、<kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页、<kbd>Ctrl + N</kbd> 下一步 / 完成引导（第 3 页）、<kbd>Ctrl + Q</kbd> 退出（仅第 1 页）。Ctrl + C 全程不占用（不与系统复制冲突）。
+  <b>走查说明</b> · 本页是「首次使用引导弹窗」交互原型：全程键盘操作——<kbd>↑</kbd><kbd>↓</kbd> 移动（输入态下可直接换行，草稿按行保留）、<kbd>Enter</kbd> 确认、<kbd>Space</kbd> 设为当前使用（第 2 页）、<kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页、<kbd>Ctrl + N</kbd> 下一步 / 完成引导（第 4 页）、<kbd>Ctrl + Q</kbd> 退出（仅第 1 页）。Ctrl + C 全程不占用（不与系统复制冲突）。第 4 页（消息备份，m5b 批新增）：三选一（默认目录 / 自定义目录… / 暂不备份），Enter 确认；选「自定义目录…」Enter 进入目录输入行（明文显示、只收目录），Backspace 删除 / 返回。
   浏览器可能吞掉 <kbd>Ctrl + N</kbd>/<kbd>Ctrl + Q</kbd>（保留键），此时用 <kbd>Alt + N</kbd>/<kbd>Alt + Q</kbd> 等效演示；真机 TUI 无此问题。
   触发条件：无 config.toml 或其解析损坏（现状是启动即崩，本批改为降级进引导）。
 </div>
@@ -262,11 +262,18 @@ const S = {
   page: 1, done: false, quit: false,
   p2: { sel: 0, pageIdx: 0, mode: "list", drafts: {}, configured: [], active: null, notice: "" },
   p3: { sel: 0, stage: "opts", keyOpt: null, provOpt: null, drafts: {}, chosen: null, model: null, notice: "" },
+  p4: { sel: 0, stage: "opts", draft: "", customDir: "", chosen: null, notice: "" },
 };
 const WEB_OPTS = [
   { id: "llm",   name: "LLM Web Search", desc: "默认 · 用已配置的模型联网搜索，无需任何 Key" },
   { id: "tavily",name: "Tavily",         desc: "专业搜索服务 · 需 API Key · tavily.com", url: "https://tavily.com" },
   { id: "brave", name: "Brave",          desc: "独立索引搜索 · 需 API Key · brave.com/search/api", url: "https://brave.com/search/api" },
+];
+/* 第 4 页选项（m5b 消息备份批）——目录语义与 /settings 备份弹窗一致：只收目录，文件名固定 backup.sqlite */
+const BACKUP_OPTS = [
+  { id: "default", name: "使用默认目录（推荐）", desc: "~/.orosus/db/backup.sqlite · 零输入回车即开" },
+  { id: "custom",  name: "自定义目录…",          desc: "备份库放到你指定的目录（如 D:\\backups）" },
+  { id: "skip",    name: "暂不备份",             desc: "之后随时可在 /settings → 消息备份 开启" },
 ];
 /* 演示用模型清单（实机 = 该提供商的在线模型目录，经既有目录管道拉取；拉取失败回退手动输入行——SW-24） */
 const MODELS = {
@@ -291,8 +298,8 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">"
 /* 提示行三色语义（v4.5 走查拍板）：成功回执青玉、引导/拒绝提示暖金（基色）、真错误赭石——成功反馈永不用红 */
 function noticeClass(text) {
   if (!text) return "";
-  if (/已写入|已配置/.test(text)) return "ok";
-  if (/不能为空/.test(text)) return "err";
+  if (/已写入|已配置|已选择/.test(text)) return "ok";
+  if (/不能为空|只填目录/.test(text)) return "err";
   return "";
 }
 
@@ -430,14 +437,45 @@ function renderP3() {
   n.textContent = p.notice;
   const ready = p.chosen !== null;
   foot([
-    { key: "Ctrl + N", label: "完成引导", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" },
+    { key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" },
+  ]);
+}
+
+/* ── 第 4 页 · 配置消息备份（m5b 批新增） ── */
+function renderP4() {
+  $("m-step").textContent = "引导 4 / 4";
+  $("m-title").textContent = "配置消息备份";
+  const p = S.p4;
+  let lead = `<p class="lead" style="margin-bottom:8px">开启后，每个会话的每条消息会同时抄送一份进备份数据库（jsonl 主存储不受影响，子代理对话一并入库）；之后随时可在 /settings → 消息备份 里修改或停用。</p>`;
+  const rows = BACKUP_OPTS.map((o, i) => `
+    <div class="prow ${i === p.sel ? "sel" : ""} ${p.chosen === o.id ? "done" : ""}">
+    <span class="ok">✓</span><span class="name">${o.name}</span><span class="env">${o.desc}</span></div>`).join("");
+  let bar = "↑ ↓ 移动 · Enter 选择";
+  if (p.stage === "dir") {
+    // 目录明文输入（非 Key 不掩码）；超宽单行截断保尾部——与 /settings 备份弹窗同规矩
+    const shown = p.draft.length > 34 ? "…" + p.draft.slice(-33) : p.draft;
+    lead += `<div class="keyline">
+      <div class="lab">备份目录（只填目录，文件名固定 backup.sqlite；留空回车 = 默认 ~/.orosus/db/）</div>
+      <div class="keybox">${esc(shown)}<span class="cur"></span></div></div>`;
+    bar = "Enter 确认 · Backspace 删除 / 返回";
+  }
+  $("m-body").innerHTML = `${lead}<div class="plist">${rows}</div>
+    <div class="pagebar"><span class="flex"></span><span>${bar}</span></div>`;
+  let n = $("m-body").querySelector(".modal-notice");
+  if (!n) { n = document.createElement("div"); n.className = "modal-notice"; $("m-body").appendChild(n); }
+  n.className = "modal-notice " + noticeClass(p.notice);
+  n.textContent = p.notice;
+  const ready = p.chosen !== null;
+  foot([
+    { key: "Ctrl + N", label: "完成引导", on: ready, why: ready ? "" : "先选一项——默认目录回车即开" },
   ]);
 }
 
 function render() {
   if (S.page === 1) renderP1();
   else if (S.page === 2) renderP2();
-  else renderP3();
+  else if (S.page === 3) renderP3();
+  else renderP4();
 }
 
 /* ── 完成引导 ── */
@@ -447,11 +485,16 @@ function complete() {
   $("tui").classList.remove("onboarding");
   $("inputbox").classList.add("live");
   $("inputbox").innerHTML = '你好，介绍一下你自己<span class="cursor"></span>';
+  // 第 4 页选择 → 备份写入口径（默认/自定义 = 开启；skip = 不写入）；备份引擎构造期读配置 → 自下一个会话起生效
+  const dir = S.p4.chosen === "custom" && S.p4.customDir ? S.p4.customDir : "";
+  const backupLine = S.p4.chosen === null || S.p4.chosen === "skip"
+    ? "未开启消息备份——/settings → 消息备份 随时可开"
+    : `backupPath = ${dir === "" ? "默认目录（~/.orosus/db/）" : dir}`;
   const lines = $("streamlines");
   lines.insertAdjacentHTML("beforeend", `
-    <div class="ln"><span class="a">● 引导完成</span> —— 配置已写入，<span class="i">即时生效</span>（provider 与 web search 均为调用时解析）。</div>
-    <div class="ln u">写入：config.toml [provider] / [web] search；secrets.env（如配置了 Tavily / Brave Key）。</div>`);
-  toast("引导完成 · 配置已写入并即时生效");
+    <div class="ln"><span class="a">● 引导完成</span> —— 配置已写入，provider / web search 调用时解析；<span class="i">消息备份自下一个会话起生效</span>。</div>
+    <div class="ln u">写入：config.toml [provider] / [web] search / ${backupLine}；secrets.env（如配置了 Tavily / Brave Key）。</div>`);
+  toast("引导完成 · 配置已写入（消息备份自下一个会话起生效）");
 }
 
 function quitApp() {
@@ -463,6 +506,7 @@ function restart() {
   S.page = 1; S.done = false; S.quit = false;
   S.p2 = { sel: 0, pageIdx: 0, mode: "list", drafts: {}, configured: [], active: null, notice: "" };
   S.p3 = { sel: 0, stage: "opts", keyOpt: null, provOpt: null, drafts: {}, chosen: null, model: null, notice: "" };
+  S.p4 = { sel: 0, stage: "opts", draft: "", customDir: "", chosen: null, notice: "" };
   $("quitveil").classList.add("hidden");
   $("backdrop").classList.remove("hidden");
   $("tui").classList.add("onboarding");
@@ -483,7 +527,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (S.page === 1) { quitApp(); return; }
     if (S.page === 2) { S.p2.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
-    else { S.p3.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
+    else if (S.page === 3) { S.p3.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
+    else { S.p4.notice = "Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出"; render(); }
     return;
   }
   if (S.page === 1 && ctrlN) { e.preventDefault(); S.page = 2; render(); return; }
@@ -638,6 +683,46 @@ document.addEventListener("keydown", (e) => {
     if (ctrlN) {
       e.preventDefault();
       if (p.chosen === null) { p.notice = "请先选择一个搜索后端——LLM 默认零配置，回车即选"; render(); return; }
+      S.page = 4; render(); return;
+    }
+  }
+
+  if (S.page === 4) {
+    const p = S.p4;
+    if (p.stage === "opts") {
+      if (e.key === "ArrowDown") { e.preventDefault(); p.sel = Math.min(p.sel + 1, BACKUP_OPTS.length - 1); render(); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); p.sel = Math.max(p.sel - 1, 0); render(); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const o = BACKUP_OPTS[p.sel];
+        if (o.id === "custom") { p.stage = "dir"; p.notice = ""; render(); return; }
+        p.chosen = o.id;
+        p.notice = o.id === "default"
+          ? "已写入 config.toml（backupPath 默认目录 ~/.orosus/db/）——消息备份已开启"
+          : "已选择暂不备份——/settings → 消息备份 随时可开";
+        render(); return;
+      }
+    } else { // dir（目录明文输入——空格合法〔目录可含空格〕；超宽截断在渲染层）
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        if (p.draft) { p.draft = p.draft.slice(0, -1); } else { p.stage = "opts"; p.notice = ""; }
+        render(); return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const d = p.draft.trim();
+        if (/\.(sqlite|db)$/i.test(d)) { p.notice = "这里只填目录路径，文件名固定为 backup.sqlite"; render(); return; }
+        p.chosen = "custom"; p.customDir = d; p.stage = "opts";
+        p.notice = d === ""
+          ? "已写入 config.toml（backupPath 默认目录 ~/.orosus/db/）——消息备份已开启"
+          : `已写入 config.toml backupPath（${d}）——备份库将落在 ${d}\\backup.sqlite`;
+        render(); return;
+      }
+      if (e.key.length === 1 && !ctrlN) { e.preventDefault(); p.draft += e.key; render(); return; }
+    }
+    if (ctrlN) {
+      e.preventDefault();
+      if (p.chosen === null) { p.notice = "先选一项——默认目录回车即开，暂不备份也可选"; render(); return; }
       complete(); return;
     }
   }
