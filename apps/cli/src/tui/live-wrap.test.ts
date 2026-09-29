@@ -123,3 +123,17 @@ describe("LiveWrap 增量折行（m5-render-perf T0——codex live_wrap.rs 同�
 		expect(lw.lastFeedWrappedChars).toBe(8); // 追加 1 字符：仍只折尾行
 	});
 });
+
+describe("LiveWrap 性能回归钉一（m5-render-perf T3——防「改回去」的闸）", () => {
+	it("20KB 多行思考文本缓存后追加 1 字符，lastFeedWrappedChars < 500（改回全量重折则 ≥ 20000 必红）", () => {
+		// 构造 ~20KB 多行文本：每行 ~40 码元 × 500 行——模拟真实思考流（句行形态）
+		const lines = Array.from({ length: 500 }, (_, i) => `思考第 ${i} 行：一段中等长度的推理内容 covering mixed text。`);
+		const text = lines.join("\n");
+		expect(text.length).toBeGreaterThanOrEqual(20000); // 前提：确为 20KB 量级
+		const lw = new LiveWrap();
+		lw.feed(text, 60); // 全量喂入建缓存
+		expect(lw.lastFeedWrappedChars).toBeGreaterThanOrEqual(20000); // 首次全折（语义自证）
+		lw.feed(text + "！", 60); // 追加 1 字符
+		expect(lw.lastFeedWrappedChars).toBeLessThan(500); // 只折尾行（~40 码元）——全量重折则 ≥ 20000
+	});
+});
