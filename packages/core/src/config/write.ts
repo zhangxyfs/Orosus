@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { parse } from "smol-toml";
 import { join } from "node:path";
 
 /**
@@ -39,6 +40,16 @@ export function writeSectionKey(filePath: string, section: string, key: string, 
     raw = stripBom(readFileSync(filePath, "utf8"));
   } catch {
     /* 缺文件从空起 */
+  }
+  // CM-01 拒写纪律（tuiSidebarPersist 原语义，收口时继承）：文件在但整文件 parse 失败 = 读不懂的盘——
+  // 写入也不生效（加载层 SW-20 会跳过整层）还会动用户的坏文件，宁丢这次写。parse 仅作健康检查，
+  // 回写仍走原行（保注释——与 stringify 重写的毁配置风险无关）。
+  if (raw !== "") {
+    try {
+      parse(raw);
+    } catch {
+      return;
+    }
   }
   const eol = raw.includes("\r\n") ? "\r\n" : "\n";
   const lines = raw === "" ? [] : raw.split(/\r?\n/);

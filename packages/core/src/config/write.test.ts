@@ -43,6 +43,12 @@ describe("writeSectionKey（m4-8 T3 统一写口）", () => {
     expect(readFileSync(p, "utf8").split("\n").filter((l) => l.startsWith("mode")).length).toBe(1); // 单行
   });
 
+  it("①-c CM-01 拒写：文件在但整文件 parse 失败 = 读不懂的盘——盘上原样（写入不生效还动坏文件,宁丢这次写;缺文件/空文件不受此限）", () => {
+    const p = cfg("this is = = not valid toml ][");
+    writeSectionKey(p, "tui", "sidebar", true);
+    expect(readFileSync(p, "utf8")).toBe("this is = = not valid toml ][");
+  });
+
   it("② 删键：null 删行——节内中段删、节尾唯一键删、键不在场 = 无操作", () => {
     const p = cfg(BASE);
     writeSectionKey(p, "tui", "mode", null); // 节内中段（sidebar 在后）
