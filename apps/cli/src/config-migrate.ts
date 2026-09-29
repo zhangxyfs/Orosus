@@ -62,6 +62,16 @@ function segmentLines(lines: string[]): Segment[] {
   return segs;
 }
 
+/** 留守节（§3.5，真机踩中补钉 2026-09-29）：approval/compaction 是内置模块但配置属宿主安全/行为，
+ *  provider-custom 是端点家底——三者及其子节（点分名第一段命中）永不进 modules.d。
+ *  白名单（内置模块名）与留守清单有交集，迁移判定必须先过留守排除。 */
+export const STAY_SECTIONS = ["tui", "approval", "compaction", "provider-custom"];
+
+const isStaySection = (section: string): boolean => {
+  const head = section.split(".")[0]!;
+  return STAY_SECTIONS.includes(head);
+};
+
 export function migrateModulesSections(configPath: string, modulesDir: string, knownModuleNames: string[]): MigrateResult {
   if (!existsSync(configPath)) return { moved: [] };
   const raw = stripBom(readFileSync(configPath, "utf8"));
@@ -77,11 +87,19 @@ export function migrateModulesSections(configPath: string, modulesDir: string, k
   const outFiles: Array<{ name: string; content: string }> = [];
   for (const seg of segs) {
     const name = seg.section;
-    if (name !== null && known.has(name) && !seg.body.some((l) => /^\s*source\s*=/.test(l))) {
+    // 子节随父节同搬（真机踩中补钉：[tool-web.search] 按第一段 "tool-web" 判归属——与父节同文件，不留守成孤儿）
+    const head = name === null ? null : name.split(".")[0]!;
+    if (
+      name !== null &&
+      head !== null &&
+      known.has(head) &&
+      !isStaySection(name) &&
+      !seg.body.some((l) => /^\s*source\s*=/.test(l))
+    ) {
       moved.push(name);
       const bodyNoTail = [...seg.body];
       while (bodyNoTail.length > 0 && bodyNoTail[bodyNoTail.length - 1]!.trim() === "") bodyNoTail.pop(); // 段尾分隔空行不随节走
-      outFiles.push({ name, content: [...seg.headComment, ...bodyNoTail].join(eol) });
+      outFiles.push({ name: head, content: [...seg.headComment, ...bodyNoTail].join(eol) });
     } else {
       stay.push(...seg.headComment, ...seg.blank, ...seg.body);
     }
