@@ -10,6 +10,7 @@
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import * as theme from "../theme.ts";
 import { wrapText } from "./width.ts";
+import { LiveWrap } from "./live-wrap.ts";
 import { DiffScreen } from "./diffscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
 
@@ -60,11 +61,14 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 	let inThink = false;
 	let mdStream: StreamingMarkdown | undefined;
 	let streamWidth = -1;
+	// 活动思考块增量折行缓存（m5-render-perf T2）——每帧只折最后一条未完行，替代每帧全文
+	// wrapText（streamview 热点 (a) 行模式同病）；settleActive/discard 重置。
+	let thinkLive = new LiveWrap();
 
-	const thinkBlock = (text: string, w: number): string[] => {
-		const raw = wrapText(text, Math.max(8, w - 2));
-		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
-	};
+	/** 思考块样式（裸行上色——与折行解耦，D4 同款：样式便宜现做、折行贵进缓存）。 */
+	const styleThink = (raw: string[]): string[] => raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
+
+	const thinkBlock = (text: string, w: number): string[] => styleThink(wrapText(text, Math.max(8, w - 2)));
 
 	const mdRender = (text: string, w: number): string[] => {
 		if (streamWidth !== w || mdStream === undefined) {
@@ -77,7 +81,7 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 	const frame = (): number => {
 		const w = io.columns();
 		const buf = [...lines];
-		if (thinkText !== "") buf.push(...thinkBlock(thinkText, w));
+		if (thinkText !== "") buf.push(...styleThink(thinkLive.feed(thinkText, Math.max(8, w - 2))));
 		if (mdText !== "") buf.push(...mdRender(mdText, w));
 		return diff.render(buf, w);
 	};
@@ -96,6 +100,7 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 			lines.push(...thinkBlock(thinkText, w));
 			thinkText = "";
 			inThink = false;
+			thinkLive = new LiveWrap(); // 下一块思考从头缓存
 		}
 	};
 
@@ -128,6 +133,7 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 			thinkText = "";
 			inThink = false;
 			mdStream = undefined;
+			thinkLive = new LiveWrap();
 			requestFrame();
 		},
 		end(): void {
