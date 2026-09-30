@@ -3,9 +3,14 @@ import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 import { createSdkConnection } from "./client.ts";
+import { readProjectMcpJson, gateProjectServers, mcpTrustFile } from "./project.ts";
 
 export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 export { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS } from "./client.ts";
+export {
+  readProjectMcpJson, gateProjectServers, fingerprintServer, loadMcpTrust, saveMcpTrust,
+  trustProjectServer, foldProjectPath, mcpTrustFile, type ProjectServerConfig, type McpTrustStore,
+} from "./project.ts";
 
 /** 测试与 activate 共用的连接口：listTools 一次（清单快照语义）+ callTool 按调。 */
 export interface ServerConnection {
@@ -185,11 +190,24 @@ export const mcpDef = defineModule({
   mounts: ["contribute:tool", "contribute:promptSection", "tools.list"],
   async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
+    // T12 项目 .mcp.json：只认 cwd 这一层；手写配置同名赢；未确认（无记录/指纹不符）不连（fail-closed），
+    // toast 一条指路（ctx.ui.notice 可选口——无头/非 TTY 静默丢弃，server 照样跳过）
+    const project = readProjectMcpJson(process.cwd());
+    for (const w of project.warnings) ctx.log.warn("mcp.project-json", w, {});
+    const gated = gateProjectServers({
+      userServers: ctx.config.servers as Record<string, Record<string, unknown>>,
+      projectServers: project.servers,
+      trustFile: mcpTrustFile(),
+      projectPath: process.cwd(),
+    });
     const out = await activateMcp({
-      servers: ctx.config.servers,
+      servers: gated.servers as typeof ctx.config.servers,
       connect: (name, cfg) => createSdkConnection(name, cfg),
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
     });
+    if (gated.pending.length > 0) {
+      ctx.ui.notice?.(`项目 .mcp.json 有 ${gated.pending.length} 个未确认的 MCP server，/mcp 查看确认`);
+    }
     for (const t of out.tools) ctx.contribute.tool(t);
     // MI-07：撞名跳过的带内可观测面（registry 不再因重名 throw——模块不降级，但用户须能看到少了哪些工具）
     for (const sk of out.skippedTools) ctx.log.warn("mcp.tool-skipped", `工具 "${sk.tool}"（server ${sk.server}）未注册：${sk.reason}`, { server: sk.server, tool: sk.tool });
