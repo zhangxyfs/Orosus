@@ -64,6 +64,8 @@ export interface SdkServerConfig {
   timeoutMs?: number;
   headers?: Record<string, string>;
   cwd?: string;
+  /** 远程传输档（T17 原型拍板三档）：缺省 http（StreamableHTTP）；sse = 旧式 HTTP+SSE（SDK SSEClientTransport）。 */
+  transport?: "http" | "sse";
 }
 
 /** SDK 连接实现（m4-3c T1 起从 index.ts 抽出）：stdio（command/args/env）与 HTTP（url）两 transport。
@@ -98,10 +100,15 @@ export async function createSdkConnection(
   /** 建一次连接（首连与 T7 重连共用）：transport + stderr 监听 + 带超时握手 + 失败收尾。 */
   const connectOnce = async (): Promise<Client> => {
     const transport = cfg.url !== undefined
-      ? new StreamableHTTPClientTransport(
-          new URL(cfg.url),
-          cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
-        )
+      ? (cfg.transport === "sse"
+        ? new (await import("@modelcontextprotocol/sdk/client/sse.js")).SSEClientTransport(
+            new URL(cfg.url),
+            cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
+          )
+        : new StreamableHTTPClientTransport(
+            new URL(cfg.url),
+            cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
+          ))
       : new StdioClientTransport({
           ...winSpawnForm(cfg.command!, cfg.args ?? []),
           ...(cfg.env !== undefined ? { env: cfg.env } : {}),

@@ -53,13 +53,16 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig, sectionPath, modelsDevCacheFile, resolveContextWindow } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)/窗口兜底链(2026-09-29)
 import { toggleResultText } from "./module-toggle-result.ts";
-import { runMcpCommand, defaultMcpCmdDeps } from "./mcp-cmd.ts";
+import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
+import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
+import { openMcpAddWindow } from "./mcp-add-window.ts";
 import type { McpCatalogRow } from "@orosus/mcp";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, resolveBellFlag, formatBytes, dirUsage } from "./tuicfg.ts";
+import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
 
 /** CM-06②（2026-09-28 code review）：console 输出在管道/重定向下是异步写——`process.exit` 立即退可能
@@ -1243,6 +1246,7 @@ const SETTINGS_ITEMS = [
 	"运行状态（模型 / 会话 / 模块图）",
 	"子代理（模型 / 审批模式 / 轮数上限）",
 	"技能（查看 / 启停——四轨目录全部技能）",
+	"MCP（查看 / 开关 / 删除——server 管理与添加）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
 const tokenUsageText = async (): Promise<string> => {
@@ -1435,6 +1439,187 @@ const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
 	}
 };
 
+const isEsc = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
+
+// ---------- MCP 管理面（m4-3c T17——列表四段行 / 详情六字段 / Alt + K 启停 / d 两拍删除 / Alt + N 添加窗） ----------
+
+/** mcp.catalog 服务现取（模块未启用 = 空表——面板给指路文案）。 */
+const mcpCatalogRows = async (): Promise<McpCatalogRow[]> => {
+	const catalog = await h.graph().services.getOptional("mcp.catalog");
+	return typeof catalog === "function" ? (catalog as () => McpCatalogRow[])() : [];
+};
+let mcpPanelCatalog: (() => McpCatalogRow[]) | undefined; // 面板期缓存上一轮服务值（runMcpCommand 同步消费）
+const mcpWarmCatalog = (): void => {
+	void h.graph().services.getOptional("mcp.catalog").then((cat) => { mcpPanelCatalog = typeof cat === "function" ? (cat as () => McpCatalogRow[]) : undefined; }).catch(() => undefined);
+};
+/** 面板版命令依赖（catalog 服务现取——启停与删除共用 /mcp 命令族的写盘与守卫）。 */
+const mcpPanelDeps = (): McpCmdDeps => ({ ...defaultMcpCmdDeps(), ...(mcpPanelCatalog !== undefined ? { catalogRows: mcpPanelCatalog } : {}) });
+/** 配置文件里的原表值（修改窗预填——名称锁定的真身）。 */
+const configuredMcpServer = (name: string): Record<string, unknown> => {
+	try {
+		const p = defaultMcpCmdDeps().configPath();
+		const doc = tomlParse(readFileSync(p, "utf8").replace(/^\uFEFF/, "")) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
+		return doc.mcp?.servers?.[name] ?? {};
+	} catch { return {}; }
+};
+/** MCP 写配置后的收尾（同 afterSkillToggle 口径）：空闲重载生效、busy 缓后 toast。 */
+const afterMcpWrite = (app: FullApp | undefined, doneText: string): string => {
+	if (app === undefined || !app.stateRef.busy) {
+		void (async () => {
+			try {
+				const namesBefore = activeModuleNames();
+				await h.reload();
+				closeGoneModuleUi(namesBefore);
+				registerToolLabels(h.graph().tools.toolInfos());
+				void refreshSkillMenu();
+				await refreshPanel();
+			} catch (err) {
+				(app ?? activeApp)?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
+			}
+		})();
+		return doneText;
+	}
+	return `${doneText} · 有任务在执行，稍后请输入 /reload 重新加载`;
+};
+const runMcpToggle = async (app: FullApp | undefined, row: McpCatalogRow): Promise<string> => {
+	const enable = row.state === "disabled";
+	const r = await runMcpCommand(`${enable ? "on" : "off"} ${row.name}`, mcpPanelDeps());
+	row.state = enable ? (row.source === "preload" ? "idle" : "failed") : "disabled"; // 重载前乐观翻转（重载后 catalog 重算）
+	return afterMcpWrite(app, r.text);
+};
+
+const openMcpPanel = async (app: FullApp): Promise<void> => {
+	let selAt = 0;
+	for (;;) {
+		mcpWarmCatalog();
+		const rows = await mcpCatalogRows();
+		const w = app.pickRowWidth();
+		const items = [
+			...rows.map((r) => mcpListRow(w, r)),
+			...(rows.length === 0 ? [theme.fg("muted", "（还没有 MCP server——按 Alt + N 或回车添加第一个）")] : []),
+		];
+		let addRequested = false;
+		const picked = await app.pickOverlay(
+			`MCP（${rows.length} 个 server${rows.length === 0 ? "" : " · 预装按需启动"}）`,
+			items,
+			selAt,
+			{
+				"alt+n": { label: "Alt + N 添加", run: (ctrl): boolean => { addRequested = true; ctrl.close(); return true; } },
+				"alt+k": { label: "Alt + K 启停", run: (): boolean => { app.showToast("列表页拿不准选中行——回车进详情再 Alt + K"); return true; } },
+			},
+		);
+		if (addRequested || (rows.length === 0 && picked !== undefined)) {
+			mcpWarmCatalog();
+			const existing = (await mcpCatalogRows()).map((r) => r.name);
+			openMcpAddWindow(app, {
+				mode: "add",
+				configPath: defaultMcpCmdDeps().configPath(),
+				existingNames: existing,
+				onSaved: (name) => { void afterMcpWrite(app, `已添加 ${name}（模块图重载中）`); },
+			});
+			continue; // 窗 Esc 关后循环重开列表（行集现取）
+		}
+		if (picked === undefined) return; // Esc → 回设置根列表
+		if (picked < 0 || picked >= rows.length) continue;
+		selAt = picked;
+		const row = rows[picked]!;
+		let deleteArm = false;
+		let detailMsg = "";
+		const detail = (): string => (detailMsg === "" ? mcpDetailText(w, row) : `${mcpDetailText(w, row)}\n${theme.fg("muted", detailMsg)}`);
+		items[picked] = mcpListRow(w, row); // Alt + K 后回列表顶上的正是这个排队的 pickOverlay（持同数组——行原地更新）
+		app.viewText(`${row.name} · MCP server`, detail(), { layout: "dock", keys: {
+				"alt+k": {
+					label: "Alt + K 启停",
+					run: (): string => {
+						void runMcpToggle(app, row).then((t) => { if (t !== "") app.showToast(t); });
+						items[picked] = mcpListRow(w, row);
+						return detail();
+					},
+				},
+				"alt+n": {
+					label: "Alt + N 修改",
+					run: (): string => {
+						if (row.source !== "config") {
+							detailMsg = row.source === "project"
+								? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
+								: "预装 server 不可修改——只能停用（Alt + K）";
+							return detail();
+						}
+						mcpWarmCatalog();
+						openMcpAddWindow(app, {
+							mode: "edit",
+							row,
+							original: configuredMcpServer(row.name),
+							configPath: defaultMcpCmdDeps().configPath(),
+							existingNames: rows.map((r) => r.name),
+							onSaved: (name) => { void afterMcpWrite(app, `已修改 ${name}（模块图重载中）`); },
+						});
+						return detail();
+					},
+				},
+				d: {
+					label: "d 删除",
+					run: (): string => {
+						if (row.source !== "config") {
+							detailMsg = row.source === "project"
+								? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
+								: "预装 server 只能停用不能删除（Alt + K）";
+							return detail();
+						}
+						if (!deleteArm) {
+							deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
+							detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
+							return detail();
+						}
+						void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
+							const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
+							if (t !== "") app.showToast(t);
+						});
+						return "close";
+					},
+				},
+			},
+		});
+	}
+};
+
+/** 行模式对等件（m4-3c T17）：列表 choose → 详情直出 → 动作菜单。 */
+const openMcpLine = async (out: (s: string) => void): Promise<void> => {
+	for (;;) {
+		mcpWarmCatalog();
+		const rows = await mcpCatalogRows();
+		const w = 76;
+		const items = [...rows.map((r) => mcpListRow(w, r)), ...(rows.length === 0 ? ["（还没有 MCP server——添加用 /mcp add 名字 命令或URL）"] : [])];
+		let picked: number;
+		try {
+			const chosen = await commandUi.choose("MCP（回车查看详情）", items);
+			picked = items.indexOf(chosen);
+		} catch (err) {
+			if (isEsc(err)) return;
+			throw err;
+		}
+		if (picked < 0) return;
+		if (rows.length === 0 || picked >= rows.length) continue;
+		const row = rows[picked]!;
+		out(mcpDetailText(w, row));
+		try {
+			const actions = [row.state === "disabled" ? "启用（Alt + K 同款）" : "停用（Alt + K 同款）"];
+			if (row.source === "config") actions.push("删除");
+			actions.push("返回列表");
+			const action = await commandUi.choose(row.name, actions);
+			if (action === "启用（Alt + K 同款）" || action === "停用（Alt + K 同款）") {
+				out(await runMcpToggle(undefined, row));
+			} else if (action === "删除") {
+				const r = await runMcpCommand(`remove ${row.name}`, mcpPanelDeps());
+				out(r.wrote ? afterMcpWrite(undefined, r.text) : r.text);
+			}
+		} catch (err) {
+			if (err instanceof Error && err.message === "已取消（Esc）") continue;
+			throw err;
+		}
+	}
+};
+
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	// 子菜单/子窗 Esc 返回根列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：根列表本身的 Esc = 收面。
 	// 只读子窗走 /tasks 同款 FIFO——viewText 占槽期循环重入的 pickOverlay 排队，关窗即自动顶上回根列表
@@ -1475,7 +1660,8 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 			}
 		}
 		else if (picked === 5) await openSkillsPanel(app); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
-		else if (picked === 6) {
+		else if (picked === 6) await openMcpPanel(app); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
+		else if (picked === 7) {
 			// 顶层后端菜单的 Esc → 回设置根列表（更深的 Esc 已在 tool-web 模块内逐级返回）
 			try {
 				const res = await runSearchSettings();
@@ -1491,7 +1677,6 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
  *  同一五项经 commandUi.choose（readline）；面板文本直出（out = processReplLine 的输出通道参数）。 */
 const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 	// Esc 逐级返回（2026-09-28 用户拍板，全屏对等件）：根菜单 Esc 穿透（宿主静默）；子级 Esc 回上级
-	const isEsc = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
 	for (;;) {
 		const picked = await commandUi.choose("设置", SETTINGS_ITEMS); // 根 Esc 穿透——整面收起
 		const idx = SETTINGS_ITEMS.indexOf(picked);
@@ -1527,7 +1712,8 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 			}
 		}
 		else if (idx === 5) await openSkillsLine(out);
-		else if (idx === 6) {
+		else if (idx === 6) await openMcpLine(out);
+		else if (idx === 7) {
 			try {
 				const res = await runSearchSettings();
 				if (res !== "") out(res);

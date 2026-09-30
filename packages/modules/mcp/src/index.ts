@@ -24,7 +24,7 @@ export interface ServerConnection {
 }
 
 export interface ActivateMcpOpts {
-  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string }>;
+  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse" }>;
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
 }
@@ -282,12 +282,14 @@ export const mcpDef = defineModule({
       headers: z.record(z.string(), z.string()).optional(),
       // stdio 子进程工作目录（T5）
       cwd: z.string().optional(),
+      // 远程传输档（T17 三档）：缺省 http；sse = 旧式 HTTP+SSE
+      transport: z.enum(["http", "sse"]).optional(),
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
   provides: ["mcp.catalog"], // T16：/mcp 命令族与 /settings 管理面的数据源（技能 catalog 同款服务倒挂）
   mounts: ["contribute:tool", "contribute:promptSection", "tools.list", "provide"],
-  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string }> }>) {
+  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse" }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
     // T12 项目 .mcp.json：只认 cwd 这一层；手写配置同名赢；未确认（无记录/指纹不符）不连（fail-closed），
     // toast 一条指路（ctx.ui.notice 可选口——无头/非 TTY 静默丢弃，server 照样跳过）
