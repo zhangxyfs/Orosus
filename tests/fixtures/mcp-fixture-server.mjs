@@ -26,6 +26,7 @@
 //   nothing                  空内容——测「没有返回内容」（T8）
 //   headers                  （HTTP 模式）回显收到的请求头——测 headers 配置（T5）
 //   dot.name / dot_name      点号名对——测清洗撞名并存（T4）
+//   cwd_of_process           回显子进程工作目录——测 cwd 配置（T5）
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -114,6 +115,7 @@ const baseTools = () => [
   },
   { name: "nothing", description: "空内容", inputSchema: { type: "object", properties: {} } },
   { name: "dot.name", description: "点号名（清洗靶）", inputSchema: { type: "object", properties: {} } },
+  { name: "cwd_of_process", description: "回显子进程工作目录", inputSchema: { type: "object", properties: {} } },
   { name: "dot_name", description: "下划线名（与点号名清洗后同形——撞名靶）", inputSchema: { type: "object", properties: {} } },
 ];
 if (env.FIXTURE_HTTP === "1") {
@@ -201,6 +203,8 @@ async function handleCall(req, extra) {
       return { content: [text(JSON.stringify(lastHeaders))] };
     case "dot.name":
       return { content: [text("dot.dot")] };
+    case "cwd_of_process":
+      return { content: [text(process.cwd())] };
     case "dot_name":
       return { content: [text("dot.underscore")] };
     default:

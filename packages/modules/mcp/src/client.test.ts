@@ -2,6 +2,10 @@
 // e2e 走 T0 假 server（tests/fixtures/mcp-fixture-server.mjs）；并发与失败面用注入 connect 单测 activateMcp。
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES } from "./client.ts";
 import { activateMcp, mcpDef } from "./index.ts";
 
@@ -15,6 +19,26 @@ const fixtureServer = (env: Record<string, string> = {}) => ({
 
 const race = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`timeout: ${label}`)), ms))]);
+
+/** 起 HTTP 模式 fixture，回传 {port, stop}——stop 由调用方在测试收尾杀进程。 */
+async function startHttpFixture(): Promise<{ port: number; stop: () => void }> {
+  const proc = spawn("node", [FIXTURE], {
+    env: { ...process.env, FIXTURE_HTTP: "1", FIXTURE_PORT: "0" },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const port = await race(
+    new Promise<number>((resolve, reject) => {
+      proc.stdout!.on("data", (d: Buffer) => {
+        const m = /FIXTURE_HTTP_READY (\d+)/.exec(d.toString("utf8"));
+        if (m !== null) resolve(Number(m[1]));
+      });
+      proc.on("exit", (code) => reject(new Error(`fixture http 退出 code=${code}`)));
+    }),
+    10_000,
+    "http ready",
+  );
+  return { port, stop: () => proc.kill() };
+}
 
 describe("T1 并发连接 + 启动超时 + 说明书修复（m4-3c）", () => {
   it("① 并发：三 server 各延迟 150ms——总耗时 < 350ms（串行 ≥ 450ms）；全数连上", async () => {
@@ -199,6 +223,64 @@ describe("T3 工具清单翻页到底（m4-3c）", () => {
       expect(names.length).toBeGreaterThanOrEqual(20);
     } finally {
       await conn.close?.();
+    }
+  });
+});
+
+describe("T5 headers + cwd 配置（m4-3c）", () => {
+  it("① schema：headers（字符串映射）与 cwd（字符串）过校验、非法拒", () => {
+    const schema = mcpDef.config!;
+    expect(schema.safeParse({ servers: { r: { url: "http://x", headers: { authorization: "Bearer t" } } } }).success).toBe(true);
+    expect(schema.safeParse({ servers: { s: { command: "x", cwd: "D:/tmp" } } }).success).toBe(true);
+    expect(schema.safeParse({ servers: { s: { command: "x", headers: "nope" } } }).success).toBe(false);
+  });
+
+  it("② e2e HTTP headers：鉴权头真到 server（headers 工具回显所见请求头）", async () => {
+    const { port, stop } = await startHttpFixture();
+    try {
+      const conn = await race(
+        createSdkConnection("fx", { url: `http://127.0.0.1:${port}/mcp`, headers: { authorization: "Bearer t5-token", "x-custom": "orosus" } }),
+        15_000,
+        "http connect",
+      );
+      try {
+        const res = (await race(
+          conn.callTool("headers", {}, new AbortController().signal),
+          10_000,
+          "headers",
+        )) as { content: { text?: string }[] };
+        const got = JSON.parse(res.content[0]!.text!) as Record<string, string>;
+        expect(got.authorization).toBe("Bearer t5-token");
+        expect(got["x-custom"]).toBe("orosus");
+      } finally {
+        await conn.close?.();
+      }
+    } finally {
+      stop();
+    }
+  });
+
+  it("③ e2e cwd：stdio 子进程落在指定目录跑（cwd_of_process 回显）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-mcp-cwd-"));
+    try {
+      const conn = await race(
+        createSdkConnection("fx", { ...fixtureServer(), cwd: dir }),
+        15_000,
+        "connect",
+      );
+      try {
+        const res = (await race(
+          conn.callTool("cwd_of_process", {}, new AbortController().signal),
+          10_000,
+          "cwd",
+        )) as { content: { text?: string }[] };
+        // Windows tmpdir 大小写/8.3 形态可能不等值——归一小写比较，且至少落在 tmp 根下
+        expect(res.content[0]?.text?.toLowerCase()).toBe(dir.toLowerCase());
+      } finally {
+        await conn.close?.();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
