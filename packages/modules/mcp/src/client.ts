@@ -9,6 +9,9 @@ export const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 /** 翻页页数帽（T3，opencode 同款上限）：server 恒新游标（死循环保险拦不住）时的最后防线。 */
 export const MAX_LIST_PAGES = 1000;
 
+/** stderr 尾巴缓冲上限（T6）：够看出死因、不撑爆失败面；保尾丢头（临死前说的话最值钱）。 */
+export const STDERR_TAIL_LIMIT = 4096;
+
 /** 工具清单翻页（T3）：循环到 nextCursor 缺省为止。两道保险——① 同一 nextCursor 第二次出现即停
  *  （防 server 死循环：好 server 的游标单向推进，重复出现 = 环）；② 页数帽 1000（防恒新游标刷屏）。
  *  抽成独立助手：两道保险可用零开销 fake 直测（1000 页真跑要秒级）。 */
@@ -76,7 +79,24 @@ export async function createSdkConnection(
         args: cfg.args ?? [],
         ...(cfg.env !== undefined ? { env: cfg.env } : {}),
         ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}), // T5：子进程工作目录
+        stderr: "pipe", // T6：捕获 stderr 做报错尾巴（缺省 inherit 直透父进程、排障靠猜）
       });
+  // T6 尾巴缓冲：只对 stdio 型有义（HTTP 无子进程）。transport.stderr 在 pipe 形态下立即可挂——
+  // SDK 文档明示「PassThrough 立即返回，可在 start 前挂监听防丢早期输出」。
+  let stderrTail = "";
+  const stderrStream = cfg.url !== undefined ? null : (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+  stderrStream?.on("data", (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_LIMIT);
+  });
+  /** 失败原因缀尾巴（T6）：连接失败/意外断开时把子进程最后说过的话附上（[stderr] 前缀）——没有则原样。 */
+  const withTail = async (err: unknown): Promise<Error> => {
+    if (stderrTail === "") return err instanceof Error ? err : new Error(String(err));
+    await new Promise((r) => setTimeout(r, 25)); // 退出与 stderr 数据到达的微小竞态——让管道先吐完
+    const tail = stderrTail.trim();
+    if (tail === "") return err instanceof Error ? err : new Error(String(err));
+    const msg = err instanceof Error ? err.message : String(err);
+    return new Error(`${msg}\n[stderr] ${tail}`);
+  };
   const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined; // 成功路也须清（30s 定时器悬着会拖住进程退出）
   try {
@@ -93,7 +113,7 @@ export async function createSdkConnection(
     ]);
   } catch (err) {
     await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败/超时也收尾，close 杀 stdio 子进程）
-    throw err;
+    throw await withTail(err); // T6：连接失败带 stderr 尾巴（排障不再靠猜）
   } finally {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }

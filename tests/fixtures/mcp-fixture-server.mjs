@@ -9,6 +9,7 @@
 //   FIXTURE_PAGE_SIZE=n      listTools 按页返回——测客户端 cursor 翻页（T3）
 //   FIXTURE_LIST_ERROR=1     listTools 抛协议错误——测清单失败面（T1 失败名单带原因）
 //   FIXTURE_POISON_DESC=1    echo 的描述夹带零宽/双向控制符——测描述清洗（T9）
+//   FIXTURE_STDERR_DIE=1     启动即写 8KB+ stderr（HEAD-MARKER…TAIL-MARKER）后 exit 1——测连接失败附 stderr 尾巴（T6）
 // 工具面（覆盖各任务靶型）：
 //   echo {message}           回显
 //   time                     报时（ISO）
@@ -227,6 +228,13 @@ function makeServer() {
   });
   server.setRequestHandler(CallToolRequestSchema, handleCall);
   return server;
+}
+
+if (env.FIXTURE_STDERR_DIE === "1") {
+  // 先头标记 + 8KB 噪声 + 尾标记：4KB 尾巴缓冲应保尾丢头
+  process.stderr.write(`HEAD-MARKER ${"x".repeat(8192)} TAIL-MARKER
+`);
+  process.exit(1);
 }
 
 const initDelay = num("FIXTURE_INIT_DELAY") ?? 0;

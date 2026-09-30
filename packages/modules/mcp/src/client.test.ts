@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES } from "./client.ts";
+import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES, STDERR_TAIL_LIMIT } from "./client.ts";
 import { activateMcp, mcpDef } from "./index.ts";
 
 const FIXTURE = fileURLToPath(new URL("../../../../tests/fixtures/mcp-fixture-server.mjs", import.meta.url));
@@ -282,5 +282,32 @@ describe("T5 headers + cwd 配置（m4-3c）", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("T6 报错尾巴（m4-3c）", () => {
+  it("① 帽钉：stderr 尾巴缓冲 = 4KB（够看死因不撑爆界面）", () => {
+    expect(STDERR_TAIL_LIMIT).toBe(4096);
+  });
+
+  it("② e2e 连接失败附尾：fixture 启动即写 stderr 后死 → 拒绝原因带 [stderr] 段与尾标记", async () => {
+    await expect(
+      race(createSdkConnection("fx", fixtureServer({ FIXTURE_STDERR_DIE: "1" })), 15_000, "connect"),
+    ).rejects.toThrow(/\[stderr\][\s\S]*TAIL-MARKER/);
+  });
+
+  it("③ e2e 保尾丢头：8KB 输出只保最后 4KB——头标记被裁、尾标记还在、[stderr] 段不超帽太多", async () => {
+    const err = await race(
+      createSdkConnection("fx", fixtureServer({ FIXTURE_STDERR_DIE: "1" })),
+      15_000,
+      "connect",
+    ).then(
+      () => { throw new Error("应失败"); },
+      (e: Error) => e,
+    );
+    expect(err.message).not.toContain("HEAD-MARKER");
+    const tail = err.message.split("[stderr]")[1] ?? "";
+    expect(tail).toContain("TAIL-MARKER");
+    expect(tail.length).toBeLessThanOrEqual(STDERR_TAIL_LIMIT + 2); // 4KB 帽 + 换行余量
   });
 });
