@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
@@ -9,7 +10,8 @@ import type { Chunk } from "@orosus/contracts/provider";
 import type { ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { Fs } from "@orosus/contracts/fs";
-import { JobRegistry } from "./jobs.ts";
+import { JobRegistry, parseProcRows, closureFrom, pickVictims, sweepRootsNow, listProcsWin, killTree } from "./jobs.ts";
+import { resolveShell } from "./shell.ts";
 import def, { killAllBackgroundJobs } from "./index.ts";
 
 let dir: string;
@@ -384,4 +386,87 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
     expect(k.isError).toBe(false);
     dispose?.();
   });
+});
+
+describe("win32 残留清扫（2026-09-30 挂起孤儿诊断批）", () => {
+  it("① parseProcRows：两列数字行入表；垃圾/空行/单列丢弃；CRLF 容忍", () => {
+    const out = "100 1\r\n200 100\n\n垃圾行\n300\n400 300 extra";
+    const rows = parseProcRows(out);
+    // 两列精确匹配才收：单列、「300 行带尾巴」都不进——枚举器多打一行诊断不至于误杀
+    expect(rows).toEqual([
+      { pid: 100, ppid: 1 },
+      { pid: 200, ppid: 100 },
+    ]);
+  });
+
+  it("② closureFrom：ppid 链闭包——直孩/孙代/曾孙代进（多趟收敛），无关进程不进", () => {
+    const procs = [
+      { pid: 10, ppid: 1 }, { pid: 20, ppid: 10 }, { pid: 30, ppid: 20 }, { pid: 40, ppid: 30 },
+      { pid: 50, ppid: 1 }, { pid: 60, ppid: 50 }, // 无关分支（根 1 下的另一棵）
+      { pid: 70, ppid: 99 }, // ppid 不在树内
+    ];
+    expect(closureFrom(procs, 10)).toEqual(new Set([10, 20, 30, 40]));
+    expect(closureFrom(procs, 50)).toEqual(new Set([50, 60]));
+    expect(closureFrom([], 10)).toEqual(new Set([10])); // 快照失败 = 仅根种子（降级形态）
+  });
+
+  it("③ pickVictims：pid∈seeds（首杀漏刀）与 ppid∈seeds（快照后新生/死父名下孤儿）两类命中", () => {
+    const seeds = new Set([100, 200]);
+    const procs = [
+      { pid: 100, ppid: 1 },   // 种子本身还活着 = 首杀漏刀
+      { pid: 210, ppid: 200 }, // 父是种子 = 新生/孤儿
+      { pid: 310, ppid: 300 }, // 双不中
+    ];
+    expect(pickVictims(procs, seeds)).toEqual([
+      { pid: 100, ppid: 1 },
+      { pid: 210, ppid: 200 },
+    ]);
+    expect(pickVictims(procs, new Set([999]))).toEqual([]);
+  });
+
+  // ---- 实进程集成 ----
+  // ④ 深链清杀（2026-09-30 事故形态的治法验证）：Git Bash 双层结构 bin\bash → usr\bin\bash → sleep，
+  //    单纯 taskkill /T 根在中间层先死时链断漏杀。killTree 完整版（杀前快照 + 杀后清扫）应清干净。
+  it.skipIf(process.platform !== "win32" || resolveShell().kind !== "bash")(
+    "④ killTree 完整版：深链树（根→中间层→sleep）杀后 ppid 链无活残留",
+    async () => {
+      const shell = resolveShell() as { kind: "bash"; bashPath: string };
+      const child = spawn(shell.bashPath, ["-c", "sleep 30"], { stdio: "ignore" });
+      await new Promise((r) => setTimeout(r, 800)); // 树成形（bin\bash → usr\bin\bash → sleep）
+      const members = closureFrom(await listProcsWin(), child.pid!); // 测试侧独立快照（killTree 内部另拍一份）
+      expect(members.size).toBeGreaterThanOrEqual(3); // 前置：确实拍到了深链（三层起）
+      killTree(child);
+      // 轮询清扫收敛：成员集上再无活进程（killTree 内部快照种子 ≥ 测试侧成员，能覆盖即通过）
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (pickVictims(await listProcsWin(), members).length === 0) break;
+        if (i === 29) throw new Error("15s 内深链残留未清净");
+      }
+      expect(pickVictims(await listProcsWin(), members)).toEqual([]);
+    },
+    25_000,
+  );
+
+  // ⑤ 即扫口的真实职责 = 活树补杀（首杀漏刀兜底）：pid∈seeds 命中活根 → /T 整树。
+  //    「死根直接孤儿」形态本机不可造：原生 node→node 链的孙随父退带走（libuv job——标记文件
+  //    实锤出生过、父退后进程消失，2026-09-30 取证）；shell 链（bash &/cmd start /b）孤儿必挂
+  //    死中间层（深链，归 ④ 杀前快照管）。
+  //    死亡验证走探活而非 close 事件：taskkill 在 sweep 内部发生时监听尚未注册，close 触发即
+  //    永久丢失（Node 无监听者事件即丢——生产路径 runBash/registry 均 spawn 后立即注册，无此坑）。
+  it.skipIf(process.platform !== "win32")(
+    "⑤ sweepRootsNow：活树即扫——根 pid 命中即整树补杀",
+    async () => {
+      const child = spawn(process.execPath, ["-e", "setTimeout(()=>{},30000)"], { stdio: "ignore" });
+      await new Promise((r) => setTimeout(r, 600)); // 树成形
+      expect(child.pid).toBeDefined();
+      const killed = await sweepRootsNow(child.pid!);
+      expect(killed).toBeGreaterThanOrEqual(1); // 根命中 pid∈seeds 被补杀
+      for (let i = 0; i < 20; i++) { // 探活轮询收敛（杀令已下，进程死透以 ESRCH 为准）
+        try { process.kill(child.pid!, 0); await new Promise((r) => setTimeout(r, 200)); }
+        catch { break; }
+      }
+      expect(() => process.kill(child.pid!, 0)).toThrow(); // 进程真死（ESRCH）
+    },
+    20_000,
+  );
 });
