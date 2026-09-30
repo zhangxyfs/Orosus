@@ -129,11 +129,11 @@ describe("DocModel 技能手动加载行（2026-09-28 用户拍板：技能正�
 		expect(plain).toContain("❯ 普通提问"); // 普通用户消息照旧整块渲染
 	});
 
-	it("③ 带参形态（2026-09-30 拍板：/skill : 名 参数——kimi skillArgs 同款）：手敲=原话行+标记合成一条消息，拆分渲染原话块在前、● 行随后；菜单形态（标记在消息首）照旧只 ● 行", () => {
+	it("③ 带参形态（2026-09-30 拍板：/skill : 名 参数——kimi skillArgs 同款）：手敲=原话行嵌标记行后持久化，拆分渲染原话块在前、● 行随后；菜单形态（标记行后无 / 行）照旧只 ● 行", () => {
 		const dm = new DocModel();
-		// 手敲路径：main 层合成一条 user 消息（原话 + 标记 + <skill args> 正文）——实时与回放同走本口
+		// 手敲路径：main 层产出「标记行 / 原话行 / <skill args> 正文」一条消息（原话不放开头——防命令路由误吞）——实时与回放同走本口
 		dm.userPrompt(
-			"/skill : doc-review 2026-09-27-m4-3c-mcp-production.md 全量\n（用户通过菜单手动加载技能 \"doc-review\"——请按该技能正文行事）\n<skill name=\"doc-review\" args=\"2026-09-27-m4-3c-mcp-production.md 全量\">\n# 技能正文\n</skill>",
+			"（用户通过菜单手动加载技能 \"doc-review\"——请按该技能正文行事）\n/skill : doc-review 2026-09-27-m4-3c-mcp-production.md 全量\n<skill name=\"doc-review\" args=\"2026-09-27-m4-3c-mcp-production.md 全量\">\n# 技能正文\n</skill>",
 		);
 		const plain = dm.frameLines(120).map(stripAnsi);
 		const joined = plain.join("\n");
@@ -142,7 +142,7 @@ describe("DocModel 技能手动加载行（2026-09-28 用户拍板：技能正�
 		expect(joined.indexOf("❯ /skill : doc-review")).toBeLessThan(joined.indexOf("已加载技能 doc-review")); // 顺序：输入行在前
 		expect(joined).not.toContain("技能正文"); // 正文照旧不进对话流
 		expect(joined).not.toContain("args="); // 属性不裸露
-		// 菜单 Enter 形态：标记在消息首、无原话前缀 → 只 ● 行（既有序 ① 已钉单行，此处补无原话块断言）
+		// 菜单 Enter 形态：标记行后直接 <skill>（无 / 开头的原话行）→ 只 ● 行
 		const dm2 = new DocModel();
 		dm2.userPrompt("（用户通过菜单手动加载技能 \"pdf\"——请按该技能正文行事）\n<skill name=\"pdf\">\n正文\n</skill>");
 		expect(dm2.frameLines(80).map(stripAnsi).join("\n")).not.toContain("❯"); // 无原话块
