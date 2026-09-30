@@ -9,6 +9,7 @@ import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { fakeProviderModule } from "@orosus/testing";
 import { activateMcp, mcpDef, type ActivateMcpOpts, type McpCatalogRow } from "./index.ts";
 import { MCP_PRELOADS, shouldRegisterPreloadTools, isPreloadName, readPreloadSchemaCache, writePreloadSchemaCache, withCachedSchemas, preloadSchemaCacheFile } from "./preload.ts";
+import { BUNDLED_PRELOAD_SCHEMAS } from "./preload-schemas.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -122,6 +123,25 @@ describe("T20 预装清单与门控", () => {
     expect(MCP_PRELOADS.every((p) => p.manifest.length > 0)).toBe(true);
     expect(isPreloadName("memory")).toBe(true);
     expect(isPreloadName("mine")).toBe(false);
+  });
+
+  it("⑤b 出厂默认参数结构（2026-09-30 实况抓取烤码 + 清单名对齐实况）：四件可抓 server 的每个清单工具都有 bundled schema 且带 properties（github 无令牌豁免——首连落盘补）；清单名与 bundled 键互相对齐", () => {
+    for (const pl of MCP_PRELOADS) {
+      const bundled = BUNDLED_PRELOAD_SCHEMAS[pl.name];
+      if (pl.name === "github") {
+        expect(bundled === undefined || Object.keys(bundled).length === 0).toBe(true); // 无令牌未捕获——空是事实不是回归
+        continue;
+      }
+      expect(bundled !== undefined).toBe(true);
+      for (const m of pl.manifest) {
+        const schema = bundled![m.name];
+        if (schema === undefined) throw new Error(`${pl.name}.${m.name} 缺出厂 schema（新机器冷进程会盲发）`);
+        // type:object + properties 键在场（空 properties 合法 = 真·无参工具——「无参数」本身就是正确信息）
+        expect(schema.type === "object" && typeof schema.properties === "object").toBe(true);
+      }
+      const extra = Object.keys(bundled!).filter((k) => !pl.manifest.some((m) => m.name === k));
+      expect(extra).toEqual([]); // bundled 不夹带清单外名字（烤码时按清单过滤）
+    }
   });
 
   it("⑥ 门控 shouldRegisterPreloadTools：默认 true（2026-09-30 翻转）；显式 false 关（modules.d 优先于 config.toml）；老 config.toml 同款认", () => {

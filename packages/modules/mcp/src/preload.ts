@@ -40,7 +40,7 @@ export const MCP_PRELOADS: PreloadDef[] = [
       t("delete_relations", "删除实体间关系"),
       t("read_graph", "读取整个知识图谱"),
       t("search_nodes", "按查询搜索节点"),
-      t("read_nodes", "读取指定实体"),
+      t("open_nodes", "读取指定名字的节点"),
     ],
   },
   {
@@ -50,7 +50,7 @@ export const MCP_PRELOADS: PreloadDef[] = [
     desc: "库文档检索（最新版官方文档片段）",
     manifest: [
       t("resolve-library-id", "把库名解析成 context7 库 ID"),
-      t("get-library-docs", "取库的文档片段（可带主题过滤）"),
+      t("query-docs", "查库文档片段（可带主题过滤）"),
     ],
   },
   {
@@ -90,13 +90,18 @@ export const MCP_PRELOADS: PreloadDef[] = [
     desc: "MCP 官方自检 server（echo/图片/进度/资源全特性——验证链路通不通）",
     manifest: [
       t("echo", "回显输入（附随机上下文）"),
-      t("add", "两数相加"),
-      t("sampleLLM", "借 server 侧 LLM 采样"),
-      t("getTinyImage", "返回 1x1 测试图（Orosus 工具结果暂只支持文本——显示占位说明）"),
-      t("printEnv", "打印 server 可见环境变量"),
-      t("longRunningOperation", "长任务 + 进度通知（测超时顺延）"),
-      t("sampledNotification", "周期通知"),
-      t("annotatedTool", "带注释的工具（测 tool 注解）"),
+      t("get-sum", "返回两数之和"),
+      t("simulate-research-query", "模拟深度研究任务（测 MCP 任务式编排）"),
+      t("get-tiny-image", "返回 1x1 测试图（Orosus 工具结果暂只支持文本——显示占位说明）"),
+      t("get-env", "打印 server 可见环境变量"),
+      t("trigger-long-running-operation", "长任务 + 进度通知（测超时顺延）"),
+      t("toggle-subscriber-updates", "周期资源订阅通知开关"),
+      t("toggle-simulated-logging", "模拟分级日志开关"),
+      t("get-annotated-message", "带注释的消息（测内容注解）"),
+      t("get-structured-content", "结构化内容 + 输出 schema（测客户端数据校验）"),
+      t("get-resource-links", "资源链接列表（测 resource_link 渲染）"),
+      t("get-resource-reference", "资源引用块（测 MCP 资源引用形态）"),
+      t("gzip-file-as-resource", "单文件 gzip 压缩（按输出形态回文本或资源）"),
     ],
   },
   {
@@ -112,7 +117,6 @@ export const MCP_PRELOADS: PreloadDef[] = [
       t("puppeteer_select", "选择下拉项"),
       t("puppeteer_hover", "悬停元素"),
       t("puppeteer_evaluate", "执行 JS 并返回结果"),
-      t("puppeteer_resize", "调整视口大小"),
     ],
   },
 ];
