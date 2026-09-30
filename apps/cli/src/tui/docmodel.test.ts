@@ -128,6 +128,110 @@ describe("DocModel 技能手动加载行（2026-09-28 用户拍板：技能正�
 		expect(plain).not.toContain("正文原文");
 		expect(plain).toContain("❯ 普通提问"); // 普通用户消息照旧整块渲染
 	});
+
+	it("③ 带参形态（2026-09-30 拍板：/skill : 名 参数——kimi skillArgs 同款）：args 挂 <skill> 属性不破标记行识别；手敲原话行在前、● 行随后", () => {
+		const dm = new DocModel();
+		// main 层手敲路径的两次 userPrompt 调用序：先原话回显、后技能标记消息（kimi promptMetadata「/名 参数」同形态）
+		dm.userPrompt("/skill : doc-review 2026-09-27-m4-3c-mcp-production.md 全量");
+		dm.userPrompt(
+			`（用户通过菜单手动加载技能 "doc-review"——请按该技能正文行事）\n<skill name="doc-review" args="2026-09-27-m4-3c-mcp-production.md 全量">\n# 技能正文\n</skill>`,
+		);
+		const plain = dm.frameLines(120).map(stripAnsi);
+		const joined = plain.join("\n");
+		expect(joined).toContain("❯ /skill : doc-review 2026-09-27-m4-3c-mcp-production.md 全量"); // 原话整行上屏
+		expect(joined).toContain("已加载技能 doc-review"); // ● 行随后
+		expect(joined.indexOf("❯ /skill : doc-review")).toBeLessThan(joined.indexOf("已加载技能 doc-review")); // 顺序：输入行在前
+		expect(joined).not.toContain("技能正文"); // 正文照旧不进对话流
+		expect(joined).not.toContain("args="); // 属性不裸露
+	});
+});
+
+describe("连续只读工具聚合（2026-09-30 用户拍板抄 cc-haha 计数行——同名紧邻并组、一行计数、Alt+O 展开逐条）", () => {
+	it("① 三个连续 read 并组：单行「Used Read 3 个文件 · 共 N 行」，路径不上屏，行数 = 各次之和", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c1");
+		dm.toolCall("tool-fs__read", { path: "b.md" }, "c2");
+		dm.toolCall("tool-fs__read", { path: "c.md" }, "c3");
+		dm.toolResult("line1\nline2", false, "c1");
+		dm.toolResult("x\ny\nz", false, "c2");
+		dm.toolResult("w", false, "c3");
+		const plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Used Read 3 个文件 · 共 6 行");
+		expect(plain.join("\n")).not.toContain("a.md"); // 收起态路径不上屏
+	});
+
+	it("② 进行中组头 Using…，挂果后原位翻 Used（不新增行）；部分挂果仍 Using", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c1");
+		dm.toolCall("tool-fs__read", { path: "b.md" }, "c2");
+		let plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Using Read 2 个文件");
+		dm.toolResult("x", false, "c1");
+		plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Using Read 2 个文件"); // 仍有未结组员
+		dm.toolResult("y\nz", false, "c2");
+		plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Used Read 2 个文件 · 共 3 行");
+	});
+
+	it("③ 断组与单飞：异名工具断组、组后单次调用保持 solo 形态；write 永不并组", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c1");
+		dm.toolCall("tool-fs__read", { path: "b.md" }, "c2");
+		dm.toolCall("tool-fs__write", { path: "w.md", content: "x" }, "c3"); // 非折叠类——断组
+		dm.toolCall("tool-fs__read", { path: "c.md" }, "c4"); // 断组后单飞 → solo 行
+		dm.toolResult("1", false, "c1");
+		dm.toolResult("2", false, "c2");
+		dm.toolResult("ok", false, "c3");
+		dm.toolResult("3", false, "c4");
+		const plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(4); // 组一行 + write 头行 + write 内容预览一行 + read solo 一行
+		expect(plain[0]).toContain("Used Read 2 个文件 · 共 2 行");
+		expect(plain[1]).toContain("Used Write");
+		expect(plain[3]).toContain("Used Read (c.md)"); // solo 形态照旧（不误并已断组的调用）
+	});
+
+	it("④ Alt+O 展开：组头 + 逐组员单行（kimi 树形近似），账本行数随展开精确", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c1");
+		dm.toolCall("tool-fs__read", { path: "b.md" }, "c2");
+		dm.toolResult("x", false, "c1");
+		dm.toolResult("y", false, "c2");
+		dm.toolOpen = true;
+		const plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(3);
+		expect(plain[0]).toContain("Used Read 2 个文件");
+		expect(plain[1]).toContain("a.md");
+		expect(plain[2]).toContain("b.md");
+	});
+
+	it("⑤ 去重口径：同文件同范围读两次算一个文件（cc-haha 唯一路径 Set 同款）", () => {
+		const dm = new DocModel();
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c1");
+		dm.toolCall("tool-fs__read", { path: "a.md" }, "c2");
+		dm.toolResult("x", false, "c1");
+		dm.toolResult("y", false, "c2");
+		const plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Used Read 1 个文件 · 共 2 行"); // 去重后 1 个文件、行数仍两次之和
+	});
+
+	it("⑥ 回放同形（旧日志无 callId 走组内回退配对）：historyFrom 的连续 tool/call 同并组", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "tool/call", name: "tool-fs__read", args: { path: "a.md" } },
+			{ type: "tool/call", name: "tool-fs__read", args: { path: "b.md" } },
+			{ type: "tool/result", output: "x", isError: false },
+			{ type: "tool/result", output: "y", isError: false },
+		], 80);
+		const plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toContain("Used Read 2 个文件 · 共 2 行");
+	});
 });
 
 
