@@ -35,13 +35,17 @@ export interface SdkConnectOpts {
   callTimeoutMs?: number;
 }
 
-/** createSdkConnection 的配置面（与 activateMcp 的 server 条目同形——headers/cwd 在 T5 扩入）。 */
+/** createSdkConnection 的配置面（与 activateMcp 的 server 条目同形）。
+ *  headers（T5）：远程 server 鉴权头——值可写 $ENV:VAR（config 层 ENV_PLACEHOLDER 全局语法，零新码）；
+ *  cwd（T5）：子进程工作目录（stdio 型）。 */
 export interface SdkServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   url?: string;
   timeoutMs?: number;
+  headers?: Record<string, string>;
+  cwd?: string;
 }
 
 /** SDK 连接实现（m4-3c T1 起从 index.ts 抽出）：stdio（command/args/env）与 HTTP（url）两 transport。
@@ -63,8 +67,16 @@ export async function createSdkConnection(
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
   const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
   const transport = cfg.url !== undefined
-    ? new StreamableHTTPClientTransport(new URL(cfg.url))
-    : new StdioClientTransport({ command: cfg.command!, args: cfg.args ?? [], ...(cfg.env !== undefined ? { env: cfg.env } : {}) });
+    ? new StreamableHTTPClientTransport(
+        new URL(cfg.url),
+        cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
+      )
+    : new StdioClientTransport({
+        command: cfg.command!,
+        args: cfg.args ?? [],
+        ...(cfg.env !== undefined ? { env: cfg.env } : {}),
+        ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}), // T5：子进程工作目录
+      });
   const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined; // 成功路也须清（30s 定时器悬着会拖住进程退出）
   try {

@@ -19,7 +19,7 @@ export interface ServerConnection {
 }
 
 export interface ActivateMcpOpts {
-  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number }>;
+  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string }>;
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
 }
@@ -134,11 +134,15 @@ export const mcpDef = defineModule({
       deferred: z.boolean().optional(),
       // 调用超时 server 级覆盖（T2）：缺省 60s；长任务 server 可调大（毫秒、正数）
       timeoutMs: z.number().positive().optional(),
+      // 远程 server 鉴权头（T5）：值可写 $ENV:VAR（config 层全局语法）
+      headers: z.record(z.string(), z.string()).optional(),
+      // stdio 子进程工作目录（T5）
+      cwd: z.string().optional(),
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
   mounts: ["contribute:tool", "contribute:promptSection"],
-  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number }> }>) {
+  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
     const out = await activateMcp({
       servers: ctx.config.servers,
