@@ -4,7 +4,9 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activateMcp, type ActivateMcpOpts } from "./index.ts";
+import { createHarness, InMemorySessionStore } from "@orosus/core";
+import { fakeProviderModule } from "@orosus/testing";
+import { activateMcp, mcpDef, type ActivateMcpOpts, type McpCatalogRow } from "./index.ts";
 import { MCP_PRELOADS, shouldRegisterPreloadTools, isPreloadName } from "./preload.ts";
 
 const dirs: string[] = [];
@@ -137,5 +139,47 @@ describe("T20 预装清单与门控", () => {
     const home2 = tmp("gate2");
     writeFileSync(join(home2, "config.toml"), "坏 TOML", "utf8");
     expect(shouldRegisterPreloadTools(home2)).toBe(true);
+  });
+
+  it("⑦ 同名空壳覆盖自愈（2026-09-30 实机 memory 弄残事故）：用户层 enabled:true 空壳不再顶掉预装——工具照注册、catalog 报 preload/待启动；enabled:false 空壳维持停用", async () => {
+    const home = tmp("heal-home");
+    const prevHome = process.env.OROSUS_HOME;
+    process.env.OROSUS_HOME = home; // mcpDef 的 shouldRegisterPreloadTools/orosusHome 走隔离家（默认开）
+    try {
+      const d = tmp("heal");
+      const userFile = join(d, "u.toml");
+      writeFileSync(userFile, "[mcp.servers.memory]\nenabled = true\n", "utf8"); // 旧 on-bug 弄残的壳：无 command
+      const h = await createHarness({
+        store: new InMemorySessionStore(),
+        diagDir: d, spillDir: join(d, "spill"),
+        modules: [mcpDef, fakeProviderModule("fake", [])],
+        config: { userFile, projectFile: join(d, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+      });
+      const names = h.graph().tools.toolInfos().map((t) => t.name);
+      expect(names).toContain("mcp__memory__search_nodes"); // 空壳没顶掉预装——工具在（自愈）
+      const cat = await h.graph().services.getOptional("mcp.catalog");
+      expect(typeof cat).toBe("function");
+      const rows = (cat as () => McpCatalogRow[])();
+      const mem = rows.find((r) => r.name === "memory");
+      expect(mem?.source).toBe("preload"); // 定源预装（不再被用户层同名误标 config）
+      expect(mem?.state).toBe("idle"); // 待启动——不是「失败」
+      await h.close();
+      // enabled:false 空壳 = 停用覆盖——语义不变（预装配置照供但不启用）
+      writeFileSync(userFile, "[mcp.servers.memory]\nenabled = false\n", "utf8");
+      const h2 = await createHarness({
+        store: new InMemorySessionStore(),
+        diagDir: d, spillDir: join(d, "spill2"),
+        modules: [mcpDef, fakeProviderModule("fake", [])],
+        config: { userFile, projectFile: join(d, "p.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+      });
+      const names2 = h2.graph().tools.toolInfos().map((t) => t.name);
+      expect(names2).not.toContain("mcp__memory__search_nodes"); // 停用 = 工具不注册
+      const rows2 = (await h2.graph().services.getOptional("mcp.catalog") as () => McpCatalogRow[])();
+      expect(rows2.find((r) => r.name === "memory")?.state).toBe("disabled");
+      await h2.close();
+    } finally {
+      if (prevHome === undefined) delete process.env.OROSUS_HOME;
+      else process.env.OROSUS_HOME = prevHome;
+    }
   });
 });
