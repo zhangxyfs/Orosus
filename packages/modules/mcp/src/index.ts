@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { orosusHome } from "@orosus/contracts/home";
 import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 import { createSdkConnection } from "./client.ts";
 import { readProjectMcpJson, gateProjectServers, mcpTrustFile } from "./project.ts";
+import { MCP_PRELOADS, shouldRegisterPreloadTools } from "./preload.ts";
 
 export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 export { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS } from "./client.ts";
@@ -24,9 +26,16 @@ export interface ServerConnection {
 }
 
 export interface ActivateMcpOpts {
-  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse" }>;
+  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse"; lazy?: boolean }>;
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
+  /** T20 惰性策略（预装件按需启动）：lazy:true 的 server 不在 activate 连接——工具清单来自
+   *  manifest，首次调用才 connect（memoized；失败清空可重试）。 */
+  lazy?: {
+    manifestFor(name: string): ServerToolMeta[] | undefined;
+    connect(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }): Promise<ServerConnection>;
+    onStarted(name: string, state: "connected" | "failed", reason?: string): void;
+  };
 }
 
 export interface McpActivateOut {
@@ -53,8 +62,35 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   const mapping: Record<string, Record<string, string>> = {}; // MI-07：消毒改名映射（原样名 → 注册名），manifest 事件可观测
   // T1 并发连接（kimi 同款）：所有 server 一起握（互不拖累——失败隔离本就有），结果按配置序归并（确定性）。
   // 每 server 一条 connect → listTools → instructions 流水线；任一步炸即该 server 记失败，不株连其余。
+  // T20：lazy:true 的 server 走惰性分支——activate 零连接（启动零进程），manifest 供清单、首调才握。
   const results = await Promise.all(
-    (Object.entries(opts.servers).filter(([, cfg]) => cfg.enabled !== false)).map(async ([name, cfg]) => {
+    (Object.entries(opts.servers).filter(([, cfg]) => cfg.enabled !== false)).map(async ([name, cfg]): Promise<
+      | { ok: true; name: string; cfg: typeof cfg; list: ServerToolMeta[]; instructions?: string; conn?: ServerConnection; lazyCall?: ServerCall }
+      | { ok: false; name: string; reason: string }
+    > => {
+      if (cfg.lazy === true && opts.lazy !== undefined) {
+        const mf = opts.lazy.manifestFor(name);
+        if (mf === undefined) {
+          return { ok: false, name, reason: "惰性 server 无静态清单（lazy 需配 manifest）" };
+        }
+        let started: ServerConnection | undefined;
+        let pending: Promise<ServerConnection> | undefined;
+        const ensure = (): Promise<ServerConnection> => {
+          if (started !== undefined) return Promise.resolve(started);
+          pending ??= opts.lazy!.connect(name, cfg).then(
+            (c) => { started = c; opts.lazy!.onStarted(name, "connected"); return c; },
+            (err) => {
+              pending = undefined; // 失败清 memo——下次调用可重试
+              opts.lazy!.onStarted(name, "failed", err instanceof Error ? err.message : String(err));
+              throw err;
+            },
+          );
+          return pending;
+        };
+        const lazyCall: ServerCall = (toolName, args, signal) => ensure().then((c) => c.callTool(toolName, args, signal));
+        conns.push({ close: async () => { await started?.close?.(); } } as ServerConnection); // dispose 只关已起进程（未起零操作）
+        return { ok: true, name, cfg, list: mf, lazyCall };
+      }
       try {
         const conn = await opts.connect(name, cfg);
         const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
@@ -64,9 +100,9 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
         try {
           instructions = sanitizeServerInstructions(name, await conn.instructions?.());
         } catch { /* 指令取不到不株连连接 */ }
-        return { ok: true as const, name, cfg, conn, list, instructions };
+        return { ok: true, name, cfg, conn, list, ...(instructions !== undefined ? { instructions } : {}) };
       } catch (err) {
-        return { ok: false as const, name, reason: err instanceof Error ? err.message : String(err) };
+        return { ok: false, name, reason: err instanceof Error ? err.message : String(err) };
       }
     }),
   );
@@ -75,8 +111,10 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       failedServers.push({ name: r.name, reason: r.reason }); // §10 降级粒度：单 server 失败不株连模块
       continue;
     }
-    const { name, cfg, conn, list, instructions } = r;
-    conns.push(conn);
+    const { name, cfg, conn, list, instructions, lazyCall } = r;
+    if (conn !== undefined) conns.push(conn);
+    if (list.length === 0 && lazyCall !== undefined) continue; // T20：空清单惰性件（tool-search 关态门控）——不占 promptSection 与 manifest 事件
+    const callTool: ServerCall = lazyCall ?? conn!.callTool;
     manifest[name] = list.map((t) => t.name);
     // T11③：无说明 server 降级为「工具清单行」——每行带描述首行（截 160 字，qwen 目录行同值）
     const toolLines = list.map((meta) => {
@@ -84,7 +122,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       return descFirst === "" ? `- ${meta.name}` : `- ${meta.name}：${descFirst}`;
     });
     for (const meta of list) {
-      const tool = toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）
+      const tool = toBridgedTool(name, meta, callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）
       if (seenNames.has(tool.name)) {
         // MI-07 带内跳过：消毒后撞名——进 registry 会 throw（整模块降级），跳过后来者并记录
         skippedTools.push({ server: name, tool: meta.name, reason: `消毒后注册名撞车：${tool.name}` });
@@ -284,12 +322,14 @@ export const mcpDef = defineModule({
       cwd: z.string().optional(),
       // 远程传输档（T17 三档）：缺省 http；sse = 旧式 HTTP+SSE
       transport: z.enum(["http", "sse"]).optional(),
+      // 按需启动（T20，v1 原案键名）：activate 不连接，首次调用才起（预装件用）
+      lazy: z.boolean().optional(),
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
   provides: ["mcp.catalog"], // T16：/mcp 命令族与 /settings 管理面的数据源（技能 catalog 同款服务倒挂）
   mounts: ["contribute:tool", "contribute:promptSection", "tools.list", "provide"],
-  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse" }> }>) {
+  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse"; lazy?: boolean }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
     // T12 项目 .mcp.json：只认 cwd 这一层；手写配置同名赢；未确认（无记录/指纹不符）不连（fail-closed），
     // toast 一条指路（ctx.ui.notice 可选口——无头/非 TTY 静默丢弃，server 照样跳过）
@@ -301,24 +341,65 @@ export const mcpDef = defineModule({
       trustFile: mcpTrustFile(),
       projectPath: process.cwd(),
     });
+    // T20 预装合并：优先级最低（用户 > 项目确认件 > 预装）；lazy + deferred 双标记；
+    // 不走信任门（非项目带来）。同名在场即整条让位。
+    const merged: Record<string, Record<string, unknown>> = { ...gated.servers };
+    // T20 门控：tool-search 未显式启用 → 预装不注册工具（deferred 标记在关态不生效——50 工具会灌爆
+    // 上下文）；管理面/菜单/启停不受影响（catalog 行总在）。README 指路开 tool-search 后 /reload 生效。
+    const preloadToolsOn = shouldRegisterPreloadTools(orosusHome());
+    for (const pl of MCP_PRELOADS) {
+      if (pl.name in gated.servers || pl.name in project.servers) continue;
+      merged[pl.name] = { command: pl.command, args: pl.args, lazy: true, deferred: true };
+    }
+    // T20 live 态：惰性首启结果记在活表——catalog 服务每次现读（idle → connected/failed 即时翻）
+    const lazyState = new Map<string, { state: "connected" | "failed"; reason?: string }>();
     const out = await activateMcp({
-      servers: gated.servers as typeof ctx.config.servers,
+      servers: merged as typeof ctx.config.servers,
       connect: (name, cfg) => createSdkConnection(name, cfg),
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
+      lazy: {
+        manifestFor: (name) => (preloadToolsOn ? MCP_PRELOADS.find((p) => p.name === name)?.manifest : []),
+        connect: (name, cfg) => createSdkConnection(name, cfg, { connectTimeoutMs: 60_000 }), // 预装首启 60s（npx 下载包——设计空白拍板）
+        onStarted: (name, state, reason) => {
+          if (state === "failed") lazyState.set(name, { state, ...(reason !== undefined ? { reason } : {}) });
+          else lazyState.set(name, { state });
+          if (state === "failed") ctx.log.warn("mcp.preload-start-failed", `预装 server ${name} 首次启动失败：${reason ?? ""}`, { server: name });
+        },
+      },
     });
     if (gated.pending.length > 0) {
       ctx.ui.notice?.(`项目 .mcp.json 有 ${gated.pending.length} 个未确认的 MCP server，/mcp 查看确认`);
     }
     // T16：catalog 服务（零参函数返回行快照——skill.catalog 同款；live 态在 activate 定格，reload 换代重算）
     const userServerNames = new Set(Object.keys(ctx.config.servers));
-    ctx.provide("mcp.catalog", (): McpCatalogRow[] => buildCatalogRows({
-      userServerNames,
-      mergedServers: gated.servers,
-      projectServers: project.servers,
-      connected: out.connected,
-      failed: out.failedServers,
-      pending: gated.pending,
-    }));
+    ctx.provide("mcp.catalog", (): McpCatalogRow[] => [
+      ...buildCatalogRows({
+        userServerNames,
+        mergedServers: gated.servers,
+        projectServers: project.servers,
+        connected: out.connected,
+        failed: out.failedServers,
+        pending: gated.pending,
+      }),
+      // T20 预装行（live：首启结果即时翻绿灯/红字）
+      ...MCP_PRELOADS
+        .filter((pl) => !(pl.name in gated.servers) && !(pl.name in project.servers))
+        .map((pl): McpCatalogRow => {
+          const live = lazyState.get(pl.name);
+          const state: McpCatalogRow["state"] = live === undefined ? "idle" : live.state === "connected" ? "connected" : "failed";
+          return {
+            name: pl.name,
+            state,
+            toolCount: pl.manifest.length,
+            tools: pl.manifest.map((t) => t.name),
+            ...(live?.state === "failed" && live.reason !== undefined ? { failReason: live.reason } : {}),
+            source: "preload",
+            transport: "stdio",
+            command: `${pl.command} ${(pl.args ?? []).join(" ")}`,
+            deferred: true,
+          };
+        }),
+    ]);
     for (const t of out.tools) ctx.contribute.tool(t);
     // MI-07：撞名跳过的带内可观测面（registry 不再因重名 throw——模块不降级，但用户须能看到少了哪些工具）
     for (const sk of out.skippedTools) ctx.log.warn("mcp.tool-skipped", `工具 "${sk.tool}"（server ${sk.server}）未注册：${sk.reason}`, { server: sk.server, tool: sk.tool });
