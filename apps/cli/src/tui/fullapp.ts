@@ -60,7 +60,6 @@ export interface SlashItem {
 	childMeta?: Record<string, { label: string; desc: string; long: string }>; // 二级项元数据（F5 十轮⑤：档名/短解/详释）
 	usage?: string; // m4-7 技能条目：详释第 3 行「适用：…」（when_to_use；无则整行留空不删行——高度恒定纪律）
 	skill?: string; // m4-7 技能条目标记 = 技能真名（Enter 走 skillInject 注入，不走命令管线）
-	mcp?: string; // m4-3c T18 MCP 条目标记 = server 真名（Enter 走 mcpOpen 直达管理面详情，不走命令管线）
 }
 
 export interface FullAppIO {
@@ -141,11 +140,6 @@ export interface FullAppIO {
 	/** 技能条目 Enter 注入（m4-7 T7）：返回以用户消息提交的全文（宿主拼 <skill> 块，剥 frontmatter）；
 	 *  undefined = 正文读取失败（菜单提示，不提交）。 */
 	skillInject?(name: string): string | undefined;
-	/** 斜杠菜单 MCP 区数据源（m4-3c T18）：技能区下方「── MCP ──」+ `mcp : 名字` 条目；缺省/空 = 整区不显示。
-	 *  条目须带 mcp 字段（server 真名）。 */
-	mcpItems?(): SlashItem[];
-	/** MCP 条目 Enter（m4-3c T18）：打开 MCP 管理面并跳到该 server 详情页。 */
-	mcpOpen?(name: string): void;
 }
 
 type FocusIdx = 0 | 1 | 2;
@@ -2040,8 +2034,9 @@ export class FullApp {
 	}
 
 	/** 斜杠菜单当前候选清单（onOverlayKey 与滚轮路由共用一源——两处过滤口径漂移即选中越界/Enter 错位）。
-	 *  m4-7 T7：一级含技能区（sep 分隔行 + 技能条目殿后于命中命令）；key 一级命令 = 命令名、技能 = 真名。 */
-	private overlayItems(): { key: string; kind: "cmd" | "skill" | "mcp" | "sep" }[] {
+	 *  m4-7 T7：一级含技能区（sep 分隔行 + 技能条目殿后于命中命令）；key 一级命令 = 命令名、技能 = 真名。
+	 *  （m4-3c T18 曾加 MCP 区，2026-09-30 用户打回「没有意义」整段退役——管理面唯一入口 /settings。） */
+	private overlayItems(): { key: string; kind: "cmd" | "skill" | "sep" }[] {
 		const s = this.state;
 		const level2 = s.overlayCmd !== "";
 		const ap = this.argPhase();
@@ -2049,29 +2044,9 @@ export class FullApp {
 		if (level2) return (this.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? []).map((c) => ({ key: c, kind: "cmd" as const }));
 		const cmds = this.filteredCommands().map((c) => ({ key: c.name, kind: "cmd" as const }));
 		const skills = this.filteredSkills().map((c) => ({ key: c.skill ?? c.name, kind: "skill" as const }));
-		// m4-3c T18：MCP 区殿后于技能区（「── MCP ──」分隔 + `mcp : 名字`；空区整段不显示）
-		const mcps = this.filteredMcp().map((c) => ({ key: c.mcp ?? c.name, kind: "mcp" as const }));
-		const out: { key: string; kind: "cmd" | "skill" | "mcp" | "sep" }[] = [...cmds];
+		const out: { key: string; kind: "cmd" | "skill" | "sep" }[] = [...cmds];
 		if (skills.length > 0) out.push({ key: "", kind: "sep" as const }, ...skills);
-		if (mcps.length > 0) out.push({ key: "", kind: "sep" as const }, ...mcps);
 		return out;
-	}
-
-	/** MCP 区过滤（m4-3c T18，技能区同款三档制：前缀排前、含字居中、子序列殿后）。
-	 *  可搜文本 = 真名 + 显示标签「mcp : 名」。 */
-	private filteredMcp(): SlashItem[] {
-		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
-		const hits: SlashItem[] = [];
-		const more: SlashItem[] = [];
-		const fuzzy: SlashItem[] = [];
-		for (const c of this.io.mcpItems?.() ?? []) {
-			const n = (c.mcp ?? c.name).toLowerCase();
-			const label = c.name.toLowerCase();
-			if (q === "" || n.startsWith(q) || label.startsWith(q)) hits.push(c);
-			else if (n.includes(q) || label.includes(q)) more.push(c);
-			else if (isSubseq(q, n) || isSubseq(q, (c.mcp ?? c.name).toLowerCase())) fuzzy.push(c);
-		}
-		return [...hits, ...more, ...fuzzy];
 	}
 
 	/** 技能区过滤（m4-7 T7，原型图 1）：技能名档位（前缀排前、含字居中、子序列殿后——2026-09-30
@@ -2136,7 +2111,6 @@ export class FullApp {
 			// 技能 Tab 填可输入形态「/skill : 名」（2026-09-30 用户拍板：Tab ≠ Enter——回车直接执行技能，
 			// Tab 落输入框可编辑，提交层 processReplLine 解析该格式再注入正文）；命令行 Tab 照旧补全命令名
 			const sel = items[s.overlaySel];
-			if (sel?.kind === "mcp") return; // m4-3c T18 拍板：mcp 条目 Tab 不补全（不是可输入命令——技能条目同款边界）
 			s.input = sel?.kind === "skill" ? `/skill : ${sel.key}` : sel?.key ?? s.input;
 			s.cursor = s.input.length;
 			s.overlayOpen = false;
@@ -2173,16 +2147,6 @@ export class FullApp {
 			if (row.kind === "skill") {
 				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）
 				this.fireSkill(row.key);
-				this.scheduler.requestImmediateRender();
-				return;
-			}
-			if (row.kind === "mcp") {
-				// m4-3c T18：server 不是命令——Enter 直达 /settings MCP 管理面详情页
-				s.overlayOpen = false;
-				s.overlayCmd = "";
-				s.input = ""; // 与命令提交同口径清输入（残留 "/" 会污染下一次菜单过滤）
-				s.cursor = 0;
-				this.io.mcpOpen?.(row.key);
 				this.scheduler.requestImmediateRender();
 				return;
 			}
@@ -3005,8 +2969,7 @@ export class FullApp {
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
 		const skillCount = ap === undefined && !level2 ? this.filteredSkills().length : 0;
-		const mcpCount = (this.io.mcpItems?.() ?? []).length;
-		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}${mcpCount > 0 ? `${mcpCount} 个 server ` : ``}`);
+		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
 		// CTU-09（2026-09-28 code review）：标题源头截断（overlayCmd/ap.cmd 是用户输入可超长——原靠
 		// padToWidth 兜底切掉右框角；预算扣除 en 段实测宽）
 		const titleText = ap !== undefined ? ` ${ap.cmd} 参数 ` : level2 ? ` ${s.overlayCmd} ` : " 斜杠命令 ";
@@ -3014,7 +2977,7 @@ export class FullApp {
 		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
 		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」
-		let items: { text: string; mark: string; long: string; kind: "cmd" | "skill" | "mcp" | "sep"; usage?: string }[];
+		let items: { text: string; mark: string; long: string; kind: "cmd" | "skill" | "sep"; usage?: string }[];
 		if (ap !== undefined) {
 			// 参数阶段（m5 T15）：候选行与命令菜单同框（恒定行数防闪烁纪律不变）
 			items = ap.items.length === 0
@@ -3047,17 +3010,8 @@ export class FullApp {
 				const desc = budget >= 8 ? ` ${theme.dim(truncateToWidth(c.desc, budget))}` : "";
 				return { text: truncateToWidth(`${label}${desc}`, oInner - 4), mark: " ", long: c.long, kind: "skill" as const, ...(c.usage !== undefined ? { usage: c.usage } : {}) };
 			};
-			// m4-3c T18：MCP 条目「mcp : 名」+ 行内短说明；详释第 3 行 = 状态行（usage 字段同构技能「适用」）
-			const mc = this.filteredMcp();
-			const mcpSepRow = { text: theme.fg("muted", `── MCP ${"─".repeat(Math.max(1, oInner - 10))}`), mark: " ", long: "", kind: "sep" as const };
-			const mcpRow = (c: SlashItem) => {
-				const label = `mcp : ${c.mcp ?? c.name}`;
-				const budget = oInner - 4 - visibleWidth(label) - 1;
-				const desc = budget >= 8 ? ` ${theme.dim(truncateToWidth(c.desc, budget))}` : "";
-				return { text: truncateToWidth(`${label}${desc}`, oInner - 4), mark: " ", long: c.long, kind: "mcp" as const, ...(c.usage !== undefined ? { usage: c.usage } : {}) };
-			};
 			items =
-				real.length === 0 && sk.length === 0 && mc.length === 0
+				real.length === 0 && sk.length === 0
 					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有匹配的命令。继续输入或删字修改筛选，Esc 关闭菜单。", kind: "cmd" as const }]
 					: [
 							...real.map((c) => ({
@@ -3068,9 +3022,6 @@ export class FullApp {
 							})),
 							...(sk.length > 0 ? [sepRow] : []),
 							...sk.map(skillRow),
-							// m4-3c T18：MCP 区（技能下方；空区整段不显示——无 MCP 环境与现状逐字节一致）
-							...(mc.length > 0 ? [mcpSepRow] : []),
-							...mc.map(mcpRow),
 						];
 		}
 		const selI = Math.max(0, Math.min(items.length - 1, s.overlaySel));
@@ -3113,9 +3064,9 @@ export class FullApp {
 		// 详释第 3 行（m4-7 T7 / 原型图 1 验收点 2）：技能选中 = when_to_use 简单说明（无则整行留空不删行——
 		// 高度恒定纪律）；命令/参数/二级维持操作提示行（技能的 Enter/Esc 键位与命令同，操作行省去不损可发现性）
 		const selItem = items[selI];
-		const third = selItem !== undefined && (selItem.kind === "skill" || selItem.kind === "mcp")
+		const third = selItem !== undefined && selItem.kind === "skill"
 			? (selItem.usage !== undefined && selItem.usage !== ""
-				? ` ${theme.dim(selItem.kind === "mcp" ? truncateToWidth(selItem.usage, longW - 2) : `适用：${truncateToWidth(selItem.usage, longW - 4)}`)}`
+				? ` ${theme.dim(`适用：${truncateToWidth(selItem.usage, longW - 4)}`)}`
 				: "")
 			: foot;
 		olines.push(boxRow(third));

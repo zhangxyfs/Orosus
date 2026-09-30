@@ -3254,36 +3254,8 @@ describe("查看窗内容快捷键与主窗一致（走查④续——Alt+E/O/F 
 	});
 });
 
-describe("斜杠菜单 MCP 区（m4-3c T18——技能下方/直达详情/Tab 不补全/空区不显/三档过滤）", () => {
-	const MCP = (name: string, desc: string, usage?: string): SlashItem => ({
-		name: `mcp : ${name}`, desc, long: `${name} —— ${desc}`, mcp: name, ...(usage !== undefined ? { usage } : {}),
-	});
-	const overlayOf = (app: FullApp): string[] =>
-		(app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[] } }).buildOverlay(80, 24).lines;
-
-	it("T18-① 区位与形态：技能区下方「── MCP ──」+ `mcp : 名字` + 行内说明；标题计数含 server 段", async () => {
-		const { app, input } = rig(["# hi"], 100, 30, {
-			skillItems: () => [{ name: "skill : pdf", desc: "生成 PDF", long: "生成 PDF", skill: "pdf" }],
-			mcpItems: () => [MCP("memory", "跨会话记忆", "状态：待启动 · 启用 · 26 个工具（deferred）"), MCP("github", "GitHub 操作")],
-			mcpOpen: () => {},
-		});
-		app.start();
-		await flush();
-		input.emit("data", "/");
-		await flush(120);
-		const joined = overlayOf(app).map(stripAnsi).join("\n");
-		const skillPos = joined.indexOf("skill : pdf");
-		const sepPos = joined.indexOf("── MCP");
-		const mcpPos = joined.indexOf("mcp : memory");
-		expect(skillPos).toBeGreaterThanOrEqual(0);
-		expect(sepPos).toBeGreaterThan(skillPos);
-		expect(mcpPos).toBeGreaterThan(sepPos);
-		expect(joined).toContain("跨会话记忆");
-		expect(joined).toContain("2 个 server");
-		app.stop();
-	});
-
-	it("T18-② 空区不显示：无 mcpItems 时与现状一致（无 ── MCP ── 分隔行、计数无 server 段）", async () => {
+describe("斜杠菜单 MCP 区退役（2026-09-30 用户打回「没有意义」——m4-3c T18 整段移除，管理面唯一入口 /settings）", () => {
+	it("退役钉：菜单无「── MCP ──」分隔行、无 `mcp : ` 条目、标题计数无 server 段（技能区不受影响）", async () => {
 		const { app, input } = rig(["# hi"], 100, 30, {
 			skillItems: () => [{ name: "skill : pdf", desc: "生成 PDF", long: "生成 PDF", skill: "pdf" }],
 		});
@@ -3291,67 +3263,11 @@ describe("斜杠菜单 MCP 区（m4-3c T18——技能下方/直达详情/Tab �
 		await flush();
 		input.emit("data", "/");
 		await flush(120);
-		const joined = overlayOf(app).map(stripAnsi).join("\n");
+		const joined = (app as unknown as { buildOverlay(leftW: number, divRow: number): { lines: string[] } }).buildOverlay(80, 24).lines.map(stripAnsi).join("\n");
 		expect(joined).not.toContain("── MCP");
+		expect(joined).not.toContain("mcp : ");
 		expect(joined).not.toContain("server");
-		app.stop();
-	});
-
-	it("T18-③ Enter = mcpOpen(server 真名) 菜单关闭；Tab 不补全（输入不动、菜单不关）", async () => {
-		const opened: string[] = [];
-		const { app, input } = rig(["# hi"], 100, 30, {
-			mcpItems: () => [MCP("memory", "记忆")],
-			mcpOpen: (n) => { opened.push(n); },
-		});
-		app.start();
-		await flush();
-		input.emit("data", "/");
-		await flush(120);
-		input.emit("data", "\x1b[B"); // ↓ ×3 越三命令（rig 自带 /help /title /permission），第 4 步 sep 自动跳过到 memory
-		input.emit("data", "\x1b[B");
-		input.emit("data", "\x1b[B");
-		await flush(120);
-		input.emit("data", "\r");
-		await flush(120);
-		expect(opened).toEqual(["memory"]);
-		expect(app.stateRef.overlayOpen).toBe(false);
-		input.emit("data", "/");
-		await flush(120);
-		input.emit("data", "\x1b[B");
-		input.emit("data", "\x1b[B");
-		input.emit("data", "\x1b[B");
-		await flush(120);
-		input.emit("data", "\t");
-		await flush(120);
-		expect(app.stateRef.overlayOpen).toBe(true); // Tab 不补全——菜单不关
-		expect(app.stateRef.input).toBe("/"); // 输入不动
-		app.stop();
-	});
-
-	it("T18-④ 详释第 3 行状态行 + 三档过滤（前缀/含字/子序列）", async () => {
-		const { app, input } = rig(["# hi"], 100, 30, {
-			mcpItems: () => [MCP("memory", "跨会话记忆", "状态：待启动 · 启用 · 26 个工具（deferred）"), MCP("github", "GitHub 操作")],
-		});
-		app.start();
-		await flush();
-		input.emit("data", "/");
-		await flush(120);
-		input.emit("data", "\x1b[B"); // ↓ ×3 越三命令，sep 自动跳过到 memory
-		input.emit("data", "\x1b[B");
-		input.emit("data", "\x1b[B");
-		await flush(120);
-		expect(overlayOf(app).map(stripAnsi).join("\n")).toContain("状态：待启动 · 启用 · 26 个工具（deferred）");
-		input.emit("data", "mem");
-		await flush(120);
-		const q1 = overlayOf(app).map(stripAnsi).join("\n");
-		expect(q1).toContain("mcp : memory");
-		expect(q1).not.toContain("mcp : github");
-		input.emit("data", "\b\b\b");
-		input.emit("data", "gth");
-		await flush(120);
-		const q2 = overlayOf(app).map(stripAnsi).join("\n");
-		expect(q2).toContain("mcp : github");
-		expect(q2).not.toContain("mcp : memory");
+		expect(joined).toContain("skill : pdf"); // 技能区原样
 		app.stop();
 	});
 });
