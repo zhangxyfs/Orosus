@@ -60,13 +60,20 @@ describe("readSessionHead（预算读件下沉 core——T7）", () => {
       ev("e1", "session/header", {}),
       ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("doc-review", "2026-09-27-m4-3c-mcp-production.md 全量") }] }),
     ]);
-    expect(readSessionHead(f1)!.firstUser).toBe("[技能] doc-review 2026"); // 20 字符帽照旧截断
+    expect(readSessionHead(f1)!.firstUser).toBe("[技能] doc-review 2026-09-27-m4-3c-mcp-production.md 全量"); // 帽放宽到 60 后全显（行宽截断归显示侧）
     // 手敲形态（2026-09-30 二轮）：消息 = 原话行 + 标记 + 正文合成一条——标记行不在消息首也识别，原话行不上标题
     const f1b = seed(d, "s_skill_typed", [
       ev("e1", "session/header", {}),
       ev("e2", "user/message", { content: [{ kind: "text", text: `/skill : doc-review 参数甲 参数乙\n${skillBody("doc-review", "参数甲 参数乙")}` }] }),
     ]);
-    expect(readSessionHead(f1b)!.firstUser).toBe("[技能] doc-review 参数甲");
+    expect(readSessionHead(f1b)!.firstUser).toBe("[技能] doc-review 参数甲 参数乙");
+    // 60 帽仍守住：超长参数截断且不带尾随空格
+    const longArgs = "长".repeat(80);
+    const f1c = seed(d, "s_skill_long", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("x".repeat(30), longArgs) }] }),
+    ]);
+    expect(readSessionHead(f1c)!.firstUser).toBe(`[技能] ${"x".repeat(30)} ${"长".repeat(24)}`);
     const f2 = seed(d, "s_skill_old", [
       ev("e1", "session/header", {}),
       ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("ask-matt") }] }),
