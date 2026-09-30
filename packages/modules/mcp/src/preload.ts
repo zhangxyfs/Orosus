@@ -7,8 +7,10 @@ import { join } from "node:path";
  *  优先级最低：用户/项目同名条目整体让位；只能停用不能删除；不走 T12 确认门（非项目带来）。
  *
  *  静态工具清单（manifest）：lazy 意味着启动时不连 server——但 tool-search 目录与提示词清单行
- *  需要工具名。清单按当前主流版本手工钉版；首次连接后以 server 实况 listTools 为准（差异仅
- *  诊断日志——清单名实况不存在时调用会得到 server 的 Unknown tool 报错，属优雅降级非崩坏）。 */
+ *  需要工具名。清单按当前主流版本手工钉版；首次连接后取实况 listTools **把真 inputSchema 就地
+ *  补进已注册工具**（2026-09-30——静态清单没 schema，模型看不到参数面会瞎发参数吃 server 校验
+ *  错）；名单漂移双向报告维持优雅降级（实况多出的无法后补注册、静态名实况不存在时调用得到
+ *  server 的 Unknown tool——非崩坏）。 */
 
 export interface PreloadDef {
   name: string;

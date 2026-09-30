@@ -2,7 +2,7 @@ import { z } from "zod";
 import { orosusHome } from "@orosus/contracts/home";
 import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
-import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, type ServerToolMeta, type ServerCall } from "./bridge.ts";
+import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, applyLiveList, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 import { createSdkConnection } from "./client.ts";
 import { readProjectMcpJson, gateProjectServers, mcpTrustFile } from "./project.ts";
 import { MCP_PRELOADS, shouldRegisterPreloadTools } from "./preload.ts";
@@ -30,11 +30,15 @@ export interface ActivateMcpOpts {
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
   /** T20 惰性策略（预装件按需启动）：lazy:true 的 server 不在 activate 连接——工具清单来自
-   *  manifest，首次调用才 connect（memoized；失败清空可重试）。 */
+   *  manifest，首次调用才 connect（memoized；失败清空可重试）。
+   *  onLive（2026-09-30 补）：首连成功后异步取一次实况 listTools 回调——静态清单没有 inputSchema，
+   *  模型看不到参数面（瞎发参数吃 server 校验错）；宿主侧在回调里 applyLiveList 换血。listTools
+   *  失败也回调（error 带原因、list 空）——静态清单维持现状属优雅降级，不升级为报错。 */
   lazy?: {
     manifestFor(name: string): ServerToolMeta[] | undefined;
     connect(name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }): Promise<ServerConnection>;
     onStarted(name: string, state: "connected" | "failed", reason?: string): void;
+    onLive?(name: string, list: ServerToolMeta[], error?: string): void;
   };
 }
 
@@ -78,7 +82,17 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
         const ensure = (): Promise<ServerConnection> => {
           if (started !== undefined) return Promise.resolve(started);
           pending ??= opts.lazy!.connect(name, cfg).then(
-            (c) => { started = c; opts.lazy!.onStarted(name, "connected"); return c; },
+            (c) => {
+              started = c;
+              opts.lazy!.onStarted(name, "connected");
+              // 首连一次性实况清单（2026-09-30 schema 补丁）：不阻塞首调（旁路异步）——listTools 与
+              // callTool 并发走同一 SDK Client（JSON-RPC 按 id 多路复用，请求安全）；失败带 error 回调
+              void c.listTools().then(
+                (l) => { opts.lazy!.onLive?.(name, l); },
+                (e) => { opts.lazy!.onLive?.(name, [], e instanceof Error ? e.message : String(e)); },
+              );
+              return c;
+            },
             (err) => {
               pending = undefined; // 失败清 memo——下次调用可重试
               opts.lazy!.onStarted(name, "failed", err instanceof Error ? err.message : String(err));
@@ -355,6 +369,8 @@ export const mcpDef = defineModule({
     }
     // T20 live 态：惰性首启结果记在活表——catalog 服务每次现读（idle → connected/failed 即时翻）
     const lazyState = new Map<string, { state: "connected" | "failed"; reason?: string }>();
+    // 首连实况换血的目标数组——onLive 只会在首次工具调用（activate 完成之后）才可能触发，届时 out 已就位
+    let liveTarget: Tool[] = [];
     const out = await activateMcp({
       servers: merged as typeof ctx.config.servers,
       connect: (name, cfg) => createSdkConnection(name, cfg),
@@ -367,8 +383,26 @@ export const mcpDef = defineModule({
           else lazyState.set(name, { state });
           if (state === "failed") ctx.log.warn("mcp.preload-start-failed", `预装 server ${name} 首次启动失败：${reason ?? ""}`, { server: name });
         },
+        // 首连 schema 补丁（2026-09-30）：静态清单无 inputSchema → 模型瞎发参数吃 server 校验错——
+        // 实况清单就地换 parameters（registry 条目零扰动）；名单漂移双向报告（多出的进不来、消失的维持
+        // 优雅降级）；listTools 失败 = 静态清单继续用，只记日志不报错
+        onLive: (name, list, error) => {
+          if (error !== undefined) {
+            ctx.log.warn("mcp.live-list-failed", `server ${name} 首连后取实况清单失败，schema 维持静态清单：${error}`, { server: name });
+            return;
+          }
+          try {
+            const r = applyLiveList(liveTarget, name, list);
+            if (r.applied.length > 0) ctx.log.info("mcp.live-schema", `server ${name} 实况 schema 已补进 ${r.applied.length} 个工具`, { server: name, tools: r.applied.join(",") });
+            if (r.liveExtra.length > 0) ctx.log.warn("mcp.live-extra-tools", `server ${name} 实况多出 ${r.liveExtra.length} 个静态清单没有的工具（懒启动无法后补注册，已略过）：${r.liveExtra.join("、")}`, { server: name });
+            if (r.stale.length > 0) ctx.log.warn("mcp.live-stale-tools", `server ${name} 静态清单里的 ${r.stale.length} 个工具实况不存在（调用会得到 Unknown tool）：${r.stale.join("、")}`, { server: name });
+          } catch (err) {
+            ctx.log.warn("mcp.live-schema-error", `server ${name} 实况 schema 补丁抛错（已注册工具不动）：${err instanceof Error ? err.message : String(err)}`, { server: name });
+          }
+        },
       },
     });
+    liveTarget = out.tools;
     if (gated.pending.length > 0) {
       ctx.ui.notice?.(`项目 .mcp.json 有 ${gated.pending.length} 个未确认的 MCP server，/settings → MCP 详情按 t 确认`); // 2026-09-30 /mcp 命令退役——确认门新家在管理面详情页
     }
