@@ -18,9 +18,11 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const script: Chunk[][] = [[{ type: "text/delta", text: "你好" }, { type: "finish", kind: "stop" }]];
 
 // 密封性：userFile/projectFile 显式指向不存在的 tmp 路径，阻断真实 ~/.orosus 与 cwd 配置泄漏进测试；env 传 {} 阻断真实 OROSUS_* 变量；spillDir 同理
+// catalogCacheFile 同理（2026-09-29 窗口兜底链）——缺省 = 真实 ~/.orosus/cache/models-dev.json，model 在场且无显式窗口即触发读取
 const hermetic = (dir: string) => ({
   userFile: join(dir, "no-user.toml"),
   projectFile: join(dir, "no-proj.toml"),
+  catalogCacheFile: join(dir, "no-catalog.json"),
   env: {},
 });
 
@@ -823,7 +825,7 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
       const h = await createHarness({
         store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
         modules: [fakeProviderModule("fake", []), stateModule()],
-        config: { ...(configToml !== undefined ? { userFile: join(dir, "user.toml") } : hermetic(dir)), cliOverrides: { model: "fake/m" } },
+        config: { ...(configToml !== undefined ? { userFile: join(dir, "user.toml") } : hermetic(dir)), catalogCacheFile: join(dir, "no-catalog.json"), cliOverrides: { model: "fake/m" } },
       });
       const raw = await h.prompt("/llm-probe__state");
       await h.close();
@@ -844,6 +846,30 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
     // 旧实现两处断点：env 层 toLowerCase 落 contextwindow（≠contextWindow）；读侧只认 number（字符串恒被忽略）
     expect(JSON.parse((await h.prompt("/llm-probe__state")) as string).contextWindow).toBe(65536);
     await h.close();
+  });
+
+  it("②c 目录兜底链（2026-09-29 用户拍板）：无显式 contextWindow 时按槽·模型查 models-dev 盘上缓存；显式值在场则赢；非法显式 warn 后仍兜底", async () => {
+    const stateWith = async (configToml: string | undefined): Promise<{ contextWindow: number | null }> => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-harness-cw-cat-"));
+      const catalogFile = join(dir, "models-dev.json");
+      writeFileSync(catalogFile, JSON.stringify({ fetchedAt: 1, catalog: { "zhipuai-coding-plan": { models: { "glm-5.3": { limit: { context: 1_000_000 } } } } } }), "utf8");
+      if (configToml !== undefined) writeFileSync(join(dir, "user.toml"), configToml, "utf8");
+      const h = await createHarness({
+        store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+        modules: [fakeProviderModule("fake", []), stateModule()],
+        config: {
+          ...(configToml !== undefined ? { userFile: join(dir, "user.toml") } : hermetic(dir)),
+          catalogCacheFile: catalogFile,
+          cliOverrides: { model: "zhipuai-coding-plan/glm-5.3" }, // 模型名真值进目录查表（fake 槽提供 stream）
+        },
+      });
+      const raw = await h.prompt("/llm-probe__state");
+      await h.close();
+      return JSON.parse(raw as string) as { contextWindow: number | null };
+    };
+    expect((await stateWith(undefined)).contextWindow).toBe(1_000_000); // 无显式 → 目录兜底
+    expect((await stateWith("contextWindow = 262144\n")).contextWindow).toBe(262144); // 显式赢目录
+    expect((await stateWith("contextWindow = 0\n")).contextWindow).toBe(1_000_000); // 非法显式（三轮 P2 warn 口径不变）→ 兜底救回
   });
 
   it("③ reload 更新：改 config 文件后 /reload → contextWindow 读到新值（getter 代际正确性）", async () => {
@@ -1385,7 +1411,7 @@ describe("/model 持久化（2026-09-22 批⑧——选定即写盘不再问，�
     const h = await createHarness({
       store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
       commandUi: mkUi(), modules: [prov],
-      config: { userFile, projectFile: join(dir, "no-proj.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+      config: { userFile, projectFile: join(dir, "no-proj.toml"), catalogCacheFile: join(dir, "no-catalog.json"), env: {}, cliOverrides: { model: "fake/m" } },
     });
     await h.prompt("/model");
     const text = readFileSync(userFile, "utf8");

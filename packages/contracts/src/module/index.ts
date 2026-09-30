@@ -354,7 +354,8 @@ export interface LlmPort {
    *  可选——无一槽提供目录能力时读得 undefined（显式 | undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法），
    *  消费方据此隐藏模型选择项。 */
   listModels?: (() => Promise<string[]>) | undefined;
-  /** 当前模型上下文窗口（token）——harness 解析（config 顶层 contextWindow > provider import 目录写入）；未知 undefined。 */
+  /** 当前模型上下文窗口（token）——harness 解析链（2026-09-29）：config 顶层 contextWindow 显式值
+ *  （provider import / 模型菜单写入的也是此键）> models-dev 目录盘上缓存按槽·模型查表兜底；未知 undefined。 */
   readonly contextWindow?: number | undefined;
   /** 最近一次主循环请求的真实用量锚点：totalTokens = input+output（该次请求全上下文）、atMessageCount = 该次请求
    *  messages 条数——其后消息用估算增量（compaction 消费；锚点有效性三态规则见 M3 补强方案空白 §4）。 */
