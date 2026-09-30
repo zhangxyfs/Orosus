@@ -3,9 +3,13 @@ import type { ServerConnection } from "./index.ts";
 /** 连接超时默认值（T1，kimi 同值）：再长用户会以为死机。预装件首启另用 60s（T20）。 */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
-/** SDK 适配层选项：测试可缩时（e2e 不等 30 秒）。 */
+/** 调用超时默认值（T2 自定值）：比 opencode 默认（30s）宽一档，给长任务余地；server 级 timeoutMs 可调大。 */
+export const DEFAULT_CALL_TIMEOUT_MS = 60_000;
+
+/** SDK 适配层选项：测试可缩时（e2e 不等 30/60 秒）。 */
 export interface SdkConnectOpts {
   connectTimeoutMs?: number;
+  callTimeoutMs?: number;
 }
 
 /** createSdkConnection 的配置面（与 activateMcp 的 server 条目同形——headers/cwd 在 T5 扩入）。 */
@@ -14,12 +18,15 @@ export interface SdkServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  timeoutMs?: number;
 }
 
 /** SDK 连接实现（m4-3c T1 起从 index.ts 抽出）：stdio（command/args/env）与 HTTP（url）两 transport。
  *  行为契约（连接类任务逐个落位）：
  *  - T1：连接带超时（默认 30s）——超时/失败都 client.close() 收尾，stdio 子进程随 close 被杀不悬空；
  *    instructions 走 getInstructions（SDK 真名——旧 getServerInstructions 是不存在的方法，说明书恒空）。
+ *  - T2：调用带超时（默认 60s，server 级 timeoutMs 可调）+ resetTimeoutOnProgress 与空 onprogress
+ *    成对传（opencode 注释实锤：SDK 只在 onprogress 在场时才真顺延——只翻开关不传回调是死的）。
  *  SDK 保持动态 import：模块定义加载（CLI 启动）不背 SDK 包体，activate 才付这笔。 */
 export async function createSdkConnection(
   name: string,
@@ -27,9 +34,11 @@ export async function createSdkConnection(
   opts: SdkConnectOpts = {},
 ): Promise<ServerConnection> {
   const timeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const callTimeoutMs = opts.callTimeoutMs ?? cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
   const transport = cfg.url !== undefined
     ? new StreamableHTTPClientTransport(new URL(cfg.url))
     : new StdioClientTransport({ command: cfg.command!, args: cfg.args ?? [], ...(cfg.env !== undefined ? { env: cfg.env } : {}) });
@@ -59,8 +68,27 @@ export async function createSdkConnection(
       return res.tools as never;
     },
     callTool: async (toolName, args, signal) => {
-      const res = await client.callTool({ name: toolName, arguments: args as Record<string, unknown> }, undefined, { signal });
-      return res as never;
+      try {
+        const res = await client.callTool(
+          { name: toolName, arguments: args as Record<string, unknown> },
+          undefined,
+          {
+            signal,
+            timeout: callTimeoutMs,
+            resetTimeoutOnProgress: true,
+            onprogress: () => {}, // 空回调——激活 SDK 的超时顺延（缺它翻开关无效，T2）
+          },
+        );
+        return res as never;
+      } catch (err) {
+        if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) {
+          // T2 人话文案：超时不等于失败完成——副作用可能已发生，永不自动重放（T7 同纪律）
+          throw new Error(
+            `调用超时（等了 ${Math.round(callTimeoutMs / 1000)} 秒）——执行可能已经完成，没有自动重试；可以把该 server 的 timeoutMs 配大`,
+          );
+        }
+        throw err;
+      }
     },
     instructions: async () => client.getInstructions(), // T1 修复：SDK 真名是 getInstructions
     close: async () => { await client.close(); }, // MI-02：stdio transport 随 close 杀子进程

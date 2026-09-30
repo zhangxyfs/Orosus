@@ -14,6 +14,9 @@
 //   time                     报时（ISO）
 //   fail                     故意报错（isError: true）
 //   slow {ms, message}       延迟回显——测调用超时（T2）
+//   progress_loop {interval, hold}
+//                           每 interval ms 发一条进度通知、撑满 hold ms 后返回——测「空进度回调
+//                           激活超时顺延」（T2：有 onprogress 的客户端撑得过帽、无回调的到帽即死）
 //   stderr_line {line}       向 stderr 写一行——测报错尾巴（T6）
 //   crash {line}             写 stderr 后进程退出——测断线重连（T7）
 //   struct_same {value}      text 与 structuredContent 同值——测去重（T8）
@@ -63,6 +66,15 @@ const baseTools = () => [
       type: "object",
       properties: { ms: { type: "number" }, message: { type: "string" } },
       required: ["ms"],
+    },
+  },
+  {
+    name: "progress_loop",
+    description: "每 interval ms 发进度通知、撑满 hold ms 后返回",
+    inputSchema: {
+      type: "object",
+      properties: { interval: { type: "number" }, hold: { type: "number" } },
+      required: ["interval", "hold"],
     },
   },
   {
@@ -127,7 +139,7 @@ const png1x1 =
 
 let lastHeaders = {};
 
-async function handleCall(req) {
+async function handleCall(req, extra) {
   const { name, arguments: args = {} } = req.params;
   switch (name) {
     case "echo":
@@ -139,6 +151,25 @@ async function handleCall(req) {
     case "slow":
       await new Promise((r) => setTimeout(r, Number(args.ms) || 0));
       return { content: [text(args.message ?? `slept ${args.ms}ms`)] };
+    case "progress_loop": {
+      const interval = Number(args.interval) || 100;
+      const hold = Number(args.hold) || 1000;
+      const token = req.params._meta?.progressToken;
+      const t0 = Date.now();
+      let n = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, interval));
+        n += 1;
+        if (token !== undefined && extra !== undefined) {
+          await extra.sendNotification({
+            method: "notifications/progress",
+            params: { progressToken: token, progress: n },
+          });
+        }
+        if (Date.now() - t0 >= hold) break;
+      }
+      return { content: [text(`progressed ${n}`)] };
+    }
     case "stderr_line":
       process.stderr.write(`${args.line}\n`);
       return { content: [text("written")] };
