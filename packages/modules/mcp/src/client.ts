@@ -69,25 +69,8 @@ export async function createSdkConnection(
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
   const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
-  const transport = cfg.url !== undefined
-    ? new StreamableHTTPClientTransport(
-        new URL(cfg.url),
-        cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
-      )
-    : new StdioClientTransport({
-        command: cfg.command!,
-        args: cfg.args ?? [],
-        ...(cfg.env !== undefined ? { env: cfg.env } : {}),
-        ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}), // T5：子进程工作目录
-        stderr: "pipe", // T6：捕获 stderr 做报错尾巴（缺省 inherit 直透父进程、排障靠猜）
-      });
-  // T6 尾巴缓冲：只对 stdio 型有义（HTTP 无子进程）。transport.stderr 在 pipe 形态下立即可挂——
-  // SDK 文档明示「PassThrough 立即返回，可在 start 前挂监听防丢早期输出」。
+  // T6 尾巴缓冲：只对 stdio 型有义（HTTP 无子进程）；重连换代后继续累积（临死输出属于同一 server）。
   let stderrTail = "";
-  const stderrStream = cfg.url !== undefined ? null : (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
-  stderrStream?.on("data", (chunk: Buffer) => {
-    stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_LIMIT);
-  });
   /** 失败原因缀尾巴（T6）：连接失败/意外断开时把子进程最后说过的话附上（[stderr] 前缀）——没有则原样。 */
   const withTail = async (err: unknown): Promise<Error> => {
     if (stderrTail === "") return err instanceof Error ? err : new Error(String(err));
@@ -97,48 +80,97 @@ export async function createSdkConnection(
     const msg = err instanceof Error ? err.message : String(err);
     return new Error(`${msg}\n[stderr] ${tail}`);
   };
-  const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined; // 成功路也须清（30s 定时器悬着会拖住进程退出）
-  try {
-    const connecting = client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
-    connecting.catch(() => undefined); // 超时路被 close 打断的迟到拒绝不悬空（race 已由超时先 settle）
-    await Promise.race([
-      connecting,
-      new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(
-          () => reject(new Error(`连接超时（等了 ${Math.round(timeoutMs / 1000)} 秒没握上手——server 可能没起来或卡在初始化）`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } catch (err) {
-    await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败/超时也收尾，close 杀 stdio 子进程）
-    throw await withTail(err); // T6：连接失败带 stderr 尾巴（排障不再靠猜）
-  } finally {
-    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-  }
+  /** 建一次连接（首连与 T7 重连共用）：transport + stderr 监听 + 带超时握手 + 失败收尾。 */
+  const connectOnce = async (): Promise<Client> => {
+    const transport = cfg.url !== undefined
+      ? new StreamableHTTPClientTransport(
+          new URL(cfg.url),
+          cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
+        )
+      : new StdioClientTransport({
+          command: cfg.command!,
+          args: cfg.args ?? [],
+          ...(cfg.env !== undefined ? { env: cfg.env } : {}),
+          ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}), // T5：子进程工作目录
+          stderr: "pipe", // T6：捕获 stderr 做报错尾巴（缺省 inherit 直透父进程、排障靠猜）
+        });
+    // transport.stderr 在 pipe 形态下立即可挂——SDK 文档明示「PassThrough 立即返回，可在 start 前挂监听防丢早期输出」
+    const stderrStream = cfg.url !== undefined ? null : (transport as { stderr?: NodeJS.ReadableStream | null }).stderr;
+    stderrStream?.on("data", (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_LIMIT);
+    });
+    const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined; // 成功路也须清（30s 定时器悬着会拖住进程退出）
+    try {
+      const connecting = client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
+      connecting.catch(() => undefined); // 超时路被 close 打断的迟到拒绝不悬空（race 已由超时先 settle）
+      await Promise.race([
+        connecting,
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error(`连接超时（等了 ${Math.round(timeoutMs / 1000)} 秒没握上手——server 可能没起来或卡在初始化）`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (err) {
+      await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败/超时也收尾，close 杀 stdio 子进程）
+      throw await withTail(err); // T6：连接失败带 stderr 尾巴（排障不再靠猜）
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
+    return client;
+  };
+  let active = await connectOnce();
+  // T7 断线判定：只认「连接关闭」类——在途请求 McpError(-32000 'Connection closed')、关后新请求
+  // Error('Not connected')。超时（-32001）**不算**：与断线在别的实现里同码（qwen 踩过），显式排除；
+  // 用户取消（同码 -32000 但文案 'Request was cancelled'）同样不算——取消是意图不是故障。
+  const isConnectionClosed = (err: unknown): boolean => {
+    if (err instanceof McpError) {
+      if (err.code === ErrorCode.RequestTimeout) return false;
+      if (err.code === ErrorCode.ConnectionClosed) return err.message !== "Request was cancelled";
+      return false;
+    }
+    return /connection closed|not connected|transport closed/i.test(err instanceof Error ? err.message : String(err));
+  };
+  /** 单次调用（首试与 T7 重放共用同一形态：超时 + 进度顺延 + 空回调）。 */
+  const callOnce = (client: Client, toolName: string, args: unknown, signal: AbortSignal) =>
+    client.callTool(
+      { name: toolName, arguments: args as Record<string, unknown> },
+      undefined,
+      {
+        signal,
+        timeout: callTimeoutMs,
+        resetTimeoutOnProgress: true,
+        onprogress: () => {}, // 空回调——激活 SDK 的超时顺延（缺它翻开关无效，T2）
+      },
+    );
   return {
     listTools: async () => {
       // T3 翻页取全：旧实现一次 listTools 只拿首页（工具多的 server 静默少一半）
       const tools = await collectAllPages<never>(async (cursor) => {
-        const res = await client.listTools(cursor !== undefined ? { cursor } : {});
+        const res = await active.listTools(cursor !== undefined ? { cursor } : {});
         return { tools: res.tools as never[], ...(res.nextCursor !== undefined ? { nextCursor: res.nextCursor } : {}) };
       });
       return tools;
     },
     callTool: async (toolName, args, signal) => {
       try {
-        const res = await client.callTool(
-          { name: toolName, arguments: args as Record<string, unknown> },
-          undefined,
-          {
-            signal,
-            timeout: callTimeoutMs,
-            resetTimeoutOnProgress: true,
-            onprogress: () => {}, // 空回调——激活 SDK 的超时顺延（缺它翻开关无效，T2）
-          },
-        );
-        return res as never;
+        try {
+          return (await callOnce(active, toolName, args, signal)) as never;
+        } catch (err) {
+          // T7 断线重连一次（ZCode 同款；Reasonix 同语义）：只认连接关闭类（超时/取消不重连——
+          // 副作用类操作重放两次就是事故，永不自动重试第二次）；重连成功后重放**一次**，再失败照常抛
+          if (!isConnectionClosed(err)) throw err;
+          try {
+            const next = await connectOnce();
+            await active.close().catch(() => undefined); // 旧代收尾（已断，失败不追究）
+            active = next;
+          } catch (reconnErr) {
+            throw await withTail(reconnErr instanceof Error ? reconnErr : err); // 重连失败：带 stderr 尾巴照常抛
+          }
+          return (await callOnce(active, toolName, args, signal)) as never;
+        }
       } catch (err) {
         if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) {
           // T2 人话文案：超时不等于失败完成——副作用可能已发生，永不自动重放（T7 同纪律）
@@ -149,7 +181,7 @@ export async function createSdkConnection(
         throw err;
       }
     },
-    instructions: async () => client.getInstructions(), // T1 修复：SDK 真名是 getInstructions
-    close: async () => { await client.close(); }, // MI-02：stdio transport 随 close 杀子进程
+    instructions: async () => active.getInstructions(), // T1 修复：SDK 真名是 getInstructions
+    close: async () => { await active.close(); }, // MI-02：stdio transport 随 close 杀子进程（关的是当前代——含重连后的新代）
   };
 }

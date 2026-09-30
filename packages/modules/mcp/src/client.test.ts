@@ -2,7 +2,7 @@
 // e2e 走 T0 假 server（tests/fixtures/mcp-fixture-server.mjs）；并发与失败面用注入 connect 单测 activateMcp。
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -309,5 +309,81 @@ describe("T6 报错尾巴（m4-3c）", () => {
     const tail = err.message.split("[stderr]")[1] ?? "";
     expect(tail).toContain("TAIL-MARKER");
     expect(tail.length).toBeLessThanOrEqual(STDERR_TAIL_LIMIT + 2); // 4KB 帽 + 换行余量
+  });
+});
+
+describe("T7 断线重连一次（m4-3c）", () => {
+  it("① e2e 重连复活：crash 杀掉子进程 → 下一次调用自动重建连接并成功（新子进程应答）", async () => {
+    const conn = await race(createSdkConnection("fx", fixtureServer()), 15_000, "connect");
+    try {
+      // 第一击：让 server 进程死掉（crash 写 stderr 后 exit 1）
+      await race(conn.callTool("crash", { line: "first death" }, new AbortController().signal), 10_000, "crash").catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 150)); // 等进程死透（exit 是 crash 工具里 setTimeout 0 异步的）
+      // 第二击：断线 → 自动重连（新子进程）→ echo 成功
+      const res = (await race(
+        conn.callTool("echo", { message: "复活了" }, new AbortController().signal),
+        20_000,
+        "after-crash echo",
+      )) as { content: { text?: string }[] };
+      expect(res.content[0]?.text).toBe("复活了");
+    } finally {
+      await conn.close?.();
+    }
+  }, 30_000);
+
+  it("② 重连失败照常抛错（不无限重建）：杀进程后让 respawn 不可能（副本已删）→ 报 spawn 失败而非静默重试风暴", async () => {
+    // 副本须放仓库内（node 自文件位置向上解析 node_modules——tmpdir 副本连首连都起不来）
+    const copy = join(fileURLToPath(new URL(".", import.meta.url)), `../../../../tests/fixtures/t7-copy-${process.pid}-${Date.now()}.mjs`);
+    copyFileSync(FIXTURE, copy);
+    try {
+      const conn = await race(createSdkConnection("fx", { command: "node", args: [copy] }), 15_000, "connect");
+      try {
+        await race(conn.callTool("crash", { line: "dead" }, new AbortController().signal), 10_000, "crash").catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 150));
+        rmSync(copy); // respawn 将 ENOENT——重连一次失败后必须把错误抛出来
+        const err = await race(
+          conn.callTool("echo", { message: "x" }, new AbortController().signal),
+          15_000,
+          "echo-after-death",
+        ).then(
+          () => { throw new Error("应失败"); },
+          (e: Error) => e,
+        );
+        expect(/ENOENT|spawn|连接|Connection/i.test(err.message)).toBe(true);
+      } finally {
+        await conn.close?.();
+      }
+    } finally {
+      rmSync(copy, { force: true });
+    }
+  }, 30_000);
+
+  it("③ 每次断线各自恢复：连杀两次、两次都自动复活（重连是按断线事件、不是一生一次）", async () => {
+    const conn = await race(createSdkConnection("fx", fixtureServer()), 15_000, "connect");
+    try {
+      for (let i = 0; i < 2; i++) {
+        await race(conn.callTool("crash", { line: `death ${i}` }, new AbortController().signal), 10_000, `crash${i}`).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 150));
+        const res = (await race(
+          conn.callTool("echo", { message: `revive ${i}` }, new AbortController().signal),
+          20_000,
+          `revive${i}`,
+        )) as { content: { text?: string }[] };
+        expect(res.content[0]?.text).toBe(`revive ${i}`);
+      }
+    } finally {
+      await conn.close?.();
+    }
+  }, 45_000);
+
+  it("③ 超时不触发重连：slow 到帽报「调用超时」人话文案（不是断线文案、不重放）", async () => {
+    const conn = await race(createSdkConnection("fx", fixtureServer(), { callTimeoutMs: 250 }), 15_000, "connect");
+    try {
+      await expect(
+        race(conn.callTool("slow", { ms: 900 }, new AbortController().signal), 10_000, "slow"),
+      ).rejects.toThrow(/调用超时.*没有自动重试/s);
+    } finally {
+      await conn.close?.();
+    }
   });
 });
