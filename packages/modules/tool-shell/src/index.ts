@@ -6,7 +6,7 @@ import { defineModule } from "@orosus/contracts/module";
 import { orosusHome } from "@orosus/contracts/home";
 import { Access, defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
-import { JobRegistry, killTree, decodeOut, type BgJob } from "./jobs.ts";
+import { JobRegistry, killTree, decodeOut, sweepTreeRemnants, type BgJob } from "./jobs.ts";
 import { resolveShell, lintCmdCommand, classifyFailure, type ShellSpec } from "./shell.ts";
 
 export { JobRegistry, type BgJob } from "./jobs.ts";
@@ -87,6 +87,9 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
     child.on("error", (err) => finish({ output: `spawn 失败：${err.message}`, isError: true }));
     child.on("close", (code) => {
       void (async () => {
+        // 收工残留清扫（2026-09-30 挂起孤儿诊断批）：正常完成的树也可能留下后台孙进程（`cmd &`
+        // 形态——bash 退、孙进程活）。fire-and-forget（500ms 合并窗口），不拖 finish。
+        if (child.pid !== undefined) sweepTreeRemnants(child.pid);
         const out = captureOut();
         if (signal.aborted) return finish({ output: `${out}\n[已中止]`, isError: true });
         if (timedOut) return finish({ output: `${out}\n[超时 ${timeout}ms，已杀进程树]`, isError: true });
