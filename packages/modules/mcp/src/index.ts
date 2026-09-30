@@ -347,9 +347,11 @@ export const mcpDef = defineModule({
     // T20 门控：tool-search 未显式启用 → 预装不注册工具（deferred 标记在关态不生效——50 工具会灌爆
     // 上下文）；管理面/菜单/启停不受影响（catalog 行总在）。README 指路开 tool-search 后 /reload 生效。
     const preloadToolsOn = shouldRegisterPreloadTools(orosusHome());
+    const mergedPreloadNames: string[] = []; // 真并入预装名（被用户/项目同名覆盖的不算——catalog 定源用）
     for (const pl of MCP_PRELOADS) {
       if (pl.name in gated.servers || pl.name in project.servers) continue;
       merged[pl.name] = { command: pl.command, args: pl.args, lazy: true, deferred: true };
+      mergedPreloadNames.push(pl.name);
     }
     // T20 live 态：惰性首启结果记在活表——catalog 服务每次现读（idle → connected/failed 即时翻）
     const lazyState = new Map<string, { state: "connected" | "failed"; reason?: string }>();
@@ -372,34 +374,50 @@ export const mcpDef = defineModule({
     }
     // T16：catalog 服务（零参函数返回行快照——skill.catalog 同款；live 态在 activate 定格，reload 换代重算）
     const userServerNames = new Set(Object.keys(ctx.config.servers));
-    ctx.provide("mcp.catalog", (): McpCatalogRow[] => [
-      ...buildCatalogRows({
+    ctx.provide("mcp.catalog", (): McpCatalogRow[] => {
+      // T20：门开时预装走 connected（清单行/工具数现成）——就地修正来源与 live 态（未起 = 待启动，
+      // 不能照 connected 快照标「已连接」）；门关时预装不在 connected——补 idle 行（管理面/菜单可见、工具未注册）。
+      const base = buildCatalogRows({
         userServerNames,
-        mergedServers: gated.servers,
+        mergedServers: merged,
         projectServers: project.servers,
         connected: out.connected,
         failed: out.failedServers,
         pending: gated.pending,
-      }),
-      // T20 预装行（live：首启结果即时翻绿灯/红字）
-      ...MCP_PRELOADS
-        .filter((pl) => !(pl.name in gated.servers) && !(pl.name in project.servers))
-        .map((pl): McpCatalogRow => {
-          const live = lazyState.get(pl.name);
-          const state: McpCatalogRow["state"] = live === undefined ? "idle" : live.state === "connected" ? "connected" : "failed";
-          return {
-            name: pl.name,
-            state,
-            toolCount: pl.manifest.length,
-            tools: pl.manifest.map((t) => t.name),
-            ...(live?.state === "failed" && live.reason !== undefined ? { failReason: live.reason } : {}),
-            source: "preload",
-            transport: "stdio",
-            command: `${pl.command} ${(pl.args ?? []).join(" ")}`,
-            deferred: true,
-          };
-        }),
-    ]);
+      });
+      const preloadSet = new Set(mergedPreloadNames);
+      const seen = new Set<string>();
+      const rows: McpCatalogRow[] = [];
+      for (const r of base) {
+        if (preloadSet.has(r.name)) {
+          const live = lazyState.get(r.name);
+          r.source = "preload";
+          r.state = live === undefined ? "idle" : live.state; // connected 快照≠已连接——lazy 未起就是待启动
+          if (live?.state === "failed" && live.reason !== undefined) r.failReason = live.reason;
+          else delete r.failReason;
+          r.deferred = true;
+          seen.add(r.name);
+        }
+        rows.push(r);
+      }
+      for (const name of mergedPreloadNames) {
+        if (seen.has(name)) continue;
+        const pl = MCP_PRELOADS.find((d) => d.name === name)!;
+        const live = lazyState.get(name);
+        rows.push({
+          name,
+          state: live === undefined ? "idle" : live.state,
+          toolCount: pl.manifest.length,
+          tools: pl.manifest.map((t) => t.name),
+          ...(live?.state === "failed" && live.reason !== undefined ? { failReason: live.reason } : {}),
+          source: "preload",
+          transport: "stdio",
+          command: `${pl.command} ${pl.args.join(" ")}`,
+          deferred: true,
+        });
+      }
+      return rows;
+    });
     for (const t of out.tools) ctx.contribute.tool(t);
     // MI-07：撞名跳过的带内可观测面（registry 不再因重名 throw——模块不降级，但用户须能看到少了哪些工具）
     for (const sk of out.skippedTools) ctx.log.warn("mcp.tool-skipped", `工具 "${sk.tool}"（server ${sk.server}）未注册：${sk.reason}`, { server: sk.server, tool: sk.tool });

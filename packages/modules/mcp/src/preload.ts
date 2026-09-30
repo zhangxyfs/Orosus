@@ -116,11 +116,12 @@ export const MCP_PRELOADS: PreloadDef[] = [
 
 export const isPreloadName = (name: string): boolean => MCP_PRELOADS.some((p) => p.name === name);
 
-/** 预装工具注册门（T20 实现拍板）：预装工具整体标 deferred——但 tool-search 未启用时 deferred
- *  标记不生效（SW-26 联动：照常全量进请求），~50 个预装工具会灌爆每个请求的上下文。
- *  故预装「工具注册」只在 tool-search 显式启用（两处配置任一 enabled = true）时进行；未启用时
- *  预装仍进管理面/菜单/启停（catalog 行在），只是不注册工具——README 指路开 tool-search。
- *  激活序为字典序（mcp 先于 tool-search）——运行时探针不可行，配置层直读是唯一确定口径。 */
+/** 预装工具注册门（T20 实现拍板 + 2026-09-30 用户拍板默认翻开）：预装工具整体标 deferred——
+ *  但 tool-search 关态（enabled = false 显式）时 deferred 标记不生效（SW-26 联动：照常全量进请求），
+ *  ~50 个预装工具会灌爆每个请求的上下文。故关态时预装仍进管理面/菜单/启停（catalog 行在），
+ *  只是不注册工具。tool-search 现默认启用（预装批承重墙——当年默认关的前提「无东西出厂带
+ *  deferred 工具」已推翻），显式关仍是逃生口。激活序为字典序（mcp 先于 tool-search）——
+ *  运行时探针不可行，配置层直读是唯一确定口径。 */
 export function shouldRegisterPreloadTools(home: string): boolean {
   const sectionEnabled = (raw: string): boolean | undefined => {
     if (!raw.includes("[tool-search]")) return undefined;
@@ -137,5 +138,5 @@ export function shouldRegisterPreloadTools(home: string): boolean {
       if (v !== undefined) return v; // 先读 modules.d（m4-8 新家）再回落 config.toml——首个显式值生效
     } catch { /* 坏文件当未配置 */ }
   }
-  return false; // 无显式启用 = tool-search 默认关（SW-26）——预装不注册工具
+  return true; // 无显式配置 = tool-search 默认开（2026-09-30 拍板翻转）——预装开箱即用
 }

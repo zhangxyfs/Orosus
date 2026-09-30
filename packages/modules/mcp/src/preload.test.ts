@@ -121,20 +121,21 @@ describe("T20 预装清单与门控", () => {
     expect(isPreloadName("mine")).toBe(false);
   });
 
-  it("⑥ 门控 shouldRegisterPreloadTools：默认 false；modules.d/tool-search.toml enabled=true 开；config.toml 同款；显式 false 关", () => {
+  it("⑥ 门控 shouldRegisterPreloadTools：默认 true（2026-09-30 翻转）；显式 false 关（modules.d 优先于 config.toml）；老 config.toml 同款认", () => {
     const home = tmp("gate");
-    expect(shouldRegisterPreloadTools(home)).toBe(false); // 无配置 = tool-search 默认关
+    expect(shouldRegisterPreloadTools(home)).toBe(true); // 无配置 = 默认开——预装开箱即用
     mkdirSync(join(home, "modules.d"), { recursive: true });
-    writeFileSync(join(home, "modules.d", "tool-search.toml"), "[tool-search]\nenabled = true\n", "utf8");
-    expect(shouldRegisterPreloadTools(home)).toBe(true);
     writeFileSync(join(home, "modules.d", "tool-search.toml"), "[tool-search]\nenabled = false\n", "utf8");
-    expect(shouldRegisterPreloadTools(home)).toBe(false);
-    rmSync(join(home, "modules.d", "tool-search.toml"));
+    expect(shouldRegisterPreloadTools(home)).toBe(false); // 显式关 = 逃生口（预装不注册工具防灌爆）
     writeFileSync(join(home, "config.toml"), "[tool-search]\nenabled = true\n", "utf8");
-    expect(shouldRegisterPreloadTools(home)).toBe(true); // 老 config.toml 同款认
-    // 坏文件当未配置
+    expect(shouldRegisterPreloadTools(home)).toBe(false); // modules.d 显式值优先（m4-8 新家 > 老家）
+    rmSync(join(home, "modules.d", "tool-search.toml"));
+    expect(shouldRegisterPreloadTools(home)).toBe(true); // 老家 true 生效
+    writeFileSync(join(home, "config.toml"), "[tool-search]\nenabled = false\n", "utf8");
+    expect(shouldRegisterPreloadTools(home)).toBe(false); // 老家显式关同款认
+    // 坏文件当未配置（回落默认开）
     const home2 = tmp("gate2");
     writeFileSync(join(home2, "config.toml"), "坏 TOML", "utf8");
-    expect(shouldRegisterPreloadTools(home2)).toBe(false);
+    expect(shouldRegisterPreloadTools(home2)).toBe(true);
   });
 });

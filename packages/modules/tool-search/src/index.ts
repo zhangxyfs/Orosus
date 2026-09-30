@@ -123,9 +123,11 @@ export default defineModule({
   api: 1,
   mounts: ["tools.reveal", "tools.list", "contribute:tool", "contribute:promptSection"],
   // SW-26 启用开关 = 内核自带三层启停（[tool-search] enabled——保留键语义；配置键 enabled 是保留键会被剥离，
-  // 自建 zod 键永远读不到——defaultEnabled:false 即「默认关」的正解）。关态 = 模块不激活 = 机制整门不启
+  // 自建 zod 键永远读不到——defaultEnabled 即「默认态」的正解）。关态（enabled = false）= 模块不激活 = 机制整门不启
   // （deferred 标记不生效、specs 零过滤、meta 工具与目录段不注册——防「标了 deferred 却无 meta 工具可 reveal」死锁）。
-  defaultEnabled: false,
+  // 默认翻开（2026-09-30 用户拍板，m4-3c 预装批收尾）：当年默认关的前提「无东西出厂带 deferred 工具」已被
+  // 预装五件推翻——机制成了承重墙；关态仍可用 enabled = false 显式达到（语义不变，只翻默认）。
+  defaultEnabled: true,
   activate(ctx) {
     ctx.tools.enable();
     ctx.contribute.tool(searchMetaTool(ctx.tools));
