@@ -12,6 +12,20 @@ export const MAX_LIST_PAGES = 1000;
 /** stderr 尾巴缓冲上限（T6）：够看出死因、不撑爆失败面；保尾丢头（临死前说的话最值钱）。 */
 export const STDERR_TAIL_LIMIT = 4096;
 
+/** win32 下必须经 cmd /c 才能跑的壳型启动器（npx/npm/pnpm 是 .cmd 壳——Node 的 CVE-2024-27980 修复后
+ *  spawn(shell:false) 对 .cmd/.bat 直接 EINVAL；实测：裸 npx 与 npx.cmd 都炸、cmd /c npx 通、node（.exe）直通）。
+ *  真机走查①（npx 型 server 在 Windows 连上）的地基；T20 预装件多为 npx 型。 */
+const WIN_SHELL_LAUNCHERS = new Set(["npx", "npm", "pnpm", "yarn", "bunx", "uvx", "pipx", "deno"]);
+
+/** spawn 形态归一（可测纯函数——platform 注入）：壳型启动器包 cmd /c；带路径/其余命令原样（用户自己负责）。 */
+export function winSpawnForm(command: string, args: string[], platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+  if (platform !== "win32") return { command, args };
+  const base = command.replace(/\.cmd$/i, "").toLowerCase();
+  if (/[/\\]/.test(command)) return { command, args }; // 带路径的写法不猜——.exe 直跑；.cmd 带路径仍会炸（文档写明用引号全路径或改用 cmd）
+  if (WIN_SHELL_LAUNCHERS.has(base)) return { command: "cmd", args: ["/d", "/s", "/c", command, ...args] };
+  return { command, args };
+}
+
 /** 工具清单翻页（T3）：循环到 nextCursor 缺省为止。两道保险——① 同一 nextCursor 第二次出现即停
  *  （防 server 死循环：好 server 的游标单向推进，重复出现 = 环）；② 页数帽 1000（防恒新游标刷屏）。
  *  抽成独立助手：两道保险可用零开销 fake 直测（1000 页真跑要秒级）。 */
@@ -88,8 +102,7 @@ export async function createSdkConnection(
           cfg.headers !== undefined ? { requestInit: { headers: cfg.headers } } : undefined,
         )
       : new StdioClientTransport({
-          command: cfg.command!,
-          args: cfg.args ?? [],
+          ...winSpawnForm(cfg.command!, cfg.args ?? []),
           ...(cfg.env !== undefined ? { env: cfg.env } : {}),
           ...(cfg.cwd !== undefined ? { cwd: cfg.cwd } : {}), // T5：子进程工作目录
           stderr: "pipe", // T6：捕获 stderr 做报错尾巴（缺省 inherit 直透父进程、排障靠猜）

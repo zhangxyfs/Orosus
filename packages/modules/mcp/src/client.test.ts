@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES, STDERR_TAIL_LIMIT } from "./client.ts";
+import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES, STDERR_TAIL_LIMIT, winSpawnForm } from "./client.ts";
 import { activateMcp, mcpDef, runTool } from "./index.ts";
 
 const FIXTURE = fileURLToPath(new URL("../../../../tests/fixtures/mcp-fixture-server.mjs", import.meta.url));
@@ -417,4 +417,25 @@ describe("T7 断线重连一次（m4-3c）", () => {
       await conn.close?.();
     }
   });
+});
+describe("win32 启动器包装（真机走查①地基）", () => {
+  it("win32 壳型启动器包 cmd /d /s /c（npx 裸名与 .cmd 后缀同待遇）；带路径与其余命令原样；非 win32 全原样", () => {
+    expect(winSpawnForm("npx", ["-y", "pkg"], "win32")).toEqual({ command: "cmd", args: ["/d", "/s", "/c", "npx", "-y", "pkg"] });
+    expect(winSpawnForm("NPX.CMD", [], "win32")).toEqual({ command: "cmd", args: ["/d", "/s", "/c", "NPX.CMD"] });
+    expect(winSpawnForm("pnpm", ["run", "x"], "win32")).toEqual({ command: "cmd", args: ["/d", "/s", "/c", "pnpm", "run", "x"] });
+    expect(winSpawnForm("node", ["s.mjs"], "win32")).toEqual({ command: "node", args: ["s.mjs"] });
+    expect(winSpawnForm(String.raw`C:\tools\x.exe`, ["-p"], "win32")).toEqual({ command: String.raw`C:\tools\x.exe`, args: ["-p"] });
+    expect(winSpawnForm("npx", ["-y", "p"], "linux")).toEqual({ command: "npx", args: ["-y", "p"] });
+  });
+  it("e2e：cmd /c 包装真通（win32 上 npx --version 出版本号——EINVAL 病的活体反证）", async () => {
+    if (process.platform !== "win32") return;
+    const { execFile } = await import("node:child_process");
+    const out = await new Promise<string>((resolve, reject) => {
+      const f = execFile("cmd", ["/d", "/s", "/c", "npx", "--version"], { timeout: 60_000 }, (err, stdout) => {
+        if (err !== null) reject(err); else resolve(String(stdout).trim());
+      });
+      void f;
+    });
+    expect(out).toMatch(/^\d+\.\d+/);
+  }, 90_000);
 });
