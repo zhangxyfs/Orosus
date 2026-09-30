@@ -1,13 +1,14 @@
 // T12（m4-3c）：项目 .mcp.json 识别 + 指纹信任门。gate 层纯测（合并优先级/指纹语义/信任往返），
 // 读取层走真实临时目录（缺文件/坏 JSON/坏形状三分支）。
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readProjectMcpJson, gateProjectServers, fingerprintServer,
   loadMcpTrust, saveMcpTrust, trustProjectServer, foldProjectPath, mcpTrustFile,
 } from "./project.ts";
+import { buildCatalogRows, mcpDef, type McpCatalogRow } from "./index.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -105,4 +106,72 @@ describe("T12 项目 .mcp.json 信任门（m4-3c）", () => {
     expect(parsed.trusted["/p"]!.s).toBe("fp"); // 落盘是人读 JSON
     expect(mcpTrustFile().replace(/\\/g, "/")).toContain(".orosus/mcp-trust.json");
   });
+});
+
+describe("T16 mcp.catalog 数据服务（m4-3c）", () => {
+  const base = {
+    userServerNames: new Set(["mine"]),
+    mergedServers: {
+      mine: { command: "node", args: ["m.js"] },
+      off: { url: "https://off/mcp", enabled: false },
+      down: { command: "bad" },
+    },
+    projectServers: { proj: { command: "node", args: ["p.mjs"] }, evil: { url: "https://e/mcp" } },
+    connected: [{ name: "mine", tools: ["a", "b"], toolLines: ["- a：x", "- b：y"], instructions: "[mcp:mine] 用我" }],
+    failed: [{ name: "down", reason: "spawn ENOENT\n[stderr] boom" }],
+    pending: [{ name: "evil", fingerprint: "abcd1234abcd1234" }],
+  };
+
+  it("① 五档状态归位：connected/idle 缺（activateMcp 不产生）/failed/pending-confirm/disabled 各就各位", () => {
+    const rows = buildCatalogRows(base);
+    const by = (n: string): McpCatalogRow => rows.find((r) => r.name === n)!;
+    expect(by("mine").state).toBe("connected");
+    expect(by("mine").toolCount).toBe(2);
+    expect(by("mine").tools).toEqual(["a", "b"]);
+    expect(by("mine").instructions).toBe("[mcp:mine] 用我");
+    expect(by("mine").source).toBe("config");
+    expect(by("mine").transport).toBe("stdio");
+    expect(by("mine").command).toBe("node m.js");
+    expect(by("down").state).toBe("failed");
+    expect(by("down").failReason).toContain("[stderr] boom");
+    expect(by("evil").state).toBe("pending-confirm");
+    expect(by("evil").source).toBe("project");
+    expect(by("evil").transport).toBe("http");
+    expect(by("evil").url).toBe("https://e/mcp");
+    expect(by("evil").fingerprint).toBe("abcd1234abcd1234");
+    expect(by("off").state).toBe("disabled");
+    expect(by("off").source).toBe("project"); // 项目件被用户覆盖停用——来源仍记项目
+  });
+
+  it("② harness 真模块：服务可解析、行快照与实际连接一致（fixture 当 server）", async () => {
+    const { createHarness, InMemorySessionStore } = await import("@orosus/core");
+    const { fakeProviderModule } = await import("@orosus/testing");
+    const { fileURLToPath } = await import("node:url");
+    const FIXTURE = fileURLToPath(new URL("../../../../tests/fixtures/mcp-fixture-server.mjs", import.meta.url));
+    const dir = tmp("harness");
+    const modulesDir = join(dir, "modules.d");
+    mkdirSync(modulesDir, { recursive: true });
+    writeFileSync(join(modulesDir, "mcp.toml"), `[mcp.servers.fx]
+command = "node"
+args = ["${FIXTURE.split("\\").join("/")}"]
+`, "utf8");
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [mcpDef as never, fakeProviderModule("fake", [])],
+      config: { userFile: join(dir, "u.toml"), userModulesDir: modulesDir, projectFile: join(dir, "p.toml"), projectModulesDir: join(dir, "pm"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    try {
+      const catalog = await h.graph().services.getOptional("mcp.catalog");
+      expect(typeof catalog).toBe("function");
+      const rows = (catalog as () => McpCatalogRow[])();
+      const fx = rows.find((r) => r.name === "fx");
+      expect(fx?.state).toBe("connected");
+      expect(fx?.source).toBe("config");
+      expect(fx?.toolCount).toBeGreaterThan(5); // fixture 工具面全量
+      expect(rows.find((r) => r.state === "pending-confirm")).toBeUndefined(); // cwd 无 .mcp.json
+    } finally {
+      await h.close();
+    }
+  }, 30_000);
 });
