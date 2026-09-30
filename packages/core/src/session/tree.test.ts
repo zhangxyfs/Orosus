@@ -51,6 +51,27 @@ describe("readSessionHead（预算读件下沉 core——T7）", () => {
   it("③ 文件不可读 → undefined（坏文件跳过不炸整体）", () => {
     expect(readSessionHead(join(fresh(), "nope", "agents", "session.jsonl"))).toBeUndefined();
   });
+
+  it("④ 技能会话标题（2026-09-30 用户拍板）：首条消息是技能注入机器标记 → 「[技能] 名字 参数」，标记与正文都不上标题", () => {
+    const d = fresh();
+    const skillBody = (name: string, args?: string) =>
+      `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${args !== undefined ? ` args="${args}"` : ""}>\n# 技能正文一大堆\n不该当标题\n</skill>`;
+    const f1 = seed(d, "s_skill", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("doc-review", "2026-09-27-m4-3c-mcp-production.md 全量") }] }),
+    ]);
+    expect(readSessionHead(f1)!.firstUser).toBe("[技能] doc-review 2026"); // 20 字符帽照旧截断
+    const f2 = seed(d, "s_skill_old", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("ask-matt") }] }),
+    ]);
+    expect(readSessionHead(f2)!.firstUser).toBe("[技能] ask-matt"); // 老形态无参数只显名字
+    const f3 = seed(d, "s_plain", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: "普通提问照旧" }] }),
+    ]);
+    expect(readSessionHead(f3)!.firstUser).toBe("普通提问照旧"); // 非技能消息不受影响
+  });
 });
 
 describe("buildSessionTree（T7——当前项目桶全量树快照，jsonl 读法）", () => {
