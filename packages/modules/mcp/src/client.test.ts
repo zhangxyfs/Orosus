@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES, STDERR_TAIL_LIMIT } from "./client.ts";
-import { activateMcp, mcpDef } from "./index.ts";
+import { activateMcp, mcpDef, runTool } from "./index.ts";
 
 const FIXTURE = fileURLToPath(new URL("../../../../tests/fixtures/mcp-fixture-server.mjs", import.meta.url));
 
@@ -375,6 +375,37 @@ describe("T7 断线重连一次（m4-3c）", () => {
       await conn.close?.();
     }
   }, 45_000);
+
+  it("④ e2e 桥接落地：activateMcp + fixture 全链——六种结果形态经 renderToolResult 到 ToolResult", async () => {
+    const out = await race(
+      activateMcp({
+        servers: { fx: fixtureServer() },
+        connect: (name, cfg) => createSdkConnection(name, cfg),
+        sessionAppend: () => {},
+      }),
+      20_000,
+      "activateMcp",
+    );
+    try {
+      const pick = (suffix: string) => out.tools.find((t) => t.name === `mcp__fx__${suffix}`)!;
+      const structSame = await runTool(pick("struct_same"), { value: "hello" });
+      expect(structSame.output).toBe(JSON.stringify({ value: "hello" })); // 去重后单份
+      const structDiff = await runTool(pick("struct_diff"), { a: "甲", b: "乙" });
+      expect(structDiff.output).toContain("甲");
+      expect(structDiff.output).toContain(JSON.stringify({ a: "甲", b: "乙" }, null, 2)); // 附后
+      const image = await runTool(pick("image"), {});
+      expect(image.output).toMatch(/（图片：image\/png/);
+      const link = await runTool(pick("link"), { uri: "file:///doc.md", name: "文档" });
+      expect(link.output).toBe("资源链接：文档 <file:///doc.md>");
+      const nothing = await runTool(pick("nothing"), {});
+      expect(nothing.output).toBe("（server 没有返回内容）");
+      const failed = await runTool(pick("fail"), {});
+      expect(failed.isError).toBe(true); // server 标记的失败透传（旧实现恒 false）
+      expect(failed.output).toContain("boom");
+    } finally {
+      await out.close();
+    }
+  }, 30_000);
 
   it("③ 超时不触发重连：slow 到帽报「调用超时」人话文案（不是断线文案、不重放）", async () => {
     const conn = await race(createSdkConnection("fx", fixtureServer(), { callTimeoutMs: 250 }), 15_000, "connect");
