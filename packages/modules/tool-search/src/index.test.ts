@@ -74,16 +74,17 @@ describe("tool-search meta 工具与目录段（M4-3 T4）", () => {
     expect(empty.output).toContain("按需目录为空");
   });
 
-  it("T4-⑧ 目录段：hidden 列表（截断 80 字描述）+ 空目录空串过滤 + reveal 后条目消失", () => {
+  it("T4-⑧+T19② 目录段：hidden 列表（截断描述 80→160 字放宽）+ 空目录空串过滤 + reveal 后条目消失", () => {
     const { seam } = mkSeam([
-      info("m__a", { description: "长".repeat(100) }),
+      info("m__a", { description: "长".repeat(200) }),
       info("m__b"),
     ]);
     const text1 = catalogText(seam);
     expect(text1).toContain("以下 2 个工具按需加载");
     expect(text1).toContain("m__a");
-    expect(text1).toContain("…"); // 80 字截断
-    expect(text1).not.toContain("长".repeat(100));
+    expect(text1).toContain("长".repeat(159)); // 帽内全显（truncate 留 1 列给 …；旧 80 帽会腰斩）
+    expect(text1).toContain("…"); // 200 字超帽截断
+    expect(text1).not.toContain("长".repeat(161));
     seam.reveal(["m__a"]);
     const text2 = catalogText(seam);
     expect(text2).toContain("以下 1 个工具按需加载");
@@ -163,5 +164,22 @@ describe("tool-search meta 工具与目录段（M4-3 T4）", () => {
     // reveal 后 lazy__deep 可 plan 执行（c2 成功——未被「按需加载目录」拦截）
     const deepResult = all.find((e) => e.type === "tool/result" && e.callId === "c2");
     expect(String(deepResult && JSON.stringify(deepResult))).toContain("deep-done");
+  });
+});
+
+describe("T19 三小改（m4-3c）", () => {
+  it("① 桥接工具 searchHint「mcp + server 名」参与打分——server 名只经 hint 命中（+4），无 hint 同词 0 分", async () => {
+    const { scoreTool } = await import("./index.ts");
+    const withHint = { name: "mcp__gh__create_issue", owner: "mcp", description: "创建 issue", searchHint: "mcp github" } as never;
+    const noHint = { name: "mcp__gh__create_issue", owner: "mcp", description: "创建 issue" } as never;
+    expect(scoreTool(withHint, ["github"])).toBe(4); // 「github」只出现在 hint——搜 server 名能命中（真实增益：工具名常缩写）
+    expect(scoreTool(noHint, ["github"])).toBe(0); // 无 hint：名字/描述全不中
+    expect(scoreTool(withHint, ["mcp", "github"])).toBeGreaterThan(scoreTool(noHint, ["mcp", "github"])); // 排序增益
+  });
+
+  it("② 目录行描述帽 80 → 160（qwen 同值——与 T11③ 共口径）", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8"));
+    expect(src).toContain("const DESC_TRUNC = 160;");
+    expect(src).not.toContain("const DESC_TRUNC = 80;");
   });
 });

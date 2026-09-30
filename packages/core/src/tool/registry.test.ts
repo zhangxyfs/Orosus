@@ -270,7 +270,8 @@ describe("ToolSearch 机制层（M4-3 T4）", () => {
     expect(blocked.ok).toBe(false);
     if (!blocked.ok) {
       expect(blocked.result.isError).toBe(true);
-      expect(blocked.result.output).toContain("按需加载目录");
+      expect(blocked.result.output).toContain("这个工具可用但未加载");
+      expect(blocked.result.output).toContain('tool-search__search'); // T19③：手把手句式钉（先加载再调用）
       expect(blocked.result.output).toContain("tool-search__search");
     }
     reg.revealTools(["m__lazy"]);

@@ -149,6 +149,7 @@ export function toBridgedTool(server: string, meta: ServerToolMeta, call: Server
   return defineTool({
     name: toolName,
     description: clean.description,
+    searchHint: `mcp ${server}`, // T19①（m4-3c）：搜「mcp github」比搜工具全名容易命中；只参与打分不显示（cc-haha 对照实验）
     ...(deferred === true ? { deferred: true } : {}),
     parameters: schemaMeta !== undefined ? loose.meta(schemaMeta) : loose,
     resolveExecution: async (input) => ({

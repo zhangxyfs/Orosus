@@ -6,7 +6,7 @@ import { defineTool, type Tool, type ToolInfo } from "@orosus/contracts/tool";
  *  默认 5 条帽 20；目录描述截断 80 字符；未命中近似名建议 ≤3；目录段 50 行帽。 */
 const MAX_RESULTS = 5;
 const HARD_CAP = 20;
-const DESC_TRUNC = 80;
+const DESC_TRUNC = 160; // T19②（m4-3c）：80 → 160 放宽——与 T11③ 提示词清单行共用 qwen 目录行同值口径
 const MAX_SUGGEST = 3;
 const CATALOG_LINE_CAP = 50;
 
