@@ -25,13 +25,15 @@ const sessionFile = (root: string, sid: string, lines: string[], bucket = "B-mai
 const { setTitle } = await import("./sessions.ts");
 
 describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对时间/倒序/当前高亮/无黑话）", () => {
-  it("① readTitle 三级：session/label 优先 → 首问文本兜底 → sid 兜底", () => {
+  it("① readTitle 三级：session/label 优先 → 首问文本兜底（≤60 帽——2026-09-30 从 20 放宽）→ sid 兜底", () => {
     const root = fresh();
     const f1 = sessionFile(root, "s_labeled", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "问个好" }] }), ev("e3", "session/label", { label: "问候测试" })]);
-    const f2 = sessionFile(root, "s_fallback", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "这是一个特别长的首问文本应该被截断到二十个字符以内才对" }] })]);
+    const f2 = sessionFile(root, "s_fallback", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "这是一个中等长度的首问文本在六十字符帽以内应该完整显示出来才对" }] })]);
+    const f2b = sessionFile(root, "s_long", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "长".repeat(80) }] })]);
     const f3 = sessionFile(root, "s_empty", [ev("e1", "session/header")]);
     expect(readTitle(f1, "s_labeled")).toBe("问候测试");
-    expect(readTitle(f2, "s_fallback")).toBe("这是一个特别长的首问文本应该被截断到二十");
+    expect(readTitle(f2, "s_fallback")).toBe("这是一个中等长度的首问文本在六十字符帽以内应该完整显示出来才对"); // 帽内全显
+    expect(readTitle(f2b, "s_long")).toBe("长".repeat(60)); // 超帽截到 60（tree.test ④ 同口径）
     expect(readTitle(f3, "s_empty")).toBe("s_empty");
   });
 
