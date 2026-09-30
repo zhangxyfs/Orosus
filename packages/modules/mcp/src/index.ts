@@ -52,6 +52,9 @@ export interface McpActivateOut {
   /** MI-07：消毒后撞名被跳过的工具（带内记录——不进 registry〔重名 throw 会降级整个模块〕）。
    *  如 server 清单同时提供 "a.b" 与 "a_b"——两段消毒后同注册名，保留首个、跳过后来者。 */
   skippedTools: { server: string; tool: string; reason: string }[];
+  /** 手动启动懒 server（2026-09-30「待启动态按启停=被停用」陷阱修）：触发 ensure() 连接（memoized——
+   *  与首调共用同一 promise；onStarted/onLive 照常回调）。非懒/未知名 → 拒绝（调用方 toast）。 */
+  startLazy(name: string): Promise<void>;
   /** MI-02：逐个关成功建立的连接（close 缺省的 fake 连接跳过）；单个失败不株连其余。 */
   close(): Promise<void>;
 }
@@ -65,6 +68,8 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   const skippedTools: McpActivateOut["skippedTools"] = [];
   const seenNames = new Set<string>(); // 注册名去重（MI-07）：registry 对非墓碑重名 throw → 整模块降级
   const mapping: Record<string, Record<string, string>> = {}; // MI-07：消毒改名映射（原样名 → 注册名），manifest 事件可观测
+  const lazyStarts = new Map<string, () => Promise<ServerConnection>>(); // 手动启动口（startLazy 用）
+  const connectedNames = new Set<string>(); // activate 期已连的非懒名（startLazy 对它们即答）
   // T1 并发连接（kimi 同款）：所有 server 一起握（互不拖累——失败隔离本就有），结果按配置序归并（确定性）。
   // 每 server 一条 connect → listTools → instructions 流水线；任一步炸即该 server 记失败，不株连其余。
   // T20：lazy:true 的 server 走惰性分支——activate 零连接（启动零进程），manifest 供清单、首调才握。
@@ -102,6 +107,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
           );
           return pending;
         };
+        lazyStarts.set(name, ensure); // 手动启动口：与首调共用同一 memoized promise
         const lazyCall: ServerCall = (toolName, args, signal) => ensure().then((c) => c.callTool(toolName, args, signal));
         conns.push({ close: async () => { await started?.close?.(); } } as ServerConnection); // dispose 只关已起进程（未起零操作）
         return { ok: true, name, cfg, list: mf, lazyCall };
@@ -127,7 +133,10 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       continue;
     }
     const { name, cfg, conn, list, instructions, lazyCall } = r;
-    if (conn !== undefined) conns.push(conn);
+    if (conn !== undefined) {
+      conns.push(conn);
+      connectedNames.add(name); // 非懒已连——startLazy 对它们即答成功
+    }
     if (list.length === 0 && lazyCall !== undefined) continue; // T20：空清单惰性件（tool-search 关态门控）——不占 promptSection 与 manifest 事件
     const callTool: ServerCall = lazyCall ?? conn!.callTool;
     manifest[name] = list.map((t) => t.name);
@@ -162,6 +171,12 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   let closed = false;
   return {
     tools, failedServers, connected, skippedTools,
+    startLazy: async (name: string): Promise<void> => {
+      if (connectedNames.has(name)) return; // 非懒件 activate 已连——即答
+      const ensure = lazyStarts.get(name);
+      if (ensure === undefined) throw new Error(`没有叫「${name}」的懒启动 server（或它已停用）`);
+      await ensure().then(() => undefined);
+    },
     close: async () => {
       if (closed) return;
       closed = true;
@@ -342,7 +357,7 @@ export const mcpDef = defineModule({
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
-  provides: ["mcp.catalog"], // T16：/mcp 命令族与 /settings 管理面的数据源（技能 catalog 同款服务倒挂）
+  provides: ["mcp.catalog", "mcp.start"], // T16 catalog：/settings 管理面数据源；mcp.start（2026-09-30）：管理面「启动」——手动触发懒 server 连接
   mounts: ["contribute:tool", "contribute:promptSection", "tools.list", "provide"],
   async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number; headers?: Record<string, string>; cwd?: string; transport?: "http" | "sse"; lazy?: boolean }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
@@ -438,6 +453,7 @@ export const mcpDef = defineModule({
     }
     // T16：catalog 服务（零参函数返回行快照——skill.catalog 同款；live 态在 activate 定格，reload 换代重算）
     const userServerNames = new Set(Object.keys(ctx.config.servers));
+    ctx.provide("mcp.start", (name: string): Promise<void> => out.startLazy(name)); // 管理面「启动」：待启动/失败态的懒 server 手动触发连接
     ctx.provide("mcp.catalog", (): McpCatalogRow[] => {
       // T20：门开时预装走 connected（清单行/工具数现成）——就地修正来源与 live 态（未起 = 待启动，
       // 不能照 connected 快照标「已连接」）；门关时预装不在 connected——补 idle 行（管理面/菜单可见、工具未注册）。

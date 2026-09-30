@@ -112,6 +112,22 @@ describe("T20 惰性机制（activate 零连接、首调才起、memo 复用、�
     });
     expect(out.failedServers).toEqual([{ name: "ghost", reason: expect.stringContaining("静态清单") }]);
   });
+
+  it("④b 手动启动口 startLazy（2026-09-30「待启动态按启停=被停用」陷阱修）：触发连接且 memoized（两次启动一次连接）、未知名拒绝、非懒已连即答", async () => {
+    const out = await activateMcp({
+      servers: { mem: { command: "x", lazy: true }, api: { command: "y" } },
+      connect: async () => ({ listTools: async () => [{ name: "ping", description: "d" }], callTool: async () => ({ content: [] }) }),
+      sessionAppend: () => {},
+      ...lazyDeps(),
+    });
+    const before = started.length;
+    await out.startLazy("mem");
+    await out.startLazy("mem"); // memoized——与首调共用同一连接 promise
+    expect(started.length - before).toBe(1);
+    await expect(out.startLazy("ghost")).rejects.toThrow("懒启动");
+    await out.startLazy("api"); // 非懒 activate 已连——即答不炸
+    await out.close();
+  });
 });
 
 describe("T20 预装清单与门控", () => {
@@ -180,6 +196,10 @@ describe("T20 预装清单与门控", () => {
       expect(names).toContain("mcp__memory__search_nodes"); // 空壳没顶掉预装——工具在（自愈）
       const cat = await h.graph().services.getOptional("mcp.catalog");
       expect(typeof cat).toBe("function");
+      // mcp.start 服务挂载钉（2026-09-30 启动口）：在座且可调——未知名拒绝（真启动会拉 npx 进程，不在单测里做）
+      const start = await h.graph().services.getOptional("mcp.start");
+      expect(typeof start).toBe("function");
+      await expect((start as (name: string) => Promise<void>)("no-such-server")).rejects.toThrow("懒启动");
       const rows = (cat as () => McpCatalogRow[])();
       const mem = rows.find((r) => r.name === "memory");
       expect(mem?.source).toBe("preload"); // 定源预装（不再被用户层同名误标 config）
