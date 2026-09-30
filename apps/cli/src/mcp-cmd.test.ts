@@ -106,9 +106,9 @@ describe("T13 /mcp 命令族（注入式）", () => {
     const proj = await runMcpCommand("remove proj", dp);
     expect(proj.wrote).toBe(false);
     expect(proj.text).toContain("项目 .mcp.json");
-    expect(proj.text).toContain("off proj");
+    expect(proj.text).toContain("Alt + K");
     const pre = await runMcpCommand("remove memory", dp);
-    expect(pre.text).toContain("预装");
+    expect(pre.text).toContain("只能停用不能删除");
     const unknown = await runMcpCommand("remove ghost", dp);
     expect(unknown.text).toContain("没有叫");
   });

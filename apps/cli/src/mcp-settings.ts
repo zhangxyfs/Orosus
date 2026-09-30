@@ -80,5 +80,8 @@ export function mcpDetailText(w: number, row: McpCatalogRow): string {
   if (row.state === "pending-confirm") {
     lines.push("", fg("muted", `未确认——核对指纹后按 t 确认连接（指纹 ${row.fingerprint?.slice(0, 8) ?? "—"}；确认一次永久可用，配置被改过会重新要求）`));
   }
+  if (row.source === "preload") {
+    lines.push("", fg("muted", "预装 server——只能停用不能删除（Alt + K 启停/启动）；停用后可随时再启用"));
+  }
   return lines.join("\n");
 }
