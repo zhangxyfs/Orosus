@@ -47,7 +47,7 @@ describe("T17 管理面纯层（m4-3c）", () => {
     expect(failText).toContain("4KB");
     const proj = stripAnsi(mcpDetailText(76, row("api", "pending-confirm", { source: "project", fingerprint: "abcd1234efgh" })));
     expect(proj).toContain("项目 .mcp.json");
-    expect(proj).toContain("/mcp trust api");
+    expect(proj).toContain("按 t 确认连接"); // 2026-09-30 确认门随 /mcp 退役迁入管理面详情页
     expect(proj).toContain("abcd1234");
     const remote = stripAnsi(mcpTransportLabel(row("r", "connected", { transport: "http", url: "https://x/mcp" })));
     expect(remote).toBe("HTTP（远程）");

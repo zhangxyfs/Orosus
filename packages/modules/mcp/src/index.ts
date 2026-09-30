@@ -370,7 +370,7 @@ export const mcpDef = defineModule({
       },
     });
     if (gated.pending.length > 0) {
-      ctx.ui.notice?.(`项目 .mcp.json 有 ${gated.pending.length} 个未确认的 MCP server，/mcp 查看确认`);
+      ctx.ui.notice?.(`项目 .mcp.json 有 ${gated.pending.length} 个未确认的 MCP server，/settings → MCP 详情按 t 确认`); // 2026-09-30 /mcp 命令退役——确认门新家在管理面详情页
     }
     // T16：catalog 服务（零参函数返回行快照——skill.catalog 同款；live 态在 activate 定格，reload 换代重算）
     const userServerNames = new Set(Object.keys(ctx.config.servers));

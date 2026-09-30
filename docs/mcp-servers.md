@@ -7,7 +7,7 @@
 > Search 重复）——装了也是功能重复，白占上下文。
 
 预装五件（memory 记忆 / context7 文档检索 / github / everything 自检 / puppeteer 浏览器）开箱即用、
-按需启动、不用时零进程——详见 `/mcp`。下面是预装之外的三个方向。
+按需启动、不用时零进程——详见 `/settings` →「MCP」。下面是预装之外的三个方向。
 
 ## 数据库类
 
@@ -48,10 +48,10 @@ args = ["graphiti-mcp"]
 # 需要图数据库与 LLM key——按所实现例在 env 里显式声明（$ENV: 引用宿主环境）
 ```
 
-- 这一类普遍要配 Neo4j / API key，属于「先读它的 README 再装」的档位——`/mcp browse memory` 看实时清单。
+- 这一类普遍要配 Neo4j / API key，属于「先读它的 README 再装」的档位——注册表实时清单见 MCP 官方目录。
 
 ## 装完之后
 
-- `/mcp` 看红绿灯；连不上时详情页有「最后说过什么」（stderr 尾巴）。
+- `/settings` →「MCP」看红绿灯；连不上时详情页有「最后说过什么」（stderr 尾巴）。
 - 工具多不用怕——预装与声明 `deferred` 的 server 工具走按需加载（tool-search 搜到才进请求）。
 - 项目自带的 `.mcp.json` 首次会要求 `/mcp trust` 确认（指纹核对），确认一次永久可用。
