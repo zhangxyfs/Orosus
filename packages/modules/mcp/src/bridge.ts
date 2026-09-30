@@ -19,12 +19,23 @@ export type ServerCall = (
 
 const DESCRIPTIION_LIMIT = 4096; // §8.5 不受信消毒：4KB 截断
 
+/** T9 隐形字符清洗（m4-3c，cc-haha 记录的真实攻击案例防御）：server 提供的描述/说明书是不可信输入，
+ *  零宽字符与双向控制符能夹带人眼看不见的模型指令（Trojan Source 同款机理）。NFC 归一后删除：
+ *  零宽族（U+200B-F）、双向控制族（U+202A-E / U+2066-9 / U+061C）、不可见操作符（U+2060-4）、
+ *  BOM/软连字符（U+FEFF/U+00AD）、行间注记（U+FFF9-B）、C0 控制字符（保留 \n\r\t——合法排版）与 DEL。
+ *  可见文字原样保留——清洗目标是「看不见的」，不是「不想看的」。 */
+// oxlint-disable-next-line no-control-regex -- 清洗件的职责就是匹配控制字符，非误用
+const INVISIBLE_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\uFFF9-\uFFFB]/g;
+export function stripInvisible(raw: string): string {
+  return raw.normalize("NFC").replace(INVISIBLE_RE, "");
+}
+
 /** 桥接工具名上限（MI-07）：OpenAI/Anthropic 工具名约束 ^[a-zA-Z0-9_-]{1,64}$——超长即每个请求 400。 */
 const TOOL_NAME_LIMIT = 64;
 
-/** description 不受信输入（§8.5）：非 string 归空、超长截断、来源标记前缀（防 tool poisoning 的可见性标记）。 */
+/** description 不受信输入（§8.5）：非 string 归空、隐形字符清洗（T9）、超长截断、来源标记前缀（防 tool poisoning 的可见性标记）。 */
 export function sanitizeToolMeta(server: string, name: string, description: unknown): { name: string; description: string } {
-  const raw = typeof description === "string" ? description : "";
+  const raw = typeof description === "string" ? stripInvisible(description) : "";
   const tagged = raw === "" ? `[mcp:${server}]` : `[mcp:${server}] ${raw}`;
   return { name, description: tagged.slice(0, DESCRIPTIION_LIMIT) };
 }
@@ -35,7 +46,7 @@ export function sanitizeToolMeta(server: string, name: string, description: unkn
  *  来源前缀 + 4096 截断；非 string / 空串 → undefined（回落工具清单行，不装占位）。 */
 export function sanitizeServerInstructions(server: string, raw: unknown): string | undefined {
   if (typeof raw !== "string" || raw === "") return undefined;
-  return `[mcp:${server}] ${raw}`.slice(0, DESCRIPTIION_LIMIT);
+  return `[mcp:${server}] ${stripInvisible(raw)}`.slice(0, DESCRIPTIION_LIMIT);
 }
 
 /** MI-07 修复（2026-09-28 code review P2，kimi sanitizeMcpNamePart 同款）+ T4 补强（m4-3c）：server id
