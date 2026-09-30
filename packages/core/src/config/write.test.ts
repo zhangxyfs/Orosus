@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeSectionKey, sectionPath } from "./write.ts";
+import { parse } from "smol-toml";
+import { writeSectionKey, sectionPath, writeNestedTable } from "./write.ts";
 
 /** m4-8 T3：统一写口——行级节区感知写（三份复制逻辑并一份）+ sectionPath 路由。
  *  null = 删键；字符串/字符串数组带引号、数值/布尔裸；保注释/键序/EOL（CM-01 纪律：行级写不 parse
@@ -101,5 +102,64 @@ describe("sectionPath（m4-8 T3 路由）", () => {
     const p2 = sectionPath("tui", { userConfig, modulesDir, isModule });
     expect(p2).toBe(userConfig); // 留守节回原文件（不建）
     expect(existsSync(userConfig)).toBe(false);
+  });
+});
+
+
+describe("writeNestedTable（T13 嵌套表写入器——m4-3c）", () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+  const td = () => { const d = mkdtempSync(join(tmpdir(), "orosus-nested-")); dirs.push(d); return join(d, "mcp.toml"); };
+  const rd = (p: string) => readFileSync(p, "utf8");
+
+  it("① 新建：空文件/缺表 → 文件尾追加 [mcp.servers.x] 整表（env 内联表、args 数组、引号键名）", () => {
+    const p = td();
+    writeNestedTable(p, "mcp.servers.gh", { command: "npx", args: ["-y", "pkg"], env: { TOKEN: "t1" }, timeoutMs: 90_000 });
+    const t = rd(p);
+    expect(t).toContain('[mcp.servers.gh]');
+    expect(t).toContain('command = "npx"');
+    expect(t).toContain('args = ["-y", "pkg"]');
+    expect(t).toContain('env = { TOKEN = "t1" }');
+    expect(t).toContain("timeoutMs = 90000");
+    expect(parse(t)).toEqual({ mcp: { servers: { gh: { command: "npx", args: ["-y", "pkg"], env: { TOKEN: "t1" }, timeoutMs: 90_000 } } } }); // 落盘是合法 TOML 且结构如预期
+    writeNestedTable(p, "mcp.servers.my srv", { command: "x" });
+    expect(rd(p)).toContain('[mcp.servers."my srv"]'); // 非裸键段自动引号
+  });
+
+  it("② 替换：既有表体与子表整体让位、其余节与注释不动", () => {
+    const p = td();
+    const PRE = ["# 顶部注释", "[mcp]", "enabled = true", "", "[mcp.servers.old]", "command = \"a\"", "[mcp.servers.old.env]", "K = \"v\"", "", "[skill]", "disabled = []"].join("\n") + "\n";
+    writeFileSync(p, PRE, "utf8");
+    writeNestedTable(p, "mcp.servers.old", { url: "https://x/mcp", headers: { authorization: "Bearer t" } });
+    const t = rd(p);
+    expect(t).toContain("# 顶部注释"); // 注释保住
+    expect(t).not.toContain('command = "a"');
+    expect(t).not.toContain("[mcp.servers.old.env]"); // 子表一并让位
+    expect(parse(t)).toEqual({ mcp: { enabled: true, servers: { old: { url: "https://x/mcp", headers: { authorization: "Bearer t" } } } }, skill: { disabled: [] } }); // 邻节无损
+  });
+
+  it("③ 删除：整表摘除 + 空行折叠；表不在无操作；坏 TOML 拒写", () => {
+    const p = td();
+    writeNestedTable(p, "mcp.servers.a", { command: "x" });
+    writeNestedTable(p, "mcp.servers.b", { command: "y" });
+    writeNestedTable(p, "mcp.servers.a", null);
+    const t = rd(p);
+    expect(t).not.toContain("[mcp.servers.a]");
+    expect(parse(t)).toEqual({ mcp: { servers: { b: { command: "y" } } } });
+    expect(t.match(/^$/gm)?.length ?? 0).toBeLessThanOrEqual(2); // 双空行折回
+    writeNestedTable(p, "mcp.servers.ghost", null); // 不在——无操作
+    expect(rd(p)).toBe(t);
+    const bad = td();
+    writeFileSync(bad, "不是 = 合法 = TOML", "utf8");
+    writeNestedTable(bad, "mcp.servers.x", { command: "x" });
+    expect(rd(bad)).toBe("不是 = 合法 = TOML"); // 拒写（CM-01）——原样一字未动
+  });
+
+  it("④ 精确匹配：前缀同名表不误伤（gh 与 gh2 互不相干）", () => {
+    const p = td();
+    writeNestedTable(p, "mcp.servers.gh", { command: "a" });
+    writeNestedTable(p, "mcp.servers.gh2", { command: "b" });
+    writeNestedTable(p, "mcp.servers.gh", null);
+    expect(parse(rd(p))).toEqual({ mcp: { servers: { gh2: { command: "b" } } } });
   });
 });
