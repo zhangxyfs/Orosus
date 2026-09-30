@@ -7,6 +7,7 @@ import {
   readProjectMcpJson, fingerprintServer, trustProjectServer, gateProjectServers, mcpTrustFile,
   type McpCatalogRow, type ProjectServerConfig,
 } from "@orosus/mcp";
+import { searchRegistry, decideInstall, REGISTRY_SHOW_LIMIT, defaultRegistryCacheFile } from "./mcp-registry.ts";
 
 /** T13（m4-3c）：`/mcp` 命令族——查看 / 添加 / 删除 / 开关 / 信任确认（宿主侧实现，skill-settings 先例：
  *  管理面写盘走 core 写入器 + mcp.catalog 服务取 live 状态 + 写完由 main.ts 触发 h.reload()）。
@@ -57,6 +58,10 @@ export interface McpCmdDeps {
   /** 信任库落点 */
   trustFile(): string;
   platform?: NodeJS.Platform;
+  /** 注册表缓存落点（T14） */
+  registryCachePath?: string;
+  /** 网络实现（T14——测试注入） */
+  fetchImpl?: typeof fetch;
 }
 
 export interface McpCmdResult {
@@ -70,6 +75,7 @@ export function defaultMcpCmdDeps(): McpCmdDeps {
     configPath: () => join(orosusHome(), "modules.d", "mcp.toml"),
     projectPath: () => process.cwd(),
     trustFile: () => mcpTrustFile(),
+    registryCachePath: () => defaultRegistryCacheFile(join(orosusHome(), "cache")),
   };
 }
 
@@ -213,7 +219,79 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
     return { text: `已确认 **${name}**（指纹 ${target.fingerprint.slice(0, 8)}）——模块图重载后连接`, wrote: true };
   }
 
-  return { text: "用法：`/mcp`（列表）· `/mcp add 名字 命令或URL` · `/mcp remove|on|off 名字` · `/mcp trust [名字]` · `/mcp browse 关键词`（T14）", wrote: false };
+  if (sub === "browse") {
+    const query = rest.join(" ").trim();
+    if (query === "") return { text: "用法：`/mcp browse 关键词`——搜 MCP 官方注册表（registry.modelcontextprotocol.io）", wrote: false };
+    const r = await searchRegistry({
+      query,
+      cacheFile: deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache")),
+      ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
+    });
+    if (r.entries.length === 0) {
+      return {
+        text: r.offline
+          ? "网络不可用且本地没有可用的注册表缓存——连上网后重试（缓存 30 天有效，断网时自动回落）"
+          : `注册表里没有匹配「${query}」的 server——换个关键词，或直接 /mcp add 手写`,
+        wrote: false,
+      };
+    }
+    const shown = r.entries.slice(0, REGISTRY_SHOW_LIMIT);
+    const lines = shown.map((e) => {
+      const kind = e.stdio !== undefined ? "本地" : e.remote !== undefined ? "远程" : "无安装形态";
+      const needs = [...(e.stdio?.requiredEnv ?? []), ...(e.remote?.requiredHeaders ?? [])];
+      const needTag = needs.length > 0 ? `（需配置：${needs.join("、")}）` : "";
+      const desc = e.description.split("\n")[0]!.slice(0, 60);
+      return `- \`${e.name}\` ${kind}${needTag} —— ${desc}`;
+    });
+    const more = r.entries.length > REGISTRY_SHOW_LIMIT
+      ? `\n\n（前 ${REGISTRY_SHOW_LIMIT} 条，共 ${r.entries.length} 条命中——细化关键词缩小范围）`
+      : "";
+    return { text: `注册表搜索「${query}」${r.offline ? "（离线——用缓存）" : ""}：\n${lines.join("\n")}${more}\n\n安装：\`/mcp install 名字\`（短名即可）`, wrote: false };
+  }
+
+  if (sub === "install") {
+    const name = rest[0];
+    if (name === undefined || name === "") return { text: "用法：`/mcp install 名字`——先 /mcp browse 找名字", wrote: false };
+    const existing = configuredServers(configPath);
+    const cacheFile = deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache"));
+    // 取全量（无关键词过滤）再精确匹配名/短名
+    const r = await searchRegistry({ query: name, cacheFile, ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}) }); // 按名搜——空关键词只回前 N 条会漏目标
+    const decision = decideInstall(r.entries, name);
+    switch (decision.kind) {
+      case "not-found":
+        return { text: `注册表里没找到「${name}」——/mcp browse 搜一下确认名字（install 用全名或短名都行）`, wrote: false };
+      case "ambiguous":
+        return { text: `「${name}」命中多个条目——用全名指明：${decision.candidates.map((c) => `\`${c.name}\``).join("、")}`, wrote: false };
+      case "needs-secrets":
+        return {
+          text: `**${decision.entry.name}** 需要密钥（${decision.missing.join("、")}）——不半自动安装（占位密钥连上也是 401）。把下面模板填好后贴进 \`${configPath}\`，再 /reload：
+
+${decision.template}
+
+（值可用 \`$ENV:变量名\` 引用环境变量——Orosus 不会把宿主环境自动漏给 server）`,
+          wrote: false,
+        };
+      case "stdio": {
+        if (decision.entry.shortName in existing) {
+          return { text: `已存在同名 server「${decision.entry.shortName}」——不覆盖；想改它请用修改`, wrote: false };
+        }
+        writeNestedTable(configPath, `mcp.servers.${decision.entry.shortName}`, {
+          command: decision.values.command,
+          ...(decision.values.args.length > 0 ? { args: decision.values.args } : {}),
+        });
+        return { text: `已安装 **${decision.entry.shortName}**（来自 ${decision.entry.name} v${decision.entry.version}）——模块图重载后生效，回 \`/mcp\` 看红绿灯`, wrote: true };
+      }
+      case "remote": {
+        if (decision.entry.shortName in existing) {
+          return { text: `已存在同名 server「${decision.entry.shortName}」——不覆盖；想改它请用修改`, wrote: false };
+        }
+        writeNestedTable(configPath, `mcp.servers.${decision.entry.shortName}`, { url: decision.values.url });
+        return { text: `已安装 **${decision.entry.shortName}**（远程，来自 ${decision.entry.name} v${decision.entry.version}）——模块图重载后生效`, wrote: true };
+      }
+    }
+  }
+
+    return { text: "用法：`/mcp`（列表）· `/mcp add 名字 命令或URL` · `/mcp remove|on|off 名字` · `/mcp trust [名字]` · `/mcp browse 关键词` · `/mcp install 名字`", wrote: false };
 }
 
 const serverKind = (cfg: ProjectServerConfig): string => cfg.url !== undefined ? `远程 ${cfg.url}` : `本地 ${[cfg.command, ...(cfg.args ?? [])].join(" ")}`;
