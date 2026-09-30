@@ -13,7 +13,8 @@ const HEAD_MAX_BYTES = 16 * 1024;
 export interface SessionHead {
   /** 会话名（最后一个 session/label；未命名 = undefined——树快照契约「显示侧自定」）。 */
   label?: string;
-  /** 首个 user/message 文本截断（标题兜底；≤20 字符）。 */
+  /** 首个 user/message 文本截断（标题兜底；≤60 字符——2026-09-30 拍板从 20 放宽：会话列表行
+   *  顶到行宽由显示侧截断，标题多显才看得清）。 */
   firstUser?: string;
   /** header.parentSession（根会话 = null；文件无 header = undefined——坏文件跳过用）。 */
   parentSession?: string | null;
@@ -27,9 +28,10 @@ export interface SessionHead {
  *  〔菜单 Enter〕或第二行起〔2026-09-30 手敲形态：原话行 + 标记 + 正文合成一条〕）。 */
 const SKILL_MARK = /(?:^|\n)（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
 
-/** 首条用户消息 → 列表标题兜底（≤20 字符、空白折叠；空串 = undefined 继续找下一条）：技能注入
+/** 首条用户消息 → 列表标题兜底（≤60 字符、空白折叠；空串 = undefined 继续找下一条）：技能注入
  *  消息特例显示「[技能] 名字 参数」（2026-09-30 用户拍板——机器标记与正文都不当标题；参数从
- *  <skill args> 属性取、&quot; 还原，老会话无参数即只显名字）。 */
+ *  <skill args> 属性取、&quot; 还原，老会话无参数即只显名字）。帽从 20 放宽到 60（同日拍板：
+ *  行宽截断归显示侧，标题先存足）。 */
 function firstUserTitle(raw: string): string | undefined {
 	const text = raw.replace(/\s+/g, " ").trim();
 	if (text === "") return undefined;
@@ -37,9 +39,9 @@ function firstUserTitle(raw: string): string | undefined {
 	if (m !== null) {
 		const argsM = /<skill name="[^"]*"(?: args="([^"]*)")?>/.exec(raw);
 		const args = argsM?.[1]?.replace(/&quot;/g, '"');
-		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 20).trimEnd();
+		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 60).trimEnd();
 	}
-	return text.slice(0, 20);
+	return text.slice(0, 60);
 }
 
 /** 读会话文件头部元数据（jsonl 读法，T7）：一次读全文，元数据解析限预算内、行数恒真。
