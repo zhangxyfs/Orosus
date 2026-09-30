@@ -170,10 +170,16 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
     if (!(name in existing) && row === undefined) {
       return { text: `没有叫「${name}」的 server（/mcp 查看列表）`, wrote: false };
     }
-    // 来源分流（2026-09-30 T13 走查逻辑修正）：catalog 报 config 来源 = 手写条目——表内翻转；
-    // 报 project/preload = 用户层只有「停用覆盖条目」——on 删覆盖还原来源、off 写覆盖（设计空白拍板）。
-    // 模块未启用无 catalog 时按 config 处置（读了什么翻什么，保守不删）。
-    if (name in existing && (row?.source ?? "config") === "config") {
+    // 来源分流（2026-09-30 T13 走查逻辑修正；同日二修——实机 memory 弄残事故）：**按条目内容分流，不按
+    // catalog 报的来源**——off 写下的停用覆盖是无 command/url 的空壳，reload 后 catalog 会把它重报成
+    // 「配置文件」来源（用户层同名即 config），旧判据据此把随后的 on 引进「表内翻转」分支 → 空壳翻成
+    // enabled=true 顶掉预装启动配置（同名让位）→ server 永久起不来。新判据：条目带 command 或 url =
+    // 真手写条目（表内翻转）；空壳 = 覆盖条目（on 删覆盖还原来源、off 写/保持覆盖）——off→on 任意来回
+    // 恒等。模块未启用无 catalog 时同判据照判（不依赖 row）。
+    const entry = existing[name] as Record<string, unknown> | undefined;
+    const hasStartup = entry !== undefined && entry !== null && typeof entry === "object"
+      && (typeof entry.command === "string" || typeof entry.url === "string");
+    if (name in existing && hasStartup) {
       // 手写条目：表内翻转 enabled（保留其余键）
       const merged: Record<string, NestedTableValue> = {};
       for (const [k, v] of Object.entries(existing[name]!)) {
@@ -186,7 +192,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
       writeNestedTable(configPath, `mcp.servers.${name}`, merged);
       return { text: `已${enable ? "启用" : "停用"} **${name}**——模块图重载后生效`, wrote: true };
     }
-    // 项目/预装条目：用户层同名覆盖（停用 = 覆盖条目；启用 = 删覆盖条目还原来源——设计空白拍板）
+    // 项目/预装条目与空壳覆盖：用户层同名覆盖（停用 = 覆盖条目；启用 = 删覆盖条目还原来源——设计空白拍板）
     if (enable) {
       writeNestedTable(configPath, `mcp.servers.${name}`, null); // 覆盖条目不在则无操作
       return { text: `已启用 **${name}**（移除用户层覆盖）——模块图重载后生效`, wrote: true };

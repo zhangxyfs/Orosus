@@ -356,15 +356,21 @@ export const mcpDef = defineModule({
       projectPath: process.cwd(),
     });
     // T20 预装合并：优先级最低（用户 > 项目确认件 > 预装）；lazy + deferred 双标记；
-    // 不走信任门（非项目带来）。同名在场即整条让位。
+    // 不走信任门（非项目带来）。同名让位判据（2026-09-30 二修——实机 memory 弄残事故）：**真条目
+    // （带 command/url）才让位**；无启动配置的空壳 = 覆盖条目（off 写下的停用覆盖、或被旧 on-bug
+    // 翻成 enabled=true 的残壳）——预装启动配置照供、enabled 跟空壳走：停用语义不变，残壳自愈。
     const merged: Record<string, Record<string, unknown>> = { ...gated.servers };
     // T20 门控：tool-search 未显式启用 → 预装不注册工具（deferred 标记在关态不生效——50 工具会灌爆
     // 上下文）；管理面/菜单/启停不受影响（catalog 行总在）。README 指路开 tool-search 后 /reload 生效。
     const preloadToolsOn = shouldRegisterPreloadTools(orosusHome());
-    const mergedPreloadNames: string[] = []; // 真并入预装名（被用户/项目同名覆盖的不算——catalog 定源用）
+    const mergedPreloadNames: string[] = []; // 真并入预装名（被用户/项目真条目覆盖的不算——catalog 定源用）
     for (const pl of MCP_PRELOADS) {
-      if (pl.name in gated.servers || pl.name in project.servers) continue;
-      merged[pl.name] = { command: pl.command, args: pl.args, lazy: true, deferred: true };
+      if (pl.name in project.servers) continue; // 项目同名（含未确认）让位——旧规则不变
+      const userEntry = gated.servers[pl.name] as Record<string, unknown> | undefined;
+      const userReal = userEntry !== undefined && userEntry !== null && typeof userEntry === "object"
+        && (typeof userEntry.command === "string" || typeof userEntry.url === "string");
+      if (userReal) continue; // 用户真条目让位
+      merged[pl.name] = { command: pl.command, args: pl.args, lazy: true, deferred: true, ...(userEntry?.enabled === false ? { enabled: false } : {}) };
       mergedPreloadNames.push(pl.name);
     }
     // T20 live 态：惰性首启结果记在活表——catalog 服务每次现读（idle → connected/failed 即时翻）
@@ -426,7 +432,8 @@ export const mcpDef = defineModule({
         if (preloadSet.has(r.name)) {
           const live = lazyState.get(r.name);
           r.source = "preload";
-          r.state = live === undefined ? "idle" : live.state; // connected 快照≠已连接——lazy 未起就是待启动
+          // 停用覆盖优先于 live 态：空壳 enabled:false 并进 merged 时（⑦ 二修）不许被「待启动」覆写
+          r.state = merged[r.name]?.enabled === false ? "disabled" : live === undefined ? "idle" : live.state;
           if (live?.state === "failed" && live.reason !== undefined) r.failReason = live.reason;
           else delete r.failReason;
           r.deferred = true;

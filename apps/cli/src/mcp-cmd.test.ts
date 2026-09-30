@@ -131,6 +131,25 @@ describe("T13 /mcp 命令族（注入式）", () => {
     expect(serversOf(dp.configPath()).proj).toBeUndefined(); // 覆盖条目删除——还原来源
   });
 
+  it("④b 覆盖空壳 off→on 恒等（2026-09-30 实机 memory 弄残事故回归钉）：off 写空壳 → reload 后 catalog 重报 config 来源 → on 仍删覆盖还原，不残留 enabled:true 空壳；手写真条目照旧表内翻转", async () => {
+    const d = tmp("toggle2");
+    await runMcpCommand("off memory", deps(d, [row("memory", "idle", { source: "preload" })]));
+    expect(serversOf(join(d, "modules.d", "mcp.toml")).memory).toEqual({ enabled: false }); // 空壳覆盖（无 command）
+    // reload 后：用户层同名在场 → catalog 把来源重报成 config——旧判据据此走「表内翻转」把空壳翻成
+    // enabled=true，顶掉预装启动配置 → server 永久起不来（实机事故形态）
+    const dp2 = deps(d, [row("memory", "idle", { source: "config" })]);
+    const onR = await runMcpCommand("on memory", dp2);
+    expect(onR.wrote).toBe(true);
+    expect(serversOf(dp2.configPath()).memory).toBeUndefined(); // 新判据按内容分流：空壳 = 覆盖 → 删掉还原预装
+    expect(onR.text).toContain("移除用户层覆盖");
+    // 手写真条目（带 command）不受影响——仍表内翻转
+    await runMcpCommand("add gh npx -y p", deps(d));
+    const dp3 = deps(d, [row("gh", "connected")]);
+    await runMcpCommand("off gh", dp3);
+    await runMcpCommand("on gh", dp3);
+    expect(serversOf(dp3.configPath()).gh).toEqual({ command: "npx", args: ["-y", "p"], enabled: true });
+  });
+
   it("⑤ trust：无待确认明说；清单显指纹；trust 名字登记 + wrote=true", async () => {
     const d = tmp("trust");
     const dp = deps(d);
