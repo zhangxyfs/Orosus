@@ -2,6 +2,7 @@ import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderReq
 import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState } from "./translate-openai.ts";
 import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
+import { netErrorDetail } from "./neterr.ts";
 
 /** 响应里的服务端搜索标记抽取（M4-3 T1b——2026-09-24 spike 无真样本，按各家已公开形态宽进：
  *  ① zhipu 文档字段 choices[].message/delta.web_search 数组（{title,url,content?} 项）；
@@ -36,7 +37,8 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
     ({ type: "finish", kind: "error", errorMessage, ...(errorCode !== undefined ? { errorCode } : {}) });
     // MP-07 最小可靠性（与 stream-anthropic 同款）：请求级空闲超时——连接/响应头/块间任一阶段无进展字节即
     // abort 带内终局（此前挂起网关下 reader.read() 无限等待）。重试/退避刻意不在本层做：流已产出正文后重发
-    // 会重复投递，429/5xx 的重试归调用方策略层（loop 现仅 context_limit 单次重试）——取舍注明而非静默。
+    // 会重复投递。传输层失败（fetch/读流抛错）打 errorCode "network"（2026-09-30 拍板 a）——loop 据码零产出
+    // 重发；空闲超时不打码（理由见 stream-anthropic.ts 同段）。
     // 缺省 300s（2026-09-28 学 kimi 拍板，依据与不加总超时的理由见 stream-anthropic.ts DEFAULT_IDLE_TIMEOUT_MS 注释）。
     const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     const idle = new AbortController();
@@ -85,7 +87,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           ? { type: "finish", kind: "aborted" }
           : idleFired
             ? fail(`空闲超时：${Math.round(idleMs / 1000)}s 无进展——已中止连接`)
-            : fail(`网络错误：${err instanceof Error ? err.message : String(err)}`);
+            : fail(`网络错误：${netErrorDetail(err)}`, "network");
         return;
       }
       if (!res.ok || !res.body) {
@@ -150,7 +152,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           ? { type: "finish", kind: "aborted" }
           : idleFired
             ? fail(`空闲超时：${Math.round(idleMs / 1000)}s 无进展——已中止连接`)
-            : fail(`流读取错误：${err instanceof Error ? err.message : String(err)}`);
+            : fail(`流读取错误：${netErrorDetail(err)}`, "network");
       }
     } finally {
       if (idleTimer !== undefined) clearTimeout(idleTimer); // 计时器必清——挂起 timer 会拖住事件循环（提前 break/异常路径同样覆盖）

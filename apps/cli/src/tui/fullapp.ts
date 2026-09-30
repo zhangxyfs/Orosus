@@ -2173,7 +2173,9 @@ export class FullApp {
 					s.cursor--;
 				}
 			} else this.inputInsert(key);
-			if (normCmd(s.input).startsWith("/")) s.overlaySel = this.selToSelectable(items, 0);
+			// 重置选中须按敲键后的新清单算（2026-09-30 用户走查：/mc+/p 把命中命令筛光后 sep 占 0 位，
+			// 旧实现用敲键前 items 重置 0 落 sep——渲染不跳 sep 焦点整屏隐身，Tab 还吃 sep 空串清空输入框）
+			if (normCmd(s.input).startsWith("/")) s.overlaySel = this.selToSelectable(this.overlayItems(), 0);
 			else s.overlayOpen = false;
 		}
 		this.scheduler.requestImmediateRender();

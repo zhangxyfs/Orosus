@@ -7,6 +7,7 @@ import { InMemorySessionStore } from "../session/memory.ts";
 import { createEventBus, CORE_POINTS } from "../kernel/bus.ts";
 import { createToolRegistry } from "../tool/registry.ts";
 import { agentLoop } from "./loop.ts";
+import type { LoopOptions } from "./loop.ts";
 import { deriveMessages } from "./convert.ts";
 import type { DiagSink, DiagRecord } from "../diag/logger.ts";
 
@@ -15,7 +16,7 @@ const sink = (): DiagSink & { records: DiagRecord[] } => {
   return { records, write: (r) => void records.push(r), flush: () => Promise.resolve(), close: () => Promise.resolve() };
 };
 
-const setup = (script: Chunk[][]) => {
+const setup = (script: Chunk[][], extra: Pick<LoopOptions, "networkRetryDelaysMs"> = {}) => {
   const s = sink();
   const bus = createEventBus(s);
   const tools = createToolRegistry({ bus, sink: s, spillDir: "/tmp/orosus-loop-spill" });
@@ -24,7 +25,7 @@ const setup = (script: Chunk[][]) => {
   const run = (signal = new AbortController().signal) =>
     (async () => {
       const types: string[] = [];
-      for await (const e of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal, sink: s })) {
+      for await (const e of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal, sink: s, ...extra })) {
         types.push(e.type);
       }
       return types;
@@ -312,6 +313,68 @@ describe("溢出恢复（M3 补强 T4/D43：agent/request-error 广播 + 数据�
     for await (const _e of agentLoop({ session: session2, bus, tools, provider: provider2.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s })) { void _e; }
     expect("reasoningEffort" in provider2.requests[0]!).toBe(false);
     expect(((await session2.all()).find((e) => e.type === "request/header") as { effort?: string }).effort).toBeUndefined();
+  });
+});
+
+describe("网络错误重试（2026-09-30 拍板 a：传输层失败零产出重发——限次退避，代理切换/瞬时抖动兜底）", () => {
+  const netErr = { type: "finish", kind: "error", errorMessage: "网络错误：fetch failed；cause: read ECONNRESET", errorCode: "network" } as const;
+
+  it("① 首请求 network → 广播 request-error(network) → 退避后重发成功：turn completed、消息原样、不落重复 header", async () => {
+    const { run, bus, provider, session } = setup([
+      [netErr],
+      [{ type: "text/delta", text: "好了" }, { type: "finish", kind: "stop" }],
+    ], { networkRetryDelaysMs: [1] });
+    await session.append("user/message", { content: [{ kind: "text", text: "hi" }] });
+    const errs: unknown[] = [];
+    bus.on(CORE_POINTS.requestError, (p) => { errs.push(p); }, "observer");
+    const types = await run();
+    expect(errs).toHaveLength(1);
+    expect((errs[0] as { code: string }).code).toBe("network");
+    expect(provider.requests).toHaveLength(2); // 恰重发一次
+    expect(provider.requests[1]!.messages).toEqual(provider.requests[0]!.messages); // 原样重发
+    expect(types.filter((t) => t === "request/header")).toHaveLength(1); // lastRequestSig 不变 → 不落重复 header
+    const all = await session.all();
+    expect(all.at(-1)).toMatchObject({ type: "turn/end", kind: "completed" });
+  });
+
+  it("② 恒 network → 退避表 [1,1] 用尽（1+2 次调用）终局 error，errorMessage 带重发指引", async () => {
+    const { run, provider, session } = setup([[netErr]], { networkRetryDelaysMs: [1, 1] }); // fakeProvider 重复末位脚本 → 恒失败
+    await run();
+    expect(provider.requests).toHaveLength(3); // 首发 + 两次重发
+    const end = (await session.all()).at(-1) as { type: string; kind?: string; errorMessage?: string };
+    expect(end).toMatchObject({ type: "turn/end", kind: "error" });
+    expect(end.errorMessage).toContain("已自动重发 2 次仍网络错误");
+    expect(end.errorMessage).toContain("read ECONNRESET"); // cause 链进终局事件（拍板 b）
+  });
+
+  it("③ 部分产出防护：先流出 text 再 network → 不重试（provider 只调 1 次），半截物化 + error 终局", async () => {
+    const { run, provider, session } = setup([
+      [{ type: "text/delta", text: "半截" }, netErr],
+    ], { networkRetryDelaysMs: [1] });
+    await run();
+    expect(provider.requests).toHaveLength(1);
+    const all = await session.all();
+    expect(all.some((e) => e.type === "assistant/message")).toBe(true); // 半截文本已物化
+    expect((all.at(-1) as { kind?: string }).kind).toBe("error");
+  });
+
+  it("④ reasoning 半截同防护：思考已流出再 network → 不重试（比 context_limit 多查的口径——防两份 reasoning 先后物化）", async () => {
+    const { run, provider } = setup([
+      [{ type: "reasoning/delta", text: "思" }, netErr],
+    ], { networkRetryDelaysMs: [1] });
+    await run();
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("⑤ 退避期 abort → interrupted 收场（不打满等待、不再重发）", async () => {
+    const { run, provider, session } = setup([[netErr]], { networkRetryDelaysMs: [5_000] });
+    const ac = new AbortController();
+    const p = run(ac.signal);
+    await new Promise((r) => setTimeout(r, 5)); // 首请求已失败、退避中
+    ac.abort();
+    await p;
+    expect(provider.requests).toHaveLength(1); // 退避被打断——未再发
+    expect(((await session.all()).at(-1) as { kind?: string }).kind).toBe("interrupted");
   });
 });
 

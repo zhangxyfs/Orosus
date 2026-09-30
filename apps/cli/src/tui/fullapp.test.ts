@@ -1266,24 +1266,45 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		app.stop();
 	});
 
-	it("⑦ 过滤第三档子序列（2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：散见命中殿后于前缀/含字档，可搜文本 = 真名 + 显示标签", async () => {
-		const r = rig(["# hi"], 100, 30, {
-			skillItems: () => [SK("ask", "提问技能"), SK("pdf", "生成 PDF 文件")],
-			skillInject: (n) => `INJ:${n}`,
+		it("⑦ 过滤第三档子序列（2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：散见命中殿后于前缀/含字档，可搜文本 = 真名 + 显示标签", async () => {
+			const r = rig(["# hi"], 100, 30, {
+				skillItems: () => [SK("ask", "提问技能"), SK("pdf", "生成 PDF 文件")],
+				skillInject: (n) => `INJ:${n}`,
+			});
+			const { app, input } = r;
+			app.start();
+			await flush();
+			input.emit("data", "/skas"); // skas = 「skill : ask」的子序列（真名 ask 不含——只认真名筛不出）
+			await flush(120);
+			const plain = overlayOf(app).map(stripAnsi);
+			const joined = plain.join("\n");
+			expect(joined).toContain("skill : ask");
+			expect(joined).not.toContain("skill : pdf"); // pdf 真名/标签都不是 skas 子序列
+			expect(joined).toContain("0 个命令 · 1 个技能"); // rig 三命令（help/title/permission）无 skas 散见命中
+			app.stop();
 		});
-		const { app, input } = r;
-		app.start();
-		await flush();
-		input.emit("data", "/skas"); // skas = 「skill : ask」的子序列（真名 ask 不含——只认真名筛不出）
-		await flush(120);
-		const plain = overlayOf(app).map(stripAnsi);
-		const joined = plain.join("\n");
-		expect(joined).toContain("skill : ask");
-		expect(joined).not.toContain("skill : pdf"); // pdf 真名/标签都不是 skas 子序列
-		expect(joined).toContain("0 个命令 · 1 个技能"); // rig 三命令（help/title/permission）无 skas 散见命中
-		app.stop();
+
+		it("⑧ 过滤把命令筛光只剩技能时焦点自动落首个技能行（2026-09-30 用户走查：/mcp 只剩 context7-mcp 却无 ❯——敲字重置用敲键前清单，0 命令后 sep 占 0 位渲染不跳 sep、焦点整屏隐身；该态下 Tab 还会吃 sep 空串清空输入框）", async () => {
+			const r = rig(["# hi"], 100, 30, {
+				skillItems: () => [SK("review-pr", "审查拉取请求")],
+				skillInject: (n) => `INJ:${n}`,
+			});
+			const { app, input } = r;
+			app.start();
+			await flush();
+			// 敲 e 那一拍敲键前清单 = /r 态 [/permission, sep, review-pr]（首行命令）——旧实现重置 0 后
+			// /re 态清单变 [sep, review-pr]，0 位是 sep：渲染不高亮、Tab 取 items[0].key 空串
+			input.emit("data", "/re");
+			await flush(120);
+			const joined = overlayOf(app).map(stripAnsi).join("\n");
+			expect(joined).toContain("0 个命令 · 1 个技能");
+			expect(joined).toContain("❯ skill : review-pr"); // 焦点可见地落在首个（唯一）技能行
+			input.emit("data", "\t"); // Tab：选中行填 /skill : 名（不再清空输入框）
+			await flush(120);
+			expect(app.stateRef.input).toBe("/skill : review-pr");
+			app.stop();
+		});
 	});
-});
 
 describe("斜杠菜单 Enter 越界钳制（CTU-01 回归钉 2026-09-28——粘贴收缩/技能清单 5s TTL 异步换数组后 overlaySel 陈旧越界，旧实现在此 TypeError 沿 stdin 链炸进程）", () => {
 	it("① 越界索引 + Enter：钳到有效行照常提交，不崩", async () => {
