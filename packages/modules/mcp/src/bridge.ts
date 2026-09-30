@@ -33,20 +33,25 @@ export function sanitizeServerInstructions(server: string, raw: unknown): string
   return `[mcp:${server}] ${raw}`.slice(0, DESCRIPTIION_LIMIT);
 }
 
-/** MI-07 修复（2026-09-28 code review P2，kimi sanitizeMcpNamePart 同款）：server id（用户 config 键）与
- *  工具名（server 清单原样名）都是不受信输入——非法字符（./空格/CJK）或超长直拼 mcp__{server}__{name}
- *  会令 provider 拒收**每个**请求；消毒后撞名在 registry throw 则整个 mcp 模块降级（比 400 更重）。
- *  规则：[^a-zA-Z0-9_-] → `_`、空段保底 `_`；整名超 64 截断 + sha256 短哈希后缀（防截断碰撞）。 */
+/** MI-07 修复（2026-09-28 code review P2，kimi sanitizeMcpNamePart 同款）+ T4 补强（m4-3c）：server id
+ *  （用户 config 键）与工具名（server 清单原样名）都是不受信输入——非法字符（./空格/CJK）或超长直拼
+ *  mcp__{server}__{name} 会令 provider 拒收**每个**请求；消毒后撞名在 registry throw 则整个 mcp 模块降级。
+ *  规则：[^a-zA-Z0-9_-] → `_`、连续下划线折叠成一个（T4①——替换产物 "a..b"→"a__b" 不留双杠）、
+ *  空段保底 `_`。 */
 export function sanitizeMcpNamePart(part: string): string {
-  const clean = part.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const clean = part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_{2,}/g, "_");
   return clean === "" ? "_" : clean;
 }
 
-/** 桥接工具注册名（消毒后——模型面/审批规则/注册表都只见这个名；server 调用仍用原样名）。 */
+/** 桥接工具注册名（消毒后——模型面/审批规则/注册表都只见这个名；server 调用仍用原样名）。
+ *  T4②（m4-3c）：凡名字被改动过（替换/折叠/空段保底）或超长，一律追加 8 位哈希后缀——哈希按**原样名**
+ *  算，保证两侧都变形（server "x.y" vs "x_y"）时后缀也互不撞。旧实现只有超长截断才加后缀：「a.b」与
+ *  「a_b」洗成同名只能跳过后者（少一个工具能用）；现在两个都在、各得其所。 */
 export function bridgedToolName(server: string, tool: string): string {
   const full = `mcp__${sanitizeMcpNamePart(server)}__${sanitizeMcpNamePart(tool)}`;
-  if (full.length <= TOOL_NAME_LIMIT) return full;
-  const hash = createHash("sha256").update(full).digest("hex").slice(0, 8);
+  const raw = `mcp__${server}__${tool}`;
+  if (full === raw && full.length <= TOOL_NAME_LIMIT) return full; // 原样即合法——零改动直用
+  const hash = createHash("sha256").update(raw).digest("hex").slice(0, 8);
   return `${full.slice(0, TOOL_NAME_LIMIT - 9)}_${hash}`;
 }
 
