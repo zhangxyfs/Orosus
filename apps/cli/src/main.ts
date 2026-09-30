@@ -952,23 +952,6 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           }
           return "again";
         }
-        // /mcp 命令族（m4-3c T13）：列表/添加/删除/开关/信任确认——宿主侧实现（写盘走 core
-        // writeNestedTable 落用户层 modules.d/mcp.toml，live 状态吃 mcp.catalog 服务）；写盘后
-        // h.reload()（/provider 先例——新 server 即时进激活槽）。busy 期不在即改/拦截两档 = 排队（界面惯例）
-        if (cmdNameOf(text) === "/mcp") {
-          try {
-            const cat = await h.graph().services.getOptional("mcp.catalog");
-            const r = await runMcpCommand(
-              text.trim().replace(/^\/\s*mcp/i, "").trim(),
-              { ...defaultMcpCmdDeps(), ...(typeof cat === "function" ? { catalogRows: cat as () => McpCatalogRow[] } : {}) },
-            );
-            if (r.wrote) await h.reload();
-            if (r.text !== "") out(r.text);
-          } catch (e) {
-            settleCommandError(e);
-          }
-          return "again";
-        }
         // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
         // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款）
         if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
@@ -1600,6 +1583,19 @@ const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked
 				return "close";
 			},
 		},
+		t: {
+			// 确认信任（2026-09-30 /mcp 命令退役后确认门的新家）：仅未确认态生效——核对指纹后按 t
+			// 写 mcp-trust.json 并重载连接；其余态按下无感（键位行恒定防闪烁——标签只随未确认态显示提示）
+			label: row.state === "pending-confirm" ? "t 确认" : "",
+			run: (): string => {
+				if (row.state !== "pending-confirm") return detail();
+				void runMcpCommand(`trust ${row.name}`, mcpPanelDeps()).then((r) => {
+					const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
+					if (t !== "") app.showToast(t);
+				});
+				return "close"; // 确认即收窗回列表（重载后状态翻绿）
+			},
+		},
 	};
 };
 
@@ -1624,11 +1620,15 @@ const openMcpLine = async (out: (s: string) => void): Promise<void> => {
 		out(mcpDetailText(w, row));
 		try {
 			const actions = [row.state === "disabled" ? "启用（Alt + K 同款）" : "停用（Alt + K 同款）"];
+			if (row.state === "pending-confirm") actions.push("确认（信任 t 键同款）");
 			if (row.source === "config") actions.push("删除");
 			actions.push("返回列表");
 			const action = await commandUi.choose(row.name, actions);
 			if (action === "启用（Alt + K 同款）" || action === "停用（Alt + K 同款）") {
 				out(await runMcpToggle(undefined, row));
+			} else if (action === "确认（信任 t 键同款）") {
+				const r = await runMcpCommand(`trust ${row.name}`, mcpPanelDeps());
+				out(r.wrote ? afterMcpWrite(undefined, r.text) : r.text);
 			} else if (action === "删除") {
 				const r = await runMcpCommand(`remove ${row.name}`, mcpPanelDeps());
 				out(r.wrote ? afterMcpWrite(undefined, r.text) : r.text);
@@ -1895,7 +1895,6 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
-	{ name: "/mcp", desc: "MCP server 管理", long: "列出全部 MCP server（状态、工具数、失败原因）；/mcp add 名字 命令或URL 添加（写用户层配置并即时重载）；/mcp remove|on|off 名字 删除与开关；/mcp trust [名字] 确认项目 .mcp.json 带来的 server（核对指纹前不连接）。" },
 	{
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},

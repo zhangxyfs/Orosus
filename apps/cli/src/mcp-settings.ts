@@ -78,7 +78,7 @@ export function mcpDetailText(w: number, row: McpCatalogRow): string {
     lines.push(dim("…（失败原因最多保留 4KB——完整内容见 /mcp）"));
   }
   if (row.state === "pending-confirm") {
-    lines.push("", fg("muted", `未确认——/mcp trust ${row.name} 确认后连接（指纹 ${row.fingerprint?.slice(0, 8) ?? "—"}）`));
+    lines.push("", fg("muted", `未确认——核对指纹后按 t 确认连接（指纹 ${row.fingerprint?.slice(0, 8) ?? "—"}；确认一次永久可用，配置被改过会重新要求）`));
   }
   return lines.join("\n");
 }

@@ -9,8 +9,9 @@ import {
 } from "@orosus/mcp";
 import { searchRegistry, decideInstall, REGISTRY_SHOW_LIMIT, defaultRegistryCacheFile } from "./mcp-registry.ts";
 
-/** T13（m4-3c）：`/mcp` 命令族——查看 / 添加 / 删除 / 开关 / 信任确认（宿主侧实现，skill-settings 先例：
- *  管理面写盘走 core 写入器 + mcp.catalog 服务取 live 状态 + 写完由 main.ts 触发 h.reload()）。
+/** MCP 管理引擎（m4-3c T13/T14，2026-09-30 `/mcp` 斜杠命令随用户口令退役）：/settings → MCP
+ *  管理面与行模式设置面的内部口——查看 / 添加 / 删除 / 开关 / 信任确认（t 键）/ 注册表 browse+install。
+ *  写盘走 core 写入器 + mcp.catalog 服务取 live 灰度 + 写完由调用方触发 h.reload()。
  *  依赖全注入（catalog 落点/配置路径/项目路径/信任库/平台）——apps/cli 接真实现，测试接临时目录。 */
 
 /** 整行命令拆分（守卫拍板入方案）：常见启动器开头才拆、引号开头才拆、
@@ -102,7 +103,7 @@ const STATE_TEXT: Record<McpCatalogRow["state"], string> = {
 
 const firstLine = (s: string): string => s.split("\n")[0]!;
 
-/** `/mcp` 主入口：text 是去掉命令词后的参数串（空 = 列表）。 */
+/** 管理引擎主入口（面板内部口）：args 为子命令参数串（空 = 列表）。 */
 export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<McpCmdResult> {
   const args = rawArgs.trim();
   const [sub = "", ...rest] = args.split(/\s+/);
@@ -111,7 +112,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
   if (args === "" || sub === "list" || sub === "ls") {
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     if (rows.length === 0) {
-      return { text: "还没有配置任何 MCP server。\n\n- 命令添加：`/mcp add 名字 npx -y 包名`（或一个 https:// URL）\n- 项目自带 `.mcp.json` 会自动识别（确认后可用）\n- 想找更多 server：见 docs/mcp-servers.md 推荐清单", wrote: false };
+      return { text: "还没有配置任何 MCP server。\n\n- /settings → MCP 按 Alt + N 添加（手动命令或 URL，或粘 JSON）\n- 项目自带 `.mcp.json` 会自动识别（详情页按 t 确认后可用）\n- 想找更多 server：见 docs/mcp-servers.md 推荐清单", wrote: false };
     }
     const lines = rows.map((r) => {
       const tools = r.toolCount !== undefined ? `${r.toolCount} 个工具` : "—";
@@ -127,7 +128,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
   if (sub === "add") {
     const name = rest[0];
     const cmdline = rest.slice(1).join(" "); // rest 已按空白分词但引号保留在段内——拼回交给守卫拆分
-    if (name === undefined || name === "") return { text: "用法：`/mcp add 名字 npx -y 包名`（或一个 https:// URL）", wrote: false };
+    if (name === undefined || name === "") return { text: "用法：add 名字 npx -y 包名（或一个 https:// URL）——完整表单在 /settings → MCP 的 Alt + N 添加窗", wrote: false };
     if (cmdline === "") return { text: `缺少命令或 URL——\`/mcp add ${name} npx -y 包名\``, wrote: false };
     if (name in configuredServers(configPath)) {
       return { text: `已存在同名 server「${name}」——不覆盖别人的配置；想改它请到 /settings → MCP 用修改`, wrote: false };
@@ -146,7 +147,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
 
   if (sub === "remove" || sub === "rm") {
     const name = rest[0];
-    if (name === undefined) return { text: "用法：`/mcp remove 名字`", wrote: false };
+    if (name === undefined) return { text: "用法：remove 名字（管理面详情页 d 键同款）", wrote: false };
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     const row = rows.find((r) => r.name === name);
     if (row !== undefined && row.source !== "config") {
@@ -221,7 +222,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
 
   if (sub === "browse") {
     const query = rest.join(" ").trim();
-    if (query === "") return { text: "用法：`/mcp browse 关键词`——搜 MCP 官方注册表（registry.modelcontextprotocol.io）", wrote: false };
+    if (query === "") return { text: "用法：browse 关键词（管理面内部口）——搜 MCP 官方注册表（registry.modelcontextprotocol.io）", wrote: false };
     const r = await searchRegistry({
       query,
       cacheFile: deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache")),
@@ -251,7 +252,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
 
   if (sub === "install") {
     const name = rest[0];
-    if (name === undefined || name === "") return { text: "用法：`/mcp install 名字`——先 /mcp browse 找名字", wrote: false };
+    if (name === undefined || name === "") return { text: "用法：`/mcp install 名字`——先 browse 找名字（管理面内部口）", wrote: false };
     const existing = configuredServers(configPath);
     const cacheFile = deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache"));
     // 取全量（无关键词过滤）再精确匹配名/短名
@@ -291,7 +292,7 @@ ${decision.template}
     }
   }
 
-    return { text: "用法：`/mcp`（列表）· `/mcp add 名字 命令或URL` · `/mcp remove|on|off 名字` · `/mcp trust [名字]` · `/mcp browse 关键词` · `/mcp install 名字`", wrote: false };
+    return { text: "管理面内部口（图形面走 /settings → MCP）：list · add 名字 命令或URL · remove|on|off 名字 · trust [名字] · browse 关键词 · install 名字", wrote: false };
 }
 
 const serverKind = (cfg: ProjectServerConfig): string => cfg.url !== undefined ? `远程 ${cfg.url}` : `本地 ${[cfg.command, ...(cfg.args ?? [])].join(" ")}`;

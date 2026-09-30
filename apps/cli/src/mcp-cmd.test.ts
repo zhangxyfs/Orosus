@@ -71,7 +71,7 @@ describe("T13 /mcp 命令族（注入式）", () => {
     expect(r.text).toContain("**down** 失败 · 3 个工具（——spawn ENOENT）"); // 尾巴首行
     expect(r.text).not.toContain("boom 尾巴");
     expect(r.text).toContain("`proj`（指纹 abcd1234）");
-    expect(r.text).toContain("/mcp trust 名字");
+    expect(r.text).toContain("trust 名字");
     const empty = await runMcpCommand("", deps(d, []));
     expect(empty.text).toContain("docs/mcp-servers.md");
   });
@@ -106,7 +106,7 @@ describe("T13 /mcp 命令族（注入式）", () => {
     const proj = await runMcpCommand("remove proj", dp);
     expect(proj.wrote).toBe(false);
     expect(proj.text).toContain("项目 .mcp.json");
-    expect(proj.text).toContain("/mcp off proj");
+    expect(proj.text).toContain("off proj");
     const pre = await runMcpCommand("remove memory", dp);
     expect(pre.text).toContain("预装");
     const unknown = await runMcpCommand("remove ghost", dp);
@@ -164,10 +164,11 @@ describe("T13 /mcp 命令族（注入式）", () => {
     expect(r.text).toContain("`evil`（指纹");
   });
 
-  it("⑦ 用法兜底：未知子命令给用法行", async () => {
+  it("⑦ 用法兜底：未知子命令给用法行（管理面内部口口径）", async () => {
     const r = await runMcpCommand("frobnicate", deps(tmp("usage")));
     expect(r.wrote).toBe(false);
-    expect(r.text).toContain("用法");
+    expect(r.text).toContain("管理面内部口");
+    expect(r.text).toContain("/settings → MCP");
   });
 });
 
