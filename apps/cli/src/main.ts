@@ -28,6 +28,7 @@ import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE, registerToolLabels } from "./render.ts";
+import { ringTurnBell } from "./bell.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
@@ -52,11 +53,13 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig, sectionPath, modelsDevCacheFile, resolveContextWindow } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)/窗口兜底链(2026-09-29)
 import { toggleResultText } from "./module-toggle-result.ts";
+import { runMcpCommand, defaultMcpCmdDeps } from "./mcp-cmd.ts";
+import type { McpCatalogRow } from "@orosus/mcp";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
-import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
+import { resolveTuiMode, resolveLatexFlag, resolveBellFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 
 /** CM-06②（2026-09-28 code review）：console 输出在管道/重定向下是异步写——`process.exit` 立即退可能
@@ -723,6 +726,9 @@ let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdo
 // LaTeX 数学渲染开关（mdpipe 批 T7，设计空白 #12/#13）：[tui] latex 缺省开，启动读一次注入，
 // 改配置重启生效（/reload 热切换不做——本仓配置面无热读口，诚实登记）
 setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
+// 回合结束提示音（2026-09-30 用户拍板）：[tui] bell 缺省开——完成 1 响/中断 2 响/错误 3 响（bell.ts）；
+// 同 latex 式启动读一次。响铃只认 TTY（--print 管道静默），静音另一路 = 终端自身 bell 设置。
+const bellEnabled = resolveBellFlag(configFaceTuiBell());
 // 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见。
 // 实现抽 tui-config.ts（CM-01 修复：读盘剥 BOM + 解析失败拒写防整盘覆写毁配置）。
 
@@ -774,6 +780,9 @@ function attachRender(h: Harness): void {
         sinkFor().end();
         if (tuiMode === "full") dm.turnEnd(); // 轮边界记账 + 滑窗裁剪（T7——settle 之后条目已定格）
         void refreshPanel(); // 面板数据随 turn 刷新（F4）
+        // 回合提示音（2026-09-30 用户拍板）：完成 1 响/中断 2 响/错误 3 响——events() 是实时通道
+        //（恢复回放走 pendingEcho/DocModel 重建，不经此），只响活体回合；TTY 且 [tui] bell 开才响
+        if (bellEnabled && process.stdout.isTTY === true) ringTurnBell(e.kind, (s) => process.stdout.write(s));
       }
       // m4-7 T5：压缩完成点清 skill 模块去重集——skill__load 正文是 tool result，compact 会被压掉，
       // 去重集不清 = 模型重调只得到确认句却没有正文（qwen 明确处理的坑）。/compact 手动与阈值自动
@@ -937,6 +946,23 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
             await openSettingsPanel(activeApp);
           } else {
             await openSettingsLine(out);
+          }
+          return "again";
+        }
+        // /mcp 命令族（m4-3c T13）：列表/添加/删除/开关/信任确认——宿主侧实现（写盘走 core
+        // writeNestedTable 落用户层 modules.d/mcp.toml，live 状态吃 mcp.catalog 服务）；写盘后
+        // h.reload()（/provider 先例——新 server 即时进激活槽）。busy 期不在即改/拦截两档 = 排队（界面惯例）
+        if (cmdNameOf(text) === "/mcp") {
+          try {
+            const cat = await h.graph().services.getOptional("mcp.catalog");
+            const r = await runMcpCommand(
+              text.trim().replace(/^\/\s*mcp/i, "").trim(),
+              { ...defaultMcpCmdDeps(), ...(typeof cat === "function" ? { catalogRows: cat as () => McpCatalogRow[] } : {}) },
+            );
+            if (r.wrote) await h.reload();
+            if (r.text !== "") out(r.text);
+          } catch (e) {
+            settleCommandError(e);
           }
           return "again";
         }
@@ -1137,6 +1163,10 @@ const configFace = (): { contextWindow: number; approvalMode: string } => {
 function configFaceTuiLatex(): boolean | undefined {
 	const v = (loadConfig(configFacePaths()).sections.get("tui") as { latex?: unknown } | undefined)?.latex;
 	return typeof v === "boolean" ? v : undefined;
+}
+
+function configFaceTuiBell(): unknown {
+	return (loadConfig(configFacePaths()).sections.get("tui") as { bell?: unknown } | undefined)?.bell;
 }
 
 function configFaceTui(): string | undefined {
@@ -1659,6 +1689,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
+	{ name: "/mcp", desc: "MCP server 管理", long: "列出全部 MCP server（状态、工具数、失败原因）；/mcp add 名字 命令或URL 添加（写用户层配置并即时重载）；/mcp remove|on|off 名字 删除与开关；/mcp trust [名字] 确认项目 .mcp.json 带来的 server（核对指纹前不连接）。" },
 	{
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: PERM_META,
 	},

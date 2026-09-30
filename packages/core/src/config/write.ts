@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { parse } from "smol-toml";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * 统一写口（m4-8 §3.3，用户拍板「读写配置各一个专用代码文件」）：
@@ -154,6 +154,10 @@ function parseHeader(line: string): string[] | null {
  *  - values 为 null：整表删除（头 + 体 + 子表），并把因删除多出来的连续空行折回一行。
  */
 export function writeNestedTable(filePath: string, tablePath: string, values: Record<string, NestedTableValue> | null): void {
+  const persist = (lines: string[], eol: string): void => {
+    mkdirSync(dirname(filePath), { recursive: true }); // modules.d/ 可能整层不在（sectionPath 建层同精神）
+    writeFileSync(filePath, lines.join(eol) + eol, "utf8");
+  };
   let raw = "";
   try {
     raw = stripBom(readFileSync(filePath, "utf8"));
@@ -198,7 +202,7 @@ export function writeNestedTable(filePath: string, tablePath: string, values: Re
       collapsed.push(l);
     }
     lines = collapsed;
-    writeFileSync(filePath, lines.join(eol) + eol, "utf8");
+    persist(lines, eol);
     return;
   }
 
@@ -210,5 +214,5 @@ export function writeNestedTable(filePath: string, tablePath: string, values: Re
   } else {
     lines.splice(start, end - start, ...block);
   }
-  writeFileSync(filePath, lines.join(eol) + eol, "utf8");
+  persist(lines, eol);
 }
