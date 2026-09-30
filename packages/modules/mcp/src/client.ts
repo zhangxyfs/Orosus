@@ -6,6 +6,29 @@ export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 /** 调用超时默认值（T2 自定值）：比 opencode 默认（30s）宽一档，给长任务余地；server 级 timeoutMs 可调大。 */
 export const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 
+/** 翻页页数帽（T3，opencode 同款上限）：server 恒新游标（死循环保险拦不住）时的最后防线。 */
+export const MAX_LIST_PAGES = 1000;
+
+/** 工具清单翻页（T3）：循环到 nextCursor 缺省为止。两道保险——① 同一 nextCursor 第二次出现即停
+ *  （防 server 死循环：好 server 的游标单向推进，重复出现 = 环）；② 页数帽 1000（防恒新游标刷屏）。
+ *  抽成独立助手：两道保险可用零开销 fake 直测（1000 页真跑要秒级）。 */
+export async function collectAllPages<T>(
+  fetchPage: (cursor: string | undefined) => Promise<{ tools: T[]; nextCursor?: string }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const res = await fetchPage(cursor);
+    all.push(...res.tools);
+    if (res.nextCursor === undefined) break;
+    if (seenCursors.has(res.nextCursor)) break; // 环检测：同一游标二次出现
+    seenCursors.add(res.nextCursor);
+    cursor = res.nextCursor;
+  }
+  return all;
+}
+
 /** SDK 适配层选项：测试可缩时（e2e 不等 30/60 秒）。 */
 export interface SdkConnectOpts {
   connectTimeoutMs?: number;
@@ -64,8 +87,12 @@ export async function createSdkConnection(
   }
   return {
     listTools: async () => {
-      const res = await client.listTools({});
-      return res.tools as never;
+      // T3 翻页取全：旧实现一次 listTools 只拿首页（工具多的 server 静默少一半）
+      const tools = await collectAllPages<never>(async (cursor) => {
+        const res = await client.listTools(cursor !== undefined ? { cursor } : {});
+        return { tools: res.tools as never[], ...(res.nextCursor !== undefined ? { nextCursor: res.nextCursor } : {}) };
+      });
+      return tools;
     },
     callTool: async (toolName, args, signal) => {
       try {
