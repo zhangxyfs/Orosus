@@ -84,7 +84,7 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     });
     const names = collectTools(out).map((t: { name: string }) => t.name);
     expect(names).toEqual(["mcp__good__ok_tool"]); // bad 的工具零注册
-    expect(out.failedServers).toEqual(["bad"]); // 记录失败但不整体降级
+    expect(out.failedServers).toEqual([{ name: "bad", reason: "connect fail" }]); // 记录失败（名字+原因，T1 升级）不整体降级
   });
 
   it("⑨ MI-02 连接清理：out.close() 逐个关成功连接且幂等；失败 server 不拖垮 close（旧实现 reload 换代 MCP 子进程全泄漏）", async () => {
@@ -105,7 +105,7 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
       },
       sessionAppend: () => {},
     });
-    expect(out.failedServers).toEqual(["c"]);
+    expect(out.failedServers).toEqual([{ name: "c", reason: "连不上" }]);
     await out.close();
     expect([...closedLog].sort()).toEqual(["a", "b"]); // 成功连接逐个关（stdio 随之杀子进程）
     await out.close(); // 幂等——重复触达不二次关

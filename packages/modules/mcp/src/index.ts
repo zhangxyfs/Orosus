@@ -2,8 +2,10 @@ import { z } from "zod";
 import { defineModule, type ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, digest, sanitizeServerInstructions, type ServerToolMeta, type ServerCall } from "./bridge.ts";
+import { createSdkConnection } from "./client.ts";
 
 export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
+export { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS } from "./client.ts";
 
 /** 测试与 activate 共用的连接口：listTools 一次（清单快照语义）+ callTool 按调。 */
 export interface ServerConnection {
@@ -24,7 +26,8 @@ export interface ActivateMcpOpts {
 
 export interface McpActivateOut {
   tools: Tool[];
-  failedServers: string[];
+  /** 连接失败名单（T1 升级：名字 + 原因——T6 起原因可附 stderr 尾巴）。 */
+  failedServers: { name: string; reason: string }[];
   /** 连接成功登记（M4-2 T12）：config 声明但未连的不列——promptSection 只写真连接。
    *  instructions 已过 MI-15 消毒（`[mcp:<server>]` 来源前缀 + 4096 截断）——promptSection 消费即安全。 */
   connected: { name: string; tools: string[]; instructions?: string }[];
@@ -37,41 +40,52 @@ export interface McpActivateOut {
 
 export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut> {
   const tools: Tool[] = [];
-  const failedServers: string[] = [];
-  const connected: { name: string; tools: string[]; instructions?: string }[] = [];
+  const failedServers: McpActivateOut["failedServers"] = [];
+  const connected: McpActivateOut["connected"] = [];
   const manifest: Record<string, string[]> = {};
   const conns: ServerConnection[] = [];
   const skippedTools: McpActivateOut["skippedTools"] = [];
   const seenNames = new Set<string>(); // 注册名去重（MI-07）：registry 对非墓碑重名 throw → 整模块降级
   const mapping: Record<string, Record<string, string>> = {}; // MI-07：消毒改名映射（原样名 → 注册名），manifest 事件可观测
-  for (const [name, cfg] of Object.entries(opts.servers)) {
-    if (cfg.enabled === false) continue;
-    try {
-      const conn = await opts.connect(name, cfg);
-      const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
-      conns.push(conn);
-      manifest[name] = list.map((t) => t.name);
-      for (const meta of list) {
-        const tool = toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）
-        if (seenNames.has(tool.name)) {
-          // MI-07 带内跳过：消毒后撞名——进 registry 会 throw（整模块降级），跳过后来者并记录
-          skippedTools.push({ server: name, tool: meta.name, reason: `消毒后注册名撞车：${tool.name}` });
-          continue;
-        }
-        seenNames.add(tool.name);
-        if (tool.name !== `mcp__${name}__${meta.name}`) (mapping[name] ??= {})[meta.name] = tool.name;
-        tools.push(tool);
-      }
-      // MI-15：instructions 不受信消毒（来源前缀 + 4096 截断——与 tool description 的 §8.5 纪律同款），
-      // 在采集点一次性收口（promptSection 段渲染直接消费 connected，不再有裸通道）
-      let instructions: string | undefined;
+  // T1 并发连接（kimi 同款）：所有 server 一起握（互不拖累——失败隔离本就有），结果按配置序归并（确定性）。
+  // 每 server 一条 connect → listTools → instructions 流水线；任一步炸即该 server 记失败，不株连其余。
+  const results = await Promise.all(
+    (Object.entries(opts.servers).filter(([, cfg]) => cfg.enabled !== false)).map(async ([name, cfg]) => {
       try {
-        instructions = sanitizeServerInstructions(name, await conn.instructions?.());
-      } catch { /* 指令取不到不株连连接 */ }
-      connected.push({ name, tools: manifest[name]!, ...(instructions !== undefined ? { instructions } : {}) });
-    } catch {
-      failedServers.push(name); // §10 降级粒度：单 server 失败不株连模块
+        const conn = await opts.connect(name, cfg);
+        const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
+        // MI-15：instructions 不受信消毒（来源前缀 + 4096 截断——与 tool description 的 §8.5 纪律同款），
+        // 在采集点一次性收口（promptSection 段渲染直接消费 connected，不再有裸通道）
+        let instructions: string | undefined;
+        try {
+          instructions = sanitizeServerInstructions(name, await conn.instructions?.());
+        } catch { /* 指令取不到不株连连接 */ }
+        return { ok: true as const, name, cfg, conn, list, instructions };
+      } catch (err) {
+        return { ok: false as const, name, reason: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
+  for (const r of results) {
+    if (!r.ok) {
+      failedServers.push({ name: r.name, reason: r.reason }); // §10 降级粒度：单 server 失败不株连模块
+      continue;
     }
+    const { name, cfg, conn, list, instructions } = r;
+    conns.push(conn);
+    manifest[name] = list.map((t) => t.name);
+    for (const meta of list) {
+      const tool = toBridgedTool(name, meta, conn.callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）
+      if (seenNames.has(tool.name)) {
+        // MI-07 带内跳过：消毒后撞名——进 registry 会 throw（整模块降级），跳过后来者并记录
+        skippedTools.push({ server: name, tool: meta.name, reason: `消毒后注册名撞车：${tool.name}` });
+        continue;
+      }
+      seenNames.add(tool.name);
+      if (tool.name !== `mcp__${name}__${meta.name}`) (mapping[name] ??= {})[meta.name] = tool.name;
+      tools.push(tool);
+    }
+    connected.push({ name, tools: manifest[name]!, ...(instructions !== undefined ? { instructions } : {}) });
   }
   if (Object.keys(manifest).length > 0) {
     // 计划补空白的 digest 落点；MI-07：消毒改名映射与跳过清单随事件落盘（digest 仍按 server 原样清单算——与 server 侧可对账）
@@ -123,36 +137,10 @@ export const mcpDef = defineModule({
   logEvents: ["mcp/manifest"],
   mounts: ["contribute:tool", "contribute:promptSection"],
   async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean }> }>) {
-    // M1 SDK 接线：stdio（command/args/env）与 HTTP（url）两 transport——实现期联调，测试注入 fake connect
-    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-    const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
-    const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
     const out = await activateMcp({
       servers: ctx.config.servers,
-      connect: async (name, cfg) => {
-        const transport = cfg.url !== undefined
-          ? new StreamableHTTPClientTransport(new URL(cfg.url))
-          : new StdioClientTransport({ command: cfg.command!, args: cfg.args ?? [], ...(cfg.env !== undefined ? { env: cfg.env } : {}) });
-        const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
-        try {
-          await client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
-        } catch (err) {
-          await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败也收尾）
-          throw err;
-        }
-        return {
-          listTools: async () => {
-            const res = await client.listTools({});
-            return res.tools as never;
-          },
-          callTool: async (toolName, args, signal) => {
-            const res = await client.callTool({ name: toolName, arguments: args as Record<string, unknown> }, undefined, { signal });
-            return res as never;
-          },
-          instructions: async () => (client as unknown as { getServerInstructions?: () => string | undefined }).getServerInstructions?.(),
-          close: async () => { await client.close(); }, // MI-02：stdio transport 随 close 杀子进程
-        };
-      },
+      connect: (name, cfg) => createSdkConnection(name, cfg),
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
     });
     for (const t of out.tools) ctx.contribute.tool(t);

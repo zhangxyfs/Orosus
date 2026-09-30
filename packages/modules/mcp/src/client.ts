@@ -1,0 +1,68 @@
+import type { ServerConnection } from "./index.ts";
+
+/** 连接超时默认值（T1，kimi 同值）：再长用户会以为死机。预装件首启另用 60s（T20）。 */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+
+/** SDK 适配层选项：测试可缩时（e2e 不等 30 秒）。 */
+export interface SdkConnectOpts {
+  connectTimeoutMs?: number;
+}
+
+/** createSdkConnection 的配置面（与 activateMcp 的 server 条目同形——headers/cwd 在 T5 扩入）。 */
+export interface SdkServerConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+
+/** SDK 连接实现（m4-3c T1 起从 index.ts 抽出）：stdio（command/args/env）与 HTTP（url）两 transport。
+ *  行为契约（连接类任务逐个落位）：
+ *  - T1：连接带超时（默认 30s）——超时/失败都 client.close() 收尾，stdio 子进程随 close 被杀不悬空；
+ *    instructions 走 getInstructions（SDK 真名——旧 getServerInstructions 是不存在的方法，说明书恒空）。
+ *  SDK 保持动态 import：模块定义加载（CLI 启动）不背 SDK 包体，activate 才付这笔。 */
+export async function createSdkConnection(
+  name: string,
+  cfg: SdkServerConfig,
+  opts: SdkConnectOpts = {},
+): Promise<ServerConnection> {
+  const timeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const transport = cfg.url !== undefined
+    ? new StreamableHTTPClientTransport(new URL(cfg.url))
+    : new StdioClientTransport({ command: cfg.command!, args: cfg.args ?? [], ...(cfg.env !== undefined ? { env: cfg.env } : {}) });
+  const client = new Client({ name: `orosus-mcp-${name}`, version: "0.1.0" });
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined; // 成功路也须清（30s 定时器悬着会拖住进程退出）
+  try {
+    const connecting = client.connect(transport as never); // SDK 传输联合类型在 exactOptionalPropertyTypes 下的摩擦——运行时无歧义
+    connecting.catch(() => undefined); // 超时路被 close 打断的迟到拒绝不悬空（race 已由超时先 settle）
+    await Promise.race([
+      connecting,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`连接超时（等了 ${Math.round(timeoutMs / 1000)} 秒没握上手——server 可能没起来或卡在初始化）`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch (err) {
+    await client.close().catch(() => undefined); // 半开连接不悬空（MI-02：连接失败/超时也收尾，close 杀 stdio 子进程）
+    throw err;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+  return {
+    listTools: async () => {
+      const res = await client.listTools({});
+      return res.tools as never;
+    },
+    callTool: async (toolName, args, signal) => {
+      const res = await client.callTool({ name: toolName, arguments: args as Record<string, unknown> }, undefined, { signal });
+      return res as never;
+    },
+    instructions: async () => client.getInstructions(), // T1 修复：SDK 真名是 getInstructions
+    close: async () => { await client.close(); }, // MI-02：stdio transport 随 close 杀子进程
+  };
+}
