@@ -23,6 +23,24 @@ export interface SessionHead {
   ownLines: number;
 }
 
+/** 技能注入消息的机器标记（宿主 skillInjectText 首行——docmodel ● 行识别同款前缀）。 */
+const SKILL_MARK = /^（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
+
+/** 首条用户消息 → 列表标题兜底（≤20 字符、空白折叠；空串 = undefined 继续找下一条）：技能注入
+ *  消息特例显示「[技能] 名字 参数」（2026-09-30 用户拍板——机器标记与正文都不当标题；参数从
+ *  <skill args> 属性取、&quot; 还原，老会话无参数即只显名字）。 */
+function firstUserTitle(raw: string): string | undefined {
+	const text = raw.replace(/\s+/g, " ").trim();
+	if (text === "") return undefined;
+	const m = SKILL_MARK.exec(raw);
+	if (m !== null) {
+		const argsM = /<skill name="[^"]*"(?: args="([^"]*)")?>/.exec(raw);
+		const args = argsM?.[1]?.replace(/&quot;/g, '"');
+		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 20);
+	}
+	return text.slice(0, 20);
+}
+
 /** 读会话文件头部元数据（jsonl 读法，T7）：一次读全文，元数据解析限预算内、行数恒真。
  *  文件不可读（不存在/损坏）= undefined。 */
 export function readSessionHead(file: string): SessionHead | undefined {
@@ -53,8 +71,8 @@ export function readSessionHead(file: string): SessionHead | undefined {
     if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") head.label = e.label;
     if (head.firstUser === undefined && e.type === "user/message") {
       const parts = (e.content ?? []) as { kind?: string; text?: string }[];
-      const text = parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join("").replace(/\s+/g, " ").trim();
-      if (text !== "") head.firstUser = text.slice(0, 20);
+      const t = firstUserTitle(parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join(""));
+      if (t !== undefined) head.firstUser = t;
     }
   }
   return head;
@@ -87,8 +105,7 @@ export function readSqliteHead(file: string): SessionHead | undefined {
       let firstUser: string | undefined;
       if (userFields !== undefined) {
         const parts = (userFields.content ?? []) as { kind?: string; text?: string }[];
-        const text = parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join("").replace(/\s+/g, " ").trim();
-        if (text !== "") firstUser = text.slice(0, 20);
+        firstUser = firstUserTitle(parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join(""));
       }
       return {
         ...(labelFields !== undefined && typeof labelFields.label === "string" && labelFields.label !== "" ? { label: labelFields.label } : {}),
