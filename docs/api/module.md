@@ -324,7 +324,7 @@ export interface LlmPort { … }
 |---|---|---|
 | `stream` | `stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>` | 二级流式调用（错误带内——finish error，不许 reject）。 |
 | `listModels?` | `listModels?: (() => Promise<string[]>) \| undefined` | 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式； 切分口径同 stream.model（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id，嵌套 id 不截断—— 显示层取尾段会丢前缀，消费方须按此口径切分）。 可选——无一槽提供目录能力时读得 undefined（显式 \| undefined：exactOptionalPropertyTypes 下 getter 惰性判定合法）， 消费方据此隐藏模型选择项。 |
-| `contextWindow?` | `readonly contextWindow?: number \| undefined` | 当前模型上下文窗口（token）——harness 解析（config 顶层 contextWindow > provider import 目录写入）；未知 undefined。 |
+| `contextWindow?` | `readonly contextWindow?: number \| undefined` | 当前模型上下文窗口（token）——harness 解析链（2026-09-29）：config 顶层 contextWindow 显式值 （provider import / 模型菜单写入的也是此键）> models-dev 目录盘上缓存按槽·模型查表兜底；未知 undefined。 |
 | `lastUsage?` | `readonly lastUsage?: { totalTokens: number; atMessageCount: number } \| undefined` | 最近一次主循环请求的真实用量锚点：totalTokens = input+output（该次请求全上下文）、atMessageCount = 该次请求 messages 条数——其后消息用估算增量（compaction 消费；锚点有效性三态规则见 M3 补强方案空白 §4）。 |
 
 **方法参数**

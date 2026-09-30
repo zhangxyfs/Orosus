@@ -492,7 +492,14 @@ describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM
       const r = await runRepl(d, ["/title 甲", "/new", "/title 乙", "/resume 2", "/fork", "/quit"]);
       expect(r.code).toBe(0);
       expect(r.out).toContain("[已命名 → 甲]");
-      expect(r.out).toContain("[已恢复 甲（"); // 序号 2 落在「甲」会话（非最新的「乙」）——切回目标锚定
+      // 恢复横幅已退役（2026-09-30 拍板：恢复零提示只回放）——锚改走 sid：/resume 2 应切到「甲」（s1），
+      // 随后 /fork 的父必须是 s1 而非 /new 打出的 s2（乙）。父若错拿 s2 的尾事件 id，则 s2 id ∉ s1 投影
+      // → CS-05 崩溃面（下方 not.toContain 钉）——两会话池里「父 ≠ s2」即唯一锚定「父 = s1 = 甲」
+      const newSid = /\[新会话 (s_[0-9A-Za-z]+)\]/.exec(r.out)?.[1];
+      const forkParent = /\[已从 (s_[0-9A-Za-z]+) 分叉/.exec(r.out)?.[1];
+      expect(newSid).toBeDefined();
+      expect(forkParent).toBeDefined();
+      expect(forkParent).not.toBe(newSid);
       expect(r.out).toContain("[已从"); // switchTo 后 /fork 成功
       expect(`${r.out}${r.err}`).not.toContain("fork 分叉点不在父会话投影内");
     } finally {
