@@ -218,8 +218,8 @@ export interface CommandUi {
 
 /** 控件（m5 口子二/三共用）——「给数据不给画面」：模块交控件清单，画永远是宿主画。八种：
  *  text 一段文字（可带样式与折行开关）/ kv 一行「标签: 值」/ sep 分隔线 / list 列表（interactive =
- *  可选中，选中变化回事件）/ progress 进度条（value/max）/ input 输入框（multiline 多行、lines 高度、
- *  enterSubmit 回车即提交）/ columns 多列（cols 每列又是控件清单，可嵌套）/ table 表格。
+ *  可选中，选中变化回事件）/ progress 进度条（value/max）/ input 输入框（label 字段名画进框顶边、
+ *  multiline 多行、lines 高度、enterSubmit 回车即提交）/ columns 多列（cols 每列又是控件清单，可嵌套）/ table 表格。
  *  text/value/progress 的 value 字段给函数 = 活值：宿主渲染期现读（卡片每秒、控件窗每帧）。
  *
  * @example
@@ -236,7 +236,7 @@ export type WidgetSpec =
   | { id: string; kind: "sep" }
   | { id: string; kind: "list"; interactive?: boolean; items: string[] }
   | { id: string; kind: "progress"; value: number | (() => number); max: number }
-  | { id: string; kind: "input"; multiline?: boolean; lines?: number; enterSubmit?: boolean; placeholder?: string }
+  | { id: string; kind: "input"; label?: string; multiline?: boolean; lines?: number; enterSubmit?: boolean; placeholder?: string }
   | { id: string; kind: "columns"; cols: WidgetSpec[][]; widths?: number[] }
   | { id: string; kind: "table"; head: string[]; rows: string[][] };
 

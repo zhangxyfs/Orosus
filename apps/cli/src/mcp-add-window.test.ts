@@ -4,6 +4,8 @@ import { describe, it, expect } from "vitest";
 import {
   draftToJson, jsonToDraft, parseKeyValueLines, buildManualValues, parseJsonPaste, buildAddWidgets, emptyDraft,
 } from "./mcp-add-window.ts";
+import { fg } from "./theme.ts";
+import { stripAnsi } from "./tui/width.ts";
 
 describe("T17 添加窗——草稿互转（两页签共享体）", () => {
   it("① 手动 → JSON：stdio 拆 command/args、远程带 url、env/超时随行", () => {
@@ -86,5 +88,25 @@ describe("T17 添加窗——控件清单结构（三档联动）", () => {
     const json = buildAddWidgets({ tab: "json", mode: "add", transport: "stdio", advOpen: false, err: "✕ 测", ok: "" });
     expect(json.map((w) => w.id)).toContain("json");
     expect(json.some((w) => w.id === "msg")).toBe(true);
+  });
+
+  it("⑧ 配色钉（2026-09-30 实机走查拍板）：页签选中绿/未选白；传输方式三档并一行；输入框带 label（契约新可选字段）", () => {
+    const ws = buildAddWidgets({ tab: "manual", mode: "add", transport: "http", advOpen: false, err: "", ok: "" });
+    const tabs = ws.find((w) => w.id === "tabs");
+    expect(tabs !== undefined && tabs.kind === "text").toBe(true);
+    const tabText = tabs !== undefined && tabs.kind === "text" ? tabs.text : "";
+    expect(tabText).toContain(fg("accent", "▶ 手动")); // 选中页签绿
+    expect(tabText).toContain(fg("fg", "  JSON")); // 未选页签白
+    const t = ws.find((w) => w.id === "transport");
+    expect(t !== undefined && t.kind === "list" && t.interactive === true && t.items.length).toBe(1); // 三档并一行（单条 list 项保焦点圈）
+    const row = t !== undefined && t.kind === "list" ? stripAnsi(t.items[0]!) : "";
+    expect(row).toContain("● HTTP（远程）"); // 选中档实心点
+    expect(row).toContain("○ stdio 子进程"); // 未选档空心点同行
+    expect(row).toContain("○ SSE");
+    expect(row).toContain("←→ 切换"); // 行内自带提示（底部键位行不提——走查拍板③）
+    const name = ws.find((w) => w.id === "name");
+    expect(name !== undefined && name.kind === "input" && name.label).toBe("名称"); // label 画进框顶边
+    const cmd = ws.find((w) => w.id === "cmd");
+    expect(cmd !== undefined && cmd.kind === "input" && cmd.label).toBe("URL"); // 远程档命令字段换牌
   });
 });
