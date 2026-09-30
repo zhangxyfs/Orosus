@@ -1465,6 +1465,25 @@ const afterMcpWrite = (app: FullApp | undefined, doneText: string): string => {
 	return `${doneText} · 有任务在执行，稍后请输入 /reload 重新加载`;
 };
 const runMcpToggle = async (app: FullApp | undefined, row: McpCatalogRow): Promise<string> => {
+	// 懒 server 的「启动」语义（2026-09-30「待启动态按启停=被停用」陷阱修）：待启动/首启失败的预装件，
+	// 用户按 Alt + K 的意图是「启动它」不是「停用它」——触发手动连接（mcp.start 服务；与首调共用
+	// memoized 连接，schema 补丁/落盘缓存照常走）。停用路径留给已连接态与停用态翻转。
+	if (row.deferred === true && (row.state === "idle" || row.state === "failed")) {
+		if (app === undefined) return "";
+		try {
+			const start = await h.graph().services.getOptional("mcp.start");
+			if (typeof start !== "function") {
+				app.showToast("mcp 模块未提供启动口——重启 CLI 后再试");
+				return "";
+			}
+			app.showToast(`正在启动 ${row.name}（首次可能需要下载，最长 60 秒）…`);
+			await (start as (name: string) => Promise<void>)(row.name);
+			app.showToast(`已连接 ${row.name}——工具就绪`);
+		} catch (err) {
+			app.showToast(`启动 ${row.name} 失败：${err instanceof Error ? err.message : String(err)}`);
+		}
+		return "";
+	}
 	const enable = row.state === "disabled";
 	const r = await runMcpCommand(`${enable ? "on" : "off"} ${row.name}`, mcpPanelDeps());
 	row.state = enable ? (row.source === "preload" ? "idle" : "failed") : "disabled"; // 重载前乐观翻转（重载后 catalog 重算）
