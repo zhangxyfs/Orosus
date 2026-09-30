@@ -131,7 +131,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
       // 按需加载拦截（M4-3 T4，kimi toolSelectService.ts:333-338 话术同族）：模型点名了 deferred 未 reveal
       // 的工具 → 带内指路 meta 工具（体验增强非正确性依赖——幻觉名（未注册）已由上方「未知工具」兜住）
       if (deferredEnabled && entry.tool.deferred === true && !revealed.has(call.name)) {
-        return { ok: false, callId: call.id, result: { output: `工具 "${call.name}" 处于按需加载目录中，先调 tool-search__search 加载（搜索即加载，下一轮起可调用）`, isError: true } };
+        return { ok: false, callId: call.id, result: { output: `这个工具可用但未加载——先用 tool-search 加载它（调用 tool-search__search 搜索 "${call.name}"，搜索即加载），然后再调用`, isError: true } }; // T19③（m4-3c）：手把手句式（qwen/kimi 参照）——本拦截只在机制启用（tool-search 在场）时生效
       }
       const { tool, owner } = entry;
       const tlog: Logger = createLogger(opts.sink, owner);

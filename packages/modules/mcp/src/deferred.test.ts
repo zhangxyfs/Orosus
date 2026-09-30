@@ -133,7 +133,7 @@ describe("mcp deferred 接线（M4-3 T5）", () => {
     await h.close();
     const all = await mem.all();
     const blocked = all.find((e) => e.type === "tool/result" && e.callId === "c0");
-    expect(String(blocked && JSON.stringify(blocked))).toContain("按需加载目录"); // 未加载拦截生效
+    expect(String(blocked && JSON.stringify(blocked))).toContain("这个工具可用但未加载"); // 未加载拦截生效（T19③ 新句式）
     const searchResult = all.find((e) => e.type === "tool/result" && e.callId === "c1");
     expect(String(searchResult && JSON.stringify(searchResult))).toContain("已加载：mcp__big__job0");
     const ran = all.find((e) => e.type === "tool/result" && e.callId === "c2");
