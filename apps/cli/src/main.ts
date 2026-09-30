@@ -54,7 +54,7 @@ import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig, sectionPath, modelsDevCacheFile, resolveContextWindow } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)/窗口兜底链(2026-09-29)
 import { toggleResultText } from "./module-toggle-result.ts";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
-import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
+import { mcpListRow, mcpDetailText, mcpDescLine } from "./mcp-settings.ts";
 import { openMcpAddWindow } from "./mcp-add-window.ts";
 import type { McpCatalogRow } from "@orosus/mcp";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
@@ -1488,8 +1488,10 @@ const runMcpToggle = async (app: FullApp | undefined, row: McpCatalogRow): Promi
 	return afterMcpWrite(app, r.text);
 };
 
-const openMcpPanel = async (app: FullApp): Promise<void> => {
+const openMcpPanel = async (app: FullApp, initialDetail?: string): Promise<void> => {
 	let selAt = 0;
+	// T18 斜杠菜单 mcp : 名 直达详情：首圈跳过列表（Esc 从详情回列表——循环第二圈起正常）
+	let skipList = initialDetail !== undefined;
 	for (;;) {
 		mcpWarmCatalog();
 		const rows = await mcpCatalogRows();
@@ -1498,6 +1500,19 @@ const openMcpPanel = async (app: FullApp): Promise<void> => {
 			...rows.map((r) => mcpListRow(w, r)),
 			...(rows.length === 0 ? [theme.fg("muted", "（还没有 MCP server——按 Alt + N 或回车添加第一个）")] : []),
 		];
+		if (skipList) {
+			// T18 直达详情：详情窗入队后本圈 pickOverlay 排其后面（FIFO——用户先见详情，Esc 关即见列表）
+			skipList = false;
+			const rows0 = await mcpCatalogRows();
+			const hit = rows0.findIndex((r) => r.name === initialDetail);
+			if (hit >= 0) {
+				selAt = hit;
+				const w0 = app.pickRowWidth();
+				const items0 = rows0.map((r) => mcpListRow(w0, r));
+				const row0 = rows0[hit]!;
+				app.viewText(`${row0.name} · MCP server`, mcpDetailText(w0, row0), { layout: "dock", keys: mcpDetailKeys(app, row0, items0, hit) });
+			}
+		}
 		let addRequested = false;
 		const picked = await app.pickOverlay(
 			`MCP（${rows.length} 个 server${rows.length === 0 ? "" : " · 预装按需启动"}）`,
@@ -1523,64 +1538,69 @@ const openMcpPanel = async (app: FullApp): Promise<void> => {
 		if (picked < 0 || picked >= rows.length) continue;
 		selAt = picked;
 		const row = rows[picked]!;
-		let deleteArm = false;
-		let detailMsg = "";
-		const detail = (): string => (detailMsg === "" ? mcpDetailText(w, row) : `${mcpDetailText(w, row)}\n${theme.fg("muted", detailMsg)}`);
-		items[picked] = mcpListRow(w, row); // Alt + K 后回列表顶上的正是这个排队的 pickOverlay（持同数组——行原地更新）
-		app.viewText(`${row.name} · MCP server`, detail(), { layout: "dock", keys: {
-				"alt+k": {
-					label: "Alt + K 启停",
-					run: (): string => {
-						void runMcpToggle(app, row).then((t) => { if (t !== "") app.showToast(t); });
-						items[picked] = mcpListRow(w, row);
-						return detail();
-					},
-				},
-				"alt+n": {
-					label: "Alt + N 修改",
-					run: (): string => {
-						if (row.source !== "config") {
-							detailMsg = row.source === "project"
-								? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
-								: "预装 server 不可修改——只能停用（Alt + K）";
-							return detail();
-						}
-						mcpWarmCatalog();
-						openMcpAddWindow(app, {
-							mode: "edit",
-							row,
-							original: configuredMcpServer(row.name),
-							configPath: defaultMcpCmdDeps().configPath(),
-							existingNames: rows.map((r) => r.name),
-							onSaved: (name) => { void afterMcpWrite(app, `已修改 ${name}（模块图重载中）`); },
-						});
-						return detail();
-					},
-				},
-				d: {
-					label: "d 删除",
-					run: (): string => {
-						if (row.source !== "config") {
-							detailMsg = row.source === "project"
-								? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
-								: "预装 server 只能停用不能删除（Alt + K）";
-							return detail();
-						}
-						if (!deleteArm) {
-							deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
-							detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
-							return detail();
-						}
-						void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
-							const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
-							if (t !== "") app.showToast(t);
-						});
-						return "close";
-					},
-				},
-			},
-		});
+		items[picked] = mcpListRow(w, row);
+		app.viewText(`${row.name} · MCP server`, mcpDetailText(w, row), { layout: "dock", keys: mcpDetailKeys(app, row, items, picked) });
 	}
+};
+
+/** 详情窗键位构造（T17 主循环与 T18 菜单直达共用）：Alt + K 启停 / Alt + N 修改 / d 两拍删除。 */
+const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked: number): Record<string, import("@orosus/contracts/module").PopupKey> => {
+	let deleteArm = false;
+	let detailMsg = "";
+	const w = app.pickRowWidth();
+	const detail = (): string => (detailMsg === "" ? mcpDetailText(w, row) : `${mcpDetailText(w, row)}\n${theme.fg("muted", detailMsg)}`);
+	return {
+		"alt+k": {
+			label: "Alt + K 启停",
+			run: (): string => {
+				void runMcpToggle(app, row).then((t) => { if (t !== "") app.showToast(t); });
+				items[picked] = mcpListRow(w, row);
+				return detail();
+			},
+		},
+		"alt+n": {
+			label: "Alt + N 修改",
+			run: (): string => {
+				if (row.source !== "config") {
+					detailMsg = row.source === "project"
+						? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
+						: "预装 server 不可修改——只能停用（Alt + K）";
+					return detail();
+				}
+				mcpWarmCatalog();
+				openMcpAddWindow(app, {
+					mode: "edit",
+					row,
+					original: configuredMcpServer(row.name),
+					configPath: defaultMcpCmdDeps().configPath(),
+					existingNames: [],
+					onSaved: (name) => { void afterMcpWrite(app, `已修改 ${name}（模块图重载中）`); },
+				});
+				return detail();
+			},
+		},
+		d: {
+			label: "d 删除",
+			run: (): string => {
+				if (row.source !== "config") {
+					detailMsg = row.source === "project"
+						? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
+						: "预装 server 只能停用不能删除（Alt + K）";
+					return detail();
+				}
+				if (!deleteArm) {
+					deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
+					detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
+					return detail();
+				}
+				void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
+					const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
+					if (t !== "") app.showToast(t);
+				});
+				return "close";
+			},
+		},
+	};
 };
 
 /** 行模式对等件（m4-3c T17）：列表 choose → 详情直出 → 动作菜单。 */
@@ -1906,6 +1926,32 @@ interface SkillMenuRow {
 	file: string;
 }
 let skillMenu: SlashItem[] = [];
+// m4-3c T18：斜杠菜单 MCP 区（技能区下方）——TTL 惰性刷新 + reload/写盘后显式刷新（技能同款模式）
+let mcpMenu: SlashItem[] = [];
+let mcpMenuAt = 0;
+const refreshMcpMenu = async (): Promise<void> => {
+	try {
+    mcpWarmCatalog();
+		const rows = await mcpCatalogRows();
+		const stateLine = (r: McpCatalogRow): string => {
+			const base = r.state === "connected" ? "已连接" : r.state === "idle" ? "待启动" : r.state === "failed" ? "失败" : r.state === "disabled" ? "已停用" : "未确认";
+			const enable = r.state === "disabled" ? "" : " · 启用";
+			const tools = r.toolCount !== undefined ? ` · ${r.toolCount} 个工具` : "";
+			const deferredTag = r.deferred === true ? "（deferred）" : "";
+			return `状态：${base}${enable}${tools}${deferredTag}`;
+		};
+		mcpMenu = rows.map((r) => ({
+			name: `mcp : ${r.name}`,
+			desc: mcpDescLine(r),
+			long: `${r.name} —— ${mcpDescLine(r) === "" ? "MCP server" : mcpDescLine(r)}`,
+			usage: stateLine(r),
+			mcp: r.name,
+		}));
+	} catch (err) {
+		mcpMenu = [];
+		h.log("host.mcpmenu.error", `MCP 菜单刷新抛错，当帧清空：${err instanceof Error ? err.message : String(err)}`);
+	}
+};
 const skillFiles = new Map<string, string>(); // 技能真名 → SKILL.md 实路径（Enter 注入读正文用）
 let skillMenuAt = 0;
 /** 菜单缓存刷新：catalog 是 Promise 口而菜单渲染同步——TTL 惰性（skillItems 被调时隔 5s 触发一次）
@@ -2055,6 +2101,18 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       return skillMenu;
     },
     skillInject: skillInjectText,
+    // m4-3c T18：MCP 区数据源（TTL 惰性——技能区同款 5s）+ Enter 直达管理面详情
+    mcpItems: () => {
+      const now = Date.now();
+      if (now - mcpMenuAt > 5000) {
+        mcpMenuAt = now;
+        void refreshMcpMenu();
+      }
+      return mcpMenu;
+    },
+    mcpOpen: (name: string) => {
+      if (activeApp !== undefined) void openMcpPanel(activeApp, name);
+    },
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
     // 参数阶段数据源（m5 T15）：graph 现读模块命令的 completeArg；抛错兜底空表 + host 日志（菜单层当无候选）
     slashArgComplete: (cmd, word, args) => {
