@@ -1,5 +1,5 @@
 import type { ServerToolMeta } from "./bridge.ts";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** T20（m4-3c）：预装五件 MCP server——按需启动（lazy：启动零进程，首次调用才连，60s 首启预算
@@ -8,8 +8,9 @@ import { join } from "node:path";
  *
  *  静态工具清单（manifest）：lazy 意味着启动时不连 server——但 tool-search 目录与提示词清单行
  *  需要工具名。清单按当前主流版本手工钉版；首次连接后取实况 listTools **把真 inputSchema 就地
- *  补进已注册工具**（2026-09-30——静态清单没 schema，模型看不到参数面会瞎发参数吃 server 校验
- *  错）；名单漂移双向报告维持优雅降级（实况多出的无法后补注册、静态名实况不存在时调用得到
+ *  补进已注册工具并落盘缓存**（2026-09-30——静态清单没 schema，模型看不到参数面会瞎发参数吃
+ *  server 校验错；缓存 = 下次冷进程的参数面从第一个请求就在，盲发只剩每台机器每 server 头一回）；
+ *  名单漂移双向报告维持优雅降级（实况多出的无法后补注册、静态名实况不存在时调用得到
  *  server 的 Unknown tool——非崩坏）。 */
 
 export interface PreloadDef {
@@ -141,4 +142,53 @@ export function shouldRegisterPreloadTools(home: string): boolean {
     } catch { /* 坏文件当未配置 */ }
   }
   return true; // 无显式配置 = tool-search 默认开（2026-09-30 拍板翻转）——预装开箱即用
+}
+
+/** ---------- 预装 schema 本地缓存（2026-09-30 用户拍板「参数结构本地记录、连接后可更新」）----------
+ *  静态清单没 inputSchema → 冷进程的模型首调只能盲发（schema 得连上 server 才有）。首连成功后把实况
+ *  schema 落盘 `~/.orosus/cache/mcp-preload-schemas.json`，下次启动 manifestFor 叠加缓存——参数面从
+ *  第一个请求就在，盲发只剩每台机器每 server 的头一回。缓存是加速件非事实源：坏文件当空、删了自愈、
+ *  server 升级改参数在下一次连接时自然刷新（两次连接之间的过期与静态清单钉版同一 staleness 等级）。 */
+
+export type PreloadSchemaCache = Record<string, Record<string, Record<string, unknown>>>;
+
+export const preloadSchemaCacheFile = (home: string): string => join(home, "cache", "mcp-preload-schemas.json");
+
+/** 读缓存（server → 工具名 → inputSchema）；不存在/坏 JSON → 空（回落无缓存行为）。 */
+export function readPreloadSchemaCache(home: string): PreloadSchemaCache {
+  const file = preloadSchemaCacheFile(home);
+  if (!existsSync(file)) return {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: PreloadSchemaCache = {};
+    for (const [server, tools] of Object.entries(parsed as Record<string, unknown>)) {
+      if (tools === null || typeof tools !== "object" || Array.isArray(tools)) continue;
+      const clean: Record<string, Record<string, unknown>> = {};
+      for (const [tool, schema] of Object.entries(tools as Record<string, unknown>)) {
+        if (schema !== null && typeof schema === "object" && !Array.isArray(schema)) clean[tool] = schema as Record<string, unknown>;
+      }
+      out[server] = clean;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 写缓存（整文件覆盖——单进程是唯一写者；多 CLI 实例并存时最后写者赢，缓存语义可接受）。 */
+export function writePreloadSchemaCache(home: string, cache: PreloadSchemaCache): void {
+  const file = preloadSchemaCacheFile(home);
+  mkdirSync(join(home, "cache"), { recursive: true });
+  writeFileSync(file, JSON.stringify(cache, null, 2), "utf8");
+}
+
+/** 静态清单叠加缓存 schema（activate 期用）：inputSchema 只在缓存有该工具时补上——描述保留策展版
+ *  不动、缓存没有的工具照旧宽松收参（server 侧自校验兜底）。 */
+export function withCachedSchemas(manifest: readonly ServerToolMeta[], cached: Record<string, Record<string, unknown>> | undefined): ServerToolMeta[] {
+  if (cached === undefined) return [...manifest];
+  return manifest.map((m) => {
+    const hit = cached[m.name];
+    return hit === undefined ? { ...m } : { ...m, inputSchema: hit };
+  });
 }

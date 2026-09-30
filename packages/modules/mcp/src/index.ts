@@ -5,7 +5,7 @@ import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, applyLiveList, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 import { createSdkConnection } from "./client.ts";
 import { readProjectMcpJson, gateProjectServers, mcpTrustFile } from "./project.ts";
-import { MCP_PRELOADS, shouldRegisterPreloadTools } from "./preload.ts";
+import { MCP_PRELOADS, shouldRegisterPreloadTools, readPreloadSchemaCache, writePreloadSchemaCache, withCachedSchemas } from "./preload.ts";
 
 export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 export { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS } from "./client.ts";
@@ -362,7 +362,15 @@ export const mcpDef = defineModule({
     const merged: Record<string, Record<string, unknown>> = { ...gated.servers };
     // T20 门控：tool-search 未显式启用 → 预装不注册工具（deferred 标记在关态不生效——50 工具会灌爆
     // 上下文）；管理面/菜单/启停不受影响（catalog 行总在）。README 指路开 tool-search 后 /reload 生效。
-    const preloadToolsOn = shouldRegisterPreloadTools(orosusHome());
+    const home = orosusHome();
+    const preloadToolsOn = shouldRegisterPreloadTools(home);
+    // 预装 schema 本地缓存（2026-09-30 拍板）：activate 期读一次——manifestFor 叠加，冷进程的参数面
+    // 从第一个请求就在；onLive 首连后整读整写刷新（in-memory 副本为唯一写源，进程内多 server 互不覆写）
+    let schemaCache = readPreloadSchemaCache(home);
+    const manifestWithCache = (name: string): ServerToolMeta[] => {
+      const pl = MCP_PRELOADS.find((p) => p.name === name);
+      return pl === undefined ? [] : (preloadToolsOn ? withCachedSchemas(pl.manifest, schemaCache[name]) : []);
+    };
     const mergedPreloadNames: string[] = []; // 真并入预装名（被用户/项目真条目覆盖的不算——catalog 定源用）
     for (const pl of MCP_PRELOADS) {
       if (pl.name in project.servers) continue; // 项目同名（含未确认）让位——旧规则不变
@@ -382,7 +390,7 @@ export const mcpDef = defineModule({
       connect: (name, cfg) => createSdkConnection(name, cfg),
       sessionAppend: (type, payload) => void ctx.session.append(type, payload),
       lazy: {
-        manifestFor: (name) => (preloadToolsOn ? MCP_PRELOADS.find((p) => p.name === name)?.manifest : []),
+        manifestFor: (name) => manifestWithCache(name),
         connect: (name, cfg) => createSdkConnection(name, cfg, { connectTimeoutMs: 60_000 }), // 预装首启 60s（npx 下载包——设计空白拍板）
         onStarted: (name, state, reason) => {
           if (state === "failed") lazyState.set(name, { state, ...(reason !== undefined ? { reason } : {}) });
@@ -390,7 +398,8 @@ export const mcpDef = defineModule({
           if (state === "failed") ctx.log.warn("mcp.preload-start-failed", `预装 server ${name} 首次启动失败：${reason ?? ""}`, { server: name });
         },
         // 首连 schema 补丁（2026-09-30）：静态清单无 inputSchema → 模型瞎发参数吃 server 校验错——
-        // 实况清单就地换 parameters（registry 条目零扰动）；名单漂移双向报告（多出的进不来、消失的维持
+        // 实况清单就地换 parameters（registry 条目零扰动）+ **落盘缓存**（下次冷进程参数面从第一请求
+        // 就在——盲发只剩每台机器每 server 头一回）；名单漂移双向报告（多出的进不来、消失的维持
         // 优雅降级）；listTools 失败 = 静态清单继续用，只记日志不报错
         onLive: (name, list, error) => {
           if (error !== undefined) {
@@ -404,6 +413,19 @@ export const mcpDef = defineModule({
             if (r.stale.length > 0) ctx.log.warn("mcp.live-stale-tools", `server ${name} 静态清单里的 ${r.stale.length} 个工具实况不存在（调用会得到 Unknown tool）：${r.stale.join("、")}`, { server: name });
           } catch (err) {
             ctx.log.warn("mcp.live-schema-error", `server ${name} 实况 schema 补丁抛错（已注册工具不动）：${err instanceof Error ? err.message : String(err)}`, { server: name });
+          }
+          try {
+            // 缓存刷新：实况里有 inputSchema 的都记（含静态清单外名字——将来清单收录即生效）；坏盘/写失败 = 当没缓存
+            const schemas: Record<string, Record<string, unknown>> = {};
+            for (const m of list) {
+              if (m.inputSchema !== undefined && m.inputSchema !== null && typeof m.inputSchema === "object") schemas[m.name] = m.inputSchema;
+            }
+            if (Object.keys(schemas).length > 0) {
+              schemaCache[name] = schemas;
+              writePreloadSchemaCache(home, schemaCache);
+            }
+          } catch (err) {
+            ctx.log.warn("mcp.schema-cache-write-failed", `server ${name} 实况 schema 落盘失败（仅影响下次冷启动的首调体验，不影响本次会话）：${err instanceof Error ? err.message : String(err)}`, { server: name });
           }
         },
       },

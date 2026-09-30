@@ -4,10 +4,11 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { fakeProviderModule } from "@orosus/testing";
 import { activateMcp, mcpDef, type ActivateMcpOpts, type McpCatalogRow } from "./index.ts";
-import { MCP_PRELOADS, shouldRegisterPreloadTools, isPreloadName } from "./preload.ts";
+import { MCP_PRELOADS, shouldRegisterPreloadTools, isPreloadName, readPreloadSchemaCache, writePreloadSchemaCache, withCachedSchemas, preloadSchemaCacheFile } from "./preload.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -181,5 +182,38 @@ describe("T20 预装清单与门控", () => {
       if (prevHome === undefined) delete process.env.OROSUS_HOME;
       else process.env.OROSUS_HOME = prevHome;
     }
+  });
+
+  it("⑧ schema 本地缓存（2026-09-30 拍板「参数结构本地记录、连接后可更新」）：读写回环 + 坏 JSON 当空 + 叠加只补 inputSchema 不动描述 + 冷进程注册即带参数面", async () => {
+    const home = tmp("schema-cache");
+    expect(readPreloadSchemaCache(home)).toEqual({}); // 不存在 = 空
+    writePreloadSchemaCache(home, { memory: { search_nodes: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } });
+    expect(readPreloadSchemaCache(home).memory?.search_nodes?.required).toEqual(["query"]); // 回环
+    writeFileSync(preloadSchemaCacheFile(home), "{ 坏 JSON", "utf8");
+    expect(readPreloadSchemaCache(home)).toEqual({}); // 坏文件当空（缓存非事实源）
+    // 叠加：缓存里有的补 inputSchema、没有的照旧；描述保留清单原样
+    const overlay = withCachedSchemas(
+      [{ name: "search_nodes", description: "按查询搜索节点" }, { name: "read_graph", description: "读图" }],
+      { search_nodes: { type: "object", properties: { query: { type: "string" } } } },
+    );
+    expect(overlay[0]!.inputSchema).toEqual({ type: "object", properties: { query: { type: "string" } } });
+    expect(overlay[0]!.description).toBe("按查询搜索节点"); // 描述不动
+    expect(overlay[1]!.inputSchema).toBeUndefined(); // 缓存没有的照旧
+    // 冷进程全链：缓存预热后 activateMcp 经 manifestFor 叠加——注册即带参数面（盲发消除的目标形态）
+    const home2 = tmp("schema-cache2");
+    writePreloadSchemaCache(home2, { mem: { remember: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } });
+    const out = await activateMcp({
+      servers: { mem: { command: "x", lazy: true } },
+      connect: async () => { throw new Error("不应走非惰性连接"); },
+      sessionAppend: () => {},
+      lazy: {
+        manifestFor: (name) => (name === "mem" ? withCachedSchemas(manifest, readPreloadSchemaCache(home2).mem) : undefined),
+        connect: async () => ({ listTools: async () => manifest, callTool: async () => ({ content: [] }) }),
+        onStarted: () => {},
+      },
+    });
+    const schema = z.toJSONSchema(out.tools.find((t) => t.name === "mcp__mem__remember")!.parameters) as { properties?: Record<string, unknown>; required?: string[] };
+    expect(schema.properties !== undefined && "text" in schema.properties).toBe(true); // 零连接已带参数面
+    expect(schema.required).toEqual(["text"]);
   });
 });
