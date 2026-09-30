@@ -181,8 +181,9 @@ async function handleCall(req, extra) {
       setTimeout(() => process.exit(1), 0);
       return { content: [text("crashing")] };
     case "struct_same":
+      // 文字 = 结构化的 JSON 序列化（qwen 去重语义的靶形：两路同内容只留一份）
       return {
-        content: [text(args.value)],
+        content: [text(JSON.stringify({ value: args.value }))],
         structuredContent: { value: args.value },
       };
     case "struct_diff":

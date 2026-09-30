@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest, toBridgedTool } from "./bridge.ts";
+import { sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest, toBridgedTool, renderToolResult } from "./bridge.ts";
 import { activateMcp, collectTools, runTool } from "./index.ts";
 import type { Tool } from "@orosus/contracts/tool";
 
@@ -217,5 +217,42 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     expect(evil.instructions).not.toContain("x".repeat(4100)); // 确实被截断（9000 连跑不可能整段存活）
     expect(out.connected.find((s) => s.name === "plain")!.instructions).toBe("[mcp:plain] 正常指令"); // 正常长度只加前缀
     expect("instructions" in out.connected.find((s) => s.name === "weird")!).toBe(false); // 非 string → 无指令（回落工具清单行，不装占位）
+  });
+});
+
+describe("T8 结果展示（m4-3c）——renderToolResult 四类内容落地", () => {
+  it("① 纯文字直收（多块换行拼接）；isError 透传（旧实现硬编码 false 吞掉 server 失败标记）", () => {
+    const r = renderToolResult({ content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] });
+    expect(r).toEqual({ output: "a\nb", isError: false });
+    expect(renderToolResult({ content: [{ type: "text", text: "boom" }], isError: true })).toEqual({ output: "boom", isError: true });
+  });
+
+  it("② 结构化与文字相同去重（qwen 三家同款）；不同附后", () => {
+    const same = JSON.stringify({ value: "x" });
+    const dedup = renderToolResult({ content: [{ type: "text", text: same }], structuredContent: { value: "x" } });
+    expect(dedup.output).toBe(same); // 只留一份
+    const diff = renderToolResult({ content: [{ type: "text", text: "a" }], structuredContent: { a: "a", b: "b" } });
+    expect(diff.output).toBe("a\n" + JSON.stringify({ a: "a", b: "b" }, null, 2));
+  });
+
+  it("③ 图片/音频占位行：类型+大小（base64 折算字节），不输出乱码数据", () => {
+    const r = renderToolResult({ content: [{ type: "image", data: "QUJD", mimeType: "image/png" }] });
+    expect(r.output).toMatch(/（图片：image\/png，约 3 字节——工具结果通道暂只支持文本，内容未带回）/);
+    expect(r.output).not.toContain("QUJD");
+    const a = renderToolResult({ content: [{ type: "audio", data: "", mimeType: "audio/wav" }] });
+    expect(a.output).toMatch(/（音频：audio\/wav，约 0 字节/);
+  });
+
+  it("④ 资源链接转一行可读文字（名字 + uri）", () => {
+    const r = renderToolResult({ content: [{ type: "resource_link", uri: "file:///x/y.md", name: "y" }] });
+    expect(r.output).toBe("资源链接：y <file:///x/y.md>");
+  });
+
+  it("⑤ 全空明确说；未知块明说一行不静默丢；裸字符串块宽容", () => {
+    expect(renderToolResult({ content: [] })).toEqual({ output: "（server 没有返回内容）", isError: false });
+    expect(renderToolResult({})).toEqual({ output: "（server 没有返回内容）", isError: false });
+    const unk = renderToolResult({ content: [{ type: "embedded_resource", resource: {} }] });
+    expect(unk.output).toBe("（未识别的内容块：embedded_resource，已跳过渲染）");
+    expect(renderToolResult({ content: ["裸串"] }).output).toBe("裸串");
   });
 });

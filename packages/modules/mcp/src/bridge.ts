@@ -9,8 +9,13 @@ export interface ServerToolMeta {
   inputSchema?: Record<string, unknown>;
 }
 
-/** server 侧调用句柄（SDK 适配层注入；测试注入 fake）。 */
-export type ServerCall = (name: string, args: unknown, signal: AbortSignal) => Promise<{ content: unknown[] }>;
+/** server 侧调用句柄（SDK 适配层注入；测试注入 fake）。T8 起返回面按 MCP CallToolResult 全形：
+ *  content 块数组（text/image/audio/resource_link/…）+ structuredContent（结构化数据）+ isError。 */
+export type ServerCall = (
+  name: string,
+  args: unknown,
+  signal: AbortSignal,
+) => Promise<{ content?: unknown[]; structuredContent?: unknown; isError?: boolean }>;
 
 const DESCRIPTIION_LIMIT = 4096; // §8.5 不受信消毒：4KB 截断
 
@@ -76,6 +81,50 @@ export function digest(servers: Record<string, string[]>): string {
   return createHash("sha256").update(normalized).digest("hex");
 }
 
+/** T8 结果展示（m4-3c，qwen 占位形态参照）：server 返回四种内容的落地面——
+ *  纯文字直收；结构化数据与文字相同则去重、不同则附后（qwen 等三家同款）；图片音频给占位行
+ *  （类型+大小——工具结果通道是纯文本，图进不来〔带图通道在不做清单顺延〕）；资源链接转一行可读文字；
+ *  全空明确说「没有返回内容」；不认识的块也明说一行（不静默丢——静默丢过 cc-haha 投毒案例的同款盲区）。
+ *  isError 透传（server 标记的失败不再被硬编码 false 吞掉）。 */
+export function renderToolResult(result: { content?: unknown[]; structuredContent?: unknown; isError?: boolean }): { output: string; isError: boolean } {
+  const blocks = Array.isArray(result.content) ? result.content : [];
+  const lines: string[] = [];
+  for (const b of blocks) {
+    if (typeof b === "string") {
+      lines.push(b); // 旧形态宽容（非 SDK 规范但历史出现过的裸字符串块）
+      continue;
+    }
+    const blk = b as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown; uri?: unknown; name?: unknown };
+    if (blk?.type === "text") {
+      lines.push(typeof blk.text === "string" ? blk.text : JSON.stringify(blk.text));
+    } else if (blk?.type === "image" || blk?.type === "audio") {
+      const mime = typeof blk.mimeType === "string" ? blk.mimeType : "未知类型";
+      const bytes = typeof blk.data === "string" ? Math.max(0, Math.floor((blk.data.length * 3) / 4)) : 0;
+      const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} 字节`;
+      lines.push(`（${blk.type === "image" ? "图片" : "音频"}：${mime}，约 ${size}——工具结果通道暂只支持文本，内容未带回）`);
+    } else if (blk?.type === "resource_link") {
+      const uri = typeof blk.uri === "string" ? blk.uri : JSON.stringify(blk.uri);
+      const nm = typeof blk.name === "string" && blk.name !== "" ? blk.name : uri;
+      lines.push(`资源链接：${nm} <${uri}>`);
+    } else {
+      const t = blk !== null && typeof blk === "object" && typeof blk.type === "string" ? `：${String(blk.type)}` : "";
+      lines.push(`（未识别的内容块${t}，已跳过渲染）`);
+    }
+  }
+  if (result.structuredContent !== undefined) {
+    // 去重比对认两种序列化形态：紧凑（server 常把 structuredContent 序列化成 text 回带）与缩进（我方落盘形态）
+    const compact = JSON.stringify(result.structuredContent).trim();
+    const pretty = JSON.stringify(result.structuredContent, null, 2).trim();
+    if (!lines.some((l) => {
+      const t = l.trim();
+      return t === compact || t === pretty;
+    })) lines.push(pretty); // 与文字相同不重复、不同附后
+  }
+  const isError = result.isError === true;
+  if (lines.length === 0) return { output: "（server 没有返回内容）", isError };
+  return { output: lines.join("\n"), isError };
+}
+
 /** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>（MI-07：两段消毒后拼装——注册/审批/模型面
  *  用注册名，server 调用用原样名）；accesses 缺省 fail-closed [all]，server 级声明可放宽。
  *  deferred（M4-3 T5）：server 级「按需加载」标记透传——tool-search 未启用时标记不生效（SW-26 联动）。 */
@@ -97,10 +146,7 @@ export function toBridgedTool(server: string, meta: ServerToolMeta, call: Server
       execute: async (tctx): Promise<ToolResult> => {
         try {
           const result = await call(meta.name, input, tctx.signal);
-          const text = result.content
-            .map((c) => (typeof c === "string" ? c : ((c as { text?: unknown }).text !== undefined ? String((c as { text: string }).text) : JSON.stringify(c))))
-            .join("\n");
-          return { output: text, isError: false };
+          return renderToolResult(result); // T8：四类内容落地 + isError 透传
         } catch (err) {
           return { output: String(err instanceof Error ? err.message : err), isError: true };
         }
