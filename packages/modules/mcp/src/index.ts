@@ -5,7 +5,8 @@ import type { Tool } from "@orosus/contracts/tool";
 import { toBridgedTool, bridgedToolName, digest, sanitizeServerInstructions, stripInvisible, applyLiveList, type ServerToolMeta, type ServerCall } from "./bridge.ts";
 import { createSdkConnection } from "./client.ts";
 import { readProjectMcpJson, gateProjectServers, mcpTrustFile } from "./project.ts";
-import { MCP_PRELOADS, shouldRegisterPreloadTools, readPreloadSchemaCache, writePreloadSchemaCache, withCachedSchemas } from "./preload.ts";
+import { MCP_PRELOADS, shouldRegisterPreloadTools, readPreloadSchemaCache, writePreloadSchemaCache, withCachedSchemas, type PreloadSchemaCache } from "./preload.ts";
+import { BUNDLED_PRELOAD_SCHEMAS } from "./preload-schemas.ts";
 
 export { toBridgedTool, sanitizeToolMeta, sanitizeServerInstructions, sanitizeMcpNamePart, bridgedToolName, digest } from "./bridge.ts";
 export { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS } from "./client.ts";
@@ -365,8 +366,9 @@ export const mcpDef = defineModule({
     const home = orosusHome();
     const preloadToolsOn = shouldRegisterPreloadTools(home);
     // 预装 schema 本地缓存（2026-09-30 拍板）：activate 期读一次——manifestFor 叠加，冷进程的参数面
-    // 从第一个请求就在；onLive 首连后整读整写刷新（in-memory 副本为唯一写源，进程内多 server 互不覆写）
-    let schemaCache = readPreloadSchemaCache(home);
+    // 从第一个请求就在；onLive 首连后整读整写刷新（in-memory 副本为唯一写源，进程内多 server 互不覆写）。
+    // 层序：出厂默认（BUNDLED——2026-09-30 实况抓取烤进代码）垫底、本地缓存覆盖（首连后落盘，应对升级）
+    let schemaCache: PreloadSchemaCache = { ...BUNDLED_PRELOAD_SCHEMAS, ...readPreloadSchemaCache(home) };
     const manifestWithCache = (name: string): ServerToolMeta[] => {
       const pl = MCP_PRELOADS.find((p) => p.name === name);
       return pl === undefined ? [] : (preloadToolsOn ? withCachedSchemas(pl.manifest, schemaCache[name]) : []);
