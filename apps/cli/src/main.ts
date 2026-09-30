@@ -1566,27 +1566,25 @@ const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked
 				return detail();
 			},
 		},
-		d: {
-			label: "d 删除",
-			run: (): string => {
-				if (row.source !== "config") {
-					detailMsg = row.source === "project"
-						? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
-						: "预装 server 只能停用不能删除（Alt + K）";
-					return detail();
-				}
-				if (!deleteArm) {
-					deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
-					detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
-					return detail();
-				}
-				void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
-					const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
-					if (t !== "") app.showToast(t);
-				});
-				return "close";
+		// d 删除只挂手写条目（2026-09-30 用户拍板「预装不允许删除」）：预装/项目行不注册 d——
+		// 键位行不显示、按下走浮层默认键（不引导尝试；详情文本另有「只能停用不能删除」说明行）
+		...(row.source === "config" ? {
+			d: {
+				label: "d 删除",
+				run: (): string => {
+					if (!deleteArm) {
+						deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
+						detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
+						return detail();
+					}
+					void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
+						const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
+						if (t !== "") app.showToast(t);
+					});
+					return "close";
+				},
 			},
-		},
+		} : {}),
 		t: {
 			// 确认信任（2026-09-30 /mcp 命令退役后确认门的新家）：仅未确认态生效——核对指纹后按 t
 			// 写 mcp-trust.json 并重载连接；其余态按下无感（键位行恒定防闪烁——标签只随未确认态显示提示）

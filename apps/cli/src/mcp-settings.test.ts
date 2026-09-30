@@ -52,6 +52,9 @@ describe("T17 管理面纯层（m4-3c）", () => {
     const remote = stripAnsi(mcpTransportLabel(row("r", "connected", { transport: "http", url: "https://x/mcp" })));
     expect(remote).toBe("HTTP（远程）");
     expect(mcpSourceLabel(row("p", "idle", { source: "preload" }))).toBe("预装");
+    // 2026-09-30 用户拍板「预装不允许删除」：预装行详情带说明行（d 键不再注册——纯层钉文案）
+    const pre = stripAnsi(mcpDetailText(76, row("memory", "idle", { source: "preload" })));
+    expect(pre).toContain("只能停用不能删除");
   });
 
   it("④ 描述首行兜底链：instructions→url→command→工具数；pending 显指纹 8 位", () => {

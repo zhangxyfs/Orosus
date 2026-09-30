@@ -151,7 +151,7 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     const row = rows.find((r) => r.name === name);
     if (row !== undefined && row.source !== "config") {
-      return { text: `「${name}」来自${row.source === "project" ? "项目 .mcp.json" : "预装"}——Orosus 不改它的来源；想停用用 \`/mcp off ${name}\``, wrote: false };
+      return { text: `「${name}」来自${row.source === "project" ? "项目 .mcp.json" : "预装（只能停用不能删除）"}——Orosus 不改它的来源；想停用在管理面按 Alt + K`, wrote: false };
     }
     if (!(name in configuredServers(configPath)) && row === undefined) {
       return { text: `没有叫「${name}」的 server（/mcp 查看列表）`, wrote: false };
