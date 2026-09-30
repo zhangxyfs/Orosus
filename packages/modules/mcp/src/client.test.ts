@@ -2,7 +2,7 @@
 // e2e 走 T0 假 server（tests/fixtures/mcp-fixture-server.mjs）；并发与失败面用注入 connect 单测 activateMcp。
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
-import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS } from "./client.ts";
+import { createSdkConnection, DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_CALL_TIMEOUT_MS, collectAllPages, MAX_LIST_PAGES } from "./client.ts";
 import { activateMcp, mcpDef } from "./index.ts";
 
 const FIXTURE = fileURLToPath(new URL("../../../../tests/fixtures/mcp-fixture-server.mjs", import.meta.url));
@@ -144,6 +144,61 @@ describe("T2 调用超时 + 进度顺延（m4-3c）", () => {
       ).rejects.toThrow(/调用超时/);
     } finally {
       await capped.close?.();
+    }
+  });
+});
+
+describe("T3 工具清单翻页到底（m4-3c）", () => {
+  it("① 纯翻页助手：多页按序取全、nextCursor 缺省即止", async () => {
+    const calls: (string | undefined)[] = [];
+    const all = await collectAllPages(async (cursor) => {
+      calls.push(cursor);
+      if (cursor === undefined) return { tools: ["a", "b"], nextCursor: "p2" };
+      if (cursor === "p2") return { tools: ["c"], nextCursor: "p3" };
+      return { tools: ["d"] };
+    });
+    expect(all).toEqual(["a", "b", "c", "d"]);
+    expect(calls).toEqual([undefined, "p2", "p3"]);
+  });
+
+  it("② 死循环保险（opencode 同款）：同一 nextCursor 出现第二次即停——不刷一千页", async () => {
+    let pages = 0;
+    const all = await collectAllPages(async () => {
+      pages += 1;
+      return { tools: ["x"], nextCursor: "loop" };
+    });
+    expect(pages).toBe(2); // 第 1 页拿到 loop（首见续翻）→ 第 2 页又给 loop（再见即停）
+    expect(all).toEqual(["x", "x"]);
+  });
+
+  it("③ 页数帽 = 1000（opencode 同款上限钉）：游标恒新（死循环保险不触发）也到帽即停", async () => {
+    expect(MAX_LIST_PAGES).toBe(1000);
+    let pages = 0;
+    const all = await collectAllPages(async () => {
+      pages += 1;
+      return { tools: [String(pages)], nextCursor: `c${pages}` };
+    });
+    expect(pages).toBe(1000);
+    expect(all).toHaveLength(1000);
+  });
+
+  it("④ e2e：fixture 每页 3 条 + 5 个 bulk 工具 → 翻到底全量（20 条、含末页 bulk4 与点号名）", async () => {
+    const conn = await race(
+      createSdkConnection("fx", fixtureServer({ FIXTURE_TOOL_COUNT: "5", FIXTURE_PAGE_SIZE: "3" })),
+      15_000,
+      "connect",
+    );
+    try {
+      const list = await race(conn.listTools(), 15_000, "listTools");
+      const names = (list as { name: string }[]).map((t) => t.name);
+      expect(names).toContain("echo");
+      expect(names).toContain("bulk4"); // 末页也在
+      expect(names).toContain("dot.name");
+      expect(names).toContain("dot_name");
+      expect(new Set(names).size).toBe(names.length); // 不重不漏
+      expect(names.length).toBeGreaterThanOrEqual(20);
+    } finally {
+      await conn.close?.();
     }
   });
 });
