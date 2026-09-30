@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { sanitizeToolMeta, sanitizeMcpNamePart, bridgedToolName, digest, toBridgedTool } from "./bridge.ts";
 import { activateMcp, collectTools, runTool } from "./index.ts";
@@ -132,12 +133,24 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     for (const t of [t1, t2]) expect((z.toJSONSchema(t.parameters) as { properties?: unknown }).properties).toEqual({});
   });
 
-  it("⑪ MI-07 工具名消毒：非法字符 → `_`、超 64 截断 + 短哈希后缀防碰撞；注册名消毒、server 调用仍用原样名", async () => {
+  it("⑪ MI-07+T4 工具名消毒：非法字符 → `_`、下划线折叠、凡改动即哈希后缀；注册名消毒、server 调用仍用原样名", async () => {
     expect(sanitizeMcpNamePart("my.server id")).toBe("my_server_id");
-    expect(sanitizeMcpNamePart("工具")).toBe("__");
+    expect(sanitizeMcpNamePart("工具")).toBe("_"); // CJK 全替换成下划线后折叠（T4①——不再留 "__"）
+    expect(sanitizeMcpNamePart("a..b")).toBe("a_b"); // 替换产物连续下划线折叠（T4①）
+    expect(sanitizeMcpNamePart("a__b")).toBe("a_b"); // 原生连续下划线同规则折叠——清洗统一，不再区分来源
     expect(sanitizeMcpNamePart("")).toBe("_"); // 空段保底——不产出空名
-    expect(bridgedToolName("gh", "create.issue")).toBe("mcp__gh__create_issue");
-    expect(bridgedToolName("a b", "t")).toBe("mcp__a_b__t");
+    // T4②：凡被改动（替换/折叠/保底）即追加 8 位哈希后缀，哈希按原样名算（两侧都变形也不互撞）
+    const ghHash = createHash("sha256").update("mcp__gh__create.issue").digest("hex").slice(0, 8);
+    expect(bridgedToolName("gh", "create.issue")).toBe(`mcp__gh__create_issue_${ghHash}`);
+    const spHash = createHash("sha256").update("mcp__a b__t").digest("hex").slice(0, 8);
+    expect(bridgedToolName("a b", "t")).toBe(`mcp__a_b__t_${spHash}`);
+    // 未改动的原样名零干扰（不带后缀）
+    expect(bridgedToolName("gh", "create_issue")).toBe("mcp__gh__create_issue");
+    // T4 主诉：「a.b」与「a_b」并存（旧实现洗成同名只能跳过后者）
+    expect(bridgedToolName("s", "a_b")).toBe("mcp__s__a_b");
+    const dotted = bridgedToolName("s", "a.b");
+    expect(dotted.startsWith("mcp__s__a_b_")).toBe(true);
+    expect(dotted).not.toBe("mcp__s__a_b");
     // 两个仅尾段不同的超长名：截断后同前缀，短哈希区分（防「截断即撞名」互踩）
     const longA = bridgedToolName("s", `t${"a".repeat(80)}`);
     const longB = bridgedToolName("s", `t${"a".repeat(79)}b`);
@@ -148,32 +161,37 @@ describe("mcp 桥接（§6.3 两规则 + §8.5 不受信 description）", () => 
     // 桥接工具：注册名/审批规则用消毒名；wire 调用用 server 原样名（消毒只影响我们的注册面）
     const calls: string[] = [];
     const tool = toBridgedTool("gh", { name: "create.issue", description: "d" }, async (n) => { calls.push(n); return { content: [{ type: "text", text: "ok" }] }; });
-    expect(tool.name).toBe("mcp__gh__create_issue");
-    expect((await tool.resolveExecution({})).approvalRule).toBe("mcp__gh__create_issue");
+    expect(tool.name).toBe(`mcp__gh__create_issue_${ghHash}`);
+    expect((await tool.resolveExecution({})).approvalRule).toBe(`mcp__gh__create_issue_${ghHash}`);
     const r = await runTool(tool, {});
     expect(r.output).toBe("ok");
     expect(calls).toEqual(["create.issue"]); // server 收到的仍是它自己宣告的原样名
   });
 
-  it("⑫ MI-07 撞名带内跳过：同 server 清单消毒后撞名 → 首个保留、后来者跳过记录（旧实现两工具同注册名 → registry throw → 整个 mcp 模块降级）", async () => {
+  it("⑫ MI-07+T4 撞名网：变形撞名对并存各得其所（旧实现跳过后者）；真重复原样名仍走跳过网兜底", async () => {
     const logged: Array<{ t: string; p: Record<string, unknown> }> = [];
     const out = await activateMcp({
       servers: { gh: { command: "x" } },
       connect: async () => ({
         listTools: async () => [
-          { name: "create.issue", description: "d1" },
-          { name: "create_issue", description: "d2" }, // 消毒后与上面同注册名
-          { name: "ok", description: "d3" },
+          { name: "create_issue", description: "d1" }, // 未变形——原样注册
+          { name: "create.issue", description: "d2" }, // 变形者带后缀——与上面并存（T4 主诉：旧实现洗成同名跳过后者）
+          { name: "dup", description: "d3" },
+          { name: "dup", description: "d4" }, // 原样重复：清洗后仍同名——跳过网兜底（registry 不 throw）
         ],
         callTool: async () => ({ content: [] }),
       }),
       sessionAppend: (t, p) => void logged.push({ t, p }),
     });
-    expect(out.tools.map((t) => t.name).toSorted()).toEqual(["mcp__gh__create_issue", "mcp__gh__ok"]); // 不炸模块、正常工具照常注册
-    expect(out.skippedTools).toEqual([{ server: "gh", tool: "create_issue", reason: expect.stringContaining("撞车") }]);
+    const names = out.tools.map((t) => t.name);
+    expect(names).toContain("mcp__gh__create_issue"); // 未变形者原样
+    const dotted = names.find((n) => n.startsWith("mcp__gh__create_issue_"));
+    expect(dotted).toBeDefined(); // 变形者带后缀并存——两个工具都可用
+    expect(names.filter((n) => n === "mcp__gh__dup")).toHaveLength(1); // 重复原样名：保留首个
+    expect(out.skippedTools).toEqual([{ server: "gh", tool: "dup", reason: expect.stringContaining("撞车") }]);
     const manifest = logged.find((x: { t: string }) => x.t === "mcp/manifest")!;
-    expect(manifest.p.servers).toEqual({ gh: ["create.issue", "create_issue", "ok"] }); // server 原样清单（与 server 侧可对账）
-    expect(manifest.p.mapping).toEqual({ gh: { "create.issue": "mcp__gh__create_issue" } }); // 改名映射随事件落盘
+    expect(manifest.p.servers).toEqual({ gh: ["create_issue", "create.issue", "dup", "dup"] }); // server 原样清单（与 server 侧可对账）
+    expect(manifest.p.mapping).toEqual({ gh: { "create.issue": dotted } }); // 改名映射随事件落盘
     expect(manifest.p.skipped).toEqual(out.skippedTools); // 跳过清单同样可观测
   });
 
