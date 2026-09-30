@@ -2,12 +2,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { fakeProviderModule } from "@orosus/testing";
 import toolSearch from "@orosus/tool-search";
 import { defineModule, type ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk } from "@orosus/contracts/provider";
 import { activateMcp, toBridgedTool, mcpDef } from "./index.ts";
+import { applyLiveList } from "./bridge.ts";
 
 let dir = "";
 afterEach(() => { if (dir !== "") rmSync(dir, { recursive: true, force: true }); dir = ""; });
@@ -199,5 +201,92 @@ describe("mcp deferred 接线（M4-3 T5）", () => {
     });
     await h.close();
     expect(seen).toEqual({ servers: { big: { command: "x", deferred: true } } });
+  });
+});
+
+describe("懒启动实况 schema 补丁（2026-09-30 修「模型看不到参数面」——静态清单注册的工具无 inputSchema，首连后取实况 listTools 就地换 parameters）", () => {
+  const runTool = async (tool: { resolveExecution(i: unknown): Promise<{ execute(ctx: unknown): Promise<{ output: string }> }> }, args: unknown): Promise<string> => {
+    const plan = await tool.resolveExecution(args);
+    return (await plan.execute({ callId: "t", signal: new AbortController().signal, log: { info: () => {}, warn: () => {}, error: () => {} } } as never)).output;
+  };
+
+  it("⑧ applyLiveList：实况 schema 就地补进（描述保留策展版）、漂移双向报告", () => {
+    const call = async () => ({ content: [] });
+    const tools = [
+      toBridgedTool("ctx7", { name: "resolve-library-id", description: "解析库名" }, call),
+      toBridgedTool("ctx7", { name: "legacy-tool", description: "静态钉版旧名" }, call),
+    ];
+    expect(JSON.stringify(z.toJSONSchema(tools[0]!.parameters))).not.toContain("libraryName"); // 补丁前：空参数面
+    const r = applyLiveList(tools, "ctx7", [
+      { name: "resolve-library-id", description: "live english desc", inputSchema: { type: "object", properties: { libraryName: { type: "string" }, query: { type: "string" } }, required: ["libraryName"] } },
+      { name: "brand-new", description: "实况多出" },
+    ]);
+    expect(r.applied).toEqual(["resolve-library-id"]);
+    expect(r.liveExtra).toEqual(["brand-new"]);
+    expect(r.stale).toEqual(["mcp__ctx7__legacy-tool"]);
+    const schema = z.toJSONSchema(tools[0]!.parameters) as { properties?: Record<string, unknown>; required?: string[] };
+    expect(schema.properties !== undefined && "libraryName" in schema.properties && "query" in schema.properties).toBe(true);
+    expect(schema.required).toEqual(["libraryName"]);
+    expect(tools[0]!.description).toContain("解析库名"); // 描述保留静态策展版——不被实况英文覆盖
+    // 补丁后的 parameters 仍宽松收参（server 侧校验才是权威——本地不误拒）
+    expect(tools[0]!.parameters.safeParse({ extra: 1 }).success).toBe(true);
+  });
+
+  it("⑨ onLive 全链：首调触发一次（不阻塞调用）、实况清单到手换血即生效、二次调用不重触发", async () => {
+    const live = [
+      { name: "resolve-library-id", description: "d", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
+    ];
+    const events: Array<{ name: string; list: typeof live; error?: string }> = [];
+    let listCalls = 0;
+    const out = await activateMcp({
+      servers: { ctx7: { command: "x", lazy: true } },
+      connect: async () => { throw new Error("不应走非惰性连接"); },
+      sessionAppend: () => {},
+      lazy: {
+        manifestFor: () => [{ name: "resolve-library-id", description: "解析库名" }],
+        connect: async () => ({
+          listTools: async () => { listCalls++; return live; },
+          callTool: async (name: string) => ({ content: [{ type: "text", text: `ran:${name}` }] }),
+        }),
+        onStarted: () => {},
+        onLive: (name, list, error) => { events.push({ name, list: list as typeof live, ...(error !== undefined ? { error } : {}) }); },
+      },
+    });
+    const tool = out.tools.find((t) => t.name === "mcp__ctx7__resolve-library-id")!;
+    expect(await runTool(tool, {})).toContain("ran:resolve-library-id"); // 首调照常返回（listTools 旁路不阻塞）
+    await new Promise((res) => setTimeout(res, 20));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.name).toBe("ctx7");
+    expect(events[0]!.list).toBe(live);
+    applyLiveList(out.tools, "ctx7", events[0]!.list); // 宿主侧换血（镜像 mcpDef onLive 体）
+    const schema = z.toJSONSchema(tool.parameters) as { properties?: Record<string, unknown> };
+    expect(schema.properties !== undefined && "query" in schema.properties).toBe(true); // 下一轮 specs 即带参数面
+    await runTool(tool, {});
+    await new Promise((res) => setTimeout(res, 10));
+    expect(events).toHaveLength(1); // 连接 memoized——onLive 不重触发
+    expect(listCalls).toBe(1);
+  });
+
+  it("⑩ onLive 失败路径：listTools 拒绝 → error 回调空清单，静态清单维持不断（不升级为报错）", async () => {
+    const events: Array<{ list: unknown[]; error?: string }> = [];
+    const out = await activateMcp({
+      servers: { ctx7: { command: "x", lazy: true } },
+      connect: async () => { throw new Error("不应走非惰性连接"); },
+      sessionAppend: () => {},
+      lazy: {
+        manifestFor: () => [{ name: "t", description: "d" }],
+        connect: async () => ({
+          listTools: async () => { throw new Error("boom"); },
+          callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+        }),
+        onStarted: () => {},
+        onLive: (_name, list, error) => { events.push({ list, ...(error !== undefined ? { error } : {}) }); },
+      },
+    });
+    expect(await runTool(out.tools[0]!, {})).toContain("ok"); // 调用不受 listTools 失败株连
+    await new Promise((res) => setTimeout(res, 20));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.error).toBe("boom");
+    expect(events[0]!.list).toEqual([]);
   });
 });

@@ -166,3 +166,37 @@ export function toBridgedTool(server: string, meta: ServerToolMeta, call: Server
     }),
   });
 }
+
+/** 懒启动 schema 补丁（2026-09-30 修「模型看不到参数面」：静态清单注册的工具无 inputSchema →
+ *  specs() 空参数面 → 模型瞎发参数吃 server 校验错——首连成功后拿实况 listTools 把真 schema
+ *  补进已注册工具）。**就地换 parameters**：registry 条目身份/注册名/顺序全不动（tools 数组字节
+ *  稳定、reveal 态按名存活、provider 缓存前缀不炸）；描述保留静态清单的策展版不动。activate 后
+ *  contribute.tool 进死 stage、模块侧 disposer 是 no-op（M1 已知限制）——重注册路线走不通，这是
+ *  唯一零扰动的换血口。名单漂移维持优雅降级（实况多出的名字进不来、静态名不在实况照旧 Unknown
+ *  tool）——两边都带回报告供日志。 */
+export function applyLiveList(tools: readonly Tool[], server: string, list: readonly ServerToolMeta[]): {
+  applied: string[];
+  /** 实况有、已注册集合没有——无法后补注册（进不来），仅报告 */
+  liveExtra: string[];
+  /** 静态清单有、实况没有——schema 维持空面，调用会吃 server 的 Unknown tool（原优雅降级） */
+  stale: string[];
+} {
+  const byName = new Map(tools.map((t) => [t.name, t] as const));
+  const applied: string[] = [];
+  const liveExtra: string[] = [];
+  for (const meta of list) {
+    const tool = byName.get(bridgedToolName(server, meta.name));
+    if (tool === undefined) {
+      liveExtra.push(meta.name);
+      continue;
+    }
+    const schemaMeta = schemaMetaOf(meta.inputSchema);
+    if (schemaMeta !== undefined) {
+      (tool as { parameters: Tool["parameters"] }).parameters = z.object({}).passthrough().meta(schemaMeta);
+      applied.push(meta.name);
+    }
+  }
+  const liveRegistered = new Set(list.map((m) => bridgedToolName(server, m.name)));
+  const stale = [...byName.keys()].filter((n) => n.startsWith(`mcp__${sanitizeMcpNamePart(server)}__`) && !liveRegistered.has(n));
+  return { applied, liveExtra, stale };
+}
