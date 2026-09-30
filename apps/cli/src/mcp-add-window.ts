@@ -3,6 +3,7 @@ import { writeNestedTable, type NestedTableValue } from "@orosus/core";
 import { splitCommandLine } from "./mcp-cmd.ts";
 import type { FullApp, HostDialogKeys, DialogKeyCtx } from "./tui/fullapp.ts";
 import type { McpCatalogRow } from "@orosus/mcp";
+import * as theme from "./theme.ts";
 
 /** T17（m4-3c）：Alt + N 添加/修改窗——手动/JSON 两页签（Shift + ←→ 切换、共享草稿互转不丢）、
  *  传输方式三档（行内 ←→ 切换——走查拍板 2026-09-30）、高级区字段随档位联动、JSON 五种错误文案
@@ -188,7 +189,9 @@ export function parseJsonPaste(text: string): { name?: string; values?: Record<s
   return { name, values };
 }
 
-/** 页签/高级区/错误行渲染（widget 清单构造——导出供结构测试）。 */
+/** 页签/高级区/错误行渲染（widget 清单构造——导出供结构测试）。
+ *  配色（2026-09-30 实机走查拍板）：页签选中绿/未选白；传输方式三档并一行（原型 sel-row——
+ *  选中 ● 绿、未选 ○ 白；行内自带「←→ 切换」提示，底部键位行不提）。 */
 export function buildAddWidgets(st: {
   tab: "manual" | "json";
   mode: "add" | "edit";
@@ -199,27 +202,33 @@ export function buildAddWidgets(st: {
   editName?: string | undefined;
 }): WidgetSpec[] {
   const remote = st.transport !== "stdio";
-  const tabLine = `  ${st.tab === "manual" ? "▶ 手动" : "  手动"}  │  ${st.tab === "json" ? "▶ JSON" : "  JSON"}    （Shift + ←→ 切换方式——两种方式共享同一份草稿，切过去内容互转不丢）`;
-  const widgets: WidgetSpec[] = [{ id: "tabs", kind: "text", text: tabLine, style: "accent" }];
+  const tab = (on: boolean, name: string): string => (on ? theme.fg("accent", `▶ ${name}`) : theme.fg("fg", `  ${name}`));
+  const tabLine = ` ${tab(st.tab === "manual", "手动")}   ${tab(st.tab === "json", "JSON")}   ${theme.dim("（Shift + ←→ 切换——草稿互转不丢）")}`;
+  const widgets: WidgetSpec[] = [{ id: "tabs", kind: "text", text: tabLine }];
+  // 传输方式行：三项并一行（单条 list 项保焦点圈——list 是焦点圈的成员，text 不是；1 项无 select 移动、
+  // ❯ 前缀兼作焦点指示：聚焦青玉/失焦灰）
+  const opts = TRANSPORT_TIERS.map((t) => (t.id === st.transport ? theme.fg("accent", `● ${t.label}`) : theme.fg("fg", `○ ${t.label}`))).join("   ");
+  const transportRow = `${theme.fg("muted", "传输方式")}  ${opts}   ${theme.dim("←→ 切换")}`;
+  const advRow = theme.fg("fg", `${st.advOpen ? "▾" : "▸"} 高级选项${st.advOpen ? "" : remote ? "（环境变量 / 请求头 / 超时）" : "（环境变量 / 工作目录 / 超时）"}`);
   if (st.tab === "manual") {
     widgets.push(
       st.mode === "edit"
         ? { id: "name-lock", kind: "kv", label: "名称", value: `${st.editName ?? ""}（名称不可改——删除后重加）` }
-        : { id: "name", kind: "input", placeholder: "my-search——列表和权限规则都靠名字认 server" },
-      { id: "transport", kind: "list", interactive: true, items: TRANSPORT_TIERS.map((t) => `${t.id === st.transport ? "●" : "○"} ${t.label}`) },
-      { id: "cmd", kind: "input", placeholder: remote ? "https://mcp.internal.example.com/sse" : "npx -y my-search-mcp --port 9（整行收——保存时统一拆）" },
-      { id: "adv", kind: "list", interactive: true, items: [`${st.advOpen ? "▾" : "▸"} 高级选项${st.advOpen ? "" : remote ? "（环境变量 / 请求头 / 超时）" : "（环境变量 / 工作目录 / 超时）"}`] },
+        : { id: "name", kind: "input", label: "名称", placeholder: "my-search——列表和权限规则都靠名字认 server" },
+      { id: "transport", kind: "list", interactive: true, items: [transportRow] },
+      { id: "cmd", kind: "input", label: remote ? "URL" : "命令", placeholder: remote ? "https://mcp.internal.example.com/sse" : "npx -y my-search-mcp --port 9（整行收——保存时统一拆）" },
+      { id: "adv", kind: "list", interactive: true, items: [advRow] },
     );
     if (st.advOpen) {
-      widgets.push({ id: "env", kind: "input", multiline: true, lines: 2, placeholder: st.mode === "edit" ? "GITHUB_TOKEN（只写键名=保持原值）" : "GITHUB_TOKEN=… 每行一条" });
-      if (remote) widgets.push({ id: "headers", kind: "input", multiline: true, lines: 2, placeholder: "Authorization=Bearer … 每行一条" });
-      else widgets.push({ id: "cwd", kind: "input", placeholder: "子进程工作目录（仅本地命令）" });
-      widgets.push({ id: "timeout", kind: "input", placeholder: "调用超时（秒，留空 = 60）" });
+      widgets.push({ id: "env", kind: "input", label: "环境变量（可选）", multiline: true, lines: 2, placeholder: st.mode === "edit" ? "GITHUB_TOKEN（只写键名=保持原值）" : "GITHUB_TOKEN=… 每行一条" });
+      if (remote) widgets.push({ id: "headers", kind: "input", label: "请求头（可选）", multiline: true, lines: 2, placeholder: "Authorization=Bearer … 每行一条" });
+      else widgets.push({ id: "cwd", kind: "input", label: "工作目录（可选）", placeholder: "子进程工作目录（仅本地命令）" });
+      widgets.push({ id: "timeout", kind: "input", label: "超时（秒）", placeholder: "调用超时，留空 = 默认 60" });
     }
   } else {
     widgets.push(
       { id: "json-hint", kind: "text", text: "粘贴一段配置——两种格式都吃：{\"名字\": {\"command\": …}} 单 server，或 Claude 包裹 {\"mcpServers\": {…}}。一次只装一个。", style: "muted" },
-      { id: "json", kind: "input", multiline: true, lines: 7, placeholder: "{\"mcpServers\": {\"my-search\": {\"command\": \"npx\", \"args\": [\"-y\", \"my-search-mcp\"]}}}" },
+      { id: "json", kind: "input", label: "JSON", multiline: true, lines: 7, placeholder: "{\"mcpServers\": {\"my-search\": {\"command\": \"npx\", \"args\": [\"-y\", \"my-search-mcp\"]}}}" },
     );
   }
   if (st.err !== "") widgets.push({ id: "msg", kind: "text", text: `✕ ${st.err}`, style: "warn" });
@@ -318,8 +327,7 @@ export function openMcpAddWindow(app: FullApp, opts: {
         const i = TRANSPORT_TIERS.findIndex((t) => t.id === st.transport);
         st.transport = TRANSPORT_TIERS[(i - 1 + TRANSPORT_TIERS.length) % TRANSPORT_TIERS.length]!.id;
         draft.transport = st.transport;
-        ctx.setSel("transport", TRANSPORT_TIERS.findIndex((t) => t.id === st.transport));
-        handle?.update(buildAddWidgets(st));
+        handle?.update(buildAddWidgets(st)); // 单条 list 项无 select 索引——配色即状态
         return true;
       } },
       right: { label: "", run: (ctx: DialogKeyCtx): boolean => {
@@ -327,7 +335,6 @@ export function openMcpAddWindow(app: FullApp, opts: {
         const i = TRANSPORT_TIERS.findIndex((t) => t.id === st.transport);
         st.transport = TRANSPORT_TIERS[(i + 1) % TRANSPORT_TIERS.length]!.id;
         draft.transport = st.transport;
-        ctx.setSel("transport", TRANSPORT_TIERS.findIndex((t) => t.id === st.transport));
         handle?.update(buildAddWidgets(st));
         return true;
       } },
@@ -344,15 +351,9 @@ export function openMcpAddWindow(app: FullApp, opts: {
         else if (e.id === "json") draft.jsonText = text;
         return; // 输入不打扰其余区（错误行保留到下一次保存尝试）
       }
-      if (e.type === "select" && e.id === "transport") {
-        const idx = e.index ?? 0;
-        const tier = TRANSPORT_TIERS[Math.max(0, Math.min(TRANSPORT_TIERS.length - 1, idx))];
-        if (tier !== undefined) { st.transport = tier.id; draft.transport = tier.id; handle?.update(buildAddWidgets(st)); }
-        return;
-      }
       if (e.type === "activate") {
         if (e.id === "adv") { st.advOpen = !st.advOpen; handle?.update(buildAddWidgets(st)); return; }
-        if (e.id === "transport") return; // 传输行 Enter 不做事（←→ 或 ↑↓ 切）
+        if (e.id === "transport") return; // 传输行 Enter 不做事（←→ 切）
         save(); // 其余输入框 Enter = 保存（原型「Enter 激活」）
       }
     },

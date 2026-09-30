@@ -1720,7 +1720,7 @@ describe("控件窗三②交互（m5 T8——input 编辑/提交/换行 + input 
 		await flush();
 		input.emit("data", "a"); // 焦点默认在 q（首个交互控件）
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("[a");
+		expect(stripAnsi(output.buf)).toContain("a▏"); // 2026-09-30 框形：字进框内容行、光标块随行
 		input.emit("data", "\t"); // 焦点 q → l
 		await flush();
 		input.emit("data", "\x1b[B"); // ↓ 动列表
@@ -1729,7 +1729,7 @@ describe("控件窗三②交互（m5 T8——input 编辑/提交/换行 + input 
 		await flush();
 		input.emit("data", "b"); // 回到输入框继续打字
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("[ab");
+		expect(stripAnsi(output.buf)).toContain("ab▏");
 	});
 });
 

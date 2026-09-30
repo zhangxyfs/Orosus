@@ -7,7 +7,7 @@
 import type { WidgetSpec } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { pickLabel } from "../picker.ts";
-import { padToWidth, truncateToWidth, wrapText } from "./width.ts";
+import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 
 const resolveText = (v: string | (() => string)): string => (typeof v === "function" ? v() : v);
 const resolveNum = (v: number | (() => number)): number => (typeof v === "function" ? v() : v);
@@ -136,15 +136,15 @@ export function renderWidgets(widgets: readonly WidgetSpec[], w: number): string
 	return renderWidgetLines(widgets, w).lines;
 }
 
-/** 输入框控件（m5 T8）：框形 [ 文本 ]——聚焦带光标块 ▏、未聚焦灰显占位（placeholder）。
- *  多行按 lines 高度开窗、窗口跟随光标行（超出滚动）；文本按看得见的宽度截到内容宽。 */
+/** 输入框控件（m5 T8；2026-09-30 实机走查改框形）：真边框三行——label 画进顶边（fieldset 形态）、
+ *  框色聚焦白 / 失焦灰（用户拍板）；聚焦光标块 ▏、未动笔显灰占位。多行按 lines 高度开窗、窗口跟随
+ *  光标行（超出滚动）；文本按看得见的宽度截到框内容宽。 */
 function renderInputWidget(
 	wd: Extract<WidgetSpec, { kind: "input" }>,
 	w: number,
 	st: { text: string; cursor: number } | undefined,
 	focused: boolean,
 ): string[] {
-	const inner = Math.max(4, w - 4);
 	const text = st?.text ?? "";
 	const cursor = Math.min(st?.cursor ?? 0, text.length);
 	const logical = text.split("\n");
@@ -163,21 +163,36 @@ function renderInputWidget(
 	const show = wd.multiline === true ? Math.max(1, wd.lines ?? 3) : 1;
 	const start = Math.max(0, Math.min(row, logical.length - show));
 	const win = logical.slice(start, start + show);
-	const boxLine = (line: string, cursorHere: boolean): string => {
+	// 框几何：1 格左缩进 + 右侧 1 格呼吸；框色 = 焦点信号（白/灰——2026-09-30 用户拍板）
+	const boxW = Math.max(6, w - 2);
+	const inner = Math.max(2, boxW - 4);
+	const bc = focused ? "fg" : "muted";
+	// 顶边：┌─ label ───┐（无 label 纯线；label 放不下截断——顶边预算 = 框内宽）
+	const label = wd.label === undefined ? "" : truncateToWidth(wd.label, Math.max(1, boxW - 8));
+	const labelSeg = label === "" ? "" : ` ${label} `;
+	const topFill = Math.max(0, boxW - 2 - 1 - visibleWidth(labelSeg));
+	const contentLine = (line: string, cursorHere: boolean): string => {
 		if (st === undefined && text === "" && wd.placeholder !== undefined) {
-			return ` ${theme.dim(`[${truncateToWidth(wd.placeholder, inner)}]`)}`; // 未动过笔才显占位
+			return theme.dim(truncateToWidth(wd.placeholder, inner)); // 未动过笔才显占位
 		}
-		if (!focused) return ` ${theme.dim(`[${truncateToWidth(line, inner)}]`)}`;
-		if (!cursorHere) return ` [${truncateToWidth(line, inner)}]`;
+		if (!focused || !cursorHere) return truncateToWidth(line, inner);
 		// 光标块插在光标位（码元口径）——超宽时显示窗滑到光标附近
 		const head = line.slice(0, cursor);
 		const tail = line.slice(cursor);
 		const headFit = head.length > inner - 1 ? head.slice(head.length - (inner - 1)) : head;
 		const tailFit = tail.slice(0, Math.max(0, inner - headFit.length));
-		return ` [${headFit}${theme.fg("accent", "▏")}${tailFit}]`;
+		return `${headFit}${theme.fg("accent", "▏")}${tailFit}`;
 	};
 	const out: string[] = [];
-	for (let i = 0; i < win.length; i++) out.push(boxLine(win[i]!, start + i === row));
+	out.push(` ${theme.fg(bc, `┌─${labelSeg}${"─".repeat(topFill)}┐`)}`);
+	for (let i = 0; i < win.length; i++) {
+		out.push(` ${theme.fg(bc, "│")} ${padToWidth(contentLine(win[i]!, start + i === row), inner)} ${theme.fg(bc, "│")}`);
+	}
+	// 空行撑到 show 高（原型 textarea 定高——内容不足也占满行数，多行框不随内容缩）
+	for (let i = win.length; i < show; i++) {
+		out.push(` ${theme.fg(bc, "│")} ${" ".repeat(inner)} ${theme.fg(bc, "│")}`);
+	}
+	out.push(` ${theme.fg(bc, `└${"─".repeat(boxW - 2)}┘`)}`);
 	return out;
 }
 

@@ -804,10 +804,14 @@ export class FullApp {
 				if (installed === undefined || this.pendingUi !== installed) return; // 路 3：句柄更新——换清单滚回顶部（设计空白 14）
 				installed.widgets = widgets;
 				installed.selById = {};
-				installed.inputById = {};
 				installed.scroll = 0;
+				// inputById 与焦点保留（2026-09-30 实机走查：表单窗同 id 重拼是常态——切传输方式/开高级区
+				// 重拼清单时清输入 = 已敲的字凭空蒸发、焦点跳回第一格；设计空白 14 钉的是滚回顶部，不含这俩。
+				// 消失的 id 留着无害（渲染按 id 现读），焦点 id 不在新清单才回落首格）
 				const ids = this.dialogInteractiveIds(widgets);
-				installed.focusedId = ids.length > 0 ? ids[0] : undefined; // 无交互控件 = 无焦点（exactOptional 收窄）
+				if (installed.focusedId === undefined || !ids.includes(installed.focusedId)) {
+					installed.focusedId = ids.length > 0 ? ids[0] : undefined; // 无交互控件 = 无焦点（exactOptional 收窄）
+				}
 				this.scheduler.requestImmediateRender();
 			},
 			close: () => {
@@ -2891,7 +2895,9 @@ export class FullApp {
 		const ow = geo.width;
 		const inner = ow - 2;
 		const bc = "accent";
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
+		// 先截断再补齐（2026-09-30 实机走查：控件行超宽时 padToWidth 只补不切——右边框被顶出去，
+		// 终端软换行把底线推歪 = 「左右竖线不直」的根因；截断口径与其余四窗「源头截断」同族）
+		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(truncateToWidth(l, inner), inner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
 		// CTU-09（2026-09-28 code review）：标题源头截断（spec.title 模块供给可超长——原靠 padToWidth 兜底
 		// 切掉右框角；预算 = ow − ╭─(2) − 首尾空格(2) ─╮(2) − 最小 fill(1)）
@@ -2913,8 +2919,13 @@ export class FullApp {
 		const upN = sc;
 		const downN = content.length - sc - win.length;
 		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
-		const hostLabels = pu.hostKeys === undefined ? "" : Object.values(pu.hostKeys).map((k) => k.label).join(" · ");
-		const hint = ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`;
+		// 键位行（2026-09-30 实机走查重排）：宿主自定义键的标签过滤空串（同键多绑只标一次——空标签混进
+		// join 出「· ·」断片）；有自定义键 = 窗自带完整键表（Enter/Esc 内建兜底），不再拼通用「↑↓ 选择 ·
+		// Tab 换焦点」表单窗用不上的段；无自定义键维持原通用句
+		const hostLabels = pu.hostKeys === undefined ? "" : [...new Set(Object.values(pu.hostKeys).map((k) => k.label).filter((l) => l !== ""))].join(" · ");
+		const hint = pu.hostKeys === undefined
+			? ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`
+			: ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}Enter 激活 · Esc 关闭`;
 		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(inner) + "╯")));
 		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };

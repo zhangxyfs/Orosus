@@ -5,12 +5,28 @@ import { stripAnsi } from "./width.ts";
 import { fg, dim } from "../theme.ts";
 
 describe("控件渲染器三②（m5 T8——input/columns/table 纯渲染面）", () => {
-	it("① input：未聚焦灰显占位、聚焦带光标块", () => {
+	it("① input：未动笔灰显占位、聚焦带光标块", () => {
 		const w = renderWidgetLines([{ id: "i", kind: "input", placeholder: "说点什么" }], 20).lines;
 		expect(stripAnsi(w.join("\n"))).toContain("说点什么");
 		const f = renderWidgetLines([{ id: "i", kind: "input" }], 20, { focusedId: "i", inputById: { i: { text: "hi", cursor: 2 } } }).lines;
 		expect(stripAnsi(f.join("\n"))).toContain("hi");
 		expect(f.join("\n")).toContain("▏"); // 光标块
+	});
+
+	it("①b input 框形（2026-09-30 实机走查拍板）：label 画进顶边；框色聚焦白/失焦灰；单行 = 顶边+内容+底边三行", () => {
+		const w = renderWidgetLines([{ id: "i", kind: "input", label: "名称" }], 30).lines;
+		expect(w.length).toBe(3); // 三行框
+		expect(stripAnsi(w[0]!)).toBe(" ┌─ 名称 " + "─".repeat(19) + "┐"); // 顶边 label 形态（boxW=28）
+		expect(stripAnsi(w[1]!)).toBe(" │" + " ".repeat(26) + "│"); // 内容行框边
+		expect(stripAnsi(w[2]!)).toBe(" └" + "─".repeat(26) + "┘");
+		// 框色：聚焦 = fg（白）、失焦 = muted（灰）——顶边整行单包，直接整行比对
+		const focused = renderWidgetLines([{ id: "i", kind: "input", label: "名称" }], 30, { focusedId: "i" }).lines;
+		const top = (c: "fg" | "muted"): string => " " + fg(c, `┌─ 名称 ${"─".repeat(19)}┐`);
+		expect(w[0]).toBe(top("muted"));
+		expect(focused[0]).toBe(top("fg"));
+		// 无 label 顶边纯线
+		const nl = renderWidgetLines([{ id: "i", kind: "input" }], 20).lines;
+		expect(stripAnsi(nl[0]!)).toBe(" ┌" + "─".repeat(16) + "┐");
 	});
 
 	it("② input 多行 lines 开窗跟随光标行（5 行文本 lines=2 → 只显光标附近两行）", () => {
@@ -19,7 +35,8 @@ describe("控件渲染器三②（m5 T8——input/columns/table 纯渲染面）
 		const plain = stripAnsi(f.join("\n"));
 		expect(plain).toContain("d");
 		expect(plain).toContain("e");
-		expect(plain).not.toContain("[a");
+		expect(plain).not.toContain("a");
+		expect(f.length).toBe(4); // 顶边 + 两行内容 + 底边
 	});
 
 	it("③ columns 均分两列并列（列间 │ 分隔）", () => {
