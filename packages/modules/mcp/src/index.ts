@@ -19,7 +19,7 @@ export interface ServerConnection {
 }
 
 export interface ActivateMcpOpts {
-  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean }>;
+  servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number }>;
   connect: (name: string, cfg: { command?: string; args?: string[]; env?: Record<string, string>; url?: string }) => Promise<ServerConnection>;
   sessionAppend: (type: string, payload: Record<string, unknown>) => void;
 }
@@ -132,11 +132,13 @@ export const mcpDef = defineModule({
       // ToolSearch 按需加载（M4-3 T5，kimi server 级开关同款边界——只有 MCP 工具可被隐藏）：
       // true = 该 server 的桥接工具全标 deferred；tool-search 未启用时标记不生效（SW-26 联动，照常全量进请求）
       deferred: z.boolean().optional(),
+      // 调用超时 server 级覆盖（T2）：缺省 60s；长任务 server 可调大（毫秒、正数）
+      timeoutMs: z.number().positive().optional(),
     })).default({}),
   }),
   logEvents: ["mcp/manifest"],
   mounts: ["contribute:tool", "contribute:promptSection"],
-  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean }> }>) {
+  async activate(ctx: ModuleContext<{ servers: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; enabled?: boolean; accesses?: unknown[]; deferred?: boolean; timeoutMs?: number }> }>) {
     // SDK 接线收在 client.ts（T1 起）：并发/超时/说明书等连接行为在那里对 fixture e2e 测试
     const out = await activateMcp({
       servers: ctx.config.servers,
