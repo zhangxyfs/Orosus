@@ -23,6 +23,9 @@ export interface LoopOptions {
   /** 实时旁路（M4-1 T4/D45）：流式 Chunk 的内存投递口（harness liveChunks 通道）。
    *  T4 并存态：assistantChunk 照落日志 + livePush 双投；T5 断流后仅剩 livePush。 */
   livePush?: (chunk: Chunk) => void;
+  /** 网络重试退避表（2026-09-30 拍板 a）：传输层失败（errorCode "network"）且本 turn 零产出时按下表
+   *  延迟重发——缺省 [1s, 3s]（代理切换/瞬时抖动通常秒级回稳）；测试注入短值防拖慢。 */
+  networkRetryDelaysMs?: readonly number[];
 }
 
 interface PendingToolCall {
@@ -109,11 +112,13 @@ async function* executeGroups(
 export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent> {
   const { session, bus, tools, provider, model, system, signal, sink } = opts;
   const reasoningEffort = opts.reasoningEffort;
+  const networkRetryDelays = opts.networkRetryDelaysMs ?? [1_000, 3_000];
   const turnStart = await session.append(LOG_TYPES.turnStart, { model });
   await bus.emit("turn/start", { turnId: turnStart.id, model }); // m5 T9（设计空白 17）：busy 自推事件面——turn 事件上总线（此前只进 session 流，模块照方订阅永不触发）
   const log = createLogger(sink, "loop").withCtx({ sess: session.sessionId, turn: turnStart.id });
   let lastRequestSig: string | null = null;
   let overflowRetried = false; // 溢出重试每 turn 至多一次（D43：重试后仍超限即终局，防打转）
+  let networkRetries = 0; // 网络重试每 turn 至多 networkRetryDelays.length 次（拍板 a：零产出才重发，限次防打转）
 
   async function* emit(type: string, fields?: Record<string, unknown>): AsyncGenerator<SessionEvent, SessionEvent> {
     const e = await session.append(type, fields);
@@ -213,7 +218,11 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
       lengthHit = true;
       log.warn("loop.finish.length", "输出达 max_tokens 上限被截断（finishKind=length 已落 assistant/message 与 turn/end）");
     }
-    log.debug("loop.provider.stream-finish", "provider 流式结束", { kind: finish.kind });
+    log.debug("loop.provider.stream-finish", "provider 流式结束", {
+      kind: finish.kind,
+      ...(finish.kind === "error" ? { errorMessage: finish.errorMessage, ...(finish.errorCode !== undefined ? { errorCode: finish.errorCode } : {}) } : {}), // 拍板 b：错误详情进诊断日志（此前只记 kind——fetch failed 真因无从查）
+    });
+    if (finish.kind === "error") log.warn("loop.provider.stream-error", "provider 流式失败", { errorMessage: finish.errorMessage, ...(finish.errorCode !== undefined ? { errorCode: finish.errorCode } : {}) });
 
     if (text !== "" || reasoning !== "" || pending.size > 0) {
       // 完成事件扩形（T5/D45）：content 块数组（reasoning 在前 text 在后）+ usage——纯工具回合 content 留空数组
@@ -241,10 +250,30 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
         await bus.emit(CORE_POINTS.requestError, { code: "context_limit", errorMessage: finish.errorMessage, turn: turnStart.id });
         continue outer; // 重试步注记：lastRequestSig 不变不落重复 request/header；turn/step 多落合法；steering 已排空
       }
+      // 网络重试（2026-09-30 拍板 a）：传输层失败（errorCode "network"——fetch/读流抛错，适配器打码）且本 turn
+      // 零产出（text/reasoning/pending 全空——防重复 assistant 投影，比 context_limit 多查 reasoning：网络错误
+      // 前若已流出思考半截，重发会把两份 reasoning 先后物化进显示面）。代理切换/瞬时抖动是实锤场景
+      //（2026-09-30 fetch failed 挂 150s 杀回合）。退避表耗尽即终局；退避期可被 abort 打断（不打满等待）。
+      if (finish.errorCode === "network" && networkRetries < networkRetryDelays.length
+          && text === "" && reasoning === "" && pending.size === 0) {
+        const delay = networkRetryDelays[networkRetries]!;
+        networkRetries++;
+        log.warn("loop.provider.network-retry", `网络错误将重发（第 ${networkRetries}/${networkRetryDelays.length} 次，${Math.round(delay)}ms 后）`, { errorMessage: finish.errorMessage });
+        await bus.emit(CORE_POINTS.requestError, { code: "network", errorMessage: finish.errorMessage, turn: turnStart.id });
+        await new Promise<void>((resolve) => {
+          const onAbort = (): void => { clearTimeout(timer); resolve(); };
+          const timer = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, delay);
+          signal.addEventListener("abort", onAbort, { once: true }); // 计时器刻意不 unref：退避期回合在飞，进程须存活（unref 会让管道/--print 场景事件循环抽空、以「未完成顶层 await」exit 13 提前退场）；abort 即清、自然到点即已完成——无悬挂句柄
+        });
+        if (signal.aborted) { endKind = "interrupted"; break; }
+        continue outer; // 同 context_limit 重试步注记：不落重复 header，steering 已排空
+      }
       endKind = "error";
       endDetail = finish.errorCode === "context_limit"
         ? `${finish.errorMessage ?? ""}（已自动压缩重试仍超限——可 /compact 或换更大窗口模型）`
-        : finish.errorMessage;
+        : finish.errorCode === "network" && networkRetries > 0
+          ? `${finish.errorMessage ?? ""}（已自动重发 ${networkRetries} 次仍网络错误——检查网络/代理后重试）`
+          : finish.errorMessage;
       break;
     }
 
@@ -307,6 +336,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     ...(lengthHit ? { finishKind: "length" } : {}), // CL-03：本 turn 曾按 max_tokens 截断——终局事件带内记档（completed 语义不变）
   });
   await bus.emit("turn/end", { kind: endKind }); // m5 T9：busy 自推事件面（与 turn/start 成对）
-  log.info("loop.turn.end", `turn 结束：${endKind}`);
+  if (endKind === "error" && endDetail !== undefined) log.info("loop.turn.end", `turn 结束：${endKind}`, { errorMessage: endDetail }); // 拍板 b：错误终局带详情（会话日志 turn/end 同款带内）
+  else log.info("loop.turn.end", `turn 结束：${endKind}`);
   await session.flush();
 }

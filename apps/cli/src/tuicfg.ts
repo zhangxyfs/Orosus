@@ -16,6 +16,12 @@ export function resolveLatexFlag(cfgLatex: unknown): boolean {
   return typeof cfgLatex === "boolean" ? cfgLatex : true;
 }
 
+/** 回合结束提示音开关解析（2026-09-30 用户拍板）：[tui] bell，布尔、缺省 true（开）——完成 1 响/
+ *  中断 2 响/错误 3 响（bell.ts）。非法值按未配置处理，与 latex 同式；TTY 才响（--print 管道静默）。 */
+export function resolveBellFlag(cfgBell: unknown): boolean {
+  return typeof cfgBell === "boolean" ? cfgBell : true;
+}
+
 /** 字节数人性化（磁盘占用视图用）。 */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
