@@ -45,7 +45,7 @@ GITHUB_TOKEN = "$ENV:GITHUB_TOKEN"   # 从宿主环境读取；也可直接写�
 `memory`（跨会话知识图谱记忆）/ `context7`（库文档检索）/ `github`（要配 `GITHUB_TOKEN` 环境变量）/ `everything`（官方自检）/ `puppeteer`（浏览器自动化）。全部 `lazy` + `deferred` 双标记：**Orosus 启动时一个进程都不起**，第一次真正调用某个工具才连接（首次要等 npx 下载包，预算 60 秒）；预装件优先级最低（自己配置同名条目以你的为准）、只能停用不能删除、不走信任门。
 
 - **`puppeteer` 的诚实标注**：导航、点击、抓文字、执行 JS 返回的都是文字，现在就能用；**截图返回的是图片，而工具结果通道目前是纯文本**——只会显示一行占位说明（预期行为非 bug）。「工具结果带图通道」在顺延台账里，那天做了截图自然复活。
-- **预装工具的注册门**：预装工具整体走 tool-search 按需加载——**需要 tool-search 显式启用**（`~/.orosus/modules.d/tool-search.toml` 里 `[tool-search]` `enabled = true`）。未启用时预装仍出现在管理面/斜杠菜单（可启停查看），但不注册工具——否则几十个工具会灌爆每个请求的上下文。启用后 `/reload` 生效。
+- **预装工具与 tool-search**：预装工具整体走 tool-search 按需加载（搜索到才进请求）——tool-search **默认启用**（2026-09-30 起随预装批翻开，预装开箱即用）。显式关掉它（`[tool-search]` `enabled = false`）时预装仍出现在管理面/斜杠菜单（可启停查看），但不注册工具——关态下 deferred 标记不生效，几十个工具会灌爆每个请求的上下文。改完 `/reload` 生效。
 - `github` 缺令牌时连接失败，详情页的 stderr 尾巴会带 server 自己的引导文案。
 
 ## 排障

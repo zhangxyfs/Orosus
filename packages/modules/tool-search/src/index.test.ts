@@ -95,7 +95,8 @@ describe("tool-search meta 工具与目录段（M4-3 T4）", () => {
 
   it("T4-⑨ 模块开关与 mounts：关态 = 模块整门不启（SW-26 钉）；声明 mounts 未列位即抛", async () => {
     tmp();
-    // 关态（defaultEnabled:false 且无配置）：模块不激活——audit 落 disabled、meta 工具不存在
+    // 关态（2026-09-30 默认翻开后须显式关：[tool-search] enabled = false）：模块不激活——audit 落 discovered、meta 工具不存在
+    writeFileSync(join(dir, "n.toml"), "[tool-search]\nenabled = false\n", "utf8");
     const h = await createHarness({
       store: new InMemorySessionStore(),
       diagDir: dir, spillDir: join(dir, "spill"),
@@ -105,6 +106,16 @@ describe("tool-search meta 工具与目录段（M4-3 T4）", () => {
     expect(h.graph().audit().find((a) => a.name === "tool-search")?.state).toBe("discovered");
     expect(h.graph().commands.find((c) => c.name === "tool-search__search")).toBeUndefined();
     await h.close();
+    // 无配置默认开（2026-09-30 拍板翻转）：meta 工具在场
+    const h0 = await createHarness({
+      store: new InMemorySessionStore(),
+      diagDir: dir, spillDir: join(dir, "spill0"),
+      modules: [toolSearch, fakeProviderModule("fake", [])],
+      config: { userFile: join(dir, "n0.toml"), projectFile: join(dir, "p0.toml"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    expect(h0.graph().audit().find((a) => a.name === "tool-search")?.state).toBe("active");
+    expect(h0.graph().tools.toolInfos().find((t) => t.name === "tool-search__search")).toBeDefined(); // 工具面非命令面
+    await h0.close();
     // 开态但 mounts 收紧：声明 mounts 未含 tools.reveal → enable 调用抛错（模块降级非炸穿）
     const tight: ModuleDefinition = defineModule({
       name: "tool-search", version: "0.1.0", description: "x", api: 1,

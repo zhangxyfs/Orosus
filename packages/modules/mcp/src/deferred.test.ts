@@ -75,6 +75,8 @@ describe("mcp deferred 接线（M4-3 T5）", () => {
       [{ type: "text/delta", text: "好" }, { type: "finish", kind: "stop" }],
     ];
     const mem = new InMemorySessionStore();
+    // 2026-09-30 默认翻开后关态须显式：[tool-search] enabled = false（机制整门不启，deferred 工具照常可调）
+    writeFileSync(join(dir, "u.toml"), "[tool-search]\nenabled = false\n", "utf8");
     const h = await createHarness({
       store: mem,
       diagDir: dir, spillDir: join(dir, "spill"),

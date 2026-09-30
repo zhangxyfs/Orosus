@@ -182,7 +182,7 @@ Orosus/
 │       ├── tool-web/            # fetch/search（SSRF 防护/turndown/三后端搜索）
 │       ├── tool-ask/            # ask_user 用户提问
 │       ├── tool-goal/           # goal create/get/update 会话目标
-│       ├── tool-search/         # 延迟工具目录 meta 搜索（默认关）
+│       ├── tool-search/         # 延迟工具目录 meta 搜索（默认开——2026-09-30 预装批翻开）
 │       ├── tool-todo/           # todo_write 任务清单
 │       ├── tool-subagent/       # spawn 子代理派生
 │       ├── approval/            # 审批（vendored tree-sitter-bash）
@@ -399,7 +399,7 @@ chunk/event → 条目 → 行数组投影；条目级 LineCache（宽度级缓�
 
 3 工具：`create / get / update(complete|blocked)`。**单目标纪律**（已有 active 再 create 报错带现状，replace 可覆盖）；OBJECTIVE_MAX=4000；**blocked 三连判定按续跑轮**（同轮重复不累计、换 reason 清零，streak≥3 才受理）；maxRounds 预算耗尽自动置 blocked；`agent/follow-up` 每轮注入目标提醒（用户消息位，保前缀缓存）。
 
-#### tool-search（134 行）— 延迟工具目录（默认关）
+#### tool-search（134 行）— 延迟工具目录（默认开——2026-09-30 预装批翻开；enabled = false 显式关）
 
 `defaultEnabled: false`。`search` meta 工具：目录源 = `tools.list({deferredOnly:true})`；打分表（精确名短路 1000 / 名词 10 / 子串 5 / hint 4 / 描述 2）取前 5；命中 `tools.reveal` 下一轮可调；目录段 order 21 行数帽 50。
 
