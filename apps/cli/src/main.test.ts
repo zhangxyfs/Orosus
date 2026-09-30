@@ -471,8 +471,10 @@ describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM
     try {
       const r1 = await runRepl(d, ["/mcp", "/quit"]);
       expect(r1.code).toBe(0);
-      expect(r1.out).toContain("还没有配置任何 MCP server");
-      expect(r1.out).toContain("docs/mcp-servers.md");
+      // T20 后预装五件常驻（lazy 待启动行——零进程）；空态文案只在预装被同名覆盖/停用时不可达，改钉预装面
+      expect(r1.out).toContain("共 5 个 MCP server");
+      expect(r1.out).toMatch(/\*\*memory\*\* 待启动 · \d+ 个工具 · 按需启动/); // 预装行：清单数的工具 + 按需启动括注
+      expect(r1.out).toContain("**puppeteer** 待启动");
       const r2 = await runRepl(d, ["/mcp add demo npx -y some-package", "/mcp", "/quit"]);
       expect(r2.code).toBe(0);
       expect(r2.out).toContain("已写入 **demo**");
