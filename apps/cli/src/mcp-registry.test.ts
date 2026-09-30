@@ -154,8 +154,8 @@ describe("T14 browse/install 命令分支（注入式）", () => {
     const dp = deps(d);
     const clean = await runMcpCommand("install plain", dp);
     expect(clean.wrote).toBe(true);
-    const doc = parse(readFileSync(dp.configPath(), "utf8")) as { mcp: { servers: Record<string, unknown> } };
-    expect(doc.mcp.servers.plain).toEqual({ command: "npx", args: ["-y", "plain"] });
+    const doc = (parse(readFileSync(dp.configPath(), "utf8")) as { mcp?: { servers?: Record<string, Record<string, unknown>> } }).mcp?.servers ?? {};
+    expect(doc.plain).toEqual({ command: "npx", args: ["-y", "plain"] });
     const gh = await runMcpCommand("install github-mcp-server", dp);
     expect(gh.wrote).toBe(false);
     expect(gh.text).toContain("需要密钥");
@@ -174,6 +174,6 @@ describe("T14 browse/install 命令分支（注入式）", () => {
     const offline = { ...deps(d), fetchImpl: (async () => { throw new Error("离线"); }) as typeof fetch };
     const r = await runMcpCommand("install plain", offline);
     expect(r.wrote).toBe(true);
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers.plain).toBeDefined();
+    expect((parse(readFileSync(dp.configPath(), "utf8")) as { mcp?: { servers?: Record<string, unknown> } }).mcp?.servers?.plain).toBeDefined();
   });
 });

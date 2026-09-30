@@ -134,10 +134,11 @@ export interface McpCatalogRow {
   fingerprint?: string;
   source: "config" | "project" | "preload";
   transport: "stdio" | "http";
-  /** 展示形命令（command + args 空格拼）——stdio 型 */
-  command?: string;
-  url?: string;
-  deferred?: boolean;
+  /** 展示形命令（command + args 空格拼）——stdio 型。显式 | undefined（exactOptional：
+   *  构造点经 displayCommand 拿 string | undefined，条件展开外仍需可显式置空）。 */
+  command?: string | undefined;
+  url?: string | undefined;
+  deferred?: boolean | undefined;
 }
 
 function displayCommand(cfg: Record<string, unknown>): string | undefined {

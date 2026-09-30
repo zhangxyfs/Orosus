@@ -25,6 +25,10 @@ const deps = (dir: string, rows?: McpCatalogRow[]): McpCmdDeps => ({
   ...(rows !== undefined ? { catalogRows: () => rows } : {}),
 });
 
+/** smol-toml parse 的收窄口（测试内联形状——TomlValue 联合不认 .mcp.servers 链）。 */
+const serversOf = (p: string): Record<string, Record<string, unknown>> =>
+  ((parse(readFileSync(p, "utf8")) as { mcp?: { servers?: Record<string, Record<string, unknown>> } }).mcp?.servers) ?? {};
+
 const row = (name: string, state: McpCatalogRow["state"], extra: Partial<McpCatalogRow> = {}): McpCatalogRow => ({
   name, state, toolCount: 3, tools: ["a", "b", "c"], source: "config", transport: "stdio", command: "npx pkg", ...extra,
 });
@@ -88,7 +92,7 @@ describe("T13 /mcp 命令族（注入式）", () => {
     const guard = await runMcpCommand("add bad C:\\Program Files\\x.exe --p", dp);
     expect(guard.wrote).toBe(false);
     expect(guard.text).toContain("加引号");
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers).toHaveProperty("gh"); // 未被污染
+    expect(serversOf(dp.configPath())).toHaveProperty("gh"); // 未被污染
   });
 
   it("③ remove：手写条目删表；项目/预装来源拒绝（指路 off）；未知名提示", async () => {
@@ -115,16 +119,16 @@ describe("T13 /mcp 命令族（注入式）", () => {
     const dp = deps(d, [row("gh", "connected"), row("proj", "connected", { source: "project" })]);
     const off = await runMcpCommand("off gh", dp);
     expect(off.wrote).toBe(true);
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers.gh).toEqual({ command: "npx", args: ["-y", "p"], enabled: false });
+    expect(serversOf(dp.configPath()).gh).toEqual({ command: "npx", args: ["-y", "p"], enabled: false });
     const projOff = await runMcpCommand("off proj", dp);
     expect(projOff.wrote).toBe(true);
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers.proj).toEqual({ enabled: false }); // 覆盖条目
+    expect(serversOf(dp.configPath()).proj).toEqual({ enabled: false }); // 覆盖条目
     const onR = await runMcpCommand("on gh", dp);
     expect(onR.wrote).toBe(true);
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers.gh).toEqual({ command: "npx", args: ["-y", "p"], enabled: true });
+    expect(serversOf(dp.configPath()).gh).toEqual({ command: "npx", args: ["-y", "p"], enabled: true });
     const projOn = await runMcpCommand("on proj", dp);
     expect(projOn.wrote).toBe(true);
-    expect(parse(readFileSync(dp.configPath(), "utf8")).mcp.servers.proj).toBeUndefined(); // 覆盖条目删除——还原来源
+    expect(serversOf(dp.configPath()).proj).toBeUndefined(); // 覆盖条目删除——还原来源
   });
 
   it("⑤ trust：无待确认明说；清单显指纹；trust 名字登记 + wrote=true", async () => {

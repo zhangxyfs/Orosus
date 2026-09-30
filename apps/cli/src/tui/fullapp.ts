@@ -395,6 +395,28 @@ function isSubseq(q: string, target: string): boolean {
 	return i === q.length;
 }
 
+/** 控件窗自定义键表（T17 m4-3c 宿主侧扩展）：契约 DialogSpec 不动——宿主调用点用超集
+ *  openDialogHost(spec) 传键；表单类窗（MCP 添加窗）需要行内 ←→、Shift+←→ 切页签这类
+ *  超出「Tab 循环 + ↑↓ 选择」内建面的键。 */
+export type HostDialogKeys = Record<string, { label: string; run: (ctx: DialogKeyCtx) => boolean | void }>; // 返回 false = 不消费回落内建键
+
+/** pick 列表自定义键（T17 m4-3c 宿主侧扩展）：列表页 Alt + N / Alt + K 的载体——run 拿
+ *  关闭口（close = 以 undefined 结算——调用方用旗标区分「键关闭」与「Esc 返回」）。 */
+export type PickExtraKeys = Record<string, { label: string; run: (ctrl: { close(): void }) => boolean | void }>;
+
+/** 控件窗键上下文（T17）：闭包读写窗态的窄口。 */
+export interface DialogKeyCtx {
+	focusedId?: string | undefined;
+	focusIds: readonly string[];
+	setFocus(id: string): void;
+	moveFocus(delta: number): void;
+	selOf(id: string): number | undefined;
+	setSel(id: string, index: number): void;
+	inputOf(id: string): string;
+	setInput(id: string, text: string): void;
+	close(): void;
+}
+
 export class FullApp {
 	private io: FullAppIO;
 	private term: Term;
@@ -614,10 +636,10 @@ export class FullApp {
 	// ---------- 全屏 CommandUi 适配面（choose → overlay 选择器；ask/askSecret → 输入行询问） ----------
 
 	private pendingUi:
-		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string }
+		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys }
 		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined; viewPage?: number }
-		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"] }
+		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"]; hostKeys?: HostDialogKeys }
 		| undefined;
 
 	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
@@ -726,6 +748,12 @@ export class FullApp {
 	 *  句柄闭包查属主与存活——窗已关/模块已卸载后调用 = 无操作不报错；
 	 *  排队期（窗还没开）的 update/close 同款无操作。 */
 	openDialog(spec: DialogSpec, owner?: string): DialogHandle | undefined {
+		return this.openDialogHost(spec, owner);
+	}
+
+	/** 控件窗宿主超集（T17 m4-3c）：DialogSpec + 自定义键（hostKeys）。契约面不动——模块仍走
+	 *  openDialog（键被静默丢弃）；宿主表单窗用本口。 */
+	openDialogHost(spec: Omit<DialogSpec, "layout"> & { layout?: PopupLayout | "dock"; hostKeys?: HostDialogKeys }, owner?: string): DialogHandle | undefined {
 		const lists = this.dialogInteractiveIds(spec.widgets);
 		let installed: (typeof this.pendingUi) & { kind: "dialog" } | undefined;
 		const open = (): void => {
@@ -748,6 +776,7 @@ export class FullApp {
 				selById: {},
 				inputById: {},
 				...(spec.onEvent !== undefined ? { onEvent: spec.onEvent } : {}),
+				...(spec.hostKeys !== undefined ? { hostKeys: spec.hostKeys } : {}),
 			};
 			installed = e;
 			this.pendingUi = e;
@@ -819,9 +848,9 @@ export class FullApp {
 	}
 
 	/** 选中项行位跟随（窗口滚动针对焦点列表的选中项最小平移）。 */
-	private dialogFollowSel(pu: { widgets: readonly WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number> }): void {
+	private dialogFollowSel(pu: { widgets: readonly WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number> }): void {
 		if (pu.focusedId === undefined) return;
-		const geo = this.viewGeo(pu.layout);
+		const geo = this.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
 		const wl = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, focusedId: pu.focusedId });
 		const li = wl.lists.find((l) => l.id === pu.focusedId);
 		if (li === undefined) return;
@@ -910,11 +939,11 @@ export class FullApp {
 		return Math.max(8, this.io.columns() - this.sidebarW() - 1) - 2 - 4;
 	}
 
-	pickOverlay(title: string, items: string[], selAt = 0): Promise<number | undefined> {
+	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys): Promise<number | undefined> {
 		if (this.pendingUi !== undefined) {
 			return new Promise((resolve) => this.uiQueue.push({ run: () => {
 				if (this.stopped) { resolve(undefined); return; }
-				void this.pickOverlay(title, items, selAt).then(resolve);
+				void this.pickOverlay(title, items, selAt, keys).then(resolve);
 			} }));
 		}
 		this.state.overlayOpen = false; // 与斜杠菜单互斥
@@ -927,6 +956,7 @@ export class FullApp {
 				sel: Math.max(0, Math.min(items.length - 1, selAt)), // m4-7 T9：初始选中（详情 Esc 回列表选中行回到该技能）
 				resolve,
 				...(items.length >= 12 ? { filter: "" } : {}),
+				...(keys !== undefined ? { extraKeys: keys } : {}),
 			};
 			this.scheduler.requestImmediateRender();
 		});
@@ -1048,7 +1078,7 @@ export class FullApp {
 		} else if (pu?.kind === "dialog") {
 			// dialog 型没有 lines 字段（控件渲染出 content）——内容行数走 renderWidgetLines 渲染口径，
 			// 与 buildDialogOverlay 同源调用；滚轮写 scroll 是本批新增的手动滚动，渲染切片面现成
-			const geo = this.viewGeo(pu.layout);
+			const geo = this.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
 			const page = Math.max(3, geo.height - 3);
 			const total = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
 			pu.scroll = Math.max(0, Math.min(Math.max(0, total - page), pu.scroll + (up ? -lines : lines)));
@@ -1681,6 +1711,39 @@ export class FullApp {
 			}
 			if (pu.kind === "dialog") {
 				const ids = this.dialogInteractiveIds(pu.widgets);
+				// T17 宿主自定义键先行（含 escape 前的行内键——表单窗的 ←→/Shift+←→ 在此路由）；
+				// escape 恒留给内建关窗（键表不得覆盖——收口纪律同 viewText 的 Esc）
+				const hostKey = key !== "escape" ? pu.hostKeys?.[key] : undefined;
+				if (hostKey !== undefined) {
+					const ctx: DialogKeyCtx = {
+						focusedId: pu.focusedId,
+						focusIds: ids,
+						setFocus: (id) => { pu.focusedId = id; },
+						moveFocus: (delta) => {
+							if (ids.length === 0) return;
+							const i = Math.max(0, ids.indexOf(pu.focusedId ?? ids[0]!));
+							pu.focusedId = ids[(i + delta + ids.length * 4) % ids.length]!;
+						},
+						selOf: (id) => pu.selById[id],
+						setSel: (id, index) => { pu.selById[id] = index; },
+						inputOf: (id) => pu.inputById[id]?.text ?? "",
+						setInput: (id, text) => {
+							const cur = pu.inputById[id] ?? (pu.inputById[id] = { text: "", cursor: 0 });
+							cur.cursor = Math.min(cur.cursor, (cur.text = text).length);
+						},
+						close: () => { this.pendingUi = undefined; this.promoteUi(); },
+					};
+					let consumed: boolean | void = true;
+					try {
+						consumed = hostKey.run(ctx);
+					} catch (err) {
+						this.showToast(`表单键处理出错：${err instanceof Error ? err.message : String(err)}`);
+					}
+					if (consumed !== false) {
+						this.scheduler.requestImmediateRender();
+						return; // false = 不消费——回落内建（输入框光标等）
+					}
+				}
 				if (key === "escape") {
 					this.pendingUi = undefined;
 					this.promoteUi();
@@ -1750,6 +1813,20 @@ export class FullApp {
 				return;
 			}
 			if (pu.kind === "pick") {
+				// T17 宿主自定义键先行（escape 恒内建关窗）
+				const pickKey = key !== "escape" && key !== "enter" ? pu.extraKeys?.[key] : undefined;
+				if (pickKey !== undefined && pu.filter === undefined) { // 过滤态打字优先——自定义键只在无过滤时生效
+					let consumed: boolean | void = true;
+					try {
+						consumed = pickKey.run({ close: () => { this.pendingUi = undefined; pu.resolve(undefined); this.promoteUi(); } });
+					} catch (err) {
+						this.showToast(`列表键处理出错：${err instanceof Error ? err.message : String(err)}`);
+					}
+					if (consumed !== false) {
+						this.scheduler.requestImmediateRender();
+						return;
+					}
+				}
 				// 过滤列表（F5 九轮①）：可打印/退格编辑过滤串——子串匹配 includes（非 startsWith）。
 				// CTU-08（2026-09-28 code review）：过滤携带原始索引——Enter 结算不再 indexOf 按值回查
 				// （重复文本项会错拿首个同值项；choose 是模块契约面，契约未禁止重复项）
@@ -2673,14 +2750,14 @@ export class FullApp {
 			overlay = { lines: ob.lines, row: ob.row, col: ob.col, width: ob.width };
 		} else if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;
-			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter);
+			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys);
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
 			if (pu.live !== undefined) pu.lines = pu.live().split("\n"); // M4.5 T11：实时查看窗——每帧现算（滚动钳制在 build 内）
 			overlay = this.buildViewOverlay(pu, leftW, divRow);
 		} else if (this.pendingUi?.kind === "dialog") {
 			const pu = this.pendingUi;
-			overlay = this.buildDialogOverlay(pu);
+			overlay = this.buildDialogOverlay(pu, leftW, divRow);
 		} else if (s.overlayOpen) {
 			overlay = this.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {
@@ -2759,8 +2836,19 @@ export class FullApp {
 
 	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
 	 *  （交互列表带选中标记与焦点高亮）；恒定行数防闪烁（余量并进提示行——view 窗同款纪律）。 */
-	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }> }): OverlayFrame {
-		const geo = this.viewGeo(pu.layout);
+	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys }, leftW?: number, divRow?: number): OverlayFrame {
+		// dock（T17 原型走查拍板：窗体与输入框同宽、贴输入框上缘）——几何同 buildViewOverlay dock 分支；
+		// 高度按内容自适应封顶（控件行数预渲染一次取长）
+		const dock = pu.layout === "dock" && leftW !== undefined && divRow !== undefined;
+		let contentLen = 3;
+		if (dock) {
+			try {
+				contentLen = renderWidgetLines(pu.widgets, Math.max(20, leftW - 2), { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
+			} catch { /* 预渲染失败走保底高度——正式渲染的 try/catch 会给占位行 */ }
+		}
+		const geo = dock
+			? { row: 0, col: 0, width: leftW, height: Math.max(6, Math.min(contentLen + 3, divRow)) }
+			: this.viewGeo(pu.layout);
 		const ow = geo.width;
 		const inner = ow - 2;
 		const bc = "accent";
@@ -2786,14 +2874,15 @@ export class FullApp {
 		const upN = sc;
 		const downN = content.length - sc - win.length;
 		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
-		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`;
+		const hostLabels = pu.hostKeys === undefined ? "" : Object.values(pu.hostKeys).map((k) => k.label).join(" · ");
+		const hint = ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`;
 		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(inner) + "╯")));
-		return { lines: olines, row: geo.row, col: geo.col, width: ow };
+		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };
 	}
 
 	/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */
-	private buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string): OverlayFrame {
+	private buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys): OverlayFrame {
 		const ow = leftW;
 		const oInner = ow - 2;
 		const bc = "accent";
@@ -2824,7 +2913,8 @@ export class FullApp {
 		}
 		const rest = shown.length - winStart - win.length;
 		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 项`)));
-		olines.push(boxRow(theme.dim(filter === undefined ? " ↑↓ 选择 · Enter 选定 · Esc 取消" : " 输入文字过滤 · ↑↓ 选择 · Enter 选定 · Esc 取消")));
+		const extraLabels = extraKeys === undefined ? "" : Object.values(extraKeys).map((k) => k.label).join(" · ");
+		olines.push(boxRow(theme.dim((filter === undefined ? " ↑↓ 选择 · Enter 选定" : " 输入文字过滤 · ↑↓ 选择 · Enter 选定") + (extraLabels !== "" ? ` · ${extraLabels}` : "") + " · Esc 取消")));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}

@@ -41,7 +41,7 @@ describe("T12 项目 .mcp.json 信任门（m4-3c）", () => {
 
   it("② 指纹语义：值不进键名进——换 env/headers 值指纹不变；加键/改命令/改 URL 指纹变；键序无关", () => {
     const base = { command: "npx", args: ["-y", "p"], env: { TOKEN: "aaa" }, headers: { authorization: "Bearer x" } };
-    expect(fingerprintServer({ env: { TOKEN: "bbb" }, ...base, headers: { authorization: "Bearer y" } })).toBe(fingerprintServer(base)); // 只换值
+    expect(fingerprintServer({ ...base, env: { TOKEN: "bbb" }, headers: { authorization: "Bearer y" } })).toBe(fingerprintServer(base)); // 只换值
     expect(fingerprintServer({ ...base, env: { TOKEN: "aaa", EXTRA: "1" } })).not.toBe(fingerprintServer(base)); // 加 env 键
     expect(fingerprintServer({ ...base, command: "node" })).not.toBe(fingerprintServer(base));
     expect(fingerprintServer({ ...base, args: ["-y", "q"] })).not.toBe(fingerprintServer(base));
