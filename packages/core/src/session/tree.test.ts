@@ -61,6 +61,12 @@ describe("readSessionHead（预算读件下沉 core——T7）", () => {
       ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("doc-review", "2026-09-27-m4-3c-mcp-production.md 全量") }] }),
     ]);
     expect(readSessionHead(f1)!.firstUser).toBe("[技能] doc-review 2026"); // 20 字符帽照旧截断
+    // 手敲形态（2026-09-30 二轮）：消息 = 原话行 + 标记 + 正文合成一条——标记行不在消息首也识别，原话行不上标题
+    const f1b = seed(d, "s_skill_typed", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: `/skill : doc-review 参数甲 参数乙\n${skillBody("doc-review", "参数甲 参数乙")}` }] }),
+    ]);
+    expect(readSessionHead(f1b)!.firstUser).toBe("[技能] doc-review 参数甲");
     const f2 = seed(d, "s_skill_old", [
       ev("e1", "session/header", {}),
       ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("ask-matt") }] }),

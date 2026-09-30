@@ -23,8 +23,9 @@ export interface SessionHead {
   ownLines: number;
 }
 
-/** 技能注入消息的机器标记（宿主 skillInjectText 首行——docmodel ● 行识别同款前缀）。 */
-const SKILL_MARK = /^（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
+/** 技能注入消息的机器标记行（宿主 skillInjectText 生成——docmodel ● 行识别同款；可在消息首
+ *  〔菜单 Enter〕或第二行起〔2026-09-30 手敲形态：原话行 + 标记 + 正文合成一条〕）。 */
+const SKILL_MARK = /(?:^|\n)（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
 
 /** 首条用户消息 → 列表标题兜底（≤20 字符、空白折叠；空串 = undefined 继续找下一条）：技能注入
  *  消息特例显示「[技能] 名字 参数」（2026-09-30 用户拍板——机器标记与正文都不当标题；参数从
@@ -36,7 +37,7 @@ function firstUserTitle(raw: string): string | undefined {
 	if (m !== null) {
 		const argsM = /<skill name="[^"]*"(?: args="([^"]*)")?>/.exec(raw);
 		const args = argsM?.[1]?.replace(/&quot;/g, '"');
-		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 20);
+		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 20).trimEnd();
 	}
 	return text.slice(0, 20);
 }

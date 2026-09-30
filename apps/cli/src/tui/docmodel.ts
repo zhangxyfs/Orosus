@@ -561,12 +561,15 @@ export class DocModel {
 	}
 
 	/** 用户消息块（❯ 青玉 + 暖金加粗正文 + 前后各空一行）。
-	 *  技能手动加载消息（斜杠菜单 Enter 注入的 <skill> 全文）单行紧凑化（2026-09-28 用户拍板：正文
-	 *  不打印进对话流——kimi「Activated skill」/pi「[skill] name」同款；全文照发模型上下文）。按宿主
-	 *  skillInjectText 的机器标记行鉴别——实时回显与 historyFrom 回放同走本口，两路同形。 */
+	 *  技能加载消息紧凑化（2026-09-28 拍板：正文不打印进对话流——kimi「Activated skill」/pi「[skill] name」
+	 *  同款；全文照发模型上下文）。标记行可在消息首（菜单 Enter 注入）或第二行起（2026-09-30 手敲形态：
+	 *  原话行 + 标记 + 正文合成一条消息持久化）——标记行之前有非空内容则先出原话用户块、随后 ● 行，
+	 *  实时与 historyFrom 回放同走本口同形。 */
 	userPrompt(text: string): void {
-		const m = /^（用户通过菜单手动加载技能 "(.+?)"——请按该技能正文行事）/.exec(text);
+		const m = /(?:^|\n)（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/.exec(text);
 		if (m !== null) {
+			const pre = text.slice(0, m.index).replace(/\n+$/, "");
+			if (pre.trim() !== "") this.pushE({ k: "user", src: pre });
 			this.pushE({ k: "skill", name: m[1]! });
 			return;
 		}
