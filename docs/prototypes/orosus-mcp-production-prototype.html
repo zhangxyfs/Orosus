@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· MCP 生产化界面原型（M4-3c · T12 / T13 / T17 / T18）</title>
+<style>
+  /* ─── tokens · 连山配色（与 orosus-onboarding-prototype.html 同源） ────────── */
+  :root {
+    --bg:        #0a100e;   /* 玄墨 */
+    --surface:   #121b17;   /* 层峦 */
+    --surface-2: #18241e;   /* 浮峦 */
+    --fg:        #e9eee6;   /* 宣纸 */
+    --muted:     #97a49a;   /* 山岚 */
+    --border:    #25352d;   /* 叠嶂 */
+    --accent:    #7cc9a5;   /* 青玉 · 主强调 */
+    --accent-soft: #1a2a23; /* 青玉软底（选中行） */
+    --info:      #84b8cd;   /* 石青 · 信息 */
+    --warn:      #d4a25e;   /* 暖金 · 进行/注意 */
+    --err:       #d07f70;   /* 赭石 · 错误 */
+    --font-mono: ui-monospace, 'Cascadia Mono', 'Cascadia Code', Consolas, 'JetBrains Mono', Menlo, monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.65; padding-bottom: 90px; }
+
+  /* ─── 顶部走查说明条（非 TUI 部分） ──────────────────────────────── */
+  .notebar { max-width: 1240px; margin: 18px auto 10px; padding: 12px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 13px; }
+  .notebar h1 { margin: 0 0 4px; font-size: 15px; color: var(--fg); font-weight: 600; }
+  .notebar h1 .tag { font-size: 11px; font-weight: 600; letter-spacing: .08em; color: var(--warn); border: 1px solid #4a3b28; border-radius: 999px; padding: 1px 9px; margin-left: 10px; vertical-align: 2px; }
+  .notebar .src { font-size: 12px; color: #5c6b62; margin-bottom: 8px; }
+  .notebar .src code { font-family: var(--font-mono); font-size: 11.5px; color: var(--info); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+  .chip { font-family: var(--font-mono); font-size: 12px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 11px; cursor: pointer; user-select: none; }
+  .chip:hover { color: var(--fg); }
+  .chip.on { color: var(--accent); border-color: #2d5546; background: var(--accent-soft); }
+  .keyhelp { margin-top: 8px; color: #6d7d73; font-size: 12px; }
+  .keyhelp kbd, .notes kbd, .notebar kbd { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg); cursor: pointer; background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; margin: 0 1px; }
+
+  /* ─── 终端窗体 ──────────────────────────────────────────────────── */
+  .terminal { max-width: 1240px; margin: 0 auto; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; font-family: var(--font-mono); font-size: 13px; box-shadow: 0 30px 70px rgba(0,0,0,.6); }
+  .titlebar { display: flex; align-items: center; gap: 12px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+  .dots { display: flex; gap: 8px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2c3f36; }
+  .ttl { flex: 1; text-align: center; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+  .geom { color: #5c6b62; font-size: 11px; }
+
+  .tui-body { position: relative; display: grid; grid-template-columns: minmax(0,1fr) 320px; height: 760px; }
+  .main { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow: hidden; padding: 14px 22px 6px; font-size: 13px; line-height: 1.75; }
+  .ln { white-space: pre-wrap; word-break: break-all; }
+  .u { color: var(--fg); } .a { color: var(--accent); } .i { color: var(--info); } .w { color: var(--warn); } .e { color: var(--err); } .m { color: var(--muted); }
+  .userln { color: var(--fg); }
+  .userln::before { content: "❯ "; color: var(--accent); }
+  .toolln { color: var(--muted); }
+  .toolln::before { content: "● "; color: var(--accent); }
+  .toolln .tname { color: var(--accent); }
+  .resultln { color: var(--muted); padding-left: 2em; }
+
+  .inputwrap { padding: 0 22px 14px; }
+  .inputbox { border: 1px solid #2d5546; border-radius: 0; background: var(--surface-2); padding: 8px 12px; color: var(--fg); min-height: 38px; }
+  .inputbox .prompt { color: var(--accent); margin-right: 6px; }
+  .inputbox .ph { color: #5c6b62; }
+  .cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent); vertical-align: text-bottom; }
+  .hintline { display: flex; justify-content: space-between; gap: 12px; color: #5c6b62; font-size: 12px; margin-top: 6px; }
+  .hintline .perm { color: var(--accent); }
+
+  .side { border-left: 1px solid var(--border); display: flex; flex-direction: column; font-size: 12.5px; }
+  .card { padding: 12px 14px; }
+  .card + .card { border-top: 1px solid var(--border); }
+  .cardhead { display: flex; align-items: baseline; margin-bottom: 8px; }
+  .cardhead .t { color: var(--accent); font-size: 12.5px; }
+  .cardhead .pg { margin-left: auto; color: #5c6b62; font-size: 11px; }
+  .kv { display: flex; gap: 8px; color: var(--muted); line-height: 1.8; }
+  .kv b { color: var(--fg); font-weight: 500; }
+  .kv .lbl { flex: none; width: 7.5em; color: #7d8b81; }
+  .kv .val { color: var(--fg); word-break: break-all; }
+  .kv .val.i { color: var(--info); }
+  .sep { border-top: 1px dashed var(--border); margin: 8px 0; }
+  .ctxbar { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .ctxbar .bar { flex: 1; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--accent) 0 38%, #22352b 38% 100%); }
+  .modrow { display: flex; align-items: center; gap: 7px; color: var(--fg); line-height: 1.9; }
+  .modrow .d { color: var(--accent); }
+  .modrow .st { margin-left: auto; color: var(--accent); font-size: 11.5px; }
+  .todo { display: flex; gap: 8px; color: var(--muted); line-height: 1.9; }
+  .cardfoot { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); color: #5c6b62; font-size: 11.5px; }
+
+  /* ─── 浮层（pick / view / dialog / 菜单——全宽贴左栏、锚输入框上缘） ── */
+  .overlay-layer { position: absolute; inset: 0; pointer-events: none; }
+  .opanel { pointer-events: auto; position: absolute; left: 22px; right: 22px; bottom: 86px; background: var(--surface-2); border: 1px solid var(--accent); box-shadow: 0 20px 55px rgba(0,0,0,.55); }
+  .opanel.dim-border { border-color: #2d5546; }
+  .ohead { display: flex; align-items: center; gap: 10px; padding: 8px 14px 4px; }
+  .ohead .ot { color: var(--accent); white-space: nowrap; }
+  .ohead .ot.warn { color: var(--err); }
+  .ohead .ofill { flex: 1; height: 1px; background: var(--accent); opacity: .45; }
+  .opanel.dim-border .ohead .ofill { background: #2d5546; opacity: 1; }
+  .ohead .oc { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .obody { padding: 2px 8px 4px; }
+  .ofoot { margin: 2px 12px 0; border-top: 1px solid rgba(124,201,165,.3); padding: 6px 4px 8px; color: var(--muted); font-size: 12.5px; }
+  .ofoot.warn { color: var(--warn); }
+
+  .prow { height: 27px; display: flex; align-items: center; gap: 9px; padding: 0 8px; white-space: nowrap; border-radius: 3px; cursor: pointer; }
+  .prow .mk { width: 1.2ch; color: var(--accent); flex: none; }
+  .prow .dot { flex: none; }
+  .prow .dot.ok  { color: var(--accent); }
+  .prow .dot.idle{ color: var(--muted); }
+  .prow .dot.bad { color: var(--err); }
+  .prow .nm { width: 12ch; flex: none; overflow: hidden; text-overflow: ellipsis; }
+  .prow .ds { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .prow .ds.nowrap-plain { white-space: nowrap; }
+  .prow .st { flex: none; font-size: 12.5px; }
+  .prow .st.ok  { color: var(--accent); }
+  .prow .st.idle{ color: var(--muted); }
+  .prow .st.bad { color: var(--err); }
+  .prow.sel { background: var(--accent-soft); }
+
+  .mrow { height: 26px; display: flex; align-items: center; gap: 9px; padding: 0 8px; white-space: nowrap; border-radius: 3px; cursor: pointer; }
+  .mrow .mk { width: 1.2ch; color: var(--accent); flex: none; }
+  .mrow .cmd { color: var(--fg); }
+  .mrow .cmdname { color: var(--fg); }
+  .mrow .ds { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .mrow.sel { background: var(--accent-soft-2, var(--accent-soft)); }
+  .msep { height: 26px; display: flex; align-items: center; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+  .msep .fill { flex: 1; border-top: 1px solid #3a4a41; margin-left: 8px; }
+  .mhint { height: 24px; display: flex; align-items: center; padding: 0 11px; color: var(--muted); font-size: 12px; }
+  .mdetail { padding: 4px 12px 2px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  .mdetail .lbl { color: #7d8b81; }
+
+  .vrow { display: flex; gap: 12px; padding: 2px 8px; line-height: 1.75; }
+  .vrow .vl { flex: none; width: 11ch; color: var(--muted); }
+  .vrow .vv { flex: 1; word-break: break-all; }
+  .vrow .vv.i { color: var(--info); }
+  .vrow .vv.e { color: var(--err); }
+  .vrow .vv .sub { color: var(--muted); }
+
+  /* 控件窗（Alt + N 添加/修改） */
+  .tabs { display: flex; gap: 10px; align-items: center; padding: 2px 8px 8px; }
+  .tab { font-size: 12.5px; padding: 2px 14px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; }
+  .tab.on { color: var(--accent); background: var(--accent-soft); border-color: #2d5546; }
+  .tabhint { margin-left: auto; color: #5c6b62; font-size: 11.5px; }
+  .field { display: flex; align-items: center; gap: 10px; padding: 3px 8px; }
+  .field .fl { flex: none; width: 15ch; color: var(--muted); font-size: 12.5px; text-align: right; }
+  .field .inp { flex: 1; display: flex; align-items: center; background: var(--surface); border: 1px solid var(--border); min-height: 27px; padding: 0 8px; color: var(--fg); font-family: var(--font-mono); font-size: 12.5px; }
+  .field .inp.focus { border-color: var(--accent); }
+  .field .inp input { flex: 1; background: none; border: none; outline: none; color: var(--fg); font: inherit; padding: 3px 0; }
+  .field .inp .ph { color: #5c6b62; }
+  .field .inp .locknote { color: #5c6b62; font-size: 11.5px; margin-left: 8px; }
+  .field textarea { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--fg); font-family: var(--font-mono); font-size: 12.5px; padding: 6px 8px; resize: none; outline: none; line-height: 1.5; }
+  .field textarea.focus { border-color: var(--accent); }
+  .field textarea:focus { border-color: var(--accent); outline: none; }
+  .field .sel-row { flex: 1; display: flex; gap: 22px; align-items: center; font-size: 12.5px; padding: 2px 4px; }
+  .field .sel-row .opt { color: var(--muted); cursor: default; }
+  .field .sel-row .opt.on { color: var(--accent); }
+  .field .sel-row .opt.on::before { content: "● "; }
+  .field .sel-row .opt::before { content: "○ "; color: var(--muted); }
+  .advtoggle { display: flex; align-items: center; gap: 8px; padding: 6px 8px 2px; color: var(--info); font-size: 12.5px; cursor: pointer; }
+  .advnote { padding: 0 8px 2px 22px; color: #5c6b62; font-size: 11.5px; }
+  .jsonhint { padding: 2px 8px 6px 22px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  .jsonhint code { font-family: var(--font-mono); font-size: 11.5px; color: var(--info); }
+  .errline { padding: 4px 8px 2px 22px; color: var(--err); font-size: 12.5px; }
+  .okline { padding: 4px 8px 2px 22px; color: var(--accent); font-size: 12.5px; }
+  .btnrow { display: flex; gap: 12px; justify-content: flex-end; padding: 8px 14px 4px; }
+  .btn { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 16px; background: var(--surface); border: 1px solid var(--border); color: var(--fg); cursor: pointer; border-radius: 4px; }
+  .btn:focus { border-color: var(--accent); color: var(--accent); outline: none; }
+
+  /* toast：全宽无框、暖金、贴输入框上缘（瞬时提示不落流区） */
+  .toast { position: absolute; left: 22px; right: 22px; bottom: 86px; color: var(--warn); background: var(--bg); padding: 4px 6px; font-size: 13px; pointer-events: none; z-index: 40; }
+
+  /* ─── 屏注记卡（走查要点：方案钉死 vs 原型自定待拍板） ───────────── */
+  .notes { max-width: 1240px; margin: 14px auto 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .notecard { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; font-size: 13px; color: var(--muted); }
+  .notecard h3 { margin: 0 0 8px; font-size: 13px; color: var(--info); font-weight: 600; }
+  .notecard.open h3 { color: var(--warn); }
+  .notecard ul { margin: 0; padding-left: 18px; }
+  .notecard li { margin: 4px 0; }
+  .notecard li b { color: var(--fg); font-weight: 500; }
+  .notecard .sim { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: #6d7d73; font-size: 12px; }
+  .simbtn { font-size: 12px; font-family: var(--font-body); color: var(--fg); background: var(--surface-2); border: 1px solid #3a4a41; border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+  .simbtn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .statedump { max-width: 1240px; margin: 0 auto 14px; font-family: var(--font-mono); font-size: 12px; color: #6d7d73; padding: 0 4px; }
+
+  /* ─── 浮动切屏条（原型工具——非被评审 UI 的一部分） ──────────────── */
+  .switcher { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 100; display: flex; align-items: center; gap: 4px; background: var(--surface); border: 1px solid var(--accent); border-radius: 999px; padding: 6px 10px; box-shadow: 0 10px 30px rgba(0,0,0,.5); font-size: 13px; }
+  .switcher button { background: var(--accent-soft); color: var(--accent); border: 1px solid #2d5546; border-radius: 999px; width: 30px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1; }
+  .switcher button:hover { background: #223830; }
+  .switcher .cur { padding: 0 12px; color: var(--fg); white-space: nowrap; }
+  .switcher .cur b { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="notebar">
+  <h1>M4-3c「MCP 生产化」界面原型<span class="tag">评审用一次性原型</span></h1>
+  <div class="src">对应方案 <code>docs/superpowers/plans/2026-09-27-m4-3c-mcp-production.md</code> 的 T12（信任门）/ T13（/mcp 命令族）/ T17（/settings 管理面 + Alt + N 添加窗）/ T18（斜杠菜单区）。本件只回答「长什么样」——连接超时、翻页、重连等行为不在原型里。验收后结论回写方案，本件不进实现。</div>
+  <div class="chips" id="chips"></div>
+  <div class="keyhelp">
+    切屏：<kbd>[</kbd><kbd>]</kbd> 或点上面色块 / 底部浮条；屏内：<kbd>↑</kbd><kbd>↓</kbd> 选择 · <kbd>Enter</kbd> 确认 · <kbd>Esc</kbd> 逐级返回 · <kbd>Alt + K</kbd> 启停 · <kbd>Alt + N</kbd> 添加或修改 · <kbd>d</kbd> 两拍删除 · 添加窗里 <kbd>Tab</kbd> 或 <kbd>Shift + ↑↓</kbd> 换焦点、<kbd>Shift + ←→</kbd> 切页签、直接打字。<kbd>Alt + K</kbd> 被浏览器吃掉时用 <kbd>k</kbd>（列表/详情屏等效）。
+  </div>
+</header>
+
+<main class="terminal">
+  <div class="titlebar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="ttl">Orosus · 新会话 — D:\develop\demo — MCP 生产化界面原型（M4-3c）</div>
+    <div class="geom">120 × 34</div>
+  </div>
+  <div class="tui-body">
+    <div class="main">
+      <div class="stream" id="stream"></div>
+      <div class="inputwrap">
+        <div class="inputbox" id="inputbox"></div>
+        <div class="hintline" id="hintline"></div>
+      </div>
+      <div class="overlay-layer" id="overlay"></div>
+      <div id="toastslot"></div>
+    </div>
+    <div class="side" id="side"></div>
+  </div>
+</main>
+
+<div class="statedump" id="statedump"></div>
+<section class="notes" id="notes"></section>
+
+<div class="switcher" id="switcher">
+  <button id="swprev" title="上一屏（[）">◀</button>
+  <span class="cur" id="swcur"></span>
+  <button id="swnext" title="下一屏（]）">▶</button>
+</div>
+
+<script>
+"use strict";
+/* ============================================================================
+ * MCP 生产化界面原型（M4-3c）—— 十屏 × 单终端场景。
+ * 问题：「/settings 的 MCP 管理面、Alt + N 添加窗、斜杠菜单 mcp 区、/mcp 输出、
+ *       信任门提示——按方案文字画出来，长这样对不对？」
+ * 数据：八个 server 覆盖全部状态（已连接/待启动/失败/未确认/停用 × 预装/配置/项目）。
+ * ==========================================================================*/
+
+/* ---- server 数据（覆盖 T17 列表页全部五种状态文字 + 三种来源） ---- */
+const INITIAL_SERVERS = [
+  { id: "memory",     desc: "跨会话知识图谱记忆",            state: "connected",   enabled: true,  source: "预装",        transport: "stdio", cmd: "npx -y @modelcontextprotocol/server-memory",       tools: 9,  lazy: true },
+  { id: "context7",   desc: "库文档检索（拿最新版文档）",      state: "connected",   enabled: true,  source: "预装",        transport: "stdio", cmd: "npx -y @upstash/context7-mcp",                     tools: 3,  lazy: true },
+  { id: "github",     desc: "GitHub 仓库 / PR / issue 操作",  state: "idle",        enabled: true,  source: "预装",        transport: "stdio", cmd: "npx -y @modelcontextprotocol/server-github",      tools: 26, lazy: true, note: "需要环境变量 GITHUB_TOKEN；未配置时启动失败并在状态里给出引导" },
+  { id: "everything", desc: "官方自检 server（验证 MCP 链路）", state: "idle",      enabled: true,  source: "预装",        transport: "stdio", cmd: "npx -y @modelcontextprotocol/server-everything",  tools: 14, lazy: true },
+  { id: "puppeteer",  desc: "浏览器自动化（截图只返回占位说明）", state: "idle",    enabled: true,  source: "预装",        transport: "stdio", cmd: "npx -y @modelcontextprotocol/server-puppeteer",   tools: 19, lazy: true },
+  { id: "my-db",      desc: "Postgres 只读查询（本地）",       state: "failed",     enabled: true,  source: "配置文件",    transport: "stdio", cmd: "postgres-mcp --dsn $ENV:PG_DSN",                   tools: 0,
+    errtail: ["连接失败：启动 30 秒超时（超时算失败，不拖累其他 server）",
+              "[stderr] node:internal/modules/cjs/loader:1145",
+              "[stderr]   throw err;  Error: Cannot find module 'postgres-mcp'",
+              "[stderr] …（报错尾巴最多保留 4KB——够看出死因，不撑爆界面）"] },
+  { id: "project-api", desc: "同事共享的项目接口文档查询",      state: "unconfirmed", enabled: true, source: "项目 .mcp.json", transport: "sse",  cmd: "https://mcp.internal.example.com/sse",          tools: 3,  fp: "a1b2c3d4" },
+  { id: "weather",    desc: "天气查询（示例——已停用）",         state: "idle",       enabled: false, source: "配置文件",    transport: "stdio", cmd: "npx -y weather-mcp",                               tools: 4 },
+];
+
+const SETTINGS_ITEMS = [
+  "磁盘占用（各目录大小与清理口径）",
+  "上下文用量（窗口占用与输入输出累计）",
+  "Token 用量（本会话与项目累计）",
+  "运行状态（模型 / 会话 / 模块图）",
+  "子代理（模型 / 审批模式 / 轮数上限）",
+  "技能（查看 / 启停——四轨目录全部技能）",
+  "MCP（查看 / 开关 / 删除——server 管理与添加）",   /* ← 本批新增入口（T17） */
+  "配置网络搜索（LLM Web Search / Tavily / Brave）",
+];
+
+/* ---- 全局状态 ---- */
+const S = {
+  screen: 1,            /* 当前屏索引 */
+  servers: JSON.parse(JSON.stringify(INITIAL_SERVERS)),
+  sel: 0,               /* 列表页选中行 */
+  detailSel: 0,         /* 详情页对应的 server 下标 */
+  settingsSel: 5,       /* 设置根列表选中行（默认停在「技能」——新入口在它下面） */
+  menuSel: 7,           /* 斜杠菜单选中行（默认停在首个 mcp 条目） */
+  deleteArm: false,     /* 详情页 d 两拍删除的武装态 */
+  detailMsg: "",        /* 详情页临时提示（预装不可删等） */
+  trustStage: "confirm",/* toast | confirm | done */
+  browseVariant: false, /* 第 7 屏：/mcp 列表 ↔ /mcp browse */
+  toast: null,          /* { text } */
+  addWin: { open: false, mode: "add", tab: "manual", transport: "stdio", advOpen: false, err: "", ok: "",
+            fields: { name: "", cmd: "", env: "", headers: "", cwd: "", timeout: "" }, jsonText: "", opener: 1 },
+  lastFocusId: "",      /* 添加窗重建后恢复焦点 */
+};
+let toastTimer = null;
+
+/* ---- 工具 ---- */
+const $id = (x) => document.getElementById(x);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const srv = (i) => S.servers[i];
+
+/* 状态 → 圆点/文字/颜色（T17 钉死：绿=已连接、灰=装了还没启动、红=失败/未确认/停用都算红） */
+function dotOf(sv) {
+  if (sv.state === "connected") return { ch: "●", cls: "ok" };
+  if (sv.state === "idle" && sv.enabled) return { ch: "○", cls: "idle" };
+  return { ch: "●", cls: "bad" }; /* failed / unconfirmed / 停用 */
+}
+function statusText(sv) {
+  if (sv.state === "connected") return { t: "已连接 · 启用", cls: "ok" };
+  if (sv.state === "unconfirmed") return { t: "未确认", cls: "bad" };
+  if (sv.state === "failed") return { t: "失败 · 启用", cls: "bad" };
+  if (!sv.enabled) return { t: "已停用", cls: "idle" };
+  return { t: "待启动 · 启用", cls: "idle" };
+}
+function showToast(text, ms = 4200) {
+  S.toast = { text };
+  renderToast();
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { S.toast = null; renderToast(); }, ms);
+}
+function renderToast() {
+  if (!S.toast) { $id("toastslot").innerHTML = ""; return; }
+  /* 浮层在场时 toast 上移一格窗高——真机里两者同锚输入框上缘，原型里错开避免互相盖字 */
+  const ov = $id("overlay") ? $id("overlay").firstElementChild : null;
+  const off = ov ? ov.offsetHeight + 10 : 0;
+  $id("toastslot").innerHTML = `<div class="toast" style="bottom:${86 + off}px">${esc(S.toast.text)}</div>`;
+}
+
+/* ---- 屏清单 ---- */
+const SCREENS = [
+  { name: "设置入口 ·「MCP」在哪" },
+  { name: "MCP 列表页（红绿灰）" },
+  { name: "详情页 · 正常" },
+  { name: "详情页 · 失败与两拍删除" },
+  { name: "添加窗 · 手动页签" },
+  { name: "添加窗 · JSON 页签" },
+  { name: "斜杠菜单 mcp 区" },
+  { name: "/mcp 命令输出" },
+  { name: "信任门（.mcp.json）" },
+  { name: "流区条目 · 首启与结果" },
+];
+
+/* ============ 底座渲染：侧栏 / 输入框 / 流区 ============ */
+
+function renderSide() {
+  $id("side").innerHTML = `
+  <div class="card">
+    <div class="cardhead"><span class="t">运行状态</span><span class="pg">1/2 · ←→ 翻页</span></div>
+    <div class="kv"><span class="lbl">模型</span><span class="val i">zhipuai-coding-plan</span></div>
+    <div class="kv"><span class="lbl">会话</span><span class="val">a3f9c214</span></div>
+    <div class="kv"><span class="lbl">工作目录</span><span class="val i">D:\\develop\\demo</span></div>
+    <div class="kv"><span class="lbl">运行时间</span><span class="val">0:42</span></div>
+    <div class="kv"><span class="lbl">Tokens</span><span class="val">↑ 12,384 · ↓ 8,712</span></div>
+    <div class="sep"></div>
+    <div class="kv"><span class="lbl">上下文</span><span class="val" style="flex:1"><span class="ctxbar"><span class="bar"></span><span>38k/200k</span></span></span></div>
+    <div class="sep"></div>
+    <div class="kv"><span class="lbl">模块挂载</span><span class="val" style="color:#7d8b81">1/1 · MODULES</span></div>
+    ${["provider-custom", "tool-web", "tool-fs", "tool-shell", "skill", "mcp"].map((m) => `
+      <div class="modrow"><span class="d">●</span><span>${m}</span><span class="st">已挂载</span></div>`).join("")}
+  </div>
+  <div class="card" style="flex:1">
+    <div class="cardhead"><span class="t">任务清单</span><span class="pg">1/1</span></div>
+    <div class="todo"><span style="color:var(--accent)">☑</span><span>MCP 管理面界面原型（本件）</span></div>
+    <div class="todo"><span style="color:var(--muted)">☐</span><span>/mcp 命令族与信任门实现</span></div>
+    <div class="cardfoot">┄<br>由 Agent 同步 · 共 2 项</div>
+  </div>`;
+}
+
+function renderInputBox() {
+  const slashOpen = S.screen === 6;
+  const html = slashOpen
+    ? `<span class="prompt">❯</span><span style="color:var(--fg)">/</span><span class="cursor"></span>`
+    : `<span class="prompt">❯</span><span class="ph">向 Orosus 下达指令，或输入 / 查看命令…</span>`;
+  $id("inputbox").innerHTML = html;
+  $id("hintline").innerHTML = `
+    <span><span class="perm">◆ 常规</span> · Shift + Tab 切换模式</span>
+    <span>Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回</span>`;
+}
+
+/* 各屏的流区内容（浮层底下的背景——真实数据密度） */
+function streamLines() {
+  const L = [];
+  const push = (cls, text) => L.push(`<div class="ln ${cls}">${text}</div>`);
+  const filler = () => {
+    push("userln", "项目里的 .mcp.json 是干嘛的？");
+    push("toolln", "<span class='tname'>Read</span> .mcp.json · 共 8 行");
+    push("ln m", "这是 Claude 定的社区标准：项目把自带的 MCP server 清单放进仓库，克隆的人确认一次就能用。");
+    push("ln m", "Orosus 识别它但不直接连——启动时 toast 提示，/mcp trust 确认后才连（方案 T12）。");
+  };
+  switch (S.screen) {
+    case 0: case 1: case 2: case 3: case 4: case 5:
+      filler();
+      push("userln", "/settings");
+      break;
+    case 6:
+      filler();
+      break;
+    case 7:
+      if (!S.browseVariant) {
+        push("userln", "/mcp");
+        push("ln a", "MCP server · 共 8 个");
+        S.servers.map((sv, i) => {
+          const d = dotOf(sv), st = statusText(sv);
+          let extra = "";
+          if (sv.state === "failed") extra = ` —— ${esc((sv.errtail && sv.errtail[0]) || "")}`;
+          if (sv.state === "unconfirmed") extra = ` —— /mcp trust ${sv.id} 确认后连接`;
+          if (sv.state === "idle" && sv.lazy) extra = "（按需启动——用到才起进程）";
+          return `<div class="ln toolln" style="cursor:pointer" onclick="jumpToList(${i})"><span style="color:${d.cls === "ok" ? "var(--accent)" : d.cls === "idle" ? "var(--muted)" : "var(--err)"}">${d.ch}</span> <span class="tname">${esc(sv.id)}</span> ${st.t} · ${sv.tools} 个工具${extra}</div>`;
+        }).forEach((x) => L.push(x));
+        push("ln m", "管理面在 /settings → MCP（红绿灯 / 开关 / 删除）；推荐清单见 docs/mcp-servers.md。");
+      } else {
+        push("userln", "/mcp browse postgres");
+        push("ln a", "注册表搜索「postgres」（registry.modelcontextprotocol.io）· 前 20 条 · 缓存 30 天");
+        [["postgres-mcp", "只读 SQL 查询与 schema 浏览", "需要 POSTGRES_URL"],
+         ["postgres-inspector", "库表结构与索引分析", "需要 DATABASE_URL"],
+         ["pg-mcp-lite", "轻量只读查询", "无密钥"]].map(([n, d, k]) =>
+          `<div class="ln toolln"><span class="tname">${esc(n)}</span> ${esc(d)} · ${k === "无密钥" ? "免密钥" : "需要密钥：" + esc(k)}</div>`).forEach((x) => L.push(x));
+        push("ln m", "Enter 安装选中项；缺密钥的条目不做半自动安装，改为打印让你手填的配置模板（Reasonix 同款）。");
+        push("userln", "/mcp install postgres-mcp");
+        push("ln m", "该 server 需要 POSTGRES_URL 环境变量——不半自动安装。模板如下，手填后 /mcp add 或 Alt + N 粘贴：");
+        push("ln m", "&nbsp;&nbsp;[mcp.servers.postgres-mcp]&nbsp;&nbsp;command = \"postgres-mcp\"&nbsp;&nbsp;env = { POSTGRES_URL = \"…\" }");
+      }
+      break;
+    case 8:
+      push("userln", "/mcp trust project-api");
+      if (S.trustStage === "done") {
+        push("ln m", "已确认 project-api（指纹 a1b2c3d4）——已连接，3 个工具。记录存 ~/.orosus/mcp-trust.json。");
+      }
+      break;
+    case 9:
+      push("userln", "自检一下 MCP 链路通不通");
+      push("toolln", "<span class='tname'>everything · ping</span>");
+      push("resultln", "（没有返回内容——调用成功，server 无话可说）");
+      push("userln", "帮我把今天关于 MCP 管理面的决定记下来");
+      push("toolln", "<span class='tname'>memory · create_entities</span>（预装首启——npx 下载包，等了 8.2 秒）");
+      push("resultln", "已连接 memory——3 个实体、2 条关系写入");
+      push("resultln", "结构化数据：entities = [MCP 管理面, /settings, 信任门] · relations = 2（与文字摘要不重复时才附注）");
+      push("userln", "用浏览器截一张 GitHub 首页");
+      push("toolln", "<span class='tname'>puppeteer · browser_navigate</span> → github.com");
+      push("toolln", "<span class='tname'>puppeteer · browser_take_screenshot</span>");
+      push("resultln", "（图片 image/png · 214 KB——工具结果通道暂不支持显示图片；文件已留存 &lt;会话桶&gt;/media/2026-09-30-1.png，带图通道立项后直接显示）");
+      break;
+  }
+  L.push(`<div class="ln m" style="color:#5c6b62">正在待命</div>`);
+  return L.join("");
+}
+function renderStream() { $id("stream").innerHTML = streamLines(); }
+
+/* ============ 浮层渲染 ============ */
+
+function head(title, count, warn) {
+  return `<div class="ohead"><span class="ot${warn ? " warn" : ""}">${esc(title)}</span><span class="ofill"></span>${count ? `<span class="oc">${esc(count)}</span>` : ""}</div>`;
+}
+
+/* —— 屏 0：设置根列表（pickOverlay 形态） —— */
+function overlaySettings() {
+  const rows = SETTINGS_ITEMS.map((it, i) => {
+    const isMcp = it.startsWith("MCP（");
+    const di = i - 6; /* MCP 项在数组里的下标偏移——仅它有真实下级行为 */
+    const title = isMcp ? "MCP" : it.replace(/（.*$/, "");
+    const paren = isMcp ? "（查看 / 开关 / 删除——server 管理与添加）" : it.slice(title.length);
+    return `<div class="prow${i === S.settingsSel ? " sel" : ""}" onclick="pickSettings(${i})">
+      <span class="mk">${i === S.settingsSel ? "❯" : "&nbsp;"}</span>
+      <span class="nm" style="width:auto">${esc(title)}</span><span class="ds">${esc(paren)}</span>
+      ${isMcp ? `<span class="st ok">本批新增</span>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="opanel">${head("设置", `${SETTINGS_ITEMS.length} 项`)}
+    <div class="obody">${rows}</div>
+    <div class="ofoot">&nbsp;↑↓ 选择 · Enter 选定 · Esc 取消</div>
+  </div>`;
+}
+
+/* —— 屏 1：MCP 列表页（pickOverlay 形态 + 四段行） —— */
+function overlayMcpList() {
+  const rows = S.servers.map((sv, i) => {
+    const d = dotOf(sv), st = statusText(sv);
+    return `<div class="prow${i === S.sel ? " sel" : ""}" onclick="pickList(${i})">
+      <span class="mk">${i === S.sel ? "❯" : "&nbsp;"}</span>
+      <span class="dot ${d.cls}">${d.ch}</span>
+      <span class="nm">${esc(sv.id)}</span>
+      <span class="ds">${esc(sv.desc)}</span>
+      <span class="st ${st.cls}">${st.t}</span>
+    </div>`;
+  }).join("");
+  return `<div class="opanel">${head("MCP（回车查看详情）", `${S.servers.length} 个 server · 预装 5 个不起进程`)}
+    <div class="obody">${rows}</div>
+    <div class="ofoot">&nbsp;↑↓ 选择 · Enter 详情 · Alt + N 添加 · Alt + K 启停 · Esc 返回设置</div>
+  </div>`;
+}
+
+/* —— 屏 2/3：详情页（dock viewText 形态 + 六字段） —— */
+function overlayDetail() {
+  const sv = srv(S.detailSel) || srv(0);
+  if (!sv) return "";
+  const d = dotOf(sv);
+  const rows = [];
+  const field = (l, v, cls) => rows.push(`<div class="vrow"><span class="vl">${esc(l)}</span><span class="vv${cls ? " " + cls : ""}">${v}</span></div>`);
+  field("名称", esc(sv.id));
+  field("说明", esc(sv.desc) + (sv.note ? `<span class="sub">——${esc(sv.note)}</span>` : ""));
+  let stHtml = `<span style="color:${d.cls === "ok" ? "var(--accent)" : d.cls === "idle" ? "var(--muted)" : "var(--err)"}">${d.ch} ${esc(statusText(sv).t)}</span>`;
+  if (sv.state === "unconfirmed") stHtml += `<span class="sub">——/mcp trust ${esc(sv.id)} 确认后连接（指纹前 8 位 ${esc(sv.fp)}）</span>`;
+  if (sv.state === "failed" && sv.errtail) {
+    /* 失败态：状态行放首行报错，[stderr] 尾巴行跟在后面（T6——4KB 帽） */
+    field("状态", `<span class="e">${esc(sv.errtail[0])}</span>`);
+    for (let i = 1; i < sv.errtail.length; i++) {
+      rows.push(`<div class="vrow"><span class="vl"></span><span class="vv" style="color:#7d8b81;font-size:12px">${esc(sv.errtail[i])}</span></div>`);
+    }
+  } else {
+    field("状态", stHtml);
+  }
+  field("来源", esc(sv.source) + (sv.source === "预装" ? `<span class="sub">——只能停用不能删除</span>` : ""));
+  field("传输方式", sv.transport === "http" ? "HTTP（远程）" : sv.transport === "sse" ? "SSE" : "stdio 子进程");
+  field(sv.transport === "http" ? "URL" : "命令或 URL", `<span class="i">${esc(sv.cmd)}</span>`);
+  /* 失败态：状态行应排在尾巴行前面——上面分支已保证（failed 分支先 push 尾巴再插状态会被挪，
+     这里直接重排一次最稳：状态行永远在 errtail 之前。 */
+  let foot;
+  if (S.detailMsg) foot = { cls: " warn", t: "&nbsp;" + esc(S.detailMsg) };
+  else if (S.deleteArm) foot = { cls: " warn", t: `&nbsp;再按一次 d 确认删除 ${esc(sv.id)} · 按其他键取消` };
+  else foot = { cls: "", t: "&nbsp;↑↓ / PgUp/PgDn 翻页 · Alt + K 启停 · Alt + N 修改 · d 删除 · Esc 返回列表" };
+  return `<div class="opanel">${head("MCP 详情", sv.id)}
+    <div class="obody" style="padding-top:6px">${rows.join("")}</div>
+    <div class="ofoot${foot.cls}">${foot.t}</div>
+  </div>`;
+}
+
+/* —— 屏 6：斜杠菜单（恒定高度：列表区 10 行 + 余量行 + 详释 3 行） —— */
+function overlayMenu() {
+  const items = [
+    { kind: "cmd",  name: "/title",  desc: "修改会话标题" },
+    { kind: "cmd",  name: "/reload", desc: "重载全部模块" },
+    { kind: "sep",  label: "技能" },
+    { kind: "skill", name: "skill : writing-plan-docs", desc: "写方案必须人话" },
+    { kind: "skill", name: "skill : diagnosing-bugs",   desc: "系统化排障流程" },
+    { kind: "sep",  label: "MCP" },
+    ...S.servers.slice(0, 4).map((sv) => ({ kind: "mcp", sv })),
+  ];
+  const winStart = 0;
+  const rows = [];
+  items.slice(winStart, winStart + 10).forEach((it, i) => {
+    const gi = winStart + i;
+    const sel = gi === S.menuSel;
+    if (it.kind === "sep") {
+      rows.push(`<div class="msep">&nbsp;── ${esc(it.label)} <span class="fill"></span></div>`);
+      return;
+    }
+    const label = it.kind === "mcp" ? `mcp : ${it.sv.id}` : it.name;
+    const desc = it.kind === "mcp" ? it.sv.desc : it.desc;
+    rows.push(`<div class="mrow${sel ? " sel" : ""}" onclick="pickMenu(${gi})">
+      <span class="mk">${sel ? "❯" : "&nbsp;"}</span><span class="cmdname">${esc(label)}</span><span class="ds">${esc(desc)}</span>
+    </div>`);
+  });
+  for (let i = rows.length; i < 10; i++) rows.push(`<div class="mrow"></div>`); /* 空槽留空（防闪烁） */
+  const rest = Math.max(0, S.servers.length - 4);
+  const hint = rest > 0 ? `&nbsp;&nbsp;↑ 还有 14 项 · ↓ 还有 ${rest} 项（MCP 区）` : "";
+  const selItem = items[S.menuSel] || items[0];
+  let detail = "", third = "";
+  if (selItem && selItem.kind === "mcp") {
+    const sv = selItem.sv, st = statusText(sv);
+    detail = `&nbsp;${esc(sv.desc)}${sv.note ? "——" + esc(sv.note) : ""}。选中打开 /settings 的 MCP 管理面并跳到本 server 详情。`;
+    third = `&nbsp;<span class="lbl">状态：</span>${st.t} · ${sv.tools} 个工具（deferred——tool-search 按需加载，不占上下文）`;
+  } else if (selItem && selItem.kind === "skill") {
+    detail = `&nbsp;${esc(selItem.desc)}——技能条目回车执行、Tab 填入输入框（mcp 条目两者皆非，见注记）。`;
+    third = `&nbsp;<span class="lbl">适用：</span>写方案与调研文档时套用的格式规则`;
+  } else {
+    detail = `&nbsp;${esc(selItem ? selItem.desc : "")}——回车执行。`;
+    third = "&nbsp;↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭";
+  }
+  return `<div class="opanel">${head("斜杠命令", "16 个命令 · 2 个技能 · 8 个 server")}
+    <div class="obody" style="padding-top:4px">${rows.join("")}
+      <div class="mhint">${hint || "&nbsp;"}</div>
+    </div>
+    <div class="ofoot" style="margin-top:0;border-top:1px solid rgba(124,201,165,.3)">
+      <div class="mdetail">${detail}</div>
+      <div class="mdetail">${third}</div>
+    </div>
+  </div>`;
+}
+
+/* —— 屏 8：信任确认窗（dock viewText 形态） —— */
+function overlayTrust() {
+  const sv = S.servers.find((x) => x.id === "project-api");
+  if (!sv || S.trustStage !== "confirm") return "";
+  const rows = [
+    ["来源", `项目 .mcp.json（D:\\develop\\demo\\.mcp.json）`],
+    ["指纹", `<span class="i">${esc(sv.fp)}</span><span class="sub">（配置内容哈希前 8 位——值不进指纹、键名进，换密钥不用重新确认）</span>`],
+    ["传输", "SSE"],
+    ["地址", `<span class="i">${esc(sv.cmd)}</span>`],
+    ["说明", esc(sv.desc)],
+  ].map(([l, v]) => `<div class="vrow"><span class="vl">${esc(l)}</span><span class="vv">${v}</span></div>`).join("");
+  return `<div class="opanel">${head("信任确认", "project-api", true)}
+    <div class="obody" style="padding-top:6px">${rows}
+      <div class="vrow"><span class="vl"></span><span class="vv sub" style="color:#7d8b81">确认后这个项目的这份配置永久可用；配置被改动（指纹变化）要重新确认。记录存 ~/.orosus/mcp-trust.json——不进仓库，恶意项目无法自带「已批准」。</span></div>
+    </div>
+    <div class="ofoot">&nbsp;Enter 确认连接 · Esc 取消 · ↑↓ / PgUp/PgDn 翻页</div>
+  </div>`;
+}
+
+/* —— 屏 4/5：Alt + N 添加 / 修改窗（控件窗形态） —— */
+function overlayAddWin() {
+  const w = S.addWin;
+  if (!w.open) return "";
+  const isEdit = w.mode === "edit";
+  const remote = w.transport !== "stdio";
+  const F = w.fields;
+  const f = (id, label, value, ph, readonlyNote) => `
+    <div class="field"><span class="fl">${esc(label)}</span>
+      <div class="inp${S.lastFocusId === "f-" + id ? " focus" : ""}" id="box-f-${id}">
+        ${readonlyNote
+          ? `<input id="f-${id}" readonly value="${esc(value)}" style="color:var(--muted)"><span class="locknote">${esc(readonlyNote)}</span>`
+          : `<input id="f-${id}" value="${esc(value)}" placeholder="${esc(ph)}" oninput="S.addWin.fields.${id} = this.value">`}
+      </div>
+    </div>`;
+  /* 多行字段（环境变量 / 请求头——2026-09-30 走查拍板：多行文本框、（可选）后缀） */
+  const ft = (id, label, value, ph) => `
+    <div class="field" style="align-items:flex-start"><span class="fl" style="padding-top:6px">${esc(label)}</span>
+      <textarea id="f-${id}" rows="2" placeholder="${esc(ph)}" oninput="S.addWin.fields.${id} = this.value">${esc(value)}</textarea>
+    </div>`;
+  /* 高级区（走查拍板四轮）：环境变量（可选）恒在；请求头（可选）仅远程两档；工作目录仅 stdio（子进程概念）；
+     超时两档都适用。全部可选、极简占位。 */
+  const advBody = !w.advOpen ? "" : `
+    ${ft("env", "环境变量（可选）", F.env, isEdit ? "GITHUB_TOKEN" : "GITHUB_TOKEN=…")}
+    ${remote ? ft("headers", "请求头（可选）", F.headers, "Authorization=…") : ""}
+    ${remote ? "" : f("cwd", "工作目录", F.cwd, "")}
+    ${f("timeout", "超时（秒）", F.timeout, "60")}`;
+
+  let body;
+  if (w.tab === "manual") {
+    body = `
+    <div class="tabs" id="f-tabs" tabindex="0">
+      <span class="tab on">手动</span><span class="tab">JSON</span>
+      <span class="tabhint">Shift + ←→ 切换方式 · 两种方式共享同一份草稿，切过去内容互转不丢</span>
+    </div>
+    ${f("name", "名称", isEdit ? (srv(S.detailSel) || {}).id : F.name, "my-search——列表和权限规则都靠名字认 server", isEdit ? "（名称不可改——删除后重加）" : undefined)}
+    <div class="field"><span class="fl">传输方式</span>
+      <div class="sel-row" id="f-transport" tabindex="0">
+        <span class="opt${w.transport === "stdio" ? " on" : ""}">stdio 子进程</span>
+        <span class="opt${w.transport === "http" ? " on" : ""}">HTTP（远程）</span>
+        <span class="opt${w.transport === "sse" ? " on" : ""}">SSE</span>
+        <span style="color:#5c6b62;font-size:11.5px;margin-left:auto">←→ 切换</span>
+      </div>
+    </div>
+    ${f("cmd", remote ? "URL" : "命令", F.cmd, remote ? "https://mcp.internal.example.com/sse" : "npx -y my-search-mcp --port 9")}
+    <div class="advtoggle" id="f-adv" tabindex="0">${w.advOpen ? "▾" : "▸"} 高级选项${w.advOpen ? "" : (remote ? "（环境变量 / 请求头 / 超时）" : "（环境变量 / 工作目录 / 超时）")}</div>
+    ${w.advOpen ? `<div class="advnote">env / headers 每行一条 KEY=VALUE；修改已有 server 时只显示键名不显示值，留空 = 保持原值。</div>` : ""}
+    ${advBody}`;
+  } else {
+    body = `
+    <div class="tabs" id="f-tabs" tabindex="0">
+      <span class="tab">手动</span><span class="tab on">JSON</span>
+      <span class="tabhint">Shift + ←→ 切换方式 · 两种方式共享同一份草稿，切过去内容互转不丢</span>
+    </div>
+    <div class="jsonhint">
+      粘贴一段配置——两种格式都吃：<code>{"名字": {"command": …}}</code> 单 server，或 Claude 包裹 <code>{"mcpServers": {…}}</code>。一次只装一个。
+    </div>
+    <div class="field"><span class="fl">JSON</span>
+      <textarea id="f-json" rows="7" placeholder='{"mcpServers": {"my-search": {"command": "npx", "args": ["-y", "my-search-mcp"]}}}'
+        oninput="S.addWin.jsonText = this.value">${esc(w.jsonText)}</textarea>
+    </div>`;
+  }
+  const msg = w.err ? `<div class="errline">✕ ${esc(w.err)}</div>` : (w.ok ? `<div class="okline">✓ ${esc(w.ok)}</div>` : "");
+  return `<div class="opanel">${head(isEdit ? "修改 MCP server" : "添加 MCP server", `${w.tab === "manual" ? "手动" : "JSON"}${isEdit ? " · 修改（" + esc((srv(S.detailSel) || { id: "" }).id) + "）" : ""}`)}
+    <div class="obody" style="padding-top:2px">${body}${msg}</div>
+    <div class="btnrow"><button class="btn" id="f-save" onclick="saveAddWin()">保存</button><button class="btn" id="f-cancel" onclick="closeAddWin()">取消</button></div>
+    <div class="ofoot">&nbsp;Shift + ↑↓ / Tab 换焦点 · Shift + ←→ 切页签 · Enter 激活 · Esc 关闭</div>
+  </div>`;
+}
+
+/* ============ 主渲染 ============ */
+
+function renderOverlay() {
+  let html = "";
+  switch (S.screen) {
+    case 0: html = overlaySettings(); break;
+    case 1: html = S.addWin.open ? overlayAddWin() : overlayMcpList(); break;
+    case 2: case 3: html = S.addWin.open ? overlayAddWin() : overlayDetail(); break;
+    case 6: html = overlayMenu(); break;
+    case 8: html = overlayTrust(); break;
+    case 4: case 5: html = overlayAddWin(); break;
+    default: html = "";
+  }
+  $id("overlay").innerHTML = html;
+}
+
+function renderNotes() {
+  const N = [];
+  const pinned = (arr) => N.push(`<div class="notecard"><h3>方案钉死（走查对照原文）</h3><ul>${arr.map((x) => `<li>${x}</li>`).join("")}</ul></div>`);
+  const open = (arr, sim) => N.push(`<div class="notecard open"><h3>原型自定 · 走查待拍板</h3><ul>${arr.map((x) => `<li>${x}</li>`).join("")}</ul>${sim || ""}</div>`);
+
+  switch (S.screen) {
+    case 0:
+      pinned([
+        "<b>入口位置</b>：/settings 根列表加「MCP」项（T17）——放在「技能」下面，形态照抄姊妹项「技能（查看 / 启停——…）」的「标题（说明）」两段式。",
+      ]);
+      open([
+        "菜单文案原型写作 <b>「MCP（查看 / 开关 / 删除——server 管理与添加）」</b>——方案只说了入口职能没定字，措辞待拍板。",
+        "选中行尾标「本批新增」是原型的讲解装饰，<b>真实界面没有</b>（空槽位禁装饰占位的铁律反过来也适用于多余标注）。",
+      ]);
+      break;
+    case 1:
+      pinned([
+        "<b>四段行</b>：状态点（绿 ●=已连接、灰 ○=装了还没启动、红 ●=失败/未确认/停用都算红）、名字、描述首行、状态文字（「已连接 · 启用」「待启动 · 启用」「失败 · 启用」「已停用」「未确认」——方案原文照录）。",
+        "<b>Alt + K</b> 列表页和详情页都生效（与技能管理面同一个键，肌肉记忆复用）；<b>Esc 逐级返回</b>设置根列表。",
+        "<b>预装五件按需启动</b>：启动时一个进程都不起（T20）——所以 memory / context7 显示「已连接」是「本次会话用过」之后的态，开机首屏是五个「待启动」。",
+      ]);
+      open([
+        "<b>列表页键位行</b>：pickOverlay 现在没有自定义键位行能力（固定「↑↓ 选择 · Enter 选定 · Esc 取消」）。原型把 Alt + N / Alt + K 写进底行——实现要么扩 pickOverlay 支持键位注记，要么列表页改走 viewText。倾向前者，待拍板。",
+        "标题右侧计数段写「N 个 server · 预装 5 个不起进程」——后半句是否常驻待拍板（信息有用但占宽）。",
+        "描述列词原子截断、超宽加 …（技能列表同款纪律），原型用 CSS 省略号近似。",
+      ]);
+      break;
+    case 2:
+      pinned([
+        "<b>六字段</b>：名称、说明、状态（失败时附报错尾巴）、来源（配置文件 / 项目 .mcp.json / 预装）、传输方式（stdio 子进程 / HTTP）、命令或 URL（T17 原文）。",
+        "<b>d 删除两拍制</b>：按 d 后再按一次 d 才真删（防误触——设计空白登记表原文）；<b>预装件只能停用不能删除</b>。",
+        "<b>窗形态</b>：dock——贴输入框上缘、与输入框同宽（技能详情窗同款，2026-09-27 拍板形态）。",
+      ]);
+      open([
+        "<b>修改入口键</b>：方案写了「添加/修改窗」但没写修改从哪进。原型采用 <b>详情页 Alt + N</b> 打开修改（列表页 Alt + N = 添加，同键两用）。待拍板。",
+        "标签列宽：技能详情是两字标签 + 8 列；MCP 六字段有四字段（「传输方式」「命令或 URL」），原型用 11ch 标签列对齐——真实实现按最长标签定列。",
+        "未确认 server 的详情只读指路「/mcp trust 确认」——不在详情页里放确认键（信任确认走命令族，与 T12 口径一致）。是否要详情页直达确认，待拍板。",
+      ]);
+      break;
+    case 3:
+      pinned([
+        "<b>报错尾巴</b>：失败原因 + [stderr] 前缀的最后输出（最多 4KB——设计空白登记表）。「连接失败为什么」在这一页要有答案（T6）。",
+        "<b>两拍删除</b>的提示占用键位行位置换文案（窗高度不变——浮层高度恒定铁律）；预装件按 d 直接告知不可删。",
+      ]);
+      open([
+        "报错尾巴的展示深度：原型给 3 行 + 「…最多保留 4KB」说明行；折叠/展开（Alt + O 之类）是否需要，待拍板——尾巴长时详情页会被占满。",
+      ]);
+      break;
+    case 4:
+      pinned([
+        "<b>走查拍板（2026-09-30，四轮）</b>：①页签切换 = <b>Shift + ←→</b>；②焦点轮换 = <b>Shift + ↑↓ / Tab</b>（裸 ↑↓ 不动焦点）；③底部键位行不提「←→ 切传输」（行内自带提示）；④高级选项 = 干净输入框（短标签 + 极简占位）；⑤弹窗宽度与输入框同宽；⑥<b>传输方式三档：stdio 子进程 / HTTP（远程） / SSE</b>；⑦<b>高级区字段</b>——环境变量（可选）多行恒在、请求头（可选）多行仅 HTTP / SSE、<b>工作目录仅 stdio</b>（子进程概念，远程无目录可设——T5 的 cwd 本就是「子进程在哪个目录跑」）、<b>超时（秒）两档恒在</b>。",
+        "<b>两种方式页签切换、共享草稿互转不丢</b>（T17 原文）；<b>命令收整行、保存时统一拆</b>（守卫同 T13：常见启动器才拆、引号才拆、没引号的 Windows 路径绝不拆）。",
+        "<b>修改时名称锁定</b>（想改名删了重加）；<b>环境变量 / 请求头修改时只显键名不显值，留空 = 保持原值</b>；<b>重名报错不覆盖</b>。",
+        "<b>请求头远程型才显示</b>；保存即生效回列表看红绿灯（没有单独验证步骤——设计空白登记表）。",
+      ]);
+      open([
+        "<b>URL 型的 HTTP / SSE 归属</b>：表单里三档由人选；但 JSON 粘贴与 /mcp add 收到 URL 时自动识别归哪档（按 URL 形态猜 /sse 结尾？还是先都按 HTTP 连上再说）——实现时定，本原型 JSON 粘贴统一归 HTTP。",
+        "超时字段给的是「调用超时」（设计空白：默认 60 秒、可按 server 调大）；连接超时（30 秒）不进表单——只调调用侧，是否够用待拍板。",
+      ],
+      `<div class="sim">模拟：<button class="simbtn" onclick="toggleAddMode()">切换 添加 ↔ 修改（锁定名称）</button><button class="simbtn" onclick="presetManual()">填入示例命令</button></div>`);
+      break;
+    case 5:
+      pinned([
+        "<b>吃两种粘贴格式</b>：单 server 对象或 Claude 包裹；<b>一次只装一个，粘多个明确报错</b>；<b>五种错误各有说人话的文案</b>（T17 原文）。",
+      ]);
+      open([
+        "<b>错误文案全稿</b>（原型措辞，逐条待拍板）：①不是合法 JSON——「这不是合法的 JSON——检查引号、逗号是否配对完整」；②多个 server——「一次只能装一个 server——这段里有 2 个（weather、maps），删到剩一个再保存」；③缺启动方式——「server 条目缺启动方式——command（本地命令）或 url（远程地址）至少要有一个」；④重名——「已存在同名 server「x」——不覆盖别人的配置；想改它请用修改」；⑤空包裹——「mcpServers 里面是空的——没有可安装的 server」。",
+        "JSON 大输入框是原生多行文本域形态；真实实现走控件窗 multiline input（每行 [ ] 包裹）还是宿主自绘，实现细节不在方案里。",
+      ],
+      `<div class="sim">模拟粘贴：<button class="simbtn" onclick="pasteJson('wrapped')">mcpServers 包裹</button><button class="simbtn" onclick="pasteJson('single')">单 server</button><button class="simbtn" onclick="pasteJson('multi')">两个 server（报错②）</button><button class="simbtn" onclick="pasteJson('missing')">缺启动方式（报错③）</button><button class="simbtn" onclick="pasteJson('bad')">坏 JSON（报错①）</button>　然后点保存</div>`);
+      break;
+    case 6:
+      pinned([
+        "<b>位置</b>：技能区下面加「── MCP ──」分隔行（灰色）+ 每个 server 一条，固定格式 <b>mcp : 名字</b>（T18 原文；与技能条目「skill : 名字」同构）。",
+        "<b>选中 = 打开管理面并跳到该 server 详情</b>；<b>不能 Tab 补全</b>（它不是可输入的命令）；<b>一个 server 都没有时整区不显示</b>。",
+        "<b>计数段</b>：标题右侧「N 个命令 · M 个技能 · K 个 server」（技能菜单模式的延长线）。",
+      ]);
+      open([
+        "<b>详释第三行</b>：技能条目第三行显「适用：when_to_use」，原型给 mcp 条目配<b>状态行</b>（「状态：待启动 · 启用 · 26 个工具（deferred）」）——同构延长，待拍板。",
+        "<b>底部操作行</b>：mcp 条目选中时原文「Enter 执行 · Tab 补全」不适用——原型换显「Enter 打开管理面详情（Tab 不补全）」。动态换文案但行数不变（高度恒定铁律内），待拍板。",
+      ]);
+      break;
+    case 7:
+      pinned([
+        "<b>/mcp 列表四件</b>：名字、红绿灯、工具数、失败原因首行（T13 原文）；命令结果走 markdown 渲染（命令结果走 md 的既有铁律）。",
+        "<b>空态指路</b>：没有 server 时指到推荐清单 docs/mcp-servers.md（T15）。",
+        "<b>/mcp browse</b>：搜官方注册表列前 20 条；缺密钥条目拒绝半自动、打印手填模板（T14 原文）。",
+      ]);
+      open([
+        "输出行格式原型自定：<b>「● 名字 状态 · N 个工具（——失败原因首行）」</b>；「按需启动」括注是否常驻待拍板。",
+        "browse 结果是纯输出还是可选列表（Enter 安装）：原型画成输出 + 说明行，倾向纯输出（install 单独敲）；待拍板。",
+      ],
+      `<div class="sim">变体：<button class="simbtn" onclick="S.browseVariant=!S.browseVariant;renderAll()">/mcp ↔ /mcp browse</button></div>`);
+      break;
+    case 8:
+      pinned([
+        "<b>启动 toast 原文</b>：「项目 .mcp.json 有 N 个未确认的 MCP server，/mcp 查看确认」——瞬时提示走 toast 不落流区（T12 修订注拍板）。",
+        "<b>指纹前 8 位肉眼核对</b>；<b>值不进指纹、键名进</b>（换密钥不用重新确认）；<b>记录存 ~/.orosus/mcp-trust.json</b>（不进仓库——恶意项目无法自带「已批准」）。",
+        "<b>非 TTY 管道模式同样跳过不连</b>（fail-closed 同款）。",
+      ]);
+      open([
+        "确认窗形态：原型用 dock 窗 + Enter 确认（viewText keys）；也可以做成 pickOverlay 两选项（「确认连接 / 取消」）。倾向前者（信息量大），待拍板。",
+        "确认成功后的 toast 文案原型写作「已确认 project-api（指纹 a1b2c3d4）——已连接，3 个工具」——是否带连接结果待拍板（连接可能要几秒，也许只报已确认）。",
+      ],
+      `<div class="sim">模拟：<button class="simbtn" onclick="replayTrustToast()">重放启动 toast</button><button class="simbtn" onclick="resetTrust()">重置回确认前</button></div>`);
+      break;
+    case 9:
+      pinned([
+        "<b>结果展示四口径</b>（T8）：结构化数据与文字相同时不重复、不同时附在后面；图片音频一行占位（类型 + 大小）；链接转可读文字；全空明说「没有返回内容」。",
+        "<b>puppeteer 截图占位</b>是预期行为非 bug（不做清单「工具结果带图通道」顺延——那天做了截图复活）。",
+        "<b>预装首启</b>：第一次用到才起进程，npx 下载等 60 秒预算（T20）。",
+      ]);
+      open([
+        "<b>工具行显示名</b>：原型用「server · 工具名」（memory · create_entities）吃 Tool.label 契约（模块自设显示名）；模型侧真名是清洗后的下划线形。具体格式待拍板。",
+        "首启等待的呈现：工具行括注「预装首启——npx 下载包，等了 8.2 秒」是事后叙事；进行中态（spinner / 倒计时）T20 实现时另定。",
+      ]);
+      break;
+  }
+  $id("notes").innerHTML = N.join("") || `<div class="notecard">（本屏无注记）</div>`;
+}
+
+function renderStateDump() {
+  const cnt = { connected: 0, idle: 0, failed: 0, unconfirmed: 0, off: 0 };
+  S.servers.forEach((sv) => {
+    if (sv.state === "connected") cnt.connected++;
+    else if (sv.state === "failed") cnt.failed++;
+    else if (sv.state === "unconfirmed") cnt.unconfirmed++;
+    else if (!sv.enabled) cnt.off++;
+    else cnt.idle++;
+  });
+  const sel = S.screen === 1 ? srv(S.sel) : S.screen === 2 || S.screen === 3 ? srv(S.detailSel) : null;
+  $id("statedump").textContent =
+    `状态 · 屏 ${S.screen + 1}/10（${SCREENS[S.screen].name}） · 选中 ${sel ? sel.id : "—"} · server ${S.servers.length} 个（已连接 ${cnt.connected} · 待启动 ${cnt.idle} · 失败 ${cnt.failed} · 未确认 ${cnt.unconfirmed} · 停用 ${cnt.off}）` +
+    (S.addWin.open ? ` · 添加窗开（${S.addWin.tab}/${S.addWin.mode}）` : "") + (S.deleteArm ? " · 删除已武装（再按 d 生效）" : "");
+}
+
+function renderAll() {
+  renderStream();
+  renderInputBox();
+  renderOverlay();
+  renderNotes();
+  renderStateDump();
+  renderChips();
+  renderToast();
+  $id("swcur").innerHTML = `<b>${S.screen + 1}/${SCREENS.length}</b> · ${esc(SCREENS[S.screen].name)}`;
+  if (S.addWin.open && S.lastFocusId) {
+    const el = $id(S.lastFocusId);
+    if (el && el.focus) { el.focus(); try { if (el.setSelectionRange && el.type !== "button") el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* textarea ok */ } }
+  }
+}
+
+function renderChips() {
+  $id("chips").innerHTML = SCREENS.map((s, i) =>
+    `<span class="chip${i === S.screen ? " on" : ""}" onclick="go(${i})">${i + 1}·${esc(s.name)}</span>`).join("");
+}
+
+/* ============ 交互 ============ */
+
+function go(i) {
+  S.screen = Math.max(0, Math.min(SCREENS.length - 1, i));
+  S.deleteArm = false; S.detailMsg = ""; S.addWin.open = false;
+  /* 专用屏 3 = 失败态详情——进屏自动选中第一个失败 server（演示报错尾巴） */
+  if (S.screen === 3) {
+    const fi = S.servers.findIndex((x) => x.state === "failed");
+    if (fi >= 0) { S.detailSel = fi; S.sel = fi; }
+  }
+  /* 专用屏 4/5 = 添加窗本身——进屏即开窗（添加形态；「修改」形态走注记里的模拟按钮） */
+  if (S.screen === 4) {
+    S.addWin.open = true; S.addWin.mode = "add"; S.addWin.tab = "manual";
+    S.lastFocusId = "f-name";
+  }
+  if (S.screen === 5) {
+    S.addWin.open = true; S.addWin.mode = "add"; S.addWin.tab = "json";
+    S.lastFocusId = "f-json";
+  }
+  renderAll();
+}
+window.jumpToList = (i) => { S.sel = i; S.detailSel = i; go(1); };
+window.pickSettings = (i) => { S.settingsSel = i; renderAll(); };
+window.pickList = (i) => { S.sel = i; renderAll(); };
+window.pickMenu = (i) => { S.menuSel = i; renderAll(); };
+
+function enterSettings() {
+  if (S.settingsSel === 6) go(1);
+  else showToast("（原型只做了 MCP 面——其余入口是现状摆设）", 2600);
+}
+function enterList() {
+  S.detailSel = S.sel; S.deleteArm = false; S.detailMsg = "";
+  go(2);
+}
+
+function toggleServerAt(i) {
+  const sv = srv(i);
+  if (!sv) return;
+  if (sv.state === "unconfirmed") { showToast(`「${sv.id}」还没确认——/mcp trust ${sv.id} 确认后才连`, 3600); return; }
+  sv.enabled = !sv.enabled;
+  if (sv.enabled && sv.state !== "connected" && sv.state !== "failed") sv.state = "idle";
+  showToast(`已${sv.enabled ? "启用" : "停用"} ${sv.id}——写盘并重载，清单即刻生效${sv.source === "预装" ? "（预装件停用后一个进程都不起）" : ""}`, 3600);
+  renderAll();
+}
+
+function detailD() {
+  const sv = srv(S.detailSel);
+  if (!sv) return;
+  if (sv.source === "预装") { S.detailMsg = "预装 server 只能停用不能删除——Alt + K 停用"; S.deleteArm = false; renderAll(); return; }
+  if (S.deleteArm) {
+    S.servers.splice(S.detailSel, 1);
+    S.deleteArm = false; S.detailMsg = "";
+    showToast(`已删除 ${sv.id}——配置从 modules.d/mcp.toml 移除并重载`, 3600);
+    if (S.servers.length === 0) { go(0); showToast("没有配置任何 MCP server——Alt + N 添加，或看推荐清单 docs/mcp-servers.md", 4600); return; }
+    S.sel = Math.min(S.sel, S.servers.length - 1);
+    go(1);
+  } else { S.deleteArm = true; S.detailMsg = ""; renderAll(); }
+}
+
+/* —— 添加 / 修改窗 —— */
+function fillEditFrom(sv) {
+  const w = S.addWin;
+  w.mode = "edit"; w.err = ""; w.ok = "";
+  w.transport = sv.transport === "sse" ? "sse" : sv.transport === "http" ? "http" : "stdio";
+  w.advOpen = true; w.tab = "manual";
+  /* 修改形态：名称锁定；环境变量 / 请求头只显键名不显值（留空 = 保持原值——方案 T17） */
+  w.fields = { name: sv.id, cmd: sv.cmd, env: sv.id === "github" ? "GITHUB_TOKEN" : sv.id === "my-db" ? "PG_DSN" : "", headers: sv.transport !== "stdio" ? "Authorization" : "", cwd: "", timeout: "60" };
+  w.jsonText = "";
+}
+function openAdd(mode) {
+  const w = S.addWin;
+  w.open = true; w.mode = mode; w.err = ""; w.ok = "";
+  if (mode === "add") {
+    w.tab = "manual"; w.transport = "stdio"; w.advOpen = false;
+    w.fields = { name: "", cmd: "", env: "", headers: "", cwd: "", timeout: "" };
+    w.jsonText = "";
+    S.lastFocusId = "f-name";
+  } else {
+    fillEditFrom(srv(S.detailSel) || { id: "my-db", transport: "stdio", cmd: "postgres-mcp --dsn $ENV:PG_DSN" });
+    S.lastFocusId = "f-transport";
+  }
+  go(mode === "edit" ? 2 : 1);
+  S.addWin.open = true; renderAll();
+}
+/* 注记里的模拟按钮：在当前屏原地切添加 ↔ 修改（不换屏——修改形态拿 my-db 当靶子） */
+window.toggleAddMode = () => {
+  const w = S.addWin;
+  if (w.mode === "add") {
+    const idx = S.servers.findIndex((x) => x.id === "my-db");
+    if (idx >= 0) S.detailSel = idx;
+    fillEditFrom(S.servers[idx] || { id: "my-db", transport: "stdio", cmd: "postgres-mcp --dsn $ENV:PG_DSN" });
+    S.lastFocusId = "f-transport";
+  } else {
+    w.mode = "add"; w.err = ""; w.ok = ""; w.tab = "manual"; w.transport = "stdio"; w.advOpen = false;
+    w.fields = { name: "", cmd: "", env: "", headers: "", cwd: "", timeout: "" }; w.jsonText = "";
+    S.lastFocusId = "f-name";
+  }
+  w.open = true; renderAll();
+};
+window.presetManual = () => { S.addWin.fields.name = "my-search"; S.addWin.fields.cmd = "npx -y my-search-mcp --port 9"; renderAll(); };
+
+const JSON_SAMPLES = {
+  wrapped: `{"mcpServers": {"my-search": {"command": "npx", "args": ["-y", "my-search-mcp"]}}}`,
+  single: `{"weather": {"command": "npx", "args": ["-y", "weather-mcp"], "env": {"WEATHER_KEY": "…"}}}`,
+  multi: `{"mcpServers": {"weather": {"command": "npx"}, "maps": {"command": "npx"}}}`,
+  missing: `{"my-db": {"env": {"PG_DSN": "postgres://…"}}}`,
+  bad: `{"mcpServers": {"weather": {"command": "npx"},}`,
+};
+window.pasteJson = (k) => { S.addWin.jsonText = JSON_SAMPLES[k]; S.addWin.err = ""; S.lastFocusId = "f-json"; renderAll(); };
+
+function closeAddWin() {
+  S.addWin.open = false;
+  if (S.screen === 4 || S.screen === 5) go(1); /* 专用屏关窗 = 回列表 */
+  else renderAll();
+}
+window.closeAddWin = closeAddWin;
+
+function saveAddWin() {
+  const w = S.addWin;
+  w.err = ""; w.ok = "";
+  if (w.tab === "manual") {
+    const name = w.mode === "edit" ? (srv(S.detailSel) || {}).id : w.fields.name.trim();
+    const cmdv = w.fields.cmd.trim();
+    if (w.mode === "add" && name === "") { w.err = "名称没填——列表和权限规则都靠名字认 server"; renderAll(); return; }
+    if (w.mode === "add" && S.servers.some((x) => x.id === name)) { w.err = `已存在同名 server「${name}」——不覆盖别人的配置；想改它请用修改`; renderAll(); return; }
+    const remoteSave = w.transport !== "stdio";
+    if (cmdv === "") { w.err = remoteSave ? "URL 没填——远程型（HTTP / SSE）需要一个 https:// 地址" : "启动命令没填——stdio 型要有一条命令（整行收，保存时统一拆）"; renderAll(); return; }
+    if (w.mode === "edit") {
+      const sv = srv(S.detailSel);
+      sv.cmd = cmdv; sv.transport = w.transport;
+      if (sv.state !== "connected") sv.state = "idle";
+      w.ok = "已保存——保存即生效，Esc 关窗回列表看红绿灯";
+      renderAll(); return;
+    }
+    S.servers.push({ id: name, desc: "（新添加——说明待 server 连上后取回）", state: "idle", enabled: true, source: "配置文件", transport: w.transport, cmd: cmdv, tools: 0 });
+    S.sel = S.servers.length - 1;
+    S.addWin.open = false;
+    showToast(`已添加 ${name}——保存即生效，回列表看红绿灯（连上是绿、出问题是红带原因）`, 4200);
+    go(1);
+    return;
+  }
+  /* JSON 页签 */
+  const text = w.jsonText.trim();
+  if (text === "") { w.err = "先粘贴一段配置——两种格式都吃：{\"名字\": {…}} 或 {\"mcpServers\": {…}}"; renderAll(); return; }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (e) { w.err = "这不是合法的 JSON——检查引号、逗号是否配对完整（浏览器报：" + String(e.message).slice(0, 60) + "）"; renderAll(); return; }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) { w.err = "JSON 顶层得是对象——形如 {\"名字\": {…}} 或 {\"mcpServers\": {…}}"; renderAll(); return; }
+  let entries = null;
+  if (parsed.mcpServers !== undefined) {
+    const ms = parsed.mcpServers;
+    if (typeof ms !== "object" || ms === null || Array.isArray(ms)) { w.err = "mcpServers 得是对象——{\"名字\": {…}} 形状"; renderAll(); return; }
+    entries = Object.keys(ms).map((k) => [k, ms[k]]);
+  } else {
+    entries = Object.keys(parsed).map((k) => [k, parsed[k]]);
+  }
+  if (entries.length === 0) { w.err = "里面没有任何 server——空配置没法安装"; renderAll(); return; }
+  if (entries.length > 1) { w.err = `一次只能装一个 server——这段里有 ${entries.length} 个（${entries.map((x) => x[0]).join("、")}），删到剩一个再保存`; renderAll(); return; }
+  const [name, ent] = entries[0];
+  if (typeof ent !== "object" || ent === null) { w.err = `server 条目「${name}」得是对象——command / args / env 那些字段写在里面`; renderAll(); return; }
+  if (ent.command === undefined && ent.url === undefined) { w.err = "server 条目缺启动方式——command（本地命令）或 url（远程地址）至少要有一个"; renderAll(); return; }
+  if (w.mode === "add" && S.servers.some((x) => x.id === name)) { w.err = `已存在同名 server「${name}」——不覆盖别人的配置；想改它请用修改`; renderAll(); return; }
+  const isUrl = ent.command === undefined;
+  const cmdv = isUrl ? String(ent.url) : [ent.command, ...((ent.args || []).map(String))].join(" ");
+  if (w.mode === "edit") {
+    const sv = srv(S.detailSel);
+    sv.cmd = cmdv; sv.transport = isUrl ? "http" : "stdio";
+    if (sv.state !== "connected") sv.state = "idle";
+    w.ok = "已保存——保存即生效，Esc 关窗回列表看红绿灯";
+    renderAll(); return;
+  }
+  S.servers.push({ id: name, desc: "（新添加——说明待 server 连上后取回）", state: "idle", enabled: true, source: "配置文件", transport: isUrl ? "http" : "stdio", cmd: cmdv, tools: 0 });
+  S.sel = S.servers.length - 1;
+  S.addWin.open = false;
+  showToast(`已添加 ${name}（来自 JSON 粘贴）——保存即生效，回列表看红绿灯`, 4200);
+  go(1);
+}
+window.saveAddWin = saveAddWin;
+
+/* —— 信任门 —— */
+window.replayTrustToast = () => { showToast("项目 .mcp.json 有 1 个未确认的 MCP server，/mcp 查看确认", 5000); };
+window.resetTrust = () => {
+  const sv = S.servers.find((x) => x.id === "project-api");
+  if (sv) { sv.state = "unconfirmed"; sv.enabled = true; }
+  S.trustStage = "confirm";
+  renderAll();
+};
+function confirmTrust() {
+  const sv = S.servers.find((x) => x.id === "project-api");
+  if (!sv || S.trustStage !== "confirm") return;
+  sv.state = "connected"; sv.enabled = true;
+  S.trustStage = "done";
+  renderAll();
+  showToast("已确认 project-api（指纹 a1b2c3d4）——已连接，3 个工具", 4600);
+}
+
+/* ============ 键盘路由 ============ */
+
+document.addEventListener("keydown", (e) => {
+  const inField = e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable);
+  const addOpen = S.addWin.open;
+
+  /* —— 添加窗内：输入框让给原生（Esc / Shift + ↑↓ 焦点轮换除外；JSON 大文本域里 Shift + ↑↓ 保原生选行） —— */
+  if (inField && addOpen) {
+    if (e.key === "Escape") { e.preventDefault(); closeAddWin(); return; }
+    if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && e.target.tagName !== "TEXTAREA") {
+      e.preventDefault(); cycleFocus(e.target, e.key === "ArrowUp" ? -1 : 1); return;
+    }
+    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); focusNextStop(e.target); }
+    return;
+  }
+  /* 焦点在页签行 / 传输行 / adv 行（div tabindex）—— ←→ 与 Enter 在这里处理 */
+  const ae = document.activeElement;
+  const aeId = ae && ae.id ? ae.id : "";
+  if (addOpen) {
+    if (e.key === "Escape") { e.preventDefault(); closeAddWin(); return; }
+    if (e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      const cur = document.activeElement;
+      cycleFocus(cur && cur !== document.body ? cur : null, e.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
+    if (aeId === "f-tabs" && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      S.addWin.tab = S.addWin.tab === "manual" ? "json" : "manual";
+      S.lastFocusId = "f-tabs"; renderAll(); return;
+    }
+    if (aeId === "f-transport" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      const order = ["stdio", "http", "sse"];
+      const cur = order.indexOf(S.addWin.transport);
+      S.addWin.transport = order[(cur + (e.key === "ArrowRight" ? 1 : -1) + order.length) % order.length];
+      S.lastFocusId = "f-transport"; renderAll(); return;
+    }
+    if ((aeId === "f-adv" || aeId === "f-tabs") && e.key === "Enter" && aeId === "f-adv") {
+      e.preventDefault(); S.addWin.advOpen = !S.addWin.advOpen; S.lastFocusId = "f-adv"; renderAll(); return;
+    }
+    if (e.key === "Tab") return; /* 原生焦点循环 */
+    return; /* 其余键在添加窗内不路由到屏 */
+  }
+
+  const kAlt = e.altKey;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+  /* 全局屏切换 */
+  if (e.key === "[") { e.preventDefault(); go(S.screen - 1); return; }
+  if (e.key === "]") { e.preventDefault(); go(S.screen + 1); return; }
+  if (/^[0-9]$/.test(e.key)) { const n = e.key === "0" ? 9 : Number(e.key) - 1; if (n < SCREENS.length) { e.preventDefault(); go(n); } return; }
+
+  const altK = (kAlt && key === "k") || (!kAlt && key === "k");
+  const altN = (kAlt && key === "n") || (!kAlt && key === "n" && (S.screen === 1 || S.screen === 2 || S.screen === 3 || S.screen === 4 || S.screen === 5));
+  if (altK || altN) e.preventDefault();
+
+  switch (S.screen) {
+    case 0:
+      if (e.key === "ArrowDown") { S.settingsSel = (S.settingsSel + 1) % SETTINGS_ITEMS.length; renderAll(); }
+      else if (e.key === "ArrowUp") { S.settingsSel = (S.settingsSel - 1 + SETTINGS_ITEMS.length) % SETTINGS_ITEMS.length; renderAll(); }
+      else if (e.key === "Enter") { enterSettings(); }
+      break;
+    case 1:
+      if (e.key === "ArrowDown") { S.sel = (S.sel + 1) % S.servers.length; renderAll(); }
+      else if (e.key === "ArrowUp") { S.sel = (S.sel - 1 + S.servers.length) % S.servers.length; renderAll(); }
+      else if (e.key === "Enter") { enterList(); }
+      else if (e.key === "Escape") { go(0); }
+      else if (altK) { toggleServerAt(S.sel); }
+      else if (altN) { openAdd("add"); }
+      break;
+    case 2: case 3: {
+      const i = S.detailSel;
+      if (e.key === "Escape") { go(1); }
+      else if (altK) { toggleServerAt(i); }
+      else if (altN) { openAdd("edit"); }
+      else if (key === "d" && !kAlt) { detailD(); }
+      else if (S.deleteArm && key !== "d") { S.deleteArm = false; renderAll(); } /* 其他键解除武装 */
+      else if (S.detailMsg && key !== "d") { S.detailMsg = ""; renderAll(); }
+      break;
+    }
+    case 6: {
+      const max = 10;
+      if (e.key === "ArrowDown") { S.menuSel = Math.min(max - 1, S.menuSel + 1); renderAll(); }
+      else if (e.key === "ArrowUp") { S.menuSel = Math.max(0, S.menuSel - 1); renderAll(); }
+      else if (e.key === "Enter") {
+        const items = menuItems();
+        const it = items[S.menuSel];
+        if (it && it.kind === "mcp") {
+          const idx = S.servers.indexOf(it.sv);
+          S.detailSel = Math.max(0, idx); S.sel = Math.max(0, idx);
+          go(2);
+        } else showToast("（命令与技能条目行为不在本原型范围——只演 mcp 区）", 2600);
+      } else if (e.key === "Escape") { go(1); }
+      break;
+    }
+    case 8:
+      if (S.trustStage === "confirm" && e.key === "Enter") { confirmTrust(); }
+      else if (e.key === "Escape") { if (S.trustStage === "confirm") { S.trustStage = "done"; renderAll(); showToast("已取消——server 保持未确认，不连接（fail-closed）", 3600); } }
+      break;
+  }
+});
+
+function menuItems() {
+  return [
+    { kind: "cmd", name: "/title", desc: "修改会话标题" },
+    { kind: "cmd", name: "/reload", desc: "重载全部模块" },
+    { kind: "sep", label: "技能" },
+    { kind: "skill", name: "skill : writing-plan-docs", desc: "写方案必须人话" },
+    { kind: "skill", name: "skill : diagnosing-bugs", desc: "系统化排障流程" },
+    { kind: "sep", label: "MCP" },
+    ...S.servers.slice(0, 4).map((sv) => ({ kind: "mcp", sv })),
+  ];
+}
+function focusStops() {
+  return Array.from(document.querySelectorAll("#overlay input, #overlay textarea, #overlay button, #overlay [tabindex='0']"));
+}
+/** 焦点轮换（2026-09-30 走查拍板：Shift + ↑↓ / Tab——裸 ↑↓ 不动焦点，输入框内留给光标）。
+ *  el 不在停靠点里时从头（dir=1）或尾（dir=-1）起；环形回绕。 */
+function cycleFocus(el, dir) {
+  const stops = focusStops();
+  if (stops.length === 0) return;
+  const i = el ? stops.indexOf(el) : -1;
+  const next = i < 0 ? (dir > 0 ? 0 : stops.length - 1) : (i + dir + stops.length) % stops.length;
+  stops[next].focus();
+  S.lastFocusId = stops[next].id || S.lastFocusId;
+}
+function focusNextStop(el) { cycleFocus(el, 1); }
+
+/* 焦点跟踪：添加窗内焦点变化时记住，重建后恢复 */
+document.addEventListener("focusin", (e) => {
+  const t = e.target;
+  if (!t.id) return;
+  if (t.id.startsWith("f-")) S.lastFocusId = t.id;
+});
+
+/* 切屏条 */
+$id("swprev").onclick = () => go(S.screen - 1);
+$id("swnext").onclick = () => go(S.screen + 1);
+
+/* ============ 启动 ============ */
+renderSide();
+go(1);
+/* 首屏顺带演示 T12 的启动 toast（信任门屏另有重放按钮） */
+setTimeout(() => showToast("项目 .mcp.json 有 1 个未确认的 MCP server，/mcp 查看确认", 5000), 600);
+</script>
+</body>
+</html>
