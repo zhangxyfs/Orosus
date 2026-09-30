@@ -466,6 +466,25 @@ describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM
     return new Promise((resolve) => { child.on("exit", (c) => resolve({ code: c ?? -1, out, err })); });
   };
 
+  it("T13：/mcp 命令族管道冒烟——空态指路 → add 写入密封 home 的 modules.d 并即时重载", async () => {
+    const d = tmp("mcp13"); // 文件级 afterEach 清理口径（局部 rmSync 会漏 afterEach 的 dir 未设崩）
+    try {
+      const r1 = await runRepl(d, ["/mcp", "/quit"]);
+      expect(r1.code).toBe(0);
+      expect(r1.out).toContain("还没有配置任何 MCP server");
+      expect(r1.out).toContain("docs/mcp-servers.md");
+      const r2 = await runRepl(d, ["/mcp add demo npx -y some-package", "/mcp", "/quit"]);
+      expect(r2.code).toBe(0);
+      expect(r2.out).toContain("已写入 **demo**");
+      const tomlPath = join(d, "home", ".orosus", "modules.d", "mcp.toml");
+      expect(readFileSync(tomlPath, "utf8")).toContain('[mcp.servers.demo]');
+      expect(readFileSync(tomlPath, "utf8")).toContain('command = "npx"');
+      expect(r2.out).toContain("**demo**"); // 重载后的列表含新条目（连接失败也列——失败面有名字）
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("CS-05①：/new 换会话后立即 /fork——不再把上一会话的事件 id 当分叉点（残留即「fork 分叉点不在父会话投影内」崩进程）", async () => {
     const d = mkdtempSync(join(tmpdir(), "orosus-cs05a-"));
     try {

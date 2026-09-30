@@ -20,4 +20,4 @@ export { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrust
 export { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 // M4-3 T1d 宿主面：引导期按裸条目实拉模型清单需直读 secrets（reload 前的文件级解析）
 export { loadSecretsEnv, loadConfig, modelsDevCacheFile, lookupModelsDevContextWindow, resolveContextWindow } from "./config/load.ts"; // loadConfig 导出（m4-8 T2.5 散读收口）；窗口链三件（2026-09-29：config 显式 > models-dev 目录兜底）
-export { writeSectionKey, sectionPath } from "./config/write.ts"; // 统一写口导出（m4-8 T3——写配置单一事实源）
+export { writeSectionKey, sectionPath, writeNestedTable, type NestedTableValue } from "./config/write.ts"; // 统一写口导出（m4-8 T3——写配置单一事实源；T13 嵌套表写入器）
