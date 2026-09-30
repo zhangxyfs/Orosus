@@ -1094,7 +1094,7 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 	});
 });
 
-describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 注入）", () => {
+describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 注入；2026-09-30 增 Tab 填 /skill : 名 形态与子序列第三档）", () => {
 	const SK = (name: string, desc: string, usage?: string): SlashItem => ({
 		name: `skill : ${name}`, desc, long: desc, skill: name, ...(usage !== undefined ? { usage } : {}),
 	});
@@ -1166,7 +1166,7 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		app.stop();
 	});
 
-	it("④ Enter = 用户触发注入：skillInject 拿真名、submit 收注入全文、菜单关；Tab 对技能条目不补全（留菜单）", async () => {
+	it("④ Enter = 用户触发注入：skillInject 拿真名、submit 收注入全文、菜单关", async () => {
 		const injected: string[] = [];
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件")],
@@ -1181,10 +1181,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		input.emit("data", "\x1b[B");
 		input.emit("data", "\x1b[B");
 		await flush(120);
-		input.emit("data", "\t"); // Tab：技能不可补全——菜单仍开、输入仍 "/"
-		await flush(120);
-		expect(app.stateRef.overlayOpen).toBe(true);
-		expect(app.stateRef.input).toBe("/");
 		input.emit("data", "\r"); // Enter → 注入提交
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(false);
@@ -1195,7 +1191,55 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		app.stop();
 	});
 
-	it("⑤ 过滤两档：q=「re」→ 技能 review-pr 命中（pdf 不含不显）；命令零命中技能有货不显示「无匹配命令」；↑ 跨分隔行回绕不停 sep", async () => {
+	it("⑤ Tab ≠ Enter（2026-09-30 用户拍板）：技能条目 Tab 填可输入形态「/skill : 名」进输入框（菜单关、不注入），回车提交原文走宿主解析", async () => {
+		const injected: string[] = [];
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "生成 PDF 文件")],
+			skillInject: (n) => { injected.push(n); return `INJ:${n}`; },
+		});
+		const { app, input, submitted } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/");
+		await flush(120);
+		input.emit("data", "\x1b[B"); // ↓ ×3 → pdf
+		input.emit("data", "\x1b[B");
+		input.emit("data", "\x1b[B");
+		await flush(120);
+		input.emit("data", "\t"); // Tab → 填形态不注入
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false); // 菜单关（命令 Tab 同款）
+		expect(app.stateRef.input).toBe("/skill : pdf"); // 可输入形态落输入框（光标尾）
+		expect(app.stateRef.cursor).toBe("/skill : pdf".length);
+		expect(injected).toEqual([]); // 未注入
+		expect(submitted).toHaveLength(0);
+		input.emit("data", "\r"); // 回车 → 提交原文（/skill : 名 的解析在宿主 processReplLine，rig 只收提交串）
+		await flush(120);
+		expect(submitted).toEqual(["/skill : pdf"]);
+		app.stop();
+	});
+
+	it("⑦ 菜单开着的手敲完整形态（含参数）：Enter 提交原话不走 fireSkill——参数不丢、原话可回显（2026-09-30 拍板「我输入啥就显示啥」）", async () => {
+		const injected: string[] = [];
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("pdf", "生成 PDF 文件")],
+			skillInject: (n) => { injected.push(n); return `INJ:${n}`; },
+		});
+		const { app, input, submitted } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/skill : pdf 附带参数整段"); // 从 / 起整行手敲——菜单全程开着
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true); // 菜单没关（对照 ⑤：Tab 填形态才关）
+		input.emit("data", "\r");
+		await flush(120);
+		expect(submitted).toEqual(["/skill : pdf 附带参数整段"]); // 原话整段提交（提交层解析：回显 + args 注入）
+		expect(injected).toEqual([]); // 不经 fireSkill（只带名字会丢参数、也不回显原话）
+		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+
+	it("⑥ 过滤两档：q=「re」→ 技能 review-pr 命中（pdf 不含不显）；命令零命中技能有货不显示「无匹配命令」；↑ 跨分隔行回绕不停 sep", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件"), SK("review-pr", "审查拉取请求")],
 			skillInject: (n) => `INJ:${n}`,
@@ -1219,6 +1263,24 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		await flush(120);
 		plain = overlayOf(app).map(stripAnsi);
 		expect(plain[plain.length - 2]!.includes("适用")).toBe(false); // 仍选中 review-pr（无 usage 第 3 行空）——未停在 sep
+		app.stop();
+	});
+
+	it("⑦ 过滤第三档子序列（2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：散见命中殿后于前缀/含字档，可搜文本 = 真名 + 显示标签", async () => {
+		const r = rig(["# hi"], 100, 30, {
+			skillItems: () => [SK("ask", "提问技能"), SK("pdf", "生成 PDF 文件")],
+			skillInject: (n) => `INJ:${n}`,
+		});
+		const { app, input } = r;
+		app.start();
+		await flush();
+		input.emit("data", "/skas"); // skas = 「skill : ask」的子序列（真名 ask 不含——只认真名筛不出）
+		await flush(120);
+		const plain = overlayOf(app).map(stripAnsi);
+		const joined = plain.join("\n");
+		expect(joined).toContain("skill : ask");
+		expect(joined).not.toContain("skill : pdf"); // pdf 真名/标签都不是 skas 子序列
+		expect(joined).toContain("0 个命令 · 1 个技能"); // rig 三命令（help/title/permission）无 skas 散见命中
 		app.stop();
 	});
 });
@@ -2184,6 +2246,66 @@ describe("主窗文本选择（m5 鼠标批 T5——拖选反白 + 松开即复�
 		expect(app.stateRef.toast?.text).toBe("已发终端复制口令（系统剪贴板未确认）");
 		app.stop();
 	});
+	it("CC-1 Ctrl+A 全选后 Ctrl+C：writeClipboard 收到输入框全文 + toast「已复制输入框 N 字」（2026-09-30 拍板）", async () => {
+		const writes: string[] = [];
+		const { app, input } = rig(["# 你好"], 100, 30, { writeClipboard: async (t: string) => { writes.push(t); return true; } });
+		app.start();
+		await flush();
+		input.emit("data", "你好世界");
+		input.emit("data", "\x01"); // Ctrl+A 全选
+		input.emit("data", "\x03"); // Ctrl+C
+		await flush();
+		expect(writes).toEqual(["你好世界"]);
+		expect(app.stateRef.toast?.text).toBe("已复制输入框 4 字");
+		app.stop();
+	});
+	it("CC-2 无键盘选区时 Ctrl+C：吞键维持现状——不写剪贴板、无 toast", async () => {
+		const writes: string[] = [];
+		const { app, input } = rig(["# 你好"], 100, 30, { writeClipboard: async (t: string) => { writes.push(t); return true; } });
+		app.start();
+		await flush();
+		input.emit("data", "abc");
+		input.emit("data", "\x03"); // 无选区的 Ctrl+C
+		await flush();
+		expect(writes).toHaveLength(0);
+		expect(app.stateRef.toast).toBeUndefined();
+		app.stop();
+	});
+	it("CC-3 输入框 Ctrl+C 失败落 OSC 52 兜底（与拖选同一条降级路）", async () => {
+		const { app, input, output } = rig(["# 你好"], 100, 30, { writeClipboard: async () => false });
+		app.start();
+		await flush();
+		const before = output.buf.length;
+		input.emit("data", "ab");
+		input.emit("data", "\x01");
+		input.emit("data", "\x03");
+		await flush();
+		expect(output.buf.slice(before)).toContain("\x1b]52;c;");
+		expect(app.stateRef.toast?.text).toBe("已发终端复制口令（系统剪贴板未确认）");
+		app.stop();
+	});
+	it("CC-4 键盘选区诞生清拖选高亮：Ctrl+A 与 Shift+→ 两路都清（拍板：屏幕最多一块高亮）", async () => {
+		const { app, input } = rig(doc100, 100, 30);
+		app.start();
+		await flush();
+		const st = app.stateRef as unknown as SelState;
+		input.emit("data", "xy");
+		press(input, 4, 0); dragTo(input, 20, 1); releaseAt(input, 20, 1); // 拖选留高亮
+		await flush();
+		expect(st.mselAnchor).toBeDefined();
+		input.emit("data", "\x01"); // Ctrl+A → 键盘选区诞生
+		await flush();
+		expect(st.mselAnchor).toBeUndefined(); // 拖选高亮被清
+		input.emit("data", "\x1b[C"); // → 收起键盘选区
+		await flush();
+		press(input, 4, 0); dragTo(input, 20, 1); releaseAt(input, 20, 1); // 再拖选一次
+		await flush();
+		expect(st.mselAnchor).toBeDefined();
+		input.emit("data", "\x1b[1;2C"); // Shift+→ 首拍 → 键盘选区从无到有
+		await flush();
+		expect(st.mselAnchor).toBeUndefined(); // 同样清拖选高亮
+		app.stop();
+	});
 });
 
 describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同款：500ms 窗口 + 词/行边界连击计数）", () => {
@@ -2687,13 +2809,12 @@ describe("查看窗自定义键内容替换的滚动语义（走查⑥ 2026-09-2
 		app.stop();
 	});
 	it("普通窗自定义键返回新文本：scroll 保持、仅钳到新范围（内容变短超界才动）", async () => {
-		const { app, input, output } = rig();
+		const { app, input } = rig();
 		app.start();
 		await flush();
 		const long = Array.from({ length: 60 }, (_, i) => `行${i}`).join("\n");
 		const short = ["甲", "乙", "丙"].join("\n");
-		let text = long;
-		app.viewText("普通窗", long, { keys: { r: { label: "换短", run: () => (text = short) } } });
+		app.viewText("普通窗", long, { keys: { r: { label: "换短", run: () => short } } });
 		await flush();
 		// 滚到中部（非顶部非底部）
 		const pu0 = (app as unknown as { pendingUi: { scroll: number } }).pendingUi;

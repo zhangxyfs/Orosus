@@ -386,6 +386,15 @@ function normCmd(text: string): string {
 	return text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
 }
 
+/** 子序列模糊命中（斜杠菜单第三档，2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：
+ *  q 的字符按序散见于目标即可，不必连续。空词恒 false（已被前缀档全收，到不了这）。 */
+function isSubseq(q: string, target: string): boolean {
+	if (q === "") return false;
+	let i = 0;
+	for (const ch of target) if (ch === q[i]) i++;
+	return i === q.length;
+}
+
 export class FullApp {
 	private io: FullAppIO;
 	private term: Term;
@@ -989,7 +998,10 @@ export class FullApp {
 
 	private moveCursor(dir: -1 | 1, extend: boolean): void {
 		const s = this.state;
-		if (extend && s.selAnchor < 0) s.selAnchor = s.cursor;
+		if (extend && s.selAnchor < 0) {
+			s.selAnchor = s.cursor;
+			this.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板，与 Ctrl+A 同规则）
+		}
 		if (!extend) {
 			const r = this.selRange();
 			if (r) {
@@ -1459,15 +1471,41 @@ export class FullApp {
 	}
 
 	/** 选区复制结算（决策点 8）：真剪贴板优先（paste.ts 三平台），失败落 OSC 52 逃生口再提示。 */
-	private async copySelection(text: string): Promise<void> {
+	private copySelection(text: string): Promise<void> {
+		return this.writeClipboardSettle(text, `已复制 ${text.split("\n").length} 行`);
+	}
+
+	/** 剪贴板写入结算（真剪贴板优先，失败落 OSC 52 逃生口再提示）——拖选松开（m5 T5）与
+	 *  输入框 Ctrl+C（2026-09-30）共用同一条降级路。 */
+	private async writeClipboardSettle(text: string, okMsg: string): Promise<void> {
 		const write = this.io.writeClipboard ?? writeClipboardText;
 		const ok = await write(text);
 		if (ok) {
-			this.showToast(`已复制 ${text.split("\n").length} 行`);
+			this.showToast(okMsg);
 		} else {
 			this.term.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
 			this.showToast("已发终端复制口令（系统剪贴板未确认）");
 		}
+	}
+
+	/** 输入框键盘选区复制（2026-09-30 用户拍板）：Ctrl+C 只在「输入框有高亮选区」时消费——
+	 *  WT 自有鼠标选区时会先截走 Ctrl+C、\x03 不到达应用，两层天然互斥、不抢 WT 原生复制；
+	 *  无选区维持吞键现状（退出走 /quit、停生成双击 Esc 的 2026-09-23 拍板不动）。 */
+	private async copyInputSelection(): Promise<void> {
+		const r = this.selRange();
+		if (r === undefined) return;
+		const text = this.state.input.slice(r.lo, r.hi);
+		await this.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
+	}
+
+	/** 键盘选区与拖选选区互斥（2026-09-30 拍板：任一时刻屏幕最多一块高亮）：输入框键盘选区诞生
+	 *  （Ctrl+A / Shift+←→ 首拍）即清对话流拖选残留高亮——Ctrl+C 复制的永远是「看到的那块」。 */
+	private clearStreamSelection(): void {
+		const s = this.state;
+		if (s.mselAnchor === undefined && s.mselFocus === undefined) return;
+		s.mselAnchor = undefined;
+		s.mselFocus = undefined;
+		this.stopAutoScroll();
 	}
 
 	/** 打开链接（T7 决策点 17）：只开 http/https——链接文本来自模型输出，file:// 等方案
@@ -1927,18 +1965,22 @@ export class FullApp {
 		return skills.length > 0 ? [...cmds, { key: "", kind: "sep" as const }, ...skills] : cmds;
 	}
 
-	/** 技能区过滤（m4-7 T7，原型图 1）：技能名两档（前缀排前、含字殿后）殿后于全部命中命令；
-	 *  技能组整体不插进命令组（「追加在全部命中命令之后」）。q 为空 = 全显。 */
+	/** 技能区过滤（m4-7 T7，原型图 1）：技能名档位（前缀排前、含字居中、子序列殿后——2026-09-30
+	 *  第三档拍板）殿后于全部命中命令；技能组整体不插进命令组（「追加在全部命中命令之后」）。q 为空 = 全显。
+	 *  可搜文本 = 真名 + 显示标签「skill : 名」：只认真名则 /skas 筛不出 ask（skas 非 ask 子序列），认标签才成立。 */
 	private filteredSkills(): SlashItem[] {
 		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
 		const hits: SlashItem[] = [];
 		const more: SlashItem[] = [];
+		const fuzzy: SlashItem[] = [];
 		for (const c of this.io.skillItems?.() ?? []) {
 			const n = (c.skill ?? c.name).toLowerCase();
-			if (n.startsWith(q)) hits.push(c);
-			else if (n.includes(q)) more.push(c);
+			const label = `skill : ${n}`;
+			if (n.startsWith(q) || label.startsWith(q)) hits.push(c);
+			else if (n.includes(q) || label.includes(q)) more.push(c);
+			else if (isSubseq(q, n) || isSubseq(q, label)) fuzzy.push(c);
 		}
-		return [...hits, ...more];
+		return [...hits, ...more, ...fuzzy];
 	}
 
 	/** overlaySel 夹到可选行（sep 不可选——重置 0/滚窗后落 sep 时沿向下让位）。 */
@@ -1982,13 +2024,24 @@ export class FullApp {
 			s.cursor = s.input.length;
 			s.overlaySel = 0;
 		} else if (key === "tab" && !level2 && items.length > 0) {
-			// 技能条目不可 Tab 补全（它不是可输入命令——skill : 名进输入框无路由意义）：无操作留菜单
-			if (items[s.overlaySel]?.kind !== "skill") {
-				s.input = items[s.overlaySel]?.key ?? s.input;
-				s.cursor = s.input.length;
-				s.overlayOpen = false;
-			}
+			// 技能 Tab 填可输入形态「/skill : 名」（2026-09-30 用户拍板：Tab ≠ Enter——回车直接执行技能，
+			// Tab 落输入框可编辑，提交层 processReplLine 解析该格式再注入正文）；命令行 Tab 照旧补全命令名
+			const sel = items[s.overlaySel];
+			s.input = sel?.kind === "skill" ? `/skill : ${sel.key}` : sel?.key ?? s.input;
+			s.cursor = s.input.length;
+			s.overlayOpen = false;
 		} else if (key === "enter") {
+			// 「/skill : 名 [参数]」完整形态（Tab 填出或手敲，2026-09-30 拍板「我输入啥就显示啥」）：
+			// 菜单开着也提交原话走提交层（processReplLine 解析：原话回显 + 参数随技能注入）——不在此处
+			// fireSkill（只带名字会丢参数也不回显）；零命中空态同样放行（否则带参形态被空态卡死无法发）；
+			// 纯过滤词（/pdf 之类无冒号形态）维持「回车直接执行技能」拍板不变
+			if (/^\/skill\s*:\s*\S/i.test(normCmd(s.input))) {
+				s.overlayOpen = false;
+				s.overlayCmd = "";
+				this.submitLine(normCmd(s.input));
+				this.scheduler.requestImmediateRender();
+				return;
+			}
 			if (items.length === 0) {
 				this.scheduler.requestImmediateRender();
 				return;
@@ -2008,17 +2061,8 @@ export class FullApp {
 			s.overlaySel = this.selToSelectable(items, s.overlaySel);
 			const row = items[s.overlaySel]!;
 			if (row.kind === "skill") {
-				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）：正文以用户消息注入当前轮
-				// （pi/kimi 同款——走主输入口，busy 期照排队语义，不打断 turn 机制）
-				const name = row.key;
-				const text = this.io.skillInject?.(name);
-				if (text === undefined) {
-					this.showToast(`技能 "${name}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
-				} else {
-					s.overlayOpen = false;
-					s.overlayCmd = "";
-					this.submitLine(text);
-				}
+				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）
+				this.fireSkill(row.key);
 				this.scheduler.requestImmediateRender();
 				return;
 			}
@@ -2051,6 +2095,20 @@ export class FullApp {
 		this.scheduler.requestImmediateRender();
 	}
 
+	/** 技能条目 Enter 触发：正文以用户消息注入当前轮（m4-7 D3 拍板，pi/kimi 同款——走主输入口，
+	 *  busy 期照排队语义，不打断 turn 机制）。读不到正文 = toast 提示留菜单。
+	 *  Tab 不走此路（2026-09-30 拍板）：Tab 填「/skill : 名」可输入形态，提交层解析后殊途同归。 */
+	private fireSkill(name: string): void {
+		const text = this.io.skillInject?.(name);
+		if (text === undefined) {
+			this.showToast(`技能 "${name}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
+			return;
+		}
+		this.state.overlayOpen = false;
+		this.state.overlayCmd = "";
+		this.submitLine(text);
+	}
+
 	private onEditKey(key: string): void {
 		const s = this.state;
 		switch (key) {
@@ -2061,9 +2119,13 @@ export class FullApp {
 			case "shift+enter": // Shift+Enter = 换行（2026-09-27 用户拍板；keymatch 两形态：裸 LF / CSI-u）
 				this.inputInsert("\n");
 				break;
+			case "ctrl+c": // 2026-09-30 用户拍板：输入框键盘选区复制；无选区吞键维持现状（WT 原生复制让位不动）
+				void this.copyInputSelection();
+				break;
 			case "ctrl+a":
 				s.selAnchor = 0;
 				s.cursor = s.input.length;
+				this.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板：屏幕最多一块高亮）
 				break;
 			case "shift+left":
 				this.moveCursor(-1, true);
@@ -2190,16 +2252,19 @@ export class FullApp {
 		// 统一小写比较；Enter 提交菜单真名（picked），不带过滤串的大小写进输入
 		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
 		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
-		// 前缀命中排前、含字命中殿后（2026-09-24 拍板：/ol 先列 ol 开头，再列含 ol 的 /yolo）——组内保持注册序
+		// 前缀命中排前、含字命中居中、子序列命中殿后（2026-09-24 拍板两档 + 2026-09-30 第三档：
+		// /ol 先列 ol 开头，再列含 ol 的 /yolo，末列字符按序散见的）——组内保持注册序
 		const hits: SlashItem[] = [];
 		const more: SlashItem[] = [];
+		const fuzzy: SlashItem[] = [];
 		for (const c of this.io.slashCommands()) {
 			const lowerName = c.name.toLowerCase();
 			const aliases = (c.aliases ?? []).map((a) => a.toLowerCase());
 			if (lowerName.startsWith("/" + q) || aliases.some((a) => a.startsWith(q))) hits.push(c);
 			else if (lowerName.slice(1).includes(q) || aliases.some((a) => a.includes(q))) more.push(c);
+			else if (isSubseq(q, lowerName.slice(1)) || aliases.some((a) => isSubseq(q, a))) fuzzy.push(c);
 		}
-		return [...hits, ...more];
+		return [...hits, ...more, ...fuzzy];
 	}
 
 	// ---------- 布局与渲染 ----------

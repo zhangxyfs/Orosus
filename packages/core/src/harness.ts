@@ -11,7 +11,7 @@ import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
 import { TreeIndex } from "./session/treeindex.ts";
-import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./config/load.ts";
+import { loadConfig, loadSecretsEnv, mergeEnvLayer, modelsDevCacheFile, resolveContextWindow } from "./config/load.ts";
 import { resolveSections } from "./config/validate.ts";
 import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
@@ -82,6 +82,7 @@ export interface HarnessOptions {
     projectFile?: string;
     userModulesDir?: string;                // modules.d 目录层（m4-8）——缺省 ~/.orosus/modules.d/
     projectModulesDir?: string;             // 缺省 <cwd>/.orosus/modules.d/
+    catalogCacheFile?: string;              // models-dev 盘上缓存落点（contextWindow 兜底链，2026-09-29）——缺省 ~/.orosus/cache/models-dev.json；测试注入 tmp 密封
     cliOverrides?: Record<string, unknown>;
     enableModules?: string[];
     disableModules?: string[];
@@ -285,6 +286,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   });
   // SW-20：解析失败降级进 warnings——落地即弃可惜，diag 留痕（引导触发判定在 CLI preflight，不靠此路）
   for (const w of config.warnings) createLogger(sink, "kernel").warn("kernel.config.load-warning", w, {});
+  // 窗口兜底链数据源（2026-09-29 用户拍板）：config 顶层显式值缺省/非法时按槽·模型查 models-dev 盘上缓存
+  const catalogCacheFile = options.config?.catalogCacheFile ?? modelsDevCacheFile(home);
 
   // 存储构造分支（D41/T6 + D42/T7）：显式 store > resume > fork > 全新；后端按核心顶层 key sessionStore 选择（缺省 jsonl）
   const sessionsDir = options.sessionsDir ?? join(home, "sessions");
@@ -360,16 +363,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     close: () => store.close(),
   };
 
-  // 窗口语义（M3 补强空白 §5）：核心顶层 contextWindow——正整数才生效；非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）
-  const readContextWindow = (core: Record<string, unknown>): number | undefined => {
-    const v = core.contextWindow;
-    // CH-06 连带：env 层（OROSUS_CONTEXTWINDOW）值恒为字符串——纯数字串等价接受（键名映射在
-    // config/load.ts ENV_CORE_KEYS；非数字串照旧 warn + 忽略）
-    const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
-    if (typeof n === "number" && Number.isInteger(n) && n > 0) return n;
-    if (v !== undefined) createLogger(sink, "kernel").warn("kernel.config.contextwindow", `contextWindow 配置非法（${String(v)}）——须为正整数，已忽略`);
-    return undefined;
-  };
+  // 窗口语义（M3 补强空白 §5 + 2026-09-29 兜底链）：核心顶层 contextWindow 显式值优先——正整数才生效，
+  // 非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）；缺省/非法时按槽·模型查 models-dev 盘上缓存兜底
+  const readContextWindow = (core: Record<string, unknown>): number | undefined =>
+    resolveContextWindow(core, {
+      catalogFile: catalogCacheFile,
+      onIllegal: (raw) => createLogger(sink, "kernel").warn("kernel.config.contextwindow", `contextWindow 配置非法（${String(raw)}）——须为正整数，已忽略`),
+    });
   let contextWindow = readContextWindow(config.core);
   let usageAnchor: { totalTokens: number; atMessageCount: number } | undefined; // usage 锚点（空白 §4）：主循环 stream 包装记录，二级调用不更新
 

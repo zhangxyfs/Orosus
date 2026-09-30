@@ -19,5 +19,5 @@ export { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrust
 // 宿主面（§9）：CLI module 子命令族的发现数据源——与 trust 函数同批先例（M2 补账：T13 处理器从未接线）
 export { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 // M4-3 T1d 宿主面：引导期按裸条目实拉模型清单需直读 secrets（reload 前的文件级解析）
-export { loadSecretsEnv, loadConfig } from "./config/load.ts"; // loadConfig 导出（m4-8 T2.5 散读收口——读配置单一事实源）
+export { loadSecretsEnv, loadConfig, modelsDevCacheFile, lookupModelsDevContextWindow, resolveContextWindow } from "./config/load.ts"; // loadConfig 导出（m4-8 T2.5 散读收口）；窗口链三件（2026-09-29：config 显式 > models-dev 目录兜底）
 export { writeSectionKey, sectionPath } from "./config/write.ts"; // 统一写口导出（m4-8 T3——写配置单一事实源）

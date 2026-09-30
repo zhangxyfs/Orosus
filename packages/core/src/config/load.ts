@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { parse } from "smol-toml";
 
 export interface EffectiveConfig {
@@ -177,6 +178,74 @@ export function loadConfig(opts: {
     }
   }
   return { core: acc.core, sections: new Map(Object.entries(acc.sections)), warnings };
+}
+
+/** models-dev 目录盘上缓存落点（宿主 cache 目录惯例——provider-custom 的 defaultCatalogCacheFile 同款；
+ *  路径字面量两侧各自声明是边界的代价：模块禁 import core（铁律 2），core 也不认模块内部）。 */
+export function modelsDevCacheFile(home: string): string {
+  return join(home, "cache", "models-dev.json");
+}
+
+/** 盘上信封窄读（mtime 记忆化——面板定时刷新链每几秒一读，免反复 parse 大 JSON）：
+ *  信封形状 { fetchedAt, catalog } 与 provider-custom catalog.ts 同一外部格式（models.dev api.json）。
+ *  缺文件/坏 JSON/坏形状 → undefined（兜底读取不炸不吵）。 */
+let modelsDevMemo: { file: string; mtimeMs: number; catalog: Record<string, unknown> | undefined } | undefined;
+function readModelsDevCatalog(catalogFile: string): Record<string, unknown> | undefined {
+  try {
+    const st = statSync(catalogFile);
+    if (modelsDevMemo?.file === catalogFile && modelsDevMemo.mtimeMs === st.mtimeMs) return modelsDevMemo.catalog;
+    const parsed = JSON.parse(readFileSync(catalogFile, "utf8")) as { catalog?: unknown };
+    const catalog = typeof parsed.catalog === "object" && parsed.catalog !== null && !Array.isArray(parsed.catalog)
+      ? (parsed.catalog as Record<string, unknown>)
+      : undefined;
+    modelsDevMemo = { file: catalogFile, mtimeMs: st.mtimeMs, catalog };
+    return catalog;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 目录按模型查上下文窗口：全条目宽搜（key/尾段/id/name 四口径，与 provider-custom lookupModelVision
+ *  同口径——同厂异门条目同模型窗口一致，命中但该条目无有效 limit.context 时继续搜下一条目）。
+ *  model 形参接受「槽/模型」全名（首个 "/" 后段 = 模型 id，CT-02 口径）。limit.context 须正整数。
+ *  未命中/坏文件/无文件 → undefined。 */
+export function lookupModelsDevContextWindow(catalogFile: string, model: string): number | undefined {
+  const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+  if (bare === "") return undefined;
+  const catalog = readModelsDevCatalog(catalogFile);
+  if (catalog === undefined) return undefined;
+  for (const entry of Object.values(catalog)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const models = (entry as { models?: unknown }).models;
+    if (typeof models !== "object" || models === null || Array.isArray(models)) continue;
+    for (const [key, m] of Object.entries(models as Record<string, unknown>)) {
+      if (typeof m !== "object" || m === null) continue;
+      const rec = m as { id?: unknown; name?: unknown };
+      if (key !== bare && !key.endsWith(`/${bare}`) && rec.id !== bare && rec.name !== bare) continue;
+      const ctx = (m as { limit?: { context?: unknown } }).limit?.context;
+      if (typeof ctx === "number" && Number.isInteger(ctx) && ctx > 0) return ctx;
+    }
+  }
+  return undefined;
+}
+
+/** contextWindow 解析全链（2026-09-29 用户拍板）：config 顶层显式值优先——正整数才生效（纯数字串
+ *  等价，env 层 CH-06），provider import / 模型菜单写入的也是这个键，写了就用；缺省/非法时按当前
+ *  槽·模型（core.model ?? core.provider——merge 归一后两层只活一个）查 models-dev 盘上缓存兜底；
+ *  都无 → undefined。onIllegal：显式值在场但非法时回调（宿主 warn 用；显示侧不传 = 静默走兜底）。 */
+export function resolveContextWindow(
+  core: Record<string, unknown>,
+  opts: { catalogFile?: string; onIllegal?: (raw: unknown) => void } = {},
+): number | undefined {
+  const v = core.contextWindow;
+  const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
+  if (typeof n === "number" && Number.isInteger(n) && n > 0) return n;
+  if (v !== undefined) opts.onIllegal?.(v);
+  const model = typeof core.model === "string" && core.model !== "" ? core.model
+    : typeof core.provider === "string" && core.provider !== "" ? core.provider
+      : undefined;
+  if (model === undefined || opts.catalogFile === undefined) return undefined;
+  return lookupModelsDevContextWindow(opts.catalogFile, model);
 }
 
 /** 本地密钥文件（D37）：KEY=VALUE 行解析——坏行跳过并计数（调用方 warn，不因手改坏一行丢失全部密钥）。 */

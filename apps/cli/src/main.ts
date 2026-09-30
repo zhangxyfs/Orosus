@@ -593,11 +593,11 @@ if (args.print !== undefined) {
 } else if (args.resume !== undefined) {
   // --resume 启动同样回显历史（B9 走查补——此前只有 REPL /resume 有）；
   // 全屏模式延期到 dm 重建后（F5 二轮⑯——tuiMode 此时未定，按 TTY 实况同口径预判）
-  const notice = `[已恢复 ${h.sessionId}——历史对话如下]`;
+  // 恢复回放（横幅退役同上——空 notice 只回放）；全屏延期到 dm 重建后（F5 二轮⑯——tuiMode 此时
+  // 未定，按 TTY 实况同口径预判）
   if (args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true) {
-    pendingEcho = { notice, history: true };
+    pendingEcho = { notice: "", history: true };
   } else {
-    console.log(notice);
     await echoHistory(h);
   }
 }
@@ -808,11 +808,11 @@ const switchTo = async (sid: string, out: (s: string) => void = (s) => console.l
   // 重置为 undefined = /fork 走「父投影尾事件」缺省（createHarness fork 分支与 h.fork 两出口同款兜底），
   // 语义恰是 /fork 的「从最新位置分叉」。sessionSwitch 缝（ctx.session.switchTo）背后也走本函数，同点覆盖。
   lastEventId = undefined;
-  const notice = `[已恢复 ${readTitle(loc.file, sid)}（${sid}）——历史对话如下]`;
+  // 恢复横幅整条退役（2026-09-30 用户拍板三轮：[已恢复] 与 ❯ 标题行都不要——历史回放即提示，
+  // 顶上再压一行看着难受）；notice 留空串走回放，消费口跳过空行
   if (tuiMode === "full") {
-    pendingEcho = { notice, history: true }; // 延期到 dm 重建后（F5 二轮⑯）
+    pendingEcho = { notice: "", history: true }; // 延期到 dm 重建后（F5 二轮⑯）
   } else {
-    out(notice);
     await echoHistory(h, out); // 回显存量对话（B9 走查补 + 分页）
   }
 };
@@ -945,6 +945,41 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
           await openTasks(activeApp, out);
           return "again";
+        }
+        // /skill : 名（2026-09-30 用户拍板：菜单技能条目 Tab ≠ Enter——回车直接执行技能，Tab 填
+        // 「/skill : 名」可输入形态，本层解析该格式后与菜单 Enter 同路注入正文）。格式宽松：
+        // /skill:名 /skill : 名 /SKILL 同达（命令词忽略大小写，core 2026-09-27 口径）；宿主级拦截
+        // 先于 h.prompt 路由——graph 若注册 /skill 命令以本形态为准（技能区是宿主面）；解析成功
+        // 递归走用户消息管线（回显/vision 闸/busy 排队语义与菜单 Enter 一致，正文不以 / 开头无二次解析）
+        // 防重入（2026-09-30 三轮走查修卡死）：本分支产出的合成消息同样以 /skill : 开头，而下面的
+        // 空白折叠会把换行压平——正则会再次命中、typed 连标记带技能正文整条吞进「参数」再包一层
+        // 递归提交，无限自缠绕 = CPU 死循环界面卡死（用户实机复现）。含机器标记行 = 已是合成体，
+        // 跳过解析直送消息管线。
+        const skillM = text.includes("（用户通过菜单手动加载技能")
+          ? null
+          : /^\/skill\s*:\s*(.*)$/i.exec(text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " "));
+        if (skillM !== null) {
+          // 名字与参数分家（2026-09-30 用户拍板：首个空格后的尾巴是给技能的参数——kimi skillArgs 同款）
+          const typed = skillM[1]!.trim();
+          const sp = typed.indexOf(" ");
+          const namePart = sp === -1 ? typed : typed.slice(0, sp);
+          const skillArgs = sp === -1 ? undefined : typed.slice(sp + 1).trim() || undefined;
+          const canonical = namePart === "" ? undefined : skillTypedName(namePart);
+          if (canonical === undefined) {
+            notify(namePart === "" ? "用法：/skill : <技能名> [参数]——斜杠菜单技能区 Tab 填入" : `未找到技能「${namePart}」——/reload 后重试或从 / 菜单技能区选择`);
+            return "again";
+          }
+          const body = skillInjectText(canonical, skillArgs);
+          if (body === undefined) {
+            notify(`技能 "${canonical}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
+            return "again";
+          }
+          // 原话行持久化（2026-09-30 拍板「我输入啥就显示啥」含回放）：嵌在标记行之后、<skill> 正文
+          // 之前——不放开头：/ 开头的合成消息会被管线尾部当命令路由（未知命令，消息根本不发——
+          // 三轮走查实机踩坑），且重入技能解析。消息以「（」开头 → isCmdLine 为 false 走内建回显，
+          // docmodel 拆分渲染 = 原话块 + ● 行，实时与回放同一口同形（无需本层显式回显）
+          const bodyNl = body.indexOf("\n");
+          return await processReplLine(`${body.slice(0, bodyNl)}\n${text}\n${body.slice(bodyNl + 1)}`, out);
         }
         // 图片收集（2026-09-23 走查拍板）：全屏 = 文内 [image #N] token（extractImageRefs 剥除后进正文），
         // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
@@ -1689,15 +1724,26 @@ const refreshSkillMenu = async (): Promise<void> => {
 
 /** 技能条目 Enter 注入（D3 拍板）：正文剥 frontmatter 后包 <skill> 块，以用户消息提交——
  *  pi/kimi 同款形态，走主输入口零新机制（busy 期照排队语义，不打断 turn）。读不到 = undefined（菜单提示）。 */
-const skillInjectText = (name: string): string | undefined => {
+const skillInjectText = (name: string, args?: string): string | undefined => {
 	const file = skillFiles.get(name);
 	if (file === undefined) return undefined;
 	try {
 		const body = readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, ""); // 剥 frontmatter
-		return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}">\n${body}\n</skill>`;
+		// 参数挂 <skill> 块属性（kimi renderSkillLoadedBlock 的 args="..." 同款，引号转义防早闭）；
+		// 标记行保持首位原样——docmodel 的 ● 行识别按该行前缀，菜单 Enter 路不传 args 形态不变
+		const attrs = args !== undefined ? ` args="${args.replace(/"/g, "&quot;")}"` : "";
+		return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs}>\n${body}\n</skill>`;
 	} catch {
 		return undefined;
 	}
+};
+
+/** /skill : 名 提交解析的真名归位（2026-09-30）：目录真名精确命中优先，落空整表小写比对
+ *  （命令词忽略大小写同口径——手输大小写不齐也能筛到）。 */
+const skillTypedName = (typed: string): string | undefined => {
+	if (skillFiles.has(typed)) return typed;
+	const lower = typed.toLowerCase();
+	return [...skillFiles.keys()].find((k) => k.toLowerCase() === lower);
 };
 
 /** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行 + 框下快捷键导引一行）。 */
@@ -2153,7 +2199,7 @@ if (args.print === undefined) try {
       const pe = pendingEcho;
       pendingEcho = undefined;
       if (tuiMode === "full") {
-        dm.pushLine(pe.notice);
+        if (pe.notice !== "") dm.pushLine(pe.notice); // 空串 = 恢复横幅退役（只回放历史）
         if (pe.history) dm.historyFrom(await h.history(), streamW()); // 结构化摄入（F5 五轮②③④）
       }
     }

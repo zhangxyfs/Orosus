@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
-import { loadConfig, loadSecretsEnv, mergeEnvLayer } from "./load.ts";
+import { loadConfig, loadSecretsEnv, mergeEnvLayer, modelsDevCacheFile, lookupModelsDevContextWindow, resolveContextWindow } from "./load.ts";
 import { resolveSections } from "./validate.ts";
 
 let dir: string;
@@ -195,5 +195,58 @@ describe("secrets.env（D37）", () => {
     writeFileSync(f, 'A="sk-1"\nB=\'sk-2\'\nC=sk-3\nD="单边\nE=""\n');
     const { vars } = loadSecretsEnv(f);
     expect(vars).toEqual({ A: "sk-1", B: "sk-2", C: "sk-3", D: '"单边', E: "" });
+  });
+});
+
+describe("contextWindow 解析链（2026-09-29 用户拍板：config 显式值 > models-dev 目录兜底）", () => {
+  let seq = 0;
+  const writeCatalog = (catalog: unknown): string => {
+    const file = join(dir, `models-dev-${seq++}.json`); // 每次新文件——mtime 记忆化不串场
+    writeFileSync(file, JSON.stringify({ fetchedAt: 1, catalog }), "utf8");
+    return file;
+  };
+  const CATALOG = {
+    "zhipuai-coding-plan": { name: "智谱编码", models: { "glm-5.3": { limit: { context: 1_000_000 } } } }, // key 口径
+    zhipu: { name: "智谱", models: { "glm-4.6": { id: "glm-4.6", limit: { context: 200_000 } } } }, // id 口径
+    openrouter: { models: { "zhipu/glm-4.5": { limit: { context: 128_000 } } } }, // 嵌斜杠 key 尾段口径
+  };
+
+  it("lookupModelsDevContextWindow：key/id/尾段三口径命中；「槽/模型」全名取首斜杠后段；未命中/缺文件/坏 JSON/limit 非法 → undefined；同模型异条目取有效者", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cw-"));
+    const file = writeCatalog(CATALOG);
+    expect(lookupModelsDevContextWindow(file, "glm-5.3")).toBe(1_000_000);
+    expect(lookupModelsDevContextWindow(file, "zhipuai-coding-plan/glm-5.3")).toBe(1_000_000);
+    expect(lookupModelsDevContextWindow(file, "glm-4.6")).toBe(200_000);
+    expect(lookupModelsDevContextWindow(file, "zhipu/glm-4.5")).toBe(128_000);
+    expect(lookupModelsDevContextWindow(file, "nope/m")).toBeUndefined();
+    expect(lookupModelsDevContextWindow(file, "")).toBeUndefined();
+    expect(lookupModelsDevContextWindow(join(dir, "absent.json"), "glm-5.3")).toBeUndefined();
+    const bad = join(dir, `bad-${seq++}.json`);
+    writeFileSync(bad, "{oops", "utf8");
+    expect(lookupModelsDevContextWindow(bad, "glm-5.3")).toBeUndefined();
+    // 命中但该条目 limit.context 非法（0）→ 继续搜；同厂异门另一条目有效 → 取到
+    const two = writeCatalog({ a: { models: { "x1": { limit: { context: 0 } } } }, b: { models: { "x1": { limit: { context: 65536 } } } } });
+    expect(lookupModelsDevContextWindow(two, "x1")).toBe(65536);
+    // 全条目都无有效 limit → undefined
+    const none = writeCatalog({ a: { models: { "x2": { limit: { context: "大" } } } } });
+    expect(lookupModelsDevContextWindow(none, "x2")).toBeUndefined();
+  });
+
+  it("resolveContextWindow：显式正整数/纯数字串优先；非法显式 → onIllegal 后走目录兜底；无 model 或无 catalogFile 不查表", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cw-r-"));
+    const file = writeCatalog(CATALOG);
+    expect(resolveContextWindow({ contextWindow: 65536, provider: "zhipuai-coding-plan/glm-5.3" }, { catalogFile: file })).toBe(65536); // 显式赢目录
+    expect(resolveContextWindow({ contextWindow: "409600" }, { catalogFile: file })).toBe(409600); // env 层数字串等价（CH-06 连带）
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan/glm-5.3" }, { catalogFile: file })).toBe(1_000_000); // 兜底命中（provider 槽/模型口径）
+    expect(resolveContextWindow({ model: "glm-4.6" }, { catalogFile: file })).toBe(200_000); // core.model 口径
+    const illegal: unknown[] = [];
+    expect(resolveContextWindow({ contextWindow: 0, provider: "zhipuai-coding-plan/glm-5.3" }, { catalogFile: file, onIllegal: (v) => illegal.push(v) })).toBe(1_000_000); // 非法显式不挡兜底
+    expect(illegal).toEqual([0]);
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan/glm-5.3" })).toBeUndefined(); // 未给 catalogFile = 不查表（纯读面）
+    expect(resolveContextWindow({}, { catalogFile: file })).toBeUndefined(); // 无 model 不查表
+  });
+
+  it("modelsDevCacheFile：宿主 cache 目录落点（provider-custom defaultCatalogCacheFile 同款路径）", () => {
+    expect(modelsDevCacheFile(join("h", "home"))).toBe(join("h", "home", "cache", "models-dev.json"));
   });
 });
