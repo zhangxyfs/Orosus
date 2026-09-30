@@ -31,7 +31,8 @@ export function relativeTime(then: number, now = Date.now()): string {
   return `${Math.floor(d / 365)} 年前`;
 }
 
-/** /sessions 列表（B9 形态）：按创建时间倒序（最新在最前）取前 10，带标题与创建时间。
+/** /sessions 列表（B9 形态；2026-09-30 用户拍板撤「前 10」帽——picker 可滚动，全量按创建时间
+ *  倒序显示，最新在最前），带标题与创建时间。
  *  创建时间 = min(birthtime, mtime)——正常时 birth ≤ mtime 恒取 birth；mtime 被倒拨（迁移/测试）时
  *  取倒拨值，保持「创建早于一切修改」语义。
  *  bucket（会话树批 #17 项目内封闭）：传 = 只列当前项目桶；不传 = 全域（测试与宿主级消费）。 */
@@ -46,8 +47,7 @@ export function listSessions(root: string, bucket?: string): SessionListItem[] {
       } catch { /* mtime 回退 */ }
       return { ...e, createdAtMs, title: readTitle(e.file, e.id) };
     })
-    .sort((a, b) => b.createdAtMs - a.createdAtMs)
-    .slice(0, 10);
+    .sort((a, b) => b.createdAtMs - a.createdAtMs);
 }
 
 const BOLD_CYAN = "\x1b[1;36m";
@@ -148,8 +148,8 @@ export async function pickSessionNumber(
   }
 }
 
-/** 序号/sid → 会话 id（pick 选中或直达共用）。序号按当前列表（创建时间倒序前 10）；
- *  sid 经扫描定位（不限前 10）。bucket（#17）= 当前项目桶——他桶会话序号不可见、sid 直达落空。 */
+/** 序号/sid → 会话 id（pick 选中或直达共用）。序号按当前列表（创建时间倒序全量——2026-09-30 撤帽）；
+ *  sid 经扫描定位。bucket（#17）= 当前项目桶——他桶会话序号不可见、sid 直达落空。 */
 export function resolveTarget(target: string, root: string, bucket?: string): string | undefined {
   if (/^\d+$/.test(target)) {
     const n = Number(target);
