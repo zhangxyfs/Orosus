@@ -18,8 +18,12 @@ import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
 import { LiveWrap } from "./live-wrap.ts";
-import { TOOL_MERGE, toolCallLine } from "../render.ts";
+import { TOOL_MERGE, toolCallLine, toolDisplayName } from "../render.ts";
 import { toolDiffRows, toolChangeStats, writeContentFor, langForPath, errorLines, type DiffRow } from "./toolview.ts";
+
+/** 只读探索类工具最小集（2026-09-30 用户拍板：连续同名聚合只对纯查询开——写/执行/网络永不并组，
+ *  kimi/cc-haha/codex/qwen 四家共识）；v1 只并同名紧邻（read+grep 相邻各自成行，kimi 同款）。 */
+const COLLAPSIBLE_TOOLS = new Set(["tool-fs__read", "tool-fs__grep", "tool-fs__glob"]);
 import { highlightLines } from "../md/highlight.ts";
 import type { StreamChunk } from "./streamview.ts";
 
@@ -37,7 +41,7 @@ type Entry =
 	| { k: "md"; src: string; cache?: LineCache } // markdown 源——按宽度渲染（缓存）
 	| { k: "user"; src: string; cache?: LineCache } // 用户消息块（❯ 暖金）——宽度级缓存
 	| { k: "think"; src: string; cache?: { w: number; open: boolean; lines: string[] } } // 思考块——键含 thinkOpen（收起态旧口径每帧付全文 wrapText）
-	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存）
+	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] }; group?: { name: string; items: { args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult }[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存；group = 连续同名只读工具聚合〔2026-09-30 用户拍板抄 cc-haha 计数行〕：第 2 个紧邻同名调用并进宿主条目就地成组〔kimi in-place 同款〕，条目下标与账本不动、callId 配对下钻 items——宿主自身 args/callId/result 自成组起停用）
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
 	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
@@ -220,6 +224,22 @@ export class DocModel {
 			else this.ghostNoIdAt = this.lines.length; // CTW-10：位置感知——记静默 call 时刻条目序
 			return;
 		}
+		// 连续同名只读工具聚合（2026-09-30 用户拍板抄 cc-haha 计数行）：紧邻前一条目是同名可折叠工具
+		// （solo 或已成组）→ 并进宿主条目不新增行（kimi 就地升级同款）——渲染一行计数，下标/账本/callId 配对不变
+		if (COLLAPSIBLE_TOOLS.has(name)) {
+			const last = this.lines[this.lines.length - 1];
+			if (last !== undefined && last.k === "tool" && (last.group?.name ?? last.name) === name) {
+				if (last.group === undefined) {
+					last.group = {
+						name,
+						items: [{ args: last.args, ...(last.callId !== undefined ? { callId: last.callId } : {}), ...(last.result !== undefined ? { result: last.result } : {}) }],
+					};
+				}
+				last.group.items.push({ args, ...(callId !== undefined ? { callId } : {}) });
+				this.markCountDirty(this.lines.length - 1); // 组员加入——组行数即时重算
+				return;
+			}
+		}
 		this.pushE({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
 	}
 
@@ -246,7 +266,20 @@ export class DocModel {
 		if (callId !== undefined) {
 			for (let i = this.lines.length - 1; i >= 0; i--) {
 				const prev = this.lines[i]!;
-				if (prev.k === "tool" && prev.callId === callId) {
+				if (prev.k !== "tool") continue;
+				if (prev.group !== undefined) {
+					// 聚合组（2026-09-30）：callId 配对下钻 items——宿主自身字段自成组起停用
+					const item = prev.group.items.find((it) => it.callId === callId);
+					if (item !== undefined) {
+						if (item.result === undefined) {
+							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+							this.markCountDirty(i);
+						}
+						return;
+					}
+					continue; // 本组无此 callId——继续向前扫（前后可能另有同名 solo/组）
+				}
+				if (prev.callId === callId) {
 					if (prev.result === undefined) {
 						prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
 						this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
@@ -258,10 +291,24 @@ export class DocModel {
 		}
 		for (let i = this.lines.length - 1; i >= 0; i--) {
 			const prev = this.lines[i]!;
-			if (prev.k === "tool" && prev.result === undefined) {
-				prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
-				this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
-				return;
+			if (prev.k === "tool") {
+				if (prev.group !== undefined) {
+					// 组内最近未完结（旧日志无 callId 回退语义——组员从后往前找第一个空位）
+					for (let j = prev.group.items.length - 1; j >= 0; j--) {
+						const item = prev.group.items[j]!;
+						if (item.result === undefined) {
+							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+							this.markCountDirty(i);
+							return;
+						}
+					}
+					continue; // 全组已结——继续向前
+				}
+				if (prev.result === undefined) {
+					prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+					this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
+					return;
+				}
 			}
 			if (prev.k !== "tool") break; // 工具行不紧邻（理论不至）——不合并
 		}
@@ -321,6 +368,32 @@ export class DocModel {
 		const hidden = rows.length - shown.length;
 		if (hidden > 0)
 			out.push(theme.dim(this.toolOpen ? `  … 其余 ${hidden} 行从略（完整内容在会话文件）` : `  … 还有 ${hidden} 行 · Alt + O 展开全部`));
+		return out;
+	}
+
+	/** 聚合组渲染（2026-09-30 用户拍板抄 cc-haha 计数行）：收起 = 一行「Used Read 3 个文件 · 共 N 行」
+	 *  （进行中 Using…；含失败尾缀「· N 失败」）；Alt+O 展开 = 组头 + 逐组员单行（两格缩进，kimi 树形近似）。
+	 *  计数去重口径（cc-haha 唯一路径 Set 同款）：read 按 path+offset+limit、grep/glob 按 pattern。 */
+	private toolGroupLines(e: Entry & { k: "tool" }, width: number): string[] {
+		const g = e.group!;
+		const label = toolDisplayName(g.name);
+		const uniq = new Set(g.items.map((it) =>
+			g.name === "tool-fs__read"
+				? `${String(it.args?.path ?? "")}:${String(it.args?.offset ?? "")}:${String(it.args?.limit ?? "")}`
+				: String(it.args?.pattern ?? ""),
+		)).size;
+		const unit = g.name === "tool-fs__read" ? "个文件" : "个模式";
+		const pend = g.items.some((it) => it.result === undefined);
+		const failed = g.items.filter((it) => it.result?.isError === true).length;
+		const total = g.items.reduce((s, it) => s + (it.result !== undefined && !it.result.isError ? it.result.lines : 0), 0);
+		const head = pend
+			? `● Using ${label} ${uniq} ${unit}…`
+			: `● Used ${label} ${uniq} ${unit} · 共 ${total} 行${failed > 0 ? ` · ${failed} 失败` : ""}`;
+		const out = [this.styleToolLine(head, !pend && failed === g.items.length)];
+		if (!this.toolOpen) return out;
+		for (const it of g.items) {
+			out.push("  " + this.toolLines({ k: "tool", name: g.name, args: it.args, ...(it.result !== undefined ? { result: it.result } : {}) }, width)[0]!);
+		}
 		return out;
 	}
 
@@ -571,6 +644,9 @@ export class DocModel {
 			return e.cache.lines;
 		}
 		if (e.k === "tool") {
+			// 聚合组（2026-09-30）：每帧现算不缓存（agent group 同款——头行随组员挂果翻转「Using…→Used · 共
+			// N 行」；行数 = 1 或 1+组员数，账本键控〔宽度/Alt+O 翻转全量失效〕+ markCountDirty〔组员到达/挂果〕覆盖）
+			if (e.group !== undefined) return this.toolGroupLines(e, width);
 			const done = e.result !== undefined;
 			if (e.cache?.w !== width || e.cache.open !== this.toolOpen || e.cache.err !== this.errOpen || e.cache.done !== done) {
 				this.debugWrapCalls++;
