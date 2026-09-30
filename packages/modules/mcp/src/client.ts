@@ -1,4 +1,5 @@
 import type { ServerConnection } from "./index.ts";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js"; // type-only——模块加载不背 SDK（动态 import 同源）
 
 /** 连接超时默认值（T1，kimi 同值）：再长用户会以为死机。预装件首启另用 60s（T20）。 */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;

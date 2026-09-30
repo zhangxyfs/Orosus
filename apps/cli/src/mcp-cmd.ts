@@ -59,7 +59,7 @@ export interface McpCmdDeps {
   trustFile(): string;
   platform?: NodeJS.Platform;
   /** 注册表缓存落点（T14） */
-  registryCachePath?: string;
+  registryCachePath?: () => string;
   /** 网络实现（T14——测试注入） */
   fetchImpl?: typeof fetch;
 }
