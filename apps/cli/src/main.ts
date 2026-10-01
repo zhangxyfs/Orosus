@@ -601,6 +601,14 @@ const settingsService: SettingsService = {
 };
 
 let h: Awaited<ReturnType<typeof createSession>>;
+/** Alt+V 取图落点（m5-media F8）：当前会话媒资库 <sid>/media/（随桶清理）；会话未就绪/切换中回落旧 tmp 位。 */
+const pasteImageToMedia = (): Promise<{ file: string } | undefined> => {
+  try {
+    return pasteImage(join(sessionsDir, h.sessionId, "media"));
+  } catch {
+    return pasteImage();
+  }
+};
 try {
   h = await createSession();
 } catch (err) {
@@ -680,7 +688,7 @@ const attachPendingImage = (file: string): string => {
 attachAltVPaste({
   input: process.stdin,
   isTTY: process.stdin.isTTY === true,
-  pasteImage,
+  pasteImage: pasteImageToMedia,
   write: (s) => lv.write(s),
   clearInputLine: () => {
     const w = rl as unknown as { line: string; cursor: number };
@@ -2376,7 +2384,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // Alt + V 全屏接线（2026-09-23 修订）：取图 → chip token 插入输入框光标位；无图提示进流区
     requestPasteImage: () => {
       void (async () => {
-        const img = await pasteImage();
+        const img = await pasteImageToMedia();
         if (img === undefined) {
           notify(PASTE_EMPTY); // toast 化（2026-09-23 拍板）——无图提示不落流区
           return;

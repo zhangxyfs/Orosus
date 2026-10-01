@@ -98,6 +98,9 @@ importers:
       '@orosus/tool-goal':
         specifier: workspace:*
         version: link:../../packages/modules/tool-goal
+      '@orosus/tool-media':
+        specifier: workspace:*
+        version: link:../../packages/modules/tool-media
       '@orosus/tool-search':
         specifier: workspace:*
         version: link:../../packages/modules/tool-search
@@ -268,6 +271,22 @@ importers:
         version: 4.6.5
 
   packages/modules/tool-goal:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+    devDependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../../testing
+
+  packages/modules/tool-media:
     dependencies:
       '@orosus/contracts':
         specifier: workspace:*

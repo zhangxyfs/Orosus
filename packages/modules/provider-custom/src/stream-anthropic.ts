@@ -3,6 +3,7 @@ import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapEvent, parseSseBlock, thinkingParamFor, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 import { gateImagesByVision } from "./visiongate.ts";
+import { mediaSpecOf, budgetOptsOf, type MediaRuntimeOpts } from "./stream-openai.ts";
 import { prepareImagesForWire } from "./mediapipe.ts";
 import { applyMediaBudget } from "./mediabudget.ts";
 
@@ -50,7 +51,7 @@ function parseSearchHitsFromToolResult(content: unknown): { title: string; url: 
 export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 
 /** fetch glue（D31）：Anthropic Messages 协议，双头鉴权，错误全带内。vendored 自 provider-anthropic。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string; /** m5-media F6：端点认的图片 mime 白名单（缺省四白名单） */ acceptedImageMimes?: readonly string[] }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string; /** m5-media F6：端点认的图片 mime 白名单（缺省四白名单） */ acceptedImageMimes?: readonly string[]; /** m5-media F9：媒体策略现读口（tool-media.policy 快照） */ mediaOpts?: () => MediaRuntimeOpts | undefined }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -92,7 +93,10 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             model: request.model,
             max_tokens: maxTokens,
             system: request.system,
-            messages: toAnthropicMessages(applyMediaBudget(await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile)), { acceptedMimes: opts.acceptedImageMimes })), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本（worker 降采样）→ mime 门控 → 预算降级（老图换标签）
+            messages: toAnthropicMessages(applyMediaBudget(
+              await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile), mediaSpecOf(opts.mediaOpts)),
+              { acceptedMimes: opts.acceptedImageMimes, ...budgetOptsOf(opts.mediaOpts) },
+            )), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本 → mime 门控 → 预算降级——F9 策略服务可覆盖口径/帽值
             tools: [
               ...request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
               // M4-3 T1b：webSearch=true → 追加 Anthropic 服务端搜索工具（文档形态 web_search_20250305；

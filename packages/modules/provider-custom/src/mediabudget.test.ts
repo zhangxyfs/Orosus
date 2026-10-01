@@ -107,3 +107,42 @@ describe("F7 stream 装配钉（openai/anthropic——拿掉 applyMediaBudget �
     expect(bodies[0]!).toContain("该端点不认 image/webp");
   });
 });
+
+// F9 服务倒挂消费钉：policy 参数的帽值经 mediaOpts 到达线缆（拿掉 adapters 的 policy 接线即红）
+describe("F9 媒体策略消费（createAdapters policy 参数 → 流内 mediaOpts → 线缆帽值）", () => {
+  it("⑨ policy 收紧张数帽 → 真实双图最老一张被降级标签化（策略值非内置默认在起作用）", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const d = mkdtempSync(join(tmpdir(), "orosus-f9-"));
+    try {
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+      const a = join(d, "a.png");
+      const b = join(d, "b.png");
+      writeFileSync(a, png);
+      writeFileSync(b, png);
+      const { createAdapters } = await import("./adapters.ts");
+      const bodies: string[] = [];
+      const ok = String.raw`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\n" + "data: [DONE]\n\n";
+      const fetchImpl = (async (_i: unknown, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return new Response(ok, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      const adapters = createAdapters(
+        { providers: { x: { type: "openai", baseUrl: "https://x/v1" } } },
+        fetchImpl,
+        undefined,
+        undefined,
+        async () => ({ current: () => ({ maxEdge: 2048, tokenTier: 2048, singleCapBytes: 4.5 * 1024 * 1024, budgetBytes: 20 * 1024 * 1024, safeBytes: 10 * 1024 * 1024, maxImages: 1, visionModel: "off" }) }), // 张数帽收到 1（内置默认 4）
+      );
+      const stream = adapters.get("x")!.stream;
+      const messages: ModelMessage[] = [imgMsg(a), imgMsg(b)];
+      for await (const _ of stream({ model: "m", system: "", tools: [], messages, signal: new AbortController().signal })) { /* drain */ }
+      const wire = bodies[0]!;
+      expect(wire).toContain("超过每次 1 张上限"); // 策略收紧的张数帽在线缆生效（默认 4 不会降两张小图）
+      expect(wire).toContain("a.png"); // 降级标签带路径（JSON 转义反斜杠——按文件名断言）
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

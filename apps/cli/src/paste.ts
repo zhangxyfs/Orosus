@@ -93,8 +93,9 @@ export function extractImageRefs(text: string): { cleaned: string; seqs: number[
 /** 从系统剪贴板读取图片（M4-2 T10；M4-2.5 T5 起随消息真实喂图）。
  *  返回保存的 PNG 文件路径；剪贴板无图返回 undefined。
  *  路径以 image part 进 user/message（日志存路径、请求期翻译层转 base64）。 */
-export async function pasteImage(): Promise<{ file: string } | undefined> {
-  const tmp = join(orosusHome(), "tmp", `paste-${Date.now()}.png`);
+export async function pasteImage(destDir?: string): Promise<{ file: string } | undefined> {
+  // m5-media F8：destDir 在场 = 落会话媒资库 <sid>/media/（随桶清理；宿主传当前会话位）；缺省旧 tmp 位
+  const tmp = join(destDir ?? join(orosusHome(), "tmp"), `paste-${Date.now()}.png`);
   mkdirSync(dirname(tmp), { recursive: true });
   try {
     if (process.platform === "win32") {
