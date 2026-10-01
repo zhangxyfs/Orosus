@@ -39,6 +39,39 @@ describe("deriveMessages（model-visible ⟺ logged 的投影）", () => {
     });
   });
 
+  it("tool/result 带 images → toolResult.parts（m5-media F1 路径引用制：不进 output、不吃 base64）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("assistant/message", { content: [{ kind: "text", text: "看图" }] });
+    await s.append("tool/call", { callId: "c1", name: "mcp__srv__shot", args: {} });
+    await s.append("tool/result", {
+      callId: "c1", output: "（附 1 张图：png，约 1.2 KB）", isError: false,
+      images: [{ path: "/sess/media/media-1-c1.png", mimeType: "image/png" }],
+    });
+    const msgs = deriveMessages(await s.all());
+    expect(msgs.at(-1)).toEqual({
+      role: "toolResult", callId: "c1", output: "（附 1 张图：png，约 1.2 KB）", isError: false,
+      parts: [{ kind: "image", path: "/sess/media/media-1-c1.png", mimeType: "image/png" }],
+    });
+  });
+
+  it("images 坏形状防御：非白名单 mime/空路径/裸字符串剔除；全坏或无字段 = 无 parts（fork 片段/手改日志/旧会话不炸投影）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("assistant/message", { content: [{ kind: "text", text: "t" }] });
+    await s.append("tool/call", { callId: "c1", name: "m__t", args: {} });
+    await s.append("tool/result", {
+      callId: "c1", output: "o", isError: false,
+      images: [{ path: "", mimeType: "image/png" }, { path: "/ok.png", mimeType: "image/x-ms-bmp" }, { path: "/ok2.png", mimeType: "image/jpeg" }, "junk"],
+    });
+    const msgs = deriveMessages(await s.all());
+    expect(msgs.at(-1)).toMatchObject({ parts: [{ kind: "image", path: "/ok2.png", mimeType: "image/jpeg" }] });
+
+    const s2 = new InMemorySessionStore();
+    await s2.append("assistant/message", { content: [{ kind: "text", text: "t" }] });
+    await s2.append("tool/call", { callId: "c1", name: "m__t", args: {} });
+    await s2.append("tool/result", { callId: "c1", output: "o", isError: false, images: [{ path: "", mimeType: "image/tiff" }] });
+    expect((deriveMessages(await s2.all()).at(-1) as { parts?: unknown }).parts).toBeUndefined();
+  });
+
   it("agent/steering-message 投影为 user 消息（先落日志再进请求，§6.2）；v3 起带 origin 出处标记", async () => {
     const s = new InMemorySessionStore();
     await s.append("agent/steering-message", { messages: [{ text: "记得先跑测试", sourceModule: "todo" }] });

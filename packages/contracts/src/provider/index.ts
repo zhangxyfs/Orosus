@@ -43,7 +43,9 @@ export type MessageOrigin =
 export type ModelMessage =
   | { role: "user"; content: ContentPart[]; origin?: MessageOrigin }
   | { role: "assistant"; content: ContentPart[]; toolCalls?: { callId: string; name: string; args: unknown }[] }
-  | { role: "toolResult"; callId: string; output: string; isError: boolean };
+  | { role: "toolResult"; callId: string; output: string; isError: boolean; /** 工具结果多媒体部件（m5-media F1，
+   *  路径引用制）：来自 tool/result 事件的 images 字段——翻译层翻进线缆（anthropic = tool_result content
+   *  blocks；openai = 三态 trait，见 provider-custom）。 */ parts?: ContentPart[] };
 
 /** 发给 provider 的工具描述（parameters 为 JSON Schema）。 */
 export interface ToolSpec {
