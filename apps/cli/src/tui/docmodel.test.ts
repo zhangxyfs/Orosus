@@ -149,6 +149,41 @@ describe("DocModel 技能手动加载行（2026-09-28 用户拍板：技能正�
 	});
 });
 
+describe("工具结果图片附件信息行（m5-media F4——chip 常显 + Alt+O 展开逐图行，不渲染像素）", () => {
+	it("① 收起态：头行 chip「· 附 N 图」；展开态：逐图行（格式 · 体积 · 路径）；坏条目剔除", () => {
+		const imgDir = mkdtempSync(join(tmpdir(), "orosus-dm-m5-"));
+		try {
+			const img = join(imgDir, "shot.png");
+			writeFileSync(img, Buffer.alloc(2048, 7));
+			const dm = new DocModel();
+			dm.toolCall("mcp__fx__screenshot", {}, "c1");
+			dm.toolResult("（附 1 张图：png，约 2.0 KB）", false, "c1", [
+				{ path: img, mimeType: "image/png" },
+				{ path: "", mimeType: "image/png" }, // 坏条目——剔除
+			]);
+			let plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+			expect(plain[0]).toContain("Used Screenshot"); // 显示名 chip 照旧
+			expect(plain[0]).toContain("· 附 1 图"); // 好图计数（坏条目不计）
+			expect(plain.join("\n")).not.toContain(img); // 收起态路径不上屏
+			dm.toolOpen = true;
+			plain = dm.frameLines(80).map(stripAnsi).filter((l) => l.trim() !== "");
+			expect(plain.join("\n")).toContain("png · 2.0 KB"); // 格式+体积
+			// 路径（展开态可见——想看可取）；wrapText 词原子折行可能把长路径拆两行，断言按去空白拼合
+			expect(plain.join(" ").replace(/\s+/g, "")).toContain(img.replace(/\s+/g, ""));
+		} finally {
+			rmSync(imgDir, { recursive: true, force: true });
+		}
+	});
+
+	it("② 无图结果零差异：chip 无「附 N 图」", () => {
+		const dm = new DocModel();
+		dm.toolCall("mcp__fx__query", {}, "c1");
+		dm.toolResult("ok", false, "c1");
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.join("\n")).not.toContain("附 ");
+	});
+});
+
 describe("连续只读工具聚合（2026-09-30 用户拍板抄 cc-haha 计数行——同名紧邻并组、一行计数、Alt+O 展开逐条）", () => {
 	it("① 三个连续 read 并组：单行「Used Read 3 个文件 · 共 N 行」，路径不上屏，行数 = 各次之和", () => {
 		const dm = new DocModel();

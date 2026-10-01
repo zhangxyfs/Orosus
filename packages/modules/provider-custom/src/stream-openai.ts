@@ -3,6 +3,7 @@ import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState, type ToolImagesMode } from "./translate-openai.ts";
 import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
+import { gateImagesByVision } from "./visiongate.ts";
 
 /** 响应里的服务端搜索标记抽取（M4-3 T1b——2026-09-24 spike 无真样本，按各家已公开形态宽进：
  *  ① zhipu 文档字段 choices[].message/delta.web_search 数组（{title,url,content?} 项）；
@@ -30,7 +31,7 @@ function extractServerSearch(obj: Record<string, unknown>): Chunk | undefined {
 }
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -70,7 +71,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           },
           body: JSON.stringify({
             model: request.model,
-            messages: toOpenAIMessages(request.system, request.messages, opts.toolImages ?? "bridge"),
+            messages: toOpenAIMessages(request.system, gateImagesByVision(request.model, request.messages, opts.catalogFile), opts.toolImages ?? "bridge"), // m5-media F4：非图模型先剥图占位（true/undefined 放行）
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
