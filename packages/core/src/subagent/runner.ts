@@ -390,6 +390,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
     const agentSid = `agents_${id}`;
     const agentStore = deps.makeStore(agentSid, agentsDir);
     const spillDir = join(agentsDir, agentSid, "spill"); // 显式传——默认拼装 join(sessionsDir, sid, "spill") 会落错位（harness.ts spill 同款坑）
+    const mediaDir = join(agentsDir, agentSid, "media");  // m5-media F2：子代理媒资库同层惯例
     // 轮数保险丝解析（2026-09-27 双保险丝批）：[tool-subagent].maxTurns（settings）> 工种 req.maxTurns > 默认 100；
     // -1 = 不限（仅时长兜底）；显式数值钳位 [1, 200]
     const cfgTurns = readLimitConfig(deps, "maxTurns", (v) => v === -1 || (Number.isInteger(v) && v >= 1 && v <= SUBAGENT_MAX_TURNS_CEILING));
@@ -473,7 +474,7 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       const allowed = req.allowedTools !== undefined ? new Set(req.allowedTools) : undefined;
       const disallowed = req.disallowedTools !== undefined ? new Set(req.disallowedTools) : undefined;
       const bus = createEventBus(deps.sink); // 子代理独立 bus：steering/followUp 不串主对话
-      const tools = createToolRegistry({ bus, sink: deps.sink, spillDir });
+      const tools = createToolRegistry({ bus, sink: deps.sink, spillDir, mediaDir });
       // 写报备归一（决策 24①）：禁通配符、限项目内、大小写折叠——报备失败 = 单子拒绝（模糊报备等于没有报备）
       if (req.writePaths !== undefined) {
         const norm = req.writePaths.map((p) => normalizeClaimPath(deps.cwd, p));

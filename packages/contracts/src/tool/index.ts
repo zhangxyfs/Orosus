@@ -54,6 +54,10 @@ export interface ToolResult {
   denied?: boolean;
   /** 图片附件（m5-media F1）：渲染层显示「附 N 张图」、投影层转 toolResult.parts、翻译层翻进线缆。 */
   images?: ToolResultImage[];
+  /** 内联图（m5-media F2 产出侧形态）：base64 原始数据（如 MCP server 的 image 块）——core 归一化
+   *  （落盘会话媒资库 + T6 尺寸归一）后转 images 路径形态；**永不进会话日志**（归一化发生在 loop
+   *  落条前）。坏条目（空 data/非白名单 mime/超 10MB 块帽）剔除，不炸工具契约。 */
+  rawImages?: { data: string; mimeType: ToolImageMime }[];
 }
 
 /** 工具执行期上下文。signal 供取消传播（长耗时工具必须响应）；callId 关联 tool/call 与 tool/result。 */

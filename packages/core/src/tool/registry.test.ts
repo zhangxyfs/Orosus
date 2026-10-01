@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -27,7 +27,7 @@ const setup = () => {
   dir = mkdtempSync(join(tmpdir(), "orosus-spill-"));
   const s = sink();
   const bus = createEventBus(s);
-  return { bus, reg: createToolRegistry({ bus, sink: s, spillDir: dir }), s };
+  return { bus, reg: createToolRegistry({ bus, sink: s, spillDir: dir, mediaDir: join(dir, "media") }), s }; // m5-media：显式 mediaDir 密封（缺省兄弟位派生会漂到共享 Temp）
 };
 
 describe("工具注册表（§6.3）", () => {
@@ -182,6 +182,38 @@ describe("工具注册表（§6.3）", () => {
     expect(r.isError).toBe(false);          // 不是错误——只是全文未落盘
     expect(r.output).toContain("溢写失败"); // 中缝如实提示
     expect(s.records.some((x) => x.code === "kernel.tool.spill-failed")).toBe(true);
+  });
+
+  it("m5-media F2：rawImages 归一化——run 返回 images 路径引用（文件落 spillDir 兄弟 media/），rawImages 剥除不进日志面", async () => {
+    const { reg } = setup();
+    reg.register(
+      defineTool({
+        name: "m__shot",
+        description: "截图",
+        parameters: z.object({}),
+        resolveExecution: async () => ({
+          execute: async () => ({
+            output: "（附 1 张图：png，约 3 字节）", isError: false,
+            rawImages: [{ data: "QUJD", mimeType: "image/png" }],
+          }),
+        }),
+      }),
+      "m",
+    );
+    const r = await reg.run({ id: "call_1", name: "m__shot", args: {} }, { signal: new AbortController().signal });
+    expect((r as { rawImages?: unknown }).rawImages).toBeUndefined(); // 归一化后剥除——base64 永不进会话日志
+    expect(r.images).toHaveLength(1);
+    expect(r.images![0]).toMatchObject({ mimeType: "image/png" });
+    expect(r.images![0]!.path).toMatch(/[\\/]media-1-call_1\.png$/); // 缺省 mediaDir = dirname(spillDir)/media（<sid>/media 惯例）
+    expect(readFileSync(r.images![0]!.path).toString("utf8")).toBe("ABC");
+  });
+
+  it("m5-media F2：无图结果零差异——不建 media 目录、结果不带 images 键", async () => {
+    const { reg } = setup();
+    reg.register(echo("m__t", "ok"), "m");
+    const r = await reg.run({ id: "c1", name: "m__t", args: {} }, { signal: new AbortController().signal });
+    expect((r as { images?: unknown }).images).toBeUndefined();
+    expect(existsSync(join(dir, "media"))).toBe(false); // 未触发归一化 = 零目录副作用
   });
 
   it("register 返回 disposer：注销后工具消失（规则 3）", () => {

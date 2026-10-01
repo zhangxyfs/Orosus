@@ -394,7 +394,10 @@ describe("T7 断线重连一次（m4-3c）", () => {
       expect(structDiff.output).toContain("甲");
       expect(structDiff.output).toContain(JSON.stringify({ a: "甲", b: "乙" }, null, 2)); // 附后
       const image = await runTool(pick("image"), {});
-      expect(image.output).toMatch(/（图片：image\/png/);
+      expect(image.output).toMatch(/（附 1 张图：png/); // m5-media F2：带图通道（rawImages 交 core 归一化）
+      expect(image.rawImages).toHaveLength(1);
+      expect(image.rawImages![0]).toMatchObject({ mimeType: "image/png" });
+      expect(image.rawImages![0]!.data.length).toBeGreaterThan(20); // 真 1x1 PNG base64，非空壳
       const link = await runTool(pick("link"), { uri: "file:///doc.md", name: "文档" });
       expect(link.output).toBe("资源链接：文档 <file:///doc.md>");
       const nothing = await runTool(pick("nothing"), {});

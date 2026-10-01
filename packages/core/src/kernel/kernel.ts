@@ -75,6 +75,7 @@ export interface LoadModulesInput {
   session: SessionStore;
   sink: DiagSink;
   spillDir: string;
+  mediaDir?: string;       // m5-media F2/F8：会话媒资库（<sid>/media/——spill 同层惯例）；缺省 registry 按 spillDir 兄弟位派生
   cwd?: string;            // 核心五节 Environment 与 AGENTS.md 发现的工作目录（M4-2 T12；缺省 process.cwd()）
   commandUi?: CommandUi;   // 宿主交互 UI（D35 M3/T2：ctx.ui 注入，审批询问消费）
   settings?: import("@orosus/contracts/module").SettingsService;  // m5 T9：设置服务写面（ctx.settings 装配，mounts "settings" 门）
@@ -145,7 +146,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   // 模型"没有文件系统模块"）、ctx.events 监听器孤儿化（compaction/approval 拦截器静默失效））：
   // reload 传当前实例复用（T14/T15 既定）；启动路径缺省新建不变
   const bus = input.reuse?.bus ?? createEventBus(input.sink);
-  const tools = input.reuse?.tools ?? createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir });
+  const tools = input.reuse?.tools ?? createToolRegistry({ bus, sink: input.sink, spillDir: input.spillDir, ...(input.mediaDir !== undefined ? { mediaDir: input.mediaDir } : {}) }); // m5-media F2：媒资库显式注入（缺省兄弟位派生）
   const act = await activateModules({
     ordered: order, sectionResolution: sections, session: input.session, sink: input.sink, bus, tools,
     sources: sourcePathByName, // T7：failed 事件的 sourcePath 数据源
