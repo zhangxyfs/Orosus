@@ -202,7 +202,7 @@ interface AppState {
 }
 
 import { subagentCountHint } from "../subagent-status.ts";
-const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+export const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const INPUT_MAX_ROWS = 5;
 const OVERLAY_PAGE = 10;
 const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
@@ -2808,6 +2808,10 @@ export class FullApp {
 		const maxScroll = Math.max(0, pu.lines.length - page);
 		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
 		const win = pu.lines.slice(sc, sc + page);
+		// 恒满屏（2026-10-01 走查①拍板「不论内容填不填满都得满屏」）：full 布局内容行补空行到 page——
+		// 盒高恒 geo.height，短内容不再抱内容贴终端顶（子代理详情窗短内容半屏盒即此症；斜杠菜单 17 行
+		// 定高同族纪律）。dock（技能详情窗，内容自适应封顶）与 center80（既有弹窗视觉契约）不动。
+		if (pu.layout === "full") while (win.length < page) win.push("");
 		// 选区反白合入（T8）：行索引与 pointToView 同源（sc + 行号——滚动平移天然稳定）；
 		// 滚动条（T10）：右缘 1 列轨道/拇指覆盖在内容最右列上
 		const vthumb = thumbGeometry(page, pu.lines.length, sc);

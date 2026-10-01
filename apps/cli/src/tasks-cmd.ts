@@ -3,6 +3,7 @@ import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
 import { DocModel } from "./tui/docmodel.ts";
+import { SPIN_FRAMES } from "./tui/fullapp.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 /**
@@ -100,7 +101,13 @@ export function renderAgentView(entry: SubagentRosterEntry, events: readonly { t
     `${STATUS_TEXT[entry.status]}${entry.pendingApproval !== undefined ? " · 等审批" : ""} · ${entry.turns} 轮` +
     (entry.error !== undefined ? ` · ${(entry.error.split("\n")[0] ?? "").slice(0, 60)}` : "");
   const head = theme.fg(STATUS_COLOR[entry.status], `状态：${stat}${entry.roleName !== undefined ? ` · 工种 ${entry.roleName}` : ""}${entry.background ? " · 后台" : ""}`);
-  return [head, ...dm.frameLines(width)].join("\n");
+  // 生成中尾行（2026-10-01 走查④拍板）：运行/排队态在内容末尾挂「⠸ 正在生成…」——与主窗 tailLine
+  // 同形。帧号取系统时钟秒位（live 刷新 1s tick 一帧——主窗 busyTimer 100ms 不共用：这里每帧重读
+  // 子代理会话文件，1s 是文件重读成本的既定节拍）。配合查看窗 pinned 贴底，此行恒在窗口底部可见。
+  const busy = entry.status === "queued" || entry.status === "running";
+  const frame = SPIN_FRAMES[Math.floor(Date.now() / 1000) % SPIN_FRAMES.length]!;
+  const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", "正在生成…") : "";
+  return [head, ...dm.frameLines(width), ...(tail !== "" ? [tail] : [])].join("\n");
 }
 
 /**

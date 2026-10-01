@@ -87,16 +87,18 @@ const capArg = (s: string, max = 60): string => {
   return t.length <= max ? t : `${t.slice(0, max - 12)}…${t.slice(-10)}`;
 };
 
-/** 关键参数：path/file/pattern/command/query 优先；工作区内相对路径、区外全路径（用户口径）。 */
+/** 关键参数：path/file/pattern/command/url/query 优先；工作区内相对路径、区外全路径（用户口径）。 */
 export function toolKeyArg(args: Record<string, unknown> | undefined, cwd: string): string {
   const raw =
     typeof args?.path === "string" ? args.path
     : typeof args?.file === "string" ? args.file
     : typeof args?.pattern === "string" ? args.pattern
     : typeof args?.command === "string" ? args.command
+    : typeof args?.url === "string" ? args.url
     : typeof args?.query === "string" ? args.query
     : undefined;
   if (raw === undefined) return "";
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) return capArg(raw); // URL 不走文件系统相对化——win32 归一会吞 https:// 的双斜杠
   if (/[\\/]/.test(raw)) {
     const rel = relative(cwd, raw);
     if (rel !== "" && !rel.startsWith("..") && !/^[a-zA-Z]:/.test(rel)) return capArg(rel.replace(/\\/g, "/"));
