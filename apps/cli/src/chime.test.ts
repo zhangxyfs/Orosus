@@ -4,15 +4,15 @@ import { existsSync } from "node:fs";
 import { resolveBellMode, playTurnChime, TURN_END_SOUND } from "./chime.ts";
 
 describe("回合提示音 · chime 档", () => {
-  it("① resolveBellMode：三态字符串直收 + 旧布尔兼容（true=bel/false=off）+ 缺省/非法回落 bel", () => {
+  it("① resolveBellMode：三态字符串直收 + 旧布尔兼容（true=bel/false=off）+ 缺省/非法回落 chime（2026-10-01 拍板）", () => {
     expect(resolveBellMode("chime")).toBe("chime");
     expect(resolveBellMode("bel")).toBe("bel");
     expect(resolveBellMode("off")).toBe("off");
     expect(resolveBellMode(true)).toBe("bel");
     expect(resolveBellMode(false)).toBe("off");
-    expect(resolveBellMode(undefined)).toBe("bel");
-    expect(resolveBellMode("CHIME")).toBe("bel"); // 大小写敏感——非法值回落
-    expect(resolveBellMode(1)).toBe("bel");
+    expect(resolveBellMode(undefined)).toBe("chime");
+    expect(resolveBellMode("CHIME")).toBe("chime"); // 大小写敏感——非法值回落缺省 chime
+    expect(resolveBellMode(1)).toBe("chime");
   });
 
   it("② playTurnChime 平台选型：win=powershell SoundPlayer（含路径单引号转义）/ darwin=afplay / linux=paplay||aplay", () => {
