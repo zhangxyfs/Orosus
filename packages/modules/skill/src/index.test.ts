@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModuleContext, PromptSection } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import { z } from "zod";
-import def from "./index.ts";
+import def, { seedBundledSkills } from "./index.ts";
 
 type Ctx = Parameters<typeof def.activate>[0];
 const md = (p: string) => mkdirSync(p, { recursive: true });
@@ -375,8 +375,8 @@ describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能�
     expect(catalog().find((x) => x.name === "skill-creator")!.disabled).toBe(true);
   });
 
-  it("④ 出厂十件全量走查（T13-T21 自举验收——explore 按 T21 前置跳过：tool-subagent 内置 research 工种已覆盖其只读探索语义）：每件进清单、正文可加载非空、简单说明齐", async () => {
-    const EXPECTED = ["batch", "code-review", "commit", "doc-review", "doc-writer", "goal-draft", "research", "simplify", "skill-creator", "update-config"];
+  it("④ 出厂件全量走查（T13-T21 自举验收——explore 按 T21 前置跳过；doc-review 2026-10-01 拆 cn/en 两件）：每件进清单、正文可加载非空、简单说明齐", async () => {
+    const EXPECTED = ["batch", "code-review", "commit", "doc-review-cn", "doc-review-en", "doc-writer", "goal-draft", "research", "simplify", "skill-creator", "update-config"];
     const { ctx, sections, tools, services } = fakeCtx(bundledOnlyCfg());
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
     const summary = sections[0]!.text;
@@ -391,6 +391,79 @@ describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能�
     }
     expect(catalog().every((r) => r.whenToUse !== undefined)).toBe(true); // 每件都写了简单说明（菜单详释第 3 行）
     expect(names).toHaveLength(EXPECTED.length); // 无意外多余件
+  });
+});
+
+describe("出厂技能固化 seedBundledSkills（2026-10-01 拍板——引导弹出时刻拷入用户级目录，打包布局不再牵动已初始化用户）", () => {
+  const realBundled = join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
+  const ROSTER = ["batch", "code-review", "commit", "doc-review-cn", "doc-review-en", "doc-writer", "goal-draft", "research", "simplify", "skill-creator", "update-config"];
+
+  it("① 真身固化：出厂件整拷到目标、逐件与 bundled 源逐字节同", () => {
+    const target = join(user, "seeded");
+    const r = seedBundledSkills(target);
+    expect(r.copied).toEqual(ROSTER); // 源目录序（sort）与名单字母序一致
+    expect(r.skipped).toEqual([]);
+    expect(r.failed).toEqual([]);
+    for (const n of ROSTER) {
+      expect(readFileSync(join(target, n, "SKILL.md"), "utf8")).toBe(readFileSync(join(realBundled, n, "SKILL.md"), "utf8"));
+    }
+    // doc-review-cn 随带 references/lenses.md（正文两处引用它——2026-10-01 用户拍板「这个别忘了」：
+    // 拆件出厂必须自带，否则全新机器上镜头详解是指悬空指针）；固化随迁逐字节同。
+    const lens = join("doc-review-cn", "references", "lenses.md");
+    expect(readFileSync(join(target, lens), "utf8")).toBe(readFileSync(join(realBundled, lens), "utf8"));
+    expect(readFileSync(join(realBundled, lens), "utf8").length).toBeGreaterThan(5000); // 真文件非占位（22788 字节 ≈ 9611 字符，CJK 三字节）
+  });
+
+  it("② 同名跳过：目标已有同名 SKILL.md 整技不覆盖（用户件优先——与轨道优先级同向；删掉固化件 bundled 原件重新浮出）", () => {
+    const target = join(user, "seeded");
+    put(target, "commit", "用户自己的 commit", "用户正文不被动");
+    const r = seedBundledSkills(target);
+    expect(r.skipped).toEqual(["commit"]);
+    expect(r.copied).toHaveLength(ROSTER.length - 1);
+    expect(readFileSync(join(target, "commit", "SKILL.md"), "utf8")).toContain("用户正文不被动");
+  });
+
+  it("③ 源缺失零拷零错：bundled 断链（打包丢失场景）静默空回不抛——不炸引导", () => {
+    expect(seedBundledSkills(join(user, "seeded"), join(user, "no-such-bundled"))).toEqual({ copied: [], skipped: [], failed: [] });
+  });
+
+  it("④ 附属文件随迁与非技能条目跳过：references/ 子目录整拷；非目录条目/缺 SKILL.md 目录不收（与 scanSkills 同口径）", () => {
+    const src = join(user, "bundled-fake");
+    md(join(src, "fake-skill", "references"));
+    writeFileSync(join(src, "fake-skill", "SKILL.md"), "---\nname: fake-skill\ndescription: x\n---\n\n正文");
+    writeFileSync(join(src, "fake-skill", "references", "lens.md"), "lens 正文");
+    writeFileSync(join(src, "stray.txt"), "非目录条目");
+    md(join(src, "no-skill-md")); // 有目录无 SKILL.md
+    const r = seedBundledSkills(join(user, "seeded"), src);
+    expect(r.copied).toEqual(["fake-skill"]);
+    expect(readFileSync(join(user, "seeded", "fake-skill", "references", "lens.md"), "utf8")).toBe("lens 正文");
+  });
+
+  it("⑤ 单件失败不拖垮其余（MI-09 同款逐件容错）：目标处同名位置被文件占住 → 该件进 failed、其余照拷", () => {
+    const target = join(user, "seeded");
+    md(target);
+    writeFileSync(join(target, "commit"), "占位文件——目录位置被文件占了");
+    const r = seedBundledSkills(target);
+    expect(r.failed.map((f) => f.name)).toEqual(["commit"]);
+    expect(r.copied).toHaveLength(ROSTER.length - 1);
+    expect(existsSync(join(target, "batch", "SKILL.md"))).toBe(true);
+  });
+
+  it("⑥ 固化件在轨道竞争中按用户级生效：seed 后重扫，出厂件 layer=source=用户级（bundled 原件被同名压住）", async () => {
+    const target = join(user, "seeded");
+    seedBundledSkills(target);
+    const { ctx, services } = fakeCtx({
+      userAgentsDir: join(user, "none-agents"),
+      userOrosusDir: target, // 固化目录当用户级轨
+      projectAgentsDirs: [join(proj, "none-pagents")],
+      projectOrosusDir: join(proj, "none-porosus"),
+      bundledDir: realBundled,
+    });
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const catalog = services.get("skill.catalog") as () => Array<{ name: string; layer: string; source: string }>;
+    const rows = catalog().filter((x) => ROSTER.includes(x.name));
+    expect(rows).toHaveLength(ROSTER.length);
+    expect(rows.every((x) => x.layer === "user" && x.source === "orosus")).toBe(true); // 固化件压住 bundled 同名
   });
 });
 

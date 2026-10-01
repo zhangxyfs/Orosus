@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHarness } from "@orosus/core";
@@ -216,7 +216,8 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     const ids = listSessions(sessDir).map((x) => x.id);
     expect(ids[0]).toBe("s_db"); // 最新写入在前
     expect(new Set(ids)).toEqual(new Set(["s_old", "s_new", "s_db"]));
-    expect(formatSessions(sessDir)).toContain("s_new");
+    expect(formatSessions(sessDir)).toContain("1. s_db"); // sqlite 会话标题走 id 兜底（readTitle 既有口径）
+    expect(formatSessions(sessDir)).toContain("2. 新会话"); // jsonl 空会话行兜底「新会话」（2026-10-01 起不裸显 sid）
   });
 
   it("⑪ /new 语义端到端：新 harness 即新 session id（旧会话关闭幂等）", async () => {
@@ -515,6 +516,23 @@ describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM
       expect(forkParent).not.toBe(newSid);
       expect(r.out).toContain("[已从"); // switchTo 后 /fork 成功
       expect(`${r.out}${r.err}`).not.toContain("fork 分叉点不在父会话投影内");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("空会话清理批（2026-10-01 拍板③+②）：空会话 /new 不换 sid 就地刷新；退出漏斗清 0 消息壳", async () => {
+    const d = tmp("empty-new");
+    try {
+      // /yolo 落 approval/policy 事件 = 物化 0 消息壳（与 MCP manifest 壳同判定面）；/new 应复用本会话
+      // 不另起（旧实现：旧壳留尸 + 新壳又生）；/quit 退出漏斗把最后的空会话整目录清掉
+      const r = await runRepl(d, ["/yolo", "/new", "/quit"]);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("[已是空会话——沿用本会话"); // 复用分支命中
+      expect(r.out).not.toMatch(/\[新会话 s_[0-9A-Za-z]+\]/); // 不再另起新会话
+      const sessRoot = join(d, "home", ".orosus", "sessions");
+      const sids = existsSync(sessRoot) ? readdirSync(sessRoot).flatMap((b) => readdirSync(join(sessRoot, b))) : [];
+      expect(sids).toEqual([]); // 退出漏斗已清——桶内零会话目录
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

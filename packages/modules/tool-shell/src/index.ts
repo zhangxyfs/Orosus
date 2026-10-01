@@ -233,7 +233,7 @@ Returns the tail of the job's output file plus its state (running / exited). Def
         execute: () => {
           const want = chars ?? 16_000;
           const r = registry.readTail(id, want);
-          if (r === undefined) return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx）`, isError: true });
+          if (r === undefined) return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx；查在跑子代理进度请用 tool-subagent__tasks，子代理结论自动送回、不是后台作业）`, isError: true });
           const state = r.state === "running" ? "运行中" : `已结束（退出码 ${r.code ?? "null"}）`;
           // MB-13（2026-09-28 code review P3）：运行中 totalChars = 文件字节数近似（非精确字符数）——状态头如实
           // 标「约 N 字节」，不再用「尾部 X/Y 字符」把窗口值冒充总量；已结束才用精确字符分母
@@ -272,7 +272,7 @@ function killTool(registry: JobRegistry): Tool {
           if (r.state === "already-done") {
             return Promise.resolve({ output: `后台作业 ${id} 已自行结束（退出码 ${r.code ?? "null"}），无需停止——如需输出用 tool-shell__output 读取`, isError: false });
           }
-          return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx）`, isError: true });
+          return Promise.resolve({ output: `无此后台作业："${id}"（本会话未登记——id 形如 bg-xxxxxxxx；停子代理请用 tool-subagent__stop，子代理不是后台作业）`, isError: true });
         },
       });
     },

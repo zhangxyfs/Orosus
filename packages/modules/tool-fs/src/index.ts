@@ -465,7 +465,7 @@ function writeTool(fs: LocalFs, readState: ReadState): Tool {
 function editTool(fs: LocalFs, readState: ReadState): Tool {
   return defineTool({
     name: "tool-fs__edit",
-    description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.",
+    description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.\nCRLF-tolerant: on CRLF files, \\n-only line breaks in oldText/newText are auto-normalized to the file's style.",
     parameters: z.object({
       ...pathParam,
       edits: z.array(z.object({
@@ -483,18 +483,41 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
           try {
             const guard = await writeGuard(fs, path, readState); // 写前比对（决策 24④）——edit 自带的现读不替代模型侧的读记录
             if (guard !== undefined) return { output: guard, isError: true };
-            const before = await fs.read(path);
-            const positions: { start: number; end: number; newText: string; index: number }[] = [];
-            for (let i = 0; i < edits.length; i++) {
-              const e = edits[i]!;
-              if (e.replaceAll === true) continue; // 全替换不参与位置检测
-              const pos = before.indexOf(e.oldText);
-              if (pos < 0) return { output: `edits[${i}]: 未找到待替换文本`, isError: true };
-              if (before.indexOf(e.oldText, pos + 1) >= 0) {
-                return { output: `edits[${i}]: 多处匹配——请提供更长的唯一片段或设 replaceAll`, isError: true };
+          const before = await fs.read(path);
+          // CRLF 容差（2026-10-01 实机「未找到待替换文本」连报根因）：core.autocrlf=true 的机器上经 git
+          // 检出的文件工作树是 CRLF——Read 按行展示时行尾 \r 不可见，模型复述的多行 oldText 只会是 \n，
+          // 裸字节匹配必败。先按原样精确匹配（混合行尾文件的 LF 区段不受扰），未中且文件含 \r\n 时把
+          // oldText 换行扩成 \r\n 再试；此路命中则 newText 同步归一，不往 CRLF 文件里掺 LF。
+          const hasCrlf = before.includes("\r\n");
+          const expand = (s: string): string => s.replace(/\r?\n/g, "\r\n");
+          const positions: { start: number; end: number; newText: string; index: number }[] = [];
+          for (let i = 0; i < edits.length; i++) {
+            const e = edits[i]!;
+            if (e.replaceAll === true) continue; // 全替换不参与位置检测
+            let oldText = e.oldText;
+            let newText = e.newText;
+            let pos = before.indexOf(oldText);
+            if (pos < 0 && hasCrlf) {
+              const expanded = expand(e.oldText);
+              if (expanded !== e.oldText && before.indexOf(expanded) >= 0) {
+                oldText = expanded;
+                newText = expand(e.newText);
+                pos = before.indexOf(expanded);
               }
-              positions.push({ start: pos, end: pos + e.oldText.length, newText: e.newText, index: i });
             }
+            if (pos < 0) {
+              // 报错带线索（实机教训：光一句「未找到」模型只会微调重试连败）——说破 EOL 适配已试过、
+              // 从未读过的文件提醒先读（writeGuard 对没读过的文件放行，这里补一句指路）
+              const hints: string[] = [];
+              if (hasCrlf) hints.push("本文件为 CRLF 行尾——多行片段已自动按 \\r\\n 适配仍未命中，请逐字对照最新读取内容");
+              if (readState.get(fs.resolveAbs(path)) === undefined) hints.push("本会话尚未读取过该文件——先 tool-fs__read 再编辑");
+              return { output: `edits[${i}]: 未找到待替换文本${hints.length > 0 ? `（${hints.join("；")}）` : ""}`, isError: true };
+            }
+            if (before.indexOf(oldText, pos + 1) >= 0) {
+              return { output: `edits[${i}]: 多处匹配——请提供更长的唯一片段或设 replaceAll`, isError: true };
+            }
+            positions.push({ start: pos, end: pos + oldText.length, newText, index: i });
+          }
             // 重叠检测（pi 原文件匹配方案核心）
             positions.sort((a, b) => a.start - b.start);
             for (let i = 1; i < positions.length; i++) {
@@ -511,7 +534,12 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
             // simultaneously」对齐；旧实现对已应用位置编辑的结果串再跑 split/join，是增量的）
             const applyReplaceAll = (segment: string): string => {
               for (const e of edits) {
-                if (e.replaceAll === true) segment = segment.split(e.oldText).join(e.newText);
+                if (e.replaceAll !== true) continue;
+                // 同款 CRLF 容差（文件级判定：原样在文件里存在就按原样，否则试扩展形态——
+                // 混合行尾文件原样优先；newText 随命中形态归一）
+                const expanded = hasCrlf ? expand(e.oldText) : e.oldText;
+                const useExpanded = expanded !== e.oldText && !before.includes(e.oldText);
+                segment = segment.split(useExpanded ? expanded : e.oldText).join(useExpanded ? expand(e.newText) : e.newText);
               }
               return segment;
             };

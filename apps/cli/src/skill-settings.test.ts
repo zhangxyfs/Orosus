@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { readSkillDisabled, toggleSkillDisabled, skillScopeLabel, skillListRow, skillDetailText, truncateAtWord, type SkillCatalogRow } from "./skill-settings.ts";
+import { readSkillDisabled, toggleSkillDisabled, skillScopeLabel, skillListRow, skillDetailText, truncateAtWord, seedFactorySkills, type SkillCatalogRow } from "./skill-settings.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
 
 /** m4-7 T8/T9：技能停用配置读写（[skill] disabled 数组键）+ 列表行/详情文本纯函数（原型图 2/3）。 */
@@ -115,5 +115,46 @@ describe("技能列表行与详情文本（m4-7 T8/T9——原型图 2/3）", ()
 		expect(truncateAtWord("deployment batching 详解", 14)).toBe("deployment…");
 		expect(truncateAtWord("超长的中文描述内容在这里", 10)).toBe("超长的中…"); // 预算 9 列 = 4 个 CJK + …
 		expect(truncateAtWord("short", 10)).toBe("short"); // 不超宽原样
+	});
+});
+
+describe("出厂技能固化接线 seedFactorySkills（2026-10-01 拍板——引导弹出时刻拷入用户级 ~/.orosus/skills）", () => {
+	const sinks = () => {
+		const notified: string[] = [];
+		const toasted: string[] = [];
+		return { notified, toasted, notify: (m: string) => notified.push(m), showToast: (m: string) => toasted.push(m) };
+	};
+
+	it("① fresh 首启：真身出厂件落目标 + 成功 toast 带件数与去处；零失败零 notify", () => {
+		dir = mkdtempSync(join(tmpdir(), "skill-seed-"));
+		const s = sinks();
+		seedFactorySkills({ fresh: true, ...s, targetDir: join(dir, "skills") });
+		expect(s.toasted).toHaveLength(1);
+		expect(s.toasted[0]).toContain("11"); // 出厂件数随版本浮动——doc-review 拆 cn/en 后为 11
+		expect(s.toasted[0]).toContain("~/.orosus/skills");
+		expect(s.notified).toEqual([]);
+		expect(readFileSync(join(dir, "skills", "skill-creator", "SKILL.md"), "utf8")).toContain("Progressive disclosure"); // 真身非占位
+	});
+
+	it("② 幂等复弹：非 fresh 再触发 → 同名全跳过零拷贝，无任何提示（话术位留给 SW-20/degraded）", () => {
+		dir = mkdtempSync(join(tmpdir(), "skill-seed-"));
+		const target = join(dir, "skills");
+		seedFactorySkills({ fresh: true, notify: () => {}, showToast: () => {}, targetDir: target });
+		const s = sinks();
+		seedFactorySkills({ fresh: false, ...s, targetDir: target });
+		expect(s.toasted).toEqual([]);
+		expect(s.notified).toEqual([]);
+	});
+
+	it("③ 单件失败走 notify（弹窗外浮层）不给成功 toast：点名件数与名字", () => {
+		dir = mkdtempSync(join(tmpdir(), "skill-seed-"));
+		mkdirSync(join(dir, "skills"), { recursive: true });
+		writeFileSync(join(dir, "skills", "commit"), "占位文件——目录位置被文件占了");
+		const s = sinks();
+		seedFactorySkills({ fresh: true, ...s, targetDir: join(dir, "skills") });
+		expect(s.notified).toHaveLength(1);
+		expect(s.notified[0]).toContain("1");
+		expect(s.notified[0]).toContain("commit");
+		expect(s.toasted).toEqual([]);
 	});
 });

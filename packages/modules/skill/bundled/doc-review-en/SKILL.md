@@ -1,5 +1,5 @@
 ---
-name: doc-review
+name: doc-review-en
 description: Review documents for factual accuracy, internal consistency, and plain-language quality before they ship. Use when the user asks to review, audit, or double-check any plan, survey, README, or report — evidence before accusation, findings graded A/B/C, honest convergence.
 when_to_use: Reviewing or auditing any written deliverable (plan / survey / README / report)
 ---

@@ -92,6 +92,36 @@ describe("写协调闸 T7（决策 24：报备归一 + 撞车排队 + 同血缘�
     g.release("m1");
   });
 
+  it("㉑a 出路分叉文案（2026-10-01 实机：后台 Bash 型子代理持整仓闸，主对话 grep/ls 三连被拦、模型只会原地重试）：不透明执行拦车须指路只读工具；路径写拦车维持等持闸者口径", async () => {
+    const g = gate();
+    await g.acquire("bash1", { paths: [], wholeRepo: true }, []);
+    const opaque = g.checkMainWrite([]);                    // 主对话 Bash（subprocess 不透明 → 空数组 = 整仓）
+    expect(opaque.ok).toBe(false);
+    if (!opaque.ok) {
+      expect(opaque.error).toContain("Grep/Read/Glob");     // 逃生路说全——改道只读工具立即可继续
+      expect(opaque.error).toContain("tool-subagent__tasks");
+    }
+    const file = g.checkMainWrite([join("docs", "b.txt")]); // 主对话真写文件撞整仓闸——无只读替身，不给改道建议
+    expect(file.ok).toBe(false);
+    if (!file.ok) expect(file.error).not.toContain("Grep/Read/Glob");
+    g.release("bash1");
+    const g2 = gate();
+    await g2.acquire("a", paths("docs/"), []);
+    let wStarted = false;
+    const waitW = g2.acquire("w", { paths: [], wholeRepo: true }, []).then(() => { wStarted = true; });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(wStarted).toBe(false);                           // 整仓者与 a 撞 → 排队
+    const qHit = g2.checkMainWrite([join("src", "a.ts")]);  // 与持闸 a 不撞、与排队整仓者撞（意图已声明）
+    expect(qHit.ok).toBe(false);
+    if (!qHit.ok) {
+      expect(qHit.error).toContain("排队中");
+      expect(qHit.error).not.toContain("Grep/Read/Glob");
+    }
+    g2.release("a");
+    await waitW;
+    g2.release("w");
+  });
+
   it("㉑b CX-10 冲突序钉：先到的冲突排队者未启动时，不冲突的后来者先行持闸（非严格 FIFO——细粒度报备的并发意义，头注释同款口径）", async () => {
     const g = gate();
     await g.acquire("h", paths("src/"), []);             // 持闸：src/

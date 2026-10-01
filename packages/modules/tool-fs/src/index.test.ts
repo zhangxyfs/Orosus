@@ -78,6 +78,24 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     expect((await run(tools[2]!, { path: "b.txt", edits: [{ oldText: "aa", newText: "x" }] })).isError).toBe(true); // 多处匹配
   });
 
+  it("edit CRLF 容差（2026-10-01 实机「未找到待替换文本」连报根因：autocrlf 工作树 + 模型 \\n 复述）：多行 oldText 自动适配命中且写回不掺 LF；仍未中时报错带 CRLF/未读取线索；LF 文件原样匹配不受扰", async () => {
+    writeFileSync(join(dir, "crlf.md"), "第一行\r\n第二行\r\n第三行");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const miss = await run(tools[2]!, { path: "crlf.md", edits: [{ oldText: "不存在\n的文本", newText: "x" }] }); // 未读先编 + 真不存在
+    expect(miss.isError).toBe(true);
+    expect(miss.output).toContain("CRLF 行尾");
+    expect(miss.output).toContain("尚未读取");
+    await run(tools[0]!, { path: "crlf.md" }); // 读一次（此后未读取线索不再出现）
+    const ok = await run(tools[2]!, { path: "crlf.md", edits: [{ oldText: "第二行\n第三行", newText: "新二行\n新三行" }] });
+    expect(ok.isError).toBe(false);
+    expect(readFileSync(join(dir, "crlf.md"), "utf8")).toBe("第一行\r\n新二行\r\n新三行"); // newText 同步归一——不往 CRLF 文件掺 LF
+    writeFileSync(join(dir, "lf.md"), "a\nb\nc");
+    const lf = await run(tools[2]!, { path: "lf.md", edits: [{ oldText: "a\nb", newText: "x\ny" }] });
+    expect(lf.isError).toBe(false);
+    expect(readFileSync(join(dir, "lf.md"), "utf8")).toBe("x\ny\nc");
+  });
+
   it("批 C（2026-10-01 方案一拍板）：读面放开绝对路径——根外文件可读；写面仍限根（越出 → isError）", async () => {
     const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-out2-"));
     writeFileSync(join(outside, "peer.txt"), "PEER REPO", "utf8");

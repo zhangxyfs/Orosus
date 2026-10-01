@@ -38,8 +38,9 @@ export function hardeningNote(): string | null {
 }
 
 /** 锁持有者 pid 是否仍活着（CS-03）：signal 0 探活——ESRCH = 已死；EPERM（权限不足/Windows 系统进程）
- *  按活着处理（宁拒勿撞：把活实例误判成 stale 会重新引入双写）。 */
-function pidAlive(pid: number): boolean {
+ *  按活着处理（宁拒勿撞：把活实例误判成 stale 会重新引入双写）。
+ *  2026-10-01 起导出：空会话清扫（cleanup.ts）复用同款判活——锁在且持有者活着 = 他实例占用，跳过不清。 */
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -49,7 +50,7 @@ function pidAlive(pid: number): boolean {
 }
 
 /** 读锁文件首行 pid（CS-03）：损坏/空文件返回 null——按 stale 回收处理，坏锁文件不许死锁后续打开。 */
-function readLockPid(file: string): number | null {
+export function readLockPid(file: string): number | null {
   try {
     const pid = Number.parseInt(readFileSync(file, "utf8").split("\n")[0]!.trim(), 10);
     return Number.isInteger(pid) && pid > 0 ? pid : null;
