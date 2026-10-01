@@ -736,7 +736,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       if (candidates.length === 0) return "无可切换的平台——先用 /provider 添加平台（含默认模型）";
       // 两段选循环（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：模型列表 Esc → 回平台列表；
       // 平台列表（根）的 Esc 照旧穿透——整条取消。单槽直达（F5 用户实测：只有一个平台时还问
-      // 「选哪个」是废问——/model 语义是换模型不是换平台）：无上级可回，Esc 后直接重列模型
+      // 「选哪个」是废问——/model 语义是换模型不是换平台）：无上级可回，模型列表 Esc 同样穿透取消
+      // （2026-10-01 批 E 修正：原「Esc 后直接重列模型」在单槽下是死循环——见下方 catch 注释）
       for (;;) {
         const slotName = candidates.length === 1
           ? candidates[0]!.name
@@ -770,7 +771,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
             try {
               mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
             } catch (err) {
-              if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回平台列表
+              // Esc → 回平台列表（2026-09-28 拍板「子菜单 Esc 返回上一级」）。单槽直达时模型清单即根——
+              // 无上级可回，Esc 穿透取消（2026-10-01 批 E 修正：原无条件 continue 在单槽下无限重列——
+              // 真人 UI 菜单关不掉，测试假 UI 瞬抛成纯微任务自旋〔100% CPU、免疫 testTimeout 与 worker
+              // 强杀〕→ harness.test 全量套件永不退，两小时挂树实锤）
+              if (err instanceof Error && err.message === "已取消（Esc）" && candidates.length > 1) continue;
               throw err;
             }
             next = `${slotName}/${mpick.replace(/ ✓$/, "")}`;
