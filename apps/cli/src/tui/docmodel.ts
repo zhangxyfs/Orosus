@@ -10,6 +10,7 @@
  *  2026-09-28 卡顿批 A：定格条目全部宽度级缓存（此前仅 md）——frameLines 单帧成本从 O(会话文本)
  *  降为拼引用；kimi「字符串引用没变复用上帧结果」的条目级等价物（见 LineCache 注释）。 */
 
+import { statSync } from "node:fs";
 import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from "../mdpipe.ts";
 import { stripDangerEsc } from "../ansi-guard.ts";
 import { agentGroupLines } from "../subagent-status.ts";
@@ -27,7 +28,7 @@ const COLLAPSIBLE_TOOLS = new Set(["tool-fs__read", "tool-fs__grep", "tool-fs__g
 import { highlightLines } from "../md/highlight.ts";
 import type { StreamChunk } from "./streamview.ts";
 
-type ToolResult = { isError: boolean; output?: string | undefined; lines: number }; // output 仅失败留存（成功体可巨大）
+type ToolResult = { isError: boolean; output?: string | undefined; lines: number; /** 图片附件（m5-media F4）：路径引用——头行 chip「附 N 图」+ Alt+O 展开逐图行（不渲染像素）。 */ images?: { path: string; mime: string; bytes: number }[] }; // output 仅失败留存（成功体可巨大）
 
 /** 定格条目渲染缓存（bash 卡顿批 A，2026-09-28）：frameLines 每帧跑、单帧成本曾 = O(会话文本)
  *  （think 收起态照付全文 wrapText），busy 心跳 10Hz 全帧叠上 bash 子进程抢 CPU 即用户可感的卡顿。
@@ -246,8 +247,20 @@ export class DocModel {
 	/** 工具结果原位合并：callId 在场 → 精确配对（并发乱序不交叉挂错——2026-09-25 用户实机错配修复：
 	 *  旧「最近未完结」启发式在后发先完成时把快工具的结果挂到慢工具行上）；缺席（旧会话日志）→
 	 *  回退最近未完结（write() 的 TOOL_MERGE 哨兵同语义的结构化版）。 */
-	toolResult(output: unknown, isError: unknown, callId?: string): void {
+	toolResult(output: unknown, isError: unknown, callId?: string, images?: unknown): void {
 		this.settleActive();
+		// m5-media F4：图片附件摄入（不受信形状防御——坏条目剔除；statSync 取体积供信息行，失败记 0）
+		const imgs: { path: string; mime: string; bytes: number }[] | undefined = (() => {
+			if (!Array.isArray(images)) return undefined;
+			const ok = images.flatMap((it): { path: string; mime: string; bytes: number }[] => {
+				const o = it as { path?: unknown; mimeType?: unknown } | null;
+				if (typeof o?.path !== "string" || o.path === "" || typeof o?.mimeType !== "string") return [];
+				let bytes = 0;
+				try { bytes = statSync(o.path).size; } catch { bytes = 0; }
+				return [{ path: o.path, mime: o.mimeType.split("/")[1] ?? o.mimeType, bytes }];
+			});
+			return ok.length > 0 ? ok : undefined;
+		})();
 		// 静默对的另一半：tasks 的结果随 call 一起吞（agent 组已实时显示同款信息——不刷屏）
 		if (callId !== undefined && this.ghostCalls.has(callId)) {
 			this.ghostCalls.delete(callId);
@@ -272,7 +285,7 @@ export class DocModel {
 					const item = prev.group.items.find((it) => it.callId === callId);
 					if (item !== undefined) {
 						if (item.result === undefined) {
-							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n, ...(imgs !== undefined ? { images: imgs } : {}) };
 							this.markCountDirty(i);
 						}
 						return;
@@ -281,7 +294,7 @@ export class DocModel {
 				}
 				if (prev.callId === callId) {
 					if (prev.result === undefined) {
-						prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+						prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n, ...(imgs !== undefined ? { images: imgs } : {}) };
 						this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
 					}
 					return; // callId 唯一：已有结果不覆盖，无则挂上
@@ -297,7 +310,7 @@ export class DocModel {
 					for (let j = prev.group.items.length - 1; j >= 0; j--) {
 						const item = prev.group.items[j]!;
 						if (item.result === undefined) {
-							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+							item.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n, ...(imgs !== undefined ? { images: imgs } : {}) };
 							this.markCountDirty(i);
 							return;
 						}
@@ -305,7 +318,7 @@ export class DocModel {
 					continue; // 全组已结——继续向前
 				}
 				if (prev.result === undefined) {
-					prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n };
+					prev.result = { isError: isError === true, output: isError === true ? text : undefined, lines: n, ...(imgs !== undefined ? { images: imgs } : {}) };
 					this.markCountDirty(i); // 条目原位变更——账本行即时重算（T4）
 					return;
 				}
@@ -327,9 +340,17 @@ export class DocModel {
 				const stats = toolChangeStats(e.name, e.args);
 				chip = stats === undefined ? ` · ${e.result.lines} 行` : stats.dels > 0 ? ` · +${stats.adds} -${stats.dels}` : ` · ${stats.adds} 行`;
 			}
+			if (e.result.images !== undefined) chip += ` · 附 ${e.result.images.length} 图`; // m5-media F4：头行 chip 常显（收起态也可见）
 		}
 		const head = toolCallLine(e.name, e.args, process.cwd()).replace("● Using ", e.result === undefined ? "● Using " : "● Used ") + chip;
 		const out = [this.styleToolLine(head, e.result?.isError === true)];
+		// m5-media F4：图片信息行（不渲染像素——终端不折腾六块图）；Alt+O 展开态逐图一行（格式+体积+路径）
+		if (e.result?.images !== undefined && this.toolOpen) {
+			for (const img of e.result.images) {
+				const size = img.bytes >= 1024 ? `${(img.bytes / 1024).toFixed(1)} KB` : `${img.bytes} 字节`;
+				for (const wl of wrapText(`图 ${img.mime} · ${size} · ${img.path}`, Math.max(8, width - 4))) out.push(theme.dim(`  ${wl}`));
+			}
+		}
 		if (e.result?.isError === true) {
 			if (!this.errOpen) return out;
 			// CTW-09（2026-09-28）：错误体入场一次解析缓存（hl/detail 同纪律）——errorLines 是
@@ -536,7 +557,7 @@ export class DocModel {
 					for (const id of spawnIdsIn(String(e.output ?? ""))) if (!grp.ids.includes(id)) grp.ids.push(id);
 					continue; // spawn 结果不落行——进度/结论都在 agent 组里（实时路同款：无配对工具行，静默丢弃）
 				}
-				this.toolResult(e.output, e.isError, callId);
+				this.toolResult(e.output, e.isError, callId, e.images); // m5-media F4：图片附件透传（信息行数据源）
 			} else if (e.type === "agent/steering-message") {
 				// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
 				const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];

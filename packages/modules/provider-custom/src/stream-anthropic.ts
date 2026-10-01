@@ -2,6 +2,7 @@ import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderReq
 import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapEvent, parseSseBlock, thinkingParamFor, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
+import { gateImagesByVision } from "./visiongate.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 8192;
@@ -47,7 +48,7 @@ function parseSearchHitsFromToolResult(content: unknown): { title: string; url: 
 export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 
 /** fetch glue（D31）：Anthropic Messages 协议，双头鉴权，错误全带内。vendored 自 provider-anthropic。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -89,7 +90,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             model: request.model,
             max_tokens: maxTokens,
             system: request.system,
-            messages: toAnthropicMessages(request.messages),
+            messages: toAnthropicMessages(gateImagesByVision(request.model, request.messages, opts.catalogFile)), // m5-media F4：非图模型先剥图占位（true/undefined 放行）
             tools: [
               ...request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
               // M4-3 T1b：webSearch=true → 追加 Anthropic 服务端搜索工具（文档形态 web_search_20250305；

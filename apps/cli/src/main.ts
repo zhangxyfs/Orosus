@@ -801,7 +801,7 @@ function attachRender(h: Harness): void {
             if (name === "tool-subagent__spawn") dm.agentGroupCall();
             else dm.toolCall(name, args, callId);
           },
-          toolResult: (output: unknown, isError: unknown, callId?: string) => dm.toolResult(output, isError, callId),
+          toolResult: (output: unknown, isError: unknown, callId?: string, images?: unknown) => dm.toolResult(output, isError, callId, images),
         }
       : {};
   attachRenderTo(
