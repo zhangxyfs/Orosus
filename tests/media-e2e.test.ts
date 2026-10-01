@@ -32,7 +32,7 @@ describe("m5-media T5：MCP 图块全链（fixture server → 媒资库 → Mode
     const provider = defineModule({
       name: "provider-fake", version: "0.1.0", description: "fake", api: 1,
       activate(ctx) {
-        ctx.provide("provider:fake" as never, (req) => {
+        ctx.provide("provider:fake" as never, (req: import("@orosus/contracts/provider").ProviderRequest) => {
           requests.push(req);
           const chunks = script[Math.min(i++, script.length - 1)]!;
           return (async function* () { for (const c of chunks) yield c; })();
@@ -74,8 +74,8 @@ describe("m5-media T5：MCP 图块全链（fixture server → 媒资库 → Mode
 
       // ③ 第二请求（假 provider 收到的 ModelMessage）：toolResult.parts 引用同一路径
       const tr = requests[1]!.messages.find((m) => m.role === "toolResult");
-      expect(tr).toBeDefined();
-      expect(tr!.role === "toolResult" && tr.parts?.[0]).toMatchObject({ kind: "image", path: images[0]!.path, mimeType: "image/png" });
+      if (tr === undefined || tr.role !== "toolResult") throw new Error("第二请求缺 toolResult 消息");
+      expect(tr.parts?.[0]).toMatchObject({ kind: "image", path: images[0]!.path, mimeType: "image/png" });
 
       // ④ openai 线缆（bridge 默认）：tool 消息纯文本 + 紧跟只含 image_url 的 user 消息（T0 spike C 形态）
       const wire = toOpenAIMessages("", requests[1]!.messages) as Array<{ role: string; content: unknown }>;
