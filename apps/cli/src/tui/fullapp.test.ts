@@ -1068,6 +1068,28 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(b).not.toContain("─".repeat(90)); // 79 宽弹窗撑不出 90 连横线
 	});
 
+	it("④b 恒满屏（2026-10-01 走查①拍板「不论内容填不填满都得满屏」）：full 弹窗单行内容也画满整屏（大量空盒行）；dock 仍内容自适应短盒", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 20);
+		app.start();
+		await flush();
+		output.buf = "";
+		app.viewText("全屏窗", "仅一行", { layout: "full" });
+		await flush();
+		const b = stripAnsi(output.buf);
+		expect(b).toContain("全屏窗");
+		// 补空行后的空盒行（│ + 长空串 + │）：page-1 ≈ 16 行——旧实现抱内容只有 4 行盒、零空盒行
+		expect((b.match(/│ {60,}│/g) ?? []).length).toBeGreaterThanOrEqual(10);
+		expect(b).toContain("╰"); // 底框在
+		input.emit("data", "\x1b");
+		await flush();
+		output.buf = "";
+		app.viewText("贴底窗", "仅一行", { layout: "dock" });
+		await flush();
+		const d = stripAnsi(output.buf);
+		expect(d).toContain("贴底窗");
+		expect((d.match(/│ {60,}│/g) ?? []).length).toBeLessThanOrEqual(3); // dock 不补——盒行数=内容数（≤ 内容 1 行 + 提示行）
+	});
+
 	it("⑤ too-small：8×2 终端连保底都装不下——不弹窗、黄字「终端窗口太小」", async () => {
 		const { app, output } = rig(["# hi"], 8, 2);
 		app.start();

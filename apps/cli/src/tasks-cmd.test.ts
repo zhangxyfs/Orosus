@@ -74,6 +74,15 @@ describe("/tasks 列表与查看窗 T11（决策 21/22：亲缘分组 + 三色 +
     expect(plain.some((l) => l.includes("调研结论在此"))).toBe(true);
   });
 
+  it("㊸b 生成中尾行（2026-10-01 走查④拍板）：运行/排队态内容末尾挂「正在生成…」spinner 行；完成/失败态不挂", () => {
+    const running = stripAnsi(renderAgentView(T({ status: "running" }), [{ type: "user/message", content: [{ kind: "text", text: "任务" }] }]));
+    expect(running.split("\n").at(-1)).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 正在生成…$/);
+    const queued = stripAnsi(renderAgentView(T({ status: "queued" }), []));
+    expect(queued).toContain("正在生成…");
+    const done = stripAnsi(renderAgentView(T({ status: "completed" }), [{ type: "user/message", content: [{ kind: "text", text: "任务" }] }]));
+    expect(done).not.toContain("正在生成…");
+  });
+
   it("㊹ 失败/等审批形态：错误首行与等审批标注进顶栏；失败色红", () => {
     const failed = renderAgentView(
       T({ status: "failed", error: "已被取消（子代理被停止）\n第二行不进" }),

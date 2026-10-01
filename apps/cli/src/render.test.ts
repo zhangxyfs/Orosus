@@ -224,6 +224,15 @@ describe("工具显示名 label（2026-09-24 用户拍板——Search→Web Sear
     expect(toolDisplayName("tool-web__search")).toBe("Search");
   });
 
+  it("①b url 关键参数（2026-10-01 走查②拍板——Web Fetch 失败行要带网址）：url 进 toolKeyArg 优先级表（command 之后、query 之前）", () => {
+    registerToolLabels([{ name: "tool-web__fetch", label: "Web Fetch" }]);
+    expect(toolCallLine("tool-web__fetch", { url: "https://example.com/some/long/path" }, process.cwd())).toBe("● Using Web Fetch (https://example.com/some/long/path)");
+    registerToolLabels([]);
+    // 优先级：command 仍在 url 前（bash 类工具不受影响）；无关键参数照旧裸名
+    expect(toolCallLine("tool-shell__bash", { command: "ls", url: "not-a-url-arg" }, process.cwd())).toBe("● Using Bash (ls)");
+    expect(toolCallLine("tool-web__fetch", {}, process.cwd())).toBe("● Using Fetch");
+  });
+
   it("② reload 重喂语义：带 label 收录、label 摘除后回落（同位换模块生效）", () => {
     registerToolLabels([{ name: "m__t", label: "My Tool" }]);
     expect(toolDisplayName("m__t")).toBe("My Tool");
