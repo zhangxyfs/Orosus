@@ -91,6 +91,35 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     expect(all.some((e) => e.type === "tool/result" && e.output === "文件内容")).toBe(true);
   });
 
+  it("工具结果带图（m5-media F1）：images 落 tool/result 事件 + 下一请求投影 toolResult.parts；无图结果零差异（不带 images 字段）", async () => {
+    const { run, tools, provider, session } = setup([
+      [
+        { type: "toolcall/argumentsDelta", callId: "c1", name: "m__shot", argumentsDelta: "{}" },
+        { type: "toolcall/argumentsDelta", callId: "c2", name: "m__t", argumentsDelta: "{}" },
+        { type: "finish", kind: "toolUse" },
+      ],
+      [{ type: "text/delta", text: "看到了" }, { type: "finish", kind: "stop" }],
+    ]);
+    tools.register(defineTool({
+      name: "m__shot", description: "shot", parameters: z.object({}),
+      resolveExecution: async () => ({
+        execute: async () => ({ output: "截图完成", isError: false, images: [{ path: "/sess/media/media-1-c1.png", mimeType: "image/png" }] }),
+      }),
+    }), "m");
+    tools.register(defineTool({
+      name: "m__t", description: "t", parameters: z.object({}),
+      resolveExecution: async () => ({ execute: async () => ({ output: "纯文本", isError: false }) }),
+    }), "m");
+    await run();
+    const all = await session.all();
+    const shotResult = all.find((e) => e.type === "tool/result" && e.callId === "c1")!;
+    expect(shotResult.images).toEqual([{ path: "/sess/media/media-1-c1.png", mimeType: "image/png" }]); // 路径引用落日志
+    const textResult = all.find((e) => e.type === "tool/result" && e.callId === "c2")!;
+    expect((textResult as { images?: unknown }).images).toBeUndefined(); // 无图零差异
+    const shot = provider.requests[1]!.messages.find((m) => m.role === "toolResult" && m.callId === "c1");
+    expect(shot).toMatchObject({ parts: [{ kind: "image", path: "/sess/media/media-1-c1.png", mimeType: "image/png" }] }); // 投影带图
+  });
+
   it("多工具回合：全部 tool/call 先批量落条再执行，投影不丢 call（§6.2 伪码/§6.1 铁律）", async () => {
     const { run, tools, provider } = setup([
       [

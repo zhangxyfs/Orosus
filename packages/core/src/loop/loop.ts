@@ -75,6 +75,7 @@ async function* executeGroups(
           ...(result.denied !== undefined ? { denied: result.denied } : {}),
           ...(result.truncated !== undefined ? { truncated: result.truncated } : {}),
           ...(result.spill !== undefined ? { spill: result.spill } : {}),
+          ...(Array.isArray(result.images) && result.images.length > 0 ? { images: result.images } : {}), // m5-media F1：图片附件路径引用透传（投影 → toolResult.parts）
         });
         await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
         queue.push(e);

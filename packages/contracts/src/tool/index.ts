@@ -33,6 +33,18 @@ export const Access = {
   all: (): Access => ({ kind: "all" }),
 } as const;
 
+/** 工具结果图片附件 mime 联合（m5-media F1）——与 ContentPart.image 同口径四值。 */
+export type ToolImageMime = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+
+/** 工具结果的图片附件（m5-media F1，路径引用制）：不存 base64——会话日志与 ModelMessage 永远只
+ *  见路径（日志不吃 4/3 膨胀），provider 翻译层请求期读文件转线缆形态。落盘归宿 = 会话媒资库
+ *  <sid>/media/（F8，core 归一化统一写入——spill 同款纪律）；工具自返的磁盘既有文件（如读图工具）
+ *  直接给路径。 */
+export interface ToolResultImage {
+  path: string;
+  mimeType: ToolImageMime;
+}
+
 /** 工具结果统一形状（§6.3）。denied: true 表示被 waterfall 否决（此时 isError 恒为 true）。 */
 export interface ToolResult {
   output: string;
@@ -40,6 +52,8 @@ export interface ToolResult {
   truncated?: boolean;
   spill?: { path: string; bytes: number };
   denied?: boolean;
+  /** 图片附件（m5-media F1）：渲染层显示「附 N 张图」、投影层转 toolResult.parts、翻译层翻进线缆。 */
+  images?: ToolResultImage[];
 }
 
 /** 工具执行期上下文。signal 供取消传播（长耗时工具必须响应）；callId 关联 tool/call 与 tool/result。 */

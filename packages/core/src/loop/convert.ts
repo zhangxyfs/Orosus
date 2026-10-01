@@ -18,6 +18,19 @@ function stripImages(m: ModelMessage): ModelMessage {
   };
 }
 
+/** tool/result 事件的 images 字段（m5-media F1，不受信形状——fork 片段/手改日志同 stripImages 的防御场景）
+ *  → image ContentPart[]：路径非空串 + mime 四值白名单双校验，坏条目剔除；全空/无字段 → undefined。 */
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+function imagePartsOf(raw: unknown): ContentPart[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const parts = raw.flatMap((it): ContentPart[] => {
+    const o = it as { path?: unknown; mimeType?: unknown } | null;
+    if (typeof o?.path !== "string" || o.path === "" || typeof o?.mimeType !== "string" || !IMAGE_MIMES.has(o.mimeType)) return [];
+    return [{ kind: "image", path: o.path, mimeType: o.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif" }];
+  });
+  return parts.length > 0 ? parts : undefined;
+}
+
 /**
  * convertToLlm：日志投影 → 模型消息（§6.1 铁律 "model-visible means logged" 的执行点）。
  * 核心固定实现，不可被模块替换（§6.2）；契约：不许抛异常——未知/不可投影类型跳过。
@@ -124,16 +137,20 @@ ${summary}` }],
         }
         break;
       }
-      case "tool/result":
+      case "tool/result": {
         // 孤儿防御（M3/D41）：fork 截断/损坏片段可能产生无对应 tool/call 的 result——跳过，不进请求
         if (!seenCalls.has(String(e.callId))) break;
+        // m5-media F1：图片附件路径引用 → parts（翻译层翻线缆）；坏形状防御剔除见 imagePartsOf
+        const imgParts = imagePartsOf(e.images);
         out.push({
           role: "toolResult",
           callId: String(e.callId),
           output: String(e.output ?? ""),
           isError: e.isError === true,
+          ...(imgParts !== undefined ? { parts: imgParts } : {}),
         });
         break;
+      }
       default:
         break; // session/header、turn/*、request/header、assistant/chunk、<module>/* 扩展事件不进模型投影
     }
