@@ -1,11 +1,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { Disposer, Logger } from "@orosus/contracts/module";
 import { Access, type Tool, type ToolExecution, type ToolInfo, type ToolResult } from "@orosus/contracts/tool";
 import type { ToolSpec } from "@orosus/contracts/provider";
 import { CORE_POINTS, type EventBus } from "../kernel/bus.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
+import { persistRawImages } from "./media.ts";
 
 /** 单条工具输出上限（字节按 length 近似），超出截断 + 溢写 spill（§6.3）。 */
 export const OUTPUT_LIMIT = 32768;
@@ -58,11 +59,15 @@ export interface ToolRegistry {
  * → execute → 归一（截断/spill）。run 为合成口（M1 语义不变）。loop 消费 plan/execute 做 §6.3 并发分组。
  * fail-closed 默认值：accesses 缺省 = kind:"all"；approvalRule 缺省 = 需要审批。
  */
-export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string }): ToolRegistry {
+export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string; mediaDir?: string }): ToolRegistry {
   const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
   // CX-06 修复（2026-09-28 code review）：溢写文件序号（registry 实例内单调）——callId 是 provider 流的
   // 外部可控值，部分厂商/桥接层会跨轮复用同一 id，原样做文件名会互相覆写（前一次溢写全文丢失）。
   let spillSeq = 0;
+  // 会话媒资库（m5-media F2/F8）：<sid>/media/ 与 <sid>/spill/ 同层惯例——缺省由 spillDir 兄弟位派生
+  // （harness 默认 spillDir = <sid>/spill → media = <sid>/media）；显式注入优先。媒资序号同 spill 单调。
+  const mediaDirUsed = opts.mediaDir ?? join(dirname(opts.spillDir), "media");
+  let mediaSeq = 0;
   // ToolSearch 机制态（M4-3 T4）：deferredEnabled = 总开关（SW-26 关态整门不启的前提位）；
   // revealed = 已加载集合——随 registry 实例存活，压缩/会话裁剪不清（SW-11，cc-haha 同款，kimi 清空是反例）
   let deferredEnabled = false;
@@ -218,6 +223,14 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
           const tail = result.output.slice(-TAIL_KEEP);
           result = { ...result, output: `${head}\n[…中间截断 ${bytes - HEAD_KEEP - TAIL_KEEP} 字符——溢写失败，全文未落盘…]\n${tail}`, truncated: true };
         }
+      }
+
+      // m5-media F2：内联图归一化（pi「进历史前归一化」——rawImages 在 loop 落条前转媒资库路径引用，
+      // base64 永不进会话日志）；单条剔除不炸（media.ts 内部 warn），与既有 images 合并、raw 字段剥除。
+      if (result.rawImages !== undefined && result.rawImages.length > 0) {
+        const stored = persistRawImages(result.rawImages, { dir: mediaDirUsed, seq: () => ++mediaSeq, callId: planned.callId, log: planned.log });
+        const { rawImages: _raw, ...rest } = result;
+        result = { ...rest, ...(result.images !== undefined || stored.length > 0 ? { images: [...(result.images ?? []), ...stored] } : {}) };
       }
 
       planned.log.debug("kernel.tool.result", "执行完成", { call: planned.callId, isError: result.isError, truncated: result.truncated ?? false });

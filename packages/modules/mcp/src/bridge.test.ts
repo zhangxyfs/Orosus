@@ -235,12 +235,26 @@ describe("T8 结果展示（m4-3c）——renderToolResult 四类内容落地", 
     expect(diff.output).toBe("a\n" + JSON.stringify({ a: "a", b: "b" }, null, 2));
   });
 
-  it("③ 图片/音频占位行：类型+大小（base64 折算字节），不输出乱码数据", () => {
+  it("③ 图片块带图通道（m5-media F2）：白名单 mime + 有效数据 → rawImages 透传 + 「附 1 张图」人话行（base64 不进 output）；音频维持占位行", () => {
     const r = renderToolResult({ content: [{ type: "image", data: "QUJD", mimeType: "image/png" }] });
-    expect(r.output).toMatch(/（图片：image\/png，约 3 字节——工具结果通道暂只支持文本，内容未带回）/);
-    expect(r.output).not.toContain("QUJD");
+    expect(r.output).toMatch(/（附 1 张图：png，约 3 字节）/);
+    expect(r.rawImages).toEqual([{ data: "QUJD", mimeType: "image/png" }]); // core 归一化消费（落盘媒资库）
+    expect(r.output).not.toContain("QUJD"); // base64 原始数据不进文本面
     const a = renderToolResult({ content: [{ type: "audio", data: "", mimeType: "audio/wav" }] });
-    expect(a.output).toMatch(/（音频：audio\/wav，约 0 字节/);
+    expect(a.output).toMatch(/（音频：audio\/wav，约 0 字节——音频通道未开通，内容未带回）/);
+    expect((a as { rawImages?: unknown }).rawImages).toBeUndefined();
+  });
+
+  it("③b 图片占位分档（m5-media F2）：非白名单 mime / 空数据 / 超 10MB 单块帽 → 不透传 + 如实占位（不静默丢）", () => {
+    const svg = renderToolResult({ content: [{ type: "image", data: "QUJD", mimeType: "image/svg+xml" }] });
+    expect(svg.rawImages).toBeUndefined();
+    expect(svg.output).toMatch(/（图片：image\/svg\+xml，约 3 字节——格式不受支持或数据为空，内容未带回）/);
+    const empty = renderToolResult({ content: [{ type: "image", data: "", mimeType: "image/png" }] });
+    expect(empty.rawImages).toBeUndefined();
+    const overCap = "A".repeat(Math.ceil(((10 * 1024 * 1024 + 1) * 4) / 3));
+    const big = renderToolResult({ content: [{ type: "image", data: overCap, mimeType: "image/png" }] });
+    expect(big.rawImages).toBeUndefined();
+    expect(big.output).toMatch(/超过 10MB 单块上限，未带回/);
   });
 
   it("④ 资源链接转一行可读文字（名字 + uri）", () => {

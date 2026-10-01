@@ -92,14 +92,24 @@ export function digest(servers: Record<string, string[]>): string {
   return createHash("sha256").update(normalized).digest("hex");
 }
 
-/** T8 结果展示（m4-3c，qwen 占位形态参照）：server 返回四种内容的落地面——
- *  纯文字直收；结构化数据与文字相同则去重、不同则附后（qwen 等三家同款）；图片音频给占位行
- *  （类型+大小——工具结果通道是纯文本，图进不来〔带图通道在不做清单顺延〕）；资源链接转一行可读文字；
- *  全空明确说「没有返回内容」；不认识的块也明说一行（不静默丢——静默丢过 cc-haha 投毒案例的同款盲区）。
+/** 图片 mime 白名单判定（m5-media F2）：与契约 ToolImageMime 同四值——白名单外的（svg 等）无法作为
+ *  模型图片输入，也不进媒资库，占位行如实说明。 */
+const IMAGE_MIME_OK = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+/** 单块图帽（m5-media F2，kimi MCP_MAX_BINARY_PART_BYTES 同值）：超限不透传（core 侧还有第二道同值
+ *  守卫）——占位行明说超限未带回，不静默丢。 */
+const IMAGE_BLOCK_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/** T8 结果展示（m4-3c，qwen 占位形态参照）+ m5-media F2 带图通道：server 返回内容的落地面——
+ *  纯文字直收；结构化数据与文字相同则去重、不同则附后（qwen 等三家同款）；**图片块带 rawImages
+ *  透传**（base64 原始数据交 core 归一化落媒资库——文本行同步给「附 N 张图」人话行，白名单外/超帽/
+ *  空数据仍占位说明）；音频维持占位行（音频通道不在本批）；资源链接转一行可读文字；全空明确说
+ *  「没有返回内容」；不认识的块也明说一行（不静默丢——静默丢过 cc-haha 投毒案例的同款盲区）。
  *  isError 透传（server 标记的失败不再被硬编码 false 吞掉）。 */
-export function renderToolResult(result: { content?: unknown[]; structuredContent?: unknown; isError?: boolean }): { output: string; isError: boolean } {
+export function renderToolResult(result: { content?: unknown[]; structuredContent?: unknown; isError?: boolean }): { output: string; isError: boolean; rawImages?: { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[] } {
   const blocks = Array.isArray(result.content) ? result.content : [];
   const lines: string[] = [];
+  const rawImages: { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[] = [];
   for (const b of blocks) {
     if (typeof b === "string") {
       lines.push(b); // 旧形态宽容（非 SDK 规范但历史出现过的裸字符串块）
@@ -108,11 +118,25 @@ export function renderToolResult(result: { content?: unknown[]; structuredConten
     const blk = b as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown; uri?: unknown; name?: unknown };
     if (blk?.type === "text") {
       lines.push(typeof blk.text === "string" ? blk.text : JSON.stringify(blk.text));
-    } else if (blk?.type === "image" || blk?.type === "audio") {
+    } else if (blk?.type === "image") {
+      const mime = typeof blk.mimeType === "string" ? blk.mimeType : "未知类型";
+      const data = typeof blk.data === "string" ? blk.data : "";
+      const bytes = Math.max(0, Math.floor((data.length * 3) / 4));
+      const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} 字节`;
+      const short = mime.split("/")[1] ?? mime;
+      if (typeof blk.mimeType === "string" && IMAGE_MIME_OK.has(blk.mimeType) && data !== "" && bytes <= IMAGE_BLOCK_LIMIT_BYTES) {
+        rawImages.push({ data, mimeType: blk.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif" });
+        lines.push(`（附 1 张图：${short}，约 ${size}）`);
+      } else if (bytes > IMAGE_BLOCK_LIMIT_BYTES) {
+        lines.push(`（图片：${mime}，约 ${size}——超过 10MB 单块上限，未带回）`);
+      } else {
+        lines.push(`（图片：${mime}，约 ${size}——格式不受支持或数据为空，内容未带回）`);
+      }
+    } else if (blk?.type === "audio") {
       const mime = typeof blk.mimeType === "string" ? blk.mimeType : "未知类型";
       const bytes = typeof blk.data === "string" ? Math.max(0, Math.floor((blk.data.length * 3) / 4)) : 0;
       const size = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} 字节`;
-      lines.push(`（${blk.type === "image" ? "图片" : "音频"}：${mime}，约 ${size}——工具结果通道暂只支持文本，内容未带回）`);
+      lines.push(`（音频：${mime}，约 ${size}——音频通道未开通，内容未带回）`);
     } else if (blk?.type === "resource_link") {
       const uri = typeof blk.uri === "string" ? blk.uri : JSON.stringify(blk.uri);
       const nm = typeof blk.name === "string" && blk.name !== "" ? blk.name : uri;
@@ -133,7 +157,7 @@ export function renderToolResult(result: { content?: unknown[]; structuredConten
   }
   const isError = result.isError === true;
   if (lines.length === 0) return { output: "（server 没有返回内容）", isError };
-  return { output: lines.join("\n"), isError };
+  return { output: lines.join("\n"), isError, ...(rawImages.length > 0 ? { rawImages } : {}) };
 }
 
 /** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>（MI-07：两段消毒后拼装——注册/审批/模型面

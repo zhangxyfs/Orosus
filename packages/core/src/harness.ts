@@ -65,6 +65,7 @@ export interface HarnessOptions {
   sessionSwitch?: (sessionId: string) => Promise<boolean>; // 会话树批 T10/T11 缝三：宿主切换缝（CLI 注入 switchTo 链路 + 桶闸；立即返回语义——决策点 9）；缺省不装（ctx.session.switchTo = undefined）
   diagDir?: string;
   spillDir?: string;
+  mediaDir?: string;   // m5-media F2：会话媒资库显式注入（缺省 <sid>/media）
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
   settings?: SettingsService;              // m5 T9 口子四：设置服务实现（写面）——经内核装配成 ctx.settings（mounts "settings" 白名单校验）；缺省不装（模块读 undefined 降级）
@@ -422,6 +423,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...(options.config?.module !== undefined ? { module: options.config.module } : {}),
   };
   const spillDirUsed = options.spillDir ?? join(sessionsDir, store.sessionId, "spill");
+  // m5-media F2/F8：会话媒资库（<sid>/media/——spill 同层惯例，随桶清理）；显式注入优先（测试密封）
+  const mediaDirUsed = options.mediaDir ?? join(sessionsDir, store.sessionId, "media");
   const llmHolder: { impl?: LlmPort } = {}; // D39/T4：loadModules 后装配——Unchanged 模块的旧闭包经同一 holder 读到新解析
   // 会话树批 T6/T10：三缝内核半边提取为独立函数——harness 返回对象与 ctx.session 装配（loadModules
   // 转发）共用同一实现。graph 是 loadModules 的返回值、闭包捕获 let 变量（调用期读最新值）——activate
@@ -497,6 +500,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         session: sessionGuarded, // header 兜底面——模块事件先于首个 turn 落盘时先补 header（断头文件实证修复）
         sink,
         spillDir: spillDirUsed,
+        mediaDir: mediaDirUsed, // m5-media F2：媒资库注入（reload 新图同款）
         cwd: options.cwd ?? process.cwd(),
         commandUi,
         llm: llmHolder,
@@ -1391,6 +1395,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           sections: config2.sections,
           session: store,
           sink,
+          mediaDir: mediaDirUsed, // m5-media F2：媒资库注入（reload 新图同款）
           spillDir: spillDirUsed,
           cwd: options.cwd ?? process.cwd(),
           commandUi,
