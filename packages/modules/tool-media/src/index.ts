@@ -2,6 +2,8 @@ import { defineModule } from "@orosus/contracts/module";
 import type { CapabilityKey } from "@orosus/contracts/module";
 import { z } from "zod";
 import { createReadMediaFileTool } from "./readfile.ts";
+import { createConvertTool, createCropTool, createDownsampleTool, createVideoClipTool } from "./tools.ts";
+import { hasFfmpeg } from "./imaging.ts";
 
 /** 媒体策略出货形态（m5-media F9——服务倒挂双边契约）：发送路径四道闸 + 压缩口径的有效值快照。
  *  消费方 = provider-custom（translate 前的 F5 副本口径与 F6/F7 帽值）；键与形状登记于本文件常量。 */
@@ -70,6 +72,10 @@ export default defineModule({
       model: () => hostModel,
       spec: { maxEdge: facts.maxEdge, tokenTier: facts.tokenTier },
     }));
-    // T11（媒体工具族 downsample/crop/convert）/T10（视频）随后续任务挂载
+    ctx.contribute.tool(createDownsampleTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));
+    ctx.contribute.tool(createCropTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));
+    ctx.contribute.tool(createConvertTool());
+    // F12 video_clip：ffmpeg 在场才注册（D11 注册制——缺席不挂工具，解锁条件在 readfile 占位文案明说）
+    void hasFfmpeg().then((ok) => { if (ok) ctx.contribute.tool(createVideoClipTool()); });
   },
 });

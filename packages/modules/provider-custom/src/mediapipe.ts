@@ -105,7 +105,9 @@ async function runResize(path: string, buf: Buffer, spec: ResizeSpec): Promise<{
       return await new Promise<{ buffer: Buffer; width: number; height: number; mime: string; unchanged?: boolean }>((resolve, reject) => {
         const id = ++seq;
         wk.pending.set(id, { resolve, reject });
-        wk.w.postMessage({ id, buffer: buf, maxEdge: spec.maxEdge, tokenTier: spec.tokenTier }, [buf.buffer as ArrayBuffer]);
+        // 小文件 Buffer 走 node 内存池（共享 AB）——transfer 池 = detached 崩；拷贝出自有 AB 再 transfer
+        const ab2 = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+        wk.w.postMessage({ id, buffer: Buffer.from(ab2), maxEdge: spec.maxEdge, tokenTier: spec.tokenTier }, [ab2]);
       });
     } catch {
       // worker 失败——inline 兜底（下方重读文件）
