@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModelMessage } from "@orosus/contracts/provider";
 import {
   applyMediaBudget, DEFAULT_ACCEPTED_IMAGE_MIMES, imageTag,
@@ -64,6 +67,27 @@ describe("applyMediaBudget（F6 mime 门控 + F7 预算降级——四道闸）"
     expect((out[2] as { parts: { kind: string }[] }).parts[0]!.kind).toBe("image"); // 最新存活（4MB ≤ 5MB）
     expect(REQUEST_MEDIA_BUDGET_BYTES).toBe(20 * MB);
     expect(REQUEST_MEDIA_BUDGET_LOW_BYTES).toBe(10 * MB);
+  });
+
+  it("⑤b F13 富化：降级标签同名 .summary.txt 在场 → 带 [视觉摘要]；无缓存纯标签", () => {
+    const d = mkdtempSync(join(tmpdir(), "orosus-f13-"));
+    try {
+      const img = join(d, "s.png");
+      writeFileSync(img, Buffer.alloc(10));
+      const msgs = [imgMsg(img)];
+      // 单图帽外体积 → 降级 → 标签富化
+      const out = applyMediaBudget(msgs, { sizeOf: fakeSizes({ [img]: SINGLE_IMAGE_CAP_BYTES + 1 }) });
+      expect((out[0] as { parts: { kind: string }[] }).parts[0]!.kind).toBe("text");
+      let label = JSON.stringify(out);
+      expect(label).not.toContain("视觉摘要"); // 无缓存纯标签
+      writeFileSync(`${img}.summary.txt`, "蓝色按钮的登录页截图", "utf8");
+      const out2 = applyMediaBudget(msgs, { sizeOf: fakeSizes({ [img]: SINGLE_IMAGE_CAP_BYTES + 1 }) });
+      label = JSON.stringify(out2);
+      expect(label).toContain("[视觉摘要]");
+      expect(label).toContain("蓝色按钮的登录页截图");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 
   it("⑥ 文件缺失不占预算（translate 层自有缺失降级）；imageTag 形态", () => {

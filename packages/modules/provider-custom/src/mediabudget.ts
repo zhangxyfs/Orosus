@@ -3,7 +3,7 @@
 // ③ 张数帽 4 张/请求 ④ 总量帽 20MB 超线降级到安全线 10MB（从最老开始）。被降级的图换文字标签
 // `<image path="…">`——信息不丢（路径在，模型想看可再读；T12 会在此标签挂视觉摘要）。
 // 纯函数 + 判定确定性：同一消息序列两次过闸结果一致（老图恒老——不存在 kimi 备忘录式的横跳面）。
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
 
 type ImagePart = Extract<ContentPart, { kind: "image" }>;
@@ -41,9 +41,24 @@ const fileSize = (path: string): number | undefined => {
   }
 };
 
-/** 降级标签（kimi replaceWithMediaTag 形态；T12 VisionSummary 挂同位）。 */
-export const imageTag = (path: string, reason?: string): string =>
-  reason === undefined ? `<image path="${path}">` : `<image path="${path}" reason="${reason}">`;
+/** 降级标签（kimi replaceWithMediaTag 形态；T12/F13 VisionSummary 富化——同名 .summary.txt 缓存在就带
+ *  一段视觉描述：非视觉模型被降级图也能「读懂」扔掉的图；无缓存纯标签回落）。 */
+export const imageTag = (path: string, reason?: string): string => {
+  const base = reason === undefined ? `<image path="${path}">` : `<image path="${path}" reason="${reason}">`;
+  const summary = readCachedSummary(path);
+  return summary === undefined ? base : `${base}
+[视觉摘要] ${summary}`;
+};
+
+/** F13 缓存读取（<path>.summary.txt——tool-media 后台生成；缺席 undefined）。 */
+function readCachedSummary(path: string): string | undefined {
+  try {
+    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    return t === "" ? undefined : t.slice(0, 500);
+  } catch {
+    return undefined;
+  }
+}
 
 type MediaPart = ImagePart | Extract<ContentPart, { kind: "video" }>;
 

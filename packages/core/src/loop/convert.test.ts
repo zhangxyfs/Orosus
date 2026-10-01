@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import { InMemorySessionStore } from "../session/memory.ts";
 import { deriveMessages } from "./convert.ts";
 
@@ -304,5 +305,29 @@ describe("turn/compaction v3 分形（D57：trigger 分级 + keepUserAt 下标�
       "[Some messages were omitted here during compaction: 5 messages between the oldest and the most recent user input are covered by the compaction summary at the end.]", // 去重后 M = 7 − 2 = 5（MI-12；旧：-1）
       "u6", "[历史摘要]\nS",
     ]);
+  });
+});
+
+describe("压缩剥图占位的视觉摘要富化（m5-media F13）", () => {
+  it("turn/compaction 保留消息的 image part → 占位 + 同名 .summary.txt 摘要在场则附（无缓存纯占位）", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const d = mkdtempSync(join(tmpdir(), "orosus-cvt-"));
+    try {
+      const img = join(d, "k.png");
+      writeFileSync(img, Buffer.alloc(8));
+      const s = new InMemorySessionStore();
+      await s.append("user/message", { content: [{ kind: "text", text: "看图" }, { kind: "image", path: img, mimeType: "image/png" }] });
+      await s.append("turn/compaction", { summary: "前情", trigger: "auto", keepUserAt: [0], keepUserHead: 1, droppedCount: 1 });
+      let msgs = deriveMessages(await s.all());
+      let kept = msgs.find((m) => m.role === "user" && m.content.some((p) => p.kind === "text" && p.text.includes("image omitted")));
+      expect(kept).toBeDefined();
+      expect(JSON.stringify(msgs)).not.toContain("视觉摘要");
+      writeFileSync(`${img}.summary.txt`, "绿色图表", "utf8");
+      msgs = deriveMessages(await s.all());
+      expect(JSON.stringify(msgs)).toContain("[视觉摘要] 绿色图表");
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });

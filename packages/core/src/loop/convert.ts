@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
 import type { SessionEvent } from "../session/types.ts";
 
@@ -13,9 +14,22 @@ function stripImages(m: ModelMessage): ModelMessage {
   return {
     ...m,
     content: m.content.map((p) => p.kind === "image"
-      ? { kind: "text" as const, text: `[image omitted during compaction: ${p.path}]` }
+      ? { kind: "text" as const, text: imageOmittedText(p.path) }
       : p),
   };
+}
+
+/** 压缩剥图占位（m5-media F13：同名 .summary.txt 视觉摘要缓存在场则附——非视觉模型的压缩摘要也能
+ *  「读懂」被剥的图；无缓存纯路径占位〔重放与 config 无关铁律不破——文件是磁盘事实〕）。 */
+function imageOmittedText(path: string): string {
+  const base = `[image omitted during compaction: ${path}]`;
+  try {
+    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    return t === "" ? base : `${base}
+[视觉摘要] ${t.slice(0, 500)}`;
+  } catch {
+    return base;
+  }
 }
 
 /** tool/result 事件的 images 字段（m5-media F1，不受信形状——fork 片段/手改日志同 stripImages 的防御场景）
