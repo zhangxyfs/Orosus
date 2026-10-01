@@ -1,6 +1,7 @@
 import { defineModule } from "@orosus/contracts/module";
 import type { CapabilityKey } from "@orosus/contracts/module";
 import { z } from "zod";
+import { createReadMediaFileTool } from "./readfile.ts";
 
 /** 媒体策略出货形态（m5-media F9——服务倒挂双边契约）：发送路径四道闸 + 压缩口径的有效值快照。
  *  消费方 = provider-custom（translate 前的 F5 副本口径与 F6/F7 帽值）；键与形状登记于本文件常量。 */
@@ -55,12 +56,20 @@ export default defineModule({
   version: "0.1.0",
   description: "媒体处理——读图工具/媒体工具族/媒体策略（m5-media：预算帽值与压缩口径的配置源，服务倒挂供 provider-custom）",
   api: 1,
-  mounts: ["provide"],
   provides: [MEDIA_POLICY_KEY], // §5.2 规则 1：服务键须声明（provider 槽走核心保留槽例外——本模块无）
   config: configSchema,
+  mounts: ["provide", "contribute:tool", "hook:turn/end"], // turn/end = 宿主快照模型刷新（F10 门控数据源）
   activate(ctx) {
     const facts = policyOf(ctx.config);
     ctx.provide(MEDIA_POLICY_KEY, { current: () => facts });
-    // T9（ReadMediaFile）/T11（媒体工具族）工具挂载点——contribute.tool 随任务落地
+    // 宿主快照缓存（F10 门控数据源——m5 T9 读面标准接法：activate 拉首份 + turn/end 刷新）
+    let hostModel: string | undefined;
+    void ctx.host?.current().then((s) => { hostModel = s.model; }).catch(() => undefined);
+    ctx.events.on("turn/end", () => { void ctx.host?.current().then((s) => { hostModel = s.model; }).catch(() => undefined); });
+    ctx.contribute.tool(createReadMediaFileTool({
+      model: () => hostModel,
+      spec: { maxEdge: facts.maxEdge, tokenTier: facts.tokenTier },
+    }));
+    // T11（媒体工具族 downsample/crop/convert）/T10（视频）随后续任务挂载
   },
 });

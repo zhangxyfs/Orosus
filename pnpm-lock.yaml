@@ -288,9 +288,15 @@ importers:
 
   packages/modules/tool-media:
     dependencies:
+      '@jsquash/webp':
+        specifier: ^1.5.0
+        version: 1.5.0
       '@orosus/contracts':
         specifier: workspace:*
         version: link:../../contracts
+      jimp:
+        specifier: ^1.6.1
+        version: 1.6.1
       zod:
         specifier: ^4.0.0
         version: 4.6.5
