@@ -19,7 +19,7 @@ describe("回合提示音 · chime 档", () => {
     const calls: Array<{ cmd: string; args: string[] }> = [];
     const run = (cmd: string, args: string[]): void => { calls.push({ cmd, args }); };
     playTurnChime("completed", { platform: "win32", run });
-    expect(calls[0]!.cmd).toBe("powershell");
+    expect(calls[0]!.cmd).toMatch(/powershell(\.exe)?$/); // 绝对路径兜底（PATH 剥 System32 免疫）——认尾段
     expect(calls[0]!.args[0]).toBe("-NoProfile");
     expect(calls[0]!.args[2]).toContain("SoundPlayer");
     expect(calls[0]!.args[2]).toContain(TURN_END_SOUND);

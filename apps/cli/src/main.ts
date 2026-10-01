@@ -792,7 +792,9 @@ function attachRender(h: Harness): void {
         // 回合提示音（2026-09-30 用户拍板）：完成 1 响/中断 2 响/错误 3 响——events() 是实时通道
         //（恢复回放走 pendingEcho/DocModel 重建，不经此），只响活体回合；TTY 且 [tui] bell 开才响
         if (bellMode !== "off" && process.stdout.isTTY === true) {
-          if (bellMode === "chime") playTurnChime(e.kind); // 自带音频一声（不分结局——响数区分是 BEL 档语义）
+          if (bellMode === "chime") playTurnChime(e.kind, { // 自带音频一声（不分结局——响数区分是 BEL 档语义）
+            onError: (stage, err) => h.log("tui.chime.error", `回合提示音播放失败（${stage}）：${err instanceof Error ? err.message : String(err)}`, { stage: String(stage) }),
+          });
           else ringTurnBell(e.kind, (s) => process.stdout.write(s));
         }
       }
