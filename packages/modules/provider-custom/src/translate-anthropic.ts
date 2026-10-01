@@ -138,6 +138,7 @@ export function toAnthropicMessages(messages: ModelMessage[]): ApiMessage[] {
     // M4-2.5 T5：image part → base64 source block（imageBlockOrPlaceholder 单源）
     const content: ApiBlock[] = m.content.flatMap((p): ApiBlock[] => {
       if (p.kind === "text") return p.text !== "" ? [{ type: "text", text: p.text }] : [];
+      if (p.kind === "video") return [{ type: "text", text: `[视频不随本端点发送（Anthropic 形态无视频输入）——已存 ${p.path}]` }]; // m5-media F11
       return [imageBlockOrPlaceholder(p)];
     });
     if (m.role === "assistant" && m.toolCalls) {

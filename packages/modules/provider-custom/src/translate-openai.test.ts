@@ -178,3 +178,36 @@ describe("toOpenAIMessages 工具结果带图三态（m5-media F3）", () => {
     expect(JSON.stringify(out)).not.toContain("image_url");
   });
 });
+
+// m5-media F11：视频部件线缆映射（spike 实证 glm-5.3-flash 吃 data URL video_url）
+describe("toOpenAIMessages 视频部件（m5-media F11 路①）", () => {
+  let vDir: string | undefined;
+  const mp4Path = (): string => {
+    vDir ??= mkdtempSync(join(tmpdir(), "orosus-m5f11-"));
+    const p = join(vDir, "clip.mp4");
+    const b = Buffer.alloc(32);
+    b.writeUInt32BE(16, 0); b.write("ftypisom", 4, "ascii");
+    writeFileSync(p, b);
+    return p;
+  };
+  afterEach(() => { if (vDir) { rmSync(vDir, { recursive: true, force: true }); vDir = undefined; } });
+
+  it("⑧ user 消息 video part → video_url data URL；toolResult video → bridge flush 同发；缺失文件降级占位", () => {
+    const p = mp4Path();
+    const msg: MP = { role: "user", content: [{ kind: "text", text: "看视频" }, { kind: "video", path: p, mimeType: "video/mp4" }] };
+    const out = toOpenAIMessages("", [msg]) as Array<{ content: unknown }>;
+    const parts = out[0]!.content as Array<{ type: string; video_url?: { url: string } }>;
+    expect(parts[1]!.type).toBe("video_url");
+    expect(parts[1]!.video_url!.url.startsWith("data:video/mp4;base64,")).toBe(true);
+    // toolResult video → bridge flush（紧跟只含 video_url 的 user 消息）
+    const tr: MP = { role: "toolResult", callId: "c1", output: "录好了", isError: false, parts: [{ kind: "video", path: p, mimeType: "video/mp4" }] };
+    const out2 = toOpenAIMessages("", [tr]) as Array<{ role: string; content: unknown }>;
+    expect(out2.map((m) => m.role)).toEqual(["tool", "user"]);
+    const flush = out2[1]!.content as Array<{ type: string }>;
+    expect(flush[0]!.type).toBe("video_url");
+    // 缺失
+    const ghost: MP = { role: "user", content: [{ kind: "video", path: "Z:/nope/x.mp4", mimeType: "video/mp4" }] };
+    const out3 = toOpenAIMessages("", [ghost]) as Array<{ content: Array<{ type: string; text?: string }> }>;
+    expect(out3[0]!.content[0]!.text).toContain("视频文件缺失");
+  });
+});

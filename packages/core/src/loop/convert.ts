@@ -21,12 +21,15 @@ function stripImages(m: ModelMessage): ModelMessage {
 /** tool/result 事件的 images 字段（m5-media F1，不受信形状——fork 片段/手改日志同 stripImages 的防御场景）
  *  → image ContentPart[]：路径非空串 + mime 四值白名单双校验，坏条目剔除；全空/无字段 → undefined。 */
 const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const VIDEO_MIMES = new Set(["video/mp4", "video/webm", "video/quicktime"]); // m5-media F11
 function imagePartsOf(raw: unknown): ContentPart[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const parts = raw.flatMap((it): ContentPart[] => {
     const o = it as { path?: unknown; mimeType?: unknown } | null;
-    if (typeof o?.path !== "string" || o.path === "" || typeof o?.mimeType !== "string" || !IMAGE_MIMES.has(o.mimeType)) return [];
-    return [{ kind: "image", path: o.path, mimeType: o.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif" }];
+    if (typeof o?.path !== "string" || o.path === "" || typeof o?.mimeType !== "string") return [];
+    if (IMAGE_MIMES.has(o.mimeType)) return [{ kind: "image", path: o.path, mimeType: o.mimeType as "image/png" | "image/jpeg" | "image/webp" | "image/gif" }];
+    if (VIDEO_MIMES.has(o.mimeType)) return [{ kind: "video", path: o.path, mimeType: o.mimeType as "video/mp4" | "video/webm" | "video/quicktime" }];
+    return [];
   });
   return parts.length > 0 ? parts : undefined;
 }
@@ -141,13 +144,13 @@ ${summary}` }],
         // 孤儿防御（M3/D41）：fork 截断/损坏片段可能产生无对应 tool/call 的 result——跳过，不进请求
         if (!seenCalls.has(String(e.callId))) break;
         // m5-media F1：图片附件路径引用 → parts（翻译层翻线缆）；坏形状防御剔除见 imagePartsOf
-        const imgParts = imagePartsOf(e.images);
+        const imgParts = [...(imagePartsOf(e.images) ?? []), ...(imagePartsOf(e.videos) ?? [])]; // m5-media F11：videos 同口投影（坏形状防御共用）
         out.push({
           role: "toolResult",
           callId: String(e.callId),
           output: String(e.output ?? ""),
           isError: e.isError === true,
-          ...(imgParts !== undefined ? { parts: imgParts } : {}),
+          ...(imgParts.length > 0 ? { parts: imgParts } : {}), // 空数组不带键（零差异）
         });
         break;
       }

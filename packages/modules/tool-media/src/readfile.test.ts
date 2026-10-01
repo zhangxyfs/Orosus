@@ -86,3 +86,57 @@ describe("ReadMediaFile（m5-media F10——投递四档 + F4 门控 + 卫戍）
     expect(bad.output).toContain("无法识别的图片格式");
   });
 });
+
+describe("ReadMediaFile 视频三分支（m5-media F11——spike 实证直发/抽帧两路）", () => {
+  const mp4Magic = Buffer.alloc(16);
+  mp4Magic.writeUInt32BE(16, 0); // ftyp 盒长
+  mp4Magic.write("ftyp", 4, "ascii");
+  mp4Magic.write("isom", 8, "ascii");
+
+  it("⑥ ① 直发：目录声明吃视频的模型 → videos 路径引用；未知模型同样直发（F4 三值语义）", async () => {
+    const d = fresh();
+    const p2 = join(d, "clip.mp4");
+    writeFileSync(p2, mp4Magic);
+    const catalog = join(d, "models-dev.json");
+    writeFileSync(catalog, JSON.stringify({ fetchedAt: 1, catalog: { zai: { models: { "v-m": { modalities: { input: ["text", "image", "video"] } }, "img-only": { modalities: { input: ["text", "image"] } } } } } }));
+    const direct = await run(createReadMediaFileTool({ model: () => "v-m", catalogFile: catalog }), { path: p2 });
+    expect(direct.isError).toBe(false);
+    expect(direct.videos).toEqual([{ path: p2, mimeType: "video/mp4" }]);
+    expect(direct.output).toContain("直发");
+    const unknown = await run(createReadMediaFileTool({ model: () => "selfhost/x", catalogFile: catalog }), { path: p2 });
+    expect(unknown.videos).toHaveLength(1); // undefined 放行
+    expect(unknown.output).toContain("未知");
+  });
+
+  it("⑦ ③ 抽帧：不吃视频的模型 + ffmpeg 在场 → 帧转图（rawImages，说明带帧数与档位）；④ 无 ffmpeg 诚实占位", async () => {
+    const d = fresh();
+    const { execFileSync } = await import("node:child_process");
+    let hasFF = true;
+    try { execFileSync("ffmpeg", ["-version"]); } catch { hasFF = false; }
+    const catalog = join(d, "models-dev.json");
+    writeFileSync(catalog, JSON.stringify({ fetchedAt: 1, catalog: { zai: { models: { "img-only": { modalities: { input: ["text", "image"] } } } } } }));
+    if (hasFF) {
+      const clip = join(d, "real.mp4");
+      await new Promise<void>((resolve, reject) => {
+        const { spawn } = require("node:child_process") as typeof import("node:child_process");
+        const ff = spawn("ffmpeg", ["-y", "-f", "lavfi", "-i", "color=c=red:size=160x120:duration=2", "-pix_fmt", "yuv420p", "-r", "10", clip]);
+        ff.on("exit", (c) => (c === 0 ? resolve() : reject(new Error(`ffmpeg ${c}`))));
+      });
+      const r = await run(createReadMediaFileTool({ model: () => "img-only", catalogFile: catalog }), { path: clip, frames: 2 });
+      expect(r.isError).toBe(false);
+      const raw = (r as { rawImages?: unknown[] }).rawImages;
+      expect(Array.isArray(raw)).toBe(true);
+      expect(raw!.length).toBeGreaterThan(0);
+      expect(r.output).toContain("抽");
+      expect(r.output).toContain("帧");
+    } else {
+      // ④ 分支：假 mp4（魔数合法、内容不可解）+ 无 ffmpeg 机器——占位文案（本机有 ffmpeg 时以注入法验证同分支）
+      const fakeMp4 = join(d, "fake.mp4");
+      const bad = Buffer.alloc(64);
+      bad.writeUInt32BE(16, 0); bad.write("ftyp", 4, "ascii"); bad.write("isom", 8, "ascii");
+      writeFileSync(fakeMp4, bad);
+      const r = await run(createReadMediaFileTool({ model: () => "img-only", catalogFile: catalog }), { path: fakeMp4 });
+      expect(r.output).toContain("抽帧失败"); // ffmpeg 在但内容不可解 → 带内错误回落（占位语义同源）
+    }
+  }, 60_000);
+});

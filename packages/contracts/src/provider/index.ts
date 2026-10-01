@@ -30,7 +30,10 @@ export type Chunk =
  *  请求期由 provider 翻译层读文件转 base64（pi 两段式同款）；文件缺失诚实降级为文本占位。 */
 export type ContentPart =
   | { kind: "text"; text: string }
-  | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" };
+  | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }
+  /** 视频（m5-media F11 路①）：路径引用制同 image；openai 族翻译为 user 消息 video_url（spike 实证
+   *  glm-5.3-flash 直吃 data URL），anthropic 族无视频——占位文本。 */
+  | { kind: "video"; path: string; mimeType: "video/mp4" | "video/webm" | "video/quicktime" };
 
 /** 用户消息出处标记（v3 compaction 设计空白 1，kimi 式元数据）：用户直敲的消息不带 origin；
  *  steering 注入带 kind + 来源模块（sourceModule === "host" = 宿主 busy 期插队话）；压缩摘要消息带

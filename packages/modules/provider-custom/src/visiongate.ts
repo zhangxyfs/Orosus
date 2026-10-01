@@ -7,14 +7,14 @@ import { defaultCatalogCacheFile, lookupModelVision, readCatalogDiskCache, type 
 export const nonVisionImagePlaceholder = (path: string): string =>
   `[当前模型不支持图片输入——图片已存 ${path}，/model 换视觉模型后可查看]`;
 
-/** 图部件剥除（纯函数）：user/assistant 的 content 与 toolResult 的 parts 中的 image part → 文本占位。
- *  只在调用方已判定 vision === false 时使用（本函数不查目录）。 */
+/** 图/视频部件剥除（纯函数）：user/assistant 的 content 与 toolResult 的 parts 中的 image/video part
+ *  → 文本占位。只在调用方已判定 vision === false 时使用（本函数不查目录）——非视觉模型视频同样看不见。 */
 export function stripImageParts(
   messages: ModelMessage[],
   placeholder: (path: string) => string = nonVisionImagePlaceholder,
 ): ModelMessage[] {
   const swap = (parts: ContentPart[]): ContentPart[] =>
-    parts.map((p) => (p.kind === "image" ? { kind: "text" as const, text: placeholder(p.path) } : p));
+    parts.map((p) => (p.kind === "image" || p.kind === "video" ? { kind: "text" as const, text: placeholder(p.path) } : p));
   return messages.map((m): ModelMessage => {
     if (m.role === "toolResult") {
       if (m.parts === undefined || !m.parts.some((p) => p.kind === "image")) return m;
@@ -26,7 +26,9 @@ export function stripImageParts(
 }
 
 const hasAnyImage = (messages: ModelMessage[]): boolean => messages.some((m) =>
-  m.role === "toolResult" ? (m.parts ?? []).some((p) => p.kind === "image") : m.content.some((p) => p.kind === "image"),
+  m.role === "toolResult"
+    ? (m.parts ?? []).some((p) => p.kind === "image" || p.kind === "video")
+    : m.content.some((p) => p.kind === "image" || p.kind === "video"),
 );
 
 // 目录读缓存 memo（发送路径每次请求都可能走——statSync 命中 mtime 即复用解析结果，文件未变零重读）
