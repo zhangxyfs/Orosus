@@ -36,6 +36,9 @@ export const Access = {
 /** 工具结果图片附件 mime 联合（m5-media F1）——与 ContentPart.image 同口径四值。 */
 export type ToolImageMime = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 
+/** 工具结果的视频附件 mime 联合（m5-media F11——魔数可嗅探的三主流容器）。 */
+export type ToolVideoMime = "video/mp4" | "video/webm" | "video/quicktime";
+
 /** 工具结果的图片附件（m5-media F1，路径引用制）：不存 base64——会话日志与 ModelMessage 永远只
  *  见路径（日志不吃 4/3 膨胀），provider 翻译层请求期读文件转线缆形态。落盘归宿 = 会话媒资库
  *  <sid>/media/（F8，core 归一化统一写入——spill 同款纪律）；工具自返的磁盘既有文件（如读图工具）
@@ -58,6 +61,11 @@ export interface ToolResult {
    *  （落盘会话媒资库 + T6 尺寸归一）后转 images 路径形态；**永不进会话日志**（归一化发生在 loop
    *  落条前）。坏条目（空 data/非白名单 mime/超 10MB 块帽）剔除，不炸工具契约。 */
   rawImages?: { data: string; mimeType: ToolImageMime }[];
+  /** 视频附件（m5-media F11 路①）：路径引用（模型目录 input 含 video 的端点直发 video_url——2026-10-01
+   *  spike 实证 glm-5.3-flash 吃 data URL 视频）。 */
+  videos?: { path: string; mimeType: ToolVideoMime }[];
+  /** 内联视频（m5-media F11——MCP video 块同通道）：core 落媒资库转 videos 路径形态（100MB 块帽）。 */
+  rawVideos?: { data: string; mimeType: ToolVideoMime }[];
 }
 
 /** 工具执行期上下文。signal 供取消传播（长耗时工具必须响应）；callId 关联 tool/call 与 tool/result。 */

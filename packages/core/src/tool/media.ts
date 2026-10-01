@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "@orosus/contracts/module";
-import type { ToolImageMime, ToolResultImage } from "@orosus/contracts/tool";
+import type { ToolImageMime, ToolResultImage, ToolVideoMime } from "@orosus/contracts/tool";
 
 /** 内联图单块帽（m5-media F2，kimi MCP_MAX_BINARY_PART_BYTES 同值 10MB）：超限丢弃——通常是无裁剪的
  *  全屏高 DPI 截图，落盘与降采样都救不回合理体积。产出侧（mcp 桥）占位行会如实说明超限未带回。 */
@@ -54,6 +54,52 @@ export function persistRawImages(
       out.push({ path, mimeType: img.mimeType });
     } catch (err) {
       opts.log.warn("kernel.tool.media-write-failed", `内联图落盘失败（${err instanceof Error ? err.message : String(err)}）——跳过该图`, { path, call: opts.callId });
+    }
+  }
+  return out;
+}
+
+const VIDEO_EXT: Record<ToolVideoMime, string> = {
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+};
+
+const isToolVideoMime = (m: unknown): m is ToolVideoMime =>
+  m === "video/mp4" || m === "video/webm" || m === "video/quicktime";
+
+/** 内联视频块帽（m5-media F11）：100MB——视频原件通常大，超限丢弃（产出侧占位行明说）。 */
+export const RAW_VIDEO_LIMIT_BYTES = 100 * 1024 * 1024;
+
+/** rawVideos 归一化（m5-media F11——rawImages 同款纪律：base64 → 媒资库 media-<seq>-<safe>.<ext> 路径引用；
+ *  视频不做尺寸归一（无纯 JS 编解码器——压缩/抽帧归 ffmpeg 路③）。 */
+export function persistRawVideos(
+  raw: readonly { data: string; mimeType: ToolVideoMime }[],
+  opts: { dir: string; seq: () => number; callId: string; log: Logger },
+): { path: string; mimeType: ToolVideoMime }[] {
+  const out: { path: string; mimeType: ToolVideoMime }[] = [];
+  const safe = opts.callId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64) || "call";
+  try {
+    mkdirSync(opts.dir, { recursive: true });
+  } catch (err) {
+    opts.log.warn("kernel.tool.media-dir-failed", `媒资目录创建失败（${err instanceof Error ? err.message : String(err)}）——内联视频全部丢弃`, { dir: opts.dir, call: opts.callId });
+    return out;
+  }
+  for (const v of raw) {
+    if (typeof v?.data !== "string" || v.data === "" || !isToolVideoMime(v?.mimeType)) {
+      opts.log.warn("kernel.tool.media-skip", "内联视频条目无效（空数据/非白名单 mime）——剔除", { call: opts.callId });
+      continue;
+    }
+    if (base64Bytes(v.data) > RAW_VIDEO_LIMIT_BYTES) {
+      opts.log.warn("kernel.tool.media-oversize", `内联视频超 100MB 帽——丢弃`, { call: opts.callId, bytes: base64Bytes(v.data) });
+      continue;
+    }
+    const path = join(opts.dir, `media-${opts.seq()}-${safe}.${VIDEO_EXT[v.mimeType]}`);
+    try {
+      writeFileSync(path, Buffer.from(v.data, "base64"), { mode: 0o600 });
+      out.push({ path, mimeType: v.mimeType });
+    } catch (err) {
+      opts.log.warn("kernel.tool.media-write-failed", `内联视频落盘失败（${err instanceof Error ? err.message : String(err)}）——跳过`, { path, call: opts.callId });
     }
   }
   return out;

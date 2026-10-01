@@ -4,6 +4,10 @@
 // 能力门控（F4 同口径）：目录明确 false → 工具照跑但不带回图（拒发+留路径指路——三档表一档+二档）；
 // true/undefined 放行。模型判定走宿主快照 model + 盘上目录（与 provider-custom/visiongate 同语义双写）。
 import { readFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
 import { z } from "zod";
@@ -13,17 +17,61 @@ import { runProcess, sniffMime } from "./imaging.ts";
 /** 读取文件上限（kimi read-media-file :10 同值 100MB）。 */
 const READ_LIMIT_BYTES = 100 * 1024 * 1024;
 
+const execFileAsync = promisify(execFile);
+
+/** 视频容器魔数嗅探（F11）：mp4/mov = ftyp 盒（offset 4）；webm = EBML 头。 */
+export function sniffVideoMime(buf: Buffer): "video/mp4" | "video/webm" | "video/quicktime" | undefined {
+  if (buf.length >= 12 && buf.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = buf.subarray(8, 12).toString("ascii");
+    return brand.startsWith("qt") ? "video/quicktime" : "video/mp4";
+  }
+  if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return "video/webm";
+  return undefined;
+}
+
+/** ffmpeg 在场探测（D11 注册制——外部二进制缺席明说解锁条件；进程内 memo 一次）。 */
+let ffmpegOk: Promise<boolean> | undefined;
+export function hasFfmpeg(): Promise<boolean> {
+  ffmpegOk ??= execFileAsync("ffmpeg", ["-version"]).then(() => true).catch(() => false);
+  return ffmpegOk;
+}
+
+/** 抽帧（F11 路③，qwen 帧分档口径：帧按 80/256/1024 token 档缩放）：ffprobe 取时长 → fps=帧数/时长 →
+ *  ffmpeg fps 滤镜出 N 帧 jpg（tmp 目录即用即清）。失败 throw——调用方带内回落。 */
+async function extractFrames(path: string, frames: number): Promise<Buffer[]> {
+  const dir = mkdtempSync(join(tmpdir(), "orosus-frames-"));
+  try {
+    let fps = 1;
+    try {
+      const { stdout } = await execFileAsync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]);
+      const duration = Number(stdout.trim());
+      if (Number.isFinite(duration) && duration > 0) fps = Math.min(frames / duration, 4);
+    } catch { /* ffprobe 缺席——fps=1 兜底 */ }
+    await execFileAsync("ffmpeg", ["-y", "-i", path, "-vf", `fps=${fps}`, "-frames:v", String(frames), "-q:v", "2", join(dir, "f-%d.jpg")]);
+    const out: Buffer[] = [];
+    for (let i = 1; i <= frames; i++) {
+      try {
+        out.push(readFileSync(join(dir, `f-${i}.jpg`)));
+      } catch { break; } // 帧不足 N——有几帧收几帧
+    }
+    if (out.length === 0) throw new Error("抽帧产出为空");
+    return out;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // —— 视觉能力查表（与 provider-custom/catalog.ts lookupModelVision 同匹配口径双写：全名/尾段/id/name 四口径）——
 type CatalogModel = { id?: string; name?: string; modalities?: { input?: string[] }; attachment?: boolean };
 type Catalog = Record<string, { models?: Record<string, CatalogModel> }>;
 
-function lookupVision(catalog: Catalog, model: string): boolean | undefined {
+function lookupModality(catalog: Catalog, model: string, want: "image" | "video"): boolean | undefined {
   const bare = model.includes("/") ? model.split("/").pop()! : model;
   for (const entry of Object.values(catalog)) {
     for (const [key, m] of Object.entries(entry.models ?? {})) {
       if (key === model || key === bare || key.endsWith(`/${bare}`) || m.id === model || m.id === bare || m.name === bare) {
-        if (m.modalities?.input !== undefined) return m.modalities.input.includes("image");
-        if (m.attachment !== undefined) return m.attachment;
+        if (m.modalities?.input !== undefined) return m.modalities.input.includes(want);
+        if (want === "image" && m.attachment !== undefined) return m.attachment;
         return undefined;
       }
     }
@@ -69,9 +117,10 @@ If the current model does not support image input, this returns a path note inst
       }).optional().describe(REGION_DESC),
       token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).optional().describe(TIER_DESC),
       full_resolution: z.boolean().optional().describe("真 = 跳过预降采样（线缆帽值仍守）；缺省 false"),
+      frames: z.number().int().min(1).max(8).optional().describe("视频抽帧数（1-8，缺省 4）——仅当模型不支持视频输入时走抽帧路"),
     }),
     resolveExecution: async (input) => {
-      const args = input as { path: string; region?: { x: number; y: number; width: number; height: number }; token_tier?: 256 | 1024 | 2048; full_resolution?: boolean };
+      const args = input as { path: string; region?: { x: number; y: number; width: number; height: number }; token_tier?: 256 | 1024 | 2048; full_resolution?: boolean; frames?: number };
       return {
         accesses: [{ kind: "fs.read", path: args.path }],
         approvalRule: "tool-media__read_media_file",
@@ -86,10 +135,15 @@ If the current model does not support image input, this returns a path note inst
             return { output: `图片文件读不到：${args.path}`, isError: true };
           }
           const mime = sniffMime(bytes);
-          if (mime === undefined) return { output: `无法识别的图片格式（支持 png/jpeg/gif/webp）：${args.path}`, isError: true };
+          if (mime === undefined) {
+            // m5-media F11：视频三分支（① 目录含 video 直发 / ③ ffmpeg 抽帧 / ④ 诚实占位）
+            const vmime = sniffVideoMime(bytes);
+            if (vmime !== undefined) return await deliverVideo(args, vmime, deps, catalogFile, spec);
+            return { output: `无法识别的图片格式（支持 png/jpeg/gif/webp 与 mp4/webm/mov 视频）：${args.path}`, isError: true };
+          }
           // 能力门控（F4 口径：明确 false 才拦——拒发+留路径指路；true/undefined 放行）
           const model = deps.model?.();
-          if (model !== undefined && lookupVision(readCatalog(catalogFile) ?? {}, model) === false) {
+          if (model !== undefined && lookupModality(readCatalog(catalogFile) ?? {}, model, "image") === false) {
             return { output: `当前模型（${model}）不支持图片输入——图已存 ${args.path}，/model 换视觉模型后可查看`, isError: false };
           }
           const useSpec = { maxEdge: spec.maxEdge, tokenTier: args.token_tier ?? spec.tokenTier };
@@ -116,3 +170,38 @@ If the current model does not support image input, this returns a path note inst
   });
 }
 
+
+/** 视频投递（F11 三分支——readfile execute 内联调用；args/deps 同外层）。 */
+async function deliverVideo(
+  args: { path: string; frames?: number },
+  vmime: "video/mp4" | "video/webm" | "video/quicktime",
+  deps: ReadMediaFileDeps,
+  catalogFile: string,
+  spec: { maxEdge: number; tokenTier: number },
+): Promise<ToolResult> {
+  const model = deps.model?.();
+  const catalog = readCatalog(catalogFile) ?? {};
+  // ① 三值判定（F4 同语义）：true（目录声明吃视频）或 undefined（自架模型不误伤）→ 直发
+  //   （spike 实证 glm-5.3-flash 吃 data URL 视频）；明确 false 走 ③ 抽帧 / ④ 占位。
+  const videoOk = model === undefined ? undefined : lookupModality(catalog, model, "video");
+  if (videoOk !== false) {
+    const how = videoOk === true ? "当前模型支持视频输入" : "模型视频能力未知——直发（线缆帽值仍守）";
+    return { output: `已读入视频 ${args.path}（${vmime}，直发——${how}）`, isError: false, videos: [{ path: args.path, mimeType: vmime }] };
+  }
+  // ③ ffmpeg 在场 → 抽帧成图（非视频模型也能看——帧按 1024 档缩）
+  if (await hasFfmpeg()) {
+    try {
+      const frameBufs = await extractFrames(args.path, args.frames ?? 4);
+      const frameSpec = { maxEdge: Math.min(spec.maxEdge, 1024), tokenTier: 1024 }; // qwen 帧分档缺省 1024
+      const out = await Promise.all(frameBufs.map(async (b) => {
+        const r = await runProcess(b, frameSpec);
+        return { data: r.buffer.toString("base64"), mimeType: r.mime } as const;
+      }));
+      return { output: `已读入视频 ${args.path}（当前模型不支持视频输入——ffmpeg 抽 ${out.length} 帧转图片投递，帧按 1024 档缩放）`, isError: false, rawImages: [...out] };
+    } catch (err) {
+      return { output: `视频抽帧失败（${err instanceof Error ? err.message : String(err)}）——视频已存 ${args.path}`, isError: true };
+    }
+  }
+  // ④ 诚实占位（D11——缺席明说解锁条件）
+  return { output: `视频已存 ${args.path}——当前模型不支持视频输入，且本机未装 ffmpeg（装 ffmpeg 可解锁视频抽帧看图）`, isError: false };
+}

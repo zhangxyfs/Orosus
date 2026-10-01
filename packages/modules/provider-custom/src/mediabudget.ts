@@ -17,9 +17,14 @@ export const MAX_IMAGES_PER_REQUEST = 4;
 /** 两协议族缺省都认四白名单格式（image_url data URL / base64 source 皆标准件）；端点特殊时按槽配置收紧。 */
 export const DEFAULT_ACCEPTED_IMAGE_MIMES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
+/** 视频三主流容器缺省全认（openai 族 video_url——spike 实证；anthropic 族在翻译层已占位不达此处）。 */
+export const DEFAULT_ACCEPTED_VIDEO_MIMES: readonly string[] = ["video/mp4", "video/webm", "video/quicktime"];
+
 export interface MediaBudgetOptions {
   /** 端点认的图片 mime（F6 格式策略）；缺省四白名单。显式 undefined 合法（exactOptionalPropertyTypes 直传面）。 */
   acceptedMimes?: readonly string[] | undefined;
+  /** 端点认的视频 mime（F11）；缺省三主流容器。 */
+  acceptedVideos?: readonly string[] | undefined;
   singleCapBytes?: number | undefined;
   budgetBytes?: number | undefined;
   safeBytes?: number | undefined;
@@ -40,8 +45,12 @@ const fileSize = (path: string): number | undefined => {
 export const imageTag = (path: string, reason?: string): string =>
   reason === undefined ? `<image path="${path}">` : `<image path="${path}" reason="${reason}">`;
 
-const partsOf = (m: ModelMessage): ImagePart[] =>
-  m.role === "toolResult" ? (m.parts ?? []).filter((p): p is ImagePart => p.kind === "image") : m.content.filter((p): p is ImagePart => p.kind === "image");
+type MediaPart = ImagePart | Extract<ContentPart, { kind: "video" }>;
+
+const partsOf = (m: ModelMessage): MediaPart[] =>
+  m.role === "toolResult"
+    ? (m.parts ?? []).filter((p): p is MediaPart => p.kind === "image" || p.kind === "video") // m5-media F11：视频同帽
+    : m.content.filter((p): p is MediaPart => p.kind === "image" || p.kind === "video");
 
 /**
  * 预算与策略闸（translate 前最后一步，prepareImagesForWire 之后——副本体积才是真实发送体积）。
@@ -49,6 +58,7 @@ const partsOf = (m: ModelMessage): ImagePart[] =>
  */
 export function applyMediaBudget(messages: ModelMessage[], opts: MediaBudgetOptions = {}): ModelMessage[] {
   const accepted = opts.acceptedMimes ?? DEFAULT_ACCEPTED_IMAGE_MIMES;
+  const acceptedVideos = opts.acceptedVideos ?? DEFAULT_ACCEPTED_VIDEO_MIMES;
   const singleCap = opts.singleCapBytes ?? SINGLE_IMAGE_CAP_BYTES;
   const budget = opts.budgetBytes ?? REQUEST_MEDIA_BUDGET_BYTES;
   const safe = opts.safeBytes ?? REQUEST_MEDIA_BUDGET_LOW_BYTES;
@@ -63,7 +73,11 @@ export function applyMediaBudget(messages: ModelMessage[], opts: MediaBudgetOpti
   const survivors: { path: string; bytes: number }[] = [];
   for (const p of all) {
     if (degrade.has(p.path)) continue; // 同图多处引用：一处降级处处降级（一致体验）
-    if (!accepted.includes(p.mimeType)) {
+    if (p.kind === "video" && !acceptedVideos.includes(p.mimeType)) {
+      degrade.set(p.path, `该端点不认 ${p.mimeType}`);
+      continue;
+    }
+    if (p.kind === "image" && !accepted.includes(p.mimeType)) {
       degrade.set(p.path, `该端点不认 ${p.mimeType}`);
       continue;
     }
@@ -92,7 +106,7 @@ export function applyMediaBudget(messages: ModelMessage[], opts: MediaBudgetOpti
   if (degrade.size === 0) return messages;
 
   const swap = (parts: ContentPart[]): ContentPart[] =>
-    parts.map((p) => (p.kind === "image" && degrade.has(p.path) ? { kind: "text" as const, text: imageTag(p.path, degrade.get(p.path)) } : p));
+    parts.map((p) => ((p.kind === "image" || p.kind === "video") && degrade.has(p.path) ? { kind: "text" as const, text: imageTag(p.path, degrade.get(p.path)) } : p));
   return messages.map((m): ModelMessage => {
     if (m.role === "toolResult") {
       if (m.parts === undefined || !m.parts.some((p) => p.kind === "image" && degrade.has(p.path))) return m;

@@ -106,10 +106,11 @@ const IMAGE_BLOCK_LIMIT_BYTES = 10 * 1024 * 1024;
  *  空数据仍占位说明）；音频维持占位行（音频通道不在本批）；资源链接转一行可读文字；全空明确说
  *  「没有返回内容」；不认识的块也明说一行（不静默丢——静默丢过 cc-haha 投毒案例的同款盲区）。
  *  isError 透传（server 标记的失败不再被硬编码 false 吞掉）。 */
-export function renderToolResult(result: { content?: unknown[]; structuredContent?: unknown; isError?: boolean }): { output: string; isError: boolean; rawImages?: { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[] } {
+export function renderToolResult(result: { content?: unknown[]; structuredContent?: unknown; isError?: boolean }): { output: string; isError: boolean; rawImages?: { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]; rawVideos?: { data: string; mimeType: "video/mp4" | "video/webm" | "video/quicktime" }[] } {
   const blocks = Array.isArray(result.content) ? result.content : [];
   const lines: string[] = [];
   const rawImages: { data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[] = [];
+  const rawVideos: { data: string; mimeType: "video/mp4" | "video/webm" | "video/quicktime" }[] = []; // m5-media F11：MCP video 块（base64→core 落媒资库）
   for (const b of blocks) {
     if (typeof b === "string") {
       lines.push(b); // 旧形态宽容（非 SDK 规范但历史出现过的裸字符串块）
@@ -131,6 +132,19 @@ export function renderToolResult(result: { content?: unknown[]; structuredConten
         lines.push(`（图片：${mime}，约 ${size}——超过 10MB 单块上限，未带回）`);
       } else {
         lines.push(`（图片：${mime}，约 ${size}——格式不受支持或数据为空，内容未带回）`);
+      }
+    } else if (blk?.type === "video") {
+      // m5-media F11：MCP video 块——三主流容器 + 有效数据透传（100MB 块帽在 core 侧守）；白名单外如实占位
+      const mime = typeof blk.mimeType === "string" ? blk.mimeType : "未知类型";
+      const data = typeof blk.data === "string" ? blk.data : "";
+      const bytes = Math.max(0, Math.floor((data.length * 3) / 4));
+      const size = bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
+      const vOK = mime === "video/mp4" || mime === "video/webm" || mime === "video/quicktime";
+      if (vOK && data !== "") {
+        rawVideos.push({ data, mimeType: mime as "video/mp4" | "video/webm" | "video/quicktime" });
+        lines.push(`（附 1 段视频：${mime.split("/")[1]}，约 ${size}）`);
+      } else {
+        lines.push(`（视频：${mime}，约 ${size}——格式不受支持或数据为空，内容未带回）`);
       }
     } else if (blk?.type === "audio") {
       const mime = typeof blk.mimeType === "string" ? blk.mimeType : "未知类型";
@@ -157,7 +171,7 @@ export function renderToolResult(result: { content?: unknown[]; structuredConten
   }
   const isError = result.isError === true;
   if (lines.length === 0) return { output: "（server 没有返回内容）", isError };
-  return { output: lines.join("\n"), isError, ...(rawImages.length > 0 ? { rawImages } : {}) };
+  return { output: lines.join("\n"), isError, ...(rawImages.length > 0 ? { rawImages } : {}), ...(rawVideos.length > 0 ? { rawVideos } : {}) };
 }
 
 /** 桥接工具构造（§6.3 两规则）：三段名 mcp__<server>__<tool>（MI-07：两段消毒后拼装——注册/审批/模型面

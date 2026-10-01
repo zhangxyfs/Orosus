@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Chunk, ContentPart, ModelMessage, ToolSpec } from "@orosus/contracts/provider";
 
 type ImagePart = Extract<ContentPart, { kind: "image" }>;
+type VideoPart = Extract<ContentPart, { kind: "video" }>; // m5-media F11
 
 /** 单个 image part → 线缆部件（openai 形）：image_url data URL（请求期读文件）；文件缺失诚实降级
  *  text 占位（不发坏请求）——user 消息与工具结果图共用同一映射（单源）。 */
@@ -14,13 +15,28 @@ function imageToWire(p: ImagePart): Record<string, unknown> {
   }
 }
 
-/** 含图消息判定与 part 映射（M4-2.5 T5——openai 线缆五处同款）。
+/** 单个 video part → 线缆部件（m5-media F11 路①）：video_url data URL（请求期读文件）；缺失诚实降级
+ *  text 占位。spike 2026-10-01 实证 glm-5.3-flash 直吃 data URL 视频。 */
+function videoToWire(p: VideoPart): Record<string, unknown> {
+  try {
+    const b64 = readFileSync(p.path).toString("base64");
+    return { type: "video_url", video_url: { url: `data:${p.mimeType};base64,${b64}` } };
+  } catch {
+    return { type: "text", text: `[视频文件缺失：${p.path}]` };
+  }
+}
+
+/** 含图消息判定与 part 映射（M4-2.5 T5——openai 线缆五处同款；m5-media F11 增 video 路）。
  *  纯文本消息保持字符串 join（端点兼容最稳）。 */
 function imageAwareContent(parts: ContentPart[]): string | Array<Record<string, unknown>> {
-  if (!parts.some((p) => p.kind === "image")) {
+  if (!parts.some((p) => p.kind === "image" || p.kind === "video")) {
     return parts.filter((p) => p.kind === "text" && p.text !== "").map((p) => (p as { text: string }).text).join("");
   }
-  return parts.map((p) => (p.kind === "text" ? { type: "text", text: p.text } : imageToWire(p)));
+  return parts.map((p): Record<string, unknown> => {
+    if (p.kind === "text") return { type: "text", text: p.text };
+    if (p.kind === "video") return videoToWire(p);
+    return imageToWire(p);
+  });
 }
 
 /** 工具结果带图三态（m5-media F3/D1；T0 spike 2026-10-01 三形态在 glm-5.3-flash @ coding 网关全 200 实证）：
@@ -53,10 +69,11 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[], toolI
   for (const m of messages) {
     if (m.role === "toolResult") {
       const images = (m.parts ?? []).filter((p): p is ImagePart => p.kind === "image");
+      const videos = (m.parts ?? []).filter((p): p is VideoPart => p.kind === "video"); // m5-media F11：工具产视频
       // 文本部件透传（m5-media F7）：预算降级/门控换装的 <image path> 标签活在 parts 里——拼进 output 同发
       const extra = (m.parts ?? []).filter((p): p is { kind: "text"; text: string } => p.kind === "text").map((p) => p.text).join("\n");
       const output = extra === "" ? m.output : (m.output === "" ? extra : `${m.output}\n${extra}`);
-      if (images.length === 0) {
+      if (images.length === 0 && videos.length === 0) {
         out.push({ role: "tool", tool_call_id: m.callId, content: output });
         continue;
       }
@@ -69,6 +86,7 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[], toolI
         out.push({ role: "tool", tool_call_id: m.callId, content: output === "" ? notes : `${output}\n${notes}` });
       } else {
         for (const p of images) pendingImages.push(imageToWire(p)); // 缺失文件的降级占位也进 flush 消息（诚实可见）
+        for (const v of videos) pendingImages.push(videoToWire(v)); // m5-media F11：工具产视频同走 bridge flush（video_url 标准件）
         out.push({ role: "tool", tool_call_id: m.callId, content: output });
       }
       continue;
