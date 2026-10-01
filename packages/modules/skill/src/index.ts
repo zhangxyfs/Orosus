@@ -246,7 +246,13 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, w
             return { output: `技能 "${name}" 已加载过，正文在上方对话中，请直接按其行事。`, isError: false };
           }
           loaded.add(name);
-          return { output: s.body, isError: false };
+          // 2026-10-01 诊断批（实况：doc-review 正文引用 references/lenses.md，模型按项目 cwd 找落空，
+          // 降级按速查表执行——SKILL.md 的相对路径引用此前无解析基准）：首行附技能文件绝对路径，
+          // 模型可据此把 references/… 解析到技能目录（对照：ZCode 技能清单逐条带 file: 路径）。
+          return {
+            output: `[技能 "${name}" 的文件：${s.file}——正文中的相对路径（如 references/…）相对该文件所在目录解析，而非当前项目目录]\n\n${s.body}`,
+            isError: false,
+          };
         },
       };
     },

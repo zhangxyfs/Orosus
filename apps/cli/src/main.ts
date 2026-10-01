@@ -1967,10 +1967,13 @@ const skillInjectText = (name: string, args?: string): string | undefined => {
 	if (file === undefined) return undefined;
 	try {
 		const body = readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, ""); // 剥 frontmatter
-		// 参数挂 <skill> 块属性（kimi renderSkillLoadedBlock 的 args="..." 同款，引号转义防早闭）；
-		// 标记行保持首位原样——docmodel 的 ● 行识别按该行前缀，菜单 Enter 路不传 args 形态不变
-		const attrs = args !== undefined ? ` args="${args.replace(/"/g, "&quot;")}"` : "";
-		return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs}>\n${body}\n</skill>`;
+			// 参数挂 <skill> 块属性（kimi renderSkillLoadedBlock 的 args="..." 同款，引号转义防早闭）；
+			// 标记行保持首位原样——docmodel 的 ● 行识别按该行前缀，菜单 Enter 路不传 args 形态不变
+			const attrs = args !== undefined ? ` args="${args.replace(/"/g, "&quot;")}"` : "";
+			// 2026-10-01 诊断批：file 属性给模型提供相对路径解析基准（正文引用 references/… 不再按项目
+			// cwd 落空——与 skill__load 输出首行带路径同因）；首行协议串不动（docmodel ● 行识别 + 防重入
+			// 标记都按精确形态匹配它）；skill 块正文不进对话流，属性追加对用户可见面零影响
+			return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
 	} catch {
 		return undefined;
 	}
