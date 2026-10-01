@@ -14,6 +14,9 @@ export { JobRegistry, type BgJob } from "./jobs.ts";
 type BashInput = { command: string; workdir?: string; writeOutputTo?: string; timeoutMs?: number; run_in_background?: boolean };
 
 const MAX_TIMEOUT = 120_000;
+/** 杀树收尾宽限（测试注入位——生产恒 5 秒）：超时/中止杀树后给 close 这么久，超期强制返回。
+ *  机理见 runBash 内 killWithGrace 注释（2026-10-01 doc-review 全量 vitest 挂死实锤）。 */
+export const KILL_GRACE = { ms: 5_000 };
 /** 前台输出捕获上限（MB-01）：头/尾各 256KB——中段丢弃。足够覆盖溢写截断口径（32KB）两个数量级，
  *  同时把失控命令的内存占用钉死在 ~512KB。 */
 const CAPTURE_HEAD = 256 * 1024;
@@ -71,15 +74,34 @@ function runBash(input: BashInput, fs: Fs, signal: AbortSignal, memory: ShellMem
         ? `${decodeOut(Buffer.concat(headBufs))}\n[…中段截断 ${droppedBytes} 字节——前台捕获上限：头尾各 ${CAPTURE_HEAD / 1024}KB…]\n${decodeOut(Buffer.concat(tailBufs))}`
         : decodeOut(Buffer.concat([...headBufs, ...tailBufs]));
     let timedOut = false;
-    const finish = (r: ToolResult) => {
+    let finished = false;
+    let graceTimer: NodeJS.Timeout | undefined;
+    const finish = (r: ToolResult): void => {
+      if (finished) return; // close 与宽限兜底竞态——首个到达者收口，迟到的 close 静默放过
+      finished = true;
       clearTimeout(timer);
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
       signal.removeEventListener("abort", onAbort);
       resolvePromise(r);
     };
-    const onAbort = () => killTree(child);
+    // 杀树宽限兜底（2026-10-01 doc-review 挂死实锤）：close 只在「进程退出且 stdio 流全关」时到来——
+    // win32 taskkill /T 漏杀的孙进程继承着管道写端时 close 永不来，旧实现 promise 永挂 → 整个 turn
+    // 陪葬（现场：全量 vitest 超时，bash 层被杀、vitest 树漏杀攥管道，1h45m 不返回，Esc 也救不了）。
+    // 杀树后给 KILL_GRACE.ms 宽限：期内 close 照常正常收尾；超期带已捕获输出强制返回。
+    const killWithGrace = (note: string): void => {
+      killTree(child);
+      if (graceTimer !== undefined) return; // 已武装不重置（超时→中止连击保首次宽限）
+      graceTimer = setTimeout(() => {
+        finish({
+          output: `${captureOut()}\n[${note}，${KILL_GRACE.ms / 1000} 秒后仍无收尾——强制返回（进程树可能有漏杀残留，必要时用任务管理器核查）]`,
+          isError: true,
+        });
+      }, KILL_GRACE.ms);
+    };
+    const onAbort = () => killWithGrace("已中止");
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree(child);
+      killWithGrace(`超时 ${timeout}ms，已杀进程树`);
     }, timeout);
     child.stdout.on("data", onChunk);
     child.stderr.on("data", onChunk);
@@ -129,7 +151,7 @@ function dialectTexts(shell: ShellSpec): { description: string; commandHint: str
         ? "要执行的 shell 命令（Windows=cmd：无 head/grep 等 POSIX 命令；POSIX=sh）"
         : "要执行的 shell 命令（POSIX sh）";
   return {
-    description: `${base}\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not \`cd\`) to run in a specific directory — it is remembered for the next call.\n\`cd\` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed).`,
+    description: `${base}\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not \`cd\`) to run in a specific directory — it is remembered for the next call.\n\`cd\` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed). Do NOT pipe a background job through \`tail\` (cmd | tail -20) — tail buffers everything until the command exits, so the job's output file stays empty the whole time (reads as "no progress"); read the raw output instead.`,
     commandHint,
   };
 }
