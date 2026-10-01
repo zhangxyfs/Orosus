@@ -134,14 +134,21 @@ export function createWriteGate(cwd: string): WriteGate {
         wholeRepo: norm.some((n) => !n.ok) || rawPaths.length === 0,
       };
       const hit = (c: WriteClaim): boolean => claimsOverlap(c, main);
+      // 出路分叉（2026-10-01 实机教训：后台 Bash 型子代理持整仓闸期间，主对话 grep/ls 三连被拦、
+      // 模型只会原地重试同一条 Bash——文案须把「改道只读工具」的逃生路说全，不能只说「等它跑完」）。
+      // main.wholeRepo 即不透明执行（Bash/subprocess）或归一失败：只读工具不进闸、立即可改道；
+      // 路径写没有替身，只能等持闸者收工重试。
+      const wayOut = main.wholeRepo
+        ? "Bash 属不透明执行按整仓过闸——改用 Grep/Read/Glob 等只读工具立即可继续（只读不进此闸），确要跑 Bash 等它跑完再重试（tool-subagent__tasks 可看进度）"
+        : "等它跑完再重试这一步（tool-subagent__tasks 可看进度）";
       for (const [id, c] of holders) {
         if (hit(c)) {
-          return { ok: false, error: `写路径与在跑子代理的写报备撞车（子代理 ${id}：${c.wholeRepo ? "整仓（bash/未报备）" : c.paths.join("、")}）——等它跑完再重试这一步（tool-subagent__tasks 可看进度）` };
+          return { ok: false, error: `写路径与在跑子代理的写报备撞车（子代理 ${id}：${c.wholeRepo ? "整仓（bash/未报备）" : c.paths.join("、")}）——${wayOut}` };
         }
       }
       for (const w of queue) {
         if (hit(w.claim)) {
-          return { ok: false, error: `写路径与排队中子代理的写报备撞车（子代理 ${w.agentId}：${w.claim.wholeRepo ? "整仓（bash/未报备）" : w.claim.paths.join("、")}）——等它跑完再重试这一步` };
+          return { ok: false, error: `写路径与排队中子代理的写报备撞车（子代理 ${w.agentId}：${w.claim.wholeRepo ? "整仓（bash/未报备）" : w.claim.paths.join("、")}）——${wayOut}` };
         }
       }
       return { ok: true };

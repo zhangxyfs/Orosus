@@ -55,6 +55,8 @@ export interface McpActivateOut {
   /** 手动启动懒 server（2026-09-30「待启动态按启停=被停用」陷阱修）：触发 ensure() 连接（memoized——
    *  与首调共用同一 promise；onStarted/onLive 照常回调）。非懒/未知名 → 拒绝（调用方 toast）。 */
   startLazy(name: string): Promise<void>;
+  /** 首连耗时查询（2026-10-01 拍板 B——被动真值）：有计时记录才返回；未连过（idle）恒 undefined。 */
+  connectMs(name: string): number | undefined;
   /** MI-02：逐个关成功建立的连接（close 缺省的 fake 连接跳过）；单个失败不株连其余。 */
   close(): Promise<void>;
 }
@@ -65,6 +67,13 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
   const connected: McpActivateOut["connected"] = [];
   const manifest: Record<string, string[]> = {};
   const conns: ServerConnection[] = [];
+  // 首连耗时被动计时（2026-10-01 拍板 B）：连接本来就要发生，掐表不算探测——eager（activate 期）与
+  // lazy（首调/手动启动）两路共用；失败也记（finally），懒件重试覆盖为末次尝试值
+  const connectMsMap = new Map<string, number>();
+  const timedConnect = (name: string, run: () => Promise<ServerConnection>): Promise<ServerConnection> => {
+    const t0 = Date.now();
+    return run().finally(() => { connectMsMap.set(name, Date.now() - t0); });
+  };
   const skippedTools: McpActivateOut["skippedTools"] = [];
   const seenNames = new Set<string>(); // 注册名去重（MI-07）：registry 对非墓碑重名 throw → 整模块降级
   const mapping: Record<string, Record<string, string>> = {}; // MI-07：消毒改名映射（原样名 → 注册名），manifest 事件可观测
@@ -87,7 +96,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
         let pending: Promise<ServerConnection> | undefined;
         const ensure = (): Promise<ServerConnection> => {
           if (started !== undefined) return Promise.resolve(started);
-          pending ??= opts.lazy!.connect(name, cfg).then(
+          pending ??= timedConnect(name, () => opts.lazy!.connect(name, cfg)).then(
             (c) => {
               started = c;
               opts.lazy!.onStarted(name, "connected");
@@ -113,7 +122,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
         return { ok: true, name, cfg, list: mf, lazyCall };
       }
       try {
-        const conn = await opts.connect(name, cfg);
+        const conn = await timedConnect(name, () => opts.connect(name, cfg));
         const list = await conn.listTools(); // 清单快照：连接一次取全量（§6.3）
         // MI-15：instructions 不受信消毒（来源前缀 + 4096 截断——与 tool description 的 §8.5 纪律同款），
         // 在采集点一次性收口（promptSection 段渲染直接消费 connected，不再有裸通道）
@@ -177,6 +186,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
       if (ensure === undefined) throw new Error(`没有叫「${name}」的懒启动 server（或它已停用）`);
       await ensure().then(() => undefined);
     },
+    connectMs: (name: string): number | undefined => connectMsMap.get(name),
     close: async () => {
       if (closed) return;
       closed = true;
@@ -198,6 +208,9 @@ export interface McpCatalogRow {
   instructions?: string;
   /** failed 时的原因全文（含 [stderr] 尾巴——消费面截行） */
   failReason?: string;
+  /** 首连耗时毫秒（2026-10-01 拍板 B——被动计时，连接本来就要发生）：connected/failed 有值（懒件重试
+   *  = 末次尝试值）；idle（从未连接）恒无。展示面自行取整。 */
+  connectMs?: number | undefined;
   /** pending-confirm 时的指纹（/mcp trust 展示前 8 位） */
   fingerprint?: string;
   source: "config" | "project" | "preload";
@@ -479,6 +492,8 @@ export const mcpDef = defineModule({
           r.deferred = true;
           seen.add(r.name);
         }
+        const ms = out.connectMs(r.name);
+        if (ms !== undefined) r.connectMs = ms;
         rows.push(r);
       }
       for (const name of mergedPreloadNames) {
@@ -491,6 +506,7 @@ export const mcpDef = defineModule({
           toolCount: pl.manifest.length,
           tools: pl.manifest.map((t) => t.name),
           ...(live?.state === "failed" && live.reason !== undefined ? { failReason: live.reason } : {}),
+          ...(out.connectMs(name) !== undefined ? { connectMs: out.connectMs(name) } : {}),
           source: "preload",
           transport: "stdio",
           command: `${pl.command} ${pl.args.join(" ")}`,

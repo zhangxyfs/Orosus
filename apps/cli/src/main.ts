@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join, sep } from "node:path";
-import { createHarness, discoverModules, encodeCwd, locateSessionFile, loadSecretsEnv } from "@orosus/core";
+import { createHarness, discoverModules, encodeCwd, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
 import { deriveMessages } from "@orosus/core";
 import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
@@ -32,10 +32,10 @@ import { ringTurnBell } from "./bell.ts";
 import { resolveBellMode, playTurnChime } from "./chime.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
-import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
+import { FullApp, type PanelData, type PanelNetwork, type SlashItem, msText } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 
-import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels } from "@orosus/provider-custom";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, type ProviderEntry } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -46,7 +46,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { readSkillDisabled, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
+import { readSkillDisabled, seedFactorySkills, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
 import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -65,11 +65,20 @@ import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
-import { maybeEnableEnvProxy } from "./proxy-env.ts";
+import { maybeEnableEnvProxy, envProxyUrl, proxyDisplayText, readWindowsSystemProxy, detectTunProxy } from "./proxy-env.ts";
 
 // 批 D（2026-10-01 拍板 A+B）：代理环境自动接线——机理与副作用披露见 proxy-env.ts；
 // 必须赶在任何 fetch 发生前（undici 全局分发器首用时读取 NODE_USE_ENV_PROXY）
 maybeEnableEnvProxy();
+
+/** 「网络 · MCP」卡代理态（2026-10-01 走查修准「开了代理却显直连」）：三源检测——
+ *  ① 环境变量（流量真走——批 D 已接线 NODE_USE_ENV_PROXY）；② TUN 网卡（Clash Meta/v2rayN 的 TUN 模式
+ *  透明路由——系统代理关着、env 不设，双源都漏，但全流量实际在走；实测本机 Mihomo→198.18.0.1）；
+ *  ③ Windows 系统代理（注册表 ProxyEnable——Clash 类「系统代理」档写的这里，本进程 fetch 不认它）。
+ *  ②纯内存调用；③ reg query 启动后异步取一次（~20ms）。展示专用不参与流量接线；启动期定形语义
+ *  （会话中切换代理模式不追帧，下次启动自会反映）。 */
+const systemProxyOnce = readWindowsSystemProxy().catch(() => undefined);
+const proxyStateText = async (): Promise<string> => proxyDisplayText(envProxyUrl(), await systemProxyOnce, detectTunProxy());
 
 /** CM-06②（2026-09-28 code review）：console 输出在管道/重定向下是异步写——`process.exit` 立即退可能
  *  赶在缓冲 flush 之前截断尾部输出（provider list 全量目录恰是大输出；--print 路径的 exitCode 自然退出
@@ -154,6 +163,25 @@ const sessionsDir = join(sessionsRoot, currentBucket);
 const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId, { bucket: currentBucket }) : undefined;
 // activeDir 语义 = 桶目录（/fork 父定位与 createSession 回退的写侧桶）——目录化后 scan 条目 dir 是会话目录，取其父
 let activeDir = (resumeLoc !== undefined ? dirname(resumeLoc.dir) : undefined) ?? sessionsDir;
+
+// 空会话残留清扫（2026-10-01 用户拍板清理批②）：启动即扫当前项目桶，清掉上次异常退出留下的 0 消息壳
+// （正常退出由 sessionLoop 退出漏斗就地清——走不到漏斗的进程被杀/崩溃壳归这里兜底）。只扫当前桶：他桶
+// 等该项目下次打开时自清。豁免 --resume 目标（用户点名要打开的空会话不能进门就被清）；他实例活锁占用
+// 的跳过。MCP 模块 activate 即写 mcp/manifest 令每次启动物化会话文件——不发消息退出即壳，这是壳的主源
+{
+  const swept = sweepEmptySessions(sessionsDir, new Set(args.resume !== undefined ? [args.resume.sessionId] : []));
+  if (swept.removed.length > 0) console.error(`已清理 ${swept.removed.length} 个空会话残留（上次退出的 0 消息壳）`);
+}
+
+/** 空会话退出即清（2026-10-01 用户拍板清理批②）：刚关的会话 0 消息 → 整目录不留（判定 = core
+ *  isEmptySessionHead，fork 子体除外——投影含父辈）。异常退出走不到此（进程被杀）——残留壳由下次
+ *  启动 sweepEmptySessions 兜底。purge 前置条件 = store 已 close（Windows 活句柄删不动）。 */
+const purgeIfEmptySession = (sid: string): void => {
+  const loc = locateSessionFile(sessionsRoot, sid);
+  if (loc === undefined) return;
+  const head = readSessionHead(loc.file);
+  if (head !== undefined && isEmptySessionHead(head)) purgeSessionDir(dirname(loc.dir), sid);
+};
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
@@ -582,6 +610,7 @@ try {
 if (args.dumpModules) {
   console.log(h.graph().catalog());
   await h.close();
+  purgeIfEmptySession(h.sessionId); // 空会话退出即清（2026-10-01 拍板②）——工具模式不带消息，壳不留
   process.exit(0);
 }
 
@@ -902,6 +931,28 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         return "switch";
       }
       if (directive.kind === "new" || directive.kind === "fork") {
+        // 空会话 /new 就地刷新（2026-10-01 用户拍板清理批③）：当前会话 0 消息且非 fork 子体 → 不另起新
+        // 会话（否则旧壳留尸 + 新壳又生），关店 → 清壳 → 同 sid 重开——文件 birthtime 归零即「创建时间
+        // 已刷新」，header 也由重开的空会话按当下时刻懒写。fork 子体排除：投影含父辈历史，「新」不成立。
+        // 文件未物化/读不出 = 走下方常规 /new（无壳可清，换 sid 无落盘代价）
+        if (directive.kind === "new") {
+          const loc = locateSessionFile(sessionsRoot, h.sessionId);
+          const head = loc !== undefined ? readSessionHead(loc.file) : undefined;
+          if (loc !== undefined && head !== undefined && isEmptySessionHead(head)) {
+            const sid = h.sessionId;
+            const bucketDir = dirname(loc.dir);
+            await h.close();
+            purgeSessionDir(bucketDir, sid);
+            h = await createSession({ resume: { sessionId: sid }, sessionsDir: bucketDir }); // 同 sid 空档重开
+            activeDir = bucketDir;
+            lastEventId = undefined; // 与常规换会话同款重置（CS-05②：三处换会话缝一个口径）
+            clearScreen();
+            const notice = `[已是空会话——沿用本会话 ${sid}，创建时间已刷新]`;
+            if (tuiMode === "full") pendingEcho = { notice, history: false }; // F5 二轮⑯ 延期
+            else out(notice);
+            return "switch";
+          }
+        }
         const from = directive.kind === "fork" ? directive.parentSessionId : undefined;
         // fork 自动命名（2026-09-22 用户拍板）：「fork <父标题>」——/sessions 里父子一眼可辨；
         // 经 h.setLabel 活写口（header 已由 harness fork 分支即刻落盘，链序 header→fork→label）
@@ -1131,6 +1182,16 @@ const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; p
     return { input: estimateTokens(deriveMessages(events)), output: result.output, postCompaction: true };
   }
   return result;
+};
+
+/** 末次模型请求耗时（2026-10-01 拍板 B——被动真值，loop 随 assistant/message 落 durationMs）：
+ *  倒扫最近一条带 durationMs 的 assistant/message；老会话（字段未生年代）= undefined 不显示。 */
+const lastRequestMsOf = (events: SessionEvent[]): number | undefined => {
+	for (let i = events.length - 1; i >= 0; i--) {
+		const e = events[i]!;
+		if (e.type === "assistant/message" && typeof e.durationMs === "number") return e.durationMs;
+	}
+	return undefined;
 };
 
 /** 配置面读数（m4-8 T2.5 收口 loadConfig；2026-09-29 修空参——此前 loadConfig({}) 一层文件都没读：
@@ -1448,6 +1509,49 @@ const mcpWarmCatalog = (): void => {
 };
 /** 面板版命令依赖（catalog 服务现取——启停与删除共用 /mcp 命令族的写盘与守卫）。 */
 const mcpPanelDeps = (): McpCmdDeps => ({ ...defaultMcpCmdDeps(), ...(mcpPanelCatalog !== undefined ? { catalogRows: mcpPanelCatalog } : {}) });
+
+// ---------- 「网络 · MCP」卡供数（2026-10-01 拍板填实：被动真值——首连耗时/末次请求耗时，不做主动探测） ----------
+
+/** mcp.catalog 服务行 → 卡连接行投影（五态原文照传，渲染期映射点色；说明段 = 传输型 + 工具数）。 */
+const mcpConnRows = (): PanelNetwork["connections"] => {
+	mcpWarmCatalog(); // panelData 每秒 tick 现读——顺带保温服务缓存（模块未启用 = 空表）
+	const rows = mcpPanelCatalog?.() ?? [];
+	return rows.map((r) => ({
+		name: r.name,
+		state: r.state,
+		desc: `${r.transport === "http" ? "HTTP" : "stdio"}${r.toolCount !== undefined ? ` · ${r.toolCount} 工具` : ""}`,
+		...(r.state === "connected" && r.connectMs !== undefined ? { connectMs: r.connectMs } : {}),
+	}));
+};
+
+/** provider 条目表 TTL 缓存（skillMenu 5s 同款惯例——/provider 菜单改端点后最迟 5s 反映到卡）。 */
+let providersCache: { at: number; providers: Record<string, ProviderEntry> } | undefined;
+const providersTtl = async (): Promise<Record<string, ProviderEntry>> => {
+	const now = Date.now();
+	if (providersCache === undefined || now - providersCache.at > 5000) {
+		providersCache = { at: now, providers: await defaultMenuDeps().loadProviders() };
+	}
+	return providersCache.providers;
+};
+
+/** 模型服务信息行（2026-10-01 拍板②按倾向留——纯信息行不主张连接状态）：端点域名 + 末次请求耗时
+ *  （assistant/message.durationMs 投影，老会话无字段则只显端点）。refreshPanel 异步预取进 panelCache。 */
+const modelServiceOf = async (events: SessionEvent[]): Promise<string> => {
+	const v = realReadModel(process.cwd())() ?? "";
+	if (v === "") return "（未配置——/provider 配置）";
+	const providerName = v.includes("/") ? v.split("/")[0]! : v;
+	const entry = (await providersTtl())[providerName];
+	let host = providerName;
+	if (entry !== undefined) {
+		try {
+			host = new URL(entry.baseUrl).host;
+		} catch {
+			host = entry.baseUrl; // 无 scheme 形态原样显示（kvRow 行内截断兜底）
+		}
+	}
+	const lastMs = lastRequestMsOf(events);
+	return lastMs === undefined ? host : `${host} · 末次 ${msText(lastMs)}`;
+};
 /** 配置文件里的原表值（修改窗预填——名称锁定的真身）。 */
 const configuredMcpServer = (name: string): Record<string, unknown> => {
 	try {
@@ -1879,6 +1983,9 @@ const refreshPanel = async (): Promise<void> => {
 		tasks: (lastTodo !== undefined ? panelTasksFromEvent(lastTodo) : undefined) ?? [],
 		permission,
 		permissionNext: () => `/permission ${next}`,
+		// 「网络 · MCP」卡预取面（2026-10-01）：代理态静态、模型服务行要读 provider 条目（异步预取）；
+		// 连接行走 mcp.catalog 现读不进快照——panelData() 装配期合并
+		network: { proxy: await proxyStateText(), modelService: await modelServiceOf(events), connections: [] },
 	};
 };
 
@@ -2077,6 +2184,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         permissionNext: () => "/permission ask-always",
       }),
       cards: moduleCards(), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
+      network: panelCache?.network === undefined ? undefined : { ...panelCache.network, connections: mcpConnRows() }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
     }),
     slashCommands: () => SLASH_ITEMS,
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
@@ -2349,6 +2457,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     onboardingTrigger = null;
     if (trigger.reason === "broken") app.showToast("配置文件无法读取，已按默认配置进入引导"); // SW-20 定案话术
     else if (trigger.reason === "degraded") app.showToast("部分模块配置无效已降级——已按默认配置进入引导");
+    // 出厂技能固化（2026-10-01 拍板）：弹窗弹出时刻把 bundled/ 出厂件（件数随版本浮动）拷入用户级
+    // ~/.orosus/skills——打包布局变化不再影响已初始化用户（引导完成后 h.reload 重扫即入清单；quit 路径下次启动拾取）
+    seedFactorySkills({ fresh: trigger.reason === "fresh", notify, showToast: (m) => app.showToast(m) });
     const outcome = await app.runOnboarding(buildOnboardingDeps(), await onboardingInitial());
     if (outcome.kind === "quit") {
       action = "quit"; // Ctrl + Q（仅第 1 页）= /quit 同款
@@ -2492,4 +2603,5 @@ if (args.print === undefined) try {
   killAllBackgroundJobs(); // M4-3 T3：退出清杀——/quit、行模式 EOF、全屏 quit 全路径统一收口于此
                            // （ModuleContext 无退出缝；SIGINT 不在其列——现状只 cancel 当前 turn 不退出，v4.7 定案）
   await h.close();
+  purgeIfEmptySession(h.sessionId); // 空会话退出即清（2026-10-01 拍板②）——h.close 后无句柄可删；h = 最后在开的会话
 }

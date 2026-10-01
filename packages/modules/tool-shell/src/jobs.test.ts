@@ -243,6 +243,7 @@ describe("tool-shell 后台三工具面（M4-3 T3）", () => {
     const miss = await run(output, { id: "bg-ghost00" });
     expect(miss.isError).toBe(true);
     expect(miss.output).toContain("无此后台作业");
+    expect(miss.output).toContain("tool-subagent__tasks"); // 2026-10-01 实机：模型把子代理编号喂给 output——误用须指路
     await run(tools[0]!, { command: OK_BG, run_in_background: true });
     await waitFor(() => existsSync(join(dir, "bg")) && readdirSync(join(dir, "bg")).length > 0);
     const file = readdirSync(join(dir, "bg"))[0]!;

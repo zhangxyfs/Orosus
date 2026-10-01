@@ -290,6 +290,28 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		app.setBusy(false);
 		app.stop();
 	});
+	it("⑤bb-b 生成中焦点在侧栏面板时 Esc 先收焦点回输入框（2026-10-01 走查——不被双击停止确认截胡；收焦点同时打断双击序列）", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "\t"); // Tab：焦点 0→1（侧栏模块面板）
+		await flush();
+		expect(app.stateRef.focusIdx).toBe(1);
+		input.emit("data", "\x1b"); // 忙时 Esc：先回焦点——不提示不取消
+		await flush(80);
+		expect(app.stateRef.focusIdx).toBe(0);
+		expect(app.stateRef.toast).toBeUndefined();
+		expect(actions).toEqual([]);
+		input.emit("data", "\x1b"); // 回输入框后再按 = 双击停止序列首拍（正常提示）
+		await flush(80);
+		expect(app.stateRef.toast?.text).toContain("再按一次 Esc");
+		input.emit("data", "\x1b"); // 窗口内再按：真正取消
+		await flush(80);
+		expect(actions).toEqual(["cancel"]);
+		app.setBusy(false);
+		app.stop();
+	});
 	it("⑤bc 图片 chip 文内 token：insertAtCursor 光标位插入、restoreInput 恢复原文（2026-09-23 走查拍板）", async () => {
 		const { app, input } = rig();
 		app.start();
@@ -3312,5 +3334,154 @@ describe("斜杠菜单 MCP 区退役（2026-09-30 用户打回「没有意义」
 		expect(joined).not.toContain("server");
 		expect(joined).toContain("skill : pdf"); // 技能区原样
 		app.stop();
+	});
+});
+
+describe("「网络 · MCP」卡（2026-10-01 拍板填实——被动真值：代理态 + 模型服务信息行 + mcp.catalog 五态连接列表＋首连耗时；占位行退役）", () => {
+	const netPanel = (): PanelData => ({
+		...defaultPanelData(),
+		network: {
+			proxy: "已启用 · 127.0.0.1:7890",
+			modelService: "api.z.ai · 末次 1.8s",
+			connections: [
+				{ name: "mcp:context7", state: "connected", desc: "HTTP · 12 工具", connectMs: 231 },
+				{ name: "mcp:filesystem", state: "connected", desc: "stdio · 8 工具", connectMs: 6 },
+				{ name: "mcp:naked", state: "connected", desc: "stdio" }, // connected 无耗时 → 右列回落状态文案
+				{ name: "mcp:playwright", state: "idle", desc: "stdio · 懒启动——首调连接" },
+				{ name: "mcp:web-search", state: "failed", desc: "stdio" },
+				{ name: "mcp:db-helper", state: "pending-confirm", desc: "项目 .mcp.json" },
+				{ name: "mcp:seq", state: "disabled", desc: "stdio · 5 工具" },
+			],
+		},
+	});
+	const page2 = (app: FullApp): string =>
+		(app as unknown as { statusRows(w: number, h: number): string[] }).statusRows(42, 18).map(stripAnsi).join("\n");
+
+	it("① KV 两行 + 五态连接行 + 首连耗时右列 + 恒定提示行（「健康探测」占位文案退役）", () => {
+		const { app } = rig(["# hi"], 100, 30, { panelData: netPanel });
+		app.stateRef.statePage = 1;
+		const rows = page2(app);
+		expect(rows).toContain("网络 · MCP");
+		expect(rows).toContain("已启用 · 127.0.0.1:7890");
+		expect(rows).toContain("api.z.ai · 末次 1.8s");
+		expect(rows).toContain("网络 / MCP 连接");
+		expect(rows).toContain("mcp:context7");
+		expect(rows).toContain("HTTP · 12 工具");
+		expect(rows).toContain("231ms"); // connected + connectMs → 右列显首连耗时
+		expect(rows).toContain("6ms");
+		expect(rows).toContain("已连接"); // connected 无 connectMs → 状态文案回落
+		expect(rows).toContain("待启动"); // idle
+		expect(rows).toContain("失败"); // failed
+		expect(rows).toContain("未确认"); // pending-confirm
+		expect(rows).toContain("已停用"); // disabled
+		expect(rows).toContain("←→ 切卡 · Esc 返回"); // 提示两行制（走查打回：单行窄侧栏折行）
+		expect(rows).toContain("PgUp/PgDn 连接翻页");
+		expect(rows).not.toContain("健康探测"); // 占位行退役
+		app.stop();
+	});
+
+	it("② 连接翻页：>8 行分页（1/2 · SERVERS），PgDn 翻至第 2 页；空表占位行；network 缺省退化行", async () => {
+		const conns = Array.from({ length: 9 }, (_, i) => ({ name: `srv${i + 1}`, state: "connected" as const, desc: "stdio" }));
+		const { app, input } = rig(["# hi"], 100, 30, { panelData: () => ({ ...defaultPanelData(), network: { proxy: "直连 · 未检测到代理", modelService: "api.z.ai", connections: conns } }) });
+		app.stateRef.statePage = 1;
+		let rows = page2(app);
+		expect(rows).toContain("1/2 · SERVERS");
+		expect(rows).toContain("srv1");
+		expect(rows).toContain("srv8");
+		expect(rows).not.toContain("srv9"); // 每页 8 行
+		app.stateRef.statePage = 0; // 预启动直渲设过页号——键序从运行状态页起步复位
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 焦点 → 运行状态组
+		await flush();
+		input.emit("data", "\x1b[C"); // → 网络·MCP 页
+		await flush();
+		input.emit("data", "\x1b[6~"); // PgDn → 连接第 2 页
+		await flush();
+		rows = (app as unknown as { statusRows(w: number, h: number): string[] }).statusRows(42, 18).map(stripAnsi).join("\n");
+		expect(rows).toContain("2/2 · SERVERS");
+		expect(rows).toContain("srv9");
+		app.stop();
+		// 空表：占位指路行
+		const empty = rig(["# hi"], 100, 30, { panelData: () => ({ ...defaultPanelData(), network: { proxy: "直连", modelService: "x", connections: [] } }) });
+		empty.app.stateRef.statePage = 1;
+		expect(page2(empty.app)).toContain("无 MCP server");
+		empty.app.stop();
+		// network 未供（退化/老桩）：给一行占位不空白
+		const bare = rig(["# hi"], 100, 30);
+		bare.app.stateRef.statePage = 1;
+		expect(page2(bare.app)).toContain("网络面数据未装配");
+		bare.app.stop();
+	});
+
+	it("③ 键序面：网络页 Enter 不隔页热插拔、↑↓ 不暗挪 moduleSel；回运行状态页行为恢复", async () => {
+		const { app, input, actions } = rig(["# hi"], 100, 30, { panelData: netPanel, toggleModule: (n) => actions.push(`toggle:${n}`) });
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 焦点 → 面板组（运行状态页）
+		await flush();
+		input.emit("data", "\x1b[C"); // → 网络·MCP 页
+		await flush();
+		input.emit("data", "\r"); // Enter：不该隔页热插拔看不见的模块
+		await flush();
+		input.emit("data", "\x1b[B"); // ↓：网络页无选择语义
+		await flush();
+		expect(actions).toEqual([]);
+		expect(app.stateRef.moduleSel).toBe(0);
+		input.emit("data", "\x1b[D"); // ← 回运行状态页
+		await flush();
+		input.emit("data", "\r"); // Enter：热插拔恢复生效
+		await flush();
+		expect(actions).toEqual(["toggle:orosus-core"]);
+		app.stop();
+	});
+});
+
+describe("「网络 · MCP」卡窄宽防线（2026-10-01 走查打回：字体大 = 卡窄，说明段/小节头不得顶飞——每行可见宽恒 ≤ 卡内宽）", () => {
+	const fatPanel = (): PanelData => ({
+		...defaultPanelData(),
+		network: {
+			proxy: "已启用 · 10.9.2.3:7890",
+			modelService: "api.z.ai · 末次 1.1s",
+			connections: [
+				{ name: "mcp:desktop-commander", state: "connected", desc: "stdio · 17 工具", connectMs: 12500 },
+				{ name: "mcp:sequential-thinking", state: "connected", desc: "stdio · 3 工具", connectMs: 2100 },
+				{ name: "mcp:playwright", state: "idle", desc: "stdio · 2 工具" },
+				{ name: "mcp:web-search", state: "failed", desc: "stdio" },
+			],
+		},
+	});
+	const rowsAt = (w: number): string[] => {
+		const { app } = rig(["# hi"], 100, 30, { panelData: fatPanel });
+		app.stateRef.statePage = 1;
+		const rows = (app as unknown as { statusRows(w: number, h: number): string[] }).statusRows(w, 20);
+		app.stop();
+		return rows.map(stripAnsi);
+	};
+
+	it("① 每行可见宽恒 ≤ 卡宽（46/38/30/28 四档——顶飞回归钉）；连接行右端恒 ≥1 空隙不贴边框", () => {
+		for (const w of [48, 40, 32, 28]) {
+			const rows = rowsAt(w);
+			for (const r of rows) {
+				expect(visibleWidth(r), `w=${w} 行超宽：${r}`).toBeLessThanOrEqual(w);
+			}
+			for (const r of rows.filter((x) => x.includes("●") || x.includes("○"))) {
+				expect(r.endsWith(" │"), `w=${w} 连接行贴边框（右边框前无空隙）：${r}`).toBe(true);
+			}
+		}
+	});
+
+	it("② 说明段两段降级（走查拍板「字体大时传输方式不显示」——预算驱动）：宽=全段 / 中=只显工具数 / 窄=空；小节头窄卡丢后缀不腰斩", () => {
+		const wide = rowsAt(54).join("\n");
+		expect(wide).toContain("mcp:desktop-commander stdio · 17 工具"); // 全段
+		expect(wide).toContain("1/1 · SERVERS");
+		const mid = rowsAt(34).join("\n"); // 短名行 playwright 预算余 8——中档只显「2 工具」
+		expect(mid).toContain("mcp:playwright 2 工具");
+		expect(mid).not.toContain("mcp:playwright stdio");
+		expect(mid).not.toContain("mcp:desktop-commander stdio"); // 长名行预算穷——desc 整段空
+		const narrow = rowsAt(28).join("\n");
+		expect(narrow).not.toContain("stdio"); // 最窄档：传输方式全灭（工具数也不显）
+		expect(narrow).not.toContain("SERVERS"); // 小节头降级只留页码——不被腰斩成「SER」
+		expect(narrow).toContain("1/1");
 	});
 });

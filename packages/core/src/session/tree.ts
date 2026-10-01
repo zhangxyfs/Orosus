@@ -37,11 +37,23 @@ function firstUserTitle(raw: string): string | undefined {
 	if (text === "") return undefined;
 	const m = SKILL_MARK.exec(raw);
 	if (m !== null) {
-		const argsM = /<skill name="[^"]*"(?: args="([^"]*)")?>/.exec(raw);
+		// 属性容忍匹配（2026-10-01 修）：args 后面还可能有别的属性——2026-10-01 诊断批给 <skill> 追加
+		// 了 file="…"（940ef4e），旧正则以 > 收尾自此静默失配、参数全体丢显；改按「name 定位标签、标签内
+		// 找 args」不再依赖属性个数与顺序（file 在 args 前后都能中）
+		const argsM = /<skill name="[^"]*"[^>]*? args="([^"]*)"/.exec(raw);
 		const args = argsM?.[1]?.replace(/&quot;/g, '"');
 		return `[技能] ${m[1]!}${args !== undefined && args !== "" ? ` ${args}` : ""}`.slice(0, 60).trimEnd();
 	}
 	return text.slice(0, 60);
+}
+
+/** 空会话判定（2026-10-01 用户拍板清理批）：无用户消息（firstUser undefined）、未起名（label
+ *  undefined）、非 fork 子体（子体投影含父辈历史——0 自有消息也可能是用户有意留的分叉点，parentSession
+ *  为字符串即排除；无 header 的 manifest 壳 = undefined、根会话 = null，两者都算空候选）。
+ *  ownLines 帽 = 解析预算同款值：超出 = 事件量大必非空壳，同时防「首条 user/message 落在预算外被漏看」
+ *  的误杀（预算内全程看过了，firstUser undefined 才是真没有）。 */
+export function isEmptySessionHead(head: SessionHead): boolean {
+  return head.label === undefined && head.firstUser === undefined && (head.parentSession ?? null) === null && head.ownLines <= HEAD_MAX_LINES;
 }
 
 /** 读会话文件头部元数据（jsonl 读法，T7）：一次读全文，元数据解析限预算内、行数恒真。

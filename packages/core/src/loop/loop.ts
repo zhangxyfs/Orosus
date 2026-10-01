@@ -158,6 +158,9 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     }
 
     log.debug("loop.provider.stream-start", "provider 流式开始", { messages: messages.length });
+    // 末次请求耗时（2026-10-01 拍板 B——被动真值，不做主动健康探测）：起表 = 请求即将发出，停表 = 流终
+    // （含 catch 路径）；随 assistant/message 带内落盘，resume 回放保值——「网络 · MCP」卡模型服务行消费
+    const streamT0 = Date.now();
     let text = "";
     let reasoning = ""; // T5/D45：流内累积——reasoning 首次持久化（只入审计/显示面；投影跳过，模型可见性不变）
     let usage: { input: number; output: number } | undefined;
@@ -202,6 +205,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
       // provider 契约是不许 reject（§6.4）；违约者按带内错误同等处理
       finish = { type: "finish", kind: "error", errorMessage: String(err) };
     }
+    const durationMs = Date.now() - streamT0;
     // CL-02 修复（2026-09-28 code review）：provider 流干净 EOF 但全程无 finish 块（经网关/代理的 SSE 被
     // 中间层干净切断的常见形态——契约要求必有 finish，缺块即截断/违约）时，旧实现沿用预置 kind:"stop"
     // 静默收尾：半截 text 物化为 assistant/message、turn/end{completed}，截断对用户不可见。现改按带内错误
@@ -234,6 +238,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
         ],
         ...(usage !== undefined ? { usage } : {}),
         ...(finish.kind === "length" ? { finishKind: "length" } : {}), // CL-03：截断记档（per-step 精确）
+        durationMs, // 2026-10-01 拍板 B：本 step 流式耗时（起表→流终，含截断/违约路径）——面板「末次耗时」数据源
       });
     }
 

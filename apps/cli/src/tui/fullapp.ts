@@ -41,6 +41,27 @@ export interface PanelData {
 	/** 模块卡（m5 T6 口子二）：宿主每次现调 getter 装配（不走快照——1 秒 tick 驱动现问现答）；
 	 *  getter 抛错的卡宿主侧已剔除（设计空白 15）。可选——无卡宿主/占位路径不带。 */
 	cards?: ModuleCard[] | undefined;
+	/** 「网络 · MCP」卡数据面（2026-10-01 拍板）：被动真值——首连耗时/末次请求耗时，不做主动健康
+	 *  探测（出网/DNS 周期 ping 维持方案书「另议」缺位）。proxy/modelService 为宿主拼好的显示串；
+	 *  connections = mcp.catalog 服务行的投影（五态原文照传，渲染期映射点色）。可选——退化/测试路径
+	 *  不带时卡体给占位行。 */
+	network?: PanelNetwork | undefined;
+}
+
+/** 「网络 · MCP」卡连接行（消费侧本地声明——圈地纪律：类型结构不 import 模块包）。 */
+export interface PanelNetwork {
+	/** 代理态显示串（批 D proxy-env 语义）：「已启用 · host」/「直连 · 未检测到代理」。 */
+	proxy: string;
+	/** 模型服务信息行（不主张连接状态）：端点域名 + 末次请求耗时（assistant/message.durationMs 投影）。 */
+	modelService: string;
+	connections: {
+		name: string;
+		state: "connected" | "idle" | "failed" | "pending-confirm" | "disabled";
+		/** 说明段（宿主拼好）：「HTTP · 12 工具」/「stdio · 8 工具」形。 */
+		desc: string;
+		/** 首连耗时毫秒（connected 行展示；缺省回落状态文案）。 */
+		connectMs?: number;
+	}[];
 }
 
 /** 模块卡的渲染面形态（PanelData.cards 元素）：contribute.card 注册物的投影。 */
@@ -161,6 +182,8 @@ interface AppState {
 	/** 右下卡组页号（m5 T6）：0 = 任务清单（内建在前），≥1 = bottom 模块卡（按 order 排）。
 	 *  与 statePage（右上组同款语义：0 运行状态 / 1 网络·MCP / ≥2 top 模块卡）成对。 */
 	taskPage: number;
+	/** 「网络 · MCP」卡连接列表页号（2026-10-01）：纯页号（无选择语义——↑↓ 不动它），渲染期夹回。 */
+	connPage: number;
 	scrollBack: number;
 	busy: boolean;
 	/** /compact 执行期（2026-09-23 用户拍板 UI 形态）：busy spinner 切换为「上下文压缩中…」石青（info）色——
@@ -250,11 +273,21 @@ export function wordRangeAt(plain: string, col: number): { start: number; end: n
 	return { start: colOf(segs[lo]!.start), end: colOf(segs[hi]!.end) };
 }
 const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载", pendingConfirm: "待确认" }; // pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
+/** 「网络 · MCP」卡连接行五态文案（mcp-cmd.ts STATE_TEXT 同款口径——管理面/卡片两处措辞一致）。 */
+const CONN_STATE_TEXT: Record<string, string> = { connected: "已连接", idle: "待启动", failed: "失败", "pending-confirm": "未确认", disabled: "已停用" };
+/** 连接列表每页行数（2026-10-01）：页 2 比页 0 少 3 行 KV + 上下文进度条——同框高多容 3 行（8 = 5+3）。 */
+const CONN_SLOTS = 8;
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
 const taskTick = (state: "done" | "active" | "pending"): string =>
 	state === "done" ? theme.fg("accent", "✓") : state === "active" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 /** 运行时间格式化（F5 十轮② 用户拍板：精确到秒，随 1s 心跳实时跳）：
  *  <60s「N 秒」；<1 时「M 分 SS 秒」；<1 天「H 时 MM 分 SS 秒」；否则「D 天 H 时」。 */
+/** 毫秒耗时显示串（2026-10-01 拍板 B）：<1s「Nms」，≥1s「M.Ns」——首连耗时（连接行右列）与
+ *  末次请求耗时（模型服务行）共用一源；宿主供数侧（main.ts 模型服务行拼串）同款 import。 */
+export function msText(ms: number): string {
+	return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
 export function elapsedText(startedAt: string | undefined, now: number = Date.now()): string {
 	if (startedAt === undefined) return "—";
 	const ms = Math.max(0, now - Date.parse(startedAt));
@@ -452,6 +485,7 @@ export class FullApp {
 			taskSel: 0,
 			statePage: 0,
 			taskPage: 0,
+			connPage: 0,
 			scrollBack: 0,
 			busy: false,
 			compacting: false,
@@ -1911,6 +1945,15 @@ export class FullApp {
 
 		if (key === "escape") {
 			if (s.busy) {
+				// 焦点在侧栏面板（Tab 切走）时 Esc 先收焦点回输入框（2026-10-01 走查——否则被双击
+				// 停止确认截胡，用户预期与空闲态一致先回焦点）；收焦点同时打断双击序列（含 lastEscCancel
+				// 清零——与下方空闲态收尾同款，隔了一次 Tab 导航不再算连续两按）
+				if (s.focusIdx !== 0) {
+					this.lastEscCancel = 0;
+					s.focusIdx = 0;
+					this.scheduler.requestImmediateRender();
+					return;
+				}
 				// 双击 Esc 才停止生成（2026-09-23 走查拍板——单击误触痛点；qwen-code 双击窗口
 				// CTRL_EXIT_PROMPT_DURATION_MS=1000ms 同口径，比 claude-code 的 2s 短）：
 				// 首按 toast 提示，1s 内再按才真正取消；窗口外再按重新计首按
@@ -1971,8 +2014,15 @@ export class FullApp {
 			// 面板聚焦时归面板（2026-09-24 拍板——翻页不再借道 Shift）：运行状态=模块翻页、任务清单=任务翻页，
 			// 未聚焦才滚对话流；故此分支必须整体先于下方焦点分支
 			if (s.focusIdx === 1) {
-				const mods = this.io.panelData().modules;
-				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "pageUp" ? -MODULE_SLOTS : MODULE_SLOTS)));
+				if (s.statePage === 1) {
+					// 网络·MCP 页：连接列表翻页（纯页号 ±1——渲染期夹回；server 增减不炸）
+					const conns = this.io.panelData().network?.connections ?? [];
+					const connPages = Math.max(1, Math.ceil(conns.length / CONN_SLOTS));
+					s.connPage = Math.max(0, Math.min(connPages - 1, s.connPage + (key === "pageUp" ? -1 : 1)));
+				} else {
+					const mods = this.io.panelData().modules;
+					s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "pageUp" ? -MODULE_SLOTS : MODULE_SLOTS)));
+				}
 			} else if (s.focusIdx === 2) {
 				const tasks = this.io.panelData().tasks;
 				const slots = this.taskPageSlots();
@@ -1985,14 +2035,17 @@ export class FullApp {
 		} else if (s.focusIdx === 1) {
 			const mods = this.io.panelData().modules;
 			if (key === "up" || key === "down") {
-				s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "up" ? -1 : 1)));
+				// 模块选择只在运行状态页（2026-10-01）：网络·MCP 页无选择语义——旧态 ↑↓ 隔页挪 moduleSel 属暗改
+				if (s.statePage === 0) s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "up" ? -1 : 1)));
 			} else if (key === "left" || key === "right") {
 				// 右上卡组翻页（m5 T6）：[运行状态, 网络·MCP, ...top 模块卡] 循环；先夹回（卡消失后页号可能越界）
 				const pages = 2 + (this.io.panelData().cards ?? []).filter((c) => c.area === "top").length;
 				s.statePage = (Math.min(s.statePage, pages - 1) + (key === "left" ? -1 : 1) + pages) % pages;
 			} else if (key === "enter") {
 				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload；
-				// 待确认项（m5 T17）：回车弹首挂确认窗（声明面人话清单→确认三动作）
+				// 待确认项（m5 T17）：回车弹首挂确认窗（声明面人话清单→确认三动作）。
+				// 只在运行状态页生效（2026-10-01）：网络·MCP 页回车不隔页热插拔看不见的模块
+				if (s.statePage !== 0) return;
 				const m = mods[s.moduleSel];
 				if (m !== undefined) {
 					if (m.state === "pendingConfirm") this.io.confirmModule?.(m.name);
@@ -2440,6 +2493,44 @@ export class FullApp {
 		return selected ? theme.bg("accentSoft", padToWidth(row, w)) : row;
 	}
 
+	/** 「网络 · MCP」卡连接行（2026-10-01）：布局同 modRow（点+名+说明+右列），无选中态/锁定后缀；
+	 *  五态点色对齐管理面口径——connected 绿 ● / failed·未确认 红 ● / idle·停用 灰 ○（mcp-cmd 同款）。
+	 *  右列：connected 有首连耗时时显耗时（被动真值），否则状态文案。 */
+	private connRow(c: NonNullable<PanelData["network"]>["connections"][number], w: number): string {
+		const stateText = CONN_STATE_TEXT[c.state]!;
+		const dot =
+			c.state === "connected" ? theme.fg("accent", "●") : c.state === "failed" || c.state === "pending-confirm" ? theme.fg("err", "●") : theme.fg("muted", "○");
+		const right =
+			c.state === "connected" && c.connectMs !== undefined
+				? theme.fg("muted", msText(c.connectMs))
+				: c.state === "connected"
+					? theme.fg("accent", stateText)
+					: c.state === "failed" || c.state === "pending-confirm"
+						? theme.fg("err", stateText)
+						: theme.dim(stateText);
+		// 名字源头截断（同 modRow CTU-09 预算式）：w − 前缀「 ● 」(3) − 右列实宽 − gap(1) − 右端呼吸(1)
+		// （2026-10-01 走查「顶飞」修：名字多让 1 列，右列与边框恒 ≥1 空隙——pane padToWidth 补尾空格）
+		const nameTxt = truncateToWidth(c.name, Math.max(4, w - 3 - visibleWidth(right) - 2));
+		const name = c.state === "idle" || c.state === "disabled" ? theme.fg("muted", nameTxt) : nameTxt;
+		// 说明段两段降级（2026-10-01 走查拍板「字体大时传输方式不显示」——预算驱动非硬阈值）：
+		// 全段「stdio · 12 工具」→ 中段「12 工具」（丢传输方式）→ 空；裸传输段（无「 · 」）窄卡直接空。
+		// 预算整体再让 1 列（… −1 尾）：全段「刚好吃满」时 gap 会被 max(1) 钉死→行满宽贴边框（w=48 实测）
+		const descBudget = w - (3 + visibleWidth(nameTxt) + 1 + visibleWidth(right) + 1) - 1;
+		const sep = c.desc.indexOf(" · ");
+		const shortDesc = sep >= 0 ? c.desc.slice(sep + 3) : undefined;
+		const descText =
+			c.desc !== "" && descBudget >= visibleWidth(c.desc)
+				? c.desc
+				: shortDesc !== undefined && descBudget >= visibleWidth(shortDesc)
+					? shortDesc
+					: "";
+		const desc = descText === "" ? "" : theme.dim(descText);
+		const leftW = 3 + visibleWidth(nameTxt) + (desc === "" ? 0 : 1 + visibleWidth(descText));
+		// gap 恒给右端留 1 列（2026-10-01 走查「顶飞」修：右列贴死边框观感差）；名字预算已让 1 列，闭环恒 ≤ w−1
+		const gap = Math.max(1, w - leftW - visibleWidth(right) - 1);
+		return ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${right}`;
+	}
+
 	private statusRows(w: number, h: number): string[] {
 		const s = this.state;
 		const d = this.io.panelData();
@@ -2486,10 +2577,37 @@ export class FullApp {
 			return this.panelBox("运行状态", `1/${pages}`, focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [this.sep(inner)]);
 		}
 		if (page === 1) {
-			const content: string[] = [
-				` ${theme.fg("muted", "（健康探测数据源未就绪——如实登记：框架化方案书缺口项）")}`,
-			];
-			return this.panelBox("网络 · MCP", `2/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [this.sep(inner)]);
+			// 2026-10-01 拍板填实（占位行退役）：被动真值——代理态 + 模型服务信息行 + mcp.catalog 五态
+			// 连接列表（首连耗时）；主动健康探测（出网/DNS 周期 ping）维持方案书「另议」缺位，不假装有数据
+			const n = d.network;
+			const content: string[] = [];
+			if (n === undefined) {
+				content.push(` ${theme.fg("muted", "（网络面数据未装配——供数退化，详见诊断日志）")}`);
+			} else {
+				content.push(this.kvRow("代理", n.proxy, inner));
+				content.push(this.kvRow("模型服务", n.modelService, inner));
+			}
+			content.push(this.sep(inner));
+			const conns = n?.connections ?? [];
+			const connPages = Math.max(1, Math.ceil(conns.length / CONN_SLOTS));
+			const connPage = Math.min(s.connPage, connPages - 1);
+			const lo = connPage * CONN_SLOTS;
+			const headL = ` ${theme.fg("muted", "网络 / MCP 连接")}`;
+			// 右段窄卡降级（2026-10-01 走查「顶飞」修：标题+右段超内宽曾被 padToWidth 腰斩成「1/1 · SER」贴边）——
+			// 余量不足先丢「· SERVERS」后缀只留页码；标题侧不截（与页 0「模块挂载」头同权重）
+			const pageTag = `${connPage + 1}/${connPages}`;
+			const room = inner - visibleWidth(headL) - 1;
+			const headR = theme.dim(room >= visibleWidth(`${pageTag} · SERVERS`) ? `${pageTag} · SERVERS` : pageTag);
+			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
+			content.push(this.sep(inner)); // 小节头与列表之间分隔线（2026-10-01 走查打回：贴太近）
+			if (conns.length === 0) {
+				content.push(` ${theme.fg("muted", "（无 MCP server——/settings 添加，或模块挂载页启用 mcp）")}`);
+			}
+			for (let i = lo; i < Math.min(conns.length, lo + CONN_SLOTS); i++) {
+				content.push(this.connRow(conns[i]!, inner));
+			}
+			// 提示两行制（2026-10-01 走查打回：单行 27 列在窄侧栏被 wrapText 折行——拆两行各保短，行数恒定不闪）
+			return this.panelBox("网络 · MCP", `2/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回", "PgUp/PgDn 连接翻页"], undefined, [this.sep(inner)]);
 		}
 		return this.renderModuleCard(topCards[page - 2]!, w, h, focused, page, pages);
 	}

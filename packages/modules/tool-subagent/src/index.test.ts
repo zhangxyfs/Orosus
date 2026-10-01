@@ -83,6 +83,7 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     const [spawnTool] = subagentTools(port, dirs);
     expect(spawnTool!.description).toContain("自动送回"); // 反轮询引导（2026-09-27 拍板）
     expect(spawnTool!.description).toContain("不要轮询");
+    expect(spawnTool!.description).toContain("写闸"); // 2026-10-01 实机：Bash 型后台子代理持整仓闸时主对话 Bash 被拦——指引并行走只读工具
     const out = await exec(spawnTool!, { description: "批量总结", prompt: "总结 {{item}} 文件", items: ["甲", "乙"] });
     expect(out.isError).toBe(false);
     expect(port.calls.length).toBe(2);

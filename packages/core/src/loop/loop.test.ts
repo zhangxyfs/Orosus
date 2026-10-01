@@ -54,6 +54,8 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     const msg = all.find((e) => e.type === "assistant/message")!;
     expect(msg.content).toEqual([{ kind: "reasoning", text: "思" }, { kind: "text", text: "你好" }]); // reasoning 首次持久化（D45）
     expect(msg.usage).toEqual({ input: 3, output: 2 }); // usage 落 message（不再只在 chunk 碎片里）
+    expect(typeof msg.durationMs).toBe("number"); // 2026-10-01 拍板 B：末次请求耗时随 message 带内（「网络·MCP」卡模型服务行数据源）
+    expect(msg.durationMs as number).toBeGreaterThanOrEqual(0);
     expect(deriveMessages(all).at(-1)).toEqual({ role: "assistant", content: [{ kind: "text", text: "你好" }] }); // reasoning 不回流模型（v1 定案）
   });
 

@@ -290,3 +290,56 @@ describe("懒启动实况 schema 补丁（2026-09-30 修「模型看不到参数
     expect(events[0]!.list).toEqual([]);
   });
 });
+
+describe("首连耗时被动计时（2026-10-01 拍板 B——连接本来就要发生，掐表不算探测）", () => {
+  const runTool = async (tool: { resolveExecution(i: unknown): Promise<{ execute(ctx: unknown): Promise<{ output: string }> }> }, args: unknown): Promise<string> => {
+    const plan = await tool.resolveExecution(args);
+    return (await plan.execute({ callId: "t", signal: new AbortController().signal, log: { info: () => {}, warn: () => {}, error: () => {} } } as never)).output;
+  };
+
+  it("① eager：成功/失败 server 都有耗时记录（finally 语义），未知名恒 undefined", async () => {
+    const out = await activateMcp({
+      servers: {
+        ok: { command: "x" },
+        bad: { command: "y" },
+      },
+      connect: async (name) => {
+        await new Promise((res) => setTimeout(res, 8));
+        if (name === "bad") throw new Error("连不上");
+        return { listTools: async () => [{ name: "t", description: "d" }], callTool: async () => ({ content: [] }) };
+      },
+      sessionAppend: () => {},
+    });
+    expect(out.failedServers.map((f) => f.name)).toEqual(["bad"]);
+    expect(typeof out.connectMs("ok")).toBe("number");
+    expect(out.connectMs("ok")!).toBeGreaterThanOrEqual(5); // 真等了 8ms——只压下界不压上界（免 flaky）
+    expect(typeof out.connectMs("bad")).toBe("number"); // 失败也记——finally 语义
+    expect(out.connectMs("nobody")).toBeUndefined();
+  });
+
+  it("② lazy：首调前 undefined、首调后有值；失败重试后覆盖为末次尝试值", async () => {
+    let attempts = 0;
+    const out = await activateMcp({
+      servers: { ctx7: { command: "x", lazy: true } },
+      connect: async () => { throw new Error("不应走非惰性连接"); },
+      sessionAppend: () => {},
+      lazy: {
+        manifestFor: () => [{ name: "t", description: "d" }],
+        connect: async () => {
+          attempts++;
+          await new Promise((res) => setTimeout(res, 8));
+          if (attempts === 1) throw new Error("第一次失败");
+          return { listTools: async () => [], callTool: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+        },
+        onStarted: () => {},
+      },
+    });
+    expect(out.connectMs("ctx7")).toBeUndefined(); // 从未连接——idle 语义
+    expect(await runTool(out.tools[0]!, {})).toContain("第一次失败"); // 首调失败（工具错误转 output；memo 清空可重试）
+    expect(typeof out.connectMs("ctx7")).toBe("number"); // 失败也记
+    expect(await runTool(out.tools[0]!, {})).toContain("ok"); // 二次调用重连成功
+    const after = out.connectMs("ctx7")!;
+    expect(after).toBeGreaterThanOrEqual(5); // 重试覆盖为末次尝试值
+    expect(attempts).toBe(2);
+  });
+});

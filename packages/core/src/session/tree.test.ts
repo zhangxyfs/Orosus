@@ -54,24 +54,28 @@ describe("readSessionHead（预算读件下沉 core——T7）", () => {
 
   it("④ 技能会话标题（2026-09-30 用户拍板）：首条消息是技能注入机器标记 → 「[技能] 名字 参数」，标记与正文都不上标题", () => {
     const d = fresh();
-    const skillBody = (name: string, args?: string) =>
-      `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${args !== undefined ? ` args="${args}"` : ""}>\n# 技能正文一大堆\n不该当标题\n</skill>`;
+    // 夹具对齐 skillInjectText 真实输出（2026-10-01 修）：file 属性必随（940ef4e 起恒在、排在 args 后）——
+    // 旧夹具无 file，掩盖了「正则以 > 收尾遇追加属性即失配、参数全体丢显」的实机坑（用户会话列表只见
+    // [技能] doc-review 不见参数）；file 省略 = 2026-10-01 前老会话形态
+    const skillBody = (name: string, args?: string, file?: string) =>
+      `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${args !== undefined ? ` args="${args}"` : ""}${file === undefined ? "" : ` file="${file}"`}>\n# 技能正文一大堆\n不该当标题\n</skill>`;
     const f1 = seed(d, "s_skill", [
       ev("e1", "session/header", {}),
-      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("doc-review", "2026-09-27-m4-3c-mcp-production.md 全量") }] }),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("doc-review", "2026-09-27-m4-3c-mcp-production.md 全量", "C:\\skills\\doc-review\\SKILL.md") }] }),
     ]);
     expect(readSessionHead(f1)!.firstUser).toBe("[技能] doc-review 2026-09-27-m4-3c-mcp-production.md 全量"); // 帽放宽到 60 后全显（行宽截断归显示侧）
-    // 手敲形态（2026-09-30 二轮）：消息 = 原话行 + 标记 + 正文合成一条——标记行不在消息首也识别，原话行不上标题
+    // 手敲形态（2026-09-30 二轮 + 2026-10-01 实机坑回归钉）：消息 = 标记 + 原话行 + <skill> 合成一条、
+    // file 恒在场——参数必须上标题（实机见「[技能] doc-review」丢参，正则失配根因）
     const f1b = seed(d, "s_skill_typed", [
       ev("e1", "session/header", {}),
-      ev("e2", "user/message", { content: [{ kind: "text", text: `/skill : doc-review 参数甲 参数乙\n${skillBody("doc-review", "参数甲 参数乙")}` }] }),
+      ev("e2", "user/message", { content: [{ kind: "text", text: `（用户通过菜单手动加载技能 "doc-review"——请按该技能正文行事）\n/skill : doc-review 2026-09-30-m5-media-multimedia.md 全量\n<skill name="doc-review" args="2026-09-30-m5-media-multimedia.md 全量" file="C:\\Users\\Administrator\\.agents\\skills\\doc-review\\SKILL.md">\n# 技能正文\n</skill>` }] }),
     ]);
-    expect(readSessionHead(f1b)!.firstUser).toBe("[技能] doc-review 参数甲 参数乙");
+    expect(readSessionHead(f1b)!.firstUser).toBe("[技能] doc-review 2026-09-30-m5-media-multimedia.md 全量");
     // 60 帽仍守住：超长参数截断且不带尾随空格
     const longArgs = "长".repeat(80);
     const f1c = seed(d, "s_skill_long", [
       ev("e1", "session/header", {}),
-      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("x".repeat(30), longArgs) }] }),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("x".repeat(30), longArgs, "C:\\s\\SKILL.md") }] }),
     ]);
     expect(readSessionHead(f1c)!.firstUser).toBe(`[技能] ${"x".repeat(30)} ${"长".repeat(24)}`);
     const f2 = seed(d, "s_skill_old", [
@@ -79,6 +83,12 @@ describe("readSessionHead（预算读件下沉 core——T7）", () => {
       ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("ask-matt") }] }),
     ]);
     expect(readSessionHead(f2)!.firstUser).toBe("[技能] ask-matt"); // 老形态无参数只显名字
+    // 新形态无参数（菜单 Enter：file 在场无 args）——不显幻影参数
+    const f2b = seed(d, "s_skill_noargs", [
+      ev("e1", "session/header", {}),
+      ev("e2", "user/message", { content: [{ kind: "text", text: skillBody("ask-matt", undefined, "C:\\skills\\ask-matt\\SKILL.md") }] }),
+    ]);
+    expect(readSessionHead(f2b)!.firstUser).toBe("[技能] ask-matt");
     const f3 = seed(d, "s_plain", [
       ev("e1", "session/header", {}),
       ev("e2", "user/message", { content: [{ kind: "text", text: "普通提问照旧" }] }),

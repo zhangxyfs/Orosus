@@ -14,7 +14,9 @@ export interface SessionListItem extends SessionFileEntry {
 export function readTitle(file: string, id: string): string {
   if (file.endsWith(".sqlite")) return id;
   const head = readSessionHead(file);
-  return head?.label ?? head?.firstUser ?? id;
+  // 未命名兜底「新会话」不裸显 sid（2026-09-25 拍板口径补齐——当时只改了状态卡，列表漏网裸 id；
+  // 2026-10-01 空会话清理批一并收口）。/settings 诊断 dump 是另一路径仍保留 sid
+  return head?.label ?? head?.firstUser ?? "新会话";
 }
 
 /** 相对时间（走查要求：几年/月/天/小时/分钟前——不显示绝对时间戳）。 */

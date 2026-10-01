@@ -808,7 +808,7 @@ describe("DocModel 性能回归钉二（m5-render-perf T6——防三处退化�
 			docWindow: (s, c) => dm.frameWindow(w(), s, c),
 			submit: () => {},
 			requestCancel: () => {},
-			panelData: () => ({ model: "m", session: "s", cwd: "d", tokens: { input: 0, output: 0 }, startedAt: new Date().toISOString(), modules: [], tasks: [], permission: "never" }),
+			panelData: () => ({ model: "m", session: "s", cwd: "d", tokens: { input: 0, output: 0 }, startedAt: new Date().toISOString(), contextWindow: 200_000, modules: [], tasks: [], permission: "never", permissionNext: () => "/permission ask-always" }),
 			slashCommands: () => [],
 			slashCurrent: () => "",
 			thinkOpen: () => false,

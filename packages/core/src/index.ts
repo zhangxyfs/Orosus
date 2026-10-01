@@ -11,7 +11,9 @@ export type { SessionEvent, SessionStore } from "./session/types.ts";
 export { encodeCwd, scanSessionFiles, scanBucketSessions, locateSessionFile } from "./session/dir.ts";
 export type { SessionFileEntry } from "./session/dir.ts";
 // 会话树批 T7：树快照统一件（宿主列表 readTitle 薄封装同源）——预算读件与树构建落 core
-export { buildSessionTree, readSessionHead, type SessionHead } from "./session/tree.ts";
+export { buildSessionTree, readSessionHead, isEmptySessionHead, type SessionHead } from "./session/tree.ts";
+// 空会话清理批（2026-10-01 用户拍板）：退出漏斗就地清 + 启动清扫异常退出残留壳（宿主 CLI 两调用点）
+export { purgeSessionDir, sweepEmptySessions, type EmptySessionSweep } from "./session/cleanup.ts";
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
 export { verifyChain } from "./session/fork.ts"; // 宿主面（M4-1 T6 复核用）：复合投影链校验
 export { repairFile } from "./session/jsonl.ts"; // 宿主面（M4-1 T6 复核用）：撕裂尾修复

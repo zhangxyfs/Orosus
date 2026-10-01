@@ -25,7 +25,7 @@ const sessionFile = (root: string, sid: string, lines: string[], bucket = "B-mai
 const { setTitle } = await import("./sessions.ts");
 
 describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对时间/倒序/当前高亮/无黑话）", () => {
-  it("① readTitle 三级：session/label 优先 → 首问文本兜底（≤60 帽——2026-09-30 从 20 放宽）→ sid 兜底", () => {
+  it("① readTitle 三级：session/label 优先 → 首问文本兜底（≤60 帽——2026-09-30 从 20 放宽）→「新会话」兜底（2026-10-01 拍板：不裸显 sid）", () => {
     const root = fresh();
     const f1 = sessionFile(root, "s_labeled", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "问个好" }] }), ev("e3", "session/label", { label: "问候测试" })]);
     const f2 = sessionFile(root, "s_fallback", [ev("e1", "session/header"), ev("e2", "user/message", { content: [{ kind: "text", text: "这是一个中等长度的首问文本在六十字符帽以内应该完整显示出来才对" }] })]);
@@ -34,7 +34,7 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     expect(readTitle(f1, "s_labeled")).toBe("问候测试");
     expect(readTitle(f2, "s_fallback")).toBe("这是一个中等长度的首问文本在六十字符帽以内应该完整显示出来才对"); // 帽内全显
     expect(readTitle(f2b, "s_long")).toBe("长".repeat(60)); // 超帽截到 60（tree.test ④ 同口径）
-    expect(readTitle(f3, "s_empty")).toBe("s_empty");
+    expect(readTitle(f3, "s_empty")).toBe("新会话"); // 空会话壳——与状态卡同款口径（09-25 拍板补齐）
   });
 
   it("② listSessions：目录形态可见、按创建时间倒序（最新在最前）、带标题", () => {
@@ -55,7 +55,7 @@ describe("会话列表人性化（B9 拉前，2026-09-19 走查：标题/相对�
     writeFileSync(join(root, "B-mine", "s_flat.jsonl"), "{}\n"); // 平铺遗留——拍板不识别
     const mine = listSessions(root, "B-mine");
     expect(mine.map((s) => s.id)).toEqual(["s_mine"]); // 他桶与平铺都不进
-    expect(formatSessions(root, "s_mine", "B-mine")).toContain("s_mine");
+    expect(formatSessions(root, "s_mine", "B-mine")).toContain("\x1b[1;36m  1. 新会话"); // 当前会话高亮行（未命名兜底「新会话」——2026-10-01 起不裸显 sid）
     expect(listSessions(root, "B-mine").every((s) => s.bucket === "B-mine")).toBe(true);
   });
 
@@ -207,18 +207,18 @@ describe("pickSessionNumber（走查定案：不选即取消——专门取消�
 });
 
 describe("readTitle 读取预算（M4-2.5 T2——日志调研 P5：列表不被无对话大文件拖慢）", () => {
-  it("① 无 label 无对话的超大文件 → 64 行/16KB 内退化为 sid", () => {
+  it("① 无 label 无对话的超大文件 → 64 行/16KB 内退化为「新会话」", () => {
     const root = fresh();
     const noise = Array.from({ length: 200 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] }));
     const f = sessionFile(root, "s_noise", noise); // 无 label、无 user/message——现状要读完 200 行
-    expect(readTitle(f, "s_noise")).toBe("s_noise"); // 预算内无命中 → sid
+    expect(readTitle(f, "s_noise")).toBe("新会话"); // 预算内无命中 → 兜底文案（2026-10-01 起不裸显 sid）
   })
-  it("② 预算是硬上限不是软提示：label 越预算退 sid、预算内正常命中", () => {
+  it("② 预算是硬上限不是软提示：label 越预算退「新会话」、预算内正常命中", () => {
     const root = fresh();
-    // label 在第 100 行（预算外）也退 sid
+    // label 在第 100 行（预算外）也退兜底
     const withLabel = [...Array.from({ length: 100 }, (_, i) => ev(`e${i}`, "assistant/message", { content: [{ kind: "text", text: "x".repeat(200) }] })), ev("l", "session/label", { label: "百行之后" })];
     const f1 = sessionFile(root, "s_label_late", withLabel);
-    expect(readTitle(f1, "s_label_late")).toBe("s_label_late");
+    expect(readTitle(f1, "s_label_late")).toBe("新会话");
     // 对照：label 在前 64 行内 → 正常命中
     const f2 = sessionFile(root, "s_label_early", [ev("e1", "session/header"), ev("e2", "session/label", { label: "早标签" })]);
     expect(readTitle(f2, "s_label_early")).toBe("早标签");

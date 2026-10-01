@@ -237,6 +237,9 @@
     .mod .mstate { flex: 0 0 auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
     .mod.mounted .mstate { color: var(--accent); }
     .mod.loading .mstate { color: var(--warn); }
+    /* failed / pending-confirm（2026-10-01 网络卡五态）：红 ● —— mcp.catalog 口径 */
+    .mod.failed .dot { color: var(--err); }
+    .mod.failed .mstate { color: var(--err); }
     .mod.sel { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
     .mod.sel .mname { color: var(--accent); }
 
@@ -458,38 +461,46 @@
             </div>
 
             <div class="page" id="state-page-2" hidden>
+              <!-- 2026-10-01 拍板改版：删虚构的出网/DNS 探测与模块仓库行（主动健康探测维持缺位，不假装有数据）；
+                   代理行对齐批 D 真实语义；模型服务 = 纯信息行（端点 + 末次请求耗时——被动真值）；
+                   连接列表 = mcp.catalog 五态（connected 绿● / failed·未确认 红● / idle·停用 灰○）＋首连耗时 -->
               <dl class="kv">
-                <dt>出网</dt><dd><span class="ok">正常</span> · 延迟 38ms</dd>
-                <dt>代理</dt><dd>直连 <span class="dim">· 未启用代理</span></dd>
-                <dt>DNS</dt><dd>system <span class="dim">· 223.5.5.5 备用</span></dd>
+                <dt>代理</dt><dd>已启用 <span class="dim">· 127.0.0.1:7890</span></dd>
+                <dt>模型服务</dt><dd>api.z.ai <span class="dim">· 末次 1.8s</span></dd>
               </dl>
 
               <hr class="side-sep" />
 
-              <div class="subhead"><span>网络 / MCP 连接</span><span class="en">CONNECTIONS</span></div>
+              <div class="subhead"><span>网络 / MCP 连接</span><span class="en">SERVERS</span></div>
+
+              <hr class="side-sep" />
 
               <div class="mod mounted">
-                <span class="dot">●</span><span class="mname">api.moonshot.cn</span>
-                <span class="mdesc">模型服务 · HTTPS</span><span class="mstate">38ms</span>
-              </div>
-              <div class="mod mounted">
-                <span class="dot">●</span><span class="mname">mcp:github</span>
-                <span class="mdesc">MCP · 12 工具</span><span class="mstate">112ms</span>
+                <span class="dot">●</span><span class="mname">mcp:context7</span>
+                <span class="mdesc">HTTP · 12 工具</span><span class="mstate">231ms</span>
               </div>
               <div class="mod mounted">
                 <span class="dot">●</span><span class="mname">mcp:filesystem</span>
-                <span class="mdesc">MCP · 8 工具</span><span class="mstate">6ms</span>
-              </div>
-              <div class="mod loading">
-                <span class="dot">◐</span><span class="mname">mcp:web-search</span>
-                <span class="mdesc">等待 orosus-web 挂载</span><span class="mstate">待命</span>
+                <span class="mdesc">stdio · 8 工具</span><span class="mstate">6ms</span>
               </div>
               <div class="mod off">
-                <span class="dot">○</span><span class="mname">registry.orosus.dev</span>
-                <span class="mdesc">模块仓库</span><span class="mstate">未连接</span>
+                <span class="dot">○</span><span class="mname">mcp:playwright</span>
+                <span class="mdesc">stdio · 懒启动——首调连接</span><span class="mstate">待启动</span>
+              </div>
+              <div class="mod failed">
+                <span class="dot">●</span><span class="mname">mcp:web-search</span>
+                <span class="mdesc">stdio</span><span class="mstate">失败</span>
+              </div>
+              <div class="mod failed">
+                <span class="dot">●</span><span class="mname">mcp:db-helper</span>
+                <span class="mdesc">项目 .mcp.json · 指纹未确认</span><span class="mstate">未确认</span>
+              </div>
+              <div class="mod off">
+                <span class="dot">○</span><span class="mname">mcp:sequential-thinking</span>
+                <span class="mdesc">stdio · 5 工具</span><span class="mstate">已停用</span>
               </div>
 
-              <div class="mod-hint">←→ 返回运行状态 · Esc 返回输入</div>
+              <div class="mod-hint">←→ 切卡 · Esc 返回<br />PgUp/PgDn 连接翻页</div>
             </div>
           </section>
 

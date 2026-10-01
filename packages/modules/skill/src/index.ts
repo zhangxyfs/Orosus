@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,8 @@ import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
  * description（缺省空串）/when_to_use 简单说明/disable-model-invocation 可选——m4-7 T2；未知键丢弃，宽松派）。
  * 贡献：promptSection（可用技能摘要，order 0 区，4000 字符预算超限降级仅名——T3）+
  * 工具 skill__load（读全文；执行时重扫 + 运行时去重——T4）+ 服务 skill.catalog / skill.resetLoaded
- * （宿主斜杠菜单与 /settings 管理面 / compact 后去重集重置——服务倒挂先例 websearch:endpoints）。
+ * （宿主斜杠菜单与 /settings 管理面 / compact 后去重集重置——服务倒挂先例 websearch:endpoints）
+ * + 具名导出 seedBundledSkills（引导弹出时刻出厂件固化到 ~/.orosus/skills——宿主首启接线）。
  */
 
 interface Skill {
@@ -153,8 +154,46 @@ export const configSchema = z.object({
 });
 
 /** 第五轨内置目录（m4-7 T11）：skill 模块自带 bundled/ 随包分发（包根下，src 的上一级）——
- *  优先级垫底（低于 ~/.agents，skillTracks 首位），用户/项目同名技能可覆盖内置版（九仓惯例）。 */
+ *  优先级垫底（低于 ~/.agents，skillTracks 首位），用户/项目同名技能可覆盖内置版（九仓惯例）。
+ *  铁律（2026-10-01 用户拍板）：本目录只读——宁可出厂技能找不到（打包断链静默降级）也绝不向此
+ *  目录落任何文件；一切拷贝单向流出（固化 targetDir 只会是用户目录），停用态写 config 不写这里。 */
 const bundledSkillsDir = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "bundled");
+
+/** 出厂技能固化（2026-10-01 拍板「引导弹出时把预置技能拷到 ~/.orosus/skills/」）：bundled/ 出厂件整目录
+ *  拷入目标（宿主接线在引导弹窗弹出时刻——首启初始化即解除对 bundled 轨相对定位的路径依赖：打包布局
+ *  变化会让 bundled 轨静默断链〔scanSkills 对缺失目录只 continue〕，固化后用户目录里的件不随打包走样）。
+ *  同名 SKILL.md 已在目标 → 整技跳过（用户件优先，与轨道优先级同向；删掉固化件 bundled 原件重新浮出）；
+ *  整目录拷（含 references/ 等附属件——skill__load 首行带 file 路径后相对路径按技能目录解析）；
+ *  逐件容错（MI-09 同款纪律）：单件失败进 failed 不拖垮其余；源目录缺失/不可读 = 无件可固化，静默空回。 */
+export function seedBundledSkills(
+  targetDir: string = join(orosusHome(), "skills"),
+  sourceDir: string = bundledSkillsDir(),
+): { copied: string[]; skipped: string[]; failed: Array<{ name: string; error: string }> } {
+  const copied: string[] = [];
+  const skipped: string[] = [];
+  const failed: Array<{ name: string; error: string }> = [];
+  let subs: string[];
+  try {
+    if (!existsSync(sourceDir)) return { copied, skipped, failed };
+    subs = readdirSync(sourceDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    return { copied, skipped, failed };
+  }
+  for (const sub of subs) {
+    try {
+      if (!existsSync(join(sourceDir, sub, "SKILL.md"))) continue; // 与 scanSkills 同口径：缺 SKILL.md 的目录不是技能
+      if (existsSync(join(targetDir, sub, "SKILL.md"))) {
+        skipped.push(sub);
+        continue;
+      }
+      cpSync(join(sourceDir, sub), join(targetDir, sub), { recursive: true });
+      copied.push(sub);
+    } catch (err) {
+      failed.push({ name: sub, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { copied, skipped, failed };
+}
 
 /** 缺省目录解析（config 注入可全覆盖——测试注轨不走真实 home/cwd）。 */
 function resolveDirs(cfg: z.infer<typeof configSchema> | undefined): {

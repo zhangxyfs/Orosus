@@ -1,6 +1,7 @@
 import { join, dirname } from "node:path";
 import { loadConfig, writeSectionKey, sectionPath } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
+import { seedBundledSkills } from "@orosus/skill";
 import { fg, dim } from "./theme.ts";
 import { truncateToWidth, visibleWidth } from "./tui/width.ts";
 
@@ -42,6 +43,26 @@ export function toggleSkillDisabled(name: string, filePath = join(orosusHome(), 
   const target = sectionPath("skill", { userConfig: filePath, modulesDir: join(dirname(filePath), "modules.d"), isModule: () => true });
   writeSectionKey(target, "skill", "disabled", next.length === 0 ? null : next);
   return nowDisabled;
+}
+
+/** 出厂技能固化接线（2026-10-01 拍板「引导页弹出时把预置技能拷到 ~/.orosus/skills/ 下」）：bundled 轨锚
+ *  模块文件相对定位（import.meta.url → ../bundled，源码直跑期成立；将来打包布局变化即静默断链——
+ *  scanSkills 对缺失目录只 continue），弹出时刻固化一份到用户级目录，路径依赖一次性解除。
+ *  目标取用户级而非项目级：引导可能在任意目录触发，往项目 .orosus/ 撒十份出厂件会污染 git 仓库。
+ *  提示形态：失败走 notify（全屏 = 引导弹窗外浮层——CM-12③ 同款，不与 SW-20/degraded 话术相顶）；
+ *  成功仅 fresh 给 toast（broken/degraded 复弹已有话术占位；固化幂等——同名跳过，复弹通常零拷贝）。 */
+export function seedFactorySkills(opts: {
+  fresh: boolean;
+  notify: (msg: string) => void;
+  showToast: (msg: string) => void;
+  targetDir?: string;
+}): void {
+  const r = seedBundledSkills(opts.targetDir);
+  if (r.failed.length > 0) {
+    opts.notify(`出厂技能安装失败 ${r.failed.length} 件：${r.failed.map((f) => f.name).join("、")}`);
+    return;
+  }
+  if (opts.fresh && r.copied.length > 0) opts.showToast(`已安装 ${r.copied.length} 件出厂技能到 ~/.orosus/skills`);
 }
 
 /** 范围三值映射（原型图 3 要点：括号内文字照写，禁缩写）。 */

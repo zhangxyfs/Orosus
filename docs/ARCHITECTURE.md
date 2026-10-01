@@ -996,7 +996,7 @@ Shift+Tab 循环 `ask-risky → ask-always → never`（PERM_CYCLE，main.ts:149
 3. **后台作业超时缺失**：tool-shell 后台作业 v1 无超时（前台 120s 帽）；长期挂起作业占槽且依赖宿主退出收口，建议加 idle/total 双保险丝。
 4. **loop 投影 O(n²)**：每 step 全量 deriveMessages 重投影（loop.ts:143 自注 M1 已知）；长会话 + 大窗口下是最大计算热点，可增量投影或缓存投影结果按 seq 失效。
 5. **Windows O_NOFOLLOW 缺失**：jsonl 追加降级 "a" 模式（hardeningNote 审计已留）；win32 平台加固依赖未来 Node 支持，安全敏感场景可文档披露。
-6. **网络·MCP 面板占位**：fullapp.ts:2304「健康探测数据源未就绪」——MCP server 状态页尚无数据源，建议接 mcp/manifest digest 做健康面。
+6. **网络·MCP 面板**（2026-10-01 已填实销账）：右上卡组第 2 页落地真数据——代理态（批 D proxy-env 语义）+ 模型服务信息行（端点域名 + 末次请求耗时，`assistant/message.durationMs` 带内）+ mcp.catalog 五态连接列表（首连耗时 `McpCatalogRow.connectMs` 被动计时）。主动健康探测（出网/DNS 周期 ping）拍板不做——维持 2026-09-20 TUI 批「另议」缺位口径，被动真值已覆盖展示需求。
 7. **approval deny 规则 fail-open latent 风险**：deny 规则 + 无 matchesRule 的带参工具返回 indeterminate → 强制询问（当前安全），但外部工具若声明不当存在 latent 面；建议契约层 lint 提示。
 8. **grep 无索引全根重扫**：每次调用 `**/*` 全量扫描；大仓可考虑 mtime 增量或 ripgrep 外挂（需平台适配评估）。
 9. **elision/摘要文案与 /context 退役遗留**：/context 内建仍注册但已退役出补全清单——要么正式移除要么恢复文档口径，避免双口径困惑。
