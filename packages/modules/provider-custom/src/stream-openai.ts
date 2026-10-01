@@ -5,6 +5,7 @@ import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 import { gateImagesByVision } from "./visiongate.ts";
 import { prepareImagesForWire } from "./mediapipe.ts";
+import { applyMediaBudget } from "./mediabudget.ts";
 
 /** 响应里的服务端搜索标记抽取（M4-3 T1b——2026-09-24 spike 无真样本，按各家已公开形态宽进：
  *  ① zhipu 文档字段 choices[].message/delta.web_search 数组（{title,url,content?} 项）；
@@ -32,7 +33,7 @@ function extractServerSearch(obj: Record<string, unknown>): Chunk | undefined {
 }
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string; /** m5-media F6：端点认的图片 mime 白名单（缺省四白名单——见 DEFAULT_ACCEPTED_IMAGE_MIMES） */ acceptedImageMimes?: readonly string[] }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -72,7 +73,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           },
           body: JSON.stringify({
             model: request.model,
-            messages: toOpenAIMessages(request.system, await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile)), opts.toolImages ?? "bridge"), // m5-media F4+F5：门控（非图模型剥图占位）→ 发送副本（超尺寸降采样，worker）
+            messages: toOpenAIMessages(request.system, applyMediaBudget(await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile)), { acceptedMimes: opts.acceptedImageMimes }), opts.toolImages ?? "bridge"), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本（worker 降采样）→ mime 门控 → 预算降级（老图换标签）
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
