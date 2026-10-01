@@ -23,6 +23,9 @@ export const configSchema = z.object({
       // T0 spike 2026-10-01 实证；inline=kimi keep_parts 私有扩展形态，确证端点用；placeholder=图不送文字占位）。
       // anthropic 族原生 tool_result 图块，本键无效。
       toolImages: z.enum(["inline", "bridge", "placeholder"]).default("bridge"),
+      // m5-media F6：端点认的图片 mime（缺省四白名单全收——png/jpeg/webp/gif 在两协议族都是标准件；
+      // 端点确不认某格式时收紧，不认的格式换文字标签不发送）
+      acceptedImageMimes: z.array(z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"])).optional(),
     }),
   ).default({}), // 空表合法（模块文档 §2）——section 整体缺失（全新安装）也激活零槽，/provider 配置入口在任何配置状态下可用
 });
@@ -75,7 +78,7 @@ export function createAdapters(
     const glue = { apiKey: p.apiKey, baseUrl: p.baseUrl, ...(fetchImpl !== undefined ? { fetchImpl } : {}) };
     const isAnthropic = p.type === "anthropic";
     const live = isAnthropic ? anthropicListModels(glue) : openaiListModels(glue); // 模型发现 T2：端点真实清单（尽力能力）
-    let stream = isAnthropic ? anthropicStream(glue) : openaiStream({ ...glue, toolImages: p.toolImages ?? "bridge" }); // m5-media F3：openai 族带三态（缺省 bridge；anthropic 原生图块无需）
+    let stream = isAnthropic ? anthropicStream({ ...glue, ...(p.acceptedImageMimes !== undefined ? { acceptedImageMimes: p.acceptedImageMimes } : {}) }) : openaiStream({ ...glue, toolImages: p.toolImages ?? "bridge", ...(p.acceptedImageMimes !== undefined ? { acceptedImageMimes: p.acceptedImageMimes } : {}) }); // m5-media F3/F6：openai 三态 + 两族 mime 白名单
     // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：openai 档槽的 webSearch 请求（tool-web 搜索
     // 辅助调用）命中改道服务 → 改发 {anthropicRoot}/v1/messages（同 key 双头），chat 请求零变化；
     // anthropic 档槽天然走 web_search_20250305 无需服务。路由 = 本模块行为，端点知识 = tool-web 服务

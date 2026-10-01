@@ -882,16 +882,15 @@ describe("v3 头尾预算选择（T1：kimi selectCompactionUserMessages 改编�
     expect(sel.omittedEntries).toBe(6); // MI-12：totalEntries 6 − 保留 0（与旧口径同值）
     expect(sel.elided).toBe(true);
   });
-  it("⑤ 图片按 1000 token/张占位估算（estimateTokens 同口径）", () => {
+  it("⑤ 图片按固定字符估（m5-media D9：ESTIMATED_IMAGE_CHARS=4800 → 1200 token/张——pi 口径；工具结果图同计）", () => {
     const imgUser: ModelMessage = { role: "user", content: [
       { kind: "text", text: "abcd" },
       { kind: "image", path: "a.png", mimeType: "image/png" },
       { kind: "image", path: "b.png", mimeType: "image/png" },
     ] };
-    expect(estimateTokens([imgUser])).toBe(2001); // 1 + 2×1000
-    const users = [{ at: 0, m: imgUser }, { at: 1, m: big(1) }];
-    const sel = selectUserMessages(users, { max: 2002, head: 0, totalEntries: 2 });
-    expect(sel.keepUserAt).toEqual([0, 1]); // 2001 + 1 ≤ 2002 全保留
+    expect(estimateTokens([imgUser])).toBe(2401); // 1 + 2×1200
+    const imgTool: ModelMessage = { role: "toolResult", callId: "c", output: "x", isError: false, parts: [{ kind: "image", path: "c.png", mimeType: "image/png" }] };
+    expect(estimateTokens([imgTool])).toBe(1201); // 1（output "x"）+ 1×1200（F1 parts 图计入）
   });
   it("⑥ 下标集升序且为投影下标（非用户序号）——隔着 assistant/tool 也不受影响", () => {
     const msgs = [u("问1"), a("答1"), u("问2"), tr("c1", 10), u("问3")];

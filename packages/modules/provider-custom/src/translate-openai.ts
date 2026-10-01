@@ -53,20 +53,23 @@ export function toOpenAIMessages(system: string, messages: ModelMessage[], toolI
   for (const m of messages) {
     if (m.role === "toolResult") {
       const images = (m.parts ?? []).filter((p): p is ImagePart => p.kind === "image");
+      // 文本部件透传（m5-media F7）：预算降级/门控换装的 <image path> 标签活在 parts 里——拼进 output 同发
+      const extra = (m.parts ?? []).filter((p): p is { kind: "text"; text: string } => p.kind === "text").map((p) => p.text).join("\n");
+      const output = extra === "" ? m.output : (m.output === "" ? extra : `${m.output}\n${extra}`);
       if (images.length === 0) {
-        out.push({ role: "tool", tool_call_id: m.callId, content: m.output });
+        out.push({ role: "tool", tool_call_id: m.callId, content: output });
         continue;
       }
       if (toolImages === "inline") {
-        const parts: Record<string, unknown>[] = m.output !== "" ? [{ type: "text", text: m.output }] : [];
+        const parts: Record<string, unknown>[] = output !== "" ? [{ type: "text", text: output }] : [];
         for (const p of images) parts.push(imageToWire(p));
         out.push({ role: "tool", tool_call_id: m.callId, content: parts });
       } else if (toolImages === "placeholder") {
         const notes = images.map((p) => `[图片 ${p.path} 未随请求发送——本端点工具消息不支持图片]`).join("\n");
-        out.push({ role: "tool", tool_call_id: m.callId, content: m.output === "" ? notes : `${m.output}\n${notes}` });
+        out.push({ role: "tool", tool_call_id: m.callId, content: output === "" ? notes : `${output}\n${notes}` });
       } else {
         for (const p of images) pendingImages.push(imageToWire(p)); // 缺失文件的降级占位也进 flush 消息（诚实可见）
-        out.push({ role: "tool", tool_call_id: m.callId, content: m.output });
+        out.push({ role: "tool", tool_call_id: m.callId, content: output });
       }
       continue;
     }

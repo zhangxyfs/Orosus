@@ -116,9 +116,12 @@ export function toAnthropicMessages(messages: ModelMessage[]): ApiMessage[] {
   for (const m of messages) {
     if (m.role === "toolResult") {
       const images = (m.parts ?? []).filter((p): p is ImagePart => p.kind === "image");
-      let content: string | ApiBlock[] = m.output;
+      // 文本部件透传（m5-media F7）：预算降级/门控换装的 <image path> 标签拼进 output 同发
+      const extra = (m.parts ?? []).filter((p): p is { kind: "text"; text: string } => p.kind === "text").map((p) => p.text).join("\n");
+      const output = extra === "" ? m.output : (m.output === "" ? extra : `${m.output}\n${extra}`);
+      let content: string | ApiBlock[] = output;
       if (images.length > 0) {
-        const blocks: ApiBlock[] = m.output !== "" ? [{ type: "text", text: m.output }] : [];
+        const blocks: ApiBlock[] = output !== "" ? [{ type: "text", text: output }] : [];
         for (const p of images) blocks.push(imageBlockOrPlaceholder(p));
         content = blocks;
       }

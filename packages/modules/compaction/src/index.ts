@@ -17,6 +17,10 @@ export const configSchema = z.object({
   rapidRefillLimit: z.number().int().positive().default(3).describe("refill 连续 N 次 → 自动压缩本会话停手"),
 });
 
+/** 图按固定字符估算（m5-media D9，pi ESTIMATED_IMAGE_CHARS=4800 同源）：阈值判定启发式——降采样后的
+ *  视觉图换算 token ≈ 1200（/4 字符口径）；工具结果图（m5-media F1 toolResult.parts）同口径计入。 */
+export const ESTIMATED_IMAGE_CHARS = 4800;
+
 /** token 估算（启发式，只用于阈值触发，不进日志事实）：CJK 按近似 1:1，其余 4 字符/token。 */
 export function estimateTokens(messages: ModelMessage[]): number {
   let tokens = 0;
@@ -24,15 +28,19 @@ export function estimateTokens(messages: ModelMessage[]): number {
     const cjk = (s.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) ?? []).length;
     return cjk + Math.ceil(Math.max(0, s.length - cjk) / 4);
   };
+  const imageTokens = Math.ceil(ESTIMATED_IMAGE_CHARS / 4);
   for (const m of messages) {
     for (const p of "content" in m ? m.content : []) { // toolResult 角色无 content 字段
       if (p.kind === "text") tokens += textTokens(p.text);
-      else tokens += 1000; // image 粗估（M4-2.5 T5 设计空白）：阈值判定启发式，精确 vision 计费无契约面——留待真实账单校准
+      else tokens += imageTokens; // 图按固定字符估（ESTIMATED_IMAGE_CHARS——比 M4-2.5 裸 1000 占位贴真实账单）
     }
     if (m.role === "assistant" && m.toolCalls !== undefined) {
       tokens += m.toolCalls.reduce((n, tc) => n + textTokens(JSON.stringify(tc.args ?? {})), 0);
     }
-    if (m.role === "toolResult") tokens += textTokens(m.output ?? "");
+    if (m.role === "toolResult") {
+      tokens += textTokens(m.output ?? "");
+      for (const p of m.parts ?? []) if (p.kind === "image") tokens += imageTokens; // m5-media F1/D9：工具结果图计入
+    }
   }
   return tokens;
 }
