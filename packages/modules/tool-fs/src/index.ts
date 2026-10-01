@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
 
-/** fs 能力的本地实现（规则 1 提供者）。所有路径解析限制在根目录内。 */
+/** fs 能力的本地实现（规则 1 提供者）。**读面放开（2026-10-01 批 C 方案一拍板：读任意绝对路径——
+ *  对标 ZCode/kimi 等六仓主流「读写分开治理」）；写面仍限根目录内**（越根与符号链接外指照拦）。 */
 class LocalFs implements Fs {
   // 显式字段赋值，刻意不用 constructor 参数属性：参数属性是非可擦除语法，node --experimental-strip-types
   // （CLI 的运行方式，Task 21）加载即抛 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX；vitest 走 esbuild 全转换测不出
@@ -16,10 +17,11 @@ class LocalFs implements Fs {
     this.root = realpathSync(root);
   }
 
-  private safe(path: string): string {
+  /** 写面安全检查（方案一保留项）：词法越根 + 符号链接外指双拦——写仍限根内，防用链接绕过写边界。 */
+  private safeWrite(path: string): string {
     const abs = resolve(this.root, path);
     if (abs !== this.root && !abs.startsWith(this.root + sep)) {
-      throw new Error(`路径越出根目录：${path}`);
+      throw new Error(`路径越出根目录：${path}（写面仍限工作目录内——读面已放开绝对路径，写没有）`);
     }
     // MB-02：词法前缀挡不住工作区内符号链接外指（readFileSync/writeFileSync 跟随链接读写根外文件）——
     // realpath 后复检。新建文件（目标不存在）以最近存在祖先作代表。
@@ -46,9 +48,10 @@ class LocalFs implements Fs {
     return abs;
   }
 
-  /** safe 的只读公开（M4-2.5 T0：mtime 去重需要 statSync 绝对路径——沙箱语义不变）。 */
+  /** 读面路径归一（方案一：读放开——不再越根拦截/链接检查，仅词法绝对化）。
+   *  写前比对状态键、Access 声明路径与 read 全走这里（统一绝对路径口径，MB-03 不变）。 */
   resolveAbs(path: string): string {
-    return this.safe(path);
+    return resolve(this.root, path);
   }
 
   /** 根的绝对路径（CT-04 2026-09-28 code review）：glob/grep 的「整根读」声明用字面绝对路径，
@@ -58,22 +61,42 @@ class LocalFs implements Fs {
   }
 
   read(path: string): Promise<string> {
-    return Promise.resolve(readFileSync(this.safe(path), "utf8"));
+    return Promise.resolve(readFileSync(this.resolveAbs(path), "utf8"));
   }
 
   write(path: string, content: string): Promise<void> {
-    writeFileSync(this.safe(path), content, "utf8");
+    writeFileSync(this.safeWrite(path), content, "utf8");
     return Promise.resolve();
   }
 
-  /** glob 匹配（T16）：自实现递归走查 + 模式转正则（避免 fs.glob 类型重载纠缠）；结果经根目录沙箱过滤。 */
+  /** glob 走查基切分（方案一：pattern 支持绝对路径/.. 直指根外）：首个含通配符的段之前 = 走查基、
+   *  之后 = 相对基的匹配模式；无通配符（纯字面路径）literal——走查退化为存在性检查。 */
+  static splitPattern(root: string, pattern: string): { base: string; rest: string; literal: boolean } {
+    const abs = resolve(root, pattern).replace(/\\/g, "/");
+    const segs = abs.split("/");
+    const gi = segs.findIndex((s) => /[*?{[]/.test(s));
+    if (gi < 0) return { base: resolve(abs), rest: "", literal: true };
+    const basePosix = /^[a-zA-Z]:$/.test(segs[0]!) && gi === 1 ? `${segs[0]}/` : segs.slice(0, gi).join("/"); // win 裸盘根特判（"D:" ≠ "D:/"）
+    return { base: resolve(basePosix), rest: segs.slice(gi).join("/"), literal: false }; // base 归原生分隔符——与 resolveAbs/Access 声明同口径
+  }
+
+  /** glob 匹配（T16）：自实现递归走查 + 模式转正则（避免 fs.glob 类型重载纠缠）。
+   *  方案一（2026-10-01）：走查基随 pattern 走（根外绝对 pattern 即他仓目录），不再越根拦截；
+   *  结果恒绝对路径。 */
   async globFiles(pattern: string): Promise<string[]> {
-    this.safe(pattern.replace(/[*?{[]/g, "x")); // 越出根的 pattern 在占位化后仍会被 safe 拦下
-    const re = globToRegExp(pattern);
+    const { base, rest, literal } = LocalFs.splitPattern(this.root, pattern);
+    if (literal) {
+      try {
+        return statSync(base).isFile() ? [base] : [];
+      } catch {
+        return [];
+      }
+    }
+    const re = globToRegExp(rest);
     const skip = new Set(["node_modules", ".git"]);
     const out: string[] = [];
     const walk = (rel: string): void => {
-      const abs = join(this.root, rel);
+      const abs = join(base, rel);
       let entries;
       try {
         entries = readdirSync(abs, { withFileTypes: true });
@@ -85,7 +108,7 @@ class LocalFs implements Fs {
         const child = rel === "" ? e.name : `${rel}/${e.name}`;
         // MB-10（2026-09-28 code review P3）：只推文件——目录不进结果（description 的 "file paths only" 落实；
         // Dirent.isFile() 对符号链接为 false（lstat 语义），链接目标不跟随——与沙箱 realpath 口径不冲突）
-        if (e.isFile() && re.test(child)) out.push(this.safe(child));
+        if (e.isFile() && re.test(child)) out.push(join(base, child));
         if (e.isDirectory()) walk(child);
       }
     };
@@ -219,7 +242,42 @@ const GREP_MAX_FILE_BYTES = 1_048_576;
 /** MB-09：grep 命中条数上限——宽匹配（pattern="."）不再攒出数十万条命中与拼接串；达限停扫，工具层标注截断。 */
 const GREP_MAX_MATCHES = 200;
 
-/** glob 模式 → 锚定正则：** 跨段、* 单段内、? 单字符（相对根的 posix 风格路径）。 */
+/** ---- 敏感文件黑名单（2026-10-01 批 C 拍板「学 kimi」，逐项照抄 kimi-code path-access.ts:15-81）----
+ *  读面放开后的防线：.env 系 / SSH 私钥系 / credentials 系命中 → read 带内拒绝（审批面暂无「敏感读询问」
+ *  语义——Access 只有四形态、工具无法主动触发弹问，v1 以硬拒+放行指引近似 kimi 的 ask，契约窗口再升级）；
+ *  glob/grep 结果命中 → 静默过滤并计数（kimi globTool.ts:233-240 / grepTool.ts:658-662 同款）。 */
+const SENSITIVE_BASENAMES = new Set([".env", "id_rsa", "id_ed25519", "id_ecdsa", "credentials"]);
+const SENSITIVE_NAME_PREFIXES = ["id_rsa", "id_ed25519", "id_ecdsa", "credentials"];
+const SENSITIVE_DOT_VARIANTS = new Set([".bak", ".backup", ".copy", ".disabled", ".key", ".old", ".orig", ".pem", ".save", ".tmp"]);
+const ENV_EXEMPTIONS = new Set([".env.example", ".env.sample", ".env.template"]);
+const PUBLIC_KEY_BASENAMES = new Set(["id_rsa.pub", "id_ed25519.pub", "id_ecdsa.pub"]);
+const SENSITIVE_PATH_SUFFIXES = [".aws/credentials", ".gcp/credentials"];
+
+/** 敏感文件判定（kimi isSensitivePath 同款口径，全程小写比较）：basename 精确命中 / .env.* 前缀 /
+ *  密钥名连接变体（-xxx、_xxx、.bak/.pem 等点变体；公钥 .pub 豁免）/ .aws|.gcp credentials 路径后缀。 */
+export function isSensitivePath(path: string): boolean {
+  const name = basename(path).toLowerCase();
+  const full = path.toLowerCase().replace(/\\/g, "/");
+  if (ENV_EXEMPTIONS.has(name) || PUBLIC_KEY_BASENAMES.has(name)) return false;
+  if (SENSITIVE_BASENAMES.has(name)) return true;
+  if (name.startsWith(".env.")) return true;
+  for (const p of SENSITIVE_NAME_PREFIXES) {
+    if (name.length > p.length && name.startsWith(p)) {
+      const suffix = name.slice(p.length);
+      const next = suffix[0]!;
+      if (next === "-" || next === "_") return true;
+      if (next === "." && SENSITIVE_DOT_VARIANTS.has(suffix)) return true;
+    }
+  }
+  for (const sfx of SENSITIVE_PATH_SUFFIXES) {
+    if (full.endsWith(`/${sfx}`) || full.includes(`/${sfx}/`)) return true;
+  }
+  return false;
+}
+
+const SENSITIVE_DENY_NOTE = "敏感文件（.env/密钥/凭证类）默认拒绝读取——防密钥泄漏进模型上下文。如任务确需此文件内容，请询问用户、由用户直接提供";
+
+/** glob 模式 → 锚定正则：** 跨段、* 单段内、? 单字符（相对走查基的 posix 风格路径）。 */
 function globToRegExp(pattern: string): RegExp {
   const segs = pattern.split("/");
   const body = segs.map((seg) => {
@@ -234,7 +292,7 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${anchored}$`);
 }
 
-const pathParam = { path: z.string().describe("相对工作目录的路径") };
+const pathParam = { path: z.string().describe("相对工作目录的路径（read 也接受绝对路径——可读工作目录外的文件；写仍限工作目录内）") };
 
 /** read 缺省窗口（M4-2.5 T0，opencode/pi 同款）：模型得连贯首段+续读提示；日志侧坍缩靠 mtime 去重。 */
 const READ_DEFAULT_WINDOW = 2000;
@@ -310,7 +368,7 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
   const lastRead = new Map<string, number>();
   return defineTool({
     name: "tool-fs__read",
-    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nParameters:\n  path: Relative path to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFiles larger than 1MB are rejected (use grep to locate content or shell tools to read sections); binary files are rejected.\nLines longer than 8KB are truncated.",
+    description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nAbsolute paths are accepted and may point outside the working directory (e.g. other local repos the user referenced); writes stay confined to the working directory.\nSensitive files (.env / SSH keys / credentials, incl. variants) are denied by default — ask the user to provide such content directly if truly needed.\nParameters:\n  path: Relative path (or absolute path) to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFiles larger than 1MB are rejected (use grep to locate content or shell tools to read sections); binary files are rejected.\nLines longer than 8KB are truncated.",
     parameters: z.object({
       ...pathParam,
       offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
@@ -326,6 +384,9 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
         execute: async () => {
           try {
             const abs = fs.resolveAbs(path); // MB-03：状态键统一绝对路径（拼写变体同键）
+            if (isSensitivePath(abs)) {
+              return { output: `已拒绝读取 ${path}：${SENSITIVE_DENY_NOTE}`, isError: true };
+            }
             const st = statSync(abs);
             const key = `${abs}:${offset ?? 1}:${limit ?? "d"}`; // MB-03：去重键以归一路径为基
             if (lastRead.get(key) === st.mtimeMs) {
@@ -477,24 +538,27 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
 function globTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__glob",
-    description: "Find files by glob pattern. Results are file paths only (directories excluded).\nUse this tool — not shell find or ls — to discover files by name pattern.\nSkips node_modules and .git directories only — other ignore rules are NOT applied (dist/ and coverage/ are traversed). head_limit to cap results (default 100).",
+    description: "Find files by glob pattern. Results are file paths only (directories excluded).\nUse this tool — not shell find or ls — to discover files by name pattern.\nPatterns resolve against the working directory; absolute-path patterns (or ../) target directories outside it — the walk starts at the longest glob-free directory prefix (e.g. D:/other/repo/src/**/*.ts).\nSensitive files (.env / SSH keys / credentials) are filtered out of results.\nSkips node_modules and .git directories only — other ignore rules are NOT applied (dist/ and coverage/ are traversed). head_limit to cap results (default 100).",
     parameters: z.object({
-      pattern: z.string().describe("glob 模式"),
+      pattern: z.string().describe("glob 模式（相对工作目录，或绝对路径直指他仓）"),
       head_limit: z.number().int().positive().optional().describe("返回的最大条数（缺省 100）"),
     }),
     resolveExecution: async (input) => {
       const { pattern, head_limit } = input as { pattern: string; head_limit?: number };
       return {
-        // CT-04：pattern 不是文件系统路径——按「整根读」声明字面绝对路径（根），调度器前缀比较恢复真实语义
-        accesses: [Access.fsRead(fs.absRoot())],
+        // CT-04 + 方案一：声明随走查基如实——根内 pattern 基 = 根（或其子目录）、根外绝对 pattern 基 = 外部目录
+        accesses: [Access.fsRead(LocalFs.splitPattern(fs.absRoot(), pattern).base)],
         approvalRule: "tool-fs__glob",
         execute: async () => {
           try {
-            const files = await fs.globFiles(pattern);
+            const all = await fs.globFiles(pattern);
+            const kept = all.filter((p) => !isSensitivePath(p));
+            const filtered = all.length - kept.length;
             const limit = head_limit ?? 100;
-            const shown = files.slice(0, limit);
-            const footer = files.length > limit ? `\n(共 ${files.length} 条，仅显示前 ${limit} 条)` : "";
-            return { output: (shown.length > 0 ? shown.join("\n") : "（无匹配）") + footer, isError: false };
+            const shown = kept.slice(0, limit);
+            const footer = kept.length > limit ? `\n(共 ${kept.length} 条，仅显示前 ${limit} 条)` : "";
+            const note = filtered > 0 ? `\n(已过滤 ${filtered} 个敏感文件——.env/密钥/凭证类不进结果)` : "";
+            return { output: (shown.length > 0 ? shown.join("\n") : "（无匹配）") + footer + note, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
@@ -507,7 +571,7 @@ function globTool(fs: LocalFs): Tool {
 function grepTool(fs: LocalFs): Tool {
   return defineTool({
     name: "tool-fs__grep",
-    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.\nFiles over 1MB are skipped; matches are capped at 200 (truncated with a note — narrow the pattern).",
+    description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\nScans the working directory tree (to search another local repo, use glob with an absolute pattern there, or read its files directly).\nSensitive files (.env / SSH keys / credentials) are excluded from results.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.\nFiles over 1MB are skipped; matches are capped at 200 (truncated with a note — narrow the pattern).",
     parameters: z.object({
       pattern: z.string().describe("JavaScript 正则"),
       output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
@@ -520,7 +584,9 @@ function grepTool(fs: LocalFs): Tool {
         approvalRule: "tool-fs__grep",
         execute: async () => {
           try {
-            const { matches, truncated } = await fs.grepMatches(pattern);
+            const { matches: all, truncated } = await fs.grepMatches(pattern);
+            const matches = all.filter((m) => !isSensitivePath(m.file));
+            const filtered = new Set(all.filter((m) => isSensitivePath(m.file)).map((m) => m.file)).size;
             let body: string;
             if (output_mode === "files_with_matches") {
               body = [...new Set(matches.map((m) => m.file))].join("\n");
@@ -535,7 +601,8 @@ function grepTool(fs: LocalFs): Tool {
             const note = truncated
               ? `\n(命中过多：已达 ${GREP_MAX_MATCHES} 条上限，仅保留先扫到的部分——请收窄 pattern 或改用更精确的定位)`
               : "";
-            return { output: (body !== "" ? body : "（无匹配）") + note, isError: false };
+            const sensNote = filtered > 0 ? `\n(已跳过 ${filtered} 个敏感文件——.env/密钥/凭证类不进结果)` : "";
+            return { output: (body !== "" ? body : "（无匹配）") + note + sensNote, isError: false };
           } catch (err) {
             return { output: String(err instanceof Error ? err.message : err), isError: true };
           }
