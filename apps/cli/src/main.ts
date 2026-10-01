@@ -737,7 +737,7 @@ let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdo
 setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
 // 回合结束提示音（2026-09-30 用户拍板）：[tui] bell 缺省开——完成 1 响/中断 2 响/错误 3 响（bell.ts）；
 // 同 latex 式启动读一次。响铃只认 TTY（--print 管道静默），静音另一路 = 终端自身 bell 设置。
-const bellMode = resolveBellMode(configFaceTuiBell()); // 2026-10-01 三态：bel（缺省）/chime（自带音频走声卡）/off
+const bellMode = resolveBellMode(configFaceTuiBell()); // 2026-10-01 三态：chime（缺省——开箱即有完成音）/bel/off
 // 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见。
 // 实现抽 tui-config.ts（CM-01 修复：读盘剥 BOM + 解析失败拒写防整盘覆写毁配置）。
 

@@ -14,12 +14,13 @@ export const TURN_END_SOUND = fileURLToPath(new URL("./assets/sounds/turn-end.wa
 export type BellMode = "bel" | "chime" | "off";
 
 /** [tui] bell 解析：三态字符串 + 旧布尔兼容（true = bel / false = off——bell.ts 首版语义）；
- *  缺省与非法值回落 bel（零成本老行为，用户显式选 chime 才换）。 */
+ *  缺省与非法值回落 chime（2026-10-01 用户拍板「缺省得用 chime」——开箱即有完成音，
+ *  想回老行为显式写 bel）。 */
 export function resolveBellMode(cfgBell: unknown): BellMode {
   if (cfgBell === true) return "bel";
   if (cfgBell === false) return "off";
   if (cfgBell === "bel" || cfgBell === "chime" || cfgBell === "off") return cfgBell;
-  return "bel";
+  return "chime";
 }
 
 /** 可听终态（与 bell.ts bellCount 的非零档同集）：未知终态不响。 */
