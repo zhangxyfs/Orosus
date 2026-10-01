@@ -3,6 +3,7 @@ import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
 import { mapEvent, parseSseBlock, thinkingParamFor, toAnthropicMessages, type SseState } from "./translate-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 import { gateImagesByVision } from "./visiongate.ts";
+import { prepareImagesForWire } from "./mediapipe.ts";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 8192;
@@ -90,7 +91,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             model: request.model,
             max_tokens: maxTokens,
             system: request.system,
-            messages: toAnthropicMessages(gateImagesByVision(request.model, request.messages, opts.catalogFile)), // m5-media F4：非图模型先剥图占位（true/undefined 放行）
+            messages: toAnthropicMessages(await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile))), // m5-media F4+F5：门控（非图模型剥图占位）→ 发送副本（超尺寸降采样，worker）
             tools: [
               ...request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
               // M4-3 T1b：webSearch=true → 追加 Anthropic 服务端搜索工具（文档形态 web_search_20250305；

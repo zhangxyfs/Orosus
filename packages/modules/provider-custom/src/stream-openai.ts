@@ -4,6 +4,7 @@ import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState, type
 import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 import { gateImagesByVision } from "./visiongate.ts";
+import { prepareImagesForWire } from "./mediapipe.ts";
 
 /** 响应里的服务端搜索标记抽取（M4-3 T1b——2026-09-24 spike 无真样本，按各家已公开形态宽进：
  *  ① zhipu 文档字段 choices[].message/delta.web_search 数组（{title,url,content?} 项）；
@@ -71,7 +72,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           },
           body: JSON.stringify({
             model: request.model,
-            messages: toOpenAIMessages(request.system, gateImagesByVision(request.model, request.messages, opts.catalogFile), opts.toolImages ?? "bridge"), // m5-media F4：非图模型先剥图占位（true/undefined 放行）
+            messages: toOpenAIMessages(request.system, await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile)), opts.toolImages ?? "bridge"), // m5-media F4+F5：门控（非图模型剥图占位）→ 发送副本（超尺寸降采样，worker）
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
