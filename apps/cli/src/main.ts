@@ -64,6 +64,11 @@ import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag, resolveBellFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
+import { maybeEnableEnvProxy } from "./proxy-env.ts";
+
+// 批 D（2026-10-01 拍板 A+B）：代理环境自动接线——机理与副作用披露见 proxy-env.ts；
+// 必须赶在任何 fetch 发生前（undici 全局分发器首用时读取 NODE_USE_ENV_PROXY）
+maybeEnableEnvProxy();
 
 /** CM-06②（2026-09-28 code review）：console 输出在管道/重定向下是异步写——`process.exit` 立即退可能
  *  赶在缓冲 flush 之前截断尾部输出（provider list 全量目录恰是大输出；--print 路径的 exitCode 自然退出
