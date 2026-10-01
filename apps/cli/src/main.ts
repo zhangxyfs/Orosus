@@ -29,6 +29,7 @@ import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
 import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE, registerToolLabels } from "./render.ts";
 import { ringTurnBell } from "./bell.ts";
+import { resolveBellMode, playTurnChime } from "./chime.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type SlashItem } from "./tui/fullapp.ts";
@@ -61,7 +62,7 @@ import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
-import { resolveTuiMode, resolveLatexFlag, resolveBellFlag, formatBytes, dirUsage } from "./tuicfg.ts";
+import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
 import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
 import { maybeEnableEnvProxy } from "./proxy-env.ts";
@@ -736,7 +737,7 @@ let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdo
 setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
 // 回合结束提示音（2026-09-30 用户拍板）：[tui] bell 缺省开——完成 1 响/中断 2 响/错误 3 响（bell.ts）；
 // 同 latex 式启动读一次。响铃只认 TTY（--print 管道静默），静音另一路 = 终端自身 bell 设置。
-const bellEnabled = resolveBellFlag(configFaceTuiBell());
+const bellMode = resolveBellMode(configFaceTuiBell()); // 2026-10-01 三态：bel（缺省）/chime（自带音频走声卡）/off
 // 侧栏可见性持久化（F5 十二轮② 用户拍板：Ctrl+T 状态跨会话保留）——[tui] sidebar，缺省可见。
 // 实现抽 tui-config.ts（CM-01 修复：读盘剥 BOM + 解析失败拒写防整盘覆写毁配置）。
 
@@ -790,7 +791,10 @@ function attachRender(h: Harness): void {
         void refreshPanel(); // 面板数据随 turn 刷新（F4）
         // 回合提示音（2026-09-30 用户拍板）：完成 1 响/中断 2 响/错误 3 响——events() 是实时通道
         //（恢复回放走 pendingEcho/DocModel 重建，不经此），只响活体回合；TTY 且 [tui] bell 开才响
-        if (bellEnabled && process.stdout.isTTY === true) ringTurnBell(e.kind, (s) => process.stdout.write(s));
+        if (bellMode !== "off" && process.stdout.isTTY === true) {
+          if (bellMode === "chime") playTurnChime(e.kind); // 自带音频一声（不分结局——响数区分是 BEL 档语义）
+          else ringTurnBell(e.kind, (s) => process.stdout.write(s));
+        }
       }
       // m4-7 T5：压缩完成点清 skill 模块去重集——skill__load 正文是 tool result，compact 会被压掉，
       // 去重集不清 = 模型重调只得到确认句却没有正文（qwen 明确处理的坑）。/compact 手动与阈值自动
