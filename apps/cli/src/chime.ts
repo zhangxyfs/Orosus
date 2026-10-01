@@ -6,6 +6,7 @@
  *  chime 档**不区分结局**（完成/中断/错误同一声「该回来了」）——响数区分结局是 BEL 档的语义，
  *  两档各取所长；资产固定音量（SoundPlayer 无音量口，「柔和不刺耳」靠选曲本身）。 */
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** 运行资产锚（import.meta.url 相对定位——skill bundled 轨同款源码直跑期形态）。 */
@@ -33,11 +34,13 @@ export interface ChimeDeps {
 	onError?: (stage: "spawn" | "resolve", err: unknown) => void;
 }
 
-/** powershell 绝对路径兜底（2026-10-01 实机排障）：spawn("powershell") 走 PATH——终端环境把
- *  System32 族从 PATH 里剥掉时 ENOENT 静默；SystemRoot 是进程必有环境变量，绝对路径免疫。 */
+/** powershell 绝对路径兜底（2026-10-01 实机排障两轮）：spawn("powershell") 走 PATH——终端环境把
+ *  System32 族从 PATH 里剥掉时 ENOENT 静默；SystemRoot 是进程必有环境变量，绝对路径免疫。
+ *  **必须 path.join 拼——禁反斜杠字面量**：上版模板串里 \S \W 被当转义吞、 成纵向制表符，
+ *  拼出乱码路径 ENOENT（实机「最新进程没声」真因；python heredoc 转义塌方进仓的教训）。 */
 function powershellExe(): string {
   const root = process.env.SystemRoot ?? process.env.windir;
-  return root === undefined ? "powershell" : `${root}\System32\WindowsPowerShell1.0\powershell.exe`;
+  return root === undefined ? "powershell" : join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
 /** 播放回合结束音（chime 档）：任一可听终态一声。runner/platform 注入可测；
