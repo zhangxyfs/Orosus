@@ -13,6 +13,7 @@ import skill from "@orosus/skill";
 import approval from "@orosus/approval";
 import compaction from "@orosus/compaction";
 import toolSubagent from "@orosus/tool-subagent";
+import toolMedia from "@orosus/tool-media";
 
 /** CLI 内置模块全家福（§8.7 builtin 层，M2 收敛）。
  *  approval（T3）与 compaction（T5）已接入；tool-todo（M4-2 T7）任务清单；tool-ask（T8）模型提问。
@@ -35,4 +36,5 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   approval,
   compaction,
   toolSubagent, // M4.5 子代理批：spawn/tasks/stop 派活工具族
+  toolMedia, // m5-media：媒体策略/读图/媒体工具族（F9/F10/F12）
 ];

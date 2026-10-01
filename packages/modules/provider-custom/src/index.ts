@@ -33,7 +33,19 @@ export default defineModule({
         .catch(() => undefined);
       return factsCache;
     };
-    for (const [name, adapter] of createAdapters(ctx.config, undefined, undefined, facts)) {
+    // 媒体策略服务（m5-media F9 服务倒挂）：tool-media.policy 惰性解析（激活序无关；缺席 = 内置默认）
+    let policyCache: Promise<import("./adapters.ts").MediaPolicyFace | undefined> | undefined;
+    const policy = (): Promise<import("./adapters.ts").MediaPolicyFace | undefined> => {
+      policyCache ??= ctx.services
+        .getOptional<import("./adapters.ts").MediaPolicyFace>("tool-media.policy" as never)
+        .then((f) => {
+          ctx.log.info("provider-custom.mediapolicy", f === undefined ? "媒体策略服务缺席——发送路径走内置默认帽值" : "媒体策略服务在（tool-media.policy）");
+          return f;
+        })
+        .catch(() => undefined);
+      return policyCache;
+    };
+        for (const [name, adapter] of createAdapters(ctx.config, undefined, undefined, facts, policy)) {
       ctx.provide(providerSlotKey(name), adapter);
     }
     // /provider（内建别名，D38）：多级菜单（D37 中文规格）——副作用经宿主侧默认接线（config/secrets 真实读写）

@@ -4,6 +4,7 @@ import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState, type
 import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 import { gateImagesByVision } from "./visiongate.ts";
+import { DEFAULT_MAX_EDGE, DEFAULT_TOKEN_TIER } from "./mediapipe-core.ts";
 import { prepareImagesForWire } from "./mediapipe.ts";
 import { applyMediaBudget } from "./mediabudget.ts";
 
@@ -32,8 +33,27 @@ function extractServerSearch(obj: Record<string, unknown>): Chunk | undefined {
   return undefined;
 }
 
+/** m5-media F9：媒体策略运行面（tool-media.policy 服务注入；缺省 undefined 全走内置默认值——与策略默认同值）。 */
+export interface MediaRuntimeOpts {
+  maxEdge?: number;
+  tokenTier?: number;
+  budgetBytes?: number;
+  safeBytes?: number;
+  singleCapBytes?: number;
+  maxImages?: number;
+  acceptedMimes?: readonly string[];
+}
+export const mediaSpecOf = (mediaOpts?: () => MediaRuntimeOpts | undefined): { maxEdge: number; tokenTier: number } => {
+  const mo = mediaOpts?.();
+  return { maxEdge: mo?.maxEdge ?? DEFAULT_MAX_EDGE, tokenTier: mo?.tokenTier ?? DEFAULT_TOKEN_TIER };
+};
+export const budgetOptsOf = (mediaOpts?: () => MediaRuntimeOpts | undefined): { budgetBytes?: number | undefined; safeBytes?: number | undefined; singleCapBytes?: number | undefined; maxImages?: number | undefined } => {
+  const mo = mediaOpts?.();
+  return { budgetBytes: mo?.budgetBytes, safeBytes: mo?.safeBytes, singleCapBytes: mo?.singleCapBytes, maxImages: mo?.maxImages };
+};
+
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string; /** m5-media F6：端点认的图片 mime 白名单（缺省四白名单——见 DEFAULT_ACCEPTED_IMAGE_MIMES） */ acceptedImageMimes?: readonly string[] }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode; /** m5-media F4：目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封） */ catalogFile?: string; /** m5-media F6：端点认的图片 mime 白名单（缺省四白名单——见 DEFAULT_ACCEPTED_IMAGE_MIMES） */ acceptedImageMimes?: readonly string[]; /** m5-media F9：媒体策略现读口（tool-media.policy 服务快照——压缩口径与帽值用户配置；缺省内置同值） */ mediaOpts?: () => MediaRuntimeOpts | undefined }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -73,7 +93,10 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           },
           body: JSON.stringify({
             model: request.model,
-            messages: toOpenAIMessages(request.system, applyMediaBudget(await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile)), { acceptedMimes: opts.acceptedImageMimes }), opts.toolImages ?? "bridge"), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本（worker 降采样）→ mime 门控 → 预算降级（老图换标签）
+            messages: toOpenAIMessages(request.system, applyMediaBudget(
+              await prepareImagesForWire(gateImagesByVision(request.model, request.messages, opts.catalogFile), mediaSpecOf(opts.mediaOpts)),
+              { acceptedMimes: opts.acceptedImageMimes, ...budgetOptsOf(opts.mediaOpts) },
+            ), opts.toolImages ?? "bridge"), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本（worker 降采样）→ mime 门控 → 预算降级（老图换标签）——F9 策略服务可覆盖口径/帽值
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单

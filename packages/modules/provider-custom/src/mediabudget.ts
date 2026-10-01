@@ -20,10 +20,10 @@ export const DEFAULT_ACCEPTED_IMAGE_MIMES: readonly string[] = ["image/png", "im
 export interface MediaBudgetOptions {
   /** 端点认的图片 mime（F6 格式策略）；缺省四白名单。显式 undefined 合法（exactOptionalPropertyTypes 直传面）。 */
   acceptedMimes?: readonly string[] | undefined;
-  singleCapBytes?: number;
-  budgetBytes?: number;
-  safeBytes?: number;
-  maxImages?: number;
+  singleCapBytes?: number | undefined;
+  budgetBytes?: number | undefined;
+  safeBytes?: number | undefined;
+  maxImages?: number | undefined;
   /** 文件体积取数口（缺省 statSync；测试注入）。 */
   sizeOf?: (path: string) => number | undefined;
 }
