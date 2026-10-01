@@ -1,6 +1,6 @@
 import { classifyContextLimit, parseModelsResponse, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
-import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState } from "./translate-openai.ts";
+import { mapSseChunk, toOpenAIMessages, toOpenAITools, type OaiStreamState, type ToolImagesMode } from "./translate-openai.ts";
 import { DEFAULT_IDLE_TIMEOUT_MS } from "./stream-anthropic.ts";
 import { netErrorDetail } from "./neterr.ts";
 
@@ -30,7 +30,7 @@ function extractServerSearch(obj: Record<string, unknown>): Chunk | undefined {
 }
 
 /** fetch glue（D31）：双头鉴权（无 key 零头）、SSE data: 行解析、[DONE] 兜底 stop、错误全带内。 */
-export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number }): StreamFn {
+export function createStream(opts: { apiKey?: string | undefined; baseUrl: string; fetchImpl?: typeof fetch; idleTimeoutMs?: number; /** m5-media F3/D1：工具结果带图三态（缺省 bridge——见 ToolImagesMode 注） */ toolImages?: ToolImagesMode }): StreamFn {
   const doFetch = opts.fetchImpl ?? fetch;
   return async function* stream(request: ProviderRequest): AsyncIterable<Chunk> {
     const fail = (errorMessage: string, errorCode?: string): Chunk =>
@@ -70,7 +70,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
           },
           body: JSON.stringify({
             model: request.model,
-            messages: toOpenAIMessages(request.system, request.messages),
+            messages: toOpenAIMessages(request.system, request.messages, opts.toolImages ?? "bridge"),
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单

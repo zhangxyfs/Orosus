@@ -114,3 +114,67 @@ describe("toOpenAIMessages 图片映射（M4-2.5 T5）", () => {
     expect(out[0]!.content.map((x) => x.type)).toEqual(["text", "image_url", "image_url"]);
   });
 });
+
+
+// m5-media F3：工具结果带图三态（T0 spike 2026-10-01 三形态在 glm-5.3-flash 实证；bridge=默认）
+describe("toOpenAIMessages 工具结果带图三态（m5-media F3）", () => {
+  let f3Dir: string | undefined;
+  afterEach(() => { if (f3Dir) { rmSync(f3Dir, { recursive: true, force: true }); f3Dir = undefined; } });
+  const pngPath = (): string => {
+    f3Dir ??= mkdtempSync(join(tmpdir(), "orosus-m5f3-"));
+    const p = join(f3Dir, "shot.png");
+    writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    return p;
+  };
+  const shotMsg = (path: string, output = "截图完成"): MP => ({
+    role: "toolResult", callId: "c1", output, isError: false,
+    parts: [{ kind: "image", path, mimeType: "image/png" }],
+  });
+
+  it("① bridge（默认）：tool 消息纯文本 + 图 flush 成紧跟的只含图 user 消息", () => {
+    const p = pngPath();
+    const out = toOpenAIMessages("", [shotMsg(p)]) as Array<{ role: string; tool_call_id?: string; content: unknown }>;
+    expect(out).toHaveLength(2);
+    expect(out[0]).toEqual({ role: "tool", tool_call_id: "c1", content: "截图完成" });
+    const flush = out[1]!.content as Array<{ type: string; image_url?: { url: string } }>;
+    expect(out[1]!.role).toBe("user");
+    expect(flush).toHaveLength(1);
+    expect(flush[0]!.type).toBe("image_url");
+    expect(flush[0]!.image_url!.url.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  it("② bridge 连续 toolResult 聚合一次冲刷（消息最少）；缺失文件降级占位进 flush；无图结果零差异", () => {
+    const p = pngPath();
+    const noImg: MP = { role: "toolResult", callId: "c0", output: "纯文本", isError: false };
+    const missing: MP = {
+      role: "toolResult", callId: "c2", output: "o2", isError: false,
+      parts: [{ kind: "image", path: "Z:/nope/ghost.png", mimeType: "image/png" }],
+    };
+    const out = toOpenAIMessages("", [noImg, shotMsg(p, "o1"), missing]) as Array<{ role: string; content: unknown }>;
+    expect(out.map((m) => m.role)).toEqual(["tool", "tool", "tool", "user"]); // 三 tool + 一条聚合 flush
+    const flush = out[3]!.content as Array<{ type: string; text?: string }>;
+    expect(flush.map((x) => x.type)).toEqual(["image_url", "text"]); // 好图 + 缺失占位（诚实可见）
+    expect(flush[1]!.text).toContain("图片文件缺失");
+    // 无图零差异：不产 flush 消息
+    const plain = toOpenAIMessages("", [noImg]) as unknown[];
+    expect(plain).toHaveLength(1);
+  });
+
+  it("③ inline：tool 消息 content 部件数组（text + image_url——kimi keep_parts 形态）", () => {
+    const p = pngPath();
+    const out = toOpenAIMessages("", [shotMsg(p)], "inline") as Array<{ role: string; content: unknown }>;
+    expect(out).toHaveLength(1);
+    const parts = out[0]!.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+    expect(parts.map((x) => x.type)).toEqual(["text", "image_url"]);
+    expect(parts[0]!.text).toBe("截图完成");
+    expect(parts[1]!.image_url!.url.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  it("④ placeholder：图不送、文字占位（kimi 通用 openai 做法）；无任何 image_url 部件", () => {
+    const p = pngPath();
+    const out = toOpenAIMessages("", [shotMsg(p, "o")], "placeholder") as Array<{ role: string; content: unknown }>;
+    expect(out).toHaveLength(1);
+    expect(out[0]!.content).toBe(`o\n[图片 ${p} 未随请求发送——本端点工具消息不支持图片]`);
+    expect(JSON.stringify(out)).not.toContain("image_url");
+  });
+});

@@ -19,6 +19,10 @@ export const configSchema = z.object({
       baseUrl: z.string(),                   // 必填——自定义厂商无"官方默认端点"，端点就是定义的一部分
       apiKey: z.string().optional(),         // $ENV: 占位；省略不发鉴权头（本地/内网端点）
       defaultModel: z.string().optional(),   // D32：有值则 model = "<name>" 裸名可用
+      // m5-media F3/D1：openai 族工具结果带图三态（bridge=桥接 user 消息默认——opencode 生产同款、
+      // T0 spike 2026-10-01 实证；inline=kimi keep_parts 私有扩展形态，确证端点用；placeholder=图不送文字占位）。
+      // anthropic 族原生 tool_result 图块，本键无效。
+      toolImages: z.enum(["inline", "bridge", "placeholder"]).default("bridge"),
     }),
   ).default({}), // 空表合法（模块文档 §2）——section 整体缺失（全新安装）也激活零槽，/provider 配置入口在任何配置状态下可用
 });
@@ -61,17 +65,17 @@ export function catalogPreferredListModels(slot: string, live: () => Promise<str
  *  facts = 搜索改道服务（tool-web.search-faces）的惰性解析口（index.ts 注入 ctx.services 消费闭包）；
  *  缺省无服务 = 表外/服务缺席一律 chat 面原行为。 */
 export function createAdapters(
-  config: z.infer<typeof configSchema>,
+  config: z.input<typeof configSchema>, // 输入形态（toolImages 可缺省——.default 在 parse 后才有值；宿主 ctx.config 是已 parse 的输出型，结构兼容可直传）
   fetchImpl?: typeof fetch,
   loadCatalog: CatalogLoader = diskFirstCatalogLoader(),
   facts?: () => Promise<SearchFaceFacts | undefined>,
 ): Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> }> {
   const out = new Map<string, { stream: StreamFn; defaultModel?: string; listModels?: () => Promise<string[]>; listThinking?: (model: string) => Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> }>();
-  for (const [name, p] of Object.entries(config.providers)) {
+  for (const [name, p] of Object.entries(config.providers ?? {})) { // z.input 形态：providers 可缺省（宿主已 parse 的输出型恒有值）
     const glue = { apiKey: p.apiKey, baseUrl: p.baseUrl, ...(fetchImpl !== undefined ? { fetchImpl } : {}) };
     const isAnthropic = p.type === "anthropic";
     const live = isAnthropic ? anthropicListModels(glue) : openaiListModels(glue); // 模型发现 T2：端点真实清单（尽力能力）
-    let stream = isAnthropic ? anthropicStream(glue) : openaiStream(glue);
+    let stream = isAnthropic ? anthropicStream(glue) : openaiStream({ ...glue, toolImages: p.toolImages ?? "bridge" }); // m5-media F3：openai 族带三态（缺省 bridge；anthropic 原生图块无需）
     // 已知可搜端点改道（2026-09-24 用户拍板对齐 Reasonix）：openai 档槽的 webSearch 请求（tool-web 搜索
     // 辅助调用）命中改道服务 → 改发 {anthropicRoot}/v1/messages（同 key 双头），chat 请求零变化；
     // anthropic 档槽天然走 web_search_20250305 无需服务。路由 = 本模块行为，端点知识 = tool-web 服务
