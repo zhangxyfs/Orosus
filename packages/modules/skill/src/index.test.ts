@@ -271,6 +271,18 @@ describe("skill 模块（m4-7 T4/T5——skill__load 三修 + 去重重置口）
     expect(r.isError).toBe(true);
     expect(r.output).toContain("newly"); // 可用列表是执行时现扫的
   });
+
+  it("⑥ 输出首行带技能文件绝对路径与相对路径解析基准（2026-10-01 诊断批——正文引用 references/… 时模型可定位到技能目录，不再按项目 cwd 落空降级速查表）", async () => {
+    put(join(user, ".orosus", "skills"), "with-refs", "带参考文件", "详见 references/lenses.md");
+    const { ctx, tools } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const r = await runLoad(tools, "with-refs");
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain(join(user, ".orosus", "skills", "with-refs", "SKILL.md")); // 绝对路径在输出里
+    expect(r.output).toContain("相对该文件所在目录解析"); // 解析基准提示
+    expect(r.output).toContain("详见 references/lenses.md"); // 正文本体原样
+    expect((r.output as string).indexOf("SKILL.md")).toBeLessThan((r.output as string).indexOf("详见")); // 路径行在正文之前
+  });
 });
 
 describe("skill 模块（m4-7 T6——停用清单）", () => {
