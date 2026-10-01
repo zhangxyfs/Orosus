@@ -53,7 +53,7 @@ describe("代理态双源检测（2026-10-01 走查修准「开了代理却显�
   });
 
   it("⑤ detectTunProxy：关键词网卡名命中 / fake-ip 网段 198.18.x 命中 / 组网网卡与 WLAN 不误伤 / 非 win32 不判", () => {
-    const iface = (name: string, addr: string) => ({ [name]: [{ address: addr, family: "IPv4" as const, internal: false, mac: "", netmask: "", cidr: "", scopeid: undefined }] });
+    const iface = (name: string, addr: string) => ({ [name]: [{ address: addr, family: "IPv4" as const, internal: false, mac: "", netmask: "", cidr: "", scopeid: 0 }] });
     expect(detectTunProxy({ ...iface("Mihomo", "198.18.0.1"), ...iface("WLAN", "192.168.3.12") }, "win32")).toBe("Mihomo");
     expect(detectTunProxy({ ...iface("以太网 3", "198.18.0.1") }, "win32")).toBe("以太网 3"); // 名字不带关键词但持 fake-ip 段
     expect(detectTunProxy({ ...iface("sing-box", "172.19.0.1"), ...iface("ZeroTier One [f37]", "10.72.145.189") }, "win32")).toBe("sing-box");
