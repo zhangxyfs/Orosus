@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Orosus · 配置视觉模型（m5-media）——原型走查</title>
+<style>
+  :root {
+    --bg: #0a0f0d; --surface: #101815; --surface-2: #0d1512;
+    --border: #1d2b25; --fg: #e9eee6; --muted: #97a49a;
+    --accent: #7cc9a5; --accent-soft: #1a2a23; --info: #7fb8d4; --warn: #d9b36c; --err: #d98c7c;
+    --font-mono: 'Cascadia Mono', Consolas, 'JetBrains Mono', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.6; }
+  .notebar { max-width: 1180px; margin: 18px auto 10px; padding: 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 13px; }
+  .notebar b { color: var(--info); font-weight: 600; }
+  .notebar kbd { font-family: var(--font-mono); font-size: 12px; color: var(--fg); background: var(--surface-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; margin: 0 1px; }
+  .screen-title { max-width: 1180px; margin: 26px auto 8px; font-size: 15px; color: var(--accent); font-weight: 600; }
+  .screen-title small { color: var(--muted); font-weight: 400; margin-left: 10px; }
+  .terminal { max-width: 1180px; margin: 0 auto 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.75; box-shadow: 0 30px 70px rgba(0,0,0,.6); }
+  .titlebar { display: flex; align-items: center; gap: 12px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+  .dots { display: flex; gap: 8px; } .dots i { width: 11px; height: 11px; border-radius: 50%; background: #2c3f36; }
+  .title { flex: 1; text-align: center; color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+  .geom { color: #5c6b62; font-size: 11px; }
+  .tui { position: relative; height: 560px; background: var(--bg); }
+  .overlay { position: absolute; left: 26px; right: 26px; bottom: 58px; background: var(--surface-2); border: 1px solid var(--accent); box-shadow: 0 20px 55px rgba(0,0,0,.55); padding-bottom: 4px; } /* dock：贴输入框上缘、与输入框同宽（skill 详情窗形态） */
+  .ohead { display: flex; align-items: center; gap: 10px; padding: 9px 14px 5px; }
+  .ohead .ot { color: var(--accent); white-space: nowrap; }
+  .ohead .ofill { flex: 1; height: 1px; background: var(--accent); opacity: .45; }
+  .ohead .oc { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .obody { padding: 4px 14px 6px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
+  .row.sel { background: var(--accent-soft); outline: 1px solid rgba(124,201,165,.35); }
+  .row .mark { width: 18px; color: var(--accent); }
+  .row .name { color: var(--fg); }
+  .row .desc { color: var(--muted); font-size: 12.5px; }
+  .row .tail { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-left: 5px; color: var(--muted); }
+  .badge.v { color: var(--accent); border-color: #2d5546; }
+  .sep { color: var(--muted); opacity: .8; margin: 4px 8px; }
+  .dockstack { position: absolute; left: 26px; right: 26px; bottom: 18px; display: flex; flex-direction: column; }
+  .dockstack .overlay { position: static; left: auto; right: auto; bottom: auto; }
+  .dockstack .inputwrap { position: static; left: auto; right: auto; bottom: auto; }
+  .rows5 { min-height: 155px; } /* 恒定 5 行（高度恒定防闪烁铁律）：不足补空行、空槽留白禁装饰 */
+  /* ── 引导 modal 族（自 orosus-onboarding-prototype.html 平移——屏 5/6 用真版式） ── */
+  .backdrop { position: absolute; inset: 0; background: rgba(4,8,6,.62); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .modal { width: 760px; height: 540px; background: var(--surface-2); border: 1px solid #2d5546; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .modal-head { padding: 16px 22px 10px; border-bottom: 1px solid var(--border); }
+  .modal-head .step { color: var(--info); font-size: 11.5px; letter-spacing: .12em; }
+  .modal-head h2 { margin: 3px 0 0; font-size: 16px; letter-spacing: .03em; }
+  .modal-body { flex: 1; padding: 14px 22px; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-foot { display: flex; gap: 18px; align-items: center; padding: 11px 22px; border-top: 1px solid var(--border); background: var(--surface); border-radius: 0 0 12px 12px; font-size: 12.5px; min-height: 46px; }
+  .foot-item { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .foot-note { color: #5c6b62; font-size: 11.5px; }
+  .lead { color: var(--muted); margin: 0 0 10px; }
+  .plist { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .prow { display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: 13px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); min-height: 31px; }
+  .prow:last-child { border-bottom: none; }
+  .prow.sel { background: color-mix(in srgb, var(--accent) 13%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .prow .name { min-width: 15ch; }
+  .prow .env { color: #5c6b62; font-size: 11.5px; flex: 1; }
+  .prow .tag { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; color: var(--muted); }
+  .prow .tag.on { color: var(--accent); border-color: #2d5546; }
+  .prow .ok { color: var(--accent); visibility: hidden; }
+  .prow.done .ok { visibility: visible; }
+  .plist.rows5 .prow.ghost { border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+  .plist.rows5 .prow.ghost:last-child { border-bottom: none; }
+  .pagebar { display: flex; margin-top: 8px; color: #5c6b62; font-size: 12px; }
+  .pagebar .flex { flex: 1; }
+  .ob-grid { position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0,1fr) 300px; }
+  .ob-main { display: flex; flex-direction: column; padding: 18px 24px; }
+  .ob-banner { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .ob-logo { width: 54px; height: 54px; border-radius: 10px; background: linear-gradient(160deg,#143024,#0c1a15); border: 1px solid #2d5546; color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; }
+  .ob-banner h1 { margin: 0; font-size: 15px; }
+  .ob-banner p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .ob-line { color: #97a49a; font-size: 13px; }
+  .ob-side { border-left: 1px solid var(--border); padding: 16px 18px; }
+  .ob-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .ob-card h3 { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: .05em; }
+  .ob-kv { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 2px 0; }
+  .ob-kv b { color: var(--fg); font-weight: 500; }
+  .ob-input { position: absolute; left: 24px; right: 324px; bottom: 16px; }
+  .ob-input .inputbox { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 8px 12px; color: var(--muted); }
+  .ob-input .hintline { color: #5c6b62; font-size: 11.5px; margin-top: 6px; }
+  .row.ghost { cursor: default; }
+  .empty { color: var(--muted); padding: 10px 8px; }
+  .empty .hint { font-size: 12.5px; margin-top: 4px; color: #6f7d74; }
+  .ofoot { margin: 6px 12px 6px; border-top: 1px solid rgba(124,201,165,.3); padding: 6px 4px 6px; color: var(--muted); font-size: 12.5px; }
+  .toast { position: absolute; left: 26px; right: 26px; bottom: 64px; z-index: 20; background: #20160e; border: 1px solid var(--warn); color: var(--warn); border-radius: 8px; padding: 8px 14px; font-family: var(--font-mono); font-size: 13px; display: none; }
+  .toast.show { display: block; }
+  .inputwrap { position: absolute; left: 26px; right: 26px; bottom: 18px; }
+  .inputbox { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 8px 12px; color: var(--muted); }
+  .keys { position: absolute; left: 26px; right: 26px; bottom: -2px; color: #5c6b62; font-size: 12px; }
+  .stream-bg { position: absolute; inset: 0; padding: 18px 26px; color: #33453c; font-size: 13px; overflow: hidden; }
+  .simbar { max-width: 1180px; margin: 6px auto 0; display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); }
+  .simbtn { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 12px; cursor: pointer; }
+  .simbtn:hover { border-color: var(--accent); }
+  .notes { max-width: 1180px; margin: 30px auto 60px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px; }
+  .notes h3 { margin: 4px 0 8px; font-size: 14px; color: var(--info); }
+  .notes ul { margin: 6px 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+  .notes li b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="notebar">
+  <b>配置视觉模型（m5-media D12/F14）原型走查</b>——给非多模态模型提供视觉的「眼睛模型」两入口：
+  ①/settings 新项「配置视觉模型」（三选项：停用 / 自动 / 指定模型）；②首启引导在网络搜索页<b>前面</b>插一页同名配置（可不选直接 <kbd>Ctrl + N</kbd>，默认不开启）。
+  列表数据源 = 已配置提供商的模型清单 ∩ models-dev 目录 <code>modalities.input 含 image</code> 过滤（§2.5 既有链）。
+</div>
+
+<!-- ═══ 屏 1：/settings 列表（新项落位） ═══ -->
+<div class="screen-title">屏 1 · /settings 列表——实机形态（● 行首点 · 1/2 分页 · PgUp/PgDn）；新项「配置视觉模型」插在「配置网络搜索」之前<small>↑↓ 选择 · PgUp/PgDn 翻页 · Enter 进入</small></div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">OROSUS · 设置</div><div class="geom">100×30</div></div>
+  <div class="tui">
+    <div class="stream-bg">
+      <div># 会话</div><div>● Used Read 1 个文件 · 共 42 行</div><div style="margin-top:8px">配置相关的说明文字…</div>
+    </div>
+    <div class="dockstack">
+    <div class="overlay">
+      <div class="ohead"><span class="ot">设置</span><span class="ofill"></span><span class="oc">1/2 </span></div>
+      <div class="obody">
+        <div class="row sel"><span class="mark">❯</span><span class="mark" style="color:var(--accent)">●</span><span class="name">磁盘占用</span><span class="desc">各目录大小与清理口径</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">上下文用量</span><span class="desc">窗口占用与输入输出累计</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">Token 用量</span><span class="desc">本会话与项目累计</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">运行状态</span><span class="desc">模型 / 会话 / 模块图</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">子代理</span><span class="desc">模型 / 审批模式 / 轮数上限</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">技能</span><span class="desc">四轨目录与启停</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">MCP</span><span class="desc">查看 / 开关 / 删除 · server 管理与添加</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">配置视觉模型</span><span class="desc">给非多模态模型提供视觉（走查 / 读图 / 摘要）</span><span class="tail">未开启</span></div>
+        <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">配置网络搜索</span><span class="desc">LLM Web Search / Tavily / Brave</span></div>
+      </div>
+      <div class="ofoot"> ↑↓ 选择 · PgUp/PgDn 翻页 · Enter 进入 · Esc 关闭</div>
+    </div>
+    <div class="inputwrap"><div class="inputbox">❯ 向 Orosus 下达指令，或输入 / 查看命令…</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="screen-title">屏 2 · 配置视觉模型 · 三选项（停用 / 自动 / 指定模型）<small>↑↓ 选择 · Enter 确定 · Esc 返回</small></div>
+<div class="simbar">模拟切换：<button class="simbtn" onclick="pickOpt(0)">选 停用</button><button class="simbtn" onclick="pickOpt(1)">选 自动</button><button class="simbtn" onclick="pickOpt(2)">选 指定模型</button>（看右侧「当前」标记变化）</div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">OROSUS · 配置视觉模型</div><div class="geom">100×30</div></div>
+  <div class="tui">
+    <div class="stream-bg"><div># 会话（背景）</div></div>
+    <div class="dockstack">
+    <div class="overlay">
+      <div class="ohead"><span class="ot">配置视觉模型</span><span class="ofill"></span><span class="oc">给非多模态模型提供视觉 </span></div>
+      <div class="obody">
+        <div class="row" id="opt0" onclick="pickOpt(0)"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">停用</span><span class="desc">——不做任何视觉辅助（默认）</span><span class="tail" id="cur0"></span></div>
+        <div class="row" id="opt1" onclick="pickOpt(1)"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">自动</span><span class="desc">——用已配置模型里支持图片的（取第一个）</span><span class="tail" id="cur1"></span></div>
+        <div class="row" id="opt2" onclick="pickOpt(2)"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">指定模型</span><span class="desc">——从已配置的多模态模型里挑一个</span><span class="tail" id="cur2">当前 · 自动</span></div>
+      </div>
+      <div class="ofoot"> 当前配置的模型本身支持图片时不经过这里——本项只服务「纯文本模型 + 需要看图」的组合（读图 / 截图走查 / 视觉摘要）</div>
+    </div>
+    <div class="inputwrap"><div class="inputbox">❯ 向 Orosus 下达指令，或输入 / 查看命令…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 屏 3：指定模型 · 多模态列表 ═══ -->
+<div class="screen-title">屏 3 · 指定模型 · 已配置提供商的多模态模型（过滤后）<small>↑↓ 选择 · Enter 选定回屏 2 · Esc 返回</small></div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">OROSUS · 配置视觉模型 · 指定模型</div><div class="geom">100×30</div></div>
+  <div class="tui">
+    <div class="stream-bg"><div># 会话（背景）</div></div>
+    <div class="dockstack">
+    <div class="overlay">
+      <div class="ohead"><span class="ot">指定模型</span><span class="ofill"></span><span class="oc">已配置提供商 · 仅多模态 2/5 </span></div>
+      <div class="obody">
+        <div class="rows5">
+          <div class="row sel"><span class="mark">❯</span><span class="mark" style="color:var(--accent)">●</span><span class="name">zhipuai / glm-5.3-flash</span><span class="badge v">图</span><span class="badge v">视频</span><span class="badge">pdf</span><span class="tail">✓ 当前</span></div>
+          <div class="row"><span class="mark"> </span><span class="mark" style="color:var(--accent)">●</span><span class="name">zhipuai / glm-4.6v</span><span class="badge v">图</span><span class="badge v">视频</span></div>
+        <div class="row ghost">&nbsp;</div>
+        <div class="row ghost">&nbsp;</div>
+        <div class="row ghost">&nbsp;</div>
+        </div>
+        <div class="sep">── 其余 3 个模型不支持图片输入，已过滤（glm-5.3 / glm-5.2 / deepseek-v4）──</div>
+      </div>
+      <div class="ofoot"> 数据源 = models-dev 目录按模型查 modalities.input（§2.5 既有链）；目录未命中（自架模型）的不过滤、行尾标「未知」由用户自判</div>
+    </div>
+    <div class="inputwrap"><div class="inputbox">❯ 向 Orosus 下达指令，或输入 / 查看命令…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 屏 4：指定模型 · 空态 + toast ═══ -->
+<div class="screen-title">屏 4 · 指定模型 · 空态（已配置模型里没有多模态的）——toast 指路<small>点按钮看 toast</small></div>
+<div class="simbar">模拟：<button class="simbtn" onclick="showToast('t4', 2600)">按 Enter 进「指定模型」</button></div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">OROSUS · 配置视觉模型 · 指定模型</div><div class="geom">100×30</div></div>
+  <div class="tui">
+    <div class="stream-bg"><div># 会话（背景）</div></div>
+    <div class="dockstack">
+    <div class="overlay">
+      <div class="ohead"><span class="ot">指定模型</span><span class="ofill"></span><span class="oc">已配置提供商 · 仅多模态 0/3 </span></div>
+      <div class="obody">
+        <div class="rows5">
+          <div class="empty">（已配置的 3 个模型都不支持图片输入）<div class="hint">——先去 /provider 配置一个多模态模型（如 glm-5.3-flash），配好回来这里就能选</div></div>
+        <div class="row ghost">&nbsp;</div>
+        <div class="row ghost">&nbsp;</div>
+        </div>
+      </div>
+      <div class="ofoot"> ↑↓ / Enter 无可选项 · Esc 返回</div>
+    </div>
+    <div class="toast" id="t4">已配置的模型里没有支持图片的——先用 /provider 配置一个多模态模型（如 glm-5.3-flash）再来选</div>
+    <div class="inputwrap"><div class="inputbox">❯ 向 Orosus 下达指令，或输入 / 查看命令…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 屏 5：引导页 · 配置视觉模型（插在网络搜索前，第 3/5 页——onboarding 原型真 modal 版式） ═══ -->
+<div class="screen-title">屏 5 · 首启引导 · 第 3 / 5 页「配置视觉模型」（插在「配置网络搜索」之前——引导 modal 真版式：居中弹窗 + 背板 + 双栏背景）<small>↑↓ 移动 · Enter 选定 · Ctrl + N 下一步（可不选）</small></div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">orosus · 连山 — D:\develop\Orosus</div><div class="geom">120 × 30</div></div>
+  <div class="tui">
+    <div class="ob-grid">
+      <div class="ob-main">
+        <div class="ob-banner"><div class="ob-logo">山</div><div><h1>Orosus · 连山</h1><p>模块互连、组件层叠的本地 Agent Harness</p></div></div>
+        <div class="ob-line">模型未配置——完成引导后即可开始对话。</div>
+      </div>
+      <div class="ob-side">
+        <div class="ob-card"><h3>运行状态</h3><div class="ob-kv"><span>模型</span><b>未配置</b></div><div class="ob-kv"><span>权限</span><b>ask-risky</b></div><div class="ob-kv"><span>会话</span><b>new · 未落盘</b></div><div class="ob-kv"><span>模块</span><b>9 加载</b></div></div>
+        <div class="ob-card"><h3>任务清单</h3><div class="ob-kv"><span style="color:#5c6b62">（空——先完成引导）</span><b></b></div></div>
+      </div>
+    </div>
+    <div class="ob-input"><div class="inputbox">引导进行中——输入由引导弹窗接管</div><div class="hintline">/help 命令清单 · Ctrl + T 侧栏 · Alt + V 附图</div></div>
+    <div class="backdrop">
+      <div class="modal">
+        <div class="modal-head"><div class="step">引导 3 / 5</div><h2>配置视觉模型</h2></div>
+        <div class="modal-body">
+          <p class="lead">当前模型看不了图时，用它当眼睛：读图文件 / 截图走查 / 压缩时的视觉摘要。下面是第 2 页已配置提供商里支持图片的模型；之后随时可在 /settings → 配置视觉模型 里改。</p>
+          <div class="plist rows5">
+            <div class="prow sel"><span class="ok">✓</span><span class="name">glm-5.3-flash</span><span class="env">zhipuai · 支持 图片 / 视频 / pdf</span></div>
+            <div class="prow"><span class="ok">✓</span><span class="name">glm-4.6v</span><span class="env">zhipuai · 支持 图片 / 视频</span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+          </div>
+          <div class="pagebar"><span class="flex"></span><span>↑ ↓ 移动 · Enter 选定（再按取消）</span></div>
+        </div>
+        <div class="modal-foot">
+          <div class="foot-item"><span class="key hint-accent" style="font-family:var(--font-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:1px 7px;color:var(--accent)">Ctrl + N</span> 下一步（可不选——不选 = 不开启）</div>
+          <div class="foot-spacer" style="flex:1"></div>
+          <div class="foot-note">Ctrl + Q 仅第 1 页</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 屏 6：引导页 · 空列表形态（同版式，恒 5 行空槽） ═══ -->
+<div class="screen-title">屏 6 · 首启引导 · 第 3 / 5 页空列表形态（已配置提供商无多模态模型）<small>空态可读 + Ctrl + N 直过</small></div>
+<div class="terminal">
+  <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div><div class="title">orosus · 连山 — D:\develop\Orosus</div><div class="geom">120 × 30</div></div>
+  <div class="tui">
+    <div class="ob-grid">
+      <div class="ob-main">
+        <div class="ob-banner"><div class="ob-logo">山</div><div><h1>Orosus · 连山</h1><p>模块互连、组件层叠的本地 Agent Harness</p></div></div>
+        <div class="ob-line">模型未配置——完成引导后即可开始对话。</div>
+      </div>
+      <div class="ob-side">
+        <div class="ob-card"><h3>运行状态</h3><div class="ob-kv"><span>模型</span><b>未配置</b></div><div class="ob-kv"><span>权限</span><b>ask-risky</b></div><div class="ob-kv"><span>会话</span><b>new · 未落盘</b></div><div class="ob-kv"><span>模块</span><b>9 加载</b></div></div>
+        <div class="ob-card"><h3>任务清单</h3><div class="ob-kv"><span style="color:#5c6b62">（空——先完成引导）</span><b></b></div></div>
+      </div>
+    </div>
+    <div class="ob-input"><div class="inputbox">引导进行中——输入由引导弹窗接管</div><div class="hintline">/help 命令清单 · Ctrl + T 侧栏 · Alt + V 附图</div></div>
+    <div class="backdrop">
+      <div class="modal">
+        <div class="modal-head"><div class="step">引导 3 / 5</div><h2>配置视觉模型</h2></div>
+        <div class="modal-body">
+          <p class="lead">当前模型看不了图时，用它当眼睛。下面是第 2 页已配置提供商里支持图片的模型：</p>
+          <div class="plist rows5">
+            <div class="prow" style="color:var(--muted)"><span class="ok">✓</span><span class="name" style="min-width:0">（已配置的提供商里，暂无支持图片的模型）</span><span class="env">不影响使用——需要时随时 /settings → 配置视觉模型 再开启</span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+            <div class="prow ghost"><span class="ok">✓</span><span class="name">&nbsp;</span><span class="env"></span></div>
+          </div>
+          <div class="pagebar"><span class="flex"></span><span>无可选项</span></div>
+        </div>
+        <div class="modal-foot">
+          <div class="foot-item"><span class="key hint-accent" style="font-family:var(--font-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:1px 7px;color:var(--accent)">Ctrl + N</span> 下一步（默认不开启）</div>
+          <div class="foot-spacer" style="flex:1"></div>
+          <div class="foot-note">Ctrl + Q 仅第 1 页</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <h3>钉死（2026-09-30 用户口令）</h3>
+  <ul>
+    <li><b>两入口</b>：/settings 新项「配置视觉模型」+ 首启引导插页（网络搜索页之前——现流程已四页〔m5b 消息备份为第 4 页〕，插入后为 <b>第 3 / 5 页</b>；版式照 onboarding 原型真 modal 族：居中弹窗 + 背板 + 引导期双栏背景）。</li>
+    <li><b>三选项</b>：停用（默认）/ 自动（用已配置模型里支持图片的）/ 指定模型（多模态过滤列表）。</li>
+    <li><b>指定模型空态</b>：无可选时 toast 指路 /provider 配置多模态模型。</li>
+    <li><b>引导页可跳过</b>：不选任何模型直接 Ctrl + N = 不开启（默认）。</li>
+    <li><b>settings 列表实机形态</b>：行首 ● 点（accent）+ 标题白 + 说明灰；标题栏右侧 1/2 分页计数；键位行含 PgUp/PgDn 翻页；清单平铺无分隔行（SETTINGS_ITEMS 同源）。</li>
+    <li><b>设置侧弹窗为 dock 形态</b>：贴输入框上缘、与输入框同宽（skill 详情窗同款）；引导侧是居中 modal 族——两族各按其规。</li>
+    <li><b>列表恒定 5 行</b>：模型列表区恒留 5 行空间，不足补空行、空槽留白（浮层高度恒定防闪烁铁律）；过滤说明行与「暂不启用」行在固定区之外。</li>
+  </ul>
+  <h3>待拍板</h3>
+  <ul>
+    <li><b>自动档取哪个</b>：已配置模型里多个 vision 时——建议取列表第一个（原型注记「取第一个」），或取「最近用过的」。</li>
+    <li><b>落盘键形态</b>：建议单键三态 <code>[media] visionModel = "off" | "auto" | "&lt;槽/模型&gt;"</code>（缺省 = off）。</li>
+    <li><b>选中模型失效时</b>（槽被删 / 目录查实非 vision）：建议启动时 warn 一条 + 当作未配置回落，不硬炸。</li>
+    <li><b>引导第 2 页跳过时</b>（无任何提供商）：本页仍显示空态（流程可预期），还是直接跳过本页——建议显示空态。</li>
+    <li><b>settings 项位置</b>：原型排在「配置网络搜索」之前（与引导顺序一致）——可调。</li>
+  </ul>
+</div>
+
+<script>
+  function pickOpt(i) {
+    for (let k = 0; k < 3; k++) {
+      const row = document.getElementById('opt' + k);
+      row.classList.toggle('sel', k === i);
+      row.querySelector('.mark').textContent = k === i ? '❯' : ' ';
+      document.getElementById('cur' + k).textContent = '';
+    }
+    document.getElementById('cur' + i).textContent = '当前 · ' + ['停用', '自动', '指定模型'][i];
+  }
+  function showToast(id, ms) {
+    const el = document.getElementById(id);
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), ms);
+  }
+</script>
+</body>
+</html>
