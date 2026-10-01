@@ -61,8 +61,17 @@ function normalizeUrl(raw: string | URL): URL {
   return parsed;
 }
 
+/** 代理态（批 D 2026-10-01 拍板 A+B）：宿主启动时检测到代理环境变量且 Node ≥24 会自动设 NODE_USE_ENV_PROXY=1
+ *  （main.ts 批 D），此后内置 fetch 走代理。此环境下 DNS 预检会假拦截——fake-ip 代理（Clash 类）把一切域名
+ *  本地解析成 fc00::/7 段假 IP，但实际连接目标由代理侧解析，本地解析结果不代表连接去向。 */
+const proxyEnvUrl = (): string | undefined =>
+  process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy;
+const proxied = (): boolean => process.env.NODE_USE_ENV_PROXY === "1" && proxyEnvUrl() !== undefined;
+
 /** 逐跳 SSRF 校验：IP 字面量直接查段；localhost/.localhost 拒；域名 DNS 解析后逐地址查段（kimi :235-287）。
- *  不钉 IP（Node 内置 undici 不可 import，pinned dispatcher 做不了——在案坑），解析-连接间存在 TOCTOU 窗口，v1 接受。 */
+ *  不钉 IP（Node 内置 undici 不可 import，pinned dispatcher 做不了——在案坑），解析-连接间存在 TOCTOU 窗口，v1 接受。
+ *  批 D：代理态跳过域名的 DNS 预检（字面 IP 主机名仍拦——URL 直写私网 IP 的代理请求照样打内网，语义保留；
+ *  域名解析交代理侧——本地 fake-ip 恒命中私网段，2026-10-01 doc-review 任务 14 次「解析到私网地址」实锤）。 */
 async function assertPublicTarget(url: string, deps: Required<Pick<FetchDeps, "lookupImpl">> & FetchDeps): Promise<void> {
   if (deps.allowPrivateAddresses === true) return;
   const hostRaw = new URL(url).hostname.toLowerCase();
@@ -74,6 +83,7 @@ async function assertPublicTarget(url: string, deps: Required<Pick<FetchDeps, "l
   if (host === "localhost" || host.endsWith(".localhost")) {
     throw new Error(`拒绝抓取本地主机名 "${host}"`);
   }
+  if (proxied()) return; // 域名走代理——本地 DNS 结果不代表连接目标（fake-ip 模式恒假拦截），交代理侧解析
   let addresses: { address: string }[];
   try {
     addresses = await deps.lookupImpl(host);
@@ -82,7 +92,11 @@ async function assertPublicTarget(url: string, deps: Required<Pick<FetchDeps, "l
   }
   for (const { address } of addresses) {
     if (isBlockedAddress(address)) {
-      throw new Error(`拒绝抓取主机 "${host}"：解析到私网地址 "${address}"`);
+      const proxy = proxyEnvUrl();
+      const hint = proxy !== undefined && process.env.NODE_USE_ENV_PROXY !== "1"
+        ? `（检测到代理环境变量 ${proxy}——若为 fake-ip 模式 DNS，以 NODE_USE_ENV_PROXY=1 启动 CLI 即经代理抓取，新版 CLI 已自动设置、重启生效）`
+        : "";
+      throw new Error(`拒绝抓取主机 "${host}"：解析到私网地址 "${address}"${hint}`);
     }
   }
 }

@@ -84,6 +84,40 @@ describe("tool-web fetch 单元（M4-3 T0）", () => {
     expect(calls.length).toBe(0);
   });
 
+  it("⑤b 批 D（2026-10-01 A+B）：代理态跳过域名 DNS 预检（fake-ip 假拦截解除——连接交代理侧解析）；字面私网 IP 仍拒", async () => {
+    const savedNup = process.env.NODE_USE_ENV_PROXY;
+    const savedHp = process.env.HTTPS_PROXY;
+    process.env.NODE_USE_ENV_PROXY = "1";
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+    try {
+      const fakeIpLookup: FetchDeps["lookupImpl"] = async () => [{ address: "fdfe:dcba::1234" }]; // fake-ip 代理的典型假 IP（fc00::/7 段）
+      const { result } = await exec({ fetchImpl: stubFetch([new Response("ok", { headers: { "content-type": "text/plain" } })], []), lookupImpl: fakeIpLookup }, "https://example.com/proxied");
+      expect(result.isError).toBe(false); // 旧实现：解析到私网地址 fdfe:dcba::（假拦截——本地 DNS 结果不代表代理连接目标）
+      expect(result.output).toBe("ok");
+      const lit = await exec({ fetchImpl: stubFetch([], []), lookupImpl: fakeIpLookup }, "https://192.168.1.1/x");
+      expect(lit.result.isError).toBe(true); // 字面 IP 主机名不豁免——URL 直写私网 IP 的代理请求照样打内网
+    } finally {
+      if (savedNup === undefined) delete process.env.NODE_USE_ENV_PROXY; else process.env.NODE_USE_ENV_PROXY = savedNup;
+      if (savedHp === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = savedHp;
+    }
+  });
+
+  it("⑤c 批 D 文案兜底：非代理态私网解析拒 + 代理变量在场而 NODE_USE_ENV_PROXY 未设 → 提示自动接线（重启生效）", async () => {
+    const savedNup = process.env.NODE_USE_ENV_PROXY;
+    const savedHp = process.env.HTTPS_PROXY;
+    delete process.env.NODE_USE_ENV_PROXY;
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7890";
+    try {
+      const { result } = await exec({ fetchImpl: stubFetch([], []), lookupImpl: async () => [{ address: "fdfe:dcba::1234" }] }, "https://example.com/hint");
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("解析到私网地址");
+      expect(result.output).toContain("NODE_USE_ENV_PROXY");
+    } finally {
+      if (savedNup === undefined) delete process.env.NODE_USE_ENV_PROXY; else process.env.NODE_USE_ENV_PROXY = savedNup;
+      if (savedHp === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = savedHp;
+    }
+  });
+
   it("⑥ http 公网自动升级 https；resolveExecution 按实参 host 声明 network access 与带参规则", async () => {
     const calls: FetchCall[] = [];
     const { plan, result } = await exec({ fetchImpl: stubFetch([new Response("ok", { headers: { "content-type": "text/plain" } })], calls), lookupImpl: PUBLIC_LOOKUP }, "http://example.com/a");
