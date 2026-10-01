@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
 import { z } from "zod";
 import { defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
-import { runProcess, sniffMime } from "./imaging.ts";
+import { hasFfmpeg, runProcess, sniffMime } from "./imaging.ts";
 
 /** 读取文件上限（kimi read-media-file :10 同值 100MB）。 */
 const READ_LIMIT_BYTES = 100 * 1024 * 1024;
@@ -29,12 +29,7 @@ export function sniffVideoMime(buf: Buffer): "video/mp4" | "video/webm" | "video
   return undefined;
 }
 
-/** ffmpeg 在场探测（D11 注册制——外部二进制缺席明说解锁条件；进程内 memo 一次）。 */
-let ffmpegOk: Promise<boolean> | undefined;
-export function hasFfmpeg(): Promise<boolean> {
-  ffmpegOk ??= execFileAsync("ffmpeg", ["-version"]).then(() => true).catch(() => false);
-  return ffmpegOk;
-}
+
 
 /** 抽帧（F11 路③，qwen 帧分档口径：帧按 80/256/1024 token 档缩放）：ffprobe 取时长 → fps=帧数/时长 →
  *  ffmpeg fps 滤镜出 N 帧 jpg（tmp 目录即用即清）。失败 throw——调用方带内回落。 */

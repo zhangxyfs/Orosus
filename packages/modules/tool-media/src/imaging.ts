@@ -6,7 +6,23 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 
-export type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+export type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+
+/** ffmpeg 在场探测（F11/F12 D11 注册制——外部二进制缺席明说解锁条件；进程内 memo 一次）。 */
+export let ffmpegProbe: Promise<boolean> | undefined;
+export function hasFfmpeg(): Promise<boolean> {
+  ffmpegProbe ??= (async () => {
+    try {
+      const { promisify } = await import("node:util");
+      const { execFile } = await import("node:child_process");
+      await promisify(execFile)("ffmpeg", ["-version"]);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  return ffmpegProbe;
+};
 
 /** 魔数嗅探（读文件先认格式——扩展名不可信）。 */
 export function sniffMime(buf: Buffer): ImageMime | undefined {
@@ -108,7 +124,8 @@ function getWorker() {
     w.on("error", (err) => failAll(`imaging worker 加载失败：${err instanceof Error ? err.message : String(err)}`));
     w.on("exit", (code) => { if (code !== 0) failAll(`imaging worker 异常退出 code=${code}`); });
     workerState = { w, pending };
-    w.unref?.();
+    // 刻意不 unref：工具执行期（无 fetch 句柄的 --print/管道场景）事件循环可能只剩本 worker——
+    // unref 会让进程提前退场、pending 永不结算（node -e TLA 实测饿死）；worker 常驻成本可接受
     return workerState;
   } catch {
     workerBroken = true;
@@ -124,7 +141,10 @@ export async function runProcess(buffer: Buffer, spec: ResizeSpec, region?: { x:
       return await new Promise<ProcessResult>((resolve, reject) => {
         const id = ++jobSeq;
         wk.pending.set(id, { resolve, reject });
-        wk.w.postMessage({ id, buffer, spec, ...(region !== undefined ? { region } : {}) }, [buffer.buffer as ArrayBuffer]);
+        // 小文件 Buffer 走 node 内存池（共享 AB）——直接 transfer 池 = detached ArrayBuffer 崩；
+        // 拷贝出自有 AB 再 transfer（大文件本就自有、此拷贝一次性）
+        const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+        wk.w.postMessage({ id, buffer: Buffer.from(ab), spec, ...(region !== undefined ? { region } : {}) }, [ab]);
       });
     } catch { /* inline 兜底 */ }
   }
