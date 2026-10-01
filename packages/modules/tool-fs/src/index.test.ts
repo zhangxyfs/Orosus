@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
 import type { Tool } from "@orosus/contracts/tool";
 import type { Fs } from "@orosus/contracts/fs";
@@ -78,15 +78,26 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     expect((await run(tools[2]!, { path: "b.txt", edits: [{ oldText: "aa", newText: "x" }] })).isError).toBe(true); // 多处匹配
   });
 
-  it("路径越出根目录 → isError（安全沙箱边界）", async () => {
-    const { ctx, tools } = fakeCtx();
-    await def.activate(ctx);
-    const r = await run(tools[0]!, { path: "../../../../etc/passwd" });
-    expect(r.isError).toBe(true);
-    expect(r.output).toContain("越出");
+  it("批 C（2026-10-01 方案一拍板）：读面放开绝对路径——根外文件可读；写面仍限根（越出 → isError）", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-out2-"));
+    writeFileSync(join(outside, "peer.txt"), "PEER REPO", "utf8");
+    try {
+      const { ctx, services, tools } = fakeCtx();
+      await def.activate(ctx);
+      const fs = services.get("fs") as Fs;
+      expect(await fs.read(join(outside, "peer.txt"))).toBe("PEER REPO"); // 旧实现：路径越出根目录
+      const r = await run(tools[0]!, { path: join(outside, "peer.txt") });
+      expect(r.isError).toBe(false);
+      expect(r.output).toContain("PEER REPO");
+      const w = await run(tools[1]!, { path: join(outside, "peer.txt"), content: "x" });
+      expect(w.isError).toBe(true); // 写面不动：方案一只放开读
+      expect(w.output).toContain("越出");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
-  it("MB-02 符号链接逃逸拦截：工作区内链接指向根外 → read/write/edit 被拒（词法前缀挡不住链接外指）", async () => {
+  it("MB-02 符号链接：写面拦截保留（链接外指 → write 被拒）；读面已放开（经链接可读——2026-10-01 方案一）", async () => {
     const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-out-"));
     writeFileSync(join(outside, "secret.txt"), "TOP SECRET", "utf8");
     try {
@@ -100,7 +111,7 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
       const { ctx, services, tools } = fakeCtx();
       await def.activate(ctx);
       const fs = services.get("fs") as Fs;
-      expect(() => fs.read("linkdir/secret.txt")).toThrow(/符号链接越出根目录/); // 旧实现：读到根外 TOP SECRET（readFileSync 跟随链接）
+      expect(await fs.read("linkdir/secret.txt")).toBe("TOP SECRET"); // 读面放开：跟随链接读根外（旧实现拦）
       expect(() => fs.write("linkdir/secret.txt", "x")).toThrow(/符号链接越出根目录/);
       expect(() => fs.write("linkdir/new.txt", "x")).toThrow(/符号链接越出根目录/); // 新建文件经链接目录——最近存在祖先（linkdir）解析到根外，同拦
       expect((await run(tools[1]!, { path: "linkdir/secret.txt", content: "x" })).isError).toBe(true);
@@ -133,18 +144,77 @@ describe("glob/grep（T16，§12 M2）", () => {
     expect(r.output).not.toContain("g2.ts");
   });
 
-  it("③ accesses 整根读声明 + 沙箱边界（越出 → isError，同 read）", async () => {
+  it("③ accesses 声明随走查基如实（方案一）：根内 pattern 基 = 根；根外 pattern 基 = 外部目录（不再整根一刀）", async () => {
     writeFileSync(join(dir, "in.txt"), "x");
     const { ctx, tools } = fakeCtx();
     await def.activate(ctx);
     const glob = tools.find((t) => t.name === "tool-fs__glob")!;
     const exec = await glob.resolveExecution({ pattern: "**/*.ts" });
-    // CT-04（2026-09-28 code review）：pattern 不再当路径塞进声明——glob/grep 按「整根读」声明字面绝对根路径，
-    // 调度器前缀比较恢复真实语义（原 <cwd>/**/* 字面串与一切 fs.write 恒不冲突，串行承诺被绕开）
+    // CT-04（2026-09-28 code review）+ 批 C：pattern 不再当路径塞进声明——按走查基声明字面绝对路径，
+    // 调度器前缀比较恢复真实语义；根外 pattern 声明外部基（审批面板如实显示将读哪里）
     expect(exec.accesses).toEqual([{ kind: "fs.read", path: realpathSync(dir) }]);
-    const r = await run(glob, { pattern: "../../etc/**/*.conf" });
-    expect(r.isError).toBe(true);
-    expect(r.output).toContain("越出");
+    const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-decl-"));
+    try {
+      const exec2 = await glob.resolveExecution({ pattern: `${outside.replaceAll("\\", "/")}/**/*.ts` });
+      expect(exec2.accesses).toEqual([{ kind: "fs.read", path: outside }]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("批 C（2026-10-01 方案一 + 敏感黑名单学 kimi）：glob 根外走查 + 敏感面", () => {
+  it("④ glob 绝对路径 pattern 直指他仓：外部目录走查命中；字面路径（无通配符）= 存在性检查", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-glob-"));
+    mkdirSync(join(outside, "src"), { recursive: true });
+    writeFileSync(join(outside, "src", "x.ts"), "x");
+    writeFileSync(join(outside, "README.md"), "r");
+    try {
+      const { ctx, tools } = fakeCtx();
+      await def.activate(ctx);
+      const r = await run(tools.find((t) => t.name === "tool-fs__glob")!, { pattern: `${outside.replaceAll("\\", "/")}/src/**/*.ts` });
+      expect(r.isError).toBe(false); // 旧实现：越出根目录 isError
+      expect(r.output).toContain(join(outside, "src", "x.ts"));
+      const lit = await run(tools.find((t) => t.name === "tool-fs__glob")!, { pattern: join(outside, "README.md") });
+      expect(lit.output).toContain(join(outside, "README.md"));
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("⑤ 敏感 read 拒绝（kimi path-access.ts:15-81 同款口径）：.env/.env.local/id_rsa.bak/.aws/credentials 带内拒；.env.example/id_rsa.pub 放行", async () => {
+    writeFileSync(join(dir, ".env"), "K=1");
+    writeFileSync(join(dir, ".env.local"), "K=2");
+    writeFileSync(join(dir, "id_rsa.bak"), "-----BEGIN PRIVATE");
+    writeFileSync(join(dir, ".env.example"), "K=");
+    writeFileSync(join(dir, "id_rsa.pub"), "ssh-rsa AAAA");
+    mkdirSync(join(dir, ".aws"), { recursive: true });
+    writeFileSync(join(dir, ".aws", "credentials"), "[default]");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    for (const p of [".env", ".env.local", "id_rsa.bak", ".aws/credentials"]) {
+      const r = await run(tools[0]!, { path: p });
+      expect(r.isError, p).toBe(true);
+      expect(r.output, p).toContain("敏感文件");
+    }
+    for (const p of [".env.example", "id_rsa.pub"]) {
+      expect((await run(tools[0]!, { path: p })).isError, p).toBe(false);
+    }
+  });
+
+  it("⑥ glob/grep 敏感过滤计数：.env 不进结果且带过滤注记（kimi globTool/grepTool 同款静默过滤）", async () => {
+    writeFileSync(join(dir, ".env"), "SECRET=1");
+    writeFileSync(join(dir, "a.ts"), "needle");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const g = await run(tools.find((t) => t.name === "tool-fs__glob")!, { pattern: "**/*" });
+    expect(g.output).toContain(join(dir, "a.ts"));
+    expect(g.output).not.toContain(join(dir, ".env"));
+    expect(g.output).toContain("已过滤 1 个敏感文件");
+    const gr = await run(tools.find((t) => t.name === "tool-fs__grep")!, { pattern: "SECRET" });
+    expect(gr.isError).toBe(false);
+    expect(gr.output).toContain("无匹配");
+    expect(gr.output).toContain("已跳过 1 个敏感文件");
   });
 });
 
@@ -472,10 +542,12 @@ describe("code review P1 批（2026-09-28）", () => {
     expect(editEx.accesses).toEqual([{ kind: "fs.write", path: join(realpathSync(dir), "e.ts") }]);
   });
 
-  it("CT-04 ② 越出根的声明回落原始串（声明阶段不抛，execute 内自会带内报错）", async () => {
+  it("CT-04 ② 越出根的声明（批 C 修订：读面放开后 resolveAbs 不再抛——声明即归一绝对路径，execute 内按读写面分治）", async () => {
     const t = await setup();
     const readEx = await t.read.resolveExecution({ path: "../../outside.txt" });
-    expect(readEx.accesses).toEqual([{ kind: "fs.read", path: "../../outside.txt" }]);
+    expect(readEx.accesses).toEqual([{ kind: "fs.read", path: resolve(dir, "../../outside.txt") }]); // 读面：如实声明根外绝对路径
+    const writeEx = await t.write.resolveExecution({ path: "../../outside.txt", content: "x" });
+    expect(writeEx.accesses).toEqual([{ kind: "fs.write", path: resolve(dir, "../../outside.txt") }]); // 写面声明同样如实——execute 内 safeWrite 拒
   });
 
   it("CT-04 ③ grep 声明整根读（字面绝对路径），与根内写真实冲突（调度器前缀比较口径）", async () => {
