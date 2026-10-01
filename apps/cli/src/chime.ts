@@ -29,6 +29,15 @@ const AUDIBLE_KINDS = new Set(["completed", "interrupted", "error"]);
 export interface ChimeDeps {
 	platform?: NodeJS.Platform;
 	run?: (cmd: string, args: string[]) => void;
+	/** 失败回报（宿主接诊断日志——2026-10-01 实机排障：静默吞错让「没声」无从查因）。 */
+	onError?: (stage: "spawn" | "resolve", err: unknown) => void;
+}
+
+/** powershell 绝对路径兜底（2026-10-01 实机排障）：spawn("powershell") 走 PATH——终端环境把
+ *  System32 族从 PATH 里剥掉时 ENOENT 静默；SystemRoot 是进程必有环境变量，绝对路径免疫。 */
+function powershellExe(): string {
+  const root = process.env.SystemRoot ?? process.env.windir;
+  return root === undefined ? "powershell" : `${root}\System32\WindowsPowerShell1.0\powershell.exe`;
 }
 
 /** 播放回合结束音（chime 档）：任一可听终态一声。runner/platform 注入可测；
@@ -36,19 +45,24 @@ export interface ChimeDeps {
 export function playTurnChime(kind: unknown, deps: ChimeDeps = {}): void {
   if (!AUDIBLE_KINDS.has(kind as string)) return;
   const run = deps.run ?? ((cmd: string, args: string[]): void => {
-    const child = spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true } as never);
-    child.unref();
+    try {
+      const child = spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true } as never);
+      child.unref();
+      child.on?.("error", (err: unknown) => deps.onError?.("spawn", err)); // ENOENT 异步错——spawn 本体不抛
+    } catch (err) {
+      deps.onError?.("spawn", err);
+    }
   });
   const platform = deps.platform ?? process.platform;
   try {
     if (platform === "win32") {
-      run("powershell", ["-NoProfile", "-c", `(New-Object Media.SoundPlayer '${TURN_END_SOUND.replace(/'/g, "''")}').PlaySync()`]);
+      run(powershellExe(), ["-NoProfile", "-c", `(New-Object Media.SoundPlayer '${TURN_END_SOUND.replace(/'/g, "''")}').PlaySync()`]);
     } else if (platform === "darwin") {
       run("afplay", [TURN_END_SOUND]);
     } else {
       run("sh", ["-c", `paplay '${TURN_END_SOUND}' 2>/dev/null || aplay -q '${TURN_END_SOUND}'`]);
     }
-  } catch {
-    /* 音效失败不影响主流程 */
+  } catch (err) {
+    deps.onError?.("resolve", err); // 音效失败不影响主流程——只回报
   }
 }
