@@ -75,3 +75,48 @@ describe("mapEvent 流内 error 事件（MP-03：error 事件 → finish{kind:\"
     expect(mapEvent(st(), "ping", { type: "ping" })).toEqual([]);
   });
 });
+
+
+// m5-media F3：工具结果带图——Anthropic 形态原生 tool_result content blocks（kimi lower.ts 同构）
+describe("toAnthropicMessages 工具结果带图（m5-media F3）", () => {
+  let mDir: string | undefined;
+  const pngPath = (): string => {
+    mDir ??= mkdtempSync(join(tmpdir(), "orosus-m5f3b-"));
+    const p = join(mDir, "shot.png");
+    writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    return p;
+  };
+  afterEach(() => { if (mDir) { rmSync(mDir, { recursive: true, force: true }); mDir = undefined; } });
+
+  it("⑦ toolResult.parts → tool_result content blocks（text + image base64 source）；无 parts 保持字符串（零差异）", () => {
+    const p = pngPath();
+    const withImg: ModelMessage = {
+      role: "toolResult", callId: "c1", output: "截图完成", isError: false,
+      parts: [{ kind: "image", path: p, mimeType: "image/png" }],
+    };
+    const out = toAnthropicMessages([withImg]) as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    const block = out[0]!.content[0]!;
+    expect(block["type"]).toBe("tool_result");
+    expect(block["tool_use_id"]).toBe("c1");
+    const blocks = block["content"] as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+    expect(blocks.map((b) => b.type)).toEqual(["text", "image"]);
+    expect(blocks[0]!.text).toBe("截图完成");
+    expect(blocks[1]!.source!.media_type).toBe("image/png");
+    expect(blocks[1]!.source!.data).toBe(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString("base64"));
+    // 零差异：无 parts 的 toolResult content 仍是纯字符串
+    const plain = toAnthropicMessages([{ role: "toolResult", callId: "c2", output: "纯文本", isError: false }]);
+    expect((plain[0]!.content[0] as Record<string, unknown>)["content"]).toBe("纯文本");
+  });
+
+  it("⑧ 工具图缺失 → 降级 text block；连续 toolResult 仍合并进同一条 user 消息", () => {
+    const missing: ModelMessage = {
+      role: "toolResult", callId: "c1", output: "o1", isError: false,
+      parts: [{ kind: "image", path: "Z:/nope/ghost.png", mimeType: "image/png" }],
+    };
+    const second: ModelMessage = { role: "toolResult", callId: "c2", output: "o2", isError: false };
+    const out = toAnthropicMessages([missing, second]) as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(out).toHaveLength(1); // 连续合并（既有行为不回归）
+    const blocks = (out[0]!.content[0] as Record<string, unknown>)["content"] as Array<{ type: string; text?: string }>;
+    expect(blocks.some((b) => b.type === "text" && (b.text ?? "").includes("图片文件缺失"))).toBe(true);
+  });
+});

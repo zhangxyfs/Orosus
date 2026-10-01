@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
+import type { Chunk, ContentPart, ModelMessage } from "@orosus/contracts/provider";
 
 /** 跨事件的可变解析状态（每条流一份）。 */
 export interface SseState {
@@ -96,12 +96,33 @@ export function mapEvent(state: SseState, event: string, raw: unknown): Chunk[] 
 type ApiBlock = Record<string, unknown>;
 interface ApiMessage { role: "user" | "assistant"; content: ApiBlock[] }
 
-/** ModelMessage → Anthropic messages。连续 toolResult 合并进同一条 user 消息（API 要求角色交替）。 */
+type ImagePart = Extract<ContentPart, { kind: "image" }>;
+
+/** image part → base64 source block（请求期读文件；缺失诚实降级 text 占位——不发坏请求）。
+ *  user 消息与 tool_result 图块共用同一映射（m5-media F3 单源——kimi anthropic/lower.ts 同构）。 */
+function imageBlockOrPlaceholder(p: ImagePart): ApiBlock {
+  try {
+    return { type: "image", source: { type: "base64", media_type: p.mimeType, data: readFileSync(p.path).toString("base64") } };
+  } catch {
+    return { type: "text", text: `[图片文件缺失：${p.path}]` };
+  }
+}
+
+/** ModelMessage → Anthropic messages。连续 toolResult 合并进同一条 user 消息（API 要求角色交替）。
+ *  工具结果带图（m5-media F3）：tool_result.content 从纯文本升级为 content blocks（text + image
+ *  base64 source——Anthropic 形态原生支持，kimi lower.ts:104-122 同构）；无 parts 时保持字符串（零差异）。 */
 export function toAnthropicMessages(messages: ModelMessage[]): ApiMessage[] {
   const out: ApiMessage[] = [];
   for (const m of messages) {
     if (m.role === "toolResult") {
-      const block: ApiBlock = { type: "tool_result", tool_use_id: m.callId, content: m.output, is_error: m.isError };
+      const images = (m.parts ?? []).filter((p): p is ImagePart => p.kind === "image");
+      let content: string | ApiBlock[] = m.output;
+      if (images.length > 0) {
+        const blocks: ApiBlock[] = m.output !== "" ? [{ type: "text", text: m.output }] : [];
+        for (const p of images) blocks.push(imageBlockOrPlaceholder(p));
+        content = blocks;
+      }
+      const block: ApiBlock = { type: "tool_result", tool_use_id: m.callId, content, is_error: m.isError };
       const last = out[out.length - 1];
       if (last && last.role === "user" && last.content.every((b) => b.type === "tool_result")) {
         last.content.push(block);
@@ -111,14 +132,10 @@ export function toAnthropicMessages(messages: ModelMessage[]): ApiMessage[] {
       continue;
     }
     // 空 text block 会被 Anthropic API 拒绝（纯工具调用 turn 会物化 text 为 "" 的 assistant/message）——在此过滤
-    // M4-2.5 T5：image part → base64 source block（请求期读文件；缺失诚实降级 text 占位——不发坏请求）
+    // M4-2.5 T5：image part → base64 source block（imageBlockOrPlaceholder 单源）
     const content: ApiBlock[] = m.content.flatMap((p): ApiBlock[] => {
       if (p.kind === "text") return p.text !== "" ? [{ type: "text", text: p.text }] : [];
-      try {
-        return [{ type: "image", source: { type: "base64", media_type: p.mimeType, data: readFileSync(p.path).toString("base64") } }];
-      } catch {
-        return [{ type: "text", text: `[图片文件缺失：${p.path}]` }];
-      }
+      return [imageBlockOrPlaceholder(p)];
     });
     if (m.role === "assistant" && m.toolCalls) {
       for (const tc of m.toolCalls) content.push({ type: "tool_use", id: tc.callId, name: tc.name, input: tc.args });
