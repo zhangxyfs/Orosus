@@ -53,7 +53,8 @@ import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
-import { loadConfig, sectionPath, modelsDevCacheFile, resolveContextWindow } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5)/路由(T3)/窗口兜底链(2026-09-29)
+import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
+import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
 import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
@@ -387,16 +388,6 @@ const commandUi = createCliUi({
   },
 });
 
-/** 模块节配置路由（m4-8 T3）：模块节 → modules.d/<名>.toml（sectionPath 负责建目录与带节头文件）；
- *  留守节 → config.toml。isModule = 内置 ∪ 当前图在册（audit 含第三方）。含 source 的模块节若被
- *  写 enabled 到 modules.d，与 config.toml 里的 [名] 节由加载层 CH-07 深合并兜底合体（§3.2）。 */
-const moduleConfigFileFor = (name: string): string =>
-  sectionPath(name, {
-    userConfig: join(orosusHome(), "config.toml"),
-    modulesDir: join(orosusHome(), "modules.d"),
-    isModule: (n) => BUILTIN_MODULES.some((m) => m.name === n) || h.graph().audit().some((a) => a.name === n),
-  });
-
 const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
   // m4-8 T2 存量迁移（D1 自动搬）：老 config.toml 里的模块节整节搬 modules.d/<名>.toml（.bak 备份、幂等、
   // 白名单 = 内置模块名——第三方已挂载模块发现后才知名，首轮不搬、下轮启动自然补搬）；
@@ -543,7 +534,7 @@ const applyModulePresetImpl = async (preset: "full" | "minimal"): Promise<{ fail
   const failed: string[] = [];
   for (const name of writeList) {
     try {
-      setModuleEnabledInConfig(name, preset === "minimal" ? false : true, moduleConfigFileFor(name));
+      setModuleEnabledInConfig(name, preset === "minimal" ? false : true, moduleConfigFileFor(name, h));
     } catch (err) {
       h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) });
       failed.push(name);
@@ -1249,44 +1240,6 @@ const lastRequestMsOf = (events: SessionEvent[]): number | undefined => {
 	return undefined;
 };
 
-/** 配置面读数（m4-8 T2.5 收口 loadConfig；2026-09-29 修空参——此前 loadConfig({}) 一层文件都没读：
- *  contextWindow 恒落 200k 硬编码、[approval]/[tui] 盘上值恒不可达）。窗口链 = config 显式值 >
- *  models-dev 目录兜底（resolveContextWindow）> 200k 显示缺省。env 层语义对齐(方案空白 7)不变。 */
-function configFacePaths(): { userFile: string; projectFile: string; userModulesDir: string; projectModulesDir: string } {
-	return {
-		userFile: join(orosusHome(), "config.toml"),
-		projectFile: join(process.cwd(), ".orosus", "config.toml"),
-		userModulesDir: join(orosusHome(), "modules.d"),
-		projectModulesDir: join(process.cwd(), ".orosus", "modules.d"),
-	};
-}
-const configFace = (): { contextWindow: number; approvalMode: string } => {
-	const cfg = loadConfig(configFacePaths());
-	const cw = resolveContextWindow(cfg.core, { catalogFile: modelsDevCacheFile(orosusHome()) });
-	const mode = (cfg.sections.get("approval") as { mode?: unknown } | undefined)?.mode;
-	return {
-		contextWindow: typeof cw === "number" ? cw : 200000,
-		approvalMode: typeof mode === "string" ? mode : "ask-risky",
-	};
-};
-
-/** [tui] 三键读数（m4-8 T2.5 收口 loadConfig——modules.d 自动生效；2026-09-29 补文件路径，此前空参恒 undefined）。
- *  分层对齐(方案空白 9):旧散读是「用户层优先」,收口统一为 §6.6 权威「项目压用户」——tui 键
- *  几乎总在用户层,真机感知面近零;登记为有意对齐。function 声明——早处初始化要用(hoisting)。 */
-function configFaceTuiLatex(): boolean | undefined {
-	const v = (loadConfig(configFacePaths()).sections.get("tui") as { latex?: unknown } | undefined)?.latex;
-	return typeof v === "boolean" ? v : undefined;
-}
-
-function configFaceTuiBell(): unknown {
-	return (loadConfig(configFacePaths()).sections.get("tui") as { bell?: unknown } | undefined)?.bell;
-}
-
-function configFaceTui(): string | undefined {
-	const v = (loadConfig(configFacePaths()).sections.get("tui") as { mode?: unknown } | undefined)?.mode;
-	return typeof v === "string" ? v : undefined;
-}
-
 /** 磁盘占用视图文本（F6——ROADMAP 缓存目录条目③销账面）。 */
 const diskUsageText = (): string => {
 	const home = orosusHome();
@@ -1338,16 +1291,6 @@ const ctxUsageText = (): string => {
 
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
  *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
-/** 子代理配置文件（M4.5 T12）：用户层 config.toml——[tool-subagent] 节 model/approvalMode 两键。 */
-const subagentConfigFile = (): string => join(orosusHome(), "config.toml");
-/** 模型槽清单（子代理模型菜单数据源——/model 同源换写盘目标）。 */
-const modelSlotList = (): { name: string; defaultModel?: string; listModels?: () => Promise<string[]> }[] =>
-	h.graph().services.listProviders().map((x) => ({
-		name: x.name,
-		...(x.defaultModel !== undefined ? { defaultModel: x.defaultModel } : {}),
-		...(h.graph().services.provider(x.name)?.listModels !== undefined ? { listModels: h.graph().services.provider(x.name)!.listModels! } : {}),
-	}));
-
 
 const SETTINGS_ITEMS = [
 	"磁盘占用（各目录大小与清理口径）",
@@ -1430,7 +1373,7 @@ const eyeModelUsable = async (
   modelNow: string,
   catalogAll: import("@orosus/provider-custom").Catalog,
 ): Promise<{ configured: boolean; usable: boolean; model?: string; why?: string }> => {
-  const v = readVisionModel(moduleConfigFileFor("tool-media"));
+  const v = readVisionModel(moduleConfigFileFor("tool-media", h));
   if (v === "off") return { configured: false, usable: false };
   if (v === "auto") {
     if (lookupModelVision(catalogAll, modelNow) === true) return { configured: true, usable: true, model: modelNow };
@@ -1952,7 +1895,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 				};
 				try {
 					if (sub === 0) {
-						const res = await runSubagentModelSetting(chooseVia, subagentConfigFile(), modelSlotList());
+						const res = await runSubagentModelSetting(chooseVia, subagentConfigFile(), modelSlotList(h));
 						if (res !== "") app.showToast(res);
 					} else if (sub === 1) {
 						const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
@@ -1974,7 +1917,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 			try {
 				const res = await runVisionSetting(
 					async (t, items) => { const i = await app.pickOverlay(t, items); if (i === undefined) throw new Error("已取消（Esc）"); return items[i] ?? ""; },
-					() => moduleConfigFileFor("tool-media"),
+					() => moduleConfigFileFor("tool-media", h),
 				);
 				// 写盘即自动重载（空闲）；busy（消息接收中）不 reload 只提示——reloadModulesIdle 共用件
 				if (res.wrote) {
@@ -2021,7 +1964,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 				}
 				try {
 					if (subIdx === "子代理模型") {
-						const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList());
+						const res = await runSubagentModelSetting((t, items) => commandUi.choose(t, items), subagentConfigFile(), modelSlotList(h));
 						if (res !== "") out(res);
 					} else if (subIdx === "审批模式") {
 						const res = await runSubagentApprovalSetting((t, items) => commandUi.choose(t, items), subagentConfigFile());
@@ -2040,7 +1983,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 		else if (idx === 6) await openMcpLine(out);
 		else if (idx === 7) {
 			try {
-				const res = await runVisionSetting(async (t, items) => commandUi.choose(t, items), () => moduleConfigFileFor("tool-media"));
+				const res = await runVisionSetting(async (t, items) => commandUi.choose(t, items), () => moduleConfigFileFor("tool-media", h));
 				// 写盘即自动重载——行模式 /settings busy 期排队到 turn 结束，此处必然空闲（共用件口径）
 				if (res.wrote) { reloadModulesIdle(undefined, ""); out(`${res.message}，已重载生效`); }
 				else out(res.message);
@@ -2464,7 +2407,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       let writeFailed = false;
       for (const n of writeList) {
         try {
-          setModuleEnabledInConfig(n, target, moduleConfigFileFor(n));
+          setModuleEnabledInConfig(n, target, moduleConfigFileFor(n, h));
           written++;
         } catch {
           writeFailed = true;
@@ -2527,7 +2470,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           void (async () => {
             try {
               trustModule(join(orosusHome(), "trust.json"), info.root, info.entryHash); // 动作 1：登记（项目级 hash 门/用户级认登记共用 trust.json——零新存储）
-              setModuleEnabledInConfig(name, true, moduleConfigFileFor(name)); // 动作 2：写盘 enabled
+              setModuleEnabledInConfig(name, true, moduleConfigFileFor(name, h)); // 动作 2：写盘 enabled
               await h.reload(); // 动作 3：重跑信任判定 → 挂载
               registerToolLabels(h.graph().tools.toolInfos());
               await refreshPanel();
@@ -2733,9 +2676,9 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		},
 		// m4-8 T4/C5：[tool-web] 路由新家 modules.d/tool-web.toml（D7 例外——模块侧写动作保持，
 		// 目标路径由宿主按 sectionPath 算好传入；模块不 import core）
-		writeSearch: (patch) => persistToolWebSearch(moduleConfigFileFor("tool-web"), patch),
+		writeSearch: (patch) => persistToolWebSearch(moduleConfigFileFor("tool-web", h), patch),
 			// F14 视觉模型页（第 3/4 页）：写 [tool-media] visionModel；清单 = 已配置槽逐槽查目录（遮蔽坑免疫）
-			writeVision: (value) => persistVisionModel(moduleConfigFileFor("tool-media"), value),
+			writeVision: (value) => persistVisionModel(moduleConfigFileFor("tool-media", h), value),
 			visionModels: () => visionCandidates(),
 		listModels: async (slot) => {
 			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）
