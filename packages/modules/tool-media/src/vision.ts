@@ -47,6 +47,11 @@ export function readSummary(imagePath: string): string | undefined {
 
 const SUMMARY_PROMPT = "用一两句话客观描述这张图（界面元素/文字要点/显著颜色与布局）。不要猜测图外信息，直接给描述，不要前缀。";
 
+// 进行中去重（2026-10-02 拍板）：同一图并发摘要（中止后秒内重发等小窗口）共享同一次调用——缓存
+// 去重只挡已落盘，进行中的重复请求会双花视觉 token（图片输入 token 已计费，省的就是这次）。
+// 键 = 图片路径（缓存文件同键）；失败/超时 finally 出表（不缓存失败——下次调用照常重试）。
+const summarizing = new Map<string, Promise<string | undefined>>();
+
 /** 生成并缓存一张图的视觉摘要（后台调用——失败静默 undefined 回落纯标签，绝不炸）。 */
 export async function summarizeImage(
   imagePath: string,
@@ -54,30 +59,37 @@ export async function summarizeImage(
   eyeModel: string,
   deps: VisionSummaryDeps,
 ): Promise<string | undefined> {
-  if (readSummary(imagePath) !== undefined) return readSummary(imagePath); // 已缓存
-  try {
-    let text = "";
-    const stream = deps.llmStream({
-      model: eyeModel,
-      system: "你是图片描述器。",
-      messages: [{ role: "user", content: [{ kind: "text", text: SUMMARY_PROMPT }, { kind: "image", path: imagePath, mimeType }] }],
-      tools: [],
-      signal: AbortSignal.timeout(60_000),
-      maxTokens: 300,
-    });
-    for await (const c of stream) {
-      if (c.type === "text/delta") text += c.text;
-      if (c.type === "finish" && c.kind === "error") return undefined;
-    }
-    const clean = text.trim().slice(0, 500);
-    if (clean === "") return undefined;
+  const cached = readSummary(imagePath);
+  if (cached !== undefined) return cached; // 已缓存
+  const running = summarizing.get(imagePath);
+  if (running !== undefined) return running; // 进行中——共享同一次调用
+  const p = (async (): Promise<string | undefined> => {
     try {
-      writeFileSync(summaryPathOf(imagePath), clean, { mode: 0o600 });
-    } catch { /* 缓存写失败不影响返回值（本次直接用） */ }
-    return clean;
-  } catch {
-    return undefined;
-  }
+      let text = "";
+      const stream = deps.llmStream({
+        model: eyeModel,
+        system: "你是图片描述器。",
+        messages: [{ role: "user", content: [{ kind: "text", text: SUMMARY_PROMPT }, { kind: "image", path: imagePath, mimeType }] }],
+        tools: [],
+        signal: AbortSignal.timeout(60_000),
+        maxTokens: 300,
+      });
+      for await (const c of stream) {
+        if (c.type === "text/delta") text += c.text;
+        if (c.type === "finish" && c.kind === "error") return undefined;
+      }
+      const clean = text.trim().slice(0, 500);
+      if (clean === "") return undefined;
+      try {
+        writeFileSync(summaryPathOf(imagePath), clean, { mode: 0o600 });
+      } catch { /* 缓存写失败不影响返回值（本次直接用） */ }
+      return clean;
+    } catch {
+      return undefined;
+    }
+  })().finally(() => summarizing.delete(imagePath));
+  summarizing.set(imagePath, p);
+  return p;
 }
 
 /** policy 便捷面：facts + 当前模型 → 眼睛模型现算（激活期/事件期共用）。 */

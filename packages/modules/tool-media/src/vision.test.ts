@@ -54,6 +54,33 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     const emptyDeps = { llmStream: () => fakeStream([{ type: "finish", kind: "stop" }])() };
     expect(await summarizeImage(img, "image/png", "eye/m", emptyDeps as never)).toBeUndefined();
   });
+
+  it("③b 进行中去重（2026-10-02 拍板）：同一图并发调用共享同一次流（双 Esc 中止后秒内重发的小窗口不双花）；落盘后新调用走缓存", async () => {
+    const d = fresh();
+    const img = join(d, "dup.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slowDeps = {
+      llmStream: () => {
+        calls++;
+        return (async function* (): AsyncIterable<Chunk> {
+          await gate; // 悬住首次调用——并发窗口打开
+          yield { type: "text/delta", text: "共享一次调用的描述" };
+          yield { type: "finish", kind: "stop" };
+        })();
+      },
+    };
+    const p1 = summarizeImage(img, "image/png", "eye/m", slowDeps as never);
+    const p2 = summarizeImage(img, "image/png", "eye/m", slowDeps as never); // 首次未完——进行中命中
+    release();
+    expect(await p1).toContain("共享一次调用");
+    expect(await p2).toBe(await p1);
+    expect(calls).toBe(1); // 只发一次视觉请求
+    expect(await summarizeImage(img, "image/png", "eye/m", slowDeps as never)).toContain("共享一次调用");
+    expect(calls).toBe(1); // 已落缓存——第三次仍零请求
+  });
 });
 
 describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", () => {
