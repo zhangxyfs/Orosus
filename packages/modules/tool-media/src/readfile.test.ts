@@ -72,6 +72,11 @@ describe("ReadMediaFile（m5-media F10——投递四档 + F4 门控 + 卫戍）
     expect(vision.images).toHaveLength(1); // vision 放行
     const unknown = await run(createReadMediaFileTool({ model: () => "selfhosted/x", catalogFile: catalog }), { path: p });
     expect(unknown.images).toHaveLength(1); // 未知（自架）放行——tui 批 F5 二轮⑭ 语义
+    // ④b 执行期现读（2026-10-02 readfile 门修复）：异步 getter（宿主 liveModel 形态）同样触发门——
+    // 修复前快照式 getter 在首轮 turn 进行中为空、门静默放行原图（实机 11:31 白投案）
+    const live = await run(createReadMediaFileTool({ model: async () => "text-m", catalogFile: catalog }), { path: p });
+    expect((live as { images?: unknown }).images).toBeUndefined();
+    expect(live.output).toContain("不支持图片输入");
   }, 30_000);
 
   it("⑤ 卫戍：文件缺失 / 非图格式 / 超 100MB 帽（按 stat 模拟不了大文件——以缺失与格式两档钉卫戍行为）", async () => {

@@ -2,7 +2,6 @@
 // 为有意的双写：口径互指（scaleFor 同式：min(1, 边帽, √(token 预算/像素))）；worker 隔离同 pi 形态。
 import { Jimp } from "jimp";
 import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 

@@ -83,8 +83,10 @@ function readCatalog(catalogFile: string): Catalog | undefined {
 }
 
 export interface ReadMediaFileDeps {
-  /** 当前模型现读口（宿主快照缓存 getter；测试注入）。undefined = 不知道（放行口径）。 */
-  model?: () => string | undefined;
+  /** 当前模型现读口（**执行期现读**〔2026-10-02 readfile 门修复〕：快照式 getter 在首轮 turn 进行中
+   *  为空——实机非视觉门因此没触发、白给模型投了原图；返回 Promise 由调用侧 await，同步 getter 兼容）。
+   *  undefined = 不知道（放行口径）。 */
+  model?: () => string | undefined | Promise<string | undefined>;
   /** 目录缓存路径（缺省 ~/.orosus/cache/models-dev.json；测试注入密封）。 */
   catalogFile?: string;
   /** 压缩口径（缺省 2048px + 2048 档——policyOf 缺省）。 */
@@ -142,7 +144,7 @@ If the current model does not support image input, STILL CALL THIS whenever the 
           // 能力门控（F4 口径：明确 false 才拦——拒发+留路径指路；true/undefined 放行）。
           // F10×D12 扩面（2026-10-02）：视觉模型已配时先试眼睛转述——主模型非视觉也能"读"图（摘要进对话）；
           // 转述不可用（未配/失败）回落路径指路。
-          const model = deps.model?.();
+          const model = await deps.model?.();
           if (model !== undefined && lookupModality(readCatalog(catalogFile) ?? {}, model, "image") === false) {
             const summary = deps.summarize !== undefined ? await deps.summarize(args.path, mime).catch(() => undefined) : undefined;
             if (summary !== undefined) {
@@ -183,7 +185,7 @@ async function deliverVideo(
   catalogFile: string,
   spec: { maxEdge: number; tokenTier: number },
 ): Promise<ToolResult> {
-  const model = deps.model?.();
+  const model = await deps.model?.();
   const catalog = readCatalog(catalogFile) ?? {};
   // ① 三值判定（F4 同语义）：true（目录声明吃视频）或 undefined（自架模型不误伤）→ 直发
   //   （spike 实证 glm-5.3-flash 吃 data URL 视频）；明确 false 走 ③ 抽帧 / ④ 占位。
