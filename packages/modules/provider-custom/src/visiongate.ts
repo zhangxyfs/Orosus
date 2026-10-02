@@ -1,11 +1,20 @@
 import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { defaultCatalogCacheFile, lookupModelVision, readCatalogDiskCache, type Catalog } from "./catalog.ts";
 
 /** 非图模型占位文案（m5-media F4——形态照 main.ts Alt+V 拦截文案先例：通用指路「/model 换视觉模型」，
- *  不含具体模型名）。路径在——信息不丢，换模型后可再读（三档口诀的二档「东西在哪别丢」）。 */
-export const nonVisionImagePlaceholder = (path: string): string =>
-  `[当前模型不支持图片输入——图片已存 ${path}，/model 换视觉模型后可查看]`;
+ *  不含具体模型名）。路径在——信息不丢，换模型后可再读（三档口诀的二档「东西在哪别丢」）。
+ *  F13/F14 扩面（2026-10-02）：眼睛模型摘要缓存（<path>.summary.txt——tool-media 后台生成）在场则随占位
+ *  附上——非视觉主模型照样「读懂」图；无缓存纯占位（首次请求可能未到、后续请求带上，最终一致）。 */
+export const nonVisionImagePlaceholder = (path: string): string => {
+  const base = `[当前模型不支持图片输入——图片已存 ${path}，/model 换视觉模型后可查看]`;
+  try {
+    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    return t === "" ? base : `${base}\n[视觉摘要] ${t.slice(0, 500)}`;
+  } catch {
+    return base;
+  }
+};
 
 /** 图/视频部件剥除（纯函数）：user/assistant 的 content 与 toolResult 的 parts 中的 image/video part
  *  → 文本占位。只在调用方已判定 vision === false 时使用（本函数不查目录）——非视觉模型视频同样看不见。 */

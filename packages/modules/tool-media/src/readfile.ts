@@ -89,6 +89,9 @@ export interface ReadMediaFileDeps {
   catalogFile?: string;
   /** 压缩口径（缺省 2048px + 2048 档——policyOf 缺省）。 */
   spec?: { maxEdge: number; tokenTier: number };
+  /** 眼睛模型转述口（F10×D12——主模型非视觉但视觉模型已配：读图改为摘要文本投递；
+   *  undefined/返 undefined = 未启用或生成失败 → 回落路径指路文案）。 */
+  summarize?: (path: string, mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif") => Promise<string | undefined>;
 }
 
 const REGION_DESC = "裁剪区（像素坐标，先全图看布局再裁一角看细节的两段式用法）";
@@ -136,9 +139,15 @@ If the current model does not support image input, this returns a path note inst
             if (vmime !== undefined) return await deliverVideo(args, vmime, deps, catalogFile, spec);
             return { output: `无法识别的图片格式（支持 png/jpeg/gif/webp 与 mp4/webm/mov 视频）：${args.path}`, isError: true };
           }
-          // 能力门控（F4 口径：明确 false 才拦——拒发+留路径指路；true/undefined 放行）
+          // 能力门控（F4 口径：明确 false 才拦——拒发+留路径指路；true/undefined 放行）。
+          // F10×D12 扩面（2026-10-02）：视觉模型已配时先试眼睛转述——主模型非视觉也能"读"图（摘要进对话）；
+          // 转述不可用（未配/失败）回落路径指路。
           const model = deps.model?.();
           if (model !== undefined && lookupModality(readCatalog(catalogFile) ?? {}, model, "image") === false) {
+            const summary = deps.summarize !== undefined ? await deps.summarize(args.path, mime).catch(() => undefined) : undefined;
+            if (summary !== undefined) {
+              return { output: `当前模型（${model}）不支持图片输入——视觉模型转述：${summary}\n（原图已存 ${args.path}，换视觉模型后可直接看）`, isError: false };
+            }
             return { output: `当前模型（${model}）不支持图片输入——图已存 ${args.path}，/model 换视觉模型后可查看`, isError: false };
           }
           const useSpec = { maxEdge: spec.maxEdge, tokenTier: args.token_tier ?? spec.tokenTier };

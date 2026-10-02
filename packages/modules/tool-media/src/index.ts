@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createReadMediaFileTool } from "./readfile.ts";
 import { createConvertTool, createCropTool, createDownsampleTool, createVideoClipTool } from "./tools.ts";
 import { hasFfmpeg } from "./imaging.ts";
-import { eyeModelOf, summarizeImage } from "./vision.ts";
+import { eyeModelOf, makeSummarizer, summarizeImage } from "./vision.ts";
 
 /** 媒体策略出货形态（m5-media F9——服务倒挂双边契约）：发送路径四道闸 + 压缩口径的有效值快照。
  *  消费方 = provider-custom（translate 前的 F5 副本口径与 F6/F7 帽值）；键与形状登记于本文件常量。 */
@@ -77,6 +77,8 @@ export default defineModule({
     ctx.contribute.tool(createReadMediaFileTool({
       model: () => hostModel,
       spec: { maxEdge: facts.maxEdge, tokenTier: facts.tokenTier },
+      // F10×D12：主模型非视觉但眼睛模型已配 → 读图改为转述（未解析/失败回落路径指路）
+      summarize: makeSummarizer(facts, () => hostModel, join(orosusHome(), "cache", "models-dev.json"), (req) => ctx.llm.stream(req as never)),
     }));
     ctx.contribute.tool(createDownsampleTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));
     ctx.contribute.tool(createCropTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));

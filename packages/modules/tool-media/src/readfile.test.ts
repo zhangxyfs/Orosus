@@ -140,3 +140,24 @@ describe("ReadMediaFile 视频三分支（m5-media F11——spike 实证直发/�
     }
   }, 60_000);
 });
+
+// F10×D12：主模型非视觉但视觉模型已配 → 读图改为眼睛转述（摘要文本进对话）
+describe("ReadMediaFile 眼睛转述（F10×D12）", () => {
+  it("⑥b 非视觉模型 + summarize 可用 → 转述文本 + 原图路径；summarize 失败/缺席 → 回落路径指路", async () => {
+    const d = fresh();
+    const p2 = join(d, "e.png");
+    await new Jimp({ width: 60, height: 40, color: 0x00ffff }).write(p2 as `${string}.png`);
+    const catalog = join(d, "models-dev.json");
+    writeFileSync(catalog, JSON.stringify({ fetchedAt: 1, catalog: { zai: { models: { "text-m": { modalities: { input: ["text"] } } } } } }));
+    const r = await run(createReadMediaFileTool({ model: () => "text-m", catalogFile: catalog, summarize: async () => "绿色矩形图表，左上角有标题" }), { path: p2 });
+    expect(r.isError).toBe(false);
+    expect(r.output).toContain("视觉模型转述");
+    expect(r.output).toContain("绿色矩形图表");
+    expect(r.output).toContain(p2); // 原图路径留据
+    expect((r as { images?: unknown }).images).toBeUndefined(); // 不投图——主模型吃不了
+    const fell = await run(createReadMediaFileTool({ model: () => "text-m", catalogFile: catalog, summarize: async () => undefined }), { path: p2 });
+    expect(fell.output).toContain("/model 换视觉模型"); // 回落路径指路
+    const noEye = await run(createReadMediaFileTool({ model: () => "text-m", catalogFile: catalog }), { path: p2 });
+    expect(noEye.output).toContain("/model 换视觉模型"); // 未配 summarize 同回落
+  }, 30_000);
+});

@@ -1070,16 +1070,25 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         const textNoImg = imgRefs.cleaned;
         const imgSeqs = [...pendingLineSeqs, ...imgRefs.seqs];
         const imgs = imgSeqs.map((q) => pendingImageFiles.get(q)).filter((f): f is string => f !== undefined);
-        // 非 vision 模型拦截（F5 二轮⑭）：含图消息先查 models.dev 目录——明确不支持图片输入则拒发
-        // （坏消息落日志后每轮重发 = 会话永久报废，用户实测痛点）；目录未命中（自架模型）放行。
-        // 注：模型判定走 config 面值——/model 会话内覆盖在 harness 闭包内，CLI 不可见（持久化则同值）。
+        // 非 vision 模型拦截（F5 二轮⑭）+ F14 眼睛模型旁路（2026-10-02 用户口令「视觉模型启用了就不能再拦截」）：
+        // 主模型明确不吃图时三态——① 视觉模型可用（三态解析过：auto=当前模型视觉 / 指定=槽在且目录证实多模态）
+        // → 放行：图照发（日志留 image part，磁盘在媒资库），请求组装期占位+眼睛摘要进上下文；② 配置了
+        // 但不可用 → 仍拦截、文案带眼因（auto 且当前非视觉 / 槽未配置 / 目录证实非多模态）；③ 未配置 → 原文案。
+        // （坏消息落日志后每轮重发 = 会话永久报废的拦截理由不变——旁路不把图发给不吃图的模型，只换占位+摘要。）
         if (imgs.length > 0) {
           const modelNow = realReadModel(process.cwd())() ?? "";
-          const vision = lookupModelVision(readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}, modelNow);
-          if (vision === false) {
-            notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
-            activeApp?.restoreInput(text); // 全屏：输入原文（含 chip token）回挂——提交已清输入框
-            return "again";
+          const catalogAll = readCatalogDiskCache(defaultCatalogCacheFile()) ?? {};
+          if (lookupModelVision(catalogAll, modelNow) === false) {
+            const eye = await eyeModelUsable(modelNow, catalogAll);
+            if (eye.usable) {
+              notify(`已发送——当前模型不吃图，图片将由视觉模型 ${eye.model} 转述（进上下文后可继续追问）`);
+              warmVisionSummaries(imgs); // 后台生成 .summary.txt——请求组装期占位富化（首次请求可能未到，最终一致）
+            } else {
+              const why = eye.configured ? `，且视觉模型不可用（${eye.why}——/settings 修复）` : "（或在 /settings 配置视觉模型转述）";
+              notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入${why}——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
+              activeApp?.restoreInput(text); // 全屏：输入原文（含 chip token）回挂——提交已清输入框
+              return "again";
+            }
           }
         }
         // @文件引用（M4-2 T18）：引用替换为附着内容（限 5 个/50KB，超限提示带内）
@@ -1376,6 +1385,48 @@ const runVisionSetting = async (
 	persistVisionModel(configFile(), model);
 	return { wrote: true, message: `已指定视觉模型 ${model}` };
 };
+
+/** F14 眼睛模型可用性（发送闸旁路判定——与 tool-media/vision.ts eyeModelOf 同判定口径的 CLI 侧实读）：
+ *  读 [tool-media] visionModel 三态：off=未配置；auto=当前模型视觉才可用（跨槽挑模块侧不可达，同收窄口径）；
+ *  指定=槽已配置且目录**条目内精确键**证实多模态（遮蔽坑免疫）。configured=true 但 usable=false 时 why 带原因。 */
+const eyeModelUsable = async (
+  modelNow: string,
+  catalogAll: import("@orosus/provider-custom").Catalog,
+): Promise<{ configured: boolean; usable: boolean; model?: string; why?: string }> => {
+  const v = readVisionModel(moduleConfigFileFor("tool-media"));
+  if (v === "off") return { configured: false, usable: false };
+  if (v === "auto") {
+    if (lookupModelVision(catalogAll, modelNow) === true) return { configured: true, usable: true, model: modelNow };
+    return { configured: true, usable: false, why: `auto 档且当前模型 ${modelNow || "（未配置）"} 非视觉` };
+  }
+  const slot = v.split("/")[0] ?? "";
+  const key = v.slice(slot.length + 1);
+  const providers = await defaultMenuDeps().loadProviders();
+  if (providers[slot] === undefined) return { configured: true, usable: false, why: `槽 "${slot}" 未配置` };
+  const mm = catalogAll[slot]?.models?.[key];
+  if (mm === undefined) return { configured: true, usable: false, why: `目录无 ${v}` };
+  if (mm.modalities?.input?.includes("image") !== true) return { configured: true, usable: false, why: `目录证实 ${v} 非多模态` };
+  return { configured: true, usable: true, model: v };
+};
+
+/** 扩展名 → 图片 mime（warm 参数用——贴图/媒资库件均按扩展名落盘）。 */
+const extImageMime = (path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
+  const e = path.slice(path.lastIndexOf(".")).toLowerCase();
+  return e === ".jpg" || e === ".jpeg" ? "image/jpeg" : e === ".webp" ? "image/webp" : e === ".gif" ? "image/gif" : "image/png";
+};
+
+/** 用户贴图摘要预热（F13 扩面：tool/post-execute 只盖工具产图——用户消息图在发送时 warm，
+ *  服务缺席静默〔tool-media 未启用等〕——占位富化自然回落纯路径）。 */
+const warmVisionSummaries = (imgs: string[]): void => {
+  void h.graph().services
+    .getOptional("tool-media.vision-summary" as never)
+    .then((svc) => {
+      const warm = (svc as { warm?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => void } | undefined)?.warm;
+      warm?.(imgs.map((path) => ({ path, mimeType: extImageMime(path) })));
+    })
+    .catch(() => undefined);
+};
+
 
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
  *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。
