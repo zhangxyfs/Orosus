@@ -100,7 +100,10 @@ export class FullScreen {
 				const r = overlay.row + i;
 				if (r < 0 || r >= rows) continue;
 				const base = buf[r]!;
-				const before = sliceByColumn(base, 0, overlay.col);
+				// before 强制恒宽 col（2026-10-02 引导窗框线错位走查）：sliceByColumn 尾界语义是
+				// 「起点在界内即计入」——宿主行宽字符跨界 overlay.col 时整字带入，prefix 实画 col+1 格，
+				// 整条弹窗行被顶右 1 格（该行左右框线双双右漂、与其余行错位实锤）；截尾再补齐锁死 col。
+				const before = padToWidth(sliceByColumn(base, 0, overlay.col), overlay.col);
 				const after = sliceByColumn(base, overlay.col + overlay.width, cols - overlay.col - overlay.width);
 				buf[r] =
 					before +

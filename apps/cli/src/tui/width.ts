@@ -321,10 +321,17 @@ export function truncateToWidth(text: string, maxWidth: number): string {
 	return out + leaked;
 }
 
-/** 右填充空格到目标宽（面板排版用；超宽转截断）。 */
+/** 右填充空格到目标宽（面板排版用；超宽转截断）。
+ *  截断后回填（2026-10-02 引导窗框线错位走查）：截点落宽字中间时整字让位会短 1~2 格——
+ *  box 行右框线随内容长短左右漂移（账面 95 ≠ 96 实锤）；契约是「恒等于目标宽」，短多少补多少。 */
 export function padToWidth(text: string, width: number): string {
 	const w = visibleWidth(text);
-	return w >= width ? truncateToWidth(text, width) : text + " ".repeat(width - w);
+	if (w >= width) {
+		const cut = truncateToWidth(text, width);
+		const short = width - visibleWidth(cut);
+		return short > 0 ? cut + " ".repeat(short) : cut;
+	}
+	return text + " ".repeat(width - w);
 }
 
 /** 抽取显示列区间 [startCol, startCol+len)（overlay 合成/选区切分用——pi sliceByColumn 同构）。

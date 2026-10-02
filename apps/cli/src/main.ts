@@ -35,7 +35,7 @@ import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type PanelData, type PanelNetwork, type SlashItem, msText } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 
-import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, type ProviderEntry } from "@orosus/provider-custom";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView, type ProviderEntry } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
@@ -2662,6 +2662,10 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // 出厂技能固化（2026-10-01 拍板）：弹窗弹出时刻把 bundled/ 出厂件（件数随版本浮动）拷入用户级
     // ~/.orosus/skills——打包布局变化不再影响已初始化用户（引导完成后 h.reload 重扫即入清单；quit 路径下次启动拾取）
     seedFactorySkills({ fresh: trigger.reason === "fresh", notify, showToast: (m) => app.showToast(m) });
+    // 目录预装固化（2026-10-02 用户拍板「打开程序时候拷到 cache 下」）：预装 models-dev.json 全量信封
+    // 缺/坏才拷入 ~/.orosus/cache/——引导第 2 页提供商与第 4 页模型清单离线首跑即全量；在线拉取的
+    // 更新数据不被回滚（缺/坏判据在 seed 内部）
+    seedBundledCatalog(defaultCatalogCacheFile());
     const outcome = await app.runOnboarding(buildOnboardingDeps(), await onboardingInitial());
     if (outcome.kind === "quit") {
       action = "quit"; // Ctrl + Q（仅第 1 页）= /quit 同款
@@ -2706,7 +2710,9 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 	const menuDeps = defaultMenuDeps();
 	const secretsFile = join(orosusHome(), "secrets.env");
 	return {
-		providers: snapshotProviderView(),
+		// 2026-10-02 用户拍板：提供商正源 = 盘上目录缓存（预装 models-dev.json 已 seed 固化，见 runOnboarding
+		// 调用前）——全量派生视图（过滤 + 头部优先排序）；盘上无缓存/坏文件回退烤码 7 家快照（末位兜底）
+		providers: catalogProviderView(defaultCatalogCacheFile()) ?? snapshotProviderView(),
 		writeProvider: (p) => {
 			// CM-12③（2026-09-28 code review）：引导写盘 void 裸奔——IO 拒绝（EACCES/ENOSPC）即 unhandledRejection
 			// 崩进程，用户视角「填完密钥程序炸了」；rejection 落 toast（notify：全屏=引导弹窗外浮层、行模式=单行），进程存活

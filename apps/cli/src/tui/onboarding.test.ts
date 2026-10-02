@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { OnboardingSession, type OnboardingDeps, type OnboardingProvider } from "./onboarding.ts";
-import { visibleWidth } from "./width.ts";
+import { stripAnsi, visibleWidth } from "./width.ts";
 
 const PROVIDERS: OnboardingProvider[] = [
-  { id: "openai", name: "OpenAI", envKey: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", type: "openai", local: false },
-  { id: "anthropic", name: "Anthropic", envKey: "ANTHROPIC_API_KEY", baseUrl: "https://api.anthropic.com", type: "anthropic", local: false },
-  { id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://open.bigmodel.cn/api/paas/v4", type: "openai", local: false },
-  { id: "ollama", name: "Ollama", baseUrl: "http://localhost:11434/v1", type: "openai", local: true },
+  { id: "openai", name: "OpenAI", envKey: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", type: "openai" },
+  { id: "anthropic", name: "Anthropic", envKey: "ANTHROPIC_API_KEY", baseUrl: "https://api.anthropic.com", type: "anthropic" },
+  { id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://open.bigmodel.cn/api/paas/v4", type: "openai" },
 ];
 
 interface Calls {
@@ -89,20 +88,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(calls.models).toEqual(["openai", "anthropic"]);
   });
 
-  it("③ p2 本地服务免 Key：Enter 即配置并自动当前使用（ollama）", () => {
-    const { deps, calls } = mkDeps();
-    const s = new OnboardingSession(deps);
-    s.handleKey("ctrl+n");
-    s.handleKey("down"); s.handleKey("down"); s.handleKey("down"); // ollama sel=3
-    s.handleKey("enter"); // list → key 态
-    s.handleKey("enter"); // key 态回车 = 确认（免 Key）
-    expect(calls.providers).toEqual([{ id: "ollama" }]);
-    expect(calls.secrets).toEqual([]);
-    expect(calls.models).toEqual(["ollama"]);
-    expect(s.stateRef.p2.notice).toContain("本地服务无需 Key");
-  });
-
-  it("④ p2 空 Key 回车 → 暖金提示；输入态 ↑↓ 换行草稿按行保留（SW-25）", () => {
+  it("③ p2 空 Key 回车 → 暖金提示；输入态 ↑↓ 换行草稿按行保留（SW-25）", () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     s.handleKey("ctrl+n");
@@ -125,7 +111,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.stateRef.p2.mode).toBe("list");
   });
 
-  it("⑤ p3 LLM 跨提供商钉选：llm → provs → models → 钉选值 provider/model 限定形（SW-24）", async () => {
+  it("④ p3 LLM 跨提供商钉选：llm → provs → models → 钉选值 provider/model 限定形（SW-24）", async () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu", "openai"], active: "zhipu" });
     s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p3 视觉页（跳过）→ p4 搜索页
@@ -143,7 +129,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.stateRef.p3.stage).toBe("opts");
   });
 
-  it("⑥ p3 模型清单拉取失败 → 手动输入行回退（SW-24）", async () => {
+  it("⑤ p3 模型清单拉取失败 → 手动输入行回退（SW-24）", async () => {
     const { deps, calls } = mkDeps({ listModels: async () => { throw new Error("端点不可达"); } });
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
     s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
@@ -156,7 +142,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(calls.searchPatches).toEqual([{ backend: "auto", model: "zhipu/glm-5.3" }]);
   });
 
-  it("⑦ p3 Tavily key：输入 → secrets + 占位符写盘；输入态 ↑↓ 可换 Brave（草稿按行保留）", () => {
+  it("⑥ p3 Tavily key：输入 → secrets + 占位符写盘；输入态 ↑↓ 可换 Brave（草稿按行保留）", () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
     s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
@@ -175,7 +161,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });
   });
 
-  it("⑧ Ctrl + Q 仅第 1 页退出；第 2/3 页给提示不退出（SW-22）", () => {
+  it("⑦ Ctrl + Q 仅第 1 页退出；第 2/3 页给提示不退出（SW-22）", () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     expect(s.handleKey("ctrl+q")).toEqual({ kind: "quit" });
@@ -186,7 +172,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s2.stateRef.page).toBe(2);
   });
 
-  it("⑨ Backspace 逐级返回链（SW-24）：models→provs→llm→opts；key 空草稿→opts", async () => {
+  it("⑧ Backspace 逐级返回链（SW-24）：models→provs→llm→opts；key 空草稿→opts", async () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
     s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
@@ -206,7 +192,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.stateRef.p3.stage).toBe("opts");
   });
 
-  it("⑩ 渲染定高钉：三页与各状态下弹窗总行数恒定（浮层防闪烁纪律——条件性增删行即闪烁源）", async () => {
+  it("⑨ 渲染定高钉：三页与各状态下弹窗总行数恒定（浮层防闪烁纪律——条件性增删行即闪烁源）", async () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     const h = (sess: OnboardingSession) => sess.render(120, 30).lines.length;
@@ -228,7 +214,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(small.width).toBeLessThanOrEqual(72);
   });
 
-  it("⑪ 渲染内容钉：页头步进/标题、页脚键位带空格（Ctrl + N）、锁定置灰原因、Esc 未占用注记", () => {
+  it("⑩ 渲染内容钉：页头步进/标题、页脚键位带空格（Ctrl + N）、锁定置灰原因、Esc 未占用注记", () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     const p1 = s.render(120, 30).lines.join("\n");
@@ -240,7 +226,6 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     const p2 = s.render(120, 30).lines.join("\n");
     expect(p2).toContain("引导 2 / 4");
     expect(p2).toContain("先配好一家提供商"); // 锁定原因（Ctrl + N 置灰带 why）
-    expect(p2).toContain("本地"); // ollama 本地标记
     // key 态静默盲输形态（SW-23：已输入 N 字符，不逐键掩码）
     s.handleKey("enter"); type(s, "abc");
     const p2k = s.render(120, 30).lines.join("\n");
@@ -248,7 +233,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(p2k).not.toContain("●●●");
   });
 
-  it("⑫ 粘贴路由：输入态 handlePaste 整段进草稿（API Key 首要输入方式）；非输入态吞掉", () => {
+  it("⑪ 粘贴路由：输入态 handlePaste 整段进草稿（API Key 首要输入方式）；非输入态吞掉", () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     s.handleKey("ctrl+n");
@@ -295,13 +280,69 @@ describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最�
     expect(g.lines.length).toBeGreaterThanOrEqual(6); // 退化也保住框结构（顶框/头/底框可见）
   });
 
-  it("③ 大终端零变化：cols≥46 / rows≥15 与旧口径同值（96×24 基准不回归）", () => {
-    const { deps } = mkDeps();
-    const s = new OnboardingSession(deps);
-    expect(s.render(104, 26).width).toBe(96); // max(40, min(96, 96)) 同旧
-    expect(s.render(60, 30).width).toBe(52); // max(40, 52) 同旧
-    expect(s.render(104, 20).lines).toHaveLength(17); // mh=18 → bodyH=11 ≥ P1 的 7 行：定高结构同旧
-  });
+	it("③ 大终端零变化：cols≥46 / rows≥15 与旧口径同值（96×24 基准不回归）", () => {
+		const { deps } = mkDeps();
+		const s = new OnboardingSession(deps);
+		expect(s.render(104, 26).width).toBe(96); // max(40, min(96, 96)) 同旧
+		expect(s.render(60, 30).width).toBe(52); // max(40, 52) 同旧
+		expect(s.render(104, 20).lines).toHaveLength(17); // mh=18 → bodyH=11 ≥ P1 的 7 行：定高结构同旧
+	});
+
+	it("④ 贴输入框上缘 + 与输入框同宽同左缘（2026-10-02 拍板，推翻居中+固定 96 宽）：dock = 输入框几何 → 底边贴其上一行、col=0、width=输入框宽；不传保持居中", () => {
+		const { deps } = mkDeps();
+		const s = new OnboardingSession(deps);
+		const g = s.render(110, 30, { bottom: 25, width: 98 });
+		expect(g.row).toBe(25 - g.lines.length); // 弹窗 ╰ 在 divRow−1，与 view/dialog 窗 dock 几何同款
+		expect(g.row + g.lines.length).toBe(25);
+		expect(g.col).toBe(0); // 左缘 = 输入框左缘（左栏 col=0）
+		expect(g.width).toBe(98); // 宽度 = 输入框宽 leftW（不再钉 96）
+		expect(g.col + g.width).toBeLessThanOrEqual(109); // CTU-05 不变量 col+width ≤ cols−1 不破
+		const narrow = s.render(110, 30, { bottom: 25, width: 120 }); // 越界宽钳到 cols−1（左栏不会这么宽，防御性）
+		expect(narrow.width).toBe(109);
+		const c = s.render(110, 30); // 不传 → 居中兜底（几何矩阵测试口径不变）
+		expect(c.row).toBe(Math.floor((30 - c.lines.length) / 2));
+		expect(c.col).toBe(Math.floor((110 - c.width) / 2));
+	});
+
+	it("⑤ 简介行回流（2026-10-02 走查：102 格 > 内容区 93 格被截尾丢「可插拔。」）：折行无损、尾巴可见、恒宽不破", () => {
+		const { deps } = mkDeps();
+		const s = new OnboardingSession(deps);
+		const g = s.render(110, 30);
+		const joined = g.lines.map((l) => stripAnsi(l).replace(/[│╭╮╰╯─]/g, "")).join("").replace(/\s+/g, "");
+		expect(joined).toContain("可插拔。"); // 旧被截掉的尾巴
+		expect(joined).toContain("模型与能力都可插拔"); // 全句完整（折行不丢字；垫空格已剥）
+		for (const l of g.lines) expect(visibleWidth(l)).toBe(g.width); // 每行账面恒宽（右框线不漂）
+	});
+
+	it("⑥ p2 列表动态页大小 + 提示行钉底（2026-10-02 用户拍板）：列表撑满正文至「第 x / y 页」上一行、提示行贴灰色分隔线、翻页键与渲染同源", () => {
+		const many = Array.from({ length: 30 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, envKey: `P${i}_KEY`, baseUrl: "https://x", type: "openai" as const }));
+		const { deps } = mkDeps({ providers: many });
+		const s = new OnboardingSession(deps);
+		s.handleKey("ctrl+n"); // → p2 列表态
+		const g = s.render(120, 30);
+		const bodyH = g.lines.length - 6; // 正文行数 = 总行数 − 顶框/标题/头分隔/脚分隔/脚/底框 6 行
+		const pageSize = s.stateRef.p2.pageSize;
+		expect(pageSize).toBe(bodyH - 2); // 动态 = 正文 − 提示行 − notice 行
+		expect(pageSize).toBeGreaterThan(4);
+		const body = g.lines.slice(3, 3 + bodyH).map((l) => stripAnsi(l));
+		expect(body.filter((l) => l.includes("_KEY"))).toHaveLength(pageSize); // 列表撑满页宽（行含 envKey 即提供商行）
+		expect(body[bodyH - 1]).toContain("第 1 /"); // 提示行 = 正文末行
+		expect(body[bodyH - 1]).toContain("PgUp / PgDn 翻页");
+		expect(body[bodyH - 2]!.replace(/│/g, "").trim()).toBe(""); // 其上一行 = notice 占位（剥框后空）
+		expect(stripAnsi(g.lines[3 + bodyH]!)).toMatch(/^│─+│$/); // 提示行下一行 = 灰色分隔线（钉底成立）
+		// 动态收缩：小终端页宽跟随正文
+		const small = s.stateRef.p2.pageSize;
+		s.render(60, 16);
+		expect(s.stateRef.p2.pageSize).toBeLessThan(small);
+		// 翻页键与渲染同源：PgDn → 页 2 首行 = providers[pageSize]
+		s.render(120, 30);
+		s.handleKey("pageDown");
+		expect(s.stateRef.p2.pageIdx).toBe(1);
+		expect(s.stateRef.p2.sel).toBe(pageSize);
+		const g2 = s.render(120, 30);
+		expect(stripAnsi(g2.lines[3]!)).toContain("P15"); // 页 2 首行（0..pageSize−1 在页 1）
+		expect(s.stateRef.p2.pageSize).toBe(pageSize); // 同尺寸页宽稳定
+	});
 });
 
 // F14 第 3 页 · 配置视觉模型（D12 三态 + 5 行恒定列表 + 可跳过默认不开启）
@@ -374,5 +415,7 @@ describe("首次使用引导弹窗 · p3 视觉模型页（m5-media F14）", () 
 
 /** 测试内小件：剥 ANSI（onboarding.test 顶部已有 stripAnsi 则复用——此处防御性自带）。 */
 function stripAnsiSafe(s2: string): string {
+  // 终端代码合法形态：ANSI 判定正则必须含 ESC 控制符（lint 基线批定点豁免——width.ts 同款）
+  // oxlint-disable-next-line no-control-regex
   return s2.replace(/\u001b\[[0-9;]*m/g, "");
 }

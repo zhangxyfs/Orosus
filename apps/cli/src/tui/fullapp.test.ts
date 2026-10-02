@@ -676,8 +676,7 @@ describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列�
 describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 	const obDeps = (calls: { secrets: [string, string][]; models: string[]; search: Record<string, unknown>[] }) => ({
 		providers: [
-			{ id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://x/v1", type: "openai" as const, local: false },
-			{ id: "ollama", name: "Ollama", baseUrl: "http://localhost:11434/v1", type: "openai" as const, local: true },
+			{ id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://x/v1", type: "openai" as const },
 		],
 		writeProvider: () => {},
 		appendSecret: (k: string, v: string) => { calls.secrets.push([k, v]); },
