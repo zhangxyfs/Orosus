@@ -112,3 +112,6 @@ export default defineModule({
     });
   },
 });
+
+// F14 配置落盘件（宿主 CLI 传目标路径——settings/引导两入口共用）
+export { persistVisionModel, readVisionModel } from "./persist.ts";

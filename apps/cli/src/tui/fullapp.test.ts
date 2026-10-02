@@ -684,6 +684,8 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		setModel: (s: string) => { calls.models.push(s); },
 		writeSearch: (p: Record<string, unknown>) => { calls.search.push(p); },
 		listModels: async () => ["glm-5.3"],
+		writeVision: () => {},
+		visionModels: async () => [],
 	});
 
 	it("⑬ 弹窗开 → 焦点锁全键序走通三页 → completed 结算 + 弹窗消退", async () => {
@@ -693,10 +695,10 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
 		const outcome = app.runOnboarding(obDeps(calls));
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("引导 1 / 3");
+		expect(stripAnsi(output.buf)).toContain("引导 1 / 4");
 		input.emit("data", "\x0e"); // Ctrl + N → p2
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("引导 2 / 3");
+		expect(stripAnsi(output.buf)).toContain("引导 2 / 4");
 		input.emit("data", "\r"); // 进 key 态（zhipu）
 		input.emit("data", "zk");
 		input.emit("data", "\r"); // 确认 key
@@ -705,6 +707,9 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		expect(calls.models).toEqual(["zhipu"]);
 		input.emit("data", "\x0e"); // → p3
 		await flush();
+		input.emit("data", ""); // → p4 搜索页（视觉页跳过——默认不开启）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("引导 4 / 4");
 		input.emit("data", "\r"); // opts → llm 子态
 		input.emit("data", "\r"); // 默认项选定
 		await flush();
@@ -712,7 +717,7 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		await flush();
 		expect(await outcome).toEqual({ kind: "completed" });
 		const tail = stripAnsi(output.buf.slice(-4000));
-		expect(tail).not.toContain("引导 3 / 3"); // 弹窗已消退
+		expect(tail).not.toContain("引导 4 / 4"); // 弹窗已消退
 		app.stop();
 	});
 
