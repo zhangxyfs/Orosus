@@ -51,7 +51,18 @@ export function readSummary(imagePath: string): string | undefined {
   }
 }
 
-const SUMMARY_PROMPT = "用一两句话客观描述这张图（界面元素/文字要点/显著颜色与布局）。不要猜测图外信息，直接给描述，不要前缀。";
+// 转述提示词（2026-10-02 用户拍板升级）：F13 时代是「一两句话」短标签（预算降级标签富化出身）——
+// 走查扩面成主模型看图的唯一来源后不够用（用户实机：描述太不细致，问图答不上）。改结构化全量
+// 转述：可见文字逐条原样转录 + 布局/颜色/线条形状 + 显著细节，让看不到图的人也能回答关于它的问题。
+const SUMMARY_PROMPT = `把这张图完整转述成文字，让看不到图的人也能回答关于它的任何问题：
+1. 图类型与整体布局（截图/照片/图表/示意图/文档；分几块、怎么排列）；
+2. 所有可见文字逐条原样转录（标题、菜单、按钮、标签、正文、数据值）——保留原文语言，不翻译不概括；
+3. 视觉元素：背景与前景颜色、强调色、线条与形状、图表的轴/图例/数值/趋势；
+4. 显著细节：错误或状态提示、红绿标记、选中/高亮、图标含义。
+只描述图中实际可见的内容，不要猜测图外信息；直接给转述，不要前缀、不要收尾总结。`;
+// 全量转述的产出帽（存储/占位同源）：UI 截图逐条转录普遍 400-900 字——旧帽 500 会拦腰截断。
+// 1200 ≈ 主模型看图唯一来源时的信息量上限（每请求随占位进上下文，再大就得不偿失）。
+export const SUMMARY_TEXT_CAP = 1_200;
 
 // 瞬时故障重试（2026-10-02 转述失败诊断批）：实机 200ms 瞬败、11 秒后同路径成功——限流/新文件读
 // 竞态类自愈型故障，两退避重试把它吃掉（发送闸还在等——对用户只是转述慢一两秒，不再是失败行）。
@@ -74,13 +85,13 @@ const attemptOnce = async (
       messages: [{ role: "user", content: [{ kind: "text", text: SUMMARY_PROMPT }, { kind: "image", path: imagePath, mimeType }] }],
       tools: [],
       signal: AbortSignal.timeout(60_000),
-      maxTokens: 300,
+      maxTokens: 1_400, // 产出帽 1200 字（CJK≈1 token/字）+ 标点/换行余量——帽要真够得着
     });
     for await (const c of stream) {
       if (c.type === "text/delta") text += c.text;
       if (c.type === "finish" && c.kind === "error") return { ok: false, reason: String((c as { errorMessage?: string }).errorMessage ?? "流带内错误（finish/error 无原因串）") };
     }
-    const clean = text.trim().slice(0, 500);
+    const clean = text.trim().slice(0, SUMMARY_TEXT_CAP);
     if (clean === "") return { ok: false, reason: "空产出（流正常结束但无文本）" };
     return { ok: true, text: clean };
   } catch (err) {

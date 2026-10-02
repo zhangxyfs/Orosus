@@ -10,7 +10,9 @@ import { defaultCatalogCacheFile, lookupModelVision, readCatalogDiskCache, type 
 export const nonVisionImagePlaceholder = (path: string): string => {
   try {
     const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
-    if (t !== "") return `[图片描述（视觉模型转述）] ${t.slice(0, 500)}\n（当前模型不支持图片输入，原图已存 ${path}）`;
+    // 转述帽与 tool-media SUMMARY_TEXT_CAP 同值双写（2026-10-02 全量转述升级：旧 500 帽拦腰截断）——
+    // 占位是非视觉主模型看图的唯一来源，满额带；预算降级/压缩标签两消费口保持 500 短标签口径
+    if (t !== "") return `[图片描述（视觉模型转述）] ${t.slice(0, 1200)}\n（当前模型不支持图片输入，原图已存 ${path}）`;
   } catch { /* 无缓存——纯占位 */ }
   return `[图片未随消息送达：当前模型不支持图片输入——原件已存 ${path}]`;
 };

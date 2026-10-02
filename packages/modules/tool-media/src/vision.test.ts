@@ -147,6 +147,28 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     await summarizeImage(small, "image/png", "eye/m", deps as never);
     expect(seen[1]!.path).toBe(small); // 小图零拷贝直用原路径
   });
+
+  it("③e 全量转述提示词（2026-10-02 用户拍板「太不细致」）：要求逐条原样转录+颜色/线条；产出按 1200 帽截断（旧 500 不再拦腰）", async () => {
+    const d = fresh();
+    const img = join(d, "full.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    let prompt = "";
+    let maxTokens = 0;
+    const deps = {
+      llmStream: (req: { messages?: { content?: { text?: string }[] }[]; maxTokens?: number }) => {
+        prompt = String(req.messages?.[0]?.content?.[0]?.text ?? "");
+        maxTokens = Number(req.maxTokens ?? 0);
+        return fakeStream([{ type: "text/delta", text: "字".repeat(2000) }, { type: "finish", kind: "stop" }])();
+      },
+      retryBackoffMs: [],
+    };
+    const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
+    expect(out).toHaveLength(1200); // 帽 1200
+    expect(prompt).toContain("逐条原样转录"); // 可见文字原样转录（不概括）——用户点名要的细致度
+    expect(prompt).toContain("颜色");
+    expect(prompt).toContain("线条");
+    expect(maxTokens).toBeGreaterThanOrEqual(1200); // 帽够得着（旧 300 出半截）
+  });
 });
 
 describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", () => {
