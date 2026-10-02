@@ -2,18 +2,17 @@ import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
 import { readFileSync, statSync } from "node:fs";
 import { defaultCatalogCacheFile, lookupModelVision, readCatalogDiskCache, type Catalog } from "./catalog.ts";
 
-/** 非图模型占位文案（m5-media F4——形态照 main.ts Alt+V 拦截文案先例：通用指路「/model 换视觉模型」，
- *  不含具体模型名）。路径在——信息不丢，换模型后可再读（三档口诀的二档「东西在哪别丢」）。
- *  F13/F14 扩面（2026-10-02）：眼睛模型摘要缓存（<path>.summary.txt——tool-media 后台生成）在场则随占位
- *  附上——非视觉主模型照样「读懂」图；无缓存纯占位（首次请求可能未到、后续请求带上，最终一致）。 */
+/** 非图模型占位文案（m5-media F4/F13）。模型可见文本写事实、不写行动建议（2026-10-02 实机复盘：
+ *  旧文案「/model 换视觉模型后可查看」是给用户的建议嵌进了模型可见文本——非视觉主模型当传声筒
+ *  原样复述、还长篇推理「调工具是否白调」；用户侧指路由发送闸 toast 承担，这里只陈述事实）。
+ *  F13：眼睛模型摘要缓存（<path>.summary.txt——tool-media 生成）在场则描述优先——非视觉主模型
+ *  照样「读懂」图；无缓存纯事实占位（发送闸 describe 同步等后首请求即带——最终一致）。 */
 export const nonVisionImagePlaceholder = (path: string): string => {
-  const base = `[当前模型不支持图片输入——图片已存 ${path}，/model 换视觉模型后可查看]`;
   try {
     const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
-    return t === "" ? base : `${base}\n[视觉摘要] ${t.slice(0, 500)}`;
-  } catch {
-    return base;
-  }
+    if (t !== "") return `[图片描述（视觉模型转述）] ${t.slice(0, 500)}\n（当前模型不支持图片输入，原图已存 ${path}）`;
+  } catch { /* 无缓存——纯占位 */ }
+  return `[图片未随消息送达：当前模型不支持图片输入——原件已存 ${path}]`;
 };
 
 /** 图/视频部件剥除（纯函数）：user/assistant 的 content 与 toolResult 的 parts 中的 image/video part
