@@ -43,7 +43,7 @@ import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { seedFactorySkills } from "./skill-settings.ts";
-import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
@@ -871,7 +871,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
         // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款）
         if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
-          await openTasks(activeApp, out);
+          await openTasks(activeApp, out, { getH: () => h, sessionsDir, commandUi, notify });
           return "again";
         }
         // /skill : 名（2026-09-30 用户拍板：菜单技能条目 Tab ≠ Enter——回车直接执行技能，Tab 填
@@ -1040,82 +1040,6 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
  *  Ctrl+T → 切回滚动流（requestLineMode 改写 tuiMode）；Ctrl+C → 退出；会话生命周期指令 → switch 重挂。
  *  提交走 processReplLine 共用体（输出通道 = dm.pushLine——console 输出在全屏下毁屏）。 */
 // ---------- 全屏面板数据与斜杠清单（F4——真实数据源接线；原型图右栏组件清单逐行） ----------
-
-/** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
- *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。
- *  2026-09-27 拍板：查看窗 Esc 关闭后回列表页（不是一路关到底）——全屏循环里查看窗之后的
- *  pickOverlay 落 m5 T2 的 FIFO 队列（pendingUi 被查看窗占着），关窗即自动回列表；行模式无弹窗栈，一轮即止。 */
-const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Promise<void> => {
-	for (;;) {
-		// 名册合并（2026-09-27 拍板：不删旧数据就得能查看）：活名册（本进程）∪ 盘上历史（agents/ 目录重建，
-		// 简述/后台/工种从主会话 spawn 调用回查），按 id 去重——活名册优先（状态新鲜带 truncated）；
-		// 排序最新在最上（用户拍板：第一页永远是最新，上一轮对话的派单自然沉为历史）。每轮现取——
-		// 查看窗停留期间状态会变（跑完/新增），回列表该是新鲜册
-		const live = h.subagents();
-		const liveIds = new Set(live.map((e) => e.id));
-		const entries = sortNewestFirst([...live, ...loadHistoricalSubagents(sessionsDir, h.sessionId).filter((e) => !liveIds.has(e.id))]);
-		// 空册也开列表（用户拍板 2026-09-27：/tasks 无条件开）——占位行说明派活方式，回车无事发生
-		const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
-		let idx: number;
-		if (app !== undefined) {
-			const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
-			if (picked === undefined || entries.length === 0) return; // Esc / 空态占位行
-			idx = picked;
-		} else {
-			const picked = await commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
-			if (entries.length === 0) return;
-			idx = rows.indexOf(picked);
-			if (idx < 0) return;
-		}
-		// 选中行 → 名册条目（CM-02 修复）：rows 经 tasksListRows 亲缘重排（孙行紧跟父行、孤儿孙补位），
-		// 显示行下标与 entries（sortNewestFirst 时间序）位次错开——孙代理在场时 entries[idx] 是另一条
-		// （选 A 执行 B：查看窗开错会话流、审批答错子代理）。经 taskIdOfRow 从选中行反查编号、再按 id
-		// 找真条目（tasks-cmd 既有件，行模式 choose 回串解析同源）。
-		const pickedId = taskIdOfRow(rows[idx]!);
-		const entry = pickedId === undefined ? undefined : entries.find((e) => e.id === pickedId);
-		if (entry === undefined) return; // 行解析不出编号（理论不可达）——安全退出而非错配条目
-		// 等审批的行 → 应答（决策 3 第二层「有空再批」的出口；同 commandUi 串行队列）——应答完回列表；
-		// 应答菜单的 Esc 不答也不退出（2026-09-28 拍板「Esc 返回上一级」）——回任务列表
-		if (entry.pendingApproval !== undefined) {
-			try {
-				const ans = await commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
-				const allow = ans === "批准一次";
-				h.answerSubagentApproval(entry.id, allow);
-				notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
-			} catch (err) {
-				if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回列表（审批保持挂起）
-				throw err;
-			}
-			continue;
-		}
-		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
-		// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
-		const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
-		// 内容快捷键与主窗一致（走查④，2026-09-29）：Alt+E/O/F 切查看窗内思考/工具明细/失败体折叠态——
-		// 折叠态在闭包（跨 live 刷新保持，每次开窗默认收起与主窗同）；键提示行显示「思考 · 明细 · 失败」
-		const fold: import("./tasks-cmd.ts").AgentViewFoldState = { thinkOpen: false, toolOpen: false, errOpen: false };
-		const eventsNow = (): readonly { type: string; [k: string]: unknown }[] => agentEventsFromFile(sessionsDir, h.sessionId, entry.id);
-		const renderNow = (): string =>
-			renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, eventsNow(), viewW(), fold);
-		const liveView = entry.status === "queued" || entry.status === "running" ? () => renderNow() : undefined;
-		const body = renderNow();
-		if (app !== undefined) {
-			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, {
-				layout: "full",
-				bottom: true, // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
-				...(liveView !== undefined ? { live: liveView } : {}),
-				keys: {
-					"alt+e": { label: "思考", run: () => { fold.thinkOpen = !fold.thinkOpen; return renderNow(); } },
-					"alt+o": { label: "明细", run: () => { fold.toolOpen = !fold.toolOpen; return renderNow(); } },
-					"alt+f": { label: "失败", run: () => { fold.errOpen = !fold.errOpen; return renderNow(); } },
-				},
-			});
-			continue; // 查看窗排在 pendingUi——Esc 关窗后队里的列表自动顶上（回列表页拍板）
-		}
-		out(body);
-		return; // 行模式一轮即止（无弹窗栈可回）
-	}
-};
 
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
