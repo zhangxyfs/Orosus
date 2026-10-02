@@ -106,7 +106,7 @@ export function createReadMediaFileTool(deps: ReadMediaFileDeps = {}): Tool {
     label: "Read Image",
     description: `Read an image file (png/jpeg/gif/webp) from disk into the conversation so you can SEE it.
 Delivery tiers: image already within size caps is delivered as-is; oversized images are downsampled (longest edge ${spec.maxEdge}px, token tier ${spec.tokenTier}); use "region" to crop and inspect a detail area at higher effective resolution (look at the whole image first, then crop); use full_resolution to skip pre-downsampling (wire caps still apply).
-If the current model does not support image input, this returns a path note instead of the image (switch model with /model to view).`,
+If the current model does not support image input, STILL CALL THIS whenever the user references an image: with a vision helper model configured it returns the helper model's description of the image (original stays at the path); otherwise a path note (switch model with /model to view).`,
     parameters: z.object({
       path: z.string().min(1).describe("图片文件的绝对路径"),
       region: z.object({

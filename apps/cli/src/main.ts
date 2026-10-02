@@ -1081,8 +1081,11 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           if (lookupModelVision(catalogAll, modelNow) === false) {
             const eye = await eyeModelUsable(modelNow, catalogAll);
             if (eye.usable) {
-              notify(`已发送——当前模型不吃图，图片将由视觉模型 ${eye.model} 转述（进上下文后可继续追问）`);
-              warmVisionSummaries(imgs); // 后台生成 .summary.txt——请求组装期占位富化（首次请求可能未到，最终一致）
+              // 同步等转述落盘（2026-10-02 首请求竞态修）：后台 warm 是「消息先发、摘要后到」——首答
+              // 读纯占位、主模型当传声筒复述换模型建议（用户实机复现）。await 后请求组装期占位即带描述。
+              notify(`视觉模型 ${eye.model} 转述图片中…`);
+              await describeVisionSummaries(imgs);
+              notify(`已发送——当前模型不吃图，图片已由视觉模型 ${eye.model} 转述（可继续追问）`);
             } else {
               const why = eye.configured ? `，且视觉模型不可用（${eye.why}——/settings 修复）` : "（或在 /settings 配置视觉模型转述）";
               notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入${why}——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
@@ -1415,16 +1418,12 @@ const extImageMime = (path: string): "image/png" | "image/jpeg" | "image/webp" |
   return e === ".jpg" || e === ".jpeg" ? "image/jpeg" : e === ".webp" ? "image/webp" : e === ".gif" ? "image/gif" : "image/png";
 };
 
-/** 用户贴图摘要预热（F13 扩面：tool/post-execute 只盖工具产图——用户消息图在发送时 warm，
- *  服务缺席静默〔tool-media 未启用等〕——占位富化自然回落纯路径）。 */
-const warmVisionSummaries = (imgs: string[]): void => {
-  void h.graph().services
-    .getOptional("tool-media.vision-summary" as never)
-    .then((svc) => {
-      const warm = (svc as { warm?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => void } | undefined)?.warm;
-      warm?.(imgs.map((path) => ({ path, mimeType: extImageMime(path) })));
-    })
-    .catch(() => undefined);
+/** 用户贴图转述同步等（F13 扩面：tool/post-execute 只盖工具产图——用户消息图在发送闸 describe，
+ *  await 落盘后请求组装期占位富化同请求生效；服务缺席/失败静默〔tool-media 未启用等〕回落纯占位）。 */
+const describeVisionSummaries = async (imgs: string[]): Promise<void> => {
+  const svc = await h.graph().services.getOptional("tool-media.vision-summary" as never).catch(() => undefined);
+  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => Promise<void> } | undefined)?.describe;
+  await describe?.(imgs.map((path) => ({ path, mimeType: extImageMime(path) }))).catch(() => undefined);
 };
 
 
