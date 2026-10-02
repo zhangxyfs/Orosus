@@ -1,1 +1,10 @@
+# 全仓文本统一 LF：入库归一化，检出不转 CRLF
+* text=auto eol=lf
+
+# 二进制显式豁免（text=auto 本就按内容跳过二进制，这几行是保险 + 文档化）
+*.png binary
+*.webp binary
+*.wav binary
+*.mp3 binary
+
 *.sh text eol=lf
