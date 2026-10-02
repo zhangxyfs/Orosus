@@ -1099,7 +1099,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
                 dm.visionTranscribeStart(eyeModel);
                 echoed = true;
               } else notify(`视觉模型 ${eyeModel} 转述图片中…`);
-              const res = await waitVisionTranscribe(imgs);
+              const res = await waitVisionTranscribe(imgs, tuiMode === "full" ? (d) => dm.visionDelta(d.kind, d.text) : undefined);
               if (res.state === "aborted") {
                 if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "aborted");
                 notify("已中止转述——消息未发出，输入与图片已回挂（重发即续：已生成的转述有缓存）");
@@ -1459,16 +1459,20 @@ type VisionWaitResult = { state: "done"; text: string } | { state: "failed" } | 
 let visionWaitAbort: (() => void) | undefined;
 
 /** 转述等待（可中止）：服务缺席静默回落 failed；底层 describe 调用不掐——中止后结果照常落
- *  .summary.txt（重发命中缓存零等待——「中止不白等」），占位富化最终一致口径不变。 */
-const waitVisionTranscribe = async (imgs: string[]): Promise<VisionWaitResult> => {
+ *  .summary.txt（重发命中缓存零等待——「中止不白等」），占位富化最终一致口径不变。
+ *  onDelta（A 案 2026-10-02 拍板）：流式增量喂 DocModel 转述活动块（思考/正文流式显示防卡死感）。 */
+const waitVisionTranscribe = async (imgs: string[], onDelta?: (d: { kind: "thinking" | "text"; text: string }) => void): Promise<VisionWaitResult> => {
   const svc = await h.graph().services.getOptional("tool-media.vision-summary" as never).catch(() => undefined);
-  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => Promise<{ path: string; text?: string }[]> } | undefined)?.describe;
+  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[], onDelta?: (d: { kind: "thinking" | "text"; text: string }) => void) => Promise<{ path: string; text?: string }[]> } | undefined)?.describe;
   const aborted = new Promise<{ state: "aborted" }>((resolve) => { visionWaitAbort = () => resolve({ state: "aborted" }); });
+  // live 旗（A 案泄漏口）：中止后底层调用不掐、增量还会来——迟到增量不得复活已清空的活动块
+  let live = true;
+  const feed = onDelta === undefined ? undefined : (d: { kind: "thinking" | "text"; text: string }) => { if (live) onDelta(d); };
   try {
     const raced: VisionWaitResult | undefined = describe === undefined
       ? undefined
       : await Promise.race([
-          describe(imgs.map((path) => ({ path, mimeType: extImageMime(path) })))
+          describe(imgs.map((path) => ({ path, mimeType: extImageMime(path) })), feed)
             .then((entries): VisionWaitResult => {
               const texts = entries.map((x) => x.text).filter((t): t is string => t !== undefined && t !== "");
               return texts.length > 0 ? { state: "done", text: texts.join("\n") } : { state: "failed" };
@@ -1478,6 +1482,7 @@ const waitVisionTranscribe = async (imgs: string[]): Promise<VisionWaitResult> =
         ]);
     return raced ?? { state: "failed" };
   } finally {
+    live = false;
     visionWaitAbort = undefined;
   }
 };

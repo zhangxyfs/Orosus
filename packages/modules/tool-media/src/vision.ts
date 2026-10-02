@@ -17,6 +17,9 @@ export interface VisionSummaryDeps {
   /** 失败观测口（2026-10-02 转述失败诊断批）：每次尝试失败带原因（重试中含退避标注）——宿主接
    *  ctx.log.warn。修复前 warn 只落路径不落因，200ms 瞬败定不了性（限流？新文件读竞态？）的盲区就是它。 */
   onFail?: (reason: string) => void;
+  /** 流式观测口（2026-10-02 拍板 A 案）：逐 chunk 上抛思考/正文增量——宿主喂「转述活动块」流式
+   *  显示（等待不死字防「卡死感」）；多图并发时增量交错（单图主导场景，UI 单活动区不分图）。 */
+  onDelta?: (d: { kind: "thinking" | "text"; text: string }) => void;
   /** 重试退避表（缺省 [1s, 2s]——测试注入短表提速）。 */
   retryBackoffMs?: number[];
 }
@@ -112,11 +115,16 @@ const attemptOnce = async (
       messages: [{ role: "user", content: [{ kind: "text", text: SUMMARY_PROMPT }, { kind: "image", path: imagePath, mimeType }] }],
       tools: [],
       signal: AbortSignal.timeout(60_000),
-      maxTokens: 1_400, // 产出帽 1200 字（CJK≈1 token/字）+ 标点/换行余量——帽要真够得着
+      maxTokens: 2_000, // 产出帽 1200 字 + 思考余量保险（2026-10-02 拍板抬帽：无 effort 声明的推理模型
+      // 当眼睛时思考与正文共享帽——2000 让思考烧完正文还剩得出；有 low 档时思考本来就短）
       ...(lowEffort !== undefined ? { reasoningEffort: lowEffort } : {}),
     });
     for await (const c of stream) {
-      if (c.type === "text/delta") text += c.text;
+      if (c.type === "reasoning/delta") deps.onDelta?.({ kind: "thinking", text: c.text });
+      else if (c.type === "text/delta") {
+        deps.onDelta?.({ kind: "text", text: c.text });
+        text += c.text;
+      }
       if (c.type === "finish" && c.kind === "error") return { ok: false, reason: String((c as { errorMessage?: string }).errorMessage ?? "流带内错误（finish/error 无原因串）") };
     }
     const clean = text.trim().slice(0, SUMMARY_TEXT_CAP);
