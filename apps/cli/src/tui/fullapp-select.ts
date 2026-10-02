@@ -44,7 +44,7 @@ export function createSelect(app: FullApp) {
 			const cy = Math.max(geo.row + 1, Math.min(geo.row + geo.height - 1, y)); // 顶框让位
 			return (() => { const p = pointToView(cx, cy); return p === undefined ? undefined : { scope: "view" as const, ...p }; })();
 		}
-		const { streamH, leftW } = app.layoutFrame();
+		const { streamH, leftW } = app.frame.layoutFrame();
 		const p = pointToDoc(Math.min(x, leftW - 1), Math.max(0, Math.min(streamH - 1, y)));
 		return p === undefined ? undefined : { scope: "main", ...p };
 	};
@@ -56,7 +56,7 @@ export function createSelect(app: FullApp) {
 			const pu = app.pendingUi;
 			return pu?.kind === "view" ? (pu.lines[idx] ?? "") : "";
 		}
-		const { start, doc } = app.layoutFrame();
+		const { start, doc } = app.frame.layoutFrame();
 		return doc[idx - start] ?? "";
 	};
 
@@ -100,7 +100,7 @@ export function createSelect(app: FullApp) {
 
 	/** 指针屏坐标 → doc 行列（T5——与 renderFrame 同源几何 layoutFrame；左内衬 2 列）。 */
 	const pointToDoc = (x: number, y: number): { docIdx: number; col: number } | undefined => {
-		const { streamH, start, dmTotal, leftW } = app.layoutFrame();
+		const { streamH, start, dmTotal, leftW } = app.frame.layoutFrame();
 		if (y < 0 || y >= streamH) return undefined; // 流区外（输入框/队列区）→ 不选
 		if (x >= leftW) return undefined; // 右侧面板与流区同 y 段，按 x 排除（侧栏按下 = 清选区不建幻影锚点）
 		const idx = start + y;

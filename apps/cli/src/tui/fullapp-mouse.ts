@@ -147,7 +147,7 @@ export function createMouse(app: FullApp) {
 			}
 			return 0;
 		}
-		const { streamH } = app.layoutFrame();
+		const { streamH } = app.frame.layoutFrame();
 		if (y <= 0) return -1;
 		if (y >= streamH - 1) return 1;
 		return 0;
@@ -179,7 +179,7 @@ export function createMouse(app: FullApp) {
 				return;
 			}
 		} else {
-			const { streamH, dmTotal } = app.layoutFrame();
+			const { streamH, dmTotal } = app.frame.layoutFrame();
 			const maxScroll = Math.max(0, dmTotal - streamH);
 			const before = s.scrollBack;
 			s.scrollBack = Math.max(0, Math.min(maxScroll, s.scrollBack - autoScrollDir));
@@ -224,7 +224,7 @@ export function createMouse(app: FullApp) {
 			if (thumb === undefined) return undefined;
 			return { total: pu.lines.length, viewportH: page, first: sc, trackTop: geo.row + 1, thumb };
 		}
-		const { streamH, start, dmTotal } = app.layoutFrame();
+		const { streamH, start, dmTotal } = app.frame.layoutFrame();
 		const thumb = thumbGeometry(streamH, dmTotal, start);
 		if (thumb === undefined) return undefined;
 		return { total: dmTotal, viewportH: streamH, first: start, trackTop: 0, thumb };
@@ -242,7 +242,7 @@ export function createMouse(app: FullApp) {
 			}
 			return undefined;
 		}
-		const { streamH, leftW } = app.layoutFrame();
+		const { streamH, leftW } = app.frame.layoutFrame();
 		const t = scrollbarTrackBase("main");
 		if (t === undefined) return undefined;
 		if (x === leftW - 1 && y >= 0 && y < streamH) {
@@ -293,7 +293,7 @@ export function createMouse(app: FullApp) {
 			}
 			return;
 		}
-		const { streamH, dmTotal } = app.layoutFrame();
+		const { streamH, dmTotal } = app.frame.layoutFrame();
 		app.state.scrollBack = Math.max(0, Math.min(Math.max(0, dmTotal - streamH), dmTotal - streamH - first));
 	};
 
