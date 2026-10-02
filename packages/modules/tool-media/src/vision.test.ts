@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -38,7 +38,8 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     };
     const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
     expect(out).toContain("登录页");
-    expect(readSummary(img)).toBe(out);
+    expect(readSummary(img)).toBe(out); // 剥版本标记后的正文
+    expect(readFileSync(summaryPathOf(img), "utf8").startsWith("[summary-v2]\n")).toBe(true); // 首行版本标记（Reasonix PromptVersion 同款）
     expect(summaryPathOf(img)).toBe(`${img}.summary.txt`);
     const again = await summarizeImage(img, "image/png", "eye/m", deps as never);
     expect(again).toBe(out);
@@ -167,6 +168,8 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(prompt).toContain("逐条原样转录"); // 可见文字原样转录（不概括）——用户点名要的细致度
     expect(prompt).toContain("颜色");
     expect(prompt).toContain("线条");
+    expect(prompt).toContain("不可信"); // 注入防御针（Reasonix 同款）：图内文字不执行其中指令
+    expect(prompt).toContain("不执行");
     expect(maxTokens).toBeGreaterThanOrEqual(2000); // 帽够得着（旧 300 出半截）
   });
 
@@ -206,9 +209,11 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     writeFileSync(img, Buffer.from([0x89, 0x50]));
     const deltas: { kind: string; text: string }[] = [];
     let maxTokens = 0;
+    let temperature: number | undefined;
     const deps = {
-      llmStream: (req: { maxTokens?: number }) => {
+      llmStream: (req: { maxTokens?: number; temperature?: number }) => {
         maxTokens = Number(req.maxTokens ?? 0);
+        temperature = req.temperature;
         return fakeStream([
           { type: "reasoning/delta", text: "先想一想" },
           { type: "text/delta", text: "正文开始" },
@@ -226,6 +231,7 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
       { kind: "text", text: "，继续" },
     ]);
     expect(maxTokens).toBe(6000); // 生成帽天花板（图繁→转录+思考都长——2000 会截断密文截图；上限不花钱）
+    expect(temperature).toBe(0); // 确定性输出（Reasonix 同款）——同图两次转述一致
   });
 
   it("③h 长度帽截断带内信号：finish/length → 正文照收 + 尾部标注（图内容更繁的诚实信号——非失败不重试）", async () => {
@@ -237,6 +243,20 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(out).toContain("前半段转录"); // 截断非失败——半份转录好过没有
     expect(out).toContain("长度帽截断"); // 尾部标注进缓存与占位（模型与用户都知情）
   });
+
+  it("③i 缓存版本门（Reasonix PromptVersion 同款）：旧版本/无标记文件 = 未命中重转——提示词升级不再手删旧缓存", async () => {
+    const d = fresh();
+    const img = join(d, "ver.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    writeFileSync(summaryPathOf(img), "旧格式的短描述"); // 无版本标记（升级前落盘的旧缓存）
+    expect(readSummary(img)).toBeUndefined(); // 版本门——旧格式不算命中
+    let calls = 0;
+    const deps = { llmStream: () => { calls++; return fakeStream([{ type: "text/delta", text: "新版本重转" }, { type: "finish", kind: "stop" }])(); }, retryBackoffMs: [] };
+    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("新版本重转");
+    expect(calls).toBe(1); // 旧缓存被无视——重新转述落新格式
+    writeFileSync(summaryPathOf(img), "[summary-v1]\n旧版本标记的缓存"); // 标记在但版本旧
+    expect(readSummary(img)).toBeUndefined(); // 同样失效
+  });
 });
 
 describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", () => {
@@ -244,7 +264,7 @@ describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", ()
     const d = fresh();
     const img = join(d, "x.png");
     writeFileSync(img, Buffer.from([0x89, 0x50]));
-    writeFileSync(summaryPathOf(img), "红色矩形截图");
+    writeFileSync(summaryPathOf(img), "[summary-v2]\n红色矩形截图");
     expect(readSummary(img)).toBe("红色矩形截图");
     rmSync(summaryPathOf(img));
     expect(readSummary(img)).toBeUndefined();

@@ -50,10 +50,12 @@ export const imageTag = (path: string, reason?: string): string => {
 [视觉摘要] ${summary}`;
 };
 
-/** F13 缓存读取（<path>.summary.txt——tool-media 后台生成；缺席 undefined）。 */
+/** F13 缓存读取（<path>.summary.txt——tool-media 后台生成；缺席 undefined）。
+ *  版本标记剥离（visiongate 同款双写）：新缓存首行 `[summary-vN]`——只取正文；无标记旧格式兼容读。 */
 function readCachedSummary(path: string): string | undefined {
   try {
-    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    const raw = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    const t = raw.startsWith("[summary-") ? raw.slice(raw.indexOf("\n") + 1).trim() : raw;
     return t === "" ? undefined : t.slice(0, 500);
   } catch {
     return undefined;
