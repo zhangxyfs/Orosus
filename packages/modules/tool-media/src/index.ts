@@ -60,7 +60,12 @@ export const MEDIA_POLICY_KEY = "tool-media.policy" as CapabilityKey<{ current()
  *  旁路放行前 await 落盘，首请求占位即带描述。2026-10-02 竞态修：warm 是「消息先发、摘要后到」，
  *  首答复读纯占位、主模型当传声筒复述换模型建议——用户实机复现）。 */
 export type SummaryImageRef = { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" };
-export const MEDIA_SUMMARY_KEY = "tool-media.vision-summary" as CapabilityKey<{ warm(images: SummaryImageRef[]): void; describe(images: SummaryImageRef[]): Promise<void> }>;
+export const MEDIA_SUMMARY_KEY = "tool-media.vision-summary" as CapabilityKey<{
+  warm(images: SummaryImageRef[]): void;
+  /** 同步等版（走查四）：返回逐图转述文本（失败图 text 缺席）——发送闸旁路等它，首请求占位即带
+   *  描述、且窗口内「● 视觉转述」条目与回放事件共用同一份数据。全失败/服务异常 = 空数组。 */
+  describe(images: SummaryImageRef[]): Promise<{ path: string; text?: string }[]>;
+}>;
 
 export default defineModule({
   name: "tool-media",
@@ -92,22 +97,25 @@ export default defineModule({
     // F13 VisionSummary：每张进媒资库的图后台生成一次描述缓存（<名>.summary.txt）——预算降级/压缩
     // 剥图标签同步富化（读缓存零延迟）；off=不生成、auto/指定=二级调用（D12 三态，失败静默回落纯标签）。
     const catalogFile = join(orosusHome(), "cache", "models-dev.json");
-    const summarizeAll = async (images: SummaryImageRef[]): Promise<void> => {
+    const summarizeAll = async (images: SummaryImageRef[]): Promise<{ path: string; text?: string }[]> => {
       const eye = eyeModelOf(facts, hostModel, catalogFile);
       const m = eye.model;
       if (m === undefined) {
         if (facts.visionModel !== "off") ctx.log.info("tool-media.vision", eye.note ?? "眼睛模型未解析——摘要不生成");
-        return;
+        return [];
       }
-      await Promise.all(images.map((img) => summarizeImage(img.path, img.mimeType, m, {
+      return Promise.all(images.map((img) => summarizeImage(img.path, img.mimeType, m, {
         llmStream: (req) => ctx.llm.stream(req as never),
         catalogFile,
-      }).then((t) => { if (t === undefined) ctx.log.warn("tool-media.vision", "视觉摘要生成失败——回落纯标签", { path: img.path }); })));
+      }).then((t): { path: string; text?: string } => {
+        if (t === undefined) ctx.log.warn("tool-media.vision", "视觉摘要生成失败——回落纯标签", { path: img.path });
+        return t === undefined ? { path: img.path } : { path: img.path, text: t };
+      })));
     };
     ctx.provide(MEDIA_SUMMARY_KEY, {
       // warm=后台即发不候（工具产图预热）；describe=await 落盘（发送闸用——失败静默回落纯占位）
       warm: (images: SummaryImageRef[]): void => void summarizeAll(images),
-      describe: (images: SummaryImageRef[]): Promise<void> => summarizeAll(images),
+      describe: (images: SummaryImageRef[]): Promise<{ path: string; text?: string }[]> => summarizeAll(images),
     });
     ctx.events.on("tool/post-execute", (raw: unknown) => {
       const payload = raw as { result?: { images?: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[] } };

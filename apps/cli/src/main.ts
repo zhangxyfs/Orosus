@@ -1070,22 +1070,51 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         const textNoImg = imgRefs.cleaned;
         const imgSeqs = [...pendingLineSeqs, ...imgRefs.seqs];
         const imgs = imgSeqs.map((q) => pendingImageFiles.get(q)).filter((f): f is string => f !== undefined);
+        // 转述等待期不收第二条（走查四——单等待口：并发提交会在 harness 单并发守卫炸「已有进行中的
+        // turn」丢消息；双 Esc 可中止后重发）
+        if (visionWaitAbort !== undefined) {
+          notify("视觉转述进行中——稍候再发（双击 Esc 可中止）");
+          activeApp?.restoreInput(text);
+          return "again";
+        }
         // 非 vision 模型拦截（F5 二轮⑭）+ F14 眼睛模型旁路（2026-10-02 用户口令「视觉模型启用了就不能再拦截」）：
         // 主模型明确不吃图时三态——① 视觉模型可用（三态解析过：auto=当前模型视觉 / 指定=槽在且目录证实多模态）
-        // → 放行：图照发（日志留 image part，磁盘在媒资库），请求组装期占位+眼睛摘要进上下文；② 配置了
-        // 但不可用 → 仍拦截、文案带眼因（auto 且当前非视觉 / 槽未配置 / 目录证实非多模态）；③ 未配置 → 原文案。
-        // （坏消息落日志后每轮重发 = 会话永久报废的拦截理由不变——旁路不把图发给不吃图的模型，只换占位+摘要。）
+        // → 放行：回车即回显 + 窗口内「◐ 转述中 → ● 结果」两态条目（走查四拍板——转述等待不黑屏，
+        // toast 双发退役；行模式无 dm 落 toast 退化），await 转述落盘后才发——首请求占位即带描述
+        // （b6b8505 竞态修不变）；vtNote 随 prompt 紧随 user/message 落日志（回放行源）。
+        // ② 配置了但不可用 → 仍拦截、文案带眼因（auto 且当前非视觉 / 槽未配置 / 目录证实非多模态）；
+        // ③ 未配置 → 原文案。（坏消息落日志后每轮重发 = 会话永久报废的拦截理由不变——旁路不把图发给
+        // 不吃图的模型，只换占位+摘要。）
+        let vtNote: { model: string; ok: boolean; text?: string } | undefined;
+        let echoed = false; // 旁路分支已回显——下方「确认发出点」跳过（拦截分支不回显纪律不变）
         if (imgs.length > 0) {
           const modelNow = realReadModel(process.cwd())() ?? "";
           const catalogAll = readCatalogDiskCache(defaultCatalogCacheFile()) ?? {};
           if (lookupModelVision(catalogAll, modelNow) === false) {
             const eye = await eyeModelUsable(modelNow, catalogAll);
             if (eye.usable) {
-              // 同步等转述落盘（2026-10-02 首请求竞态修）：后台 warm 是「消息先发、摘要后到」——首答
-              // 读纯占位、主模型当传声筒复述换模型建议（用户实机复现）。await 后请求组装期占位即带描述。
-              notify(`视觉模型 ${eye.model} 转述图片中…`);
-              await describeVisionSummaries(imgs);
-              notify(`已发送——当前模型不吃图，图片已由视觉模型 ${eye.model} 转述（可继续追问）`);
+              const eyeModel = eye.model ?? ""; // usable=true 恒带 model（三态解析同源）
+              if (!isCmdLine && tuiMode === "full") {
+                dm.userPrompt(text);
+                dm.visionTranscribeStart(eyeModel);
+                echoed = true;
+              } else notify(`视觉模型 ${eyeModel} 转述图片中…`);
+              const res = await waitVisionTranscribe(imgs);
+              if (res.state === "aborted") {
+                if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "aborted");
+                notify("已中止转述——消息未发出，输入与图片已回挂（重发即续：已生成的转述有缓存）");
+                activeApp?.restoreInput(text);
+                return "again";
+              }
+              if (res.state === "done") {
+                if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, res.text, "done");
+                else notify(`已发送——图片已由视觉模型 ${eyeModel} 转述（可继续追问）`);
+                vtNote = { model: eyeModel, ok: true, text: res.text };
+              } else {
+                if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "failed");
+                else notify(`视觉转述失败——按无图占位发送（/settings 查视觉模型配置）`);
+                vtNote = { model: eyeModel, ok: false };
+              }
             } else {
               const why = eye.configured ? `，且视觉模型不可用（${eye.why}——/settings 修复）` : "（或在 /settings 配置视觉模型转述）";
               notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入${why}——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
@@ -1099,8 +1128,9 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
         // 用户消息回显放在「确认发出」点（2026-09-23 用户拍板：被拦截的消息不留痕迹）——
         // 上方非 vision/未配置模型两道拦截已 return，走到这里 = 消息真要发了；流区只显示发出的消息。
-        // 原提交即回显（runSubmit）会把被拦截的消息留在流区成孤条。回显原文含图片 chip token，形态不变
-        if (!isCmdLine && tuiMode === "full") dm.userPrompt(text);
+        // 旁路分支（echoed）已在转述前回显——回车即见（走查四）。原提交即回显（runSubmit）会把被拦截
+        // 的消息留在流区成孤条。回显原文含图片 chip token，形态不变
+        if (!isCmdLine && tuiMode === "full" && !echoed) dm.userPrompt(text);
         // 命令输入时 harness.prompt 返回命令输出（D38）——必须回显（M2 补账：原实现从不打印，命令「敲了没反应」）
         // /compact 进度指示（TUI 批 T7）：行模式经 lv 活动行、全屏经 busy spinner 专属形态（2026-09-23 用户拍板：
         // 「上下文压缩中…」石青色）；settle 后行模式 discard 擦除、全屏退出专属形态——结果由下方输出替换。
@@ -1122,7 +1152,11 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
                 : undefined;
             })(),
           },
-          () => h.prompt(withAt, imagesFor(imgs)), // 挂起的图以 image part 随本条消息发出（M4-2.5 T5；文内 token 形态自 2026-09-23）
+          () => h.prompt(withAt, { // 挂起的图以 image part 随本条消息发出（M4-2.5 T5；文内 token 形态自 2026-09-23）
+            ...imagesFor(imgs),
+            // 转述旁注（走查四）：紧随 user/message 落盘——回放行序「问题→转述→回答」；不进上下文
+            ...(vtNote !== undefined ? { afterUserEvent: { type: "host/vision-transcribe", fields: vtNote } } : {}),
+          }),
         );
         for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
         pendingLineSeqs = [];
@@ -1412,18 +1446,40 @@ const eyeModelUsable = async (
   return { configured: true, usable: true, model: v };
 };
 
-/** 扩展名 → 图片 mime（warm 参数用——贴图/媒资库件均按扩展名落盘）。 */
+/** 扩展名 → 图片 mime（describe 参数用——贴图/媒资库件均按扩展名落盘）。 */
 const extImageMime = (path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
   const e = path.slice(path.lastIndexOf(".")).toLowerCase();
   return e === ".jpg" || e === ".jpeg" ? "image/jpeg" : e === ".webp" ? "image/webp" : e === ".gif" ? "image/gif" : "image/png";
 };
 
-/** 用户贴图转述同步等（F13 扩面：tool/post-execute 只盖工具产图——用户消息图在发送闸 describe，
- *  await 落盘后请求组装期占位富化同请求生效；服务缺席/失败静默〔tool-media 未启用等〕回落纯占位）。 */
-const describeVisionSummaries = async (imgs: string[]): Promise<void> => {
+/** 转述等待结果（走查四）：done=至少一图转述成功（text=逐图文本聚合）；failed=全失败/服务缺席
+ *  （回落纯占位照发）；aborted=双 Esc 中止（不发送、输入回挂）。 */
+type VisionWaitResult = { state: "done"; text: string } | { state: "failed" } | { state: "aborted" };
+/** 转述等待中止口（模块级单等待——等待期二次提交被发送闸拦；fullapp 双击 Esc 经 io 触发）。 */
+let visionWaitAbort: (() => void) | undefined;
+
+/** 转述等待（可中止）：服务缺席静默回落 failed；底层 describe 调用不掐——中止后结果照常落
+ *  .summary.txt（重发命中缓存零等待——「中止不白等」），占位富化最终一致口径不变。 */
+const waitVisionTranscribe = async (imgs: string[]): Promise<VisionWaitResult> => {
   const svc = await h.graph().services.getOptional("tool-media.vision-summary" as never).catch(() => undefined);
-  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => Promise<void> } | undefined)?.describe;
-  await describe?.(imgs.map((path) => ({ path, mimeType: extImageMime(path) }))).catch(() => undefined);
+  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[]) => Promise<{ path: string; text?: string }[]> } | undefined)?.describe;
+  const aborted = new Promise<{ state: "aborted" }>((resolve) => { visionWaitAbort = () => resolve({ state: "aborted" }); });
+  try {
+    const raced: VisionWaitResult | undefined = describe === undefined
+      ? undefined
+      : await Promise.race([
+          describe(imgs.map((path) => ({ path, mimeType: extImageMime(path) })))
+            .then((entries): VisionWaitResult => {
+              const texts = entries.map((x) => x.text).filter((t): t is string => t !== undefined && t !== "");
+              return texts.length > 0 ? { state: "done", text: texts.join("\n") } : { state: "failed" };
+            })
+            .catch((): VisionWaitResult => ({ state: "failed" })),
+          aborted,
+        ]);
+    return raced ?? { state: "failed" };
+  } finally {
+    visionWaitAbort = undefined;
+  }
 };
 
 
@@ -2308,6 +2364,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     requestCancel: () => {
       h.cancel(); // Esc 忙碌时取消当前 turn（SIGINT 同效——修复轮②）
     },
+    // 视觉转述等待期（走查四）：双击 Esc 中止口——visionWaitAbort 模块级单等待
+    visionTranscribing: () => visionWaitAbort !== undefined,
+    abortVisionTranscribe: () => { visionWaitAbort?.(); },
     panelData: () => ({
       ...(panelCache ?? {
         model: "…",

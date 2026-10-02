@@ -45,6 +45,7 @@ type Entry =
 	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] }; group?: { name: string; items: { args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult }[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存；group = 连续同名只读工具聚合〔2026-09-30 用户拍板抄 cc-haha 计数行〕：第 2 个紧邻同名调用并进宿主条目就地成组〔kimi in-place 同款〕，条目下标与账本不动、callId 配对下钻 items——宿主自身 args/callId/result 自成组起停用）
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
+	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; cache?: LineCache } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文宽度级缓存（raw 同款折行）；aborted 恒 live-only（未发送不落日志）
 	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
 
 export class DocModel {
@@ -570,6 +571,12 @@ export class DocModel {
 					else if (m.sourceModule === "host/date") continue;
 					else this.userPrompt(m.text);
 				}
+			} else if (e.type === "host/vision-transcribe") {
+				// 视觉转述行回放（走查四拍板「重进程序调历史也要显示」）：落盘恒终态——done（text 在场）/
+				//  failed（ok !== true）；行序由 afterUserEvent 紧随 user/message 落盘保证（问题→转述→回答）。
+				//  不进上下文：deriveMessages 未知类型跳过（本事件只是回放渲染数据）。
+				const text = typeof e.text === "string" && e.text !== "" ? e.text : undefined;
+				this.visionTranscribeEnd(String(e.model ?? ""), text, text === undefined ? "failed" : "done");
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
 				this.pushE({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });
@@ -609,6 +616,28 @@ export class DocModel {
 	/** 直接推一行（宿主带内输出——横幅/提示语的流区呈现；超宽由 frameLines 折行兜底）。 */
 	pushLine(s: string): void {
 		for (const l of s.replace(/\n$/, "").split("\n")) this.pushE({ k: "raw", s: l });
+	}
+
+	/** 视觉转述行·开始（走查四）：推送 ◐ 进行中条目——发送闸旁路时在回显后立即调用（回车即见）。 */
+	visionTranscribeStart(model: string): void {
+		this.settleActive();
+		this.pushE({ k: "vision", model, state: "running" });
+	}
+
+	/** 视觉转述行·收尾：最近一条 running 条目原位翻转终态（下标/账本稳定——markCountDirty 同 toolResult
+	 *  挂上口径）；无 running 条目（回放路）直接推终态。aborted = 双 Esc 中止（live-only，永不回放）。 */
+	visionTranscribeEnd(model: string, text: string | undefined, state: "done" | "failed" | "aborted"): void {
+		this.settleActive();
+		const final = text === undefined ? { k: "vision" as const, model, state } : { k: "vision" as const, model, state, text };
+		for (let i = this.lines.length - 1; i >= 0; i--) {
+			const e = this.lines[i]!;
+			if (e.k === "vision" && e.state === "running") {
+				this.lines[i] = final;
+				this.markCountDirty(i);
+				return;
+			}
+		}
+		this.pushE(final);
 	}
 
 	/** 工具行配色（F5 六轮① 用户拍板；2026-09-22 再拍板：动词 Using/Used 白色）：
@@ -684,6 +713,19 @@ export class DocModel {
 		if (e.k === "skill") {
 			// 技能加载行：● 与技能名青玉、说明灰（工具行配色同族——2026-09-28 用户拍板：技能正文不进对话流）
 			return [theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文")];
+		}
+		if (e.k === "vision") {
+			// 视觉转述行（走查四）：进行中 dim 单行；终态头行 ● 青玉 + 模型名灰括注 + 正文 muted 折行（宽度级缓存）
+			if (e.state === "running") return [theme.dim(`◐ 由 ${e.model} 转述图片中…`)];
+			if (e.state === "aborted") return [theme.fg("muted", "● 视觉转述已中止——消息未发出（重发即续：已生成的转述有缓存）")];
+			if (e.state === "failed") return [theme.fg("muted", `● 视觉转述失败（${e.model}）——已按无图占位发送`)];
+			if (e.cache?.w !== width) {
+				this.debugWrapCalls++;
+				const head = theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}）`);
+				const body = wrapText(e.text ?? "", Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`));
+				e.cache = { w: width, lines: [head, ...body] };
+			}
+			return e.cache.lines;
 		}
 		if (e.k === "md") {
 			if (e.cache?.w !== width) {

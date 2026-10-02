@@ -1487,6 +1487,22 @@ describe("prompt images（M4-2.5 T5——/paste 图进模型上下文，V.2 销�
     expect((msgs[0] as { content: unknown }).content).toEqual([{ kind: "text", text: "看图" }, { kind: "image", path: "C:/tmp/paste-1.png", mimeType: "image/png" }]);
     await h.close();
   });
+
+  it("⑨ afterUserEvent 宿主旁注（m5-media 走查四）：紧随 user/message 落盘（回放行序「问题→转述→回答」），不进 deriveMessages 投影（未知类型跳过 = 不进上下文）", async () => {
+    const { deriveMessages } = await import("./index.ts");
+    const h = await makeHarness();
+    await h.prompt("看图", {
+      images: ["C:/tmp/paste-1.png"],
+      afterUserEvent: { type: "host/vision-transcribe", fields: { model: "glm-5.3-flash", ok: true, text: "蓝色按钮的登录页" } },
+    });
+    const evs = await h.history();
+    const iU = evs.findIndex((e) => e.type === "user/message");
+    const iV = evs.findIndex((e) => e.type === "host/vision-transcribe");
+    expect(iU).toBeGreaterThanOrEqual(0);
+    expect(iV).toBe(iU + 1); // 原子紧随 user/message（先 append 会抢在前面——行序保障见接口注释）
+    expect(JSON.stringify(deriveMessages(evs))).not.toContain("蓝色按钮"); // 旁注只服务回放，不进请求
+    await h.close();
+  });
 });
 
 describe("fork 即刻落盘与 header 兜底（2026-09-22 用户实测：fork 零落盘 → /sessions 不可见 + 观感同 /new；模块事件先于 turn → 断头文件）", () => {
