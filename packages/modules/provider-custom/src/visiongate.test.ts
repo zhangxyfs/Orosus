@@ -126,10 +126,10 @@ describe("nonVisionImagePlaceholder 摘要富化（F13/F14 扩面）", () => {
       expect(rich).toContain("视觉模型转述");
       expect(rich).toContain("不可信"); // 注入防御头（Reasonix untrusted 同款）
       expect(rich).toContain(img); // 路径留据
-      writeFileSync(`${img}.summary.txt`, "[summary-v2]\n带版本标记的描述"); // 新格式：首行版本标记
+      writeFileSync(`${img}.summary.txt`, "[summary-v3]\n带版本标记的描述"); // 新格式：首行版本标记
       const marked = nonVisionImagePlaceholder(img);
       expect(marked).toContain("带版本标记的描述"); // 标记被剥——正文直出
-      expect(marked).not.toContain("summary-v2"); // 标记不漏进占位文本
+      expect(marked).not.toContain("summary-v3"); // 标记不漏进占位文本
       writeFileSync(`${img}.summary.txt`, "   ");
       expect(nonVisionImagePlaceholder(img)).not.toContain("蓝色按钮"); // 空白文件 = 无摘要
     } finally {
