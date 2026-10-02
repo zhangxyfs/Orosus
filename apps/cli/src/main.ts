@@ -2,10 +2,9 @@ import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
-import { createHarness, discoverModules, encodeCwd, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
+import { discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
-import { BUILTIN_MODULES } from "./builtins.ts";
 import { compactionSummaryView } from "./compaction-view.ts";
 import { createCliUi } from "./uiface.ts";
 import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
@@ -25,7 +24,7 @@ import { banner } from "./banner.ts";
 import { needsProviderSetup, } from "./onboarding.ts";
 import { realReadModel, startupGate } from "./startup.ts";
 import { isSessionsSubcommand, runPruneSubcommand } from "./prune.ts";
-import { renderHistoryLines, historyPage, attachRender as attachRenderTo, TOOL_MERGE, registerToolLabels } from "./render.ts";
+import { attachRender as attachRenderTo, TOOL_MERGE, registerToolLabels } from "./render.ts";
 import { ringTurnBell } from "./bell.ts";
 import { resolveBellMode, playTurnChime } from "./chime.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
@@ -50,11 +49,11 @@ import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgen
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
-import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { ctxUsageText, diskUsageText, lastRequestMsOf, lastUsageOf, runtimeStatusText, shortenPath, tokenUsageText } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, runVisionSetting, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
+import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
 import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
@@ -157,14 +156,10 @@ try {
   await exitCli(2);
   throw err; // 不可达（exitCli 已排空并 process.exit）——只为满足明确赋值分析
 }
-// 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
-const sessionsRoot = join(orosusHome(), "sessions");
-const currentBucket = encodeCwd(process.cwd()); // 会话树批 #17：交互面只认当前项目桶
-const sessionsDir = join(sessionsRoot, currentBucket);
-// --resume 定位（会话树批 T2 目录化 + #17 桶限定）：只认当前项目桶的新形态会话；找不到 = 全新空会话（M3 既有语义）
-const resumeLoc = args.resume !== undefined ? locateSessionFile(sessionsRoot, args.resume.sessionId, { bucket: currentBucket }) : undefined;
-// activeDir 语义 = 桶目录（/fork 父定位与 createSession 回退的写侧桶）——目录化后 scan 条目 dir 是会话目录，取其父
-let activeDir = (resumeLoc !== undefined ? dirname(resumeLoc.dir) : undefined) ?? sessionsDir;
+// 会话目录分桶三件（sessionsRoot/currentBucket/sessionsDir）与 activeDir/purgeIfEmptySession/
+// createSession/echoHistory/switchTo 随会话族迁 session-io.ts（m5-split-main T5）；
+// activeDir 初始化在原位调用（求值时机不变：locate → 初值，先于下方清扫块）
+initActiveDir(args.resume);
 
 // 空会话残留清扫（2026-10-01 用户拍板清理批②）：启动即扫当前项目桶，清掉上次异常退出留下的 0 消息壳
 // （正常退出由 sessionLoop 退出漏斗就地清——走不到漏斗的进程被杀/崩溃壳归这里兜底）。只扫当前桶：他桶
@@ -174,16 +169,6 @@ let activeDir = (resumeLoc !== undefined ? dirname(resumeLoc.dir) : undefined) ?
   const swept = sweepEmptySessions(sessionsDir, new Set(args.resume !== undefined ? [args.resume.sessionId] : []));
   if (swept.removed.length > 0) console.error(`已清理 ${swept.removed.length} 个空会话残留（上次退出的 0 消息壳）`);
 }
-
-/** 空会话退出即清（2026-10-01 用户拍板清理批②）：刚关的会话 0 消息 → 整目录不留（判定 = core
- *  isEmptySessionHead，fork 子体除外——投影含父辈）。异常退出走不到此（进程被杀）——残留壳由下次
- *  启动 sweepEmptySessions 兜底。purge 前置条件 = store 已 close（Windows 活句柄删不动）。 */
-const purgeIfEmptySession = (sid: string): void => {
-  const loc = locateSessionFile(sessionsRoot, sid);
-  if (loc === undefined) return;
-  const head = readSessionHead(loc.file);
-  if (head !== undefined && isEmptySessionHead(head)) purgeSessionDir(dirname(loc.dir), sid);
-};
 
 // rl 与交互 UI（D35，T10）：先于 harness 创建——/model、/provider 等菜单命令经 commandUi 注入。
 // M3 口子：审批模块的 waterfall 询问流将复用同一 UI 注入路径（届时经 ctx 扩展，形态随 M3 方案审查定）。
@@ -388,81 +373,6 @@ const commandUi = createCliUi({
   },
 });
 
-const createSession = async (extra: { fork?: { parentSessionId: string; atEntryId?: string; parentDir?: string }; resume?: { sessionId: string }; sessionsDir?: string } = {}) => {
-  // m4-8 T2 存量迁移（D1 自动搬）：老 config.toml 里的模块节整节搬 modules.d/<名>.toml（.bak 备份、幂等、
-  // 白名单 = 内置模块名——第三方已挂载模块发现后才知名，首轮不搬、下轮启动自然补搬）；
-  // OROSUS_NO_MIGRATE 非空可关。用户层与项目层各迁一次（层各自的 config.toml 与 modules.d）
-  if (process.env.OROSUS_NO_MIGRATE === undefined || process.env.OROSUS_NO_MIGRATE === "") {
-    const knownNames = BUILTIN_MODULES.map((m) => m.name);
-    for (const [cfg, modDir] of [
-      [join(orosusHome(), "config.toml"), join(orosusHome(), "modules.d")],
-      [join(process.cwd(), ".orosus", "config.toml"), join(process.cwd(), ".orosus", "modules.d")],
-    ] as const) {
-      try {
-        migrateModulesSections(cfg, modDir, knownNames);
-      } catch (err) {
-        console.error(`[迁移跳过] ${cfg}：${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  }
-  const h = await createHarness({
-    builtinModules: BUILTIN_MODULES,
-    commandUi,
-    settings: settingsService, // m5 T9 口子四：经内核装配成 ctx.settings（mounts "settings" 门）
-    host: hostInfo,             // m5 T9 读面：ctx.host 直挂无门
-    autoTitle: true, // B9 拉前：首轮问答完成自动起会话标题（核心缺省关，CLI 显式开——装配层）
-    sessionsDir: extra.sessionsDir ?? activeDir,
-    sessionsRoot, // 会话树批 T1：fork 祖先链跨桶定位兜底（存量跨桶链只读兼容；新链恒同桶走快路径）
-    // 会话树批 T11：宿主切换缝（ctx.session.switchTo 背后）——立即返回语义（决策点 9）：返回 true = 已受理，
-    // 切换异步走（void 不等待——等待 = 永远等不到，调用方 harness 即将随切换销毁）；#17 桶闸：locate 限当前
-    // 项目桶，他桶/不存在 = false（契约「false = 会话不存在」的唯一出处——模块不能借 switchTo 跳进别项目）
-    sessionSwitch: async (sid: string) => {
-      const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
-      if (loc === undefined) return false;
-      // CM-12①（2026-09-28 code review）：switchTo 内 createSession 可抛（桶目录 mkdir 失败、配置在会话间
-      // 被改坏）——void-async 无 rejection 落点 = 进程杀手（runSubmit 网兜同源认知，1851 一带先例注释的推广）；
-      // 契约已先返回 true（受理），失败面走 settleCommandError（Esc 静默、其余 toast/单行），宿主进程不崩
-      void switchTo(sid).catch((err) => settleCommandError(err));
-      return true;
-    },
-    ...((extra.resume ?? args.resume) !== undefined ? { resume: extra.resume ?? args.resume } : {}),
-    ...(extra.fork !== undefined ? { fork: extra.fork } : {}),
-    config: {
-      enableModules: args.enable,
-      disableModules: args.disable,
-      noModules: args.noModules,
-      module: args.module,
-      ...(args.model !== undefined ? { cliOverrides: { model: args.model } } : {}),
-    },
-  });
-  // 工具显示名喂给渲染层（label 优先呈现——2026-09-24 用户拍板）；reload 会换工具集合，四处 reload 位同步重喂
-  registerToolLabels(h.graph().tools.toolInfos());
-  return h;
-};
-
-// 历史回显（B9 走查补 + 分页）：尾页优先（最新对话先可见），TTY 下回车向前翻页、q 结束；
-// 非交互（管道）只出尾页——巨量历史不再刷爆终端（单行截断在 renderHistoryLines）
-const echoHistory = async (h: Harness, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
-  const lines = renderHistoryLines(await h.history(), process.stdout.columns ?? 80);
-  const PAGE = 30;
-  let { shown, hiddenBefore } = historyPage(lines, PAGE);
-  if (hiddenBefore > 0) out(`…（历史共 ${lines.length} 行，先显示最近 ${shown.length} 行——完整原文在会话文件）`);
-  for (const l of shown) out(l);
-  while (hiddenBefore > 0 && process.stdin.isTTY) {
-    let more: string;
-    try {
-      more = await commandUi.ask(`…（前面还有 ${hiddenBefore} 行）回车=继续往前翻，q/Esc=停止回显`);
-    } catch {
-      break; // Esc（已取消）= 停止翻页，语义同 q——echoHistory 调用点在 REPL catch 面外（TUI 批 T3 过账：不接则 Esc 未捕获异常炸进程）
-    }
-    if (more.trim().toLowerCase() === "q") break;
-    const end = hiddenBefore;
-    const start = Math.max(0, end - PAGE);
-    for (let i = start; i < end; i++) out(lines[i]!);
-    hiddenBefore = start;
-  }
-};
-
 // 全屏会话切换的回显延期槽（F5 二轮⑯）：switch 后 dm 在 sessionLoop 顶重建——
 // 当场回显等于写进即弃的旧 dm（用户实测：/sessions 切换后历史「没加载」）。
 let pendingEcho: { notice: string; history: boolean } | undefined;
@@ -592,9 +502,23 @@ const settingsService: SettingsService = {
   readClipboard: () => readClipboardText(),
 };
 
-let h: Awaited<ReturnType<typeof createSession>>;
+let h: Harness;
+/** 会话族装配依赖（m5-split-main T5，D2 签名注入）：main.ts 留守件经此穿给 session-io.ts 的
+ *  createSession/switchTo（h/lastEventId/tuiMode/pendingEcho 走闭包访问器，调用期现读现写）。 */
+const sessionDeps: SessionDeps = {
+  args,
+  commandUi,
+  settingsService,
+  hostInfo,
+  settleCommandError,
+  getH: () => h,
+  setH: (nh: Harness) => { h = nh; },
+  resetLastEventId: () => { lastEventId = undefined; },
+  isFullscreen: () => tuiMode === "full",
+  deferEcho: () => { pendingEcho = { notice: "", history: true }; },
+};
 try {
-  h = await createSession();
+  h = await createSession(sessionDeps);
 } catch (err) {
   console.error(formatStartupError(err, orosusHome(), new Date()));
   process.exit(1);
@@ -631,7 +555,7 @@ if (args.print !== undefined) {
   if (args.tui !== "line" && process.stdout.isTTY === true && process.stdin.isTTY === true) {
     pendingEcho = { notice: "", history: true };
   } else {
-    await echoHistory(h);
+    await echoHistory(h, commandUi);
   }
 }
 
@@ -829,28 +753,6 @@ function attachRender(h: Harness): void {
 
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
-// 恢复会话（B9 拉前 → 会话树批 T2/#17）：当前桶定位 → 续写；scan 条目 dir 是会话目录，store 要桶 = dirname
-const switchTo = async (sid: string, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
-  const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
-  if (loc === undefined) { out(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
-  await h.close();
-  h = await createSession({ resume: { sessionId: sid }, sessionsDir: dirname(loc.dir) });
-  activeDir = dirname(loc.dir);
-  // CS-05①（2026-09-28 code review）：换会话重置 lastEventId——它只经 attachRender 的 onEvent 喂（切回的
-  // 会话存量历史不重放事件流），不重置则切会话后立即 /fork 会把上一会话的事件 id 当 atEntryId 带进新
-  // 会话；session 域已把投影外 atEntryId 从宽容降级改为 throw（fork.ts CS-05），此路径会响亮报错。
-  // 重置为 undefined = /fork 走「父投影尾事件」缺省（createHarness fork 分支与 h.fork 两出口同款兜底），
-  // 语义恰是 /fork 的「从最新位置分叉」。sessionSwitch 缝（ctx.session.switchTo）背后也走本函数，同点覆盖。
-  lastEventId = undefined;
-  // 恢复横幅整条退役（2026-09-30 用户拍板三轮：[已恢复] 与 ❯ 标题行都不要——历史回放即提示，
-  // 顶上再压一行看着难受）；notice 留空串走回放，消费口跳过空行
-  if (tuiMode === "full") {
-    pendingEcho = { notice: "", history: true }; // 延期到 dm 重建后（F5 二轮⑯）
-  } else {
-    await echoHistory(h, out); // 回显存量对话（B9 走查补 + 分页）
-  }
-};
-
 /** 单行处理（REPL 与全屏共用——F3 抽取）：会话生命周期指令 → "switch"（重挂横幅/渲染）；
  *  /quit → "quit"；其余 → "again"。out = 输出通道（REPL=console.log，全屏=DocModel.pushLine——
  *  全屏 alt-screen 下 console 输出会毁屏，一切带内输出必须进流区）。 */
@@ -882,7 +784,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           },
         );
         if (n === undefined) return "again";
-        await switchTo(items[n - 1]!.id);
+        await switchTo(items[n - 1]!.id, sessionDeps);
         return "switch"; // 换 harness 后重挂横幅与渲染
       }
       if (directive.kind === "title") {
@@ -909,7 +811,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot, currentBucket);
         if (sid === undefined) { notify(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
-        await switchTo(sid);
+        await switchTo(sid, sessionDeps);
         return "switch";
       }
       if (directive.kind === "new" || directive.kind === "fork") {
@@ -925,8 +827,8 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
             const bucketDir = dirname(loc.dir);
             await h.close();
             purgeSessionDir(bucketDir, sid);
-            h = await createSession({ resume: { sessionId: sid }, sessionsDir: bucketDir }); // 同 sid 空档重开
-            activeDir = bucketDir;
+            h = await createSession(sessionDeps, { resume: { sessionId: sid }, sessionsDir: bucketDir }); // 同 sid 空档重开
+            setActiveDir(bucketDir);
             lastEventId = undefined; // 与常规换会话同款重置（CS-05②：三处换会话缝一个口径）
             clearScreen();
             const notice = `[已是空会话——沿用本会话 ${sid}，创建时间已刷新]`;
@@ -943,11 +845,11 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           : undefined;
         await h.close();
         // 新会话/fork 子会话一律落当前项目桶；fork 父会话按 activeDir 定位（可能在平铺或他桶——resume 旧会话后 /fork）
-        h = await createSession(directive.kind === "fork"
-          ? { ...harnessOptionsFor(directive, { parentDir: activeDir }), sessionsDir }
+        h = await createSession(sessionDeps, directive.kind === "fork"
+          ? { ...harnessOptionsFor(directive, { parentDir: activeDirRef() }), sessionsDir }
           : { sessionsDir });
         if (from !== undefined && parentTitle !== undefined) await h.setLabel(`fork ${parentTitle}`);
-        activeDir = sessionsDir;
+        setActiveDir(sessionsDir);
         // CS-05②：/new 与 /fork 换会话同款重置——/new 的新会话尚无事件（header 懒写），残留旧会话尾事件
         // id 时立即 /fork 必 throw（投影外 atEntryId）；/fork 分支的重置是口径统一（父尾 id 虽仍在子投影
         // 内合法，统一回 undefined 走尾缺省——三处换会话缝一个口径，勿再单点漏）
@@ -959,7 +861,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         if (tuiMode === "full") pendingEcho = { notice, history: from !== undefined }; // F5 二轮⑯ 延期
         else {
           out(notice);
-          if (from !== undefined) await echoHistory(h);
+          if (from !== undefined) await echoHistory(h, commandUi);
         }
         return "switch"; // 重挂横幅与渲染（新事件流）
       }
