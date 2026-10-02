@@ -16,7 +16,7 @@
     "@orosus/contracts": "workspace:*",
     "jimp": "^1.6.1",
     "wasm-feature-detect": "^1.9.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0", "smol-toml": "^1.0.0"
   },
   "devDependencies": {
     "@orosus/core": "workspace:*",

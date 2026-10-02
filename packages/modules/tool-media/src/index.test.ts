@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configSchema, policyOf, MEDIA_POLICY_KEY, type MediaPolicyFacts } from "./index.ts";
+import { configSchema, policyOf, MEDIA_POLICY_KEY, persistVisionModel, readVisionModel, type MediaPolicyFacts } from "./index.ts";
 import { defineModule, MODULE_API_VERSION } from "@orosus/contracts/module";
 const probeModApi = MODULE_API_VERSION;
 import toolMedia from "./index.ts";
@@ -74,4 +74,19 @@ describe("tool-media 配置与策略（m5-media F9——[tool-media] 节，帽�
       await h.close();
     }
   }, 30_000);
+});
+
+// F14 落盘件往返（persist.ts——settings/引导两入口共用写器）
+describe("persistVisionModel / readVisionModel（F14）", () => {
+  it("缺省 off；写 auto / 指定槽全名往返保真；与其他 [tool-media] 键共存", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-vp-"));
+    const f = join(dir, "tool-media.toml");
+    expect(readVisionModel(f)).toBe("off"); // 无文件缺省
+    persistVisionModel(f, "auto");
+    persistVisionModel(f, "zhipuai-coding-plan/glm-5.3-flash");
+    expect(readVisionModel(f)).toBe("zhipuai-coding-plan/glm-5.3-flash");
+    // 再写回 off（三态切换不残留）
+    persistVisionModel(f, "off");
+    expect(readVisionModel(f)).toBe("off");
+  });
 });

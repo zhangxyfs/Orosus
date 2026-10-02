@@ -29,6 +29,10 @@ export interface OnboardingDeps {
   writeSearch(patch: { backend?: string | undefined; model?: string | undefined; tavilyApiKey?: string | undefined; braveApiKey?: string | undefined }): void;
   /** 按 provider 实拉模型清单（SW-24：目录优选 + live 兜底；reject = 拉取失败 → 回退手动输入行）。 */
   listModels(slot: string): Promise<string[]>;
+  /** [tool-media] visionModel 写回（F14 引导页——D12 三态 "off"|"auto"|"<槽/模型>"）。 */
+  writeVision(value: string): void;
+  /** 已配置槽的多模态模型清单（宿主逐槽查目录——遮蔽坑免疫；空 = 空态指路）。 */
+  visionModels(): Promise<string[]>;
   /** 异步清单到达后的重绘请求（FullApp 挂接时强制注入自家调度——宿主直驱测试可省略）。 */
   requestRender?(): void;
 }
@@ -48,6 +52,19 @@ interface P3State {
   notice: string; noticeKind: NoticeKind;
 }
 
+/** F14 第 3 页 · 配置视觉模型（D12 三态 + 指定列表——恒定 5 行空槽留白防闪烁）。 */
+interface PVState {
+  sel: number; mode: "opts" | "list";
+  models: string[]; loading: boolean;
+  notice: string; noticeKind: NoticeKind;
+}
+const VISION_OPTS = [
+  { id: "off", name: "暂不启用（默认）", desc: "不生成视觉摘要——降级图只留路径标签" },
+  { id: "auto", name: "自动", desc: "当前模型支持图片时直接用它看图" },
+  { id: "pick", name: "指定视觉模型", desc: "从已配置提供商的多模态模型中选择" },
+] as const;
+const VISION_LIST_ROWS = 5; // 恒定行数（原型走查③：不足补空槽——高度恒定防闪烁铁律）
+
 const PAGE_SIZE = 8;
 const WEB_OPTS = [
   { id: "llm", name: "LLM Web Search", desc: "默认 · 用已配置的模型联网搜索，无需任何 Key" },
@@ -58,9 +75,10 @@ const ENV_NAME: Record<"tavily" | "brave", string> = { tavily: "TAVILY_API_KEY",
 
 export class OnboardingSession {
   private deps: OnboardingDeps;
-  private page: 1 | 2 | 3 = 1;
+  private page: 1 | 2 | 3 | 4 = 1;
   private p2: P2State;
   private p3: P3State;
+  private pv: PVState;
 
   constructor(deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null }) {
     this.deps = deps;
@@ -73,11 +91,12 @@ export class OnboardingSession {
       sel: 0, stage: "opts", keyOpt: null, provOpt: null, models: [], drafts: {},
       chosen: null, model: null, notice: "", noticeKind: "warn",
     };
+    this.pv = { sel: 0, mode: "opts", models: [], loading: false, notice: "", noticeKind: "warn" };
   }
 
   /** 测试探针。 */
-  get stateRef(): { page: number; p2: P2State; p3: P3State } {
-    return { page: this.page, p2: this.p2, p3: this.p3 };
+  get stateRef(): { page: number; p2: P2State; p3: P3State; pv: PVState } {
+    return { page: this.page, p2: this.p2, p3: this.p3, pv: this.pv };
   }
 
   private provById(id: string): OnboardingProvider {
@@ -114,11 +133,13 @@ export class OnboardingSession {
       return undefined;
     }
     if (this.page === 2) return this.keyP2(key);
+    if (this.page === 3) return this.keyPV(key);
     return this.keyP3(key);
   }
 
   private notice(text: string, kind: NoticeKind): void {
     if (this.page === 2) { this.p2.notice = text; this.p2.noticeKind = kind; }
+    else if (this.page === 3) { this.pv.notice = text; this.pv.noticeKind = kind; }
     else { this.p3.notice = text; this.p3.noticeKind = kind; }
   }
 
@@ -212,7 +233,53 @@ export class OnboardingSession {
     return undefined;
   }
 
-  /* ── 第 3 页 · 配置网络搜索 ── */
+  /* ── 第 3 页 · 配置视觉模型（F14——D12 三态；可不选直接 Ctrl + N，默认不开启） ── */
+  private keyPV(key: string): OnboardingOutcome | undefined {
+    const p = this.pv;
+    if (key === "up" || key === "down") {
+      const n = p.mode === "opts" ? VISION_OPTS.length : Math.max(1, p.models.length);
+      p.sel = Math.max(0, Math.min(n - 1, p.sel + (key === "down" ? 1 : -1)));
+      return undefined;
+    }
+    if (key === "backspace" && p.mode === "list") { p.mode = "opts"; p.sel = 0; p.notice = ""; return undefined; }
+    if (key === "enter") {
+      if (p.mode === "opts") {
+        const o = VISION_OPTS[p.sel];
+        if (o === undefined) return undefined;
+        if (o.id === "off") {
+          this.deps.writeVision("off");
+          this.notice("已写入 modules.d/tool-media.toml（视觉摘要停用）", "ok");
+        } else if (o.id === "auto") {
+          this.deps.writeVision("auto");
+          this.notice("已设为自动——当前模型支持图片时直接用它看图", "ok");
+        } else {
+          p.mode = "list"; p.sel = 0; p.loading = true; p.models = []; p.notice = "";
+          this.deps.visionModels().then((models) => {
+            if (p.mode !== "list") return; // 用户已返回选项页
+            p.models = models; p.loading = false;
+            if (models.length === 0) this.notice("已配置的提供商里没有目录可证的多模态模型——可回上一页换提供商，或直接下一步", "warn");
+            this.deps.requestRender?.();
+          }).catch(() => {
+            if (p.mode !== "list") return;
+            p.loading = false;
+            this.notice("多模态模型清单读取失败——可直接下一步稍后在 /settings 配置", "warn");
+            this.deps.requestRender?.();
+          });
+        }
+        return undefined;
+      }
+      const m = p.models[p.sel];
+      if (m !== undefined) {
+        this.deps.writeVision(m);
+        this.notice(`已指定视觉模型 ${m}`, "ok");
+      }
+      return undefined;
+    }
+    if (key === "ctrl+n") { this.page = 4; return undefined; }
+    return undefined;
+  }
+
+  /* ── 第 4 页 · 配置网络搜索 ── */
   private keyP3(key: string): OnboardingOutcome | undefined {
     const p = this.p3;
     if (key === "backspace") {
@@ -358,11 +425,12 @@ export class OnboardingSession {
     const body: string[] = [];
     if (this.page === 1) this.bodyP1(body, bodyH, inner);
     else if (this.page === 2) this.bodyP2(body, bodyH, inner);
+    else if (this.page === 3) this.bodyPV(body, bodyH, inner);
     else this.bodyP3(body, bodyH, inner);
     while (body.length < bodyH) body.push(""); // 定高垫行——条件性增删行即闪烁源（浮层纪律）
     if (body.length > bodyH) body.length = Math.max(0, bodyH); // CTU-05：P1 body 恒推 7 行，bodyH 不足时裁尾（旧「只垫不裁」让 lines 超 mh 预算顶穿底行——rows≤12 时底框/键位行整行被裁不可见）
-    const step = theme.fg("info", `引导 ${this.page} / 3`);
-    const title = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置网络搜索"][this.page - 1]!;
+    const step = theme.fg("info", `引导 ${this.page} / 4`);
+    const title = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置视觉模型", "配置网络搜索"][this.page - 1]!;
     const lines = [
       theme.fg(bc, "╭" + "─".repeat(inner) + "╮"),
       box(` ${step}  ${theme.fg("fg", title)}`),
@@ -457,6 +525,31 @@ export class OnboardingSession {
       }
     }
     out.push(this.noticeLine(p.noticeKind, p.notice));
+  }
+
+  private bodyPV(out: string[], bodyH: number, inner: number): void {
+    const p = this.pv;
+    if (p.mode === "opts") {
+      out.push(theme.fg("muted", "给不支持图片的模型配一双眼睛（视觉摘要 / 看图能力）——可跳过"));
+      out.push("");
+      for (const [i, o] of VISION_OPTS.entries()) {
+        const mark = i === p.sel ? theme.fg("accent", "●") : theme.dim("○");
+        out.push(`${mark} ${theme.fg("fg", o.name)}${theme.dim("——" + o.desc)}`);
+      }
+    } else {
+      out.push(theme.fg("muted", "多模态模型（已按提供商过滤）· Enter 指定 / Backspace 返回"));
+      out.push("");
+      const rows = p.loading ? ["加载中…"] : p.models.length > 0 ? p.models : ["（无多模态模型）"];
+      const shown = rows.slice(0, VISION_LIST_ROWS);
+      for (const [i, m] of shown.entries()) {
+        const mark = i === p.sel ? theme.fg("accent", "●") : theme.dim("○");
+        out.push(`${mark} ${theme.fg("fg", truncateToWidth(m, inner - 4))}`);
+      }
+      for (let i = shown.length; i < VISION_LIST_ROWS; i++) out.push(""); // 恒定 5 行空槽留白（防闪烁铁律）
+      if (rows.length > VISION_LIST_ROWS) out.push(theme.dim(`  ↑ 还有 ${rows.length - VISION_LIST_ROWS} 个未显示`));
+    }
+    const n = this.noticeLine(p.noticeKind, p.notice);
+    if (n !== "") { out.push(""); out.push(n); }
   }
 
   private bodyP3(out: string[], bodyH: number, inner: number): void {

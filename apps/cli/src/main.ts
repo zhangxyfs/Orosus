@@ -37,6 +37,7 @@ import * as theme from "./theme.ts";
 
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, type ProviderEntry } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
+import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { readFileSync, existsSync } from "node:fs";
@@ -1310,6 +1311,7 @@ const SETTINGS_ITEMS = [
 	"子代理（模型 / 审批模式 / 轮数上限）",
 	"技能（查看 / 启停——四轨目录全部技能）",
 	"MCP（查看 / 开关 / 删除——server 管理与添加）",
+	"配置视觉模型（停用 / 自动 / 指定——给非多模态模型提供视觉）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
 const tokenUsageText = async (): Promise<string> => {
@@ -1333,6 +1335,48 @@ const runtimeStatusText = (): string => {
 };
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
+/** 已配置槽的多模态模型清单（F14——§2.5 遮蔽坑免疫：按槽条目内**精确键**逐槽查，禁全目录尾段扫；
+ *  live /models 出的目录外模型无法验视觉能力——不列〔诚实〕；目录缺席 = 空清单走空态指路）。 */
+const visionCandidates = async (): Promise<string[]> => {
+	const providers = await defaultMenuDeps().loadProviders();
+	const catalog = readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}; // 与拦截段同源（provider-custom 盘上缓存口）
+	const out: string[] = [];
+	for (const slot of Object.keys(providers)) {
+		const entry = catalog[slot];
+		if (entry === undefined) continue;
+		for (const [key, m] of Object.entries(entry.models ?? {})) {
+			if (m.modalities?.input?.includes("image") === true) out.push(`${slot}/${key}`);
+		}
+	}
+	return out;
+};
+
+/** F14 视觉模型配置流（chooseVia = 子代理三件同款双态抽象）。D12 三态；写盘后 /reload 生效（模块配置）。 */
+const runVisionSetting = async (
+	chooseVia: (title: string, items: string[]) => Promise<string>,
+	configFile: () => string,
+): Promise<string> => {
+	const cur = readVisionModel(configFile());
+	const curNote = cur === "off" ? "停用" : cur === "auto" ? "自动" : cur;
+	const OPTS = ["停用（默认——不生成视觉摘要，降级图只留路径标签）", "自动（当前模型支持图片时直接用它）", "指定模型（从已配置提供商的多模态模型中选）"];
+	const picked = await chooseVia(`配置视觉模型（当前：${curNote}）`, OPTS);
+	if (picked === OPTS[0]) {
+		persistVisionModel(configFile(), "off");
+		return "已设为停用——/reload 后生效";
+	}
+	if (picked === OPTS[1]) {
+		persistVisionModel(configFile(), "auto");
+		return "已设为自动——/reload 后生效";
+	}
+	const candidates = await visionCandidates();
+	if (candidates.length === 0) {
+		return "已配置的提供商里没有目录可证的多模态模型——先 /provider 配置视觉模型所在的提供商（或给模型正确的目录名）";
+	}
+	const model = await chooseVia("指定视觉模型（多模态模型 · 已按提供商过滤）", candidates);
+	persistVisionModel(configFile(), model);
+	return `已指定视觉模型 ${model}——/reload 后生效`;
+};
+
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
  *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。
  *  2026-09-27 拍板：查看窗 Esc 关闭后回列表页（不是一路关到底）——全屏循环里查看窗之后的
@@ -1807,6 +1851,19 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 		else if (picked === 5) await openSkillsPanel(app); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
 		else if (picked === 6) await openMcpPanel(app); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
 		else if (picked === 7) {
+			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
+			try {
+				const res = await runVisionSetting(
+					async (t, items) => { const i = await app.pickOverlay(t, items); if (i === undefined) throw new Error("已取消（Esc）"); return items[i] ?? ""; },
+					() => moduleConfigFileFor("tool-media"),
+				);
+				app.showToast(res);
+			} catch (err) {
+				if (err instanceof Error && err.message === "已取消（Esc）") continue;
+				throw err;
+			}
+		}
+		else if (picked === 8) {
 			// 顶层后端菜单的 Esc → 回设置根列表（更深的 Esc 已在 tool-web 模块内逐级返回）
 			try {
 				const res = await runSearchSettings();
@@ -1859,6 +1916,15 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 		else if (idx === 5) await openSkillsLine(out);
 		else if (idx === 6) await openMcpLine(out);
 		else if (idx === 7) {
+			try {
+				const res = await runVisionSetting(async (t, items) => commandUi.choose(t, items), () => moduleConfigFileFor("tool-media"));
+				if (res !== "") out(res);
+			} catch (err) {
+				if (isEsc(err)) continue; // Esc → 回设置根菜单
+				throw err;
+			}
+		}
+		else if (idx === 8) {
 			try {
 				const res = await runSearchSettings();
 				if (res !== "") out(res);
@@ -2534,6 +2600,9 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		// m4-8 T4/C5：[tool-web] 路由新家 modules.d/tool-web.toml（D7 例外——模块侧写动作保持，
 		// 目标路径由宿主按 sectionPath 算好传入；模块不 import core）
 		writeSearch: (patch) => persistToolWebSearch(moduleConfigFileFor("tool-web"), patch),
+			// F14 视觉模型页（第 3/4 页）：写 [tool-media] visionModel；清单 = 已配置槽逐槽查目录（遮蔽坑免疫）
+			writeVision: (value) => persistVisionModel(moduleConfigFileFor("tool-media"), value),
+			visionModels: () => visionCandidates(),
 		listModels: async (slot) => {
 			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）
 			const entry = (await menuDeps.loadProviders())[slot];

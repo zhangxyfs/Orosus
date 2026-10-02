@@ -14,11 +14,12 @@ interface Calls {
   secrets: [string, string][];
   models: string[];
   searchPatches: Record<string, unknown>[];
+  vision: string[];
   renders: number;
 }
 
 const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; calls: Calls } => {
-  const calls: Calls = { providers: [], secrets: [], models: [], searchPatches: [], renders: 0 };
+  const calls: Calls = { providers: [], secrets: [], models: [], searchPatches: [], vision: [], renders: 0 };
   const deps: OnboardingDeps = {
     providers: PROVIDERS,
     writeProvider: (p) => { calls.providers.push({ id: p.id, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) }); },
@@ -26,6 +27,8 @@ const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; cal
     setModel: (slot) => { calls.models.push(slot); },
     writeSearch: (patch) => { calls.searchPatches.push(patch as Record<string, unknown>); },
     listModels: over.listModels ?? (async () => ["glm-5.3", "glm-5.3-air"]),
+    writeVision: (v) => { calls.vision.push(v); },
+    visionModels: over.visionModels ?? (async () => ["zai/glm-5.3-flash", "zai/glm-4.6v"]),
     requestRender: () => { calls.renders += 1; },
     ...over,
   };
@@ -51,9 +54,11 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     s.handleKey("enter"); // 确认 Key
     expect(calls.secrets).toEqual([["ZHIPU_API_KEY", "zk-1"]]);
     expect(calls.models).toEqual(["zhipu"]); // 首个配好自动设为当前使用（SW-25）
-    // 进 p3
+    // 进 p3（F14 视觉页——可不选直接下一步，默认不开启）
     expect(s.handleKey("ctrl+n")).toBeUndefined();
     expect(s.stateRef.page).toBe(3);
+    expect(s.handleKey("ctrl+n")).toBeUndefined(); // 视觉页可跳过 → 进 p4 搜索页
+    expect(s.stateRef.page).toBe(4);
     expect(s.handleKey("ctrl+n")).toBeUndefined(); // 未选定 → 锁定
     expect(s.stateRef.p3.notice).toContain("先选择一个搜索后端");
     // LLM 默认项选定（Enter 进 llm 子态 → 选默认项）
@@ -123,7 +128,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
   it("⑤ p3 LLM 跨提供商钉选：llm → provs → models → 钉选值 provider/model 限定形（SW-24）", async () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu", "openai"], active: "zhipu" });
-    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p3
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p3 视觉页（跳过）→ p4 搜索页
     s.handleKey("enter"); // opts → llm
     s.handleKey("down"); s.handleKey("enter"); // 另选一个模型…
     expect(s.stateRef.p3.stage).toBe("provs");
@@ -141,7 +146,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
   it("⑥ p3 模型清单拉取失败 → 手动输入行回退（SW-24）", async () => {
     const { deps, calls } = mkDeps({ listModels: async () => { throw new Error("端点不可达"); } });
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
-    s.handleKey("ctrl+n"); s.handleKey("ctrl+n");
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
     s.handleKey("enter"); s.handleKey("down"); s.handleKey("enter");
     s.handleKey("enter"); // 选 zhipu
     await new Promise((r) => setTimeout(r, 0));
@@ -154,7 +159,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
   it("⑦ p3 Tavily key：输入 → secrets + 占位符写盘；输入态 ↑↓ 可换 Brave（草稿按行保留）", () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
-    s.handleKey("ctrl+n"); s.handleKey("ctrl+n");
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
     s.handleKey("down"); s.handleKey("enter"); // Tavily
     type(s, "tv-1");
     s.handleKey("down"); // 换 Brave——草稿保留
@@ -184,7 +189,7 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
   it("⑨ Backspace 逐级返回链（SW-24）：models→provs→llm→opts；key 空草稿→opts", async () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
-    s.handleKey("ctrl+n"); s.handleKey("ctrl+n");
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4（视觉页跳过）
     s.handleKey("enter"); s.handleKey("down"); s.handleKey("enter"); s.handleKey("enter"); // → models（等清单）
     await new Promise((r) => setTimeout(r, 0));
     expect(s.stateRef.p3.stage).toBe("models");
@@ -227,13 +232,13 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     const p1 = s.render(120, 30).lines.join("\n");
-    expect(p1).toContain("引导 1 / 3");
+    expect(p1).toContain("引导 1 / 4");
     expect(p1).toContain("欢迎使用 Orosus（连山）");
     expect(p1).toContain("Ctrl + N");
     expect(p1).toContain("Esc 未占用");
     s.handleKey("ctrl+n");
     const p2 = s.render(120, 30).lines.join("\n");
-    expect(p2).toContain("引导 2 / 3");
+    expect(p2).toContain("引导 2 / 4");
     expect(p2).toContain("先配好一家提供商"); // 锁定原因（Ctrl + N 置灰带 why）
     expect(p2).toContain("本地"); // ollama 本地标记
     // key 态静默盲输形态（SW-23：已输入 N 字符，不逐键掩码）
@@ -298,3 +303,76 @@ describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最�
     expect(s.render(104, 20).lines).toHaveLength(17); // mh=18 → bodyH=11 ≥ P1 的 7 行：定高结构同旧
   });
 });
+
+// F14 第 3 页 · 配置视觉模型（D12 三态 + 5 行恒定列表 + 可跳过默认不开启）
+describe("首次使用引导弹窗 · p3 视觉模型页（m5-media F14）", () => {
+  const toP3 = (s2: OnboardingSession): void => {
+    s2.handleKey("ctrl+n"); s2.handleKey("ctrl+n"); // → p3 视觉页
+  };
+
+  it("F14-① 三选项：停用/auto 写盘即留页提示；Ctrl+N 跳过零写入（默认不开启）", () => {
+    const { deps, calls } = mkDeps();
+    const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+    toP3(s);
+    expect(s.stateRef.page).toBe(3);
+    s.handleKey("enter"); // opts[0] 停用
+    expect(calls.vision).toEqual(["off"]);
+    expect(s.stateRef.pv.notice).toContain("tool-media");
+    s.handleKey("down"); s.handleKey("enter"); // auto
+    expect(calls.vision).toEqual(["off", "auto"]);
+    expect(s.stateRef.pv.notice).toContain("自动");
+    const { calls: c2 } = mkDeps();
+    const s3 = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+    s3.handleKey("ctrl+n"); s3.handleKey("ctrl+n"); s3.handleKey("ctrl+n"); // 直接跳过
+    expect(s3.stateRef.page).toBe(4);
+    expect(c2.vision).toEqual([]); // 跳过不写盘（缺省即 off）
+  });
+
+  it("F14-② 指定模型：Enter 进列表（异步清单到达）→ Enter 写盘限定形；Backspace 回选项页", async () => {
+    const { deps, calls } = mkDeps();
+    const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+    toP3(s);
+    s.handleKey("down"); s.handleKey("down"); s.handleKey("enter"); // 指定模型 → list
+    expect(s.stateRef.pv.mode).toBe("list");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.stateRef.pv.models).toEqual(["zai/glm-5.3-flash", "zai/glm-4.6v"]);
+    s.handleKey("enter"); // 选第一个
+    expect(calls.vision).toEqual(["zai/glm-5.3-flash"]);
+    s.handleKey("backspace"); // 已在 opts——backspace 无副作用
+    expect(s.stateRef.pv.mode).toBe("opts");
+  });
+
+  it("F14-③ 空清单空态指路；拉取失败同回退提示；Ctrl+N 始终可走", async () => {
+    const { deps } = mkDeps({ visionModels: async () => [] });
+    const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+    toP3(s);
+    s.handleKey("down"); s.handleKey("down"); s.handleKey("enter");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.stateRef.pv.notice).toContain("没有目录可证的多模态模型");
+    const { deps: d2 } = mkDeps({ visionModels: async () => { throw new Error("目录不可读"); } });
+    const s2 = new OnboardingSession(d2, { configured: ["zhipu"], active: "zhipu" });
+    toP3(s2);
+    s2.handleKey("down"); s2.handleKey("down"); s2.handleKey("enter");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s2.stateRef.pv.notice).toContain("读取失败");
+    expect(s2.handleKey("ctrl+n")).toBeUndefined();
+    expect(s2.stateRef.page).toBe(4);
+  });
+
+  it("F14-④ 渲染钉：视觉页标题/三选项行/列表恒定 5 行（防闪烁铁律）", () => {
+    const { deps } = mkDeps();
+    const s = new OnboardingSession(deps, { configured: ["zhipu"], active: "zhipu" });
+    toP3(s);
+    const r1 = s.render(80, 24);
+    const txt = r1.lines.map((l) => stripAnsiSafe(l)).join("\n");
+    expect(txt).toContain("配置视觉模型");
+    expect(txt).toContain("暂不启用（默认）");
+    expect(txt).toContain("指定视觉模型");
+    expect(r1.lines).toHaveLength(s.render(80, 24).lines.length); // 定高
+  });
+});
+
+/** 测试内小件：剥 ANSI（onboarding.test 顶部已有 stripAnsi 则复用——此处防御性自带）。 */
+function stripAnsiSafe(s2: string): string {
+  return s2.replace(/\u001b\[[0-9;]*m/g, "");
+}
