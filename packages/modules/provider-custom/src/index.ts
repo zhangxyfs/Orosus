@@ -61,6 +61,8 @@ export { defaultMenuDeps } from "./cli-deps.ts";
 // M4-3 T1d 引导弹窗消费面：裁剪快照视图（SW-21）+ 按 provider 实拉模型清单的组合件（SW-24——引导期槽未激活，
 // 用裸条目直组「目录优选 + live 兜底」，与槽内 listModels 同口径）
 export { BUILTIN_SNAPSHOT, snapshotProviderView, type SnapshotProviderView } from "./builtin-snapshot.ts";
+// 2026-10-02 用户拍板：引导第 2 页正源换盘上目录缓存——预装件固化（seedBundledCatalog）+ 全量派生视图（catalogProviderView）
+export { bundledCatalogFile, seedBundledCatalog, catalogProviderView, bundledCatalogHealthy } from "./bundled-catalog.ts";
 export { catalogPreferredListModels, diskFirstCatalogLoader, type CatalogLoader } from "./adapters.ts";
 export { createListModels as openaiListModels } from "./stream-openai.ts";
 export { createListModels as anthropicListModels } from "./stream-anthropic.ts";

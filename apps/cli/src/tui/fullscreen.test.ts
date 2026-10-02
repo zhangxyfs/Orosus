@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { FullScreen, ENTER_ALT, EXIT_ALT, MOUSE_OFF, MOUSE_ON_ALL_MOTION, MOUSE_ON_BUTTON_MOTION, CRASH_RESTORE, mouseOnFor } from "./fullscreen.ts";
+import { stripAnsi } from "./width.ts";
 
 describe("鼠标上报开关（m5 鼠标批 T3——kimi 两档照抄：全动/按钮级 + 多路复用器降级）", () => {
 	it("① mouseOnFor：普通环境 = 全动四段（1000/1002/1003/1006）；TMUX/STY/ZELLIJ/TERM 前缀 = 按钮级三段（去 1003）", () => {
@@ -62,5 +63,17 @@ describe("全屏渲染器（TUI 批阶段三 F0——alt-screen 行级 diff + ov
 		expect(out).toContain("XX");
 		// 合成行 = 前 3 列原文 + 浮层 + 后 5 列原文
 		expect(out.indexOf("aaa")).toBeLessThan(out.indexOf("XX"));
+	});
+	it("③ overlay 合成 before 恒宽（2026-10-02 引导窗框线错位走查）：宿主行宽字符跨界 overlay.col 时整字让位补齐——浮层左缘钉在 col 不右漂", () => {
+		const frames: string[] = [];
+		const f = new FullScreen((s) => frames.push(s));
+		// 宿主行「权限管理…」：权=0-1 格、限=2-3 格跨界 col=3——旧代码 before 带入「限」实画 4 格，浮层整行右移 1 格（左右框线双双右漂实锤）
+		f.render(["权限管理abcd", "bbbbbbbbbb"], 2, 12, {
+			lines: ["╭──╮"],
+			row: 0,
+			col: 3,
+			width: 4,
+		});
+		expect(stripAnsi(frames[0]!).startsWith("权 ╭──╮")).toBe(true); // before 恒 3 格：限字让位换空格，浮层从第 3 格起
 	});
 });

@@ -2892,7 +2892,9 @@ export class FullApp {
 
 		let overlay: OverlayFrame | undefined;
 		if (this.onboarding !== undefined) {
-			const ob = this.onboarding.session.render(cols, rows); // 居中定高弹窗（三页恒定行数——防闪烁纪律）
+			// dock = 输入框几何（2026-10-02 用户拍板，推翻居中+固定 96 宽）：底边贴输入框上缘、
+			// 左缘对齐、宽度一致（leftW）——view/dialog 窗 dock 同款；定高防闪烁纪律不变
+			const ob = this.onboarding.session.render(cols, rows, { bottom: divRow, width: leftW });
 			overlay = { lines: ob.lines, row: ob.row, col: ob.col, width: ob.width };
 		} else if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;

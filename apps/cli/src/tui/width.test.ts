@@ -142,4 +142,10 @@ describe("Unicode 属性计宽（2026-10-01 滚动条顶飞事故批——✅ �
 		expect(visibleWidth("❤")).toBe(1);
 		expect(visibleWidth("✓️")).toBe(2); // 非 RGI（2713 无 emoji 呈现）但 VS16 政策升 2——政策保留
 	});
+	it("⑲ padToWidth 截断回填（2026-10-02 引导窗框线错位走查）：截点落宽字中间整字让位后补空格——恒等于目标宽", () => {
+		expect(visibleWidth(padToWidth("ABC山", 4))).toBe(4); // 旧：截断短 1 格不回填 → 3（box 行右框线左漂根因）
+		expect(padToWidth("ABC山", 4)).toBe("ABC ");
+		expect(visibleWidth(padToWidth("山山山", 5))).toBe(5); // 旧：4
+		expect(visibleWidth(padToWidth("山山", 4))).toBe(4); // 恰好齐宽不补
+	});
 });
