@@ -979,15 +979,19 @@ describe("DocModel 视觉转述行（m5-media 走查四 2026-10-02——◐ 转�
 		dm.visionDelta("thinking", "图上有个按钮");
 		dm.visionDelta("text", "蓝色登录页");
 		const streaming = dm.frameLines(80).map(stripAnsi);
-		expect(streaming.some((l) => l.includes("[眼睛思考]"))).toBe(true);
+		expect(streaming.some((l) => l.includes("[视觉模型思考]"))).toBe(true);
 		expect(streaming.some((l) => l.includes("蓝色登录页"))).toBe(true);
 		dm.visionTranscribeEnd("zhipuai-coding-plan/glm-5.3-flash", "蓝色按钮的登录页，标题写着测试字样", "done");
 		const done = dm.frameLines(80).map(stripAnsi);
 		expect(done.some((l) => l.includes("● 视觉转述（zhipuai-coding-plan/glm-5.3-flash）"))).toBe(true);
-		expect(done.some((l) => l.includes("蓝色按钮的登录页"))).toBe(true); // 转述正文可见
+		expect(done.some((l) => l.includes("蓝色按钮的登录页"))).toBe(true); // 折叠态尾两行仍在（短正文整条可见）
 		expect(done.some((l) => l.includes("◐"))).toBe(false); // 进行中行已被原位替换
-		expect(done.some((l) => l.includes("[眼睛思考]"))).toBe(false); // 活动块已清空（思考弃置、正文定格）
-		expect(done.some((l) => l.includes("蓝色登录页，标题") === false && l.includes("蓝色登录页") === true && l.includes("[眼睛思考]"))).toBe(false); // 流式正文随活动块清空收编进定格行
+		expect(done.some((l) => l.includes("[视觉模型思考]"))).toBe(false); // 活动块已清空（思考弃置、正文定格）
+		expect(done.some((l) => l.includes("Alt + E 展开"))).toBe(true); // 默认折叠带展开提示
+		dm.thinkOpen = true; // Alt+E 共键展开
+		const opened = dm.frameLines(80).map(stripAnsi);
+		expect(opened.some((l) => l.includes("Alt + E 展开"))).toBe(false);
+		expect(opened.some((l) => l.includes("蓝色按钮的登录页，标题写着测试字样"))).toBe(true); // 全文可见
 	});
 
 	it("② 失败/中止态：failed 带模型名与占位说明；aborted 提示重发即续（live-only 态）", () => {
