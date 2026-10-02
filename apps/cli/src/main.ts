@@ -37,14 +37,14 @@ import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { imagesFor, extractImageRefs, PASTE_EMPTY, readClipboardText } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
 import { commandCompleter, HELP_TEXT } from "./help.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { readSkillDisabled, seedFactorySkills, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
+import { seedFactorySkills } from "./skill-settings.ts";
 import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -55,6 +55,7 @@ import { ctxUsageText, diskUsageText, lastRequestMsOf, lastUsageOf, runtimeStatu
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, runVisionSetting, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
 import { isEsc, mcpConnRows, openMcpLine, openMcpPanel, type McpUiDeps } from "./mcp-ui.ts";
+import { openSkillsLine, openSkillsPanel, refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -520,9 +521,15 @@ const mcpDeps: McpUiDeps = {
   commandUi,
   activeModuleNames: () => activeModuleNames(),
   closeGoneModuleUi: (before) => closeGoneModuleUi(before),
-  refreshSkillMenu: () => refreshSkillMenu(),
+  refreshSkillMenu: () => refreshSkillMenu(skillDeps),
   refreshPanel: () => refreshPanel(),
   getActiveApp: () => activeApp,
+};
+/** 技能菜单族依赖（m5-split-main T7，D2）：reloadModulesIdle 为 T9 留守共用件（闭包现读）。 */
+const skillDeps: SkillUiDeps = {
+  getH: () => h,
+  commandUi,
+  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(app, busyToast),
 };
 try {
   h = await createSession(sessionDeps);
@@ -1052,7 +1059,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           notify("平台配置已即时生效（模块图已重载）");
         }
         if (reloadShot !== undefined) closeGoneModuleUi(reloadShot);
-        if (cmdNameOf(text) === "/reload") { registerToolLabels(h.graph().tools.toolInfos()); void refreshSkillMenu(); } // 标签表与技能菜单缓存随图重喂
+        if (cmdNameOf(text) === "/reload") { registerToolLabels(h.graph().tools.toolInfos()); void refreshSkillMenu(skillDeps); } // 标签表与技能菜单缓存随图重喂
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
@@ -1171,16 +1178,6 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 	}
 };
 
-/** /settings → 技能（m4-7 T8/T9，原型图 2/3/4）：列表页（全收口径——含停用与仅手动者）→ 详情页
- *  （五字段 + Alt + K 启停）。数据源 = skill.catalog 服务现取（与 T7 菜单同链）+ disabled 现读盘覆盖
- *  （busy 期 reload 缓挂、catalog 停用快照滞后——盘是 Alt + K 即时写的，以盘为准）。 */
-const skillCatalogRows = async (): Promise<SkillCatalogRow[]> => {
-	const catalog = await h.graph().services.getOptional("skill.catalog");
-	const rows = typeof catalog === "function" ? (catalog as () => SkillCatalogRow[])() : [];
-	const disabledNow = new Set(readSkillDisabled(subagentConfigFile()));
-	for (const r of rows) r.disabled = disabledNow.has(r.name);
-	return rows;
-};
 /** Alt + K 写配置后的收尾（T9）：空闲走 /reload 同链（清单即刻生效——/reload 自有完成反馈不另 toast）；
  *  busy 不 reload 只 toast（图 4 三要素：动作 · 原因 · 出路）。返回 toast 文案（空 = 空闲路径无 toast）。
  *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
@@ -1197,7 +1194,7 @@ const reloadModulesIdle = (app: FullApp | undefined, busyToast: string): string 
 				await h.reload();
 				closeGoneModuleUi(namesBefore);
 				registerToolLabels(h.graph().tools.toolInfos());
-				void refreshSkillMenu();
+				void refreshSkillMenu(skillDeps);
 				await refreshPanel();
 			} catch (err) {
 				(app ?? activeApp)?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
@@ -1206,70 +1203,6 @@ const reloadModulesIdle = (app: FullApp | undefined, busyToast: string): string 
 		return "";
 	}
 	return busyToast;
-};
-
-/** Alt + K 写配置后的收尾（T9）：共用件之上拼技能启停文案（图 4 三要素：动作 · 原因 · 出路）。 */
-const afterSkillToggle = (app: FullApp | undefined, name: string, nowDisabled: boolean): string =>
-	reloadModulesIdle(app, `${nowDisabled ? "已停用" : "已启用"} ${name} · 有任务在执行，稍后请输入 /reload 重新加载`);
-const openSkillsPanel = async (app: FullApp): Promise<void> => {
-	let selAt = 0; // 详情 Esc 回列表——选中行回到该技能（原型图 3 要点；pickOverlay selAt 参数）
-	for (;;) {
-		const rows = await skillCatalogRows();
-		if (rows.length === 0) {
-			app.showToast("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）");
-			return;
-		}
-		// 行宽与 pick 渲染同源（m4-7 走查修 2026-09-27：原按全终端列数拼行——侧栏在场时超宽把右框 │ 推错位）
-		const w = app.pickRowWidth();
-		// items 数组长期持有（2026-09-27 用户走查拍板「改变状态后要更新上一级列表」）：详情 Alt + K 后
-		// 原地重拼该行——Esc 回列表顶上的正是这个排队的 pickOverlay（持同数组引用），状态列即时新
-		const items = rows.map((r) => skillListRow(w, r));
-		const picked = await app.pickOverlay("技能（回车查看详情）", items, selAt);
-		if (picked === undefined || picked < 0 || picked >= rows.length) return; // Esc 返回设置
-		selAt = picked;
-		const row = rows[picked]!;
-		const detail = (): string => skillDetailText(w, row); // dock 窗（贴输入框上缘、左栏同宽）行预算
-		// dock（2026-09-27 用户拍板：原 center80 居中弹窗位置/宽度都不对——贴输入框上边缘 + 与输入框同宽）
-		app.viewText("技能详情", detail(), { layout: "dock", keys: {
-				"alt+k": {
-					label: "Alt + K 启用或停用",
-					run: (): string => {
-						const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
-						row.disabled = nowDisabled;
-						items[picked] = skillListRow(w, row); // 上一级列表行原地更新（回列表即见新状态）
-						const toast = afterSkillToggle(app, row.name, nowDisabled);
-						if (toast !== "") app.showToast(toast); // busy 缓后（图 4）
-						return detail(); // 状态行即时翻转（内容替换）
-					},
-				},
-			},
-		});
-		// viewText 入队不 await——Esc 关详情后循环重入的 pickOverlay 排队顶上（回列表；openTasks 同款结构）
-	}
-};
-/** 行模式对等件（m4-7 T8/T9）：列表 choose → 详情文本直出 → 动作菜单（停用/启用 · 返回列表）。 */
-const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
-	for (;;) {
-		const rows = await skillCatalogRows();
-		if (rows.length === 0) { out("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）"); return; }
-		const names = rows.map((r) => skillListRow(76, r));
-		const picked = await commandUi.choose("技能（回车查看详情）", names);
-		const i = names.indexOf(picked);
-		if (i < 0) return;
-		const row = rows[i]!;
-		out(skillDetailText(76, row));
-		try {
-			const action = await commandUi.choose(row.name, [row.disabled ? "启用" : "停用（Alt + K 同款）", "返回列表"]);
-			if (action === "启用" || action === "停用（Alt + K 同款）") {
-				const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
-				const toast = afterSkillToggle(undefined, row.name, nowDisabled);
-				out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
-			}
-		} catch (err) {
-			if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回技能列表（2026-09-28 拍板）
-			throw err;
-		}
-	}
 };
 
 /** provider 条目表 TTL 缓存（skillMenu 5s 同款惯例——/provider 菜单改端点后最迟 5s 反映到卡）。 */
@@ -1339,7 +1272,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 				}
 			}
 		}
-		else if (picked === 5) await openSkillsPanel(app); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
+		else if (picked === 5) await openSkillsPanel(app, skillDeps); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
 		else if (picked === 6) await openMcpPanel(app, mcpDeps); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
 		else if (picked === 7) {
 			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
@@ -1408,7 +1341,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 				}
 			}
 		}
-		else if (idx === 5) await openSkillsLine(out);
+		else if (idx === 5) await openSkillsLine(out, skillDeps);
 		else if (idx === 6) await openMcpLine(out, mcpDeps);
 		else if (idx === 7) {
 			try {
@@ -1608,74 +1541,6 @@ const SLASH_ITEMS: SlashItem[] = [
 // ---------- 技能菜单（m4-7 T7——服务倒挂：宿主消费 skill.catalog，模块不在优雅降级为零技能） ----------
 
 /** catalog 行消费面类型（圈地纪律：消费侧类型结构本地声明）。 */
-interface SkillMenuRow {
-	name: string;
-	description: string;
-	whenToUse?: string;
-	disabled: boolean;
-	file: string;
-}
-let skillMenu: SlashItem[] = [];
-const skillFiles = new Map<string, string>(); // 技能真名 → SKILL.md 实路径（Enter 注入读正文用）
-let skillMenuAt = 0;
-/** 菜单缓存刷新：catalog 是 Promise 口而菜单渲染同步——TTL 惰性（skillItems 被调时隔 5s 触发一次）
- *  + 显式点（/reload 收尾、模块插拔 reload 后、启动）。disabled 不进菜单（D7：停用双摘；
- *  disable-model-invocation 照显——用户手动路径不受限）。 */
-const refreshSkillMenu = async (): Promise<void> => {
-	// CM-12②（2026-09-28 code review）：catalog 是模块代码——同步抛错使本 Promise reject，而五个调用点全是
-	// void 调用 = unhandledRejection 直崩进程（Node 22 起缺省 throw）；与 moduleCards「模块卡读取抛错当帧剔除」
-	// 同政策：失败 = 菜单清空 + host 日志，技能面降级不带走宿主
-	try {
-		const catalog = await h.graph().services.getOptional("skill.catalog");
-		if (typeof catalog !== "function") {
-			skillMenu = [];
-			skillFiles.clear();
-			return;
-		}
-		const rows = (catalog as () => SkillMenuRow[])();
-		skillFiles.clear();
-		for (const r of rows) skillFiles.set(r.name, r.file);
-		skillMenu = rows.filter((r) => !r.disabled).map((r) => ({
-			name: `skill : ${r.name}`,
-			desc: r.description,
-			long: r.description, // 详释行 1-2 = description 折行截断（原型图 1）
-			...(r.whenToUse !== undefined ? { usage: r.whenToUse } : {}),
-			skill: r.name,
-		}));
-	} catch (err) {
-		skillMenu = [];
-		skillFiles.clear();
-		h.log("host.skillmenu.error", `技能菜单刷新抛错，当帧清空：${err instanceof Error ? err.message : String(err)}`);
-	}
-};
-
-/** 技能条目 Enter 注入（D3 拍板）：正文剥 frontmatter 后包 <skill> 块，以用户消息提交——
- *  pi/kimi 同款形态，走主输入口零新机制（busy 期照排队语义，不打断 turn）。读不到 = undefined（菜单提示）。 */
-const skillInjectText = (name: string, args?: string): string | undefined => {
-	const file = skillFiles.get(name);
-	if (file === undefined) return undefined;
-	try {
-		const body = readFileSync(file, "utf8").replace(/^---\n[\s\S]*?\n---\n?/, ""); // 剥 frontmatter
-			// 参数挂 <skill> 块属性（kimi renderSkillLoadedBlock 的 args="..." 同款，引号转义防早闭）；
-			// 标记行保持首位原样——docmodel 的 ● 行识别按该行前缀，菜单 Enter 路不传 args 形态不变
-			const attrs = args !== undefined ? ` args="${args.replace(/"/g, "&quot;")}"` : "";
-			// 2026-10-01 诊断批：file 属性给模型提供相对路径解析基准（正文引用 references/… 不再按项目
-			// cwd 落空——与 skill__load 输出首行带路径同因）；首行协议串不动（docmodel ● 行识别 + 防重入
-			// 标记都按精确形态匹配它）；skill 块正文不进对话流，属性追加对用户可见面零影响
-			return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
-	} catch {
-		return undefined;
-	}
-};
-
-/** /skill : 名 提交解析的真名归位（2026-09-30）：目录真名精确命中优先，落空整表小写比对
- *  （命令词忽略大小写同口径——手输大小写不齐也能筛到）。 */
-const skillTypedName = (typed: string): string | undefined => {
-	if (skillFiles.has(typed)) return typed;
-	const lower = typed.toLowerCase();
-	return [...skillFiles.keys()].find((k) => k.toLowerCase() === lower);
-};
-
 /** ASCII 字 banner（第三轮走查设计——大框 + OROSUS 块字 + 可变版本号 + slogan 两行 + 框下快捷键导引一行）。 */
 const ASCII_BANNER = (VERSION: string): string[] => [
 	"",
@@ -1699,7 +1564,7 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 
 const runFullScreen = async (): Promise<"switch" | "quit"> => {
   let action: "switch" | "quit" | undefined;
-  void refreshSkillMenu(); // m4-7 T7：技能菜单首刷（异步先取，菜单首开即有数据；后续走 TTL + reload 显式点）
+  void refreshSkillMenu(skillDeps); // m4-7 T7：技能菜单首刷（异步先取，菜单首开即有数据；后续走 TTL + reload 显式点）
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
     rows: () => process.stdout.rows ?? 24,
@@ -1763,14 +1628,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     slashCommands: () => SLASH_ITEMS,
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
     // /reload 收尾与模块插拔后另有显式刷新点
-    skillItems: () => {
-      const now = Date.now();
-      if (now - skillMenuAt > 5000) {
-        skillMenuAt = now;
-        void refreshSkillMenu();
-      }
-      return skillMenu;
-    },
+    skillItems: () => skillMenuTtl(skillDeps),
     skillInject: skillInjectText,
     slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
     // 参数阶段数据源（m5 T15）：graph 现读模块命令的 completeArg；抛错兜底空表 + host 日志（菜单层当无候选）
@@ -1857,7 +1715,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           const r = await h.reload();
           closeGoneModuleUi(namesBefore);
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
-          void refreshSkillMenu(); // m4-7 T7：技能菜单缓存随图刷新（停用后插拔即时生效）
+          void refreshSkillMenu(skillDeps); // m4-7 T7：技能菜单缓存随图刷新（停用后插拔即时生效）
           await refreshPanel();
           app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
         } catch (err) {
