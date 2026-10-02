@@ -62,18 +62,51 @@ function eawWide(cp: number): boolean {
 	);
 }
 
-/** 单 grapheme 显示宽：tab=3；组合符/ZW 零宽；全角/emoji=2（ambiguous=1 政策，VS16 升 2）。 */
+/** RGI emoji 序列（ES2024 v 模式属性——pi rgiEmojiRegex 同款）：ZWJ 家族/旗帜对/键帽/肤色/
+ *  彩虹旗 tag 全按「一个序列 2 列」计。多码点 cluster 终端合成一格半（2 列），逐码点累加会
+ *  虚报 6~8 列。单码点 basic emoji（✅❌⭐ 一族）同属 RGI 集——2026-10-01 滚动条顶飞事故根因：
+ *  U+2705 等 BMP 散点 emoji 呈现字符不在 eawWide 区间表（表只盖 CJK/全角/1F000+ 平面）被记
+ *  1 列、终端实画 2 列，一行 N 个账面少 N 列把行尾滚动条顶出 N 列（八仓调研：pi/cc-haha 用
+ *  get-east-asian-width+emoji-regex、Reasonix/dsh 用 \p{Emoji_Presentation}，唯自建表漏此段）。
+ *  构造式而非字面量：v flag 的属性序列类要 tsconfig target ES2024，base 是 ES2023（为一枚
+ *  正则升全仓 target 越圈地纪律）；TS 不静态检查构造式 flag，Node 20+ 运行时原生支持。 */
+const RGI_EMOJI_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
+/** RGI 预筛（pi couldBeEmoji 同构）：纯区间/长度判定，避免对每个 grapheme 跑昂贵正则。
+ *  段宽进严出（盖未来 Unicode 增补）；CJK 大头不在段内 → 常规文本零正则开销。 */
+function couldBeEmoji(segment: string): boolean {
+	const cp = segment.codePointAt(0)!;
+	return (
+		(cp >= 0x2300 && cp <= 0x23ff) || // Misc technical（⏰⏳ 族）
+		(cp >= 0x25a0 && cp <= 0x27bf) || // 几何图形 + Misc symbols/dingbats（✅❌⭐ 族）
+		(cp >= 0x2b00 && cp <= 0x2bff) || // 箭头星族（⭐⭕）
+		(cp >= 0x1f000 && cp <= 0x1fbff) || // Emoji and Pictograph
+		segment.includes("\uFE0F") || // 含 VS16（emoji 呈现选择符）
+		segment.length > 2 // 多码点 cluster（ZWJ/肤色/键帽等序列）
+	);
+}
+
+/** 零宽/记号属性集（2026-10-01 属性化——旧手工表只盖希腊组合段 0300-036F+ZW+20E3，泰/老挝/
+ *  天城文/阿拉伯组合记号、SHY、BOM、WJ 全漏判 1 列；对齐 pi zeroWidthRegex（\p{Mark}|
+ *  \p{Control}|\p{Cf}|\p{Cs}）与 Reasonix ZERO_WIDTH（\p{Mn}\p{Me}\p{Cf}）并集语义。VS 区
+ *  FE00-FE0F/Mongolian FVS/VS 补充平面 E0100+ 本身是 \p{Mn}，属性自带；孤立代理（流式
+ *  chunk 劈开 UTF-16 对的坏数据）按零宽计不占格。取舍：pi 对 \p{Spacing_Mark} 例外 +1 格
+ *  （legacy wcwidth 表占格的那几个），cc-haha/Bun/wcwidth 派全 0——终端实画按 wcwidth，
+ *  账本从终端，天城文 गि/泰文ที่ 全按 1 格计。 */
+const ZERO_WIDTH_RE = /[\p{Mn}\p{Me}\p{Cf}\p{Cc}\p{Cs}]/u;
+
+/** 单 grapheme 显示宽：tab=3；RGI emoji 序列整体 2；全角 2；组合符/ZW/控制符 0；
+ *  ambiguous=1 政策，VS16 升 2。 */
 function graphemeWidth(g: string): number {
 	if (g === "\t") return 3;
+	if (couldBeEmoji(g) && RGI_EMOJI_RE.test(g)) return 2;
 	const cp = g.codePointAt(0);
 	if (cp === undefined) return 0;
 	if (eawWide(cp)) return 2;
-	let w = 1;
+	let w = ZERO_WIDTH_RE.test(g[0]!) ? 0 : 1;
 	for (const ch of [...g].slice(1)) {
 		const c = ch.codePointAt(0)!;
-		if (c === 0xfe0f) w = 2; // VS16 emoji 呈现 → 宽 2
-		else if ((c >= 0x0300 && c <= 0x036f) || (c >= 0x200b && c <= 0x200f) || c === 0x20e3) w += 0; // 组合符/ZW
-		else if (eawWide(c)) w += 2;
+		if (c === 0xfe0f) w = 2; // VS16 emoji 呈现 → 宽 2（非 RGI 的 ✓️ 一族也升 2——政策保留）
+		else if (!ZERO_WIDTH_RE.test(ch) && eawWide(c)) w += 2; // 尾部残余宽字符兜底（合法 cluster 罕见）
 	}
 	return w;
 }

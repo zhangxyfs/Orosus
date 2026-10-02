@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dispLines, osc8LinkAtColumn, sliceByColumn, stripAnsi, visibleWidth, wrapText } from "./width.ts";
+import { dispLines, osc8LinkAtColumn, padToWidth, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 
 describe("宽度引擎（TUI 批阶段三 F0——pi-tui utils 零依赖移植）", () => {
 	it("① CJK 折行：12 个全角字在 10 列宽折 3 行（24 显示宽 ÷ 10 列向上取整）", () => {
@@ -101,5 +101,45 @@ describe("wrapText 幽灵行与末行收尾（CTW-07 回归钉 2026-09-28——�
 	it("⑬ 末行补 reset 收尾：与 emit() 同口径（旧末行裸推无收尾——非自闭合输入串色到下一逻辑行）", () => {
 		const lines = wrapText("\x1b[31mabcdef", 5); // 裸色输入（无 39m 自闭合）
 		expect(lines).toEqual(["\x1b[31mabcde\x1b[0m", "\x1b[31mf\x1b[0m"]); // 末行同补收尾
+	});
+});
+
+describe("Unicode 属性计宽（2026-10-01 滚动条顶飞事故批——✅ 一行 N 个账面各少 1 列，行尾滚动条被顶出 N 列；八仓调研：pi RGI_Emoji/Reasonix \\p{Emoji_Presentation} 全处理、唯自建区间表漏 BMP 散点 emoji）", () => {
+	it("⑭ emoji 呈现单字符宽 2（✅❌⭐ 本案主犯）；text 形态维持 ambiguous=1 政策（✓⚠）", () => {
+		expect(visibleWidth("✅")).toBe(2); // U+2705——eawWide 区间表外、RGI basic emoji（旧：1 列 ← 顶飞根因）
+		expect(visibleWidth("❌")).toBe(2); // U+274C
+		expect(visibleWidth("⭐")).toBe(2); // U+2B50
+		expect(visibleWidth("⏰")).toBe(2); // U+23F0（Misc technical 段）
+		expect(visibleWidth("✓")).toBe(1); // U+2713 text 形态——Reasonix 注释点名验证过，政策不动
+		expect(visibleWidth("⚠")).toBe(1); // U+26A0 默认 text 呈现（cc-haha：string-width 错报 2 的反面钉）
+	});
+	it("⑮ RGI emoji 序列整体宽 2：ZWJ 家族/旗帜对/键帽/肤色——逐码点累加会虚报 6~8 列", () => {
+		expect(visibleWidth("👨‍👩‍👧")).toBe(2); // ZWJ 家族（旧：6——尾部成员各 +2 累加）
+		expect(visibleWidth("🇨🇳")).toBe(2); // 旗帜 = regional indicator 对（旧：4）
+		expect(visibleWidth("#️⃣")).toBe(2); // 键帽 = # + VS16 + 20E3
+		expect(visibleWidth("👍🏽")).toBe(2); // 肤色修饰序列
+		expect(visibleWidth("🏳️‍🌈")).toBe(2); // 彩虹旗 = 白旗+VS16+ZWJ+tag 串（VS 区全 \p{Mn} 零宽）
+	});
+	it("⑯ 零宽集属性化：组合记号跨文字（泰/天城文）+ SHY/BOM/ZWJ/孤立代理全零宽（旧表只盖希腊段 0300-036F）", () => {
+		expect(visibleWidth("ที่")).toBe(1); // 泰文整串一个 cluster：基字符 1 格 + ี ่ 叠印零宽
+		expect(visibleWidth("ที่ท")).toBe(2); // 两个 cluster（旧：记号各 +1 虚报 4）
+		expect(visibleWidth("गि")).toBe(1); // 天城文：ग + ि(U+093F Mn)
+		expect(visibleWidth("e\u0301")).toBe(1); // NFD 分解型 combining acute（拉丁组合记号）
+		expect(visibleWidth("a\u00ADB")).toBe(2); // SHY 软连字符（\p{Cf}）不占格
+		expect(visibleWidth("a\uFEFFb")).toBe(2); // BOM/ZWNBSP
+		expect(visibleWidth("a\u200Db")).toBe(2); // ZWJ 裸用
+	});
+	it("⑰ 事故形态端到端：✅ 密集长行折行——每行账本 ≤ 目标宽（= 终端实画宽，滚动条列不再被顶）", () => {
+		const row = "核验 loader.ts:32-43 ✅ trust.ts:68-86 ✅ fs/index.ts:5 ✅ ui.ts:9 ✅ core.ts:12 ✅";
+		for (const l of wrapText(row, 10)) expect(visibleWidth(l)).toBeLessThanOrEqual(10); // 每行恒不超宽
+		expect(visibleWidth(truncateToWidth("✅".repeat(10), 15) + " ")).toBe(15); // 截断+垫空格=恒宽 15（行尾滚动条列的地基）
+		expect(visibleWidth(padToWidth("ab✅cd", 8))).toBe(8); // pad 恒宽（✅=2 计入账本）
+	});
+	it("⑱ VS16 政策不回归：☀️❤️✓️ 升 2、裸 ☀❤✓ 维持 1", () => {
+		expect(visibleWidth("☀️")).toBe(2);
+		expect(visibleWidth("☀")).toBe(1);
+		expect(visibleWidth("❤️")).toBe(2); // U+2764+FE0F
+		expect(visibleWidth("❤")).toBe(1);
+		expect(visibleWidth("✓️")).toBe(2); // 非 RGI（2713 无 emoji 呈现）但 VS16 政策升 2——政策保留
 	});
 });
