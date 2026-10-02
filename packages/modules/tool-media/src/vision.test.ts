@@ -35,6 +35,7 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
         expect(req.messages.at(-1)!.role).toBe("user"); // 末条 user 指令（compaction v3 坑纪律）
         return fakeStream([{ type: "text/delta", text: "登录页，" }, { type: "text/delta", text: "含蓝色提交按钮" }, { type: "finish", kind: "stop" }])();
       },
+      retryBackoffMs: [], // 短文案 10 字撞短产出守卫——空表=首次即兜底收（守卫行为在 ③j 钉）
     };
     const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
     expect(out).toContain("登录页");
@@ -104,11 +105,12 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
       retryBackoffMs: [1, 1],
     };
     expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("第三次成功");
-    expect(calls).toBe(3);
-    expect(fails).toHaveLength(2);
+    expect(calls).toBe(3); // 两次错误 + 第三次（短产出守卫命中但退避耗尽——残文照收）
+    expect(fails).toHaveLength(3);
     expect(fails[0]).toContain("ECONNRESET");
     expect(fails[0]).toContain("重试");
-    expect(readSummary(img)).toContain("第三次成功"); // 成功后照常落缓存
+    expect(fails[2]).toContain("产出异常短"); // 第三次 5 字也命中守卫——末次兜底
+    expect(readSummary(img)).toContain("第三次成功"); // 残文照缓存
   });
 
   it("③c-b 鉴权类不重试：401 一次即弃（重试白花）；onFail 原因不带退避标注", async () => {
@@ -135,6 +137,7 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
         seen.push(req.messages[0]!.content.find((p) => p.kind === "image") as { path?: string });
         return fakeStream([{ type: "text/delta", text: "红底方块" }, { type: "finish", kind: "stop" }])();
       },
+      retryBackoffMs: [], // 短文案 4 字撞守卫——首次即兜底
     };
     const big = join(d, "big.png");
     await new Jimp({ width: 3000, height: 3000, color: 0xff0000ff }).write(big as `${string}.png`);
@@ -256,6 +259,41 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(calls).toBe(1); // 旧缓存被无视——重新转述落新格式
     writeFileSync(summaryPathOf(img), "[summary-v1]\n旧版本标记的缓存"); // 标记在但版本旧
     expect(readSummary(img)).toBeUndefined(); // 同样失效
+  });
+
+  it("③j 短产出守卫（端点早停实证 2026-10-02）：finish/stop 但 <120 字 = 瞬时故障重试；重试拿到长文则用长文；耗尽则末次残文照收照缓存", async () => {
+    const d = fresh();
+    const img = join(d, "short.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    let calls = 0;
+    const fails: string[] = [];
+    const deps = {
+      llmStream: () => {
+        calls++;
+        return calls < 3
+          ? fakeStream([{ type: "text/delta", text: "太短的早停残文" }, { type: "finish", kind: "stop" }])() // 7 字——早停
+          : fakeStream([{ type: "text/delta", text: "一".repeat(300) }, { type: "finish", kind: "stop" }])();
+      },
+      onFail: (r: string) => fails.push(r),
+      retryBackoffMs: [1, 1],
+    };
+    const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
+    expect(out).toBe("一".repeat(300)); // 第三次长文胜出
+    expect(calls).toBe(3);
+    expect(fails[0]).toContain("产出异常短");
+    // 耗尽兜底：三次全早停 → 末次残文照收照缓存（短转述好过没有）
+    const img2 = join(d, "short2.png");
+    writeFileSync(img2, Buffer.from([0x89, 0x50]));
+    let calls2 = 0;
+    const deps2 = {
+      llmStream: () => { calls2++; return fakeStream([{ type: "text/delta", text: "始终很短" }, { type: "finish", kind: "stop" }])(); },
+      onFail: () => undefined,
+      retryBackoffMs: [1, 1],
+    };
+    const out2 = await summarizeImage(img2, "image/png", "eye/m", deps2 as never);
+    expect(out2).toBe("始终很短"); // 残文照收
+    expect(readSummary(img2)).toBe("始终很短"); // 照缓存（不再每发重烧）
+    expect(calls2).toBe(3); // 重试耗尽
   });
 });
 

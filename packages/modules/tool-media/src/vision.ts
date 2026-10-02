@@ -81,6 +81,8 @@ export const SUMMARY_TEXT_CAP = 2_000;
 // 鉴权/模型不存在类重试也是白花（NON_RETRYABLE）——靠 attemptOnce 带出的 reason 分类。
 const DEFAULT_RETRY_BACKOFF_MS = [1_000, 2_000];
 const NON_RETRYABLE_REASON = /(?:\b401\b|\b403\b|invalid[ _-]?api[ _-]?key|unauthorized|forbidden|model[ _-]?not[ _-]?(?:found|exist)|no such model|permission[ _-]?denied)/i;
+/** 短产出守卫地板（端点早停实证 2026-10-02）：四段结构提示词的正常产出下限。 */
+const SHORT_OUTPUT_FLOOR = 120;
 
 // 转述思考档（2026-10-02 卡 23 秒空产出修 + 用户拍板 off 优先）：glm-5.3-flash 等推理模型的默认
 // 思考在描述任务上白烧 20s+ 且吃光 maxTokens（实机三连「流正常结束但无文本」——reasoning 耗尽预算、
@@ -111,13 +113,14 @@ const eyeEffortOf = (catalogFile: string, model: string): string | undefined => 
   return undefined;
 };
 
-/** 单次尝试：产出清洗文本或失败原因（诊断带因——不再吞错误串）。 */
+/** 单次尝试：产出清洗文本或失败原因（诊断带因——不再吞错误串）。short = 短产出守卫命中时的
+ *  残文（末次尝试重试耗尽后照收——短转述好过没有）。 */
 const attemptOnce = async (
   imagePath: string,
   mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif",
   eyeModel: string,
   deps: VisionSummaryDeps,
-): Promise<{ ok: true; text: string } | { ok: false; reason: string }> => {
+): Promise<{ ok: true; text: string } | { ok: false; reason: string; short?: string }> => {
   try {
     let text = "";
     let truncated = false;
@@ -144,6 +147,10 @@ const attemptOnce = async (
     }
     const clean = (truncated ? `${text.trim()}…（转述因长度帽截断——原图内容更繁）` : text.trim()).slice(0, SUMMARY_TEXT_CAP);
     if (clean === "") return { ok: false, reason: "空产出（流正常结束但无文本）" };
+    // 短产出守卫（2026-10-02 端点早停实证）：提示词要求四段结构（类型布局/逐字转录/视觉元素/细节），
+    // 正常产出不可能 <120 字——实机同图一次 59 字 finish/stop、13 秒后 1619 字（temp 0 非严格确定，
+    // 端点输出方差）。视为瞬时故障可重试；末次尝试照收（重试后仍短 = 图真的没内容可说，诚实兜底）。
+    if (clean.length < SHORT_OUTPUT_FLOOR) return { ok: false, reason: `产出异常短（${clean.length} 字，finish/stop 早停疑端点方差）`, short: clean };
     return { ok: true, text: clean };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
@@ -191,15 +198,16 @@ export async function summarizeImage(
     const eye = await eyeCopyOf(imagePath, mimeType); // 大图先降采样再发（省眼睛模型图 token）
     for (let attempt = 0; ; attempt++) {
       const r = await attemptOnce(eye.path, eye.mimeType, eyeModel, deps);
-      if (r.ok) {
+      const keep = (t: string): string => {
         try {
-          writeFileSync(summaryPathOf(imagePath), `[${SUMMARY_PROMPT_VERSION}]\n${r.text}`, { mode: 0o600 });
+          writeFileSync(summaryPathOf(imagePath), `[${SUMMARY_PROMPT_VERSION}]\n${t}`, { mode: 0o600 });
         } catch { /* 缓存写失败不影响返回值（本次直接用） */ }
-        return r.text;
-      }
+        return t;
+      };
+      if (r.ok) return keep(r.text);
       const retrying = attempt < backoff.length && !NON_RETRYABLE_REASON.test(r.reason);
       deps.onFail?.(retrying ? `${r.reason}——第 ${attempt + 1} 次失败，${backoff[attempt]}ms 后重试` : r.reason);
-      if (!retrying) return undefined;
+      if (!retrying) return r.short !== undefined ? keep(r.short) : undefined; // 短产出兜底：末次残文照收照缓存
       await new Promise((res) => setTimeout(res, backoff[attempt]));
     }
   })().finally(() => summarizing.delete(imagePath));
