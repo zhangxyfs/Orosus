@@ -163,11 +163,11 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
       retryBackoffMs: [],
     };
     const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
-    expect(out).toHaveLength(1200); // 帽 1200
+    expect(out).toHaveLength(2000); // 帽 2000（内容复杂度推高生成侧——用户点破 1200 不够密文截图）
     expect(prompt).toContain("逐条原样转录"); // 可见文字原样转录（不概括）——用户点名要的细致度
     expect(prompt).toContain("颜色");
     expect(prompt).toContain("线条");
-    expect(maxTokens).toBeGreaterThanOrEqual(1200); // 帽够得着（旧 300 出半截）
+    expect(maxTokens).toBeGreaterThanOrEqual(2000); // 帽够得着（旧 300 出半截）
   });
 
   it("③f 转述思考档（卡 23s 空产出修）：目录声明 low → 请求带 reasoningEffort=low；无声明 → 不带字段（lenient 照发会 400 自证）", async () => {
@@ -219,7 +219,17 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
       { kind: "text", text: "正文开始" },
       { kind: "text", text: "，继续" },
     ]);
-    expect(maxTokens).toBe(2000); // 抬帽钉（无 effort 声明的推理模型当眼睛时思考烧完正文还剩得出）
+    expect(maxTokens).toBe(6000); // 生成帽天花板（图繁→转录+思考都长——2000 会截断密文截图；上限不花钱）
+  });
+
+  it("③h 长度帽截断带内信号：finish/length → 正文照收 + 尾部标注（图内容更繁的诚实信号——非失败不重试）", async () => {
+    const d = fresh();
+    const img = join(d, "trunc.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    const deps = { llmStream: () => fakeStream([{ type: "text/delta", text: "前半段转录" }, { type: "finish", kind: "length" }])(), retryBackoffMs: [] };
+    const out = await summarizeImage(img, "image/png", "eye/m", deps as never);
+    expect(out).toContain("前半段转录"); // 截断非失败——半份转录好过没有
+    expect(out).toContain("长度帽截断"); // 尾部标注进缓存与占位（模型与用户都知情）
   });
 });
 
