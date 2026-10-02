@@ -155,7 +155,7 @@ export function createSelect(app: FullApp) {
 		if ((s.mselAnchor?.scope ?? s.mselFocus?.scope) === "view" && app.pendingUi?.kind !== "view") {
 			s.mselAnchor = undefined;
 			s.mselFocus = undefined;
-			app.stopAutoScroll();
+			app.mouse.stopAutoScroll();
 		}
 	};
 
@@ -184,7 +184,7 @@ export function createSelect(app: FullApp) {
 		if (s.mselAnchor === undefined && s.mselFocus === undefined) return;
 		s.mselAnchor = undefined;
 		s.mselFocus = undefined;
-		app.stopAutoScroll();
+		app.mouse.stopAutoScroll();
 	};
 
 	/** 打开链接（T7 决策点 17）：只开 http/https——链接文本来自模型输出，file:// 等方案
