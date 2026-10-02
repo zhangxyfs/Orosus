@@ -193,6 +193,34 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(await summarizeImage(img2, "image/png", "eye/m", deps as never)).toContain("低思考快出");
     expect(efforts[1]).toBeUndefined(); // 无声明不带字段
   });
+
+  it("③g 流式增量透传（A 案）：onDelta 逐 chunk 上抛思考/正文（kind 与顺序保持）；maxTokens 2000（思考余量保险）", async () => {
+    const d = fresh();
+    const img = join(d, "stream.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    const deltas: { kind: string; text: string }[] = [];
+    let maxTokens = 0;
+    const deps = {
+      llmStream: (req: { maxTokens?: number }) => {
+        maxTokens = Number(req.maxTokens ?? 0);
+        return fakeStream([
+          { type: "reasoning/delta", text: "先想一想" },
+          { type: "text/delta", text: "正文开始" },
+          { type: "text/delta", text: "，继续" },
+          { type: "finish", kind: "stop" },
+        ] as Chunk[])();
+      },
+      onDelta: (d: { kind: string; text: string }) => deltas.push(d),
+      retryBackoffMs: [],
+    };
+    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("正文开始，继续");
+    expect(deltas).toEqual([
+      { kind: "thinking", text: "先想一想" },
+      { kind: "text", text: "正文开始" },
+      { kind: "text", text: "，继续" },
+    ]);
+    expect(maxTokens).toBe(2000); // 抬帽钉（无 effort 声明的推理模型当眼睛时思考烧完正文还剩得出）
+  });
 });
 
 describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", () => {

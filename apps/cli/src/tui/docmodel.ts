@@ -45,7 +45,7 @@ type Entry =
 	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] }; group?: { name: string; items: { args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult }[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存；group = 连续同名只读工具聚合〔2026-09-30 用户拍板抄 cc-haha 计数行〕：第 2 个紧邻同名调用并进宿主条目就地成组〔kimi in-place 同款〕，条目下标与账本不动、callId 配对下钻 items——宿主自身 args/callId/result 自成组起停用）
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
-	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; cache?: LineCache } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文宽度级缓存（raw 同款折行）；aborted 恒 live-only（未发送不落日志）
+	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; since?: number; cache?: LineCache } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文宽度级缓存（raw 同款折行）；aborted 恒 live-only（未发送不落日志）。since = 开始时刻——running 态活体行（1s 心跳重绘现算已耗时，group 行同先例；流式增量另走转述活动块 activeTail）
 	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
 
 export class DocModel {
@@ -114,6 +114,11 @@ export class DocModel {
 	/** 活动思考块增量折行缓存（m5-render-perf T1）——每帧只折最后一条未完行，
 	 *  替代旧路径每帧对全文 wrapText（docmodel.ts 热点 (a)）；settleActive/discard 重置。 */
 	private thinkLive = new LiveWrap();
+	/** 转述活动块（A 案）：眼睛模型的思考/正文流式增量——visionDelta 喂入、activeTail 渲染、
+	 *  visionTranscribeEnd 清空（思考弃置、正文定格进 ● 行）。 */
+	private visionThinkText = "";
+	private visionBodyText = "";
+	private visionLive = new LiveWrap();
 
 	// ---------- kimi 式轮次滑窗（m5-render-perf T7——D11/D12/D13） ----------
 	/** 滑窗开关：主窗实例显式启用（main.ts）；renderAgentView 等一次性渲染实例不启用不裁剪
@@ -621,13 +626,18 @@ export class DocModel {
 	/** 视觉转述行·开始（走查四）：推送 ◐ 进行中条目——发送闸旁路时在回显后立即调用（回车即见）。 */
 	visionTranscribeStart(model: string): void {
 		this.settleActive();
-		this.pushE({ k: "vision", model, state: "running" });
+		this.pushE({ k: "vision", model, state: "running", since: Date.now() });
 	}
 
 	/** 视觉转述行·收尾：最近一条 running 条目原位翻转终态（下标/账本稳定——markCountDirty 同 toolResult
-	 *  挂上口径）；无 running 条目（回放路）直接推终态。aborted = 双 Esc 中止（live-only，永不回放）。 */
+	 *  挂上口径）；无 running 条目（回放路）直接推终态。aborted = 双 Esc 中止（live-only，永不回放）。
+	 *  收尾同时清空转述活动块（思考增量弃置——流式期间可见即完成使命，定格只留正文；与主对话
+	 *  「思考冻结成块」不同：转述思考是过程性噪音）。 */
 	visionTranscribeEnd(model: string, text: string | undefined, state: "done" | "failed" | "aborted"): void {
 		this.settleActive();
+		this.visionThinkText = "";
+		this.visionBodyText = "";
+		this.visionLive = new LiveWrap();
 		const final = text === undefined ? { k: "vision" as const, model, state } : { k: "vision" as const, model, state, text };
 		for (let i = this.lines.length - 1; i >= 0; i--) {
 			const e = this.lines[i]!;
@@ -638,6 +648,13 @@ export class DocModel {
 			}
 		}
 		this.pushE(final);
+	}
+
+	/** 转述活动块·流式增量（A 案 2026-10-02 拍板）：思考 dim 尾两行（与主思考收起态同款流动感）+
+	 *  正文 muted 全量折行——activeTail 渲染（1s 心跳重绘驱动，等待不死字防卡死感）。 */
+	visionDelta(kind: "thinking" | "text", text: string): void {
+		if (kind === "thinking") this.visionThinkText += text;
+		else this.visionBodyText += text;
 	}
 
 	/** 工具行配色（F5 六轮① 用户拍板；2026-09-22 再拍板：动词 Using/Used 白色）：
@@ -715,8 +732,10 @@ export class DocModel {
 			return [theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文")];
 		}
 		if (e.k === "vision") {
-			// 视觉转述行（走查四）：进行中 dim 单行；终态头行 ● 青玉 + 模型名灰括注 + 正文 muted 折行（宽度级缓存）
-			if (e.state === "running") return [theme.dim(`◐ 由 ${e.model} 转述图片中…`)];
+			// 视觉转述行（走查四）：进行中活体行——已耗时每帧现算（1s 心跳重绘驱动；流式增量在
+			// 转述活动块 activeTail，这里只做「还活着」的计时证明——B 档兜底）；终态头行 ● 青玉 +
+			// 模型名灰括注 + 正文 muted 折行（宽度级缓存）
+			if (e.state === "running") return [theme.dim(`◐ 由 ${e.model} 转述图片中… ${Math.max(0, Math.floor((Date.now() - (e.since ?? Date.now())) / 1000))}s`)];
 			if (e.state === "aborted") return [theme.fg("muted", "● 视觉转述已中止——消息未发出（重发即续：已生成的转述有缓存）")];
 			if (e.state === "failed") return [theme.fg("muted", `● 视觉转述失败（${e.model}）——已按无图占位发送`)];
 			if (e.cache?.w !== width) {
@@ -789,6 +808,12 @@ export class DocModel {
 	/** 活动块尾段（帧尾动态段，不入账本——每帧现算一次，行数与内容同源）。 */
 	private activeTail(width: number): string[] {
 		const out: string[] = [];
+		// 转述活动块（A 案）置前：转述发生在 turn 开始前，主流区此时空闲——视觉上紧跟 ◐ 行
+		if (this.visionThinkText !== "") {
+			const raw = this.visionLive.feed(this.visionThinkText, Math.max(8, width - 2));
+			out.push(theme.dim("[眼睛思考]"), ...raw.slice(-2).map((l) => theme.dim("  " + l))); // 尾两行流动（主思考收起态同款）
+		}
+		if (this.visionBodyText !== "") out.push(...wrapText(this.visionBodyText, Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`)));
 		if (this.thinkText !== "") out.push(...this.styleWrappedThink(this.thinkLive.feed(this.thinkText, Math.max(8, width - 2)), this.thinkOpen));
 		if (this.mdText !== "") out.push(...this.mdRender(this.mdText, width));
 		return out;
