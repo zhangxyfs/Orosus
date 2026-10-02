@@ -86,7 +86,8 @@ export default defineModule({
       model: () => hostModel,
       spec: { maxEdge: facts.maxEdge, tokenTier: facts.tokenTier },
       // F10×D12：主模型非视觉但眼睛模型已配 → 读图改为转述（未解析/失败回落路径指路）
-      summarize: makeSummarizer(facts, () => hostModel, join(orosusHome(), "cache", "models-dev.json"), (req) => ctx.llm.stream(req as never)),
+      summarize: makeSummarizer(facts, () => hostModel, join(orosusHome(), "cache", "models-dev.json"), (req) => ctx.llm.stream(req as never),
+        (path, reason) => ctx.log.warn("tool-media.vision", "read_media_file 转述失败", { path, reason })),
     }));
     ctx.contribute.tool(createDownsampleTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));
     ctx.contribute.tool(createCropTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));
@@ -107,10 +108,8 @@ export default defineModule({
       return Promise.all(images.map((img) => summarizeImage(img.path, img.mimeType, m, {
         llmStream: (req) => ctx.llm.stream(req as never),
         catalogFile,
-      }).then((t): { path: string; text?: string } => {
-        if (t === undefined) ctx.log.warn("tool-media.vision", "视觉摘要生成失败——回落纯标签", { path: img.path });
-        return t === undefined ? { path: img.path } : { path: img.path, text: t };
-      })));
+        onFail: (reason) => ctx.log.warn("tool-media.vision", "视觉摘要生成失败——回落纯标签", { path: img.path, reason }),
+      }).then((t): { path: string; text?: string } => (t === undefined ? { path: img.path } : { path: img.path, text: t }))));
     };
     ctx.provide(MEDIA_SUMMARY_KEY, {
       // warm=后台即发不候（工具产图预热）；describe=await 落盘（发送闸用——失败静默回落纯占位）
