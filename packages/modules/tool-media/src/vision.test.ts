@@ -170,28 +170,34 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(maxTokens).toBeGreaterThanOrEqual(2000); // 帽够得着（旧 300 出半截）
   });
 
-  it("③f 转述思考档（卡 23s 空产出修）：目录声明 low → 请求带 reasoningEffort=low；无声明 → 不带字段（lenient 照发会 400 自证）", async () => {
+  it("③f 转述思考档（卡 23s 空产出修+off 优先拍板）：有关档（none/off/null）取关档 > minimal > low；无可用档 → 不带字段（lenient 照发会 400 自证）", async () => {
     const d = fresh();
-    const img = join(d, "eff.png");
-    writeFileSync(img, Buffer.from([0x89, 0x50]));
     const cat = join(d, "models-dev.json");
-    writeFileSync(cat, JSON.stringify({ catalog: { zai: { models: { "eye/m": { id: "eye/m", reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] } } } } }));
+    const writeCat = (values: unknown[]): void => writeFileSync(cat, JSON.stringify({ catalog: { zai: { models: { "eye/m": { id: "eye/m", reasoning_options: [{ type: "effort", values }] } } } } }));
     const efforts: (string | undefined)[] = [];
     const deps = {
       llmStream: (req: { reasoningEffort?: string }) => {
         efforts.push(req.reasoningEffort);
-        return fakeStream([{ type: "text/delta", text: "低思考快出" }, { type: "finish", kind: "stop" }])();
+        return fakeStream([{ type: "text/delta", text: "快出" }, { type: "finish", kind: "stop" }])();
       },
       catalogFile: cat,
       retryBackoffMs: [],
     };
-    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("低思考快出");
-    expect(efforts[0]).toBe("low"); // 目录声明 low 在列——降档发出
-    writeFileSync(cat, JSON.stringify({ catalog: { zai: { models: { "eye/m": { id: "eye/m" } } } } })); // 无声明
-    const img2 = join(d, "eff2.png");
-    writeFileSync(img2, Buffer.from([0x89, 0x50]));
-    expect(await summarizeImage(img2, "image/png", "eye/m", deps as never)).toContain("低思考快出");
-    expect(efforts[1]).toBeUndefined(); // 无声明不带字段
+    const cases: Array<[unknown[], string | undefined, string]> = [
+      [["none", "low", "high"], "none", "none 在列——直接关思考"],
+      [["off", "low"], "off", "off 关档在列——取 off"],
+      [["low", "high", "max"], "low", "无关档——降 low（glm-5.3-flash 实况）"],
+      [["minimal", "high"], "minimal", "无 none/off——取 minimal"],
+      [["low", null], "none", "null 关档位（models.dev 惯例）折 none"],
+      [["high"], undefined, "只有 high——不发字段（乱发 400 自证）"],
+    ];
+    for (let i = 0; i < cases.length; i++) {
+      writeCat(cases[i]![0]);
+      const p = join(d, `eff${i}.png`);
+      writeFileSync(p, Buffer.from([0x89, 0x50]));
+      expect(await summarizeImage(p, "image/png", "eye/m", deps as never)).toContain("快出");
+      expect(efforts[i]).toBe(cases[i]![1]); // 逐案对表
+    }
   });
 
   it("③g 流式增量透传（A 案）：onDelta 逐 chunk 上抛思考/正文（kind 与顺序保持）；maxTokens 2000（思考余量保险）", async () => {

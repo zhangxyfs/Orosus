@@ -74,12 +74,12 @@ export const SUMMARY_TEXT_CAP = 2_000;
 const DEFAULT_RETRY_BACKOFF_MS = [1_000, 2_000];
 const NON_RETRYABLE_REASON = /(?:\b401\b|\b403\b|invalid[ _-]?api[ _-]?key|unauthorized|forbidden|model[ _-]?not[ _-]?(?:found|exist)|no such model|permission[ _-]?denied)/i;
 
-// 转述思考档（2026-10-02 卡 23 秒空产出修）：glm-5.3-flash 等推理模型的默认思考在描述任务上
-// 白烧 20s+ 且吃光 maxTokens（实机三连「流正常结束但无文本」——reasoning 耗尽预算、正文零字，
-// m5-media spike 期同款坑：max_tokens 被思考吞）。目录声明 effort 档（low 在列）→ 降 low；
-// minimal 在列 → minimal；无声明/读不到 → 不发字段（适配器 lenient 照发会 400 自证——只在
-// 目录证实时才带）。
-const lowEffortOf = (catalogFile: string, model: string): string | undefined => {
+// 转述思考档（2026-10-02 卡 23 秒空产出修 + 用户拍板 off 优先）：glm-5.3-flash 等推理模型的默认
+// 思考在描述任务上白烧 20s+ 且吃光 maxTokens（实机三连「流正常结束但无文本」——reasoning 耗尽预算、
+// 正文零字，m5-media spike 期同款坑）。**优先取关档**（none/off——描述任务零推理需求；models.dev 的
+// null 关档位同 repo offEffort 口径折 "none"），没有关档再降最低档（minimal/low）；无声明/读不到 →
+// 不发字段（适配器 lenient 照发会 400 自证——只在目录证实时才带）。
+const eyeEffortOf = (catalogFile: string, model: string): string | undefined => {
   try {
     const doc = JSON.parse(readFileSync(catalogFile, "utf8")) as { catalog?: Record<string, { models?: Record<string, { id?: string; reasoning_options?: { type?: string; values?: unknown[] }[] }> }> };
     const bare = model.includes("/") ? model.split("/").pop()! : model;
@@ -89,9 +89,12 @@ const lowEffortOf = (catalogFile: string, model: string): string | undefined => 
         for (const opt of m.reasoning_options ?? []) {
           if (opt?.type !== "effort" || !Array.isArray(opt.values)) continue;
           const vals = opt.values.filter((v): v is string => typeof v === "string");
-          if (vals.includes("low")) return "low";
+          if (vals.includes("none")) return "none";
+          if (vals.includes("off")) return "off";
+          if (opt.values.includes(null)) return "none"; // models.dev 惯例：null = 关档位（offEffort 同口径）
           if (vals.includes("minimal")) return "minimal";
-          return undefined; // 命中模型但无低档声明——不发
+          if (vals.includes("low")) return "low";
+          return undefined; // 命中模型但无可用低档——不发
         }
         return undefined;
       }
@@ -110,7 +113,7 @@ const attemptOnce = async (
   try {
     let text = "";
     let truncated = false;
-    const lowEffort = deps.catalogFile !== undefined ? lowEffortOf(deps.catalogFile, eyeModel) : undefined;
+    const lowEffort = deps.catalogFile !== undefined ? eyeEffortOf(deps.catalogFile, eyeModel) : undefined;
     const stream = deps.llmStream({
       model: eyeModel,
       system: "你是图片描述器。",
