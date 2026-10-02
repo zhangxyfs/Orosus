@@ -24,8 +24,8 @@ import * as theme from "../theme.ts";
 import { subagentCountHint } from "../subagent-status.ts";
 import {
 	CONN_SLOTS, DIAG_LIST_ROWS, diagListLines,
-	indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, MODULE_SLOTS,
-	normCmd, OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
+	INPUT_MAX_ROWS, layoutInputRows, locateCursor, MODULE_SLOTS,
+	OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
 	type AppState, type DialogKeyCtx, type FocusIdx, type FullAppIO, type HostDialogKeys, type InputRow,
 	type PickExtraKeys, type SlashItem,
 } from "./fullapp-types.ts";
@@ -34,6 +34,7 @@ import { createDialogs } from "./fullapp-dialogs.ts";
 import { createSelect } from "./fullapp-select.ts";
 import { createMouse } from "./fullapp-mouse.ts";
 import { createMenu } from "./fullapp-menu.ts";
+import { createInput } from "./fullapp-input.ts";
 
 // 子系统拆分（m5-split-fullapp）：九个闭包工厂子系统住 fullapp-*.ts 族件；壳内子系统装配对象与
 // 降级共享字段（io/state/pendingUi 等无修饰成员）——子系统共享态，非公开 API，外部勿用。
@@ -64,6 +65,8 @@ export class FullApp {
 	mouse: ReturnType<typeof createMouse>;
 	/** 斜杠菜单 overlay 键子系统（m5-split-fullapp T7——fullapp-menu.ts 工厂件）。 */
 	menu: ReturnType<typeof createMenu>;
+	/** 输入框编辑/历史/提交子系统（m5-split-fullapp T8——fullapp-input.ts 工厂件）。 */
+	input: ReturnType<typeof createInput>;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
 		this.io = io;
@@ -119,6 +122,7 @@ export class FullApp {
 		this.select = createSelect(this);
 		this.mouse = createMouse(this);
 		this.menu = createMenu(this);
+		this.input = createInput(this);
 	}
 
 	/** 测试探针。 */
@@ -181,8 +185,8 @@ export class FullApp {
 				this.scheduler.requestImmediateRender();
 				return;
 			}
-			this.inputInsert(text);
-			this.afterEdit();
+			this.input.inputInsert(text);
+			this.input.afterEdit();
 		});
 		this.term.onResize(() => this.scheduler.requestRender());
 		this.scheduler.requestRender();
@@ -325,6 +329,19 @@ export class FullApp {
 		return this.dialogs.promptInput(question, secret);
 	}
 
+	/** 输入框编辑/历史/提交公开入口三件——体已出仓 fullapp-input.ts（m5-split-fullapp T8），壳留薄委托。 */
+	insertAtCursor(text: string): void {
+		this.input.insertAtCursor(text);
+	}
+
+	restoreInput(text: string): void {
+		this.input.restoreInput(text);
+	}
+
+	seedHistory(items: string[]): void {
+		this.input.seedHistory(items);
+	}
+
 	// ---------- 控件窗（m5 T7 口子三①——数据流三路：开窗快照 / onEvent 回新清单 / update 句柄） ----------
 
 	/** 开控件窗：几何走 T1（不另算）；排队同 viewText（单槽 FIFO）。
@@ -339,111 +356,15 @@ export class FullApp {
 	/** 引导弹窗占用槽：在槽期一切按键/粘贴路由给会话（焦点锁——pendingUi/编辑态全部让位）。 */
 	onboarding: { session: OnboardingSession; resolve: (o: OnboardingOutcome) => void } | undefined;
 
-	/** 文本插入输入框光标位（2026-09-23 走查拍板——图片 chip [image #N (宽×高)] 从独立 chip 行
-	 *  改为文内 token：光标处插入、删除键可删 = 撤销挂图）。 */
-	insertAtCursor(text: string): void {
-		const s = this.state;
-		this.exitHistoryBrowse(); // 贴图 = 编辑（kimi exitHistoryBrowsing 同语义）
-		s.input = s.input.slice(0, s.cursor) + text + s.input.slice(s.cursor);
-		s.cursor += text.length; // chip 为 ASCII+×（BMP）——码元步进安全
-		s.selAnchor = -1;
-		this.afterEdit();
-	}
-
-	/** 提交被拒（如非 vision 模型拦截）时恢复输入原文（含图片 chip token——挂图不丢）。 */
-	restoreInput(text: string): void {
-		const s = this.state;
-		s.input = text;
-		s.cursor = text.length;
-		s.selAnchor = -1;
-		this.afterEdit();
-	}
-
-	/** 输入历史播种（2026-09-23 实测：/sessions 恢复后 FullApp 随会话重建、输入历史清零——
-	 *  ↑ 无历史可召回前案）：宿主从会话事件取用户消息文本灌入（kimi 按 cwd 持久化历史的同族口径），
-	 *  帽 100 条（kimi 同值）。 */
-	seedHistory(items: string[]): void {
-		const s = this.state;
-		s.history = items.slice(-100);
-		s.historyIdx = s.history.length;
-		s.historyDraft = undefined;
-	}
-
 	/** pick 列表行的可用显示宽（m4-7 走查修 2026-09-27）：左栏宽 − 框 2 列 − 「 ❯ 」前缀 4 列——
 	 *  宿主拼行（如技能列表三列）按此截断，防超宽把右框 │ 推错位。侧栏随 cols 现算（与渲染同源）。 */
 	pickRowWidth(): number {
 		return Math.max(8, this.io.columns() - this.panels.sidebarW() - 1) - 2 - 4;
 	}
 
-	// ---------- 选择与编辑 ----------
-
-	private selRange(): { lo: number; hi: number } | undefined {
-		const s = this.state;
-		if (s.selAnchor < 0 || s.selAnchor === s.cursor) return undefined;
-		return { lo: Math.min(s.selAnchor, s.cursor), hi: Math.max(s.selAnchor, s.cursor) };
-	}
-
-	private deleteSelection(): boolean {
-		const s = this.state;
-		const r = this.selRange();
-		if (!r) return false;
-		s.input = s.input.slice(0, r.lo) + s.input.slice(r.hi);
-		s.cursor = r.lo;
-		s.selAnchor = -1;
-		return true;
-	}
-
-	/** 编辑即退出历史浏览（kimi exitHistoryBrowsing——浏览中改动的是召回条目本身，草稿快照作废）。 */
-	private exitHistoryBrowse(): void {
-		const s = this.state;
-		s.historyIdx = s.history.length;
-		s.historyDraft = undefined;
-	}
-
-	inputInsert(text: string): void {
-		const s = this.state;
-		this.exitHistoryBrowse(); // 编辑即退出历史浏览、丢弃草稿快照（kimi exitHistoryBrowsing 同语义）
-		const norm = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-		this.deleteSelection();
-		s.input = s.input.slice(0, s.cursor) + norm + s.input.slice(s.cursor);
-		s.cursor += norm.length;
-	}
-
-	private moveCursor(dir: -1 | 1, extend: boolean): void {
-		const s = this.state;
-		if (extend && s.selAnchor < 0) {
-			s.selAnchor = s.cursor;
-			this.select.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板，与 Ctrl+A 同规则）
-		}
-		if (!extend) {
-			const r = this.selRange();
-			if (r) {
-				s.cursor = dir === -1 ? r.lo : r.hi;
-				s.selAnchor = -1;
-				return;
-			}
-		}
-		if (dir === -1 && s.cursor > 0) {
-			const prev = s.input.codePointAt(s.cursor - 1)!;
-			s.cursor -= prev >= 0xdc00 && prev <= 0xdfff && s.cursor > 1 ? 2 : 1;
-		} else if (dir === 1 && s.cursor < s.input.length) {
-			const cp = s.input.codePointAt(s.cursor)!;
-			s.cursor += cp > 0xffff ? 2 : 1;
-		}
-	}
-
-	private afterEdit(): void {
-		const s = this.state;
-		const rows = layoutInputRows(s.input, this.panels.inputInnerW());
-		const cur = locateCursor(rows, s.cursor);
-		if (cur.row < s.inputScroll) s.inputScroll = cur.row;
-		if (cur.row >= s.inputScroll + INPUT_MAX_ROWS) s.inputScroll = cur.row - INPUT_MAX_ROWS + 1;
-		this.scheduler.requestImmediateRender();
-	}
-
 	// ---------- 按键 ----------
 
-	private lastEscCancel = 0; // 双击 Esc 停止生成窗口（2026-09-23 走查拍板——防误触，qwen-code 1s 同口径）
+	lastEscCancel = 0; // 双击 Esc 停止生成窗口（2026-09-23 走查拍板——防误触，qwen-code 1s 同口径）
 
 	// ---------- 滚动条（T10——kimi :1037-1052 命中 / :1115-1118 跳位 / :1075-1078 拖动映射） ----------
 
@@ -455,16 +376,6 @@ export class FullApp {
 	/** 同上——selectionText（拖选复制断言驱动口）。 */
 	selectionText(): string | undefined {
 		return this.select.selectionText();
-	}
-
-	/** 输入框键盘选区复制（2026-09-30 用户拍板）：Ctrl+C 只在「输入框有高亮选区」时消费——
-	 *  WT 自有鼠标选区时会先截走 Ctrl+C、\x03 不到达应用，两层天然互斥、不抢 WT 原生复制；
-	 *  无选区维持吞键现状（退出走 /quit、停生成双击 Esc 的 2026-09-23 拍板不动）。 */
-	private async copyInputSelection(): Promise<void> {
-		const r = this.selRange();
-		if (r === undefined) return;
-		const text = this.state.input.slice(r.lo, r.hi);
-		await this.select.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
 	}
 
 	private onKey(key: string): void {
@@ -549,7 +460,7 @@ export class FullApp {
 				s.cursor = 0;
 				s.inputScroll = 0;
 				s.selAnchor = -1;
-				this.exitHistoryBrowse();
+				this.input.exitHistoryBrowse();
 				this.io.requestSteer(texts);
 			}
 			this.scheduler.requestImmediateRender();
@@ -793,7 +704,7 @@ export class FullApp {
 				pu.resolve(undefined);
 				this.dialogs.promoteUi();
 			} else if (key !== "shift+enter") {
-				this.onEditKey(key);
+				this.input.onEditKey(key);
 				return;
 			}
 			this.scheduler.requestImmediateRender();
@@ -958,168 +869,10 @@ export class FullApp {
 				s.taskPage = (Math.min(s.taskPage, bottomPages - 1) + (key === "left" ? -1 : 1) + bottomPages) % bottomPages;
 			}
 		} else {
-			this.onEditKey(key);
+			this.input.onEditKey(key);
 			return;
 		}
 		this.scheduler.requestImmediateRender();
-	}
-
-	private onEditKey(key: string): void {
-		const s = this.state;
-		switch (key) {
-			case "enter":
-				if (normCmd(s.input) !== "") this.submitLine(normCmd(s.input));
-				break;
-			case "alt+enter":
-			case "shift+enter": // Shift+Enter = 换行（2026-09-27 用户拍板；keymatch 两形态：裸 LF / CSI-u）
-				this.inputInsert("\n");
-				break;
-			case "ctrl+c": // 2026-09-30 用户拍板：输入框键盘选区复制；无选区吞键维持现状（WT 原生复制让位不动）
-				void this.copyInputSelection();
-				break;
-			case "ctrl+a":
-				s.selAnchor = 0;
-				s.cursor = s.input.length;
-				this.select.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板：屏幕最多一块高亮）
-				break;
-			case "shift+left":
-				this.moveCursor(-1, true);
-				break;
-			case "shift+right":
-				this.moveCursor(1, true);
-				break;
-			case "backspace":
-				this.exitHistoryBrowse();
-				if (!this.deleteSelection() && s.cursor > 0) {
-					// CTU-02 修复（2026-09-28 code review）：光标前一位（cursor-1）落在代理对的低代理
-					// （0xdc00–0xdfff）且再前一位是高代理 → 整对删除。原判定区间写反（按高代理
-					// 0xd800–0xdbff 判），emoji 退格一次只删低代理、残留孤立高代理——对齐 moveCursor 的写法
-					const cp = s.input.codePointAt(s.cursor - 1)!;
-					const prev2 = s.input.charCodeAt(s.cursor - 2);
-					const w = cp >= 0xdc00 && cp <= 0xdfff && prev2 >= 0xd800 && prev2 <= 0xdbff ? 2 : 1;
-					s.input = s.input.slice(0, s.cursor - w) + s.input.slice(s.cursor);
-					s.cursor -= w;
-				}
-				break;
-			case "delete":
-				this.exitHistoryBrowse();
-				if (!this.deleteSelection() && s.cursor < s.input.length) {
-					const cp = s.input.codePointAt(s.cursor)!;
-					s.input = s.input.slice(0, s.cursor) + s.input.slice(s.cursor + (cp > 0xffff ? 2 : 1));
-				}
-				break;
-			case "left":
-				this.moveCursor(-1, false);
-				break;
-			case "right":
-				this.moveCursor(1, false);
-				break;
-			case "home":
-				s.selAnchor = -1;
-				s.cursor = 0;
-				break;
-			case "end":
-				s.selAnchor = -1;
-				s.cursor = s.input.length;
-				break;
-			case "up":
-			case "down": {
-				// ↑/↓ 历史导航（2026-09-23 走查拍板，照抄 kimi pi-tui editor.ts:1027-1052 语义）：
-				// 非首/末视觉行 → 行内移动；首行非起始点 → 先回行首；起始点再 ↑ 才召回历史；
-				// 进入浏览快照草稿，↓ 翻回最新位草稿原样恢复；上翻光标置首（可连按续翻）、下翻置末
-				s.selAnchor = -1;
-				const rows = layoutInputRows(s.input, this.panels.inputInnerW());
-				const cur = locateCursor(rows, s.cursor);
-				const browsing = s.historyIdx < s.history.length;
-				if (key === "up") {
-					if (cur.row > 0) {
-						s.cursor = indexAtRowCol(rows, cur.row - 1, cur.col);
-					} else if (s.cursor !== 0) {
-						s.cursor = 0; // 首行非起始 → 先回起始点（kimi moveToLineStart）
-					} else if (s.input === "" && this.io.queueItems().length > 0) {
-						// 空输入 + 队列非空 → 召回队尾（LIFO，kimi onUpArrowEmpty 优先于历史导航同口径）
-						const q = this.io.recallQueued();
-						if (q !== undefined) {
-							s.input = q;
-							s.cursor = q.length;
-						}
-					} else if (s.historyIdx > 0) {
-						if (!browsing) s.historyDraft = s.input; // 进入浏览那一刻快照草稿
-						s.historyIdx--;
-						s.input = s.history[s.historyIdx]!;
-						s.cursor = 0; // 上翻光标放开头——多行历史条目上连按 ↑ 即续翻（kimi setTextInternal "start"）
-						s.inputScroll = 0;
-					}
-				} else if (browsing && cur.row === rows.length - 1) {
-					s.historyIdx++;
-					if (s.historyIdx === s.history.length) {
-						s.input = s.historyDraft ?? ""; // 回到草稿位——草稿原样恢复
-						s.historyDraft = undefined;
-					} else {
-						s.input = s.history[s.historyIdx]!;
-					}
-					s.cursor = s.input.length; // 下翻/回草稿光标放末尾（kimi "end"）
-					s.inputScroll = 0;
-				} else if (cur.row < rows.length - 1) {
-					s.cursor = indexAtRowCol(rows, cur.row + 1, cur.col);
-				} else {
-					s.cursor = s.input.length; // 末行非浏览 → 跳行尾（kimi moveToLineEnd）
-				}
-				break;
-			}
-			default:
-				if (isPrintable(key)) {
-					this.inputInsert(key);
-					// 输入仍是斜杠命令形态即（重）开菜单（F5 十五轮②：Esc 关掉后继续补字母要能重开
-					// ——原条件 === "/" 只在恰好一个斜杠时触发，"/qu"+Esc 后再输入永不重开）
-					if (normCmd(s.input).startsWith("/") && !s.overlayOpen) {
-						s.overlayOpen = true;
-						s.overlaySel = 0;
-						s.overlayCmd = "";
-					}
-				}
-		}
-		this.afterEdit();
-	}
-
-	submitLine(text: string): void {
-		const s = this.state;
-		// 提交闸门（批④——busy 期拒收档拦在回车前）：拦下则输入框原文保留、不进历史、不写流区、不提交，
-		// 拒因尾行瞬显自消；回答结束后原文还在，直接再按回车即发
-		const gated = this.io.submitGate?.(text);
-		if (gated !== undefined) {
-			this.showToast(gated); // 拒因走浮动 toast（输入框上边缘黄字 3s 自消——原尾行位退役）
-			return;
-		}
-		s.scrollBack = 0; // 回看历史时提交 → 跳到底部（F5 五轮②：一次性置底，非粘底）
-		s.history.push(text);
-		s.historyIdx = s.history.length;
-		s.historyDraft = undefined;
-		s.input = "";
-		s.cursor = 0;
-		s.inputScroll = 0;
-		s.selAnchor = -1;
-		this.io.submit(text);
-	}
-
-	filteredCommands(): SlashItem[] {
-		// 命令词忽略大小写（2026-09-27 用户走查拍板）：/He /HELP 都能筛出 /help——q 与命令名/别名
-		// 统一小写比较；Enter 提交菜单真名（picked），不带过滤串的大小写进输入
-		const q = normCmd(this.state.input).slice(1).split(" ")[0]!.toLowerCase();
-		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
-		// 前缀命中排前、含字命中居中、子序列命中殿后（2026-09-24 拍板两档 + 2026-09-30 第三档：
-		// /ol 先列 ol 开头，再列含 ol 的 /yolo，末列字符按序散见的）——组内保持注册序
-		const hits: SlashItem[] = [];
-		const more: SlashItem[] = [];
-		const fuzzy: SlashItem[] = [];
-		for (const c of this.io.slashCommands()) {
-			const lowerName = c.name.toLowerCase();
-			const aliases = (c.aliases ?? []).map((a) => a.toLowerCase());
-			if (lowerName.startsWith("/" + q) || aliases.some((a) => a.startsWith(q))) hits.push(c);
-			else if (lowerName.slice(1).includes(q) || aliases.some((a) => a.includes(q))) more.push(c);
-			else if (isSubseq(q, lowerName.slice(1)) || aliases.some((a) => isSubseq(q, a))) fuzzy.push(c);
-		}
-		return [...hits, ...more, ...fuzzy];
 	}
 
 	// ---------- 布局与渲染 ----------
@@ -1297,7 +1050,7 @@ export class FullApp {
 			}
 		}
 
-		const sel = this.selRange();
+		const sel = this.input.selRange();
 		const paneIn = (l: string) => theme.bg("surface2", theme.fg(ibc, "│") + padToWidth(l, leftW - 2) + theme.fg(ibc, "│"));
 		for (let i = 0; i < showRows; i++) {
 			const vr = inputRows[s.inputScroll + i];
@@ -1563,7 +1316,7 @@ export class FullApp {
 		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
 		const olines: string[] = [];
 		const skillCount = ap === undefined && !level2 ? this.menu.filteredSkills().length : 0;
-		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
+		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.input.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
 		// CTU-09（2026-09-28 code review）：标题源头截断（overlayCmd/ap.cmd 是用户输入可超长——原靠
 		// padToWidth 兜底切掉右框角；预算扣除 en 段实测宽）
 		const titleText = ap !== undefined ? ` ${ap.cmd} 参数 ` : level2 ? ` ${s.overlayCmd} ` : " 斜杠命令 ";
@@ -1590,7 +1343,7 @@ export class FullApp {
 				};
 			});
 		} else {
-			const real = this.filteredCommands();
+			const real = this.input.filteredCommands();
 			const sk = this.menu.filteredSkills();
 			// m4-7 T7（原型图 1）：技能条目殿后于全部命中命令；分隔行「── 技能 ──」仅技能区非空时出现——
 			// 无技能环境此处与原实现逐字节一致（验收点 3）；muted（2026-09-27 用户走查打回：border 边框色
