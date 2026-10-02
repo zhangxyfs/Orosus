@@ -101,3 +101,18 @@ export function eyeModelOf(facts: MediaPolicyFacts, hostModel: string | undefine
     }
   });
 }
+
+/** F10×D12 眼睛转述口装配（模块 activate 用——read_media_file 的 summarize dep）：
+ *  调用期解析眼睛模型（hostModel 现读），未解析/生成失败 = undefined（调用方回落路径指路）。 */
+export function makeSummarizer(
+  facts: MediaPolicyFacts,
+  hostModelGet: () => string | undefined,
+  catalogFile: string,
+  llmStream: VisionSummaryDeps["llmStream"],
+): (path: string, mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif") => Promise<string | undefined> {
+  return async (path, mimeType) => {
+    const eye = eyeModelOf(facts, hostModelGet(), catalogFile);
+    if (eye.model === undefined) return undefined;
+    return summarizeImage(path, mimeType, eye.model, { llmStream, catalogFile });
+  };
+}

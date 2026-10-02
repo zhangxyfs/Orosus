@@ -107,3 +107,31 @@ describe("F4 门控 stream 接线（openai/anthropic 两族——目录明确 fa
     expect(wire).toContain("当前模型不支持图片输入");
   });
 });
+
+// F13/F14 扩面：非视觉占位带眼睛摘要缓存（发送闸旁路后——非视觉主模型照样「读懂」图）
+describe("nonVisionImagePlaceholder 摘要富化（F13/F14 扩面）", () => {
+  it("⑥ 同名 .summary.txt 在场 → 占位附 [视觉摘要]；无缓存/空文件 → 纯占位", () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await0();
+    const d = mkdtempSync(join(tmpdir(), "orosus-vg3-"));
+    try {
+      const img = join(d, "p.png");
+      writeFileSync(img, Buffer.alloc(4));
+      const plain = nonVisionImagePlaceholder(img);
+      expect(plain).toContain("不支持图片输入");
+      expect(plain).not.toContain("视觉摘要");
+      writeFileSync(`${img}.summary.txt`, "蓝色按钮的登录页");
+      const rich = nonVisionImagePlaceholder(img);
+      expect(rich).toContain("[视觉摘要] 蓝色按钮的登录页");
+      expect(rich).toContain(img); // 路径留据
+      writeFileSync(`${img}.summary.txt`, "   ");
+      expect(nonVisionImagePlaceholder(img)).not.toContain("视觉摘要"); // 空白文件 = 无摘要
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+// mkdtemp 等的零参占位（顶部 import 已有 mkdtempSync/writeFileSync/rmSync/join/tmpdir——await0 防误用）
+function await0(): { mkdtempSync: typeof import("node:fs").mkdtempSync; writeFileSync: typeof import("node:fs").writeFileSync; rmSync: typeof import("node:fs").rmSync } {
+  return { mkdtempSync, writeFileSync, rmSync };
+}
