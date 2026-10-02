@@ -10,12 +10,11 @@
  *  鼠标接管关闭（用户拍板 2026-09-21——重开 = fullscreen.ts ENTER_ALT 追加 ?1000/?1006）。 */
 
 import { writeSync } from "node:fs";
-import { writeClipboardText, openUrl } from "../paste.ts";
 import { Term, type TermIO } from "./terminal.ts";
 import { matchKey, isPrintable } from "./keymatch.ts";
 import { FullScreen, CRASH_RESTORE, type OverlayFrame } from "./fullscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
-import { padToWidth, osc8LinkAtColumn, sliceByColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { padToWidth, osc8LinkAtColumn, stripAnsi, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { renderWidgetLines } from "./widgets.ts";
@@ -24,7 +23,7 @@ import { pickLabel } from "../picker.ts";
 import * as theme from "../theme.ts";
 import { subagentCountHint } from "../subagent-status.ts";
 import {
-	ALT_WHEEL_MULTIPLIER, CONN_SLOTS, DIAG_LIST_ROWS, diagListLines, DOUBLE_CLICK_INTERVAL_MS,
+	ALT_WHEEL_MULTIPLIER, CONN_SLOTS, DIAG_LIST_ROWS, diagListLines,
 	indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, MODULE_SLOTS,
 	normCmd, OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
 	WHEEL_STEP, wordRangeAt,
@@ -33,6 +32,7 @@ import {
 } from "./fullapp-types.ts";
 import { createPanels } from "./fullapp-panels.ts";
 import { createDialogs } from "./fullapp-dialogs.ts";
+import { createSelect } from "./fullapp-select.ts";
 
 // 子系统拆分（m5-split-fullapp）：九个闭包工厂子系统住 fullapp-*.ts 族件；壳内子系统装配对象与
 // 降级共享字段（io/state/pendingUi 等无修饰成员）——子系统共享态，非公开 API，外部勿用。
@@ -43,7 +43,7 @@ export * from "./fullapp-types.ts";
 
 export class FullApp {
 	io: FullAppIO;
-	private term: Term;
+	term: Term;
 	private full: FullScreen;
 	scheduler: FrameScheduler;
 	state: AppState;
@@ -57,6 +57,8 @@ export class FullApp {
 	panels: ReturnType<typeof createPanels>;
 	/** 弹窗队列/查看窗/对话框/引导/toast 子系统（m5-split-fullapp T4——fullapp-dialogs.ts 工厂件）。 */
 	dialogs: ReturnType<typeof createDialogs>;
+	/** 鼠标选区与剪贴板/链接子系统（m5-split-fullapp T5——fullapp-select.ts 工厂件）。 */
+	select: ReturnType<typeof createSelect>;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
 		this.io = io;
@@ -109,6 +111,7 @@ export class FullApp {
 		// 调用期解引用 app——装配点晚对行为无影响，统一末尾最稳）
 		this.panels = createPanels(this);
 		this.dialogs = createDialogs(this);
+		this.select = createSelect(this);
 	}
 
 	/** 测试探针。 */
@@ -403,7 +406,7 @@ export class FullApp {
 		const s = this.state;
 		if (extend && s.selAnchor < 0) {
 			s.selAnchor = s.cursor;
-			this.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板，与 Ctrl+A 同规则）
+			this.select.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板，与 Ctrl+A 同规则）
 		}
 		if (!extend) {
 			const r = this.selRange();
@@ -496,13 +499,13 @@ export class FullApp {
 				return;
 			}
 			// 查看窗盒内优先（T8）——主流区 pointToDoc 之前判 viewGeo 盒命中
-			const vp = this.pointToView(e.x, e.y);
+			const vp = this.select.pointToView(e.x, e.y);
 			const p = vp !== undefined
 				? { scope: "view" as const, docIdx: vp.docIdx, col: vp.col }
-				: (() => { const m = this.pointToDoc(e.x, e.y); return m === undefined ? undefined : { scope: "main" as const, docIdx: m.docIdx, col: m.col }; })();
-			const plain = p !== undefined ? stripAnsi(this.selLineText(p.scope, p.docIdx)) : undefined;
+				: (() => { const m = this.select.pointToDoc(e.x, e.y); return m === undefined ? undefined : { scope: "main" as const, docIdx: m.docIdx, col: m.col }; })();
+			const plain = p !== undefined ? stripAnsi(this.select.selLineText(p.scope, p.docIdx)) : undefined;
 			const word = p !== undefined && plain !== undefined ? wordRangeAt(plain, p.col) : undefined;
-			const count = this.clickCount(p, word);
+			const count = this.select.clickCount(p, word);
 			const range = p === undefined ? undefined
 				: count === 3 ? { start: 0, end: visibleWidth(plain ?? "") }
 				: count === 2 ? word
@@ -516,7 +519,7 @@ export class FullApp {
 			// 链接探测（T7——kimi :1385-1390）：单击（count 1）才记 URL，双击/三击走选词不探测
 			s.pressedUrl = count === 1 && p !== undefined
 				? (() => {
-					const url = osc8LinkAtColumn(this.selLineText(p.scope, p.docIdx), p.col);
+					const url = osc8LinkAtColumn(this.select.selLineText(p.scope, p.docIdx), p.col);
 					return url === undefined ? undefined : { url, x: e.x, y: e.y };
 				})()
 				: undefined;
@@ -529,7 +532,7 @@ export class FullApp {
 			}
 			s.pressedUrl = undefined; // 拖动即作废（误拖保护）
 			if (s.mselAnchor === undefined) return;
-			this.extendSelection(e.x, e.y);
+			this.select.extendSelection(e.x, e.y);
 			// 拖选自动滚（T9——kimi updateSelectionAutoScroll :1259-1285）：压到所在窗口上/下边缘
 			// → 50ms 一格滚 + 指针重映射续选；方向必落 state（脉冲从 state 读——两字段号相反见 pulse）
 			s.dragPointer = { x: e.x, y: e.y };
@@ -548,38 +551,13 @@ export class FullApp {
 			this.stopAutoScroll(); // 松手即停（kimi :1322 同位）
 			// 链接打开（T7——kimi :1330-1336 次序）：未拖动（pressedUrl 未被 drag 作废）且同点才打开
 			const pu = s.pressedUrl;
-			if (pu !== undefined && pu.x === e.x && pu.y === e.y) void this.openLink(pu.url);
+			if (pu !== undefined && pu.x === e.x && pu.y === e.y) void this.select.openLink(pu.url);
 			s.pressedUrl = undefined;
-			const text = this.selectionText();
-			if (text !== undefined) void this.copySelection(text); // 已复制 N 行（决策点 8）
+			const text = this.select.selectionText();
+			if (text !== undefined) void this.select.copySelection(text); // 已复制 N 行（决策点 8）
 			else { s.mselAnchor = undefined; s.mselFocus = undefined; } // 空选区松开即消
 		}
 		this.scheduler.requestImmediateRender();
-	}
-
-	/** 扩选到指针点（T9 提取——drag 分支与自动滚脉冲共用）：越界按 scope 钳边界（clampedSelPoint）
-	 *  + 粒度感知（T6 逻辑原样：词/行粒度 focus 对齐区间、反侧锚点切换）。 */
-	private extendSelection(x: number, y: number): void {
-		const s = this.state;
-		const p = this.clampedSelPoint(x, y);
-		if (p === undefined) return;
-		const initial = s.selInitialRange;
-		if (s.selGranularity !== "character" && initial !== undefined) {
-			const before = p.docIdx < initial.start.docIdx || (p.docIdx === initial.start.docIdx && p.col < initial.start.col);
-			const anchor = { scope: p.scope, docIdx: before ? initial.end.docIdx : initial.start.docIdx, col: before ? initial.end.col : initial.start.col };
-			if (s.selGranularity === "word") {
-				const plain = stripAnsi(this.selLineText(p.scope, p.docIdx));
-				const r = wordRangeAt(plain, p.col) ?? { start: p.col, end: p.col };
-				s.mselAnchor = anchor;
-				s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? r.start : r.end };
-			} else {
-				const lineEnd = visibleWidth(stripAnsi(this.selLineText(p.scope, p.docIdx)));
-				s.mselAnchor = anchor;
-				s.mselFocus = { scope: p.scope, docIdx: p.docIdx, col: before ? 0 : lineEnd };
-			}
-		} else {
-			s.mselFocus = p;
-		}
 	}
 
 	/** 自动滚方向判定（T9）：按选区 scope 的窗口界——压上边缘 -1 / 压下边缘 +1 / 界内 0。 */
@@ -635,12 +613,12 @@ export class FullApp {
 				return;
 			}
 		}
-		this.extendSelection(dragPointer.x, dragPointer.y); // 指针重映射：start 变了映射点随行
+		this.select.extendSelection(dragPointer.x, dragPointer.y); // 指针重映射：start 变了映射点随行
 		this.scheduler.requestImmediateRender();
 	}
 
 	/** 停自动滚（T9）：松开/回界内/滚到头/窗关闭四路共用。 */
-	private stopAutoScroll(): void {
+	stopAutoScroll(): void {
 		const s = this.state;
 		if (s.autoScrollTimer !== undefined) {
 			clearInterval(s.autoScrollTimer);
@@ -651,6 +629,17 @@ export class FullApp {
 	}
 
 	// ---------- 滚动条（T10——kimi :1037-1052 命中 / :1115-1118 跳位 / :1075-1078 拖动映射） ----------
+
+	/** 选区族测试探针（fullapp.test.ts 经 as-cast 直取的两件——体已出仓 fullapp-select.ts，壳留委托）。 */
+	pointToDoc(x: number, y: number): { docIdx: number; col: number } | undefined {
+		return this.select.pointToDoc(x, y);
+	}
+
+	/** 同上——selectionText（拖选复制断言驱动口）。 */
+	selectionText(): string | undefined {
+		return this.select.selectionText();
+	}
+
 
 	/** 查看窗键让位判定（走查④）：查看窗注册了该键 → 窗内优先——Alt+E/O/F 等内容键落到查看窗
 	 *  自己的 keys 分发（子代理消息窗的内容快捷键与主窗一致），主窗全局段不拦截（穿透到
@@ -748,149 +737,6 @@ export class FullApp {
 		this.state.scrollBack = Math.max(0, Math.min(Math.max(0, dmTotal - streamH), dmTotal - streamH - first));
 	}
 
-	/** 拖动点钳制（T8）：按当前选区 scope 钳在对应窗口边界——view 钳查看窗盒、main 钳主流区。 */
-	private clampedSelPoint(x: number, y: number): { scope: "main" | "view"; docIdx: number; col: number } | undefined {
-		if (this.state.mselAnchor?.scope === "view") {
-			const pu = this.pendingUi;
-			if (pu?.kind !== "view") return undefined;
-			const geo = this.dialogs.viewGeo(pu.layout);
-			const cx = Math.max(geo.col, Math.min(geo.col + geo.width - 1, x));
-			const cy = Math.max(geo.row + 1, Math.min(geo.row + geo.height - 1, y)); // 顶框让位
-			return (() => { const p = this.pointToView(cx, cy); return p === undefined ? undefined : { scope: "view" as const, ...p }; })();
-		}
-		const { streamH, leftW } = this.layoutFrame();
-		const p = this.pointToDoc(Math.min(x, leftW - 1), Math.max(0, Math.min(streamH - 1, y)));
-		return p === undefined ? undefined : { scope: "main", ...p };
-	}
-
-	/** 选区行文本（T8 scope 感知）：main → doc（含 tailLine）；view → pu.lines。
-	 *  窗口化（T5）：doc 是窗口局部数组——全局下标 − start 取局部（窗口外回退空串）。 */
-	private selLineText(scope: "main" | "view", idx: number): string {
-		if (scope === "view") {
-			const pu = this.pendingUi;
-			return pu?.kind === "view" ? (pu.lines[idx] ?? "") : "";
-		}
-		const { start, doc } = this.layoutFrame();
-		return doc[idx - start] ?? "";
-	}
-
-	/** 指针 → 查看窗内容行列（T8）：viewGeo 盒内才命中；行索引随渲染 sc 同源（滚动平移天然稳定）；
-	 *  盒内衬 = │ + 空格共 2 列。 */
-	private pointToView(x: number, y: number): { docIdx: number; col: number } | undefined {
-		const pu = this.pendingUi;
-		if (pu?.kind !== "view") return undefined;
-		const geo = this.dialogs.viewGeo(pu.layout);
-		if (y < geo.row || y >= geo.row + geo.height || x < geo.col || x >= geo.col + geo.width) return undefined;
-		const page = Math.max(3, geo.height - 3);
-		pu.viewPage = page; // 渲染期回写——翻页/滚轮页大小与窗几何同源（dock 不走 viewGeo，m4-7 走查修）
-		const maxScroll = Math.max(0, pu.lines.length - page);
-		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll));
-		const row = y - geo.row - 1; // 顶框占 1 行
-		if (row < 0 || row >= page) return undefined;
-		const idx = sc + row;
-		if (idx >= pu.lines.length) return undefined;
-		return { docIdx: idx, col: Math.max(0, x - geo.col - 2) };
-	}
-
-	/** 连击计数（T6——kimi getClickCount :1233-1257）：500ms 窗口内 + 同行 + 同词边界才 +1
-	 *  （1→2→3 循环）；点到空白/流区外连击不记。 */
-	private clickCount(point: { docIdx: number; col: number } | undefined, word: { start: number; end: number } | undefined): number {
-		const s = this.state;
-		const lc = s.lastClick;
-		const now = Date.now();
-		if (point !== undefined && word !== undefined && lc !== undefined
-			&& now - lc.at <= DOUBLE_CLICK_INTERVAL_MS
-			&& lc.docIdx === point.docIdx
-			&& lc.wordStart === word.start && lc.wordEnd === word.end) {
-			const count = (lc.count % 3) + 1;
-			s.lastClick = { at: now, count, docIdx: point.docIdx, wordStart: word.start, wordEnd: word.end };
-			return count;
-		}
-		s.lastClick = point !== undefined && word !== undefined
-			? { at: now, count: 1, docIdx: point.docIdx, wordStart: word.start, wordEnd: word.end }
-			: undefined; // 空白/流区外——连击状态清空
-		return 1;
-	}
-
-	/** 指针屏坐标 → doc 行列（T5——与 renderFrame 同源几何 layoutFrame；左内衬 2 列）。 */
-	private pointToDoc(x: number, y: number): { docIdx: number; col: number } | undefined {
-		const { streamH, start, dmTotal, leftW } = this.layoutFrame();
-		if (y < 0 || y >= streamH) return undefined; // 流区外（输入框/队列区）→ 不选
-		if (x >= leftW) return undefined; // 右侧面板与流区同 y 段，按 x 排除（侧栏按下 = 清选区不建幻影锚点）
-		const idx = start + y;
-		if (idx >= dmTotal) return undefined;
-		return { docIdx: idx, col: Math.max(0, x - 2) };
-	}
-
-	/** 选区端点排序（anchor/focus → lo/hi）。 */
-	private mselRange(): { lo: { scope: "main" | "view"; docIdx: number; col: number }; hi: { scope: "main" | "view"; docIdx: number; col: number } } | undefined {
-		const { mselAnchor: a, mselFocus: f } = this.state;
-		if (a === undefined || f === undefined) return undefined;
-		if (a.docIdx < f.docIdx || (a.docIdx === f.docIdx && a.col <= f.col)) return { lo: a, hi: f };
-		return { lo: f, hi: a };
-	}
-
-	/** 选区纯文本提取（kimi getActiveSelectionText :1432-1454 同构）：逐行 sliceByColumn（ANSI 感知）
-	 *  + stripAnsi + trimEnd；行源按 scope（T8：view → pu.lines、main → doc）；空选区/全空白 → undefined。 */
-	private selectionText(): string | undefined {
-		const r = this.mselRange();
-		if (r === undefined) return undefined;
-		const lines: string[] = [];
-		for (let i = r.lo.docIdx; i <= r.hi.docIdx; i++) {
-			const line = this.selLineText(r.lo.scope, i);
-			const startCol = i === r.lo.docIdx ? r.lo.col : 0;
-			const endCol = i === r.hi.docIdx ? r.hi.col : visibleWidth(line);
-			lines.push(stripAnsi(sliceByColumn(line, startCol, Math.max(0, endCol - startCol))).trimEnd());
-		}
-		const text = lines.join("\n");
-		return text.trim() === "" ? undefined : text;
-	}
-
-	/** 渲染行按选区反白（T5——theme.inverse 与输入框选区 styleWithSelection 同手法；
-	 *  入参是已带内衬的渲染行，列区间 +2 对齐；scope 匹配才作用〔T8——主窗/查看窗各自渲染〕）。 */
-	private styleDocSelection(scope: "main" | "view", docIdx: number, renderedLine: string): string {
-		const r = this.mselRange();
-		if (r === undefined || r.lo.scope !== scope) return renderedLine;
-		if (docIdx < r.lo.docIdx || docIdx > r.hi.docIdx) return renderedLine;
-		const lineStart = docIdx === r.lo.docIdx ? r.lo.col + 2 : 0;
-		const lineEnd = docIdx === r.hi.docIdx ? r.hi.col + 2 : visibleWidth(renderedLine);
-		if (lineEnd <= lineStart) return renderedLine;
-		const left = sliceByColumn(renderedLine, 0, lineStart);
-		const mid = sliceByColumn(renderedLine, lineStart, lineEnd - lineStart);
-		const right = sliceByColumn(renderedLine, lineEnd, Math.max(0, visibleWidth(renderedLine) - lineEnd));
-		return left + theme.inverse(mid) + right;
-	}
-
-	/** 选区一致性守卫（T8）：scope=view 的选区只在查看窗在位时有效——窗关闭首帧即整组清空
-	 *  （防行索引残留误映射下一窗内容）；并同步停自动滚（T9——否则拖着选区关窗后 50ms 脉冲
-	 *  继续跑、按主窗几何对空气重映射）。 */
-	private selectionGuard(): void {
-		const s = this.state;
-		if ((s.mselAnchor?.scope ?? s.mselFocus?.scope) === "view" && this.pendingUi?.kind !== "view") {
-			s.mselAnchor = undefined;
-			s.mselFocus = undefined;
-			this.stopAutoScroll();
-		}
-	}
-
-	/** 选区复制结算（决策点 8）：真剪贴板优先（paste.ts 三平台），失败落 OSC 52 逃生口再提示。 */
-	private copySelection(text: string): Promise<void> {
-		return this.writeClipboardSettle(text, `已复制 ${text.split("\n").length} 行`);
-	}
-
-	/** 剪贴板写入结算（真剪贴板优先，失败落 OSC 52 逃生口再提示）——拖选松开（m5 T5）与
-	 *  输入框 Ctrl+C（2026-09-30）共用同一条降级路。 */
-	private async writeClipboardSettle(text: string, okMsg: string): Promise<void> {
-		const write = this.io.writeClipboard ?? writeClipboardText;
-		const ok = await write(text);
-		if (ok) {
-			this.showToast(okMsg);
-		} else {
-			this.term.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
-			this.showToast("已发终端复制口令（系统剪贴板未确认）");
-		}
-	}
-
 	/** 输入框键盘选区复制（2026-09-30 用户拍板）：Ctrl+C 只在「输入框有高亮选区」时消费——
 	 *  WT 自有鼠标选区时会先截走 Ctrl+C、\x03 不到达应用，两层天然互斥、不抢 WT 原生复制；
 	 *  无选区维持吞键现状（退出走 /quit、停生成双击 Esc 的 2026-09-23 拍板不动）。 */
@@ -898,29 +744,7 @@ export class FullApp {
 		const r = this.selRange();
 		if (r === undefined) return;
 		const text = this.state.input.slice(r.lo, r.hi);
-		await this.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
-	}
-
-	/** 键盘选区与拖选选区互斥（2026-09-30 拍板：任一时刻屏幕最多一块高亮）：输入框键盘选区诞生
-	 *  （Ctrl+A / Shift+←→ 首拍）即清对话流拖选残留高亮——Ctrl+C 复制的永远是「看到的那块」。 */
-	private clearStreamSelection(): void {
-		const s = this.state;
-		if (s.mselAnchor === undefined && s.mselFocus === undefined) return;
-		s.mselAnchor = undefined;
-		s.mselFocus = undefined;
-		this.stopAutoScroll();
-	}
-
-	/** 打开链接（T7 决策点 17）：只开 http/https——链接文本来自模型输出，file:// 等方案
-	 *  拒开是注入面防线；toast 文案族（设计空白 6）。 */
-	private async openLink(url: string): Promise<void> {
-		if (!/^https?:\/\//i.test(url)) {
-			this.showToast("仅支持打开 http/https 链接");
-			return;
-		}
-		const open = this.io.openUrl ?? openUrl;
-		const ok = await open(url);
-		this.showToast(ok ? "已打开链接" : "打开链接失败");
+		await this.select.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
 	}
 
 	private onKey(key: string): void {
@@ -1613,7 +1437,7 @@ export class FullApp {
 			case "ctrl+a":
 				s.selAnchor = 0;
 				s.cursor = s.input.length;
-				this.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板：屏幕最多一块高亮）
+				this.select.clearStreamSelection(); // 键盘选区诞生清拖选高亮（2026-09-30 拍板：屏幕最多一块高亮）
 				break;
 			case "shift+left":
 				this.moveCursor(-1, true);
@@ -1783,7 +1607,7 @@ export class FullApp {
 	 *  m5-render-perf T5 窗口化：不再持有全量行数组——dmTotal = 宿主总行数 + 尾行 1，
 	 *  doc = 视口窗口（streamH + 余量 streamH，设计空白 #6 视口×2），start 语义不变（全局首行
 	 *  下标）；消费面全部走「dmTotal 当总长 / doc 局部下标 = 全局下标 − start」。 */
-	private layoutFrame(): {
+	layoutFrame(): {
 		cols: number; rows: number; leftW: number; streamH: number; start: number;
 		dmTotal: number; doc: string[]; inputRows: InputRow[]; cursorPos: { row: number; col: number };
 		showRows: number; queue: string[]; queueH: number;
@@ -1865,7 +1689,7 @@ export class FullApp {
 	}
 
 	private renderFrameInner(): number {
-		this.selectionGuard(); // T8：关窗首帧清 scope=view 残留选区
+		this.select.selectionGuard(); // T8：关窗首帧清 scope=view 残留选区
 		const { cols, rows, leftW, streamH, start, dmTotal, doc, inputRows, cursorPos, showRows, queue, queueH } = this.layoutFrame();
 		const s = this.state;
 
@@ -1884,7 +1708,7 @@ export class FullApp {
 			// = streamW − 2，前导 2 空格后恰 = leftW 不截尾；空行也垫，块状整体右移保持对齐；
 			// 选区行反白合入（m5 鼠标批 T5）。窗口化（T5）：doc[r] 即全局 start+r 行（窗口从 start 起）
 			const raw = doc[r] === undefined ? "" : `  ${doc[r]!}`;
-			screen[r] = padToWidth(this.styleDocSelection("main", start + r, raw), leftW);
+			screen[r] = padToWidth(this.select.styleDocSelection("main", start + r, raw), leftW);
 		}
 		// 滚动条（T10）：内容超一屏才显示——右缘 1 列轨道/拇指；文字截在 leftW−2、与轨道间
 		// 空 1 列（2026-09-27 用户走查两轮定稿：先一个字（2 列）、后收窄为 1 列——满宽行不贴轨道）。
@@ -2040,7 +1864,7 @@ export class FullApp {
 			// 前导空格算进截断预算（oInner−3）：满宽文字 + 前导空格恰占满内容区——与主窗
 			// 212e891「截断与 pad 同目标」恒宽口径一致（原截 oInner−2 靠 padToWidth 转截断兜底）
 			const raw = " " + truncateToWidth(win[i]!, oInner - 3);
-			const styled = this.styleDocSelection("view", sc + i, raw);
+			const styled = this.select.styleDocSelection("view", sc + i, raw);
 			if (vthumb !== undefined) {
 				const onThumb = i >= vthumb.top && i < vthumb.top + vthumb.height;
 				// 轨道格 = 深底空格、拇指 = █（2026-09-27 用户走查二轮：dim │ 细竖线字形上下有留缝、
