@@ -29,7 +29,7 @@ import { ringTurnBell } from "./bell.ts";
 import { resolveBellMode, playTurnChime } from "./chime.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
-import { FullApp, type PanelData, type PanelNetwork, type SlashItem, msText } from "./tui/fullapp.ts";
+import { FullApp, type PanelData, type SlashItem, msText } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView, type ProviderEntry } from "@orosus/provider-custom";
@@ -54,17 +54,13 @@ import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, model
 import { ctxUsageText, diskUsageText, lastRequestMsOf, lastUsageOf, runtimeStatusText, shortenPath, tokenUsageText } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, runVisionSetting, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
+import { isEsc, mcpConnRows, openMcpLine, openMcpPanel, type McpUiDeps } from "./mcp-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
-import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
-import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
-import { openMcpAddWindow } from "./mcp-add-window.ts";
-import type { McpCatalogRow } from "@orosus/mcp";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag } from "./tuicfg.ts";
-import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
 import { maybeEnableEnvProxy, envProxyUrl, proxyDisplayText, readWindowsSystemProxy, detectTunProxy } from "./proxy-env.ts";
 
@@ -516,6 +512,17 @@ const sessionDeps: SessionDeps = {
   resetLastEventId: () => { lastEventId = undefined; },
   isFullscreen: () => tuiMode === "full",
   deferEcho: () => { pendingEcho = { notice: "", history: true }; },
+};
+/** MCP 面板族依赖（m5-split-main T6，D2）：reload 收尾链与全屏/行模式访问器穿给 mcp-ui.ts
+ *  （闭包现读——refreshPanel/refreshSkillMenu 等定义在本文件后段，调用期恒已初始化）。 */
+const mcpDeps: McpUiDeps = {
+  getH: () => h,
+  commandUi,
+  activeModuleNames: () => activeModuleNames(),
+  closeGoneModuleUi: (before) => closeGoneModuleUi(before),
+  refreshSkillMenu: () => refreshSkillMenu(),
+  refreshPanel: () => refreshPanel(),
+  getActiveApp: () => activeApp,
 };
 try {
   h = await createSession(sessionDeps);
@@ -1265,36 +1272,6 @@ const openSkillsLine = async (out: (s: string) => void): Promise<void> => {
 	}
 };
 
-const isEsc = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
-
-// ---------- MCP 管理面（m4-3c T17——列表四段行 / 详情六字段 / Alt + K 启停 / d 两拍删除 / Alt + N 添加窗） ----------
-
-/** mcp.catalog 服务现取（模块未启用 = 空表——面板给指路文案）。 */
-const mcpCatalogRows = async (): Promise<McpCatalogRow[]> => {
-	const catalog = await h.graph().services.getOptional("mcp.catalog");
-	return typeof catalog === "function" ? (catalog as () => McpCatalogRow[])() : [];
-};
-let mcpPanelCatalog: (() => McpCatalogRow[]) | undefined; // 面板期缓存上一轮服务值（runMcpCommand 同步消费）
-const mcpWarmCatalog = (): void => {
-	void h.graph().services.getOptional("mcp.catalog").then((cat) => { mcpPanelCatalog = typeof cat === "function" ? (cat as () => McpCatalogRow[]) : undefined; }).catch(() => undefined);
-};
-/** 面板版命令依赖（catalog 服务现取——启停与删除共用 /mcp 命令族的写盘与守卫）。 */
-const mcpPanelDeps = (): McpCmdDeps => ({ ...defaultMcpCmdDeps(), ...(mcpPanelCatalog !== undefined ? { catalogRows: mcpPanelCatalog } : {}) });
-
-// ---------- 「网络 · MCP」卡供数（2026-10-01 拍板填实：被动真值——首连耗时/末次请求耗时，不做主动探测） ----------
-
-/** mcp.catalog 服务行 → 卡连接行投影（五态原文照传，渲染期映射点色；说明段 = 传输型 + 工具数）。 */
-const mcpConnRows = (): PanelNetwork["connections"] => {
-	mcpWarmCatalog(); // panelData 每秒 tick 现读——顺带保温服务缓存（模块未启用 = 空表）
-	const rows = mcpPanelCatalog?.() ?? [];
-	return rows.map((r) => ({
-		name: r.name,
-		state: r.state,
-		desc: `${r.transport === "http" ? "HTTP" : "stdio"}${r.toolCount !== undefined ? ` · ${r.toolCount} 工具` : ""}`,
-		...(r.state === "connected" && r.connectMs !== undefined ? { connectMs: r.connectMs } : {}),
-	}));
-};
-
 /** provider 条目表 TTL 缓存（skillMenu 5s 同款惯例——/provider 菜单改端点后最迟 5s 反映到卡）。 */
 let providersCache: { at: number; providers: Record<string, ProviderEntry> } | undefined;
 const providersTtl = async (): Promise<Record<string, ProviderEntry>> => {
@@ -1323,211 +1300,6 @@ const modelServiceOf = async (events: SessionEvent[]): Promise<string> => {
 	const lastMs = lastRequestMsOf(events);
 	return lastMs === undefined ? host : `${host} · 末次 ${msText(lastMs)}`;
 };
-/** 配置文件里的原表值（修改窗预填——名称锁定的真身）。 */
-const configuredMcpServer = (name: string): Record<string, unknown> => {
-	try {
-		const p = defaultMcpCmdDeps().configPath();
-		const doc = tomlParse(readFileSync(p, "utf8").replace(/^\uFEFF/, "")) as { mcp?: { servers?: Record<string, Record<string, unknown>> } };
-		return doc.mcp?.servers?.[name] ?? {};
-	} catch { return {}; }
-};
-/** MCP 写配置后的收尾（同 afterSkillToggle 口径）：空闲重载生效、busy 缓后 toast。 */
-const afterMcpWrite = (app: FullApp | undefined, doneText: string): string => {
-	if (app === undefined || !app.stateRef.busy) {
-		void (async () => {
-			try {
-				const namesBefore = activeModuleNames();
-				await h.reload();
-				closeGoneModuleUi(namesBefore);
-				registerToolLabels(h.graph().tools.toolInfos());
-				void refreshSkillMenu();
-				await refreshPanel();
-			} catch (err) {
-				(app ?? activeApp)?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
-			}
-		})();
-		return doneText;
-	}
-	return `${doneText} · 有任务在执行，稍后请输入 /reload 重新加载`;
-};
-const runMcpToggle = async (app: FullApp | undefined, row: McpCatalogRow): Promise<string> => {
-	// 懒 server 的「启动」语义（2026-09-30「待启动态按启停=被停用」陷阱修）：待启动/首启失败的预装件，
-	// 用户按 Alt + K 的意图是「启动它」不是「停用它」——触发手动连接（mcp.start 服务；与首调共用
-	// memoized 连接，schema 补丁/落盘缓存照常走）。停用路径留给已连接态与停用态翻转。
-	if (row.deferred === true && (row.state === "idle" || row.state === "failed")) {
-		if (app === undefined) return "";
-		try {
-			const start = await h.graph().services.getOptional("mcp.start");
-			if (typeof start !== "function") {
-				app.showToast("mcp 模块未提供启动口——重启 CLI 后再试");
-				return "";
-			}
-			app.showToast(`正在启动 ${row.name}（首次可能需要下载，最长 60 秒）…`);
-			await (start as (name: string) => Promise<void>)(row.name);
-			app.showToast(`已连接 ${row.name}——工具就绪`);
-		} catch (err) {
-			app.showToast(`启动 ${row.name} 失败：${err instanceof Error ? err.message : String(err)}`);
-		}
-		return "";
-	}
-	const enable = row.state === "disabled";
-	const r = await runMcpCommand(`${enable ? "on" : "off"} ${row.name}`, mcpPanelDeps());
-	row.state = enable ? (row.source === "preload" ? "idle" : "failed") : "disabled"; // 重载前乐观翻转（重载后 catalog 重算）
-	return afterMcpWrite(app, r.text);
-};
-
-const openMcpPanel = async (app: FullApp): Promise<void> => {
-	let selAt = 0;
-	for (;;) {
-		mcpWarmCatalog();
-		const rows = await mcpCatalogRows();
-		const w = app.pickRowWidth();
-		const items = [
-			...rows.map((r) => mcpListRow(w, r)),
-			...(rows.length === 0 ? [theme.fg("muted", "（还没有 MCP server——按 Alt + N 或回车添加第一个）")] : []),
-		];
-		let addRequested = false;
-		const picked = await app.pickOverlay(
-			`MCP（${rows.length} 个 server${rows.length === 0 ? "" : " · 预装按需启动"}）`,
-			items,
-			selAt,
-			{
-				"alt+n": { label: "Alt + N 添加", run: (ctrl): boolean => { addRequested = true; ctrl.close(); return true; } },
-				"alt+k": { label: "Alt + K 启停", run: (): boolean => { app.showToast("列表页拿不准选中行——回车进详情再 Alt + K"); return true; } },
-			},
-		);
-		if (addRequested || (rows.length === 0 && picked !== undefined)) {
-			mcpWarmCatalog();
-			const existing = (await mcpCatalogRows()).map((r) => r.name);
-			openMcpAddWindow(app, {
-				mode: "add",
-				configPath: defaultMcpCmdDeps().configPath(),
-				existingNames: existing,
-				onSaved: (name) => { void afterMcpWrite(app, `已添加 ${name}（模块图重载中）`); },
-			});
-			continue; // 窗 Esc 关后循环重开列表（行集现取）
-		}
-		if (picked === undefined) return; // Esc → 回设置根列表
-		if (picked < 0 || picked >= rows.length) continue;
-		selAt = picked;
-		const row = rows[picked]!;
-		items[picked] = mcpListRow(w, row);
-		app.viewText(`${row.name} · MCP server`, mcpDetailText(w, row), { layout: "dock", keys: mcpDetailKeys(app, row, items, picked) });
-	}
-};
-
-/** 详情窗键位构造（T17 主循环与 T18 菜单直达共用）：Alt + K 启停 / Alt + N 修改 / d 两拍删除。 */
-const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked: number): Record<string, import("@orosus/contracts/module").PopupKey> => {
-	let deleteArm = false;
-	let detailMsg = "";
-	const w = app.pickRowWidth();
-	const detail = (): string => (detailMsg === "" ? mcpDetailText(w, row) : `${mcpDetailText(w, row)}\n${theme.fg("muted", detailMsg)}`);
-	return {
-		"alt+k": {
-			label: "Alt + K 启停",
-			run: (): string => {
-				void runMcpToggle(app, row).then((t) => { if (t !== "") app.showToast(t); });
-				items[picked] = mcpListRow(w, row);
-				return detail();
-			},
-		},
-		"alt+n": {
-			label: "Alt + N 修改",
-			run: (): string => {
-				if (row.source !== "config") {
-					detailMsg = row.source === "project"
-						? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
-						: "预装 server 不可修改——只能停用（Alt + K）";
-					return detail();
-				}
-				mcpWarmCatalog();
-				openMcpAddWindow(app, {
-					mode: "edit",
-					row,
-					original: configuredMcpServer(row.name),
-					configPath: defaultMcpCmdDeps().configPath(),
-					existingNames: [],
-					onSaved: (name) => { void afterMcpWrite(app, `已修改 ${name}（模块图重载中）`); },
-				});
-				return detail();
-			},
-		},
-		// d 删除只挂手写条目（2026-09-30 用户拍板「预装不允许删除」）：预装/项目行不注册 d——
-		// 键位行不显示、按下走浮层默认键（不引导尝试；详情文本另有「只能停用不能删除」说明行）
-		...(row.source === "config" ? {
-			d: {
-				label: "d 删除",
-				run: (): string => {
-					if (!deleteArm) {
-						deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
-						detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
-						return detail();
-					}
-					void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
-						const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
-						if (t !== "") app.showToast(t);
-					});
-					return "close";
-				},
-			},
-		} : {}),
-		t: {
-			// 确认信任（2026-09-30 /mcp 命令退役后确认门的新家）：仅未确认态生效——核对指纹后按 t
-			// 写 mcp-trust.json 并重载连接；其余态按下无感（键位行恒定防闪烁——标签只随未确认态显示提示）
-			label: row.state === "pending-confirm" ? "t 确认" : "",
-			run: (): string => {
-				if (row.state !== "pending-confirm") return detail();
-				void runMcpCommand(`trust ${row.name}`, mcpPanelDeps()).then((r) => {
-					const t = r.wrote ? afterMcpWrite(app, r.text) : r.text;
-					if (t !== "") app.showToast(t);
-				});
-				return "close"; // 确认即收窗回列表（重载后状态翻绿）
-			},
-		},
-	};
-};
-
-/** 行模式对等件（m4-3c T17）：列表 choose → 详情直出 → 动作菜单。 */
-const openMcpLine = async (out: (s: string) => void): Promise<void> => {
-	for (;;) {
-		mcpWarmCatalog();
-		const rows = await mcpCatalogRows();
-		const w = 76;
-		const items = [...rows.map((r) => mcpListRow(w, r)), ...(rows.length === 0 ? ["（还没有 MCP server——添加用 /mcp add 名字 命令或URL）"] : [])];
-		let picked: number;
-		try {
-			const chosen = await commandUi.choose("MCP（回车查看详情）", items);
-			picked = items.indexOf(chosen);
-		} catch (err) {
-			if (isEsc(err)) return;
-			throw err;
-		}
-		if (picked < 0) return;
-		if (rows.length === 0 || picked >= rows.length) continue;
-		const row = rows[picked]!;
-		out(mcpDetailText(w, row));
-		try {
-			const actions = [row.state === "disabled" ? "启用（Alt + K 同款）" : "停用（Alt + K 同款）"];
-			if (row.state === "pending-confirm") actions.push("确认（信任 t 键同款）");
-			if (row.source === "config") actions.push("删除");
-			actions.push("返回列表");
-			const action = await commandUi.choose(row.name, actions);
-			if (action === "启用（Alt + K 同款）" || action === "停用（Alt + K 同款）") {
-				out(await runMcpToggle(undefined, row));
-			} else if (action === "确认（信任 t 键同款）") {
-				const r = await runMcpCommand(`trust ${row.name}`, mcpPanelDeps());
-				out(r.wrote ? afterMcpWrite(undefined, r.text) : r.text);
-			} else if (action === "删除") {
-				const r = await runMcpCommand(`remove ${row.name}`, mcpPanelDeps());
-				out(r.wrote ? afterMcpWrite(undefined, r.text) : r.text);
-			}
-		} catch (err) {
-			if (err instanceof Error && err.message === "已取消（Esc）") continue;
-			throw err;
-		}
-	}
-};
-
 const openSettingsPanel = async (app: FullApp): Promise<void> => {
 	// 子菜单/子窗 Esc 返回根列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：根列表本身的 Esc = 收面。
 	// 只读子窗走 /tasks 同款 FIFO——viewText 占槽期循环重入的 pickOverlay 排队，关窗即自动顶上回根列表
@@ -1568,7 +1340,7 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 			}
 		}
 		else if (picked === 5) await openSkillsPanel(app); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
-		else if (picked === 6) await openMcpPanel(app); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
+		else if (picked === 6) await openMcpPanel(app, mcpDeps); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
 		else if (picked === 7) {
 			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
 			try {
@@ -1637,7 +1409,7 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 			}
 		}
 		else if (idx === 5) await openSkillsLine(out);
-		else if (idx === 6) await openMcpLine(out);
+		else if (idx === 6) await openMcpLine(out, mcpDeps);
 		else if (idx === 7) {
 			try {
 				const res = await runVisionSetting(async (t, items) => commandUi.choose(t, items), () => moduleConfigFileFor("tool-media", h));
@@ -1986,7 +1758,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         permissionNext: () => "/permission ask-always",
       }),
       cards: moduleCards(), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
-      network: panelCache?.network === undefined ? undefined : { ...panelCache.network, connections: mcpConnRows() }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
+      network: panelCache?.network === undefined ? undefined : { ...panelCache.network, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
     }),
     slashCommands: () => SLASH_ITEMS,
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
