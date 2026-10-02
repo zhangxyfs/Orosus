@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { defineModule, type LlmPort } from "@orosus/contracts/module";
 import type { ModelMessage } from "@orosus/contracts/provider";
@@ -20,6 +21,19 @@ export const configSchema = z.object({
 /** 图按固定字符估算（m5-media D9，pi ESTIMATED_IMAGE_CHARS=4800 同源）：阈值判定启发式——降采样后的
  *  视觉图换算 token ≈ 1200（/4 字符口径）；工具结果图（m5-media F1 toolResult.parts）同口径计入。 */
 export const ESTIMATED_IMAGE_CHARS = 4800;
+
+/** 压缩剥图占位（m5-media F13：与 core/convert.ts imageOmittedText 双写逐字一致——同名 .summary.txt
+ *  视觉摘要缓存在场则附；无缓存纯路径占位。dualwrite.test 钉两侧逐字节一致）。 */
+function imageOmittedText(path: string): string {
+  const base = `[image omitted during compaction: ${path}]`;
+  try {
+    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    return t === "" ? base : `${base}
+[视觉摘要] ${t.slice(0, 500)}`;
+  } catch {
+    return base;
+  }
+}
 
 /** token 估算（启发式，只用于阈值触发，不进日志事实）：CJK 按近似 1:1，其余 4 字符/token。 */
 export function estimateTokens(messages: ModelMessage[]): number {
@@ -83,7 +97,7 @@ function stripImages(m: ModelMessage): ModelMessage {
   return {
     ...m,
     content: m.content.map((p) => p.kind === "image"
-      ? { kind: "text" as const, text: `[image omitted during compaction: ${p.path}]` }
+      ? { kind: "text" as const, text: imageOmittedText(p.path) }
       : p),
   };
 }
