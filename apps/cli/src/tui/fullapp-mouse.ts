@@ -40,8 +40,8 @@ export function createMouse(app: FullApp) {
 		} else if (pu !== undefined) {
 			return; // ask——没有可滚面
 		} else if (s.overlayOpen) {
-			const items = app.overlayItems();
-			s.overlaySel = app.selToSelectable(items, s.overlaySel + (up ? -lines : lines));
+			const items = app.menu.overlayItems();
+			s.overlaySel = app.menu.selToSelectable(items, s.overlaySel + (up ? -lines : lines));
 		} else if (s.diagOpen) {
 			const entries = app.io.diagEntries?.() ?? [];
 			s.diagSel = Math.max(0, Math.min(Math.max(0, entries.length - 1), s.diagSel + (up ? -lines : lines)));
