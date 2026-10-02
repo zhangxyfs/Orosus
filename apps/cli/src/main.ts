@@ -35,11 +35,11 @@ import * as theme from "./theme.ts";
 
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView, type ProviderEntry } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
-import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
+import { persistVisionModel } from "@orosus/tool-media";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { readFileSync, existsSync } from "node:fs";
-import { pasteImage, imagesFor, extractImageRefs, PASTE_EMPTY, imageChipLabel, readClipboardText } from "./paste.ts";
+import { imagesFor, extractImageRefs, PASTE_EMPTY, readClipboardText } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
@@ -54,6 +54,7 @@ import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { ctxUsageText, diskUsageText, lastRequestMsOf, lastUsageOf, runtimeStatusText, shortenPath, tokenUsageText } from "./usage-text.ts";
+import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, runVisionSetting, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
 import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
@@ -592,14 +593,6 @@ const settingsService: SettingsService = {
 };
 
 let h: Awaited<ReturnType<typeof createSession>>;
-/** Alt+V 取图落点（m5-media F8）：当前会话媒资库 <sid>/media/（随桶清理）；会话未就绪/切换中回落旧 tmp 位。 */
-const pasteImageToMedia = (): Promise<{ file: string } | undefined> => {
-  try {
-    return pasteImage(join(sessionsDir, h.sessionId, "media"));
-  } catch {
-    return pasteImage();
-  }
-};
 try {
   h = await createSession();
 } catch (err) {
@@ -662,24 +655,14 @@ if (args.print === undefined && process.stdin.isTTY && !willFullscreen) {
 // 事件渲染：会话日志的实时投影（append 即转发，§6.7）；lastEventId 供 /fork 选分叉点
 // 渲染面抽至 render.ts（M3 补强 T8：压缩/裁剪可见性 + 可测性注入）
 let lastEventId: string | undefined;
-// Alt + V 挂起的图片注册表（2026-09-23 走查拍板重构）：seq → 文件（序号会话内累计）；
-// chip [image #N (宽×高)] 全屏期是输入框文内 token（光标位插入、可删），行模式期是挂起序号列
-//（pendingLineSeqs——行模式输入不经 token）。提交时从文本 token/行模式列收集 seq → 查表取文件。
-const pendingImageFiles = new Map<number, string>();
-let pendingLineSeqs: number[] = [];
-let imageSeq = 0;
-const attachPendingImage = (file: string): string => {
-  imageSeq++;
-  pendingImageFiles.set(imageSeq, file);
-  return imageChipLabel(imageSeq, file);
-};
 // Alt+V 按键粘贴（TUI 批 T5）：keypress 多播拦截——与敲 /paste 完全同效；非 TTY 不挂（按键零处理）。
 // keypress 事件发在输入流上（emitKeypressEvents(process.stdin)，与 rl.input 同一对象）；
 // rl.line/rl.cursor 运行时可写（readline 公开属性）——@types/node 的 promises 变体声明为 readonly，窄化断言
+// （挂起图片注册表与序号列随视觉族迁 vision-media.ts——m5-split-main T4；此处经访问器/注入闭包读写）
 attachAltVPaste({
   input: process.stdin,
   isTTY: process.stdin.isTTY === true,
-  pasteImage: pasteImageToMedia,
+  pasteImage: () => pasteImageToMedia(sessionsDir, h.sessionId),
   write: (s) => lv.write(s),
   clearInputLine: () => {
     const w = rl as unknown as { line: string; cursor: number };
@@ -688,7 +671,7 @@ attachAltVPaste({
   },
   setPendingImage: (file) => {
     const label = attachPendingImage(file);
-    pendingLineSeqs.push(imageSeq); // 行模式无文内 token——挂起序号列（提交时并入）
+    pendingLineSeqsRef().push(imageSeqNow()); // 行模式无文内 token——挂起序号列（提交时并入）
     return label;
   },
   enabled: () => activeApp === undefined, // 全屏期 Alt+V 归 FullApp（F5 走查：此处直写 lv 毁屏）
@@ -1058,11 +1041,11 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
         const imgRefs = extractImageRefs(text);
         const textNoImg = imgRefs.cleaned;
-        const imgSeqs = [...pendingLineSeqs, ...imgRefs.seqs];
+        const imgSeqs = [...pendingLineSeqsRef(), ...imgRefs.seqs];
         const imgs = imgSeqs.map((q) => pendingImageFiles.get(q)).filter((f): f is string => f !== undefined);
         // 转述等待期不收第二条（走查四——单等待口：并发提交会在 harness 单并发守卫炸「已有进行中的
         // turn」丢消息；双 Esc 可中止后重发）
-        if (visionWaitAbort !== undefined) {
+        if (visionTranscribing()) {
           notify("视觉转述进行中——稍候再发（双击 Esc 可中止）");
           activeApp?.restoreInput(text);
           return "again";
@@ -1081,7 +1064,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           const modelNow = realReadModel(process.cwd())() ?? "";
           const catalogAll = readCatalogDiskCache(defaultCatalogCacheFile()) ?? {};
           if (lookupModelVision(catalogAll, modelNow) === false) {
-            const eye = await eyeModelUsable(modelNow, catalogAll);
+            const eye = await eyeModelUsable(modelNow, catalogAll, h);
             if (eye.usable) {
               const eyeModel = eye.model ?? ""; // usable=true 恒带 model（三态解析同源）
               if (!isCmdLine && tuiMode === "full") {
@@ -1089,7 +1072,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
                 dm.visionTranscribeStart(eyeModel);
                 echoed = true;
               } else notify(`视觉模型 ${eyeModel} 转述图片中…`);
-              const res = await waitVisionTranscribe(imgs, tuiMode === "full" ? (d) => dm.visionDelta(d.kind, d.text) : undefined);
+              const res = await waitVisionTranscribe(imgs, tuiMode === "full" ? (d) => dm.visionDelta(d.kind, d.text) : undefined, h);
               if (res.state === "aborted") {
                 if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "aborted");
                 notify("已中止转述——消息未发出，输入与图片已回挂（重发即续：已生成的转述有缓存）");
@@ -1149,7 +1132,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           }),
         );
         for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
-        pendingLineSeqs = [];
+        resetPendingLineSeqs();
         // /provider 写盘后自动重载模块图（2026-09-24 走查 bug 前案：会话内新加平台不进激活槽——/settings 的
         // LLM 钉模型清单读活槽，不重载即缺席；「设为当前默认」写的顶层 provider 键同理随重载即时生效）；
         // 只在写盘结果后重载（取消与未写入不动图）
@@ -1202,112 +1185,6 @@ const SETTINGS_ITEMS = [
 ];
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
-/** 已配置槽的多模态模型清单（F14——§2.5 遮蔽坑免疫：按槽条目内**精确键**逐槽查，禁全目录尾段扫；
- *  live /models 出的目录外模型无法验视觉能力——不列〔诚实〕；目录缺席 = 空清单走空态指路）。 */
-const visionCandidates = async (): Promise<string[]> => {
-	const providers = await defaultMenuDeps().loadProviders();
-	const catalog = readCatalogDiskCache(defaultCatalogCacheFile()) ?? {}; // 与拦截段同源（provider-custom 盘上缓存口）
-	const out: string[] = [];
-	for (const slot of Object.keys(providers)) {
-		const entry = catalog[slot];
-		if (entry === undefined) continue;
-		for (const [key, m] of Object.entries(entry.models ?? {})) {
-			if (m.modalities?.input?.includes("image") === true) out.push(`${slot}/${key}`);
-		}
-	}
-	return out;
-};
-
-/** F14 视觉模型配置流（chooseVia = 子代理三件同款双态抽象）。D12 三态；写盘后 /reload 生效（模块配置）。 */
-const runVisionSetting = async (
-	chooseVia: (title: string, items: string[]) => Promise<string>,
-	configFile: () => string,
-): Promise<{ wrote: boolean; message: string }> => {
-	const cur = readVisionModel(configFile());
-	const curNote = cur === "off" ? "停用" : cur === "auto" ? "自动" : cur;
-	const OPTS = ["停用（默认——不生成视觉摘要，降级图只留路径标签）", "自动（当前模型支持图片时直接用它）", "指定模型（从已配置提供商的多模态模型中选）"];
-	const picked = await chooseVia(`配置视觉模型（当前：${curNote}）`, OPTS);
-	if (picked === OPTS[0]) {
-		persistVisionModel(configFile(), "off");
-		return { wrote: true, message: "已设为停用" };
-	}
-	if (picked === OPTS[1]) {
-		persistVisionModel(configFile(), "auto");
-		return { wrote: true, message: "已设为自动" };
-	}
-	const candidates = await visionCandidates();
-	if (candidates.length === 0) {
-		return { wrote: false, message: "已配置的提供商里没有目录可证的多模态模型——先 /provider 配置视觉模型所在的提供商（或给模型正确的目录名）" };
-	}
-	const model = await chooseVia("指定视觉模型（多模态模型 · 已按提供商过滤）", candidates);
-	persistVisionModel(configFile(), model);
-	return { wrote: true, message: `已指定视觉模型 ${model}` };
-};
-
-/** F14 眼睛模型可用性（发送闸旁路判定——与 tool-media/vision.ts eyeModelOf 同判定口径的 CLI 侧实读）：
- *  读 [tool-media] visionModel 三态：off=未配置；auto=当前模型视觉才可用（跨槽挑模块侧不可达，同收窄口径）；
- *  指定=槽已配置且目录**条目内精确键**证实多模态（遮蔽坑免疫）。configured=true 但 usable=false 时 why 带原因。 */
-const eyeModelUsable = async (
-  modelNow: string,
-  catalogAll: import("@orosus/provider-custom").Catalog,
-): Promise<{ configured: boolean; usable: boolean; model?: string; why?: string }> => {
-  const v = readVisionModel(moduleConfigFileFor("tool-media", h));
-  if (v === "off") return { configured: false, usable: false };
-  if (v === "auto") {
-    if (lookupModelVision(catalogAll, modelNow) === true) return { configured: true, usable: true, model: modelNow };
-    return { configured: true, usable: false, why: `auto 档且当前模型 ${modelNow || "（未配置）"} 非视觉` };
-  }
-  const slot = v.split("/")[0] ?? "";
-  const key = v.slice(slot.length + 1);
-  const providers = await defaultMenuDeps().loadProviders();
-  if (providers[slot] === undefined) return { configured: true, usable: false, why: `槽 "${slot}" 未配置` };
-  const mm = catalogAll[slot]?.models?.[key];
-  if (mm === undefined) return { configured: true, usable: false, why: `目录无 ${v}` };
-  if (mm.modalities?.input?.includes("image") !== true) return { configured: true, usable: false, why: `目录证实 ${v} 非多模态` };
-  return { configured: true, usable: true, model: v };
-};
-
-/** 扩展名 → 图片 mime（describe 参数用——贴图/媒资库件均按扩展名落盘）。 */
-const extImageMime = (path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
-  const e = path.slice(path.lastIndexOf(".")).toLowerCase();
-  return e === ".jpg" || e === ".jpeg" ? "image/jpeg" : e === ".webp" ? "image/webp" : e === ".gif" ? "image/gif" : "image/png";
-};
-
-/** 转述等待结果（走查四）：done=至少一图转述成功（text=逐图文本聚合）；failed=全失败/服务缺席
- *  （回落纯占位照发）；aborted=双 Esc 中止（不发送、输入回挂）。 */
-type VisionWaitResult = { state: "done"; text: string } | { state: "failed" } | { state: "aborted" };
-/** 转述等待中止口（模块级单等待——等待期二次提交被发送闸拦；fullapp 双击 Esc 经 io 触发）。 */
-let visionWaitAbort: (() => void) | undefined;
-
-/** 转述等待（可中止）：服务缺席静默回落 failed；底层 describe 调用不掐——中止后结果照常落
- *  .summary.txt（重发命中缓存零等待——「中止不白等」），占位富化最终一致口径不变。
- *  onDelta（A 案 2026-10-02 拍板）：流式增量喂 DocModel 转述活动块（思考/正文流式显示防卡死感）。 */
-const waitVisionTranscribe = async (imgs: string[], onDelta?: (d: { kind: "thinking" | "text"; text: string }) => void): Promise<VisionWaitResult> => {
-  const svc = await h.graph().services.getOptional("tool-media.vision-summary" as never).catch(() => undefined);
-  const describe = (svc as { describe?: (images: { path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" }[], onDelta?: (d: { kind: "thinking" | "text"; text: string }) => void) => Promise<{ path: string; text?: string }[]> } | undefined)?.describe;
-  const aborted = new Promise<{ state: "aborted" }>((resolve) => { visionWaitAbort = () => resolve({ state: "aborted" }); });
-  // live 旗（A 案泄漏口）：中止后底层调用不掐、增量还会来——迟到增量不得复活已清空的活动块
-  let live = true;
-  const feed = onDelta === undefined ? undefined : (d: { kind: "thinking" | "text"; text: string }) => { if (live) onDelta(d); };
-  try {
-    const raced: VisionWaitResult | undefined = describe === undefined
-      ? undefined
-      : await Promise.race([
-          describe(imgs.map((path) => ({ path, mimeType: extImageMime(path) })), feed)
-            .then((entries): VisionWaitResult => {
-              const texts = entries.map((x) => x.text).filter((t): t is string => t !== undefined && t !== "");
-              return texts.length > 0 ? { state: "done", text: texts.join("\n") } : { state: "failed" };
-            })
-            .catch((): VisionWaitResult => ({ state: "failed" })),
-          aborted,
-        ]);
-    return raced ?? { state: "failed" };
-  } finally {
-    live = false;
-    visionWaitAbort = undefined;
-  }
-};
-
 
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
  *  全屏走 app.pickOverlay（原生列表弹窗）；行模式走 commandUi.choose（readline）。
@@ -2190,9 +2067,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     requestCancel: () => {
       h.cancel(); // Esc 忙碌时取消当前 turn（SIGINT 同效——修复轮②）
     },
-    // 视觉转述等待期（走查四）：双击 Esc 中止口——visionWaitAbort 模块级单等待
-    visionTranscribing: () => visionWaitAbort !== undefined,
-    abortVisionTranscribe: () => { visionWaitAbort?.(); },
+    // 视觉转述等待期（走查四）：双击 Esc 中止口——vision-media.ts 模块级单等待（经访问器，m5-split-main T4）
+    visionTranscribing: () => visionTranscribing(),
+    abortVisionTranscribe: () => { abortVisionTranscribe(); },
     panelData: () => ({
       ...(panelCache ?? {
         model: "…",
@@ -2399,7 +2276,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // Alt + V 全屏接线（2026-09-23 修订）：取图 → chip token 插入输入框光标位；无图提示进流区
     requestPasteImage: () => {
       void (async () => {
-        const img = await pasteImageToMedia();
+        const img = await pasteImageToMedia(sessionsDir, h.sessionId);
         if (img === undefined) {
           notify(PASTE_EMPTY); // toast 化（2026-09-23 拍板）——无图提示不落流区
           return;
