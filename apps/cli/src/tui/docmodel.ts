@@ -45,7 +45,7 @@ type Entry =
 	| { k: "tool"; name: string; args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult; detail?: DiffRow[] | undefined; hl?: string[]; errLines?: string[]; cache?: { w: number; open: boolean; err: boolean; done: boolean; lines: string[] }; group?: { name: string; items: { args: Record<string, unknown> | undefined; callId?: string; result?: ToolResult }[] } } // 工具条目（2026-09-23 走查批：Edit/Write diff + 失败体，Alt+O 折叠态当下渲染；hl = Write 高亮缓存、errLines = 失败体错误行缓存——帧心跳不重算〔CTW-09〕；callId = 结果精确配对键〔2026-09-25 错配修复——并发乱序不再交叉挂错〕；cache 键含 toolOpen/errOpen/result 在场——整行缓存；group = 连续同名只读工具聚合〔2026-09-30 用户拍板抄 cc-haha 计数行〕：第 2 个紧邻同名调用并进宿主条目就地成组〔kimi in-place 同款〕，条目下标与账本不动、callId 配对下钻 items——宿主自身 args/callId/result 自成组起停用）
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
-	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; since?: number; cache?: LineCache } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文宽度级缓存（raw 同款折行）；aborted 恒 live-only（未发送不落日志）。since = 开始时刻——running 态活体行（1s 心跳重绘现算已耗时，group 行同先例；流式增量另走转述活动块 activeTail）
+	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; since?: number; cache?: { w: number; open: boolean; lines: string[] } } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文**默认折叠 Alt+E 展开**（全量转述可达 1200 字——2026-10-02 拍板，与主思考共键 thinkOpen）；aborted 恒 live-only（未发送不落日志）。since = 开始时刻——running 态活体行（1s 心跳重绘现算已耗时，group 行同先例；流式增量另走转述活动块 activeTail）
 	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
 
 export class DocModel {
@@ -738,11 +738,15 @@ export class DocModel {
 			if (e.state === "running") return [theme.dim(`◐ 由 ${e.model} 转述图片中… ${Math.max(0, Math.floor((Date.now() - (e.since ?? Date.now())) / 1000))}s`)];
 			if (e.state === "aborted") return [theme.fg("muted", "● 视觉转述已中止——消息未发出（重发即续：已生成的转述有缓存）")];
 			if (e.state === "failed") return [theme.fg("muted", `● 视觉转述失败（${e.model}）——已按无图占位发送`)];
-			if (e.cache?.w !== width) {
+			// done 正文默认折叠、Alt+E 展开（2026-10-02 拍板——全量转述可达 1200 字，与主思考共键）：
+			// 折叠 = 头行带展开提示 + 正文尾两行（thinkBlock 收起态同款「最新内容」语义）；展开 = 全文
+			if (e.cache?.w !== width || e.cache.open !== this.thinkOpen) {
 				this.debugWrapCalls++;
-				const head = theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}）`);
 				const body = wrapText(e.text ?? "", Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`));
-				e.cache = { w: width, lines: [head, ...body] };
+				const head = this.thinkOpen
+					? theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}）`)
+					: theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}） · Alt + E 展开`);
+				e.cache = { w: width, open: this.thinkOpen, lines: this.thinkOpen ? [head, ...body] : [head, ...body.slice(-2)] };
 			}
 			return e.cache.lines;
 		}
@@ -811,7 +815,7 @@ export class DocModel {
 		// 转述活动块（A 案）置前：转述发生在 turn 开始前，主流区此时空闲——视觉上紧跟 ◐ 行
 		if (this.visionThinkText !== "") {
 			const raw = this.visionLive.feed(this.visionThinkText, Math.max(8, width - 2));
-			out.push(theme.dim("[眼睛思考]"), ...raw.slice(-2).map((l) => theme.dim("  " + l))); // 尾两行流动（主思考收起态同款）
+			out.push(theme.dim("[视觉模型思考]"), ...raw.slice(-2).map((l) => theme.dim("  " + l))); // 尾两行流动（主思考收起态同款）
 		}
 		if (this.visionBodyText !== "") out.push(...wrapText(this.visionBodyText, Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`)));
 		if (this.thinkText !== "") out.push(...this.styleWrappedThink(this.thinkLive.feed(this.thinkText, Math.max(8, width - 2)), this.thinkOpen));
