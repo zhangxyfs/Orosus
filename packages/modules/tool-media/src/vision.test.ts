@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
+import { Jimp } from "jimp";
 import { readSummary, resolveEyeModel, summaryPathOf, summarizeImage } from "./vision.ts";
 
 let dir: string | undefined;
@@ -44,14 +45,16 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(calls).toBe(1); // 缓存命中——零二次请求
   });
 
-  it("③ 失败/空产出 → undefined 回落纯标签；error finish 不缓存", async () => {
+  it("③ 失败/空产出 → undefined 回落纯标签；error finish 不缓存；onFail 带原因（诊断批——修复前只落路径不落因）", async () => {
     const d = fresh();
     const img = join(d, "bad.png");
     writeFileSync(img, Buffer.from([0x89, 0x50]));
-    const errDeps = { llmStream: () => fakeStream([{ type: "finish", kind: "error", errorMessage: "boom" }])() };
+    const fails: string[] = [];
+    const errDeps = { llmStream: () => fakeStream([{ type: "finish", kind: "error", errorMessage: "boom" }])(), onFail: (r: string) => fails.push(r), retryBackoffMs: [] };
     expect(await summarizeImage(img, "image/png", "eye/m", errDeps as never)).toBeUndefined();
     expect(readSummary(img)).toBeUndefined(); // 不缓存失败
-    const emptyDeps = { llmStream: () => fakeStream([{ type: "finish", kind: "stop" }])() };
+    expect(fails).toEqual(["boom"]); // 原因带出（不再吞）
+    const emptyDeps = { llmStream: () => fakeStream([{ type: "finish", kind: "stop" }])(), retryBackoffMs: [] };
     expect(await summarizeImage(img, "image/png", "eye/m", emptyDeps as never)).toBeUndefined();
   });
 
@@ -71,6 +74,7 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
           yield { type: "finish", kind: "stop" };
         })();
       },
+      retryBackoffMs: [],
     };
     const p1 = summarizeImage(img, "image/png", "eye/m", slowDeps as never);
     const p2 = summarizeImage(img, "image/png", "eye/m", slowDeps as never); // 首次未完——进行中命中
@@ -80,6 +84,68 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(calls).toBe(1); // 只发一次视觉请求
     expect(await summarizeImage(img, "image/png", "eye/m", slowDeps as never)).toContain("共享一次调用");
     expect(calls).toBe(1); // 已落缓存——第三次仍零请求
+  });
+
+  it("③c 瞬时故障重试（诊断批）：两次带内错误后第三次成功——共 3 次请求；onFail 带原因与退避标注", async () => {
+    const d = fresh();
+    const img = join(d, "retry.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    let calls = 0;
+    const fails: string[] = [];
+    const deps = {
+      llmStream: () => {
+        calls++;
+        return calls < 3
+          ? fakeStream([{ type: "finish", kind: "error", errorMessage: "fetch failed: ECONNRESET" }])()
+          : fakeStream([{ type: "text/delta", text: "第三次成功" }, { type: "finish", kind: "stop" }])();
+      },
+      onFail: (r: string) => fails.push(r),
+      retryBackoffMs: [1, 1],
+    };
+    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("第三次成功");
+    expect(calls).toBe(3);
+    expect(fails).toHaveLength(2);
+    expect(fails[0]).toContain("ECONNRESET");
+    expect(fails[0]).toContain("重试");
+    expect(readSummary(img)).toContain("第三次成功"); // 成功后照常落缓存
+  });
+
+  it("③c-b 鉴权类不重试：401 一次即弃（重试白花）；onFail 原因不带退避标注", async () => {
+    const d = fresh();
+    const img = join(d, "auth.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    let calls = 0;
+    const fails: string[] = [];
+    const deps = {
+      llmStream: () => { calls++; return fakeStream([{ type: "finish", kind: "error", errorMessage: "HTTP 401: invalid api key" }])(); },
+      onFail: (r: string) => fails.push(r),
+      retryBackoffMs: [1, 1],
+    };
+    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toBeUndefined();
+    expect(calls).toBe(1); // 不重试
+    expect(fails).toEqual(["HTTP 401: invalid api key"]);
+  });
+
+  it("③d 转述前预降采样（拍板「再改功能」）：大图请求走 .eye. 降采样副本（缓存仍键原图）；小图 unchanged 直用原路径", async () => {
+    const d = fresh();
+    const seen: { path?: string }[] = [];
+    const deps = {
+      llmStream: (req: { messages: { content: ({ kind: string; path?: string })[] }[] }) => {
+        seen.push(req.messages[0]!.content.find((p) => p.kind === "image") as { path?: string });
+        return fakeStream([{ type: "text/delta", text: "红底方块" }, { type: "finish", kind: "stop" }])();
+      },
+    };
+    const big = join(d, "big.png");
+    await new Jimp({ width: 3000, height: 3000, color: 0xff0000ff }).write(big as `${string}.png`);
+    const out = await summarizeImage(big, "image/png", "eye/m", deps as never);
+    expect(out).toContain("红底方块");
+    expect(seen[0]!.path).toContain(".eye."); // 3000px → tier 1024 降采样副本（≈1568 边）
+    expect(seen[0]!.path).not.toBe(big);
+    expect(readSummary(big)).toBe(out); // 缓存键 = 原图路径（副本只是请求形态）
+    const small = join(d, "small.png");
+    await new Jimp({ width: 100, height: 100, color: 0x00ffffff }).write(small as `${string}.png`);
+    await summarizeImage(small, "image/png", "eye/m", deps as never);
+    expect(seen[1]!.path).toBe(small); // 小图零拷贝直用原路径
   });
 });
 
