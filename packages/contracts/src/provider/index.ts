@@ -82,6 +82,9 @@ export interface ProviderRequest {
    *  reasoning_effort；anthropic 族 = thinking 开关与 budget_tokens 映射，kimi-code 同款口径）。
    *  缺省不发送（端点默认行为）。值不做端点级校验（lenient——kimi-code 定案：不在清单也原样发，端点 400 自证）。 */
   reasoningEffort?: string;
+  /** 采样温度（m5-media 走查十二 2026-10-02，Reasonix 同款）：转述等确定性二级调用置 0——同一张图
+   *  两次产出应一致（缓存/占位/回放依赖稳定文本）。主对话缺省不发送（端点默认温度）。 */
+  temperature?: number;
 }
 
 /** Provider SPI 唯一方法（§6.4）。 */

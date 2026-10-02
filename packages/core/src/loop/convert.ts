@@ -24,7 +24,10 @@ function stripImages(m: ModelMessage): ModelMessage {
 function imageOmittedText(path: string): string {
   const base = `[image omitted during compaction: ${path}]`;
   try {
-    const t = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    const raw = readFileSync(`${path}.summary.txt`, "utf8").trim();
+    // 版本标记剥离（tool-media SUMMARY_PROMPT_VERSION 双写约定——visiongate/mediabudget 同款）：
+    // 新缓存首行 `[summary-vN]`——只取正文；无标记旧格式兼容读（readSummary 版本门重转前旧文本仍可用）
+    const t = raw.startsWith("[summary-") ? raw.slice(raw.indexOf("\n") + 1).trim() : raw;
     return t === "" ? base : `${base}
 [视觉摘要] ${t.slice(0, 500)}`;
   } catch {

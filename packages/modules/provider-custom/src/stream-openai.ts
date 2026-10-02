@@ -99,6 +99,7 @@ export function createStream(opts: { apiKey?: string | undefined; baseUrl: strin
             ), opts.toolImages ?? "bridge"), // m5-media F4+F5+F6+F7 四步：门控 → 发送副本（worker 降采样）→ mime 门控 → 预算降级（老图换标签）——F9 策略服务可覆盖口径/帽值
             ...(tools.length > 0 ? { tools } : {}),
             ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
+            ...(request.temperature !== undefined ? { temperature: request.temperature } : {}), // 确定性二级调用（转述置 0——Reasonix 同款；主对话缺省不发送）
             // /effort（kimi resolveThinkingEffort 同款）：具体档位原样透传 reasoning_effort——不在端点清单
             // 也照发（lenient，端点 400 自证）；'on'/'off' 语义档 = silent（不发字段：on = 端点默认开思考，
             // off = 无 offEffort 声明时的关思考形态；有声明时 core 已换发 "none" 等具体值）
