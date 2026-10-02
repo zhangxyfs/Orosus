@@ -62,10 +62,11 @@ const SUMMARY_PROMPT = `把这张图完整转述成文字，让看不到图的�
 2. 所有可见文字逐条原样转录（标题、菜单、按钮、标签、正文、数据值）——保留原文语言，不翻译不概括；
 3. 视觉元素：背景与前景颜色、强调色、线条与形状、图表的轴/图例/数值/趋势；
 4. 显著细节：错误或状态提示、红绿标记、选中/高亮、图标含义。
-只描述图中实际可见的内容，不要猜测图外信息；直接给转述，不要前缀、不要收尾总结。`;
-// 全量转述的产出帽（存储/占位同源）：UI 截图逐条转录普遍 400-900 字——旧帽 500 会拦腰截断。
-// 1200 ≈ 主模型看图唯一来源时的信息量上限（每请求随占位进上下文，再大就得不偿失）。
-export const SUMMARY_TEXT_CAP = 1_200;
+只描述图中实际可见的内容，不要猜测图外信息；直接给转述，不要前缀、不要收尾总结。篇幅跟着内容走——把可见内容说完为止，不为省字数压缩；降采样后过小不可辨的文字，标注「小字不可辨」即可，不要猜。`;
+// 全量转述的产出帽（存储/占位同源）：图越繁、可见文字越多，逐条转录正文越长（2026-10-02 用户点破：
+// 内容复杂度推高生成侧——1200 对密文截图会拦腰）。2000 ≈ 密终端截图逐行转录的量级；占位随文进
+// 上下文，再大就得不偿失（要更细应升 tier 或换模型，不是无限放帽）。
+export const SUMMARY_TEXT_CAP = 2_000;
 
 // 瞬时故障重试（2026-10-02 转述失败诊断批）：实机 200ms 瞬败、11 秒后同路径成功——限流/新文件读
 // 竞态类自愈型故障，两退避重试把它吃掉（发送闸还在等——对用户只是转述慢一两秒，不再是失败行）。
@@ -108,6 +109,7 @@ const attemptOnce = async (
 ): Promise<{ ok: true; text: string } | { ok: false; reason: string }> => {
   try {
     let text = "";
+    let truncated = false;
     const lowEffort = deps.catalogFile !== undefined ? lowEffortOf(deps.catalogFile, eyeModel) : undefined;
     const stream = deps.llmStream({
       model: eyeModel,
@@ -115,8 +117,8 @@ const attemptOnce = async (
       messages: [{ role: "user", content: [{ kind: "text", text: SUMMARY_PROMPT }, { kind: "image", path: imagePath, mimeType }] }],
       tools: [],
       signal: AbortSignal.timeout(60_000),
-      maxTokens: 2_000, // 产出帽 1200 字 + 思考余量保险（2026-10-02 拍板抬帽：无 effort 声明的推理模型
-      // 当眼睛时思考与正文共享帽——2000 让思考烧完正文还剩得出；有 low 档时思考本来就短）
+      maxTokens: 6_000, // 生成帽天花板（2026-10-02 用户点破再抬：图内容繁 → 逐条转录正文+思考都变长，
+      // 2000 会截断密文截图的转录；帽是上限不是目标——没用到就不花钱，6000 ≈ kimi 32K 兜底的任务级缩水）
       ...(lowEffort !== undefined ? { reasoningEffort: lowEffort } : {}),
     });
     for await (const c of stream) {
@@ -126,8 +128,9 @@ const attemptOnce = async (
         text += c.text;
       }
       if (c.type === "finish" && c.kind === "error") return { ok: false, reason: String((c as { errorMessage?: string }).errorMessage ?? "流带内错误（finish/error 无原因串）") };
+      if (c.type === "finish" && c.kind === "length") truncated = true; // 带内截断信号——正文照收，尾部标注
     }
-    const clean = text.trim().slice(0, SUMMARY_TEXT_CAP);
+    const clean = (truncated ? `${text.trim()}…（转述因长度帽截断——原图内容更繁）` : text.trim()).slice(0, SUMMARY_TEXT_CAP);
     if (clean === "") return { ok: false, reason: "空产出（流正常结束但无文本）" };
     return { ok: true, text: clean };
   } catch (err) {
