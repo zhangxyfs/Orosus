@@ -38,7 +38,7 @@ export function createMenu(app: FullApp) {
 		const ap = argPhase();
 		if (ap !== undefined) return ap.items.map((c) => ({ key: c, kind: "cmd" as const }));
 		if (level2) return (app.io.slashCommands().find((c) => c.name === s.overlayCmd)?.children ?? []).map((c) => ({ key: c, kind: "cmd" as const }));
-		const cmds = app.filteredCommands().map((c) => ({ key: c.name, kind: "cmd" as const }));
+		const cmds = app.input.filteredCommands().map((c) => ({ key: c.name, kind: "cmd" as const }));
 		const skills = filteredSkills().map((c) => ({ key: c.skill ?? c.name, kind: "skill" as const }));
 		const out: { key: string; kind: "cmd" | "skill" | "sep" }[] = [...cmds];
 		if (skills.length > 0) out.push({ key: "", kind: "sep" as const }, ...skills);
@@ -111,7 +111,7 @@ export function createMenu(app: FullApp) {
 			if (/^\/skill\s*:\s*\S/i.test(normCmd(s.input))) {
 				s.overlayOpen = false;
 				s.overlayCmd = "";
-				app.submitLine(normCmd(s.input));
+				app.input.submitLine(normCmd(s.input));
 				app.scheduler.requestImmediateRender();
 				return;
 			}
@@ -125,7 +125,7 @@ export function createMenu(app: FullApp) {
 				const final = picked === undefined ? normCmd(s.input) : `${ap.cmd} ${ap.args.slice(0, ap.args.length - ap.word.length)}${picked.key}`;
 				s.overlayOpen = false;
 				s.overlayCmd = "";
-				app.submitLine(final);
+				app.input.submitLine(final);
 				app.scheduler.requestImmediateRender();
 				return;
 			}
@@ -153,7 +153,7 @@ export function createMenu(app: FullApp) {
 				const cmd = level2 ? `${s.overlayCmd} ${picked}` : typed.includes(" ") ? typed : picked;
 				s.overlayOpen = false;
 				s.overlayCmd = "";
-				app.submitLine(cmd);
+				app.input.submitLine(cmd);
 			}
 		} else if (!level2 && (key === "backspace" || isPrintable(key))) {
 			if (key === "backspace") {
@@ -161,7 +161,7 @@ export function createMenu(app: FullApp) {
 					s.input = s.input.slice(0, s.cursor - 1) + s.input.slice(s.cursor);
 					s.cursor--;
 				}
-			} else app.inputInsert(key);
+			} else app.input.inputInsert(key);
 			// 重置选中须按敲键后的新清单算（2026-09-30 用户走查：/mc+/p 把命中命令筛光后 sep 占 0 位，
 			// 旧实现用敲键前 items 重置 0 落 sep——渲染不跳 sep 焦点整屏隐身，Tab 还吃 sep 空串清空输入框）
 			if (normCmd(s.input).startsWith("/")) s.overlaySel = selToSelectable(overlayItems(), 0);
@@ -181,7 +181,7 @@ export function createMenu(app: FullApp) {
 		}
 		app.state.overlayOpen = false;
 		app.state.overlayCmd = "";
-		app.submitLine(text);
+		app.input.submitLine(text);
 	};
 
 	return { argPhase, overlayItems, filteredSkills, selToSelectable, onOverlayKey, fireSkill };
