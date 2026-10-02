@@ -78,15 +78,21 @@ export default defineModule({
   activate(ctx) {
     const facts = policyOf(ctx.config);
     ctx.provide(MEDIA_POLICY_KEY, { current: () => facts });
-    // 宿主快照缓存（F10 门控数据源——m5 T9 读面标准接法：activate 拉首份 + turn/end 刷新）
+    // 宿主快照缓存（m5 T9 读面标准接法：activate 拉首份 + turn/end 刷新）——但快照在**首轮 turn
+    // 进行中**为空、且 /model 中途切换后到 turn/end 前陈旧（2026-10-02 实机：非视觉门因快照空没触发，
+    // 白给模型投了原图）。门控判定改**执行期现读**（工具执行低频，host.current() 成本可忽略；快照
+    // 兜底 host 面缺席/读失败）；快照保留给 policy/turn-end 高频路径。
     let hostModel: string | undefined;
     void ctx.host?.current().then((s) => { hostModel = s.model; }).catch(() => undefined);
     ctx.events.on("turn/end", () => { void ctx.host?.current().then((s) => { hostModel = s.model; }).catch(() => undefined); });
+    const liveModel = async (): Promise<string | undefined> => {
+      try { return (await ctx.host?.current())?.model ?? hostModel; } catch { return hostModel; }
+    };
     ctx.contribute.tool(createReadMediaFileTool({
-      model: () => hostModel,
+      model: liveModel,
       spec: { maxEdge: facts.maxEdge, tokenTier: facts.tokenTier },
       // F10×D12：主模型非视觉但眼睛模型已配 → 读图改为转述（未解析/失败回落路径指路）
-      summarize: makeSummarizer(facts, () => hostModel, join(orosusHome(), "cache", "models-dev.json"), (req) => ctx.llm.stream(req as never),
+      summarize: makeSummarizer(facts, liveModel, join(orosusHome(), "cache", "models-dev.json"), (req) => ctx.llm.stream(req as never),
         (path, reason) => ctx.log.warn("tool-media.vision", "read_media_file 转述失败", { path, reason })),
     }));
     ctx.contribute.tool(createDownsampleTool({ maxEdge: facts.maxEdge, tokenTier: facts.tokenTier }));

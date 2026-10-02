@@ -168,17 +168,18 @@ export function eyeModelOf(facts: MediaPolicyFacts, hostModel: string | undefine
 }
 
 /** F10×D12 眼睛转述口装配（模块 activate 用——read_media_file 的 summarize dep）：
- *  调用期解析眼睛模型（hostModel 现读），未解析/生成失败 = undefined（调用方回落路径指路）。
+ *  调用期解析眼睛模型（hostModelGet **执行期现读**〔2026-10-02 修复——快照式在首轮 turn 进行中为空，
+ *  auto 档因此解析不出眼睛〕，同步 getter 兼容），未解析/生成失败 = undefined（调用方回落路径指路）。
  *  onFail 透传诊断原因（宿主接 ctx.log.warn——2026-10-02 诊断批）。 */
 export function makeSummarizer(
   facts: MediaPolicyFacts,
-  hostModelGet: () => string | undefined,
+  hostModelGet: () => string | undefined | Promise<string | undefined>,
   catalogFile: string,
   llmStream: VisionSummaryDeps["llmStream"],
   onFail?: (path: string, reason: string) => void,
 ): (path: string, mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif") => Promise<string | undefined> {
   return async (path, mimeType) => {
-    const eye = eyeModelOf(facts, hostModelGet(), catalogFile);
+    const eye = eyeModelOf(facts, await hostModelGet(), catalogFile);
     if (eye.model === undefined) return undefined;
     return summarizeImage(path, mimeType, eye.model, { llmStream, catalogFile, ...(onFail !== undefined ? { onFail: (reason) => onFail(path, reason) } : {}) });
   };
