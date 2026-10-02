@@ -19,36 +19,42 @@ import { padToWidth, osc8LinkAtColumn, sliceByColumn, stripAnsi, truncateToWidth
 import { parseWheel, parseButton, isMouseSequence, type WheelEvent, type ButtonEvent } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import { resolvePopupLayout } from "./popuplayout.ts";
-import { renderWidgetLines, renderWidgets } from "./widgets.ts";
+import { renderWidgetLines } from "./widgets.ts";
 import type { DialogEvent, DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import { pickLabel } from "../picker.ts";
 import * as theme from "../theme.ts";
 import { subagentCountHint } from "../subagent-status.ts";
 import {
-	ALT_WHEEL_MULTIPLIER, CONN_SLOTS, CONN_STATE_TEXT, DIAG_LIST_ROWS, diagListLines, DOUBLE_CLICK_INTERVAL_MS,
-	elapsedText, indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, MOD_STATE_TEXT, MODULE_SLOTS,
-	msText, normCmd, OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, taskTick, thumbGeometry,
+	ALT_WHEEL_MULTIPLIER, CONN_SLOTS, DIAG_LIST_ROWS, diagListLines, DOUBLE_CLICK_INTERVAL_MS,
+	indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, MODULE_SLOTS,
+	normCmd, OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
 	WHEEL_STEP, wordRangeAt,
 	type AppState, type DialogKeyCtx, type FocusIdx, type FullAppIO, type HostDialogKeys, type InputRow,
-	type ModuleCard, type PanelData, type PickExtraKeys, type SlashItem,
+	type PickExtraKeys, type SlashItem,
 } from "./fullapp-types.ts";
+import { createPanels } from "./fullapp-panels.ts";
+
+// 子系统拆分（m5-split-fullapp）：九个闭包工厂子系统住 fullapp-*.ts 族件；壳内子系统装配对象与
+// 降级共享字段（io/state/pendingUi 等无修饰成员）——子系统共享态，非公开 API，外部勿用。
 
 // 类外段（接缝类型/AppState/常量/纯函数）已出仓 fullapp-types.ts（m5-split-fullapp T2）；
 // 消费方九文件仍经本件 import——转出口维持不动（D3 消费方零改动）。
 export * from "./fullapp-types.ts";
 
 export class FullApp {
-	private io: FullAppIO;
+	io: FullAppIO;
 	private term: Term;
 	private full: FullScreen;
 	private scheduler: FrameScheduler;
-	private state: AppState;
+	state: AppState;
 	private busyTimer: NodeJS.Timeout | undefined;
 	private watchdogTimer: NodeJS.Timeout | undefined;
 	private tickTimer: NodeJS.Timeout | undefined;
 	private toastTimer: NodeJS.Timeout | undefined; // CTU-03：toast 自消定时器统一登记（顶替即清）
 	private toastSeq = 0; // CTU-03：toast 身份令牌序列（定时器闭包捕获 id，与时长解耦）
 	private stopped = false;
+	/** 面板行拼装子系统（m5-split-fullapp T3——fullapp-panels.ts 工厂件）。 */
+	panels: ReturnType<typeof createPanels>;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
 		this.io = io;
@@ -97,6 +103,9 @@ export class FullApp {
 			scrollbarDrag: undefined,
 			scrollbarHover: undefined,
 		};
+		// 子系统装配统一放构造器末尾（m5-split-fullapp 设计空白 1：state 等共享态先就位，工厂只在
+		// 调用期解引用 app——装配点晚对行为无影响，统一末尾最稳）
+		this.panels = createPanels(this);
 	}
 
 	/** 测试探针。 */
@@ -110,7 +119,7 @@ export class FullApp {
 		// 隐藏后 dm 仍按窄宽渲染 = 「回流没修好」的真根因）
 		// 再收 2 列 = 右内衬（2026-09-23 用户拍板：左垫 2 列后右端顶分隔线错位——两端各留 2 列对称；
 		// docmodel 内部再 −2 折行，正文实际占 leftW − 4）
-		const sidebarW = this.state.sidebarVisible ? this.sidebarW() : 0;
+		const sidebarW = this.state.sidebarVisible ? this.panels.sidebarW() : 0;
 		return Math.max(8, this.io.columns() - sidebarW - 3);
 	}
 
@@ -256,7 +265,7 @@ export class FullApp {
 
 	// ---------- 全屏 CommandUi 适配面（choose → overlay 选择器；ask/askSecret → 输入行询问） ----------
 
-	private pendingUi:
+	pendingUi:
 		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys }
 		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; bottom?: boolean | undefined; viewPage?: number }
@@ -561,7 +570,7 @@ export class FullApp {
 	/** pick 列表行的可用显示宽（m4-7 走查修 2026-09-27）：左栏宽 − 框 2 列 − 「 ❯ 」前缀 4 列——
 	 *  宿主拼行（如技能列表三列）按此截断，防超宽把右框 │ 推错位。侧栏随 cols 现算（与渲染同源）。 */
 	pickRowWidth(): number {
-		return Math.max(8, this.io.columns() - this.sidebarW() - 1) - 2 - 4;
+		return Math.max(8, this.io.columns() - this.panels.sidebarW() - 1) - 2 - 4;
 	}
 
 	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys): Promise<number | undefined> {
@@ -676,7 +685,7 @@ export class FullApp {
 
 	private afterEdit(): void {
 		const s = this.state;
-		const rows = layoutInputRows(s.input, this.inputInnerW());
+		const rows = layoutInputRows(s.input, this.panels.inputInnerW());
 		const cur = locateCursor(rows, s.cursor);
 		if (cur.row < s.inputScroll) s.inputScroll = cur.row;
 		if (cur.row >= s.inputScroll + INPUT_MAX_ROWS) s.inputScroll = cur.row - INPUT_MAX_ROWS + 1;
@@ -1626,7 +1635,7 @@ export class FullApp {
 				}
 			} else if (s.focusIdx === 2) {
 				const tasks = this.io.panelData().tasks;
-				const slots = this.taskPageSlots();
+				const slots = this.panels.taskPageSlots();
 				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "pageUp" ? -slots : slots)));
 			} else if (key === "pageUp") {
 				s.scrollBack += Math.max(1, this.io.rows() - 10);
@@ -1913,7 +1922,7 @@ export class FullApp {
 				// 非首/末视觉行 → 行内移动；首行非起始点 → 先回行首；起始点再 ↑ 才召回历史；
 				// 进入浏览快照草稿，↓ 翻回最新位草稿原样恢复；上翻光标置首（可连按续翻）、下翻置末
 				s.selAnchor = -1;
-				const rows = layoutInputRows(s.input, this.inputInnerW());
+				const rows = layoutInputRows(s.input, this.panels.inputInnerW());
 				const cur = locateCursor(rows, s.cursor);
 				const browsing = s.historyIdx < s.history.length;
 				if (key === "up") {
@@ -2009,262 +2018,14 @@ export class FullApp {
 
 	// ---------- 布局与渲染 ----------
 
-	private sidebarW(): number {
-		const cols = this.io.columns();
-		return cols >= 100 ? Math.min(40, Math.max(34, Math.floor(cols * 0.28))) : Math.min(40, Math.floor(cols * 0.28));
+	/** 面板族测试探针（fullapp.test.ts 经 as-cast 直取的两件——体已出仓 fullapp-panels.ts，壳留委托）。 */
+	sidebarW(): number {
+		return this.panels.sidebarW();
 	}
 
-	private inputInnerW(): number {
-		return Math.max(8, this.io.columns() - this.sidebarW() - 2 - 4);
-	}
-
-	private tailLine(): string {
-		const s = this.state;
-		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
-		if (this.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
-		// 交互挂起期（pick/view）spinner 同让位（2026-09-22 用户实测：/model 选择期间「正在生成…」照转——
-		// 挂起 = 等用户操作，不是在生成；浮层自带操作页脚，尾行回退待命态）
-		if (this.pendingUi !== undefined) return theme.dim("正在待命");
-		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
-		if (s.busy) {
-			if (s.compacting) {
-				// 压缩期（2026-09-23 用户拍板）：石青（info）色专属文案——与 turn 生成的「正在生成…」区分
-				return `${theme.fg("info", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("info", "上下文压缩中…")}`;
-			}
-			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
-		}
-		return theme.dim("正在待命");
-	}
-
-	private panelBox(title: string, en: string, focused: boolean, w: number, h: number, content: string[], hints: string[], footer?: string[], footTop?: string[]): string[] {
-		const bc = focused ? "accent" : "border";
-		const inner = w - 2;
-		// CTU-09（2026-09-28 code review）：顶框标题源头截断（card.title 模块供给可超长——原靠 padToWidth
-		// 兜底会把右侧框角 ╮ 切掉）。预算 = w − ╭─(2) − 首尾空格(2) − 最小 fill(1) − 最小 en 段(4) ─╮(2)
-		const titleFit = truncateToWidth(title, Math.max(4, w - 11));
-		const titleSeg = focused ? theme.fg("accent", ` ${titleFit} `) : theme.fg("muted", ` ${titleFit} `);
-		const enSeg = theme.dim(` ${en} `);
-		const titleW = visibleWidth(titleSeg);
-		const enBudget = Math.max(4, w - 4 - titleW - 1);
-		const enFit = truncateToWidth(enSeg, enBudget);
-		const fill = Math.max(1, w - 4 - titleW - visibleWidth(enFit));
-		const top = theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(fill)) + enFit + theme.fg(bc, "─╮");
-		const pane = (l: string) => theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"); // 内底透明（F5 二轮⑩——surface 铺色在第三方终端主题下是一块黑）
-		const rows: string[] = [top, pane("")];
-		for (const l of content) rows.push(pane(l));
-		const footRows = footer ?? [];
-		const topRows = footTop ?? [];
-		// 提示行超内宽折行不截字（F5 十一轮②：窄侧栏下「Enter 挂载/卸载」曾截成「挂载/卸」）
-		const hintLines = hints.flatMap((hl) => wrapText(theme.dim(" " + hl), inner));
-		// 填充目标含顶框（2026-09-24 走查：原 h-2 漏算顶框 1 行——面板恒矮一行，底框比输入框高，
-		// 与输入框下边缘错位）；底部分三段（同日用户拍板）：footTop 分隔线贴提示区上沿 → 操作提示 →
-		// footer 注脚贴底框——填充空行恒在分隔线上方，终端再高分隔线也不与提示行脱节
-		while (rows.length < h - 1 - topRows.length - footRows.length - hintLines.length) rows.push(pane(""));
-		for (const l of topRows) rows.push(pane(l));
-		for (const hl of hintLines) rows.push(pane(hl));
-		for (const l of footRows) rows.push(pane(l));
-		rows.push(theme.fg(bc, "╰" + "─".repeat(inner) + "╯"));
-		return rows.slice(0, h);
-	}
-
-	private kvRow(label: string, value: string, w: number): string {
-		return ` ${theme.fg("muted", padToWidth(label, 8))} ${truncateToWidth(value, w - 11)}`;
-	}
-
-	private sep(w: number): string {
-		return theme.fg("border", " " + "┄".repeat(Math.max(1, w - 2)));
-	}
-
-	private modRow(m: PanelData["modules"][number], selected: boolean, w: number): string {
-		const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
-		// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
-		const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
-		const stateText = MOD_STATE_TEXT[m.state]!;
-		const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", stateText) : theme.dim(stateText);
-		const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
-		// CTU-09（2026-09-28 code review）：模块名源头截断（注册面供给可超长——原 padToWidth 兜底把行尾
-		// 状态字切掉）。预算 = w − 前缀「 ● 」(3) − 锁定后缀 − 状态字 − 最小 gap(1)
-		const nameTxt = truncateToWidth(m.name, Math.max(4, w - 3 - lockW - visibleWidth(stateText) - 1));
-		const name = (m.state === "off" ? theme.fg("muted", nameTxt) : selected ? theme.fg("accent", nameTxt) : nameTxt) + lockSuffix;
-		const descBudget = w - (3 + visibleWidth(nameTxt) + lockW + 1 + visibleWidth(stateText) + 1);
-		const desc = descBudget >= visibleWidth(m.desc) ? theme.dim(m.desc) : descBudget >= 8 ? truncateToWidth(theme.dim(m.desc), descBudget) : "";
-		const leftW = 3 + visibleWidth(nameTxt) + lockW + (desc === "" ? 0 : 1 + visibleWidth(desc));
-		const gap = Math.max(1, w - leftW - visibleWidth(stateText));
-		const row = ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${st}`;
-		return selected ? theme.bg("accentSoft", padToWidth(row, w)) : row;
-	}
-
-	/** 「网络 · MCP」卡连接行（2026-10-01）：布局同 modRow（点+名+说明+右列），无选中态/锁定后缀；
-	 *  五态点色对齐管理面口径——connected 绿 ● / failed·未确认 红 ● / idle·停用 灰 ○（mcp-cmd 同款）。
-	 *  右列：connected 有首连耗时时显耗时（被动真值），否则状态文案。 */
-	private connRow(c: NonNullable<PanelData["network"]>["connections"][number], w: number): string {
-		const stateText = CONN_STATE_TEXT[c.state]!;
-		const dot =
-			c.state === "connected" ? theme.fg("accent", "●") : c.state === "failed" || c.state === "pending-confirm" ? theme.fg("err", "●") : theme.fg("muted", "○");
-		const right =
-			c.state === "connected" && c.connectMs !== undefined
-				? theme.fg("muted", msText(c.connectMs))
-				: c.state === "connected"
-					? theme.fg("accent", stateText)
-					: c.state === "failed" || c.state === "pending-confirm"
-						? theme.fg("err", stateText)
-						: theme.dim(stateText);
-		// 名字源头截断（同 modRow CTU-09 预算式）：w − 前缀「 ● 」(3) − 右列实宽 − gap(1) − 右端呼吸(1)
-		// （2026-10-01 走查「顶飞」修：名字多让 1 列，右列与边框恒 ≥1 空隙——pane padToWidth 补尾空格）
-		const nameTxt = truncateToWidth(c.name, Math.max(4, w - 3 - visibleWidth(right) - 2));
-		const name = c.state === "idle" || c.state === "disabled" ? theme.fg("muted", nameTxt) : nameTxt;
-		// 说明段两段降级（2026-10-01 走查拍板「字体大时传输方式不显示」——预算驱动非硬阈值）：
-		// 全段「stdio · 12 工具」→ 中段「12 工具」（丢传输方式）→ 空；裸传输段（无「 · 」）窄卡直接空。
-		// 预算整体再让 1 列（… −1 尾）：全段「刚好吃满」时 gap 会被 max(1) 钉死→行满宽贴边框（w=48 实测）
-		const descBudget = w - (3 + visibleWidth(nameTxt) + 1 + visibleWidth(right) + 1) - 1;
-		const sep = c.desc.indexOf(" · ");
-		const shortDesc = sep >= 0 ? c.desc.slice(sep + 3) : undefined;
-		const descText =
-			c.desc !== "" && descBudget >= visibleWidth(c.desc)
-				? c.desc
-				: shortDesc !== undefined && descBudget >= visibleWidth(shortDesc)
-					? shortDesc
-					: "";
-		const desc = descText === "" ? "" : theme.dim(descText);
-		const leftW = 3 + visibleWidth(nameTxt) + (desc === "" ? 0 : 1 + visibleWidth(descText));
-		// gap 恒给右端留 1 列（2026-10-01 走查「顶飞」修：右列贴死边框观感差）；名字预算已让 1 列，闭环恒 ≤ w−1
-		const gap = Math.max(1, w - leftW - visibleWidth(right) - 1);
-		return ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${right}`;
-	}
-
-	private statusRows(w: number, h: number): string[] {
-		const s = this.state;
-		const d = this.io.panelData();
-		const focused = s.focusIdx === 1;
-		const inner = w - 2;
-		// 右上页序数组化（m5 T6，决策点 10 area:"top" 落位）：[运行状态, 网络·MCP, ...top 模块卡（按 order）]——
-		// 内建固定在前、模块卡排后（决策点 12）；页号渲染期夹回（卸载拆卡不需要通知——每秒现读自然消失）
-		const topCards = (d.cards ?? []).filter((c) => c.area === "top");
-		const pages = 2 + topCards.length;
-		const page = Math.min(s.statePage, pages - 1);
-		if (page === 0) {
-			const content: string[] = [];
-			content.push(this.kvRow("模型", theme.fg("info", d.model), inner));
-			content.push(this.kvRow("会话", d.session, inner));
-			content.push(this.kvRow("工作目录", theme.fg("info", d.cwd), inner));
-			content.push(this.kvRow("运行时间", elapsedText(d.startedAt), inner)); // F5 二轮④
-			content.push(this.kvRow("Tokens", `↑ ${d.tokens.input.toLocaleString()} · ↓ ${d.tokens.output.toLocaleString()}`, inner)); // F5 二轮⑤
-			content.push(this.sep(inner));
-			// 上下文占用 = 末次请求的输入规模（上下文体量口径）；占比再小也至少给一格 ▏（F5 二轮⑥——
-			// 0k/1000k 时零绿块被读成「进度条坏了」）
-			const usedCtx = d.tokens.input;
-			const pct = d.contextWindow > 0 ? Math.min(1, usedCtx / d.contextWindow) : 0;
-			const pctText = `${Math.round(usedCtx / 1000)}k/${Math.round(d.contextWindow / 1000)}k`;
-			const FRACS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-			const barW = Math.max(6, inner - 8 - pctText.length - 1);
-			const total = Math.max(0, Math.min(barW, Math.round(pct * barW * 8) / 8));
-			const full = Math.floor(total);
-			const frac = total - full;
-			const fracCh = frac > 0 ? FRACS[Math.min(7, Math.ceil(frac * 8) - 1)] : usedCtx > 0 ? "▏" : "";
-			content.push(
-				` ${theme.fg("muted", "上下文")} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
-			);
-			content.push(this.sep(inner));
-			const slots = MODULE_SLOTS;
-			const modPages = Math.max(1, Math.ceil(d.modules.length / slots));
-			const modPage = Math.min(modPages - 1, Math.floor(s.moduleSel / slots));
-			const lo = modPage * slots;
-			const headL = ` ${theme.fg("muted", "模块挂载")}`;
-			const headR = theme.dim(`${modPage + 1}/${modPages} · MODULES`);
-			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
-			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
-				content.push(this.modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
-			}
-			return this.panelBox("运行状态", `1/${pages}`, focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [this.sep(inner)]);
-		}
-		if (page === 1) {
-			// 2026-10-01 拍板填实（占位行退役）：被动真值——代理态 + 模型服务信息行 + mcp.catalog 五态
-			// 连接列表（首连耗时）；主动健康探测（出网/DNS 周期 ping）维持方案书「另议」缺位，不假装有数据
-			const n = d.network;
-			const content: string[] = [];
-			if (n === undefined) {
-				content.push(` ${theme.fg("muted", "（网络面数据未装配——供数退化，详见诊断日志）")}`);
-			} else {
-				content.push(this.kvRow("代理", n.proxy, inner));
-				content.push(this.kvRow("模型服务", n.modelService, inner));
-			}
-			content.push(this.sep(inner));
-			const conns = n?.connections ?? [];
-			const connPages = Math.max(1, Math.ceil(conns.length / CONN_SLOTS));
-			const connPage = Math.min(s.connPage, connPages - 1);
-			const lo = connPage * CONN_SLOTS;
-			const headL = ` ${theme.fg("muted", "网络 / MCP 连接")}`;
-			// 右段窄卡降级（2026-10-01 走查「顶飞」修：标题+右段超内宽曾被 padToWidth 腰斩成「1/1 · SER」贴边）——
-			// 余量不足先丢「· SERVERS」后缀只留页码；标题侧不截（与页 0「模块挂载」头同权重）
-			const pageTag = `${connPage + 1}/${connPages}`;
-			const room = inner - visibleWidth(headL) - 1;
-			const headR = theme.dim(room >= visibleWidth(`${pageTag} · SERVERS`) ? `${pageTag} · SERVERS` : pageTag);
-			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
-			content.push(this.sep(inner)); // 小节头与列表之间分隔线（2026-10-01 走查打回：贴太近）
-			if (conns.length === 0) {
-				content.push(` ${theme.fg("muted", "（无 MCP server——/settings 添加，或模块挂载页启用 mcp）")}`);
-			}
-			for (let i = lo; i < Math.min(conns.length, lo + CONN_SLOTS); i++) {
-				content.push(this.connRow(conns[i]!, inner));
-			}
-			// 提示两行制（2026-10-01 走查打回：单行 27 列在窄侧栏被 wrapText 折行——拆两行各保短，行数恒定不闪）
-			return this.panelBox("网络 · MCP", `2/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回", "PgUp/PgDn 连接翻页"], undefined, [this.sep(inner)]);
-		}
-		return this.renderModuleCard(topCards[page - 2]!, w, h, focused, page, pages);
-	}
-
-	/** 模块卡页（m5 T6）：控件清单走只读渲染器；渲染抛错 = 当帧占位行 + 日志（全局约束 4——窗/卡保留）。 */
-	private renderModuleCard(card: ModuleCard, w: number, h: number, focused: boolean, page: number, pages: number): string[] {
-		const inner = w - 2;
-		let content: string[];
-		try {
-			content = renderWidgets(card.widgets, inner);
-		} catch (err) {
-			this.io.logWarn?.("tui.card.render-error", `模块卡渲染抛错，当帧占位：${card.title}`, { error: String(err instanceof Error ? err.message : err) });
-			content = [` ${theme.fg("warn", "（卡片渲染出错——下帧恢复即回，见诊断日志）")}`];
-		}
-		return this.panelBox(card.title, `${page + 1}/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [this.sep(inner)]);
-	}
-
-	// 任务清单每页行数（翻页步长 = 页大小——步长小于页大小时选中项在页内挪动页号不翻）；
-	// 与 renderFrame 的 statusH/taskH 布局同口径，改布局两处同步
-	private taskPageSlots(): number {
-		const taskH = this.io.rows() - Math.max(8, Math.floor(this.io.rows() * 0.55));
-		return Math.max(2, taskH - 6);
-	}
-
-	private taskRows(w: number, h: number): string[] {
-		const s = this.state;
-		const d = this.io.panelData();
-		const focused = s.focusIdx === 2;
-		const inner = w - 2;
-		// 右下卡组（m5 T6）：[任务清单（内建在前）, ...bottom 模块卡（按 order）]；单卡（无模块卡）时页码隐藏
-		const bottomCards = (d.cards ?? []).filter((c) => c.area === "bottom");
-		const pages = 1 + bottomCards.length;
-		const page = Math.min(s.taskPage, pages - 1);
-		if (page > 0) return this.renderModuleCard(bottomCards[page - 1]!, w, h, focused, page, pages);
-		const done = d.tasks.filter((t) => t.state === "done").length;
-		const slots = this.taskPageSlots();
-		const itemPages = Math.max(1, Math.ceil(d.tasks.length / slots));
-		const itemPage = Math.min(itemPages - 1, Math.floor(s.taskSel / slots));
-		const lo = itemPage * slots;
-		const content: string[] = [];
-		for (let i = lo; i < Math.min(d.tasks.length, lo + slots); i++) {
-			const t = d.tasks[i]!;
-			const text =
-				t.state === "done"
-					? `\x1b[9m${theme.fg("muted", t.text)}\x1b[29m`
-					: t.state === "active"
-						? theme.fg("warn", t.text)
-						: theme.fg("fg", t.text);
-			const row = ` ${taskTick(t.state)} ${truncateToWidth(text, inner - 4)}`;
-			content.push(focused && i === s.taskSel ? theme.bg("accentSoft", padToWidth(row, inner - 1)) : row);
-		}
-		const footL = theme.dim(" 由 Agent 实时同步");
-		const pageTag = itemPages > 1 ? ` · 第 ${itemPage + 1}/${itemPages} 页` : ""; // 任务条目分页并进注脚（页码位让给卡组）
-		const footR = theme.dim(`任务数：${done}/${d.tasks.length}${pageTag}`);
-		const footer = [footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return this.panelBox("任务清单", pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? ["←→ 切卡 · PgUp/PgDn 任务翻页 · Esc 返回"] : ["PgUp/PgDn 翻页 · Esc 返回"], footer, [this.sep(inner)]);
+	/** 同上——statusRows（网络·MCP 卡与截断回归钉的驱动口）。 */
+	statusRows(w: number, h: number): string[] {
+		return this.panels.statusRows(w, h);
 	}
 
 	private styleWithSelection(vr: InputRow, sel: { lo: number; hi: number } | undefined): string {
@@ -2291,7 +2052,7 @@ export class FullApp {
 		const cols = this.io.columns();
 		const rows = this.io.rows();
 		const s = this.state;
-		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0; // 隐藏 = 左栏占满（无面板）
+		const sidebarW = s.sidebarVisible ? this.panels.sidebarW() : 0; // 隐藏 = 左栏占满（无面板）
 		// 2026-09-27 用户走查拍板：左栏与侧栏间的分隔线退役——原分隔线列并入左栏（左栏 +1 列，
 		// 输入框与滚动条随之右扩；面板紧贴左栏、自身宽度不变）
 		const leftW = cols - sidebarW - 1;
@@ -2337,7 +2098,7 @@ export class FullApp {
 	 *  dm 短返回时补上）。 */
 	private docRows(start: number, count: number): string[] {
 		const out = this.io.docWindow(start, count);
-		if (out.length < count && start + out.length === this.io.docTotal()) out.push(this.tailLine());
+		if (out.length < count && start + out.length === this.io.docTotal()) out.push(this.panels.tailLine());
 		return out;
 	}
 
@@ -2370,11 +2131,11 @@ export class FullApp {
 		const s = this.state;
 
 		// 面板行只在侧栏可见时计算（隐藏时 sidebarW=0 会让 panelBox 内宽为负——repeat 炸）
-		const sidebarW = s.sidebarVisible ? this.sidebarW() : 0;
+		const sidebarW = s.sidebarVisible ? this.panels.sidebarW() : 0;
 		const statusH = Math.max(8, Math.floor(rows * 0.55));
 		const taskH = rows - statusH;
-		const status = s.sidebarVisible ? this.statusRows(sidebarW, statusH) : [];
-		const tasks = s.sidebarVisible ? this.taskRows(sidebarW, taskH) : [];
+		const status = s.sidebarVisible ? this.panels.statusRows(sidebarW, statusH) : [];
+		const tasks = s.sidebarVisible ? this.panels.taskRows(sidebarW, taskH) : [];
 
 		const inputFocused = s.focusIdx === 0;
 		const ibc = inputFocused ? "accent" : "border";
