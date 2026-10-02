@@ -1355,26 +1355,26 @@ const visionCandidates = async (): Promise<string[]> => {
 const runVisionSetting = async (
 	chooseVia: (title: string, items: string[]) => Promise<string>,
 	configFile: () => string,
-): Promise<string> => {
+): Promise<{ wrote: boolean; message: string }> => {
 	const cur = readVisionModel(configFile());
 	const curNote = cur === "off" ? "停用" : cur === "auto" ? "自动" : cur;
 	const OPTS = ["停用（默认——不生成视觉摘要，降级图只留路径标签）", "自动（当前模型支持图片时直接用它）", "指定模型（从已配置提供商的多模态模型中选）"];
 	const picked = await chooseVia(`配置视觉模型（当前：${curNote}）`, OPTS);
 	if (picked === OPTS[0]) {
 		persistVisionModel(configFile(), "off");
-		return "已设为停用——/reload 后生效";
+		return { wrote: true, message: "已设为停用" };
 	}
 	if (picked === OPTS[1]) {
 		persistVisionModel(configFile(), "auto");
-		return "已设为自动——/reload 后生效";
+		return { wrote: true, message: "已设为自动" };
 	}
 	const candidates = await visionCandidates();
 	if (candidates.length === 0) {
-		return "已配置的提供商里没有目录可证的多模态模型——先 /provider 配置视觉模型所在的提供商（或给模型正确的目录名）";
+		return { wrote: false, message: "已配置的提供商里没有目录可证的多模态模型——先 /provider 配置视觉模型所在的提供商（或给模型正确的目录名）" };
 	}
 	const model = await chooseVia("指定视觉模型（多模态模型 · 已按提供商过滤）", candidates);
 	persistVisionModel(configFile(), model);
-	return `已指定视觉模型 ${model}——/reload 后生效`;
+	return { wrote: true, message: `已指定视觉模型 ${model}` };
 };
 
 /** /tasks（M4.5 T11 / 决策 21-22）：子代理任务列表（含孙代理亲缘分组）→ 回车看查看窗 / 应答挂起审批。
@@ -1467,7 +1467,11 @@ const skillCatalogRows = async (): Promise<SkillCatalogRow[]> => {
  *  busy 不 reload 只 toast（图 4 三要素：动作 · 原因 · 出路）。返回 toast 文案（空 = 空闲路径无 toast）。
  *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
  *  /settings 在 busy 期排队到 turn 结束才执行——走到这里必然空闲，直接 reload 安全。 */
-const afterSkillToggle = (app: FullApp | undefined, name: string, nowDisabled: boolean): string => {
+/** 写模块配置后的收尾（共用件——Alt+K 技能启停 T9 / F14 视觉模型两处）：空闲走 /reload 同链
+ *  （清单即刻生效——reload 链自带标签表/技能菜单/面板重喂；失败 toast 三要素）；busy 不 reload 只 toast。
+ *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
+ *  /settings 在 busy 期排队到 turn 结束才执行——走到这里必然空闲，直接 reload 安全。 */
+const reloadModulesIdle = (app: FullApp | undefined, busyToast: string): string => {
 	if (app === undefined || !app.stateRef.busy) {
 		void (async () => {
 			try {
@@ -1483,8 +1487,12 @@ const afterSkillToggle = (app: FullApp | undefined, name: string, nowDisabled: b
 		})();
 		return "";
 	}
-	return `${nowDisabled ? "已停用" : "已启用"} ${name} · 有任务在执行，稍后请输入 /reload 重新加载`;
+	return busyToast;
 };
+
+/** Alt + K 写配置后的收尾（T9）：共用件之上拼技能启停文案（图 4 三要素：动作 · 原因 · 出路）。 */
+const afterSkillToggle = (app: FullApp | undefined, name: string, nowDisabled: boolean): string =>
+	reloadModulesIdle(app, `${nowDisabled ? "已停用" : "已启用"} ${name} · 有任务在执行，稍后请输入 /reload 重新加载`);
 const openSkillsPanel = async (app: FullApp): Promise<void> => {
 	let selAt = 0; // 详情 Esc 回列表——选中行回到该技能（原型图 3 要点；pickOverlay selAt 参数）
 	for (;;) {
@@ -1857,7 +1865,11 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 					async (t, items) => { const i = await app.pickOverlay(t, items); if (i === undefined) throw new Error("已取消（Esc）"); return items[i] ?? ""; },
 					() => moduleConfigFileFor("tool-media"),
 				);
-				app.showToast(res);
+				// 写盘即自动重载（空闲）；busy（消息接收中）不 reload 只提示——reloadModulesIdle 共用件
+				if (res.wrote) {
+					const busyNote = reloadModulesIdle(app, "有任务在执行，稍后 /reload 生效");
+					app.showToast(busyNote === "" ? `${res.message}，已重载生效` : `${res.message}——${busyNote}`);
+				} else app.showToast(res.message);
 			} catch (err) {
 				if (err instanceof Error && err.message === "已取消（Esc）") continue;
 				throw err;
@@ -1918,7 +1930,9 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 		else if (idx === 7) {
 			try {
 				const res = await runVisionSetting(async (t, items) => commandUi.choose(t, items), () => moduleConfigFileFor("tool-media"));
-				if (res !== "") out(res);
+				// 写盘即自动重载——行模式 /settings busy 期排队到 turn 结束，此处必然空闲（共用件口径）
+				if (res.wrote) { reloadModulesIdle(undefined, ""); out(`${res.message}，已重载生效`); }
+				else out(res.message);
 			} catch (err) {
 				if (isEsc(err)) continue; // Esc → 回设置根菜单
 				throw err;
