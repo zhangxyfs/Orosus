@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { orosusHome as homeDir } from "@orosus/contracts/home";
 import { createHarness } from "@orosus/core";
 import type { CommandUi, ModuleDefinition, SubagentRosterEntry } from "@orosus/contracts/module";
 import { Access, defineTool } from "@orosus/contracts/tool";
@@ -12,6 +13,7 @@ import { z } from "zod";
 const repoRoot = (): string => join(import.meta.dirname, "..", "..", "..");
 import approvalDef from "@orosus/approval";
 import { BUILTIN_MODULES } from "./builtins.ts";
+import { shortenPath } from "./usage-text.ts";
 import { stripAnsi } from "./tui/width.ts";
 
 let dir: string;
@@ -566,14 +568,15 @@ describe("P3 批跨域收尾（2026-09-28 code review）——CS-05 / CT-02 / CM
 });
 
 describe("P3 批跨域收尾——CM-16② / CM-19③ 源面钉（main.ts 内件无独立缝且渲染面行模式不可达）", () => {
-  // shortenPath 只喂全屏面板 cwd（管道行模式无渲染面）、PROVIDER_WRITE_DONE 是 processReplLine 内联门——
-  // 两处均无法经 import/子进程观测（与 CM-02 机制钉同困境，但无外部语义面可钉），退而钉源面：
-  // 关键形态复发（硬编码分隔符 / 前缀正则内联）即红
+  // PROVIDER_WRITE_DONE 是 processReplLine 内联门——无法经 import/子进程观测（与 CM-02 机制钉同困境，
+  // 但无外部语义面可钉），退而钉源面：关键形态复发（前缀正则内联）即红。
+  // CM-16② m5-split-main T3 升格：shortenPath 已搬 usage-text.ts 可 import——行为直钉两档模板 +
+  // 源面旧形钉（硬编码分隔符复发即红）双保险；测试数 1→1 不变。
   const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
-  const fnSeg = (start: string, end: string): string => src.slice(src.indexOf(start), src.indexOf(end));
 
   it("CM-16②：shortenPath 两档模板 + join 全走 path.sep——旧硬编码模板复发即红（Windows 输出不变，POSIX 修正）", () => {
-    const seg = fnSeg("const shortenPath", "const lastUsageOf");
+    const utSrc = readFileSync(join(repoRoot(), "apps", "cli", "src", "usage-text.ts"), "utf8");
+    const seg = utSrc.slice(utSrc.indexOf("const shortenPath"), utSrc.indexOf("const lastUsageOf"));
     expect(seg).toContain("join(sep)");
     expect(seg).toContain(`parts[0] + sep + "…" + sep + tail`);
     expect(seg).toContain(`"…" + sep + tail`);
@@ -581,6 +584,13 @@ describe("P3 批跨域收尾——CM-16② / CM-19③ 源面钉（main.ts 内件
     expect(seg).not.toContain('join("\\\\")');
     expect(seg).not.toContain('"…\\\\"');
     expect(seg).not.toContain('"\\\\…\\\\"');
+    // 行为直钉（升格新增——三档压缩形逐档验；路径以 sep 组装跨平台成立）
+    expect(shortenPath(homeDir(), 4)).toBe("~"); // 档一：家目录本体 → ~
+    expect(shortenPath(homeDir() + sep + "proj", 100)).toBe("~" + sep + "proj"); // 档一：家前缀替换
+    const deep = ["A:", "bbbb", "cccc", "dddd", "eeee"].join(sep); // 5 段深路径（>3 触发档三）
+    expect(shortenPath(deep, deep.length)).toBe(deep); // 档二：塞得下直出
+    expect(shortenPath(deep, 16)).toBe(["A:", "…", "dddd", "eeee"].join(sep)); // 档三：头+…+尾两段
+    expect(shortenPath(deep, 12)).toBe(["…", "dddd", "eeee"].join(sep)); // 档四：只留尾两段
   });
 
   it("CM-19③：/provider 重载门的前缀正则单点常量化——内联回归即红", () => {

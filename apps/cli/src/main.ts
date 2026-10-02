@@ -1,10 +1,8 @@
 import { createInterface } from "node:readline/promises";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { createHarness, discoverModules, encodeCwd, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
-import { deriveMessages } from "@orosus/core";
-import { estimateTokens } from "@orosus/compaction";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
@@ -55,6 +53,7 @@ import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
 import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
+import { ctxUsageText, diskUsageText, lastRequestMsOf, lastUsageOf, runtimeStatusText, shortenPath, tokenUsageText } from "./usage-text.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "./mcp-cmd.ts";
 import { mcpListRow, mcpDetailText } from "./mcp-settings.ts";
@@ -64,7 +63,7 @@ import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
-import { resolveTuiMode, resolveLatexFlag, formatBytes, dirUsage } from "./tuicfg.ts";
+import { resolveTuiMode, resolveLatexFlag } from "./tuicfg.ts";
 import { parse as tomlParse } from "smol-toml";
 import { setLatexEnabled } from "./md/latex.ts";
 import { maybeEnableEnvProxy, envProxyUrl, proxyDisplayText, readWindowsSystemProxy, detectTunProxy } from "./proxy-env.ts";
@@ -1187,108 +1186,6 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
  *  提交走 processReplLine 共用体（输出通道 = dm.pushLine——console 输出在全屏下毁屏）。 */
 // ---------- 全屏面板数据与斜杠清单（F4——真实数据源接线；原型图右栏组件清单逐行） ----------
 
-/** 路径压缩（工作目录 KV——v1.11 三档：家目录 → ~ / 头+…+尾两级 / 只留尾两段）。 */
-const shortenPath = (p: string, maxW: number): string => {
-	const home = orosusHome();
-	let s2 = p;
-	if (p === home || p.startsWith(home + "\\") || p.startsWith(home + "/")) s2 = "~" + p.slice(home.length);
-	if (s2.length <= maxW) return s2;
-	const parts = s2.split(/[\\/]/); // F5 走查实修：原 /[\/]/ 只劈正斜杠，Windows 路径整串落入「…\+全路径」
-	// CM-16②（2026-09-28 code review）：两档模板此前硬编码 "\\"——POSIX 上压缩形把反斜杠混进正斜杠
-	// 路径（面板 cwd 不可读）；join 与两处模板统一走 node:path 的 sep（Windows 输出逐字节不变）
-	const tail = parts.slice(-2).join(sep);
-	if (parts.length > 3) {
-		const cand = parts[0] + sep + "…" + sep + tail; // 头+…+尾两段（F5 二轮：旧模板 \$ 把插值转义成字面量——rig 实证 C:…${tail}）
-		if (cand.length <= maxW) return cand;
-	}
-	return "…" + sep + tail;
-};
-
-/** 末条 usage 输入/输出分拆（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。
- *  F5 二轮⑤：面板 Tokens 行要 ↑ 输入 · ↓ 输出 分列，不再合并总量。
- *  v3 压缩后口径（2026-09-23 实机首例二：压缩成功但面板仍显示压缩前 73k——末条 usage 停在压缩前的请求，
- *  数字回落被滞后掩盖到下一条消息）：末条 turn/compaction 晚于末条 usage 时，input 换压缩后投影估算
- *  （deriveMessages 已应用压缩事件）并置 postCompaction 标记。 */
-const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; postCompaction?: boolean } => {
-  let usageSeq = -1;
-  let result = { input: 0, output: 0 };
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type === "assistant/chunk") {
-      const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-      if (c?.type === "usage") { result = { input: c.input ?? 0, output: c.output ?? 0 }; usageSeq = e.seq; break; }
-    }
-    if (e.type === "assistant/message") {
-      const u = e.usage as { input?: number; output?: number } | undefined;
-      if (u !== undefined) { result = { input: u.input ?? 0, output: u.output ?? 0 }; usageSeq = e.seq; break; }
-    }
-  }
-  const lastCompaction = events.filter((e) => e.type === "turn/compaction").at(-1) as { seq?: number } | undefined;
-  if (lastCompaction !== undefined && (lastCompaction.seq ?? 0) > usageSeq) {
-    return { input: estimateTokens(deriveMessages(events)), output: result.output, postCompaction: true };
-  }
-  return result;
-};
-
-/** 末次模型请求耗时（2026-10-01 拍板 B——被动真值，loop 随 assistant/message 落 durationMs）：
- *  倒扫最近一条带 durationMs 的 assistant/message；老会话（字段未生年代）= undefined 不显示。 */
-const lastRequestMsOf = (events: SessionEvent[]): number | undefined => {
-	for (let i = events.length - 1; i >= 0; i--) {
-		const e = events[i]!;
-		if (e.type === "assistant/message" && typeof e.durationMs === "number") return e.durationMs;
-	}
-	return undefined;
-};
-
-/** 磁盘占用视图文本（F6——ROADMAP 缓存目录条目③销账面）。 */
-const diskUsageText = (): string => {
-	const home = orosusHome();
-	const names = ["cache", "sessions", "logs", "tmp", "modules"];
-	const lines: string[] = [];
-	let total = 0;
-	let totalFiles = 0;
-	for (const name of names) {
-		const u = dirUsage(join(home, name));
-		total += u.bytes;
-		totalFiles += u.files;
-		lines.push(`${name.padEnd(10)}${formatBytes(u.bytes).padStart(10)}   ${u.files} 个文件`);
-	}
-	lines.push("");
-	lines.push(`${"合计".padEnd(10)}${formatBytes(total).padStart(10)}   ${totalFiles} 个文件`);
-	lines.push("");
-	lines.push(`根目录：${home}`);
-	lines.push("清理口径：cache 可安全删除（目录缓存可再拉取）；tmp 为粘贴图片暂存，重启不清、可手动清；sessions 是会话历史（/sessions prune 可清理）。");
-	return lines.join("\n");
-};
-
-/** 上下文用量视图文本（F5 十六轮③：/context 并入——panelCache 同源数据）。 */
-const ctxUsageText = (): string => {
-	const cfg = configFace();
-	const p = panelCache;
-	const model = (() => {
-		const v = realReadModel(process.cwd())() ?? "";
-		if (v === "") return "（未配置）";
-		// CT-02（2026-09-28 code review）：首斜杠切分取模型段——嵌套模型 id（目录侧 openrouter 族真实产出
-		// 如 openai/gpt-4o）旧 split("/").pop() 只剩尾段丢前缀；与 contracts 新口径一致（首个 "/" 前 =
-		// 提供商名、其余整体 = 模型 id）
-		const slash = v.indexOf("/");
-		return slash >= 0 ? v.slice(slash + 1) : v;
-	})();
-	const used = p?.tokens.input ?? 0;
-	const pct = cfg.contextWindow > 0 ? Math.min(100, Math.round((used / cfg.contextWindow) * 100)) : 0;
-	return [
-		"上下文用量",
-		"",
-		`模型　　　${model}`,
-		`窗口　　　${cfg.contextWindow.toLocaleString()} tokens`,
-		`已用　　　~${used.toLocaleString()} tokens（${pct}%）${p?.tokens.postCompaction === true ? "（压缩后估算——下一条消息发出后按实际请求刷新）" : ""}`,
-		`输入累计　↑ ${(p?.tokens.input ?? 0).toLocaleString()}`,
-		`输出累计　↓ ${(p?.tokens.output ?? 0).toLocaleString()}`,
-		"",
-		"口径：已用 = 最近一次请求的输入规模（上下文体量；压缩后至下一条消息前 = 压缩后投影估算）；累计 = 本会话末条 usage。上下文增长到阈值会自动压缩（/compact 可手动）。",
-	].join("\n");
-};
-
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
  *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
 
@@ -1303,25 +1200,6 @@ const SETTINGS_ITEMS = [
 	"配置视觉模型（停用 / 自动 / 指定——给非多模态模型提供视觉）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
 ];
-const tokenUsageText = async (): Promise<string> => {
-	try {
-		const u = await h.usage();
-		const lines = [`当前会话：input ${u.current.input} / output ${u.current.output} tokens`];
-		if (u.lifetime !== undefined) lines.push(`累计（当前项目 ${u.lifetime.sessions} 场会话）：input ${u.lifetime.input} / output ${u.lifetime.output} tokens`);
-		return lines.join("\n");
-	} catch (err) {
-		return `[错误] ${err instanceof Error ? err.message : String(err)}`;
-	}
-};
-const runtimeStatusText = (): string => {
-	const st = h.status();
-	return [
-		`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
-		...(st.effort !== undefined ? [`effort: ${st.effort}`] : []), // /effort 已设才显示（2026-09-25）
-		`session: ${st.sessionId}`,
-		`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
-	].join("\n");
-};
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
 /** 已配置槽的多模态模型清单（F14——§2.5 遮蔽坑免疫：按槽条目内**精确键**逐槽查，禁全目录尾段扫；
@@ -1879,9 +1757,9 @@ const openSettingsPanel = async (app: FullApp): Promise<void> => {
 		if (picked === undefined) return; // 根列表 Esc：整面收起
 		// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
 		if (picked === 0) app.viewText("磁盘占用", diskUsageText(), { layout: "dock" });
-		else if (picked === 1) app.viewText("上下文用量", ctxUsageText(), { layout: "dock" });
-		else if (picked === 2) app.viewText("Token 用量", await tokenUsageText(), { layout: "dock" });
-		else if (picked === 3) app.viewText("运行状态", runtimeStatusText(), { layout: "dock" });
+		else if (picked === 1) app.viewText("上下文用量", ctxUsageText(panelCache), { layout: "dock" });
+		else if (picked === 2) app.viewText("Token 用量", await tokenUsageText(h), { layout: "dock" });
+		else if (picked === 3) app.viewText("运行状态", runtimeStatusText(h), { layout: "dock" });
 		else if (picked === 4) {
 			// M4.5 T12：子代理分组项 → 两子项（决策 7/23）——模型复用 /model 两段选换数据源、审批三档中文名。
 			// 子菜单循环：子项内的 Esc 回子菜单（配置未写零副作用），子菜单的 Esc 回设置根列表
@@ -1949,9 +1827,9 @@ const openSettingsLine = async (out: (s: string) => void): Promise<void> => {
 		const picked = await commandUi.choose("设置", SETTINGS_ITEMS); // 根 Esc 穿透——整面收起
 		const idx = SETTINGS_ITEMS.indexOf(picked);
 		if (idx === 0) out(diskUsageText());
-		else if (idx === 1) out(ctxUsageText());
-		else if (idx === 2) out(await tokenUsageText());
-		else if (idx === 3) out(runtimeStatusText());
+		else if (idx === 1) out(ctxUsageText(panelCache));
+		else if (idx === 2) out(await tokenUsageText(h));
+		else if (idx === 3) out(runtimeStatusText(h));
 		else if (idx === 4) {
 			// M4.5 T12 行模式对等件：子代理分组（模型 / 审批模式 / 轮数上限）——子级 Esc 回子菜单，子菜单 Esc 回根
 			for (;;) {
