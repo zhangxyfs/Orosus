@@ -966,3 +966,49 @@ describe("工具失败体展开帽（m5-render-perf 走查③修——旧帽 60 
 		expect(opened.some((l) => l.includes("其余 5 行从略"))).toBe(true); // 提示行带余量数
 	});
 });
+
+describe("DocModel 视觉转述行（m5-media 走查四 2026-10-02——◐ 转述中 → ● 结果两态原位翻转）", () => {
+	it("① 实时两态：start 后 ◐ 进行中单行；end(done) 原位换 ● 头行 + 转述正文折行；行数账本翻转即时生效", () => {
+		const dm = new DocModel();
+		dm.userPrompt("这张图里有什么？");
+		dm.visionTranscribeStart("zhipuai-coding-plan/glm-5.3-flash");
+		const mid = dm.frameLines(80).map(stripAnsi);
+		expect(mid.some((l) => l.includes("◐ 由 zhipuai-coding-plan/glm-5.3-flash 转述图片中"))).toBe(true);
+		dm.visionTranscribeEnd("zhipuai-coding-plan/glm-5.3-flash", "蓝色按钮的登录页，标题写着测试字样", "done");
+		const done = dm.frameLines(80).map(stripAnsi);
+		expect(done.some((l) => l.includes("● 视觉转述（zhipuai-coding-plan/glm-5.3-flash）"))).toBe(true);
+		expect(done.some((l) => l.includes("蓝色按钮的登录页"))).toBe(true); // 转述正文可见
+		expect(done.some((l) => l.includes("◐"))).toBe(false); // 进行中行已被原位替换
+	});
+
+	it("② 失败/中止态：failed 带模型名与占位说明；aborted 提示重发即续（live-only 态）", () => {
+		const dm = new DocModel();
+		dm.visionTranscribeStart("glm-5.3-flash");
+		dm.visionTranscribeEnd("glm-5.3-flash", undefined, "failed");
+		let plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.some((l) => l.includes("视觉转述失败（glm-5.3-flash）"))).toBe(true);
+		dm.visionTranscribeStart("glm-5.3-flash");
+		dm.visionTranscribeEnd("glm-5.3-flash", undefined, "aborted");
+		plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.some((l) => l.includes("已中止") && l.includes("重发即续"))).toBe(true);
+	});
+
+	it("③ 回放（拍板「重进程序调历史也要显示」）：host/vision-transcribe 事件 → 问题→转述行→回答行序；ok=false → failed 行", () => {
+		const dm = new DocModel();
+		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: "看图" }] },
+			{ type: "host/vision-transcribe", model: "glm-5.3-flash", ok: true, text: "绿色图表与三条曲线" },
+			{ type: "assistant/message", content: [{ kind: "text", text: "这张图展示了…" }] },
+		], 80);
+		const plain = dm.frameLines(80).map(stripAnsi);
+		const iQ = plain.findIndex((l) => l.includes("看图"));
+		const iV = plain.findIndex((l) => l.includes("● 视觉转述（glm-5.3-flash）"));
+		const iA = plain.findIndex((l) => l.includes("这张图展示了"));
+		expect(iQ).toBeGreaterThanOrEqual(0);
+		expect(iV).toBeGreaterThan(iQ); // 行序：问题 → 转述
+		expect(iA).toBeGreaterThan(iV); // 转述 → 回答
+		expect(plain.some((l) => l.includes("绿色图表与三条曲线"))).toBe(true);
+		dm.historyFrom([{ type: "host/vision-transcribe", model: "m", ok: false }], 80); // 无 running 条目 → 直接推终态
+		expect(dm.frameLines(80).map(stripAnsi).some((l) => l.includes("视觉转述失败"))).toBe(true);
+	});
+});

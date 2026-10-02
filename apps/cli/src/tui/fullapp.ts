@@ -122,6 +122,11 @@ export interface FullAppIO {
 	/** 双击 Esc 全停（M4.5 T14——决策 12）：焦点在输入框空闲态双击 = 停止全部子代理（未答审批自动回绝）；
 	 *  忙时双击 = 停生成 + 全停（叠合语义定案——设计空白 T14 条）。 */
 	stopAllSubagents?(): void;
+	/** 视觉转述等待期（m5-media 走查四 2026-10-02）：transcribing = 有转述在等；abort = 双击 Esc 中止
+	 *  （宿主侧不发送、输入连图回挂；转述调用本身不掐——结果照常落缓存，重发命中零等待）。非 busy
+	 *  独立态：busy 分支管不到（turn 未开始），判定口径与 busy 双击同款（1s 窗口首按 toast 提示）。 */
+	visionTranscribing?(): boolean;
+	abortVisionTranscribe?(): void;
 	/** ↑ 召回队尾（LIFO——kimi recallLastQueued 同语义）；空队列 → undefined。 */
 	recallQueued(): string | undefined;
 	/** Ctrl+U = steer（kimi Ctrl-S 改键位——Ctrl+S 是终端流控 XOFF 冲突回避）：排队消息 + 当前草稿
@@ -1976,6 +1981,20 @@ export class FullApp {
 					s.cursor = 1;
 					s.overlaySel = 0;
 				} else s.overlayOpen = false;
+				this.scheduler.requestImmediateRender();
+				return;
+			}
+			// 视觉转述等待期双击 Esc（走查四）：非 busy 独立态（turn 未开始）——busy 分支管不到。
+			// 判定口径与 busy 双击同款；overlay 已关才轮到本分支（Esc 优先关菜单）
+			if (this.io.visionTranscribing?.() === true) {
+				if (Date.now() - this.lastEscCancel < 1000) {
+					this.lastEscCancel = 0;
+					s.toast = undefined;
+					this.io.abortVisionTranscribe?.();
+				} else {
+					this.lastEscCancel = Date.now();
+					this.showToast("再按一次 Esc 中止转述（消息不发出，重发即续）");
+				}
 				this.scheduler.requestImmediateRender();
 				return;
 			}

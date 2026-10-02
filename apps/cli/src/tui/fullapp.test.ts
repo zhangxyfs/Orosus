@@ -1958,6 +1958,41 @@ describe("双击 Esc 全停子代理（M4.5 T14——决策 12 + 忙时叠合定
 	});
 });
 
+describe("双击 Esc 中止视觉转述（m5-media 走查四——非 busy 独立态：等待期 turn 未开始）", () => {
+	it("ⓐ 转述等待期：单击只提示，窗口内双击触发中止；不再等待后 Esc 回归零行为", async () => {
+		let transcribing = true;
+		const { app, input, actions } = rig([], 100, 30, {
+			visionTranscribing: () => transcribing,
+			abortVisionTranscribe: () => { transcribing = false; actions.push("abort-vision"); },
+		});
+		app.start();
+		await flush();
+		input.emit("data", ""); // 首按只提示不动作
+		await flush(80);
+		expect(actions).toEqual([]);
+		expect(app.stateRef.toast?.text).toContain("再按一次 Esc 中止转述");
+		input.emit("data", ""); // 窗口内再按：中止
+		await flush(80);
+		expect(actions).toEqual(["abort-vision"]);
+		input.emit("data", ""); // 已不在等待——不炸、不再触发中止（回焦点零行为）
+		await flush(80);
+		expect(actions).toEqual(["abort-vision"]);
+		app.stop();
+	});
+
+	it("ⓑ 非等待期（未挂 io 两个口）：空闲双击零行为改动——回归钉（不误入中止分支）", async () => {
+		const { app, input, actions } = rig([], 100, 30, {});
+		app.start();
+		await flush();
+		input.emit("data", "");
+		await flush(80);
+		input.emit("data", "");
+		await flush(80);
+		expect(actions).toEqual([]); // 无子代理无转述——维持旧零行为
+		app.stop();
+	});
+});
+
 describe("浮层期硬件光标隐藏（2026-09-27 用户走查：子代理查看窗里浮着个光标——浮层是字符层盖不住物理光标）", () => {
 	it("view/pick/dialog 浮层在位时 placeCursor 写隐藏序列（?25l）；ask 输入行接管与斜杠菜单期仍显示（?25h）", async () => {
 		const { app, input, output } = rig();
