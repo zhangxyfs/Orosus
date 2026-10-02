@@ -3,11 +3,10 @@ import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
 import { discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
-import type { Harness, SessionEvent } from "@orosus/core";
+import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
 import { createCliUi } from "./uiface.ts";
-import { computeModulePreset, planModulePreset, presetBaseline } from "./modpreset.ts";
 import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.ts";
 import { trustModule } from "@orosus/core";
 import { createSilenceableOutput } from "./menu.ts";
@@ -29,10 +28,10 @@ import { ringTurnBell } from "./bell.ts";
 import { resolveBellMode, playTurnChime } from "./chime.ts";
 import { createStreamView, type StreamChunk } from "./tui/streamview.ts";
 import { DocModel } from "./tui/docmodel.ts";
-import { FullApp, type PanelData, type SlashItem, msText } from "./tui/fullapp.ts";
+import { FullApp, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 
-import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView, type ProviderEntry } from "@orosus/provider-custom";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
@@ -50,12 +49,13 @@ import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, moduleConfigFileFor } from "./config-face.ts";
-import { lastRequestMsOf, lastUsageOf, shortenPath } from "./usage-text.ts";
+import { shortenPath } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
+import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
@@ -379,13 +379,6 @@ let pendingEcho: { notice: string; history: boolean } | undefined;
 // process.exit(1) 直接拦住（同文件 --dump-modules 的 exit(0) 先例）
 // ---- 口子四：设置服务写面 + 宿主状态读面（m5 T9；h 经模块级 let 引用——服务闭包调用期现读活会话）----
 
-/** 挂载模式现算三态（设计空白 17）：启用集 ⊆ 保底名单 → minimal；全启用 → full；其余 → custom。
- *  现算不靠记忆——用户切完极简又手动插拔，「上次切的档」会撒谎。保底名单 = lockReasonFor 三款同款（核心 + approval + 当前活跃 provider）。 */
-const modulePresetOf = (): "full" | "minimal" | "custom" => {
-  const providerV = realReadModel(process.cwd())() ?? "";
-  return computeModulePreset(h.graph().audit(), presetBaseline(providerV === "" ? "" : providerV.split("/")[0]!));
-};
-
 /** 宿主状态快照（m5 T9 读面，决策点 24）：harness 现成读口 + 提纯投影 + preset 现算——零新增读口。 */
 const hostInfo: HostInfo = {
   current: async () => {
@@ -398,7 +391,7 @@ const hostInfo: HostInfo = {
       model: st.model,
       modelOverridden: st.overridden,
       ...(st.effort !== undefined ? { effort: st.effort } : {}),
-      preset: modulePresetOf(),
+      preset: modulePresetOf(modulesDeps),
       theme: theme.activeThemeName(), // m5 T12：注册表 active 名（本批仓内恒「连山」）
       permission: permissionOf(events, cfg.approvalMode),
       ...(label !== undefined ? { sessionLabel: label } : {}),
@@ -407,62 +400,6 @@ const hostInfo: HostInfo = {
       usage,
     };
   },
-};
-
-/** 挂载预设状态（m5 T10，设计空白 16）：极简模式自己关掉的模块名单（会话内存）——
- *  切回完整只恢复这批（用户手动关过的不会被误开）；undefined = 从未切过极简。 */
-let minimalClosed: Set<string> | undefined;
-
-/** applyModulePreset 实现（m5 T10）：算关闭集（纯计划器）→ 硬依赖级联闭包展开 →
- *  逐模块写盘（单节失败记日志继续，失败清单带内返回——决策点 21）→ 统一 reload 一次
- *  （关消失模块的挂起窗、面板刷新、标签表重喂——toggleModule 链同款收尾）。 */
-const applyModulePresetImpl = async (preset: "full" | "minimal"): Promise<{ failed: string[] }> => {
-  const audit = h.graph().audit();
-  const providerV = realReadModel(process.cwd())() ?? "";
-  const baseline = presetBaseline(providerV === "" ? "" : providerV.split("/")[0]!);
-  const plan = planModulePreset({
-    preset,
-    activeNames: audit.filter((a) => a.state === "active").map((a) => a.name),
-    baseline,
-    minimalClosed,
-  });
-  if (plan.writes.length === 0) return { failed: plan.failed };
-  let writeList: string[];
-  if (preset === "minimal") {
-    // 级联：卸载带走依赖者（computeUnmountClosure——toggleModule 同款）；撞锁定（保底成了被拔者的依赖）拒绝整次带拒因
-    const depRows = audit.map((a) => ({ name: a.name, provides: a.provides, dependsOn: a.dependsOn, state: a.state }));
-    const lockedNames = audit.filter((a) => lockReasonFor(a.name) !== undefined).map((a) => a.name);
-    const closure = computeUnmountClosure(plan.writes.map((w) => w.name), depRows, lockedNames);
-    if (!closure.ok) return { failed: [closure.blocked] };
-    writeList = closure.write;
-  } else {
-    writeList = plan.writes.map((w) => w.name);
-  }
-  const failed: string[] = [];
-  for (const name of writeList) {
-    try {
-      setModuleEnabledInConfig(name, preset === "minimal" ? false : true, moduleConfigFileFor(name, h));
-    } catch (err) {
-      h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) });
-      failed.push(name);
-    }
-  }
-  if (preset === "minimal") {
-    minimalClosed = new Set(writeList); // 幂等：空关闭集不到这里（早退）——不覆盖原记录
-  } else {
-    minimalClosed = undefined; // 恢复完清记录（再切 minimal 重新记）
-  }
-  const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
-  try {
-    await h.reload();
-  } catch (err) {
-    h.log("host.preset.reload-failed", `预设 reload 失败（已写盘——可 /reload 或重启对齐）`, { preset, error: String(err instanceof Error ? err.message : err) });
-    return { failed: [...failed, "(reload)"] };
-  }
-  closeGoneModuleUi(namesBefore);
-  registerToolLabels(h.graph().tools.toolInfos());
-  await refreshPanel();
-  return { failed };
 };
 
 /** 设置服务（m5 T9 骨架）：setModel/setEffort/setLabel 走 harness 同源出口（单一写者）；
@@ -484,7 +421,7 @@ const settingsService: SettingsService = {
     notify(`主题已切换：${name}`);
   },
   applyModulePreset: async (preset) => {
-    const { failed } = await applyModulePresetImpl(preset);
+    const { failed } = await applyModulePresetImpl(modulesDeps, preset);
     notify(failed.length > 0
       ? `预设切换部分失败：${failed.join("、")}（已写盘部分可 /reload 对齐）`
       : preset === "minimal" ? "已切到极简模式（核心 + 审批 + 当前模型）" : "已切回完整模式");
@@ -514,29 +451,39 @@ const sessionDeps: SessionDeps = {
   isFullscreen: () => tuiMode === "full",
   deferEcho: () => { pendingEcho = { notice: "", history: true }; },
 };
+/** 模块面板/预设族依赖（m5-split-main T9，D2）：refreshSkillMenu 惰性闭包织入（skillDeps 后建、
+ *  调用期现读——防 skills-ui/modules-ui 相互 import 的环）。 */
+const modulesDeps: ModulesUiDeps = {
+  getH: () => h,
+  getActiveApp: () => activeApp,
+  refreshSkillMenu: () => void refreshSkillMenu(skillDeps),
+  proxyStateText,
+  runStartedAt: RUN_STARTED_AT,
+  permCycle: () => PERM_CYCLE,
+};
 /** MCP 面板族依赖（m5-split-main T6，D2）：reload 收尾链与全屏/行模式访问器穿给 mcp-ui.ts
  *  （闭包现读——refreshPanel/refreshSkillMenu 等定义在本文件后段，调用期恒已初始化）。 */
 const mcpDeps: McpUiDeps = {
   getH: () => h,
   commandUi,
-  activeModuleNames: () => activeModuleNames(),
-  closeGoneModuleUi: (before) => closeGoneModuleUi(before),
+  activeModuleNames: () => activeModuleNames(modulesDeps),
+  closeGoneModuleUi: (before) => closeGoneModuleUi(modulesDeps, before),
   refreshSkillMenu: () => refreshSkillMenu(skillDeps),
-  refreshPanel: () => refreshPanel(),
+  refreshPanel: () => refreshPanel(modulesDeps),
   getActiveApp: () => activeApp,
 };
 /** 技能菜单族依赖（m5-split-main T7，D2）：reloadModulesIdle 为 T9 留守共用件（闭包现读）。 */
 const skillDeps: SkillUiDeps = {
   getH: () => h,
   commandUi,
-  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(app, busyToast),
+  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
 };
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
   getH: () => h,
   commandUi,
-  getPanelCache: () => panelCache,
-  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(app, busyToast),
+  getPanelCache: () => getPanelCache(),
+  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
   skillDeps,
   mcpDeps,
 };
@@ -746,7 +693,7 @@ function attachRender(h: Harness): void {
       if (e.type === "turn/end") {
         sinkFor().end();
         if (tuiMode === "full") dm.turnEnd(); // 轮边界记账 + 滑窗裁剪（T7——settle 之后条目已定格）
-        void refreshPanel(); // 面板数据随 turn 刷新（F4）
+        void refreshPanel(modulesDeps); // 面板数据随 turn 刷新（F4）
         // 回合提示音（2026-09-30 用户拍板）：完成 1 响/中断 2 响/错误 3 响——events() 是实时通道
         //（恢复回放走 pendingEcho/DocModel 重建，不经此），只响活体回合；TTY 且 [tui] bell 开才响
         if (bellMode !== "off" && process.stdout.isTTY === true) {
@@ -769,7 +716,7 @@ function attachRender(h: Harness): void {
       // panelCache 未就绪（启动历史重放先于首刷）跳过，refreshPanel 稍后自会从历史取 .at(-1)；
       // 全屏 FullApp 秒 tick 自动重绘，行模式无面板，改快照无害
       const todoTasks = panelTasksFromEvent(e);
-      if (todoTasks !== undefined && panelCache !== undefined) panelCache = { ...panelCache, tasks: todoTasks };
+      if (todoTasks !== undefined && getPanelCache() !== undefined) setPanelCache({ ...getPanelCache()!, tasks: todoTasks });
     },
   );
 }
@@ -1035,7 +982,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // isTTY 取 stdout（写侧关切，与 lv/attachRender 双写面同口径——输出入管时硬保证不被指示行污染）
         // /reload 走 h.prompt 内建路由（报表不透出到 CLI 调用点）——m5 T7 关消失模块挂起窗：
         // 进 prompt 前快照活跃集，回来后 diff 关窗（报表解析口径不一，直接 diff 激活集更稳）
-        const reloadShot = cmdNameOf(text) === "/reload" ? activeModuleNames() : undefined;
+        const reloadShot = cmdNameOf(text) === "/reload" ? activeModuleNames(modulesDeps) : undefined;
         const cmdOut = await withCompactHint(
           text,
           {
@@ -1062,12 +1009,12 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // LLM 钉模型清单读活槽，不重载即缺席；「设为当前默认」写的顶层 provider 键同理随重载即时生效）；
         // 只在写盘结果后重载（取消与未写入不动图）
         if (cmdNameOf(text) === "/provider" && PROVIDER_WRITE_DONE.test(cmdOut ?? "")) {
-          const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
+          const namesBefore = activeModuleNames(modulesDeps); // m5 T7：关消失模块的挂起窗
           await h.reload();
-          closeGoneModuleUi(namesBefore);
+          closeGoneModuleUi(modulesDeps, namesBefore);
           notify("平台配置已即时生效（模块图已重载）");
         }
-        if (reloadShot !== undefined) closeGoneModuleUi(reloadShot);
+        if (reloadShot !== undefined) closeGoneModuleUi(modulesDeps, reloadShot);
         if (cmdNameOf(text) === "/reload") { registerToolLabels(h.graph().tools.toolInfos()); void refreshSkillMenu(skillDeps); } // 标签表与技能菜单缓存随图重喂
         // 空串 = 静默约定（2026-09-22 用户拍板——/permission /yolo 切换成功不落流区行，面板 chip 自反映）
         if (cmdOut !== undefined && cmdOut !== "") {
@@ -1170,61 +1117,6 @@ const openTasks = async (app: FullApp | undefined, out: (s: string) => void): Pr
 	}
 };
 
-/** Alt + K 写配置后的收尾（T9）：空闲走 /reload 同链（清单即刻生效——/reload 自有完成反馈不另 toast）；
- *  busy 不 reload 只 toast（图 4 三要素：动作 · 原因 · 出路）。返回 toast 文案（空 = 空闲路径无 toast）。
- *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
- *  /settings 在 busy 期排队到 turn 结束才执行——走到这里必然空闲，直接 reload 安全。 */
-/** 写模块配置后的收尾（共用件——Alt+K 技能启停 T9 / F14 视觉模型两处）：空闲走 /reload 同链
- *  （清单即刻生效——reload 链自带标签表/技能菜单/面板重喂；失败 toast 三要素）；busy 不 reload 只 toast。
- *  busy 判定 = 全屏 stateRef.busy 现读（inflight 是 runFullScreen 局部，模块级取不到）；行模式
- *  /settings 在 busy 期排队到 turn 结束才执行——走到这里必然空闲，直接 reload 安全。 */
-const reloadModulesIdle = (app: FullApp | undefined, busyToast: string): string => {
-	if (app === undefined || !app.stateRef.busy) {
-		void (async () => {
-			try {
-				const namesBefore = activeModuleNames();
-				await h.reload();
-				closeGoneModuleUi(namesBefore);
-				registerToolLabels(h.graph().tools.toolInfos());
-				void refreshSkillMenu(skillDeps);
-				await refreshPanel();
-			} catch (err) {
-				(app ?? activeApp)?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
-			}
-		})();
-		return "";
-	}
-	return busyToast;
-};
-
-/** provider 条目表 TTL 缓存（skillMenu 5s 同款惯例——/provider 菜单改端点后最迟 5s 反映到卡）。 */
-let providersCache: { at: number; providers: Record<string, ProviderEntry> } | undefined;
-const providersTtl = async (): Promise<Record<string, ProviderEntry>> => {
-	const now = Date.now();
-	if (providersCache === undefined || now - providersCache.at > 5000) {
-		providersCache = { at: now, providers: await defaultMenuDeps().loadProviders() };
-	}
-	return providersCache.providers;
-};
-
-/** 模型服务信息行（2026-10-01 拍板②按倾向留——纯信息行不主张连接状态）：端点域名 + 末次请求耗时
- *  （assistant/message.durationMs 投影，老会话无字段则只显端点）。refreshPanel 异步预取进 panelCache。 */
-const modelServiceOf = async (events: SessionEvent[]): Promise<string> => {
-	const v = realReadModel(process.cwd())() ?? "";
-	if (v === "") return "（未配置——/provider 配置）";
-	const providerName = v.includes("/") ? v.split("/")[0]! : v;
-	const entry = (await providersTtl())[providerName];
-	let host = providerName;
-	if (entry !== undefined) {
-		try {
-			host = new URL(entry.baseUrl).host;
-		} catch {
-			host = entry.baseUrl; // 无 scheme 形态原样显示（kvRow 行内截断兜底）
-		}
-	}
-	const lastMs = lastRequestMsOf(events);
-	return lastMs === undefined ? host : `${host} · 末次 ${msText(lastMs)}`;
-};
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
@@ -1268,105 +1160,6 @@ const PERM_META: Record<string, { label: string; desc: string; long: string }> =
 	"ask-risky": { label: "需要时候询问", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
 	never: { label: "从不询问", desc: "全自动，有问题模型自行判断", long: "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；就算有问题也是模型自行判断，不会向你提问。只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。" },
 };
-let panelCache: PanelData | undefined;
-
-/** 面板锁定规则（2026-09-23 用户拍板 + T4 联动闭包复用）：① orosus-core = 核心本体（伪模块）；
- *  ② approval = 安全护栏（出厂 required=true，想松绑走 /permission never 正道）；
- *  ③ 当前活跃 provider 模块 = 拔了当场断模型（换 provider 后旧的自动解锁）。 */
-const lockReasonFor = (name: string): string | undefined => {
-	const activeProviderModule = (() => {
-		const v = realReadModel(process.cwd())() ?? "";
-		return v === "" ? "" : v.split("/")[0]!;
-	})();
-	return name === "orosus-core" ? "核心本体，不可插拔"
-		: name === "approval" ? "安全护栏模块（出厂 required），放松审批走 /permission never"
-		: name === activeProviderModule ? "当前使用的 provider，拔了会断模型（先 /model 换到别的）"
-		: undefined;
-};
-
-/** reload 后关消失模块的挂起窗（m5 T7——/reload、toggleModule、applyModulePreset 三处 reload 调用点共用）：
- *  拆卡不需要通知（panelData 每秒现读自然消失），窗是持久态必须主动关。
- *  比对 reload 前后的活跃集（报表解析在各调用点口径不一，直接 diff 激活集更稳）。 */
-const activeModuleNames = (): Set<string> => new Set(h.graph().audit().filter((a) => a.state === "active").map((a) => a.name));
-const closeGoneModuleUi = (before: Set<string>): void => {
-  if (activeApp === undefined) return;
-  const after = activeModuleNames();
-  for (const n of before) if (!after.has(n)) activeApp.closeModuleUi(n);
-};
-
-/** 权限投影（m5 T9 从 refreshPanel 提纯共用——host.current() 同源）：末条 approval/policy 事件 ?? 配置档。 */
-const permissionOf = (events: { type: string; mode?: unknown }[], fallback: string): string => {
-  const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
-  return lastPolicy?.mode ?? fallback;
-};
-/** 会话名投影（同款提纯）：末条 session/label 事件；未命名 = undefined（显示侧自定「新会话」）。 */
-const sessionLabelOf = (events: { type: string; label?: unknown }[]): string | undefined => {
-  const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
-  return lastLabel?.label;
-};
-
-/** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
-const refreshPanel = async (): Promise<void> => {
-	const events = await h.history();
-	const cfg = configFace();
-	const permission = permissionOf(events, cfg.approvalMode); // m5 T9：提纯投影（host.current() 共用）
-	const lastTodo = events.filter((e) => e.type === "tool-todo/write").at(-1) as
-		| { type: string; todos?: unknown }
-		| undefined;
-	const next = PERM_CYCLE[(PERM_CYCLE.indexOf(permission) + 1 + PERM_CYCLE.length) % PERM_CYCLE.length]!;
-	panelCache = {
-		model: (() => {
-			// F5 十三轮② 用户实测：裸 provider 值不能直接当模型名显示——解析槽的 defaultModel
-			const v = realReadModel(process.cwd())() ?? "";
-			if (v === "") return "（未配置——/provider 配置）";
-			if (v.includes("/")) return v.split("/").pop()!;
-			const slot = h.graph().services.provider(v) as { defaultModel?: string } | undefined;
-			return slot?.defaultModel ?? v;
-		})(),
-    session: (() => {
-      // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名显示「新会话」直到 /title 或 fork 命名
-      return sessionLabelOf(events) ?? "新会话";
-    })(),
-		cwd: shortenPath(process.cwd(), 26),
-		tokens: lastUsageOf(events),
-		startedAt: RUN_STARTED_AT, // 本次进程启动（F5 九轮⑤：resume 旧会话不再显示历史年龄）
-		contextWindow: cfg.contextWindow,
-		modules: h
-			.graph()
-			.audit()
-			.map((a) => {
-				const lockedReason = lockReasonFor(a.name);
-				return {
-					name: a.name,
-					desc: a.name === "orosus-core" ? "核心循环" : "",
-					state: a.state === "active" ? ("mounted" as const) : a.state === "pending-confirm" ? ("pendingConfirm" as const) : ("off" as const), // m5 T17 第四态
-					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
-				};
-			}),
-		tasks: (lastTodo !== undefined ? panelTasksFromEvent(lastTodo) : undefined) ?? [],
-		permission,
-		permissionNext: () => `/permission ${next}`,
-		// 「网络 · MCP」卡预取面（2026-10-01）：代理态静态、模型服务行要读 provider 条目（异步预取）；
-		// 连接行走 mcp.catalog 现读不进快照——panelData() 装配期合并
-		network: { proxy: await proxyStateText(), modelService: await modelServiceOf(events), connections: [] },
-	};
-};
-
-/** 模块卡现读（m5 T6 口子二）：不走 panelCache 快照——panelData() 每次现调 getter（FullApp 1 秒 tick
- *  驱动重渲，现问现答）；getter 抛错 = 该卡当帧剔除 + host 日志 warn（设计空白 15——不记黑名单，
- *  下帧恢复即回）。卸载拆卡不需要通知：卡注册表随 reload 变化，此处每秒现读自然消失。 */
-const moduleCards = (): PanelData["cards"] => {
-	const out: NonNullable<PanelData["cards"]> = [];
-	for (const c of h.graph().cards) {
-		try {
-			out.push({ area: c.spec.area, order: c.spec.order, title: c.spec.title, widgets: c.spec.widgets });
-		} catch (err) {
-			h.log("host.card.read-error", `模块卡读取抛错，当帧剔除：${c.owner}/${c.spec.title}`, { owner: c.owner, title: c.spec.title, error: String(err instanceof Error ? err.message : err) });
-		}
-	}
-	return out.sort((a, b) => a.order - b.order);
-};
-
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
 const SLASH_ITEMS: SlashItem[] = [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
@@ -1469,7 +1262,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     visionTranscribing: () => visionTranscribing(),
     abortVisionTranscribe: () => { abortVisionTranscribe(); },
     panelData: () => ({
-      ...(panelCache ?? {
+      ...(getPanelCache() ?? {
         model: "…",
         session: "新会话", // 首刷前占位——未命名口径与 refreshPanel 一致（sid 不可读）
         cwd: shortenPath(process.cwd(), 26),
@@ -1481,15 +1274,15 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         permission: configFace().approvalMode,
         permissionNext: () => "/permission ask-always",
       }),
-      cards: moduleCards(), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
-      network: panelCache?.network === undefined ? undefined : { ...panelCache.network, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
+      cards: moduleCards(modulesDeps), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
+      network: getPanelCache()?.network === undefined ? undefined : { ...getPanelCache()!.network!, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
     }),
     slashCommands: () => SLASH_ITEMS,
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
     // /reload 收尾与模块插拔后另有显式刷新点
     skillItems: () => skillMenuTtl(skillDeps),
     skillInject: skillInjectText,
-    slashCurrent: (cmd) => (cmd === "/permission" ? (panelCache?.permission ?? configFace().approvalMode) : ""),
+    slashCurrent: (cmd) => (cmd === "/permission" ? (getPanelCache()?.permission ?? configFace().approvalMode) : ""),
     // 参数阶段数据源（m5 T15）：graph 现读模块命令的 completeArg；抛错兜底空表 + host 日志（菜单层当无候选）
     slashArgComplete: (cmd, word, args) => {
       const c = h.graph().commands.find((x) => `/${x.name}` === cmd);
@@ -1525,7 +1318,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         app.showToast("回答进行中不可插拔（等本轮结束后再试）");
         return;
       }
-      const mounted = panelCache?.modules.find((m) => m.name === name)?.state === "mounted";
+      const mounted = getPanelCache()?.modules.find((m) => m.name === name)?.state === "mounted";
       const target = !mounted;
       // 卸载 tool-subagent 守卫（2026-09-27）：在跑/排队/挂审批的子代理在册不许卸——
       // 内核 runner 不随模块死，但派活/停止工具面会消失，模型侧就管不着了
@@ -1570,12 +1363,12 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       }
       void (async () => {
         try {
-          const namesBefore = activeModuleNames(); // m5 T7：关消失模块的挂起窗
+          const namesBefore = activeModuleNames(modulesDeps); // m5 T7：关消失模块的挂起窗
           const r = await h.reload();
-          closeGoneModuleUi(namesBefore);
+          closeGoneModuleUi(modulesDeps, namesBefore);
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
           void refreshSkillMenu(skillDeps); // m4-7 T7：技能菜单缓存随图刷新（停用后插拔即时生效）
-          await refreshPanel();
+          await refreshPanel(modulesDeps);
           app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
         } catch (err) {
           app.showToast(`插拔失败：${err instanceof Error ? err.message : String(err)}（已回写配置，可 /reload 或重启恢复）`);
@@ -1619,7 +1412,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
               setModuleEnabledInConfig(name, true, moduleConfigFileFor(name, h)); // 动作 2：写盘 enabled
               await h.reload(); // 动作 3：重跑信任判定 → 挂载
               registerToolLabels(h.graph().tools.toolInfos());
-              await refreshPanel();
+              await refreshPanel(modulesDeps);
               notify(`已确认并启用 ${name}`);
             } catch (err) {
               notify(`确认失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1729,11 +1522,11 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           inflight = false;
           app.setBusy(false);
           // 命令类提交（/permission /model…）不产生 turn/end——面板在此刷新（F5 走查：chip 陈旧）
-          void refreshPanel();
+          void refreshPanel(modulesDeps);
           const next = pendingSubmits.shift();
           if (next !== undefined && action === undefined) runSubmit(next);
         } else {
-          void refreshPanel(); // busy 即改档（/title /permission…）也要即时刷面板（2026-09-23：/title 改名单元格陈旧前案）
+          void refreshPanel(modulesDeps); // busy 即改档（/title /permission…）也要即时刷面板（2026-09-23：/title 改名单元格陈旧前案）
         }
       }
     })();
@@ -1866,7 +1659,7 @@ if (args.print === undefined) try {
         if (pe.history) dm.historyFrom(await h.history(), streamW()); // 结构化摄入（F5 五轮②③④）
       }
     }
-    void refreshPanel(); // 面板首刷（F4）
+    void refreshPanel(modulesDeps); // 面板首刷（F4）
   // m5 T17：启动期一次性 toast——待确认第三方存在时提示（config 已 enabled 但未确认的也在此列：保持不挂载，回车确认后才启用）
   {
     const pending = h.pendingConfirms();
