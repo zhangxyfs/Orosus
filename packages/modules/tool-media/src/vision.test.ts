@@ -169,6 +169,30 @@ describe("summarizeImage（F13——后台生成 + 缓存 + 失败回落）", ()
     expect(prompt).toContain("线条");
     expect(maxTokens).toBeGreaterThanOrEqual(1200); // 帽够得着（旧 300 出半截）
   });
+
+  it("③f 转述思考档（卡 23s 空产出修）：目录声明 low → 请求带 reasoningEffort=low；无声明 → 不带字段（lenient 照发会 400 自证）", async () => {
+    const d = fresh();
+    const img = join(d, "eff.png");
+    writeFileSync(img, Buffer.from([0x89, 0x50]));
+    const cat = join(d, "models-dev.json");
+    writeFileSync(cat, JSON.stringify({ catalog: { zai: { models: { "eye/m": { id: "eye/m", reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] } } } } }));
+    const efforts: (string | undefined)[] = [];
+    const deps = {
+      llmStream: (req: { reasoningEffort?: string }) => {
+        efforts.push(req.reasoningEffort);
+        return fakeStream([{ type: "text/delta", text: "低思考快出" }, { type: "finish", kind: "stop" }])();
+      },
+      catalogFile: cat,
+      retryBackoffMs: [],
+    };
+    expect(await summarizeImage(img, "image/png", "eye/m", deps as never)).toContain("低思考快出");
+    expect(efforts[0]).toBe("low"); // 目录声明 low 在列——降档发出
+    writeFileSync(cat, JSON.stringify({ catalog: { zai: { models: { "eye/m": { id: "eye/m" } } } } })); // 无声明
+    const img2 = join(d, "eff2.png");
+    writeFileSync(img2, Buffer.from([0x89, 0x50]));
+    expect(await summarizeImage(img2, "image/png", "eye/m", deps as never)).toContain("低思考快出");
+    expect(efforts[1]).toBeUndefined(); // 无声明不带字段
+  });
 });
 
 describe("降级/压缩标签富化（F13 消费侧——缓存同步读）", () => {

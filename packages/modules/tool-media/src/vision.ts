@@ -11,7 +11,7 @@ import { runProcess } from "./imaging.ts";
 
 export interface VisionSummaryDeps {
   /** 二级模型流（ctx.llm.stream——D39 口，model 字段按值解析槽）。 */
-  llmStream: (req: { model: string; system: string; messages: { role: "user"; content: ({ kind: "text"; text: string } | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" })[] }[]; tools: never[]; signal: AbortSignal; maxTokens?: number }) => AsyncIterable<Chunk>;
+  llmStream: (req: { model: string; system: string; messages: { role: "user"; content: ({ kind: "text"; text: string } | { kind: "image"; path: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" })[] }[]; tools: never[]; signal: AbortSignal; maxTokens?: number; reasoningEffort?: string }) => AsyncIterable<Chunk>;
   /** 目录缓存路径（vision 判定——auto 档用）。 */
   catalogFile?: string;
   /** 失败观测口（2026-10-02 转述失败诊断批）：每次尝试失败带原因（重试中含退避标注）——宿主接
@@ -70,6 +70,32 @@ export const SUMMARY_TEXT_CAP = 1_200;
 const DEFAULT_RETRY_BACKOFF_MS = [1_000, 2_000];
 const NON_RETRYABLE_REASON = /(?:\b401\b|\b403\b|invalid[ _-]?api[ _-]?key|unauthorized|forbidden|model[ _-]?not[ _-]?(?:found|exist)|no such model|permission[ _-]?denied)/i;
 
+// 转述思考档（2026-10-02 卡 23 秒空产出修）：glm-5.3-flash 等推理模型的默认思考在描述任务上
+// 白烧 20s+ 且吃光 maxTokens（实机三连「流正常结束但无文本」——reasoning 耗尽预算、正文零字，
+// m5-media spike 期同款坑：max_tokens 被思考吞）。目录声明 effort 档（low 在列）→ 降 low；
+// minimal 在列 → minimal；无声明/读不到 → 不发字段（适配器 lenient 照发会 400 自证——只在
+// 目录证实时才带）。
+const lowEffortOf = (catalogFile: string, model: string): string | undefined => {
+  try {
+    const doc = JSON.parse(readFileSync(catalogFile, "utf8")) as { catalog?: Record<string, { models?: Record<string, { id?: string; reasoning_options?: { type?: string; values?: unknown[] }[] }> }> };
+    const bare = model.includes("/") ? model.split("/").pop()! : model;
+    for (const entry of Object.values(doc.catalog ?? {})) {
+      for (const [key, m] of Object.entries(entry.models ?? {})) {
+        if (key !== model && key !== bare && !key.endsWith(`/${bare}`) && m.id !== model && m.id !== bare) continue;
+        for (const opt of m.reasoning_options ?? []) {
+          if (opt?.type !== "effort" || !Array.isArray(opt.values)) continue;
+          const vals = opt.values.filter((v): v is string => typeof v === "string");
+          if (vals.includes("low")) return "low";
+          if (vals.includes("minimal")) return "minimal";
+          return undefined; // 命中模型但无低档声明——不发
+        }
+        return undefined;
+      }
+    }
+  } catch { /* 目录读不到——不发 */ }
+  return undefined;
+};
+
 /** 单次尝试：产出清洗文本或失败原因（诊断带因——不再吞错误串）。 */
 const attemptOnce = async (
   imagePath: string,
@@ -79,6 +105,7 @@ const attemptOnce = async (
 ): Promise<{ ok: true; text: string } | { ok: false; reason: string }> => {
   try {
     let text = "";
+    const lowEffort = deps.catalogFile !== undefined ? lowEffortOf(deps.catalogFile, eyeModel) : undefined;
     const stream = deps.llmStream({
       model: eyeModel,
       system: "你是图片描述器。",
@@ -86,6 +113,7 @@ const attemptOnce = async (
       tools: [],
       signal: AbortSignal.timeout(60_000),
       maxTokens: 1_400, // 产出帽 1200 字（CJK≈1 token/字）+ 标点/换行余量——帽要真够得着
+      ...(lowEffort !== undefined ? { reasoningEffort: lowEffort } : {}),
     });
     for await (const c of stream) {
       if (c.type === "text/delta") text += c.text;
