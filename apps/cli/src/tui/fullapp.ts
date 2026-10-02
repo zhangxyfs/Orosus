@@ -17,17 +17,14 @@ import { FrameScheduler } from "./scheduler.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { parseWheel, parseButton, isMouseSequence } from "./mouse.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
-import { renderWidgetLines } from "./widgets.ts";
 import type { DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
-import { pickLabel } from "../picker.ts";
 import * as theme from "../theme.ts";
 import { subagentCountHint } from "../subagent-status.ts";
 import {
-	DIAG_LIST_ROWS, diagListLines,
 	INPUT_MAX_ROWS, layoutInputRows, locateCursor,
-	OVERLAY_PAGE, PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
+	PERM_LABEL, SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES, thumbGeometry,
 	type AppState, type FullAppIO, type HostDialogKeys, type InputRow,
-	type PickExtraKeys, type SlashItem,
+	type PickExtraKeys,
 } from "./fullapp-types.ts";
 import { createPanels } from "./fullapp-panels.ts";
 import { createDialogs } from "./fullapp-dialogs.ts";
@@ -36,6 +33,7 @@ import { createMouse } from "./fullapp-mouse.ts";
 import { createMenu } from "./fullapp-menu.ts";
 import { createInput } from "./fullapp-input.ts";
 import { createKeys } from "./fullapp-keys.ts";
+import { createOverlay } from "./fullapp-overlay.ts";
 
 // 子系统拆分（m5-split-fullapp）：九个闭包工厂子系统住 fullapp-*.ts 族件；壳内子系统装配对象与
 // 降级共享字段（io/state/pendingUi 等无修饰成员）——子系统共享态，非公开 API，外部勿用。
@@ -70,6 +68,8 @@ export class FullApp {
 	input: ReturnType<typeof createInput>;
 	/** 键盘路由子系统（m5-split-fullapp T9——fullapp-keys.ts 工厂件；onKey 巨方法整体搬入）。 */
 	keys: ReturnType<typeof createKeys>;
+	/** 浮层构建子系统（m5-split-fullapp T10——fullapp-overlay.ts 工厂件）。 */
+	overlay: ReturnType<typeof createOverlay>;
 
 	constructor(io: FullAppIO, termIo?: TermIO) {
 		this.io = io;
@@ -127,6 +127,7 @@ export class FullApp {
 		this.menu = createMenu(this);
 		this.input = createInput(this);
 		this.keys = createKeys(this);
+		this.overlay = createOverlay(this);
 	}
 
 	/** 测试探针。 */
@@ -607,18 +608,18 @@ export class FullApp {
 			overlay = { lines: ob.lines, row: ob.row, col: ob.col, width: ob.width };
 		} else if (this.pendingUi?.kind === "pick") {
 			const pu = this.pendingUi;
-			overlay = this.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys);
+			overlay = this.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys);
 		} else if (this.pendingUi?.kind === "view") {
 			const pu = this.pendingUi;
 			if (pu.live !== undefined) pu.lines = pu.live().split("\n"); // M4.5 T11：实时查看窗——每帧现算（滚动钳制在 build 内）
-			overlay = this.buildViewOverlay(pu, leftW, divRow);
+			overlay = this.overlay.buildViewOverlay(pu, leftW, divRow);
 		} else if (this.pendingUi?.kind === "dialog") {
 			const pu = this.pendingUi;
-			overlay = this.buildDialogOverlay(pu, leftW, divRow);
+			overlay = this.overlay.buildDialogOverlay(pu, leftW, divRow);
 		} else if (s.overlayOpen) {
-			overlay = this.buildOverlay(leftW, divRow);
+			overlay = this.overlay.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {
-			overlay = this.buildDiagOverlay(leftW, divRow);
+			overlay = this.overlay.buildDiagOverlay(leftW, divRow);
 		}
 
 		const bytes = this.full.render(screen, rows, cols, overlay);
@@ -631,301 +632,22 @@ export class FullApp {
 		return bytes;
 	}
 
-	/** 只读文本浮层（F5 二轮⑪ / m5 T2 新几何）：resolvePopupLayout 居中弹窗（缺省 center80；五旧窗随之
-	 *  统一新长相）。恒定行数防闪烁（斜杠菜单同款纪律）：顶框 + 内容页（高 − 3）+ 余量提示行 + 底框，
-	 *  余量并进提示行不再条件性增删行；自定义键的 label 附在提示行尾。 */
-	private buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; viewPage?: number }, leftW?: number, divRow?: number): OverlayFrame {
-		// dock（m4-7 走查修 2026-09-27 用户拍板）：贴输入框上缘 + 与输入框（左栏）同宽——技能详情窗形态，
-		// 内容自适应封顶可滚（高度 = min(内容行数, 输入框上方可用高)）；不走 resolvePopupLayout 居中几何
-		const dock = pu.layout === "dock" && leftW !== undefined && divRow !== undefined;
-		const geo = dock
-			? { row: 0, col: 0, width: leftW, height: Math.max(6, Math.min(pu.lines.length + 3, divRow)) }
-			: this.dialogs.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
-		const ow = geo.width;
-		const oInner = ow - 2;
-		const bc = "accent";
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
-		const olines: string[] = [];
-		// CTU-09（2026-09-28 code review）：标题源头截断（模块供给可超长——原靠 padToWidth 兜底切掉右框角；
-		// 预算 = ow − ╭─(2) − 首尾空格(2) ─╮(2) − 最小 fill(1)）
-		const titleSeg = theme.fg("accent", ` ${truncateToWidth(pu.title, Math.max(4, ow - 7))} `);
-		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
-		const page = Math.max(3, geo.height - 3);
-		pu.viewPage = page; // 渲染期回写——翻页/滚轮页大小与窗几何同源（dock 不走 viewGeo，m4-7 走查修）
-		const maxScroll = Math.max(0, pu.lines.length - page);
-		const sc = pu.pinned === true ? maxScroll : Math.max(0, Math.min(maxScroll, pu.scroll)); // pinned = 每帧钳到末页（T1 贴底跟随）
-		const win = pu.lines.slice(sc, sc + page);
-		// 恒满屏（2026-10-01 走查①拍板「不论内容填不填满都得满屏」）：full 布局内容行补空行到 page——
-		// 盒高恒 geo.height，短内容不再抱内容贴终端顶（子代理详情窗短内容半屏盒即此症；斜杠菜单 17 行
-		// 定高同族纪律）。dock（技能详情窗，内容自适应封顶）与 center80（既有弹窗视觉契约）不动。
-		if (pu.layout === "full") while (win.length < page) win.push("");
-		// 选区反白合入（T8）：行索引与 pointToView 同源（sc + 行号——滚动平移天然稳定）；
-		// 滚动条（T10）：右缘 1 列轨道/拇指覆盖在内容最右列上
-		const vthumb = thumbGeometry(page, pu.lines.length, sc);
-		for (let i = 0; i < win.length; i++) {
-			// 前导空格算进截断预算（oInner−3）：满宽文字 + 前导空格恰占满内容区——与主窗
-			// 212e891「截断与 pad 同目标」恒宽口径一致（原截 oInner−2 靠 padToWidth 转截断兜底）
-			const raw = " " + truncateToWidth(win[i]!, oInner - 3);
-			const styled = this.select.styleDocSelection("view", sc + i, raw);
-			if (vthumb !== undefined) {
-				const onThumb = i >= vthumb.top && i < vthumb.top + vthumb.height;
-				// 轨道格 = 深底空格、拇指 = █（2026-09-27 用户走查二轮：dim │ 细竖线字形上下有留缝、
-				// 渲染成虚线，与右侧 1 列的 accent 边框虚线交叠成锯齿——「画歪了」实锤。bg 块与 █
-				// 同为满格实心字形，虚线观感消除；主窗轨道是末列无邻线故无此症，不改）
-				const bar = onThumb
-					? theme.paint(this.state.scrollbarHover === "view" ? "accent" : "muted", "surface2", "█")
-					: theme.bg("surface", " ");
-				// 文字与轨道间空 1 列；各段显式带底色（theme.bg 收尾 49m 清外层底色——整行单包会漏）
-				olines.push(
-					theme.bg("surface2", theme.fg(bc, "│") + padToWidth(styled, oInner - 2)) +
-					theme.bg("surface2", " ") + bar + theme.bg("surface2", theme.fg(bc, "│")),
-				);
-			} else {
-				olines.push(boxRow(styled));
-			}
-		}
-		const upN = sc;
-		const downN = pu.lines.length - sc - win.length;
-		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
-		const keyHints = pu.keys === undefined ? "" : Object.values(pu.keys).map((k) => k.label).join(" · ");
-		const hint = ` ${more}${more !== "" ? " · " : ""}↑↓ / PgUp/PgDn 翻页${keyHints !== "" ? ` · ${keyHints}` : ""} · Esc 关闭`;
-		olines.push(boxRow(theme.dim(hint)));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };
+	// ---------- 浮层族测试探针（fullapp.test.ts 经 as-cast 直取的四件——体已出仓 fullapp-overlay.ts，壳留委托） ----------
+
+	buildViewOverlay(pu: { title: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; viewPage?: number }, leftW?: number, divRow?: number): OverlayFrame {
+		return this.overlay.buildViewOverlay(pu, leftW, divRow);
 	}
 
-	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
-	 *  （交互列表带选中标记与焦点高亮）；恒定行数防闪烁（余量并进提示行——view 窗同款纪律）。 */
-	private buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys }, leftW?: number, divRow?: number): OverlayFrame {
-		// dock（T17 原型走查拍板：窗体与输入框同宽、贴输入框上缘）——几何同 buildViewOverlay dock 分支；
-		// 高度按内容自适应封顶（控件行数预渲染一次取长）
-		const dock = pu.layout === "dock" && leftW !== undefined && divRow !== undefined;
-		let contentLen = 3;
-		if (dock) {
-			try {
-				contentLen = renderWidgetLines(pu.widgets, Math.max(20, leftW - 2), { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
-			} catch { /* 预渲染失败走保底高度——正式渲染的 try/catch 会给占位行 */ }
-		}
-		const geo = dock
-			? { row: 0, col: 0, width: leftW, height: Math.max(6, Math.min(contentLen + 3, divRow)) }
-			: this.dialogs.viewGeo(pu.layout);
-		const ow = geo.width;
-		const inner = ow - 2;
-		const bc = "accent";
-		// 先截断再补齐（2026-09-30 实机走查：控件行超宽时 padToWidth 只补不切——右边框被顶出去，
-		// 终端软换行把底线推歪 = 「左右竖线不直」的根因；截断口径与其余四窗「源头截断」同族）
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(truncateToWidth(l, inner), inner) + theme.fg(bc, "│"));
-		const olines: string[] = [];
-		// CTU-09（2026-09-28 code review）：标题源头截断（spec.title 模块供给可超长——原靠 padToWidth 兜底
-		// 切掉右框角；预算 = ow − ╭─(2) − 首尾空格(2) ─╮(2) − 最小 fill(1)）
-		const titleSeg = theme.fg("accent", ` ${truncateToWidth(pu.title, Math.max(4, ow - 7))} `);
-		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.fg(bc, "─╮")));
-		const page = Math.max(3, geo.height - 3);
-		let content: string[];
-		try {
-			content = renderWidgetLines(pu.widgets, inner, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines;
-		} catch (err) {
-			this.io.logWarn?.("tui.dialog.render-error", `控件窗渲染抛错：${pu.title}`, { error: String(err instanceof Error ? err.message : err) });
-			content = [` ${theme.fg("warn", "（控件渲染出错——见诊断日志）")}`];
-		}
-		const maxScroll = Math.max(0, content.length - page);
-		const sc = Math.max(0, Math.min(maxScroll, pu.scroll));
-		const win = content.slice(sc, sc + page);
-		for (const l of win) olines.push(boxRow(l));
-		const upN = sc;
-		const downN = content.length - sc - win.length;
-		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
-		// 键位行（2026-09-30 实机走查重排）：宿主自定义键的标签过滤空串（同键多绑只标一次——空标签混进
-		// join 出「· ·」断片）；有自定义键 = 窗自带完整键表（Enter/Esc 内建兜底），不再拼通用「↑↓ 选择 ·
-		// Tab 换焦点」表单窗用不上的段；无自定义键维持原通用句
-		const hostLabels = pu.hostKeys === undefined ? "" : [...new Set(Object.values(pu.hostKeys).map((k) => k.label).filter((l) => l !== ""))].join(" · ");
-		const hint = pu.hostKeys === undefined
-			? ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`
-			: ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}Enter 激活 · Esc 关闭`;
-		olines.push(boxRow(theme.dim(hint)));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(inner) + "╯")));
-		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };
+	buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys }, leftW?: number, divRow?: number): OverlayFrame {
+		return this.overlay.buildDialogOverlay(pu, leftW, divRow);
 	}
 
-	/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */
-	private buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys): OverlayFrame {
-		const ow = leftW;
-		const oInner = ow - 2;
-		const bc = "accent";
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
-		// 多行项压平单行（2026-09-24 走查实锤前案——/provider「名称\n（URL）」双行项：裸 \n 进 overlay 行，
-		// padToWidth 计宽与合成全乱 → 上下移动大概率残影黑带+||；行模式 choose 同款压平 menu.ts:46）
-		const flatItems = items.map((i) => i.replace(/\s*\n\s*/g, " "));
-		const shown = filter === undefined ? flatItems : flatItems.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
-		const olines: string[] = [];
-		const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : `过滤「${filter}」`} ${shown.length}/${items.length} `;
-		// CTU-09（2026-09-28 code review）：标题源头截断（choose 标题模块供给可超长——原靠 padToWidth 兜底
-		// 切掉右框角；预算扣除过滤段实测宽）
-		const titleSeg = theme.fg("accent", ` ${truncateToWidth(title, Math.max(4, ow - 7 - visibleWidth(theme.dim(filterSeg))))} `);
-		const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg) - visibleWidth(theme.dim(filterSeg)));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.dim(filterSeg) + theme.fg(bc, "─╮")));
-		olines.push(boxRow(""));
-		const selI = Math.max(0, Math.min(shown.length - 1, sel));
-		const winStart = Math.max(0, Math.min(Math.max(0, shown.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
-		const win = shown.slice(winStart, winStart + OVERLAY_PAGE);
-		if (winStart > 0) olines.push(boxRow(theme.dim(`   ↑ 还有 ${winStart} 项`)));
-		for (let i = 0; i < win.length; i++) {
-			const gi = winStart + i;
-			// 两段式渲染（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；「 ✓」当前值项
-			// 标题青玉 + 说明仍灰。说明拆分三形态见 pickLabel；已带 ANSI 的行（技能/任务列表）原样）
-			const label = pickLabel(win[i]!);
-			const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${label}`;
-			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
-		}
-		const rest = shown.length - winStart - win.length;
-		if (rest > 0) olines.push(boxRow(theme.dim(`   ↓ 还有 ${rest} 项`)));
-		const extraLabels = extraKeys === undefined ? "" : Object.values(extraKeys).map((k) => k.label).join(" · ");
-		olines.push(boxRow(theme.dim((filter === undefined ? " ↑↓ 选择 · Enter 选定" : " 输入文字过滤 · ↑↓ 选择 · Enter 选定") + (extraLabels !== "" ? ` · ${extraLabels}` : "") + " · Esc 取消")));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+	buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys): OverlayFrame {
+		return this.overlay.buildPickOverlay(leftW, divRow, title, items, sel, filter, extraKeys);
 	}
 
-	/** 模块诊断一级列表浮层（T9，原型一级）：赭石标题 + 恒 8 行列表 + 余量提示 + 键提示行（浮层高度恒定防闪烁）。 */
-	private buildDiagOverlay(leftW: number, divRow: number): OverlayFrame {
-		const s = this.state;
-		const entries = this.io.diagEntries?.() ?? [];
-		const ow = leftW;
-		const oInner = ow - 2;
-		const bc = "accent";
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
-		const olines: string[] = [];
-		const en = theme.dim(` ${entries.length} 个模块出过问题 `);
-		// CTU-09（2026-09-28 code review）：标题源头截断（本窗标题为内建定长——窄终端下 en 段挤爆顶框时的
-		// 防线，与其余四窗拼行点同式；预算扣除 en 段实测宽）
-		const title = theme.fg("err", truncateToWidth(" 模块诊断 ", Math.max(4, ow - 7 - visibleWidth(en))));
-		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
-		const selI = Math.max(0, Math.min(entries.length - 1, s.diagSel));
-		const { lines, selRow } = diagListLines(entries, selI, oInner - 1);
-		for (let i = 0; i < DIAG_LIST_ROWS + 1; i++) {
-			// 选中行青玉软底（斜杠菜单同款）；余量行（第 9 行）不参与高亮
-			olines.push(i === selRow ? boxRow(theme.bg("accentSoft", padToWidth(lines[i] ?? "", oInner - 1))) : boxRow(lines[i] ?? ""));
-		}
-		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
-		olines.push(boxRow(theme.dim(" ↑↓ 选择 · Enter 详情 · Esc 关闭")));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
-	}
-
-	private buildOverlay(leftW: number, divRow: number): OverlayFrame {		const s = this.state;
-		const level2 = s.overlayCmd !== "";
-		const ap = this.menu.argPhase();
-		const ow = leftW;
-		const oInner = ow - 2;
-		const bc = "accent";
-		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
-		const olines: string[] = [];
-		const skillCount = ap === undefined && !level2 ? this.menu.filteredSkills().length : 0;
-		const en = theme.dim(ap !== undefined ? ` ${ap.items.length} 个候选 ` : level2 ? " 选择一项 " : ` ${this.input.filteredCommands().length} 个命令${skillCount > 0 ? ` · ${skillCount} 个技能 ` : ` `}`);
-		// CTU-09（2026-09-28 code review）：标题源头截断（overlayCmd/ap.cmd 是用户输入可超长——原靠
-		// padToWidth 兜底切掉右框角；预算扣除 en 段实测宽）
-		const titleText = ap !== undefined ? ` ${ap.cmd} 参数 ` : level2 ? ` ${s.overlayCmd} ` : " 斜杠命令 ";
-		const title = theme.fg("accent", truncateToWidth(titleText, Math.max(4, ow - 7 - visibleWidth(en))));
-		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
-		// 标题下不留装饰空行（2026-09-23 用户打回：上方空白一块）——↑ 占位行紧贴标题，滚动时原地变「↑ 还有 N 项」
-		let items: { text: string; mark: string; long: string; kind: "cmd" | "skill" | "sep"; usage?: string }[];
-		if (ap !== undefined) {
-			// 参数阶段（m5 T15）：候选行与命令菜单同框（恒定行数防闪烁纪律不变）
-			items = ap.items.length === 0
-				? [{ text: theme.dim("无匹配候选"), mark: " ", long: "继续输入或删字修改；Esc 关菜单继续编辑。", kind: "cmd" as const }]
-				: ap.items.map((c) => ({ text: c, mark: " ", long: `参数候选：${c}——Tab 补全当前词，Enter 直接提交。`, kind: "cmd" as const }));
-		} else if (level2) {
-			const cmdDef = this.io.slashCommands().find((c) => c.name === s.overlayCmd);
-			const current = this.io.slashCurrent(s.overlayCmd);
-			items = (cmdDef?.children ?? []).map((c) => {
-				const meta = cmdDef?.childMeta?.[c]; // F5 十轮⑤：档名 + 短解（详释区用 long）；内部档值括注已删（2026-09-28 用户走查打回——中文档名自足）
-				return {
-					text: meta === undefined ? c : `${theme.fg("fg", meta.label)} ${theme.dim(`——${meta.desc}`)}`,
-					mark: c === current ? theme.fg("accent", "✓") : " ",
-					long: meta?.long ?? `${s.overlayCmd} 二级项：${c}——回车选定。`,
-					kind: "cmd" as const,
-				};
-			});
-		} else {
-			const real = this.input.filteredCommands();
-			const sk = this.menu.filteredSkills();
-			// m4-7 T7（原型图 1）：技能条目殿后于全部命中命令；分隔行「── 技能 ──」仅技能区非空时出现——
-			// 无技能环境此处与原实现逐字节一致（验收点 3）；muted（2026-09-27 用户走查打回：border 边框色
-			// #25352d 深底上几乎不可见——换灰绿与描述文字同色独占一行可读；不用 accent 避免与选中行抢权重）
-			const sepRow = { text: theme.fg("muted", `── 技能 ${"─".repeat(Math.max(1, oInner - 12))}`), mark: " ", long: "", kind: "sep" as const };
-			const skillRow = (c: SlashItem) => {
-				// 主标签固定格式「skill : 名」（类别前缀，冒号两侧空格照写——与命令 /xxx 视觉区分）+
-				// 行内短说明 = description（超宽截断不折行，原型要点）
-				const label = `skill : ${c.skill ?? c.name}`;
-				const budget = oInner - 4 - visibleWidth(label) - 1;
-				const desc = budget >= 8 ? ` ${theme.dim(truncateToWidth(c.desc, budget))}` : "";
-				return { text: truncateToWidth(`${label}${desc}`, oInner - 4), mark: " ", long: c.long, kind: "skill" as const, ...(c.usage !== undefined ? { usage: c.usage } : {}) };
-			};
-			items =
-				real.length === 0 && sk.length === 0
-					? [{ text: theme.dim("无匹配命令"), mark: " ", long: "没有匹配的命令。继续输入或删字修改筛选，Esc 关闭菜单。", kind: "cmd" as const }]
-					: [
-							...real.map((c) => ({
-								text: `${c.name}${c.aliases === undefined ? "" : theme.fg("muted", `（${c.aliases.join(", ")}）`)} ${theme.dim(c.desc)}`,
-								mark: " ",
-								long: c.long,
-								kind: "cmd" as const,
-							})),
-							...(sk.length > 0 ? [sepRow] : []),
-							...sk.map(skillRow),
-						];
-		}
-		const selI = Math.max(0, Math.min(items.length - 1, s.overlaySel));
-		const winStart = Math.max(0, Math.min(Math.max(0, items.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
-		const win = items.slice(winStart, winStart + OVERLAY_PAGE);
-		// 列表区恒定（2023-09-23 用户拍板：固定防闪烁）——命令恒 OVERLAY_PAGE 行（二级列表不足时补空行——空槽位留空）
-		for (let i = 0; i < OVERLAY_PAGE; i++) {
-			const it = win[i];
-			if (it === undefined) {
-				olines.push(boxRow(""));
-				continue;
-			}
-			const gi = winStart + i;
-			if (it.kind === "sep") {
-				// 分隔行不可选不高亮（占 1 行参与窗口分页——滚出视野即不见）
-				olines.push(boxRow(` ${it.text}`));
-				continue;
-			}
-			const selPrefix = gi === selI ? theme.fg("accent", "❯") : " ";
-			const markSeg = it.mark === " " ? "" : `${it.mark} `;
-			const row = ` ${selPrefix} ${markSeg}${it.text}`;
-			olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
-		}
-		// 余量提示合并一行常驻（2026-09-23 用户打回：上下两行占 2 行不好看）——上下都有时「↑ 还有 N · ↓ 还有 M」，无余量时空占位
-		const rest = items.length - winStart - win.length;
-		const hints = [
-			winStart > 0 ? `↑ 还有 ${winStart} 项` : "",
-			rest > 0 ? `↓ 还有 ${rest} 项` : "",
-		].filter(Boolean).join(" · ");
-		olines.push(boxRow(hints === "" ? "" : theme.dim(`   ${hints}`)));
-		// 详释区恒定 3 行（同拍板）：说明最多 2 行，显示不下第 2 行末尾 "..."（占 3 列），第 3 行操作提示
-		const longW = oInner - 2;
-		const wrapped = wrapText(theme.dim(items[selI]?.long ?? ""), longW);
-		const longLines = wrapped.slice(0, 2).map((l) => ` ${l}`);
-		if (wrapped.length > 2) longLines[1] = ` ${truncateToWidth(wrapped[1] ?? "", longW - 4)}...`;
-		while (longLines.length < 2) longLines.push("");
-		const foot = theme.dim(ap !== undefined ? " ↑↓ 选择 · Tab 补全词 · Enter 提交 · Esc 关菜单" : level2 ? " ↑↓ 选择 · Enter 选定 · Esc 返回" : " ↑↓ 选择 · Enter 执行 · Tab 补全 · Esc 关闭");
-		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
-		for (const l of longLines) olines.push(boxRow(l));
-		// 详释第 3 行（m4-7 T7 / 原型图 1 验收点 2）：技能选中 = when_to_use 简单说明（无则整行留空不删行——
-		// 高度恒定纪律）；命令/参数/二级维持操作提示行（技能的 Enter/Esc 键位与命令同，操作行省去不损可发现性）
-		const selItem = items[selI];
-		const third = selItem !== undefined && selItem.kind === "skill"
-			? (selItem.usage !== undefined && selItem.usage !== ""
-				? ` ${theme.dim(`适用：${truncateToWidth(selItem.usage, longW - 4)}`)}`
-				: "")
-			: foot;
-		olines.push(boxRow(third));
-		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
-		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+	buildOverlay(leftW: number, divRow: number): OverlayFrame {
+		return this.overlay.buildOverlay(leftW, divRow);
 	}
 
 	// ---------- 崩溃恢复（spike 判据 4 同款） ----------
