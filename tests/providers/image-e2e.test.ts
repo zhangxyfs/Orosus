@@ -67,12 +67,12 @@ describe("图片喂图 e2e（M4-2.5 T5）", () => {
     expect(parts[1]!.image_url!.url.startsWith("data:image/png;base64,")).toBe(true);
   });
 
-  it("⑩ estimateTokens 含 image 消息不炸且计粗估值（1000 token/图）", () => {
+  it("⑩ estimateTokens 含 image 消息不炸且计粗估值（m5-media D9：ESTIMATED_IMAGE_CHARS=4800 → 1200 token/图）", () => {
     const msg: ModelMessage = { role: "user", content: [{ kind: "text", text: "看图" }, { kind: "image", path: "C:/x.png", mimeType: "image/png" }] };
     const withImg = estimateTokens([msg]);
     const textOnly = estimateTokens([{ role: "user", content: [{ kind: "text", text: "看图" }] }]);
-    expect(withImg).toBe(textOnly + 1000);
+    expect(withImg).toBe(textOnly + 1200);
     const imgOnly: ModelMessage = { role: "user", content: [{ kind: "image", path: "C:/y.png", mimeType: "image/jpeg" }] };
-    expect(estimateTokens([imgOnly])).toBe(1000);
+    expect(estimateTokens([imgOnly])).toBe(1200);
   });
 });

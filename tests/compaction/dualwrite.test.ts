@@ -114,7 +114,7 @@ describe("compaction v3 双写一致性矩阵（T7：模块返回值 = deriveMes
   });
 
   it("② auto（图片剥占位 + steering 注入剥离 + elision 恒插）：模块返回值 = 重放逐字节（JSON 相等）", async () => {
-    const h = mkHarness({ config: { thresholdTokens: 1, userMessageTokens: 1_200, userMessageHeadTokens: 100, pruneThresholdChars: 99_999 } });
+    const h = mkHarness({ config: { thresholdTokens: 1, userMessageTokens: 1_600, userMessageHeadTokens: 100, pruneThresholdChars: 99_999 } }); // m5-media D9：图估 1200/图（4800 字符）——预算 1200→1600 保三用户消息全保留（图消息 ≈1202）
     await compaction.activate(h.ctx);
     const imgUser: ModelMessage = { role: "user", content: [
       { kind: "text", text: "看图" },
