@@ -87,7 +87,9 @@ const capArg = (s: string, max = 60): string => {
   return t.length <= max ? t : `${t.slice(0, max - 12)}…${t.slice(-10)}`;
 };
 
-/** 关键参数：path/file/pattern/command/url/query 优先；工作区内相对路径、区外全路径（用户口径）。 */
+/** 关键参数：path/file/pattern/command/url/query/name 优先（工作区内相对路径、区外全路径——用户口径；
+ *  name = 链尾兜位，第一方工具里只有 skill__load 用〔2026-10-03 用户走查：「Used Skill_load」行要看得到
+ *  加载了什么技能〕；第三方 MCP 工具若有同名参数顺带受益——本就是关键参数机制的目的）。 */
 export function toolKeyArg(args: Record<string, unknown> | undefined, cwd: string): string {
   const raw =
     typeof args?.path === "string" ? args.path
@@ -96,6 +98,7 @@ export function toolKeyArg(args: Record<string, unknown> | undefined, cwd: strin
     : typeof args?.command === "string" ? args.command
     : typeof args?.url === "string" ? args.url
     : typeof args?.query === "string" ? args.query
+    : typeof args?.name === "string" ? args.name
     : undefined;
   if (raw === undefined) return "";
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw)) return capArg(raw); // URL 不走文件系统相对化——win32 归一会吞 https:// 的双斜杠

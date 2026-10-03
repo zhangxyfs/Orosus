@@ -233,6 +233,14 @@ describe("工具显示名 label（2026-09-24 用户拍板——Search→Web Sear
     expect(toolCallLine("tool-web__fetch", {}, process.cwd())).toBe("● Using Fetch");
   });
 
+  it("①c name 关键参数（2026-10-03 用户走查——「Used Skill_load」行要能看到加载了什么技能）：name 进 toolKeyArg 优先级表（链尾兜位，query 之后不抢占）", () => {
+    registerToolLabels([{ name: "skill__load", label: "Skill_load" }]);
+    expect(toolCallLine("skill__load", { name: "doc-review" }, process.cwd())).toBe("● Using Skill_load (doc-review)");
+    registerToolLabels([]);
+    // 优先级不动：既有键在前，name 只兜底（同名参数并存的工具不受影响）
+    expect(toolCallLine("tool-shell__bash", { command: "ls", name: "x" }, process.cwd())).toBe("● Using Bash (ls)");
+  });
+
   it("② reload 重喂语义：带 label 收录、label 摘除后回落（同位换模块生效）", () => {
     registerToolLabels([{ name: "m__t", label: "My Tool" }]);
     expect(toolDisplayName("m__t")).toBe("My Tool");
