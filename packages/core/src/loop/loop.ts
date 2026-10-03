@@ -17,6 +17,11 @@ export interface LoopOptions {
   system: string;
   signal: AbortSignal;
   sink: DiagSink;
+  /** 落 turn/start 的全形模型名（provider/model 或裸 provider 名——2026-10-03 模型随会话恢复拍板）：
+   *  恢复侧（harness resume/fork）读尾部 turn/start 还原 modelOverride，而 override 的语义是全形
+   *  （parseModel 解析）；model 本身是剥掉 provider 的裸名（请求线缆口径），落裸名恢复后会被当
+   *  provider 名解析、请求必炸。缺省回退 model（老调用方兼容）。 */
+  modelFull?: string;
   /** 思考投入档位（/effort 2026-09-25）：透传 ProviderRequest.reasoningEffort——provider 翻译层按协议族
    *  落线缆参数（openai reasoning_effort / anthropic thinking）。turn 内恒定（harness 在 prompt 开头捕获）。 */
   reasoningEffort?: string;
@@ -114,8 +119,13 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
   const { session, bus, tools, provider, model, system, signal, sink } = opts;
   const reasoningEffort = opts.reasoningEffort;
   const networkRetryDelays = opts.networkRetryDelaysMs ?? [1_000, 3_000];
-  const turnStart = await session.append(LOG_TYPES.turnStart, { model });
-  await bus.emit("turn/start", { turnId: turnStart.id, model }); // m5 T9（设计空白 17）：busy 自推事件面——turn 事件上总线（此前只进 session 流，模块照方订阅永不触发）
+  // effort 带值才落（与 request/header 同款在场性口径）：恢复侧（harness resume/fork）按字段在场性判——
+  // 老会话（2026-10-03 前）turn/start 无 effort 字段 = 只恢复模型、档位跟全局配置，不误伤。
+  // model 落全形（modelFull 优先——同日拍板）：恢复侧直接还原 modelOverride（全形语义）
+  const turnModel = opts.modelFull ?? model;
+  const turnEffort = reasoningEffort !== undefined ? { effort: reasoningEffort } : {};
+  const turnStart = await session.append(LOG_TYPES.turnStart, { model: turnModel, ...turnEffort });
+  await bus.emit("turn/start", { turnId: turnStart.id, model: turnModel, ...turnEffort }); // m5 T9（设计空白 17）：busy 自推事件面——turn 事件上总线（此前只进 session 流，模块照方订阅永不触发）
   const log = createLogger(sink, "loop").withCtx({ sess: session.sessionId, turn: turnStart.id });
   let lastRequestSig: string | null = null;
   let overflowRetried = false; // 溢出重试每 turn 至多一次（D43：重试后仍超限即终局，防打转）

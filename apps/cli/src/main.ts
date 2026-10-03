@@ -748,11 +748,12 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           await openTasks(activeApp, out, { getH: () => h, sessionsDir, commandUi, notify });
           return "again";
         }
-        // /skill : 名（2026-09-30 用户拍板：菜单技能条目 Tab ≠ Enter——回车直接执行技能，Tab 填
-        // 「/skill : 名」可输入形态，本层解析该格式后与菜单 Enter 同路注入正文）。格式宽松：
+        // /skill : 名（2026-09-30 用户拍板：菜单技能条目 Tab ≠ Enter——Tab 填「/skill : 名」可输入
+        // 形态；2026-10-03 方案 2 起菜单 Enter 也提交该格式——↑ 历史记命令形态，Tab 填形回车/手敲
+        // 完整形态/菜单 Enter 三路在本层归一）。格式宽松：
         // /skill:名 /skill : 名 /SKILL 同达（命令词忽略大小写，core 2026-09-27 口径）；宿主级拦截
         // 先于 h.prompt 路由——graph 若注册 /skill 命令以本形态为准（技能区是宿主面）；解析成功
-        // 递归走用户消息管线（回显/vision 闸/busy 排队语义与菜单 Enter 一致，正文不以 / 开头无二次解析）
+        // 递归走用户消息管线（回显/vision 闸/busy 排队语义三路一致，正文不以 / 开头无二次解析）
         // 防重入（2026-09-30 三轮走查修卡死）：本分支产出的合成消息同样以 /skill : 开头，而下面的
         // 空白折叠会把换行压平——正则会再次命中、typed 连标记带技能正文整条吞进「参数」再包一层
         // 递归提交，无限自缠绕 = CPU 死循环界面卡死（用户实机复现）。含机器标记行 = 已是合成体，
@@ -1087,7 +1088,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
     // /reload 收尾与模块插拔后另有显式刷新点
     skillItems: () => skillMenuTtl(skillDeps),
-    skillInject: skillInjectText,
+    // （技能条目 Enter 2026-10-03 起提交「/skill : 名」走 processReplLine 解析——skillInject 注入口随旧实现退役）
     slashCurrent: (cmd) => (cmd === "/permission" ? (getPanelCache()?.permission ?? configFace().approvalMode) : ""),
     // 参数阶段数据源（m5 T15）：graph 现读模块命令的 completeArg；抛错兜底空表 + host 日志（菜单层当无候选）
     slashArgComplete: (cmd, word, args) => {

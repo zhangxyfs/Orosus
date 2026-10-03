@@ -334,16 +334,25 @@ describe("溢出恢复（M3 补强 T4/D43：agent/request-error 广播 + 数据�
     const tools = createToolRegistry({ bus, sink: s, spillDir: "/tmp/orosus-loop-spill" });
     const session = new InMemorySessionStore();
     const provider = fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]);
-    for await (const _e of agentLoop({ session, bus, tools, provider: provider.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s, reasoningEffort: "high" })) { void _e; }
+    // modelFull 透传（2026-10-03 模型随会话恢复拍板）：turn/start 落全形（model 裸名是请求线缆口径，
+    // 恢复侧要 modelOverride 全形语义——缺省回退 model）
+    for await (const _e of agentLoop({ session, bus, tools, provider: provider.stream, model: "m", modelFull: "fake/m", system: "sys", signal: new AbortController().signal, sink: s, reasoningEffort: "high" })) { void _e; }
     expect(provider.requests[0]!.reasoningEffort).toBe("high"); // 主轮请求透传（provider 翻译层落线缆参数）
     const header = (await session.all()).find((e) => e.type === "request/header") as { effort?: string };
     expect(header.effort).toBe("high"); // 审计面记档
+    // turn/start 同记（2026-10-03 模型/effort 随会话恢复拍板）：恢复侧（harness resume/fork）读尾部
+    // turn/start 还原本会话最后用的组合——model 落全形（modelFull 优先）、effort 带值才落（老会话
+    // 无字段 = 只恢复模型/裸名老形态放弃恢复，两口径都护住）
+    const turnStartEv = (await session.all()).find((e) => e.type === "turn/start") as { model?: string; effort?: string };
+    expect(turnStartEv.model).toBe("fake/m"); // 全形落盘（model 裸名 "m" 是请求口径不落此）
+    expect(turnStartEv.effort).toBe("high");
     // 缺省路径：不传 reasoningEffort → 请求与 header 都无字段（端点默认行为）
     const session2 = new InMemorySessionStore();
     const provider2 = fakeProvider([[{ type: "finish", kind: "stop" }]]);
     for await (const _e of agentLoop({ session: session2, bus, tools, provider: provider2.stream, model: "fake/m", system: "sys", signal: new AbortController().signal, sink: s })) { void _e; }
     expect("reasoningEffort" in provider2.requests[0]!).toBe(false);
     expect(((await session2.all()).find((e) => e.type === "request/header") as { effort?: string }).effort).toBeUndefined();
+    expect(((await session2.all()).find((e) => e.type === "turn/start") as { effort?: string }).effort).toBeUndefined(); // 缺省不带（老形态同款——恢复侧按在场性判）
   });
 });
 

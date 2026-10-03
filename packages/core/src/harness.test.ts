@@ -105,6 +105,89 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     expect(events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("续聊"))).toBe(true);
   });
 
+  // 模型/effort 随会话恢复（2026-10-03 用户拍板）：/model /effort 写的是全局 user config（语义 = 「以后
+  // 新会话的默认」，最后设置者赢）——不恢复则本会话身份会被其他会话的切换顶掉（A 用 X/high → B 切
+  // Y/low → 回 A 成 Y/low）。恢复读事件流尾部 turn/start（每 turn 必落 model，effort 2026-10-03 起
+  // 带值才落）；恢复只占内存 override、不回写全局盘；status/请求链经 override 优先天然生效。
+  // 二次拍板（同日）：恢复模型的 provider 已删 → 整个组合回退 config 默认（模型+effort 一起，不 lenient 硬留）。
+  describe("resume 模型/effort 恢复（尾部 turn/start → 内存 override，不回写全局盘）", () => {
+    const seedStore = async (sid: string, turns: { model: string; effort?: string }[]): Promise<JsonlSessionStore> => {
+      const store = new JsonlSessionStore({ dir: join(dir, "sessions"), sessionId: sid });
+      await store.append("session/header", { format: 1, cwd: "/tmp", parentSession: null });
+      for (const t of turns) await store.append("turn/start", { model: t.model, ...(t.effort !== undefined ? { effort: t.effort } : {}) });
+      await store.flush();
+      return store;
+    };
+    const openResumed = (store: JsonlSessionStore) =>
+      createHarness({
+        store, diagDir: dir, spillDir: join(dir, "spill"),
+        sessionsDir: join(dir, "sessions"),
+        modules: [fakeProviderModule("fake", script)],
+        resume: { sessionId: store.sessionId },
+        config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+      });
+
+    it("① 新形态（model+effort 都落）→ status 恢复尾部组合、覆盖全局 config 值、overridden=true；多 turn 取最后一条", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-run-"));
+      const store = await seedStore("s_run_new", [{ model: "fake/old" }, { model: "fake/m2", effort: "low" }]);
+      const h = await openResumed(store);
+      const st = h.status();
+      expect(st.model).toBe("fake/m2"); // 尾部 turn/start 的模型（config 的 fake/m 不挤入——防被其他会话的切换顶掉）
+      expect(st.effort).toBe("low");
+      expect(st.overridden).toBe(true); // 本会话偏离全局配置——语义准确
+      await h.close();
+    });
+
+    it("② 老会话（2026-10-03 前落盘，turn/start 无 effort 字段）→ 只恢复模型，档位跟全局配置（无配置 = 不带）", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-old-"));
+      const store = await seedStore("s_run_old", [{ model: "fake/m2" }]);
+      const h = await openResumed(store);
+      const st = h.status();
+      expect(st.model).toBe("fake/m2");
+      expect(st.effort).toBeUndefined(); // 字段缺席 = 档位不恢复（hermetic 无 effort 配置）
+      await h.close();
+    });
+
+    it("③ 空会话（无 turn/start，如刚建即切走）→ 零恢复：model 走 configured、overridden=false", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-empty-"));
+      const store = await seedStore("s_run_empty", []);
+      const h = await openResumed(store);
+      const st = h.status();
+      expect(st.model).toBe("fake/m"); // configured（cliOverrides）
+      expect(st.overridden).toBe(false);
+      await h.close();
+    });
+
+    it("④ 老形态裸模型名（2026-10-03 前 turn/start 落的是剥掉 provider 的裸名）→ 放弃恢复——裸名塞 override 会被 parseModel 当 provider 名解析、请求必炸（实测「provider m 不可用」）；模型跟 config = 拍板前行为无回归", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-bare-"));
+      const store = await seedStore("s_run_bare", [{ model: "m2", effort: "low" }]); // 裸名（不含 / 也不命中 provider 名）
+      const h = await openResumed(store);
+      const st = h.status();
+      expect(st.model).toBe("fake/m"); // 不恢复（信息已缺失——裸名无法还原 provider）
+      expect(st.overridden).toBe(false);
+      await h.close();
+    });
+
+    it("⑤ 裸 provider 名形态（/model 可写的合法全形，命中激活 provider 名）→ 可恢复", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-slot-"));
+      const store = await seedStore("s_run_slot", [{ model: "fake" }]); // 裸 provider 名（defaultModel 兜底形态）
+      const h = await openResumed(store);
+      expect(h.status().model).toBe("fake");
+      await h.close();
+    });
+
+    it("⑥ 全形但 provider 已删/停用（2026-10-03 二次拍板「用 config 默认，effort 同理」）→ 整个组合回退：模型走 configured、effort 不恢复——组合一体，档位不悬空挂在新模型上", async () => {
+      dir = mkdtempSync(join(tmpdir(), "orosus-resume-gone-"));
+      const store = await seedStore("s_run_gone", [{ model: "gone/m2", effort: "low" }]); // provider "gone" 不在图（仅 fake）
+      const h = await openResumed(store);
+      const st = h.status();
+      expect(st.model).toBe("fake/m"); // config 默认（cliOverrides）——不 lenient 硬留恢复值等请求期报错
+      expect(st.overridden).toBe(false);
+      expect(st.effort).toBeUndefined(); // effort 同理：与模型组合一体，不单独恢复（防档名悬空挂到 config 模型上）
+      await h.close();
+    });
+  });
+
   it("命令归一化：斜杠后空格/连续空格/首尾空白可解析（/ reload 同 /reload——2026-09-19 用户走查；载体自 /status 换 /reload，批⑥退役）", async () => {
     const h = await makeHarness();
     const out = await h.prompt("/  reload");

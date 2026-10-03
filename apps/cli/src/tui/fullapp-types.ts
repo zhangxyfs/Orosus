@@ -65,7 +65,7 @@ export interface SlashItem {
 	aliases?: string[]; // 别名（F5 十六轮①：过滤/展示用——路由层早已直达，菜单按别名可筛出真实命令）
 	childMeta?: Record<string, { label: string; desc: string; long: string }>; // 二级项元数据（F5 十轮⑤：档名/短解/详释）
 	usage?: string; // m4-7 技能条目：详释第 3 行「适用：…」（when_to_use；无则整行留空不删行——高度恒定纪律）
-	skill?: string; // m4-7 技能条目标记 = 技能真名（Enter 走 skillInject 注入，不走命令管线）
+	skill?: string; // m4-7 技能条目标记 = 技能真名（Enter 提交「/skill : 名」等价命令走宿主解析管线，2026-10-03 方案 2）
 }
 
 export interface FullAppIO {
@@ -146,11 +146,10 @@ export interface FullAppIO {
 	 *  测试注入 stub。返回 false = 拒开或失败。 */
 	openUrl?(url: string): Promise<boolean>;
 	/** 斜杠菜单技能区数据源（m4-7 T7）：宿主从 skill.catalog 服务惰性取并缓存（同步渲染口）；
-	 *  缺省/空数组 = 无技能区（菜单与现状逐字节一致——验收点 3）。条目须带 skill 字段（真名）。 */
+	 *  缺省/空数组 = 无技能区（菜单与现状逐字节一致——验收点 3）。条目须带 skill 字段（真名）。
+	 *  （条目 Enter 2026-10-03 起提交「/skill : 名」等价命令走宿主解析管线，不再走注入口——
+	 *  skillInject 接口随旧实现退役。） */
 	skillItems?(): SlashItem[];
-	/** 技能条目 Enter 注入（m4-7 T7）：返回以用户消息提交的全文（宿主拼 <skill> 块，剥 frontmatter）；
-	 *  undefined = 正文读取失败（菜单提示，不提交）。 */
-	skillInject?(name: string): string | undefined;
 	/** @ 文件菜单数据源（m5-at-menu T5）：dir（相对路径，根 = 空串）→ 条目全量 + miss 标志（宿主
 	 *  readdirSync 失败置 true——目录不存在，渲染层给「目录不存在」空态文案；entries [] 且无 miss =
 	 *  空目录）。导航点现读、不缓存（渲染期不碰文件系统）；undefined = 宿主未供（菜单不开——
