@@ -18,6 +18,9 @@ import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
  * 工具 skill__load（读全文；执行时重扫 + 运行时去重——T4）+ 服务 skill.catalog / skill.resetLoaded
  * （宿主斜杠菜单与 /settings 管理面 / compact 后去重集重置——服务倒挂先例 websearch:endpoints）
  * + 具名导出 seedBundledSkills（引导弹出时刻出厂件固化到 ~/.orosus/skills——宿主首启接线）。
+ * m5-skill-trigger（2026-10-03）：清单头时序令 + when_to_use 进条目 + 工具描述强制令/反向令 + 禁调
+ * 调用侧拒绝 + 运行期消息英文化——五件新文本全为模型可见面，依该方案 §四语言拍板统一英文（自创值
+ * 登记造册位）；UI 元素名（/settings、技能 tab、Alt + K）按屏幕实显专名保留不译。
  */
 
 interface Skill {
@@ -214,18 +217,23 @@ function resolveDirs(cfg: z.infer<typeof configSchema> | undefined): {
   };
 }
 
-/** 清单段（T3）：单条 description 截 250 进摘要（cc 同值——清单只为发现，长描述白占每轮预算）；
- *  段总预算 4000 字符，超限整段降级为仅技能名列表（ZCode 降级思路简化版——skill__load 按名加载，降级不带路径）。
+/** 清单段（T3；m5-skill-trigger 两改）：头句带时序强制令（英文——模型可见面依语言拍板）；条目 =
+ *  description 拼上 when_to_use 后**合并**截 250（先拼后截共用一帽，cc 同款——清单只为发现，冗长
+ *  说明白占每轮预算不涨缓存命中率）；段总预算 4000 字符，超限整段降级为仅技能名列表（ZCode 降级思路
+ *  简化版——skill__load 按名加载，降级不带路径；降级头自带英文标记，不再借旧中文头的全角冒号 replace）。
  *  外层保险沿用 promptSection 单段 32KB 上限（activate.ts 既有纪律）。 */
 const SKILL_DESC_LIMIT = 250;
 const SKILL_SECTION_BUDGET = 4000;
 
 function listingText(listed: Skill[]): string {
-  const head = "可用技能（skill__load 按需加载全文）：";
-  const rows = listed.map((s) => `${s.name} — ${s.description.length > SKILL_DESC_LIMIT ? `${s.description.slice(0, SKILL_DESC_LIMIT)}…` : s.description}`);
+  const head = "The following skills are available for use with the skill__load tool. If the user names a skill, or the task clearly matches a skill's description, call skill__load with the exact name before taking task actions.";
+  const rows = listed.map((s) => {
+    const combined = s.whenToUse !== undefined ? `${s.description} — ${s.whenToUse}` : s.description;
+    return `${s.name} — ${combined.length > SKILL_DESC_LIMIT ? `${combined.slice(0, SKILL_DESC_LIMIT)}…` : combined}`;
+  });
   const full = `${head}\n${rows.join("\n")}`;
   if (full.length <= SKILL_SECTION_BUDGET) return full;
-  return `${head.replace("：", "（清单超预算，仅列名）：")}${listed.map((s) => s.name).join(" ")}`;
+  return `Skills list over budget, names only: ${listed.map((s) => s.name).join(" ")}`;
 }
 
 /** 斜杠菜单 / /settings 管理面的目录行（T7/T8 数据源）：全收口径——含停用与 disable-model-invocation 者，
@@ -263,8 +271,17 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, w
   return defineTool({
     name: "skill__load",
     label: "Skill_load", // 工具行显示名（2026-09-29 用户走查报「Used Load」不可辨——缺 label 走默认剥前缀名 Load；模型/审批面仍用 name）
-    description: "读取指定技能的完整内容（摘要常驻系统提示，本文按需加载）",
-    parameters: z.object({ name: z.string().describe("技能名（见系统提示中的可用技能列表）") }),
+    // 模型可见面全英（m5-skill-trigger §2.3 语言拍板）：强制令（MUST/BEFORE）+ 禁令（NEVER mention /
+    // do not guess）+ 去重告知 + 反向令（keyword overlap 不构成调用理由）——cc 措辞骨架、qwen 防幻觉句、
+    // opencode/Reasonix 反向令；刻意只压「一句必须 + 一句禁止 + 一句反向」，塞太满稀释。
+    description:
+      "Load the full content of a skill (summaries stay in the system prompt; this tool loads the body on demand). " +
+      "If the user names a skill, or the task clearly matches a skill's description, you MUST call this tool before taking task actions. " +
+      "NEVER mention a skill without actually calling this tool. " +
+      "Use only skill names listed in the system prompt — do not guess. " +
+      "If a skill is already loaded, do not call it again (the call is intercepted; follow the body already in the conversation). " +
+      "A few overlapping keywords alone are not sufficient — confirm the skill's guidance materially helps the task first.",
+    parameters: z.object({ name: z.string().describe("The name of a skill from the available-skills list. Do not guess names.") }),
     resolveExecution: async (input) => {
       const { name } = input as { name: string };
       const hit = () => scanSkills(tracks, warn).find((x) => x.name === name); // MI-09：重扫同样容错（坏轨只损该轨）——只归 execute 期用（MI-16）
@@ -273,23 +290,28 @@ function loadTool(tracks: Track[], disabled: Set<string>, loaded: Set<string>, w
         approvalRule: "skill__load",
         execute: async () => {
           if (disabled.has(name)) {
-            return { output: `技能 "${name}" 已停用。可在 /settings → 技能 中重新启用（Alt + K）。`, isError: true };
+            return { output: `Skill "${name}" is disabled. You can re-enable it under /settings → 技能 (Alt + K).`, isError: true };
           }
           const s = hit(); // 执行时重扫（ZCode）：会话中用户新放的技能指名即加载，清单滞后不碍事
           if (s === undefined) {
-            const names = scanSkills(tracks, warn).map((x) => x.name).join("、");
-            return { output: `技能 "${name}" 不存在（可用：${names || "无"}）`, isError: true };
+            const names = scanSkills(tracks, warn).map((x) => x.name).join(", ");
+            return { output: `Skill "${name}" does not exist (available: ${names || "none"})`, isError: true };
+          }
+          if (s.disableModelInvocation) {
+            // 禁调调用侧拒绝（m5-skill-trigger D4）：清单剔除只是建议面，execute 才是强制面（cc 双重执行
+            // 主流、与执行时重扫同款分层）；菜单手动触发不经 skill__load，不受影响。
+            return { output: `Skill "${name}" has disable-model-invocation set: only the user can trigger it, via the slash menu — ask the user to invoke it manually.`, isError: true };
           }
           if (loaded.has(name)) {
             // 运行时去重（qwen 九仓唯一）：已加载重调只回确认句，省一遍正文 token
-            return { output: `技能 "${name}" 已加载过，正文在上方对话中，请直接按其行事。`, isError: false };
+            return { output: `Skill "${name}" is already loaded — its body is earlier in the conversation; follow it directly.`, isError: false };
           }
           loaded.add(name);
           // 2026-10-01 诊断批（实况：doc-review 正文引用 references/lenses.md，模型按项目 cwd 找落空，
           // 降级按速查表执行——SKILL.md 的相对路径引用此前无解析基准）：首行附技能文件绝对路径，
           // 模型可据此把 references/… 解析到技能目录（对照：ZCode 技能清单逐条带 file: 路径）。
           return {
-            output: `[技能 "${name}" 的文件：${s.file}——正文中的相对路径（如 references/…）相对该文件所在目录解析，而非当前项目目录]\n\n${s.body}`,
+            output: `[Skill file for "${name}": ${s.file} — relative paths in the body (e.g. references/…) resolve against this skill file's directory, not the project cwd]\n\n${s.body}`,
             isError: false,
           };
         },

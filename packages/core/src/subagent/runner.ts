@@ -60,7 +60,8 @@ export const WRITE_CAPABLE_TOOLS: ReadonlySet<string> = new Set(["tool-fs__write
 
 /** 子代理抄面整族剥离名册（2026-10-03 对照九仓修）：清单配套工具——技能清单段（order 0）只进主对话
  *  系统提示，工具被抄进而清单不可见时，模型只能指着一份看不见的清单猜名（skill__load 参数描述明写
- *  「见系统提示中的可用技能列表」）。九仓无一给普通子代理配技能清单；子代理「按什么行事」由
+ *  「The name of a skill from the available-skills list」——2026-10-03 m5-skill-trigger 模型可见面
+ *  英文化后的措辞）。九仓无一给普通子代理配技能清单；子代理「按什么行事」由
  *  rolePrompt 工种正文承担（kimi profile/Reasonix 技能正文即子代理人格——同族形态）。 */
 const SUBAGENT_HIDDEN_TOOLS: ReadonlySet<string> = new Set(["skill__load"]);
 

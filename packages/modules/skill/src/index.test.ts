@@ -152,7 +152,7 @@ describe("skill 模块（m4-7 T1/T2——四轨目录 + frontmatter 扩集）", 
     expect(row.source).toBe("orosus");
   });
 
-  it("⑧ disable-model-invocation（值恰为 true）：不进 promptSection，但 load 指名仍给正文（用户手动路径不受限）", async () => {
+  it("⑧ disable-model-invocation（值恰为 true）：不进 promptSection，skill__load 指名调用被拒（m5-skill-trigger D4 调用侧拒绝——菜单手动路径不经 skill__load 不受影响；旧 m4-7 行为「指名仍给正文」被推翻）", async () => {
     put(join(user, ".orosus", "skills"), "manual-only", "纯手动技能", "手动正文", "\ndisable-model-invocation: true");
     put(join(user, ".orosus", "skills"), "explicit-false", "显式 false", "常规正文", "\ndisable-model-invocation: false");
     const { ctx, sections, tools } = fakeCtx(fourTrackCfg());
@@ -160,8 +160,9 @@ describe("skill 模块（m4-7 T1/T2——四轨目录 + frontmatter 扩集）", 
     expect(sections[0]!.text).not.toContain("manual-only");
     expect(sections[0]!.text).toContain("explicit-false"); // false 不算禁——值恰为 true 才算
     const r = await runLoad(tools, "manual-only");
-    expect(r.isError).toBe(false);
-    expect(r.output).toContain("手动正文");
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("disable-model-invocation set");
+    expect(r.output).not.toContain("手动正文"); // 正文不给（模型路径拦截）
   });
 
   it("⑨ 未知键丢弃维持（宽松派）——frontmatter 带未知键照常解析", async () => {
@@ -184,23 +185,83 @@ describe("skill 模块（m4-7 T3——清单预算与降级）", () => {
   });
 
   it("② 段总预算 4000：正常不触；超限整段降级为仅技能名列表（不带描述不带路径）", async () => {
-    // 17 条 × 249 字符 ≈ 4250 > 4000 → 降级
+    // 17 条 × 259 ≈ 4403 + 英文头 ~213（m5-skill-trigger 换英文头句）≈ 4630 > 4000 → 降级
     for (let i = 0; i < 17; i++) put(join(user, ".orosus", "skills"), `bulk-${i}`, "描".repeat(249), "b");
     const { ctx, sections } = fakeCtx(fourTrackCfg());
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
     const text = sections[0]!.text;
-    expect(text).toContain("清单超预算，仅列名");
+    expect(text).toContain("Skills list over budget, names only");
     expect(text).toContain("bulk-0");
     expect(text).toContain("bulk-16"); // 仅名列表（名间空格连接，字典序排列）
     expect(text).not.toContain("—"); // 不再有 name — desc 行形态
   });
 
-  it("③ 降级边界：15 条 × 249 ≈ 3920 不降级（保持 name — desc 行）", async () => {
-    for (let i = 0; i < 15; i++) put(join(user, ".orosus", "skills"), `bulk-${i}`, "描".repeat(249), "b");
+  it("③ 降级边界：14 条 × 249 ≈ 3850（含英文头 ~213）不降级（保持 name — desc 行）——m5-skill-trigger 头句换英文后边界自 15 条平移（15 条 ≈ 4112 已越 4000）", async () => {
+    for (let i = 0; i < 14; i++) put(join(user, ".orosus", "skills"), `bulk-${i}`, "描".repeat(249), "b");
     const { ctx, sections } = fakeCtx(fourTrackCfg());
     await def.activate(ctx as ModuleContext<Record<string, unknown>>);
-    expect(sections[0]!.text).not.toContain("清单超预算");
-    expect(sections[0]!.text.split("\n").filter((l) => l.includes("—"))).toHaveLength(15);
+    expect(sections[0]!.text).not.toContain("over budget");
+    expect(sections[0]!.text.split("\n").filter((l) => l.includes("—"))).toHaveLength(14);
+  });
+});
+
+describe("skill 模块（m5-skill-trigger——清单头时序令 + when_to_use 进条目 + 工具面全英 + 禁调拒绝）", () => {
+  it("① 清单头句带时序强制令（英文）——首行含 cc 同句与 dsh 式「先调再动工」短语", async () => {
+    put(join(user, ".orosus", "skills"), "plain", "普通技能", "b");
+    const { ctx, sections } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const firstLine = sections[0]!.text.split("\n")[0]!;
+    expect(firstLine).toContain("The following skills are available for use with the skill__load tool");
+    expect(firstLine).toContain("before taking task actions"); // 时序令：先 skill__load 再动工
+  });
+
+  it("② when_to_use 拼进条目：`名 — 描述 — 何时用`；无 when_to_use 条目不拼（无尾随分隔符）", async () => {
+    put(join(user, ".orosus", "skills"), "annotated", "描述文本", "b", "\nwhen_to_use: 适用说明文本");
+    put(join(user, ".orosus", "skills"), "bare", "裸描述", "b");
+    const { ctx, sections } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const lines = sections[0]!.text.split("\n");
+    expect(lines.find((l) => l.startsWith("annotated"))).toBe("annotated — 描述文本 — 适用说明文本");
+    expect(lines.find((l) => l.startsWith("bare"))).toBe("bare — 裸描述");
+  });
+
+  it("③ 合并截断帽：desc 单独不超、拼上 when_to_use 才超 → 截断作用于合并串（先拼后截共用一帽，cc 同款）", async () => {
+    const desc = "描".repeat(100);
+    const when = "用".repeat(200); // 100 + 3 + 200 = 303 > 250
+    put(join(user, ".orosus", "skills"), "combo", desc, "b", `\nwhen_to_use: ${when}`);
+    const { ctx, sections } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const row = sections[0]!.text.split("\n").find((l) => l.startsWith("combo"))!;
+    expect(row).toBe(`combo — ${`${desc} — ${when}`.slice(0, 250)}…`);
+  });
+
+  it("④ skill__load 工具描述与参数 describe 全英：强制令/禁令/去重告知/反向令关键短语在场（短语钉不钉全文——钉全文太脆）", async () => {
+    const { ctx, tools } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const load = tools.find((t) => t.name === "skill__load")!;
+    expect(load.description).toContain("you MUST call this tool before taking task actions"); // 强制令
+    expect(load.description).toContain("NEVER mention a skill without actually calling this tool"); // 禁令（cc 逐字）
+    expect(load.description).toContain("do not call it again"); // 去重告知
+    expect(load.description).toContain("keywords alone are not sufficient"); // 反向令（防关键词过敏）
+    const param = (load.parameters as unknown as { shape: { name: { description?: string } } }).shape.name;
+    expect(param.description).toContain("The name of a skill from the available-skills list"); // ZCode 逐字
+    expect(param.description).toContain("Do not guess names");
+  });
+
+  it("⑤ 禁调调用侧拒绝（D4）：isError + 带动作指令的拒绝文案、正文不给；三分支次序 = 停用 → 未知名 → 禁调（cc validateInput 同序）", async () => {
+    put(join(user, ".orosus", "skills"), "manual-only", "纯手动", "手动正文", "\ndisable-model-invocation: true");
+    const { ctx, tools } = fakeCtx(fourTrackCfg());
+    await def.activate(ctx as ModuleContext<Record<string, unknown>>);
+    const r = await runLoad(tools, "manual-only");
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain('Skill "manual-only" has disable-model-invocation set');
+    expect(r.output).toContain("ask the user to invoke it manually"); // 带动作的指令——模型拿到即可照做
+    expect(r.output).not.toContain("手动正文");
+    expect((await runLoad(tools, "ghost")).output).toContain("does not exist"); // 未知名在禁调之前
+    // 停用分支最先：同一技能既停用又禁调 → 报「停用」不报「禁调」
+    const both = fakeCtx({ ...fourTrackCfg(), disabled: ["manual-only"] });
+    await def.activate(both.ctx as ModuleContext<Record<string, unknown>>);
+    expect((await runLoad(both.tools, "manual-only")).output).toContain("is disabled");
   });
 });
 
@@ -247,7 +308,7 @@ describe("skill 模块（m4-7 T4/T5——skill__load 三修 + 去重重置口）
     const first = await runLoad(tools, "dedup");
     expect(first.output).toContain("只该出现一次的正文");
     const second = await runLoad(tools, "dedup");
-    expect(second.output).toBe('技能 "dedup" 已加载过，正文在上方对话中，请直接按其行事。');
+    expect(second.output).toBe('Skill "dedup" is already loaded — its body is earlier in the conversation; follow it directly.');
     expect(second.isError).toBe(false);
     expect((await runLoad(tools, "other")).output).toContain("另一个技能");
   });
@@ -279,7 +340,7 @@ describe("skill 模块（m4-7 T4/T5——skill__load 三修 + 去重重置口）
     const r = await runLoad(tools, "with-refs");
     expect(r.isError).toBe(false);
     expect(r.output).toContain(join(user, ".orosus", "skills", "with-refs", "SKILL.md")); // 绝对路径在输出里
-    expect(r.output).toContain("相对该文件所在目录解析"); // 解析基准提示
+    expect(r.output).toContain("resolve against this skill file's directory"); // 解析基准提示
     expect(r.output).toContain("详见 references/lenses.md"); // 正文本体原样
     expect((r.output as string).indexOf("SKILL.md")).toBeLessThan((r.output as string).indexOf("详见")); // 路径行在正文之前
   });
@@ -295,7 +356,7 @@ describe("skill 模块（m4-7 T6——停用清单）", () => {
     expect(sections[0]!.text).not.toContain("off-skill");
     const r = await runLoad(tools, "off-skill");
     expect(r.isError).toBe(true);
-    expect(r.output).toContain("已停用");
+    expect(r.output).toContain("is disabled");
     expect(r.output).toContain("/settings → 技能");
     const catalog = services.get("skill.catalog") as () => Array<{ name: string; disabled: boolean; modelInvocable: boolean }>;
     const off = catalog().find((x) => x.name === "off-skill")!;
@@ -370,7 +431,7 @@ describe("skill 模块（m4-7 T11/T12——第五轨内置目录 + 出厂技能�
     expect(sections[0]!.text).not.toContain("skill-creator"); // 摘除该件（其余出厂件照常在册——非单件时代不再断言整段为空）
     const r = await runLoad(tools, "skill-creator");
     expect(r.isError).toBe(true);
-    expect(r.output).toContain("已停用");
+    expect(r.output).toContain("is disabled");
     const catalog = services.get("skill.catalog") as () => Array<{ name: string; disabled: boolean }>;
     expect(catalog().find((x) => x.name === "skill-creator")!.disabled).toBe(true);
   });
