@@ -27,6 +27,7 @@ import { createDialogs } from "./fullapp-dialogs.ts";
 import { createSelect } from "./fullapp-select.ts";
 import { createMouse } from "./fullapp-mouse.ts";
 import { createMenu } from "./fullapp-menu.ts";
+import { createAt } from "./fullapp-at.ts";
 import { createInput } from "./fullapp-input.ts";
 import { createKeys } from "./fullapp-keys.ts";
 import { createOverlay } from "./fullapp-overlay.ts";
@@ -72,6 +73,8 @@ export class FullApp {
 	mouse: ReturnType<typeof createMouse>;
 	/** 斜杠菜单 overlay 键子系统（m5-split-fullapp T7——fullapp-menu.ts 工厂件）。 */
 	menu: ReturnType<typeof createMenu>;
+	/** @ 文件菜单键子系统（m5-at-menu T2——fullapp-at.ts 工厂件）。 */
+	at: ReturnType<typeof createAt>;
 	/** 输入框编辑/历史/提交子系统（m5-split-fullapp T8——fullapp-input.ts 工厂件）。 */
 	input: ReturnType<typeof createInput>;
 	/** 键盘路由子系统（m5-split-fullapp T9——fullapp-keys.ts 工厂件；onKey 巨方法整体搬入）。 */
@@ -115,6 +118,7 @@ export class FullApp {
 			diagOpen: false,
 			diagSel: 0,
 			diagReturn: false,
+			atMenu: undefined,
 			toast: undefined,
 			mselAnchor: undefined,
 			mselFocus: undefined,
@@ -135,6 +139,7 @@ export class FullApp {
 		this.select = createSelect(this);
 		this.mouse = createMouse(this);
 		this.menu = createMenu(this);
+		this.at = createAt(this);
 		this.input = createInput(this);
 		this.keys = createKeys(this);
 		this.overlay = createOverlay(this);
