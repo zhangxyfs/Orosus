@@ -133,6 +133,9 @@ export function createKeys(app: FullApp) {
 						else if (typeof r === "string") {
 							pu.text = r;
 							pu.lines = r.split("\n");
+							// live 一秒缓存失效一拍（m5-agentview-perf T4）：run 回新文本（如折叠键切换）后，
+							// 下一帧 live 必须现算——否则 1s 龄门窗口内命中旧缓存会把新文本顶回旧帧
+							pu.liveCache = undefined;
 							// 走查⑥（2026-09-29 用户报「折叠键按完直接置顶」）：内容替换不再滚回顶部
 							// （旧「替换即置顶」是设计空白 14 为模块刷新内容定的语义，折叠切换被顶飞不合
 							// 理）。学 kimi agent-activity-viewer :106-110（ctrl+o 折叠切换不动滚动）+
