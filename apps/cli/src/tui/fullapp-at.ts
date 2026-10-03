@@ -61,12 +61,13 @@ export function filterEntries(entries: AtEntry[], filter: string): AtEntry[] {
 	return [...byTier(true), ...byTier(false)];
 }
 
+/** 词长（从 atWordAt 重组——word = path + "/" + filter 无损）：start + 词长 = 词区间右端。 */
+const wordLen = (w: { path: string; filter: string }): number => 1 + (w.path === "" ? 0 : w.path.length + 1) + w.filter.length;
+
 /** @ 菜单键族（T2——结构照抄 fullapp-menu createMenu 的 onOverlayKey）。
  *  词替换一律用 atWordAt 返回的 start 做区间替换、不用字符串 replace（CR-03 教训：replace 吃
  *  首次出现会啃错位——正文中段同串场景致命）。 */
 export function createAt(app: FullApp) {
-	/** 词长（从 atWordAt 重组——word = path + "/" + filter 无损）：start + 词长 = 词区间右端。 */
-	const wordLen = (w: { path: string; filter: string }): number => 1 + (w.path === "" ? 0 : w.path.length + 1) + w.filter.length;
 
 	/** 词区间替换：[w.start, w.start+词长) 换 replacement，光标落替换尾。 */
 	const replaceWord = (w: { start: number; path: string; filter: string }, replacement: string): void => {
