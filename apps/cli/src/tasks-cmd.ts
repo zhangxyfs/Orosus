@@ -407,6 +407,8 @@ export const openTasks = async (
     sessionsDir: string;
     commandUi: import("@orosus/contracts/module").CommandUi;
     notify: (msg: string) => void;
+    /** 测试缝（m5-agentview-perf T3）：注入假盘观察查看窗读盘行为；缺省走真盘 IO。 */
+    viewIO?: AgentViewIO;
   },
 ): Promise<void> => {
 	for (;;) {
@@ -452,26 +454,33 @@ export const openTasks = async (
 			}
 			continue;
 		}
-		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷——live 每帧现读会话文件）。
+		// 查看窗（决策 22：顶栏 + 消息流主窗口同款渲染；跑着的实时刷）。
 		// 折行宽 = 全终端宽 − 盒框 4 列（2026-09-27 拍板：按全窗口大小折行，不是 78 定宽——live 每帧现取，拖宽即时回流）
 		const viewW = (): number => Math.max(40, (process.stdout.columns ?? 80) - 4);
 		// 内容快捷键与主窗一致（走查④，2026-09-29）：Alt+E/O/F 切查看窗内思考/工具明细/失败体折叠态——
 		// 折叠态在闭包（跨 live 刷新保持，每次开窗默认收起与主窗同）；键提示行显示「思考 · 明细 · 失败」
 		const fold: AgentViewFoldState = { thinkOpen: false, toolOpen: false, errOpen: false };
-		const eventsNow = (): readonly { type: string; [k: string]: unknown }[] => agentEventsFromFile(deps.sessionsDir, h.sessionId, entry.id);
-		const renderNow = (): string =>
-			renderAgentView(h.subagents().find((e) => e.id === entry.id) ?? entry, eventsNow(), viewW(), fold);
-		const liveView = entry.status === "queued" || entry.status === "running" ? () => renderNow() : undefined;
-		const body = renderNow();
+		// m5-agentview-perf T3：三路消费（实时刷新 liveView / 首屏 body / 三个折叠键 run）全走增量渲染器——
+		// 文件未变不重读、变了只解析新增行、常驻模型折行跨帧复用（旧路 renderNow 每路全量冷算，每帧
+		// 随子代理输出线性增长即查看窗卡顿根因）。行模式分支（app === undefined）走同一段，同受益。
+		const renderer = createAgentViewRenderer(
+			deps.sessionsDir,
+			entry,
+			() => h.subagents().find((e) => e.id === entry.id) ?? entry, // 活体取数口：状态行/尾行每帧现取最新态
+			() => ({ sid: h.sessionId, id: entry.id }),
+			deps.viewIO !== undefined ? { io: deps.viewIO } : undefined,
+		);
+		const liveView = entry.status === "queued" || entry.status === "running" ? () => renderer.render(viewW()) : undefined;
+		const body = renderer.render(viewW());
 		if (app !== undefined) {
 			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, {
 				layout: "full",
 				bottom: true, // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
 				...(liveView !== undefined ? { live: liveView } : {}),
 				keys: {
-					"alt+e": { label: "思考", run: () => { fold.thinkOpen = !fold.thinkOpen; return renderNow(); } },
-					"alt+o": { label: "明细", run: () => { fold.toolOpen = !fold.toolOpen; return renderNow(); } },
-					"alt+f": { label: "失败", run: () => { fold.errOpen = !fold.errOpen; return renderNow(); } },
+					"alt+e": { label: "思考", run: () => { fold.thinkOpen = !fold.thinkOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
+					"alt+o": { label: "明细", run: () => { fold.toolOpen = !fold.toolOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
+					"alt+f": { label: "失败", run: () => { fold.errOpen = !fold.errOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
 				},
 			});
 			continue; // 查看窗排在 pendingUi——Esc 关窗后队里的列表自动顶上（回列表页拍板）

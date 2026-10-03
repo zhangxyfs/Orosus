@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
-import { agentEventsFromFile, createAgentViewRenderer, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, createAgentViewRenderer, emptyTasksRow, loadHistoricalSubagents, openTasks, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import type { AgentViewIO } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 let dir: string | undefined;
@@ -291,5 +292,33 @@ describe("增量渲染器 createAgentViewRenderer（m5-agentview-perf T2：常�
     const again = stripAnsi(r.render(80));
     expect(again).toBe(opened); // 同档二次复用
     expect(r.readCount).toBe(readsBeforeFold);
+  });
+});
+
+describe("openTasks 查看窗接线增量渲染器（m5-agentview-perf T3：实时刷新/首屏/折叠键三路全走 renderer）", () => {
+  it("T3① 开窗后多次触发 live：同一文件状态下只有首次真读盘（假盘 readFrom 计数钉 1），文本含会话内容", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t3-")); // sessionsDir 空目录：无历史名册（loadHistoricalSubagents 空转）
+    const file = join(dir!, "main", "agents", "agents_a3f9c2e1", "agents", "session.jsonl");
+    const files = new Map<string, Buffer>([[file, Buffer.from(JSON.stringify({ v: 1, type: "user/message", content: [{ kind: "text", text: "任务正文" }] }) + "\n", "utf8")]]);
+    let reads = 0;
+    const viewIO: AgentViewIO = {
+      stat: (f) => { const b = files.get(f); return b === undefined ? undefined : { mtimeMs: 1000, size: b.length }; },
+      readFrom: (f, off) => { reads++; const b = files.get(f); return b === undefined ? "" : b.subarray(off).toString("utf8"); },
+    };
+    const entry = T({ status: "running" });
+    const h = { sessionId: "main", subagents: () => [entry], answerSubagentApproval: () => {} } as never;
+    let captured: { live?: () => string } | undefined;
+    const app = {
+      pickOverlay: async () => (captured === undefined ? 0 : undefined), // 第一轮选中行、查看窗关闭后 Esc 出循环
+      viewText: (_t: string, _b: string, opts: { live?: () => string }) => { captured = opts; },
+    } as unknown as import("./tui/fullapp.ts").FullApp;
+    await openTasks(app, () => {}, { getH: () => h, sessionsDir: dir!, commandUi: {} as never, notify: () => {}, viewIO });
+    expect(captured?.live).toBeDefined(); // running 态挂实时刷
+    const a = captured!.live!();
+    expect(reads).toBe(1); // 首次真读盘（旧全量路不走 viewIO 缝恒 0——接线前此断言即红）
+    const b = captured!.live!();
+    expect(reads).toBe(1); // 文件未变不重读
+    expect(stripAnsi(b)).toContain("任务正文");
+    expect(b).toBe(a); // 同一文件状态文本同形
   });
 });
