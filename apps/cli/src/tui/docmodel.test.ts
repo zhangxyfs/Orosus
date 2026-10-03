@@ -570,6 +570,57 @@ describe("子代理 agent 组条目（2026-09-27 用户拍板：spawn 工具行�
 	});
 });
 
+describe("historyFrom 可重入化（m5-agentview-perf T1：group 提升实例字段——分批喂入与一次全量同形）", () => {
+	// roster 全终态 + 固定时间戳：组行时长/词元走 startedAt/endedAt 纯数据跨度，无 Date.now() 依赖——
+	// 两向渲染逐字节确定（活体行跨秒漂移假红的防法，见方案 T1 审修补）
+	const roster = (): import("@orosus/contracts/module").SubagentRosterEntry[] => [
+		{ id: "aaaa1111", depth: 1, label: "调研", status: "completed", background: false, turns: 3, enqueuedAt: "2026-10-02T10:00:00Z", startedAt: "2026-10-02T10:00:01Z", endedAt: "2026-10-02T10:00:04Z" } as never,
+		{ id: "bbbb2222", depth: 1, label: "检索", status: "completed", background: true, turns: 2, enqueuedAt: "2026-10-02T10:00:00Z", startedAt: "2026-10-02T10:00:02Z", endedAt: "2026-10-02T10:00:05Z" } as never,
+	];
+
+	it("T1① 跨批连续 spawn 并组：分两次 historyFrom 喂入的行数组与一次全量完全一致", () => {
+		const batch1 = [
+			{ type: "user/message", content: [{ kind: "text", text: "去查" }] },
+			{ type: "assistant/message", content: [] },
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c1", args: {} },
+		];
+		const batch2 = [
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c2", args: {} }, // 跨批紧邻 spawn——全量喂时与 c1 同组
+			{ type: "tool/result", callId: "c1", output: "- aaaa1111 · 完成\n结论：略" },
+			{ type: "tool/result", callId: "c2", output: "已派出后台子代理：bbbb2222" },
+			{ type: "tool/call", name: "tool-fs__read", callId: "c3", args: { path: "a.ts" } },
+		];
+		const dmSplit = new DocModel();
+		dmSplit.agentProvider = roster;
+		dmSplit.historyFrom(batch1, 80);
+		dmSplit.historyFrom(batch2, 80);
+		const dmWhole = new DocModel();
+		dmWhole.agentProvider = roster;
+		dmWhole.historyFrom([...batch1, ...batch2], 80);
+		const split = dmSplit.frameLines(80).map(stripAnsi);
+		const whole = dmWhole.frameLines(80).map(stripAnsi);
+		expect(split).toEqual(whole); // 同形（现状分批时批 2 的 spawn 另开新组即红）
+		expect(split.filter((l) => l.includes("agents ")).length).toBe(1); // 跨批两 spawn 并一组
+	});
+
+	it("T1② 组员结果跨批配对：上一批末尾 spawn、下一批才来 result——编号仍抠进组（pendingSpawnResults 跨调用存活回归钉）", () => {
+		const dm = new DocModel();
+		// 单条目 roster：claimAgents 渲染期认领「无主」条目——多条目会把未 spawn 的也并进末组，钉不住配对本身
+		dm.agentProvider = () => roster().filter((r) => r.id === "aaaa1111");
+		dm.historyFrom([
+			{ type: "user/message", content: [{ kind: "text", text: "查一下" }] },
+			{ type: "assistant/message", content: [] },
+			{ type: "tool/call", name: "tool-subagent__spawn", callId: "c1", args: {} },
+		], 80);
+		dm.historyFrom([
+			{ type: "tool/result", callId: "c1", output: "后台已入册：aaaa1111" },
+		], 80);
+		const lines = dm.frameLines(80).map(stripAnsi);
+		expect(lines.some((l) => l.includes("● 1 general agents 完成"))).toBe(true);
+		expect(lines.some((l) => l.includes("调研"))).toBe(true); // result 抠出的编号经 roster 现算成组员行
+	});
+});
+
 describe("回放 agent 组重建集成（2026-09-27：重载后与实时同形——盘上布局 → 历史名册 → 回放组 → 渲染）", () => {
 	let dir: string | undefined;
 	it("㊿-8 真盘布局：spawn call/result 落主会话文件 + agents/ 目录在盘 → loadHistoricalSubagents 喂 provider → historyFrom 回放出完整组（两端抠编号口径一致）", () => {
