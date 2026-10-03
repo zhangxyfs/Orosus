@@ -2,7 +2,7 @@
  *  公开三件（insertAtCursor/restoreInput/seedHistory）壳留薄委托；lastEscCancel 字段留守壳
  *  （唯一消费者是 onKey 键路 T9，经降级字段触达）。非公开 API。 */
 
-import { atWordAt, type AtEntry } from "./fullapp-at.ts";
+import { atWordAt } from "./fullapp-at.ts";
 import { indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, normCmd, slashFilterQ, slashMenuActive, type SlashItem } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { FullApp } from "./fullapp.ts";
@@ -124,9 +124,9 @@ export function createInput(app: FullApp) {
 		if (app.pendingUi !== undefined || s.diagOpen || s.diagReturn) return false; // 弹窗模态期不开（ask 态 onEditKey 也走这里）
 		const w = atWordAt(s.input, s.cursor);
 		if (w === undefined) return false;
-		const entries: AtEntry[] | undefined = app.io.atMenuEntries?.(w.path);
-		if (entries === undefined) return false; // 宿主未供数据源——不开（行模式/测试缺省路径）
-		s.atMenu = { dir: w.path, entries, sel: 0, start: w.start, filter: w.filter };
+		const data = app.io.atMenuEntries?.(w.path);
+		if (data === undefined) return false; // 宿主未供数据源——不开（行模式/测试缺省路径）
+		s.atMenu = { dir: w.path, entries: data.entries, sel: 0, start: w.start, filter: w.filter, ...(data.miss ? { miss: true } : {}) };
 		return true;
 	};
 

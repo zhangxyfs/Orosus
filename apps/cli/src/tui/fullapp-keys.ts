@@ -26,7 +26,7 @@ export function createKeys(app: FullApp) {
 		// 功能。例外 = 弹窗自己的键：查看窗注册键（viewHasKey 让位，落窗内分发）与诊断开关
 		// （Ctrl+E 在 diagOpen 期是诊断窗的关窗键）。旧铁律「模块窗期 Ctrl+E 仍走宿主全局键」随之
 		// 作废（保留键注册即拒不动——模块依然不能绑这些键）；吞键静默，Esc 关弹窗后恢复。
-		const popupFocused = app.pendingUi !== undefined || s.diagOpen || s.diagReturn || s.overlayOpen;
+		const popupFocused = app.pendingUi !== undefined || s.diagOpen || s.diagReturn || s.overlayOpen || s.atMenu !== undefined;
 		if (key === "ctrl+t") {
 			// m5-render-perf T5 护栏①（D8 定案）：生成中拒绝切换——宽度变化全量重折的尖峰削频，
 			// toast 明示（设计空白 #9 文案）；冷却期连击由 setSidebar 静默吞（预检后到达的都是真实切换意图）
@@ -55,6 +55,7 @@ export function createKeys(app: FullApp) {
 					app.showToast("模块全部正常——没有诊断记录"); // 空态不弹空窗（原型同款）
 				} else {
 					s.overlayOpen = false; // 与斜杠菜单互斥
+					s.atMenu = undefined; // 与 @ 文件菜单互斥（m5-at-menu T3——两标志位独立，逐个清）
 					s.diagOpen = true;
 					s.diagSel = 0; // 打开时刷新（定案）：entries 每开现读
 				}

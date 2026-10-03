@@ -244,6 +244,10 @@ export function createFrame(app: FullApp) {
 		} else if (app.pendingUi?.kind === "dialog") {
 			const pu = app.pendingUi;
 			overlay = app.overlay.buildDialogOverlay(pu, leftW, divRow);
+		} else if (s.atMenu !== undefined) {
+			// @ 文件菜单（m5-at-menu T3）：过滤词从 atMenu 词快照读——渲染不追光标现算（光标挪走后
+			// 菜单内容静止）；渲染期零 fs——entries 来自 state（导航点现读已存）
+			overlay = app.overlay.buildAtOverlay(leftW, divRow, s.atMenu.dir, s.atMenu.entries, s.atMenu.sel, s.atMenu.filter, s.atMenu.miss);
 		} else if (s.overlayOpen) {
 			overlay = app.overlay.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {

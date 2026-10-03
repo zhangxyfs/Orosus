@@ -3801,10 +3801,18 @@ const AT_TREE: Record<string, AtEntry[]> = {
 		{ name: "fullapp.ts", dir: false },
 		{ name: "menu.ts", dir: false },
 	],
+	big: Array.from({ length: 12 }, (_, i) => ({ name: `f${i}.ts`, dir: false })),
 };
 
 /** at rig：rig 桩上叠 atMenuEntries（导航点现读——目录变了才读的现读语义由键族驱动）。 */
-const atRig = (over: Partial<FullAppIO> = {}) => rig(["# 你好"], 100, 30, { atMenuEntries: (d) => AT_TREE[d] ?? [], ...over });
+const atRig = (over: Partial<FullAppIO> = {}) =>
+	rig(["# 你好"], 100, 30, {
+		atMenuEntries: (d) => {
+			const e = AT_TREE[d];
+			return e === undefined ? { entries: [] as AtEntry[], miss: true } : { entries: e };
+		},
+		...over,
+	});
 
 describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/插路径/Tab 补全/过滤/召回/光标与退格触发）", () => {
 	it("① 打 @ 开菜单 + 继续打字过滤（词快照落 state）", async () => {
@@ -3862,7 +3870,7 @@ describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/�
 		await flush();
 		expect(app.stateRef.input).toBe("@src/");
 		expect(app.stateRef.cursor).toBe(5); // 光标落替换尾（/ 右侧）
-		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src, sel: 0, start: 0, filter: "" });
+		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src!, sel: 0, start: 0, filter: "" });
 		app.stop();
 	});
 	it("⑤ Enter 文件插 `@路径` + 空格 + 关菜单（光标落空格后已不在词上）", async () => {
@@ -3932,7 +3940,7 @@ describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/�
 		await flush();
 		expect(app.stateRef.input).toBe("@src/");
 		expect(app.stateRef.cursor).toBe(5);
-		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src, sel: 0, start: 0, filter: "" });
+		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src!, sel: 0, start: 0, filter: "" });
 		app.stop();
 	});
 	it("⑩ Esc 根上关菜单且文本与光标保留", async () => {
@@ -3993,13 +4001,13 @@ describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/�
 		expect(app.stateRef.atMenu).toBeDefined();
 		app.stop();
 	});
-	it("⑮ 桩返回空不炸（目录不存在/空目录——空态可见反馈，菜单照开）", async () => {
+	it("⑮ 桩返回空不炸（目录不存在 miss 标志——空态可见反馈，菜单照开）", async () => {
 		const { app, input } = atRig();
 		app.start();
 		await flush();
-		input.emit("data", "@nosuch/"); // 未知目录 → []
+		input.emit("data", "@nosuch/"); // 未知目录 → miss（目录不存在空态）
 		await flush();
-		expect(app.stateRef.atMenu).toEqual({ dir: "nosuch", entries: [], sel: 0, start: 0, filter: "" });
+		expect(app.stateRef.atMenu).toEqual({ dir: "nosuch", entries: [], sel: 0, start: 0, filter: "", miss: true });
 		input.emit("data", "\r"); // 空清单 Enter 无动作
 		await flush();
 		expect(app.stateRef.atMenu).toBeDefined();
@@ -4162,6 +4170,140 @@ describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/�
 		expect(app.stateRef.atMenu).toBeDefined();
 		expect(app.stateRef.overlayOpen).toBe(false); // 斜杠不得重开（双菜单态不出现）
 		expect(app.stateRef.atMenu?.filter).toBe("ax");
+		app.stop();
+	});
+});
+
+describe("m5-at-menu（T3 渲染层 + 滚轮 + 互斥——buildAtOverlay 框线/选中/分页/空态与斜杠菜单同款纪律）", () => {
+	it("① 菜单框形态：标题/计数段/目录文件两形态行/键提示行 + 恒定行数不随条目数变", async () => {
+		const { app } = atRig();
+		app.start();
+		await flush();
+		const f = app.overlay.buildAtOverlay(80, 20, "", AT_TREE[""]!, 0, "");
+		const plain = f.lines.map((l) => stripAnsi(l));
+		expect(plain[0]).toContain("@ 文件");
+		expect(plain[0]).toContain("2 个目录 · 2 个文件");
+		expect(plain.join("\n")).toContain("apps/");
+		expect(plain.join("\n")).toContain("readme.md");
+		expect(plain.join("\n")).toContain("↑↓ 选择 · Enter/Tab 进入目录/插入路径 · Esc 返回 · 输入过滤");
+		expect(f.lines).toHaveLength(14); // 顶框 + 10 列表 + 余量 + 键提示 + 底框
+		// 恒定行数：2 条目录（src/tui）与 4 条根同高——防闪烁纪律
+		expect(app.overlay.buildAtOverlay(80, 20, "src/tui", AT_TREE["src/tui"]!, 0, "").lines).toHaveLength(14);
+		// 窗几何：贴输入框上缘、全左栏宽（斜杠同款）
+		expect(f.row).toBe(20 - 14);
+		expect(f.col).toBe(0);
+		expect(f.width).toBe(80);
+		app.stop();
+	});
+	it("② 子目录标题 + 目录行 accent 色、文件行默认色、选中行 ❯ 前缀软底", async () => {
+		const { app } = atRig();
+		app.start();
+		await flush();
+		const f = app.overlay.buildAtOverlay(80, 20, "src/tui", AT_TREE.src!, 1, "");
+		expect(stripAnsi(f.lines[0]!)).toContain("@ src/tui/");
+		// 空 filter 目录在前：行序 = [tui/, a.ts]；sel 1 = a.ts 选中
+		expect(stripAnsi(f.lines[1]!)).toContain("tui/");
+		expect(stripAnsi(f.lines[2]!)).toContain("a.ts");
+		expect(stripAnsi(f.lines[2]!)).toContain("❯"); // 选中前缀
+		expect(f.lines[2]!).toMatch(/48;2;26;42;35|48;5;234/); // accentSoft 软底（truecolor/256 两形态）
+		expect(f.lines[1]!).not.toContain("❯"); // 未选中行无前缀
+		app.stop();
+	});
+	it("③ 过滤段（pick overlay filter 段同款形态）与空态三则：无匹配文件/（空目录）/目录不存在", async () => {
+		const { app } = atRig();
+		app.start();
+		await flush();
+		const zero = app.overlay.buildAtOverlay(80, 20, "", AT_TREE[""]!, 0, "zzz");
+		expect(stripAnsi(zero.lines[0]!)).toContain("过滤「zzz」 0/4");
+		expect(zero.lines.map((l) => stripAnsi(l)).join("\n")).toContain("无匹配文件");
+		const empty = app.overlay.buildAtOverlay(80, 20, "apps/cli", [], 0, "");
+		expect(empty.lines.map((l) => stripAnsi(l)).join("\n")).toContain("（空目录）");
+		const miss = app.overlay.buildAtOverlay(80, 20, "nosuch", [], 0, "", true);
+		expect(miss.lines.map((l) => stripAnsi(l)).join("\n")).toContain("目录不存在——检查路径或 Esc 返回");
+		app.stop();
+	});
+	it("④ 余量提示合一行：12 条目录首屏 10 条 + 「↓ 还有 2 项」；sel 落尾页带上余量", async () => {
+		const { app } = atRig();
+		app.start();
+		await flush();
+		const f = app.overlay.buildAtOverlay(80, 20, "big", AT_TREE.big!, 0, "");
+		const plain = f.lines.map((l) => stripAnsi(l));
+		expect(plain.join("\n")).toContain("↓ 还有 2 项");
+		expect(plain[10]).not.toContain("↑"); // 无上余量行
+		const tail = app.overlay.buildAtOverlay(80, 20, "big", AT_TREE.big!, 11, "");
+		expect(tail.lines.map((l) => stripAnsi(l)).join("\n")).toContain("↑ 还有 2 项");
+		app.stop();
+	});
+	it("⑤ 滚轮上下翻选中（与 onAtKey 共用 filterEntries 一源、到头停）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		const wheel = (dir: "up" | "down"): void => {
+			input.emit("data", `\x1b[<${64 + (dir === "up" ? 0 : 1)};10;5M`);
+		};
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(0);
+		wheel("down");
+		wheel("down");
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(2);
+		wheel("up");
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(1);
+		wheel("up");
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(0); // 到头停（不回绕）
+		app.stop();
+	});
+	it("⑥ 菜单期主窗全局键不可用（popupFocused 弹窗模态）：Ctrl+T 拦截，Esc 后恢复", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		const before = app.stateRef.sidebarVisible;
+		input.emit("data", "\x14"); // Ctrl+T
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(before); // 被拦
+		input.emit("data", "\x1b"); // Esc 关菜单
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		input.emit("data", "\x14"); // Ctrl+T 恢复可用
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(!before);
+		app.stop();
+	});
+	it("⑦ 与诊断弹窗互斥：at 菜单期 Ctrl+E 吞（不叠诊断）；诊断期编辑不开 at；诊断关后恢复", async () => {
+		const diagEntries = () =>
+			Array.from({ length: 2 }, (_, i) => ({
+				name: `mod-${i}`, tag: "激活失败" as const, reason: `失败原因文本 ${i}`, count: 1, last: "2026-09-25T10:00:00.000Z",
+			}));
+		const { app, input } = atRig({ diagEntries });
+		app.start();
+		await flush();
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		input.emit("data", "\x05"); // Ctrl+E：at 菜单是弹窗态（popupFocused）——不开诊断
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(false);
+		expect(app.stateRef.atMenu).toBeDefined(); // 菜单不受扰
+		input.emit("data", "\x1b"); // Esc 关 at 菜单
+		await flush();
+		input.emit("data", "\x05"); // Ctrl+E 开诊断
+		await flush();
+		expect(app.stateRef.diagOpen).toBe(true);
+		input.emit("data", "@"); // 诊断期打字被诊断窗吞（键不落编辑态）——at 不开、input 不追加
+		await flush();
+		expect(app.stateRef.input).toBe("@"); // Esc 关 at 菜单时保留的原词（未变成 "@@"）
+		expect(app.stateRef.atMenu).toBeUndefined();
+		input.emit("data", "\x1b"); // Esc 关诊断
+		await flush();
+		input.emit("data", "@"); // 诊断关后恢复
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
 		app.stop();
 	});
 });

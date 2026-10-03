@@ -3,6 +3,7 @@
  *  dialogs.viewGeo）与 widgets 渲染件；this.→app. 机械改写 15 处。非公开 API。 */
 
 import { diagListLines, DIAG_LIST_ROWS, OVERLAY_PAGE, thumbGeometry, type HostDialogKeys, type PickExtraKeys, type SlashItem } from "./fullapp-types.ts";
+import { filterEntries, type AtEntry } from "./fullapp-at.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
 import { pickLabel } from "../picker.ts";
@@ -51,6 +52,50 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 	return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 }
 
+
+/** @ 文件菜单浮层（m5-at-menu T3——buildPickOverlay 同款住模块级、零 app 触达）。框线/选中/
+ *  恒定行数/余量合一行/源头截断全按 buildOverlay 同款纪律；miss = 目录不存在（数据源 readdirSync
+ *  失败——空态文案三则的分判依据，设计空白 2）。dir/sel/filter 从 state 词快照读——渲染不追光标
+ *  现算（光标挪走后菜单内容静止，kimi 同款）。 */
+const buildAtOverlay = (leftW: number, divRow: number, dir: string, entries: AtEntry[], sel: number, filter: string, miss?: boolean): OverlayFrame => {
+	const ow = leftW;
+	const oInner = ow - 2;
+	const bc = "accent";
+	const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+	const shown = filterEntries(entries, filter);
+	const rows: AtEntry[] = shown.length > 0
+		? shown
+		: [{ name: theme.dim(miss === true ? "目录不存在——检查路径或 Esc 返回" : entries.length === 0 ? "（空目录）" : "无匹配文件"), dir: false }]; // 空态三则（设计空白 2）
+	const olines: string[] = [];
+	// 计数段（设计空白 4）：过滤时 pick overlay filter 段同款形态；平时目录/文件分计
+	const dirs = entries.filter((e) => e.dir).length;
+	const en = theme.dim(filter !== "" ? ` 过滤「${filter}」 ${shown.length}/${entries.length} ` : ` ${dirs} 个目录 · ${entries.length - dirs} 个文件 `);
+	// 标题（设计空白 4）：根 = @ 文件、子目录 = @ src/tui/；CTU-09 源头截断（dir 是用户输入可超长）
+	const titleText = dir === "" ? " @ 文件 " : ` @ ${dir}/ `;
+	const title = theme.fg("accent", truncateToWidth(titleText, Math.max(4, ow - 7 - visibleWidth(en))));
+	const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
+	olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
+	const selI = Math.max(0, Math.min(rows.length - 1, sel));
+	const winStart = Math.max(0, Math.min(Math.max(0, rows.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
+	const win = rows.slice(winStart, winStart + OVERLAY_PAGE);
+	for (let i = 0; i < OVERLAY_PAGE; i++) {
+		const it = win[i];
+		if (it === undefined) {
+			olines.push(boxRow("")); // 恒定行数防闪烁（斜杠同款纪律）
+			continue;
+		}
+		const gi = winStart + i;
+		const selPrefix = gi === selI ? theme.fg("accent", "❯") : " ";
+		const row = ` ${selPrefix} ${it.dir ? theme.fg("accent", `${it.name}/`) : it.name}`; // 目录行名/ accent、文件行默认色
+		olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
+	}
+	const rest = rows.length - winStart - win.length;
+	const hints = [winStart > 0 ? `↑ 还有 ${winStart} 项` : "", rest > 0 ? `↓ 还有 ${rest} 项` : ""].filter(Boolean).join(" · ");
+	olines.push(boxRow(hints === "" ? "" : theme.dim(`   ${hints}`)));
+	olines.push(boxRow(theme.dim(" ↑↓ 选择 · Enter/Tab 进入目录/插入路径 · Esc 返回 · 输入过滤"))); // 设计空白 3
+	olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
+	return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+}
 
 export function createOverlay(app: FullApp) {
 	/** 只读文本浮层（F5 二轮⑪ / m5 T2 新几何）：resolvePopupLayout 居中弹窗（缺省 center80；五旧窗随之
@@ -312,5 +357,5 @@ export function createOverlay(app: FullApp) {
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
 
-	return { buildViewOverlay, buildDialogOverlay, buildPickOverlay, buildDiagOverlay, buildOverlay };
+	return { buildViewOverlay, buildDialogOverlay, buildPickOverlay, buildDiagOverlay, buildAtOverlay, buildOverlay };
 }

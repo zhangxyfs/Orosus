@@ -151,10 +151,11 @@ export interface FullAppIO {
 	/** 技能条目 Enter 注入（m4-7 T7）：返回以用户消息提交的全文（宿主拼 <skill> 块，剥 frontmatter）；
 	 *  undefined = 正文读取失败（菜单提示，不提交）。 */
 	skillInject?(name: string): string | undefined;
-	/** @ 文件菜单数据源（m5-at-menu T5）：dir（相对路径，根 = 空串）→ 条目全量（宿主 readdirSync
-	 *  + 符号链接跟随判定 + 目录在前码元序）。导航点现读、不缓存（渲染期不碰文件系统）；undefined =
-	 *  宿主未供（菜单不开——行模式/测试缺省路径）；[] = 空目录/目录不存在（空态可见反馈）。 */
-	atMenuEntries?(dir: string): AtEntry[] | undefined;
+	/** @ 文件菜单数据源（m5-at-menu T5）：dir（相对路径，根 = 空串）→ 条目全量 + miss 标志（宿主
+	 *  readdirSync 失败置 true——目录不存在，渲染层给「目录不存在」空态文案；entries [] 且无 miss =
+	 *  空目录）。导航点现读、不缓存（渲染期不碰文件系统）；undefined = 宿主未供（菜单不开——
+	 *  行模式/测试缺省路径）。 */
+	atMenuEntries?(dir: string): { entries: AtEntry[]; miss?: boolean } | undefined;
 }
 
 export type FocusIdx = 0 | 1 | 2;
@@ -193,9 +194,11 @@ export interface AppState {
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
 	/** @ 文件菜单（m5-at-menu，独立于斜杠菜单 overlay 另起一支——diagOpen 同理由）：undefined = 关。
 	 *  dir = 当前目录相对路径（根 = 空串）；entries = 导航点现读的原始全量（渲染与过滤只查内存表
-	 *  ——渲染期不碰文件系统）；start/filter = 最近一次编辑动作落定时光标处词的快照（渲染与滚轮读
-	 *  快照、不追光标现算——纯光标移动后菜单内容静止，下次编辑动作重判刷新或关，kimi 同款）。 */
-	atMenu: { dir: string; entries: AtEntry[]; sel: number; start: number; filter: string } | undefined;
+	 *  ——渲染期不碰文件系统）；miss = 目录不存在（数据源 readdirSync 失败——空态文案分「目录不
+	 *  存在」与「（空目录）」两则的依据）；start/filter = 最近一次编辑动作落定时光标处词的快照
+	 *  （渲染与滚轮读快照、不追光标现算——纯光标移动后菜单内容静止，下次编辑动作重判刷新或关，
+	 *  kimi 同款）。 */
+	atMenu: { dir: string; entries: AtEntry[]; sel: number; start: number; filter: string; miss?: boolean } | undefined;
 	/** 浮动提示（2026-09-22 用户拍板）：输入框上边缘黄字、自消（duration = 自定义时长毫秒，m5 T3）。 */
 	toast: { id: number; text: string; at: number; duration?: number } | undefined;
 	/** 鼠标选区端点（m5 鼠标批 T5/T8）：存绝对行索引（设计空白 9——内容追加不漂移；压缩重建 doc

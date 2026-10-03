@@ -75,6 +75,10 @@ export function createAt(app: FullApp) {
 		s.cursor = w.start + replacement.length;
 	};
 
+	/** 导航点现读（目录变了才读）：宿主未供/读失败 → 空 entries（miss 标志透传——渲染层分
+	 *  「目录不存在」与「（空目录）」两则空态文案）。 */
+	const readDir = (dir: string): { entries: AtEntry[]; miss?: boolean } => app.io.atMenuEntries?.(dir) ?? { entries: [] };
+
 	/** 编辑落定重判（自编辑后/开菜单共用）：现算光标处词 → 命中则目录变了才现读 + sel 夹回 + 更新
 	 *  词快照；失中关菜单。返回是否命中。 */
 	const refreshFromWord = (): boolean => {
@@ -86,7 +90,8 @@ export function createAt(app: FullApp) {
 			return false;
 		}
 		if (w.path !== am.dir) {
-			s.atMenu = { dir: w.path, entries: app.io.atMenuEntries?.(w.path) ?? [], sel: 0, start: w.start, filter: w.filter };
+			const d = readDir(w.path);
+			s.atMenu = { dir: w.path, entries: d.entries, sel: 0, start: w.start, filter: w.filter, ...(d.miss ? { miss: true } : {}) };
 		} else {
 			const n = filterEntries(am.entries, w.filter).length;
 			am.start = w.start;
@@ -113,7 +118,8 @@ export function createAt(app: FullApp) {
 				// 词内有多级：截到上一级（@src/tui/ → @src/）+ 目录跟着回退
 				const up = w.path.slice(0, w.path.lastIndexOf("/"));
 				replaceWord(w, `@${up}/`);
-				s.atMenu = { dir: up, entries: app.io.atMenuEntries?.(up) ?? [], sel: 0, start: w.start, filter: "" };
+				const d = readDir(up);
+				s.atMenu = { dir: up, entries: d.entries, sel: 0, start: w.start, filter: "", ...(d.miss ? { miss: true } : {}) };
 			} else {
 				s.atMenu = undefined; // 根上（词内无 /）或光标处词失中——输入框文本与光标保留
 			}
@@ -137,7 +143,8 @@ export function createAt(app: FullApp) {
 			const joined = w.path === "" ? picked.name : `${w.path}/${picked.name}`;
 			if (picked.dir) {
 				replaceWord(w, `@${joined}/`); // 目录：补全即钻入 + 现读续显（可连按逐级补到文件）
-				s.atMenu = { dir: joined, entries: app.io.atMenuEntries?.(joined) ?? [], sel: 0, start: w.start, filter: "" };
+				const d = readDir(joined);
+				s.atMenu = { dir: joined, entries: d.entries, sel: 0, start: w.start, filter: "", ...(d.miss ? { miss: true } : {}) };
 			} else {
 				replaceWord(w, `@${joined} `); // 文件：路径 + 空格（显式词边界，设计空白 5）+ 关（光标在空格后已不在词上）
 				s.atMenu = undefined;
