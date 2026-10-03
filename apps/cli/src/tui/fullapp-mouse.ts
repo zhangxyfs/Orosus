@@ -4,6 +4,7 @@
  *  引用改结构化 TrackBase（类型面等价改写）。非公开 API。 */
 
 import { WHEEL_STEP, ALT_WHEEL_MULTIPLIER, thumbGeometry, wordRangeAt } from "./fullapp-types.ts";
+import { filterEntries } from "./fullapp-at.ts";
 import { osc8LinkAtColumn, stripAnsi, visibleWidth } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
 import type { WheelEvent, ButtonEvent } from "./mouse.ts";
@@ -39,6 +40,11 @@ export function createMouse(app: FullApp) {
 			pu.sel = Math.max(0, Math.min(filtered.length - 1, pu.sel + (up ? -lines : lines))); // 到头停（决策点 6——不学键盘回绕）
 		} else if (pu !== undefined) {
 			return; // ask——没有可滚面
+		} else if (s.atMenu !== undefined) {
+			// @ 文件菜单滚轮（m5-at-menu T3）：与 onAtKey 共用 filterEntries 一源（两处口径漂移即
+			// Enter 错位）；到头停（决策点 6 同款——不学键盘回绕）
+			const items = filterEntries(s.atMenu.entries, s.atMenu.filter);
+			s.atMenu.sel = Math.max(0, Math.min(items.length - 1, s.atMenu.sel + (up ? -lines : lines)));
 		} else if (s.overlayOpen) {
 			const items = app.menu.overlayItems();
 			s.overlaySel = app.menu.selToSelectable(items, s.overlaySel + (up ? -lines : lines));
