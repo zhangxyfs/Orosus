@@ -392,6 +392,12 @@ export function createKeys(app: FullApp) {
 				app.scheduler.requestImmediateRender();
 				return;
 			}
+			if (s.atMenu !== undefined) {
+				// at 菜单 Esc（m5-at-menu T2）：词内多级逐级回退、根上关闭——非 busy 态在斜杠菜单
+				// Esc 同级（busy 期 Esc 优先双击停生成，在上分支已截住）；onAtKey 尾部自带渲染请求
+				app.at.onAtKey("escape");
+				return;
+			}
 			if (s.overlayOpen) {
 				if (s.overlayCmd !== "") {
 					// 中行形态退级回串尾 /（2026-10-03 前缀保留），行首形态回裸 /——与 fullapp-menu
@@ -436,6 +442,12 @@ export function createKeys(app: FullApp) {
 			app.lastEscCancel = 0;
 			s.focusIdx = 0;
 			app.scheduler.requestImmediateRender();
+			return;
+		}
+
+		// @ 文件菜单态（m5-at-menu T2——与斜杠菜单分派同型位置、at 在前：两态互斥、顺序无行为差异）
+		if (s.atMenu !== undefined) {
+			app.at.onAtKey(key);
 			return;
 		}
 

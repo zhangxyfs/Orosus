@@ -2,6 +2,7 @@
  *  公开三件（insertAtCursor/restoreInput/seedHistory）壳留薄委托；lastEscCancel 字段留守壳
  *  （唯一消费者是 onKey 键路 T9，经降级字段触达）。非公开 API。 */
 
+import { atWordAt, type AtEntry } from "./fullapp-at.ts";
 import { indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, normCmd, slashFilterQ, slashMenuActive, type SlashItem } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { FullApp } from "./fullapp.ts";
@@ -111,14 +112,33 @@ export function createInput(app: FullApp) {
 		await app.select.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
 	};
 
+	/** @ 菜单开闸（m5-at-menu T2/D15）：编辑动作（打印字符/退格/前删/召回）落定后现算光标处 @ 词——
+	 *  命中且两菜单态皆关 + 非弹窗模态期 → 现读目录、sel=0 开菜单。at 命中优先于斜杠重开（共存串
+	 *  `看下@a /he` 光标在 @a 上编辑时斜杠重开不得劫持——挂点在 menuReopenCheck 之前、命中短路本键
+	 *  斜杠重开；menuReopenCheck 另补 atMenu 关态判据——at 开着不重开斜杠，两标志位独立只判一边拦不住）。
+	 *  开闸不含 entries 非空判据（与斜杠 menuReopenCheck 的 length>0 守卫有意不同）：at 的空态
+	 *  （空目录/目录不存在）本身是可见反馈，照抄先例守卫会吞掉全部空态场景。 */
+	const maybeOpenAtMenu = (): boolean => {
+		const s = app.state;
+		if (s.overlayOpen || s.atMenu !== undefined) return false;
+		if (app.pendingUi !== undefined || s.diagOpen || s.diagReturn) return false; // 弹窗模态期不开（ask 态 onEditKey 也走这里）
+		const w = atWordAt(s.input, s.cursor);
+		if (w === undefined) return false;
+		const entries: AtEntry[] | undefined = app.io.atMenuEntries?.(w.path);
+		if (entries === undefined) return false; // 宿主未供数据源——不开（行模式/测试缺省路径）
+		s.atMenu = { dir: w.path, entries, sel: 0, start: w.start, filter: w.filter };
+		return true;
+	};
+
 	/** 菜单（重）开闸（F5 十五轮② + 2026-10-03 两扩展）：Esc 关掉后继续编辑命令词要能重开；
 	 *  中行「消息内容 空格 /」串尾词同开（slashMenuActive 统一口径）；零命中（写错命令）不开——
 	 *  开 ⇔ 形态成立且清单非空，与 menu 敲键侧同一条规矩两端口。只挂内容变更键（打印字符/
 	 *  退格/前删），光标移动不挂——Esc 关闭后左右移动不得擅自重开。2026-10-03 空格关窗拍板后
-	 *  行首/中行含空白都不算形态成立；argPhase 例外同挂——声明 completeArg 的命令打空格即进参数候选。 */
+	 *  行首/中行含空白都不算形态成立；argPhase 例外同挂——声明 completeArg 的命令打空格即进参数候选。
+	 *  m5-at-menu：补 atMenu 关态判据——at 菜单开着不重开斜杠（at 命中优先让位规则的另一半）。 */
 	const menuReopenCheck = (): void => {
 		const s = app.state;
-		if (!s.overlayOpen && (slashMenuActive(s.input) || app.menu.argPhase() !== undefined) && app.menu.overlayItems().length > 0) {
+		if (!s.overlayOpen && s.atMenu === undefined && (slashMenuActive(s.input) || app.menu.argPhase() !== undefined) && app.menu.overlayItems().length > 0) {
 			s.overlayOpen = true;
 			s.overlaySel = 0;
 			s.overlayCmd = "";
@@ -158,19 +178,19 @@ export function createInput(app: FullApp) {
 					const cp = s.input.codePointAt(s.cursor - 1)!;
 					const prev2 = s.input.charCodeAt(s.cursor - 2);
 					const w = cp >= 0xdc00 && cp <= 0xdfff && prev2 >= 0xd800 && prev2 <= 0xdbff ? 2 : 1;
-					s.input = s.input.slice(0, s.cursor - w) + s.input.slice(s.cursor);
-					s.cursor -= w;
-				}
-				menuReopenCheck(); // 退格回命中要重开（零命中关窗后改错的主路径——只认打印字符会漏）
-				break;
-			case "delete":
-				exitHistoryBrowse();
-				if (!deleteSelection() && s.cursor < s.input.length) {
-					const cp = s.input.codePointAt(s.cursor)!;
-					s.input = s.input.slice(0, s.cursor) + s.input.slice(s.cursor + (cp > 0xffff ? 2 : 1));
-				}
-				menuReopenCheck();
-				break;
+				s.input = s.input.slice(0, s.cursor - w) + s.input.slice(s.cursor);
+				s.cursor -= w;
+			}
+			if (!maybeOpenAtMenu()) menuReopenCheck(); // D16 退格删成光标处 @ 词即开 at（命中优先于斜杠重开——共存串让位）
+			break;
+		case "delete":
+			exitHistoryBrowse();
+			if (!deleteSelection() && s.cursor < s.input.length) {
+				const cp = s.input.codePointAt(s.cursor)!;
+				s.input = s.input.slice(0, s.cursor) + s.input.slice(s.cursor + (cp > 0xffff ? 2 : 1));
+			}
+			if (!maybeOpenAtMenu()) menuReopenCheck(); // D16 前删同款
+			break;
 			case "left":
 				moveCursor(-1, false);
 				break;
@@ -205,6 +225,7 @@ export function createInput(app: FullApp) {
 						if (q !== undefined) {
 							s.input = q;
 							s.cursor = q.length;
+							maybeOpenAtMenu(); // D13 召回落定串尾光标——@ 词收尾自动开菜单
 						}
 					} else if (s.historyIdx > 0) {
 						if (!browsing) s.historyDraft = s.input; // 进入浏览那一刻快照草稿
@@ -212,6 +233,7 @@ export function createInput(app: FullApp) {
 						s.input = s.history[s.historyIdx]!;
 						s.cursor = 0; // 上翻光标放开头——多行历史条目上连按 ↑ 即续翻（kimi setTextInternal "start"）
 						s.inputScroll = 0;
+						maybeOpenAtMenu(); // D13 串首光标——历史条目以 @ 词开头（@路径 正文 形态）恰命中（词区间起点 0 含光标 0）
 					}
 				} else if (browsing && cur.row === rows.length - 1) {
 					s.historyIdx++;
@@ -223,6 +245,7 @@ export function createInput(app: FullApp) {
 					}
 					s.cursor = s.input.length; // 下翻/回草稿光标放末尾（kimi "end"）
 					s.inputScroll = 0;
+					maybeOpenAtMenu(); // D13 下翻落定串尾光标（文本真的被替换的路径才挂）
 				} else if (cur.row < rows.length - 1) {
 					s.cursor = indexAtRowCol(rows, cur.row + 1, cur.col);
 				} else {
@@ -233,7 +256,7 @@ export function createInput(app: FullApp) {
 			default:
 				if (isPrintable(key)) {
 					inputInsert(key);
-					menuReopenCheck();
+					if (!maybeOpenAtMenu()) menuReopenCheck(); // at 命中优先（D15 光标处词触发）——命中即开 at 并短路本键斜杠重开
 				}
 		}
 		afterEdit();

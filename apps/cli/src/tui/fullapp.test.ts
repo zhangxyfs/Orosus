@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { FullApp, diagListLines, indexAtRowCol, layoutInputRows, locateCursor, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
+import type { AtEntry } from "./fullapp-at.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { fg, dim } from "../theme.ts";
@@ -3777,5 +3778,390 @@ describe("「网络 · MCP」卡窄宽防线（2026-10-01 走查打回：字体�
 		expect(narrow).not.toContain("stdio"); // 最窄档：传输方式全灭（工具数也不显）
 		expect(narrow).not.toContain("SERVERS"); // 小节头降级只留页码——不被腰斩成「SER」
 		expect(narrow).toContain("1/1");
+	});
+});
+
+// ---------- m5-at-menu（T2 键族与状态机——@ 文件选择菜单） ----------
+
+/** 目录桩：根/apps/apps-cli/src/src-tui 五级（未知目录 → [] = 目录不存在空态）。 */
+const AT_TREE: Record<string, AtEntry[]> = {
+	"": [
+		{ name: "apps", dir: true },
+		{ name: "src", dir: true },
+		{ name: "a.ts", dir: false },
+		{ name: "readme.md", dir: false },
+	],
+	apps: [{ name: "cli", dir: true }],
+	"apps/cli": [{ name: "main.ts", dir: false }],
+	src: [
+		{ name: "tui", dir: true },
+		{ name: "a.ts", dir: false },
+	],
+	"src/tui": [
+		{ name: "fullapp.ts", dir: false },
+		{ name: "menu.ts", dir: false },
+	],
+};
+
+/** at rig：rig 桩上叠 atMenuEntries（导航点现读——目录变了才读的现读语义由键族驱动）。 */
+const atRig = (over: Partial<FullAppIO> = {}) => rig(["# 你好"], 100, 30, { atMenuEntries: (d) => AT_TREE[d] ?? [], ...over });
+
+describe("m5-at-menu（T2 键族与状态机——开菜单/钻入/Esc 回退/插路径/Tab 补全/过滤/召回/光标与退格触发）", () => {
+	it("① 打 @ 开菜单 + 继续打字过滤（词快照落 state）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu).toEqual({ dir: "", entries: AT_TREE[""], sel: 0, start: 0, filter: "" });
+		input.emit("data", "sr");
+		await flush();
+		expect(app.stateRef.atMenu?.filter).toBe("sr"); // 过滤词跟打字更新
+		expect(app.stateRef.atMenu?.dir).toBe(""); // 词内无 / 仍根目录
+		app.stop();
+	});
+	it("② 退格删到 @ 消失关菜单", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@sr");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		input.emit("data", "\x7f"); // @s
+		input.emit("data", "\x7f"); // @
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined(); // 裸 @ 空词仍命中（根全显）
+		input.emit("data", "\x7f"); // 空
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		app.stop();
+	});
+	it("③ 退格删成 @ 词重开（D16——Esc 关掉后续打/退格回词内菜单回来）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@sr");
+		await flush();
+		input.emit("data", "\x1b"); // Esc 根上关菜单（文本保留）
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		expect(app.stateRef.input).toBe("@sr");
+		input.emit("data", "\x7f"); // @s——退格删成 @ 词即开（D16 挂点）
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		expect(app.stateRef.atMenu?.filter).toBe("s");
+		app.stop();
+	});
+	it("④ Enter 目录钻入：输入框变 `@src/` + 现读下级 + sel 归零", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@sr"); // 过滤到 src 唯一命中
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		expect(app.stateRef.input).toBe("@src/");
+		expect(app.stateRef.cursor).toBe(5); // 光标落替换尾（/ 右侧）
+		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src, sel: 0, start: 0, filter: "" });
+		app.stop();
+	});
+	it("⑤ Enter 文件插 `@路径` + 空格 + 关菜单（光标落空格后已不在词上）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src/a"); // path=src filter=a → 唯一命中 src/a.ts
+		await flush();
+		input.emit("data", "\r");
+		await flush();
+		expect(app.stateRef.input).toBe("@src/a.ts ");
+		expect(app.stateRef.cursor).toBe(10);
+		expect(app.stateRef.atMenu).toBeUndefined();
+		app.stop();
+	});
+	it("⑥ Tab 目录补全且续显下级（与 Enter 钻入同款）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@sr");
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		expect(app.stateRef.input).toBe("@src/");
+		expect(app.stateRef.atMenu?.dir).toBe("src");
+		app.stop();
+	});
+	it("⑦ Tab 文件补全收尾关菜单（与 Enter 选定同款）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src/a");
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		expect(app.stateRef.input).toBe("@src/a.ts ");
+		expect(app.stateRef.atMenu).toBeUndefined();
+		app.stop();
+	});
+	it("⑧ 连按 Tab 逐级补到文件：@ → @apps/ → @apps/cli/ → @apps/cli/main.ts ", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@");
+		await flush();
+		input.emit("data", "\t"); // 选中 apps（根目录在前 sel 0）
+		await flush();
+		expect(app.stateRef.input).toBe("@apps/");
+		expect(app.stateRef.atMenu?.dir).toBe("apps");
+		input.emit("data", "\t"); // apps 下唯一 cli
+		await flush();
+		expect(app.stateRef.input).toBe("@apps/cli/");
+		input.emit("data", "\t"); // cli 下唯一 main.ts——补全收尾
+		await flush();
+		expect(app.stateRef.input).toBe("@apps/cli/main.ts ");
+		expect(app.stateRef.atMenu).toBeUndefined();
+		app.stop();
+	});
+	it("⑨ Esc 子目录退根：词截到上一级 + 目录跟着回退", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src/tui/f");
+		await flush();
+		expect(app.stateRef.atMenu?.dir).toBe("src/tui");
+		input.emit("data", "\x1b");
+		await flush();
+		expect(app.stateRef.input).toBe("@src/");
+		expect(app.stateRef.cursor).toBe(5);
+		expect(app.stateRef.atMenu).toEqual({ dir: "src", entries: AT_TREE.src, sel: 0, start: 0, filter: "" });
+		app.stop();
+	});
+	it("⑩ Esc 根上关菜单且文本与光标保留", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@sr");
+		await flush();
+		input.emit("data", "\x1b");
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		expect(app.stateRef.input).toBe("@sr");
+		expect(app.stateRef.cursor).toBe(3);
+		app.stop();
+	});
+	it("⑪ 词与目录联动：打字推进词内出现 / 时目录切换现读", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src");
+		await flush();
+		expect(app.stateRef.atMenu?.dir).toBe(""); // 词内无 / 仍根
+		input.emit("data", "/"); // 词变 @src/ → path=src
+		await flush();
+		expect(app.stateRef.atMenu?.dir).toBe("src");
+		expect(app.stateRef.atMenu?.entries).toEqual(AT_TREE.src);
+		expect(app.stateRef.atMenu?.filter).toBe("");
+		app.stop();
+	});
+	it("⑫ 中文紧贴「看下@sr」也开菜单", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "看下@sr");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		expect(app.stateRef.atMenu?.start).toBe(2);
+		expect(app.stateRef.atMenu?.filter).toBe("sr");
+		app.stop();
+	});
+	it("⑬ 斜杠命令形态打 @ 不开（互斥：atWordAt 排除 + 斜杠侧空格关窗）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "/x@"); // 行首斜杠形态——at 恒不命中；斜杠侧 x@ 零命中也不开
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+	it("⑭ busy 期照常可开（菜单不依赖空闲态）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		app.stop();
+	});
+	it("⑮ 桩返回空不炸（目录不存在/空目录——空态可见反馈，菜单照开）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@nosuch/"); // 未知目录 → []
+		await flush();
+		expect(app.stateRef.atMenu).toEqual({ dir: "nosuch", entries: [], sel: 0, start: 0, filter: "" });
+		input.emit("data", "\r"); // 空清单 Enter 无动作
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		app.stop();
+	});
+	it("⑯ 词区间替换不吃正文中段同串（Enter 换第二条词，第一条原样）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@a.ts 前言 @a.t");
+		await flush();
+		expect(app.stateRef.atMenu?.start).toBe(9); // 光标在第二条词上（@9a10.11t12——第一条词区间替换不得误啃）
+		input.emit("data", "\r");
+		await flush();
+		expect(app.stateRef.input).toBe("@a.ts 前言 @a.ts ");
+		app.stop();
+	});
+	it("⑰ D15 光标触发：光标挪到正文中间 @ 词上续打一字符即开（过滤词 = 词内容）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "前言 @a.ts 后语");
+		await flush(); // 打完空格/后语已失中关菜单
+		expect(app.stateRef.atMenu).toBeUndefined();
+		input.emit("data", "\x1b[D"); // ←×4：光标 17→13（词 @a.ts 区间 [3,9] 内——s 左/t 右）
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined(); // 纯移动不触发（D15）
+		input.emit("data", "x"); // 词中续打 → @a.txs → 命中即开
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		expect(app.stateRef.atMenu?.filter).toBe("a.txs");
+		app.stop();
+	});
+	it("⑱ D15 菜单开着 ← 挪出词不关、内容静止；续打非词字符后关", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "前言 @sr");
+		await flush();
+		expect(app.stateRef.atMenu?.filter).toBe("sr");
+		input.emit("data", "\x1b[D"); // ←×4：光标 6→2（空格位 = 词外）
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined(); // 纯移动不关
+		expect(app.stateRef.atMenu?.filter).toBe("sr"); // 内容静止——词快照不追光标
+		input.emit("data", "x"); // 光标 2（词外——空格位）插入 → 失中 → 关
+		await flush();
+		expect(app.stateRef.atMenu).toBeUndefined();
+		expect(app.stateRef.input).toBe("前言x @sr");
+		app.stop();
+	});
+	it("⑲ D15 Enter 时光标已挪离词：无动作不误替换（kimi applyCompletion 防活词失中同款）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "前言 @sr");
+		await flush();
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D"); // 光标 2 = 词外
+		await flush();
+		input.emit("data", "\r"); // Enter 现算失中 → 无动作
+		await flush();
+		expect(app.stateRef.input).toBe("前言 @sr"); // 不误替换
+		expect(app.stateRef.atMenu).toBeDefined(); // 无动作 = 菜单不动（保持开）
+		app.stop();
+	});
+	it("⑳ D13 队列召回：↑ 召回落「…@src/a.ts」光标串尾 → 自动开菜单且过滤词 = 文件名", async () => {
+		const { app, input, queue } = atRig();
+		app.start();
+		await flush();
+		queue.push("看看 @src/a.ts"); // @ 词收尾（D13 挂点 = 串尾光标在词上）
+		input.emit("data", "\x1b[A"); // 空输入 + 队列非空 → 召回队尾（光标落串尾）
+		await flush();
+		expect(app.stateRef.input).toBe("看看 @src/a.ts");
+		expect(app.stateRef.atMenu).toBeDefined();
+		expect(app.stateRef.atMenu?.dir).toBe("src");
+		expect(app.stateRef.atMenu?.filter).toBe("a.ts");
+		app.stop();
+	});
+	it("㉑ D13 历史上翻：↑ 召回「@src/a.ts 前言」光标落串首也开（串首即词首——@ 开头形态）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src/a.ts 前言");
+		input.emit("data", "\r"); // 进历史（rig submit 桩）
+		await flush();
+		input.emit("data", "\x1b[A"); // 历史上翻：cursor = 0
+		await flush();
+		expect(app.stateRef.cursor).toBe(0);
+		expect(app.stateRef.atMenu).toBeDefined(); // 词区间起点 0 含光标 0
+		expect(app.stateRef.atMenu?.filter).toBe("a.ts");
+		app.stop();
+	});
+	it("㉒ D13 召回后改中段引用：→ 挪词尾 + 退格一下开菜单 + Enter 替换词区间（后段完好）", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@src/a.ts 你看看");
+		input.emit("data", "\r");
+		await flush();
+		input.emit("data", "\x1b[A"); // 上翻召回：cursor = 0、词首命中开菜单
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		for (let i = 0; i < 9; i++) input.emit("data", "\x1b[C"); // →×9：光标 0→9（词尾 s 右——纯移动菜单保持开内容静止）
+		await flush();
+		input.emit("data", "\x7f"); // 退格删 s → 词 @src/a.t → 重判命中刷新（D15 编辑动作）
+		await flush();
+		expect(app.stateRef.atMenu?.filter).toBe("a.t");
+		input.emit("data", "\r"); // 唯一命中 src/a.ts → 替换词区间 [0,8)
+		await flush();
+		// 词区间替换 + 文件尾缀空格：后段「 你看看」原样跟随（原空格 + 补空格 = 两空格——设计空白 5 词边界语义）
+		expect(app.stateRef.input).toBe("@src/a.ts  你看看");
+		app.stop();
+	});
+	it("㉓ 菜单开着 ↑/↓ 走选中移动不走历史召回", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "第一条"); // 无 @ 的普通消息——造历史全程不开菜单
+		input.emit("data", "\r");
+		await flush();
+		input.emit("data", "@");
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		const before = app.stateRef.input;
+		input.emit("data", "\x1b[A"); // ↑ = 选中循环到尾（4 条 → sel 3）
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(3);
+		expect(app.stateRef.input).toBe(before); // 不召回
+		input.emit("data", "\x1b[B"); // ↓ 回 0
+		await flush();
+		expect(app.stateRef.atMenu?.sel).toBe(0);
+		app.stop();
+	});
+	it("㉔ 共存串让位（doc-review 三轮勒定）：光标在 @ 词上编辑，串尾 / 词不得劫持斜杠重开", async () => {
+		const { app, input } = atRig();
+		app.start();
+		await flush();
+		input.emit("data", "@a /he"); // 打到 /he 时光标在串尾 / 词上——斜杠侧该开斜杠菜单
+		await flush();
+		expect(app.stateRef.overlayOpen).toBe(true); // 斜杠菜单开着（中行 / 词形态）
+		expect(app.stateRef.atMenu).toBeUndefined();
+		input.emit("data", "\x1b"); // Esc 关斜杠菜单（文本保留）
+		await flush();
+		input.emit("data", "\x1b[D"); // ←×4：光标 5→1（@a 词区间 [0,3] 内）
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		input.emit("data", "\x1b[D");
+		await flush();
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "x"); // 在 @a 词上续打（←×4 光标 2 = 词右缘内、a 后空格前）→ at 命中优先、短路斜杠重开
+		await flush();
+		expect(app.stateRef.atMenu).toBeDefined();
+		expect(app.stateRef.overlayOpen).toBe(false); // 斜杠不得重开（双菜单态不出现）
+		expect(app.stateRef.atMenu?.filter).toBe("ax");
+		app.stop();
 	});
 });

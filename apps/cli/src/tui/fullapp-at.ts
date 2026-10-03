@@ -1,10 +1,12 @@
-/** fullapp-at.ts（m5-at-menu T1）：@ 文件选择菜单纯函数层——光标处 @ 词解析 + 条目过滤。
+/** fullapp-at.ts（m5-at-menu T1 纯函数层 + T2 键族）：@ 文件选择菜单。
  *  词判定（D1/D15）：原串扫描全部 @ 词（负向后顾边界——@ 在行首或前一字符非路径合法字符即词起点，
  *  中文紧贴 `看下@sr` 命中、邮箱 `foo@bar` 不命中），光标落在词区间 [start, start+词长]（含两端）即命中，
  *  串尾词是光标在串尾时的特例；斜杠命令形态整条排除（与斜杠菜单互斥的判定地基）。
- *  T2 在此挂 createAt 键族。非公开 API。 */
+ *  键族结构照抄 fullapp-menu.ts createMenu——两族代码长得一样、读一处懂两处。非公开 API。 */
 
-import { isSubseq, normCmd } from "./fullapp-types.ts";
+import { isSubseq, normCmd, OVERLAY_PAGE } from "./fullapp-types.ts";
+import { isPrintable } from "./keymatch.ts";
+import type { FullApp } from "./fullapp.ts";
 
 /** @ 文件菜单条目（宿主经 io.atMenuEntries 供给——tui 家族无 fs 纪律，渲染与键族只消费）。 */
 export interface AtEntry {
@@ -57,4 +59,102 @@ export function filterEntries(entries: AtEntry[], filter: string): AtEntry[] {
 		return [...hits, ...more, ...fuzzy];
 	};
 	return [...byTier(true), ...byTier(false)];
+}
+
+/** @ 菜单键族（T2——结构照抄 fullapp-menu createMenu 的 onOverlayKey）。
+ *  词替换一律用 atWordAt 返回的 start 做区间替换、不用字符串 replace（CR-03 教训：replace 吃
+ *  首次出现会啃错位——正文中段同串场景致命）。 */
+export function createAt(app: FullApp) {
+	/** 词长（从 atWordAt 重组——word = path + "/" + filter 无损）：start + 词长 = 词区间右端。 */
+	const wordLen = (w: { path: string; filter: string }): number => 1 + (w.path === "" ? 0 : w.path.length + 1) + w.filter.length;
+
+	/** 词区间替换：[w.start, w.start+词长) 换 replacement，光标落替换尾。 */
+	const replaceWord = (w: { start: number; path: string; filter: string }, replacement: string): void => {
+		const s = app.state;
+		s.input = s.input.slice(0, w.start) + replacement + s.input.slice(w.start + wordLen(w));
+		s.cursor = w.start + replacement.length;
+	};
+
+	/** 编辑落定重判（自编辑后/开菜单共用）：现算光标处词 → 命中则目录变了才现读 + sel 夹回 + 更新
+	 *  词快照；失中关菜单。返回是否命中。 */
+	const refreshFromWord = (): boolean => {
+		const s = app.state;
+		const am = s.atMenu;
+		const w = atWordAt(s.input, s.cursor);
+		if (w === undefined || am === undefined) {
+			s.atMenu = undefined;
+			return false;
+		}
+		if (w.path !== am.dir) {
+			s.atMenu = { dir: w.path, entries: app.io.atMenuEntries?.(w.path) ?? [], sel: 0, start: w.start, filter: w.filter };
+		} else {
+			const n = filterEntries(am.entries, w.filter).length;
+			am.start = w.start;
+			am.filter = w.filter;
+			am.sel = Math.max(0, Math.min(n - 1, am.sel));
+		}
+		return true;
+	};
+
+	const onAtKey = (key: string): void => {
+		const s = app.state;
+		const am = s.atMenu;
+		if (am === undefined) return;
+		// 纯光标移动穿透（D15/kimi moveCursor 同款）：不触发不关、内容静止（词快照不追光标）——
+		// onEditKey 内 afterEdit 已请求渲染；下次编辑动作落定时经 refreshFromWord 重判刷新或关
+		if (key === "left" || key === "right" || key === "home" || key === "end") {
+			app.input.onEditKey(key);
+			return;
+		}
+		const items = filterEntries(am.entries, am.filter);
+		if (key === "escape") {
+			const w = atWordAt(s.input, s.cursor);
+			if (w !== undefined && w.path.includes("/")) {
+				// 词内有多级：截到上一级（@src/tui/ → @src/）+ 目录跟着回退
+				const up = w.path.slice(0, w.path.lastIndexOf("/"));
+				replaceWord(w, `@${up}/`);
+				s.atMenu = { dir: up, entries: app.io.atMenuEntries?.(up) ?? [], sel: 0, start: w.start, filter: "" };
+			} else {
+				s.atMenu = undefined; // 根上（词内无 /）或光标处词失中——输入框文本与光标保留
+			}
+		} else if (key === "up" && items.length > 0) {
+			am.sel = (am.sel - 1 + items.length) % items.length;
+		} else if (key === "down" && items.length > 0) {
+			am.sel = (am.sel + 1) % items.length;
+		} else if (key === "pageUp" && items.length > 0) {
+			am.sel = Math.max(0, am.sel - OVERLAY_PAGE);
+		} else if (key === "pageDown" && items.length > 0) {
+			am.sel = Math.min(items.length - 1, am.sel + OVERLAY_PAGE);
+		} else if (key === "enter" || key === "tab") {
+			// Tab 与 Enter 两分支同款（D9：Tab = 补全链 / Enter = 选定——v1 不分化，实现共用）
+			// 按键当刻现算活词（kimi applyCompletion 防 stale 前缀同款）：失中无动作不误替换
+			const w = atWordAt(s.input, s.cursor);
+			const picked = w === undefined ? undefined : items[Math.max(0, Math.min(items.length - 1, am.sel))];
+			if (w === undefined || picked === undefined) {
+				app.scheduler.requestImmediateRender();
+				return;
+			}
+			const joined = w.path === "" ? picked.name : `${w.path}/${picked.name}`;
+			if (picked.dir) {
+				replaceWord(w, `@${joined}/`); // 目录：补全即钻入 + 现读续显（可连按逐级补到文件）
+				s.atMenu = { dir: joined, entries: app.io.atMenuEntries?.(joined) ?? [], sel: 0, start: w.start, filter: "" };
+			} else {
+				replaceWord(w, `@${joined} `); // 文件：路径 + 空格（显式词边界，设计空白 5）+ 关（光标在空格后已不在词上）
+				s.atMenu = undefined;
+			}
+		} else if (key === "backspace" || (key.length === 1 && isPrintable(key))) {
+			// 键族内自编辑（照 fullapp-menu onOverlayKey 同款；长度守卫防键名串插字）
+			if (key === "backspace") {
+				if (s.cursor > 0) {
+					s.input = s.input.slice(0, s.cursor - 1) + s.input.slice(s.cursor);
+					s.cursor--;
+				}
+			} else app.input.inputInsert(key);
+			// 编辑落定以新光标位重判：命中 → 目录变了才现读 + sel 夹回 + 更新快照；失中 → 关
+			refreshFromWord();
+		}
+		app.scheduler.requestImmediateRender();
+	};
+
+	return { onAtKey };
 }
