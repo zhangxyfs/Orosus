@@ -2,7 +2,7 @@
  *  公开三件（insertAtCursor/restoreInput/seedHistory）壳留薄委托；lastEscCancel 字段留守壳
  *  （唯一消费者是 onKey 键路 T9，经降级字段触达）。非公开 API。 */
 
-import { indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, normCmd, type SlashItem } from "./fullapp-types.ts";
+import { indexAtRowCol, INPUT_MAX_ROWS, isSubseq, layoutInputRows, locateCursor, normCmd, slashFilterQ, slashMenuActive, type SlashItem } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { FullApp } from "./fullapp.ts";
 
@@ -111,6 +111,20 @@ export function createInput(app: FullApp) {
 		await app.select.writeClipboardSettle(text, `已复制输入框 ${[...text].length} 字`);
 	};
 
+	/** 菜单（重）开闸（F5 十五轮② + 2026-10-03 两扩展）：Esc 关掉后继续编辑命令词要能重开；
+	 *  中行「消息内容 空格 /」串尾词同开（slashMenuActive 统一口径）；零命中（写错命令）不开——
+	 *  开 ⇔ 形态成立且清单非空，与 menu 敲键侧同一条规矩两端口。只挂内容变更键（打印字符/
+	 *  退格/前删），光标移动不挂——Esc 关闭后左右移动不得擅自重开。2026-10-03 空格关窗拍板后
+	 *  行首/中行含空白都不算形态成立；argPhase 例外同挂——声明 completeArg 的命令打空格即进参数候选。 */
+	const menuReopenCheck = (): void => {
+		const s = app.state;
+		if (!s.overlayOpen && (slashMenuActive(s.input) || app.menu.argPhase() !== undefined) && app.menu.overlayItems().length > 0) {
+			s.overlayOpen = true;
+			s.overlaySel = 0;
+			s.overlayCmd = "";
+		}
+	};
+
 	const onEditKey = (key: string): void => {
 		const s = app.state;
 		switch (key) {
@@ -147,6 +161,7 @@ export function createInput(app: FullApp) {
 					s.input = s.input.slice(0, s.cursor - w) + s.input.slice(s.cursor);
 					s.cursor -= w;
 				}
+				menuReopenCheck(); // 退格回命中要重开（零命中关窗后改错的主路径——只认打印字符会漏）
 				break;
 			case "delete":
 				exitHistoryBrowse();
@@ -154,6 +169,7 @@ export function createInput(app: FullApp) {
 					const cp = s.input.codePointAt(s.cursor)!;
 					s.input = s.input.slice(0, s.cursor) + s.input.slice(s.cursor + (cp > 0xffff ? 2 : 1));
 				}
+				menuReopenCheck();
 				break;
 			case "left":
 				moveCursor(-1, false);
@@ -217,13 +233,7 @@ export function createInput(app: FullApp) {
 			default:
 				if (isPrintable(key)) {
 					inputInsert(key);
-					// 输入仍是斜杠命令形态即（重）开菜单（F5 十五轮②：Esc 关掉后继续补字母要能重开
-					// ——原条件 === "/" 只在恰好一个斜杠时触发，"/qu"+Esc 后再输入永不重开）
-					if (normCmd(s.input).startsWith("/") && !s.overlayOpen) {
-						s.overlayOpen = true;
-						s.overlaySel = 0;
-						s.overlayCmd = "";
-					}
+					menuReopenCheck();
 				}
 		}
 		afterEdit();
@@ -251,8 +261,9 @@ export function createInput(app: FullApp) {
 
 	const filteredCommands = (): SlashItem[] => {
 		// 命令词忽略大小写（2026-09-27 用户走查拍板）：/He /HELP 都能筛出 /help——q 与命令名/别名
-		// 统一小写比较；Enter 提交菜单真名（picked），不带过滤串的大小写进输入
-		const q = normCmd(app.state.input).slice(1).split(" ")[0]!.toLowerCase();
+		// 统一小写比较；Enter 提交菜单真名（picked），不带过滤串的大小写进输入。
+		// q 取词 2026-10-03 换 slashFilterQ：行首首词（旧口径）+ 中行串尾 / 词两形态一源
+		const q = slashFilterQ(app.state.input);
 		// 别名可筛（F5 十六轮①：/exit /q /rename /resume 都能过滤出真实命令——Enter 提交真名）
 		// 前缀命中排前、含字命中居中、子序列命中殿后（2026-09-24 拍板两档 + 2026-09-30 第三档：
 		// /ol 先列 ol 开头，再列含 ol 的 /yolo，末列字符按序散见的）——组内保持注册序

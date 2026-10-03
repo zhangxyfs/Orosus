@@ -96,8 +96,10 @@ export interface HarnessOptions {
 export interface Harness {
   prompt(text: string, opts?: { images?: string[] | undefined; /** 宿主旁注事件（m5-media F14 走查四）：紧随
    *  user/message 原子落盘——回放行序「用户消息→旁注→回答」由落盘顺序保证（外部先 append 会抢在
-   *  user/message 前）。类型建议 host/ 前缀：deriveMessages 未知类型跳过 = 不进上下文，只服务回放渲染。 */
-    afterUserEvent?: { type: string; fields: Record<string, unknown> } | undefined }): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined。images = /paste 挂起图（M4-2.5 T5）
+   *  user/message 前）。类型建议 host/ 前缀：deriveMessages 未知类型跳过 = 不进上下文，只服务回放渲染。
+   *  可传多条（2026-10-03 输入召回批：转述旁注与输入召回旁注共存——数组序即落盘序）。
+   *  单条形态向后兼容（旧调用不动）。 */
+    afterUserEvent?: { type: string; fields: Record<string, unknown> } | { type: string; fields: Record<string, unknown> }[] | undefined }): Promise<string | undefined>;  // 命令输入时返回命令输出（回显）；普通 turn 返回 undefined。images = /paste 挂起图（M4-2.5 T5）
   cancel(): void;
   /** Steering 注入口（2026-09-23 消息队列批——kimi Ctrl-S 同语义，宿主键位 Ctrl+U）：turn 进行中
    *  把文本注入当前 turn——loop 下一 step 边界（steering collect 链）或停止边界（followUp 兜底，
@@ -1140,9 +1142,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           ...(opts?.images ?? []).map((p) => ({ kind: "image" as const, path: p, mimeType: imageMimeOf(p) })),
         ];
         await store.append(LOG_TYPES.userMessage, { content: content.length > 0 ? content : [{ kind: "text", text: "" }] });
-        // 宿主旁注（m5-media F14 走查四）：紧随 user/message 落盘——行序保障见接口注释
+        // 宿主旁注（m5-media F14 走查四）：紧随 user/message 落盘——行序保障见接口注释；
+        // 数组形态按序逐条（2026-10-03 输入召回批）
         if (opts?.afterUserEvent !== undefined) {
-          await store.append(opts.afterUserEvent.type, opts.afterUserEvent.fields);
+          for (const hostNote of Array.isArray(opts.afterUserEvent) ? opts.afterUserEvent : [opts.afterUserEvent]) {
+            await store.append(hostNote.type, hostNote.fields);
+          }
         }
         try {
         // turn 机械（M4.5 T9 抽 driveTurn 共用——用户轮与送回轮同款 usage 锚点/档位/事件循环）

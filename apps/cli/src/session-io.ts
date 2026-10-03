@@ -1,11 +1,13 @@
 import { join, dirname } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
 import { createHarness, locateSessionFile, readSessionHead, isEmptySessionHead, purgeSessionDir, encodeCwd } from "@orosus/core";
-import type { Harness } from "@orosus/core";
+import type { Harness, SessionEvent } from "@orosus/core";
 import type { CommandUi, HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { registerToolLabels, renderHistoryLines, historyPage } from "./render.ts";
 import { migrateModulesSections } from "./config-migrate.ts";
+import { extractImageRefs } from "./paste.ts";
+import { SKILL_MARK_RE } from "./skills-ui.ts";
 import type { CliArgs } from "./args.ts";
 
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
@@ -148,4 +150,51 @@ export const switchTo = async (sid: string, deps: SessionDeps, out: (s: string) 
   } else {
     await echoHistory(deps.getH(), deps.commandUi, out); // 回显存量对话（B9 走查补 + 分页）
   }
+};
+
+/** 输入召回旁注事件类型（host/ 前缀——deriveMessages 未知类型跳过 = 不进模型上下文，只服务
+ *  重开会话的输入历史播种）。写侧：main 提交层在「发出文本 ≠ 输入框原文」（技能合成体/@ 引用
+ *  展开/图片 chip 剥离）时经 prompt afterUserEvent 紧随 user/message 落盘。 */
+export const INPUT_ECHO_EVENT = "host/input-echo";
+
+/** 输入历史播种文本（2026-10-03 用户拍板「按上键召回的必须是我输入的内容」）：从会话事件还原
+ *  「输入框原文」，替代此前「user/message 文本照单全收」——技能合成体整条（标记行+原话+<skill>
+ *  正文）曾被原样召回（用户实测报 bug）。三层还原，优先级从高到低：
+ *  ① host/input-echo 旁注（新落盘会话）：紧随 user/message 的连续 host/* 事件里取原话（与转述
+ *    旁注按数组序共存，扫描越过 host/vision-transcribe 等邻居）；
+ *  ② 老会话（旁注机制之前落盘的技能合成体）：按 SKILL_MARK_RE 定位标记行，取标记行与 <skill
+ *    开栏行之间的原话行（2026-09-30 前的菜单 Enter 旧形态无原话行 → 空串跳过，不召回）；
+ *  ③ 其余（普通消息/老会话 @ 展开体——引用已删正文已拼，原话不可逆）按发出体召回（尽力而为）。
+ *  全部路径统一剥图片 chip token（seq 注册表随旧会话失效）；steer 文本本就是原文照收，排除
+ *  host/date 系统行（2026-09-28：↑ 翻出「系统提醒：今天是…」是系统噪音）。 */
+export const inputHistoryTexts = (events: SessionEvent[]): string[] => {
+  const texts: string[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]!;
+    if (e.type === "user/message") {
+      const joined = ((e.content ?? []) as { kind?: string; text?: string }[]).filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
+      // ① 旁注优先：只扫紧随的连续 host/* 事件（旁注块原子紧随落盘；host.date 系统行走 steer 通道不在此）
+      let echo: string | undefined;
+      for (let j = i + 1; j < events.length && events[j]!.type.startsWith("host/"); j++) {
+        if (events[j]!.type === INPUT_ECHO_EVENT && typeof events[j]!.text === "string") echo = events[j]!.text as string;
+      }
+      let src = echo ?? joined;
+      if (echo === undefined) {
+        // ② 老会话技能合成体：标记行…行事）\n原话\n<skill name=… ——取中间段（indexOf：原话自身含
+        // 同形行时截短召回，好过 lastIndexOf 越过开栏把正文尾巴带回来）
+        const m = SKILL_MARK_RE.exec(joined);
+        if (m !== null) {
+          const rest = joined.slice(m.index + m[0].length);
+          const open = rest.indexOf("\n<skill name=");
+          src = open > 0 ? rest.slice(1, open) : "";
+        }
+      }
+      const { cleaned } = extractImageRefs(src);
+      if (cleaned !== "") texts.push(cleaned);
+    } else if (e.type === "agent/steering-message") {
+      for (const m of (e.messages ?? []) as { text?: string; sourceModule?: string }[])
+        if (typeof m.text === "string" && m.text !== "" && m.sourceModule !== "host/date") texts.push(m.text);
+    }
+  }
+  return texts;
 };

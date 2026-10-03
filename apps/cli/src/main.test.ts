@@ -599,3 +599,61 @@ describe("P3 批跨域收尾——CM-16② / CM-19③ 源面钉（main.ts 内件
     expect((src.match(/\^\(\?:success\|已设为当前默认\|已移除\)/g) ?? []).length).toBe(1); // 正则字面量只此一处——内联 = 二处即红
   });
 });
+
+describe("输入召回旁注写侧（2026-10-03 拍板「↑ 召回 = 我输入的内容」——重开会话后技能正文整条被召回 bug）：@ 展开体原话随 user/message 落盘（管道 e2e）+ 接线源面钉", () => {
+
+  it("e2e：提交「看看 @a.txt」→ session.jsonl 里 user/message（展开体）紧随 host/input-echo（输入框原文）——重开播种据此还原原话", async () => {
+    const d = tmp("inputecho"); // 模块级 tmp：置 dir 供 afterEach 清理（mkdtempSync 裸用会让过滤跑炸 afterEach）
+    try {
+      writeFileSync(join(d, "a.txt"), "内容甲\n", "utf8"); // @ 引用展开源（resolveAtRefs 按子进程 cwd=d 解析）
+      // 假 provider（端点不可达——turn 单次快速失败属预期；消息闸门 needsProviderSetup 只看配置在不在，
+      // user/message 与旁注先于 turn 落盘即为本钉目标，重试批未落地无退避拖尾）
+      mkdirSync(join(d, "home", ".orosus"), { recursive: true });
+      writeFileSync(join(d, "home", ".orosus", "config.toml"), [
+        'model = "deadprov/dm-1"',
+        "",
+        "[provider-custom.providers.deadprov]",
+        'type = "openai"',
+        'baseUrl = "http://127.0.0.1:9/v1"',
+        'apiKey = "sk-test"',
+        'defaultModel = "dm-1"',
+        "",
+      ].join("\n"), "utf8");
+      const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
+        // 密封家目录三变量内联（P3 批同款；不再抽助手——第三份拷贝会多一条 consistent-function-scoping 基线外警告）
+        cwd: d,
+        env: { ...process.env, USERPROFILE: join(d, "home"), HOME: join(d, "home"), OROSUS_HOME: join(d, "home", ".orosus") } as Record<string, string>,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = ""; let err = "";
+      child.stdout.on("data", (c) => { out += String(c); });
+      child.stderr.on("data", (c) => { err += String(c); });
+      child.stdin.write("看看 @a.txt\n/quit\n");
+      child.stdin.end();
+      const code = await new Promise<number>((resolve) => { child.on("exit", (c) => resolve(c ?? -1)); });
+      expect(code).toBe(0); // 消息 turn 无 provider 报模型错误属正常路径，不炸进程（旁注先于 turn 落盘）
+      // 找会话文件（sessions/<桶>/<sid>/session.jsonl）
+      const sessRoot = join(d, "home", ".orosus", "sessions");
+      const jsonls = readdirSync(sessRoot, { recursive: true }).map(String).filter((p) => p.endsWith("session.jsonl"));
+      expect(jsonls.length).toBeGreaterThanOrEqual(1);
+      const lines = readFileSync(join(sessRoot, jsonls[0]!), "utf8").split("\n").filter((l) => l !== "");
+      const iU = lines.findIndex((l) => l.includes('"user/message"'));
+      expect(iU).toBeGreaterThanOrEqual(0);
+      const u = JSON.parse(lines[iU]!) as { content: { kind: string; text: string }[] };
+      expect(u.content[0]!.text).toContain("[@a.txt]"); // 发出体 = 原文（引用已删）+ 附件展开
+      const echo = JSON.parse(lines[iU + 1]!) as { type: string; text: string };
+      expect(echo.type).toBe("host/input-echo"); // 旁注原子紧随 user/message
+      expect(echo.text).toBe("看看 @a.txt"); // 旁注 = 输入框原文（↑ 召回口径；不进上下文/渲染面由 harness ⑨b 与 docmodel 未知类型跳过保证）
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("接线源面钉（processReplLine 无独立缝——CM-16② 同困境退而钉源面）：技能递归穿原话 + 发出≠原话才落旁注 + 播种收口纯函数", () => {
+    tmp("inputecho-pin"); // 置模块级 dir——afterEach rmSync 需要（本测自建目录仅作清理锚）
+    const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+    expect(src).toContain("out, text); // typed=原话——合成体不带原话"); // 技能递归 typed=输入框原文
+    expect(src).toContain("if (withAt !== typedText) afterNotes.push({ type: INPUT_ECHO_EVENT"); // 判据：发出体 ≠ 原话
+    expect(src).toContain("app.seedHistory(inputHistoryTexts(await h.history()))"); // 播种走 session-io 纯函数（行为钉在彼处）
+  });
+});

@@ -1,3 +1,14 @@
+/** CLI 入口（启动序 + 子命令拦截 + 命令路由 + 全屏运行器 + 渲染装配——这四段是本件的留守本体）。
+ *  拆分说明（m5-split-main，2026-10-02）：本件曾堆到 2818 行——apps/cli/src 本有「一功能一平铺
+ *  小文件」惯例，但 2026-09 后各批「全屏 + 行模式双态接线」的函数族全塞进这里，多个并行批
+ *  同改一文件必撞车。九个功能家族已拆到平级新件：配置读取 config-face / 用量文本 usage-text /
+ *  视觉贴图 vision-media / 会话切换 session-io / MCP 面板 mcp-ui / 技能菜单 skills-ui / 设置面板
+ *  settings-ui / 模块面板 modules-ui / 行模式 IO repl-io（openTasks 另归并进既有 tasks-cmd.ts）。
+ *  留守不动：runFullScreen / attachRender 渲染装配段（与 FullApp 实例和主循环穿线最深，随
+ *  fullapp 壳同命运评估）；processReplLine 就是「命令路由」本体，属留守职责。
+ *  限制：跨件依赖一律函数签名注入（D2——不建全局状态仓；activeDir/activeApp 等可变单例经新件
+ *  export 的 get/set 访问器，见各 deps 注记）；族内缓存保持模块级私有变量形态，不额外封装。
+ *  纯搬移零行为变；方案与收官对账见 docs/superpowers/plans/2026-10-02-m5-split-main.md。 */
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
@@ -49,9 +60,9 @@ import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, moduleConfigFileFor } from "./config-face.ts";
 import { shortenPath } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
-import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
+import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryTexts, INPUT_ECHO_EVENT, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
-import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
+import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
 import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
@@ -586,8 +597,9 @@ process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出�
 
 /** 单行处理（REPL 与全屏共用——F3 抽取）：会话生命周期指令 → "switch"（重挂横幅/渲染）；
  *  /quit → "quit"；其余 → "again"。out = 输出通道（REPL=console.log，全屏=DocModel.pushLine——
- *  全屏 alt-screen 下 console 输出会毁屏，一切带内输出必须进流区）。 */
-const processReplLine = async (text: string, out: (s: string) => void): Promise<"again" | "switch" | "quit"> => {
+ *  全屏 alt-screen 下 console 输出会毁屏，一切带内输出必须进流区）。typedInput = 输入框原文（仅技能
+ *  递归传——text 已是「标记行+原话+正文」合成体；旁注据此记原话，↑ 召回口径见 inputHistoryTexts）。 */
+const processReplLine = async (text: string, out: (s: string) => void, typedInput?: string): Promise<"again" | "switch" | "quit"> => {
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
       if (directive.kind === "quit") return "quit"; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
       if (directive.kind === "pick") {
@@ -744,7 +756,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // 空白折叠会把换行压平——正则会再次命中、typed 连标记带技能正文整条吞进「参数」再包一层
         // 递归提交，无限自缠绕 = CPU 死循环界面卡死（用户实机复现）。含机器标记行 = 已是合成体，
         // 跳过解析直送消息管线。
-        const skillM = text.includes("（用户通过菜单手动加载技能")
+        const skillM = text.includes(SKILL_MARK_PREFIX)
           ? null
           : /^\/skill\s*:\s*(.*)$/i.exec(text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " "));
         if (skillM !== null) {
@@ -768,7 +780,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           // 三轮走查实机踩坑），且重入技能解析。消息以「（」开头 → isCmdLine 为 false 走内建回显，
           // docmodel 拆分渲染 = 原话块 + ● 行，实时与回放同一口同形（无需本层显式回显）
           const bodyNl = body.indexOf("\n");
-          return await processReplLine(`${body.slice(0, bodyNl)}\n${text}\n${body.slice(bodyNl + 1)}`, out);
+          return await processReplLine(`${body.slice(0, bodyNl)}\n${text}\n${body.slice(bodyNl + 1)}`, out, text); // typed=原话——合成体不带原话（引用已拼正文），召回旁注靠它
         }
         // 图片收集（2026-09-23 走查拍板）：全屏 = 文内 [image #N] token（extractImageRefs 剥除后进正文），
         // 行模式 = 挂起序号列；token 被用户删掉即不匹配 = 图不发出。chip 剥除在 @引用解析之前。
@@ -844,6 +856,15 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
         // /reload 走 h.prompt 内建路由（报表不透出到 CLI 调用点）——m5 T7 关消失模块挂起窗：
         // 进 prompt 前快照活跃集，回来后 diff 关窗（报表解析口径不一，直接 diff 激活集更稳）
         const reloadShot = cmdNameOf(text) === "/reload" ? activeModuleNames(modulesDeps) : undefined;
+        // 旁注组装（紧随 user/message 原子落盘，数组形态——core 2026-10-03 放宽）：①转述旁注
+        // （走查四，回放行序「问题→转述→回答」）；②输入召回旁注——发出体 ≠ 输入框原文时
+        // （技能合成体/@ 引用展开/图片 chip 剥离）原话随盘，重开会话 ↑ 召回取它（2026-10-03
+        // 用户拍板「召回的必须是我输入的内容」；此前技能正文整条进召回池——实测报 bug）。
+        // 不进上下文：host/ 前缀未知类型 deriveMessages 跳过
+        const typedText = typedInput ?? text;
+        const afterNotes: { type: string; fields: Record<string, unknown> }[] = [];
+        if (vtNote !== undefined) afterNotes.push({ type: "host/vision-transcribe", fields: vtNote });
+        if (withAt !== typedText) afterNotes.push({ type: INPUT_ECHO_EVENT, fields: { text: typedText } });
         const cmdOut = await withCompactHint(
           text,
           {
@@ -860,8 +881,7 @@ const processReplLine = async (text: string, out: (s: string) => void): Promise<
           },
           () => h.prompt(withAt, { // 挂起的图以 image part 随本条消息发出（M4-2.5 T5；文内 token 形态自 2026-09-23）
             ...imagesFor(imgs),
-            // 转述旁注（走查四）：紧随 user/message 落盘——回放行序「问题→转述→回答」；不进上下文
-            ...(vtNote !== undefined ? { afterUserEvent: { type: "host/vision-transcribe", fields: vtNote } } : {}),
+            ...(afterNotes.length > 0 ? { afterUserEvent: afterNotes } : {}),
           }),
         );
         for (const q of imgSeqs) pendingImageFiles.delete(q); // 已发出的图出注册表（取消/错误保留——旧口径）
@@ -995,7 +1015,7 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
 	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头）
 	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"),
-	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断"),
+	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点"),
 	"",
 ];
 
@@ -1255,23 +1275,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
   });
   // 输入历史播种（2026-09-23 实测：/sessions 恢复后 ↑ 无历史可召——FullApp 随会话重建即清零）：
-  // 会话的 user/message + steering 文本作为可召回历史；图片 chip token 剥除（seq 注册表已随旧会话失效）
-  {
-    const hist = await h.history();
-    const seedTexts: string[] = [];
-    for (const e of hist) {
-      if (e.type === "user/message") {
-        const t = ((e.content ?? []) as { kind?: string; text?: string }[]).filter((p2) => p2.kind === "text").map((p2) => p2.text ?? "").join("");
-        const { cleaned } = extractImageRefs(t);
-        if (cleaned !== "") seedTexts.push(cleaned);
-      } else if (e.type === "agent/steering-message") {
-        // 用户 steer 的话可召回；日期系统行（host/date）不进输入历史——↑ 翻出「系统提醒：今天是…」是系统噪音（2026-09-28）
-        for (const m of (e.messages ?? []) as { text?: string; sourceModule?: string }[])
-          if (typeof m.text === "string" && m.text !== "" && m.sourceModule !== "host/date") seedTexts.push(m.text);
-      }
-    }
-    app.seedHistory(seedTexts);
-  }
+  // 召回 = 我输入的内容（2026-10-03 拍板）——原话旁注优先、老会话技能合成体按标记行还原、图片
+  // chip 剥除；推导收口 session-io inputHistoryTexts（行为钉在彼处测试件）
+  app.seedHistory(inputHistoryTexts(await h.history()));
   // 流式排队面（F5 四轮）：turn 进行中的提交入队，结束后依序执行——消息带气泡、命令不带，
   // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
   const pendingSubmits: string[] = [];

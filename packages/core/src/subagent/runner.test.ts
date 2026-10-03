@@ -102,6 +102,20 @@ describe("子代理内核缝 T1（开子会话 + 跑循环 + 取结论 + 8 位�
     await h.close();
   });
 
+  it("①c 子代理系统提示词 v3（2026-10-03 对照九仓修）：Working Discipline 节四句任务向纪律下传（机密防线/不臆测库/脏树不回滚/交付验证诚实）；对话向段不下传（System Messages/Context Management 不在——ZCode 裁剪派：跳过对话向段、任务向纪律照给）", async () => {
+    const h = await setup();
+    await port!.spawn({ label: "纪律", prompt: "go" });
+    const system = lastRequests[0]!.system ?? "";
+    expect(system).toContain("## Working Discipline");
+    expect(system).toContain("Never read, copy, or transmit secret files");
+    expect(system).toContain("confirm it in the project's imports, manifest, or lockfile");
+    expect(system).toContain("never revert or overwrite them");
+    expect(system).toContain("verify it in the form the dispatcher will receive it");
+    expect(system).not.toContain("## System Messages");
+    expect(system).not.toContain("## Context Management");
+    await h.close();
+  });
+
   it("② 取文本：多轮工具往返后，结论 = 最后一条 assistant 回复文本", async () => {
     let toolRan = false;
     const echo = fakeModule("echo", {
@@ -217,6 +231,43 @@ describe("子代理 T2（工具过滤：按工种减 + 到顶剥 + 双层门控�
     expect(lastRequests[0]!.tools.map((t) => t.name)).toEqual(["echo__hi"]); // nope__x 静默无效
     await port!.spawn({ label: "黑名单", prompt: "go2", disallowedTools: ["echo__hi"] });
     expect(lastRequests.at(-1)!.tools.map((t) => t.name)).toEqual(["gate__wait"]);
+    await h.close();
+  });
+
+  it("⑤b 可见面同源抄写（2026-10-03 对照九仓修）：deferred 未 reveal 不进子代理面（主图 reveal 后带过；机制关态不滤——与主对话 specs 同视图）；skill__load 整族剥（清单段只进主对话系统提示，子代理不该看见指路看不见清单的加载工具）", async () => {
+    const h = await setup({
+      extraModules: [
+        fakeModule("ondemand", {
+          mounts: ["contribute:tool"],
+          activate(ctx) {
+            ctx.contribute.tool(defineTool({
+              name: "ondemand__lazy", description: "按需件", parameters: z.object({}), deferred: true,
+              resolveExecution: () => Promise.resolve({
+                accesses: [], approvalRule: "ondemand__lazy",
+                execute: () => Promise.resolve({ output: "ok", isError: false }),
+              }),
+            }));
+          },
+        }),
+        fakeModule("echo", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(mkTool("echo__hi")); } }),
+        fakeModule("skill", { mounts: ["contribute:tool"], activate(ctx) { ctx.contribute.tool(mkTool("skill__load")); } }),
+      ],
+    });
+    // 机制关态（SW-26：deferredEnabled=false 时 deferred 标记不生效）：子代理与主对话同视图——全量可见
+    await port!.spawn({ label: "关态", prompt: "go" });
+    let face = lastRequests[0]!.tools.map((t) => t.name);
+    expect(face).toContain("echo__hi");
+    expect(face).toContain("ondemand__lazy"); // 主对话模型此刻也看得见——同源谓词不反
+    expect(face).not.toContain("skill__load"); // 清单配套族不看机制开关——恒剥
+    // 机制开态：未 reveal 不进面（主对话 specs 亦不可见）；主图 reveal 后抄面自然带过
+    h.graph().tools.setDeferredEnabled(true);
+    await port!.spawn({ label: "开态未加载", prompt: "go2" });
+    face = lastRequests.at(-1)!.tools.map((t) => t.name);
+    expect(face).not.toContain("ondemand__lazy");
+    expect(face).toContain("echo__hi");
+    h.graph().tools.revealTools(["ondemand__lazy"]);
+    await port!.spawn({ label: "开态已加载", prompt: "go3" });
+    expect(lastRequests.at(-1)!.tools.map((t) => t.name)).toContain("ondemand__lazy");
     await h.close();
   });
 
@@ -378,7 +429,7 @@ describe("CX-14 stop/stopAll 解构安全（直测 createSubagentRunner——act
     };
     const sink: DiagSink = { write: () => undefined, flush: () => Promise.resolve(), close: () => Promise.resolve() };
     const graph = {
-      tools: { toolInfos: () => [{ name: "gate__wait" }], list: () => [gateTool] },
+      tools: { toolInfos: () => [{ name: "gate__wait" }], specs: () => [{ name: "gate__wait" }], list: () => [gateTool] },
       services: { getOptional: () => Promise.resolve(undefined) },
       bus: createEventBus(sink),
     } as unknown as ModuleGraph;

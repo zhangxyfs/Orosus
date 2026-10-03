@@ -236,6 +236,7 @@ describe("tool-goal followUp 续跑轮（M4-3 T7）", () => {
     await exec(create, { objective: "多轮任务" });
     const notes = goalFollowUp(store);
     expect(notes).toHaveLength(1);
+    expect(notes[0]!.text.startsWith("[非用户输入] ")).toBe(true); // 合成行声明头（2026-10-03 对照修：System Messages 节声明的行族——信封保留在头后）
     expect(notes[0]!.text).toContain("<goal-round 第 1 轮>");
     expect(notes[0]!.text).toContain("<untrusted_objective>多轮任务</untrusted_objective>");
     expect(notes[0]!.text).toContain("报 blocked");
@@ -277,6 +278,7 @@ describe("tool-goal followUp 续跑轮（M4-3 T7）", () => {
     expect(goalFollowUp(store)).toHaveLength(1); // 第 2 轮
     const stop = goalFollowUp(store); // 预算尽
     expect(stop).toHaveLength(1);
+    expect(stop[0]!.text.startsWith("[非用户输入] ")).toBe(true); // 耗尽停轮条同为声明行族（同批对照修）
     expect(stop[0]!.text).toContain("预算已耗尽");
     expect(stop[0]!.text).toContain("2/2");
     expect(store.current()?.status).toBe("blocked");

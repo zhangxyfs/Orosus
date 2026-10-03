@@ -106,15 +106,19 @@ export function goalFollowUp(store: GoalStore): { text: string; sourceModule: st
   const s = store.current();
   if (s === null || s.status !== "active") return [];
   if (store.exhaustBudget()) {
+    // [非用户输入] 头同 goal-round 续跑轮（同批对照修——System Messages 节声明的合成行族）
     return [{
-      text: `目标续跑预算已耗尽（${s.roundsUsed}/${s.maxRounds} 轮）——已自动结清为受阻态（blocked）。向用户说明进展与卡点。`,
+      text: `[非用户输入] 目标续跑预算已耗尽（${s.roundsUsed}/${s.maxRounds} 轮）——已自动结清为受阻态（blocked）。向用户说明进展与卡点。`,
       sourceModule: "tool-goal",
     }];
   }
   store.spendRound(); // 本轮记账（事件上行——dsh goal-round-driver 逐轮持久同款）
   const n = s.roundsUsed + 1;
+  // [非用户输入] 头（2026-10-03 对照修）：核心 System Messages 节（kernel.ts）声明三类合成行——后台子代理结论、
+  // goal round reminders、日期提醒——都以 `[非用户输入]` 开头；本行原先只有 <goal-round> 自有信封，声明头缺席
+  // （防伪造教育的覆盖面有洞——模型模仿 <goal-round> 行不在禁令内）。头在最前、信封保留；消息位注入不伤前缀缓存。
   return [{
-    text: `<goal-round 第 ${n} 轮>当前目标：<untrusted_objective>${s.objective}</untrusted_objective>。
+    text: `[非用户输入] <goal-round 第 ${n} 轮>当前目标：<untrusted_objective>${s.objective}</untrusted_objective>。
 继续推进；若确已无法推进，用 tool-goal__update 报 blocked 并给出具体阻塞。
 若已完成，用 tool-goal__update 报 complete。`,
     sourceModule: "tool-goal",

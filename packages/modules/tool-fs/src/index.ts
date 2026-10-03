@@ -462,10 +462,41 @@ function writeTool(fs: LocalFs, readState: ReadState): Tool {
   });
 }
 
+/** 方案 A（2026-10-03 实机 12 例分型：超长中文行错字/旧文引用/概括转述——零线索报错只会微调连败）：
+ *  失配分叉定位。oldText 多为「开头若干字符对、中段一字之差」——前缀阶梯（32→2）在文件里锚最相近
+ *  位置（多命中取公共前缀最长者），报分叉点两侧片段让模型一次看清差异；连最短前缀都锚不到说明引用的
+ *  是旧版本或纯概括，指路重读。 */
+const locateDivergence = (before: string, oldText: string): string => {
+  for (const len of [32, 16, 8, 4, 2]) {
+    const anchor = oldText.slice(0, Math.min(len, oldText.length));
+    let best: { at: number; common: number } | undefined;
+    for (let at = before.indexOf(anchor); at >= 0; at = before.indexOf(anchor, at + 1)) {
+      let k = 0;
+      while (at + k < before.length && k < oldText.length && before[at + k] === oldText[k]) k++;
+      if (best === undefined || k > best.common) best = { at, common: k };
+    }
+    if (best !== undefined) {
+      const line = before.slice(0, best.at + best.common).split("\n").length; // 分叉点所在行（1-based）
+      const esc = (s: string) => s.replace(/\r/g, "\\r").replace(/\n/g, "\\n"); // 片段内换行字面化——报错不串行
+      const from = Math.max(0, best.common - 6); // 片段带回分叉点前 6 字符上下文——差异看得清
+      const oldSeg = esc(oldText.slice(from, best.common + 12));
+      const fileSeg = esc(before.slice(best.at + from, best.at + best.common + 12));
+      const tail = fileSeg === "" ? "文件此处已到末尾" : `文件为「${fileSeg}」`;
+      return `疑似对应第 ${line} 行：前 ${best.common} 字符一致，分叉处 oldText=「${oldSeg}」而${tail}——请按文件实际字节重写`;
+    }
+  }
+  return "oldText 开头在文件中不存在（可能引用的是旧版本内容或概括改写）——请重新读取目标区段后再试";
+};
+
+/** 剥 read 展示行号前缀（Reasonix 同款，九仓对标 2026-10-03）：read 输出每行形如 `123→正文`，
+ *  模型复述时可能连装饰前缀一起带进 oldText——按行剥掉 `\d+→` 后重试。仅降级路径使用
+ *  （原样可匹配的从不走这里），文件里真有 N→ 开头的行不受扰。 */
+const stripLineNos = (s: string): string => s.replace(/^\d+→/gm, "");
+
 function editTool(fs: LocalFs, readState: ReadState): Tool {
   return defineTool({
     name: "tool-fs__edit",
-    description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.\nCRLF-tolerant: on CRLF files, \\n-only line breaks in oldText/newText are auto-normalized to the file's style.",
+    description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.\nCRLF-tolerant: on CRLF files, \\n-only line breaks in oldText/newText are auto-normalized to the file's style. Tip: for long CJK (Chinese etc.) lines, quote a short distinctive substring instead of the whole line — matching is byte-exact, and long bracket-dense quotes are prone to transcription slips.",
     parameters: z.object({
       ...pathParam,
       edits: z.array(z.object({
@@ -506,15 +537,47 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
               }
             }
             if (pos < 0) {
-              // 报错带线索（实机教训：光一句「未找到」模型只会微调重试连败）——说破 EOL 适配已试过、
-              // 从未读过的文件提醒先读（writeGuard 对没读过的文件放行，这里补一句指路）
-              const hints: string[] = [];
+              // 第三级（Reasonix 同款）：模型把 read 展示的行号前缀（N→）一并复述进 oldText——剥掉重试，
+              // newText 同剥（行号是 read 的装饰不是文件内容，不得落盘）。剥后仍走下方唯一性检测；
+              // CRLF 文件上剥完的 LF 串补一次扩展。
+              const stripped = stripLineNos(e.oldText);
+              if (stripped !== e.oldText && stripped !== "") {
+                let useOld = stripped;
+                let useNew = stripLineNos(e.newText);
+                let hit = before.indexOf(useOld);
+                if (hit < 0 && hasCrlf) {
+                  const expanded = expand(stripped);
+                  if (expanded !== stripped && before.indexOf(expanded) >= 0) {
+                    useOld = expanded;
+                    useNew = expand(useNew);
+                    hit = before.indexOf(expanded);
+                  }
+                }
+                if (hit >= 0) {
+                  oldText = useOld;
+                  newText = useNew;
+                  pos = hit;
+                }
+              }
+            }
+            if (pos < 0) {
+              // 报错带线索（实机教训：光一句「未找到」模型只会微调重试连败）——分叉定位（CRLF 文件用
+              // 扩展形态定位，跳过换行伪分叉直指真实错字）、EOL 适配说明、从未读过的文件提醒先读
+              // （writeGuard 对没读过的文件放行，这里补一句指路）
+              const hints: string[] = [locateDivergence(before, hasCrlf ? expand(e.oldText) : e.oldText)];
               if (hasCrlf) hints.push("本文件为 CRLF 行尾——多行片段已自动按 \\r\\n 适配仍未命中，请逐字对照最新读取内容");
               if (readState.get(fs.resolveAbs(path)) === undefined) hints.push("本会话尚未读取过该文件——先 tool-fs__read 再编辑");
               return { output: `edits[${i}]: 未找到待替换文本${hints.length > 0 ? `（${hints.join("；")}）` : ""}`, isError: true };
             }
             if (before.indexOf(oldText, pos + 1) >= 0) {
-              return { output: `edits[${i}]: 多处匹配——请提供更长的唯一片段或设 replaceAll`, isError: true };
+              // dsh 同款（九仓对标 2026-10-03）：多命中报错附行号列表——模型选段加锚更准；上限 5 个防刷屏
+              const lines: number[] = [];
+              let at = pos;
+              while (at >= 0 && lines.length < 5) {
+                lines.push(before.slice(0, at).split("\n").length);
+                at = before.indexOf(oldText, at + 1);
+              }
+              return { output: `edits[${i}]: 多处匹配（第 ${lines.join("、")} 行${at >= 0 ? " 等" : ""}）——请提供更长的唯一片段或设 replaceAll`, isError: true };
             }
             positions.push({ start: pos, end: pos + oldText.length, newText, index: i });
           }

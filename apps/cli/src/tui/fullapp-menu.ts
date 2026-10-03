@@ -2,7 +2,7 @@
  *  （参数阶段/候选清单/技能区过滤/可选行夹取/overlay 键路由/技能注入）。
  *  normCmd/isSubseq 经 fullapp-types import（T2 已出仓）。非公开 API。 */
 
-import { isSubseq, normCmd, OVERLAY_PAGE, type SlashItem } from "./fullapp-types.ts";
+import { inlineSlashWord, isSubseq, normCmd, OVERLAY_PAGE, slashFilterQ, slashMenuActive, type SlashItem } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { FullApp } from "./fullapp.ts";
 
@@ -49,7 +49,7 @@ export function createMenu(app: FullApp) {
 	 *  第三档拍板）殿后于全部命中命令；技能组整体不插进命令组（「追加在全部命中命令之后」）。q 为空 = 全显。
 	 *  可搜文本 = 真名 + 显示标签「skill : 名」：只认真名则 /skas 筛不出 ask（skas 非 ask 子序列），认标签才成立。 */
 	const filteredSkills = (): SlashItem[] => {
-		const q = normCmd(app.state.input).slice(1).split(" ")[0]!.toLowerCase();
+		const q = slashFilterQ(app.state.input);
 		const hits: SlashItem[] = [];
 		const more: SlashItem[] = [];
 		const fuzzy: SlashItem[] = [];
@@ -68,6 +68,9 @@ export function createMenu(app: FullApp) {
 		const level2 = s.overlayCmd !== "";
 		const ap = argPhase();
 		const items = overlayItems();
+		// 中行形态（2026-10-03「消息内容 空格 /」也开菜单）：非行首时取串尾 / 词（trimEnd 与
+		// slashMenuActive 的 normCmd 裁尾空白同口径）。行首形态恒 undefined → 下方各路径零改动走旧逻辑
+		const inline = normCmd(s.input).startsWith("/") ? undefined : inlineSlashWord(s.input.trimEnd());
 		// 循环步进跳过 sep（m4-7 技能分隔行不可选——up/down 回绕也越不过它停上去）
 		const step = (from: number, delta: number): number => {
 			let i = from;
@@ -77,8 +80,9 @@ export function createMenu(app: FullApp) {
 		if (key === "escape") {
 			if (level2) {
 				s.overlayCmd = "";
-				s.input = "/";
-				s.cursor = 1;
+				// 中行形态退级回串尾 /（前缀保留）；行首形态回裸 /
+				s.input = inline !== undefined ? s.input.slice(0, inline.start) + "/" : "/";
+				s.cursor = s.input.length;
 				s.overlaySel = 0;
 			} else s.overlayOpen = false; // 参数阶段也走这里：只关菜单不清输入（Esc 回命令名阶段 = 继续编辑参数）
 		} else if (key === "up" && items.length > 0) {
@@ -98,9 +102,13 @@ export function createMenu(app: FullApp) {
 			s.overlaySel = 0;
 		} else if (key === "tab" && !level2 && items.length > 0) {
 			// 技能 Tab 填可输入形态「/skill : 名」（2026-09-30 用户拍板：Tab ≠ Enter——回车直接执行技能，
-			// Tab 落输入框可编辑，提交层 processReplLine 解析该格式再注入正文）；命令行 Tab 照旧补全命令名
+			// Tab 落输入框可编辑，提交层 processReplLine 解析该格式再注入正文）；命令行 Tab 照旧补全命令名。
+			// 中行形态 Tab 原地补全（2026-10-03）：前缀保留——「消息 /he」Tab →「消息 /help」
 			const sel = items[s.overlaySel];
-			s.input = sel?.kind === "skill" ? `/skill : ${sel.key}` : sel?.key ?? s.input;
+			if (sel !== undefined) {
+				const fill = sel.kind === "skill" ? `/skill : ${sel.key}` : sel.key;
+				s.input = inline !== undefined ? s.input.slice(0, inline.start) + fill : fill;
+			}
 			s.cursor = s.input.length;
 			s.overlayOpen = false;
 		} else if (key === "enter") {
@@ -134,8 +142,14 @@ export function createMenu(app: FullApp) {
 			s.overlaySel = selToSelectable(items, s.overlaySel);
 			const row = items[s.overlaySel]!;
 			if (row.kind === "skill") {
-				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）
+				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）。中行形态（2026-10-03）：
+				// 技能注入走 submitLine 清了输入 → 消息前缀保留回输入框（submitGate 拦下不清输入则原样不动）
+				const draft = inline !== undefined ? s.input.slice(0, inline.start) : undefined;
 				fireSkill(row.key);
+				if (draft !== undefined && s.input === "") {
+					s.input = draft;
+					s.cursor = draft.length;
+				}
 				app.scheduler.requestImmediateRender();
 				return;
 			}
@@ -143,19 +157,32 @@ export function createMenu(app: FullApp) {
 			const slash = app.io.slashCommands().find((c) => c.name === picked);
 			if (!level2 && slash?.children !== undefined) {
 				s.overlayCmd = picked;
-				s.input = picked;
-				s.cursor = picked.length;
+				// 中行形态入二级：前缀保留（「消息 /permission」而非裸 /permission——消息草稿不丢）
+				s.input = inline !== undefined ? s.input.slice(0, inline.start) + picked : picked;
+				s.cursor = s.input.length;
 				s.overlaySel = Math.max(0, slash.children.indexOf(app.io.slashCurrent(picked)));
 			} else {
 				// 带参数输入（/title 新名字）提交原文——裸命令名会丢参数（2026-09-23 实测：/title 改名失效前案，
-				// 菜单过滤只认命令词、Enter 只提交 picked）；无参数 = picked（别名转正名）
+				// 菜单过滤只认命令词、Enter 只提交 picked）；无参数 = picked（别名转正名）。
+				// 中行形态（2026-10-03）：词是串尾、无参数可带（打空格进参数菜单就关）——恒提交 picked
 				const typed = normCmd(s.input);
-				const cmd = level2 ? `${s.overlayCmd} ${picked}` : typed.includes(" ") ? typed : picked;
+				// 二级组合最先（菜单态驱动）；中行形态次之（串尾词无参数可带，恒 picked）；
+				// 行首带参照旧提交原文、裸命令 picked 别名转正
+				const cmd = level2 ? `${s.overlayCmd} ${picked}` : inline !== undefined ? picked : typed.includes(" ") ? typed : picked;
+				// 提交后消息前缀保留回输入框当草稿（submitGate 拦下时 submitLine 不清输入，
+				// 原文「消息 /词」整体保留——判空即闸门是否放行）
+				const draft = inline !== undefined ? s.input.slice(0, inline.start) : undefined;
 				s.overlayOpen = false;
 				s.overlayCmd = "";
 				app.input.submitLine(cmd);
+				if (draft !== undefined && s.input === "") {
+					s.input = draft;
+					s.cursor = draft.length;
+				}
 			}
-		} else if (!level2 && (key === "backspace" || isPrintable(key))) {
+		} else if (!level2 && (key === "backspace" || (key.length === 1 && isPrintable(key)))) {
+				// 长度守卫（keys.ts:243/:296 同款）：键名串（ctrl+a/shift+left 等）首字符可打印，无守卫会
+				// 把键名当文本插进输入框（2026-10-03 实测：菜单开着按 Ctrl+A 输入框长出「ctrl+a」六字）
 			if (key === "backspace") {
 				if (s.cursor > 0) {
 					s.input = s.input.slice(0, s.cursor - 1) + s.input.slice(s.cursor);
@@ -164,7 +191,12 @@ export function createMenu(app: FullApp) {
 			} else app.input.inputInsert(key);
 			// 重置选中须按敲键后的新清单算（2026-09-30 用户走查：/mc+/p 把命中命令筛光后 sep 占 0 位，
 			// 旧实现用敲键前 items 重置 0 落 sep——渲染不跳 sep 焦点整屏隐身，Tab 还吃 sep 空串清空输入框）
-			if (normCmd(s.input).startsWith("/")) s.overlaySel = selToSelectable(overlayItems(), 0);
+			// 2026-10-03 零命中关窗（拍板「写错命令就不该显示菜单」，推翻 2026-09-30 空过滤占位旧纪律）：
+			// 敲键后清单空即关——三档过滤单调收窄，往前打只会在空处停住，退格回命中重开，无闪跳。
+			// 同日「有空格就关窗」拍板：slashMenuActive 含空白即不成立（空格 = 出了命令词，命令列表不
+			// 赖着）；argPhase 例外——声明 completeArg 的命令空格后切参数候选，菜单转参数态不关
+			const after = overlayItems();
+			if ((slashMenuActive(s.input) || argPhase() !== undefined) && after.length > 0) s.overlaySel = selToSelectable(after, 0);
 			else s.overlayOpen = false;
 		}
 		app.scheduler.requestImmediateRender();

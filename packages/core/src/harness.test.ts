@@ -1503,6 +1503,27 @@ describe("prompt images（M4-2.5 T5——/paste 图进模型上下文，V.2 销�
     expect(JSON.stringify(deriveMessages(evs))).not.toContain("蓝色按钮"); // 旁注只服务回放，不进请求
     await h.close();
   });
+
+  it("⑨b afterUserEvent 数组形态（2026-10-03 输入召回批）：多条旁注按数组序紧随 user/message——转述旁注与输入召回旁注共存；投影同样全跳过", async () => {
+    const { deriveMessages } = await import("./index.ts");
+    const h = await makeHarness();
+    await h.prompt("看图", {
+      afterUserEvent: [
+        { type: "host/vision-transcribe", fields: { model: "glm-5.3-flash", ok: true, text: "蓝色按钮的登录页" } },
+        { type: "host/input-echo", fields: { text: "看图 [image #2]" } },
+      ],
+    });
+    const evs = await h.history();
+    const iU = evs.findIndex((e) => e.type === "user/message");
+    expect(iU).toBeGreaterThanOrEqual(0);
+    expect(evs[iU + 1]!.type).toBe("host/vision-transcribe"); // 数组序即落盘序
+    expect(evs[iU + 2]!.type).toBe("host/input-echo");
+    expect(evs[iU + 2]!.text).toBe("看图 [image #2]");
+    const proj = JSON.stringify(deriveMessages(evs));
+    expect(proj).not.toContain("蓝色按钮"); // 两条旁注都不进上下文（host/ 前缀未知类型跳过）
+    expect(proj).not.toContain("[image #2]");
+    await h.close();
+  });
 });
 
 describe("fork 即刻落盘与 header 兜底（2026-09-22 用户实测：fork 零落盘 → /sessions 不可见 + 观感同 /new；模块事件先于 turn → 断头文件）", () => {
