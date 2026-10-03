@@ -1396,7 +1396,7 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 	});
 });
 
-describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 注入；2026-09-30 增 Tab 填 /skill : 名 形态与子序列第三档）", () => {
+describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 提交「/skill : 名」等价命令；2026-09-30 增 Tab 填 /skill : 名 形态与子序列第三档；2026-10-03 方案 2 起 Enter 不再直接提交合成体——↑ 历史记命令形态）", () => {
 	const SK = (name: string, desc: string, usage?: string): SlashItem => ({
 		name: `skill : ${name}`, desc, long: desc, skill: name, ...(usage !== undefined ? { usage } : {}),
 	});
@@ -1406,7 +1406,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 	it("① 技能条目「skill : 名」殿后于全部命中命令 + 分隔行「── 技能 ──」+ 标题计数并注技能段", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件", "需要交付 PDF 文件时"), SK("review-pr", "审查拉取请求")],
-			skillInject: (n) => `INJ:${n}`,
 		});
 		const { app, input } = r;
 		app.start();
@@ -1431,7 +1430,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 	it("② 详释恒 3 行：技能选中 = 说明折行 + 第 3 行「适用：…」；无 when_to_use 第 3 行整行留空（不删行不回退操作提示）", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "根据用户需求生成 PDF 文档，支持从 markdown 转换、中文字体嵌入与目录生成", "需要交付 PDF 文件时"), SK("plain", "无适用说明的技能")],
-			skillInject: (n) => `INJ:${n}`,
 		});
 		const { app, input } = r;
 		app.start();
@@ -1468,11 +1466,9 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		app.stop();
 	});
 
-	it("④ Enter = 用户触发注入：skillInject 拿真名、submit 收注入全文、菜单关", async () => {
-		const injected: string[] = [];
+	it("④ Enter = 提交等价命令「/skill : 名」（2026-10-03 方案 2）：↑ 历史记命令形态不进合成体、submit 收真名命令、菜单关", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件")],
-			skillInject: (n) => { injected.push(n); return `（用户通过菜单手动加载技能 "${n}"）\n<skill name="${n}">\n正文\n</skill>`; },
 		});
 		const { app, input, submitted } = r;
 		app.start();
@@ -1483,21 +1479,18 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		input.emit("data", "\x1b[B");
 		input.emit("data", "\x1b[B");
 		await flush(120);
-		input.emit("data", "\r"); // Enter → 注入提交
+		input.emit("data", "\r"); // Enter → 提交等价命令走宿主解析
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(false);
-		expect(injected).toEqual(["pdf"]); // 真名（非 skill : 名 显示文本）
-		expect(submitted).toHaveLength(1);
-		expect(submitted[0]).toContain('<skill name="pdf">');
-		expect(submitted[0]).toContain("正文");
+		expect(submitted).toEqual(["/skill : pdf"]); // 真名命令形态（非 skill : 名 显示文本）
+		// 旧实现 submitLine(合成体) → 标记行+<skill> 正文整条进 ↑ 历史（用户实测按上键翻出标记行）
+		expect(app.stateRef.history).toEqual(["/skill : pdf"]);
 		app.stop();
 	});
 
-	it("⑤ Tab ≠ Enter（2026-09-30 用户拍板）：技能条目 Tab 填可输入形态「/skill : 名」进输入框（菜单关、不注入），回车提交原文走宿主解析", async () => {
-		const injected: string[] = [];
+	it("⑤ Tab ≠ Enter（2026-09-30 用户拍板）：技能条目 Tab 填可输入形态「/skill : 名」进输入框（菜单关、不提交），回车提交原文走宿主解析", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件")],
-			skillInject: (n) => { injected.push(n); return `INJ:${n}`; },
 		});
 		const { app, input, submitted } = r;
 		app.start();
@@ -1513,19 +1506,16 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		expect(app.stateRef.overlayOpen).toBe(false); // 菜单关（命令 Tab 同款）
 		expect(app.stateRef.input).toBe("/skill : pdf"); // 可输入形态落输入框（光标尾）
 		expect(app.stateRef.cursor).toBe("/skill : pdf".length);
-		expect(injected).toEqual([]); // 未注入
-		expect(submitted).toHaveLength(0);
+		expect(submitted).toHaveLength(0); // 未提交（注入等动作全在回车后的宿主解析层）
 		input.emit("data", "\r"); // 回车 → 提交原文（/skill : 名 的解析在宿主 processReplLine，rig 只收提交串）
 		await flush(120);
 		expect(submitted).toEqual(["/skill : pdf"]);
 		app.stop();
 	});
 
-	it("⑦ 手敲完整形态（含参数）：空格即关窗（2026-10-03 拍板），Enter 仍提交原话不走 fireSkill——参数不丢、原话可回显（2026-09-30 拍板「我输入啥就显示啥」）", async () => {
-		const injected: string[] = [];
+	it("⑦ 手敲完整形态（含参数）：空格即关窗（2026-10-03 拍板），Enter 提交原话不走菜单条目——参数不丢、原话可回显（2026-09-30 拍板「我输入啥就显示啥」）", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件")],
-			skillInject: (n) => { injected.push(n); return `INJ:${n}`; },
 		});
 		const { app, input, submitted } = r;
 		app.start();
@@ -1536,7 +1526,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		input.emit("data", "\r");
 		await flush(120);
 		expect(submitted).toEqual(["/skill : pdf 附带参数整段"]); // 原话整段提交（提交层解析：回显 + args 注入）
-		expect(injected).toEqual([]); // 不经 fireSkill（只带名字会丢参数、也不回显原话）
 		expect(app.stateRef.overlayOpen).toBe(false);
 		app.stop();
 	});
@@ -1544,7 +1533,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 	it("⑥ 过滤两档：q=「re」→ 技能 review-pr 命中（pdf 不含不显）；命令零命中技能有货不显示「无匹配命令」；↑ 跨分隔行回绕不停 sep", async () => {
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件"), SK("review-pr", "审查拉取请求")],
-			skillInject: (n) => `INJ:${n}`,
 		});
 		const { app, input } = r;
 		app.start();
@@ -1571,7 +1559,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		it("⑦ 过滤第三档子序列（2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：散见命中殿后于前缀/含字档，可搜文本 = 真名 + 显示标签", async () => {
 			const r = rig(["# hi"], 100, 30, {
 				skillItems: () => [SK("ask", "提问技能"), SK("pdf", "生成 PDF 文件")],
-				skillInject: (n) => `INJ:${n}`,
 			});
 			const { app, input } = r;
 			app.start();
@@ -1589,7 +1576,6 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		it("⑧ 过滤把命令筛光只剩技能时焦点自动落首个技能行（2026-09-30 用户走查：/mcp 只剩 context7-mcp 却无 ❯——敲字重置用敲键前清单，0 命令后 sep 占 0 位渲染不跳 sep、焦点整屏隐身；该态下 Tab 还会吃 sep 空串清空输入框）", async () => {
 			const r = rig(["# hi"], 100, 30, {
 				skillItems: () => [SK("review-pr", "审查拉取请求")],
-				skillInject: (n) => `INJ:${n}`,
 			});
 			const { app, input } = r;
 			app.start();

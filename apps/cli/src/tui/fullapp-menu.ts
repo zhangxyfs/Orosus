@@ -142,8 +142,9 @@ export function createMenu(app: FullApp) {
 			s.overlaySel = selToSelectable(items, s.overlaySel);
 			const row = items[s.overlaySel]!;
 			if (row.kind === "skill") {
-				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4）。中行形态（2026-10-03）：
-				// 技能注入走 submitLine 清了输入 → 消息前缀保留回输入框（submitGate 拦下不清输入则原样不动）
+				// 技能 Enter = 用户触发（m4-7 T7 / 原型图 1 验收点 4；2026-10-03 起提交「/skill : 名」
+				// 等价命令走解析管线）。中行形态（2026-10-03）：提交清了输入 → 消息前缀保留回输入框
+				// （submitGate 拦下不清输入则原样不动）
 				const draft = inline !== undefined ? s.input.slice(0, inline.start) : undefined;
 				fireSkill(row.key);
 				if (draft !== undefined && s.input === "") {
@@ -202,19 +203,16 @@ export function createMenu(app: FullApp) {
 		app.scheduler.requestImmediateRender();
 	};
 
-	/** 技能条目 Enter 触发：正文以用户消息注入当前轮（m4-7 D3 拍板，pi/kimi 同款——走主输入口，
-	 *  busy 期照排队语义，不打断 turn 机制）。读不到正文 = toast 提示留菜单。
-	 *  Tab 不走此路（2026-09-30 拍板）：Tab 填「/skill : 名」可输入形态，提交层解析后殊途同归。 */
+	/** 技能条目 Enter 触发：提交等价命令「/skill : 名」，正文注入/原话行回显/召回旁注全走 processReplLine
+	 *  的 /skill 解析管线（m4-7 D3 拍板注入语义不变——走主输入口，busy 期照排队语义）。2026-10-03 用户
+	 *  拍板方案 2：旧实现直接 submitLine(skillInject 合成体) → 标记行+<skill> 正文整条进 ↑ 内存历史
+	 *  （实测按上键翻出标记行）；改提交命令形态后 ↑ 历史记「/skill : 名」，与 Tab 填形态回车、手敲
+	 *  完整形态三路归一。正文读取失败预检退役——解析层同款 notify 兜底。 */
 	const fireSkill = (name: string): void => {
-		const text = app.io.skillInject?.(name);
-		if (text === undefined) {
-			app.showToast(`技能 "${name}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
-			return;
-		}
 		app.state.overlayOpen = false;
 		app.state.overlayCmd = "";
-		app.input.submitLine(text);
+		app.input.submitLine(`/skill : ${name}`);
 	};
 
-	return { argPhase, overlayItems, filteredSkills, selToSelectable, onOverlayKey, fireSkill };
+	return { argPhase, overlayItems, filteredSkills, selToSelectable, onOverlayKey };
 }

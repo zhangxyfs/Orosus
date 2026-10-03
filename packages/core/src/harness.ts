@@ -650,10 +650,35 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     } catch { /* 兜底：首问截断 */ }
     await store.append(LOG_TYPES.sessionLabel, { label });
   };
-  // 读侧自修复 pass（§6.1/D41）：resume/fork 打开既有历史时做链校验（根分段——复合投影零误报），问题逐条进诊断
+  // 读侧自修复 pass（§6.1/D41）：resume/fork 打开既有历史时做链校验（根分段——复合投影零误报），问题逐条进诊断。
+  // 模型/档位随会话恢复（2026-10-03 用户拍板「不同会话模型/effort 不一样，这两个信息随会话记」）：
+  // turn/start 每 turn 落 model（effort 同日起带值才落）——尾部最后一条 = 本会话最后用的组合。
+  // /model /effort 的写盘是全局 user config（语义 = 「以后新会话的默认」，最后设置者赢）——不恢复则
+  // 本会话身份会被其他会话的切换顶掉（A 用 X/high → B 切 Y/low → 回 A 成 Y/low）。恢复只占内存
+  // override、不回写全局盘（新会话默认语义不动）、不走换模型的档位重解析（恢复的组合当时一起用过，
+  // 天然有效）。provider 已删即整个组合回退 config（见下方判定注——2026-10-03 二次拍板推翻首轮
+  // 「lenient 保留报错自证」口径）。fork 同吃：ForkedSessionStore.all() 截到分叉点，恢复的
+  // 恰是分叉点组合。老会话 effort 字段缺席 = 只恢复模型；无 turn/start（空会话）= 零恢复。
+  // model provider 在图判定（统一口径）：parseModel 取 provider 段（全形 "p/m" → "p"；裸名 → 自身）
+  // 查 services.provider（与 resolveModelValue 同一解析路径；graph.records 的 r.name 是模块名
+  // 〔provider-fake〕不是 slot 名 fake）。不通过 = 两类场景一并放弃恢复（2026-10-03 用户拍板「提供商
+  // 被删除 → 用 config 默认模型，effort 同理」——组合整体回退，不 lenient 硬留等请求期报错）：
+  // ① 恢复模型的 provider 模块已删/停用；② 2026-10-03 前老会话落的是剥掉 provider 的裸模型名
+  // （请求线缆口径，塞 override 会被 parseModel 当 provider 名解析、请求必炸——实测
+  // 「provider "m" 不可用」）。放弃 = 模型+档位都跟全局 config（拍板前行为，无回归）。
+  let resumedRunState: { model: string; effort?: string } | undefined;
   if (options.resume !== undefined || options.fork !== undefined) {
-    for (const issue of verifyChain(await store.all())) {
+    const resumedEvents = await store.all();
+    for (const issue of verifyChain(resumedEvents)) {
       createLogger(sink, "session").warn("session.chain.issue", issue);
+    }
+    const lastTurnStart = [...resumedEvents].reverse().find((e) => e.type === "turn/start");
+    if (
+      lastTurnStart !== undefined && typeof lastTurnStart.model === "string" && lastTurnStart.model !== "" &&
+      graph.services.provider(parseModel(lastTurnStart.model).provider) !== undefined
+    ) {
+      resumedRunState = { model: lastTurnStart.model };
+      if (typeof lastTurnStart.effort === "string" && lastTurnStart.effort !== "") resumedRunState.effort = lastTurnStart.effort;
     }
   }
 
@@ -663,8 +688,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // 同一次执行（双跑会在共享 bus/tools 上双激活 + 监听器双挂 + 工具注册冲突降级）；prompt 起 turn 前
   // 与后台送回轮同以它排队（quiesce 只排水不关门——reload 进行中的新 prompt 不再吃墓碑/中途换图）
   let reloadInFlight: Promise<ReloadReport> | undefined;
-  let modelOverride: string | undefined; // /model 运行期覆盖（D38：会话内存态不落盘）
-  let effortOverride: string | undefined; // /effort 运行期覆盖（/model 同款双轨：会话内存 + 写盘）；未设 = 跟随配置，配置也没有 = 目录默认档（kimi「从不不指定」——effort 型模型恒有解析值）
+  let modelOverride: string | undefined = resumedRunState?.model; // /model 运行期覆盖（D38：会话内存态不落盘）；resume/fork 初始 = 会话尾部恢复值（2026-10-03 拍板，提取见上方 resumedRunState）——status/请求链经 resolveProvider 的 override 优先天然生效，不回写全局盘
+  let effortOverride: string | undefined = resumedRunState?.effort; // /effort 运行期覆盖（/model 同款双轨：会话内存 + 写盘）；未设 = 跟随配置，配置也没有 = 目录默认档（kimi「从不不指定」——effort 型模型恒有解析值）；resume/fork 初始 = 会话尾部恢复值（同上）
 
   // 行级写 user config 顶层键（/model 2026-09-25 抽取共用，/effort 同款落点）：无 TOML 库的节区感知写
   //（2026-09-22 启动阻断实证：裸键追加在文件末尾会落进最后一个 [节]——approval strict 校验直接拒启动）。
@@ -947,12 +972,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
     return { stream: adapter.stream, model };
   };
-  const resolveProvider = (): { stream: StreamFn; model: string } => {
+  // modelValue = 解析前的全形（provider/model 或裸 provider 名）——2026-10-03 起随返回值带出：
+  // driveTurn 落 turn/start 用全形（模型随会话恢复链，见 loop.ts modelFull 注）
+  const resolveProvider = (): { stream: StreamFn; model: string; modelValue: string } => {
     const modelValue = modelOverride ?? cfgModelValue();
     if (typeof modelValue !== "string" || modelValue === "") {
       throw new Error(`未配置 model（核心顶层 key，格式 <provider>/<model> 或裸 <provider>，§6.6/D32）——请在 config.toml 或 CLI 指定`);
     }
-    return resolveModelValue(modelValue);
+    return { ...resolveModelValue(modelValue), modelValue };
   };
 
   // ctx.llm 实现（D39/T4 + 补强 T3 三扩展 + M4-3 T1b model/webSearch/listModels 扩展）：
@@ -1019,7 +1046,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   /** 共通 turn 驱动（M4.5 T9 从 prompt 抽出）：usage 锚点/档位捕获/事件循环同款——用户轮与送回轮共用。 */
   const driveTurn = async (controller: AbortController): Promise<SessionEvent | undefined> => {
     maybeSteerDateLine(); // 日期系统行（m4-6 T7）：本轮首步 steering 排空时进请求
-    const { stream, model } = resolveProvider();
+    const { stream, model, modelValue } = resolveProvider();
     // 思考档位（/effort）：turn 开头一次性捕获（/model 同款——busy 期切档下一轮生效）
     const effort = await resolveEffortForWire();
     // usage 锚点（补强 T3/空白 §4）：包装主循环 stream 记录最近一次真实用量——loop 骨架仍不消费 usage
@@ -1033,6 +1060,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     for await (const e of agentLoop({
       session: store, bus: graph.bus, tools: graph.tools,
       provider: trackedStream, model, system: graph.promptSections(),
+      modelFull: modelValue, // turn/start 落全形（2026-10-03 模型随会话恢复——裸名恢复会被当 provider 名解析炸请求）
       ...(effort !== undefined ? { reasoningEffort: effort } : {}),
       signal: controller.signal, sink,
       livePush: (c) => live.push(c), // 双投并存（T4/D45）：旁路投递——T5 断流后仅旁路
