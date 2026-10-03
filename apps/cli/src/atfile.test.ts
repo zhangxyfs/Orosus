@@ -87,3 +87,54 @@ describe("引用移除按匹配位置（CR-03——text.replace 删首个出现�
     expect(r.text).toBe(" 中  尾"); // 两处整删（各含边界空格归属正确，无互相误伤）
   });
 });
+
+describe("中文紧贴边界放宽（m5-at-menu T4/D14——@ 前一字符不是路径合法字符即算引用起点）", () => {
+  it("① 「看下@src/a.ts」解析成附件且正文只删引用段——「下」字完好（今天静默失效的第三形态）", () => {
+    writeFileSync(join(dir, "a.ts"), "CONTENT", "utf8");
+    const r = resolveAtRefs("看下@a.ts 结束", dir);
+    expect(r.attachments.join("\n")).toContain("CONTENT");
+    expect(r.text).toBe("看下 结束"); // 引用段整删、「看下」完好
+  });
+  it("② 中文标点后紧贴「，@a.txt」也成引用（标点不属于路径合法字符；词尾串尾 $ 终止）", () => {
+    writeFileSync(join(dir, "a.txt"), "MARKED", "utf8");
+    const r = resolveAtRefs("注意，@a.txt", dir);
+    expect(r.attachments.join("\n")).toContain("MARKED");
+    expect(r.text).toBe("注意，");
+    // 词尾紧跟中文句号会连带吃进路径（词 = 非空白非 # 最大段——v1 接受，带内跳过提示可见）
+    const glued = resolveAtRefs("注意，@a.txt。", dir);
+    expect(glued.attachments.some((a) => a.includes("文件不存在") && a.includes("已跳过"))).toBe(true);
+    expect(glued.text).toBe("注意，@a.txt。");
+  });
+  it("③ 邮箱 foo@bar.com 不误吃（@ 前是 o 路径合法字符——新旧规则都不算引用）", () => {
+    const r = resolveAtRefs("联系 foo@bar.com 谈", dir);
+    expect(r.attachments).toEqual([]);
+    expect(r.text).toBe("联系 foo@bar.com 谈");
+  });
+  it("④ 行首与空白前的旧行为逐字节不变（纯放宽、零翻案）", () => {
+    writeFileSync(join(dir, "a.txt"), "AAA", "utf8");
+    const head = resolveAtRefs("@a.txt 开头", dir); // 行首
+    expect(head.text).toBe(" 开头");
+    const spaced = resolveAtRefs("正文 @a.txt 正文", dir); // 空白前
+    expect(spaced.text).toBe("正文  正文");
+    expect(spaced.attachments[0]).toContain("AAA");
+  });
+  it("⑤ CR-03 双引用旧形态原样绿：「看 x@rows.txt 和 @rows.txt」x@ 片段仍不是引用", () => {
+    writeFileSync(join(dir, "rows.txt"), "row1", "utf8");
+    const r = resolveAtRefs("看 x@rows.txt 和 @rows.txt", dir);
+    expect(r.attachments).toHaveLength(1);
+    expect(r.text).toBe("看 x@rows.txt 和 ");
+  });
+  it("⑥ #L 行范围与 50KB 上限在 glued 形态下照常工作", () => {
+    writeFileSync(join(dir, "rows.txt"), Array.from({ length: 30 }, (_, i) => `row${i + 1}`).join("\n"), "utf8");
+    const ranged = resolveAtRefs("看下@rows.txt#L2-L3 部分", dir);
+    const att = ranged.attachments.join("\n");
+    expect(att).toContain("[@rows.txt#L2-L3]");
+    expect(att).toContain("row2");
+    expect(att).not.toContain("row4");
+    expect(ranged.text).toBe("看下 部分");
+    writeFileSync(join(dir, "big.txt"), "x".repeat(51 * 1024), "utf8");
+    const big = resolveAtRefs("看下@big.txt", dir);
+    expect(big.attachments.some((a) => a.includes("文件过大"))).toBe(true);
+    expect(big.text).toBe("看下@big.txt"); // 跳过路径不移除原文（与文件不存在同宗——引用保留）
+  });
+});
