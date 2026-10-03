@@ -68,6 +68,10 @@ export class DocModel {
 	/** 回放期 spawn 配对（重载后 agent 组重建）：callId → 组条目引用——result 到场时把编号抠进组。
 	 *  回放专用状态（实时路走 claimAgents 末组认领，不用精确配对）。 */
 	private pendingSpawnResults = new Map<string, { k: "group"; ids: string[] }>();
+	/** 回放期当前 spawn 组（m5-agentview-perf T1 可重入化）：跨 historyFrom 调用存活，user/assistant
+	 *  消息边界清空——分批喂入与一次喂全量同形的地基（增量渲染器按批喂事件；局部变量形态下跨批
+	 *  紧邻的 spawn 会错误另开新组，与全量回放不同形）。 */
+	private replayGroup: { k: "group"; ids: string[] } | undefined;
 
 	/** 子代理 agent 组摄入（2026-09-27 用户拍板）：spawn 工具调用的替代显示——绝不走「Using Spawn」通用行。
 	 *  连续 spawn 合成一组（末组还有活动条目就复用；全终态后下一次 spawn 开新组）。 */
@@ -520,17 +524,16 @@ export class DocModel {
 		// 回放期 agent 组重建（2026-09-27：重载后与实时同形——不再退化静态占位行）。同一轮 assistant
 		// 的连续 spawn 并一组（组引用到 user/assistant 消息边界即断）——与实时路「末组活着才并入」等价：
 		// 回放全员终态，轮边界即断组点。组员编号从 spawn 的 result 里抠（callId 精确配对，spawnIdsIn
-		// 与 /tasks 历史重建同口径）。
-		let group: { k: "group"; ids: string[] } | undefined;
+		// 与 /tasks 历史重建同口径）。当前组 = this.replayGroup（T1 实例字段——分批喂入同形，见字段注释）。
 		for (const e of events) {
 			if (e.type === "user/message") {
-				group = undefined;
+				this.replayGroup = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
 				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
 				const imgs = parts.filter((p) => p.kind === "image").length;
 				if (text !== "" || imgs > 0) this.userPrompt(text + (imgs > 0 ? `  [图片${imgs > 1 ? `×${imgs}` : ""}]` : ""));
 			} else if (e.type === "assistant/message") {
-				group = undefined;
+				this.replayGroup = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
 				const think = parts.filter((p) => p.kind === "reasoning").map((p) => p.text ?? "").join("");
 				if (think !== "") {
@@ -547,11 +550,11 @@ export class DocModel {
 				const callId = typeof e.callId === "string" ? e.callId : undefined;
 				if (name === "tool-subagent__spawn") {
 					this.settleActive();
-					if (group === undefined) {
-						group = { k: "group", ids: [] };
-						this.pushE(group);
+					if (this.replayGroup === undefined) {
+						this.replayGroup = { k: "group", ids: [] };
+						this.pushE(this.replayGroup);
 					}
-					if (callId !== undefined) this.pendingSpawnResults.set(callId, group);
+					if (callId !== undefined) this.pendingSpawnResults.set(callId, this.replayGroup);
 					continue;
 				}
 				this.toolCall(name, e.args as Record<string, unknown> | undefined, callId);
