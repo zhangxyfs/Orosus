@@ -140,6 +140,13 @@ export const skillMenuTtl = (deps: SkillUiDeps): SlashItem[] => {
 	return skillMenu;
 };
 
+/** 技能注入标记行前缀（本件构造、多方按形态匹配——单源常量防漂移）：防重入判定（main 提交层
+ *  includes）/ 输入召回还原（session-io 老会话合成体拆原话）。docmodel ● 行识别与 core 树标题
+ *  各持同款正则（core 禁反向 import apps，跨包不共享——形态由测试钉住）。 */
+export const SKILL_MARK_PREFIX = "（用户通过菜单手动加载技能";
+/** 完整标记行（含技能名捕获）——session-io 老会话合成体还原原话行用；与 docmodel/core 同形不同源。 */
+export const SKILL_MARK_RE = /(?:^|\n)（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
+
 /** 技能条目 Enter 注入（D3 拍板）：正文剥 frontmatter 后包 <skill> 块，以用户消息提交——
  *  pi/kimi 同款形态，走主输入口零新机制（busy 期照排队语义，不打断 turn）。读不到 = undefined（菜单提示）。 */
 export const skillInjectText = (name: string, args?: string): string | undefined => {
@@ -153,7 +160,7 @@ export const skillInjectText = (name: string, args?: string): string | undefined
 			// 2026-10-01 诊断批：file 属性给模型提供相对路径解析基准（正文引用 references/… 不再按项目
 			// cwd 落空——与 skill__load 输出首行带路径同因）；首行协议串不动（docmodel ● 行识别 + 防重入
 			// 标记都按精确形态匹配它）；skill 块正文不进对话流，属性追加对用户可见面零影响
-			return `（用户通过菜单手动加载技能 "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
+			return `${SKILL_MARK_PREFIX} "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
 	} catch {
 		return undefined;
 	}

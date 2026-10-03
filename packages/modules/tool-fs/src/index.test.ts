@@ -96,6 +96,64 @@ describe("tool-fs（规则 1 提供者 + 规则 5 同路径实证）", () => {
     expect(readFileSync(join(dir, "lf.md"), "utf8")).toBe("x\ny\nc");
   });
 
+  it("edit 失配分叉定位（2026-10-03 实机 12 例分型：超长中文行错字/旧文引用/概括转述——零线索报错只会微调连败）：前缀锚到疑似位置报「第 N 行+前 K 字符一致+两侧片段」；开头就锚不到（旧版本/概括改写）报重读指引；片段内换行字面化不串行", async () => {
+    writeFileSync(join(dir, "doc.md"), "开头行\n| D1 | live 龄门间隔 = 1000ms | 与查看窗转盘帧号的秒位节拍一致 |\n尾巴行\n");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    // ① 实机 case3/4 形态：「龄」错成「龿」——错字前的短前缀仍可锚，分叉点直指错字两侧
+    const r1 = await run(tools[2]!, { path: "doc.md", edits: [{ oldText: "| D1 | live 龿门间隔 = 1000ms | 与查看窗转盘帧号的秒位节拍一致 |", newText: "x" }] });
+    expect(r1.isError).toBe(true);
+    expect(r1.output).toContain("未找到待替换文本");
+    expect(r1.output).toContain("第 2 行");
+    expect(r1.output).toContain("前 12 字符一致");
+    expect(r1.output).toContain("龿门");
+    expect(r1.output).toContain("龄门");
+    // ② 实机 case6/8/9 形态：引用旧版本/概括改写——开头就锚不到，指路重读
+    const r2 = await run(tools[2]!, { path: "doc.md", edits: [{ oldText: "这段从头就不在文件里", newText: "x" }] });
+    expect(r2.isError).toBe(true);
+    expect(r2.output).toContain("旧版本");
+    expect(r2.output).toContain("重新读取");
+    // ③ 分叉片段跨换行 → 字面化（\n 显示为反斜杠 n，报错不串行）
+    const r3 = await run(tools[2]!, { path: "doc.md", edits: [{ oldText: "开头行X\n尾巴", newText: "x" }] });
+    expect(r3.isError).toBe(true);
+    expect(r3.output).toContain("行X\\n");
+    expect(r3.output).toContain("行\\n|");
+  });
+
+  it("edit 多命中报错带行号列表（dsh 同款，九仓对标 2026-10-03）：模型选段加锚更准；超 5 处截断带「等」", async () => {
+    writeFileSync(join(dir, "multi.md"), "aa 前缀\n中间行\naa 前缀\n尾巴\naa 前缀");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    const r = await run(tools[2]!, { path: "multi.md", edits: [{ oldText: "aa 前缀", newText: "x" }] });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("多处匹配");
+    expect(r.output).toContain("第 1、3、5 行");
+    expect(r.output).not.toContain(" 等）"); // 正好收完无「等」
+    writeFileSync(join(dir, "many.md"), Array.from({ length: 14 }, (_, i) => (i % 2 === 0 ? "zz 锚" : `行${i}`)).join("\n"));
+    const r2 = await run(tools[2]!, { path: "many.md", edits: [{ oldText: "zz 锚", newText: "x" }] });
+    expect(r2.isError).toBe(true);
+    expect(r2.output).toContain(" 等）"); // 超 5 处截断
+  });
+
+  it("edit 剥行号前缀匹配（Reasonix 同款，九仓对标 2026-10-03）：read 展示行形如 `N→正文`，模型连装饰前缀一起复述——剥掉重试且 newText 同剥（行号不落盘）；原样可匹配的文件（真有 N→ 开头行）不受扰", async () => {
+    writeFileSync(join(dir, "ln.md"), "第一行\n第二行内容\n第三行");
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    // 单行：oldText/newText 都带了 read 的行号装饰 → 剥后命中，写入内容不含行号
+    const r = await run(tools[2]!, { path: "ln.md", edits: [{ oldText: "2→第二行内容", newText: "2→改过的行" }] });
+    expect(r.isError).toBe(false);
+    expect(readFileSync(join(dir, "ln.md"), "utf8")).toBe("第一行\n改过的行\n第三行");
+    // 多行：每行各自的行号前缀都剥
+    const r2 = await run(tools[2]!, { path: "ln.md", edits: [{ oldText: "1→第一行\n2→改过的行", newText: "甲\n乙" }] });
+    expect(r2.isError).toBe(false);
+    expect(readFileSync(join(dir, "ln.md"), "utf8")).toBe("甲\n乙\n第三行");
+    // 原样优先：文件里真有 `10→` 开头的行，原样命中不走剥前缀
+    writeFileSync(join(dir, "real.md"), "10→真有行号行\n普通行");
+    const r3 = await run(tools[2]!, { path: "real.md", edits: [{ oldText: "10→真有行号行", newText: "x" }] });
+    expect(r3.isError).toBe(false);
+    expect(readFileSync(join(dir, "real.md"), "utf8")).toBe("x\n普通行");
+  });
+
   it("批 C（2026-10-01 方案一拍板）：读面放开绝对路径——根外文件可读；写面仍限根（越出 → isError）", async () => {
     const outside = mkdtempSync(join(tmpdir(), "orosus-toolfs-out2-"));
     writeFileSync(join(outside, "peer.txt"), "PEER REPO", "utf8");

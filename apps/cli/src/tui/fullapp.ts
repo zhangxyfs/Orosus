@@ -32,8 +32,19 @@ import { createKeys } from "./fullapp-keys.ts";
 import { createOverlay } from "./fullapp-overlay.ts";
 import { createFrame } from "./fullapp-frame.ts";
 
-// 子系统拆分（m5-split-fullapp）：九个闭包工厂子系统住 fullapp-*.ts 族件；壳内子系统装配对象与
-// 降级共享字段（io/state/pendingUi 等无修饰成员）——子系统共享态，非公开 API，外部勿用。
+// 拆分说明（m5-split-fullapp，2026-10-02）：本件曾是 3257 行的全仓第一大源文件——FullApp 总控台
+// （终端接管/按键分派/鼠标选区/输入框/侧栏面板/斜杠菜单/弹窗队列/帧渲染），十几个交互批次的
+// 功能逐层堆积的结果，多批并行开发同改一文件必撞车。拆法：类外段（接缝类型/AppState/常量/
+// 纯函数）出仓 fullapp-types.ts；类本体按九个闭包工厂子系统拆到 fullapp-*.ts 族件（panels 面板
+// 行拼装 / dialogs 弹窗队列 / select 鼠标选区 / mouse 滚轮滚动 / menu 斜杠菜单 / input 输入框 /
+// keys 键盘路由 / overlay 浮层构建 / frame 帧渲染）；本件收口为壳（字段声明 + 构造器装配 +
+// 生命周期 + 公共入口薄委托）。
+// 限制：①公共面 23 成员（20 公开 + 3 getter）签名与 stateRef 形状零改动——179 it 安全网与九个
+// 消费文件全走公共 API 的前提；②搬出方法触达的字段从 private 降为无修饰 = 子系统共享态，
+// 非公开 API，外部勿用；③onKey（fullapp-keys.ts）内部分派顺序/case 分组/早退路径红线不动；
+// ④九工厂装配统一放构造器末尾（state 构造器体内才赋值，字段初始化器先跑有访问序隐患）。
+// 零行为变三维背书（公共面/消费方/测试件零改动）；方案与收官对账见
+// docs/superpowers/plans/2026-10-02-m5-split-fullapp.md。
 
 // 类外段（接缝类型/AppState/常量/纯函数）已出仓 fullapp-types.ts（m5-split-fullapp T2）；
 // 消费方九文件仍经本件 import——转出口维持不动（D3 消费方零改动）。

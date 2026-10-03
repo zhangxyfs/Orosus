@@ -2,7 +2,7 @@
  *  （L381-876 原样整体摘取，分派顺序/case 分组/早退路径一个不动——D4 结构红线）。
  *  体内 this.→app. 机械改写 119 处；子系统调用经装配对象前缀。非公开 API。 */
 
-import { CONN_SLOTS, MODULE_SLOTS, OVERLAY_PAGE, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
+import { CONN_SLOTS, inlineSlashWord, MODULE_SLOTS, normCmd, OVERLAY_PAGE, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
@@ -394,9 +394,12 @@ export function createKeys(app: FullApp) {
 			}
 			if (s.overlayOpen) {
 				if (s.overlayCmd !== "") {
+					// 中行形态退级回串尾 /（2026-10-03 前缀保留），行首形态回裸 /——与 fullapp-menu
+					// onOverlayKey escape 同口径（两处 Esc 都要认中行形态）
+					const inline = normCmd(s.input).startsWith("/") ? undefined : inlineSlashWord(s.input.trimEnd());
 					s.overlayCmd = "";
-					s.input = "/";
-					s.cursor = 1;
+					s.input = inline !== undefined ? s.input.slice(0, inline.start) + "/" : "/";
+					s.cursor = s.input.length;
 					s.overlaySel = 0;
 				} else s.overlayOpen = false;
 				app.scheduler.requestImmediateRender();

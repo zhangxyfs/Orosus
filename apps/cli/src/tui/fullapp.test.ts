@@ -338,6 +338,9 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		expect(plain).toContain("› 第一条排队"); // 队列区逐条摘要
 		expect(plain).toContain("› 第二条排队");
 		expect(plain).toContain("Ctrl + U 立即注入"); // 操作 hint
+		// 排队正文石青 info（2026-10-03 走查拍板：灰被否、误用 accent 青玉绿被二次打回）；hint 行仍 muted
+		expect(output.buf).toContain(fg("info", "第一条排队"));
+		expect(output.buf).toContain("\x1b[2m  ↑ 召回队尾");
 		// 队列行补齐左栏宽（不齐则右栏分隔线左移错位——2026-09-23 走查实锤回归钉）：截获帧屏幕行测宽
 		const { visibleWidth } = await import("./width.ts");
 		let lastScreen: string[] = [];
@@ -536,19 +539,237 @@ describe("侧栏开关持久化接缝（F5 十二轮②）", () => {
 });
 
 
-describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
-	it("'/qu' + Esc + 继续输入 → 菜单重开；非斜杠输入不重开", async () => {
+describe("中行斜杠菜单（2026-10-03「消息内容 空格 /」也开菜单继续）", () => {
+	it("① 消息+空格+/ 开菜单，续打按 / 词过滤；退格删掉 / 词菜单关", async () => {
 		const { app, input } = rig();
 		app.start();
 		await flush();
-		input.emit("data", "/qu");
+		input.emit("data", "看下 /");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true); // 串尾 / 词即开（词界 = 空白）
+		input.emit("data", "ti");
+		await flush(120);
+		expect(app.menu.overlayItems().map((r) => r.key)).toEqual(["/title"]); // 过滤词只取 / 词，消息前缀不掺
+		input.emit("data", "\x7f");
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.input).toBe("看下 /"); // 删到只剩 /：串尾 / 词仍在——菜单还开（空过滤全显）
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.input).toBe("看下 ");
+		expect(app.stateRef.overlayOpen).toBe(false); // / 词删没 → 菜单关，消息留着
+		app.stop();
+	});
+	it("② 负例：URL 的 // 与词中斜杠不触发菜单", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "见 http://x");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f".repeat("http://x".length)); // 清回「见 」
+		await flush(120);
+		input.emit("data", "a/b");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false); // 斜杠前是非空白字符 → 词内斜杠
+		app.stop();
+	});
+	it("③ Enter 调用命令：提交菜单真名 + 消息前缀保留回输入框当草稿", async () => {
+		const { app, input, submitted } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "帮我看下 /ti");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\r");
+		await flush(120);
+		expect(submitted).toEqual(["/title"]); // 调用的是命令（不是把整行当消息发）
+		expect(app.stateRef.input).toBe("帮我看下 "); // 打过的字不丢——草稿回输入框
+		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+	it("④ Tab 原地补全（前缀保留）；Esc 关菜单文本不动、续打重开", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "帮我看下 /ti");
+		await flush(120);
+		input.emit("data", "\t");
+		await flush(120);
+		expect(app.stateRef.input).toBe("帮我看下 /title");
+		expect(app.stateRef.overlayOpen).toBe(false);
+		// Esc 路径：重开后再 Esc，文本保留；继续补字母重开（与行首形态同款）
+		input.emit("data", "\x7f".repeat("/title".length)); // 清回「帮我看下 」
+		await flush(120);
+		input.emit("data", "/ti");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(app.stateRef.input).toBe("帮我看下 /ti");
+		input.emit("data", "t");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		app.stop();
+	});
+	it("⑤ 二级命令中行：入级前缀保留；选子项提交 /permission 子项 + 草稿回填", async () => {
+		const { app, input, submitted } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "消息 /pe");
+		await flush(120);
+		input.emit("data", "\r"); // Enter 入二级（/permission 有 children）
+		await flush(120);
+		expect(app.stateRef.overlayCmd).toBe("/permission");
+		expect(app.stateRef.input).toBe("消息 /permission"); // 前缀保留非裸 /permission
+		input.emit("data", "\r"); // 选当前值 ask-risky
+		await flush(120);
+		expect(submitted).toEqual(["/permission ask-risky"]);
+		expect(app.stateRef.input).toBe("消息 ");
+		app.stop();
+	});
+	it("⑥ 二级 Esc 退级回「消息 /」（前缀保留），再 Esc 关菜单文本不动", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "消息 /pe");
+		await flush(120);
+		input.emit("data", "\r");
+		await flush(120);
+		expect(app.stateRef.overlayCmd).toBe("/permission");
+		input.emit("data", "\x1b");
+		await flush(120);
+		expect(app.stateRef.overlayCmd).toBe("");
+		expect(app.stateRef.input).toBe("消息 /"); // 退级回串尾 /，不裸 "/"
+		expect(app.stateRef.overlayOpen).toBe(true); // 一级菜单仍开
+		input.emit("data", "\x1b");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(app.stateRef.input).toBe("消息 /");
+		app.stop();
+	});
+	it("⑦ submitGate 拦回车档：命令没提交、原文整体保留（草稿不回填不丢字）", async () => {
+		const r = rig(["# 你好"], 100, 30, { submitGate: () => "生成中，稍后再发" });
+		const { app, input, submitted } = r;
+		app.start();
+		await flush();
+		input.emit("data", "帮我看下 /ti");
+		await flush(120);
+		input.emit("data", "\r");
+		await flush(120);
+		expect(submitted).toEqual([]);
+		expect(app.stateRef.input).toBe("帮我看下 /ti"); // 闸门拦下：原文含 / 词整体保留
+		expect(app.stateRef.overlayOpen).toBe(false);
+		app.stop();
+	});
+	it("⑧ 写错命令零命中即关窗：退格回命中重开——行首/中行两形态", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/ti");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "z"); // /tiz 全不命中
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f"); // 退格回 /ti——菜单重开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b"); // 先关菜单再清空（菜单开着 Ctrl+A 会被 overlay 吃掉）
+		await flush(120);
+		input.emit("data", "\x01"); // Ctrl+A 全选清空，换中行形态再验一遍
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.input).toBe("");
+		input.emit("data", "看下 /ti");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "z");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		app.stop();
+	});
+	it("⑧b 有空格就关窗（2026-10-03 拍板「只要有空格就关窗」，九仓主流同款）：行首/裸斜杠/中行三形态——空格即关、退格删空格重开；argPhase 例外另见参数阶段 describe", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/ti"); // 行首命令词——开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", " "); // 空格 = 出了命令词——关（前案：/yolo aaa 菜单挂着 /yolo 不走）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(app.stateRef.input).toBe("/ti ");
+		input.emit("data", "新名字"); // 继续打参数——不再重开（含空格形态不重开）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f"); // 退格删「字」——仍含空格，关着
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f"); // 删「名」——仍关着
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f"); // 删「新」——剩「/ti 」仍关着（尾空格也算空格）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f"); // 删掉空格——回命令词形态，重开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b"); // 关菜单再清空（菜单开着 Ctrl+A 会被 overlay 吃掉）
+		await flush(120);
+		input.emit("data", "\x01");
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.input).toBe("");
+		input.emit("data", "/"); // 裸斜杠——全量列表开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", " "); // 「/ 」也关（normCmd 抹斜杠后空格的旧口径随之退役——codex「/ test」同判）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x01"); // 菜单开着按 Ctrl+A——键名串不得混入输入框（守卫修复回归钉）
+		await flush(120);
+		expect(app.stateRef.input).toBe("/");
+		input.emit("data", "\x1b"); // 关菜单再全选清空（⑧ 同款路径）
+		await flush(120);
+		input.emit("data", "\x01");
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.input).toBe("");
+		input.emit("data", "看下 /ti"); // 中行串尾词——开
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", " "); // 词尾空格（normCmd 裁尾仍算开着的旧口径退役）——关
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		input.emit("data", "\x7f");
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		app.stop();
+	});
+});
+
+describe("Esc 后继续输入重开斜杠菜单（F5 十五轮②）", () => {
+	it("'/ti' + Esc + 继续输入 → 菜单重开；非斜杠输入不重开", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		input.emit("data", "/ti");
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(true);
 		input.emit("data", "\x1b"); // Esc 关菜单（文本保留）
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(false);
-		expect(app.stateRef.input).toBe("/qu");
-		input.emit("data", "i"); // 继续补字母——菜单重开
+		expect(app.stateRef.input).toBe("/ti");
+		input.emit("data", "t"); // 继续补字母——菜单重开
 		await flush(120);
 		expect(app.stateRef.overlayOpen).toBe(true);
 		input.emit("data", "\x1b");
@@ -780,14 +1001,14 @@ describe("斜杠菜单过滤：前缀优先、含字殿后（2026-09-24 拍板�
 		app.stop();
 	});
 
-	it("③ 全不命中 → 空态「无匹配命令」", async () => {
+	it("③ 全不命中 → 菜单不显示（2026-10-03 拍板：写错命令零命中即关窗，推翻空态占位旧纪律）", async () => {
 		const r = rig();
 		const { app, input } = r;
 		app.start();
 		await flush();
 		input.emit("data", "/zz");
 		await flush(120);
-		expect(overlayLines(app).map(stripAnsi).some((l) => l.includes("无匹配命令"))).toBe(true);
+		expect(app.stateRef.overlayOpen).toBe(false); // 清单空 → 菜单关（渲染层「无匹配命令」空态分支留作异步清单收缩安全网）
 		app.stop();
 	});
 
@@ -1299,7 +1520,7 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		app.stop();
 	});
 
-	it("⑦ 菜单开着的手敲完整形态（含参数）：Enter 提交原话不走 fireSkill——参数不丢、原话可回显（2026-09-30 拍板「我输入啥就显示啥」）", async () => {
+	it("⑦ 手敲完整形态（含参数）：空格即关窗（2026-10-03 拍板），Enter 仍提交原话不走 fireSkill——参数不丢、原话可回显（2026-09-30 拍板「我输入啥就显示啥」）", async () => {
 		const injected: string[] = [];
 		const r = rig(["# hi"], 100, 30, {
 			skillItems: () => [SK("pdf", "生成 PDF 文件")],
@@ -1308,9 +1529,9 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		const { app, input, submitted } = r;
 		app.start();
 		await flush();
-		input.emit("data", "/skill : pdf 附带参数整段"); // 从 / 起整行手敲——菜单全程开着
+		input.emit("data", "/skill : pdf 附带参数整段"); // 从 / 起整行手敲——首个空格（/skill 后）即关窗
 		await flush(120);
-		expect(app.stateRef.overlayOpen).toBe(true); // 菜单没关（对照 ⑤：Tab 填形态才关）
+		expect(app.stateRef.overlayOpen).toBe(false); // 有空格就关（旧口径「全程开着」随 2026-10-03 拍板退役）
 		input.emit("data", "\r");
 		await flush(120);
 		expect(submitted).toEqual(["/skill : pdf 附带参数整段"]); // 原话整段提交（提交层解析：回显 + args 注入）
@@ -1333,7 +1554,7 @@ describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill
 		await flush(120);
 		let plain = overlayOf(app).map(stripAnsi);
 		const joined = plain.join("\n");
-		expect(app.stateRef.overlayOpen).toBe(true); // 空过滤占位不关窗（既有纪律，技能命中同理）
+		expect(app.stateRef.overlayOpen).toBe(true); // 技能有货 → 清单非空 → 照开（2026-10-03 零命中关窗只关真干净）
 		expect(joined).toContain("skill : review-pr");
 		expect(joined).not.toContain("skill : pdf"); // 不含 q 不显
 		expect(joined).not.toContain("无匹配命令"); // 技能有货不算全空

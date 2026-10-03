@@ -150,7 +150,8 @@ export function createFrame(app: FullApp) {
 		if (queueH > 0) {
 			for (let i = 0; i < queue.length; i++) {
 				const oneLine = queue[i]!.replace(/\s+/g, " ").trim(); // 单行摘要（kimi QueuePane 同形态）
-				screen[streamH + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.dim(truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
+				// 排队正文 = 用户输入的内容 → 石青 info（2026-10-03 走查拍板：灰色被否——消息是待发送的活内容不是提示）
+				screen[streamH + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.fg("info", truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
 			}
 			// 两行都 pad 到左栏宽——不补齐则右侧面板分隔线/内容左移错位（走查实锤）
 			screen[streamH + queue.length] = padToWidth(theme.dim("  ↑ 召回队尾 · Ctrl + U 立即注入本轮 · 回答结束后依序发送"), leftW);
@@ -202,7 +203,7 @@ export function createFrame(app: FullApp) {
 		const subCnt = app.io.subagentRunningCount?.() ?? 0;
 		const subHint = subagentCountHint(subCnt);
 		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}${subHint !== "" ? theme.dim(" · ") + subHint : ""}`;
-		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行 · / 命令 · Tab 面板焦点 · Esc 返回");
+		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行");
 		const hintW = leftW - 2;
 		const gap = hintW - visibleWidth(leftHint) - visibleWidth(rightHint) - 1;
 		screen[divRow + 1 + showRows] = paneIn(

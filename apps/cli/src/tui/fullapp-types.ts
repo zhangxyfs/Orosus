@@ -407,6 +407,33 @@ export function normCmd(text: string): string {
 	return text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
 }
 
+/** 中行斜杠词（2026-10-03「消息内容 空格 /」也开斜杠菜单）：串尾 / 词，词界 = 行首或空白
+ *  （与 @ 菜单词界 (?:^|\s)@ 同源）——词内含空白即不再命中（打参数菜单就关，v1 不做中行参数阶段）。
+ *  URL 的 //（http://x）斜杠前是字符非空白，不触发。start = 词起点（含 /）在原串的 index，
+ *  键位路径用它切前缀——Enter 调用命令后消息前缀保留回输入框。不命中返回 undefined。 */
+export function inlineSlashWord(text: string): { start: number; word: string } | undefined {
+	const m = /(?:^|\s)(\/\S*)$/.exec(text);
+	if (m === null) return undefined;
+	return { start: m.index + m[0].length - m[1]!.length, word: m[1]! };
+}
+
+/** 斜杠菜单开合判定：行首命令词编辑期 + 中行串尾 / 词（2026-10-03）。有空格就关（2026-10-03 拍板，
+ *  九仓主流同款——codex/ZCode/opencode/kimi/qwen/Reasonix/pi 全是空格后不再显命令列表）：空格 = 出了
+ *  命令词进参数或行文，命令列表不得赖着不走（前案 /yolo aaa 菜单挂着 /yolo 即此病）。中行词内/词尾
+ *  空白由正则天然不命中。例外（qwen/kimi/pi/Reasonix 同款）：声明了 completeArg 的命令空格后切参数
+ *  候选——两道闸（menuReopenCheck/onOverlayKey）挂 argPhase 认这个例外。 */
+export function slashMenuActive(input: string): boolean {
+	const lead = input.trimStart();
+	return (lead.startsWith("/") && !/\s/.test(lead)) || inlineSlashWord(input) !== undefined;
+}
+
+/** 斜杠菜单过滤词：行首形态取首词（旧口径不变），中行形态取串尾 / 词去 /（2026-10-03）。 */
+export function slashFilterQ(input: string): string {
+	const t = normCmd(input);
+	if (t.startsWith("/")) return t.slice(1).split(" ")[0]!.toLowerCase();
+	return inlineSlashWord(t)?.word.slice(1).toLowerCase() ?? "";
+}
+
 /** 子序列模糊命中（斜杠菜单第三档，2026-09-30 用户拍板：/skas 筛出 skill : ask——fzf/命令面板同款）：
  *  q 的字符按序散见于目标即可，不必连续。空词恒 false（已被前缀档全收，到不了这）。 */
 export function isSubseq(q: string, target: string): boolean {
