@@ -229,7 +229,16 @@ export function createFrame(app: FullApp) {
 			overlay = app.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys);
 		} else if (app.pendingUi?.kind === "view") {
 			const pu = app.pendingUi;
-			if (pu.live !== undefined) pu.lines = pu.live().split("\n"); // M4.5 T11：实时查看窗——每帧现算（滚动钳制在 build 内）
+			// live 一秒结果缓存（m5-agentview-perf T4 / D1=1000ms——与查看窗转盘秒位节拍一致）：渲染层兜底，
+			// 即使数据源侧判据失效（写入器疯狂 flush），实时窗成本也封顶 1 次/秒。缓存挂 pu 不挂闭包——
+			// keys 的 run 消费点（fullapp-keys）回新文本后能顺手失效一拍，1s 窗口内不得顶回旧帧。
+			if (pu.live !== undefined) {
+				const now = Date.now();
+				if (pu.liveCache === undefined || now - pu.liveCache.at >= 1000) {
+					pu.liveCache = { at: now, text: pu.live() };
+				}
+				pu.lines = pu.liveCache.text.split("\n"); // 实时查看窗——每帧现算（滚动钳制在 build 内）
+			}
 			overlay = app.overlay.buildViewOverlay(pu, leftW, divRow);
 		} else if (app.pendingUi?.kind === "dialog") {
 			const pu = app.pendingUi;

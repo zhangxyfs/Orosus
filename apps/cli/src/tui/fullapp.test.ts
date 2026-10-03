@@ -1140,6 +1140,38 @@ describe("弹窗 viewText（m5 T2——新几何居中弹窗 + 自定义键 + �
 		expect(b).toContain("摘要正文一行");
 		expect(b).toContain("─".repeat(90)); // full 布局（④ 同款判据：90+ 连横线）
 	});
+
+	it("⑦ live 一秒缓存（m5-agentview-perf T4）：窗口期内多帧真执行一次；run 回新文本即失效一拍（不顶回旧帧）；过 1s 恢复现算", async () => {
+		const { app, input, output } = rig();
+		app.start();
+		await flush();
+		let calls = 0;
+		let cur = "旧帧内容";
+		app.viewText("实时窗", cur, {
+			live: () => { calls++; return cur; },
+			keys: { r: { label: "刷新", run: () => { cur = "键刷新内容"; return cur; } } },
+		});
+		await flush();
+		const firstCalls = calls; // 首帧已现算（≥1）
+		expect(firstCalls).toBeGreaterThanOrEqual(1);
+		app.renderFrame();
+		app.renderFrame();
+		expect(calls).toBe(firstCalls); // 1s 龄门内——live 真执行零次（渲染层兜底：成本封顶 1 次/秒）
+		// 折叠键 run 回新文本 → 缓存失效一拍：下一帧立即现算（D1 交互——不得顶回旧帧）
+		input.emit("data", "r");
+		await flush();
+		const afterRun = calls;
+		expect(afterRun).toBe(firstCalls + 1); // run 后恰好现算一拍
+		expect(stripAnsi(output.buf)).toContain("键刷新内容");
+		// 过 1s 龄门恢复现算：数据源变化重新可见（心跳帧时点不定，断言为「有新执行」非精确计数）
+		cur = "过了一秒的内容";
+		await new Promise((r2) => setTimeout(r2, 1050));
+		app.renderFrame();
+		expect(calls).toBeGreaterThan(afterRun);
+		expect(stripAnsi(output.buf)).toContain("过了一秒的内容");
+		input.emit("data", "\x1b");
+		await flush();
+	});
 });
 
 describe("斜杠菜单技能区（m4-7 T7——原型图 1 验收点 1-4：skill : 名殿后于命令/分隔行/详释 3 行/Enter 注入；2026-09-30 增 Tab 填 /skill : 名 形态与子序列第三档）", () => {
@@ -2030,7 +2062,9 @@ describe("查看窗全屏贴底（2026-09-27 用户拍板：自动滚动到底�
 		expect(lines.some((l) => l.includes("行34"))).toBe(true); // 末页首行 = 行34（60−27 起）
 		expect(lines.some((l) => l.includes("行33"))).toBe(false);
 		body = rows(80); // live 长内容
-		await flush(1200); // 跨一个 tick 帧让 live 刷新
+		// T4（m5-agentview-perf）语义适配：live 一秒结果缓存 + tickTimer 1000ms 保底帧相位叠加——
+		// 数据源变化到屏幕可见最坏 ≈2s（龄门 1s + 下一 tick 帧 1s）。跨两个 tick 帧必见现算刷新。
+		await flush(2100);
 		lines = viewLines(app);
 		expect(lines.some((l) => l.includes("行80"))).toBe(true); // 贴底跟随到新末页
 		app.stop();
