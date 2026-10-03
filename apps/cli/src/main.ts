@@ -70,6 +70,7 @@ import { toggleResultText } from "./module-toggle-result.ts";
 import { computeMountClosure, computeUnmountClosure } from "./module-deps.ts";
 import { formatStartupError } from "./startup-error.ts";
 import { readDiagnostics, readDiagRawLines, renderDetail, moduleOf } from "./module-diagnostics.ts";
+import { atMenuEntries as atMenuEntriesHost } from "./at-menu-entries.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
@@ -1186,6 +1187,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 模块诊断弹窗数据源（T9）：打开时现读（定案）——当天 + 前一天诊断日志过滤聚合（T8 读取器）
     diagEntries: () => readDiagnostics(join(orosusHome(), "logs"), new Date()),
+    // @ 文件菜单数据源（m5-at-menu T5）：导航点现读、不缓存（atfile.ts 同目录件——tui 无 fs 纪律，
+    // 宿主供数 UI 只消费）；失败 → miss（目录不存在空态）
+    atMenuEntries: (dir) => atMenuEntriesHost(dir),
     // 二级详情文本（T10）：T8 条目 + 原始日志行（本模块事件 + 点名本模块的事件——主犯拖累反查）拼装
     diagDetail: (name: string): string => {
       const now = new Date();
