@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi } from "./tui/width.ts";
@@ -107,7 +107,178 @@ export function renderAgentView(entry: SubagentRosterEntry, events: readonly { t
   const busy = entry.status === "queued" || entry.status === "running";
   const frame = SPIN_FRAMES[Math.floor(Date.now() / 1000) % SPIN_FRAMES.length]!;
   const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", "正在生成…") : "";
-  return [head, ...dm.frameLines(width), ...(tail !== "" ? [tail] : [])].join("\n");
+  return [head, ...dm.frameLines(width), ...(tail !== "" ? [tail] : "")].join("\n");
+}
+
+/**
+ * 查看窗增量渲染器（m5-agentview-perf T2）：把「每帧全量读盘 + 全量 JSON 解析 + 新建 DocModel 回放」
+ * 换成「文件没变不重读、变了只解析新增行、喂给常驻模型」——每帧成本从随总输出线性降到只跟新增量
+ * 相关（旧条目折行缓存挂条目跨帧复用，主窗同款收益）。文件判据 = mtime+size 双判（D2）；续读首行
+ * 解析失败或偏移越界 → 全量重建（D3，防文件被重写/轮转）；首屏锚定末 VIEW_EVENT_KEEP 条、之后
+ * 新增全收（D4）；不启用轮次裁剪/远区淘汰（D5）；折叠切换只击穿折叠类条目缓存（D6——DocModel
+ * 条目缓存键含折叠态，设字段自动失效）。
+ */
+export interface AgentViewIO {
+  /** 文件元信息；文件不存在返回 undefined（真盘实现 statSync 包 try）。 */
+  stat(file: string): { mtimeMs: number; size: number } | undefined;
+  /** 从字节偏移读到文件尾。offset 恒落在已消费的完整行边界上（renderer 只按完整行推进）。 */
+  readFrom(file: string, offset: number): string;
+}
+
+export interface AgentViewRenderer {
+  /** 全量文本（状态行 + 消息流 + 生成中尾行——与 renderAgentView 同形）。 */
+  render(width: number): string;
+  /** 折叠键切换（Alt+E/O/F）：改常驻模型折叠字段，条目缓存按折叠态自动击穿（D6）。 */
+  setFold(patch: Partial<AgentViewFoldState>): void;
+  /** 测试观察口：JSON.parse 累计次数（「只解析新增行」断言——debugWrapCalls 先例同款）。 */
+  readonly parseCount: number;
+  /** 测试观察口：readFrom 累计调用次数（「未变不重读」断言）。 */
+  readonly readCount: number;
+}
+
+/** 真盘 IO：statSync 双判元信息 + openSync/readSync 从偏移续读（不全量 readFileSync）。 */
+const realAgentViewIO: AgentViewIO = {
+  stat: (file) => {
+    try {
+      const s = statSync(file);
+      return { mtimeMs: s.mtimeMs, size: s.size };
+    } catch {
+      return undefined;
+    }
+  },
+  readFrom: (file, offset) => {
+    let fd: number;
+    try {
+      fd = openSync(file, "r");
+    } catch {
+      return "";
+    }
+    try {
+      const size = fstatSync(fd).size;
+      if (offset >= size) return "";
+      const buf = Buffer.alloc(size - offset);
+      let read = 0;
+      while (read < buf.length) {
+        const n = readSync(fd, buf, read, buf.length - read, offset + read);
+        if (n <= 0) break;
+        read += n;
+      }
+      return buf.subarray(0, read).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  },
+};
+
+export function createAgentViewRenderer(
+  sessionsDir: string,
+  entry: SubagentRosterEntry,
+  readEntry: () => SubagentRosterEntry,
+  locate: () => { sid: string; id: string },
+  opts?: { io?: AgentViewIO; now?: () => number },
+): AgentViewRenderer {
+  const io = opts?.io ?? realAgentViewIO;
+  const now = opts?.now ?? Date.now;
+  // 常驻模型（含折叠态——setFold 直改；entry 仅首屏快照语义，活体取数走 readEntry）；全量重建换新实例、折叠态随迁
+  let dm = new DocModel();
+  let fileState: { mtimeMs: number; size: number } | undefined;
+  let offset = 0; // 上次消费到的字节偏移（恒在完整行边界）
+  let bodyCache: { w: number; lines: string[] } | undefined; // 正文行数组缓存（键含宽度——拖宽不得复用旧折行）
+  let parseCount = 0;
+  let readCount = 0;
+
+  const rebuildModel = (): void => {
+    const fold = { thinkOpen: dm.thinkOpen, toolOpen: dm.toolOpen, errOpen: dm.errOpen };
+    dm = new DocModel();
+    dm.thinkOpen = fold.thinkOpen;
+    dm.toolOpen = fold.toolOpen;
+    dm.errOpen = fold.errOpen;
+  };
+
+  const fullRebuild = (file: string, width: number): void => {
+    const raw = io.readFrom(file, 0);
+    readCount++;
+    const events: { type: string; [k: string]: unknown }[] = [];
+    for (const l of raw.split("\n")) {
+      if (l.trim() === "") continue;
+      events.push(JSON.parse(l) as { type: string; [k: string]: unknown }); // 坏行抛错 = agentEventsFromFile 同语义
+      parseCount++;
+    }
+    rebuildModel();
+    dm.historyFrom(events.slice(-VIEW_EVENT_KEEP), width); // D4：首屏锚定末 500 条
+    offset = Buffer.byteLength(raw, "utf8"); // 全消费（含尾部残段——与旧全量读同口径）
+    bodyCache = undefined;
+  };
+
+  const render = (width: number): string => {
+    const { sid, id } = locate();
+    const file = join(sessionsDir, sid, "agents", `agents_${id}`, "agents", "session.jsonl");
+    const st = io.stat(file);
+    if (st === undefined) {
+      // 文件缺失 = 空流（agentEventsFromFile catch 同语义）；清态，文件再出现时走全量重建
+      if (fileState !== undefined) {
+        rebuildModel();
+        offset = 0;
+        bodyCache = undefined;
+      }
+      fileState = undefined;
+    } else if (fileState === undefined || st.mtimeMs !== fileState.mtimeMs || st.size !== fileState.size) {
+      if (fileState !== undefined && offset > 0 && st.size >= offset) {
+        // 增量：从上次偏移续读，只解析新增完整行；尾段无 \n 收尾 = 写入中的半行，不消费等下一帧
+        const chunk = io.readFrom(file, offset);
+        readCount++;
+        const parts = chunk.split("\n");
+        const tail = parts.pop() ?? ""; // chunk 以 \n 收尾时为 ""
+        const parsed: { type: string; [k: string]: unknown }[] = [];
+        let ok = true;
+        for (const l of parts) {
+          if (l.trim() === "") continue;
+          try {
+            parsed.push(JSON.parse(l) as { type: string; [k: string]: unknown });
+            parseCount++;
+          } catch {
+            ok = false; // D3：续读首行不是完整行（文件被重写、偏移落在行中间）→ 全量重建
+            break;
+          }
+        }
+        if (ok) {
+          if (parsed.length > 0) dm.historyFrom(parsed, width);
+          offset += Buffer.byteLength(chunk.slice(0, chunk.length - tail.length), "utf8");
+          bodyCache = undefined;
+        } else {
+          fullRebuild(file, width);
+        }
+      } else {
+        fullRebuild(file, width); // 首见 / 偏移越界（文件重写变小——D3）
+      }
+      fileState = st;
+    }
+    if (bodyCache === undefined || bodyCache.w !== width) {
+      bodyCache = { w: width, lines: dm.frameLines(width) };
+    }
+    // 活体行现算（首屏后冻结即 bug——状态行/尾行每帧取 readEntry 最新态 + 秒位帧号）
+    const e = readEntry();
+    const stat =
+      `${STATUS_TEXT[e.status]}${e.pendingApproval !== undefined ? " · 等审批" : ""} · ${e.turns} 轮` +
+      (e.error !== undefined ? ` · ${(e.error.split("\n")[0] ?? "").slice(0, 60)}` : "");
+    const head = theme.fg(STATUS_COLOR[e.status], `状态：${stat}${e.roleName !== undefined ? ` · 工种 ${e.roleName}` : ""}${e.background ? " · 后台" : ""}`);
+    const busy = e.status === "queued" || e.status === "running";
+    const frame = SPIN_FRAMES[Math.floor(now() / 1000) % SPIN_FRAMES.length]!;
+    const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", "正在生成…") : "";
+    return [head, ...bodyCache.lines, ...(tail !== "" ? [tail] : "")].join("\n");
+  };
+
+  return {
+    render,
+    setFold: (patch) => {
+      if (patch.thinkOpen !== undefined) dm.thinkOpen = patch.thinkOpen;
+      if (patch.toolOpen !== undefined) dm.toolOpen = patch.toolOpen;
+      if (patch.errOpen !== undefined) dm.errOpen = patch.errOpen;
+      bodyCache = undefined; // 行数组重算一次（折叠类条目缓存按折叠态自动击穿——D6）
+    },
+    get parseCount() { return parseCount; },
+    get readCount() { return readCount; },
+  };
 }
 
 /**
