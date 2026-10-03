@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
-import { agentEventsFromFile, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { agentEventsFromFile, createAgentViewRenderer, emptyTasksRow, loadHistoricalSubagents, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
 let dir: string | undefined;
@@ -211,3 +211,85 @@ describe("历史子代理名册（2026-09-27 拍板：不删旧数据就得能�
     const opened = renderAgentView(T({ status: "completed" }), events, 80, { thinkOpen: true, toolOpen: false, errOpen: false });
     expect(stripAnsi(opened)).toContain("思考开头标记甲"); // Alt+E 展开全文
   });
+
+describe("增量渲染器 createAgentViewRenderer（m5-agentview-perf T2：常驻模型 + mtime/size 文件判据 + 增量解析）", () => {
+  // 假盘（visiongate catalogFile 同款手法）：内存文件 + mtime 版本号，readFrom/stat 计数供增量断言
+  const mkIO = () => {
+    const files = new Map<string, { mtimeMs: number; buf: Buffer }>();
+    return {
+      files,
+      write(file: string, text: string, mtimeMs: number): void { files.set(file, { mtimeMs, buf: Buffer.from(text, "utf8") }); },
+      io: {
+        stat: (file: string) => { const f = files.get(file); return f === undefined ? undefined : { mtimeMs: f.mtimeMs, size: f.buf.length }; },
+        readFrom: (file: string, offset: number) => { const f = files.get(file); return f === undefined ? "" : f.buf.subarray(offset).toString("utf8"); },
+      },
+    };
+  };
+  const evUser = (text: string): string => JSON.stringify({ v: 1, type: "user/message", content: [{ kind: "text", text }] });
+  const evThink = (text: string): string => JSON.stringify({ v: 1, type: "assistant/message", content: [{ kind: "reasoning", text }] });
+  // 渲染器装配：sessionsDir="s" + locate 固定；假盘 key 与生产同构 join 拼出（平台分隔符一致）
+  const mkRenderer = (disk: ReturnType<typeof mkIO>, entry: SubagentRosterEntry, readEntry: () => SubagentRosterEntry) =>
+    createAgentViewRenderer("s", entry, readEntry, () => ({ sid: "main", id: "a3f9c2e1" }), { io: disk.io, now: () => 1_000_000 });
+
+  it("T2① 文件未变：二次 render 不重读盘（readFrom 计数不增）且文本全等（活体行现算、注入时钟同帧防跨秒假红）", () => {
+    const disk = mkIO();
+    const file = join("s", "main", "agents", "agents_a3f9c2e1", "agents", "session.jsonl");
+    disk.write(file, [evUser("任务一"), evUser("任务二")].join("\n") + "\n", 1000);
+    const cur = T({ status: "running" });
+    const r = mkRenderer(disk, cur, () => cur);
+    const a = r.render(80);
+    const readsAfterFirst = r.readCount;
+    expect(readsAfterFirst).toBe(1); // 首帧全量读一次
+    const b = r.render(80);
+    expect(r.readCount).toBe(readsAfterFirst); // 判据命中——不再碰盘
+    expect(b).toBe(a); // 正文引用直拼 + 活体行同帧 → 全等
+  });
+
+  it("T2② 文件追加：只解析新增行（parseCount 恰 +2）、文本含新内容、旧内容不变", () => {
+    const disk = mkIO();
+    const file = join("s", "main", "agents", "agents_a3f9c2e1", "agents", "session.jsonl");
+    disk.write(file, [evUser("旧内容一"), evUser("旧内容二"), evUser("旧内容三")].join("\n") + "\n", 1000);
+    const cur = T({ status: "running" });
+    const r = mkRenderer(disk, cur, () => cur);
+    r.render(80);
+    expect(r.parseCount).toBe(3); // 首帧 3 条全量
+    disk.write(file, [evUser("旧内容一"), evUser("旧内容二"), evUser("旧内容三"), evUser("新内容四"), evUser("新内容五")].join("\n") + "\n", 1001);
+    const text = stripAnsi(r.render(80));
+    expect(r.parseCount).toBe(5); // 只解析新增 2 行
+    expect(text.includes("新内容五")).toBe(true);
+    expect(text.includes("旧内容一")).toBe(true); // 旧条目常驻模型保留
+  });
+
+  it("T2③ 文件重写变小（size < offset）：回退全量重建——不炸、内容为新文件、全量重解析", () => {
+    const disk = mkIO();
+    const file = join("s", "main", "agents", "agents_a3f9c2e1", "agents", "session.jsonl");
+    disk.write(file, [evUser("长文件甲"), evUser("长文件乙"), evUser("长文件丙")].join("\n") + "\n", 1000);
+    const cur = T({ status: "completed" });
+    const r = mkRenderer(disk, cur, () => cur);
+    r.render(80);
+    disk.write(file, evUser("重写后的新内容").repeat(1) + "\n", 1001); // 重写变小——offset 越界
+    const text = stripAnsi(r.render(80)); // 不炸（D3 回退全量重建）
+    expect(text.includes("重写后的新内容")).toBe(true);
+    expect(text.includes("长文件甲")).toBe(false); // 旧模型作废
+    expect(r.parseCount).toBe(4); // 重建重解析：新文件 1 行
+  });
+
+  it("T2④ 折叠切换：内容变（thinkOpen 展开现全文）且零碰盘（readFrom 不增）；同档二次 render 文本全等", () => {
+    const disk = mkIO();
+    const file = join("s", "main", "agents", "agents_a3f9c2e1", "agents", "session.jsonl");
+    disk.write(file, [evUser("任务"), evThink("折叠开头标记甲。" + "中间推理。".repeat(30) + "折叠结尾标记乙。")].join("\n") + "\n", 1000);
+    const cur = T({ status: "completed" });
+    const r = mkRenderer(disk, cur, () => cur);
+    const collapsed = stripAnsi(r.render(80));
+    expect(collapsed.includes("折叠开头标记甲")).toBe(false); // 默认收起
+    const readsBeforeFold = r.readCount;
+    r.setFold({ thinkOpen: true });
+    const opened = stripAnsi(r.render(80));
+    expect(opened.includes("折叠开头标记甲")).toBe(true); // D6：内容变
+    expect(r.readCount).toBe(readsBeforeFold);             // 折叠不碰盘
+    expect(opened).not.toBe(collapsed);
+    const again = stripAnsi(r.render(80));
+    expect(again).toBe(opened); // 同档二次复用
+    expect(r.readCount).toBe(readsBeforeFold);
+  });
+});
