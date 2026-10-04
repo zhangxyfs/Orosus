@@ -68,6 +68,7 @@ export default defineModule({
 
     // 运行期闭包（会话生命周期、reload 重置、刻意不持久化——设计总览「记录与存储账本」）
     const state = { stopContinuations: 0 }; // Stop 连拦计数（新消息清零）
+    let runSeq = 0; // hooks/run runId 序（running→完成配对，T11 状态行）
     const injectionState: InjectionState = { injectedChars: 0 };
     const trustFile = cfg.trustFile ?? trustFilePath();
     const info = { sessionId: undefined as string | undefined, transcriptPath: undefined as string | undefined, cwd: process.cwd() };
@@ -85,6 +86,16 @@ export default defineModule({
       injectionState,
       // 信任门（T9）：dispatch 前现算不缓存——项目层改配置立即重新待审；无项目层恒放行
       projectTrusted: () => evaluateProjectTrust(projectFile, info.cwd, trustFile).trusted,
+      nextRunId: () => ++runSeq,
+    };
+    /** 钩子命令短名（阻断明示可辨识——T11）：首词 basename（"python3 ${DIR}/guard.py …" → "python3"）；
+     *  首词是解释器时带第二词（"python3 guard.py"）。 */
+    const hookShort = (command: string): string => {
+      const words = command.trim().split(/\s+/);
+      const base = (w: string): string => w.split(/[\/]/).pop() ?? w;
+      const first = base(words[0] ?? "");
+      if (/^(python3?|node|bash|sh|cmd|pwsh|npx)$/i.test(first) && words[1] !== undefined) return `${first} ${base(words[1])}`;
+      return first;
     };
     const enqueue = (event: HookEvent, texts: string[]): void => {
       if (texts.length === 0) return;
@@ -117,8 +128,11 @@ export default defineModule({
         tool_use_id: p.callId,
         ...(p.subagent !== undefined ? { agent_id: p.subagent.agentId, agent_type: p.subagent.label } : {}), // D18：载荷带身份
       };
-      const r = await dispatchEvent("PreToolUse", p.name, specific, dctx);
-      if (r.veto !== undefined) return { deny: true, reason: `钩子拦截：${r.veto.reason}` };
+      const r = await dispatchEvent("PreToolUse", p.name, specific, dctx, p.subagent?.agentId);
+      if (r.veto !== undefined) {
+        const by = r.veto.hook !== undefined ? `（${hookShort(r.veto.hook)}）` : "";
+        return { deny: true, reason: `钩子拦截${by}：${r.veto.reason}` };
+      }
       if (r.updatedInput !== undefined && p.args !== r.updatedInput) {
         await ctx.session.append("hooks/input-rewrite", { callId: p.callId, from: p.args, to: r.updatedInput }); // 修订账（append-only）
         (p as { args?: unknown }).args = r.updatedInput; // 引用判变 → T1 入参门重校验+重解+重走审批
@@ -137,7 +151,7 @@ export default defineModule({
         tool_use_id: p.callId,
         ...(p.subagent !== undefined ? { agent_id: p.subagent.agentId, agent_type: p.subagent.label } : {}),
       };
-      return dispatchEvent(event, p.name, specific, dctx).then((r) => { enqueue(event, r.injections); });
+      return dispatchEvent(event, p.name, specific, dctx, p.subagent?.agentId).then((r) => { enqueue(event, r.injections); });
     });
 
     // UserPromptSubmit：整条拒收（deny）与 additionalContext → contextNotes（T2 通道直推 steering，
@@ -150,7 +164,12 @@ export default defineModule({
         const p = payload as { text: string; images?: string[]; contextNotes: string[] };
         const specific: Record<string, unknown> = { prompt: p.text, ...(p.images !== undefined ? { images: p.images } : {}) };
         const r = await dispatchEvent("UserPromptSubmit", undefined, specific, dctx);
-        if (r.veto !== undefined) return { deny: true, reason: r.veto.reason };
+        if (r.veto !== undefined) {
+          // T11 阻断明示（qwen 形态）：被拒的输入必须让用户看得见——钩子名 + 理由 + 原文首行摘要
+          const by = r.veto.hook !== undefined ? `（${hookShort(r.veto.hook)}）` : "";
+          const firstLine = p.text.split("\n")[0]!.slice(0, 40);
+          return { deny: true, reason: `钩子${by}拦截：${r.veto.reason}｜被拒原文「${firstLine}${p.text.length > 40 ? "…" : ""}」` };
+        }
         for (const injection of r.injections) p.contextNotes.push(injection);
         return undefined;
       });

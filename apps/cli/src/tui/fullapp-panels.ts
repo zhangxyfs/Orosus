@@ -128,6 +128,9 @@ export function createPanels(app: FullApp) {
 		// 挂起 = 等用户操作，不是在生成；浮层自带操作页脚，尾行回退待命态）
 		if (app.pendingUi !== undefined) return theme.dim("正在待命");
 		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
+		// 钩子运行中（m5-hooks T11/D20）：灰字显形 ≥300ms 才到这（数据源防闪屏）；busy 期同样顶替——
+		// 工具钩子并进本行不另设行（cc 形态 N/M 计数在文案里）
+		if (s.hookStatus !== undefined) return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", s.hookStatus)}`;
 		if (s.busy) {
 			if (s.compacting) {
 				// 压缩期（2026-09-23 用户拍板）：石青（info）色专属文案——与 turn 生成的「正在生成…」区分

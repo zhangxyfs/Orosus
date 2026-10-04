@@ -94,7 +94,7 @@ describe("工具三事件接线（m5-hooks T6——真实 harness + 真实子进
     await h.prompt("干活");
     const events = await h.history();
     const result = events.find((e) => e.type === "tool/result") as { output?: string; denied?: boolean };
-    expect(result?.output).toContain("钩子拦截：不许跑");
+    expect(result?.output).toContain("钩子拦截（cat）：不许跑"); // T11 阻断明示：带钩子来源可辨识
     expect(result?.denied).toBe(true);
     expect(executed).toEqual([]);
     const run = events.find((e) => e.type === "hooks/run") as Record<string, unknown>;
@@ -237,8 +237,9 @@ command = "sleep 4"
     await h.prompt("干活");
     expect(executed).toEqual(["orig"]);
     expect(Date.now() - t0).toBeLessThan(3500); // 超时被杀没拖满 4s
-    const run = (await h.history()).find((e) => e.type === "hooks/run") as Record<string, unknown>;
-    expect(run?.status).toBe("timeout");
+    const runs = (await h.history()).filter((e) => e.type === "hooks/run") as Record<string, unknown>[];
+    expect(runs.some((r) => r.status === "running")).toBe(true); // ≥300ms 显形账（T11 状态行数据源）
+    expect(runs.some((r) => r.status === "timeout")).toBe(true);
     await h.close();
   });
 
@@ -664,3 +665,93 @@ describe("信任门原语（m5-hooks T9 unit）", () => {
     expect(trustFilePath()).toContain(join("hooks", "hooks-trust.json"));
   });
 });
+
+describe("阻断明示与顺序回归钉（m5-hooks T11）", () => {
+  it("① 提交阻断明示（qwen 形态）：钩子名 + 理由 + 被拒原文首行摘要（长文截 40 + 省略号）", async () => {
+    const { h } = await setup({
+      script: [textChunk("ok")],
+      hooksToml: `
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+command = "python3 guard.py"
+`.replace("python3 guard.py", "cat > /dev/null; echo 话题被禁 >&2; exit 2"),
+    });
+    const longText = `这条消息${"很长".repeat(25)}`;
+    await expect(h.prompt(longText)).rejects.toThrow(`钩子（cat）拦截：话题被禁｜被拒原文「${longText.slice(0, 40)}…」`); // 程序化构造——40 帽与省略号口径同源
+    await expect(h.prompt("短话")).rejects.toThrow(/钩子（cat）拦截：话题被禁｜被拒原文「短话」/);
+    await h.close();
+  });
+
+  it("② 顺序钉·改参后审批链见派生新参数：PreToolUse 改 v → tool/pre-execute 监听者收到新 approvalRule（写闸判定面）", async () => {
+    const { h } = await setup({ hooksToml: PRE_REWRITE });
+    const approvals: string[] = [];
+    h.graph().bus.on("tool/pre-execute", (p) => { approvals.push(String((p as { approvalRule?: string }).approvalRule)); }, "test-gate");
+    await h.prompt("干活");
+    expect(apporvals_safe(approvals)).toEqual(["m__t(rewritten *)"]); // 写闸只见最终参数派生的规则（T1 重解链端到端）
+    await h.close();
+  });
+
+  it("③ 顺序钉·子代理端到端（D18）：主对话配置的 PreToolUse 拦截子代理工具（hooks/run 带身份）+ PostToolUseFailure 收到子代理结果", async () => {
+    const { createHarness } = await import("@orosus/core");
+    const toolSubagent = (await import("@orosus/tool-subagent")).default;
+    dir = mkdtempSync(join(tmpdir(), "orosus-hooksub-"));
+    const userFile = join(dir, "config.toml").split("\\").join("/");
+    writeFileSync(join(dir, "config.toml"), `provider = "fake/m"\n\n[hooks]\nuserConfigFile = "${userFile}"\ntimeoutMs = 8000\n\n[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = "cat > /dev/null; echo 子代理不许跑 >&2; exit 2"\n\n[[hooks.PostToolUseFailure]]\n[[hooks.PostToolUseFailure.hooks]]\ncommand = "echo '{\\"additionalContext\\":\\"子代理失败善后\\"}'"\n`, "utf8");
+    const subChunk = (callId: string): Chunk[] => [
+      { type: "toolcall/argumentsDelta", callId, name: "m__t", argumentsDelta: "{}" },
+      { type: "finish", kind: "stop" },
+    ];
+    let port: import("@orosus/contracts/module").SubagentPort | undefined;
+    const consumer = fakeModule("consumer", { mounts: ["subagent"], activate(ctx) { port = ctx.subagent; } });
+    const providerMod = fakeModule("provider-fake", { activate(ctx) { ctx.provide(providerSlotKey("fake"), fakeProvider([subChunk("sc1"), textChunk("子代理结论")]).stream); } });
+    const toolMod = fakeModule("m", {
+      mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "m__t", description: "探针", parameters: z.object({}),
+          resolveExecution: async () => ({ accesses: [], approvalRule: "m__t", execute: async () => ({ output: "ran", isError: false }) }),
+        }));
+      },
+    });
+    const h = await createHarness({
+      store: new InMemorySessionStore(), cwd: dir, sessionsDir: join(dir, "sessions"), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [providerMod, toolMod, toolSubagent, hooksDef, consumer],
+      config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "no-proj.toml"), catalogCacheFile: join(dir, "no-cat.json"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    const out = (await port!.spawn({ label: "钩子管得住", prompt: "去跑工具" })) as { status: string };
+    expect(out.status).toBe("completed");
+    const events = await h.history();
+    const runs = events.filter((e) => e.type === "hooks/run") as Record<string, unknown>[];
+    const denyRun = runs.find((r) => r.status === "deny");
+    expect(denyRun?.subagent).toMatch(/^[0-9a-f]{8}$/); // 转发链含身份（D18——agentId 即 8 位 hex，agents_ 前缀是目录名）
+    expect(denyRun?.reason).toBe("子代理不许跑");
+    const failureRun = runs.find((r) => r.event === "PostToolUseFailure");
+    expect(failureRun).toBeDefined(); // PostToolUseFailure 钩子收到了子代理的失败结果（拒绝即失败）
+    expect(JSON.stringify(events)).toContain("子代理失败善后");
+    await h.close();
+  });
+
+  it("④ 状态行 N/M：两枚慢钩子（sleep 0.5s）的 running 账各带 index/total（1/2、2/2）——cc 形态计数", async () => {
+    const { h } = await setup({
+      hooksToml: `
+timeoutMs = 5000
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "sleep 0.5"
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "sleep 0.5"
+`,
+    });
+    await h.prompt("干活");
+    const runs = (await h.history()).filter((e) => e.type === "hooks/run") as Record<string, unknown>[];
+    const runnings = runs.filter((r) => r.status === "running");
+    expect(runnings.map((r) => `${r.index}/${r.total}`)).toEqual(["1/2", "2/2"]);
+    expect(runs.filter((r) => r.status === "pass")).toHaveLength(2); // 都慢到显形了且正常完成
+    await h.close();
+  });
+});
+
+const apporvals_safe = (a: string[]): string[] => a; // 断言助手（直通——命名防与 approvals 变量撞）

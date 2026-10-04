@@ -187,6 +187,9 @@ export interface AppState {
 	 *  压缩是命令级动作，与 turn 生成的「正在生成…」区分。 */
 	compacting: boolean;
 	spinIdx: number;
+	/** 钩子运行中状态行文案（m5-hooks T11/D20）：hooks/run running 账驱动——≥300ms 显形（数据源侧已
+	 *  防闪屏）、多钩子带 N/M；工具钩子期并入本行（不另设行——工具行本就是运行态）。 */
+	hookStatus?: string | undefined;
 	sidebarVisible: boolean; // 右侧面板栏开关（Ctrl+T——用户拍板）
 	overlayOpen: boolean;
 	overlaySel: number;

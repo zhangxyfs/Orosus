@@ -248,6 +248,24 @@ export class FullApp {
 		return this.io.subagentActive?.() === true || (this.io.subagentRunningCount?.() ?? 0) > 0;
 	}
 
+	/** 钩子运行中状态行（m5-hooks T11/D20）：running 账到达即设（数据源 ≥300ms 防闪屏）、完成清；
+	 *  转帧计时器与 busy 共用（钩子可在非 busy 期跑——提交门/停止边界）。 */
+	setHookStatus(label: string | undefined): void {
+		const s = this.state;
+		if (s.hookStatus === label) return;
+		s.hookStatus = label;
+		if (label !== undefined && this.busyTimer === undefined) {
+			this.busyTimer = setInterval(() => {
+				s.spinIdx = (s.spinIdx + 1) % SPIN_FRAMES.length;
+				this.scheduler.requestRender();
+			}, 100);
+			this.busyTimer.unref?.();
+		} else if (label === undefined && !s.busy && this.busyTimer) {
+			clearInterval(this.busyTimer);
+			this.busyTimer = undefined;
+		}
+		this.scheduler.requestRender();
+	}
 	setBusy(b: boolean): void {
 		const s = this.state;
 		if (s.busy === b) return;

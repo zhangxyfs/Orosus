@@ -11,10 +11,11 @@ export interface DispatchCtx {
   permissionMode: () => Promise<string | undefined>;    // approval.current-mode 惰性消费
   injectionState: InjectionState;
   projectTrusted: () => boolean;                        // 信任门现算口（T9：false = 项目层整层跳过；无项目层恒 true）
+  nextRunId: () => number;                              // hooks/run runId 序（running→完成配对——T11 状态行）
 }
 
 export interface DispatchResult {
-  veto?: { deny: true; reason: string };  // waterfall deny（调用方原样返回）
+  veto?: { deny: true; reason: string; hook?: string }; // waterfall deny（hook = 拦截者命令短名——T11 阻断明示可辨识）
   updatedInput?: unknown;                 // PreToolUse 改参（末次生效——串行链上后写的赢）
   allowed?: boolean;                      // 任一钩子明示 permissionDecision:"allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）
   injections: string[];                   // 过闸后的注入正文（mergeInjections 由调用方决定时机）
@@ -34,7 +35,7 @@ export function basePayload(event: HookEvent, info: { sessionId: string | undefi
 /** 串行执行 + deny 粘滞短路（D9：首个 deny 后不再跑后续钩子；两层序用户层在前已在编译时合并）。
  *  fail-open 铁律：error/timeout 不阻断主流程——hooks/run 落账 + warn 后继续下一个钩子。
  *  allow 在 PreToolUse 无升档效力（D8）——本层不产出任何放行承诺，升档只走 T8 PermissionRequest。 */
-export async function dispatchEvent(event: HookEvent, matchValue: string | undefined, specific: Record<string, unknown>, dctx: DispatchCtx): Promise<DispatchResult> {
+export async function dispatchEvent(event: HookEvent, matchValue: string | undefined, specific: Record<string, unknown>, dctx: DispatchCtx, subagentId?: string): Promise<DispatchResult> {
   const result: DispatchResult = { injections: [] };
   const tables = dctx.config.tables[event] ?? [];
   if (tables.length === 0) return result;
@@ -42,7 +43,15 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
   const info = dctx.sessionInfo();
   const permissionMode = event === "SessionStart" ? undefined : await dctx.permissionMode().catch(() => undefined);
   const base = basePayload(event, info, permissionMode);
-  const subagent = (specific["subagent"] as { agentId?: string } | undefined) ?? undefined;
+  const subagentIdUsed = subagentId ?? (specific["subagent"] as { agentId?: string } | undefined)?.agentId; // 转发链身份（D18）——hooks/run 审计与 stdin 载荷共用
+  // N/M 计数（cc 形态，T11）：先预扫本事件将跑的钩子总数（信任门/matcher/停用同款过滤）
+  let total = 0;
+  for (const t of tables) {
+    if (t.origin === "project" && !dctx.projectTrusted()) continue;
+    if (matchValue !== undefined && !t.match(matchValue)) continue;
+    for (const h of t.hooks) if (h.disabled !== true) total++;
+  }
+  let index = 0;
   for (const table of tables) {
     // 信任门（T9）：项目层未过 sha256 审查整层不执行（用户层不受影响）；dispatch 前现算（改配置立即待审）
     if (table.origin === "project" && !dctx.projectTrusted()) {
@@ -53,18 +62,24 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
     if (matchValue !== undefined && !table.match(matchValue)) continue;
     for (const hook of table.hooks) {
       if (hook.disabled === true) continue; // /settings e 键停用位——跳过不执行（配置保留，审计零账）
+      index++;
+      const runId = dctx.nextRunId();
       const timeoutMs = hook.timeoutSec !== undefined && hook.timeoutSec > 0 ? hook.timeoutSec * 1000 : dctx.config.timeoutMs;
       let outcome: HookOutcome;
       try {
-        outcome = await dctx.run(hook.command, { ...base, ...specific }, { timeoutMs, projectDir: info.cwd });
+        outcome = await dctx.run(hook.command, { ...base, ...specific }, {
+          timeoutMs, projectDir: info.cwd,
+          // T11/D20 状态行：≥300ms 显形一条 running 账（快钩子零显形；宿主据此亮「正在运行钩子…」尾行）
+          onSlow: () => { void dctx.append("hooks/run", { runId, event, hook: hook.command, status: "running", index, total }); },
+        });
       } catch (err) {
         // runHook 永不 reject——此网只接执行器自身 bug；按 fail-open 收账继续
         outcome = { kind: "error", message: `执行器异常：${String(err instanceof Error ? err.message : err)}`, stdout: "", stderr: "", durationMs: 0 };
       }
       await dctx.append("hooks/run", {
-        event, hook: hook.command,
+        runId, event, hook: hook.command,
         ...(table.matcherSource !== undefined ? { matcher: table.matcherSource } : {}),
-        ...(subagent !== undefined ? { subagent: subagent.agentId } : {}),
+        ...(subagentIdUsed !== undefined ? { subagent: subagentIdUsed } : {}),
         status: outcome.kind,
         ...("reason" in outcome && outcome.reason !== undefined ? { reason: outcome.reason } : {}),
         ...("message" in outcome ? { detail: outcome.message } : {}),
@@ -72,7 +87,7 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       });
       if (outcome.kind === "deny") {
         // 串行短路：首个 deny 即终局（ZCode 同款）；deny 理由明示给模型（工具行 Error 形态）与用户（toast）
-        return { ...result, veto: { deny: true, reason: outcome.reason } };
+        return { ...result, veto: { deny: true, reason: outcome.reason, hook: hook.command } };
       }
       if (outcome.kind === "error" || outcome.kind === "timeout") {
         dctx.log.warn("hooks.run.nonblocking", `钩子非阻塞失败（fail-open 继续）`, { event, hook: hook.command, status: outcome.kind });
@@ -82,12 +97,12 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       if (decision === undefined) continue;
       if (decision.permissionDecision === "deny") {
         const reason = decision.reason ?? "钩子拦截（JSON deny，未给理由）";
-        return { ...result, veto: { deny: true, reason } };
+        return { ...result, veto: { deny: true, reason, hook: hook.command } };
       }
       if (decision.decision === "block") {
         // Stop 面：decision block + stopReason/reason（Claude Stop hook 同名形态）
         const reason = decision.stopReason ?? decision.reason ?? "钩子要求继续（未给理由）";
-        return { ...result, veto: { deny: true, reason } };
+        return { ...result, veto: { deny: true, reason, hook: hook.command } };
       }
       // permissionDecision "allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）与
       // "ask"（语义归 T8——按无动作放行）都不折 veto

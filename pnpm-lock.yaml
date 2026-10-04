@@ -206,6 +206,9 @@ importers:
       '@orosus/testing':
         specifier: workspace:*
         version: link:../../testing
+      '@orosus/tool-subagent':
+        specifier: workspace:*
+        version: link:../tool-subagent
 
   packages/modules/mcp:
     dependencies:

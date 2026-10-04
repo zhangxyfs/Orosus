@@ -1188,7 +1188,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           contextNotes: [],
         };
         const promptVeto = await graph.bus.waterfall(CORE_POINTS.promptSubmit, promptPayload);
-        if (promptVeto) throw new Error(`钩子拦截：${promptVeto.reason}`);
+        if (promptVeto) throw new Error(promptVeto.reason); // 模块侧已组完整文案（T11 钩子名+原文摘要）——宿主不再叠前缀
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
         await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
         // user/message content 构造（M4-2.5 T5）：text part 在前、image part 引用形态在后（日志只存路径）

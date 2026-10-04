@@ -19,6 +19,7 @@
   "devDependencies": {
     "@orosus/core": "workspace:*",
     "@orosus/testing": "workspace:*",
-    "@orosus/approval": "workspace:*"
+    "@orosus/approval": "workspace:*",
+    "@orosus/tool-subagent": "workspace:*"
   }
 }

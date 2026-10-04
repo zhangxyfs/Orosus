@@ -1900,7 +1900,7 @@ describe("user/prompt-submit 提交门（m5-hooks T2）", () => {
     const h = await makeHarness({
       modules: [fakeProviderModule("fake", script), gateModule((p) => p.text.includes("危险") ? { deny: true, reason: "消息太危险" } : undefined)],
     });
-    await expect(h.prompt("危险的话")).rejects.toThrow("钩子拦截：消息太危险");
+    await expect(h.prompt("危险的话")).rejects.toThrow("消息太危险"); // T11 起宿主直传 reason——完整文案（钩子名+原文摘要）由 hooks 模块侧组
     const events = await h.history();
     expect(events.some((e) => e.type === "user/message")).toBe(false); // 消息不进上下文（Claude 拒收语义）
     expect(events.some((e) => e.type === "turn/end")).toBe(false);
@@ -1913,7 +1913,7 @@ describe("user/prompt-submit 提交门（m5-hooks T2）", () => {
 
   it("② deny 带图：图片随消息一并拒收（无 user/message 落盘）", async () => {
     const h = await makeHarness({ modules: [fakeProviderModule("fake", script), gateModule(() => ({ deny: true, reason: "连图一起拒" }))] });
-    await expect(h.prompt("带图的话", { images: [join(dir, "a.png")] })).rejects.toThrow("钩子拦截");
+    await expect(h.prompt("带图的话", { images: [join(dir, "a.png")] })).rejects.toThrow("连图一起拒");
     expect((await h.history()).some((e) => e.type === "user/message")).toBe(false);
     await h.close();
   });

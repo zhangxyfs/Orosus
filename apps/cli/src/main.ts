@@ -552,6 +552,8 @@ function attachRender(h: Harness): void {
       const extra = histRoster.entries.filter((e) => want.has(e.id) && !liveIds.has(e.id));
       return extra.length > 0 ? [...live, ...extra] : live;
     };
+  const runningHooks = new Set<number>(); // hooks/run runId 在飞集（T11 状态行配对清）
+  const hooksToasts = { untrusted: false, injectCap: false }; // 一次性提示去重（会话生命周期）
   const toolIo =
     tuiMode === "full"
       ? {
@@ -595,6 +597,28 @@ function attachRender(h: Harness): void {
         void h.graph().services.getOptional("skill.resetLoaded").then((reset) => {
           if (typeof reset === "function") (reset as () => void)();
         });
+      }
+      // 钩子运行中状态行 + 一次性提示（m5-hooks T11/D20）：running 账到达亮尾行（完成账按 runId 配对清）；
+      // skipped-untrusted / skipped-inject-cap 每会话只 toast 一次（闭包去重——reload 重建随新闭包重置）
+      if (e.type === "hooks/run") {
+        const run = e as { status?: string; runId?: number; hook?: string; index?: number; total?: number };
+        if (run.status === "running") {
+          const counting = run.total !== undefined && run.total > 1 ? `（${run.index}/${run.total}）` : "";
+          activeApp?.setHookStatus(`正在运行钩子 ${run.hook ?? ""}…${counting}`);
+          runningHooks.add(run.runId ?? -1);
+        } else if (run.runId !== undefined && runningHooks.delete(run.runId) && runningHooks.size === 0) {
+          activeApp?.setHookStatus(undefined);
+        }
+        if (run.status === "skipped-untrusted" && !hooksToasts.untrusted) {
+          hooksToasts.untrusted = true;
+          const msg = "项目层钩子未过信任门已跳过——/settings 钩子面 t 键审查后生效";
+          if (activeApp !== undefined) activeApp.showToast(msg); else notify(msg);
+        }
+        if (run.status === "skipped-inject-cap" && !hooksToasts.injectCap) {
+          hooksToasts.injectCap = true;
+          const msg = "钩子注入已达会话累计上限（64k 字符）——后续注入被跳过";
+          if (activeApp !== undefined) activeApp.showToast(msg); else notify(msg);
+        }
       }
       // 任务清单实时投影（2026-09-23 用户拍板）：载荷即全量清单，到一条改一条——不再等 turn 结束检查点。
       // panelCache 未就绪（启动历史重放先于首刷）跳过，refreshPanel 稍后自会从历史取 .at(-1)；

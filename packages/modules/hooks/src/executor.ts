@@ -146,7 +146,13 @@ export interface RunHookOpts {
   cwd?: string;
   env?: NodeJS.ProcessEnv; // 缺省 process.env——测试注入位
   shell?: ShellSpec;       // 缺省 resolveShell()——测试注入位
+  /** 运行中显形回调（T11/D20）：≥300ms 才触发（防瞬时钩子闪屏——codex HOOK_RUN_REVEAL_DELAY 同值），
+   *  完成前清除计时器（快钩子零显形）。 */
+  onSlow?: () => void;
 }
+
+/** 状态行显形延迟（ms）。 */
+export const HOOK_REVEAL_DELAY = 300;
 
 /** 单钩子执行：spawn（win32 bash 分支显式 argv、cmd/sh 分支 shell:true——tool-shell index.ts:51-52 同款）；
  *  stdin 喂一行 snake_case JSON；退出码折算 0=放行 / 2=阻断（stdout 合法 JSON 决策优先）/ 其他非零=非阻塞错误。
@@ -170,10 +176,14 @@ export function runHook(command: string, payload: Record<string, unknown>, opts:
     const out = collect(child.stdout!);
     const err = collect(child.stderr!);
     let settled = false;
+    // T11/D20 状态行显形：≥300ms 才触发 onSlow（防瞬时钩子闪屏——codex HOOK_RUN_REVEAL_DELAY 同值）；
+    // finish 统一清表（快钩子零显形），慢表先触发一次即弃
+    const slowTimer = opts.onSlow !== undefined ? setTimeout(() => { opts.onSlow!(); }, HOOK_REVEAL_DELAY) : undefined;
     const finish = (r: HookOutcome): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (slowTimer !== undefined) clearTimeout(slowTimer);
       resolveP(r);
     };
     const timer = setTimeout(() => {
