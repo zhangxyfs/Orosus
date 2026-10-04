@@ -9,6 +9,7 @@ import { defineTool, Access } from "@orosus/contracts/tool";
 import { fakeModule, fakeProvider } from "@orosus/testing";
 import { InMemorySessionStore } from "@orosus/core";
 import hooksDef from "./index.ts";
+import { projectBucketKey, projectHooksDigest, trustFilePath } from "./trust.ts";
 
 let dir: string;
 afterEach(async () => {
@@ -528,5 +529,138 @@ command = "exit 0"
     expect(result?.output).toContain("无交互环境");
     expect(executed).toEqual([]);
     await h.close();
+  });
+});
+
+describe("项目级配置与 sha256 信任门（m5-hooks T9）", () => {
+  const setupLayers = async (opts: { projectToml?: string; trustJson?: string; userToml?: string }) => {
+    const { createHarness } = await import("@orosus/core");
+    dir = mkdtempSync(join(tmpdir(), "orosus-hooktrust-"));
+    const userHooks = opts.userToml ?? `
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "echo user-ok"
+`;
+    const projectFile = join(dir, "proj-hooks.toml");
+    const trustFile = join(dir, "trust.json");
+    if (opts.projectToml !== undefined) writeFileSync(projectFile, opts.projectToml, "utf8");
+    if (opts.trustJson !== undefined) writeFileSync(trustFile, opts.trustJson, "utf8");
+    const userFile = join(dir, "config.toml").split("\\").join("/");
+    const gate = opts.projectToml !== undefined ? `\n\n[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = "proj-gate"` : "";
+    writeFileSync(join(dir, "config.toml"), `provider = "fake/m"\n\n[hooks]\nuserConfigFile = "${userFile}"\nprojectConfigFile = "${projectFile.split("\\").join("/")}"\ntrustFile = "${trustFile.split("\\").join("/")}"\n${userHooks}${gate}`, "utf8");
+    const executed: (string | undefined)[] = [];
+    const script = [toolChunk("c1", '{"v":"orig"}'), textChunk("收工"), toolChunk("c2", '{"v":"orig"}'), textChunk("再收工")]; // 两轮各一次工具调用（④ 现算测试要第二轮还有工具）
+    const providerMod = fakeModule("provider-fake", { activate(ctx) { ctx.provide(providerSlotKey("fake"), fakeProvider(script).stream); } });
+    const toolMod = fakeModule("m", {
+      mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "m__t",
+          description: "探针",
+          parameters: z.object({ v: z.string().optional() }),
+          resolveExecution: async (args: { v?: string }) => ({ accesses: [], approvalRule: "m__t", execute: async () => { executed.push(args.v); return { output: `ran:${args.v ?? ""}`, isError: false }; } }),
+        }));
+      },
+    });
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      cwd: dir,
+      sessionsDir: join(dir, "sessions"),
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [providerMod, toolMod, hooksDef],
+      config: { userFile: join(dir, "config.toml"), projectFile: join(dir, "no-proj.toml"), catalogCacheFile: join(dir, "no-cat.json"), env: {}, cliOverrides: { model: "fake/m" } },
+    });
+    return { h, executed, projectFile, trustFile, cwd: dir };
+  };
+
+  const PROJ_DENY = `
+[hooks]
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "cat > /dev/null; echo 项目层拦截 >&2; exit 2"
+`;
+
+  it("① 未信任不执行：项目层整层跳过（用户层照跑）、工具放行、hooks/run 记 skipped-untrusted", async () => {
+    const { h, executed } = await setupLayers({ projectToml: PROJ_DENY });
+    await h.prompt("干活");
+    expect(executed).toEqual(["orig"]); // 项目层 deny 被门挡下——工具放行
+    const events = await h.history();
+    const runs = events.filter((e) => e.type === "hooks/run") as Record<string, unknown>[];
+    expect(runs.some((r) => r.status === "skipped-untrusted")).toBe(true);
+    expect(runs.some((r) => r.hook === "echo user-ok" && r.status === "pass")).toBe(true); // 用户层不受门影响
+    await h.close();
+  });
+
+  it("② 信任后执行：trust 记录 digest 匹配 → 项目层 deny 生效", async () => {
+    const probe = await setupLayers({ projectToml: PROJ_DENY });
+    const digest = projectHooksDigest(probe.projectFile)!;
+    writeFileSync(probe.trustFile, JSON.stringify({ [projectBucketKey(probe.cwd)]: { digest, trustedAt: "2026-10-04T00:00:00Z" } }), "utf8");
+    await probe.h.prompt("干活");
+    const result = (await probe.h.history()).find((e) => e.type === "tool/result") as { output?: string };
+    expect(result?.output).toContain("项目层拦截");
+    expect(probe.executed).toEqual([]);
+    await probe.h.close();
+  });
+
+  it("③ 改配置 digest 变化重新待审：项目文件加表 → 旧信任记录失配 → 整层再跳过", async () => {
+    const probe = await setupLayers({ projectToml: PROJ_DENY });
+    writeFileSync(probe.trustFile, JSON.stringify({ [projectBucketKey(probe.cwd)]: { digest: projectHooksDigest(probe.projectFile)!, trustedAt: "t" } }), "utf8");
+    writeFileSync(probe.projectFile, `${PROJ_DENY}\n[[hooks.PostToolUse]]\n[[hooks.PostToolUse.hooks]]\ncommand = "exit 0"\n`, "utf8"); // 内容变（非注释）→ digest 变
+    await probe.h.prompt("干活");
+    expect(probe.executed).toEqual(["orig"]); // 失配 → 门关
+    await probe.h.close();
+  });
+
+  it("④ 每次派发前现算（不缓存）：同会话先未信任（放行）→ 写信任记录 → 下一轮项目层即生效（零 reload）", async () => {
+    const probe = await setupLayers({ projectToml: PROJ_DENY });
+    await probe.h.prompt("第一轮");
+    expect(probe.executed).toEqual(["orig"]); // 未信任
+    writeFileSync(probe.trustFile, JSON.stringify({ [projectBucketKey(probe.cwd)]: { digest: projectHooksDigest(probe.projectFile)!, trustedAt: "t" } }), "utf8");
+    await probe.h.prompt("第二轮");
+    const result = (await probe.h.history()).filter((e) => e.type === "tool/result").at(-1) as { output?: string };
+    expect(result?.output).toContain("项目层拦截"); // 现算生效——无须 reload
+    await probe.h.close();
+  });
+
+  it("⑤ 信任文件损坏容错：坏 JSON 当无记录（项目层待审——fail-closed 方向）", async () => {
+    const { h, executed } = await setupLayers({ projectToml: PROJ_DENY, trustJson: "{not json at all" });
+    await h.prompt("干活");
+    expect(executed).toEqual(["orig"]);
+    await h.close();
+  });
+
+  it("⑥ 无项目层：门不适用——零 skipped-untrusted 记录、用户层照跑", async () => {
+    const { h, executed } = await setupLayers({});
+    await h.prompt("干活");
+    expect(executed).toEqual(["orig"]);
+    const runs = (await h.history()).filter((e) => e.type === "hooks/run") as Record<string, unknown>[];
+    expect(runs.some((r) => r.status === "skipped-untrusted")).toBe(false);
+    await h.close();
+  });
+});
+
+describe("信任门原语（m5-hooks T9 unit）", () => {
+  it("⑦ canonicalJson 键序无关：同内容异序 digest 相同（嵌套递归）", async () => {
+    const { createHash } = await import("node:crypto");
+    const { canonicalJson } = await import("./trust.ts");
+    const a = canonicalJson({ b: [1, { z: 1, a: 2 }], a: "x" });
+    const b = canonicalJson({ a: "x", b: [1, { a: 2, z: 1 }] });
+    expect(a).toBe(b);
+    expect(createHash("sha256").update(a).digest("hex")).toBe(createHash("sha256").update(b).digest("hex"));
+  });
+
+  it("⑧ 盘符大小写归一：C:/x 与 c:/x 同桶（resolve+win32 toLowerCase 前置——encodeCwd 自身不归一，四轮审修口径）", async () => {
+    const { projectBucketKey } = await import("./trust.ts");
+    if (process.platform === "win32") {
+      expect(projectBucketKey("C:\Develop\Orosus")).toBe(projectBucketKey("c:\develop\orosus"));
+    } else {
+      expect(projectBucketKey("/a/b")).toBe(projectBucketKey("/a/b")); // POSIX 恒等对照
+    }
+  });
+
+  it("⑨ 信任路径缺省值：~/.orosus/hooks/hooks-trust.json（用户拍板 hooks/ 新目录）", async () => {
+    const { trustFilePath } = await import("./trust.ts");
+    expect(trustFilePath()).toContain(join("hooks", "hooks-trust.json"));
   });
 });

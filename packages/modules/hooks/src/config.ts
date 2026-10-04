@@ -25,16 +25,19 @@ export const configSchema = z.object({
   timeoutMs: z.number().int().min(1000).default(60_000).describe("全局默认超时（毫秒）"),
   userConfigFile: z.string().optional().describe("用户层配置文件路径（缺省 ~/.orosus/modules.d/hooks.toml；测试密封注入位）"),
   projectConfigFile: z.string().optional().describe("项目层配置文件路径（缺省 <cwd>/.orosus/modules.d/hooks.toml；测试密封注入位）"),
+  trustFile: z.string().optional().describe("信任记录文件路径（缺省 ~/.orosus/hooks/hooks-trust.json；测试密封注入位）"),
   ...Object.fromEntries(HOOK_EVENTS.map((e) => [e, z.array(eventTableSchema).optional().describe(`${e} 事件表`)])),
 });
 export type HooksModuleConfig = z.infer<typeof configSchema>;
 
-/** 编译产物：matcher 已编译（非法正则 → 永不匹配的哨兵 + warn——kimi「静默不匹配」可观测化）。 */
+/** 编译产物：matcher 已编译（非法正则 → 永不匹配的哨兵 + warn——kimi「静默不匹配」可观测化）；
+ *  origin 标层（信任门按层过滤——项目层未过 sha256 审查整层不执行，T9）。 */
 export interface CompiledHook {
   command: string;
   timeoutSec?: number;
 }
 export interface CompiledTable {
+  origin: "user" | "project";
   matcherSource?: string;
   match: (value: string | undefined) => boolean;
   hooks: CompiledHook[];
@@ -76,7 +79,7 @@ const readToml = (file: string): Record<string, unknown> | undefined => {
   }
 };
 
-const parseTables = (doc: Record<string, unknown> | undefined, warn: (msg: string) => void): Partial<Record<HookEvent, CompiledTable[]>> => {
+const parseTables = (doc: Record<string, unknown> | undefined, origin: "user" | "project", warn: (msg: string) => void): Partial<Record<HookEvent, CompiledTable[]>> => {
   const out: Partial<Record<HookEvent, CompiledTable[]>> = {};
   if (doc === undefined) return out;
   for (const event of HOOK_EVENTS) {
@@ -90,7 +93,7 @@ const parseTables = (doc: Record<string, unknown> | undefined, warn: (msg: strin
         continue;
       }
       const { matcherSource, match } = compileMatcher(entry.data.matcher, warn);
-      tables.push({ ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}) })) });
+      tables.push({ origin, ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}) })) });
     }
     if (tables.length > 0) out[event] = tables;
   }
@@ -110,9 +113,10 @@ export function loadHooksConfig(opts: {
 }): HooksConfig {
   const tables: Partial<Record<HookEvent, CompiledTable[]>> = {};
   if (opts.sectionHasTables) {
-    // 用户层在前、项目层追加（执行序口径：设计空白表「多钩子执行序」行）
-    for (const doc of [readToml(opts.userFile), readToml(opts.projectFile)]) {
-      const layer = parseTables(doc, opts.warn);
+    // 用户层在前、项目层追加（执行序口径：设计空白表「多钩子执行序」行）；origin 标层供信任门过滤（T9）
+    const layers: [("user" | "project"), Record<string, unknown> | undefined][] = [["user", readToml(opts.userFile)], ["project", readToml(opts.projectFile)]];
+    for (const [origin, doc] of layers) {
+      const layer = parseTables(doc, origin, opts.warn);
       for (const event of HOOK_EVENTS) {
         if (layer[event] !== undefined) tables[event] = [...(tables[event] ?? []), ...layer[event]!];
       }

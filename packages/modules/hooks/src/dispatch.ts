@@ -10,6 +10,7 @@ export interface DispatchCtx {
   sessionInfo: () => { sessionId: string | undefined; transcriptPath: string | undefined; cwd: string }; // session/start 缓存口
   permissionMode: () => Promise<string | undefined>;    // approval.current-mode 惰性消费
   injectionState: InjectionState;
+  projectTrusted: () => boolean;                        // 信任门现算口（T9：false = 项目层整层跳过；无项目层恒 true）
 }
 
 export interface DispatchResult {
@@ -37,11 +38,17 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
   const result: DispatchResult = { injections: [] };
   const tables = dctx.config.tables[event] ?? [];
   if (tables.length === 0) return result;
+  let skippedUntrusted = 0;
   const info = dctx.sessionInfo();
   const permissionMode = event === "SessionStart" ? undefined : await dctx.permissionMode().catch(() => undefined);
   const base = basePayload(event, info, permissionMode);
   const subagent = (specific["subagent"] as { agentId?: string } | undefined) ?? undefined;
   for (const table of tables) {
+    // 信任门（T9）：项目层未过 sha256 审查整层不执行（用户层不受影响）；dispatch 前现算（改配置立即待审）
+    if (table.origin === "project" && !dctx.projectTrusted()) {
+      skippedUntrusted++;
+      continue;
+    }
     // 无匹配值事件（UserPromptSubmit/Stop）：matcher 恒忽略（写了不报错——设计空白表「matcher 语义」行）
     if (matchValue !== undefined && !table.match(matchValue)) continue;
     for (const hook of table.hooks) {
@@ -96,6 +103,10 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
         }
       }
     }
+  }
+  if (skippedUntrusted > 0) {
+    // 待审留痕（每 dispatch 一条；「每会话一次 toast」由宿主侧按 status 去重——T11 接线）
+    await dctx.append("hooks/run", { event, status: "skipped-untrusted", detail: `项目层 ${skippedUntrusted} 张表未过信任门整层跳过——/settings 钩子面审查后生效` });
   }
   return result;
 }

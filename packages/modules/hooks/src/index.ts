@@ -4,6 +4,7 @@ import type { CapabilityKey } from "@orosus/contracts/module";
 import { HOOK_EVENTS, configSchema, defaultProjectConfigFile, defaultUserConfigFile, loadHooksConfig, type HookEvent } from "./config.ts";
 import { mergeInjections, runHook, capReason, type InjectionState } from "./executor.ts";
 import { dispatchEvent, type DispatchCtx } from "./dispatch.ts";
+import { evaluateProjectTrust, trustFilePath } from "./trust.ts";
 
 export { HOOK_EVENTS, configSchema, defaultProjectConfigFile, defaultUserConfigFile, loadHooksConfig } from "./config.ts";
 export { dispatchEvent, basePayload } from "./dispatch.ts";
@@ -49,11 +50,13 @@ export default defineModule({
   logEvents: ["hooks/run", "hooks/input-rewrite"],
   activate(ctx) {
     const cfg = ctx.config as z.infer<typeof configSchema>;
+    const userFile = cfg.userConfigFile ?? defaultUserConfigFile();
+    const projectFile = cfg.projectConfigFile ?? defaultProjectConfigFile(process.cwd()); // approval projectConfigFile 同款口径
     // 自读门：通用 section 出现过任一事件表才自读两份 TOML（hermetic 密封下真实 home 的配置零旁路——见 config.ts 注释）
     const compiled = loadHooksConfig({
       sectionHasTables: HOOK_EVENTS.some((e) => Array.isArray((cfg as Record<string, unknown>)[e])),
-      userFile: cfg.userConfigFile ?? defaultUserConfigFile(),
-      projectFile: cfg.projectConfigFile ?? defaultProjectConfigFile(process.cwd()),
+      userFile,
+      projectFile,
       enabled: cfg.enabled,
       timeoutMs: cfg.timeoutMs,
       warn: (msg) => { ctx.log.warn("hooks.config", msg, {}); },
@@ -65,6 +68,7 @@ export default defineModule({
     // 运行期闭包（会话生命周期、reload 重置、刻意不持久化——设计总览「记录与存储账本」）
     const state = { stopContinuations: 0 }; // Stop 连拦计数（新消息清零）
     const injectionState: InjectionState = { injectedChars: 0 };
+    const trustFile = cfg.trustFile ?? trustFilePath();
     const info = { sessionId: undefined as string | undefined, transcriptPath: undefined as string | undefined, cwd: process.cwd() };
     const injectionQueue: string[] = []; // steering 旁路队列（下个 step 首排空——prompt 永不改写）
     const dctx: DispatchCtx = {
@@ -78,6 +82,8 @@ export default defineModule({
         return mode === undefined ? undefined : String(mode);
       },
       injectionState,
+      // 信任门（T9）：dispatch 前现算不缓存——项目层改配置立即重新待审；无项目层恒放行
+      projectTrusted: () => evaluateProjectTrust(projectFile, info.cwd, trustFile).trusted,
     };
     const enqueue = (event: HookEvent, texts: string[]): void => {
       if (texts.length === 0) return;
