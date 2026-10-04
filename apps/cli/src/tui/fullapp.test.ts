@@ -313,6 +313,89 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		app.setBusy(false);
 		app.stop();
 	});
+	it("⑤bb-c 注入查看窗两层 Esc 退出不得触发双击停止（2026-10-04 用户实机：Ctrl+H 看注入全文、Esc×2 关窗后生成被停——复现钉）", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		// showInjections 同款时序（main.ts:1164）：pick 列表 → Enter 看全文（viewText 不 await）→ 循环回拍 pickOverlay FIFO 暂存
+		const entries = ["  [UserPromptSubmit] 知识注入 · 2041 字符"];
+		const pick1 = app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", entries);
+		await flush(120);
+		input.emit("data", "\r"); // Enter：开全文窗、列表解算
+		await flush(120);
+		await expect(pick1).resolves.toBe(0);
+		app.viewText("注入全文", "# 知识索引\n- 条目一", { layout: "dock" }); // 不 await——同 showInjections
+		const pick2 = app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", entries); // FIFO 顶在全文窗后
+		await flush(120);
+		// 用户关窗手势：Esc#1 关全文窗（列表顶回）、Esc#2 关列表
+		input.emit("data", "\x1b");
+		await flush(80);
+		input.emit("data", "\x1b");
+		await flush(80);
+		await expect(pick2).resolves.toBeUndefined();
+		expect(actions).toEqual([]); // 关窗 Esc 不得拼进双击停止序列——实锤复现则此处收 ["cancel"]
+		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤bb-d 关窗余震门（2026-10-04 用户实机事故修）：多层弹窗连按 Esc 关窗不得停生成；屏幕安静后双击仍可停", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		// showInjections 同款两层时序：列表 → Enter → 全文窗 + 列表 FIFO 顶回
+		const entries = ["  [UserPromptSubmit] 知识注入 · 2041 字符"];
+		const pick1 = app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", entries);
+		await flush(120);
+		input.emit("data", "\r");
+		await flush(120);
+		await expect(pick1).resolves.toBe(0);
+		app.viewText("注入全文", "# 知识索引\n- 条目一", { layout: "dock" });
+		const pick2 = app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", entries);
+		await flush(120);
+		// 用户手势：四连击关窗（全文窗 → 列表 → 惯性两拍）——窗吃两拍、余震门吃两拍
+		input.emit("data", "\x1b"); // 关全文窗（列表顶回）
+		await flush(80);
+		input.emit("data", "\x1b"); // 关列表
+		await flush(80);
+		await expect(pick2).resolves.toBeUndefined();
+		input.emit("data", "\x1b"); // 余震拍一：500ms 内被吃——不计数不提示
+		await flush(80);
+		input.emit("data", "\x1b"); // 余震拍二：同吃
+		await flush(80);
+		expect(actions).toEqual([]); // 不再误停
+		expect(app.stateRef.toast).toBeUndefined(); // 余震不弹「再按一次」邀请
+		// 屏幕安静后（余震窗过期）双击仍可停——首拍 toast、二拍真停
+		await flush(600);
+		input.emit("data", "\x1b");
+		await flush(80);
+		expect(app.stateRef.toast?.text).toContain("再按一次 Esc");
+		input.emit("data", "\x1b");
+		await flush(80);
+		expect(actions).toEqual(["cancel"]);
+		app.setBusy(false);
+		app.stop();
+	});
+	it("⑤bb-e busy 期斜杠菜单 Esc 先关菜单不喂停止计数器（2026-10-04 顺序统一：旧序菜单开着按 Esc 双击会停生成且菜单不关）", async () => {
+		const { app, input, actions } = rig();
+		app.start();
+		await flush();
+		app.setBusy(true);
+		input.emit("data", "/"); // 开斜杠菜单（busy 期照常可开）
+		await flush(120);
+		expect(app.stateRef.overlayOpen).toBe(true);
+		input.emit("data", "\x1b"); // Esc：关菜单——不再进双击停止计数器
+		await flush(80);
+		expect(app.stateRef.overlayOpen).toBe(false);
+		expect(actions).toEqual([]);
+		expect(app.stateRef.toast).toBeUndefined(); // 关窗拍无提示（busy 分支根本没进）
+		input.emit("data", "\x1b"); // 关窗后 500ms 内 = 余震——不计数不提示
+		await flush(80);
+		expect(app.stateRef.toast).toBeUndefined();
+		expect(actions).toEqual([]);
+		app.setBusy(false);
+		app.stop();
+	});
 	it("⑤bc 图片 chip 文内 token：insertAtCursor 光标位插入、restoreInput 恢复原文（2026-09-23 走查拍板）", async () => {
 		const { app, input } = rig();
 		app.start();

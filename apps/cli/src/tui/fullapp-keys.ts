@@ -8,6 +8,13 @@ import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
 
 export function createKeys(app: FullApp) {
+	/** Esc 关窗记账（2026-10-04 溢出修，用户实机事故：busy 期多层弹窗连按 Esc 关窗，尾部两拍落主窗
+	 *  拼成「双击停止」误停生成）：①清双击时戳——Tab 收焦点分支同款先例，无关 Esc 序列不得拼进停止
+	 *  判定；②记关窗时刻——busy 余震门数据源（其后 500ms 内落主窗的 Esc 视为关窗手势惯性，不计数）。 */
+	const escCloseWin = (): void => {
+		app.lastEscCancel = 0;
+		app.lastWinEscCloseAt = Date.now();
+	};
 	const onKey = (key: string): void => {
 		const s = app.state;
 		// 引导弹窗焦点锁（M4-3 T1d）：在槽期一切按键归会话——pendingUi/编辑态/busy-Esc 全部让位
@@ -174,6 +181,7 @@ export function createKeys(app: FullApp) {
 				else if (key === "pageUp") pu.scroll = Math.max(0, pu.scroll - page);
 				else if (key === "pageDown") pu.scroll = Math.min(Math.max(0, pu.lines.length - page), pu.scroll + page);
 				else if (key === "escape" || key === "enter" || key === "q") {
+					if (key === "escape") escCloseWin(); // enter/q 关窗不记余震——非 Esc 手势无连按惯性概念
 					closeView();
 				}
 				app.scheduler.requestImmediateRender();
@@ -215,6 +223,7 @@ export function createKeys(app: FullApp) {
 					}
 				}
 				if (key === "escape") {
+					escCloseWin();
 					app.pendingUi = undefined;
 					app.dialogs.promoteUi();
 				} else if (key === "tab" && ids.length > 1) {
@@ -323,6 +332,7 @@ export function createKeys(app: FullApp) {
 					pu.resolve(filtered[pu.sel]!.i); // 按携带索引结算（CTU-08——重复项不回查错位）
 					app.dialogs.promoteUi(); // 结算即提升暂存队首（批③②）
 				} else if (key === "escape") {
+					escCloseWin();
 					app.pendingUi = undefined;
 					pu.resolve(undefined);
 					app.dialogs.promoteUi();
@@ -342,6 +352,7 @@ export function createKeys(app: FullApp) {
 				pu.resolve(v);
 				app.dialogs.promoteUi();
 			} else if (key === "escape") {
+				escCloseWin();
 				app.pendingUi = undefined;
 				pu.resolve(undefined);
 				app.dialogs.promoteUi();
@@ -359,7 +370,10 @@ export function createKeys(app: FullApp) {
 			const entries = app.io.diagEntries?.() ?? [];
 			if (key === "up") s.diagSel = Math.max(0, s.diagSel - 1);
 			else if (key === "down") s.diagSel = Math.min(Math.max(0, entries.length - 1), s.diagSel + 1);
-			else if (key === "escape") s.diagOpen = false;
+			else if (key === "escape") {
+				escCloseWin();
+				s.diagOpen = false;
+			}
 			else if (key === "enter") {
 				// 二级详情（T10）：复用 viewText（翻页 + Esc 关闭——现成机制零新建）；Esc 逐级返回靠 diagReturn 标记
 				const e = entries[s.diagSel];
@@ -376,7 +390,7 @@ export function createKeys(app: FullApp) {
 		}
 
 		if (key === "escape") {
-			if (s.busy) {
+			if (s.busy && !popupFocused) {
 				// 焦点在侧栏面板（Tab 切走）时 Esc 先收焦点回输入框（2026-10-01 走查——否则被双击
 				// 停止确认截胡，用户预期与空闲态一致先回焦点）；收焦点同时打断双击序列（含 lastEscCancel
 				// 清零——与下方空闲态收尾同款，隔了一次 Tab 导航不再算连续两按）
@@ -386,9 +400,19 @@ export function createKeys(app: FullApp) {
 					app.scheduler.requestImmediateRender();
 					return;
 				}
+				// 关窗余震门（2026-10-04 用户实机事故：busy 期多层弹窗连按 Esc 关窗，尾部两拍落进
+				// 本分支拼成「双击停止」误停生成）：刚用 Esc 关过窗的 500ms 内，后续 Esc 视为关窗
+				// 手势惯性——不计数不提示。真想停：屏幕安静后再按两下（首拍照常 toast 确认）
+				if (Date.now() - app.lastWinEscCloseAt < 500) {
+					app.scheduler.requestImmediateRender();
+					return;
+				}
 				// 双击 Esc 才停止生成（2026-09-23 走查拍板——单击误触痛点；qwen-code 双击窗口
 				// CTRL_EXIT_PROMPT_DURATION_MS=1000ms 同口径，比 claude-code 的 2s 短）：
-				// 首按 toast 提示，1s 内再按才真正取消；窗口外再按重新计首按
+				// 首按 toast 提示，1s 内再按才真正取消；窗口外再按重新计首按。
+				// 前置 !popupFocused（2026-10-04）：斜杠/@ 菜单在顶上时 Esc 先归菜单（下方分支关窗），
+				// 不再「菜单开着按 Esc 不关窗直接喂计数器」——与 pendingUi/诊断窗（本块之前已归窗）和
+				// 非 busy 路径（视觉转述分支注「Esc 优先关菜单」）统一成一条原则：Esc 先关眼前的东西
 				if (Date.now() - app.lastEscCancel < 1000) {
 					app.lastEscCancel = 0;
 					s.toast = undefined; // 二次确认即消提示（走查拍板——toast 留着会误解为「还没停」）
@@ -402,12 +426,16 @@ export function createKeys(app: FullApp) {
 				return;
 			}
 			if (s.atMenu !== undefined) {
-				// at 菜单 Esc（m5-at-menu T2）：词内多级逐级回退、根上关闭——非 busy 态在斜杠菜单
-				// Esc 同级（busy 期 Esc 优先双击停生成，在上分支已截住）；onAtKey 尾部自带渲染请求
+				// at 菜单 Esc（m5-at-menu T2）：词内多级逐级回退、根上关闭——busy/非 busy 同级
+				//（2026-10-04 起 busy 不再截胡：有窗在顶 Esc 先归窗，与斜杠菜单/pendingUi 统一；
+				// 旧注「busy 期 Esc 优先双击停生成，在上分支已截住」随前置 !popupFocused 作废）；
+				// onAtKey 尾部自带渲染请求
+				escCloseWin(); // 退级拍也记账无害——菜单还开着，后续 Esc 仍归菜单；根上关闭那拍即余震门起点
 				app.at.onAtKey("escape");
 				return;
 			}
 			if (s.overlayOpen) {
+				escCloseWin(); // busy 期 Esc 归菜单关窗/退级（不再喂双击停止计数器）；关窗那拍即余震门起点，退级拍记账无害（菜单还开着，后续 Esc 仍归菜单）
 				if (s.overlayCmd !== "") {
 					// 中行形态退级回串尾 /（2026-10-03 前缀保留），行首形态回裸 /——与 fullapp-menu
 					// onOverlayKey escape 同口径（两处 Esc 都要认中行形态）
