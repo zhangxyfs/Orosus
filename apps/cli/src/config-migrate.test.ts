@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateModulesSections } from "./config-migrate.ts";
+import { HOOKS_TEMPLATE, migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 
 /** m4-8 T2：存量迁移——config.toml 里命中白名单的模块节整节剪到 modules.d/<名>.toml，
  *  搬前 .bak 备份；幂等；开关在外层（接线测试见下）；留守节与注释不动；source 节整体留守。 */
@@ -96,5 +96,53 @@ describe("存量迁移（m4-8 T2）", () => {
     writeFileSync(join(d, "config.toml"), 'provider = "p/m"\n[tui]\nsidebar = true\n', "utf8");
     const r2 = migrateModulesSections(join(d, "config.toml"), join(d, "modules.d"), ["skill"]);
     expect(r2.moved).toEqual([]);
+  });
+});
+
+describe("m5-hooks T4：hooks 注册 builtins + D21 出厂注释模板", () => {
+  it("⑤ hooks 模块注册进 BUILTIN_MODULES（required 出厂件，同 approval/compaction）+ config 写面路由 modules.d/hooks.toml", async () => {
+    const { BUILTIN_MODULES } = await import("./builtins.ts");
+    expect(BUILTIN_MODULES.some((m) => m.name === "hooks")).toBe(true);
+    const { writeSectionKey, sectionPath } = await import("@orosus/core");
+    const d = mkdtempSync(join(tmpdir(), "m48-hooks-route-"));
+    dir = d;
+    const isModule = (n: string): boolean => BUILTIN_MODULES.some((m) => m.name === n); // config-face 同款判定
+    const file = sectionPath("hooks", { isModule, userConfig: join(d, "config.toml"), modulesDir: join(d, "modules.d") });
+    expect(file).toBe(join(d, "modules.d", "hooks.toml"));
+    writeSectionKey(file, "hooks", "enabled", false);
+    const { parse } = await import("smol-toml");
+    expect(((parse(readFileSync(file, "utf8")) as Record<string, unknown>)["hooks"] as Record<string, unknown>)["enabled"]).toBe(false);
+  });
+
+  it("⑥ seedHooksTemplate：modules.d 在且 hooks.toml 缺席 → 播全注释示例（含 [hooks] 头 + 三场景注释样例）；幂等（已存在不动）；modules.d 不存在不建", () => {
+    const d = mkdtempSync(join(tmpdir(), "m48-hooks-seed-"));
+    dir = d;
+    const modulesDir = join(d, "modules.d");
+    // modules.d 不存在 → 不建不播
+    expect(seedHooksTemplate(modulesDir)).toBe(false);
+    expect(existsSync(modulesDir)).toBe(false);
+    // 建目录后播种
+    mkdirSync(modulesDir, { recursive: true });
+    expect(seedHooksTemplate(modulesDir)).toBe(true);
+    const raw = readFileSync(join(modulesDir, "hooks.toml"), "utf8");
+    expect(raw).toContain("[hooks]");
+    expect(raw).toContain("enabled = true");
+    expect(raw).toContain("#[[hooks.Stop]]"); // 注释形态（每行 # 前缀）+ [hooks] 节头包裹（modules.d 装载纪律：顶层键漏进 core）
+    expect(raw).toContain("#[[hooks.PreToolUse]]");
+    expect(raw).toContain("#[[hooks.PostToolUse]]");
+    // 幂等：再播不动
+    writeFileSync(join(modulesDir, "hooks.toml"), "[hooks]\nenabled = false\n", "utf8");
+    expect(seedHooksTemplate(modulesDir)).toBe(false);
+    expect(readFileSync(join(modulesDir, "hooks.toml"), "utf8")).toContain("enabled = false");
+  });
+
+  it("⑦ 模板是合法 TOML 且解析后零事件表（全注释示例——播种后不产生任何生效钩子）", async () => {
+    const { parse } = await import("smol-toml");
+    const doc = parse(HOOKS_TEMPLATE) as Record<string, unknown>;
+    const parsed = doc["hooks"] as Record<string, unknown>; // 节体在 [hooks] 下
+    expect(parsed).toMatchObject({ enabled: true, timeoutMs: 60000 });
+    for (const e of ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "PermissionRequest"]) {
+      expect(parsed[e]).toBeUndefined();
+    }
   });
 });

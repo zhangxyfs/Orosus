@@ -72,6 +72,45 @@ const isStaySection = (section: string): boolean => {
   return STAY_SECTIONS.includes(head);
 };
 
+/** Hooks 出厂注释示例模板（m5-hooks T4 / D21，Reasonix example 先例）：modules.d 已存在的机器上
+ *  hooks.toml 缺席时播种一份全注释示例（无任何生效键——首键 [hooks] 头保持 writeSectionKey 行级写兼容）。
+ *  幂等：文件已存在（含 sectionPath 首写的裸 [hooks] 壳）不动。 */
+export const HOOKS_TEMPLATE = `# Hooks 生命周期钩子（docs/hooks.md 是完整协议参考）
+# 七事件：SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PostToolUseFailure / Stop / PermissionRequest
+# 协议与 Claude Code 兼容：stdin 收一行 snake_case JSON；退出码 0=放行 2=阻断（stderr=理由）；stdout 可回 JSON 决策
+# 项目层 .orosus/modules.d/hooks.toml 首次生效前须经 /settings 钩子面审查（sha256）
+[hooks]
+enabled = true
+timeoutMs = 60000
+
+# ── 场景一：完成后桌面通知（Stop）──
+#[[hooks.Stop]]
+#[[hooks.Stop.hooks]]
+#command = "sh -c 'echo 代理已停 | wall' "
+
+# ── 场景二：写后自动格式化（PostToolUse）──
+#[[hooks.PostToolUse]]
+#matcher = "^fs__write$"
+#[[hooks.PostToolUse.hooks]]
+#command = "npx prettier --write \\"\${OROSUS_PROJECT_DIR}/src\\""
+
+# ── 场景三：敏感命令拦截（PreToolUse）──
+#[[hooks.PreToolUse]]
+#matcher = "shell__bash"
+#[[hooks.PreToolUse.hooks]]
+#command = "python3 \\"\${OROSUS_PROJECT_DIR}/scripts/guard.py\\""
+#timeout = 30
+`;
+
+/** 播种 hooks.toml 注释示例：modulesDir 存在且 hooks.toml 缺席才写（缺席 modulesDir 不建——不给全新机器平添目录）。 */
+export function seedHooksTemplate(modulesDir: string): boolean {
+  if (!existsSync(modulesDir)) return false;
+  const target = join(modulesDir, "hooks.toml");
+  if (existsSync(target)) return false;
+  writeFileSync(target, HOOKS_TEMPLATE, "utf8");
+  return true;
+}
+
 export function migrateModulesSections(configPath: string, modulesDir: string, knownModuleNames: string[]): MigrateResult {
   if (!existsSync(configPath)) return { moved: [] };
   const raw = stripBom(readFileSync(configPath, "utf8"));

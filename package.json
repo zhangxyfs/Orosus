@@ -22,6 +22,7 @@
     "@orosus/compaction": "workspace:*",
     "@orosus/contracts": "workspace:*",
     "@orosus/core": "workspace:*",
+    "@orosus/hooks": "workspace:*",
     "@orosus/mcp": "workspace:*",
     "@orosus/provider-custom": "workspace:*",
     "@orosus/testing": "workspace:*",

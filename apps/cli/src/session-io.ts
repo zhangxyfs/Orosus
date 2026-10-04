@@ -5,7 +5,7 @@ import type { Harness, SessionEvent } from "@orosus/core";
 import type { CommandUi, HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { registerToolLabels, renderHistoryLines, historyPage } from "./render.ts";
-import { migrateModulesSections } from "./config-migrate.ts";
+import { migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 import { extractImageRefs } from "./paste.ts";
 import { SKILL_MARK_RE } from "./skills-ui.ts";
 import type { CliArgs } from "./args.ts";
@@ -67,6 +67,11 @@ export const createSession = async (deps: SessionDeps, extra: { fork?: { parentS
         migrateModulesSections(cfg, modDir, knownNames);
       } catch (err) {
         console.error(`[迁移跳过] ${cfg}：${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (modDir === join(orosusHome(), "modules.d")) {
+        try {
+          seedHooksTemplate(modDir); // m5-hooks D21：用户层播种注释示例（幂等；项目层不播）
+        } catch { /* 播种失败零影响——docs/hooks.md 与 /settings 空态是并列指引 */ }
       }
     }
   }

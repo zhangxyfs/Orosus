@@ -39,12 +39,12 @@ const isolated = (over: { userToml?: string; commandUi?: CommandUi } = {}) => {
 };
 
 describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生态的配合闭环）", () => {
-  it("builtinModules 十六模块进图（会话树批 session-tree / M4.5 tool-subagent / m5-media tool-media 入图）；tool-search 默认开（2026-09-30 拍板翻转——预装批承重墙）", async () => {
+  it("builtinModules 十七模块进图（会话树批 session-tree / M4.5 tool-subagent / m5-media tool-media / m5-hooks hooks 入图）；tool-search 默认开（2026-09-30 拍板翻转——预装批承重墙）", async () => {
     const h = await isolated();
     const audit = h.graph().audit();
     expect(audit).toHaveLength(BUILTIN_MODULES.length);
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "mcp", "provider-custom", "session-tree", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-media", "tool-search", "tool-shell", "tool-subagent", "tool-todo", "tool-web"],
+      ["approval", "compaction", "hooks", "mcp", "provider-custom", "session-tree", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-media", "tool-search", "tool-shell", "tool-subagent", "tool-todo", "tool-web"],
     );
     // SW-26 语义不变只翻默认：关态 = enabled:false 显式（isolated 无 tool-search 配置 → 默认开 active；meta 工具在场）
     expect(audit.find((a) => a.name === "tool-search")?.state).toBe("active");

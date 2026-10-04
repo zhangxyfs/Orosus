@@ -12,6 +12,7 @@ import { mcpDef } from "@orosus/mcp";
 import skill from "@orosus/skill";
 import approval from "@orosus/approval";
 import compaction from "@orosus/compaction";
+import hooks from "@orosus/hooks";
 import toolSubagent from "@orosus/tool-subagent";
 import toolMedia from "@orosus/tool-media";
 
@@ -35,6 +36,7 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   skill,
   approval,
   compaction,
+  hooks, // m5-hooks：七事件生命周期钩子（shell 命令 + 项目层 sha256 信任门 + 注入三道闸）
   toolSubagent, // M4.5 子代理批：spawn/tasks/stop 派活工具族
   toolMedia, // m5-media：媒体策略/读图/媒体工具族（F9/F10/F12）
 ];

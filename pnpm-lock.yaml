@@ -23,6 +23,9 @@ importers:
       '@orosus/core':
         specifier: workspace:*
         version: link:packages/core
+      '@orosus/hooks':
+        specifier: workspace:*
+        version: link:packages/modules/hooks
       '@orosus/mcp':
         specifier: workspace:*
         version: link:packages/modules/mcp
@@ -77,6 +80,9 @@ importers:
       '@orosus/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@orosus/hooks':
+        specifier: workspace:*
+        version: link:../../packages/modules/hooks
       '@orosus/mcp':
         specifier: workspace:*
         version: link:../../packages/modules/mcp
