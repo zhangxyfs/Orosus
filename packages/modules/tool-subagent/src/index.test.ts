@@ -81,9 +81,9 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     const { dirs } = tmpDirs();
     const port = stubPort();
     const [spawnTool] = subagentTools(port, dirs);
-    expect(spawnTool!.description).toContain("自动送回"); // 反轮询引导（2026-09-27 拍板）
-    expect(spawnTool!.description).toContain("不要轮询");
-    expect(spawnTool!.description).toContain("写闸"); // 2026-10-01 实机：Bash 型后台子代理持整仓闸时主对话 Bash 被拦——指引并行走只读工具
+    expect(spawnTool!.description).toContain("delivered"); // 反轮询引导（2026-09-27 拍板）
+    expect(spawnTool!.description).toContain("do not poll");
+    expect(spawnTool!.description).toContain("write gate"); // 2026-10-01 实机：Bash 型后台子代理持整仓闸时主对话 Bash 被拦——指引并行走只读工具
     const out = await exec(spawnTool!, { description: "批量总结", prompt: "总结 {{item}} 文件", items: ["甲", "乙"] });
     expect(out.isError).toBe(false);
     expect(port.calls.length).toBe(2);
@@ -203,9 +203,9 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     const port = stubPort();
     const [spawnTool] = subagentTools(port, dirs);
     // 判据句（kimi 定式）+ 三禁（qwen 收窄到我们机制：禁猜/禁替身/禁轮询）
-    expect(spawnTool!.description).toContain("前台");
-    expect(spawnTool!.description).toContain("另派");
-    expect(spawnTool!.description).toContain("编造");
+    expect(spawnTool!.description).toContain("foreground");
+    expect(spawnTool!.description).toContain("another sub-agent");
+    expect(spawnTool!.description).toContain("fabricate");
     // 后台单子：返回行带教育句（ZCode 定式——教模型的话写在返回值里，出现在刚发起后台的那一轮）
     const bgPort = stubPort({ spawn: async (req) => { bgPort.calls.push(req); return { id: "dddd4444" }; } });
     const [bgTool] = subagentTools(bgPort, dirs);

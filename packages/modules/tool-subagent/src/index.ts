@@ -11,8 +11,16 @@ export { defaultRoleDirs, loadRoles, parseRoleFile, type RoleDirs, type RoleFile
 /** 一张任务清单的最多条数（决策 5——内核并发上限 8 与清单上限 128 是两件事：128 是申报、8 是同时跑）。 */
 export const SUBAGENT_LIST_MAX = 128;
 
-/** 派活工具说明（决策 5 / 设计空白权威文本——三处引用同一份，勿散抄）。v2（m4-6 T1）：前后台判据句（kimi 定式）+ 后台三禁（qwen 收窄到我们机制）。v3（2026-10-01 实机教训）：写闸联动句——带 Bash/写工具未报备的子代理占整仓闸，它在跑时主对话自己的 Bash 会被拦，指引模型把「另有独立工作」落到只读工具上。 */
-const SPAWN_GUIDANCE = "派出独立上下文的子代理，只返回最终结论。任务书自包含。相互独立的任务并行派出：一次至少 2 个、最多 8 个，按任务量自行判断。要写文件的子代理必须报备 writePaths。\n前台还是后台：下一步需要它的结论才能继续就不传 background（前台，结论当场返回）；它跑着期间你另有独立工作可做才传 background。注意写闸：带 Bash 或写工具而未报备 writePaths 的子代理占整仓写报备，它在跑时你自己的 Bash 调用会被拦——这期间的独立工作请用 Grep/Read/Glob 等只读工具（只读不进闸）。不要后台发起后立刻干等它——轮询任务列表、休眠、反复查进度都算；需要结论就直接前台。\n后台三禁：后台子代理跑完，结论以系统送回行自动送回对话——送回行没到就是还在跑；不要自己预测或编造结论，不要另派一个子代理重跑同一任务，不要轮询任务列表等进度。";
+/** 批量清单下限 = 「一次至少 N 个」的并行下界；单发（不给 items）不受此限。 */
+export const SUBAGENT_LIST_MIN = 2;
+
+/** 双写：core/subagent/constants.ts:5 同名同值（宿主并发位上限）——改那边同步改这（@orosus/core 仅 devDep，不进运行时依赖面）。 */
+const SUBAGENT_CONCURRENCY = 8;
+
+/** 派活工具说明（决策 5 / 设计空白权威文本——三处引用同一份，勿散抄）。v2（m4-6 T1）：前后台判据句（kimi 定式）+ 后台三禁（qwen 收窄到我们机制）。v3（2026-10-01 实机教训）：写闸联动句。v4.2b（2026-10-04 m5-tool-lang）：整段英文化——措辞对齐九仓参照表、指名按 §2.0 全名制（tool-fs__read 等）、数字走常量插值（SUBAGENT_LIST_MIN/SUBAGENT_CONCURRENCY，防与 runner 报错脱钩）。 */
+const SPAWN_GUIDANCE = `Launch sub-agents to run tasks in their own independent context; each returns only its final conclusion. The task brief must be self-contained. Launch independent tasks in parallel — at least ${SUBAGENT_LIST_MIN} and at most ${SUBAGENT_CONCURRENCY} per call; judge by the workload. Any sub-agent that will write files must declare writePaths.
+Foreground or background: if your next step needs its conclusion before you can continue, do NOT run it in background (foreground returns the conclusion on the spot); run it in background only when you have other independent work to do meanwhile — you will be notified automatically when it completes. Mind the write gate: a sub-agent carrying tool-shell__bash or write tools (e.g. tool-fs__write / tool-fs__edit) without declared writePaths occupies the whole-repo write reservation — while it runs, your own tool-shell__bash calls are blocked. Do your independent work in that period with read-only tools such as tool-fs__read / tool-fs__grep / tool-fs__glob (read-only calls never enter the gate). Never launch a background sub-agent and then just idle waiting for it — polling tool-subagent__tasks, sleeping, or repeatedly checking progress all count as waiting; if you need the conclusion, go foreground directly.
+Three prohibitions for background: when a background sub-agent finishes, its conclusion is delivered back into this conversation automatically by a system delivery line — if the delivery line has not arrived, it is still running. Do not predict or fabricate its conclusion yourself; do not launch another sub-agent to redo the same task; do not poll tool-subagent__tasks waiting for progress.`;
 
 const STATUS_TEXT: Record<SubagentOutcome["status"], string> = { completed: "完成", failed: "失败" };
 
@@ -41,7 +49,7 @@ const fmtOutcome = (o: SubagentOutcome): string => {
 /** 批量三校验（决策 18）：任务书必含 {{item}}；展开互异；清单至少 2 条（上限 128 由 schema .max 拦）。 */
 const expandBatch = (prompt: string, items: string[]): { ok: true; prompts: string[] } | { ok: false; error: string } => {
   if (!prompt.includes("{{item}}")) return { ok: false, error: `批量派活的任务书必须含 {{item}} 占位符（当前任务书没有——每条单子按条目名展开）` };
-  if (items.length < 2) return { ok: false, error: `批量清单至少 2 条（当前 ${items.length} 条）——单发不要给 items` };
+  if (items.length < SUBAGENT_LIST_MIN) return { ok: false, error: `批量清单至少 ${SUBAGENT_LIST_MIN} 条（当前 ${items.length} 条）——单发不要给 items` };
   if (new Set(items).size !== items.length) {
     const dup = items.find((i, idx) => items.indexOf(i) !== idx)!;
     return { ok: false, error: `清单条目须互异（"${dup}" 重复——展开后的任务书会一模一样）` };
@@ -73,13 +81,13 @@ export function subagentTools(port: SubagentPort, dirsOf: DirsOf, log?: (code: s
         // MV-07：describe 承诺的「≤60 字符」落进校验层（原仅文案无 .max，超限静默通过撑长状态行/送回行）。
         // 契约层 SubagentSpawnRequest.label 是「建议」级——本工具面从建议升格为硬界，带内拒话术指路压缩
         description: z.string().min(1).max(60, { message: "简述超过 60 字符上限——它是状态行/任务列表/送回行的显示名，压缩到一句话（任务细节写进 prompt）" })
-          .describe("简述（≤60 字符——状态行 / 任务列表 / 送回行的显示名）"),
-        prompt: z.string().min(1).describe("任务书——自包含（子代理看不到本对话，除非 forkFrom）。批量时每条按 {{item}} 展开"),
-        items: z.array(z.string().min(1)).max(SUBAGENT_LIST_MAX).optional().describe(`批量清单（2-${SUBAGENT_LIST_MAX} 条、条目互异；任务书须含 {{item}}）`),
-        role: z.string().optional().describe("工种名：research（只读调研）/ general（通用，缺省）/ 工种文件自定义名"),
-        background: z.boolean().optional().describe("true = 后台跑：立即返回编号，跑完结论自动送回对话——仅当你另有独立工作可做时用；需要结论才能继续就别传（前台当场返回）"),
-        forkFrom: z.boolean().optional().describe("true = 带上主对话聊天记录到当前为止（「照上面聊的做 X」）"),
-        writePaths: z.array(z.string().min(1)).optional().describe("要写文件的子代理必须报备的写路径（相对工作目录；目录含其下一切）——给了则以本参数为准（压过工种预声明）"),
+          .describe("A short description of the task (≤60 chars — display name in the status line / task list panel / delivery line)"),
+        prompt: z.string().min(1).describe("The task for this sub-agent to perform — the full, self-contained brief: the sub-agent starts with no context from this conversation (unless forkFrom is set), so include everything it needs. In batch mode, each entry is expanded via {{item}}"),
+        items: z.array(z.string().min(1)).max(SUBAGENT_LIST_MAX).optional().describe(`Batch list (${SUBAGENT_LIST_MIN}-${SUBAGENT_LIST_MAX} entries, all distinct; the task brief must contain {{item}})`),
+        role: z.string().optional().describe("The type of sub-agent to use: research (read-only research) / general (general-purpose, default) / a custom name defined by a role file"),
+        background: z.boolean().optional().describe("Set to true to run this sub-agent in the background — the conclusion is delivered into this conversation automatically when it completes. Use it only when you have other independent work to do meanwhile; if your next step needs the conclusion, do not pass it (foreground returns it on the spot)"),
+        forkFrom: z.boolean().optional().describe("Set to true to include the main conversation history up to now (\"do X as discussed above\")"),
+        writePaths: z.array(z.string().min(1)).optional().describe("Write paths that a file-writing sub-agent must declare (relative to the working directory; a directory covers everything under it) — when given, this parameter wins (overrides the role's pre-declared paths)"),
       }),
       resolveExecution: (input) => {
         const args = input as {
@@ -114,7 +122,7 @@ export function subagentTools(port: SubagentPort, dirsOf: DirsOf, log?: (code: s
     defineTool({
       name: "tool-subagent__stop",
       description: "Stop one sub-agent by id (stopped agents end as failed; pending approvals auto-deny).",
-      parameters: z.object({ id: z.string().min(1).describe("8 位编号（tool-subagent__tasks 可查）") }),
+      parameters: z.object({ id: z.string().min(1).describe("The id of the sub-agent to stop (8 characters — see tool-subagent__tasks)") }),
       resolveExecution: (input) => {
         const { id } = input as { id: string };
         return Promise.resolve({
