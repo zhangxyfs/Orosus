@@ -90,13 +90,13 @@ timeoutMs = 60000
 
 # ── 场景二：写后自动格式化（PostToolUse）──
 #[[hooks.PostToolUse]]
-#matcher = "^fs__write$"
+#matcher = "^tool-fs__write$"
 #[[hooks.PostToolUse.hooks]]
 #command = "npx prettier --write \\"\${OROSUS_PROJECT_DIR}/src\\""
 
 # ── 场景三：敏感命令拦截（PreToolUse）──
 #[[hooks.PreToolUse]]
-#matcher = "shell__bash"
+#matcher = "^tool-shell__bash$"
 #[[hooks.PreToolUse.hooks]]
 #command = "python3 \\"\${OROSUS_PROJECT_DIR}/scripts/guard.py\\""
 #timeout = 30

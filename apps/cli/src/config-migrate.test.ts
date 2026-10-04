@@ -141,6 +141,9 @@ describe("m5-hooks T4：hooks 注册 builtins + D21 出厂注释模板", () => {
     const doc = parse(HOOKS_TEMPLATE) as Record<string, unknown>;
     const parsed = doc["hooks"] as Record<string, unknown>; // 节体在 [hooks] 下
     expect(parsed).toMatchObject({ enabled: true, timeoutMs: 60000 });
+    // matcher 示例必须用工具全名（走查揪出：短名 fs__write/shell__bash 照抄静默不匹配——回归钉）
+    expect(HOOKS_TEMPLATE).toContain('#matcher = "^tool-fs__write$"');
+    expect(HOOKS_TEMPLATE).toContain('#matcher = "^tool-shell__bash$"');
     for (const e of ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "PermissionRequest"]) {
       expect(parsed[e]).toBeUndefined();
     }
