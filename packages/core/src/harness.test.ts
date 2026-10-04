@@ -1940,3 +1940,47 @@ describe("user/prompt-submit 提交门（m5-hooks T2）", () => {
     await h.close();
   });
 });
+
+describe("session/start 会话起点广播（m5-hooks T3）", () => {
+  const startModule = (seen: Record<string, unknown>[]): ModuleDefinition =>
+    fakeModule("starter", {
+      mounts: ["hook:session/start"],
+      activate(ctx) { ctx.events.on("session/start", (p) => { seen.push(p as Record<string, unknown>); }); },
+    });
+
+  it("① startup：新会话触发恰一次，载荷齐（source/session_id/transcript_path/cwd——模块侧缓存路径，T0-② 取证口径）", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const h = await makeHarness({ modules: [fakeProviderModule("fake", script), startModule(seen)] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ source: "startup", session_id: h.sessionId });
+    expect(String(seen[0]!.transcript_path)).toContain(join("sessions", h.sessionId, "agents", "session.jsonl"));
+    expect(typeof seen[0]!.cwd).toBe("string");
+    await h.close();
+  });
+
+  it("② resume 恰一次 source=resume；fork source=fork 且 session_id=子会话", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-sesstart-"));
+    const sessDir = join(dir, "sessions");
+    const base = { sessionsDir: sessDir, diagDir: join(dir, "d"), spillDir: join(dir, "s"), config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } } };
+    const h1 = await createHarness({ ...base, modules: [fakeProviderModule("fake", script)] });
+    await h1.prompt("母题");
+    await h1.close();
+    const seenR: Record<string, unknown>[] = [];
+    const h2 = await createHarness({ ...base, resume: { sessionId: h1.sessionId }, modules: [fakeProviderModule("fake", script), startModule(seenR)] });
+    expect(seenR.map((s) => s.source)).toEqual(["resume"]); // resume 不重复触发
+    await h2.close();
+    const seenF: Record<string, unknown>[] = [];
+    const h3 = await createHarness({ ...base, fork: { parentSessionId: h1.sessionId }, modules: [fakeProviderModule("fake", script), startModule(seenF)] });
+    expect(seenF.map((s) => s.source)).toEqual(["fork"]);
+    expect(seenF[0]!.session_id).toBe(h3.sessionId);
+    await h3.close();
+  });
+
+  it("③ 无订阅者零行为：emit 空链不炸、广播不落会话日志（bus 事件 ≠ 落盘事件——session/start 不进 history）", async () => {
+    const h = await makeHarness();
+    await h.prompt("hi");
+    const events = await h.history();
+    expect(events.some((e) => e.type === "session/start")).toBe(false);
+    await h.close();
+  });
+});

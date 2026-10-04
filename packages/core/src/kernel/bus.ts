@@ -24,6 +24,7 @@ export const CORE_BUS_TYPES: ReadonlySet<string> = new Set([
   "turn/start", "turn/step", "turn/end", "tool/call", "tool/result",
   "session/header", "user/message", "assistant/chunk", "assistant/message",
   "agent/steering-message", "request/header", "session/fork", "session/label", "turn/compaction", "turn/prune",
+  "session/start", // m5-hooks T3：会话起点广播（startup/resume/fork 三态，emit 不可阻断、模块禁发可订阅）
   "llm/stream", "tool/execute",
 ]);
 

@@ -614,6 +614,22 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     await store.flush();
   }
 
+  // 会话起点广播（m5-hooks T3）：session/start emit（不可阻断；SessionStart 钩子位）。source 三态——
+  // fork 在上方落位点发，此处只发 startup/resume。transcript_path = 主文件推导路径：CLI 装配恒传桶目录
+  //（options.sessionsDir = sessionsRoot/<encodeCwd(cwd)>，resume 也传定位桶），core 缺省口径同构——
+  // 模块侧缓存此值（ctx.session 无路径口，T0-② 取证）。
+  const sessionStartEmit = (source: "startup" | "resume" | "fork"): Promise<void> => {
+    const backendFile = String(config.core.sessionStore ?? "jsonl") === "sqlite" ? "session.sqlite" : "session.jsonl";
+    return graph.bus.emit("session/start", {
+      source,
+      session_id: store.sessionId,
+      transcript_path: join(sessionsDir, store.sessionId, "agents", backendFile),
+      cwd: options.cwd ?? process.cwd(),
+    });
+  };
+  if (options.fork !== undefined) await sessionStartEmit("fork");
+  else await sessionStartEmit(options.resume !== undefined ? "resume" : "startup");
+
   // 会话自动标题（M4-2 B9 用户拉前，2026-09-19 走查）：首轮 completed 后经主 provider 生成 ≤16 字标题，
   // 落 session/label（M3/T6 预留类型首次消费）；LLM 失败/空产出 → 兜底 = 首问文本截断。已有 label（resume）跳过。
   const maybeTitle = async (): Promise<void> => {
