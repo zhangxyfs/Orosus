@@ -1,15 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
+import type { Chunk, ProviderRequest } from "@orosus/contracts/provider";
 import { providerSlotKey } from "@orosus/contracts/provider";
 import { defineTool, Access } from "@orosus/contracts/tool";
 import { fakeModule, fakeProvider } from "@orosus/testing";
 import { InMemorySessionStore } from "@orosus/core";
 import hooksDef from "./index.ts";
-import { projectBucketKey, projectHooksDigest, trustFilePath } from "./trust.ts";
+import { projectBucketKey, projectHooksDigest } from "./trust.ts";
 
 let dir: string;
 afterEach(async () => {
@@ -654,7 +654,7 @@ describe("信任门原语（m5-hooks T9 unit）", () => {
   it("⑧ 盘符大小写归一：C:/x 与 c:/x 同桶（resolve+win32 toLowerCase 前置——encodeCwd 自身不归一，四轮审修口径）", async () => {
     const { projectBucketKey } = await import("./trust.ts");
     if (process.platform === "win32") {
-      expect(projectBucketKey("C:\Develop\Orosus")).toBe(projectBucketKey("c:\develop\orosus"));
+      expect(projectBucketKey("C:\\Develop\\Orosus")).toBe(projectBucketKey("c:\\develop\\orosus"));
     } else {
       expect(projectBucketKey("/a/b")).toBe(projectBucketKey("/a/b")); // POSIX 恒等对照
     }

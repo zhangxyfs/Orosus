@@ -34,7 +34,6 @@ describe("钩子执行器（m5-hooks T5）——真实子进程往返", () => {
   });
 
   it("② exit 2 → deny：reason 取 stderr（qwen 形态被拒看得见）", async () => {
-    const p = proj();
     const r = await run("cat > /dev/null; echo 危险命令被拦 >&2; exit 2");
     expect(r).toMatchObject({ kind: "deny", reason: "危险命令被拦" });
   });

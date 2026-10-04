@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { hooksFace, setHookDisabled, trustProjectHooks, type HookRow } from "./hooks-ui.ts";
+import { hooksFace, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
 import { injectionFoldLabel } from "./render.ts";
 import { renderEvent } from "./render.ts";
 import { SETTINGS_ITEMS } from "./settings-ui.ts";

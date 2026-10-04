@@ -92,7 +92,7 @@ export default defineModule({
      *  首词是解释器时带第二词（"python3 guard.py"）。 */
     const hookShort = (command: string): string => {
       const words = command.trim().split(/\s+/);
-      const base = (w: string): string => w.split(/[\/]/).pop() ?? w;
+      const base = (w: string): string => w.split("/").pop() ?? w;
       const first = base(words[0] ?? "");
       if (/^(python3?|node|bash|sh|cmd|pwsh|npx)$/i.test(first) && words[1] !== undefined) return `${first} ${base(words[1])}`;
       return first;
