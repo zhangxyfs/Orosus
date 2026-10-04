@@ -40,7 +40,7 @@
 
 | 键 | 类型 | 必填 | 可填值与规则 |
 |---|---|---|---|
-| `matcher` | 字符串（正则） | 否 | 省略 = 全匹配。写了 = 按正则原样编译（`new RegExp`）：**大小写敏感**（无 i 标志）、**不隐式锚定**（子串即命中；全名匹配须自带 `^...$`）。作用于**事件匹配值**——工具事件 = 工具全名（如 `tool-shell__bash`、`tool-fs__write`）、SessionStart = `source` 三值（见 §2）、UserPromptSubmit / Stop **无匹配值，matcher 恒忽略**（写了不报错）。非法正则 = 该 matcher 永不匹配 + 启动警告（不炸配置加载） |
+| `matcher` | 字符串（正则） | 否 | 省略 = 全匹配。写了 = 按正则原样编译（`new RegExp`）：**大小写敏感**（无 i 标志）、**不隐式锚定**（子串即命中；全名匹配须自带 `^...$`）。作用于**事件匹配值**——工具事件（PreToolUse / PostToolUse / PostToolUseFailure / **PermissionRequest**）= 工具全名（如 `tool-shell__bash`、`tool-fs__write`）、SessionStart = `source` 三值（见 §2）、UserPromptSubmit / Stop **无匹配值，matcher 恒忽略**（写了不报错）。非法正则 = 该 matcher 永不匹配 + 启动警告（不炸配置加载） |
 | `hooks` | 钩子条目数组 | 是 | **至少 1 条**。表内条目串行执行（见 §1.5） |
 
 matcher 示例：`"^tool-shell__bash$"`（只匹配 bash 工具全名）；`"tool-fs__"`（所有文件工具——无锚定子串命中）；`"startup|resume"`（SessionStart 的两种来源，无锚定子串命中）。
@@ -50,7 +50,7 @@ matcher 示例：`"^tool-shell__bash$"`（只匹配 bash 工具全名）；`"too
 | 键 | 类型 | 必填 | 可填值与规则 |
 |---|---|---|---|
 | `command` | 字符串 | 是 | **任意 shell 命令串**（非空）。经 `bash -c` 执行（Windows 走 Git Bash，Unix 走 sh）——**语言不限**：bash / python / node / perl / powershell 脚本、`npx`/`grep` 拼管道、单行内联判断都行（协议只认 stdin / 退出码 / stdout，见 §4–§6）。仅 `${OROSUS_PROJECT_DIR}` 与 `${CLAUDE_PROJECT_DIR}` 两个模板由 Orosus 预展开；其余 `$VAR` 由 shell 自行展开（环境已继承，见 §7） |
-| `name` | 字符串 | 否 | **1–60 字符**。说明/显示名——/settings 钩子列表行、运行中状态行（`正在运行钩子 <name>…`）、阻断提示（`钩子（<name>）拦截`）、注入折叠行（`<name> 注入 · N 字符`）优先用它；缺省回退：列表=事件名、提示=命令短名（见 §8 短名规则）。**纯显示元数据**：不进 stdin 载荷、不参与 matcher |
+| `name` | 字符串 | 否 | **1–60 字符**。说明/显示名——/settings 钩子列表行、运行中状态行（`正在运行钩子 <name>…`）、阻断提示（`钩子（<name>）拦截`）、注入折叠行（`<name> 注入 · N 字符`）优先用它；缺省回退：列表=事件名、提示=命令短名（显示名解析序见 §10）。**纯显示元数据**：不进 stdin 载荷、不参与 matcher |
 | `product` | 字符串 | 否 | **1–40 字符**。归属产品（如 `OpenKnowledge`）——列表行徽标与归类、`hooks/run` 审计带 `product` 字段；多产品共装时按此辨识。**纯显示元数据**，同上 |
 | `timeout` | 整数（秒） | 否 | **≥ 0**。缺省或 `= 0` = 用全局 `timeoutMs`（**0 是「用默认」的哨兵，不是零超时**）。到点杀整进程树（win32 `taskkill /T /F`、Unix 进程组 SIGKILL），按非阻塞失败处理（fail-open，见 §5） |
 | `disabled` | 布尔 | 否 | 缺省 `false`。`true` = 该条跳过不执行（配置保留，重新启用即恢复）——`/settings → 钩子 → e` 键写的就是这个键 |
@@ -303,6 +303,30 @@ matcher = "startup"                   # 匹配 source 三值之一（无锚定�
 command = "python3 \"${OROSUS_PROJECT_DIR}/scripts/onstart.py\""
 name = "项目知识注入"
 ```
+
+**示例四：PostToolUse 归因（写后自动格式化）**——`tool_input` 带工具实收参数，事后钩子从这取 `path`（触碰记账/索引归档同款取法）：
+
+```python
+#!/usr/bin/env python3
+# scripts/onwrite.py —— 文件写改后自动格式化（失败不阻断：吞错退 0）
+import json, sys, subprocess
+p = json.loads(sys.stdin.readline())
+path = p.get("tool_input", {}).get("path", "")
+if path.endswith((".ts", ".tsx", ".json")):
+    subprocess.run(["npx", "--no-install", "prettier", "--write", path], capture_output=True)
+sys.exit(0)
+```
+
+```toml
+[[hooks.PostToolUse]]
+matcher = "^tool-fs__(write|edit)$"    # 写/改两个工具全名
+[[hooks.PostToolUse.hooks]]
+command = "python3 \"${OROSUS_PROJECT_DIR}/scripts/onwrite.py\""
+name = "写后格式化"
+timeout = 30
+```
+
+注意挂 **PostToolUse 而不是 PreToolUse**：事前跑会记/格式化「未遂的写」（工具可能被审批拒绝或执行失败），且拿不到 `tool_response.is_error` 做成败判断。
 
 **示例三：单行内联（不写脚本文件）**——改参 + 拒收，任选语言或纯管道：
 
