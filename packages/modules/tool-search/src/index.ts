@@ -52,7 +52,7 @@ export function searchMetaTool(tools: ToolsSeam): Tool {
 Loaded tools become callable from the next request onward. Pass keywords from the task at hand;
 use "select:name1,name2" to load exact tools directly, or "+term" to require a term.`,
     parameters: z.object({
-      query: z.string().min(1).describe("工具名关键词（空格分词）；select:A,B 直选；+词 必含"),
+      query: z.string().min(1).describe("Tool-name keywords (space-separated); select:A,B picks directly; +word makes it required"),
     }),
     resolveExecution: (input) => {
       const { query } = input as { query: string };
@@ -112,8 +112,8 @@ export function catalogText(tools: ToolsSeam): string {
   const hidden = tools.list({ deferredOnly: true }).filter((t) => !t.revealed);
   if (hidden.length === 0) return "";
   const lines = hidden.slice(0, CATALOG_LINE_CAP).map((t) => `  ${t.name} — ${truncate(t.description, DESC_TRUNC)}`);
-  const more = hidden.length > CATALOG_LINE_CAP ? `\n  …还有 ${hidden.length - CATALOG_LINE_CAP} 个` : "";
-  return `以下 ${hidden.length} 个工具按需加载（只知名、无 schema、不可直接调用——用 tool-search__search 加载，搜索即加载，下一轮起可调用）：\n${lines.join("\n")}${more}`;
+  const more = hidden.length > CATALOG_LINE_CAP ? `\n  …and ${hidden.length - CATALOG_LINE_CAP} more` : "";
+  return `The following ${hidden.length} tools load on demand (name and a one-line excerpt only — no schema, not directly callable; load them with tool-search__search — searching loads them, and they become callable from the next turn):\n${lines.join("\n")}${more}`;
 }
 
 export default defineModule({

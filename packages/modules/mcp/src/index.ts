@@ -152,7 +152,7 @@ export async function activateMcp(opts: ActivateMcpOpts): Promise<McpActivateOut
     // T11③：无说明 server 降级为「工具清单行」——每行带描述首行（截 160 字，qwen 目录行同值）
     const toolLines = list.map((meta) => {
       const descFirst = (typeof meta.description === "string" ? stripInvisible(meta.description) : "").split("\n")[0]!.slice(0, 160).trim();
-      return descFirst === "" ? `- ${meta.name}` : `- ${meta.name}：${descFirst}`;
+      return descFirst === "" ? `- ${meta.name}` : `- ${meta.name}: ${descFirst}`;
     });
     for (const meta of list) {
       const tool = toBridgedTool(name, meta, callTool, cfg.accesses as never, cfg.deferred === true); // server 级 deferred 透传（M4-3 T5）

@@ -20,9 +20,9 @@ If the user dismisses/cancels: they chose not to answer.
 Do NOT pick an option for them. Stop and wait for the user's next message.`,
     parameters: z.object({
       questions: z.array(z.object({
-        text: z.string().describe("问题文本"),
+        text: z.string().describe("The complete question to ask the user"),
         options: z.array(z.string()).min(2).max(4).optional()
-          .describe("选项（省略 = 自由文本输入）"),
+          .describe("The available choices for this question (omit for free-text input)"),
       })).min(1).max(4),
     }),
     resolveExecution: async (input) => {

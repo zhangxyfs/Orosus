@@ -340,10 +340,10 @@ describe("T11 提示词段改版（m4-3c）——renderMcpPromptSection", () => 
       sessionAppend: () => {},
     });
     const lines = out.connected[0]!.toolLines!;
-    expect(lines[0]!.startsWith("- a：长描述")).toBe(true);
-    expect(lines[0]!.length).toBeLessThanOrEqual("- a：".length + 160);
+    expect(lines[0]!.startsWith("- a: 长描述")).toBe(true);
+    expect(lines[0]!.length).toBeLessThanOrEqual("- a: ".length + 160);
     expect(lines[0]).not.toContain("第二行");
-    expect(lines[1]).toBe("- b：带隐形的首行");
+    expect(lines[1]).toBe("- b: 带隐形的首行");
     expect(lines[2]).toBe("- c");
   });
 });

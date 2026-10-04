@@ -80,14 +80,14 @@ describe("tool-search meta 工具与目录段（M4-3 T4）", () => {
       info("m__b"),
     ]);
     const text1 = catalogText(seam);
-    expect(text1).toContain("以下 2 个工具按需加载");
+    expect(text1).toContain("The following 2 tools load on demand");
     expect(text1).toContain("m__a");
     expect(text1).toContain("长".repeat(159)); // 帽内全显（truncate 留 1 列给 …；旧 80 帽会腰斩）
     expect(text1).toContain("…"); // 200 字超帽截断
     expect(text1).not.toContain("长".repeat(161));
     seam.reveal(["m__a"]);
     const text2 = catalogText(seam);
-    expect(text2).toContain("以下 1 个工具按需加载");
+    expect(text2).toContain("The following 1 tools load on demand");
     expect(text2).not.toContain("m__a");
     seam.reveal(["m__b"]);
     expect(catalogText(seam)).toBe(""); // 空串被装配过滤（不占提示词预算）
