@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { hooksFace, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
+import { buildHookBuckets, hookDisplayOf, hookStatusOf, hooksFace, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
 import { injectionFoldLabel } from "./render.ts";
 import { renderEvent } from "./render.ts";
 import { SETTINGS_ITEMS } from "./settings-ui.ts";
@@ -145,5 +145,41 @@ describe("注入折叠行与修订注记（m5-hooks T10 / D19）", () => {
 		const out = renderEvent({ type: "hooks/input-rewrite", callId: "c1", from: {}, to: {} } as never, { reasoningOpen: false } as never);
 		expect(out).toContain("钩子改参");
 		expect(out).toContain("审批与执行见改后参数");
+	});
+});
+
+describe("Ctrl+H 钩子活动查看窗·消息分桶（走查修两级结构）", () => {
+	const run = (over: Record<string, unknown>): Record<string, unknown> => ({ type: "hooks/run", event: "PreToolUse", hook: "ok.exe x", status: "pass", ...over });
+	const msg = (text: string): Record<string, unknown> => ({ type: "user/message", content: [{ kind: "text", text }] });
+	const steer = (text: string, sourceModule = "host/hook"): Record<string, unknown> => ({ type: "agent/steering-message", messages: [{ text, sourceModule }] });
+
+	it("⑨b 分桶三态：首条消息前归「会话启动」伪桶；消息原文截断 40；无钩子活动的消息桶不出现", () => {
+		const long = "这".repeat(60);
+		const buckets = buildHookBuckets([
+			run({ event: "SessionStart", runId: 1 }),
+			steer("[非用户输入] 钩子注入（SessionStart）\n────────\n知识"),
+			msg(long),
+			run({ runId: 2 }),
+			msg("这条消息没触发钩子"),
+			msg("第二条"),
+			run({ runId: 3, status: "deny", name: "守卫", product: "OK", reason: "拦" }),
+		]);
+		expect(buckets.map((b) => b.label)).toEqual(["会话启动", `${"这".repeat(40)}…`, "第二条"]);
+		expect(buckets[0]).toMatchObject({ runs: [{ event: "SessionStart" }], injections: [{ sourceModule: "host/hook" }] });
+		expect(buckets[2]!.runs[0]).toMatchObject({ name: "守卫", product: "OK", status: "deny" });
+	});
+
+	it("⑩b running 显形账去重：同 runId 有完成账则 running 不重复计入；在飞钩子（只有 running）保留", () => {
+		const buckets = buildHookBuckets([msg("干活"), run({ runId: 7, status: "running" }), run({ runId: 7, status: "pass", durationMs: 900 }), run({ runId: 8, status: "running" })]);
+		expect(buckets).toHaveLength(1);
+		expect(buckets[0]!.runs.map((r) => r.status)).toEqual(["pass", "running"]); // 7 完成账留、running 丢；8 在飞唯一账保留
+	});
+
+	it("⑪b 显示名与状态映射：hookDisplayOf name 优先/解释器带二词；hookStatusOf 全枚举含新 skipped-stop-inject", () => {
+		expect(hookDisplayOf("D:/x/ok.exe hook prompt", "提示词捕获")).toBe("提示词捕获");
+		expect(hookDisplayOf("python3 ${DIR}/guard.py --x", undefined)).toBe("python3 guard.py");
+		expect(hookDisplayOf("D:/software/ok.exe hook stop claude", undefined)).toBe("ok.exe");
+		expect(hookStatusOf("skipped-stop-inject")).toBe("未注入（Stop 未阻断）");
+		expect(hookStatusOf("pass")).toBe("通过");
 	});
 });

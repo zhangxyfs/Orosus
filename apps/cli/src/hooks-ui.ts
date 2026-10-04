@@ -106,6 +106,101 @@ export const rowLabel = (w: number, r: HookRow): string => {
   return `${head.padEnd(Math.min(18, head.length + 2))}${cmd}`;
 };
 
+/** ── Ctrl+H 钩子活动查看窗（走查修：注入多了分不清是哪条消息的——两级结构）──────────
+ *  一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数）；二级 = 该消息的钩子运行列表
+ *  （hooks/run 完成账，含 name/product/状态/耗时）+ 注入条目（回车看全文）。数据源 = 会话日志
+ *  事件流按位置归桶（hooks/run 与 steering 注入归属最近一条 user/message；首条消息之前的活动
+ *  归「会话启动」伪桶）——不改协议、不加第二数据源。 */
+
+export interface HookRunRec {
+  event: string;
+  hook: string;          // 命令原文（详情窗用）
+  name?: string;
+  product?: string;
+  status: string;
+  runId?: number;
+  durationMs?: number;
+  reason?: string;
+  detail?: string;
+  matcher?: string;
+  subagent?: string;
+}
+export interface HookBucket {
+  label: string;                     // 「会话启动」或消息首行截断（≤40）
+  runs: HookRunRec[];                // 完成账（running 显形账按 runId 去重——完成账信息更全；在飞钩子只显 running 账）
+  injections: { text: string; sourceModule?: string }[]; // 该桶内的注入（host/hook 与 hooks 源）
+}
+
+const msgLabelOf = (e: Record<string, unknown>): string => {
+  const parts = Array.isArray(e.content) ? e.content as { kind?: string; text?: string }[] : [];
+  const text = parts.find((p) => p.kind === "text" && typeof p.text === "string" && p.text !== "")?.text ?? "";
+  const first = text.split("\n")[0] ?? "";
+  return first.length > 40 ? `${first.slice(0, 40)}…` : first === "" ? "（无文本消息）" : first;
+};
+
+/** 钩子运行显示名（与模块侧 hookShort 同规则：name 字段优先；否则命令首词 basename，解释器带第二词）。 */
+export const hookDisplayOf = (hook: string, name: string | undefined): string => {
+  if (name !== undefined && name !== "") return name;
+  const words = hook.trim().split(/\s+/);
+  const base = (w: string): string => w.split("/").pop() ?? w;
+  const first = base(words[0] ?? "");
+  if (/^(python3?|node|bash|sh|cmd|pwsh|npx)$/i.test(first) && words[1] !== undefined) return `${first} ${base(words[1])}`;
+  return first;
+};
+
+/** hooks/run status → 终端文案。 */
+export const hookStatusOf = (status: string): string => ({
+  pass: "通过", deny: "拦截", error: "失败", timeout: "超时", running: "运行中",
+  "stop-cap": "封顶放行", "skipped-untrusted": "跳过（未信任）",
+  "skipped-inject-cap": "跳过（注入满额）", "skipped-stop-inject": "未注入（Stop 未阻断）",
+} as Record<string, string>)[status] ?? status;
+
+/** 按消息分桶（导出供测试）。events = 会话日志事件流（h.history() 原样）；无钩子活动的消息桶不出现在结果里。 */
+export const buildHookBuckets = (events: unknown[]): HookBucket[] => {
+  const buckets: (HookBucket & { touched: boolean })[] = [];
+  let cur: (HookBucket & { touched: boolean }) | undefined; // 首条 user/message 前 = 会话启动伪桶
+  const ensure = (): HookBucket & { touched: boolean } => {
+    if (cur === undefined) { cur = { label: "会话启动", runs: [], injections: [], touched: false }; buckets.push(cur); }
+    return cur;
+  };
+  for (const raw of events) {
+    const e = raw as Record<string, unknown>;
+    if (e.type === "user/message") {
+      cur = { label: msgLabelOf(e), runs: [], injections: [], touched: false };
+      buckets.push(cur);
+      continue;
+    }
+    if (e.type === "hooks/run") {
+      ensure().touched = true;
+      ensure().runs.push({
+        event: String(e.event ?? ""), hook: String(e.hook ?? ""),
+        ...(typeof e.name === "string" ? { name: e.name } : {}),
+        ...(typeof e.product === "string" ? { product: e.product } : {}),
+        status: String(e.status ?? ""),
+        ...(typeof e.runId === "number" ? { runId: e.runId } : {}),
+        ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
+        ...(typeof e.reason === "string" ? { reason: e.reason } : {}),
+        ...(typeof e.detail === "string" ? { detail: e.detail } : {}),
+        ...(typeof e.matcher === "string" ? { matcher: e.matcher } : {}),
+        ...(typeof e.subagent === "string" ? { subagent: e.subagent } : {}),
+      });
+      continue;
+    }
+    if (e.type === "agent/steering-message") {
+      const msgs = Array.isArray(e.messages) ? e.messages as { text?: string; sourceModule?: string }[] : [];
+      const hits = msgs.filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "")
+        .map((m): { text: string; sourceModule?: string } => ({ text: m.text!, ...(m.sourceModule !== undefined ? { sourceModule: m.sourceModule } : {}) }));
+      if (hits.length > 0) { const b = ensure(); b.touched = true; b.injections.push(...hits); }
+    }
+  }
+  // running 显形账去重：同 runId 已有完成账则丢弃 running（open 时在飞的钩子保留其唯一账）
+  for (const b of buckets) {
+    const done = new Set(b.runs.filter((r) => r.status !== "running").map((r) => r.runId));
+    b.runs = b.runs.filter((r) => r.status !== "running" || !done.has(r.runId));
+  }
+  return buckets.filter((b) => b.touched).map(({ label, runs, injections }) => ({ label, runs, injections }));
+};
+
 /** TOML 行级启停写：定位第 (tableIdx+1) 个 [[hooks.<Event>]] 内第 (hookIdx+1) 个 [[hooks.<Event>.hooks]]
  *  小节，置/删 disabled 键（保注释保键序——config-migrate 行级纪律同源；EOL 跟随文件现状）。 */
 export function setHookDisabled(file: string, event: HookEvent, tableIdx: number, hookIdx: number, disabled: boolean): void {

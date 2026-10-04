@@ -416,6 +416,25 @@ command = "node -e \\"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{co
     await h.close();
   });
 
+  it("⑤c 走查修——Stop 未阻断时 additionalContext 不注入但审计透明（skipped-stop-inject，不再静默丢）", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "echo '{\\"additionalContext\\":\\"收尾备忘\\"}'"
+`,
+    });
+    await h.prompt("干活");
+    expect(requests).toHaveLength(1); // 未阻断——无续跑
+    const events = await h.history();
+    const steer = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    expect(steer.some((m) => m.text.includes("收尾备忘"))).toBe(false); // 不注入（防归因漂移到下一条消息）
+    const account = events.find((e) => e.type === "hooks/run" && JSON.stringify(e).includes("skipped-stop-inject")) as Record<string, unknown>;
+    expect(account).toMatchObject({ event: "Stop", status: "skipped-stop-inject" }); // 审计有账
+    await h.close();
+  });
+
   it("⑥ 连拦封顶 3 次：恒阻断钩子第 4 停放行 + hooks/run 落 stop-cap 账；stop_hook_active 首停 false 续停 true", async () => {
     const { h, requests } = await setup({
       script: [textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答")],

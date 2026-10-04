@@ -210,7 +210,14 @@ export default defineModule({
         const lastAssistant = await lastAssistantText();
         if (lastAssistant !== undefined && lastAssistant !== "") specific["last_assistant_message"] = lastAssistant;
         const r = await dispatchEvent("Stop", undefined, specific, dctx);
-        if (r.veto === undefined) return [];
+        if (r.veto === undefined) {
+          if (r.injections.length > 0) {
+            // 透明化（走查修）：Stop 未阻断时 additionalContext 不注入——注入会排到下一轮 step 才落日志，
+            // 归因漂移到下一条消息（两级查看窗正要消除的混淆）。ZCode 同款不注；审计记一笔不再静默丢。
+            await ctx.session.append("hooks/run", { event: "Stop", status: "skipped-stop-inject", detail: `Stop additionalContext ${r.injections.length} 条未阻断不注入（防归因漂移）` });
+          }
+          return [];
+        }
         if (state.stopContinuations >= 3) {
           await ctx.session.append("hooks/run", { event: "Stop", status: "stop-cap", detail: `连续续跑已达 ${state.stopContinuations} 次封顶，本次放行停止（防死循环）` });
           return [];

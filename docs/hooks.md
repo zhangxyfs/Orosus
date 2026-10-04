@@ -237,7 +237,7 @@ stdout / stderr 各 **64KB**（先于 JSON 解析、与注入帽解耦——大 
 | `product` | 字符串 | 归属产品（配了 `product` 才在场） |
 | `matcher` | 字符串 | 该表 matcher（写了才在场） |
 | `subagent` | 字符串 | 子代理 agent_id（子代理触发才在场） |
-| `status` | 字符串 | `running`（运行 ≥300ms 显形账，带 `index`/`total` N/M 计数）\| `pass` \| `deny` \| `error`（非零/起不来）\| `timeout` \| `stop-cap`（连拦 3 次封顶放行）\| `skipped-untrusted`（项目层待审跳过）\| `skipped-inject-cap`（累计帽跳过注入） |
+| `status` | 字符串 | `running`（运行 ≥300ms 显形账，带 `index`/`total` N/M 计数）\| `pass` \| `deny` \| `error`（非零/起不来）\| `timeout` \| `stop-cap`（连拦 3 次封顶放行）\| `skipped-untrusted`（项目层待审跳过）\| `skipped-inject-cap`（累计帽跳过注入）\| `skipped-stop-inject`（Stop additionalContext 未阻断不注入——防归因漂移） |
 | `reason` / `detail` | 字符串 | deny 理由 / 错误明细 |
 | `durationMs` | 整数 | 耗时 |
 
@@ -249,7 +249,7 @@ stdout / stderr 各 **64KB**（先于 JSON 解析、与注入帽解耦——大 
 
 - **阻断永远明示**：工具被拦走既有 Error 工具行（`钩子拦截（<显示名>）：<理由>`）；提交被拒 toast `钩子（<显示名>）拦截：<理由>｜被拒原文「首行≤40 字」`。显示名解析序 = **`name` 字段优先**；未配 name 时用命令短名（首词 basename，解释器（python3/node/bash/npx…）带第二词）。
 - **运行中**：钩子运行 ≥300ms 状态区亮灰字 `正在运行钩子 <显示名>…（N/M）`；工具钩子期并入该行（不另设行）。
-- **注入可见**：流区折叠行 + Ctrl + H 查看窗（主窗全局键，弹窗期不生效）；live 与回放同款重现。
+- **注入可见**：流区折叠行 + Ctrl + H 钩子活动查看窗（主窗全局键，弹窗期不生效）；live 与回放同款重现。查看窗两级：一级按消息分组（用户消息原文截断 + 该消息的钩子调用次数；SessionStart 归「会话启动」）——回车进二级看该消息的**全部钩子运行**（显示名/产品/事件/状态/耗时，含失败与跳过——不只注入成功的）与注入条目（回车看全文）。Stop additionalContext 在未阻断时不注入（防归因漂移到下一条消息，审计落 `skipped-stop-inject`）。
 
 ---
 

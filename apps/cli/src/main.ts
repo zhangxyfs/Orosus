@@ -65,7 +65,7 @@ import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir,
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
-import type { HooksUiDeps } from "./hooks-ui.ts";
+import { buildHookBuckets, hookDisplayOf, hookStatusOf, type HooksUiDeps } from "./hooks-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
 import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -1158,23 +1158,50 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       // 不贴底（bottom 是 live 跟随用的）。折行宽 = full 弹窗内容区（ow−2 内衬 −2 内容边 −1 前导空格 = cols−6）
       app.viewText(view.title, view.text, { layout: "full" });
     },
-    // Ctrl+H = 注入查看窗（m5-hooks T10 / D19 用户拍板三件套：live 可见 + 回放重现 + 展开看全文）：
-    // 本会话注入条目列表（事件/来源/字符数）→ ↑↓ 选中 Enter 看全文、Esc 返回——数据源 = 持久化
-    // agent/steering-message（与折叠行同源，无第二数据源）
+    // Ctrl+H = 钩子活动查看窗（m5-hooks T10 / D19 三件套 + 走查修两级结构——注入多了分不清是哪条消息的）：
+    // 一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数；SessionStart 归「会话启动」伪桶）
+    // → 回车进二级 = 该消息的钩子运行列表（hooks/run 完成账：显示名/产品/事件/状态/耗时——全部运行都
+    // 在，含失败/跳过/拦截）+ 注入条目（回车看全文）。数据源 = 会话日志事件流按位置归桶
+    // （buildHookBuckets），不改协议、不加第二数据源。
     showInjections: async () => {
-      const entries = (await h.history())
-        .filter((e) => e.type === "agent/steering-message")
-        .flatMap((e) => ((e.messages ?? []) as { text?: string; sourceModule?: string }[]))
-        .filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "");
-      if (entries.length === 0) {
-        app.showToast("本会话还没有钩子注入（配置钩子后可看，Ctrl + H）");
+      const buckets = buildHookBuckets(await h.history());
+      if (buckets.length === 0) {
+        app.showToast("本会话还没有钩子运行记录（配置钩子后可看，Ctrl + H）");
         return;
       }
-      for (;;) {
-        const items = entries.map((m) => `  ${injectionFoldLabel(m.text!, m.sourceModule)}`);
-        const picked = await app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", items);
+      for (;;) { // 一级：消息列表
+        const items = buckets.map((b) => `${b.label} · ${b.runs.length} 次钩子${b.injections.length > 0 ? ` · ${b.injections.length} 条注入` : ""}`);
+        const picked = await app.pickOverlay("钩子活动 · 按消息分组（回车下钻 · Esc 返回）", items);
         if (picked === undefined) return; // Esc 关窗
-        app.viewText("注入全文", entries[picked]!.text!, { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
+        const b = buckets[picked]!;
+        for (;;) { // 二级：该消息的钩子调用列表（运行 + 注入）
+          const runRows = b.runs.map((r) => {
+            const who = [hookDisplayOf(r.hook, r.name), r.product, r.event].filter((x) => x !== undefined && x !== "").join(" · ");
+            return `${who} · ${hookStatusOf(r.status)}${r.subagent !== undefined ? " · 子代理" : ""}${r.durationMs !== undefined ? ` · ${r.durationMs}ms` : ""}`;
+          });
+          const injRows = b.injections.map((m) => `⌁ ${injectionFoldLabel(m.text!, m.sourceModule)}（回车看全文）`);
+          const picked2 = await app.pickOverlay(`${b.label}（回车详情 · Esc 返回上一级）`, [...runRows, ...injRows]);
+          if (picked2 === undefined) break; // Esc 回一级
+          if (picked2 < runRows.length) { // 运行条目 → 详情（命令原文/理由/明细——列表行不塞命令）
+            const r = b.runs[picked2]!;
+            const l = [
+              `显示名：${hookDisplayOf(r.hook, r.name)}`,
+              ...(r.product !== undefined ? [`产品：${r.product}`] : []),
+              `事件：${r.event}`,
+              `状态：${hookStatusOf(r.status)}`,
+              `命令：${r.hook}`,
+              ...(r.matcher !== undefined ? [`matcher：${r.matcher}`] : []),
+              ...(r.subagent !== undefined ? [`子代理：${r.subagent}`] : []),
+              ...(r.reason !== undefined ? [`理由：${r.reason}`] : []),
+              ...(r.detail !== undefined ? [`明细：${r.detail}`] : []),
+              ...(r.durationMs !== undefined ? [`耗时：${r.durationMs}ms`] : []),
+              "", "Esc 返回",
+            ];
+            app.viewText("钩子运行", l.join("\n"), { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
+          } else { // 注入条目 → 全文
+            app.viewText("注入全文", b.injections[picked2 - runRows.length]!.text!, { layout: "dock" });
+          }
+        }
       }
     },
     // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
