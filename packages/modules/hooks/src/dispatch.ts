@@ -15,6 +15,7 @@ export interface DispatchCtx {
 export interface DispatchResult {
   veto?: { deny: true; reason: string };  // waterfall deny（调用方原样返回）
   updatedInput?: unknown;                 // PreToolUse 改参（末次生效——串行链上后写的赢）
+  allowed?: boolean;                      // 任一钩子明示 permissionDecision:"allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）
   injections: string[];                   // 过闸后的注入正文（mergeInjections 由调用方决定时机）
 }
 
@@ -80,7 +81,9 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
         const reason = decision.stopReason ?? decision.reason ?? "钩子要求继续（未给理由）";
         return { ...result, veto: { deny: true, reason } };
       }
-      // permissionDecision "allow"（无升档——本层无动作）与 "ask"（语义归 T8——按无动作放行）都不折 veto
+      // permissionDecision "allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）与
+      // "ask"（语义归 T8——按无动作放行）都不折 veto
+      if (decision.permissionDecision === "allow") result.allowed = true;
       if (decision.updatedInput !== undefined && event === "PreToolUse") {
         result.updatedInput = decision.updatedInput; // 串行链后写的赢
       }

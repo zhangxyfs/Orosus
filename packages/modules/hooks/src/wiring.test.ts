@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
 import { providerSlotKey } from "@orosus/contracts/provider";
-import { defineTool } from "@orosus/contracts/tool";
-import { fakeModule } from "@orosus/testing";
+import { defineTool, Access } from "@orosus/contracts/tool";
+import { fakeModule, fakeProvider } from "@orosus/testing";
 import { InMemorySessionStore } from "@orosus/core";
 import hooksDef from "./index.ts";
 
@@ -434,6 +434,99 @@ command = 'test -f "\${OROSUS_PROJECT_DIR}/m2" && echo "{\\"decision\\":\\"appro
     expect(requests).toHaveLength(2);
     const events = await h.history();
     expect(JSON.stringify(events)).toContain("还差总结");
+    await h.close();
+  });
+});
+
+describe("PermissionRequest 代答（m5-hooks T8——approval 服务倒挂）", () => {
+  const setupWithApproval = async (hooksToml: string) => {
+    const { createHarness } = await import("@orosus/core");
+    const approval = (await import("@orosus/approval")).default;
+    dir = mkdtempSync(join(tmpdir(), "orosus-hookperm-"));
+    const executed: (string | undefined)[] = [];
+    const providerMod = fakeModule("provider-fake", { activate(ctx) { ctx.provide(providerSlotKey("fake"), fakeProvider([toolChunk("c1", '{"v":"orig"}'), textChunk("收工")]).stream); } });
+    const toolMod = fakeModule("m", {
+      mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "m__t",
+          description: "探针",
+          parameters: z.object({ v: z.string().optional() }),
+          resolveExecution: async (args: { v?: string }) => ({ accesses: [Access.subprocess()], approvalRule: `m__t(${args.v ?? ""} *)`, execute: async () => { executed.push(args.v); return { output: `ran:${args.v ?? ""}`, isError: false }; } }),
+        }));
+      },
+    });
+    const h = await createHarness({
+      store: new InMemorySessionStore(),
+      cwd: dir,
+      sessionsDir: join(dir, "sessions"),
+      diagDir: dir,
+      spillDir: join(dir, "spill"),
+      modules: [providerMod, toolMod, approval, hooksDef],
+      config: { ...hermetic(dir, hooksToml), cliOverrides: { model: "fake/m" } },
+    });
+    return { h, executed };
+  };
+
+  it("① deny 代答：approval/requested 带 hooksVerdict、resolved source=hooks、工具拒绝且理由可见", async () => {
+    const { h, executed } = await setupWithApproval(`
+[[hooks.PermissionRequest]]
+matcher = "^m__t$"
+[[hooks.PermissionRequest.hooks]]
+command = "echo '{\\"permissionDecision\\":\\"deny\\",\\"reason\\":\\"不批这个工具\\"}'"
+`);
+    await h.prompt("干活");
+    const events = await h.history();
+    const requested = events.find((e) => e.type === "approval/requested") as Record<string, unknown>;
+    expect(requested?.hooksVerdict).toBe("deny");
+    const resolved = events.find((e) => e.type === "approval/resolved") as Record<string, unknown>;
+    expect(resolved).toMatchObject({ source: "hooks", decision: "deny", reason: "不批这个工具" });
+    const result = events.find((e) => e.type === "tool/result") as { output?: string };
+    expect(result?.output).toContain("钩子代答拒绝");
+    expect(result?.output).toContain("不批这个工具");
+    expect(executed).toEqual([]);
+    await h.close();
+  });
+
+  it("② allow 代答：跳过弹窗直接放行（headless 无 commandUi——若走了弹窗会抛「无交互环境」拒绝）", async () => {
+    const { h, executed } = await setupWithApproval(`
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
+command = "echo '{\\"permissionDecision\\":\\"allow\\"}'"
+`);
+    await h.prompt("干活");
+    expect(executed).toEqual(["orig"]); // 弹窗被跳过（headless 弹窗必炸）
+    const resolved = (await h.history()).find((e) => e.type === "approval/resolved") as Record<string, unknown>;
+    expect(resolved).toMatchObject({ source: "hooks", decision: "allow-once" });
+    await h.close();
+  });
+
+  it("③ 未表态照旧弹窗：钩子 exit 0 无决策 → 走 ctx.ui 询问（headless = 抛「无交互环境」fail-closed）", async () => {
+    const { h, executed } = await setupWithApproval(`
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
+command = "exit 0"
+`);
+    await h.prompt("干活");
+    const events = await h.history();
+    const requested = events.find((e) => e.type === "approval/requested") as Record<string, unknown>;
+    expect(requested?.hooksVerdict).toBeUndefined(); // 走了原始弹窗路径
+    const result = events.find((e) => e.type === "tool/result") as { output?: string };
+    expect(result?.output).toContain("无交互环境"); // headless 弹窗炸 = fail-closed 拒绝（证明弹窗路径被走）
+    expect(executed).toEqual([]);
+    await h.close();
+  });
+
+  it("④ 未配 PermissionRequest 表：服务在场但恒 undefined——弹窗路径照旧（同 ③ 形态）", async () => {
+    const { h, executed } = await setupWithApproval(`
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "exit 0"
+`);
+    await h.prompt("干活");
+    const result = (await h.history()).find((e) => e.type === "tool/result") as { output?: string };
+    expect(result?.output).toContain("无交互环境");
+    expect(executed).toEqual([]);
     await h.close();
   });
 });

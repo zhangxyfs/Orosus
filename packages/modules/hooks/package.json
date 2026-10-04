@@ -2,9 +2,23 @@
   "name": "@orosus/hooks",
   "version": "0.1.0",
   "type": "module",
-  "orosus": { "module": true },
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc --noEmit" },
-  "dependencies": { "@orosus/contracts": "workspace:*", "zod": "^4.0.0", "smol-toml": "^1.3.0" },
-  "devDependencies": { "@orosus/core": "workspace:*", "@orosus/testing": "workspace:*" }
+  "orosus": {
+    "module": true
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@orosus/contracts": "workspace:*",
+    "zod": "^4.0.0",
+    "smol-toml": "^1.3.0"
+  },
+  "devDependencies": {
+    "@orosus/core": "workspace:*",
+    "@orosus/testing": "workspace:*",
+    "@orosus/approval": "workspace:*"
+  }
 }

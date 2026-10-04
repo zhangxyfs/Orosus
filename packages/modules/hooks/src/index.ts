@@ -168,7 +168,16 @@ export default defineModule({
       });
     }
 
-    // PermissionRequest：T8 经 provide 由 approval 惰性消费
-    ctx.provide("hooks.permission-verdict", async () => undefined); // T8 充实（未表态 = undefined 照旧弹窗）
+    // PermissionRequest 代答（T8）：approval 弹窗前惰性消费（服务倒挂）。载荷经服务参数带入
+    //（方案原签名 ()——不带参会丢 tool_name，偏差改 {toolName, toolInput}）；deny/allow 折裁决、
+    // 未表态 undefined 照旧弹窗；allow 的升档效力只在此处成立（PreToolUse 位无升档 D8）。
+    ctx.provide("hooks.permission-verdict", async (info?: { toolName: string; toolInput?: unknown; subagent?: string }) => {
+      if (!has("PermissionRequest") || info === undefined) return undefined;
+      const specific: Record<string, unknown> = { tool_name: info.toolName, tool_input: info.toolInput ?? {}, ...(info.subagent !== undefined ? { agent_id: info.subagent } : {}) };
+      const r = await dispatchEvent("PermissionRequest", info.toolName, specific, dctx);
+      if (r.veto !== undefined) return { verdict: "deny" as const, reason: r.veto.reason };
+      if (r.allowed === true) return { verdict: "allow" as const };
+      return undefined;
+    });
   },
 });

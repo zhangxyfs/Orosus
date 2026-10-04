@@ -119,6 +119,38 @@ export default defineModule({
         if (!allowed) return { deny: true, reason: `后台子代理审批未通过（${p.name}——被停止自动回绝或用户拒绝）` };
         return undefined;
       }
+      // hooks 代答（m5-hooks T8，服务倒挂 + 调用期惰性）：前台 ask 弹窗前消费 hooks.permission-verdict——
+      // deny 直接拒绝 / allow 跳过弹窗放行（allow 升档效力只在此成立），approval/requested·resolved 带
+      // 「hooks 代答」因；未表态/未装 hooks 模块（getOptional undefined）照旧弹窗。dangerousGate 的 ask
+      //（source:"mode"）同样代答；never 档不进 ask 分支故不触发（注记不修）。headless 下 verdictFn 抛错
+      // 按 undefined 处理——代答失败回落弹窗（弹窗在 headless 会抛「无交互环境」，fail-closed 不减损）。
+      if (d.effect === "ask") {
+        const verdictFn = await ctx.services.getOptional("hooks.permission-verdict" as import("@orosus/contracts/module").CapabilityKey<(info?: { toolName: string; toolInput?: unknown; subagent?: string }) => Promise<{ verdict: "allow" | "deny"; reason?: string } | undefined>>);
+        if (typeof verdictFn === "function") {
+          let verdict: { verdict: "allow" | "deny"; reason?: string } | undefined;
+          try {
+            verdict = await verdictFn({ toolName: p.name, toolInput: p.args, ...(p.subagent !== undefined ? { subagent: p.subagent.label } : {}) });
+          } catch {
+            verdict = undefined;
+          }
+          if (verdict !== undefined) {
+            ctx.session.append("approval/requested", {
+              callId: p.callId, name: p.name, approvalRule: p.approvalRule,
+              reason: d.reason, mode: p.mode ?? state.modeOverride ?? cfg.mode,
+              ...(p.subagent !== undefined ? { subagent: p.subagent.label } : {}),
+              hooksVerdict: verdict.verdict,
+            });
+            ctx.session.append("approval/resolved", {
+              callId: p.callId, name: p.name,
+              decision: verdict.verdict === "allow" ? "allow-once" : "deny",
+              source: "hooks",
+              ...(verdict.verdict === "deny" && verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+            });
+            if (verdict.verdict === "deny") return { deny: true, reason: `钩子代答拒绝${verdict.reason !== undefined ? `（${verdict.reason}）` : ""}` };
+            return undefined; // allow：跳过弹窗放行
+          }
+        }
+      }
       // ask：请求先落日志（UI 经日志投影看到，§6.7），询问经 ctx.ui（D35 M3：waterfall 侧交互口）
       ctx.session.append("approval/requested", {
         callId: p.callId, name: p.name, approvalRule: p.approvalRule,
