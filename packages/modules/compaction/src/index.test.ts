@@ -838,6 +838,9 @@ describe("v3 真实用户消息谓词（T1 设计空白 1：kimi 式 origin 元�
   it("②b host/date 日期系统行保留（2026-09-28：sourceModule 独立后压缩语义不变——压掉则同日模型看不到日期）", () => {
     expect(isRealUserInput(su("[非用户输入] 系统提醒：今天是 2026-09-28。", { kind: "steering", sourceModule: "host/date" }))).toBe(true);
   });
+  it("②c host/hook 钩子注入保留（m5-hooks T2：钩子注入是项目知识——压掉则压缩后模型丢钩子给的上下文）", () => {
+    expect(isRealUserInput(su("[非用户输入] 钩子注入：项目知识。", { kind: "steering", sourceModule: "host/hook" }))).toBe(true);
+  });
   it("③ 模块注入的 steering 剥离——todo 提醒等", () => {
     expect(isRealUserInput(su("记得喝水", { kind: "steering", sourceModule: "reminder" }))).toBe(false);
   });

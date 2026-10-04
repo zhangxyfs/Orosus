@@ -1162,6 +1162,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       // close()/cancel() 在窗口期也拿不到真句柄。deferred done 让 close() 任何时刻等到的都是同一个 promise
       currentTurn = { controller, done };
       try {
+        // 提交门（m5-hooks T2）：user/prompt-submit waterfall——用户消息落日志之前的 UserPromptSubmit 钩子位。
+        // 占坑之后首个 await（守卫与占坑间零 await 窗口，TOCTOU 注释钉死勿前移）；deny 走带因 throw——
+        // catch 路无条件 settle（「消息被拒」≠「turn 取消」，文案与 AbortError 区分，CLI 按 message 显示拦截理由）；
+        // contextNotes 逐条进 steering backlog（sourceModule host/hook——仿 host/date：召回跳过/压缩保留）。
+        const promptPayload: { text: string; images?: string[]; contextNotes: string[] } = {
+          text,
+          ...(opts?.images !== undefined && opts.images.length > 0 ? { images: opts.images } : {}),
+          contextNotes: [],
+        };
+        const promptVeto = await graph.bus.waterfall(CORE_POINTS.promptSubmit, promptPayload);
+        if (promptVeto) throw new Error(`钩子拦截：${promptVeto.reason}`);
         await graph.bus.emit(CORE_POINTS.uiCommand, { kind: "prompt", text });
         await ensureHeader(); // 首个持久事件前补 header（T0 懒写——命令派发已在上方原路返回，不会触发）
         // user/message content 构造（M4-2.5 T5）：text part 在前、image part 引用形态在后（日志只存路径）
@@ -1170,6 +1181,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           ...(opts?.images ?? []).map((p) => ({ kind: "image" as const, path: p, mimeType: imageMimeOf(p) })),
         ];
         await store.append(LOG_TYPES.userMessage, { content: content.length > 0 ? content : [{ kind: "text", text: "" }] });
+        for (const note of promptPayload.contextNotes) {
+          steerBacklog.push({ text: note, sourceModule: "host/hook" }); // 钩子注入走旁路（不伪装用户输入），下个 step 首排空
+        }
         // 宿主旁注（m5-media F14 走查四）：紧随 user/message 落盘——行序保障见接口注释；
         // 数组形态按序逐条（2026-10-03 输入召回批）
         if (opts?.afterUserEvent !== undefined) {

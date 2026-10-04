@@ -22,6 +22,14 @@ describe("输入历史播种 inputHistoryTexts（2026-10-03 拍板「↑ 召回 
     expect(texts).toEqual(["你好", "追一句"]);
   });
 
+  it("①b 钩子注入行不进召回（m5-hooks T2：host/hook 源与 host/date 同款跳过——↑ 召回 = 我输入的内容，注入不重放）", () => {
+    const texts = inputHistoryTexts([
+      userMsg("你好"),
+      ev("agent/steering-message", { messages: [{ text: "[非用户输入] 钩子注入：项目知识。", sourceModule: "host/hook" }] }),
+    ]);
+    expect(texts).toEqual(["你好"]);
+  });
+
   it("② 老会话技能合成体（旁注机制之前落盘、无 echo）：只召回原话行——标记行与 <skill> 正文不进召回（本 bug 主案）", () => {
     const texts = inputHistoryTexts([
       userMsg(`（用户通过菜单手动加载技能 "doc-review"——请按该技能正文行事）\n/skill : doc-review 2026-09-30-m5-media.md 全量\n<skill name="doc-review" args="2026-09-30-m5-media.md 全量">\n# 技能正文一大堆\n不该被召回\n</skill>`),

@@ -192,8 +192,9 @@ export const inputHistoryTexts = (events: SessionEvent[]): string[] => {
       const { cleaned } = extractImageRefs(src);
       if (cleaned !== "") texts.push(cleaned);
     } else if (e.type === "agent/steering-message") {
+      // 宿主系统行不进召回（host/date 日期行、host/hook 钩子注入——m5-hooks T2；召回不重注入，回放侧另有折叠行渲染）
       for (const m of (e.messages ?? []) as { text?: string; sourceModule?: string }[])
-        if (typeof m.text === "string" && m.text !== "" && m.sourceModule !== "host/date") texts.push(m.text);
+        if (typeof m.text === "string" && m.text !== "" && m.sourceModule !== "host/date" && m.sourceModule !== "host/hook") texts.push(m.text);
     }
   }
   return texts;

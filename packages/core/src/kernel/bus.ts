@@ -12,6 +12,7 @@ export const CORE_POINTS = {
   toolPreExecute: "tool/pre-execute",          // waterfall（审批模块在此，M3）
   toolPostExecute: "tool/post-execute",        // emit 广播
   uiCommand: "ui/command",                     // emit 广播（命令端口输入，含审批应答）
+  promptSubmit: "user/prompt-submit",          // waterfall（m5-hooks T2：UserPromptSubmit 钩子位——用户消息落日志之前，可整条拒收；contextNotes 进 steering）
   requestError: "agent/request-error",         // emit 广播（M3 补强 D43：provider 请求失败观测/触发——loop 溢出重试前广播，策略在监听者）
 } as const;
 

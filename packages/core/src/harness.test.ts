@@ -1888,3 +1888,55 @@ describe("送回轮失败留痕与等待有界（CH-12——2026-09-28 code revi
     await h.close();
   });
 });
+
+describe("user/prompt-submit 提交门（m5-hooks T2）", () => {
+  const gateModule = (behavior: (payload: { text: string; images?: string[]; contextNotes: string[] }) => unknown): ModuleDefinition =>
+    fakeModule("gate", {
+      mounts: ["hook:user/prompt-submit"],
+      activate(ctx) { ctx.events.on("user/prompt-submit", (payload) => behavior(payload as { text: string; images?: string[]; contextNotes: string[] })); },
+    });
+
+  it("① deny 整条拒收：带因错误（钩子拦截：前缀，与取消 AbortError 可辨）、消息不落日志、turn 收口不悬挂（下一条 prompt 不报占用）", async () => {
+    const h = await makeHarness({
+      modules: [fakeProviderModule("fake", script), gateModule((p) => p.text.includes("危险") ? { deny: true, reason: "消息太危险" } : undefined)],
+    });
+    await expect(h.prompt("危险的话")).rejects.toThrow("钩子拦截：消息太危险");
+    const events = await h.history();
+    expect(events.some((e) => e.type === "user/message")).toBe(false); // 消息不进上下文（Claude 拒收语义）
+    expect(events.some((e) => e.type === "turn/end")).toBe(false);
+    // deny 后 currentTurn 必须已收口——否则第二条 prompt 抛「已有进行中的 turn」
+    await h.prompt("正常的话");
+    const after = await h.history();
+    expect(after.filter((e) => e.type === "user/message")).toHaveLength(1); // 只有第二条落账
+    await h.close();
+  });
+
+  it("② deny 带图：图片随消息一并拒收（无 user/message 落盘）", async () => {
+    const h = await makeHarness({ modules: [fakeProviderModule("fake", script), gateModule(() => ({ deny: true, reason: "连图一起拒" }))] });
+    await expect(h.prompt("带图的话", { images: [join(dir, "a.png")] })).rejects.toThrow("钩子拦截");
+    expect((await h.history()).some((e) => e.type === "user/message")).toBe(false);
+    await h.close();
+  });
+
+  it("③ contextNotes 进 steering：payload.contextNotes 推条目 → host/hook 源落 agent/steering-message + 模型首个请求收到（旁路注入不伪装用户输入）", async () => {
+    const h = await makeHarness({
+      modules: [fakeProviderModule("fake", script), gateModule((p) => { p.contextNotes.push("[非用户输入] 项目知识：构建用 pnpm。"); })],
+    });
+    await h.prompt("干活");
+    const events = await h.history();
+    const steer = events.find((e) => e.type === "agent/steering-message") as { messages?: { text: string; sourceModule: string }[] } | undefined;
+    expect(steer).toBeDefined();
+    expect(steer!.messages![0]).toMatchObject({ text: "[非用户输入] 项目知识：构建用 pnpm。", sourceModule: "host/hook" });
+    await h.close();
+  });
+
+  it("④ 无监听者零行为：无 gate 模块时 prompt 照旧（无 host/hook 注入行、消息正常落账——日期行 host/date 照常在）", async () => {
+    const h = await makeHarness();
+    await h.prompt("普通消息");
+    const events = await h.history();
+    expect(events.filter((e) => e.type === "user/message")).toHaveLength(1);
+    const steer = events.find((e) => e.type === "agent/steering-message") as { messages?: { sourceModule?: string }[] } | undefined;
+    expect(steer?.messages?.every((m) => m.sourceModule === "host/date")).toBe(true); // 只有日期行，无钩子注入
+    await h.close();
+  });
+});
