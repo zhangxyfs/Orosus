@@ -196,12 +196,13 @@ stdout / stderr 各 **64KB**（先于 JSON 解析、与注入帽解耦——大 
 注入正文带固定包裹头（正文里伪造同款头无法越过包裹层）：
 
 ```
-[非用户输入] 钩子注入（<事件名>）
+[非用户输入] 钩子注入（<事件名>）           ← 未配 name
+[非用户输入] 钩子注入（<事件名> · <name>）   ← 配了 name（折叠行据此显示「<name> 注入」）
 ────────
 <正文>
 ```
 
-同事件多条注入合并 = `#1 …` `#2 …` 编号 + 空行连接。**prompt 永不改写**——注入一律走旁路消息，流区有折叠行（灰字「上下文注入 · 事件 · N 字符」），**Ctrl + H** 打开注入查看窗看全文。
+同事件多条注入合并 = `#1 …` `#2 …` 编号 + 空行连接。**prompt 永不改写**——注入一律走旁路消息，流区有折叠行（灰字「<name> 注入 · N 字符」；未配 name 时「上下文注入 · <事件名> · N 字符」），**Ctrl + H** 打开注入查看窗看全文。
 
 ---
 
@@ -227,6 +228,8 @@ stdout / stderr 各 **64KB**（先于 JSON 解析、与注入帽解耦——大 
 | `runId` | 整数 | 运行序号——`running` 账与完成账配对（状态行数据源） |
 | `event` | 字符串 | 七事件名 |
 | `hook` | 字符串 | 命令原文 |
+| `name` | 字符串 | 钩子显示名（配了 `name` 才在场） |
+| `product` | 字符串 | 归属产品（配了 `product` 才在场） |
 | `matcher` | 字符串 | 该表 matcher（写了才在场） |
 | `subagent` | 字符串 | 子代理 agent_id（子代理触发才在场） |
 | `status` | 字符串 | `running`（运行 ≥300ms 显形账，带 `index`/`total` N/M 计数）\| `pass` \| `deny` \| `error`（非零/起不来）\| `timeout` \| `stop-cap`（连拦 3 次封顶放行）\| `skipped-untrusted`（项目层待审跳过）\| `skipped-inject-cap`（累计帽跳过注入） |
@@ -239,7 +242,7 @@ stdout / stderr 各 **64KB**（先于 JSON 解析、与注入帽解耦——大 
 
 ## 10. 界面可见性
 
-- **阻断永远明示**：工具被拦走既有 Error 工具行（`钩子拦截（<钩子短名>）：<理由>`）；提交被拒 toast `钩子（<短名>）拦截：<理由>｜被拒原文「首行≤40 字」`。显示名解析序 = **`name` 字段优先**；未配 name 时用命令短名（首词 basename，解释器（python3/node/bash/npx…）带第二词）。
+- **阻断永远明示**：工具被拦走既有 Error 工具行（`钩子拦截（<显示名>）：<理由>`）；提交被拒 toast `钩子（<显示名>）拦截：<理由>｜被拒原文「首行≤40 字」`。显示名解析序 = **`name` 字段优先**；未配 name 时用命令短名（首词 basename，解释器（python3/node/bash/npx…）带第二词）。
 - **运行中**：钩子运行 ≥300ms 状态区亮灰字 `正在运行钩子 <显示名>…（N/M）`；工具钩子期并入该行（不另设行）。
 - **注入可见**：流区折叠行 + Ctrl + H 查看窗（主窗全局键，弹窗期不生效）；live 与回放同款重现。
 
@@ -271,6 +274,8 @@ exit 0
 matcher = "^tool-shell__bash$"        # 只匹配 bash 工具（全名自带 ^$）
 [[hooks.PreToolUse.hooks]]
 command = "bash \"${OROSUS_PROJECT_DIR}/scripts/guard.sh\""
+name = "危险命令守卫"                  # 说明——列表/状态行/拦截提示/注入行都显示它
+product = "MyTeam"                    # 归属——多产品共装时辨识
 timeout = 10                          # 秒；本条 10 秒杀树
 ```
 
@@ -291,6 +296,7 @@ if payload.get("source") == "startup":              # matcher 同款判定（此
 matcher = "startup"                   # 匹配 source 三值之一（无锚定子串命中）
 [[hooks.SessionStart.hooks]]
 command = "python3 \"${OROSUS_PROJECT_DIR}/scripts/onstart.py\""
+name = "项目知识注入"
 ```
 
 **示例三：单行内联（不写脚本文件）**——改参 + 拒收，任选语言或纯管道：
