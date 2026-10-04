@@ -76,6 +76,7 @@ export interface ProviderRequest { … }
 | `maxTokens?` | `maxTokens?: number` | 输出 token 上限（M3 补强 D39 修订）：缺省 = 适配器现行为（openai 线缆不发送、anthropic 线缆用 MAX_TOKENS）。 |
 | `webSearch?` | `webSearch?: boolean` | 声明服务端原生搜索（M4-3 T1b，SW-17）：适配器按协议映射为服务端搜索声明（openai 族 = tools 追加 {type:"web_search",web_search:{enable:true}}〔2026-09-24 zhipu 端点 spike 实钉的接受形态〕； anthropic 族 = web_search_20250305 server tool）。与 tools 的客户端工具正交——二级调用（D39）tools 恒空， 服务端声明不进会话、模型不可见。 |
 | `reasoningEffort?` | `reasoningEffort?: string` | 思考投入档位（/effort 命令，2026-09-25）：值 = 模型目录（models.dev）reasoning_options 里 effort 型的档位字符串（low/high/max/none…），原样透传——适配器按协议族落线缆参数（openai 族 = reasoning_effort；anthropic 族 = thinking 开关与 budget_tokens 映射，kimi-code 同款口径）。 缺省不发送（端点默认行为）。值不做端点级校验（lenient——kimi-code 定案：不在清单也原样发，端点 400 自证）。 |
+| `temperature?` | `temperature?: number` | 采样温度（m5-media 走查十二 2026-10-02，Reasonix 同款）：转述等确定性二级调用置 0——同一张图 两次产出应一致（缓存/占位/回放依赖稳定文本）。主对话缺省不发送（端点默认温度）。 |
 **示例**
 
 ```ts
