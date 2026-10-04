@@ -121,8 +121,10 @@ Orosus 不规定脚本位置与语言——`command` 是任意 shell 命令串�
 | `PostToolUseFailure` 专有 | `error` | 字符串 | 失败摘要（= tool_response.output）——cc 形态，生态脚本读 `input.error` |
 | `Stop` | `stop_hook_active` | 布尔 | 本链已续跑过则为 `true`（首次停止为 `false`）——防死循环自检用 |
 | | `last_assistant_message` | 字符串 | 末条 assistant 回复全文——停止钩子据此判定要不要拦停（cc 同款；行模式宿主无消息读口时缺席） |
-| `PermissionRequest` | `tool_name` / `tool_input` | — | 与 PreToolUse 同形。与 cc 的差异：不带 `permission_suggestions`（Orosus 审批是三档制，无建议列表等价物） |
+| `PermissionRequest` | `tool_name` / `tool_input` | — | 与 PreToolUse 同形。`permission_suggestions`：cc/ZCode 类型面有此键但**从不赋值**（stdin 恒缺席）——三家实际一致，无需此键 |
 | `SessionStart` | `source` | 字符串 | `startup` \| `resume` \| `fork`。与 cc 的差异：不带 `model` / `agent_type`（无会话级模型事件源），source 取值集也不同（cc 另有 `clear` / `compact`——Orosus 无对应触发位） |
+
+**从 kimi 系脚本搬运的注记**（三源实查：cc/ZCode/kimi 字段名有分歧）：kimi 的工具调用 id 叫 `tool_call_id`（cc/ZCode/本仓 = `tool_use_id`）、结果字段叫 `tool_output`（裸字符串、截 2000；cc/ZCode/本仓 = `tool_response`，本仓为结构化对象 `{output, is_error, ...}`）；kimi 的 Stop 载荷无 `last_assistant_message`。搬 kimi 脚本时改这三个字段名即可。
 
 ### 3.3 子代理附加字段（工具三事件）
 
