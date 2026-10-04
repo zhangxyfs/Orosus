@@ -82,7 +82,9 @@ async function* executeGroups(
           ...(result.spill !== undefined ? { spill: result.spill } : {}),
           ...(Array.isArray(result.images) && result.images.length > 0 ? { images: result.images } : {}), // m5-media F1：图片附件路径引用透传（投影 → toolResult.parts）
         });
-        await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, result });
+        // tool_input 进 PostToolUse 载荷（走查修协议对齐：cc-haha hooks.ts:3481-3486 同款——事后钩子要拿
+        // 工具入参做归因）；args 取 planned 上的最终值——改参时 registry 同步 planned.args（见 registry 注）
+        await opts.bus.emit(CORE_POINTS.toolPostExecute, { callId: call.callId, name: call.name, ...(planned.ok ? { args: planned.args } : {}), result });
         queue.push(e);
       } catch (err) {
         opts.log.error("loop.tool.task-crash", "工具任务契约外抛出（兜底带内错误结果）", { call: call.callId, name: call.name, error: String(err instanceof Error ? err.message : err) });

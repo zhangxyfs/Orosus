@@ -192,6 +192,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
         const rePlanned = await registry.plan({ id: planned.callId, name: planned.name, args: prePayload.args });
         if (rePlanned.ok) {
           effective = rePlanned;
+          planned.args = rePlanned.args; // loop 的 tool/post-execute 载荷读 planned.args——同步最终值，事后钩子（PostToolUse tool_input）见到的是改后参数（cc 口径：tool_input = 工具实收输入）
           planned.log.info("kernel.tool.pre-input-rewrite", "PreToolUse 改参生效（重校验+重解 execution，审批见最终参数）", { call: planned.callId, name: planned.name });
         } else {
           planned.log.warn("kernel.tool.pre-input-rewrite-fallback", `PreToolUse 改参未过重校验，回退原参数：${rePlanned.result.output}`, { call: planned.callId, name: planned.name });

@@ -110,16 +110,19 @@ Orosus 不规定脚本位置与语言——`command` 是任意 shell 命令串�
 
 | 事件 | 字段 | 类型 | 说明 |
 |---|---|---|---|
-| `SessionStart` | `source` | 字符串 | `startup` \| `resume` \| `fork` |
 | `UserPromptSubmit` | `prompt` | 字符串 | 完整提交文本 |
 | | `images` | 字符串[] | **仅带图提交时在场** |
 | `PreToolUse` | `tool_name` | 字符串 | 工具全名 |
 | | `tool_input` | 对象 | 工具参数 |
 | | `tool_use_id` | 字符串 | 调用 id |
 | `PostToolUse` / `PostToolUseFailure` | `tool_name` / `tool_use_id` | 字符串 | 同上 |
+| | `tool_input` | 对象 | **工具实收参数（改参后为最终值）**——事后归因类钩子（触碰记账等）从这取 `path` 等入参。cc 口径同款（PostToolUse 同时带 tool_input 与 tool_response） |
 | | `tool_response` | 对象 | `{ "output": 字符串, "is_error": 布尔, "denied"?: true（被拦）, "truncated"?: true（超长截断） }` |
+| `PostToolUseFailure` 专有 | `error` | 字符串 | 失败摘要（= tool_response.output）——cc 形态，生态脚本读 `input.error` |
 | `Stop` | `stop_hook_active` | 布尔 | 本链已续跑过则为 `true`（首次停止为 `false`）——防死循环自检用 |
-| `PermissionRequest` | `tool_name` / `tool_input` | — | 与 PreToolUse 同形 |
+| | `last_assistant_message` | 字符串 | 末条 assistant 回复全文——停止钩子据此判定要不要拦停（cc 同款；行模式宿主无消息读口时缺席） |
+| `PermissionRequest` | `tool_name` / `tool_input` | — | 与 PreToolUse 同形。与 cc 的差异：不带 `permission_suggestions`（Orosus 审批是三档制，无建议列表等价物） |
+| `SessionStart` | `source` | 字符串 | `startup` \| `resume` \| `fork`。与 cc 的差异：不带 `model` / `agent_type`（无会话级模型事件源），source 取值集也不同（cc 另有 `clear` / `compact`——Orosus 无对应触发位） |
 
 ### 3.3 子代理附加字段（工具三事件）
 

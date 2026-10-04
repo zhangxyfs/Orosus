@@ -28,6 +28,7 @@ interface PreInputPayload {
 interface PostExecutePayload {
   callId: string;
   name: string;
+  args?: unknown; // 走查修协议对齐：loop 的 post-execute 载荷带最终参数（改参后 planned.args 同步）——PostToolUse 的 tool_input 源
   result: { output: string; isError?: boolean; denied?: boolean; truncated?: boolean };
   subagent?: { agentId: string; label: string };
 }
@@ -99,6 +100,23 @@ export default defineModule({
       if (/^(python3?|node|bash|sh|cmd|pwsh|npx)$/i.test(first) && words[1] !== undefined) return `${first} ${base(words[1])}`;
       return first;
     };
+    /** 末条 assistant 回复文本（Stop 载荷 last_assistant_message——cc executeStopHooks 同款）。无 messages
+     *  读口（行模式宿主）/无 assistant 消息/读口失败 = undefined（省字段，fail-open 不拖死停止边界）。 */
+    const lastAssistantText = async (): Promise<string | undefined> => {
+      try {
+        const messages = await ctx.session.messages?.();
+        if (messages === undefined) return undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i]!;
+          if (m.role !== "assistant") continue;
+          const text = m.content.filter((p) => p.kind === "text").map((p) => (p as { text: string }).text).join("\n").trim();
+          return text === "" ? undefined : text;
+        }
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    };
     const enqueue = (event: HookEvent, texts: string[]): void => {
       if (texts.length === 0) return;
       injectionQueue.push(texts.length === 1 ? texts[0]! : mergeInjections(texts));
@@ -142,15 +160,19 @@ export default defineModule({
       return undefined;
     });
 
-    // PostToolUse / PostToolUseFailure：isError 分流（同一挂点，两张表）
+    // PostToolUse / PostToolUseFailure：isError 分流（同一挂点，两张表）。tool_input/error 为走查修协议
+    // 对齐——cc-haha 事后钩子载荷带 tool_input（hooks.ts:3481-3486/3530-3538）：归因类钩子（触碰记账等）
+    // 要拿工具入参里的 path；Failure 另带 error 字符串（cc 形态，生态脚本读 input.error）。
     ctx.events.on("tool/post-execute", (payload) => {
       const p = payload as PostExecutePayload;
       const event: HookEvent = p.result.isError === true ? "PostToolUseFailure" : "PostToolUse";
       if (!has(event)) return undefined;
       const specific: Record<string, unknown> = {
         tool_name: p.name,
+        tool_input: p.args ?? {},
         tool_response: { output: p.result.output, is_error: p.result.isError === true, ...(p.result.denied === true ? { denied: true } : {}), ...(p.result.truncated === true ? { truncated: true } : {}) },
         tool_use_id: p.callId,
+        ...(event === "PostToolUseFailure" ? { error: p.result.output } : {}),
         ...(p.subagent !== undefined ? { agent_id: p.subagent.agentId, agent_type: p.subagent.label } : {}),
       };
       return dispatchEvent(event, p.name, specific, dctx, p.subagent?.agentId).then((r) => { enqueue(event, r.injections); });
@@ -182,7 +204,11 @@ export default defineModule({
     // 轮不过停止边界（loop.ts:256-293 先 break——T0-③ 取证）；shouldStop 真停时消息照落日志但不复活轮（CL-07）。
     if (has("Stop")) {
       ctx.events.on("agent/follow-up", async () => {
+        // last_assistant_message（走查修协议对齐——cc executeStopHooks 同款）：停止钩子读末条回复判定
+        // 要不要拦停；ctx.session.messages?() 无口（行模式宿主）则省字段
         const specific: Record<string, unknown> = { stop_hook_active: state.stopContinuations > 0 };
+        const lastAssistant = await lastAssistantText();
+        if (lastAssistant !== undefined && lastAssistant !== "") specific["last_assistant_message"] = lastAssistant;
         const r = await dispatchEvent("Stop", undefined, specific, dctx);
         if (r.veto === undefined) return [];
         if (state.stopContinuations >= 3) {

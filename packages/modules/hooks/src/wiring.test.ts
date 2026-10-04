@@ -198,6 +198,37 @@ command = "echo '{\\"additionalContext\\":\\"格式化完成，共 3 个文件\\
     await h.close();
   });
 
+  it("⑦b 走查修协议对齐——PostToolUse stdin 带 tool_input（cc 口径：事后钩子拿工具入参做归因）", async () => {
+    const { h } = await setup({
+      hooksToml: `
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+command = "node -e \\"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);process.stdout.write(JSON.stringify({additionalContext:'归因 arg='+p.tool_input.v}))})\\""
+`,
+    });
+    await h.prompt("干活");
+    const events = await h.history();
+    const steerMsgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    expect(steerMsgs.some((m) => m.text.includes("归因 arg=orig"))).toBe(true); // tool_input.v=orig 透传到了钩子 stdin
+    await h.close();
+  });
+
+  it("⑦c 走查修协议对齐——PostToolUseFailure stdin 带 error（cc 形态）与 tool_input", async () => {
+    const { h } = await setup({
+      failingTool: true,
+      hooksToml: `
+[[hooks.PostToolUseFailure]]
+[[hooks.PostToolUseFailure.hooks]]
+command = "node -e \\"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);process.stdout.write(JSON.stringify({additionalContext:'善后 '+p.error+' / '+p.tool_input.v}))})\\""
+`,
+    });
+    await h.prompt("干活");
+    const events = await h.history();
+    const steerMsgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    expect(steerMsgs.some((m) => m.text.includes("善后 工具炸了") && m.text.includes("/ orig"))).toBe(true);
+    await h.close();
+  });
+
   it("⑧ isError 分流：失败工具只触发 PostToolUseFailure 表、成功工具只触发 PostToolUse 表（matcher 同认工具名）", async () => {
     // 成功跑 + PostToolUseFailure-only 配置：钩子不该跑（hooks/run 无账）
     const ok = await setup({
@@ -365,6 +396,23 @@ command = "test -f \\"\${OROSUS_PROJECT_DIR}/stopmark\\" && exit 0 || { touch \\
     expect(cont).toMatchObject({ sourceModule: "hooks" });
     expect(cont!.text).toContain("还有活没干完");
     expect(JSON.stringify(requests[1]?.messages)).toContain("还有活没干完"); // 续跑消息进了模型上下文
+    await h.close();
+  });
+
+  it("⑤b 走查修协议对齐——Stop stdin 带 last_assistant_message（cc 同款：末条回复供拦停判定）", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("第一答"), textChunk("第二答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "node -e \\"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);if(p.last_assistant_message==='第一答'){console.error('末条是第一答，继续');process.exit(2)}})\\""
+`,
+    });
+    await h.prompt("干活");
+    expect(requests).toHaveLength(2); // 钩子读到 last_assistant_message=第一答 → exit 2 续跑
+    const events = await h.history();
+    const msgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    expect(msgs.some((m) => m.text.includes("钩子要求继续") && m.text.includes("第一答，继续"))).toBe(true);
     await h.close();
   });
 
