@@ -292,7 +292,7 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${anchored}$`);
 }
 
-const pathParam = { path: z.string().describe("相对工作目录的路径（read 也接受绝对路径——可读工作目录外的文件；写仍限工作目录内）") };
+const pathParam = { path: z.string().describe("Path to the file, relative to the working directory; read also accepts absolute paths (files outside the working directory can be read — writes stay confined to it)") };
 
 /** read 缺省窗口（M4-2.5 T0，opencode/pi 同款）：模型得连贯首段+续读提示；日志侧坍缩靠 mtime 去重。 */
 const READ_DEFAULT_WINDOW = 2000;
@@ -371,8 +371,8 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
     description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nAbsolute paths are accepted and may point outside the working directory (e.g. other local repos the user referenced); writes stay confined to the working directory.\nSensitive files (.env / SSH keys / credentials, incl. variants) are denied by default — ask the user to provide such content directly if truly needed.\nParameters:\n  path: Relative path (or absolute path) to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFiles larger than 1MB are rejected (use grep to locate content or shell tools to read sections); binary files are rejected.\nLines longer than 8KB are truncated.",
     parameters: z.object({
       ...pathParam,
-      offset: z.number().int().positive().optional().describe("起始行号（1-based）"),
-      limit: z.number().int().positive().optional().describe("返回的最大行数"),
+      offset: z.number().int().positive().optional().describe("The line number to start reading from (1-based)"),
+      limit: z.number().int().positive().optional().describe("The number of lines to read"),
     }),
     resolveExecution: async (input) => {
       const { path, offset, limit } = input as { path: string; offset?: number; limit?: number };
@@ -500,10 +500,10 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
     parameters: z.object({
       ...pathParam,
       edits: z.array(z.object({
-        oldText: z.string().describe("待替换的精确文本"),
-        newText: z.string().describe("替换后的文本"),
-        replaceAll: z.boolean().optional().describe("替换全部出现（不参与唯一性/重叠检测）"),
-      })).min(1).describe("编辑列表——全部基于原文件匹配，不得重叠"),
+        oldText: z.string().describe("The text to replace"),
+        newText: z.string().describe("The text to replace it with"),
+        replaceAll: z.boolean().optional().describe("Replace all occurrences of oldText (default false; exempt from the uniqueness/overlap checks)"),
+      })).min(1).describe("One or more targeted replacements — each edit is matched against the ORIGINAL file, not incrementally; do not include overlapping edits"),
     }),
     resolveExecution: async (input) => {
       const { path, edits } = input as { path: string; edits: { oldText: string; newText: string; replaceAll?: boolean }[] };
@@ -631,8 +631,8 @@ function globTool(fs: LocalFs): Tool {
     name: "tool-fs__glob",
     description: "Find files by glob pattern. Results are file paths only (directories excluded).\nUse this tool — not shell find or ls — to discover files by name pattern.\nPatterns resolve against the working directory; absolute-path patterns (or ../) target directories outside it — the walk starts at the longest glob-free directory prefix (e.g. D:/other/repo/src/**/*.ts).\nSensitive files (.env / SSH keys / credentials) are filtered out of results.\nSkips node_modules and .git directories only — other ignore rules are NOT applied (dist/ and coverage/ are traversed). head_limit to cap results (default 100).",
     parameters: z.object({
-      pattern: z.string().describe("glob 模式（相对工作目录，或绝对路径直指他仓）"),
-      head_limit: z.number().int().positive().optional().describe("返回的最大条数（缺省 100）"),
+      pattern: z.string().describe("The glob pattern to match files against (relative to the working directory, or an absolute path targeting another repo)"),
+      head_limit: z.number().int().positive().optional().describe("Limit output to the first N entries (default 100)"),
     }),
     resolveExecution: async (input) => {
       const { pattern, head_limit } = input as { pattern: string; head_limit?: number };
@@ -664,8 +664,8 @@ function grepTool(fs: LocalFs): Tool {
     name: "tool-fs__grep",
     description: "Search file contents by JavaScript regex pattern.\nUse this tool — not shell grep or rg — to search file contents.\nScans the working directory tree (to search another local repo, use glob with an absolute pattern there, or read its files directly).\nSensitive files (.env / SSH keys / credentials) are excluded from results.\noutput_mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\".\nUse files_with_matches to locate files, then read for context.\nInvalid or nested-quantifier regexes (e.g. (a+)+) are rejected; lines longer than 4096 chars are skipped.\nFiles over 1MB are skipped; matches are capped at 200 (truncated with a note — narrow the pattern).",
     parameters: z.object({
-      pattern: z.string().describe("JavaScript 正则"),
-      output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("输出格式（缺省 content）"),
+      pattern: z.string().describe("The regular expression pattern to search for (JavaScript regex)"),
+      output_mode: z.enum(["content", "files_with_matches", "count"]).optional().describe("Output mode: \"content\" (path:line:text), \"files_with_matches\" (paths only), or \"count\" (default \"content\")"),
     }),
     resolveExecution: async (input) => {
       const { pattern, output_mode } = input as { pattern: string; output_mode?: "content" | "files_with_matches" | "count" };

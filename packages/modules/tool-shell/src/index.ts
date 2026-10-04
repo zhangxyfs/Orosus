@@ -146,10 +146,10 @@ function dialectTexts(shell: ShellSpec): { description: string; commandHint: str
         : "Execute a shell command via POSIX sh. Returns combined stdout/stderr.";
   const commandHint =
     shell.kind === "bash"
-      ? "要执行的 shell 命令（本机经 Git Bash 执行——POSIX 语法可用）"
+      ? "The command to execute (runs via Git Bash on this machine — POSIX syntax works)"
       : shell.kind === "cmd"
-        ? "要执行的 shell 命令（Windows=cmd：无 head/grep 等 POSIX 命令；POSIX=sh）"
-        : "要执行的 shell 命令（POSIX sh）";
+        ? "The command to execute (the Windows shell is cmd: no POSIX commands like head/grep; POSIX systems use sh)"
+        : "The command to execute (POSIX sh)";
   return {
     description: `${base}\nUse ONLY for commands that genuinely need a shell (git, npm, system operations).\nFor file operations, prefer dedicated tools: read/write/edit/glob/grep. This is CRITICAL.\nDefault timeout 120 seconds.\nUse the workdir parameter (not \`cd\`) to run in a specific directory — it is remembered for the next call.\n\`cd\` inside a command does NOT carry over (only workdir is remembered).\nFor long-running commands (dev servers, long tests), use run_in_background: returns a job id immediately; completion is reported automatically (no polling needed). Do NOT pipe a background job through \`tail\` (cmd | tail -20) — tail buffers everything until the command exits, so the job's output file stays empty the whole time (reads as "no progress"); read the raw output instead.`,
     commandHint,
@@ -163,10 +163,10 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: She
     description,
     parameters: z.object({
       command: z.string().describe(commandHint),
-      workdir: z.string().optional().describe("工作目录（相对路径基于上次记忆的目录解析；成功后记为下次缺省——别用 cd，shell 内 cd 不会被记住）"),
-      writeOutputTo: z.string().optional().describe("可选：把原始输出经 fs 能力写入此路径"),
-      timeoutMs: z.number().int().positive().max(120_000).optional().describe("超时毫秒，默认 120000，超时杀整个进程树"),
-      run_in_background: z.boolean().optional().describe("true = 后台执行：立即返回作业 id 与输出文件路径，完成自动通知（勿轮询——进度用 tool-shell__output 读，停运用 tool-shell__kill）"),
+      workdir: z.string().optional().describe("Working directory for this command (relative paths resolve against the last remembered directory; on success it is remembered as the next default — use this instead of cd: an in-shell cd is not remembered)"),
+      writeOutputTo: z.string().optional().describe("Optional: write the raw output to this path via the fs capability"),
+      timeoutMs: z.number().int().positive().max(120_000).optional().describe("Optional timeout in milliseconds (default and max 120000); on timeout the entire process tree is killed"),
+      run_in_background: z.boolean().optional().describe("Set to true to run this command in the background: returns a job id and an output file path immediately; completion is reported automatically (do not poll — read progress with tool-shell__output, stop it with tool-shell__kill)"),
     }),
     resolveExecution: (input) => {
       const { command, workdir, writeOutputTo, timeoutMs, run_in_background } = input as BashInput;
@@ -220,8 +220,8 @@ function outputTool(registry: JobRegistry): Tool {
     description: `Read the output of a background shell job (started via tool-shell__bash with run_in_background).
 Returns the tail of the job's output file plus its state (running / exited). Default 16000 characters tail; pass chars to adjust.`,
     parameters: z.object({
-      id: z.string().describe("后台作业 id（bg-…，tool-shell__bash 后台启动时返回）"),
-      chars: z.number().int().positive().max(100_000).optional().describe("读取尾部字符数（默认 16000；字符语义非字节，CJK 不劈半——SW-6）"),
+      id: z.string().describe("The background job id to read output from (bg-…, returned when tool-shell__bash starts it in the background)"),
+      chars: z.number().int().positive().max(100_000).optional().describe("Number of trailing characters to read (default 16000; counted in characters, not bytes — CJK characters are never split in half — SW-6)"),
     }),
     resolveExecution: (input) => {
       const { id, chars } = input as { id: string; chars?: number };
@@ -253,7 +253,7 @@ function killTool(registry: JobRegistry): Tool {
     name: "tool-shell__kill",
     description: "Stop a background shell job by id (kills the whole process tree). Only jobs started by this session can be killed.\nIf the job already finished on its own, the result says so — nothing is killed.",
     parameters: z.object({
-      id: z.string().describe("要停止的后台作业 id（bg-…）"),
+      id: z.string().describe("The id of the background job to stop (bg-…)"),
     }),
     resolveExecution: (input) => {
       const { id } = input as { id: string };

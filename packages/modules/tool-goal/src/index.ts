@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { defineTool, type Tool } from "@orosus/contracts/tool";
-import { createGoalStore, OBJECTIVE_MAX, type GoalStore, type GoalState } from "./state.ts";
+import { createGoalStore, OBJECTIVE_MAX, BLOCKED_STREAK_REQUIRED, type GoalStore, type GoalState } from "./state.ts";
 
 export { createGoalStore, OBJECTIVE_MAX, BLOCKED_STREAK_REQUIRED, type GoalStore, type GoalState } from "./state.ts";
 
@@ -30,9 +30,9 @@ export function goalTools(store: GoalStore): Tool[] {
 A goal keeps you working across rounds — you will be reminded until it reaches a terminal state.
 Use when the user gives a task that needs sustained multi-step work. Do NOT create for one-shot questions.`,
       parameters: z.object({
-        objective: z.string().min(1).describe(`目标描述（≤${OBJECTIVE_MAX} 字符；更长请先写文件再给路径与摘要）`),
-        maxRounds: z.number().int().positive().optional().describe("可选：续跑轮预算（超限自动置 blocked；缺省无限——保险丝不是门槛）"),
-        replace: z.boolean().optional().describe("true = 覆盖当前活动目标（缺省撞单目标报错带现状）"),
+        objective: z.string().min(1).describe(`Objective (≤${OBJECTIVE_MAX} chars; if longer, write it to a file first and pass the path plus a summary)`),
+        maxRounds: z.number().int().positive().optional().describe("Optional positive limit on continuation rounds (exceeding it sets blocked automatically; default unlimited — a fuse, not a gate)"),
+        replace: z.boolean().optional().describe("Set to true to replace the current active goal (by default, colliding with the single active goal errors and reports the current state)"),
       }),
       resolveExecution: (input) => {
         const { objective, maxRounds, replace } = input as { objective: string; maxRounds?: number; replace?: boolean };
@@ -63,8 +63,8 @@ Use when the user gives a task that needs sustained multi-step work. Do NOT crea
 complete: the objective is fully achieved — state the evidence in reason.
 blocked: ONLY when truly stuck — requires the SAME blocker reported on 3 consecutive continuation rounds to be accepted.`,
       parameters: z.object({
-        action: z.enum(["complete", "blocked"]).describe("complete = 已完成；blocked = 无法推进（需连续三轮同一原因才受理）"),
-        reason: z.string().min(1).describe("完成的证据 / 阻塞的具体原因（什么挡着你、试过什么）"),
+        action: z.enum(["complete", "blocked"]).describe(`"complete" = done; "blocked" = cannot proceed (accepted only after the same blocking condition persists for ${BLOCKED_STREAK_REQUIRED} consecutive rounds — difficulty or merely unfinished work is not blocked)`),
+        reason: z.string().min(1).describe("Evidence of completion / the concrete blocking condition (what is stopping you, what you have tried)"),
       }),
       resolveExecution: (input) => {
         const { action, reason } = input as { action: "complete" | "blocked"; reason: string };
@@ -94,8 +94,8 @@ export function goalSectionText(store: GoalStore): string {
   const s = store.current();
   if (s === null || s.status !== "active") return "";
   return `## Current Goal
-当前目标（续跑）：<untrusted_objective>${s.objective}</untrusted_objective>
-未达终态不要停止——完成用 tool-goal__update 报 complete；确无法推进报 blocked（连续三轮同一阻塞才受理）。`;
+Current objective (continuation): <untrusted_objective>${s.objective}</untrusted_objective>
+Do not stop before reaching a terminal state — report complete via tool-goal__update when done; report blocked only if you truly cannot proceed (accepted after the same blocking condition persists for ${BLOCKED_STREAK_REQUIRED} consecutive rounds).`;
 }
 
 /** followUp 续跑轮（M4-3 T7/D7——Goal 与 todo 的分水岭）：模型无工具调用欲停时，目标未达终态且预算未尽

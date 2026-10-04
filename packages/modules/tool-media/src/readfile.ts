@@ -96,8 +96,8 @@ export interface ReadMediaFileDeps {
   summarize?: (path: string, mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif") => Promise<string | undefined>;
 }
 
-const REGION_DESC = "裁剪区（像素坐标，先全图看布局再裁一角看细节的两段式用法）";
-const TIER_DESC = "成本档：256 最省（粗看）/ 1024（常看）/ 2048 最清（细节，默认）";
+const REGION_DESC = "Images only: view just this rectangle of the image (pixel coordinates). Use after a full view to inspect fine detail";
+const TIER_DESC = "Cost tier: 256 = cheapest (rough look) / 1024 (normal) / 2048 = clearest (detail, default)";
 
 /** 工具工厂（模块 activate 与测试共用——deps 注入模型口/目录路径/口径）。 */
 export function createReadMediaFileTool(deps: ReadMediaFileDeps = {}): Tool {
@@ -110,14 +110,14 @@ export function createReadMediaFileTool(deps: ReadMediaFileDeps = {}): Tool {
 Delivery tiers: image already within size caps is delivered as-is; oversized images are downsampled (longest edge ${spec.maxEdge}px, token tier ${spec.tokenTier}); use "region" to crop and inspect a detail area at higher effective resolution (look at the whole image first, then crop); use full_resolution to skip pre-downsampling (wire caps still apply).
 If the current model does not support image input, STILL CALL THIS whenever the user references an image: with a vision helper model configured it returns the helper model's description of the image (original stays at the path); otherwise a path note (switch model with /model to view).`,
     parameters: z.object({
-      path: z.string().min(1).describe("图片文件的绝对路径"),
+      path: z.string().min(1).describe("Absolute path to an image or video file"),
       region: z.object({
         x: z.number().int().min(0), y: z.number().int().min(0),
         width: z.number().int().positive(), height: z.number().int().positive(),
       }).optional().describe(REGION_DESC),
       token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).optional().describe(TIER_DESC),
-      full_resolution: z.boolean().optional().describe("真 = 跳过预降采样（线缆帽值仍守）；缺省 false"),
-      frames: z.number().int().min(1).max(8).optional().describe("视频抽帧数（1-8，缺省 4）——仅当模型不支持视频输入时走抽帧路"),
+      full_resolution: z.boolean().optional().describe("Set to true to skip the default downscaling and view at native resolution (the per-image wire-size cap still applies); default false"),
+      frames: z.number().int().min(1).max(8).optional().describe("Number of frames to extract from video (1-8, default 4) — used only when the model does not support video input"),
     }),
     resolveExecution: async (input) => {
       const args = input as { path: string; region?: { x: number; y: number; width: number; height: number }; token_tier?: 256 | 1024 | 2048; full_resolution?: boolean; frames?: number };

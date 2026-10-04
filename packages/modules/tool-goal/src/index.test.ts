@@ -125,7 +125,7 @@ describe("tool-goal 状态机与三工具（M4-3 T6）", () => {
     const text = goalSectionText(store);
     expect(text).toContain("<untrusted_objective>把 README 翻译成英文</untrusted_objective>");
     expect(text).not.toMatch(/第 \d+\/\d+ 轮/); // 段内无轮次计数——目标活跃期段恒定，前缀缓存不每轮击穿
-    expect(text).toContain("未达终态不要停止");
+    expect(text).toContain("Do not stop before reaching a terminal state");
     const beforeSpend = text;
     store.spendRound();
     expect(goalSectionText(store)).toBe(beforeSpend); // 段文本不随 spendRound 变化

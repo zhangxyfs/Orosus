@@ -44,8 +44,8 @@ export function createDownsampleTool(spec: { maxEdge: number; tokenTier: number 
     label: "Downsample Image",
     description: `Downsample an image to a token cost tier (256 = cheapest for a quick look, 1024 = normal, 2048 = finest detail). The downsampled copy is attached so you can view it; the original file is never modified.`,
     parameters: z.object({
-      path: z.string().min(1).describe("源图片路径"),
-      token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).default(2048).describe("目标 token 档"),
+      path: z.string().min(1).describe("Source image path"),
+      token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).default(2048).describe("Target token tier"),
     }),
     resolveExecution: async (input) => {
       const args = input as { path: string; token_tier?: 256 | 1024 | 2048 };
@@ -72,10 +72,10 @@ export function createCropTool(spec: { maxEdge: number; tokenTier: number } = { 
     label: "Crop Image",
     description: `Crop a rectangular region out of an image and attach the crop so you can inspect it at higher effective resolution (look at the whole image first, then crop into a detail area). The original file is never modified.`,
     parameters: z.object({
-      path: z.string().min(1).describe("源图片路径"),
+      path: z.string().min(1).describe("Source image path"),
       x: z.number().int().min(0), y: z.number().int().min(0),
       width: z.number().int().positive(), height: z.number().int().positive(),
-      token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).optional().describe("裁剪副本的 token 档（缺省 2048——裁剪就是为看细节）"),
+      token_tier: z.union([z.literal(256), z.literal(1024), z.literal(2048)]).optional().describe("Token tier of the cropped copy (default 2048 — cropping exists to see detail)"),
     }),
     resolveExecution: async (input) => {
       const args = input as { path: string; x: number; y: number; width: number; height: number; token_tier?: 256 | 1024 | 2048 };
@@ -104,8 +104,8 @@ export function createConvertTool(): Tool {
     label: "Convert Image",
     description: `Convert an image between png / jpeg / webp and attach the converted copy (e.g. shrink a lossless png screenshot to webp/jpeg for cheaper delivery). The original file is never modified.`,
     parameters: z.object({
-      path: z.string().min(1).describe("源图片路径"),
-      to: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("目标格式"),
+      path: z.string().min(1).describe("Source image path"),
+      to: z.enum(["image/png", "image/jpeg", "image/webp"]).describe("Target format"),
     }),
     resolveExecution: async (input) => {
       const args = input as { path: string; to: "image/png" | "image/jpeg" | "image/webp" };
@@ -153,9 +153,9 @@ export function createVideoClipTool(): Tool {
     label: "Clip Video",
     description: `Cut a segment out of a video file (ffmpeg required) and attach the clip, e.g. to re-inspect the moment an UI walkthrough failed. Times are seconds from the start.`,
     parameters: z.object({
-      path: z.string().min(1).describe("源视频路径"),
-      start_sec: z.number().min(0).describe("起始秒"),
-      end_sec: z.number().min(0).describe("结束秒（> start_sec）"),
+      path: z.string().min(1).describe("Source video path"),
+      start_sec: z.number().min(0).describe("Start time in seconds"),
+      end_sec: z.number().min(0).describe("End time in seconds (> start_sec)"),
     }),
     resolveExecution: async (input) => {
       const args = input as { path: string; start_sec: number; end_sec: number };
