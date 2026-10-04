@@ -16,7 +16,6 @@ import { discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv,
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
-import { injectionFoldLabel } from "./render.ts";
 import { createCliUi } from "./uiface.ts";
 import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.ts";
 import { trustModule } from "@orosus/core";
@@ -65,7 +64,7 @@ import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir,
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
-import { buildHookBuckets, hookDisplayOf, hookStatusOf, type HooksUiDeps } from "./hooks-ui.ts";
+import { buildHookBuckets, injectionRowsOf, type HooksUiDeps } from "./hooks-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
 import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -1159,14 +1158,14 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       app.viewText(view.title, view.text, { layout: "full" });
     },
     // Ctrl+H = 钩子活动查看窗（m5-hooks T10 / D19 三件套 + 走查修两级结构——注入多了分不清是哪条消息的）：
-    // 一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数；SessionStart 归「会话启动」伪桶）
-    // → 回车进二级 = 该消息的钩子运行列表（hooks/run 完成账：显示名/产品/事件/状态/耗时——全部运行都
-    // 在，含失败/跳过/拦截）+ 注入条目（回车看全文）。数据源 = 会话日志事件流按位置归桶
-    // （buildHookBuckets），不改协议、不加第二数据源。
+    // 一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数；首条消息前的活动〔SessionStart〕
+    // 并入第一条消息桶——用户拍板无「会话启动」桶），回车进二级 = 该消息的**注入条目**（现行折叠行
+    // 形态 + product 标注，回车看全文——用户拍板二级就是注入列表；运行状态/耗时不进二级，运行账只作
+    // 一级计数与 product 归属）。数据源 = 会话日志事件流按位置归桶（buildHookBuckets），不改协议。
     showInjections: async () => {
       const buckets = buildHookBuckets(await h.history());
       if (buckets.length === 0) {
-        app.showToast("本会话还没有钩子运行记录（配置钩子后可看，Ctrl + H）");
+        app.showToast("本会话还没有钩子活动记录（配置钩子后可看，Ctrl + H）");
         return;
       }
       for (;;) { // 一级：消息列表
@@ -1174,33 +1173,12 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         const picked = await app.pickOverlay("钩子活动 · 按消息分组（回车下钻 · Esc 返回）", items);
         if (picked === undefined) return; // Esc 关窗
         const b = buckets[picked]!;
-        for (;;) { // 二级：该消息的钩子调用列表（运行 + 注入）
-          const runRows = b.runs.map((r) => {
-            const who = [hookDisplayOf(r.hook, r.name), r.product, r.event].filter((x) => x !== undefined && x !== "").join(" · ");
-            return `${who} · ${hookStatusOf(r.status)}${r.subagent !== undefined ? " · 子代理" : ""}${r.durationMs !== undefined ? ` · ${r.durationMs}ms` : ""}`;
-          });
-          const injRows = b.injections.map((m) => `⌁ ${injectionFoldLabel(m.text!, m.sourceModule)}（回车看全文）`);
-          const picked2 = await app.pickOverlay(`${b.label}（回车详情 · Esc 返回上一级）`, [...runRows, ...injRows]);
+        for (;;) { // 二级：该消息的注入条目（回车看全文 · Esc 回一级）
+          const rows = injectionRowsOf(b);
+          if (rows.length === 0) { app.showToast("这条消息的钩子运行了但没有注入内容（拦截/失败/跳过——Ctrl+H 只看注入）"); break; }
+          const picked2 = await app.pickOverlay(`${b.label}（回车看全文 · Esc 返回上一级）`, rows.map((r) => r.label));
           if (picked2 === undefined) break; // Esc 回一级
-          if (picked2 < runRows.length) { // 运行条目 → 详情（命令原文/理由/明细——列表行不塞命令）
-            const r = b.runs[picked2]!;
-            const l = [
-              `显示名：${hookDisplayOf(r.hook, r.name)}`,
-              ...(r.product !== undefined ? [`产品：${r.product}`] : []),
-              `事件：${r.event}`,
-              `状态：${hookStatusOf(r.status)}`,
-              `命令：${r.hook}`,
-              ...(r.matcher !== undefined ? [`matcher：${r.matcher}`] : []),
-              ...(r.subagent !== undefined ? [`子代理：${r.subagent}`] : []),
-              ...(r.reason !== undefined ? [`理由：${r.reason}`] : []),
-              ...(r.detail !== undefined ? [`明细：${r.detail}`] : []),
-              ...(r.durationMs !== undefined ? [`耗时：${r.durationMs}ms`] : []),
-              "", "Esc 返回",
-            ];
-            app.viewText("钩子运行", l.join("\n"), { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
-          } else { // 注入条目 → 全文
-            app.viewText("注入全文", b.injections[picked2 - runRows.length]!.text!, { layout: "dock" });
-          }
+          app.viewText("注入全文", rows[picked2]!.text, { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
         }
       }
     },

@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import { parse } from "smol-toml";
 import { HOOK_EVENTS, defaultProjectConfigFile, defaultUserConfigFile, evaluateProjectTrust, projectBucketKey, projectHooksDigest, trustFilePath, type HookEvent } from "@orosus/hooks";
+import { injectionFoldLabel } from "./render.ts";
 import type { FullApp } from "./tui/fullapp.ts";
 
 /** /settings → 钩子（m5-hooks T10，用户拍板不设 /hooks 命令）：列表样式参照 ZCode settings 钩子面
@@ -107,14 +108,15 @@ export const rowLabel = (w: number, r: HookRow): string => {
 };
 
 /** ── Ctrl+H 钩子活动查看窗（走查修：注入多了分不清是哪条消息的——两级结构）──────────
- *  一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数）；二级 = 该消息的钩子运行列表
- *  （hooks/run 完成账，含 name/product/状态/耗时）+ 注入条目（回车看全文）。数据源 = 会话日志
- *  事件流按位置归桶（hooks/run 与 steering 注入归属最近一条 user/message；首条消息之前的活动
- *  归「会话启动」伪桶）——不改协议、不加第二数据源。 */
+ *  一级 = 消息分桶（用户消息原文截断 + 该消息的钩子调用次数）；二级 = 该消息的注入条目
+ *  （现行折叠行形态 + product 标注，回车看全文）。数据源 = 会话日志事件流按位置归桶
+ *  （hooks/run 与 steering 注入归属最近一条 user/message）。**无「会话启动」伪桶**（用户走查拍板）：
+ *  首条消息之前的钩子活动（SessionStart）全部并入第一条消息桶——注入实际也是在该轮 step 生效的；
+ *  仅当查看窗在发首条消息前打开（罕见）才以「（首条消息前）」兜底桶呈现。 */
 
 export interface HookRunRec {
   event: string;
-  hook: string;          // 命令原文（详情窗用）
+  hook: string;          // 命令原文（计数与 product 归属源；二级不再展示运行行——用户拍板）
   name?: string;
   product?: string;
   status: string;
@@ -126,8 +128,8 @@ export interface HookRunRec {
   subagent?: string;
 }
 export interface HookBucket {
-  label: string;                     // 「会话启动」或消息首行截断（≤40）
-  runs: HookRunRec[];                // 完成账（running 显形账按 runId 去重——完成账信息更全；在飞钩子只显 running 账）
+  label: string;                     // 消息首行截断（≤40）；无消息兜底「（首条消息前）」
+  runs: HookRunRec[];                // 全部运行账（一级「N 次钩子」计数源 + product 归属；running 显形账按 runId 去重）
   injections: { text: string; sourceModule?: string }[]; // 该桶内的注入（host/hook 与 hooks 源）
 }
 
@@ -158,40 +160,50 @@ export const hookStatusOf = (status: string): string => ({
 /** 按消息分桶（导出供测试）。events = 会话日志事件流（h.history() 原样）；无钩子活动的消息桶不出现在结果里。 */
 export const buildHookBuckets = (events: unknown[]): HookBucket[] => {
   const buckets: (HookBucket & { touched: boolean })[] = [];
-  let cur: (HookBucket & { touched: boolean }) | undefined; // 首条 user/message 前 = 会话启动伪桶
-  const ensure = (): HookBucket & { touched: boolean } => {
-    if (cur === undefined) { cur = { label: "会话启动", runs: [], injections: [], touched: false }; buckets.push(cur); }
-    return cur;
-  };
+  // 首条消息前的活动（SessionStart 等）暂存，随首条 user/message 一并归入其桶（用户拍板：无「会话启动」桶）
+  const pending: { runs: HookRunRec[]; injections: { text: string; sourceModule?: string }[] } = { runs: [], injections: [] };
+  let cur: (HookBucket & { touched: boolean }) | undefined;
+  const runOf = (e: Record<string, unknown>): HookRunRec => ({
+    event: String(e.event ?? ""), hook: String(e.hook ?? ""),
+    ...(typeof e.name === "string" ? { name: e.name } : {}),
+    ...(typeof e.product === "string" ? { product: e.product } : {}),
+    status: String(e.status ?? ""),
+    ...(typeof e.runId === "number" ? { runId: e.runId } : {}),
+    ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
+    ...(typeof e.reason === "string" ? { reason: e.reason } : {}),
+    ...(typeof e.detail === "string" ? { detail: e.detail } : {}),
+    ...(typeof e.matcher === "string" ? { matcher: e.matcher } : {}),
+    ...(typeof e.subagent === "string" ? { subagent: e.subagent } : {}),
+  });
   for (const raw of events) {
     const e = raw as Record<string, unknown>;
     if (e.type === "user/message") {
-      cur = { label: msgLabelOf(e), runs: [], injections: [], touched: false };
-      buckets.push(cur);
+      const b: HookBucket & { touched: boolean } = { label: msgLabelOf(e), runs: pending.runs, injections: pending.injections, touched: pending.runs.length > 0 || pending.injections.length > 0 };
+      pending.runs = []; pending.injections = [];
+      cur = b;
+      buckets.push(b);
       continue;
     }
     if (e.type === "hooks/run") {
-      ensure().touched = true;
-      ensure().runs.push({
-        event: String(e.event ?? ""), hook: String(e.hook ?? ""),
-        ...(typeof e.name === "string" ? { name: e.name } : {}),
-        ...(typeof e.product === "string" ? { product: e.product } : {}),
-        status: String(e.status ?? ""),
-        ...(typeof e.runId === "number" ? { runId: e.runId } : {}),
-        ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
-        ...(typeof e.reason === "string" ? { reason: e.reason } : {}),
-        ...(typeof e.detail === "string" ? { detail: e.detail } : {}),
-        ...(typeof e.matcher === "string" ? { matcher: e.matcher } : {}),
-        ...(typeof e.subagent === "string" ? { subagent: e.subagent } : {}),
-      });
+      const rec = runOf(e);
+      if (cur === undefined) { pending.runs.push(rec); continue; }
+      cur.touched = true;
+      cur.runs.push(rec);
       continue;
     }
     if (e.type === "agent/steering-message") {
       const msgs = Array.isArray(e.messages) ? e.messages as { text?: string; sourceModule?: string }[] : [];
       const hits = msgs.filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "")
         .map((m): { text: string; sourceModule?: string } => ({ text: m.text!, ...(m.sourceModule !== undefined ? { sourceModule: m.sourceModule } : {}) }));
-      if (hits.length > 0) { const b = ensure(); b.touched = true; b.injections.push(...hits); }
+      if (hits.length === 0) continue;
+      if (cur === undefined) { pending.injections.push(...hits); continue; }
+      cur.touched = true;
+      cur.injections.push(...hits);
     }
+  }
+  // 兜底：查看窗在发首条消息前打开（罕见）——暂存活动以「（首条消息前）」单桶呈现
+  if (pending.runs.length > 0 || pending.injections.length > 0) {
+    buckets.push({ label: "（首条消息前）", runs: pending.runs, injections: pending.injections, touched: true });
   }
   // running 显形账去重：同 runId 已有完成账则丢弃 running（open 时在飞的钩子保留其唯一账）
   for (const b of buckets) {
@@ -199,6 +211,23 @@ export const buildHookBuckets = (events: unknown[]): HookBucket[] => {
     b.runs = b.runs.filter((r) => r.status !== "running" || !done.has(r.runId));
   }
   return buckets.filter((b) => b.touched).map(({ label, runs, injections }) => ({ label, runs, injections }));
+};
+
+/** 注入条目 name 提取（包裹头「钩子注入（事件 · 名）」——与 injectionFoldLabel 同源口径）。 */
+export const injectionNameOf = (text: string): string | undefined => {
+  const m = /钩子注入（([^)）]+)）/.exec(text);
+  return m?.[1]?.includes(" · ") ? m[1].split(" · ").slice(1).join(" · ") : undefined;
+};
+
+/** 二级行（用户拍板：就是现行的注入列表 + product 标注）：product 由桶内运行账按显示名归属（包裹头不带 product，不污染注入正文）。 */
+export const injectionRowsOf = (b: HookBucket): { label: string; text: string }[] => {
+  const productBy = new Map<string, string>();
+  for (const r of b.runs) if (r.name !== undefined && r.product !== undefined) productBy.set(r.name, r.product);
+  return b.injections.map((m): { label: string; text: string } => {
+    const name = injectionNameOf(m.text);
+    const product = name !== undefined ? productBy.get(name) : undefined;
+    return { label: `⌁ ${injectionFoldLabel(m.text, m.sourceModule)}${product !== undefined ? ` · ${product}` : ""}`, text: m.text };
+  });
 };
 
 /** TOML 行级启停写：定位第 (tableIdx+1) 个 [[hooks.<Event>]] 内第 (hookIdx+1) 个 [[hooks.<Event>.hooks]]

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { buildHookBuckets, hookDisplayOf, hookStatusOf, hooksFace, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
+import { buildHookBuckets, hookDisplayOf, hookStatusOf, hooksFace, injectionRowsOf, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
 import { injectionFoldLabel } from "./render.ts";
 import { renderEvent } from "./render.ts";
 import { SETTINGS_ITEMS } from "./settings-ui.ts";
@@ -153,29 +153,47 @@ describe("Ctrl+H 钩子活动查看窗·消息分桶（走查修两级结构）"
 	const msg = (text: string): Record<string, unknown> => ({ type: "user/message", content: [{ kind: "text", text }] });
 	const steer = (text: string, sourceModule = "host/hook"): Record<string, unknown> => ({ type: "agent/steering-message", messages: [{ text, sourceModule }] });
 
-	it("⑨b 分桶三态：首条消息前归「会话启动」伪桶；消息原文截断 40；无钩子活动的消息桶不出现", () => {
+	it("⑨b 分桶：首条消息前的活动（SessionStart）并入第一条消息桶（用户拍板无「会话启动」桶）；消息原文截断 40；无钩子活动的消息桶不出现", () => {
 		const long = "这".repeat(60);
 		const buckets = buildHookBuckets([
-			run({ event: "SessionStart", runId: 1 }),
-			steer("[非用户输入] 钩子注入（SessionStart）\n────────\n知识"),
+			run({ event: "SessionStart", runId: 1, name: "项目知识", product: "OK" }),
+			steer("[非用户输入] 钩子注入（SessionStart · 项目知识）\n────────\n知识"),
 			msg(long),
 			run({ runId: 2 }),
 			msg("这条消息没触发钩子"),
 			msg("第二条"),
 			run({ runId: 3, status: "deny", name: "守卫", product: "OK", reason: "拦" }),
 		]);
-		expect(buckets.map((b) => b.label)).toEqual(["会话启动", `${"这".repeat(40)}…`, "第二条"]);
-		expect(buckets[0]).toMatchObject({ runs: [{ event: "SessionStart" }], injections: [{ sourceModule: "host/hook" }] });
-		expect(buckets[2]!.runs[0]).toMatchObject({ name: "守卫", product: "OK", status: "deny" });
+		expect(buckets.map((b) => b.label)).toEqual([`${"这".repeat(40)}…`, "第二条"]); // 无「会话启动」桶
+		expect(buckets[0]!.runs.map((r) => r.event)).toEqual(["SessionStart", "PreToolUse"]); // SessionStart 并入首条消息
+		expect(buckets[0]!.injections).toHaveLength(1);
+		expect(buckets[1]!.runs[0]).toMatchObject({ name: "守卫", product: "OK", status: "deny" });
 	});
 
-	it("⑩b running 显形账去重：同 runId 有完成账则 running 不重复计入；在飞钩子（只有 running）保留", () => {
+	it("⑩b running 显形账去重：同 runId 有完成账则 running 不重复计入；在飞钩子（只有 running）保留；无消息时兜底「（首条消息前）」桶", () => {
 		const buckets = buildHookBuckets([msg("干活"), run({ runId: 7, status: "running" }), run({ runId: 7, status: "pass", durationMs: 900 }), run({ runId: 8, status: "running" })]);
 		expect(buckets).toHaveLength(1);
 		expect(buckets[0]!.runs.map((r) => r.status)).toEqual(["pass", "running"]); // 7 完成账留、running 丢；8 在飞唯一账保留
+		const noMsg = buildHookBuckets([run({ event: "SessionStart", runId: 1 })]);
+		expect(noMsg).toHaveLength(1);
+		expect(noMsg[0]!.label).toBe("（首条消息前）"); // 查看窗在发首条消息前打开的兜底
 	});
 
-	it("⑪b 显示名与状态映射：hookDisplayOf name 优先/解释器带二词；hookStatusOf 全枚举含新 skipped-stop-inject", () => {
+	it("⑪b 二级行 = 注入条目（现行形态）+ product 标注（运行账按显示名归属）；无 name 注入不标注", () => {
+		const buckets = buildHookBuckets([
+			msg("干活"),
+			run({ event: "UserPromptSubmit", runId: 1, name: "提示词捕获", product: "OpenKnowledge" }),
+			steer("[非用户输入] 钩子注入（UserPromptSubmit · 提示词捕获）\n────────\n正文"),
+			steer("[非用户输入] 钩子注入（PostToolUse）\n────────\n无名字段"),
+		]);
+		const rows = injectionRowsOf(buckets[0]!);
+		expect(rows[0]!.label).toContain("提示词捕获 注入 · ");
+		expect(rows[0]!.label).toContain(" · OpenKnowledge"); // product 从运行账归属
+		expect(rows[1]!.label).toContain("上下文注入 · PostToolUse · ");
+		expect(rows[1]!.label).not.toContain("OpenKnowledge"); // 无 name 无法归属——不硬配
+	});
+
+	it("⑫b 显示名与状态映射：hookDisplayOf name 优先/解释器带二词；hookStatusOf 全枚举含 skipped-stop-inject", () => {
 		expect(hookDisplayOf("D:/x/ok.exe hook prompt", "提示词捕获")).toBe("提示词捕获");
 		expect(hookDisplayOf("python3 ${DIR}/guard.py --x", undefined)).toBe("python3 guard.py");
 		expect(hookDisplayOf("D:/software/ok.exe hook stop claude", undefined)).toBe("ok.exe");
