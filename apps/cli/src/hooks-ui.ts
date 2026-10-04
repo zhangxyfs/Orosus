@@ -8,9 +8,9 @@ import { HOOK_EVENTS, defaultProjectConfigFile, defaultUserConfigFile, evaluateP
 import type { FullApp } from "./tui/fullapp.ts";
 
 /** /settings → 钩子（m5-hooks T10，用户拍板不设 /hooks 命令）：列表样式参照 ZCode settings 钩子面
- *  （HooksList.tsx:181-243 逐项映射到 TUI pickOverlay 惯例）——分节（用户级/项目级）、行=事件+状态
- *  标记+命令（pickOverlay 单行约束——ZCode 两行制折为单行三段，偏差在案）、行内不显 matcher/超时
- *  （藏详情）、详情窗全字段 + e 启停（写盘缓挂 /reload）+ t 信任审查（即时生效，T9 现算门）。 */
+ *  （HooksList.tsx:181-243 逐项映射到 TUI pickOverlay 惯例）——分节（用户级/项目级，走查修去路径）、
+ *  行=说明优先（name 有则 name+产品+事件+来源、命令撤进详情；无 name 保持事件+来源+命令现状）、
+ *  行内不显 matcher/超时（藏详情）、详情窗全字段 + e 启停（写盘缓挂 /reload）+ t 信任审查（即时生效，T9 现算门）。 */
 export type HooksUiDeps = {
   getH: () => Harness;
   commandUi: CommandUi;
@@ -22,6 +22,8 @@ export interface HookRow {
   event: HookEvent;
   matcher?: string;
   command: string;
+  name?: string;         // 说明/显示名（走查修）：列表行说明优先、无则回退事件名+命令现状
+  product?: string;      // 归属产品（走查修）：行徽标与归类
   timeout?: number;
   disabled: boolean;
   file: string;          // 所属 TOML 文件（写盘落点）
@@ -47,12 +49,14 @@ const readRows = (file: string, origin: "user" | "project"): HookRow[] => {
       const hooks = (t as { hooks?: unknown[] })?.hooks;
       if (!Array.isArray(hooks)) return;
       hooks.forEach((h, hookIdx) => {
-        const rec = h as { command?: unknown; timeout?: unknown; disabled?: unknown; matcher?: never };
+        const rec = h as { command?: unknown; timeout?: unknown; disabled?: unknown; name?: unknown; product?: unknown; matcher?: never };
         if (typeof rec.command !== "string") return;
         out.push({
           origin, event,
           ...(typeof (t as { matcher?: unknown }).matcher === "string" ? { matcher: (t as { matcher: string }).matcher } : {}),
           command: rec.command,
+          ...(typeof rec.name === "string" && rec.name !== "" ? { name: rec.name } : {}),
+          ...(typeof rec.product === "string" && rec.product !== "" ? { product: rec.product } : {}),
           ...(typeof rec.timeout === "number" ? { timeout: rec.timeout } : {}),
           disabled: rec.disabled === true,
           file, tableIdx, hookIdx,
@@ -87,9 +91,16 @@ export const hooksFace = (cwd: string, opts?: { userFile?: string; projectFile?:
   };
 };
 
-const rowLabel = (w: number, r: HookRow): string => {
+/** 行标签（导出供测试）：name 有则「说明 · 产品 · 事件 · 来源」（命令撤进详情——走查修）；无 name 现状回退。 */
+export const rowLabel = (w: number, r: HookRow): string => {
   const status = r.disabled ? "[已停用]" : "";
   const origin = r.origin === "user" ? "用户" : "项目";
+  // 走查修（用户反馈）：配了 name 说明的用户不关心命令原文——行=说明+产品徽标+事件名+来源，命令撤进详情窗
+  if (r.name !== undefined) {
+    const meta = [r.product, r.event, origin].filter((x) => x !== undefined && x !== "").join(" · ");
+    const line = `${status}${r.name} · ${meta}`;
+    return line.length > w ? `${line.slice(0, Math.max(4, w - 1))}…` : line;
+  }
   const head = `${status}${r.event} · ${origin}`;
   const cmd = r.command.length > w - head.length - 5 ? `${r.command.slice(0, Math.max(4, w - head.length - 8))}…` : r.command;
   return `${head.padEnd(Math.min(18, head.length + 2))}${cmd}`;
@@ -158,6 +169,8 @@ const writeFileSyncSafe = (file: string, content: string): void => {
 const detailText = (w: number, r: HookRow, face: HooksFace): string => {
   const l: string[] = [];
   l.push(`事件：${r.event}`);
+  if (r.name !== undefined) l.push(`说明：${r.name}`); // 走查修：name/product 进详情（行内撤出的命令也在此可查）
+  if (r.product !== undefined) l.push(`产品：${r.product}`);
   l.push(`来源：${r.origin === "user" ? `用户级（${r.file}）` : `项目级（${r.file}）`}`);
   if (r.matcher !== undefined) l.push(`matcher：${r.matcher}`);
   l.push(`命令：${r.command}`);
@@ -201,12 +214,12 @@ export const openHooksPanel = async (app: FullApp, deps: HooksUiDeps): Promise<v
     const idxOf: number[] = []; // items 下标 → rows 下标（节标题行跳过）
     const userRows = face.rows.filter((r) => r.origin === "user");
     const projRows = face.rows.filter((r) => r.origin === "project");
-    if (userRows.length > 0) { items.push(`── 用户级（${face.userFile}）──`); idxOf.push(-1); }
+    if (userRows.length > 0) { items.push("── 用户级 ──"); idxOf.push(-1); } // 走查修：节标题不带路径——完整路径在详情窗「来源」行
     for (const r of userRows) { items.push(rowLabel(w, r)); idxOf.push(face.rows.indexOf(r)); }
     if (projRows.length > 0) {
       items.push(face.projectApplicable && !face.projectTrusted
-        ? `── 项目级（${face.projectFile}）⚠ 钩子可在沙盒外运行，请审查最近安装或修改的所有钩子（t 审查后生效）──`
-        : `── 项目级（${face.projectFile}）──`);
+        ? "── 项目级 ⚠ 待审：钩子可在沙盒外运行，请审查最近安装或修改的钩子（t 审查后生效）──"
+        : "── 项目级 ──");
       idxOf.push(-1);
     }
     for (const r of projRows) { items.push(rowLabel(w, r)); idxOf.push(face.rows.indexOf(r)); }

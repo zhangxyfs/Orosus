@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { hooksFace, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
+import { hooksFace, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
 import { injectionFoldLabel } from "./render.ts";
 import { renderEvent } from "./render.ts";
 import { SETTINGS_ITEMS } from "./settings-ui.ts";
@@ -56,6 +56,20 @@ describe("/settings 钩子面板（m5-hooks T10）", () => {
 		const userRow = face.rows.find((r) => r.command === "guard.py")!;
 		expect(userRow).toMatchObject({ origin: "user", event: "PreToolUse", timeout: 30 });
 		expect(userRow.matcher).toBe("^bash$"); // matcher 挂表级——行随表携带
+	});
+
+	it("②b 走查修——name/product 显示键：hooksFace 行携带；rowLabel 说明优先（命令撤行）、无 name 回退现状", () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-hooksui-np-"));
+		const userFile = join(dir, "user-hooks.toml");
+		const projDir = join(dir, "proj");
+		writeFileSync(userFile, `[hooks]\n[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ncommand = "ok.exe hook prompt claude"\nname = "提示词捕获"\nproduct = "OpenKnowledge"\n\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ncommand = "keep.sh"\n`, "utf8");
+		const face = hooksFace(projDir, { userFile, projectFile: join(projDir, ".orosus", "modules.d", "hooks.toml"), trustFile: join(dir, "trust.json") });
+		const named = face.rows.find((r) => r.product === "OpenKnowledge")!;
+		expect(named).toMatchObject({ name: "提示词捕获", product: "OpenKnowledge", event: "PreToolUse" });
+		expect(rowLabel(80, named)).toBe("提示词捕获 · OpenKnowledge · PreToolUse · 用户");
+		expect(rowLabel(80, named)).not.toContain("ok.exe"); // 命令撤出列表行——详情窗可查
+		const bare = face.rows.find((r) => r.name === undefined)!;
+		expect(rowLabel(80, bare)).toContain("keep.sh"); // 无 name：现状回退（事件+来源+命令截断）
 	});
 
 	it("③ setHookDisabled 行级写：定位第 N 表第 M 钩子置/删 disabled——保 matcher/timeout/注释与结构", () => {
@@ -112,6 +126,11 @@ describe("注入折叠行与修订注记（m5-hooks T10 / D19）", () => {
 		const text = "[非用户输入] 钩子注入（PostToolUse）\n────────\n格式化完成";
 		expect(injectionFoldLabel(text, "host/hook")).toBe(`上下文注入 · PostToolUse · ${text.length} 字符`);
 		expect(injectionFoldLabel("[非用户输入] 钩子要求继续：再检查一遍", "hooks")).toBe(`上下文注入 · Stop 续跑 · ${"[非用户输入] 钩子要求继续：再检查一遍".length} 字符`);
+	});
+
+	it("⑥b 走查修——injectionFoldLabel name 形态：包裹头「事件 · 名」→「<名> 注入 · N 字符」（老格式无名字段照旧解析）", () => {
+		const t = "[非用户输入] 钩子注入（PostToolUse · 提示词捕获）\n────────\n归档完成";
+		expect(injectionFoldLabel(t, "host/hook")).toBe(`提示词捕获 注入 · ${t.length} 字符`);
 	});
 
 	it("⑦ renderEvent 折叠行：host/hook 与 hooks 消息出灰字行、host/date 与普通 steer 不出", () => {

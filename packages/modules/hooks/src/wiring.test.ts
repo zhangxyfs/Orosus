@@ -102,6 +102,25 @@ describe("工具三事件接线（m5-hooks T6——真实 harness + 真实子进
     await h.close();
   });
 
+  it("①b 走查修——name/product 显示键：deny 提示用显示名（不再是命令短名）、hooks/run 审计带两字段", async () => {
+    const { h, executed } = await setup({ hooksToml: `
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+command = "cat > /dev/null; echo 名字拦 >&2; exit 2"
+name = "危险命令守卫"
+product = "OpenKnowledge"
+` });
+    await h.prompt("干活");
+    const events = await h.history();
+    const result = events.find((e) => e.type === "tool/result") as { output?: string; denied?: boolean };
+    expect(result?.output).toContain("钩子拦截（危险命令守卫）：名字拦"); // name 显示名优先于命令短名（cat）
+    expect(result?.output).not.toContain("钩子拦截（cat）");
+    expect(executed).toEqual([]);
+    const run = events.find((e) => e.type === "hooks/run") as Record<string, unknown>;
+    expect(run).toMatchObject({ event: "PreToolUse", status: "deny", name: "危险命令守卫", product: "OpenKnowledge", reason: "名字拦" });
+    await h.close();
+  });
+
   it("② deny·JSON：permissionDecision deny + reason 生效（stdout 决策面）", async () => {
     const { h, executed } = await setup({ hooksToml: PRE_DENY_JSON });
     await h.prompt("干活");

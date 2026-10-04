@@ -142,6 +142,8 @@ describe("钩子执行器（m5-hooks T5）——真实子进程往返", () => {
     const g1 = applyInjectionGates("PostToolUse", "普通注入", state);
     expect(g1.skipped).toBe(false);
     expect(g1.text).toContain("[非用户输入] 钩子注入（PostToolUse）");
+    const g1n = applyInjectionGates("PostToolUse", "带名注入", state, "捕获归档"); // 走查修：name 显示名进包裹头（折叠行「<名> 注入」的解析源）
+    expect(g1n.text).toContain("[非用户输入] 钩子注入（PostToolUse · 捕获归档）");
     const g2 = applyInjectionGates("PostToolUse", `\u001b[31m红\u001b[0m带色\n第二行`, state);
     expect(g2.text).toContain("红带色\n第二行"); // ANSI 剥、换行保留
     expect(stripAnsiAndControl("a\u0000b\u000Bc\u007Fd\u0085e")).toBe("abcde"); // C0（除 \t\n\r）+ DEL + C1

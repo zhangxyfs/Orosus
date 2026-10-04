@@ -127,12 +127,15 @@ export function toolResultChip(output: unknown, isError: unknown): string {
 }
 
 /** 注入折叠行标签（m5-hooks T10 / D19，dsh ContextInjectionRow 形态）：收起 = 灰字一行
- *  「上下文注入 · <事件名> · N 字符」；事件名从注入包裹头（钩子注入（X））提取，Stop 续跑消息按源认。
+ *  「<显示名> 注入 · N 字符」（name 有则用 name，缺省「上下文注入 · <事件名> · N 字符」）；
+ *  事件名与显示名从注入包裹头（钩子注入（事件 · 名））提取，Stop 续跑消息按源认。
  *  live 与回放同款重现（都从持久化 agent/steering-message 渲染——无第二数据源）。 */
 export function injectionFoldLabel(text: string, sourceModule: string | undefined): string {
   const m = /钩子注入（([^)）]+)）/.exec(text);
-  const event = m?.[1] ?? (sourceModule === "hooks" ? "Stop 续跑" : "注入");
-  return `上下文注入 · ${event} · ${text.length} 字符`;
+  const inner = m?.[1];
+  const name = inner !== undefined && inner.includes(" · ") ? inner.split(" · ").slice(1).join(" · ") : undefined;
+  const event = (inner !== undefined ? inner.split(" · ")[0] : undefined) ?? (sourceModule === "hooks" ? "Stop 续跑" : "注入");
+  return name !== undefined ? `${name} 注入 · ${text.length} 字符` : `上下文注入 · ${event} · ${text.length} 字符`;
 }
 
 /** 单事件 → 终端文案（完成事件面——T5 断流后 assistant/chunk 不在此列）。

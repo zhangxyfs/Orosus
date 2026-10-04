@@ -601,10 +601,10 @@ function attachRender(h: Harness): void {
       // 钩子运行中状态行 + 一次性提示（m5-hooks T11/D20）：running 账到达亮尾行（完成账按 runId 配对清）；
       // skipped-untrusted / skipped-inject-cap 每会话只 toast 一次（闭包去重——reload 重建随新闭包重置）
       if (e.type === "hooks/run") {
-        const run = e as { status?: string; runId?: number; hook?: string; index?: number; total?: number };
+        const run = e as { status?: string; runId?: number; hook?: string; name?: string; index?: number; total?: number };
         if (run.status === "running") {
           const counting = run.total !== undefined && run.total > 1 ? `（${run.index}/${run.total}）` : "";
-          activeApp?.setHookStatus(`正在运行钩子 ${run.hook ?? ""}…${counting}`);
+          activeApp?.setHookStatus(`正在运行钩子 ${run.name ?? run.hook ?? ""}…${counting}`); // 显示名 name 优先（走查修：用户配了说明就不亮命令原文）
           runningHooks.add(run.runId ?? -1);
         } else if (run.runId !== undefined && runningHooks.delete(run.runId) && runningHooks.size === 0) {
           activeApp?.setHookStatus(undefined);

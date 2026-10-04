@@ -15,7 +15,7 @@ export interface DispatchCtx {
 }
 
 export interface DispatchResult {
-  veto?: { deny: true; reason: string; hook?: string }; // waterfall deny（hook = 拦截者命令短名——T11 阻断明示可辨识）
+  veto?: { deny: true; reason: string; hook?: string; hookName?: string }; // waterfall deny（hook = 拦截者命令；hookName = 其 name 显示名——阻断明示优先用）
   updatedInput?: unknown;                 // PreToolUse 改参（末次生效——串行链上后写的赢）
   allowed?: boolean;                      // 任一钩子明示 permissionDecision:"allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）
   injections: string[];                   // 过闸后的注入正文（mergeInjections 由调用方决定时机）
@@ -69,8 +69,8 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       try {
         outcome = await dctx.run(hook.command, { ...base, ...specific }, {
           timeoutMs, projectDir: info.cwd,
-          // T11/D20 状态行：≥300ms 显形一条 running 账（快钩子零显形；宿主据此亮「正在运行钩子…」尾行）
-          onSlow: () => { void dctx.append("hooks/run", { runId, event, hook: hook.command, status: "running", index, total }); },
+          // T11/D20 状态行：≥300ms 显形一条 running 账（快钩子零显形；宿主据此亮「正在运行钩子…」尾行——name 显示名优先）
+          onSlow: () => { void dctx.append("hooks/run", { runId, event, hook: hook.command, ...(hook.name !== undefined ? { name: hook.name } : {}), ...(hook.product !== undefined ? { product: hook.product } : {}), status: "running", index, total }); },
         });
       } catch (err) {
         // runHook 永不 reject——此网只接执行器自身 bug；按 fail-open 收账继续
@@ -78,6 +78,8 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       }
       await dctx.append("hooks/run", {
         runId, event, hook: hook.command,
+        ...(hook.name !== undefined ? { name: hook.name } : {}),
+        ...(hook.product !== undefined ? { product: hook.product } : {}),
         ...(table.matcherSource !== undefined ? { matcher: table.matcherSource } : {}),
         ...(subagentIdUsed !== undefined ? { subagent: subagentIdUsed } : {}),
         status: outcome.kind,
@@ -87,7 +89,7 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       });
       if (outcome.kind === "deny") {
         // 串行短路：首个 deny 即终局（ZCode 同款）；deny 理由明示给模型（工具行 Error 形态）与用户（toast）
-        return { ...result, veto: { deny: true, reason: outcome.reason, hook: hook.command } };
+        return { ...result, veto: { deny: true, reason: outcome.reason, hook: hook.command, ...(hook.name !== undefined ? { hookName: hook.name } : {}) } };
       }
       if (outcome.kind === "error" || outcome.kind === "timeout") {
         dctx.log.warn("hooks.run.nonblocking", `钩子非阻塞失败（fail-open 继续）`, { event, hook: hook.command, status: outcome.kind });
@@ -97,12 +99,12 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       if (decision === undefined) continue;
       if (decision.permissionDecision === "deny") {
         const reason = decision.reason ?? "钩子拦截（JSON deny，未给理由）";
-        return { ...result, veto: { deny: true, reason, hook: hook.command } };
+        return { ...result, veto: { deny: true, reason, hook: hook.command, ...(hook.name !== undefined ? { hookName: hook.name } : {}) } };
       }
       if (decision.decision === "block") {
         // Stop 面：decision block + stopReason/reason（Claude Stop hook 同名形态）
         const reason = decision.stopReason ?? decision.reason ?? "钩子要求继续（未给理由）";
-        return { ...result, veto: { deny: true, reason, hook: hook.command } };
+        return { ...result, veto: { deny: true, reason, hook: hook.command, ...(hook.name !== undefined ? { hookName: hook.name } : {}) } };
       }
       // permissionDecision "allow"（PreToolUse 无升档 D8；PermissionRequest 代答放行的信号）与
       // "ask"（语义归 T8——按无动作放行）都不折 veto
@@ -111,9 +113,9 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
         result.updatedInput = decision.updatedInput; // 串行链后写的赢
       }
       if (decision.additionalContext !== undefined) {
-        const gated = applyInjectionGates(event, decision.additionalContext, dctx.injectionState);
+        const gated = applyInjectionGates(event, decision.additionalContext, dctx.injectionState, hook.name);
         if (gated.skipped) {
-          await dctx.append("hooks/run", { event, hook: hook.command, status: "skipped-inject-cap" });
+          await dctx.append("hooks/run", { event, hook: hook.command, ...(hook.name !== undefined ? { name: hook.name } : {}), status: "skipped-inject-cap" });
         } else if (gated.text !== undefined) {
           result.injections.push(gated.text);
         }

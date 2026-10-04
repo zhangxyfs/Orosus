@@ -10,6 +10,8 @@ export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 const hookEntrySchema = z.object({
   command: z.string().min(1).describe("shell 命令（win32 走 Git Bash；${OROSUS_PROJECT_DIR}/${CLAUDE_PROJECT_DIR} 模板可用）"),
+  name: z.string().min(1).max(60).optional().describe("说明/显示名——列表行、运行中状态行、阻断提示、注入折叠行优先用它（缺省回退事件名或命令短名）；纯显示元数据，不进 stdin 载荷"),
+  product: z.string().min(1).max(40).optional().describe("归属产品——列表行徽标与折叠注入行来源标注（多产品共装时归类）；纯显示元数据，不进 stdin 载荷、不参与匹配"),
   timeout: z.number().int().min(0).optional().describe("秒；缺省或 = 0 = 用全局 timeoutMs（哨兵语义，非零超时）"),
   disabled: z.boolean().optional().describe("停用——/settings 钩子面 e 键写盘（不删除配置，重新启用即恢复）"),
 });
@@ -35,6 +37,8 @@ export type HooksModuleConfig = z.infer<typeof configSchema>;
  *  origin 标层（信任门按层过滤——项目层未过 sha256 审查整层不执行，T9）。 */
 export interface CompiledHook {
   command: string;
+  name?: string;      // 说明/显示名（纯显示——veto.hookName/审计/注入包裹头消费）
+  product?: string;   // 归属产品（纯显示——审计与列表徽标消费）
   timeoutSec?: number;
   disabled?: boolean; // /settings e 键写盘位——dispatch 跳过（配置保留）
 }
@@ -95,7 +99,7 @@ const parseTables = (doc: Record<string, unknown> | undefined, origin: "user" | 
         continue;
       }
       const { matcherSource, match } = compileMatcher(entry.data.matcher, warn);
-      tables.push({ origin, ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}), ...(h.disabled === true ? { disabled: true } : {}) })) });
+      tables.push({ origin, ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.name !== undefined ? { name: h.name } : {}), ...(h.product !== undefined ? { product: h.product } : {}), ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}), ...(h.disabled === true ? { disabled: true } : {}) })) });
     }
     if (tables.length > 0) out[event] = tables;
   }

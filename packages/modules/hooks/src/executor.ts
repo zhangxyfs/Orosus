@@ -251,8 +251,9 @@ export interface GateResult {
   truncated: boolean;   // 单条截断发生
 }
 
-/** 三道闸（顺序：净化 → 单条帽 → 累计帽）+ 固定包裹头尾——注入正文里伪造同款头无法越过包裹层。 */
-export function applyInjectionGates(event: string, raw: string | undefined, state: InjectionState): GateResult {
+/** 三道闸（顺序：净化 → 单条帽 → 累计帽）+ 固定包裹头尾——注入正文里伪造同款头无法越过包裹层。
+ *  name = 钩子显示名（可选）：有则包裹头带「事件 · 名」段——折叠行标签据此显示「<名> 注入」；老会话日志无名段照旧解析。 */
+export function applyInjectionGates(event: string, raw: string | undefined, state: InjectionState, name?: string): GateResult {
   if (raw === undefined || raw === "") return { skipped: true, truncated: false };
   const cleaned = stripAnsiAndControl(raw);
   let body = cleaned;
@@ -263,7 +264,7 @@ export function applyInjectionGates(event: string, raw: string | undefined, stat
   }
   if (state.injectedChars + body.length > INJECT_SESSION_CAP) return { skipped: true, truncated };
   state.injectedChars += body.length;
-  const text = `[非用户输入] 钩子注入（${event}）\n${"─".repeat(8)}\n${body}`;
+  const text = `[非用户输入] 钩子注入（${event}${name !== undefined ? ` · ${name}` : ""}）\n${"─".repeat(8)}\n${body}`;
   return { text, skipped: false, truncated };
 }
 

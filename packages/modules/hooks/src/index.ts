@@ -88,8 +88,10 @@ export default defineModule({
       projectTrusted: () => evaluateProjectTrust(projectFile, info.cwd, trustFile).trusted,
       nextRunId: () => ++runSeq,
     };
-    /** 钩子命令短名（阻断明示可辨识——T11）：首词 basename（"python3 ${DIR}/guard.py …" → "python3"）；
-     *  首词是解释器时带第二词（"python3 guard.py"）。 */
+    /** 钩子显示名（阻断明示可辨识——T11 走查修：name 字段优先）：无 name 时命令短名兜底——
+     *  首词 basename（"python3 ${DIR}/guard.py …" → "python3"）；首词是解释器时带第二词（"python3 guard.py"）。 */
+    const hookLabel = (command: string, name: string | undefined): string =>
+      name !== undefined ? name : hookShort(command);
     const hookShort = (command: string): string => {
       const words = command.trim().split(/\s+/);
       const base = (w: string): string => w.split("/").pop() ?? w;
@@ -130,7 +132,7 @@ export default defineModule({
       };
       const r = await dispatchEvent("PreToolUse", p.name, specific, dctx, p.subagent?.agentId);
       if (r.veto !== undefined) {
-        const by = r.veto.hook !== undefined ? `（${hookShort(r.veto.hook)}）` : "";
+        const by = r.veto.hook !== undefined || r.veto.hookName !== undefined ? `（${hookLabel(r.veto.hook ?? "", r.veto.hookName)}）` : "";
         return { deny: true, reason: `钩子拦截${by}：${r.veto.reason}` };
       }
       if (r.updatedInput !== undefined && p.args !== r.updatedInput) {
@@ -165,8 +167,8 @@ export default defineModule({
         const specific: Record<string, unknown> = { prompt: p.text, ...(p.images !== undefined ? { images: p.images } : {}) };
         const r = await dispatchEvent("UserPromptSubmit", undefined, specific, dctx);
         if (r.veto !== undefined) {
-          // T11 阻断明示（qwen 形态）：被拒的输入必须让用户看得见——钩子名 + 理由 + 原文首行摘要
-          const by = r.veto.hook !== undefined ? `（${hookShort(r.veto.hook)}）` : "";
+          // T11 阻断明示（qwen 形态）：被拒的输入必须让用户看得见——钩子名（name 优先）+ 理由 + 原文首行摘要
+          const by = r.veto.hook !== undefined || r.veto.hookName !== undefined ? `（${hookLabel(r.veto.hook ?? "", r.veto.hookName)}）` : "";
           const firstLine = p.text.split("\n")[0]!.slice(0, 40);
           return { deny: true, reason: `钩子${by}拦截：${r.veto.reason}｜被拒原文「${firstLine}${p.text.length > 40 ? "…" : ""}」` };
         }
