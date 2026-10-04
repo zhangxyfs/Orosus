@@ -41,7 +41,8 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
   const base = basePayload(event, info, permissionMode);
   const subagent = (specific["subagent"] as { agentId?: string } | undefined) ?? undefined;
   for (const table of tables) {
-    if (!table.match(matchValue)) continue;
+    // 无匹配值事件（UserPromptSubmit/Stop）：matcher 恒忽略（写了不报错——设计空白表「matcher 语义」行）
+    if (matchValue !== undefined && !table.match(matchValue)) continue;
     for (const hook of table.hooks) {
       const timeoutMs = hook.timeoutSec !== undefined && hook.timeoutSec > 0 ? hook.timeoutSec * 1000 : dctx.config.timeoutMs;
       let outcome: HookOutcome;
@@ -72,6 +73,11 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
       if (decision === undefined) continue;
       if (decision.permissionDecision === "deny") {
         const reason = decision.reason ?? "钩子拦截（JSON deny，未给理由）";
+        return { ...result, veto: { deny: true, reason } };
+      }
+      if (decision.decision === "block") {
+        // Stop 面：decision block + stopReason/reason（Claude Stop hook 同名形态）
+        const reason = decision.stopReason ?? decision.reason ?? "钩子要求继续（未给理由）";
         return { ...result, veto: { deny: true, reason } };
       }
       // permissionDecision "allow"（无升档——本层无动作）与 "ask"（语义归 T8——按无动作放行）都不折 veto

@@ -11,7 +11,12 @@ import { InMemorySessionStore } from "@orosus/core";
 import hooksDef from "./index.ts";
 
 let dir: string;
-afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); });
+afterEach(async () => {
+  if (dir === undefined) return;
+  for (let i = 0; i < 4; i++) {
+    try { rmSync(dir, { recursive: true, force: true }); return; } catch { await new Promise((r) => setTimeout(r, 150)); } // 垂死 taskkill 进程占 cwd 句柄——重试容忍
+  }
+});
 
 const hermetic = (d: string, hooksToml: string) => {
   // 单文件自指：config.toml 同开自读门（通用层见到事件表）与承载真实表（userConfigFile 指回自己）
@@ -56,6 +61,7 @@ const setup = async (opts: SetupOpts = {}) => {
   const providerMod = fakeModule("provider-fake", { activate(ctx) { ctx.provide(providerSlotKey("fake"), provider.stream); } });
   const h = await createHarness({
     store: new InMemorySessionStore(),
+    cwd: dir, // 钩子 projectDir 跟会话 cwd（session/start 载荷）——marker/模板变量全落密封 tmp，不污染仓库根
     sessionsDir: join(dir, "sessions"),
     diagDir: dir,
     spillDir: join(dir, "spill"),
@@ -252,6 +258,182 @@ command = "touch \${OROSUS_PROJECT_DIR}/second-ran"
     expect((await import("node:fs")).existsSync(marker())).toBe(false); // deny 后短路，第二钩子没跑
     const runs = (await h.history()).filter((e) => e.type === "hooks/run");
     expect(runs).toHaveLength(1); // 只有首个的账
+    await h.close();
+  });
+});
+
+describe("提交/会话/停止三事件接线（m5-hooks T7）", () => {
+  it("① UserPromptSubmit 阻断：prompt 带因拒绝、消息不落日志（Claude 拒收语义）", async () => {
+    const { h } = await setup({
+      script: [textChunk("ok")],
+      hooksToml: `
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+command = "cat > /dev/null; echo 这话题不许聊 >&2; exit 2"
+`,
+    });
+    await expect(h.prompt("危险话题")).rejects.toThrow("这话题不许聊");
+    const events = await h.history();
+    expect(events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("危险话题"))).toBe(false);
+    await h.close();
+  });
+
+  it("② UserPromptSubmit additionalContext → contextNotes 通道：[非用户输入] 头注入进首轮请求", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("ok")],
+      hooksToml: `
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+command = "echo '{\\"additionalContext\\":\\"项目规矩：测试跑 pnpm vitest\\"}'"
+`,
+    });
+    await h.prompt("干活");
+    const events = await h.history();
+    const msgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string; sourceModule: string }[] }).messages ?? []));
+    const note = msgs.find((m) => m.text.includes("项目规矩"));
+    expect(note).toMatchObject({ sourceModule: "host/hook" });
+    expect(note!.text).toContain("[非用户输入]");
+    expect(JSON.stringify(requests[0]?.messages)).toContain("项目规矩"); // 首轮请求就收到（T2 下个 step 排空）
+    await h.close();
+  });
+
+  it("③ UserPromptSubmit matcher 恒忽略（无匹配值事件——写了不报错照样触发）", async () => {
+    const { h } = await setup({
+      script: [textChunk("ok")],
+      hooksToml: `
+[[hooks.UserPromptSubmit]]
+matcher = "^never-match-anything$"
+[[hooks.UserPromptSubmit.hooks]]
+command = "cat > /dev/null; echo matcher 不生效 >&2; exit 2"
+`,
+    });
+    await expect(h.prompt("任意话")).rejects.toThrow("matcher 不生效");
+    await h.close();
+  });
+
+  it("④ SessionStart 注入进首轮（startup 时钩子跑完 → 队列在首个 step 排空进上下文）", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("ok")],
+      hooksToml: `
+[[hooks.SessionStart]]
+matcher = "startup|resume|fork"
+[[hooks.SessionStart.hooks]]
+command = "echo '{\\"additionalContext\\":\\"启动知识：本仓构建用 pnpm\\"}'"
+`,
+    });
+    await new Promise((r) => setTimeout(r, 400)); // 等 session/start 异步派发落队列（真机用户首条消息远慢于此）
+    await h.prompt("干活");
+    expect(JSON.stringify(requests[0]?.messages)).toContain("启动知识");
+    await h.close();
+  });
+
+  it("⑤ Stop 阻断续跑一次：首停 exit 2 → 带理由续跑（sourceModule=hooks 落账）→ 二停放行", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("第一答"), textChunk("第二答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "test -f \\"\${OROSUS_PROJECT_DIR}/stopmark\\" && exit 0 || { touch \\"\${OROSUS_PROJECT_DIR}/stopmark\\"; echo 还有活没干完 >&2; exit 2; }"
+`,
+    });
+    await h.prompt("干活");
+    expect(requests).toHaveLength(2); // 续跑产生了第二个请求
+    const events = await h.history();
+    const msgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string; sourceModule: string }[] }).messages ?? []));
+    const cont = msgs.find((m) => m.text.includes("钩子要求继续"));
+    expect(cont).toMatchObject({ sourceModule: "hooks" });
+    expect(cont!.text).toContain("还有活没干完");
+    expect(JSON.stringify(requests[1]?.messages)).toContain("还有活没干完"); // 续跑消息进了模型上下文
+    await h.close();
+  });
+
+  it("⑥ 连拦封顶 3 次：恒阻断钩子第 4 停放行 + hooks/run 落 stop-cap 账；stop_hook_active 首停 false 续停 true", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "cat >> \\"\${OROSUS_PROJECT_DIR}/stopins\\"; echo 别停 >&2; exit 2"
+`,
+    });
+    await h.prompt("干活");
+    expect(requests).toHaveLength(4); // 3 次续跑后封顶放行
+    const events = await h.history();
+    expect(events.some((e) => e.type === "hooks/run" && JSON.stringify(e).includes("stop-cap"))).toBe(true);
+    const { readFileSync: rfs } = await import("node:fs");
+    const stdinLines = rfs(join(dir!, "stopins"), "utf8").split("\n").filter((l) => l.trim() !== "");
+    expect(stdinLines.length).toBe(4); // 4 次停止边界各喂一次 stdin
+    expect(JSON.parse(stdinLines[0]!).stop_hook_active).toBe(false); // 首停
+    expect(JSON.parse(stdinLines[1]!).stop_hook_active).toBe(true); // 续停
+    await h.close();
+  });
+
+  it("⑦ 新消息清零计数：封顶后的下一轮重新获得 3 次续跑额度", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答"), textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "echo 别停 >&2; exit 2"
+`,
+    });
+    await h.prompt("第一轮"); // 封顶 → 4 请求
+    expect(requests).toHaveLength(4);
+    await h.prompt("第二轮"); // 计数清零 → 又 3 续跑 + 1 = 4 请求
+    expect(requests).toHaveLength(8);
+    await h.close();
+  });
+
+  it("⑧ shouldStop 真停：Stop 钩子意见照落日志但不复活轮（CL-07——turn 照常收口）", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("答"), textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "echo 想续但被喊停 >&2; exit 2"
+`,
+    });
+    h.graph().bus.on("agent/should-stop", () => true, "test-stopper");
+    await h.prompt("干活");
+    expect(requests).toHaveLength(1); // 没有续跑
+    const events = await h.history();
+    expect(events.some((e) => e.type === "turn/end")).toBe(true); // 轮正常收口
+    const msgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    expect(msgs.some((m) => m.text.includes("钩子要求继续"))).toBe(true); // 意见照落日志（不静默丢）
+    await h.close();
+  });
+
+  it("⑨ Stop reason 过帽：超大 stderr 理由截到 16k + 可读截断标记", async () => {
+    const { h } = await setup({
+      script: [textChunk("答"), textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "yes 理理理理理理理理理理理理理理理理理理理理 | head -c 100000 >&2; exit 2"
+`,
+    });
+    await h.prompt("干活");
+    const events = await h.history();
+    const msgs = events.filter((e) => e.type === "agent/steering-message").flatMap((e) => ((e as { messages?: { text: string }[] }).messages ?? []));
+    const cont = msgs.find((m) => m.text.includes("钩子要求继续"));
+    expect(cont!.text).toContain("字符，保留前 16000]"); // 可读截断标记（原文超 16k）
+    expect(cont!.text.length).toBeLessThan(17_000);
+    await h.close();
+  });
+
+  it("⑩ JSON decision block（Claude Stop 同名形态）也能续跑：stopReason 优先", async () => {
+    const { h, requests } = await setup({
+      script: [textChunk("答"), textChunk("答")],
+      hooksToml: `
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = 'test -f "\${OROSUS_PROJECT_DIR}/m2" && echo "{\\"decision\\":\\"approve\\"}" || { touch "\${OROSUS_PROJECT_DIR}/m2"; echo "{\\"decision\\":\\"block\\",\\"stopReason\\":\\"还差总结\\"}"; }'
+`,
+    });
+    await h.prompt("干活");
+    expect(requests).toHaveLength(2);
+    const events = await h.history();
+    expect(JSON.stringify(events)).toContain("还差总结");
     await h.close();
   });
 });

@@ -261,3 +261,11 @@ export function applyInjectionGates(event: string, raw: string | undefined, stat
 export function mergeInjections(parts: string[]): string {
   return parts.map((p, i) => `#${i + 1} ${p}`).join("\n\n");
 }
+
+/** Stop 续跑 reason 专用闸：净化 + 单条帽（无包裹、不计累计——续跑消息不是注入正文，由 loop 落
+ * agent/steering-message sourceModule=hooks，与 host/hook 注入分流）。 */
+export function capReason(raw: string): string {
+  const cleaned = stripAnsiAndControl(raw);
+  if (cleaned.length <= INJECT_SINGLE_CAP) return cleaned;
+  return `${cleaned.slice(0, INJECT_SINGLE_CAP)}\n[截断：原文 ${cleaned.length} 字符，保留前 ${INJECT_SINGLE_CAP}]`;
+}

@@ -111,19 +111,23 @@ command = "c"
     expect(f.ons).toHaveLength(0);
   });
 
-  it("④ 事件表→监听挂点：工具两点+session/start 缓存与 steering 注入通道恒挂（表有无在派发层自门控）；T7 两点（prompt-submit/follow-up）未接线", () => {
+  it("④ 事件表→监听挂点：工具两点+session/start 缓存与 steering 注入通道恒挂；配了表的事件点再补挂（Stop 表 → prompt-submit 清零位+follow-up；PermissionRequest 不走挂点——T8 走 provide）", () => {
     const files = tmpFiles(`
 [[PreToolUse]]
 [[PreToolUse.hooks]]
 command = "check"
-
+`);
+    const f = fakeCtx(gateConfig(files));
+    def.activate(f.ctx);
+    expect([...f.ons].sort()).toEqual(["agent/steering", "session/start", "tool/post-execute", "tool/pre-input"]); // 无 Stop 表 → 无 follow-up/prompt-submit
+    const files2 = tmpFiles(`
 [[Stop]]
 [[Stop.hooks]]
 command = "keep-going"
 `);
-    const f = fakeCtx(gateConfig(files));
-    def.activate(f.ctx);
-    expect([...f.ons].sort()).toEqual(["agent/steering", "session/start", "tool/post-execute", "tool/pre-input"]);
+    const f2 = fakeCtx({ ...gateConfig(files2), PreToolUse: undefined, Stop: [{ hooks: [{ command: "x" }] }] });
+    def.activate(f2.ctx);
+    expect([...f2.ons].sort()).toEqual(["agent/follow-up", "agent/steering", "session/start", "tool/post-execute", "tool/pre-input", "user/prompt-submit"]); // Stop 表补挂两点（清零责任随 Stop 走）
   });
 
   it("⑤ disabled 总闸：enabled=false → 零监听（配置再满也不跑）", () => {

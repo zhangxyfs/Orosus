@@ -270,7 +270,7 @@ export function isRealUserInput(m: ModelMessage): boolean {
     }
     return true;
   }
-  return m.origin.kind === "steering" && (m.origin.sourceModule === "host" || m.origin.sourceModule === "host/date" || m.origin.sourceModule === "host/hook");
+  return m.origin.kind === "steering" && (m.origin.sourceModule === "host" || m.origin.sourceModule === "host/date" || m.origin.sourceModule === "host/hook" || m.origin.sourceModule === "hooks");
 }
 
 /** 收集真实用户消息（kimi collectCompactableUserMessages :170-174 同型）——带投影下标（keepUserAt 重放锚的基）。 */

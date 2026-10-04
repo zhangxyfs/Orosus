@@ -2,12 +2,12 @@ import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import type { CapabilityKey } from "@orosus/contracts/module";
 import { HOOK_EVENTS, configSchema, defaultProjectConfigFile, defaultUserConfigFile, loadHooksConfig, type HookEvent } from "./config.ts";
-import { mergeInjections, runHook, type InjectionState } from "./executor.ts";
+import { mergeInjections, runHook, capReason, type InjectionState } from "./executor.ts";
 import { dispatchEvent, type DispatchCtx } from "./dispatch.ts";
 
 export { HOOK_EVENTS, configSchema, defaultProjectConfigFile, defaultUserConfigFile, loadHooksConfig } from "./config.ts";
 export { dispatchEvent, basePayload } from "./dispatch.ts";
-export { runHook, parseHookJson, applyInjectionGates, stripAnsiAndControl, mergeInjections, buildHookEnv, expandCommand, resolveShell, INJECT_SINGLE_CAP, INJECT_SESSION_CAP } from "./executor.ts";
+export { runHook, parseHookJson, applyInjectionGates, stripAnsiAndControl, mergeInjections, buildHookEnv, expandCommand, resolveShell, capReason, INJECT_SINGLE_CAP, INJECT_SESSION_CAP } from "./executor.ts";
 export type { HookEvent, HooksConfig, CompiledTable, CompiledHook } from "./config.ts";
 export type { HookDecision, HookOutcome, InjectionState } from "./executor.ts";
 export type { DispatchCtx, DispatchResult } from "./dispatch.ts";
@@ -63,6 +63,7 @@ export default defineModule({
     if (!HOOK_EVENTS.some(has)) return; // 无任何事件表——零监听
 
     // 运行期闭包（会话生命周期、reload 重置、刻意不持久化——设计总览「记录与存储账本」）
+    const state = { stopContinuations: 0 }; // Stop 连拦计数（新消息清零）
     const injectionState: InjectionState = { injectedChars: 0 };
     const info = { sessionId: undefined as string | undefined, transcriptPath: undefined as string | undefined, cwd: process.cwd() };
     const injectionQueue: string[] = []; // steering 旁路队列（下个 step 首排空——prompt 永不改写）
@@ -132,7 +133,42 @@ export default defineModule({
       return dispatchEvent(event, p.name, specific, dctx).then((r) => { enqueue(event, r.injections); });
     });
 
-    // UserPromptSubmit / Stop：T7 接线；PermissionRequest：T8 经 provide 由 approval 惰性消费
+    // UserPromptSubmit：整条拒收（deny）与 additionalContext → contextNotes（T2 通道直推 steering，
+    // sourceModule host/hook 由 harness 侧统一加）。新消息清零 Stop 续跑计数（用户拍板新方向优先）——
+    // 监听在「配了任一提交/停止事件」时挂（清零责任不能只随 UserPromptSubmit 表——只配 Stop 时也要清）。
+    if (has("UserPromptSubmit") || has("Stop")) {
+      ctx.events.on("user/prompt-submit", async (payload) => {
+        state.stopContinuations = 0;
+        if (!has("UserPromptSubmit")) return undefined;
+        const p = payload as { text: string; images?: string[]; contextNotes: string[] };
+        const specific: Record<string, unknown> = { prompt: p.text, ...(p.images !== undefined ? { images: p.images } : {}) };
+        const r = await dispatchEvent("UserPromptSubmit", undefined, specific, dctx);
+        if (r.veto !== undefined) return { deny: true, reason: r.veto.reason };
+        for (const injection of r.injections) p.contextNotes.push(injection);
+        return undefined;
+      });
+    }
+
+    // Stop：停止边界、turn 收口前（agent/follow-up collect 链）——阻断 = 返回续跑消息，代理带着理由继续
+    //（零内核改动得到 Claude「Stop hook 阻止停止」语义）。连拦封顶 3 次防死循环（ZCode 同值）；错误/中止
+    // 轮不过停止边界（loop.ts:256-293 先 break——T0-③ 取证）；shouldStop 真停时消息照落日志但不复活轮（CL-07）。
+    if (has("Stop")) {
+      ctx.events.on("agent/follow-up", async () => {
+        const specific: Record<string, unknown> = { stop_hook_active: state.stopContinuations > 0 };
+        const r = await dispatchEvent("Stop", undefined, specific, dctx);
+        if (r.veto === undefined) return [];
+        if (state.stopContinuations >= 3) {
+          await ctx.session.append("hooks/run", { event: "Stop", status: "stop-cap", detail: `连续续跑已达 ${state.stopContinuations} 次封顶，本次放行停止（防死循环）` });
+          return [];
+        }
+        state.stopContinuations++;
+        const reason = capReason(r.veto.reason);
+        // sourceModule "hooks"：续跑消息折叠行渲染依据（D19）+ 压缩保留谓词第二值
+        return [{ text: `[非用户输入] 钩子要求继续：${reason}`, sourceModule: "hooks" }];
+      });
+    }
+
+    // PermissionRequest：T8 经 provide 由 approval 惰性消费
     ctx.provide("hooks.permission-verdict", async () => undefined); // T8 充实（未表态 = undefined 照旧弹窗）
   },
 });
