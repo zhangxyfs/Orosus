@@ -174,10 +174,33 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
     async execute(planned, { signal }): Promise<ToolResult> {
       if (!planned.ok) return planned.result;
-      const veto = await opts.bus.waterfall(CORE_POINTS.toolPreExecute, {
+      // 入参门（m5-hooks T1）：tool/pre-input waterfall——先于审批链的 PreToolUse 钩子位。承载两件事：
+      // deny（拦截，同 veto 形态带 denied）与改参（监听者就地替换 payload.args——引用判变）。改参后必须
+      // 重走 plan 段（schema 重校验 + resolveExecution 重解，MI-16 两阶段契约）：跳过它拿旧 execution 执行
+      // 新参数 = 绕开声明扫描与审批重判。重校验/重解失败按 fail-open 回原参数（钩子任何失败不阻断主流程）。
+      const prePayload = {
         callId: planned.callId, name: planned.name, args: planned.args, accesses: planned.accesses,
         approvalRule: planned.approvalRule,
-        ...(planned.matchesRule !== undefined ? { matchesRule: planned.matchesRule } : {}), // 审批带参规则判定（T2/D40）
+        ...(planned.matchesRule !== undefined ? { matchesRule: planned.matchesRule } : {}),
+      };
+      const preVeto = await opts.bus.waterfall(CORE_POINTS.preInput, prePayload);
+      if (preVeto) {
+        return { output: preVeto.reason, isError: true, denied: true };
+      }
+      let effective = planned;
+      if (prePayload.args !== planned.args) {
+        const rePlanned = await registry.plan({ id: planned.callId, name: planned.name, args: prePayload.args });
+        if (rePlanned.ok) {
+          effective = rePlanned;
+          planned.log.info("kernel.tool.pre-input-rewrite", "PreToolUse 改参生效（重校验+重解 execution，审批见最终参数）", { call: planned.callId, name: planned.name });
+        } else {
+          planned.log.warn("kernel.tool.pre-input-rewrite-fallback", `PreToolUse 改参未过重校验，回退原参数：${rePlanned.result.output}`, { call: planned.callId, name: planned.name });
+        }
+      }
+      const veto = await opts.bus.waterfall(CORE_POINTS.toolPreExecute, {
+        callId: effective.callId, name: effective.name, args: effective.args, accesses: effective.accesses,
+        approvalRule: effective.approvalRule,
+        ...(effective.matchesRule !== undefined ? { matchesRule: effective.matchesRule } : {}), // 审批带参规则判定（T2/D40）
       });
       if (veto) {
         return { output: veto.reason, isError: true, denied: true };
@@ -185,7 +208,7 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
       let result: ToolResult;
       try {
-        result = await planned.execution.execute({ callId: planned.callId, signal, log: planned.log });
+        result = await effective.execution.execute({ callId: effective.callId, signal, log: effective.log });
       } catch (err) {
         result = { output: `工具执行抛错：${String(err)}`, isError: true };
       }

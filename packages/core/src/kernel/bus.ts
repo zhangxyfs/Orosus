@@ -8,6 +8,7 @@ export const CORE_POINTS = {
   steering: "agent/steering",                  // collect 链
   followUp: "agent/follow-up",                 // collect 链
   shouldStop: "agent/should-stop",             // collect 链（任一 stop 即 stop）
+  preInput: "tool/pre-input",                  // waterfall（m5-hooks T1：PreToolUse 钩子位——先于审批链，承载 deny 拦截与改参；改参后重校验+重解 execution 再进 tool/pre-execute）
   toolPreExecute: "tool/pre-execute",          // waterfall（审批模块在此，M3）
   toolPostExecute: "tool/post-execute",        // emit 广播
   uiCommand: "ui/command",                     // emit 广播（命令端口输入，含审批应答）

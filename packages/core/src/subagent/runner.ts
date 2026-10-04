@@ -585,6 +585,29 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
         });
         return veto ?? undefined;
       }, `subagent:${id}`); // owner 记子代理身份——诊断日志可辨来源
+      // 入参门转发（m5-hooks T1，D18）：子代理 bus 的 tool/pre-input 同样转主 bus——PreToolUse 钩子
+      // 对子代理工具调用生效（六仓同款）。改参回传是必须的：转发对象是 {...p} 展开的新对象，主 bus
+      // 监听者替换 forwarded.args 后若不写回，重写结果就丢在子代理边界外（deny 经 waterfall 返回值天然回传）。
+      bus.on(CORE_POINTS.preInput, async (payload) => {
+        const p = payload as { args?: unknown; [k: string]: unknown };
+        const forwarded = {
+          ...p,
+          mode: forwardMode,
+          subagent: { agentId: id, depth, parentId: parentAgentId, background: req.background === true, label: req.label },
+        };
+        const veto = await deps.graph().bus.waterfall(CORE_POINTS.preInput, forwarded);
+        if (veto === undefined && forwarded.args !== p.args) p.args = forwarded.args;
+        return veto ?? undefined;
+      }, `subagent:${id}`);
+      // 结果事件转发（m5-hooks T1，D18）：子代理 loop 在自己 bus 上 emit tool/post-execute——转回主 bus
+      // 供 PostToolUse/Failure 钩子消费（带身份）。只转发不回灌：主 bus 消费不进子代理决策路径。
+      bus.on(CORE_POINTS.toolPostExecute, (payload) => {
+        const p = payload as { [k: string]: unknown };
+        return deps.graph().bus.emit(CORE_POINTS.toolPostExecute, {
+          ...p,
+          subagent: { agentId: id, depth, parentId: parentAgentId, label: req.label },
+        });
+      }, `subagent:${id}`);
       // 收尾轮双监听：steering 一次性注入总结指令（loop 每 step 首收）；工具全禁（waterfall 任一 deny 即终局）
       bus.on(CORE_POINTS.steering, () => {
         if (!graceArmed || graceConsumed) return [];

@@ -349,3 +349,99 @@ describe("ToolSearch 机制层（M4-3 T4）", () => {
     expect(infos.find((t) => t.name === "tool-fs__read")).not.toHaveProperty("label"); // 缺省 = 无键（exactOptionalPropertyTypes 口径）
   });
 });
+
+describe("tool/pre-input 入参门（m5-hooks T1）", () => {
+  /** args 敏感工具：accesses 由参数派生（fsWrite(v)）——改参后重解 execution 的可见证据；execute 落实参记录。 */
+  const argTool = (records: { resolved?: string; executed?: string }[]) =>
+    defineTool({
+      name: "m__t",
+      description: "t",
+      parameters: z.object({ v: z.string() }),
+      resolveExecution: async (args: { v: string }) => {
+        records.push({ resolved: args.v });
+        return {
+          accesses: [Access.fsWrite(`/w/${args.v}`)], approvalRule: `m__t(${args.v} *)`,
+          execute: async () => { records.push({ executed: args.v }); return { output: `ran:${args.v}`, isError: false }; },
+        };
+      },
+    });
+
+  it("① 空链零行为回归钉：无 pre-input 监听器时 execute 照旧走审批链执行（新点位不改变既有管线）", async () => {
+    const { reg, bus } = setup();
+    const records: { resolved?: string; executed?: string }[] = [];
+    reg.register(argTool(records), "m");
+    let approvalCalls = 0;
+    bus.on(CORE_POINTS.toolPreExecute, () => { approvalCalls++; }, "approval");
+    const planned = await reg.plan({ id: "c1", name: "m__t", args: { v: "orig" } });
+    const result = await reg.execute(planned!, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ output: "ran:orig", isError: false });
+    expect(approvalCalls).toBe(1);
+  });
+
+  it("② deny 短路不进审批：pre-input 否决 → denied 结果 + 审批监听器零调用 + 工具零执行", async () => {
+    const { reg, bus } = setup();
+    const records: { resolved?: string; executed?: string }[] = [];
+    reg.register(argTool(records), "m");
+    bus.on(CORE_POINTS.preInput, () => ({ deny: true, reason: "钩子拦截：危险参数" }), "hooks");
+    let approvalCalls = 0;
+    bus.on(CORE_POINTS.toolPreExecute, () => { approvalCalls++; }, "approval");
+    const planned = await reg.plan({ id: "c1", name: "m__t", args: { v: "orig" } });
+    const result = await reg.execute(planned!, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ output: "钩子拦截：危险参数", isError: true, denied: true });
+    expect(approvalCalls).toBe(0);
+    expect(records.filter((r) => r.executed !== undefined)).toHaveLength(0); // 工具零执行（仅 plan 期一次 resolveExecution）
+  });
+
+  it("③ 改参后审批收到最终参数：pre-input 替换 args → 重校验+重解 execution（accesses/approvalRule 随新参派生）→ 审批载荷见新参", async () => {
+    const { reg, bus } = setup();
+    const records: { resolved?: string; executed?: string }[] = [];
+    reg.register(argTool(records), "m");
+    bus.on(CORE_POINTS.preInput, (payload) => {
+      const p = payload as { args: { v: string } };
+      p.args = { v: "rewritten" };
+      return undefined;
+    }, "hooks");
+    const approvals: { args: unknown; accesses: unknown; approvalRule: unknown }[] = [];
+    bus.on(CORE_POINTS.toolPreExecute, (p) => {
+      const q = p as { args: unknown; accesses: unknown; approvalRule: unknown };
+      approvals.push({ args: q.args, accesses: q.accesses, approvalRule: q.approvalRule });
+    }, "approval");
+    const planned = await reg.plan({ id: "c1", name: "m__t", args: { v: "orig" } });
+    const result = await reg.execute(planned!, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ output: "ran:rewritten", isError: false }); // 执行用新参（修订语义：tool/call 历史不改，账由 T6 落）
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.args).toEqual({ v: "rewritten" });
+    expect(JSON.stringify(approvals[0]!.accesses)).toContain("/w/rewritten"); // 重解 execution 派生新 accesses
+    expect(approvals[0]!.approvalRule).toBe("m__t(rewritten *)");
+    expect(records.filter((r) => r.resolved === "rewritten")).toHaveLength(1); // 重解恰一次
+    expect(records.filter((r) => r.executed === "rewritten")).toHaveLength(1);
+  });
+
+  it("④ 改参重校验失败回退原参（fail-open）：rewrite 成 schema 非法值 → 原参数照常执行 + warn 日志", async () => {
+    const { reg, bus, s } = setup();
+    const records: { resolved?: string; executed?: string }[] = [];
+    reg.register(argTool(records), "m");
+    bus.on(CORE_POINTS.preInput, (payload) => {
+      const p = payload as { args: { v: string } };
+      p.args = { v: 123 as unknown as string }; // 重校验必败（v 须 string）
+      return undefined;
+    }, "hooks");
+    const approvals: { args: unknown }[] = [];
+    bus.on(CORE_POINTS.toolPreExecute, (p) => { approvals.push({ args: (p as { args: unknown }).args }); }, "approval");
+    const planned = await reg.plan({ id: "c1", name: "m__t", args: { v: "orig" } });
+    const result = await reg.execute(planned!, { signal: new AbortController().signal });
+    expect(result).toMatchObject({ output: "ran:orig", isError: false }); // 回退原参
+    expect(approvals[0]!.args).toEqual({ v: "orig" });
+    expect(s.records.some((r) => r.code === "kernel.tool.pre-input-rewrite-fallback")).toBe(true);
+  });
+
+  it("⑤ 带内短路在前：planned ok:false（未知工具/校验失败）不触发 pre-input waterfall", async () => {
+    const { reg, bus } = setup();
+    let preInputCalls = 0;
+    bus.on(CORE_POINTS.preInput, () => { preInputCalls++; }, "hooks");
+    const planned = await reg.plan({ id: "c1", name: "m__missing", args: {} });
+    const result = await reg.execute(planned, { signal: new AbortController().signal });
+    expect(result.isError).toBe(true);
+    expect(preInputCalls).toBe(0); // ok:false 带内短路先于入参门
+  });
+});

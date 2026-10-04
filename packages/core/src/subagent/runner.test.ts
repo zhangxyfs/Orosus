@@ -456,3 +456,103 @@ describe("CX-14 stop/stopAll 解构安全（直测 createSubagentRunner——act
     }
   });
 });
+
+describe("子代理钩子双点转发（m5-hooks T1，D18）", () => {
+  /** 探针模块：注册无参工具（记执行次数）+ 主图监听 tool/pre-input 与 tool/post-execute（记载荷）。 */
+  const probe = (state: { executions: number; preInputs: Record<string, unknown>[]; postExecutes: Record<string, unknown>[] }): ModuleDefinition =>
+    fakeModule("probe", {
+      mounts: ["contribute:tool", "hook:tool/pre-input", "hook:tool/post-execute"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "probe__ping",
+          description: "探针",
+          parameters: z.object({}),
+          resolveExecution: () => Promise.resolve({
+            accesses: [],
+            approvalRule: "probe__ping",
+            execute: () => { state.executions++; return Promise.resolve({ output: "pong", isError: false }); },
+          }),
+        }));
+        ctx.events.on("tool/pre-input", (payload) => { state.preInputs.push(payload as Record<string, unknown>); });
+        ctx.events.on("tool/post-execute", (payload) => { state.postExecutes.push(payload as Record<string, unknown>); });
+      },
+    });
+  const pingScript = (): Chunk[][] => [
+    [{ type: "toolcall/argumentsDelta", callId: "c1", name: "probe__ping", argumentsDelta: "{}" }, { type: "finish", kind: "stop" }],
+    textChunk("子代理结论"),
+  ];
+
+  it("⑧ pre-input 转发含身份：主图监听器收到子代理的 tool/pre-input 载荷（agentId/depth/label/mode）", async () => {
+    const state = { executions: 0, preInputs: [] as Record<string, unknown>[], postExecutes: [] as Record<string, unknown>[] };
+    const h = await setup({ script: pingScript(), extraModules: [probe(state)] });
+    const out = (await port!.spawn({ label: "转发探针", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(state.preInputs.length).toBe(1); // 主对话自己的 spawn 无工具调用——仅子代理那一次
+    const p = state.preInputs[0]!;
+    expect(p).toMatchObject({ callId: "c1", name: "probe__ping", args: {} });
+    expect((p.subagent as Record<string, unknown>).agentId).toBe(out.id);
+    expect((p.subagent as Record<string, unknown>).depth).toBe(1);
+    expect((p.subagent as Record<string, unknown>).label).toBe("转发探针");
+    expect(p.mode).not.toBeUndefined(); // 档位提示随转发（与 tool/pre-execute 转发同款）
+    await h.close();
+  });
+
+  it("⑨ post-execute 转发含身份与结果：子代理工具结果事件回主 bus（isError/output 可辨）", async () => {
+    const state = { executions: 0, preInputs: [] as Record<string, unknown>[], postExecutes: [] as Record<string, unknown>[] };
+    const h = await setup({ script: pingScript(), extraModules: [probe(state)] });
+    const out = (await port!.spawn({ label: "结果探针", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(state.postExecutes.length).toBe(1);
+    const e = state.postExecutes[0]!;
+    expect(e).toMatchObject({ callId: "c1", name: "probe__ping" });
+    expect((e.result as Record<string, unknown>).output).toBe("pong");
+    expect((e.subagent as Record<string, unknown>).agentId).toBe(out.id);
+    await h.close();
+  });
+
+  it("⑩ 转发不回灌：主 bus 消费结果不触发子代理侧二次执行——工具恰执行一次、两条事件各恰一条", async () => {
+    const state = { executions: 0, preInputs: [] as Record<string, unknown>[], postExecutes: [] as Record<string, unknown>[] };
+    const h = await setup({ script: pingScript(), extraModules: [probe(state)] });
+    const out = (await port!.spawn({ label: "回灌探针", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(state.executions).toBe(1); // 若转发回灌成环会二次执行（环会死循环——此断言兼钉「不会挂死」）
+    expect(state.preInputs.length).toBe(1);
+    expect(state.postExecutes.length).toBe(1);
+    await h.close();
+  });
+
+  it("⑪ 子代理 pre-input 改参回传：主图监听器改 args → 子代理侧按新参重解执行（转发对象是展开副本——不回传即丢）", async () => {
+    // args 记录器：主图监听在 pre-input 改参 v=rewritten；工具记录实际拿到的参数
+    const seen: string[] = [];
+    const argProbe = fakeModule("argprobe", {
+      mounts: ["contribute:tool", "hook:tool/pre-input"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "argprobe__v",
+          description: "参数探针",
+          parameters: z.object({ v: z.string() }),
+          resolveExecution: (args: { v: string }) => Promise.resolve({
+            accesses: [],
+            approvalRule: "argprobe__v",
+            execute: () => { seen.push(args.v); return Promise.resolve({ output: `got:${args.v}`, isError: false }); },
+          }),
+        }));
+        ctx.events.on("tool/pre-input", (payload) => {
+          const p = payload as { args: { v: string } };
+          p.args = { ...p.args, v: "rewritten" };
+        });
+      },
+    });
+    const h = await setup({
+      script: [
+        [{ type: "toolcall/argumentsDelta", callId: "c1", name: "argprobe__v", argumentsDelta: JSON.stringify({ v: "orig" }) }, { type: "finish", kind: "stop" }],
+        textChunk("done"),
+      ],
+      extraModules: [argProbe],
+    });
+    const out = (await port!.spawn({ label: "改参探针", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(seen).toEqual(["rewritten"]); // 改参穿透子代理边界（deny 回传在 ⑧ 同链路——waterfall 返回值天然回传，不另测）
+    await h.close();
+  });
+});
