@@ -179,6 +179,25 @@ importers:
         specifier: ^4.0.0
         version: 4.6.5
 
+  packages/modules/hooks:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      smol-toml:
+        specifier: ^1.3.0
+        version: 1.8.0
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
+    devDependencies:
+      '@orosus/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@orosus/testing':
+        specifier: workspace:*
+        version: link:../../testing
+
   packages/modules/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':
