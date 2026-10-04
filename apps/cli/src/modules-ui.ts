@@ -182,7 +182,9 @@ export const sessionLabelOf = (events: { type: string; label?: unknown }[]): str
 	return lastLabel?.label;
 };
 
-/** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/定时三驱。 */
+/** 面板数据异步刷新（渲染是同步路径——历史/审计读取只能预取）：会话顶/turn 结束/命令提交与插拔；
+ *  tokens 字段另有事件级就地刷新（assistant/message·turn/compaction → withLiveTokens，2026-10-04）。
+ *  无定时驱动——全屏 1 秒 tick 只重绘（重读快照）不重算。 */
 export const refreshPanel = async (deps: ModulesUiDeps): Promise<void> => {
 	const h = deps.getH();
 	const events = await h.history();

@@ -126,6 +126,15 @@ export function toolResultChip(output: unknown, isError: unknown): string {
   return TOOL_MERGE + `${n} 行`;
 }
 
+/** 注入折叠行标签（m5-hooks T10 / D19，dsh ContextInjectionRow 形态）：收起 = 灰字一行
+ *  「上下文注入 · <事件名> · N 字符」；事件名从注入包裹头（钩子注入（X））提取，Stop 续跑消息按源认。
+ *  live 与回放同款重现（都从持久化 agent/steering-message 渲染——无第二数据源）。 */
+export function injectionFoldLabel(text: string, sourceModule: string | undefined): string {
+  const m = /钩子注入（([^)）]+)）/.exec(text);
+  const event = m?.[1] ?? (sourceModule === "hooks" ? "Stop 续跑" : "注入");
+  return `上下文注入 · ${event} · ${text.length} 字符`;
+}
+
 /** 单事件 → 终端文案（完成事件面——T5 断流后 assistant/chunk 不在此列）。
  *  压缩/裁剪对用户可见（三轮 P1：此前零渲染）；四家参考均有可见提示。 */
 export function renderEvent(e: SessionEvent, state: RenderState): string {
@@ -136,6 +145,19 @@ ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, pr
 `;
   }
   if (e.type === "tool/result") return `${toolResultChip(e.output, e.isError)}\n`;
+  if (e.type === "agent/steering-message") {
+    // 钩子注入折叠行（m5-hooks T10 / D19）：host/hook 注入与 hooks 续跑消息可见可展开（Ctrl + H 查看窗）——
+    // 「出错才知道」的隐藏档（五仓形态）被用户明确反对。行模式文本路；全屏走结构化口（attachRenderTo）
+    const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
+    const lines = msgs
+      .filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "")
+      .map((m) => `  ⌁ ${injectionFoldLabel(m.text!, m.sourceModule)}（Ctrl + H 查看全文）`);
+    return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+  }
+  if (e.type === "hooks/input-rewrite") {
+    // 改参修订注记（m5-hooks T10）：一行灰字——tool/call 存原始参数、审批与执行见改后参数（对账口径）
+    return `  ⌁ 钩子改参：参数已由钩子改写（对话流工具行存原始参数，审批与执行见改后参数）\n`;
+  }
   if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]\n`;
   if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
@@ -214,6 +236,9 @@ export function attachRender(
      *  args 留存供 diff/失败体渲染（Alt+O 折叠）；缺省 = 旧文本形态（行模式/--print 零变化）。 */
     toolCall?(name: string, args: Record<string, unknown> | undefined, callId?: string): void;
     toolResult?(output: unknown, isError: unknown, callId?: string, images?: unknown): void; // m5-media F4：图片附件（DocModel 信息行数据源）
+    /** 注入折叠行结构化口（m5-hooks T10）：全屏 DocModel 提供时钩子注入行走此口（不经 md 管线）；
+     *  缺省 = renderEvent 文本形态（行模式）。 */
+    injection?(line: string): void;
     /** 模型错误 toast 口（2026-09-23 用户拍板）：finish kind=error 不再进活动流区——TTY 下改走此口
      *  （全屏浮动 toast / 行模式单行，文案 errorMessageText）；缺省回落 renderChunk 旧管道形（--print）。 */
     onError?(text: string): void;
@@ -250,6 +275,15 @@ export function attachRender(
       }
       if (e.type === "tool/result" && io.toolResult !== undefined) {
         io.toolResult(e.output, e.isError, typeof e.callId === "string" ? e.callId : undefined, e.images); // m5-media F4：图片附件透传
+        continue;
+      }
+      // 注入折叠行结构化口（m5-hooks T10）：全屏走 DocModel 行源（不经 md 管线）
+      if (e.type === "agent/steering-message" && io.injection !== undefined) {
+        for (const m of ((e.messages ?? []) as { text?: string; sourceModule?: string }[])) {
+          if ((m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "") {
+            io.injection(injectionFoldLabel(m.text, m.sourceModule));
+          }
+        }
         continue;
       }
       const out = renderEvent(e, state);

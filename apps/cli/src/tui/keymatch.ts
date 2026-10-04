@@ -7,7 +7,8 @@ const KEY_TABLE: Record<string, string> = {
 	"\r": "enter",
 	"\n": "shift+enter", // 裸 LF = Shift+Enter 的可区分形态（裸 VT 无协议协商下多数终端如此；Ctrl+J 同达——同为换行语义无害）。原映射 "enter" 会让 Shift+Enter 误提交
 	"\x7f": "backspace",
-	"\x08": "backspace",
+	"\x08": "ctrl+h", // m5-hooks T10 键位拆分：原 \x08 也映射 backspace（Ctrl+H 在主流终端发 \x08 必撞退格）——\x7f 独占 backspace、\x08 归 ctrl+h（注入查看窗主窗全局键）。遗留终端（老 conhost 配 Backspace=0x08）会真撞键——查看窗 Esc 即关不受损，真机走查含双向验证
+	"\x1b[104;5u": "ctrl+h", // CSI-u 形（kitty/win32-input 键盘协议终端——与 shift+enter 的 \x1b[13;2u 同族先例）
 	"\t": "tab",
 	"\x1b[Z": "shift+tab",
 	"\x1b": "escape",

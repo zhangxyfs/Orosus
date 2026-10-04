@@ -16,6 +16,7 @@ import { discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv,
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
+import { injectionFoldLabel } from "./render.ts";
 import { createCliUi } from "./uiface.ts";
 import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.ts";
 import { trustModule } from "@orosus/core";
@@ -58,12 +59,13 @@ import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
 import { setModuleEnabledInConfig } from "./module-toggle.ts";
 import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5；路由/窗口兜底链随族迁 config-face.ts)
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, moduleConfigFileFor } from "./config-face.ts";
-import { shortenPath } from "./usage-text.ts";
+import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryTexts, INPUT_ECHO_EVENT, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
+import type { HooksUiDeps } from "./hooks-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
 import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
 import { toggleResultText } from "./module-toggle-result.ts";
@@ -351,6 +353,12 @@ const skillDeps: SkillUiDeps = {
   commandUi,
   reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
 };
+/** 钩子面板族依赖（m5-hooks T10，技能面板同款三件）。 */
+const hooksDeps: HooksUiDeps = {
+  getH: () => h,
+  commandUi,
+  reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
+};
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
   getH: () => h,
@@ -358,6 +366,7 @@ const settingsDeps: SettingsUiDeps = {
   getPanelCache: () => getPanelCache(),
   reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
   skillDeps,
+  hooksDeps,
   mcpDeps,
 };
 try {
@@ -551,6 +560,8 @@ function attachRender(h: Harness): void {
             else dm.toolCall(name, args, callId);
           },
           toolResult: (output: unknown, isError: unknown, callId?: string, images?: unknown) => dm.toolResult(output, isError, callId, images),
+          // 钩子注入折叠行（m5-hooks T10）：灰字一行直进 DocModel（不经 md 管线）；标签与回放/行模式同源
+          injection: (line: string) => dm.pushLine(theme.fg("muted", `  ⌁ ${line}（Ctrl + H 查看全文）`)),
         }
       : {};
   attachRenderTo(
@@ -590,6 +601,15 @@ function attachRender(h: Harness): void {
       // 全屏 FullApp 秒 tick 自动重绘，行模式无面板，改快照无害
       const todoTasks = panelTasksFromEvent(e);
       if (todoTasks !== undefined && getPanelCache() !== undefined) setPanelCache({ ...getPanelCache()!, tasks: todoTasks });
+      // Tokens/上下文实时刷新（2026-10-04 用户拍板「有变化就得更新」）：模型请求结束（assistant/message
+      // 落 usage）与压缩完成（input 换压缩后投影估算）即重算 tokens 就地写回——todo 同款事件级就地更新。
+      // refreshPanel 只在 turn 结束重算，turn 进行中（agent 一轮可跑十分钟）面板会停在首刷旧值。
+      if (e.type === "assistant/message" || e.type === "turn/compaction") {
+        void h.history().then((events) => {
+          const next = withLiveTokens(getPanelCache(), events);
+          if (next !== undefined) setPanelCache(next);
+        });
+      }
     },
   );
 }
@@ -985,7 +1005,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
-		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板五项：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、配置网络搜索（LLM Web Search / Tavily / Brave 后端与 key）。「子代理」组内配模型 / 审批模式 / 轮数上限。",
+		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、子代理（模型 / 审批模式 / 轮数上限）、技能（查看 / 启停）、钩子（查看 / 启停 / 信任审查——七事件生命周期钩子清单）、MCP（server 管理）、视觉模型与网络搜索后端配置。",
 	},
 	{ name: "/tasks", aliases: ["task"], desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
 	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
@@ -1113,6 +1133,25 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       // 全屏窗形态（2026-09-27 用户拍板：参照子代理查看窗）；全部压缩历史最新在最上、静态文档自顶读——
       // 不贴底（bottom 是 live 跟随用的）。折行宽 = full 弹窗内容区（ow−2 内衬 −2 内容边 −1 前导空格 = cols−6）
       app.viewText(view.title, view.text, { layout: "full" });
+    },
+    // Ctrl+H = 注入查看窗（m5-hooks T10 / D19 用户拍板三件套：live 可见 + 回放重现 + 展开看全文）：
+    // 本会话注入条目列表（事件/来源/字符数）→ ↑↓ 选中 Enter 看全文、Esc 返回——数据源 = 持久化
+    // agent/steering-message（与折叠行同源，无第二数据源）
+    showInjections: async () => {
+      const entries = (await h.history())
+        .filter((e) => e.type === "agent/steering-message")
+        .flatMap((e) => ((e.messages ?? []) as { text?: string; sourceModule?: string }[]))
+        .filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "");
+      if (entries.length === 0) {
+        app.showToast("本会话还没有钩子注入（配置钩子后可看，Ctrl + H）");
+        return;
+      }
+      for (;;) {
+        const items = entries.map((m) => `  ${injectionFoldLabel(m.text!, m.sourceModule)}`);
+        const picked = await app.pickOverlay("钩子注入（回车看全文 · Esc 返回）", items);
+        if (picked === undefined) return; // Esc 关窗
+        app.viewText("注入全文", entries[picked]!.text!, { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
+      }
     },
     // 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项行级写 config enabled + h.reload()
     // T4 联动启停：硬依赖传递闭包——卸载带走依赖者、挂载自动补上提供者；撞锁定拒绝整次（S1）

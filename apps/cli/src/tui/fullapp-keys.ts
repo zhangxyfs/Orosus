@@ -110,6 +110,14 @@ export function createKeys(app: FullApp) {
 			app.scheduler.requestImmediateRender();
 			return;
 		}
+		if (key === "ctrl+h") {
+			// Ctrl+H = 注入查看窗（m5-hooks T10 / D19 用户拍板展开键）：钩子注入条目列表 → 全文；
+			// 主窗全局键、弹窗模态期不生效（模态铁律）；键位自  拆分而来（keymatch——遗留终端撞键走查项）
+			if (popupFocused) return;
+			app.io.showInjections?.();
+			app.scheduler.requestImmediateRender();
+			return;
+		}
 
 		// 全屏 CommandUi 挂起态（模块 choose/ask 的 overlay 化——优先于一切编辑态；
 		// F5 实证：须先于 busy-Esc 判定，否则命令询问期间 Esc 被取消 turn 分支截胡、询问卡死）

@@ -9,6 +9,7 @@ import { evaluateProjectTrust, trustFilePath } from "./trust.ts";
 export { HOOK_EVENTS, configSchema, defaultProjectConfigFile, defaultUserConfigFile, loadHooksConfig } from "./config.ts";
 export { dispatchEvent, basePayload } from "./dispatch.ts";
 export { runHook, parseHookJson, applyInjectionGates, stripAnsiAndControl, mergeInjections, buildHookEnv, expandCommand, resolveShell, capReason, INJECT_SINGLE_CAP, INJECT_SESSION_CAP } from "./executor.ts";
+export { evaluateProjectTrust, projectBucketKey, projectHooksDigest, readTrustTable, trustFilePath, canonicalJson, type TrustRecord } from "./trust.ts";
 export type { HookEvent, HooksConfig, CompiledTable, CompiledHook } from "./config.ts";
 export type { HookDecision, HookOutcome, InjectionState } from "./executor.ts";
 export type { DispatchCtx, DispatchResult } from "./dispatch.ts";

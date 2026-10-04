@@ -29,3 +29,13 @@ describe("按键匹配表（TUI 批阶段三 F0——T0 解析器的 shift 修�
 		expect(matchKey("\x1b\r")).toBe("alt+enter"); // Alt+Enter 换行原键保留
 	});
 });
+
+describe("m5-hooks T10：Ctrl+H 键位拆分（\x7f 独占 backspace、\x08 归 ctrl+h + CSI-u 形）", () => {
+	it("⌫ 删字不误开窗：\x7f 仍是 backspace；\x08 归 ctrl+h（原双字节都映射 backspace——Ctrl+H 必撞退格）", () => {
+		expect(matchKey("\x7f")).toBe("backspace");
+		expect(matchKey("\x08")).toBe("ctrl+h");
+	});
+	it("CSI-u 形（kitty/win32-input 协议终端）：\x1b[104;5u 同归 ctrl+h（shift+enter 的 \x1b[13;2u 同族）", () => {
+		expect(matchKey("\x1b[104;5u")).toBe("ctrl+h");
+	});
+});

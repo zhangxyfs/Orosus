@@ -84,7 +84,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /auto       从不询问模式（从不打断你，就算有问题也是模型自行判断）
 
 设置与信息面板：
-  /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 子代理 / 技能 / 配置网络搜索——/usage /status 已并入；回答进行中也可打开；别名 /config）
+  /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 子代理 / 技能 / 钩子 / MCP / 配置网络搜索——/usage /status 已并入；回答进行中也可打开；别名 /config）
   /tasks      子代理任务列表（父编号-孙编号亲缘标注；回车进消息查看窗；挂着审批的行回车即可批准或拒绝）
 
 技能（四轨目录：~/.agents/skills → ~/.orosus/skills → 项目 .agents/skills → 项目 .orosus/skills，同名后入者胜——项目压用户）：
@@ -93,6 +93,11 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
               手敲 /skill : 名 参数 同效——输入行原样上屏、参数随技能正文一起注入
   /settings → 技能    全部技能列表（含已停用）→ 回车进详情（名称 / 描述 / 范围 / 状态 / 文件），
               Alt + K 启用或停用（空闲自动重载生效；回答进行中改完稍后 /reload）
+
+钩子（七事件生命周期 shell 命令——配置 ~/.orosus/modules.d/hooks.toml 与项目 .orosus/modules.d/hooks.toml，协议兼容 Claude Code）：
+  /settings → 钩子    全部钩子列表（用户级/项目级分节；项目层首次生效前须 t 键审查 sha256）
+              → 回车进详情（事件 / matcher / 命令 / 超时 / 信任态），e 启用或停用（写盘缓挂 /reload）
+  Ctrl+H     注入查看窗——本会话钩子注入条目列表 → 回车看全文（流区折叠行同源；弹窗期不生效）
 
 快捷键（全屏）：
   Enter       发送；回答进行中 = 排队（队列逐条显示在输入框上方，结束后依序发出）

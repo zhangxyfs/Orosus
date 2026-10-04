@@ -6,6 +6,7 @@ import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
+import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
 import { isEsc, openMcpLine, openMcpPanel, type McpUiDeps } from "./mcp-ui.ts";
 
 /** m5-split-main T8：设置面板族自 main.ts 搬入。横切单例经本依赖对象注入（D2）：getH/commandUi
@@ -17,18 +18,20 @@ export type SettingsUiDeps = {
   getPanelCache: () => PanelData | undefined;
   reloadModulesIdle: (app: FullApp | undefined, busyToast: string) => string;
   skillDeps: SkillUiDeps;
+  hooksDeps: HooksUiDeps;
   mcpDeps: McpUiDeps;
 };
 
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
  *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
-const SETTINGS_ITEMS = [
+export const SETTINGS_ITEMS = [
 	"磁盘占用（各目录大小与清理口径）",
 	"上下文用量（窗口占用与输入输出累计）",
 	"Token 用量（本会话与项目累计）",
 	"运行状态（模型 / 会话 / 模块图）",
 	"子代理（模型 / 审批模式 / 轮数上限）",
 	"技能（查看 / 启停——四轨目录全部技能）",
+	"钩子（查看 / 启停 / 信任审查——七事件生命周期钩子）",
 	"MCP（查看 / 开关 / 删除——server 管理与添加）",
 	"配置视觉模型（停用 / 自动 / 指定——给非多模态模型提供视觉）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
@@ -76,8 +79,9 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 			}
 		}
 		else if (picked === 5) await openSkillsPanel(app, deps.skillDeps); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
-		else if (picked === 6) await openMcpPanel(app, deps.mcpDeps); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
-		else if (picked === 7) {
+		else if (picked === 6) await openHooksPanel(app, deps.hooksDeps); // m5-hooks T10：钩子面板自管（用户拍板不设 /hooks 命令）
+		else if (picked === 7) await openMcpPanel(app, deps.mcpDeps); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
+		else if (picked === 8) {
 			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
 			try {
 				const res = await runVisionSetting(
@@ -94,7 +98,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
-		else if (picked === 8) {
+		else if (picked === 9) {
 			// 顶层后端菜单的 Esc → 回设置根列表（更深的 Esc 已在 tool-web 模块内逐级返回）
 			try {
 				const res = await runSearchSettings(deps.getH());
@@ -145,8 +149,9 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 			}
 		}
 		else if (idx === 5) await openSkillsLine(out, deps.skillDeps);
-		else if (idx === 6) await openMcpLine(out, deps.mcpDeps);
-		else if (idx === 7) {
+		else if (idx === 6) await openHooksLine(out, deps.hooksDeps); // m5-hooks T10 行模式对等件
+		else if (idx === 7) await openMcpLine(out, deps.mcpDeps);
+		else if (idx === 8) {
 			try {
 				const res = await runVisionSetting(async (t, items) => deps.commandUi.choose(t, items), () => moduleConfigFileFor("tool-media", deps.getH()));
 				// 写盘即自动重载——行模式 /settings busy 期排队到 turn 结束，此处必然空闲（共用件口径）
@@ -157,7 +162,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 				throw err;
 			}
 		}
-		else if (idx === 8) {
+		else if (idx === 9) {
 			try {
 				const res = await runSearchSettings(deps.getH());
 				if (res !== "") out(res);

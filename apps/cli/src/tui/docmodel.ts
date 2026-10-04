@@ -15,6 +15,7 @@ import { createStreamingMarkdown, renderMarkdown, type StreamingMarkdown } from 
 import { stripDangerEsc } from "../ansi-guard.ts";
 import { agentGroupLines } from "../subagent-status.ts";
 import { spawnIdsIn } from "../tasks-cmd.ts";
+import { injectionFoldLabel } from "../render.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { visibleWidth, wrapText } from "./width.ts";
@@ -567,24 +568,30 @@ export class DocModel {
 					continue; // spawn 结果不落行——进度/结论都在 agent 组里（实时路同款：无配对工具行，静默丢弃）
 				}
 				this.toolResult(e.output, e.isError, callId, e.images); // m5-media F4：图片附件透传（信息行数据源）
-			} else if (e.type === "agent/steering-message") {
-				// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
-				const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
-				for (const m of msgs) {
-					if (typeof m.text !== "string" || m.text === "") continue;
-					// M4.5 T9：子代理送回走灰色系统行（sourceModule 标记——非用户块；行文自带 [非用户输入] 头防伪装）
-					if (m.sourceModule === "tool-subagent") this.pushLine(theme.fg("muted", m.text));
-					// 日期系统行（host/date）不回显：实时路 renderEvent 本就不渲染它，回放对齐——
-					// resume 后流区不该冒出「[非用户输入] 系统提醒：今天是 …」（2026-09-28 修复，落盘与请求侧不动）
-					else if (m.sourceModule === "host/date") continue;
-					else this.userPrompt(m.text);
-				}
-			} else if (e.type === "host/vision-transcribe") {
+				} else if (e.type === "agent/steering-message") {
+					// steer 注入的消息回显（2026-09 队列批——投影 = user 消息，回显同形暖金提问块）
+					const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
+					for (const m of msgs) {
+						if (typeof m.text !== "string" || m.text === "") continue;
+						// M4.5 T9：子代理送回走灰色系统行（sourceModule 标记——非用户块；行文自带 [非用户输入] 头防伪装）
+						if (m.sourceModule === "tool-subagent") this.pushLine(theme.fg("muted", m.text));
+						// 日期系统行（host/date）不回显：实时路 renderEvent 本就不渲染它，回放对齐——
+						// resume 后流区不该冒出「[非用户输入] 系统提醒：今天是 …」（2026-09-28 修复，落盘与请求侧不动）
+						else if (m.sourceModule === "host/date") continue;
+						// 钩子注入折叠行（m5-hooks T10 / D19）：host/hook 注入与 hooks 续跑——回放与 live 同款重现
+						else if (m.sourceModule === "host/hook" || m.sourceModule === "hooks")
+							this.pushLine(theme.fg("muted", `  ⌁ ${injectionFoldLabel(m.text, m.sourceModule)}（Ctrl + H 查看全文）`));
+						else this.userPrompt(m.text);
+					}
+				} else if (e.type === "host/vision-transcribe") {
 				// 视觉转述行回放（走查四拍板「重进程序调历史也要显示」）：落盘恒终态——done（text 在场）/
 				//  failed（ok !== true）；行序由 afterUserEvent 紧随 user/message 落盘保证（问题→转述→回答）。
 				//  不进上下文：deriveMessages 未知类型跳过（本事件只是回放渲染数据）。
 				const text = typeof e.text === "string" && e.text !== "" ? e.text : undefined;
 				this.visionTranscribeEnd(String(e.model ?? ""), text, text === undefined ? "failed" : "done");
+			} else if (e.type === "hooks/input-rewrite") {
+				// 改参修订注记回放（m5-hooks T10）：与实时路 renderEvent 同款一行灰字
+				this.pushLine(theme.fg("muted", "  ⌁ 钩子改参：参数已由钩子改写（对话流工具行存原始参数，审批与执行见改后参数）"));
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
 				this.pushE({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });

@@ -52,6 +52,7 @@ export async function dispatchEvent(event: HookEvent, matchValue: string | undef
     // 无匹配值事件（UserPromptSubmit/Stop）：matcher 恒忽略（写了不报错——设计空白表「matcher 语义」行）
     if (matchValue !== undefined && !table.match(matchValue)) continue;
     for (const hook of table.hooks) {
+      if (hook.disabled === true) continue; // /settings e 键停用位——跳过不执行（配置保留，审计零账）
       const timeoutMs = hook.timeoutSec !== undefined && hook.timeoutSec > 0 ? hook.timeoutSec * 1000 : dctx.config.timeoutMs;
       let outcome: HookOutcome;
       try {

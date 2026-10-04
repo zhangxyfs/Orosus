@@ -52,6 +52,13 @@ export const lastUsageOf = (events: SessionEvent[]): { input: number; output: nu
   return result;
 };
 
+/** tokens 就地刷新（2026-10-04 用户拍板「token/上下文有变化就得更新」）：assistant/message（usage
+ *  落定）与 turn/compaction（input 换压缩后投影估算）两事件到达时重算末条 usage 投影就地写回面板
+ *  快照——此前只有 refreshPanel（turn 结束/命令提交/插拔）重算，turn 进行中（agent 一轮可跑十分钟）
+ *  Tokens 行与上下文条停在旧值（新会话首 turn 恒 0/0）。cache 未就绪（首刷前）返 undefined 跳过。 */
+export const withLiveTokens = (cache: PanelData | undefined, events: SessionEvent[]): PanelData | undefined =>
+  cache === undefined ? undefined : { ...cache, tokens: lastUsageOf(events) };
+
 /** 末次模型请求耗时（2026-10-01 拍板 B——被动真值，loop 随 assistant/message 落 durationMs）：
  *  倒扫最近一条带 durationMs 的 assistant/message；老会话（字段未生年代）= undefined 不显示。 */
 export const lastRequestMsOf = (events: SessionEvent[]): number | undefined => {

@@ -17,7 +17,7 @@ export { purgeSessionDir, sweepEmptySessions, type EmptySessionSweep } from "./s
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
 export { verifyChain } from "./session/fork.ts"; // 宿主面（M4-1 T6 复核用）：复合投影链校验
 export { repairFile } from "./session/jsonl.ts"; // 宿主面（M4-1 T6 复核用）：撕裂尾修复
-export { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrustKey, type TrustStore } from "./kernel/trust.ts";
+export { loadTrustStore, saveTrustStore, checkTrust, trustModule, normalizeTrustKey, atomicWriteTextSync, type TrustStore } from "./kernel/trust.ts"; // atomicWriteTextSync：m5-hooks T10 钩子信任面写盘（tmp+rename 原子替换——CK-07 修复成果件复用）
 // 宿主面（§9）：CLI module 子命令族的发现数据源——与 trust 函数同批先例（M2 补账：T13 处理器从未接线）
 export { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 // M4-3 T1d 宿主面：引导期按裸条目实拉模型清单需直读 secrets（reload 前的文件级解析）

@@ -11,6 +11,7 @@ export type HookEvent = (typeof HOOK_EVENTS)[number];
 const hookEntrySchema = z.object({
   command: z.string().min(1).describe("shell 命令（win32 走 Git Bash；${OROSUS_PROJECT_DIR}/${CLAUDE_PROJECT_DIR} 模板可用）"),
   timeout: z.number().int().min(0).optional().describe("秒；缺省或 = 0 = 用全局 timeoutMs（哨兵语义，非零超时）"),
+  disabled: z.boolean().optional().describe("停用——/settings 钩子面 e 键写盘（不删除配置，重新启用即恢复）"),
 });
 const eventTableSchema = z.object({
   matcher: z.string().optional().describe("正则（大小写敏感、不隐式锚定，全名匹配须自带 ^$）；作用于事件匹配值——工具事件=工具名、SessionStart=source；省略 = 全匹配"),
@@ -35,6 +36,7 @@ export type HooksModuleConfig = z.infer<typeof configSchema>;
 export interface CompiledHook {
   command: string;
   timeoutSec?: number;
+  disabled?: boolean; // /settings e 键写盘位——dispatch 跳过（配置保留）
 }
 export interface CompiledTable {
   origin: "user" | "project";
@@ -93,7 +95,7 @@ const parseTables = (doc: Record<string, unknown> | undefined, origin: "user" | 
         continue;
       }
       const { matcherSource, match } = compileMatcher(entry.data.matcher, warn);
-      tables.push({ origin, ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}) })) });
+      tables.push({ origin, ...(matcherSource !== undefined ? { matcherSource } : {}), match, hooks: entry.data.hooks.map((h) => ({ command: h.command, ...(h.timeout !== undefined ? { timeoutSec: h.timeout } : {}), ...(h.disabled === true ? { disabled: true } : {}) })) });
     }
     if (tables.length > 0) out[event] = tables;
   }

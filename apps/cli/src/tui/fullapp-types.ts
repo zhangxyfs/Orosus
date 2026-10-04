@@ -124,6 +124,9 @@ export interface FullAppIO {
 	/** Ctrl+O = 查看压缩摘要（2026-09-23 用户拍板：/summary 命令退役，摘要查看唯一入口）。
 	 *  宿主读最近 turn/compaction 的 summary（overlay 文本灰色 muted 由宿主包裹）。 */
 	showCompactionSummary?(): void;
+	/** Ctrl+H = 注入查看窗（m5-hooks T10 / D19）：本会话钩子注入条目列表 → 选中看全文；
+	 *  主窗全局键，弹窗模态期不生效（popupFocused 铁律——见 fullapp-keys）。 */
+	showInjections?(): void;
 	/** 模块卡回车 = 热插拔（2026-09-23 用户拍板）：锁定项宿主 toast 锁因；可插拔项宿主写
 	 *  config 的 [模块名] enabled + h.reload()（面板随之刷新）。 */
 	toggleModule?(name: string, lockedReason: string | undefined): void;
