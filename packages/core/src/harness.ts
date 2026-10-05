@@ -8,7 +8,7 @@ import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./se
 import { SqliteSessionStore, sqliteAvailable } from "./session/sqlite.ts";
 import { ForkedSessionStore, openSessionView, verifyChain, type SessionLoadInfo } from "./session/fork.ts";
 import { refreshEventIndex } from "./session/eventindex.ts";
-import { eventsBefore as eventsBeforeQuery } from "./session/eventindex.ts";
+import { defaultEventIndexFile, eventsBefore as eventsBeforeQuery, indexSingleSession } from "./session/eventindex.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
@@ -325,7 +325,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // 同形）；子代理经 runner 接线显式传 {load:"full"}。窗口注入 index（bucket=目录名——事件索引
   // (bucket,sid) 主键；索引可用性由装配层判定：resume 前先增量刷新）。
   const sessionLoad: "window" | "full" = options.sessionLoad ?? (process.env.OROSUS_SESSION_LOAD === "full" ? "full" : "window");
-  const eventIndexFile = options.eventIndexFile ?? join(orosusHome(), "db", "event-index.sqlite");
+  const eventIndexFile = options.eventIndexFile ?? defaultEventIndexFile();
   const makeStore = (sessionId?: string, dir: string = sessionsDir, opts?: { load?: "window" | "full" }): SessionStore => {
     const backend = String(config.core.sessionStore ?? "jsonl");
     const withId = sessionId !== undefined ? { sessionId } : {};
@@ -1314,9 +1314,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // T14（m5-resume-perf）：懒分页取段——事件索引查段 + pread 逐行 parse（纯查看，不动镜像）
     async eventsBefore(sessionId: string, beforeSeq: number, limitEvents = 500): Promise<SessionEvent[]> {
       if (baseStore instanceof ForkedSessionStore || !sqliteAvailable()) return []; // fork 复合视图：前缀在祖辈文件，本口恒空
-      const segs = eventsBeforeQuery(eventIndexFile, basename(sessionsDir), sessionId, beforeSeq, limitEvents);
-      if (segs.length === 0) return [];
       const file = join(sessionsDir, sessionId, "agents", "session.jsonl");
+      let segs = eventsBeforeQuery(eventIndexFile, basename(sessionsDir), sessionId, beforeSeq, limitEvents);
+      if (segs.length === 0) {
+        // D14 ③（2026-10-05 补接线）：翻页恰好无索引（会话从未入索引——<5MB 全量装载不走嗅探建行）
+        // → 单会话即时字节扫补建后重查（几百 ms 一次性；建行只扫字节不 parse）。补建后仍空 = 到头
+        indexSingleSession(eventIndexFile, basename(sessionsDir), sessionId, file);
+        segs = eventsBeforeQuery(eventIndexFile, basename(sessionsDir), sessionId, beforeSeq, limitEvents);
+      }
+      if (segs.length === 0) return [];
       let fd: number;
       try {
         fd = openSync(file, "r");

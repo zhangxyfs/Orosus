@@ -1,7 +1,13 @@
 import { closeSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { orosusHome } from "@orosus/contracts/home";
 import { scanSessionFiles, type SessionFileEntry } from "./dir.ts";
 import { openDatabase, removeSqliteDbFiles, sqliteAvailable } from "./sqlite.ts";
+
+/** 索引库缺省落点单一解析点（T11 harness 装配与 CLI 列表接线共用——两处漂移即索引分裂）。 */
+export function defaultEventIndexFile(): string {
+  return join(orosusHome(), "db", "event-index.sqlite");
+}
 
 /** 事件索引（m5-resume-perf T6b，D12 混合形态）：`~/.orosus/db/event-index.sqlite`（独立库——与树索引
  *  session-tree.sqlite 同目录不共库，生命周期独立：删事件索引不牵连树索引、schema 演进互不干扰）。

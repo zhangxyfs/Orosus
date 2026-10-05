@@ -1243,3 +1243,30 @@ describe("DocModel 懒分页头部补页（m5-resume-perf T14——ZCode/Codex �
 		expect(dm.oldestLoadedSeq).toBe(5);
 	});
 });
+
+describe("T14 锚点勘正（2026-10-05 补接线修）——窗口态跨压缩翻页死锚拆除", () => {
+	it("① historyFrom 锚=首个非种子事件 seq：窗口形态 [header(1),label(2),compaction(5),tail] 锚=5 非 1（eventsBefore(1) 恒空的死锚）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = false;
+		dm.historyFrom([
+			{ type: "session/header", seq: 1, v: 1, id: "a", parentId: null, ts: "t" },
+			{ type: "session/label", seq: 2, label: "L", v: 1, id: "b", parentId: "a", ts: "t" },
+			{ type: "turn/compaction", seq: 5, droppedCount: 3, v: 1, id: "c", parentId: "b", ts: "t" },
+			{ type: "user/message", seq: 6, content: [{ kind: "text", text: "后问" }], v: 1, id: "d", parentId: "c", ts: "t" },
+		], 80);
+		expect(dm.oldestLoadedSeq).toBe(5); // 非 1——首个非种子（压缩事件，窗口头）
+	});
+
+	it("② prependHistory 空渲染批（翻到文件头的 header/label 批）也推进锚——翻页终止有界不空转", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = false;
+		dm.historyFrom([{ type: "user/message", seq: 10, content: [{ kind: "text", text: "后问" }], v: 1, id: "e10", parentId: null, ts: "t" }], 80);
+		expect(dm.oldestLoadedSeq).toBe(10);
+		const added = dm.prependHistory([
+			{ type: "session/header", seq: 1, v: 1, id: "h", parentId: null, ts: "t" },
+			{ type: "session/label", seq: 2, label: "L", v: 1, id: "l", parentId: "h", ts: "t" },
+		], 80);
+		expect(added).toBe(0); // 种子不渲染
+		expect(dm.oldestLoadedSeq).toBe(1); // 锚仍推进——下一次 eventsBefore(1) 空=到头（终止有界）
+	});
+});

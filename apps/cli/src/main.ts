@@ -12,7 +12,7 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
-import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -661,6 +661,9 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId, currentBucket) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
         const items = listSessions(sessionsRoot, currentBucket);
         if (items.length === 0) { notify("暂无会话——发送第一条消息即创建"); return "again"; }
+        // D14 ②（2026-10-05 补接线）：刷会话列表时机后台全库补建事件索引——列表不依赖它（标题走
+        // readSessionHead 预算读），void 不挡界面；已索引会话 mtime+size 双判命中零成本跳过
+        void refreshEventIndex(defaultEventIndexFile(), sessionsRoot);
         // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
         // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
         // 不再先打印静态表格——picker 自带列表渲染），Esc reject 在 pickSessionNumber 内转 undefined

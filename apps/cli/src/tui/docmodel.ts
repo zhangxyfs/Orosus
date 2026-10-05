@@ -609,7 +609,10 @@ export class DocModel {
 	oldestLoadedSeq: number | undefined = undefined;
 
 	historyFrom(events: { type: string; seq?: unknown; [k: string]: unknown }[], _width: number): void {
-		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq;
+		// T14 锚点勘正（2026-10-05 补）：种子三件（header/label/fork）不渲染且窗口态种子 seq=1——
+		// 取装载批首事件会把锚谎设在 1（eventsBefore(1) 恒空=跨压缩翻页死锚）。锚=首个非种子事件 seq
+		const firstContent = events.find((e) => e.type !== "session/header" && e.type !== "session/label" && e.type !== "session/fork");
+		if (typeof firstContent?.seq === "number") this.oldestLoadedSeq = firstContent.seq;
 		this.replayEventLoop(events);
 		this.settleActive();
 		if (this.turnWindowEnabled) this.trimTurns(); // resume 即裁：装载完立即裁到保留窗（大会话恢复首帧与内存双收益——这正是恢复秒开的来源）
@@ -622,6 +625,7 @@ export class DocModel {
 	 *  （头部插入 → dmTotal 与内容同下移，scrollBack 不动 = 同一可视内容）。 */
 	prependHistory(events: { type: string; seq?: unknown; [k: string]: unknown }[], _width: number): number {
 		if (events.length === 0) return 0;
+		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq; // 锚先行——空渲染批（header/label）也推进（含种子：防同批重取），翻页终止有界
 		const savedTurn = this.curTurn;
 		const startLen = this.lines.length;
 		this.curTurn = -events.filter((e) => e.type === "turn/end").length - 1; // 负基：补页轮恒先于现存轮被裁
@@ -635,7 +639,6 @@ export class DocModel {
 		this.lines.splice(at, 0, ...newEntries);
 		this.turnOf.splice(at, 0, ...newTurns);
 		this.counts.splice(at, 0, ...Array.from({ length: added }, () => -1));
-		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq;
 		return added;
 	}
 

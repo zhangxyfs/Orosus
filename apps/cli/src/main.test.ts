@@ -668,6 +668,11 @@ describe("T4b m5-resume-perf: 全屏切会话就地换页（不退出 FullApp—
 		expect(src).toContain("app.sessionSwapped();"); // 懒分页到头态重置
 	});
 
+	it("D14 ② 接线钉：/sessions 列表时机后台全库补建事件索引（void 不挡界面）", () => {
+		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+		expect(src).toContain("void refreshEventIndex(defaultEventIndexFile(), sessionsRoot);"); // 列表时机后台补建
+	});
+
 	it("fork 快径钉：full 模式 /fork 登记意图即返回（重活 forkInPlace 异步走）+ 拦截分派", () => {
 		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
 		expect(src).toContain('if (directive.kind === "fork" && tuiMode === "full") {'); // 快径判据

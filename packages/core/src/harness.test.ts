@@ -2104,3 +2104,40 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
     expect(winEvents.some((e) => e.id === preAnchorId)).toBe(true); // 分叉锚在投影内
   });
 });
+
+describe("D14 ③ 补接线（2026-10-05）：eventsBefore 翻页 miss 当场单会话补建", () => {
+  it("会话从未入索引（<5MB 全量装载不走嗅探建行）→ 首次 eventsBefore 即时补建并返回更早事件", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-d14c-"));
+    const sid = "s_d14c";
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_d${String(seq).padStart(3, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "t", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    push({ label: "补建帽" }, "session/label");
+    for (let i = 0; i < 6; i++) push({ content: [{ kind: "text", text: `问${i}` }] }, "user/message");
+    mkdirSync(join(dir, "sessions", sid, "agents"), { recursive: true });
+    writeFileSync(join(dir, "sessions", sid, "agents", "session.jsonl"), lines.join("\n") + "\n");
+    // store 注入（绕过 resume 分支的 T11 预刷新——保持索引为空，逼出 ③ 补建路径）
+    const store = new JsonlSessionStore({ dir: join(dir, "sessions"), sessionId: sid });
+    const h = await createHarness({
+      store,
+      sessionsDir: join(dir, "sessions"),
+      sessionsRoot: join(dir, "sessions"),
+      eventIndexFile: join(dir, "event-index.sqlite"),
+      diagDir: join(dir, "logs"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    const evs = await h.eventsBefore(sid, 7, 3); // seq<7 的 3 条 = 4,5,6
+    expect(evs.map((e) => e.seq)).toEqual([4, 5, 6]);
+    const evs2 = await h.eventsBefore(sid, 4, 10); // 索引已建——直接命中（1..3）
+    expect(evs2.map((e) => e.seq)).toEqual([1, 2, 3]);
+    await h.close();
+  });
+});
