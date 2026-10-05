@@ -224,8 +224,9 @@ export async function refreshEventIndex(dbFile: string, root: string, entries?: 
       onDisk.add(key);
       const st = stamps.get(key);
       if (st !== undefined && st.mtime_ms === entry.mtimeMs && st.size === entry.size) continue; // 双判命中 → 整会话跳过
-      // 首次 / mtime 变更：从已索引位置续读；size 变小（外物截断/重写）= 该会话行全量重建
-      let fromByte = st === undefined || entry.size < st.indexed_bytes ? 0 : st.indexed_bytes;
+      // 首次 / mtime 变更：仅「纯增长」走增量续读（append-only 常态）；缩短（外物截断/删行）或
+      // 同尺寸变动（同长度编辑——锚行不动但中段内容已换）一律该会话行全量重建
+      let fromByte = st === undefined || entry.size <= st.indexed_bytes ? 0 : st.indexed_bytes;
       // 锚行校验（2026-10-05 空会话清理问答修）：增量续读前 pread 最后一行验 seq/type 与行记录一致——
       // 不符=文件被重写（同 sid 删了重建 / 外物改写）而非纯追加，从 0 重建（旧行偏移全部作废）
       if (fromByte > 0) {

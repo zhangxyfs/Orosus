@@ -171,8 +171,8 @@ describe.skipIf(!sqliteAvailable())("T6b m5-resume-perf: 事件索引 schema 与
     const dbFile = join(d, "event-index.sqlite");
     // 双层布局（root/bucket/<sid>/agents/…）——scanSessionFiles 的真实视角
     const bucket = join(d, "bk");
-    const a = await seedSession(bucket, "s_g1", 3);
-    const b = await seedSession(bucket, "s_g2", 4);
+    await seedSession(bucket, "s_g1", 3);
+    await seedSession(bucket, "s_g2", 4);
     await refreshEventIndex(dbFile, d); // 全库形态：扫到两会话
     expect(rowsOf(dbFile)).toHaveLength(7);
     rmSync(join(bucket, "s_g1"), { recursive: true, force: true });
@@ -185,7 +185,7 @@ describe.skipIf(!sqliteAvailable())("T6b m5-resume-perf: 事件索引 schema 与
     const dbFile = join(d, "event-index.sqlite");
     const bucket = join(d, "bk");
     const a = await seedSession(bucket, "s_a", 3);
-    const b = await seedSession(bucket, "s_b", 4);
+    await seedSession(bucket, "s_b", 4);
     await refreshEventIndex(dbFile, d); // 全库：两会话都入索引
     expect(rowsOf(dbFile)).toHaveLength(7);
     // T11 装载预刷新 / 翻页追平的单会话形态：显式条目只刷自己——他会话行必须存活
@@ -329,8 +329,7 @@ describe("空会话清理配套（2026-10-05 用户问答「空会话清理时�
     const { purgeSessionDir } = await import("./cleanup.ts");
     expect(purgeSessionDir(bucket, "s_j1", { eventIndexFile: dbFile })).toBe(true);
     expect(rowsOf(dbFile)).toHaveLength(4); // j1 行连带清掉，j2 完好
-    const stamps = stampCount(dbFile);
-    expect(stamps).toBe(1);
+    expect(stampCount(dbFile)).toBe(1);
     void a;
   });
 
@@ -369,5 +368,58 @@ describe("空会话清理配套（2026-10-05 用户问答「空会话清理时�
     } finally {
       closeSync(fd);
     }
+  });
+});
+
+describe("用户问答「手动删/改会话文件导致索引对不上」（2026-10-05）", () => {
+  it("l. 删中段行（文件缩短+内容上移）→ 全量重建：行 pread 回读与改后文件逐行对得上", async () => {
+    const d = tmp("evixl");
+    const dbFile = join(d, "event-index.sqlite");
+    const bucket = join(d, "bk");
+    const { file } = await seedSession(bucket, "s_l", 6);
+    const st1 = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ id: "s_l", file, dir: bucket, mtimeMs: st1.mtimeMs, size: st1.size, bucket: "bk" }]);
+    expect(rowsOf(dbFile)).toHaveLength(6);
+    // 手动删中段一行（第 3 行）——内容整体上移、锚行偏移全错
+    const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+    lines.splice(2, 1);
+    writeFileSync(file, lines.join("\n") + "\n");
+    forwardMtime(file);
+    const st2 = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ id: "s_l", file, dir: bucket, mtimeMs: st2.mtimeMs, size: st2.size, bucket: "bk" }]);
+    const rows = rowsOf(dbFile);
+    expect(rows).toHaveLength(5); // 缩短 → 全量重建（旧行偏移作废）
+    const fd = openSync(file, "r");
+    try {
+      for (const r of rows) {
+        const buf = Buffer.alloc(r.byte_length);
+        readSync(fd, buf, 0, r.byte_length, r.byte_offset);
+        expect((JSON.parse(buf.toString("utf8")) as { seq: number }).seq).toBe(r.seq); // 回读逐行对得上
+      }
+    } finally {
+      closeSync(fd);
+    }
+  });
+
+  it("m. 同尺寸内容编辑（改一个字符字节长不变）→ 也全量重建（readSync 扫描从 0 起）", async () => {
+    const d = tmp("evixm");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file } = await seedSession(d, "s_m", 5);
+    const st1 = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ id: "s_m", file, dir: d, mtimeMs: st1.mtimeMs, size: st1.size, bucket: "bk" }]);
+    expect(rowsOf(dbFile)).toHaveLength(5);
+    // 同长度编辑：m3 → m4（字节数不变）；锚行（末行）不动——只有「仅纯增长才增量」的规则能抓到
+    const raw = readFileSync(file, "utf8");
+    const edited = raw.replace("m3", "m4");
+    expect(Buffer.byteLength(edited)).toBe(Buffer.byteLength(raw)); // 前提钉：同尺寸
+    writeFileSync(file, edited);
+    forwardMtime(file);
+    const st2 = statSync(file);
+    vi.mocked(readSync).mockClear();
+    await refreshEventIndex(dbFile, d, [{ id: "s_m", file, dir: d, mtimeMs: st2.mtimeMs, size: st2.size, bucket: "bk" }]);
+    const calls = vi.mocked(readSync).mock.calls as unknown as unknown[][];
+    const scanPositions = calls.filter((c) => typeof c[3] === "number" && (c[3] as number) >= 300).map((c) => c[4] as number);
+    expect(scanPositions.length).toBeGreaterThan(0);
+    expect(Math.min(...scanPositions)).toBe(0); // 从头重扫（旧规则=增量零扫，中段旧行原样保留）
   });
 });
