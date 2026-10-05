@@ -1322,6 +1322,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     toggleErr: () => {
       dm.errOpen = !dm.errOpen;
     },
+    toggleSteps: () => {
+      dm.toggleSteps(); // T9：轮内步级折叠（Alt+S）——开=splice 回原位、关=全轮重折，账本 stepsOpen 键收口
+    },
     // 消息队列三件套（2026-09-23 队列批——kimi 方案改 Ctrl+U）：队列区数据源 / ↑ 召回队尾 / steer 注入
     queueItems: () => [...pendingSubmits],
     // M4.5（2026-09-27 改版）：前台显示走流区 agent 组（DocModel 组条目）；此口只剩双击 Esc 全停门槛判定

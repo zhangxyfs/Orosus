@@ -901,6 +901,7 @@ describe("DocModel 性能回归钉二（m5-render-perf T6——防三处退化�
 			toggleThink: () => {},
 			toggleTool: () => {},
 			toggleErr: () => {},
+			toggleSteps: () => {},
 			queueItems: () => [],
 			recallQueued: () => undefined,
 			requestSteer: () => {},
@@ -1074,5 +1075,92 @@ describe("DocModel 视觉转述行（m5-media 走查四 2026-10-02——◐ 转�
 		expect(plain.some((l) => l.includes("绿色图表与三条曲线"))).toBe(true);
 		dm.historyFrom([{ type: "host/vision-transcribe", model: "m", ok: false }], 80); // 无 running 条目 → 直接推终态
 		expect(dm.frameLines(80).map(stripAnsi).some((l) => l.includes("视觉转述失败"))).toBe(true);
+	});
+});
+
+describe("DocModel 轮内步级折叠（m5-resume-perf T9——kimi KEEP_RECENT_STEPS=30 同款，Alt+S 独立键）", () => {
+	/** 单轮 n 步：每步 toolCall + toolResult + 帧渲染；不 turnEnd（同轮内）。 */
+	const steps = (dm: DocModel, n: number, from = 0): void => {
+		for (let i = from; i < from + n; i++) {
+			dm.toolCall(`tool-fx__s${i % 3}`, { path: `f${i}.md` }, `c${i}`); // 交替名——不进聚合组（连续同名才并组）
+			dm.toolResult(`内容 ${i}`, false, `c${i}`);
+			dm.frameLines(80);
+		}
+	};
+
+	it("① 单轮 40+ 步：折叠行 1 + 保留 30 + 非步骤条目不折；toggleSteps 展开恢复全部", () => {
+		const dm = new DocModel();
+		dm.userPrompt("巨步骤轮");
+		dm.pushLine("  横幅行不该被折叠");
+		steps(dm, 45);
+		dm.turnEnd(); // 收轮终折：精确保留 30（活轮滞回态 34 → 终态 30）
+		const plain = dm.frameLines(80).map(stripAnsi);
+		const foldLines = plain.filter((l) => l.includes("本轮前序") && l.includes("步已折叠"));
+		expect(foldLines).toHaveLength(1); // 恰一条折叠行
+		expect(foldLines[0]!).toContain("15 步"); // 45 − 30 = 15
+		expect(plain.filter((l) => l.includes("● Used")).length).toBe(30); // 保留最近 30 步（收起态头行计数）
+		expect(plain.join("\n")).toContain("横幅行不该被折叠"); // 非步骤条目不折
+		expect(plain.join("\n")).not.toContain("f0.md"); // 最早步骤已折（args 预览可辨）
+		expect(plain.join("\n")).toContain("f44.md"); // 最新步骤保留
+		// Alt+S 展开：恢复全部且折叠行消失
+		dm.toggleSteps();
+		const open = dm.frameLines(80).map(stripAnsi);
+		expect(open.filter((l) => l.includes("步已折叠"))).toHaveLength(0);
+		expect(open.filter((l) => l.includes("● Used")).length).toBe(45); // 全部恢复
+		expect(open.join("\n")).toContain("f0.md");
+		// 再收：重折回 30
+		dm.toggleSteps();
+		const shut = dm.frameLines(80).map(stripAnsi);
+		expect(shut.filter((l) => l.includes("● Used")).length).toBe(30);
+		expect(shut.filter((l) => l.includes("步已折叠"))).toHaveLength(1);
+	});
+
+	it("② 20 轮大会话回放有界：每轮 40 步 → 每轮各 1 折叠行 + 30 保留（单轮巨条目不再全挂载）", () => {
+		const dm = new DocModel();
+		for (let t = 0; t < 20; t++) {
+			dm.userPrompt(`第 ${t} 轮`);
+			steps(dm, 40);
+			dm.turnEnd();
+		}
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.filter((l) => l.includes("步已折叠"))).toHaveLength(20); // 每轮一条
+		expect(plain.filter((l) => l.includes("● Used")).length).toBe(20 * 30); // 每轮保留 30
+	});
+
+	it("③ stepsOpen 键失配触发账本重折（counts 精确）；env 0 = 不折常开", () => {
+		const dm = new DocModel();
+		dm.userPrompt("env 轮");
+		process.env.OROSUS_TUI_KEEP_STEPS = "0";
+		try {
+			steps(dm, 50);
+			dm.frameLines(80);
+			const plain = dm.frameLines(80).map(stripAnsi);
+			expect(plain.filter((l) => l.includes("步已折叠"))).toHaveLength(0);
+			expect(plain.filter((l) => l.includes("● Used")).length).toBe(50); // 常开全挂
+			dm.turnEnd(); // env 仍为 0 时收轮——不折
+		} finally {
+			delete process.env.OROSUS_TUI_KEEP_STEPS;
+		}
+		// env 恢复后新轮折叠照常
+		dm.userPrompt("env 恢复轮");
+		steps(dm, 42);
+		dm.turnEnd();
+		const plain2 = dm.frameLines(80).map(stripAnsi);
+		expect(plain2.filter((l) => l.includes("步已折叠"))).toHaveLength(1);
+	});
+
+	it("④ 账本几何精确：折叠/展开前后 frameWindow 行数一致性与总行数账目对得上", () => {
+		const dm = new DocModel();
+		dm.userPrompt("几何轮");
+		steps(dm, 35);
+		dm.turnEnd(); // 终折 5 步
+		const before = dm.frameLines(80).length;
+		expect(before).toBeGreaterThan(0);
+		// 展开后总行数 = 折叠态总行数 − 1 + 展开恢复的 5 步行数（每步 1 行工具行）
+		dm.toggleSteps();
+		const open = dm.frameLines(80);
+		expect(open.length).toBe(before - 1 + 5); // fold-step 1 行换回 5 个工具行
+		dm.toggleSteps();
+		expect(dm.frameLines(80).length).toBe(before); // 重折回原几何
 	});
 });

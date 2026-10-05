@@ -72,6 +72,7 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Par
 		toggleThink: () => actions.push("think"),
 		toggleTool: () => actions.push("tool"),
 		toggleErr: () => actions.push("err"),
+		toggleSteps: () => actions.push("steps"),
 		...over,
 	};
 	const { input, output } = fakeTerm(cols, rows);

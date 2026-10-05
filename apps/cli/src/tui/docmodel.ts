@@ -47,7 +47,8 @@ type Entry =
 	| { k: "group"; ids: string[] } // 子代理 agent 组（2026-09-27 用户拍板格式）：spawn 工具行合并体——每帧从 roster 现算不缓存（活体行：状态/时长随心跳自更；kimi agent-group 定式：连续 spawn 并一组、非 spawn 断组）
 	| { k: "skill"; name: string } // 技能手动加载行（2026-09-28 用户拍板：正文不打印进对话流）——单行紧凑标记，kimi「Activated skill」/pi「[skill] name」同款；全文只进模型上下文（单行静态拼接，无缓存必要）
 	| { k: "vision"; model: string; state: "running" | "done" | "failed" | "aborted"; text?: string; since?: number; cache?: { w: number; open: boolean; lines: string[] } } // 视觉转述行（m5-media 走查四 2026-10-02 拍板）：◐ 转述中 → ● 结果两态原位翻转（下标稳定——frameWindow 账本要求）；done 正文**默认折叠 Alt+E 展开**（全量转述可达 1200 字——2026-10-02 拍板，与主思考共键 thinkOpen）；aborted 恒 live-only（未发送不落日志）。since = 开始时刻——running 态活体行（1s 心跳重绘现算已耗时，group 行同先例；流式增量另走转述活动块 activeTail）
-	| { k: "fold"; turns: number }; // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
+	| { k: "fold"; turns: number } // 滑窗折叠行（m5-render-perf T7——D12）：被裁轮次的原地单行提示（dim 色），每次裁剪重建（先移除旧 fold 再插头部）
+	| { k: "fold-step"; hidden: Entry[] }; // 轮内步级折叠行（m5-resume-perf T9——D9/kimi KEEP_RECENT_STEPS=30 同款）：本轮前序步骤条目合并体（hidden 持原条目，Alt+S 展开时 splice 回原位——下标稳定账本 splice 重算）
 
 export class DocModel {
 	/** 思考块折叠态（Alt+E 全局切换——默认收起最多 2 视觉行，走查 v1.8 口径）。 */
@@ -56,6 +57,20 @@ export class DocModel {
 	toolOpen = false;
 	/** 工具失败体折叠态（Alt+F 全局切换——二轮走查拍板：错误默认全收起、头行带提示，与 diff 分键）。 */
 	errOpen = false;
+	/** 轮内步级折叠态（m5-resume-perf T9——Alt+S 全局切换，与 thinkOpen/toolOpen/errOpen 同族不持久化；
+	 *  D9 拍板独立键不挂 Alt+O——「内容详略」与「步骤多少」正交维度分键管）。 */
+	stepsOpen = false;
+	/** 轮内保留步数（D9：kimi TRANSCRIPT_KEEP_RECENT_STEPS=30 同值；env OROSUS_TUI_KEEP_STEPS 覆盖、
+	 *  0 = 不折常开——OROSUS_TUI_MAX_TURNS 同款读法）。 */
+	private get stepsKeep(): number {
+		const keep = Number(process.env.OROSUS_TUI_KEEP_STEPS ?? 30);
+		return Number.isFinite(keep) && keep > 0 ? keep : 0;
+	}
+	/** 步骤条目判据：tool 条目 + 「●」头工具 raw 行（聚合组/工具结果哨兵行都以此头标记——非步骤
+	 *  raw（横幅/提示/注入折叠行）不以 ● 开头，天然分离）。 */
+	private isStepEntry(e: Entry): boolean {
+		return e.k === "tool" || (e.k === "raw" && e.s.startsWith("●"));
+	}
 	/** 花名册现读口（agent 组条目每帧取数——main.ts 注入 h.subagents()；无 = 组条目退化空）。 */
 	agentProvider: (() => readonly SubagentRosterEntry[]) | undefined = undefined;
 	/** 静默调用集（2026-09-27 拍板：tasks 纯查询行收进 agent 组）：tasks 的 call/result 整对吞掉——
@@ -253,6 +268,74 @@ export class DocModel {
 			}
 		}
 		this.pushE({ k: "tool", name, args, ...(callId !== undefined ? { callId } : {}) });
+		this.trimIntraTurn(); // T9：轮内步数即时有界（活轮巨步骤不再全挂载——懒查轻计数）
+	}
+
+	/** T9 轮内步级折叠切换（Alt+S）：开 = 全部 fold-step splice 回原位；关 = 全轮重折（各轮独立保留
+	 *  最近 stepsKeep 步）。条目增删走 splice（下标稳定语义），账本由 reconcile 的 stepsOpen 键失配
+	 *  全量重折收口。 */
+	toggleSteps(): void {
+		this.stepsOpen = !this.stepsOpen;
+		if (this.stepsOpen) {
+			for (let i = this.lines.length - 1; i >= 0; i--) {
+				const e = this.lines[i]!;
+				if (e.k !== "fold-step") continue;
+				const t = this.turnOf[i] ?? 0;
+				this.lines.splice(i, 1, ...e.hidden);
+				this.turnOf.splice(i, 1, ...e.hidden.map(() => t));
+				this.counts.splice(i, 1, ...e.hidden.map(() => -1));
+			}
+		} else {
+			for (let t = 0; t <= this.curTurn; t++) this.foldStepsForTurn(t, true);
+		}
+	}
+
+	/** T9 轮内折叠增量触发（toolCall 推入后 + turnEnd 收轮时）：滞回 +10——超 stepsKeep+10 才折到
+	 *  stepsKeep（避免每步一折的抖动；kimi 滑窗滞回同思路）。stepsOpen 展开态/env 0 不折。 */
+	private trimIntraTurn(): void {
+		if (this.stepsOpen || this.stepsKeep === 0) return;
+		this.foldStepsForTurn(this.curTurn, false);
+	}
+
+	/** T9 单轮折叠：该轮步骤条目超 stepsKeep+10 时，把最早的（步数 − stepsKeep）个收进 fold-step
+	 *  （同轮已有 fold-step 则并入其 hidden，位置不动）；lines/turnOf/counts 三平行数组同步 splice，
+	 *  fold-step 恒 1 行（账本即时精确）。 */
+	private foldStepsForTurn(turn: number, final: boolean): void {
+		const keep = this.stepsKeep;
+		if (keep === 0) return;
+		const SLACK = final ? 0 : 10; // 活轮滞回防每步一折；收轮/重折终态=精确 stepsKeep
+		const stepIdx: number[] = [];
+		let foldAt = -1;
+		for (let i = 0; i < this.lines.length; i++) {
+			const e = this.lines[i]!;
+			if (this.turnOf[i] !== turn) continue;
+			if (e.k === "fold-step") {
+				foldAt = i;
+				continue;
+			}
+			if (this.isStepEntry(e)) stepIdx.push(i);
+		}
+		if (stepIdx.length <= keep + SLACK) return;
+		const foldN = stepIdx.length - keep;
+		const victims = stepIdx.slice(0, foldN);
+		const hidden: Entry[] = [];
+		for (let v = victims.length - 1; v >= 0; v--) {
+			const i = victims[v]!;
+			hidden.unshift(this.lines[i]!);
+			this.lines.splice(i, 1);
+			this.turnOf.splice(i, 1);
+			this.counts.splice(i, 1);
+		}
+		if (foldAt >= 0) {
+			// 同轮已有折叠行：并入（foldAt 位于最早 victim 之前——splice 后仍指向折叠行本体）
+			const fe = this.lines[foldAt]!;
+			if (fe.k === "fold-step") fe.hidden.push(...hidden);
+			return;
+		}
+		const insertAt = victims[0]!;
+		this.lines.splice(insertAt, 0, { k: "fold-step", hidden });
+		this.turnOf.splice(insertAt, 0, turn);
+		this.counts.splice(insertAt, 0, 1);
 	}
 
 	/** 工具结果原位合并：callId 在场 → 精确配对（并发乱序不交叉挂错——2026-09-25 用户实机错配修复：
@@ -456,6 +539,7 @@ export class DocModel {
 	 *  turn/end 的 sink.end()（settleActive）之后调用；historyFrom 装载期走 turnEnd(false)
 	 *  只记账、尾部统一裁剪一次（resume 即裁）。 */
 	turnEnd(trim = true): void {
+		this.foldStepsForTurn(this.curTurn, true); // T9：收轮终折（回放路 turnEnd(false) 同钩——装载即有界且精确到 stepsKeep）
 		this.curTurn++;
 		if (trim) this.trimTurns();
 	}
@@ -691,6 +775,10 @@ export class DocModel {
 			// 滑窗折叠行（D12）：单行 dim 提示，与压缩提示行/工具截断行同族排版——去向 = 会话文件
 			return [theme.dim(`┄ 已折叠更早的 ${e.turns} 轮对话 · 完整内容在会话文件`)];
 		}
+		if (e.k === "fold-step") {
+			// 轮内步级折叠行（T9——kimi KEEP_RECENT_STEPS 同款文案形）：单行 dim，去向 = Alt+S 展开
+			return [theme.dim(`  ⚙ 本轮前序 ${e.hidden.length} 步已折叠（Alt + S 展开全部）`)];
+		}
 		if (e.k === "group") {
 			const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
 			const out = agentGroupLines(mine); // 每帧现算——状态/时长/词元随心跳自更
@@ -786,17 +874,20 @@ export class DocModel {
 	private ledgerThinkOpen = false;
 	private ledgerToolOpen = false;
 	private ledgerErrOpen = false;
+	private ledgerStepsOpen = false;
 
-	/** 帧入口账本维护：键失配（宽度/Ctrl+T 或 Alt+E/O/F 折叠态）→ 全量重折（refoldAll 语义）；
+	/** 帧入口账本维护：键失配（宽度/Ctrl+T 或 Alt+E/O/F/S 折叠态）→ 全量重折（refoldAll 语义）；
 	 *  脏行重算；新入列条目补尾（渲染入 cache 顺便计数——计数精确不依赖先被窗口扫到）。 */
 	private reconcile(width: number): void {
-		if (this.ledgerWidth !== width || this.ledgerThinkOpen !== this.thinkOpen || this.ledgerToolOpen !== this.toolOpen || this.ledgerErrOpen !== this.errOpen) {
+		if (this.ledgerWidth !== width || this.ledgerThinkOpen !== this.thinkOpen || this.ledgerToolOpen !== this.toolOpen || this.ledgerErrOpen !== this.errOpen || this.ledgerStepsOpen !== this.stepsOpen) {
 			this.ledgerWidth = width;
 			this.ledgerThinkOpen = this.thinkOpen;
 			this.ledgerToolOpen = this.toolOpen;
 			this.ledgerErrOpen = this.errOpen;
+			this.ledgerStepsOpen = this.stepsOpen;
 			this.counts = [];
 		}
+		if (this.counts.length > this.lines.length) this.counts.length = this.lines.length; // T9 展开态 splice 缩短——账本随缩（键失配路径已整清，此处兜同帧多次操作）
 		const roster = this.agentProvider?.() ?? [];
 		for (let i = 0; i < this.counts.length; i++) {
 			if (this.counts[i] === -1) this.counts[i] = this.renderEntry(this.lines[i]!, width, roster).length;

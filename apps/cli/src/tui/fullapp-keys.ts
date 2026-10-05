@@ -88,6 +88,12 @@ export function createKeys(app: FullApp) {
 			app.scheduler.requestImmediateRender();
 			return;
 		}
+		if (key === "alt+s" && !app.mouse.viewHasKey(key)) {
+			if (popupFocused) return; // 弹窗让位（alt+e/f/o 三连同款）
+			app.io.toggleSteps();
+			app.scheduler.requestImmediateRender();
+			return;
+		}
 		if (key === "ctrl+u") {
 			// Ctrl+U = steer（2026-09-23 队列批——kimi Ctrl-S 改键位，Ctrl+S 是终端 XOFF 流控冲突回避）：
 			// 排队消息 + 当前草稿一起注入/提交；输入框清空（宿主把不可 steer 项留队）
