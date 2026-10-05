@@ -36,6 +36,15 @@ async function seedSession(bucketDir: string, sid: string, count: number): Promi
   return { file, entry: { id: sid, file, dir: bucketDir, mtimeMs: st.mtimeMs, size: st.size, bucket: "bk" } };
 }
 
+const stampCount = (dbFile: string): number => {
+  const db = openDatabase(dbFile);
+  try {
+    return (db.prepare("SELECT COUNT(*) AS n FROM event_index_files").get() as { n: number }).n;
+  } finally {
+    db.close();
+  }
+};
+
 const rowsOf = (dbFile: string): { seq: number; type: string; byte_offset: number; byte_length: number }[] => {
   const db = openDatabase(dbFile);
   try {
@@ -91,7 +100,8 @@ describe.skipIf(!sqliteAvailable())("T6b m5-resume-perf: 事件索引 schema 与
     await refreshEventIndex(dbFile, d, [{ ...entry, mtimeMs: st2.mtimeMs, size: st2.size }]);
     // 只读新尾：本次扫描的 readSync 首位置 = 旧行末尾之后（旧行零重读）
     const calls = vi.mocked(readSync).mock.calls as unknown as unknown[][];
-    const positions = calls.map((c) => c[4]).filter((v): v is number => typeof v === "number");
+    // 锚行校验的 pread 在旧区单行（长度 <300）——属校验面非重扫；增量尾扫描读 ≥900B
+    const positions = calls.filter((c) => typeof c[3] === "number" && (c[3] as number) >= 300).map((c) => c[4]).filter((v): v is number => typeof v === "number");
     expect(positions.length).toBeGreaterThan(0);
     expect(Math.min(...positions)).toBeGreaterThanOrEqual(first[4]!.byte_offset + first[4]!.byte_length + 1);
     const second = rowsOf(dbFile);
@@ -304,5 +314,60 @@ describe.skipIf(!sqliteAvailable())("T6c m5-resume-perf: 索引查询口（压�
     const hit = eventsBefore(dbFile, "bk", "s_p", 4, 100);
     expect(hit[0]!.seq).toBe(1);
     expect(hit.reduce((n, sg) => n + sg.byteLength, 0)).toBeGreaterThan(0);
+  });
+});
+
+describe("空会话清理配套（2026-10-05 用户问答「空会话清理时索引怎么办」）", () => {
+  it("j. purgeSessionDir 删会话目录连带清索引行+stamp——悬空行与同 sid 重建错位同防", async () => {
+    const d = tmp("evixj");
+    const dbFile = join(d, "event-index.sqlite");
+    const bucket = join(d, "bk");
+    const a = await seedSession(bucket, "s_j1", 3);
+    await seedSession(bucket, "s_j2", 4);
+    await refreshEventIndex(dbFile, d);
+    expect(rowsOf(dbFile)).toHaveLength(7);
+    const { purgeSessionDir } = await import("./cleanup.ts");
+    expect(purgeSessionDir(bucket, "s_j1", { eventIndexFile: dbFile })).toBe(true);
+    expect(rowsOf(dbFile)).toHaveLength(4); // j1 行连带清掉，j2 完好
+    const stamps = stampCount(dbFile);
+    expect(stamps).toBe(1);
+    void a;
+  });
+
+  it("k. 锚行校验：文件被重写成更大的不同内容（同 sid 删了重建/外物改写形态）→ 增量拒绝、整体重建——行 pread 回读全对", async () => {
+    const d = tmp("evixk");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file, entry } = await seedSession(d, "s_k", 3);
+    await refreshEventIndex(dbFile, d, [entry]);
+    expect(rowsOf(dbFile)).toHaveLength(3);
+    // 重写：更长的不同内容（同 sid 重建形态——不是纯追加）
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    for (let i = 0; i < 8; i++) {
+      const id = `e_k${i}`;
+      lines.push(JSON.stringify({ content: [{ kind: "text", text: `重写问${i} ${"y".repeat(200)}` }], v: 1, id, parentId: prevId, seq, ts: "t", type: "user/message" }));
+      prevId = id;
+      seq++;
+    }
+    writeFileSync(file, lines.join("\n") + "\n");
+    forwardMtime(file);
+    const st2 = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ ...entry, mtimeMs: st2.mtimeMs, size: st2.size }]);
+    // 整体重建：8 行全对（旧 3 行偏移作废——旧行为=增量续读在错位内容上扫出混合行集）
+    const rows = rowsOf(dbFile);
+    expect(rows).toHaveLength(8);
+    expect(rows.map((r) => r.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // pread 回读逐行 parse 成功（字节账对得上）
+    const fd = openSync(file, "r");
+    try {
+      for (const r of rows) {
+        const buf = Buffer.alloc(r.byte_length);
+        readSync(fd, buf, 0, r.byte_length, r.byte_offset);
+        expect((JSON.parse(buf.toString("utf8")) as { seq: number }).seq).toBe(r.seq);
+      }
+    } finally {
+      closeSync(fd);
+    }
   });
 });

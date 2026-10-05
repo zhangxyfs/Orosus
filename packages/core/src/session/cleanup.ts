@@ -1,5 +1,6 @@
+import { dropEventIndex, defaultEventIndexFile } from "./eventindex.ts";
 import { existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { pidAlive, readLockPid } from "./jsonl.ts";
 import { isEmptySessionHead, readSessionHead, readSqliteHead } from "./tree.ts";
@@ -7,11 +8,17 @@ import { isEmptySessionHead, readSessionHead, readSqliteHead } from "./tree.ts";
 /** 删除整个会话目录（2026-10-01 用户拍板清理批）：<sid>/ 连带 agents/ 主文件与锁、db/、spill/ 一并清。
  *  调用方保证会话已关（store close 后无句柄——Windows 下活句柄会让 rmSync 失败）。id 先过 CS-12 格式闸。
  *  目录不存在 = 幂等 false。删除失败抛错由调用方定口径（清理是尽力而为面，不该炸启动）。 */
-export function purgeSessionDir(bucketDir: string, sessionId: string): boolean {
+export function purgeSessionDir(bucketDir: string, sessionId: string, opts?: { eventIndexFile?: string }): boolean {
   if (!isSafeSessionId(sessionId)) return false;
   const dir = join(bucketDir, sessionId);
   if (!existsSync(dir)) return false;
   rmSync(dir, { recursive: true, force: true });
+  // 索引连带清行（2026-10-05 用户问答「空会话清理时索引怎么办」）：防悬空行 + 防「同 sid 删了重建」
+  // 的增量错位（/new 空会话就地刷新路径——旧 stamp 续读会在错位内容上扫）。best-effort，失败留全库
+  // sweep 兜底。
+  try {
+    dropEventIndex(opts?.eventIndexFile ?? defaultEventIndexFile(), basename(bucketDir), sessionId);
+  } catch { /* 索引是缓存 */ }
   return true;
 }
 

@@ -4,6 +4,26 @@ import { orosusHome } from "@orosus/contracts/home";
 import { scanSessionFiles, type SessionFileEntry } from "./dir.ts";
 import { openDatabase, removeSqliteDbFiles, sqliteAvailable } from "./sqlite.ts";
 
+/** 定点清行（2026-10-05 空会话清理配套）：purgeSessionDir 删会话目录时顺带删该会话索引行+stamp——
+ *  防悬空行与「同 sid 删了重建」的增量错位（/new 空会话就地刷新路径）。best-effort：库不在/失败 no-op。 */
+export function dropEventIndex(dbFile: string, bucket: string, sessionId: string): void {
+  if (!sqliteAvailable()) return;
+  try {
+    const db = openEventIndexDb(dbFile, false); // 不删库重建——清行口碰瞬时锁宁可跳过（悬空行有全库 sweep 兜底）
+    if (db === undefined) return;
+    try {
+      db.exec("BEGIN");
+      db.prepare("DELETE FROM event_index WHERE bucket = ? AND session_id = ?").run(bucket, sessionId);
+      db.prepare("DELETE FROM event_index_files WHERE bucket = ? AND session_id = ?").run(bucket, sessionId);
+      db.exec("COMMIT");
+    } catch {
+      try { db.exec("ROLLBACK"); } catch { /* 已不在事务 */ }
+    } finally {
+      try { db.close(); } catch { /* 已坏 */ }
+    }
+  } catch { /* 库打不开=无行可清 */ }
+}
+
 /** 索引库缺省落点单一解析点（T11 harness 装配与 CLI 列表接线共用——两处漂移即索引分裂）。 */
 export function defaultEventIndexFile(): string {
   return join(orosusHome(), "db", "event-index.sqlite");
@@ -205,7 +225,30 @@ export async function refreshEventIndex(dbFile: string, root: string, entries?: 
       const st = stamps.get(key);
       if (st !== undefined && st.mtime_ms === entry.mtimeMs && st.size === entry.size) continue; // 双判命中 → 整会话跳过
       // 首次 / mtime 变更：从已索引位置续读；size 变小（外物截断/重写）= 该会话行全量重建
-      const fromByte = st === undefined || entry.size < st.indexed_bytes ? 0 : st.indexed_bytes;
+      let fromByte = st === undefined || entry.size < st.indexed_bytes ? 0 : st.indexed_bytes;
+      // 锚行校验（2026-10-05 空会话清理问答修）：增量续读前 pread 最后一行验 seq/type 与行记录一致——
+      // 不符=文件被重写（同 sid 删了重建 / 外物改写）而非纯追加，从 0 重建（旧行偏移全部作废）
+      if (fromByte > 0) {
+        const lastRow = db.prepare(
+          "SELECT seq, type, byte_offset, byte_length FROM event_index WHERE bucket = ? AND session_id = ? ORDER BY byte_offset DESC LIMIT 1",
+        ).get(entry.bucket, entry.id) as { seq: number; type: string; byte_offset: number; byte_length: number } | undefined;
+        let anchorOk = false;
+        if (lastRow !== undefined) {
+          try {
+            const fd = openSync(entry.file, "r");
+            try {
+              const buf = Buffer.alloc(lastRow.byte_length);
+              if (readSync(fd, buf, 0, lastRow.byte_length, lastRow.byte_offset) === lastRow.byte_length) {
+                const sniffed = sniffEventLine(buf);
+                anchorOk = sniffed !== undefined && sniffed.seq === lastRow.seq && sniffed.type === lastRow.type;
+              }
+            } finally {
+              closeSync(fd);
+            }
+          } catch { anchorOk = false; }
+        }
+        if (!anchorOk) fromByte = 0;
+      }
       if (fromByte === 0) del.run(entry.bucket, entry.id);
       let consumedTo = fromByte;
       for (const line of scanEventLines(entry.file, fromByte)) {
