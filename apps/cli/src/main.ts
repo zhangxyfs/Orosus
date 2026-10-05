@@ -12,7 +12,7 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
-import { discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -60,7 +60,7 @@ import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, moduleConfigFileFor } from "./config-face.ts";
 import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
-import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryTexts, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
+import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
@@ -922,6 +922,10 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         // 用户拍板「召回的必须是我输入的内容」；此前技能正文整条进召回池——实测报 bug）。
         // 不进上下文：host/ 前缀未知类型 deriveMessages 跳过
         const typedText = typedInput ?? text;
+        // T13（m5-resume-perf D3）：输入召回 sidecar 恒落（best-effort）——每条 user/message 记原话
+        //（剥图片 chip）；旁注 host/input-echo 照旧只在「发出体≠原话」时落主转录，两者时序天然一致。
+        // 命令不记（召回集合不含命令）；模块 steer 文本不经此层（queue steer 通道）天然不记。
+        if (!isCmdLine) appendInput(activeDirRef(), h.sessionId, extractImageRefs(typedText).cleaned);
         const afterNotes: { type: string; fields: Record<string, unknown> }[] = [];
         if (vtNote !== undefined) afterNotes.push({ type: "host/vision-transcribe", fields: vtNote });
         if (withAt !== typedText) afterNotes.push({ type: INPUT_ECHO_EVENT, fields: { text: typedText } });
@@ -1368,7 +1372,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   // 输入历史播种（2026-09-23 实测：/sessions 恢复后 ↑ 无历史可召——FullApp 随会话重建即清零）：
   // 召回 = 我输入的内容（2026-10-03 拍板）——原话旁注优先、老会话技能合成体按标记行还原、图片
   // chip 剥除；推导收口 session-io inputHistoryTexts（行为钉在彼处测试件）
-  app.seedHistory(isSwitching ? [] : inputHistoryTexts(await h.history())); // T4：切换期 h 尚旧——跳过播种，注水完成时补挂
+  app.seedHistory(isSwitching ? [] : inputHistoryFor(activeDirRef(), h.sessionId, await h.history())); // T13 sidecar 优先、老会话降级镜像窗口；T4 切换期跳过（注水完成补挂）
   // 流式排队面（F5 四轮）：turn 进行中的提交入队，结束后依序执行——消息带气泡、命令不带，
   // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
   const pendingSubmits: string[] = [];
@@ -1549,7 +1553,7 @@ if (args.print === undefined) try {
             attachRender(prepared.h);
             const hist = await prepared.h.history();
             dm.historyFrom(hist, streamW());
-            activeApp?.seedHistory(inputHistoryTexts(hist)); // 输入召回播种补挂（FullApp 创建期 h 尚旧已跳过）
+            activeApp?.seedHistory(inputHistoryFor(activeDirRef(), h.sessionId, hist)); // 输入召回播种补挂（T13 sidecar 优先）
             void refreshPanel(modulesDeps);
           }
         } catch (err) {

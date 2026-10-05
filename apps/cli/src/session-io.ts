@@ -1,6 +1,6 @@
 import { join, dirname } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
-import { createHarness, locateSessionFile, readSessionHead, isEmptySessionHead, purgeSessionDir, encodeCwd } from "@orosus/core";
+import { appendInput, createHarness, locateSessionFile, readSessionHead, isEmptySessionHead, purgeSessionDir, readInputs, encodeCwd } from "@orosus/core";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { CommandUi, HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
@@ -233,4 +233,16 @@ export const inputHistoryTexts = (events: SessionEvent[]): string[] => {
     }
   }
   return texts;
+};
+
+
+/** T13（m5-resume-perf D3）：召回源切换——sidecar 优先、老会话降级镜像窗口。
+ *  sidecar 存在且非空 → readInputs（帽 100，与大会话转录彻底解耦——五家同构）；否则老会话
+ *  （sidecar 机制之前落盘）降级 = 现 inputHistoryTexts(events)（镜像窗口内翻，不 ensureFull——
+ *  D3 世代交替语义：不为召回读全文件）。新会话起召回池=用户键入（模块 steer 不记 sidecar，
+ *  有意收窄——2026-10-05 D3 补注）。 */
+export const inputHistoryFor = (dir: string, sessionId: string, events: SessionEvent[]): string[] => {
+  const sidecar = readInputs(dir, sessionId);
+  if (sidecar.length > 0) return sidecar;
+  return inputHistoryTexts(events);
 };

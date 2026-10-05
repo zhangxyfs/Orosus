@@ -654,6 +654,6 @@ describe("输入召回旁注写侧（2026-10-03 拍板「↑ 召回 = 我输入�
     const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
     expect(src).toContain("out, text); // typed=原话——合成体不带原话"); // 技能递归 typed=输入框原文
     expect(src).toContain("if (withAt !== typedText) afterNotes.push({ type: INPUT_ECHO_EVENT"); // 判据：发出体 ≠ 原话
-    expect(src).toContain("app.seedHistory(isSwitching ? [] : inputHistoryTexts(await h.history()))"); // 播种走 session-io 纯函数（行为钉在彼处；T4 切换期跳过、注水完成补挂）
+    expect(src).toContain("app.seedHistory(isSwitching ? [] : inputHistoryFor(activeDirRef(), h.sessionId, await h.history()))"); // 播种走 session-io（T13 sidecar 优先、老会话降级；T4 切换期跳过、注水完成补挂）
   });
 });

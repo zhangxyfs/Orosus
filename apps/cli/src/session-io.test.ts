@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "@orosus/core";
-import { inputHistoryTexts, INPUT_ECHO_EVENT, switchBusyGate, switchStepsFor } from "./session-io.ts";
+import { appendInput } from "@orosus/core";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { inputHistoryFor, inputHistoryTexts, INPUT_ECHO_EVENT, switchBusyGate, switchStepsFor } from "./session-io.ts";
 
 /** 事件桩（inputHistoryTexts 只读 type/content/messages/text/sourceModule——其余字段桩值即可） */
 const ev = (type: string, fields: Record<string, unknown> = {}): SessionEvent =>
@@ -77,5 +81,26 @@ describe("T4 m5-resume-perf: 切换先画后注水（switchTo 拆步——装配
     expect(blocked.blocked).toBe(true);
     if (blocked.blocked) expect(blocked.message).toBe("正在切换会话…");
     expect(switchBusyGate(false)).toEqual({ blocked: false });
+  });
+});
+
+describe("T13 m5-resume-perf: 召回源切换 inputHistoryFor（sidecar 优先、老会话降级镜像窗口）", () => {
+  it("sidecar 存在且非空 → 数据来自 sidecar（镜像窗口外的输入原文可召回）；空 sidecar/不存在 → 降级 inputHistoryTexts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-t13-"));
+    try {
+      // 窗口外原话：不在事件镜像里、只在 sidecar 里
+      appendInput(dir, "s_side", "窗口外的输入原话");
+      appendInput(dir, "s_side", "最新输入");
+      const fromSidecar = inputHistoryFor(dir, "s_side", [userMsg("镜像里的消息")]);
+      expect(fromSidecar).toEqual(["窗口外的输入原话", "最新输入"]); // sidecar 优先——镜像事件不被翻
+      // 不存在 → 降级（现行为钉）
+      expect(inputHistoryFor(dir, "s_old", [userMsg("老会话消息")])).toEqual(["老会话消息"]);
+      // 存在但空文件 → 降级
+      mkdirSync(join(dir, "s_empty", "agents"), { recursive: true });
+      writeFileSync(join(dir, "s_empty", "agents", "inputs.jsonl"), "");
+      expect(inputHistoryFor(dir, "s_empty", [userMsg("空 sidecar 降级")])).toEqual(["空 sidecar 降级"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
