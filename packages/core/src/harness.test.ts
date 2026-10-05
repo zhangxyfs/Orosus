@@ -42,6 +42,17 @@ const makeHarness = async (extra: Parameters<typeof createHarness>[0] = {}) => {
   return createHarness({ ...base, ...extra, config: { ...base.config, ...extra.config } });
 };
 
+/** 汇聚 llm 流（m5-btw T1 用——模块层：describe 内副本触发 consistent-function-scoping）。 */
+const collectHostLlm = async (s: AsyncIterable<Chunk>): Promise<{ text: string; finish?: Chunk | undefined }> => {
+  let text = "";
+  let finish: Chunk | undefined;
+  for await (const c of s) {
+    if (c.type === "text/delta") text += c.text;
+    if (c.type === "finish") finish = c;
+  }
+  return { text, finish };
+};
+
 describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => {
   it("CH-01 装配失败清理：激活后 store.all() 抛（坏行）→ 已激活模块 dispose + store.close（旧实现句柄/MCP 子进程全悬空）", async () => {
     const trail: string[] = [];
@@ -877,16 +888,6 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
 });
 
 describe("harness.llm 宿主二级调用口（m5-btw T1）", () => {
-  const collect = async (s: AsyncIterable<Chunk>): Promise<{ text: string; finish?: Chunk | undefined }> => {
-    let text = "";
-    let finish: Chunk | undefined;
-    for await (const c of s) {
-      if (c.type === "text/delta") text += c.text;
-      if (c.type === "finish") finish = c;
-    }
-    return { text, finish };
-  };
-
   it("① 返回 ctx.llm 同一实现：幂等同一对象、与模块口吃同一 provider 队列、内建 tools:[]", async () => {
     // 同一 fakeProvider 队列：模块 ctx.llm 先吃第 1 转、宿主 h.llm() 吃第 2 转——两侧经同一 llmHolder.impl
     const fp = fakeProvider([
@@ -905,8 +906,8 @@ describe("harness.llm 宿主二级调用口（m5-btw T1）", () => {
       ],
     });
     expect(h.llm()).toBe(h.llm()); // 幂等——llmHolder.impl 同一实现体（每次调用不新包装）
-    expect((await collect(moduleLlm!.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }))).text).toBe("经模块口");
-    const r = await collect(h.llm().stream({ system: "侧问", messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
+    expect((await collectHostLlm(moduleLlm!.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }))).text).toBe("经模块口");
+    const r = await collectHostLlm(h.llm().stream({ system: "侧问", messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
     expect(r.text).toBe("经宿主口"); // 同一队列第 2 转 = 同一实现体的行为证明
     expect(fp.requests[1]).toMatchObject({ model: "m", system: "侧问", tools: [] }); // 解析链 + 二级调用零工具（D39）
     await h.close();
@@ -923,7 +924,7 @@ describe("harness.llm 宿主二级调用口（m5-btw T1）", () => {
     await h.prompt("hi"); // 先落一轮真事件，基线非空——零追加断言才有牙
     const before = await h.history();
     expect(before.length).toBeGreaterThan(0);
-    await collect(h.llm().stream({ messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
+    await collectHostLlm(h.llm().stream({ messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
     expect(await h.history()).toEqual(before); // 全程零 store.append（m5-btw D5/D6：不进名册不留痕）
     await h.close();
   });

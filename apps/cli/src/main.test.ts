@@ -682,30 +682,46 @@ describe("T4b m5-resume-perf: 全屏切会话就地换页（不退出 FullApp—
 	});
 });
 
+/** 密封家目录（P3 批同款；模块层唯一名——describe 内副本会触发 consistent-function-scoping）：子进程数据目录解析进 tmp。 */
+const btwSealedEnv = (d: string): Record<string, string> => ({
+	...process.env,
+	USERPROFILE: join(d, "home"),
+	HOME: join(d, "home"),
+	OROSUS_HOME: join(d, "home", ".orosus"),
+}) as Record<string, string>;
+const btwRunRepl = (d: string, lines: string[]): Promise<{ code: number; out: string; err: string }> => {
+	const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
+		cwd: d, env: btwSealedEnv(d), stdio: ["pipe", "pipe", "pipe"],
+	});
+	let out = ""; let err = "";
+	child.stdout.on("data", (c) => { out += String(c); });
+	child.stderr.on("data", (c) => { err += String(c); });
+	child.stdin.write(lines.map((l) => `${l}\n`).join("")); // 单块写入：全部行先进待处理队列（命令逐条串行消费）
+	child.stdin.end();
+	return new Promise((resolve) => { child.on("exit", (c) => resolve({ code: c ?? -1, out, err })); });
+};
+/** 桩 FullApp（btw-cmd.test 同款；模块层唯一名同因）：捕获 viewText 调用。 */
+const btwStubApp = (): { app: import("./tui/fullapp.ts").FullApp; calls: { title: string; opts: { live?: () => string } }[] } => {
+	const calls: { title: string; opts: { live?: () => string } }[] = [];
+	const app = {
+		viewText: (title: string, _text: string, opts: { live?: () => string }) => { calls.push({ title, opts }); },
+		pickRowWidth: () => 60,
+	} as unknown as import("./tui/fullapp.ts").FullApp;
+	return { app, calls };
+};
+/** 闸门流（btw-cmd.test 同款；模块层唯一名同因）：挂起直到 release——旧问在飞的时序缝。 */
+const btwGateStream = (): { stream: () => AsyncIterable<Chunk>; release: (chunks: Chunk[]) => void } => {
+	let release!: (chunks: Chunk[]) => void;
+	const gate = new Promise<Chunk[]>((r) => { release = r; });
+	return { stream: () => (async function* () { yield* await gate; })(), release };
+};
+
 describe("/btw 侧问命令接线（m5-btw T4）", () => {
-	// 密封家目录（P3 批同款）：子进程数据目录解析进 tmp
-	const sealedEnv = (d: string): Record<string, string> => ({
-		...process.env,
-		USERPROFILE: join(d, "home"),
-		HOME: join(d, "home"),
-		OROSUS_HOME: join(d, "home", ".orosus"),
-	}) as Record<string, string>;
-	const runRepl = (d: string, lines: string[]): Promise<{ code: number; out: string; err: string }> => {
-		const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
-			cwd: d, env: sealedEnv(d), stdio: ["pipe", "pipe", "pipe"],
-		});
-		let out = ""; let err = "";
-		child.stdout.on("data", (c) => { out += String(c); });
-		child.stderr.on("data", (c) => { err += String(c); });
-		child.stdin.write(lines.map((l) => `${l}\n`).join("")); // 单块写入：全部行先进待处理队列（命令逐条串行消费）
-		child.stdin.end();
-		return new Promise((resolve) => { child.on("exit", (c) => resolve({ code: c ?? -1, out, err })); });
-	};
 
 	it("带参路由命中：/btw <问题> 不落「未知命令」、不弹用法提示（fire-and-forget 立即返回不挂路由）", async () => {
 		const d = tmp("btw-arg");
 		try {
-			const r = await runRepl(d, ["/btw 为什么这里用 unsafe", "/quit"]);
+			const r = await btwRunRepl(d, ["/btw 为什么这里用 unsafe", "/quit"]);
 			expect(r.code).toBe(0);
 			expect(r.out).not.toContain("未知命令"); // 宿主拦截命中——不漏到 core 路由
 			expect(r.out).not.toContain("用法：/btw"); // 带参不开空态提示
@@ -717,7 +733,7 @@ describe("/btw 侧问命令接线（m5-btw T4）", () => {
 	it("无参路由（D7 空态）：无记录 → 用法提示一行（toast 通道，不进流区不落盘）", async () => {
 		const d = tmp("btw-noarg");
 		try {
-			const r = await runRepl(d, ["/btw", "/quit"]);
+			const r = await btwRunRepl(d, ["/btw", "/quit"]);
 			expect(r.code).toBe(0);
 			expect(r.out).toContain("用法：/btw");
 		} finally {
@@ -728,7 +744,7 @@ describe("/btw 侧问命令接线（m5-btw T4）", () => {
 	it("非 /btw 不误伤：/bt（前缀撞名）走未知命令面，不被 btw 分支吞", async () => {
 		const d = tmp("btw-near");
 		try {
-			const r = await runRepl(d, ["/bt", "/quit"]);
+			const r = await btwRunRepl(d, ["/bt", "/quit"]);
 			expect(r.code).toBe(0);
 			expect(r.out).toContain("未知命令"); // cmdNameOf 精确匹配——前缀不误伤
 		} finally {
@@ -750,28 +766,12 @@ describe("/btw 侧问命令接线（m5-btw T4）", () => {
 });
 
 describe("/btw 边界与集成（m5-btw T5）", () => {
-	/** 桩 FullApp（btw-cmd.test 同款）：捕获 viewText 调用。 */
-	const stubApp = (): { app: import("./tui/fullapp.ts").FullApp; calls: { title: string; opts: { live?: () => string } }[] } => {
-		const calls: { title: string; opts: { live?: () => string } }[] = [];
-		const app = {
-			viewText: (title: string, _text: string, opts: { live?: () => string }) => { calls.push({ title, opts }); },
-			pickRowWidth: () => 60,
-		} as unknown as import("./tui/fullapp.ts").FullApp;
-		return { app, calls };
-	};
-	/** 闸门流（btw-cmd.test 同款）：挂起直到 release——旧问在飞的时序缝。 */
-	const gateStream = (): { stream: () => AsyncIterable<Chunk>; release: (chunks: Chunk[]) => void } => {
-		let release!: (chunks: Chunk[]) => void;
-		const gate = new Promise<Chunk[]>((r) => { release = r; });
-		return { stream: () => (async function* () { yield* await gate; })(), release };
-	};
-
 	it("连发两问：新问先中止旧在飞、第二窗照开（真 FullApp 下排队 FIFO）；负向——/tasks 名册与 <sid>/agents/ 目录均无 btw 痕迹", async () => {
 		const d = tmp("btw-two");
 		const h = await isolated();
 		try {
-			const { app, calls } = stubApp();
-			const g1 = gateStream();
+			const { app, calls } = btwStubApp();
+			const g1 = btwGateStream();
 			const first = openBtw(app, { getH: () => h, llmStream: g1.stream }, "旧问题");
 			const second = openBtw(app, {
 				getH: () => h,
