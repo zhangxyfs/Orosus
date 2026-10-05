@@ -183,6 +183,15 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
   });
 });
 
+describe("/btw 边界（m5-btw T5）", () => {
+  it("空会话首问（主会话还没有任何消息）：history 为空 → messages 只有问题一条——侧问自然退化为无上下文快问", async () => {
+    const r = await buildBtwRequest(stubH([]), "随便问点啥");
+    expect(r.messages).toHaveLength(1);
+    expect(r.messages[0]).toMatchObject({ role: "user", content: [{ kind: "text", text: "随便问点啥" }] });
+    expect(r.system).toContain("side-question assistant"); // system 侧照常全量（话术仍在）
+  });
+});
+
 describe("/btw 窗接线（m5-btw T3）", () => {
   it("① live 三态输出：开窗即 answering 转盘+秒数 → answer 正文行 → error 红字一行（同一闭包每帧现算）", async () => {
     const { app, calls } = stubApp();

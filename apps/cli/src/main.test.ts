@@ -14,6 +14,7 @@ const repoRoot = (): string => join(import.meta.dirname, "..", "..", "..");
 import approvalDef from "@orosus/approval";
 import { BUILTIN_MODULES } from "./builtins.ts";
 import { shortenPath } from "./usage-text.ts";
+import { openBtw, lastBtwArchive } from "./btw-cmd.ts";
 import { stripAnsi } from "./tui/width.ts";
 
 let dir: string;
@@ -745,5 +746,97 @@ describe("/btw 侧问命令接线（m5-btw T4）", () => {
 		expect(src).toContain("openBtw(activeApp, btwDeps, btwQuestion)"); // 带参走侧问本体（fire-and-forget）
 		expect(src).toContain("reopenBtw(activeApp, btwDeps)"); // 无参回看（D7）
 		expect(src).toContain('name: "/btw", desc: "侧问（不打断主对话）"'); // 菜单条目
+	});
+});
+
+describe("/btw 边界与集成（m5-btw T5）", () => {
+	/** 桩 FullApp（btw-cmd.test 同款）：捕获 viewText 调用。 */
+	const stubApp = (): { app: import("./tui/fullapp.ts").FullApp; calls: { title: string; opts: { live?: () => string } }[] } => {
+		const calls: { title: string; opts: { live?: () => string } }[] = [];
+		const app = {
+			viewText: (title: string, _text: string, opts: { live?: () => string }) => { calls.push({ title, opts }); },
+			pickRowWidth: () => 60,
+		} as unknown as import("./tui/fullapp.ts").FullApp;
+		return { app, calls };
+	};
+	/** 闸门流（btw-cmd.test 同款）：挂起直到 release——旧问在飞的时序缝。 */
+	const gateStream = (): { stream: () => AsyncIterable<Chunk>; release: (chunks: Chunk[]) => void } => {
+		let release!: (chunks: Chunk[]) => void;
+		const gate = new Promise<Chunk[]>((r) => { release = r; });
+		return { stream: () => (async function* () { yield* await gate; })(), release };
+	};
+
+	it("连发两问：新问先中止旧在飞、第二窗照开（真 FullApp 下排队 FIFO）；负向——/tasks 名册与 <sid>/agents/ 目录均无 btw 痕迹", async () => {
+		const d = tmp("btw-two");
+		const h = await isolated();
+		try {
+			const { app, calls } = stubApp();
+			const g1 = gateStream();
+			const first = openBtw(app, { getH: () => h, llmStream: g1.stream }, "旧问题");
+			const second = openBtw(app, {
+				getH: () => h,
+				llmStream: () => (async function* () { yield { type: "text/delta", text: "新答" }; yield { type: "finish", kind: "stop" }; })(),
+			}, "新问题");
+			g1.release([{ type: "finish", kind: "stop" }]); // 旧问流此刻才收流——signal 早已 aborted
+			await first.done;
+			await second.done;
+			expect(calls).toHaveLength(2); // 两窗都开（pendingUi 单槽、第二窗排队——真 FullApp 下 FIFO 顶上）
+			expect(first.slot).toMatchObject({ phase: "error", text: "已被新侧问取代" });
+			expect(second.slot).toMatchObject({ phase: "answer", text: "新答" });
+			expect(lastBtwArchive()).toEqual({ question: "新问题", text: "新答" }); // 归档只有新问
+			// 负向断言收尾（v1.3b 注：附于连发两问例，不另立第四测）——D5/D6 临时性：零落盘零名册
+			expect(h.subagents()).toEqual([]); // /tasks 名册零痕迹（btw 不是子代理）
+			expect(existsSync(join(d, "sessions", h.sessionId, "agents"))).toBe(false); // <sid>/agents/ 目录零痕迹（子代理转录才建）
+			const hist = JSON.stringify(await h.history());
+			expect(hist).not.toContain("旧问题");
+			expect(hist).not.toContain("新问题");
+			expect(hist).not.toContain("新答"); // 会话事件零 btw 内容
+		} finally {
+			await h.close();
+			rmSync(d, { recursive: true, force: true });
+		}
+	});
+
+	it("busy 共存：主 turn 在飞时侧问照答（不占 inflight/不碰 turn 状态），主 turn 完好收尾且历史零 btw 痕迹", async () => {
+		const d = tmp("btw-busy");
+		let releaseMain!: () => void;
+		const mainGate = new Promise<void>((r) => { releaseMain = r; });
+		const gateProv: ModuleDefinition = {
+			name: "provider-gate", version: "0.1.0", description: "g", api: 1,
+			activate(ctx) {
+				ctx.provide("provider:gate" as never, () => (async function* () {
+					await mainGate; // 主 turn 挂在闸门上——侧问期间「busy」为真
+					yield { type: "text/delta", text: "主答" };
+					yield { type: "finish", kind: "stop" };
+				})());
+			},
+		};
+		const h = await createHarness({
+			cwd: d, builtinModules: BUILTIN_MODULES, modules: [gateProv],
+			secretsFile: join(d, "s.env"), diagDir: join(d, "logs"), spillDir: join(d, "spill"),
+			sessionsDir: join(d, "sessions"),
+			discovery: { userDir: join(d, "m"), projectDir: join(d, "p"), trustFile: join(d, "t.json") },
+			config: { userFile: join(d, "u.toml"), projectFile: join(d, "n.toml"), env: {}, cliOverrides: { model: "gate/m" } },
+		});
+		try {
+			const mainTurn = h.prompt("主问题"); // busy 开始（provider 闸门未放）
+			const outs: string[] = [];
+			const btw = openBtw(undefined, {
+				getH: () => h,
+				out: (s) => outs.push(s),
+				llmStream: () => (async function* () { yield { type: "text/delta", text: "侧答" }; yield { type: "finish", kind: "stop" }; })(),
+			}, "busy 时问一句");
+			await btw.done; // 主 turn 仍在飞（闸门未放）——侧问已答完 = 不占 inflight、不等待 busy
+			expect(outs[0]).toContain("[侧问] 侧答"); // 行模式回显
+			releaseMain(); // 放主 turn
+			await mainTurn; // 主 turn 完好收尾——侧问没有碰它（未取消/未串流）
+			const hist = JSON.stringify(await h.history());
+			expect(hist).toContain("主答");
+			expect(hist).not.toContain("侧答"); // D6：流区/会话事件零 btw 痕迹
+			expect(hist).not.toContain("busy 时问一句");
+		} finally {
+			await h.close();
+			rmSync(d, { recursive: true, force: true });
+		}
 	});
 });
