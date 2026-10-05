@@ -149,6 +149,10 @@ export class DocModel {
 	 *  fullapp end = total − scrollBack 只在恒头部移除下视口纹丝不动、scrollBack 无需修正）。 */
 	viewportProbe: (() => { start: number; end: number } | undefined) | undefined = undefined;
 	private turnOf: number[] = []; // 与 lines 平行：每条目轮号（turn/end 边界——一轮 = 两条用户消息之间的全部条目）
+	/** T14 复核修（2026-10-05 方案复读）：与 lines 平行——条目来源事件的 seq（实时条目/横幅等无源 = undefined）。
+	 *  翻页取段锚的数据源：trimTurns 裁掉头段后锚随之下移（轮次滑窗裁掉的内容由此可翻回——D13
+	 *  「fold 行计数递减、真到头消失」的地基）。所有 lines 长度变更点同步 splice。 */
+	private evSeqOf: (number | undefined)[] = [];
 	private curTurn = 0;
 	private foldedTurns = 0; // 累计已裁轮数（fold 行文案 N）
 	private lastEvictAt = 0; // 远区淘汰 1Hz 节流（设计空白 #8 两可——落地取节流档，随 T8 回写登记）
@@ -158,6 +162,7 @@ export class DocModel {
 	private pushE(e: Entry): void {
 		this.lines.push(e);
 		this.turnOf.push(this.curTurn);
+		this.evSeqOf.push(undefined);
 	}
 
 	private thinkBlock(text: string, w: number): string[] {
@@ -281,8 +286,10 @@ export class DocModel {
 				const e = this.lines[i]!;
 				if (e.k !== "fold-step") continue;
 				const t = this.turnOf[i] ?? 0;
+				const hiddenLen = e.hidden.length;
 				this.lines.splice(i, 1, ...e.hidden);
 				this.turnOf.splice(i, 1, ...e.hidden.map(() => t));
+				this.evSeqOf.splice(i, 1, ...Array.from({ length: hiddenLen }, () => undefined));
 				this.counts.splice(i, 1, ...e.hidden.map(() => -1));
 			}
 		} else {
@@ -324,6 +331,7 @@ export class DocModel {
 			hidden.unshift(this.lines[i]!);
 			this.lines.splice(i, 1);
 			this.turnOf.splice(i, 1);
+			this.evSeqOf.splice(i, 1);
 			this.counts.splice(i, 1);
 		}
 		if (foldAt >= 0) {
@@ -335,6 +343,7 @@ export class DocModel {
 		const insertAt = victims[0]!;
 		this.lines.splice(insertAt, 0, { k: "fold-step", hidden });
 		this.turnOf.splice(insertAt, 0, turn);
+		this.evSeqOf.splice(insertAt, 0, undefined);
 		this.counts.splice(insertAt, 0, 1);
 	}
 
@@ -570,9 +579,14 @@ export class DocModel {
 		this.lines.splice(0, cut);
 		this.turnOf.splice(0, cut);
 		this.counts.splice(0, cut);
+		this.evSeqOf.splice(0, cut);
 		this.lines.unshift({ k: "fold", turns: this.foldedTurns });
 		this.turnOf.unshift(0);
 		this.counts.unshift(1); // fold 恒 1 行（账本即时精确）
+		this.evSeqOf.unshift(undefined);
+		// T14 复核修：锚随裁剪下移 = 现存最老事件 seq——被裁轮次此后可经 eventsBefore 翻回（D13）
+		const firstSeq = this.evSeqOf.find((v) => v !== undefined);
+		if (firstSeq !== undefined) this.oldestLoadedSeq = firstSeq;
 		this.headTrimmedNet += cut - 1; // 头部净平移：移除 cut 行 − 回插 fold 1 行（走查⑦滚动补偿用）
 	}
 
@@ -623,22 +637,61 @@ export class DocModel {
 	 *  临时阅读态，滚回底部后 trimTurns 按「轮号 < oldest」正常裁掉，滑窗治理不冲突）；账本 counts
 	 *  插 -1 脏标（reconcile 补尾只长尾，头部插入须显式 splice）；bottom 锚定滚动几何天然钉住视口
 	 *  （头部插入 → dmTotal 与内容同下移，scrollBack 不动 = 同一可视内容）。 */
-	prependHistory(events: { type: string; seq?: unknown; [k: string]: unknown }[], _width: number): number {
+	prependHistory(events: { type: string; seq?: unknown; [k: string]: unknown }[], width: number): number {
 		if (events.length === 0) return 0;
 		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq; // 锚先行——空渲染批（header/label）也推进（含种子：防同批重取），翻页终止有界
 		const savedTurn = this.curTurn;
 		const startLen = this.lines.length;
-		this.curTurn = -events.filter((e) => e.type === "turn/end").length - 1; // 负基：补页轮恒先于现存轮被裁
+		const batchTurns = events.filter((e) => e.type === "turn/end").length;
+		// T14 复核修：真轮号基 = 现存最小非 fold 轮 − 批轮数（被裁轮次翻回时与折叠边界连续——
+		// fold 计数随之递减；负值=窗口前历史（无 fold 可减）照常显示）
+		let minTurn = Number.MAX_SAFE_INTEGER;
+		for (let i = 0; i < this.lines.length; i++) {
+			if (this.lines[i]!.k === "fold") continue;
+			minTurn = Math.min(minTurn, this.turnOf[i] ?? 0);
+		}
+		if (minTurn === Number.MAX_SAFE_INTEGER) minTurn = 0;
+		this.curTurn = minTurn - batchTurns;
 		this.replayEventLoop(events);
 		this.curTurn = savedTurn;
 		const added = this.lines.length - startLen;
 		if (added === 0) return 0;
 		const newEntries = this.lines.splice(startLen, added);
 		const newTurns = this.turnOf.splice(startLen, added);
+		const newSeqs = this.evSeqOf.splice(startLen, added);
 		const at = this.lines.length > 0 && this.lines[0]!.k === "fold" ? 1 : 0;
 		this.lines.splice(at, 0, ...newEntries);
 		this.turnOf.splice(at, 0, ...newTurns);
-		this.counts.splice(at, 0, ...Array.from({ length: added }, () => -1));
+		this.evSeqOf.splice(at, 0, ...newSeqs);
+		// T14 复核修（方案钦点形态）：插入行数即时物化（renderEntry 顺带暖缓存）——两用：
+		// ① counts 直接精确（不标脏）；② headTrimmedNet 记负平移（头部净增）——fullapp 补偿差分
+		// 据此把头部插入从「尾部增长」里对消，scrollBack 不动 = 视口钉住（补页前后同一可视内容）
+		const roster = this.agentProvider?.() ?? [];
+		let insertedRows = 0;
+		for (let i = 0; i < newEntries.length; i++) {
+			const n = this.renderEntry(newEntries[i]!, width, roster).length;
+			insertedRows += n;
+			this.counts.splice(at + i, 0, n);
+		}
+		this.headTrimmedNet -= insertedRows;
+		// T14 复核修（D13）：fold 行计数递减——翻回的轮次不再是「已折叠」；到 0 = 真到会话开头，行消失
+		const foldTurnBoundary = Math.max(0, Math.min(this.foldedTurns, minTurn - batchTurns));
+		if (this.lines[0]?.k === "fold") {
+			if (foldTurnBoundary <= 0) {
+				this.lines.splice(0, 1);
+				this.turnOf.splice(0, 1);
+				this.counts.splice(0, 1);
+				this.evSeqOf.splice(0, 1);
+				this.foldedTurns = 0; // 真到会话开头：折叠清零（下次 trimTurns 按需重建）
+				this.headTrimmedNet -= 1; // 头部净平移：移除 fold 1 行
+			} else {
+				(this.lines[0] as { k: "fold"; turns: number }).turns = foldTurnBoundary;
+				this.markCountDirty(0);
+				this.foldedTurns = foldTurnBoundary;
+			}
+		} else {
+			this.foldedTurns = foldTurnBoundary;
+		}
 		return added;
 	}
 
@@ -649,6 +702,8 @@ export class DocModel {
 		// 回放全员终态，轮边界即断组点。组员编号从 spawn 的 result 里抠（callId 精确配对，spawnIdsIn
 		// 与 /tasks 历史重建同口径）。当前组 = this.replayGroup（T1 实例字段——分批喂入同形，见字段注释）。
 		for (const e of events) {
+			const evSeq = typeof e.seq === "number" ? e.seq : undefined;
+			const seqMark = this.lines.length; // T14：本事件产生的条目区间 [seqMark, lines.length) 记 seq
 			if (e.type === "user/message") {
 				this.replayGroup = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
@@ -720,6 +775,7 @@ export class DocModel {
 			} else if (e.type === "turn/end") {
 				this.turnEnd(false); // 装载期只记账不逐次裁剪——尾部统一一次（T7 轮次记账补分支）
 			}
+			for (let i = seqMark; i < this.lines.length; i++) this.evSeqOf[i] = evSeq; // T14：区间回填（一事件可产 0..n 条目）
 		}
 	}
 

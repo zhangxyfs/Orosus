@@ -4430,3 +4430,30 @@ describe("T4b m5-resume-perf: 就地换页配套 sessionSwapped（懒分页到�
 		app.stop?.();
 	});
 });
+
+describe("验收门 6 几何钉（2026-10-05 方案复读补）：头部插页视口钉住——底部锚定 scrollBack 下头部内容只增不移", () => {
+	it("补页（doc 头部插入 N 行）后视口窗口内容不变——start/end 随内容下移同一可视内容", () => {
+		const old: string[] = Array.from({ length: 40 }, (_, i) => `旧内容 ${i}`);
+		let doc = [...old];
+		let headShift = 0; // 模拟 dm.headShiftTotal（main.ts docHeadShift 同款接线）
+		const { app } = rig([], 100, 30, {
+			docTotal: () => doc.length,
+			docWindow: (start: number, count: number) => doc.slice(start, Math.min(doc.length, start + count)),
+			docHeadShift: () => headShift,
+		} as never);
+		app.state.scrollBack = 10; // 用户上翻停在距底 10 行（非贴底）
+		app.scheduler.requestImmediateRender();
+		const before = app.viewportRange();
+		const beforeContent = doc.slice(before.start, before.end);
+		// 补页：头部插入 12 行 + headShift 负平移 -12（dm.prependHistory 同款账）
+		doc = [...Array.from({ length: 12 }, (_, i) => `补页行 ${i}`), ...old];
+		headShift -= 12;
+		app.scheduler.requestImmediateRender();
+		const after = app.viewportRange();
+		const afterContent = doc.slice(after.start, after.end);
+		expect(after.start).toBe(before.start + 12); // 行号随内容下移 12（scrollBack 不动）
+		expect(afterContent).toEqual(beforeContent); // 视口钉住：同一可视内容（headShift 负平移对消补偿）
+		expect(app.state.scrollBack).toBe(10); // 距底不动——头部插入未被当尾部增长
+		app.stop?.();
+	});
+});

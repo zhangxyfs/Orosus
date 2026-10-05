@@ -368,7 +368,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     });
     baseStore = resumeView.store;
     resumeLoads = resumeView.loads;
-    const leaf = resumeView.loads[0];
+    // mode 取首个窗口态层的 path（fork 子体 resume 时 loads[0] 是子体自身小文件 full——代表不了
+    // 祖先链的窗口路径；全 full 时回落 loads[0]）
+    const leaf = resumeView.loads.find((l) => l.mode === "window") ?? resumeView.loads[0];
     createLogger(sink, "session").info("session.load.resumed", "会话装载完成", {
       duration_ms: Date.now() - tResume0,
       mode: leaf?.path ?? "full",

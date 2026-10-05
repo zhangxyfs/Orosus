@@ -452,7 +452,11 @@ export class JsonlSessionStore implements SessionStore {
     } catch {
       return false;
     }
-    if (size < lastEnd) return false; // 索引漂移：文件比索引矮（外物截断/重写）
+    // 新鲜度铁律（2026-10-05 复核修——严重数据丢失路径）：索引段必须精确到 EOF 才可用。陈旧索引
+    // （索引后文件又追加了事件——祖先链无预刷新护送即达）下按旧 lastEnd 装载会把新事件静默丢出
+    // 镜像、且 repairWindowTail 会把它们当好撕裂尾 ftruncate 掉。不符 → false 走嗅探（重扫自愈：
+    // 嗅探读的是文件本体，撕裂尾判断不受索引影响，并顺手重写索引）。
+    if (size !== lastEnd) return false; // 变矮=外物截断；变高=索引落后（追加未追平）——都降级
     const tail: SessionEvent[] = [];
     let fd: number;
     try {

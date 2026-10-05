@@ -635,3 +635,46 @@ describe("T8 m5-resume-perf: ensureFull 懒升级口（窗口镜像按需整读�
     await w.close();
   });
 });
+
+describe("复核修（2026-10-05 方案复读）：loadIndexed 新鲜度铁律——陈旧索引绝不截掉追加的好事件", () => {
+  it("索引落后于文件（索引后又有追加、无预刷新——祖先链形态）→ 降级嗅探：新事件在镜像、文件分毫未动", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-stale-"));
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_s${String(seq).padStart(5, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "t", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    const FILLER = "x".repeat(4000);
+    for (let i = 0; i < 1300; i++) push({ content: [{ kind: "text", text: `问${i} ${FILLER}` }] }, "user/message");
+    push({ trigger: "auto", summary: "S", keepUserHead: 0, keptUsers: [], elidedCount: 1301, droppedCount: 1301 }, "turn/compaction");
+    push({ content: [{ kind: "text", text: `后问0` }] }, "user/message");
+    const agents = join(dir, "s_stale", "agents");
+    mkdirSync(agents, { recursive: true });
+    const file = join(agents, "session.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    const dbFile = join(dir, "event-index.sqlite");
+    // 索引建在「追加之前」——制造陈旧
+    const st1 = statSync(file);
+    await refreshEventIndex(dbFile, dir, [{ id: "s_stale", file, dir, mtimeMs: st1.mtimeMs, size: st1.size, bucket: "bk" }]);
+    const indexedSize = st1.size;
+    // 索引后父会话继续聊（追加两轮）+ mtime 前移
+    appendFileSync(file, [
+      JSON.stringify({ content: [{ kind: "text", text: "新追加问" }], v: 1, id: "e_new1", parentId: prevId, seq, ts: "t", type: "user/message" }),
+      JSON.stringify({ content: [{ kind: "text", text: "新追加答" }], v: 1, id: "e_new2", parentId: "e_new1", seq: seq + 1, ts: "t", type: "assistant/message" }),
+    ].map((l) => l + "\n").join(""));
+    const future = new Date(Date.now() + 5000);
+    utimesSync(file, future, future);
+    // 无预刷新直接窗口装载（祖先链形态）——旧实现会按陈旧 lastEnd 把两条新事件 ftruncate 掉
+    const w = new JsonlSessionStore({ dir, sessionId: "s_stale", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w.loadPath).toBe("sniff"); // 陈旧被新鲜度铁律拒掉 → 嗅探重扫自愈
+    const all = await w.all();
+    expect(JSON.stringify(all)).toContain("新追加问"); // 新事件在镜像
+    expect(statSync(file).size).toBeGreaterThan(indexedSize); // 文件分毫未动（没被截）
+    await w.close();
+  });
+});

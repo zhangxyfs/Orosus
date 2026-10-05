@@ -1270,3 +1270,73 @@ describe("T14 锚点勘正（2026-10-05 补接线修）——窗口态跨压缩�
 		expect(dm.oldestLoadedSeq).toBe(1); // 锚仍推进——下一次 eventsBefore(1) 空=到头（终止有界）
 	});
 });
+
+describe("D13/T14-c 补做（2026-10-05 方案复读）：轮次滑窗裁掉的内容翻回 + fold 行计数递减/到头消失", () => {
+	const turnEv = (seq: number, text: string, isEnd = false): { type: string; seq: number; [k: string]: unknown } =>
+		isEnd
+			? { type: "turn/end", seq, kind: "completed", v: 1, id: `t${seq}`, parentId: null, ts: "t" }
+			: { type: "user/message", seq, content: [{ kind: "text", text }], v: 1, id: `t${seq}`, parentId: null, ts: "t" };
+
+	it("① 锚随裁剪下移：trimTurns 后 oldestLoadedSeq = 现存最老事件 seq（被裁轮次可翻回的地基）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		const events: { type: string; seq: number; [k: string]: unknown }[] = [];
+		let seq = 1;
+		for (let t = 0; t < 21; t++) {
+			events.push(turnEv(seq++, `第 ${t} 轮`));
+			events.push(turnEv(seq++, `第 ${t} 轮 end`, true));
+		}
+		dm.historyFrom(events, 80);
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.some((l) => l.includes("已折叠更早的"))).toBe(true); // 已裁（保留 15：轮 6..20）
+		expect(dm.oldestLoadedSeq).toBe(15); // 轮 7 首事件 = 第 15 个 seq（keep=15 => 折叠轮 0..6 共 14 事件被裁）
+	});
+
+	it("② fold 行计数递减 + 翻回的裁掉轮次可见 + 真到头行消失（D13 定案形态）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		const events: { type: string; seq: number; [k: string]: unknown }[] = [];
+		let seq = 1;
+		for (let t = 0; t < 21; t++) {
+			events.push(turnEv(seq++, `第 ${t} 轮提问`));
+			events.push(turnEv(seq++, `第 ${t} 轮 end`, true));
+		}
+		dm.historyFrom(events, 80);
+		let plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.join("\n")).not.toContain("第 3 轮提问"); // 已裁
+		expect(plain.some((l) => l.includes("已折叠更早的 7 轮"))).toBe(true); // 轮 0..6（keep=15）
+		// 翻回两轮（seq 9..12 = 轮 4..5）——eventsBefore 按锚取的形态
+		dm.prependHistory([turnEv(9, "第 4 轮提问"), turnEv(10, "", true), turnEv(11, "第 5 轮提问"), turnEv(12, "", true), turnEv(13, "第 6 轮提问"), turnEv(14, "", true)], 80);
+		plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.join("\n")).toContain("第 4 轮提问"); // 裁掉的轮次翻回可见
+		expect(plain.join("\n")).toContain("第 5 轮提问");
+		expect(plain.join("\n")).toContain("第 6 轮提问");
+		expect(plain.some((l) => l.includes("已折叠更早的 4 轮"))).toBe(true); // 计数递减 7→4
+		expect(dm.oldestLoadedSeq).toBe(9); // 锚=翻回后最老
+		// 翻回剩余全部（轮 0..3，seq 1..8）——真到头：fold 行消失
+		dm.prependHistory([turnEv(1, "第 0 轮提问"), turnEv(2, "", true), turnEv(3, "第 1 轮提问"), turnEv(4, "", true), turnEv(5, "第 2 轮提问"), turnEv(6, "", true), turnEv(7, "第 3 轮提问"), turnEv(8, "", true)], 80);
+		plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.some((l) => l.includes("已折叠更早的"))).toBe(false); // 到头消失
+		expect(plain.join("\n")).toContain("第 0 轮提问");
+		expect(dm.oldestLoadedSeq).toBe(1);
+	});
+
+	it("③ 滚回底部后滑窗照常回收翻回段（锚随回收复位——可再次翻回）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		const events: { type: string; seq: number; [k: string]: unknown }[] = [];
+		let seq = 1;
+		for (let t = 0; t < 21; t++) {
+			events.push(turnEv(seq++, `第 ${t} 轮提问`));
+			events.push(turnEv(seq++, `第 ${t} 轮 end`, true));
+		}
+		dm.historyFrom(events, 80);
+		dm.prependHistory([turnEv(9, "第 4 轮提问"), turnEv(10, "", true), turnEv(11, "第 5 轮提问"), turnEv(12, "", true)], 80);
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("第 4 轮提问");
+		dm.viewportProbe = () => ({ start: 1_000_000, end: 1_000_001 }); // 视口在底部外
+		dm.turnEnd(); // 触发 trim——翻回段（轮号 < oldest）照常被裁
+		const plain = dm.frameLines(80).map(stripAnsi);
+		expect(plain.join("\n")).not.toContain("第 4 轮提问"); // 回收
+		expect(dm.oldestLoadedSeq).toBe(17); // 锚复位——再翻回可重取同段（触发用的 turnEnd 推进轮界一格：oldest=8 ⇒ 首存 seq 17）
+	});
+});
