@@ -113,6 +113,9 @@ export interface Harness {
   events(): AsyncIterable<SessionEvent>;
   /** 会话历史（宿主显示面，B9 走查补）：全部持久事件（resume 回显用；含 reasoning 块——显示方自行取舍）。 */
   history(): Promise<SessionEvent[]>;
+  /** T10（m5-resume-perf）历史全量升级口：窗口装载（T7）的镜像按需整读全量——全量消费者兜底
+   *  （label 预算外等显示面缺数据时）；全量后端 noop。幂等。 */
+  ensureHistoryFull(): Promise<void>;
   /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
    *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
   liveChunks(): AsyncIterable<Chunk>;
@@ -435,6 +438,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // 转发）共用同一实现。graph 是 loadModules 的返回值、闭包捕获 let 变量（调用期读最新值）——activate
   // 期调 fork 会拿 undefined，与 llm「运行期调」同纪律（activate 期 provider 可能未装配同款）。
   const sessionForkFn = async (forkOpts?: { atEntryId?: string }): Promise<{ sessionId: string }> => {
+    // T10（m5-resume-perf）：分叉点校验按全量投影语义——窗外 atEntryId 合法（「分叉点不在当前投影内」
+    // 的语义 = 全量投影语义，窗口是读路径优化不缩小分叉面）
+    if (store.ensureFull !== undefined) await store.ensureFull();
     const events = await store.all();
     const at = forkOpts?.atEntryId ?? events[events.length - 1]?.id;
     if (at === undefined || !events.some((e) => e.id === at)) {
@@ -574,7 +580,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // onboarding 的 /provider、/reload 不落盘），保持 §6.1「文件首行 = session/header」不变量；
   // resume 的既有文件已带 header（不重复落）；模块图摘要取写入时刻的图（onboarding 在首聊前 /reload，
   // 捕获的是会话真正开工时的图——比构造期快照更真）。fork 的 sourceEntryId 仍在 fork 时刻取父尾（语义不变）。
-  const existingEvents = await (async () => {
+  let existingEvents = await (async () => {
     try {
       return await store.all();
     } catch (err) {
@@ -585,6 +591,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
   })();
   let headerPending = options.resume === undefined || existingEvents.length === 0;
+  // T10（m5-resume-perf）：启动 fork 显式 atEntryId 落在窗口头之前时（父压缩点早于分叉点）先全量升级
+  // ——ForkedSessionStore 的切片校验按全量投影语义；existingEvents 随升级重读（捕获的是旧数组引用）
+  if (options.fork?.atEntryId !== undefined && !existingEvents.some((e) => e.id === options.fork!.atEntryId)
+      && options.fork.atEntryId !== (existingEvents[existingEvents.length - 1]?.id)) {
+    if (store.ensureFull !== undefined) await store.ensureFull();
+    existingEvents = await store.all();
+  }
   const pendingForkSourceEntryId = headerPending && options.fork !== undefined
     ? options.fork.atEntryId ?? existingEvents[existingEvents.length - 1]?.id
     : undefined;
@@ -1247,6 +1260,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       return store.all(); // 内存镜像（含未 drain 的 buffer）——与投影同源
     },
 
+    // T10（m5-resume-perf）：窗口镜像懒升级读口——D4 全量消费兜底（store 缺省不带 = noop）
+    async ensureHistoryFull() {
+      if (store.ensureFull !== undefined) await store.ensureFull();
+    },
+
     liveChunks() {
       // §11.9 纪律（T4）：订阅/断开记 klog——实时通道可观测性（无订阅者期间 push 全弃属设计行为）
       const klog = createLogger(sink, "kernel");
@@ -1267,6 +1285,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
     // 批⑤：/usage 内建命令退役后的宿主读口（双口径不变——会话级恒有、项目级随存储后端）
     async usage() {
+      // T10（m5-resume-perf）：窗口镜像全量升级——当前会话累计按全量口径（兄弟聚合有 T3 缓存托底）
+      if (store.ensureFull !== undefined) await store.ensureFull();
       const cur = sumUsage(await store.all());
       const lt = store.lifetimeUsage !== undefined ? await store.lifetimeUsage() : undefined;
       return { current: cur, ...(lt !== undefined ? { lifetime: lt } : {}) };

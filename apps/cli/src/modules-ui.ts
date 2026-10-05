@@ -187,7 +187,14 @@ export const sessionLabelOf = (events: { type: string; label?: unknown }[]): str
  *  无定时驱动——全屏 1 秒 tick 只重绘（重读快照）不重算。 */
 export const refreshPanel = async (deps: ModulesUiDeps): Promise<void> => {
 	const h = deps.getH();
-	const events = await h.history();
+	const events0 = await h.history();
+	// T10（m5-resume-perf D4）：窗口装载的 label 兜底——预算外 label（头部 16KB 种子未覆盖且在压缩点
+	// 之前）会让标题误显「新会话」；缺 label 才升级（热路径零成本），全量后端 noop
+	let events = events0;
+	if (sessionLabelOf(events0) === undefined) {
+		await h.ensureHistoryFull();
+		events = await h.history();
+	}
 	const cfg = configFace();
 	const permission = permissionOf(events, cfg.approvalMode); // m5 T9：提纯投影（host.current() 共用）
 	const lastTodo = events.filter((e) => e.type === "tool-todo/write").at(-1) as
