@@ -544,3 +544,44 @@ describe("h.fork 落盘式分叉出口（会话树批 T6——缝一内核半边
     await h.close();
   });
 });
+
+describe("T5 m5-resume-perf: verifyChain 窗口头感知（窗口镜像装载的误报豁免）", () => {
+  /** 窗口镜像形态：种子（header/label——文件头预算读）+ 窗口（压缩事件起——首条 parentId 指向窗外合法 id）。 */
+  const windowed = (): { v: number; id: string; parentId: string | null; seq: number; ts: string; type: string }[] => [
+    { v: 1, id: "e_1", parentId: null, seq: 1, ts: "t", type: "session/header" },
+    { v: 1, id: "e_2", parentId: "e_1", seq: 2, ts: "t", type: "session/label" },
+    { v: 1, id: "e_90", parentId: "e_89", seq: 90, ts: "t", type: "turn/compaction" }, // parentId 指向窗外（e_89 不在镜像内）
+    { v: 1, id: "e_91", parentId: "e_90", seq: 91, ts: "t", type: "user/message" },
+  ];
+
+  it("① 窗口头：接缝（种子尾→窗口首 parentId 越窗）豁免零 issue；缺省调用照报（现状钉）", () => {
+    expect(verifyChain(windowed(), { windowedHead: true })).toEqual([]);
+    const issues = verifyChain(windowed());
+    expect(issues.some((i) => i.includes("parentId 链断裂"))).toBe(true);
+  });
+
+  it("② 豁免只给接缝一处：窗口体内的真断链照报（窗口化不等于免检）", () => {
+    const events = windowed();
+    events[3] = { ...events[3]!, parentId: "e_other" }; // 窗口体内第二处断链
+    const issues = verifyChain(events, { windowedHead: true });
+    expect(issues.some((i) => i.includes("parentId 链断裂"))).toBe(true);
+  });
+
+  it("③ 段内 seq 单调与孤儿配对不受豁免影响：窗口体 seq 回退照报", () => {
+    const events = windowed();
+    events[3] = { ...events[3]!, seq: 50 }; // 窗口体内 seq 回退
+    const issues = verifyChain(events, { windowedHead: true });
+    expect(issues.some((i) => i.includes("seq 非单调"))).toBe(true);
+  });
+
+  it("④ 链式多段（fork 投影 = 父段 + 子段，各自窗口装载）：每段各有一条接缝可豁免（T11 祖先链同窗口的行为前提）", () => {
+    const parentSeg = windowed(); // 父段：seed + 窗口（e_1/e_2/e_90/e_91）
+    const ownSeg = [
+      { v: 1, id: "f_1", parentId: null, seq: 1, ts: "t", type: "session/header" },
+      { v: 1, id: "f_2", parentId: "f_1", seq: 2, ts: "t", type: "session/fork" },
+      { v: 1, id: "f_70", parentId: "f_69", seq: 70, ts: "t", type: "turn/compaction" }, // 子段自己的接缝
+      { v: 1, id: "f_71", parentId: "f_70", seq: 71, ts: "t", type: "user/message" },
+    ];
+    expect(verifyChain([...parentSeg, ...ownSeg], { windowedHead: true })).toEqual([]);
+  });
+});

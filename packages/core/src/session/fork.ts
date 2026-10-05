@@ -131,8 +131,14 @@ export async function openSessionView(opts: {
 }
 
 /** 读侧自修复 pass（§6.1，D41）：parentId 链断裂 / seq 非单调 / 孤儿 tool/result / 未闭合 tool/call
- *  ——返回问题描述清单（调用方 sink.warn 逐条诊断；可自动修复的撕裂尾部归 repairFile）。 */
-export function verifyChain(events: SessionEvent[]): string[] {
+ *  ——返回问题描述清单（调用方 sink.warn 逐条诊断；可自动修复的撕裂尾部归 repairFile）。
+ *  T5（m5-resume-perf）窗口头感知：windowedHead:true 时每段允许一处「种子尾→窗口首」接缝——窗口镜像
+ *  装载（T7）的事件首条 parentId 合法指向窗外（文件前段未读入），按子段根切分豁免该对、两侧各自校验；
+ *  每段只豁免第一处（接缝按构造唯一），窗口体内的真断链照报；seq 单调与孤儿配对不受影响。缺省不传
+ *  = 与全量校验逐字节一致（既有调用零感知）。
+ *  豁免粒度=每段一次而非仅首段（方案字面是「首段」）：T11 祖先链同窗口装载时，fork 投影每代一段、
+ *  各有一条自己的接缝——只豁免首段会让子代段误报（单会话镜像两口径等价）。 */
+export function verifyChain(events: SessionEvent[], opts?: { windowedHead?: boolean }): string[] {
   const issues: string[] = [];
   // 根分段（首轮 P1）：fork 复合投影 = parent(seq 1..M) + own(seq 1..N、首条 parentId=null)——
   // 逐条校验必误报。以根事件（parentId=null 且 header）分段，段内校验链/seq；孤儿与未闭合 call 按段配对
@@ -147,10 +153,17 @@ export function verifyChain(events: SessionEvent[]): string[] {
   }
   if (current.length > 0) segments.push(current);
   for (const seg of segments) {
+    let junctionLeft = opts?.windowedHead === true; // 本段接缝豁免额度（窗口态才有一处，用掉即关门）
     for (let i = 1; i < seg.length; i++) {
       const prev = seg[i - 1]!;
       const e = seg[i]!;
-      if (e.parentId !== prev.id) issues.push(`parentId 链断裂：seq ${e.seq}（${e.type}）的 parentId 指向 ${e.parentId ?? "null"}，前一条是 ${prev.id}`);
+      if (e.parentId !== prev.id) {
+        if (junctionLeft) {
+          junctionLeft = false;
+          continue; // 接缝：本对跳过（parentId 越窗 + seq 跨接缝两类都不查），从 e 起按新子段校验
+        }
+        issues.push(`parentId 链断裂：seq ${e.seq}（${e.type}）的 parentId 指向 ${e.parentId ?? "null"}，前一条是 ${prev.id}`);
+      }
       if (e.seq <= prev.seq) issues.push(`seq 非单调：seq ${e.seq}（${e.type}）未超过前一条 ${prev.seq}`);
     }
   }
