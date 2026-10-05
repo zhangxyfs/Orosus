@@ -227,3 +227,107 @@ export function indexSingleSession(dbFile: string, bucket: string, sessionId: st
   const consumedTo = rows.length > 0 ? rows[rows.length - 1]!.byteOffset + rows[rows.length - 1]!.byteLength + 1 : 0;
   writeEventRows(dbFile, bucket, sessionId, rows, { ...st, indexedBytes: consumedTo });
 }
+
+// ---------- T6c 查询口（装载定位 + 翻页取段） ----------
+
+/** 查询用只读开库：只读避免读路径写副作用（readSqliteHead 同口径）；库不在/打不开 = undefined
+ *  （调用方按无索引容错——T7 降级嗅探、T14 当场补建）。 */
+function openEventIndexQuery(dbFile: string): import("node:sqlite").DatabaseSync | undefined {
+  if (!sqliteAvailable()) return undefined;
+  try {
+    const db = openDatabase(dbFile, { readOnly: true });
+    db.exec("PRAGMA busy_timeout = 5000;");
+    return db;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface IndexedSegment {
+  byteOffset: number;
+  byteLength: number;
+  /** 段首行 seq（段内行可由调用方 split 后自增）。 */
+  seq: number;
+}
+
+/** 行序列 → 连续字节段（qwen readSegmentRecords 同款手法：相邻行 offset 邻接则并成大段，减少 pread
+ *  次数）。byteLength 含段内行尾 \n（pread 后 split("\\n") 即行集）；不邻接处（跳过的坏行/间隙）切段。 */
+function mergeSegments(rows: { seq: number; byte_offset: number; byte_length: number }[]): IndexedSegment[] {
+  const segs: IndexedSegment[] = [];
+  for (const r of rows) {
+    const last = segs[segs.length - 1];
+    if (last !== undefined && r.byte_offset === last.byteOffset + last.byteLength) {
+      last.byteLength += r.byte_length + 1; // +1 = 该行尾 \n
+    } else {
+      segs.push({ byteOffset: r.byte_offset, byteLength: r.byte_length + 1, seq: r.seq });
+    }
+  }
+  return segs;
+}
+
+/** 最后压缩点（T7 索引路径的窗口定位口）：type='turn/compaction' 取最大 seq 行 + pread 该单行判
+ *  keptUsers 在场性得 v4（在场性判版本——v:1 后置覆盖坑在档）。file = 会话 jsonl 路径（索引只存
+ *  bucket/sid 不存路径——调用方装载时本来就持有）。无压缩/库不可用/单行读失败/parse 失败 = undefined
+ *  （调用方降级：索引 miss 走前向嗅探备胎——索引漂移的 pread 坏行同样落此，装载永不因索引坏而死）。 */
+export function lastCompaction(dbFile: string, bucket: string, sessionId: string, file: string): { byteOffset: number; seq: number; v4: boolean } | undefined {
+  const db = openEventIndexQuery(dbFile);
+  if (db === undefined) return undefined;
+  try {
+    const row = db.prepare(
+      "SELECT seq, byte_offset, byte_length FROM event_index WHERE bucket = ? AND session_id = ? AND type = 'turn/compaction' ORDER BY seq DESC LIMIT 1",
+    ).get(bucket, sessionId) as { seq: number; byte_offset: number; byte_length: number } | undefined;
+    if (row === undefined) return undefined;
+    try {
+      const fd = openSync(file, "r");
+      try {
+        const buf = Buffer.alloc(row.byte_length);
+        const n = readSync(fd, buf, 0, row.byte_length, row.byte_offset);
+        if (n !== row.byte_length) return undefined; // 文件变短 = 索引漂移
+        const parsed = JSON.parse(buf.toString("utf8")) as { type?: string; keptUsers?: unknown };
+        if (parsed.type !== "turn/compaction") return undefined; // 行内容与索引类型不符 = 漂移
+        return { byteOffset: row.byte_offset, seq: row.seq, v4: Array.isArray(parsed.keptUsers) };
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return undefined;
+    }
+  } finally {
+    try { db.close(); } catch { /* 已关 */ }
+  }
+}
+
+/** 尾段取读（T7 索引路径的装载口）：fromSeq 起到 EOF 的行按连续字节段返回（相邻行合并成大段减少
+ *  pread 次数——qwen reader 同款）。索引不可用/会话无行 = 空数组（调用方降级）。 */
+export function eventsFrom(dbFile: string, bucket: string, sessionId: string, fromSeq: number): IndexedSegment[] {
+  const db = openEventIndexQuery(dbFile);
+  if (db === undefined) return [];
+  try {
+    const rows = db.prepare(
+      "SELECT seq, byte_offset, byte_length FROM event_index WHERE bucket = ? AND session_id = ? AND seq >= ? ORDER BY seq",
+    ).all(bucket, sessionId, fromSeq) as unknown as { seq: number; byte_offset: number; byte_length: number }[];
+    return mergeSegments(rows);
+  } catch {
+    return [];
+  } finally {
+    try { db.close(); } catch { /* 已关 */ }
+  }
+}
+
+/** 向上翻页取段（T14 懒分页口）：seq < beforeSeq 降序取 limitEvents 条、按升序返回（头部插页序），
+ *  同样合并连续段。翻过头（beforeSeq 之前无行）= 空数组 = 「已到会话开头」。不设压缩边界——
+ *  D13 定案：翻页可跨压缩行取压缩前原文。 */
+export function eventsBefore(dbFile: string, bucket: string, sessionId: string, beforeSeq: number, limitEvents: number): IndexedSegment[] {
+  const db = openEventIndexQuery(dbFile);
+  if (db === undefined) return [];
+  try {
+    const rows = (db.prepare(
+      "SELECT seq, byte_offset, byte_length FROM event_index WHERE bucket = ? AND session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?",
+    ).all(bucket, sessionId, beforeSeq, limitEvents) as unknown as { seq: number; byte_offset: number; byte_length: number }[]).reverse();
+    return mergeSegments(rows);
+  } catch {
+    return [];
+  } finally {
+    try { db.close(); } catch { /* 已关 */ }
+  }
+}

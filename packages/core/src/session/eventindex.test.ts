@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore } from "./jsonl.ts";
-import { refreshEventIndex, scanEventLines, sniffEventLine, writeEventRows } from "./eventindex.ts";
+import { eventsBefore, eventsFrom, lastCompaction, refreshEventIndex, scanEventLines, sniffEventLine, writeEventRows } from "./eventindex.ts";
 import { openDatabase, setSqliteProbeForTest, sqliteAvailable } from "./sqlite.ts";
 import type { SessionFileEntry } from "./dir.ts";
 
@@ -201,5 +201,91 @@ describe("T6b sniffEventLine（信封尾锚定嗅探——纯函数）", () => {
     expect(sniffEventLine(Buffer.from('{"v":1,"id":"x","parentId":null,"seq":1,"ts":"t","typ'))).toBeUndefined();
     // type 非末键（后随他键）→ undefined（信封形态破坏）
     expect(sniffEventLine(Buffer.from('{"v":1,"type":"x","extra":1}'))).toBeUndefined();
+  });
+});
+
+describe.skipIf(!sqliteAvailable())("T6c m5-resume-perf: 索引查询口（压缩点定位 / 尾段取读 / 向上翻页取段）", () => {
+  it("① 无压缩 → undefined；多压缩点取最后（最大 seq）且 v4 判定正确（keptUsers 在场性）", async () => {
+    const d = tmp("evixc");
+    const dbFile = join(d, "event-index.sqlite");
+    const s = new JsonlSessionStore({ dir: d, sessionId: "s_q1" });
+    await s.append("session/header", { cwd: "/r", parentSession: null });
+    await s.append("user/message", { content: [{ kind: "text", text: "问" }] });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "答" }] });
+    await s.append("turn/compaction", { trigger: "auto", summary: "旧v3", keepUserAt: [0], keepUserHead: 1, droppedCount: 3 }); // v3（无 keptUsers）
+    await s.append("user/message", { content: [{ kind: "text", text: "后问" }] });
+    await s.append("turn/compaction", { trigger: "auto", summary: "新v4", keepUserHead: 1, keptUsers: [{ role: "user", content: [{ kind: "text", text: "后问" }] }], elidedCount: 1, droppedCount: 5 }); // v4
+    await s.append("user/message", { content: [{ kind: "text", text: "再问" }] });
+    await s.flush();
+    const file = join(d, "s_q1", "agents", "session.jsonl");
+    await s.close();
+    const st = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ id: "s_q1", file, dir: d, mtimeMs: st.mtimeMs, size: st.size, bucket: "bk" }]);
+    // 无压缩会话 → undefined
+    const other = await seedSession(d, "s_q0", 3);
+    expect(lastCompaction(dbFile, "bk", "s_q0", other.file)).toBeUndefined();
+    // 多压缩点取最后 + v4 在场性
+    const lc = lastCompaction(dbFile, "bk", "s_q1", file)!;
+    expect(lc).not.toBeUndefined();
+    expect(lc.v4).toBe(true);
+    expect(lc.seq).toBe(6);
+    // v4 判定负例：单造一个只有 v3 的会话
+    const s3 = new JsonlSessionStore({ dir: d, sessionId: "s_q3" });
+    await s3.append("session/header", { cwd: "/r", parentSession: null });
+    await s3.append("turn/compaction", { trigger: "auto", summary: "旧v3", keepUserAt: [0], keepUserHead: 1, droppedCount: 1 });
+    await s3.flush();
+    const f3 = join(d, "s_q3", "agents", "session.jsonl");
+    await s3.close();
+    const st3 = statSync(f3);
+    await refreshEventIndex(dbFile, d, [{ id: "s_q3", file: f3, dir: d, mtimeMs: st3.mtimeMs, size: st3.size, bucket: "bk" }]);
+    expect(lastCompaction(dbFile, "bk", "s_q3", f3)!.v4).toBe(false);
+    // 库不在 → undefined（降级口）
+    expect(lastCompaction(join(d, "nope.sqlite"), "bk", "s_q1", file)).toBeUndefined();
+  });
+
+  it("② eventsFrom：fromSeq 起到 EOF；连续行合并大段（不邻接处切段）；段字节可 pread 解析回行", async () => {
+    const d = tmp("evixf");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file, entry } = await seedSession(d, "s_f", 6);
+    await refreshEventIndex(dbFile, d, [entry]);
+    const segs = eventsFrom(dbFile, "bk", "s_f", 4);
+    expect(segs).toHaveLength(1); // 4..6 邻接 → 一段
+    expect(segs[0]!.seq).toBe(4);
+    // 段字节 pread 回读 = 行 4..6
+    const fd = openSync(file, "r");
+    const buf = Buffer.alloc(segs[0]!.byteLength);
+    readSync(fd, buf, 0, segs[0]!.byteLength, segs[0]!.byteOffset);
+    closeSync(fd);
+    const seqs = buf.toString("utf8").split("\n").filter(Boolean).map((l) => (JSON.parse(l) as { seq: number }).seq);
+    expect(seqs).toEqual([4, 5, 6]);
+    expect(eventsFrom(dbFile, "bk", "s_f", 99)).toEqual([]); // 翻过头空
+    // 手造间隙（writeEventRows 覆盖式）：行 1/2 邻接、行 3 跳开 → 两段
+    const rows = [...scanEventLines(file)];
+    const gapped = [rows[0]!, rows[1]!, { ...rows[2]!, byteOffset: rows[2]!.byteOffset + 100, byteLength: rows[2]!.byteLength }];
+    writeEventRows(dbFile, "bk", "s_f", gapped, { mtimeMs: 1, size: 1, indexedBytes: 1 });
+    expect(eventsFrom(dbFile, "bk", "s_f", 1)).toHaveLength(2); // 不邻接不并段
+  });
+
+  it("③ eventsBefore：seq 降序取 limit 条按升序返回；翻过头空；limit 截断边界", async () => {
+    const d = tmp("evixb");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file, entry } = await seedSession(d, "s_p", 10);
+    await refreshEventIndex(dbFile, d, [entry]);
+    const segs = eventsBefore(dbFile, "bk", "s_p", 8, 3);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.seq).toBe(5); // 7,6,5 降序取 3 → 升序返回从 5 起
+    // 段内行数 = 3（pread 验证）
+    const fd = openSync(file, "r");
+    const buf = Buffer.alloc(segs[0]!.byteLength);
+    readSync(fd, buf, 0, segs[0]!.byteLength, segs[0]!.byteOffset);
+    closeSync(fd);
+    expect(buf.toString("utf8").split("\n").filter(Boolean)).toHaveLength(3);
+    expect(eventsBefore(dbFile, "bk", "s_p", 1, 5)).toEqual([]); // 翻过头（seq<1 无行）
+    const all = eventsBefore(dbFile, "bk", "s_p", 11, 100);
+    expect(all).toHaveLength(1);
+    expect(all[0]!.seq).toBe(1); // 全量页从 1 起
+    const hit = eventsBefore(dbFile, "bk", "s_p", 4, 100);
+    expect(hit[0]!.seq).toBe(1);
+    expect(hit.reduce((n, sg) => n + sg.byteLength, 0)).toBeGreaterThan(0);
   });
 });
