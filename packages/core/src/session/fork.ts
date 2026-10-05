@@ -90,6 +90,14 @@ const FORK_CHAIN_MAX_DEPTH = 32;
  *  恒在自己文件前两行）；深度上限 32 + 已访问集合防环（超限/成环就地截断并 warn）。祖先文件找不到 =
  *  就地截断（只用最近可得的段）——链缺口由 verifyChain 报告，调用方看到的是「最近可得的完整投影」。
  *  async 原因：读祖辈元数据须等 store.all()（jsonl 构造期全读、all() 出内存镜像）。 */
+/** T11（m5-resume-perf）：openSessionView 各层装载口径（埋点 mode 数据源 + verifyChain windowedHead
+ *  判据）——makeStore 产 JsonlSessionStore 时由其只读口 loadMode/loadPath/loadFallback 现取。 */
+export interface SessionLoadInfo {
+  mode: "window" | "full";
+  path: "index" | "sniff" | "full";
+  fallback?: string;
+}
+
 export async function openSessionView(opts: {
   /** 目标会话 id（顶层由调用方保证存在——不存在时 all() 为空、按裸 store 返回，父前缀为空，与旧语义一致）。 */
   sessionId: string;
@@ -99,11 +107,18 @@ export async function openSessionView(opts: {
   /** 祖先定位：返回祖先所在桶；找不到 undefined = 截断（通常 = dir.ts locateSessionBucket 包一层）。 */
   locate: (sessionId: string) => { bucket: string } | undefined;
   sink?: { warn: (code: string, msg: string, data?: Record<string, unknown>) => void };
-}): Promise<{ store: SessionStore; chain: string[] }> {
+}): Promise<{ store: SessionStore; chain: string[]; loads: SessionLoadInfo[] }> {
   const chain: string[] = []; // 自上而下祖先 id 链（诊断日志用）
+  const loads: SessionLoadInfo[] = []; // T11：各层（自目标层起）装载口径
   const visited = new Set<string>();
   const openFrom = async (sessionId: string, bucket: string, depth: number): Promise<SessionStore> => {
     const store = opts.makeStore(sessionId, bucket);
+    { // T11：装载口径现取（窗口后端的只读口；其他后端跳过）
+      const ls = store as SessionStore & { loadMode?: "window" | "full"; loadPath?: "index" | "sniff" | "full"; loadFallback?: string };
+      if (typeof ls.loadMode === "string" && typeof ls.loadPath === "string") {
+        loads.push({ mode: ls.loadMode, path: ls.loadPath, ...(ls.loadFallback !== undefined ? { fallback: ls.loadFallback } : {}) });
+      }
+    }
     const own = await store.all();
     const header = own.find((e) => e.type === "session/header");
     const forkEvent = own.find((e) => e.type === "session/fork");
@@ -139,11 +154,19 @@ export async function openSessionView(opts: {
     }
     const parentView = await openFrom(parent, parentLoc.bucket, depth + 1);
     const at = forkEvent === undefined ? undefined : (forkEvent as { sourceEntryId?: unknown }).sourceEntryId;
+    // T11 祖先链窗口安全判据（doc-review A 点）：分叉点落在父层窗口头之前（fork 之后父继续对话并
+    // 压缩——常见链形）时，CS-05 的 fullPrefix 降级会拿「父压缩后尾部」冒充分叉前缀——投影静默错、
+    // verifyChain 不报。判据：atEntryId 不在父层窗口镜像内 → 该父层先 ensureFull 再切片（必须先于
+    // 本层首次 all()；ForkedSessionStore.ensureFull 清 parentCache，T8 转发已保缓存不滞留窗口态）。
+    if (typeof at === "string" && parentView.ensureFull !== undefined) {
+      const inWindow = (await parentView.all()).some((e) => e.id === at);
+      if (!inWindow) await parentView.ensureFull();
+    }
     // CS-05：onMissing:"fullPrefix" 显式保留盘上链重建的宽容降级——sourceEntryId 指向的事件可能已被
     // 撕裂截断/修复移出父投影，此时按全量父前缀投影优于让会话打不开（活 API 出口走默认 throw）。
     return new ForkedSessionStore({ parent: parentView, ...(typeof at === "string" ? { atEntryId: at } : {}), onMissing: "fullPrefix", own: store });
   };
-  return { store: await openFrom(opts.sessionId, opts.bucket, 0), chain };
+  return { store: await openFrom(opts.sessionId, opts.bucket, 0), chain, loads };
 }
 
 /** 读侧自修复 pass（§6.1，D41）：parentId 链断裂 / seq 非单调 / 孤儿 tool/result / 未闭合 tool/call

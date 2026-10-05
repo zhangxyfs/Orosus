@@ -1,12 +1,13 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./session/jsonl.ts";
-import { SqliteSessionStore } from "./session/sqlite.ts";
-import { ForkedSessionStore, openSessionView, verifyChain } from "./session/fork.ts";
+import { SqliteSessionStore, sqliteAvailable } from "./session/sqlite.ts";
+import { ForkedSessionStore, openSessionView, verifyChain, type SessionLoadInfo } from "./session/fork.ts";
+import { refreshEventIndex } from "./session/eventindex.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
@@ -62,6 +63,13 @@ export interface HarnessOptions {
   sessionsDir?: string;                     // 会话文件目录（D41/T6）：缺省 ~/.orosus/sessions——resume/fork/新会话共用；测试密封注入 tmp
   sessionsRoot?: string;                    // 会话根目录（会话树批 T1）：fork 祖先链跨桶定位兜底用（locateSessionBucket 全根扫描）；#17 封闭后新链祖先恒同桶，只为存量跨桶链只读兼容；缺省 = 只走同桶快路径
   treeIndexFile?: string;                   // 会话树批 T9：树索引库落点（缺省 ~/.orosus/db/session-tree.sqlite——索引是缓存可删可重建）；测试密封注入 tmp
+  /** T11（m5-resume-perf）：事件索引库落点（缺省 ~/.orosus/db/event-index.sqlite——独立库与树索引
+   *  生命周期互不牵连，索引是缓存可删可重建）；测试密封注入 tmp。 */
+  eventIndexFile?: string;
+  /** T11：会话装载模式（缺省窗口；env OROSUS_SESSION_LOAD=full 逃生阀；行模式由 CLI 装配层显式传
+   *  full——echoHistory 只翻已载入行，窗口化会让更早历史在行模式看不到，零回归原则）。子代理 store
+   *  恒全量（runner 接线显式传 full——文件受双保险丝天然有界，风险节钦点不窗口化）。 */
+  sessionLoad?: "window" | "full";
   sessionSwitch?: (sessionId: string) => Promise<boolean>; // 会话树批 T10/T11 缝三：宿主切换缝（CLI 注入 switchTo 链路 + 桶闸；立即返回语义——决策点 9）；缺省不装（ctx.session.switchTo = undefined）
   diagDir?: string;
   spillDir?: string;
@@ -255,6 +263,9 @@ function forwardingStore(store: SessionStore, channel: Channel<SessionEvent>): S
     },
     all: () => store.all(),
     ...(store.lifetimeUsage !== undefined ? { lifetimeUsage: () => store.lifetimeUsage!() } : {}),
+    // T10/T11（m5-resume-perf）：ensureFull 条件转发（lifetimeUsage 同款挂法）——窗口镜像的懒升级口
+    // 经包装层透出，usage()/fork 校验/h.ensureHistoryFull 才够得着 JsonlSessionStore 的真身
+    ...(store.ensureFull !== undefined ? { ensureFull: () => store.ensureFull!() } : {}),
     flush: () => store.flush(),
     close: () => store.close(),
   };
@@ -304,32 +315,59 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // 存储构造分支（D41/T6 + D42/T7）：显式 store > resume > fork > 全新；后端按核心顶层 key sessionStore 选择（缺省 jsonl）
   const sessionsDir = options.sessionsDir ?? join(home, "sessions");
-  const makeStore = (sessionId?: string, dir: string = sessionsDir): SessionStore => {
+  // T11（m5-resume-perf）装载装配链：缺省窗口；env OROSUS_SESSION_LOAD=full 逃生阀（cc kill switch
+  // 同形）；子代理经 runner 接线显式传 {load:"full"}。窗口注入 index（bucket=目录名——事件索引
+  // (bucket,sid) 主键；索引可用性由装配层判定：resume 前先增量刷新）。
+  const sessionLoad: "window" | "full" = options.sessionLoad ?? (process.env.OROSUS_SESSION_LOAD === "full" ? "full" : "window");
+  const eventIndexFile = options.eventIndexFile ?? join(orosusHome(), "db", "event-index.sqlite");
+  const makeStore = (sessionId?: string, dir: string = sessionsDir, opts?: { load?: "window" | "full" }): SessionStore => {
     const backend = String(config.core.sessionStore ?? "jsonl");
     const withId = sessionId !== undefined ? { sessionId } : {};
-    if (backend === "sqlite") return new SqliteSessionStore({ dir, ...withId });
-    if (backend === "jsonl") return new JsonlSessionStore({ dir, ...withId });
+    if (backend === "sqlite") return new SqliteSessionStore({ dir, ...withId }); // v2 撤项：sqlite 会话后端维持现状（全量装载）不再投资
+    if (backend === "jsonl") {
+      const load = opts?.load ?? sessionLoad;
+      return new JsonlSessionStore({ dir, ...withId, ...(load === "window" ? { load: "window" as const, index: { dbFile: eventIndexFile, bucket: basename(dir) } } : {}) });
+    }
     throw new Error(`sessionStore 配置非法："${backend}"（合法值 jsonl | sqlite，核心顶层 key，§7.2/D42）`);
   };
   let baseStore: SessionStore;
+  let resumeLoads: SessionLoadInfo[] = []; // T11：装载路径口径（verifyChain windowedHead 判据与埋点数据源）
   if (options.store !== undefined) {
     baseStore = options.store;
   } else if (options.resume !== undefined) {
     // CS-01 修复（2026-09-28 code review P0）：resume 的会话可能是 fork 子体——旧实现平铺打开自己那份
     // 文件，投影丢掉全部父辈历史（/sessions 回车、switchTo、--resume 三条入口全命中）。统一经
     // openSessionView：普通会话 = 裸 store（与旧 makeStore 语义一致），子体 = 递归拼装祖辈前缀（同 fork 分支）。
-    baseStore = (
-      await openSessionView({
-        sessionId: options.resume.sessionId,
-        bucket: sessionsDir,
-        makeStore,
-        locate: (sid) => {
-          const b = locateSessionBucket(options.sessionsRoot, sid, sessionsDir);
-          return b === undefined ? undefined : { bucket: b };
-        },
-        sink: { warn: (code, msg, data) => createLogger(sink, "session").warn(code, msg, data ?? {}) },
-      })
-    ).store;
+    // T11：①装载前增量刷事件索引（D14——mtime+size 双判命中零成本跳过；首开建行走 T7 嗅探备胎顺手建，
+    // 本次备胎下次索引）；②耗时埋点 session.load.resumed（cc tengu_session_resumed 同款——mode 取
+    // loadPath 三态）；③祖先链各层同窗口（makeStore 同参注入）。
+    const tResume0 = Date.now();
+    const rb = locateSessionBucket(options.sessionsRoot, options.resume.sessionId, sessionsDir);
+    if (rb !== undefined && sqliteAvailable()) {
+      try {
+        const rfile = join(rb, options.resume.sessionId, "agents", "session.jsonl");
+        const rst = statSync(rfile);
+        await refreshEventIndex(eventIndexFile, options.sessionsRoot ?? dirname(sessionsDir), [{ id: options.resume.sessionId, file: rfile, dir: rb, mtimeMs: rst.mtimeMs, size: rst.size, bucket: basename(rb) }]);
+      } catch { /* 索引 best-effort：失败走嗅探备胎 */ }
+    }
+    const resumeView = await openSessionView({
+      sessionId: options.resume.sessionId,
+      bucket: sessionsDir,
+      makeStore,
+      locate: (sid) => {
+        const b = locateSessionBucket(options.sessionsRoot, sid, sessionsDir);
+        return b === undefined ? undefined : { bucket: b };
+      },
+      sink: { warn: (code, msg, data) => createLogger(sink, "session").warn(code, msg, data ?? {}) },
+    });
+    baseStore = resumeView.store;
+    resumeLoads = resumeView.loads;
+    const leaf = resumeView.loads[0];
+    createLogger(sink, "session").info("session.load.resumed", "会话装载完成", {
+      duration_ms: Date.now() - tResume0,
+      mode: leaf?.path ?? "full",
+      ...(leaf?.fallback !== undefined ? { fallback: leaf.fallback } : {}),
+    });
   } else if (options.fork !== undefined) {
     // 会话树批 T1 断代修复：父视图经 openSessionView 递归拼装——父若是 fork 子体，其投影含祖辈段
     //（旧实现平铺打开父自己那份文件，孙代丢祖辈前缀）。parentDir 缺省同桶（REPL /fork）；跨桶父由宿主定位后填入（D46）。
@@ -344,6 +382,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       },
       sink: { warn: (code, msg, data) => createLogger(sink, "session").warn(code, msg, data ?? {}) },
     });
+    resumeLoads = parentView.loads; // T11：fork 父链同窗口装载（分叉安全判据在 openSessionView 内层）
     baseStore = new ForkedSessionStore({
       parent: parentView.store,
       ...(options.fork.atEntryId !== undefined ? { atEntryId: options.fork.atEntryId } : {}),
@@ -481,7 +520,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     sessionsDir,
     sink,
     cwd: options.cwd ?? process.cwd(),
-    makeStore: (sid, dir) => makeStore(sid, dir),
+    makeStore: (sid, dir) => makeStore(sid, dir, { load: "full" }), // T11：子代理 store 恒全量——文件受双保险丝天然有界，不窗口化（风险节钦点）
     graph: () => graph,
     configSections: () => config.sections,
     resolveParentModel: () => resolveProvider(),
@@ -698,7 +737,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   let resumedRunState: { model: string; effort?: string } | undefined;
   if (options.resume !== undefined || options.fork !== undefined) {
     const resumedEvents = await store.all();
-    for (const issue of verifyChain(resumedEvents)) {
+    // T11：窗口装载的接缝豁免（T5 口）——链上任一层窗口化则每段允许一处种子→窗口接缝
+    for (const issue of verifyChain(resumedEvents, { windowedHead: resumeLoads.some((l) => l.mode === "window") })) {
       createLogger(sink, "session").warn("session.chain.issue", issue);
     }
     const lastTurnStart = [...resumedEvents].reverse().find((e) => e.type === "turn/start");

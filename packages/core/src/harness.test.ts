@@ -10,6 +10,7 @@ import { JsonlSessionStore } from "./session/jsonl.ts";
 import { verifyChain } from "./session/fork.ts";
 import { createHarness } from "./index.ts";
 import { loadConfig } from "./config/load.ts";
+import { deriveMessages } from "./loop/convert.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 
 let dir: string;
@@ -1982,5 +1983,124 @@ describe("session/start 会话起点广播（m5-hooks T3）", () => {
     const events = await h.history();
     expect(events.some((e) => e.type === "session/start")).toBe(false);
     await h.close();
+  });
+});
+
+describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 + 祖先链同窗口 + 消费点等价）", () => {
+  /** ≥5MB v4 压缩大会话直写（信封形态同 T7 夹具）；label 埋在 20KB 首消息之后（头 16KB 种子预算外）。
+   *  返回 { sid, file, preAnchorId, compactionSeq }。 */
+  const buildBig = (root: string, sid: string): { file: string; preAnchorId: string; compactionSeq: number } => {
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    let preAnchorId = "";
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_h${String(seq).padStart(5, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "2026-10-05T00:00:00Z", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    push({ content: [{ kind: "text", text: `问0 ${"x".repeat(20 * 1024)}` }] }, "user/message");
+    push({ label: "预算外标签" }, "session/label"); // 头 16KB 种子覆盖不到（首消息 20KB 之后）
+    const FILLER = "x".repeat(4000);
+    for (let i = 1; i < 1250; i++) {
+      push({ content: [{ kind: "text", text: `问${i} ${FILLER}` }] }, "user/message");
+      push({ content: [{ kind: "text", text: `答${i}` }] }, "assistant/message");
+      if (i === 2) preAnchorId = prevId!; // 分叉锚 = 普通 user 事件（压缩点之前、非种子类——真实 fork 链形）
+    }
+    push({ trigger: "auto", summary: "S", keepUserHead: 1, keptUsers: [{ role: "user", content: [{ kind: "text", text: "保留问" }] }], elidedCount: 2500, droppedCount: 2503 }, "turn/compaction");
+    push({ content: [{ kind: "text", text: "后问" }] }, "user/message");
+    push({ content: [{ kind: "text", text: "后答" }] }, "assistant/message");
+    const agents = join(root, sid, "agents");
+    mkdirSync(agents, { recursive: true });
+    const file = join(agents, "session.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    return { file, preAnchorId, compactionSeq: 2504 };
+  };
+  const harnessOpts = (d: string, sid: string, load: "window" | "full") => ({
+    sessionsDir: join(d, "sessions"),
+    sessionsRoot: join(d, "sessions"),
+    eventIndexFile: join(d, "event-index.sqlite"),
+    sessionLoad: load,
+    resume: { sessionId: sid },
+    diagDir: join(d, "logs"),
+    modules: [fakeProviderModule("fake", script)],
+    config: { ...hermetic(d), cliOverrides: { model: "fake/m" } },
+  });
+
+  it("a. 端到端等价：窗口 resume 与全量 resume 的投影 deriveMessages deep equal + verifyChain 零 issue（含窗口头豁免）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t11a-"));
+    const sid = "s_t11a";
+    buildBig(join(dir, "sessions"), sid);
+    const hWin = await createHarness(harnessOpts(dir, sid, "window"));
+    const winEvents = await hWin.history();
+    await hWin.close();
+    const hFull = await createHarness(harnessOpts(dir, sid, "full"));
+    const fullEvents = await hFull.history();
+    await hFull.close();
+    expect(deriveMessages(winEvents)).toEqual(deriveMessages(fullEvents)); // 端到端等价钉（T6/T7 的 harness 级总装）
+    expect(verifyChain(winEvents, { windowedHead: true })).toEqual([]); // 窗口头豁免下零 issue
+    expect(winEvents.some((e) => e.type === "session/header")).toBe(true); // 种子在位
+  });
+
+  it("b. env 逃生阀 OROSUS_SESSION_LOAD=full → 全量（hermetic env 面注入）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t11b-"));
+    const sid = "s_t11b";
+    buildBig(join(dir, "sessions"), sid);
+    const { sessionLoad: _drop, ...opts } = harnessOpts(dir, sid, "window"); // 不显式传——env 定
+    void _drop;
+    process.env.OROSUS_SESSION_LOAD = "full";
+    let events: { type: string }[];
+    try {
+      const h = await createHarness(opts);
+      events = await h.history();
+      await h.close();
+    } finally {
+      delete process.env.OROSUS_SESSION_LOAD;
+    }
+    // 全量装载：镜像含预算外 label（窗口态需 ensureHistoryFull 补——见 c）
+    expect(events.filter((e) => e.type === "session/label").length).toBe(1);
+  });
+
+  it("c. 消费点等价（T10 并钉）：usage().current 窗口=全量；fork 窗外 atEntryId 成功；ensureHistoryFull 补预算外 label", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t11c-"));
+    const sid = "s_t11c";
+    const { preAnchorId } = buildBig(join(dir, "sessions"), sid);
+    const hWin = await createHarness(harnessOpts(dir, sid, "window"));
+    const hFull = await createHarness(harnessOpts(dir, sid, "full"));
+    // 预算外 label：窗口镜像缺（先断言——usage/fork 的 ensureFull 会升级镜像）→ ensureHistoryFull 后在
+    expect((await hWin.history()).some((e) => e.type === "session/label")).toBe(false);
+    await hWin.ensureHistoryFull();
+    expect((await hWin.history()).some((e) => e.type === "session/label")).toBe(true);
+    // usage：窗口（经 ensureFull）= 全量
+    expect((await hWin.usage()).current).toEqual((await hFull.usage()).current);
+    // fork 窗外 atEntryId（压缩点之前——ensureFull 后合法）
+    const forked = await hWin.fork({ atEntryId: preAnchorId });
+    expect(forked.sessionId).not.toBe(sid);
+    await hWin.close();
+    await hFull.close();
+  });
+
+  it("d. 链式钉：父压缩点晚于子分叉点——窗口态子会话投影 = 全量态 deep equal（祖先链安全判据行为钉）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t11d-"));
+    const parentSid = "s_t11p";
+    const { preAnchorId } = buildBig(join(dir, "sessions"), parentSid);
+    // 子会话：header{parentSession} + session/fork{sourceEntryId=preAnchorId} + 自有事件（小文件全量装载）
+    const childLines = [
+      JSON.stringify({ format: 1, cwd: "/r", parentSession: parentSid, v: 1, id: "e_c1", parentId: null, seq: 1, ts: "t", type: "session/header" }),
+      JSON.stringify({ sourceEntryId: preAnchorId, parentSession: parentSid, v: 1, id: "e_c2", parentId: "e_c1", seq: 2, ts: "t", type: "session/fork" }),
+      JSON.stringify({ content: [{ kind: "text", text: "子会话问" }], v: 1, id: "e_c3", parentId: "e_c2", seq: 3, ts: "t", type: "user/message" }),
+    ];
+    mkdirSync(join(dir, "sessions", "s_t11kid", "agents"), { recursive: true });
+    writeFileSync(join(dir, "sessions", "s_t11kid", "agents", "session.jsonl"), childLines.join("\n") + "\n");
+    const hWin = await createHarness(harnessOpts(dir, "s_t11kid", "window"));
+    const winEvents = await hWin.history();
+    await hWin.close();
+    const hFull = await createHarness(harnessOpts(dir, "s_t11kid", "full"));
+    const fullEvents = await hFull.history();
+    await hFull.close();
+    expect(deriveMessages(winEvents)).toEqual(deriveMessages(fullEvents)); // 安全判据生效：父层 ensureFull 后按全量前缀切片
+    expect(winEvents.some((e) => e.id === preAnchorId)).toBe(true); // 分叉锚在投影内
   });
 });

@@ -373,6 +373,14 @@ const settingsDeps: SettingsUiDeps = {
   hooksDeps,
   mcpDeps,
 };
+// 界面模式解析上移（T11 m5-resume-perf）：初始 createSession 的行模式装载判据（deps.isFullscreen）
+// 需在 createSession 求值期读到 tuiMode——原声明位（runFullScreen 装配段前）晚于首个 createSession
+// 调用，TDZ 炸启动。依赖（args/configFace/TTY）此点全就绪，纯前移零行为变。
+// 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
+// 界面模式（F6）：--tui 旗标 > 配置 [tui] mode > TTY 缺省（resolveTuiMode 纯函数可测；
+// 运行期不切换——Ctrl+T 互切已下线，用户拍板）
+const cfgTuiMode = configFaceTui();
+let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
 try {
   h = await createSession(sessionDeps);
 } catch (err) {
@@ -518,11 +526,6 @@ const sinkFor = (): { write(s: string): void; activity(c: StreamChunk): void; en
         end: () => lv.end(),
       };
 
-// 界面模式（F3）：TTY 缺省 full（全屏双栏主模式），--tui line 显式降级滚动流；非 TTY 恒 line（硬保底）。
-// 界面模式（F6）：--tui 旗标 > 配置 [tui] mode > TTY 缺省（resolveTuiMode 纯函数可测；
-// 运行期不切换——Ctrl+T 互切已下线，用户拍板）
-const cfgTuiMode = configFaceTui();
-let tuiMode: "line" | "full" = resolveTuiMode(args.tui, cfgTuiMode, process.stdout.isTTY === true && process.stdin.isTTY === true);
 // LaTeX 数学渲染开关（mdpipe 批 T7，设计空白 #12/#13）：[tui] latex 缺省开，启动读一次注入，
 // 改配置重启生效（/reload 热切换不做——本仓配置面无热读口，诚实登记）
 setLatexEnabled(resolveLatexFlag(configFaceTuiLatex()));
