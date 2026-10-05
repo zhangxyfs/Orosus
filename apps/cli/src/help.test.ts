@@ -98,3 +98,16 @@ describe("命令参数补全第三职（m5 T15——模块命令 completeArg 委
 		expect(line).toBe("/mo");
 	});
 });
+
+describe("T12 m5-resume-perf：/help 三处同步（Alt+S 步骤收展 / 懒分页 / Alt+O 聚合组）", () => {
+	it("① Alt+S 行在列（轮内步级折叠——默认保留最近 30 步，排 Alt+F 后）", () => {
+		expect(HELP_TEXT).toContain("Alt+S       展开 / 收起一轮内被折叠的前序步骤（默认保留最近 30 步）");
+	});
+	it("② PgUp/PgDn 行含懒分页半句（翻到顶继续按可加载更早历史）", () => {
+		expect(HELP_TEXT).toContain("翻到顶继续按可加载更早历史（懒分页）");
+	});
+	it("③ Alt+O 行含同名工具聚合组描述（Used Read N 个文件）", () => {
+		expect(HELP_TEXT).toContain("同名工具聚合组");
+		expect(HELP_TEXT).toContain("Used Read N 个文件");
+	});
+});

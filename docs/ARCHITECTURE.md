@@ -718,6 +718,25 @@ compactOnce：
 
 **恢复**：摘要尾部 recoveryFooter 指引模型回 `~/.orosus/sessions/` 日志 grep 捞细节（append-only 不丢）；keepUserAt 随事件落盘，冷启动重放由 core convert.ts 应用同一变换（铁律 2 双写，测试钉一致）。Ctrl+O 全屏/行模式回看全部历史压缩摘要（/summary 已退役）。
 
+### 10.3 压缩载荷 v4 自包含与会话窗口装载（m5-resume-perf）
+
+**v4 载荷**（`turn/compaction`，2026-10-05 起）：`{ trigger, summary, keepUserHead, keptUsers, elidedCount, droppedCount }`——`keptUsers` 为保留用户消息的**完整投影形态**内联（stripImages 后的 ModelMessage 快照，含部件边界与 origin；`elidedCount` = MI-12 真省略数 `总条目−保留条目`）。投影分支判据 = `Array.isArray(keptUsers)` 在场性（信封 v:1 后置覆盖抹载荷 v 字段，判据用字段在场性）→ 直接拼 `[头保留, elision, 尾保留, 摘要]`，**不访问 out 历史与下标**——窗口重放（压缩点起读、前缀零装载）与全量重放投影字节一致。老 v2（keepFrom）/v3（keepUserAt 下标回取）事件一字不重写、永远回退全量装载（下标在窗口态全部越界，保留消息会静默丢失）。
+
+**事件索引**（D12 混合形态：文件当账本、数据库当索引）：独立库 `~/.orosus/db/event-index.sqlite`（与树索引同目录不共库、生命周期互不牵连）；表 `event_index(bucket, session_id, seq)` 主键存字节定位（`byte_offset`/`byte_length`，不存正文）+ `event_index_files` stamp 表（mtime+size 双判 + `indexed_bytes` 续读锚）。随 jsonl 追加增量维护（append 从 indexed_bytes 追尾、size 变小全量重建、盘上消失 sweep；建行 = 1MB 块字节扫 + 信封尾锚定嗅探 seq/type，不 JSON.parse 全文）；坏库删本库重建。**索引是缓存非事实源——任何时刻可安全删除**，删后下次打开走嗅探备胎顺手重建。行嗅探依据：SessionEvent 落盘 = `{...fields, v,id,parentId,seq,ts,type}`（payload 前、信封六键后、type 恒末键）——`,"type":"tok"}` 恰在行尾 + `,"seq":N` 尾部定位。
+
+**三层装载**（JsonlSessionStore，`load:"window"` opt-in——harness 装配层决定）：
+| 层 | 判据 | 行为 |
+|---|---|---|
+| ①全量快路径 | 文件 < 5MB（D6，cc 同值） | 整读 parse（行为零变化） |
+| ②索引主路 | ≥5MB 且 lastCompaction 命中 v4 | 头种子（16KB：header/label/fork）+ eventsFrom 连续段 pread——**前面字节零接触**；坏行即降级（装载永不因索引坏而死） |
+| ③前向嗅探备胎 | 索引不可用/v2v3/漂移 | 1MB 块前向扫：compaction 必 parse（v4 清零累积器；v2/v3 无条件转全量）、压缩点前跳过 parse、后段入累积器；**扫描产出顺手写索引（本次备胎下次索引）** |
+
+兜底铁律：等价不可证 = 回退全量，宁慢不错。全量消费点（usage/fork 分叉/label 预算外）经 `ensureFull()` 懒升级（T8/T10 接线）；祖先链窗口安全判据：分叉点不在父层窗口镜像内 → 父层先 ensureFull 再切片（fork.ts openSessionView）。`OROSUS_SESSION_LOAD=full` 一键回现状（逃生阀）；行模式恒全量（echoHistory 只翻已载入行）；子代理 store 恒全量（双保险丝天然有界）。resume 耗时埋点 `session.load.resumed { duration_ms, mode: index|sniff|full, fallback? }`。
+
+**感知层**：切会话先画后注水（框架先亮 +「正在加载会话历史…」，createSession 异步注水，isSwitching 门）；轮内步级折叠（Alt+S，每轮保留最近 30 步，env `OROSUS_TUI_KEEP_STEPS` 覆盖、0=常开）；**翻到顶懒分页**（PgUp/滚轮到顶 → 防抖 150ms → `h.eventsBefore`（索引取段、一页 500 事件、不设压缩边界——翻过压缩行取压缩前原文）→ `dm.prependHistory` 头部插页；底部锚定滚动几何天然钉住视口；到头 toast「已到会话开头」停触）。输入召回 sidecar `agents/inputs.jsonl`（每条用户键入一行，帽 100——与大会话转录彻底解耦；老会话降级镜像窗口翻）。env 总表：`OROSUS_SESSION_LOAD`（=full 回全量装载）、`OROSUS_TUI_KEEP_STEPS`（步级折叠保留数，0 不折）、`OROSUS_TUI_MAX_TURNS`（轮次滑窗保留数，0 不裁）。
+
+**真机走查清单**：老 v3 压缩会话打开（应全量装载不炸）/ 新压缩会话打开（窗口秒开）/ ↑ 召回（sidecar 池）/ 翻到顶持续上翻 / 翻过压缩行继续取压缩前原文 / 补页后滚回底部（滑窗照常裁）/ Alt+S 步骤收展 / fork 窗外分叉 / 逃生阀 OROSUS_SESSION_LOAD=full / 索引库删除后自动重建。
+
 ---
 
 ## 11. 技能系统（skill）

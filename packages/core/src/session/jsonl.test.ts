@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { appendFileSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, rmSync, utimesSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readSync, rmSync, utimesSync, writeFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

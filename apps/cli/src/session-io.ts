@@ -1,6 +1,6 @@
 import { join, dirname } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
-import { appendInput, createHarness, locateSessionFile, readSessionHead, isEmptySessionHead, purgeSessionDir, readInputs, encodeCwd } from "@orosus/core";
+import { createHarness, locateSessionFile, readSessionHead, isEmptySessionHead, purgeSessionDir, readInputs, encodeCwd } from "@orosus/core";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { CommandUi, HostInfo, SettingsService } from "@orosus/contracts/module";
 import { BUILTIN_MODULES } from "./builtins.ts";
