@@ -4404,3 +4404,29 @@ describe("T14 m5-resume-perf: 翻到顶懒分页（防抖触发 + 到头 toast +
 		app.stop?.();
 	});
 });
+
+describe("T4b m5-resume-perf: 就地换页配套 sessionSwapped（懒分页到头态随会话重置）", () => {
+	it("到头（exhausted）后 sessionSwapped 重置——requestOlderPage 可再次触发取段", async () => {
+		let calls = 0;
+		const { app } = rig([], 100, 30, {
+			fetchOlderPage: async () => {
+				calls++;
+				return calls === 1; // 第一次有更早、第二次到头……重置后第三次再有
+			},
+		});
+		app.requestOlderPage();
+		await flush(300);
+		expect(calls).toBe(1);
+		app.requestOlderPage();
+		await flush(300);
+		expect(calls).toBe(2); // 到头
+		app.requestOlderPage();
+		await flush(300);
+		expect(calls).toBe(2); // exhausted 停触
+		app.sessionSwapped(); // 换会话——重置
+		app.requestOlderPage();
+		await flush(300);
+		expect(calls).toBe(3); // 新会话可重新上翻
+		app.stop?.();
+	});
+});

@@ -657,3 +657,14 @@ describe("输入召回旁注写侧（2026-10-03 拍板「↑ 召回 = 我输入�
     expect(src).toContain("app.seedHistory(isSwitching ? [] : inputHistoryFor(activeDirRef(), h.sessionId, await h.history()))"); // 播种走 session-io（T13 sidecar 优先、老会话降级；T4 切换期跳过、注水完成补挂）
   });
 });
+
+describe("T4b m5-resume-perf: 全屏切会话就地换页（不退出 FullApp——闪空根因拆除）", () => {
+	it("接线源面钉（CM-16② 同困境退而钉源面）：runSubmit 拦截 pendingSwitchSid → switchInPlace 原子换 dm（不设 action=switch 退出）", () => {
+		tmp("t4b-pin");
+		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+		expect(src).toContain('if (r === "switch" && pendingSwitchSid !== undefined)'); // 拦截判据
+		expect(src).toContain("switchInPlace(sid);"); // 就地换页（无 action 退出）
+		expect(src).toContain("dm = next;"); // 原子换行源（io.docTotal/docWindow 现读模块级 dm）
+		expect(src).toContain("app.sessionSwapped();"); // 懒分页到头态重置
+	});
+});

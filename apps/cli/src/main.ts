@@ -1406,6 +1406,13 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       try {
         const emit = busyExec ? (s: string) => dm.pushLine(s) : (s: string) => dm.pushMd(s, streamW()); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
         const r = await processReplLine(text, emit);
+        if (r === "switch" && pendingSwitchSid !== undefined) {
+          // T4b：/resume /sessions 切换就地换页——不退出 FullApp（闪空根因），旧内容留屏待原子替换
+          const sid = pendingSwitchSid;
+          pendingSwitchSid = undefined;
+          switchInPlace(sid);
+          return; // void-async 内 return：finally 照走（inflight/setBusy 复位 ✓）
+        }
         if (modelBefore !== undefined) reportModelSwitch(modelBefore);
         if (effortCmd) reportEffortSwitch(effortBefore);
         if (!busyExec) {
@@ -1429,6 +1436,58 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         } else {
           void refreshPanel(modulesDeps); // busy 即改档（/title /permission…）也要即时刷面板（2026-09-23：/title 改名单元格陈旧前案）
         }
+      }
+    })();
+  };
+
+  // T4b（m5-resume-perf 走查修）就地换页：full 模式切会话不再退出 FullApp——alt-screen 退出重进
+  // 就是「瞬间啥都不显示」的根因。旧内容留屏、isSwitching 门拦提交（toast 反馈装载中）、装载
+  // 完成后原子换 dm 上屏（io.docTotal/docWindow 每帧现读模块级 dm——换引用即换行源；新 dm 连同
+  // 滑窗/账本在屏下建好再整体换上，旧 dm 整体弃置）。/new /fork 仍走退出重进路径（同步换会话在
+  // processReplLine 已完成，改造属后续批）。
+  const switchInPlace = (sid: string): void => {
+    const gate = switchBusyGate(isSwitching);
+    if (gate.blocked) { notify(gate.message); return; }
+    isSwitching = true;
+    notify("正在加载会话历史…");
+    void (async () => {
+      try {
+        const prepared = await prepareSwitch(sid, sessionDeps, notify);
+        if (prepared === undefined) return; // 未找到：旧会话未动（prepareSwitch 已 toast）
+        applySwitch(prepared, sessionDeps);
+        const next = newMainDocModel();
+        for (const l of ASCII_BANNER(OROSUS_VERSION)) next.pushLine(l);
+        for (const line of banner(prepared.h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: prepared.h.graph().services.listProviders().map((p) => p.name) }) })) next.pushLine(line);
+        const hist = await prepared.h.history();
+        next.historyFrom(hist, streamW()); // 屏下建好（含 resume 即裁）再上屏——换页帧即终态
+        dm = next;
+        attachRender(prepared.h); // 绑新 h 事件流到新 dm（attachRender 闭包现读模块级 dm）
+        app.seedHistory(inputHistoryFor(activeDirRef(), prepared.h.sessionId, hist));
+        // UX 态重置（对齐旧路径「新 FullApp=干净开局」语义）：滚动贴底/输入清空/弹窗关/队列清
+        const st = app.state;
+        st.scrollBack = 0;
+        st.input = "";
+        st.cursor = 0;
+        st.inputScroll = 0;
+        st.selAnchor = -1;
+        st.historyDraft = undefined;
+        st.overlayOpen = false;
+        st.atMenu = undefined;
+        st.diagOpen = false;
+        pendingSubmits.length = 0;
+        app.sessionSwapped(); // T14 懒分页到头态重置（新会话可重新上翻）
+        void refreshPanel(modulesDeps);
+        app.scheduler.requestImmediateRender();
+      } catch (err) {
+        // 空悬窗口兜底（与 T4 同款）：旧会话已 close + 新会话构造失败 → toast + 重建空会话
+        settleCommandError(err);
+        try {
+          const fresh = await createSession(sessionDeps);
+          applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
+          attachRender(fresh);
+        } catch (fatal) { settleCommandError(fatal); }
+      } finally {
+        isSwitching = false;
       }
     })();
   };
@@ -1550,42 +1609,10 @@ if (args.print === undefined) try {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);
     }
-    // T4（m5-resume-perf）先画后注水：full 模式切换在此兑现——框架（横幅+加载行）先亮、FullApp 即刻
-    // 接管终端，prepareSwitch（close+createSession 大文件读盘）异步走、完成后 attachRender+historyFrom
-    // 注水；行模式与 /new /fork 等同步换会话路径照旧（attachRender(h) 原位）。
-    const switchSid = pendingSwitchSid;
-    pendingSwitchSid = undefined;
-    if (switchSid !== undefined) {
-      dm.pushLine(theme.fg("muted", "正在加载会话历史…"));
-      isSwitching = true;
-      void (async () => {
-        try {
-          const prepared = await prepareSwitch(switchSid, sessionDeps, notify);
-          if (prepared !== undefined) {
-            applySwitch(prepared, sessionDeps);
-            attachRender(prepared.h);
-            const hist = await prepared.h.history();
-            dm.historyFrom(hist, streamW());
-            activeApp?.seedHistory(inputHistoryFor(activeDirRef(), h.sessionId, hist)); // 输入召回播种补挂（T13 sidecar 优先）
-            void refreshPanel(modulesDeps);
-          }
-        } catch (err) {
-          // 旧会话已 close + 新会话构造失败 = 空悬窗口：toast + 重建空会话兜底（void-async 不留
-          // unhandled rejection；现状同步路径同样存在该窗口——close 后抛错直达 runSubmit 网兜，本批不放大它）
-          settleCommandError(err);
-          try {
-            const fresh = await createSession(sessionDeps);
-            applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
-            attachRender(fresh);
-          } catch (fatal) { settleCommandError(fatal); }
-        } finally {
-          isSwitching = false;
-          activeApp?.repaint(); // 注水完成即刻重绘（不等 1s 心跳/下一键）
-        }
-      })();
-    } else {
-      attachRender(h);
-    }
+    // T4b（m5-resume-perf 走查修）：full 模式 /resume /sessions 切换改就地换页（runSubmit 拦截
+    // pendingSwitchSid → switchInPlace，不退出 FullApp——闪空根因拆除）；本循环顶只服务启动与
+    // /new //fork 退出重进路径。
+    attachRender(h);
     if (pendingEcho !== undefined) {
       // 延期的切换回显落新 dm（F5 二轮⑯）；行模式已在 switchTo 内即时回显，不会走到这
       const pe = pendingEcho;

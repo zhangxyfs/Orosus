@@ -204,6 +204,17 @@ export class FullApp {
 		}, 150);
 	}
 
+	/** 就地换页配套（m5-resume-perf 走查修）：宿主换会话后调用——重置懒分页到头态与在飞防抖，
+	 *  新会话可重新上翻（不重置则上一会话的 olderExhausted 会吃掉新会话的到顶触发）。 */
+	sessionSwapped(): void {
+		if (this.olderTimer !== undefined) {
+			clearTimeout(this.olderTimer);
+			this.olderTimer = undefined;
+		}
+		this.olderExhausted = false;
+		this.olderInflight = false;
+	}
+
 	start(): void {
 		this.full.enter();
 		this.term.start();

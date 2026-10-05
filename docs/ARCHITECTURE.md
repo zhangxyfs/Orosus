@@ -733,7 +733,7 @@ compactOnce：
 
 兜底铁律：等价不可证 = 回退全量，宁慢不错。全量消费点（usage/fork 分叉/label 预算外）经 `ensureFull()` 懒升级（T8/T10 接线）；祖先链窗口安全判据：分叉点不在父层窗口镜像内 → 父层先 ensureFull 再切片（fork.ts openSessionView）。`OROSUS_SESSION_LOAD=full` 一键回现状（逃生阀）；行模式恒全量（echoHistory 只翻已载入行）；子代理 store 恒全量（双保险丝天然有界）。resume 耗时埋点 `session.load.resumed { duration_ms, mode: index|sniff|full, fallback? }`。
 
-**感知层**：切会话先画后注水（框架先亮 +「正在加载会话历史…」，createSession 异步注水，isSwitching 门）；轮内步级折叠（Alt+S，每轮保留最近 30 步，env `OROSUS_TUI_KEEP_STEPS` 覆盖、0=常开）；**翻到顶懒分页**（PgUp/滚轮到顶 → 防抖 150ms → `h.eventsBefore`（索引取段、一页 500 事件、不设压缩边界——翻过压缩行取压缩前原文）→ `dm.prependHistory` 头部插页；底部锚定滚动几何天然钉住视口；到头 toast「已到会话开头」停触）。输入召回 sidecar `agents/inputs.jsonl`（每条用户键入一行，帽 100——与大会话转录彻底解耦；老会话降级镜像窗口翻）。env 总表：`OROSUS_SESSION_LOAD`（=full 回全量装载）、`OROSUS_TUI_KEEP_STEPS`（步级折叠保留数，0 不折）、`OROSUS_TUI_MAX_TURNS`（轮次滑窗保留数，0 不裁）。
+**感知层**：切会话就地换页（full 模式不退出 FullApp——旧内容留屏、装载完成后原子换 dm 上屏，装载期 isSwitching 门 + toast；/new /fork 仍走退出重进）；轮内步级折叠（Alt+S，每轮保留最近 30 步，env `OROSUS_TUI_KEEP_STEPS` 覆盖、0=常开）；**翻到顶懒分页**（PgUp/滚轮到顶 → 防抖 150ms → `h.eventsBefore`（索引取段、一页 500 事件、不设压缩边界——翻过压缩行取压缩前原文）→ `dm.prependHistory` 头部插页；底部锚定滚动几何天然钉住视口；到头 toast「已到会话开头」停触）。输入召回 sidecar `agents/inputs.jsonl`（每条用户键入一行，帽 100——与大会话转录彻底解耦；老会话降级镜像窗口翻）。env 总表：`OROSUS_SESSION_LOAD`（=full 回全量装载）、`OROSUS_TUI_KEEP_STEPS`（步级折叠保留数，0 不折）、`OROSUS_TUI_MAX_TURNS`（轮次滑窗保留数，0 不裁）。
 
 **真机走查清单**：老 v3 压缩会话打开（应全量装载不炸）/ 新压缩会话打开（窗口秒开）/ ↑ 召回（sidecar 池）/ 翻到顶持续上翻 / 翻过压缩行继续取压缩前原文 / 补页后滚回底部（滑窗照常裁）/ Alt+S 步骤收展 / fork 窗外分叉 / 逃生阀 OROSUS_SESSION_LOAD=full / 索引库删除后自动重建。
 
