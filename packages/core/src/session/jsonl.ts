@@ -242,6 +242,66 @@ function sqliteSiblingUsage(file: string): { input: number; output: number; isFo
   }
 }
 
+/** jsonl 兄弟会话用量聚合（T3 从 lifetimeUsage 兄弟循环抽出——与 sqliteSiblingUsage 成对，同挂缓存）。
+ *  口径与抽出前逐行等价：usageDelta 双形态、首行 header 判 fork 子体、坏行跳行不炸。读失败（文件竞态
+ *  消失）= undefined 跳过——旧实现 readFileSync 无 try 会炸整个 /usage，统一按 sqlite 兄弟同口径容错。 */
+function jsonlSiblingUsage(file: string): { input: number; output: number; isForkChild: boolean } | undefined {
+  let input = 0;
+  let output = 0;
+  let isForkChild = false;
+  let seenFirst = false;
+  let lines: string[];
+  try {
+    lines = readFileSync(file, "utf8").split("\n");
+  } catch {
+    return undefined;
+  }
+  for (const line of lines) {
+    if (line === "") continue;
+    let e: SessionEvent;
+    try {
+      e = JSON.parse(line) as SessionEvent;
+    } catch {
+      continue; // 他会话 torn tail：累计值不因坏行中断
+    }
+    if (!seenFirst) {
+      seenFirst = true;
+      const ps = (e as { parentSession?: unknown }).parentSession;
+      if (e.type === "session/header" && ps !== null && ps !== undefined) isForkChild = true;
+    }
+    if (isForkChild) continue; // 子体整文件跳过——含 sessions 计数
+    const d = usageDelta(e);
+    if (d !== undefined) {
+      input += d.input;
+      output += d.output;
+    }
+  }
+  return { input, output, isForkChild };
+}
+
+/** T3（m5-resume-perf）：兄弟聚合 (mtime,size) 缓存——append-only 语义下 (mtime,size) 不变 ⇒ 内容不变
+ *  （mtime+size 双判，同毫秒坑在档由调用方 utimes 前移兜），命中免读盘：/settings 每开重付 177ms
+ *  全语料扫描归零。key=文件路径；agg 为 undefined 也记键（坏库/消失的结果同样缓存，mtime 变才重试）。 */
+const usageCache = new Map<string, { mtimeMs: number; size: number; agg: { input: number; output: number; isForkChild: boolean } | undefined }>();
+
+/** 兄弟聚合统一入口：mtime+size 双判缓存，miss/变更才重读（jsonl 兄弟逐行 / sqlite 兄弟开库）。 */
+function siblingUsageCached(file: string): { input: number; output: number; isForkChild: boolean } | undefined {
+  let mtimeMs: number;
+  let size: number;
+  try {
+    const st = statSync(file);
+    mtimeMs = st.mtimeMs;
+    size = st.size;
+  } catch {
+    return undefined; // 文件消失（竞态）——跳过该兄弟
+  }
+  const hit = usageCache.get(file);
+  if (hit !== undefined && hit.mtimeMs === mtimeMs && hit.size === size) return hit.agg;
+  const agg = file.endsWith(".sqlite") ? sqliteSiblingUsage(file) : jsonlSiblingUsage(file);
+  usageCache.set(file, { mtimeMs, size, agg });
+  return agg;
+}
+
 /** append-only JSONL 后端（§6.1 写入硬化三件套 + 每文件写队列串行化）。
  *  会话树批 T3 目录化：每会话一目录——主文件落 <桶>/<sid>/agents/session.jsonl（决策点 4/16）。
  *  懒建语义保持（D46）：零 append 零落盘，连会话目录也不建；首写时递归建目录（0o700）+ 文件（0o600）。 */
@@ -455,48 +515,14 @@ export class JsonlSessionStore implements SessionStore {
       .toSorted((a, b) => a.id.localeCompare(b.id));
     for (const sibling of siblings) {
       // CS-14（2026-09-28 code review）：旧 filter 只留 .jsonl——sessionStore 从 jsonl 切 sqlite 后同桶并存
-      // 两种后端（tree.test「混合后端同树共览」明确支持），/usage 项目累计静默丢掉全部 sqlite 会话。sqlite
-      // 兄弟走同口径聚合（usageDelta + fork 子体跳过），jsonl 兄弟走原逐行循环（torn tail 跳坏行）。
-      if (sibling.file.endsWith(".sqlite")) {
-        const agg = sqliteSiblingUsage(sibling.file);
-        if (agg === undefined || agg.isForkChild) continue; // 子体整库跳过——含 sessions 计数
-        input += agg.input;
-        output += agg.output;
-        if (agg.input > 0 || agg.output > 0) sessions++;
-        continue;
-      }
-      let fileInput = 0;
-      let fileOutput = 0;
-      let isForkChild = false;
-      let seenFirst = false;
-      for (const line of readFileSync(sibling.file, "utf8").split("\n")) {
-        if (line === "") continue;
-        let e: SessionEvent;
-        try {
-          e = JSON.parse(line) as SessionEvent;
-        } catch {
-          continue; // 他会话 torn tail：累计值不因坏行中断
-        }
-        if (!seenFirst) {
-          seenFirst = true;
-          const ps = (e as { parentSession?: unknown }).parentSession;
-          if (e.type === "session/header" && ps !== null && ps !== undefined) isForkChild = true;
-        }
-        if (isForkChild) continue; // 子体整文件跳过——含 sessions 计数
-        // CS-06（2026-09-28 code review）：兄弟循环改走 usageDelta 共用口径——旧内联分支只有 chunk/message
-        // 两形态，session/subagent-usage 行落穿不计：重启后 /usage 项目累计丢失所有历史会话的子代理用量，
-        // 而当前会话照计（sumUsage 有该分支）——同一天数字随重启跳变。与 torn-tail 跳坏行的容错需求不冲突
-        //（坏行在上方 JSON.parse 即 continue，到达不了这里）。
-        const d = usageDelta(e);
-        if (d !== undefined) {
-          fileInput += d.input;
-          fileOutput += d.output;
-        }
-      }
-      if (isForkChild) continue;
-      input += fileInput;
-      output += fileOutput;
-      if (fileInput > 0 || fileOutput > 0) sessions++;
+      // 两种后端（tree.test「混合后端同树共览」明确支持），/usage 项目累计静默丢掉全部 sqlite 会话。两后端
+      // 统一走 siblingUsageCached（T3：mtime+size 双判缓存——append-only 下命中免读盘，177ms 重付归零；
+      // 口径 usageDelta + fork 子体跳过不变）。
+      const agg = siblingUsageCached(sibling.file);
+      if (agg === undefined || agg.isForkChild) continue; // 子体整文件/库跳过——含 sessions 计数
+      input += agg.input;
+      output += agg.output;
+      if (agg.input > 0 || agg.output > 0) sessions++;
     }
     return { input, output, sessions };
   }

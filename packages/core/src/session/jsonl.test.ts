@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -395,5 +395,44 @@ describe("T1 m5-resume-perf: repairFile 与构造镜像合读（构造期一次�
     // 镜像与修复后文件一致（含补入的 turn/end——镜像不能缺也不能 parse 炸）
     expect((await s.all()).map((e) => e.id)).toEqual(onDisk.map((e) => e.id));
     await s.close();
+  });
+});
+
+describe("T3 m5-resume-perf: usage 兄弟聚合 (mtime,size) 缓存", () => {
+  it("两次 lifetimeUsage：第二次兄弟文件 0 次读盘且数值一致；变更兄弟后仅重读该文件", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t3-"));
+    const mk = async (sid: string, input: number, output: number): Promise<void> => {
+      const s = new JsonlSessionStore({ dir: dir!, sessionId: sid });
+      await s.append("session/header", { cwd: dir, parentSession: null });
+      await s.append("assistant/message", { content: [{ kind: "text", text: "答" }], usage: { input, output } });
+      await s.close();
+    };
+    await mk("s_a", 10, 4);
+    await mk("s_b", 5, 1);
+    const cur = new JsonlSessionStore({ dir: dir!, sessionId: "s_cur" });
+    await cur.append("session/header", { cwd: dir, parentSession: null });
+    const fa = join(dir!, "s_a", "agents", "session.jsonl");
+    const fb = join(dir!, "s_b", "agents", "session.jsonl");
+    vi.mocked(readFileSync).mockClear();
+    const first = await cur.lifetimeUsage();
+    expect(first).toEqual({ input: 15, output: 5, sessions: 2 });
+    const firstReadsA = vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fa).length;
+    expect(firstReadsA).toBe(1);
+    // 第二次：缓存命中——兄弟文件 0 次读盘，数值一致
+    vi.mocked(readFileSync).mockClear();
+    const second = await cur.lifetimeUsage();
+    expect(second).toEqual({ input: 15, output: 5, sessions: 2 });
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fa)).toHaveLength(0);
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fb)).toHaveLength(0);
+    // 改写 s_a（append 新用量行 + mtime 强制前移防同毫秒）→ 第三次仅重读 s_a
+    appendFileSync(fa, JSON.stringify({ v: 1, id: "e_x", parentId: null, seq: 9, ts: "t", type: "assistant/message", content: [{ kind: "text", text: "答" }], usage: { input: 100, output: 50 } }) + "\n");
+    const future = new Date(Date.now() + 5000);
+    utimesSync(fa, future, future);
+    vi.mocked(readFileSync).mockClear();
+    const third = await cur.lifetimeUsage();
+    expect(third).toEqual({ input: 115, output: 55, sessions: 2 });
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fa)).toHaveLength(1);
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fb)).toHaveLength(0); // s_b 缓存仍命中
+    await cur.close();
   });
 });
