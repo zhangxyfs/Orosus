@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, mkdirSync, existsSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chunk } from "@orosus/contracts/provider";
@@ -2142,6 +2142,55 @@ describe("D14 ③ 补接线（2026-10-05）：eventsBefore 翻页 miss 当场单
     expect(evs.map((e) => e.seq)).toEqual([4, 5, 6]);
     const evs2 = await h.eventsBefore(sid, 4, 10); // 索引已建——直接命中（1..3）
     expect(evs2.map((e) => e.seq)).toEqual([1, 2, 3]);
+    await h.close();
+  });
+});
+
+describe("走查问答修（2026-10-05）：翻页前索引新鲜度追平——活会话追加后不跳段", () => {
+  it("索引建到旧 EOF → 追加新轮 → eventsBefore 取到追加段（跳段=取到旧 EOF 以下的旧内容即红）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-pagefresh-"));
+    const sid = "s_pf";
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_f${String(seq).padStart(3, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "t", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    for (let i = 0; i < 4; i++) push({ content: [{ kind: "text", text: `旧问${i}` }] }, "user/message");
+    mkdirSync(join(dir, "sessions", sid, "agents"), { recursive: true });
+    const file = join(dir, "sessions", sid, "agents", "session.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    const dbFile = join(dir, "event-index.sqlite");
+    const { refreshEventIndex } = await import("./session/eventindex.ts");
+    const st1 = statSync(file);
+    await refreshEventIndex(dbFile, join(dir, "sessions"), [{ id: sid, file, dir: join(dir, "sessions"), mtimeMs: st1.mtimeMs, size: st1.size, bucket: "sessions" }]);
+    // 活会话追加新轮（索引不随之更新——写路径零改动）
+    const appends: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      appends.push(JSON.stringify({ content: [{ kind: "text", text: `新问${i}` }], v: 1, id: `e_a${i}`, parentId: prevId, seq, ts: "t", type: "user/message" }));
+      prevId = `e_a${i}`; seq++;
+    }
+    appendFileSync(file, appends.map((l) => l + "\n").join(""));
+    const future = new Date(Date.now() + 5000);
+    utimesSync(file, future, future);
+    // store 注入（绕过 resume 预刷新）逼出「索引落后 + 直接翻页」形态
+    const store = new JsonlSessionStore({ dir: join(dir, "sessions"), sessionId: sid });
+    const h = await createHarness({
+      store,
+      sessionsDir: join(dir, "sessions"),
+      sessionsRoot: join(dir, "sessions"),
+      eventIndexFile: dbFile,
+      diagDir: join(dir, "logs"),
+      modules: [fakeProviderModule("fake", script)],
+      config: { ...hermetic(dir), cliOverrides: { model: "fake/m" } },
+    });
+    // 锚落在追加段内（新轮被滑窗裁掉后的形态）——必须取到追加段（旧实现会跳回旧 EOF 以下）
+    const evs = await h.eventsBefore(sid, 7, 5);
+    expect(evs.map((e) => e.seq)).toEqual([2, 3, 4, 5, 6]); // 升序 5 条，含追加段首（seq 6）——不跳段（旧实现只会给 [1..5]）
     await h.close();
   });
 });

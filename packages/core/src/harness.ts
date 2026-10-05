@@ -1323,6 +1323,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     async eventsBefore(sessionId: string, beforeSeq: number, limitEvents = 500): Promise<SessionEvent[]> {
       if (baseStore instanceof ForkedSessionStore || !sqliteAvailable()) return []; // fork 复合视图：前缀在祖辈文件，本口恒空
       const file = join(sessionsDir, sessionId, "agents", "session.jsonl");
+      // 索引新鲜度追平（2026-10-05 走查问答修）：活会话持续追加后索引落后——翻页锚可能落在未索引
+      // 区间（轮次滑窗裁掉的新轮），查旧索引会跳段取更旧内容。mtime+size 双判命中零成本跳过、
+      // 落后增量追平（D14「随用随补」的翻页时机形态；失败走下方查空的 ③ 单会话补建兜底）。
+      try {
+        const st = statSync(file);
+        await refreshEventIndex(eventIndexFile, options.sessionsRoot ?? dirname(sessionsDir),
+          [{ id: sessionId, file, dir: sessionsDir, mtimeMs: st.mtimeMs, size: st.size, bucket: basename(sessionsDir) }]);
+      } catch { /* best-effort */ }
       let segs = eventsBeforeQuery(eventIndexFile, basename(sessionsDir), sessionId, beforeSeq, limitEvents);
       if (segs.length === 0) {
         // D14 ③（2026-10-05 补接线）：翻页恰好无索引（会话从未入索引——<5MB 全量装载不走嗅探建行）
