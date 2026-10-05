@@ -1,9 +1,16 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSessionTree, readSessionHead } from "./tree.ts";
+import { buildSessionTree, countNewlines, readSessionHead } from "./tree.ts";
 import { sqliteAvailable } from "./sqlite.ts";
+
+// T2（m5-resume-perf）读法审计：node:fs ESM 命名空间不可 spyOn，部分替换 mock 拦截 readFileSync——
+// 包装 actual 行为零变化，仅多记账（断言「读全文但不带 encoding=Buffer、未做全量 utf8 decode」）。
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 let dir: string | undefined;
 const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), "orosus-tree-")));
@@ -189,5 +196,78 @@ describe("sqlite 后端树快照读法（会话树批 T8——混合后端同树
     expect(nodes.find((n) => n.sessionId === "s_closed")?.label).toBe("关过的");
     expect(nodes.find((n) => n.sessionId === "s_live")?.label).toBe("活着的");
     await b.close();
+  });
+});
+
+describe("T2 m5-resume-perf: readSessionHead 字节级行数（/sessions 列表免全文件 utf8 decode）", () => {
+  it("countNewlines：\n 计数 + 末行无 \n 补 1（语义=行数非换行符数；多字节不炸）", () => {
+    expect(countNewlines(Buffer.from("a\nb\nc"))).toBe(3);
+    expect(countNewlines(Buffer.from("a\nb\nc\n"))).toBe(3);
+    expect(countNewlines(Buffer.from(""))).toBe(0);
+    expect(countNewlines(Buffer.from("中文一行\n第二行"))).toBe(2);
+    expect(countNewlines(Buffer.from("\n"))).toBe(1); // 单换行 = 一空行内容——计数口径从字节层出发
+  });
+
+  it("2MB 预算外大文件：ownLines 全行真值 + 元数据仍正确（预算内行才 decode）", () => {
+    const d = fresh();
+    const filler = JSON.stringify({ v: 1, id: "e_fill", parentId: null, seq: 9, ts: "t", type: "assistant/chunk", chunk: { type: "text", text: "x".repeat(200) } });
+    const lines = [
+      ev("e1", "session/header", { parentSession: null }),
+      ev("e2", "user/message", { content: [{ kind: "text", text: "大问" }] }),
+      ev("e3", "session/label", { label: "大标题" }),
+      ...Array(10000).fill(filler),
+    ];
+    const f = seed(d, "s_big", lines);
+    const h = readSessionHead(f)!;
+    expect(h.ownLines).toBe(lines.length); // 行数要真——10003 行
+    expect(h.label).toBe("大标题");
+    expect(h.firstUser).toBe("大问");
+    expect(h.parentSession).toBeNull();
+  });
+
+  it("对照钉：与旧 utf8 split 全读法 deep equal（同一文件两读法同果）", () => {
+    const d = fresh();
+    const lines = [
+      ev("e1", "session/header", { parentSession: "s0" }),
+      ev("e2", "session/fork", { sourceEntryId: "e0", parentSession: "s0" }),
+      ev("e3", "user/message", { content: [{ kind: "text", text: "对照问" }] }),
+      ev("e4", "session/label", { label: "对照名" }),
+      ev("e5", "assistant/message", { content: [{ kind: "text", text: "答" }] }),
+    ];
+    const f = seed(d, "s_cmp", lines);
+    // 旧实现 oracle（改前原文内联——utf8 全读 + 非空行 split）
+    const raw = readFileSync(f, "utf8");
+    const allLines = raw.split("\n").filter((l) => l !== "");
+    const oracle = { ownLines: allLines.length, sourceEntryId: null } as Record<string, unknown>;
+    let n = 0;
+    let bytes = 0;
+    for (const line of allLines) {
+      n++;
+      bytes += line.length;
+      if (n > 64 || bytes > 16 * 1024) break;
+      let e: Record<string, unknown>;
+      try { e = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+      if (e.type === "session/header" && oracle.parentSession === undefined) oracle.parentSession = typeof e.parentSession === "string" ? e.parentSession : null;
+      if (e.type === "session/fork") oracle.sourceEntryId = typeof e.sourceEntryId === "string" ? e.sourceEntryId : null;
+      if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") oracle.label = e.label;
+      if (oracle.firstUser === undefined && e.type === "user/message") {
+        const parts = (e.content ?? []) as { kind?: string; text?: string }[];
+        const t = parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join("").replace(/\s+/g, " ").trim();
+        if (t !== "") oracle.firstUser = t.slice(0, 60);
+      }
+    }
+    const h = readSessionHead(f)!;
+    expect({ label: h.label, firstUser: h.firstUser, parentSession: h.parentSession, sourceEntryId: h.sourceEntryId, ownLines: h.ownLines })
+      .toEqual({ label: oracle.label, firstUser: oracle.firstUser, parentSession: oracle.parentSession, sourceEntryId: oracle.sourceEntryId, ownLines: oracle.ownLines });
+  });
+
+  it("readFileSync 不带 encoding 调用（拿 Buffer 走字节层——全量 utf8 decode 不再发生）", () => {
+    const d = fresh();
+    const f = seed(d, "s_enc", [ev("e1", "session/header", { parentSession: null }), ev("e2", "user/message", { content: [{ kind: "text", text: "编码" }] })]);
+    vi.mocked(readFileSync).mockClear();
+    readSessionHead(f);
+    const calls = vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === f);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]).toBeUndefined(); // 无 encoding 参数 = Buffer 读（T2 前 = "utf8"）
   });
 });

@@ -56,39 +56,65 @@ export function isEmptySessionHead(head: SessionHead): boolean {
   return head.label === undefined && head.firstUser === undefined && (head.parentSession ?? null) === null && head.ownLines <= HEAD_MAX_LINES;
 }
 
-/** 读会话文件头部元数据（jsonl 读法，T7）：一次读全文，元数据解析限预算内、行数恒真。
+/** 字节层行数（T2 m5-resume-perf）：\n 计数 + 末行无 \n 补 1——语义是**行数**非换行符数，对齐
+ *  旧 utf8 split 非空行真值（append-only 写入器不产生中段空行，两口径恒等；外物写入的空行从字节层
+ *  出发计数，设计注记见方案 T2）。全程不 decode——大文件免全量 utf8 解码（71ms 列表主因）。 */
+export function countNewlines(buf: Buffer): number {
+  let n = 0;
+  let idx = buf.indexOf(0x0a);
+  while (idx !== -1) {
+    n++;
+    idx = buf.indexOf(0x0a, idx + 1);
+  }
+  if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) n++;
+  return n;
+}
+
+/** 读会话文件头部元数据（jsonl 读法，T7）：全量读**字节**（行数需全文件），元数据解析限预算内、
+ *  行数恒真；预算内行才 utf8 解码（T2 m5-resume-perf——/sessions 列表构建免全文件 decode）。
+ *  预算口径注记：HEAD_MAX_BYTES 从「字符数」（旧 utf8 行 .length）变为「字节数」——多字节内容下
+ *  预算更紧（16KB 字节 < 16K 字符），元数据（header/label/firstUser 几乎都在前几行）实际不受影响。
  *  文件不可读（不存在/损坏）= undefined。 */
 export function readSessionHead(file: string): SessionHead | undefined {
-  let raw: string;
+  let buf: Buffer;
   try {
-    raw = readFileSync(file, "utf8");
+    buf = readFileSync(file); // 不带 encoding = Buffer——字节层计数，免全量 decode（T2）
   } catch {
     return undefined;
   }
-  const allLines = raw.split("\n").filter((l) => l !== "");
-  const head: SessionHead = { ownLines: allLines.length, sourceEntryId: null }; // 无 session/fork（根会话）= null；有则覆盖
+  const head: SessionHead = { ownLines: countNewlines(buf), sourceEntryId: null }; // 无 session/fork（根会话）= null；有则覆盖
+  let pos = 0;
   let lines = 0;
   let bytes = 0;
-  for (const line of allLines) {
+  while (pos < buf.length) {
+    const nl = buf.indexOf(0x0a, pos);
+    const end = nl === -1 ? buf.length : nl;
     lines++;
-    bytes += line.length;
+    bytes += end - pos;
     if (lines > HEAD_MAX_LINES || bytes > HEAD_MAX_BYTES) break; // 元数据解析预算硬上限（行数已在上面取真值）
-    let e: { type?: string; label?: unknown; content?: unknown; parentSession?: unknown; sourceEntryId?: unknown };
-    try {
-      e = JSON.parse(line) as typeof e;
-    } catch {
-      continue; // torn tail 坏行跳过
+    if (end > pos) {
+      const line = buf.toString("utf8", pos, end);
+      // while 手动推进循环里不能 continue（会跳过 pos 推进死循环）——parse 失败置 undefined 走同径
+      let e: { type?: string; label?: unknown; content?: unknown; parentSession?: unknown; sourceEntryId?: unknown } | undefined;
+      try {
+        e = JSON.parse(line) as typeof e;
+      } catch {
+        e = undefined; // torn tail 坏行跳过
+      }
+      if (e !== undefined) {
+        if (e.type === "session/header") {
+          if (head.parentSession === undefined) head.parentSession = typeof e.parentSession === "string" ? e.parentSession : null;
+        }
+        if (e.type === "session/fork") head.sourceEntryId = typeof e.sourceEntryId === "string" ? e.sourceEntryId : null;
+        if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") head.label = e.label;
+        if (head.firstUser === undefined && e.type === "user/message") {
+          const parts = (e.content ?? []) as { kind?: string; text?: string }[];
+          const t = firstUserTitle(parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join(""));
+          if (t !== undefined) head.firstUser = t;
+        }
+      }
     }
-    if (e.type === "session/header") {
-      if (head.parentSession === undefined) head.parentSession = typeof e.parentSession === "string" ? e.parentSession : null;
-    }
-    if (e.type === "session/fork") head.sourceEntryId = typeof e.sourceEntryId === "string" ? e.sourceEntryId : null;
-    if (e.type === "session/label" && typeof e.label === "string" && e.label !== "") head.label = e.label;
-    if (head.firstUser === undefined && e.type === "user/message") {
-      const parts = (e.content ?? []) as { kind?: string; text?: string }[];
-      const t = firstUserTitle(parts.filter((p) => p.kind !== "reasoning").map((p) => p.text ?? "").join(""));
-      if (t !== undefined) head.firstUser = t;
-    }
+    pos = end + 1;
   }
   return head;
 }
