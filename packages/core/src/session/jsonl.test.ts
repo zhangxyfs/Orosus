@@ -1,10 +1,17 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore, repairFile, sessionAppendFlag } from "./jsonl.ts";
 import { sqliteAvailable } from "./sqlite.ts";
+
+// T1（m5-resume-perf）读盘计数：node:fs ESM 命名空间不可 spyOn（Cannot redefine），部分替换 mock 拦截
+// 所有导入方（jsonl.ts 源码内）的 readFileSync——包装 actual，行为零变化，仅多记账。
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 let dir: string | undefined;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
@@ -363,5 +370,30 @@ describe("/fork 用量去重（M4-2 T4/B3——子体 lineage 以父计，cc-hah
     const parentResumed = new JsonlSessionStore({ dir, sessionId: "s_parent" });
     expect(await parentResumed.lifetimeUsage()).toEqual({ input: 10, output: 4, sessions: 1 });
     await parentResumed.close();
+  });
+});
+
+describe("T1 m5-resume-perf: repairFile 与构造镜像合读（构造期一次读盘）", () => {
+  it("constructor 读盘恰 1 次——torn tail 修复与镜像装载共用一次读盘，修复动作照旧", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t1-"));
+    const file = join(dir, "s_torn", "agents", "session.jsonl");
+    mkdirSync(join(dir, "s_torn", "agents"), { recursive: true });
+    const good = [
+      JSON.stringify({ v: 1, id: "e_1", parentId: null, seq: 1, ts: "t", type: "session/header" }),
+      JSON.stringify({ v: 1, id: "e_2", parentId: "e_1", seq: 2, ts: "t", type: "turn/start" }),
+    ].join("\n");
+    writeFileSync(file, good + "\n" + '{"v":1,"id":"e_3","typ'); // 撕裂尾部
+    vi.mocked(readFileSync).mockClear();
+    const s = new JsonlSessionStore({ dir, sessionId: "s_torn" });
+    const calls = vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === file);
+    expect(calls).toHaveLength(1); // 现状=2：repairFile 一读 + 镜像装载一读
+    // torn tail 仍被修复（截断 + 补 turn/end，与现状一致）
+    const onDisk = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { id: string; type: string });
+    expect(onDisk).toHaveLength(3);
+    expect(onDisk[2]!.type).toBe("turn/end");
+    expect(onDisk[2]!.id).not.toBe("e_1");
+    // 镜像与修复后文件一致（含补入的 turn/end——镜像不能缺也不能 parse 炸）
+    expect((await s.all()).map((e) => e.id)).toEqual(onDisk.map((e) => e.id));
+    await s.close();
   });
 });

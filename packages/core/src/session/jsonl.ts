@@ -64,10 +64,14 @@ export function readLockPid(file: string): number | null {
  *  覆写中途再崩溃丢整段会话历史；且 openSessionView 上溯祖先时每层构造 JsonlSessionStore 都触发修复性
  *  改写（读意图写盘、暴露面随链长放大）。现在：torn tail 用 ftruncate 原地截断（字节偏移精确到坏行起点）、
  *  补事件/补缺尾换行用 appendFileSync 追加——任何时刻崩溃只留下「更短但合法」的文件，下次 repairFile
- *  幂等续修；好行的原始字节一概不动（旧覆写会顺带重排/重序列化，现为保真）。 */
-export function repairFile(path: string): { truncated: boolean; interruptedClosed: boolean } {
+ *  幂等续修；好行的原始字节一概不动（旧覆写会顺带重排/重序列化，现为保真）。
+ *  T1（m5-resume-perf）：opts.raw 免二次读盘（调用方已读内容直接复用）；opts.probeOnly 只探测判断不写盘。
+ *  传 raw 时回传 repaired = 修复动作后盘上最终内容（修复态与 raw 不一致——torn tail 截断/补 synthesized
+ *  /补尾换行都会改内容；调用方建内存镜像必须用修复后形态，否则 parse 炸/缺事件）。不传 raw 时 repaired
+ *  不回传（老调用方零感知，签名向后兼容）。 */
+export function repairFile(path: string, opts?: { probeOnly?: boolean; raw?: string }): { truncated: boolean; interruptedClosed: boolean; repaired?: string } {
   if (!existsSync(path)) return { truncated: false, interruptedClosed: false };
-  const raw = readFileSync(path, "utf8");
+  const raw = opts?.raw ?? readFileSync(path, "utf8");
   // 崩溃切口恰好落在换行前：最后一行是合法 JSON（truncated=false）但文件缺尾 \n——不规范化的话，
   // 下一次 append 会把新旧两条记录合并到同一行，再开时按 torn tail 处理、双事件静默丢失
   const needsNewline = raw.length > 0 && !raw.endsWith("\n");
@@ -130,6 +134,17 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
     synthesized.push(end);
     interruptedClosed = true;
   }
+  const tail =
+    (!truncated && needsNewline ? "\n" : "") + synthesized.map((e) => JSON.stringify(e) + "\n").join("");
+  // 修复后盘上最终内容：好行逐行带尾 \n + synthesized 行（ftruncate 截到坏行起点=好行序列、补换行/
+  // 补事件都走追加——三种修复动作的乘积恰等于此拼装；未发生修复时盘上内容 = raw 原样，缺尾 \n 也在）
+  const wrote = truncated || tail !== "";
+  const repaired = opts?.raw === undefined ? undefined : wrote
+    ? good.map((l) => l + "\n").join("") + synthesized.map((e) => JSON.stringify(e) + "\n").join("")
+    : raw;
+  if (opts?.probeOnly) {
+    return repaired !== undefined ? { truncated, interruptedClosed, repaired } : { truncated, interruptedClosed };
+  }
   if (truncated && cutChar !== undefined) {
     // 原地截断到坏行起点（该点之前必然以 "\n" 收尾或为文件头——截后文件保持行完整性）
     const fd = openSync(path, "r+");
@@ -139,10 +154,8 @@ export function repairFile(path: string): { truncated: boolean; interruptedClose
       closeSync(fd);
     }
   }
-  const tail =
-    (!truncated && needsNewline ? "\n" : "") + synthesized.map((e) => JSON.stringify(e) + "\n").join("");
   if (tail !== "") appendFileSync(path, tail);
-  return { truncated, interruptedClosed };
+  return repaired !== undefined ? { truncated, interruptedClosed, repaired } : { truncated, interruptedClosed };
 }
 
 /** 单条事件 → usage 增量（CS-06：sumUsage 与 lifetimeUsage 兄弟循环共用同一口径——旧实现两处分支
@@ -259,10 +272,14 @@ export class JsonlSessionStore implements SessionStore {
     this.dir = opts.dir;
     this.file = join(opts.dir, this.sessionId, "agents", "session.jsonl");
     this.lockFile = join(opts.dir, this.sessionId, "agents", "session.lock");
-    repairFile(this.file);
-    if (existsSync(this.file)) {
+    // T1（m5-resume-perf）：构造期一次读盘——raw 先读，repairFile 复用、镜像装载复用同一份；修复态下
+    // 镜像必须吃 repairFile 回传的修复后内容（torn tail 截断/补 end 后与 raw 不一致），否则 parse 炸/缺事件。
+    // 旧实现 repairFile 与镜像各读一遍，20MB 会话 IO 双付（~200ms 白付）。
+    const raw = existsSync(this.file) ? readFileSync(this.file, "utf8") : undefined;
+    const rep = repairFile(this.file, raw !== undefined ? { raw } : undefined);
+    if (raw !== undefined) {
       this.fileEnsured = true;
-      const lines = readFileSync(this.file, "utf8").split("\n").filter(Boolean);
+      const lines = (rep.repaired ?? raw).split("\n").filter(Boolean);
       for (const line of lines) {
         const e = JSON.parse(line) as SessionEvent;
         this.seq = e.seq;
