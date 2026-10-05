@@ -1,6 +1,6 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
 import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
@@ -8,6 +8,7 @@ import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./se
 import { SqliteSessionStore, sqliteAvailable } from "./session/sqlite.ts";
 import { ForkedSessionStore, openSessionView, verifyChain, type SessionLoadInfo } from "./session/fork.ts";
 import { refreshEventIndex } from "./session/eventindex.ts";
+import { eventsBefore as eventsBeforeQuery } from "./session/eventindex.ts";
 import type { SessionEvent, SessionStore } from "./session/types.ts";
 import { LOG_TYPES } from "./session/types.ts";
 import { locateSessionBucket } from "./session/dir.ts";
@@ -124,6 +125,11 @@ export interface Harness {
   /** T10（m5-resume-perf）历史全量升级口：窗口装载（T7）的镜像按需整读全量——全量消费者兜底
    *  （label 预算外等显示面缺数据时）；全量后端 noop。幂等。 */
   ensureHistoryFull(): Promise<void>;
+  /** T14（m5-resume-perf）懒分页取段口：索引查 beforeSeq 之前的 limitEvents 条（升序）——pread
+   *  逐行 parse、纯查看用不进内存镜像；不设压缩边界（D13：翻页可跨压缩行取压缩前原文——取数走
+   *  文件索引，与内存装了哪段无关）。空返 = 到会话开头。fork 复合视图恒空（前缀在祖辈文件——分页
+   *  属后续增强）。 */
+  eventsBefore(sessionId: string, beforeSeq: number, limitEvents?: number): Promise<SessionEvent[]>;
   /** 实时旁路通道（M4-1 T4/D45）：provider 流式 Chunk 的内存投递——不持久、不进 SessionEvent 流、
    *  断连即弃（无等待者的 push 直接丢，零积压）；每调用一次 = 新订阅（从当下起，无重放）。 */
   liveChunks(): AsyncIterable<Chunk>;
@@ -1303,6 +1309,38 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // T10（m5-resume-perf）：窗口镜像懒升级读口——D4 全量消费兜底（store 缺省不带 = noop）
     async ensureHistoryFull() {
       if (store.ensureFull !== undefined) await store.ensureFull();
+    },
+
+    // T14（m5-resume-perf）：懒分页取段——事件索引查段 + pread 逐行 parse（纯查看，不动镜像）
+    async eventsBefore(sessionId: string, beforeSeq: number, limitEvents = 500): Promise<SessionEvent[]> {
+      if (baseStore instanceof ForkedSessionStore || !sqliteAvailable()) return []; // fork 复合视图：前缀在祖辈文件，本口恒空
+      const segs = eventsBeforeQuery(eventIndexFile, basename(sessionsDir), sessionId, beforeSeq, limitEvents);
+      if (segs.length === 0) return [];
+      const file = join(sessionsDir, sessionId, "agents", "session.jsonl");
+      let fd: number;
+      try {
+        fd = openSync(file, "r");
+      } catch {
+        return [];
+      }
+      const out: SessionEvent[] = [];
+      try {
+        for (const seg of segs) {
+          const buf = Buffer.alloc(seg.byteLength);
+          if (readSync(fd, buf, 0, seg.byteLength, seg.byteOffset) !== seg.byteLength) return out; // 文件变短：已取到的先给
+          for (const line of buf.toString("utf8").split("\n")) {
+            if (line === "") continue;
+            try {
+              out.push(JSON.parse(line) as SessionEvent);
+            } catch {
+              return out; // 坏行止损：页面截到好行
+            }
+          }
+        }
+      } finally {
+        closeSync(fd);
+      }
+      return out;
     },
 
     liveChunks() {

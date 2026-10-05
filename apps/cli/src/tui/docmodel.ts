@@ -605,7 +605,42 @@ export class DocModel {
 	}
 
 	/** 历史结构化摄入（F5 五轮②③④）：与实时流同形（暖金提问/md 渲染/think marker/工具 Used 行）。 */
-	historyFrom(events: { type: string; [k: string]: unknown }[], _width: number): void {
+	/** 已装载最老事件 seq（T14 懒分页取段锚——eventsBefore 的 beforeSeq 数据源）。 */
+	oldestLoadedSeq: number | undefined = undefined;
+
+	historyFrom(events: { type: string; seq?: unknown; [k: string]: unknown }[], _width: number): void {
+		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq;
+		this.replayEventLoop(events);
+		this.settleActive();
+		if (this.turnWindowEnabled) this.trimTurns(); // resume 即裁：装载完立即裁到保留窗（大会话恢复首帧与内存双收益——这正是恢复秒开的来源）
+	}
+
+	/** T14 懒分页头部插页：更早事件按 historyFrom 同款逐事件转换（共用 replayEventLoop，勿复制粘贴）
+	 *  后整块搬到头部（fold 行之后——补页历史晚于已折叠轮）。轮号取负基（低于一切现存轮——补页是
+	 *  临时阅读态，滚回底部后 trimTurns 按「轮号 < oldest」正常裁掉，滑窗治理不冲突）；账本 counts
+	 *  插 -1 脏标（reconcile 补尾只长尾，头部插入须显式 splice）；bottom 锚定滚动几何天然钉住视口
+	 *  （头部插入 → dmTotal 与内容同下移，scrollBack 不动 = 同一可视内容）。 */
+	prependHistory(events: { type: string; seq?: unknown; [k: string]: unknown }[], _width: number): number {
+		if (events.length === 0) return 0;
+		const savedTurn = this.curTurn;
+		const startLen = this.lines.length;
+		this.curTurn = -events.filter((e) => e.type === "turn/end").length - 1; // 负基：补页轮恒先于现存轮被裁
+		this.replayEventLoop(events);
+		this.curTurn = savedTurn;
+		const added = this.lines.length - startLen;
+		if (added === 0) return 0;
+		const newEntries = this.lines.splice(startLen, added);
+		const newTurns = this.turnOf.splice(startLen, added);
+		const at = this.lines.length > 0 && this.lines[0]!.k === "fold" ? 1 : 0;
+		this.lines.splice(at, 0, ...newEntries);
+		this.turnOf.splice(at, 0, ...newTurns);
+		this.counts.splice(at, 0, ...Array.from({ length: added }, () => -1));
+		if (typeof events[0]?.seq === "number") this.oldestLoadedSeq = events[0]!.seq;
+		return added;
+	}
+
+	/** 回放事件 → 条目（historyFrom 与 T14 prependHistory 共用的逐事件转换——单源勿复制）。 */
+	private replayEventLoop(events: { type: string; [k: string]: unknown }[]): void {
 		// 回放期 agent 组重建（2026-09-27：重载后与实时同形——不再退化静态占位行）。同一轮 assistant
 		// 的连续 spawn 并一组（组引用到 user/assistant 消息边界即断）——与实时路「末组活着才并入」等价：
 		// 回放全员终态，轮边界即断组点。组员编号从 spawn 的 result 里抠（callId 精确配对，spawnIdsIn
@@ -683,8 +718,6 @@ export class DocModel {
 				this.turnEnd(false); // 装载期只记账不逐次裁剪——尾部统一一次（T7 轮次记账补分支）
 			}
 		}
-		this.settleActive();
-		if (this.turnWindowEnabled) this.trimTurns(); // resume 即裁：装载完立即裁到保留窗（大会话恢复首帧与内存双收益——这正是恢复秒开的来源）
 	}
 
 	/** 用户消息块（❯ 青玉 + 暖金加粗正文 + 前后各空一行）。

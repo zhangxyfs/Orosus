@@ -4377,3 +4377,30 @@ describe("m5-at-menu（T3 渲染层 + 滚轮 + 互斥——buildAtOverlay 框线
 		app.stop();
 	});
 });
+
+describe("T14 m5-resume-perf: 翻到顶懒分页（防抖触发 + 到头 toast + 停触）", () => {
+	it("b. requestOlderPage 防抖合并连击一次取段；到头（false）→ toast「已到会话开头」+ exhausted 停触", async () => {
+		let calls = 0;
+		const pages = [true, false];
+		const { app } = rig([], 100, 30, {
+			fetchOlderPage: async () => {
+				calls++;
+				return pages[Math.min(calls - 1, pages.length - 1)]!;
+			},
+		});
+		app.requestOlderPage();
+		app.requestOlderPage();
+		app.requestOlderPage(); // 防抖窗口内连击 → 合并为一次
+		expect(calls).toBe(0);
+		await flush(300); // 过防抖 150ms
+		expect(calls).toBe(1);
+		await flush(100);
+		app.requestOlderPage(); // 第二次：返回 false → 到头
+		await flush(300);
+		expect(calls).toBe(2);
+		app.requestOlderPage(); // exhausted → 停触
+		await flush(300);
+		expect(calls).toBe(2);
+		app.stop?.();
+	});
+});

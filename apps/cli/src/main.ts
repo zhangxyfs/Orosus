@@ -1332,6 +1332,16 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     toggleSteps: () => {
       dm.toggleSteps(); // T9：轮内步级折叠（Alt+S）——开=splice 回原位、关=全轮重折，账本 stepsOpen 键收口
     },
+    fetchOlderPage: async (): Promise<boolean> => {
+      // T14：翻到顶懒分页——h.eventsBefore 索引取段（不设压缩边界，翻过压缩行取压缩前原文）→
+      // dm.prependHistory 头部插页。空返 = 到会话开头（fullapp toast + 停触）
+      const oldest = dm.oldestLoadedSeq;
+      if (oldest === undefined) return false;
+      const evs = await h.eventsBefore(h.sessionId, oldest, 500); // 一页 500 事件（qwen 同值——取大页减补页频率）
+      if (evs.length === 0) return false;
+      dm.prependHistory(evs, streamW());
+      return true;
+    },
     // 消息队列三件套（2026-09-23 队列批——kimi 方案改 Ctrl+U）：队列区数据源 / ↑ 召回队尾 / steer 注入
     queueItems: () => [...pendingSubmits],
     // M4.5（2026-09-27 改版）：前台显示走流区 agent 组（DocModel 组条目）；此口只剩双击 Esc 全停门槛判定

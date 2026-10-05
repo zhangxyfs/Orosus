@@ -173,6 +173,37 @@ export class FullApp {
 		return { start, end: Math.min(dmTotal, start + streamH) };
 	}
 
+	/** T14（m5-resume-perf）：懒分页取段状态（防抖 150ms 合并到顶区连击滚动；inflight 防并发；
+	 *  exhausted 到头停触——「已到会话开头」toast 后不再发取段）。 */
+	private olderTimer: ReturnType<typeof setTimeout> | undefined;
+	private olderInflight = false;
+	private olderExhausted = false;
+
+	/** 到顶触发懒分页（PgUp/滚轮上在视口 start===0 时调）：防抖后取一页插头。底部锚定滚动几何
+	 *  天然钉住视口（头部插入 → 总行与内容同下移、scrollBack 不动 = 同一可视内容——ZCode/Codex 式
+	 *  无限上翻的补偿免写）。 */
+	requestOlderPage(): void {
+		if (this.olderExhausted || this.olderInflight || this.io.fetchOlderPage === undefined) return;
+		if (this.olderTimer !== undefined) return; // 防抖窗口内连击合并
+		this.olderTimer = setTimeout(() => {
+			this.olderTimer = undefined;
+			if (this.olderExhausted || this.olderInflight) return;
+			this.olderInflight = true;
+			void (async () => {
+				try {
+					const more = await this.io.fetchOlderPage!();
+					if (!more) {
+						this.olderExhausted = true;
+						this.showToast("已到会话开头");
+					}
+					this.scheduler.requestImmediateRender();
+				} finally {
+					this.olderInflight = false;
+				}
+			})();
+		}, 150);
+	}
+
 	start(): void {
 		this.full.enter();
 		this.term.start();

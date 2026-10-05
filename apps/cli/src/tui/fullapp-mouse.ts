@@ -53,6 +53,7 @@ export function createMouse(app: FullApp) {
 			s.diagSel = Math.max(0, Math.min(Math.max(0, entries.length - 1), s.diagSel + (up ? -lines : lines)));
 		} else {
 			s.scrollBack = Math.max(0, s.scrollBack + (up ? lines : -lines)); // 上滚=回看历史（PgUp 同向）；上界渲染帧已钳
+			if (up && app.viewportRange().start === 0) app.requestOlderPage(); // T14：滚到顶继续上滚 → 懒分页补头
 		}
 		app.scheduler.requestImmediateRender();
 	};

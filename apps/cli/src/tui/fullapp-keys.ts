@@ -524,6 +524,7 @@ export function createKeys(app: FullApp) {
 				s.taskSel = Math.max(0, Math.min(tasks.length - 1, s.taskSel + (key === "pageUp" ? -slots : slots)));
 			} else if (key === "pageUp") {
 				s.scrollBack += Math.max(1, app.io.rows() - 10);
+				if (app.viewportRange().start === 0) app.requestOlderPage(); // T14：到顶再翻 → 懒分页补头（防抖内合并）
 			} else {
 				s.scrollBack = Math.max(0, s.scrollBack - Math.max(1, app.io.rows() - 10));
 			}

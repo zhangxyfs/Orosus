@@ -98,6 +98,9 @@ export interface FullAppIO {
 	/** Alt + S 轮内步级折叠切换（m5-resume-perf T9——D9 拍板独立键：与 Alt+O「内容详略」正交的
 	 *  「步骤多少」维度；默认收最近 30 步、更早一行折叠，env OROSUS_TUI_KEEP_STEPS 调）。 */
 	toggleSteps(): void;
+	/** T14（m5-resume-perf）：翻到顶懒分页取段（可选——宿主接 h.eventsBefore → dm.prependHistory）。
+	 *  返回 true = 已补一页（还有更早可翻）；false = 到会话开头（调用方 toast + 停触）。 */
+	fetchOlderPage?(): Promise<boolean>;
 	/** Alt + V 粘贴剪贴板图片（2026-09-23 修订——宿主侧 pasteImage 完成后经 insertAtCursor 把
 	 *  chip token 插入输入框光标位，删除键可删 = 撤销挂图）。 */
 	requestPasteImage?(): void;

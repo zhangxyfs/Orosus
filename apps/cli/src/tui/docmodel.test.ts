@@ -1164,3 +1164,82 @@ describe("DocModel 轮内步级折叠（m5-resume-perf T9——kimi KEEP_RECENT_
 		expect(dm.frameLines(80).length).toBe(before); // 重折回原几何
 	});
 });
+
+describe("DocModel 懒分页头部补页（m5-resume-perf T14——ZCode/Codex 式按段补读、头部插页）", () => {
+	const evOf = (seq: number, type: string, fields: Record<string, unknown> = {}): { type: string; seq: number; [k: string]: unknown } =>
+		({ ...fields, type, seq });
+	const userEv = (seq: number, text: string) => evOf(seq, "user/message", { content: [{ kind: "text", text }] });
+	const turnEndEv = (seq: number) => evOf(seq, "turn/end", { kind: "completed" });
+
+	it("a+c. 头部插页：补页条目落头部、oldestLoadedSeq 前移、账本 counts 精确（frameWindow 行数=条目行数和）；跨压缩行取到压缩前原文", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = false; // 隔离滑窗（互锁归 d 钉）
+		dm.historyFrom([userEv(21, "第二页问"), turnEndEv(22)], 80);
+		expect(dm.oldestLoadedSeq).toBe(21);
+		const before = dm.frameLines(80).map(stripAnsi);
+		// 补页：压缩事件 + 更早原文（D13——翻过压缩行继续取压缩前）
+		const added = dm.prependHistory([userEv(11, "最早问"), turnEndEv(12), evOf(13, "turn/compaction", { droppedCount: 9 }), userEv(14, "压缩前问"), turnEndEv(15), userEv(16, "中段问")], 80);
+		expect(added).toBeGreaterThan(0);
+		expect(dm.oldestLoadedSeq).toBe(11); // 取段锚前移
+		const after = dm.frameLines(80).map(stripAnsi);
+		// 头部多出补页内容、旧头部内容仍在下方（视口钉住的 docmodel 侧前提：内容只增不移）
+		expect(after.join("\n")).toContain("最早问");
+		expect(after.join("\n")).toContain("已压缩：9 条历史"); // 跨压缩行照常渲染
+		expect(after.join("\n")).toContain("压缩前问");
+		expect(after.join("\n")).toContain("第二页问");
+		expect(after.indexOf(after.find((l) => l.includes("最早问"))!)).toBeLessThan(after.indexOf(after.find((l) => l.includes("第二页问"))!));
+		expect(after.length).toBeGreaterThan(before.length); // 只增不减
+	});
+
+	it("d. 滑窗互锁：补页轮号取负基——trimTurns 正常裁掉补页段（滚回底部后滑窗治理照常，内存不滞涨）", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = true;
+		// 铺 21 轮触发裁剪（保留 15）
+		for (let t = 0; t < 21; t++) {
+			dm.userPrompt(`第 ${t} 轮`);
+			dm.activity({ kind: "text", text: `答 ${t}` }, 80);
+			dm.end(80);
+			dm.turnEnd();
+		}
+		expect(dm.frameLines(80).map(stripAnsi).some((l) => l.includes("已折叠更早的"))).toBe(true);
+		const lenBefore = dm.frameLines(80).length;
+		// 补页（阅读态：头部插入负基轮）
+		dm.prependHistory([userEv(1, "补页问"), turnEndEv(2)], 80);
+		const lenAfterPrepend = dm.frameLines(80).length;
+		expect(lenAfterPrepend).toBeGreaterThan(lenBefore);
+		expect(dm.frameLines(80).map(stripAnsi).join("\n")).toContain("补页问");
+		// 滚回底部（视口离开补页段）→ 下一次 trimTurns 把补页段裁掉（viewportProbe 未挂=无阅读保护）
+		dm.viewportProbe = () => ({ start: 1_000_000, end: 1_000_001 }); // 视口在底部之外
+		dm.turnEnd(); // 触发 trimTurns
+		const final = dm.frameLines(80).map(stripAnsi);
+		expect(final.join("\n")).not.toContain("补页问"); // 补页临时阅读态被滑窗回收
+		expect(final.length).toBeLessThanOrEqual(lenAfterPrepend);
+	});
+
+	it("e. 页缝工具配对不炸账本：跨页 tool/call 与 tool/result 按 callId 各自成条、counts 精确", () => {
+		const dm = new DocModel();
+		dm.turnWindowEnabled = false;
+		// 第二页尾有 call 无 result（页缝切开配对）
+		dm.historyFrom([
+			evOf(21, "tool/call", { callId: "cx", name: "tool-fx__x", args: {} }),
+			userEv(22, "页尾问"),
+		], 80);
+		// 补页头有 result 无 call（其 call 在更早页——未取）
+		const added = dm.prependHistory([
+			userEv(11, "补页问"),
+			evOf(12, "tool/result", { callId: "cy", output: "孤儿结果", isError: false }),
+		], 80);
+		expect(added).toBeGreaterThan(0);
+		const lines = dm.frameLines(80); // 不炸（孤儿 result 回放侧按 pendingSpawnResults/吞逻辑处置）
+		expect(lines.length).toBeGreaterThan(0);
+	});
+
+	it("f. 空补页（无更早）零变化", () => {
+		const dm = new DocModel();
+		dm.historyFrom([userEv(5, "唯一问")], 80);
+		const before = dm.frameLines(80).length;
+		expect(dm.prependHistory([], 80)).toBe(0);
+		expect(dm.frameLines(80).length).toBe(before);
+		expect(dm.oldestLoadedSeq).toBe(5);
+	});
+});
