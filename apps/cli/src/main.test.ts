@@ -662,9 +662,16 @@ describe("T4b m5-resume-perf: 全屏切会话就地换页（不退出 FullApp—
 	it("接线源面钉（CM-16② 同困境退而钉源面）：runSubmit 拦截 pendingSwitchSid → switchInPlace 原子换 dm（不设 action=switch 退出）", () => {
 		tmp("t4b-pin");
 		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
-		expect(src).toContain('if (r === "switch" && pendingSwitchSid !== undefined)'); // 拦截判据
+		expect(src).toContain('if (r === "switch" && (pendingSwitchSid !== undefined || pendingForkIntent !== undefined))'); // 拦截判据（resume/sessions 切换与 fork 分叉）
 		expect(src).toContain("switchInPlace(sid);"); // 就地换页（无 action 退出）
 		expect(src).toContain("dm = next;"); // 原子换行源（io.docTotal/docWindow 现读模块级 dm）
 		expect(src).toContain("app.sessionSwapped();"); // 懒分页到头态重置
+	});
+
+	it("fork 快径钉：full 模式 /fork 登记意图即返回（重活 forkInPlace 异步走）+ 拦截分派", () => {
+		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+		expect(src).toContain('if (directive.kind === "fork" && tuiMode === "full") {'); // 快径判据
+		expect(src).toContain("pendingForkIntent = {"); // 意图登记
+		expect(src).toContain("forkInPlace(forkIntent!);"); // 拦截分派
 	});
 });

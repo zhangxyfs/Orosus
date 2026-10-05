@@ -251,6 +251,8 @@ let pendingEcho: { notice: string; history: boolean } | undefined;
 // processReplLine 里 await——FullApp 不冻屏）；sessionLoop 顶画框架后异步装载注水。
 // isSwitching 门拦注水完成前的提交/再切换（切换不可逆：旧会话已 close，Esc 不中断）。
 let pendingSwitchSid: string | undefined;
+// T4b：/fork 就地换页意图（full 模式 processReplLine 只登记不干活——重活挪 forkInPlace 异步走）
+let pendingForkIntent: { parentSessionId: string; atEntryId?: string; parentDir: string } | undefined;
 let isSwitching = false;
 
 // 顶层兜底 catch（T6/S7）：createHarness 抛错（坏配置 TOML、required 护栏阻断、T5 没盖住的）不再裸堆栈退出。
@@ -720,6 +722,16 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         return "switch";
       }
       if (directive.kind === "new" || directive.kind === "fork") {
+        // T4b（m5-resume-perf 走查修）：full 模式 /fork 就地换页——重活（父视图装载+建新会话+自动命名）
+        // 挪 forkInPlace 异步走，此处只登记意图即返回（行模式与 /new 走下方原同步路径，用户拍板不动）
+        if (directive.kind === "fork" && tuiMode === "full") {
+          pendingForkIntent = {
+            parentSessionId: directive.parentSessionId,
+            ...(directive.atEntryId !== undefined ? { atEntryId: directive.atEntryId } : {}),
+            parentDir: activeDirRef(),
+          };
+          return "switch";
+        }
         // 空会话 /new 就地刷新（2026-10-01 用户拍板清理批③）：当前会话 0 消息且非 fork 子体 → 不另起新
         // 会话（否则旧壳留尸 + 新壳又生），关店 → 清壳 → 同 sid 重开——文件 birthtime 归零即「创建时间
         // 已刷新」，header 也由重开的空会话按当下时刻懒写。fork 子体排除：投影含父辈历史，「新」不成立。
@@ -1406,11 +1418,14 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       try {
         const emit = busyExec ? (s: string) => dm.pushLine(s) : (s: string) => dm.pushMd(s, streamW()); // 命令结果含 md（/compact 摘要等）——渲染后入流（F5 六轮②）
         const r = await processReplLine(text, emit);
-        if (r === "switch" && pendingSwitchSid !== undefined) {
-          // T4b：/resume /sessions 切换就地换页——不退出 FullApp（闪空根因），旧内容留屏待原子替换
+        if (r === "switch" && (pendingSwitchSid !== undefined || pendingForkIntent !== undefined)) {
+          // T4b：/resume /sessions 切换与 /fork 分叉就地换页——不退出 FullApp（闪空根因），旧内容留屏待原子替换
           const sid = pendingSwitchSid;
           pendingSwitchSid = undefined;
-          switchInPlace(sid);
+          const forkIntent = pendingForkIntent;
+          pendingForkIntent = undefined;
+          if (sid !== undefined) switchInPlace(sid);
+          else forkInPlace(forkIntent!);
           return; // void-async 内 return：finally 照走（inflight/setBusy 复位 ✓）
         }
         if (modelBefore !== undefined) reportModelSwitch(modelBefore);
@@ -1443,8 +1458,47 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   // T4b（m5-resume-perf 走查修）就地换页：full 模式切会话不再退出 FullApp——alt-screen 退出重进
   // 就是「瞬间啥都不显示」的根因。旧内容留屏、isSwitching 门拦提交（toast 反馈装载中）、装载
   // 完成后原子换 dm 上屏（io.docTotal/docWindow 每帧现读模块级 dm——换引用即换行源；新 dm 连同
-  // 滑窗/账本在屏下建好再整体换上，旧 dm 整体弃置）。/new /fork 仍走退出重进路径（同步换会话在
-  // processReplLine 已完成，改造属后续批）。
+  // 滑窗/账本在屏下建好再整体换上，旧 dm 整体弃置）。/fork 同走就地换页（forkInPlace——2026-10-05
+  // 用户拍板）；/new 与行模式仍走退出重进（用户拍板不动）。
+  // 共用换页尾段：新 h 的 dm（横幅+可选通知行+historyFrom 含 resume 即裁）在屏下建好再整体换
+  // 引用上屏（io.docTotal/docWindow 每帧现读模块级 dm——换引用即换行源，换页帧即终态、无中间态），
+  // 继而 attachRender/seedHistory/UX 态重置/懒分页重置/面板刷新一气呵成。
+  const swapSessionIn = async (newH: Harness, opts: { notice?: string } = {}): Promise<void> => {
+    const next = newMainDocModel();
+    for (const l of ASCII_BANNER(OROSUS_VERSION)) next.pushLine(l);
+    for (const line of banner(newH, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: newH.graph().services.listProviders().map((p) => p.name) }) })) next.pushLine(line);
+    if (opts.notice !== undefined) next.pushLine(opts.notice);
+    const hist = await newH.history();
+    next.historyFrom(hist, streamW());
+    dm = next;
+    attachRender(newH); // 绑新 h 事件流到新 dm（attachRender 闭包现读模块级 dm）
+    app.seedHistory(inputHistoryFor(activeDirRef(), newH.sessionId, hist));
+    // UX 态重置（对齐旧路径「新 FullApp=干净开局」语义）：滚动贴底/输入清空/弹窗关/队列清
+    const st = app.state;
+    st.scrollBack = 0;
+    st.input = "";
+    st.cursor = 0;
+    st.inputScroll = 0;
+    st.selAnchor = -1;
+    st.historyDraft = undefined;
+    st.overlayOpen = false;
+    st.atMenu = undefined;
+    st.diagOpen = false;
+    pendingSubmits.length = 0;
+    app.sessionSwapped(); // T14 懒分页到头态重置（新会话可重新上翻）
+    void refreshPanel(modulesDeps);
+    app.scheduler.requestImmediateRender();
+  };
+  // 就地换页失败兜底（两路共用）：旧会话已 close + 新会话构造失败 → toast + 重建空会话
+  const switchFailedFallback = async (err: unknown): Promise<void> => {
+    settleCommandError(err);
+    try {
+      const fresh = await createSession(sessionDeps);
+      applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
+      attachRender(fresh);
+    } catch (fatal) { settleCommandError(fatal); }
+  };
+
   const switchInPlace = (sid: string): void => {
     const gate = switchBusyGate(isSwitching);
     if (gate.blocked) { notify(gate.message); return; }
@@ -1455,37 +1509,40 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         const prepared = await prepareSwitch(sid, sessionDeps, notify);
         if (prepared === undefined) return; // 未找到：旧会话未动（prepareSwitch 已 toast）
         applySwitch(prepared, sessionDeps);
-        const next = newMainDocModel();
-        for (const l of ASCII_BANNER(OROSUS_VERSION)) next.pushLine(l);
-        for (const line of banner(prepared.h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: prepared.h.graph().services.listProviders().map((p) => p.name) }) })) next.pushLine(line);
-        const hist = await prepared.h.history();
-        next.historyFrom(hist, streamW()); // 屏下建好（含 resume 即裁）再上屏——换页帧即终态
-        dm = next;
-        attachRender(prepared.h); // 绑新 h 事件流到新 dm（attachRender 闭包现读模块级 dm）
-        app.seedHistory(inputHistoryFor(activeDirRef(), prepared.h.sessionId, hist));
-        // UX 态重置（对齐旧路径「新 FullApp=干净开局」语义）：滚动贴底/输入清空/弹窗关/队列清
-        const st = app.state;
-        st.scrollBack = 0;
-        st.input = "";
-        st.cursor = 0;
-        st.inputScroll = 0;
-        st.selAnchor = -1;
-        st.historyDraft = undefined;
-        st.overlayOpen = false;
-        st.atMenu = undefined;
-        st.diagOpen = false;
-        pendingSubmits.length = 0;
-        app.sessionSwapped(); // T14 懒分页到头态重置（新会话可重新上翻）
-        void refreshPanel(modulesDeps);
-        app.scheduler.requestImmediateRender();
+        await swapSessionIn(prepared.h);
       } catch (err) {
-        // 空悬窗口兜底（与 T4 同款）：旧会话已 close + 新会话构造失败 → toast + 重建空会话
-        settleCommandError(err);
-        try {
-          const fresh = await createSession(sessionDeps);
-          applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
-          attachRender(fresh);
-        } catch (fatal) { settleCommandError(fatal); }
+        await switchFailedFallback(err);
+      } finally {
+        isSwitching = false;
+      }
+    })();
+  };
+
+  // T4b：/fork 就地换页（2026-10-05 用户拍板：fork 修、/new 不动）——父视图装载+建新会话+自动命名
+  // 全异步走，旧内容留屏待原子替换；通知行走旧文案（「继承历史如下」——historyFrom 本就带入父前缀）。
+  const forkInPlace = (intent: { parentSessionId: string; atEntryId?: string; parentDir: string }): void => {
+    const gate = switchBusyGate(isSwitching);
+    if (gate.blocked) { notify(gate.message); return; }
+    isSwitching = true;
+    notify("正在分叉会话…");
+    void (async () => {
+      try {
+        const from = intent.parentSessionId;
+        // fork 自动命名（2026-09-22 用户拍板）：「fork <父标题>」——/sessions 里父子一眼可辨
+        const loc = locateSessionFile(sessionsRoot, from, { bucket: currentBucket });
+        const parentTitle = loc !== undefined ? readTitle(loc.file, from) : from;
+        await h.close();
+        const nh = await createSession(sessionDeps, {
+          fork: { parentSessionId: from, ...(intent.atEntryId !== undefined ? { atEntryId: intent.atEntryId } : {}), parentDir: intent.parentDir },
+          sessionsDir,
+        });
+        if (parentTitle !== undefined) await nh.setLabel(`fork ${parentTitle}`);
+        h = nh;
+        setActiveDir(sessionsDir);
+        lastEventId = undefined; // CS-05②：三处换会话缝一个口径（统一回 undefined 走父尾缺省）
+        await swapSessionIn(nh, { notice: `[已从 ${from} 分叉——新会话 ${nh.sessionId}，继承历史如下]` }); // fork 继承父上下文——回显让继承可见
+      } catch (err) {
+        await switchFailedFallback(err);
       } finally {
         isSwitching = false;
       }
