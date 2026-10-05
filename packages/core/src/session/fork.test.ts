@@ -7,6 +7,7 @@ import { fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { JsonlSessionStore } from "./jsonl.ts";
 import { repairFile } from "./jsonl.ts";
 import { ForkedSessionStore, openSessionView, verifyChain } from "./fork.ts";
+import type { SessionEvent } from "./types.ts";
 import { InMemorySessionStore } from "./memory.ts";
 import { createHarness } from "../index.ts";
 import { deriveMessages } from "../loop/convert.ts";
@@ -547,7 +548,7 @@ describe("h.fork 落盘式分叉出口（会话树批 T6——缝一内核半边
 
 describe("T5 m5-resume-perf: verifyChain 窗口头感知（窗口镜像装载的误报豁免）", () => {
   /** 窗口镜像形态：种子（header/label——文件头预算读）+ 窗口（压缩事件起——首条 parentId 指向窗外合法 id）。 */
-  const windowed = (): { v: number; id: string; parentId: string | null; seq: number; ts: string; type: string }[] => [
+  const windowed = (): SessionEvent[] => [
     { v: 1, id: "e_1", parentId: null, seq: 1, ts: "t", type: "session/header" },
     { v: 1, id: "e_2", parentId: "e_1", seq: 2, ts: "t", type: "session/label" },
     { v: 1, id: "e_90", parentId: "e_89", seq: 90, ts: "t", type: "turn/compaction" }, // parentId 指向窗外（e_89 不在镜像内）
@@ -576,7 +577,7 @@ describe("T5 m5-resume-perf: verifyChain 窗口头感知（窗口镜像装载的
 
   it("④ 链式多段（fork 投影 = 父段 + 子段，各自窗口装载）：每段各有一条接缝可豁免（T11 祖先链同窗口的行为前提）", () => {
     const parentSeg = windowed(); // 父段：seed + 窗口（e_1/e_2/e_90/e_91）
-    const ownSeg = [
+    const ownSeg: SessionEvent[] = [
       { v: 1, id: "f_1", parentId: null, seq: 1, ts: "t", type: "session/header" },
       { v: 1, id: "f_2", parentId: "f_1", seq: 2, ts: "t", type: "session/fork" },
       { v: 1, id: "f_70", parentId: "f_69", seq: 70, ts: "t", type: "turn/compaction" }, // 子段自己的接缝
