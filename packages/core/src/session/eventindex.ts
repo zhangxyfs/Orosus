@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
 import { scanSessionFiles, type SessionFileEntry } from "./dir.ts";
@@ -8,6 +8,7 @@ import { openDatabase, removeSqliteDbFiles, sqliteAvailable } from "./sqlite.ts"
  *  防悬空行与「同 sid 删了重建」的增量错位（/new 空会话就地刷新路径）。best-effort：库不在/失败 no-op。 */
 export function dropEventIndex(dbFile: string, bucket: string, sessionId: string): void {
   if (!sqliteAvailable()) return;
+  if (!existsSync(dbFile)) return; // 库不在=无行可清——不凭空建库（purge 空会话不该造出索引文件）
   try {
     const db = openEventIndexDb(dbFile, false); // 不删库重建——清行口碰瞬时锁宁可跳过（悬空行有全库 sweep 兜底）
     if (db === undefined) return;
@@ -47,7 +48,14 @@ export interface ScanLine {
   byteLength: number;
   seq: number;
   type: string;
-  bytes: Buffer;
+  /** 行内容拷贝（T7 嗅探装载按行选择性 parse 用）。**留存进索引行集时应剥除**（stripRow）——写行只用
+ *  定位四元组，剥除防大文件建索引时行字节随 rows 数组整体滞留（100MB 会话峰值翻倍）。 */
+  bytes?: Buffer;
+}
+
+/** 剥字节留存（索引行集专用）：writeEventRows 只消费定位四元组。 */
+export function stripRow(l: ScanLine): ScanLine {
+  return { byteOffset: l.byteOffset, byteLength: l.byteLength, seq: l.seq, type: l.type };
 }
 
 /** 嗅探块大小（D11：cc TRANSCRIPT_READ_CHUNK_SIZE 同值 1MB）——扫描器按此分块前向读。 */
@@ -169,6 +177,10 @@ function openEventIndexDb(dbFile: string, allowRebuild = true): import("node:sql
           "bucket TEXT NOT NULL, session_id TEXT NOT NULL, mtime_ms REAL NOT NULL, size INTEGER NOT NULL," +
           " indexed_bytes INTEGER NOT NULL, PRIMARY KEY(bucket, session_id));",
       );
+      // schema 校验（2026-10-05 索引专项审计）：IF NOT EXISTS 不迁移——将来同表名改列的旧库会让
+      // 一切查询恒炸、catch 静默跳过=索引永久哑火无痕。列缺失按坏库形态抛出走删库重建。
+      db.prepare("SELECT bucket, session_id, mtime_ms, size, indexed_bytes FROM event_index_files LIMIT 1").get();
+      db.prepare("SELECT bucket, session_id, seq, type, byte_offset, byte_length FROM event_index LIMIT 1").get();
       return db;
     } catch (e) {
       // 坏库须先关句柄再抛——否则 Windows 下句柄泄漏挡住 rmSync、坏库删不掉（treeindex 同款实测坑）
@@ -286,7 +298,7 @@ export function indexSingleSession(dbFile: string, bucket: string, sessionId: st
   } catch {
     return;
   }
-  const rows = [...scanEventLines(file, 0)];
+  const rows = [...scanEventLines(file, 0)].map(stripRow); // 剥字节留存——写行只用定位四元组
   const consumedTo = rows.length > 0 ? rows[rows.length - 1]!.byteOffset + rows[rows.length - 1]!.byteLength + 1 : 0;
   writeEventRows(dbFile, bucket, sessionId, rows, { ...st, indexedBytes: consumedTo });
 }

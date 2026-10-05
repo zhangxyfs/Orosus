@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore } from "./jsonl.ts";
-import { eventsBefore, eventsFrom, lastCompaction, refreshEventIndex, scanEventLines, sniffEventLine, writeEventRows } from "./eventindex.ts";
+import { dropEventIndex, eventsBefore, eventsFrom, lastCompaction, refreshEventIndex, scanEventLines, sniffEventLine, stripRow, writeEventRows } from "./eventindex.ts";
 import { openDatabase, setSqliteProbeForTest, sqliteAvailable } from "./sqlite.ts";
 import type { SessionFileEntry } from "./dir.ts";
 
@@ -421,5 +421,40 @@ describe("用户问答「手动删/改会话文件导致索引对不上」（202
     const scanPositions = calls.filter((c) => typeof c[3] === "number" && (c[3] as number) >= 300).map((c) => c[4] as number);
     expect(scanPositions.length).toBeGreaterThan(0);
     expect(Math.min(...scanPositions)).toBe(0); // 从头重扫（旧规则=增量零扫，中段旧行原样保留）
+  });
+});
+
+describe("索引专项审计修（2026-10-05 用户令「再好好看看索引相关的所有内容」）", () => {
+  it("n. dropEventIndex 库不存在 → no-op 不凭空建库（purge 空会话不该造出索引文件）", () => {
+    const d = tmp("evixn");
+    const dbFile = join(d, "event-index.sqlite");
+    expect(existsSync(dbFile)).toBe(false);
+    dropEventIndex(dbFile, "bk", "s_n");
+    expect(existsSync(dbFile)).toBe(false); // 没有被创建
+  });
+
+  it("o. schema 漂移（旧库同表名缺列）→ 当坏库删库重建——索引不永久哑火", async () => {
+    const d = tmp("evixo");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file } = await seedSession(d, "s_o", 3);
+    // 手造旧 schema：event_index_files 缺 indexed_bytes 列（将来改表的形态）
+    const db = openDatabase(dbFile);
+    db.exec("CREATE TABLE event_index_files (bucket TEXT, session_id TEXT, mtime_ms REAL, size INTEGER)");
+    db.close();
+    const st = statSync(file);
+    await refreshEventIndex(dbFile, d, [{ id: "s_o", file, dir: d, mtimeMs: st.mtimeMs, size: st.size, bucket: "bk" }]);
+    expect(rowsOf(dbFile)).toHaveLength(3); // 删旧库重建——查询恢复可用
+  });
+
+  it("p. stripRow 剥字节留存：写行/查询全链路不受影响（bytes 仅装载当下消费）", async () => {
+    const d = tmp("evixp");
+    const dbFile = join(d, "event-index.sqlite");
+    const { file } = await seedSession(d, "s_p", 4);
+    const stripped = [...scanEventLines(file)].map(stripRow);
+    expect(stripped.every((r) => r.bytes === undefined)).toBe(true); // 留存行无字节滞留
+    writeEventRows(dbFile, "bk", "s_p", stripped, { mtimeMs: 1, size: 1, indexedBytes: 1 });
+    expect(rowsOf(dbFile)).toHaveLength(4); // 写行只用定位四元组
+    const segs = eventsBefore(dbFile, "bk", "s_p", 99, 10);
+    expect(segs).toHaveLength(1); // 查询照常
   });
 });

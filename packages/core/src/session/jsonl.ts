@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
-import { eventsFrom, lastCompaction, scanEventLines, writeEventRows, type ScanLine } from "./eventindex.ts";
+import { eventsFrom, lastCompaction, scanEventLines, stripRow, writeEventRows, type ScanLine } from "./eventindex.ts";
 
 /** T7 装载分流阈（D6：cc SKIP_PRECOMPACT_THRESHOLD 同值 5MB）——小于此走全量快路径（零行为变化）。 */
 const WINDOW_LOAD_MIN_BYTES = 5 * 1024 * 1024;
@@ -510,16 +510,16 @@ export class JsonlSessionStore implements SessionStore {
     let abortReason: string | undefined;
     const rows: ScanLine[] = [];
     for (const line of scanEventLines(this.file, 0)) {
-      rows.push(line);
+      rows.push(stripRow(line)); // 剥字节留存——行内容仅装载当下消费，不随行集滞留
       lastEnd = line.byteOffset + line.byteLength + 1;
       if (line.type === "session/header" || line.type === "session/label" || line.type === "session/fork") {
         try {
-          seeds.push(JSON.parse(line.bytes.toString("utf8")) as SessionEvent);
+          seeds.push(JSON.parse(line.bytes!.toString("utf8")) as SessionEvent);
         } catch { /* 种子坏行跳过（修复后下次补） */ }
       } else if (line.type === "turn/compaction") {
         let ev: SessionEvent;
         try {
-          ev = JSON.parse(line.bytes.toString("utf8")) as SessionEvent;
+          ev = JSON.parse(line.bytes!.toString("utf8")) as SessionEvent;
         } catch {
           continue; // 压缩行本身撕裂：不入窗（修复后下次刷新补）；继续扫更晚的压缩点
         }
@@ -532,7 +532,7 @@ export class JsonlSessionStore implements SessionStore {
         seenCompaction = true;
       } else if (seenCompaction) {
         try {
-          acc.push(JSON.parse(line.bytes.toString("utf8")) as SessionEvent);
+          acc.push(JSON.parse(line.bytes!.toString("utf8")) as SessionEvent);
         } catch {
           continue; // 窗内坏行跳过（全量路径的 repairFile 会处置撕裂尾；中段坏行两路径同吞）
         }
