@@ -111,3 +111,11 @@ describe("T12 m5-resume-perf：/help 三处同步（Alt+S 步骤收展 / 懒分�
 		expect(HELP_TEXT).toContain("Used Read N 个文件");
 	});
 });
+
+describe("m5-btw T4：/btw 帮助与补全同步", () => {
+	it("HELP_TEXT 内建区含 /btw 侧问行；Tab 补全清单同步入列（/bt 前缀唯一命中）", () => {
+		expect(HELP_TEXT).toContain("/btw        侧问"); // 内建命令区（模型与状态）
+		expect(HELP_TEXT).toContain("无参回看最近一次");
+		expect(commandCompleter("/bt")[0]).toEqual(["/btw"]); // 与 SLASH_ITEMS 菜单同步入列
+	});
+});

@@ -57,8 +57,8 @@ export function commandCompleter(
   const all = [
     "/new", "/fork", "/sessions", "/resume", "/title", "/rename", "/quit", "/exit", "/q",
     "/model", "/effort", "/reload", "/help", "/settings", "/config",
-    "/compact", "/permission", "/yolo", "/auto", "/tasks",
-  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）；2026-09-25 /effort 入列
+    "/compact", "/permission", "/yolo", "/auto", "/tasks", "/btw",
+  ]; // 批⑤⑥：/usage /status /context /paste 退役出清单（/usage /status 并入 /settings；/paste 由 Alt+V 覆盖；/context 早并入 /settings）；批⑧：/auto 入列；/summary 退役（2026-09-23——查看口 Ctrl+O）；M4-3 T1c：/other 改名 /settings（旧名直接消失）；2026-09-25 /effort 入列；m5-btw：/btw 入列（与 SLASH_ITEMS 菜单同步）
   return [all.filter((c) => c.startsWith(line)), line];
 }
 
@@ -74,6 +74,7 @@ export const HELP_TEXT = `CLI 命令（会话生命周期）：
   /effort     思考投入档位（推理深度/自检/多方案推演；档位来自模型目录；回答进行中也可执行，下一轮生效）
   /reload     重新加载模块配置
   /help       显示此帮助
+  /btw        侧问——带着当前对话上下文的旁路快问（不打断主对话；答案开小窗、不进主对话流不留痕；回答中也可问；无参回看最近一次）
 
 （压缩摘要查看口 = Ctrl+O——/summary 已退役）
 

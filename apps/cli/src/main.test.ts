@@ -680,3 +680,70 @@ describe("T4b m5-resume-perf: 全屏切会话就地换页（不退出 FullApp—
 		expect(src).toContain("forkInPlace(forkIntent!);"); // 拦截分派
 	});
 });
+
+describe("/btw 侧问命令接线（m5-btw T4）", () => {
+	// 密封家目录（P3 批同款）：子进程数据目录解析进 tmp
+	const sealedEnv = (d: string): Record<string, string> => ({
+		...process.env,
+		USERPROFILE: join(d, "home"),
+		HOME: join(d, "home"),
+		OROSUS_HOME: join(d, "home", ".orosus"),
+	}) as Record<string, string>;
+	const runRepl = (d: string, lines: string[]): Promise<{ code: number; out: string; err: string }> => {
+		const child = spawn(process.execPath, ["--experimental-strip-types", join(repoRoot(), "apps/cli/src/main.ts")], {
+			cwd: d, env: sealedEnv(d), stdio: ["pipe", "pipe", "pipe"],
+		});
+		let out = ""; let err = "";
+		child.stdout.on("data", (c) => { out += String(c); });
+		child.stderr.on("data", (c) => { err += String(c); });
+		child.stdin.write(lines.map((l) => `${l}\n`).join("")); // 单块写入：全部行先进待处理队列（命令逐条串行消费）
+		child.stdin.end();
+		return new Promise((resolve) => { child.on("exit", (c) => resolve({ code: c ?? -1, out, err })); });
+	};
+
+	it("带参路由命中：/btw <问题> 不落「未知命令」、不弹用法提示（fire-and-forget 立即返回不挂路由）", async () => {
+		const d = tmp("btw-arg");
+		try {
+			const r = await runRepl(d, ["/btw 为什么这里用 unsafe", "/quit"]);
+			expect(r.code).toBe(0);
+			expect(r.out).not.toContain("未知命令"); // 宿主拦截命中——不漏到 core 路由
+			expect(r.out).not.toContain("用法：/btw"); // 带参不开空态提示
+		} finally {
+			rmSync(d, { recursive: true, force: true });
+		}
+	}, 60_000);
+
+	it("无参路由（D7 空态）：无记录 → 用法提示一行（toast 通道，不进流区不落盘）", async () => {
+		const d = tmp("btw-noarg");
+		try {
+			const r = await runRepl(d, ["/btw", "/quit"]);
+			expect(r.code).toBe(0);
+			expect(r.out).toContain("用法：/btw");
+		} finally {
+			rmSync(d, { recursive: true, force: true });
+		}
+	}, 60_000);
+
+	it("非 /btw 不误伤：/bt（前缀撞名）走未知命令面，不被 btw 分支吞", async () => {
+		const d = tmp("btw-near");
+		try {
+			const r = await runRepl(d, ["/bt", "/quit"]);
+			expect(r.code).toBe(0);
+			expect(r.out).toContain("未知命令"); // cmdNameOf 精确匹配——前缀不误伤
+		} finally {
+			rmSync(d, { recursive: true, force: true });
+		}
+	}, 60_000);
+
+	it("接线源面钉（processReplLine 无独立缝——CM-16② 同困境退而钉源面）：BUSY_EXEC 即改档 + 拦截分支 + SLASH_ITEMS 菜单条目", () => {
+		tmp("btw-pin"); // 置模块级 dir——afterEach rmSync 需要
+		const src = readFileSync(join(repoRoot(), "apps", "cli", "src", "main.ts"), "utf8");
+		const busyLine = src.split("\n").find((l) => l.includes("const BUSY_EXEC = new Set"));
+		expect(busyLine).toBeDefined();
+		expect(busyLine).toContain('"/btw"'); // busy 期立即执行、不占 inflight（侧问永不阻塞主输入）
+		expect(src).toContain('if (cmdNameOf(text) === "/btw")'); // 拦截分支（try 内、/tasks 旁）
+		expect(src).toContain("openBtw(activeApp, btwDeps, btwQuestion)"); // 带参走侧问本体（fire-and-forget）
+		expect(src).toContain("reopenBtw(activeApp, btwDeps)"); // 无参回看（D7）
+		expect(src).toContain('name: "/btw", desc: "侧问（不打断主对话）"'); // 菜单条目
+	});
+});
