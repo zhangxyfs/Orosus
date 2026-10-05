@@ -19,6 +19,7 @@ import { loadModules, type ModuleGraph } from "./kernel/kernel.ts";
 import { discoverModules, type DiscoveredModule } from "./kernel/discover.ts";
 import { diffGraphs, stableStringify, type ReloadReport } from "./kernel/reload.ts";
 import { loadTrustStore, checkTrust, atomicWriteTextSync } from "./kernel/trust.ts";
+import { unassignedLlm } from "./kernel/activate.ts";
 import { CORE_POINTS } from "./kernel/bus.ts";
 import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
@@ -164,6 +165,9 @@ export interface Harness {
   answerSubagentApproval(agentId: string, allow: boolean): boolean;
   /** 双击 Esc 全停（M4.5 T14/决策 12）：停止全部子代理（在跑/排队），未答审批自动按拒绝收场。 */
   stopAllSubagents(): void;
+  /** 宿主二级调用口（m5-btw T1，/btw 直调用）：返回 llmHolder.impl——模块 ctx.llm 转发的同一实现体（D39）。
+   *  调用时解析当前 provider/model（含 /model 覆盖）、内建 tools:[]、全程零落盘（不经 store/loop）。 */
+  llm(): LlmPort;
   pendingConfirms(): { name: string; version: string; layer: "user" | "project"; root: string; reason: string; entryHash: string; def: import("@orosus/contracts/module").ModuleDefinition }[];
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
@@ -1421,6 +1425,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     },
     stopAllSubagents() {
       subagentRunner.stopAll();
+    },
+    // m5-btw T1：宿主二级调用口——llmHolder.impl 即模块 ctx.llm 惰性转发的同一实现体（activate.ts 同一 holder）。
+    // 构造期无条件装配，?? 兜底只在装配前窗口成立——unassignedLlm 带内错误（activate.ts 导出复用）
+    llm(): LlmPort {
+      return llmHolder.impl ?? unassignedLlm;
     },
     // m5 T17：待确认桶读口（blocked 随 reload 重算——返回当前态）
     pendingConfirms() {

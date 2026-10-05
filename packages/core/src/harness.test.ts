@@ -876,6 +876,59 @@ describe("ctx.llm 二级模型口（D39，M3 T4）", () => {
   });
 });
 
+describe("harness.llm 宿主二级调用口（m5-btw T1）", () => {
+  const collect = async (s: AsyncIterable<Chunk>): Promise<{ text: string; finish?: Chunk | undefined }> => {
+    let text = "";
+    let finish: Chunk | undefined;
+    for await (const c of s) {
+      if (c.type === "text/delta") text += c.text;
+      if (c.type === "finish") finish = c;
+    }
+    return { text, finish };
+  };
+
+  it("① 返回 ctx.llm 同一实现：幂等同一对象、与模块口吃同一 provider 队列、内建 tools:[]", async () => {
+    // 同一 fakeProvider 队列：模块 ctx.llm 先吃第 1 转、宿主 h.llm() 吃第 2 转——两侧经同一 llmHolder.impl
+    const fp = fakeProvider([
+      [{ type: "text/delta", text: "经模块口" }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "经宿主口" }, { type: "finish", kind: "stop" }],
+    ]);
+    let moduleLlm: LlmPort | undefined;
+    const consumer: ModuleDefinition = {
+      ...fakeModule("llm-consumer"),
+      activate(ctx) { moduleLlm = ctx.llm; },
+    };
+    const h = await makeHarness({
+      modules: [
+        { ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) },
+        consumer,
+      ],
+    });
+    expect(h.llm()).toBe(h.llm()); // 幂等——llmHolder.impl 同一实现体（每次调用不新包装）
+    expect((await collect(moduleLlm!.stream({ messages: [{ role: "user", content: [{ kind: "text", text: "x" }] }] }))).text).toBe("经模块口");
+    const r = await collect(h.llm().stream({ system: "侧问", messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
+    expect(r.text).toBe("经宿主口"); // 同一队列第 2 转 = 同一实现体的行为证明
+    expect(fp.requests[1]).toMatchObject({ model: "m", system: "侧问", tools: [] }); // 解析链 + 二级调用零工具（D39）
+    await h.close();
+  });
+
+  it("② stream 透传零落盘：流消费前后 store 镜像零追加（/btw 对会话文件零痕迹）", async () => {
+    const fp = fakeProvider([
+      [{ type: "text/delta", text: "主答" }, { type: "finish", kind: "stop" }],
+      [{ type: "text/delta", text: "侧问答" }, { type: "finish", kind: "stop" }],
+    ]);
+    const h = await makeHarness({
+      modules: [{ ...fakeProviderModule("fake", []), activate: (ctx) => ctx.provide("provider:fake" as never, fp.stream) }],
+    });
+    await h.prompt("hi"); // 先落一轮真事件，基线非空——零追加断言才有牙
+    const before = await h.history();
+    expect(before.length).toBeGreaterThan(0);
+    await collect(h.llm().stream({ messages: [{ role: "user", content: [{ kind: "text", text: "q" }] }] }));
+    expect(await h.history()).toEqual(before); // 全程零 store.append（m5-btw D5/D6：不进名册不留痕）
+    await h.close();
+  });
+});
+
 describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补强 T3，D39 修订）", () => {
   const stateModule = (extra?: Partial<ModuleDefinition>): ModuleDefinition => ({
     ...fakeModule("llm-probe"),

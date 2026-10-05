@@ -18,7 +18,8 @@ export interface LlmHolder {
   impl?: LlmPort;
 }
 
-const unassignedLlm: LlmPort = {
+// 导出（m5-btw T1）：harness.llm() 暴露口的兜底复用——impl 未装配窗口同款带内错误，不另造第二份
+export const unassignedLlm: LlmPort = {
   stream: () => (async function* () {
     yield { type: "finish", kind: "error", errorMessage: "llm 口未注入（harness 未装配——activate 期调用过早，D39）" };
   })(),
