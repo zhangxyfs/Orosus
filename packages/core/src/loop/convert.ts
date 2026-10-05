@@ -93,6 +93,29 @@ export function deriveMessages(events: SessionEvent[]): ModelMessage[] {
         // 投影应用（§6.1/M3）：前缀丢弃换摘要——deriveMessages 是事件的纯函数；重放确定性：同一事件序列两次投影字节一致。
         // v2/v3 分界 = trigger 字段缺席（信封 v:1 后置覆盖会抹掉载荷 v 字段——版本判据改用 trigger 在场性，重放仍与 config 无关）
         const summary = String(e.summary ?? "");
+        if (Array.isArray(e.keptUsers)) {
+          // v4（m5-resume-perf T6）自包含重放：保留消息（完整投影形态——落盘时 stripImages(pruned[i]) 的
+          // 快照，含部件边界与 origin）与真省略数内联在事件里——窗口重放（本条之前的 out 未装载）与
+          // 全量重放字节一致，不访问 out 历史与 keepUserAt 下标（v3 的下标回取在窗口态会全部越界被滤、
+          // 保留消息静默丢失——这是老格式永远回退全量的根因）。
+          const summaryMsg: ModelMessage = {
+            role: "user",
+            content: [{ kind: "text", text: `[历史摘要]\n${summary}` }],
+            origin: { kind: "compaction-summary" },
+          };
+          const keptUsers = e.keptUsers as ModelMessage[];
+          if (String(e.trigger) === "manual" || keptUsers.length === 0) {
+            out = [summaryMsg]; // manual 全量零保留（ZCode 形态）；auto 无保留同形
+            break;
+          }
+          const keepUserHead = Math.max(0, Math.min(Number(e.keepUserHead ?? 0) || 0, keptUsers.length));
+          const elisionMsg: ModelMessage = {
+            role: "user",
+            content: [{ kind: "text", text: COMPACTION_ELISION(Number(e.elidedCount ?? 0)) }], // MI-12 口径在落盘侧固化（≡ pruned.length − keepUserAt.length）
+          };
+          out = [...keptUsers.slice(0, keepUserHead), elisionMsg, ...keptUsers.slice(keepUserHead), summaryMsg];
+          break;
+        }
         if (e.trigger === undefined) {
           // v2 旧事件（现状规则不动——旧会话重放兼容，不重写历史）：keepFrom 计数切尾、摘要置顶、无 origin
           const keepFrom = Number(e.keepFrom ?? 0);

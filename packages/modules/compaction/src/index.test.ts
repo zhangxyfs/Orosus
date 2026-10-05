@@ -100,7 +100,8 @@ function setup(opts: { config?: Record<string, unknown>; llmChunks?: Chunk[]; co
   };
 }
 
-/** 迷你重放（镜像 convert.ts 的 turn/prune + turn/compaction v3 分形应用语义——v2 载荷走 keepFrom 旧规则）——
+/** 迷你重放（镜像 convert.ts 的 turn/prune + turn/compaction v4/v3/v2 三代分形应用语义——v4 keptUsers 内联
+ *  自包含〔m5-resume-perf T6〕；v3 载荷走 keepUserAt 下标；v2 载荷走 keepFrom 旧规则）——
  *  用例⑤等钉"模块侧返回值 = 核心侧重放"双写一致。 */
 const replayStripImages = (m: ModelMessage): ModelMessage => {
   if (m.role !== "user" || !m.content.some((p) => p.kind === "image")) return m;
@@ -122,6 +123,16 @@ const miniReplay = (msgs: ModelMessage[], events: { type: string; payload: Recor
       }
     } else if (e.type === "turn/compaction") {
       const summary = String(e.payload.summary);
+      if (Array.isArray(e.payload.keptUsers)) {
+        // v4 自包含（m5-resume-perf T6）——镜像核心 convert.ts v4 分支：keptUsers 内联直用、elidedCount 落盘数
+        const summaryMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: `[历史摘要]\n${summary}` }], origin: { kind: "compaction-summary" } };
+        const keptUsers = e.payload.keptUsers as ModelMessage[];
+        if (String(e.payload.trigger) === "manual" || keptUsers.length === 0) { out = [summaryMsg]; continue; }
+        const keepUserHead = Math.max(0, Math.min(Number(e.payload.keepUserHead ?? 0) || 0, keptUsers.length));
+        const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: replayElision(Number(e.payload.elidedCount ?? 0)) }] };
+        out = [...keptUsers.slice(0, keepUserHead), elisionMsg, ...keptUsers.slice(keepUserHead), summaryMsg];
+        continue;
+      }
       if (e.payload.trigger === undefined) {
         out = [{ role: "user", content: [{ kind: "text", text: `[历史摘要]\n${summary}` }] }, ...out.slice(Number(e.payload.keepFrom ?? 0))];
         continue;
@@ -233,10 +244,12 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
     expect(r).toHaveLength(3); // [elision, u6, 摘要]——头空时 elision 仍置尾段之前（设计空白 4 边界）
     expect(firstText(r[0])).toContain(ELISION_PREFIX);
     expect(firstText(r[1])).toContain("问");
-    const payload = s.appended.find((e) => e.type === "turn/compaction")!.payload as { keepUserAt: number[]; keepUserHead: number; keepUserTail: number };
-    expect(payload.keepUserAt).toEqual([6]);
+    const payload = s.appended.find((e) => e.type === "turn/compaction")!.payload as { keptUsers: ModelMessage[]; keepUserHead: number; elidedCount: number; droppedCount: number };
+    // v4 载荷（m5-resume-perf T6）：keptUsers 内联（完整投影消息）、keepUserAt/keepUserTail 退役
+    expect(payload.keptUsers).toHaveLength(1);
+    expect(firstText(payload.keptUsers[0])).toContain("问");
     expect(payload.keepUserHead).toBe(0);
-    expect(payload.keepUserTail).toBe(1);
+    expect(payload.elidedCount).toBe(payload.droppedCount - payload.keptUsers.length); // MI-12 口径钉
   });
 
   it("⑦ v3 零拒绝（缺陷 A 机制退役）：预算盖过全会话 / 尾部无用户消息 → 照样压缩（用户消息全保留+摘要置尾）", async () => {
@@ -287,7 +300,7 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
     expect(await run({})).toBe(8_192);
   });
 
-  it("⑪ 成功路径回归（v3 载荷）：落 turn/compaction { trigger, summary(含页脚), keepUserAt, keepUserHead, keepUserTail, droppedCount } + 返回 [用户…, elision, 摘要]；摘要输入 = 全部历史（保留用户既进摘要又留原话）", async () => {
+  it("⑪ 成功路径回归（v4 载荷）：落 turn/compaction { trigger, summary(含页脚), keepUserHead, keptUsers(内联完整投影), elidedCount, droppedCount } + 返回 [用户…, elision, 摘要]；摘要输入 = 全部历史（保留用户既进摘要又留原话）", async () => {
     const s = setup({ config: { thresholdTokens: 1 } });
     await def.activate(s.ctx);
     const messages = [u("第一问"), a("第一答"), u("第二问"), a("第二答")];
@@ -300,9 +313,9 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
       payload: {
         trigger: "auto",
         summary: expect.stringContaining("这是摘要"),
-        keepUserAt: [0, 2],
         keepUserHead: 2,
-        keepUserTail: 2,
+        keptUsers: [u("第一问"), u("第二问")], // 完整投影形态内联（T6——窗口重放之根）
+        elidedCount: 2, // MI-12：4 条目 − 2 保留
         droppedCount: 4,
       },
     }]);
@@ -365,7 +378,7 @@ describe("compaction 模块（v3/D57：锚定/窗口/prune 前置/触发分级/�
     expect(r.length).toBe(6); // [尾 4 用户, elision, 摘要]
     const ev = s.appended.find((e) => e.type === "turn/compaction")!;
     expect(ev.payload.trigger).toBe("overflow");
-    expect((ev.payload as { keepUserAt: number[] }).keepUserAt).toEqual([12, 14, 16, 18]); // 最新 4 条用户（尾预算 498 ≈ 4×101）
+    expect((ev.payload as { keptUsers: ModelMessage[] }).keptUsers).toHaveLength(4); // 最新 4 条用户内联（尾预算 498 ≈ 4×101；v4 载荷形态）
     s.errListener({ code: "auth" });                          // 其他 code 不置位
     await s.listener(mk());
     expect(s.appended.filter((e) => e.type === "turn/compaction")).toHaveLength(1);
@@ -437,7 +450,7 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     expect(out).not.toContain("保留尾部");
     expect(out).not.toContain("这是摘要"); // 摘要本文不再进流区（Ctrl+O 查看）
     const ev = s.appended.find((e) => e.type === "turn/compaction")!;
-    expect(ev.payload).toMatchObject({ trigger: "manual", keepUserAt: [], keepUserHead: 0, keepUserTail: 0, droppedCount: 40 });
+    expect(ev.payload).toMatchObject({ trigger: "manual", keepUserHead: 0, keptUsers: [], droppedCount: 40 }); // v4：零保留=空内联（T6）
     expect(s.llmRequests).toHaveLength(1); // 立即执行（不等下一条消息——修复前只返回「已安排」）
   });
 
@@ -480,8 +493,8 @@ describe("compaction__compact 立即执行（M4-2.5 T3——压缩调研 P1+P3�
     await def.activate(man.ctx);
     await man.listener(bigMsgs());
     await man.command("", stubUi);
-    const manEv = man.appended.find((e) => e.type === "turn/compaction")!.payload as { keepUserAt: number[]; droppedCount: number };
-    expect(manEv.keepUserAt).toEqual([]); // manual：零保留
+    const manEv = man.appended.find((e) => e.type === "turn/compaction")!.payload as { keptUsers: ModelMessage[]; droppedCount: number };
+    expect(manEv.keptUsers).toEqual([]); // manual：零保留（v4 空内联）
     expect(manEv.droppedCount).toBe(40);
   });
 

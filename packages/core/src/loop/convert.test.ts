@@ -331,3 +331,94 @@ describe("压缩剥图占位的视觉摘要富化（m5-media F13）", () => {
     }
   });
 });
+
+describe("T6 m5-resume-perf: 压缩事件 v4 自包含（keptUsers+elidedCount 内联——窗口重放 ≡ 全量重放）", () => {
+  /** 前缀铺 6 条投影：u0 / a1 / u2（带图——剥占位后多 text part）/ u4（steering——带 origin）/ a5 / u6。
+   *  v4 载荷内联 keptUsers = 落盘时 stripImages(pruned[i]) 快照（完整投影形态）；elidedCount = 6 − 4 = 2。 */
+  const preEvents = async (s: InMemorySessionStore): Promise<void> => {
+    await s.append("user/message", { content: [{ kind: "text", text: "第一问" }] });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "答一" }] });
+    await s.append("user/message", { content: [{ kind: "text", text: "看图" }, { kind: "image", path: "shots/p.png", mimeType: "image/png" }] });
+    await s.append("agent/steering-message", { messages: [{ text: "busy 期插队", sourceModule: "host" }] });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "答五" }] });
+    await s.append("user/message", { content: [{ kind: "text", text: "最新问" }] });
+  };
+  /** v4 载荷（模块 :451 同款形状）：keptUsers 为剥图/带 origin 的完整投影消息。 */
+  const v4Event = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    type: "turn/compaction",
+    fields: {
+      trigger: "auto",
+      summary: "S",
+      keepUserHead: 2,
+      keptUsers: [
+        { role: "user", content: [{ kind: "text", text: "第一问" }] },
+        { role: "user", content: [{ kind: "text", text: "看图" }, { kind: "text", text: "[image omitted during compaction: shots/p.png]" }] },
+        { role: "user", content: [{ kind: "text", text: "busy 期插队" }], origin: { kind: "steering", sourceModule: "host" } },
+        { role: "user", content: [{ kind: "text", text: "最新问" }] },
+      ],
+      elidedCount: 2,
+      droppedCount: 6,
+      ...over,
+    },
+  });
+  const postEvents = async (s: InMemorySessionStore): Promise<void> => {
+    await s.append("user/message", { content: [{ kind: "text", text: "后续问" }] });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "后续答" }] });
+  };
+
+  it("① v4-auto 部分保留：窗口重放（[v4, 其后事件]）与全量重放 deep equal——含带图多 part 与 steering origin 两形态", async () => {
+    const full = new InMemorySessionStore();
+    await preEvents(full);
+    await full.append("turn/compaction", v4Event().fields as Record<string, unknown>);
+    await postEvents(full);
+    const fullMsgs = deriveMessages(await full.all());
+    const win = new InMemorySessionStore();
+    await win.append("turn/compaction", v4Event().fields as Record<string, unknown>);
+    await postEvents(win);
+    const winMsgs = deriveMessages(await win.all());
+    expect(winMsgs).toEqual(fullMsgs); // 等价性钉（本任务的灵魂）
+    // 形状要点：多 text part 与 origin 都原样进投影（v3 的 string[] 形状装不下这两类）
+    const kept = fullMsgs.filter((m) => m.role === "user");
+    expect(JSON.stringify(fullMsgs)).toContain("[image omitted during compaction: shots/p.png]");
+    expect(JSON.stringify(fullMsgs)).toContain('"sourceModule":"host"');
+    expect(fullMsgs.some((m) => m.role === "user" && (m.content.length ?? 0) === 2 && m.content.every((p) => p.kind === "text"))).toBe(true);
+  });
+
+  it("② v4-manual 全量零保留：窗口 ≡ 全量 = [摘要] + 其后事件", async () => {
+    const payload = { trigger: "manual", summary: "全部摘要", keepUserHead: 0, keptUsers: [], elidedCount: 6, droppedCount: 6 };
+    const full = new InMemorySessionStore();
+    await preEvents(full);
+    await full.append("turn/compaction", payload);
+    await postEvents(full);
+    const win = new InMemorySessionStore();
+    await win.append("turn/compaction", payload);
+    await postEvents(win);
+    expect(deriveMessages(await win.all())).toEqual(deriveMessages(await full.all()));
+  });
+
+  it("③ elidedCount 计数一致性（MI-12 口径=总条目−保留条目）：elision 文案数字与载荷一致；全量/窗口两路同文", async () => {
+    const full = new InMemorySessionStore();
+    await preEvents(full);
+    await full.append("turn/compaction", v4Event().fields as Record<string, unknown>);
+    const fullMsgs = deriveMessages(await full.all());
+    const textOf = (m: { role: string; content?: unknown }): string => String(((m.content as { text?: string }[] | undefined)?.[0])?.text ?? "");
+    const elision = fullMsgs.find((m) => textOf(m).startsWith("[Some messages"))!;
+    expect(textOf(elision)).toContain("omitted here during compaction: 2 messages"); // 6 条目 − 4 保留
+    const win = new InMemorySessionStore();
+    await win.append("turn/compaction", v4Event().fields as Record<string, unknown>);
+    const winMsgs = deriveMessages(await win.all());
+    expect(textOf(winMsgs.find((m) => textOf(m).startsWith("[Some messages"))!)).toBe(textOf(elision));
+  });
+
+  it("④ v3 事件（无 keptUsers）照走 v3 下标分支（在场性判版本——v2/v3/v4 三代共存）", async () => {
+    const s = new InMemorySessionStore();
+    await s.append("user/message", { content: [{ kind: "text", text: "u0" }] });
+    await s.append("assistant/message", { content: [{ kind: "text", text: "a1" }] });
+    await s.append("user/message", { content: [{ kind: "text", text: "u2" }] });
+    await s.append("turn/compaction", { trigger: "auto", summary: "S", keepUserAt: [0, 2], keepUserHead: 1, droppedCount: 3 });
+    const msgs = deriveMessages(await s.all());
+    const textOf = (m: { role: string; content?: unknown }): string => String(((m.content as { text?: string }[] | undefined)?.[0])?.text ?? "");
+    expect(textOf(msgs.find((m) => textOf(m).startsWith("[Some messages"))!))
+      .toContain("omitted here during compaction: 1 messages"); // 3 − 2 = 1（v3 公式 out.length − keepUserAt.length）
+  });
+});

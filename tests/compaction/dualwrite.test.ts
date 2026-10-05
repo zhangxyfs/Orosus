@@ -197,3 +197,67 @@ describe("compaction v3 双写一致性矩阵（T7：模块返回值 = deriveMes
     expect(JSON.stringify(replayed)).toBe(JSON.stringify(moduleOut));
   });
 });
+
+describe("T6 v4 自包含载荷（m5-resume-perf）：keptUsers 内联 + elidedCount——窗口重放 ≡ 全量重放（端到端）", () => {
+  it("① 载荷形状：keptUsers=完整投影消息（带 origin/多 text part）、elidedCount=MI-12 口径、keepUserAt/keepUserTail 退役", async () => {
+    const h = mkHarness({ config: { thresholdTokens: 1, userMessageTokens: 1_600, userMessageHeadTokens: 100, pruneThresholdChars: 99_999 } });
+    await compaction.activate(h.ctx);
+    const imgUser: ModelMessage = { role: "user", content: [
+      { kind: "text", text: "看图" },
+      { kind: "image", path: "shots/p.png", mimeType: "image/png" },
+    ] };
+    const msgs: ModelMessage[] = [
+      u("第一问"),
+      a("中间回答"),
+      imgUser,
+      { role: "user", content: [{ kind: "text", text: "busy 期插队" }], origin: { kind: "steering", sourceModule: "host" } },
+      u("尾部最新问题".repeat(20)),
+    ];
+    await layDown(h.store, msgs);
+    await (h.listener(msgs)) as ModelMessage[];
+    const ev = (await h.store.all()).find((e) => e.type === "turn/compaction") as unknown as {
+      keptUsers?: ModelMessage[]; keepUserAt?: unknown; keepUserHead?: number; elidedCount?: number; droppedCount?: number;
+    };
+    expect(Array.isArray(ev.keptUsers)).toBe(true);
+    expect(ev.keptUsers!.length).toBeGreaterThan(1);
+    expect(ev.keepUserAt).toBeUndefined(); // v4 退役
+    expect(JSON.stringify(ev.keptUsers)).toContain("[image omitted during compaction: shots/p.png]"); // 剥图后的多 text part 形态
+    expect(JSON.stringify(ev.keptUsers)).toContain('"sourceModule":"host"'); // steering origin 保留
+    expect(ev.elidedCount).toBe(ev.droppedCount! - ev.keptUsers!.length); // MI-12 口径钉
+  });
+
+  it("② 端到端等价：deriveMessages([v4 压缩事件, ...其后事件]) 与全量事件流 deep equal——真实模块产物（图+steering 夹具）", async () => {
+    const h = mkHarness({ config: { thresholdTokens: 1, userMessageTokens: 1_600, userMessageHeadTokens: 100, pruneThresholdChars: 99_999 } });
+    await compaction.activate(h.ctx);
+    const imgUser: ModelMessage = { role: "user", content: [
+      { kind: "text", text: "看图" },
+      { kind: "image", path: "shots/p.png", mimeType: "image/png" },
+    ] };
+    const msgs: ModelMessage[] = [u("第一问"), a("答"), imgUser, u("尾问".repeat(10))];
+    await layDown(h.store, msgs);
+    await (h.listener(msgs)) as ModelMessage[];
+    // 压缩后再续两轮（压缩事件之后的事件——窗口尾段）
+    await layDown(h.store, [u("压缩后问"), a("压缩后答")]);
+    const events = await h.store.all();
+    const at = events.findIndex((e) => e.type === "turn/compaction");
+    expect(at).toBeGreaterThan(0);
+    const full = deriveMessages(events);
+    const windowed = deriveMessages(events.slice(at)); // 窗口装载形态：压缩点起读、前缀零接触
+    expect(windowed).toEqual(full);
+  });
+
+  it("③ 二次压缩（前 v4 摘要为头）：第二次事件同样自包含，窗口=最后压缩点起 → 与全量等价", async () => {
+    const h = mkHarness({ config: { thresholdTokens: 1, userMessageTokens: 500, userMessageHeadTokens: 50 } });
+    await compaction.activate(h.ctx);
+    const msgs = Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? u(`用户问题${i}${"内".repeat(80)}`) : a(`答${i}`)));
+    await layDown(h.store, msgs);
+    const first = (await h.listener(msgs)) as ModelMessage[];
+    await layDown(h.store, [u("二压前补充")]);
+    const second = (await h.listener([...first, u("二压前补充")])) as ModelMessage[];
+    expect((await h.store.all()).filter((e) => e.type === "turn/compaction")).toHaveLength(2); // 二次压缩确已发生（收缩口径归既有⑤钉——本测专注窗口等价）
+    const events = await h.store.all();
+    const at = events.map((e) => e.type === "turn/compaction").lastIndexOf(true);
+    expect(at).toBeGreaterThan(0);
+    expect(deriveMessages(events.slice(at))).toEqual(deriveMessages(events)); // 最后压缩点起 ≡ 全量
+  });
+});

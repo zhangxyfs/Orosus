@@ -448,23 +448,23 @@ async function compactOnce(
   opts.state.consecutiveFailures = 0; // 任一成功清零（熔断与退避同释）
   opts.state.failPoint = undefined;
   opts.state.anchorStale = true; // 压缩改写上下文 → 锚点 stale
-  events.push({ type: "turn/compaction", fields: { trigger, summary: fullSummary, keepUserAt: sel.keepUserAt, keepUserHead: sel.keepUserHead, keepUserTail: sel.keepUserTail, droppedCount: dropped.length } });
+  // v4 自包含（m5-resume-perf T6）：保留消息以完整投影形态（stripImages 后快照——含部件边界与 origin）
+  // 内联进事件 + elidedCount（MI-12 口径）——窗口重放（压缩点起读、前缀不装载）与全量重放字节一致之根。
+  // keepUserAt/keepUserTail 退役出载荷（下标回取在窗口态会越界——老 v3 事件原样保留、重放走 v3 分支）。
+  const keptUsers: ModelMessage[] = sel.keepUserAt.map((i) => stripImages(pruned[i]!));
+  events.push({ type: "turn/compaction", fields: { trigger, summary: fullSummary, keepUserHead: sel.keepUserHead, keptUsers, elidedCount: sel.omittedEntries, droppedCount: dropped.length } });
 
-  // 新投影（与核心 convert.ts v3 分形同款双写——测试钉两侧逐字节一致）：manual/[摘要]；
+  // 新投影（与核心 convert.ts v4 分形同款双写——测试钉两侧逐字节一致）：manual/[摘要]；
   // auto/overflow [头(剥图)…, elision, 尾(剥图)…, 摘要（末尾——kimi 形态：模型读到的最近内容就是交接摘要）]。
   // elision 恒在——全保留时省略的是 assistant/tool 条目，同样诚实标注
   let newMessages: ModelMessage[];
-  if (sel.keepUserAt.length === 0) {
+  if (keptUsers.length === 0) {
     newMessages = [summaryMsg];
   } else {
-    const kept = sel.keepUserAt.map((i) => stripImages(pruned[i]!));
-    const headKept = kept.slice(0, sel.keepUserHead);
-    const tailKept = kept.slice(sel.keepUserHead);
-    // MI-12：真省略数（pruned.length − 保留用户条目 = sel.omittedEntries，selectUserMessages 同口径）。
-    // ⚠️ 跨域留档（2026-09-28 code review P3，本批只修模块侧）：核心 convert.ts 的 turn/compaction 分形
-    // （packages/core/src/loop/convert.ts:93-98）仍持旧间隙公式 `tailFirstAt − headLastAt − 1`——core 域须
-    // 同步改为 `out.length − keepUserAt.length`（重放时 out.length ≡ 模块侧 pruned.length，两式同值），并删
-    // headLastAt/tailFirstAt 两行死变量；模板文本两侧不动。对齐前热路径与冷重放的 elision 数字分叉。
+    const headKept = keptUsers.slice(0, sel.keepUserHead);
+    const tailKept = keptUsers.slice(sel.keepUserHead);
+    // MI-12：真省略数（pruned.length − 保留用户条目 = sel.omittedEntries，selectUserMessages 同口径）——
+    // 已固化进 elidedCount 落盘，重放（v4 分支）与热路径同数。
     const elisionMsg: ModelMessage = { role: "user", content: [{ kind: "text", text: COMPACTION_ELISION(sel.omittedEntries) }] };
     newMessages = [...headKept, elisionMsg, ...tailKept, summaryMsg];
   }
