@@ -10,6 +10,10 @@
 import { deriveMessages } from "@orosus/core";
 import type { Harness, SessionEvent } from "@orosus/core";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
+import * as theme from "./theme.ts";
+import { renderMarkdown } from "./mdpipe.ts";
+import { SPIN_FRAMES } from "./tui/fullapp.ts";
+import type { FullApp } from "./tui/fullapp.ts";
 
 /** 侧问角色话术（§四：四要素 = 五家收敛定式——独立轻量实例 / 主对话未被打断 / 无工具单轮 /
  *  不知道就说不、不许承诺去查）。英文与描述层全英方向一致（m5-tool-lang 口径）。 */
@@ -44,6 +48,8 @@ export type BtwDeps = {
   getH: () => Harness;
   /** 直调缝（缺省 = getH().llm().stream——T1 暴露口；测试注入 fake 观察请求与产出）。 */
   llmStream?: (req: BtwStreamReq) => AsyncIterable<Chunk>;
+  /** 行模式输出通道（full 模式不传——答案进 dock 窗，流区零痕迹 D6）；行模式答案/错误经此回显。 */
+  out?: (s: string) => void;
 };
 
 /** 侧问三态槽（live 闭包每帧读——T3 窗接线消费；测试观察口同源）。 */
@@ -106,9 +112,38 @@ export function lastBtwArchive(): { question: string; text: string } | undefined
   return lastBtw;
 }
 
+/** 无参 /btw 回看（D7）：lastBtw 归档重开 dock 窗（静态答案，无 live 不重跑）；false = 无记录——
+ *  调用方 toast BTW_USAGE_HINT。行模式经 deps.out 回显（方案未涉行模式的角落，按 /tasks 行模式
+ *  out(body) 同构处置——偏差台账记）。 */
+export function reopenBtw(app: FullApp | undefined, deps: BtwDeps): boolean {
+  const archive = lastBtwArchive();
+  if (archive === undefined) return false;
+  const slot: BtwSlot = { question: archive.question, phase: "answer", text: archive.text, startedAt: 0 };
+  if (app !== undefined) {
+    app.viewText(btwTitle(archive.question), renderBtwView(slot, app.pickRowWidth()), { layout: "dock" });
+  } else {
+    deps.out?.(`[侧问] ${archive.question}\n${archive.text}`);
+  }
+  return true;
+}
+
+/** 侧问窗三态视图（纯函数——live 闭包每帧现调，1 秒龄门粒度可接受〔§三 步骤 3〕）：
+ *  answering = 转盘 + 秒数（秒位与帧号同拍，tasks-cmd 查看窗同款）；answer = renderMarkdown
+ *  同源公共口（mdpipe.ts:18，流区同管线——零新渲染代码）；error = 红字一行（§三·五：不另画）。 */
+export function renderBtwView(slot: BtwSlot, width: number): string {
+  if (slot.phase === "answering") {
+    const secs = Math.max(0, Math.floor((Date.now() - slot.startedAt) / 1000));
+    const frame = SPIN_FRAMES[Math.floor(Date.now() / 1000) % SPIN_FRAMES.length]!;
+    return theme.fg("accent", frame) + " " + theme.fg("muted", `回答中 · ${secs}s`);
+  }
+  if (slot.phase === "error") return theme.fg("err", slot.text.split("\n")[0] ?? slot.text);
+  return renderMarkdown(slot.text, Math.max(10, width)).join("\n");
+}
+
 /** 带参侧问（fire-and-forget：命令分支立即返回，路由不被 LLM 挂住；不占 inflight/busy——T4 经
- *  BUSY_EXEC 命中走此口）。T3 在本机上接 dock 窗；行模式回显同批 T3/T4 落位。 */
-export function openBtw(deps: BtwDeps, question: string): BtwHandle {
+ *  BUSY_EXEC 命中走此口）。full 模式立即开 dock 窗（pendingUi 单槽，第二问排队 FIFO——§七 已知
+ * 局限）；行模式答案/错误经 deps.out 回显。 */
+export function openBtw(app: FullApp | undefined, deps: BtwDeps, question: string): BtwHandle {
   // 新问先中止旧在飞（qwen cancelBtw 同款）——旧槽由其闭包自行切 error「已被新侧问取代」
   btwAbort?.abort();
   const ac = new AbortController();
@@ -117,6 +152,20 @@ export function openBtw(deps: BtwDeps, question: string): BtwHandle {
   let doneResolve: (() => void) | undefined;
   const done = new Promise<void>((r) => { doneResolve = r; });
   const call = deps.llmStream ?? ((req: BtwStreamReq) => deps.getH().llm().stream(req));
+  if (app !== undefined) {
+    // 立即开窗占槽（首帧即转盘行，不等 1s tick）；折宽 = dock 内容宽惯例（hooks-ui/mcp-ui 同款 pickRowWidth）
+    app.viewText(btwTitle(question), renderBtwView(slot, app.pickRowWidth()), {
+      layout: "dock",
+      live: () => renderBtwView(slot, app.pickRowWidth()), // 三态每帧现算——拖宽即时回流
+    });
+  } else {
+    // 行模式：跑完经 out 回显（full 模式流区零痕迹 D6 在此成立——out 只在行模式布线时传）
+    void done.then(() => {
+      if (deps.out === undefined) return;
+      if (slot.phase === "answer") deps.out(`[侧问] ${slot.text}`);
+      else if (slot.phase === "error") deps.out(`[侧问失败] ${slot.text}`);
+    });
+  }
   void (async () => {
     /** 终态落定（一次性）：已入终态不覆写——abort 与完成同拍时以先到者为准（T2 测试钉）。 */
     const finish = (phase: "answer" | "error", text: string): void => {

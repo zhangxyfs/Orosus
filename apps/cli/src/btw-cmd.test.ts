@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { SessionEvent, Harness } from "@orosus/core";
 import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
+import { stripAnsi } from "./tui/width.ts";
+import type { FullApp } from "./tui/fullapp.ts";
 import {
-  BTW_ROLE_PROMPT, BTW_USAGE_HINT, buildBtwRequest, openBtw, lastBtwArchive,
-  stripTrailingDanglingToolCalls, btwTitle, type BtwRequestSource, type BtwStreamReq, type BtwDeps,
+  BTW_ROLE_PROMPT, BTW_USAGE_HINT, buildBtwRequest, openBtw, reopenBtw, lastBtwArchive,
+  renderBtwView, stripTrailingDanglingToolCalls, btwTitle,
+  type BtwRequestSource, type BtwStreamReq, type BtwDeps, type BtwSlot,
 } from "./btw-cmd.ts";
 
 /** 最小事件（信封字段按 SessionEvent 形状补齐——deriveMessages 只读 type 与载荷字段）。 */
@@ -35,6 +38,17 @@ const gateStream = (): { stream: (req: BtwStreamReq) => AsyncIterable<Chunk>; re
 /** 抛错流：消费即抛（require-yield 合规——空 yield* 占位再抛，行为与裸抛一致）。 */
 const throwStream = (e: unknown): ((req: BtwStreamReq) => AsyncIterable<Chunk>) =>
   () => (async function* () { yield* []; throw e; })();
+
+/** 桩 FullApp（T3）：捕获 viewText 调用（title/text/opts），pickRowWidth 定宽 60（dock 内容宽惯例）。 */
+const stubApp = (): { app: FullApp; calls: { title: string; text: string; opts: { layout?: string; live?: () => string } }[] } => {
+  const calls: { title: string; text: string; opts: { layout?: string; live?: () => string } }[] = [];
+  const app = {
+    viewText: (title: string, text: string, opts: { layout?: string; live?: () => string }) => { calls.push({ title, text, opts }); },
+    pickRowWidth: () => 60,
+  } as unknown as FullApp;
+  return { app, calls };
+};
+const bareDeps = (): BtwDeps => ({ getH: () => stubH([]) as unknown as Harness });
 
 const deps = (stream: (req: BtwStreamReq) => AsyncIterable<Chunk>, h: BtwRequestSource = stubH([])): BtwDeps =>
   ({ getH: () => h as unknown as Harness, llmStream: stream });
@@ -78,40 +92,40 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
 
   it("④ 三态迁移：answering→answer 归档 / 抛错→error 不归档 / 新问先中止旧在飞 / abort-完成同拍已入终态不覆写", async () => {
     // a) answering → answer（归档）
-    const a = openBtw(deps(scriptStream([{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }]).stream, stubH([])), "q1");
+    const a = openBtw(undefined, deps(scriptStream([{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }]).stream, stubH([])), "q1");
     expect(a.slot.phase).toBe("answering"); // 开跑即 answering 态
     await a.done;
     expect(a.slot).toMatchObject({ phase: "answer", text: "答" });
     expect(lastBtwArchive()).toEqual({ question: "q1", text: "答" }); // 只有 answer 态归档
     // b) 抛错 → error 不归档
-    const b = openBtw(deps(throwStream(new Error("网络炸了"))), "q2");
+    const b = openBtw(undefined, deps(throwStream(new Error("网络炸了"))), "q2");
     await b.done;
     expect(b.slot).toMatchObject({ phase: "error", text: "网络炸了" });
     expect(lastBtwArchive()).toEqual({ question: "q1", text: "答" }); // 归档仍是 q1——q2 不入
     // c) 新问先中止旧在飞：旧槽切 error「已被新侧问取代」、不入档；新问照常跑完
     const g = gateStream();
-    const old = openBtw(deps(g.stream), "旧问");
-    const next = openBtw(deps(scriptStream([{ type: "text/delta", text: "新答" }, { type: "finish", kind: "stop" }]).stream), "新问");
+    const old = openBtw(undefined, deps(g.stream), "旧问");
+    const next = openBtw(undefined, deps(scriptStream([{ type: "text/delta", text: "新答" }, { type: "finish", kind: "stop" }]).stream), "新问");
     g.release([{ type: "finish", kind: "stop" }]); // 旧问流此刻才收流——signal 早已 aborted
     await old.done;
     await next.done;
     expect(old.slot).toMatchObject({ phase: "error", text: "已被新侧问取代" });
     expect(lastBtwArchive()).toEqual({ question: "新问", text: "新答" }); // 归档只有新问
     // d) abort-完成同拍：已入终态（answer）的槽不被后来的 abort 覆写
-    const d1 = openBtw(deps(scriptStream([{ type: "text/delta", text: "先到" }, { type: "finish", kind: "stop" }]).stream), "d1");
+    const d1 = openBtw(undefined, deps(scriptStream([{ type: "text/delta", text: "先到" }, { type: "finish", kind: "stop" }]).stream), "d1");
     await d1.done; // d1 已 answer 落定
-    const d2 = openBtw(deps(gateStream().stream), "d2"); // 开新问 = abort 旧中止器（已无人在飞）
+    const d2 = openBtw(undefined, deps(gateStream().stream), "d2"); // 开新问 = abort 旧中止器（已无人在飞）
     expect(d1.slot.phase).toBe("answer"); // 先到者为准——不覆写成「已被新侧问取代」
     expect(d1.slot.text).toBe("先到");
     void d2; // d2 挂在闸门上，测试收尾不等它（进程随套件退出）
   });
 
   it("⑤ 无参回看数据口（D7）：answer 归档可读；在飞未归档不算（边缘披露口径）", async () => {
-    const run = openBtw(deps(scriptStream([{ type: "text/delta", text: "回看正文" }, { type: "finish", kind: "stop" }]).stream), "回看题");
+    const run = openBtw(undefined, deps(scriptStream([{ type: "text/delta", text: "回看正文" }, { type: "finish", kind: "stop" }]).stream), "回看题");
     await run.done;
     expect(lastBtwArchive()).toEqual({ question: "回看题", text: "回看正文" });
     const g = gateStream();
-    const inflight = openBtw(deps(g.stream), "在飞题");
+    const inflight = openBtw(undefined, deps(g.stream), "在飞题");
     expect(lastBtwArchive()).toEqual({ question: "回看题", text: "回看正文" }); // 在飞尚未归档——无参回看不到它
     g.release([{ type: "finish", kind: "error", errorMessage: "收流" }]);
     await inflight.done; // 放成 error 收场（不入档），不留挂起流
@@ -129,7 +143,7 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
 
   it("⑦ 错误格式化：抛 Error 取 message / 抛非 Error 走 String / 带内 finish·error 用 errorMessage、缺省兜底文案", async () => {
     const run = async (stream: (req: BtwStreamReq) => AsyncIterable<Chunk>): Promise<string> => {
-      const h = openBtw(deps(stream), "q");
+      const h = openBtw(undefined, deps(stream), "q");
       await h.done;
       expect(h.slot.phase).toBe("error");
       return h.slot.text;
@@ -146,7 +160,7 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
     const snapshot = JSON.parse(JSON.stringify(events)) as SessionEvent[];
     const h = stubH(events);
     const s = scriptStream([{ type: "text/delta", text: "侧答" }, { type: "finish", kind: "stop" }]);
-    const run = openBtw({ getH: () => h as unknown as Harness, llmStream: s.stream }, "q");
+    const run = openBtw(undefined, { getH: () => h as unknown as Harness, llmStream: s.stream }, "q");
     await run.done;
     expect(h.calls).toBe(1); // 一次只读快照（调用瞬间——§七 快照语义）
     expect(events).toEqual(snapshot); // deriveMessages 纯函数——事件镜像逐字节不变
@@ -163,8 +177,55 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
       { type: "text/delta", text: "二" },
       { type: "finish", kind: "stop" },
     ]);
-    const run = openBtw(deps(s.stream), "q");
+    const run = openBtw(undefined, deps(s.stream), "q");
     await run.done;
     expect(run.slot).toMatchObject({ phase: "answer", text: "一二" });
+  });
+});
+
+describe("/btw 窗接线（m5-btw T3）", () => {
+  it("① live 三态输出：开窗即 answering 转盘+秒数 → answer 正文行 → error 红字一行（同一闭包每帧现算）", async () => {
+    const { app, calls } = stubApp();
+    const g = gateStream();
+    const run = openBtw(app, { ...bareDeps(), llmStream: g.stream }, "为什么这里用 unsafe");
+    expect(calls[0]).toMatchObject({ title: "侧问 · 为什么这里用 unsafe" });
+    expect(calls[0]!.opts.layout).toBe("dock"); // 贴输入框上缘（TUI 三家共识形态，D3）
+    expect(calls[0]!.opts.live).toBeDefined(); // 三态窗全挂 live
+    expect(stripAnsi(calls[0]!.opts.live!())).toMatch(/回答中 · \d+s/);
+    expect(stripAnsi(calls[0]!.text)).toMatch(/回答中 · \d+s/); // 首帧即转盘行，不等 1s tick
+    g.release([{ type: "text/delta", text: "因为跨 FFI 边界" }, { type: "finish", kind: "stop" }]);
+    await run.done;
+    const answered = calls[0]!.opts.live!();
+    expect(stripAnsi(answered)).not.toContain("回答中");
+    expect(stripAnsi(answered)).toContain("因为跨 FFI 边界"); // 同一闭包翻成答案
+    // error 态：同一窗正文区换红字原因行
+    const err = openBtw(app, { ...bareDeps(), llmStream: throwStream(new Error("端点 401")) }, "第二问");
+    await err.done;
+    expect(stripAnsi(calls[1]!.opts.live!())).toContain("端点 401");
+  });
+
+  it("② renderMarkdown 行形态：md 源码不透传（粗体/列表过同源公共口）、长段按 dock 内容宽折行", () => {
+    const slot: BtwSlot = { question: "q", phase: "answer", text: "**粗体** 与列表：\n\n- 甲项\n- 乙项", startedAt: 0 };
+    const out = renderBtwView(slot, 20);
+    expect(stripAnsi(out)).toContain("粗体");
+    expect(stripAnsi(out)).toContain("甲项");
+    expect(out).not.toContain("**"); // md 标记不透传——流区同源管线（mdpipe renderMarkdown）
+    const long = renderBtwView({ question: "q", phase: "answer", text: "一".repeat(50), startedAt: 0 }, 20);
+    expect(stripAnsi(long).split("\n").length).toBeGreaterThan(1); // 20 宽下 50 字必折行
+  });
+
+  it("③ 关窗后槽保留：answer 归档不随窗消失——reopenBtw 重开静态窗（无 live 不重跑）；行模式经 out 回显", async () => {
+    const run = openBtw(undefined, deps(scriptStream([{ type: "text/delta", text: "回看正文" }, { type: "finish", kind: "stop" }]).stream), "回看题");
+    await run.done; // 窗（若有）关掉后归档仍在
+    const { app, calls } = stubApp();
+    expect(reopenBtw(app, bareDeps())).toBe(true);
+    expect(calls[0]).toMatchObject({ title: "侧问 · 回看题" });
+    expect(calls[0]!.opts.layout).toBe("dock"); // 回看同 dock 形态
+    expect(calls[0]!.opts.live).toBeUndefined(); // 静态答案不重跑
+    expect(stripAnsi(calls[0]!.text)).toContain("回看正文");
+    const outs: string[] = [];
+    expect(reopenBtw(undefined, { ...bareDeps(), out: (s) => outs.push(s) })).toBe(true);
+    expect(outs[0]).toContain("回看题");
+    expect(outs[0]).toContain("回看正文");
   });
 });
