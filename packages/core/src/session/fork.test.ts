@@ -7,7 +7,7 @@ import { fakeProvider, fakeProviderModule } from "@orosus/testing";
 import { JsonlSessionStore } from "./jsonl.ts";
 import { repairFile } from "./jsonl.ts";
 import { ForkedSessionStore, openSessionView, verifyChain } from "./fork.ts";
-import type { SessionEvent } from "./types.ts";
+import type { SessionEvent, SessionStore } from "./types.ts";
 import { InMemorySessionStore } from "./memory.ts";
 import { createHarness } from "../index.ts";
 import { deriveMessages } from "../loop/convert.ts";
@@ -584,5 +584,54 @@ describe("T5 m5-resume-perf: verifyChain 窗口头感知（窗口镜像装载的
       { v: 1, id: "f_71", parentId: "f_70", seq: 71, ts: "t", type: "user/message" },
     ];
     expect(verifyChain([...parentSeg, ...ownSeg], { windowedHead: true })).toEqual([]);
+  });
+});
+
+describe("T8 m5-resume-perf: ForkedSessionStore ensureFull 条件转发（parent→own + parentCache 失效）", () => {
+  const mkStore = (sid: string, events: () => SessionEvent[]): { store: SessionStore; upgraded: () => boolean } => {
+    let upgraded = false;
+    return {
+      store: {
+        sessionId: sid,
+        append: async () => { throw new Error("not used"); },
+        all: async () => events(),
+        flush: async () => {},
+        close: async () => {},
+        ensureFull: async () => { upgraded = true; },
+      },
+      upgraded: () => upgraded,
+    };
+  };
+  const ev = (id: string, type: string): SessionEvent => ({ v: 1, id, parentId: null, seq: 1, ts: "t", type }) as SessionEvent;
+
+  it("own+parent 都带才挂；调用序 parent→own；parentCache 失效（all() 拿升级后父前缀）", async () => {
+    let parentFull = false;
+    const parentEvents = [ev("p1", "session/header"), ev("p2", "user/message")];
+    const ownEvents = [ev("o1", "session/header")];
+    const parent = mkStore("s_p", () => (parentFull ? [...parentEvents, ev("p3", "assistant/message")] : parentEvents));
+    const own = mkStore("s_o", () => ownEvents);
+    const fork = new ForkedSessionStore({ parent: parent.store, own: own.store });
+    expect(typeof fork.ensureFull).toBe("function");
+    const before = await fork.all();
+    expect(before.map((e) => e.id)).toEqual(["p1", "p2", "o1"]); // parentCache 建立（窗口态父前缀）
+    parentFull = true; // 父升级后投影变长（模拟 ensureFull 生效）
+    expect((await fork.all()).map((e) => e.id)).toEqual(["p1", "p2", "o1"]); // 缓存不失效（升级前）
+    await fork.ensureFull!();
+    expect(parent.upgraded()).toBe(true); // parent 先升级
+    expect(own.upgraded()).toBe(true); // own 随后
+    expect((await fork.all()).map((e) => e.id)).toEqual(["p1", "p2", "p3", "o1"]); // parentCache 已清——全量父前缀
+  });
+
+  it("own 无 ensureFull（内存后端）→ 复合层不挂（缺省口径——调用方 typeof 判）", async () => {
+    const parent = mkStore("s_p2", () => [ev("p1", "session/header")]);
+    const bare: SessionStore = {
+      sessionId: "s_o2",
+      append: async () => { throw new Error("not used"); },
+      all: async () => [],
+      flush: async () => {},
+      close: async () => {},
+    };
+    const fork = new ForkedSessionStore({ parent: parent.store, own: bare });
+    expect(fork.ensureFull).toBeUndefined();
   });
 });

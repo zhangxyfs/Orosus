@@ -592,3 +592,46 @@ describe("T7 m5-resume-perf: JsonlSessionStore 索引窗口装载（三层：索
     await reopened.close();
   });
 });
+
+describe("T8 m5-resume-perf: ensureFull 懒升级口（窗口镜像按需整读全量）", () => {
+  it("窗口→ensureFull→全量行数；幂等（二调零读盘）；append 后镜像尾即时可见", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t8-"));
+    const agents = join(dir, "s_up", "agents");
+    mkdirSync(agents, { recursive: true });
+    const file = join(agents, "session.jsonl");
+    // 中等窗口会话（v4 压缩、>5MB）——直接手写信封行（同 T7 夹具手法，量缩小到过阈即可）
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_u${String(seq).padStart(5, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "t", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    for (let i = 0; i < 1300; i++) push({ content: [{ kind: "text", text: `问${i} ${"x".repeat(4000)}` }] }, "user/message");
+    push({ trigger: "auto", summary: "S", keepUserHead: 0, keptUsers: [], elidedCount: 1301, droppedCount: 1301 }, "turn/compaction");
+    push({ content: [{ kind: "text", text: "后问" }] }, "user/message");
+    writeFileSync(file, lines.join("\n") + "\n");
+    expect(statSync(file).size).toBeGreaterThan(5 * 1024 * 1024);
+    const dbFile = join(dir, "event-index.sqlite");
+    const w = new JsonlSessionStore({ dir, sessionId: "s_up", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w.loadMode).toBe("window");
+    const before = (await w.all()).length;
+    expect(before).toBeLessThan(lines.length); // 窗口态：种子+尾段（远小于全量 1303 行）
+    await w.ensureFull();
+    expect(w.loadMode).toBe("full");
+    expect((await w.all()).length).toBe(lines.length); // 全量行数
+    vi.mocked(readFileSync).mockClear();
+    await w.ensureFull(); // 幂等
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === file)).toHaveLength(0);
+    const appended = await w.append("user/message", { content: [{ kind: "text", text: "再问" }] });
+    await w.flush();
+    const tail = (await w.all()).slice(-1)[0]!;
+    expect(tail.id).toBe(appended.id); // append 后新事件即时在镜像尾（ensureFull 后续调仍 noop）
+    await w.ensureFull();
+    expect((await w.all()).slice(-1)[0]!.id).toBe(appended.id);
+    await w.close();
+  });
+});

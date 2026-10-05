@@ -29,7 +29,23 @@ export class ForkedSessionStore implements SessionStore {
       const own = opts.own;
       this.lifetimeUsage = () => own.lifetimeUsage!(); // 经对象调用保 this（解构裸函数会丢接收者）
     }
+    // T8（m5-resume-perf）懒升级条件转发（lifetimeUsage 同款挂法）：own 与 parent 都带才转发——
+    // 链上任一环无升级能力则本复合层不挂（调用方 typeof 判缺省）。转发序 parent→own（前缀先升级），
+    // 并清 parentCache——缓存建立后不失效是 T11 祖先链判据的前提，全量消费（fork 窗外分叉）必须拿到
+    // 升级后的父前缀。
+    if (opts.own.ensureFull !== undefined && opts.parent.ensureFull !== undefined) {
+      const own = opts.own;
+      const parent = opts.parent;
+      this.ensureFull = async () => {
+        await parent.ensureFull!();
+        await own.ensureFull!();
+        this.parentCache = undefined;
+      };
+    }
   }
+
+  /** T8：窗口后端的懒升级转发口（条件挂载——见构造器注）。 */
+  readonly ensureFull?: () => Promise<void>;
 
   async all(): Promise<SessionEvent[]> {
     if (this.parentCache === undefined) {

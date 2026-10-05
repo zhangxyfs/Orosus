@@ -19,6 +19,11 @@ export interface SessionStore {
   /** 跨会话累计用量（/usage 口径）：同存储域全部会话的 usage chunk 求和；sessions = 有用量的会话数。
    *  可选——内存/SQLite 后端可缺省，调用方回退当前会话口径。 */
   lifetimeUsage?(): Promise<{ input: number; output: number; sessions: number }>;
+  /** T8（m5-resume-perf）懒升级口：窗口镜像（T7）按需整读全量替换（usage/fork 分叉等全量消费者）。
+   *  可选成员——exactOptionalPropertyTypes 口径下「缺席」≠「值为 undefined」；窗口能力后端（jsonl）
+   *  才挂，全量/内存后端缺省（全量态本就无升级可做，调用方 typeof 判在场性——ForkedSessionStore
+   *  条件转发同 lifetimeUsage 先例）。幂等：全量态再调 = noop。 */
+  ensureFull?(): Promise<void>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }

@@ -722,6 +722,37 @@ export class JsonlSessionStore implements SessionStore {
     return Promise.resolve([...this.events]);
   }
 
+  /** T8（m5-resume-perf）懒升级：窗口镜像整文件重读替换为全量并置 loadMode="full"（幂等——全量态
+   *  noop，二调零读盘）。all() 契约不变；append 续写锚随镜像末条推进（全量末条=窗口末条=文件真实
+   *  末条，链无缝）。撕裂尾防御：首条坏行即止（append-only 保证坏只可能在尾）。 */
+  async ensureFull(): Promise<void> {
+    if (this._loadMode === "full") return;
+    let raw: string;
+    try {
+      raw = readFileSync(this.file, "utf8");
+    } catch {
+      return; // 文件消失（极端竞态）——保持现镜像
+    }
+    const events: SessionEvent[] = [];
+    for (const line of raw.split("\n")) {
+      if (line === "") continue;
+      let e: SessionEvent;
+      try {
+        e = JSON.parse(line) as SessionEvent;
+      } catch {
+        break; // 撕裂尾恒在尾——其后无好行
+      }
+      events.push(e);
+    }
+    this.events = events;
+    const last = events[events.length - 1];
+    if (last !== undefined) {
+      this.seq = last.seq;
+      this.lastId = last.id;
+    }
+    this._loadMode = "full";
+  }
+
   /** 跨会话累计（/usage 口径修复：重启后此前会话的用量不归零）。当前会话取内存镜像——
    *  buffer 可能未 drain；其余会话读盘，坏行（torn tail）跳过不炸。会话数按文件计（有用量才算）。
    *  fork 子体整文件跳过（M4-2 T4/B3）：header.parentSession 非空 = fork 子体，其 usage 不入累计
