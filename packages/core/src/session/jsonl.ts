@@ -541,6 +541,14 @@ export class JsonlSessionStore implements SessionStore {
     }
     if (aborted || !seenCompaction) {
       this._loadFallback = aborted ? abortReason : "no-compaction";
+      // T7③「顺手建索引」补（2026-10-05 全量对账）：无压缩路径扫描已完整（EOF 达成）——落行让翻页
+      // 免走 ③ 兜底；legacy-abort 路径行集不完整（扫至老格式即断）不落（③ 单会话补建覆盖）。
+      if (!aborted && index !== undefined && sqliteAvailable()) {
+        try {
+          const st = statSync(this.file);
+          writeEventRows(index.dbFile, index.bucket, this.sessionId, rows, { mtimeMs: st.mtimeMs, size: st.size, indexedBytes: lastEnd });
+        } catch { /* 索引 best-effort */ }
+      }
       this.loadFull();
       return;
     }

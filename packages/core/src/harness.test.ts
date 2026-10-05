@@ -2001,6 +2001,7 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
       seq++;
     };
     push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    push({ label: "预算内标签" }, "session/label"); // 头预算内（T10 消费点钉①：种子即恢复）
     push({ content: [{ kind: "text", text: `问0 ${"x".repeat(20 * 1024)}` }] }, "user/message");
     push({ label: "预算外标签" }, "session/label"); // 头 16KB 种子覆盖不到（首消息 20KB 之后）
     const FILLER = "x".repeat(4000);
@@ -2042,6 +2043,8 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
     expect(deriveMessages(winEvents)).toEqual(deriveMessages(fullEvents)); // 端到端等价钉（T6/T7 的 harness 级总装）
     expect(verifyChain(winEvents, { windowedHead: true })).toEqual([]); // 窗口头豁免下零 issue
     expect(winEvents.some((e) => e.type === "session/header")).toBe(true); // 种子在位
+    // T10① 预算内 label：头种子即恢复（无需 ensureHistoryFull）
+    expect(winEvents.some((e) => e.type === "session/label" && e.label === "预算内标签")).toBe(true);
   });
 
   it("b. env 逃生阀 OROSUS_SESSION_LOAD=full → 全量（hermetic env 面注入）", async () => {
@@ -2051,7 +2054,7 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
     const { sessionLoad: _drop, ...opts } = harnessOpts(dir, sid, "window"); // 不显式传——env 定
     void _drop;
     process.env.OROSUS_SESSION_LOAD = "full";
-    let events: { type: string }[];
+    let events: { type: string; label?: unknown }[];
     try {
       const h = await createHarness(opts);
       events = await h.history();
@@ -2059,8 +2062,8 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
     } finally {
       delete process.env.OROSUS_SESSION_LOAD;
     }
-    // 全量装载：镜像含预算外 label（窗口态需 ensureHistoryFull 补——见 c）
-    expect(events.filter((e) => e.type === "session/label").length).toBe(1);
+    // 全量装载：镜像含预算外 label（窗口态需 ensureHistoryFull 补——见 c；预算内标签见 a）
+    expect(events.filter((e) => e.type === "session/label" && e.label === "预算外标签").length).toBe(1);
   });
 
   it("c. 消费点等价（T10 并钉）：usage().current 窗口=全量；fork 窗外 atEntryId 成功；ensureHistoryFull 补预算外 label", async () => {
@@ -2069,10 +2072,11 @@ describe("T11 m5-resume-perf: 窗口装载装配链（默认窗口 + 逃生阀 +
     const { preAnchorId } = buildBig(join(dir, "sessions"), sid);
     const hWin = await createHarness(harnessOpts(dir, sid, "window"));
     const hFull = await createHarness(harnessOpts(dir, sid, "full"));
-    // 预算外 label：窗口镜像缺（先断言——usage/fork 的 ensureFull 会升级镜像）→ ensureHistoryFull 后在
-    expect((await hWin.history()).some((e) => e.type === "session/label")).toBe(false);
+    // 预算外 label：窗口镜像缺（先断言——usage/fork 的 ensureFull 会升级镜像；预算内标签在种子）→ ensureHistoryFull 后在
+    expect((await hWin.history()).some((e) => e.type === "session/label" && e.label === "预算外标签")).toBe(false);
+    expect((await hWin.history()).some((e) => e.type === "session/label" && e.label === "预算内标签")).toBe(true);
     await hWin.ensureHistoryFull();
-    expect((await hWin.history()).some((e) => e.type === "session/label")).toBe(true);
+    expect((await hWin.history()).some((e) => e.type === "session/label" && e.label === "预算外标签")).toBe(true);
     // usage：窗口（经 ensureFull）= 全量
     expect((await hWin.usage()).current).toEqual((await hFull.usage()).current);
     // fork 窗外 atEntryId（压缩点之前——ensureFull 后合法）

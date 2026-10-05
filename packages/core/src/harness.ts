@@ -376,6 +376,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       mode: leaf?.path ?? "full",
       ...(leaf?.fallback !== undefined ? { fallback: leaf.fallback } : {}),
     });
+    // T7③ 方案点名 diag（2026-10-05 全量对账补）：窗口装载降级留 warn 痕——老格式/无压缩/索引漂移
+    for (const l of resumeView.loads) {
+      if (l.fallback !== undefined) {
+        createLogger(sink, "session").warn("session.load.window-fallback", "窗口装载降级回退全量", { fallback: l.fallback, mode: l.path });
+      }
+    }
   } else if (options.fork !== undefined) {
     // 会话树批 T1 断代修复：父视图经 openSessionView 递归拼装——父若是 fork 子体，其投影含祖辈段
     //（旧实现平铺打开父自己那份文件，孙代丢祖辈前缀）。parentDir 缺省同桶（REPL /fork）；跨桶父由宿主定位后填入（D46）。

@@ -310,6 +310,17 @@ export class DocModel {
 	private foldStepsForTurn(turn: number, final: boolean): void {
 		const keep = this.stepsKeep;
 		if (keep === 0) return;
+		// T9 阅读保护（2026-10-05 全量对账补，trimTurns 同哲学）：活轮折叠要移除的行段与视口相交
+		// → 本轮顺延（用户在读就不折；回放期不设防——装载即有界是硬保证、且屏下建设期行号对不上）
+		if (!this.inReplay && this.viewportProbe !== undefined && this.viewportProbe() !== undefined) {
+			const vp = this.viewportProbe()!;
+			let acc = 0;
+			for (let i = 0; i < this.lines.length; i++) {
+				const n = Math.max(0, this.counts[i] ?? 0);
+				if (this.turnOf[i] === turn && acc < vp.end && acc + n > vp.start) return; // 本轮行段与视口相交
+				acc += n;
+			}
+		}
 		const SLACK = final ? 0 : 10; // 活轮滞回防每步一折；收轮/重折终态=精确 stepsKeep
 		const stepIdx: number[] = [];
 		let foldAt = -1;
@@ -695,8 +706,14 @@ export class DocModel {
 		return added;
 	}
 
+	/** 回放期旗标（T9 阅读保护门）：historyFrom/prependHistory 建设期 viewportProbe 属旧屏内容——
+	 *  行号对不上新 dm 的账本，折叠保护只在活轮生效（回放期无条件折——装载即有界是硬保证）。 */
+	private inReplay = false;
+
 	/** 回放事件 → 条目（historyFrom 与 T14 prependHistory 共用的逐事件转换——单源勿复制）。 */
 	private replayEventLoop(events: { type: string; [k: string]: unknown }[]): void {
+		this.inReplay = true;
+		try {
 		// 回放期 agent 组重建（2026-09-27：重载后与实时同形——不再退化静态占位行）。同一轮 assistant
 		// 的连续 spawn 并一组（组引用到 user/assistant 消息边界即断）——与实时路「末组活着才并入」等价：
 		// 回放全员终态，轮边界即断组点。组员编号从 spawn 的 result 里抠（callId 精确配对，spawnIdsIn
@@ -776,6 +793,9 @@ export class DocModel {
 				this.turnEnd(false); // 装载期只记账不逐次裁剪——尾部统一一次（T7 轮次记账补分支）
 			}
 			for (let i = seqMark; i < this.lines.length; i++) this.evSeqOf[i] = evSeq; // T14：区间回填（一事件可产 0..n 条目）
+		}
+		} finally {
+			this.inReplay = false;
 		}
 	}
 
