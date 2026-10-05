@@ -14,6 +14,7 @@ import * as theme from "./theme.ts";
 import { renderMarkdown } from "./mdpipe.ts";
 import { SPIN_FRAMES } from "./tui/fullapp.ts";
 import type { FullApp } from "./tui/fullapp.ts";
+import { truncateToWidth } from "./tui/width.ts";
 
 /** 侧问角色话术（§四：四要素 = 五家收敛定式——独立轻量实例 / 主对话未被打断 / 无工具单轮 /
  *  不知道就说不、不许承诺去查）。英文与描述层全英方向一致（m5-tool-lang 口径）。 */
@@ -56,8 +57,12 @@ export type BtwDeps = {
 export interface BtwSlot {
   question: string;
   phase: "answering" | "answer" | "error";
-  /** answer 态 = 答案全文；error 态 = 失败原因。 */
+  /** answer 态 = 答案全文；error 态 = 失败原因；answering 态 = 流式累积正文（升级档：chunk 边收边写，
+   *  live 每秒一跳呈现——窗口 1 秒龄门 tick 是现成机制，渲染侧零新增）。 */
   text: string;
+  /** 思考预览（kimi thinking 预览同款）：reasoning/delta 累积——answering 态灰字末两行显示，
+   *  正文到来后顶在上方、answer 态整块退役；不进最终答案文（零落盘口径不变）。 */
+  thinking?: string;
   readonly startedAt: number;
 };
 
@@ -127,14 +132,22 @@ export function reopenBtw(app: FullApp | undefined, deps: BtwDeps): boolean {
   return true;
 }
 
-/** 侧问窗三态视图（纯函数——live 闭包每帧现调，1 秒龄门粒度可接受〔§三 步骤 3〕）：
- *  answering = 转盘 + 秒数（秒位与帧号同拍，tasks-cmd 查看窗同款）；answer = renderMarkdown
- *  同源公共口（mdpipe.ts:18，流区同管线——零新渲染代码）；error = 红字一行（§三·五：不另画）。 */
+/** 侧问窗三态视图（纯函数——live 闭包每帧现调，1 秒龄门粒度即「1 秒一跳」呈现节拍〔升级档〕）：
+ *  answering = 思考预览（末两行灰字，正文到来顶在下方）+ 流式累积正文（renderMarkdown 同源公共口，
+ *  mdpipe.ts:18 流区同管线——零新渲染代码）+ 转盘尾行（纯思考期标「思考中」）；answer = 完整 md；
+ *  error = 红字一行（§三·五：不另画）。 */
 export function renderBtwView(slot: BtwSlot, width: number): string {
+  const w = Math.max(10, width);
   if (slot.phase === "answering") {
     const secs = Math.max(0, Math.floor((Date.now() - slot.startedAt) / 1000));
     const frame = SPIN_FRAMES[Math.floor(Date.now() / 1000) % SPIN_FRAMES.length]!;
-    return theme.fg("accent", frame) + " " + theme.fg("muted", `回答中 · ${secs}s`);
+    const onlyThinking = slot.text === "" && (slot.thinking ?? "") !== "";
+    const parts: string[] = [];
+    const thinkLines = (slot.thinking ?? "").split("\n").map((l) => l.trim()).filter((l) => l !== "");
+    for (const l of thinkLines.slice(-2)) parts.push(theme.dim(truncateToWidth(l, w))); // 思考预览：末两行防顶飞正文
+    if (slot.text !== "") parts.push(renderMarkdown(slot.text, w).join("\n")); // 流式正文
+    parts.push(theme.fg("accent", frame) + " " + theme.fg("muted", `${onlyThinking ? "思考中" : "回答中"} · ${secs}s`));
+    return parts.join("\n");
   }
   if (slot.phase === "error") return theme.fg("err", slot.text.split("\n")[0] ?? slot.text);
   return renderMarkdown(slot.text, Math.max(10, width)).join("\n");
@@ -183,16 +196,22 @@ export function openBtw(app: FullApp | undefined, deps: BtwDeps, question: strin
       const { system, messages } = await buildBtwRequest(deps.getH(), question);
       if (replaced()) return;
       let text = "";
+      let thinking = "";
       for await (const c of call({ system, messages, signal: ac.signal })) {
-        if (c.type === "text/delta") text += c.text;
-        else if (c.type === "finish") {
+        if (c.type === "text/delta") {
+          text += c.text;
+          slot.text = text; // 流式：边收边写——live 每秒读槽即「1 秒一跳」呈现
+        } else if (c.type === "reasoning/delta") {
+          thinking += c.text;
+          slot.thinking = thinking; // 思考预览（不进最终答案文——text 只收 text/delta）
+        } else if (c.type === "finish") {
           // 带内错误形态（llm 口失败不抛、yield finish/error——只 try/catch 会漏成空答案进 answer 态）
           if (c.kind === "error") { finish("error", c.errorMessage ?? "llm 调用失败"); return; }
           // 适配器静默中止（无本侧 signal）也诚实记失败，不把半截当答案
           if (c.kind === "aborted" && !ac.signal.aborted) { finish("error", "已中止"); return; }
           break; // stop/length = 完整答案（无工具单轮，toolUse 不会出现）；finish 后流即尽
         }
-        // reasoning/delta、usage、server-search：侧问不消费
+        // usage、server-search：侧问不消费
       }
       if (replaced()) return; // 适配器被 abort 后静默收流（不抛不 yield aborted）的形态
       finish("answer", text);

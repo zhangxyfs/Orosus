@@ -192,6 +192,66 @@ describe("/btw 边界（m5-btw T5）", () => {
   });
 });
 
+/** 轮询等待（升级档用；模块层——describe 内副本触发 consistent-function-scoping）。 */
+const btwWaitFor = async (pred: () => boolean): Promise<void> => {
+  for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setTimeout(r, 5));
+};
+
+/** 分段流（升级档用；模块层同因）：先吐思考+首段正文后挂起（可断言中段），放行后吐尾段+finish。 */
+const btwStepStream = (): { stream: (req: BtwStreamReq) => AsyncIterable<Chunk>; release: () => void } => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  return {
+    stream: () => (async function* () {
+      yield { type: "reasoning/delta", text: "思考一\n思考二\n思考三" };
+      yield { type: "text/delta", text: "答" };
+      await gate;
+      yield { type: "text/delta", text: "案" };
+      yield { type: "finish", kind: "stop" };
+    })(),
+    release,
+  };
+};
+
+describe("/btw 流式与思考预览（m5-btw 升级档——D13 一秒一跳 + kimi thinking 预览）", () => {
+  it("① 一秒一跳 + 思考预览：answering 中段读到流式正文与思考末两行（首行被顶掉）；answer 态思考整块退役", async () => {
+    const s = btwStepStream();
+    const run = openBtw(undefined, deps(s.stream), "q");
+    await btwWaitFor(() => run.slot.text === "答"); // 挂起在中段：正文一字、思考三行已入槽
+    const mid = renderBtwView(run.slot, 40);
+    expect(stripAnsi(mid)).toContain("答"); // 流式正文已现（chunk 边收边写——live 每秒读槽）
+    expect(stripAnsi(mid)).toContain("思考二");
+    expect(stripAnsi(mid)).toContain("思考三"); // 预览 = 思考末两行
+    expect(stripAnsi(mid)).not.toContain("思考一"); // 首行被顶掉（防长思考把正文顶出屏）
+    expect(stripAnsi(mid)).toMatch(/回答中 · \d+s/); // 正文已到 → 回答中尾行
+    s.release();
+    await run.done;
+    expect(run.slot).toMatchObject({ phase: "answer", text: "答案" });
+    const done = renderBtwView(run.slot, 40);
+    expect(stripAnsi(done)).toContain("答案");
+    expect(stripAnsi(done)).not.toContain("思考三"); // answer 态思考预览退役——只留答案
+  });
+
+  it("② 纯思考期尾行标「思考中」：只有 reasoning 无正文时；思考不进答案文（text 只收 text/delta）", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const stream = (): AsyncIterable<Chunk> => (async function* () {
+      yield { type: "reasoning/delta", text: "只有思考" };
+      await gate;
+      yield { type: "finish", kind: "stop" }; // 零正文完成（防御形态——text 空）
+    })();
+    const run = openBtw(undefined, { getH: () => stubH([]) as unknown as Harness, llmStream: () => stream() }, "q");
+    await btwWaitFor(() => (run.slot.thinking ?? "") !== "");
+    const think = renderBtwView(run.slot, 40);
+    expect(stripAnsi(think)).toContain("只有思考");
+    expect(stripAnsi(think)).toMatch(/思考中 · \d+s/); // 无正文 → 思考中尾行
+    release();
+    await run.done;
+    expect(run.slot).toMatchObject({ phase: "answer", text: "" }); // 思考没混进答案文
+    expect(run.slot.thinking).toBe("只有思考"); // 槽里留档（仅 answering 期显示用）
+  });
+});
+
 describe("/btw 窗接线（m5-btw T3）", () => {
   it("① live 三态输出：开窗即 answering 转盘+秒数 → answer 正文行 → error 红字一行（同一闭包每帧现算）", async () => {
     const { app, calls } = stubApp();
