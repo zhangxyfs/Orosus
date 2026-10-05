@@ -156,16 +156,33 @@ describe.skipIf(!sqliteAvailable())("T6b m5-resume-perf: 事件索引 schema 与
     expect(rowsOf(dbFile)).toHaveLength(3);
   });
 
-  it("g. 盘上消失的会话行删除（stale sweep）", async () => {
+  it("g. 盘上消失的会话行删除（stale sweep——仅全库形态：entries 缺省走 scanSessionFiles）", async () => {
     const d = tmp();
     const dbFile = join(d, "event-index.sqlite");
-    const a = await seedSession(d, "s_g1", 3);
-    const b = await seedSession(d, "s_g2", 4);
-    await refreshEventIndex(dbFile, d, [a.entry, b.entry]);
+    // 双层布局（root/bucket/<sid>/agents/…）——scanSessionFiles 的真实视角
+    const bucket = join(d, "bk");
+    const a = await seedSession(bucket, "s_g1", 3);
+    const b = await seedSession(bucket, "s_g2", 4);
+    await refreshEventIndex(dbFile, d); // 全库形态：扫到两会话
     expect(rowsOf(dbFile)).toHaveLength(7);
-    rmSync(join(d, "s_g1"), { recursive: true, force: true });
-    await refreshEventIndex(dbFile, d, [b.entry]); // 只剩 b 在盘上
-    expect(rowsOf(dbFile)).toHaveLength(4); // a 的行被删
+    rmSync(join(bucket, "s_g1"), { recursive: true, force: true });
+    await refreshEventIndex(dbFile, d); // 再全库——s_g1 盘上消失，行被清扫
+    expect(rowsOf(dbFile)).toHaveLength(4);
+  });
+
+  it("g2. 定向刷新（显式条目）不清扫他会话——2026-10-05 用户实机「索引只剩一个会话」的根因钉", async () => {
+    const d = tmp();
+    const dbFile = join(d, "event-index.sqlite");
+    const bucket = join(d, "bk");
+    const a = await seedSession(bucket, "s_a", 3);
+    const b = await seedSession(bucket, "s_b", 4);
+    await refreshEventIndex(dbFile, d); // 全库：两会话都入索引
+    expect(rowsOf(dbFile)).toHaveLength(7);
+    // T11 装载预刷新 / 翻页追平的单会话形态：显式条目只刷自己——他会话行必须存活
+    forwardMtime(a.file);
+    const st = statSync(a.file);
+    await refreshEventIndex(dbFile, d, [{ ...a.entry, mtimeMs: st.mtimeMs, size: st.size }]);
+    expect(rowsOf(dbFile)).toHaveLength(7); // b 的 4 行没被误删（旧实现此处=3 行）
   });
 
   it("h. writeEventRows（T7 嗅探路径顺手建索引的低层口）：覆盖式落行 + stamp", async () => {

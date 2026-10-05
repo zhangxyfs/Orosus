@@ -158,7 +158,11 @@ function openEventIndexDb(dbFile: string, allowRebuild = true): import("node:sql
   };
   try {
     return tryOpen();
-  } catch {
+  } catch (err) {
+    // 瞬时锁（他进程写并发/检查点窗口）不删库——重建是空库，会把健康索引清零（treeindex CS-08
+    // 「瞬时错误删掉健康索引」同教训）；只有真坏库（not a database 等形态错）才走删库重建
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/busy|locked/i.test(msg)) return undefined;
     if (!allowRebuild) return undefined;
     removeSqliteDbFiles(dbFile); // 坏库重建（连 -wal/-shm——树索引同款先例；只删本库）
     try {
@@ -176,6 +180,10 @@ function openEventIndexDb(dbFile: string, allowRebuild = true): import("node:sql
  *  ③（翻页单会话补建）走 indexSingleSession。 */
 export async function refreshEventIndex(dbFile: string, root: string, entries?: SessionFileEntry[]): Promise<void> {
   if (!sqliteAvailable()) return;
+  // 全库形态（entries 缺省）才做「盘上消失清扫」——显式条目 = 定向刷新（T11 装载预刷新 / 翻页追平
+  // 的单会话形态），清扫按「不在条目集 = 已消失」会把其余全会话的行误删（2026-10-05 用户实机：
+  // 索引只剩一个会话——最后打开的那个）。
+  const fullScan = entries === undefined;
   const list = entries ?? scanSessionFiles(root);
   const db = openEventIndexDb(dbFile);
   if (db === undefined) return;
@@ -206,13 +214,15 @@ export async function refreshEventIndex(dbFile: string, root: string, entries?: 
       }
       stampUp.run(entry.bucket, entry.id, entry.mtimeMs, entry.size, consumedTo);
     }
-    for (const key of stamps.keys()) {
-      if (onDisk.has(key)) continue;
-      const slash = key.indexOf("/");
-      const bucket = key.slice(0, slash);
-      const sid = key.slice(slash + 1); // sid 自身可含 "/"？——bucket 是 basename 无斜杠，余段全归 sid
-      del.run(bucket, sid);
-      delStamp.run(bucket, sid);
+    if (fullScan) {
+      for (const key of stamps.keys()) {
+        if (onDisk.has(key)) continue;
+        const slash = key.indexOf("/");
+        const bucket = key.slice(0, slash);
+        const sid = key.slice(slash + 1); // bucket 是 basename 无斜杠，余段全归 sid
+        del.run(bucket, sid);
+        delStamp.run(bucket, sid);
+      }
     }
     db.exec("COMMIT");
   } catch {
