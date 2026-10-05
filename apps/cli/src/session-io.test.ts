@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "@orosus/core";
-import { inputHistoryTexts, INPUT_ECHO_EVENT } from "./session-io.ts";
+import { inputHistoryTexts, INPUT_ECHO_EVENT, switchBusyGate, switchStepsFor } from "./session-io.ts";
 
 /** 事件桩（inputHistoryTexts 只读 type/content/messages/text/sourceModule——其余字段桩值即可） */
 const ev = (type: string, fields: Record<string, unknown> = {}): SessionEvent =>
@@ -63,5 +63,19 @@ describe("输入历史播种 inputHistoryTexts（2026-10-03 拍板「↑ 召回 
     expect(inputHistoryTexts([userMsg("看 [image #3]")])).toEqual(["看"]);
     expect(inputHistoryTexts([userMsg("[image #3]")])).toEqual([]);
     expect(inputHistoryTexts([userMsg("[image #3]（旁注路径同剥）"), echoEv("[image #4]"), ev("turn/start", {})])).toEqual([]);
+  });
+});
+
+describe("T4 m5-resume-perf: 切换先画后注水（switchTo 拆步——装配策略与切换中门的可测形态）", () => {
+  it("switchStepsFor：full 模式 frameFirst（先画后注水）、行模式同步切换（现状语义钉）", () => {
+    expect(switchStepsFor({ isFullscreen: () => true })).toEqual({ frameFirst: true });
+    expect(switchStepsFor({ isFullscreen: () => false })).toEqual({ frameFirst: false });
+  });
+
+  it("switchBusyGate：切换中拦回（文案「正在切换会话…」）、注水完成放行", () => {
+    const blocked = switchBusyGate(true);
+    expect(blocked.blocked).toBe(true);
+    if (blocked.blocked) expect(blocked.message).toBe("正在切换会话…");
+    expect(switchBusyGate(false)).toEqual({ blocked: false });
   });
 });

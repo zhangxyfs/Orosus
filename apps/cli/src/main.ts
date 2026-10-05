@@ -60,7 +60,7 @@ import { loadConfig } from "@orosus/core"; // 读配置单一事实源(m4-8 T2.5
 import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, moduleConfigFileFor } from "./config-face.ts";
 import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
-import { activeDirRef, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryTexts, INPUT_ECHO_EVENT, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchTo, type SessionDeps } from "./session-io.ts";
+import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryTexts, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, SKILL_MARK_PREFIX, type SkillUiDeps } from "./skills-ui.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
@@ -247,6 +247,11 @@ const commandUi = createCliUi({
 // 全屏会话切换的回显延期槽（F5 二轮⑯）：switch 后 dm 在 sessionLoop 顶重建——
 // 当场回显等于写进即弃的旧 dm（用户实测：/sessions 切换后历史「没加载」）。
 let pendingEcho: { notice: string; history: boolean } | undefined;
+// T4（m5-resume-perf）先画后注水：full 模式切换只登记目标 sid 即返回（重活 createSession 不在
+// processReplLine 里 await——FullApp 不冻屏）；sessionLoop 顶画框架后异步装载注水。
+// isSwitching 门拦注水完成前的提交/再切换（切换不可逆：旧会话已 close，Esc 不中断）。
+let pendingSwitchSid: string | undefined;
+let isSwitching = false;
 
 // 顶层兜底 catch（T6/S7）：createHarness 抛错（坏配置 TOML、required 护栏阻断、T5 没盖住的）不再裸堆栈退出。
 // 模块顶层 await——catch 内不能 return、也不能只设 exitCode 放行（后续 REPL 带着未初始化的 h 继续跑），
@@ -671,6 +676,12 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           },
         );
         if (n === undefined) return "again";
+        // T4（m5-resume-perf）：full 模式先画后注水——登记目标即返回，装载在 sessionLoop 顶异步走；
+        // 行模式照旧同步切换（echoHistory 即时回显语义不变）
+        if (switchStepsFor(sessionDeps).frameFirst) {
+          pendingSwitchSid = items[n - 1]!.id;
+          return "switch";
+        }
         await switchTo(items[n - 1]!.id, sessionDeps);
         return "switch"; // 换 harness 后重挂横幅与渲染
       }
@@ -698,6 +709,10 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot, currentBucket);
         if (sid === undefined) { notify(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
+        if (switchStepsFor(sessionDeps).frameFirst) { // T4：先画后注水（同 /sessions 选择）
+          pendingSwitchSid = sid;
+          return "switch";
+        }
         await switchTo(sid, sessionDeps);
         return "switch";
       }
@@ -1350,7 +1365,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   // 输入历史播种（2026-09-23 实测：/sessions 恢复后 ↑ 无历史可召——FullApp 随会话重建即清零）：
   // 召回 = 我输入的内容（2026-10-03 拍板）——原话旁注优先、老会话技能合成体按标记行还原、图片
   // chip 剥除；推导收口 session-io inputHistoryTexts（行为钉在彼处测试件）
-  app.seedHistory(inputHistoryTexts(await h.history()));
+  app.seedHistory(isSwitching ? [] : inputHistoryTexts(await h.history())); // T4：切换期 h 尚旧——跳过播种，注水完成时补挂
   // 流式排队面（F5 四轮）：turn 进行中的提交入队，结束后依序执行——消息带气泡、命令不带，
   // 全程不触碰活动 markdown/think 块（插队输出会把 DocModel 活动块 settle 掉 = 渲染乱）
   const pendingSubmits: string[] = [];
@@ -1358,6 +1373,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   // busyExec = busy 即改档（批①②⑦d）：不占有/释放 inflight 与 busy（归进行中的 turn 所有），
   // 结果走单行 pushLine（md 块会 settle 活动流块——busy 期 [提示] 直写先例）；命令不产生 switch/quit 语义
   const runSubmit = (text: string, busyExec = false): void => {
+    const gate = switchBusyGate(isSwitching); // T4：注水完成前拦回（切换不可逆但未就绪——旧会话已 close）
+    if (gate.blocked) { notify(gate.message); return; }
     if (!busyExec) {
       inflight = true;
       app.setBusy(true);
@@ -1513,7 +1530,42 @@ if (args.print === undefined) try {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);
     }
-    attachRender(h);
+    // T4（m5-resume-perf）先画后注水：full 模式切换在此兑现——框架（横幅+加载行）先亮、FullApp 即刻
+    // 接管终端，prepareSwitch（close+createSession 大文件读盘）异步走、完成后 attachRender+historyFrom
+    // 注水；行模式与 /new /fork 等同步换会话路径照旧（attachRender(h) 原位）。
+    const switchSid = pendingSwitchSid;
+    pendingSwitchSid = undefined;
+    if (switchSid !== undefined) {
+      dm.pushLine(theme.fg("muted", "正在加载会话历史…"));
+      isSwitching = true;
+      void (async () => {
+        try {
+          const prepared = await prepareSwitch(switchSid, sessionDeps, notify);
+          if (prepared !== undefined) {
+            applySwitch(prepared, sessionDeps);
+            attachRender(prepared.h);
+            const hist = await prepared.h.history();
+            dm.historyFrom(hist, streamW());
+            activeApp?.seedHistory(inputHistoryTexts(hist)); // 输入召回播种补挂（FullApp 创建期 h 尚旧已跳过）
+            void refreshPanel(modulesDeps);
+          }
+        } catch (err) {
+          // 旧会话已 close + 新会话构造失败 = 空悬窗口：toast + 重建空会话兜底（void-async 不留
+          // unhandled rejection；现状同步路径同样存在该窗口——close 后抛错直达 runSubmit 网兜，本批不放大它）
+          settleCommandError(err);
+          try {
+            const fresh = await createSession(sessionDeps);
+            applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
+            attachRender(fresh);
+          } catch (fatal) { settleCommandError(fatal); }
+        } finally {
+          isSwitching = false;
+          activeApp?.repaint(); // 注水完成即刻重绘（不等 1s 心跳/下一键）
+        }
+      })();
+    } else {
+      attachRender(h);
+    }
     if (pendingEcho !== undefined) {
       // 延期的切换回显落新 dm（F5 二轮⑯）；行模式已在 switchTo 内即时回显，不会走到这
       const pe = pendingEcho;

@@ -136,18 +136,40 @@ export const echoHistory = async (h: Harness, commandUi: CommandUi, out: (s: str
 
 // 恢复会话（B9 拉前 → 会话树批 T2/#17）：当前桶定位 → 续写；scan 条目 dir 是会话目录，store 要桶 = dirname
 // m5-split-main T5：自 main.ts 搬入；h/lastEventId/tuiMode/pendingEcho 经 deps 访问器注入（D2）。
-export const switchTo = async (sid: string, deps: SessionDeps, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
+// T4（m5-resume-perf）拆两段：prepareSwitch=重活（定位+close+createSession——大文件读盘主体）、
+// applySwitch=轻活（状态落位）；switchTo 保兼容整段（行模式 /resume /sessions 与 sessionSwitch 缝
+// 同步语义不变）——full 模式主路径改走 main.ts 先画后注水（框架先亮、装载异步）。
+/** T4 切换重活段产物：新 harness + 目标桶目录。 */
+export type SwitchPrepared = { h: Harness; dir: string };
+
+/** T4 重活段：定位 + close 旧会话 + createSession。未找到 → out 消息 + undefined（旧会话未动，调用方
+ *  零补偿）；close 后 createSession 抛错 = 空悬窗口（h 已关新未成）——异步调用方负责兜底重建。 */
+export const prepareSwitch = async (sid: string, deps: SessionDeps, out: (s: string) => void = (s) => console.log(s)): Promise<SwitchPrepared | undefined> => {
   const loc = locateSessionFile(sessionsRoot, sid, { bucket: currentBucket });
-  if (loc === undefined) { out(`未找到会话 ${sid}（/sessions 查看列表）`); return; }
+  if (loc === undefined) { out(`未找到会话 ${sid}（/sessions 查看列表）`); return undefined; }
+  const dir = dirname(loc.dir);
   await deps.getH().close();
-  deps.setH(await createSession(deps, { resume: { sessionId: sid }, sessionsDir: dirname(loc.dir) }));
-  setActiveDir(dirname(loc.dir));
+  const h = await createSession(deps, { resume: { sessionId: sid }, sessionsDir: dir });
+  return { h, dir };
+};
+
+/** T4 轻活段：状态落位（setH/activeDir/resetLastEventId）。回显不在此——同步整段走 deferEcho/echoHistory
+ *  分派，异步路径由 main 侧直做注水（pendingEcho 消费点在 sessionLoop 顶、异步路径已过该点）。 */
+export const applySwitch = (prepared: SwitchPrepared, deps: SessionDeps): void => {
+  deps.setH(prepared.h);
+  setActiveDir(prepared.dir);
   // CS-05①（2026-09-28 code review）：换会话重置 lastEventId——它只经 attachRender 的 onEvent 喂（切回的
   // 会话存量历史不重放事件流），不重置则切会话后立即 /fork 会把上一会话的事件 id 当 atEntryId 带进新
   // 会话；session 域已把投影外 atEntryId 从宽容降级改为 throw（fork.ts CS-05），此路径会响亮报错。
   // 重置为 undefined = /fork 走「父投影尾事件」缺省（createHarness fork 分支与 h.fork 两出口同款兜底），
   // 语义恰是 /fork 的「从最新位置分叉」。sessionSwitch 缝（ctx.session.switchTo）背后也走本函数，同点覆盖。
   deps.resetLastEventId();
+};
+
+export const switchTo = async (sid: string, deps: SessionDeps, out: (s: string) => void = (s) => console.log(s)): Promise<void> => {
+  const prepared = await prepareSwitch(sid, deps, out);
+  if (prepared === undefined) return;
+  applySwitch(prepared, deps);
   // 恢复横幅整条退役（2026-09-30 用户拍板三轮：[已恢复] 与 ❯ 标题行都不要——历史回放即提示，
   // 顶上再压一行看着难受）；notice 留空串走回放，消费口跳过空行
   if (deps.isFullscreen()) {
@@ -156,6 +178,14 @@ export const switchTo = async (sid: string, deps: SessionDeps, out: (s: string) 
     await echoHistory(deps.getH(), deps.commandUi, out); // 回显存量对话（B9 走查补 + 分页）
   }
 };
+
+/** T4 装配策略口（可测形态）：full 模式切换 = 先画后注水（框架先行、装载异步走）；行模式 = 同步切换。 */
+export const switchStepsFor = (deps: Pick<SessionDeps, "isFullscreen">): { frameFirst: boolean } => ({ frameFirst: deps.isFullscreen() });
+
+/** T4 切换中门（isSwitching）：注水完成前提交/再切换拦回——切换不可逆（旧会话已 close），Esc 不中断。 */
+export type SwitchGate = { blocked: true; message: string } | { blocked: false };
+export const switchBusyGate = (switching: boolean): SwitchGate =>
+  switching ? { blocked: true, message: "正在切换会话…" } : { blocked: false };
 
 /** 输入召回旁注事件类型（host/ 前缀——deriveMessages 未知类型跳过 = 不进模型上下文，只服务
  *  重开会话的输入历史播种）。写侧：main 提交层在「发出文本 ≠ 输入框原文」（技能合成体/@ 引用
