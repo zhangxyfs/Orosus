@@ -1,8 +1,14 @@
-import { appendFileSync, chmodSync, closeSync, constants, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, rmSync, readSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
+import { eventsFrom, lastCompaction, scanEventLines, writeEventRows, type ScanLine } from "./eventindex.ts";
+
+/** T7 装载分流阈（D6：cc SKIP_PRECOMPACT_THRESHOLD 同值 5MB）——小于此走全量快路径（零行为变化）。 */
+const WINDOW_LOAD_MIN_BYTES = 5 * 1024 * 1024;
+/** T7 头种子预算（D7：readSessionHead 的 HEAD_MAX_BYTES=16KB 同值——tree.ts:11 沿用）。 */
+const HEAD_SEED_BYTES = 16 * 1024;
 
 /** CS-07（2026-09-28 code review）：追加路径的打开旗标——POSIX 用数值 O_APPEND|O_NOFOLLOW|O_CREAT
  *  （§6.1「写入硬化三件套」(b) 承诺的 O_NOFOLLOW：字符串旗标表达不了，须数值组合；符号链接终点直接
@@ -59,6 +65,49 @@ export function readLockPid(file: string): number | null {
   }
 }
 
+/** 未闭合 turn 补结尾（repairFile 与 T7 窗口装载共用的纯函数段）：最后一个 turn/start 之后若无
+ *  turn/end，先补 turn 内缺 tool/result 的 call（M3/D41——日志里不许出现无结果的 tool/call）再补
+ *  turn/end{kind:"interrupted"}。输入事件序列不修改，返回应补事件（可能为空）。 */
+function synthesizeUnclosed(events: SessionEvent[]): SessionEvent[] {
+  const synthesized: SessionEvent[] = [];
+  const lastTurnStart = events.map((e, i) => (e.type === "turn/start" ? i : -1)).filter((i) => i >= 0).pop();
+  const hasTurnEndAfter = lastTurnStart !== undefined && events.slice(lastTurnStart).some((e) => e.type === "turn/end");
+  if (lastTurnStart !== undefined && !hasTurnEndAfter) {
+    const inTurn = events.slice(lastTurnStart);
+    const called = new Set(inTurn.filter((e) => e.type === "tool/call").map((e) => String(e.callId)));
+    const resulted = new Set(inTurn.filter((e) => e.type === "tool/result").map((e) => String(e.callId)));
+    let last = events[events.length - 1]!;
+    for (const callId of called) {
+      if (resulted.has(callId)) continue;
+      last = {
+        v: 1,
+        id: newId("e"),
+        parentId: last.id,
+        seq: last.seq + 1,
+        ts: new Date().toISOString(),
+        type: "tool/result",
+        callId,
+        output: "[已中止：工具未执行]",
+        isError: true,
+      };
+      events.push(last);
+      synthesized.push(last);
+    }
+    const end: SessionEvent = {
+      v: 1,
+      id: newId("e"),
+      parentId: last.id,
+      seq: last.seq + 1,
+      ts: new Date().toISOString(),
+      type: "turn/end",
+      kind: "interrupted",
+    };
+    events.push(end);
+    synthesized.push(end);
+  }
+  return synthesized;
+}
+
 /** 崩溃修复（§6.1）：torn tail 截断 + 未闭合 turn 补 turn/end{kind:"interrupted"}。
  *  CS-11（2026-09-28 code review）：修复动作改为「最小写面」——旧实现一旦要修就 writeFileSync 全文覆写，
  *  覆写中途再崩溃丢整段会话历史；且 openSessionView 上溯祖先时每层构造 JsonlSessionStore 都触发修复性
@@ -93,47 +142,9 @@ export function repairFile(path: string, opts?: { probeOnly?: boolean; raw?: str
       break; // torn tail：截掉该行及之后一切
     }
   }
-  let interruptedClosed = false;
   const events = good.map((l) => JSON.parse(l) as SessionEvent);
-  const lastTurnStart = events.map((e, i) => (e.type === "turn/start" ? i : -1)).filter((i) => i >= 0).pop();
-  const hasTurnEndAfter = lastTurnStart !== undefined && events.slice(lastTurnStart).some((e) => e.type === "turn/end");
-  const synthesized: SessionEvent[] = [];
-  if (lastTurnStart !== undefined && !hasTurnEndAfter) {
-    // 未闭合 turn：先补 turn 内缺 tool/result 的 call（M3/D41——日志里不许出现无结果的 tool/call），
-    // 再补 turn/end{interrupted}
-    const inTurn = events.slice(lastTurnStart);
-    const called = new Set(inTurn.filter((e) => e.type === "tool/call").map((e) => String(e.callId)));
-    const resulted = new Set(inTurn.filter((e) => e.type === "tool/result").map((e) => String(e.callId)));
-    let last = events[events.length - 1]!;
-    for (const callId of called) {
-      if (resulted.has(callId)) continue;
-      last = {
-        v: 1,
-        id: newId("e"),
-        parentId: last.id,
-        seq: last.seq + 1,
-        ts: new Date().toISOString(),
-        type: "tool/result",
-        callId,
-        output: "[已中止：工具未执行]",
-        isError: true,
-      };
-      events.push(last);
-      synthesized.push(last);
-    }
-    const end: SessionEvent = {
-      v: 1,
-      id: newId("e"),
-      parentId: last.id,
-      seq: last.seq + 1,
-      ts: new Date().toISOString(),
-      type: "turn/end",
-      kind: "interrupted",
-    };
-    events.push(end);
-    synthesized.push(end);
-    interruptedClosed = true;
-  }
+  const synthesized = synthesizeUnclosed(events);
+  const interruptedClosed = synthesized.some((e) => e.type === "turn/end");
   const tail =
     (!truncated && needsNewline ? "\n" : "") + synthesized.map((e) => JSON.stringify(e) + "\n").join("");
   // 修复后盘上最终内容：好行逐行带尾 \n + synthesized 行（ftruncate 截到坏行起点=好行序列、补换行/
@@ -321,20 +332,47 @@ export class JsonlSessionStore implements SessionStore {
   private readonly lockFile: string; // CS-03 单写者锁：<sid>/agents/session.lock（与主文件同目录）
   private lockHeld = false;
 
-  constructor(opts: { dir: string; sessionId?: string }) {
+  constructor(opts: { dir: string; sessionId?: string; load?: "window" | "full"; index?: { dbFile: string; bucket: string } }) {
     const sid = opts.sessionId ?? newId("s");
     // CS-12（2026-09-28 code review）：sessionId 直接进 join(this.dir, sid, "agents", "session.jsonl")——
     // 旧实现无格式校验，"../escaped" 类 id 一次 append 即在桶外建目录与文件（--resume 旗标无存在性/格式闸
     // 直透 makeStore 到此处，实测桶外逃逸）。不合形响亮抛错（真实 id 形态 s_<base32>/agents_<编号> 天然通过）。
-    if (!isSafeSessionId(sid)) throw new Error(`会话 id 非法：${JSON.stringify(sid)}（只许 [A-Za-z0-9._-] 且首字符为字母数字——防桶逃逸，CS-12）`);
+    if (!isSafeSessionId(sid)) throw new Error(`会话 id 非法：${JSON.stringify(sid)}（只许 [A-Za-z0-9] 且首字符为字母数字——防桶逃逸，CS-12）`);
     mkdirSync(opts.dir, { recursive: true }); // 桶目录构造期建（D46 既有语义——装配层保证桶在）
     this.sessionId = sid;
     this.dir = opts.dir;
     this.file = join(opts.dir, this.sessionId, "agents", "session.jsonl");
     this.lockFile = join(opts.dir, this.sessionId, "agents", "session.lock");
-    // T1（m5-resume-perf）：构造期一次读盘——raw 先读，repairFile 复用、镜像装载复用同一份；修复态下
-    // 镜像必须吃 repairFile 回传的修复后内容（torn tail 截断/补 end 后与 raw 不一致），否则 parse 炸/缺事件。
-    // 旧实现 repairFile 与镜像各读一遍，20MB 会话 IO 双付（~200ms 白付）。
+    // T7（m5-resume-perf）：装载策略分派——缺省 full（core 层显式 opt-in 窗口，测试可控；harness 装配层
+    // 按 OROSUS_SESSION_LOAD 与文件大小决定）。窗口路径失败兜底 = 全量（等价不可证=回退全量，宁慢不错）。
+    if ((opts.load ?? "full") === "window") {
+      this.loadViaWindow(opts.index);
+    } else {
+      this.loadFull();
+    }
+    // M4-1 T0（D46 止血）：文件不再构造期预建——零 append 的临时会话零落盘；首写时 ensureFile 以 0o600 懒建。
+    // 既有文件的权限校正与 dev/ino 身份记录保留（POSIX 语义）。
+    if (process.platform !== "win32" && existsSync(this.file)) {
+      const st = statSync(this.file);
+      if ((st.mode & 0o777) !== 0o600) chmodSync(this.file, 0o600);
+      // dev/ino 身份校验：记录打开时的身份，防符号链接替换（POSIX 语义）
+      this.devIno = `${st.dev}:${st.ino}`;
+    }
+  }
+
+  /** 装载结果口径（只读口——验收门 7 耗时埋点 mode 的数据源：loadMode 两态分不清索引路与嗅探路）。 */
+  private _loadMode: "window" | "full" = "full";
+  private _loadPath: "index" | "sniff" | "full" = "full";
+  /** 窗口装载的降级原因（T11 埋点 fallback 字段与 diag 数据源）：legacy-compaction = v2/v3 老格式
+   *  无条件回退；no-compaction = ≥5MB 但无压缩点（窗口无从定位，语义上应全量）；index-drift = 索引
+   *  路径 pread 坏行/段不符（降级嗅探或全量）。 */
+  private _loadFallback: string | undefined = undefined;
+  get loadMode(): "window" | "full" { return this._loadMode; }
+  get loadPath(): "index" | "sniff" | "full" { return this._loadPath; }
+  get loadFallback(): string | undefined { return this._loadFallback; }
+
+  /** 全量装载（=T1 合读后的现状代码原样）：repairFile(file,{raw}) 修复 + 全行 parse 入镜像。 */
+  private loadFull(): void {
     const raw = existsSync(this.file) ? readFileSync(this.file, "utf8") : undefined;
     const rep = repairFile(this.file, raw !== undefined ? { raw } : undefined);
     if (raw !== undefined) {
@@ -347,13 +385,207 @@ export class JsonlSessionStore implements SessionStore {
         this.events.push(e);
       }
     }
-    // M4-1 T0（D46 止血）：文件不再构造期预建——零 append 的临时会话零落盘；首写时 ensureFile 以 0o600 懒建。
-    // 既有文件的权限校正与 dev/ino 身份记录保留（POSIX 语义）。
-    if (process.platform !== "win32" && existsSync(this.file)) {
-      const st = statSync(this.file);
-      if ((st.mode & 0o777) !== 0o600) chmodSync(this.file, 0o600);
-      // dev/ino 身份校验：记录打开时的身份，防符号链接替换（POSIX 语义）
-      this.devIno = `${st.dev}:${st.ino}`;
+    this._loadMode = "full";
+    this._loadPath = "full";
+  }
+
+  /** 窗口装载分流（T7 三层的①）：文件不存在/为空 = 空镜像同现状；< 5MB 全量快路径（D6——零行为
+   *  变化，小会话整读零风险零收益）；≥ 5MB 先索引路径、不可用走前向嗅探备胎。 */
+  private loadViaWindow(index?: { dbFile: string; bucket: string }): void {
+    let size = 0;
+    try {
+      size = statSync(this.file).size;
+    } catch {
+      return; // 文件不存在 = 空镜像（与全量路径一致）
+    }
+    if (size === 0) return;
+    if (size < WINDOW_LOAD_MIN_BYTES) {
+      this.loadFull();
+      return;
+    }
+    if (index !== undefined && sqliteAvailable()) {
+      const lc = lastCompaction(index.dbFile, index.bucket, this.sessionId, this.file);
+      if (lc !== undefined && lc.v4 && this.loadIndexed(index, lc)) return;
+    }
+    this.loadSniffed(index);
+  }
+
+  /** 头种子（D7）：首 16KB 预算读，取 header/label/fork 三类（fork 子体的 header+fork 恒在文件前两
+   *  行——T11 祖先链判据依赖；只读后半段会丢标题与 fork 元数据）。预算内逐行 parse，其余类型跳过。 */
+  private readHeadSeeds(): SessionEvent[] {
+    const seeds: SessionEvent[] = [];
+    let fd: number;
+    try {
+      fd = openSync(this.file, "r");
+    } catch {
+      return seeds;
+    }
+    try {
+      const buf = Buffer.alloc(HEAD_SEED_BYTES);
+      const n = readSync(fd, buf, 0, HEAD_SEED_BYTES, 0);
+      for (const line of buf.toString("utf8", 0, n).split("\n")) {
+        if (line === "") continue;
+        try {
+          const e = JSON.parse(line) as SessionEvent;
+          if (e.type === "session/header" || e.type === "session/label" || e.type === "session/fork") seeds.push(e);
+        } catch { /* 预算内坏行跳过 */ }
+      }
+    } catch {
+      return seeds;
+    } finally {
+      closeSync(fd);
+    }
+    return seeds;
+  }
+
+  /** 索引路径（T7 三层之②主路）：lastCompaction 已判 v4 → 头种子 + eventsFrom(压缩 seq) 连续段
+   *  pread 逐行 parse → 镜像 = 种子 + 压缩事件起全部尾事件（前面字节零接触）。任一坏行/段不符 =
+   *  false（调用方降级嗅探——装载永不因索引坏而死）。 */
+  private loadIndexed(index: { dbFile: string; bucket: string }, lc: { byteOffset: number; seq: number; v4: boolean }): boolean {
+    const segs = eventsFrom(index.dbFile, index.bucket, this.sessionId, lc.seq);
+    if (segs.length === 0) return false;
+    const lastSeg = segs[segs.length - 1]!;
+    const lastEnd = lastSeg.byteOffset + lastSeg.byteLength;
+    let size = 0;
+    try {
+      size = statSync(this.file).size;
+    } catch {
+      return false;
+    }
+    if (size < lastEnd) return false; // 索引漂移：文件比索引矮（外物截断/重写）
+    const tail: SessionEvent[] = [];
+    let fd: number;
+    try {
+      fd = openSync(this.file, "r");
+    } catch {
+      return false;
+    }
+    try {
+      for (const seg of segs) {
+        const buf = Buffer.alloc(seg.byteLength);
+        const n = readSync(fd, buf, 0, seg.byteLength, seg.byteOffset);
+        if (n !== seg.byteLength) return false;
+        for (const line of buf.toString("utf8").split("\n")) {
+          if (line === "") continue;
+          try {
+            tail.push(JSON.parse(line) as SessionEvent);
+          } catch {
+            return false; // 坏行 = 漂移 → 降级嗅探
+          }
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+    const seeds = this.readHeadSeeds().filter((s) => s.seq < lc.seq);
+    this.events = [...seeds, ...tail];
+    this.repairWindowTail(lastEnd);
+    const last = this.events[this.events.length - 1];
+    if (last !== undefined) {
+      this.seq = last.seq;
+      this.lastId = last.id;
+    }
+    this.fileEnsured = true;
+    this._loadMode = "window";
+    this._loadPath = "index";
+    return true;
+  }
+
+  /** 前向嗅探备胎（T7 三层之③，v1.1 算法 + 顺手建索引）：scanEventLines 1MB 块前向扫——header/label/
+   *  fork 入种子；turn/compaction 必 parse（v4 → 累积器清零为 [该事件]；v2/v3 → 无条件中止转全量——
+   *  即使老格式是文件末条，窗口投影也会因 keepUserAt 下标全部越界被滤只剩 summaryMsg、保留消息静默
+   *  丢失）；压缩点之前的其余行瞄一眼就跳过不 parse（D11——最终未见过压缩点则本来就该全量）；
+   *  压缩点之后的行 parse 入累积器。扫描产出 (offset,length,type) 顺手写进事件索引（D14 ①装载路径
+   *  重建——本次备胎、下次索引）。 */
+  private loadSniffed(index?: { dbFile: string; bucket: string }): void {
+    const seeds: SessionEvent[] = [];
+    let acc: SessionEvent[] = [];
+    let seenCompaction = false;
+    let lastEnd = 0;
+    let aborted = false;
+    let abortReason: string | undefined;
+    const rows: ScanLine[] = [];
+    for (const line of scanEventLines(this.file, 0)) {
+      rows.push(line);
+      lastEnd = line.byteOffset + line.byteLength + 1;
+      if (line.type === "session/header" || line.type === "session/label" || line.type === "session/fork") {
+        try {
+          seeds.push(JSON.parse(line.bytes.toString("utf8")) as SessionEvent);
+        } catch { /* 种子坏行跳过（修复后下次补） */ }
+      } else if (line.type === "turn/compaction") {
+        let ev: SessionEvent;
+        try {
+          ev = JSON.parse(line.bytes.toString("utf8")) as SessionEvent;
+        } catch {
+          continue; // 压缩行本身撕裂：不入窗（修复后下次刷新补）；继续扫更晚的压缩点
+        }
+        if (!Array.isArray(ev.keptUsers)) {
+          aborted = true; // v2/v3 老格式：无条件回退全量（doc-review 二轮勘正定案）
+          abortReason = "legacy-compaction";
+          break;
+        }
+        acc = [ev];
+        seenCompaction = true;
+      } else if (seenCompaction) {
+        try {
+          acc.push(JSON.parse(line.bytes.toString("utf8")) as SessionEvent);
+        } catch {
+          continue; // 窗内坏行跳过（全量路径的 repairFile 会处置撕裂尾；中段坏行两路径同吞）
+        }
+      }
+      // 压缩点之前的非种子行：跳过不 parse（D11「瞄一眼就跳过」）
+    }
+    if (aborted || !seenCompaction) {
+      this._loadFallback = aborted ? abortReason : "no-compaction";
+      this.loadFull();
+      return;
+    }
+    const compactionSeq = acc[0]!.seq;
+    this.events = [...seeds.filter((s) => s.seq < compactionSeq), ...acc];
+    this.repairWindowTail(lastEnd);
+    const last = this.events[this.events.length - 1];
+    if (last !== undefined) {
+      this.seq = last.seq;
+      this.lastId = last.id;
+    }
+    this.fileEnsured = true;
+    this._loadMode = "window";
+    this._loadPath = "sniff";
+    // D14 ①装载路径重建：扫描产出顺手落索引（一遍扫描两用）——下次装载走索引路径
+    if (index !== undefined && sqliteAvailable()) {
+      try {
+        const st = statSync(this.file);
+        writeEventRows(index.dbFile, index.bucket, this.sessionId, rows, { mtimeMs: st.mtimeMs, size: st.size, indexedBytes: lastEnd });
+      } catch { /* 索引 best-effort：失败不挡装载 */ }
+    }
+  }
+
+  /** 窗口装载的尾部修复（D8——坏行恒在尾）：镜像装载止于最后完好行（lastGoodEnd），其后内容 =
+   *  撕裂尾 → ftruncate 原地截断；未闭合 turn 补结尾按镜像判定（turn/start 在窗内可判；更早的
+   *  start 窗外不可见——全量装载的 repairFile 幂等续修兜底）。修复动作照旧（ftruncate/append）。 */
+  private repairWindowTail(lastGoodEnd: number): void {
+    let size = 0;
+    try {
+      size = statSync(this.file).size;
+    } catch {
+      return;
+    }
+    if (size > lastGoodEnd) {
+      const fd = openSync(this.file, "r+");
+      try {
+        ftruncateSync(fd, lastGoodEnd);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    const synthesized = synthesizeUnclosed(this.events);
+    if (synthesized.length > 0) {
+      appendFileSync(this.file, synthesized.map((e) => JSON.stringify(e) + "\n").join(""));
+      const last = this.events[this.events.length - 1];
+      if (last !== undefined) {
+        this.seq = last.seq;
+        this.lastId = last.id;
+      }
     }
   }
 

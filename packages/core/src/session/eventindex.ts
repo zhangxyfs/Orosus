@@ -13,12 +13,15 @@ import { openDatabase, removeSqliteDbFiles, sqliteAvailable } from "./sqlite.ts"
  *  `{"type":"` 行首前缀嗅探对我们序列化不成立（cc 行首才是 type）——改尾部锚定：`,"type":"tok"}` 恰在
  *  行尾 + `,"seq":N` 尾部定位，lastIndexOf 恒中信封键（payload 内同形子串必在信封键之前）。 */
 
-/** 扫描产出的单行定位（offset/length 均不含行尾 \n——pread [offset, offset+length) 即行 JSON 字节）。 */
+/** 扫描产出的单行定位（offset/length 均不含行尾 \n——pread [offset, offset+length) 即行 JSON 字节）。
+ *  bytes = 行内容拷贝（T7 嗅探装载按行选择性 parse 用——扫描器 chunk 复用，yield 视图会被下块覆写，
+ *  必须拷贝；建索引侧忽略此字段）。 */
 export interface ScanLine {
   byteOffset: number;
   byteLength: number;
   seq: number;
   type: string;
+  bytes: Buffer;
 }
 
 /** 嗅探块大小（D11：cc TRANSCRIPT_READ_CHUNK_SIZE 同值 1MB）——扫描器按此分块前向读。 */
@@ -80,7 +83,7 @@ export function* scanEventLines(file: string, fromByte = 0): Generator<ScanLine,
           const line = data.subarray(lineStart, nl);
           const sniffed = sniffEventLine(line);
           if (sniffed !== undefined) {
-            yield { byteOffset: dataStart + lineStart, byteLength: nl - lineStart, seq: sniffed.seq, type: sniffed.type };
+            yield { byteOffset: dataStart + lineStart, byteLength: nl - lineStart, seq: sniffed.seq, type: sniffed.type, bytes: Buffer.from(line) };
           }
         }
         lineStart = nl + 1;

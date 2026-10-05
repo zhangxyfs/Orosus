@@ -1,16 +1,19 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, rmSync, utimesSync, writeFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionStore, repairFile, sessionAppendFlag } from "./jsonl.ts";
+import { refreshEventIndex } from "./eventindex.ts";
+import { verifyChain } from "./fork.ts";
+import { deriveMessages } from "../loop/convert.ts";
 import { sqliteAvailable } from "./sqlite.ts";
 
 // T1（m5-resume-perf）读盘计数：node:fs ESM 命名空间不可 spyOn（Cannot redefine），部分替换 mock 拦截
 // 所有导入方（jsonl.ts 源码内）的 readFileSync——包装 actual，行为零变化，仅多记账。
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), readSync: vi.fn(actual.readSync) };
 });
 
 let dir: string | undefined;
@@ -434,5 +437,158 @@ describe("T3 m5-resume-perf: usage 兄弟聚合 (mtime,size) 缓存", () => {
     expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fa)).toHaveLength(1);
     expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === fb)).toHaveLength(0); // s_b 缓存仍命中
     await cur.close();
+  });
+});
+
+describe("T7 m5-resume-perf: JsonlSessionStore 索引窗口装载（三层：索引主路 / 嗅探备胎 / 全量兜底）", () => {
+  /** ≥5MB 大会话夹具（信封形态：fields 前、v/id/parentId/seq/ts/type 后——真实序列化序）。
+   *  返回 file 与压缩行字节偏移（供字节账断言）。variant：v4（缺省）/ v3 / v3-at-end / none。 */
+  const buildBigSession = (dir: string, sid: string, variant: "v4" | "v3" | "v3-at-end" | "none" = "v4"): { file: string; compactionOffset: number } => {
+    const lines: string[] = [];
+    let seq = 1;
+    let prevId: string | null = null;
+    const push = (fields: Record<string, unknown>, type: string): void => {
+      const id = `e_b${String(seq).padStart(5, "0")}`;
+      lines.push(JSON.stringify({ ...fields, v: 1, id, parentId: prevId, seq, ts: "2026-10-05T00:00:00Z", type }));
+      prevId = id;
+      seq++;
+    };
+    push({ format: 1, cwd: "/r", parentSession: null }, "session/header");
+    push({ label: "大会话" }, "session/label");
+    const FILLER = "x".repeat(4000);
+    const pre = 1250;
+    const post = variant === "v3-at-end" ? 0 : 300;
+    for (let i = 0; i < pre; i++) {
+      push({ content: [{ kind: "text", text: `问${i} ${FILLER}` }] }, "user/message");
+      push({ content: [{ kind: "text", text: `答${i}` }] }, "assistant/message");
+    }
+    let compactionOffset = -1;
+    if (variant !== "none") {
+      compactionOffset = lines.join("\n").length + 1; // 压缩行起点字节偏移（前面所有行 + 各自 \n）
+      if (variant === "v4") {
+        push({ trigger: "auto", summary: "S", keepUserHead: 1, keptUsers: [{ role: "user", content: [{ kind: "text", text: "保留问" }] }], elidedCount: 1399, droppedCount: 1402 }, "turn/compaction");
+      } else {
+        push({ trigger: "auto", summary: "S", keepUserAt: [2, 4], keepUserHead: 1, droppedCount: 1402 }, "turn/compaction");
+      }
+    }
+    for (let i = 0; i < post; i++) {
+      push({ content: [{ kind: "text", text: `后问${i}` }] }, "user/message");
+      push({ content: [{ kind: "text", text: `后答${i}` }] }, "assistant/message");
+    }
+    const agents = join(dir, sid, "agents");
+    mkdirSync(agents, { recursive: true });
+    const file = join(agents, "session.jsonl");
+    writeFileSync(file, lines.join("\n") + "\n");
+    return { file, compactionOffset };
+  };
+  const entryOf = (dir: string, sid: string, file: string) => ({ id: sid, file, dir, mtimeMs: statSync(file).mtimeMs, size: statSync(file).size, bucket: "bk" });
+  const readAllBytes = (): number => {
+    const calls = vi.mocked(readSync).mock.calls as unknown as unknown[][];
+    return calls.reduce((n, c) => n + (typeof c[3] === "number" ? (c[3] as number) : 0), 0);
+  };
+
+  it("a+c. 等价=字节级：嗅探备胎接住 → 顺手建索引 → 第二次装载走索引路径；两路径与全量投影 deep equal", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t7ac-"));
+    const { file } = buildBigSession(dir, "s_big");
+    expect(statSync(file).size).toBeGreaterThan(5 * 1024 * 1024);
+    const dbFile = join(dir, "event-index.sqlite");
+    const full = new JsonlSessionStore({ dir, sessionId: "s_big", load: "full" });
+    const fullAll = await full.all();
+    await full.close();
+    // c 前半：索引不可用 → 嗅探接住（等价性同 a）
+    const w1 = new JsonlSessionStore({ dir, sessionId: "s_big", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w1.loadPath).toBe("sniff");
+    expect(w1.loadMode).toBe("window");
+    const w1All = await w1.all();
+    await w1.close();
+    // c 后半：嗅探后索引行齐备——第二次装载改走索引路径
+    const w2 = new JsonlSessionStore({ dir, sessionId: "s_big", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w2.loadPath).toBe("index");
+    const w2All = await w2.all();
+    await w2.close();
+    // a：窗口与全量自压缩事件起 deep equal；种子（header/label）在位
+    const C = fullAll.findIndex((e) => e.type === "turn/compaction");
+    expect(C).toBeGreaterThan(0);
+    const cSeq = fullAll[C]!.seq;
+    expect(w2All.filter((e) => e.seq >= cSeq)).toEqual(fullAll.filter((e) => e.seq >= cSeq));
+    expect(w2All[0]!.type).toBe("session/header");
+    expect(w2All[1]!.type).toBe("session/label");
+    // 灵魂：投影等价（v4 自包含——两种装载的 deriveMessages 字节一致）
+    expect(deriveMessages(w2All)).toEqual(deriveMessages(fullAll));
+    expect(deriveMessages(w1All)).toEqual(deriveMessages(fullAll)); // 嗅探路径同证
+  });
+
+  it("b. 索引路径零全读：readSync 总字节 ≤ 头 16KB + 尾段 + 单行探测 + 余量（全文件零接触）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t7b-"));
+    const { file, compactionOffset } = buildBigSession(dir, "s_bytes");
+    const dbFile = join(dir, "event-index.sqlite");
+    await refreshEventIndex(dbFile, dir, [entryOf(dir, "s_bytes", file)]);
+    vi.mocked(readSync).mockClear();
+    vi.mocked(readFileSync).mockClear();
+    const w = new JsonlSessionStore({ dir, sessionId: "s_bytes", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w.loadPath).toBe("index");
+    const size = statSync(file).size;
+    const tailBytes = size - compactionOffset;
+    const total = readAllBytes();
+    expect(total).toBeLessThanOrEqual(16 * 1024 + tailBytes + 2048); // 头种子 + 尾段 + 压缩单行探测 + 余量
+    expect(total).toBeLessThan(size / 2); // 防回归：索引失效退化全读即爆
+    expect(vi.mocked(readFileSync).mock.calls.filter((c) => c[0] === file)).toHaveLength(0); // 全量读未走
+    await w.close();
+  });
+
+  it("d. v2/v3 压缩事件（中部或末条）→ 无条件回退全量：镜像长度=全量行数、loadFallback=legacy-compaction", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t7d-"));
+    const dbFile = join(dir, "event-index.sqlite");
+    for (const [variant, sid] of [["v3", "s_v3mid"], ["v3-at-end", "s_v3end"]] as const) {
+      const { file } = buildBigSession(dir, sid, variant);
+      await refreshEventIndex(dbFile, dir, [entryOf(dir, sid, file)]);
+      const w = new JsonlSessionStore({ dir, sessionId: sid, load: "window", index: { dbFile, bucket: "bk" } });
+      expect(w.loadMode).toBe("full");
+      expect(w.loadFallback).toBe("legacy-compaction");
+      const full = new JsonlSessionStore({ dir, sessionId: sid, load: "full" });
+      expect((await w.all()).length).toBe((await full.all()).length); // 镜像=全量行数（不静默丢窗前事件）
+      await w.close();
+      await full.close();
+    }
+  });
+
+  it("e. 分流：<5MB 走全量快路径（零嗅探零索引）；≥5MB 无压缩 → 全量（no-compaction）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t7e-"));
+    const s = new JsonlSessionStore({ dir, sessionId: "s_small" });
+    await s.append("session/header", { cwd: "/r", parentSession: null });
+    await s.append("user/message", { content: [{ kind: "text", text: "问" }] });
+    await s.flush();
+    await s.close();
+    const dbFile = join(dir, "event-index.sqlite");
+    const w = new JsonlSessionStore({ dir, sessionId: "s_small", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w.loadPath).toBe("full"); // 快路径（未进嗅探/索引）
+    expect(w.loadMode).toBe("full");
+    await w.close();
+    const { file } = buildBigSession(dir, "s_noc", "none");
+    expect(statSync(file).size).toBeGreaterThan(5 * 1024 * 1024);
+    const w2 = new JsonlSessionStore({ dir, sessionId: "s_noc", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w2.loadMode).toBe("full");
+    expect(w2.loadFallback).toBe("no-compaction");
+    const full2 = new JsonlSessionStore({ dir, sessionId: "s_noc", load: "full" });
+    expect((await w2.all()).length).toBe((await full2.all()).length);
+    await w2.close();
+    await full2.close();
+  });
+
+  it("f. append 续写：索引路径装载后 append → 落盘 parentId=窗口末条、seq 连续；flush 后全量重开链校验零 issue", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-t7f-"));
+    const { file } = buildBigSession(dir, "s_app");
+    const dbFile = join(dir, "event-index.sqlite");
+    await refreshEventIndex(dbFile, dir, [entryOf(dir, "s_app", file)]);
+    const w = new JsonlSessionStore({ dir, sessionId: "s_app", load: "window", index: { dbFile, bucket: "bk" } });
+    expect(w.loadPath).toBe("index");
+    const before = (await w.all()).slice(-1)[0]!;
+    const appended = await w.append("user/message", { content: [{ kind: "text", text: "续写问" }] });
+    expect(appended.parentId).toBe(before.id); // 链锚 = 窗口末条（=文件真实末条）
+    await w.flush();
+    await w.close();
+    const reopened = new JsonlSessionStore({ dir, sessionId: "s_app", load: "full" });
+    expect(verifyChain(await reopened.all())).toEqual([]); // 窗口装载不留链伤
+    await reopened.close();
   });
 });
