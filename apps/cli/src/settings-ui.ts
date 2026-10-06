@@ -70,7 +70,7 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 		],
 		hostKeys: {
 			"alt+c": {
-				label: "停止",
+				label: "Alt + C 停止",
 				run: () => {
 					if (finished === undefined && !ac.signal.aborted) {
 						stopped = true;
@@ -79,10 +79,15 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 					return undefined;
 				},
 			},
-		},
-		onEvent: (e) => {
-			if (e.type === "activate" && finished !== undefined) handle?.close();   // 完成态 Enter = 关窗
-			return undefined;
+			// 窗内无 interactive 控件 → activate 事件永不触发（走查十-②：Enter 无效=窗死锁根因）。
+			// Enter 走 hostKeys：完成态关窗；进行态吞掉（不消费会落回输入框把回车当发送）。
+			"enter": {
+				label: "Enter 关闭",
+				run: () => {
+					if (finished !== undefined) handle?.close();
+					return true;
+				},
+			},
 		},
 	});
 	const r = await deps.run(ids, organize, (d, _t, title) => {

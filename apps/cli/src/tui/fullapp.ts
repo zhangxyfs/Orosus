@@ -485,7 +485,7 @@ export class FullApp {
 		return this.overlay.buildViewOverlay(pu, leftW, divRow);
 	}
 
-	buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys }, leftW?: number, divRow?: number): OverlayFrame {
+	buildDialogOverlay(pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys; disallowEscape?: boolean }, leftW?: number, divRow?: number): OverlayFrame {
 		return this.overlay.buildDialogOverlay(pu, leftW, divRow);
 	}
 

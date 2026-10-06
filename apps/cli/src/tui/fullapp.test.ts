@@ -4584,4 +4584,62 @@ describe("dialog 禁 Esc（disallowEscape）", () => {
 		expect(app.stateRef.toast?.text).toContain("进行中不可关闭");   // toast 走状态探针（dock 窗与 toast 同区域渲染互挤）
 		app.stop();
 	});
+	// 走查十-②：完成态「没有新条目」关不掉窗——窗内无 interactive 控件时 activate 事件永不触发
+	// （ids 空 → keys 的 enter→activate 分支不进）+ Esc 被禁 = 窗死锁。修法 = Enter 走 hostKeys
+	//（派发在 ids 分支之前、escape 除外恒可达）：完成态关窗、进行态吞掉（不消费会落回输入框当发送）。
+	it("完成态 Enter 经 hostKeys 关窗（无 interactive 控件也能到）", async () => {
+		const { app, input } = rig(["# 你好"], 100, 30);
+		app.start();
+		await flush();
+		let finished = false;
+		app.openDialogHost({
+			title: "记忆 · 导入",
+			layout: "dock",
+			disallowEscape: true,
+			widgets: [
+				{ id: "status", kind: "text", text: () => (finished ? "没有新条目 —— Enter 关闭" : "导入中…") },
+				{ id: "bar", kind: "progress", value: () => (finished ? 3 : 0), max: 3 },
+			],
+			hostKeys: {
+				"alt+c": { label: "Alt + C 停止", run: () => true },
+				enter: { label: "Enter 关闭", run: (ctx) => { if (finished) ctx.close(); return true; } },
+			},
+		});
+		await flush();
+		input.emit("data", "\r"); // 进行态 Enter：吞掉不动作（窗在）
+		await flush();
+		expect((app as unknown as { pendingUi?: unknown }).pendingUi).toBeDefined();
+		finished = true;   // 完成态（活值 getter 现读）
+		app.scheduler.requestImmediateRender();
+		await flush();
+		input.emit("data", "\r"); // 完成态 Enter：关窗
+		await flush();
+		expect((app as unknown as { pendingUi?: unknown }).pendingUi).toBeUndefined();
+		app.stop();
+	});
+	// 走查十-①红框：键导引行硬编码「Enter 激活 · Esc 关闭」——禁 Esc 窗里 Esc 被吞、Enter 无控件可激活，
+	// 两句都是空头支票。修法 = disallowEscape 时尾巴整段不拼、键表由 hostKeys 标签自带（带键名）。
+	it("禁 Esc 窗键导引行只显 hostKeys 标签、不再提 Esc 关闭/Enter 激活", async () => {
+		const { app } = rig(["# 你好"], 100, 30);
+		app.start();
+		await flush();
+		app.openDialogHost({
+			title: "记忆 · 导入",
+			layout: "dock",
+			disallowEscape: true,
+			widgets: [{ id: "bar", kind: "progress", value: 0, max: 3 }],
+			hostKeys: {
+				"alt+c": { label: "Alt + C 停止", run: () => true },
+				enter: { label: "Enter 关闭", run: () => true },
+			},
+		});
+		await flush();
+		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
+		const ov = (app as unknown as { buildDialogOverlay(pu: unknown): { lines: string[] } }).buildDialogOverlay(pu);
+		const plain = stripAnsi(ov.lines.join("\n"));
+		expect(plain).toContain("Alt + C 停止 · Enter 关闭");
+		expect(plain).not.toContain("Esc 关闭");
+		expect(plain).not.toContain("Enter 激活");
+		app.stop();
+	});
 });

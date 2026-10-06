@@ -164,7 +164,7 @@ export function createOverlay(app: FullApp) {
 
 	/** 控件窗体（m5 T7①）：几何走 T1 resolvePopupLayout（不另算）；内容行走只读渲染器
 	 *  （交互列表带选中标记与焦点高亮）；恒定行数防闪烁（余量并进提示行——view 窗同款纪律）。 */
-	const buildDialogOverlay = (pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys }, leftW?: number, divRow?: number): OverlayFrame => {
+	const buildDialogOverlay = (pu: { title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; hostKeys?: HostDialogKeys; disallowEscape?: boolean }, leftW?: number, divRow?: number): OverlayFrame => {
 		// dock（T17 原型走查拍板：窗体与输入框同宽、贴输入框上缘）——几何同 buildViewOverlay dock 分支；
 		// 高度按内容自适应封顶（控件行数预渲染一次取长）
 		const dock = pu.layout === "dock" && leftW !== undefined && divRow !== undefined;
@@ -222,11 +222,17 @@ export function createOverlay(app: FullApp) {
 		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");
 		// 键位行（2026-09-30 实机走查重排）：宿主自定义键的标签过滤空串（同键多绑只标一次——空标签混进
 		// join 出「· ·」断片）；有自定义键 = 窗自带完整键表（Enter/Esc 内建兜底），不再拼通用「↑↓ 选择 ·
-		// Tab 换焦点」表单窗用不上的段；无自定义键维持原通用句
+		// Tab 换焦点」表单窗用不上的段；无自定义键维持原通用句。
+		// 禁 Esc 窗（走查十-①：键位行说「Esc 关闭」但 Esc 实际被吞 = 红框误导）：内建尾巴整段不拼——
+		// 键表全部由 hostKeys 标签自带（如「Alt + C 停止 · Enter 关闭」），窗内无 interactive 控件时
+		// 「Enter 激活 · Esc 关闭」两句都是空头支票
 		const hostLabels = pu.hostKeys === undefined ? "" : [...new Set(Object.values(pu.hostKeys).map((k) => k.label).filter((l) => l !== ""))].join(" · ");
-		const hint = pu.hostKeys === undefined
-			? ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`
-			: ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}Enter 激活 · Esc 关闭`;
+		const builtinTail = pu.disallowEscape === true ? "" : "Enter 激活 · Esc 关闭";
+		const hint = pu.disallowEscape === true
+			? ` ${more}${more !== "" && hostLabels !== "" ? " · " : ""}${hostLabels}`
+			: pu.hostKeys === undefined
+				? ` ${more}${more !== "" ? " · " : ""}↑↓ 选择 · Tab 换焦点 · Enter 激活 · Esc 关闭`
+				: ` ${more}${more !== "" ? " · " : ""}${hostLabels}${hostLabels !== "" ? " · " : ""}${builtinTail}`;
 		olines.push(boxRow(theme.dim(hint)));
 		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(inner) + "╯")));
 		return { lines: olines, row: dock && divRow !== undefined ? Math.max(0, divRow - olines.length) : geo.row, col: dock ? 0 : geo.col, width: ow };
