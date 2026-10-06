@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +47,29 @@ describe("readSourceNotes / importNotes", () => {
     const r2 = importNotes(dest, notes);
     expect(r2.imported).toBe(0);
     expect(r2.skipped).toBe(2);
+  });
+
+  it("不覆盖已有记忆（走查修订四钉）：已有同标题时原内容原样保留——源里改了内容也不动盘上旧文", () => {
+    const dest = join(root, "dest", "memory");
+    const src = join(root, "src");
+    mkdirSync(src, { recursive: true });
+    // 先落一条我们自己的记忆
+    importNotes(dest, [{ title: "锚点写法", summary: "旧摘要", content: "旧正文——手工积累", type: "project" }]);
+    // 源里出现同标题但内容不同的版本（比如在别家工具里也记过这事）
+    writeFileSync(join(src, "x.md"), "---\nname: 锚点写法\ndescription: 新摘要\n---\n\n源里的新正文\n");
+    const r = importNotes(dest, readSourceNotes(src));
+    expect(r.imported).toBe(0);
+    expect(r.skipped).toBe(1);
+    // 原文件原样：内容/摘要都没被源版本顶掉
+    const kept = listNotes(dest).find(n => n.title === "锚点写法")!;
+    expect(kept.summary).toBe("旧摘要");
+    expect(readFileSync(join(dest, kept.file), "utf8")).toContain("旧正文——手工积累");
+    expect(readFileSync(join(dest, kept.file), "utf8")).not.toContain("源里的新正文");
+    // 顺带：不同标题同 slug（CJK 全消 → note）不互踩——-2 后缀共存
+    importNotes(dest, [{ title: "并行批纪律", summary: "s", content: "c1", type: "project" }]);
+    const two = importNotes(dest, [{ title: "终端坑", summary: "s", content: "c2", type: "project" }]);
+    expect(two.imported).toBe(1);
+    expect(listNotes(dest)).toHaveLength(3);
   });
 });
 
