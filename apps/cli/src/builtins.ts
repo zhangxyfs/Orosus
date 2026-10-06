@@ -15,6 +15,7 @@ import compaction from "@orosus/compaction";
 import hooks from "@orosus/hooks";
 import toolSubagent from "@orosus/tool-subagent";
 import toolMedia from "@orosus/tool-media";
+import toolPeers from "@orosus/tool-peers";
 
 /** CLI 内置模块全家福（§8.7 builtin 层，M2 收敛）。
  *  approval（T3）与 compaction（T5）已接入；tool-todo（M4-2 T7）任务清单；tool-ask（T8）模型提问。
@@ -39,4 +40,5 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   hooks, // m5-hooks：七事件生命周期钩子（shell 命令 + 项目层 sha256 信任门 + 注入三道闸）
   toolSubagent, // M4.5 子代理批：spawn/tasks/stop 派活工具族
   toolMedia, // m5-media：媒体策略/读图/媒体工具族（F9/F10/F12）
+  toolPeers, // m5-peers：会话互相感知——占用查询 + 共享记忆（defaultEnabled:false，settings「记忆」双开关启用）
 ];
