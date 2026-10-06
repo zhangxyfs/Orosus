@@ -117,7 +117,7 @@ await ui.notice?.("已导出 3 条便签", { durationMs: 8000 }); // 停 8 秒
 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式
 
 ```ts
-viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
+viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; owner?: string }): void;
 ```
 
 ```ts
