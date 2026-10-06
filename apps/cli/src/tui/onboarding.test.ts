@@ -28,6 +28,8 @@ const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; cal
     listModels: over.listModels ?? (async () => ["glm-5.3", "glm-5.3-air"]),
     writeVision: (v) => { calls.vision.push(v); },
     visionModels: over.visionModels ?? (async () => ["zai/glm-5.3-flash", "zai/glm-4.6v"]),
+    detectMemorySources: over.detectMemorySources ?? (() => []),
+    importMemory: over.importMemory ?? (async () => ({ imported: 0, skipped: 0, merged: 0 })),
     requestRender: () => { calls.renders += 1; },
     ...over,
   };
@@ -37,7 +39,7 @@ const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; cal
 const type = (s: OnboardingSession, text: string): void => { for (const ch of text) s.handleKey(ch); };
 
 describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原型）", () => {
-  it("① 三页流转与锁定：p1 Ctrl+N 进 p2；p2 未配 Ctrl+N 锁定带原因；配好进 p3；p3 未选 Ctrl+N 锁定；选定后完成", async () => {
+  it("① 三页流转与锁定：p1 Ctrl+N 进 p2；p2 未配 Ctrl+N 锁定带原因；配好进 p3；p3 未选 Ctrl+N 锁定；选定后进 p5；p5 未勾选 Ctrl+N 跳过完成（T6d 后四页半）", async () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps);
     expect(s.handleKey("ctrl+n")).toBeUndefined();
@@ -65,7 +67,9 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     s.handleKey("enter");
     expect(calls.searchPatches).toEqual([{ backend: "auto", model: undefined }]);
     expect(s.stateRef.p3.chosen).toBe("llm");
-    expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });
+    expect(s.handleKey("ctrl+n")).toBeUndefined();   // T6d：搜索选定后进第 5 页（原「完成」顺延）
+    expect(s.stateRef.page).toBe(5);
+    expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });   // 未勾选源 = 跳过导入直接完成
   });
 
   it("② p2 多家配置 + Space 切换当前使用；未配置行 Space 给「先输入 Key」提示（SW-25）", () => {
@@ -158,7 +162,9 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(calls.secrets).toEqual([["TAVILY_API_KEY", "tv-1"]]);
     expect(calls.searchPatches).toEqual([{ backend: "auto", tavilyApiKey: "$ENV:TAVILY_API_KEY" }]);
     expect(s.stateRef.p3.chosen).toBe("tavily");
-    expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });
+    expect(s.handleKey("ctrl+n")).toBeUndefined();   // T6d：选定后进 p5（原「完成」顺延一页）
+    expect(s.stateRef.page).toBe(5);
+    expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });   // 未勾选源 = 跳过导入完成
   });
 
   it("⑦ Ctrl + Q 仅第 1 页退出；第 2/3 页给提示不退出（SW-22）", () => {
@@ -218,13 +224,13 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     const p1 = s.render(120, 30).lines.join("\n");
-    expect(p1).toContain("引导 1 / 4");
+    expect(p1).toContain("引导 1 / 5");   // T6d 加页后分母随标题数组派生
     expect(p1).toContain("欢迎使用 Orosus（连山）");
     expect(p1).toContain("Ctrl + N");
     expect(p1).toContain("Esc 未占用");
     s.handleKey("ctrl+n");
     const p2 = s.render(120, 30).lines.join("\n");
-    expect(p2).toContain("引导 2 / 4");
+    expect(p2).toContain("引导 2 / 5");
     expect(p2).toContain("先配好一家提供商"); // 锁定原因（Ctrl + N 置灰带 why）
     // key 态静默盲输形态（SW-23：已输入 N 字符，不逐键掩码）
     s.handleKey("enter"); type(s, "abc");
@@ -419,3 +425,98 @@ function stripAnsiSafe(s2: string): string {
   // oxlint-disable-next-line no-control-regex
   return s2.replace(/\u001b\[[0-9;]*m/g, "");
 }
+
+describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () => {
+  const SRC = [
+    { id: "claude-code", label: "Claude Code", note: "~/.claude/…", count: 12, available: true },
+    { id: "zcode", label: "ZCode", note: "~/.zcode/cli/…", count: 37, available: true },
+    { id: "qwen", label: "qwen-code", note: "", count: 0, available: true },
+    { id: "codex", label: "codex", note: "~/.codex/…", count: 0, available: false },
+  ];
+  const toP5 = (over: Partial<OnboardingDeps> = {}): OnboardingSession => {
+    const { deps } = mkDeps({ detectMemorySources: () => SRC, ...over });
+    const s = new OnboardingSession(deps);
+    s.handleKey("ctrl+n"); s.handleKey("enter"); type(s, "k"); s.handleKey("enter");   // p2 配好
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n");   // p3 视觉跳过 → p4
+    s.handleKey("enter"); s.handleKey("enter"); s.handleKey("ctrl+n");   // p4 选定 → p5
+    return s;
+  };
+
+  it("① Space 勾选/取消；0 条与未安装源给提示不可勾", () => {
+    const s = toP5();
+    expect(s.stateRef.page).toBe(5);
+    s.handleKey(" ");   // sel=0 Claude Code → 勾
+    expect([...s.stateRef.pm.checked]).toEqual(["claude-code"]);
+    s.handleKey(" ");   // 再按 → 取消
+    expect(s.stateRef.pm.checked.size).toBe(0);
+    s.handleKey("down"); s.handleKey("down");   // sel=2 qwen 0 条
+    s.handleKey(" ");
+    expect(s.stateRef.pm.notice).toContain("没有可导入的笔记");
+    s.handleKey("down"); s.handleKey(" ");   // sel=3 codex 未安装
+    expect(s.stateRef.pm.notice).toContain("没有可导入的笔记");
+    expect(s.stateRef.pm.checked.size).toBe(0);
+  });
+
+  it("② 整理开关行 Space 切换（默认关——D20）", () => {
+    const s = toP5();
+    for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // sel=4 = 开关行
+    expect(s.stateRef.pm.organize).toBe(false);
+    s.handleKey(" ");
+    expect(s.stateRef.pm.organize).toBe(true);
+  });
+
+  it("③ ctrl+n 有勾选 → 异步导入 → finish 回调带 importResult；期间再按不理", async () => {
+    const finished: unknown[] = [];
+    let importedArgs: [string[], boolean] | undefined;
+    const s = toP5({
+      importMemory: async (ids, organize) => { importedArgs = [ids, organize]; return { imported: 49, skipped: 3, merged: 0 }; },
+      finish: (o) => { finished.push(o); },
+    });
+    s.handleKey("down");   // sel=1 ZCode
+    s.handleKey(" ");
+    expect(s.handleKey("ctrl+n")).toBeUndefined();   // 导入中不完成
+    expect(importedArgs).toEqual([["zcode"], false]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toEqual([{ kind: "completed", importResult: { imported: 49, skipped: 3, merged: 0 } }]);
+    expect(s.stateRef.pm.notice).toContain("已导入 49 条");
+  });
+
+  it("④ organize 开启时 importMemory 收到 true（开关透传）", async () => {
+    let got: boolean | undefined;
+    const s = toP5({ importMemory: async (_ids, organize) => { got = organize; return { imported: 1, skipped: 0, merged: 1 }; } });
+    for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // 开关行
+    s.handleKey(" ");   // 开
+    s.handleKey("up");   // 回源行（qwen 0 条…再 up 到 codex？——up 到 sel=3 codex 不可勾）
+    s.handleKey("up");   // sel=2
+    s.handleKey("up");   // sel=1 ZCode
+    s.handleKey(" ");
+    s.handleKey("ctrl+n");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(got).toBe(true);
+  });
+
+  it("⑤ 导入失败 → err notice、不 finish（可直接 Ctrl+N 完成）", async () => {
+    const finished: unknown[] = [];
+    const s = toP5({
+      importMemory: async () => { throw new Error("disk"); },
+      finish: (o) => { finished.push(o); },
+    });
+    s.handleKey(" ");
+    s.handleKey("ctrl+n");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toEqual([]);
+    expect(s.stateRef.pm.notice).toContain("导入失败");
+    expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });   // 手动完成兜底
+  });
+
+  it("⑥ 渲染：标题「从其他 agent 导入记忆」、源行含条数、整理开关含 token 提示、未勾选 ctrl+n 脚注 why", () => {
+    const s = toP5();
+    const text = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(text).toContain("引导 5 / 5");
+    expect(text).toContain("从其他 agent 导入记忆");
+    expect(text).toContain("12 条笔记");
+    expect(text).toContain("未安装");
+    expect(text).toContain("用模型去重并整理这些记忆");
+    expect(text).toContain("消耗 token");
+  });
+});

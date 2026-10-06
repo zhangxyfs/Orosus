@@ -4,8 +4,9 @@ import { orosusHome } from "@orosus/contracts/home";
 import { parseClaims, type Claim } from "./derive.ts";
 
 export interface SelfInfo { sid: string; bucketDir: string; sessionDir: string; cwd: string; transcriptPath: string }
-export interface PeersConfig { workspaceMemory: boolean; sessionPeers: boolean; injectIndex: boolean; windowMinutes: number; leaseMinutes: number; sessionsRoot?: string; memoryBase?: string }
-// ↑ 七键全量，与 Produces 接口块同面——缺键即 excess-property TS2353（四轮复审勘正）
+export interface PeersConfig { workspaceMemory: boolean; sessionPeers: boolean; injectIndex: boolean; windowMinutes: number; leaseMinutes: number; sessionsRoot?: string | undefined; memoryBase?: string | undefined }
+// ↑ 七键全量，与 Produces 接口块同面——缺键即 excess-property TS2353（四轮复审勘正）；
+//   optional 键显式 | undefined（exactOptionalPropertyTypes 口径——z.infer 传入侧兼容）
 
 const atomicWrite = (file: string, text: string): void => {
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;

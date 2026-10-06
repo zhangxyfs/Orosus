@@ -11,6 +11,7 @@ const ev = (fields: Record<string, unknown>, type: string) => JSON.stringify({ .
 // 信封 type 为末键（jsonl.ts:676-684）——样例行必须手拼保持键序
 const toolCall = (name: string, args: Record<string, unknown>, ts = "2026-10-06T09:59:30.000Z") =>
   `{"callId":"c1","name":${JSON.stringify(name)},"args":${JSON.stringify(args)},"v":1,"id":"e3","parentId":"e2","seq":3,"ts":${JSON.stringify(ts)},"type":"tool/call"}`;
+const labelLine = (label: string) => `{"label":${JSON.stringify(label)},"v":1,"id":"e2","parentId":"e1","seq":2,"ts":"2026-10-06T09:59:00.000Z","type":"session/label"}`;
 
 describe("parseToolCallLine", () => {
   it("parses a tool/call line", () => {
@@ -88,7 +89,6 @@ describe("readTailLines", () => {
 });
 
 describe("readLabel", () => {
-  const labelLine = (label: string) => `{"label":${JSON.stringify(label)},"v":1,"id":"e2","parentId":"e1","seq":2,"ts":"2026-10-06T09:59:00.000Z","type":"session/label"}`;
   it("takes the last session/label line", () => {
     const lines = [labelLine("旧标题"), toolCall("tool-fs__write", { path: "a.ts" }), labelLine("重构")];
     expect(readLabel(lines, "fallback")).toBe("重构");

@@ -34,11 +34,18 @@ export interface OnboardingDeps {
   writeVision(value: string): void;
   /** 已配置槽的多模态模型清单（宿主逐槽查目录——遮蔽坑免疫；空 = 空态指路）。 */
   visionModels(): Promise<string[]>;
+  /** T6d 第 5 页（m5-peers）：五源探测（宿主接 importers.detectSources；available=false = 未安装/0 条）。 */
+  detectMemorySources(): { id: string; label: string; note: string; count: number; available: boolean }[];
+  /** T6d 第 5 页：导入勾选源（organize = D20 模型整理开关——仅引导当次生效不落盘）。
+   *  异步（organize 开启时含 llm 调用）；完成经 deps.finish 收尾。 */
+  importMemory(sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }>;
+  /** 引导自动收尾口（T6d：异步导入完成时宿主注入 resolve；测试/无头可省——手按 Ctrl+N 完成）。 */
+  finish?(outcome: OnboardingOutcome): void;
   /** 异步清单到达后的重绘请求（FullApp 挂接时强制注入自家调度——宿主直驱测试可省略）。 */
   requestRender?(): void;
 }
 
-export type OnboardingOutcome = { kind: "completed" } | { kind: "quit" };
+export type OnboardingOutcome = { kind: "completed"; importResult?: { imported: number; skipped: number; merged: number } } | { kind: "quit" };
 
 type NoticeKind = "ok" | "warn" | "err";
 interface P2State {
@@ -60,6 +67,18 @@ interface PVState {
   models: string[]; loading: boolean;
   notice: string; noticeKind: NoticeKind;
 }
+
+/** T6d 第 5 页 · 从其他 agent 导入记忆（v3 走查二轮 + v5 整理开关 D20）。 */
+interface PMState {
+  sel: number; checked: Set<string>; organize: boolean;   // sel 0..sources.length = 源行；+1 = 整理开关行
+  importing: boolean;
+  done: boolean;   // 导入已尝试（成功或失败）——此后 Ctrl+N 直接完成不再重试
+  importResult?: { imported: number; skipped: number; merged: number };
+  sources: { id: string; label: string; note: string; count: number; available: boolean }[];
+  notice: string; noticeKind: NoticeKind;
+}
+
+const PAGE_TITLES = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置视觉模型", "配置网络搜索", "从其他 agent 导入记忆"];
 const VISION_OPTS = [
   { id: "off", name: "暂不启用（默认）", desc: "不生成视觉摘要——降级图只留路径标签" },
   { id: "auto", name: "自动", desc: "当前模型支持图片时直接用它看图" },
@@ -77,10 +96,11 @@ const ENV_NAME: Record<"tavily" | "brave", string> = { tavily: "TAVILY_API_KEY",
 
 export class OnboardingSession {
   private deps: OnboardingDeps;
-  private page: 1 | 2 | 3 | 4 = 1;
+  private page: 1 | 2 | 3 | 4 | 5 = 1;
   private p2: P2State;
   private p3: P3State;
   private pv: PVState;
+  private pm: PMState;
 
   constructor(deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null }) {
     this.deps = deps;
@@ -95,11 +115,12 @@ export class OnboardingSession {
       chosen: null, model: null, notice: "", noticeKind: "warn",
     };
     this.pv = { sel: 0, mode: "opts", models: [], loading: false, notice: "", noticeKind: "warn" };
+    this.pm = { sel: 0, checked: new Set(), organize: false, importing: false, done: false, sources: deps.detectMemorySources(), notice: "", noticeKind: "warn" };
   }
 
   /** 测试探针。 */
-  get stateRef(): { page: number; p2: P2State; p3: P3State; pv: PVState } {
-    return { page: this.page, p2: this.p2, p3: this.p3, pv: this.pv };
+  get stateRef(): { page: number; p2: P2State; p3: P3State; pv: PVState; pm: PMState } {
+    return { page: this.page, p2: this.p2, p3: this.p3, pv: this.pv, pm: this.pm };
   }
 
   private provById(id: string): OnboardingProvider {
@@ -137,12 +158,14 @@ export class OnboardingSession {
     }
     if (this.page === 2) return this.keyP2(key);
     if (this.page === 3) return this.keyPV(key);
-    return this.keyP3(key);
+    if (this.page === 4) return this.keyP3(key);
+    return this.keyPM(key);
   }
 
   private notice(text: string, kind: NoticeKind): void {
     if (this.page === 2) { this.p2.notice = text; this.p2.noticeKind = kind; }
     else if (this.page === 3) { this.pv.notice = text; this.pv.noticeKind = kind; }
+    else if (this.page === 5) { this.pm.notice = text; this.pm.noticeKind = kind; }
     else { this.p3.notice = text; this.p3.noticeKind = kind; }
   }
 
@@ -378,7 +401,53 @@ export class OnboardingSession {
     }
     if (key === "ctrl+n") {
       if (p.chosen === null) { this.notice("请先选择一个搜索后端——LLM 默认零配置，回车即选", "warn"); return undefined; }
-      return { kind: "completed" };
+      this.page = 5;   // T6d：网络搜索之后进导入页（原「完成」顺延一页）
+      return undefined;
+    }
+    return undefined;
+  }
+
+  /* ── 第 5 页 · 从其他 agent 导入记忆（T6d——Space 勾选（第 2 页同键不同义先例）+ 整理开关 D20） ── */
+  private keyPM(key: string): OnboardingOutcome | undefined {
+    const p = this.pm;
+    const rows = p.sources.length + 1;   // 末行 = 整理开关
+    if (key === "up" || key === "down") {
+      p.sel = Math.max(0, Math.min(rows - 1, p.sel + (key === "down" ? 1 : -1)));
+      return undefined;
+    }
+    if (key === " ") {
+      if (p.sel < p.sources.length) {
+        const src = p.sources[p.sel]!;
+        if (!src.available || src.count === 0) { this.notice(`${src.label} 没有可导入的笔记`, "warn"); return undefined; }
+        if (p.checked.has(src.id)) p.checked.delete(src.id);
+        else p.checked.add(src.id);
+        p.notice = "";
+      } else {
+        p.organize = !p.organize;
+        p.notice = "";
+      }
+      return undefined;
+    }
+    if (key === "ctrl+n") {
+      if (p.importing) return undefined;   // 导入中不理键
+      if (p.done) return { kind: "completed", ...(p.importResult !== undefined ? { importResult: p.importResult } : {}) };   // 已尝试过（成功/失败）→ 直接完成
+      if (p.checked.size === 0) return { kind: "completed" };   // 无勾选 = 跳过导入直接完成
+      p.importing = true;
+      this.notice("正在导入记忆…", "warn");
+      void Promise.resolve(this.deps.importMemory([...p.checked], p.organize)).then((r) => {
+        p.importing = false;
+        p.done = true;
+        p.importResult = r;
+        this.notice(`已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）`, "ok");
+        this.deps.requestRender?.();
+        this.deps.finish?.({ kind: "completed", importResult: r });   // 宿主注入的自动收尾（引导关窗 + toast）
+      }).catch(() => {
+        p.importing = false;
+        p.done = true;
+        this.notice("导入失败——可直接 Ctrl + N 完成（稍后重开引导或手工搬入）", "err");
+        this.deps.requestRender?.();
+      });
+      return undefined;
     }
     return undefined;
   }
@@ -422,11 +491,12 @@ export class OnboardingSession {
     if (this.page === 1) this.bodyP1(body, bodyH, inner);
     else if (this.page === 2) this.bodyP2(body, bodyH, inner);
     else if (this.page === 3) this.bodyPV(body, bodyH, inner);
-    else this.bodyP3(body, bodyH, inner);
+    else if (this.page === 4) this.bodyP3(body, bodyH, inner);
+    else this.bodyPM(body, bodyH, inner);
     while (body.length < bodyH) body.push(""); // 定高垫行——条件性增删行即闪烁源（浮层纪律）
     if (body.length > bodyH) body.length = Math.max(0, bodyH); // CTU-05：P1 body 简介回流后 7~9 行（窄终端折行更多），bodyH 不足时裁尾（旧「只垫不裁」让 lines 超 mh 预算顶穿底行——rows≤12 时底框/键位行整行被裁不可见）
-    const step = theme.fg("info", `引导 ${this.page} / 4`);
-    const title = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置视觉模型", "配置网络搜索"][this.page - 1]!;
+    const step = theme.fg("info", `引导 ${this.page} / ${PAGE_TITLES.length}`);   // 分母随标题数组派生（T6d 加页防再漂）
+    const title = PAGE_TITLES[this.page - 1]!;
     const lines = [
       theme.fg(bc, "╭" + "─".repeat(inner) + "╮"),
       box(` ${step}  ${theme.fg("fg", title)}`),
@@ -468,8 +538,15 @@ export class OnboardingSession {
         { key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先配好一家提供商" },
       ], inner);
     }
-    const ready = this.p3.chosen !== null;
-    return this.foot([{ key: "Ctrl + N", label: "完成引导", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" }], inner);
+    if (this.page === 3) return this.foot([{ key: "Ctrl + N", label: "下一步", on: true }], inner);
+    if (this.page === 4) {
+      const ready = this.p3.chosen !== null;
+      return this.foot([{ key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" }], inner);
+    }
+    return this.foot([
+      { key: "Space", label: "勾选", on: true },
+      { key: "Ctrl + N", label: "导入选中并完成", on: !this.pm.importing, why: this.pm.importing ? "导入中…" : this.pm.checked.size === 0 ? "未勾选则跳过导入" : "" },
+    ], inner);
   }
 
   private bodyP1(out: string[], _h: number, inner: number): void {
@@ -607,5 +684,28 @@ export class OnboardingSession {
     }
     out.push(this.noticeLine(p.noticeKind, p.notice));
     void bodyH;
+  }
+
+  /* ── 第 5 页 · 导入记忆正文（v3 简图③：五源行 + 整理开关 + 说明；行数恒定防闪烁） ── */
+  private bodyPM(out: string[], _bodyH: number, inner: number): void {
+    const p = this.pm;
+    out.push(theme.fg("muted", "换工具不丢积累——检测到本机有记忆库的 agent（Space 勾选导入）："));
+    out.push("");
+    for (const [i, src] of p.sources.entries()) {
+      const mark = p.checked.has(src.id) ? theme.fg("accent", "●") : theme.dim("○");
+      const count = !src.available ? theme.dim("未安装")
+        : src.count === 0 ? theme.dim("0 条（本项目无记忆）")
+        : theme.fg("fg", `${src.count} 条笔记`);
+      const row = `${mark} ${theme.fg("fg", src.label)}${theme.dim(` · ${count}${src.available && src.count > 0 ? ` · ${src.note}` : ""}`)}`;
+      out.push(truncateToWidth(i === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + row) : ` ${row}`, inner));
+    }
+    out.push("");
+    const optMark = p.organize ? theme.fg("accent", "[✓]") : theme.dim("[ ]");
+    const optRow = `${optMark} ${theme.fg("fg", "用模型去重并整理这些记忆")}${theme.dim("（默认关）")}`;
+    out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
+    out.push(theme.dim("    开启后导入时调用刚配置的模型做语义去重与归并，"));
+    out.push(theme.dim("    更干净但消耗 token（一次性，按导入量）。"));
+    const n = this.noticeLine(p.noticeKind, p.notice);
+    if (n !== "") { out.push(""); out.push(n); }
   }
 }

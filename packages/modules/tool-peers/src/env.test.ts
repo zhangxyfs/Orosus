@@ -36,7 +36,7 @@ describe("PeersEnv", () => {
     const env = new PeersEnv({ workspaceMemory: false, sessionPeers: false, injectIndex: true, windowMinutes: 10, leaseMinutes: 30, sessionsRoot: root, memoryBase: join(root, "mem") });
     boot(env);
     for (const sid of ["s_self", "s_a", "s_b"]) mkdirSync(join(root, "D--proj-abc12345", sid), { recursive: true });
-    expect(env.siblingSessionDirs().map(s => s.sid).sort()).toEqual(["s_a", "s_b"]);
+    expect(env.siblingSessionDirs().map(s => s.sid).toSorted()).toEqual(["s_a", "s_b"]);
   });
   it("round-trips claims with lease filter", () => {
     const env = new PeersEnv({ workspaceMemory: false, sessionPeers: false, injectIndex: true, windowMinutes: 10, leaseMinutes: 30, sessionsRoot: root, memoryBase: join(root, "mem") });

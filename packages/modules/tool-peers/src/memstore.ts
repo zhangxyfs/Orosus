@@ -43,7 +43,7 @@ export interface NoteMeta { file: string; title: string; summary: string; update
 const frontmatterField = (text: string, key: "name" | "description"): string | undefined => {
   const m = text.match(/^---\n([\s\S]*?)\n---\n/);
   if (m === null) return undefined;
-  const line = m[1].split("\n").find(l => l.startsWith(`${key}:`));
+  const line = m[1]!.split("\n").find(l => l.startsWith(`${key}:`));
   return line === undefined ? undefined : line.slice(key.length + 1).trim();
 };
 

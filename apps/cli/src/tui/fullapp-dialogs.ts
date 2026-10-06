@@ -227,7 +227,11 @@ export function createDialogs(app: FullApp) {
 	const runOnboarding = (deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null }): Promise<OnboardingOutcome> => {
 		return new Promise((resolve) => {
 			app.onboarding = {
-				session: new OnboardingSession({ ...deps, requestRender: () => app.scheduler.requestRender() }, initial),
+				session: new OnboardingSession({
+					...deps,
+					requestRender: () => app.scheduler.requestRender(),
+					finish: (outcome) => resolve(outcome),   // T6d：第 5 页异步导入完成自动收尾（session 侧调）
+				}, initial),
 				resolve,
 			};
 			app.scheduler.requestImmediateRender();

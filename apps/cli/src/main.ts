@@ -12,7 +12,8 @@
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
-import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
+import { homedir } from "node:os";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile, encodeCwd } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -43,6 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
+import { detectSources, importNotes, organizeNotes, readSourceNotes } from "@orosus/tool-peers";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { existsSync } from "node:fs";
@@ -1591,7 +1593,12 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     } else {
       await h.reload(); // provider 槽/search 后端进图——配置即时生效（调用时解析的另一翼 = tool-web 闭包活态）
       registerToolLabels(h.graph().tools.toolInfos()); // 引导激活的模块（tool-web 等）标签进表
-      app.showToast("引导完成 · 配置已写入并即时生效");
+      const ir = outcome.importResult;
+      if (ir !== undefined) {
+        app.showToast(`引导完成 · 已导入 ${ir.imported} 条记忆（跳过 ${ir.skipped} 条重复${ir.merged > 0 ? ` · 模型整理合并 ${ir.merged} 条` : ""}）· /tool-peers__memory 可浏览`, 6000);
+      } else {
+        app.showToast("引导完成 · 配置已写入并即时生效");
+      }
     }
   }
   while (action === undefined) {
@@ -1666,6 +1673,27 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			const live = entry.type === "anthropic" ? anthropicListModels(glue) : openaiListModels(glue);
 			return catalogPreferredListModels(slot, live, diskFirstCatalogLoader())();
 		},
+		// T6d 第 5 页（m5-peers）：五源探测 + 导入——importers 纯函数件经 deps 注入引导（onboarding 无 IO）
+		detectMemorySources: () => {
+			const cwd = process.cwd();
+			const homes = memorySourceHomes();
+			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
+			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? "未安装", count: s.count, available: s.dir !== undefined }));
+		},
+		importMemory: async (sourceIds, organize) => {
+			const cwd = process.cwd();
+			const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
+			let notes = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
+			let merged = 0;
+			if (organize && notes.length >= 2) {
+				const organized = await organizeNotes(notes, (req) => h.llm().stream(req));   // D20 整理通道（/btw 同款 h.llm 直调）
+				notes = organized.notes;
+				merged = organized.merged;
+			}
+			const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");   // 与 env.memoryDir 同桶（session/start 后同目录）
+			const r = importNotes(destDir, notes);
+			return { imported: r.imported, skipped: r.skipped, merged };
+		},
 	};
 };
 
@@ -1675,6 +1703,29 @@ const onboardingInitial = async (): Promise<{ configured: string[]; active: stri
 	const curModel = realReadModel(process.cwd())();
 	const slot = curModel === undefined || curModel === "" ? null : curModel.split("/")[0]!;
 	return { configured: Object.keys(cur), active: slot !== null && cur[slot] !== undefined ? slot : null };
+};
+
+/** T6d 五源家目录（m5-peers——探测纯读，缺目录 = 未安装）。 */
+const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string } => {
+	const home = homedir();
+	return {
+		claude: join(home, ".claude"),
+		zcode: join(home, ".zcode"),
+		qwen: join(home, ".qwen"),
+		codex: join(home, ".codex"),
+		reasonix: join(home, ".reasonix"),
+	};
+};
+
+/** T6d git root 探测（向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。 */
+const findGitRoot = (cwd: string): string => {
+	let dir = cwd;
+	for (;;) {
+		if (existsSync(join(dir, ".git"))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) return cwd;   // 到根没有 .git → 用 cwd（探测退化为本目录）
+		dir = parent;
+	}
 };
 
 if (args.print === undefined) try {

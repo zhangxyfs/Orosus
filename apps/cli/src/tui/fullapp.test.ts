@@ -991,6 +991,8 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		listModels: async () => ["glm-5.3"],
 		writeVision: () => {},
 		visionModels: async () => [],
+		detectMemorySources: () => [],
+		importMemory: async () => ({ imported: 0, skipped: 0, merged: 0 }),
 	});
 
 	it("⑬ 弹窗开 → 焦点锁全键序走通三页 → completed 结算 + 弹窗消退", async () => {
@@ -1000,10 +1002,10 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
 		const outcome = app.runOnboarding(obDeps(calls));
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("引导 1 / 4");
+		expect(stripAnsi(output.buf)).toContain("引导 1 / 5");
 		input.emit("data", "\x0e"); // Ctrl + N → p2
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("引导 2 / 4");
+		expect(stripAnsi(output.buf)).toContain("引导 2 / 5");
 		input.emit("data", "\r"); // 进 key 态（zhipu）
 		input.emit("data", "zk");
 		input.emit("data", "\r"); // 确认 key
@@ -1014,15 +1016,18 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		await flush();
 		input.emit("data", ""); // → p4 搜索页（视觉页跳过——默认不开启）
 		await flush();
-		expect(stripAnsi(output.buf)).toContain("引导 4 / 4");
+		expect(stripAnsi(output.buf)).toContain("引导 4 / 5");
 		input.emit("data", "\r"); // opts → llm 子态
 		input.emit("data", "\r"); // 默认项选定
 		await flush();
-		input.emit("data", "\x0e"); // 完成
+		input.emit("data", "\x0e"); // → p5 导入页（T6d——原「完成」顺延一页）
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("引导 5 / 5");
+		input.emit("data", "\x0e"); // 未勾选源 = 跳过导入 → 完成
 		await flush();
 		expect(await outcome).toEqual({ kind: "completed" });
 		const tail = stripAnsi(output.buf.slice(-4000));
-		expect(tail).not.toContain("引导 4 / 4"); // 弹窗已消退
+		expect(tail).not.toContain("引导 5 / 5"); // 弹窗已消退
 		app.stop();
 	});
 
