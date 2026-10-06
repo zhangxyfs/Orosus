@@ -248,7 +248,6 @@ export const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 export const INPUT_MAX_ROWS = 5;
 export const OVERLAY_PAGE = 10;
 export const DIAG_LIST_ROWS = 8; // 诊断一级列表恒定行数（原型 LIST_ROWS=8——不足留空防闪烁）
-export const MODULE_SLOTS = 5; // 模块挂载区每页行数（渲染与 PgUp/PgDn 翻页共用一源——两处漂移即页号错位）
 export const WHEEL_STEP = 1; // 滚轮每格滚动行数（m5 鼠标批设计空白 1——kimi 生产默认同款 tui-alt-screen.ts:264 ?? 1）
 export const ALT_WHEEL_MULTIPLIER = 5; // Alt+滚轮加速倍数（设计空白 2——kimi :75 同名常量同值）
 export const DOUBLE_CLICK_INTERVAL_MS = 500; // 双击判定窗口（m5 鼠标批 T6 设计空白 10——kimi :79 同值）

@@ -7,7 +7,7 @@
 
 import { renderWidgets } from "./widgets.ts";
 import {
-	CONN_SLOTS, CONN_STATE_TEXT, elapsedText, MOD_STATE_TEXT, MODULE_SLOTS, msText, SPIN_FRAMES, taskTick,
+	CONN_SLOTS, CONN_STATE_TEXT, elapsedText, MOD_STATE_TEXT, msText, SPIN_FRAMES, taskTick,
 	type ModuleCard, type PanelData,
 } from "./fullapp-types.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
@@ -174,7 +174,7 @@ export function createPanels(app: FullApp) {
 				` ${theme.fg("muted", "上下文")} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
 			);
 			content.push(sepRow(inner));
-			const slots = MODULE_SLOTS;
+			const slots = moduleSlots();
 			const modPages = Math.max(1, Math.ceil(d.modules.length / slots));
 			const modPage = Math.min(modPages - 1, Math.floor(s.moduleSel / slots));
 			const lo = modPage * slots;
@@ -235,6 +235,15 @@ export function createPanels(app: FullApp) {
 		return panelBox(card.title, `${page + 1}/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [sepRow(inner)]);
 	};
 
+	// 模块挂载区每页行数（2026-10-06 动态化——原写死 MODULE_SLOTS=5 不随终端高度）：渲染与 PgUp/PgDn
+	// 翻页共用本函数（两处漂移即页号错位）。固定开销 15 = 顶框+空行+kv×5+sep×2+上下文条+模块区标题+
+	// 底部隔线+提示行×2+底框，与 statusRows 页 0 内容序同口径，改页 0 布局两处同步；高度公式与
+	// renderFrame 的 statusH 同口径。小终端下限 3——再小面板从底部裁（提示行让路，模块行先保）
+	const moduleSlots = (): number => {
+		const statusH = Math.max(8, Math.floor(app.io.rows() * 0.55));
+		return Math.max(3, statusH - 15);
+	};
+
 	// 任务清单每页行数（翻页步长 = 页大小——步长小于页大小时选中项在页内挪动页号不翻）；
 	// 与 renderFrame 的 statusH/taskH 布局同口径，改布局两处同步
 	const taskPageSlots = (): number => {
@@ -276,5 +285,5 @@ export function createPanels(app: FullApp) {
 		return panelBox("任务清单", pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? ["←→ 切卡 · PgUp/PgDn 任务翻页 · Esc 返回"] : ["PgUp/PgDn 翻页 · Esc 返回"], footer, [sepRow(inner)]);
 	};
 
-	return { sidebarW, inputInnerW, tailLine, panelBox, kvRow, sep: sepRow, modRow, connRow, statusRows, renderModuleCard, taskPageSlots, taskRows };
+	return { sidebarW, inputInnerW, tailLine, panelBox, kvRow, sep: sepRow, modRow, connRow, statusRows, renderModuleCard, moduleSlots, taskPageSlots, taskRows };
 }
