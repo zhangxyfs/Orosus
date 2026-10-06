@@ -197,7 +197,7 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 	});
 	it("④b 面板聚焦裸键直控（2026-09-24 拍板——翻页不再借道 Shift）：状态面板 ←→ 翻页 / PgUp·PgDn 模块翻页 / ↑↓ 选择；任务面板 PgUp·PgDn 翻页；聚焦期 PgUp·PgDn 不滚对话流", async () => {
 		const doc = Array.from({ length: 60 }, (_, i) => `第 ${i} 行`);
-		const mods = Array.from({ length: 7 }, (_, i) => ({ name: `mod-${i}`, desc: "测试", state: "mounted" as const }));
+		const mods = Array.from({ length: 12 }, (_, i) => ({ name: `mod-${i}`, desc: "测试", state: "mounted" as const })); // 12 条防 clamp 混测：模块每页行数动态（44 行终端 24−15=9），PgDn 步长 9 需总数 ≥10
 		const tasks = Array.from({ length: 18 }, (_, i) => ({ text: `任务 ${i}`, state: "pending" as const }));
 		// 44 行：状态面板（55% 定高）才装得下底部提示行——30 行终端提示行被 slice 截掉（既有挤压口径）
 		const { app, input, output } = rig(doc, 100, 44, {
@@ -232,13 +232,13 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		input.emit("data", "\x1b[D"); // ← 返回运行状态页
 		await flush();
 		expect(st.state.statePage).toBe(0);
-		input.emit("data", "\x1b[6~"); // PgDn → 模块翻页（每页 5）：sel 0 → 5 落第 2 页
+		input.emit("data", "\x1b[6~"); // PgDn → 模块翻页（每页动态：44 行终端 statusH=24−15=9）：sel 0 → 9 落第 2 页
 		await flush();
-		expect(st.state.moduleSel).toBe(5);
+		expect(st.state.moduleSel).toBe(9);
 		expect(st.state.scrollBack).toBe(0); // 面板聚焦期 PgUp/PgDn 归面板，不滚对话流
 		input.emit("data", "\x1b[B"); // ↓ 模块选择就地 +1
 		await flush();
-		expect(st.state.moduleSel).toBe(6);
+		expect(st.state.moduleSel).toBe(10);
 		input.emit("data", "\t"); // 焦点 → 任务清单
 		await flush();
 		expect(st.state.focusIdx).toBe(2);
@@ -4523,6 +4523,37 @@ describe("模块总览启动器（m5-peers T6e）", () => {
 		input.emit("data", "\x14"); // Ctrl+T（关了——应切换）
 		await flush();
 		expect(app.stateRef.sidebarVisible).toBe(!before);
+		app.stop();
+	});
+});
+
+// m5-peers 走查六-②：浏览窗（dialog interactive list）长列表真翻页验证
+describe("dialog 长列表滚动（m5-peers 浏览窗形态）", () => {
+	it("40 条列表：↑↓ 视口跟随选中行（选中项滚出页时窗跟着滚）；PgDn 整页跳", async () => {
+		const items = Array.from({ length: 40 }, (_, i) => `笔记-${String(i).padStart(2, "0")}`);
+		const { app, input, output } = rig(["# 你好"], 100, 30);
+		app.start();
+		await flush();
+		app.openDialogHost({
+			title: "记忆 · 本项目",
+			layout: "full",
+			widgets: [{ id: "list", kind: "list", interactive: true, items }],
+		});
+		await flush();
+		let plain = stripAnsi(output.buf);
+		expect(plain).toContain("笔记-00");
+		// PgDn 翻一页：sel 跳一页步长到第 10 条（OVERLAY_PAGE），窗随之滚（末帧口径——buf 叠全部历史帧）
+		input.emit("data", "\x1b[6~"); // pageDown
+		await flush();
+		plain = stripAnsi(output.buf.slice(-3600));
+		expect(plain).toContain("笔记-10");
+		// 连按 ↓ 到第 35 条 → 视口跟随（末帧含 35、首条滚出、顶上有「↑ 还有」）
+		for (let i = 0; i < 25; i++) input.emit("data", "\x1b[B");
+		await flush(120);
+		plain = stripAnsi(output.buf.slice(-3600));
+		expect(plain).toContain("笔记-35");
+		expect(plain).not.toContain("笔记-00");
+		expect(plain).toContain("↑ 还有");
 		app.stop();
 	});
 });

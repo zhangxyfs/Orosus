@@ -50,30 +50,37 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(readPeersConfig(f)).toEqual({ workspaceMemory: false, sessionPeers: false });
   });
 
-  it("③c 导入流：有货源逐项/全部导入 + 人话结果；无货源空态；Esc 空串（走查修订三）", async () => {
+  it("③c 导入流：逐项/全部/模型整理三档 + 人话结果；无货源空态；Esc 空串（走查修订三+七-①）", async () => {
+    const runs: Array<[string[], boolean]> = [];
     const deps: MemoryImportDeps = {
       detect: () => [
         { id: "claude-code", label: "Claude Code", count: 12 },
         { id: "zcode", label: "ZCode", count: 37 },
         { id: "qwen", label: "qwen-code", count: 0 },   // 无货不列
       ],
-      run: (ids) => ({ imported: ids.length * 10, skipped: 2 }),
+      run: async (ids, organize) => { runs.push([ids, organize]); return { imported: ids.length * 10, skipped: 2, merged: organize ? 5 : 0 }; },
     };
-    // 单源导入（第一项）
+    // 单源导入（第一项，纯机械）
     const single = await runMemoryImportSetting(async (_t, items) => items[0]!, deps);
+    expect(runs[0]).toEqual([["claude-code"], false]);
     expect(single).toContain("已导入 10 条记忆");
     expect(single).toContain("跳过 2 条重复");
     expect(single).toContain("/tool-peers__memory");
-    // 全部导入（末项——只有两源列进：qwen 0 条被滤）
-    const all = await runMemoryImportSetting(async (_t, items) => items[items.length - 1]!, deps);
+    expect(single).not.toContain("模型整理");   // 机械档不报整理
+    // 全部导入（倒数第二项——只有两源列进：qwen 0 条被滤）
+    const all = await runMemoryImportSetting(async (_t, items) => items[items.length - 2]!, deps);
     expect(all).toContain("已导入 20 条记忆");
+    // 全部 + 模型整理（末项——organize 透传，结果报合并数）
+    const org = await runMemoryImportSetting(async (_t, items) => items[items.length - 1]!, deps);
+    expect(runs[runs.length - 1]).toEqual([["claude-code", "zcode"], true]);
+    expect(org).toContain("模型整理合并 5 条");
     // Esc = 空串
     expect(await runMemoryImportSetting(async () => "", deps)).toBe("");
     // 全重复
-    const dupDeps: MemoryImportDeps = { detect: deps.detect, run: () => ({ imported: 0, skipped: 5 }) };
+    const dupDeps: MemoryImportDeps = { detect: deps.detect, run: async () => ({ imported: 0, skipped: 5, merged: 0 }) };
     expect(await runMemoryImportSetting(async (_t, items) => items[0]!, dupDeps)).toContain("全部与现有记忆重复");
     // 无货源空态（不弹菜单）
-    const emptyDeps: MemoryImportDeps = { detect: () => [{ id: "x", label: "X", count: 0 }], run: () => ({ imported: 0, skipped: 0 }) };
+    const emptyDeps: MemoryImportDeps = { detect: () => [{ id: "x", label: "X", count: 0 }], run: async () => ({ imported: 0, skipped: 0, merged: 0 }) };
     const empty = await runMemoryImportSetting(async () => {
       throw new Error("不该弹菜单");
     }, emptyDeps);

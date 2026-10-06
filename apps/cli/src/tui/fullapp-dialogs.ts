@@ -5,6 +5,7 @@
 
 import { resolvePopupLayout } from "./popuplayout.ts";
 import { renderWidgetLines } from "./widgets.ts";
+import { renderMarkdown } from "../mdpipe.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import type { DialogEvent, DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import type { HostDialogKeys, PickExtraKeys } from "./fullapp-types.ts";
@@ -63,7 +64,7 @@ export function createDialogs(app: FullApp) {
 	 *  黄字「终端窗口太小」（分析报告口子一 :125 的调用方行为）。
 	 *  layout "dock"（m4-7 走查修，宿主内部值——模块契约 PopupLayout 不含）：贴输入框上缘 + 左栏同宽，
 	 *  内容自适应封顶可滚（渲染期 buildViewOverlay 算几何，不走 resolvePopupLayout）。 */
-	const viewText = (title: string, text: string, opts?: { layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean }): void => {
+	const viewText = (title: string, text: string, opts?: { layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean; markdown?: boolean }): void => {
 		const open = (): void => {
 			if (app.stopped) return;
 			if (opts?.layout !== "dock") { // dock 不走居中几何——too-small 检查仅对弹窗布局有意义
@@ -75,7 +76,11 @@ export function createDialogs(app: FullApp) {
 				}
 			}
 			const keys = filterViewKeys(opts?.keys, opts?.owner);
-			const initLines = text.split("\n");
+			// markdown 正文先走回显面 md 管线（m5-peers 走查六-③——/btw dock 窗 renderMarkdown 同源先例）；
+			// 折行宽 = full 弹窗内容区口径 cols−6（compaction 摘要同款），非 full 布局同样按此渲染（取窗内容宽近似）
+			const initLines = opts?.markdown === true
+				? renderMarkdown(text, Math.max(20, app.io.columns() - 6))
+				: text.split("\n");
 			app.state.overlayOpen = false; // 与斜杠菜单互斥
 			app.pendingUi = {
 				// bottom（2026-09-27 用户拍板：查看窗自动滚到底）——T1 pinned 重构：scroll 恒诚实值（0 起），

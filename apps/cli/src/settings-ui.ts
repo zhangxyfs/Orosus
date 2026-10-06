@@ -132,7 +132,9 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 					});
 					if (res === undefined) break; // Esc / 未匹配 → 回设置根列表
 					if (res.kind === "import") {
-						// 导入流（子级 Esc = 静默回子菜单——runMemoryImportSetting 空串约定）
+						// 导入流（子级 Esc = 静默回子菜单——runMemoryImportSetting 空串约定）；
+						// 选了模型整理档时 llm 调用可达几十秒——先挂「导入中」提示，结果 toast 顶替
+						app.showToast("导入中（模型整理可能需要几十秒）…", 30000);
 						const outText = await runMemoryImportSetting(async (t, list) => {
 							const i = await app.pickOverlay(t, list);
 							return i === undefined ? "" : list[i] ?? "";

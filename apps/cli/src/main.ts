@@ -400,6 +400,18 @@ const importFromSources = (sourceIds: string[]): { imported: number; skipped: nu
 	const r = importNotes(destDir, notes);
 	return { imported: r.imported, skipped: r.skipped };
 };
+/** m5-peers 导入全形（走查七-①：settings 与引导共用）——organize = true 先语义去重归并再落盘
+ *  （D20 整理通道，/btw 同款 h.llm 直调，异步）；false = 纯机械同步。 */
+const importWithOrganize = async (sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }> => {
+	if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
+	const cwd = process.cwd();
+	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
+	const raw = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
+	const organized = await organizeNotes(raw, (req) => h.llm().stream(req));
+	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
+	const r = importNotes(destDir, organized.notes);
+	return { imported: r.imported, skipped: r.skipped, merged: organized.merged };
+};
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
   getH: () => h,
@@ -409,11 +421,11 @@ const settingsDeps: SettingsUiDeps = {
   skillDeps,
   hooksDeps,
   mcpDeps,
-  // m5-peers 走查修订三：「记忆导入」数据口（settings 与引导第 5 页共用 importers 核心）
+  // m5-peers 走查修订三 + 走查七-①：「记忆导入」数据口（settings 与引导第 5 页共用 importers 核心 + 模型整理）
   peersImport: {
     detect: () => detectSources(memorySourceHomes(), findGitRoot(process.cwd()), process.cwd())
       .map(s => ({ id: s.id, label: s.label, count: s.count })),
-    run: importFromSources,
+    run: importWithOrganize,
   },
 };
 // 界面模式解析上移（T11 m5-resume-perf）：初始 createSession 的行模式装载判据（deps.isFullscreen）
@@ -1721,17 +1733,7 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
 			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? "未安装", count: s.count, available: s.dir !== undefined }));
 		},
-		importMemory: async (sourceIds, organize) => {
-			// organize 开（D20 整理通道，/btw 同款 h.llm 直调）先语义去重再落盘；关 = 纯机械共用核心
-			if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
-			const cwd = process.cwd();
-			const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
-			const raw = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-			const organized = await organizeNotes(raw, (req) => h.llm().stream(req));
-			const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
-			const r = importNotes(destDir, organized.notes);
-			return { imported: r.imported, skipped: r.skipped, merged: organized.merged };
-		},
+		importMemory: (sourceIds, organize) => importWithOrganize(sourceIds, organize),
 	};
 };
 

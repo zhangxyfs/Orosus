@@ -81,7 +81,7 @@ export default defineModule({
             if (entry === undefined) return undefined;
             const body = browserBody(dir, entry.file);
             handle?.close();   // 正文窗走 viewText FIFO 顶上
-            if (body !== undefined) ui.viewText?.(entry.title, body, { layout: "full" });
+            if (body !== undefined) ui.viewText?.(entry.title, body, { layout: "full", markdown: true });   // 走查六-③：md 渲染（不支持的宿主按纯文本原样显示）
           }
           return undefined;
         },

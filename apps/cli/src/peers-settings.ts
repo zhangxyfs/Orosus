@@ -53,16 +53,17 @@ export async function runMemorySetting(
   return { kind: "toggle", key, value, message: `${label}：${value ? "开" : "关"}（已写 [tool-peers] ${key}）` };
 }
 
-/** 记忆导入数据口（走查修订三：settings 侧 = 引导第 5 页同功能·简版——纯机械导入零 token，
- *  模型整理开关是引导专属〔D20 当次生效不落盘〕不进设置面）。宿主接线复用 importers 件。 */
+/** 记忆导入数据口（走查修订三 + 走查七-①：settings 侧 = 引导第 5 页同功能——含 D20 模型整理）。
+ *  宿主接线复用 importers 件 + h.llm()（organize = true 时语义去重合并，消耗 token 一次性）。 */
 export interface MemoryImportDeps {
   /** 五源探测（有货才列：count > 0）。 */
   detect(): { id: string; label: string; count: number }[];
-  /** 执行导入（标题精确去重，已导入过的跳过）。 */
-  run(sourceIds: string[]): { imported: number; skipped: number };
+  /** 执行导入（organize = true 走模型语义去重与归并——异步含 llm 调用；false = 纯机械同步零 token）。 */
+  run(sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }>;
 }
 
-/** 「记忆导入」流：有货源逐项 / 全部导入；无货源空态文案可跳过。返回人话结果（toast/out 用；空串 = Esc）。 */
+/** 「记忆导入」流：逐源 / 全部（纯机械） / 全部 + 模型整理（D20 同款语义去重，文案明示 token 消耗）；
+ *  无货源空态文案可跳过。返回人话结果（toast/out 用；空串 = Esc）。 */
 export async function runMemoryImportSetting(
   choose: (title: string, items: string[]) => Promise<string>,
   deps: MemoryImportDeps,
@@ -73,13 +74,16 @@ export async function runMemoryImportSetting(
   const items = [
     ...sources.map(s => `${s.label} —— 导入该源 ${s.count} 条`),
     `全部导入 —— ${sources.length} 家共 ${total} 条`,
+    `全部导入 + 模型整理 —— 语义去重与归并，更干净但消耗 token（一次性，按导入量）`,
   ];
   const picked = await choose("记忆 · 导入", items);
   const idx = items.indexOf(picked);
   if (idx === -1) return "";
+  const organize = idx === sources.length + 1;   // 末项 = 模型整理
   const ids = idx < sources.length ? [sources[idx]!.id] : sources.map(s => s.id);
-  const r = deps.run(ids);
+  const r = await deps.run(ids, organize);
+  const mergedNote = r.merged > 0 ? ` · 模型整理合并 ${r.merged} 条` : "";
   return r.imported === 0 && r.skipped > 0
-    ? `没有新条目——${r.skipped} 条全部与现有记忆重复（此前已导入过）`
-    : `已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）· /tool-peers__memory 可浏览`;
+    ? `没有新条目——${r.skipped} 条全部与现有记忆重复（此前已导入过）${mergedNote}`
+    : `已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）${mergedNote} · /tool-peers__memory 可浏览`;
 }

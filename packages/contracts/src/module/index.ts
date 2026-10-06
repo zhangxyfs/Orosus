@@ -173,6 +173,8 @@ export interface CommandUi {
    *  @param opts - 可选项。
    *  @param opts.layout - 布局；缺省 "center80"。非法值整体回退 center80；终端装不下 = 不弹 + 黄字。
    *  @param opts.keys - 自定义键（键名 → 动作）；键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"），保留键注册即拒。
+   *  @param opts.markdown - 声明正文为 markdown（m5-peers 走查六-③）：支持的宿主先渲染（回显面 md 管线
+   *   同源）再显示——标题层级/列表/代码块带样式；不支持的宿主按纯文本原样显示（内容不丢）。可省 = 纯文本。
    *  @param opts.owner - 内核自动标注的模块名（@internal——模块勿自填）。
    *
  *  @example
@@ -180,7 +182,7 @@ export interface CommandUi {
  *  ui.viewText?.("便签", notes.join("\n"), { layout: { height: 20, marginTop: 2 } });
  *  ```
    */
-  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; owner?: string }): void;
+  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
    *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。
    *  @param text - 插入文本（与用户手打等效——可退格删除；多行文本宿主按编辑器规则并入）。

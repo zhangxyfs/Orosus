@@ -380,7 +380,7 @@ export class FullApp {
 
 	// ---------- 弹窗/查看窗/对话框/引导/toast 公开入口——体已出仓 fullapp-dialogs.ts（m5-split-fullapp T4），壳留薄委托 ----------
 
-	viewText(title: string, text: string, opts?: { layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean }): void {
+	viewText(title: string, text: string, opts?: { layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string; live?: () => string; bottom?: boolean; markdown?: boolean }): void {
 		this.dialogs.viewText(title, text, opts);
 	}
 
