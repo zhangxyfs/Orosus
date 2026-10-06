@@ -39,7 +39,7 @@ describe("钩子执行器（m5-hooks T5）——真实子进程往返", () => {
   });
 
   it("③ exit 2 + stdout 合法 JSON deny：JSON 决策优先（reason 用 JSON 的，不用 stderr）", async () => {
-    const p = proj();
+    proj(); // 夹具初始化（返回值不消费；③用例不读项目路径）
     const r = await run(`cat > /dev/null; echo '{"permissionDecision":"deny","reason":"json-理由"}' ; echo stderr-理由 >&2; exit 2`);
     expect(r).toMatchObject({ kind: "deny", reason: "json-理由" });
   });

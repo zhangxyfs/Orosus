@@ -236,7 +236,8 @@ export function stripAnsiAndControl(text: string): string {
   return text
     // eslint-disable-next-line no-control-regex
     .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, "")   // CSI 序列（ESC [ … 终字节）
-    .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)?/g, "") // OSC 序列（ESC ] … BEL/ST）
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)?/g, "") // OSC 序列（ESC ] 起 BEL/ST 止）
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ""); // C0（保留 \t\n\r）+ DEL + C1
 }

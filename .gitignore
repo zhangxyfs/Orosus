@@ -4,3 +4,6 @@ dist/
 .idea/
 web/md/
 .orosus-*.log
+/release/
+
+/*.tgz

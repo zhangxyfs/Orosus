@@ -253,7 +253,7 @@ describe("T6 v4 自包含载荷（m5-resume-perf）：keptUsers 内联 + elidedC
     await layDown(h.store, msgs);
     const first = (await h.listener(msgs)) as ModelMessage[];
     await layDown(h.store, [u("二压前补充")]);
-    const second = (await h.listener([...first, u("二压前补充")])) as ModelMessage[];
+    await h.listener([...first, u("二压前补充")]); // 二次压缩触发（返回值不消费——断言走 events）
     expect((await h.store.all()).filter((e) => e.type === "turn/compaction")).toHaveLength(2); // 二次压缩确已发生（收缩口径归既有⑤钉——本测专注窗口等价）
     const events = await h.store.all();
     const at = events.map((e) => e.type === "turn/compaction").lastIndexOf(true);

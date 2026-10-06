@@ -36,7 +36,7 @@ export interface ChimeDeps {
 
 /** powershell 绝对路径兜底（2026-10-01 实机排障两轮）：spawn("powershell") 走 PATH——终端环境把
  *  System32 族从 PATH 里剥掉时 ENOENT 静默；SystemRoot 是进程必有环境变量，绝对路径免疫。
- *  **必须 path.join 拼——禁反斜杠字面量**：上版模板串里 \S \W 被当转义吞、 成纵向制表符，
+ *  **必须 path.join 拼——禁反斜杠字面量**：上版模板串里 \S \W 被当转义吞、\x0b 成纵向制表符，
  *  拼出乱码路径 ENOENT（实机「最新进程没声」真因；python heredoc 转义塌方进仓的教训）。 */
 function powershellExe(): string {
   const root = process.env.SystemRoot ?? process.env.windir;

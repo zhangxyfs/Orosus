@@ -378,7 +378,6 @@ describe("T6 m5-resume-perf: 压缩事件 v4 自包含（keptUsers+elidedCount �
     const winMsgs = deriveMessages(await win.all());
     expect(winMsgs).toEqual(fullMsgs); // 等价性钉（本任务的灵魂）
     // 形状要点：多 text part 与 origin 都原样进投影（v3 的 string[] 形状装不下这两类）
-    const kept = fullMsgs.filter((m) => m.role === "user");
     expect(JSON.stringify(fullMsgs)).toContain("[image omitted during compaction: shots/p.png]");
     expect(JSON.stringify(fullMsgs)).toContain('"sourceModule":"host"');
     expect(fullMsgs.some((m) => m.role === "user" && (m.content.length ?? 0) === 2 && m.content.every((p) => p.kind === "text"))).toBe(true);

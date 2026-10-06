@@ -11,7 +11,7 @@ import { SETTINGS_ITEMS } from "./settings-ui.ts";
 let dir: string;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); });
 
-const USER_TOML = (file: string): string => `
+const USER_TOML = (_file: string): string => `
 [hooks]
 [[hooks.PreToolUse]]
 matcher = "^bash$"

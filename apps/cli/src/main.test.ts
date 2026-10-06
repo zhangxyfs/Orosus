@@ -45,7 +45,8 @@ describe("CLI 全家福与命令装配（M2 补账——M1 CLI × M2 模块生�
     const audit = h.graph().audit();
     expect(audit).toHaveLength(BUILTIN_MODULES.length);
     expect(audit.filter((a) => a.state === "active").map((a) => a.name).sort()).toEqual(
-      ["approval", "compaction", "hooks", "mcp", "provider-custom", "session-tree", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-media", "tool-search", "tool-shell", "tool-subagent", "tool-todo", "tool-web"],
+      // tool-peers 补钉（release-npm T6 全量流水线抓出）：92ed915（m5-peers D12 翻案——defaultEnabled 删除、模块默认挂载）把 tool-peers 翻进默认 active 图，但本名单漏更——名单 16 与 BUILTIN_MODULES 实数 17 脱节（测试名「十七模块」正确、数组漏一件）
+      ["approval", "compaction", "hooks", "mcp", "provider-custom", "session-tree", "skill", "tool-ask", "tool-fs", "tool-goal", "tool-media", "tool-peers", "tool-search", "tool-shell", "tool-subagent", "tool-todo", "tool-web"],
     );
     // SW-26 语义不变只翻默认：关态 = enabled:false 显式（isolated 无 tool-search 配置 → 默认开 active；meta 工具在场）
     expect(audit.find((a) => a.name === "tool-search")?.state).toBe("active");

@@ -58,9 +58,6 @@ export interface HooksConfig {
 export const defaultUserConfigFile = (): string => join(orosusHome(), "modules.d", "hooks.toml");
 export const defaultProjectConfigFile = (cwd: string): string => join(cwd, ".orosus", "modules.d", "hooks.toml");
 
-/** 非法正则哨兵：空负向前瞻任何输入都不匹配（$^ 对空串可同时命中首尾位——不可用）。 */
-const NEVER_MATCH = /(?!)/;
-
 const compileMatcher = (source: string | undefined, warn: (msg: string) => void): { matcherSource?: string; match: (value: string | undefined) => boolean } => {
   if (source === undefined) return { match: () => true };
   try {
