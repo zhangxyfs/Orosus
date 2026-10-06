@@ -33,7 +33,7 @@ export function createKeys(app: FullApp) {
 		// 功能。例外 = 弹窗自己的键：查看窗注册键（viewHasKey 让位，落窗内分发）与诊断开关
 		// （Ctrl+E 在 diagOpen 期是诊断窗的关窗键）。旧铁律「模块窗期 Ctrl+E 仍走宿主全局键」随之
 		// 作废（保留键注册即拒不动——模块依然不能绑这些键）；吞键静默，Esc 关弹窗后恢复。
-		const popupFocused = app.pendingUi !== undefined || s.diagOpen || s.diagReturn || s.overlayOpen || s.atMenu !== undefined;
+		const popupFocused = app.pendingUi !== undefined || s.diagOpen || s.diagReturn || s.overlayOpen || s.atMenu !== undefined || s.launcherOpen;
 		if (key === "ctrl+t") {
 			// m5-render-perf T5 护栏①（D8 定案）：生成中拒绝切换——宽度变化全量重折的尖峰削频，
 			// toast 明示（设计空白 #9 文案）；冷却期连击由 setSidebar 静默吞（预检后到达的都是真实切换意图）
@@ -125,9 +125,31 @@ export function createKeys(app: FullApp) {
 		}
 		if (key === "ctrl+h") {
 			// Ctrl+H = 注入查看窗（m5-hooks T10 / D19 用户拍板展开键）：钩子注入条目列表 → 全文；
-			// 主窗全局键、弹窗模态期不生效（模态铁律）；键位自  拆分而来（keymatch——遗留终端撞键走查项）
+			// 主窗全局键、弹窗模态期不生效（模态铁律）；键位自  拆分而来（keymatch——遗留终端撞键走查项）
 			if (popupFocused) return;
 			app.io.showInjections?.();
+			app.scheduler.requestImmediateRender();
+			return;
+		}
+		if (key === "ctrl+p") {
+			// Ctrl+P = 模块总览启动器（m5-peers T6e，A-1 极简版 D21）：带 UI 模块的统一快捷入口——
+			// 总开关 + 导航同 diag 分支（自开关期不受 popupFocused 拦——弹窗里再按 = 关）；空态 toast 诊断同款
+			if (s.launcherOpen) {
+				escCloseWin();
+				s.launcherOpen = false;
+			} else {
+				if (popupFocused) return; // 弹窗聚焦期不开总览（模态让位——走查⑤同款）
+				const entries = app.io.launcherEntries?.() ?? [];
+				if (entries.length === 0) {
+					app.showToast("没有可打开的模块界面"); // 空态不弹空窗（诊断空态同款）
+				} else {
+					s.overlayOpen = false; // 与斜杠菜单互斥
+					s.atMenu = undefined; // 与 @ 文件菜单互斥
+					s.diagOpen = false; // 与诊断弹窗互斥
+					s.launcherOpen = true;
+					s.launcherSel = 0; // 打开时刷新（D24 同款）：entries 每开现读
+				}
+			}
 			app.scheduler.requestImmediateRender();
 			return;
 		}
@@ -389,6 +411,28 @@ export function createKeys(app: FullApp) {
 					s.diagOpen = false;
 					app.viewText(`模块诊断 · ${e.name}`, text);
 					return;
+				}
+			}
+			app.scheduler.requestImmediateRender();
+			return;
+		}
+
+		// 模块总览态（m5-peers T6e）：diag 分支同款焦点锁——↑↓ 选择、Enter 执行登记命令（io.submit
+		// = 与用户手敲斜杠命令等效）、Esc/再按 Ctrl+P 关；其余键吞掉不落编辑态
+		if (s.launcherOpen) {
+			const entries = app.io.launcherEntries?.() ?? [];
+			if (key === "up") s.launcherSel = Math.max(0, s.launcherSel - 1);
+			else if (key === "down") s.launcherSel = Math.min(Math.max(0, entries.length - 1), s.launcherSel + 1);
+			else if (key === "escape") {
+				escCloseWin();
+				s.launcherOpen = false;
+			}
+			else if (key === "enter") {
+				const e = entries[s.launcherSel];
+				if (e !== undefined && e.command !== undefined) {
+					escCloseWin();
+					s.launcherOpen = false;
+					app.io.submit(e.command);
 				}
 			}
 			app.scheduler.requestImmediateRender();

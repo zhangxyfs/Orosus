@@ -286,6 +286,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
           dependsOn: (r.def.dependsOn ?? []).map((d) => (typeof d === "string" ? d : `${d.capability}?`)),
           contributes: act.contributes.get(r.name) ?? [],
           ...(r.failReason !== undefined ? { failReason: r.failReason } : {}),
+          ...(r.def.launcher !== undefined ? { launcher: r.def.launcher } : {}),   // m5-peers T6e：总览启动器登记直抄
         }));
     },
 

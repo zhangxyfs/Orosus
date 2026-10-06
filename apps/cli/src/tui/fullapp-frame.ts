@@ -252,6 +252,8 @@ export function createFrame(app: FullApp) {
 			overlay = app.overlay.buildOverlay(leftW, divRow);
 		} else if (s.diagOpen) {
 			overlay = app.overlay.buildDiagOverlay(leftW, divRow);
+		} else if (s.launcherOpen) {
+			overlay = app.overlay.buildLauncherOverlay(leftW, divRow);   // m5-peers T6e：模块总览（Ctrl+P）
 		}
 
 		const bytes = app.full.render(screen, rows, cols, overlay);

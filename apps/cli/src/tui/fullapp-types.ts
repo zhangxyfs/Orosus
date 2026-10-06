@@ -140,6 +140,9 @@ export interface FullAppIO {
 	diagEntries?(): DiagEntry[];
 	/** 二级详情文本（T10）：name → 详情全文（renderDetail 拼装——宿主喂原始日志行）。 */
 	diagDetail?(name: string): string;
+	/** 模块总览启动器数据源（m5-peers T6e，D24「打开时刷新」同款）：Ctrl+P 现读 active 模块的
+	 *  launcher 登记（宿主侧 collectLaunchers(h.graph().audit())）。 */
+	launcherEntries?(): { name: string; label: string; command?: string }[];
 	/** 宿主日志口（m5 T2）：弹窗保留键注册即拒等 UI 层事件的留痕（接线 main.ts → harness 日志）。 */
 	logWarn?(code: string, msg: string, data?: Record<string, unknown>): void;
 	/** 斜杠菜单参数阶段数据源（m5 T15）：cmd（含斜杠）→ 参数候选全量（宿主侧调模块 completeArg，
@@ -203,6 +206,10 @@ export interface AppState {
 	diagOpen: boolean; // 模块诊断一级列表（T9——独立于斜杠菜单 overlay：语义不同，另起一支）
 	diagSel: number;
 	diagReturn: boolean; // 二级详情的「逐级返回」标记（T10/S5——viewText 关闭时据此重开一级）
+	/** 模块总览启动器（m5-peers T6e，A-1 极简版）：Ctrl+P 开、diagOpen 同族独立一支；
+	 *  sel 边界夹紧照 diag 分支；Enter 执行登记命令（io.submit）。 */
+	launcherOpen: boolean;
+	launcherSel: number;
 	/** @ 文件菜单（m5-at-menu，独立于斜杠菜单 overlay 另起一支——diagOpen 同理由）：undefined = 关。
 	 *  dir = 当前目录相对路径（根 = 空串）；entries = 导航点现读的原始全量（渲染与过滤只查内存表
 	 *  ——渲染期不碰文件系统）；miss = 目录不存在（数据源 readdirSync 失败——空态文案分「目录不

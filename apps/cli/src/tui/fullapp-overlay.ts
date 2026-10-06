@@ -243,6 +243,33 @@ export function createOverlay(app: FullApp) {
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
 
+	/** 模块总览启动器浮层（m5-peers T6e，A-1 极简版 D24）：buildDiagOverlay 同族几何——通栏左列宽、
+	 *  底贴输入框上缘、surface2+accent 框、右上计数徽标、恒定列表行数防闪、底行键导引。 */
+	const LAUNCHER_LIST_ROWS = 6;
+	const buildLauncherOverlay = (leftW: number, divRow: number): OverlayFrame => {
+		const s = app.state;
+		const entries = app.io.launcherEntries?.() ?? [];
+		const ow = leftW;
+		const oInner = ow - 2;
+		const bc = "accent";
+		const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+		const olines: string[] = [];
+		const en = theme.dim(` ${entries.length} 个带界面模块 `);
+		const title = theme.fg("info", truncateToWidth(" 模块总览 ", Math.max(4, ow - 7 - visibleWidth(en))));
+		const topFill = Math.max(1, ow - 4 - visibleWidth(title) - visibleWidth(en));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + title + theme.fg(bc, "─".repeat(topFill)) + en + theme.fg(bc, "─╮")));
+		const selI = Math.max(0, Math.min(entries.length - 1, s.launcherSel));
+		for (let i = 0; i < LAUNCHER_LIST_ROWS + 1; i++) {
+			const e = entries[i];
+			const row = e === undefined ? "" : ` ${e.label}${e.command !== undefined ? theme.dim(` —— ${e.command}`) : ""}`;
+			olines.push(i === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));   // 选中行青玉软底（diag 同款）
+		}
+		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
+		olines.push(boxRow(theme.dim(" ↑↓ 选择 · Enter 打开 · Esc 关闭")));
+		olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
+		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
+	};
+
 	const buildOverlay = (leftW: number, divRow: number): OverlayFrame => {		const s = app.state;
 		const level2 = s.overlayCmd !== "";
 		const ap = app.menu.argPhase();
@@ -357,5 +384,5 @@ export function createOverlay(app: FullApp) {
 		return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 	}
 
-	return { buildViewOverlay, buildDialogOverlay, buildPickOverlay, buildDiagOverlay, buildAtOverlay, buildOverlay };
+	return { buildViewOverlay, buildDialogOverlay, buildPickOverlay, buildDiagOverlay, buildLauncherOverlay, buildAtOverlay, buildOverlay };
 }

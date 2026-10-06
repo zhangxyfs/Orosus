@@ -1008,6 +1008,10 @@ export interface ModuleDefinition<C = unknown> {
   provides?: string[];
   /** 缺省启用与否（缺省 true；配置 [模块名] enabled 可覆盖）。 */
   defaultEnabled?: boolean;
+  /** 模块总览启动器登记（m5-peers T6e，A-1 极简版 D22）：带 UI 的模块向宿主总览弹窗（Ctrl+P）
+   *  自报入口——label = 显示名、command = 指向模块既有斜杠命令（经 audit() 透出，active 模块才收；
+   *  完整版 open(ctx) 直开窗照原拍板顺延）。 */
+  launcher?: { label: string; command?: string };
   /** 声明使用的非能力标记（如 "config.foreign" = 要 overlay 别人 section；可省）。 */
   uses?: string[];
   /** 宿主口白名单（一经声明 = 只能用列出的口；缺省 = 不限制）。可用位："settings"、"contribute:tool"、"contribute:command"、"contribute:promptSection"、"contribute:configOverlay"、"contribute:card"、"tools.reveal"、"tools.list"、"emit"、"hook:<事件名>"、"provide"、"get"。 */

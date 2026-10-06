@@ -26,4 +26,6 @@ export interface AuditEntry {
   dependsOn: string[];
   contributes: string[];
   failReason?: string;
+  /** 模块总览启动器登记（m5-peers T6e）：def.launcher 直抄——宿主 Ctrl+P 总览弹窗收集口（未登记缺省）。 */
+  launcher?: { label: string; command?: string };
 }

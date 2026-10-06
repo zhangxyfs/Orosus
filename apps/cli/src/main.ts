@@ -45,6 +45,7 @@ import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defau
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
 import { detectSources, importNotes, organizeNotes, readSourceNotes } from "@orosus/tool-peers";
+import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
 import { existsSync } from "node:fs";
@@ -1114,9 +1115,10 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
-	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头）
+	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头；
+	// m5-peers T6e/D23：行 2 尾追加 Ctrl + P 模块——静态常驻，无登记模块时空态 toast 兜底）
 	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"),
-	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点"),
+	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点 · Ctrl + P 模块"),
 	"",
 ];
 
@@ -1312,6 +1314,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     },
     // 模块诊断弹窗数据源（T9）：打开时现读（定案）——当天 + 前一天诊断日志过滤聚合（T8 读取器）
     diagEntries: () => readDiagnostics(join(orosusHome(), "logs"), new Date()),
+    // 模块总览启动器数据源（m5-peers T6e）：打开时现读（D24 同款）——active 模块的 launcher 登记
+    launcherEntries: () => collectLaunchers(h.graph().audit()),
     // @ 文件菜单数据源（m5-at-menu T5）：导航点现读、不缓存（atfile.ts 同目录件——tui 无 fs 纪律，
     // 宿主供数 UI 只消费）；失败 → miss（目录不存在空态）
     atMenuEntries: (dir) => atMenuEntriesHost(dir),

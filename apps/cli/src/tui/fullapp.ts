@@ -118,6 +118,8 @@ export class FullApp {
 			diagOpen: false,
 			diagSel: 0,
 			diagReturn: false,
+			launcherOpen: false,
+			launcherSel: 0,
 			atMenu: undefined,
 			toast: undefined,
 			mselAnchor: undefined,

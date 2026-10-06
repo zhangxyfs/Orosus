@@ -4462,3 +4462,67 @@ describe("验收门 6 几何钉（2026-10-05 方案复读补）：头部插页�
 		app.stop?.();
 	});
 });
+
+// m5-peers T6e：模块总览启动器（Ctrl+P——A-1 极简版）FullApp 集成
+describe("模块总览启动器（m5-peers T6e）", () => {
+	it("① Ctrl+P 开总览：列表渲染 + ↑↓/Enter 执行登记命令（submit 通道）+ Esc 关闭", async () => {
+		const { app, input, output, submitted } = rig(["# 你好"], 100, 30, {
+			launcherEntries: () => [
+				{ name: "tool-peers", label: "记忆", command: "/tool-peers__memory" },
+				{ name: "other", label: "另一窗", command: "/other__ui" },
+			],
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\x10"); // Ctrl+P 开
+		await flush();
+		const plain = stripAnsi(output.buf);
+		expect(plain).toContain("模块总览");
+		expect(plain).toContain("记忆");
+		expect(plain).toContain("/tool-peers__memory");
+		expect(plain).toContain("2 个带界面模块");
+		input.emit("data", "\x1b[B"); // ↓ 到第二项
+		await flush();
+		input.emit("data", "\r"); // Enter → submit 登记命令
+		await flush();
+		expect(submitted).toEqual(["/other__ui"]);
+		input.emit("data", "\x10"); // 再按 Ctrl+P（总键再按关闭——此时已关，重开）
+		await flush();
+		input.emit("data", "\x1b"); // Esc 关
+		await flush();
+		const tail = stripAnsi(output.buf.slice(-3000));
+		expect(tail).not.toContain("模块总览");
+		app.stop();
+	});
+
+	it("② 空态：无登记模块 → toast 不弹空窗", async () => {
+		const { app, input, output } = rig(["# 你好"], 100, 30, { launcherEntries: () => [] });
+		app.start();
+		await flush();
+		input.emit("data", "\x10");
+		await flush();
+		const plain = stripAnsi(output.buf);
+		expect(plain).toContain("没有可打开的模块界面");
+		app.stop();
+	});
+
+	it("③ 弹窗期模态让位：总览开着时 Ctrl+T 不切侧栏（popupFocused 链）；busy 期 Ctrl+P 可用", async () => {
+		const { app, input } = rig(["# 你好"], 100, 30, {
+			launcherEntries: () => [{ name: "tool-peers", label: "记忆", command: "/tool-peers__memory" }],
+		});
+		app.start();
+		await flush();
+		const before = app.stateRef.sidebarVisible;
+		input.emit("data", "\x10"); // 开总览
+		await flush();
+		input.emit("data", "\x14"); // Ctrl+T（总览开着——应被吞）
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(before); // 未切换
+		input.emit("data", "\x1b"); // Esc 关总览
+		await flush();
+		input.emit("data", "\x14"); // Ctrl+T（关了——应切换）
+		await flush();
+		expect(app.stateRef.sidebarVisible).toBe(!before);
+		app.stop();
+	});
+});
