@@ -11,10 +11,10 @@ describe("tool-peers module", () => {
     expect(def.api).toBe(1);
   });
 
-  // v2 增补：默认卸载断言（缺省 true 的反向——validate.ts:27）
-  it("defaults to disabled", () => {
+  // D12 翻案（2026-10-06 走查）：默认挂载——字段缺省（validate.ts:27 缺省 true）
+  it("defaults to enabled（走查翻案 D12）", () => {
     const def = mod as unknown as { defaultEnabled?: boolean };
-    expect(def.defaultEnabled).toBe(false);
+    expect(def.defaultEnabled).not.toBe(false);
   });
 
   it("config schema declares all keys with D13 defaults (validate 硬规则——未声明键被 strip)", () => {

@@ -30,7 +30,8 @@ export default defineModule({
   version: "0.1.0",
   description: "会话互相感知——同项目会话占用查询（声明+推导）与共享记忆",
   api: 1,
-  defaultEnabled: false, // v2：默认卸载（D12）——走 settings「记忆」双开关启用（T6b）
+  // 2026-10-06 走查翻案 D12：默认挂载（原 defaultEnabled:false）——挂载代价仅浏览命令+launcher 登记
+  // （不耗 token）；两项模型面功能仍由 v2 双键门控、默认关（D13 缺键 = 关，activate 空转零工具零段）
   launcher: { label: "记忆", command: "/tool-peers__memory" },   // T6e 总览启动器（Ctrl+P）登记——浏览本项目共享记忆
   mounts: ["contribute:tool", "contribute:command", "contribute:promptSection", "hook:session/start"],
   config: configSchema,

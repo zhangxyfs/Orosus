@@ -40,5 +40,5 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   hooks, // m5-hooks：七事件生命周期钩子（shell 命令 + 项目层 sha256 信任门 + 注入三道闸）
   toolSubagent, // M4.5 子代理批：spawn/tasks/stop 派活工具族
   toolMedia, // m5-media：媒体策略/读图/媒体工具族（F9/F10/F12）
-  toolPeers, // m5-peers：会话互相感知——占用查询 + 共享记忆（defaultEnabled:false，settings「记忆」双开关启用）
+  toolPeers, // m5-peers：会话互相感知——占用查询 + 共享记忆（默认挂载走查翻案；功能经 settings「记忆」双开关门控、默认关）
 ];
