@@ -34,12 +34,14 @@ interface Harness {
   tools: { name: string }[];
   sections: { order: number; text: string }[];
   commands: string[];
+  commandHandlers: Map<string, (args: string, ui: unknown) => Promise<string>>;
   listeners: Map<string, (p: unknown) => unknown>;
 }
 const activateWith = (config: unknown, session?: { id?: string }): Harness => {
   const tools: { name: string }[] = [];
   const sections: { order: number; text: string }[] = [];
   const commands: string[] = [];
+  const commandHandlers = new Map<string, (args: string, ui: unknown) => Promise<string>>();
   const listeners = new Map<string, (p: unknown) => unknown>();
   const ctx = {
     config,
@@ -49,11 +51,11 @@ const activateWith = (config: unknown, session?: { id?: string }): Harness => {
     contribute: {
       tool: (t: { name: string }) => { tools.push(t); },
       promptSection: (s: { order: number; text: string }) => { sections.push(s); },
-      command: (name: string) => { commands.push(name); return () => {}; },
+      command: (name: string, handler: (args: string, ui: unknown) => Promise<string>) => { commands.push(name); commandHandlers.set(name, handler); return () => {}; },
     },
   };
   (mod as { activate?: (ctx: unknown) => void }).activate?.(ctx);
-  return { tools, sections, commands, listeners };
+  return { tools, sections, commands, commandHandlers, listeners };
 };
 
 const FULL_ON = { workspaceMemory: true, sessionPeers: true, injectIndex: true, windowMinutes: 10, leaseMinutes: 30 };
@@ -135,5 +137,14 @@ describe("T6 门控矩阵与索引段", () => {
     const h = activateWith(FULL_ON);
     expect(h.tools).toHaveLength(6);
     expect(h.sections).toHaveLength(1);
+  });
+
+  it("走查修订一：空态/not-ready 走 notice toast 返回空串；无 notice 口（无头）回退返回串", async () => {
+    const h = activateWith(FULL_ON);   // 未 fire session/start、无 session.id → env 未 boot
+    const handler = h.commandHandlers.get("tool-peers__memory")!;
+    const notices: string[] = [];
+    expect(await handler("", { notice: (t: string) => { notices.push(t); } })).toBe("");
+    expect(notices[0]).toContain("尚未定位到当前项目会话");
+    expect(await handler("", {})).toContain("尚未定位到当前项目会话");   // 无头回退：返回串承载
   });
 });

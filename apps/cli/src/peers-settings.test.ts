@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { Harness } from "@orosus/core";
-import { readPeersConfig, runMemorySetting, writePeersConfigKey } from "./peers-settings.ts";
+import { readPeersConfig, runMemoryImportSetting, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
 import { settingsItems } from "./settings-ui.ts";
 
 let dir = "";
@@ -43,11 +43,41 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(esc).toBeUndefined();
   });
 
-  it("③b 第三项「浏览记忆」→ { kind: browse }（不写盘）", async () => {
+  it("③b 第三项「记忆导入」→ { kind: import }（不写盘；浏览窗不走设置入口——走查修订二/三)", async () => {
     const f = tmpCfg();
     const res = await runMemorySetting(async (_t, items) => items[2]!, f);
-    expect(res).toEqual({ kind: "browse" });
+    expect(res).toEqual({ kind: "import" });
     expect(readPeersConfig(f)).toEqual({ workspaceMemory: false, sessionPeers: false });
+  });
+
+  it("③c 导入流：有货源逐项/全部导入 + 人话结果；无货源空态；Esc 空串（走查修订三）", async () => {
+    const deps: MemoryImportDeps = {
+      detect: () => [
+        { id: "claude-code", label: "Claude Code", count: 12 },
+        { id: "zcode", label: "ZCode", count: 37 },
+        { id: "qwen", label: "qwen-code", count: 0 },   // 无货不列
+      ],
+      run: (ids) => ({ imported: ids.length * 10, skipped: 2 }),
+    };
+    // 单源导入（第一项）
+    const single = await runMemoryImportSetting(async (_t, items) => items[0]!, deps);
+    expect(single).toContain("已导入 10 条记忆");
+    expect(single).toContain("跳过 2 条重复");
+    expect(single).toContain("/tool-peers__memory");
+    // 全部导入（末项——只有两源列进：qwen 0 条被滤）
+    const all = await runMemoryImportSetting(async (_t, items) => items[items.length - 1]!, deps);
+    expect(all).toContain("已导入 20 条记忆");
+    // Esc = 空串
+    expect(await runMemoryImportSetting(async () => "", deps)).toBe("");
+    // 全重复
+    const dupDeps: MemoryImportDeps = { detect: deps.detect, run: () => ({ imported: 0, skipped: 5 }) };
+    expect(await runMemoryImportSetting(async (_t, items) => items[0]!, dupDeps)).toContain("全部与现有记忆重复");
+    // 无货源空态（不弹菜单）
+    const emptyDeps: MemoryImportDeps = { detect: () => [{ id: "x", label: "X", count: 0 }], run: () => ({ imported: 0, skipped: 0 }) };
+    const empty = await runMemoryImportSetting(async () => {
+      throw new Error("不该弹菜单");
+    }, emptyDeps);
+    expect(empty).toContain("没有检测到可导入的记忆");
   });
 
   it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十项序位不乱", () => {

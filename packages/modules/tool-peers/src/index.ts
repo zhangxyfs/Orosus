@@ -51,9 +51,20 @@ export default defineModule({
     // 正文 = viewText 全屏 md 渲染（/tasks 纪律）；行模式 ui.dialog 判空降级只读列表。
     ctx.contribute.command("tool-peers__memory", async (_args, ui) => {
       const dir = env.memoryDir();
-      if (dir === undefined) return "尚未定位到当前项目会话——先发一条消息建会话，再打开记忆浏览";
+      // 空态/not-ready 走 notice toast（走查修订一：一句话提示不占面板）；无头无 notice 口回退返回串
+      if (dir === undefined) {
+        const msg = "尚未定位到当前项目会话——先发一条消息建会话，再打开记忆浏览";
+        if (ui.notice === undefined) return msg;
+        await ui.notice(msg);
+        return "";
+      }
       const entries = browserEntries(dir);
-      if (entries.length === 0) return "本项目还没有共享记忆——让模型记一条（tool-peers__memory__write），或先开启工作区记忆";
+      if (entries.length === 0) {
+        const msg = "本项目还没有共享记忆——让模型记一条（tool-peers__memory__write），或先开启工作区记忆";
+        if (ui.notice === undefined) return msg;
+        await ui.notice(msg);
+        return "";
+      }
       const lines = renderBrowserList(entries, Date.now());
       if (ui.dialog === undefined) {
         ui.viewText?.("记忆 · 本项目（只读列表——全屏模式可 Enter 打开）", lines.join("\n"), { layout: "full" });

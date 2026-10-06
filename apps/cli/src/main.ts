@@ -369,6 +369,37 @@ const hooksDeps: HooksUiDeps = {
   commandUi,
   reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
 };
+/** m5-peers 五源家目录（T6d——探测纯读，缺目录 = 未安装；settings 与引导两消费方共用，故置顶）。 */
+const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string } => {
+	const home = homedir();
+	return {
+		claude: join(home, ".claude"),
+		zcode: join(home, ".zcode"),
+		qwen: join(home, ".qwen"),
+		codex: join(home, ".codex"),
+		reasonix: join(home, ".reasonix"),
+	};
+};
+/** m5-peers git root 探测（T6d：向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。 */
+const findGitRoot = (cwd: string): string => {
+	let dir = cwd;
+	for (;;) {
+		if (existsSync(join(dir, ".git"))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) return cwd;   // 到根没有 .git → 用 cwd（探测退化为本目录）
+		dir = parent;
+	}
+};
+/** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）——纯机械同步零 token
+ *  （模型整理开关是引导专属 D20；settings 侧不整理）。目标 = 本项目记忆桶（与 env.memoryDir 同桶）。 */
+const importFromSources = (sourceIds: string[]): { imported: number; skipped: number } => {
+	const cwd = process.cwd();
+	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
+	const notes = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
+	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
+	const r = importNotes(destDir, notes);
+	return { imported: r.imported, skipped: r.skipped };
+};
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
   getH: () => h,
@@ -378,6 +409,12 @@ const settingsDeps: SettingsUiDeps = {
   skillDeps,
   hooksDeps,
   mcpDeps,
+  // m5-peers 走查修订三：「记忆导入」数据口（settings 与引导第 5 页共用 importers 核心）
+  peersImport: {
+    detect: () => detectSources(memorySourceHomes(), findGitRoot(process.cwd()), process.cwd())
+      .map(s => ({ id: s.id, label: s.label, count: s.count })),
+    run: importFromSources,
+  },
 };
 // 界面模式解析上移（T11 m5-resume-perf）：初始 createSession 的行模式装载判据（deps.isFullscreen）
 // 需在 createSession 求值期读到 tuiMode——原声明位（runFullScreen 装配段前）晚于首个 createSession
@@ -1685,18 +1722,15 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? "未安装", count: s.count, available: s.dir !== undefined }));
 		},
 		importMemory: async (sourceIds, organize) => {
+			// organize 开（D20 整理通道，/btw 同款 h.llm 直调）先语义去重再落盘；关 = 纯机械共用核心
+			if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
 			const cwd = process.cwd();
 			const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
-			let notes = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-			let merged = 0;
-			if (organize && notes.length >= 2) {
-				const organized = await organizeNotes(notes, (req) => h.llm().stream(req));   // D20 整理通道（/btw 同款 h.llm 直调）
-				notes = organized.notes;
-				merged = organized.merged;
-			}
-			const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");   // 与 env.memoryDir 同桶（session/start 后同目录）
-			const r = importNotes(destDir, notes);
-			return { imported: r.imported, skipped: r.skipped, merged };
+			const raw = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
+			const organized = await organizeNotes(raw, (req) => h.llm().stream(req));
+			const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
+			const r = importNotes(destDir, organized.notes);
+			return { imported: r.imported, skipped: r.skipped, merged: organized.merged };
 		},
 	};
 };
@@ -1707,29 +1741,6 @@ const onboardingInitial = async (): Promise<{ configured: string[]; active: stri
 	const curModel = realReadModel(process.cwd())();
 	const slot = curModel === undefined || curModel === "" ? null : curModel.split("/")[0]!;
 	return { configured: Object.keys(cur), active: slot !== null && cur[slot] !== undefined ? slot : null };
-};
-
-/** T6d 五源家目录（m5-peers——探测纯读，缺目录 = 未安装）。 */
-const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string } => {
-	const home = homedir();
-	return {
-		claude: join(home, ".claude"),
-		zcode: join(home, ".zcode"),
-		qwen: join(home, ".qwen"),
-		codex: join(home, ".codex"),
-		reasonix: join(home, ".reasonix"),
-	};
-};
-
-/** T6d git root 探测（向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。 */
-const findGitRoot = (cwd: string): string => {
-	let dir = cwd;
-	for (;;) {
-		if (existsSync(join(dir, ".git"))) return dir;
-		const parent = dirname(dir);
-		if (parent === dir) return cwd;   // 到根没有 .git → 用 cwd（探测退化为本目录）
-		dir = parent;
-	}
 };
 
 if (args.print === undefined) try {

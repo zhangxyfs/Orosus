@@ -4,7 +4,7 @@ import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { runMemorySetting } from "./peers-settings.ts";
+import { runMemoryImportSetting, runMemorySetting, type MemoryImportDeps } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
@@ -21,6 +21,8 @@ export type SettingsUiDeps = {
   skillDeps: SkillUiDeps;
   hooksDeps: HooksUiDeps;
   mcpDeps: McpUiDeps;
+  /** m5-peers 走查修订三：「记忆导入」数据口（= 引导第 5 页同功能——importers 件宿主接线）。 */
+  peersImport: MemoryImportDeps;
 };
 
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
@@ -119,7 +121,8 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 			}
 		}
 		else if (picked === 10) {
-			// m5-peers T6b/T6c：「记忆」动态项（settingsItems 尾部追加，tool-peers active 才在场）
+			// m5-peers T6b + 走查修订三：「记忆」动态项——双开关 + 记忆导入（浏览窗不走设置入口：
+			// /tool-peers__memory 命令 + Ctrl+P 总览两处，走查修订二）
 			// 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
 			for (;;) {
 				try {
@@ -128,8 +131,13 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 						return i === undefined ? "" : list[i] ?? "";
 					});
 					if (res === undefined) break; // Esc / 未匹配 → 回设置根列表
-					if (res.kind === "browse") {
-						await deps.getH().prompt("/tool-peers__memory");   // 浏览窗（模块命令，runSearchSettings 同款 h.prompt 先例）
+					if (res.kind === "import") {
+						// 导入流（子级 Esc = 静默回子菜单——runMemoryImportSetting 空串约定）
+						const outText = await runMemoryImportSetting(async (t, list) => {
+							const i = await app.pickOverlay(t, list);
+							return i === undefined ? "" : list[i] ?? "";
+						}, deps.peersImport);
+						if (outText !== "") app.showToast(outText, 6000);
 						continue;
 					}
 					// 写盘即自动重载（空闲）；busy 不 reload 只提示——reloadModulesIdle 共用件（D15）
@@ -207,16 +215,18 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 			}
 		}
 		else if (idx === 10) {
-			// m5-peers T6b/T6c 行模式对等件：「记忆」双开关 + 浏览记忆——子菜单 Esc 回设置根菜单
+			// m5-peers T6b + 走查修订三 行模式对等件：「记忆」双开关 + 记忆导入——子菜单 Esc 回设置根菜单
 			for (;;) {
 				try {
 					const res = await runMemorySetting(async (t, list) => {
 						try { return await deps.commandUi.choose(t, list); } catch { return ""; }   // 子菜单 Esc → 空串 = 未匹配
 					});
 					if (res === undefined) break;
-					if (res.kind === "browse") {
-						const outText = await deps.getH().prompt("/tool-peers__memory");
-						if (outText !== undefined && outText !== "") out(outText);   // 行模式降级串直出
+					if (res.kind === "import") {
+						const outText = await runMemoryImportSetting(async (t, list) => {
+							try { return await deps.commandUi.choose(t, list); } catch { return ""; }
+						}, deps.peersImport);
+						if (outText !== "") out(outText);   // 行模式无 toast——结果直出
 						continue;
 					}
 					// 行模式 /settings busy 期排队到 turn 结束，走到这里必然空闲（共用件口径）
