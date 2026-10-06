@@ -5,6 +5,7 @@ import { defineTool, type Tool } from "@orosus/contracts/tool";
 import { z } from "zod";
 import { isSessionLive, normalizePath, parseClaims, parseToolCallLine, readLabel, readTailLines, WRITE_TOOL_NAMES, type Claim } from "./derive.ts";
 import type { PeersEnv } from "./env.ts";
+import { buildIndex, listNotes, readNote, writeNote } from "./memstore.ts";
 
 // 模型面英文（D11）；铁律句 qwen 先例 + advisory 句 dsh 化用（v4 定案原文）
 const PEERS_RULE = "Other sessions are peers, not your workers — do not delegate this session's work to them.";
@@ -243,4 +244,80 @@ export function createPeersTools(env: PeersEnv, llm?: LlmPort): Tool[] {
   });
 
   return [peersTool, claimTool, releaseTool];
+}
+
+// D25 记忆写入纪律（v9 定案，ZCode 写边界原文化用）
+const MEMORY_DISCIPLINE = `WRITE when the user explicitly asks to remember something, or you notice a fact that will matter later and is hard to re-derive: decision rationale, corrected preferences, project constraints, pitfalls.
+DO NOT write what the repo already records, what only matters to this conversation, or what is easily derivable.
+Before writing a new note, check tool-peers__memory__list and UPDATE an existing note on the same topic instead of creating a duplicate (same title = update, not a new note).`;
+
+export function createMemoryTools(env: PeersEnv): Tool[] {
+  const writeTool = defineTool({
+    name: "tool-peers__memory__write",
+    description: `Save a durable note to this project's shared memory. Every session of this project sees the note index in its system prompt and can read notes with tool-peers__memory__read. ${MEMORY_DISCIPLINE}`,
+    parameters: z.object({
+      title: z.string().min(1),
+      summary: z.string().min(1),
+      content: z.string().min(1),
+      type: z.enum(["project", "reference"]).optional(),
+    }),
+    resolveExecution: async (input) => {
+      const { title, summary, content, type } = input as { title: string; summary: string; content: string; type?: "project" | "reference" };
+      return {
+        accesses: [],
+        approvalRule: "tool-peers__memory__write",
+        execute: async () => {
+          const dir = env.memoryDir();
+          if (dir === undefined) return { output: NOT_READY, isError: false };
+          const existing = listNotes(dir).find(n => n.title === title);
+          const file = writeNote(dir, title, summary, content, new Date(), type);
+          return {
+            output: existing !== undefined
+              ? `Updated existing note ${file} (same title — no duplicate created) — index updated. Other sessions in this project will see it on their next turn.`
+              : `Saved note ${file} — index updated. Other sessions in this project will see it on their next turn.`,
+            isError: false,
+          };
+        },
+      };
+    },
+  });
+
+  const listTool = defineTool({
+    name: "tool-peers__memory__list",
+    description: "List this project's shared-memory notes (title, file, one-line summary — newest first).",
+    parameters: z.object({}),
+    resolveExecution: async () => ({
+      accesses: [],
+      approvalRule: "tool-peers__memory__list",
+      execute: async () => {
+        const dir = env.memoryDir();
+        if (dir === undefined) return { output: NOT_READY, isError: false };
+        const notes = listNotes(dir);
+        if (notes.length === 0) return { output: "No notes yet — this project has no shared memory. Use tool-peers__memory__write to save the first one.", isError: false };
+        return { output: buildIndex(notes), isError: false };
+      },
+    }),
+  });
+
+  const readTool = defineTool({
+    name: "tool-peers__memory__read",
+    description: "Read one shared-memory note in full. Pass the file name shown by tool-peers__memory__list.",
+    parameters: z.object({ file: z.string().min(1) }),
+    resolveExecution: async (input) => {
+      const { file } = input as { file: string };
+      return {
+        accesses: [],
+        approvalRule: "tool-peers__memory__read",
+        execute: async () => {
+          const dir = env.memoryDir();
+          if (dir === undefined) return { output: NOT_READY, isError: false };
+          const text = readNote(dir, file);
+          if (text === undefined) return { output: `笔记不存在：${file}。用 tool-peers__memory__list 查看现有笔记。`, isError: true };
+          return { output: text, isError: false };
+        },
+      };
+    },
+  });
+
+  return [writeTool, listTool, readTool];
 }

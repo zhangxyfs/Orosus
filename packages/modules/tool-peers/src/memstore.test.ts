@@ -37,4 +37,11 @@ describe("index", () => {
     writeNote(dir, "T", "s", "c", new Date());
     expect(noteBody("T", "s", "c")).toContain("description: s");
   });
+  it("same title updates the existing note instead of creating a duplicate (D25 查重)", () => {
+    const f1 = writeNote(dir, "Anchor", "v1", "body1", new Date("2026-10-06T00:00:00Z"));
+    const f2 = writeNote(dir, "Anchor", "v2", "body2", new Date("2026-10-06T01:00:00Z"));
+    expect(f2).toBe(f1);
+    expect(listNotes(dir)).toHaveLength(1);
+    expect(readNote(dir, f1)).toContain("body2");
+  });
 });

@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Tool, ToolContext } from "@orosus/contracts/tool";
 import type { LlmPort } from "@orosus/contracts/module";
 import { PeersEnv } from "./env.ts";
-import { createPeersTools } from "./tools.ts";
+import { listNotes } from "./memstore.ts";
+import { createMemoryTools, createPeersTools } from "./tools.ts";
 
 let root: string;
 let env: PeersEnv;
@@ -131,5 +132,52 @@ describe("peers/claim/release tools", () => {
     const [peersTool] = createPeersTools(env, undefined);
     const out = await run(peersTool, {});
     expect(out).toContain("session context not ready");
+  });
+});
+
+describe("memory__write/list/read tools", () => {
+  it("write→list→read round-trip: note file + MEMORY.md index line + body back", async () => {
+    makeSiblings();
+    const [w, l, r] = createMemoryTools(env);
+    const out = await run(w, { title: "Anchor Style", summary: "how to cite code", content: "Use file:line always." });
+    expect(out).toContain("index updated");
+    expect(out).toContain("next turn");
+    const memDir = env.memoryDir()!;
+    const file = listNotes(memDir)[0]!.file;
+    expect((await import("node:fs")).readFileSync(join(memDir, "MEMORY.md"), "utf8")).toContain("- [Anchor Style](");
+    const list = await run(l, {});
+    expect(list).toContain("Anchor Style");
+    expect(list).toContain(file);
+    const rd = await run(r, { file });
+    expect(rd).toContain("Use file:line always.");
+  });
+
+  it("same title updates existing note (D25 查重)", async () => {
+    makeSiblings();
+    const [w] = createMemoryTools(env);
+    await run(w, { title: "Anchor", summary: "v1", content: "body1" });
+    const out2 = await run(w, { title: "Anchor", summary: "v2", content: "body2" });
+    expect(out2).toContain("Updated");
+    expect(listNotes(env.memoryDir()!)).toHaveLength(1);
+  });
+
+  it("read missing note → isError with Chinese message", async () => {
+    makeSiblings();
+    const [, , r] = createMemoryTools(env);
+    const res = await (await r.resolveExecution({ file: "nope.md" })).execute(tctx());
+    expect(res.isError).toBe(true);
+    expect(res.output).toContain("笔记不存在");
+  });
+
+  it("session context not ready → friendly output", async () => {
+    const [w] = createMemoryTools(env);
+    const out = await run(w, { title: "x", summary: "y", content: "z" });
+    expect(out).toContain("session context not ready");
+  });
+
+  it("D25 discipline is stated in memory__write description (禁记/查重关键句)", async () => {
+    const [w] = createMemoryTools(env);
+    expect(w.description).toContain("DO NOT write");
+    expect(w.description).toContain("UPDATE an existing note");
   });
 });

@@ -1,6 +1,6 @@
 import { defineModule } from "@orosus/contracts/module";
 import { PeersEnv } from "./env.ts";
-import { createPeersTools } from "./tools.ts";
+import { createMemoryTools, createPeersTools } from "./tools.ts";
 
 export default defineModule({
   name: "tool-peers",
@@ -10,8 +10,9 @@ export default defineModule({
   defaultEnabled: false, // v2：默认卸载（D12）——走 settings「记忆」双开关启用（T6b）
   mounts: ["contribute:tool", "contribute:promptSection", "hook:session/start"],
   activate(ctx) {
-    // T6 定稿 config schema 后换 cfg 驱动门控；T4 先硬编码默认接线
-    const env = new PeersEnv({ workspaceMemory: false, sessionPeers: true, injectIndex: true, windowMinutes: 10, leaseMinutes: 30 });
+    // T6 定稿 config schema 后换 cfg 驱动门控；T4/T5 先硬编码默认接线
+    const env = new PeersEnv({ workspaceMemory: true, sessionPeers: true, injectIndex: true, windowMinutes: 10, leaseMinutes: 30 });
     for (const t of createPeersTools(env, ctx.llm)) ctx.contribute.tool(t);
+    for (const t of createMemoryTools(env)) ctx.contribute.tool(t);
   },
 });

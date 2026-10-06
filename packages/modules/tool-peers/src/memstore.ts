@@ -96,6 +96,13 @@ export function rebuildIndex(dir: string): void {
 
 export function writeNote(dir: string, title: string, summary: string, content: string, now: Date, type: "project" | "reference" = "project"): string {
   mkdirSync(dir, { recursive: true });
+  // D25 写前查重：同标题（frontmatter name）更新原文件，不建重复
+  const existing = listNotes(dir).find(n => n.title === oneLine(title));
+  if (existing !== undefined) {
+    atomicWrite(join(dir, existing.file), noteBody(title, summary, content, type));
+    rebuildIndex(dir);
+    return existing.file;
+  }
   let file = noteFileName(title, now);
   for (let n = 2; existsSync(join(dir, file)); n++) file = noteFileName(title, now).replace(/\.md$/, `-${n}.md`);
   atomicWrite(join(dir, file), noteBody(title, summary, content, type));
