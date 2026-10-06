@@ -1,3 +1,4 @@
+import { cpSync } from "node:fs";
 import { defineConfig } from "tsdown";
 
 // release-npm T2：单包发行物构建。20 个 workspace 包全 bundle（唯一例外 testing 纯测试件），
@@ -19,6 +20,11 @@ export default defineConfig({
   outDir: "./dist",
   dts: false,
   clean: true,
+  // 音效资产随 dist（T2b/G9 S0 定案）：rolldown 1.0.0-beta.8 未自动发射 new URL() 资产——
+  // chime.ts 的 "./assets/sounds/turn-end.wav" 锚相对 dist/main.js 解析，手工拷齐 dist/assets/sounds/
+  onSuccess() {
+    cpSync("src/assets/sounds", "dist/assets/sounds", { recursive: true });
+  },
   outputOptions: {
     // bin 入口 shebang：tsdown 0.9.9 顶层无 banner 键（doc-review 二轮 A 勘误），rolldown OutputOptions
     // 才有、经 outputOptions 直通。AddonFunction 按 chunk 只给 main 注（worker chunk 不带）
