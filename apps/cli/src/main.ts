@@ -44,7 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, importNotes, organizeNotes, readSourceNotes } from "@orosus/tool-peers";
+import { detectSources, filterNewNotes, importNotes, organizeNotes, readSourceNotes } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -400,17 +400,23 @@ const importFromSources = (sourceIds: string[]): { imported: number; skipped: nu
 	const r = importNotes(destDir, notes);
 	return { imported: r.imported, skipped: r.skipped };
 };
-/** m5-peers 导入全形（走查七-①：settings 与引导共用）——organize = true 先语义去重归并再落盘
- *  （D20 整理通道，/btw 同款 h.llm 直调，异步）；false = 纯机械同步。 */
-const importWithOrganize = async (sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }> => {
-	if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
+/** m5-peers 导入全形（走查七-① + 走查八-③）：settings 与引导共用。
+ *  organize = true 走模型整理（**逐条**内容优化 + 重写 description——只花钱在新条上：先按现有标题滤、
+ *  再逐条整理〔onProgress 每条一步〕、最后落盘，索引随写自动重建）；false = 纯机械同步。 */
+const importWithOrganize = async (
+	sourceIds: string[],
+	organize: boolean,
+	onProgress?: (done: number, total: number, title: string) => void,
+): Promise<{ imported: number; skipped: number; merged: number }> => {
 	const cwd = process.cwd();
 	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
-	const raw = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-	const organized = await organizeNotes(raw, (req) => h.llm().stream(req));
 	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
+	if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
+	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
+	const fresh = filterNewNotes(destDir, all);   // 已存在的照旧跳过——不花整理钱
+	const organized = await organizeNotes(fresh, (req) => h.llm().stream(req), onProgress);
 	const r = importNotes(destDir, organized.notes);
-	return { imported: r.imported, skipped: r.skipped, merged: organized.merged };
+	return { imported: r.imported, skipped: (all.length - fresh.length) + r.skipped, merged: organized.merged };
 };
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
@@ -1199,7 +1205,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           action = "quit";
           return;
         }
-        if (BUSY_EXEC.has(cmdN)) { runSubmit(text, true); return; }
+        if (BUSY_EXEC.has(cmdN) || cmdN.includes("__")) { runSubmit(text, true); return; }
+        // ↑ 走查八-①：模块命令（<module>__<command> 命名纪律）= 纯操作面（开窗/面板），busy 期即改档
+        //   立即执行不排队（busyExec 单行输出不碰流块）——用户 busy 期按 /tool-peers__memory 被排队 = 图 1 事故
         pendingSubmits.push(text); // 队列区逐条显示（2026-09-23 队列批——尾行计数 chip 退役）
         return;
       }
@@ -1648,7 +1656,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       registerToolLabels(h.graph().tools.toolInfos()); // 引导激活的模块（tool-web 等）标签进表
       const ir = outcome.importResult;
       if (ir !== undefined) {
-        app.showToast(`引导完成 · 已导入 ${ir.imported} 条记忆（跳过 ${ir.skipped} 条重复${ir.merged > 0 ? ` · 模型整理合并 ${ir.merged} 条` : ""}）· /tool-peers__memory 可浏览`, 6000);
+        app.showToast(`引导完成 · 已导入 ${ir.imported} 条记忆（跳过 ${ir.skipped} 条重复${ir.merged > 0 ? ` · 模型整理 ${ir.merged} 条` : ""}）· /tool-peers__memory 可浏览`, 6000);
       } else {
         app.showToast("引导完成 · 配置已写入并即时生效");
       }

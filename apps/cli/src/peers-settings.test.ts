@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { Harness } from "@orosus/core";
-import { readPeersConfig, runMemoryImportSetting, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
+import { memoryImportResultText, readPeersConfig, runMemoryImportChoose, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
 import { settingsItems } from "./settings-ui.ts";
 
 let dir = "";
@@ -50,41 +50,39 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(readPeersConfig(f)).toEqual({ workspaceMemory: false, sessionPeers: false });
   });
 
-  it("③c 导入流：逐项/全部/模型整理三档 + 人话结果；无货源空态；Esc 空串（走查修订三+七-①）", async () => {
-    const runs: Array<[string[], boolean]> = [];
+  it("③c 导入选择段（走查八-④ 开关形态）：源行/全部/整理开关行；开关开后所有路径走整理；Esc/空货源", async () => {
     const deps: MemoryImportDeps = {
       detect: () => [
         { id: "claude-code", label: "Claude Code", count: 12 },
         { id: "zcode", label: "ZCode", count: 37 },
         { id: "qwen", label: "qwen-code", count: 0 },   // 无货不列
       ],
-      run: async (ids, organize) => { runs.push([ids, organize]); return { imported: ids.length * 10, skipped: 2, merged: organize ? 5 : 0 }; },
+      run: async () => ({ imported: 0, skipped: 0, merged: 0 }),   // 选择段不触 run
     };
-    // 单源导入（第一项，纯机械）
-    const single = await runMemoryImportSetting(async (_t, items) => items[0]!, deps);
-    expect(runs[0]).toEqual([["claude-code"], false]);
-    expect(single).toContain("已导入 10 条记忆");
-    expect(single).toContain("跳过 2 条重复");
-    expect(single).toContain("/tool-peers__memory");
-    expect(single).not.toContain("模型整理");   // 机械档不报整理
-    // 全部导入（倒数第二项——只有两源列进：qwen 0 条被滤）
-    const all = await runMemoryImportSetting(async (_t, items) => items[items.length - 2]!, deps);
-    expect(all).toContain("已导入 20 条记忆");
-    // 全部 + 模型整理（末项——organize 透传，结果报合并数）
-    const org = await runMemoryImportSetting(async (_t, items) => items[items.length - 1]!, deps);
-    expect(runs[runs.length - 1]).toEqual([["claude-code", "zcode"], true]);
-    expect(org).toContain("模型整理合并 5 条");
-    // Esc = 空串
-    expect(await runMemoryImportSetting(async () => "", deps)).toBe("");
-    // 全重复
-    const dupDeps: MemoryImportDeps = { detect: deps.detect, run: async () => ({ imported: 0, skipped: 5, merged: 0 }) };
-    expect(await runMemoryImportSetting(async (_t, items) => items[0]!, dupDeps)).toContain("全部与现有记忆重复");
-    // 无货源空态（不弹菜单）
+    // 单源导入（默认整理关）
+    const single = await runMemoryImportChoose(async (_t, items) => items[0]!, deps);
+    expect(single).toEqual({ ids: ["claude-code"], organize: false });
+    // 全部导入（倒数第二项——qwen 0 条被滤）
+    const all = await runMemoryImportChoose(async (_t, items) => items[items.length - 2]!, deps);
+    expect(all).toEqual({ ids: ["claude-code", "zcode"], organize: false });
+    // 开关行（末项）：切换后菜单刷新（✓ 移位），再选源行 = organize true（单源也走整理——走查八-④）
+    const seq = ["last", "first"];
+    let i = 0;
+    const orgSingle = await runMemoryImportChoose(async (_t, items) => items[seq[i++] === "last" ? items.length - 1 : 0]!, deps);
+    expect(orgSingle).toEqual({ ids: ["claude-code"], organize: true });
+    // Esc = undefined；无货源 = "empty"（不弹菜单）
+    expect(await runMemoryImportChoose(async () => "", deps)).toBeUndefined();
     const emptyDeps: MemoryImportDeps = { detect: () => [{ id: "x", label: "X", count: 0 }], run: async () => ({ imported: 0, skipped: 0, merged: 0 }) };
-    const empty = await runMemoryImportSetting(async () => {
+    expect(await runMemoryImportChoose(async () => {
       throw new Error("不该弹菜单");
-    }, emptyDeps);
-    expect(empty).toContain("没有检测到可导入的记忆");
+    }, emptyDeps)).toBe("empty");
+  });
+
+  it("③d 导入结果人话：机械档不报整理；整理档报「模型整理 N 条」；全重复专句", () => {
+    expect(memoryImportResultText({ imported: 10, skipped: 2, merged: 0 })).toContain("已导入 10 条记忆");
+    expect(memoryImportResultText({ imported: 10, skipped: 2, merged: 0 })).not.toContain("模型整理");
+    expect(memoryImportResultText({ imported: 31, skipped: 3, merged: 18 })).toContain("模型整理 18 条");
+    expect(memoryImportResultText({ imported: 0, skipped: 5, merged: 0 })).toContain("全部与现有记忆重复");
   });
 
   it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十项序位不乱", () => {

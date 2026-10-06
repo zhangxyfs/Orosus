@@ -516,7 +516,7 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(text).toContain("从其他 agent 导入记忆");
     expect(text).toContain("12 条笔记");
     expect(text).toContain("未安装");
-    expect(text).toContain("用模型去重并整理这些记忆");
-    expect(text).toContain("消耗 token");
+    expect(text).toContain("用模型整理导入的记忆");
+    expect(text).toContain("逐条优化内容");
   });
 });

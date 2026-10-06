@@ -4,7 +4,7 @@ import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { runMemoryImportSetting, runMemorySetting, type MemoryImportDeps } from "./peers-settings.ts";
+import { memoryImportResultText, runMemoryImportChoose, runMemorySetting, type MemoryImportDeps } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
@@ -41,6 +41,45 @@ export const SETTINGS_ITEMS = [
 ];
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
+
+/** 走查八-②：导入执行段——进度弹窗（dock 贴输入框上缘，不遮消息流）：进度条 + 当前条目活值，
+ *  每步 requestImmediateRender；Esc 关窗不中断（后台跑完 toast 收尾——导入不可半途弃）。 */
+const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: string[], organize: boolean): Promise<void> => {
+	let done = 0;
+	let label = "";
+	let finished: { imported: number; skipped: number; merged: number } | undefined;
+	// 进度条 max 是静态数（控件契约）——开窗前先按源计数定总步数；实际步数以 onProgress 为准（max 只画条）
+	const total = deps.detect().filter(s => ids.includes(s.id)).reduce((n, s) => n + s.count, 0);
+	const statusText = (): string => {
+		if (finished !== undefined) return `${memoryImportResultText(finished)} —— Enter 关闭`;
+		if (done === 0) return "正在读取源记忆…";
+		return organize
+			? `模型整理中：${label}（${done} / ${total}）`
+			: `导入中…（${done} / ${total}）`;
+	};
+	const handle = app.openDialogHost({
+		title: "记忆 · 导入",
+		layout: "dock",
+		widgets: [
+			{ id: "status", kind: "text", text: statusText },
+			{ id: "bar", kind: "progress", value: () => done, max: Math.max(1, total) },
+		],
+		onEvent: (e) => {
+			if (e.type === "activate") {
+				// 完成态 Enter = 关窗（导入中 Enter 无效——窗在即导入在跑）
+				if (finished !== undefined) handle?.close();
+			}
+			return undefined;
+		},
+	});
+	const r = await deps.run(ids, organize, (d, _t, title) => {
+		done = d; label = title;   // total 开窗前已定（max 静态数）；步数以实际进度为准
+		app.scheduler.requestImmediateRender();
+	});
+	finished = r;
+	app.scheduler.requestImmediateRender();
+	app.showToast(memoryImportResultText(r), 6000);   // 窗可能已被 Esc 关——toast 双保险
+};
 
 /** D14（m5-peers T6b）：settings 面第一个动态条目——tool-peers 模块 active（启用）时尾部追加「记忆」；
  *  未启用/卸载即从列表消失。静态数组保留导出（hooks-ui.test 序位锚等外部消费兼容）。
@@ -132,14 +171,15 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 					});
 					if (res === undefined) break; // Esc / 未匹配 → 回设置根列表
 					if (res.kind === "import") {
-						// 导入流（子级 Esc = 静默回子菜单——runMemoryImportSetting 空串约定）；
-						// 选了模型整理档时 llm 调用可达几十秒——先挂「导入中」提示，结果 toast 顶替
-						app.showToast("导入中（模型整理可能需要几十秒）…", 30000);
-						const outText = await runMemoryImportSetting(async (t, list) => {
+						// 走查八：导入两段——选择段（开关形态菜单）+ 执行段（进度弹窗——dock 贴输入框，
+						// progress/text 活值 getter 每步重绘；Esc 关窗不中断导入，完成 toast 收尾）
+						const picked = await runMemoryImportChoose(async (t, list) => {
 							const i = await app.pickOverlay(t, list);
 							return i === undefined ? "" : list[i] ?? "";
 						}, deps.peersImport);
-						if (outText !== "") app.showToast(outText, 6000);
+						if (picked === "empty") { app.showToast("本机没有检测到可导入的记忆——支持五家（先在对应工具里记几条）"); continue; }
+						if (picked === undefined) continue;   // Esc 回子菜单
+						await runImportWithProgress(app, deps.peersImport, picked.ids, picked.organize);
 						continue;
 					}
 					// 写盘即自动重载（空闲）；busy 不 reload 只提示——reloadModulesIdle 共用件（D15）
@@ -225,10 +265,14 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 					});
 					if (res === undefined) break;
 					if (res.kind === "import") {
-						const outText = await runMemoryImportSetting(async (t, list) => {
+						// 行模式对等件（走查八）：选择段同款；执行段无弹窗——完成串直出（进度条能力面留全屏）
+						const picked = await runMemoryImportChoose(async (t, list) => {
 							try { return await deps.commandUi.choose(t, list); } catch { return ""; }
 						}, deps.peersImport);
-						if (outText !== "") out(outText);   // 行模式无 toast——结果直出
+						if (picked === "empty") { out("本机没有检测到可导入的记忆——支持 Claude Code / ZCode / qwen / codex / Reasonix 五家"); continue; }
+						if (picked === undefined) continue;
+						out(picked.organize ? "导入中（模型整理逐条进行，可能需要几十秒）…" : "导入中…");
+						out(memoryImportResultText(await deps.peersImport.run(picked.ids, picked.organize)));
 						continue;
 					}
 					// 行模式 /settings busy 期排队到 turn 结束，走到这里必然空闲（共用件口径）

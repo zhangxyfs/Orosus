@@ -53,37 +53,49 @@ export async function runMemorySetting(
   return { kind: "toggle", key, value, message: `${label}：${value ? "开" : "关"}（已写 [tool-peers] ${key}）` };
 }
 
-/** 记忆导入数据口（走查修订三 + 走查七-①：settings 侧 = 引导第 5 页同功能——含 D20 模型整理）。
- *  宿主接线复用 importers 件 + h.llm()（organize = true 时语义去重合并，消耗 token 一次性）。 */
+/** 记忆导入数据口（走查修订三 + 走查八：settings 侧 = 引导第 5 页同功能——含 D20 模型整理〔逐条
+ *  内容优化 + 重写 description，走查八-③ 重定义〕与进度回调）。宿主接线复用 importers 件 + h.llm()。 */
 export interface MemoryImportDeps {
   /** 五源探测（有货才列：count > 0）。 */
   detect(): { id: string; label: string; count: number }[];
-  /** 执行导入（organize = true 走模型语义去重与归并——异步含 llm 调用；false = 纯机械同步零 token）。 */
-  run(sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }>;
+  /** 执行导入（organize = true 逐条模型整理；onProgress 每条一步——进度弹窗数据源）。 */
+  run(sourceIds: string[], organize: boolean, onProgress?: (done: number, total: number, title: string) => void): Promise<{ imported: number; skipped: number; merged: number }>;
 }
 
-/** 「记忆导入」流：逐源 / 全部（纯机械） / 全部 + 模型整理（D20 同款语义去重，文案明示 token 消耗）；
- *  无货源空态文案可跳过。返回人话结果（toast/out 用；空串 = Esc）。 */
-export async function runMemoryImportSetting(
+/** 「记忆导入」选择段（走查八-④：整理是**开关**项——开启后不论全部导入还是单源导入都走整理）：
+ *  菜单 = 每源一项 + 全部导入 + 「用模型整理」开关行（回车/空格切换，当次会话态不落盘）。
+ *  返回 { ids, organize }（执行段由调用方跑——全屏接进度弹窗）；"empty" = 无货源；undefined = Esc。 */
+export async function runMemoryImportChoose(
   choose: (title: string, items: string[]) => Promise<string>,
   deps: MemoryImportDeps,
-): Promise<string> {
+  initialOrganize = false,
+): Promise<{ ids: string[]; organize: boolean } | "empty" | undefined> {
   const sources = deps.detect().filter(s => s.count > 0);
-  if (sources.length === 0) return "本机没有检测到可导入的记忆——支持 Claude Code / ZCode / qwen / codex / Reasonix 五家（在对应工具里先记几条再来）";
+  if (sources.length === 0) return "empty";
   const total = sources.reduce((n, s) => n + s.count, 0);
-  const items = [
-    ...sources.map(s => `${s.label} —— 导入该源 ${s.count} 条`),
-    `全部导入 —— ${sources.length} 家共 ${total} 条`,
-    `全部导入 + 模型整理 —— 语义去重与归并，更干净但消耗 token（一次性，按导入量）`,
-  ];
-  const picked = await choose("记忆 · 导入", items);
-  const idx = items.indexOf(picked);
-  if (idx === -1) return "";
-  const organize = idx === sources.length + 1;   // 末项 = 模型整理
-  const ids = idx < sources.length ? [sources[idx]!.id] : sources.map(s => s.id);
-  const r = await deps.run(ids, organize);
-  const mergedNote = r.merged > 0 ? ` · 模型整理合并 ${r.merged} 条` : "";
+  const organizeRow = (on: boolean): string => `用模型整理 —— ${on ? "开 ✓" : "关"}（逐条优化内容 + 重写摘要，消耗 token 一次性；开启后所有导入路径都走整理）`;
+  let organize = initialOrganize;
+  for (;;) {
+    const items = [
+      ...sources.map(s => `${s.label} —— 导入该源 ${s.count} 条`),
+      `全部导入 —— ${sources.length} 家共 ${total} 条`,
+      organizeRow(organize),
+    ];
+    const picked = await choose("记忆 · 导入", items);
+    const idx = items.indexOf(picked);
+    if (idx === -1) return undefined;   // Esc
+    if (idx === items.length - 1) { organize = !organize; continue; }   // 开关行：切换后菜单刷新（✓ 移位）
+    return {
+      ids: idx < sources.length ? [sources[idx]!.id] : sources.map(s => s.id),
+      organize,
+    };
+  }
+}
+
+/** 导入结果人话（执行段完成后的 toast/out 文案）。 */
+export const memoryImportResultText = (r: { imported: number; skipped: number; merged: number }): string => {
+  const mergedNote = r.merged > 0 ? ` · 模型整理 ${r.merged} 条` : "";
   return r.imported === 0 && r.skipped > 0
     ? `没有新条目——${r.skipped} 条全部与现有记忆重复（此前已导入过）${mergedNote}`
     : `已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）${mergedNote} · /tool-peers__memory 可浏览`;
-}
+};

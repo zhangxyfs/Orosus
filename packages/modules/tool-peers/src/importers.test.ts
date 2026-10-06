@@ -105,41 +105,52 @@ describe("detectSources（D19 五源定位）", () => {
   });
 });
 
-describe("organizeNotes（D20 模型去重整理）", () => {
+describe("organizeNotes（D20 走查八-③ 重定义：逐条内容优化 + 重写 description）", () => {
   const notes: SourceNote[] = [
-    { title: "Anchor rules", summary: "s1", content: "c1", type: "project" },
-    { title: "How to cite code", summary: "s2", content: "c2", type: "project" },
-    { title: "Parallel batch discipline", summary: "s3", content: "c3", type: "project" },
+    { title: "Anchor rules", summary: "旧摘要A", content: "乱糟糟的原文A", type: "project" },
+    { title: "Parallel discipline", summary: "旧摘要B", content: "原文B", type: "project" },
   ];
-  it("注入 fake：同主题两条合并（标题取首条、正文拼接、摘要重写）", async () => {
-    const { notes: out, merged } = await organizeNotes(notes, async function* () {
-      yield { type: "text/delta", text: '```json\n[{"members":[0,1],"summary":"merged summary"},{"members":[2]}]\n```' } as never;
-    });
-    expect(merged).toBe(1);
-    expect(out).toHaveLength(2);
-    expect(out[0]?.title).toBe("Anchor rules");
-    expect(out[0]?.summary).toBe("merged summary");
-    expect(out[0]?.content).toContain("c2");
-    expect(out[1]?.title).toBe("Parallel batch discipline");
+  const fakeLlm = (replyFor: (src: string) => string) => async function* (req: { messages: { content: { text: string }[] }[] }) {
+    const src = req.messages[0]!.content[0]!.text;
+    yield { type: "text/delta", text: replyFor(src) } as never;
+  };
+
+  it("逐条优化：内容与摘要按模型输出替换、标题不动；onProgress 每条一步", async () => {
+    const steps: string[] = [];
+    const { notes: out, merged } = await organizeNotes(
+      notes,
+      fakeLlm(src => `{"description": "新摘要-${src.slice(0, 12)}", "content": "整理后的正文"}`),
+      (done, total, title) => { steps.push(`${done}/${total}:${title}`); },
+    );
+    expect(merged).toBe(2);
+    expect(out[0]!.title).toBe("Anchor rules");
+    expect(out[0]!.summary).toContain("新摘要-");
+    expect(out[0]!.content).toBe("整理后的正文");
+    expect(out[1]!.title).toBe("Parallel discipline");
+    expect(steps).toEqual(["1/2:Anchor rules", "2/2:Parallel discipline"]);
   });
-  it("关开关（llm 缺省）= 零调用原样返回", async () => {
-    const { notes: out, merged } = await organizeNotes(notes, undefined);
+  it("关开关（llm 缺省）= 零调用原样返回，进度仍逐步（机械档进度条数据源）", async () => {
+    const steps: string[] = [];
+    const { notes: out, merged } = await organizeNotes(notes, undefined, (_d, _t, title) => { steps.push(title); });
+    expect(merged).toBe(0);
+    expect(out).toEqual(notes);
+    expect(steps).toHaveLength(2);
+  });
+  it("单条失败（finish error / 坏输出）= 该条原样降级，其余照常整理", async () => {
+    let call = 0;
+    const mixed = async function* () {
+      call++;
+      if (call === 1) yield { type: "text/delta", text: "not json" } as never;   // 第一条：坏输出 → 原样
+      else yield { type: "finish", kind: "error" } as never;   // 第二条：失败 → 原样
+    };
+    const { notes: out, merged } = await organizeNotes(notes, mixed);
     expect(merged).toBe(0);
     expect(out).toEqual(notes);
   });
-  it("llm 失败（finish error）= 降级机械导入（原样）", async () => {
-    const { notes: out, merged } = await organizeNotes(notes, async function* () {
-      yield { type: "text/delta", text: "partial" } as never;
-      yield { type: "finish", kind: "error" } as never;
-    });
-    expect(merged).toBe(0);
-    expect(out).toEqual(notes);
-  });
-  it("解析坏输出 = 原样降级不炸", async () => {
-    const { notes: out, merged } = await organizeNotes(notes, async function* () {
-      yield { type: "text/delta", text: "not json at all" } as never;
-    });
-    expect(merged).toBe(0);
-    expect(out).toEqual(notes);
+  it("只给 description 不给 content = 内容保原文（乱才动）", async () => {
+    const { notes: out, merged } = await organizeNotes(notes, fakeLlm(() => `{"description": "只重写摘要"}`));
+    expect(merged).toBe(2);   // 两条摘要都被改
+    expect(out[0]!.content).toBe("乱糟糟的原文A");   // 内容没动
+    expect(out[0]!.summary).toBe("只重写摘要");
   });
 });

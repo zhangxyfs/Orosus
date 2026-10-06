@@ -701,9 +701,9 @@ export class OnboardingSession {
     }
     out.push("");
     const optMark = p.organize ? theme.fg("accent", "[✓]") : theme.dim("[ ]");
-    const optRow = `${optMark} ${theme.fg("fg", "用模型去重并整理这些记忆")}${theme.dim("（默认关）")}`;
+    const optRow = `${optMark} ${theme.fg("fg", "用模型整理导入的记忆")}${theme.dim("（默认关）")}`;
     out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
-    out.push(theme.dim("    开启后导入时调用刚配置的模型做语义去重与归并，"));
+    out.push(theme.dim("    开启后逐条优化内容（乱才动、保事实）并重写摘要，"));
     out.push(theme.dim("    更干净但消耗 token（一次性，按导入量）。"));
     const n = this.noticeLine(p.noticeKind, p.notice);
     if (n !== "") { out.push(""); out.push(n); }

@@ -101,52 +101,60 @@ export function importNotes(destDir: string, sources: SourceNote[]): ImportResul
 export interface LlmStreamReq { system?: string; messages: { role: "user"; content: { kind: "text"; text: string }[] }[]; maxTokens?: number }
 export type LlmStream = (req: LlmStreamReq) => AsyncIterable<{ type: string; text?: string; kind?: string }>;
 
-const ORGANIZE_SYSTEM = `You deduplicate and organize imported memory notes. Input: numbered list of "index. title — summary". Task: group notes that describe the SAME underlying fact or practice (different titles, same topic) and rewrite a one-line summary for each merged group.
-Reply with ONLY a JSON array, one element per group: {"members":[indexes],"summary":"one-line merged summary"}. Single-note groups: {"members":[i]} (summary optional). Keep every index exactly once. No prose, no markdown fence.`;
+const ORGANIZE_SYSTEM = `You clean up one imported memory note. Rewrite the body ONLY where it is messy (verbatim-fine notes stay verbatim): never lose facts, tighten wording, fix structure (headings/lists/code fences). Then write a one-line description (<= 60 chars, same language as the note) that best summarizes the RESULTING content.
+Reply with ONLY a JSON object: {"description": "...", "content": "..."}. No prose, no markdown fence.`;
 
-/** 模型去重整理（D20，v5）：语义去重（标题不同但同主题合并）+ 摘要重写。
- *  llm 缺省 / 失败 / 超时 / 解析坏 = 原样返回（降级机械导入，零假设零炸）。合并正文 = 各成员依序拼接（模型不碰正文，防失真）。 */
-export async function organizeNotes(notes: SourceNote[], llm?: LlmStream): Promise<{ notes: SourceNote[]; merged: number }> {
-  if (llm === undefined || notes.length < 2) return { notes, merged: 0 };
-  let text = "";
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 30_000);
-    try {
-      const list = notes.map((n, i) => `${i}. ${n.title} — ${n.summary}`).join("\n");
-      for await (const c of llm({ system: ORGANIZE_SYSTEM, messages: [{ role: "user", content: [{ kind: "text", text: list }] }], maxTokens: 2000 })) {
-        if (c.type === "text/delta" && typeof c.text === "string") text += c.text;
-        else if (c.type === "finish" && c.kind === "error") { text = ""; break; }
-      }
-    } finally { clearTimeout(timer); }
-  } catch { return { notes, merged: 0 }; }
-  const fence = text.slice(text.indexOf("["), text.lastIndexOf("]") + 1);   // 剥 markdown 栅栏
-  let groups: unknown;
-  try { groups = JSON.parse(fence); } catch { return { notes, merged: 0 }; }
-  if (!Array.isArray(groups)) return { notes, merged: 0 };
-  const taken = new Set<number>();
+export type OrganizeProgress = (done: number, total: number, title: string) => void;
+
+/** 模型整理（D20 走查八-③ 重定义）：**逐条**内容优化（乱才动、保事实）+ 按整理后内容**重写 description**；
+ *  索引随落盘自动重建（writeNote 内建）。llm 缺省 / 单条失败 / 超时 / 解析坏 = 该条原样降级（不炸不丢），
+ *  整理继续下一条。merged = 被修改（内容或摘要）的条数；onProgress 每条一步（进度条数据源）。 */
+export async function organizeNotes(notes: SourceNote[], llm?: LlmStream, onProgress?: OrganizeProgress): Promise<{ notes: SourceNote[]; merged: number }> {
+  if (llm === undefined || notes.length === 0) {
+    for (const [i, n] of notes.entries()) onProgress?.(i + 1, notes.length, n.title);
+    return { notes, merged: 0 };
+  }
   const out: SourceNote[] = [];
   let merged = 0;
-  for (const g of groups) {
-    const members = Array.isArray((g as { members?: unknown }).members)
-      ? ((g as { members: unknown[] }).members as unknown[]).filter(x => typeof x === "number" && Number.isInteger(x) && x >= 0 && x < notes.length && !taken.has(x)) as number[]
-      : [];
-    const newSummary = typeof (g as { summary?: unknown }).summary === "string" ? ((g as { summary: string }).summary).trim() : "";
-    if (members.length === 0) continue;
-    for (const i of members) taken.add(i);
-    const parts = members.map(i => notes[i]!);
-    if (members.length > 1) {
+  for (const [i, n] of notes.entries()) {
+    let text = "";
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 60_000);   // 单条 60s——整理档整体可进度
+      try {
+        for await (const c of llm({
+          system: ORGANIZE_SYSTEM,
+          messages: [{ role: "user", content: [{ kind: "text", text: `# ${n.title}\n\n${n.content}` }] }],
+          maxTokens: 4096,
+        })) {
+          if (c.type === "text/delta" && typeof c.text === "string") text += c.text;
+          else if (c.type === "finish" && c.kind === "error") { text = ""; break; }
+        }
+      } finally { clearTimeout(timer); }
+    } catch { text = ""; }
+    const fence = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);   // 剥 markdown 栅栏
+    let parsed: { description?: unknown; content?: unknown } | undefined;
+    try { parsed = JSON.parse(fence) as typeof parsed; } catch { parsed = undefined; }
+    const newDesc = typeof parsed?.description === "string" && parsed.description.trim() !== "" ? parsed.description.trim() : undefined;
+    const newContent = typeof parsed?.content === "string" && parsed.content.trim() !== "" ? parsed.content.trim() : undefined;
+    if (newDesc === undefined && newContent === undefined) {
+      out.push(n);   // 整理失败原样降级
+    } else {
       merged++;
       out.push({
-        title: parts[0]!.title,
-        summary: newSummary !== "" ? newSummary : parts.map(p => p.summary).join("; ").slice(0, 120),
-        content: parts.map(p => `## ${p.title}\n\n${p.content}`).join("\n\n"),
-        type: parts[0]!.type,
+        title: n.title,
+        summary: newDesc ?? n.summary,
+        content: newContent ?? n.content,   // 内容乱才动——模型没给 content 就保原文
+        type: n.type,
       });
-    } else {
-      out.push(newSummary !== "" ? { ...parts[0]!, summary: newSummary } : parts[0]!);
     }
+    onProgress?.(i + 1, notes.length, n.title);
   }
-  for (const [i, n] of notes.entries()) if (!taken.has(i)) out.push(n);   // 模型漏掉的条目原样补尾不丢
   return { notes: out, merged };
+}
+
+/** 与现有记忆按标题比对，滤出将被新导入的条目（整理只花钱在新条上——已存在的照旧跳过）。 */
+export function filterNewNotes(destDir: string, notes: SourceNote[]): SourceNote[] {
+  const existing = new Set(listNotes(destDir).map(n => n.title));
+  return notes.filter(n => !existing.has(n.title));
 }

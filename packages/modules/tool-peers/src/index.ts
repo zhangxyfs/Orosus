@@ -8,8 +8,8 @@ import { truncateIndex } from "./memstore.ts";
 import { createMemoryTools, createPeersTools } from "./tools.ts";
 
 // 五源导入件对宿主开口（T6d：引导在 apps/cli 直 import 模块包调用——apps 依赖 modules 合法、boundaries 不反向）
-export { detectSources, importNotes, organizeNotes, readSourceNotes } from "./importers.ts";
-export type { SourceNote, MemorySource, LlmStream, LlmStreamReq } from "./importers.ts";
+export { detectSources, filterNewNotes, importNotes, organizeNotes, readSourceNotes } from "./importers.ts";
+export type { SourceNote, MemorySource, LlmStream, LlmStreamReq, OrganizeProgress } from "./importers.ts";
 
 /** 模块 config schema（validate.ts:42-46 硬规则——未声明键被 strip，settings 写的开关必须在此声明）。 */
 export const configSchema = z.object({
