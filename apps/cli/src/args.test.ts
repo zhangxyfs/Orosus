@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseArgs } from "./args.ts";
+import { parseArgs, parseEarlyFlags } from "./args.ts";
 
 describe("parseArgs", () => {
   it("多次 --enable-module/--disable-module 累积；布尔 flag；--model", () => {
@@ -27,5 +27,21 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--fork"])).toThrow(/未知参数/);
     expect(() => parseArgs(["--fork", "s_1"])).toThrow(/未知参数/);
     expect(() => parseArgs(["--fork", "s_1:e_9"])).toThrow(/未知参数/);
+  });
+});
+
+// T1（release-npm）：--version/-v 早退旗标——main 顶部在子命令拦截与 parseArgs 之前消费；
+// 三形态命中 + 不误伤正常启动
+describe("parseEarlyFlags", () => {
+  it("--version / -v / 混在其他参数后 → { version: true }", () => {
+    expect(parseEarlyFlags(["--version"])).toEqual({ version: true });
+    expect(parseEarlyFlags(["-v"])).toEqual({ version: true });
+    expect(parseEarlyFlags(["--model", "openai/gpt", "--version"])).toEqual({ version: true });
+  });
+
+  it("无版本旗标（含前缀相似项）→ 空对象，不误伤正常启动", () => {
+    expect(parseEarlyFlags([])).toEqual({});
+    expect(parseEarlyFlags(["--model", "anthropic/claude-sonnet-4-5"])).toEqual({});
+    expect(parseEarlyFlags(["--print", "--version-like"])).toEqual({});
   });
 });

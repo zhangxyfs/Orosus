@@ -23,7 +23,7 @@ import { trustModule } from "@orosus/core";
 import { createModal, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
 import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
-import { parseArgs, type CliArgs } from "./args.ts";
+import { parseArgs, parseEarlyFlags, type CliArgs } from "./args.ts";
 import { tuiSidebarPersist, tuiSidebarRead } from "./tui-config.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
 import { isHomeSubcommand, runHomeSubcommand } from "./home-cmd.ts";
@@ -107,6 +107,15 @@ const exitCli = async (code: number): Promise<never> => {
   ]);
   process.exit(code);
 };
+
+// T1（release-npm）：`orosus --version` / `-v` 早退——单行版本号即退（G3：无 ASCII banner，banner 属
+// TUI 启动面），先于子命令拦截与 parseArgs（parseArgs 不识 --version 会按未知参数报错）
+{
+  if (parseEarlyFlags(process.argv.slice(2)).version) {
+    console.log(`orosus ${OROSUS_VERSION}`);
+    await exitCli(0);
+  }
+}
 
 // 子命令拦截（M2 接口总表：互斥于 flag 之外先解析）——M2 补账：T8/T13 处理器此前从未接线，
 // `orosus provider ...` / `orosus module ...` 会被 flag 解析器当未知参数拒收

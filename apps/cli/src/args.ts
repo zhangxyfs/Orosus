@@ -17,6 +17,12 @@ const USAGE = `用法: orosus [--model <provider/model>] [--enable-module <name>
              [--disable-module <name>]... [--no-modules [--module <name>]...] [--dump-modules]
              [--print <prompt> [--output-format text|json|stream-json]] [--tui line|full]`;
 
+// T1（release-npm）：--version/-v 早退旗标——main 顶部在子命令拦截与 parseArgs 之前消费。
+// 精确整串匹配（startsWith 反查误中前缀同款教训——"--version-like" 不算命中）
+export function parseEarlyFlags(argv: string[]): { version?: boolean } {
+  return argv.includes("--version") || argv.includes("-v") ? { version: true } : {};
+}
+
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { enable: [], disable: [], module: [], noModules: false, dumpModules: false };
   const takeValue = (i: number, flag: string): string => {
