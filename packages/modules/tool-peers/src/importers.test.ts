@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectSources, importNotes, organizeNote, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
+import { detectSources, importNotes, importNotesProgressive, organizeNote, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
 import { listNotes } from "./memstore.ts";
 
 let root: string;
@@ -185,5 +185,57 @@ describe("走查九：单条整理与强停", () => {
     expect(out[0]!.summary).toBe("整理后-1");
     expect(out[1]).toEqual(note("二"));   // 剩余原样落盘
     expect(out[2]).toEqual(note("三"));
+  });
+});
+
+describe("走查十一：importNotesProgressive 逐条单通道（机械档进度根因修复）", () => {
+  const note = (t: string): SourceNote => ({ title: t, summary: `旧-${t}`, content: `原文-${t}`, type: "project" });
+
+  it("机械档（不开整理）：每条先报进度再落盘——前置报点逐条可见、索引末次重建", async () => {
+    const dest = join(root, "dest", "memory");
+    const ticks: [number, number, string][] = [];
+    const r = await importNotesProgressive(dest, [note("一"), note("二"), note("三")], {
+      onProgress: (done, total, title) => ticks.push([done, total, title]),
+    });
+    expect(r).toEqual({ imported: 3, skipped: 0, merged: 0 });
+    expect(ticks).toEqual([[1, 3, "一"], [2, 3, "二"], [3, 3, "三"]]);   // 前置：1 起步（非 0 起步）
+    expect(listNotes(dest)).toHaveLength(3);
+    expect(readFileSync(join(dest, "MEMORY.md"), "utf8")).toContain("一");   // 索引末次重建一次
+  });
+
+  it("判重：已存在标题跳过 + 源内同名互撞后到计跳过（importNotes 同款语义）", async () => {
+    const dest = join(root, "dest", "memory");
+    await importNotesProgressive(dest, [note("一")]);   // 预置一条
+    const ticks: string[] = [];
+    const r = await importNotesProgressive(dest, [note("一"), note("二"), note("二")], {
+      onProgress: (_d, _t, title) => ticks.push(title),
+    });
+    expect(r).toEqual({ imported: 1, skipped: 2, merged: 0 });
+    expect(ticks).toEqual(["二"]);   // 只处理新条——已存在/互撞的不报点不落盘
+  });
+
+  it("整理档：organize+llm 在场逐条过模型（merged 计数）；llm 缺场/强停 = 原样落盘 merged 0", async () => {
+    const dest = join(root, "dest", "memory");
+    let calls = 0;
+    const llm = async function* () {
+      calls++;
+      yield { type: "text/delta", text: `{"description": "整理后-${calls}", "content": "净化的正文"}` } as never;
+    };
+    const r1 = await importNotesProgressive(dest, [note("甲"), note("乙")], { organize: true, llm });
+    expect(r1).toEqual({ imported: 2, skipped: 0, merged: 2 });
+    expect(calls).toBe(2);
+    const landed = listNotes(dest);
+    expect(landed.every(n => n.summary.startsWith("整理后-"))).toBe(true);
+
+    const dest2 = join(root, "dest2", "memory");
+    const r2 = await importNotesProgressive(dest2, [note("丙")], { organize: true });   // llm 缺场——降级不炸
+    expect(r2).toEqual({ imported: 1, skipped: 0, merged: 0 });
+    expect(readFileSync(join(dest2, listNotes(dest2)[0]!.file), "utf8")).toContain("原文-丙");
+
+    const ac = new AbortController();
+    ac.abort();   // 进门前已强停——剩余原样、不花模型钱
+    const r3 = await importNotesProgressive(dest2, [note("丁")], { organize: true, llm, signal: ac.signal });
+    expect(r3).toEqual({ imported: 1, skipped: 0, merged: 0 });
+    expect(calls).toBe(2);   // 没有为丁调模型
   });
 });

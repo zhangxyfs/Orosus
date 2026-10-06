@@ -178,3 +178,37 @@ export function filterNewNotes(destDir: string, notes: SourceNote[]): SourceNote
   const existing = new Set(listNotes(destDir).map(n => n.title));
   return notes.filter(n => !existing.has(n.title));
 }
+
+/** 逐条导入单通道（走查十一：settings/引导共用——原 main.ts importWithOrganize 本体下沉）。
+ *  机械档与整理档同一循环：**每条先报进度（前置——进度条先动）** → [organize 开启且 llm 在场才过模型]
+ *  → **立即落盘一条**（中断/强停不丢成果）→ **让一拍事件循环**（进度窗重绘可见——旧机械档整段同步，
+ *  onProgress 没接 + 事件循环锁死 = 140 条全程「正在读取源记忆…」零反应、完成态进度条停在 0/140）。
+ *  判重同 importNotes 语义：已存在标题跳过 + 源内同名互撞后到计跳过；索引末次重建一次。
+ *  强停（signal.aborted）= 该条起原样落盘（merged 不再增）、导入照常完成。 */
+export async function importNotesProgressive(
+  destDir: string,
+  sources: SourceNote[],
+  opts: { organize?: boolean; llm?: LlmStream; onProgress?: OrganizeProgress; signal?: AbortSignal } = {},
+): Promise<{ imported: number; skipped: number; merged: number }> {
+  const { organize = false, llm, onProgress, signal } = opts;
+  const seen = new Set<string>();
+  const fresh = filterNewNotes(destDir, sources).filter(n => {
+    if (seen.has(n.title)) return false;   // 源内同名互撞——后到的计跳过（importNotes 同款）
+    seen.add(n.title);
+    return true;
+  });
+  let imported = 0;
+  let merged = 0;
+  for (const [i, n] of fresh.entries()) {
+    onProgress?.(i + 1, fresh.length, n.title);   // 前置：先推进度再处理数据（走查九-①）
+    const organized = organize && llm !== undefined && signal?.aborted !== true
+      ? await organizeNote(n, llm, signal)
+      : undefined;
+    writeNoteFile(destDir, n.title, organized?.summary ?? n.summary, organized?.content ?? n.content, new Date(), n.type);
+    imported++;
+    if (organized !== undefined) merged++;
+    await new Promise<void>(r => setImmediate(r));   // 让一拍——同步批会锁死事件循环、进度窗不重绘
+  }
+  if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
+  return { imported, skipped: sources.length - fresh.length, merged };
+}

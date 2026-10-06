@@ -8,7 +8,7 @@ import { truncateIndex } from "./memstore.ts";
 import { createMemoryTools, createPeersTools } from "./tools.ts";
 
 // 五源导入件对宿主开口（T6d：引导在 apps/cli 直 import 模块包调用——apps 依赖 modules 合法、boundaries 不反向）
-export { detectSources, filterNewNotes, importNotes, organizeNote, organizeNotes, readSourceNotes } from "./importers.ts";
+export { detectSources, filterNewNotes, importNotes, importNotesProgressive, organizeNote, organizeNotes, readSourceNotes } from "./importers.ts";
 export type { SourceNote, MemorySource, LlmStream, LlmStreamReq, OrganizeProgress } from "./importers.ts";
 export { rebuildIndex, writeNoteFile } from "./memstore.ts";   // 走查九：批量落盘路径（每条一文件+索引末次重建）
 

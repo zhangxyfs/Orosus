@@ -44,7 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, filterNewNotes, importNotes, organizeNote, readSourceNotes, rebuildIndex, writeNoteFile } from "@orosus/tool-peers";
+import { detectSources, importNotesProgressive, readSourceNotes } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -390,21 +390,9 @@ const findGitRoot = (cwd: string): string => {
 		dir = parent;
 	}
 };
-/** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）——纯机械同步零 token
- *  （模型整理开关是引导专属 D20；settings 侧不整理）。目标 = 本项目记忆桶（与 env.memoryDir 同桶）。 */
-const importFromSources = (sourceIds: string[]): { imported: number; skipped: number } => {
-	const cwd = process.cwd();
-	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
-	const notes = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
-	const r = importNotes(destDir, notes);
-	return { imported: r.imported, skipped: r.skipped };
-};
-/** m5-peers 导入全形（走查八 + 走查九）：settings 与引导共用。
- *  organize = true 走模型整理（逐条内容优化 + 重写 description；**先报进度再处理**〔走查九-①〕、
- *  **每整理完一条立即落盘一个 .md**〔走查九-②——中断/强停不丢已整理成果〕、**全部完成 rebuildIndex
- *  一次**〔索引不闪烁〕；只花钱在新条上——先按现有标题滤）；false = 纯机械（importNotes 同款批量落盘）。
- *  signal = Alt+C 强停（走查九-③）：剩余条目原样落盘，导入照常完成（部分整理）。 */
+/** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）。
+ *  逐条单通道本体在包层 importNotesProgressive（走查十一：机械档旧形整段同步+onProgress 没接 =
+ *  全程零反应直跳完成态——下沉包层为可测）；目标 = 本项目记忆桶（与 env.memoryDir 同桶）。 */
 const importWithOrganize = async (
 	sourceIds: string[],
 	organize: boolean,
@@ -414,20 +402,13 @@ const importWithOrganize = async (
 	const cwd = process.cwd();
 	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
 	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
-	if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
 	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-	const fresh = filterNewNotes(destDir, all);   // 已存在的照旧跳过——不花整理钱
-	let imported = 0;
-	let merged = 0;
-	for (const [i, n] of fresh.entries()) {
-		onProgress?.(i + 1, fresh.length, n.title);   // 前置：先推进度再处理
-		const organized = signal?.aborted === true ? undefined : await organizeNote(n, (req) => h.llm().stream(req), signal);
-		writeNoteFile(destDir, n.title, organized?.summary ?? n.summary, organized?.content ?? n.content, new Date(), n.type);   // 整理完一条立即落盘（不建索引）
-		imported++;
-		if (organized !== undefined) merged++;
-	}
-	if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
-	return { imported, skipped: (all.length - fresh.length), merged };
+	return importNotesProgressive(destDir, all, {
+		organize,
+		llm: (req) => h.llm().stream(req),
+		...(onProgress !== undefined ? { onProgress } : {}),   // exactOptional：undefined 不显式入参
+		...(signal !== undefined ? { signal } : {}),
+	});
 };
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {
