@@ -1,4 +1,5 @@
 # CI 四门（doc/17 TS-10）：此前 test / lint / typecheck / check:boundaries 全靠人跑，无自动承载。
+# 触发：合入 master 与所有 PR。
 # 平台口径：本地 Windows 开发、CI 跑 Linux——win32 专属用例经 it.skipIf 平台守卫自然跳过
 # （CK-17），cmd 方言用例在 Linux 走 POSIX 分支：两平台各覆盖一半方言面，互补不重复。
 name: ci
