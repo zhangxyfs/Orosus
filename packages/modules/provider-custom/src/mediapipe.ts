@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { Worker } from "node:worker_threads";
+import { workerEntryUrl } from "./worker-entry.ts";
 import type { ContentPart, ModelMessage } from "@orosus/contracts/provider";
 import {
   DEFAULT_MAX_EDGE, DEFAULT_TOKEN_TIER, resizeFile, scaleFor, type ResizeSpec,
@@ -66,7 +67,7 @@ function getWorker() {
     // execArgv: []——worker 不继承父进程旗标：vitest 的 --import / node --input-type=module -e 等
     // 旗标会被 worker 当启动参数毒化（实测「--input-type can only be used with string input」即死）。
     // Node 24 原生 type-strip .ts，worker 无需任何旗标即可加载本件。
-    const w = new Worker(new URL("./media-worker.ts", import.meta.url), { execArgv: [] });
+    const w = new Worker(workerEntryUrl(import.meta.url, "media-worker"), { execArgv: [] }); // 入口经 shim 探测（D4=B：dist 形态同目录 .js 优先）
     const pending = new Map<number, { resolve: (v: { buffer: Buffer; width: number; height: number; mime: string; unchanged?: boolean }) => void; reject: (e: Error) => void }>();
     const failAll = (reason: string): void => {
       for (const p of pending.values()) p.reject(new Error(reason));

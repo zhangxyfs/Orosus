@@ -4,6 +4,7 @@ import { Jimp } from "jimp";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
+import { workerEntryUrl } from "./worker-entry.ts";
 
 export type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp"
 
@@ -103,7 +104,7 @@ function getWorker() {
   if (workerBroken) return undefined;
   if (workerState !== undefined) return workerState;
   try {
-    const w = new Worker(new URL("./imaging-worker.ts", import.meta.url), { execArgv: [] }); // 隔离父进程旗标（vitest --import 等毒化即死）
+    const w = new Worker(workerEntryUrl(import.meta.url, "imaging-worker"), { execArgv: [] }); // 隔离父进程旗标（vitest --import 等毒化即死）；入口经 shim 探测（D4=B：dist 形态同目录 .js 优先）
     const pending = new Map<number, Job>();
     const failAll = (reason: string): void => {
       for (const p of pending.values()) p.reject(new Error(reason));

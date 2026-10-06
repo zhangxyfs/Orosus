@@ -11,7 +11,10 @@ if (parentPort !== null) {
         // structuredClone 过线程后是 Uint8Array（不是 Buffer 实例）——Jimp 只认 Buffer，就地包一层零拷贝视图
         const buf = Buffer.from(msg.buffer.buffer, msg.buffer.byteOffset, msg.buffer.byteLength);
         const out = await resizeBuffer(buf, { maxEdge: msg.maxEdge, tokenTier: msg.tokenTier });
-        parentPort!.postMessage({ id: msg.id, ok: true, ...out }, [out.buffer.buffer as ArrayBuffer]);
+        // 小输出 Buffer 走 node 内存池（共享 AB）——worker postMessage 直接 transfer 池 AB 报
+        // "Cannot transfer object of unsupported type"（imaging-worker 同坑同修，release-npm T3 走查实锤）
+        const ab = out.buffer.buffer.slice(out.buffer.byteOffset, out.buffer.byteOffset + out.buffer.byteLength) as ArrayBuffer;
+        parentPort!.postMessage({ id: msg.id, ok: true, ...out, buffer: Buffer.from(ab) }, [ab]);
       } catch (err) {
         parentPort!.postMessage({ id: msg.id, ok: false, error: String(err instanceof Error ? err.message : err) });
       }
