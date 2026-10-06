@@ -736,6 +736,7 @@ export interface ModuleDefinition<C = unknown> { … }
 | `dependsOn?` | `dependsOn?: Dependency[]` | 依赖声明（字符串 = 硬依赖；{ capability, optional: true } = 可选不建拓扑边；可省 = 无）。 |
 | `provides?` | `provides?: string[]` | 自己提供的能力 key 清单（ctx.provide 的合法域；建议 `<模块名>.<能力>`；可省）。 |
 | `defaultEnabled?` | `defaultEnabled?: boolean` | 缺省启用与否（缺省 true；配置 [模块名] enabled 可覆盖）。 |
+| `launcher?` | `launcher?: { label: string; command?: string }` | 模块总览启动器登记（m5-peers T6e，A-1 极简版 D22）：带 UI 的模块向宿主总览弹窗（Ctrl+P） 自报入口——label = 显示名、command = 指向模块既有斜杠命令（经 audit() 透出，active 模块才收； 完整版 open(ctx) 直开窗照原拍板顺延）。 |
 | `uses?` | `uses?: string[]` | 声明使用的非能力标记（如 "config.foreign" = 要 overlay 别人 section；可省）。 |
 | `mounts?` | `mounts?: string[]` | 宿主口白名单（一经声明 = 只能用列出的口；缺省 = 不限制）。可用位："settings"、"contribute:tool"、"contribute:command"、"contribute:promptSection"、"contribute:configOverlay"、"contribute:card"、"tools.reveal"、"tools.list"、"emit"、"hook:<事件名>"、"provide"、"get"。 |
 | `config?` | `config?: ZodType<C>` | 自家配置节的 zod schema（声明了才读得到 [模块名] 节；校验带默认值；可省）。 |
