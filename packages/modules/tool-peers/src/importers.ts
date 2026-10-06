@@ -80,18 +80,28 @@ export function readSourceNotes(dir: string | undefined): SourceNote[] {
   return out;
 }
 
+/** 现有记忆的判重键全集：标题 ∪ source_name（走查十二-③——整理改英文题后原题仍算「已导入」）。 */
+const existingKeys = (destDir: string): Set<string> => {
+  const s = new Set<string>();
+  for (const n of listNotes(destDir)) {
+    s.add(n.title);
+    if (n.sourceTitle !== undefined) s.add(n.sourceTitle);
+  }
+  return s;
+};
+
 export interface ImportResult { imported: number; skipped: number; notes: SourceNote[] }
 
 /** 一次性搬运（D18）：与现有记忆按标题精确去重（已存在跳过并报数）；**逐条写文件（立即可见、
  *  中断不丢），全部写完 rebuildIndex 一次**（走查九-①——旧形态每条 writeNote 各重建一次索引）。 */
 export function importNotes(destDir: string, sources: SourceNote[]): ImportResult {
-  const existing = new Set(listNotes(destDir).map(n => n.title));
+  const existing = existingKeys(destDir);
   let imported = 0, skipped = 0;
   const landed: SourceNote[] = [];
   for (const n of sources) {
     if (existing.has(n.title)) { skipped++; continue; }
     existing.add(n.title);
-    writeNoteFile(destDir, n.title, n.summary, n.content, new Date(), n.type);
+    writeNoteFile(destDir, n.title, n.summary, n.content, n.type);
     imported++;
     landed.push(n);
   }
@@ -103,8 +113,11 @@ export function importNotes(destDir: string, sources: SourceNote[]): ImportResul
 export interface LlmStreamReq { system?: string; messages: { role: "user"; content: { kind: "text"; text: string }[] }[]; maxTokens?: number; signal?: AbortSignal }
 export type LlmStream = (req: LlmStreamReq) => AsyncIterable<{ type: string; text?: string; kind?: string }>;
 
-const ORGANIZE_SYSTEM = `You clean up one imported memory note. Rewrite the body ONLY where it is messy (verbatim-fine notes stay verbatim): never lose facts, tighten wording, fix structure (headings/lists/code fences). Then write a one-line description (<= 60 chars, same language as the note) that best summarizes the RESULTING content.
-Reply with ONLY a JSON object: {"description": "...", "content": "..."}. No prose, no markdown fence.`;
+const ORGANIZE_SYSTEM = `You clean up one imported memory note. Three outputs:
+1. title: a SHORT ENGLISH title (2-6 words, no dates) that names what the note is about — it becomes the file name.
+2. description: one line (<= 60 chars, same language as the note content), NO dates.
+3. content: rewrite the body ONLY where it is messy (verbatim-fine notes stay verbatim): never lose facts, tighten wording, fix structure (headings/lists/code fences).
+Reply with ONLY a JSON object: {"title": "...", "description": "...", "content": "..."}. No prose, no markdown fence.`;
 
 export type OrganizeProgress = (done: number, total: number, title: string) => void;
 
@@ -136,13 +149,14 @@ export async function organizeNote(n: SourceNote, llm: LlmStream, signal?: Abort
   } catch { text = ""; }
   if (signal !== undefined && signal.aborted) return undefined;
   const fence = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);   // 剥 markdown 栅栏
-  let parsed: { description?: unknown; content?: unknown } | undefined;
+  let parsed: { title?: unknown; description?: unknown; content?: unknown } | undefined;
   try { parsed = JSON.parse(fence) as typeof parsed; } catch { parsed = undefined; }
+  const newTitle = typeof parsed?.title === "string" && parsed.title.trim() !== "" ? parsed.title.trim() : undefined;
   const newDesc = typeof parsed?.description === "string" && parsed.description.trim() !== "" ? parsed.description.trim() : undefined;
   const newContent = typeof parsed?.content === "string" && parsed.content.trim() !== "" ? parsed.content.trim() : undefined;
-  if (newDesc === undefined && newContent === undefined) return undefined;
+  if (newTitle === undefined && newDesc === undefined && newContent === undefined) return undefined;
   return {
-    title: n.title,
+    title: newTitle ?? n.title,   // 走查十二-③：整理改英文短题（无日期）——文件名随 slugify(title) 与标题一致
     summary: newDesc ?? n.summary,
     content: newContent ?? n.content,   // 内容乱才动——模型没给 content 就保原文
     type: n.type,
@@ -175,22 +189,24 @@ export async function organizeNotes(notes: SourceNote[], llm?: LlmStream, onProg
 
 /** 与现有记忆按标题比对，滤出将被新导入的条目（整理只花钱在新条上——已存在的照旧跳过）。 */
 export function filterNewNotes(destDir: string, notes: SourceNote[]): SourceNote[] {
-  const existing = new Set(listNotes(destDir).map(n => n.title));
+  const existing = existingKeys(destDir);
   return notes.filter(n => !existing.has(n.title));
 }
 
 /** 逐条导入单通道（走查十一：settings/引导共用——原 main.ts importWithOrganize 本体下沉）。
  *  机械档与整理档同一循环：**每条先报进度（前置——进度条先动）** → [organize 开启且 llm 在场才过模型]
- *  → **立即落盘一条**（中断/强停不丢成果）→ **让一拍事件循环**（进度窗重绘可见——旧机械档整段同步，
+ *  → **立即落盘一条**（中断不丢成果）→ **让一拍事件循环**（进度窗重绘可见——旧机械档整段同步，
  *  onProgress 没接 + 事件循环锁死 = 140 条全程「正在读取源记忆…」零反应、完成态进度条停在 0/140）。
- *  判重同 importNotes 语义：已存在标题跳过 + 源内同名互撞后到计跳过；索引末次重建一次。
- *  强停（signal.aborted）= 该条起原样落盘（merged 不再增）、导入照常完成。 */
+ *  判重：已存在标题/源内同名互撞跳过（importNotes 同款语义）；整理改题后按 frontmatter source_name
+ *  （源原题）判重——重复导入不重复进（走查十二-③）。
+ *  强停（signal.aborted，走查十二-④）= **硬中断**：剩余条目不拷不落盘；正在整理中的那条若被取消也不落。 */
 export async function importNotesProgressive(
   destDir: string,
   sources: SourceNote[],
   opts: { organize?: boolean; llm?: LlmStream; onProgress?: OrganizeProgress; signal?: AbortSignal } = {},
 ): Promise<{ imported: number; skipped: number; merged: number }> {
   const { organize = false, llm, onProgress, signal } = opts;
+  const isAborted = (): boolean => signal?.aborted === true;   // 闭包现读（TS 属性窄化不跨 await 重置）
   const seen = new Set<string>();
   const fresh = filterNewNotes(destDir, sources).filter(n => {
     if (seen.has(n.title)) return false;   // 源内同名互撞——后到的计跳过（importNotes 同款）
@@ -201,10 +217,12 @@ export async function importNotesProgressive(
   let merged = 0;
   for (const [i, n] of fresh.entries()) {
     onProgress?.(i + 1, fresh.length, n.title);   // 前置：先推进度再处理数据（走查九-①）
-    const organized = organize && llm !== undefined && signal?.aborted !== true
-      ? await organizeNote(n, llm, signal)
-      : undefined;
-    writeNoteFile(destDir, n.title, organized?.summary ?? n.summary, organized?.content ?? n.content, new Date(), n.type);
+    if (isAborted()) break;   // 强停：剩余不拷贝不落盘（走查十二-④——旧形「原样落盘照常完成」被用户打回）
+    const organized = organize && llm !== undefined ? await organizeNote(n, llm, signal) : undefined;
+    if (isAborted() && organized === undefined) break;   // 整理中途被取消——本条不落盘
+    const title = organized?.title ?? n.title;
+    writeNoteFile(destDir, title, organized?.summary ?? n.summary, organized?.content ?? n.content, n.type,
+      title !== n.title ? n.title : undefined);   // 改过题才留 source_name 原题（判重锚）
     imported++;
     if (organized !== undefined) merged++;
     await new Promise<void>(r => setImmediate(r));   // 让一拍——同步批会锁死事件循环、进度窗不重绘

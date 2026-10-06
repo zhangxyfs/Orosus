@@ -58,8 +58,8 @@ export async function runMemorySetting(
 export interface MemoryImportDeps {
   /** 五源探测（有货才列：count > 0）。 */
   detect(): { id: string; label: string; count: number }[];
-  /** 执行导入（organize = true 逐条模型整理；onProgress **前置**每条一步；signal = Alt+C 强停——
-   *  剩余条目原样落盘，导入照常完成〔部分整理〕）。 */
+  /** 执行导入（organize = true 逐条模型整理——内容优化 + 重写摘要 + 改英文短题；onProgress **前置**
+   *  每条一步；signal = Alt+C 强停〔走查十二-④〕——硬中断：剩余条目不拷不落盘）。 */
   run(sourceIds: string[], organize: boolean, onProgress?: (done: number, total: number, title: string) => void, signal?: AbortSignal): Promise<{ imported: number; skipped: number; merged: number }>;
 }
 
@@ -74,7 +74,7 @@ export async function runMemoryImportChoose(
   const sources = deps.detect().filter(s => s.count > 0);
   if (sources.length === 0) return "empty";
   const total = sources.reduce((n, s) => n + s.count, 0);
-  const organizeRow = (on: boolean): string => `用模型整理 —— ${on ? "开 ✓" : "关"}（逐条优化内容 + 重写摘要，消耗 token 一次性；开启后所有导入路径都走整理）`;
+  const organizeRow = (on: boolean): string => `用模型整理 —— ${on ? "开 ✓" : "关"}（逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理）`;
   let organize = initialOrganize;
   for (;;) {
     const items = [

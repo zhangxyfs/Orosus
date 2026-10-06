@@ -4587,6 +4587,7 @@ describe("dialog 禁 Esc（disallowEscape）", () => {
 	// 走查十-②：完成态「没有新条目」关不掉窗——窗内无 interactive 控件时 activate 事件永不触发
 	// （ids 空 → keys 的 enter→activate 分支不进）+ Esc 被禁 = 窗死锁。修法 = Enter 走 hostKeys
 	//（派发在 ids 分支之前、escape 除外恒可达）：完成态关窗、进行态吞掉（不消费会落回输入框当发送）。
+	//（走查十二-① 后完成态由宿主自动关窗——此测钉 hostKeys.enter 机制兜底仍可达。）
 	it("完成态 Enter 经 hostKeys 关窗（无 interactive 控件也能到）", async () => {
 		const { app, input } = rig(["# 你好"], 100, 30);
 		app.start();
@@ -4597,11 +4598,11 @@ describe("dialog 禁 Esc（disallowEscape）", () => {
 			layout: "dock",
 			disallowEscape: true,
 			widgets: [
-				{ id: "status", kind: "text", text: () => (finished ? "没有新条目 —— Enter 关闭" : "导入中…") },
+				{ id: "status", kind: "text", text: () => (finished ? "已导入 3 条记忆" : "导入中…") },
 				{ id: "bar", kind: "progress", value: () => (finished ? 3 : 0), max: 3 },
 			],
 			hostKeys: {
-				"alt+c": { label: "Alt + C 停止", run: () => true },
+				"alt+c": { label: "Alt + C 停止并关闭", run: () => true },
 				enter: { label: "Enter 关闭", run: (ctx) => { if (finished) ctx.close(); return true; } },
 			},
 		});
@@ -4629,15 +4630,15 @@ describe("dialog 禁 Esc（disallowEscape）", () => {
 			disallowEscape: true,
 			widgets: [{ id: "bar", kind: "progress", value: 0, max: 3 }],
 			hostKeys: {
-				"alt+c": { label: "Alt + C 停止", run: () => true },
-				enter: { label: "Enter 关闭", run: () => true },
+				"alt+c": { label: "Alt + C 停止并关闭", run: () => true },
+				enter: { label: "", run: () => true },
 			},
 		});
 		await flush();
 		const pu = (app as unknown as { pendingUi: unknown }).pendingUi;
 		const ov = (app as unknown as { buildDialogOverlay(pu: unknown): { lines: string[] } }).buildDialogOverlay(pu);
 		const plain = stripAnsi(ov.lines.join("\n"));
-		expect(plain).toContain("Alt + C 停止 · Enter 关闭");
+		expect(plain).toContain("Alt + C 停止并关闭");
 		expect(plain).not.toContain("Esc 关闭");
 		expect(plain).not.toContain("Enter 激活");
 		app.stop();

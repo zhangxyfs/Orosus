@@ -252,8 +252,8 @@ export function createKeys(app: FullApp) {
 				}
 				if (key === "escape") {
 					if (pu.disallowEscape === true) {
-						// 走查九-③：进行态窗（记忆整理等）禁 Esc——吞掉并指路强停键（不误关丢进度感）
-						app.showToast("进行中不可关闭——Alt + C 停止");
+						// 走查九-③ + 走查十二-②：进行态窗（记忆导入等）禁 Esc——吞掉并指路强停键（不误关丢进度感）
+						app.showToast("进行中不可关闭——Alt + C 停止并关闭");
 					} else {
 						escCloseWin();
 						app.pendingUi = undefined;

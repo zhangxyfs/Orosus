@@ -13,8 +13,8 @@ const NOW = Date.parse("2026-10-06T12:00:00.000Z");
 
 describe("browserEntries（m5-peers T6c）", () => {
   it("第一项恒 MEMORY.md 本体，其后按索引引用顺序；标题取 frontmatter name 非文件名", () => {
-    writeNote(dir, "First Note", "s1", "b1", new Date("2026-10-05T00:00:00Z"));
-    writeNote(dir, "Second Note", "s2", "b2", new Date("2026-10-06T00:00:00Z"));
+    writeNote(dir, "First Note", "s1", "b1");
+    writeNote(dir, "Second Note", "s2", "b2");
     const entries = browserEntries(dir);
     expect(entries[0]?.isIndex).toBe(true);
     expect(entries[0]?.file).toBe("MEMORY.md");
@@ -23,7 +23,7 @@ describe("browserEntries（m5-peers T6c）", () => {
   });
 
   it("孤儿笔记（有文件无索引行）按 mtime 补尾不丢", () => {
-    writeNote(dir, "Indexed", "s", "b", new Date());
+    writeNote(dir, "Indexed", "s", "b");
     writeFileSync(join(dir, "2026-01-01-orphan.md"), "---\nname: Orphan\ndescription: o\n---\n\nbody\n");
     const titles = browserEntries(dir).map(e => e.title);
     expect(titles).toContain("Orphan");
@@ -48,7 +48,7 @@ describe("relativeTime（/sessions 同款 + 超 30 天落日期）", () => {
 
 describe("renderBrowserList 与 browserBody", () => {
   it("行含标题与相对时间；◆ 标索引行", () => {
-    writeNote(dir, "First", "s1", "body1", new Date(NOW - 5 * 60_000));
+    writeNote(dir, "First", "s1", "body1");
     utimesSync(join(dir, listNotes(dir)[0]!.file), new Date(NOW - 5 * 60_000), new Date(NOW - 5 * 60_000));   // mtime 钉 5 分钟前（墙钟漂移隔离）
     const entries = browserEntries(dir);
     const lines = renderBrowserList(entries, NOW);
@@ -57,7 +57,7 @@ describe("renderBrowserList 与 browserBody", () => {
     expect(lines[1]).toContain("5 分钟前");
   });
   it("body 读回原文 + 防穿越；MEMORY.md 可读", () => {
-    writeNote(dir, "N", "s", "content-here", new Date());
+    writeNote(dir, "N", "s", "content-here");
     const entries = browserEntries(dir);
     expect(browserBody(dir, entries[1]!.file)).toContain("content-here");
     expect(browserBody(dir, "MEMORY.md")).toContain("# Memory Index");

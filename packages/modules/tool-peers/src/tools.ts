@@ -270,7 +270,7 @@ export function createMemoryTools(env: PeersEnv): Tool[] {
           const dir = env.memoryDir();
           if (dir === undefined) return { output: NOT_READY, isError: false };
           const existing = listNotes(dir).find(n => n.title === title);
-          const file = writeNote(dir, title, summary, content, new Date(), type);
+          const file = writeNote(dir, title, summary, content, type);
           return {
             output: existing !== undefined
               ? `Updated existing note ${file} (same title — no duplicate created) — index updated. Other sessions in this project will see it on their next turn.`

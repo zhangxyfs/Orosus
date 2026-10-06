@@ -42,19 +42,17 @@ export const SETTINGS_ITEMS = [
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
 
-/** 走查八-② + 走查九：导入执行段——进度弹窗（dock 贴输入框上缘）：进度条 + 当前条目活值，
- *  **进度前置**（每条开始处理时先报——条先动再跑数据）；**禁 Esc**（进行态不可关——防误关丢进度感），
- *  **Alt+C 强停**（停止后续整理：剩余条目原样落盘、已整理成果保留、导入照常完成）；完成态 Enter 关窗。 */
+/** 走查八-② + 走查九 + 走查十二：导入执行段——进度弹窗（dock 贴输入框上缘）：进度条 + 当前条目活值，
+ *  **进度前置**（每条开始处理时先报——条先动再跑数据）；**禁 Esc** + **Alt+C 停止并关窗**（走查十二-②④：
+ *  硬中断——剩余条目不拷不落盘）；**完成自动关窗**（走查十二-①——结果走 toast，无需手动 Enter）。 */
 const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: string[], organize: boolean): Promise<void> => {
 	let done = 0;
 	let label = "";
-	let finished: { imported: number; skipped: number; merged: number } | undefined;
 	let stopped = false;
 	const ac = new AbortController();
 	// 进度条 max 是静态数（控件契约）——开窗前先按源计数定总步数；实际步数以 onProgress 为准（max 只画条）
 	const total = deps.detect().filter(s => ids.includes(s.id)).reduce((n, s) => n + s.count, 0);
 	const statusText = (): string => {
-		if (finished !== undefined) return `${stopped ? "已停止整理——已处理部分照常入库。 " : ""}${memoryImportResultText(finished)} —— Enter 关闭`;
 		if (done === 0) return "正在读取源记忆…";
 		return organize
 			? `模型整理中：${label}（${done} / ${total}）`
@@ -63,28 +61,29 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 	const handle = app.openDialogHost({
 		title: "记忆 · 导入",
 		layout: "dock",
-		disallowEscape: true,   // 走查九-③：进行态禁 Esc（完成态 Enter 关）
+		disallowEscape: true,   // 进行态禁 Esc（防误关丢进度感）——完成自动关、强停走 Alt+C
 		widgets: [
 			{ id: "status", kind: "text", text: statusText },
 			{ id: "bar", kind: "progress", value: () => done, max: Math.max(1, total) },
 		],
 		hostKeys: {
 			"alt+c": {
-				label: "Alt + C 停止",
+				label: "Alt + C 停止并关闭",
 				run: () => {
-					if (finished === undefined && !ac.signal.aborted) {
+					if (!ac.signal.aborted) {
 						stopped = true;
-						ac.abort();   // 剩余条目原样落盘（organizeNote/循环感知）——导入不弃
+						ac.abort();   // 硬中断（走查十二-④）：剩余条目不拷不落盘
 					}
-					return undefined;
+					handle?.close();   // 立即关窗——已入库部分走完成 toast 报数
+					return true;
 				},
 			},
-			// 窗内无 interactive 控件 → activate 事件永不触发（走查十-②：Enter 无效=窗死锁根因）。
-			// Enter 走 hostKeys：完成态关窗；进行态吞掉（不消费会落回输入框把回车当发送）。
+			// 窗内无 interactive 控件 → activate 事件永不触发（走查十-②）；Enter 恒吞掉
+			// （不消费会落回输入框当发送）；完成态窗已自动关，此处仅防御性兜底
 			"enter": {
-				label: "Enter 关闭",
+				label: "",
 				run: () => {
-					if (finished !== undefined) handle?.close();
+					if (stopped) handle?.close();
 					return true;
 				},
 			},
@@ -94,9 +93,8 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 		done = d; label = title;   // 前置进度：条目开始时即推（进度条先动）
 		app.scheduler.requestImmediateRender();
 	}, ac.signal);
-	finished = r;
-	app.scheduler.requestImmediateRender();
-	app.showToast(`${stopped ? "已停止整理——" : ""}${memoryImportResultText(r)}`, 6000);
+	handle?.close();   // 完成自动关窗（走查十二-①）——结果数字走 toast
+	app.showToast(`${stopped ? "已停止导入——剩余未处理。 " : ""}${memoryImportResultText(r)}`, 6000);
 };
 
 /** D14（m5-peers T6b）：settings 面第一个动态条目——tool-peers 模块 active（启用）时尾部追加「记忆」；

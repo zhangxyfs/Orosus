@@ -214,12 +214,12 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
     expect(ticks).toEqual(["二"]);   // 只处理新条——已存在/互撞的不报点不落盘
   });
 
-  it("整理档：organize+llm 在场逐条过模型（merged 计数）；llm 缺场/强停 = 原样落盘 merged 0", async () => {
+  it("整理档：organize+llm 在场逐条过模型（merged 计数）；llm 缺场降级原样落盘", async () => {
     const dest = join(root, "dest", "memory");
     let calls = 0;
     const llm = async function* () {
       calls++;
-      yield { type: "text/delta", text: `{"description": "整理后-${calls}", "content": "净化的正文"}` } as never;
+      yield { type: "text/delta", text: `{"description": "整理后-${calls}", "content": "净化的正文"}` } as never;   // 不含 title——回退原题
     };
     const r1 = await importNotesProgressive(dest, [note("甲"), note("乙")], { organize: true, llm });
     expect(r1).toEqual({ imported: 2, skipped: 0, merged: 2 });
@@ -231,11 +231,43 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
     const r2 = await importNotesProgressive(dest2, [note("丙")], { organize: true });   // llm 缺场——降级不炸
     expect(r2).toEqual({ imported: 1, skipped: 0, merged: 0 });
     expect(readFileSync(join(dest2, listNotes(dest2)[0]!.file), "utf8")).toContain("原文-丙");
+  });
 
+  it("整理改英文题（走查十二-③）：文件名随英文题、source_name 留原题——重复导入按原题判重", async () => {
+    const dest = join(root, "dest", "memory");
+    const llm = async function* () {
+      yield { type: "text/delta", text: `{"title": "Anchor Style Guide", "description": "锚点写法速查", "content": "整理后正文"}` } as never;
+    };
+    const src = [note("锚点写法")];
+    const r1 = await importNotesProgressive(dest, src, { organize: true, llm });
+    expect(r1).toEqual({ imported: 1, skipped: 0, merged: 1 });
+    const landed = listNotes(dest)[0]!;
+    expect(landed.file).toBe("anchor-style-guide.md");   // 文件名 = slug(英文题)，无日期前缀
+    expect(landed.title).toBe("Anchor Style Guide");
+    expect(readFileSync(join(dest, landed.file), "utf8")).toContain("source_name: 锚点写法");   // 原题留档
+    const r2 = await importNotesProgressive(dest, src, {});   // 重复导入同源题：source_name 判重
+    expect(r2).toEqual({ imported: 0, skipped: 1, merged: 0 });
+    expect(listNotes(dest)).toHaveLength(1);
+  });
+
+  it("强停=硬中断（走查十二-④）：Alt+C 后剩余不拷不落盘、已入库保留", async () => {
+    const dest = join(root, "dest", "memory");
     const ac = new AbortController();
-    ac.abort();   // 进门前已强停——剩余原样、不花模型钱
-    const r3 = await importNotesProgressive(dest2, [note("丁")], { organize: true, llm, signal: ac.signal });
-    expect(r3).toEqual({ imported: 1, skipped: 0, merged: 0 });
-    expect(calls).toBe(2);   // 没有为丁调模型
+    const r = await importNotesProgressive(dest, [note("一"), note("二"), note("三")], {
+      onProgress: (done) => { if (done === 2) ac.abort(); },   // 第 2 条报点时强停
+      signal: ac.signal,
+    });
+    expect(r.imported).toBe(1);   // 只落了第一条——旧形「剩余原样落盘照常完成」已废
+    expect(listNotes(dest)).toHaveLength(1);
+
+    const ac2 = new AbortController();
+    ac2.abort();   // 进门前已强停——零落盘零模型钱
+    let llmCalls = 0;
+    const llm = async function* () { llmCalls++; yield { type: "text/delta", text: "{}" } as never; };
+    const dest2 = join(root, "dest2", "memory");
+    const r2 = await importNotesProgressive(dest2, [note("丁")], { organize: true, llm, signal: ac2.signal });
+    expect(r2).toEqual({ imported: 0, skipped: 0, merged: 0 });
+    expect(llmCalls).toBe(0);
+    expect(listNotes(dest2)).toHaveLength(0);
   });
 });
