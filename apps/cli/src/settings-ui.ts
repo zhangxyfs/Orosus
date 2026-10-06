@@ -4,6 +4,7 @@ import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
+import { runMemoryToggleSetting } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
@@ -39,11 +40,20 @@ export const SETTINGS_ITEMS = [
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
 
+/** D14（m5-peers T6b）：settings 面第一个动态条目——tool-peers 模块 active（启用）时尾部追加「记忆」；
+ *  未启用/卸载即从列表消失。静态数组保留导出（hooks-ui.test 序位锚等外部消费兼容）。
+ *  模块启停本身走 config enabled（通用模块启停 UI 顺延，D15 注记）——这里只看运行态。 */
+export const settingsItems = (h: Harness): string[] => {
+	const peersActive = h.graph().audit().some((a) => a.name === "tool-peers" && a.state === "active");
+	return peersActive ? [...SETTINGS_ITEMS, "记忆（工作区记忆 / 会话感知——同项目会话互相看见）"] : SETTINGS_ITEMS;
+};
+
 export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Promise<void> => {
 	// 子菜单/子窗 Esc 返回根列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：根列表本身的 Esc = 收面。
 	// 只读子窗走 /tasks 同款 FIFO——viewText 占槽期循环重入的 pickOverlay 排队，关窗即自动顶上回根列表
 	for (;;) {
-		const picked = await app.pickOverlay("设置", SETTINGS_ITEMS);
+		const items = settingsItems(deps.getH());
+		const picked = await app.pickOverlay("设置", items);
 		if (picked === undefined) return; // 根列表 Esc：整面收起
 		// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
 		if (picked === 0) app.viewText("磁盘占用", diskUsageText(), { layout: "dock" });
@@ -108,6 +118,25 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
+		else if (picked === 10) {
+			// m5-peers T6b：「记忆」动态项（settingsItems 尾部追加，tool-peers active 才在场）
+			// 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
+			for (;;) {
+				try {
+					const res = await runMemoryToggleSetting(async (t, list) => {
+						const i = await app.pickOverlay(t, list);
+						return i === undefined ? "" : list[i] ?? "";
+					});
+					if (res === undefined) break; // Esc / 未匹配 → 回设置根列表
+					// 写盘即自动重载（空闲）；busy 不 reload 只提示——reloadModulesIdle 共用件（D15）
+					const busyNote = deps.reloadModulesIdle(app, "有任务在执行，稍后 /reload 生效");
+					app.showToast(busyNote === "" ? `${res.message}，已重载生效` : `${res.message}——${busyNote}`);
+				} catch (err) {
+					if (isEsc(err)) break;
+					throw err;
+				}
+			}
+		}
 	}
 };
 /** 行模式对等件（2026-09-24 T1c：/other 时代行模式只有指路——配置流两态都要能走，菜单随之对等）：
@@ -115,8 +144,10 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 export const openSettingsLine = async (out: (s: string) => void, deps: SettingsUiDeps): Promise<void> => {
 	// Esc 逐级返回（2026-09-28 用户拍板，全屏对等件）：根菜单 Esc 穿透（宿主静默）；子级 Esc 回上级
 	for (;;) {
-		const picked = await deps.commandUi.choose("设置", SETTINGS_ITEMS); // 根 Esc 穿透——整面收起
-		const idx = SETTINGS_ITEMS.indexOf(picked);
+		const items = settingsItems(deps.getH());
+		const picked = await deps.commandUi.choose("设置", items); // 根 Esc 穿透——整面收起
+		const idx = items.indexOf(picked);
+		if (idx === -1) return;
 		if (idx === 0) out(diskUsageText());
 		else if (idx === 1) out(ctxUsageText(deps.getPanelCache()));
 		else if (idx === 2) out(await tokenUsageText(deps.getH()));
@@ -169,6 +200,23 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 			} catch (err) {
 				if (isEsc(err)) continue; // 顶层后端菜单 Esc → 回设置根菜单（更深的已在模块内逐级返回）
 				throw err;
+			}
+		}
+		else if (idx === 10) {
+			// m5-peers T6b 行模式对等件：「记忆」双开关——子菜单 Esc 回设置根菜单
+			for (;;) {
+				try {
+					const res = await runMemoryToggleSetting(async (t, list) => {
+						try { return await deps.commandUi.choose(t, list); } catch { return ""; }   // 子菜单 Esc → 空串 = 未匹配
+					});
+					if (res === undefined) break;
+					// 行模式 /settings busy 期排队到 turn 结束，走到这里必然空闲（共用件口径）
+					const busyNote = deps.reloadModulesIdle(undefined, "");
+					out(busyNote === "" ? `${res.message}，已重载生效` : `${res.message}——${busyNote}`);
+				} catch (err) {
+					if (isEsc(err)) break;
+					throw err;
+				}
 			}
 		}
 	}
