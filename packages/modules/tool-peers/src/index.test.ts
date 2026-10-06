@@ -14,7 +14,7 @@ describe("tool-peers module", () => {
     expect(def.defaultEnabled).toBe(false);
   });
 
-  it("T4 activate registers the three occupancy tools", () => {
+  it("T4/T5 activate registers the six tools", () => {
     const tools: { name: string }[] = [];
     const ctx = {
       llm: undefined,
@@ -25,6 +25,9 @@ describe("tool-peers module", () => {
       },
     };
     (mod as { activate?: (ctx: unknown) => void }).activate?.(ctx);
-    expect(tools.map(t => t.name)).toEqual(["tool-peers__peers", "tool-peers__claim", "tool-peers__release"]);
+    expect(tools.map(t => t.name)).toEqual([
+      "tool-peers__peers", "tool-peers__claim", "tool-peers__release",
+      "tool-peers__memory__write", "tool-peers__memory__list", "tool-peers__memory__read",
+    ]);
   });
 });
