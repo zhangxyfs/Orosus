@@ -8,6 +8,7 @@ import { filterEntries } from "./fullapp-at.ts";
 import { osc8LinkAtColumn, stripAnsi, visibleWidth } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
 import type { WheelEvent, ButtonEvent } from "./mouse.ts";
+import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
 
 /** 滚动条基座几何（scrollbarTrackBase 返回型——trackHit/press/drag 共用）。 */
@@ -28,12 +29,27 @@ export function createMouse(app: FullApp) {
 			if (pu.pinned === true) { pu.scroll = Math.max(0, pu.lines.length - page); pu.pinned = false; } // T1 落地再滚
 			pu.scroll = Math.max(0, Math.min(Math.max(0, pu.lines.length - page), pu.scroll + (up ? -lines : lines)));
 		} else if (pu?.kind === "dialog") {
-			// dialog 型没有 lines 字段（控件渲染出 content）——内容行数走 renderWidgetLines 渲染口径，
-			// 与 buildDialogOverlay 同源调用；滚轮写 scroll 是本批新增的手动滚动，渲染切片面现成
-			const geo = app.dialogs.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
-			const page = Math.max(3, geo.height - 3);
-			const total = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
-			pu.scroll = Math.max(0, Math.min(Math.max(0, total - page), pu.scroll + (up ? -lines : lines)));
+			// 走查七-②：聚焦 interactive list 期滚轮 = ↑↓（移选中行 + 视口跟随 + select 事件——与键盘同效）；
+			// 表单/无聚焦列表窗保持滚窗体（旧语义——内容行数走 renderWidgetLines 渲染口径，与 buildDialogOverlay 同源）
+			const ids = app.dialogs.dialogInteractiveIds(pu.widgets);
+			const focusId = pu.focusedId ?? ids[0];
+			const list = focusId !== undefined
+				? pu.widgets.find((wd): wd is Extract<WidgetSpec, { kind: "list" }> => wd.kind === "list" && wd.id === focusId && wd.interactive === true)
+				: undefined;
+			if (list !== undefined) {
+				const cur = pu.selById[list.id] ?? 0;
+				const next = Math.max(0, Math.min(list.items.length - 1, cur + (up ? -lines : lines)));   // 到头停（决策点 6 同款）
+				if (next !== cur) {
+					pu.selById[list.id] = next;
+					app.dialogs.fireDialogEvent(pu, { type: "select", id: list.id, index: next });
+					app.dialogs.dialogFollowSel(pu);
+				}
+			} else {
+				const geo = app.dialogs.viewGeo(pu.layout === "dock" ? undefined : pu.layout);
+				const page = Math.max(3, geo.height - 3);
+				const total = renderWidgetLines(pu.widgets, geo.width - 2, { selById: pu.selById, inputById: pu.inputById, ...(pu.focusedId !== undefined ? { focusedId: pu.focusedId } : {}) }).lines.length;
+				pu.scroll = Math.max(0, Math.min(Math.max(0, total - page), pu.scroll + (up ? -lines : lines)));
+			}
 		} else if (pu?.kind === "pick") {
 			// 与键盘同一张过滤清单——过滤激活时按 filtered 钳，否则滚轮可越过过滤尾致 Enter 错位
 			const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));

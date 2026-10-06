@@ -200,7 +200,23 @@ export function createOverlay(app: FullApp) {
 		const maxScroll = Math.max(0, content.length - page);
 		const sc = Math.max(0, Math.min(maxScroll, pu.scroll));
 		const win = content.slice(sc, sc + page);
-		for (const l of win) olines.push(boxRow(l));
+		// 走查七-②：滚动条（view 窗 T10 同款——右缘 1 列轨道/拇指覆盖在内容最右列；不超一屏不显示）
+		const vthumb = thumbGeometry(page, content.length, sc);
+		for (let i = 0; i < win.length; i++) {
+			if (vthumb === undefined) {
+				olines.push(boxRow(win[i] ?? ""));
+				continue;
+			}
+			const onThumb = i >= vthumb.top && i < vthumb.top + vthumb.height;
+			const bar = onThumb
+				? theme.paint("muted", "surface2", "█")
+				: theme.bg("surface", " ");
+			olines.push(
+				theme.bg("surface2",
+					theme.fg(bc, "│") + padToWidth(truncateToWidth(win[i] ?? "", inner - 2), inner - 2)
+					+ theme.bg("surface2", " ") + bar + theme.fg(bc, "│")),
+			);
+		}
 		const upN = sc;
 		const downN = content.length - sc - win.length;
 		const more = [upN > 0 ? `↑ 还有 ${upN}` : "", downN > 0 ? `↓ 还有 ${downN}` : ""].filter(Boolean).join(" · ");

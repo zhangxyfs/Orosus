@@ -263,7 +263,10 @@ export function createKeys(app: FullApp) {
 					const input = pu.widgets.find((wd): wd is Extract<WidgetSpec, { kind: "input" }> => wd.kind === "input" && wd.id === id);
 					if (list !== undefined) {
 						const cur = pu.selById[id] ?? 0;
-						const step = key === "up" ? -1 : key === "down" ? 1 : key === "pageUp" ? -OVERLAY_PAGE : key === "pageDown" ? OVERLAY_PAGE : 0;
+						// 走查七-①：PgUp/PgDn = 整页翻（步长 = 窗页高，与渲染切片/dialogFollowSel 同源）——
+						// 旧 ±OVERLAY_PAGE(10) 步长小于页高(~24)，选中跳完仍留首页内、视口不动 = 「翻页无效」观感
+						const pageStep = Math.max(3, app.dialogs.viewGeo(pu.layout === "dock" ? undefined : pu.layout).height - 3);
+						const step = key === "up" ? -1 : key === "down" ? 1 : key === "pageUp" ? -pageStep : key === "pageDown" ? pageStep : 0;
 						if (step !== 0) {
 							const next = Math.max(0, Math.min(list.items.length - 1, cur + step));
 							if (next !== cur) {

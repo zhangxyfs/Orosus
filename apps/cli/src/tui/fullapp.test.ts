@@ -4527,9 +4527,14 @@ describe("模块总览启动器（m5-peers T6e）", () => {
 	});
 });
 
-// m5-peers 走查六-②：浏览窗（dialog interactive list）长列表真翻页验证
+// m5-peers 走查六-②/七：浏览窗（dialog interactive list）长列表翻页/滚轮/滚动条验证
 describe("dialog 长列表滚动（m5-peers 浏览窗形态）", () => {
-	it("40 条列表：↑↓ 视口跟随选中行（选中项滚出页时窗跟着滚）；PgDn 整页跳", async () => {
+	const wheel = (input: FakeInput, dir: "up" | "down"): void => {
+		const code = 64 + (dir === "up" ? 0 : 1);
+		input.emit("data", `\x1b[<${code};10;5M`);
+	};
+
+	it("40 条列表：↑↓ 视口跟随；PgDn 整页翻（视口真动）；滚轮 = 移选中行；滚动条在场", async () => {
 		const items = Array.from({ length: 40 }, (_, i) => `笔记-${String(i).padStart(2, "0")}`);
 		const { app, input, output } = rig(["# 你好"], 100, 30);
 		app.start();
@@ -4542,18 +4547,19 @@ describe("dialog 长列表滚动（m5-peers 浏览窗形态）", () => {
 		await flush();
 		let plain = stripAnsi(output.buf);
 		expect(plain).toContain("笔记-00");
-		// PgDn 翻一页：sel 跳一页步长到第 10 条（OVERLAY_PAGE），窗随之滚（末帧口径——buf 叠全部历史帧）
-		input.emit("data", "\x1b[6~"); // pageDown
+		expect(plain).toContain("█");   // 走查七-②：超一屏 → 右缘滚动条拇指在场
+		// PgDn = 整页翻（走查七-①）：sel 跳到页高(~24)处、首屏内容滚出视野（末帧口径——buf 叠全部历史帧）
+		input.emit("data", "\x1b[6~");
 		await flush();
-		plain = stripAnsi(output.buf.slice(-3600));
-		expect(plain).toContain("笔记-10");
-		// 连按 ↓ 到第 35 条 → 视口跟随（末帧含 35、首条滚出、顶上有「↑ 还有」）
-		for (let i = 0; i < 25; i++) input.emit("data", "\x1b[B");
+		plain = stripAnsi(output.buf.slice(-3800));
+		expect(plain).not.toContain("笔记-01");   // 首屏已翻走（整页语义——旧 ±10 步长时首屏仍在）
+		expect(plain).toContain("笔记-24");   // sel 落到页高步长处
+		// 滚轮 = ↑↓（走查七-②）：滚两格 sel +2、视口跟随
+		wheel(input, "down");
+		wheel(input, "down");
 		await flush(120);
-		plain = stripAnsi(output.buf.slice(-3600));
-		expect(plain).toContain("笔记-35");
-		expect(plain).not.toContain("笔记-00");
-		expect(plain).toContain("↑ 还有");
+		plain = stripAnsi(output.buf.slice(-3800));
+		expect(plain).toContain("笔记-26");   // 24 → 26（滚轮移选中非滚窗体）
 		app.stop();
 	});
 });
