@@ -13,4 +13,18 @@ describe("tool-peers module", () => {
     const def = mod as unknown as { defaultEnabled?: boolean };
     expect(def.defaultEnabled).toBe(false);
   });
+
+  it("T4 activate registers the three occupancy tools", () => {
+    const tools: { name: string }[] = [];
+    const ctx = {
+      llm: undefined,
+      contribute: {
+        tool: (t: { name: string }) => { tools.push(t); },
+        promptSection: () => {},
+        command: () => {},
+      },
+    };
+    (mod as { activate?: (ctx: unknown) => void }).activate?.(ctx);
+    expect(tools.map(t => t.name)).toEqual(["tool-peers__peers", "tool-peers__claim", "tool-peers__release"]);
+  });
 });
