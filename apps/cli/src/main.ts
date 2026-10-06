@@ -44,7 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, filterNewNotes, importNotes, organizeNotes, readSourceNotes } from "@orosus/tool-peers";
+import { detectSources, filterNewNotes, importNotes, organizeNote, readSourceNotes, rebuildIndex, writeNoteFile } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -400,13 +400,16 @@ const importFromSources = (sourceIds: string[]): { imported: number; skipped: nu
 	const r = importNotes(destDir, notes);
 	return { imported: r.imported, skipped: r.skipped };
 };
-/** m5-peers 导入全形（走查七-① + 走查八-③）：settings 与引导共用。
- *  organize = true 走模型整理（**逐条**内容优化 + 重写 description——只花钱在新条上：先按现有标题滤、
- *  再逐条整理〔onProgress 每条一步〕、最后落盘，索引随写自动重建）；false = 纯机械同步。 */
+/** m5-peers 导入全形（走查八 + 走查九）：settings 与引导共用。
+ *  organize = true 走模型整理（逐条内容优化 + 重写 description；**先报进度再处理**〔走查九-①〕、
+ *  **每整理完一条立即落盘一个 .md**〔走查九-②——中断/强停不丢已整理成果〕、**全部完成 rebuildIndex
+ *  一次**〔索引不闪烁〕；只花钱在新条上——先按现有标题滤）；false = 纯机械（importNotes 同款批量落盘）。
+ *  signal = Alt+C 强停（走查九-③）：剩余条目原样落盘，导入照常完成（部分整理）。 */
 const importWithOrganize = async (
 	sourceIds: string[],
 	organize: boolean,
 	onProgress?: (done: number, total: number, title: string) => void,
+	signal?: AbortSignal,
 ): Promise<{ imported: number; skipped: number; merged: number }> => {
 	const cwd = process.cwd();
 	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
@@ -414,9 +417,17 @@ const importWithOrganize = async (
 	if (!organize) return { ...importFromSources(sourceIds), merged: 0 };
 	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
 	const fresh = filterNewNotes(destDir, all);   // 已存在的照旧跳过——不花整理钱
-	const organized = await organizeNotes(fresh, (req) => h.llm().stream(req), onProgress);
-	const r = importNotes(destDir, organized.notes);
-	return { imported: r.imported, skipped: (all.length - fresh.length) + r.skipped, merged: organized.merged };
+	let imported = 0;
+	let merged = 0;
+	for (const [i, n] of fresh.entries()) {
+		onProgress?.(i + 1, fresh.length, n.title);   // 前置：先推进度再处理
+		const organized = signal?.aborted === true ? undefined : await organizeNote(n, (req) => h.llm().stream(req), signal);
+		writeNoteFile(destDir, n.title, organized?.summary ?? n.summary, organized?.content ?? n.content, new Date(), n.type);   // 整理完一条立即落盘（不建索引）
+		imported++;
+		if (organized !== undefined) merged++;
+	}
+	if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
+	return { imported, skipped: (all.length - fresh.length), merged };
 };
 /** 设置面板族依赖（m5-split-main T8，D2）：panelCache 访问器 + 子面板族的既有依赖对象。 */
 const settingsDeps: SettingsUiDeps = {

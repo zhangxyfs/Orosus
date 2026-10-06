@@ -115,7 +115,7 @@ export function createDialogs(app: FullApp) {
 	 *  开控件窗：几何走 T1（不另算）；排队同 viewText（单槽 FIFO）。
 	 *  句柄闭包查属主与存活——窗已关/模块已卸载后调用 = 无操作不报错；
 	 *  排队期（窗还没开）的 update/close 同款无操作。 */
-	const openDialogHost = (spec: Omit<DialogSpec, "layout"> & { layout?: PopupLayout | "dock"; hostKeys?: HostDialogKeys }, owner?: string): DialogHandle | undefined => {
+	const openDialogHost = (spec: Omit<DialogSpec, "layout"> & { layout?: PopupLayout | "dock"; hostKeys?: HostDialogKeys; disallowEscape?: boolean }, owner?: string): DialogHandle | undefined => {
 		const lists = dialogInteractiveIds(spec.widgets);
 		let installed: (typeof app.pendingUi) & { kind: "dialog" } | undefined;
 		const open = (): void => {
@@ -139,6 +139,7 @@ export function createDialogs(app: FullApp) {
 				inputById: {},
 				...(spec.onEvent !== undefined ? { onEvent: spec.onEvent } : {}),
 				...(spec.hostKeys !== undefined ? { hostKeys: spec.hostKeys } : {}),
+				...(spec.disallowEscape === true ? { disallowEscape: true } : {}),   // 走查九-③：进行态窗（导入/整理）禁 Esc——强停走显式键
 			};
 			installed = e;
 			app.pendingUi = e;

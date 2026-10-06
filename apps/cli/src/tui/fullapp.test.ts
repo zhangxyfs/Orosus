@@ -4563,3 +4563,25 @@ describe("dialog 长列表滚动（m5-peers 浏览窗形态）", () => {
 		app.stop();
 	});
 });
+
+// m5-peers 走查九-③：进行态 dialog 禁 Esc（强停走显式键）
+describe("dialog 禁 Esc（disallowEscape）", () => {
+	it("进行态按 Esc 不关窗、toast 指路 Alt+C", async () => {
+		const { app, input } = rig(["# 你好"], 100, 30);
+		app.start();
+		await flush();
+		app.openDialogHost({
+			title: "记忆 · 导入",
+			layout: "dock",
+			disallowEscape: true,
+			widgets: [{ id: "bar", kind: "progress", value: 3, max: 10 }],
+		});
+		await flush();
+		input.emit("data", "\x1b"); // Esc
+		await flush();
+		const pu = (app as unknown as { pendingUi?: unknown }).pendingUi;
+		expect(pu).toBeDefined();   // 窗未关（disallowEscape 生效）
+		expect(app.stateRef.toast?.text).toContain("进行中不可关闭");   // toast 走状态探针（dock 窗与 toast 同区域渲染互挤）
+		app.stop();
+	});
+});

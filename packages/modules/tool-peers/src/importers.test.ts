@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectSources, importNotes, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
+import { detectSources, importNotes, organizeNote, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
 import { listNotes } from "./memstore.ts";
 
 let root: string;
@@ -152,5 +152,38 @@ describe("organizeNotes（D20 走查八-③ 重定义：逐条内容优化 + 重
     expect(merged).toBe(2);   // 两条摘要都被改
     expect(out[0]!.content).toBe("乱糟糟的原文A");   // 内容没动
     expect(out[0]!.summary).toBe("只重写摘要");
+  });
+});
+
+describe("走查九：单条整理与强停", () => {
+  const note = (t: string): SourceNote => ({ title: t, summary: "旧", content: `原文-${t}`, type: "project" });
+
+  it("organizeNote 单条：成功返回整理后；失败返回 undefined（原文由调用方落盘）", async () => {
+    const ok = await organizeNote(note("A"), async function* () {
+      yield { type: "text/delta", text: `{"description": "新A", "content": "整理A"}` } as never;
+    });
+    expect(ok).toMatchObject({ title: "A", summary: "新A", content: "整理A" });
+    const bad = await organizeNote(note("B"), async function* () {
+      yield { type: "finish", kind: "error" } as never;
+    });
+    expect(bad).toBeUndefined();
+  });
+
+  it("organizeNotes signal 强停：第 2 条开始（前置报点）abort → 剩余原样、第 1 条成果保留、llm 只调一次", async () => {
+    const ac = new AbortController();
+    let llmCalls = 0;
+    const llm = async function* () {
+      llmCalls++;
+      yield { type: "text/delta", text: `{"description": "整理后-${llmCalls}"}` } as never;
+    };
+    const notes = [note("一"), note("二"), note("三")];
+    const { notes: out, merged } = await organizeNotes(notes, llm, (done) => {
+      if (done === 2) ac.abort();   // 前置报点：第 2 条开始处理前强停
+    }, ac.signal);
+    expect(llmCalls).toBe(1);
+    expect(merged).toBe(1);
+    expect(out[0]!.summary).toBe("整理后-1");
+    expect(out[1]).toEqual(note("二"));   // 剩余原样落盘
+    expect(out[2]).toEqual(note("三"));
   });
 });

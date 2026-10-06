@@ -110,6 +110,21 @@ export function writeNote(dir: string, title: string, summary: string, content: 
   return file;
 }
 
+/** 单文件写（走查九-①/② 批量路径件）：与 writeNote 同语义（查重/撞名 -2），但**不重建索引**——
+ *  批量导入/整理逐条落盘用（每条一个 .md 立即可见、中断不丢），全部写完由调用方 rebuildIndex 一次。 */
+export function writeNoteFile(dir: string, title: string, summary: string, content: string, now: Date, type: "project" | "reference" = "project"): string {
+  mkdirSync(dir, { recursive: true });
+  const existing = listNotes(dir).find(n => n.title === oneLine(title));
+  if (existing !== undefined) {
+    atomicWrite(join(dir, existing.file), noteBody(title, summary, content, type));
+    return existing.file;
+  }
+  let file = noteFileName(title, now);
+  for (let n = 2; existsSync(join(dir, file)); n++) file = noteFileName(title, now).replace(/\.md$/, `-${n}.md`);
+  atomicWrite(join(dir, file), noteBody(title, summary, content, type));
+  return file;
+}
+
 export function readNote(dir: string, file: string): string | undefined {
   if (file !== basename(file) || !file.endsWith(".md") || file === "MEMORY.md") return undefined;   // 防穿越
   try { return readFileSync(join(dir, file), "utf8"); } catch { return undefined; }

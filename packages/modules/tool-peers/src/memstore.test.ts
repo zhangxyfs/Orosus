@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildIndex, listNotes, noteFileName, noteBody, readNote, slugify, truncateIndex, writeNote } from "./memstore.ts";
+import { buildIndex, listNotes, noteFileName, noteBody, readNote, slugify, truncateIndex, writeNote, writeNoteFile } from "./memstore.ts";
+import { importNotes, type SourceNote } from "./importers.ts";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "peers-mem-")); mkdirSync(dir, { recursive: true }); });
@@ -43,5 +44,18 @@ describe("index", () => {
     expect(f2).toBe(f1);
     expect(listNotes(dir)).toHaveLength(1);
     expect(readNote(dir, f1)).toContain("body2");
+  });
+});
+
+describe("writeNoteFile（走查九：批量落盘路径件）", () => {
+  it("单文件写不重建索引（MEMORY.md 不动）；importNotes 批量后索引一次含全部", () => {
+    writeNoteFile(dir, "Solo", "s", "body", new Date("2026-10-06T00:00:00Z"));
+    expect(existsSync(join(dir, "MEMORY.md"))).toBe(false);   // 未建索引
+    expect(readNote(dir, "2026-10-06-solo.md")).toContain("body");
+    importNotes(dir, [{ title: "B1", summary: "sb", content: "cb", type: "project" }, { title: "B2", summary: "sb2", content: "cb2", type: "project" }]);
+    const index = readFileSync(join(dir, "MEMORY.md"), "utf8");
+    expect(index).toContain("- [B1](");
+    expect(index).toContain("- [B2](");
+    expect(index).toContain("- [Solo](");   // 末次重建把批量前的散文件也一并入册
   });
 });

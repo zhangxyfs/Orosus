@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { listNotes, slugify, writeNote } from "./memstore.ts";
+import { listNotes, rebuildIndex, slugify, writeNoteFile } from "./memstore.ts";
 
 /** 五源导入件（m5-peers T6d，v3/v5 走查定案）：纯函数——探测/格式转换/标题去重/整理通道。
  *  导入 = 一次性搬运（D18，重复导入靠标题去重）；模型整理 = 依赖注入 llmStream（D20，默认关零 token）。 */
@@ -82,7 +82,8 @@ export function readSourceNotes(dir: string | undefined): SourceNote[] {
 
 export interface ImportResult { imported: number; skipped: number; notes: SourceNote[] }
 
-/** 一次性搬运（D18）：与现有记忆按标题精确去重（已存在跳过并报数）；写走 writeNote（同标题更新语义兜底 + 索引重建）。 */
+/** 一次性搬运（D18）：与现有记忆按标题精确去重（已存在跳过并报数）；**逐条写文件（立即可见、
+ *  中断不丢），全部写完 rebuildIndex 一次**（走查九-①——旧形态每条 writeNote 各重建一次索引）。 */
 export function importNotes(destDir: string, sources: SourceNote[]): ImportResult {
   const existing = new Set(listNotes(destDir).map(n => n.title));
   let imported = 0, skipped = 0;
@@ -90,15 +91,16 @@ export function importNotes(destDir: string, sources: SourceNote[]): ImportResul
   for (const n of sources) {
     if (existing.has(n.title)) { skipped++; continue; }
     existing.add(n.title);
-    writeNote(destDir, n.title, n.summary, n.content, new Date(), n.type);
+    writeNoteFile(destDir, n.title, n.summary, n.content, new Date(), n.type);
     imported++;
     landed.push(n);
   }
+  if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
   return { imported, skipped, notes: landed };
 }
 
 /** 整理通道窄缝（btw-cmd llmStream 同族依赖注入——引导传宿主 h.llm().stream，模块侧将来传 ctx.llm.stream）。 */
-export interface LlmStreamReq { system?: string; messages: { role: "user"; content: { kind: "text"; text: string }[] }[]; maxTokens?: number }
+export interface LlmStreamReq { system?: string; messages: { role: "user"; content: { kind: "text"; text: string }[] }[]; maxTokens?: number; signal?: AbortSignal }
 export type LlmStream = (req: LlmStreamReq) => AsyncIterable<{ type: string; text?: string; kind?: string }>;
 
 const ORGANIZE_SYSTEM = `You clean up one imported memory note. Rewrite the body ONLY where it is messy (verbatim-fine notes stay verbatim): never lose facts, tighten wording, fix structure (headings/lists/code fences). Then write a one-line description (<= 60 chars, same language as the note) that best summarizes the RESULTING content.
@@ -106,49 +108,67 @@ Reply with ONLY a JSON object: {"description": "...", "content": "..."}. No pros
 
 export type OrganizeProgress = (done: number, total: number, title: string) => void;
 
-/** 模型整理（D20 走查八-③ 重定义）：**逐条**内容优化（乱才动、保事实）+ 按整理后内容**重写 description**；
- *  索引随落盘自动重建（writeNote 内建）。llm 缺省 / 单条失败 / 超时 / 解析坏 = 该条原样降级（不炸不丢），
- *  整理继续下一条。merged = 被修改（内容或摘要）的条数；onProgress 每条一步（进度条数据源）。 */
-export async function organizeNotes(notes: SourceNote[], llm?: LlmStream, onProgress?: OrganizeProgress): Promise<{ notes: SourceNote[]; merged: number }> {
+/** 单条整理（走查九-②：宿主逐条循环件——整理完一条立即落盘一个 .md）：
+ *  返回整理后条目（内容/摘要被改）；失败/超时/解析坏 = undefined（调用方落原文）。
+ *  signal.aborted 时直接 undefined（强停路径——Alt+C）。 */
+export async function organizeNote(n: SourceNote, llm: LlmStream, signal?: AbortSignal): Promise<SourceNote | undefined> {
+  let text = "";
+  try {
+    const ac = new AbortController();
+    const onAbort = (): void => ac.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => ac.abort(), 60_000);   // 单条 60s
+    try {
+      for await (const c of llm({
+        system: ORGANIZE_SYSTEM,
+        messages: [{ role: "user", content: [{ kind: "text", text: `# ${n.title}\n\n${n.content}` }] }],
+        maxTokens: 4096,
+        signal: ac.signal,
+      })) {
+        if (ac.signal.aborted) break;
+        if (c.type === "text/delta" && typeof c.text === "string") text += c.text;
+        else if (c.type === "finish" && c.kind === "error") { text = ""; break; }
+      }
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  } catch { text = ""; }
+  if (signal !== undefined && signal.aborted) return undefined;
+  const fence = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);   // 剥 markdown 栅栏
+  let parsed: { description?: unknown; content?: unknown } | undefined;
+  try { parsed = JSON.parse(fence) as typeof parsed; } catch { parsed = undefined; }
+  const newDesc = typeof parsed?.description === "string" && parsed.description.trim() !== "" ? parsed.description.trim() : undefined;
+  const newContent = typeof parsed?.content === "string" && parsed.content.trim() !== "" ? parsed.content.trim() : undefined;
+  if (newDesc === undefined && newContent === undefined) return undefined;
+  return {
+    title: n.title,
+    summary: newDesc ?? n.summary,
+    content: newContent ?? n.content,   // 内容乱才动——模型没给 content 就保原文
+    type: n.type,
+  };
+}
+
+/** 模型整理（D20 走查八-③ + 走查九-①）：**逐条**内容优化 + 重写 description；
+ *  进度**前置**（每条开始处理前先报——进度条先动、显示"正在整理第 N 条"）；
+ *  llm 缺省 / 单条失败 = 该条原样降级；signal.aborted = 剩余条目原样返回（强停——已整理成果保留）。
+ *  merged = 被修改条数。批量落盘路径（每条一文件 + 索引末次重建）在宿主 importWithOrganize。 */
+export async function organizeNotes(notes: SourceNote[], llm?: LlmStream, onProgress?: OrganizeProgress, signal?: AbortSignal): Promise<{ notes: SourceNote[]; merged: number }> {
   if (llm === undefined || notes.length === 0) {
     for (const [i, n] of notes.entries()) onProgress?.(i + 1, notes.length, n.title);
     return { notes, merged: 0 };
   }
   const out: SourceNote[] = [];
   let merged = 0;
+  let aborted = false;
+  const isAborted = (): boolean => signal?.aborted === true;   // 闭包现读（TS 属性窄化不跨 await 重置）
   for (const [i, n] of notes.entries()) {
-    let text = "";
-    try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 60_000);   // 单条 60s——整理档整体可进度
-      try {
-        for await (const c of llm({
-          system: ORGANIZE_SYSTEM,
-          messages: [{ role: "user", content: [{ kind: "text", text: `# ${n.title}\n\n${n.content}` }] }],
-          maxTokens: 4096,
-        })) {
-          if (c.type === "text/delta" && typeof c.text === "string") text += c.text;
-          else if (c.type === "finish" && c.kind === "error") { text = ""; break; }
-        }
-      } finally { clearTimeout(timer); }
-    } catch { text = ""; }
-    const fence = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);   // 剥 markdown 栅栏
-    let parsed: { description?: unknown; content?: unknown } | undefined;
-    try { parsed = JSON.parse(fence) as typeof parsed; } catch { parsed = undefined; }
-    const newDesc = typeof parsed?.description === "string" && parsed.description.trim() !== "" ? parsed.description.trim() : undefined;
-    const newContent = typeof parsed?.content === "string" && parsed.content.trim() !== "" ? parsed.content.trim() : undefined;
-    if (newDesc === undefined && newContent === undefined) {
-      out.push(n);   // 整理失败原样降级
-    } else {
-      merged++;
-      out.push({
-        title: n.title,
-        summary: newDesc ?? n.summary,
-        content: newContent ?? n.content,   // 内容乱才动——模型没给 content 就保原文
-        type: n.type,
-      });
-    }
-    onProgress?.(i + 1, notes.length, n.title);
+    onProgress?.(i + 1, notes.length, n.title);   // 前置：先推进度再处理数据（走查九-①）
+    if (aborted || isAborted()) { out.push(n); continue; }   // 强停：剩余原样
+    const organized = await organizeNote(n, llm, signal);
+    if (organized !== undefined) { merged++; out.push(organized); }
+    else out.push(n);
+    if (isAborted()) aborted = true;
   }
   return { notes: out, merged };
 }

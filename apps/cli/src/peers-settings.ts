@@ -58,8 +58,9 @@ export async function runMemorySetting(
 export interface MemoryImportDeps {
   /** 五源探测（有货才列：count > 0）。 */
   detect(): { id: string; label: string; count: number }[];
-  /** 执行导入（organize = true 逐条模型整理；onProgress 每条一步——进度弹窗数据源）。 */
-  run(sourceIds: string[], organize: boolean, onProgress?: (done: number, total: number, title: string) => void): Promise<{ imported: number; skipped: number; merged: number }>;
+  /** 执行导入（organize = true 逐条模型整理；onProgress **前置**每条一步；signal = Alt+C 强停——
+   *  剩余条目原样落盘，导入照常完成〔部分整理〕）。 */
+  run(sourceIds: string[], organize: boolean, onProgress?: (done: number, total: number, title: string) => void, signal?: AbortSignal): Promise<{ imported: number; skipped: number; merged: number }>;
 }
 
 /** 「记忆导入」选择段（走查八-④：整理是**开关**项——开启后不论全部导入还是单源导入都走整理）：

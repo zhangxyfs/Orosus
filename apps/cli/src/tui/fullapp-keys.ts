@@ -2,7 +2,7 @@
  *  （L381-876 原样整体摘取，分派顺序/case 分组/早退路径一个不动——D4 结构红线）。
  *  体内 this.→app. 机械改写 119 处；子系统调用经装配对象前缀。非公开 API。 */
 
-import { CONN_SLOTS, inlineSlashWord, MODULE_SLOTS, normCmd, OVERLAY_PAGE, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
+import { CONN_SLOTS, inlineSlashWord, normCmd, OVERLAY_PAGE, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
@@ -251,9 +251,14 @@ export function createKeys(app: FullApp) {
 					}
 				}
 				if (key === "escape") {
-					escCloseWin();
-					app.pendingUi = undefined;
-					app.dialogs.promoteUi();
+					if (pu.disallowEscape === true) {
+						// 走查九-③：进行态窗（记忆整理等）禁 Esc——吞掉并指路强停键（不误关丢进度感）
+						app.showToast("进行中不可关闭——Alt + C 停止");
+					} else {
+						escCloseWin();
+						app.pendingUi = undefined;
+						app.dialogs.promoteUi();
+					}
 				} else if (key === "tab" && ids.length > 1) {
 					const i = Math.max(0, ids.indexOf(pu.focusedId ?? ids[0]!));
 					pu.focusedId = ids[(i + 1) % ids.length]!;
@@ -563,7 +568,8 @@ export function createKeys(app: FullApp) {
 					s.connPage = Math.max(0, Math.min(connPages - 1, s.connPage + (key === "pageUp" ? -1 : 1)));
 				} else {
 					const mods = app.io.panelData().modules;
-					s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "pageUp" ? -MODULE_SLOTS : MODULE_SLOTS)));
+					const slots = app.panels.moduleSlots();
+					s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "pageUp" ? -slots : slots)));
 				}
 			} else if (s.focusIdx === 2) {
 				const tasks = app.io.panelData().tasks;

@@ -42,16 +42,19 @@ export const SETTINGS_ITEMS = [
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
 
-/** 走查八-②：导入执行段——进度弹窗（dock 贴输入框上缘，不遮消息流）：进度条 + 当前条目活值，
- *  每步 requestImmediateRender；Esc 关窗不中断（后台跑完 toast 收尾——导入不可半途弃）。 */
+/** 走查八-② + 走查九：导入执行段——进度弹窗（dock 贴输入框上缘）：进度条 + 当前条目活值，
+ *  **进度前置**（每条开始处理时先报——条先动再跑数据）；**禁 Esc**（进行态不可关——防误关丢进度感），
+ *  **Alt+C 强停**（停止后续整理：剩余条目原样落盘、已整理成果保留、导入照常完成）；完成态 Enter 关窗。 */
 const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: string[], organize: boolean): Promise<void> => {
 	let done = 0;
 	let label = "";
 	let finished: { imported: number; skipped: number; merged: number } | undefined;
+	let stopped = false;
+	const ac = new AbortController();
 	// 进度条 max 是静态数（控件契约）——开窗前先按源计数定总步数；实际步数以 onProgress 为准（max 只画条）
 	const total = deps.detect().filter(s => ids.includes(s.id)).reduce((n, s) => n + s.count, 0);
 	const statusText = (): string => {
-		if (finished !== undefined) return `${memoryImportResultText(finished)} —— Enter 关闭`;
+		if (finished !== undefined) return `${stopped ? "已停止整理——已处理部分照常入库。 " : ""}${memoryImportResultText(finished)} —— Enter 关闭`;
 		if (done === 0) return "正在读取源记忆…";
 		return organize
 			? `模型整理中：${label}（${done} / ${total}）`
@@ -60,25 +63,35 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 	const handle = app.openDialogHost({
 		title: "记忆 · 导入",
 		layout: "dock",
+		disallowEscape: true,   // 走查九-③：进行态禁 Esc（完成态 Enter 关）
 		widgets: [
 			{ id: "status", kind: "text", text: statusText },
 			{ id: "bar", kind: "progress", value: () => done, max: Math.max(1, total) },
 		],
+		hostKeys: {
+			"alt+c": {
+				label: "停止",
+				run: () => {
+					if (finished === undefined && !ac.signal.aborted) {
+						stopped = true;
+						ac.abort();   // 剩余条目原样落盘（organizeNote/循环感知）——导入不弃
+					}
+					return undefined;
+				},
+			},
+		},
 		onEvent: (e) => {
-			if (e.type === "activate") {
-				// 完成态 Enter = 关窗（导入中 Enter 无效——窗在即导入在跑）
-				if (finished !== undefined) handle?.close();
-			}
+			if (e.type === "activate" && finished !== undefined) handle?.close();   // 完成态 Enter = 关窗
 			return undefined;
 		},
 	});
 	const r = await deps.run(ids, organize, (d, _t, title) => {
-		done = d; label = title;   // total 开窗前已定（max 静态数）；步数以实际进度为准
+		done = d; label = title;   // 前置进度：条目开始时即推（进度条先动）
 		app.scheduler.requestImmediateRender();
-	});
+	}, ac.signal);
 	finished = r;
 	app.scheduler.requestImmediateRender();
-	app.showToast(memoryImportResultText(r), 6000);   // 窗可能已被 Esc 关——toast 双保险
+	app.showToast(`${stopped ? "已停止整理——" : ""}${memoryImportResultText(r)}`, 6000);
 };
 
 /** D14（m5-peers T6b）：settings 面第一个动态条目——tool-peers 模块 active（启用）时尾部追加「记忆」；
