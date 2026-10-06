@@ -71,6 +71,12 @@ importers:
 
   apps/cli:
     dependencies:
+      '@jsquash/webp':
+        specifier: ^1.5.0
+        version: 1.5.0
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.12.0
+        version: 1.30.0(zod@4.6.5)
       '@orosus/approval':
         specifier: workspace:*
         version: link:../../packages/modules/approval
@@ -128,19 +134,34 @@ importers:
       cli-highlight:
         specifier: ^2.1.11
         version: 2.1.11
+      jimp:
+        specifier: ^1.6.1
+        version: 1.6.1
+      jiti:
+        specifier: ^2.7.0
+        version: 2.7.0
       marked:
         specifier: ^16.4.2
         version: 16.4.2
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
+      turndown:
+        specifier: ^7.2.0
+        version: 7.2.4
+      turndown-plugin-gfm:
+        specifier: ^1.0.2
+        version: 1.0.2
+      wasm-feature-detect:
+        specifier: ^1.9.0
+        version: 1.9.0
+      zod:
+        specifier: ^4.0.0
+        version: 4.6.5
     devDependencies:
       '@orosus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      zod:
-        specifier: ^4.0.0
-        version: 4.6.5
 
   packages/contracts:
     dependencies:

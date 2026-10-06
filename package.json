@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --filter \"./packages/**\" --filter \"./apps/**\" run typecheck",
     "lint": "oxlint .",
     "check:boundaries": "node --experimental-strip-types scripts/check-boundaries.mts",
+    "check:publish-deps": "node --experimental-strip-types scripts/check-publish-deps.mts",
     "build": "pnpm -r build",
     "docs:check": "pnpm gen-docs && pnpm gen-extension-catalog && git diff --exit-code docs/api docs/extension-catalog.md",
     "gen-extension-catalog": "node --experimental-strip-types scripts/gen-extension-catalog.mts",

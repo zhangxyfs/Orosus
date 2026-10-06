@@ -36,5 +36,7 @@ jobs:
         run: pnpm lint
       - name: check-boundaries
         run: pnpm check:boundaries
+      - name: check-publish-deps # release-npm T5：bundled 包外部依赖并集 vs apps/cli dependencies 漂移门禁
+        run: pnpm check:publish-deps
       - name: test
         run: pnpm test
