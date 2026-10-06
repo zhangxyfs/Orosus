@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { Harness } from "@orosus/core";
-import { readPeersConfig, runMemoryToggleSetting, writePeersConfigKey } from "./peers-settings.ts";
+import { readPeersConfig, runMemorySetting, writePeersConfigKey } from "./peers-settings.ts";
 import { settingsItems } from "./settings-ui.ts";
 
 let dir = "";
@@ -27,22 +27,27 @@ describe("peers 设置面（m5-peers T6b）", () => {
 
   it("② 切换流：回车即切换写键，返回人话结果（工作区记忆 关→开）", async () => {
     const f = tmpCfg();
-    const res = await runMemoryToggleSetting(async (_t, items) => items[0]!, f);
-    expect(res?.key).toBe("workspaceMemory");
-    expect(res?.value).toBe(true);
-    expect(res?.message).toContain("工作区记忆");
+    const res = await runMemorySetting(async (_t, items) => items[0]!, f);
+    expect(res).toMatchObject({ kind: "toggle", key: "workspaceMemory", value: true });
+    expect(res?.kind === "toggle" && res.message).toContain("工作区记忆");
     expect(readPeersConfig(f).workspaceMemory).toBe(true);
   });
 
   it("③ 切换流：会话感知 开→关（先写 true）；Esc（空串）= undefined", async () => {
     const f = tmpCfg();
     writePeersConfigKey("sessionPeers", true, f);
-    const res = await runMemoryToggleSetting(async (_t, items) => items[1]!, f);
-    expect(res?.key).toBe("sessionPeers");
-    expect(res?.value).toBe(false);
+    const res = await runMemorySetting(async (_t, items) => items[1]!, f);
+    expect(res).toMatchObject({ kind: "toggle", key: "sessionPeers", value: false });
     expect(readPeersConfig(f).sessionPeers).toBe(false);
-    const esc = await runMemoryToggleSetting(async () => "", f);
+    const esc = await runMemorySetting(async () => "", f);
     expect(esc).toBeUndefined();
+  });
+
+  it("③b 第三项「浏览记忆」→ { kind: browse }（不写盘）", async () => {
+    const f = tmpCfg();
+    const res = await runMemorySetting(async (_t, items) => items[2]!, f);
+    expect(res).toEqual({ kind: "browse" });
+    expect(readPeersConfig(f)).toEqual({ workspaceMemory: false, sessionPeers: false });
   });
 
   it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十项序位不乱", () => {

@@ -24,23 +24,31 @@ export function writePeersConfigKey(key: "workspaceMemory" | "sessionPeers", val
   writeSectionKey(target, "tool-peers", key, value);
 }
 
-/** 「记忆」子菜单切换流：回车即切换并写键；返回 { key, value, message }（写盘已发生，reload 由调用方收尾）。
- *  undefined = Esc/未匹配（回上一级）。文案带 token 消耗提示（v2 用户走查定案）。 */
-export async function runMemoryToggleSetting(
+/** 「记忆」子菜单三项流（T6b 双开关 + T6c 浏览记忆）：回车即切换并写键 / 打开浏览窗；
+ *  返回 { kind: "toggle", ... }（写盘已发生，reload 由调用方收尾）或 { kind: "browse" }（调
+ *  /tool-peers__memory 命令开窗——由调用方走 h.prompt）。undefined = Esc/未匹配（回上一级）。
+ *  文案带 token 消耗提示（v2 用户走查定案）；浏览项不耗 token、不设开关（D17）。 */
+export type MemorySettingResult =
+  | { kind: "toggle"; key: "workspaceMemory" | "sessionPeers"; value: boolean; message: string }
+  | { kind: "browse" };
+
+export async function runMemorySetting(
   choose: (title: string, items: string[]) => Promise<string>,
   cfgFile: string = join(orosusHome(), "config.toml"),
-): Promise<{ key: "workspaceMemory" | "sessionPeers"; value: boolean; message: string } | undefined> {
+): Promise<MemorySettingResult | undefined> {
   const cfg = readPeersConfig(cfgFile);
   const items = [
     `工作区记忆 —— ${cfg.workspaceMemory ? "开 ✓" : "关"}（共享笔记 + 索引注入：本会话写、其他会话读；开启后系统提示带记忆索引，有 token 消耗）`,
     `会话感知 —— ${cfg.sessionPeers ? "开 ✓" : "关"}（查同伴 / 文件占用：peers 查询对每个活会话按需做一句话总结，有 token 消耗）`,
+    "浏览记忆（打开记忆浏览窗——不耗 token、不设开关）",
   ];
   const picked = await choose("记忆", items);
   const idx = items.indexOf(picked);
+  if (idx === 2) return { kind: "browse" };
   if (idx !== 0 && idx !== 1) return undefined;
   const key: "workspaceMemory" | "sessionPeers" = idx === 0 ? "workspaceMemory" : "sessionPeers";
   const value = !(idx === 0 ? cfg.workspaceMemory : cfg.sessionPeers);
   writePeersConfigKey(key, value, cfgFile);
   const label = idx === 0 ? "工作区记忆" : "会话感知";
-  return { key, value, message: `${label}：${value ? "开" : "关"}（已写 [tool-peers] ${key}）` };
+  return { kind: "toggle", key, value, message: `${label}：${value ? "开" : "关"}（已写 [tool-peers] ${key}）` };
 }

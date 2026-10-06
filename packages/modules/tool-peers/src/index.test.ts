@@ -33,11 +33,13 @@ describe("tool-peers module", () => {
 interface Harness {
   tools: { name: string }[];
   sections: { order: number; text: string }[];
+  commands: string[];
   listeners: Map<string, (p: unknown) => unknown>;
 }
 const activateWith = (config: unknown, session?: { id?: string }): Harness => {
   const tools: { name: string }[] = [];
   const sections: { order: number; text: string }[] = [];
+  const commands: string[] = [];
   const listeners = new Map<string, (p: unknown) => unknown>();
   const ctx = {
     config,
@@ -47,11 +49,11 @@ const activateWith = (config: unknown, session?: { id?: string }): Harness => {
     contribute: {
       tool: (t: { name: string }) => { tools.push(t); },
       promptSection: (s: { order: number; text: string }) => { sections.push(s); },
-      command: () => {},
+      command: (name: string) => { commands.push(name); return () => {}; },
     },
   };
   (mod as { activate?: (ctx: unknown) => void }).activate?.(ctx);
-  return { tools, sections, listeners };
+  return { tools, sections, commands, listeners };
 };
 
 const FULL_ON = { workspaceMemory: true, sessionPeers: true, injectIndex: true, windowMinutes: 10, leaseMinutes: 30 };
@@ -76,10 +78,11 @@ describe("T6 门控矩阵与索引段", () => {
   const fireStart = (h: Harness): void => { (h.listeners.get("session/start") as (p: unknown) => void)(bootPayload); };
   const memoryDir = (): string => join(memBase, "D--proj-x", "memory");
 
-  it("双关 = activate 零贡献（零工具零段零 token）", () => {
+  it("双关 = activate 零贡献（零工具零段零 token；浏览命令不受门控——D17）", () => {
     const h = activateWith(ALL_OFF);
     expect(h.tools).toHaveLength(0);
     expect(h.sections).toHaveLength(0);
+    expect(h.commands).toEqual(["tool-peers__memory"]);   // 命令带模块名前缀（激活期强校验 activate.ts:463）
   });
 
   it("sessionPeers 单开 = 只 peers 三件、无段", () => {

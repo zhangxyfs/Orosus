@@ -4,7 +4,7 @@ import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
-import { runMemoryToggleSetting } from "./peers-settings.ts";
+import { runMemorySetting } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
@@ -119,15 +119,19 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 			}
 		}
 		else if (picked === 10) {
-			// m5-peers T6b：「记忆」动态项（settingsItems 尾部追加，tool-peers active 才在场）
+			// m5-peers T6b/T6c：「记忆」动态项（settingsItems 尾部追加，tool-peers active 才在场）
 			// 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
 			for (;;) {
 				try {
-					const res = await runMemoryToggleSetting(async (t, list) => {
+					const res = await runMemorySetting(async (t, list) => {
 						const i = await app.pickOverlay(t, list);
 						return i === undefined ? "" : list[i] ?? "";
 					});
 					if (res === undefined) break; // Esc / 未匹配 → 回设置根列表
+					if (res.kind === "browse") {
+						await deps.getH().prompt("/tool-peers__memory");   // 浏览窗（模块命令，runSearchSettings 同款 h.prompt 先例）
+						continue;
+					}
 					// 写盘即自动重载（空闲）；busy 不 reload 只提示——reloadModulesIdle 共用件（D15）
 					const busyNote = deps.reloadModulesIdle(app, "有任务在执行，稍后 /reload 生效");
 					app.showToast(busyNote === "" ? `${res.message}，已重载生效` : `${res.message}——${busyNote}`);
@@ -203,13 +207,18 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 			}
 		}
 		else if (idx === 10) {
-			// m5-peers T6b 行模式对等件：「记忆」双开关——子菜单 Esc 回设置根菜单
+			// m5-peers T6b/T6c 行模式对等件：「记忆」双开关 + 浏览记忆——子菜单 Esc 回设置根菜单
 			for (;;) {
 				try {
-					const res = await runMemoryToggleSetting(async (t, list) => {
+					const res = await runMemorySetting(async (t, list) => {
 						try { return await deps.commandUi.choose(t, list); } catch { return ""; }   // 子菜单 Esc → 空串 = 未匹配
 					});
 					if (res === undefined) break;
+					if (res.kind === "browse") {
+						const outText = await deps.getH().prompt("/tool-peers__memory");
+						if (outText !== undefined && outText !== "") out(outText);   // 行模式降级串直出
+						continue;
+					}
 					// 行模式 /settings busy 期排队到 turn 结束，走到这里必然空闲（共用件口径）
 					const busyNote = deps.reloadModulesIdle(undefined, "");
 					out(busyNote === "" ? `${res.message}，已重载生效` : `${res.message}——${busyNote}`);
