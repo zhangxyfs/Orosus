@@ -80,7 +80,7 @@ export const jaJP: Record<string, string> = {
 	"head.modules": "モジュール",
 	"panel.title.status": "実行ステータス",
 	"hint.statusPage": "←→ ページ送り · PgUp/PgDn",
-	"hint.modSelect": "↑↓ モジュール選択 · Enter マウント/アンマウント",
+	"hint.modSelect": "↑↓ 選択 · Enter 切替",
 	"net.notReady": "（ネットワーク面のデータが未組立——供給低下、診断ログをご確認ください）",
 	"kv.proxy": "プロキシ",
 	"kv.modelService": "サービス",

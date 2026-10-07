@@ -36,7 +36,7 @@ export const enUSPanels: Record<string, string> = {
 	"head.modules": "Modules",
 	"panel.title.status": "Status",
 	"hint.statusPage": "←→ Switch page · PgUp/PgDn",
-	"hint.modSelect": "↑↓ Select module · Enter mount/unmount",
+	"hint.modSelect": "↑↓ Select · Enter toggle",
 	"net.notReady": "(Network data not assembled — degraded feed; see diagnostic log)",
 	"head.conns": "Network / MCP connections",
 	"net.empty": "(No MCP server — add via /settings, or enable mcp on the Modules page)",

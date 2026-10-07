@@ -80,7 +80,7 @@ export const ruRU: Record<string, string> = {
 	"head.modules": "Модули",
 	"panel.title.status": "Статус",
 	"hint.statusPage": "←→ Стр. · PgUp/PgDn",
-	"hint.modSelect": "↑↓ Выбор модуля · Enter вкл./выкл.",
+	"hint.modSelect": "↑↓ Выбор · Enter перекл.",
 	"net.notReady": "(Данные сети не собраны — ухудшенная подача; см. журнал диагностики)",
 	"kv.proxy": "Прокси",
 	"kv.modelService": "Сервис",

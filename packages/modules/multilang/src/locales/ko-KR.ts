@@ -80,7 +80,7 @@ export const koKR: Record<string, string> = {
 	"head.modules": "모듈",
 	"panel.title.status": "실행 상태",
 	"hint.statusPage": "←→ 페이지 이동 · PgUp/PgDn",
-	"hint.modSelect": "↑↓ 모듈 선택 · Enter 마운트/해제",
+	"hint.modSelect": "↑↓ 선택 · Enter 전환",
 	"net.notReady": "(네트워크 데이터 미조립——공급 저하, 진단 로그를 확인해 주세요)",
 	"kv.proxy": "프록시",
 	"kv.modelService": "서비스",

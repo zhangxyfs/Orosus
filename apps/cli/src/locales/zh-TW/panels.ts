@@ -36,7 +36,7 @@ export const zhTWPanels: Record<string, string> = {
 	"head.modules": "模組掛載",
 	"panel.title.status": "執行狀態",
 	"hint.statusPage": "←→ 翻頁 · PgUp/PgDn 模組翻頁",
-	"hint.modSelect": "↑↓ 模組選擇 · Enter 掛載/卸載",
+	"hint.modSelect": "↑↓ 模組選擇 · Enter 掛/卸載",
 	"net.notReady": "（網路面資料未裝配——供數退化，詳見診斷記錄）",
 	"head.conns": "網路 / MCP 連線",
 	"net.empty": "（無 MCP server——/settings 新增，或模組掛載頁啟用 mcp）",
