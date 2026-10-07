@@ -142,12 +142,17 @@ const exitCli = async (code: number): Promise<never> => {
   try {
     if (isProviderSubcommand(argv)) {
       // CM-06①：处理器抛错（坏 TOML parse/IO 拒绝）此前穿透模块顶层 = Node 裸堆栈——整块兜底转人话 + 退出码 1
-      await exitCli(await runProviderSubcommand(argv, {
+      const code = await runProviderSubcommand(argv, {
         configPath: join(homeDir, "config.toml"),
         secretsPath: join(homeDir, "secrets.env"),
         env: process.env,
         out: (l) => console.log(l),
-      }));
+      });
+      // 防御性驻留（2026-10-07 实测定档）：fetch 后紧接 process.exit 在 Node v24 win32 撕 undici 池句柄
+      // （libuv 断言 exit 127）——upgrade 快路径实证三连炸；provider 冷缓存基线 exit 0（取数后的写盘/
+      // 输出工作量天然错开竞态窗）但无防御，统一收口同款 150ms
+      await new Promise((r) => setTimeout(r, 150));
+      await exitCli(code);
     }
     // `orosus sessions prune`（M4-1 T2/D47）：显式清理——缺省 dry-run、--apply 才删、不做启动自动 GC
     if (isSessionsSubcommand(argv)) {
