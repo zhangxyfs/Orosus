@@ -7,3 +7,4 @@ web/md/
 /release/
 
 /*.tgz
+release-gate-*.log
