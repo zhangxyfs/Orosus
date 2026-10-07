@@ -163,7 +163,7 @@ function report(): void {
 	if (dupA.length) console.log(`A 表键内重复：${[...new Set(dupA)].join(", ")}`);
 	const zoneA = new Map<string, number>();
 	for (const r of a) zoneA.set(r.zone, (zoneA.get(r.zone) ?? 0) + 1);
-	console.log(`分区计数（勘正⑩-⑰后 263/496/259/174/237）：${[...zoneA.entries()].sort().map(([z, n]) => `${z}=${n}`).join(" ")}`);
+	console.log(`分区计数（勘正⑩-⑰后 263/496/296/174/237）：${[...zoneA.entries()].sort().map(([z, n]) => `${z}=${n}`).join(" ")}`);
 
 	// zh 列两表一致（B 表基准列 = A 表原文列）
 	const zhB = new Map(b.map((r) => [r.key, r.zh]));

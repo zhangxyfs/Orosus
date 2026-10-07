@@ -169,7 +169,7 @@ const exitCli = async (code: number): Promise<never> => {
   } catch (err) {
     // CM-06①：兜底面按「harness 创建」划界的旧口径漏掉子命令——坏 config 遇 `provider list` 即裸堆栈；
     // 政策与 formatStartupError 同族（人话 + 非零退出，不带栈）
-    console.error(`[错误] 子命令失败：${err instanceof Error ? err.message : String(err)}`);
+    console.error(t("main.subCmdFail", { err: err instanceof Error ? err.message : String(err) })); // i18n:diag stderr 诊断面——键化走查定
     await exitCli(1);
   }
 }
@@ -196,7 +196,7 @@ initActiveDir(args.resume);
 // 的跳过。MCP 模块 activate 即写 mcp/manifest 令每次启动物化会话文件——不发消息退出即壳，这是壳的主源
 {
   const swept = sweepEmptySessions(sessionsDir, new Set(args.resume !== undefined ? [args.resume.sessionId] : []));
-  if (swept.removed.length > 0) console.error(`已清理 ${swept.removed.length} 个空会话残留（上次退出的 0 消息壳）`);
+  if (swept.removed.length > 0) console.error(t("main.sweep.done", { n: swept.removed.length })); // i18n:diag stderr
 }
 
 // 行模式 IO 族（stdoutEcho/rl/行队列/询问四件/notify/settleCommandError）迁 repl-io.ts（m5-split-main T11）——
@@ -237,7 +237,7 @@ const pickFace =
             if (n === undefined) throw new Error(ESC_CANCELLED);
             return n;
           }
-          lv.write(`== ${title} ==
+          lv.write(`${t("main.pick.header", { title: title })}
 `);
           const n = await pick(items, terminalMenuIo());
           if (n === undefined) throw new Error(ESC_CANCELLED);
@@ -257,7 +257,7 @@ const commandUi = createCliUi({
   // m5 T4：贴图 = 注册表登记 + chip token 进输入框光标位（Alt+V 同款链路）；路径校验不过走 toast
   attachImage: (app, path) => {
     if (!existsSync(path)) {
-      app.showToast(`贴图失败：文件不存在（${path}）`);
+      app.showToast(`${t("main.paste.missing", { path: path })}`);
       return;
     }
     app.insertAtCursor(attachPendingImage(path));
@@ -310,29 +310,29 @@ const settingsService: SettingsService = {
   setModel: async (qualified) => {
     const before = h.status().model;
     await h.setModel(qualified);
-    notify(`模型已切换：${before} → ${qualified}`); // reportModelSwitch 同族——toast diff
+    notify(t("main.toast.modelSwitched2", { before, after: qualified })); // reportModelSwitch 同族——toast diff
   },
   setEffort: async (level) => {
     h.setEffort(level);
-    notify(level === "auto" ? "思考档位：跟随目录默认" : `思考档位：${level}`);
+    notify(level === "auto" ? t("main.toast.effortAuto") : t("main.toast.effortSet", { level }));
   },
   setTheme: async (name) => {
     theme.setTheme(name); // 未知名抛错 = reject（模块自行 catch；契约口径——本批仓内仅连山一套，机制就绪）
     activeApp?.repaint(); // 新渲染面换新色（历史行旧色不重刷——设计空白 11 预期行为）
-    notify(`主题已切换：${name}`);
+    notify(`${t("main.toast.themeSwitched", { name: name })}`);
   },
   setLanguage: async (tag) => {
     // m5-i18n T3：与 /locale 同源（h 写盘 + store 重建）；重绘 = 新面换新语言（流区旧行保持——D5 主题同款）
     await h.setLanguage(tag);
     await localeStore.setLanguage(tag);
     activeApp?.repaint();
-    notify("语言已切换（已写入 config）");
+    notify(t("main.toast.localeDone"));
   },
   applyModulePreset: async (preset) => {
     const { failed } = await applyModulePresetImpl(modulesDeps, preset);
     notify(failed.length > 0
-      ? `预设切换部分失败：${failed.join("、")}（已写盘部分可 /reload 对齐）`
-      : preset === "minimal" ? "已切到极简模式（核心 + 审批 + 当前模型）" : "已切回完整模式");
+      ? t("main.toast.presetPartial", { failed: failed.join("、") })
+      : preset === "minimal" ? t("main.toast.presetMinimal") : t("main.toast.presetFull"));
     return { failed };
   },
   setLabel: (label) => h.setLabel(label),
@@ -480,7 +480,7 @@ await localeStore.init(h.configuredLanguage() ?? detectSystemLocale());
 h.setModuleT(localeStore.t);
 bindAppLocale(localeStore.t); // tui 渲染面同源（试点 T4 起）
 if (localeStore.packMissing() && args.dumpModules === undefined && args.print === undefined) {
-  notify("语言包未挂载——已显示英文（配置保留，重新挂载后自动恢复）");
+  notify(t("main.locale.packMissing"));
 }
 if (args.dumpModules) {
   console.log(h.graph().catalog());
@@ -568,7 +568,7 @@ attachAltVPaste({
     void (async () => {
       const view = compactionSummaryView(await h.history(), { width: Math.max(20, (process.stdout.columns ?? 80) - 6) }); // 2026-09-27：与全屏口同源——全部历史列出 + 按终端宽预折行
       const lines = view === undefined
-        ? [theme.fg("info", "本会话还没有压缩摘要（/compact 后可看）")]
+        ? [theme.fg("info", t("main.compact.emptySummary"))]
         : view.text.split("\n");
       const w = rl as unknown as { line: string; cursor: number };
       w.line = "";
@@ -665,7 +665,7 @@ function attachRender(h: Harness): void {
           },
           toolResult: (output: unknown, isError: unknown, callId?: string, images?: unknown) => dm.toolResult(output, isError, callId, images),
           // 钩子注入折叠行（m5-hooks T10）：灰字一行直进 DocModel（不经 md 管线）；标签与回放/行模式同源
-          injection: (line: string) => dm.pushLine(theme.fg("muted", `  ⌁ ${line}（Ctrl + H 查看全文）`)),
+          injection: (line: string) => dm.pushLine(theme.fg("muted", t("main.fold.injection", { line }))),
         }
       : {};
   attachRenderTo(
@@ -686,7 +686,7 @@ function attachRender(h: Harness): void {
         //（恢复回放走 pendingEcho/DocModel 重建，不经此），只响活体回合；TTY 且 [tui] bell 开才响
         if (bellMode !== "off" && process.stdout.isTTY === true) {
           if (bellMode === "chime") playTurnChime(e.kind, { // 自带音频一声（不分结局——响数区分是 BEL 档语义）
-            onError: (stage, err) => h.log("tui.chime.error", `回合提示音播放失败（${stage}）：${err instanceof Error ? err.message : String(err)}`, { stage: String(stage) }),
+            onError: (stage, err) => h.log("tui.chime.error", t("main.bell.fail", { err: `${stage}：${err instanceof Error ? err.message : String(err)}` }), { stage: String(stage) }) // i18n:diag 日志面键化（值即原文）,
           });
           else ringTurnBell(e.kind, (s) => process.stdout.write(s));
         }
@@ -706,19 +706,19 @@ function attachRender(h: Harness): void {
         const run = e as { status?: string; runId?: number; hook?: string; name?: string; index?: number; total?: number };
         if (run.status === "running") {
           const counting = run.total !== undefined && run.total > 1 ? `（${run.index}/${run.total}）` : "";
-          activeApp?.setHookStatus(`正在运行钩子 ${run.name ?? run.hook ?? ""}…${counting}`); // 显示名 name 优先（走查修：用户配了说明就不亮命令原文）
+          activeApp?.setHookStatus(t("main.hooks.running", { names: run.name ?? run.hook ?? "" }) + counting); // 显示名 name 优先（走查修：用户配了说明就不亮命令原文）
           runningHooks.add(run.runId ?? -1);
         } else if (run.runId !== undefined && runningHooks.delete(run.runId) && runningHooks.size === 0) {
           activeApp?.setHookStatus(undefined);
         }
         if (run.status === "skipped-untrusted" && !hooksToasts.untrusted) {
           hooksToasts.untrusted = true;
-          const msg = "项目层钩子未过信任门已跳过——/settings 钩子面 t 键审查后生效";
+          const msg = t("main.hooks.skippedUntrusted");
           if (activeApp !== undefined) activeApp.showToast(msg); else notify(msg);
         }
         if (run.status === "skipped-inject-cap" && !hooksToasts.injectCap) {
           hooksToasts.injectCap = true;
-          const msg = "钩子注入已达会话累计上限（64k 字符）——后续注入被跳过";
+          const msg = t("main.hooks.injectCap");
           if (activeApp !== undefined) activeApp.showToast(msg); else notify(msg);
         }
       }
@@ -751,26 +751,26 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
       if (directive.kind === "quit") return "quit"; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
       if (directive.kind === "pick") {
         // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
-        if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId, currentBucket) + "\n（非交互环境——用 /resume <序号|sid> 直达恢复）"); return "again"; }
+        if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId, currentBucket) + "\n" + t("main.sessions.nonTty")); return "again"; }
         const items = listSessions(sessionsRoot, currentBucket);
-        if (items.length === 0) { notify("暂无会话——发送第一条消息即创建"); return "again"; }
+        if (items.length === 0) { notify(t("main.sessions.empty")); return "again"; }
         // D14 ②（2026-10-05 补接线）：刷会话列表时机后台全库补建事件索引——列表不依赖它（标题走
         // readSessionHead 预算读），void 不挡界面；已索引会话 mtime+size 双判命中零成本跳过
         void refreshEventIndex(defaultEventIndexFile(), sessionsRoot);
         // 走查定案（2026-09-19）：不选即取消——空输入 = 取消（专门「取消」项退役）。
-        // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/（当前）标记同行；
+        // TUI 批 T2：TTY 注入 picker 闭包（列表即菜单，序号/相对时间/${t("main.sessions.currentMark")}标记同行；
         // 不再先打印静态表格——picker 自带列表渲染），Esc reject 在 pickSessionNumber 内转 undefined
         const n = await pickSessionNumber(
           (q) => commandUi.ask(q),
           items.length,
           async () => {
             const labels = items.map(
-              // 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形）——标题白、相对时间灰、「（当前）」标记青玉
-              (s, i) => `${i + 1}. ${s.title} ${theme.dim(`· ${relativeTime(s.createdAtMs)}`)}${s.id === h.sessionId ? theme.fg("accent", "（当前）") : ""}`,
+              // 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形）——标题白、相对时间灰、「${t("main.sessions.currentMark")}」标记青玉
+              (s, i) => `${i + 1}. ${s.title} ${theme.dim(`· ${relativeTime(s.createdAtMs)}`)}${s.id === h.sessionId ? theme.fg("accent", t("main.sessions.currentMark")) : ""}`,
             );
             // 全屏期走 FullApp overlay（F5 走查实证：readline picker 的 modal 与 FullApp 抢 stdin 卡死）
             const n0 = activeApp !== undefined
-              ? await activeApp.pickOverlay("选择会话", labels)
+              ? await activeApp.pickOverlay(t("main.sessions.pickTitle"), labels)
               : await pick(labels, terminalMenuIo());
             if (n0 === undefined) throw new Error(ESC_CANCELLED);
             return n0 + 1; // picker 0-based → 序号 1-based（与回落路径同口径）
@@ -792,24 +792,24 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         // 当前会话（或目标解析回当前）走活 harness 写口——批⑦a 破链修复：旁路新建 store 写活文件
         // 会让活 store 内存 lastId/seq 失真，后续事件 parentId 链断裂；序号/sid 指定的非活会话保持旁路（单写者安全）
         const targetSid = directive.target !== undefined ? resolveTarget(directive.target, sessionsRoot, currentBucket) : undefined;
-        if (directive.target !== undefined && targetSid === undefined) { notify("未找到目标会话"); return "again"; }
+        if (directive.target !== undefined && targetSid === undefined) { notify(t("main.title.targetNotFound")); return "again"; }
         if (targetSid === undefined || targetSid === h.sessionId) {
           await h.setLabel(directive.name);
           // 命名确认走浮动 toast（2026-09-23 用户拍板——瞬时确认不落流区，/model 切换反馈同族）
-          if (activeApp !== undefined) activeApp.showToast(`已命名 → ${directive.name}`);
-          else out(`[已命名 → ${directive.name}]`);
+          if (activeApp !== undefined) activeApp.showToast(t("main.title.renamedToast", { name: directive.name }));
+          else out(t("main.title.renamedLine", { name: directive.name }));
         } else {
           const r = await setTitle(sessionsRoot, h.sessionId, directive.target, directive.name, currentBucket);
           if (r !== undefined) {
-            if (activeApp !== undefined) activeApp.showToast(`已命名 ${r.sid} → ${directive.name}`);
-            else out(`[已命名 ${r.sid} → ${directive.name}]`);
-          } else notify(`未找到目标会话 ${directive.target}`); // toast 化（2026-09-23 拍板）——目标回显在文案里补上下文
+            if (activeApp !== undefined) activeApp.showToast(t("main.title.renamedOtherToast", { sid: r.sid, name: directive.name }));
+            else out(t("main.title.renamedOtherLine", { sid: r.sid, name: directive.name }));
+          } else notify(`${t("main.title.targetNotFound")} ${directive.target}`); // toast 化（2026-09-23 拍板）——目标回显在文案里补上下文
         }
         return "again";
       }
       if (directive.kind === "resume") {
         const sid = resolveTarget(directive.sessionId, sessionsRoot, currentBucket);
-        if (sid === undefined) { notify(`未找到会话「${directive.sessionId}」——/sessions 查看列表`); return "again"; }
+        if (sid === undefined) { notify(t("main.sessions.notFound", { sid: directive.sessionId })); return "again"; }
         if (switchStepsFor(sessionDeps).frameFirst) { // T4：先画后注水（同 /sessions 选择）
           pendingSwitchSid = sid;
           return "switch";
@@ -844,7 +844,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
             setActiveDir(bucketDir);
             lastEventId = undefined; // 与常规换会话同款重置（CS-05②：三处换会话缝一个口径）
             clearScreen();
-            const notice = `[已是空会话——沿用本会话 ${sid}，创建时间已刷新]`;
+            const notice = `${t("main.new.reusedEmpty", { sid: sid })}`;
             if (tuiMode === "full") pendingEcho = { notice, history: false }; // F5 二轮⑯ 延期
             else out(notice);
             return "switch";
@@ -869,8 +869,8 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         lastEventId = undefined;
         clearScreen(); // 用户走查（2026-09-19）：换会话清屏——旧会话残屏与"历史丢失"错觉同源
         const notice = from !== undefined
-          ? `[已从 ${from} 分叉——新会话 ${h.sessionId}，继承历史如下]` // fork 继承父上下文（ForkedSessionStore 投影实证）——回显让继承可见
-          : `[新会话 ${h.sessionId}]`;
+          ? t("main.fold.forkLine", { sid: from, new: h.sessionId }) // fork 继承父上下文（ForkedSessionStore 投影实证）——回显让继承可见
+          : t("main.sessions.newLine", { sid: h.sessionId });
         if (tuiMode === "full") pendingEcho = { notice, history: from !== undefined }; // F5 二轮⑯ 延期
         else {
           out(notice);
@@ -888,8 +888,8 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
       // 注记（同日走查实锤）：本条拦截须在下方 try 的 catch-all 覆盖内——弹窗配置流的 choose/ask Esc
       // 抛「已取消（Esc）」，try 外无人接 = 进程 exit 7 前案；移入 try 后与 /model 等同政策静默
       // 退役命令指路（批⑤⑥——打字面肌肉记忆；/paste 先例是干净移除，此二条有明确新家故留一行）
-      if (/^\/usage\s*$/.test(text.trim())) { notify("已退役：/usage 并入 /settings → Token 用量"); return "again"; }
-      if (/^\/status\s*$/.test(text.trim())) { notify("已退役：/status 并入 /settings → 运行状态"); return "again"; }
+      if (/^\/usage\s*$/.test(text.trim())) { notify(t("main.retired.usage")); return "again"; }
+      if (/^\/status\s*$/.test(text.trim())) { notify(t("main.retired.status")); return "again"; }
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
       // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
       const isCmdLine = text.trim().startsWith("/");
@@ -897,7 +897,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         !isCmdLine &&
         needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })
       ) {
-        notify("还没有配置任何平台和模型——输入 /provider 打开配置向导（选平台 → 填端点与密钥 → 配好后直接提问）");
+        notify(t("main.gate.providerUnconfigured"));
         return "again";
       }
       try {
@@ -977,12 +977,12 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           const skillArgs = sp === -1 ? undefined : typed.slice(sp + 1).trim() || undefined;
           const canonical = namePart === "" ? undefined : skillTypedName(namePart);
           if (canonical === undefined) {
-            notify(namePart === "" ? "用法：/skill : <技能名> [参数]——斜杠菜单技能区 Tab 填入" : `未找到技能「${namePart}」——/reload 后重试或从 / 菜单技能区选择`);
+            notify(namePart === "" ? t("main.skill.usage") : t("main.skill.notFound", { name: namePart }));
             return "again";
           }
           const body = skillInjectText(canonical, skillArgs);
           if (body === undefined) {
-            notify(`技能 "${canonical}" 正文读取失败——文件可能已被移动或删除（/reload 后重试）`);
+            notify(t("main.skill.readFail", { name: canonical }));
             return "again";
           }
           // 原话行持久化（2026-09-30 拍板「我输入啥就显示啥」含回放）：嵌在标记行之后、<skill> 正文
@@ -1001,7 +1001,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         // 转述等待期不收第二条（走查四——单等待口：并发提交会在 harness 单并发守卫炸「已有进行中的
         // turn」丢消息；双 Esc 可中止后重发）
         if (visionTranscribing()) {
-          notify("视觉转述进行中——稍候再发（双击 Esc 可中止）");
+          notify(t("main.vision.busy"));
           activeApp?.restoreInput(text);
           return "again";
         }
@@ -1026,26 +1026,26 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
                 dm.userPrompt(text);
                 dm.visionTranscribeStart(eyeModel);
                 echoed = true;
-              } else notify(`视觉模型 ${eyeModel} 转述图片中…`);
+              } else notify(t("main.vision.transcribing", { model: eyeModel }));
               const res = await waitVisionTranscribe(imgs, tuiMode === "full" ? (d) => dm.visionDelta(d.kind, d.text) : undefined, h);
               if (res.state === "aborted") {
                 if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "aborted");
-                notify("已中止转述——消息未发出，输入与图片已回挂（重发即续：已生成的转述有缓存）");
+                notify(t("main.vision.aborted"));
                 activeApp?.restoreInput(text);
                 return "again";
               }
               if (res.state === "done") {
                 if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, res.text, "done");
-                else notify(`已发送——图片已由视觉模型 ${eyeModel} 转述（可继续追问）`);
+                else notify(t("main.vision.sent", { model: eyeModel }));
                 vtNote = { model: eyeModel, ok: true, text: res.text };
               } else {
                 if (tuiMode === "full") dm.visionTranscribeEnd(eyeModel, undefined, "failed");
-                else notify(`视觉转述失败——按无图占位发送（/settings 查视觉模型配置）`);
+                else notify(`${t("main.vision.failedLine")}`);
                 vtNote = { model: eyeModel, ok: false };
               }
             } else {
-              const why = eye.configured ? `，且视觉模型不可用（${eye.why}——/settings 修复）` : "（或在 /settings 配置视觉模型转述）";
-              notify(`已拦截：当前模型 ${modelNow || "（未配置）"} 不支持图片输入${why}——消息未发送，图片仍挂起（/model 换视觉模型后再发）`);
+              const why = eye.configured ? t("main.vision.noVision", { why: eye.why }) : t("main.vision.whyUnset");
+              notify(t("main.vision.blocked", { model: modelNow || t("main.vision.whyNoModel"), why }));
               activeApp?.restoreInput(text); // 全屏：输入原文（含 chip token）回挂——提交已清输入框
               return "again";
             }
@@ -1108,7 +1108,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           await h.reload();
           await localeStore.rebuild(); // m5-i18n：语言包/catalog 槽随图重建
           closeGoneModuleUi(modulesDeps, namesBefore);
-          notify("平台配置已即时生效（模块图已重载）");
+          notify(t("main.provider.reloaded"));
         }
         if (reloadShot !== undefined) closeGoneModuleUi(modulesDeps, reloadShot);
         if (cmdNameOf(text) === "/reload") { registerToolLabels(h.graph().tools.toolInfos()); void refreshSkillMenu(skillDeps); } // 标签表与技能菜单缓存随图重喂
@@ -1116,7 +1116,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         if (cmdOut !== undefined && cmdOut !== "") {
           // 压缩完成行（2026-09-23 用户拍板）：石青（info）正文 + 灰（muted）括号段——ANSI 行必须走 raw
           // 通道不经 md 渲染（pushMd 会吃掉转义序列）；行模式 console 直出同款
-          if (isCompactCommand(text) && cmdOut.startsWith("上下文压缩完成")) {
+          if (isCompactCommand(text) && (cmdOut.startsWith("上下文压缩完成") || cmdOut.startsWith("Compacted:"))) { // D4 双格式（en 形走查补键）
             const line = renderCompactDoneLine(cmdOut);
             if (activeApp !== undefined) dm.pushLine(line);
             else console.log(line);
@@ -1157,7 +1157,7 @@ const PROVIDER_WRITE_DONE = /^(?:success|已设为当前默认|已移除)/;
 const reportModelSwitch = (before: string): void => {
 	const now = h.status().model;
 	if (now === before) return; // Esc/原样选择 = 未切换，零反馈
-	const msg = `模型已切换 → ${now}（已写入 config）`;
+	const msg = t("main.toast.modelSwitched", { model: now });
 	if (activeApp !== undefined) activeApp.showToast(msg);
 	else console.log(`[${msg}]`);
 };
@@ -1167,8 +1167,8 @@ const reportEffortSwitch = (before: string | undefined): void => {
 	const now = h.status().effort;
 	if (now === before) return; // Esc/原样重选 = 未变化，零反馈
 	const msg = now === undefined
-		? "思考档位已清除（回端点默认，已写入 config）"
-		: before === undefined ? `思考档位已设为 ${now}（已写入 config）` : `思考档位已切换 ${before} → ${now}（已写入 config）`;
+		? t("main.toast.effortCleared")
+		: before === undefined ? t("main.toast.effortSet2", { level: now }) : t("main.toast.effortSwitched2", { before, after: now });
 	if (activeApp !== undefined) activeApp.showToast(msg);
 	else console.log(`[${msg}]`);
 };
@@ -1183,34 +1183,34 @@ const permMeta = (): Record<string, { label: string; desc: string; long: string 
 });
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
 const slashItems = (): SlashItem[] => [
-	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
+	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于${t("main.help.dockTitle")}）
 	// 2026-09-26 拍板 D2 交叉互换（2026-09-28 走查修）：/yolo==需要时候询问（ask-risky）——详细文案用户拍板原文，档名对齐 /permission 菜单显示名
-	{ name: "/yolo", desc: t("slash.items.yolo.desc"), long: "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
+	{ name: "/yolo", desc: t("slash.items.yolo.desc"), long: t("slash.items.yolo.long") },
 	// 2026-09-26 拍板：/auto 文案按「从不询问」档名表述（D8 显示名），语义 = 就算有问题也是模型自行判断；行为换绑 never 由本批 T2 落地（D1 拍板），沿革见 ROADMAP 走查三批与 m3b 方案
-	{ name: "/auto", desc: t("slash.items.auto.desc"), long: "从不打断你，一切运行并自动决定——就算有问题也是模型自行判断。" },
-	{ name: "/help", desc: t("slash.items.help.desc"), long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
-	{ name: "/model", desc: t("slash.items.model.desc"), long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
-	{ name: "/effort", desc: t("slash.items.effort.desc"), long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
-	{ name: "/locale", desc: t("slash.items.locale.desc"), long: "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。" },
-	{ name: "/provider", desc: t("slash.items.provider.desc"), long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
+	{ name: "/auto", desc: t("slash.items.auto.desc"), long: t("slash.items.auto.long") },
+	{ name: "/help", desc: t("slash.items.help.desc"), long: t("slash.items.help.long") },
+	{ name: "/model", desc: t("slash.items.model.desc"), long: t("slash.items.model.long") },
+	{ name: "/effort", desc: t("slash.items.effort.desc"), long: t("slash.items.effort.long") },
+	{ name: "/locale", desc: t("slash.items.locale.desc"), long: t("slash.items.locale.long") },
+	{ name: "/provider", desc: t("slash.items.provider.desc"), long: t("slash.items.provider.long") },
 	{
 		name: "/permission", desc: t("slash.items.permission.desc"), long: t("slash.items.permission.long"), children: [...PERM_CYCLE], childMeta: permMeta(),
 	},
-	{ name: "/compact", desc: t("slash.items.compact.desc"), long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
-	{ name: "/sessions", aliases: ["resume"], desc: t("slash.items.sessions.desc"), long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
+	{ name: "/compact", desc: t("slash.items.compact.desc"), long: t("slash.items.compact.long") },
+	{ name: "/sessions", aliases: ["resume"], desc: t("slash.items.sessions.desc"), long: t("slash.items.sessions.long") },
 	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
 		name: "/settings", aliases: ["config"], desc: t("slash.items.settings.desc"), long: t("slash.items.settings.long"),
 	},
-	{ name: "/tasks", aliases: ["task"], desc: t("slash.items.tasks.desc"), long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
-	{ name: "/btw", desc: t("slash.items.btw.desc"), long: "带着当前对话上下文发一次旁路快问：答案开小窗展示（贴输入框上方），不进主对话流、不留持久痕迹、也不打断正在进行的回答（回答中同样可问；新问会取代未完的旧问）。无参回看最近一次问答（仅本进程内存，重开 CLI 即没）。" },
-	{ name: "/quit", aliases: ["exit", "q"], desc: t("slash.items.quit.desc"), long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
+	{ name: "/tasks", aliases: ["task"], desc: t("slash.items.tasks.desc"), long: t("slash.items.tasks.long") },
+	{ name: "/btw", desc: t("slash.items.btw.desc"), long: t("slash.items.btw.long") },
+	{ name: "/quit", aliases: ["exit", "q"], desc: t("slash.items.quit.desc"), long: t("slash.items.quit.long") },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）
-	{ name: "/new", desc: t("slash.items.new.desc"), long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
-	{ name: "/fork", desc: t("slash.items.fork.desc"), long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
-	{ name: "/title", aliases: ["rename"], desc: t("slash.items.title.desc"), long: "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。" },
-	{ name: "/reload", desc: t("slash.items.reload.desc"), long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
+	{ name: "/new", desc: t("slash.items.new.desc"), long: t("slash.items.new.long") },
+	{ name: "/fork", desc: t("slash.items.fork.desc"), long: t("slash.items.fork.long") },
+	{ name: "/title", aliases: ["rename"], desc: t("slash.items.title.desc"), long: t("slash.items.title.long") },
+	{ name: "/reload", desc: t("slash.items.reload.desc"), long: t("slash.items.reload.long") },
 ];
 
 // ---------- 技能菜单（m4-7 T7——服务倒挂：宿主消费 skill.catalog，模块不在优雅降级为零技能） ----------
@@ -1227,14 +1227,14 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + theme.fg("accent", " ╚██████╔╝██║  ██║╚██████╔╝███████║╚██████╔╝███████║") + "      " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + theme.fg("accent", "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝ ╚══════╝ ╚══════╝") + "     " + theme.fg("accent", "│"),
 	theme.fg("accent", "│") + "                                                          " + theme.fg("accent", "│"),
-	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"),
-	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"),
-	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"),
+	theme.fg("accent", "│") + ` ${theme.bold(theme.fg("fg", `v${VERSION}`))}${theme.dim(" — 模块化 AI Agent Harness")}                         ` + theme.fg("accent", "│"), // i18n:brand D12 不翻——品牌身份
+	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"), // i18n:brand D12 不翻——品牌身份
+	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"), // i18n:brand D12 不翻——品牌身份
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
-	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头；
-	// m5-peers T6e/D23：行 2 尾追加 Ctrl + P 模块——静态常驻，无登记模块时空态 toast 兜底）
-	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"),
-	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点 · Ctrl + P 模块"),
+	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头； // i18n:brand D12 不翻——品牌身份
+	// m5-peers T6e/D23：行 2 尾追加 Ctrl + P 模块——静态常驻，无登记模块时空态 toast 兜底） // i18n:brand D12 不翻——品牌身份
+	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"), // i18n:brand D12 不翻——品牌身份
+	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点 · Ctrl + P 模块"), // i18n:brand D12 不翻——品牌身份
 	"",
 ];
 
@@ -1254,7 +1254,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       // dock（2026-09-28 用户拍板）：贴输入框上缘 + 与输入框同宽同左缘——左右边框与输入框连成直线
       const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmd === "/help") {
-        app.viewText("帮助", helpText(), { layout: "dock" }); // 题头键归 T14 统一收口
+        app.viewText(t("main.help.dockTitle"), helpText(), { layout: "dock" }); // 题头键归 T14 统一收口
         return;
       }
       // busy 命令策略（批①②④⑦d 重构）：/quit 族立即打断退出；即改档（BUSY_EXEC）busy 期直接执行；
@@ -1277,7 +1277,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     submitGate: (text) => {
       // 批④：拦回车档的拒因（返回串 = 拦截——FullApp 尾行瞬显，输入保留不进历史）
       const c = cmdNameOf(text);
-      return inflight && BUSY_BLOCK.has(c) ? `回答进行中——${c} 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）` : undefined;
+      return inflight && BUSY_BLOCK.has(c) ? t("main.busy.note", { cmd: c }) : undefined;
     },
     // CTU-11（2026-09-28 code review）：requestExit 死接口三方删除（本实现 + fullapp.ts 声明 + 测试桩）——
     // 2026-09-23 拍板 Ctrl+C 不占用、退出走 /quit 后成遗迹，全仓 grep 零真实调用方
@@ -1290,7 +1290,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     panelData: () => ({
       ...(getPanelCache() ?? {
         model: "…",
-        session: "新会话", // 首刷前占位——未命名口径与 refreshPanel 一致（sid 不可读）
+        session: t("panel.newSession"), // 首刷前占位——未命名口径与 refreshPanel 一致（sid 不可读）
         cwd: shortenPath(process.cwd(), 26),
         tokens: { input: 0, output: 0 },
         startedAt: undefined,
@@ -1316,7 +1316,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       try {
         return c.completeArg(word, args);
       } catch (err) {
-        h.log("host.completer.error", `模块参数补全抛错，当无候选：${cmd}`, { error: String(err instanceof Error ? err.message : err) });
+        h.log("host.completer.error", `模块参数补全抛错，当无候选：${cmd}`, { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断日志面
         return [];
       }
     },
@@ -1326,7 +1326,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     showCompactionSummary: async () => {
       const view = compactionSummaryView(await h.history(), { width: Math.max(20, (process.stdout.columns ?? 80) - 6) });
       if (view === undefined) {
-        app.showToast("本会话还没有压缩摘要（/compact 后可看）");
+        app.showToast(t("main.compact.emptySummary"));
         return;
       }
       // 全屏窗形态（2026-09-27 用户拍板：参照子代理查看窗）；全部压缩历史最新在最上、静态文档自顶读——
@@ -1341,20 +1341,20 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     showInjections: async () => {
       const buckets = buildHookBuckets(await h.history());
       if (buckets.length === 0) {
-        app.showToast("本会话还没有钩子活动记录（配置钩子后可看，Ctrl + H）");
+        app.showToast(t("main.hooks.emptyActivity"));
         return;
       }
       for (;;) { // 一级：消息列表
-        const items = buckets.map((b) => `${b.label} · ${b.runs.length} 次钩子${b.injections.length > 0 ? ` · ${b.injections.length} 条注入` : ""}`);
-        const picked = await app.pickOverlay("钩子活动 · 按消息分组（回车下钻 · Esc 返回）", items);
+        const items = buckets.map((b) => `${b.label}${t("main.hooks.statLine", { n: b.runs.length, m: b.injections.length })}`); // 统计行整键（m=0 时表值含可选组可再优化——走查定）
+        const picked = await app.pickOverlay(t("main.hooks.pickTitle"), items);
         if (picked === undefined) return; // Esc 关窗
         const b = buckets[picked]!;
         for (;;) { // 二级：该消息的注入条目（回车看全文 · Esc 回一级）
           const rows = injectionRowsOf(b);
-          if (rows.length === 0) { app.showToast("这条消息的钩子运行了但没有注入内容（拦截/失败/跳过——Ctrl+H 只看注入）"); break; }
-          const picked2 = await app.pickOverlay(`${b.label}（回车看全文 · Esc 返回上一级）`, rows.map((r) => r.label));
+          if (rows.length === 0) { app.showToast(t("main.hooks.noInjection")); break; }
+          const picked2 = await app.pickOverlay(`${b.label}${t("main.hooks.injectFoot")}`, rows.map((r) => r.label));
           if (picked2 === undefined) break; // Esc 回一级
-          app.viewText("注入全文", rows[picked2]!.text, { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
+          app.viewText(t("main.hooks.injectFullTitle"), rows[picked2]!.text, { layout: "dock" }); // 不 await——FIFO 顶上回列表（技能面板同款）
         }
       }
     },
@@ -1362,11 +1362,11 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // T4 联动启停：硬依赖传递闭包——卸载带走依赖者、挂载自动补上提供者；撞锁定拒绝整次（S1）
     toggleModule: (name, lockedReason) => {
       if (lockedReason !== undefined) {
-        app.showToast(`${name} · 锁定——${lockedReason}`);
+        app.showToast(t("main.hooks.lockSuffix", { name, why: lockedReason })); // 表值含前导「 · 」与锁名结构——走查核形
         return;
       }
       if (inflight) {
-        app.showToast("回答进行中不可插拔（等本轮结束后再试）");
+        app.showToast(t("main.module.busyToggle"));
         return;
       }
       const mounted = getPanelCache()?.modules.find((m) => m.name === name)?.state === "mounted";
@@ -1405,12 +1405,12 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         }
       }
       if (writeFailed) {
-        app.showToast(`配置写盘中途失败（已写 ${written}/${writeList.length} 个模块，可 /reload 或重启对齐）`);
+        app.showToast(t("main.writePartialFail", { n: `${written}/${writeList.length}` }));
         return;
       }
       if (cascaded.length > 0) {
         // S10 拍板：toast 只报目标模块（上方 toggleResultText），连带名单写诊断日志——host.module.cascade
-        h.log("host.module.cascade", `联动${target ? "挂载" : "卸载"} ${name}：连带${target ? "启用" : "停用"} ${cascaded.join("、")}`, { action: target ? "mount" : "unmount", target: name, cascaded });
+        h.log("host.module.cascade", `${t("main.cascade.verb")}${target ? t("modtoggle.verbMount") : t("modtoggle.verbUnmount")} ${name}${t("main.cascade.colon")}${target ? t("skills.action.enable") : t("mcp.action.disable")} ${cascaded.join("、")}`, { action: target ? "mount" : "unmount", target: name, cascaded }); // i18n:diag 日志面
       }
       void (async () => {
         try {
@@ -1423,7 +1423,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
           await refreshPanel(modulesDeps);
           app.showToast(toggleResultText(target ? "mount" : "unmount", name, r)); // 读 failed 清单——失败明说，不再假报成功（T2）
         } catch (err) {
-          app.showToast(`插拔失败：${err instanceof Error ? err.message : String(err)}（已回写配置，可 /reload 或重启恢复）`);
+          app.showToast(t("main.toggle.fail", { err: err instanceof Error ? err.message : String(err) }));
         }
       })();
     },
@@ -1443,8 +1443,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       const now = new Date();
       const dir = join(orosusHome(), "logs");
       const entry = readDiagnostics(dir, now).find((e) => e.name === name);
-      if (entry === undefined) return "（该模块没有诊断记录）";
-      const raw = readDiagRawLines(dir, now).filter((e) => moduleOf(e) === name || e.msg.includes(`的提供者 ${name}`));
+      if (entry === undefined) return t("main.diag.noRecord");
+      const raw = readDiagRawLines(dir, now).filter((e) => moduleOf(e) === name || e.msg.includes(t("main.diag.providerOf") + name)); // i18n:diag 判据跟日志语言（zh 基准）
       return renderDetail(entry, raw);
     },
     // 宿主日志口（m5 T2）：UI 层事件留痕——弹窗保留键注册即拒等（h.log 走 host 通道）
@@ -1455,11 +1455,11 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       const info = h.pendingConfirms().find((p) => p.name === name);
       if (info === undefined) return;
       if (activeApp === undefined) {
-        notify(`行模式请在终端运行：orosus module trust ${name}`);
+        notify(`${t("main.module.trustLineHint", { name: name })}`);
         return;
       }
       const handle = activeApp.openDialog({
-        title: `启用模块 ${name}？`,
+        title: t("main.trust.enableModule", { name }) + "?",
         widgets: confirmDialogWidgets(info satisfies PendingModuleInfo & Record<string, unknown>),
         onEvent: (e) => {
           if (e.type !== "activate" || e.index !== 0) return undefined;
@@ -1471,9 +1471,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
               await localeStore.rebuild(); // m5-i18n：槽随图重建
               registerToolLabels(h.graph().tools.toolInfos());
               await refreshPanel(modulesDeps);
-              notify(`已确认并启用 ${name}`);
+              notify(`${t("main.module.confirmed", { name: name })}`);
             } catch (err) {
-              notify(`确认失败：${err instanceof Error ? err.message : String(err)}`);
+              notify(t("main.trust.fail", { err: err instanceof Error ? err.message : String(err) }));
             }
           })();
           handle?.close();
@@ -1649,7 +1649,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     const gate = switchBusyGate(isSwitching);
     if (gate.blocked) { notify(gate.message); return; }
     isSwitching = true;
-    notify("正在加载会话历史…");
+    notify(t("main.switch.loading"));
     void (async () => {
       try {
         const prepared = await prepareSwitch(sid, sessionDeps, notify);
@@ -1670,7 +1670,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     const gate = switchBusyGate(isSwitching);
     if (gate.blocked) { notify(gate.message); return; }
     isSwitching = true;
-    notify("正在分叉会话…");
+    notify(t("main.switch.forking"));
     void (async () => {
       try {
         const from = intent.parentSessionId;
@@ -1686,7 +1686,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         h = nh;
         setActiveDir(sessionsDir);
         lastEventId = undefined; // CS-05②：三处换会话缝一个口径（统一回 undefined 走父尾缺省）
-        await swapSessionIn(nh, { notice: `[已从 ${from} 分叉——新会话 ${nh.sessionId}，继承历史如下]` }); // fork 继承父上下文——回显让继承可见
+        await swapSessionIn(nh, { notice: t("main.fold.forkLine", { sid: from, new: nh.sessionId }) }); // fork 继承父上下文——回显让继承可见
       } catch (err) {
         await switchFailedFallback(err);
       } finally {
@@ -1702,8 +1702,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   if (onboardingTrigger !== null) {
     const trigger = onboardingTrigger;
     onboardingTrigger = null;
-    if (trigger.reason === "broken") app.showToast("配置文件无法读取，已按默认配置进入引导"); // SW-20 定案话术
-    else if (trigger.reason === "degraded") app.showToast("部分模块配置无效已降级——已按默认配置进入引导");
+    if (trigger.reason === "broken") app.showToast(t("main.onboarding.brokenToast")); // SW-20 定案话术
+    else if (trigger.reason === "degraded") app.showToast(t("main.onboarding.degradedToast"));
     // 出厂技能固化（2026-10-01 拍板）：弹窗弹出时刻把 bundled/ 出厂件（件数随版本浮动）拷入用户级
     // ~/.orosus/skills——打包布局变化不再影响已初始化用户（引导完成后 h.reload 重扫即入清单；quit 路径下次启动拾取）
     seedFactorySkills({ fresh: trigger.reason === "fresh", notify, showToast: (m) => app.showToast(m) });
@@ -1720,9 +1720,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       registerToolLabels(h.graph().tools.toolInfos()); // 引导激活的模块（tool-web 等）标签进表
       const ir = outcome.importResult;
       if (ir !== undefined) {
-        app.showToast(`引导完成 · 已导入 ${ir.imported} 条记忆（跳过 ${ir.skipped} 条重复${ir.merged > 0 ? ` · 模型整理 ${ir.merged} 条` : ""}）· /tool-peers__memory 可浏览`, 6000);
+        app.showToast(t("main.ob.imported", { n: ir.imported, skip: ir.skipped, org: ir.merged > 0 ? ir.merged : undefined }), 6000);
       } else {
-        app.showToast("引导完成 · 配置已写入并即时生效");
+        app.showToast(t("main.onboarding.doneToast"));
       }
     }
   }
@@ -1748,7 +1748,7 @@ if (tuiMode === "full" && args.print === undefined) {
 	} else {
 		// m4-8 T2.5 收口 loadConfig：warnings 本就产出解析失败信号(SW-20);modules.d 坏文件走目录层
 		// 容错字样不计入 broken(设计 §3.6——目录坏文件只降级不触发引导)
-		const broken = loadConfig({ userFile: userConfigPath }).warnings.some((w) => w.includes(userConfigPath) && w.includes("解析失败"));
+		const broken = loadConfig({ userFile: userConfigPath }).warnings.some((w) => w.includes(userConfigPath) && (/解析失败|parse/i.test(w))); // i18n:diag 判据双格式
 		if (broken) onboardingTrigger = { reason: "broken" };
 	}
 	if (onboardingTrigger === null && h.graph().audit().some((a) => a.state === "failed")) {
@@ -1773,14 +1773,14 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 					...cur,
 					[p.id]: { type: p.type, baseUrl: p.baseUrl, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) },
 				});
-			})().catch((err) => notify(`平台配置写盘失败：${err instanceof Error ? err.message : String(err)}`));
+			})().catch((err) => notify(t("main.provider.writeFail", { err: err instanceof Error ? err.message : String(err) })));
 		},
 		// secrets 统一走 upsertSecret（原位更新不累积重复行——引导内可重复输同一家 key；
 		// provider/search 两类 key 同享，与 /settings 配置流同落点同语义）
 		appendSecret: (envKey, value) => { upsertSecret(secretsFile, envKey, value); },
 		setModel: (slot) => {
 			// CM-12③：同上——setModel 写盘失败落 toast，不崩引导
-			void menuDeps.setModel(slot).catch((err) => notify(`默认平台写盘失败：${err instanceof Error ? err.message : String(err)}`));
+			void menuDeps.setModel(slot).catch((err) => notify(t("main.provider.defWriteFail", { err: err instanceof Error ? err.message : String(err) })));
 		},
 		// m4-8 T4/C5：[tool-web] 路由新家 modules.d/tool-web.toml（D7 例外——模块侧写动作保持，
 		// 目标路径由宿主按 sectionPath 算好传入；模块不 import core）
@@ -1791,7 +1791,7 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		listModels: async (slot) => {
 			// SW-24：引导期槽未激活——按裸条目直组「目录优选 + live 兜底」（与槽内 listModels 同口径）
 			const entry = (await menuDeps.loadProviders())[slot];
-			if (entry === undefined) throw new Error(`槽 "${slot}" 未配置`);
+			if (entry === undefined) throw new Error(t("main.slot.missing2", { slot })); // 被 catch 吞无露出面（清单 §五备查键）
 			const secrets = loadSecretsEnv(secretsFile).vars;
 			const key = entry.apiKey?.startsWith("$ENV:") ? secrets[entry.apiKey.slice(5)] : entry.apiKey;
 			const glue = { baseUrl: entry.baseUrl, ...(key !== undefined ? { apiKey: key } : {}) };
@@ -1803,7 +1803,7 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			const cwd = process.cwd();
 			const homes = memorySourceHomes();
 			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
-			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? "未安装", count: s.count, available: s.dir !== undefined }));
+			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? t("main.src.notInstalled"), count: s.count, available: s.dir !== undefined }));
 		},
 		importMemory: (sourceIds, organize) => importWithOrganize(sourceIds, organize),
 	};
@@ -1843,7 +1843,7 @@ if (args.print === undefined) try {
   // m5 T17：启动期一次性 toast——待确认第三方存在时提示（config 已 enabled 但未确认的也在此列：保持不挂载，回车确认后才启用）
   {
     const pending = h.pendingConfirms();
-    if (pending.length > 0) notify(`${pending.length} 个模块待确认——面板选中后回车查看声明并确认（或 orosus module trust）`);
+    if (pending.length > 0) notify(t("main.module.pending2", { n: pending.length }));
   }
     for (;;) {
       // 全屏模式（F3）：FullApp 接管终端（alt-screen 双栏）；返回后按动作分流

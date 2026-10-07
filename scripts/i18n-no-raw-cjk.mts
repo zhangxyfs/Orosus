@@ -78,7 +78,7 @@ export function scanSource(file: string, source: string): { line: number; text: 
 			const { line } = sf.getLineAndCharacterOfPosition(pos);
 			const lineStart = sf.getLineStarts()[line] ?? 0;
 			const lineEnd = source.indexOf("\n", lineStart);
-			return source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).includes("i18n:diag");
+			return source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).includes("i18n:diag") || source.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).includes("i18n:brand");
 		};
 		if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
 			const text = node.text;
