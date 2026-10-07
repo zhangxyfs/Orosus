@@ -1,5 +1,6 @@
 import * as theme from "./theme.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
+import { t } from "./i18n/app.ts";
 
 /**
  * 前台子代理 agent 组显示（2026-09-27 用户拍板格式，照 kimi agent-group 定式）：
@@ -33,16 +34,16 @@ const fmtTok = (n: number): string => (n < 1000 ? String(n) : `${(n / 1000).toFi
 /** 时长（精确到秒）：<60「N秒」；<1时「M分SS秒」；否则「H时M分」。 */
 const fmtDur = (ms: number): string => {
   const total = Math.max(0, Math.floor(ms / 1000));
-  if (total < 60) return `${total}秒`;
-  if (total < 3600) return `${Math.floor(total / 60)}分${String(total % 60).padStart(2, "0")}秒`;
-  return `${Math.floor(total / 3600)}时${Math.floor(total / 60) % 60}分`;
+  if (total < 60) return t("sub.dur.sec", { n: total });
+  if (total < 3600) return t("sub.dur.min", { m: Math.floor(total / 60), s: String(total % 60).padStart(2, "0") });
+  return t("sub.dur.hr", { h: Math.floor(total / 3600), m: (Math.floor(total / 60) % 60).toString() });
 };
 
 const isTerminal = (e: SubagentRosterEntry): boolean => e.status === "completed" || e.status === "failed";
 
 const statusWord = (e: SubagentRosterEntry): string => {
-  const base = e.status === "queued" ? "排队中" : e.status === "running" ? "运行中" : e.status === "completed" ? "完成" : "失败";
-  return base + (e.pendingApproval !== undefined ? "·等审批" : "") + (e.background ? "·后台" : "");
+  const base = e.status === "queued" ? t("sub.status.queued") : e.status === "running" ? t("sub.status.running") : e.status === "completed" ? t("sub.status.completed") : t("sub.status.failed");
+  return base + (e.pendingApproval !== undefined ? t("sub.mark.approval") : "") + (e.background ? t("sub.mark.background") : "");
 };
 
 const rowDur = (e: SubagentRosterEntry, now: number): number | undefined => {
@@ -58,7 +59,7 @@ const rowStats = (e: SubagentRosterEntry, now: number): string => {
   const segs = [
     e.model,
     e.effort,
-    e.toolCalls !== undefined ? `${e.toolCalls}次` : undefined,
+    e.toolCalls !== undefined ? t("sub.toolCalls", { n: e.toolCalls }) : undefined,
     dur !== undefined ? fmtDur(dur) : undefined, // CR-10①：非法日期 → 段缺失，不显「NaN时NaN分」
     e.usage !== undefined ? fmtTok(e.usage.input + e.usage.output) : undefined,
   ].filter((x): x is string => x !== undefined && x !== "");
@@ -86,23 +87,23 @@ export function agentGroupLines(entries: readonly SubagentRosterEntry[], now: nu
   if (entries.length === 0) return [];
   // ── 首行：数量 + 工种（全组同名才显，否则「子代理」）+ 聚合状态；括号段只在全部终态 ──
   const roles = [...new Set(entries.map((e) => e.roleName ?? "general"))];
-  const role = roles.length === 1 ? roles[0]! : "子代理";
+  const role = roles.length === 1 ? roles[0]! : t("sub.roleFallback");
   const active = entries.filter((e) => !isTerminal(e));
   const failed = entries.filter((e) => e.status === "failed");
   const done = entries.filter((e) => e.status === "completed");
   let state: string;
   let color: Parameters<typeof theme.fg>[0];
   if (active.length > 0) {
-    state = "运行中";
+    state = t("sub.status.running");
     color = "accent";
   } else if (failed.length === 0) {
-    state = "完成";
+    state = t("sub.status.completed");
     color = "muted";
   } else if (done.length === 0) {
-    state = "失败";
+    state = t("sub.status.failed");
     color = "err";
   } else {
-    state = `完成（${done.length}/${entries.length}）`; // 混合终态：M/N 完成
+    state = t("sub.status.mixed", { done: done.length, total: entries.length }); // 混合终态：M/N 完成
     color = "err";
   }
   let header = theme.fg(color, `● ${entries.length} ${role} agents ${state}`);
@@ -115,7 +116,7 @@ export function agentGroupLines(entries: readonly SubagentRosterEntry[], now: nu
     const span = Math.max(...ends) - Math.min(...starts);
     // CR-10①：任一端非法日期（盘上损坏重放）→ 总时长段跳过，不显「NaN时NaN分」
     const durSeg = Number.isFinite(span) ? ` · ${fmtDur(Math.max(0, span))}` : "";
-    header += theme.dim(`（${tools} 工具调用 · ${fmtTok(tok)} 词元${durSeg}）`);
+    header += theme.dim(t("sub.groupSummary", { tools, tok: fmtTok(tok), dur: durSeg === "" ? undefined : durSeg.slice(3) }));
   }
 
   // ── 子行：父子摊平树（父行 ├─/└─，孙行嵌套 │/空续接）→ 分桶挑选 → 连接符按显示序现算 ──
@@ -145,7 +146,7 @@ export function agentGroupLines(entries: readonly SubagentRosterEntry[], now: nu
     lines.push(`  ${prefix}${branch}  ${name}${stats}·${st}`); // 状态前不加空格——拍板模板全 · 连
   }
   const rest = flat.length - shown.length;
-  if (rest > 0) lines.push(theme.dim(`  …还有 ${rest} 个（/tasks 看全部）`));
+  if (rest > 0) lines.push(theme.dim(`  ${t("sub.moreRows", { n: rest })}`)); // 前导两格缩进留调用侧（表值不带填充）
   return lines;
 }
 
@@ -157,5 +158,5 @@ export function backgroundRunningCount(entries: readonly SubagentRosterEntry[]):
 /** 输入行计数文案（T13）：「N 任务正在执行」青绿色；为零 = 空串（整段消失）。 */
 export function subagentCountHint(count: number): string {
   if (count <= 0) return "";
-  return theme.fg("accent", `${count} 任务正在执行`);
+  return theme.fg("accent", t("foot.subagentCount", { n: count }));
 }

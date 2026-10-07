@@ -10,6 +10,7 @@ import { registerToolLabels } from "./render.ts";
 import type { FullApp, PanelNetwork } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
 
 /** m5-split-main T6：MCP 面板族自 main.ts 搬入。横切单例经本依赖对象注入（D2 签名注入）：
  *  getH——harness 单例；commandUi——行模式菜单口；activeModuleNames/closeGoneModuleUi/refreshSkillMenu/
@@ -50,7 +51,7 @@ export const mcpConnRows = (deps: McpUiDeps): PanelNetwork["connections"] => {
 	return rows.map((r) => ({
 		name: r.name,
 		state: r.state,
-		desc: `${r.transport === "http" ? "HTTP" : "stdio"}${r.toolCount !== undefined ? ` · ${r.toolCount} 工具` : ""}`,
+		desc: t("conn.desc", { n: r.toolCount ?? "", transport: r.transport === "http" ? "HTTP" : "stdio" }),
 		...(r.state === "connected" && r.connectMs !== undefined ? { connectMs: r.connectMs } : {}),
 	}));
 };
@@ -75,12 +76,12 @@ const afterMcpWrite = (deps: McpUiDeps, app: FullApp | undefined, doneText: stri
 				void deps.refreshSkillMenu();
 				await deps.refreshPanel();
 			} catch (err) {
-				(app ?? deps.getActiveApp())?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
+				(app ?? deps.getActiveApp())?.showToast(t("toast.reloadFailed", { err: err instanceof Error ? err.message : String(err) }));
 			}
 		})();
 		return doneText;
 	}
-	return `${doneText} · 有任务在执行，稍后请输入 /reload 重新加载`;
+	return t("toast.busyReload", undefined, doneText); // 表值整句；缺键退 doneText
 };
 const runMcpToggle = async (deps: McpUiDeps, app: FullApp | undefined, row: McpCatalogRow): Promise<string> => {
 	// 懒 server 的「启动」语义（2026-09-30「待启动态按启停=被停用」陷阱修）：待启动/首启失败的预装件，
@@ -91,14 +92,14 @@ const runMcpToggle = async (deps: McpUiDeps, app: FullApp | undefined, row: McpC
 		try {
 			const start = await deps.getH().graph().services.getOptional("mcp.start");
 			if (typeof start !== "function") {
-				app.showToast("mcp 模块未提供启动口——重启 CLI 后再试");
+				app.showToast(t("toast.noMcpStart"));
 				return "";
 			}
-			app.showToast(`正在启动 ${row.name}（首次可能需要下载，最长 60 秒）…`);
+			app.showToast(t("toast.mcpStarting", { name: row.name }));
 			await (start as (name: string) => Promise<void>)(row.name);
-			app.showToast(`已连接 ${row.name}——工具就绪`);
+			app.showToast(t("toast.mcpStarted", { name: row.name }));
 		} catch (err) {
-			app.showToast(`启动 ${row.name} 失败：${err instanceof Error ? err.message : String(err)}`);
+			app.showToast(t("toast.mcpStartFailed", { name: row.name, err: err instanceof Error ? err.message : String(err) }));
 		}
 		return "";
 	}
@@ -116,16 +117,16 @@ export const openMcpPanel = async (app: FullApp, deps: McpUiDeps): Promise<void>
 		const w = app.pickRowWidth();
 		const items = [
 			...rows.map((r) => mcpListRow(w, r)),
-			...(rows.length === 0 ? [theme.fg("muted", "（还没有 MCP server——按 Alt + N 或回车添加第一个）")] : []),
+			...(rows.length === 0 ? [theme.fg("muted", t("mcp.emptyPanel"))] : []),
 		];
 		let addRequested = false;
 		const picked = await app.pickOverlay(
-			`MCP（${rows.length} 个 server${rows.length === 0 ? "" : " · 预装按需启动"}）`,
+			t("mcp.listTitle", { n: rows.length, lazy: rows.length === 0 ? undefined : "1" }), // 可选组「· 预装按需启动」由 lazy 在场触发
 			items,
 			selAt,
 			{
 				"alt+n": { label: "Alt + N 添加", run: (ctrl): boolean => { addRequested = true; ctrl.close(); return true; } },
-				"alt+k": { label: "Alt + K 启停", run: (): boolean => { app.showToast("列表页拿不准选中行——回车进详情再 Alt + K"); return true; } },
+				"alt+k": { label: "Alt + K 启停", run: (): boolean => { app.showToast(t("toast.listAltK")); return true; } },
 			},
 		);
 		if (addRequested || (rows.length === 0 && picked !== undefined)) {
@@ -135,7 +136,7 @@ export const openMcpPanel = async (app: FullApp, deps: McpUiDeps): Promise<void>
 				mode: "add",
 				configPath: defaultMcpCmdDeps().configPath(),
 				existingNames: existing,
-				onSaved: (name) => { void afterMcpWrite(deps, app, `已添加 ${name}（模块图重载中）`); },
+				onSaved: (name) => { void afterMcpWrite(deps, app, t("mcp.added", { name })); },
 			});
 			continue; // 窗 Esc 关后循环重开列表（行集现取）
 		}
@@ -168,8 +169,8 @@ const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked
 			run: (): string => {
 				if (row.source !== "config") {
 					detailMsg = row.source === "project"
-						? "此 server 来自项目 .mcp.json——Orosus 不改它的来源；停用用 Alt + K（用户层覆盖）"
-						: "预装 server 不可修改——只能停用（Alt + K）";
+						? t("mcp.projectSource")
+						: t("mcp.preloadNoEdit");
 					return detail();
 				}
 				mcpWarmCatalog(deps);
@@ -179,7 +180,7 @@ const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked
 					original: configuredMcpServer(row.name),
 					configPath: defaultMcpCmdDeps().configPath(),
 					existingNames: [],
-					onSaved: (name) => { void afterMcpWrite(deps, app, `已修改 ${name}（模块图重载中）`); },
+					onSaved: (name) => { void afterMcpWrite(deps, app, t("mcp.modified", { name })); },
 				});
 				return detail();
 			},
@@ -192,7 +193,7 @@ const mcpDetailKeys = (app: FullApp, row: McpCatalogRow, items: string[], picked
 				run: (): string => {
 					if (!deleteArm) {
 						deleteArm = true; // 两拍制（设计空白拍板：弹窗里误按一下不该直接删配置）
-						detailMsg = `再按一次 d 确认删除 ${row.name} · 按其他键取消`;
+						detailMsg = t("mcp.deleteArm", { name: row.name });
 						return detail();
 					}
 					void runMcpCommand(`remove ${row.name}`, mcpPanelDeps()).then((r) => {
@@ -225,10 +226,10 @@ export const openMcpLine = async (out: (s: string) => void, deps: McpUiDeps): Pr
 		mcpWarmCatalog(deps);
 		const rows = await mcpCatalogRows(deps);
 		const w = 76;
-		const items = [...rows.map((r) => mcpListRow(w, r)), ...(rows.length === 0 ? ["（还没有 MCP server——添加用 /mcp add 名字 命令或URL）"] : [])];
+		const items = [...rows.map((r) => mcpListRow(w, r)), ...(rows.length === 0 ? [t("mcp.emptyLine")] : [])];
 		let picked: number;
 		try {
-			const chosen = await deps.commandUi.choose("MCP（回车查看详情）", items);
+			const chosen = await deps.commandUi.choose(t("mcp.lineTitle"), items);
 			picked = items.indexOf(chosen);
 		} catch (err) {
 			if (isEsc(err)) return;
@@ -239,17 +240,23 @@ export const openMcpLine = async (out: (s: string) => void, deps: McpUiDeps): Pr
 		const row = rows[picked]!;
 		out(mcpDetailText(w, row));
 		try {
-			const actions = [row.state === "disabled" ? "启用（Alt + K 同款）" : "停用（Alt + K 同款）"];
-			if (row.state === "pending-confirm") actions.push("确认（信任 t 键同款）");
-			if (row.source === "config") actions.push("删除");
-			actions.push("返回列表");
+			// 协议耦合修（清单 §三②）：选项显示与分支判据两侧同走 t() 值——换语言不破分支
+			const optEnable = t("mcp.action.enable");
+			const optDisable = t("mcp.action.disable");
+			const optTrust = t("mcp.action.trust");
+			const optDelete = t("mcp.action.delete");
+			const optBack = t("mcp.action.back");
+			const actions = [row.state === "disabled" ? optEnable : optDisable];
+			if (row.state === "pending-confirm") actions.push(optTrust);
+			if (row.source === "config") actions.push(optDelete);
+			actions.push(optBack);
 			const action = await deps.commandUi.choose(row.name, actions);
-			if (action === "启用（Alt + K 同款）" || action === "停用（Alt + K 同款）") {
+			if (action === optEnable || action === optDisable) {
 				out(await runMcpToggle(deps, undefined, row));
-			} else if (action === "确认（信任 t 键同款）") {
+			} else if (action === optTrust) {
 				const r = await runMcpCommand(`trust ${row.name}`, mcpPanelDeps());
 				out(r.wrote ? afterMcpWrite(deps, undefined, r.text) : r.text);
-			} else if (action === "删除") {
+			} else if (action === optDelete) {
 				const r = await runMcpCommand(`remove ${row.name}`, mcpPanelDeps());
 				out(r.wrote ? afterMcpWrite(deps, undefined, r.text) : r.text);
 			}

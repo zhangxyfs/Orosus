@@ -1,4 +1,5 @@
 import { networkInterfaces } from "node:os";
+import { t } from "./i18n/app.ts";
 
 /** 批 D（2026-10-01 拍板 A+B）：代理环境自动接线——检测到代理环境变量且 Node ≥24 时自动设
  *  NODE_USE_ENV_PROXY=1（用户未显式设才设——显式 =0 是用户明示直连，尊重）。Node 内置 fetch（undici）
@@ -77,10 +78,10 @@ export async function readWindowsSystemProxy(
  *  仅系统代理 = 开着但本进程 fetch 不认它（undici 不读 WinINET）——如实标注，免「开了代理为何还慢」困惑；
  *  都无 = 直连。优先级 env > TUN > 系统代理 > 直连。 */
 export function proxyDisplayText(envUrl: string | undefined, systemProxy: string | undefined, tunAdapter: string | undefined): string {
-  if (envUrl !== undefined) return `已启用 · ${proxyHostOf(envUrl)}`;
-  if (tunAdapter !== undefined) return `TUN · ${tunAdapter}（透明路由）`;
-  if (systemProxy !== undefined) return `系统代理 · ${systemProxy}（本进程未走）`;
-  return "直连 · 未检测到代理";
+  if (envUrl !== undefined) return t("proxy.enabled", { host: proxyHostOf(envUrl) });
+  if (tunAdapter !== undefined) return t("proxy.tun", { adapter: tunAdapter });
+  if (systemProxy !== undefined) return t("proxy.system", { host: systemProxy });
+  return t("proxy.direct");
 }
 
 /** TUN 网卡探测（2026-10-01 走查实锤三连漏的第三源）：Clash Verge/Meta、v2rayN 等的 TUN 模式走虚拟网卡

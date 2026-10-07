@@ -11,6 +11,7 @@ import { lastRequestMsOf, lastUsageOf, shortenPath } from "./usage-text.ts";
 import { panelTasksFromEvent } from "./todo-panel.ts";
 import { defaultMenuDeps, type ProviderEntry } from "@orosus/provider-custom";
 import type { SessionEvent } from "@orosus/core";
+import { t } from "./i18n/app.ts";
 
 /** m5-split-main T9：模块面板/预设族自 main.ts 搬入。横切单例经本依赖对象注入（D2）：
  *  getH/getActiveApp——harness 与全屏实例访问器（activeApp 本体留守 main.ts 渲染装配段——方案
@@ -105,7 +106,7 @@ export const reloadModulesIdle = (deps: ModulesUiDeps, app: FullApp | undefined,
 				deps.refreshSkillMenu();
 				await refreshPanel(deps);
 			} catch (err) {
-				(app ?? deps.getActiveApp())?.showToast(`重载失败：${err instanceof Error ? err.message : String(err)}（已写配置，可 /reload 或重启对齐）`);
+				(app ?? deps.getActiveApp())?.showToast(t("toast.reloadFailed", { err: err instanceof Error ? err.message : String(err) }));
 			}
 		})();
 		return "";
@@ -127,7 +128,7 @@ const providersTtl = async (): Promise<Record<string, ProviderEntry>> => {
  *  （assistant/message.durationMs 投影，老会话无字段则只显端点）。refreshPanel 异步预取进 panelCache。 */
 const modelServiceOf = async (events: SessionEvent[]): Promise<string> => {
 	const v = realReadModel(process.cwd())() ?? "";
-	if (v === "") return "（未配置——/provider 配置）";
+	if (v === "") return t("panel.unconfigured");
 	const providerName = v.includes("/") ? v.split("/")[0]! : v;
 	const entry = (await providersTtl())[providerName];
 	let host = providerName;
@@ -139,7 +140,7 @@ const modelServiceOf = async (events: SessionEvent[]): Promise<string> => {
 		}
 	}
 	const lastMs = lastRequestMsOf(events);
-	return lastMs === undefined ? host : `${host} · 末次 ${msText(lastMs)}`;
+	return lastMs === undefined ? host : t("net.modelServiceLast", { host, ms: msText(lastMs) });
 };
 
 /** 面板快照（渲染同步路径的数据源）：get/set 访问器（可变单例——m5-split-main T9，D2）。 */
@@ -155,9 +156,9 @@ export const lockReasonFor = (name: string): string | undefined => {
 		const v = realReadModel(process.cwd())() ?? "";
 		return v === "" ? "" : v.split("/")[0]!;
 	})();
-	return name === "orosus-core" ? "核心本体，不可插拔"
-		: name === "approval" ? "安全护栏模块（出厂 required），放松审批走 /permission never"
-		: name === activeProviderModule ? "当前使用的 provider，拔了会断模型（先 /model 换到别的）"
+	return name === "orosus-core" ? t("mod.lock.core")
+		: name === "approval" ? t("mod.lock.approval")
+		: name === activeProviderModule ? t("mod.lock.provider")
 		: undefined;
 };
 
@@ -206,14 +207,14 @@ export const refreshPanel = async (deps: ModulesUiDeps): Promise<void> => {
 		model: (() => {
 			// F5 十三轮② 用户实测：裸 provider 值不能直接当模型名显示——解析槽的 defaultModel
 			const v = realReadModel(process.cwd())() ?? "";
-			if (v === "") return "（未配置——/provider 配置）";
+			if (v === "") return t("panel.unconfigured");
 			if (v.includes("/")) return v.split("/").pop()!;
 			const slot = h.graph().services.provider(v) as { defaultModel?: string } | undefined;
 			return slot?.defaultModel ?? v;
 		})(),
     session: (() => {
       // 会话项显示标题（2026-09-23 用户拍板——sid 不可读）；未命名显示「新会话」直到 /title 或 fork 命名
-      return sessionLabelOf(events) ?? "新会话";
+      return sessionLabelOf(events) ?? t("panel.newSession");
     })(),
 		cwd: shortenPath(process.cwd(), 26),
 		tokens: lastUsageOf(events),
@@ -226,7 +227,7 @@ export const refreshPanel = async (deps: ModulesUiDeps): Promise<void> => {
 				const lockedReason = lockReasonFor(a.name);
 				return {
 					name: a.name,
-					desc: a.name === "orosus-core" ? "核心循环" : "",
+					desc: a.name === "orosus-core" ? t("mod.desc.core") : "",
 					state: a.state === "active" ? ("mounted" as const) : a.state === "pending-confirm" ? ("pendingConfirm" as const) : ("off" as const), // m5 T17 第四态
 					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
 				};
@@ -249,7 +250,7 @@ export const moduleCards = (deps: ModulesUiDeps): PanelData["cards"] => {
 		try {
 			out.push({ area: c.spec.area, order: c.spec.order, title: c.spec.title, widgets: c.spec.widgets });
 		} catch (err) {
-			deps.getH().log("host.card.read-error", `模块卡读取抛错，当帧剔除：${c.owner}/${c.spec.title}`, { owner: c.owner, title: c.spec.title, error: String(err instanceof Error ? err.message : err) });
+			deps.getH().log("host.card.read-error", `模块卡读取抛错，当帧剔除：${c.owner}/${c.spec.title}`, { owner: c.owner, title: c.spec.title, error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
 		}
 	}
 	return out.sort((a, b) => a.order - b.order);

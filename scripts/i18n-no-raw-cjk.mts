@@ -22,9 +22,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** 入册清单（T4 试点起步；T5-T14 各区抽取任务入册其文件并收紧 max）。 */
 export const ENROLLED: readonly { file: string; max: number; note?: string }[] = [
-	{ file: "apps/cli/src/tui/fullapp-types.ts", max: 11, note: "T4 试点入册；残余 elapsed 族——T5 清零" },
+	{ file: "apps/cli/src/tui/fullapp-types.ts", max: 0, note: "T5 清零（elapsed/diag.more 族已 t() 化）" },
 	{ file: "apps/cli/src/tui/fullapp-frame.ts", max: 0, note: "T4 试点清零（唯一残余 = logWarn 诊断串走 i18n:diag 豁免）" },
-	{ file: "apps/cli/src/tui/fullapp-panels.ts", max: 28, note: "T4 试点入册；残余尾行/状态页/网络页/挂载页/任务页——T5 清零" },
+	{ file: "apps/cli/src/tui/fullapp-panels.ts", max: 0, note: "T5 清零（尾行/状态页/网络页/任务页已 t() 化）" },
+	{ file: "apps/cli/src/modules-ui.ts", max: 2, note: "T5 入册；残余 = 预设写盘/reload 两 toast（T8 设置族）" },
+	{ file: "apps/cli/src/proxy-env.ts", max: 0, note: "T5 清零" },
+	{ file: "apps/cli/src/mcp-ui.ts", max: 8, note: "T5 入册；残余 = 键帽行八处（清单标不翻-键名——Alt+N 添加等动词面走查定夺）" },
+	{ file: "apps/cli/src/subagent-status.ts", max: 0, note: "T5 清零（agent 组全族 + sub.status.failed 补账）" },
 ];
 
 const CJK = /[\u2e80-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

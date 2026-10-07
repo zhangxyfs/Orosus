@@ -57,10 +57,10 @@ const sepRow = (w: number): string => {
 const modRow = (m: PanelData["modules"][number], selected: boolean, w: number): string => {
 	const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 	// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
-	const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
+	const lockSuffix = m.locked === true ? theme.dim(t("mod.lockSuffix")) : "";
 	const stateText = modStateText(m.state);
 	const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", stateText) : theme.dim(stateText);
-	const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
+	const lockW = m.locked === true ? visibleWidth(t("mod.lockSuffix")) : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
 	// CTU-09（2026-09-28 code review）：模块名源头截断（注册面供给可超长——原 padToWidth 兜底把行尾
 	// 状态字切掉）。预算 = w − 前缀「 ● 」(3) − 锁定后缀 − 状态字 − 最小 gap(1)
 	const nameTxt = truncateToWidth(m.name, Math.max(4, w - 3 - lockW - visibleWidth(stateText) - 1));
@@ -124,10 +124,10 @@ export function createPanels(app: FullApp) {
 	const tailLine = (): string => {
 		const s = app.state;
 		// 模块询问挂起期：spinner 让位（F5——「正在生成…」与等待输入并存误导，用户不知该答什么）
-		if (app.pendingUi?.kind === "ask") return theme.fg("info", "● 等待输入——Enter 确认 · Esc 取消");
+		if (app.pendingUi?.kind === "ask") return theme.fg("info", t("tail.waitInput"));
 		// 交互挂起期（pick/view）spinner 同让位（2026-09-22 用户实测：/model 选择期间「正在生成…」照转——
 		// 挂起 = 等用户操作，不是在生成；浮层自带操作页脚，尾行回退待命态）
-		if (app.pendingUi !== undefined) return theme.dim("正在待命");
+		if (app.pendingUi !== undefined) return theme.dim(t("tail.idle"));
 		// pick 不占尾行（F5 十七轮①：选择浮层自带完整操作页脚——流区再挂「等待选择」是复读噪音）
 		// 钩子运行中（m5-hooks T11/D20）：灰字显形 ≥300ms 才到这（数据源防闪屏）；busy 期同样顶替——
 		// 工具钩子并进本行不另设行（cc 形态 N/M 计数在文案里）
@@ -135,11 +135,11 @@ export function createPanels(app: FullApp) {
 		if (s.busy) {
 			if (s.compacting) {
 				// 压缩期（2026-09-23 用户拍板）：石青（info）色专属文案——与 turn 生成的「正在生成…」区分
-				return `${theme.fg("info", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("info", "上下文压缩中…")}`;
+				return `${theme.fg("info", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("info", t("tail.compacting"))}`;
 			}
-			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", "正在生成…")}`;
+			return `${theme.fg("accent", SPIN_FRAMES[s.spinIdx]!)} ${theme.fg("muted", t("tail.busy"))}`;
 		}
-		return theme.dim("正在待命");
+		return theme.dim(t("tail.idle"));
 	};
 
 	const statusRows = (w: number, h: number): string[] => {
@@ -172,20 +172,20 @@ export function createPanels(app: FullApp) {
 			const frac = total - full;
 			const fracCh = frac > 0 ? FRACS[Math.min(7, Math.ceil(frac * 8) - 1)] : usedCtx > 0 ? "▏" : "";
 			content.push(
-				` ${theme.fg("muted", "上下文")} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
+				` ${theme.fg("muted", t("kv.context"))} ${theme.fg("accent", "█".repeat(full) + fracCh)}${theme.fg("muted", "░".repeat(Math.max(0, barW - full - (fracCh === "" ? 0 : 1))))} ${theme.fg("muted", pctText)}`,
 			);
 			content.push(sepRow(inner));
 			const slots = moduleSlots();
 			const modPages = Math.max(1, Math.ceil(d.modules.length / slots));
 			const modPage = Math.min(modPages - 1, Math.floor(s.moduleSel / slots));
 			const lo = modPage * slots;
-			const headL = ` ${theme.fg("muted", "模块挂载")}`;
+			const headL = ` ${theme.fg("muted", t("head.modules"))}`;
 			const headR = theme.dim(`${modPage + 1}/${modPages} · MODULES`);
 			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
 			for (let i = lo; i < Math.min(d.modules.length, lo + slots); i++) {
 				content.push(modRow(d.modules[i]!, focused && i === s.moduleSel, inner));
 			}
-			return panelBox("运行状态", `1/${pages}`, focused, w, h, content, ["←→ 翻页 · PgUp/PgDn 模块翻页", "↑↓ 模块选择 · Enter 挂/卸载"], undefined, [sepRow(inner)]);
+			return panelBox(t("panel.title.status"), `1/${pages}`, focused, w, h, content, [t("hint.statusPage"), t("hint.modSelect")], undefined, [sepRow(inner)]);
 		}
 		if (page === 1) {
 			// 2026-10-01 拍板填实（占位行退役）：被动真值——代理态 + 模型服务信息行 + mcp.catalog 五态
@@ -193,7 +193,7 @@ export function createPanels(app: FullApp) {
 			const n = d.network;
 			const content: string[] = [];
 			if (n === undefined) {
-				content.push(` ${theme.fg("muted", "（网络面数据未装配——供数退化，详见诊断日志）")}`);
+				content.push(` ${theme.fg("muted", t("net.notReady"))}`);
 			} else {
 				content.push(kvRow(t("kv.proxy"), n.proxy, inner));
 				content.push(kvRow(t("kv.modelService"), n.modelService, inner));
@@ -203,7 +203,7 @@ export function createPanels(app: FullApp) {
 			const connPages = Math.max(1, Math.ceil(conns.length / CONN_SLOTS));
 			const connPage = Math.min(s.connPage, connPages - 1);
 			const lo = connPage * CONN_SLOTS;
-			const headL = ` ${theme.fg("muted", "网络 / MCP 连接")}`;
+			const headL = ` ${theme.fg("muted", t("head.conns"))}`;
 			// 右段窄卡降级（2026-10-01 走查「顶飞」修：标题+右段超内宽曾被 padToWidth 腰斩成「1/1 · SER」贴边）——
 			// 余量不足先丢「· SERVERS」后缀只留页码；标题侧不截（与页 0「模块挂载」头同权重）
 			const pageTag = `${connPage + 1}/${connPages}`;
@@ -212,13 +212,13 @@ export function createPanels(app: FullApp) {
 			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
 			content.push(sepRow(inner)); // 小节头与列表之间分隔线（2026-10-01 走查打回：贴太近）
 			if (conns.length === 0) {
-				content.push(` ${theme.fg("muted", "（无 MCP server——/settings 添加，或模块挂载页启用 mcp）")}`);
+				content.push(` ${theme.fg("muted", t("net.empty"))}`);
 			}
 			for (let i = lo; i < Math.min(conns.length, lo + CONN_SLOTS); i++) {
 				content.push(connRow(conns[i]!, inner));
 			}
 			// 提示两行制（2026-10-01 走查打回：单行 27 列在窄侧栏被 wrapText 折行——拆两行各保短，行数恒定不闪）
-			return panelBox("网络 · MCP", `2/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回", "PgUp/PgDn 连接翻页"], undefined, [sepRow(inner)]);
+			return panelBox(t("panel.title.network"), `2/${pages}`, focused, w, h, content, [t("hint.switchCard"), t("hint.connPage")], undefined, [sepRow(inner)]);
 		}
 		return renderModuleCard(topCards[page - 2]!, w, h, focused, page, pages);
 	};
@@ -230,10 +230,10 @@ export function createPanels(app: FullApp) {
 		try {
 			content = renderWidgets(card.widgets, inner);
 		} catch (err) {
-			app.io.logWarn?.("tui.card.render-error", `模块卡渲染抛错，当帧占位：${card.title}`, { error: String(err instanceof Error ? err.message : err) });
-			content = [` ${theme.fg("warn", "（卡片渲染出错——下帧恢复即回，见诊断日志）")}`];
+			app.io.logWarn?.("tui.card.render-error", `模块卡渲染抛错，当帧占位：${card.title}`, { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
+			content = [` ${theme.fg("warn", t("card.error"))}`];
 		}
-		return panelBox(card.title, `${page + 1}/${pages}`, focused, w, h, content, ["←→ 切卡 · Esc 返回"], undefined, [sepRow(inner)]);
+		return panelBox(card.title, `${page + 1}/${pages}`, focused, w, h, content, [t("hint.switchCard")], undefined, [sepRow(inner)]);
 	};
 
 	// 模块挂载区每页行数（2026-10-06 动态化——原写死 MODULE_SLOTS=5 不随终端高度）：渲染与 PgUp/PgDn
@@ -279,11 +279,11 @@ export function createPanels(app: FullApp) {
 			const row = ` ${taskTick(t.state)} ${truncateToWidth(text, inner - 4)}`;
 			content.push(focused && i === s.taskSel ? theme.bg("accentSoft", padToWidth(row, inner - 1)) : row);
 		}
-		const footL = theme.dim(" 由 Agent 实时同步");
-		const pageTag = itemPages > 1 ? ` · 第 ${itemPage + 1}/${itemPages} 页` : ""; // 任务条目分页并进注脚（页码位让给卡组）
-		const footR = theme.dim(`任务数：${done}/${d.tasks.length}${pageTag}`);
+		const footL = theme.dim(t("task.footSync"));
+		const pageTag = itemPages > 1 ? t("task.pageTag", { n: itemPage + 1, m: itemPages }) : ""; // 任务条目分页并进注脚（页码位让给卡组）
+		const footR = theme.dim(t("task.count", { done, total: d.tasks.length }) + pageTag);
 		const footer = [footL + " ".repeat(Math.max(1, inner - visibleWidth(footL) - visibleWidth(footR))) + footR];
-		return panelBox("任务清单", pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? ["←→ 切卡 · PgUp/PgDn 任务翻页 · Esc 返回"] : ["PgUp/PgDn 翻页 · Esc 返回"], footer, [sepRow(inner)]);
+		return panelBox(t("panel.title.tasks"), pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? [t("hint.tasksCards")] : [t("hint.tasksPage")], footer, [sepRow(inner)]);
 	};
 
 	return { sidebarW, inputInnerW, tailLine, panelBox, kvRow, sep: sepRow, modRow, connRow, statusRows, renderModuleCard, moduleSlots, taskPageSlots, taskRows };

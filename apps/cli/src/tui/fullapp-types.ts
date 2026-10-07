@@ -320,10 +320,10 @@ export function elapsedText(startedAt: string | undefined, now: number = Date.no
 	const min = Math.floor(total / 60) % 60;
 	const hr = Math.floor(total / 3600) % 24;
 	const day = Math.floor(total / 86400);
-	if (total < 60) return `${total} 秒`;
-	if (total < 3600) return `${Math.floor(total / 60)} 分 ${p2(sec)} 秒`;
-	if (total < 86400) return `${hr} 时 ${p2(min)} 分 ${p2(sec)} 秒`;
-	return `${day} 天 ${hr} 时`;
+	if (total < 60) return t("elapsed.sec", { n: total });
+	if (total < 3600) return t("elapsed.min", { m: Math.floor(total / 60), s: p2(sec) });
+	if (total < 86400) return t("elapsed.hr", { h: hr, m: p2(min), s: p2(sec) });
+	return t("elapsed.day", { d: day, h: hr });
 }
 
 /** 诊断一级列表行拼装（T9，原型一级）：❯ ● 模块名 [标签] 原因……… N 次 · HH:MM:SS。
@@ -342,7 +342,7 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 		const mark = idx === sel ? theme.fg("accent", "❯") : " ";
 		const head = ` ${mark} ${theme.fg("err", "●")} ${e.name} ${theme.fg("info", e.tag)} `;
 		const time = e.last.slice(11, 19); // ISO 时分秒（与日志同口径）
-		const right = `${e.count} 次 · ${time}`;
+		const right = t("diag.list.count", { n: e.count, "hh:mm:ss": time });
 		const headW = visibleWidth(stripAnsi(head));
 		const reasonW = innerW - headW - right.length - 2;
 		const reason = reasonW >= 3 ? truncateToWidth(e.reason, reasonW) : "";
@@ -351,7 +351,7 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 	}
 	const restUp = wstart;
 	const restDown = entries.length - wstart - DIAG_LIST_ROWS;
-	const hints = [restUp > 0 ? `↑ 还有 ${restUp}` : "", restDown > 0 ? `↓ 还有 ${restDown}` : ""].filter(Boolean).join(" · ");
+	const hints = [restUp > 0 ? t("diag.more.up", { n: restUp }) : "", restDown > 0 ? t("diag.more.down", { n: restDown }) : ""].filter(Boolean).join(" · ");
 	lines.push(hints === "" ? "" : theme.dim(`   ${hints}`));
 	return { lines, selRow: sel - wstart };
 }
