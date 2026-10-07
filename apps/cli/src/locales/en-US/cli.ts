@@ -139,6 +139,8 @@ export const enUSCli: Record<string, string> = {
 	"banner.failed": "⚠ {n} modules degraded (full list: orosus --dump-modules):",
 	"banner.failedRow": "  - {name}: {reason}",
 	"banner.active": "[orosus] {n} modules active",
+	"banner.keys1": " Tab focus · Shift + Tab permission · Alt + E resize thinking · /<command> · Ctrl + T sidebar",
+	"banner.keys2": " Alt + V paste image · Ctrl + E diagnostics · Tab panel focus · Ctrl + P modules",
 	"startup.fail": "Startup failed: {reason}",
 	"startup.failLog": "Diagnostic log: {home}/logs/diagnostic-{date}.jsonl",
 

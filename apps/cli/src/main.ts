@@ -1237,10 +1237,11 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	theme.fg("accent", "│") + theme.fg("muted", " 玄墨为基，青玉点睛，石青、暖金、赭石各载其义。") + "           " + theme.fg("accent", "│"), // i18n:brand D12 不翻——品牌身份
 	theme.fg("accent", "│") + theme.fg("muted", " 如层峦绵亘，灵脉贯通。") + "                                   " + theme.fg("accent", "│"), // i18n:brand D12 不翻——品牌身份
 	theme.fg("accent", "╰──────────────────────────────────────────────────────────╯"),
-	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头； // i18n:brand D12 不翻——品牌身份
-	// m5-peers T6e/D23：行 2 尾追加 Ctrl + P 模块——静态常驻，无登记模块时空态 toast 兜底） // i18n:brand D12 不翻——品牌身份
-	theme.dim(" Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏"), // i18n:brand D12 不翻——品牌身份
-	theme.dim(" Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点 · Ctrl + P 模块"), // i18n:brand D12 不翻——品牌身份
+	// 快捷键导引（2026-09-27 拍板：移出框外置框下，定两行——行 1 到 Ctrl + T 缩放侧栏、行 2 Alt + V 起头；
+	// m5-peers T6e/D23：行 2 尾追加 Ctrl + P 模块——静态常驻，无登记模块时空态 toast 兜底）。
+	// 2026-10-07 用户走查点名：两行是功能提示非品牌——D12 翻案改走键（banner.keys1/2，三语）；slogan 三行维持品牌不翻
+	theme.dim(t("banner.keys1")),
+	theme.dim(t("banner.keys2")),
 	"",
 ];
 

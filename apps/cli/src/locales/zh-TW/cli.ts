@@ -139,6 +139,8 @@ export const zhTWCli: Record<string, string> = {
 	"banner.failed": "⚠ {n} 個模組降級（完整表：orosus --dump-modules）：",
 	"banner.failedRow": "  - {name}: {reason}",
 	"banner.active": "[orosus] {n} 個模組已啟用",
+	"banner.keys1": " Tab 切換焦點 · Shift + Tab 切換權限 · Alt + E 縮放思考 · /<命令> · Ctrl + T 縮放側欄",
+	"banner.keys2": " Alt + V 貼圖 · Ctrl + E 診斷 · Tab 面板焦點 · Ctrl + P 模組",
 	"startup.fail": "啟動失敗：{reason}",
 	"startup.failLog": "診斷記錄：{home}/logs/diagnostic-{date}.jsonl",
 

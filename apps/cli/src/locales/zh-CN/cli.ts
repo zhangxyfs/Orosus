@@ -139,6 +139,8 @@ export const zhCNCli: Record<string, string> = {
 	"banner.failed": "⚠ {n} 个模块降级（完整表：orosus --dump-modules）：",
 	"banner.failedRow": "  - {name}: {reason}",
 	"banner.active": "[orosus] {n} 个模块已激活",
+	"banner.keys1": " Tab 切换焦点 · Shift + Tab 切换权限 · Alt + E 缩放思考 · /<命令> · Ctrl + T 缩放侧栏",
+	"banner.keys2": " Alt + V 贴图 · Ctrl + E 诊断 · Tab 面板焦点 · Ctrl + P 模块",
 	"startup.fail": "启动失败：{reason}",
 	"startup.failLog": "诊断日志：{home}/logs/diagnostic-{date}.jsonl",
 
