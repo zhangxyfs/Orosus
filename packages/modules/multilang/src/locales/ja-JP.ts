@@ -79,7 +79,7 @@ export const jaJP: Record<string, string> = {
 	"kv.context": "上下文",
 	"head.modules": "モジュール",
 	"panel.title.status": "実行ステータス",
-	"hint.statusPage": "←→ ページ送り · PgUp/PgDn モジュールページ送り",
+	"hint.statusPage": "←→ ページ送り · PgUp/PgDn",
 	"hint.modSelect": "↑↓ モジュール選択 · Enter マウント/アンマウント",
 	"net.notReady": "（ネットワーク面のデータが未組立——供給低下、診断ログをご確認ください）",
 	"kv.proxy": "プロキシ",

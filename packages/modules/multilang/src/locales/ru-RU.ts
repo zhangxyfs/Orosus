@@ -79,7 +79,7 @@ export const ruRU: Record<string, string> = {
 	"kv.context": "Контекст",
 	"head.modules": "Модули",
 	"panel.title.status": "Статус",
-	"hint.statusPage": "←→ Стр. · PgUp/PgDn страницы модулей",
+	"hint.statusPage": "←→ Стр. · PgUp/PgDn",
 	"hint.modSelect": "↑↓ Выбор модуля · Enter вкл./выкл.",
 	"net.notReady": "(Данные сети не собраны — ухудшенная подача; см. журнал диагностики)",
 	"kv.proxy": "Прокси",
