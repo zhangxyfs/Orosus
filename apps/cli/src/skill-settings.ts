@@ -4,6 +4,7 @@ import { orosusHome } from "@orosus/contracts/home";
 import { seedBundledSkills } from "@orosus/skill";
 import { fg, dim } from "./theme.ts";
 import { truncateToWidth, visibleWidth } from "./tui/width.ts";
+import { t } from "./i18n/app.ts";
 
 /**
  * 技能设置（m4-7 T8/T9，原型图 2/3/4）：/settings →「技能」→ 列表页（全收口径——含停用与
@@ -59,17 +60,17 @@ export function seedFactorySkills(opts: {
 }): void {
   const r = seedBundledSkills(opts.targetDir);
   if (r.failed.length > 0) {
-    opts.notify(`出厂技能安装失败 ${r.failed.length} 件：${r.failed.map((f) => f.name).join("、")}`);
+    opts.notify(t("skillseed.fail", { n: r.failed.length, names: r.failed.map((f) => f.name).join("、") }));
     return;
   }
-  if (opts.fresh && r.copied.length > 0) opts.showToast(`已安装 ${r.copied.length} 件出厂技能到 ~/.orosus/skills`);
+  if (opts.fresh && r.copied.length > 0) opts.showToast(t("skillseed.done", { n: r.copied.length }));
 }
 
 /** 范围三值映射（原型图 3 要点：括号内文字照写，禁缩写）。 */
 export function skillScopeLabel(layer: SkillCatalogRow["layer"]): string {
-  if (layer === "user") return "个人（用户级）";
-  if (layer === "project") return "所有人（项目级）";
-  return "内置（出厂自带）";
+  if (layer === "user") return t("skill.scope.user");
+  if (layer === "project") return t("skill.scope.project");
+  return t("skill.scope.bundled");
 }
 
 /** 词原子截断（m4-7 走查修 2026-09-27 用户拍板「显示不下就在最后 …」）：在词边界截断加省略号——
@@ -95,7 +96,7 @@ export function truncateAtWord(text: string, w: number): string {
  *  w = 宿主从 pickRowWidth() 拿的行可用宽（左栏内宽——拼行与 pick 渲染同源，防超宽推错右框）。
  *  描述列灰（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白、简单说明灰）。 */
 export function skillListRow(w: number, row: SkillCatalogRow): string {
-  const status = row.disabled ? fg("muted", "停用") : fg("accent", "启用"); // 启用绿/停用灰（2026-09-27 用户走查拍板）
+  const status = row.disabled ? fg("muted", t("skill.badge.off")) : fg("accent", t("skills.action.enable")); // 启用绿/停用灰（2026-09-27 用户走查拍板）
   const statusW = 4; // 启用/停用两字（ANSI 不占宽）
   const nameW = Math.min(20, Math.max(8, Math.floor((w - statusW - 4) / 3)));
   const name = row.name.length > nameW ? `${row.name.slice(0, nameW - 1)}…` : row.name.padEnd(nameW);
@@ -113,10 +114,10 @@ export function skillDetailText(w: number, row: SkillCatalogRow): string {
   const label = (s: string) => `${fg("muted", s)}    `; // 标签两字 + 4 空格（标签列 8 列，原型图 3 形态）
   const field = (name: string, value: string): string => `${label(name)}${truncateAtWord(value, w - 2 - 8)}`;
   return [
-    field("名称", row.name),
-    field("描述", row.description === "" ? "（无描述）" : row.description),
-    field("范围", skillScopeLabel(row.layer)),
-    field("状态", row.disabled ? "停用" : "启用"),
-    field("文件", row.file),
+    field(t("skill.detail.name"), row.name),
+    field(t("skill.detail.desc"), row.description === "" ? t("skill.detail.noDesc") : row.description),
+    field(t("skill.detail.scope"), skillScopeLabel(row.layer)),
+    field(t("skill.detail.status"), row.disabled ? t("skill.badge.off") : t("skills.action.enable")),
+    field(t("skill.detail.file"), row.file),
   ].join("\n");
 }

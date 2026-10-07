@@ -4,6 +4,7 @@ import { pasteImage, imageChipLabel } from "./paste.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps } from "@orosus/provider-custom";
 import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
 import { moduleConfigFileFor } from "./config-face.ts";
+import { t } from "./i18n/app.ts";
 
 /** Alt+V 取图落点（m5-media F8）：当前会话媒资库 <sid>/media/（随桶清理）；会话未就绪/切换中回落旧 tmp 位。
  *  m5-split-main T4：自 main.ts 搬入；sessionsDir/sessionId 原为模块级单例直读，改经参数注入（D2——
@@ -54,24 +55,24 @@ export const runVisionSetting = async (
 	configFile: () => string,
 ): Promise<{ wrote: boolean; message: string }> => {
 	const cur = readVisionModel(configFile());
-	const curNote = cur === "off" ? "停用" : cur === "auto" ? "自动" : cur;
-	const OPTS = ["停用（默认——不生成视觉摘要，降级图只留路径标签）", "自动（当前模型支持图片时直接用它）", "指定模型（从已配置提供商的多模态模型中选）"];
-	const picked = await chooseVia(`配置视觉模型（当前：${curNote}）`, OPTS);
+	const curNote = cur === "off" ? t("skill.badge.off") : cur === "auto" ? t("vision.note.auto") : cur;
+	const OPTS = [t("vision.opt.off"), t("vision.opt.auto"), t("vision.opt.pick")];
+	const picked = await chooseVia(`${t("vision.title", { curNote: curNote })}`, OPTS);
 	if (picked === OPTS[0]) {
 		persistVisionModel(configFile(), "off");
-		return { wrote: true, message: "已设为停用" };
+		return { wrote: true, message: t("vision.set.off") };
 	}
 	if (picked === OPTS[1]) {
 		persistVisionModel(configFile(), "auto");
-		return { wrote: true, message: "已设为自动" };
+		return { wrote: true, message: t("vision.set.auto") };
 	}
 	const candidates = await visionCandidates();
 	if (candidates.length === 0) {
-		return { wrote: false, message: "已配置的提供商里没有目录可证的多模态模型——先 /provider 配置视觉模型所在的提供商（或给模型正确的目录名）" };
+		return { wrote: false, message: t("vision.noCandidates") };
 	}
-	const model = await chooseVia("指定视觉模型（多模态模型 · 已按提供商过滤）", candidates);
+	const model = await chooseVia(t("vision.pickModel"), candidates);
 	persistVisionModel(configFile(), model);
-	return { wrote: true, message: `已指定视觉模型 ${model}` };
+	return { wrote: true, message: `${t("vision.set.model", { model: model })}` };
 };
 
 /** F14 眼睛模型可用性（发送闸旁路判定——与 tool-media/vision.ts eyeModelOf 同判定口径的 CLI 侧实读）：
@@ -87,15 +88,15 @@ export const eyeModelUsable = async (
   if (v === "off") return { configured: false, usable: false };
   if (v === "auto") {
     if (lookupModelVision(catalogAll, modelNow) === true) return { configured: true, usable: true, model: modelNow };
-    return { configured: true, usable: false, why: `auto 档且当前模型 ${modelNow || "（未配置）"} 非视觉` };
+    return { configured: true, usable: false, why: t("vision.why.auto", { model: modelNow }) }; // {model/（未配置）} 缺省走模板
   }
   const slot = v.split("/")[0] ?? "";
   const key = v.slice(slot.length + 1);
   const providers = await defaultMenuDeps().loadProviders();
-  if (providers[slot] === undefined) return { configured: true, usable: false, why: `槽 "${slot}" 未配置` };
+  if (providers[slot] === undefined) return { configured: true, usable: false, why: t("vision.why.slotMissing", { slot }) };
   const mm = catalogAll[slot]?.models?.[key];
-  if (mm === undefined) return { configured: true, usable: false, why: `目录无 ${v}` };
-  if (mm.modalities?.input?.includes("image") !== true) return { configured: true, usable: false, why: `目录证实 ${v} 非多模态` };
+  if (mm === undefined) return { configured: true, usable: false, why: `${t("vision.why.notInCatalog", { v: v })}` };
+  if (mm.modalities?.input?.includes("image") !== true) return { configured: true, usable: false, why: `${t("vision.why.notMultimodal", { v: v })}` };
   return { configured: true, usable: true, model: v };
 };
 

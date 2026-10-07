@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { t } from "./i18n/app.ts";
 
-/** 诊断弹窗条目标签（S4 三分类）：激活失败 / 级联 / 加载失败。 */
-export type DiagTag = "激活失败" | "级联" | "加载失败";
+/** 诊断弹窗条目标签（S4 三分类）：激活失败 / 级联 / 加载失败。 */ // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
+export type DiagTag = "激活失败" | "级联" | "加载失败"; // 类型面字面量（判据值）；显示面走 moddiag.tag.* 键 // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
 
 export interface DiagEntry {
   name: string;
@@ -15,27 +16,28 @@ export interface DiagEntry {
 /** 一级列表收集范围（S3 定案四类）：模块级失败事件码白名单。 */
 const COLLECTED_CODES = new Set(["kernel.module.failed", "kernel.discover.fail", "kernel.discover.skip", "kernel.discover.missing"]);
 
-/** skip 只收「加载失败」语义的行（S3 机械判据）：「包描述读取失败」/「入口读取失败」（公共子串「读取失败」）
+/** skip 只收「加载失败」语义的行（S3 机械判据）：「包描述读取失败」/「入口读取失败」（公共子串「读取失败」） // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
  *  与「（source 目录）无入口」；排除「无模块入口」良性形态（目录非模块，discover.ts 的目录扫描信息行）。 */
 function isLoadFailureSkip(msg: string): boolean {
-  if (msg.includes("读取失败")) return true;
-  return msg.includes("无入口") && !msg.includes("无模块入口");
+  if (msg.includes("读取失败")) return true; // i18n:diag 协议判据——匹配 core 日志中文原文（诊断面不翻边界）
+  return msg.includes("无入口") && !msg.includes("无模块入口"); // i18n:diag 同上（classifyFailure 双语扩表先例——随语扩表走查定）
 }
 
 /** 模块名提取（T8 现状取证）：data.module 优先（结构化，T5/T7 已补）；msg 前缀「目录 X」「模块 X」兜底（前一天的历史行）。 */
 function extractModuleName(rec: { msg?: unknown; data?: unknown }): string | undefined {
   const dm = (rec.data as Record<string, unknown> | undefined)?.["module"];
   if (typeof dm === "string" && dm !== "") return dm;
-  const m = /^(?:目录|模块) ([^\s（]+)/.exec(typeof rec.msg === "string" ? rec.msg : "");
+  const m = /^(?:目录|模块) ([^\s（]+)/.exec(typeof rec.msg === "string" ? rec.msg : ""); // i18n:diag 日志原文判据
   return m?.[1];
 }
 
-/** 标签推断（S4）：discover.* → 加载失败；原因含「级联」或「不可用（」或「无可用提供者」→ 级联（topo 两形态 +
- *  activate 级联形；「提供者模块 bug」分支不含三关键词、正确落激活失败）；其余 → 激活失败。 */
+/** 标签推断（S4）：discover.* → 加载失败；原因含「级联」或「不可用（」或「无可用提供者」→ 级联（topo 两形态 + // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
+ *  activate 级联形；「提供者模块 bug」分支不含三关键词、正确落激活失败）；其余 → 激活失败。 */ // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
 function tagOf(code: string, reason: string): DiagTag {
-  if (code.startsWith("kernel.discover.")) return "加载失败";
-  if (reason.includes("级联") || reason.includes("不可用（") || reason.includes("无可用提供者")) return "级联";
-  return "激活失败";
+  if (code.startsWith("kernel.discover.")) return "加载失败"; // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
+  // i18n:diag 判据关键词跟 failReason 语言（kernelT 缺省 zh；en 态走查后随语扩表——classifyFailure 先例）
+  if (reason.includes("不可用（") || reason.includes("无可用提供者") || reason.includes("is degraded") || reason.includes("not registered")) return "级联"; // i18n:diag 双语判据（随语扩表走查定）
+  return "激活失败"; // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
 }
 
 /**
@@ -107,39 +109,41 @@ export function readDiagRawLines(dir: string, now: Date): DiagLine[] {
  *  rawEvents = 与该模块相关的事件行（本模块的 + 点名该模块的——主犯拖累反查靠后者）。 */
 export function renderDetail(entry: DiagEntry, rawEvents: readonly DiagLine[]): string {
   const sections: string[] = [];
-  sections.push(`【失败原因】\n${entry.reason}\n（共 ${entry.count} 次 · 最后 ${entry.last.slice(11, 19)}）`);
+  sections.push(t("moddiag.reason", { reason: entry.reason, count: entry.count, time: entry.last.slice(11, 19) }));
 
   // 连带影响：从犯（原因点名提供者）= 被谁拖累；无提供者形态 = 说明；主犯 = 反查点名它的事件
   const prov = /的提供者 ([^\s（、]+) 不可用|的提供者 ([^\s（、]+) 已降级/.exec(entry.reason);
   const cascadeLines: string[] = [];
   if (prov !== null) {
     const providerName = prov[1] ?? prov[2] ?? "";
-    cascadeLines.push(`因硬依赖能力的提供者 ${providerName} 不可用/已降级，本模块被级联降级（本模块代码无问题）。`);
-    cascadeLines.push(`恢复 ${providerName} 后本模块自动恢复（下次 reload 生效）；单独重试本模块无用——依赖不满足是护栏在正确工作。`);
-  } else if (entry.reason.includes("无可用提供者")) {
-    cascadeLines.push("依赖的能力没有安装提供者（未安装/未声明）。");
-    cascadeLines.push("安装或启用提供该能力的模块后，本模块自动恢复（下次 reload 生效）。");
+    cascadeLines.push(t("moddiag.cascade.victim", { name: providerName }));
+    cascadeLines.push(t("moddiag.cascade.recover", { name: providerName }));
+  } else if (entry.reason.includes("无可用提供者")) { // i18n:diag 判据
+    cascadeLines.push(t("moddiag.cascade.noProvider"));
+    cascadeLines.push(t("moddiag.cascade.installProvider"));
   }
   const victims = [...new Set(rawEvents
-    .filter((e) => e.msg.includes(`的提供者 ${entry.name}`) && moduleOf(e) !== entry.name)
+    .filter((e) => e.msg.includes(`的提供者 ${entry.name}`) && moduleOf(e) !== entry.name) // i18n:diag 日志原文判据
     .map((e) => moduleOf(e))
     .filter((n): n is string => n !== undefined))];
   if (victims.length > 0) {
-    cascadeLines.push(`本模块的失败已连带拖累：${victims.join("、")}（依赖它的模块在本模块恢复前不可用）。`);
+    cascadeLines.push(t("moddiag.cascade.victims", { names: victims.join("、") }));
   }
-  if (cascadeLines.length > 0) sections.push(`【连带影响】\n${cascadeLines.join("\n")}`);
+  if (cascadeLines.length > 0) sections.push(`${t("moddiag.impact")}\n${cascadeLines.join("\n")}`);
 
   const mine = rawEvents.filter((e) => moduleOf(e) === entry.name).sort((a, b) => (a.ts < b.ts ? -1 : 1));
   if (mine.length > 0) {
-    sections.push(`【事件时间线】\n${mine.map((e) => `${e.ts.slice(11, 19)}  ${e.msg.split("\n")[0] ?? e.msg}`).join("\n")}`);
+    sections.push(`${t("moddiag.timeline.title")}\n${mine.map((e) => `${e.ts.slice(11, 19)}  ${e.msg.split("\n")[0] ?? e.msg}`).join("\n")}`);
   }
 
-  const logHint = "· 诊断日志：~/.orosus/logs/diagnostic-<日期>.jsonl";
-  const guide = entry.tag === "级联"
-    ? "· 根因在它依赖的提供者模块——恢复提供者后本模块自动恢复\n· 单独重试本模块无用——依赖不满足是护栏在正确工作\n· 临时规避：重启进程"
-    : entry.tag === "加载失败"
-      ? "· 发现期加载失败：模块未进图、不影响主程序运行\n· 修复模块源码后 /reload（或重开本窗口）即可看到更新\n· 本地模块入口规范：index.{ts,js} 或 package.json 的 exports[\"./module\"]"
-      : "· 检查模块配置与依赖后重试挂载（模块面板 Enter 或 /reload）\n· 临时规避：重启进程（新进程按盘上配置干净激活）";
-  sections.push(`【修复指引】\n${guide}\n${logHint}`);
+  const logHint = t("moddiag.logHint");
+  const guide = entry.tag === "级联" // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
+	    ? t("moddiag.guide.cascade")
+    : entry.tag === "加载失败" // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
+	      ? t("moddiag.guide.load")
+	      : t("moddiag.guide.default");
+	sections.push(`${t("moddiag.guide.title")}
+${guide}
+${logHint}`);
   return sections.join("\n\n");
 }

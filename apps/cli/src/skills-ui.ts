@@ -5,6 +5,8 @@ import type { SlashItem, FullApp } from "./tui/fullapp.ts";
 import { readSkillDisabled, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
 import { subagentConfigFile } from "./config-face.ts";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
+import { SKILL_MARK_PREFIX, SKILL_MARK_TAIL } from "./i18n/protocol-strings.ts";
 
 /** m5-split-main T7：技能菜单族自 main.ts 搬入。横切单例经本依赖对象注入（D2）：
  *  getH——harness 单例；commandUi——行模式菜单口；reloadModulesIdle——/reload 收尾共用件（T9 留守件）。 */
@@ -27,13 +29,13 @@ const skillCatalogRows = async (deps: SkillUiDeps): Promise<SkillCatalogRow[]> =
 
 /** Alt + K 写配置后的收尾（T9）：共用件之上拼技能启停文案（图 4 三要素：动作 · 原因 · 出路）。 */
 const afterSkillToggle = (deps: SkillUiDeps, app: FullApp | undefined, name: string, nowDisabled: boolean): string =>
-	deps.reloadModulesIdle(app, `${nowDisabled ? "已停用" : "已启用"} ${name} · 有任务在执行，稍后请输入 /reload 重新加载`);
+	deps.reloadModulesIdle(app, t(nowDisabled ? "hooks.toggle.busyOff" : "hooks.toggle.busyOn", { name }));
 export const openSkillsPanel = async (app: FullApp, deps: SkillUiDeps): Promise<void> => {
 	let selAt = 0; // 详情 Esc 回列表——选中行回到该技能（原型图 3 要点；pickOverlay selAt 参数）
 	for (;;) {
 		const rows = await skillCatalogRows(deps);
 		if (rows.length === 0) {
-			app.showToast("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）");
+			app.showToast(t("skills.empty"));
 			return;
 		}
 		// 行宽与 pick 渲染同源（m4-7 走查修 2026-09-27：原按全终端列数拼行——侧栏在场时超宽把右框 │ 推错位）
@@ -41,15 +43,15 @@ export const openSkillsPanel = async (app: FullApp, deps: SkillUiDeps): Promise<
 		// items 数组长期持有（2026-09-27 用户走查拍板「改变状态后要更新上一级列表」）：详情 Alt + K 后
 		// 原地重拼该行——Esc 回列表顶上的正是这个排队的 pickOverlay（持同数组引用），状态列即时新
 		const items = rows.map((r) => skillListRow(w, r));
-		const picked = await app.pickOverlay("技能（回车查看详情）", items, selAt);
+		const picked = await app.pickOverlay(t("skills.title"), items, selAt);
 		if (picked === undefined || picked < 0 || picked >= rows.length) return; // Esc 返回设置
 		selAt = picked;
 		const row = rows[picked]!;
 		const detail = (): string => skillDetailText(w, row); // dock 窗（贴输入框上缘、左栏同宽）行预算
 		// dock（2026-09-27 用户拍板：原 center80 居中弹窗位置/宽度都不对——贴输入框上边缘 + 与输入框同宽）
-		app.viewText("技能详情", detail(), { layout: "dock", keys: {
+		app.viewText(t("skills.detail.title"), detail(), { layout: "dock", keys: {
 				"alt+k": {
-					label: "Alt + K 启用或停用",
+					label: t("skills.detail.keyAltK"),
 					run: (): string => {
 						const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
 						row.disabled = nowDisabled;
@@ -68,19 +70,19 @@ export const openSkillsPanel = async (app: FullApp, deps: SkillUiDeps): Promise<
 export const openSkillsLine = async (out: (s: string) => void, deps: SkillUiDeps): Promise<void> => {
 	for (;;) {
 		const rows = await skillCatalogRows(deps);
-		if (rows.length === 0) { out("没有可用技能（扫描 ~/.agents/skills 等四轨目录，每目录下 <名>/SKILL.md）"); return; }
+		if (rows.length === 0) { out(t("skills.empty")); return; }
 		const names = rows.map((r) => skillListRow(76, r));
-		const picked = await deps.commandUi.choose("技能（回车查看详情）", names);
+		const picked = await deps.commandUi.choose(t("skills.title"), names);
 		const i = names.indexOf(picked);
 		if (i < 0) return;
 		const row = rows[i]!;
 		out(skillDetailText(76, row));
 		try {
-			const action = await deps.commandUi.choose(row.name, [row.disabled ? "启用" : "停用（Alt + K 同款）", "返回列表"]);
-			if (action === "启用" || action === "停用（Alt + K 同款）") {
+			const action = await deps.commandUi.choose(row.name, [row.disabled ? t("skills.action.enable") : t("skills.action.disable"), t("skills.action.back")]);
+			if (action === t("skills.action.enable") || action === t("skills.action.disable")) {
 				const nowDisabled = toggleSkillDisabled(row.name, subagentConfigFile());
 				const toast = afterSkillToggle(deps, undefined, row.name, nowDisabled);
-				out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
+				out(toast !== "" ? toast : t("skills.toggle.done", { verb: nowDisabled ? t("skill.badge.off") : t("skills.action.enable"), name: row.name }));
 			}
 		} catch (err) {
 			if (err instanceof Error && err.message === ESC_CANCELLED) continue; // Esc → 回技能列表（2026-09-28 拍板）
@@ -126,7 +128,7 @@ export const refreshSkillMenu = async (deps: SkillUiDeps): Promise<void> => {
 	} catch (err) {
 		skillMenu = [];
 		skillFiles.clear();
-		deps.getH().log("host.skillmenu.error", `技能菜单刷新抛错，当帧清空：${err instanceof Error ? err.message : String(err)}`);
+		deps.getH().log("host.skillmenu.error", `技能菜单刷新抛错，当帧清空：${err instanceof Error ? err.message : String(err)}`); // i18n:diag 诊断面不翻
 	}
 };
 
@@ -144,7 +146,6 @@ export const skillMenuTtl = (deps: SkillUiDeps): SlashItem[] => {
 /** 技能注入标记行前缀（本件构造、多方按形态匹配——单源常量防漂移）：防重入判定（main 提交层
  *  includes）/ 输入召回还原（session-io 老会话合成体拆原话）。docmodel ● 行识别与 core 树标题
  *  各持同款正则（core 禁反向 import apps，跨包不共享——形态由测试钉住）。 */
-export const SKILL_MARK_PREFIX = "（用户通过菜单手动加载技能";
 /** 完整标记行（含技能名捕获）——session-io 老会话合成体还原原话行用；与 docmodel/core 同形不同源。 */
 export const SKILL_MARK_RE = /(?:^|\n)（用户通过菜单手动加载技能 "([^"]+)"——请按该技能正文行事）/;
 
@@ -161,7 +162,7 @@ export const skillInjectText = (name: string, args?: string): string | undefined
 			// 2026-10-01 诊断批：file 属性给模型提供相对路径解析基准（正文引用 references/… 不再按项目
 			// cwd 落空——与 skill__load 输出首行带路径同因）；首行协议串不动（docmodel ● 行识别 + 防重入
 			// 标记都按精确形态匹配它）；skill 块正文不进对话流，属性追加对用户可见面零影响
-			return `${SKILL_MARK_PREFIX} "${name}"——请按该技能正文行事）\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
+			return `${SKILL_MARK_PREFIX} "${name}"${SKILL_MARK_TAIL}\n<skill name="${name}"${attrs} file="${file.replace(/"/g, "&quot;")}">\n${body}\n</skill>`;
 	} catch {
 		return undefined;
 	}

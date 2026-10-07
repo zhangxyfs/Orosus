@@ -48,6 +48,13 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/prune.ts", max: 0, note: "T9 清零" },
 	{ file: "apps/cli/src/module-cmd.ts", max: 0, note: "T9 清零" },
 	{ file: "apps/cli/src/provider-cmd.ts", max: 0, note: "T9 清零（success： 前缀=PROVIDER_WRITE_DONE 判据不动）" },
+	{ file: "apps/cli/src/skills-ui.ts", max: 0, note: "T10 清零（SKILL_MARK 协议族走 D13 登记表）" },
+	{ file: "apps/cli/src/skill-settings.ts", max: 0, note: "T10 清零（skillseed 两键）" },
+	{ file: "apps/cli/src/tasks-cmd.ts", max: 0, note: "T10 清零（agent 组/审批应答/查看窗题）" },
+	{ file: "apps/cli/src/subagent-settings.ts", max: 0, note: "T10 清零（APPROVAL_MENU/PRESETS 惰性化）" },
+	{ file: "apps/cli/src/module-confirm.ts", max: 0, note: "T10 清零" },
+	{ file: "apps/cli/src/module-diagnostics.ts", max: 0, note: "T10 清零（判据行 diag 豁免——双语扩表走查定）" },
+	{ file: "apps/cli/src/vision-media.ts", max: 0, note: "T10 清零（vision.why 族）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

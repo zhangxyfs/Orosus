@@ -22,7 +22,7 @@ function splitRow(line: string): string[] {
 	return protectedLine
 		.slice(protectedLine.startsWith("|") ? 1 : 0, protectedLine.endsWith("|") ? -1 : 0)
 		.split("|")
-		.map((c) => c.split(ESCAPED_PIPE).join("|").trim());
+		.map((c) => c.split(ESCAPED_PIPE).join("|").replace(/^ /, "").replace(/ $/, "")); // 只剥单格 padding——前导" · "等有义空格保真
 }
 
 /**

@@ -6,6 +6,7 @@ import { DocModel } from "./tui/docmodel.ts";
 import { SPIN_FRAMES } from "./tui/fullapp.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
 
 /**
  * /tasks 命令与全屏查看窗（M4.5 T11 / 决策 21/22）：
@@ -18,10 +19,10 @@ import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 const VIEW_EVENT_KEEP = 500;
 
 const STATUS_TEXT: Record<SubagentRosterEntry["status"], string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
+  queued: t("sub.status.queued"),
+  running: t("sub.status.running"),
+  completed: t("tasks.status.completed"),
+  failed: t("sub.status.failed"),
 };
 const STATUS_COLOR: Record<SubagentRosterEntry["status"], Parameters<typeof theme.fg>[0]> = {
   queued: "accent",
@@ -35,8 +36,8 @@ export function tasksListRows(entries: readonly SubagentRosterEntry[]): string[]
   const rows: string[] = [];
   const emit = (e: SubagentRosterEntry): void => {
     const rel = e.depth === 2 ? `${e.parentId} - ${e.id}` : e.id;
-    const stat = STATUS_TEXT[e.status] + (e.pendingApproval !== undefined ? " · 等审批" : "") + (e.background ? " · 后台" : "");
-    const line = `${e.depth === 2 ? "[孙代理]" : "[子代理]"} ${rel} ${e.label} · ${stat}`;
+    const stat = t(`sub.status.${e.status}`, undefined, STATUS_TEXT[e.status]) + (e.pendingApproval !== undefined ? ` ${t("tasks.tag.pendingApproval")}` : "") + (e.background ? ` ${t("tasks.tag.background")}` : "");
+    const line = `${e.depth === 2 ? t("tasks.tag.grandchild") : t("tasks.tag.child")} ${rel} ${e.label} · ${stat}`;
     rows.push(theme.fg(STATUS_COLOR[e.status], line));
   };
   for (const parent of entries.filter((e) => e.depth === 1)) {
@@ -49,7 +50,7 @@ export function tasksListRows(entries: readonly SubagentRosterEntry[]): string[]
 
 /** 空册占位行（用户拍板：/tasks 无条件开列表——空态也开，占位行说明怎么派活）。 */
 export function emptyTasksRow(): string {
-  return theme.dim("（暂无在册子代理——对模型说「派个子代理去 …」后这里会列出；后台跑完结论自动送回对话）");
+  return theme.dim(t("tasks.empty"));
 }
 
 /** 卸载 tool-subagent 的守卫（2026-09-27 用户拍板）：有在跑/排队/挂审批的子代理不许卸——
@@ -59,7 +60,7 @@ export function subagentUnloadBlock(entries: readonly SubagentRosterEntry[]): st
   const active = entries.filter((e) => e.status === "queued" || e.status === "running");
   if (active.length === 0) return undefined;
   const pending = active.filter((e) => e.pendingApproval !== undefined).length;
-  return `有 ${active.length} 个子代理在跑${pending > 0 ? `（含 ${pending} 个挂起审批）` : ""}——先停掉再卸载：/tasks 逐个停，或双击 Esc 全停`;
+  return t("tasks.unloadBlocked", { n: active.length, m: pending > 0 ? pending : undefined });
 }
 
 /** 行选中解析：彩色行 → 编号（choose 回串解析用）。 */
@@ -98,16 +99,14 @@ export function renderAgentView(entry: SubagentRosterEntry, events: readonly { t
   dm.toolOpen = fold.toolOpen;
   dm.errOpen = fold.errOpen;
   dm.historyFrom([...events], width);
-  const stat =
-    `${STATUS_TEXT[entry.status]}${entry.pendingApproval !== undefined ? " · 等审批" : ""} · ${entry.turns} 轮` +
-    (entry.error !== undefined ? ` · ${(entry.error.split("\n")[0] ?? "").slice(0, 60)}` : "");
-  const head = theme.fg(STATUS_COLOR[entry.status], `状态：${stat}${entry.roleName !== undefined ? ` · 工种 ${entry.roleName}` : ""}${entry.background ? " · 后台" : ""}`);
+  const stat = t("agentview.stat", { status: t(`sub.status.${entry.status}`, undefined, STATUS_TEXT[entry.status]), approval: entry.pendingApproval !== undefined ? "1" : undefined, n: entry.turns, err: entry.error !== undefined ? (entry.error.split("\n")[0] ?? "").slice(0, 60) : undefined });
+  const head = theme.fg(STATUS_COLOR[entry.status], t("agentview.head", { stat, role: entry.roleName, background: entry.background ? "1" : undefined }));
   // 生成中尾行（2026-10-01 走查④拍板）：运行/排队态在内容末尾挂「⠸ 正在生成…」——与主窗 tailLine
   // 同形。帧号取系统时钟秒位（live 刷新 1s tick 一帧——主窗 busyTimer 100ms 不共用：这里每帧重读
   // 子代理会话文件，1s 是文件重读成本的既定节拍）。配合查看窗 pinned 贴底，此行恒在窗口底部可见。
   const busy = entry.status === "queued" || entry.status === "running";
   const frame = SPIN_FRAMES[Math.floor(Date.now() / 1000) % SPIN_FRAMES.length]!;
-  const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", "正在生成…") : "";
+  const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", t("tasks.view.generating")) : "";
   return [head, ...dm.frameLines(width), ...(tail !== "" ? [tail] : "")].join("\n");
 }
 
@@ -259,13 +258,11 @@ export function createAgentViewRenderer(
     }
     // 活体行现算（首屏后冻结即 bug——状态行/尾行每帧取 readEntry 最新态 + 秒位帧号）
     const e = readEntry();
-    const stat =
-      `${STATUS_TEXT[e.status]}${e.pendingApproval !== undefined ? " · 等审批" : ""} · ${e.turns} 轮` +
-      (e.error !== undefined ? ` · ${(e.error.split("\n")[0] ?? "").slice(0, 60)}` : "");
-    const head = theme.fg(STATUS_COLOR[e.status], `状态：${stat}${e.roleName !== undefined ? ` · 工种 ${e.roleName}` : ""}${e.background ? " · 后台" : ""}`);
+    const stat = t("agentview.stat", { status: t(`sub.status.${e.status}`, undefined, STATUS_TEXT[e.status]), approval: e.pendingApproval !== undefined ? "1" : undefined, n: e.turns, err: e.error !== undefined ? (e.error.split("\n")[0] ?? "").slice(0, 60) : undefined });
+    const head = theme.fg(STATUS_COLOR[e.status], t("agentview.head", { stat, role: e.roleName, background: e.background ? "1" : undefined }));
     const busy = e.status === "queued" || e.status === "running";
     const frame = SPIN_FRAMES[Math.floor(now() / 1000) % SPIN_FRAMES.length]!;
-    const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", "正在生成…") : "";
+    const tail = busy ? theme.fg("accent", frame) + " " + theme.fg("muted", t("tasks.view.generating")) : "";
     return [head, ...bodyCache.lines, ...(tail !== "" ? [tail] : "")].join("\n");
   };
 
@@ -328,7 +325,7 @@ export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): S
       id,
       depth: parent !== undefined ? 2 : 1,
       ...(parent !== undefined ? { parentId: parent } : {}),
-      label: m?.label ?? "（历史任务）",
+      label: m?.label ?? t("tasks.history.label"),
       status,
       background: m?.background ?? false,
       ...(m?.roleName !== undefined ? { roleName: m.roleName } : {}),
@@ -378,7 +375,7 @@ function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<str
     } else if (e.type === "tool/result" && typeof e.callId === "string" && calls.has(e.callId)) {
       const c = calls.get(e.callId)!;
       for (const id of spawnIdsIn(String(e.output ?? ""))) {
-        out.set(id, { label: c.description ?? "（历史任务）", background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
+        out.set(id, { label: c.description ?? t("tasks.history.label"), background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
       }
     }
   }
@@ -425,11 +422,11 @@ export const openTasks = async (
 		const rows = entries.length > 0 ? tasksListRows(entries) : [emptyTasksRow()];
 		let idx: number;
 		if (app !== undefined) {
-			const picked = await app.pickOverlay("子代理任务（回车查看 · 等审批的可应答）", rows);
+			const picked = await app.pickOverlay(t("tasks.title"), rows);
 			if (picked === undefined || entries.length === 0) return; // Esc / 空态占位行
 			idx = picked;
 		} else {
-			const picked = await deps.commandUi.choose("子代理任务（回车查看 · 等审批的可应答）", rows);
+			const picked = await deps.commandUi.choose(t("tasks.title"), rows);
 			if (entries.length === 0) return;
 			idx = rows.indexOf(picked);
 			if (idx < 0) return;
@@ -445,10 +442,10 @@ export const openTasks = async (
 		// 应答菜单的 Esc 不答也不退出（2026-09-28 拍板「Esc 返回上一级」）——回任务列表
 		if (entry.pendingApproval !== undefined) {
 			try {
-				const ans = await deps.commandUi.choose(`子代理审批 ${entry.id} ${entry.label} · ${entry.pendingApproval.tool}（${entry.pendingApproval.reason}）`, ["批准一次", "拒绝"]);
-				const allow = ans === "批准一次";
+				const ans = await deps.commandUi.choose(t("tasks.approval.title", { id: entry.id, label: entry.label, tool: entry.pendingApproval.tool, reason: entry.pendingApproval.reason }), [t("tasks.approval.allow"), t("tasks.approval.deny")]);
+				const allow = ans === t("tasks.approval.allow");
 				h.answerSubagentApproval(entry.id, allow);
-				deps.notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
+				deps.notify(allow ? t("tasks.approval.allowed", { id: entry.id, tool: entry.pendingApproval.tool }) : t("tasks.approval.denied", { id: entry.id, tool: entry.pendingApproval.tool }));
 			} catch (err) {
 				if (err instanceof Error && err.message === ESC_CANCELLED) continue; // Esc → 回列表（审批保持挂起）
 				throw err;
@@ -474,14 +471,14 @@ export const openTasks = async (
 		const liveView = entry.status === "queued" || entry.status === "running" ? () => renderer.render(viewW()) : undefined;
 		const body = renderer.render(viewW());
 		if (app !== undefined) {
-			app.viewText(`子代理 ${entry.id} · ${entry.label}`, body, {
+			app.viewText(t("tasks.view.title", { id: entry.id, label: entry.label }), body, {
 				layout: "full",
 				bottom: true, // 2026-09-27 拍板：全屏 + 自动滚底（实时刷跟随末页）
 				...(liveView !== undefined ? { live: liveView } : {}),
 				keys: {
-					"alt+e": { label: "思考", run: () => { fold.thinkOpen = !fold.thinkOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
-					"alt+o": { label: "明细", run: () => { fold.toolOpen = !fold.toolOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
-					"alt+f": { label: "失败", run: () => { fold.errOpen = !fold.errOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
+					"alt+e": { label: t("tasks.view.keyThink"), run: () => { fold.thinkOpen = !fold.thinkOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
+					"alt+o": { label: t("tasks.view.keyTool"), run: () => { fold.toolOpen = !fold.toolOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
+					"alt+f": { label: t("sub.status.failed"), run: () => { fold.errOpen = !fold.errOpen; renderer.setFold(fold); return renderer.render(viewW()); } },
 				},
 			});
 			continue; // 查看窗排在 pendingUi——Esc 关窗后队里的列表自动顶上（回列表页拍板）

@@ -11,5 +11,9 @@
 /** Esc 取消哨兵：picker/menu/skills-ui/settings-ui/tasks-cmd/hooks-ui/mcp-ui/repl-io 以 err.message === 全仓唯一比较。 */
 export const ESC_CANCELLED = "已取消（Esc）";
 
+/** 技能标记行前缀/尾段（D4 协议-不翻）：docmodel ● 行识别 + 防重入标记按精确形态匹配——版本化成本在案。 */
+export const SKILL_MARK_PREFIX = "（用户通过菜单手动加载技能";
+export const SKILL_MARK_TAIL = "——请按该技能正文行事）";
+
 /** 门禁白名单值集（协议串本体——出现即放行；新协议串在此登记并注明判据面）。 */
-export const PROTOCOL_STRINGS: readonly string[] = [ESC_CANCELLED];
+export const PROTOCOL_STRINGS: readonly string[] = [ESC_CANCELLED, SKILL_MARK_PREFIX, SKILL_MARK_TAIL];
