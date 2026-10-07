@@ -70,12 +70,26 @@ export default defineModule({
 | `fs` | `@orosus/contracts/fs` 的 `Fs`（read/write） | tool-fs |
 | `provider:<name>` | `@orosus/contracts/provider` 的 `ProviderAdapter`（保留槽，经 `provide` 注册） | provider-custom（唯一 provider——品牌 ×5 已退役 2026-09-23，/provider 向导即完整配置入口） |
 | `tool-web.search-faces` | `{ match(baseUrl): { anthropicRoot } \| undefined }`（已知可搜端点改道事实；模块自有 key 按规则 1 带名前缀） | tool-web（2026-09-24 服务倒挂首例——provider-custom 路由时惰性消费） |
+| `i18n.locale.<tag>` | `LocalePackImpl`（`{ native?, messages }` 扁键值表——语言包槽，每语言单所有者） | multilang（ja/ko/ru 三语包，m5-i18n） |
+| `i18n.catalog.<模块名>` | `LocaleCatalog`（`Record<tag, 键值表>`——模块自带目录，每模块单所有者；段坏整槽拒收降级不炸） | （外置模块②档推荐位） |
 
 ## 贡献点与拦截点
 
 - 贡献点：`tool` / `command`（`/<module>__<cmd>`）/ `promptSection` / `configOverlay`（读侧，D2）。promptSection 分带（m4-6 T8 成文）：≤ −100 核心保留区（激活期降级）；**0-29 模块引导带**（现役 0 skill / 10 todo / 20 mcp / 21 tool-search / 22 tool-goal / 23 tool-web）；30 AGENTS.md 拼尾；≥ 40 预留带未启用——越出 0-29 注册落越带告警（不拦截），单段 32KB / 全局 64KB 超限激活期降级
 - 拦截点（§6.5 白名单 8 个）：`agent/pre-step`（emit）、`agent/transform-context`（reduce）、`agent/steering`、`agent/follow-up`（collect）、`agent/should-stop`（布尔 OR）、`tool/pre-execute`（waterfall，审批在此）、`tool/post-execute`（emit）、`ui/command`（emit）
 - 运行时清单：`harness.graph().catalogJson()`（或 CLI `--dump-modules`）
+
+## 模块翻译口 ctx.t（m5-i18n 起）——外置三档制
+
+`ModuleContext` 可选成员 `t(key, params?, fallback?)`：宿主注入的当前语言翻译口（D35 接缝——模块不 import 实现包；类型 `LocaleMessages`/`LocalePackImpl`/`LocaleCatalog` 从 `@orosus/contracts/module` 拿）。模板语法六形态：`{name}` 插值 / `{name|默认}` 缺省 / `{flag?…}` 条件段 / `{（… {m} …）}` 可选组（内参全在场才渲染）/ `{A/{raw} B}` 在场二选一 / `{1:…|2:…|5:…}` 复数（ru 三形，按首个数值参数 CLDR 选形）。
+
+| 档 | 模块作者做什么 | 用户侧效果 |
+|---|---|---|
+| ① 零成本透传 | 字面量直写（作者母语），不调 ctx.t | 恒显作者语言，不随 /locale 变 |
+| ② 自带目录（**推荐**） | 串走 `t("mymodule.key", params, "缺省文案")`（fallback 即作者缺省，永不裸显 key）；activate 时 `ctx.provide("i18n.catalog.mymodule", { "zh-CN": {...}, "en-US": {...} })`（键以模块名前缀、槽名=模块名、段坏整槽拒收） | 目录有的语种显译文，缺档语种落 en |
+| ③ 语言包补全 | 模块零改动——语言包表是全局扁键，收录 `mymodule.*` 即补全 | 与②叠加 |
+
+启动解析：config `language` > 三平台系统检测（win32 ICU 真值优先 env——Git Bash en_US 噪音免疫；linux env 四级 LC_ALL>LC_MESSAGES>LANG>LC_CTYPE，C/POSIX 视为未设；darwin env 后 `defaults read -g AppleLocale` 兜底）> en-US。内置简/繁/英三语地板永不降级；`/locale` 切换写回 config，语言包语种卸载自动回退英文、配置不改写（重挂恢复）。
 
 ## 配置的读写单一事实源（m4-8 起）
 
