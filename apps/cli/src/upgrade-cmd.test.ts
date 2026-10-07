@@ -6,7 +6,14 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { detectPackageManager, isUpgradeSubcommand, renderProgress, runUpgradeSubcommand, type UpgradeCmdIo } from "./upgrade-cmd.ts";
+import { detectPackageManager, isUpgradeSubcommand, isYes, renderProgress, runUpgradeSubcommand, type UpgradeCmdIo } from "./upgrade-cmd.ts";
+
+describe("isYes（确认词宽容——真机 yy 实锚）", () => {
+	it("y 开头即认，其余拒", () => {
+		for (const s of ["y", "Y", "yes", "Yes", "yy", " y "]) expect(isYes(s)).toBe(true);
+		for (const s of ["", "n", "no", "N", "回车", "1"]) expect(isYes(s)).toBe(false);
+	});
+});
 
 let dir: string | undefined;
 afterEach(() => {

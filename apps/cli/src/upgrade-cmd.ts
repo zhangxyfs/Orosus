@@ -72,11 +72,14 @@ export function renderProgress(loaded: number, total: number | undefined): strin
 	return `[${"█".repeat(filled)}${"░".repeat(BAR - filled)}] ${pct}% · ${fmtBytes(loaded)}/${fmtBytes(total)}`;
 }
 
+/** 确认词判定：y 开头即认（y/yes/yy 宽容——2026-10-07 真机用户打 yy 实锚）；空/n/no 拒。 */
+export const isYes = (s: string): boolean => /^y/i.test(s.trim());
+
 const defaultConfirm = async (prompt: string): Promise<boolean> => {
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		const ans = await rl.question(prompt);
-		return /^y(es)?$/i.test(ans.trim());
+		return isYes(ans);
 	} catch {
 		return false; // EOF（管道耗尽）/异常 = 拒绝，不当崩溃
 	} finally {

@@ -29,9 +29,11 @@ if (process.stdout.isTTY === true) {
 }
 // Tab 补全（M4-2 T21 + m5 T15 第三职）：模块命令参数经 graph 现读委托（completeArg 抛错当无候选 + host 日志）
 const rlCompleter = (line: string): Promise<[string[], string]> =>
-  Promise.resolve(commandCompleter(line, process.cwd(), refs.getH().graph().commands.map((c) => ({ name: `/${c.name}`, ...(c.completeArg !== undefined ? { completeArg: c.completeArg } : {}) })), (name, err) => {
-    refs.getH().log("host.completer.error", `模块参数补全抛错，当无候选：${name}`, { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
-  }));
+  refs === undefined
+    ? Promise.resolve([[], line] as [string[], string]) // initReplIo 前窗口期（子命令读 stdin）无图可查——空候选
+    : Promise.resolve(commandCompleter(line, process.cwd(), refs.getH().graph().commands.map((c) => ({ name: `/${c.name}`, ...(c.completeArg !== undefined ? { completeArg: c.completeArg } : {}) })), (name, err) => {
+      refs.getH().log("host.completer.error", `模块参数补全抛错，当无候选：${name}`, { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
+    }));
 export const rl = createInterface({ input: process.stdin, output: stdoutEcho, completer: rlCompleter });
 // 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
 // 且 EOF 落在 await 间隙时已关闭接口上的 question 永不 settle（退出码 13 挂起）——REPL 一律走队列兜底。
@@ -41,6 +43,9 @@ let stdinClosed = false;
 let askActive = false; // 菜单询问期间的行归询问消费（REPL 不抢答）
 rl.on("line", (l) => {
   if (askActive) return;
+  // initReplIo 前窗口期（子命令读 stdin 首例 = orosus upgrade 确认，2026-10-07 真机实锚）：
+  // refs 未注入——此刻无人消费行队列，丢弃防爆栈（模块体建 rl 早于 init 的既有时序，此前无人读 stdin）
+  if (refs === undefined) return;
   // 全屏期 readline 与 FullApp 共用同一 stdin（rl 不摘——行模式回切还要用）：按键两头都到，
   // rl 会把全屏输入框里的回车也酿成 line 事件——不丢则回行模式后陈旧命令连环重放（F5 走查实证）
   if (refs.getActiveApp() !== undefined) {
