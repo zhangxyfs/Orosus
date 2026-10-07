@@ -13,6 +13,7 @@ import { wrapText } from "./width.ts";
 import { LiveWrap } from "./live-wrap.ts";
 import { DiffScreen } from "./diffscreen.ts";
 import { FrameScheduler } from "./scheduler.ts";
+import { t } from "../i18n/app.ts";
 
 export interface StreamChunk {
 	kind: "text" | "reasoning";
@@ -39,7 +40,7 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 				if (c.kind === "reasoning") {
 					if (!inR) {
 						inR = true;
-						io.write(`\n[2m[思考] ${c.text}`);
+						io.write(`\n[2m[${t("stream.thinkWord")}] ${c.text}`);
 						return;
 					}
 					io.write(c.text);
@@ -66,7 +67,7 @@ export function createStreamView(io: { write(s: string): void; isTTY: boolean; c
 	let thinkLive = new LiveWrap();
 
 	/** 思考块样式（裸行上色——与折行解耦，D4 同款：样式便宜现做、折行贵进缓存）。 */
-	const styleThink = (raw: string[]): string[] => raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
+	const styleThink = (raw: string[]): string[] => raw.map((l, i) => theme.dim((i === 0 ? t("stream.thinkPrefix") : "  ") + l));
 
 	const thinkBlock = (text: string, w: number): string[] => styleThink(wrapText(text, Math.max(8, w - 2)));
 

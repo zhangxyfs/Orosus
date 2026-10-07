@@ -6,6 +6,7 @@
  *  content）与 tool/result 的 output（失败体）——此前在 renderEvent 被压成一行文本丢失。 */
 
 import { stripDangerEsc } from "../ansi-guard.ts";
+import { t } from "../i18n/app.ts";
 
 /** diff 行：ctx 上下文 / del 删除 / add 新增 / gap 省略隔断；no = 块内 1 基行号（删行与上下文按
  *  旧文本计、增行按新文本计——真实文件行号调用面不可得，登记为已知口径）。 */
@@ -50,7 +51,7 @@ export function editDiffRows(oldText: string, newText: string): DiffRow[] {
 	const rows: DiffRow[] = [];
 	const CTX = 3;
 	const preShown = Math.min(pre, CTX);
-	if (pre > preShown) rows.push({ tag: "gap", no: 0, text: `… 上方 ${pre - preShown} 行相同` });
+	if (pre > preShown) rows.push({ tag: "gap", no: 0, text: t("diff.gapUp", { n: pre - preShown }) });
 	for (let i = pre - preShown; i < pre; i++) rows.push({ tag: "ctx", no: i + 1, text: oldLines[i]! });
 	for (let i = pre; i < oldLines.length - suf; i++) rows.push({ tag: "del", no: i + 1, text: oldLines[i]! });
 	for (let i = pre; i < newLines.length - suf; i++) rows.push({ tag: "add", no: i + 1, text: newLines[i]! });
@@ -59,7 +60,7 @@ export function editDiffRows(oldText: string, newText: string): DiffRow[] {
 		const idx = oldLines.length - sufShown + j;
 		rows.push({ tag: "ctx", no: idx + 1, text: oldLines[idx]! });
 	}
-	if (suf > sufShown) rows.push({ tag: "gap", no: 0, text: `… 下方 ${suf - sufShown} 行相同` });
+	if (suf > sufShown) rows.push({ tag: "gap", no: 0, text: t("diff.gapDown", { n: suf - sufShown }) });
 	return dedent(rows);
 }
 

@@ -58,6 +58,10 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/tui/onboarding.ts", max: 0, note: "T12 清零（引导五页全窗）" },
 	{ file: "apps/cli/src/onboarding.ts", max: 0, note: "T12 清零（首启两问）" },
 	{ file: "apps/cli/src/startup.ts", max: 0, note: "T12 清零（复检两行）" },
+	{ file: "apps/cli/src/render.ts", max: 0, note: "T13 清零（行模式流渲染全族）" },
+	{ file: "apps/cli/src/tui/docmodel.ts", max: 0, note: "T13 清零（全屏流渲染）" },
+	{ file: "apps/cli/src/tui/toolview.ts", max: 0, note: "T13 清零（diff 上下文缺口）" },
+	{ file: "apps/cli/src/tui/streamview.ts", max: 0, note: "T13 清零（行模式思考前缀）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

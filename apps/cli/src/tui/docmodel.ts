@@ -28,6 +28,7 @@ import { toolDiffRows, toolChangeStats, writeContentFor, langForPath, errorLines
 const COLLAPSIBLE_TOOLS = new Set(["tool-fs__read", "tool-fs__grep", "tool-fs__glob"]);
 import { highlightLines } from "../md/highlight.ts";
 import type { StreamChunk } from "./streamview.ts";
+import { t } from "../i18n/app.ts";
 
 type ToolResult = { isError: boolean; output?: string | undefined; lines: number; /** 图片附件（m5-media F4）：路径引用——头行 chip「附 N 图」+ Alt+O 展开逐图行（不渲染像素）。 */ images?: { path: string; mime: string; bytes: number }[] }; // output 仅失败留存（成功体可巨大）
 
@@ -174,10 +175,10 @@ export class DocModel {
 	private styleWrappedThink(raw: string[], open: boolean): string[] {
 		if (!open) {
 			// 收起 = 尾部 2 视觉行 + 展开提示（F5 三轮①：流式观看语义 = 永远最新内容）
-			const head = theme.dim("[思考] · Alt + E 展开");
+			const head = theme.dim(t("doc.think.foldHead"));
 			return [head, ...raw.slice(-2).map((l) => theme.dim("  " + l))];
 		}
-		return raw.map((l, i) => theme.dim((i === 0 ? "[思考] " : "  ") + l));
+		return raw.map((l, i) => theme.dim((i === 0 ? t("stream.thinkPrefix") : "  ") + l));
 	}
 
 	private mdRender(text: string, w: number): string[] {
@@ -449,20 +450,20 @@ export class DocModel {
 	private toolLines(e: Entry & { k: "tool" }, width: number): string[] {
 		let chip = "";
 		if (e.result !== undefined) {
-			if (e.result.isError) chip = ` · 失败${this.errOpen ? "" : " · Alt + F 查看"}`;
+			if (e.result.isError) chip = ` ${t("doc.tool.failTail")}${this.errOpen ? "" : t("doc.tool.altF")}`;
 			else {
 				const stats = toolChangeStats(e.name, e.args);
-				chip = stats === undefined ? ` · ${e.result.lines} 行` : stats.dels > 0 ? ` · +${stats.adds} -${stats.dels}` : ` · ${stats.adds} 行`;
+				chip = stats === undefined ? ` ${t("doc.tool.lines", { n: e.result.lines })}` : stats.dels > 0 ? ` · +${stats.adds} -${stats.dels}` : ` ${t("doc.tool.lines", { n: stats.adds })}`;
 			}
-			if (e.result.images !== undefined) chip += ` · 附 ${e.result.images.length} 图`; // m5-media F4：头行 chip 常显（收起态也可见）
+			if (e.result.images !== undefined) chip += t("doc.tool.attach", { n: e.result.images.length }); // m5-media F4：头行 chip 常显（收起态也可见）
 		}
 		const head = toolCallLine(e.name, e.args, process.cwd()).replace("● Using ", e.result === undefined ? "● Using " : "● Used ") + chip;
 		const out = [this.styleToolLine(head, e.result?.isError === true)];
 		// m5-media F4：图片信息行（不渲染像素——终端不折腾六块图）；Alt+O 展开态逐图一行（格式+体积+路径）
 		if (e.result?.images !== undefined && this.toolOpen) {
 			for (const img of e.result.images) {
-				const size = img.bytes >= 1024 ? `${(img.bytes / 1024).toFixed(1)} KB` : `${img.bytes} 字节`;
-				for (const wl of wrapText(`图 ${img.mime} · ${size} · ${img.path}`, Math.max(8, width - 4))) out.push(theme.dim(`  ${wl}`));
+				const size = img.bytes >= 1024 ? `${(img.bytes / 1024).toFixed(1)} KB` : t("doc.tool.bytes", { n: img.bytes });
+				for (const wl of wrapText(t("doc.tool.imgRow", { mime: img.mime, size, path: img.path }), Math.max(8, width - 4))) out.push(theme.dim(`  ${wl}`));
 			}
 		}
 		if (e.result?.isError === true) {
@@ -474,7 +475,7 @@ export class DocModel {
 			e.errLines ??= errorLines(e.result.output);
 			const ERR_CAP = 10; // 与 diff/Write 收起帽同族（CAP 10）
 			for (const l of e.errLines.slice(0, ERR_CAP)) for (const wl of wrapText(l, Math.max(8, width - 2))) out.push("  " + theme.fg("err", wl));
-			if (e.errLines.length > ERR_CAP) out.push(theme.dim(`  … 其余 ${e.errLines.length - ERR_CAP} 行从略（完整内容在会话文件）`));
+			if (e.errLines.length > ERR_CAP) out.push(theme.dim(t("doc.tool.rest", { n: e.errLines.length - ERR_CAP })));
 			return out;
 		}
 		// Write = 内容预览（kimi 形态：dim 行号 + 语法高亮正文，无 +/- 记号——高亮一次入缓存，
@@ -491,7 +492,7 @@ export class DocModel {
 			}
 			const hidden = e.hl.length - shown.length;
 			if (hidden > 0)
-				out.push(theme.dim(this.toolOpen ? "  … 其余从略（完整内容在会话文件）" : `  … 还有 ${hidden} 行 · Alt + O 展开全部`));
+				out.push(theme.dim(this.toolOpen ? t("doc.more.capOpen") : t("doc.tool.more", { n: hidden })));
 			return out;
 		}
 		if (e.detail === undefined) e.detail = toolDiffRows(e.name, e.args);
@@ -502,7 +503,7 @@ export class DocModel {
 		for (const r of shown) out.push(...this.diffRowLines(r, width));
 		const hidden = rows.length - shown.length;
 		if (hidden > 0)
-			out.push(theme.dim(this.toolOpen ? `  … 其余 ${hidden} 行从略（完整内容在会话文件）` : `  … 还有 ${hidden} 行 · Alt + O 展开全部`));
+			out.push(theme.dim(this.toolOpen ? t("doc.tool.rest", { n: hidden }) : t("doc.tool.more", { n: hidden })));
 		return out;
 	}
 
@@ -517,13 +518,13 @@ export class DocModel {
 				? `${String(it.args?.path ?? "")}:${String(it.args?.offset ?? "")}:${String(it.args?.limit ?? "")}`
 				: String(it.args?.pattern ?? ""),
 		)).size;
-		const unit = g.name === "tool-fs__read" ? "个文件" : "个模式";
+		const unit = g.name === "tool-fs__read" ? t("doc.group.unitFiles") : t("doc.group.unitPatterns");
 		const pend = g.items.some((it) => it.result === undefined);
 		const failed = g.items.filter((it) => it.result?.isError === true).length;
 		const total = g.items.reduce((s, it) => s + (it.result !== undefined && !it.result.isError ? it.result.lines : 0), 0);
 		const head = pend
 			? `● Using ${label} ${uniq} ${unit}…`
-			: `● Used ${label} ${uniq} ${unit} · 共 ${total} 行${failed > 0 ? ` · ${failed} 失败` : ""}`;
+			: `● Used ${label} ${uniq} ${unit}${t("doc.tool.total", { n: total })}${failed > 0 ? t("doc.tool.failTail2", { n: failed }) : ""}`;
 		const out = [this.styleToolLine(head, !pend && failed === g.items.length)];
 		if (!this.toolOpen) return out;
 		for (const it of g.items) {
@@ -726,7 +727,7 @@ export class DocModel {
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
 				const text = parts.filter((p) => p.kind === "text").map((p) => p.text ?? "").join("");
 				const imgs = parts.filter((p) => p.kind === "image").length;
-				if (text !== "" || imgs > 0) this.userPrompt(text + (imgs > 0 ? `  [图片${imgs > 1 ? `×${imgs}` : ""}]` : ""));
+				if (text !== "" || imgs > 0) this.userPrompt(text + (imgs > 0 ? `${t("doc.histImage")}${imgs > 1 ? `×${imgs}` : ""}` : ""));
 			} else if (e.type === "assistant/message") {
 				this.replayGroup = undefined;
 				const parts = (e.content ?? []) as { kind?: string; text?: string }[];
@@ -774,7 +775,7 @@ export class DocModel {
 						else if (m.sourceModule === "host/date") continue;
 						// 钩子注入折叠行（m5-hooks T10 / D19）：host/hook 注入与 hooks 续跑——回放与 live 同款重现
 						else if (m.sourceModule === "host/hook" || m.sourceModule === "hooks")
-							this.pushLine(theme.fg("muted", `  ⌁ ${injectionFoldLabel(m.text, m.sourceModule)}（Ctrl + H 查看全文）`));
+							this.pushLine(theme.fg("muted", `  ⌁ ${injectionFoldLabel(m.text, m.sourceModule)}${t("render.inject.full")}`));
 						else this.userPrompt(m.text);
 					}
 				} else if (e.type === "host/vision-transcribe") {
@@ -785,10 +786,10 @@ export class DocModel {
 				this.visionTranscribeEnd(String(e.model ?? ""), text, text === undefined ? "failed" : "done");
 			} else if (e.type === "hooks/input-rewrite") {
 				// 改参修订注记回放（m5-hooks T10）：与实时路 renderEvent 同款一行灰字
-				this.pushLine(theme.fg("muted", "  ⌁ 钩子改参：参数已由钩子改写（对话流工具行存原始参数，审批与执行见改后参数）"));
+				this.pushLine(theme.fg("muted", t("doc.injection.rewrite")));
 			} else if (e.type === "turn/compaction") {
 				this.settleActive();
-				this.pushE({ k: "raw", s: `  [已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]` });
+				this.pushE({ k: "raw", s: t("doc.compaction.mark", { n: Number(e.droppedCount ?? 0) }).trimStart() });
 			} else if (e.type === "turn/end") {
 				this.turnEnd(false); // 装载期只记账不逐次裁剪——尾部统一一次（T7 轮次记账补分支）
 			}
@@ -885,18 +886,18 @@ export class DocModel {
 	private renderEntry(e: Entry, width: number, roster: readonly SubagentRosterEntry[]): string[] {
 		if (e.k === "fold") {
 			// 滑窗折叠行（D12）：单行 dim 提示，与压缩提示行/工具截断行同族排版——去向 = 会话文件
-			return [theme.dim(`┄ 已折叠更早的 ${e.turns} 轮对话 · 完整内容在会话文件`)];
+			return [theme.dim(t("doc.foldTurns", { n: e.turns }))];
 		}
 		if (e.k === "fold-step") {
 			// 轮内步级折叠行（T9——kimi KEEP_RECENT_STEPS 同款文案形）：单行 dim，去向 = Alt+S 展开
-			return [theme.dim(`  ⚙ 本轮前序 ${e.hidden.length} 步已折叠（Alt + S 展开全部）`)];
+			return [theme.dim(t("doc.foldSteps", { n: e.hidden.length }))];
 		}
 		if (e.k === "group") {
 			const mine = e.ids.map((id) => roster.find((r) => r.id === id)).filter((r): r is SubagentRosterEntry => r !== undefined);
 			const out = agentGroupLines(mine); // 每帧现算——状态/时长/词元随心跳自更
 			// 兜底：组员编号在场但花名册解析不出（fork 会话 agents/ 留在原会话、盘上文件被清）——
 			// 留一行痕迹而不是整组消失（spawn 行已吞，无此行这段历史就空了）
-			if (mine.length === 0 && e.ids.length > 0) out.push(theme.fg("muted", "  ● 派出子代理（本会话无可查名册——/tasks 可试）"));
+			if (mine.length === 0 && e.ids.length > 0) out.push(theme.fg("muted", t("doc.group.rosterMiss")));
 			return out;
 		}
 		if (e.k === "think") {
@@ -939,23 +940,23 @@ export class DocModel {
 		}
 		if (e.k === "skill") {
 			// 技能加载行：● 与技能名青玉、说明灰（工具行配色同族——2026-09-28 用户拍板：技能正文不进对话流）
-			return [theme.fg("accent", "●") + theme.fg("fg", " 已加载技能 ") + theme.fg("accent", e.name) + theme.dim(" · 正文已注入模型上下文")];
+			return [theme.fg("accent", "●") + t("doc.skill.loaded", { name: theme.fg("accent", e.name) })];
 		}
 		if (e.k === "vision") {
 			// 视觉转述行（走查四）：进行中活体行——已耗时每帧现算（1s 心跳重绘驱动；流式增量在
 			// 转述活动块 activeTail，这里只做「还活着」的计时证明——B 档兜底）；终态头行 ● 青玉 +
 			// 模型名灰括注 + 正文 muted 折行（宽度级缓存）
-			if (e.state === "running") return [theme.dim(`◐ 由 ${e.model} 转述图片中… ${Math.max(0, Math.floor((Date.now() - (e.since ?? Date.now())) / 1000))}s`)];
-			if (e.state === "aborted") return [theme.fg("muted", "● 视觉转述已中止——消息未发出（重发即续：已生成的转述有缓存）")];
-			if (e.state === "failed") return [theme.fg("muted", `● 视觉转述失败（${e.model}）——已按无图占位发送`)];
+			if (e.state === "running") return [theme.dim(`${t("doc.vision.working", { model: e.model })}${Math.max(0, Math.floor((Date.now() - (e.since ?? Date.now())) / 1000))}s`)];
+			if (e.state === "aborted") return [theme.fg("muted", t("doc.vision.aborted"))];
+			if (e.state === "failed") return [theme.fg("muted", t("doc.vision.failed", { err: e.model }))];
 			// done 正文默认折叠、Alt+E 展开（2026-10-02 拍板——全量转述可达 1200 字，与主思考共键）：
 			// 折叠 = 头行带展开提示 + 正文尾两行（thinkBlock 收起态同款「最新内容」语义）；展开 = 全文
 			if (e.cache?.w !== width || e.cache.open !== this.thinkOpen) {
 				this.debugWrapCalls++;
 				const body = wrapText(e.text ?? "", Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`));
 				const head = this.thinkOpen
-					? theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}）`)
-					: theme.fg("accent", "●") + theme.fg("fg", " 视觉转述") + theme.dim(`（${e.model}） · Alt + E 展开`);
+					? theme.fg("accent", "●") + t("doc.vision.think", { model: e.model })
+					: theme.fg("accent", "●") + t("doc.vision.thinkFold", { model: e.model });
 				e.cache = { w: width, open: this.thinkOpen, lines: this.thinkOpen ? [head, ...body] : [head, ...body.slice(-2)] };
 			}
 			return e.cache.lines;
@@ -1028,7 +1029,7 @@ export class DocModel {
 		// 转述活动块（A 案）置前：转述发生在 turn 开始前，主流区此时空闲——视觉上紧跟 ◐ 行
 		if (this.visionThinkText !== "") {
 			const raw = this.visionLive.feed(this.visionThinkText, Math.max(8, width - 2));
-			out.push(theme.dim("[视觉模型思考]"), ...raw.slice(-2).map((l) => theme.dim("  " + l))); // 尾两行流动（主思考收起态同款）
+			out.push(theme.dim(t("doc.vision.thinkPrefix")), ...raw.slice(-2).map((l) => theme.dim("  " + l))); // 尾两行流动（主思考收起态同款）
 		}
 		if (this.visionBodyText !== "") out.push(...wrapText(this.visionBodyText, Math.max(8, width - 2)).map((l) => theme.fg("muted", `  ${l}`)));
 		if (this.thinkText !== "") out.push(...this.styleWrappedThink(this.thinkLive.feed(this.thinkText, Math.max(8, width - 2)), this.thinkOpen));

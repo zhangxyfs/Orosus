@@ -4,6 +4,7 @@ import type { Harness, SessionEvent } from "@orosus/core";
 import { renderMarkdown } from "./mdpipe.ts";
 import { stripDangerEsc } from "./ansi-guard.ts";
 import type { StreamChunk } from "./tui/streamview.ts";
+import { t } from "./i18n/app.ts";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[22m";
@@ -25,15 +26,15 @@ const closeReasoning = (state: RenderState): string => {
 
 // 401/403/429 排查提示正文（模型发现 T5 走查缺陷③）：校验用输入值、运行用合并链（显式 env > process.env > secrets.env）
 // ——同名环境变量覆盖刚写入的 secrets 是最常见根因，给用户排查方向。管道形带 [提示] 标签、toast 形裸文案（两形共用正文防漂移）
-const HINT_401 = "密钥被拒——若刚更新过 secrets.env，检查同名环境变量是否覆盖（优先级：显式 env > process.env > secrets.env）";
-const HINT_429 = "429 限流或配额不足——错误体含 1113（余额不足或无可用资源包）时，检查套餐窗口配额是否用尽、模型是否在套餐覆盖列表";
+const HINT_401 = (): string => t("render.hint401");
+const HINT_429 = (): string => t("render.hint429");
 
 /** 模型错误 → toast 文案（2026-09-23 用户拍板：模型错误不再落流区）：无标签纯文本，排查提示跟随。
  *  全屏浮动 toast（3 行封顶——超长错误体尾部让位）/ 行模式 console 单行同文案。 */
 export function errorMessageText(c: Extract<Chunk, { type: "finish" }>): string {
   const msg = stripDangerEsc(c.errorMessage ?? ""); // CR-01：错误体来自端点/网关（外部文字）——危险序列不进终端
-  const hint = /HTTP 40[13]/.test(msg) ? `\n提示：${HINT_401}` : /HTTP 429/.test(msg) ? `\n提示：${HINT_429}` : "";
-  return `模型错误：${msg}${hint}`;
+  const hint = /HTTP 40[13]/.test(msg) ? "\n" + t("render.hintTag", { hint: HINT_401() }) : /HTTP 429/.test(msg) ? "\n" + t("render.hintTag", { hint: HINT_429() }) : "";
+  return t("render.errToast", { msg, hint });
 }
 
 /** 单 Chunk → 终端文案（M4-1 T5/D45：从原 assistant/chunk 事件分支迁来——断流后 chunk 经
@@ -45,15 +46,15 @@ export function renderChunk(c: Chunk, state: RenderState): string {
     const text = stripDangerEsc(c.text); // CR-01：模型正文/思考是外部文字——危险序列入口净化（SGR 颜色保留）
     if (!state.inReasoning) {
       state.inReasoning = true;
-      return `\n${DIM}[思考] ${text}`;
+      return `\n${DIM}${t("stream.thinkPrefix")}${text}`;
     }
     return text;
   }
   if (c.type === "text/delta") return closeReasoning(state) + stripDangerEsc(c.text);
   if (c.type === "finish" && c.kind === "error") {
     const msg = stripDangerEsc(c.errorMessage ?? "");
-    const hint = /HTTP 40[13]/.test(msg) ? `\n[提示] ${HINT_401}\n` : /HTTP 429/.test(msg) ? `\n[提示] ${HINT_429}\n` : "";
-    return `${closeReasoning(state)}\n[模型错误] ${msg}${hint}`;
+    const hint = /HTTP 40[13]/.test(msg) ? "\n" + t("render.hintTagPipe", { hint: HINT_401() }) + "\n" : /HTTP 429/.test(msg) ? "\n" + t("render.hintTagPipe", { hint: HINT_429() }) + "\n" : "";
+    return `${closeReasoning(state)}\n${t("render.errPipe", { msg, hint })}`;
   }
   return "";
 }
@@ -119,11 +120,11 @@ export function toolCallLine(name: string, args: Record<string, unknown> | undef
 /** 原位合并哨兵（DocModel 挂到对应 ● 行；行模式消费面转独立行）。 */
 export const TOOL_MERGE = "\x1d";
 export function toolResultChip(output: unknown, isError: unknown): string {
-  if (isError === true) return TOOL_MERGE + "失败";
+  if (isError === true) return TOOL_MERGE + t("render.chip.fail");
   const text = typeof output === "string" ? output : String(output ?? "");
   let n = 0;
   for (const l of text.split("\n")) if (l.trim().length > 0) n++;
-  return TOOL_MERGE + `${n} 行`;
+  return TOOL_MERGE + t("render.chip.lines", { n });
 }
 
 /** 注入折叠行标签（m5-hooks T10 / D19，dsh ContextInjectionRow 形态）：收起 = 灰字一行
@@ -134,11 +135,11 @@ export function injectionFoldLabel(text: string, sourceModule: string | undefine
   const m = /钩子注入（([^)）]+)）/.exec(text);
   const inner = m?.[1];
   const name = inner !== undefined && inner.includes(" · ") ? inner.split(" · ").slice(1).join(" · ") : undefined;
-  const event = (inner !== undefined ? inner.split(" · ")[0] : undefined) ?? (sourceModule === "hooks" ? "Stop 续跑" : "注入");
-  return name !== undefined ? `${name} 注入 · ${text.length} 字符` : `上下文注入 · ${event} · ${text.length} 字符`;
+  const event = (inner !== undefined ? inner.split(" · ")[0] : undefined) ?? (sourceModule === "hooks" ? t("render.inject.stop") : t("render.inject.plain"));
+  return name !== undefined ? t("render.inject.named", { name, n: text.length }) : t("render.inject.fallback", { event, n: text.length });
 }
 
-/** 单事件 → 终端文案（完成事件面——T5 断流后 assistant/chunk 不在此列）。
+/** 单事件 → 终端文案（t("render.finishEvent")面——T5 断流后 assistant/chunk 不在此列）。
  *  压缩/裁剪对用户可见（三轮 P1：此前零渲染）；四家参考均有可见提示。 */
 export function renderEvent(e: SessionEvent, state: RenderState): string {
   if (e.type === "tool/call") {
@@ -154,15 +155,15 @@ ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, pr
     const msgs = (e.messages ?? []) as { text?: string; sourceModule?: string }[];
     const lines = msgs
       .filter((m) => (m.sourceModule === "host/hook" || m.sourceModule === "hooks") && typeof m.text === "string" && m.text !== "")
-      .map((m) => `  ⌁ ${injectionFoldLabel(m.text!, m.sourceModule)}（Ctrl + H 查看全文）`);
+      .map((m) => `  ⌁ ${injectionFoldLabel(m.text!, m.sourceModule)}${t("render.inject.full")}`);
     return lines.length > 0 ? `${lines.join("\n")}\n` : "";
   }
   if (e.type === "hooks/input-rewrite") {
     // 改参修订注记（m5-hooks T10）：一行灰字——tool/call 存原始参数、审批与执行见改后参数（对账口径）
-    return `  ⌁ 钩子改参：参数已由钩子改写（对话流工具行存原始参数，审批与执行见改后参数）\n`;
+    return `  ⌁ ${t("doc.injection.rewrite").trimStart()}\n`;
   }
-  if (e.type === "turn/compaction") return `\n[已压缩：${Number(e.droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]\n`;
-  if (e.type === "turn/prune") return `\n[已裁剪 ${Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0} 个超长工具结果（原文保留在会话文件中）]\n`;
+  if (e.type === "turn/compaction") return "\n" + t("render.compactMark", { n: Number(e.droppedCount ?? 0) }) + "\n";
+  if (e.type === "turn/prune") return "\n" + t("render.pruneMark", { n: Array.isArray(e.prunes) ? (e.prunes as unknown[]).length : 0 }) + "\n";
   if (e.type === "turn/end") return `${closeReasoning(state)}\n`;
   return "";
 }
@@ -182,13 +183,13 @@ export function renderHistoryLines(events: SessionEvent[], width: number): strin
         .map((p) => p.text ?? "")
         .join(""),
     );
-  const cap = (s: string): string => (s.length > HISTORY_LINE_MAX ? `${s.slice(0, HISTORY_LINE_MAX)}…（超长截断——完整原文在会话文件）` : s);
+  const cap = (s: string): string => (s.length > HISTORY_LINE_MAX ? `${s.slice(0, HISTORY_LINE_MAX)}${t("render.histTrunc")}` : s);
   for (const e of events) {
     if (e.type === "user/message") {
       const text = textBlocks(e);
       const imgs = ((e.content ?? []) as { kind?: string }[]).filter((p) => p.kind === "image").length;
-      // image part 图痕（M4-2.5 T5）：回显不零痕——[图片] 标记随 user 行（纯图消息也有一行）
-      const line = `${text}${imgs > 0 ? `${text !== "" ? " " : ""}[图片]${imgs > 1 ? `×${imgs}` : ""}` : ""}`;
+      // image part 图痕（M4-2.5 T5）：回显不零痕——t("render.histImage") 标记随 user 行（纯图消息也有一行）
+      const line = `${text}${imgs > 0 ? `${text !== "" ? " " : ""}${t("render.histImage")}${imgs > 1 ? `×${imgs}` : ""}` : ""}`;
       if (line !== "") out.push(`> ${cap(line)}`);
     } else if (e.type === "assistant/message") {
       const text = textBlocks(e);
@@ -203,7 +204,7 @@ export function renderHistoryLines(events: SessionEvent[], width: number): strin
       out.push(`  ${toolCallLine(String(e.name), e.args as Record<string, unknown> | undefined, process.cwd()).replace("● Using ", "Used ")}`);
     } else if (e.type === "turn/compaction") {
       // 压缩点回显（M4-2.5 T4——压缩调研 §4.2：resume 后压缩点完全隐形是六家独一份的偏差）
-      out.push(`  [已压缩：${Number((e as { droppedCount?: number }).droppedCount ?? 0)} 条历史 → 摘要（Ctrl+O 查看）]`);
+      out.push(t("doc.compaction.mark", { n: Number((e as { droppedCount?: number }).droppedCount ?? 0) }).trimStart());
     }
   }
   return out;
@@ -221,11 +222,11 @@ export function historyPage(lines: string[], page = 30): { shown: string[]; hidd
 // 该路循环退出（渲染面降级不拖垮进程——与契约③「模块降级不阻断」同向）。不走 io.write 面
 // 报错——写面本身可能正是抛错方。
 const reportRenderFailure = (lane: string, err: unknown): void => {
-  console.error(`[render] ${lane}渲染循环异常退出：${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+  console.error(`[render] ${lane}t("render.loopErr")${err instanceof Error ? err.stack ?? err.message : String(err)}`);
 };
 
 /** 挂接渲染（main.ts 的接线面，M4-1 T5 双订阅）：实时 Chunk 走 liveChunks 旁路 → renderChunk；
- *  完成事件走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 streamview 的 turn/end 判定——
+ *  t("render.finishEvent")走 events() → renderEvent（onEvent 供 /fork 记 lastEventId 与 streamview 的 turn/end 判定——
  *  chunk 无事件 id，不受影响）。两路共享同一 RenderState（思考块的闭合可来自任一路）。
  *  双写面（T4/v1.8；F2 升级）：chunk 路 TTY 接 io.activity——**结构化 StreamChunk**（kind + 原文，
  *  渲染形态由 streamview/mdpipe 负责——F2 新管线）；activity 缺省回落 renderChunk 旧形态（非 TTY
@@ -267,7 +268,7 @@ export function attachRender(
       const out = renderChunk(c, state);
       if (out !== "") io.write(out);
     }
-  })().catch((err) => reportRenderFailure("实时 chunk", err)); // CR-07
+  })().catch((err) => reportRenderFailure(t("render.liveChunk"), err)); // CR-07
   void (async () => {
     for await (const e of h.events()) {
       onEvent?.(e);
@@ -292,5 +293,5 @@ export function attachRender(
       const out = renderEvent(e, state);
       if (out !== "") io.write(out);
     }
-  })().catch((err) => reportRenderFailure("完成事件", err)); // CR-07
+  })().catch((err) => reportRenderFailure(t("render.finishEvent"), err)); // CR-07
 }
