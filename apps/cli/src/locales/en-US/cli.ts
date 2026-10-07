@@ -78,6 +78,8 @@ export const enUSCli: Record<string, string> = {
 	"provider.action.updateKey": "Update API key",
 	"provider.action.remove": "Remove",
 	"provider.action.back": "Back",
+	"provider.action.pickModel": "Pick a default model (live list from the endpoint)",
+	"provider.action.manualModel": "Model list unreachable — type a {name} model name (Enter to cancel)",
 	"provider.result.setDefault": "Set as default (provider = \"{name}\")",
 	"provider.result.noEnvRef": "Not updated: this slot does not use an $ENV: key reference (plaintext key or no key slot — edit config.toml / secrets.env directly)",
 	"provider.ask.pasteNewKey": "Paste a new value for {envKey} (Enter to cancel)",

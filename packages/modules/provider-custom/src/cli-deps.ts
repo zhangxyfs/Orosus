@@ -58,6 +58,27 @@ export function defaultMenuDeps(overrides: Partial<MenuDeps> = {}): MenuDeps {
       if (!existed && process.platform !== "win32") chmodSync(secretsPath, 0o600); // Windows 无 0o600 等价——降级不静默
     },
     env: process.env,
+    // $ENV: 双源解析（2026-10-07 setDefault 补选模型件）：secrets.env → 进程环境——密钥实际住在
+    // secrets.env（appendSecret 写盘），进程环境往往没有；解析语义镜像 core loadSecretsEnv（后者覆盖、
+    // 剥成对引号、# 注释/坏行跳过——模块不 import core，本地最小实现）
+    resolveKey: (ref: string | undefined): string | undefined => {
+      if (ref === undefined) return undefined;
+      if (!ref.startsWith("$ENV:")) return ref; // 明文 key 原样
+      const key = ref.slice(5);
+      if (existsSync(secretsPath)) {
+        for (const line of readFileSync(secretsPath, "utf8").split("\n").reverse()) { // 后者覆盖：倒序首命中
+          const t = line.trim();
+          if (t === "" || t.startsWith("#")) continue;
+          const i = t.indexOf("=");
+          if (i <= 0 || t.slice(0, i) !== key) continue;
+          const raw = t.slice(i + 1).trim();
+          return raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
+            ? raw.slice(1, -1)
+            : raw;
+        }
+      }
+      return process.env[key];
+    },
     getCatalog: () => getCatalogWithSource({ cacheFile: defaultCatalogCacheFile() }), // 拉到即落盘——重启后离线也有全量目录
     // 本地文件源的缓存直读（2026-09-28 用户拍板）：~/.orosus/cache/models-dev.json 在场即直读不问路径
     readCacheCatalog: () => readCatalogDiskCache(defaultCatalogCacheFile()),

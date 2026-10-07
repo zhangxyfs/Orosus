@@ -1067,13 +1067,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
     const model = explicitModel ?? adapter.defaultModel;
     if (model === undefined) {
-      // 裸名报错须列出可用 provider 及各自 defaultModel（计划补空白登记项）
-      const listing = graph.records
-        .filter((r) => r.state === "active")
-        .map((r) => {
-          const a = graph.services.provider(r.name);
-          return a?.defaultModel !== undefined ? `${r.name}（默认 ${a.defaultModel}）` : `${r.name}（无默认，需写全名）`;
-        })
+      // 裸名报错须列出可用 provider 及各自 defaultModel（计划补空白登记项）。
+      // 2026-10-07 修：旧版遍历 graph.records（模块记录）——列出的是 approval/compaction 等模块名而非
+      // provider 槽，用户实机裸名报错收到一墙模块名；改遍历 listProviders() 槽清单（name+defaultModel）
+      const listing = graph.services
+        .listProviders()
+        .map((s) => (s.defaultModel !== undefined ? `${s.name}（默认 ${s.defaultModel}）` : `${s.name}（无默认，需写全名）`))
         .join("、") || "（无）";
       throw new Error(`provider "${provider}" 未声明 defaultModel——请写全名 "<provider>/<model>"。可用 provider：${listing}`);
     }

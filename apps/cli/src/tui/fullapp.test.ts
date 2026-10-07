@@ -980,13 +980,14 @@ describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列�
 
 // M4-3 T1d：引导弹窗 FullApp 集成（焦点锁/键路由/结算/渲染）
 describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
-	const obDeps = (calls: { secrets: [string, string][]; models: string[]; search: Record<string, unknown>[] }) => ({
+	const obDeps = (calls: { secrets: [string, string][]; models: string[]; defaults: [string, string][]; search: Record<string, unknown>[] }) => ({
 		providers: [
 			{ id: "zhipu", name: "智谱 GLM", envKey: "ZHIPU_API_KEY", baseUrl: "https://x/v1", type: "openai" as const },
 		],
 		writeProvider: () => {},
 		appendSecret: (k: string, v: string) => { calls.secrets.push([k, v]); },
 		setModel: (s: string) => { calls.models.push(s); },
+		writeDefaultModel: (slot: string, model: string) => { calls.defaults.push([slot, model]); },
 		writeSearch: (p: Record<string, unknown>) => { calls.search.push(p); },
 		listModels: async () => ["glm-5.3"],
 		writeVision: () => {},
@@ -999,7 +1000,7 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		const { app, input, output } = rig();
 		app.start();
 		await flush();
-		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
+		const calls = { secrets: [] as [string, string][], models: [] as string[], defaults: [] as [string, string][], search: [] as Record<string, unknown>[] };
 		const outcome = app.runOnboarding(obDeps(calls));
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("引导 1 / 5");
@@ -1008,9 +1009,12 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		expect(stripAnsi(output.buf)).toContain("引导 2 / 5");
 		input.emit("data", "\r"); // 进 key 态（zhipu）
 		input.emit("data", "zk");
-		input.emit("data", "\r"); // 确认 key
+		input.emit("data", "\r"); // 确认 key → 选默认模型子态（2026-10-07 修）
+		await flush();
+		input.emit("data", "\r"); // 选定首个模型——defaultModel 落盘在前、裸名 setModel 在后
 		await flush();
 		expect(calls.secrets).toEqual([["ZHIPU_API_KEY", "zk"]]);
+		expect(calls.defaults).toEqual([["zhipu", "glm-5.3"]]);
 		expect(calls.models).toEqual(["zhipu"]);
 		input.emit("data", "\x0e"); // → p3
 		await flush();
@@ -1035,7 +1039,7 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		const { app, input } = rig();
 		app.start();
 		await flush();
-		const calls = { secrets: [] as [string, string][], models: [] as string[], search: [] as Record<string, unknown>[] };
+		const calls = { secrets: [] as [string, string][], models: [] as string[], defaults: [] as [string, string][], search: [] as Record<string, unknown>[] };
 		const outcome = app.runOnboarding(obDeps(calls));
 		await flush();
 		input.emit("data", "\x11"); // Ctrl + Q

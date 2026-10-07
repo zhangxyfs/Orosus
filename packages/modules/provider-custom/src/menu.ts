@@ -38,6 +38,9 @@ export interface MenuDeps {
   /** 磁盘目录缓存直读（2026-09-28 用户拍板）：本地文件源先查 ~/.orosus/cache/models-dev.json——
    *  在场即直读不再问路径；缺省（未注入）= 视同无缓存，回落问路径。测试注入隔离 home（HERMETIC）。 */
   readCacheCatalog?(): Catalog | undefined;
+  /** 密钥引用解析（2026-10-07 setDefault 补选模型件）："$ENV:X" → secrets.env → 进程环境；明文原样；
+   *  缺省（未注入）= 退回 env 单源（进程环境）。宿主 CLI 接 secrets.env 双源。 */
+  resolveKey?(ref: string | undefined): string | undefined;
   fetchImpl: typeof fetch;
 }
 
@@ -145,8 +148,36 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps, t?: MenuT): Pr
       }
       if (act === actMenu.back) continue;
       if (act === actMenu.setDefault) {
-        await deps.setModel(name); // 裸槽名（F5 十轮）——真名（MP-01 前：显示名写入，provider 解析必失败）
-        return `已设为当前默认（provider = "${name}"）`;
+        const entry = current[name]!;
+        if (entry.defaultModel !== undefined) {
+          await deps.setModel(name); // 裸槽名（F5 十轮）——条目带默认模型，裸名可解析（D32）
+          return `已设为当前默认（provider = "${name}"）`;
+        }
+        // 2026-10-07 修：条目缺默认模型时裸名 provider 解析必炸（D32）——旧版此处无条件写盘，正是
+        // 「设为当前默认后 CLI 起不来」的写盘形态。先补选默认模型：GET /models 实时清单（零 token，
+        // 密钥经 resolveKey 双源解析），不可达回退手输；选定写 defaultModel 再 setModel——两写同序。
+        const key = deps.resolveKey !== undefined
+          ? deps.resolveKey(entry.apiKey)
+          : entry.apiKey !== undefined && entry.apiKey.startsWith("$ENV:") ? deps.env[entry.apiKey.slice(5)] : entry.apiKey;
+        const v = await verify(deps, entry, key);
+        const live = v.kind === "ok" ? (() => { try { return parseModelsResponse(v.body); } catch { return []; } })() : [];
+        let pickedModel: string | undefined;
+        try {
+          if (live.length > 0) {
+            pickedModel = (await ui.choose(tt("provider.action.pickModel", undefined, "选择默认模型（来自端点实时清单）"), live)).trim();
+          } else {
+            const manual = (await ui.ask(tt("provider.action.manualModel", { name: displayName(name, { name }) }, "模型清单不可达——手输 {name} 的模型名（回车取消）"))).trim();
+            if (manual !== "") pickedModel = manual;
+          }
+        } catch (err) {
+          if (isEscCancel(err)) continue; // Esc → 回平台列表（未产生任何写盘）
+          throw err;
+        }
+        if (pickedModel === undefined || pickedModel === "") return "已取消（未变更）";
+        await deps.saveProviders({ ...current, [name]: { ...entry, defaultModel: pickedModel } });
+        current[name] = { ...entry, defaultModel: pickedModel }; // 根循环读 current——本地视图同步
+        await deps.setModel(name);
+        return `已设为当前默认（provider = "${name}"，默认模型 ${pickedModel}）`;
       }
       if (act === actMenu.updateKey) {
         // MP-05：接通真实交互流（此前菜单数组提供该项但处理链无分支——选中直接落「已返回」，密钥不变，

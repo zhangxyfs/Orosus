@@ -500,7 +500,8 @@ describe("/provider 多级菜单（D37）", () => {
 // MP-01 回归（报告条目：既有槽列表用 displayName 中文显示名渲染，sel.split("\n")[0] 反解把显示名当槽 key——
 // setModel("深度求索") 写坏配置、delete next["深度求索"] 假成功。修复：选中按下标反查回槽 key 真名）
 describe("/provider 既有槽管理（MP-01：显示名渲染 / 真名反查）", () => {
-  const providers = { deepseek: { type: "openai" as const, baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY" } };
+  // defaultModel 在场——①③ 走「直设」路径；缺默认模型的补选路径见 ④⑤（2026-10-07 修）
+  const providers = { deepseek: { type: "openai" as const, baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY", defaultModel: "deepseek-chat" } };
   /** 第一级选首项（显示名「深度求索\n（…）」——displayName 命中 DISPLAY_NAMES 的最常见目录槽名），第二级选指定动作 */
   const pickUi = (act: string): MenuUi => {
     let call = 0;
@@ -531,6 +532,79 @@ describe("/provider 既有槽管理（MP-01：显示名渲染 / 真名反查）"
     const deps = fakeDeps({ loadProviders: async () => ({ "my-gateway": providers.deepseek! }) });
     await runProviderMenu(pickUi("设为当前默认"), deps);
     expect(deps.state.setModels).toEqual(["my-gateway"]);
+  });
+
+  // 2026-10-07 修（setDefault 补选件）：条目缺 defaultModel 时裸名 provider 解析必炸（D32）——
+  // 旧版无条件 setModel 正是「设为当前默认后 CLI 起不来」的写盘形态。修复 = 先补选再两写同序。
+  const bareProviders = { deepseek: { type: "openai" as const, baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY" } };
+  /** 三级 choose 剧本：平台首项 → 设为当前默认 → thirdChoose（null = 该次抛 Esc）；ask 出 askAnswer。 */
+  const actUi = (thirdChoose: string | null, askAnswer: string): MenuUi => {
+    let call = 0;
+    return {
+      choose: async (_t: string, items: string[]) => {
+        call++;
+        if (call === 1) return items[0]!;
+        if (call === 2) return "设为当前默认";
+        if (thirdChoose === null) throw new Error("已取消（Esc）");
+        return thirdChoose;
+      },
+      ask: async () => askAnswer,
+      askSecret: async () => "",
+      confirm: async () => false,
+    };
+  };
+
+  it("④ 条目缺 defaultModel → GET /models 实时清单选一 → defaultModel 先写、setModel 后写（既有字段保真）", async () => {
+    const deps = fakeDeps({
+      loadProviders: async () => JSON.parse(JSON.stringify(bareProviders)) as typeof bareProviders,
+      env: { DEEPSEEK_API_KEY: "sk-live" }, // resolveKey 未注入 → env 单源解析
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }] }), { status: 200 })) as typeof fetch,
+    });
+    const h = actUi("deepseek-reasoner", "");
+    const out = await runProviderMenu(h, deps);
+    expect(deps.state.saved).toMatchObject({ deepseek: { type: "openai", baseUrl: "https://api.deepseek.com/v1", apiKey: "$ENV:DEEPSEEK_API_KEY", defaultModel: "deepseek-reasoner" } }); // apiKey/baseUrl 保真
+    expect(deps.state.setModels).toEqual(["deepseek"]); // 裸名此刻才写
+    expect(out).toContain("deepseek-reasoner");
+  });
+
+  it("⑤ 清单不可达 → 手输回退：ask 输模型名写盘；空输 = 取消零写盘；choose Esc = 回平台列表零写盘", async () => {
+    const mk = () => fakeDeps({
+      loadProviders: async () => JSON.parse(JSON.stringify(bareProviders)) as typeof bareProviders,
+      fetchImpl: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
+    });
+    const ok = mk();
+    const out = await runProviderMenu(actUi(null, "glm-5.3"), ok);
+    expect(out).toContain("glm-5.3");
+    expect(ok.state.saved).toMatchObject({ deepseek: { defaultModel: "glm-5.3" } });
+    expect(ok.state.setModels).toEqual(["deepseek"]);
+    // 空输取消：零写盘零 setModel（旧版此处已把裸名写坏配置）
+    const cancel = mk();
+    const out2 = await runProviderMenu(actUi(null, ""), cancel);
+    expect(out2).toContain("已取消");
+    expect(cancel.state.saved).toBeNull();
+    expect(cancel.state.setModels).toEqual([]);
+    // 第三级 choose 抛 Esc（清单在手但用户放弃）→ 回平台列表：零写盘，choose 再来一轮选「取消」结束
+    const esc = fakeDeps({
+      loadProviders: async () => JSON.parse(JSON.stringify(bareProviders)) as typeof bareProviders,
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "deepseek-chat" }] }), { status: 200 })) as typeof fetch,
+    });
+    let call = 0;
+    const escUi: MenuUi = {
+      choose: async (_t, items) => {
+        call++;
+        if (call === 1) return items[0]!;
+        if (call === 2) return "设为当前默认";
+        if (call === 3) throw new Error("已取消（Esc）");
+        return "[取消]";
+      },
+      ask: async () => "",
+      askSecret: async () => "",
+      confirm: async () => false,
+    };
+    const out3 = await runProviderMenu(escUi, esc);
+    expect(out3).toContain("已取消");
+    expect(esc.state.saved).toBeNull();
+    expect(esc.state.setModels).toEqual([]);
   });
 });
 

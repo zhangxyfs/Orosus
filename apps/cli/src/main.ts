@@ -1737,15 +1737,30 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		// 2026-10-02 用户拍板：提供商正源 = 盘上目录缓存（预装 models-dev.json 已 seed 固化，见 runOnboarding
 		// 调用前）——全量派生视图（过滤 + 头部优先排序）；盘上无缓存/坏文件回退烤码 7 家快照（末位兜底）
 		providers: catalogProviderView(defaultCatalogCacheFile()) ?? snapshotProviderView(),
-		writeProvider: (p) => {
+		writeProvider: async (p) => {
 			// CM-12③（2026-09-28 code review）：引导写盘 void 裸奔——IO 拒绝（EACCES/ENOSPC）即 unhandledRejection
-			// 崩进程，用户视角「填完密钥程序炸了」；rejection 落 toast（notify：全屏=引导弹窗外浮层、行模式=单行），进程存活
-			void (async () => {
+			// 崩进程，用户视角「填完密钥程序炸了」；rejection 落 toast（notify：全屏=引导弹窗外浮层、行模式=单行），进程存活。
+			// 2026-10-07 两修：① 展开既有条目（重输 Key 不再抹掉 defaultModel 等字段）；② 返回写盘 Promise
+			// ——选模型子态要等条目落盘再 listModels（清单读盘取条目，与写盘竞态会拿空）。
+			try {
 				const cur = await menuDeps.loadProviders();
+				const prev = cur[p.id];
 				await menuDeps.saveProviders({
 					...cur,
-					[p.id]: { type: p.type, baseUrl: p.baseUrl, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) },
+					[p.id]: { ...prev, type: p.type, baseUrl: p.baseUrl, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) },
 				});
+			} catch (err) {
+				notify(t("main.provider.writeFail", { err: err instanceof Error ? err.message : String(err) }));
+			}
+		},
+		// 条目补写 defaultModel（读-改-写——保 apiKey 等既有字段）：引导选模型子态选定落盘，
+		// setModel 裸名的前置（D32——2026-10-07 引导写盘 bug 修复件）
+		writeDefaultModel: (slot, model) => {
+			void (async () => {
+				const cur = await menuDeps.loadProviders();
+				const prev = cur[slot];
+				if (prev === undefined) throw new Error(t("main.slot.missing2", { slot }));
+				await menuDeps.saveProviders({ ...cur, [slot]: { ...prev, defaultModel: model } });
 			})().catch((err) => notify(t("main.provider.writeFail", { err: err instanceof Error ? err.message : String(err) })));
 		},
 		// secrets 统一走 upsertSecret（原位更新不累积重复行——引导内可重复输同一家 key；
@@ -1782,12 +1797,17 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 	};
 };
 
-/** 引导初态：已配置槽 + 当前使用槽（顶层 provider 键的首段；指向不存在的槽按 null——损坏降级面）。 */
-const onboardingInitial = async (): Promise<{ configured: string[]; active: string | null }> => {
+/** 引导初态：已配置槽 + 当前使用槽（顶层 provider 键的首段；指向不存在的槽按 null——损坏降级面）
+ *  + 已带默认模型的槽（modelDone——这批槽 Space/裸名 setModel 合法，其余先进选模型子态）。 */
+const onboardingInitial = async (): Promise<{ configured: string[]; active: string | null; modelDone: string[] }> => {
 	const cur = await defaultMenuDeps().loadProviders();
 	const curModel = realReadModel(process.cwd())();
 	const slot = curModel === undefined || curModel === "" ? null : curModel.split("/")[0]!;
-	return { configured: Object.keys(cur), active: slot !== null && cur[slot] !== undefined ? slot : null };
+	return {
+		configured: Object.keys(cur),
+		active: slot !== null && cur[slot] !== undefined ? slot : null,
+		modelDone: Object.entries(cur).filter(([, e]) => e != null && e.defaultModel !== undefined).map(([id]) => id),
+	};
 };
 
 if (args.print === undefined) try {

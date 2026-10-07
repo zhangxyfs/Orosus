@@ -51,3 +51,44 @@ describe("appendSecret 单行 upsert（MP-09：不累积重复行 + 换行拒绝
     expect(existsSync(secrets)).toBe(true);
   });
 });
+
+/** resolveKey $ENV 双源解析（2026-10-07 setDefault 补选模型件）：secrets.env → 进程环境。
+ *  语义镜像 core loadSecretsEnv（后者覆盖、剥成对引号、# 注释跳过）——模块不 import core，本地最小实现。 */
+describe("resolveKey（$ENV: 双源——secrets.env 后者覆盖，进程环境兜底）", () => {
+  const dirs: string[] = [];
+  const savedHome = process.env.OROSUS_HOME;
+  const savedEnvKey = process.env.PROVIDER_TEST_KEY;
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    if (savedHome === undefined) delete process.env.OROSUS_HOME;
+    else process.env.OROSUS_HOME = savedHome;
+    if (savedEnvKey === undefined) delete process.env.PROVIDER_TEST_KEY;
+    else process.env.PROVIDER_TEST_KEY = savedEnvKey;
+  });
+
+  it("① secrets.env 命中：后者覆盖、剥成对引号、# 注释与他行跳过；明文引用与 undefined 原样", () => {
+    const home = mkdtempSync(join(tmpdir(), "orosus-reskey-")); dirs.push(home);
+    process.env.OROSUS_HOME = home;
+    writeFileSync(join(home, "secrets.env"), [
+      "# 注释行跳过",
+      "DEEPSEEK_API_KEY=\"sk-quoted-first\"",
+      "OTHER=keep",
+      "DEEPSEEK_API_KEY=sk-last", // 同 key 后者覆盖
+    ].join("\n"), "utf8");
+    const deps = defaultMenuDeps();
+    expect(deps.resolveKey?.("$ENV:DEEPSEEK_API_KEY")).toBe("sk-last"); // 后者覆盖（首次成对引号被覆盖不生效）
+    expect(deps.resolveKey?.("sk-plaintext")).toBe("sk-plaintext"); // 非 $ENV 引用：明文原样
+    expect(deps.resolveKey?.(undefined)).toBeUndefined();
+  });
+
+  it("② 文件无此键 → 进程环境兜底；引号剥取首次命中值、成对才剥（loadSecretsEnv 同口径）", () => {
+    const home = mkdtempSync(join(tmpdir(), "orosus-reskey2-")); dirs.push(home);
+    process.env.OROSUS_HOME = home;
+    process.env.PROVIDER_TEST_KEY = "sk-from-process-env";
+    writeFileSync(join(home, "secrets.env"), "QUOTED=\"sk-quoted\"\nUNPAIRED=\"unpaired'\n", "utf8");
+    const deps = defaultMenuDeps();
+    expect(deps.resolveKey?.("$ENV:PROVIDER_TEST_KEY")).toBe("sk-from-process-env"); // 文件缺席回落进程环境
+    expect(deps.resolveKey?.("$ENV:QUOTED")).toBe("sk-quoted"); // 成对引号剥
+    expect(deps.resolveKey?.("$ENV:UNPAIRED")).toBe("\"unpaired'"); // 不成对按字面量
+  });
+});

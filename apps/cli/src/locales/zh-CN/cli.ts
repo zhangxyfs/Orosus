@@ -78,6 +78,8 @@ export const zhCNCli: Record<string, string> = {
 	"provider.action.updateKey": "更新密钥",
 	"provider.action.remove": "移除",
 	"provider.action.back": "返回",
+	"provider.action.pickModel": "选择默认模型（来自端点实时清单）",
+	"provider.action.manualModel": "模型清单不可达——手输 {name} 的模型名（回车取消）",
 	"provider.result.setDefault": "已设为当前默认（provider = \"{name}\"）",
 	"provider.result.noEnvRef": "未更新：该槽未使用 $ENV: 密钥引用（明文 key 或无密钥槽——请直接编辑 config.toml / secrets.env）",
 	"provider.ask.pasteNewKey": "请粘贴 {envKey} 的新值（回车取消）",

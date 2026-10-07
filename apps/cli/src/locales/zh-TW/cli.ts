@@ -78,6 +78,8 @@ export const zhTWCli: Record<string, string> = {
 	"provider.action.updateKey": "更新金鑰",
 	"provider.action.remove": "移除",
 	"provider.action.back": "返回",
+	"provider.action.pickModel": "選擇預設模型（來自端點即時清單）",
+	"provider.action.manualModel": "模型清單不可達——手輸 {name} 的模型名（Enter 取消）",
 	"provider.result.setDefault": "已設為目前預設（provider = \"{name}\"）",
 	"provider.result.noEnvRef": "未更新：該槽未使用 $ENV: 金鑰引用（明文 key 或無金鑰槽——請直接編輯 config.toml / secrets.env）",
 	"provider.ask.pasteNewKey": "請貼上 {envKey} 的新值（Enter 取消）",

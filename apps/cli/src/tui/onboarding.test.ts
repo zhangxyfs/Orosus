@@ -12,18 +12,20 @@ interface Calls {
   providers: { id: string; apiKey?: string }[];
   secrets: [string, string][];
   models: string[];
+  defaults: [string, string][];
   searchPatches: Record<string, unknown>[];
   vision: string[];
   renders: number;
 }
 
 const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; calls: Calls } => {
-  const calls: Calls = { providers: [], secrets: [], models: [], searchPatches: [], vision: [], renders: 0 };
+  const calls: Calls = { providers: [], secrets: [], models: [], defaults: [], searchPatches: [], vision: [], renders: 0 };
   const deps: OnboardingDeps = {
     providers: PROVIDERS,
     writeProvider: (p) => { calls.providers.push({ id: p.id, ...(p.apiKey !== undefined ? { apiKey: p.apiKey } : {}) }); },
     appendSecret: (k, v) => { calls.secrets.push([k, v]); },
     setModel: (slot) => { calls.models.push(slot); },
+    writeDefaultModel: (slot, model) => { calls.defaults.push([slot, model]); },
     writeSearch: (patch) => { calls.searchPatches.push(patch as Record<string, unknown>); },
     listModels: over.listModels ?? (async () => ["glm-5.3", "glm-5.3-air"]),
     writeVision: (v) => { calls.vision.push(v); },
@@ -39,7 +41,7 @@ const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; cal
 const type = (s: OnboardingSession, text: string): void => { for (const ch of text) s.handleKey(ch); };
 
 describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原型）", () => {
-  it("① 三页流转与锁定：p1 Ctrl+N 进 p2；p2 未配 Ctrl+N 锁定带原因；配好进 p3；p3 未选 Ctrl+N 锁定；选定后进 p5；p5 未勾选 Ctrl+N 跳过完成（T6d 后四页半）", async () => {
+  it("① 五页流转与锁定：p1 Ctrl+N 进 p2；p2 未配 Ctrl+N 锁定带原因；配好（含选默认模型）进 p3；p3 未选 Ctrl+N 锁定；选定后进 p5；p5 未勾选 Ctrl+N 跳过完成", async () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps);
     expect(s.handleKey("ctrl+n")).toBeUndefined();
@@ -48,13 +50,19 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.handleKey("ctrl+n")).toBeUndefined();
     expect(s.stateRef.page).toBe(2);
     expect(s.stateRef.p2.notice).toContain("先配置一个提供商");
-    // 配一家（zhipu，sel=2）
+    // 配一家（zhipu，sel=2）——输完 Key 进选默认模型子态（2026-10-07 修：裸名 setModel 前置）
     s.handleKey("down"); s.handleKey("down");
     s.handleKey("enter"); // 进输入态
     type(s, "zk-1");
-    s.handleKey("enter"); // 确认 Key
+    s.handleKey("enter"); // 确认 Key → 选模型子态
     expect(calls.secrets).toEqual([["ZHIPU_API_KEY", "zk-1"]]);
-    expect(calls.models).toEqual(["zhipu"]); // 首个配好自动设为当前使用（SW-25）
+    expect(s.stateRef.p2.mode).toBe("pick");
+    await new Promise((r) => setTimeout(r, 0)); // 异步清单到达
+    s.handleKey("enter"); // 选首个模型 glm-5.3
+    expect(calls.defaults).toEqual([["zhipu", "glm-5.3"]]); // 条目 defaultModel 先落盘
+    expect(calls.models).toEqual(["zhipu"]); // 裸名 setModel 此刻才合法（首个自动设为当前使用）
+    expect(s.stateRef.p2.active).toBe("zhipu");
+    expect(s.stateRef.p2.mode).toBe("list"); // 选完回列表态
     // 进 p3（F14 视觉页——可不选直接下一步，默认不开启）
     expect(s.handleKey("ctrl+n")).toBeUndefined();
     expect(s.stateRef.page).toBe(3);
@@ -72,17 +80,22 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });   // 未勾选源 = 跳过导入直接完成
   });
 
-  it("② p2 多家配置 + Space 切换当前使用；未配置行 Space 给「先输入 Key」提示（SW-25）", () => {
+  it("② p2 多家配置（各选默认模型）+ Space 切换当前使用；未配置行 Space 给「先输入 Key」提示（SW-25）", async () => {
     const { deps, calls } = mkDeps();
     const s = new OnboardingSession(deps);
     s.handleKey("ctrl+n");
-    // 配 openai（sel=0）
+    // 配 openai（sel=0）——首个：选定模型即自动设为当前使用
     s.handleKey("enter"); type(s, "ok-1"); s.handleKey("enter");
-    // 配 anthropic（sel=1）
+    await new Promise((r) => setTimeout(r, 0));
+    s.handleKey("enter"); // 选 glm-5.3
+    // 配 anthropic（sel=1）——次家：选定模型不抢当前使用（Space 再切）
     s.handleKey("down"); s.handleKey("enter"); type(s, "ak-1"); s.handleKey("enter");
+    await new Promise((r) => setTimeout(r, 0));
+    s.handleKey("enter");
+    expect(calls.defaults).toEqual([["openai", "glm-5.3"], ["anthropic", "glm-5.3"]]);
     expect(calls.models).toEqual(["openai"]); // 只有首个自动设为当前使用
     expect(s.stateRef.p2.active).toBe("openai");
-    // Space 切到 anthropic
+    // Space 切到 anthropic（已带默认模型——裸名 setModel 合法）
     s.handleKey(" ");
     expect(calls.models).toEqual(["openai", "anthropic"]);
     expect(s.stateRef.p2.active).toBe("anthropic");
@@ -211,6 +224,11 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(h(s)).toBe(h2list); // 第 2 页两态恒撑满（key 态列表动态 bodyH−5 布局以满高为准）
     s.handleKey("backspace"); // 回 list
     s.handleKey("down"); s.handleKey("down"); s.handleKey("enter"); type(s, "zk"); s.handleKey("enter");
+    expect(s.stateRef.p2.mode).toBe("pick"); // 输完 Key → 选默认模型子态（2026-10-07 修）
+    expect(h(s)).toBe(h2list); // 第 2 页三态恒撑满（子态切换不跳框）
+    await new Promise((r) => setTimeout(r, 0)); // 清单到达
+    expect(h(s)).toBe(h2list);
+    s.handleKey("enter"); // 选定模型
     expect(h(s)).toBe(h2list); // 配置完成 notice 出现不跳框
     expect(h2list).toBe(23); // 撑满 = 6 框架行 + bodyH 17（旧口径上限）
     s.handleKey("ctrl+n"); // p3 视觉页（opts）
@@ -291,6 +309,96 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     const gm2 = s.render(120, 30);
     expect(stripAnsi(gm2.lines[6]!)).toContain("m13"); // 首行 = start 项
     expect(stripAnsi(gm2.lines[7]!)).toContain("▌m14"); // 选中项（▌ 高亮）落列表第二行
+  });
+});
+
+describe("p2 选默认模型子态（2026-10-07 修——裸名 setModel 的前置：旧版输完 Key 直写 provider = 裸槽名，条目无 defaultModel，写出解析必炸的自相矛盾配置）", () => {
+  it("① 输完 Key 进子态：清单到达可选定，写 defaultModel 在前、setModel 裸名在后；渲染含铅行与模型行", async () => {
+    const { deps, calls } = mkDeps();
+    const s = new OnboardingSession(deps);
+    s.handleKey("ctrl+n");
+    s.handleKey("enter"); type(s, "ok-1"); s.handleKey("enter");
+    expect(s.stateRef.p2.mode).toBe("pick");
+    expect(s.stateRef.p2.pickFor).toBe("openai");
+    expect(s.stateRef.p2.pickLoading).toBe(true); // 先落「加载中」
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.stateRef.p2.pickModels).toEqual(["glm-5.3", "glm-5.3-air"]);
+    const txt = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(txt).toContain("选一个默认模型"); // 铅行（OpenAI）
+    expect(txt).toContain("glm-5.3");
+    s.handleKey("down"); s.handleKey("enter"); // 选 glm-5.3-air
+    expect(calls.defaults).toEqual([["openai", "glm-5.3-air"]]);
+    expect(calls.models).toEqual(["openai"]); // 首个自动设为当前使用
+    expect(s.stateRef.p2.active).toBe("openai");
+    expect(s.stateRef.p2.mode).toBe("list");
+  });
+
+  it("② 清单拉取失败 → 手输行回退（SW-24 口径）：输入模型名回车写盘；Backspace 删草稿", async () => {
+    const { deps, calls } = mkDeps({ listModels: async () => { throw new Error("端点不可达"); } });
+    const s = new OnboardingSession(deps);
+    s.handleKey("ctrl+n");
+    s.handleKey("enter"); type(s, "ok-1"); s.handleKey("enter");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.stateRef.p2.pickManual).toBe(true);
+    type(s, "glm-4.7");
+    s.handleKey("backspace"); // 删一位 → glm-4.
+    expect(s.stateRef.p2.pickDraft).toBe("glm-4.");
+    type(s, "7");
+    s.handleKey("enter");
+    expect(calls.defaults).toEqual([["openai", "glm-4.7"]]);
+    expect(calls.models).toEqual(["openai"]);
+  });
+
+  it("③ 空清单同失败回退手输（SW-24）；手输粘贴整段进草稿", async () => {
+    const { deps, calls } = mkDeps({ listModels: async () => [] });
+    const s = new OnboardingSession(deps);
+    s.handleKey("ctrl+n");
+    s.handleKey("enter"); type(s, "ok-1"); s.handleKey("enter");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(s.stateRef.p2.pickManual).toBe(true);
+    s.handlePaste("glm-5.3\r\n");
+    s.handleKey("enter");
+    expect(calls.defaults).toEqual([["openai", "glm-5.3"]]);
+  });
+
+  it("④ 放弃选择（Backspace）回列表：零写盘、ctrl+n 仍锁 needOne、定位回该槽行", async () => {
+    const { deps, calls } = mkDeps();
+    const s = new OnboardingSession(deps);
+    s.handleKey("ctrl+n");
+    s.handleKey("down"); s.handleKey("down");
+    s.handleKey("enter"); type(s, "zk-1"); s.handleKey("enter");
+    expect(s.stateRef.p2.mode).toBe("pick");
+    s.handleKey("backspace"); // 放弃
+    expect(s.stateRef.p2.mode).toBe("list");
+    expect(s.stateRef.p2.sel).toBe(2); // 回列表定位到该槽（zhipu）
+    expect(calls.defaults).toEqual([]);
+    expect(calls.models).toEqual([]); // 不写裸名——引导写盘 bug 的修复核心
+    s.handleKey("ctrl+n");
+    expect(s.stateRef.page).toBe(2); // active 仍空 → 锁定
+    expect(s.stateRef.p2.notice).toContain("先配置一个提供商");
+    // Space 重进选模型（configured 无 modelDone）
+    s.handleKey(" ");
+    expect(s.stateRef.p2.mode).toBe("pick");
+    expect(s.stateRef.p2.notice).toContain("还没有默认模型");
+    await new Promise((r) => setTimeout(r, 0));
+    s.handleKey("enter");
+    expect(calls.defaults).toEqual([["zhipu", "glm-5.3"]]); // 选定补写
+    expect(calls.models).toEqual(["zhipu"]); // Space 语义：选定即设当前使用
+  });
+
+  it("⑤ 槽已带默认模型（重走引导/重输 Key，initial.modelDone）→ 不进子态，旧路径直设当前使用", async () => {
+    const { deps, calls } = mkDeps();
+    const s = new OnboardingSession(deps, { configured: ["zhipu", "openai"], active: null, modelDone: ["zhipu"] });
+    s.handleKey("ctrl+n");
+    s.handleKey("down"); s.handleKey("down");
+    s.handleKey("enter"); type(s, "zk-2"); s.handleKey("enter");
+    expect(s.stateRef.p2.mode).toBe("key"); // 不进选模型——留输入态（旧口径：可继续换行输别家 Key）
+    expect(calls.models).toEqual(["zhipu"]); // 首个自动设为当前使用（裸名此刻合法）
+    expect(s.stateRef.p2.notice).toContain("并设为当前使用");
+    // Space 切到 openai（无默认模型）→ 进子态而非裸名 setModel
+    s.handleKey("up"); s.handleKey("up"); s.handleKey(" ");
+    expect(s.stateRef.p2.mode).toBe("pick");
+    expect(calls.models).toEqual(["zhipu"]);
   });
 });
 
@@ -501,17 +609,19 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     { id: "qwen", label: "qwen-code", note: "", count: 0, available: true },
     { id: "codex", label: "codex", note: "~/.codex/…", count: 0, available: false },
   ];
-  const toP5 = (over: Partial<OnboardingDeps> = {}): OnboardingSession => {
+  const toP5 = async (over: Partial<OnboardingDeps> = {}): Promise<OnboardingSession> => {
     const { deps } = mkDeps({ detectMemorySources: () => SRC, ...over });
     const s = new OnboardingSession(deps);
-    s.handleKey("ctrl+n"); s.handleKey("enter"); type(s, "k"); s.handleKey("enter");   // p2 配好
+    s.handleKey("ctrl+n"); s.handleKey("enter"); type(s, "k"); s.handleKey("enter");   // p2 输 Key → 选模型子态
+    await new Promise((r) => setTimeout(r, 0));   // 清单到达
+    s.handleKey("enter");   // 选定默认模型（首个自动设为当前使用）
     s.handleKey("ctrl+n"); s.handleKey("ctrl+n");   // p3 视觉跳过 → p4
     s.handleKey("enter"); s.handleKey("enter"); s.handleKey("ctrl+n");   // p4 选定 → p5
     return s;
   };
 
-  it("① Space 勾选/取消；0 条与未安装源给提示不可勾", () => {
-    const s = toP5();
+  it("① Space 勾选/取消；0 条与未安装源给提示不可勾", async () => {
+    const s = await toP5();
     expect(s.stateRef.page).toBe(5);
     s.handleKey(" ");   // sel=0 Claude Code → 勾
     expect([...s.stateRef.pm.checked]).toEqual(["claude-code"]);
@@ -525,8 +635,8 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(s.stateRef.pm.checked.size).toBe(0);
   });
 
-  it("② 整理开关行 Space 切换（默认关——D20）", () => {
-    const s = toP5();
+  it("② 整理开关行 Space 切换（默认关——D20）", async () => {
+    const s = await toP5();
     for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // sel=4 = 开关行
     expect(s.stateRef.pm.organize).toBe(false);
     s.handleKey(" ");
@@ -536,7 +646,7 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
   it("③ ctrl+n 有勾选 → 异步导入 → finish 回调带 importResult；期间再按不理", async () => {
     const finished: unknown[] = [];
     let importedArgs: [string[], boolean] | undefined;
-    const s = toP5({
+    const s = await toP5({
       importMemory: async (ids, organize) => { importedArgs = [ids, organize]; return { imported: 49, skipped: 3, merged: 0 }; },
       finish: (o) => { finished.push(o); },
     });
@@ -551,7 +661,7 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
 
   it("④ organize 开启时 importMemory 收到 true（开关透传）", async () => {
     let got: boolean | undefined;
-    const s = toP5({ importMemory: async (_ids, organize) => { got = organize; return { imported: 1, skipped: 0, merged: 1 }; } });
+    const s = await toP5({ importMemory: async (_ids, organize) => { got = organize; return { imported: 1, skipped: 0, merged: 1 }; } });
     for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // 开关行
     s.handleKey(" ");   // 开
     s.handleKey("up");   // 回源行（qwen 0 条…再 up 到 codex？——up 到 sel=3 codex 不可勾）
@@ -565,7 +675,7 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
 
   it("⑤ 导入失败 → err notice、不 finish（可直接 Ctrl+N 完成）", async () => {
     const finished: unknown[] = [];
-    const s = toP5({
+    const s = await toP5({
       importMemory: async () => { throw new Error("disk"); },
       finish: (o) => { finished.push(o); },
     });
@@ -577,8 +687,8 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(s.handleKey("ctrl+n")).toEqual({ kind: "completed" });   // 手动完成兜底
   });
 
-  it("⑥ 渲染：标题「从其他 agent 导入记忆」、源行含条数、整理开关含 token 提示、未勾选 ctrl+n 脚注 why", () => {
-    const s = toP5();
+  it("⑥ 渲染：标题「从其他 agent 导入记忆」、源行含条数、整理开关含 token 提示、未勾选 ctrl+n 脚注 why", async () => {
+    const s = await toP5();
     const text = stripAnsi(s.render(120, 30).lines.join("\n"));
     expect(text).toContain("引导 5 / 5");
     expect(text).toContain("从其他 agent 导入记忆");

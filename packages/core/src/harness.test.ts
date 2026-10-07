@@ -224,6 +224,22 @@ describe("createHarness（§8.1 编程式入口 + §4.2 启动序列）", () => 
     await h.close();
   });
 
+  it("裸槽名未声明 defaultModel → 「可用 provider」列槽清单及各自默认（2026-10-07 修：旧版遍历 graph.records 列出一墙模块名）", async () => {
+    const withDefault: ModuleDefinition = {
+      ...fakeModule("provider-two", {}),
+      activate(ctx) {
+        ctx.provide("provider:two" as never, { stream: fakeProvider(script).stream, defaultModel: "t0" });
+      },
+    };
+    const h = await makeHarness({ modules: [fakeProviderModule("fake", script), withDefault], config: { cliOverrides: { model: "fake" } } });
+    let msg = "";
+    await h.prompt("hi").catch((e: unknown) => { msg = e instanceof Error ? e.message : String(e); });
+    expect(msg).toContain("fake（无默认，需写全名）"); // 裸名槽：无默认直说
+    expect(msg).toContain("two（默认 t0）"); // 有默认槽：带默认模型
+    expect(msg).not.toContain("provider-two（"); // 旧 bug 形态：模块名 provider-xxx 被当 provider 列出
+    await h.close();
+  });
+
   it("并发 prompt：第二个立即拒绝（守卫同步占坑，无 TOCTOU 窗口）", async () => {
     const h = await makeHarness();
     const first = h.prompt("hi"); // 不 await——但占坑是同步的，此行返回前 currentTurn 已设

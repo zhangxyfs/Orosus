@@ -22,11 +22,17 @@ export interface OnboardingProvider {
 
 export interface OnboardingDeps {
   providers: OnboardingProvider[];
-  /** 增量写入一家提供商（[provider-custom.providers.<id>]；apiKey 形 = $ENV: 占位符）。 */
-  writeProvider(p: { id: string; type: "openai" | "anthropic"; baseUrl: string; apiKey?: string }): void;
+  /** 增量写入一家提供商（[provider-custom.providers.<id>]；apiKey 形 = $ENV: 占位符）。
+   *  2026-10-07 修：返回写盘 Promise（选模型子态要等条目落盘再拉清单——listModels 读盘取条目），
+   *  且保留既有条目字段（重输 Key 不得抹掉 defaultModel）。 */
+  writeProvider(p: { id: string; type: "openai" | "anthropic"; baseUrl: string; apiKey?: string }): void | Promise<void>;
   appendSecret(envKey: string, value: string): void;
-  /** provider = "<slot>" 顶层键（/model 写盘同落点）。 */
+  /** provider = "<slot>" 顶层键（/model 写盘同落点）。裸名仅在条目声明 defaultModel 时可解析（D32）——
+   *  调用方必须先经 writeDefaultModel 补默认模型（2026-10-07 修：引导旧版输完 Key 直接 setModel 裸名，
+   *  写出解析必炸的自相矛盾配置——用户删 .orosus 重走引导首次实踩）。 */
   setModel(slot: string): void;
+  /** 条目补写 defaultModel（读-改-写——保留 apiKey 等既有字段）。 */
+  writeDefaultModel(slot: string, model: string): void;
   /** [tool-web] search 节写回（tool-web persistToolWebSearch 同形；model=undefined 删键）。 */
   writeSearch(patch: { backend?: string | undefined; model?: string | undefined; tavilyApiKey?: string | undefined; braveApiKey?: string | undefined }): void;
   /** 按 provider 实拉模型清单（SW-24：目录优选 + live 兜底；reject = 拉取失败 → 回退手动输入行）。 */
@@ -50,8 +56,13 @@ export type OnboardingOutcome = { kind: "completed"; importResult?: { imported: 
 
 type NoticeKind = "ok" | "warn" | "err";
 interface P2State {
-  sel: number; pageIdx: number; mode: "list" | "key";
+  sel: number; pageIdx: number; mode: "list" | "key" | "pick";
   drafts: Record<string, string>; configured: string[]; active: string | null;
+  /** 已带默认模型的槽（条目 defaultModel 在场）——setModel 裸名仅对这批槽合法（D32）。 */
+  modelDone: string[];
+  /** 选模型子态（2026-10-07 修）：pickFor = 目标槽；清单 SW-24 口径（目录优选 + live 兜底），
+   *  失败/空回退手输行；pickManual = 手输回退态；pickActivate = 选定后是否设为当前使用。 */
+  pickFor: string | null; pickModels: string[]; pickLoading: boolean; pickManual: boolean; pickDraft: string; pickActivate: boolean;
   notice: string; noticeKind: NoticeKind;
   pageSize: number; // 列表页大小（渲染期按正文可用高度动态回写——键位翻页与渲染同源；初值 = 旧固定值）
 }
@@ -103,11 +114,13 @@ export class OnboardingSession {
   private pv: PVState;
   private pm: PMState;
 
-  constructor(deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null }) {
+  constructor(deps: OnboardingDeps, initial?: { configured?: string[]; active?: string | null; modelDone?: string[] }) {
     this.deps = deps;
     this.p2 = {
       sel: 0, pageIdx: 0, mode: "list", drafts: {},
       configured: [...(initial?.configured ?? [])], active: initial?.active ?? null,
+      modelDone: [...(initial?.modelDone ?? [])],
+      pickFor: null, pickModels: [], pickLoading: false, pickManual: false, pickDraft: "", pickActivate: false,
       notice: "", noticeKind: "warn",
       pageSize: PAGE_SIZE,
     };
@@ -138,6 +151,8 @@ export class OnboardingSession {
     if (this.page === 2 && this.p2.mode === "key") {
       const prov = this.deps.providers[this.p2.sel];
       if (prov !== undefined) this.p2.drafts[prov.id] = (this.p2.drafts[prov.id] ?? "") + clean;
+    } else if (this.page === 2 && this.p2.mode === "pick" && this.p2.pickManual) {
+      this.p2.pickDraft += clean; // 选模型手输回退行同享整段粘贴（与 Key 输入同输入法）
     } else if (this.page === 3 && this.p3.stage === "key" && this.p3.keyOpt !== null) {
       this.p3.drafts[this.p3.keyOpt] = (this.p3.drafts[this.p3.keyOpt] ?? "") + clean;
     } else if (this.page === 3 && this.p3.stage === "manual") {
@@ -170,15 +185,22 @@ export class OnboardingSession {
     else { this.p3.notice = text; this.p3.noticeKind = kind; }
   }
 
-  /* ── 第 2 页 · 选择提供商（可配多家，当前使用仅一家——SW-25） ── */
+  /* ── 第 2 页 · 选择提供商（可配多家，当前使用仅一家——SW-25；输完 Key 进选默认模型子态 2026-10-07） ── */
   private keyP2(key: string): OnboardingOutcome | undefined {
     const p = this.p2;
     const providers = this.deps.providers;
+    if (p.mode === "pick") return this.keyP2Pick(key);
     if (key === " ") {
       // Space = 设为当前使用（输入态下同样可用——API Key 不含空格）
       const prov = providers[p.sel];
       if (prov === undefined) return undefined;
       if (p.configured.includes(prov.id)) {
+        if (!p.modelDone.includes(prov.id)) {
+          // 裸名 setModel 前置缺 defaultModel（D32）——先进选模型子态，选定即设当前使用
+          this.enterPick(prov.id, { activate: true });
+          this.notice(t("onboard.p2.needModel", { name: prov.name }), "warn"); // 后置——enterPick 会清 notice
+          return undefined;
+        }
         p.active = prov.id;
         this.deps.setModel(prov.id);
         this.notice(t("onboard.p2.setModelDone", { id: prov.id }), "ok");
@@ -212,15 +234,22 @@ export class OnboardingSession {
       const envKey = prov.envKey ?? `${prov.id.toUpperCase().replace(/-/g, "_")}_API_KEY`;
       this.deps.appendSecret(envKey, draft);
       if (!p.configured.includes(prov.id)) p.configured.push(prov.id);
-      this.deps.writeProvider({ id: prov.id, type: prov.type, baseUrl: prov.baseUrl, apiKey: `$ENV:${envKey}` });
+      const wp = this.deps.writeProvider({ id: prov.id, type: prov.type, baseUrl: prov.baseUrl, apiKey: `$ENV:${envKey}` });
       p.drafts[prov.id] = "";
-      if (p.active === null) {
-        p.active = prov.id;
-        this.deps.setModel(prov.id);
-        this.notice(`${t("onboard.p2.keyWrittenActive", { envKey: envKey })}`, "ok");
-      } else {
-        this.notice(t("onboard.p2.keyWrittenBackup", { envKey, name: prov.name }), "ok");
+      if (p.modelDone.includes(prov.id)) {
+        // 槽已带默认模型（重输 Key/重走引导）——旧路径照旧：首个自动设为当前使用
+        if (p.active === null) {
+          p.active = prov.id;
+          this.deps.setModel(prov.id);
+          this.notice(`${t("onboard.p2.keyWrittenActive", { envKey: envKey })}`, "ok");
+        } else {
+          this.notice(t("onboard.p2.keyWrittenBackup", { envKey, name: prov.name }), "ok");
+        }
+        return undefined;
       }
+      // 新配槽缺默认模型——进选模型子态：选定写 defaultModel 才 setModel 裸名（旧版此处直写裸名，
+      // 产出自相矛盾配置：provider 解析必炸——2026-10-07 用户删 .orosus 重走引导实踩）
+      this.enterPick(prov.id, { activate: p.active === null, after: wp });
       return undefined;
     }
     if (p.mode === "key") {
@@ -244,6 +273,81 @@ export class OnboardingSession {
       return undefined;
     }
     return undefined;
+  }
+
+  /** 选默认模型子态键位（SW-24 口径：清单 ↑↓/Enter 选定；失败/空回退手输行；Backspace 放弃回列表）。 */
+  private keyP2Pick(key: string): OnboardingOutcome | undefined {
+    const p = this.p2;
+    if (key === "up" || key === "down") {
+      if (p.pickManual || p.pickModels.length === 0) return undefined; // 手输行/加载中不可移
+      p.sel = Math.max(0, Math.min(p.pickModels.length - 1, p.sel + (key === "down" ? 1 : -1)));
+      return undefined;
+    }
+    if (key === "enter") {
+      if (p.pickManual) {
+        const draft = p.pickDraft.trim();
+        if (draft === "") { this.notice(t("onboard.web.manualEmpty"), "warn"); return undefined; }
+        this.completePick(draft);
+        return undefined;
+      }
+      const m = p.pickModels[p.sel];
+      if (m !== undefined && !p.pickLoading) this.completePick(m);
+      return undefined; // 清单未到——等待
+    }
+    if (key === "backspace") {
+      if (p.pickManual && p.pickDraft !== "") { p.pickDraft = p.pickDraft.slice(0, -1); return undefined; }
+      this.exitPick();
+      return undefined;
+    }
+    if (p.pickManual && key.length === 1 && isPrintable(key)) { p.pickDraft += key; return undefined; }
+    return undefined; // 其余键（含 ctrl+n）不占用——先选定或返回
+  }
+
+  /** 进选模型子态：after = 先行写盘（writeProvider）Promise——listModels 读盘取条目，须等落盘。
+   *  与第 4 页 models 子态同口径（目录优选 + live 兜底；失败/空回退手输行）。 */
+  private enterPick(id: string, opts: { activate: boolean; after?: void | Promise<void> }): void {
+    const p = this.p2;
+    p.mode = "pick"; p.pickFor = id; p.pickModels = []; p.pickLoading = true; p.pickManual = false; p.pickDraft = "";
+    p.pickActivate = opts.activate; p.sel = 0; p.notice = "";
+    void Promise.resolve(opts.after)
+      .then(() => this.deps.listModels(id))
+      .then((models) => {
+        if (p.mode !== "pick" || p.pickFor !== id) return; // 用户已离开子态
+        p.pickModels = models; p.pickLoading = false;
+        if (models.length === 0) p.pickManual = true; // 空清单同拉取失败（SW-24）
+        this.deps.requestRender?.();
+      })
+      .catch(() => {
+        if (p.mode !== "pick" || p.pickFor !== id) return;
+        p.pickLoading = false; p.pickManual = true; // 回退手输入模型名行
+        this.deps.requestRender?.();
+      });
+  }
+
+  /** 选定落盘：写条目 defaultModel →（该槽成为/已是当前使用）setModel 裸名此刻才合法（D32）。 */
+  private completePick(model: string): void {
+    const p = this.p2;
+    const id = p.pickFor;
+    if (id === null) return;
+    this.deps.writeDefaultModel(id, model);
+    if (!p.modelDone.includes(id)) p.modelDone.push(id);
+    const prov = this.provById(id);
+    if (p.pickActivate || p.active === null) {
+      p.active = id;
+      this.deps.setModel(id);
+      this.notice(t("onboard.p2.pickDoneActive", { name: prov.name, model }), "ok");
+    } else {
+      this.notice(t("onboard.p2.pickDone", { name: prov.name, model }), "ok");
+    }
+    this.exitPick();
+  }
+
+  /** 离开选模型子态回列表（放弃未选——槽保持已配 Key 无默认模型，Space/重输 Key 可再进）。 */
+  private exitPick(): void {
+    const p = this.p2;
+    if (p.pickFor !== null) p.sel = Math.max(0, this.deps.providers.findIndex((x) => x.id === p.pickFor)); // 回列表定位到该槽
+    p.mode = "list"; p.pickFor = null; p.pickModels = []; p.pickLoading = false; p.pickManual = false; p.pickDraft = "";
+    p.notice = "";
   }
 
   /* ── 第 3 页 · 配置视觉模型（F14——D12 三态；可不选直接 Ctrl + N，默认不开启） ── */
@@ -616,6 +720,28 @@ export class OnboardingSession {
         out.push(theme.dim(t("onboard.p2.pasteHint", { name: prov.name, conf: conf ? t("onboard.p2.pasteConf") : undefined })));
         out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim(t("onboard.blindPlaceholder")) : theme.fg("fg", `${t("onboard.p2.typed", { n: draft.length })}`)}`); // SW-23 静默盲输
       }
+      out.push(this.noticeLine(p.noticeKind, p.notice));
+      return;
+    }
+    if (p.mode === "pick") {
+      // 选默认模型子态（2026-10-07）：清单/加载/手输三形；长清单按框高钳制 + 窗口跟随 + 快捷键行钉底
+      // （第 4 页 models 子态同款纪律——预算 5 行 = 铅行 + 空行 + 手输/加载一行 + 快捷键 + notice）。
+      const prov = this.provById(p.pickFor ?? "");
+      out.push(theme.fg("info", t("onboard.p2.pickLead", { name: prov.name })));
+      out.push("");
+      if (p.pickManual) {
+        out.push(theme.dim(t("onboard.p2.pickManualLead", { name: prov.name })));
+        out.push(`${theme.fg("accent", "▍")} ${p.pickDraft === "" ? theme.dim(t("onboard.web.manualPlaceholder")) : theme.fg("fg", p.pickDraft)}`);
+      } else if (p.pickLoading) {
+        out.push(theme.dim(t("onboard.web.modelsLoading")));
+      } else {
+        const vis = Math.max(1, bodyH - 5);
+        const start = Math.max(0, Math.min(p.sel - 1, p.pickModels.length - vis));
+        for (let gi = start; gi < Math.min(start + vis, p.pickModels.length); gi++) {
+          out.push(truncateToWidth(this.prow(gi === p.sel, false, p.pickModels[gi]!), inner));
+        }
+      }
+      out.push(theme.dim(t("onboard.keys.movePin")));
       out.push(this.noticeLine(p.noticeKind, p.notice));
       return;
     }
