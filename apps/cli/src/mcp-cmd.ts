@@ -8,6 +8,7 @@ import {
   type McpCatalogRow, type ProjectServerConfig,
 } from "@orosus/mcp";
 import { searchRegistry, decideInstall, REGISTRY_SHOW_LIMIT, defaultRegistryCacheFile } from "./mcp-registry.ts";
+import { t } from "./i18n/app.ts";
 
 /** MCP 管理引擎（m4-3c T13/T14，2026-09-30 `/mcp` 斜杠命令随用户口令退役）：/settings → MCP
  *  管理面与行模式设置面的内部口——查看 / 添加 / 删除 / 开关 / 信任确认（t 键）/ 注册表 browse+install。
@@ -20,7 +21,7 @@ const LAUNCHERS = new Set(["npx", "npm", "pnpm", "yarn", "bunx", "uvx", "pipx", 
 
 export function splitCommandLine(line: string): { ok: true; command: string; args: string[] } | { ok: false; error: string } {
   const trimmed = line.trim();
-  if (trimmed === "") return { ok: false, error: "命令是空的——用法：/mcp add 名字 npx -y 包名（或一个 https:// URL）" };
+  if (trimmed === "") return { ok: false, error: t("mcp.split.empty") };
   // 引号感知分词（"..." 内的空格不分；引号本身剥除——cmd 风格，反斜杠是字面路径成分）
   const tokens: string[] = [];
   let cur = "";
@@ -44,7 +45,7 @@ export function splitCommandLine(line: string): { ok: true; command: string; arg
   const firstSpan = /^[^\s"']+/.exec(trimmed)?.[0] ?? "";
   const launcher = LAUNCHERS.has(first.replace(/\.cmd$/i, "").toLowerCase()) || firstIsQuoted;
   if (!launcher && /\\/.test(firstSpan) && trimmed.length > firstSpan.length) {
-    return { ok: false, error: "命令带反斜杠又带空格还没加引号——无法安全拆分（C:\\Program Files\\x.exe 这类路径会被拆碎）；请给带空格的路径加引号后重试" };
+    return { ok: false, error: t("mcp.split.unquoted") };
   }
   return { ok: true, command: tokens[0]!, args: tokens.slice(1) };
 }
@@ -94,11 +95,11 @@ const configuredServers = (path: string): Record<string, Record<string, unknown>
 };
 
 const STATE_TEXT: Record<McpCatalogRow["state"], string> = {
-  connected: "已连接",
-  idle: "待启动",
-  failed: "失败",
-  "pending-confirm": "未确认",
-  disabled: "已停用",
+  connected: t("mcp.state.connected"),
+  idle: t("mcp.state.idle"),
+  failed: t("mcp.state.failed"),
+  "pending-confirm": t("mcp.state.pending"),
+  disabled: t("mcp.state.disabled"),
 };
 
 const firstLine = (s: string): string => s.split("\n")[0]!;
@@ -112,26 +113,26 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
   if (args === "" || sub === "list" || sub === "ls") {
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     if (rows.length === 0) {
-      return { text: "还没有配置任何 MCP server。\n\n- /settings → MCP 按 Alt + N 添加（手动命令或 URL，或粘 JSON）\n- 项目自带 `.mcp.json` 会自动识别（详情页按 t 确认后可用）\n- 想找更多 server：见 docs/mcp-servers.md 推荐清单", wrote: false };
+      return { text: t("mcp.list.empty"), wrote: false };
     }
     const lines = rows.map((r) => {
-      const tools = r.toolCount !== undefined ? `${r.toolCount} 个工具` : "—";
-      const fail = r.state === "failed" && r.failReason !== undefined ? `（——${firstLine(r.failReason)}）` : "";
-      const lazy = r.source === "preload" ? " · 按需启动" : "";
+      const tools = r.toolCount !== undefined ? t("mcp.list.tools", { n: r.toolCount }) : "—";
+      const fail = r.state === "failed" && r.failReason !== undefined ? t("mcp.list.fail", { reason: firstLine(r.failReason) }) : "";
+      const lazy = r.source === "preload" ? ` ${t("mcp.list.lazyTag")}` : "";
       return `- ${r.state === "connected" ? "●" : r.state === "idle" ? "○" : "●"} **${r.name}** ${STATE_TEXT[r.state]} · ${tools}${lazy}${fail}`;
     });
     const pending = rows.filter((r) => r.state === "pending-confirm");
-    const tail = pending.length > 0 ? `\n\n未确认（项目 .mcp.json 带来）：${pending.map((p) => `\`${p.name}\`（指纹 ${p.fingerprint?.slice(0, 8)}）`).join("、")}——\`/mcp trust 名字\` 确认后连接` : "";
-    return { text: `共 ${rows.length} 个 MCP server：\n${lines.join("\n")}${tail}`, wrote: false };
+    const tail = pending.length > 0 ? `${t("mcp.list.pendingTail", { names: pending.map((p) => t("mcp.list.pendingItem", { name: p.name, fp8: p.fingerprint?.slice(0, 8) ?? "" })).join("、")})}` : "";
+    return { text: t("mcp.list.header", { n: rows.length }) + "\n" + lines.join("\n") + tail, wrote: false };
   }
 
   if (sub === "add") {
     const name = rest[0];
     const cmdline = rest.slice(1).join(" "); // rest 已按空白分词但引号保留在段内——拼回交给守卫拆分
-    if (name === undefined || name === "") return { text: "用法：add 名字 npx -y 包名（或一个 https:// URL）——完整表单在 /settings → MCP 的 Alt + N 添加窗", wrote: false };
-    if (cmdline === "") return { text: `缺少命令或 URL——\`/mcp add ${name} npx -y 包名\``, wrote: false };
+    if (name === undefined || name === "") return { text: t("mcp.add.usage"), wrote: false };
+    if (cmdline === "") return { text: t("mcp.add.missing", { name }), wrote: false };
     if (name in configuredServers(configPath)) {
-      return { text: `已存在同名 server「${name}」——不覆盖别人的配置；想改它请到 /settings → MCP 用修改`, wrote: false };
+      return { text: `${t("mcp.add.dup", { name: name })}`, wrote: false };
     }
     let values: Record<string, NestedTableValue>;
     if (/^https?:\/\//i.test(cmdline)) {
@@ -142,33 +143,33 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
       values = { command: split.command, ...(split.args.length > 0 ? { args: split.args } : {}) };
     }
     writeNestedTable(configPath, `mcp.servers.${name}`, values);
-    return { text: `已写入 **${name}**（${deps.configPath()}）——模块图重载后生效，回 \`/mcp\` 看红绿灯`, wrote: true };
+    return { text: t("mcp.add.written", { name, path: deps.configPath() }), wrote: true };
   }
 
   if (sub === "remove" || sub === "rm") {
     const name = rest[0];
-    if (name === undefined) return { text: "用法：remove 名字（管理面详情页 d 键同款）", wrote: false };
+    if (name === undefined) return { text: t("mcp.remove.usage"), wrote: false };
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     const row = rows.find((r) => r.name === name);
     if (row !== undefined && row.source !== "config") {
-      return { text: `「${name}」来自${row.source === "project" ? "项目 .mcp.json" : "预装（只能停用不能删除）"}——Orosus 不改它的来源；想停用在管理面按 Alt + K`, wrote: false };
+      return { text: t("mcp.cmd.notYours", { name, source: row.source === "project" ? t("mcp.source.project") : t("mcp.cmd.sourcePreload") }), wrote: false };
     }
     if (!(name in configuredServers(configPath)) && row === undefined) {
-      return { text: `没有叫「${name}」的 server（/mcp 查看列表）`, wrote: false };
+      return { text: `${t("mcp.notFound", { name: name })}`, wrote: false };
     }
     writeNestedTable(configPath, `mcp.servers.${name}`, null);
-    return { text: `已删除 **${name}**——模块图重载后生效`, wrote: true };
+    return { text: `${t("mcp.remove.done", { name: name })}`, wrote: true };
   }
 
   if (sub === "on" || sub === "off") {
     const name = rest[0];
-    if (name === undefined) return { text: `用法：\`/mcp ${sub} 名字\``, wrote: false };
+    if (name === undefined) return { text: t("mcp.cmd.usage", { sub }), wrote: false };
     const existing = configuredServers(configPath);
     const rows = deps.catalogRows?.() ?? fallbackRows(deps);
     const row = rows.find((r) => r.name === name);
     const enable = sub === "on";
     if (!(name in existing) && row === undefined) {
-      return { text: `没有叫「${name}」的 server（/mcp 查看列表）`, wrote: false };
+      return { text: `${t("mcp.notFound", { name: name })}`, wrote: false };
     }
     // 来源分流（2026-09-30 T13 走查逻辑修正；同日二修——实机 memory 弄残事故）：**按条目内容分流，不按
     // catalog 报的来源**——off 写下的停用覆盖是无 command/url 的空壳，reload 后 catalog 会把它重报成
@@ -190,15 +191,15 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
       }
       merged.enabled = enable;
       writeNestedTable(configPath, `mcp.servers.${name}`, merged);
-      return { text: `已${enable ? "启用" : "停用"} **${name}**——模块图重载后生效`, wrote: true };
+      return { text: t("mcp.cmd.toggled", { verb: enable ? t("skills.action.enable") : t("mcp.action.disable") , name }), wrote: true };
     }
     // 项目/预装条目与空壳覆盖：用户层同名覆盖（停用 = 覆盖条目；启用 = 删覆盖条目还原来源——设计空白拍板）
     if (enable) {
       writeNestedTable(configPath, `mcp.servers.${name}`, null); // 覆盖条目不在则无操作
-      return { text: `已启用 **${name}**（移除用户层覆盖）——模块图重载后生效`, wrote: true };
+      return { text: `${t("mcp.toggle.enableOverride", { name: name })}`, wrote: true };
     }
     writeNestedTable(configPath, `mcp.servers.${name}`, { enabled: false });
-    return { text: `已停用 **${name}**（用户层同名覆盖——项目文件零改动）——模块图重载后生效`, wrote: true };
+    return { text: `${t("mcp.toggle.disableOverride", { name: name })}`, wrote: true };
   }
 
   if (sub === "trust") {
@@ -211,24 +212,24 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
       ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
     });
     if (gated.pending.length === 0) {
-      return { text: "没有待确认的项目 server（cwd 无 .mcp.json 或全部已确认/被手写配置覆盖）", wrote: false };
+      return { text: t("mcp.trust.none"), wrote: false };
     }
     const name = rest[0];
     if (name === undefined) {
-      const lines = gated.pending.map((p) => `- \`${p.name}\`（指纹 ${p.fingerprint.slice(0, 8)}——${serverKind(project.servers[p.name]!)}）`);
-      return { text: `项目 .mcp.json 待确认（核对指纹后 \`/mcp trust 名字\`）：\n${lines.join("\n")}`, wrote: false };
+      const lines = gated.pending.map((p) => t("mcp.trust.row", { name: p.name, fp8: p.fingerprint.slice(0, 8), kind: serverKind(project.servers[p.name]!) }));
+      return { text: `${t("mcp.trust.header")}\n${lines.join("\n")}`, wrote: false };
     }
     const target = gated.pending.find((p) => p.name === name);
     if (target === undefined) {
-      return { text: `「${name}」不在待确认清单（/mcp trust 查看全部）`, wrote: false };
+      return { text: `${t("mcp.trust.notPending", { name: name })}`, wrote: false };
     }
     trustProjectServer(deps.trustFile(), deps.projectPath(), deps.platform ?? process.platform, name, fingerprintServer(project.servers[name] as Record<string, unknown>));
-    return { text: `已确认 **${name}**（指纹 ${target.fingerprint.slice(0, 8)}）——模块图重载后连接`, wrote: true };
+    return { text: t("mcp.trust.done", { name, fp8: target.fingerprint.slice(0, 8) }), wrote: true };
   }
 
   if (sub === "browse") {
     const query = rest.join(" ").trim();
-    if (query === "") return { text: "用法：browse 关键词（管理面内部口）——搜 MCP 官方注册表（registry.modelcontextprotocol.io）", wrote: false };
+    if (query === "") return { text: t("mcp.browse.usage"), wrote: false };
     const r = await searchRegistry({
       query,
       cacheFile: deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache")),
@@ -237,28 +238,28 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
     if (r.entries.length === 0) {
       return {
         text: r.offline
-          ? "网络不可用且本地没有可用的注册表缓存——连上网后重试（缓存 30 天有效，断网时自动回落）"
-          : `注册表里没有匹配「${query}」的 server——换个关键词，或直接 /mcp add 手写`,
+          ? t("mcp.browse.offline")
+          : `${t("mcp.browse.noHit", { query: query })}`,
         wrote: false,
       };
     }
     const shown = r.entries.slice(0, REGISTRY_SHOW_LIMIT);
     const lines = shown.map((e) => {
-      const kind = e.stdio !== undefined ? "本地" : e.remote !== undefined ? "远程" : "无安装形态";
+      const kind = e.stdio !== undefined ? t("mcp.reg.kindLocal") : e.remote !== undefined ? t("mcp.reg.kindRemote") : t("mcp.reg.kindNone");
       const needs = [...(e.stdio?.requiredEnv ?? []), ...(e.remote?.requiredHeaders ?? [])];
-      const needTag = needs.length > 0 ? `（需配置：${needs.join("、")}）` : "";
+      const needTag = needs.length > 0 ? t("mcp.reg.needs", { names: needs.join("、") }) : "";
       const desc = e.description.split("\n")[0]!.slice(0, 60);
       return `- \`${e.name}\` ${kind}${needTag} —— ${desc}`;
     });
     const more = r.entries.length > REGISTRY_SHOW_LIMIT
-      ? `\n\n（前 ${REGISTRY_SHOW_LIMIT} 条，共 ${r.entries.length} 条命中——细化关键词缩小范围）`
+      ? t("mcp.reg.more", { shown: REGISTRY_SHOW_LIMIT, total: r.entries.length })
       : "";
-    return { text: `注册表搜索「${query}」${r.offline ? "（离线——用缓存）" : ""}：\n${lines.join("\n")}${more}\n\n安装：\`/mcp install 名字\`（短名即可）`, wrote: false };
+    return { text: t("mcp.reg.header", { query, offline: r.offline ? "1" : undefined }) + "\n" + lines.join("\n") + more + t("mcp.reg.installHint"), wrote: false };
   }
 
   if (sub === "install") {
     const name = rest[0];
-    if (name === undefined || name === "") return { text: "用法：`/mcp install 名字`——先 browse 找名字（管理面内部口）", wrote: false };
+    if (name === undefined || name === "") return { text: t("mcp.install.usage"), wrote: false };
     const existing = configuredServers(configPath);
     const cacheFile = deps.registryCachePath?.() ?? defaultRegistryCacheFile(join(orosusHome(), "cache"));
     // 取全量（无关键词过滤）再精确匹配名/短名
@@ -266,42 +267,40 @@ export async function runMcpCommand(rawArgs: string, deps: McpCmdDeps): Promise<
     const decision = decideInstall(r.entries, name);
     switch (decision.kind) {
       case "not-found":
-        return { text: `注册表里没找到「${name}」——/mcp browse 搜一下确认名字（install 用全名或短名都行）`, wrote: false };
+        return { text: `${t("mcp.install.notFound", { name: name })}`, wrote: false };
       case "ambiguous":
-        return { text: `「${name}」命中多个条目——用全名指明：${decision.candidates.map((c) => `\`${c.name}\``).join("、")}`, wrote: false };
+        return { text: t("mcp.install.ambiguous", { name, names: decision.candidates.map((c) => c.name).join("、") }), wrote: false };
       case "needs-secrets":
         return {
-          text: `**${decision.entry.name}** 需要密钥（${decision.missing.join("、")}）——不半自动安装（占位密钥连上也是 401）。把下面模板填好后贴进 \`${configPath}\`，再 /reload：
-
+          text: `${t("mcp.install.needsSecrets", { name: decision.entry.name, keys: decision.missing.join("、"), path: configPath })}
 ${decision.template}
-
-（值可用 \`$ENV:变量名\` 引用环境变量——Orosus 不会把宿主环境自动漏给 server）`,
+${t("mcp.install.envNote")}`,
           wrote: false,
         };
       case "stdio": {
         if (decision.entry.shortName in existing) {
-          return { text: `已存在同名 server「${decision.entry.shortName}」——不覆盖；想改它请用修改`, wrote: false };
+          return { text: t("mcp.install.dup", { name: decision.entry.shortName }), wrote: false };
         }
         writeNestedTable(configPath, `mcp.servers.${decision.entry.shortName}`, {
           command: decision.values.command,
           ...(decision.values.args.length > 0 ? { args: decision.values.args } : {}),
         });
-        return { text: `已安装 **${decision.entry.shortName}**（来自 ${decision.entry.name} v${decision.entry.version}）——模块图重载后生效，回 \`/mcp\` 看红绿灯`, wrote: true };
+        return { text: t("mcp.install.done", { name: decision.entry.shortName, from: `${decision.entry.name} v${decision.entry.version}` }), wrote: true };
       }
       case "remote": {
         if (decision.entry.shortName in existing) {
-          return { text: `已存在同名 server「${decision.entry.shortName}」——不覆盖；想改它请用修改`, wrote: false };
+          return { text: t("mcp.install.dup", { name: decision.entry.shortName }), wrote: false };
         }
         writeNestedTable(configPath, `mcp.servers.${decision.entry.shortName}`, { url: decision.values.url });
-        return { text: `已安装 **${decision.entry.shortName}**（远程，来自 ${decision.entry.name} v${decision.entry.version}）——模块图重载后生效`, wrote: true };
+        return { text: t("mcp.install.remoteDone", { name: decision.entry.shortName, from: `${decision.entry.name} v${decision.entry.version}` }), wrote: true };
       }
     }
   }
 
-    return { text: "管理面内部口（图形面走 /settings → MCP）：list · add 名字 命令或URL · remove|on|off 名字 · trust [名字] · browse 关键词 · install 名字", wrote: false };
+    return { text: t("mcp.usage"), wrote: false };
 }
 
-const serverKind = (cfg: ProjectServerConfig): string => cfg.url !== undefined ? `远程 ${cfg.url}` : `本地 ${[cfg.command, ...(cfg.args ?? [])].join(" ")}`;
+const serverKind = (cfg: ProjectServerConfig): string => cfg.url !== undefined ? `${t("mcp.reg.kindRemote")} ${cfg.url}` : `${t("mcp.reg.kindLocal")} ${[cfg.command, ...(cfg.args ?? [])].join(" ")}`;
 
 /** 模块未启用时的列表回落：只报配置面（连不连不知道——诚实说）。 */
 function fallbackRows(deps: McpCmdDeps): McpCatalogRow[] {

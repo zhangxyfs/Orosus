@@ -4,6 +4,7 @@ import { splitCommandLine } from "./mcp-cmd.ts";
 import type { FullApp, HostDialogKeys, DialogKeyCtx } from "./tui/fullapp.ts";
 import type { McpCatalogRow } from "@orosus/mcp";
 import * as theme from "./theme.ts";
+import { t } from "./i18n/app.ts";
 
 /** T17（m4-3c）：Alt + N 添加/修改窗——手动/JSON 两页签（Shift + ←→ 切换、共享草稿互转不丢）、
  *  传输方式三档（行内 ←→ 切换——走查拍板 2026-09-30）、高级区字段随档位联动、JSON 五种错误文案
@@ -13,8 +14,8 @@ import * as theme from "./theme.ts";
 export type TransportTier = "stdio" | "http" | "sse";
 
 export const TRANSPORT_TIERS: readonly { id: TransportTier; label: string }[] = [
-  { id: "stdio", label: "stdio 子进程" },
-  { id: "http", label: "HTTP（远程）" },
+  { id: "stdio", label: t("mcp.transport.stdio") },
+  { id: "http", label: t("mcp.transport.http") },
   { id: "sse", label: "SSE" },
 ];
 
@@ -44,7 +45,7 @@ export function draftToJson(d: AddDraft): string {
   if (Object.keys(env).length > 0) body.env = env;
   if (d.transport === "stdio" && d.cwd !== "") body.cwd = d.cwd;
   if (d.timeout !== "") body.timeoutMs = Number(d.timeout) * 1000;
-  return JSON.stringify({ mcpServers: { [d.name === "" ? "名字" : d.name]: body } }, null, 2);
+  return JSON.stringify({ mcpServers: { [d.name === "" ? t("mcp.add.jsonNamePlaceholder") : d.name]: body } }, null, 2);
 }
 
 /** JSON 文本 → 手动草稿（互转；解析失败返回原草稿——JSON 页修好再切）。 */
@@ -79,12 +80,12 @@ export function parseKeyValueLines(text: string, mode: "add" | "edit"): { pairs:
     if (eq > 0) {
       const k = line.slice(0, eq).trim();
       const v = line.slice(eq + 1);
-      if (k === "") return { pairs, keepOnly, error: "环境变量/请求头里有空键名的行——检查 KEY=VALUE 格式" };
+      if (k === "") return { pairs, keepOnly, error: t("mcp.kv.emptyKey") };
       pairs[k] = v.trim(); // 值两侧空白视为排版（KEY=VALUE 手敲形态）
     } else if (mode === "edit" && /^[A-Za-z0-9_.-]+$/.test(line)) {
       keepOnly.push(line); // 只显键名的行 = 留空保持原值
     } else {
-      return { pairs, keepOnly, error: `「${line}」不是 KEY=VALUE 形态${mode === "edit" ? "（修改时也可只写键名=保持原值）" : ""}` };
+      return { pairs, keepOnly, error: t("mcp.kv.badLine", { line, edit: mode === "edit" ? "1" : undefined }) };
     }
   }
   return { pairs, keepOnly };
@@ -97,12 +98,12 @@ export function buildManualValues(d: AddDraft, opts: {
   existingNames: string[];
 }): { name?: string; values?: Record<string, NestedTableValue>; error?: string } {
   const name = d.name.trim();
-  if (name === "") return { error: "名称是必填的——列表和权限规则都靠名字认 server" };
+  if (name === "") return { error: t("mcp.form.nameRequired") };
   if (opts.mode === "add" && opts.existingNames.includes(name)) {
-    return { error: `已存在同名 server「${name}」——不覆盖别人的配置；想改它请用修改` };
+    return { error: `${t("mcp.form.dup", { name: name })}` };
   }
   if (d.transport === "stdio") {
-    if (d.cmd.trim() === "") return { error: "命令是必填的——整行收（如 npx -y my-search-mcp --port 9），保存时统一拆分" };
+    if (d.cmd.trim() === "") return { error: t("mcp.form.cmdRequired") };
     const split = splitCommandLine(d.cmd.trim());
     if (!split.ok) return { error: split.error };
     const envParsed = parseKeyValueLines(d.env, opts.mode);
@@ -112,13 +113,13 @@ export function buildManualValues(d: AddDraft, opts: {
     if (d.cwd.trim() !== "") values.cwd = d.cwd.trim();
     if (d.timeout.trim() !== "") {
       const sec = Number(d.timeout);
-      if (!Number.isFinite(sec) || sec <= 0) return { error: "超时得是正数秒——留空用默认 60 秒" };
+      if (!Number.isFinite(sec) || sec <= 0) return { error: t("mcp.form.badTimeout") };
       values.timeoutMs = Math.round(sec * 1000);
     }
     return { name, values };
   }
   // 远程两档
-  if (d.cmd.trim() === "" || !/^https?:\/\//i.test(d.cmd.trim())) return { error: "URL 得以 http:// 或 https:// 开头" };
+  if (d.cmd.trim() === "" || !/^https?:\/\//i.test(d.cmd.trim())) return { error: t("mcp.form.badUrl") };
   const headersParsed = parseKeyValueLines(d.headers, opts.mode);
   if (headersParsed.error !== undefined) return { error: headersParsed.error };
   const envParsed = parseKeyValueLines(d.env, opts.mode);
@@ -129,7 +130,7 @@ export function buildManualValues(d: AddDraft, opts: {
   if (Object.keys(envParsed.pairs).length > 0) values.env = envParsed.pairs;
   if (d.timeout.trim() !== "") {
     const sec = Number(d.timeout);
-    if (!Number.isFinite(sec) || sec <= 0) return { error: "超时得是正数秒——留空用默认 60 秒" };
+    if (!Number.isFinite(sec) || sec <= 0) return { error: t("mcp.form.badTimeout") };
     values.timeoutMs = Math.round(sec * 1000);
   }
   return { name, values };
@@ -141,30 +142,30 @@ export function parseJsonPaste(text: string): { name?: string; values?: Record<s
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { error: "这不是合法的 JSON——检查引号、逗号是否配对完整" };
+    return { error: t("mcp.json.invalid") };
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { error: "这不是合法的 JSON——检查引号、逗号是否配对完整" };
+    return { error: t("mcp.json.invalid") };
   }
   let obj = parsed as Record<string, unknown>;
   if (obj["mcpServers"] !== undefined) {
     const inner = obj["mcpServers"];
     if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
-      return { error: "mcpServers 里面是空的——没有可安装的 server" };
+      return { error: t("mcp.json.emptyServers") };
     }
     obj = inner as Record<string, unknown>;
   }
   const names = Object.keys(obj).filter((k) => obj[k] !== null && typeof obj[k] === "object");
-  if (names.length === 0) return { error: "mcpServers 里面是空的——没有可安装的 server" };
+  if (names.length === 0) return { error: t("mcp.json.emptyServers") };
   if (names.length > 1) {
-    return { error: `一次只能装一个 server——这段里有 ${names.length} 个（${names.slice(0, 3).join("、")}），删到剩一个再保存` };
+    return { error: t("mcp.add.onlyOne", { n: names.length, names: names.slice(0, 3).join("、") }) };
   }
   const name = names[0]!;
   const entry = obj[name] as Record<string, unknown>;
   const hasCommand = typeof entry["command"] === "string" && entry["command"] !== "";
   const hasUrl = typeof entry["url"] === "string" && entry["url"] !== "";
   if (!hasCommand && !hasUrl) {
-    return { error: "server 条目缺启动方式——command（本地命令）或 url（远程地址）至少要有一个" };
+    return { error: t("mcp.json.noStartup") };
   }
   const values: Record<string, NestedTableValue> = {};
   if (hasUrl) values.url = entry["url"] as string;
@@ -203,31 +204,31 @@ export function buildAddWidgets(st: {
 }): WidgetSpec[] {
   const remote = st.transport !== "stdio";
   const tab = (on: boolean, name: string): string => (on ? theme.fg("accent", `▶ ${name}`) : theme.fg("fg", `  ${name}`));
-  const tabLine = ` ${tab(st.tab === "manual", "手动")}   ${tab(st.tab === "json", "JSON")}   ${theme.dim("（Shift + ←→ 切换——草稿互转不丢）")}`;
+  const tabLine = ` ${tab(st.tab === "manual", t("mcp.add.tabManual"))}   ${tab(st.tab === "json", "JSON")}   ${theme.dim(t("mcp.add.tabHint"))}`;
   const widgets: WidgetSpec[] = [{ id: "tabs", kind: "text", text: tabLine }];
   // 传输方式行：三项并一行（单条 list 项保焦点圈——list 是焦点圈的成员，text 不是；1 项无 select 移动、
   // ❯ 前缀兼作焦点指示：聚焦青玉/失焦灰）
   const opts = TRANSPORT_TIERS.map((t) => (t.id === st.transport ? theme.fg("accent", `● ${t.label}`) : theme.fg("fg", `○ ${t.label}`))).join("   ");
-  const transportRow = `${theme.fg("muted", "传输方式")}  ${opts}   ${theme.dim("←→ 切换")}`;
-  const advRow = theme.fg("fg", `${st.advOpen ? "▾" : "▸"} 高级选项${st.advOpen ? "" : remote ? "（环境变量 / 请求头 / 超时）" : "（环境变量 / 工作目录 / 超时）"}`);
+  const transportRow = `${theme.fg("muted", t("mcp.detail.transport"))}  ${opts}   ${theme.dim(t("mcp.add.transportHint"))}`;
+  const advRow = theme.fg("fg", `${st.advOpen ? "▾" : "▸"} ${t("mcp.add.advanced")}${st.advOpen ? "" : remote ? t("mcp.add.advRemote") : t("mcp.add.advLocal")}`);
   if (st.tab === "manual") {
     widgets.push(
       st.mode === "edit"
-        ? { id: "name-lock", kind: "kv", label: "名称", value: `${st.editName ?? ""}（名称不可改——删除后重加）` }
-        : { id: "name", kind: "input", label: "名称", placeholder: "my-search——列表和权限规则都靠名字认 server" },
+        ? { id: "name-lock", kind: "kv", label: t("mcp.detail.name"), value: t("mcp.add.nameLock", { name: st.editName ?? "" }) }
+        : { id: "name", kind: "input", label: t("mcp.detail.name"), placeholder: t("mcp.add.namePlaceholder") },
       { id: "transport", kind: "list", interactive: true, items: [transportRow] },
-      { id: "cmd", kind: "input", label: remote ? "URL" : "命令", placeholder: remote ? "https://mcp.internal.example.com/sse" : "npx -y my-search-mcp --port 9（整行收——保存时统一拆）" },
+      { id: "cmd", kind: "input", label: remote ? "URL" : t("mcp.detail.command"), placeholder: remote ? "https://mcp.internal.example.com/sse" : t("mcp.add.cmdPlaceholder") },
       { id: "adv", kind: "list", interactive: true, items: [advRow] },
     );
     if (st.advOpen) {
-      widgets.push({ id: "env", kind: "input", label: "环境变量（可选）", multiline: true, lines: 2, placeholder: st.mode === "edit" ? "GITHUB_TOKEN（只写键名=保持原值）" : "GITHUB_TOKEN=… 每行一条" });
-      if (remote) widgets.push({ id: "headers", kind: "input", label: "请求头（可选）", multiline: true, lines: 2, placeholder: "Authorization=Bearer … 每行一条" });
-      else widgets.push({ id: "cwd", kind: "input", label: "工作目录（可选）", placeholder: "子进程工作目录（仅本地命令）" });
-      widgets.push({ id: "timeout", kind: "input", label: "超时（秒）", placeholder: "调用超时，留空 = 默认 60" });
+      widgets.push({ id: "env", kind: "input", label: t("mcp.add.envLabel"), multiline: true, lines: 2, placeholder: st.mode === "edit" ? t("mcp.add.envPhEdit") : t("mcp.add.envPhAdd") });
+      if (remote) widgets.push({ id: "headers", kind: "input", label: t("mcp.add.headersLabel"), multiline: true, lines: 2, placeholder: t("mcp.add.headersPh") });
+      else widgets.push({ id: "cwd", kind: "input", label: t("mcp.add.cwdLabel"), placeholder: t("mcp.add.cwdPh") });
+      widgets.push({ id: "timeout", kind: "input", label: t("mcp.add.timeoutLabel"), placeholder: t("mcp.add.timeoutPh") });
     }
   } else {
     widgets.push(
-      { id: "json-hint", kind: "text", text: "粘贴一段配置——两种格式都吃：{\"名字\": {\"command\": …}} 单 server，或 Claude 包裹 {\"mcpServers\": {…}}。一次只装一个。", style: "muted" },
+      { id: "json-hint", kind: "text", text: t("mcp.add.pasteHint"), style: "muted" },
       { id: "json", kind: "input", label: "JSON", multiline: true, lines: 7, placeholder: "{\"mcpServers\": {\"my-search\": {\"command\": \"npx\", \"args\": [\"-y\", \"my-search-mcp\"]}}}" },
     );
   }
@@ -283,30 +284,30 @@ export function openMcpAddWindow(app: FullApp, opts: {
           const parsed = parseJsonPaste(draft.jsonText);
           if (parsed.error !== undefined) return { error: parsed.error };
           if (parsed.name !== undefined && st.mode === "add" && opts.existingNames.includes(parsed.name)) {
-            return { error: `已存在同名 server「${parsed.name}」——不覆盖别人的配置；想改它请用修改` };
+            return { error: t("mcp.form.dup", { name: parsed.name }) };
           }
           return parsed;
         })();
     if (built.error !== undefined || built.name === undefined || built.values === undefined) {
       st.ok = "";
-      st.err = built.error ?? "保存失败";
+      st.err = built.error ?? t("mcp.add.saveFail");
       handle?.update(buildAddWidgets(st));
       return;
     }
     const targetName = st.mode === "edit" ? (st.editName ?? built.name) : built.name;
     writeNestedTable(opts.configPath, `mcp.servers.${targetName}`, built.values);
     st.err = "";
-    st.ok = "已保存——Esc 关窗，回列表看红绿灯（模块图随后重载）";
+    st.ok = t("mcp.add.saved");
     handle?.update(buildAddWidgets(st));
     opts.onSaved(targetName);
   };
 
   const spec = (): { title: string; widgets: WidgetSpec[]; layout: "dock"; hostKeys: HostDialogKeys; onEvent: (e: { type: string; id: string; text?: string; index?: number }) => WidgetSpec[] | void } => ({
-    title: st.mode === "edit" ? `修改 MCP server · ${st.editName ?? ""}` : "添加 MCP server",
+    title: st.mode === "edit" ? t("mcp.add.titleEdit", { name: st.editName ?? "" }) : t("mcp.add.titleAdd"),
     widgets: buildAddWidgets(st),
     layout: "dock",
     hostKeys: {
-      "shift+left": { label: "Shift + ←→ 切页签", run: (): boolean => {
+      "shift+left": { label: t("mcp.add.keyTab"), run: (): boolean => {
         if (st.tab === "manual") { draft.jsonText = draftToJson(draft); st.tab = "json"; } else { Object.assign(draft, jsonToDraft(draft.jsonText, draft)); st.tab = "manual"; }
         st.err = "";
         st.ok = "";
@@ -320,7 +321,7 @@ export function openMcpAddWindow(app: FullApp, opts: {
         handle?.update(buildAddWidgets(st));
         return true;
       } },
-      "shift+up": { label: "Shift + ↑↓ 换焦点", run: (ctx: DialogKeyCtx): boolean => { ctx.moveFocus(-1); return true; } },
+      "shift+up": { label: t("mcp.add.keyFocus"), run: (ctx: DialogKeyCtx): boolean => { ctx.moveFocus(-1); return true; } },
       "shift+down": { label: "", run: (ctx: DialogKeyCtx): boolean => { ctx.moveFocus(1); return true; } },
       left: { label: "", run: (ctx: DialogKeyCtx): boolean => {
         if (ctx.focusedId !== "transport") return false; // 不消费——回落输入框光标

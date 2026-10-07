@@ -2,6 +2,7 @@ import { fg, dim } from "./theme.ts";
 import { truncateAtWord } from "./skill-settings.ts";
 import { visibleWidth } from "./tui/width.ts";
 import type { McpCatalogRow } from "@orosus/mcp";
+import { t } from "./i18n/app.ts";
 
 /** T17（m4-3c）：MCP 管理面纯层——列表四段行 / 详情六字段文本（skill-settings 同款模式；
  *  装配在 main.ts openMcpPanel，交互键位与窗口形态按 2026-09-30 原型四轮走查拍板）。 */
@@ -9,11 +10,11 @@ import type { McpCatalogRow } from "@orosus/mcp";
 /** 状态文字（T17 原文）：四段行第四段。 */
 export function mcpStateText(row: McpCatalogRow): string {
   switch (row.state) {
-    case "connected": return "已连接 · 启用";
-    case "idle": return "待启动 · 启用";
-    case "failed": return "失败 · 启用";
-    case "disabled": return "已停用";
-    case "pending-confirm": return "未确认";
+    case "connected": return t("mcp.state.connectedEnabled");
+    case "idle": return t("mcp.state.idleEnabled");
+    case "failed": return t("mcp.state.failedEnabled");
+    case "disabled": return t("mcp.state.disabled");
+    case "pending-confirm": return t("mcp.state.pending");
   }
 }
 
@@ -26,22 +27,22 @@ function stateDot(row: McpCatalogRow): string {
 
 /** 来源标签（详情页字段）。 */
 export function mcpSourceLabel(row: McpCatalogRow): string {
-  if (row.source === "config") return "配置文件";
-  if (row.source === "project") return "项目 .mcp.json";
-  return "预装";
+  if (row.source === "config") return t("mcp.source.config");
+  if (row.source === "project") return t("mcp.source.project");
+  return t("mcp.source.preload");
 }
 
 /** 传输方式标签（三档——原型走查拍板 2026-09-30，原稿两档）。 */
 export function mcpTransportLabel(row: McpCatalogRow): string {
-  return row.transport === "http" ? "HTTP（远程）" : "stdio 子进程";
+  return row.transport === "http" ? t("mcp.transport.http") : t("mcp.transport.stdio");
 }
 
 /** 描述首行（catalog 未带描述时用传输/命令兜底——列表第三段不能空着）。 */
 export function mcpDescLine(row: McpCatalogRow): string {
-  if (row.state === "pending-confirm") return row.fingerprint !== undefined ? `待确认（指纹 ${row.fingerprint.slice(0, 8)}）` : "待确认";
+  if (row.state === "pending-confirm") return row.fingerprint !== undefined ? t("mcp.desc.pendingFp", { fp8: row.fingerprint.slice(0, 8) }) : t("mcp.desc.pending");
   if (row.url !== undefined) return row.url;
   if (row.command !== undefined) return row.command;
-  if (row.state === "connected") return `${row.toolCount ?? 0} 个工具`;
+  if (row.state === "connected") return t("mcp.toolsCount", { n: row.toolCount ?? 0 });
   return "";
 }
 
@@ -65,23 +66,23 @@ export function mcpDetailText(w: number, row: McpCatalogRow): string {
   const label = (s: string) => `${fg("muted", s.padEnd(10, "　"))}`; // 标签列对齐（最长「传输方式」四字——全角补齐 10 列预算）
   const field = (name: string, value: string): string => `${label(name)}${truncateAtWord(value, w - 2 - 12)}`;
   const lines = [
-    field("名称", row.name),
-    field("说明", row.instructions !== undefined ? row.instructions : (mcpDescLine(row) === "" ? "（无说明）" : mcpDescLine(row))),
-    field("状态", mcpStateText(row)),
-    field("来源", mcpSourceLabel(row)),
-    field("传输方式", mcpTransportLabel(row)),
-    field(row.transport === "http" ? "URL" : "命令", row.transport === "http" ? (row.url ?? "—") : (row.command ?? "—")),
+    field(t("mcp.detail.name"), row.name),
+    field(t("mcp.detail.desc"), row.instructions !== undefined ? row.instructions : (mcpDescLine(row) === "" ? t("mcp.detail.noDesc") : mcpDescLine(row))),
+    field(t("mcp.detail.status"), mcpStateText(row)),
+    field(t("mcp.detail.source"), mcpSourceLabel(row)),
+    field(t("mcp.detail.transport"), mcpTransportLabel(row)),
+    field(row.transport === "http" ? "URL" : t("mcp.detail.command"), row.transport === "http" ? (row.url ?? "—") : (row.command ?? "—")),
   ];
   if (row.state === "failed" && row.failReason !== undefined) {
     const tailLines = row.failReason.split("\n").filter((l) => l.trim() !== "").slice(0, 3);
     for (const l of tailLines) lines.push(dim(truncateAtWord(l, w - 4)));
-    lines.push(dim("…（失败原因最多保留 4KB——完整内容见 /mcp）"));
+    lines.push(dim(t("mcp.detail.failTail")));
   }
   if (row.state === "pending-confirm") {
-    lines.push("", fg("muted", `未确认——核对指纹后按 t 确认连接（指纹 ${row.fingerprint?.slice(0, 8) ?? "—"}；确认一次永久可用，配置被改过会重新要求）`));
+    lines.push("", fg("muted", t("mcp.detail.pendingGuide", { fp8: row.fingerprint?.slice(0, 8) ?? "—" })));
   }
   if (row.source === "preload") {
-    lines.push("", fg("muted", "预装 server——只能停用不能删除（Alt + K 启停/启动）；停用后可随时再启用"));
+    lines.push("", fg("muted", t("mcp.detail.preloadNote")));
   }
   return lines.join("\n");
 }
