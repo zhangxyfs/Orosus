@@ -25,7 +25,7 @@ import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
 import { createSubagentRunner } from "./subagent/runner.ts";
-import { kernelT } from "./kernel/i18n.ts";
+import { kernelT, setKernelLocale } from "./kernel/i18n.ts";
 
 /** 扩展名 → MIME（M4-2.5 T5）：/paste 产物即 png；未知缺省 image/png。 */
 function imageMimeOf(path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" {
@@ -155,6 +155,10 @@ export interface Harness {
   tree(): Promise<import("@orosus/contracts/module").SessionTreeNode[]>;
   /** 设置服务后端（m5 T9 口子四）：换模型——/model 同源核心动作（覆盖槽 + 写盘 + 档位跟随重解析），单一写者不双写；busy 期可调、下一轮生效。 */
   setModel(qualified: string): Promise<void>;
+  /** 配置语言键读取（m5-i18n T3）：顶层 language 键原文；未设置返回 undefined（宿主走系统检测缺省）。 */
+  configuredLanguage(): string | undefined;
+  /** 切语言（m5-i18n T3）：行级写顶层 language 键 + 内核地板 t 对齐（failReason 新事件跟随新语言）。 */
+  setLanguage(tag: string): Promise<void>;
   /** 设置服务后端（m5 T9）：切思考档位——/effort 同源；"auto" = 回目录默认档；非法档名抛错。 */
   setEffort(level: string): void;
   /** 待确认第三方模块清单（m5 T17）：未过信任门的 local 模块（项目级 hash 门
@@ -843,6 +847,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     }
   };
 
+  // m5-i18n T3：语言切换核心动作（/locale 与 SettingsService 同源——单一写者）
+  const applyLanguageOverride = async (tag: string): Promise<void> => {
+    upsertTopLevelKey(/^\s*language\s*=/, { line: `language = ${tomlBasicString(tag)}` });
+    setKernelLocale(tag); // core 自渲染面（failReason 族）跟随新语言——旧账保持原语言（D5）
+  };
+
   // 内建别名表（D38）：短名 → 模块命令名；目标不存在提示安装对应模块
   const COMMAND_ALIASES: Record<string, string> = {
     provider: "provider-custom__provider",
@@ -982,6 +992,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // F5 十轮：核心顶层键名 provider（旧 model 键兼容读——分层合并两键都在时 provider 胜）
   const cfgModelValue = (): unknown => config.core.provider ?? config.core.model;
   // /effort 配置读口：核心顶层 effort 键（/effort 命令写盘；OROSUS_EFFORT 环境层免费生效——§6.6 核心顶层命名）
+  // m5-i18n T3：核心顶层 language 键读口（未设置 = undefined → 宿主系统检测缺省）
+  const cfgLanguageValue = (): string | undefined => {
+    const v = config.core.language;
+    return typeof v === "string" && v !== "" ? v : undefined;
+  };
   const cfgEffortValue = (): string | undefined => {
     const v = config.core.effort;
     return typeof v === "string" && v !== "" ? v : undefined;
@@ -1454,6 +1469,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // m5 T9：设置服务后端出口（命令同源核心动作）——CLI 在 main.ts 拼 SettingsService 后经本接口转发
     async setModel(qualified: string) {
       await applyModelOverride(qualified);
+    },
+    configuredLanguage: () => cfgLanguageValue(),
+    async setLanguage(tag: string) {
+      await applyLanguageOverride(tag);
     },
     setEffort(level: string) {
       applyEffortOverride(level);

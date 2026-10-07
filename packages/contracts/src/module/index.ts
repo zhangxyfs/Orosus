@@ -415,6 +415,11 @@ export interface SettingsService {
    * @param name - 主题名（未知名 reject——错误带外，模块自行 catch）。
    */
   setTheme(name: string): Promise<void>;
+  /** 切界面语言（m5-i18n T3，与 /locale 同源：写顶层 language 键 + 界面重绘由宿主负责）。 */
+  /**
+   * @param tag - BCP-47 语言标签（如 zh-CN / zh-TW / en-US / ja-JP；未挂载语言包的 tag 解析落英文——P1）。
+   */
+  setLanguage(tag: string): Promise<void>;
   /** 批量切挂载预设：minimal = 只留核心 + 审批 + 当前活跃 provider；full = 恢复极简模式关掉的那些。
    *  中途失败不回滚——全部尝试完统一 reload 一次，失败模块名带内返回。 */
   /**

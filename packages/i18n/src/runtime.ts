@@ -231,10 +231,11 @@ export function resolveMessage(chain: readonly LocaleTag[], getTable: (tag: Loca
 	return undefined;
 }
 
-/** 语言标签归一（P3 分族）：zh 裸码与 Hans 系 → zh-CN；Hant 系 → zh-TW；en* → en-US；
- * 六语包裸码补全（ja→ja-JP / ko→ko-KR / ru→ru-RU）；其余区域大写规范化后原样透传。 */
+/** 语言标签归一（P3 分族）：剥 codeset/修饰后缀（zh_TW.big5 → zh-TW）；zh 裸码与 Hans 系 → zh-CN；
+ * Hant 系 → zh-TW；en* → en-US；六语包裸码补全（ja→ja-JP / ko→ko-KR / ru→ru-RU）；
+ * 其余区域大写规范化后原样透传。 */
 export function normalizeLocaleTag(raw: string | undefined | null): LocaleTag {
-	const t = (raw ?? "").trim().replace(/_/g, "-").toLowerCase();
+	const t = (raw ?? "").trim().replace(/_/g, "-").toLowerCase().replace(/[.@].*$/, "");
 	if (t === "") return "en-US";
 	if (t === "zh" || t.startsWith("zh-hans") || t === "zh-cn" || t === "zh-sg" || t === "zh-my") return "zh-CN";
 	if (t.startsWith("zh-hant") || t === "zh-tw" || t === "zh-hk" || t === "zh-mo" || t === "zh-hant-tw") return "zh-TW";

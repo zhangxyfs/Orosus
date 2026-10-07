@@ -25,6 +25,7 @@ describe("ctx.settings / ctx.host 装配（m5 T9 口子四）", () => {
 		setModel: async (q) => { calls.push(`model:${q}`); },
 		setEffort: async (l) => { calls.push(`effort:${l}`); },
 		setTheme: async () => { calls.push("theme"); },
+		setLanguage: async () => { calls.push("language"); }, // m5-i18n T3 契约新成员
 		applyModulePreset: async () => ({ failed: [] }),
 		setLabel: async () => { calls.push("label"); },
 	};

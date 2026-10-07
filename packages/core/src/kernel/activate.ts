@@ -438,6 +438,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
               setModel: (q: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setModel(q); },
               setEffort: (l: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setEffort(l); },
               setTheme: (n: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setTheme(n); },
+              setLanguage: (tag: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setLanguage(tag); }, // m5-i18n T3
               applyModulePreset: (p: "full" | "minimal") => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.applyModulePreset(p); },
               setLabel: (l: string) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setLabel(l); },
               ...(input.settings.setSidebar !== undefined ? { setSidebar: (v: boolean) => { if (!allows("settings")) throw new Error(`mounts 校验：settings 未在声明（§5.1）`); return input.settings!.setSidebar!(v); } } : {}),

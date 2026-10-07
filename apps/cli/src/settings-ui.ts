@@ -1,5 +1,7 @@
 import type { Harness } from "@orosus/core";
 import type { CommandUi } from "@orosus/contracts/module";
+import type { LocaleStore } from "./i18n/store.ts";
+import { runLocaleSetting } from "./i18n/switch.ts";
 import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
@@ -23,6 +25,10 @@ export type SettingsUiDeps = {
   mcpDeps: McpUiDeps;
   /** m5-peers 走查修订三：「记忆导入」数据口（= 引导第 5 页同功能——importers 件宿主接线）。 */
   peersImport: MemoryImportDeps;
+  /** m5-i18n T3：语言 store（「切换语言」行——列表/当前语 ✓/切换同 /locale）。 */
+  localeStore: LocaleStore;
+  /** 切换完成回执（toast 文案）：full = repaint + notify；行模式 = out。 */
+  localeApplied: (toast: string) => void;
 };
 
 /** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
@@ -38,6 +44,7 @@ export const SETTINGS_ITEMS = [
 	"MCP（查看 / 开关 / 删除——server 管理与添加）",
 	"配置视觉模型（停用 / 自动 / 指定——给非多模态模型提供视觉）",
 	"配置网络搜索（LLM Web Search / Tavily / Brave）",
+	"切换语言（简 / 繁 / 英 + 语言包扩展）",
 ];
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
@@ -102,6 +109,7 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
  *  模块启停本身走 config enabled（通用模块启停 UI 顺延，D15 注记）——这里只看运行态。 */
 export const settingsItems = (h: Harness): string[] => {
 	const peersActive = h.graph().audit().some((a) => a.name === "tool-peers" && a.state === "active");
+	// m5-i18n T3：第 11 项「切换语言」恒在（索引 10）；peers 动态项随后（索引 11）
 	return peersActive ? [...SETTINGS_ITEMS, "记忆（工作区记忆 / 会话感知——同项目会话互相看见）"] : SETTINGS_ITEMS;
 };
 
@@ -176,6 +184,23 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 			}
 		}
 		else if (picked === 10) {
+			// m5-i18n T3：「切换语言」行——与 /locale 命令同源；Esc 静默回设置根列表（不落盘）
+			try {
+				const toast = await runLocaleSetting(
+					async (t, items) => {
+						const i = await app.pickOverlay(t, items);
+						if (i === undefined) throw new Error("已取消（Esc）");
+						return items[i] ?? "";
+					},
+					{ getH: deps.getH, store: deps.localeStore },
+				);
+				if (toast !== undefined) deps.localeApplied(toast);
+			} catch (err) {
+				if (isEsc(err)) continue;
+				throw err;
+			}
+		}
+		else if (picked === 11) {
 			// m5-peers T6b + 走查修订三：「记忆」动态项——双开关 + 记忆导入（浏览窗不走设置入口：
 			// /tool-peers__memory 命令 + Ctrl+P 总览两处，走查修订二）
 			// 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
@@ -273,6 +298,16 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 			}
 		}
 		else if (idx === 10) {
+			// m5-i18n T3 行模式对等件：「切换语言」——与 /locale 同源；Esc 静默回设置根菜单
+			try {
+				const toast = await runLocaleSetting((t, items) => deps.commandUi.choose(t, items), { getH: deps.getH, store: deps.localeStore });
+				if (toast !== undefined) deps.localeApplied(toast);
+			} catch (err) {
+				if (isEsc(err)) continue;
+				throw err;
+			}
+		}
+		else if (idx === 11) {
 			// m5-peers T6b + 走查修订三 行模式对等件：「记忆」双开关 + 记忆导入——子菜单 Esc 回设置根菜单
 			for (;;) {
 				try {

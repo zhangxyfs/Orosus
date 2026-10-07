@@ -11,7 +11,8 @@ import { createFloorT, normalizeLocaleTag, type TFunction } from "@orosus/i18n";
 let current: TFunction = createFloorT("zh-CN");
 
 export function setKernelLocale(raw: string | undefined): void {
-	current = createFloorT(normalizeLocaleTag(raw));
+	// undefined = 复位缺省 zh-CN（宿主注入前/测试隔离）；有值才归一（归一空串会落 en-US——语义不同）
+	current = raw === undefined || raw === "" ? createFloorT("zh-CN") : createFloorT(normalizeLocaleTag(raw));
 }
 
 /** core 内 failReason / 自渲染文案统一出口（键见 packages/i18n/src/floor.ts）。 */

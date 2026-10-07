@@ -56,6 +56,9 @@ import { resolveAtRefs } from "./atfile.ts";
 import { HELP_TEXT } from "./help.ts";
 import { seedFactorySkills } from "./skill-settings.ts";
 import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks-cmd.ts";
+import { isEsc } from "./mcp-ui.ts";
+import { createLocaleStore, detectSystemLocale } from "./i18n/index.ts";
+import { runLocaleSetting } from "./i18n/switch.ts";
 import { BTW_USAGE_HINT, openBtw, reopenBtw, type BtwDeps } from "./btw-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -314,6 +317,13 @@ const settingsService: SettingsService = {
     activeApp?.repaint(); // 新渲染面换新色（历史行旧色不重刷——设计空白 11 预期行为）
     notify(`主题已切换：${name}`);
   },
+  setLanguage: async (tag) => {
+    // m5-i18n T3：与 /locale 同源（h 写盘 + store 重建）；重绘 = 新面换新语言（流区旧行保持——D5 主题同款）
+    await h.setLanguage(tag);
+    await localeStore.setLanguage(tag);
+    activeApp?.repaint();
+    notify("语言已切换（已写入 config）");
+  },
   applyModulePreset: async (preset) => {
     const { failed } = await applyModulePresetImpl(modulesDeps, preset);
     notify(failed.length > 0
@@ -331,6 +341,8 @@ const settingsService: SettingsService = {
 };
 
 let h: Harness;
+/** m5-i18n T3：宿主语言 store——图槽现读（会话切换图随换代，rebuild 时现解析）；界面主目录 T4 起。 */
+const localeStore = createLocaleStore({ getGraph: () => h.graph() });
 /** 会话族装配依赖（m5-split-main T5，D2 签名注入）：main.ts 留守件经此穿给 session-io.ts 的
  *  createSession/switchTo（h/lastEventId/tuiMode/pendingEcho 走闭包访问器，调用期现读现写）。 */
 const sessionDeps: SessionDeps = {
@@ -340,7 +352,10 @@ const sessionDeps: SessionDeps = {
   hostInfo,
   settleCommandError,
   getH: () => h,
-  setH: (nh: Harness) => { h = nh; },
+  setH: (nh: Harness) => {
+    h = nh;
+    nh.setModuleT(localeStore.t); // m5-i18n：换会话换 harness——翻译口重注入（store 跨会话存活）
+  },
   resetLastEventId: () => { lastEventId = undefined; },
   isFullscreen: () => tuiMode === "full",
   deferEcho: () => { pendingEcho = { notice: "", history: true }; },
@@ -434,6 +449,12 @@ const settingsDeps: SettingsUiDeps = {
       .map(s => ({ id: s.id, label: s.label, count: s.count })),
     run: importWithOrganize,
   },
+  // m5-i18n T3：「切换语言」行——store 与回执（full = repaint + toast；行模式 = out）
+  localeStore,
+  localeApplied: (toast) => {
+    activeApp?.repaint();
+    notify(toast);
+  },
 };
 // 界面模式解析上移（T11 m5-resume-perf）：初始 createSession 的行模式装载判据（deps.isFullscreen）
 // 需在 createSession 求值期读到 tuiMode——原声明位（runFullScreen 装配段前）晚于首个 createSession
@@ -448,6 +469,13 @@ try {
 } catch (err) {
   console.error(formatStartupError(err, orosusHome(), new Date()));
   process.exit(1);
+}
+// m5-i18n T3：语言解析（config.language > 系统检测 P2 > en-US）+ 模块 ctx.t 注入；
+// P1 提示一次（语言包未挂载 → 英文兜底；dump/print 无头路径不 notify 防 stdout 污染）
+await localeStore.init(h.configuredLanguage() ?? detectSystemLocale());
+h.setModuleT(localeStore.t);
+if (localeStore.packMissing() && args.dumpModules === undefined && args.print === undefined) {
+  notify("语言包未挂载——已显示英文（配置保留，重新挂载后自动恢复）");
 }
 if (args.dumpModules) {
   console.log(h.graph().catalog());
@@ -878,6 +906,30 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           }
           return "again";
         }
+        // /locale（m5-i18n T3）：切换界面语言——BUSY_EXEC 即改档（写配置 + 重绘不动 turn）；
+        // full 模式 pickOverlay / 行模式 commandUi.choose 双胞胎；Esc 静默取消（P4：Esc 不落盘）
+        if (cmdNameOf(text) === "/locale") {
+          try {
+            const localeApp = activeApp; // let 可变态——闭包内窄化会丢，局部捕获
+            const toast = await runLocaleSetting(
+              localeApp !== undefined
+                ? async (t, items) => {
+                    const i = await localeApp.pickOverlay(t, items);
+                    if (i === undefined) throw new Error("已取消（Esc）");
+                    return items[i] ?? "";
+                  }
+                : (t, items) => commandUi.choose(t, items),
+              { getH: () => h, store: localeStore },
+            );
+            if (toast !== undefined) {
+              activeApp?.repaint(); // 新面换新语言（流区旧行保持原语言——D5）
+              notify(toast);
+            }
+          } catch (err) {
+            if (!isEsc(err)) throw err;
+          }
+          return "again";
+        }
         // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
         // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款）
         if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
@@ -1049,6 +1101,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         if (cmdNameOf(text) === "/provider" && PROVIDER_WRITE_DONE.test(cmdOut ?? "")) {
           const namesBefore = activeModuleNames(modulesDeps); // m5 T7：关消失模块的挂起窗
           await h.reload();
+          await localeStore.rebuild(); // m5-i18n：语言包/catalog 槽随图重建
           closeGoneModuleUi(modulesDeps, namesBefore);
           notify("平台配置已即时生效（模块图已重载）");
         }
@@ -1082,7 +1135,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径）
+const BUSY_EXEC = new Set(["/locale", "/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
@@ -1132,6 +1185,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
 	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
 	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
+	{ name: "/locale", desc: "切换界面语言", long: "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
 		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: PERM_META,
@@ -1356,6 +1410,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         try {
           const namesBefore = activeModuleNames(modulesDeps); // m5 T7：关消失模块的挂起窗
           const r = await h.reload();
+          await localeStore.rebuild(); // m5-i18n：语言包/catalog 槽随图重建
           closeGoneModuleUi(modulesDeps, namesBefore);
           registerToolLabels(h.graph().tools.toolInfos()); // 插拔改变工具集合——标签表随图重喂
           void refreshSkillMenu(skillDeps); // m4-7 T7：技能菜单缓存随图刷新（停用后插拔即时生效）
@@ -1407,6 +1462,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
               trustModule(join(orosusHome(), "trust.json"), info.root, info.entryHash); // 动作 1：登记（项目级 hash 门/用户级认登记共用 trust.json——零新存储）
               setModuleEnabledInConfig(name, true, moduleConfigFileFor(name, h)); // 动作 2：写盘 enabled
               await h.reload(); // 动作 3：重跑信任判定 → 挂载
+              await localeStore.rebuild(); // m5-i18n：槽随图重建
               registerToolLabels(h.graph().tools.toolInfos());
               await refreshPanel(modulesDeps);
               notify(`已确认并启用 ${name}`);
@@ -1654,6 +1710,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       action = "quit"; // Ctrl + Q（仅第 1 页）= /quit 同款
     } else {
       await h.reload(); // provider 槽/search 后端进图——配置即时生效（调用时解析的另一翼 = tool-web 闭包活态）
+      await localeStore.rebuild(); // m5-i18n：槽随图重建
       registerToolLabels(h.graph().tools.toolInfos()); // 引导激活的模块（tool-web 等）标签进表
       const ir = outcome.importResult;
       if (ir !== undefined) {

@@ -197,6 +197,7 @@ describe("m5 UI 扩展契约面（T0——四口子一次开全）", () => {
       setModel: async (q: string) => { settingsCalls.push(`model:${q}`); },
       setEffort: async (l: string) => { settingsCalls.push(`effort:${l}`); },
       setTheme: async (n: string) => { settingsCalls.push(`theme:${n}`); },
+      setLanguage: async (tag: string) => { settingsCalls.push(`language:${tag}`); }, // m5-i18n T3：契约新必选成员——mock 补齐
       applyModulePreset: async (p: "full" | "minimal") => ({ failed: [] as string[], preset: p }),
       setLabel: async (l: string) => { settingsCalls.push(`label:${l}`); },
     };

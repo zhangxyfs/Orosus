@@ -406,6 +406,7 @@ export interface SettingsService { … }
 | `setModel` | `setModel(qualified: string): Promise<void>` |  |
 | `setEffort` | `setEffort(level: string): Promise<void>` |  |
 | `setTheme` | `setTheme(name: string): Promise<void>` |  |
+| `setLanguage` | `setLanguage(tag: string): Promise<void>` |  |
 | `applyModulePreset` | `applyModulePreset(preset: "full" \| "minimal"): Promise<{ failed: string[] }>` |  |
 | `setLabel` | `setLabel(label: string): Promise<void>` |  |
 | `setSidebar?` | `setSidebar?(visible: boolean): Promise<boolean>` |  |
@@ -418,6 +419,7 @@ export interface SettingsService { … }
 | `setModel` | `qualified` | 模型全形 "provider/model"（提供商名与模型名斜杠分隔，首个 "/" 前 = 提供商名、其余整体 = 模型 id（CT-02 钉，嵌套 id 原样保留）；必须是已配置的提供商名，未知名 reject）。 |
 | `setEffort` | `level` | 档位名（小写字母数字与 . _ -；目录外模型原样发送不校验；"auto" = 回目录默认档）。 |
 | `setTheme` | `name` | 主题名（未知名 reject——错误带外，模块自行 catch）。 |
+| `setLanguage` | `tag` | BCP-47 语言标签（如 zh-CN / zh-TW / en-US / ja-JP；未挂载语言包的 tag 解析落英文——P1）。 |
 | `applyModulePreset` | `preset` | "minimal" = 只留核心 + 审批 + 当前活跃 provider；"full" = 恢复极简模式自己关掉的那批（从未切过 = 无操作）。 |
 | `setLabel` | `label` | 会话名（截至 200 字符；空串合法 = 清名回未命名）。 |
 | `setSidebar` | `visible` | true = 显示右侧面板；false = 隐藏（Ctrl+T 同款，持久化；行模式宿主未装本口）。 |
