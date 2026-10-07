@@ -25,6 +25,14 @@
 
 ### 1. Install
 
+**Option 1: npm (recommended)** — requires [Node.js ≥ 22](https://nodejs.org/):
+
+```bash
+npm i -g orosus
+```
+
+**Option 2: from source** — for development:
+
 ```bash
 git clone https://github.com/zhangxyfs/Orosus.git
 cd Orosus
@@ -33,15 +41,13 @@ pnpm install
 
 ### 2. Run
 
-```bash
-pnpm orosus
-```
+Type `orosus` (or `pnpm orosus` when installed from source).
 
 On first launch, if no provider is configured, the `/provider` wizard opens automatically — follow the menus to set up endpoint / API key / model, and modules reload automatically afterwards.
 
 ### 3. Daily Use
 
-Type natural language to chat. Commands start with `/` (press Tab after `/` to complete command names — the menu also lists your skills at the bottom; Tab after `@` completes file paths, `@path#L10-L20` references line ranges). Alt+V pastes images, Alt+Enter / Shift+Enter breaks the line, Ctrl+O reviews compaction summaries, and the mouse wheel scrolls the conversation directly.
+Type natural language to chat. Commands start with `/` (a menu pops up as you type, with your skills listed at the bottom); reference files with `@` — a directory menu opens as you type for step-by-step picking, and `@path#L10-L20` references line ranges. Alt+V pastes images, Alt+Enter / Shift+Enter breaks the line, Ctrl+O reviews compaction summaries, Ctrl+P opens the module launcher, and the mouse wheel scrolls the conversation directly (see `/help` for all shortcuts).
 
 | Category | Command | Description |
 |----------|---------|-------------|
@@ -49,24 +55,28 @@ Type natural language to chat. Commands start with `/` (press Tab after `/` to c
 | Session tree | `/session-tree__view` `/session-tree__branch` | Full-screen tree of project forks, Enter to jump / branch at the selected node |
 | Model & state | `/model` `/effort` `/reload` `/help` | Switch model slot / reasoning-effort level / reload modules / help (the first two work mid-answer, next turn) |
 | Module commands | `/compact` `/permission` `/yolo` `/auto` | Compact history / switch approval mode / one-shot ask-when-needed / never-ask mode |
+| Side question | `/btw` | A quick side question with the current conversation context — the answer opens a small window and never enters the main flow (works mid-answer; no argument reopens the last one) |
 | Subagents | `/tasks` (`/task`) | Subagent task list — Enter opens its message view (live refresh); rows with pending approvals can be answered right there |
-| Settings | `/settings` (alias `/config`) | Disk usage / context usage / token usage / runtime status / skill management / subagent config / web search setup |
+| Settings | `/settings` (alias `/config`) | Disk / context / token usage, runtime status, subagent / skill / hook / MCP / memory management, vision-model & web-search setup |
 
-Skills: pick one from the skill section of the `/` menu (`skill : name`) and press Enter to load it as a user message; toggle with Alt+K under `/settings → Skills`. Ten factory skills ship built-in (commit, code-review, research, doc-review, …).
+Skills: pick one from the skill section of the `/` menu (`skill : name`) and press Enter to load it as a user message; toggle with Alt+K under `/settings → Skills`. Eleven factory skills ship built-in (commit, code-review, research, doc-review, …).
 
 ## Features
 
 - **Modular kernel**: five core pieces (session / loop / tool / provider / kernel) + the zero-dependency contracts package `@orosus/contracts`; modules activate in topological order, support hot reload, and degrade gracefully without blocking startup
 - **Multi-provider**: a unified custom-endpoint entry (OpenAI-compatible) with an interactive `/provider` wizard and a built-in vendor catalog (endpoints / models / effort levels); switch at runtime with `/model` and `/effort`
 - **Subagents**: the model delegates work into parallel sub-sessions via a spawn tool — foreground ones render as agent groups, background ones report back automatically when done; grandchild agents nest one level; `/tasks` lists them and answers their approvals; three fuses (turns / inactivity / total duration) end runaway agents with a wrap-up turn instead of a hard cut
-- **Skill system**: one `SKILL.md` per directory, pure knowledge — four search tracks (user/project × generic/brand), project overrides user on name clashes; the model loads on demand via `skill__load`, users load via the slash-menu skill section; toggle in `/settings`; ten factory skills included
+- **Peer awareness & shared memory**: sessions in the same project see each other — occupancy queries, claims and releases keep parallel sessions from colliding; a shared memory store (write / list / read) crosses sessions, browsable via `/tool-peers__memory`; one-click import from existing Claude Code / ZCode / qwen-code / codex / DeepSeek-Reasonix memories
+- **Skill system**: one `SKILL.md` per directory, pure knowledge — four search tracks (user/project × generic/brand), project overrides user on name clashes; the model loads on demand via `skill__load`, users load via the slash-menu skill section; toggle in `/settings`; eleven factory skills included
+- **Hooks**: lifecycle shell hooks on seven events, protocol-compatible with Claude Code — existing hook scripts run unchanged: block risky commands, auto-approve safe ones, inject project knowledge into context, notify on completion; project-level hooks pass a sha256 trust gate plus a three-layer injection guard; manage under `/settings → Hooks`, inspect injections with Ctrl+H
 - **Web access**: web search & fetch — native-search protocol faces / Tavily / Brave backends traversed automatically; searches work with zero configuration
-- **Tool ecosystem**: built-in modules for filesystem, shell (working-directory memory + background jobs), todo, ask; a Goal trio for long-running task continuation; ToolSearch for on-demand lookup in large tool sets; an MCP bridge
+- **Multimedia**: paste images with Alt+V or feed image / video files to the model directly; downsample / crop / convert / video-clip tools keep context costs down before reads; a vision-model channel lets non-multimodal models see images too
+- **Tool ecosystem**: built-in modules for filesystem, shell (working-directory memory + background jobs), todo, ask; a Goal trio for long-running task continuation; ToolSearch for on-demand lookup in large tool sets; an MCP bridge (factory presets + add / toggle / trust confirmation in `/settings`)
 - **Approval gate**: two-phase tool execution (declare → execute) with a `tool/pre-execute` waterfall interception point; three modes (ask-every-time / ask-when-needed / never-ask), user deny rules always win
 - **Context management**: automatic & manual compaction, windowed reads with dedup/truncation, full-screen Ctrl+O summary review; true multimodal image input
 - **Session tree**: `/fork` forks persist as a tree — view and jump branches with `/session-tree__view`, branch at any node with `/session-tree__branch`, scoped to the project
-- **TUI**: full-screen takeover, streaming redraw, Markdown rendering (tables / code highlighting / LaTeX); keyboard and mouse both work — wheel scrolling, drag-select copies, double-click selects words, click opens URLs, scrollbar included
-- **Data self-governance**: sessions stored as readable, grep-able JSONL; `OROSUS_HOME` env var + `orosus home migrate` to relocate the entire data directory
+- **TUI**: full-screen takeover, streaming redraw, Markdown rendering (tables / code highlighting / LaTeX); keyboard and mouse both work — wheel scrolling, drag-select copies, double-click selects words, click opens URLs, scrollbar included; lazy-paged history (scrolling to the top loads earlier turns), tiered folding with Alt+E / O / F / S (thinking / tool details / error details / earlier steps)
+- **Data self-governance**: sessions stored as readable, grep-able JSONL; `OROSUS_HOME` env var + `orosus home migrate` to relocate the entire data directory; module configs live one-file-per-module under `modules.d/`
 
 ## Repository Layout
 
@@ -80,7 +90,8 @@ Orosus/
 │  └─ modules/                  # Built-in modules (same kernel pipeline as external modules)
 │     ├─ tool-fs/  tool-shell/  tool-todo/  tool-ask/      # Basic capabilities
 │     ├─ tool-web/  tool-search/  tool-goal/  tool-subagent/  # Web / tool search / goal continuation / subagent spawn
-│     ├─ skill/  mcp/  session-tree/                       # Skills / MCP bridge / session tree
+│     ├─ tool-media/  tool-peers/                          # Multimedia (image / video) / peer awareness & shared memory
+│     ├─ skill/  mcp/  session-tree/  hooks/               # Skills / MCP bridge / session tree / lifecycle hooks
 │     ├─ approval/  compaction/                            # Approval gate / context compaction
 │     └─ provider-custom/                                  # Unified provider entry (OpenAI-compatible + wizard)
 └─ tests/                       # Cross-package integration tests (module graph / trust gate / reload / ...)
@@ -100,7 +111,11 @@ pnpm gen-docs           # generate the API reference (docs/api, plain-language M
 | Document | Location |
 |----------|----------|
 | Roadmap (single source of truth for what's next) | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Architecture & technical overview | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Module developer guide (minimal module / contribution points / interception points) | [docs/developers.md](docs/developers.md) |
+| Module walkthrough (build a real module from scratch) | [docs/module-walkthrough.md](docs/module-walkthrough.md) |
+| Hooks reference (seven-event protocol) | [docs/hooks.md](docs/hooks.md) |
+| MCP server reference | [docs/mcp-servers.md](docs/mcp-servers.md) |
 | API docs (generated Markdown) | [docs/api/README.md](docs/api/README.md) |
 
 ## License
