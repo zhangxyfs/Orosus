@@ -7,6 +7,7 @@ import { DOUBLE_CLICK_INTERVAL_MS, wordRangeAt } from "./fullapp-types.ts";
 import { writeClipboardText, openUrl } from "../paste.ts";
 import * as theme from "../theme.ts";
 import type { FullApp } from "./fullapp.ts";
+import { t } from "../i18n/app.ts";
 
 export function createSelect(app: FullApp) {
 	/** 扩选到指针点（T9 提取——drag 分支与自动滚脉冲共用）：越界按 scope 钳边界（clampedSelPoint）
@@ -161,7 +162,7 @@ export function createSelect(app: FullApp) {
 
 	/** 选区复制结算（决策点 8）：真剪贴板优先（paste.ts 三平台），失败落 OSC 52 逃生口再提示。 */
 	const copySelection = (text: string): Promise<void> => {
-		return writeClipboardSettle(text, `已复制 ${text.split("\n").length} 行`);
+		return writeClipboardSettle(text, t("select.copiedLines", { n: text.split("\n").length }));
 	};
 
 	/** 剪贴板写入结算（真剪贴板优先，失败落 OSC 52 逃生口再提示）——拖选松开（m5 T5）与
@@ -173,7 +174,7 @@ export function createSelect(app: FullApp) {
 			app.showToast(okMsg);
 		} else {
 			app.term.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
-			app.showToast("已发终端复制口令（系统剪贴板未确认）");
+			app.showToast(t("select.copyCmd"));
 		}
 	};
 
@@ -191,12 +192,12 @@ export function createSelect(app: FullApp) {
 	 *  拒开是注入面防线；toast 文案族（设计空白 6）。 */
 	const openLink = async (url: string): Promise<void> => {
 		if (!/^https?:\/\//i.test(url)) {
-			app.showToast("仅支持打开 http/https 链接");
+			app.showToast(t("select.linkOnly"));
 			return;
 		}
 		const open = app.io.openUrl ?? openUrl;
 		const ok = await open(url);
-		app.showToast(ok ? "已打开链接" : "打开链接失败");
+		app.showToast(ok ? t("select.linkOpened") : t("select.linkOpenFail"));
 	};
 
 	return { extendSelection, clampedSelPoint, selLineText, pointToView, clickCount, pointToDoc, mselRange, selectionText, styleDocSelection, selectionGuard, copySelection, writeClipboardSettle, clearStreamSelection, openLink };

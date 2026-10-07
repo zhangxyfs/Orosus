@@ -8,15 +8,18 @@ import type { Messages } from "@orosus/i18n";
 import { zhCNInput } from "./zh-CN/input.ts";
 import { zhCNPanels } from "./zh-CN/panels.ts";
 import { zhCNMcp } from "./zh-CN/mcp.ts";
+import { zhCNMenus } from "./zh-CN/menus.ts";
 import { zhTWInput } from "./zh-TW/input.ts";
 import { zhTWPanels } from "./zh-TW/panels.ts";
 import { zhTWMcp } from "./zh-TW/mcp.ts";
+import { zhTWMenus } from "./zh-TW/menus.ts";
 import { enUSInput } from "./en-US/input.ts";
 import { enUSPanels } from "./en-US/panels.ts";
 import { enUSMcp } from "./en-US/mcp.ts";
+import { enUSMenus } from "./en-US/menus.ts";
 
 export const mainTables = (): Record<string, Messages> => ({
-	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp },
-	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp },
-	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp },
+	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus },
+	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus },
+	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus },
 });

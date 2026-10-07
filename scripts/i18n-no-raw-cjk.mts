@@ -29,9 +29,13 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/proxy-env.ts", max: 0, note: "T5 清零" },
 	{ file: "apps/cli/src/mcp-ui.ts", max: 8, note: "T5 入册；残余 = 键帽行八处（清单标不翻-键名——Alt+N 添加等动词面走查定夺）" },
 	{ file: "apps/cli/src/subagent-status.ts", max: 0, note: "T5 清零（agent 组全族 + sub.status.failed 补账）" },
+	{ file: "apps/cli/src/tui/fullapp-overlay.ts", max: 0, note: "T6 清零（pick/at/菜单/诊断/总览 chrome 全族）" },
+	{ file: "apps/cli/src/picker.ts", max: 0, note: "T6 清零" },
+	{ file: "apps/cli/src/menu.ts", max: 0, note: "T6 清零（行模式 choose chrome）" },
+	{ file: "apps/cli/src/tui/fullapp-select.ts", max: 0, note: "T6 清零（选区复制/链接三则）" },
 ];
 
-const CJK = /[\u2e80-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）
+const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）
 
 /** 扫单文件源码：返回含 CJK 的字面量（file:line + 文本）。可导入形态供测试。 */
 export function scanSource(file: string, source: string): { line: number; text: string }[] {

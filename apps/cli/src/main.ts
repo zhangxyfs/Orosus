@@ -59,7 +59,7 @@ import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks
 import { isEsc } from "./mcp-ui.ts";
 import { createLocaleStore, detectSystemLocale } from "./i18n/index.ts";
 import { runLocaleSetting } from "./i18n/switch.ts";
-import { bindAppLocale } from "./i18n/app.ts";
+import { bindAppLocale, t } from "./i18n/app.ts";
 import { BTW_USAGE_HINT, openBtw, reopenBtw, type BtwDeps } from "./btw-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -1173,13 +1173,14 @@ const reportEffortSwitch = (before: string | undefined): void => {
 
 const PERM_CYCLE = ["ask-risky", "ask-always", "never"];
 /** 权限三档元数据（F5 十轮⑤ 拍板：档名 + 短解释 + 详细解释——菜单/芯片同源；2026-09-26 拍板显示名改中文，内部档名不变）。 */
-const PERM_META: Record<string, { label: string; desc: string; long: string }> = {
-	"ask-always": { label: "每次都询问", desc: "每次工具调用都确认", long: "最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。" },
-	"ask-risky": { label: "需要时候询问", desc: "仅危险操作确认", long: "日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。" },
-	never: { label: "从不询问", desc: "全自动，有问题模型自行判断", long: "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；就算有问题也是模型自行判断，不会向你提问。只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。" },
-};
+/** m5-i18n T6：权限档 meta 改函数（渲染期 t()——切语言菜单随帧换文）；键 = perm.<档>.label/desc/long。 */
+const permMeta = (): Record<string, { label: string; desc: string; long: string }> => ({
+	"ask-always": { label: t("perm.askAlways.label"), desc: t("perm.askAlways.desc"), long: t("perm.askAlways.long") },
+	"ask-risky": { label: t("perm.askRisky.label"), desc: t("perm.askRisky.desc"), long: t("perm.askRisky.long") },
+	never: { label: t("perm.never.label"), desc: t("perm.never.desc"), long: t("perm.never.long") },
+});
 /** 斜杠命令清单（长说明——斜杠菜单详细说明区数据源；children = 二级列表命令）。 */
-const SLASH_ITEMS: SlashItem[] = [
+const slashItems = (): SlashItem[] => [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
 	// 2026-09-26 拍板 D2 交叉互换（2026-09-28 走查修）：/yolo==需要时候询问（ask-risky）——详细文案用户拍板原文，档名对齐 /permission 菜单显示名
 	{ name: "/yolo", desc: "仅危险操作确认", long: "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
@@ -1191,7 +1192,7 @@ const SLASH_ITEMS: SlashItem[] = [
 	{ name: "/locale", desc: "切换界面语言", long: "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。" },
 	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
-		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: PERM_META,
+		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: permMeta(),
 	},
 	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
 	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
@@ -1300,7 +1301,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       cards: moduleCards(modulesDeps), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
       network: getPanelCache()?.network === undefined ? undefined : { ...getPanelCache()!.network!, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
     }),
-    slashCommands: () => SLASH_ITEMS,
+    slashCommands: () => slashItems(),
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
     // /reload 收尾与模块插拔后另有显式刷新点
     skillItems: () => skillMenuTtl(skillDeps),

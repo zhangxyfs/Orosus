@@ -2,6 +2,7 @@ import type { KeyEvent } from "./keys.ts";
 import { moveUp, clearLine, reverse, dispLines } from "./ansi.ts";
 import { fg, dim } from "./theme.ts";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
 
 /** 尾部完整括注组定位（两段式拆分③）：串尾（忽略尾随空白）是 `（…）`/`(…)` 整组时返回
  *  { coreStart }——组前还有内容才算两段（整项即括号组不算）。只认同类配对（全角配全角）。 */
@@ -102,11 +103,11 @@ export function pick(
   },
 ): Promise<number | undefined> {
   // CR-05：空表入口即拒（TTY/非 TTY 两路同断）——伪装合法下标与死循环都在身后绝路
-  if (items.length === 0) return Promise.reject(new Error("无可选项"));
+  if (items.length === 0) return Promise.reject(new Error(t("menu.err.noItems")));
   if (!io.isTTY) {
     return (async () => {
       for (;;) {
-        const raw = (await io.numberQuestion("选择序号: ")).trim();
+        const raw = (await io.numberQuestion(t("menu.choose.ask"))).trim();
         const n = Number(raw);
         if (Number.isInteger(n) && n >= 1 && n <= items.length) return n - 1;
       }
@@ -117,15 +118,11 @@ export function pick(
     // 视口仅在注入 height 且项数超窗时激活——否则整列渲染（T1 行为原样）
     const vpHeight = io.height !== undefined && io.height > 0 && items.length > io.height ? io.height : undefined;
     // 底部提示行文案按可用能力动态拼装（设计空白——防 >9 项/视口态提示撒谎）
-    const hintParts = ["↑↓ 选择"];
-    if (vpHeight !== undefined) hintParts.push("PgUp/PgDn 翻页");
-    if (items.length <= 9) hintParts.push("数字直达");
-    hintParts.push("回车确认", "Esc 取消");
-    const hint = hintParts.join(" · ");
+    const hint = t("pick.line.foot"); // m5-i18n T6：脚注整句走键（分能力动态拼装走查后再拆）
     const frameLines = (): string[] => {
       const win = vpHeight === undefined ? { start: 0, end: items.length } : viewportOf(items.length, selected, vpHeight);
       const lines: string[] = [];
-      if (vpHeight !== undefined) lines.push(`…（第 ${win.start + 1}–${win.end} 项，共 ${items.length} 项）`);
+      if (vpHeight !== undefined) lines.push(t("pick.line.range", { n: `${win.start + 1}–${win.end}`, m: items.length }));
       for (let i = win.start; i < win.end; i++) {
         // 两段式渲染（2026-09-28 用户拍板：标题白/说明灰 + 「 ✓」当前值项青玉——与全屏 choose 浮层同形）；
         // 多行项由 pickLabel 就地折平（原「先 replace 再判尾标」两步合一）。非 TTY 编号回落不加色（管道保旧 byte 形）

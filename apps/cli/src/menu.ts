@@ -1,6 +1,7 @@
 import { Writable } from "node:stream";
 import type { CommandUi } from "@orosus/contracts/module";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
 
 /** 可静默的输出代理（密钥输入无回显，用户走查）：silence 态吞掉 readline 的全部回显——
  *  逐键回显 * 在真实 Windows 终端层（pnpm 管道 × mintty/winpty × 括号粘贴 × ANSI 支持参差）会碎成
@@ -41,7 +42,7 @@ export function createReadlineUi(io: {
     choose: async (title, items) => {
       // CR-05：空列表入口即拒——编号回落 `n >= 1 && n <= 0` 永假 → 无限重问挂死（脚本/CI）；
       // pick 面路径回车/环绕会拿到 0/NaN 假下标 → items[NaN] 伪装成合法选择（picker 入口同判双保险）
-      if (items.length === 0) throw new Error("无可选项");
+      if (items.length === 0) throw new Error(t("menu.err.noItems"));
       if (io.pick !== undefined) {
         // CR-04：不再无差别 catch 改写「已取消（Esc）」——那会把 pick 面真实故障（模态接管异常/
         // 写面抛错/NaN 索引等）伪装成用户取消，而上游 settleCommandError 对取消静默 return，
@@ -52,7 +53,7 @@ export function createReadlineUi(io: {
       for (;;) {
         const lines = [`== ${title} ==`, ...items.map((x, i) => `${i + 1}. ${x.replace(/\n/g, " ")}`)];
         for (const l of lines) process.stdout.write(`${l}\n`);
-        const raw = (await io.question("选择序号: ")).trim();
+        const raw = (await io.question(t("menu.choose.ask"))).trim();
         const n = Number(raw);
         if (Number.isInteger(n) && n >= 1 && n <= items.length) return items[n - 1]!;
       }
