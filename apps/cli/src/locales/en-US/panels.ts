@@ -35,7 +35,7 @@ export const enUSPanels: Record<string, string> = {
 	"tail.busy": "Generating…",
 	"head.modules": "Modules",
 	"panel.title.status": "Status",
-	"hint.statusPage": "←→ Switch page · PgUp/PgDn module pages",
+	"hint.statusPage": "←→ Switch page · PgUp/PgDn",
 	"hint.modSelect": "↑↓ Select module · Enter mount/unmount",
 	"net.notReady": "(Network data not assembled — degraded feed; see diagnostic log)",
 	"head.conns": "Network / MCP connections",

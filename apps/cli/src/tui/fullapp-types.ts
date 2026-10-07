@@ -142,8 +142,8 @@ export interface FullAppIO {
 	/** 二级详情文本（T10）：name → 详情全文（renderDetail 拼装——宿主喂原始日志行）。 */
 	diagDetail?(name: string): string;
 	/** 模块总览启动器数据源（m5-peers T6e，D24「打开时刷新」同款）：Ctrl+P 现读 active 模块的
-	 *  launcher 登记（宿主侧 collectLaunchers(h.graph().audit())）。 */
-	launcherEntries?(): { name: string; label: string; command?: string }[];
+	 *  launcher 登记（宿主侧 collectLaunchers(h.graph().audit())）；labelKey = 声明方翻译键（走查验 2026-10-07）。 */
+	launcherEntries?(): { name: string; label: string; labelKey?: string; command?: string }[];
 	/** 宿主日志口（m5 T2）：弹窗保留键注册即拒等 UI 层事件的留痕（接线 main.ts → harness 日志）。 */
 	logWarn?(code: string, msg: string, data?: Record<string, unknown>): void;
 	/** 斜杠菜单参数阶段数据源（m5 T15）：cmd（含斜杠）→ 参数候选全量（宿主侧调模块 completeArg，

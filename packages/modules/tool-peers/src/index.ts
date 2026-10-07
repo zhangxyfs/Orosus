@@ -33,7 +33,7 @@ export default defineModule({
   api: 1,
   // 2026-10-06 走查翻案 D12：默认挂载（原 defaultEnabled:false）——挂载代价仅浏览命令+launcher 登记
   // （不耗 token）；两项模型面功能仍由 v2 双键门控、默认关（D13 缺键 = 关，activate 空转零工具零段）
-  launcher: { label: "记忆", command: "/tool-peers__memory" },   // T6e 总览启动器（Ctrl+P）登记——浏览本项目共享记忆
+  launcher: { label: "记忆", command: "/tool-peers__memory", labelKey: "peers.launcher.label" },   // T6e 总览启动器（Ctrl+P）登记——浏览本项目共享记忆；labelKey = 总览行翻译键（2026-10-07 走查）
   mounts: ["contribute:tool", "contribute:command", "contribute:promptSection", "hook:session/start"],
   config: configSchema,
   activate(ctx) {
@@ -52,28 +52,31 @@ export default defineModule({
     // 列表 = dialog 控件窗（PopupKey 无选中态，执行期核实走 session-tree__view 同款 interactive list）；
     // 正文 = viewText 全屏 md 渲染（/tasks 纪律）；行模式 ui.dialog 判空降级只读列表。
     ctx.contribute.command("tool-peers__memory", async (_args, ui) => {
+      // m5-i18n：浏览窗串走 ctx.t（键住宿主 locales/modules 域，步骤一已备；fallback = 作者缺省中文——
+      // approval/compaction 同款模式，2026-10-07 走查接线）
+      const t = ctx.t ?? ((k, _params, f) => f ?? k);
       const dir = env.memoryDir();
       // 空态/not-ready 走 notice toast（走查修订一：一句话提示不占面板）；无头无 notice 口回退返回串
       if (dir === undefined) {
-        const msg = "尚未定位到当前项目会话——先发一条消息建会话，再打开记忆浏览";
+        const msg = t("peers.win.notready", undefined, "尚未定位到当前项目会话——先发一条消息建会话，再打开记忆浏览");
         if (ui.notice === undefined) return msg;
         await ui.notice(msg);
         return "";
       }
       const entries = browserEntries(dir);
       if (entries.length === 0) {
-        const msg = "本项目还没有共享记忆——让模型记一条（tool-peers__memory__write），或先开启工作区记忆";
+        const msg = t("peers.win.empty", undefined, "本项目还没有共享记忆——让模型记一条（tool-peers__memory__write），或先开启工作区记忆");
         if (ui.notice === undefined) return msg;
         await ui.notice(msg);
         return "";
       }
-      const lines = renderBrowserList(entries, Date.now());
+      const lines = renderBrowserList(entries, Date.now(), t);
       if (ui.dialog === undefined) {
-        ui.viewText?.("记忆 · 本项目（只读列表——全屏模式可 Enter 打开）", lines.join("\n"), { layout: "full" });
+        ui.viewText?.(t("peers.win.list.fallback", undefined, "记忆 · 本项目（只读列表——全屏模式可 Enter 打开）"), lines.join("\n"), { layout: "full" });
         return "";
       }
       const handle = ui.dialog({
-        title: "记忆 · 本项目 —— ↑↓ 选择 · Enter 打开 · Esc 关闭",
+        title: t("peers.win.title", undefined, "记忆 · 本项目 —— ↑↓ 选择 · Enter 打开 · Esc 关闭"),
         layout: "full",
         widgets: [{ id: "list", kind: "list", interactive: true, items: lines }],
         onEvent: (e) => {
@@ -82,7 +85,8 @@ export default defineModule({
             if (entry === undefined) return undefined;
             const body = browserBody(dir, entry.file);
             handle?.close();   // 正文窗走 viewText FIFO 顶上
-            if (body !== undefined) ui.viewText?.(entry.title, body, { layout: "full", markdown: true });   // 走查六-③：md 渲染（不支持的宿主按纯文本原样显示）
+            const title = entry.isIndex ? t("peers.win.index.title", undefined, entry.title) : entry.title;
+            if (body !== undefined) ui.viewText?.(title, body, { layout: "full", markdown: true });   // 走查六-③：md 渲染（不支持的宿主按纯文本原样显示）
           }
           return undefined;
         },

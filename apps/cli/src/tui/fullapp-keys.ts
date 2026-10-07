@@ -6,6 +6,7 @@ import { CONN_SLOTS, inlineSlashWord, normCmd, OVERLAY_PAGE, type DialogKeyCtx, 
 import { isPrintable } from "./keymatch.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
+import { t } from "../i18n/app.ts";
 
 export function createKeys(app: FullApp) {
 	/** Esc 关窗记账（2026-10-04 溢出修，用户实机事故：busy 期多层弹窗连按 Esc 关窗，尾部两拍落主窗
@@ -141,7 +142,7 @@ export function createKeys(app: FullApp) {
 				if (popupFocused) return; // 弹窗聚焦期不开总览（模态让位——走查⑤同款）
 				const entries = app.io.launcherEntries?.() ?? [];
 				if (entries.length === 0) {
-					app.showToast("没有可打开的模块界面"); // 空态不弹空窗（诊断空态同款）
+					app.showToast(t("toast.launcherEmpty")); // 空态不弹空窗（诊断空态同款；2026-10-07 走查走键）
 				} else {
 					s.overlayOpen = false; // 与斜杠菜单互斥
 					s.atMenu = undefined; // 与 @ 文件菜单互斥

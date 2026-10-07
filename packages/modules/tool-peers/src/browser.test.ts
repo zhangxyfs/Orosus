@@ -56,6 +56,30 @@ describe("renderBrowserList 与 browserBody", () => {
     expect(lines[1]).toContain("First");
     expect(lines[1]).toContain("5 分钟前");
   });
+  it("走查验形（2026-10-07）：行含简介（标题后、时间前）；简介帽 60 字截断带 …", () => {
+    writeNote(dir, "Has Desc", "一句话简介", "b");
+    writeNote(dir, "Long Desc", "x".repeat(80), "b2");
+    utimesSync(join(dir, listNotes(dir)[1]!.file), new Date(NOW - 30_000), new Date(NOW - 30_000));
+    const lines = renderBrowserList(browserEntries(dir), NOW);
+    const hasDesc = lines.find(l => l.includes("Has Desc"))!;
+    expect(hasDesc).toContain(" · 一句话简介 · ");
+    const longDesc = lines.find(l => l.includes("Long Desc"))!;
+    expect(longDesc).toContain(` · ${"x".repeat(59)}… · `);   // 60 帽：59 字 + …
+  });
+  it("tr 注入走键（ctx.t 接线钉）：索引行标题/相对时间经 peers.* 键；无 tr 回落作者中文", () => {
+    writeNote(dir, "N1", "s", "b");
+    const tr = (k: string, p?: Record<string, string | number>, f?: string): string => {
+      if (k === "peers.win.index.title") return "Shared memory index (MEMORY.md)";
+      if (k === "peers.reltime.day") return `${p?.d} d ago`;
+      if (k === "peers.reltime.min") return `${p?.m} min ago`;
+      return f ?? k;
+    };
+    utimesSync(join(dir, "MEMORY.md"), new Date(NOW - 2 * 86_400_000), new Date(NOW - 2 * 86_400_000));   // 钉索引行 mtime（断言对象是 lines[0]）
+    const lines = renderBrowserList(browserEntries(dir), NOW, tr);
+    expect(lines[0]).toContain("Shared memory index (MEMORY.md)");
+    expect(lines[0]).toContain("2 d ago");
+    expect(renderBrowserList(browserEntries(dir), NOW)[0]).toContain("共享记忆索引");   // 无 tr = 作者中文回落
+  });
   it("body 读回原文 + 防穿越；MEMORY.md 可读", () => {
     writeNote(dir, "N", "s", "content-here");
     const entries = browserEntries(dir);

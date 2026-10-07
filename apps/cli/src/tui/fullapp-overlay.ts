@@ -284,7 +284,9 @@ export function createOverlay(app: FullApp) {
 		const selI = Math.max(0, Math.min(entries.length - 1, s.launcherSel));
 		for (let i = 0; i < LAUNCHER_LIST_ROWS + 1; i++) {
 			const e = entries[i];
-			const row = e === undefined ? "" : ` ${e.label}${e.command !== undefined ? theme.dim(` —— ${e.command}`) : ""}`;
+			// labelKey 翻译（2026-10-07 走查）：声明方自报键 → t 回落声明原值；无键保底原样
+			const lab = e !== undefined && e.labelKey !== undefined ? t(e.labelKey, undefined, e.label) : e?.label;
+			const row = e === undefined ? "" : ` ${lab}${e.command !== undefined ? theme.dim(` —— ${e.command}`) : ""}`;
 			olines.push(i === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));   // 选中行青玉软底（diag 同款）
 		}
 		olines.push(theme.bg("surface2", theme.fg(bc, "├" + "─".repeat(oInner) + "┤")));
