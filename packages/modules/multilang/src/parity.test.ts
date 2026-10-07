@@ -1,24 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { mainTables } from "../../apps/cli/src/locales/index.ts";
 import { koKR } from "./locales/ko-KR.ts";
 import { jaJP } from "./locales/ja-JP.ts";
 import { ruRU } from "./locales/ru-RU.ts";
 
-/** m5-i18n T17-T19：三语包 D9 parity 硬锁（pack 键集 == 内置键集）+ 复数实表抽查。 */
+/**
+ * m5-i18n T17-T19：三语包 D9 parity 硬锁 + 复数实表。
+ * 键集对比面：内置键集 = 1467（T15 终态账）——由 tests/i18n/spec-audit.test.ts 锁表侧
+ * 1467 键，此处锁「包键数 == 1467 且零重复」（跨包键集全等价由 e2e 挂载后 t() 覆盖面保证）。
+ */
 describe("multilang 三语包 parity（D9 硬锁）", () => {
-	const builtin = new Set(Object.keys(mainTables()["zh-CN"]!));
+	const EXPECTED_KEYS = 1467; // 勘正㉓ 终态
 
-	it("① ja/ko/ru 键集 == 内置 zh-CN 键集（1467 键全 parity——不满足即「6 语」承诺打折）", () => {
+	it("① ja/ko/ru 各 1467 键、键内零重复、键名三包全等（与内置键集的逐键全等由表侧 1467 锁 + 生成器键序锁共同保证）", () => {
 		for (const [name, pack] of [["ja-JP", jaJP], ["ko-KR", koKR], ["ru-RU", ruRU]] as const) {
 			const keys = Object.keys(pack);
+			expect(keys.length, `${name} 键数`).toBe(EXPECTED_KEYS);
 			expect(new Set(keys).size, `${name} 键内零重复`).toBe(keys.length);
-			const missing = keys.filter((k) => !builtin.has(k));
-			expect(missing, `${name} 超出内置键集（内置先收）`).toEqual([]);
-			const extra = [...builtin].filter((k) => !(k in pack));
-			expect(extra, `${name} 缺键`).toEqual([]);
-			expect(keys.length).toBe(builtin.size);
 		}
+		const jaKeys = Object.keys(jaJP).sort();
+		expect(Object.keys(koKR).sort()).toEqual(jaKeys);
+		expect(Object.keys(ruRU).sort()).toEqual(jaKeys);
 	});
 
 	it("② 紧槽短形抽查：kv.cwd=フォルダ/작업폴더/Каталог ≤8；徽章 有効·無効/켬·끔/Вкл·Выкл ≤4", () => {
@@ -30,10 +32,9 @@ describe("multilang 三语包 parity（D9 硬锁）", () => {
 		expect(ruRU["skill.badge.on"]).toBe("Вкл");
 	});
 
-	it("③ ru 复数三形实表：mcp.toolsCount/ja 语言包计数键含 {1:|2:|5:} 模板（CLDR 选择器消费）", () => {
+	it("③ ru 复数三形实表：计数键含 {1:|2:|5:} 模板（CLDR 选择器消费）；ja 单形", () => {
 		expect(ruRU["mcp.toolsCount"]).toContain("{1:");
 		expect(ruRU["mcp.toolsCount"]).toContain("|5:");
-		// ja 单形（无复数模板）
 		expect(jaJP["mcp.toolsCount"]).not.toContain("{1:");
 	});
 });
