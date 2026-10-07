@@ -1,4 +1,5 @@
 import type { AuditEntry } from "@orosus/core";
+import { t } from "./i18n/app.ts";
 
 /** 联动闭包输入行（audit 行裁剪——只取闭包计算所需四字段）。 */
 export interface ModuleDepRow {
@@ -35,7 +36,7 @@ export function computeUnmountClosure(names: string[], modules: ModuleDepRow[], 
   }
   const hit = [...closure].find((n) => locked.has(n) && !names.includes(n));
   if (hit !== undefined) {
-    return { ok: false, blocked: `无法卸载：${names.join("、")} 被 ${hit}（锁定）硬依赖` };
+    return { ok: false, blocked: t("moddeps.blockUnmount", { names: names.join("、"), hit }) };
   }
   return { ok: true, write: [...closure] };
 }
@@ -63,7 +64,7 @@ export function computeMountClosure(names: string[], modules: ModuleDepRow[], lo
   const write = [...closure].filter((n) => byName.get(n)?.state !== "active");
   const hit = write.find((n) => locked.has(n));
   if (hit !== undefined) {
-    return { ok: false, blocked: `无法挂载：${names.join("、")} 硬依赖的 ${hit}（锁定）不可启用` };
+    return { ok: false, blocked: t("moddeps.blockMount", { names: names.join("、"), hit }) };
   }
   return { ok: true, write };
 }

@@ -33,6 +33,11 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/picker.ts", max: 0, note: "T6 清零" },
 	{ file: "apps/cli/src/menu.ts", max: 0, note: "T6 清零（行模式 choose chrome）" },
 	{ file: "apps/cli/src/tui/fullapp-select.ts", max: 0, note: "T6 清零（选区复制/链接三则）" },
+	{ file: "apps/cli/src/repl-io.ts", max: 0, note: "T7 清零（行模式 IO chrome；补全抛错诊断行 diag 豁免）" },
+	{ file: "apps/cli/src/paste.ts", max: 0, note: "T7 清零（PASTE_EMPTY/pasteOkHint 改函数）" },
+	{ file: "apps/cli/src/altpaste.ts", max: 0, note: "T7 清零" },
+	{ file: "apps/cli/src/module-deps.ts", max: 0, note: "T7 清零（挂/卸载阻断两由）" },
+	{ file: "apps/cli/src/module-toggle-result.ts", max: 0, note: "T7 清零（动词键 + {list/无} 模板缺省）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

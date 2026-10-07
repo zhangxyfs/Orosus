@@ -55,7 +55,7 @@ describe("Alt+V 按键粘贴（TUI 批 T5——V.2 移入项）", () => {
     await flush();
     expect(calls.paste).toBe(1);
     expect(calls.pending).toEqual([]); // 无图不置位
-    expect(w.join("")).toContain(PASTE_EMPTY);
+    expect(w.join("")).toContain(PASTE_EMPTY());
   });
   it("③ 非 TTY → 监听器不挂（按键零处理——退化矩阵：无 TTY 无按键流）", () => {
     const { input } = fakeIo({ isTTY: false });

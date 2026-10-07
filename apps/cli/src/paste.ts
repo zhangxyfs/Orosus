@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { orosusHome } from "@orosus/contracts/home";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
+import { t } from "./i18n/app.ts";
 const execFileAsync = promisify(execFile);
 
 /** PowerShell 取图参数（纯函数——可测）。路径转正斜杠防 PS 双引号转义歧义；
@@ -35,8 +36,8 @@ export function imagesFor(pendingImages: string[]): { images: string[] } | undef
 }
 
 /** /paste 命令与 Alt+V 按键（TUI 批 T5）两触发面的提示语同源常量——文案只此一份，两分支不漂移。 */
-export const PASTE_EMPTY = "（剪贴板中没有图片——截图后重试，或检查终端权限）";
-export const pasteOkHint = (name: string): string => `[已粘贴图片: ${name}]——将随下一条消息发送（需 vision 模型）`;
+export const PASTE_EMPTY = (): string => t("paste.empty"); // m5-i18n T7：改函数渲染期取（消费点 altpaste/main 已同步）
+export const pasteOkHint = (name: string): string => t("paste.okHint", { name });
 
 /** 图片尺寸读取（F5 二轮⑬——chip 形态 [image #2 (165×103)]）：PNG IHDR / GIF 头 / JPEG SOF 扫描；
  *  读不出返回 undefined（chip 退化为无尺寸形态）。纯读文件头，零依赖。 */

@@ -5,6 +5,7 @@ import { createSilenceableOutput } from "./menu.ts";
 import { watchEsc } from "./keys.ts";
 import { commandCompleter } from "./help.ts";
 import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
+import { t } from "./i18n/app.ts";
 
 /** m5-split-main T11：行模式 IO 族自 main.ts 搬入（人人依赖，最后拆）。
  *  h/activeApp 两件留守单例经 initReplIo 晚绑定注入（D2 的零参热路径形态——question/notify 被
@@ -29,7 +30,7 @@ if (process.stdout.isTTY === true) {
 // Tab 补全（M4-2 T21 + m5 T15 第三职）：模块命令参数经 graph 现读委托（completeArg 抛错当无候选 + host 日志）
 const rlCompleter = (line: string): Promise<[string[], string]> =>
   Promise.resolve(commandCompleter(line, process.cwd(), refs.getH().graph().commands.map((c) => ({ name: `/${c.name}`, ...(c.completeArg !== undefined ? { completeArg: c.completeArg } : {}) })), (name, err) => {
-    refs.getH().log("host.completer.error", `模块参数补全抛错，当无候选：${name}`, { error: String(err instanceof Error ? err.message : err) });
+    refs.getH().log("host.completer.error", `模块参数补全抛错，当无候选：${name}`, { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
   }));
 export const rl = createInterface({ input: process.stdin, output: stdoutEcho, completer: rlCompleter });
 // 行队列：readline 的 question() 会丢弃两次询问之间到达的行（管道喂多条命令丢行），
@@ -80,7 +81,7 @@ const askLine = (prompt: string): Promise<string> =>
     const stopEsc = process.stdin.isTTY === true ? watchEsc(process.stdin, () => ac.abort()) : undefined;
     const onClose = (): void => {
       cleanup();
-      reject(new Error("无交互环境（stdin 已关闭）——交互式命令不可用（D35 fail-closed）"));
+      reject(new Error(t("replio.noTty")));
     };
     const cleanup = (): void => {
       rl.removeListener("close", onClose);
@@ -111,7 +112,7 @@ const rlSecretQuestion = async (q: string): Promise<string> => {
   try {
     const queued = pendingLines.shift();
     if (queued !== undefined) return queued;
-    process.stdout.write(`${q}（输入不回显）: `);
+    process.stdout.write(t("replio.secretSuffix", { q }) + " ");
     stdoutEcho.silence(true);
     try {
       return await askLine("");

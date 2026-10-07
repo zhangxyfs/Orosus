@@ -168,6 +168,12 @@ function renderChunk(rawChunk: string, params: TParams | undefined, tag: LocaleT
 	const slashSegs = splitTop(chunk, "/");
 	if (slashSegs.length > 1) {
 		if (slashSegs.every((s) => CAT_RE.test(s.trim()))) return selectVariant(slashSegs, params, tag);
+		// 表格既成惯例：{list/无} 斜线书写的形参缺省（首段为形参名 = 与管道同义；枚举槽 {Tavily/Brave}
+		// 首段非调用侧形参——抽取任务须改写命名形参，改写前渲染缺省段属已知过渡态）
+		if (PARAM_RE.test(slashSegs[0]!.trim())) {
+			const v = paramValue(params, slashSegs[0]!.trim());
+			return isPresent(v) ? String(v) : interpolate(slashSegs.slice(1).join("/"), params, tag);
+		}
 		return pickAlternative(slashSegs, params, tag);
 	}
 

@@ -1,4 +1,5 @@
 import { PASTE_EMPTY } from "./paste.ts";
+import { t } from "./i18n/app.ts";
 
 /** Alt+V 按键粘贴触发层（TUI 批 T5/V.2 移入项——ROADMAP「只补按键触发层」兑现）。
  *  keypress 多播拦截（机制①——不经 T0 解析器，v1.7 勘误）：readline 的 keypress 事件多播
@@ -20,7 +21,8 @@ export function attachAltVPaste(io: {
     const img = await io.pasteImage();
     io.clearInputLine();
     const label = img === undefined ? undefined : io.setPendingImage(img.file);
-    io.write(`[K${label === undefined ? PASTE_EMPTY : `${label} 已挂接——将随下一条消息发送`}
+    io.write(`
+[K${label === undefined ? PASTE_EMPTY() : `${t("altpaste.attached", { label })}`}
 > `);
   };
   io.input.on("keypress", (_s, k) => {

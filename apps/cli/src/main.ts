@@ -1531,7 +1531,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       void (async () => {
         const img = await pasteImageToMedia(sessionsDir, h.sessionId);
         if (img === undefined) {
-          notify(PASTE_EMPTY); // toast 化（2026-09-23 拍板）——无图提示不落流区
+          notify(PASTE_EMPTY()); // toast 化（2026-09-23 拍板）——无图提示不落流区
           return;
         }
         app.insertAtCursor(attachPendingImage(img.file)); // chip token 进输入框光标位（删除键可删 = 撤销挂图）
