@@ -323,7 +323,10 @@ const settingsService: SettingsService = {
     // m5-i18n T3：与 /locale 同源（h 写盘 + store 重建）；重绘 = 新面换新语言（流区旧行保持——D5 主题同款）
     await h.setLanguage(tag);
     await localeStore.setLanguage(tag);
-    activeApp?.repaint();
+    activeApp?.repaint(); // 渲染期现取面（菜单/帮助/横幅）立即换语
+    // panelCache 冻结面（模块 desc/锁定因/新会话/未配置等快照串）须重算后再补一帧——否则要等下一次
+    // 无关的 refreshPanel 触发（命令提交/turn 结束）才换语，用户实机观察到「关弹窗才变」（2026-10-07）
+    void refreshPanel(modulesDeps).then(() => activeApp?.repaint()).catch(() => undefined);
     notify(t("main.toast.localeDone"));
   },
   applyModulePreset: async (preset) => {
