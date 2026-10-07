@@ -122,4 +122,12 @@ export const zhCNPopups: Record<string, string> = {
 	"agentview.head": "状态：{stat}{role? · 工种 {role}}{background? · 后台}",
 	"subagent.turns.unlimited.desc": "-1——仅不活动 600 秒 / 总时长 2 小时兜底",
 	"moddiag.impact": "【连带影响】",
+
+	"approval.dialog.title": "工具执行确认",
+	"approval.dialog.tool": "工具：{name}",
+	"approval.dialog.rule": "规则：{rule}",
+	"approval.dialog.access": "访问：{kinds}",
+	"approval.dialog.reason": "原因：{reason}",
+
+	"modconfirm.source": "来源",
 };

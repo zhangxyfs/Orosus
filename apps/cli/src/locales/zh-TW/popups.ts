@@ -122,4 +122,12 @@ export const zhTWPopups: Record<string, string> = {
 	"agentview.head": "狀態：{stat}{role? · 工種 {role}}{background? · 背景}",
 	"subagent.turns.unlimited.desc": "-1——僅不活動 600 秒 / 總時長 2 小時兜底",
 	"moddiag.impact": "【連帶影響】",
+
+	"approval.dialog.title": "工具執行確認",
+	"approval.dialog.tool": "工具：{name}",
+	"approval.dialog.rule": "規則：{rule}",
+	"approval.dialog.access": "存取：{kinds}",
+	"approval.dialog.reason": "原因：{reason}",
+
+	"modconfirm.source": "來源",
 };

@@ -122,4 +122,12 @@ export const enUSPopups: Record<string, string> = {
 	"agentview.head": "Status: {stat}{role? · role {role}}{background? · background}",
 	"subagent.turns.unlimited.desc": "-1 — only the 600s-idle / 2h-total backstops apply",
 	"moddiag.impact": "【Impact】",
+
+	"approval.dialog.title": "Tool confirmation",
+	"approval.dialog.tool": "Tool: {name}",
+	"approval.dialog.rule": "Rule: {rule}",
+	"approval.dialog.access": "Access: {kinds}",
+	"approval.dialog.reason": "Reason: {reason}",
+
+	"modconfirm.source": "Source",
 };
