@@ -9,6 +9,7 @@ import { createEventBus, type EventBus } from "./bus.ts";
 import { createToolRegistry, type ToolRegistry } from "../tool/registry.ts";
 import { validateModule } from "./validate.ts";
 import { resolveTopo } from "./topo.ts";
+import { kernelT } from "./i18n.ts";
 import { activateModules, type OverlayEntry, type ServiceResolver } from "./activate.ts";
 import { resolveSections } from "../config/validate.ts";
 import type { AuditEntry, ModuleRecord } from "./types.ts";
@@ -122,7 +123,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   for (const def of [...defs].sort((a, b) => a.name.localeCompare(b.name))) {
     if (disabled.has(def.name)) { disabledNames.add(def.name); continue; }
     if ((seen.get(def.name) ?? 0) > 1) {
-      if (!staticFailed.some((f) => f.name === def.name)) staticFailed.push({ name: def.name, reason: "模块名冲突（全局唯一，§5.1）" }); // 每模块一行：重名的两副本只记一条
+      if (!staticFailed.some((f) => f.name === def.name)) staticFailed.push({ name: def.name, reason: kernelT("core.kernel.err.dupName") }); // 每模块一行：重名的两副本只记一条
       continue;
     }
     const violations = validateModule(def);
@@ -167,7 +168,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   const allFailed = [
     ...staticFailed,
     ...degraded,
-    ...act.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? "未知" })),
+    ...act.records.filter((r) => r.state === "failed").map((r) => ({ name: r.name, reason: r.failReason ?? kernelT("core.kernel.err.unknown") })),
   ];
   const requiredFailed = allFailed.filter((f) => sections.isRequired(f.name));
   // CK-10：护栏盲区——被禁用/待确认的 required 模块不进 allFailed（禁用走 discovered、blocked 走 pending-confirm），
@@ -234,7 +235,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     })),
     ...[...disabledNames].map((name) => ({
       def: byName.get(name)!.def, name, source: byName.get(name)!.source,
-      state: "discovered" as const, failReason: "未启用（defaultEnabled=false 或配置/CLI 禁用，§5.4）", generation: 1, // 同上：无实例不递增
+      state: "discovered" as const, failReason: kernelT("core.kernel.disabled"), generation: 1, // 同上：无实例不递增
     })),
   ];
 

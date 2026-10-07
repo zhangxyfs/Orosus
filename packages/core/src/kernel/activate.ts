@@ -1,4 +1,5 @@
 import type { CardSpec, CommandHandler, CapabilityKey, CommandUi, Disposer, HostInfo, Listener, LlmPort, ModuleContext, ModuleDefinition, PromptSection, SettingsService } from "@orosus/contracts/module";
+import { kernelT } from "./i18n.ts";
 import type { Tool } from "@orosus/contracts/tool";
 import type { ProviderAdapter, StreamFn } from "@orosus/contracts/provider";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -226,8 +227,8 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       fail(
         def,
         failedOwner !== undefined
-          ? `硬依赖能力 "${missingKey}" 的提供者 ${failedOwner.name} 已降级（级联降级）`
-          : `硬依赖能力 "${missingKey}" 未注册：其提供者已激活但未 provide（提供者模块 bug）`,
+          ? kernelT("core.activate.err.cascade", { key: missingKey, name: failedOwner.name })
+          : kernelT("core.activate.err.noProvide", { key: missingKey }),
       );
       continue;
     }
@@ -235,7 +236,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
     // 配置校验（schema 不过 = 该模块降级，§4.2 第 6 步）
     const cfg = sectionResolution.configFor(def);
     if (!cfg.ok) {
-      fail(def, `配置校验失败：${cfg.error}`);
+      fail(def, kernelT("core.activate.err.config", { error: cfg.error }));
       continue;
     }
 

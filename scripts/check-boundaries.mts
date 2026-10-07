@@ -9,6 +9,10 @@ export interface PkgJson {
   devDependencies?: Record<string, string>;
 }
 
+/** core 允许依赖的 @orosus 包：契约 + i18n 运行时（m5-i18n 起加入——零依赖纯函数库，同 contracts 的叶子地位；
+ * 铁律 3 的「任何模块」指模块系统装载的 packages/modules/* 制品，不含纯库包）。 */
+export const CORE_ALLOWED_DEPS = new Set(["@orosus/contracts", "@orosus/i18n"]);
+
 /** 包内源文件：path 相对包根（posix 形，如 "src/index.ts"），source 为原文（注释由扫描器剥）。 */
 export interface SourceFile {
   path: string;
@@ -64,8 +68,8 @@ export function checkPackage(pkg: PkgJson, files: SourceFile[] = []): string[] {
   }
   if (pkg.name === "@orosus/core") {
     for (const d of deps) {
-      if (d.startsWith("@orosus/") && d !== "@orosus/contracts") {
-        violations.push(`core 依赖 ${d}（铁律 3：core 禁止 import 任何模块）`);
+      if (d.startsWith("@orosus/") && !CORE_ALLOWED_DEPS.has(d)) {
+        violations.push(`core 依赖 ${d}（铁律 3：core 禁止 import 任何模块——白名单：${[...CORE_ALLOWED_DEPS].join("/")}）`);
       }
     }
   }
@@ -83,7 +87,9 @@ export function checkPackage(pkg: PkgJson, files: SourceFile[] = []): string[] {
         re.lastIndex = 0; // 模块级全局正则复用防护（matchAll 以 lastIndex 为起点）
         for (const m of stripped.matchAll(re)) {
           const spec = m[1]!;
-          if (spec.startsWith("@orosus/") && !spec.startsWith("@orosus/contracts")) {
+          const allowed = pkg.name === "@orosus/core" ? CORE_ALLOWED_DEPS : new Set(["@orosus/contracts"]);
+          const bad = spec.startsWith("@orosus/") && ![...allowed].some((a) => spec === a || spec.startsWith(a + "/"));
+          if (bad) {
             violations.push(`${pkg.name} 的 ${f.path} import ${spec}（${rule}）`);
           } else if ((spec.startsWith("./") || spec.startsWith("../")) && escapesPackage(f.path, spec)) {
             violations.push(`${pkg.name} 的 ${f.path} 相对 import 越出包目录：${spec}（绕过 package.json 声明面——包间只能走包名 import）`);

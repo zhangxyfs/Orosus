@@ -1,4 +1,5 @@
 import { createJiti } from "jiti";
+import { kernelT } from "./i18n.ts";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import type { ModuleDefinition } from "@orosus/contracts/module";
@@ -33,11 +34,11 @@ export async function loadExternalModule(root: string, entry: string): Promise<M
   const mod = (await getJiti().import(join(root, entry))) as { default?: unknown };
   const def = mod.default ?? mod;
   if (typeof def !== "object" || def === null) {
-    throw new Error("非模块制品：default 导出不是对象（期待 defineModule 的返回值）");
+    throw new Error(kernelT("core.loader.err.notObject"));
   }
   const d = def as Partial<ModuleDefinition>;
   if (typeof d.name !== "string" || typeof d.activate !== "function") {
-    throw new Error("非模块制品：缺 name 或 activate（不是 defineModule 形状，§8.4）");
+    throw new Error(kernelT("core.loader.err.notModule"));
   }
   return def as ModuleDefinition;
 }

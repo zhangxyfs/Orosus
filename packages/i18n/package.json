@@ -1,0 +1,14 @@
+{
+  "name": "@orosus/i18n",
+  "version": "0.1.0",
+  "type": "module",
+  "orosus": {
+    "runtime": true
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@orosus/contracts": "workspace:*",
+    "@orosus/i18n": "workspace:*",
     "jiti": "^2.7.0",
     "smol-toml": "^1.3.0",
     "zod": "^4.0.0"
