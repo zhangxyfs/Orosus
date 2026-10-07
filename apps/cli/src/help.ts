@@ -76,7 +76,6 @@ export const helpText = (): string => [
 	t("help.cmd.model"),
 	t("help.cmd.effort"),
 	t("help.cmd.reload"),
-	t("help.cmd.locale"),
 	t("help.cmd.help"),
 	t("help.cmd.btw"),
 	"",

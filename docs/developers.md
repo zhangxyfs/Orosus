@@ -89,7 +89,7 @@ export default defineModule({
 | ② 自带目录（**推荐**） | 串走 `t("mymodule.key", params, "缺省文案")`（fallback 即作者缺省，永不裸显 key）；activate 时 `ctx.provide("i18n.catalog.mymodule", { "zh-CN": {...}, "en-US": {...} })`（键以模块名前缀、槽名=模块名、段坏整槽拒收） | 目录有的语种显译文，缺档语种落 en |
 | ③ 语言包补全 | 模块零改动——语言包表是全局扁键，收录 `mymodule.*` 即补全 | 与②叠加 |
 
-启动解析：config `language` > 三平台系统检测（win32 ICU 真值优先 env——Git Bash en_US 噪音免疫；linux env 四级 LC_ALL>LC_MESSAGES>LANG>LC_CTYPE，C/POSIX 视为未设；darwin env 后 `defaults read -g AppleLocale` 兜底）> en-US。内置简/繁/英三语地板永不降级；`/locale` 切换写回 config，语言包语种卸载自动回退英文、配置不改写（重挂恢复）。
+启动解析：config `language` > 三平台系统检测（win32 ICU 真值优先 env——Git Bash en_US 噪音免疫；linux env 四级 LC_ALL>LC_MESSAGES>LANG>LC_CTYPE，C/POSIX 视为未设；darwin env 后 `defaults read -g AppleLocale` 兜底）> en-US。内置简/繁/英三语地板永不降级；`/settings → 切换语言` 写回 config，语言包语种卸载自动回退英文、配置不改写（重挂恢复）。
 
 ## 配置的读写单一事实源（m4-8 起）
 

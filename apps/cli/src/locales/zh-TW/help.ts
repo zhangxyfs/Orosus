@@ -10,7 +10,6 @@ export const zhTWHelp: Record<string, string> = {
 	"help.cmd.model": "/model      切換當前模型（回答進行中也可執行，下一輪生效）",
 	"help.cmd.effort": "/effort     思考投入檔位（推理深度/自我檢查/多方案推演；檔位來自模型目錄；回答進行中也可執行，下一輪生效）",
 	"help.cmd.reload": "/reload     重新載入模組設定",
-	"help.cmd.locale": "/locale    切換介面語言（簡 / 繁 / 英——掛載多語言包後追加日 / 韓 / 俄等；回答進行中也可執行）",
 	"help.cmd.help": "/help       顯示此說明",
 	"help.cmd.btw": "/btw        側問——帶著當前對話上下文的旁路快問（不打斷主對話；答案開小視窗、不進主對話流不留痕；回答中也可問；無參回看最近一次）",
 	"help.note.summary": "（壓縮摘要查看口 = Ctrl+O——/summary 已退役）",

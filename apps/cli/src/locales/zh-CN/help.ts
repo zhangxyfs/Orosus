@@ -10,7 +10,6 @@ export const zhCNHelp: Record<string, string> = {
 	"help.cmd.model": "/model      切换当前模型（回答进行中也可执行，下一轮生效）",
 	"help.cmd.effort": "/effort     思考投入档位（推理深度/自检/多方案推演；档位来自模型目录；回答进行中也可执行，下一轮生效）",
 	"help.cmd.reload": "/reload     重新加载模块配置",
-	"help.cmd.locale": "/locale    切换界面语言（简 / 繁 / 英——挂载多语言包后追加日 / 韩 / 俄等；回答进行中也可执行）",
 	"help.cmd.help": "/help       显示此帮助",
 	"help.cmd.btw": "/btw        侧问——带着当前对话上下文的旁路快问（不打断主对话；答案开小窗、不进主对话流不留痕；回答中也可问；无参回看最近一次）",
 	"help.note.summary": "（压缩摘要查看口 = Ctrl+O——/summary 已退役）",

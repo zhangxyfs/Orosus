@@ -10,7 +10,6 @@ export const enUSHelp: Record<string, string> = {
 	"help.cmd.model": "/model      Switch the current model (works mid-answer; effective next turn)",
 	"help.cmd.effort": "/effort     Thinking-effort level (reasoning depth/self-check/multi-plan deliberation; levels come from the model catalog; works mid-answer, effective next turn)",
 	"help.cmd.reload": "/reload     Reload module configuration",
-	"help.cmd.locale": "/locale    Switch the interface language (zh-Hans / zh-Hant / en — plus ja/ko/ru with the language pack; works while busy)",
 	"help.cmd.help": "/help       Show this help",
 	"help.cmd.btw": "/btw        Side-ask — a quick bypass question with the current conversation context (does not interrupt; the answer opens in a small window, never enters the main flow and leaves no trace; askable mid-answer; no args shows the latest one)",
 	"help.note.summary": "(Compaction summary viewer = Ctrl+O — /summary is retired)",

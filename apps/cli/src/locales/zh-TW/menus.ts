@@ -106,6 +106,4 @@ export const zhTWMenus: Record<string, string> = {
 
 	"slash.items.yolo.long": "需要時詢問模式：常規編輯和命令自動執行；風險操作、問題和計劃仍需手動確認。等同於 /permission ask-risky。回答進行中也可執行，本輪生效。",
 	"slash.items.yolo.desc": "僅危險操作確認",
-	"slash.items.locale.desc": "切換介面語言",
-	"slash.items.locale.long": "列出介面語言並切換（內建簡體中文 / 繁體中文 / English；掛載多語言包後追加日 / 韓 / 俄等）。選定即寫入設定並重繪介面，回答進行中也可執行。",
 };

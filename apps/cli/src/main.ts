@@ -56,10 +56,8 @@ import { resolveAtRefs } from "./atfile.ts";
 import { helpText } from "./help.ts";
 import { seedFactorySkills } from "./skill-settings.ts";
 import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks-cmd.ts";
-import { isEsc } from "./mcp-ui.ts";
 import { createLocaleStore, detectSystemLocale } from "./i18n/index.ts";
 import { mainTables } from "./locales/index.ts";
-import { runLocaleSetting } from "./i18n/switch.ts";
 import { bindAppLocale, t } from "./i18n/app.ts";
 import { BTW_USAGE_HINT, openBtw, reopenBtw, type BtwDeps } from "./btw-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
@@ -911,30 +909,6 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           }
           return "again";
         }
-        // /locale（m5-i18n T3）：切换界面语言——BUSY_EXEC 即改档（写配置 + 重绘不动 turn）；
-        // full 模式 pickOverlay / 行模式 commandUi.choose 双胞胎；Esc 静默取消（P4：Esc 不落盘）
-        if (cmdNameOf(text) === "/locale") {
-          try {
-            const localeApp = activeApp; // let 可变态——闭包内窄化会丢，局部捕获
-            const toast = await runLocaleSetting(
-              localeApp !== undefined
-                ? async (t, items) => {
-                    const i = await localeApp.pickOverlay(t, items);
-                    if (i === undefined) throw new Error(ESC_CANCELLED);
-                    return items[i] ?? "";
-                  }
-                : (t, items) => commandUi.choose(t, items),
-              { getH: () => h, store: localeStore },
-            );
-            if (toast !== undefined) {
-              activeApp?.repaint(); // 新面换新语言（流区旧行保持原语言——D5）
-              notify(toast);
-            }
-          } catch (err) {
-            if (!isEsc(err)) throw err;
-          }
-          return "again";
-        }
         // /tasks（M4.5 T11）：子代理任务列表 + 查看窗 + 挂起审批应答（/task 单数同达——用户 2026-09-27）
         // CM-15①：精确小写等值改 cmdNameOf（/HELP 同款）
         if (cmdNameOf(text) === "/tasks" || cmdNameOf(text) === "/task") {
@@ -1140,7 +1114,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/locale", "/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径）
+const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
@@ -1191,7 +1165,6 @@ const slashItems = (): SlashItem[] => [
 	{ name: "/help", desc: t("slash.items.help.desc"), long: t("slash.items.help.long") },
 	{ name: "/model", desc: t("slash.items.model.desc"), long: t("slash.items.model.long") },
 	{ name: "/effort", desc: t("slash.items.effort.desc"), long: t("slash.items.effort.long") },
-	{ name: "/locale", desc: t("slash.items.locale.desc"), long: t("slash.items.locale.long") },
 	{ name: "/provider", desc: t("slash.items.provider.desc"), long: t("slash.items.provider.long") },
 	{
 		name: "/permission", desc: t("slash.items.permission.desc"), long: t("slash.items.permission.long"), children: [...PERM_CYCLE], childMeta: permMeta(),

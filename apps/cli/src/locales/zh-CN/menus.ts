@@ -106,6 +106,4 @@ export const zhCNMenus: Record<string, string> = {
 
 	"slash.items.yolo.long": "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。",
 	"slash.items.yolo.desc": "仅危险操作确认",
-	"slash.items.locale.desc": "切换界面语言",
-	"slash.items.locale.long": "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。",
 };
