@@ -25,6 +25,7 @@ import type { EventBus } from "./kernel/bus.ts";
 import { parseModel } from "./provider/resolve.ts";
 import { agentLoop } from "./loop/loop.ts";
 import { createSubagentRunner } from "./subagent/runner.ts";
+import { kernelT } from "./kernel/i18n.ts";
 
 /** 扩展名 → MIME（M4-2.5 T5）：/paste 产物即 png；未知缺省 image/png。 */
 function imageMimeOf(path: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" {
@@ -172,6 +173,8 @@ export interface Harness {
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
    *  Logger 契约只有五个分级方法，无裸 log）。首用 = 联动启停连带名单（host.module.cascade）。 */
   log(code: string, msg: string, data?: Record<string, unknown>): void;
+  /** 宿主翻译口注入（m5-i18n T2）：替换模块 ctx.t 的活实现（默认内核地板 t）；宿主 store 就绪/语言切换时调用。 */
+  setModuleT(t: (key: string, params?: Record<string, string | number | boolean | undefined | null>, fallback?: string) => string): void;
   graph(): ModuleGraph;
   reload(): Promise<ReloadReport>;  // quiesce 后执行（§5.5/T15）
   close(): Promise<void>;
@@ -491,6 +494,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // m5-media F2/F8：会话媒资库（<sid>/media/——spill 同层惯例，随桶清理）；显式注入优先（测试密封）
   const mediaDirUsed = options.mediaDir ?? join(sessionsDir, store.sessionId, "media");
   const llmHolder: { impl?: LlmPort } = {}; // D39/T4：loadModules 后装配——Unchanged 模块的旧闭包经同一 holder 读到新解析
+  const i18nHolder: { t: NonNullable<import("./kernel/activate.ts").I18nHolder["t"]> } = { t: (key, params, fallback) => kernelT(key, params, fallback) }; // m5-i18n T2：宿主翻译口 holder（缺省地板；store 就绪后 setModuleT 替换——reload 沿用）
   // 会话树批 T6/T10：三缝内核半边提取为独立函数——harness 返回对象与 ctx.session 装配（loadModules
   // 转发）共用同一实现。graph 是 loadModules 的返回值、闭包捕获 let 变量（调用期读最新值）——activate
   // 期调 fork 会拿 undefined，与 llm「运行期调」同纪律（activate 期 provider 可能未装配同款）。
@@ -572,6 +576,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         cwd: options.cwd ?? process.cwd(),
         commandUi,
         llm: llmHolder,
+        i18n: i18nHolder,
         sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
         treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
         subagent: subagentRunner,      // M4.5 子代理批：ctx.subagent 装配（mounts "subagent" 门）
@@ -1383,6 +1388,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       })();
     },
 
+    setModuleT(t) {
+      i18nHolder.t = t;
+    },
     graph() {
       return graph;
     },
@@ -1599,6 +1607,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           cwd: options.cwd ?? process.cwd(),
           commandUi,
           llm: llmHolder,
+          i18n: i18nHolder, // m5-i18n T2：reload 沿用同一 holder（Unchanged 旧闭包同读新 t）
           ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：reload 同款透传（新图 ctx 装配不缺件）
           ...(options.host !== undefined ? { host: options.host } : {}),
           subagent: subagentRunner, // M4.5 子代理批：reload 后重激活模块的 ctx.subagent 不缺件

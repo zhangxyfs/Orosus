@@ -86,6 +86,7 @@ export interface LoadModulesInput {
   sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10：宿主切换缝（mounts "session.switch" 门）
   subagent?: import("@orosus/contracts/module").SubagentPort;                        // M4.5 子代理批：内核派单执行口（ctx.subagent 装配，mounts "subagent" 门）——harness 闭包构造后注入；缺省不装
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
+  i18n?: import("./activate.ts").I18nHolder;  // m5-i18n T2：宿主翻译口持有器（ctx.t 装配；reload 沿用同一 holder）
   blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
   reuse?: { bus: EventBus; tools: ToolRegistry; overlays?: OverlayEntry[] };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）；overlays 跨代共享（CK-04）
   preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
@@ -159,6 +160,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
     ...(input.sessionSwitch !== undefined ? { sessionSwitch: input.sessionSwitch } : {}),     // 会话树批 T10
     ...(input.subagent !== undefined ? { subagent: input.subagent } : {}),                    // M4.5 子代理批：派单执行口透传
     ...(input.llm !== undefined ? { llm: input.llm } : {}),
+    ...(input.i18n !== undefined ? { i18n: input.i18n } : {}), // m5-i18n T2
     ...(input.preserved !== undefined ? { preserved: input.preserved } : {}),
     ...(input.generations !== undefined ? { generations: input.generations } : {}),
     ...(input.reuse?.overlays !== undefined ? { overlays: input.reuse.overlays } : {}), // CK-04：跨代共享 overlay 注册表

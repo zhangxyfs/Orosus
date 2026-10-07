@@ -19,6 +19,14 @@ export interface LlmHolder {
   impl?: LlmPort;
 }
 
+/** m5-i18n T2：宿主翻译口持有器（llm holder 同款——harness 装配后写入，模块 ctx.t 惰性读取）。 */
+export interface I18nHolder {
+  t: (key: string, params?: Record<string, string | number | boolean | undefined | null>, fallback?: string) => string;
+}
+
+/** 缺省翻译口 = 内核地板 t（宿主未注入窗口期，模块 t 调用仍有话可说——哑系统保险）。 */
+export const kernelFloorT: I18nHolder = { t: (key, params, fallback) => kernelT(key, params, fallback) };
+
 // 导出（m5-btw T1）：harness.llm() 暴露口的兜底复用——impl 未装配窗口同款带内错误，不另造第二份
 export const unassignedLlm: LlmPort = {
   stream: () => (async function* () {
@@ -57,6 +65,8 @@ const rejectingUi = (): CommandUi => ({
 export interface ServiceResolver {
   get(key: string): Promise<unknown>;
   getOptional(key: string): Promise<unknown | undefined>;
+  /** m5-i18n T2：槽 key 枚举（可选前缀过滤）——宿主 store 枚举 i18n.locale.* / i18n.catalog.* 槽用。 */
+  keys(prefix?: string): string[];
   /** 枚举 provider 槽（/model 等内建命令的消费面，D38）——归一化形态。 */
   listProviders(): { name: string; defaultModel?: string }[];
   /** 槽值 ProviderAdapter 经归一化后的形态（函数 → { stream }，缺 defaultModel）——消费侧免判形状（D32；模型发现修订：透传 listModels 尽力能力；/effort 2026-09-25：透传 listThinking） */
@@ -78,6 +88,7 @@ export interface ActivateInput {
   sessionSwitch?: (sessionId: string) => Promise<boolean>;                            // 会话树批 T10 缝三：宿主切换缝（mounts "session.switch" 门；T11 宿主接线）
   subagent?: import("@orosus/contracts/module").SubagentPort;                        // M4.5 子代理缝：内核派单执行口（ctx.subagent 装配，mounts "subagent" 门）；缺省不装（老宿主/无头 = 模块判空降级）
   llm?: LlmHolder;                              // 二级模型口持有器（D39/T4）：harness 装配后写入，运行期读取
+  i18n?: I18nHolder;                            // m5-i18n T2：宿主翻译口持有器（ctx.t 惰性读——缺省 kernelFloorT 地板）
   preserved?: Map<string, PreservedInstance>;   // reload 用：Unchanged 模块跳过 activate，沿用句柄与代际（§5.5）
   generations?: Map<string, number>;            // reload 用：旧代际基线——重新激活者 +1（§5.5 代际按模块实例计）
   overlays?: OverlayEntry[];                    // CK-04：跨代共享 overlay 注册表（reload 换代沿用；缺省本轮新建——启动路径不变）
@@ -271,6 +282,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       },
       log: mlog,
       ui: ownerTagUi(input.commandUi ?? rejectingUi(), def.name),
+      t: (key, params, fallback) => (input.i18n ?? kernelFloorT).t(key, params, fallback), // m5-i18n T2：宿主翻译口（holder 惰性读——缺省内核地板）
       llm: {
         stream: (req) => (input.llm?.impl ?? unassignedLlm).stream(req), // 惰性读取——reload 共用同一 holder 时旧闭包亦指向新实现
         // M4-3 T1b（SW-17）：listModels 同款惰性转发——可选方法，当前 impl 无此能力时模块侧读到 undefined（目录不可用）
@@ -533,6 +545,7 @@ export async function activateModules(input: ActivateInput): Promise<ActivateOut
       return Promise.resolve(s.impl);
     },
     getOptional: (key) => Promise.resolve(committedServices.get(key)?.impl),
+    keys: (prefix) => [...committedServices.keys()].filter((k) => prefix === undefined || k.startsWith(prefix)),
     listProviders: () =>
       [...committedServices.keys()]
         .filter((k) => k.startsWith("provider:"))

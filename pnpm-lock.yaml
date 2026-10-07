@@ -89,6 +89,9 @@ importers:
       '@orosus/hooks':
         specifier: workspace:*
         version: link:../../packages/modules/hooks
+      '@orosus/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@orosus/mcp':
         specifier: workspace:*
         version: link:../../packages/modules/mcp

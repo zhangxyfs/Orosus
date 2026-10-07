@@ -674,6 +674,44 @@ activate(ctx) {
 }
 ```
 
+## LocaleMessages（类型）
+
+语言包/目录的键值表形状（m5-i18n T2/D35 接缝）——外置模块不依赖 @orosus/i18n 包，类型从契约面拿。
+
+```ts
+export type LocaleMessages = Readonly<Record<string, string>>
+```
+
+## LocalePack（接口）
+
+语言包槽 i18n.locale.<tag> 的实现形状：扁平键值表，或带原生显示名的包装（/locale 列表用）。
+
+```ts
+export interface LocalePack { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `native?` | `native?: string` | 原生名（如 日本語 / 한국어 / Русский）——/locale 列表显示用；缺省显示 tag 本身。 |
+| `messages` | `messages: LocaleMessages` | 键值表本体（键全局唯一、命名空间前缀分家）。 |
+## LocalePackImpl（类型）
+
+LocalePackImpl = LocaleMessages | LocalePack（语言包槽的鸭子面——宿主两种都收）。
+
+```ts
+export type LocalePackImpl = LocaleMessages | LocalePack
+```
+
+## LocaleCatalog（类型）
+
+模块目录槽 i18n.catalog.<模块名> 的实现形状：按语言分段的键值表（段键 = BCP-47 tag；键须以模块名前缀）。
+
+```ts
+export type LocaleCatalog = Readonly<Record<string, LocaleMessages>>
+```
+
 ## ModuleContext（接口）
 
 模块唯一的运行时 API 面（§5.1）。L1/L2 下由宿主换成收窄版，模块代码零改动。
@@ -690,6 +728,7 @@ export interface ModuleContext<C = unknown> { … }
 | `configRead` | `configRead(): Promise<C>` | 运行期读取自身配置（无 section 参数——只能读自己的 section）。 |
 | `log` | `readonly log: Logger` | 诊断日志（五级别同形状；码表纪律见 Logger）。 |
 | `ui` | `readonly ui: CommandUi` | 宿主注入的交互 UI（D35 M3 修订/T2）：命令处理器第二参之外，waterfall 监听者（审批询问）同样需要询问口。 无头环境为拒绝式实现（核心四法 ask/askSecret/choose/confirm 抛"无交互环境"）——waterfall 监听者抛错即否决，fail-closed 方向正确。 |
+| `t?` | `readonly t?: (key: string, params?: Record<string, string \| number \| boolean \| undefined \| null>, fallback?: string) => string` | 翻译口（m5-i18n T2）：宿主注入的当前语言 t——模块不 import 实现包（D35 接缝）。 外置三档制（方案 §5.4）：① 字面量直写不调 t（恒显作者语言）；② 自带目录（推荐）——串走 `t("mymodule.key", params, "缺省文案")`（fallback 参数即作者缺省文案，永不裸显 key）， activate 时 `ctx.provide("i18n.catalog.mymodule", { "zh-CN": {...}, "en-US": {...} })` （每模块一槽，键须以模块名前缀，槽名 = 模块名）；③ 语言包补全——语言包全局扁键表收录 mymodule.* 即生效。 命名登记（规则 1）：i18n.locale.*（语言包，每语言单所有者）/ i18n.catalog.*（模块目录，每模块单所有者）。 可选成员：宿主注入（内核装配恒有——含地板兜底）；外部测试桩可省。 |
 | `llm` | `readonly llm: LlmPort` | 二级 LLM 调用口（D39）：运行期调用时解析当前 provider/model（activate 期经惰性 holder 注入）。 compaction 摘要等消费方应仅在运行期调用（activate 期 provider 可能尚未装配）。 |
 | `services` | `readonly services: {` | 能力解析（硬依赖 get／可选 getOptional——迟到绑定，判空降级）。 |
 | `provide` | `provide(key: string, impl: unknown): void` | 挂能力实现（单所有者槽）。 |
@@ -705,6 +744,9 @@ export interface ModuleContext<C = unknown> { … }
 
 | 方法 | 参 | 说明 |
 |---|---|---|
+| `t` | `key` | 带命名空间前缀的键（自带目录档须以模块名前缀）。 |
+| `t` | `params` | 插值形参（{n} 类；数值参与复数选形）。 |
+| `t` | `fallback` | 作者缺省文案：目录缺键时返回它（永不裸显 key）。 |
 | `provide` | `key` | 能力 key；必须 ⊆ provides 声明（唯一例外 = 核心保留槽）；建议 `<模块名>.<能力>`。 |
 | `provide` | `impl` | 实现对象（消费方自行声明接口形状）。 |
 
