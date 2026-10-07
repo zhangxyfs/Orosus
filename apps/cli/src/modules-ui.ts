@@ -69,7 +69,7 @@ export const applyModulePresetImpl = async (deps: ModulesUiDeps, preset: "full" 
     try {
       setModuleEnabledInConfig(name, preset === "minimal" ? false : true, moduleConfigFileFor(name, h));
     } catch (err) {
-      h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) });
+      h.log("host.preset.write-failed", `预设写盘失败：${name}`, { preset, error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
       failed.push(name);
     }
   }
@@ -82,7 +82,7 @@ export const applyModulePresetImpl = async (deps: ModulesUiDeps, preset: "full" 
   try {
     await h.reload();
   } catch (err) {
-    h.log("host.preset.reload-failed", `预设 reload 失败（已写盘——可 /reload 或重启对齐）`, { preset, error: String(err instanceof Error ? err.message : err) });
+    h.log("host.preset.reload-failed", `预设 reload 失败（已写盘——可 /reload 或重启对齐）`, { preset, error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
     return { failed: [...failed, "(reload)"] };
   }
   closeGoneModuleUi(deps, namesBefore);

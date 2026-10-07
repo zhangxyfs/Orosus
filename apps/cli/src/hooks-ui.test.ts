@@ -6,7 +6,7 @@ import { parse } from "smol-toml";
 import { buildHookBuckets, hookDisplayOf, hookStatusOf, hooksFace, injectionRowsOf, rowLabel, setHookDisabled, trustProjectHooks } from "./hooks-ui.ts";
 import { injectionFoldLabel } from "./render.ts";
 import { renderEvent } from "./render.ts";
-import { SETTINGS_ITEMS } from "./settings-ui.ts";
+import { settingsItemsBase as SETTINGS_ITEMS } from "./settings-ui.ts";
 
 let dir: string;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); });
@@ -25,9 +25,9 @@ timeout = 30
 
 describe("/settings 钩子面板（m5-hooks T10）", () => {
 	it("① 根列表含钩子项（技能后、MCP 前——用户拍板不设 /hooks 命令）", async () => {
-		const i = SETTINGS_ITEMS.findIndex((x) => x.startsWith("技能"));
-		const j = SETTINGS_ITEMS.findIndex((x) => x.startsWith("钩子"));
-		const k = SETTINGS_ITEMS.findIndex((x) => x.startsWith("MCP"));
+		const i = SETTINGS_ITEMS().findIndex((x) => x.startsWith("技能"));
+		const j = SETTINGS_ITEMS().findIndex((x) => x.startsWith("钩子"));
+		const k = SETTINGS_ITEMS().findIndex((x) => x.startsWith("MCP"));
 		expect(i).toBeGreaterThanOrEqual(0);
 		expect(j).toBe(i + 1);
 		expect(k).toBe(j + 1);

@@ -10,19 +10,22 @@ import { zhCNPanels } from "./zh-CN/panels.ts";
 import { zhCNMcp } from "./zh-CN/mcp.ts";
 import { zhCNMenus } from "./zh-CN/menus.ts";
 import { zhCNNotices } from "./zh-CN/notices.ts";
+import { zhCNSettings } from "./zh-CN/settings.ts";
 import { zhTWInput } from "./zh-TW/input.ts";
 import { zhTWPanels } from "./zh-TW/panels.ts";
 import { zhTWMcp } from "./zh-TW/mcp.ts";
 import { zhTWMenus } from "./zh-TW/menus.ts";
 import { zhTWNotices } from "./zh-TW/notices.ts";
+import { zhTWSettings } from "./zh-TW/settings.ts";
 import { enUSInput } from "./en-US/input.ts";
 import { enUSPanels } from "./en-US/panels.ts";
 import { enUSMcp } from "./en-US/mcp.ts";
 import { enUSMenus } from "./en-US/menus.ts";
 import { enUSNotices } from "./en-US/notices.ts";
+import { enUSSettings } from "./en-US/settings.ts";
 
 export const mainTables = (): Record<string, Messages> => ({
-	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices },
-	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices },
-	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices },
+	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices, ...zhCNSettings },
+	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices, ...zhTWSettings },
+	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices, ...enUSSettings },
 });

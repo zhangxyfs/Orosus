@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { scanSessionFiles, locateSessionFile, readSessionHead, type SessionFileEntry } from "@orosus/core";
+import { t } from "./i18n/app.ts";
 
 /** 会话列表条目（M4-2 B9 用户拉前，2026-09-19 走查人性化）：title 优先 session/label（首轮问答自动标题），
  *  兜底首问文本；创建时间 = birthtime（Windows 可得）回退 mtime。 */
@@ -16,21 +17,21 @@ export function readTitle(file: string, id: string): string {
   const head = readSessionHead(file);
   // 未命名兜底「新会话」不裸显 sid（2026-09-25 拍板口径补齐——当时只改了状态卡，列表漏网裸 id；
   // 2026-10-01 空会话清理批一并收口）。/settings 诊断 dump 是另一路径仍保留 sid
-  return head?.label ?? head?.firstUser ?? "新会话";
+  return head?.label ?? head?.firstUser ?? t("sessions.unnamed");
 }
 
 /** 相对时间（走查要求：几年/月/天/小时/分钟前——不显示绝对时间戳）。 */
 export function relativeTime(then: number, now = Date.now()): string {
   const s = Math.max(0, Math.floor((now - then) / 1000));
-  if (s < 60) return "刚刚";
+  if (s < 60) return t("sessions.rel.justNow");
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分钟前`;
+  if (m < 60) return t("sessions.rel.minutes", { m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
+  if (h < 24) return t("sessions.rel.hours", { h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d} 天前`;
-  if (d < 365) return `${Math.floor(d / 30)} 个月前`;
-  return `${Math.floor(d / 365)} 年前`;
+  if (d < 30) return t("sessions.rel.days", { d });
+  if (d < 365) return t("sessions.rel.months", { n: Math.floor(d / 30) });
+  return t("sessions.rel.years", { n: Math.floor(d / 365) });
 }
 
 /** /sessions 列表（B9 形态；2026-09-30 用户拍板撤「前 10」帽——picker 可滚动，全量按创建时间
@@ -58,7 +59,7 @@ const RESET = "\x1b[0m";
 /** 列表展示：`标题 · N 分钟前`，当前会话整行加粗青色（走查要求：加重/换色）。bucket = 当前项目桶（#17）。 */
 export function formatSessions(root: string, currentSessionId?: string, bucket?: string): string {
   const sessions = listSessions(root, bucket);
-  if (sessions.length === 0) return "（暂无会话——发送第一条消息即创建）";
+  if (sessions.length === 0) return t("sessions.empty");
   return sessions
     .map((s, i) => {
       const line = `  ${i + 1}. ${s.title} · ${relativeTime(s.createdAtMs)}`;
@@ -141,7 +142,7 @@ export async function pickSessionNumber(
     }
   }
   for (;;) {
-    const ans = (await ask("输入序号恢复（直接回车 = 取消）")).trim();
+    const ans = (await ask(t("sessions.pick.prompt"))).trim();
     if (ans === "") return undefined;
     if (/^\d+$/.test(ans)) {
       const n = Number(ans);

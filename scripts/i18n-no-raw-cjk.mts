@@ -25,7 +25,7 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/tui/fullapp-types.ts", max: 0, note: "T5 清零（elapsed/diag.more 族已 t() 化）" },
 	{ file: "apps/cli/src/tui/fullapp-frame.ts", max: 0, note: "T4 试点清零（唯一残余 = logWarn 诊断串走 i18n:diag 豁免）" },
 	{ file: "apps/cli/src/tui/fullapp-panels.ts", max: 0, note: "T5 清零（尾行/状态页/网络页/任务页已 t() 化）" },
-	{ file: "apps/cli/src/modules-ui.ts", max: 2, note: "T5 入册；残余 = 预设写盘/reload 两 toast（T8 设置族）" },
+	{ file: "apps/cli/src/modules-ui.ts", max: 0, note: "T8 清零（预设两串为 h.log 诊断——diag 豁免）" },
 	{ file: "apps/cli/src/proxy-env.ts", max: 0, note: "T5 清零" },
 	{ file: "apps/cli/src/mcp-ui.ts", max: 8, note: "T5 入册；残余 = 键帽行八处（清单标不翻-键名——Alt+N 添加等动词面走查定夺）" },
 	{ file: "apps/cli/src/subagent-status.ts", max: 0, note: "T5 清零（agent 组全族 + sub.status.failed 补账）" },
@@ -38,6 +38,10 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/altpaste.ts", max: 0, note: "T7 清零" },
 	{ file: "apps/cli/src/module-deps.ts", max: 0, note: "T7 清零（挂/卸载阻断两由）" },
 	{ file: "apps/cli/src/module-toggle-result.ts", max: 0, note: "T7 清零（动词键 + {list/无} 模板缺省）" },
+	{ file: "apps/cli/src/settings-ui.ts", max: 0, note: "T8 清零（根列表/子代理子菜单/导入族/busy·reloaded 串）" },
+	{ file: "apps/cli/src/usage-text.ts", max: 0, note: "T8 清零（三用量卡全族——全角填充随表值）" },
+	{ file: "apps/cli/src/compaction-view.ts", max: 0, note: "T8 清零（compact.* 四键）" },
+	{ file: "apps/cli/src/sessions.ts", max: 0, note: "T8 清零（相对时间/空态/序号提示/未命名）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

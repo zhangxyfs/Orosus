@@ -7,6 +7,7 @@ import { formatBytes, dirUsage } from "./tuicfg.ts";
 import { configFace } from "./config-face.ts";
 import { realReadModel } from "./startup.ts";
 import type { PanelData } from "./tui/fullapp.ts";
+import { t } from "./i18n/app.ts";
 
 /** 路径压缩（工作目录 KV——v1.11 三档：家目录 → ~ / 头+…+尾两级 / 只留尾两段）。
  *  m5-split-main T3：自 main.ts 搬入（纯函数零依赖）。 */
@@ -80,13 +81,13 @@ export const diskUsageText = (): string => {
 		const u = dirUsage(join(home, name));
 		total += u.bytes;
 		totalFiles += u.files;
-		lines.push(`${name.padEnd(10)}${formatBytes(u.bytes).padStart(10)}   ${u.files} 个文件`);
+		lines.push(`${name.padEnd(10)}${formatBytes(u.bytes).padStart(10)}   ${t("usage.disk.files", { n: u.files })}`);
 	}
 	lines.push("");
-	lines.push(`${"合计".padEnd(10)}${formatBytes(total).padStart(10)}   ${totalFiles} 个文件`);
+	lines.push(`${t("usage.disk.total").padEnd(10)}${formatBytes(total).padStart(10)}   ${t("usage.disk.files", { n: totalFiles })}`);
 	lines.push("");
-	lines.push(`根目录：${home}`);
-	lines.push("清理口径：cache 可安全删除（目录缓存可再拉取）；tmp 为粘贴图片暂存，重启不清、可手动清；sessions 是会话历史（/sessions prune 可清理）。");
+	lines.push(t("usage.disk.root", { home }));
+	lines.push(t("usage.disk.cleanup"));
 	return lines.join("\n");
 };
 
@@ -96,7 +97,7 @@ export const ctxUsageText = (p: PanelData | undefined): string => {
 	const cfg = configFace();
 	const model = (() => {
 		const v = realReadModel(process.cwd())() ?? "";
-		if (v === "") return "（未配置）";
+		if (v === "") return t("panel.unconfigured");
 		// CT-02（2026-09-28 code review）：首斜杠切分取模型段——嵌套模型 id（目录侧 openrouter 族真实产出
 		// 如 openai/gpt-4o）旧 split("/").pop() 只剩尾段丢前缀；与 contracts 新口径一致（首个 "/" 前 =
 		// 提供商名、其余整体 = 模型 id）
@@ -106,15 +107,15 @@ export const ctxUsageText = (p: PanelData | undefined): string => {
 	const used = p?.tokens.input ?? 0;
 	const pct = cfg.contextWindow > 0 ? Math.min(100, Math.round((used / cfg.contextWindow) * 100)) : 0;
 	return [
-		"上下文用量",
+		t("settings.title.ctx"),
 		"",
-		`模型　　　${model}`,
-		`窗口　　　${cfg.contextWindow.toLocaleString()} tokens`,
-		`已用　　　~${used.toLocaleString()} tokens（${pct}%）${p?.tokens.postCompaction === true ? "（压缩后估算——下一条消息发出后按实际请求刷新）" : ""}`,
-		`输入累计　↑ ${(p?.tokens.input ?? 0).toLocaleString()}`,
-		`输出累计　↓ ${(p?.tokens.output ?? 0).toLocaleString()}`,
+		t("usage.ctx.model", { model }),
+		t("usage.ctx.window", { n: cfg.contextWindow.toLocaleString() }),
+		t("usage.ctx.used", { n: used.toLocaleString(), pct, postCompaction: p?.tokens.postCompaction === true ? "1" : undefined }),
+		t("usage.ctx.input", { n: (p?.tokens.input ?? 0).toLocaleString() }),
+		t("usage.ctx.output", { n: (p?.tokens.output ?? 0).toLocaleString() }),
 		"",
-		"口径：已用 = 最近一次请求的输入规模（上下文体量；压缩后至下一条消息前 = 压缩后投影估算）；累计 = 本会话末条 usage。上下文增长到阈值会自动压缩（/compact 可手动）。",
+		t("usage.ctx.note"),
 	].join("\n");
 };
 
@@ -122,11 +123,11 @@ export const ctxUsageText = (p: PanelData | undefined): string => {
 export const tokenUsageText = async (h: Harness): Promise<string> => {
 	try {
 		const u = await h.usage();
-		const lines = [`当前会话：input ${u.current.input} / output ${u.current.output} tokens`];
-		if (u.lifetime !== undefined) lines.push(`累计（当前项目 ${u.lifetime.sessions} 场会话）：input ${u.lifetime.input} / output ${u.lifetime.output} tokens`);
+		const lines = [t("usage.tokens.current", { i: u.current.input, o: u.current.output })];
+		if (u.lifetime !== undefined) lines.push(t("usage.tokens.lifetime", { n: u.lifetime.sessions, i: u.lifetime.input, o: u.lifetime.output }));
 		return lines.join("\n");
 	} catch (err) {
-		return `[错误] ${err instanceof Error ? err.message : String(err)}`;
+		return t("usage.tokens.error", { err: err instanceof Error ? err.message : String(err) });
 	}
 };
 
@@ -134,9 +135,9 @@ export const tokenUsageText = async (h: Harness): Promise<string> => {
 export const runtimeStatusText = (h: Harness): string => {
 	const st = h.status();
 	return [
-		`model: ${st.model}${st.overridden ? "（运行期覆盖）" : ""}`,
+		`model: ${st.model}${st.overridden ? t("usage.runtime.override") : ""}`,
 		...(st.effort !== undefined ? [`effort: ${st.effort}`] : []), // /effort 已设才显示（2026-09-25）
 		`session: ${st.sessionId}`,
-		`模块图: active ${st.modules.active} / failed ${st.modules.failed} / discovered ${st.modules.discovered}`,
+		t("usage.runtime.modules", { a: st.modules.active, f: st.modules.failed, d: st.modules.discovered }),
 	].join("\n");
 };
