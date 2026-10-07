@@ -198,22 +198,27 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     expect(s.stateRef.p3.stage).toBe("opts");
   });
 
-  it("⑨ 渲染定高钉：三页与各状态下弹窗总行数恒定（浮层防闪烁纪律——条件性增删行即闪烁源）", async () => {
+  it("⑨ 渲染定高钉（2026-10-07 框高随内容收缩后语义）：同状态重绘恒定 + notice 出现/消失不跳框（恒占位）+ 第 2 页两态恒撑满；页/子态切换框随内容（内容少不再大片空白）", async () => {
     const { deps } = mkDeps();
     const s = new OnboardingSession(deps);
     const h = (sess: OnboardingSession) => sess.render(120, 30).lines.length;
     const h1 = h(s);
+    expect(h(s)).toBe(h1); // 同状态重绘恒定（防闪烁实质）
+    expect(h1).toBeLessThan(24); // p1 内容 ~8 行 → 框收缩（旧恒 24 大片空白）
     s.handleKey("ctrl+n"); // p2 list
-    const h2 = h(s);
-    s.handleKey("enter"); // p2 key 态（列表收窄 4 行）
-    const h3 = h(s);
+    const h2list = h(s);
+    s.handleKey("enter"); // p2 key 态
+    expect(h(s)).toBe(h2list); // 第 2 页两态恒撑满（key 态列表动态 bodyH−5 布局以满高为准）
     s.handleKey("backspace"); // 回 list
     s.handleKey("down"); s.handleKey("down"); s.handleKey("enter"); type(s, "zk"); s.handleKey("enter");
-    s.handleKey("ctrl+n"); // p3
+    expect(h(s)).toBe(h2list); // 配置完成 notice 出现不跳框
+    expect(h2list).toBe(23); // 撑满 = 6 框架行 + bodyH 17（旧口径上限）
+    s.handleKey("ctrl+n"); // p3 视觉页（opts）
+    const h3 = h(s);
+    expect(h(s)).toBe(h3);
+    s.handleKey("ctrl+n"); // p4 网络搜索（opts）
     const h4 = h(s);
-    s.handleKey("enter"); // llm 子态
-    const h5 = h(s);
-    expect(new Set([h1, h2, h3, h4, h5]).size).toBe(1);
+    expect(h(s)).toBe(h4);
     // 小终端等比收窄（760×540 原型值按字符栅格适配——SW-22）
     const small = s.render(80, 20);
     expect(small.lines.length).toBeLessThanOrEqual(18);
@@ -251,6 +256,42 @@ describe("首次使用引导弹窗（M4-3 T1d——施工基准 onboarding 原�
     s.handleKey("enter");
     expect(s.stateRef.p2.configured).toContain("openai");
   });
+
+  it("⑫ p4 排板钉（2026-10-07 用户走查）：opts 说明行与选项间空行、框高随内容收缩（内容少不再大片空白）；models/provs 长清单按框高钳制 + 快捷键行钉底（旧全量 forEach 超高被裁尾丢提示行）", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, envKey: `P${i}_KEY`, baseUrl: "https://x", type: "openai" as const }));
+    const { deps } = mkDeps({ providers: many, listModels: async () => Array.from({ length: 30 }, (_, i) => `m${i}`) });
+    const s = new OnboardingSession(deps, { configured: many.map((m) => m.id), active: "p0" });
+    s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); s.handleKey("ctrl+n"); // → p4 opts
+    const g = s.render(120, 30);
+    const bodyH = g.lines.length - 6;
+    const body = g.lines.slice(3, 3 + bodyH).map((l) => stripAnsi(l));
+    expect(bodyH).toBeLessThan(17); // opts 内容 7 行 → 框收缩（旧恒 bodyH=17 下方大片空白）
+    const lead = body.findIndex((l) => l.includes("搜索后端按"));
+    expect(body[lead + 1]!.replace(/│/g, "").trim()).toBe(""); // 说明行与选项间空行（剥框线后空）
+    expect(body[lead + 2]).toContain("LLM Web Search");
+    expect(body[bodyH - 1]!.replace(/│/g, "").trim()).toBe(""); // notice 恒占位 = 正文末行
+    // llm → 另选模型 → provs（12 家已配置全显；快捷键行钉底）
+    s.handleKey("enter"); // llm 子态
+    s.handleKey("down"); s.handleKey("enter"); // provs 子态
+    const gp = s.render(120, 30);
+    const bH = gp.lines.length - 6;
+    const bp = gp.lines.slice(3, 3 + bH).map((l) => stripAnsi(l));
+    expect(bp.filter((l) => /P\d+/.test(l))).toHaveLength(12); // 12 家全显（provs 行仅名字；= 满高预算 vis 12）
+    expect(bp[bH - 2]).toContain("Enter 选提供商"); // 快捷键行钉底（notice 上一行）
+    // models：30 个模型钳到满高预算 vis=bodyHFull−5（含函数头说明+空行两行）、窗口跟随选中项、快捷键行钉底
+    s.handleKey("enter"); // → models（异步清单）
+    await new Promise((r) => setTimeout(r, 0));
+    const gm = s.render(120, 30);
+    const mH = gm.lines.length - 6;
+    expect(mH).toBe(17); // 长清单 → 满框
+    const bm = gm.lines.slice(3, 3 + mH).map((l) => stripAnsi(l));
+    expect(bm.filter((l) => /m\d+/.test(l))).toHaveLength(12); // vis = 17−5（说明+空行+铅行+快捷键+notice）
+    expect(bm[mH - 2]).toContain("Enter 钉住");
+    for (let i = 0; i < 14; i++) s.handleKey("down"); // sel=14 → 窗口跟随（start=13，选中项落第二行）
+    const gm2 = s.render(120, 30);
+    expect(stripAnsi(gm2.lines[6]!)).toContain("m13"); // 首行 = start 项
+    expect(stripAnsi(gm2.lines[7]!)).toContain("▌m14"); // 选中项（▌ 高亮）落列表第二行
+  });
 });
 
 describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最小设计尺寸 40×12」置于终端实际尺寸之上：cols≤40 时 mw=40 ≥ cols、col=0 合成行写满底行右角格，conhost 无 DECAWM 自动换行滚屏；P1 body 恒 7 行只垫不裁使 lines 超 mh 预算。修复后 col+width ≤ cols−1 恒成立〔popuplayout availW=cols−1 同口径〕、body 裁到 bodyH）", () => {
@@ -286,12 +327,14 @@ describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最�
     expect(g.lines.length).toBeGreaterThanOrEqual(6); // 退化也保住框结构（顶框/头/底框可见）
   });
 
-	it("③ 大终端零变化：cols≥46 / rows≥15 与旧口径同值（96×24 基准不回归）", () => {
+	it("③ 大终端零变化：cols≥46 宽度与旧口径同值（96 基准不回归）；2026-10-07 框高随内容收缩后行数 ≤ 旧恒值、第 2 页仍恒撑满", () => {
 		const { deps } = mkDeps();
 		const s = new OnboardingSession(deps);
 		expect(s.render(104, 26).width).toBe(96); // max(40, min(96, 96)) 同旧
 		expect(s.render(60, 30).width).toBe(52); // max(40, 52) 同旧
-		expect(s.render(104, 20).lines).toHaveLength(17); // mh=18 → bodyH=11 ≥ P1 的 7 行：定高结构同旧
+		expect(s.render(104, 20).lines.length).toBeLessThanOrEqual(17); // 收缩后 ≤ 旧恒 bodyH=11 档（P1 实际 8 行内容 → 14）
+		s.handleKey("ctrl+n");
+		expect(s.render(104, 20).lines).toHaveLength(17); // 第 2 页恒撑满（列表分页/输入块钉底都以满高布局）
 	});
 
 	it("④ 贴输入框上缘 + 与输入框同宽同左缘（2026-10-02 拍板，推翻居中+固定 96 宽）：dock = 输入框几何 → 底边贴其上一行、col=0、width=输入框宽；不传保持居中", () => {
@@ -348,6 +391,31 @@ describe("几何钳制（CTU-05 回归钉 2026-09-28——下限钳制把「最�
 		const g2 = s.render(120, 30);
 		expect(stripAnsi(g2.lines[3]!)).toContain("P15"); // 页 2 首行（0..pageSize−1 在页 1）
 		expect(s.stateRef.p2.pageSize).toBe(pageSize); // 同尺寸页宽稳定
+	});
+
+	it("⑦ p2 key 态列表撑满 + 输入块钉底（2026-10-07 用户走查：旧收窄恒 4 行大半正文空白、静默行悬中腰）：列表能显多少显多少、快捷键/空行/粘贴提示/静默盲输/notice 五行恒贴底", () => {
+		const many = Array.from({ length: 30 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, envKey: `P${i}_KEY`, baseUrl: "https://x", type: "openai" as const }));
+		const { deps } = mkDeps({ providers: many });
+		const s = new OnboardingSession(deps);
+		s.handleKey("ctrl+n"); // → p2 列表态
+		for (let i = 0; i < 6; i++) s.handleKey("down"); // sel=6（窗口跟随：选中项落列表第二行）
+		s.handleKey("enter"); // → key 态
+		const g = s.render(120, 30);
+		const bodyH = g.lines.length - 6;
+		const body = g.lines.slice(3, 3 + bodyH).map((l) => stripAnsi(l));
+		const vis = bodyH - 5; // 列表区 = 正文 − 快捷键/空行/粘贴/静默/notice 五行
+		const rows = body.filter((l) => l.includes("_KEY"));
+		expect(rows).toHaveLength(vis); // 列表撑满剩余正文（旧：恒 4 行）
+		expect(rows[0]).toContain("P5");
+		expect(rows[1]).toContain("P6"); // 窗口跟随选中项
+		expect(body[bodyH - 5]).toContain("↑ ↓ 换提供商"); // 快捷键行
+		expect(body[bodyH - 4]!.replace(/│/g, "").trim()).toBe(""); // 空行
+		expect(body[bodyH - 3]).toContain("粘贴 P6 的 API Key"); // 粘贴提示行
+		expect(body[bodyH - 2]).toContain("静默盲输"); // 静默盲输行贴底（正文倒数第二行）
+		expect(body[bodyH - 1]!.replace(/│/g, "").trim()).toBe(""); // notice 占位 = 正文末行
+		expect(stripAnsi(g.lines[3 + bodyH]!)).toMatch(/^│─+│$/); // 钉底成立：正文下一行 = 灰色分隔线
+		// 小终端退化：bodyH≤5 时 vis 钳 1、裁尾兜底不炸
+		expect(() => s.render(80, 12)).not.toThrow();
 	});
 });
 

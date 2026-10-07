@@ -482,9 +482,24 @@ export class OnboardingSession {
     const mw = docked
       ? Math.max(4, Math.min(dock!.width, cols - 1))
       : Math.max(Math.min(40, cols - 1), Math.min(96, cols - 8));
-    const mh = Math.max(Math.min(12, rows), Math.min(24, rows - 2));
+    const cap = Math.max(Math.min(12, rows), Math.min(24, rows - 2)); // 框高上限（rows 分支口径同旧恒值）
     const inner = Math.max(0, mw - 2);
-    const bodyH = mh - 7; // 框 2 + 头 2 + 头下分隔 1 + 脚下分隔 1 + 脚 1
+    // 框高随内容收缩（2026-10-07 用户走查「内容的行数应该根据框体高度自动判断」——旧恒 cap 档的框
+    // 装 p4 opts 六七行内容、下方大片空白）：第 2 页两态恒撑满（分页页宽与输入块钉底都以满高布局，
+    // 且 bodyP2 渲染期回写 pageSize/pageIdx 不可探测重入），其余页先按满高试渲染一遍取实际内容行数
+    // 定框；同状态重绘行数恒定（防闪烁的实质），页/子态切换框随内容。钳制类列表显示行数 =
+    // min(清单长, 满高预算) 与框高互为收敛（短清单 → 小框 → 显示全部；长清单 → 满框 → 预算上限），
+    // 试渲染与正式渲染稳定同形。
+    const bodyHFull = cap - 7;
+    let bodyH = bodyHFull;
+    if (this.page !== 2) {
+      const probe: string[] = [];
+      if (this.page === 1) this.bodyP1(probe, bodyHFull, inner);
+      else if (this.page === 3) this.bodyPV(probe, bodyHFull, inner);
+      else if (this.page === 4) this.bodyP3(probe, bodyHFull, inner);
+      else this.bodyPM(probe, bodyHFull, inner);
+      bodyH = Math.max(1, Math.min(bodyHFull, probe.length));
+    }
     const bc = "accent";
     const box = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, inner) + theme.fg(bc, "│"));
     const body: string[] = [];
@@ -508,7 +523,7 @@ export class OnboardingSession {
     ];
     const row = docked
       ? Math.max(0, dock!.bottom - lines.length) // 底边贴输入框上缘（弹窗 ╰ 在 divRow−1，╭ 输入框顶边在 divRow）
-      : Math.max(0, Math.floor((rows - mh) / 2));
+      : Math.max(0, Math.floor((rows - lines.length) / 2)); // 居中按实际框高（收缩后不按上限偏移）
     const col = docked ? 0 : Math.max(0, Math.floor((cols - mw) / 2)); // 左缘对齐输入框（左栏 col=0）
     return { lines, row, col, width: mw };
   }
@@ -581,12 +596,16 @@ export class OnboardingSession {
     const pages = Math.max(1, Math.ceil(providers.length / p.pageSize));
     p.pageIdx = Math.max(0, Math.min(pages - 1, Math.floor(p.sel / p.pageSize)));
     if (keyMode) {
-      // Key 输入态下列表收窄为 4 行（窗口跟随选中项）——弹窗定高不顶撑（SW-22）
-      const vis = 4;
+      // Key 输入态：列表撑满剩余正文（窗口跟随选中项），底部块恒钉底——快捷键提示/空行/粘贴提示/
+      // 静默盲输行/notice 占位共 5 行（列表态「垫行 + 两行钉底」同款纪律，弹窗定高不顶撑 SW-22）。
+      // 2026-10-07 用户走查：旧「收窄为 4 行」把大半正文垫成空白、输入区悬在中腰——列表能显多少显多少。
+      const reserved = 5;
+      const vis = Math.max(1, bodyH - reserved);
       const start = Math.max(0, Math.min(p.sel - 1, providers.length - vis));
       for (let gi = start; gi < Math.min(start + vis, providers.length); gi++) {
         out.push(this.providerRow(gi, inner));
       }
+      while (out.length < bodyH - reserved) out.push(""); // 列表不足垫空——底部块恒贴脚下分隔线
       out.push(theme.dim("↑ ↓ 换提供商 · Enter 确认 · Backspace 删除 / 退出输入"));
       const prov = providers[p.sel];
       if (prov !== undefined) {
@@ -638,18 +657,30 @@ export class OnboardingSession {
       for (let i = shown.length; i < VISION_LIST_ROWS; i++) out.push(""); // 恒定 5 行空槽留白（防闪烁铁律）
       if (rows.length > VISION_LIST_ROWS) out.push(theme.dim(`  ↑ 还有 ${rows.length - VISION_LIST_ROWS} 个未显示`));
     }
-    const n = this.noticeLine(p.noticeKind, p.notice);
-    if (n !== "") { out.push(""); out.push(n); }
+    // notice 恒占位两行（空则空行）——框高随内容收缩后，notice 出现/消失不得再引起框高跳动
+    out.push("");
+    out.push(this.noticeLine(p.noticeKind, p.notice));
   }
 
   private bodyP3(out: string[], bodyH: number, inner: number): void {
     const p = this.p3;
     out.push(theme.dim("搜索后端按「LLM → Tavily → Brave」自动降级；此处选择会写入配置，之后随时可在 /settings 里改。"));
+    out.push(""); // 说明行与下方内容（选项/子态铅行）间空行（2026-10-07 用户走查）——各子态统一
     const optRow = (o: (typeof WEB_OPTS)[number], i: number) => {
       const desc = o.id === "llm" && p.model !== null ? `已钉住模型：${p.model}` : o.desc;
-      return truncateToWidth(this.prow(i === p.sel, p.chosen === o.id, `${o.name}${theme.dim(` · ${desc}`)}`), inner);
+      return truncateToWidth(this.prow(i === p.sel, false, `${o.name}${theme.dim(` · ${desc}`)}`), inner);
     };
     const stageLead = (t: string) => out.push(theme.fg("info", t));
+    // 长清单按框高钳制 + 窗口跟随选中项 + 快捷键行钉底（2026-10-07 与 key 输入态同款纪律——
+    // 旧全量 forEach 超高被 render 兜底裁尾，快捷键行/notice 整行丢失不可见）。
+    // 预算五行 = 函数头说明行 + 空行 + stageLead 铅行 + 快捷键 + notice——漏算公共头行会把
+    // 钉底行顶进裁尾区（首版 −3 即犯此错：19 行内容被裁掉快捷键行）。
+    const clipList = (items: string[], render: (gi: number) => string, hint: string): void => {
+      const vis = Math.max(1, bodyH - 5);
+      const start = Math.max(0, Math.min(p.sel - 1, items.length - vis));
+      for (let gi = start; gi < Math.min(start + vis, items.length); gi++) out.push(render(gi));
+      out.push(theme.dim(hint));
+    };
     if (p.stage === "opts") {
       WEB_OPTS.forEach((o, i) => out.push(optRow(o, i)));
       out.push(theme.dim("↑ ↓ 移动 · Enter 选择"));
@@ -661,13 +692,11 @@ export class OnboardingSession {
     } else if (p.stage === "provs") {
       stageLead("LLM Web Search · 选择提供商（限第 2 页已配置的）");
       const conf = this.configuredProviders();
-      conf.forEach((pr, i) => out.push(truncateToWidth(this.prow(i === p.sel, false, pr.name, this.p2.active === pr.id), inner)));
-      out.push(theme.dim("↑ ↓ 移动 · Enter 选提供商 · Backspace 返回"));
+      clipList(conf.map((x) => x.name), (gi) => truncateToWidth(this.prow(gi === p.sel, false, conf[gi]!.name, this.p2.active === conf[gi]!.id), inner), "↑ ↓ 移动 · Enter 选提供商 · Backspace 返回");
     } else if (p.stage === "models") {
       stageLead(`LLM Web Search · 从 ${this.provById(p.provOpt ?? "").name} 的模型中选择`);
       if (p.models.length === 0) out.push(theme.dim("（正在加载模型清单…）"));
-      else p.models.forEach((m, i) => out.push(truncateToWidth(this.prow(i === p.sel, false, m), inner)));
-      out.push(theme.dim("↑ ↓ 移动 · Enter 钉住 · Backspace 返回"));
+      else clipList(p.models, (gi) => truncateToWidth(this.prow(gi === p.sel, false, p.models[gi]!), inner), "↑ ↓ 移动 · Enter 钉住 · Backspace 返回");
     } else if (p.stage === "manual") {
       stageLead(`LLM Web Search · ${this.provById(p.provOpt ?? "").name} 的模型清单拉取失败——手动输入模型名`);
       const draft = p.drafts["__manual"] ?? "";
@@ -705,7 +734,8 @@ export class OnboardingSession {
     out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
     out.push(theme.dim("    开启后逐条优化内容（乱才动、保事实）并重写摘要，"));
     out.push(theme.dim("    更干净但消耗 token（一次性，按导入量）。"));
-    const n = this.noticeLine(p.noticeKind, p.notice);
-    if (n !== "") { out.push(""); out.push(n); }
+    // notice 恒占位两行（空则空行）——同 bodyPV：框高收缩后 notice 不得引起框高跳动
+    out.push("");
+    out.push(this.noticeLine(p.noticeKind, p.notice));
   }
 }
