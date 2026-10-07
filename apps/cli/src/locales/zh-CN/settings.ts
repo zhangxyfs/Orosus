@@ -91,4 +91,10 @@ export const zhCNSettings: Record<string, string> = {
 	"sessions.rel.days": "{d} 天前",
 	"sessions.rel.months": "{n} 个月前",
 	"sessions.rel.years": "{n} 年前",
+
+	"settings.items.update": "更新检查",
+	"update.setting.on": "开（启动时自动检测新版本）",
+	"update.setting.off": "关（不联网检测；orosus upgrade 手动口不受影响）",
+	"update.setting.writtenOn": "已开启更新检查——下次启动生效",
+	"update.setting.writtenOff": "已关闭更新检查——横幅与自动检测停用，orosus upgrade 仍可用",
 };

@@ -91,4 +91,10 @@ export const zhTWSettings: Record<string, string> = {
 	"sessions.rel.days": "{d} 天前",
 	"sessions.rel.months": "{n} 個月前",
 	"sessions.rel.years": "{n} 年前",
+
+	"settings.items.update": "更新檢查",
+	"update.setting.on": "開（啟動時自動偵測新版本）",
+	"update.setting.off": "關（不連網偵測；orosus upgrade 手動入口不受影響）",
+	"update.setting.writtenOn": "已開啟更新檢查——下次啟動生效",
+	"update.setting.writtenOff": "已關閉更新檢查——橫幅與自動偵測停用，orosus upgrade 仍可用",
 };

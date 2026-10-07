@@ -266,4 +266,19 @@ export const enUSCli: Record<string, string> = {
 
 	"main.sessions.notFound": "Session {sid} not found — see /sessions for the list",
 	"main.sessions.newLine": "[new session {sid}]",
+
+	"upgrade.usage": "Usage: orosus upgrade (check npm for the latest version and upgrade)",
+	"upgrade.unknownArg": "Unknown argument {a}\n{usage}",
+	"upgrade.devForm": "Development build (0.0.0-dev) — self-upgrade unavailable; run git pull inside the repo",
+	"upgrade.checkFail": "Update check failed: {err}",
+	"upgrade.upToDate": "Already up to date (version {v})",
+	"upgrade.confirm": "New version available: {cur} → {latest}. Upgrade? [y/N] ",
+	"upgrade.declined": "Cancelled (current version {v})",
+	"upgrade.headless": "New version available: {cur} → {latest} (non-interactive session — no auto-upgrade). Run: npm install -g orosus@{latest}",
+	"upgrade.installing": "Installing…",
+	"upgrade.downloadFail": "Download failed: {err}",
+	"upgrade.integrityFail": "Integrity mismatch — install aborted. Retry, or run npm install -g orosus@{v} manually",
+	"upgrade.installFail": "Install failed: {err}",
+	"upgrade.busyHint": "Hint: another running orosus instance may hold files on Windows — close it and retry",
+	"upgrade.done": "✦ Upgraded to {v} — thanks for using Orosus! Restart orosus to take effect",
 };

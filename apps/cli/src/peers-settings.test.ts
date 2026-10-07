@@ -85,12 +85,13 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(memoryImportResultText({ imported: 0, skipped: 5, merged: 0 })).toContain("全部与现有记忆重复");
   });
 
-  it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十一项序位不乱（T3 起含语言行）", () => {
+  it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十二项序位不乱（T3 语言行 + m5-update-check 更新检查行）", () => {
     const fakeH = (entries: { name: string; state: string }[]) =>
       ({ graph: () => ({ audit: () => entries }) }) as unknown as Harness;
     const withPeers = settingsItems(fakeH([{ name: "tool-peers", state: "active" }]));
-    expect(withPeers).toHaveLength(12) // m5-i18n T3 加「切换语言」行后 12（含记忆动态项）;
-    expect(withPeers[11]).toContain("记忆"); // 语言行占 10 后记忆随挪 11（T3 序）
+    expect(withPeers).toHaveLength(13) // m5-update-check 加「更新检查」行后 13（含记忆动态项）;
+    expect(withPeers[11]).toContain("更新检查"); // m5-update-check：语言行占 10 后更新检查随挪 11
+    expect(withPeers[12]).toContain("记忆"); // 更新检查行后记忆随挪 12
     expect(settingsItems(fakeH([{ name: "tool-peers", state: "discovered" }])).some(x => x.startsWith("记忆"))).toBe(false);
     const base = settingsItems(fakeH([]));
     expect(base.some(x => x.startsWith("记忆"))).toBe(false);

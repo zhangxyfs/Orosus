@@ -91,4 +91,10 @@ export const enUSSettings: Record<string, string> = {
 	"sessions.rel.days": "{d} d ago",
 	"sessions.rel.months": "{n} mo ago",
 	"sessions.rel.years": "{n} y ago",
+
+	"settings.items.update": "Update check",
+	"update.setting.on": "On (check for new versions at startup)",
+	"update.setting.off": "Off (no network check; orosus upgrade still works)",
+	"update.setting.writtenOn": "Update check enabled — takes effect on next startup",
+	"update.setting.writtenOff": "Update check disabled — banner and auto check off; orosus upgrade still works",
 };

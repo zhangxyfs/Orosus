@@ -15,4 +15,5 @@ export const enUSNotices: Record<string, string> = {
 	"altpaste.attached": "{label} attached — sent with the next message",
 	"modtoggle.verbMount": "Mount",
 	"modtoggle.verbUnmount": "Unmount",
+	"update.banner": "✦ New version {v} available · run orosus upgrade to update",
 };

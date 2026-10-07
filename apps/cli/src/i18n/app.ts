@@ -24,9 +24,12 @@ export const bindAppLocale = (t: TFunction): void => {
 	impl = t;
 };
 
-/** 测试侧：切三语（直读内置表——不依赖图）。 */
-export const bindTestLocale = (tag: string): void => {
-	impl = createT({ tag, getTable: (x) => builtinTables()[x] });
+/** 内置三语表直绑（不依赖图）——测试侧切语 + 子命令形态（store 未装配，如 orosus upgrade）。 */
+export const bindBuiltinLocale = (tag: string): void => {
+  impl = createT({ tag, getTable: (x) => builtinTables()[x] });
 };
+
+/** 测试侧旧名：切三语（直读内置表——不依赖图）。 */
+export const bindTestLocale: (tag: string) => void = bindBuiltinLocale;
 
 export const t: TFunction = (key, params, fallback) => impl(key, params, fallback);

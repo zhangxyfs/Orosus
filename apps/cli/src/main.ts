@@ -72,6 +72,9 @@ import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
+import { fireStartupUpdateCheck, markBannerRendered, shouldSkipStartupCheck, updateInfoNow } from "./update-check.ts";
+import { isUpgradeSubcommand, runUpgradeSubcommand } from "./upgrade-cmd.ts";
+import { readUpdateCheckEnabled } from "./update-settings.ts";
 import { buildHookBuckets, injectionRowsOf, type HooksUiDeps } from "./hooks-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
 import { activeModuleNames, applyModulePresetImpl, closeGoneModuleUi, getPanelCache, lockReasonFor, moduleCards, modulePresetOf, permissionOf, refreshPanel, reloadModulesIdle, sessionLabelOf, setPanelCache, type ModulesUiDeps } from "./modules-ui.ts";
@@ -89,6 +92,15 @@ import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 // 批 D（2026-10-01 拍板 A+B）：代理环境自动接线——机理与副作用披露见 proxy-env.ts；
 // 必须赶在任何 fetch 发生前（undici 全局分发器首用时读取 NODE_USE_ENV_PROXY）
 maybeEnableEnvProxy();
+
+// m5-update-check：启动期更新检测点火（D2/D5）——必须在代理接线后（fetch 走系统代理）。
+// 守卫：[update] check 开关（缺省开，项目压用户）+ dev 形态（0.0.0-dev）+ 头less（--print/--version/子命令）。
+fireStartupUpdateCheck({
+  enabled: readUpdateCheckEnabled(join(orosusHome(), "config.toml"), join(process.cwd(), ".orosus", "config.toml"))
+    && OROSUS_VERSION !== "0.0.0-dev"
+    && !shouldSkipStartupCheck(process.argv.slice(2)),
+  lateNotify: (line) => notify(line),
+});
 
 /** 「网络 · MCP」卡代理态（2026-10-01 走查修准「开了代理却显直连」）：三源检测——
  *  ① 环境变量（流量真走——批 D 已接线 NODE_USE_ENV_PROXY）；② TUN 网卡（Clash Meta/v2rayN 的 TUN 模式
@@ -163,6 +175,19 @@ const exitCli = async (code: number): Promise<never> => {
         discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
         out: (l) => console.log(l),
       }));
+    }
+    if (isUpgradeSubcommand(argv)) {
+      // m5-update-check T4：`orosus upgrade` 自升级子命令（D3）——独立取数，不受 [update] check 开关影响（D4）
+      const code = await runUpgradeSubcommand(argv, {
+        configPath: join(homeDir, "config.toml"),
+        tmpDir: join(homeDir, "tmp"),
+        out: (l) => console.log(l),
+      });
+      // Node v24 win32 实测（2026-10-07 最小复现实锚）：fetch 后紧接 process.exit 撕 undici 池句柄 →
+      // libuv 断言 exit 127。150ms 驻留让池安定再走排空退出；自然退出路径同验干净但拦截面后还有
+      // 整段 REPL 装配、不能自然流过（CM-06② 同源约束）。provider 子命令冷缓存同款隐患（邻近既有，未动）
+      await new Promise((r) => setTimeout(r, 150));
+      await exitCli(code);
     }
   } catch (err) {
     // CM-06①：兜底面按「harness 创建」划界的旧口径漏掉子命令——坏 config 遇 `provider list` 即裸堆栈；
@@ -1821,6 +1846,17 @@ if (args.print === undefined) try {
     for (const line of banner(h, { modelConfigured: !needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) }) })) {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);
+    }
+    // m5-update-check D1/D5：审计横幅下常驻一行——启动即渲染（盘上状态值/网络现值，无竞速等待）；
+    // 晚到新发现走 notify 一次（fireStartupUpdateCheck 内闩）；循环重入（/new /fork /sessions 切换）时现值直落
+    {
+      const upd = updateInfoNow();
+      if (upd !== undefined) {
+        const line = theme.dim(t("update.banner", { v: upd.latest }));
+        if (tuiMode === "full") dm.pushLine(line);
+        else console.error(line);
+      }
+      markBannerRendered(upd !== undefined);
     }
     // T4b（m5-resume-perf 走查修）：full 模式 /resume /sessions 切换改就地换页（runSubmit 拦截
     // pendingSwitchSid → switchInPlace，不退出 FullApp——闪空根因拆除）；本循环顶只服务启动与

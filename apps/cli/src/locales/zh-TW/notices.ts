@@ -15,4 +15,5 @@ export const zhTWNotices: Record<string, string> = {
 	"altpaste.attached": "{label} 已掛接——將隨下一條訊息傳送",
 	"modtoggle.verbMount": "掛載",
 	"modtoggle.verbUnmount": "卸載",
+	"update.banner": "✦ 新版本 {v} 可用 · 在終端執行 orosus upgrade 升級",
 };

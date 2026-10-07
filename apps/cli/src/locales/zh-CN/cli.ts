@@ -266,4 +266,19 @@ export const zhCNCli: Record<string, string> = {
 
 	"main.sessions.notFound": "未找到会话「{sid}」——/sessions 查看列表",
 	"main.sessions.newLine": "[新会话 {sid}]",
+
+	"upgrade.usage": "用法: orosus upgrade（检查 npm 上的最新版本并升级）",
+	"upgrade.unknownArg": "未知参数 {a}\n{usage}",
+	"upgrade.devForm": "开发运行形态（0.0.0-dev）——不支持自升级，请在仓库内 git pull 更新",
+	"upgrade.checkFail": "检查更新失败：{err}",
+	"upgrade.upToDate": "当前已是最新版本 {v}",
+	"upgrade.confirm": "发现新版本：{cur} → {latest}，是否升级？[y/N] ",
+	"upgrade.declined": "已取消（当前版本 {v}）",
+	"upgrade.headless": "发现新版本：{cur} → {latest}（非交互环境不自动升级）。可执行：npm install -g orosus@{latest}",
+	"upgrade.installing": "正在安装…",
+	"upgrade.downloadFail": "下载失败：{err}",
+	"upgrade.integrityFail": "下载内容校验失败（integrity 不匹配）——已放弃安装，可重试或手动 npm install -g orosus@{v}",
+	"upgrade.installFail": "安装失败：{err}",
+	"upgrade.busyHint": "提示：Windows 下其他正在运行的 orosus 实例可能占用文件——关闭后重试",
+	"upgrade.done": "✦ 已升级到 {v}，感谢使用 Orosus！重启 orosus 后生效",
 };

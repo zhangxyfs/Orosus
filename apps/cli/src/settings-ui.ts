@@ -6,6 +6,7 @@ import type { PanelData, FullApp } from "./tui/fullapp.ts";
 import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "./usage-text.ts";
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
+import { runUpdateCheckSetting, updateConfigFile } from "./update-settings.ts";
 import { memoryImportResultText, runMemoryImportChoose, runMemorySetting, type MemoryImportDeps } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
@@ -44,9 +45,10 @@ export const settingsItemsBase = (): string[] => [
 	t("settings.items.skills"),
 	t("settings.items.hooks"),
 	t("settings.items.mcp"),
-	t("settings.items.vision"),
-	t("settings.items.search"),
-	t("settings.items.locale"),
+  t("settings.items.vision"),
+  t("settings.items.search"),
+  t("settings.items.locale"),
+  t("settings.items.update"),
 ];
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
@@ -111,8 +113,9 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
  *  模块启停本身走 config enabled（通用模块启停 UI 顺延，D15 注记）——这里只看运行态。 */
 export const settingsItems = (h: Harness): string[] => {
 	const peersActive = h.graph().audit().some((a) => a.name === "tool-peers" && a.state === "active");
-	// m5-i18n T3：第 11 项「切换语言」恒在（索引 10）；peers 动态项随后（索引 11）
-	return peersActive ? [...settingsItemsBase(), t("settings.items.memory")] : settingsItemsBase();
+  // m5-i18n T3：第 11 项「切换语言」恒在（索引 10）；m5-update-check：第 12 项「更新检查」（索引 11）；
+  // peers 动态项随后（索引 12）
+  return peersActive ? [...settingsItemsBase(), t("settings.items.memory")] : settingsItemsBase();
 };
 
 export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Promise<void> => {
@@ -202,10 +205,24 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
-		else if (picked === 11) {
-			// m5-peers T6b + 走查修订三：「记忆」动态项——双开关 + 记忆导入（浏览窗不走设置入口：
-			// /tool-peers__memory 命令 + Ctrl+P 总览两处，走查修订二）
-			// 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
+      else if (picked === 11) {
+        // m5-update-check T5：「更新检查」开关——只管自动检测（写 [update] check；下次启动生效）
+        try {
+          const res = await runUpdateCheckSetting(async (title, items) => {
+            const i = await app.pickOverlay(title, items);
+            if (i === undefined) throw new Error(ESC_CANCELLED);
+            return items[i] ?? "";
+          }, updateConfigFile());
+          if (res !== "") app.showToast(res);
+        } catch (err) {
+          if (isEsc(err)) continue;
+          throw err;
+        }
+      }
+      else if (picked === 12) {
+        // m5-peers T6b + 走查修订三：「记忆」动态项——双开关 + 记忆导入（浏览窗不走设置入口：
+        // /tool-peers__memory 命令 + Ctrl+P 总览两处，走查修订二）
+        // 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
 			for (;;) {
 				try {
 					const res = await runMemorySetting(async (t, list) => {
@@ -309,8 +326,18 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 				throw err;
 			}
 		}
-		else if (idx === 11) {
-			// m5-peers T6b + 走查修订三 行模式对等件：「记忆」双开关 + 记忆导入——子菜单 Esc 回设置根菜单
+      else if (idx === 11) {
+        // m5-update-check T5 行模式对等件：「更新检查」开关——Esc 静默回设置根菜单
+        try {
+          const res = await runUpdateCheckSetting((title, items) => deps.commandUi.choose(title, items), updateConfigFile());
+          if (res !== "") out(res);
+        } catch (err) {
+          if (isEsc(err)) continue;
+          throw err;
+        }
+      }
+      else if (idx === 12) {
+        // m5-peers T6b + 走查修订三 行模式对等件：「记忆」双开关 + 记忆导入——子菜单 Esc 回设置根菜单
 			for (;;) {
 				try {
 					const res = await runMemorySetting(async (t, list) => {
