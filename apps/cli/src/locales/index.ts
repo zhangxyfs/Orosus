@@ -16,6 +16,7 @@ import { zhCNCli } from "./zh-CN/cli.ts";
 import { zhCNPopups } from "./zh-CN/popups.ts";
 import { zhCNOnboard } from "./zh-CN/onboarding.ts";
 import { zhCNStream } from "./zh-CN/stream.ts";
+import { zhCNModules } from "./zh-CN/modules.ts";
 import { zhTWInput } from "./zh-TW/input.ts";
 import { zhTWPanels } from "./zh-TW/panels.ts";
 import { zhTWMcp } from "./zh-TW/mcp.ts";
@@ -27,6 +28,7 @@ import { zhTWCli } from "./zh-TW/cli.ts";
 import { zhTWPopups } from "./zh-TW/popups.ts";
 import { zhTWOnboard } from "./zh-TW/onboarding.ts";
 import { zhTWStream } from "./zh-TW/stream.ts";
+import { zhTWModules } from "./zh-TW/modules.ts";
 import { enUSInput } from "./en-US/input.ts";
 import { enUSPanels } from "./en-US/panels.ts";
 import { enUSMcp } from "./en-US/mcp.ts";
@@ -38,9 +40,10 @@ import { enUSCli } from "./en-US/cli.ts";
 import { enUSPopups } from "./en-US/popups.ts";
 import { enUSOnboard } from "./en-US/onboarding.ts";
 import { enUSStream } from "./en-US/stream.ts";
+import { enUSModules } from "./en-US/modules.ts";
 
 export const mainTables = (): Record<string, Messages> => ({
-	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices, ...zhCNSettings, ...zhCNHelp, ...zhCNCli, ...zhCNPopups, ...zhCNOnboard, ...zhCNStream },
-	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices, ...zhTWSettings, ...zhTWHelp, ...zhTWCli, ...zhTWPopups, ...zhTWOnboard, ...zhTWStream },
-	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices, ...enUSSettings, ...enUSHelp, ...enUSCli, ...enUSPopups, ...enUSOnboard, ...enUSStream },
+	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices, ...zhCNSettings, ...zhCNHelp, ...zhCNCli, ...zhCNPopups, ...zhCNOnboard, ...zhCNStream, ...zhCNModules },
+	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices, ...zhTWSettings, ...zhTWHelp, ...zhTWCli, ...zhTWPopups, ...zhTWOnboard, ...zhTWStream, ...zhTWModules },
+	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices, ...enUSSettings, ...enUSHelp, ...enUSCli, ...enUSPopups, ...enUSOnboard, ...enUSStream, ...enUSModules },
 });
