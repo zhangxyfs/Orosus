@@ -26,7 +26,7 @@ export const zhCNStream: Record<string, string> = {
 	"doc.skill.line": "● 已加载技能 {name} · 正文已注入模型上下文",
 	"doc.vision.running": "◐ 由 {model} 转述图片中… {n}s",
 	"doc.vision.aborted": "● 视觉转述已中止——消息未发出（重发即续：已生成的转述有缓存）",
-	"doc.vision.failed": "● 视觉转述失败（{model}）——已按无图占位发送",
+	"doc.vision.failed": "● 视觉转述失败（{err}）——已按无图占位发送",
 	"doc.vision.head": "● 视觉转述（{model}）{ · Alt + E 展开}",
 	"doc.vision.thinkPrefix": "[视觉模型思考]",
 
@@ -65,4 +65,9 @@ export const zhCNStream: Record<string, string> = {
 	"stream.thinkTag": "\\n[2m[思考] {text}",
 	"doc.vision.thinkFold": " 视觉转述（{model}） · Alt + E 展开",
 	"stream.thinkWord": "思考",
+	"doc.foldTurns": "┄ 已折叠更早的 {n} 轮对话 · 完整内容在会话文件",
+	"doc.foldSteps": "  ⚙ 本轮前序 {n} 步已折叠（Alt + S 展开全部）",
+	"doc.tool.imgRow": "图 {mime} · {size} · {path}",
+	"diff.gapUp": "… 上方 {n} 行相同",
+	"diff.gapDown": "… 下方 {n} 行相同",
 };

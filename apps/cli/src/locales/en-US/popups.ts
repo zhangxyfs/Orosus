@@ -121,4 +121,5 @@ export const enUSPopups: Record<string, string> = {
 	"agentview.stat": "{status}{approval? · on approval} · {n} turns{err? · {err}}",
 	"agentview.head": "Status: {stat}{role? · role {role}}{background? · background}",
 	"subagent.turns.unlimited.desc": "-1 — only the 600s-idle / 2h-total backstops apply",
+	"moddiag.impact": "【Impact】",
 };

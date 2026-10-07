@@ -86,14 +86,14 @@ describe("键盘菜单 picker（TUI 批 T1——B5 第 2 层）", () => {
   });
   // CR-06 回归钉：重绘 moveUp 的 N 必须按视觉行数（ansi.ts 头注硬约定）——CJK 双宽使超宽行
   // 折成多个物理行，按逻辑行数 lines.length 少移 → 每次导航错位一行 + 折行残影
-  it("⑩ CR-06 视觉行数口径：折行帧的重绘上移按视觉行数（\\x1b[4A 而非 \\x1b[3A）", async () => {
+  it("⑩ CR-06 视觉行数口径：折行帧的重绘上移按视觉行数（\\x1b[5A——m5-i18n T6 整句脚注后 5 视觉行）", async () => {
     const w: string[] = [];
-    // 20 列窄终端：两项各 5 个 CJK 字（显示宽 10 ≤ 20 → 各 1 视觉行），提示行显示宽约 40 > 20 → 折 2 行；
-    // 逻辑 3 行 / 视觉 4 行——下键导航后的重绘 moveUp 必须上移 4 行（旧版 \x1b[3A 少移一行 → 残影）
+    // 20 列窄终端：两项各 1 视觉行，提示句 57 显示宽 > 20 → 折 3 行（m5-i18n T6 整句键后更宽）；
+    // 逻辑 3 行 / 视觉 5 行——下键导航后的重绘 moveUp 必须上移 5 行（少移 → 残影）
     await pick(["菜单甲项一", "菜单乙项二"], { ...fakeIo(["\x1b[B", "\r"], w), columns: 20 });
     const out = w.join("");
-    expect(out).toContain("\x1b[4A");
-    expect(out).not.toContain("\x1b[3A");
+    expect(out).toContain("\x1b[5A");
+    expect(out).not.toContain("\x1b[4A");
   });
 });
 

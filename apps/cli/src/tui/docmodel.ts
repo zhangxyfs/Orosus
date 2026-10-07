@@ -450,10 +450,10 @@ export class DocModel {
 	private toolLines(e: Entry & { k: "tool" }, width: number): string[] {
 		let chip = "";
 		if (e.result !== undefined) {
-			if (e.result.isError) chip = ` ${t("doc.tool.failTail")}${this.errOpen ? "" : t("doc.tool.altF")}`;
+			if (e.result.isError) chip = `${t("doc.tool.failTail")}${this.errOpen ? "" : t("doc.tool.altF")}`;
 			else {
 				const stats = toolChangeStats(e.name, e.args);
-				chip = stats === undefined ? ` ${t("doc.tool.lines", { n: e.result.lines })}` : stats.dels > 0 ? ` · +${stats.adds} -${stats.dels}` : ` ${t("doc.tool.lines", { n: stats.adds })}`;
+				chip = stats === undefined ? ` · ${t("doc.tool.lines", { n: e.result.lines })}` : stats.dels > 0 ? ` · +${stats.adds} -${stats.dels}` : ` · ${t("doc.tool.lines", { n: stats.adds })}`;
 			}
 			if (e.result.images !== undefined) chip += t("doc.tool.attach", { n: e.result.images.length }); // m5-media F4：头行 chip 常显（收起态也可见）
 		}

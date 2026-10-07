@@ -121,4 +121,5 @@ export const zhTWPopups: Record<string, string> = {
 	"agentview.stat": "{status}{approval? · 等審核} · {n} 輪{err? · {err}}",
 	"agentview.head": "狀態：{stat}{role? · 工種 {role}}{background? · 背景}",
 	"subagent.turns.unlimited.desc": "-1——僅不活動 600 秒 / 總時長 2 小時兜底",
+	"moddiag.impact": "【連帶影響】",
 };

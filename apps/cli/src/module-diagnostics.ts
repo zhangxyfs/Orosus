@@ -36,7 +36,7 @@ function extractModuleName(rec: { msg?: unknown; data?: unknown }): string | und
 function tagOf(code: string, reason: string): DiagTag {
   if (code.startsWith("kernel.discover.")) return "加载失败"; // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
   // i18n:diag 判据关键词跟 failReason 语言（kernelT 缺省 zh；en 态走查后随语扩表——classifyFailure 先例）
-  if (reason.includes("不可用（") || reason.includes("无可用提供者") || reason.includes("is degraded") || reason.includes("not registered")) return "级联"; // i18n:diag 双语判据（随语扩表走查定）
+  if (reason.includes("不可用（") || reason.includes("无可用提供者") || reason.includes("级联降级") || reason.includes("is degraded") || reason.includes("not registered")) return "级联"; // i18n:diag 双语判据（级联降级=kernelT 输出形；随语扩表走查定）
   return "激活失败"; // i18n:diag 类型面/判据值——显示面走 moddiag.tag.* 键
 }
 
