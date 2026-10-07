@@ -133,7 +133,8 @@ const rlSecretQuestion = async (q: string): Promise<string> => {
 // 经 FullApp 的 overlay/输入行接管（readline 系件在 alt-screen 下毁屏）；Esc → 「已取消（Esc）」
 // 带内抛错（机制③同族）；非全屏或应用未起 → readline 原路径。
 export const question = async (q: string): Promise<string> => {
-  const activeApp = refs.getActiveApp();
+  // refs 未注入窗口期（子命令读 stdin——upgrade 确认）同守卫：无全屏态可言，直走 rlQuestion
+  const activeApp = refs === undefined ? undefined : refs.getActiveApp();
   if (activeApp !== undefined) {
     const v = await activeApp.promptInput(q, false);
     if (v === undefined) throw new Error(ESC_CANCELLED);
@@ -142,7 +143,7 @@ export const question = async (q: string): Promise<string> => {
   return rlQuestion(q);
 };
 export const secretQuestion = async (q: string): Promise<string> => {
-  const activeApp = refs.getActiveApp();
+  const activeApp = refs === undefined ? undefined : refs.getActiveApp();
   if (activeApp !== undefined) {
     const v = await activeApp.promptInput(q, true);
     if (v === undefined) throw new Error(ESC_CANCELLED);

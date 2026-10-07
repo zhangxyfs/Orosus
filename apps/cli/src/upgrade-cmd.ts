@@ -6,7 +6,6 @@
  *  io 全注入（fetch/confirm/install/isTTY/currentVersion/路径）——测试零真网络零 spawn。 */
 import { createHash } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline/promises";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -14,6 +13,7 @@ import { OROSUS_USER_AGENT, OROSUS_VERSION } from "@orosus/contracts/version";
 import { loadConfig } from "@orosus/core";
 import { bindBuiltinLocale, t } from "./i18n/app.ts";
 import { detectSystemLocale } from "./i18n/index.ts";
+import { question } from "./repl-io.ts";
 import { fetchLatestUpdate, isNewerVersion } from "./update-check.ts";
 
 const BUILTIN_TAGS: readonly string[] = ["zh-CN", "zh-TW", "en-US"];
@@ -75,15 +75,14 @@ export function renderProgress(loaded: number, total: number | undefined): strin
 /** 确认词判定：y 开头即认（y/yes/yy 宽容——2026-10-07 真机用户打 yy 实锚）；空/n/no 拒。 */
 export const isYes = (s: string): boolean => /^y/i.test(s.trim());
 
+// 复用 repl-io 询问原语（askActive 行归询问语义）——不自建 readline：同 stdin 双 Interface 双回显
+// （真机实锚打一个 y 显两个）且绕开行队列/EOF 竞速兜底；Esc 取消（ESC_CANCELLED）与 EOF（noTty）
+// 一律 catch 成拒绝
 const defaultConfirm = async (prompt: string): Promise<boolean> => {
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const ans = await rl.question(prompt);
-		return isYes(ans);
+		return isYes(await question(prompt));
 	} catch {
-		return false; // EOF（管道耗尽）/异常 = 拒绝，不当崩溃
-	} finally {
-		rl.close();
+		return false;
 	}
 };
 

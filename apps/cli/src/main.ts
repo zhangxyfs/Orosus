@@ -1852,14 +1852,20 @@ if (args.print === undefined) try {
       if (tuiMode === "full") dm.pushLine(line);
       else console.error(line);
     }
-    // m5-update-check D1/D5：审计横幅下常驻一行——启动即渲染（盘上状态值/网络现值，无竞速等待）；
-    // 晚到新发现走 notify 一次（fireStartupUpdateCheck 内闩）；循环重入（/new /fork /sessions 切换）时现值直落
+    // m5-update-check D1/D5：审计横幅下常驻一行（用户走查验形：与审计行间空一行 + 白字不 dim）——
+    // 启动即渲染（盘上状态值/网络现值，无竞速等待）；晚到新发现走 notify 一次（fireStartupUpdateCheck
+    // 内闩）；循环重入（/new /fork /sessions 切换）时现值直落
     {
       const upd = updateInfoNow();
       if (upd !== undefined) {
-        const line = theme.dim(t("update.banner", { v: upd.latest }));
-        if (tuiMode === "full") dm.pushLine(line);
-        else console.error(line);
+        const line = theme.fg("fg", t("update.banner", { v: upd.latest }));
+        if (tuiMode === "full") {
+          dm.pushLine("");
+          dm.pushLine(line);
+        } else {
+          console.error("");
+          console.error(line);
+        }
       }
       markBannerRendered(upd !== undefined);
     }
