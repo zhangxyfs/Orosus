@@ -1,7 +1,10 @@
 import { MODULE_API_VERSION, type ModuleDefinition } from "@orosus/contracts/module";
 
 /** contracts 登记的公共能力短名（规则 1）。新增公共能力 = contracts 加包 + 本表加名。 */
-export const PUBLIC_CAPABILITY_KEYS = ["fs", "shell", "mcp", "skill"] as const;
+export const PUBLIC_CAPABILITY_KEYS = ["fs", "shell", "mcp", "skill", "i18n.locale", "i18n.catalog"] as const;
+
+/** 前缀形公共能力（m5-i18n T2 命名登记）：i18n.locale.*（语言包，每语言单所有者）/ i18n.catalog.*（模块目录，每模块单所有者）。 */
+export const PUBLIC_CAPABILITY_PREFIXES = ["i18n.locale.", "i18n.catalog."] as const;
 
 /** 核心保留槽（§7.2）：走 provide 注册、不计入 provides 声明。 */
 export const CORE_RESERVED_SLOT_PREFIXES = ["provider:"] as const;
@@ -26,7 +29,7 @@ export function validateModule(def: ModuleDefinition): string[] {
       v.push(`provides 含核心保留槽 key "${key}"（§7.2：保留槽不计入 provides 声明、由 provide 注册）`);
       continue;
     }
-    const isPublic = (PUBLIC_CAPABILITY_KEYS as readonly string[]).includes(key);
+    const isPublic = (PUBLIC_CAPABILITY_KEYS as readonly string[]).includes(key) || (PUBLIC_CAPABILITY_PREFIXES as readonly string[]).some((p) => key.startsWith(p));
     const isPrefixed = key.startsWith(`${def.name}.`);
     if (!isPublic && !isPrefixed) {
       v.push(`provides 的 key "${key}" 既非 contracts 登记的公共短名、也未带模块名前缀 "${def.name}."（规则 1）`);

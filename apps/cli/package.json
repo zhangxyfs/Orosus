@@ -20,6 +20,7 @@
     "@orosus/hooks": "workspace:*",
     "@orosus/i18n": "workspace:*",
     "@orosus/mcp": "workspace:*",
+    "@orosus/multilang": "workspace:*",
     "@orosus/provider-custom": "workspace:*",
     "@orosus/session-tree": "workspace:*",
     "@orosus/skill": "workspace:*",

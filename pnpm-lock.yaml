@@ -95,6 +95,9 @@ importers:
       '@orosus/mcp':
         specifier: workspace:*
         version: link:../../packages/modules/mcp
+      '@orosus/multilang':
+        specifier: workspace:*
+        version: link:../../packages/modules/multilang
       '@orosus/provider-custom':
         specifier: workspace:*
         version: link:../../packages/modules/provider-custom
@@ -263,6 +266,12 @@ importers:
       '@orosus/tool-search':
         specifier: workspace:*
         version: link:../tool-search
+
+  packages/modules/multilang:
+    dependencies:
+      '@orosus/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
 
   packages/modules/provider-custom:
     dependencies:

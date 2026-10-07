@@ -10,6 +10,7 @@ import sessionTree from "@orosus/session-tree";
 import providerCustom from "@orosus/provider-custom";
 import { mcpDef } from "@orosus/mcp";
 import skill from "@orosus/skill";
+import multilang from "@orosus/multilang";
 import approval from "@orosus/approval";
 import compaction from "@orosus/compaction";
 import hooks from "@orosus/hooks";
@@ -35,6 +36,7 @@ export const BUILTIN_MODULES: ModuleDefinition[] = [
   providerCustom,
   mcpDef,
   skill,
+  multilang, // m5-i18n T16：语言包（defaultEnabled: false 出厂首用——挂载后 /locale 六语）
   approval,
   compaction,
   hooks, // m5-hooks：七事件生命周期钩子（shell 命令 + 项目层 sha256 信任门 + 注入三道闸）
