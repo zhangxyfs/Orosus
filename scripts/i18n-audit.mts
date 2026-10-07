@@ -158,12 +158,12 @@ function report(): void {
 	const bSet = new Set(bKeys);
 	const dupA = aKeys.filter((k, i) => aKeys.indexOf(k) !== i);
 	console.log("\n== 译文对照表（ta/tb 分区段件） ==");
-	console.log(`A 表键数：${a.length}（勘正⑩-⑰后 1356）；B 表键数：${b.length}（勘正⑩-⑰后 1356）`);
+	console.log(`A 表键数：${a.length}（勘正⑩-⑱后 1388）；B 表键数：${b.length}（勘正⑩-⑱后 1388）`);
 	console.log(`A/B 键集漂移：${[...aSet].filter((k) => !bSet.has(k)).length} + ${[...bSet].filter((k) => !aSet.has(k)).length}`);
 	if (dupA.length) console.log(`A 表键内重复：${[...new Set(dupA)].join(", ")}`);
 	const zoneA = new Map<string, number>();
 	for (const r of a) zoneA.set(r.zone, (zoneA.get(r.zone) ?? 0) + 1);
-	console.log(`分区计数（勘正⑩-⑰后 224/495/226/174/237）：${[...zoneA.entries()].sort().map(([z, n]) => `${z}=${n}`).join(" ")}`);
+	console.log(`分区计数（勘正⑩-⑰后 224/495/258/174/237）：${[...zoneA.entries()].sort().map(([z, n]) => `${z}=${n}`).join(" ")}`);
 
 	// zh 列两表一致（B 表基准列 = A 表原文列）
 	const zhB = new Map(b.map((r) => [r.key, r.zh]));

@@ -1,5 +1,6 @@
 import { loadConfig } from "@orosus/core";
 import type { CommandUi } from "@orosus/contracts/module";
+import { t } from "./i18n/app.ts";
 
 /** 首启检测（M3 T10 补空白）：model 未配置或指向不可用 provider 槽 → 需要引导。
  *  keyless 但激活的槽（openai 的 apiKey 可选）不算"未配置"——其密钥错误在调用期带内 401 明示。 */
@@ -35,9 +36,9 @@ export async function runOnboarding(
 ): Promise<string> {
   const providers = h.graph().services.listProviders().map((p) => p.name);
   const msg = providers.length > 0
-    ? `已配置 ${providers.length} 个平台（${providers.join("、")}）但尚未选择 model——现在选吗？（进入 /provider 向导）`
-    : `尚未配置任何模型提供商——现在配置吗？（进入 /provider 向导：选平台 → 粘贴 apiKey 即用）`;
+    ? t("onboard.ask.configuredNoModel2", { n: providers.length, names: providers.join("、") })
+    : t("onboard.ask.fresh2");
   const go = await ui.confirm(msg);
-  if (!go) return "已跳过——随时输入 /provider 配置（或参照 docs/developers.md 手写 config.toml（模块配置在 modules.d/））";
-  return (await h.prompt("/provider")) ?? "（/provider 不可用——请确认 provider-custom 模块已启用）";
+  if (!go) return t("onboard.ask.skipped");
+  return (await h.prompt("/provider")) ?? t("onboard.ask.wizardUnavailable");
 }

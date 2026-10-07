@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { CommandUi } from "@orosus/contracts/module";
 import type { Harness } from "@orosus/core";
 import { needsProviderSetup, readConfigModel, runOnboarding } from "./onboarding.ts";
+import { t } from "./i18n/app.ts";
 
 /** 启动期引导编排（模型发现 T0——M3 T9 欠账接线）：TTY 且需要配置 → 确认 → /provider 向导 → /reload → 复检回显。
  *  抽取为可测面（main.ts 顶层不可 import——render.ts 同款先例）；非交互跳过（既有语义）。
@@ -21,7 +22,7 @@ export async function startupGate(opts: {
   await opts.h.prompt("/reload"); // 向导写的是 config 文件——重载生效
   // 复检回显（不阻断——用户可能中途取消）
   const ok = !needsProviderSetup({ model: opts.readModel(), providers: slotNames() });
-  return `${wizardOut}\n${ok ? "✓ 配置已生效" : "⚠ 复检未通过——model 仍未配置（可 /model 选择，或手改 config.toml 后 /reload）"}`;
+  return `${wizardOut}\n${ok ? t("startup.verifyOk") : t("startup.verifyFail")}`;
 }
 
 /** 真实 readModel：用户层 → 项目层（§6.6 分层的只读镜像，onboarding.readConfigModel 同源）。 */

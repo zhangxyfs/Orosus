@@ -10,6 +10,7 @@
 import * as theme from "../theme.ts";
 import { isPrintable } from "./keymatch.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { t } from "../i18n/app.ts";
 
 export interface OnboardingProvider {
   id: string;
@@ -78,19 +79,19 @@ interface PMState {
   notice: string; noticeKind: NoticeKind;
 }
 
-const PAGE_TITLES = ["欢迎使用 Orosus（连山）", "选择模型提供商", "配置视觉模型", "配置网络搜索", "从其他 agent 导入记忆"];
+const PAGE_TITLES = [t("onboard.p1.title"), t("onboard.p2.title"), t("onboard.p3.title"), t("onboard.p4.title"), t("onboard.p5.title")];
 const VISION_OPTS = [
-  { id: "off", name: "暂不启用（默认）", desc: "不生成视觉摘要——降级图只留路径标签" },
-  { id: "auto", name: "自动", desc: "当前模型支持图片时直接用它看图" },
-  { id: "pick", name: "指定视觉模型", desc: "从已配置提供商的多模态模型中选择" },
+  { id: "off", name: t("onboard.vision.off.name"), desc: t("onboard.vision.off.desc") },
+  { id: "auto", name: t("onboard.vision.auto.name"), desc: t("onboard.vision.auto.desc") },
+  { id: "pick", name: t("onboard.vision.pick.name"), desc: t("onboard.vision.pick.desc") },
 ] as const;
 const VISION_LIST_ROWS = 5; // 恒定行数（原型走查③：不足补空槽——高度恒定防闪烁铁律）
 
 const PAGE_SIZE = 8;
 const WEB_OPTS = [
-  { id: "llm", name: "LLM Web Search", desc: "默认 · 用已配置的模型联网搜索，无需任何 Key" },
-  { id: "tavily", name: "Tavily", desc: "专业搜索服务 · 需 API Key · tavily.com" },
-  { id: "brave", name: "Brave", desc: "独立索引搜索 · 需 API Key · brave.com/search/api" },
+  { id: "llm", name: "LLM Web Search", desc: t("onboard.web.llm.desc") },
+  { id: "tavily", name: "Tavily", desc: t("onboard.web.tavily.desc") },
+  { id: "brave", name: "Brave", desc: t("onboard.web.brave.desc") },
 ] as const;
 const ENV_NAME: Record<"tavily" | "brave", string> = { tavily: "TAVILY_API_KEY", brave: "BRAVE_API_KEY" };
 
@@ -127,7 +128,7 @@ export class OnboardingSession {
     return this.deps.providers.find((p) => p.id === id) ?? { id, name: id, baseUrl: "", type: "openai" };
   }
   private activeName(): string {
-    return this.p2.active === null ? "（未配置）" : this.provById(this.p2.active).name;
+    return this.p2.active === null ? t("onboard.p2.unconfigured") : this.provById(this.p2.active).name;
   }
 
   /** 粘贴（bracketed paste 路由）：输入态下整段进草稿（API Key 的首要输入方式就是粘贴）。 */
@@ -148,7 +149,7 @@ export class OnboardingSession {
     // Ctrl + Q：仅第 1 页退出（SW-22）；第 2/3 页给提示行——误按不炸引导
     if (key === "ctrl+q") {
       if (this.page === 1) return { kind: "quit" };
-      this.notice("Ctrl + Q 仅在第 1 页可用——完成引导后即可正常使用 /quit 退出", "warn");
+      this.notice(t("onboard.ctrlq.onlyP1"), "warn");
       return undefined;
     }
     if (key === "escape") return undefined; // Esc 在引导中不占用（SW-22——留白，不绑任何语义）
@@ -180,9 +181,9 @@ export class OnboardingSession {
       if (p.configured.includes(prov.id)) {
         p.active = prov.id;
         this.deps.setModel(prov.id);
-        this.notice(`已写入 config.toml [provider]（provider = ${prov.id}）`, "ok");
+        this.notice(t("onboard.p2.setModelDone", { id: prov.id }), "ok");
       } else {
-        this.notice(`先输入 ${prov.name} 的 Key，再设为当前使用`, "warn");
+        this.notice(t("onboard.p2.keyFirst", { name: prov.name }), "warn");
       }
       return undefined;
     }
@@ -207,7 +208,7 @@ export class OnboardingSession {
         return undefined;
       }
       const draft = (p.drafts[prov.id] ?? "").trim();
-      if (draft === "") { this.notice("Key 不能为空——粘贴后回车确认", "warn"); return undefined; }
+      if (draft === "") { this.notice(t("onboard.key.empty"), "warn"); return undefined; }
       const envKey = prov.envKey ?? `${prov.id.toUpperCase().replace(/-/g, "_")}_API_KEY`;
       this.deps.appendSecret(envKey, draft);
       if (!p.configured.includes(prov.id)) p.configured.push(prov.id);
@@ -216,9 +217,9 @@ export class OnboardingSession {
       if (p.active === null) {
         p.active = prov.id;
         this.deps.setModel(prov.id);
-        this.notice(`Key 已写入 secrets.env（${envKey}），并设为当前使用——已写入 config.toml [provider]`, "ok");
+        this.notice(`${t("onboard.p2.keyWrittenActive", { envKey: envKey })}`, "ok");
       } else {
-        this.notice(`Key 已写入 secrets.env（${envKey}）——${prov.name} 备用（Space 设为当前使用）`, "ok");
+        this.notice(t("onboard.p2.keyWrittenBackup", { envKey, name: prov.name }), "ok");
       }
       return undefined;
     }
@@ -238,7 +239,7 @@ export class OnboardingSession {
       }
     }
     if (key === "ctrl+n") {
-      if (p.active === null) { this.notice("先配置一个提供商——首个配好的自动设为当前使用", "warn"); return undefined; }
+      if (p.active === null) { this.notice(t("onboard.p2.needOne"), "warn"); return undefined; }
       this.page = 3;
       return undefined;
     }
@@ -260,21 +261,21 @@ export class OnboardingSession {
         if (o === undefined) return undefined;
         if (o.id === "off") {
           this.deps.writeVision("off");
-          this.notice("已写入 modules.d/tool-media.toml（视觉摘要停用）", "ok");
+          this.notice(t("onboard.vision.offOk"), "ok");
         } else if (o.id === "auto") {
           this.deps.writeVision("auto");
-          this.notice("已设为自动——当前模型支持图片时直接用它看图", "ok");
+          this.notice(t("onboard.vision.autoOk"), "ok");
         } else {
           p.mode = "list"; p.sel = 0; p.loading = true; p.models = []; p.notice = "";
           this.deps.visionModels().then((models) => {
             if (p.mode !== "list") return; // 用户已返回选项页
             p.models = models; p.loading = false;
-            if (models.length === 0) this.notice("已配置的提供商里没有目录可证的多模态模型——可回上一页换提供商，或直接下一步", "warn");
+            if (models.length === 0) this.notice(t("onboard.vision.noModels"), "warn");
             this.deps.requestRender?.();
           }).catch(() => {
             if (p.mode !== "list") return;
             p.loading = false;
-            this.notice("多模态模型清单读取失败——可直接下一步稍后在 /settings 配置", "warn");
+            this.notice(t("onboard.vision.listFail"), "warn");
             this.deps.requestRender?.();
           });
         }
@@ -283,7 +284,7 @@ export class OnboardingSession {
       const m = p.models[p.sel];
       if (m !== undefined) {
         this.deps.writeVision(m);
-        this.notice(`已指定视觉模型 ${m}`, "ok");
+        this.notice(t("onboard.vision.picked", { model: m }), "ok");
       }
       return undefined;
     }
@@ -328,7 +329,7 @@ export class OnboardingSession {
           // 默认项「用上一页配置的模型」直选零配置（不写 model 字段，运行时用当前模型——SW-24）
           this.deps.writeSearch({ backend: "auto", model: undefined });
           p.chosen = "llm"; p.model = null; p.stage = "opts";
-          this.notice(`已写入 config.toml [tool-web] search（用上一页配置的模型 · ${this.activeName()}，失败自动降级 Tavily / Brave）`, "ok");
+          this.notice(t("onboard.p4.writtenAuto", { name: this.activeName() }), "ok");
         } else {
           p.stage = "provs";
           const conf = this.configuredProviders();
@@ -371,7 +372,7 @@ export class OnboardingSession {
     } else if (p.stage === "manual") {
       if (key === "enter") {
         const draft = (p.drafts["__manual"] ?? "").trim();
-        if (draft === "") { this.notice("模型名不能为空——输入后回车钉住", "warn"); return undefined; }
+        if (draft === "") { this.notice(t("onboard.web.manualEmpty"), "warn"); return undefined; }
         this.pinModel(`${p.provOpt ?? ""}/${draft}`);
         return undefined;
       }
@@ -388,19 +389,19 @@ export class OnboardingSession {
       }
       if (key === "enter") {
         const draft = (p.drafts[p.keyOpt] ?? "").trim();
-        if (draft === "") { this.notice("Key 不能为空——粘贴后回车确认", "warn"); return undefined; }
+        if (draft === "") { this.notice(t("onboard.key.empty"), "warn"); return undefined; }
         const envName = ENV_NAME[p.keyOpt];
         this.deps.appendSecret(envName, draft);
         this.deps.writeSearch(p.keyOpt === "tavily" ? { backend: "auto", tavilyApiKey: `$ENV:${envName}` } : { backend: "auto", braveApiKey: `$ENV:${envName}` });
         p.chosen = p.keyOpt;
         p.drafts[p.keyOpt] = "";
-        this.notice(`Key 已写入 secrets.env（${envName}）——降级链上自动取用`, "ok");
+        this.notice(`${t("onboard.web.keyOk", { envName: envName })}`, "ok");
         return undefined;
       }
       if (key.length === 1 && isPrintable(key)) { p.drafts[p.keyOpt] = (p.drafts[p.keyOpt] ?? "") + key; return undefined; }
     }
     if (key === "ctrl+n") {
-      if (p.chosen === null) { this.notice("请先选择一个搜索后端——LLM 默认零配置，回车即选", "warn"); return undefined; }
+      if (p.chosen === null) { this.notice(t("onboard.web.needChoice"), "warn"); return undefined; }
       this.page = 5;   // T6d：网络搜索之后进导入页（原「完成」顺延一页）
       return undefined;
     }
@@ -418,7 +419,7 @@ export class OnboardingSession {
     if (key === " ") {
       if (p.sel < p.sources.length) {
         const src = p.sources[p.sel]!;
-        if (!src.available || src.count === 0) { this.notice(`${src.label} 没有可导入的笔记`, "warn"); return undefined; }
+        if (!src.available || src.count === 0) { this.notice(t("onboard.p5.noNotes", { label: src.label }), "warn"); return undefined; }
         if (p.checked.has(src.id)) p.checked.delete(src.id);
         else p.checked.add(src.id);
         p.notice = "";
@@ -433,18 +434,18 @@ export class OnboardingSession {
       if (p.done) return { kind: "completed", ...(p.importResult !== undefined ? { importResult: p.importResult } : {}) };   // 已尝试过（成功/失败）→ 直接完成
       if (p.checked.size === 0) return { kind: "completed" };   // 无勾选 = 跳过导入直接完成
       p.importing = true;
-      this.notice("正在导入记忆…", "warn");
+      this.notice(t("onboard.pm.importing"), "warn");
       void Promise.resolve(this.deps.importMemory([...p.checked], p.organize)).then((r) => {
         p.importing = false;
         p.done = true;
         p.importResult = r;
-        this.notice(`已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）`, "ok");
+        this.notice(t("onboard.p5.imported", { n: r.imported, skip: r.skipped }), "ok");
         this.deps.requestRender?.();
         this.deps.finish?.({ kind: "completed", importResult: r });   // 宿主注入的自动收尾（引导关窗 + toast）
       }).catch(() => {
         p.importing = false;
         p.done = true;
-        this.notice("导入失败——可直接 Ctrl + N 完成（稍后重开引导或手工搬入）", "err");
+        this.notice(t("onboard.pm.importFail"), "err");
         this.deps.requestRender?.();
       });
       return undefined;
@@ -460,7 +461,7 @@ export class OnboardingSession {
     const p = this.p3;
     this.deps.writeSearch({ backend: "auto", model: qualified }); // 钉选值带提供商前缀（SW-24，Reasonix web_search_model 同款格式）
     p.chosen = "llm"; p.model = qualified; p.stage = "opts"; p.drafts["__manual"] = "";
-    this.notice(`已写入 config.toml [tool-web] search（钉住 ${qualified}，失败自动降级 Tavily / Brave）`, "ok");
+    this.notice(t("onboard.p4.writtenPin", { model: qualified }), "ok");
   }
 
   /* ── 渲染（定高防闪烁纪律：三页/各状态下总行数恒定） ──
@@ -510,7 +511,7 @@ export class OnboardingSession {
     else this.bodyPM(body, bodyH, inner);
     while (body.length < bodyH) body.push(""); // 定高垫行——条件性增删行即闪烁源（浮层纪律）
     if (body.length > bodyH) body.length = Math.max(0, bodyH); // CTU-05：P1 body 简介回流后 7~9 行（窄终端折行更多），bodyH 不足时裁尾（旧「只垫不裁」让 lines 超 mh 预算顶穿底行——rows≤12 时底框/键位行整行被裁不可见）
-    const step = theme.fg("info", `引导 ${this.page} / ${PAGE_TITLES.length}`);   // 分母随标题数组派生（T6d 加页防再漂）
+    const step = theme.fg("info", t("onboard.step", { page: this.page, total: PAGE_TITLES.length }));   // 分母随标题数组派生（T6d 加页防再漂）
     const title = PAGE_TITLES[this.page - 1]!;
     const lines = [
       theme.fg(bc, "╭" + "─".repeat(inner) + "╮"),
@@ -538,50 +539,50 @@ export class OnboardingSession {
       const seg = `${it.on ? theme.fg("accent", it.key) : theme.dim(it.key)} ${it.on ? it.label : theme.dim(it.label)}`;
       return it.on ? seg : `${seg}${it.why !== undefined && it.why !== "" ? theme.fg("warn", `（${it.why}）`) : ""}`;
     });
-    const note = theme.dim("焦点锁定在引导弹窗 · Esc 未占用");
+    const note = theme.dim(t("onboard.dockNote"));
     const line = parts.join(theme.dim(" · "));
     const gap = inner - visibleWidth(line) - visibleWidth(note) - 1;
     return gap > 2 ? `${line}${" ".repeat(gap)}${note}` : truncateToWidth(line, inner);
   }
 
   private footLine(inner: number): string {
-    if (this.page === 1) return this.foot([{ key: "Ctrl + Q", label: "退出", on: true }, { key: "Ctrl + N", label: "下一步", on: true }], inner);
+    if (this.page === 1) return this.foot([{ key: "Ctrl + Q", label: t("onboard.foot.quit"), on: true }, { key: "Ctrl + N", label: t("onboard.foot.next"), on: true }], inner);
     if (this.page === 2) {
       const ready = this.p2.active !== null;
       return this.foot([
-        { key: "Space", label: "设为当前使用", on: true },
-        { key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先配好一家提供商" },
+        { key: "Space", label: t("onboard.foot.setActive"), on: true },
+        { key: "Ctrl + N", label: t("onboard.foot.next"), on: ready, why: ready ? "" : t("onboard.foot.whyNoProvider") },
       ], inner);
     }
-    if (this.page === 3) return this.foot([{ key: "Ctrl + N", label: "下一步", on: true }], inner);
+    if (this.page === 3) return this.foot([{ key: "Ctrl + N", label: t("onboard.foot.next"), on: true }], inner);
     if (this.page === 4) {
       const ready = this.p3.chosen !== null;
-      return this.foot([{ key: "Ctrl + N", label: "下一步", on: ready, why: ready ? "" : "先选定后端——LLM 回车即选" }], inner);
+      return this.foot([{ key: "Ctrl + N", label: t("onboard.p4.footNext"), on: ready, why: ready ? "" : t("onboard.p4.footWhy") }], inner);
     }
     return this.foot([
-      { key: "Space", label: "勾选", on: true },
-      { key: "Ctrl + N", label: "导入选中并完成", on: !this.pm.importing, why: this.pm.importing ? "导入中…" : this.pm.checked.size === 0 ? "未勾选则跳过导入" : "" },
+      { key: "Space", label: t("onboard.foot.check"), on: true },
+      { key: "Ctrl + N", label: t("onboard.foot.importDone"), on: !this.pm.importing, why: this.pm.importing ? t("onboard.foot.whyImporting") : this.pm.checked.size === 0 ? t("onboard.foot.whyNoCheck") : "" },
     ], inner);
   }
 
   private bodyP1(out: string[], _h: number, inner: number): void {
     // 简介按内容区宽回流（2026-10-02 走查：100 格 > 内容区 93 格被截尾丢「可插拔。」——宽度变化内容必须回流）
-    for (const l of wrapText(theme.dim("山夜为底、青绿为峰——一个跑在你终端里的本地 Agent：读写文件、执行命令、管理任务，模型与能力都可插拔。"), Math.max(8, inner - 1))) out.push(l);
+    for (const l of wrapText(theme.dim(t("onboard.p1.intro")), Math.max(8, inner - 1))) out.push(l);
     out.push("");
     const feat = (b: string, t: string) => {
       out.push(` ${theme.fg("accent", "◆")} ${theme.fg("fg", b)}${theme.dim(t)}`);
     };
-    feat("联网能力", "——搜索与打开网页，默认用你配置的模型联网，也可以接 Tavily / Brave。");
-    feat("任何提供商", "——Anthropic、OpenAI、DeepSeek、智谱、Kimi……下一步就能配好。");
-    feat("目标驱动", "——给模型一个目标，它没做完不会自己停。");
+    feat(t("onboard.p1.feat1.head"), t("onboard.p1.feat1.body"));
+    feat(t("onboard.p1.feat2.head"), t("onboard.p1.feat2.body"));
+    feat(t("onboard.p1.feat3.head"), t("onboard.p1.feat3.body"));
     out.push("");
-    out.push(theme.dim("名字由来：模块互连如山之连绵，故中文定名「连山」；oros 词根取希腊语「山」。"));
+    out.push(theme.dim(t("onboard.p1.nameOrigin")));
     void inner;
   }
 
   private prow(selected: boolean, done: boolean, cells: string, active?: boolean): string {
     const sel = selected ? theme.bg("accentSoft", theme.fg("accent", "▌") + cells) : ` ${cells}`;
-    const marks = `${done ? theme.fg("accent", "✓") : " "}${active === true ? ` ${theme.fg("accent", "[使用中]")}` : ""}`;
+    const marks = `${done ? theme.fg("accent", "✓") : " "}${active === true ? ` ${theme.fg("accent", t("onboard.p2.activeMark"))}` : ""}`;
     return `${sel}${marks}`;
   }
 
@@ -606,14 +607,14 @@ export class OnboardingSession {
         out.push(this.providerRow(gi, inner));
       }
       while (out.length < bodyH - reserved) out.push(""); // 列表不足垫空——底部块恒贴脚下分隔线
-      out.push(theme.dim("↑ ↓ 换提供商 · Enter 确认 · Backspace 删除 / 退出输入"));
+      out.push(theme.dim(t("onboard.p2.keyHint")));
       const prov = providers[p.sel];
       if (prov !== undefined) {
         const draft = p.drafts[prov.id] ?? "";
         const conf = p.configured.includes(prov.id);
         out.push("");
-        out.push(theme.dim(`粘贴 ${prov.name} 的 API Key（官网获取，输入不显示${conf ? "；已配置过，回车覆盖" : ""}）`));
-        out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim("（静默盲输——粘贴后回车）") : theme.fg("fg", `已输入 ${draft.length} 字符`)}`); // SW-23 静默盲输
+        out.push(theme.dim(t("onboard.p2.pasteHint", { name: prov.name, conf: conf ? t("onboard.p2.pasteConf") : undefined })));
+        out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim(t("onboard.blindPlaceholder")) : theme.fg("fg", `${t("onboard.p2.typed", { n: draft.length })}`)}`); // SW-23 静默盲输
       }
       out.push(this.noticeLine(p.noticeKind, p.notice));
       return;
@@ -624,7 +625,7 @@ export class OnboardingSession {
     }
     while (out.length < bodyH - 2) out.push(""); // 定高垫行——提示行与 notice 恒钉正文底部两行
     out.push(this.noticeLine(p.noticeKind, p.notice));
-    out.push(theme.dim(`第 ${p.pageIdx + 1} / ${pages} 页 · ↑ ↓ 移动 · Enter 输 Key · Space 设当前使用 · PgUp / PgDn 翻页`));
+    out.push(theme.dim(t("onboard.pm.pageFoot", { n: p.pageIdx + 1, m: pages })));
   }
 
   /** 提供商行（列表态/输入态共用渲染）。 */
@@ -639,23 +640,23 @@ export class OnboardingSession {
   private bodyPV(out: string[], bodyH: number, inner: number): void {
     const p = this.pv;
     if (p.mode === "opts") {
-      out.push(theme.fg("muted", "给不支持图片的模型配一双眼睛（视觉摘要 / 看图能力）——可跳过"));
+      out.push(theme.fg("muted", t("onboard.p3.intro")));
       out.push("");
       for (const [i, o] of VISION_OPTS.entries()) {
         const mark = i === p.sel ? theme.fg("accent", "●") : theme.dim("○");
         out.push(`${mark} ${theme.fg("fg", o.name)}${theme.dim("——" + o.desc)}`);
       }
     } else {
-      out.push(theme.fg("muted", "多模态模型（已按提供商过滤）· Enter 指定 / Backspace 返回"));
+      out.push(theme.fg("muted", t("onboard.p3.listIntro")));
       out.push("");
-      const rows = p.loading ? ["加载中…"] : p.models.length > 0 ? p.models : ["（无多模态模型）"];
+      const rows = p.loading ? [t("onboard.loading")] : p.models.length > 0 ? p.models : [t("onboard.p3.emptyList")];
       const shown = rows.slice(0, VISION_LIST_ROWS);
       for (const [i, m] of shown.entries()) {
         const mark = i === p.sel ? theme.fg("accent", "●") : theme.dim("○");
         out.push(`${mark} ${theme.fg("fg", truncateToWidth(m, inner - 4))}`);
       }
       for (let i = shown.length; i < VISION_LIST_ROWS; i++) out.push(""); // 恒定 5 行空槽留白（防闪烁铁律）
-      if (rows.length > VISION_LIST_ROWS) out.push(theme.dim(`  ↑ 还有 ${rows.length - VISION_LIST_ROWS} 个未显示`));
+      if (rows.length > VISION_LIST_ROWS) out.push(theme.dim(t("onboard.vision.more", { n: rows.length - VISION_LIST_ROWS })));
     }
     // notice 恒占位两行（空则空行）——框高随内容收缩后，notice 出现/消失不得再引起框高跳动
     out.push("");
@@ -664,10 +665,10 @@ export class OnboardingSession {
 
   private bodyP3(out: string[], bodyH: number, inner: number): void {
     const p = this.p3;
-    out.push(theme.dim("搜索后端按「LLM → Tavily → Brave」自动降级；此处选择会写入配置，之后随时可在 /settings 里改。"));
+    out.push(theme.dim(t("onboard.p4.intro")));
     out.push(""); // 说明行与下方内容（选项/子态铅行）间空行（2026-10-07 用户走查）——各子态统一
     const optRow = (o: (typeof WEB_OPTS)[number], i: number) => {
-      const desc = o.id === "llm" && p.model !== null ? `已钉住模型：${p.model}` : o.desc;
+      const desc = o.id === "llm" && p.model !== null ? t("onboard.p4.pinned", { model: p.model }) : o.desc;
       return truncateToWidth(this.prow(i === p.sel, false, `${o.name}${theme.dim(` · ${desc}`)}`), inner);
     };
     const stageLead = (t: string) => out.push(theme.fg("info", t));
@@ -683,33 +684,33 @@ export class OnboardingSession {
     };
     if (p.stage === "opts") {
       WEB_OPTS.forEach((o, i) => out.push(optRow(o, i)));
-      out.push(theme.dim("↑ ↓ 移动 · Enter 选择"));
+      out.push(theme.dim(t("onboard.keys.moveSelect")));
     } else if (p.stage === "llm") {
-      stageLead("LLM Web Search · 选择搜索用的模型");
-      out.push(truncateToWidth(this.prow(p.sel === 0, false, `使用上一页配置的模型（${this.activeName()} · 默认）${theme.dim(" · 与主对话同一模型，零额外配置")}`), inner));
-      out.push(truncateToWidth(this.prow(p.sel === 1, false, `另选一个模型…${theme.dim(" · 可跨第 2 页已配置的提供商选择")}`), inner));
-      out.push(theme.dim("↑ ↓ 移动 · Enter 选择 · Backspace 返回"));
+      stageLead(t("onboard.web.llmStage"));
+      out.push(truncateToWidth(this.prow(p.sel === 0, false, `${t("onboard.p4.optPrevRow", { name: this.activeName() })}${theme.dim(t("onboard.p4.optPrevDesc"))}`), inner));
+      out.push(truncateToWidth(this.prow(p.sel === 1, false, `${t("onboard.p4.optOtherRow")}${theme.dim(t("onboard.p4.optOtherDesc"))}`), inner));
+      out.push(theme.dim(t("onboard.keys.moveSelectBack")));
     } else if (p.stage === "provs") {
-      stageLead("LLM Web Search · 选择提供商（限第 2 页已配置的）");
+      stageLead(t("onboard.web.provStage"));
       const conf = this.configuredProviders();
-      clipList(conf.map((x) => x.name), (gi) => truncateToWidth(this.prow(gi === p.sel, false, conf[gi]!.name, this.p2.active === conf[gi]!.id), inner), "↑ ↓ 移动 · Enter 选提供商 · Backspace 返回");
+      clipList(conf.map((x) => x.name), (gi) => truncateToWidth(this.prow(gi === p.sel, false, conf[gi]!.name, this.p2.active === conf[gi]!.id), inner), t("onboard.keys.movePickProv"));
     } else if (p.stage === "models") {
-      stageLead(`LLM Web Search · 从 ${this.provById(p.provOpt ?? "").name} 的模型中选择`);
-      if (p.models.length === 0) out.push(theme.dim("（正在加载模型清单…）"));
-      else clipList(p.models, (gi) => truncateToWidth(this.prow(gi === p.sel, false, p.models[gi]!), inner), "↑ ↓ 移动 · Enter 钉住 · Backspace 返回");
+      stageLead(t("onboard.p4.llmFrom", { name: this.provById(p.provOpt ?? "").name }));
+      if (p.models.length === 0) out.push(theme.dim(t("onboard.web.modelsLoading")));
+      else clipList(p.models, (gi) => truncateToWidth(this.prow(gi === p.sel, false, p.models[gi]!), inner), t("onboard.keys.movePin"));
     } else if (p.stage === "manual") {
-      stageLead(`LLM Web Search · ${this.provById(p.provOpt ?? "").name} 的模型清单拉取失败——手动输入模型名`);
+      stageLead(t("onboard.p4.manualLead", { name: this.provById(p.provOpt ?? "").name }));
       const draft = p.drafts["__manual"] ?? "";
-      out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim("（输入模型名，回车钉住）") : theme.fg("fg", draft)}`);
-      out.push(theme.dim("Enter 钉住 · Backspace 删除 / 返回"));
+      out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim(t("onboard.web.manualPlaceholder")) : theme.fg("fg", draft)}`);
+      out.push(theme.dim(t("onboard.keys.pinBack")));
     } else if (p.stage === "key" && p.keyOpt !== null) {
       WEB_OPTS.forEach((o, i) => out.push(optRow(o, i)));
       const o = WEB_OPTS.find((x) => x.id === p.keyOpt)!;
       const draft = p.drafts[p.keyOpt] ?? "";
       out.push("");
-      out.push(theme.dim(`打开 ${o.id === "tavily" ? "tavily.com" : "brave.com/search/api"} 免费注册并创建 Key，粘贴到这里（输入不显示）`));
-      out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim("（静默盲输——粘贴后回车）") : theme.fg("fg", `已输入 ${draft.length} 字符`)}`); // SW-23
-      out.push(theme.dim("↑ ↓ 换后端 · Enter 确认 · Backspace 删除 / 返回"));
+      out.push(theme.dim(t("onboard.p4.openSite", { site: o.id === "tavily" ? "tavily.com" : "brave.com/search/api" })));
+      out.push(`${theme.fg("accent", "▍")} ${draft === "" ? theme.dim(t("onboard.blindPlaceholder")) : theme.fg("fg", `${t("onboard.p2.typed", { n: draft.length })}`)}`); // SW-23
+      out.push(theme.dim(t("onboard.keys.switchBackend")));
     }
     out.push(this.noticeLine(p.noticeKind, p.notice));
     void bodyH;
@@ -718,22 +719,22 @@ export class OnboardingSession {
   /* ── 第 5 页 · 导入记忆正文（v3 简图③：五源行 + 整理开关 + 说明；行数恒定防闪烁） ── */
   private bodyPM(out: string[], _bodyH: number, inner: number): void {
     const p = this.pm;
-    out.push(theme.fg("muted", "换工具不丢积累——检测到本机有记忆库的 agent（Space 勾选导入）："));
+    out.push(theme.fg("muted", t("onboard.pm.intro")));
     out.push("");
     for (const [i, src] of p.sources.entries()) {
       const mark = p.checked.has(src.id) ? theme.fg("accent", "●") : theme.dim("○");
-      const count = !src.available ? theme.dim("未安装")
-        : src.count === 0 ? theme.dim("0 条（本项目无记忆）")
-        : theme.fg("fg", `${src.count} 条笔记`);
+      const count = !src.available ? theme.dim(t("onboard.p5.notInstalled"))
+        : src.count === 0 ? theme.dim(t("onboard.pm.zeroNotes"))
+        : theme.fg("fg", t("onboard.p5.notesCount", { n: src.count }));
       const row = `${mark} ${theme.fg("fg", src.label)}${theme.dim(` · ${count}${src.available && src.count > 0 ? ` · ${src.note}` : ""}`)}`;
       out.push(truncateToWidth(i === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + row) : ` ${row}`, inner));
     }
     out.push("");
     const optMark = p.organize ? theme.fg("accent", "[✓]") : theme.dim("[ ]");
-    const optRow = `${optMark} ${theme.fg("fg", "用模型整理导入的记忆")}${theme.dim("（默认关）")}`;
+    const optRow = `${optMark} ${theme.fg("fg", t("onboard.pm.organizeRow"))}${theme.dim(t("onboard.pm.organizeDefaultOff"))}`;
     out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
-    out.push(theme.dim("    开启后逐条优化内容（乱才动、保事实）并重写摘要，"));
-    out.push(theme.dim("    更干净但消耗 token（一次性，按导入量）。"));
+    out.push(theme.dim(t("onboard.pm.organizeDesc1")));
+    out.push(theme.dim(t("onboard.pm.organizeDesc2")));
     // notice 恒占位两行（空则空行）——同 bodyPV：框高收缩后 notice 不得引起框高跳动
     out.push("");
     out.push(this.noticeLine(p.noticeKind, p.notice));

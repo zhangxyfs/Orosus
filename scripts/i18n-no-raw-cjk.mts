@@ -55,6 +55,9 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/module-confirm.ts", max: 0, note: "T10 清零" },
 	{ file: "apps/cli/src/module-diagnostics.ts", max: 0, note: "T10 清零（判据行 diag 豁免——双语扩表走查定）" },
 	{ file: "apps/cli/src/vision-media.ts", max: 0, note: "T10 清零（vision.why 族）" },
+	{ file: "apps/cli/src/tui/onboarding.ts", max: 0, note: "T12 清零（引导五页全窗）" },
+	{ file: "apps/cli/src/onboarding.ts", max: 0, note: "T12 清零（首启两问）" },
+	{ file: "apps/cli/src/startup.ts", max: 0, note: "T12 清零（复检两行）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）
