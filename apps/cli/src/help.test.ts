@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandCompleter, HELP_TEXT } from "./help.ts";
+import { commandCompleter, helpText } from "./help.ts";
 
 describe("completer + /help（M4-2 T21/B5）", () => {
   it("① commandCompleter：/re → 含 /resume+/reload；唯一命中单元素；非命令行零补全", () => {
@@ -17,22 +17,22 @@ describe("completer + /help（M4-2 T21/B5）", () => {
   });
 
   it("② HELP_TEXT：三组命令名 + 每条中文说明（如 /new 开始新会话）；退役命令（/usage /status /context /paste）不再列", () => {
-    expect(HELP_TEXT).toContain("CLI 命令（会话生命周期）");
-    expect(HELP_TEXT).toContain("内建命令（模型与状态）");
-    expect(HELP_TEXT).toContain("模块命令");
-    expect(HELP_TEXT).toContain("/new        开始新会话");
-    expect(HELP_TEXT).not.toContain("\n  /usage"); // 行首命令位不再列（/settings 行内的「/usage /status 已并入」指路属有意保留）
-    expect(HELP_TEXT).toContain("/settings"); // M4-3 T1c：/other 改名（旧名直接消失——HELP 行首不再列 /other）
-    expect(HELP_TEXT).not.toContain("\n  /other");
+    expect(helpText()).toContain("CLI 命令（会话生命周期）");
+    expect(helpText()).toContain("内建命令（模型与状态）");
+    expect(helpText()).toContain("模块命令");
+    expect(helpText()).toContain("/new        开始新会话");
+    expect(helpText()).not.toContain("\n  /usage"); // 行首命令位不再列（/settings 行内的「/usage /status 已并入」指路属有意保留）
+    expect(helpText()).toContain("/settings"); // M4-3 T1c：/other 改名（旧名直接消失——HELP 行首不再列 /other）
+    expect(helpText()).not.toContain("\n  /other");
     expect(commandCompleter("/set")[0]).toContain("/settings");
-    expect(HELP_TEXT).not.toContain("\n  /status");
-    expect(HELP_TEXT).not.toContain("/paste "); // 批⑤⑥退役清理（Alt+V 提示并入尾部提示行）
-    expect(HELP_TEXT).toContain("Alt+V"); // T5 可发现性：图片键位仍在帮助
-    expect(HELP_TEXT).toContain("Ctrl+U"); // 队列批可发现性：steer 键位入帮助（2026-09-23）
-    expect(HELP_TEXT).toContain("/permission 查看或切换审批模式");
-    expect(HELP_TEXT).toContain("Tab 补全");
-    expect(HELP_TEXT).toContain("@ 后 Tab 补全文件"); // T6 可发现性：@ 补全与 #L 语法入提示行
-    expect(HELP_TEXT).toContain("@path#L10-L20 引用行范围");
+    expect(helpText()).not.toContain("\n  /status");
+    expect(helpText()).not.toContain("/paste "); // 批⑤⑥退役清理（Alt+V 提示并入尾部提示行）
+    expect(helpText()).toContain("Alt+V"); // T5 可发现性：图片键位仍在帮助
+    expect(helpText()).toContain("Ctrl+U"); // 队列批可发现性：steer 键位入帮助（2026-09-23）
+    expect(helpText()).toContain("/permission 查看或切换审批模式");
+    expect(helpText()).toContain("Tab 补全");
+    expect(helpText()).toContain("@ 后 Tab 补全文件"); // T6 可发现性：@ 补全与 #L 语法入提示行
+    expect(helpText()).toContain("@path#L10-L20 引用行范围");
   });
 });
 
@@ -101,21 +101,21 @@ describe("命令参数补全第三职（m5 T15——模块命令 completeArg 委
 
 describe("T12 m5-resume-perf：/help 三处同步（Alt+S 步骤收展 / 懒分页 / Alt+O 聚合组）", () => {
 	it("① Alt+S 行在列（轮内步级折叠——默认保留最近 30 步，排 Alt+F 后）", () => {
-		expect(HELP_TEXT).toContain("Alt+S       展开 / 收起一轮内被折叠的前序步骤（默认保留最近 30 步）");
+		expect(helpText()).toContain("Alt+S       展开 / 收起一轮内被折叠的前序步骤（默认保留最近 30 步）");
 	});
 	it("② PgUp/PgDn 行含懒分页半句（翻到顶继续按可加载更早历史）", () => {
-		expect(HELP_TEXT).toContain("翻到顶继续按可加载更早历史（懒分页）");
+		expect(helpText()).toContain("翻到顶继续按可加载更早历史（懒分页）");
 	});
 	it("③ Alt+O 行含同名工具聚合组描述（Used Read N 个文件）", () => {
-		expect(HELP_TEXT).toContain("同名工具聚合组");
-		expect(HELP_TEXT).toContain("Used Read N 个文件");
+		expect(helpText()).toContain("同名工具聚合组");
+		expect(helpText()).toContain("Used Read N 个文件");
 	});
 });
 
 describe("m5-btw T4：/btw 帮助与补全同步", () => {
 	it("HELP_TEXT 内建区含 /btw 侧问行；Tab 补全清单同步入列（/bt 前缀唯一命中）", () => {
-		expect(HELP_TEXT).toContain("/btw        侧问"); // 内建命令区（模型与状态）
-		expect(HELP_TEXT).toContain("无参回看最近一次");
+		expect(helpText()).toContain("/btw        侧问"); // 内建命令区（模型与状态）
+		expect(helpText()).toContain("无参回看最近一次");
 		expect(commandCompleter("/bt")[0]).toEqual(["/btw"]); // 与 SLASH_ITEMS 菜单同步入列
 	});
 });

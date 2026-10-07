@@ -13,9 +13,9 @@ export interface CliArgs {
   tui?: "line" | "full";                                   // --tui：界面模式（TUI 批阶段三 F3——full 全屏双栏为 TTY 缺省，line 滚动流降级）
 }
 
-const USAGE = `用法: orosus [--model <provider/model>] [--enable-module <name>]...
-             [--disable-module <name>]... [--no-modules [--module <name>]...] [--dump-modules]
-             [--print <prompt> [--output-format text|json|stream-json]] [--tui line|full]`;
+import { t } from "./i18n/app.ts";
+
+const USAGE = (): string => t("args.usage"); // m5-i18n T9：用法块整体走键（多行含续行对齐）
 
 // T1（release-npm）：--version/-v 早退旗标——main 顶部在子命令拦截与 parseArgs 之前消费。
 // 精确整串匹配（startsWith 反查误中前缀同款教训——"--version-like" 不算命中）
@@ -27,7 +27,7 @@ export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { enable: [], disable: [], module: [], noModules: false, dumpModules: false };
   const takeValue = (i: number, flag: string): string => {
     const v = argv[i + 1];
-    if (v === undefined || v.startsWith("--")) throw new Error(`${flag} 缺值\n${USAGE}`);
+    if (v === undefined || v.startsWith("--")) throw new Error(`${t("args.missingValue", { flag })}\n${USAGE()}`);
     return v;
   };
   for (let i = 0; i < argv.length; i++) {
@@ -46,7 +46,7 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case "--output-format": {
         const v = takeValue(i, "--output-format"); i++;
-        if (v !== "text" && v !== "json" && v !== "stream-json") throw new Error(`--output-format 非法值 "${v}"（合法：text | json | stream-json）\n${USAGE}`);
+        if (v !== "text" && v !== "json" && v !== "stream-json") throw new Error(`${t("args.badOutputFormat", { v })}\n${USAGE()}`);
         args.outputFormat = v;
         break;
       }
@@ -57,12 +57,11 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case "--tui": {
         const v = takeValue(i, "--tui"); i++;
-        if (v !== "line" && v !== "full") throw new Error(`--tui 非法值 "${v}"（合法：line | full）
-${USAGE}`);
+        if (v !== "line" && v !== "full") throw new Error(`${t("args.badTui", { v })}\n${USAGE()}`);
         args.tui = v;
         break;
       }
-      default: throw new Error(`未知参数 ${argv[i]}\n${USAGE}`);
+      default: throw new Error(`${t("args.unknown", { v: argv[i] })}\n${USAGE()}`);
     }
   }
   return args;

@@ -53,11 +53,12 @@ import { imagesFor, extractImageRefs, PASTE_EMPTY, readClipboardText } from "./p
 import { attachAltVPaste } from "./altpaste.ts";
 import { runPrint } from "./print.ts";
 import { resolveAtRefs } from "./atfile.ts";
-import { HELP_TEXT } from "./help.ts";
+import { helpText } from "./help.ts";
 import { seedFactorySkills } from "./skill-settings.ts";
 import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks-cmd.ts";
 import { isEsc } from "./mcp-ui.ts";
 import { createLocaleStore, detectSystemLocale } from "./i18n/index.ts";
+import { mainTables } from "./locales/index.ts";
 import { runLocaleSetting } from "./i18n/switch.ts";
 import { bindAppLocale, t } from "./i18n/app.ts";
 import { BTW_USAGE_HINT, openBtw, reopenBtw, type BtwDeps } from "./btw-cmd.ts";
@@ -344,7 +345,7 @@ const settingsService: SettingsService = {
 
 let h: Harness;
 /** m5-i18n T3：宿主语言 store——图槽现读（会话切换图随换代，rebuild 时现解析）；界面主目录 T4 起。 */
-const localeStore = createLocaleStore({ getGraph: () => h.graph() });
+const localeStore = createLocaleStore({ getGraph: () => h.graph(), mainTables }); // m5-i18n T4 起主目录参与合并（T9 补接——pipe e2e 实锤）
 /** 会话族装配依赖（m5-split-main T5，D2 签名注入）：main.ts 留守件经此穿给 session-io.ts 的
  *  createSession/switchTo（h/lastEventId/tuiMode/pendingEcho 走闭包访问器，调用期现读现写）。 */
 const sessionDeps: SessionDeps = {
@@ -880,7 +881,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
       // CM-15①（2026-09-28 code review）：精确小写等值改走 cmdNameOf（归一 + 小写）——/HELP、/Help、
       // "/ help"（斜杠后空格抹除）与 core 路由口径一致（core 2026-09-27 起命令词忽略大小写），不再漏到
       // 「未知命令」；非命令文本（无斜杠）cmdNameOf 原样返回不匹配，直通不受影响
-      if (cmdNameOf(text) === "/help") { out(HELP_TEXT); return "again"; }
+      if (cmdNameOf(text) === "/help") { out(helpText()); return "again"; }
       // /settings（M4-3 T1c/D9：/other 改名——别名平移 /config；/other 旧名直接消失〔2026-09-24 用户拍板，
       // 不留指路不转别名〕——打字面撞「未知命令」即知新家）
       // 注记（同日走查实锤）：本条拦截须在下方 try 的 catch-all 覆盖内——弹窗配置流的 choose/ask Esc
@@ -1252,7 +1253,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       // dock（2026-09-28 用户拍板）：贴输入框上缘 + 与输入框同宽同左缘——左右边框与输入框连成直线
       const cmd = text.trim().replace(/^\/\s+/, "/").replace(/\s+/g, " ");
       if (cmd === "/help") {
-        app.viewText("帮助", HELP_TEXT, { layout: "dock" });
+        app.viewText("帮助", helpText(), { layout: "dock" }); // 题头键归 T14 统一收口
         return;
       }
       // busy 命令策略（批①②④⑦d 重构）：/quit 族立即打断退出；即改档（BUSY_EXEC）busy 期直接执行；

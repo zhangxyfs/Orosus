@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, rmSync, rmdirSync } from "node:fs";
 import { orosusHome } from "@orosus/contracts/home";
 import { dirname, join } from "node:path";
 import { scanSessionFiles, type SessionFileEntry } from "@orosus/core";
+import { t } from "./i18n/app.ts";
 
 /** `orosus sessions prune`（M4-1 T2/D47）：显式清理会话文件——缺省 dry-run，`--apply` 才删；
  *  不做启动期自动 GC（静默删数据违背「降级必须吵闹」）。清单复用 T1 统一件 scanSessionFiles
@@ -14,7 +15,7 @@ export function isSessionsSubcommand(argv: string[]): boolean {
 
 export interface PruneOptions { days: number; apply: boolean }
 
-const PRUNE_USAGE = "用法: orosus sessions prune [--days N] [--dry-run|--apply]（缺省 dry-run 30 天）";
+const PRUNE_USAGE = (): string => t("prune.usage"); // m5-i18n T9：用法块走键
 
 export function parsePruneFlags(rest: string[]): PruneOptions {
   const opts: PruneOptions = { days: 30, apply: false };
@@ -25,9 +26,9 @@ export function parsePruneFlags(rest: string[]): PruneOptions {
     else if (a === "--days") {
       const v = rest[++i];
       const n = v !== undefined ? Number(v) : NaN;
-      if (!Number.isInteger(n) || n < 1) throw new Error(`--days 须为正整数（得到 ${String(v)}）\n${PRUNE_USAGE}`);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`${t("prune.badDays", { v: String(v) })}\n${PRUNE_USAGE()}`);
       opts.days = n;
-    } else throw new Error(`未知参数 ${a}\n${PRUNE_USAGE}`);
+    } else throw new Error(`${t("args.unknown", { v: a })}\n${PRUNE_USAGE()}`);
   }
   return opts;
 }
@@ -79,11 +80,11 @@ export async function runPruneSubcommand(
   const stale = plan.deletions.length - empty;
   // CM-18（2026-09-28 code review）：scanSessionFiles 是全域扫描（根平铺 + 全部项目桶，dir.ts 的宿主级
   // 消费口径）——旧文案「项目桶」暗示只动当前项目，用户会误判清理的爆炸半径；跨项目是设计（子命令无项目态）
-  io.out(`扫描 ${entries.length} 个会话文件（全域——所有项目桶与根平铺，不限于当前项目）`);
-  io.out(`计划删除 ${plan.deletions.length} 个：空文件（0 字节或仅 header）${empty} 个 + 超过 ${opts.days} 天 ${stale} 个；保留 ${plan.kept} 个（含 mtime 最新的当前会话）。`);
-  for (const d of plan.deletions) io.out(`  将删 ${d.id}［${d.reason === "empty" ? "空" : "过期"}］`);
+  io.out(t("prune.scanHeader", { n: entries.length }));
+  io.out(t("prune.plan", { n: plan.deletions.length, empty, days: opts.days, stale, kept: plan.kept }));
+  for (const d of plan.deletions) io.out(t("prune.row", { id: d.id, reason: d.reason === "empty" ? t("prune.reason.empty") : t("prune.reason.stale") }));
   if (!opts.apply) {
-    io.out("dry-run（缺省）——未删除任何文件；确认后加 --apply 执行。");
+    io.out(t("prune.dryRun"));
     return 0;
   }
   // 会话树批 T4（设计空白 16）：删除粒度 = 整会话目录（含 agents/ 与 spill/）——会话既删、其日志与溢写文件同灭；
@@ -94,6 +95,6 @@ export async function runPruneSubcommand(
   for (const bucketDir of new Set(plan.deletions.map((d) => dirname(d.dir)))) {
     try { if (readdirSync(bucketDir).length === 0) rmdirSync(bucketDir); } catch { /* 并发变化则留待下轮 */ }
   }
-  io.out(`已删除 ${plan.deletions.length} 个会话（含整会话目录）。`);
+  io.out(t("prune.done", { n: plan.deletions.length }));
   return 0;
 }

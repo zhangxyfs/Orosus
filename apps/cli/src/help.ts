@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { t } from "./i18n/app.ts";
 
 /** CLI 命令补全（M4-2 T21/B5）——readline/promises Completer 形态：返回 [completions, line]
  *  （注意与回调版 readline 的记忆相反——promises 版文档示例即此序；方案草图返回序勘误）。
@@ -62,63 +63,60 @@ export function commandCompleter(
   return [all.filter((c) => c.startsWith(line)), line];
 }
 
-export const HELP_TEXT = `CLI 命令（会话生命周期）：
-  /new        开始新会话
-  /fork       从当前会话分叉
-  /sessions   列出并选择恢复历史会话（别名 /resume）
-  /title      给会话命名（别名 /rename；引号可选；无参不做任何事）
-  /quit       退出（别名 /exit /q）
-
-内建命令（模型与状态）：
-  /model      切换当前模型（回答进行中也可执行，下一轮生效）
-  /effort     思考投入档位（推理深度/自检/多方案推演；档位来自模型目录；回答进行中也可执行，下一轮生效）
-  /reload     重新加载模块配置
-  /locale    切换界面语言（简 / 繁 / 英——挂载多语言包后追加日 / 韩 / 俄等；回答进行中也可执行）
-  /help       显示此帮助
-  /btw        侧问——带着当前对话上下文的旁路快问（不打断主对话；答案开小窗、不进主对话流不留痕；回答中也可问；无参回看最近一次）
-
-（压缩摘要查看口 = Ctrl+O——/summary 已退役）
-
-模块命令：
-  /compact    手动压缩对话历史
-  /permission 查看或切换审批模式（回答进行中也可执行，本轮生效；rules 子参数看规则清单）
-  /yolo       一键切到需要时候询问（常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认）
-  /auto       从不询问模式（从不打断你，就算有问题也是模型自行判断）
-
-设置与信息面板：
-  /settings   设置（磁盘占用 / 上下文用量 / Token 用量 / 运行状态 / 子代理 / 技能 / 钩子 / MCP / 配置网络搜索——/usage /status 已并入；回答进行中也可打开；别名 /config）
-  /tasks      子代理任务列表（父编号-孙编号亲缘标注；回车进消息查看窗；挂着审批的行回车即可批准或拒绝）
-
-技能（四轨目录：~/.agents/skills → ~/.orosus/skills → 项目 .agents/skills → 项目 .orosus/skills，同名后入者胜——项目压用户）：
-  输入 /      斜杠菜单技能区殿后于命令（skill : 名 格式；详释三行 = 说明两行 + 适用一行），
-              Enter = 加载该技能（正文注入模型上下文，对话流只留「已加载技能」单行标记；模型自动调用走 skill__load）；
-              手敲 /skill : 名 参数 同效——输入行原样上屏、参数随技能正文一起注入
-  /settings → 技能    全部技能列表（含已停用）→ 回车进详情（名称 / 描述 / 范围 / 状态 / 文件），
-              Alt + K 启用或停用（空闲自动重载生效；回答进行中改完稍后 /reload）
-
-钩子（七事件生命周期 shell 命令——配置 ~/.orosus/modules.d/hooks.toml 与项目 .orosus/modules.d/hooks.toml，协议兼容 Claude Code）：
-  /settings → 钩子    全部钩子列表（用户级/项目级分节；项目层首次生效前须 t 键审查 sha256）
-              → 回车进详情（事件 / matcher / 命令 / 超时 / 信任态），e 启用或停用（写盘缓挂 /reload）
-  Ctrl+H     注入查看窗——本会话钩子注入条目列表 → 回车看全文（流区折叠行同源；弹窗期不生效）
-
-快捷键（全屏）：
-  Enter       发送；回答进行中 = 排队（队列逐条显示在输入框上方，结束后依序发出）
-  Ctrl+U      立即注入——排队消息 + 当前输入直接进本轮回答（不等回答结束；命令类不参与）
-  Alt+Enter   输入框内换行
-  ↑ / ↓       输入框内上下移动光标；光标在起始点再按 ↑ = 召回队尾排队消息 / 上一条历史输入
-              （浏览历史时当前草稿自动暂存，↓ 翻回最新即恢复）
-  Esc         回答进行中：双击停止生成 + 停止全部子代理（单击提示，1 秒内再按生效）；
-              空闲且有子代理在跑：双击停止全部子代理（未答审批自动按拒绝收场）；其余：关浮层/菜单
-  Tab         输入区 / 模块面板 / 任务面板焦点循环；Shift+Tab 切换权限模式
-  Ctrl+T      显示 / 隐藏右侧面板栏
-  Ctrl + E    打开模块诊断弹窗——本会话出过问题的模块、失败原因与修复指引（↑↓ 选择 · Enter 详情）
-  Alt+E       展开 / 收起思考块（默认收起）
-  Alt+O       展开 / 收起工具改动明细与同名工具聚合组（Edit diff / Write 内容 / \`Used Read N 个文件\`，默认 10 行）
-  Alt+F       展开 / 收起失败工具的错误详情（默认全收起）
-  Alt+S       展开 / 收起一轮内被折叠的前序步骤（默认保留最近 30 步）
-  Alt+V       粘贴剪贴板图片——[image #N] 标记插入输入框光标位，删掉标记即撤销挂图
-  Ctrl+A      全选输入框；Shift+←/→ 逐字选择；选中后 Ctrl+C 复制
-  PgUp/PgDn   回看上方对话内容；翻到顶继续按可加载更早历史（懒分页）；面板聚焦时为面板翻页（运行状态翻模块列表 / 任务清单翻任务）
-  ←→ / ↑↓     面板聚焦时生效：←→ 翻运行状态页；↑↓ 选模块 / 任务（Enter 挂/卸载模块）
-
-提示：回答进行中 /new /sessions /provider 回车被拦（尾行提示，回答结束后原文再按回车即发）；图片粘贴用 Alt+V；工具改动（diff）用 Alt+O 展开/收起、失败详情用 Alt+F 展开/收起；压缩摘要用 Ctrl+O 查看；输入 / 后按 Tab 补全命令名；@ 后 Tab 补全文件；@path#L10-L20 引用行范围`;
+/** m5-i18n T9：HELP_TEXT 改函数——行值（含命令名/对齐/续行）整体住 help 域目录，随表走。 */
+export const helpText = (): string => [
+	t("help.sec.cli"),
+	t("help.cmd.new"),
+	t("help.cmd.fork"),
+	t("help.cmd.sessions"),
+	t("help.cmd.title"),
+	t("help.cmd.quit"),
+	"",
+	t("help.sec.builtin"),
+	t("help.cmd.model"),
+	t("help.cmd.effort"),
+	t("help.cmd.reload"),
+	t("help.cmd.locale"),
+	t("help.cmd.help"),
+	t("help.cmd.btw"),
+	"",
+	t("help.note.summary"),
+	"",
+	t("help.sec.module"),
+	t("help.cmd.compact"),
+	t("help.cmd.permission"),
+	t("help.cmd.yolo"),
+	t("help.cmd.auto"),
+	"",
+	t("help.sec.settings"),
+	t("help.cmd.settings"),
+	t("help.cmd.tasks"),
+	"",
+	t("help.sec.skills"),
+	t("help.skills.block"),
+	t("help.skills.panel"),
+	"",
+	t("help.sec.hooks"),
+	t("help.hooks.panel"),
+	t("help.hooks.view"),
+	"",
+	t("help.sec.keys"),
+	t("help.key.enter"),
+	t("help.key.ctrlU"),
+	t("help.key.altEnter"),
+	t("help.key.arrows"),
+	t("help.key.esc"),
+	t("help.key.tab"),
+	t("help.key.ctrlT"),
+	t("help.key.ctrlE"),
+	t("help.key.altE"),
+	t("help.key.altO"),
+	t("help.key.altF"),
+	t("help.key.altS"),
+	t("help.key.altV"),
+	t("help.key.ctrlA"),
+	t("help.key.pgup"),
+	t("help.key.panelNav"),
+	"",
+	t("help.tips"),
+].join("\n");

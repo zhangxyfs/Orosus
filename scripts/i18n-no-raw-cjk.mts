@@ -42,6 +42,12 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/usage-text.ts", max: 0, note: "T8 清零（三用量卡全族——全角填充随表值）" },
 	{ file: "apps/cli/src/compaction-view.ts", max: 0, note: "T8 清零（compact.* 四键）" },
 	{ file: "apps/cli/src/sessions.ts", max: 0, note: "T8 清零（相对时间/空态/序号提示/未命名）" },
+	{ file: "apps/cli/src/help.ts", max: 0, note: "T9 清零（HELP_TEXT→helpText() 组装）" },
+	{ file: "apps/cli/src/args.ts", max: 0, note: "T9 清零" },
+	{ file: "apps/cli/src/home-cmd.ts", max: 0, note: "T9 清零" },
+	{ file: "apps/cli/src/prune.ts", max: 0, note: "T9 清零" },
+	{ file: "apps/cli/src/module-cmd.ts", max: 0, note: "T9 清零" },
+	{ file: "apps/cli/src/provider-cmd.ts", max: 0, note: "T9 清零（success： 前缀=PROVIDER_WRITE_DONE 判据不动）" },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）

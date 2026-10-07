@@ -1,5 +1,6 @@
 import { cpSync, existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import { t } from "./i18n/app.ts";
 
 /** `orosus home path` / `orosus home migrate <目标> [--dry-run|--apply]`（M4-2.5 T6——ROADMAP 迁移 ②）。
  *  纪律与 prune 同款：移动性操作当删除性对待——缺省 dry-run、显式 --apply 才动；
@@ -21,7 +22,7 @@ export interface HomeIo {
   copy?(from: string, to: string): void;
 }
 
-const USAGE = "用法: orosus home path | orosus home migrate <目标路径> [--dry-run|--apply]（migrate 缺省 dry-run）";
+const USAGE = t("home.usage");
 
 /** 递归统计：文件数 + 总字节（readdirSync recursive 原生）。 */
 const walk = (root: string): { files: number; bytes: number } => {
@@ -42,10 +43,10 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
   const sub = argv[1] ?? "";
   if (sub === "path") {
     const home = io.sourceHome; // main 接线 orosusHome() 的解析结果（env 已在接线时消费）
-    io.out(`OROSUS_HOME 解析结果: ${home}`);
-    for (const [name, rel] of [["config", "config.toml"], ["modules（模块配置目录）", "modules.d"], ["sessions", "sessions"], ["cache", "cache"]] as const) {
+    io.out(`${t("home.path.header", { home: home })}`);
+    for (const [name, rel] of [["config", "config.toml"], ["modules.d", "modules.d"], ["sessions", "sessions"], ["cache", "cache"]] as const) { // m5-i18n T9：目录名不翻（专名），原中文括注退役
       const p = `${home}/${rel}`;
-      io.out(`  ${name}: ${p}${existsSync(p) ? "" : "（不存在）"}`);
+      io.out(`  ${name}: ${p}${existsSync(p) ? "" : t("home.path.missing")}`);
     }
     return 0;
   }
@@ -58,24 +59,24 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
   const apply = argv.includes("--apply");
   const source = io.sourceHome;
   const dest = resolve(target);
-  if (dest === resolve(source)) { io.out(`目标与源相同：${dest}`); return 1; }
-  if (!existsSync(source)) { io.out(`源目录不存在：${source}（先启动一次 orosus 生成，或检查 OROSUS_HOME）`); return 1; }
+  if (dest === resolve(source)) { io.out(`${t("home.sameTarget", { dest: dest })}`); return 1; }
+  if (!existsSync(source)) { io.out(`${t("home.noSource", { source: source })}`); return 1; }
   // CM-10（2026-09-28 code review）：目标在源内 → 前置人话拒绝（fs.cp 自拷贝会拒，但报错形态不友好且
   // 在无兜底期直接裸抛）；win32 路径大小写不敏感受理
   const insideSource = process.platform === "win32"
     ? dest.toLowerCase().startsWith(resolve(source).toLowerCase() + sep)
     : dest.startsWith(resolve(source) + sep);
-  if (insideSource) { io.out(`目标在源目录内，拒绝：${dest}（迁移目标必须是源之外的位置）`); return 1; }
+  if (insideSource) { io.out(`${t("home.insideSource", { dest: dest })}`); return 1; }
   if (existsSync(dest)) {
-    if (!dirEmpty(dest)) { io.out(`目标已存在且非空，拒绝：${dest}（不会覆盖任何已有数据）`); return 1; }
+    if (!dirEmpty(dest)) { io.out(`${t("home.destNotEmpty", { dest: dest })}`); return 1; }
   }
 
   const plan = walk(source);
   if (!apply) {
-    io.out(`[dry-run] 迁移计划（不复制、不改名——加 --apply 执行）：`);
-    io.out(`  源:   ${source}（${plan.files} 个文件，${plan.bytes} 字节）`);
-    io.out(`  目标: ${dest}`);
-    io.out(`  执行后: 目标持有全部数据；源改名 ${source}.pre-migrate-<时间戳> 留证（绝不删）`);
+    io.out(t("home.plan.header"));
+    io.out(t("home.plan.source", { source, n: plan.files, b: plan.bytes }));
+    io.out(t("home.plan.dest", { dest }));
+    io.out(t("home.plan.after", { source }));
     return 0;
   }
 
@@ -91,7 +92,7 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
     const got = walk(dest);
     if (got.files !== plan.files || got.bytes !== plan.bytes) {
       rmSync(dest, { recursive: true, force: true });
-      io.out(`校验失败：目标 ${got.files} 文件/${got.bytes} 字节 ≠ 源 ${plan.files} 文件/${plan.bytes} 字节——目标已清理，源未动`);
+      io.out(t("home.verifyFail", { a: got.files, b: got.bytes, c: plan.files, d: plan.bytes }));
       return 1;
     }
     renameSync(source, renamed);
@@ -99,25 +100,25 @@ export async function runHomeSubcommand(argv: string[], io: HomeIo): Promise<num
     try {
       rmSync(dest, { recursive: true, force: true }); // 清理已复制部分（清理自身失败不掩盖原始错误）
     } catch {
-      io.out(`（目标自动清理失败——请手动删除 ${dest}）`);
+      io.out(`${t("home.cleanupFail", { dest: dest })}`);
     }
-    io.out(`迁移失败：${err instanceof Error ? err.message : String(err)}——目标已清理，源未动`);
+    io.out(t("home.migrateFail", { err: err instanceof Error ? err.message : String(err) }));
     return 1;
   }
-  io.out(`迁移完成：${plan.files} 个文件/${plan.bytes} 字节 → ${dest}`);
-  io.out(`源已改名留证（绝不删，确认无误后可自行删除）：${renamed}`);
+  io.out(t("home.migrateDone", { n: plan.files, b: plan.bytes, dest }));
+  io.out(`${t("home.renamed", { renamed: renamed })}`);
   // 生效指引：env 写入失败不回滚迁移（目标完好+源留证，数据双份安全）——改打印手动行
   if (process.platform === "win32") {
     try {
       io.setEnv?.(dest);
-      io.out(`已写入用户环境变量 OROSUS_HOME=${dest}（setx）——重开终端生效`);
+      io.out(`${t("home.setxOk", { dest: dest })}`);
     } catch {
-      io.out(`自动 setx 失败——请手动执行: setx OROSUS_HOME "${dest}" 后重开终端`);
+      io.out(t("home.setxFail", { dest }));
     }
   } else {
-    io.out(`请将以下行加入 shell 配置（~/.bashrc / ~/.zshrc）后重开终端：`);
+    io.out(t("home.exportHint"));
     io.out(`  export OROSUS_HOME="${dest}"`);
   }
-  io.out(`注意：其他已开的终端仍指向旧根——重开前勿在其中启动 orosus（旧根已改名，旧终端启动会重建空目录）`);
+  io.out(t("home.otherTerminals"));
   return 0;
 }

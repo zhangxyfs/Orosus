@@ -4,6 +4,7 @@ import { defaultCatalogCacheFile, getCatalogWithSource, type Catalog, type Catal
 import { resolveWire, adaptBaseUrl } from "@orosus/provider-custom";
 import { upsertSecret } from "@orosus/tool-web";
 import { OROSUS_USER_AGENT } from "@orosus/contracts/version";
+import { t } from "./i18n/app.ts";
 
 /** CLI provider 子命令（D34/D37 配置写器）：import（校验即确认）与 list。 */
 export interface ProviderCmdIo {
@@ -158,11 +159,11 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
   if (cmd === "list") {
     const config = readConfig(io.configPath);
     const providers = ((config["provider-custom"] as Record<string, unknown> | undefined)?.["providers"] ?? {}) as Record<string, { baseUrl?: string }>;
-    io.out("本地已配置厂商：");
+    io.out(t("provider.list.local"));
     const names = Object.keys(providers).sort((a, b) => a.localeCompare(b)); // 字母序（2026-09-18）——Object.keys 已是新数组，spread 冗余
-    if (names.length === 0) io.out("  （无）");
+    if (names.length === 0) io.out(t("core.help.module.empty")); // 同文复用地板键
     for (const n of names) io.out(`  ${n}（${providers[n]!.baseUrl ?? "?"}）`);
-    io.out("目录厂商（models.dev）：");
+    io.out(t("provider.list.catalog"));
     const { catalog } = await getCat({ fetchImpl: doFetch });
     for (const id of Object.keys(catalog).sort((a, b) => a.localeCompare(b))) io.out(`  ${id}${catalog[id]!.name !== undefined ? `（${catalog[id]!.name}）` : ""}`); // 字母序
     return 0;
@@ -171,27 +172,27 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
   if (cmd === "import") {
     const id = rest[0];
     if (id === undefined || id.startsWith("--")) {
-      io.out("用法: orosus provider import <id> [--baseUrl <url>] [--registry <url>] [--model <id>] [--key <value>]");
+      io.out(t("provider.import.usage"));
       return 1;
     }
     const registry = flag("--registry");
     const { catalog, source } = await getCat({ ...(registry !== undefined ? { registryUrl: registry } : {}), fetchImpl: doFetch });
     const entry = catalog[id];
     if (entry === undefined) {
-      io.out(`目录中没有厂商 "${id}"（可用 orosus provider list 查看）`);
+      io.out(t("provider.import.notFound", { id }));
       if (source !== "online") {
-        io.out(`[提示] 当前使用${source === "disk" ? "本地缓存目录" : "内置快照"}（在线拉取失败）——厂商可能存在于在线目录，检查网络或代理后重试 /provider（在线源）`);
+        io.out(t("provider.import.offlineHint", { source: source === "disk" ? t("provider.src.disk") : t("provider.src.snapshot") }));
       }
       return 1;
     }
     const wire = resolveWire(entry);
     if (wire.kind === "invalid") {
-      io.out(`无法导入：${wire.reason}`);
+      io.out(t("provider.import.invalidWire", { reason: wire.reason }));
       return 1;
     }
     const baseUrl = flag("--baseUrl") ?? entry.api;
     if (baseUrl === undefined || baseUrl === "") {
-      io.out(`目录条目缺端点——请用 --baseUrl 指定（厂商 ${id} 的 api 字段为空）`);
+      io.out(`${t("provider.import.noBaseUrl", { id: id })}`);
       return 1;
     }
     const finalBaseUrl = adaptBaseUrl(baseUrl, wire.wire);
@@ -208,7 +209,7 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
       && targetHost !== undefined && targetHost === hostOf(entry.api ?? "");
     const actualKey = flagKey ?? (officialEndpoint ? envValue : undefined);
     if (envValue !== undefined && actualKey === undefined) {
-      io.out(`[安全] 环境密钥 ${envKey} 未外发——目标端点非目录官方端点（${finalBaseUrl}${registry !== undefined ? "，自定义 registry" : ""}）；如需验证请用 --key 显式提供`);
+      io.out(t("provider.import.keyHeldBack", { envKey, url: finalBaseUrl, customRegistry: registry !== undefined ? "1" : undefined }));
     }
 
     // CM-13 配套防线（落盘键/值形态前置校验——在发网与写盘之前拒绝）：
@@ -217,11 +218,11 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     // ② 键名来自目录 entry.env[0]（不受信输入，CM-07 同源）——非常规环境变量名无法行级匹配且可
     //    注入额外行，拒绝并明示。派生键（deriveEnvKey）构造上恒过本校验。
     if (flagKey !== undefined && /[\r\n]/.test(flagKey)) {
-      io.out("--key 的值含换行——疑似多行粘贴，请整行重新提供（未写入任何配置）");
+      io.out(t("provider.import.keyNewline"));
       return 1;
     }
     if (flagKey !== undefined && envKey !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(envKey)) {
-      io.out(`目录条目声明的密钥环境变量名 ${JSON.stringify(envKey)} 非常规形态（须 [A-Za-z_][A-Za-z0-9_]*）——疑似目录数据异常，拒绝落盘（未写入任何配置）`);
+      io.out(t("provider.import.badEnvKey", { name: JSON.stringify(envKey) }));
       return 1;
     }
 
@@ -229,21 +230,21 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
     const v = await verify(finalBaseUrl, actualKey, doFetch);
     if (v === "auth") {
       io.out(actualKey !== undefined
-        ? "密钥无效（401/403）——未产生任何配置变更"
-        : "端点要求鉴权但密钥未外发/未提供——未产生任何配置变更（如需验证可用 --key 显式提供）");
+        ? t("provider.import.authFail")
+        : t("provider.import.authNoKey"));
       return 1;
     }
     if (v === "network") {
-      io.out("端点不可达——请检查 baseUrl 后重试");
+      io.out(t("provider.import.networkFail"));
       return 1;
     }
-    if (v === "unsupported") io.out("警告：端点可达但不支持校验接口（/models 404/405），密钥未验证，仍写入");
+    if (v === "unsupported") io.out(t("provider.import.verifyUnsupported"));
 
     // CM-08：落盘键名 = 目录声明的 env 名；无声明且带 --key → 派生键（不静默吞密钥，见 deriveEnvKey 注释）
     const envKeyForWrite = envKey ?? (flagKey !== undefined ? deriveEnvKey(id) : undefined);
     if (flagKey !== undefined && envKeyForWrite !== undefined) {
       upsertSecret(io.secretsPath, envKeyForWrite, flagKey); // CM-13：原位更新（重复 import 不累积旧行）+ 0o600 收紧（MV-05）
-      if (envKey === undefined) io.out(`该目录条目未声明密钥环境变量名——--key 已按派生键 ${envKeyForWrite} 落 secrets.env`);
+      if (envKey === undefined) io.out(t("provider.import.derivedKey", { envKey: envKeyForWrite }));
     }
 
     // CM-14：行级节区感知落盘（writeProviderImport）——条目键序 type/baseUrl/apiKey?/defaultModel?
@@ -261,19 +262,19 @@ export async function runProviderSubcommand(argv: string[], io: ProviderCmdIo): 
       const limit = entry.models?.[modelFlag]?.limit?.context;
       if (typeof limit === "number" && Number.isInteger(limit) && limit >= 1024) {
         topLevel["contextWindow"] = limit;
-        io.out(`目录窗口：已按 ${modelFlag} 写入 contextWindow = ${limit}——更换 model 时请自行更新此值`);
+        io.out(t("provider.import.ctxWindow", { model: modelFlag, limit }));
       } else if (limit !== undefined) {
-        io.out(`目录窗口字段无效（${String(limit)}，须为 ≥1024 的整数）——未写入 contextWindow`);
+        io.out(t("provider.import.ctxWindowBad", { limit: String(limit) }));
       }
     }
     const how = writeProviderImport(io.configPath, id, providerEntry, topLevel);
-    io.out(`success：已写入 ${id}（${wire.wire} 协议${wire.guessed ? "，目录推断 guessed" : ""}，${finalBaseUrl}）`);
+    io.out(t("provider.import.success", { id, wire: wire.wire, url: finalBaseUrl, guessed: wire.guessed ? "1" : undefined })); // success： 前缀 = PROVIDER_WRITE_DONE 判据（协议耦合③——本体走键，前缀双格式兼容）
     io.out(how === "line"
-      ? "（重启或 /reload 生效；行级写——注释与键序保留）"
-      : "（重启或 /reload 生效；配置已全量重写，注释已移除）");
+      ? t("provider.import.noteLine")
+      : t("provider.import.noteRewrite"));
     return 0;
   }
 
-  io.out("用法: orosus provider import <id> | list");
+  io.out(t("provider.usage"));
   return 1;
 }
