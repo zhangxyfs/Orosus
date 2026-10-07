@@ -308,8 +308,11 @@ command = "touch \${OROSUS_PROJECT_DIR}/second-ran"
     });
     await h.prompt("干活");
     expect((await import("node:fs")).existsSync(marker())).toBe(false); // deny 后短路，第二钩子没跑
-    const runs = (await h.history()).filter((e) => e.type === "hooks/run");
-    expect(runs).toHaveLength(1); // 只有首个的账
+    // running 中间账要滤掉：钩子执行 ≥300ms 时 onSlow 先落一条 status:"running"（T11/D20 状态行显形
+    // 设计——release-npm 批用户实机流水线抓出：bash 冷启在负载下超 300ms，双账使长度断言误红；
+    // 低负载机器 <300ms 零显形故曾稳定绿）。:838 同款过滤先例。
+    const runs = (await h.history()).filter((e) => e.type === "hooks/run" && (e as Record<string, unknown>).status !== "running");
+    expect(runs).toHaveLength(1); // 只有首个的终账
     await h.close();
   });
 });
