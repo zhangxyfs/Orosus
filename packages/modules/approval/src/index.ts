@@ -48,6 +48,8 @@ export default defineModule({
       sessionMemory: new Set<string>(),                       // "本会话始终允许"（会话结束失效，不落配置）
     };
     let askChain: Promise<unknown> = Promise.resolve();       // FIFO 串行化：并行工具组内的询问逐个发起（readline 非并发安全）
+    // m5-i18n：弹窗文案走 ctx.t（键住宿主 locales/modules 域；fallback=作者缺省中文——裸宿主不裸显 key）
+    const t = ctx.t ?? ((k, _params, f) => f ?? k);
 
     // 运行期档读口（M4.5 子代理批——服务倒挂）：内核子代理缝解析「跟随主对话」时运行期取（覆盖 > 配置）
     ctx.provide("approval.current-mode", () => state.modeOverride ?? cfg.mode);
@@ -161,26 +163,32 @@ export default defineModule({
       const ask = async (): Promise<{ deny: true; reason: string } | undefined> => {
         // 第四选「始终允许（写规则落盘）」（M4-2 T9）：仅可分段命令提供（不可分段/危险 → 与现状同视觉）
         const offerPersist = d.memoryKey !== null && segs.length > 0;
+        const L = {
+          once: t("approval.btn.once", undefined, "批准一次"),
+          deny: t("approval.btn.deny", undefined, "拒绝"),
+          session: t("approval.btn.session", undefined, "本会话始终允许"),
+          persist: t("approval.btn.persist", undefined, "始终允许（写规则落盘）"),
+        };
         const items = d.memoryKey === null
-          ? ["批准一次", "拒绝"]
+          ? [L.once, L.deny]
           : offerPersist
-            ? ["批准一次", "本会话始终允许", "始终允许（写规则落盘）", "拒绝"]
-            : ["批准一次", "本会话始终允许", "拒绝"];
+            ? [L.once, L.session, L.persist, L.deny]
+            : [L.once, L.session, L.deny];
         const title = [
-          "工具执行确认",
-          `工具：${p.name}`,
-          `规则：${p.approvalRule}`,
-          `访问：${p.accesses.map((a) => a.kind).join(", ")}`,
-          `原因：${d.reason}`,
+          t("approval.dialog.title", undefined, "工具执行确认"),
+          t("approval.dialog.tool", { name: p.name }, `工具：${p.name}`),
+          t("approval.dialog.rule", { rule: p.approvalRule }, `规则：${p.approvalRule}`),
+          t("approval.dialog.access", { kinds: p.accesses.map((a) => a.kind).join(", ") }, `访问：${p.accesses.map((a) => a.kind).join(", ")}`),
+          t("approval.dialog.reason", { reason: d.reason }, `原因：${d.reason}`),
         ].join("\n");
         const choice = await ctx.ui.choose(title, items);
-        if (choice === "拒绝") {
+        if (choice === L.deny) {
           ctx.session.append("approval/resolved", { callId: p.callId, name: p.name, decision: "deny", source: "user" });
           ctx.log.info("approval.deny", "用户拒绝", { callId: p.callId, name: p.name });
           return { deny: true, reason: `用户拒绝执行 ${p.name}（${d.reason}）` };
         }
-        if (choice === "本会话始终允许" && d.memoryKey !== null) state.sessionMemory.add(d.memoryKey);
-        if (choice === "始终允许（写规则落盘）" && offerPersist) {
+        if (choice === L.session && d.memoryKey !== null) state.sessionMemory.add(d.memoryKey);
+        if (choice === L.persist && offerPersist) {
           // 规则生成：单段 → bash(<段1> *)——MA-04 收窄一档（2026-09-28 拍板，推翻旧走查「首词全家放行」定案）：
           // 批准 git status 落 bash(git status *)——同命令带参数不再问，换子命令（git push）仍会问；
           // 多段 → 单条 bash(<段1> && <段2>) 段列原样（复合精确）——写生效层 + 会话内即时生效

@@ -23,7 +23,7 @@ describe("m5-i18n t() 键全解析钉", () => {
 		const zh = mainTables()["zh-CN"]!;
 		const keys = new Set<string>();
 		const root = join(import.meta.dirname, "..", "..", "apps", "cli", "src");
-		const RE = /\bt\(\s*["']([a-zA-Z0-9][a-zA-Z0-9_.\-]*)["']/g;
+		const RE = /\bt\(\s*["']([a-zA-Z0-9][a-zA-Z0-9_.-]*)["']/g;
 		for (const file of walk(root)) {
 			const src = readFileSync(file, "utf8");
 			for (const m of src.matchAll(RE)) keys.add(m[1]!);

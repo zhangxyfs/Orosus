@@ -531,6 +531,7 @@ export default defineModule({
     });
 
     ctx.contribute.command("compaction__compact", async (args, ui) => {
+      const t = ctx.t ?? ((k, _params, f) => f ?? k); // m5-i18n：notice 走 ctx.t（键住宿主 modules 域）；error 体双面族不动（D14）
       // 纯提示类结果走 ui.notice（批⑧：toast 浮动窗/行模式单行，不落流区）+ 返回空串（静默约定）；
       // 有实质内容的（摘要本文/失败详情/裁剪结果）仍走流区。
       // args = focus 焦点指令（v3/T6，kimi/ZCode 两家同款：/compact 后剩余文本追加进摘要指令尾）
@@ -540,12 +541,12 @@ export default defineModule({
         const projected = await ctx.session.messages?.();
         if (projected === undefined) {
           forceKind = "manual";
-          ui.notice?.("已安排：下一条消息发出前压缩（宿主无投影读口——发一条消息预热投影，之后 /compact 即时执行）");
+          ui.notice?.(t("compaction.cmd.deferred", undefined, "已安排：下一条消息发出前压缩（宿主无投影读口——发一条消息预热投影，之后 /compact 即时执行）"));
           return "";
         }
         lastSeenMessages = projected;
       }
-      if (lastSeenMessages.length === 0) { ui.notice?.("无可压缩历史（本会话还没有对话）"); return ""; }
+      if (lastSeenMessages.length === 0) { ui.notice?.(t("compaction.cmd.empty", undefined, "无可压缩历史（本会话还没有对话）")); return ""; }
       const focus = args.trim();
       // MI-06 修复（2026-09-28 code review P2）：命令路径不清 forceKind → 溢出置位的 overflow 在手动 /compact
       // 成功后仍滞留，被下一次 transform-context 消费（threshold=0 误触发——对刚压好的摘要再压一次摘要的
@@ -555,17 +556,25 @@ export default defineModule({
       const r = await compactOnce(lastSeenMessages, cfg, { llm: ctx.llm, window: ctx.llm.contextWindow, force: "manual", estimate, state, log: ctx.log, sessionId: ctx.session.id, focus: focus !== "" ? focus : undefined });
       for (const e of r.events) ctx.session.append(e.type, e.fields); // 只落事件——下一次请求的投影自然应用（D20）
       switch (r.kind) {
-        case "none": ui.notice?.("无可压缩历史（本会话还没有对话）"); return "";
-        case "pruned":
+        case "none": ui.notice?.(t("compaction.cmd.empty", undefined, "无可压缩历史（本会话还没有对话）")); return "";
+        case "pruned": {
           lastSeenMessages = r.messages;
-          return `已裁剪 ${(r.events[0]!.fields.prunes as unknown[]).length} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`;
+          const n = (r.events[0]!.fields.prunes as unknown[]).length;
+          return t("compaction.cmd.pruned", { n }, `已裁剪 ${n} 个超长工具结果（免摘要救援）——体积已降，未做摘要压缩`);
+        }
         case "skipped":
           if (r.messages !== undefined) lastSeenMessages = r.messages; // 缺陷 B 修：prune 后退避/熔断/rapid-refill 跳过也回写（下次不再拿旧投影重裁）
-          ui.notice?.(`已跳过：${r.reason === "backoff" ? "退避中（估算增长不足）" : r.reason === "rapid-refill" ? "压缩后上下文被迅速重新填满（建议 /new 开新会话或稍后再试）" : "连续失败熔断保护"}`);
+          ui.notice?.(r.reason === "backoff"
+            ? t("compaction.cmd.skipped.backoff", undefined, "已跳过：退避中（估算增长不足）")
+            : r.reason === "rapid-refill"
+              ? t("compaction.cmd.skipped.refill", undefined, "已跳过：压缩后上下文被迅速重新填满（建议 /new 开新会话或稍后再试）")
+              : t("compaction.cmd.skipped.breaker", undefined, "已跳过：连续失败熔断保护"));
           return "";
-        case "failed":
+        case "failed": {
           if (r.messages !== undefined) lastSeenMessages = r.messages; // 缺陷 B 修：失败也回写 prune 后投影（prune 已真实执行、事件已落）
-          return `压缩失败：${r.reason}——${r.messages !== undefined ? "超长工具结果已裁剪（事件已落），" : ""}未产生摘要变更（可重试 /compact）`;
+          const prunedNote = r.messages !== undefined ? t("compaction.cmd.failedPruned", undefined, "超长工具结果已裁剪（事件已落），") : "";
+          return t("compaction.cmd.failed", { reason: r.reason, pruned: prunedNote }, `压缩失败：${r.reason}——${prunedNote}未产生摘要变更（可重试 /compact）`);
+        }
         case "compacted":
           lastSeenMessages = r.newMessages; // 缓存与已落事件对齐——防连击拿陈旧前缀双落事件（机制要点 1）
           // v3 文案（2026-09-23 用户拍板 UI 形态）：单行完成反馈（数字回落立现），摘要本文不再进流区

@@ -49,7 +49,7 @@ export default defineModule({
       ctx.provide(providerSlotKey(name), adapter);
     }
     // /provider（内建别名，D38）：多级菜单（D37 中文规格）——副作用经宿主侧默认接线（config/secrets 真实读写）
-    ctx.contribute.command("provider-custom__provider", (_args, ui) => runProviderMenu(ui, defaultMenuDeps()));
+    ctx.contribute.command("provider-custom__provider", (_args, ui) => runProviderMenu(ui, defaultMenuDeps(), ctx.t));
   },
 });
 

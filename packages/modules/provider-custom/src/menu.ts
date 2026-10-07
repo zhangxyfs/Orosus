@@ -103,35 +103,52 @@ async function verify(
  *  Esc 逐级返回（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）：动作菜单/数据源 Esc → 平台列表；
  *  厂商列表 Esc → 数据源；厂商选定后的密钥/模型询问 Esc → 厂商列表。根列表（选择平台）的 Esc 仍整体取消
  *  ——不接，穿透回宿主 settleCommandError 静默。显式「取消」项语义不变（结束流程）。 */
-export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<string> {
+export type MenuT = (key: string, params?: Record<string, string | number | boolean | null | undefined>, fallback?: string) => string;
+
+export async function runProviderMenu(ui: MenuUi, deps: MenuDeps, t?: MenuT): Promise<string> {
+  // m5-i18n：对话框文案走 ctx.t（键住宿主 locales/modules 域）；缺省回退作者中文（fallback 参数语义同 §5.4 ②档）
+  const tt = t ?? ((_k, _p, f) => f ?? _k);
   const current = await deps.loadProviders();
   for (;;) { // 根循环：动作菜单「返回」/Esc、数据源 Esc 的回退落点
     const names = Object.keys(current); // 槽 key 并行数组（MP-01 修复）：列表文案用 displayName 渲染，选中按下标反查回真名
+    const L = {
+      addNew: tt("provider.menu.addNew", undefined, "[添加新平台]"),
+      cancel: tt("provider.menu.cancelBracketed", undefined, "[取消]"),
+    };
     const items = [
       ...names.map((n) => `${displayName(n, { name: n })}\n（${current[n]!.baseUrl}）`),
-      "[添加新平台]",
-      "[取消]",
+      L.addNew,
+      L.cancel,
     ];
-    const sel = await ui.choose("选择平台", items);
-    if (sel === "[取消]") return "已取消";
-    if (sel !== "[添加新平台]") {
+    const sel = await ui.choose(tt("provider.menu.pickPlatform", undefined, "选择平台"), items);
+    if (sel === L.cancel) return "已取消"; // 返回值保持中文——PROVIDER_WRITE_DONE 宿主正则耦合（§三③）
+    if (sel !== L.addNew) {
       // MP-01：不得从显示文案反解——displayName 会把 deepseek/moonshot 等目录槽名译成中文显示名，
       // split("\n")[0] 拿回的是显示名，当槽 key 用则 setModel(显示名) 写坏配置、delete next[显示名] 假成功
       const name = names[items.indexOf(sel)];
       if (name === undefined) return "已取消"; // 选中项不在列表（宿主 ui 异常返回）——不猜
       let act: string;
+      let actMenu: { setDefault: string; updateKey: string; remove: string; back: string };
       try {
-        act = await ui.choose(displayName(name, { name }), ["设为当前默认", "更新密钥", "移除", "返回"]);
+        const A = {
+          setDefault: tt("provider.action.setDefault", undefined, "设为当前默认"),
+          updateKey: tt("provider.action.updateKey", undefined, "更新密钥"),
+          remove: tt("provider.action.remove", undefined, "移除"),
+          back: tt("provider.action.back", undefined, "返回"),
+        };
+        act = await ui.choose(displayName(name, { name }), [A.setDefault, A.updateKey, A.remove, A.back]);
+        // act 比较面走局部键值（两侧同 t()——协议耦合②收口）；A 需提升到 try 外供下方分支用
+        actMenu = A;
       } catch (err) {
         if (isEscCancel(err)) continue; // Esc = 返回上一级（与显式「返回」项同效）
         throw err;
       }
-      if (act === "返回") continue;
-      if (act === "设为当前默认") {
+      if (act === actMenu.back) continue;
+      if (act === actMenu.setDefault) {
         await deps.setModel(name); // 裸槽名（F5 十轮）——真名（MP-01 前：显示名写入，provider 解析必失败）
         return `已设为当前默认（provider = "${name}"）`;
       }
-      if (act === "更新密钥") {
+      if (act === actMenu.updateKey) {
         // MP-05：接通真实交互流（此前菜单数组提供该项但处理链无分支——选中直接落「已返回」，密钥不变，
         // 用户要到下一次 401 才发现更新没生效）。槽密钥经 $ENV: 引用 secrets.env——据此定位 env key；
         // 非 $ENV 槽（明文 key / 无密钥）如实告知，不猜目标 key、零副作用。
@@ -155,7 +172,7 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
         if (v.kind === "unsupported") return "已写入（端点不支持校验接口——新密钥已生效，下次对话即使用）";
         return "已写入但端点暂不可达（网络错误）——新密钥已生效，下次对话即使用";
       }
-      if (act === "移除") {
+      if (act === actMenu.remove) {
         const next = { ...current };
         delete next[name]; // 真名删除（MP-01 前：delete next[显示名] 对槽表是 no-op，回报「已移除」假成功）
         await deps.saveProviders(next);
@@ -167,17 +184,24 @@ export async function runProviderMenu(ui: MenuUi, deps: MenuDeps): Promise<strin
     // ---- 添加新平台 ----（源级循环：厂商列表 Esc /本源 ask Esc 的回退落点 = 重问数据源）
     for (;;) {
       let src: string;
+      let srcMenu: { online: string; local: string; cancel: string };
       try {
-        src = await ui.choose("数据源", ["在线目录（https://models.dev/api.json）", "本地文件（api.json）", "取消"]);
+        const S = {
+          online: tt("provider.source.online", undefined, "在线目录（https://models.dev/api.json）"),
+          local: tt("provider.source.local", undefined, "本地文件（api.json）"),
+          cancel: tt("provider.source.cancel", undefined, "取消"),
+        };
+        src = await ui.choose(tt("provider.source.title", undefined, "数据源"), [S.online, S.local, S.cancel]);
+        srcMenu = S;
       } catch (err) {
         if (isEscCancel(err)) break; // Esc → 回平台列表（根循环继续）
         throw err;
       }
-      if (src === "取消") return "已取消";
+      if (src === srcMenu.cancel) return "已取消";
       let catalog: Catalog;
       let degradedNote = ""; // 降级可见（走查修复）：静默回退 7 家快照让用户以为目录被改小；磁盘缓存兜底如实标注来源与时间
       let catalogFull = false; // 全量目录（online/disk/本地文件）＝models.dev 策展数据可信；builtin 快照是裁剪版
-      if (src.startsWith("在线目录")) {
+      if (src === srcMenu.online) { // 原 startsWith 前缀判定改精确等值（两侧同 t()——清单 §三②）
         const r = await deps.getCatalog();
         catalog = r.catalog;
         catalogFull = r.source !== "builtin";

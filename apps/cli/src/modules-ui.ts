@@ -177,6 +177,14 @@ export const permissionOf = (events: { type: string; mode?: unknown }[], fallbac
 	const lastPolicy = events.filter((e) => e.type === "approval/policy").at(-1) as { mode?: string } | undefined;
 	return lastPolicy?.mode ?? fallback;
 };
+
+/** m5-i18n：name → def.description 查找（模块描述上屏的原文兜底源）。 */
+const defNameMap = (h: Harness): Map<string, { description: string }> => {
+	const m = new Map<string, { description: string }>();
+	for (const g of h.graph().defs()) m.set(g.def.name, g.def);
+	return m;
+};
+
 /** 会话名投影（同款提纯）：末条 session/label 事件；未命名 = undefined（显示侧自定「新会话」）。 */
 export const sessionLabelOf = (events: { type: string; label?: unknown }[]): string | undefined => {
 	const lastLabel = events.filter((e) => e.type === "session/label").at(-1) as { label?: string } | undefined;
@@ -224,10 +232,13 @@ export const refreshPanel = async (deps: ModulesUiDeps): Promise<void> => {
 			.graph()
 			.audit()
 			.map((a) => {
+				const defByName = defNameMap(h);
 				const lockedReason = lockReasonFor(a.name);
+				const def = defByName.get(a.name);
 				return {
 					name: a.name,
-					desc: a.name === "orosus-core" ? t("mod.desc.core") : "",
+					// m5-i18n：模块描述上屏（此前除 orosus-core 外恒空串）——mod.desc.<name> 键优先、def.description 原文兜底
+					desc: t(`mod.desc.${a.name}`, undefined, def?.description ?? ""),
 					state: a.state === "active" ? ("mounted" as const) : a.state === "pending-confirm" ? ("pendingConfirm" as const) : ("off" as const), // m5 T17 第四态
 					...(lockedReason !== undefined ? { locked: true, lockedReason } : {}),
 				};
