@@ -762,7 +762,7 @@ describe("/btw 侧问命令接线（m5-btw T4）", () => {
 		expect(src).toContain('if (cmdNameOf(text) === "/btw")'); // 拦截分支（try 内、/tasks 旁）
 		expect(src).toContain("openBtw(activeApp, btwDeps, btwQuestion)"); // 带参走侧问本体（fire-and-forget）
 		expect(src).toContain("reopenBtw(activeApp, btwDeps)"); // 无参回看（D7）
-		expect(src).toContain('name: "/btw", desc: "侧问（不打断主对话）"'); // 菜单条目
+		expect(src).toContain('desc: t("slash.items.btw.desc")'); // 菜单条目（m5-i18n T6 起走键——源面断言随迁）
 	});
 });
 

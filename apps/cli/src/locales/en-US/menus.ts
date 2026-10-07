@@ -103,4 +103,9 @@ export const enUSMenus: Record<string, string> = {
 	"perm.never.label": "Never",
 	"perm.never.desc": "Fully automatic; the model decides on issues itself",
 	"perm.never.long": "Fully automatic: while this mode is on, every tool approval is handled automatically (including dangerous commands); even when something is off, the model decides on its own and never asks you. Only hand-written deny rules still block. Use when you fully trust the current session and want uninterrupted execution.",
+
+	"slash.items.yolo.long": "Ask-if-risky mode: routine edits and commands run automatically; risky operations, questions, and plans still need manual confirmation. Equivalent to /permission ask-risky. Works while a reply is in progress; takes effect this turn.",
+	"slash.items.yolo.desc": "Confirm risky ops only",
+	"slash.items.locale.desc": "Switch interface language",
+	"slash.items.locale.long": "List and switch the interface language (built-in 简体中文 / 繁體中文 / English; mounting the multilang pack adds Japanese / Korean / Russian). The choice is written to config and the UI redraws; works while a reply is in progress.",
 };

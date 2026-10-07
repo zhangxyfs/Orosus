@@ -132,4 +132,11 @@ export const zhCNCli: Record<string, string> = {
 	"args.badTui": "--tui 非法值 \"{v}\"（合法：line | full）\\n{usage}",
 	"prune.reason.empty": "空",
 	"prune.reason.stale": "过期",
+
+	"banner.zeroConfig": "[orosus] 尚未配置任何模型提供商——运行 /provider 开始配置（选平台 → 粘贴 apiKey 即用），或参照 docs/developers.md 手写 config.toml（模块配置在 modules.d/ 每模块一文件）",
+	"banner.failed": "⚠ {n} 个模块降级（完整表：orosus --dump-modules）：",
+	"banner.failedRow": "  - {name}: {reason}",
+	"banner.active": "[orosus] {n} 个模块已激活",
+	"startup.fail": "启动失败：{reason}",
+	"startup.failLog": "诊断日志：{home}/logs/diagnostic-{date}.jsonl",
 };

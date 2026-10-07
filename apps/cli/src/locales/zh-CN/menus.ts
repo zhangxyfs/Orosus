@@ -103,4 +103,9 @@ export const zhCNMenus: Record<string, string> = {
 	"perm.never.label": "从不询问",
 	"perm.never.desc": "全自动，有问题模型自行判断",
 	"perm.never.long": "全自动档：此模式开启期间，所有工具批准都自动处理（含危险命令）；就算有问题也是模型自行判断，不会向你提问。只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。",
+
+	"slash.items.yolo.long": "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。",
+	"slash.items.yolo.desc": "仅危险操作确认",
+	"slash.items.locale.desc": "切换界面语言",
+	"slash.items.locale.long": "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。",
 };

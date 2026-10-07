@@ -1185,32 +1185,32 @@ const permMeta = (): Record<string, { label: string; desc: string; long: string 
 const slashItems = (): SlashItem[] => [
 	// /yolo /auto 提至 /help 前（2026-09-22 用户拍板——高频切档键优先于帮助）
 	// 2026-09-26 拍板 D2 交叉互换（2026-09-28 走查修）：/yolo==需要时候询问（ask-risky）——详细文案用户拍板原文，档名对齐 /permission 菜单显示名
-	{ name: "/yolo", desc: "仅危险操作确认", long: "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
+	{ name: "/yolo", desc: t("slash.items.yolo.desc"), long: "需要时候询问模式：常规编辑和命令自动运行；风险操作、问题和计划仍需手动确认。等同于 /permission ask-risky。回答进行中也可执行，本轮生效。" },
 	// 2026-09-26 拍板：/auto 文案按「从不询问」档名表述（D8 显示名），语义 = 就算有问题也是模型自行判断；行为换绑 never 由本批 T2 落地（D1 拍板），沿革见 ROADMAP 走查三批与 m3b 方案
-	{ name: "/auto", desc: "从不询问模式", long: "从不打断你，一切运行并自动决定——就算有问题也是模型自行判断。" },
-	{ name: "/help", desc: "帮助与快捷键", long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
-	{ name: "/model", desc: "切换模型槽位", long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
-	{ name: "/effort", desc: "思考投入档位", long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
-	{ name: "/locale", desc: "切换界面语言", long: "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。" },
-	{ name: "/provider", desc: "厂商向导", long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
+	{ name: "/auto", desc: t("slash.items.auto.desc"), long: "从不打断你，一切运行并自动决定——就算有问题也是模型自行判断。" },
+	{ name: "/help", desc: t("slash.items.help.desc"), long: "显示全部斜杠命令与快捷键的对照表。快捷键三区焦点循环：Tab 在输入区、模块面板、任务面板之间移动；Esc 忙碌时取消回答、闲时返回输入区。" },
+	{ name: "/model", desc: t("slash.items.model.desc"), long: "列出当前厂商下已配置的模型槽位，上下键选择后回车即热切换，会话不中断。槽位为空时会引导先走 /provider 配置端点。" },
+	{ name: "/effort", desc: t("slash.items.effort.desc"), long: "控制 Agent 思考投入程度：推理深度、自检次数、是否多方案推演。菜单列出 off（关思考）与模型目录声明的档位（如 low / high / max），当前档以选中色标注；未设置时自动用目录默认档（档位中位项）。也可直敲 /effort <档位>（目录外模型手动指定）或 /effort auto（回默认档）。回答进行中也可执行，下一轮生效。" },
+	{ name: "/locale", desc: t("slash.items.locale.desc"), long: "列出界面语言并切换（内置简体中文 / 繁體中文 / English；挂载多语言包后追加日 / 韩 / 俄等）。选定即写入配置并重绘界面，回答进行中也可执行。" },
+	{ name: "/provider", desc: t("slash.items.provider.desc"), long: "交互式配置模型厂商：选平台、选数据源、从厂商目录选厂商、填端点与密钥。全程支持上下键导航与 Esc 逐级取消。" },
 	{
-		name: "/permission", desc: "权限模式", long: "切换工具执行的审批策略，切换立即生效并写入配置。三档：每次都询问（全确认）/ 需要时候询问（危险才确认）/ 从不询问（全放行，有问题模型自行判断）。", children: [...PERM_CYCLE], childMeta: permMeta(),
+		name: "/permission", desc: t("slash.items.permission.desc"), long: t("slash.items.permission.long"), children: [...PERM_CYCLE], childMeta: permMeta(),
 	},
-	{ name: "/compact", desc: "压缩上下文", long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
-	{ name: "/sessions", aliases: ["resume"], desc: "会话列表", long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
+	{ name: "/compact", desc: t("slash.items.compact.desc"), long: "立即压缩当前会话的上下文：把历史折叠成一份交接摘要（用户消息按策略保留原话），释放 token 空间。压缩期间显示进度指示，完成后可用 Ctrl+O 回看压缩摘要。" },
+	{ name: "/sessions", aliases: ["resume"], desc: t("slash.items.sessions.desc"), long: "列出本机全部会话（标题、更新时间、消息数），上下键选择回车切换；带序号或会话 ID 可直达恢复。/fork 可从当前会话分叉副本。" },
 	// /summary 菜单条目已退役（2026-09-23 用户拍板）——查看口 = Ctrl+O（全屏 overlay/行模式直出）
 	{
-		name: "/settings", aliases: ["config"], desc: "设置与详细信息", long: "设置面板：磁盘占用（~/.orosus 各目录大小与清理口径）、上下文用量（窗口占用与输入输出累计）、Token 用量（本会话与项目累计）、运行状态（模型 / 会话 / 模块图——/usage /status 已并入此处）、子代理（模型 / 审批模式 / 轮数上限）、技能（查看 / 启停）、钩子（查看 / 启停 / 信任审查——七事件生命周期钩子清单）、MCP（server 管理）、视觉模型与网络搜索后端配置。",
+		name: "/settings", aliases: ["config"], desc: t("slash.items.settings.desc"), long: t("slash.items.settings.long"),
 	},
-	{ name: "/tasks", aliases: ["task"], desc: "子代理任务列表", long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
-	{ name: "/btw", desc: "侧问（不打断主对话）", long: "带着当前对话上下文发一次旁路快问：答案开小窗展示（贴输入框上方），不进主对话流、不留持久痕迹、也不打断正在进行的回答（回答中同样可问；新问会取代未完的旧问）。无参回看最近一次问答（仅本进程内存，重开 CLI 即没）。" },
-	{ name: "/quit", aliases: ["exit", "q"], desc: "退出 Orosus", long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
+	{ name: "/tasks", aliases: ["task"], desc: t("slash.items.tasks.desc"), long: "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。" },
+	{ name: "/btw", desc: t("slash.items.btw.desc"), long: "带着当前对话上下文发一次旁路快问：答案开小窗展示（贴输入框上方），不进主对话流、不留持久痕迹、也不打断正在进行的回答（回答中同样可问；新问会取代未完的旧问）。无参回看最近一次问答（仅本进程内存，重开 CLI 即没）。" },
+	{ name: "/quit", aliases: ["exit", "q"], desc: t("slash.items.quit.desc"), long: "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。" },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）
-	{ name: "/new", desc: "新会话", long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
-	{ name: "/fork", desc: "分叉会话", long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
-	{ name: "/title", aliases: ["rename"], desc: "会话命名", long: "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。" },
-	{ name: "/reload", desc: "重载模块", long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
+	{ name: "/new", desc: t("slash.items.new.desc"), long: "开一场全新会话（当前会话保留，/sessions 可切回）。" },
+	{ name: "/fork", desc: t("slash.items.fork.desc"), long: "从当前会话的最新位置分叉出一个副本会话，继承全部上下文。" },
+	{ name: "/title", aliases: ["rename"], desc: t("slash.items.title.desc"), long: "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。" },
+	{ name: "/reload", desc: t("slash.items.reload.desc"), long: "重新加载配置与模块（改了 config.toml 或模块文件后用）。" },
 ];
 
 // ---------- 技能菜单（m4-7 T7——服务倒挂：宿主消费 skill.catalog，模块不在优雅降级为零技能） ----------

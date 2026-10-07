@@ -52,10 +52,10 @@ describe("m5-i18n 全量清单对账（i18n-inventory/ 五分区）", () => {
 });
 
 describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑源）", () => {
-	it("A/B 键数 1427=1427、键集零漂移、分区计数 263/495/258/174/237（勘正⑩-⑲后）", () => {
+	it("A/B 键数 1429=1429、键集零漂移、分区计数 263/496/259/174/237（勘正⑩-㉑后）（勘正⑩-⑲后）", () => {
 		const { a, b } = parseTranslations();
-		expect(a.length).toBe(1427);
-		expect(b.length).toBe(1427);
+		expect(a.length).toBe(1429);
+		expect(b.length).toBe(1429);
 		const aKeys = new Set(a.map((r) => r.key));
 		const bKeys = new Set(b.map((r) => r.key));
 		expect(aKeys).toEqual(bKeys);
@@ -63,7 +63,7 @@ describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑�
 		expect(aKeys.size).toBe(a.length);
 		const zoneCounts = new Map<string, number>();
 		for (const r of a) zoneCounts.set(r.zone, (zoneCounts.get(r.zone) ?? 0) + 1);
-		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 263, b: 495, c: 258, d: 174, e: 237 });
+		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 263, b: 496, c: 259, d: 174, e: 237 });
 	});
 
 	it("zh 列 A/B 两表逐键一致 + 勘正⑩被删 11 键不再出现（抽取严禁双搬）", () => {

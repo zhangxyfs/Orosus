@@ -4,6 +4,8 @@
  *  其余（真坏件）保持吵闹横幅。
  *  「品牌适配器缺 key 静默降级」分支已随品牌 provider ×5 退役拆除（2026-09-23 用户拍板删除——
  *  provider 路线归一 custom + 向导，/provider 是唯一配置入口，不再有「按需手改 config 配品牌」的形态）。 */
+import { t } from "./i18n/app.ts";
+
 export interface AuditRow { name: string; state: string; failReason?: string }
 
 export function banner(h: { graph(): { audit(): AuditRow[] } }, opts: { dumpModules?: boolean; modelConfigured?: boolean } = {}): string[] {
@@ -16,12 +18,12 @@ export function banner(h: { graph(): { audit(): AuditRow[] } }, opts: { dumpModu
   const providerUsable = opts.modelConfigured ?? active.some((a) => a.name.startsWith("provider-"));
   if (!providerUsable && failed.length === 0) {
     // 零配置首跑——不是降级，是没开始（M4-2 T15/B7 剩余）
-    return ["[orosus] 尚未配置任何模型提供商——运行 /provider 开始配置（选平台 → 粘贴 apiKey 即用），或参照 docs/developers.md 手写 config.toml（模块配置在 modules.d/ 每模块一文件）"];
+    return [t("banner.zeroConfig")];
   }
   if (failed.length > 0) {
-    const lines = [`⚠ ${failed.length} 个模块降级（完整表：orosus --dump-modules）：`];
-    for (const a of failed) lines.push(`  - ${a.name}: ${a.failReason ?? ""}`);
+    const lines = [t("banner.failed", { n: failed.length })];
+    for (const a of failed) lines.push(t("banner.failedRow", { name: a.name, reason: a.failReason ?? "" }));
     return lines;
   }
-  return [`[orosus] ${active.length} 个模块已激活`];
+  return [t("banner.active", { n: active.length })];
 }

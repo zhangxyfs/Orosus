@@ -103,4 +103,9 @@ export const zhTWMenus: Record<string, string> = {
 	"perm.never.label": "從不詢問",
 	"perm.never.desc": "全自動，有問題模型自行判斷",
 	"perm.never.long": "全自動檔：此模式開啟期間，所有工具批准都自動處理（含危險命令）；就算有問題也是模型自行判斷，不會向你提問。只有你手寫的 deny 規則仍會攔。完全信任目前工作階段、追求連續執行時用。",
+
+	"slash.items.yolo.long": "需要時詢問模式：常規編輯和命令自動執行；風險操作、問題和計劃仍需手動確認。等同於 /permission ask-risky。回答進行中也可執行，本輪生效。",
+	"slash.items.yolo.desc": "僅危險操作確認",
+	"slash.items.locale.desc": "切換介面語言",
+	"slash.items.locale.long": "列出介面語言並切換（內建簡體中文 / 繁體中文 / English；掛載多語言包後追加日 / 韓 / 俄等）。選定即寫入設定並重繪介面，回答進行中也可執行。",
 };

@@ -132,4 +132,11 @@ export const zhTWCli: Record<string, string> = {
 	"args.badTui": "--tui 非法值 \"{v}\"（合法：line | full）\\n{usage}",
 	"prune.reason.empty": "空",
 	"prune.reason.stale": "過期",
+
+	"banner.zeroConfig": "[orosus] 尚未設定任何模型提供者——執行 /provider 開始設定（選平台 → 貼上 apiKey 即用），或參照 docs/developers.md 手寫 config.toml（模組設定在 modules.d/ 每模組一檔案）",
+	"banner.failed": "⚠ {n} 個模組降級（完整表：orosus --dump-modules）：",
+	"banner.failedRow": "  - {name}: {reason}",
+	"banner.active": "[orosus] {n} 個模組已啟用",
+	"startup.fail": "啟動失敗：{reason}",
+	"startup.failLog": "診斷記錄：{home}/logs/diagnostic-{date}.jsonl",
 };

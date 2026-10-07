@@ -132,4 +132,11 @@ export const enUSCli: Record<string, string> = {
 	"args.badTui": "Invalid --tui value \"{v}\" (valid: line | full)\\n{usage}",
 	"prune.reason.empty": "empty",
 	"prune.reason.stale": "stale",
+
+	"banner.zeroConfig": "[orosus] No model provider configured yet — run /provider to set one up (pick a platform → paste apiKey to use), or write config.toml by hand per docs/developers.md (module configs live in modules.d/, one file per module)",
+	"banner.failed": "⚠ {n} modules degraded (full list: orosus --dump-modules):",
+	"banner.failedRow": "  - {name}: {reason}",
+	"banner.active": "[orosus] {n} modules active",
+	"startup.fail": "Startup failed: {reason}",
+	"startup.failLog": "Diagnostic log: {home}/logs/diagnostic-{date}.jsonl",
 };
