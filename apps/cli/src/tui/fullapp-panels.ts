@@ -6,8 +6,9 @@
  *  非公开 API。 */
 
 import { renderWidgets } from "./widgets.ts";
+import { t } from "../i18n/app.ts";
 import {
-	CONN_SLOTS, CONN_STATE_TEXT, elapsedText, MOD_STATE_TEXT, msText, SPIN_FRAMES, taskTick,
+	CONN_SLOTS, connStateText, elapsedText, modStateText, msText, SPIN_FRAMES, taskTick,
 	type ModuleCard, type PanelData,
 } from "./fullapp-types.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
@@ -57,7 +58,7 @@ const modRow = (m: PanelData["modules"][number], selected: boolean, w: number): 
 	const dot = m.state === "mounted" ? theme.fg("accent", "●") : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", "◐") : theme.fg("muted", "○");
 	// 锁定后缀（2026-09-23 用户拍板）：名字后灰色「· 锁定」；行尾状态位照常显示挂载态
 	const lockSuffix = m.locked === true ? theme.dim(" · 锁定") : "";
-	const stateText = MOD_STATE_TEXT[m.state]!;
+	const stateText = modStateText(m.state);
 	const st = m.state === "mounted" ? theme.fg("accent", stateText) : m.state === "loading" || m.state === "pendingConfirm" ? theme.fg("warn", stateText) : theme.dim(stateText);
 	const lockW = m.locked === true ? visibleWidth(" · 锁定") : 0; // 锁定后缀占宽——desc/gap 预算要扣（防溢出）
 	// CTU-09（2026-09-28 code review）：模块名源头截断（注册面供给可超长——原 padToWidth 兜底把行尾
@@ -76,7 +77,7 @@ const modRow = (m: PanelData["modules"][number], selected: boolean, w: number): 
  *  五态点色对齐管理面口径——connected 绿 ● / failed·未确认 红 ● / idle·停用 灰 ○（mcp-cmd 同款）。
  *  右列：connected 有首连耗时时显耗时（被动真值），否则状态文案。 */
 const connRow = (c: NonNullable<PanelData["network"]>["connections"][number], w: number): string => {
-	const stateText = CONN_STATE_TEXT[c.state]!;
+	const stateText = connStateText(c.state);
 	const dot =
 		c.state === "connected" ? theme.fg("accent", "●") : c.state === "failed" || c.state === "pending-confirm" ? theme.fg("err", "●") : theme.fg("muted", "○");
 	const right =
@@ -153,10 +154,10 @@ export function createPanels(app: FullApp) {
 		const page = Math.min(s.statePage, pages - 1);
 		if (page === 0) {
 			const content: string[] = [];
-			content.push(kvRow("模型", theme.fg("info", d.model), inner));
-			content.push(kvRow("会话", d.session, inner));
-			content.push(kvRow("工作目录", theme.fg("info", d.cwd), inner));
-			content.push(kvRow("运行时间", elapsedText(d.startedAt), inner)); // F5 二轮④
+			content.push(kvRow(t("kv.model"), theme.fg("info", d.model), inner));
+			content.push(kvRow(t("kv.session"), d.session, inner));
+			content.push(kvRow(t("kv.cwd"), theme.fg("info", d.cwd), inner));
+			content.push(kvRow(t("kv.elapsed"), elapsedText(d.startedAt), inner)); // F5 二轮④
 			content.push(kvRow("Tokens", `↑ ${d.tokens.input.toLocaleString()} · ↓ ${d.tokens.output.toLocaleString()}`, inner)); // F5 二轮⑤
 			content.push(sepRow(inner));
 			// 上下文占用 = 末次请求的输入规模（上下文体量口径）；占比再小也至少给一格 ▏（F5 二轮⑥——
@@ -194,8 +195,8 @@ export function createPanels(app: FullApp) {
 			if (n === undefined) {
 				content.push(` ${theme.fg("muted", "（网络面数据未装配——供数退化，详见诊断日志）")}`);
 			} else {
-				content.push(kvRow("代理", n.proxy, inner));
-				content.push(kvRow("模型服务", n.modelService, inner));
+				content.push(kvRow(t("kv.proxy"), n.proxy, inner));
+				content.push(kvRow(t("kv.modelService"), n.modelService, inner));
 			}
 			content.push(sepRow(inner));
 			const conns = n?.connections ?? [];

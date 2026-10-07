@@ -7,6 +7,7 @@ import { parse } from "smol-toml";
 import { HOOK_EVENTS, defaultProjectConfigFile, defaultUserConfigFile, evaluateProjectTrust, projectBucketKey, projectHooksDigest, trustFilePath, type HookEvent } from "@orosus/hooks";
 import { injectionFoldLabel } from "./render.ts";
 import type { FullApp } from "./tui/fullapp.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** /settings → 钩子（m5-hooks T10，用户拍板不设 /hooks 命令）：列表样式参照 ZCode settings 钩子面
  *  （HooksList.tsx:181-243 逐项映射到 TUI pickOverlay 惯例）——分节（用户级/项目级，走查修去路径）、
@@ -413,7 +414,7 @@ export const openHooksLine = async (out: (s: string) => void, deps: HooksUiDeps)
         out(`已信任项目层钩子（digest ${digest.slice(0, 12)}…——配置再改需重审，即时生效）`);
       }
     } catch (err) {
-      if (err instanceof Error && err.message === "已取消（Esc）") continue;
+      if (err instanceof Error && err.message === ESC_CANCELLED) continue;
       throw err;
     }
   }

@@ -9,6 +9,7 @@ import type { WidgetSpec } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import type { AtEntry } from "./fullapp-at.ts";
 import * as theme from "../theme.ts";
+import { t } from "../i18n/app.ts";
 
 // ---------- 接缝类型 ----------
 
@@ -290,9 +291,12 @@ export function wordRangeAt(plain: string, col: number): { start: number; end: n
 	while (hi + 1 < segs.length && canJoin(segs[hi + 1]!, segs[hi]!)) hi++;
 	return { start: colOf(segs[lo]!.start), end: colOf(segs[hi]!.end) };
 }
-export const MOD_STATE_TEXT: Record<string, string> = { mounted: "已挂载", loading: "挂载中", off: "未挂载", pendingConfirm: "待确认" }; // pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
-/** 「网络 · MCP」卡连接行五态文案（mcp-cmd.ts STATE_TEXT 同款口径——管理面/卡片两处措辞一致）。 */
-export const CONN_STATE_TEXT: Record<string, string> = { connected: "已连接", idle: "待启动", failed: "失败", "pending-confirm": "未确认", disabled: "已停用" };
+// m5-i18n T4：状态映射改走 t()（渲染期现查——切语言后下一帧生效）；原 Record 形态退役
+// pendingConfirm = m5 T17 第四态（不进 failed 计数——待决不是失败）
+export const modStateText = (state: string): string => t(`panel.mod.${state}`, undefined, state);
+/** 「网络 · MCP」卡连接行五态文案（mcp-cmd.ts STATE_TEXT 同款口径——管理面/卡片两处措辞一致）。
+ * m5-i18n T4 改走 t()：pending-confirm 键归一 pendingConfirm（目录键驼峰）。 */
+export const connStateText = (state: string): string => t(`panel.conn.${state === "pending-confirm" ? "pendingConfirm" : state}`, undefined, state);
 /** 连接列表每页行数（2026-10-01）：页 2 比页 0 少 3 行 KV + 上下文进度条——同框高多容 3 行（8 = 5+3）。 */
 export const CONN_SLOTS = 8;
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
@@ -353,7 +357,8 @@ export function diagListLines(entries: readonly DiagEntry[], sel: number, innerW
 }
 
 
-export const PERM_LABEL: Record<string, string> = { "ask-always": "每次都询问", "ask-risky": "需要时候询问", never: "从不询问" }; // 显示名（2026-09-26 拍板改中文——F5 十轮⑤ 英文档名由本次取代）
+// 权限三档显示名（2026-09-26 拍板改中文——F5 十轮⑤；m5-i18n T4 改走 t()）
+export const permLabel = (mode: string): string => t(`perm.${mode === "ask-always" ? "askAlways" : mode === "ask-risky" ? "askRisky" : mode}`, undefined, mode);
 
 // ---------- 输入区多行布局（≤5 行，超出上滚——原型同款） ----------
 // CTU-04（2026-09-28 修复）：宽度口径统一走 width.ts grapheme/EAW（graphemeSpans）。原私有 cpw

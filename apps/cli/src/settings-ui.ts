@@ -11,6 +11,7 @@ import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
 import { isEsc, openMcpLine, openMcpPanel, type McpUiDeps } from "./mcp-ui.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** m5-split-main T8：设置面板族自 main.ts 搬入。横切单例经本依赖对象注入（D2）：getH/commandUi
  *  直取；getPanelCache——panelCache（T9 留守状态）访问器；reloadModulesIdle——T9 留守共用件；
@@ -133,7 +134,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				if (sub === undefined) break; // Esc → 回设置根列表
 				const chooseVia = async (t: string, items: string[]): Promise<string> => {
 					const i = await app.pickOverlay(t, items);
-					if (i === undefined) throw new Error("已取消（Esc）");
+					if (i === undefined) throw new Error(ESC_CANCELLED);
 					return items[i] ?? "";
 				};
 				try {
@@ -144,7 +145,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 						const res = await runSubagentApprovalSetting(chooseVia, subagentConfigFile());
 						if (res !== "") app.showToast(res);
 					} else if (sub === 2) {
-						const res = await runSubagentMaxTurnsSetting(chooseVia, (t) => app.promptInput(t, false).then((v) => { if (v === undefined) throw new Error("已取消（Esc）"); return v; }), subagentConfigFile());
+						const res = await runSubagentMaxTurnsSetting(chooseVia, (t) => app.promptInput(t, false).then((v) => { if (v === undefined) throw new Error(ESC_CANCELLED); return v; }), subagentConfigFile());
 						if (res !== "") app.showToast(res);
 					}
 				} catch (err) {
@@ -160,7 +161,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
 			try {
 				const res = await runVisionSetting(
-					async (t, items) => { const i = await app.pickOverlay(t, items); if (i === undefined) throw new Error("已取消（Esc）"); return items[i] ?? ""; },
+					async (t, items) => { const i = await app.pickOverlay(t, items); if (i === undefined) throw new Error(ESC_CANCELLED); return items[i] ?? ""; },
 					() => moduleConfigFileFor("tool-media", deps.getH()),
 				);
 				// 写盘即自动重载（空闲）；busy（消息接收中）不 reload 只提示——reloadModulesIdle 共用件
@@ -189,7 +190,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				const toast = await runLocaleSetting(
 					async (t, items) => {
 						const i = await app.pickOverlay(t, items);
-						if (i === undefined) throw new Error("已取消（Esc）");
+						if (i === undefined) throw new Error(ESC_CANCELLED);
 						return items[i] ?? "";
 					},
 					{ getH: deps.getH, store: deps.localeStore },

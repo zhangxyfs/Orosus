@@ -1,0 +1,22 @@
+/** m5-i18n UI main catalog · en-US · panels domain (KV labels use the 8-col short forms: Workdir/Uptime). */
+export const enUSPanels: Record<string, string> = {
+	"kv.model": "Model",
+	"kv.session": "Session",
+	"kv.cwd": "Workdir",
+	"kv.elapsed": "Uptime",
+	"kv.context": "Context",
+	"kv.proxy": "Proxy",
+	"kv.modelService": "Service",
+	"panel.mod.mounted": "Mounted",
+	"panel.mod.loading": "Mounting",
+	"panel.mod.off": "Off",
+	"panel.mod.pendingConfirm": "Unconfirmed",
+	"panel.conn.connected": "Connected",
+	"panel.conn.idle": "Lazy",
+	"panel.conn.failed": "Failed",
+	"panel.conn.pendingConfirm": "Unconfirmed",
+	"panel.conn.disabled": "Disabled",
+	"perm.askAlways": "Ask always",
+	"perm.askRisky": "Ask if risky",
+	"perm.never": "Never",
+};

@@ -1,6 +1,7 @@
 import type { KeyEvent } from "./keys.ts";
 import { moveUp, clearLine, reverse, dispLines } from "./ansi.ts";
 import { fg, dim } from "./theme.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** 尾部完整括注组定位（两段式拆分③）：串尾（忽略尾随空白）是 `（…）`/`(…)` 整组时返回
  *  { coreStart }——组前还有内容才算两段（整项即括号组不算）。只认同类配对（全角配全角）。 */
@@ -147,7 +148,7 @@ export function pick(
     render();
     for (;;) {
       const k = await readKey();
-      if (k.type === "esc") throw new Error("已取消（Esc）");
+      if (k.type === "esc") throw new Error(ESC_CANCELLED);
       if (k.type === "enter") return selected;
       if (k.type === "arrow" && k.dir === "up") selected = (selected - 1 + items.length) % items.length;
       else if (k.type === "arrow" && k.dir === "down") selected = (selected + 1) % items.length;

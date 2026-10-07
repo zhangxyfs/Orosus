@@ -4,6 +4,7 @@ import type { CommandUi } from "@orosus/contracts/module";
 import type { SlashItem, FullApp } from "./tui/fullapp.ts";
 import { readSkillDisabled, skillDetailText, skillListRow, toggleSkillDisabled, type SkillCatalogRow } from "./skill-settings.ts";
 import { subagentConfigFile } from "./config-face.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** m5-split-main T7：技能菜单族自 main.ts 搬入。横切单例经本依赖对象注入（D2）：
  *  getH——harness 单例；commandUi——行模式菜单口；reloadModulesIdle——/reload 收尾共用件（T9 留守件）。 */
@@ -82,7 +83,7 @@ export const openSkillsLine = async (out: (s: string) => void, deps: SkillUiDeps
 				out(toast !== "" ? toast : `已${nowDisabled ? "停用" : "启用"} ${row.name}（模块已重载，清单即刻生效）`);
 			}
 		} catch (err) {
-			if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回技能列表（2026-09-28 拍板）
+			if (err instanceof Error && err.message === ESC_CANCELLED) continue; // Esc → 回技能列表（2026-09-28 拍板）
 			throw err;
 		}
 	}

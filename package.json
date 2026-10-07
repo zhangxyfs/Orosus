@@ -17,7 +17,8 @@
     "build": "pnpm -r build",
     "docs:check": "pnpm gen-docs && pnpm gen-extension-catalog && git diff --exit-code docs/api docs/extension-catalog.md",
     "gen-extension-catalog": "node --experimental-strip-types scripts/gen-extension-catalog.mts",
-    "gen-docs": "node --experimental-strip-types scripts/gen-api-docs.mts"
+    "gen-docs": "node --experimental-strip-types scripts/gen-api-docs.mts",
+    "lint:i18n": "node --experimental-strip-types scripts/i18n-no-raw-cjk.mts"
   },
   "devDependencies": {
     "@orosus/approval": "workspace:*",

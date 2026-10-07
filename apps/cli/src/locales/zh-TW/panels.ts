@@ -1,0 +1,22 @@
+/** m5-i18n 界面主目录 · zh-TW · panels 域（術語表驅動——模組/設定/停用 台灣正體）。 */
+export const zhTWPanels: Record<string, string> = {
+	"kv.model": "模型",
+	"kv.session": "工作階段",
+	"kv.cwd": "工作目錄",
+	"kv.elapsed": "執行時間",
+	"kv.context": "上下文",
+	"kv.proxy": "代理",
+	"kv.modelService": "模型服務",
+	"panel.mod.mounted": "已掛載",
+	"panel.mod.loading": "掛載中",
+	"panel.mod.off": "未掛載",
+	"panel.mod.pendingConfirm": "待確認",
+	"panel.conn.connected": "已連接",
+	"panel.conn.idle": "待啟動",
+	"panel.conn.failed": "失敗",
+	"panel.conn.pendingConfirm": "未確認",
+	"panel.conn.disabled": "已停用",
+	"perm.askAlways": "每次都詢問",
+	"perm.askRisky": "需要時詢問",
+	"perm.never": "從不詢問",
+};

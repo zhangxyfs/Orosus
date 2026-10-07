@@ -1,0 +1,22 @@
+/** m5-i18n 界面主目录 · zh-CN · panels 域（试点 T4 起步——状态三映射 + KV 标签列）。 */
+export const zhCNPanels: Record<string, string> = {
+	"kv.model": "模型",
+	"kv.session": "会话",
+	"kv.cwd": "工作目录",
+	"kv.elapsed": "运行时间",
+	"kv.context": "上下文",
+	"kv.proxy": "代理",
+	"kv.modelService": "模型服务",
+	"panel.mod.mounted": "已挂载",
+	"panel.mod.loading": "挂载中",
+	"panel.mod.off": "未挂载",
+	"panel.mod.pendingConfirm": "待确认",
+	"panel.conn.connected": "已连接",
+	"panel.conn.idle": "待启动",
+	"panel.conn.failed": "失败",
+	"panel.conn.pendingConfirm": "未确认",
+	"panel.conn.disabled": "已停用",
+	"perm.askAlways": "每次都询问",
+	"perm.askRisky": "需要时候询问",
+	"perm.never": "从不询问",
+};

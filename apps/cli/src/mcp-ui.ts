@@ -9,6 +9,7 @@ import { openMcpAddWindow } from "./mcp-add-window.ts";
 import { registerToolLabels } from "./render.ts";
 import type { FullApp, PanelNetwork } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** m5-split-main T6：MCP 面板族自 main.ts 搬入。横切单例经本依赖对象注入（D2 签名注入）：
  *  getH——harness 单例；commandUi——行模式菜单口；activeModuleNames/closeGoneModuleUi/refreshSkillMenu/
@@ -24,7 +25,7 @@ export type McpUiDeps = {
 };
 
 /** Esc 判定（面板族共用小件——设置族消费点在 main.ts 留守段，经 import 取用；设计空白 6）。 */
-export const isEsc = (err: unknown): boolean => err instanceof Error && err.message === "已取消（Esc）";
+export const isEsc = (err: unknown): boolean => err instanceof Error && err.message === ESC_CANCELLED;
 
 // ---------- MCP 管理面（m4-3c T17——列表四段行 / 详情六字段 / Alt + K 启停 / d 两拍删除 / Alt + N 添加窗） ----------
 
@@ -253,7 +254,7 @@ export const openMcpLine = async (out: (s: string) => void, deps: McpUiDeps): Pr
 				out(r.wrote ? afterMcpWrite(deps, undefined, r.text) : r.text);
 			}
 		} catch (err) {
-			if (err instanceof Error && err.message === "已取消（Esc）") continue;
+			if (err instanceof Error && err.message === ESC_CANCELLED) continue;
 			throw err;
 		}
 	}

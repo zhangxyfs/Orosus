@@ -4,6 +4,7 @@ import type { FullApp } from "./tui/fullapp.ts";
 import { createSilenceableOutput } from "./menu.ts";
 import { watchEsc } from "./keys.ts";
 import { commandCompleter } from "./help.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** m5-split-main T11：行模式 IO 族自 main.ts 搬入（人人依赖，最后拆）。
  *  h/activeApp 两件留守单例经 initReplIo 晚绑定注入（D2 的零参热路径形态——question/notify 被
@@ -88,7 +89,7 @@ const askLine = (prompt: string): Promise<string> =>
     rl.once("close", onClose);
     rl.question(prompt, { signal: ac.signal }).then(
       (v) => { cleanup(); resolve(v); },
-      (e: unknown) => { cleanup(); reject(ac.signal.aborted ? new Error("已取消（Esc）") : e); },
+      (e: unknown) => { cleanup(); reject(ac.signal.aborted ? new Error(ESC_CANCELLED) : e); },
     );
   });
 const rlQuestion = async (q: string): Promise<string> => {
@@ -129,7 +130,7 @@ export const question = async (q: string): Promise<string> => {
   const activeApp = refs.getActiveApp();
   if (activeApp !== undefined) {
     const v = await activeApp.promptInput(q, false);
-    if (v === undefined) throw new Error("已取消（Esc）");
+    if (v === undefined) throw new Error(ESC_CANCELLED);
     return v;
   }
   return rlQuestion(q);
@@ -138,7 +139,7 @@ export const secretQuestion = async (q: string): Promise<string> => {
   const activeApp = refs.getActiveApp();
   if (activeApp !== undefined) {
     const v = await activeApp.promptInput(q, true);
-    if (v === undefined) throw new Error("已取消（Esc）");
+    if (v === undefined) throw new Error(ESC_CANCELLED);
     return v;
   }
   return rlSecretQuestion(q);
@@ -159,6 +160,6 @@ export const notify = (t: string, opts?: { durationMs?: number }): void => {
  *  processReplLine catch-all 与 runSubmit 网兜共用此政策——模块命令的 choose/ask Esc 抛错必须穿透
  *  处理器（/model 收窄 catch 同款约定），接住它们 = 宿主这两处。 */
 export const settleCommandError = (err: unknown): void => {
-  if (err instanceof Error && err.message === "已取消（Esc）") return;
+  if (err instanceof Error && err.message === ESC_CANCELLED) return;
   notify(err instanceof Error ? err.message : String(err));
 };

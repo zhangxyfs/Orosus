@@ -5,6 +5,7 @@ import { stripAnsi } from "./tui/width.ts";
 import { DocModel } from "./tui/docmodel.ts";
 import { SPIN_FRAMES } from "./tui/fullapp.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /**
  * /tasks 命令与全屏查看窗（M4.5 T11 / 决策 21/22）：
@@ -449,7 +450,7 @@ export const openTasks = async (
 				h.answerSubagentApproval(entry.id, allow);
 				deps.notify(allow ? `已批准 ${entry.id} 的 ${entry.pendingApproval.tool}` : `已拒绝 ${entry.id} 的 ${entry.pendingApproval.tool}`);
 			} catch (err) {
-				if (err instanceof Error && err.message === "已取消（Esc）") continue; // Esc → 回列表（审批保持挂起）
+				if (err instanceof Error && err.message === ESC_CANCELLED) continue; // Esc → 回列表（审批保持挂起）
 				throw err;
 			}
 			continue;

@@ -1,5 +1,6 @@
 import { Writable } from "node:stream";
 import type { CommandUi } from "@orosus/contracts/module";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 /** 可静默的输出代理（密钥输入无回显，用户走查）：silence 态吞掉 readline 的全部回显——
  *  逐键回显 * 在真实 Windows 终端层（pnpm 管道 × mintty/winpty × 括号粘贴 × ANSI 支持参差）会碎成
@@ -62,7 +63,7 @@ export function createReadlineUi(io: {
       } catch (e) {
         // Esc = 「非确认」——confirm 语义内 false，无需抛错（机制③；审批路径 false 即否决，
         // 与 waterfall 抛错同向 fail-closed）。文案与宿主/choose 取消的既定字面量同宗（menu.test ③ 钉）
-        if (e instanceof Error && e.message === "已取消（Esc）") return false;
+        if (e instanceof Error && e.message === ESC_CANCELLED) return false;
         throw e;
       }
     },

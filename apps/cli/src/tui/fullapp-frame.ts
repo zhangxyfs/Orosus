@@ -3,7 +3,8 @@
  *  let 态（帧间滚动补偿基准，仅本族消费）；renderFrame 壳留三行委托（FrameScheduler 调度闭包
  *  零改动——设计空白 7）；styleWithSelection 零 app 触达住模块级。非公开 API。 */
 
-import { INPUT_MAX_ROWS, layoutInputRows, locateCursor, PERM_LABEL, thumbGeometry, type InputRow } from "./fullapp-types.ts";
+import { INPUT_MAX_ROWS, layoutInputRows, locateCursor, permLabel, thumbGeometry, type InputRow } from "./fullapp-types.ts";
+import { t } from "../i18n/app.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { subagentCountHint } from "../subagent-status.ts";
 import type { OverlayFrame } from "./fullscreen.ts";
@@ -95,7 +96,7 @@ export function createFrame(app: FullApp) {
 		try {
 			return renderFrameInner();
 		} catch (err) {
-			app.io.logWarn?.("tui.render.frame-error", "渲染帧抛错，占位帧兜底", { error: String(err instanceof Error ? err.message : err) });
+			app.io.logWarn?.("tui.render.frame-error", "渲染帧抛错，占位帧兜底", { error: String(err instanceof Error ? err.message : err) }); // i18n:diag 诊断面不翻
 			let rows = 24;
 			let cols = 80;
 			try {
@@ -105,7 +106,7 @@ export function createFrame(app: FullApp) {
 				/* 宿主连尺寸口都抛——缺省几何尽力画 */
 			}
 			const screen: string[] = Array.from({ length: rows }, () => "");
-			screen[0] = truncateToWidth(theme.fg("warn", " 渲染出错——下一帧自动恢复，详见诊断日志（Ctrl + E）"), cols);
+			screen[0] = truncateToWidth(theme.fg("warn", ` ${t("frame.error")}`), cols);
 			return app.full.render(screen, rows, cols, undefined);
 		}
 	}
@@ -154,7 +155,7 @@ export function createFrame(app: FullApp) {
 				screen[streamH + i] = padToWidth(` ${theme.fg("accent", "›")} ${theme.fg("info", truncateToWidth(oneLine, Math.max(1, leftW - 4)))}`, leftW);
 			}
 			// 两行都 pad 到左栏宽——不补齐则右侧面板分隔线/内容左移错位（走查实锤）
-			screen[streamH + queue.length] = padToWidth(theme.dim("  ↑ 召回队尾 · Ctrl + U 立即注入本轮 · 回答结束后依序发送"), leftW);
+			screen[streamH + queue.length] = padToWidth(theme.dim(`  ${t("queue.hint")}`), leftW);
 		}
 		const divRow = streamH + queueH;
 		// 模块询问挂起期：问题写进输入框顶边标题（F5——placeholder 只在空输入时可见，用户一打字问题就消失）
@@ -189,8 +190,8 @@ export function createFrame(app: FullApp) {
 				line = prefix + "•".repeat(vr.text.length);
 			} else if (s.input === "" && i === 0) {
 				const ph = app.pendingUi?.kind === "ask"
-					? app.pendingUi.secret ? "请输入（不回显）…" : "请输入…" // 问题已在顶边标题（F5 九轮③——占位符不再复读）
-					: "向 Orosus 下达指令，或输入 / 查看命令…";
+					? t(app.pendingUi.secret ? "input.placeholder.secret" : "input.placeholder.ask") // 问题已在顶边标题（F5 九轮③——占位符不再复读）
+					: t("input.placeholder.main");
 				line = prefix + theme.dim(ph);
 			} else {
 				line = prefix + styleWithSelection(vr, sel);
@@ -199,11 +200,11 @@ export function createFrame(app: FullApp) {
 		}
 		const d = app.io.panelData();
 		// 档色语义（2026-09-22 用户拍板）：Never Ask = 全自动放行危险档 → 警示黄；确认类档保持青玉
-		const chip = theme.fg(d.permission === "never" ? "warn" : "accent", `◆ ${PERM_LABEL[d.permission] ?? d.permission}`);
+		const chip = theme.fg(d.permission === "never" ? "warn" : "accent", `◆ ${permLabel(d.permission)}`);
 		const subCnt = app.io.subagentRunningCount?.() ?? 0;
 		const subHint = subagentCountHint(subCnt);
-		const leftHint = `${chip}${theme.dim(" · Shift + Tab 切换模式")}${subHint !== "" ? theme.dim(" · ") + subHint : ""}`;
-		const rightHint = theme.dim("Enter 发送 · Alt + Enter 换行");
+		const leftHint = `${chip}${theme.dim(t("foot.switchMode"))}${subHint !== "" ? theme.dim(" · ") + subHint : ""}`;
+		const rightHint = theme.dim(t("foot.sendKeys"));
 		const hintW = leftW - 2;
 		const gap = hintW - visibleWidth(leftHint) - visibleWidth(rightHint) - 1;
 		screen[divRow + 1 + showRows] = paneIn(

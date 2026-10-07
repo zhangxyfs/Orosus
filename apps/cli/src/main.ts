@@ -59,6 +59,7 @@ import { loadHistoricalSubagents, openTasks, subagentUnloadBlock } from "./tasks
 import { isEsc } from "./mcp-ui.ts";
 import { createLocaleStore, detectSystemLocale } from "./i18n/index.ts";
 import { runLocaleSetting } from "./i18n/switch.ts";
+import { bindAppLocale } from "./i18n/app.ts";
 import { BTW_USAGE_HINT, openBtw, reopenBtw, type BtwDeps } from "./btw-cmd.ts";
 import { backgroundRunningCount } from "./subagent-status.ts";
 import { isCompactCommand, withCompactHint } from "./compact-hint.ts";
@@ -83,6 +84,7 @@ import { panelTasksFromEvent } from "./todo-panel.ts";
 import { resolveTuiMode, resolveLatexFlag } from "./tuicfg.ts";
 import { setLatexEnabled } from "./md/latex.ts";
 import { maybeEnableEnvProxy, envProxyUrl, proxyDisplayText, readWindowsSystemProxy, detectTunProxy } from "./proxy-env.ts";
+import { ESC_CANCELLED } from "./i18n/protocol-strings.ts";
 
 // 批 D（2026-10-01 拍板 A+B）：代理环境自动接线——机理与副作用披露见 proxy-env.ts；
 // 必须赶在任何 fetch 发生前（undici 全局分发器首用时读取 NODE_USE_ENV_PROXY）
@@ -230,13 +232,13 @@ const pickFace =
           // 全屏 CommandUi 适配层：全屏激活期 choose 走 FullApp overlay（readline picker 毁屏）
           if (activeApp !== undefined) {
             const n = await activeApp.pickOverlay(title, items);
-            if (n === undefined) throw new Error("已取消（Esc）");
+            if (n === undefined) throw new Error(ESC_CANCELLED);
             return n;
           }
           lv.write(`== ${title} ==
 `);
           const n = await pick(items, terminalMenuIo());
-          if (n === undefined) throw new Error("已取消（Esc）");
+          if (n === undefined) throw new Error(ESC_CANCELLED);
           return n;
         },
       }
@@ -474,6 +476,7 @@ try {
 // P1 提示一次（语言包未挂载 → 英文兜底；dump/print 无头路径不 notify 防 stdout 污染）
 await localeStore.init(h.configuredLanguage() ?? detectSystemLocale());
 h.setModuleT(localeStore.t);
+bindAppLocale(localeStore.t); // tui 渲染面同源（试点 T4 起）
 if (localeStore.packMissing() && args.dumpModules === undefined && args.print === undefined) {
   notify("语言包未挂载——已显示英文（配置保留，重新挂载后自动恢复）");
 }
@@ -767,7 +770,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
             const n0 = activeApp !== undefined
               ? await activeApp.pickOverlay("选择会话", labels)
               : await pick(labels, terminalMenuIo());
-            if (n0 === undefined) throw new Error("已取消（Esc）");
+            if (n0 === undefined) throw new Error(ESC_CANCELLED);
             return n0 + 1; // picker 0-based → 序号 1-based（与回落路径同口径）
           },
         );
@@ -915,7 +918,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
               localeApp !== undefined
                 ? async (t, items) => {
                     const i = await localeApp.pickOverlay(t, items);
-                    if (i === undefined) throw new Error("已取消（Esc）");
+                    if (i === undefined) throw new Error(ESC_CANCELLED);
                     return items[i] ?? "";
                   }
                 : (t, items) => commandUi.choose(t, items),
