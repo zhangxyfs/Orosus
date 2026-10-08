@@ -1889,6 +1889,8 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 			}));
 		},
 		importMemory: (sourceIds, organize, mode) => importWithOrganize(sourceIds, organize, mode ?? "current"),
+		// T8 落点行（G5/D6）：恒指当前项目落点 = git 根绝对路径（引导保持无 IO）
+		destLabel: () => findGitRoot(process.cwd()),
 	};
 };
 

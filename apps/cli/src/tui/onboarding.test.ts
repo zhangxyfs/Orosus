@@ -32,6 +32,7 @@ const mkDeps = (over: Partial<OnboardingDeps> = {}): { deps: OnboardingDeps; cal
     visionModels: over.visionModels ?? (async () => ["zai/glm-5.3-flash", "zai/glm-4.6v"]),
     detectMemorySources: over.detectMemorySources ?? (() => []),
     importMemory: over.importMemory ?? (async () => ({ imported: 0, skipped: 0, merged: 0 })),
+    destLabel: over.destLabel ?? (() => "D:\\proj\\root"),
     requestRender: () => { calls.renders += 1; },
     ...over,
   };
@@ -635,25 +636,25 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(s.stateRef.pm.checked.size).toBe(0);
   });
 
-  it("② 整理开关行 Space 切换（默认关——D20）", async () => {
+  it("② 整理开关行 Space 切换（默认关——D20；m5-peers-import-fix 后行序 = 源行 + 模式行 + 整理行）", async () => {
     const s = await toP5();
-    for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // sel=4 = 开关行
+    for (let i = 0; i < SRC.length + 1; i++) s.handleKey("down");   // sel=5 = 整理开关行（sel=4 是模式行）
     expect(s.stateRef.pm.organize).toBe(false);
     s.handleKey(" ");
     expect(s.stateRef.pm.organize).toBe(true);
   });
 
-  it("③ ctrl+n 有勾选 → 异步导入 → finish 回调带 importResult；期间再按不理", async () => {
+  it("③ ctrl+n 有勾选 → 异步导入（scope 透传，默认 all——D11）→ finish 回调带 importResult；期间再按不理", async () => {
     const finished: unknown[] = [];
-    let importedArgs: [string[], boolean] | undefined;
+    let importedArgs: [string[], boolean, "current" | "all"] | undefined;
     const s = await toP5({
-      importMemory: async (ids, organize) => { importedArgs = [ids, organize]; return { imported: 49, skipped: 3, merged: 0 }; },
+      importMemory: async (ids, organize, mode) => { importedArgs = [ids, organize, mode ?? "current"]; return { imported: 49, skipped: 3, merged: 0 }; },
       finish: (o) => { finished.push(o); },
     });
     s.handleKey("down");   // sel=1 ZCode
     s.handleKey(" ");
     expect(s.handleKey("ctrl+n")).toBeUndefined();   // 导入中不完成
-    expect(importedArgs).toEqual([["zcode"], false]);
+    expect(importedArgs).toEqual([["zcode"], false, "all"]);
     await new Promise((r) => setTimeout(r, 10));
     expect(finished).toEqual([{ kind: "completed", importResult: { imported: 49, skipped: 3, merged: 0 } }]);
     expect(s.stateRef.pm.notice).toContain("已导入 49 条");
@@ -662,10 +663,11 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
   it("④ organize 开启时 importMemory 收到 true（开关透传）", async () => {
     let got: boolean | undefined;
     const s = await toP5({ importMemory: async (_ids, organize) => { got = organize; return { imported: 1, skipped: 0, merged: 1 }; } });
-    for (let i = 0; i < SRC.length; i++) s.handleKey("down");   // 开关行
+    for (let i = 0; i < SRC.length + 1; i++) s.handleKey("down");   // 整理开关行（模式行在其上一行）
     s.handleKey(" ");   // 开
-    s.handleKey("up");   // 回源行（qwen 0 条…再 up 到 codex？——up 到 sel=3 codex 不可勾）
-    s.handleKey("up");   // sel=2
+    s.handleKey("up");   // sel=4 模式行（空过）
+    s.handleKey("up");   // sel=3 codex 未安装不可勾（空过）
+    s.handleKey("up");   // sel=2 qwen 0 条（空过）
     s.handleKey("up");   // sel=1 ZCode
     s.handleKey(" ");
     s.handleKey("ctrl+n");
@@ -696,5 +698,67 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(text).toContain("未安装");
     expect(text).toContain("用模型整理导入的记忆");
     expect(text).toContain("逐条优化内容");
+  });
+
+  /* ── m5-peers-import-fix T8：落点行 + 新数 + 全局标注 + 模式行 + 镜像结果 ── */
+  const SRC_T8 = [
+    { id: "claude-code", label: "Claude Code", note: "~/.claude/…", count: 12, available: true, newCount: 3 },
+    { id: "codex", label: "codex", note: "~/.codex/…", count: 9, available: true, newCount: 0, global: true },
+  ];
+  const toP5T8 = async (over: Partial<OnboardingDeps> = {}): Promise<OnboardingSession> => toP5({ detectMemorySources: () => SRC_T8, ...over });
+
+  it("⑦ 落点行（G5/D6）：intro 下渲染「将导入到：<git 根>」——恒指当前项目落点", async () => {
+    const s = await toP5T8({ destLabel: () => "D:\\develop\\Orosus" });
+    const text = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(text).toContain("将导入到：D:\\develop\\Orosus");
+  });
+  it("⑧ 模式行（G11/D11）：默认全部项目，Space/回车切换 ✓ 移位；scope 透传 importMemory", async () => {
+    let gotMode = "";
+    const s = await toP5T8({ importMemory: async (_ids, _o, mode) => { gotMode = mode ?? ""; return { imported: 0, skipped: 0, merged: 0 }; } });
+    expect(s.stateRef.pm.scope).toBe("all");   // D11：引导默认「全部项目」（新用户搬家心智）
+    let text = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(text).toContain("导入范围");
+    expect(text).toContain("全部项目（各归各桶）✓");
+    expect(text).not.toContain("仅当前项目 ✓");
+    s.handleKey("down"); s.handleKey("down");   // sel=2 = 模式行（源行 2 条）
+    s.handleKey("enter");   // G10 同款回车切换
+    expect(s.stateRef.pm.scope).toBe("current");
+    text = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(text).toContain("仅当前项目 ✓");
+    expect(text).not.toContain("各归各桶）✓");
+    s.handleKey("up"); s.handleKey("up");   // 回 sel=0 Claude Code
+    s.handleKey(" ");
+    s.handleKey("ctrl+n");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(gotMode).toBe("current");
+  });
+  it("⑨ 已全部导入（D7）：current 模式 M=0 拦勾带提示；all 模式不拦（判重按各目标桶独立算）", async () => {
+    const s = await toP5T8();
+    s.handleKey("down");   // sel=1 codex（newCount 0）
+    s.handleKey("down"); s.handleKey("enter");   // sel=2 模式行 → current
+    s.handleKey("up");   // 回 sel=1 codex
+    s.handleKey(" ");
+    expect(s.stateRef.pm.checked.size).toBe(0);   // 拦勾
+    expect(s.stateRef.pm.notice).toContain("该源已全部导入");
+    s.handleKey("down"); s.handleKey("enter");   // 切回 all
+    s.handleKey("up");   // sel=1
+    s.handleKey(" ");
+    expect([...s.stateRef.pm.checked]).toEqual(["codex"]);   // all 模式不拦
+  });
+  it("⑩ 全局源标注（G2/D5）：codex 行尾缀「全局源——不分项目」", async () => {
+    const s = await toP5T8();
+    const text = stripAnsi(s.render(140, 30).lines.join("\n"));
+    expect(text).toContain("全局源——不分项目，含所有项目的笔记");
+  });
+  it("⑪ 镜像结果（G12 三义）：scope=all 且 mirror 在场 →「N 个项目共 M 条」句式（含分段省略）", async () => {
+    const s = await toP5T8({
+      importMemory: async () => ({ imported: 6, skipped: 4, merged: 0, mirror: { projects: 2, unresolved: 1 } }),
+    });
+    s.handleKey(" ");   // 勾 Claude Code（scope 默认 all）
+    s.handleKey("ctrl+n");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.stateRef.pm.notice).toContain("已导入 2 个项目共 6 条");
+    expect(s.stateRef.pm.notice).toContain("跳过 4 条重复");
+    expect(s.stateRef.pm.notice).toContain("1 个项目未能定位");
   });
 });

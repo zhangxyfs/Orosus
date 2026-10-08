@@ -47,6 +47,8 @@ export interface OnboardingDeps {
   /** T6d 第 5 页：导入勾选源（organize = D20 模型整理开关——仅引导当次生效不落盘；mode = D11 导入范围，
    *  缺省 current 兼容旧调用）。异步（organize 开启时含 llm 调用）；完成经 deps.finish 收尾。 */
   importMemory(sourceIds: string[], organize: boolean, mode?: "current" | "all"): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }>;
+  /** m5-peers-import-fix T8：落点行（G5）——宿主返回 git 根绝对路径（引导保持无 IO）。 */
+  destLabel(): string;
   /** 引导自动收尾口（T6d：异步导入完成时宿主注入 resolve；测试/无头可省——手按 Ctrl+N 完成）。 */
   finish?(outcome: OnboardingOutcome): void;
   /** 异步清单到达后的重绘请求（FullApp 挂接时强制注入自家调度——宿主直驱测试可省略）。 */
@@ -81,13 +83,15 @@ interface PVState {
   notice: string; noticeKind: NoticeKind;
 }
 
-/** T6d 第 5 页 · 从其他 agent 导入记忆（v3 走查二轮 + v5 整理开关 D20）。 */
+/** T6d 第 5 页 · 从其他 agent 导入记忆（v3 走查二轮 + v5 整理开关 D20）。
+ *  m5-peers-import-fix T8：scope = 导入范围（D11 引导默认「全部项目」——新装用户一次搬家各归各桶）。 */
 interface PMState {
-  sel: number; checked: Set<string>; organize: boolean;   // sel 0..sources.length = 源行；+1 = 整理开关行
+  sel: number; checked: Set<string>; organize: boolean;   // sel 0..sources.length-1 = 源行；+0 = 模式行；+1 = 整理开关行
+  scope: "all" | "current";
   importing: boolean;
   done: boolean;   // 导入已尝试（成功或失败）——此后 Ctrl+N 直接完成不再重试
-  importResult?: { imported: number; skipped: number; merged: number };
-  sources: { id: string; label: string; note: string; count: number; available: boolean }[];
+  importResult?: { imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } };
+  sources: { id: string; label: string; note: string; count: number; available: boolean; newCount?: number; global?: boolean }[];
   notice: string; noticeKind: NoticeKind;
 }
 
@@ -130,7 +134,7 @@ export class OnboardingSession {
       chosen: null, model: null, notice: "", noticeKind: "warn",
     };
     this.pv = { sel: 0, mode: "opts", models: [], loading: false, notice: "", noticeKind: "warn" };
-    this.pm = { sel: 0, checked: new Set(), organize: false, importing: false, done: false, sources: deps.detectMemorySources(), notice: "", noticeKind: "warn" };
+    this.pm = { sel: 0, checked: new Set(), organize: false, scope: "all", importing: false, done: false, sources: deps.detectMemorySources(), notice: "", noticeKind: "warn" };
   }
 
   /** 测试探针。 */
@@ -513,10 +517,10 @@ export class OnboardingSession {
     return undefined;
   }
 
-  /* ── 第 5 页 · 从其他 agent 导入记忆（T6d——Space 勾选（第 2 页同键不同义先例）+ 整理开关 D20） ── */
+  /* ── 第 5 页 · 从其他 agent 导入记忆（T6d——Space 勾选 + 整理开关 D20；T8 加模式行/新数/拦勾） ── */
   private keyPM(key: string): OnboardingOutcome | undefined {
     const p = this.pm;
-    const rows = p.sources.length + 1;   // 末行 = 整理开关
+    const rows = p.sources.length + 2;   // 末两行 = 模式行 + 整理开关
     if (key === "up" || key === "down") {
       p.sel = Math.max(0, Math.min(rows - 1, p.sel + (key === "down" ? 1 : -1)));
       return undefined;
@@ -525,13 +529,23 @@ export class OnboardingSession {
       if (p.sel < p.sources.length) {
         const src = p.sources[p.sel]!;
         if (!src.available || src.count === 0) { this.notice(t("onboard.p5.noNotes", { label: src.label }), "warn"); return undefined; }
+        // D7：仅当前项目模式下已全部导入拦勾（镜像模式判重按各目标桶独立算，不拦）
+        if (p.scope === "current" && src.newCount === 0) { this.notice(t("onboard.p5.allImported"), "warn"); return undefined; }
         if (p.checked.has(src.id)) p.checked.delete(src.id);
         else p.checked.add(src.id);
+        p.notice = "";
+      } else if (p.sel === p.sources.length) {
+        p.scope = p.scope === "all" ? "current" : "all";   // G10 同款切换（✓ 移位）
         p.notice = "";
       } else {
         p.organize = !p.organize;
         p.notice = "";
       }
+      return undefined;
+    }
+    if (key === "enter" && p.sel === p.sources.length) {   // 模式行回车切换（G10——settings 同款交互）
+      p.scope = p.scope === "all" ? "current" : "all";
+      p.notice = "";
       return undefined;
     }
     if (key === "ctrl+n") {
@@ -540,11 +554,14 @@ export class OnboardingSession {
       if (p.checked.size === 0) return { kind: "completed" };   // 无勾选 = 跳过导入直接完成
       p.importing = true;
       this.notice(t("onboard.pm.importing"), "warn");
-      void Promise.resolve(this.deps.importMemory([...p.checked], p.organize)).then((r) => {
+      void Promise.resolve(this.deps.importMemory([...p.checked], p.organize, p.scope)).then((r) => {
         p.importing = false;
         p.done = true;
         p.importResult = r;
-        this.notice(t("onboard.p5.imported", { n: r.imported, skip: r.skipped }), "ok");
+        // G12 三义：镜像模式（scope=all 且 mirror 在场）走项目级句式，分段省略同 settings 侧
+        this.notice(r.mirror !== undefined && p.scope === "all"
+          ? t("onboard.p5.importedMirror", { projects: r.mirror.projects, n: r.imported, seg: this.mirrorSeg(r.skipped, r.mirror.unresolved) })
+          : t("onboard.p5.imported", { n: r.imported, skip: r.skipped }), "ok");
         this.deps.requestRender?.();
         this.deps.finish?.({ kind: "completed", importResult: r });   // 宿主注入的自动收尾（引导关窗 + toast）
       }).catch(() => {
@@ -556,6 +573,14 @@ export class OnboardingSession {
       return undefined;
     }
     return undefined;
+  }
+
+  /** G12 分段省略（引导侧三语拼装）：skip=0 省跳过段、unresolved=0 省未能定位段、双零整个括段省。 */
+  private mirrorSeg(skipped: number, unresolved: number): string {
+    const parts: string[] = [];
+    if (skipped > 0) parts.push(t("onboard.p5.importedMirrorSkip", { skip: skipped }));
+    if (unresolved > 0) parts.push(t("onboard.p5.importedMirrorUnres", { unresolved }));
+    return parts.length === 0 ? "" : `（${parts.join(" · ")}）`;
   }
 
   private configuredProviders(): OnboardingProvider[] {
@@ -843,23 +868,34 @@ export class OnboardingSession {
     void bodyH;
   }
 
-  /* ── 第 5 页 · 导入记忆正文（v3 简图③：五源行 + 整理开关 + 说明；行数恒定防闪烁） ── */
+  /* ── 第 5 页 · 导入记忆正文（v3 简图③：落点行 + 五源行 + 模式行 + 整理开关；行数恒定防闪烁） ── */
   private bodyPM(out: string[], _bodyH: number, inner: number): void {
     const p = this.pm;
     out.push(theme.fg("muted", t("onboard.pm.intro")));
+    // G5/D6 落点行：恒指当前项目的落点（git 根）——「全部项目」模式下其他项目的归属由模式行与结果文案表达
+    out.push(truncateToWidth(theme.dim(t("onboard.pm.destRow", { path: this.deps.destLabel() })), inner));
     out.push("");
     for (const [i, src] of p.sources.entries()) {
       const mark = p.checked.has(src.id) ? theme.fg("accent", "●") : theme.dim("○");
       const count = !src.available ? theme.dim(t("onboard.p5.notInstalled"))
         : src.count === 0 ? theme.dim(t("onboard.pm.zeroNotes"))
         : theme.fg("fg", t("onboard.p5.notesCount", { n: src.count }));
-      const row = `${mark} ${theme.fg("fg", src.label)}${theme.dim(` · ${count}${src.available && src.count > 0 ? ` · ${src.note}` : ""}`)}`;
+      // D7 新数：current 模式 M=0 显示已全部导入；all 模式恒（新 M）——按当前项目桶差集计、仅供参考
+      const fresh = src.newCount === undefined ? ""
+        : src.newCount === 0 && p.scope === "current" ? theme.dim(t("onboard.pm.allImported"))
+        : theme.fg("fg", t("onboard.pm.newCount", { n: src.newCount }));
+      const globalNote = src.global === true ? theme.dim(t("onboard.pm.globalNote")) : "";
+      const row = `${mark} ${theme.fg("fg", src.label)}${theme.dim(` · ${count}${fresh}${src.available && src.count > 0 ? ` · ${src.note}` : ""}`)}${globalNote}`;
       out.push(truncateToWidth(i === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + row) : ` ${row}`, inner));
     }
     out.push("");
+    // G11 模式行：scopeRow 三语值都以 " / " 分隔两选项（键契约——✓ 标当前值由代码拼入，无空格贴选项尾）
+    const [scopeCur, scopeAll] = t("onboard.pm.scopeRow").split(" / ");
+    const scopeText = p.scope === "current" ? `${scopeCur} ✓ / ${scopeAll}` : `${scopeCur} / ${scopeAll}✓`;
+    out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + scopeText) : ` ${scopeText}`, inner));
     const optMark = p.organize ? theme.fg("accent", "[✓]") : theme.dim("[ ]");
     const optRow = `${optMark} ${theme.fg("fg", t("onboard.pm.organizeRow"))}${theme.dim(t("onboard.pm.organizeDefaultOff"))}`;
-    out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
+    out.push(truncateToWidth(p.sources.length + 1 === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + optRow) : ` ${optRow}`, inner));
     out.push(theme.dim(t("onboard.pm.organizeDesc1")));
     out.push(theme.dim(t("onboard.pm.organizeDesc2")));
     // notice 恒占位两行（空则空行）——同 bodyPV：框高收缩后 notice 不得引起框高跳动

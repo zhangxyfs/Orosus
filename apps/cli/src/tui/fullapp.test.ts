@@ -1042,6 +1042,7 @@ describe("首次使用引导弹窗 FullApp 集成（M4-3 T1d）", () => {
 		visionModels: async () => [],
 		detectMemorySources: () => [],
 		importMemory: async () => ({ imported: 0, skipped: 0, merged: 0 }),
+		destLabel: () => "D:\\proj\\root",   // T8 落点行（G5）——测试夹具
 	});
 
 	it("⑬ 弹窗开 → 焦点锁全键序走通三页 → completed 结算 + 弹窗消退", async () => {
