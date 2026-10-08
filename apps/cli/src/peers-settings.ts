@@ -53,6 +53,9 @@ export async function runMemorySetting(
   return { kind: "toggle", key, value, message: `${label}：${value ? "开" : "关"}（已写 [tool-peers] ${key}）` };
 }
 
+/** D10/D11 导入范围：current = 仅当前项目；all = 全部项目各归各桶（镜像）。 */
+export type ImportScope = "current" | "all";
+
 /** 记忆导入数据口（走查修订三 + 走查八：settings 侧 = 引导第 5 页同功能——含 D20 模型整理〔逐条
  *  内容优化 + 重写 description，走查八-③ 重定义〕与进度回调）。宿主接线复用 importers 件 + h.llm()。
  *  m5-peers-import-fix T6：detect 增 newCount（D7 已导计数）/global（codex 全局源标注）；run 增 mode
@@ -66,7 +69,7 @@ export interface MemoryImportDeps {
   /** 执行导入（organize = true 逐条模型整理——内容优化 + 重写摘要 + 改英文短题；onProgress **前置**
    *  每条一步；signal = Alt+C 强停〔走查十二-④〕——硬中断：剩余条目不拷不落盘；mode = "all" 时四家
    *  走镜像各归各桶、codex 仍导当前桶〔结果 mirror 字段在场〕）。 */
-  run(sourceIds: string[], organize: boolean, mode: "current" | "all", onProgress?: (done: number, total: number, title: string) => void, signal?: AbortSignal): Promise<MemoryImportResult>;
+  run(sourceIds: string[], organize: boolean, mode: ImportScope, onProgress?: (done: number, total: number, title: string) => void, signal?: AbortSignal): Promise<MemoryImportResult>;
 }
 
 /** 「记忆导入」选择段（走查八-④：整理是**开关**项——开启后不论全部导入还是单源导入都走整理）：
@@ -79,22 +82,22 @@ export async function runMemoryImportChoose(
   choose: (title: string, items: string[]) => Promise<string>,
   deps: MemoryImportDeps,
   initialOrganize = false,
-): Promise<{ ids: string[]; organize: boolean; mode: "current" | "all" } | "empty" | undefined> {
+): Promise<{ ids: string[]; organize: boolean; mode: ImportScope } | "empty" | undefined> {
   const sources = deps.detect().filter(s => s.count > 0);
   if (sources.length === 0) return "empty";
   const totalNew = sources.reduce((n, s) => n + (s.newCount ?? s.count), 0);
   const organizeRow = (on: boolean): string => `用模型整理 —— ${on ? "开 ✓" : "关"}（逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理）`;
-  const scopeRow = (mode: "current" | "all"): string =>
+  const scopeRow = (mode: ImportScope): string =>
     mode === "current" ? "导入范围 —— 仅当前项目 ✓ / 全部项目（各归各桶）" : "导入范围 —— 仅当前项目 / 全部项目（各归各桶）✓";
   const globalNote = "（全局源——不分项目，含所有项目的笔记）";
-  const sourceRow = (s: MemoryImportSourceInfo, mode: "current" | "all"): string => {
+  const sourceRow = (s: MemoryImportSourceInfo, mode: ImportScope): string => {
     // D7：镜像模式不拦也不改显示——（新 M）按当前项目桶差集计、仅供参考
     const fresh = s.newCount === undefined ? "" : `（新 ${s.newCount}）`;
     const body = s.newCount === 0 && mode === "current" ? "已全部导入" : `导入该源 ${s.count} 条${fresh}`;
     return `${s.label} —— ${body}${s.global === true ? globalNote : ""}`;
   };
   let organize = initialOrganize;
-  let mode: "current" | "all" = "current";
+  let mode: ImportScope = "current";
   for (;;) {
     const items = [
       ...sources.map(s => sourceRow(s, mode)),
@@ -136,3 +139,10 @@ export const mirrorImportResultText = (r: { imported: number; skipped: number; m
   const paren = seg.length === 0 ? "" : `（${seg.join(" · ")}）`;
   return `已导入 ${r.mirror.projects} 个项目共 ${r.imported} 条${paren}`;
 };
+
+/** 结果文案分流（settings-ui 全屏/行模式共用）：镜像模式且 mirror 字段在场走 G12 串，否则原句。
+ *  mode=all 但仅勾 codex 时 mirror 缺席（四家任一在场才出）——走原句式避免「0 个项目」歧义。 */
+export const memoryImportResultFor = (mode: ImportScope, r: MemoryImportResult): string =>
+  mode === "all" && r.mirror !== undefined
+    ? mirrorImportResultText({ imported: r.imported, skipped: r.skipped, mirror: r.mirror })
+    : memoryImportResultText(r);

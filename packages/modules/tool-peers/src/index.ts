@@ -9,7 +9,7 @@ import { createMemoryTools, createPeersTools } from "./tools.ts";
 
 // 五源导入件对宿主开口（T6d：引导在 apps/cli 直 import 模块包调用——apps 依赖 modules 合法、boundaries 不反向）
 export { detectSources, filterNewNotes, importNotes, importNotesProgressive, mergeLegacyMemory, organizeNote, organizeNotes, readSourceNotes } from "./importers.ts";
-export type { SourceNote, MemorySource, LlmStream, LlmStreamReq, OrganizeProgress, MergeLegacyResult } from "./importers.ts";
+export type { SourceNote, MemorySource, PeerHomes, LlmStream, LlmStreamReq, OrganizeProgress, MergeLegacyResult } from "./importers.ts";
 export { rebuildIndex, writeNoteFile } from "./memstore.ts";   // 走查九：批量落盘路径（每条一文件+索引末次重建）
 // T1 桶键件（m5-peers-import-fix）：宿主导入目的地与模块 env.memoryDir 共用同一把键——findGitRoot
 // 自 main.ts 下沉（apps 依赖 modules 合法、findGitRoot 反向依赖无门）；encodeCwdLike/记忆桶键见 roots.ts

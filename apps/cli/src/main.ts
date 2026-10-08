@@ -44,10 +44,11 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, findGitRoot, importMirror, importNotesProgressive, mergeLegacyMemory, memoryBucketKey, readSourceNotes, scanMirrorSources, type LlmStream } from "@orosus/tool-peers";
+import { detectSources, findGitRoot, importMirror, importNotesProgressive, mergeLegacyMemory, memoryBucketKey, readSourceNotes, scanMirrorSources, type LlmStream, type PeerHomes } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
+import type { ImportScope } from "./peers-settings.ts";
 import { existsSync } from "node:fs";
 import { imagesFor, extractImageRefs, PASTE_EMPTY, readClipboardText } from "./paste.ts";
 import { attachAltVPaste } from "./altpaste.ts";
@@ -445,7 +446,7 @@ const hooksDeps: HooksUiDeps = {
   reloadModulesIdle: (app, busyToast) => reloadModulesIdle(modulesDeps, app, busyToast),
 };
 /** m5-peers 五源家目录（T6d——探测纯读，缺目录 = 未安装；settings 与引导两消费方共用，故置顶）。 */
-const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string } => {
+const memorySourceHomes = (): PeerHomes => {
 	const home = homedir();
 	return {
 		claude: join(home, ".claude"),
@@ -457,6 +458,11 @@ const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; 
 };
 /** m5-peers git root 探测（T6d：向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。
  *  m5-peers-import-fix T1：本体下沉包层 tool-peers/roots.ts（记忆桶键两消费方共用），此处改引。 */
+/** 当前项目记忆桶目录（m5-peers-import-fix：git 根键——importWithOrganize / settingsDeps detect /
+ *  引导 detectMemorySources 三消费方同桶同键）。 */
+const currentMemoryDir = (): string => join(orosusHome(), "memories", "projects", memoryBucketKey(process.cwd()), "memory");
+/** 当前项目记忆桶基根（T5 启动合并用）。 */
+const memoryBaseDir = (): string => join(orosusHome(), "memories", "projects");
 /** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）。
  *  逐条单通道本体在包层 importNotesProgressive（走查十一：机械档旧形整段同步+onProgress 没接 =
  *  全程零反应直跳完成态——下沉包层为可测）；目标 = 本项目记忆桶（与 env.memoryDir 同桶）。
@@ -466,13 +472,13 @@ const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; 
 const importWithOrganize = async (
 	sourceIds: string[],
 	organize: boolean,
-	mode: "current" | "all",
+	mode: ImportScope,
 	onProgress?: (done: number, total: number, title: string) => void,
 	signal?: AbortSignal,
 ): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }> => {
 	const cwd = process.cwd();
 	const homes = memorySourceHomes();
-	const memoryBase = join(orosusHome(), "memories", "projects");
+	const memoryBase = memoryBaseDir();
 	const llm: LlmStream = (req) => h.llm().stream(req);
 	if (mode === "all") {
 		const mirrorIds = sourceIds.filter(id => id !== "codex");
@@ -493,7 +499,7 @@ const importWithOrganize = async (
 		if (sourceIds.includes("codex")) {
 			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
 			const all = readSourceNotes(srcs.find(s => s.id === "codex")?.dir);
-			const r = await importNotesProgressive(join(memoryBase, memoryBucketKey(cwd), "memory"), all, {
+			const r = await importNotesProgressive(currentMemoryDir(), all, {
 				organize,
 				llm,
 				...(onProgress !== undefined ? { onProgress } : {}),
@@ -507,7 +513,7 @@ const importWithOrganize = async (
 	}
 	const srcs = detectSources(homes, findGitRoot(cwd), cwd);
 	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-	return importNotesProgressive(join(memoryBase, memoryBucketKey(cwd), "memory"), all, {
+	return importNotesProgressive(currentMemoryDir(), all, {
 		organize,
 		llm,
 		...(onProgress !== undefined ? { onProgress } : {}),   // exactOptional：undefined 不显式入参
@@ -528,8 +534,7 @@ const settingsDeps: SettingsUiDeps = {
   peersImport: {
     detect: () => {
       const cwd = process.cwd();
-      const destDir = join(orosusHome(), "memories", "projects", memoryBucketKey(cwd), "memory");
-      return detectSources(memorySourceHomes(), findGitRoot(cwd), cwd, destDir)
+      return detectSources(memorySourceHomes(), findGitRoot(cwd), cwd, currentMemoryDir())
         .map(s => ({ id: s.id, label: s.label, count: s.count, ...(s.newCount !== undefined ? { newCount: s.newCount } : {}), ...(s.global === true ? { global: true } : {}) }));
     },
     run: importWithOrganize,
@@ -563,7 +568,7 @@ bindAppLocale(localeStore.t); // tui 渲染面同源（试点 T4 起）
 // m5-peers-import-fix T5/G8：旧 cwd 键记忆桶启动合并（桶键改 git 根的一次性迁移，D2）——整体 try-catch
 // 包死不杀启动（半成品合并幂等可重入：importNotes 标题判重、下次启动重合零重复；唯一风险口 = 未捕获异常）
 try {
-  const merged = mergeLegacyMemory(join(orosusHome(), "memories", "projects"), process.cwd());
+  const merged = mergeLegacyMemory(memoryBaseDir(), process.cwd());
   if (merged.merged > 0) notify(t("main.peers.legacyMerged", { n: merged.merged }));   // G9 toast
 } catch { /* fs 权限/桶损坏——静默跳过，下次启动幂等重试（G8：catch 由实施定） */ }
 if (localeStore.packMissing() && args.dumpModules === undefined && args.print === undefined) {
@@ -1880,8 +1885,7 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		detectMemorySources: () => {
 			const cwd = process.cwd();
 			const homes = memorySourceHomes();
-			const destDir = join(orosusHome(), "memories", "projects", memoryBucketKey(cwd), "memory");
-			const srcs = detectSources(homes, findGitRoot(cwd), cwd, destDir);
+			const srcs = detectSources(homes, findGitRoot(cwd), cwd, currentMemoryDir());
 			return srcs.map(s => ({
 				id: s.id, label: s.label, note: s.dir ?? t("main.src.notInstalled"), count: s.count, available: s.dir !== undefined,
 				...(s.newCount !== undefined ? { newCount: s.newCount } : {}),

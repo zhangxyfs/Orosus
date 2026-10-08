@@ -7,7 +7,7 @@ import { ctxUsageText, diskUsageText, runtimeStatusText, tokenUsageText } from "
 import { modelSlotList, moduleConfigFileFor, subagentConfigFile } from "./config-face.ts";
 import { runSubagentApprovalSetting, runSubagentMaxTurnsSetting, runSubagentModelSetting } from "./subagent-settings.ts";
 import { runUpdateCheckSetting, updateConfigFile } from "./update-settings.ts";
-import { memoryImportResultText, mirrorImportResultText, runMemoryImportChoose, runMemorySetting, type MemoryImportDeps } from "./peers-settings.ts";
+import { memoryImportResultFor, runMemoryImportChoose, runMemorySetting, type ImportScope, type MemoryImportDeps } from "./peers-settings.ts";
 import { runVisionSetting } from "./vision-media.ts";
 import { openSkillsLine, openSkillsPanel, type SkillUiDeps } from "./skills-ui.ts";
 import { openHooksLine, openHooksPanel, type HooksUiDeps } from "./hooks-ui.ts";
@@ -58,7 +58,7 @@ const runSearchSettings = async (h: Harness): Promise<string> => ((await h.promp
  *  **进度前置**（每条开始处理时先报——条先动再跑数据）；**禁 Esc** + **Alt+C 停止并关窗**（走查十二-②④：
  *  硬中断——剩余条目不拷不落盘）；**完成自动关窗**（走查十二-①——结果走 toast，无需手动 Enter）。
  *  m5-peers-import-fix T6：mode 透传（"all" = 镜像各归各桶——G12 结果串）。 */
-const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: string[], organize: boolean, mode: "current" | "all"): Promise<void> => {
+const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: string[], organize: boolean, mode: ImportScope): Promise<void> => {
 	let done = 0;
 	let label = "";
 	let stopped = false;
@@ -107,10 +107,7 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 		app.scheduler.requestImmediateRender();
 	}, ac.signal);
 	handle?.close();   // 完成自动关窗（走查十二-①）——结果数字走 toast
-	const resultText = mode === "all" && r.mirror !== undefined
-		? mirrorImportResultText({ imported: r.imported, skipped: r.skipped, mirror: r.mirror })
-		: memoryImportResultText(r);
-	app.showToast(`${stopped ? `${t("settings.import.stopped")} ` : ""}${resultText}`, 6000);
+	app.showToast(`${stopped ? `${t("settings.import.stopped")} ` : ""}${memoryImportResultFor(mode, r)}`, 6000);
 };
 
 /** D14（m5-peers T6b）：settings 面动态条目——tool-peers 模块 active（启用）时插「记忆」于 MCP 后
@@ -365,9 +362,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 						if (picked === undefined) continue;
 						out(picked.organize ? t("settings.import.lineOrganize") : t("settings.import.lineRunning"));
 						const lr = await deps.peersImport.run(picked.ids, picked.organize, picked.mode);
-						out(picked.mode === "all" && lr.mirror !== undefined
-							? mirrorImportResultText({ imported: lr.imported, skipped: lr.skipped, mirror: lr.mirror })
-							: memoryImportResultText(lr));
+						out(memoryImportResultFor(picked.mode, lr));
 						continue;
 					}
 					// 行模式 /settings busy 期排队到 turn 结束，走到这里必然空闲（共用件口径）

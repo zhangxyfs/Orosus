@@ -8,6 +8,10 @@ import { encodeCwdLike, memoryBucketKey } from "./roots.ts";
  *  导入 = 一次性搬运（D18，重复导入靠标题去重）；模型整理 = 依赖注入 llmStream（D20，默认关零 token）。 */
 
 export interface SourceNote { title: string; summary: string; content: string; type: NoteType }
+
+/** 五源家目录束（detectSources / scanMirrorSources / 宿主 memorySourceHomes 共用形态）。 */
+export interface PeerHomes { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string }
+
 export interface MemorySource {
   id: "claude-code" | "zcode" | "qwen" | "codex" | "reasonix"; label: string; dir: string | undefined; count: number;
   /** 坑 3（m5-peers-import-fix T2）：全局源标注——仅 codex 恒 true（无项目维度，UI 侧显示「含所有项目的笔记」）。 */
@@ -52,7 +56,7 @@ const dirIf = (dir: string): string | undefined => (existsSync(dir) ? dir : unde
  *  codex global / destDir 给出时算 newCount）：目录不存在 = dir undefined + count 0（页面标「未安装/0 条」）。
  *  Reasonix 双形态（D3）：sha1 实机形态优先、projects-slug（当前 Go 版）次之，任一命中即该源 dir。 */
 export function detectSources(
-  homes: { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string },
+  homes: PeerHomes,
   gitRoot: string,
   cwd: string,
   destDir?: string,

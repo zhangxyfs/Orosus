@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { closeSync, existsSync, openSync, readSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { countNotes, importNotesProgressive, readSourceNotes, sha1hex16, zcodeBucketKey, type LlmStream, type OrganizeProgress, type SourceNote } from "./importers.ts";
+import { countNotes, importNotesProgressive, readSourceNotes, sha1hex16, zcodeBucketKey, type LlmStream, type OrganizeProgress, type PeerHomes, type SourceNote } from "./importers.ts";
 import { memoryBucketKey } from "./roots.ts";
 
 /** 镜像探测件（m5-peers-import-fix T3/T4）：跨项目镜像导入 = 扫全部项目桶 → 归属反查（依据实锚，
@@ -156,7 +156,7 @@ function sessionKeyPaths(dirname: string): string[] {
  *  zcode：db 键精确匹配（db 失败 = 全桶 unresolved）。
  *  reasonix：memory/<sha1(cwd)[:16]>/ 桶 + sessions 扁平键反推（sessions 缺失/无目录 = 全桶 unresolved，
  *  散置 jsonl 不参与——只取目录条目）。空桶（无 .md）不出列。 */
-export function scanMirrorSources(homes: { claude?: string; qwen?: string; zcode?: string; reasonix?: string }): MirrorBucket[] {
+export function scanMirrorSources(homes: PeerHomes): MirrorBucket[] {
   const out: MirrorBucket[] = [];
 
   // cc —— projects/<sanitize(键)>/memory + 项目目录下会话 *.jsonl
@@ -200,9 +200,12 @@ export function scanMirrorSources(homes: { claude?: string; qwen?: string; zcode
   }
 
   // reasonix —— memory/<sha1[:16]>/ 桶 + sessions 扁平键目录反推
+  // `memory/global` 是当前 Go 版的全局位（GlobalDir）——方案「不做」明确第一版不导入，跳过不计桶
+  // （否则它会以 unresolved 身份混进「未能定位」报数——不写盘但口径误导）
   const reasonixMemory = join(homes.reasonix ?? "", "memory");
   const sessionDirs = listDirs(join(homes.reasonix ?? "", "sessions"));   // 只取目录条目（散 jsonl 不参与）
   for (const entry of listDirs(reasonixMemory)) {
+    if (entry === "global") continue;
     const sourceDir = join(reasonixMemory, entry);
     const noteCount = countNotes(sourceDir);
     if (noteCount === 0) continue;

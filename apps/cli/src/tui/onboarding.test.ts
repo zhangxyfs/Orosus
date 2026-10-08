@@ -745,10 +745,18 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     s.handleKey(" ");
     expect([...s.stateRef.pm.checked]).toEqual(["codex"]);   // all 模式不拦
   });
-  it("⑩ 全局源标注（G2/D5）：codex 行尾缀「全局源——不分项目」", async () => {
-    const s = await toP5T8();
+  it("⑩ 全局源标注（G2/D5）：codex 行尾缀「全局源——不分项目」；未安装源不带新数后缀（review 修）", async () => {
+    const s = await toP5T8({
+      detectMemorySources: () => [
+        ...SRC_T8,
+        { id: "qwen", label: "qwen-code", note: "", count: 0, available: false, newCount: 0 },
+      ],
+    });
     const text = stripAnsi(s.render(140, 30).lines.join("\n"));
     expect(text).toContain("全局源——不分项目，含所有项目的笔记");
+    expect(text).not.toContain("未安装已全部导入");
+    expect(text).not.toContain("未安装（新 0）");
+    expect(text).toContain("未安装");   // 未安装态本体仍在
   });
   it("⑪ 镜像结果（G12 三义）：scope=all 且 mirror 在场 →「N 个项目共 M 条」句式（含分段省略）", async () => {
     const s = await toP5T8({

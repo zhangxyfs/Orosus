@@ -170,6 +170,15 @@ describe("scanMirrorSources · reasonix（sessions 扁平键反推 → sha1 匹�
     expect(scanMirrorSources({ reasonix: join(root, "reasonix") })[0]).toMatchObject({ how: "unresolved" });
     expect(scanMirrorSources({ reasonix: join(root, "nowhere") })).toEqual([]);
   });
+  it("memory/global 全局位跳过（方案「不做」——不混进 unresolved 报数）", () => {
+    note(join(root, "reasonix", "memory", "global"));
+    const proj = "D:\\some\\proj";
+    note(join(root, "reasonix", "memory", sha1hex16(proj)));
+    mkdirSync(join(root, "reasonix", "sessions", "D_some_proj"), { recursive: true });
+    const buckets = scanMirrorSources({ reasonix: join(root, "reasonix") });
+    expect(buckets).toHaveLength(1);   // global 不出列
+    expect(buckets[0]).toMatchObject({ projectPath: proj, how: "sessions-dir" });
+  });
 });
 
 describe("importMirror（T4：多桶各归各 + unresolved 跳过报数 + 强停后续桶不跑）", () => {

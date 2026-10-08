@@ -263,7 +263,7 @@ export const enUSCli: Record<string, string> = {
 	"main.provider.defWriteFail": "Failed writing default provider: {err}",
 	"main.slot.missing2": "Slot {slot} not configured",
 	"main.src.notInstalled": "not installed",
-	"main.peers.legacyMerged": "Merged ${n} notes from a legacy sub-directory memory bucket into this project",
+	"main.peers.legacyMerged": "Merged {n} notes from a legacy sub-directory memory bucket into this project",
 	"main.module.pending2": " {n} modules pending confirmation — select in the panel, Enter to view the declaration (or orosus module trust)",
 	"main.diag.providerOf": "'s provider ",
 
