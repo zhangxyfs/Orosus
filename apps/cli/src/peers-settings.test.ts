@@ -94,7 +94,7 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(seen[1]).toContain("全局源——不分项目，含所有项目的笔记");
   });
 
-  it("③f T6 已全部导入（D7）：M=0 行显示已全部导入且选拦（菜单重开不执行）；镜像模式不拦", async () => {
+  it("③f 覆盖拍板（2026-10-08）：D7「已全部导入」拦勾退役——M=0 行恒显（新 0）且可选（重导即覆盖）；菜单标题带覆盖提示", async () => {
     const deps: MemoryImportDeps = {
       detect: () => [
         { id: "claude-code", label: "Claude Code", count: 12, newCount: 0 },
@@ -102,15 +102,16 @@ describe("peers 设置面（m5-peers T6b）", () => {
       ],
       run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
     };
-    const picks: number[] = [0, 1];   // 先选拦行 → 菜单重开 → 再选可用行
-    let i = 0;
-    const r = await runMemoryImportChoose(async (_t, items) => items[picks[i++]!]!, deps);
-    expect(r).toEqual({ ids: ["zcode"], organize: false, mode: "current" });   // 第一次选拦行没执行、没 Esc
-    // 镜像模式（切模式行后）：M=0 行可选拦解除（判重按各目标桶独立算）
-    const picks2: number[] = [3, 0];   // items: [cc, zcode, 全部, 模式, 整理] → 3 = 模式行（切 all），0 = cc 行
-    let j = 0;
-    const r2 = await runMemoryImportChoose(async (_t, items) => items[picks2[j++]!]!, deps);
-    expect(r2).toEqual({ ids: ["claude-code"], organize: false, mode: "all" });
+    let seen: string[] = [];
+    let titles: string[] = [];
+    const r = await runMemoryImportChoose(async (title, items) => { seen = items; titles.push(title); return items[0]!; }, deps);
+    expect(r).toEqual({ ids: ["claude-code"], organize: false, mode: "current" });   // M=0 直选即执行（不再拦）
+    expect(seen[0]).toContain("（新 0）");
+    expect(seen[0]).not.toContain("已全部导入");
+    expect(titles[0]).toContain("重复导入将覆盖同标题旧版");   // 菜单标题提示
+    // 全部导入行含 M=0 源（覆盖语义——原 filter(newCount !== 0) 退役）
+    const all = await runMemoryImportChoose(async (_t, items) => items[2]!, deps);
+    expect(all).toEqual({ ids: ["claude-code", "zcode"], organize: false, mode: "current" });
   });
 
   it("③g T6 模式行（G10/D11）：默认 current，回车切换 ✓ 移位到全部项目；结果带 mode（当次会话态）；着色=标签白+当前值连勾绿（2026-10-08 用户走查修）", async () => {
@@ -148,22 +149,23 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(seen[2]).toContain("2 家共 8 条");   // 3 + 5（不再是 12 + 37）
   });
 
-  it("③i T6 镜像结果文案（G12）：分段省略——双零裸句 / 单零省一段 / 全留", () => {
-    expect(mirrorImportResultText({ imported: 6, skipped: 0, mirror: { projects: 2, unresolved: 0 } }))
+  it("③i 镜像结果文案（G12）：分段省略——双零裸句 / 单零省一段 / 全留；updated 计入总数与覆盖段", () => {
+    expect(mirrorImportResultText({ imported: 6, updated: 0, skipped: 0, mirror: { projects: 2, unresolved: 0 } }))
       .toBe("已导入 2 个项目共 6 条");
-    expect(mirrorImportResultText({ imported: 6, skipped: 4, mirror: { projects: 2, unresolved: 0 } }))
+    expect(mirrorImportResultText({ imported: 6, updated: 0, skipped: 4, mirror: { projects: 2, unresolved: 0 } }))
       .toBe("已导入 2 个项目共 6 条（跳过 4 条重复）");
-    expect(mirrorImportResultText({ imported: 6, skipped: 0, mirror: { projects: 2, unresolved: 1 } }))
+    expect(mirrorImportResultText({ imported: 6, updated: 0, skipped: 0, mirror: { projects: 2, unresolved: 1 } }))
       .toBe("已导入 2 个项目共 6 条（1 个项目未能定位）");
-    expect(mirrorImportResultText({ imported: 6, skipped: 4, mirror: { projects: 2, unresolved: 1 } }))
-      .toBe("已导入 2 个项目共 6 条（跳过 4 条重复 · 1 个项目未能定位）");
+    expect(mirrorImportResultText({ imported: 4, updated: 2, skipped: 4, mirror: { projects: 2, unresolved: 1 } }))
+      .toBe("已导入 2 个项目共 6 条（更新覆盖 2 条旧版 · 跳过 4 条重复 · 1 个项目未能定位）");
   });
 
-  it("③d 导入结果人话：机械档不报整理；整理档报「模型整理 N 条」；全重复专句", () => {
-    expect(memoryImportResultText({ imported: 10, skipped: 2, merged: 0 })).toContain("已导入 10 条记忆");
+  it("③d 导入结果人话：机械档不报整理；整理档报「模型整理 N 条」；覆盖段单独报（updated=0 省）；全互撞专句", () => {
+    expect(memoryImportResultText({ imported: 10, skipped: 0, merged: 0 })).toBe("已导入 10 条记忆 · /tool-peers__memory 可浏览");
     expect(memoryImportResultText({ imported: 10, skipped: 2, merged: 0 })).not.toContain("模型整理");
+    expect(memoryImportResultText({ imported: 10, skipped: 0, updated: 4, merged: 0 })).toContain("更新覆盖 4 条旧版");
     expect(memoryImportResultText({ imported: 31, skipped: 3, merged: 18 })).toContain("模型整理 18 条");
-    expect(memoryImportResultText({ imported: 0, skipped: 5, merged: 0 })).toContain("全部与现有记忆重复");
+    expect(memoryImportResultText({ imported: 0, skipped: 5, merged: 0 })).toContain("源内同名互撞");
   });
 
   it("④ settingsItems 动态插入：tool-peers active 才含「记忆」；discovered/缺席不含；序位 = MCP → 记忆 → 切换语言 → 更新检查 → 视觉 → 搜索（2026-10-08 用户拍板连座）", () => {

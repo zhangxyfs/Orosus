@@ -475,14 +475,14 @@ const importWithOrganize = async (
 	mode: ImportScope,
 	onProgress?: (done: number, total: number, title: string) => void,
 	signal?: AbortSignal,
-): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }> => {
+): Promise<{ imported: number; updated: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }> => {
 	const cwd = process.cwd();
 	const homes = memorySourceHomes();
 	const memoryBase = memoryBaseDir();
 	const llm: LlmStream = (req) => h.llm().stream(req);
 	if (mode === "all") {
 		const mirrorIds = sourceIds.filter(id => id !== "codex");
-		let imported = 0, skipped = 0, merged = 0;
+		let imported = 0, updated = 0, skipped = 0, merged = 0;
 		let mirror: { projects: number; unresolved: number } | undefined;
 		if (mirrorIds.length > 0) {
 			const buckets = scanMirrorSources(homes).filter(b => mirrorIds.includes(b.sourceId));
@@ -493,6 +493,7 @@ const importWithOrganize = async (
 				...(signal !== undefined ? { signal } : {}),
 			});
 			imported += r.imported;
+			updated += r.updated;
 			skipped += r.skipped;
 			mirror = { projects: r.projects, unresolved: r.unresolved };
 		}
@@ -506,10 +507,11 @@ const importWithOrganize = async (
 				...(signal !== undefined ? { signal } : {}),
 			});
 			imported += r.imported;
+			updated += r.updated;
 			skipped += r.skipped;
 			merged += r.merged;
 		}
-		return { imported, skipped, merged, ...(mirror !== undefined ? { mirror } : {}) };
+		return { imported, updated, skipped, merged, ...(mirror !== undefined ? { mirror } : {}) };
 	}
 	const srcs = detectSources(homes, findGitRoot(cwd), cwd);
 	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));

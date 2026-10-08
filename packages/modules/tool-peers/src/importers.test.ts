@@ -268,21 +268,36 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
     const r = await importNotesProgressive(dest, [note("一"), note("二"), note("三")], {
       onProgress: (done, total, title) => ticks.push([done, total, title]),
     });
-    expect(r).toEqual({ imported: 3, skipped: 0, merged: 0 });
+    expect(r).toEqual({ imported: 3, updated: 0, skipped: 0, merged: 0 });
     expect(ticks).toEqual([[1, 3, "一"], [2, 3, "二"], [3, 3, "三"]]);   // 前置：1 起步（非 0 起步）
     expect(listNotes(dest)).toHaveLength(3);
     expect(readFileSync(join(dest, "MEMORY.md"), "utf8")).toContain("一");   // 索引末次重建一次
   });
 
-  it("判重：已存在标题跳过 + 源内同名互撞后到计跳过（importNotes 同款语义）", async () => {
+  it("覆盖语义（2026-10-08 用户拍板：每次导入直接覆盖——整理通道改掉标题以外的一切，指纹比对无意义）：已存在同标题 → 重写覆盖（updated 计数、进度照报、条数不增）；源内同名互撞后到 skipped", async () => {
     const dest = join(root, "dest", "memory");
-    await importNotesProgressive(dest, [note("一")]);   // 预置一条
+    await importNotesProgressive(dest, [note("一")]);   // 预置一条（旧版本）
     const ticks: string[] = [];
-    const r = await importNotesProgressive(dest, [note("一"), note("二"), note("二")], {
-      onProgress: (_d, _t, title) => ticks.push(title),
-    });
-    expect(r).toEqual({ imported: 1, skipped: 2, merged: 0 });
-    expect(ticks).toEqual(["二"]);   // 只处理新条——已存在/互撞的不报点不落盘
+    const r = await importNotesProgressive(dest, [
+      { title: "一", summary: "新摘要", content: "源里改过的新正文", type: "reference" },
+      note("二"), note("二"),
+    ], { onProgress: (_d, _t, title) => ticks.push(title) });
+    expect(r).toEqual({ imported: 1, updated: 1, skipped: 1, merged: 0 });
+    expect(ticks).toEqual(["一", "二"]);   // 覆盖条与新条都报点——只有源内互撞不报
+    const one = listNotes(dest).find(n => n.title === "一")!;
+    expect(readFileSync(join(dest, one.file), "utf8")).toContain("源里改过的新正文");   // 内容换新
+    expect(readFileSync(join(dest, one.file), "utf8")).toContain("type: reference");    // type 随覆盖
+    expect(listNotes(dest)).toHaveLength(2);   // 覆盖不增条
+  });
+
+  it("翻案钉：本地手改过的同标题笔记同样被覆盖（走查修订四「不覆盖已有」退役——用户拍板直接覆盖，无本地改动保护）", async () => {
+    const dest = join(root, "dest", "memory");
+    await importNotesProgressive(dest, [note("锚点")]);
+    const f = listNotes(dest)[0]!.file;
+    writeFileSync(join(dest, f), "---\nname: 锚点\ndescription: 本地手改\n---\n\n手工积累的正文\n");   // 本地编辑
+    const r = await importNotesProgressive(dest, [note("锚点")]);
+    expect(r).toEqual({ imported: 0, updated: 1, skipped: 0, merged: 0 });
+    expect(readFileSync(join(dest, listNotes(dest)[0]!.file), "utf8")).toContain("原文-锚点");   // 源版本顶掉本地版
   });
 
   it("整理档：organize+llm 在场逐条过模型（merged 计数）；llm 缺场降级原样落盘", async () => {
@@ -293,32 +308,36 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
       yield { type: "text/delta", text: `{"description": "整理后-${calls}", "content": "净化的正文"}` } as never;   // 不含 title——回退原题
     };
     const r1 = await importNotesProgressive(dest, [note("甲"), note("乙")], { organize: true, llm });
-    expect(r1).toEqual({ imported: 2, skipped: 0, merged: 2 });
+    expect(r1).toEqual({ imported: 2, updated: 0, skipped: 0, merged: 2 });
     expect(calls).toBe(2);
     const landed = listNotes(dest);
     expect(landed.every(n => n.summary.startsWith("整理后-"))).toBe(true);
 
     const dest2 = join(root, "dest2", "memory");
     const r2 = await importNotesProgressive(dest2, [note("丙")], { organize: true });   // llm 缺场——降级不炸
-    expect(r2).toEqual({ imported: 1, skipped: 0, merged: 0 });
+    expect(r2).toEqual({ imported: 1, updated: 0, skipped: 0, merged: 0 });
     expect(readFileSync(join(dest2, listNotes(dest2)[0]!.file), "utf8")).toContain("原文-丙");
   });
 
-  it("整理改英文题（走查十二-③）：文件名随英文题、source_name 留原题——重复导入按原题判重", async () => {
+  it("整理改英文题（走查十二-③）：文件名随英文题、source_name 留原题——重导按原题**覆盖**（旧文件让位新题名）", async () => {
     const dest = join(root, "dest", "memory");
     const llm = async function* () {
       yield { type: "text/delta", text: `{"title": "Anchor Style Guide", "description": "锚点写法速查", "content": "整理后正文"}` } as never;
     };
     const src = [note("锚点写法")];
     const r1 = await importNotesProgressive(dest, src, { organize: true, llm });
-    expect(r1).toEqual({ imported: 1, skipped: 0, merged: 1 });
+    expect(r1).toEqual({ imported: 1, updated: 0, skipped: 0, merged: 1 });
     const landed = listNotes(dest)[0]!;
     expect(landed.file).toBe("anchor-style-guide.md");   // 文件名 = slug(英文题)，无日期前缀
     expect(landed.title).toBe("Anchor Style Guide");
     expect(readFileSync(join(dest, landed.file), "utf8")).toContain("source_name: 锚点写法");   // 原题留档
-    const r2 = await importNotesProgressive(dest, src, {});   // 重复导入同源题：source_name 判重
-    expect(r2).toEqual({ imported: 0, skipped: 1, merged: 0 });
+    const r2 = await importNotesProgressive(dest, src, {});   // 重导同源题：source_name 锚命中 → 覆盖
+    expect(r2).toEqual({ imported: 0, updated: 1, skipped: 0, merged: 0 });
     expect(listNotes(dest)).toHaveLength(1);
+    const after = listNotes(dest)[0]!;
+    expect(after.title).toBe("锚点写法");   // 新条按源题落（整理关）
+    expect(after.file).toBe("锚点写法.md");
+    expect(existsSync(join(dest, "anchor-style-guide.md"))).toBe(false);   // 旧整理版文件让位
   });
 
   it("强停=硬中断（走查十二-④）：Alt+C 后剩余不拷不落盘、已入库保留", async () => {
@@ -337,7 +356,7 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
     const llm = async function* () { llmCalls++; yield { type: "text/delta", text: "{}" } as never; };
     const dest2 = join(root, "dest2", "memory");
     const r2 = await importNotesProgressive(dest2, [note("丁")], { organize: true, llm, signal: ac2.signal });
-    expect(r2).toEqual({ imported: 0, skipped: 0, merged: 0 });
+    expect(r2).toEqual({ imported: 0, updated: 0, skipped: 0, merged: 0 });
     expect(llmCalls).toBe(0);
     expect(listNotes(dest2)).toHaveLength(0);
   });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { listNotes, rebuildIndex, slugify, writeNoteFile, type NoteType } from "./memstore.ts";
 import { encodeCwdLike, memoryBucketKey } from "./roots.ts";
@@ -245,38 +245,48 @@ export function filterNewNotes(destDir: string, notes: SourceNote[]): SourceNote
  *  机械档与整理档同一循环：**每条先报进度（前置——进度条先动）** → [organize 开启且 llm 在场才过模型]
  *  → **立即落盘一条**（中断不丢成果）→ **让一拍事件循环**（进度窗重绘可见——旧机械档整段同步，
  *  onProgress 没接 + 事件循环锁死 = 140 条全程「正在读取源记忆…」零反应、完成态进度条停在 0/140）。
- *  判重：已存在标题/源内同名互撞跳过（importNotes 同款语义）；整理改题后按 frontmatter source_name
- *  （源原题）判重——重复导入不重复进（走查十二-③）。
+ *  **覆盖语义（2026-10-08 用户拍板，翻走查修订四案）：每次导入直接覆盖，不做增量**——理由：整理通道
+ *  会改掉标题以外的一切（内容/摘要/文件名），内容指纹比对无意义。覆盖锚 = 源标题（title ∪ source_name
+ *  命中的既有条目整组让位：旧文件删除、新条重写——文件名随新题、type/内容换新、本地手改不保护）。
+ *  源内同名互撞仍后到计 skipped（importNotes 同款）；mergeLegacyMemory 走 importNotes（迁移非导入，
+ *  维持已有优先的判重）。
  *  强停（signal.aborted，走查十二-④）= **硬中断**：剩余条目不拷不落盘；正在整理中的那条若被取消也不落。 */
 export async function importNotesProgressive(
   destDir: string,
   sources: SourceNote[],
   opts: { organize?: boolean; llm?: LlmStream; onProgress?: OrganizeProgress; signal?: AbortSignal } = {},
-): Promise<{ imported: number; skipped: number; merged: number }> {
+): Promise<{ imported: number; updated: number; skipped: number; merged: number }> {
   const { organize = false, llm, onProgress, signal } = opts;
   const isAborted = (): boolean => signal?.aborted === true;   // 闭包现读（TS 属性窄化不跨 await 重置）
   const seen = new Set<string>();
-  const fresh = filterNewNotes(destDir, sources).filter(n => {
+  const batch = sources.filter(n => {
     if (seen.has(n.title)) return false;   // 源内同名互撞——后到的计跳过（importNotes 同款）
     seen.add(n.title);
     return true;
   });
   let imported = 0;
+  let updated = 0;
   let merged = 0;
-  for (const [i, n] of fresh.entries()) {
-    onProgress?.(i + 1, fresh.length, n.title);   // 前置：先推进度再处理数据（走查九-①）
+  for (const [i, n] of batch.entries()) {
+    onProgress?.(i + 1, batch.length, n.title);   // 前置：先推进度再处理数据（走查九-①）——覆盖条与新条同报
     if (isAborted()) break;   // 强停：剩余不拷贝不落盘（走查十二-④——旧形「原样落盘照常完成」被用户打回）
     const organized = organize && llm !== undefined ? await organizeNote(n, llm, signal) : undefined;
     if (isAborted() && organized === undefined) break;   // 整理中途被取消——本条不落盘
     const title = organized?.title ?? n.title;
+    // 覆盖锚：源标题命中（title 或 source_name）的既有条目整组让位——删旧写新，文件名始终随新题
+    const stale = listNotes(destDir).filter(x => x.title === n.title || x.sourceTitle === n.title);
+    for (const s of stale) {
+      try { rmSync(join(destDir, s.file), { force: true }); } catch { /* 删不掉——新条照写，最坏留旧副本 */ }
+    }
     writeNoteFile(destDir, title, organized?.summary ?? n.summary, organized?.content ?? n.content, n.type,
-      title !== n.title ? n.title : undefined);   // 改过题才留 source_name 原题（判重锚）
-    imported++;
+      title !== n.title ? n.title : undefined);   // 改过题才留 source_name 原题（覆盖锚）
+    if (stale.length > 0) updated++;
+    else imported++;
     if (organized !== undefined) merged++;
     await new Promise<void>(r => setImmediate(r));   // 让一拍——同步批会锁死事件循环、进度窗不重绘
   }
-  if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
-  return { imported, skipped: sources.length - fresh.length, merged };
+  if (imported + updated > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①——覆盖也动盘也要重建）
+  return { imported, updated, skipped: sources.length - batch.length, merged };
 }
 
 export interface MergeLegacyResult { merged: number; legacyBucket?: string }

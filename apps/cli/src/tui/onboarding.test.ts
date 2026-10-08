@@ -739,18 +739,18 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     await new Promise((r) => setTimeout(r, 10));
     expect(gotMode).toBe("current");
   });
-  it("⑨ 已全部导入（D7）：current 模式 M=0 拦勾带提示；all 模式不拦（判重按各目标桶独立算）", async () => {
+  it("⑨ 覆盖拍板（2026-10-08）：D7 拦勾退役——M=0 源恒显（新 0）且 current/all 两模式都可勾（重导即覆盖）", async () => {
     const s = await toP5T8();
+    const text = stripAnsi(s.render(120, 30).lines.join("\n"));
+    expect(text).toContain("（新 0）");   // codex 行恒显新数
     s.handleKey("down");   // sel=1 codex（newCount 0）
-    s.handleKey("down"); s.handleKey("enter");   // sel=2 模式行 → current
-    s.handleKey("up");   // 回 sel=1 codex
     s.handleKey(" ");
-    expect(s.stateRef.pm.checked.size).toBe(0);   // 拦勾
-    expect(s.stateRef.pm.notice).toContain("该源已全部导入");
-    s.handleKey("down"); s.handleKey("enter");   // 切回 all
-    s.handleKey("up");   // sel=1
+    expect([...s.stateRef.pm.checked]).toEqual(["codex"]);   // current 模式直接可勾（不再拦）
+    s.handleKey("down"); s.handleKey("enter");   // sel=2 模式行 → all
+    s.handleKey("up");   // 回 sel=1
+    s.handleKey(" ");   // 取消再勾——all 模式同样可勾
     s.handleKey(" ");
-    expect([...s.stateRef.pm.checked]).toEqual(["codex"]);   // all 模式不拦
+    expect([...s.stateRef.pm.checked]).toEqual(["codex"]);
   });
   it("⑩ 全局源标注（G2/D5）：codex 行尾缀「全局源——不分项目」；未安装源不带新数后缀（review 修）", async () => {
     const s = await toP5T8({
@@ -765,15 +765,29 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(text).not.toContain("未安装（新 0）");
     expect(text).toContain("未安装");   // 未安装态本体仍在
   });
-  it("⑪ 镜像结果（G12 三义）：scope=all 且 mirror 在场 →「N 个项目共 M 条」句式（含分段省略）", async () => {
+  it("⑪ 镜像结果（G12 三义 + 覆盖拍板）：scope=all 且 mirror 在场 →「N 个项目共 M 条」句式（updated 计入总数、覆盖段单独报）", async () => {
     const s = await toP5T8({
-      importMemory: async () => ({ imported: 6, skipped: 4, merged: 0, mirror: { projects: 2, unresolved: 1 } }),
+      importMemory: async () => ({ imported: 4, updated: 2, skipped: 4, merged: 0, mirror: { projects: 2, unresolved: 1 } }),
     });
     s.handleKey(" ");   // 勾 Claude Code（scope 默认 all）
     s.handleKey("ctrl+n");
     await new Promise((r) => setTimeout(r, 10));
-    expect(s.stateRef.pm.notice).toContain("已导入 2 个项目共 6 条");
+    expect(s.stateRef.pm.notice).toContain("已导入 2 个项目共 6 条");   // 4 新 + 2 覆盖
+    expect(s.stateRef.pm.notice).toContain("更新覆盖 2 条旧版");
     expect(s.stateRef.pm.notice).toContain("跳过 4 条重复");
     expect(s.stateRef.pm.notice).toContain("1 个项目未能定位");
+  });
+
+  it("⑫ 覆盖拍板：普通导入 updated>0 → 覆盖句式（importedCover）", async () => {
+    const s = await toP5T8({
+      importMemory: async () => ({ imported: 3, updated: 7, skipped: 0, merged: 0 }),
+    });
+    s.handleKey("down"); s.handleKey("enter");   // 模式行 → current（普通导入路径）
+    s.handleKey("up");
+    s.handleKey(" ");   // 勾 Claude Code
+    s.handleKey("ctrl+n");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.stateRef.pm.notice).toContain("已导入 3 条记忆");
+    expect(s.stateRef.pm.notice).toContain("更新覆盖 7 条旧版");
   });
 });

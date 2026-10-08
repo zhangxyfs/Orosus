@@ -47,7 +47,7 @@ export interface OnboardingDeps {
   detectMemorySources(): { id: string; label: string; note: string; count: number; available: boolean; newCount?: number; global?: boolean }[];
   /** T6d 第 5 页：导入勾选源（organize = D20 模型整理开关——仅引导当次生效不落盘；mode = D11 导入范围，
    *  缺省 current 兼容旧调用）。异步（organize 开启时含 llm 调用）；完成经 deps.finish 收尾。 */
-  importMemory(sourceIds: string[], organize: boolean, mode?: ImportScope): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }>;
+  importMemory(sourceIds: string[], organize: boolean, mode?: ImportScope): Promise<{ imported: number; updated?: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }>;
   /** m5-peers-import-fix T8：落点行（G5）——宿主返回 git 根绝对路径（引导保持无 IO）。 */
   destLabel(): string;
   /** 引导自动收尾口（T6d：异步导入完成时宿主注入 resolve；测试/无头可省——手按 Ctrl+N 完成）。 */
@@ -56,7 +56,7 @@ export interface OnboardingDeps {
   requestRender?(): void;
 }
 
-export type OnboardingOutcome = { kind: "completed"; importResult?: { imported: number; skipped: number; merged: number } } | { kind: "quit" };
+export type OnboardingOutcome = { kind: "completed"; importResult?: { imported: number; updated?: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } } } | { kind: "quit" };
 
 type NoticeKind = "ok" | "warn" | "err";
 interface P2State {
@@ -91,7 +91,7 @@ interface PMState {
   scope: ImportScope;
   importing: boolean;
   done: boolean;   // 导入已尝试（成功或失败）——此后 Ctrl+N 直接完成不再重试
-  importResult?: { imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } };
+  importResult?: { imported: number; updated?: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } };
   sources: { id: string; label: string; note: string; count: number; available: boolean; newCount?: number; global?: boolean }[];
   notice: string; noticeKind: NoticeKind;
 }
@@ -530,8 +530,7 @@ export class OnboardingSession {
       if (p.sel < p.sources.length) {
         const src = p.sources[p.sel]!;
         if (!src.available || src.count === 0) { this.notice(t("onboard.p5.noNotes", { label: src.label }), "warn"); return undefined; }
-        // D7：仅当前项目模式下已全部导入拦勾（镜像模式判重按各目标桶独立算，不拦）
-        if (p.scope === "current" && src.newCount === 0) { this.notice(t("onboard.p5.allImported"), "warn"); return undefined; }
+        // 2026-10-08 覆盖拍板：D7「已全部导入」拦勾退役——M=0 可勾（重导即覆盖更新）
         if (p.checked.has(src.id)) p.checked.delete(src.id);
         else p.checked.add(src.id);
         p.notice = "";
@@ -559,10 +558,14 @@ export class OnboardingSession {
         p.importing = false;
         p.done = true;
         p.importResult = r;
-        // G12 三义：镜像模式（scope=all 且 mirror 在场）走项目级句式，分段省略同 settings 侧
+        // G12 三义 + 覆盖提示（2026-10-08 拍板）：镜像模式（scope=all 且 mirror 在场）走项目级句式
+        // （n = imported+updated 总写入、覆盖段单独报）；普通模式 updated>0 换覆盖句式
+        const upd = r.updated ?? 0;
         this.notice(r.mirror !== undefined && p.scope === "all"
-          ? t("onboard.p5.importedMirror", { projects: r.mirror.projects, n: r.imported, seg: this.mirrorSeg(r.skipped, r.mirror.unresolved) })
-          : t("onboard.p5.imported", { n: r.imported, skip: r.skipped }), "ok");
+          ? t("onboard.p5.importedMirror", { projects: r.mirror.projects, n: r.imported + upd, seg: this.mirrorSeg(upd, r.skipped, r.mirror.unresolved) })
+          : upd > 0
+            ? t("onboard.p5.importedCover", { n: r.imported, updated: upd, skip: r.skipped })
+            : t("onboard.p5.imported", { n: r.imported, skip: r.skipped }), "ok");
         this.deps.requestRender?.();
         this.deps.finish?.({ kind: "completed", importResult: r });   // 宿主注入的自动收尾（引导关窗 + toast）
       }).catch(() => {
@@ -576,9 +579,10 @@ export class OnboardingSession {
     return undefined;
   }
 
-  /** G12 分段省略（引导侧三语拼装）：skip=0 省跳过段、unresolved=0 省未能定位段、双零整个括段省。 */
-  private mirrorSeg(skipped: number, unresolved: number): string {
+  /** G12 分段省略（引导侧三语拼装）：updated/skip/unresolved 各为 0 即省段、全零整个括段省。 */
+  private mirrorSeg(updated: number, skipped: number, unresolved: number): string {
     const parts: string[] = [];
+    if (updated > 0) parts.push(t("onboard.p5.importedMirrorCover", { updated }));
     if (skipped > 0) parts.push(t("onboard.p5.importedMirrorSkip", { skip: skipped }));
     if (unresolved > 0) parts.push(t("onboard.p5.importedMirrorUnres", { unresolved }));
     return parts.length === 0 ? "" : `（${parts.join(" · ")}）`;
@@ -875,17 +879,18 @@ export class OnboardingSession {
     out.push(theme.fg("muted", t("onboard.pm.intro")));
     // G5/D6 落点行：恒指当前项目的落点（git 根）——「全部项目」模式下其他项目的归属由模式行与结果文案表达
     out.push(truncateToWidth(theme.dim(t("onboard.pm.destRow", { path: this.deps.destLabel() })), inner));
+    // 2026-10-08 覆盖拍板：导入即覆盖的常驻提示行（结果文案另报覆盖数）
+    out.push(truncateToWidth(theme.dim(t("onboard.pm.overwriteNote")), inner));
     out.push("");
     for (const [i, src] of p.sources.entries()) {
       const mark = p.checked.has(src.id) ? theme.fg("accent", "●") : theme.dim("○");
       const count = !src.available ? theme.dim(t("onboard.p5.notInstalled"))
         : src.count === 0 ? theme.dim(t("onboard.pm.zeroNotes"))
         : theme.fg("fg", t("onboard.p5.notesCount", { n: src.count }));
-      // D7 新数：仅在有货源的源行显示（未安装/0 条行不带后缀）；current 模式 M=0 显示已全部导入；
-      // all 模式恒（新 M）——按当前项目桶差集计、仅供参考
+      // 新数：仅在有货源的源行显示（未安装/0 条行不带后缀）；覆盖语义下 M=0 也是有效操作（重导即覆盖），
+      // 恒显（新 M）——按当前项目桶差集计，镜像模式下仅供参考
       const inStock = src.available && src.count > 0;
       const fresh = !inStock || src.newCount === undefined ? ""
-        : src.newCount === 0 && p.scope === "current" ? theme.dim(t("onboard.pm.allImported"))
         : theme.fg("fg", t("onboard.pm.newCount", { n: src.newCount }));
       const globalNote = src.global === true ? theme.dim(t("onboard.pm.globalNote")) : "";
       const row = `${mark} ${theme.fg("fg", src.label)}${theme.dim(` · ${count}${fresh}${src.available && src.count > 0 ? ` · ${src.note}` : ""}`)}${globalNote}`;

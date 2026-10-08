@@ -225,13 +225,14 @@ export function scanMirrorSources(homes: PeerHomes): MirrorBucket[] {
 
 /* ── T4：镜像导入件 ── */
 
-export interface MirrorImportResult { projects: number; imported: number; skipped: number; unresolved: number }
+export interface MirrorImportResult { projects: number; imported: number; updated: number; skipped: number; unresolved: number }
 
 /** 镜像导入（T4）：只跑 projectPath 非 undefined 的桶（unresolved 计数跳过）；
  *  destDir = memoryBase/<memoryBucketKey(projectPath)>/memory——逐桶复用 importNotesProgressive
- *  （判重/整理通道/进度回调/强停全现成，桶间互不干扰）。onProject **前置**（第 N/共 M 个项目——
- *  importNotesProgressive 同款前置纪律），label = 项目路径；onProgress 逐条透传。signal 强停 =
- *  当前桶硬中断 + 后续桶不跑（走查十二-④ 同语义）。codex 等全局源不在此件（宿主按源分流，导当前桶）。 */
+ *  （**覆盖语义**〔2026-10-08 用户拍板〕/整理通道/进度回调/强停全现成，桶间互不干扰）。onProject **前置**
+ *  （第 N/共 M 个项目——importNotesProgressive 同款前置纪律），label = 项目路径；onProgress 逐条透传。
+ *  signal 强停 = 当前桶硬中断 + 后续桶不跑（走查十二-④ 同语义）。codex 等全局源不在此件（宿主按源
+ *  分流，导当前桶）。 */
 export async function importMirror(
   memoryBase: string,
   buckets: MirrorBucket[],
@@ -240,7 +241,7 @@ export async function importMirror(
   const runnable = buckets.filter(b => b.projectPath !== undefined);
   const total = runnable.length;
   const unresolved = buckets.length - total;
-  let imported = 0, skipped = 0, projects = 0;
+  let imported = 0, updated = 0, skipped = 0, projects = 0;
   for (const [i, b] of runnable.entries()) {
     if (opts.signal?.aborted === true) break;   // 强停：后续桶不跑
     opts.onProject?.(i + 1, total, b.projectPath!);   // 前置：先报项目进度再搬
@@ -253,8 +254,9 @@ export async function importMirror(
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
     imported += r.imported;
+    updated += r.updated;
     skipped += r.skipped;
     projects++;
   }
-  return { projects, imported, skipped, unresolved };
+  return { projects, imported, updated, skipped, unresolved };
 }

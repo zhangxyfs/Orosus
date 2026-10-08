@@ -62,7 +62,7 @@ export type ImportScope = "current" | "all";
  *  m5-peers-import-fix T6：detect 增 newCount（D7 已导计数）/global（codex 全局源标注）；run 增 mode
  *  （D10/D11 导入范围——current = 仅当前项目、all = 全部项目各归各桶〔镜像〕）。 */
 export interface MemoryImportSourceInfo { id: string; label: string; count: number; newCount?: number; global?: boolean }
-export interface MemoryImportResult { imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }
+export interface MemoryImportResult { imported: number; updated?: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }
 
 export interface MemoryImportDeps {
   /** 五源探测（有货才列：count > 0）；destDir 给出时每源带 newCount（0 = 已全部导入）。 */
@@ -95,59 +95,63 @@ export async function runMemoryImportChoose(
     return `${theme.fg("fg", "导入范围 —— ")}${cur}${theme.fg("fg", " / ")}${all}`;
   };
   const globalNote = "（全局源——不分项目，含所有项目的笔记）";
-  const sourceRow = (s: MemoryImportSourceInfo, mode: ImportScope): string => {
-    // D7：镜像模式不拦也不改显示——（新 M）按当前项目桶差集计、仅供参考
+  const sourceRow = (s: MemoryImportSourceInfo): string => {
+    // 2026-10-08 覆盖拍板：D7「已全部导入」拦勾退役——重导 = 覆盖更新，M=0 也是有效操作；
+    // （新 M）仍按当前项目桶差集计（镜像模式下该源其他项目的量不由此数表达，仅供参考）
     const fresh = s.newCount === undefined ? "" : `（新 ${s.newCount}）`;
-    const body = s.newCount === 0 && mode === "current" ? "已全部导入" : `导入该源 ${s.count} 条${fresh}`;
-    return `${s.label} —— ${body}${s.global === true ? globalNote : ""}`;
+    return `${s.label} —— 导入该源 ${s.count} 条${fresh}${s.global === true ? globalNote : ""}`;
   };
   let organize = initialOrganize;
   let mode: ImportScope = "current";
   for (;;) {
     const items = [
-      ...sources.map(s => sourceRow(s, mode)),
+      ...sources.map(s => sourceRow(s)),
       `全部导入 —— ${sources.length} 家共 ${totalNew} 条`,
       scopeRow(mode),
       organizeRow(organize),
     ];
-    const picked = await choose("记忆 · 导入", items);
+    // 2026-10-08 覆盖拍板：菜单标题即「提示」——重复导入将覆盖同标题旧版（结果文案另报覆盖数）
+    const picked = await choose("记忆 · 导入（重复导入将覆盖同标题旧版）", items);
     const idx = items.indexOf(picked);
     if (idx === -1) return undefined;   // Esc
     if (idx === items.length - 1) { organize = !organize; continue; }   // 整理开关行：切换后菜单刷新（✓ 移位）
     if (idx === items.length - 2) { mode = mode === "current" ? "all" : "current"; continue; }   // 模式行（G10）
-    if (idx < sources.length) {
-      const src = sources[idx]!;
-      if (src.newCount === 0 && mode === "current") continue;   // D7 拦：已全部导入——菜单重开不执行
-      return { ids: [src.id], organize, mode };
-    }
-    const selectable = mode === "current" ? sources.filter(s => s.newCount !== 0).map(s => s.id) : sources.map(s => s.id);
-    return { ids: selectable, organize, mode };
+    if (idx < sources.length) return { ids: [sources[idx]!.id], organize, mode };
+    return { ids: sources.map(s => s.id), organize, mode };   // 覆盖语义：全部导入含 M=0 源（重导即覆盖）
   }
 }
 
-/** 导入结果人话（执行段完成后的 toast/out 文案）。 */
-export const memoryImportResultText = (r: { imported: number; skipped: number; merged: number }): string => {
+/** 导入结果人话（执行段完成后的 toast/out 文案）。覆盖语义（2026-10-08 拍板）：updated 段单独报——
+ *  「更新覆盖 N 条旧版」即提示；skipped 只剩源内同名互撞（罕见）。 */
+export const memoryImportResultText = (r: { imported: number; updated?: number; skipped: number; merged: number }): string => {
+  const u = r.updated ?? 0;
+  const seg = [
+    ...(u > 0 ? [`更新覆盖 ${u} 条旧版`] : []),
+    ...(r.skipped > 0 ? [`源内同名跳过 ${r.skipped} 条`] : []),
+  ].join(" · ");
+  const paren = seg === "" ? "" : `（${seg}）`;
   const mergedNote = r.merged > 0 ? ` · 模型整理 ${r.merged} 条` : "";
-  return r.imported === 0 && r.skipped > 0
-    ? `没有新条目——${r.skipped} 条全部与现有记忆重复（此前已导入过）${mergedNote}`
-    : `已导入 ${r.imported} 条记忆（跳过 ${r.skipped} 条重复）${mergedNote} · /tool-peers__memory 可浏览`;
+  return r.imported + u === 0 && r.skipped > 0
+    ? `没有写入——${r.skipped} 条源内同名互撞全部跳过`
+    : `已导入 ${r.imported} 条记忆${paren}${mergedNote} · /tool-peers__memory 可浏览`;
 };
 
 /** 镜像导入结果人话（G12，settings 硬编码中文——本文件 i18n 收编顺延 m5-i18n 批）：分段省略——
- *  skip=0 省「跳过」段、unresolved=0 省「未能定位」段、双零省整个括段。codex（全局源）在镜像模式下
- *  仍导当前桶：其条数计入 {n}/{skip}，{projects} 不 +1（当前项目非镜像定位项目）。 */
-export const mirrorImportResultText = (r: { imported: number; skipped: number; mirror: { projects: number; unresolved: number } }): string => {
+ *  各段为 0 即省、全零省整个括段；n = imported + updated（总写入）。codex（全局源）在镜像模式下
+ *  仍导当前桶：其条数计入 {n}/{updated}/{skip}，{projects} 不 +1（当前项目非镜像定位项目）。 */
+export const mirrorImportResultText = (r: { imported: number; updated: number; skipped: number; mirror: { projects: number; unresolved: number } }): string => {
   const seg = [
+    ...(r.updated > 0 ? [`更新覆盖 ${r.updated} 条旧版`] : []),
     ...(r.skipped > 0 ? [`跳过 ${r.skipped} 条重复`] : []),
     ...(r.mirror.unresolved > 0 ? [`${r.mirror.unresolved} 个项目未能定位`] : []),
   ];
   const paren = seg.length === 0 ? "" : `（${seg.join(" · ")}）`;
-  return `已导入 ${r.mirror.projects} 个项目共 ${r.imported} 条${paren}`;
+  return `已导入 ${r.mirror.projects} 个项目共 ${r.imported + r.updated} 条${paren}`;
 };
 
 /** 结果文案分流（settings-ui 全屏/行模式共用）：镜像模式且 mirror 字段在场走 G12 串，否则原句。
  *  mode=all 但仅勾 codex 时 mirror 缺席（四家任一在场才出）——走原句式避免「0 个项目」歧义。 */
 export const memoryImportResultFor = (mode: ImportScope, r: MemoryImportResult): string =>
   mode === "all" && r.mirror !== undefined
-    ? mirrorImportResultText({ imported: r.imported, skipped: r.skipped, mirror: r.mirror })
+    ? mirrorImportResultText({ imported: r.imported, updated: r.updated ?? 0, skipped: r.skipped, mirror: r.mirror })
     : memoryImportResultText(r);

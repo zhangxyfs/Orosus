@@ -193,7 +193,7 @@ describe("importMirror（T4：多桶各归各 + unresolved 跳过报数 + 强停
     note(srcB, "b.md");
     const projA = "D:\\works\\alpha", projB = "D:\\works\\beta";
     const r = await importMirror(base, [bucket(srcA, projA), bucket(srcB, projB)]);
-    expect(r).toEqual({ projects: 2, imported: 2, skipped: 0, unresolved: 0 });
+    expect(r).toEqual({ projects: 2, imported: 2, updated: 0, skipped: 0, unresolved: 0 });
     expect(listNotes(join(base, memoryBucketKey(projA), "memory")).map(n => n.title)).toEqual(["N"]);
     expect(listNotes(join(base, memoryBucketKey(projB), "memory"))).toHaveLength(1);
     expect(memoryBucketKey(projA)).not.toBe(memoryBucketKey(projB));   // 前提：两项目不同桶
@@ -206,7 +206,7 @@ describe("importMirror（T4：多桶各归各 + unresolved 跳过报数 + 强停
     const r = await importMirror(base, [bucket(srcUnknown, undefined), bucket(srcA, "D:\\works\\alpha")], {
       onProject: (done, total, label) => ticks.push([done, total, label]),
     });
-    expect(r).toEqual({ projects: 1, imported: 1, skipped: 0, unresolved: 1 });   // unresolved 桶不进 onProject 序列
+    expect(r).toEqual({ projects: 1, imported: 1, updated: 0, skipped: 0, unresolved: 1 });   // unresolved 桶不进 onProject 序列
     expect(ticks).toEqual([[1, 1, "D:\\works\\alpha"]]);
     expect(listNotes(join(base, memoryBucketKey("D:\\works\\alpha"), "memory"))).toHaveLength(1);
   });
