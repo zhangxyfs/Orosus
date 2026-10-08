@@ -4,8 +4,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { extractProjectCwd, heuristicWinPath, scanMirrorSources } from "./mirror.ts";
+import { extractProjectCwd, heuristicWinPath, importMirror, scanMirrorSources, type MirrorBucket } from "./mirror.ts";
 import { zcodeBucketKey } from "./importers.ts";
+import { memoryBucketKey } from "./roots.ts";
+import { listNotes } from "./memstore.ts";
 
 // node:sqlite 经 createRequire 加载（vitest/vite 会改写 await import("node:sqlite")——core sqlite.ts 同款纪律）
 const nodeSqlite = (() => { try { return createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite"); } catch { return undefined; } })();
@@ -167,5 +169,50 @@ describe("scanMirrorSources · reasonix（sessions 扁平键反推 → sha1 匹�
     writeFileSync(join(root, "reasonix", "sessions", "D_x.jsonl"), "loose file\n");
     expect(scanMirrorSources({ reasonix: join(root, "reasonix") })[0]).toMatchObject({ how: "unresolved" });
     expect(scanMirrorSources({ reasonix: join(root, "nowhere") })).toEqual([]);
+  });
+});
+
+describe("importMirror（T4：多桶各归各 + unresolved 跳过报数 + 强停后续桶不跑）", () => {
+  const bucket = (sourceDir: string, projectPath: string | undefined, n = 1): MirrorBucket => ({
+    sourceId: "claude-code", sourceDir, projectPath,
+    how: projectPath === undefined ? "unresolved" : "session-cwd", noteCount: n,
+  });
+  it("多桶各归各：桶 A 笔记落桶 A 键目录（memoryBase/<memoryBucketKey>/memory）", async () => {
+    const base = join(root, "memories", "projects");
+    const srcA = join(root, "srcA"), srcB = join(root, "srcB");
+    note(srcA, "a.md");
+    note(srcB, "b.md");
+    const projA = "D:\\works\\alpha", projB = "D:\\works\\beta";
+    const r = await importMirror(base, [bucket(srcA, projA), bucket(srcB, projB)]);
+    expect(r).toEqual({ projects: 2, imported: 2, skipped: 0, unresolved: 0 });
+    expect(listNotes(join(base, memoryBucketKey(projA), "memory")).map(n => n.title)).toEqual(["N"]);
+    expect(listNotes(join(base, memoryBucketKey(projB), "memory"))).toHaveLength(1);
+    expect(memoryBucketKey(projA)).not.toBe(memoryBucketKey(projB));   // 前提：两项目不同桶
+  });
+  it("unresolved 跳过并计数；onProject 前置（第 N/共 M）", async () => {
+    const base = join(root, "memories", "projects");
+    const srcA = join(root, "srcA"), srcUnknown = join(root, "srcU");
+    note(srcA); note(srcUnknown);
+    const ticks: [number, number, string][] = [];
+    const r = await importMirror(base, [bucket(srcUnknown, undefined), bucket(srcA, "D:\\works\\alpha")], {
+      onProject: (done, total, label) => ticks.push([done, total, label]),
+    });
+    expect(r).toEqual({ projects: 1, imported: 1, skipped: 0, unresolved: 1 });   // unresolved 桶不进 onProject 序列
+    expect(ticks).toEqual([[1, 1, "D:\\works\\alpha"]]);
+    expect(listNotes(join(base, memoryBucketKey("D:\\works\\alpha"), "memory"))).toHaveLength(1);
+  });
+  it("强停：当前桶硬中断 + 后续桶不跑（走查十二-④ 同语义）", async () => {
+    const base = join(root, "memories", "projects");
+    const srcA = join(root, "srcA"), srcB = join(root, "srcB");
+    note(srcA); note(srcB);
+    const ac = new AbortController();
+    const seen: string[] = [];
+    const r = await importMirror(base, [bucket(srcA, "D:\\works\\alpha"), bucket(srcB, "D:\\works\\beta")], {
+      onProject: (done, _total, label) => { seen.push(label); if (done === 1) ac.abort(); },   // 第 1 桶开搬即停
+      signal: ac.signal,
+    });
+    expect(seen).toEqual(["D:\\works\\alpha"]);   // 第 2 桶没跑
+    expect(r.projects).toBe(1);
+    expect(listNotes(join(base, memoryBucketKey("D:\\works\\beta"), "memory"))).toHaveLength(0);
   });
 });

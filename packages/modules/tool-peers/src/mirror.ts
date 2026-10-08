@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { closeSync, existsSync, openSync, readSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { countNotes, sha1hex16, zcodeBucketKey } from "./importers.ts";
+import { countNotes, importNotesProgressive, readSourceNotes, sha1hex16, zcodeBucketKey, type LlmStream, type OrganizeProgress, type SourceNote } from "./importers.ts";
+import { memoryBucketKey } from "./roots.ts";
 
 /** 镜像探测件（m5-peers-import-fix T3/T4）：跨项目镜像导入 = 扫全部项目桶 → 归属反查（依据实锚，
  *  见方案五源对照表）→ 各归各桶。**全部纯机械、零模型**；反查失败的桶跳过并报数（unresolved），
@@ -217,4 +218,40 @@ export function scanMirrorSources(homes: { claude?: string; qwen?: string; zcode
       : { sourceId: "reasonix", sourceDir, projectPath: only, how: "sessions-dir", noteCount });
   }
   return out;
+}
+
+/* ── T4：镜像导入件 ── */
+
+export interface MirrorImportResult { projects: number; imported: number; skipped: number; unresolved: number }
+
+/** 镜像导入（T4）：只跑 projectPath 非 undefined 的桶（unresolved 计数跳过）；
+ *  destDir = memoryBase/<memoryBucketKey(projectPath)>/memory——逐桶复用 importNotesProgressive
+ *  （判重/整理通道/进度回调/强停全现成，桶间互不干扰）。onProject **前置**（第 N/共 M 个项目——
+ *  importNotesProgressive 同款前置纪律），label = 项目路径；onProgress 逐条透传。signal 强停 =
+ *  当前桶硬中断 + 后续桶不跑（走查十二-④ 同语义）。codex 等全局源不在此件（宿主按源分流，导当前桶）。 */
+export async function importMirror(
+  memoryBase: string,
+  buckets: MirrorBucket[],
+  opts: { organize?: boolean; llm?: LlmStream; onProject?: (done: number, total: number, label: string) => void; onProgress?: OrganizeProgress; signal?: AbortSignal } = {},
+): Promise<MirrorImportResult> {
+  const runnable = buckets.filter(b => b.projectPath !== undefined);
+  const total = runnable.length;
+  const unresolved = buckets.length - total;
+  let imported = 0, skipped = 0, projects = 0;
+  for (const [i, b] of runnable.entries()) {
+    if (opts.signal?.aborted === true) break;   // 强停：后续桶不跑
+    opts.onProject?.(i + 1, total, b.projectPath!);   // 前置：先报项目进度再搬
+    const notes: SourceNote[] = readSourceNotes(b.sourceDir);
+    const destDir = join(memoryBase, memoryBucketKey(b.projectPath!), "memory");
+    const r = await importNotesProgressive(destDir, notes, {
+      ...(opts.organize === true ? { organize: true } : {}),
+      ...(opts.llm !== undefined ? { llm: opts.llm } : {}),
+      ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    imported += r.imported;
+    skipped += r.skipped;
+    projects++;
+  }
+  return { projects, imported, skipped, unresolved };
 }
