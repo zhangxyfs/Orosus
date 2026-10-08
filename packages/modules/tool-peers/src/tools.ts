@@ -5,7 +5,7 @@ import { defineTool, type Tool } from "@orosus/contracts/tool";
 import { z } from "zod";
 import { isSessionLive, normalizePath, parseClaims, parseToolCallLine, readLabel, readTailLines, WRITE_TOOL_NAMES, type Claim } from "./derive.ts";
 import type { PeersEnv } from "./env.ts";
-import { buildIndex, listNotes, readNote, writeNote } from "./memstore.ts";
+import { buildIndex, listNotes, readNote, writeNote, type NoteType } from "./memstore.ts";
 
 // 模型面英文（D11）；铁律句 qwen 先例 + advisory 句 dsh 化用（v4 定案原文）
 const PEERS_RULE = "Other sessions are peers, not your workers — do not delegate this session's work to them.";
@@ -251,18 +251,21 @@ const MEMORY_DISCIPLINE = `WRITE when the user explicitly asks to remember somet
 DO NOT write what the repo already records, what only matters to this conversation, or what is easily derivable.
 Before writing a new note, check tool-peers__memory__list and UPDATE an existing note on the same topic instead of creating a duplicate (same title = update, not a new note).`;
 
+// D13 四类语义（G16——cc memoryTypes.ts 语义转译）
+const TYPE_SEMANTICS = "The type field: one of user (who the user is), feedback (how the user wants you to work), project (ongoing work, decisions, pitfalls), reference (external resources, pointers). Defaults to project.";
+
 export function createMemoryTools(env: PeersEnv): Tool[] {
   const writeTool = defineTool({
     name: "tool-peers__memory__write",
-    description: `Save a durable note to this project's shared memory. Every session of this project sees the note index in its system prompt and can read notes with tool-peers__memory__read. ${MEMORY_DISCIPLINE}`,
+    description: `Save a durable note to this project's shared memory. Every session of this project sees the note index in its system prompt and can read notes with tool-peers__memory__read. ${TYPE_SEMANTICS} ${MEMORY_DISCIPLINE}`,
     parameters: z.object({
       title: z.string().min(1),
       summary: z.string().min(1),
       content: z.string().min(1),
-      type: z.enum(["project", "reference"]).optional(),
+      type: z.enum(["user", "feedback", "project", "reference"]).optional(),
     }),
     resolveExecution: async (input) => {
-      const { title, summary, content, type } = input as { title: string; summary: string; content: string; type?: "project" | "reference" };
+      const { title, summary, content, type } = input as { title: string; summary: string; content: string; type?: NoteType };
       return {
         accesses: [],
         approvalRule: "tool-peers__memory__write",

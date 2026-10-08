@@ -16,6 +16,11 @@ const atomicWrite = (file: string, text: string): void => {
 
 const oneLine = (s: string): string => s.replace(/\s*\n\s*/g, " ").trim();
 
+/** 笔记类型四类（m5-peers-import-fix D13，对齐 cc memoryTypes/zcode frontmatter 实形）：
+ *  user=用户角色与偏好 / feedback=工作方式指导 / project=进行中工作 / reference=外部资源指针。
+ *  旧记忆全 project|reference 无迁移；listNotes 的 NoteMeta 本就不含 type（浏览窗/索引注入零改动）。 */
+export type NoteType = "user" | "feedback" | "project" | "reference";
+
 export function slugify(title: string): string {
   // 走查十二-③：CJK 保留（\p{L}\p{N}）——旧 [^a-z0-9-] 把中文全消成 note，140 条中文记忆全叫 note-2/note-3…
   const s = title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "");
@@ -27,7 +32,7 @@ export function noteFileName(title: string): string {
   return `${slugify(title)}.md`;
 }
 
-export function noteBody(title: string, summary: string, content: string, type: "project" | "reference" = "project", sourceTitle?: string): string {
+export function noteBody(title: string, summary: string, content: string, type: NoteType = "project", sourceTitle?: string): string {
   const t = typeof title === "string" ? oneLine(title) : "note";
   const s = typeof summary === "string" ? oneLine(summary) : "";
   const capped = content.length > BODY_MAX_CHARS
@@ -95,7 +100,7 @@ export function rebuildIndex(dir: string): void {
   atomicWrite(join(dir, "MEMORY.md"), buildIndex(listNotes(dir)));
 }
 
-export function writeNote(dir: string, title: string, summary: string, content: string, type: "project" | "reference" = "project", sourceTitle: string | undefined = undefined): string {
+export function writeNote(dir: string, title: string, summary: string, content: string, type: NoteType = "project", sourceTitle: string | undefined = undefined): string {
   mkdirSync(dir, { recursive: true });
   // D25 写前查重：同标题（frontmatter name）更新原文件，不建重复
   const existing = listNotes(dir).find(n => n.title === oneLine(title));
@@ -113,7 +118,7 @@ export function writeNote(dir: string, title: string, summary: string, content: 
 
 /** 单文件写（走查九-①/② 批量路径件）：与 writeNote 同语义（查重/撞名 -2），但**不重建索引**——
  *  批量导入/整理逐条落盘用（每条一个 .md 立即可见、中断不丢），全部写完由调用方 rebuildIndex 一次。 */
-export function writeNoteFile(dir: string, title: string, summary: string, content: string, type: "project" | "reference" = "project", sourceTitle: string | undefined = undefined): string {
+export function writeNoteFile(dir: string, title: string, summary: string, content: string, type: NoteType = "project", sourceTitle: string | undefined = undefined): string {
   mkdirSync(dir, { recursive: true });
   const existing = listNotes(dir).find(n => n.title === oneLine(title));
   if (existing !== undefined) {

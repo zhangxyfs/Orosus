@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -179,5 +179,19 @@ describe("memory__write/list/read tools", () => {
     const [w] = createMemoryTools(env);
     expect(w.description).toContain("DO NOT write");
     expect(w.description).toContain("UPDATE an existing note");
+  });
+
+  it("D13 type 四类直写：z.enum 接受 user/feedback、frontmatter 落盘（type: user）", async () => {
+    makeSiblings();
+    const [w] = createMemoryTools(env);
+    const out = await run(w, { title: "User prefers terse replies", summary: "who the user is", content: "Terse, Chinese, code-first.", type: "user" });
+    expect(out).toContain("Saved note");
+    const file = listNotes(env.memoryDir()!)[0]!.file;
+    expect(readFileSync(join(env.memoryDir()!, file), "utf8")).toContain("type: user");
+  });
+  it("G16 四类语义句在 memory__write description", () => {
+    const [w] = createMemoryTools(env);
+    expect(w.description).toContain("user (who the user is)");
+    expect(w.description).toContain("feedback (how the user wants you to work)");
   });
 });

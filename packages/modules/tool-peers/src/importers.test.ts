@@ -105,6 +105,76 @@ describe("detectSources（D19 五源定位）", () => {
   });
 });
 
+describe("detectSources 勘误（m5-peers-import-fix T2：qwen 小写 / Reasonix 双形态 / global / newCount / type 四类）", () => {
+  it("qwen 小写候选优先（D8：键全小写是 qwen 实机形态——mac/Linux 不靠文件系统大小写不敏感）", () => {
+    const lower = join(root, "qwen", "projects", "d--develop-orosus", "memory");
+    mkdirSync(lower, { recursive: true });
+    writeFileSync(join(lower, "q.md"), "---\nname: Q1\ndescription: d\n---\n\nx\n");
+    const srcs = detectSources({ qwen: join(root, "qwen") }, "D:\\develop\\Orosus", "D:\\develop\\Orosus");
+    expect(srcs.find(s => s.id === "qwen")?.dir).toBe(lower);
+    expect(srcs.find(s => s.id === "qwen")?.count).toBe(1);
+  });
+  it("qwen 小写 miss 时原样（大小写保留）形态兜底命中（win 大小写不敏感：dir 串形态不区分、能找到即对）", () => {
+    const orig = join(root, "qwen", "projects", "D--develop-Orosus", "memory");
+    mkdirSync(orig, { recursive: true });
+    writeFileSync(join(orig, "q.md"), "---\nname: Q2\ndescription: d\n---\n\nx\n");
+    const srcs = detectSources({ qwen: join(root, "qwen") }, "D:\\develop\\Orosus", "D:\\develop\\Orosus");
+    const q = srcs.find(s => s.id === "qwen")!;
+    expect(q.dir?.toLowerCase()).toBe(orig.toLowerCase());
+    expect(q.count).toBe(1);
+  });
+  it("Reasonix sha1 实机形态直查优先（memory/<sha1(cwd)[:16]>/，G7 原始大小写）", () => {
+    const cwd = "D:\\develop\\DeepSeek-Reasonix";
+    const key = createHash("sha1").update(cwd).digest("hex").slice(0, 16);
+    const dir = join(root, "reasonix", "memory", key);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "r.md"), "---\nname: R1\ndescription: d\n---\n\nx\n");
+    const srcs = detectSources({ reasonix: join(root, "reasonix") }, cwd, cwd);
+    expect(srcs.find(s => s.id === "reasonix")?.dir).toBe(dir);
+    expect(srcs.find(s => s.id === "reasonix")?.count).toBe(1);
+  });
+  it("Reasonix projects-slug（当前 Go 版 WorkspaceSlug）形态兜底命中", () => {
+    const cwd = "D:\\develop\\Some-Project";
+    const slug = (process.platform === "win32" ? cwd.toLowerCase() : cwd).replace(/[\\/:]/g, "-");
+    const dir = join(root, "reasonix", "projects", slug, "memory");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "r.md"), "---\nname: R2\ndescription: d\n---\n\nx\n");
+    const srcs = detectSources({ reasonix: join(root, "reasonix") }, cwd, cwd);
+    expect(srcs.find(s => s.id === "reasonix")?.dir).toBe(dir);
+  });
+  it("global 标志：仅 codex 恒 true（坑 3——全局源不冒充项目记忆，UI 侧标注）", () => {
+    mkdirSync(join(root, "codex", "memories"), { recursive: true });
+    const srcs = detectSources({ codex: join(root, "codex") }, "D:\\p", "D:\\p");
+    expect(srcs.find(s => s.id === "codex")?.global).toBe(true);
+    expect(srcs.filter(s => s.id !== "codex").every(s => s.global !== true)).toBe(true);
+  });
+  it("newCount（D7）：源标题集对 dest 已有键差集；全已导入 = 0；不给 destDir 字段缺席", () => {
+    const src = join(root, "claude", "projects", "D--develop-Orosus", "memory");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "a.md"), "---\nname: Note A\ndescription: d\n---\n\nx\n");
+    writeFileSync(join(src, "b.md"), "---\nname: Note B\ndescription: d\n---\n\nx\n");
+    const dest = join(root, "dest", "memory");
+    importNotes(dest, [{ title: "Note A", summary: "s", content: "c", type: "project" }]);   // A 已在
+    const homes = { claude: join(root, "claude") };
+    const withDest = detectSources(homes, "D:\\develop\\Orosus", "D:\\develop\\Orosus", dest);
+    expect(withDest.find(s => s.id === "claude-code")?.newCount).toBe(1);
+    // 再导一条（B 也进）后差集归零
+    importNotes(dest, [{ title: "Note B", summary: "s", content: "c", type: "project" }]);
+    expect(detectSources(homes, "D:\\develop\\Orosus", "D:\\develop\\Orosus", dest).find(s => s.id === "claude-code")?.newCount).toBe(0);
+    const noDest = detectSources(homes, "D:\\develop\\Orosus", "D:\\develop\\Orosus");
+    expect(noDest.find(s => s.id === "claude-code")?.newCount).toBeUndefined();
+  });
+  it("parseSourceNote 四类直认（D13：user/feedback 不再压扁成 project），未知/缺失归 project", () => {
+    const mk = (type: string): string => `---\nname: N\ndescription: d\nmetadata:\n  type: ${type}\n---\n\nx\n`;
+    expect(parseSourceNote(mk("user"), "u.md").type).toBe("user");
+    expect(parseSourceNote(mk("feedback"), "f.md").type).toBe("feedback");
+    expect(parseSourceNote(mk("project"), "p.md").type).toBe("project");
+    expect(parseSourceNote(mk("reference"), "r.md").type).toBe("reference");
+    expect(parseSourceNote(mk("weird"), "w.md").type).toBe("project");
+    expect(parseSourceNote("---\nname: N\n---\n\nx\n", "m.md").type).toBe("project");
+  });
+});
+
 describe("organizeNotes（D20 走查八-③ 重定义：逐条内容优化 + 重写 description）", () => {
   const notes: SourceNote[] = [
     { title: "Anchor rules", summary: "旧摘要A", content: "乱糟糟的原文A", type: "project" },

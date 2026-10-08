@@ -1,17 +1,35 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { listNotes, rebuildIndex, slugify, writeNoteFile } from "./memstore.ts";
+import { listNotes, rebuildIndex, slugify, writeNoteFile, type NoteType } from "./memstore.ts";
 
 /** 五源导入件（m5-peers T6d，v3/v5 走查定案）：纯函数——探测/格式转换/标题去重/整理通道。
  *  导入 = 一次性搬运（D18，重复导入靠标题去重）；模型整理 = 依赖注入 llmStream（D20，默认关零 token）。 */
 
-export interface SourceNote { title: string; summary: string; content: string; type: "project" | "reference" }
-export interface MemorySource { id: "claude-code" | "zcode" | "qwen" | "codex" | "reasonix"; label: string; dir: string | undefined; count: number }
+export interface SourceNote { title: string; summary: string; content: string; type: NoteType }
+export interface MemorySource {
+  id: "claude-code" | "zcode" | "qwen" | "codex" | "reasonix"; label: string; dir: string | undefined; count: number;
+  /** 坑 3（m5-peers-import-fix T2）：全局源标注——仅 codex 恒 true（无项目维度，UI 侧显示「含所有项目的笔记」）。 */
+  global?: boolean;
+  /** D7 已导计数：给出 destDir 时每源算「源标题集 − 现有判重键」差集大小；0 = 已全部导入。 */
+  newCount?: number;
+}
 
 /** git root → 目录段（cc/qwen 同款形态：`D:\develop\Orosus` → `D--develop-Orosus`——非字母数字逐字符替换为 -，
  *  冒号/分隔符各成一杠、不折叠；本仓桶名 D--develop-Orosus-524861ea 实形态吻合）。 */
 const sanitizeRoot = (p: string): string => p.replace(/[^a-zA-Z0-9]/g, "-").replace(/^-+|-+$/g, "");
+
+/** Reasonix 当前 Go 版 WorkspaceSlug 复刻（上游 config/paths.go:568）：win 小写 + `/`、`\`、`:`
+ *  全替换 `-`、255 字节封顶。**与 sanitizeRoot 折叠规则不同**（那个是非字母数字逐字符替换、不折叠端部）——
+ *  两键算法各自对齐各自上游，勿混用。 */
+const reasonixSlug = (p: string): string => {
+  let s = (process.platform === "win32" ? p.toLowerCase() : p).replace(/[\\/:]/g, "-");
+  while (Buffer.byteLength(s, "utf8") > 255) s = s.slice(0, -1);   // 255 字节封顶（上游同款）
+  return s;
+};
+
+/** G7：Reasonix 实机 sha1 键——原始大小写 cwd（与 zcode 键的小写化预处理不同，各自对齐）。 */
+const sha1hex16 = (cwd: string): string => createHash("sha1").update(cwd).digest("hex").slice(0, 16);
 
 const countNotes = (dir: string | undefined): number => {
   if (dir === undefined || !existsSync(dir)) return 0;
@@ -20,30 +38,48 @@ const countNotes = (dir: string | undefined): number => {
 
 const dirIf = (dir: string): string | undefined => (existsSync(dir) ? dir : undefined);
 
-/** 五源探测（D19，路径锚 = 九仓调研档）：目录不存在 = dir undefined + count 0（页面标「未安装/0 条」）。 */
+/** 五源探测（D19，路径锚 = 九仓调研档；m5-peers-import-fix T2 勘误：qwen 小写候选 / Reasonix 双形态 /
+ *  codex global / destDir 给出时算 newCount）：目录不存在 = dir undefined + count 0（页面标「未安装/0 条」）。
+ *  Reasonix 双形态（D3）：sha1 实机形态优先、projects-slug（当前 Go 版）次之，任一命中即该源 dir。 */
 export function detectSources(
   homes: { claude?: string; zcode?: string; qwen?: string; codex?: string; reasonix?: string },
   gitRoot: string,
   cwd: string,
+  destDir?: string,
 ): MemorySource[] {
   const root = sanitizeRoot(gitRoot);
   const cwdKey = process.platform === "win32" ? cwd.toLowerCase() : cwd;   // ZCode hash 实测形态（2026-10-06 本机 sha256 验证）
   const hash16 = createHash("sha256").update(cwdKey).digest("hex").slice(0, 16);
   const zcodeSlug = `${slugify(cwd.split(/[\\/]/).pop() ?? "project")}-${hash16}`;
-  const defs: { id: MemorySource["id"]; label: string; dir: string | undefined }[] = [
+  const defs: { id: MemorySource["id"]; label: string; dir: string | undefined; global?: boolean }[] = [
     { id: "claude-code", label: "Claude Code", dir: dirIf(join(homes.claude ?? "", "projects", root, "memory")) },
     { id: "zcode", label: "ZCode", dir: dirIf(join(homes.zcode ?? "", "cli", "memories", "projects", zcodeSlug, "memory")) },
-    { id: "qwen", label: "qwen-code", dir: dirIf(join(homes.qwen ?? "", "projects", root, "memory")) },
-    { id: "codex", label: "codex", dir: dirIf(join(homes.codex ?? "", "memories")) },
-    { id: "reasonix", label: "DeepSeek-Reasonix", dir: dirIf(join(homes.reasonix ?? "", "projects", cwd.split(/[\\/]/).pop() ?? "", "memory")) },
+    // D8：qwen 目录键全小写（实机形态）——小写候选优先、原样次之（mac/Linux 不靠大小写不敏感碰运气）
+    { id: "qwen", label: "qwen-code", dir: dirIf(join(homes.qwen ?? "", "projects", root.toLowerCase(), "memory")) ?? dirIf(join(homes.qwen ?? "", "projects", root, "memory")) },
+    { id: "codex", label: "codex", dir: dirIf(join(homes.codex ?? "", "memories")), global: true },
+    { id: "reasonix", label: "DeepSeek-Reasonix", dir: dirIf(join(homes.reasonix ?? "", "memory", sha1hex16(cwd))) ?? dirIf(join(homes.reasonix ?? "", "projects", reasonixSlug(cwd), "memory")) },
   ];
-  return defs.map(s => ({ ...s, count: countNotes(s.dir) }));
+  return defs.map(s => ({
+    ...s,
+    count: countNotes(s.dir),
+    ...(destDir !== undefined ? { newCount: sourceNewCount(s.dir, destDir) } : {}),
+  }));
 }
 
-/** frontmatter 剥取（五家共识形状：name/description/metadata.type——一事实一文件 + frontmatter，调研档差异轴一）。 */
+/** D7 已导计数：源标题集对 destDir 现有判重键（标题 ∪ source_name）的差集大小。 */
+const sourceNewCount = (dir: string | undefined, destDir: string): number => {
+  const existing = existingKeys(destDir);
+  const titles = new Set(readSourceNotes(dir).map(n => n.title));
+  let n = 0;
+  for (const t of titles) if (!existing.has(t)) n++;
+  return n;
+};
+
+/** frontmatter 剥取（五家共识形状：name/description/metadata.type——一事实一文件 + frontmatter，调研档差异轴一）。
+ *  D13 四类直认：user/feedback/project/reference 原样保留（导入保真），未知/缺失仍归 project。 */
 export function parseSourceNote(raw: string, fileName: string): SourceNote {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-  let title = "", summary = "", type: "project" | "reference" = "project", body = raw;
+  let title = "", summary = "", type: NoteType = "project", body = raw;
   if (m !== null) {
     body = raw.slice(m[0].length);
     // 缩进感知（metadata.type 在子块——顶层与缩进行都认，首个命中胜）
@@ -53,7 +89,8 @@ export function parseSourceNote(raw: string, fileName: string): SourceNote {
     };
     title = field("name") ?? "";
     summary = field("description") ?? "";
-    type = field("type") === "reference" ? "reference" : "project";
+    const rawType = field("type");
+    type = rawType === "user" || rawType === "feedback" || rawType === "project" || rawType === "reference" ? rawType : "project";
   }
   const bodyLines = body.split("\n").map(l => l.trim());
   if (title === "") {

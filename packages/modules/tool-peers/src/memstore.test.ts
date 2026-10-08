@@ -22,6 +22,11 @@ describe("naming", () => {
     expect(noteBody("T", "s", "c")).not.toContain("source_name");
     expect(noteBody("T", "s", "c", "project", "T")).not.toContain("source_name");   // 同题不写
   });
+  it("D13 四类 type 落盘：user/feedback 与 project/reference 同款 frontmatter 形态", () => {
+    expect(noteBody("T", "s", "c", "user")).toContain("type: user");
+    expect(noteBody("T", "s", "c", "feedback")).toContain("type: feedback");
+    expect(noteBody("T", "s", "c")).toContain("type: project");   // 缺省仍 project
+  });
 });
 describe("index", () => {
   it("writes note then index lists it, newest first", () => {
