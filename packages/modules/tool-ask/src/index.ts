@@ -3,8 +3,9 @@ import { defineTool, type Tool } from "@orosus/contracts/tool";
 import type { CommandUi } from "@orosus/contracts/module";
 import { z } from "zod";
 
-/** 工厂：ui 经参数注入（模块侧传 ctx.ui；测试侧传假件——tool-todo T7 可测面同款）。 */
-export function askUserTool(ui: Pick<CommandUi, "ask" | "choose">): Tool {
+/** 工厂：ui 经参数注入（模块侧传 ctx.ui；测试侧传假件——tool-todo T7 可测面同款）。
+ *  m5-ask-multi：chooseEx 为可选成员（老宿主假件不带即走降级路——D12 判空纪律）。 */
+export function askUserTool(ui: Pick<CommandUi, "ask" | "choose" | "chooseEx">): Tool {
   return defineTool({
     name: "tool-ask__ask_user",
     description: `Ask the user questions when you need their input to proceed.
@@ -16,28 +17,47 @@ Don't ask about trivial choices. Overusing this tool interrupts the user's workf
 only ask when the user's input genuinely changes your next action.
 Don't repeat a question the user didn't answer.
 
+If you have a recommended option, put it first and append "(Recommended)" to its label.
+
 If the user dismisses/cancels: they chose not to answer.
 Do NOT pick an option for them. Stop and wait for the user's next message.`,
     parameters: z.object({
       questions: z.array(z.object({
         text: z.string().describe("The complete question to ask the user"),
         options: z.array(z.string()).min(2).max(4).optional()
-          .describe("The available choices for this question (omit for free-text input)"),
+          .describe("The available choices for this question (omit for free-text input). "
+            + "There should be no \"Other\" option, that will be provided automatically. "
+            + "If multiSelect is true, phrase it accordingly"),
+        multiSelect: z.boolean().optional()
+          .describe("Whether the user may select multiple choices for this question "
+            + "(only meaningful when options are given; an \"Other\" free-input choice is always appended by the UI)"),
       })).min(1).max(4),
     }),
     resolveExecution: async (input) => {
-      const { questions } = input as { questions: { text: string; options?: string[] }[] };
+      const { questions } = input as { questions: { text: string; options?: string[]; multiSelect?: boolean }[] };
       return {
         accesses: [],
         approvalRule: "tool-ask__ask_user",
         execute: async () => {
           try {
+            // 输出 = 题号行式（D10：cc/qwen 平文本回传同族——多选多行同题号；单选行同样带
+            // `N: ` 前缀，防只有多选加编号的半吊子形态）
             const answers: string[] = [];
-            for (const q of questions) { // 串行——readline 非并发安全（M3 审批 FIFO 先例）
+            for (let qi = 0; qi < questions.length; qi++) { // 串行——readline 非并发安全（M3 审批 FIFO 先例）
+              const q = questions[qi]!;
               if (q.options !== undefined && q.options.length >= 2) {
-                answers.push(await ui.choose(q.text, q.options));
+                if (ui.chooseEx !== undefined) {
+                  const picked = await ui.chooseEx(q.text, q.options, q.multiSelect === true ? { multi: true } : undefined);
+                  for (const a of picked) answers.push(`${qi + 1}: ${a}`);
+                } else if (q.multiSelect === true) {
+                  // 老宿主降级（D12）：多选退 ask——提示选项与逗号分隔口径，答案原样单行带回
+                  answers.push(`${qi + 1}: ${await ui.ask(`${q.text}（选项 ${q.options.join("/")}，可多选，逗号分隔）`)}`);
+                } else {
+                  // 老宿主降级：单选退老 choose（无「其他」行——纯损耗可接受，CLI 宿主同仓发布实际不遇）
+                  answers.push(`${qi + 1}: ${await ui.choose(q.text, q.options)}`);
+                }
               } else {
-                answers.push(await ui.ask(q.text));
+                answers.push(`${qi + 1}: ${await ui.ask(q.text)}`); // optionless 照旧（dsh 同款既有形态）
               }
             }
             return { output: answers.join("\n"), isError: false };

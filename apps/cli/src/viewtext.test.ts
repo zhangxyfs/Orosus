@@ -177,3 +177,28 @@ describe("dialog 装配（m5 T7——活 getter：全屏期委托 openDialog 带
 		await h.close();
 	});
 });
+
+describe("chooseEx 装配（m5-ask-multi T4——uiface 透传 chooseExFace 面给 menu 基座）", () => {
+	it("① deps.chooseExFace 在则 chooseEx 存在且三参透传；不在则缺省 undefined（老宿主判空降级面）", async () => {
+		const seen: Array<{ title: string; items: string[]; opts: { multi?: boolean } | undefined }> = [];
+		const withFace = createCliUi({
+			question: async () => "",
+			secretQuestion: async () => "",
+			chooseExFace: async (title, items, opts) => { seen.push({ title, items, opts }); return ["甲", "自定义文本"]; },
+			activeApp: () => undefined,
+		});
+		expect(await withFace.chooseEx?.("发布前检查", ["甲", "乙"], { multi: true })).toEqual(["甲", "自定义文本"]);
+		expect(seen).toEqual([{ title: "发布前检查", items: ["甲", "乙"], opts: { multi: true } }]);
+		const without = createCliUi({ question: async () => "", secretQuestion: async () => "", activeApp: () => undefined });
+		expect(without.chooseEx).toBeUndefined();
+	});
+	it("② chooseExFace undefined（Esc）→ chooseEx 抛「已取消（Esc）」——组装好的取消链（MB-08 穿透面）", async () => {
+		const ui = createCliUi({
+			question: async () => "",
+			secretQuestion: async () => "",
+			chooseExFace: async () => undefined,
+			activeApp: () => undefined,
+		});
+		await expect(ui.chooseEx?.("选", ["甲"], { multi: true })).rejects.toThrow("已取消（Esc）");
+	});
+});

@@ -5,6 +5,8 @@
 
 import { WHEEL_STEP, ALT_WHEEL_MULTIPLIER, thumbGeometry, wordRangeAt } from "./fullapp-types.ts";
 import { filterEntries } from "./fullapp-at.ts";
+import { pickActivateRow, type PickUi } from "./fullapp-keys.ts";
+import { pickOverlayGeo } from "./fullapp-overlay.ts";
 import { osc8LinkAtColumn, stripAnsi, visibleWidth } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
 import type { WheelEvent, ButtonEvent } from "./mouse.ts";
@@ -51,9 +53,11 @@ export function createMouse(app: FullApp) {
 				pu.scroll = Math.max(0, Math.min(Math.max(0, total - page), pu.scroll + (up ? -lines : lines)));
 			}
 		} else if (pu?.kind === "pick") {
-			// 与键盘同一张过滤清单——过滤激活时按 filtered 钳，否则滚轮可越过过滤尾致 Enter 错位
+			// 与键盘同一张过滤清单——过滤激活时按 filtered 钳，否则滚轮可越过过滤尾致 Enter 错位。
+			// m5-ask-multi：增强面行域含合成行（其他〔+确定〕）——钳上界随之（否则滚轮够不到确定行）
 			const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));
-			pu.sel = Math.max(0, Math.min(filtered.length - 1, pu.sel + (up ? -lines : lines))); // 到头停（决策点 6——不学键盘回绕）
+			const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
+			pu.sel = Math.max(0, Math.min(rowsTotal - 1, pu.sel + (up ? -lines : lines))); // 到头停（决策点 6——不学键盘回绕）
 		} else if (pu !== undefined) {
 			return; // ask——没有可滚面
 		} else if (s.atMenu !== undefined) {
@@ -77,6 +81,27 @@ export function createMouse(app: FullApp) {
 		app.scheduler.requestImmediateRender();
 	};
 
+	/** m5-ask-multi：增强挑选窗点击命中（键路表「鼠标点击行」列——行点击 = 同该行 Enter：单选选定/
+	 *  multi 切换勾选、其他行进输入/取消勾选、确定行提交）。几何与渲染共源（pickOverlayGeo——两处
+	 *  口径漂移即点击错行）；输入态点击不动作（先 Esc 回列表）；老 choose 面恒 undefined（点击照旧落
+	 *  主流区文本选区——现有行为零改）。 */
+	const pickHitRow = (x: number, y: number): { pu: PickUi; gi: number; filtered: Array<{ t: string; i: number }> } | undefined => {
+		const pu = app.pendingUi;
+		if (pu?.kind !== "pick" || pu.custom !== true || pu.editing === true) return undefined;
+		const { leftW, streamH, queue } = app.frame.layoutFrame();
+		if (x < 0 || x >= leftW) return undefined;
+		const divRow = streamH + (queue.length === 0 ? 0 : queue.length + 1);
+		const pairs = pu.items.map((t, i) => ({ t, i }));
+		const filtered = pu.filter === undefined ? pairs : pairs.filter((p) => p.t.toLowerCase().includes(pu.filter!.toLowerCase()));
+		const rowsTotal = filtered.length + 1 + (pu.multi === true ? 1 : 0);
+		const geo = pickOverlayGeo(rowsTotal, pu.sel, false);
+		const top = Math.max(0, divRow - geo.totalLines);
+		if (y < top || y > divRow - 1) return undefined; // 盒外（底框 = divRow−1，其下是输入框顶）
+		const gi = y - (top + 2 + (geo.moreUp ? 1 : 0)); // 顶框 + 空行 + moreUp? 后即内容窗首行
+		if (gi < 0 || gi >= geo.winLen) return undefined;
+		return { pu, gi: geo.winStart + gi, filtered };
+	};
+
 	/** 按钮事件处理器（m5 鼠标批 T5 填肉 / T6 粒度 / T7 链接 / T8 查看窗）：按下建锚（空点击 =
 	 *  折叠选区）、拖动扩焦（越界钳边界）、松开结算复制（kimi handleSelectionMouseEvent
 	 *  :1314-1383 同构）。查看窗在位且指针在盒内 → 选查看窗内容（T8，坐标系 = 盒内衬 2 列）。 */
@@ -92,6 +117,14 @@ export function createMouse(app: FullApp) {
 			return;
 		}
 		if (e.kind === "press") {
+			// m5-ask-multi：增强挑选窗行点击优先（overlay 是最上层视觉层——先于滚动条/文本选区判定）
+			const hit = pickHitRow(e.x, e.y);
+			if (hit !== undefined) {
+				hit.pu.sel = hit.gi; // 焦点随点击（opencode selectOption 同族）
+				pickActivateRow(app, hit.pu, hit.gi, hit.filtered);
+				app.scheduler.requestImmediateRender();
+				return;
+			}
 			// 滚动条优先于选区（kimi :1102-1112 次序）：命中轨道列 → 拖动状态机（点轨道非拇指先跳位）
 			const track = scrollbarTrackHit(e.x, e.y);
 			if (track !== undefined) {

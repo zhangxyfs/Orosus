@@ -117,3 +117,88 @@ describe("滚动窗口（TUI 批 T2——B5 厂商目录分页）", () => {
     expect(out).toContain("\x1b[7ms10\x1b[27m"); // 选中项反色随窗口滚动
   });
 });
+
+// m5-ask-multi：pick(opts) 增强面——kimi 键路同款（空格/Enter 勾选、确定行提交、「其他」三态、
+// 输入态自收、Esc 分层）；返回形状 { picked, custom } | undefined（D13 非 TTY 回落另测）
+describe("pick 增强面 opts（m5-ask-multi——多选 + 自由输入）", () => {
+  it("① 多选空格切换勾选、光标不动；确定行 Enter 提交勾选集（picked=原始下标集）", async () => {
+    // ↓ 到乙、空格勾选（光标留乙）、↓↓↓ 到确定行（其他行占 items.length、确定行 +1）、Enter 提交
+    const r = await pick(["甲", "乙", "丙"], fakeIo(["\x1b[B", " ", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]), { multi: true });
+    expect(r).toEqual({ picked: [1] });
+  });
+  it("② 多选普通项 Enter = 切换勾选（cc SelectMulti 同款——不是提交）；渲染含 ☐/☑/✎/✓ 与 multi 脚注", async () => {
+    const w: string[] = [];
+    const io = fakeIo(["\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"], w); // Enter 勾甲（非提交）→ ↓↓↓ 到确定行 → 提交
+    const r = await pick(["甲", "乙"], io, { multi: true });
+    expect(r).toEqual({ picked: [0] });
+    const out = w.join("");
+    expect(out).toContain("☐ 乙"); // 未勾项
+    expect(out).toContain("☑ 甲"); // Enter 勾选后
+    expect(out).toContain("✎ 其他（自行输入）"); // 其他行（i18n zh-CN 测试环境）
+    expect(out).toContain("✓ 确定"); // D16 提交口
+    expect(out).toContain("空格/Enter 勾选 · 确定行提交 · Esc 取消"); // pick.line.multiFoot
+  });
+  it("③ 零勾选在确定行 Enter = 提示不关窗（D5——行模式闪现提示行一拍），真提交照常", async () => {
+    const w: string[] = [];
+    const keys = [
+      "\x1b[B", "\x1b[B", "\x1b[B", "\r", // ↓↓↓ 确定行 Enter（零勾）→ 提示不关窗
+      "\x1b[A", "\x1b[A", " ", // ↑↑ 回乙、空格勾选
+      "\x1b[B", "\x1b[B", "\r", // ↓↓ 确定行 Enter 提交
+    ];
+    const r = await pick(["甲", "乙"], fakeIo(keys, w), { multi: true });
+    expect(w.join("")).toContain("未选择任何项");
+    expect(r).toEqual({ picked: [1] });
+  });
+  it("④ 其他行三态：未勾 Enter 进输入、非空 Enter 单槽覆盖回列表（☑ ✎ 文本）、已勾 Enter 取消勾选；草稿续编", async () => {
+    const w: string[] = [];
+    const keys = [
+      "\x1b[B", "\x1b[B", "\r", // ↓↓ 到其他行 Enter → 输入态
+      "自", "定", "义", "\x7f", "义", "\r", // 输入「自定义」（含退格重输）
+      "\r", // 其他行已勾 Enter → 取消勾选（kimi :301-307 对称撤销）
+      "\r", // 再进输入态（草稿保留续编）
+      "x", "\r", // 续编提交——单槽覆盖为「自定义x」
+      "\x1b[B", "\r", // ↓ 确定行提交
+    ];
+    const r = await pick(["甲", "乙"], fakeIo(keys, w), { multi: true });
+    const out = w.join("");
+    expect(out).toContain("自行输入：自定"); // 输入行渲染（草稿直显）
+    expect(out).toContain("☑ ✎ 自定义"); // 提交态行显
+    expect(r).toEqual({ picked: [], custom: "自定义x" }); // 取消勾选清槽后再续编——最终单槽文本
+  });
+  it("⑤ 空输入 Enter 无效不动（kimi :344——不丢已输内容）、Esc 回列表草稿保留再进续编", async () => {
+    const keys = [
+      "\x1b[B", "\r", // ↓ 到其他行 Enter → 输入态
+      "\r", // 空输入 Enter——无效不动
+      "\x1b", // Esc 回列表（草稿保留）
+      "\r", // 再进输入态（续编——customText 仍在）
+      "！", "\r", // 续编 + 提交（多选回列表）
+      "\x1b[B", "\r", // ↓ 确定行提交
+    ];
+    const r = await pick(["甲"], fakeIo(keys), { multi: true });
+    expect(r).toEqual({ picked: [], custom: "！" }); // 空输入没丢草稿、Esc 后续编保留
+  });
+  it("⑥ Esc 分层：列表态 Esc = 取消整窗（「已取消（Esc）」）——MB-08 文案钉", async () => {
+    await expect(pick(["甲"], fakeIo(["\x1b"]), { multi: true })).rejects.toThrow("已取消");
+    await expect(pick(["甲"], fakeIo(["\x1b"]))).rejects.toThrow("已取消"); // 老面同款（既有钉复跑）
+  });
+  it("⑦ 单选：普通项 Enter 即答 { picked: [i] }；数字直达照旧；其他行输入非空 Enter 即答案（kimi commitOtherInput）", async () => {
+    expect(await pick(["甲", "乙", "丙"], fakeIo(["\r"]), {})).toEqual({ picked: [0] });
+    expect(await pick(["甲", "乙", "丙"], fakeIo(["2"]), {})).toEqual({ picked: [1] }); // 数字直达单选面照旧
+    const r = await pick(["甲", "乙"], fakeIo(["\x1b[B", "\x1b[B", "\r", "自", "由", "文", "本", "\r"]), {});
+    expect(r).toEqual({ picked: [], custom: "自由文本" }); // 单选自定义即答——窗即关
+  });
+  it("⑧ 多选数字直达让位（D7 防误触）：数字键被忽略、仍可导航提交", async () => {
+    const r = await pick(["甲", "乙", "丙"], fakeIo(["1", "\x1b[B", "\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]), { multi: true });
+    // "1" 不直达（忽略）；↓乙 Enter 勾选；↓↓↓ 确定行（跳过其他行）Enter 提交
+    expect(r).toEqual({ picked: [1] });
+  });
+  it("⑨ 非TTY 回落 D13：单选序号/自由文本；多选逗号分隔序号文本混排（中英逗号）；空重问", async () => {
+    const seq = (answers: string[]) => { let i = 0; return { ...fakeIo([]), isTTY: false, numberQuestion: async () => answers[i++] ?? "" }; };
+    expect(await pick(["a", "b", "c"], seq(["3"]), {})).toEqual({ picked: [2] });
+    expect(await pick(["a", "b"], seq(["", "自定义答案"]), {})).toEqual({ picked: [], custom: "自定义答案" }); // 空先重问
+    expect(await pick(["a", "b", "c"], seq(["1,3"]), { multi: true })).toEqual({ picked: [0, 2] });
+    expect(await pick(["a", "b", "c"], seq(["2，自定义"]), { multi: true })).toEqual({ picked: [1], custom: "自定义" }); // 全角逗号 + 文本混排
+    // 老面非TTY 原样（回归钉）：编号回落
+    expect(await pick(["a", "b"], seq(["2"]))).toBe(1);
+  });
+});

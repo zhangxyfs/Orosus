@@ -366,7 +366,12 @@ export class FullApp {
 	// ---------- 全屏 CommandUi 适配面（choose → overlay 选择器；ask/askSecret → 输入行询问） ----------
 
 	pendingUi:
-		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys }
+		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys
+			// m5-ask-multi 增强面：multi/custom 仅 chooseEx 路置位（老 choose 面恒 falsy——33 处消费方零感知）；
+			// checked/customText/customCommitted/editing 恒初始化（单构建点 fullapp-dialogs pickOverlay），
+			// 老面读不到也写不到。resolve 签名零改动（风险节铁律）：自定义文本不经 resolve 携带——
+			// 「其他」行恒占 items.length、「确定」行恒占 items.length + 1 合成索引，包装层按 pu 现值组装 string[]。
+			multi?: true; custom?: true; checked: number[]; customText: string; customCommitted?: string | undefined; editing: boolean }
 		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; liveCache?: { at: number; text: string } | undefined; bottom?: boolean | undefined; viewPage?: number }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"]; hostKeys?: HostDialogKeys; disallowEscape?: boolean }
@@ -401,9 +406,14 @@ export class FullApp {
 	}
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
-	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
-	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys): Promise<number | undefined> {
-		return this.dialogs.pickOverlay(title, items, selAt, keys);
+	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。
+	 *  m5-ask-multi：第 5 参 opts 传入 = chooseEx 增强面（其他行恒在；multi 加确定行），返回形状变为
+	 *  Promise<string[] | undefined>（undefined = Esc）——快照组装见 fullapp-dialogs pickOverlay；老调用
+	 *  （无 opts）签名与语义一字不动。 */
+	pickOverlay(title: string, items: string[], selAt?: number, keys?: PickExtraKeys): Promise<number | undefined>;
+	pickOverlay(title: string, items: string[], selAt: number | undefined, keys: PickExtraKeys | undefined, opts: { multi?: boolean }): Promise<string[] | undefined>;
+	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { multi?: boolean }): Promise<number | undefined | string[] | undefined> {
+		return this.dialogs.pickOverlay(title, items, selAt, keys, opts);
 	}
 
 	/** ask/askSecret 的全屏形态：输入行接管（提示语进输入框前缀；secret 盲显 •；Esc → undefined）。

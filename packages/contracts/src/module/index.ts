@@ -142,6 +142,24 @@ export interface CommandUi {
    */
   choose(title: string, items: string[]): Promise<string>;
   /**
+   * 增强选择面（m5-ask-multi，可选）：choose 的多选/自由输入扩展——恒尾附「✎ 其他（自行输入）」行；
+   * opts.multi = 多选（空格/Enter 勾选普通项；尾行「✓ 确定」Enter 提交勾选集——D16）。统一返回
+   * string[]（单选恰一项；自定义输入即成员；多选自定义恰一条、再次进入=编辑覆盖）。Esc 取消 =
+   * 抛「已取消（Esc）」（与 choose 同字面量约定）。老宿主缺省不存在——调用方判空降级
+   * （tool-ask：单选退老 choose、多选退 ask）。
+   * @param title - 标题（显示在浮层头）。
+   * @param items - 候选清单（每项单行文本，说明走「——」两段式惯例——与 choose 同口径）。
+   * @param opts - 可选项。
+   * @param opts.multi - 多选（空格/Enter 勾选、确定行提交勾选集）。
+   * @returns 选中项原文数组（多选按列表序 + 自定义恒尾；单选恰一项）；Esc 取消 = 抛「已取消（Esc）」。
+   *
+   * @example
+   * ```ts
+   * const picks = await ui.chooseEx?.("发布前检查", ["lint", "test"], { multi: true });
+   * ```
+   */
+  chooseEx?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[]>;
+  /**
    * 是/否确认。
    * @param question - 问句（宿主显示为 `question [y/N]` 形态）。
    * @returns true = 确认；false = 否认或 Esc（Esc 折为 false——语义内 fail-closed，不抛错）。

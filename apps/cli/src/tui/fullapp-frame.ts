@@ -228,7 +228,15 @@ export function createFrame(app: FullApp) {
 			overlay = { lines: ob.lines, row: ob.row, col: ob.col, width: ob.width };
 		} else if (app.pendingUi?.kind === "pick") {
 			const pu = app.pendingUi;
-			overlay = app.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys);
+			// m5-ask-multi：增强面字段透传（老 choose 面全 falsy——渲染逐字节原样）
+			overlay = app.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys, {
+				custom: pu.custom === true,
+				editing: pu.editing,
+				customText: pu.customText,
+				checked: pu.checked,
+				...(pu.multi === true ? { multi: true } : {}),
+				...(pu.customCommitted !== undefined ? { customCommitted: pu.customCommitted } : {}),
+			});
 		} else if (app.pendingUi?.kind === "view") {
 			const pu = app.pendingUi;
 			// live 一秒结果缓存（m5-agentview-perf T4 / D1=1000ms——与查看窗转盘秒位节拍一致）：渲染层兜底，

@@ -148,6 +148,7 @@ export interface CommandUi { … }
 | `ask` | `ask(question: string): Promise<string>` | 问一句（自由文本）。 |
 | `askSecret` | `askSecret(question: string): Promise<string>` | 敏感输入（密钥等）：语义同 ask，宿主以静默盲输/掩码回显。 |
 | `choose` | `choose(title: string, items: string[]): Promise<string>` | 列表单选（≥12 项宿主自动带输入过滤）。 |
+| `chooseEx?` | `chooseEx?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[]>` | 增强选择面（m5-ask-multi，可选）：choose 的多选/自由输入扩展——恒尾附「✎ 其他（自行输入）」行； opts.multi = 多选（空格/Enter 勾选普通项；尾行「✓ 确定」Enter 提交勾选集——D16）。统一返回 string[]（单选恰一项；自定义输入即成员；多选自定义恰一条、再次进入=编辑覆盖）。Esc 取消 = 抛「已取消（Esc）」（与 choose 同字面量约定）。老宿主缺省不存在——调用方判空降级 （tool-ask：单选退老 choose、多选退 ask）。 |
 | `confirm` | `confirm(question: string): Promise<boolean>` | 是/否确认。 |
 | `notice?` | `notice?(text: string, opts?: { durationMs?: number }): void` | 瞬时提示（2026-09-22 批⑧，可选）：「无可压缩/已切换」类一次性反馈——全屏宿主走浮动 toast（3s 自消）， 行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。 缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。 m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 30000]，越界按边界值算——不传即缺省， 主程序自己的提示全走缺省零变化。 |
 | `viewText?` | `viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; owner?: string }): void` | 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式 静默丢弃。窗排队（一次一窗，后来的等旧窗关）。 opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的 属主判定靠它；模块开发者无须也不应自填（@internal）。 同源）再显示——标题层级/列表/代码块带样式；不支持的宿主按纯文本原样显示（内容不丢）。可省 = 纯文本。 |
@@ -161,11 +162,13 @@ export interface CommandUi { … }
 |---|---|---|
 | `ask` | `question` | 提示语（人话一句话；宿主负责渲染与回显）。 |
 | `askSecret` | `question` | 提示语。 |
-| `choose` | `title` | 标题（显示在浮层头）。 |
+| `choose · chooseEx` | `title` | 标题（显示在浮层头）。 |
 | `choose` | `items` | 候选清单（每项单行文本——多行项宿主压平；中文/emoji 可）。 |
+| `chooseEx` | `items` | 候选清单（每项单行文本，说明走「——」两段式惯例——与 choose 同口径）。 |
+| `chooseEx · notice · viewText` | `opts` | 可选项。 |
+| `chooseEx` | `opts.multi` | 多选（空格/Enter 勾选、确定行提交勾选集）。 |
 | `confirm` | `question` | 问句（宿主显示为 `question [y/N]` 形态）。 |
 | `notice` | `text` | 提示文本（单行语义；过长宿主折行 ≤ 3 行）。 |
-| `notice · viewText` | `opts` | 可选项。 |
 | `notice` | `opts.durationMs` | 停留毫秒；缺省 3000，范围 [1000, 30000]，越界钳到边界。不传 = 缺省。 |
 | `viewText` | `title` | 窗标题（顶框展示；单行）。 |
 | `viewText` | `text` | 正文（\n 分行；可含宿主题色语义串——宿主按看得见的宽度折行/截断，不许夹终端控制码）。 |

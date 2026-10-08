@@ -32,6 +32,9 @@ export function createReadlineUi(io: {
   question(q: string): Promise<string>;
   secretQuestion(q: string): Promise<string>;
   pick?(title: string, items: string[]): Promise<number>;
+  /** m5-ask-multi：增强挑选面（chooseEx 装配）——返回已组装的选中数组（picked 按索引映射 + 自定义
+   *  恒尾，由宿主侧组装完毕）；undefined = Esc。单选恰一项、多选可多成员。 */
+  chooseExFace?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[] | undefined>;
   /** 瞬时提示出口（批⑧）：宿主给全屏 toast / 行模式单行；缺省 stdout 单行。m5 T3：透传时长参数（行模式忽略）。 */
   notice?(text: string, opts?: { durationMs?: number }): void;
 }): CommandUi {
@@ -39,6 +42,16 @@ export function createReadlineUi(io: {
     notice: (t, opts) => { if (io.notice !== undefined) io.notice(t, opts); else process.stdout.write(`${t}\n`); },
     ask: async (q) => (await io.question(`${q}: `)).trim(),
     askSecret: async (q) => (await io.secretQuestion(q)).trim(),
+    // m5-ask-multi（D11/D12）：可选方法 chooseEx——仅宿主给了 chooseExFace 面才存在（老宿主缺省 undefined，
+    //  调用方判空降级）；Esc 统一映射「已取消（Esc）」（与 choose 同字面量，穿透 MB-08 匹配）
+    ...(io.chooseExFace !== undefined ? {
+      chooseEx: async (title: string, items: string[], opts?: { multi?: boolean }): Promise<string[]> => {
+        if (items.length === 0) throw new Error(t("menu.err.noItems")); // CR-05 同款：空表入口即拒
+        const r = await io.chooseExFace!(title, items, opts);
+        if (r === undefined) throw new Error(ESC_CANCELLED);
+        return r;
+      },
+    } : {}),
     choose: async (title, items) => {
       // CR-05：空列表入口即拒——编号回落 `n >= 1 && n <= 0` 永假 → 无限重问挂死（脚本/CI）；
       // pick 面路径回车/环绕会拿到 0/NaN 假下标 → items[NaN] 伪装成合法选择（picker 入口同判双保险）

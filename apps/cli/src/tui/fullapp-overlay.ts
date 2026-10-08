@@ -14,41 +14,85 @@ import type { FullApp } from "./fullapp.ts";
 import { t } from "../i18n/app.ts";
 
 /** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。
- *  零 app 触达住模块级（lint 纪律）。 */
-/** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。 */
-const buildPickOverlay = (leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys): OverlayFrame => {
+ *  零 app 触达住模块级（lint 纪律）。
+ *  m5-ask-multi（ext 传入 = chooseEx 增强面）：行域 = 过滤项 + 「其他」行恒显 + multi「✓ 确定」尾行
+ *  （D16）——合成行不参与过滤（D8）；multi 行前缀 ☐/☑、标题尾拼「（可多选）」（D14）、输入态在提示行上插
+ *  自行输入行。ext 缺省 = 老 choose 面逐字节原样。 */
+export interface PickOverlayExt {
+	multi?: boolean;
+	custom?: boolean;
+	editing?: boolean;
+	customText?: string;
+	customCommitted?: string;
+	checked?: number[];
+}
+
+/** pick 浮层行域视口几何（渲染与鼠标点击共源——两处口径漂移即点击错行）。
+ *  rowsTotal 含合成行（其他〔+确定〕）；totalLines = 顶框 + 空行 + moreUp? + 内容窗 + moreDown? +
+ *  输入行（editing）+ 提示行 + 底框——与 buildPickOverlay 的 olines 结构一一对齐。 */
+export function pickOverlayGeo(rowsTotal: number, sel: number, editing: boolean): { selI: number; winStart: number; winLen: number; moreUp: boolean; moreDown: boolean; totalLines: number } {
+	const selI = Math.max(0, Math.min(rowsTotal - 1, sel));
+	const winStart = Math.max(0, Math.min(Math.max(0, rowsTotal - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
+	const winLen = Math.min(OVERLAY_PAGE, rowsTotal - winStart);
+	const moreUp = winStart > 0;
+	const moreDown = rowsTotal - winStart - winLen > 0;
+	return { selI, winStart, winLen, moreUp, moreDown, totalLines: 4 + (moreUp ? 1 : 0) + winLen + (moreDown ? 1 : 0) + (editing ? 1 : 0) };
+}
+
+const buildPickOverlay = (leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys, ext?: PickOverlayExt): OverlayFrame => {
 	const ow = leftW;
 	const oInner = ow - 2;
 	const bc = "accent";
 	const boxRow = (l: string) => theme.bg("surface2", theme.fg(bc, "│") + padToWidth(l, oInner) + theme.fg(bc, "│"));
+	const multi = ext?.multi === true;
+	const custom = ext?.custom === true;
 	// 多行项压平单行（2026-09-24 走查实锤前案——/provider「名称\n（URL）」双行项：裸 \n 进 overlay 行，
 	// padToWidth 计宽与合成全乱 → 上下移动大概率残影黑带+||；行模式 choose 同款压平 menu.ts:46）
-	const flatItems = items.map((i) => i.replace(/\s*\n\s*/g, " "));
-	const shown = filter === undefined ? flatItems : flatItems.filter((i) => i.toLowerCase().includes(filter.toLowerCase()));
+	// pairs 携带原始索引（CTU-08——multi 勾选标记按索引判，重复文本项按值回查必错位）
+	const pairs = items.map((raw) => raw.replace(/\s*\n\s*/g, " ")).map((text, i) => ({ t: text, i }));
+	const shown = filter === undefined ? pairs : pairs.filter((x) => x.t.toLowerCase().includes(filter.toLowerCase()));
+	const checked = ext?.checked;
+	const otherAt = custom ? shown.length : -1;
+	const confirmAt = custom && multi ? shown.length + 1 : -1;
+	const rowsTotal = shown.length + (otherAt >= 0 ? 1 : 0) + (confirmAt >= 0 ? 1 : 0);
+	const rowText = (gi: number): string => {
+		if (gi === otherAt) { // 其他行：✎ 前缀（自有——三家 Other 行都无图标）；multi 勾选态 = ☑ ✎ <文本>（D3 单槽）
+			const committed = ext?.customCommitted;
+			const mark = multi ? `${committed !== undefined ? "☑" : "☐"} ` : "";
+			return `${mark}✎ ${committed !== undefined ? truncateToWidth(committed, Math.max(4, oInner - 6)) : t("pick.other.label")}`;
+		}
+		if (gi === confirmAt) return theme.fg("accent", `✓ ${t("pick.multi.confirm")}`); // D16 提交口
+		const label = pickLabel(shown[gi]!.t);
+		return multi ? `${checked !== undefined && checked.includes(shown[gi]!.i) ? "☑" : "☐"} ${label}` : label;
+	};
 	const olines: string[] = [];
 	const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : t("pick.filterTag", { filter })} ${shown.length}/${items.length} `;
 	// CTU-09（2026-09-28 code review）：标题源头截断（choose 标题模块供给可超长——原靠 padToWidth 兜底
-	// 切掉右框角；预算扣除过滤段实测宽）
-	const titleSeg = theme.fg("accent", ` ${truncateToWidth(title, Math.max(4, ow - 7 - visibleWidth(theme.dim(filterSeg))))} `);
+	// 切掉右框角；预算扣除过滤段实测宽）；multi 标题尾拼「（可多选）」（D14——opencode 同款导引）
+	const titleSeg = theme.fg("accent", ` ${truncateToWidth(multi ? `${title}${t("pick.multi.titleSuffix")}` : title, Math.max(4, ow - 7 - visibleWidth(theme.dim(filterSeg))))} `);
 	const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg) - visibleWidth(theme.dim(filterSeg)));
 	olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.dim(filterSeg) + theme.fg(bc, "─╮")));
 	olines.push(boxRow(""));
-	const selI = Math.max(0, Math.min(shown.length - 1, sel));
-	const winStart = Math.max(0, Math.min(Math.max(0, shown.length - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
-	const win = shown.slice(winStart, winStart + OVERLAY_PAGE);
-	if (winStart > 0) olines.push(boxRow(theme.dim(`   ${t("pick.moreUp", { n: winStart })}`)));
-	for (let i = 0; i < win.length; i++) {
+	const { selI, winStart, winLen, moreUp, moreDown } = pickOverlayGeo(rowsTotal, sel, ext?.editing === true);
+	if (moreUp) olines.push(boxRow(theme.dim(`   ${t("pick.moreUp", { n: winStart })}`)));
+	for (let i = 0; i < winLen; i++) {
 		const gi = winStart + i;
 		// 两段式渲染（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；「 ✓」当前值项
 		// 标题青玉 + 说明仍灰。说明拆分三形态见 pickLabel；已带 ANSI 的行（技能/任务列表）原样）
-		const label = pickLabel(win[i]!);
-		const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${label}`;
+		const row = ` ${gi === selI ? theme.fg("accent", "❯") : " "} ${rowText(gi)}`;
 		olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 	}
-	const rest = shown.length - winStart - win.length;
-	if (rest > 0) olines.push(boxRow(theme.dim(`   ${t("pick.moreDown", { n: rest })}`)));
+	if (moreDown) olines.push(boxRow(theme.dim(`   ${t("pick.moreDown", { n: rowsTotal - winStart - winLen })}`)));
 	const extraLabels = extraKeys === undefined ? "" : Object.values(extraKeys).map((k) => k.label).join(" · ");
-	olines.push(boxRow(theme.dim((filter === undefined ? ` ${t("pick.foot.noFilter")}` : ` ${t("pick.foot.filter")}`) + (extraLabels !== "" ? ` · ${extraLabels}` : "") + t("pick.foot.esc"))));
+	// 输入态（m5-ask-multi）：提示行上插自行输入行（草稿直显）；键导引换输入态版——不写「Esc 取消」
+	// 防误导（输入态 Esc 实为返回列表，非取消整窗）
+	if (ext?.editing === true) olines.push(boxRow(` ${t("pick.custom.input")}${ext.customText ?? ""}`));
+	const footCore = ext?.editing === true
+		? t("pick.custom.foot")
+		: multi
+			? t("pick.multi.foot") // 第 2 轮措辞校准：普通项 Enter=勾选、仅确定行 Enter=提交
+			: (filter === undefined ? t("pick.foot.noFilter") : t("pick.foot.filter"));
+	olines.push(boxRow(theme.dim(` ${footCore}${extraLabels !== "" ? ` · ${extraLabels}` : ""}${t("pick.foot.esc")}`)));
 	olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
 	return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 }

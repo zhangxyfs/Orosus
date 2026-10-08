@@ -89,10 +89,13 @@ export function viewportOf(count: number, selected: number, height: number): { s
  *  （moveUp/clearLine/reverse——字节形态不变，测试零改动）；N 按视觉行数（CR-06：CJK 双宽
  *  折行后逻辑行数 ≠ 视觉行数，按 lines.length 少移即错位残影——ansi.ts 头注硬约定）。
  *  列宽经 io.columns 注入；缺省读真终端 process.stdout.columns（每帧现读，resize 即生效），
- *  再缺省 80（非 TTY/哑终端/测试面）——宿主接线不改造也能拿到正确口径。 */
-export function pick(
-  items: string[],
-  io: {
+ *  再缺省 80（非 TTY/哑终端/测试面）——宿主接线不改造也能拿到正确口径。
+ *  m5-ask-multi：第 3 参 opts 传入 = chooseEx 增强面（kimi 键路同款——「✎ 其他」行恒在、multi
+ *  再加「✓ 确定」尾行 D16），返回形状变为 { picked: number[]; custom?: string } | undefined
+ *  （picked = 勾选项原始下标集、custom = 自定义已结算文本〔恰一条〕、undefined = Esc）；
+ *  无 opts = 现状签名 Promise<number | undefined> 一字不动（/sessions 等 33 处消费面零破坏）。
+ *  非 TTY 回落（D13）：单选收序号或非数字文本（=自定义答案）；多选收逗号分隔（序号/文本混排）。 */
+export function pick(items: string[], io: {
     isTTY: boolean;
     height?: number;
     /** 终端列宽（CR-06 视觉行数口径的折行宽度）；缺省 process.stdout.columns ?? 80 */
@@ -100,36 +103,92 @@ export function pick(
     runModal<T>(fn: (readKey: () => Promise<KeyEvent>) => Promise<T>): Promise<T>;
     write(s: string): void;
     numberQuestion(q: string): Promise<string>; // 非 TTY 回落路径（现状编号版）
-  },
-): Promise<number | undefined> {
+  }, opts: { multi?: boolean }): Promise<{ picked: number[]; custom?: string } | undefined>;
+export function pick(items: string[], io: {
+    isTTY: boolean;
+    height?: number;
+    /** 终端列宽（CR-06 视觉行数口径的折行宽度）；缺省 process.stdout.columns ?? 80 */
+    columns?: number;
+    runModal<T>(fn: (readKey: () => Promise<KeyEvent>) => Promise<T>): Promise<T>;
+    write(s: string): void;
+    numberQuestion(q: string): Promise<string>; // 非 TTY 回落路径（现状编号版）
+  }): Promise<number | undefined>;
+export function pick(items: string[], io: {
+    isTTY: boolean;
+    height?: number;
+    /** 终端列宽（CR-06 视觉行数口径的折行宽度）；缺省 process.stdout.columns ?? 80 */
+    columns?: number;
+    runModal<T>(fn: (readKey: () => Promise<KeyEvent>) => Promise<T>): Promise<T>;
+    write(s: string): void;
+    numberQuestion(q: string): Promise<string>; // 非 TTY 回落路径（现状编号版）
+  }, opts?: { multi?: boolean }): Promise<number | undefined | { picked: number[]; custom?: string } | undefined> {
   // CR-05：空表入口即拒（TTY/非 TTY 两路同断）——伪装合法下标与死循环都在身后绝路
   if (items.length === 0) return Promise.reject(new Error(t("menu.err.noItems")));
+  const multi = opts?.multi === true;
   if (!io.isTTY) {
     return (async () => {
       for (;;) {
         const raw = (await io.numberQuestion(t("menu.choose.ask"))).trim();
-        const n = Number(raw);
-        if (Number.isInteger(n) && n >= 1 && n <= items.length) return n - 1;
+        if (opts === undefined) {
+          const n = Number(raw);
+          if (Number.isInteger(n) && n >= 1 && n <= items.length) return n - 1;
+          continue;
+        }
+        if (!multi) {
+          // D13 单选：序号即选项；非数字文本 = 自定义答案（「其他」等价口）；空——再问
+          const n = Number(raw);
+          if (Number.isInteger(n) && n >= 1 && n <= items.length) return { picked: [n - 1] };
+          if (raw !== "") return { picked: [], custom: raw };
+          continue;
+        }
+        // D13 多选：逗号分隔（中英逗号都可）、序号/文本混排；空——再问。多条文本并作单槽
+        // custom（D3——UI 单槽同纪律，文本段以「，」接回）
+        if (raw === "") continue;
+        const picked: number[] = [];
+        const texts: string[] = [];
+        for (const part of raw.split(/[,，]/)) {
+          const p = part.trim();
+          if (p === "") continue;
+          const n = Number(p);
+          if (Number.isInteger(n) && n >= 1 && n <= items.length) picked.push(n - 1);
+          else texts.push(p);
+        }
+        if (picked.length === 0 && texts.length === 0) continue;
+        return { picked: [...new Set(picked)], ...(texts.length > 0 ? { custom: texts.join("，") } : {}) };
       }
     })();
   }
   return io.runModal(async (readKey) => {
     let selected = 0;
-    // 视口仅在注入 height 且项数超窗时激活——否则整列渲染（T1 行为原样）
-    const vpHeight = io.height !== undefined && io.height > 0 && items.length > io.height ? io.height : undefined;
+    // m5-ask-multi 增强面状态（opts 面专用——老面不触达）
+    const checked: number[] = [];
+    let customText = ""; // 输入态草稿（Esc 回列表保留——kimi otherDrafts 同款）
+    let customCommitted: string | undefined; // 多选单槽（D3）
+    let editing = false;
+    let flash = ""; // 行模式「toast」：零勾选确定行 Enter 换帧闪现一拍（帧高不变——重绘算术安全）
+    // 行域 = 项 + 其他（opts 面）+ 确定（multi）——「其他」恒占 items.length、「确定」恒占 +1
+    const rowsTotal = opts === undefined ? items.length : items.length + 1 + (multi ? 1 : 0);
+    // 视口仅在注入 height 且项数超窗时激活——否则整列渲染（T1 行为原样；增强面按行域计）
+    const vpHeight = io.height !== undefined && io.height > 0 && rowsTotal > io.height ? io.height : undefined;
+    const rowLabel = (i: number): string => {
+      if (opts !== undefined && i === items.length) { // 其他行（✎ 自有——三家 Other 行都无图标）
+        const committed = customCommitted;
+        return `${multi ? `${committed !== undefined ? "☑" : "☐"} ` : ""}✎ ${committed ?? t("pick.other.label")}`;
+      }
+      if (multi && i === items.length + 1) return `✓ ${t("pick.multi.confirm")}`; // D16 提交口
+      return multi ? `${checked.includes(i) ? "☑" : "☐"} ${pickLabel(items[i]!)}` : pickLabel(items[i]!);
+    };
     // 底部提示行文案按可用能力动态拼装（设计空白——防 >9 项/视口态提示撒谎）
     const hint = t("pick.line.foot"); // m5-i18n T6：脚注整句走键（分能力动态拼装走查后再拆）
     const frameLines = (): string[] => {
-      const win = vpHeight === undefined ? { start: 0, end: items.length } : viewportOf(items.length, selected, vpHeight);
+      const win = vpHeight === undefined ? { start: 0, end: rowsTotal } : viewportOf(rowsTotal, selected, vpHeight);
       const lines: string[] = [];
-      if (vpHeight !== undefined) lines.push(t("pick.line.range", { n: `${win.start + 1}–${win.end}`, m: items.length }));
+      if (vpHeight !== undefined) lines.push(t("pick.line.range", { n: `${win.start + 1}–${win.end}`, m: rowsTotal }));
       for (let i = win.start; i < win.end; i++) {
-        // 两段式渲染（2026-09-28 用户拍板：标题白/说明灰 + 「 ✓」当前值项青玉——与全屏 choose 浮层同形）；
-        // 多行项由 pickLabel 就地折平（原「先 replace 再判尾标」两步合一）。非 TTY 编号回落不加色（管道保旧 byte 形）
-        const label = pickLabel(items[i]!);
-        lines.push(i === selected ? reverse(label) : label);
+        lines.push(i === selected ? reverse(rowLabel(i)) : rowLabel(i));
       }
-      lines.push(hint);
+      if (editing) lines.push(`${t("pick.custom.input")}${customText}`); // 输入态：提示行上插自行输入行
+      lines.push(flash !== "" ? flash : editing ? t("pick.custom.foot") : multi ? t("pick.line.multiFoot") : hint);
       return lines;
     };
     let drawn = 0; // 上一帧的视觉行数（moveUp 的唯一口径）
@@ -145,15 +204,67 @@ export function pick(
     render();
     for (;;) {
       const k = await readKey();
+      flash = ""; // 闪现一拍即清
+      if (editing) {
+        // 输入态自收（keys.ts readKey——Esc 歧义已在解析器 30ms 窗口解决，此处只收完整事件）
+        if (k.type === "esc") editing = false; // 返回列表非取消整窗（草稿保留）
+        else if (k.type === "enter") {
+          const v = customText.trim();
+          if (v !== "") {
+            customCommitted = v; // 多选单槽覆盖（D3）
+            if (!multi) return { picked: [], custom: v }; // 单选自定义即答（kimi commitOtherInput 同款）
+            editing = false;
+          } // 空输入 Enter 无效（kimi :344——不丢已输内容）
+        } else if (k.type === "char") customText += k.ch;
+        else if (k.type === "paste") customText += k.text.replace(/\s*\n\s*/g, " "); // 粘贴整段并入（换行压平）
+        else if (k.type === "backspace") {
+          const cp = customText.codePointAt(customText.length - 1) ?? 0;
+          customText = customText.slice(0, customText.length - (cp > 0xffff ? 2 : 1)); // CTU-10 同款整对删代理对
+        }
+        render();
+        continue;
+      }
       if (k.type === "esc") throw new Error(ESC_CANCELLED);
-      if (k.type === "enter") return selected;
-      if (k.type === "arrow" && k.dir === "up") selected = (selected - 1 + items.length) % items.length;
-      else if (k.type === "arrow" && k.dir === "down") selected = (selected + 1) % items.length;
-      else if (k.type === "page" && k.dir === "up") selected = Math.max(0, selected - (vpHeight ?? items.length));
-      else if (k.type === "page" && k.dir === "down") selected = Math.min(items.length - 1, selected + (vpHeight ?? items.length));
-      else if (k.type === "char" && items.length <= 9 && /^[1-9]$/.test(k.ch)) {
+      if (k.type === "enter") {
+        if (opts === undefined) return selected;
+        if (selected < items.length) {
+          if (multi) { // 普通项 Enter = 切换勾选（cc SelectMulti「Enter toggles selection」同款）
+            const at = checked.indexOf(selected);
+            if (at >= 0) checked.splice(at, 1); else checked.push(selected);
+            render();
+            continue;
+          }
+          return { picked: [selected] };
+        }
+        if (selected === items.length) { // 其他行
+          if (multi && customCommitted !== undefined) { customCommitted = undefined; render(); continue; } // 对称撤销（kimi :301-307）
+          editing = true;
+          render();
+          continue;
+        }
+        // 确定行（multi）：零勾选 toast 不关窗（D5——行模式无浮动 toast，闪现提示行一拍）
+        if (checked.length === 0 && customCommitted === undefined) flash = t("pick.multi.emptyToast");
+        else return { picked: [...checked], ...(customCommitted !== undefined ? { custom: customCommitted } : {}) };
+        render();
+        continue;
+      }
+      // D7：multi 空格切换（光标不动；仅普通项——合成行无效）；multi 态数字直达让位（防误触）
+      if (multi && k.type === "char" && k.ch === " ") {
+        if (selected < items.length) {
+          const at = checked.indexOf(selected);
+          if (at >= 0) checked.splice(at, 1); else checked.push(selected);
+        }
+        render();
+        continue;
+      }
+      if (k.type === "arrow" && k.dir === "up") selected = (selected - 1 + rowsTotal) % rowsTotal;
+      else if (k.type === "arrow" && k.dir === "down") selected = (selected + 1) % rowsTotal;
+      else if (k.type === "page" && k.dir === "up") selected = Math.max(0, selected - (vpHeight ?? rowsTotal));
+      else if (k.type === "page" && k.dir === "down") selected = Math.min(rowsTotal - 1, selected + (vpHeight ?? rowsTotal));
+      else if (!multi && k.type === "char" && items.length <= 9 && /^[1-9]$/.test(k.ch)) {
+        // 数字直达：单选照旧（含 ex 面）；multi 让位（D7——防误触）
         const n = Number(k.ch);
-        if (n <= items.length) return n - 1;
+        if (n <= items.length) return opts === undefined ? n - 1 : { picked: [n - 1] };
         continue; // 超界数字——无状态变化
       } else continue; // 其余按键忽略——不重绘
       render();

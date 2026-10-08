@@ -269,26 +269,50 @@ export function createDialogs(app: FullApp) {
 	};
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
-	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。 */
-	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys): Promise<number | undefined> => {
+	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。
+	 *  m5-ask-multi：opts 传入 = chooseEx 增强面——resolve 回调按 pu 现值（结算前快照）组装 string[]：
+	 *  普通     n ∈ [0, items.length)   单选普通项即答 → [items[n]]
+	 *  其他行   n === items.length      单选自定义即答 → [customCommitted]（多选不触发此口——多选其他行走输入态/取消勾选，不结算）
+	 *  确定行   n === items.length + 1  多选提交 → checked 升序映射 + customCommitted 恒尾
+	 *  resolve 对外签名零改动（风险节铁律——勿为文本扩类型）。 */
+	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { multi?: boolean }): Promise<number | undefined | string[] | undefined> => {
 		if (app.pendingUi !== undefined) {
 			return new Promise((resolve) => app.uiQueue.push({ run: () => {
 				if (app.stopped) { resolve(undefined); return; }
-				void pickOverlay(title, items, selAt, keys).then(resolve);
+				void pickOverlay(title, items, selAt, keys, opts).then(resolve);
 			} }));
 		}
 		app.state.overlayOpen = false; // 与斜杠菜单互斥
 		return new Promise((resolve) => {
 			// ≥12 项启用输入过滤（F5 九轮① 用户拍板：厂商目录全量直列、列表内输入即筛——includes 口径）
-			app.pendingUi = {
+			// m5-ask-multi：合成行不参与过滤（D8）——「其他」「确定」恒显示，阈值仍按普通项数计
+			const pu: NonNullable<FullApp["pendingUi"]> & { kind: "pick" } = {
 				kind: "pick",
 				title,
 				items,
 				sel: Math.max(0, Math.min(items.length - 1, selAt)), // m4-7 T9：初始选中（详情 Esc 回列表选中行回到该技能）
-				resolve,
+				resolve: opts === undefined
+					? resolve
+					: (n: number | undefined) => {
+						if (n === undefined) { resolve(undefined); return; }
+						if (n === items.length) { resolve([pu.customCommitted ?? ""]); return; }
+						if (n === items.length + 1) {
+							const out = pu.checked.toSorted((a, b) => a - b).map((i) => items[i]!);
+							if (pu.customCommitted !== undefined) out.push(pu.customCommitted); // 「其他」恒尾语义
+							resolve(out);
+							return;
+						}
+						resolve([items[n]!]);
+					},
 				...(items.length >= 12 ? { filter: "" } : {}),
 				...(keys !== undefined ? { extraKeys: keys } : {}),
+				...(opts?.multi === true ? { multi: true } : {}),
+				...(opts !== undefined ? { custom: true } : {}),
+				checked: [],
+				customText: "",
+				editing: false,
 			};
+			app.pendingUi = pu;
 			app.scheduler.requestImmediateRender();
 		});
 	};

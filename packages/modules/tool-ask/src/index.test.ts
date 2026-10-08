@@ -13,12 +13,12 @@ afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: t
 
 // 单元直驱：工厂注入假 ui
 const noLog = { trace() {}, debug() {}, info() {}, warn() {}, error() {} };
-const mkUi = (over: Partial<Pick<CommandUi, "ask" | "choose">> = {}): Pick<CommandUi, "ask" | "choose"> => ({
+const mkUi = (over: Partial<Pick<CommandUi, "ask" | "choose" | "chooseEx">> = {}): Pick<CommandUi, "ask" | "choose" | "chooseEx"> => ({
   ask: async (q) => `回答:${q}`,
   choose: async (_q, items) => items[0]!,
   ...over,
 });
-const execAsk = async (ui: Pick<CommandUi, "ask" | "choose">, input: Record<string, unknown>) => {
+const execAsk = async (ui: Pick<CommandUi, "ask" | "choose" | "chooseEx">, input: Record<string, unknown>) => {
   const tool = askUserTool(ui);
   const plan = await tool.resolveExecution(input);
   return await plan.execute({ callId: "c1", signal: new AbortController().signal, log: noLog });
@@ -70,6 +70,55 @@ describe("tool-ask 单元（M4-2 T8/B16）", () => {
     const other = await execAsk(mkUi({ ask: async () => { throw new Error("readline 崩了"); } }),
       { questions: [{ text: "自由输入" }] });
     expect(other.output).toContain("无交互用户"); // 真异常/无头 → 保留 Reasonix 回退语义
+  });
+
+  // ---- m5-ask-multi：chooseEx 主路 / 降级路 / 题号行式输出 ----
+
+  it("⑤ multiSelect 主路：chooseEx 被调（opts.multi）→ 多值输出多行同题号（题号行式 D10）", async () => {
+    const calls: Array<{ title: string; items: string[]; opts: { multi?: boolean } | undefined }> = [];
+    const r = await execAsk(mkUi({ chooseEx: async (title, items, opts) => { calls.push({ title, items, opts }); return ["lint", "test"]; } }),
+      { questions: [{ text: "发布前检查", options: ["lint", "test", "docs"], multiSelect: true }] });
+    expect(calls).toEqual([{ title: "发布前检查", items: ["lint", "test", "docs"], opts: { multi: true } }]);
+    expect(r.isError).toBe(false);
+    expect(r.output).toBe("1: lint\n1: test"); // 多选多行同题号
+  });
+  it("⑥ 单选走 chooseEx（opts undefined）；自定义文本即答案恰一行", async () => {
+    const optsSeen: Array<{ multi?: boolean } | undefined> = [];
+    const r = await execAsk(mkUi({ chooseEx: async (_t, _i, opts) => { optsSeen.push(opts); return ["自由文本答案"]; } }),
+      { questions: [{ text: "怎么部署", options: ["蓝绿", "灰度"] }] });
+    expect(optsSeen).toEqual([undefined]); // 单选不传 opts（chooseEx 第三参缺省）
+    expect(r.output).toBe("1: 自由文本答案");
+  });
+  it("⑦ 题号行式（第 3 轮格式钉）：单选行同样带 `N: ` 前缀——多问按序编号、optionless 照旧 ask", async () => {
+    const r = await execAsk(mkUi({ chooseEx: async () => ["生产（prod）"], ask: async () => "发布前全量跑一遍" }),
+      { questions: [
+        { text: "环境", options: ["生产（prod）", "测试"] },
+        { text: "备注" },
+      ] });
+    expect(r.output).toBe("1: 生产（prod）\n2: 发布前全量跑一遍");
+  });
+  it("⑧ 老宿主降级（无 chooseEx）单选：退老 choose、输出仍带题号（纯损耗可接受——D12）", async () => {
+    const chose: string[] = [];
+    const r = await execAsk(mkUi({ choose: async (_q, items) => { chose.push(items.join("|")); return items[1]!; } }),
+      { questions: [{ text: "选", options: ["A", "B"] }] });
+    expect(chose).toEqual(["A|B"]);
+    expect(r.output).toBe("1: B");
+  });
+  it("⑨ 老宿主降级（无 chooseEx）多选：退 ask——提示含选项与「可多选，逗号分隔」", async () => {
+    const asked: string[] = [];
+    const r = await execAsk(mkUi({ ask: async (q) => { asked.push(q); return "A,B"; } }),
+      { questions: [{ text: "发布前检查", options: ["lint", "test"], multiSelect: true }] });
+    expect(asked[0]).toContain("发布前检查");
+    expect(asked[0]).toContain("lint/test");
+    expect(asked[0]).toContain("可多选，逗号分隔");
+    expect(r.output).toBe("1: A,B"); // 降级答案原样单行带回
+  });
+  it("⑩ chooseEx 的 Esc（「已取消（Esc）」）→ MB-08 取消分支原样（文案一字不动）", async () => {
+    const r = await execAsk(mkUi({ chooseEx: async () => { throw new Error("已取消（Esc）"); } }),
+      { questions: [{ text: "选", options: ["A", "B"], multiSelect: true }] });
+    expect(r.isError).toBe(true);
+    expect(r.output).toContain("用户取消了本次提问（Esc）");
+    expect(r.output).toContain("停下等用户");
   });
 });
 

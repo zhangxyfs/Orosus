@@ -245,10 +245,10 @@ const lv = createStreamView({
 // 键盘菜单引擎（TUI 批 T1/T2）：TTY 下 choose 与 /sessions 选号走 picker（上下键/Esc/数字直达/
 // 滚动视口）——模态管理器接管期间 readline 行编辑停摆（keys.ts 文件头注）；非 TTY 不注入，
 // 编号读序号现状回落。视口高度 = 设计空白公式 max(3, min(终端行数−8, 15))（v1.8 B4 修正版）
-const terminalMenuIo = () => {
-  const modal = createModal({ input: process.stdin, isTTY: true, write: (s) => lv.write(s) });
+const terminalMenuIo = (tty = true) => {
+  const modal = createModal({ input: process.stdin, isTTY: tty, write: (s) => lv.write(s) });
   return {
-    isTTY: true,
+    isTTY: tty,
     height: Math.max(3, Math.min((process.stdout.rows ?? 24) - 8, 15)),
     runModal: <T,>(fn: (rk: () => Promise<KeyEvent>) => Promise<T>): Promise<T> => modal.run(fn),
     write: (s: string): void => lv.write(s),
@@ -274,12 +274,28 @@ const pickFace =
       }
     : {};
 
+// m5-ask-multi（T4）：chooseEx 增强挑选面装配——三路：全屏 pickOverlay opts（合成索引快照组装
+// string[]）/ 行模式 pick(opts)（键路同 kimi 语义表，「其他」恒尾在此组装）/ 非 TTY pick 的 D13
+// 编号/文本回落（chooseExFace 不随 pickFace 的 TTY 门——管道喂「3」/「1,3」/自由文本照常工作）。
+// undefined = Esc（createReadlineUi chooseEx 侧统一转「已取消（Esc）」，MB-08 穿透不动）。
+const chooseExFace = async (title: string, items: string[], opts?: { multi?: boolean }): Promise<string[] | undefined> => {
+  if (activeApp !== undefined) return await activeApp.pickOverlay(title, items, 0, undefined, opts ?? {});
+  lv.write(`${t("main.pick.header", { title: title })}
+`);
+  const r = await pick(items, terminalMenuIo(process.stdin.isTTY === true), opts ?? {});
+  if (r === undefined) return undefined;
+  const out = r.picked.map((i) => items[i]!);
+  if (r.custom !== undefined) out.push(r.custom); // 「其他」恒尾语义（T3 组装纪律）
+  return out;
+};
+
 // m5 T2：viewText 上契约（全屏走 FullApp 弹窗——新几何/自定义键/排队；行模式落 console 多行）。
 // 装配件独立在 uiface.ts（main.ts 是顶层脚本 import 即跑——装配层测试进不去）。
 const commandUi = createCliUi({
   question,
   secretQuestion,
   ...pickFace,
+  chooseExFace,
   notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
   activeApp: () => activeApp,
   // m5 T4：贴图 = 注册表登记 + chip token 进输入框光标位（Alt+V 同款链路）；路径校验不过走 toast

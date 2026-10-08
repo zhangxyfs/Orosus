@@ -8,6 +8,49 @@ import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
 import { t } from "../i18n/app.ts";
 
+/** m5-ask-multi：pick 态（含增强字段——fullapp.ts pendingUi 联合的 pick 分支）。 */
+export type PickUi = Extract<FullApp["pendingUi"], { kind: "pick" }>;
+
+/** 勾选切换（原地去留；提交前包装层另按升序映射）。 */
+export function toggleChecked(pu: PickUi, i: number): void {
+	const k = pu.checked.indexOf(i);
+	if (k >= 0) pu.checked.splice(k, 1);
+	else pu.checked.push(i);
+}
+
+/** Enter 语义的行激活（键路 Enter 与鼠标点击行共源——两处口径漂移即同窗两套行为）。
+ *  rowPos = 行域绝对位（过滤项 + 其他〔+确定〕）；越界安全返。
+ *  - 普通行：单选即答 resolve(原始索引)；multi 切换勾选（cc SelectMulti「Enter toggles selection」）
+ *  - 其他行：进输入态；multi 已勾选 = 取消勾选（kimi :301-307 对称撤销口）
+ *  - 确定行（multi）：零勾选 toast 不关窗（D5）；否则 resolve(items.length + 1) 提交勾选集（D16）
+ *  - 老 choose 面（custom 未置位）：与旧实现行为一致（普通项 Enter 即答）——行域无合成行 */
+export function pickActivateRow(app: FullApp, pu: PickUi, rowPos: number, filtered: Array<{ t: string; i: number }>): void {
+	const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
+	if (rowPos < 0 || rowPos >= rowsTotal) return;
+	if (rowPos < filtered.length) {
+		const orig = filtered[rowPos]!.i; // 按携带索引结算（CTU-08——重复项不回查错位）
+		if (pu.multi === true) { toggleChecked(pu, orig); return; }
+		app.pendingUi = undefined;
+		pu.resolve(orig);
+		app.dialogs.promoteUi(); // 结算即提升暂存队首（批③②）
+		return;
+	}
+	if (pu.custom !== true) return; // 老面行域无合成行——不可达防御
+	if (rowPos === filtered.length) { // 其他行
+		if (pu.multi === true && pu.customCommitted !== undefined) { pu.customCommitted = undefined; return; }
+		pu.editing = true;
+		return;
+	}
+	// 确定行（multi）
+	if (pu.checked.length === 0 && pu.customCommitted === undefined) {
+		app.showToast(t("pick.multi.emptyToast")); // D5：零勾选 toast 不关窗——空答案集给模型是坏信号
+		return;
+	}
+	app.pendingUi = undefined;
+	pu.resolve(pu.items.length + 1); // 确定行合成索引（风险节——勾选集经包装层组装，resolve 签名零改动）
+	app.dialogs.promoteUi();
+}
+
 export function createKeys(app: FullApp) {
 	/** Esc 关窗记账（2026-10-04 溢出修，用户实机事故：busy 期多层弹窗连按 Esc 关窗，尾部两拍落主窗
 	 *  拼成「双击停止」误停生成）：①清双击时戳——Tab 收焦点分支同款先例，无关 Esc 序列不得拼进停止
@@ -329,6 +372,34 @@ export function createKeys(app: FullApp) {
 				return;
 			}
 			if (pu.kind === "pick") {
+				// m5-ask-multi 输入态自收（kimi otherDrafts 族）：挑选窗内自绘自收，不碰 app.state.input
+				// （CTU-07 草稿快照语义不卷入）；Esc 回列表（草稿/勾选/过滤词保留）、Enter 非空结算、
+				// 空输入无效（kimi :344——不丢已输内容）
+				if (pu.editing === true) {
+					if (key === "escape") {
+						pu.editing = false; // 返回列表非取消整窗——键导引不写「Esc 取消」即为此
+					} else if (key === "enter") {
+						const v = pu.customText.trim();
+						if (v !== "") {
+							pu.customCommitted = v; // 多选单槽覆盖（D3）：旧自定义随赋值消失、新文本入集
+							if (pu.multi !== true) { // 单选自定义即答（kimi commitOtherInput 同款）
+								app.pendingUi = undefined;
+								pu.resolve(pu.items.length); // 「其他」行合成索引（风险节——文本不经 resolve 携带）
+								app.dialogs.promoteUi();
+								return;
+							}
+							pu.editing = false; // 多选：回列表态，行显 ☑ ✎ <文本>
+						}
+					} else if (key.length === 1 && isPrintable(key)) {
+						pu.customText += key;
+					} else if (key === "backspace") {
+						// CTU-10 同款：退格整对删代理对（非 BMP 字符不删一半残留孤立代理串）
+						const cp = pu.customText.codePointAt(pu.customText.length - 1) ?? 0;
+						pu.customText = pu.customText.slice(0, pu.customText.length - (cp > 0xffff ? 2 : 1));
+					}
+					app.scheduler.requestImmediateRender();
+					return;
+				}
 				// T17 宿主自定义键先行（escape 恒内建关窗）
 				const pickKey = key !== "escape" && key !== "enter" ? pu.extraKeys?.[key] : undefined;
 				if (pickKey !== undefined && pu.filter === undefined) { // 过滤态打字优先——自定义键只在无过滤时生效
@@ -348,7 +419,17 @@ export function createKeys(app: FullApp) {
 				// （重复文本项会错拿首个同值项；choose 是模块契约面，契约未禁止重复项）
 				const pairs = pu.items.map((t, i) => ({ t, i }));
 				const filtered = pu.filter === undefined ? pairs : pairs.filter((x) => x.t.toLowerCase().includes(pu.filter!.toLowerCase()));
-				if (pu.filter !== undefined && key.length === 1 && isPrintable(key)) { // 单字符才入过滤——键名串（backspace 等）不得混入
+				// m5-ask-multi 行域（D8/D16）：过滤项 + 「其他」行恒显（chooseEx 面）+ multi「确定」行——
+				// 合成行不参与过滤重排（「其他」恒占 items.length、「确定」恒占 items.length + 1）
+				const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
+				// D7：multi 空格切换勾选、光标不动（kimi 同款；仅普通项——其他/确定行无效）。空格是主操作键，
+				// 过滤态同样切换不进过滤词（multi 过滤子串不含空格——防主键被过滤态吞掉）
+				if (pu.multi === true && key === " ") {
+					if (pu.sel < filtered.length) toggleChecked(pu, filtered[pu.sel]!.i);
+					app.scheduler.requestImmediateRender();
+					return;
+				}
+				if (pu.filter !== undefined && key.length === 1 && isPrintable(key)) { // 单字符才入过滤——键名串（backspace 等）不得混入；multi 空格已在上方提前切换返回，此处余下字母照旧过滤
 					pu.filter += key;
 					pu.sel = 0;
 					app.scheduler.requestImmediateRender();
@@ -360,15 +441,12 @@ export function createKeys(app: FullApp) {
 					app.scheduler.requestImmediateRender();
 					return;
 				}
-				if (key === "up" && filtered.length > 0) pu.sel = (pu.sel - 1 + filtered.length) % filtered.length;
-				else if (key === "down" && filtered.length > 0) pu.sel = (pu.sel + 1) % filtered.length;
-				else if (key === "pageUp" && filtered.length > 0) pu.sel = Math.max(0, pu.sel - OVERLAY_PAGE);
-				else if (key === "pageDown" && filtered.length > 0) pu.sel = Math.min(filtered.length - 1, pu.sel + OVERLAY_PAGE);
-				else if (key === "enter" && filtered.length > 0) {
-					app.pendingUi = undefined;
-					pu.resolve(filtered[pu.sel]!.i); // 按携带索引结算（CTU-08——重复项不回查错位）
-					app.dialogs.promoteUi(); // 结算即提升暂存队首（批③②）
-				} else if (key === "escape") {
+				if (key === "up" && rowsTotal > 0) pu.sel = (pu.sel - 1 + rowsTotal) % rowsTotal;
+				else if (key === "down" && rowsTotal > 0) pu.sel = (pu.sel + 1) % rowsTotal;
+				else if (key === "pageUp" && rowsTotal > 0) pu.sel = Math.max(0, pu.sel - OVERLAY_PAGE);
+				else if (key === "pageDown" && rowsTotal > 0) pu.sel = Math.min(rowsTotal - 1, pu.sel + OVERLAY_PAGE);
+				else if (key === "enter") pickActivateRow(app, pu, pu.sel, filtered);
+				else if (key === "escape") {
 					escCloseWin();
 					app.pendingUi = undefined;
 					pu.resolve(undefined);

@@ -54,6 +54,31 @@ describe("readline 版 CommandUi（menu 组件，D35/D38 语言约定注记）",
     expect(await ui.askSecret("粘贴 KEY")).toBe("sk-x");
     expect(secrets).toEqual(["粘贴 KEY"]);
   });
+  // m5-ask-multi：chooseEx 装配（D11 可选方法）——chooseExFace 面在则 chooseEx 在（组装/Esc 映射/CR-05 三钉）
+  describe("chooseEx（m5-ask-multi 装配）", () => {
+    it("① chooseExFace 面返回 string[] 原样透传（组装归宿主侧——menu 只做 Esc 映射与空表拒绝）", async () => {
+      const seen: Array<{ title: string; items: string[]; opts: { multi?: boolean } | undefined }> = [];
+      const ui = createReadlineUi({
+        question: async () => "",
+        secretQuestion: async () => "",
+        chooseExFace: async (title, items, opts) => { seen.push({ title, items, opts }); return ["乙", "自定义"]; },
+      });
+      expect(await ui.chooseEx?.("发布前检查", ["甲", "乙"], { multi: true })).toEqual(["乙", "自定义"]);
+      expect(seen).toEqual([{ title: "发布前检查", items: ["甲", "乙"], opts: { multi: true } }]);
+    });
+    it("② chooseExFace undefined（Esc）→ 抛「已取消（Esc）」（机制③统一文案，MB-08 穿透面）", async () => {
+      const ui = createReadlineUi({ question: async () => "", secretQuestion: async () => "", chooseExFace: async () => undefined });
+      await expect(ui.chooseEx?.("选", ["甲", "乙"], { multi: true })).rejects.toThrow("已取消（Esc）");
+    });
+    it("③ 空列表入口即拒（CR-05 同款）+ 无 chooseExFace 面时 chooseEx 缺省不存在（老宿主判空降级面）", async () => {
+      let asked = 0;
+      const ui = createReadlineUi({ question: async () => { asked++; return ""; }, secretQuestion: async () => "", chooseExFace: async () => [] });
+      await expect(ui.chooseEx?.("空", [], { multi: true })).rejects.toThrow("无可选项");
+      expect(asked).toBe(0);
+      const old = createReadlineUi({ question: async () => "", secretQuestion: async () => "" });
+      expect(old.chooseEx).toBeUndefined(); // D12：老宿主读出来是 undefined——tool-ask 判空降级
+    });
+  });
 });
 
 describe("可静默输出代理（密钥输入无回显——逐键 * 在真实 Windows 终端层碎成孤星，走查改盲输）", () => {
