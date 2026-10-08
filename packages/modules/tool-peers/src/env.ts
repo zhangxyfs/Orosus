@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { orosusHome } from "@orosus/contracts/home";
 import { parseClaims, type Claim } from "./derive.ts";
+import { memoryBucketKey } from "./roots.ts";
 
 export interface SelfInfo { sid: string; bucketDir: string; sessionDir: string; cwd: string; transcriptPath: string }
 export interface PeersConfig { workspaceMemory: boolean; sessionPeers: boolean; injectIndex: boolean; windowMinutes: number; leaseMinutes: number; sessionsRoot?: string | undefined; memoryBase?: string | undefined }
@@ -41,7 +42,9 @@ export class PeersEnv {
     return false;
   }
   memoryDir(): string | undefined {
-    return this.selfValue === undefined ? undefined : join(this.memoryBase, basename(this.selfValue.bucketDir), "memory");
+    // T7（m5-peers-import-fix）：记忆桶键改 memoryBucketKey(cwd)（git 根、非 git 回退裸键）——
+    // 会话里写/读的记忆与导入的记忆同一个桶（坑 2：子目录启动不再分家）。会话桶（bucketDir）不动（D46）。
+    return this.selfValue === undefined ? undefined : join(this.memoryBase, memoryBucketKey(this.selfValue.cwd), "memory");
   }
   siblingSessionDirs(): { sid: string; dir: string }[] {
     if (this.selfValue === undefined) return [];

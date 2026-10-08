@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import mod, { configSchema } from "./index.ts";
+import { memoryBucketKey } from "./roots.ts";
 
 describe("tool-peers module", () => {
   it("registers with expected identity", () => {
@@ -78,7 +79,7 @@ describe("T6 门控矩阵与索引段", () => {
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
   const fireStart = (h: Harness): void => { (h.listeners.get("session/start") as (p: unknown) => void)(bootPayload); };
-  const memoryDir = (): string => join(memBase, "D--proj-x", "memory");
+  const memoryDir = (): string => join(memBase, memoryBucketKey(bootPayload.cwd), "memory");   // T7：桶键 = memoryBucketKey(cwd)
 
   it("双关 = activate 零贡献（零工具零段零 token；浏览命令不受门控——D17）", () => {
     const h = activateWith(ALL_OFF);
@@ -125,11 +126,13 @@ describe("T6 门控矩阵与索引段", () => {
   });
 
   it("D26 中途启用补捞：activate 时按 session.id 扫桶定位（session/start 已过不重放）", () => {
-    // sessionsRoot 下 s1 已有主日志（beforeEach 建）——activate 时无事件、靠 bootById 补
+    // sessionsRoot 下 s1 已有主日志（beforeEach 建）——activate 时无事件、靠 bootById 补；
+    // bootById 的 cwd 兜底 = process.cwd()（env.ts:37 同式）——T7 起记忆桶键按它现算
     const h = activateWith({ ...FULL_ON, memoryBase: memBase, sessionsRoot }, { id: "s1" });
     expect(h.listeners.has("session/start")).toBe(true);   // 后续新会话仍走事件
-    mkdirSync(memoryDir(), { recursive: true });
-    writeFileSync(join(memoryDir(), "MEMORY.md"), "# Memory Index\n\n- [T](f.md) — s\n");
+    const d26Dir = join(memBase, memoryBucketKey(process.cwd()), "memory");
+    mkdirSync(d26Dir, { recursive: true });
+    writeFileSync(join(d26Dir, "MEMORY.md"), "# Memory Index\n\n- [T](f.md) — s\n");
     expect(h.sections[0]!.text).toContain("- [T](f.md) — s");   // 段非空 = env.self 已 boot
   });
 
