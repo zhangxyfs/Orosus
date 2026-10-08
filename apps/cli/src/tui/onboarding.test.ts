@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { OnboardingSession, type OnboardingDeps, type OnboardingProvider } from "./onboarding.ts";
 import { stripAnsi, visibleWidth } from "./width.ts";
+import * as theme from "../theme.ts";
 
 const PROVIDERS: OnboardingProvider[] = [
   { id: "openai", name: "OpenAI", envKey: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", type: "openai" },
@@ -712,7 +713,7 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     const text = stripAnsi(s.render(120, 30).lines.join("\n"));
     expect(text).toContain("将导入到：D:\\develop\\Orosus");
   });
-  it("⑧ 模式行（G11/D11）：默认全部项目，Space/回车切换 ✓ 移位；scope 透传 importMemory", async () => {
+  it("⑧ 模式行（G11/D11）：默认全部项目，Space/回车切换 ✓ 移位；scope 透传 importMemory；着色=标签白+当前值连勾绿（2026-10-08 用户走查修）", async () => {
     let gotMode = "";
     const s = await toP5T8({ importMemory: async (_ids, _o, mode) => { gotMode = mode ?? ""; return { imported: 0, skipped: 0, merged: 0 }; } });
     expect(s.stateRef.pm.scope).toBe("all");   // D11：引导默认「全部项目」（新用户搬家心智）
@@ -720,12 +721,18 @@ describe("首次使用引导弹窗 · p5 导入记忆页（m5-peers T6d）", () 
     expect(text).toContain("导入范围");
     expect(text).toContain("全部项目（各归各桶）✓");
     expect(text).not.toContain("仅当前项目 ✓");
+    const raw = s.render(120, 30).lines.join("\n");
+    expect(raw).toContain(theme.fg("accent", "全部项目（各归各桶）✓"));   // 当前值连勾绿
+    expect(raw).toContain(theme.fg("fg", "导入范围 ——"));                 // 标签白（含破折号段）
     s.handleKey("down"); s.handleKey("down");   // sel=2 = 模式行（源行 2 条）
     s.handleKey("enter");   // G10 同款回车切换
     expect(s.stateRef.pm.scope).toBe("current");
     text = stripAnsi(s.render(120, 30).lines.join("\n"));
     expect(text).toContain("仅当前项目 ✓");
     expect(text).not.toContain("各归各桶）✓");
+    const raw2 = s.render(120, 30).lines.join("\n");
+    expect(raw2).toContain(theme.fg("accent", "仅当前项目 ✓"));
+    expect(raw2).toContain(theme.fg("fg", "全部项目（各归各桶）"));       // 非当前回白
     s.handleKey("up"); s.handleKey("up");   // 回 sel=0 Claude Code
     s.handleKey(" ");
     s.handleKey("ctrl+n");

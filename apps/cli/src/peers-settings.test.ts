@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { Harness } from "@orosus/core";
 import { memoryImportResultText, mirrorImportResultText, readPeersConfig, runMemoryImportChoose, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
+import * as theme from "./theme.ts";
 import { settingsItems } from "./settings-ui.ts";
 
 let dir = "";
@@ -112,7 +113,7 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(r2).toEqual({ ids: ["claude-code"], organize: false, mode: "all" });
   });
 
-  it("③g T6 模式行（G10/D11）：默认 current，回车切换 ✓ 移位到全部项目；结果带 mode（当次会话态）", async () => {
+  it("③g T6 模式行（G10/D11）：默认 current，回车切换 ✓ 移位到全部项目；结果带 mode（当次会话态）；着色=标签白+当前值连勾绿（2026-10-08 用户走查修）", async () => {
     const deps: MemoryImportDeps = {
       detect: () => [{ id: "claude-code", label: "Claude Code", count: 5, newCount: 2 }],
       run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
@@ -125,9 +126,12 @@ describe("peers 设置面（m5-peers T6b）", () => {
       return items[call === 1 ? 2 : 0]!;   // 首轮选模式行（回车切换），次轮选源行执行
     }, deps);
     expect(seen[0]![2]).toContain("仅当前项目 ✓");          // 默认 current（D11：settings 增量补给心智）
-    expect(seen[0]![2]).not.toContain("（各归各桶）✓");
+    expect(seen[0]![2]).toContain(theme.fg("accent", "仅当前项目 ✓"));   // 当前值连勾 = accent 绿
+    expect(seen[0]![2]).toContain(theme.fg("fg", "导入范围 —— "));       // 标签恒白
+    expect(seen[0]![2]).not.toContain(theme.fg("accent", "全部项目（各归各桶）"));
     expect(seen[1]![2]).not.toContain("仅当前项目 ✓");
-    expect(seen[1]![2]).toContain("全部项目（各归各桶）✓");   // ✓ 移位（同「用模型整理」开关行交互）
+    expect(seen[1]![2]).toContain(theme.fg("accent", "全部项目（各归各桶）✓"));   // ✓ 移位且同绿
+    expect(seen[1]![2]).toContain(theme.fg("fg", "仅当前项目"));   // 非当前选项回白
     expect(r).toEqual({ ids: ["claude-code"], organize: false, mode: "all" });
   });
 

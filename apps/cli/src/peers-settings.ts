@@ -1,6 +1,7 @@
 import { join, dirname } from "node:path";
 import { loadConfig, writeSectionKey, sectionPath } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
+import * as theme from "./theme.ts";
 
 /**
  * 会话互相感知设置面（m5-peers T6b，v2 走查定案）：/settings →「记忆」动态项（tool-peers 启用时出现）
@@ -87,8 +88,12 @@ export async function runMemoryImportChoose(
   if (sources.length === 0) return "empty";
   const totalNew = sources.reduce((n, s) => n + (s.newCount ?? s.count), 0);
   const organizeRow = (on: boolean): string => `用模型整理 —— ${on ? "开 ✓" : "关"}（逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理）`;
-  const scopeRow = (mode: ImportScope): string =>
-    mode === "current" ? "导入范围 —— 仅当前项目 ✓ / 全部项目（各归各桶）" : "导入范围 —— 仅当前项目 / 全部项目（各归各桶）✓";
+  // G10 模式行（2026-10-08 用户走查修）：标签「导入范围」恒白、**当前值（连 ✓）accent 绿**、另一选项白
+  const scopeRow = (mode: ImportScope): string => {
+    const cur = mode === "current" ? theme.fg("accent", "仅当前项目 ✓") : theme.fg("fg", "仅当前项目");
+    const all = mode === "all" ? theme.fg("accent", "全部项目（各归各桶）✓") : theme.fg("fg", "全部项目（各归各桶）");
+    return `${theme.fg("fg", "导入范围 —— ")}${cur}${theme.fg("fg", " / ")}${all}`;
+  };
   const globalNote = "（全局源——不分项目，含所有项目的笔记）";
   const sourceRow = (s: MemoryImportSourceInfo, mode: ImportScope): string => {
     // D7：镜像模式不拦也不改显示——（新 M）按当前项目桶差集计、仅供参考

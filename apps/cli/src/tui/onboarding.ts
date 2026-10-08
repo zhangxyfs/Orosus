@@ -892,9 +892,18 @@ export class OnboardingSession {
       out.push(truncateToWidth(i === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + row) : ` ${row}`, inner));
     }
     out.push("");
-    // G11 模式行：scopeRow 三语值都以 " / " 分隔两选项（键契约——✓ 标当前值由代码拼入，无空格贴选项尾）
-    const [scopeCur, scopeAll] = t("onboard.pm.scopeRow").split(" / ");
-    const scopeText = p.scope === "current" ? `${scopeCur} ✓ / ${scopeAll}` : `${scopeCur} / ${scopeAll}✓`;
+    // G11 模式行（2026-10-08 用户走查修）：标签「导入范围」恒白、**当前值（连 ✓）accent 绿**、另一选项白。
+    // 键契约：三语值都以「——/—」分隔标签与选项体、" / " 分隔两选项；不合形回退旧整行形态（✓ 贴尾）
+    const scopeMatch = t("onboard.pm.scopeRow").match(/^(.*?)\s*(—+)\s*(.*)$/);
+    const scopeOpts = scopeMatch?.[3] !== undefined ? scopeMatch[3].split(" / ") : [];
+    let scopeText: string;
+    if (scopeMatch !== null && scopeOpts.length === 2) {
+      const curSeg = p.scope === "current" ? theme.fg("accent", `${scopeOpts[0]} ✓`) : theme.fg("fg", scopeOpts[0]!);
+      const allSeg = p.scope === "all" ? theme.fg("accent", `${scopeOpts[1]}✓`) : theme.fg("fg", scopeOpts[1]!);
+      scopeText = `${theme.fg("fg", `${scopeMatch[1]} ${scopeMatch[2]}`)} ${curSeg}${theme.fg("fg", " / ")}${allSeg}`;
+    } else {
+      scopeText = p.scope === "current" ? `${t("onboard.pm.scopeRow").replace(" / ", " ✓ / ")}` : `${t("onboard.pm.scopeRow")}✓`;
+    }
     out.push(truncateToWidth(p.sources.length === p.sel ? theme.bg("accentSoft", theme.fg("accent", "▌") + scopeText) : ` ${scopeText}`, inner));
     const optMark = p.organize ? theme.fg("accent", "[✓]") : theme.dim("[ ]");
     const optRow = `${optMark} ${theme.fg("fg", t("onboard.pm.organizeRow"))}${theme.dim(t("onboard.pm.organizeDefaultOff"))}`;
