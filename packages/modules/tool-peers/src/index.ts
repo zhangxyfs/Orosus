@@ -11,6 +11,9 @@ import { createMemoryTools, createPeersTools } from "./tools.ts";
 export { detectSources, filterNewNotes, importNotes, importNotesProgressive, organizeNote, organizeNotes, readSourceNotes } from "./importers.ts";
 export type { SourceNote, MemorySource, LlmStream, LlmStreamReq, OrganizeProgress } from "./importers.ts";
 export { rebuildIndex, writeNoteFile } from "./memstore.ts";   // 走查九：批量落盘路径（每条一文件+索引末次重建）
+// T1 桶键件（m5-peers-import-fix）：宿主导入目的地与模块 env.memoryDir 共用同一把键——findGitRoot
+// 自 main.ts 下沉（apps 依赖 modules 合法、findGitRoot 反向依赖无门）；encodeCwdLike/记忆桶键见 roots.ts
+export { encodeCwdLike, findGitRoot, memoryBucketKey } from "./roots.ts";
 
 /** 模块 config schema（validate.ts:42-46 硬规则——未声明键被 strip，settings 写的开关必须在此声明）。 */
 export const configSchema = z.object({

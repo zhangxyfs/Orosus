@@ -44,7 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, importNotesProgressive, readSourceNotes } from "@orosus/tool-peers";
+import { detectSources, findGitRoot, importNotesProgressive, readSourceNotes } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -455,16 +455,8 @@ const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; 
 		reasonix: join(home, ".reasonix"),
 	};
 };
-/** m5-peers git root 探测（T6d：向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。 */
-const findGitRoot = (cwd: string): string => {
-	let dir = cwd;
-	for (;;) {
-		if (existsSync(join(dir, ".git"))) return dir;
-		const parent = dirname(dir);
-		if (parent === dir) return cwd;   // 到根没有 .git → 用 cwd（探测退化为本目录）
-		dir = parent;
-	}
-};
+/** m5-peers git root 探测（T6d：向上找 .git，找不到回退 cwd——cc/qwen 按项目记忆的定位基准）。
+ *  m5-peers-import-fix T1：本体下沉包层 tool-peers/roots.ts（记忆桶键两消费方共用），此处改引。 */
 /** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）。
  *  逐条单通道本体在包层 importNotesProgressive（走查十一：机械档旧形整段同步+onProgress 没接 =
  *  全程零反应直跳完成态——下沉包层为可测）；目标 = 本项目记忆桶（与 env.memoryDir 同桶）。 */
