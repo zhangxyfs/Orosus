@@ -29,9 +29,18 @@ const reasonixSlug = (p: string): string => {
 };
 
 /** G7：Reasonix 实机 sha1 键——原始大小写 cwd（与 zcode 键的小写化预处理不同，各自对齐）。 */
-const sha1hex16 = (cwd: string): string => createHash("sha1").update(cwd).digest("hex").slice(0, 16);
+export const sha1hex16 = (cwd: string): string => createHash("sha1").update(cwd).digest("hex").slice(0, 16);
 
-const countNotes = (dir: string | undefined): number => {
+/** ZCode 桶名键（detectSources 与 mirror.ts 镜像匹配共源——抽公共件防两处漂移）：
+ *  `slugify(basename)-<sha256(小写 cwd)[:16]>`（小写化仅 win，2026-10-06 本机 sha256 实测形态）。 */
+export function zcodeBucketKey(cwd: string): string {
+  const cwdKey = process.platform === "win32" ? cwd.toLowerCase() : cwd;
+  const hash16 = createHash("sha256").update(cwdKey).digest("hex").slice(0, 16);
+  return `${slugify(cwd.split(/[\\/]/).pop() ?? "project")}-${hash16}`;
+}
+
+/** 计数口径（mirror.ts 镜像扫描同款：跳 MEMORY.md 索引、只数 .md）。 */
+export const countNotes = (dir: string | undefined): number => {
   if (dir === undefined || !existsSync(dir)) return 0;
   try { return readdirSync(dir).filter(n => n.endsWith(".md") && n !== "MEMORY.md").length; } catch { return 0; }
 };
@@ -48,12 +57,9 @@ export function detectSources(
   destDir?: string,
 ): MemorySource[] {
   const root = sanitizeRoot(gitRoot);
-  const cwdKey = process.platform === "win32" ? cwd.toLowerCase() : cwd;   // ZCode hash 实测形态（2026-10-06 本机 sha256 验证）
-  const hash16 = createHash("sha256").update(cwdKey).digest("hex").slice(0, 16);
-  const zcodeSlug = `${slugify(cwd.split(/[\\/]/).pop() ?? "project")}-${hash16}`;
   const defs: { id: MemorySource["id"]; label: string; dir: string | undefined; global?: boolean }[] = [
     { id: "claude-code", label: "Claude Code", dir: dirIf(join(homes.claude ?? "", "projects", root, "memory")) },
-    { id: "zcode", label: "ZCode", dir: dirIf(join(homes.zcode ?? "", "cli", "memories", "projects", zcodeSlug, "memory")) },
+    { id: "zcode", label: "ZCode", dir: dirIf(join(homes.zcode ?? "", "cli", "memories", "projects", zcodeBucketKey(cwd), "memory")) },
     // D8：qwen 目录键全小写（实机形态）——小写候选优先、原样次之（mac/Linux 不靠大小写不敏感碰运气）
     { id: "qwen", label: "qwen-code", dir: dirIf(join(homes.qwen ?? "", "projects", root.toLowerCase(), "memory")) ?? dirIf(join(homes.qwen ?? "", "projects", root, "memory")) },
     { id: "codex", label: "codex", dir: dirIf(join(homes.codex ?? "", "memories")), global: true },

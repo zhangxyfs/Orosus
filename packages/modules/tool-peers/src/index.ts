@@ -14,6 +14,10 @@ export { rebuildIndex, writeNoteFile } from "./memstore.ts";   // 走查九：�
 // T1 桶键件（m5-peers-import-fix）：宿主导入目的地与模块 env.memoryDir 共用同一把键——findGitRoot
 // 自 main.ts 下沉（apps 依赖 modules 合法、findGitRoot 反向依赖无门）；encodeCwdLike/记忆桶键见 roots.ts
 export { encodeCwdLike, findGitRoot, memoryBucketKey } from "./roots.ts";
+// T3 镜像探测件（m5-peers-import-fix）：四家全桶扫描 + 归属反查（cc/qwen 会话 cwd / zcode db 键匹配 /
+// reasonix sessions 反推；G13 冲突与 G14 启发式纪律见 mirror.ts 注释）
+export { scanMirrorSources } from "./mirror.ts";
+export type { MirrorBucket } from "./mirror.ts";
 
 /** 模块 config schema（validate.ts:42-46 硬规则——未声明键被 strip，settings 写的开关必须在此声明）。 */
 export const configSchema = z.object({
