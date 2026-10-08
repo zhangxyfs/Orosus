@@ -224,6 +224,28 @@ describe("CLI 会话命令与 flag（M3 T6，D41）", () => {
     expect(formatSessions(sessDir)).toContain("2. 新会话"); // jsonl 空会话行兜底「新会话」（2026-10-01 起不裸显 sid）
   });
 
+  it("⑩b /sessions 行标签（2026-10-08 用户拍板）：标题顶满可用宽（撤长度帽）；「· 时间」与当前标记恒钉尾——超宽只截标题段", async () => {
+    tmp("sessrow");   // afterEach rmSync 需 dir 在场（文件级惯例）
+    const { sessionRowLabel } = await import("./sessions.ts");
+    const { stripAnsi, visibleWidth } = await import("./tui/width.ts");
+    const mk = (title: string, id = "s1"): import("./sessions.ts").SessionListItem =>
+      ({ id, title, createdAtMs: Date.now() - 90_000, file: "f", dir: "d", mtimeMs: 0, size: 0, bucket: "B" });
+    // 短标题：全量保留，时间/当前标记完整可见
+    const short = sessionRowLabel(mk("短标题"), 0, { width: 40, currentId: "s1" });
+    expect(stripAnsi(short)).toBe("1. 短标题 · 1 分钟前（当前）");
+    // 长标题：截到预算内，时间（含当前标记）仍钉尾可见
+    const long = sessionRowLabel(mk("超长会话标题实录".repeat(12)), 3, { width: 40, currentId: "s1" });
+    expect(visibleWidth(long)).toBeLessThanOrEqual(40);
+    expect(stripAnsi(long)).toMatch(/^4\. .+… · 1 分钟前（当前）$/);
+    // 非当前会话无标记；标题含换行先压平（overlay 同规则）再计宽
+    const multi = sessionRowLabel(mk("第一行\n第二行"), 0, { width: 60 });
+    expect(stripAnsi(multi)).toBe("1. 第一行 第二行 · 1 分钟前");
+    // 极窄终端：标题退化，时间仍不被顶没
+    const tiny = sessionRowLabel(mk("任意长标题"), 0, { width: 16 });
+    expect(stripAnsi(tiny)).toMatch(/· 1 分钟前$/);
+    expect(visibleWidth(tiny)).toBeLessThanOrEqual(16);
+  });
+
   it("⑪ /new 语义端到端：新 harness 即新 session id（旧会话关闭幂等）", async () => {
     const h1 = await isolated();
     const id1 = h1.sessionId;

@@ -2,6 +2,8 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { scanSessionFiles, locateSessionFile, readSessionHead, type SessionFileEntry } from "@orosus/core";
 import { t } from "./i18n/app.ts";
+import * as theme from "./theme.ts";
+import { truncateToWidth, visibleWidth } from "./tui/width.ts";
 
 /** 会话列表条目（M4-2 B9 用户拉前，2026-09-19 走查人性化）：title 优先 session/label（首轮问答自动标题），
  *  兜底首问文本；创建时间 = birthtime（Windows 可得）回退 mtime。 */
@@ -66,6 +68,23 @@ export function formatSessions(root: string, currentSessionId?: string, bucket?:
       return s.id === currentSessionId ? `${BOLD_CYAN}${line}${RESET}` : line;
     })
     .join("\n");
+}
+
+/** /sessions 选择列表行（2026-10-08 用户走查拍板）：标题**顶到头**——撤固定长度帽，按可用宽尽量伸
+ *  （原形超宽被 overlay 右缘连时间一起切掉）；「· 相对时间」与当前标记**恒钉尾**——超宽只截标题段，
+ *  时间不能被顶没。行预算由调用方给（全屏 = pickRowWidth 渲染同源；行模式 = 终端列宽）。标题换行先
+ *  压平（buildPickOverlay 多行项同规则——压平后计宽才准）。 */
+export function sessionRowLabel(s: SessionListItem, index: number, opts: { width: number; currentId?: string }): string {
+  const prefix = `${index + 1}. `;
+  const title = s.title.replace(/\s*\n\s*/g, " ");
+  const timeSeg = theme.dim(`· ${relativeTime(s.createdAtMs)}`);
+  const mark = s.id === opts.currentId ? theme.fg("accent", t("main.sessions.currentMark")) : "";
+  const tail = ` ${timeSeg}${mark}`;
+  const titleBudget = Math.max(1, opts.width - visibleWidth(prefix) - visibleWidth(tail));
+  // 截断补省略号（「…」账本宽 1——预算让 1 列），完整放下则原样
+  const fitted = truncateToWidth(title, titleBudget);
+  const titleSeg = fitted !== title ? `${truncateToWidth(title, Math.max(1, titleBudget - 1))}…` : title;
+  return `${prefix}${titleSeg}${tail}`;
 }
 
 /** CLI 拦截层会话命令（D41/D38 第一层——宿主操作）：/new /fork /sessions /resume /quit。

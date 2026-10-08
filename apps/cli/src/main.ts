@@ -22,7 +22,7 @@ import { confirmDialogWidgets, type PendingModuleInfo } from "./module-confirm.t
 import { trustModule } from "@orosus/core";
 import { createModal, type KeyEvent } from "./keys.ts";
 import { pick } from "./picker.ts";
-import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, relativeTime, resolveTarget, sessionCommand, setTitle } from "./sessions.ts";
+import { formatSessions, harnessOptionsFor, listSessions, pickSessionNumber, readTitle, resolveTarget, sessionCommand, sessionRowLabel, setTitle } from "./sessions.ts";
 import { parseArgs, parseEarlyFlags, type CliArgs } from "./args.ts";
 import { tuiSidebarPersist, tuiSidebarRead } from "./tui-config.ts";
 import { isProviderSubcommand, runProviderSubcommand } from "./provider-cmd.ts";
@@ -858,10 +858,12 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           (q) => commandUi.ask(q),
           items.length,
           async () => {
-            const labels = items.map(
-              // 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形）——标题白、相对时间灰、「${t("main.sessions.currentMark")}」标记青玉
-              (s, i) => `${i + 1}. ${s.title} ${theme.dim(`· ${relativeTime(s.createdAtMs)}`)}${s.id === h.sessionId ? theme.fg("accent", t("main.sessions.currentMark")) : ""}`,
-            );
+            // 2026-10-08 用户走查拍板：标题顶到头（撤显示长度帽——原形超宽被 overlay 连时间一起切掉）；
+            // 「· 时间」+ 当前标记恒钉尾，超宽只截标题段。行预算渲染同源：全屏 = pickRowWidth、行模式 = 终端列宽
+            const rowWidth = activeApp !== undefined
+              ? activeApp.pickRowWidth()
+              : Math.max(40, process.stdout.columns ?? 80);
+            const labels = items.map((s, i) => sessionRowLabel(s, i, { width: rowWidth, currentId: h.sessionId }));
             // 全屏期走 FullApp overlay（F5 走查实证：readline picker 的 modal 与 FullApp 抢 stdin 卡死）
             const n0 = activeApp !== undefined
               ? await activeApp.pickOverlay(t("main.sessions.pickTitle"), labels)
