@@ -263,6 +263,7 @@ export const zhCNCli: Record<string, string> = {
 	"main.provider.defWriteFail": "默认平台写盘失败：{err}",
 	"main.slot.missing2": "槽 {slot} 未配置",
 	"main.src.notInstalled": "未安装",
+	"main.peers.legacyMerged": "已合并子目录旧记忆桶 ${n} 条到当前项目",
 	"main.module.pending2": " {n} 个模块待确认——面板选中后回车查看声明并确认（或 orosus module trust）",
 	"main.diag.providerOf": "的提供者 ",
 

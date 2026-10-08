@@ -263,6 +263,7 @@ export const zhTWCli: Record<string, string> = {
 	"main.provider.defWriteFail": "預設平台寫盤失敗：{err}",
 	"main.slot.missing2": "槽 {slot} 未配置",
 	"main.src.notInstalled": "未安裝",
+	"main.peers.legacyMerged": "已合併子目錄舊記憶桶 ${n} 條到當前專案",
 	"main.module.pending2": " {n} 個模組待確認——面板選中後 Enter 查看聲明並確認（或 orosus module trust）",
 	"main.diag.providerOf": "的提供者 ",
 

@@ -13,7 +13,7 @@ import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile, encodeCwd } from "@orosus/core";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -44,7 +44,7 @@ import * as theme from "./theme.ts";
 import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
-import { detectSources, findGitRoot, importNotesProgressive, readSourceNotes } from "@orosus/tool-peers";
+import { detectSources, findGitRoot, importMirror, importNotesProgressive, mergeLegacyMemory, memoryBucketKey, readSourceNotes, scanMirrorSources, type LlmStream } from "@orosus/tool-peers";
 import { collectLaunchers } from "./module-launcher.ts";
 import { killAllBackgroundJobs } from "@orosus/tool-shell";
 import type { OnboardingDeps } from "./tui/onboarding.ts";
@@ -459,20 +459,57 @@ const memorySourceHomes = (): { claude?: string; zcode?: string; qwen?: string; 
  *  m5-peers-import-fix T1：本体下沉包层 tool-peers/roots.ts（记忆桶键两消费方共用），此处改引。 */
 /** m5-peers 记忆导入核心（走查修订三：settings「记忆导入」与引导第 5 页共用）。
  *  逐条单通道本体在包层 importNotesProgressive（走查十一：机械档旧形整段同步+onProgress 没接 =
- *  全程零反应直跳完成态——下沉包层为可测）；目标 = 本项目记忆桶（与 env.memoryDir 同桶）。 */
+ *  全程零反应直跳完成态——下沉包层为可测）；目标 = 本项目记忆桶（与 env.memoryDir 同桶）。
+ *  m5-peers-import-fix T6：mode="current" 目的地改桶键件 memoryBucketKey（git 根）；mode="all"
+ *  按源分流——四家（cc/qwen/zcode/reasonix）走镜像各归各桶（scanMirrorSources 实时探测 +
+ *  importMirror），codex（唯一无项目维度的源）仍导当前桶、条数并入结果（G12：projects 不 +1）。 */
 const importWithOrganize = async (
 	sourceIds: string[],
 	organize: boolean,
+	mode: "current" | "all",
 	onProgress?: (done: number, total: number, title: string) => void,
 	signal?: AbortSignal,
-): Promise<{ imported: number; skipped: number; merged: number }> => {
+): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }> => {
 	const cwd = process.cwd();
-	const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd);
-	const destDir = join(orosusHome(), "memories", "projects", encodeCwd(cwd), "memory");
+	const homes = memorySourceHomes();
+	const memoryBase = join(orosusHome(), "memories", "projects");
+	const llm: LlmStream = (req) => h.llm().stream(req);
+	if (mode === "all") {
+		const mirrorIds = sourceIds.filter(id => id !== "codex");
+		let imported = 0, skipped = 0, merged = 0;
+		let mirror: { projects: number; unresolved: number } | undefined;
+		if (mirrorIds.length > 0) {
+			const buckets = scanMirrorSources(homes).filter(b => mirrorIds.includes(b.sourceId));
+			const r = await importMirror(memoryBase, buckets, {
+				organize,
+				llm,
+				...(onProgress !== undefined ? { onProgress } : {}),
+				...(signal !== undefined ? { signal } : {}),
+			});
+			imported += r.imported;
+			skipped += r.skipped;
+			mirror = { projects: r.projects, unresolved: r.unresolved };
+		}
+		if (sourceIds.includes("codex")) {
+			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
+			const all = readSourceNotes(srcs.find(s => s.id === "codex")?.dir);
+			const r = await importNotesProgressive(join(memoryBase, memoryBucketKey(cwd), "memory"), all, {
+				organize,
+				llm,
+				...(onProgress !== undefined ? { onProgress } : {}),
+				...(signal !== undefined ? { signal } : {}),
+			});
+			imported += r.imported;
+			skipped += r.skipped;
+			merged += r.merged;
+		}
+		return { imported, skipped, merged, ...(mirror !== undefined ? { mirror } : {}) };
+	}
+	const srcs = detectSources(homes, findGitRoot(cwd), cwd);
 	const all = sourceIds.flatMap(id => readSourceNotes(srcs.find(s => s.id === id)?.dir));
-	return importNotesProgressive(destDir, all, {
+	return importNotesProgressive(join(memoryBase, memoryBucketKey(cwd), "memory"), all, {
 		organize,
-		llm: (req) => h.llm().stream(req),
+		llm,
 		...(onProgress !== undefined ? { onProgress } : {}),   // exactOptional：undefined 不显式入参
 		...(signal !== undefined ? { signal } : {}),
 	});
@@ -487,9 +524,14 @@ const settingsDeps: SettingsUiDeps = {
   hooksDeps,
   mcpDeps,
   // m5-peers 走查修订三 + 走查七-①：「记忆导入」数据口（settings 与引导第 5 页共用 importers 核心 + 模型整理）
+  // m5-peers-import-fix T6：detect 传 destDir 拿 newCount（D7）+ global（codex 标注）；run 带 mode（D10/D11）
   peersImport: {
-    detect: () => detectSources(memorySourceHomes(), findGitRoot(process.cwd()), process.cwd())
-      .map(s => ({ id: s.id, label: s.label, count: s.count })),
+    detect: () => {
+      const cwd = process.cwd();
+      const destDir = join(orosusHome(), "memories", "projects", memoryBucketKey(cwd), "memory");
+      return detectSources(memorySourceHomes(), findGitRoot(cwd), cwd, destDir)
+        .map(s => ({ id: s.id, label: s.label, count: s.count, ...(s.newCount !== undefined ? { newCount: s.newCount } : {}), ...(s.global === true ? { global: true } : {}) }));
+    },
     run: importWithOrganize,
   },
   // m5-i18n T3：「切换语言」行——store 与回执（full = repaint + toast；行模式 = out）
@@ -518,6 +560,12 @@ try {
 await localeStore.init(h.configuredLanguage() ?? detectSystemLocale());
 h.setModuleT(localeStore.t);
 bindAppLocale(localeStore.t); // tui 渲染面同源（试点 T4 起）
+// m5-peers-import-fix T5/G8：旧 cwd 键记忆桶启动合并（桶键改 git 根的一次性迁移，D2）——整体 try-catch
+// 包死不杀启动（半成品合并幂等可重入：importNotes 标题判重、下次启动重合零重复；唯一风险口 = 未捕获异常）
+try {
+  const merged = mergeLegacyMemory(join(orosusHome(), "memories", "projects"), process.cwd());
+  if (merged.merged > 0) notify(t("main.peers.legacyMerged", { n: merged.merged }));   // G9 toast
+} catch { /* fs 权限/桶损坏——静默跳过，下次启动幂等重试（G8：catch 由实施定） */ }
 if (localeStore.packMissing() && args.dumpModules === undefined && args.print === undefined) {
   notify(t("main.locale.packMissing"));
 }
@@ -1832,10 +1880,15 @@ const buildOnboardingDeps = (): OnboardingDeps => {
 		detectMemorySources: () => {
 			const cwd = process.cwd();
 			const homes = memorySourceHomes();
-			const srcs = detectSources(homes, findGitRoot(cwd), cwd);
-			return srcs.map(s => ({ id: s.id, label: s.label, note: s.dir ?? t("main.src.notInstalled"), count: s.count, available: s.dir !== undefined }));
+			const destDir = join(orosusHome(), "memories", "projects", memoryBucketKey(cwd), "memory");
+			const srcs = detectSources(homes, findGitRoot(cwd), cwd, destDir);
+			return srcs.map(s => ({
+				id: s.id, label: s.label, note: s.dir ?? t("main.src.notInstalled"), count: s.count, available: s.dir !== undefined,
+				...(s.newCount !== undefined ? { newCount: s.newCount } : {}),
+				...(s.global === true ? { global: true } : {}),
+			}));
 		},
-		importMemory: (sourceIds, organize) => importWithOrganize(sourceIds, organize),
+		importMemory: (sourceIds, organize, mode) => importWithOrganize(sourceIds, organize, mode ?? "current"),
 	};
 };
 

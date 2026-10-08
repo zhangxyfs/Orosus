@@ -41,11 +41,12 @@ export interface OnboardingDeps {
   writeVision(value: string): void;
   /** 已配置槽的多模态模型清单（宿主逐槽查目录——遮蔽坑免疫；空 = 空态指路）。 */
   visionModels(): Promise<string[]>;
-  /** T6d 第 5 页（m5-peers）：五源探测（宿主接 importers.detectSources；available=false = 未安装/0 条）。 */
-  detectMemorySources(): { id: string; label: string; note: string; count: number; available: boolean }[];
-  /** T6d 第 5 页：导入勾选源（organize = D20 模型整理开关——仅引导当次生效不落盘）。
-   *  异步（organize 开启时含 llm 调用）；完成经 deps.finish 收尾。 */
-  importMemory(sourceIds: string[], organize: boolean): Promise<{ imported: number; skipped: number; merged: number }>;
+  /** T6d 第 5 页（m5-peers）：五源探测（宿主接 importers.detectSources；available=false = 未安装/0 条）。
+   *  m5-peers-import-fix：newCount（D7 已导计数）/global（codex 全局源标注）随宿主 detect 带入。 */
+  detectMemorySources(): { id: string; label: string; note: string; count: number; available: boolean; newCount?: number; global?: boolean }[];
+  /** T6d 第 5 页：导入勾选源（organize = D20 模型整理开关——仅引导当次生效不落盘；mode = D11 导入范围，
+   *  缺省 current 兼容旧调用）。异步（organize 开启时含 llm 调用）；完成经 deps.finish 收尾。 */
+  importMemory(sourceIds: string[], organize: boolean, mode?: "current" | "all"): Promise<{ imported: number; skipped: number; merged: number; mirror?: { projects: number; unresolved: number } }>;
   /** 引导自动收尾口（T6d：异步导入完成时宿主注入 resolve；测试/无头可省——手按 Ctrl+N 完成）。 */
   finish?(outcome: OnboardingOutcome): void;
   /** 异步清单到达后的重绘请求（FullApp 挂接时强制注入自家调度——宿主直驱测试可省略）。 */

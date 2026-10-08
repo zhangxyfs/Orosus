@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import type { Harness } from "@orosus/core";
-import { memoryImportResultText, readPeersConfig, runMemoryImportChoose, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
+import { memoryImportResultText, mirrorImportResultText, readPeersConfig, runMemoryImportChoose, runMemorySetting, writePeersConfigKey, type MemoryImportDeps } from "./peers-settings.ts";
 import { settingsItems } from "./settings-ui.ts";
 
 let dir = "";
@@ -50,7 +50,7 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(readPeersConfig(f)).toEqual({ workspaceMemory: false, sessionPeers: false });
   });
 
-  it("③c 导入选择段（走查八-④ 开关形态）：源行/全部/整理开关行；开关开后所有路径走整理；Esc/空货源", async () => {
+  it("③c 导入选择段（走查八-④ 开关形态）：源行/全部/模式行/整理开关行；开关开后所有路径走整理；Esc/空货源", async () => {
     const deps: MemoryImportDeps = {
       detect: () => [
         { id: "claude-code", label: "Claude Code", count: 12 },
@@ -59,23 +59,100 @@ describe("peers 设置面（m5-peers T6b）", () => {
       ],
       run: async () => ({ imported: 0, skipped: 0, merged: 0 }),   // 选择段不触 run
     };
-    // 单源导入（默认整理关）
+    // 单源导入（默认整理关、默认范围 = 仅当前项目——D11 settings 侧增量补给心智）
     const single = await runMemoryImportChoose(async (_t, items) => items[0]!, deps);
-    expect(single).toEqual({ ids: ["claude-code"], organize: false });
-    // 全部导入（倒数第二项——qwen 0 条被滤）
-    const all = await runMemoryImportChoose(async (_t, items) => items[items.length - 2]!, deps);
-    expect(all).toEqual({ ids: ["claude-code", "zcode"], organize: false });
-    // 开关行（末项）：切换后菜单刷新（✓ 移位），再选源行 = organize true（单源也走整理——走查八-④）
+    expect(single).toEqual({ ids: ["claude-code"], organize: false, mode: "current" });
+    // 全部导入（源行后第一行 items[2]——qwen 0 条被滤；其后模式行/整理行）
+    const all = await runMemoryImportChoose(async (_t, items) => items[2]!, deps);
+    expect(all).toEqual({ ids: ["claude-code", "zcode"], organize: false, mode: "current" });
+    // 整理行（末项）：切换后再选源行 = organize true
     const seq = ["last", "first"];
     let i = 0;
     const orgSingle = await runMemoryImportChoose(async (_t, items) => items[seq[i++] === "last" ? items.length - 1 : 0]!, deps);
-    expect(orgSingle).toEqual({ ids: ["claude-code"], organize: true });
+    expect(orgSingle).toEqual({ ids: ["claude-code"], organize: true, mode: "current" });
     // Esc = undefined；无货源 = "empty"（不弹菜单）
     expect(await runMemoryImportChoose(async () => "", deps)).toBeUndefined();
     const emptyDeps: MemoryImportDeps = { detect: () => [{ id: "x", label: "X", count: 0 }], run: async () => ({ imported: 0, skipped: 0, merged: 0 }) };
     expect(await runMemoryImportChoose(async () => {
       throw new Error("不该弹菜单");
     }, emptyDeps)).toBe("empty");
+  });
+
+  it("③e T6 新 N 文案（G4）：源行带（新 M）；全局源（codex）行尾缀 G2 标注", async () => {
+    const deps: MemoryImportDeps = {
+      detect: () => [
+        { id: "claude-code", label: "Claude Code", count: 12, newCount: 3 },
+        { id: "codex", label: "codex", count: 9, newCount: 9, global: true },
+      ],
+      run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
+    };
+    let seen: string[] = [];
+    const r = await runMemoryImportChoose(async (_t, items) => { seen = items; return items[0]!; }, deps);
+    expect(r).toEqual({ ids: ["claude-code"], organize: false, mode: "current" });
+    expect(seen[0]).toContain("导入该源 12 条（新 3）");
+    expect(seen[1]).toContain("全局源——不分项目，含所有项目的笔记");
+  });
+
+  it("③f T6 已全部导入（D7）：M=0 行显示已全部导入且选拦（菜单重开不执行）；镜像模式不拦", async () => {
+    const deps: MemoryImportDeps = {
+      detect: () => [
+        { id: "claude-code", label: "Claude Code", count: 12, newCount: 0 },
+        { id: "zcode", label: "ZCode", count: 37, newCount: 5 },
+      ],
+      run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
+    };
+    const picks: number[] = [0, 1];   // 先选拦行 → 菜单重开 → 再选可用行
+    let i = 0;
+    const r = await runMemoryImportChoose(async (_t, items) => items[picks[i++]!]!, deps);
+    expect(r).toEqual({ ids: ["zcode"], organize: false, mode: "current" });   // 第一次选拦行没执行、没 Esc
+    // 镜像模式（切模式行后）：M=0 行可选拦解除（判重按各目标桶独立算）
+    const picks2: number[] = [3, 0];   // items: [cc, zcode, 全部, 模式, 整理] → 3 = 模式行（切 all），0 = cc 行
+    let j = 0;
+    const r2 = await runMemoryImportChoose(async (_t, items) => items[picks2[j++]!]!, deps);
+    expect(r2).toEqual({ ids: ["claude-code"], organize: false, mode: "all" });
+  });
+
+  it("③g T6 模式行（G10/D11）：默认 current，回车切换 ✓ 移位到全部项目；结果带 mode（当次会话态）", async () => {
+    const deps: MemoryImportDeps = {
+      detect: () => [{ id: "claude-code", label: "Claude Code", count: 5, newCount: 2 }],
+      run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
+    };
+    const seen: string[][] = [];
+    let call = 0;
+    const r = await runMemoryImportChoose(async (_t, items) => {
+      seen.push([...items]);
+      call++;
+      return items[call === 1 ? 2 : 0]!;   // 首轮选模式行（回车切换），次轮选源行执行
+    }, deps);
+    expect(seen[0]![2]).toContain("仅当前项目 ✓");          // 默认 current（D11：settings 增量补给心智）
+    expect(seen[0]![2]).not.toContain("（各归各桶）✓");
+    expect(seen[1]![2]).not.toContain("仅当前项目 ✓");
+    expect(seen[1]![2]).toContain("全部项目（各归各桶）✓");   // ✓ 移位（同「用模型整理」开关行交互）
+    expect(r).toEqual({ ids: ["claude-code"], organize: false, mode: "all" });
+  });
+
+  it("③h T6 全部导入行合计 = sum(newCount)（G4）", async () => {
+    const deps: MemoryImportDeps = {
+      detect: () => [
+        { id: "claude-code", label: "Claude Code", count: 12, newCount: 3 },
+        { id: "zcode", label: "ZCode", count: 37, newCount: 5 },
+      ],
+      run: async () => ({ imported: 0, skipped: 0, merged: 0 }),
+    };
+    let seen: string[] = [];
+    await runMemoryImportChoose(async (_t, items) => { seen = items; return items[0]!; }, deps);
+    expect(seen[2]).toContain("2 家共 8 条");   // 3 + 5（不再是 12 + 37）
+  });
+
+  it("③i T6 镜像结果文案（G12）：分段省略——双零裸句 / 单零省一段 / 全留", () => {
+    expect(mirrorImportResultText({ imported: 6, skipped: 0, mirror: { projects: 2, unresolved: 0 } }))
+      .toBe("已导入 2 个项目共 6 条");
+    expect(mirrorImportResultText({ imported: 6, skipped: 4, mirror: { projects: 2, unresolved: 0 } }))
+      .toBe("已导入 2 个项目共 6 条（跳过 4 条重复）");
+    expect(mirrorImportResultText({ imported: 6, skipped: 0, mirror: { projects: 2, unresolved: 1 } }))
+      .toBe("已导入 2 个项目共 6 条（1 个项目未能定位）");
+    expect(mirrorImportResultText({ imported: 6, skipped: 4, mirror: { projects: 2, unresolved: 1 } }))
+      .toBe("已导入 2 个项目共 6 条（跳过 4 条重复 · 1 个项目未能定位）");
   });
 
   it("③d 导入结果人话：机械档不报整理；整理档报「模型整理 N 条」；全重复专句", () => {
