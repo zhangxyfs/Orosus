@@ -92,9 +92,10 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const frame = stripAnsi(output.buf.slice(before));
 		expect(frame).toContain("发布前检查（可多选）");
 		expect(frame).toContain("☐");
+		expect(frame).not.toContain("☑"); // 走查修：旧勾选字形退役（勾前实心■在勾选后出现，首帧全空）
 		expect(frame).toContain("✎ 其他（自行输入）");
 		expect(frame).toContain("✓ 确定");
-		expect(frame).toContain("空格/Enter 勾选 · 确定行提交· Esc 取消"); // esc 尾段直拼（legacy pick.foot.esc 同款无空格）
+		expect(frame).toContain("空格/Enter 选定 · 确定行提交· Esc 取消"); // esc 尾段直拼（legacy pick.foot.esc 同款无空格）；走查修中性措辞
 		app.stop();
 	});
 
@@ -132,21 +133,32 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		app.stop();
 	});
 
-	it("④ 单选：普通项 Enter 即答恰一项；其他行进输入态、非空 Enter 立即以文本为答案（窗关）", async () => {
+	it("④ 单选确认流（走查修 2026-10-08——可撤回）：Enter=圆圈选定不即答、再按取消、他项移位；其他行输入回列表、确定行统一提交", async () => {
 		const { app, input, output } = rig();
 		app.start();
 		await flush();
-		const p1 = app.pickOverlay("单", ["A", "B"], 0, undefined, {});
+		const p = app.pickOverlay("单", ["A", "B"], 0, undefined, {});
 		await flush();
-		key(input, "\r"); await flush(80);
-		await expect(p1).resolves.toEqual(["A"]); // 单选恰一项（D11）
-		const p2 = app.pickOverlay("单2", ["A", "B"], 0, undefined, {});
-		await flush();
-		key(input, "\x1b[B"); key(input, "\x1b[B"); await flush(); // ↓↓ 其他行
-		const before = output.buf.length;
-		key(input, "\r"); await flush(); // 进输入态（foot 换输入态键导引——截点须含此帧）
-		key(input, "自"); key(input, "由"); await flush(); // 字符收
+		key(input, "\r"); await flush(); // Enter A——圆圈选定（走查修后不即答关窗）
 		let pu = app.pendingUi;
+		if (pu?.kind !== "pick") throw new Error("单选 Enter 不应即答关窗");
+		expect(pu.checked).toEqual([0]);
+		key(input, "\r"); await flush(); // 再按 A——取消选定（撤回）
+		pu = app.pendingUi;
+		if (pu?.kind !== "pick") throw new Error("unreachable");
+		expect(pu.checked).toEqual([]);
+		key(input, "\x1b[B"); key(input, "\r"); await flush(); // ↓ B 行 Enter——圆圈移位
+		pu = app.pendingUi;
+		if (pu?.kind !== "pick") throw new Error("unreachable");
+		expect(pu.checked).toEqual([1]);
+		const before = output.buf.length;
+		key(input, "\x1b[B"); await flush(); // ↓ 其他行
+		key(input, "\r"); await flush(); // 进输入态（foot 换输入态键导引——截点须含此帧）
+		const glyphFrame = stripAnsi(output.buf.slice(before));
+		expect(glyphFrame).toContain("○"); // 单选空心圆（走查修）
+		expect(glyphFrame).toContain("●"); // 选定实心圆
+		key(input, "自"); key(input, "由"); await flush(); // 字符收
+		pu = app.pendingUi;
 		if (pu?.kind !== "pick") throw new Error("输入态窗不应关");
 		expect(pu.editing).toBe(true);
 		expect(pu.customText).toBe("自由");
@@ -158,8 +170,14 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		expect(frame).toContain("自行输入：自"); // 输入行直显草稿
 		expect(frame).toContain("Enter 确认 · Esc 返回列表"); // 输入态键导引（不写「Esc 取消」）
 		key(input, "由"); key(input, "文本"); await flush();
-		key(input, "\r"); await flush(80);
-		await expect(p2).resolves.toEqual(["自由文本"]); // 单选自定义即答（kimi commitOtherInput）
+		key(input, "\r"); await flush(80); // 输入 Enter——回列表（圆圈落到其他行，不再即答）
+		pu = app.pendingUi;
+		if (pu?.kind !== "pick") throw new Error("走查修：单选输入 Enter 不即答");
+		expect(pu.customCommitted).toBe("自由文本");
+		expect(pu.checked).toEqual([]); // 圆圈唯一——自定义入选即移出普通项
+		key(input, "\x1b[B"); await flush(); // ↓ 确定行
+		key(input, "\r"); await flush(80); // 提交
+		await expect(p).resolves.toEqual(["自由文本"]); // 单选恰一项
 		app.stop();
 	});
 
@@ -200,7 +218,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		let pu = app.pendingUi;
 		if (pu?.kind !== "pick") throw new Error("多选输入 Enter 回列表不关窗");
 		expect(pu.customCommitted).toBe("旧值");
-		expect(stripAnsi(output.buf.slice(-4000))).toContain("☑ ✎ 旧值"); // 行显提交态
+		expect(stripAnsi(output.buf.slice(-4000))).toContain("■ ✎ 旧值"); // 行显提交态（走查修实心方）
 		key(input, "\r"); await flush(); // 其他行已勾 Enter = 取消勾选
 		pu = app.pendingUi;
 		if (pu?.kind !== "pick") throw new Error("unreachable");
@@ -231,7 +249,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		app.stop();
 	});
 
-	it("⑧ 鼠标（m5-ask-multi T2）：multi 点击行 = 切换勾选、点击确定行 = 提交；单选点击普通行 = 选定", async () => {
+	it("⑧ 鼠标（m5-ask-multi T2 + 走查修）：multi 点击行 = 切换勾选、点击确定行 = 提交；单选点击行 = 圆圈选定、点击确定行提交", async () => {
 		const { app, input } = rig();
 		app.start();
 		await flush();
@@ -251,7 +269,13 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		await expect(p).resolves.toEqual(["甲"]);
 		const p2 = app.pickOverlay("单", ["A", "B"], 0, undefined, {});
 		await flush(80);
-		press(input, 3, divRow - 4); await flush(80); // 单选 2 项：总 7 行，B 行 = top+3 = divRow−4——点击 = 选定
+		// 单选 2 项（走查修后行域 4：A/B/其他/确定）——总 8 行；B 行 = top2+3、确定行 = top2+5（内容区第 4 行）
+		const top2 = divRow - 8;
+		press(input, 3, top2 + 3); await flush(); // 点击 B 行——圆圈选定（走查修后不即答）
+		pu = app.pendingUi;
+		if (pu?.kind !== "pick") throw new Error("单选点击行不应即答关窗");
+		expect(pu.checked).toEqual([1]);
+		press(input, 3, top2 + 5); await flush(80); // 点击确定行——提交
 		await expect(p2).resolves.toEqual(["B"]);
 		app.stop();
 	});

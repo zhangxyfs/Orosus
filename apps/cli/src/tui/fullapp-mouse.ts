@@ -54,9 +54,9 @@ export function createMouse(app: FullApp) {
 			}
 		} else if (pu?.kind === "pick") {
 			// 与键盘同一张过滤清单——过滤激活时按 filtered 钳，否则滚轮可越过过滤尾致 Enter 错位。
-			// m5-ask-multi：增强面行域含合成行（其他〔+确定〕）——钳上界随之（否则滚轮够不到确定行）
+			// m5-ask-multi：增强面行域含两合成行（其他+确定——走查修后单选/多选同构）——钳上界随之
 			const filtered = pu.filter === undefined ? pu.items : pu.items.filter((i) => i.toLowerCase().includes(pu.filter!.toLowerCase()));
-			const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
+			const rowsTotal = pu.custom === true ? filtered.length + 2 : filtered.length;
 			pu.sel = Math.max(0, Math.min(rowsTotal - 1, pu.sel + (up ? -lines : lines))); // 到头停（决策点 6——不学键盘回绕）
 		} else if (pu !== undefined) {
 			return; // ask——没有可滚面
@@ -93,7 +93,7 @@ export function createMouse(app: FullApp) {
 		const divRow = streamH + (queue.length === 0 ? 0 : queue.length + 1);
 		const pairs = pu.items.map((t, i) => ({ t, i }));
 		const filtered = pu.filter === undefined ? pairs : pairs.filter((p) => p.t.toLowerCase().includes(pu.filter!.toLowerCase()));
-		const rowsTotal = filtered.length + 1 + (pu.multi === true ? 1 : 0);
+		const rowsTotal = filtered.length + 2; // 两合成行恒在（走查修后单选/多选同构）
 		const geo = pickOverlayGeo(rowsTotal, pu.sel, false);
 		const top = Math.max(0, divRow - geo.totalLines);
 		if (y < top || y > divRow - 1) return undefined; // 盒外（底框 = divRow−1，其下是输入框顶）

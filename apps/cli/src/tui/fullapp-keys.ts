@@ -18,30 +18,45 @@ export function toggleChecked(pu: PickUi, i: number): void {
 	else pu.checked.push(i);
 }
 
+/** 单选圆圈选定（走查修 2026-10-08：单选也走确认流——可撤回）：再按同项 = 取消（归零选），
+ *  选他项 = 圆圈移位（唯一性）；选普通项即移出自定义（圆圈只有一颗）。 */
+export function radioSelect(pu: PickUi, i: number): void {
+	if (pu.checked.length === 1 && pu.checked[0] === i) {
+		pu.checked = [];
+		return;
+	}
+	pu.checked = [i];
+	pu.customCommitted = undefined;
+}
+
 /** Enter 语义的行激活（键路 Enter 与鼠标点击行共源——两处口径漂移即同窗两套行为）。
- *  rowPos = 行域绝对位（过滤项 + 其他〔+确定〕）；越界安全返。
- *  - 普通行：单选即答 resolve(原始索引)；multi 切换勾选（cc SelectMulti「Enter toggles selection」）
- *  - 其他行：进输入态；multi 已勾选 = 取消勾选（kimi :301-307 对称撤销口）
- *  - 确定行（multi）：零勾选 toast 不关窗（D5）；否则 resolve(items.length + 1) 提交勾选集（D16）
+ *  rowPos = 行域绝对位（过滤项 + 其他 + 确定——走查修后单选/多选同构，恒两合成行）；越界安全返。
+ *  - 普通行：multi 方框勾选（cc SelectMulti「Enter toggles selection」）/ 单选圆圈选定（再按取消、选他项移位）
+ *  - 其他行：进输入态；已提交 = 取消勾选（kimi :301-307 对称撤销口——走查修后两态共用）
+ *  - 确定行：零勾选 toast 不关窗（D5）；否则 resolve(items.length + 1) 提交（D16——走查修后单选多选统一确认口）
  *  - 老 choose 面（custom 未置位）：与旧实现行为一致（普通项 Enter 即答）——行域无合成行 */
 export function pickActivateRow(app: FullApp, pu: PickUi, rowPos: number, filtered: Array<{ t: string; i: number }>): void {
-	const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
+	const rowsTotal = pu.custom === true ? filtered.length + 2 : filtered.length;
 	if (rowPos < 0 || rowPos >= rowsTotal) return;
 	if (rowPos < filtered.length) {
 		const orig = filtered[rowPos]!.i; // 按携带索引结算（CTU-08——重复项不回查错位）
-		if (pu.multi === true) { toggleChecked(pu, orig); return; }
+		if (pu.custom === true) { // 增强面：标记不即答（走查修——单选圆圈/多选方框，确定行统一提交）
+			if (pu.multi === true) toggleChecked(pu, orig);
+			else radioSelect(pu, orig);
+			return;
+		}
 		app.pendingUi = undefined;
-		pu.resolve(orig);
+		pu.resolve(orig); // 老 choose 面：普通项 Enter 即答（33 处消费方零改动）
 		app.dialogs.promoteUi(); // 结算即提升暂存队首（批③②）
 		return;
 	}
 	if (pu.custom !== true) return; // 老面行域无合成行——不可达防御
 	if (rowPos === filtered.length) { // 其他行
-		if (pu.multi === true && pu.customCommitted !== undefined) { pu.customCommitted = undefined; return; }
+		if (pu.customCommitted !== undefined) { pu.customCommitted = undefined; return; }
 		pu.editing = true;
 		return;
 	}
-	// 确定行（multi）
+	// 确定行
 	if (pu.checked.length === 0 && pu.customCommitted === undefined) {
 		app.showToast(t("pick.multi.emptyToast")); // D5：零勾选 toast 不关窗——空答案集给模型是坏信号
 		return;
@@ -374,21 +389,17 @@ export function createKeys(app: FullApp) {
 			if (pu.kind === "pick") {
 				// m5-ask-multi 输入态自收（kimi otherDrafts 族）：挑选窗内自绘自收，不碰 app.state.input
 				// （CTU-07 草稿快照语义不卷入）；Esc 回列表（草稿/勾选/过滤词保留）、Enter 非空结算、
-				// 空输入无效（kimi :344——不丢已输内容）
+				// 空输入无效（kimi :344——不丢已输内容）。走查修：单选输入 Enter 不再即答——回列表
+				// 圆圈落到其他行，确定行统一提交（撤回）
 				if (pu.editing === true) {
 					if (key === "escape") {
 						pu.editing = false; // 返回列表非取消整窗——键导引不写「Esc 取消」即为此
 					} else if (key === "enter") {
 						const v = pu.customText.trim();
 						if (v !== "") {
-							pu.customCommitted = v; // 多选单槽覆盖（D3）：旧自定义随赋值消失、新文本入集
-							if (pu.multi !== true) { // 单选自定义即答（kimi commitOtherInput 同款）
-								app.pendingUi = undefined;
-								pu.resolve(pu.items.length); // 「其他」行合成索引（风险节——文本不经 resolve 携带）
-								app.dialogs.promoteUi();
-								return;
-							}
-							pu.editing = false; // 多选：回列表态，行显 ☑ ✎ <文本>
+							pu.customCommitted = v; // 多选单槽覆盖（D3）/单选圆圈移到其他行
+							if (pu.multi !== true) pu.checked = []; // 圆圈唯一——自定义入选即移出普通项
+							pu.editing = false; // 回列表态，行显 ■/● ✎ <文本>
 						}
 					} else if (key.length === 1 && isPrintable(key)) {
 						pu.customText += key;
@@ -419,13 +430,16 @@ export function createKeys(app: FullApp) {
 				// （重复文本项会错拿首个同值项；choose 是模块契约面，契约未禁止重复项）
 				const pairs = pu.items.map((t, i) => ({ t, i }));
 				const filtered = pu.filter === undefined ? pairs : pairs.filter((x) => x.t.toLowerCase().includes(pu.filter!.toLowerCase()));
-				// m5-ask-multi 行域（D8/D16）：过滤项 + 「其他」行恒显（chooseEx 面）+ multi「确定」行——
-				// 合成行不参与过滤重排（「其他」恒占 items.length、「确定」恒占 items.length + 1）
-				const rowsTotal = pu.custom === true ? filtered.length + 1 + (pu.multi === true ? 1 : 0) : filtered.length;
-				// D7：multi 空格切换勾选、光标不动（kimi 同款；仅普通项——其他/确定行无效）。空格是主操作键，
-				// 过滤态同样切换不进过滤词（multi 过滤子串不含空格——防主键被过滤态吞掉）
-				if (pu.multi === true && key === " ") {
-					if (pu.sel < filtered.length) toggleChecked(pu, filtered[pu.sel]!.i);
+				// m5-ask-multi 行域（D8/D16 + 走查修）：过滤项 + 「其他」「确定」两合成行恒显（chooseEx 面
+				// 单选/多选同构）——合成行不参与过滤重排（「其他」恒占 items.length、「确定」恒占 +1）
+				const rowsTotal = pu.custom === true ? filtered.length + 2 : filtered.length;
+				// D7 + 走查修：空格标记、光标不动（kimi 同款；仅普通项——合成行无效）。空格是主操作键，
+				// 过滤态同样拦截不进过滤词（multi 过滤子串不含空格——防主键被过滤态吞掉）
+				if (pu.custom === true && key === " ") {
+					if (pu.sel < filtered.length) {
+						if (pu.multi === true) toggleChecked(pu, filtered[pu.sel]!.i);
+						else radioSelect(pu, filtered[pu.sel]!.i);
+					}
 					app.scheduler.requestImmediateRender();
 					return;
 				}

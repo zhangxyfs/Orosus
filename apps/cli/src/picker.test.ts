@@ -126,17 +126,18 @@ describe("pick 增强面 opts（m5-ask-multi——多选 + 自由输入）", () 
     const r = await pick(["甲", "乙", "丙"], fakeIo(["\x1b[B", " ", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]), { multi: true });
     expect(r).toEqual({ picked: [1] });
   });
-  it("② 多选普通项 Enter = 切换勾选（cc SelectMulti 同款——不是提交）；渲染含 ☐/☑/✎/✓ 与 multi 脚注", async () => {
+  it("② 多选普通项 Enter = 切换勾选（cc SelectMulti 同款——不是提交）；渲染含 ☐/■/✎/✓ 与 multi 脚注（走查修字形）", async () => {
     const w: string[] = [];
     const io = fakeIo(["\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"], w); // Enter 勾甲（非提交）→ ↓↓↓ 到确定行 → 提交
     const r = await pick(["甲", "乙"], io, { multi: true });
     expect(r).toEqual({ picked: [0] });
     const out = w.join("");
-    expect(out).toContain("☐ 乙"); // 未勾项
-    expect(out).toContain("☑ 甲"); // Enter 勾选后
+    expect(out).toContain("☐ 乙"); // 未勾项（空心方）
+    expect(stripAnsi(out)).toContain("■ 甲"); // 勾选后——实心方（☑ 观感大一圈被走查否；accent 包裹断言走剥 ANSI）
+    expect(out).not.toContain("☑"); // 旧字形退役
     expect(out).toContain("✎ 其他（自行输入）"); // 其他行（i18n zh-CN 测试环境）
     expect(out).toContain("✓ 确定"); // D16 提交口
-    expect(out).toContain("空格/Enter 勾选 · 确定行提交 · Esc 取消"); // pick.line.multiFoot
+    expect(out).toContain("空格/Enter 选定 · 确定行提交 · Esc 取消"); // pick.line.multiFoot（走查修中性措辞）
   });
   it("③ 零勾选在确定行 Enter = 提示不关窗（D5——行模式闪现提示行一拍），真提交照常", async () => {
     const w: string[] = [];
@@ -162,7 +163,7 @@ describe("pick 增强面 opts（m5-ask-multi——多选 + 自由输入）", () 
     const r = await pick(["甲", "乙"], fakeIo(keys, w), { multi: true });
     const out = w.join("");
     expect(out).toContain("自行输入：自定"); // 输入行渲染（草稿直显）
-    expect(out).toContain("☑ ✎ 自定义"); // 提交态行显
+    expect(stripAnsi(out)).toContain("■ ✎ 自定义"); // 提交态行显（走查修实心方字形——accent 包裹剥 ANSI 断言）
     expect(r).toEqual({ picked: [], custom: "自定义x" }); // 取消勾选清槽后再续编——最终单槽文本
   });
   it("⑤ 空输入 Enter 无效不动（kimi :344——不丢已输内容）、Esc 回列表草稿保留再进续编", async () => {
@@ -181,11 +182,19 @@ describe("pick 增强面 opts（m5-ask-multi——多选 + 自由输入）", () 
     await expect(pick(["甲"], fakeIo(["\x1b"]), { multi: true })).rejects.toThrow("已取消");
     await expect(pick(["甲"], fakeIo(["\x1b"]))).rejects.toThrow("已取消"); // 老面同款（既有钉复跑）
   });
-  it("⑦ 单选：普通项 Enter 即答 { picked: [i] }；数字直达照旧；其他行输入非空 Enter 即答案（kimi commitOtherInput）", async () => {
-    expect(await pick(["甲", "乙", "丙"], fakeIo(["\r"]), {})).toEqual({ picked: [0] });
-    expect(await pick(["甲", "乙", "丙"], fakeIo(["2"]), {})).toEqual({ picked: [1] }); // 数字直达单选面照旧
-    const r = await pick(["甲", "乙"], fakeIo(["\x1b[B", "\x1b[B", "\r", "自", "由", "文", "本", "\r"]), {});
-    expect(r).toEqual({ picked: [], custom: "自由文本" }); // 单选自定义即答——窗即关
+  it("⑦ 单选确认流（走查修 2026-10-08——可撤回）：Enter/空格/数字=圆圈选定不即答、再按取消、他项移位、输入回列表、确定行提交", async () => {
+    const w: string[] = [];
+    // 空格选甲 → Enter 取消 → 数字 2 选乙（移位）→ ↓↓ 其他行输入「自由文本」（圆圈移到其他）→ ↓ 确定行提交
+    const keys = [" ", "\r", "2", "\x1b[B", "\x1b[B", "\r", "自", "由", "文", "本", "\r", "\x1b[B", "\r"];
+    const r = await pick(["甲", "乙"], fakeIo(keys, w), {});
+    const out = w.join("");
+    expect(stripAnsi(out)).toContain("● 甲"); // 圆圈选定行显（走查修：○/●——accent 包裹剥 ANSI 断言）
+    expect(out).toContain("○ 乙"); // 未选空心圆（标记与文字均素色——裸串可断）
+    expect(out).not.toContain("■"); // 方框字形不落单选面
+    expect(stripAnsi(out)).toContain("● ✎ 自由文本"); // 输入提交后圆圈落到其他行
+    expect(r).toEqual({ picked: [], custom: "自由文本" }); // 圆圈唯一——数字选的乙被自定义移出
+    // 数字选定普通项 + 确定行提交（3 项单选：行域 5——数字 2 选乙后 ↓×4 到确定）
+    expect(await pick(["甲", "乙", "丙"], fakeIo(["2", "\x1b[B", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]), {})).toEqual({ picked: [1] });
   });
   it("⑧ 多选数字直达让位（D7 防误触）：数字键被忽略、仍可导航提交", async () => {
     const r = await pick(["甲", "乙", "丙"], fakeIo(["1", "\x1b[B", "\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]), { multi: true });

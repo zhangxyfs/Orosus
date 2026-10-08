@@ -15,8 +15,9 @@ import { t } from "../i18n/app.ts";
 
 /** 模块 choose 的 overlay 选择框（全屏 CommandUi 适配面——与斜杠菜单同族：全宽/青玉框/分页/「还有 N 项」）。
  *  零 app 触达住模块级（lint 纪律）。
- *  m5-ask-multi（ext 传入 = chooseEx 增强面）：行域 = 过滤项 + 「其他」行恒显 + multi「✓ 确定」尾行
- *  （D16）——合成行不参与过滤（D8）；multi 行前缀 ☐/☑、标题尾拼「（可多选）」（D14）、输入态在提示行上插
+ *  m5-ask-multi（ext 传入 = chooseEx 增强面）：行域 = 过滤项 + 「其他」+「✓ 确定」两合成行（走查修后
+ *  单选/多选同构）——合成行不参与过滤（D8）；多选 ☐/accent■、单选 ○/accent●（走查修：☑ 观感大一圈
+ *  被否换实心方），已标记项文字同染 accent；标题尾拼「（可多选）」（D14，仅 multi）；输入态在提示行上插
  *  自行输入行。ext 缺省 = 老 choose 面逐字节原样。 */
 export interface PickOverlayExt {
 	multi?: boolean;
@@ -53,17 +54,19 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 	const shown = filter === undefined ? pairs : pairs.filter((x) => x.t.toLowerCase().includes(filter.toLowerCase()));
 	const checked = ext?.checked;
 	const otherAt = custom ? shown.length : -1;
-	const confirmAt = custom && multi ? shown.length + 1 : -1;
-	const rowsTotal = shown.length + (otherAt >= 0 ? 1 : 0) + (confirmAt >= 0 ? 1 : 0);
+	const confirmAt = custom ? shown.length + 1 : -1; // 走查修：确定行单选/多选同构（恒两合成行）
+	const rowsTotal = shown.length + (custom ? 2 : 0);
+	// 标记字形（走查修 2026-10-08）：多选 ☐/accent■（☑ 观感大一圈被否）、单选 ○/accent●；
+	// 已标记项文字同染 accent（pickLabel current 口——标题青玉、说明仍灰）
+	const markOf = (on: boolean): string => (on ? theme.fg("accent", multi ? "■" : "●") : multi ? "☐" : "○");
 	const rowText = (gi: number): string => {
-		if (gi === otherAt) { // 其他行：✎ 前缀（自有——三家 Other 行都无图标）；multi 勾选态 = ☑ ✎ <文本>（D3 单槽）
+		if (gi === otherAt) { // 其他行：✎ 前缀（自有——三家 Other 行都无图标）；已提交 = 实心标 + accent 文本（D3 单槽）
 			const committed = ext?.customCommitted;
-			const mark = multi ? `${committed !== undefined ? "☑" : "☐"} ` : "";
-			return `${mark}✎ ${committed !== undefined ? truncateToWidth(committed, Math.max(4, oInner - 6)) : t("pick.other.label")}`;
+			return `${markOf(committed !== undefined)} ✎ ${committed !== undefined ? theme.fg("accent", truncateToWidth(committed, Math.max(4, oInner - 6))) : t("pick.other.label")}`;
 		}
 		if (gi === confirmAt) return theme.fg("accent", `✓ ${t("pick.multi.confirm")}`); // D16 提交口
-		const label = pickLabel(shown[gi]!.t);
-		return multi ? `${checked !== undefined && checked.includes(shown[gi]!.i) ? "☑" : "☐"} ${label}` : label;
+		const on = checked !== undefined && checked.includes(shown[gi]!.i);
+		return `${markOf(on)} ${pickLabel(shown[gi]!.t, { current: on })}`;
 	};
 	const olines: string[] = [];
 	const filterSeg = filter === undefined ? "" : ` ${filter === "" ? "" : t("pick.filterTag", { filter })} ${shown.length}/${items.length} `;
@@ -89,8 +92,8 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 	if (ext?.editing === true) olines.push(boxRow(` ${t("pick.custom.input")}${ext.customText ?? ""}`));
 	const footCore = ext?.editing === true
 		? t("pick.custom.foot")
-		: multi
-			? t("pick.multi.foot") // 第 2 轮措辞校准：普通项 Enter=勾选、仅确定行 Enter=提交
+		: custom
+			? t("pick.multi.foot") // 走查修：两态同键（措辞中性「选定」）；普通项 Enter=标记、仅确定行 Enter=提交
 			: (filter === undefined ? t("pick.foot.noFilter") : t("pick.foot.filter"));
 	olines.push(boxRow(theme.dim(` ${footCore}${extraLabels !== "" ? ` · ${extraLabels}` : ""}${t("pick.foot.esc")}`)));
 	olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));

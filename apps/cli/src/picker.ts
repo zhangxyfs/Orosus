@@ -160,23 +160,35 @@ export function pick(items: string[], io: {
   }
   return io.runModal(async (readKey) => {
     let selected = 0;
-    // m5-ask-multi 增强面状态（opts 面专用——老面不触达）
+    // m5-ask-multi 增强面状态（opts 面专用——老面不触达）；走查修：单选 checked 恒 ≤1 元素=圆圈位
     const checked: number[] = [];
     let customText = ""; // 输入态草稿（Esc 回列表保留——kimi otherDrafts 同款）
-    let customCommitted: string | undefined; // 多选单槽（D3）
+    let customCommitted: string | undefined; // 单槽（D3）；单选=圆圈落到其他行
     let editing = false;
-    let flash = ""; // 行模式「toast」：零勾选确定行 Enter 换帧闪现一拍（帧高不变——重绘算术安全）
-    // 行域 = 项 + 其他（opts 面）+ 确定（multi）——「其他」恒占 items.length、「确定」恒占 +1
-    const rowsTotal = opts === undefined ? items.length : items.length + 1 + (multi ? 1 : 0);
+    let flash = ""; // 行模式「toast」：零选确定行 Enter 换帧闪现一拍（帧高不变——重绘算术安全）
+    // 行域 = 项 + 其他 + 确定（走查修后单选/多选同构恒两合成行）——「其他」恒占 items.length、
+    // 「确定」恒占 +1；老面（无 opts）无合成行
+    const rowsTotal = opts === undefined ? items.length : items.length + 2;
     // 视口仅在注入 height 且项数超窗时激活——否则整列渲染（T1 行为原样；增强面按行域计）
     const vpHeight = io.height !== undefined && io.height > 0 && rowsTotal > io.height ? io.height : undefined;
+    // 标记字形（走查修 2026-10-08）：多选 ☐/accent■（☑ 观感大一圈被否）、单选 ○/accent●；
+    // 已标记项文字同染 accent（pickLabel current 口——标题青玉、说明仍灰）
+    const markOf = (on: boolean): string => (on ? fg("accent", multi ? "■" : "●") : multi ? "☐" : "○");
+    const radioSelect = (i: number): void => {
+      if (checked.length === 1 && checked[0] === i) { checked.length = 0; return; } // 再按同项=取消（撤回）
+      checked.length = 0;
+      checked.push(i); // 圆圈移位（唯一性）——选普通项即移出自定义
+      customCommitted = undefined;
+    };
     const rowLabel = (i: number): string => {
-      if (opts !== undefined && i === items.length) { // 其他行（✎ 自有——三家 Other 行都无图标）
+      if (opts === undefined) return pickLabel(items[i]!); // 老面：零前缀零标记——渲染逐字节原样
+      if (i === items.length) { // 其他行（✎ 自有——三家 Other 行都无图标）
         const committed = customCommitted;
-        return `${multi ? `${committed !== undefined ? "☑" : "☐"} ` : ""}✎ ${committed ?? t("pick.other.label")}`;
+        return `${markOf(committed !== undefined)} ✎ ${committed !== undefined ? fg("accent", committed) : t("pick.other.label")}`;
       }
-      if (multi && i === items.length + 1) return `✓ ${t("pick.multi.confirm")}`; // D16 提交口
-      return multi ? `${checked.includes(i) ? "☑" : "☐"} ${pickLabel(items[i]!)}` : pickLabel(items[i]!);
+      if (i === items.length + 1) return `✓ ${t("pick.multi.confirm")}`; // D16 提交口
+      const on = checked.includes(i);
+      return `${markOf(on)} ${pickLabel(items[i]!, { current: on })}`;
     };
     // 底部提示行文案按可用能力动态拼装（设计空白——防 >9 项/视口态提示撒谎）
     const hint = t("pick.line.foot"); // m5-i18n T6：脚注整句走键（分能力动态拼装走查后再拆）
@@ -188,7 +200,7 @@ export function pick(items: string[], io: {
         lines.push(i === selected ? reverse(rowLabel(i)) : rowLabel(i));
       }
       if (editing) lines.push(`${t("pick.custom.input")}${customText}`); // 输入态：提示行上插自行输入行
-      lines.push(flash !== "" ? flash : editing ? t("pick.custom.foot") : multi ? t("pick.line.multiFoot") : hint);
+      lines.push(flash !== "" ? flash : editing ? t("pick.custom.foot") : opts !== undefined ? t("pick.line.multiFoot") : hint);
       return lines;
     };
     let drawn = 0; // 上一帧的视觉行数（moveUp 的唯一口径）
@@ -211,9 +223,9 @@ export function pick(items: string[], io: {
         else if (k.type === "enter") {
           const v = customText.trim();
           if (v !== "") {
-            customCommitted = v; // 多选单槽覆盖（D3）
-            if (!multi) return { picked: [], custom: v }; // 单选自定义即答（kimi commitOtherInput 同款）
-            editing = false;
+            customCommitted = v; // 单槽覆盖（D3）/单选圆圈移到其他行
+            if (!multi) checked.length = 0; // 圆圈唯一——自定义入选即移出普通项
+            editing = false; // 走查修：单选输入 Enter 回列表不再即答——确定行统一提交（撤回）
           } // 空输入 Enter 无效（kimi :344——不丢已输内容）
         } else if (k.type === "char") customText += k.ch;
         else if (k.type === "paste") customText += k.text.replace(/\s*\n\s*/g, " "); // 粘贴整段并入（换行压平）
@@ -228,31 +240,36 @@ export function pick(items: string[], io: {
       if (k.type === "enter") {
         if (opts === undefined) return selected;
         if (selected < items.length) {
-          if (multi) { // 普通项 Enter = 切换勾选（cc SelectMulti「Enter toggles selection」同款）
+          if (multi) { // 普通项 Enter = 方框勾选（cc SelectMulti「Enter toggles selection」同款）
             const at = checked.indexOf(selected);
             if (at >= 0) checked.splice(at, 1); else checked.push(selected);
-            render();
-            continue;
+          } else {
+            radioSelect(selected); // 走查修：圆圈选定（再按取消、选他项移位）——不即答
           }
-          return { picked: [selected] };
+          render();
+          continue;
         }
         if (selected === items.length) { // 其他行
-          if (multi && customCommitted !== undefined) { customCommitted = undefined; render(); continue; } // 对称撤销（kimi :301-307）
+          if (customCommitted !== undefined) { customCommitted = undefined; render(); continue; } // 对称撤销（kimi :301-307——走查修后两态共用）
           editing = true;
           render();
           continue;
         }
-        // 确定行（multi）：零勾选 toast 不关窗（D5——行模式无浮动 toast，闪现提示行一拍）
+        // 确定行：零选 toast 不关窗（D5——行模式无浮动 toast，闪现提示行一拍）；走查修后单选多选统一
         if (checked.length === 0 && customCommitted === undefined) flash = t("pick.multi.emptyToast");
         else return { picked: [...checked], ...(customCommitted !== undefined ? { custom: customCommitted } : {}) };
         render();
         continue;
       }
-      // D7：multi 空格切换（光标不动；仅普通项——合成行无效）；multi 态数字直达让位（防误触）
-      if (multi && k.type === "char" && k.ch === " ") {
+      // D7 + 走查修：空格标记、光标不动（仅普通项——合成行无效）；multi 数字直达让位（防误触）
+      if (opts !== undefined && k.type === "char" && k.ch === " ") {
         if (selected < items.length) {
-          const at = checked.indexOf(selected);
-          if (at >= 0) checked.splice(at, 1); else checked.push(selected);
+          if (multi) {
+            const at = checked.indexOf(selected);
+            if (at >= 0) checked.splice(at, 1); else checked.push(selected);
+          } else {
+            radioSelect(selected);
+          }
         }
         render();
         continue;
@@ -262,10 +279,14 @@ export function pick(items: string[], io: {
       else if (k.type === "page" && k.dir === "up") selected = Math.max(0, selected - (vpHeight ?? rowsTotal));
       else if (k.type === "page" && k.dir === "down") selected = Math.min(rowsTotal - 1, selected + (vpHeight ?? rowsTotal));
       else if (!multi && k.type === "char" && items.length <= 9 && /^[1-9]$/.test(k.ch)) {
-        // 数字直达：单选照旧（含 ex 面）；multi 让位（D7——防误触）
+        // 数字直达：老面照旧即答；ex 单选=圆圈选定（走查修后不即答）；multi 让位（D7——防误触）
         const n = Number(k.ch);
-        if (n <= items.length) return opts === undefined ? n - 1 : { picked: [n - 1] };
-        continue; // 超界数字——无状态变化
+        if (n <= items.length) {
+          if (opts === undefined) return n - 1;
+          radioSelect(n - 1);
+        }
+        render();
+        continue; // 超界数字——无状态变化也重绘一帧（与 opts 面其余键路一致）
       } else continue; // 其余按键忽略——不重绘
       render();
     }
