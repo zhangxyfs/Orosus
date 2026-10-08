@@ -2768,20 +2768,31 @@ describe("双击选词/三击选行（m5 鼠标批 T6——kimi :1169-1257 同�
 		expect(wordRangeAt("see a/b/c.ts ok", 3)).toBeUndefined(); // 空白段
 	});
 	it("T6-2 双击选词：500ms 内同词两击 → 选区恰为词区间；三击 → 整行", async () => {
-		const { app, input } = rig(mkDoc());
-		app.start();
-		await flush();
-		const st = app.stateRef as unknown as SelState;
-		press(input, 6, 0); // docIdx 75 列 6（b 处）——第一击 count 1
-		press(input, 6, 0); // 同点第二击 count 2 → 词区间
-		await flush();
-		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 4 });
-		expect(st.mselFocus).toEqual({ scope: "main", docIdx: 75, col: 12 });
-		press(input, 6, 0); // 第三击 count 3 → 整行
-		await flush();
-		expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 0 });
-		expect(st.mselFocus?.docIdx).toBe(75); // 整行选区（scope main）
-		app.stop();
+		{ // 段一：双击 → 词区间（两击零间隔连发，窗口判定不受其后 flush 影响）
+			const { app, input } = rig(mkDoc());
+			app.start();
+			await flush();
+			const st = app.stateRef as unknown as SelState;
+			press(input, 6, 0); // docIdx 75 列 6（b 处）——第一击 count 1
+			press(input, 6, 0); // 同点第二击 count 2 → 词区间
+			await flush();
+			expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 4 });
+			expect(st.mselFocus).toEqual({ scope: "main", docIdx: 75, col: 12 });
+			app.stop();
+		}
+		{ // 段二：三击 → 整行。三击必须零间隔连发：旧版在两击与第三击之间夹一次 flush + 断言——
+		  // 慢机/负载下 flush(40) 实际墙钟可超 500ms，第三击漂出窗口计数被重置，整行永不成立
+		  //（release-npm 0.1.1 实发轮满载全量抓出；拆段保中间态断言、连发保三击窗口）
+			const { app, input } = rig(mkDoc());
+			app.start();
+			await flush();
+			const st = app.stateRef as unknown as SelState;
+			press(input, 6, 0); press(input, 6, 0); press(input, 6, 0); // 连发三击（同 tick，窗口必内）
+			await flush();
+			expect(st.mselAnchor).toEqual({ scope: "main", docIdx: 75, col: 0 });
+			expect(st.mselFocus?.docIdx).toBe(75); // 整行选区（scope main）
+			app.stop();
+		}
 	});
 	it("T6-3 双击后向上拖：锚点切到初始区间尾端（智能扩选反向）；向下拖按词对齐", async () => {
 		const { app, input } = rig(mkDoc());
@@ -2943,7 +2954,7 @@ describe("拖选自动滚（m5 鼠标批 T9——压边缘 50ms 一格 + 指针�
 		const st = app.stateRef as unknown as AutoState;
 		press(input, 6, 10); // 流区中部起锚（docIdx 75+10=85）
 		dragTo(input, 6, 0); // 压顶（y=0 ≤ 顶）——启动向上自动滚
-		await flush(180); // ≥3 个脉冲
+		await flush(700); // 50ms 脉冲给 14 倍墙钟余量（满载下 setInterval 漂移——180ms 内曾只发出 1 格）
 		expect(st.scrollBack).toBeGreaterThanOrEqual(3); // 50ms 一格（kimi :1283）
 		expect(st.mselFocus?.scope).toBe("main");
 		expect((st.mselFocus?.docIdx ?? 0)).toBeLessThan(85); // focus 随内容上滚吃进历史行（指针没动内容动了）
@@ -2977,7 +2988,7 @@ describe("拖选自动滚（m5 鼠标批 T9——压边缘 50ms 一格 + 指针�
 		st.scrollBack = 74; // maxScroll = 101−26 = 75——一格到顶
 		press(input, 6, 10);
 		dragTo(input, 6, 0); // 压顶继续向上
-		await flush(150);
+		await flush(600); // 50ms 脉冲给 12 倍余量（满载漂移下 150ms 内曾未滚到头，钳制未触发、定时器悬挂）
 		expect(st.scrollBack).toBe(75); // 恰到顶
 		expect(st.autoScrollTimer).toBeUndefined(); // 钳制不变即自停（无悬挂句柄）
 		app.stop();
