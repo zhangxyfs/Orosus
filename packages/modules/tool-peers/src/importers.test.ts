@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectSources, importNotes, importNotesProgressive, organizeNote, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
+import { detectSources, importNotes, importNotesProgressive, mergeLegacyMemory, organizeNote, organizeNotes, parseSourceNote, readSourceNotes, type SourceNote } from "./importers.ts";
 import { listNotes } from "./memstore.ts";
+import { encodeCwdLike, memoryBucketKey } from "./roots.ts";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "peers-imp-")); });
@@ -339,5 +340,81 @@ describe("走查十一：importNotesProgressive 逐条单通道（机械档进�
     expect(r2).toEqual({ imported: 0, skipped: 0, merged: 0 });
     expect(llmCalls).toBe(0);
     expect(listNotes(dest2)).toHaveLength(0);
+  });
+});
+
+describe("mergeLegacyMemory（T5 旧桶合并——四分支判定序）", () => {
+  /** 夹具：tmp 仓库（.git 在 repo）+ 子目录 cwd → 新旧键必不同；memoryBase 独立 tmp 根。 */
+  const mkRepo = (): { cwd: string; base: string; legacyDir: string; newDir: string } => {
+    const repo = join(root, "repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const cwd = join(repo, "packages", "sub");
+    mkdirSync(cwd, { recursive: true });
+    const base = join(root, "memories", "projects");
+    return { cwd, base, legacyDir: join(base, encodeCwdLike(cwd)), newDir: join(base, memoryBucketKey(cwd)) };
+  };
+  /** 笔记写入桶的 memory 层（真实桶结构 = <key>/memory/*.md——env.memoryDir / importWithOrganize 同构）。 */
+  const put = (bucketDir: string, title: string): void => {
+    mkdirSync(join(bucketDir, "memory"), { recursive: true });
+    writeFileSync(join(bucketDir, "memory", `${title}.md`), `---\nname: ${title}\ndescription: d\n---\n\nbody\n`);
+  };
+
+  it("分支 1：同键（非 git 目录——memoryBucketKey 回退裸键）零操作", () => {
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    const base = join(root, "memories", "projects");
+    put(join(base, encodeCwdLike(plain)), "已有");   // 即便桶在，同键 = 无迁移可做
+    expect(mergeLegacyMemory(base, plain)).toEqual({ merged: 0 });
+  });
+  it("分支 2：旧键桶不存在 → 零", () => {
+    const { cwd, base } = mkRepo();
+    expect(mergeLegacyMemory(base, cwd)).toEqual({ merged: 0 });
+  });
+  it("分支 3：仅旧桶存在 → rename 直迁（零拷贝；merged = 桶内笔记数，G9 toast 照报）", () => {
+    const { cwd, base, legacyDir, newDir } = mkRepo();
+    put(legacyDir, "旧记忆A");
+    put(legacyDir, "旧记忆B");
+    const r = mergeLegacyMemory(base, cwd);
+    expect(r).toEqual({ merged: 2, legacyBucket: encodeCwdLike(cwd) });
+    expect(existsSync(newDir)).toBe(true);           // 改名到位 = 迁移完成
+    expect(existsSync(legacyDir)).toBe(false);       // 旧名不复存在
+    expect(listNotes(join(newDir, "memory"))).toHaveLength(2);
+    expect(readFileSync(join(newDir, "memory", "旧记忆A.md"), "utf8")).toContain("body");   // 笔记本体随改名完好
+  });
+  it("分支 3 空桶：同样改名占位、merged = 0（不 toast）", () => {
+    const { cwd, base, legacyDir, newDir } = mkRepo();
+    mkdirSync(legacyDir, { recursive: true });
+    const r = mergeLegacyMemory(base, cwd);
+    expect(r).toEqual({ merged: 0, legacyBucket: encodeCwdLike(cwd) });
+    expect(existsSync(newDir)).toBe(true);
+    expect(existsSync(legacyDir)).toBe(false);
+  });
+  it("分支 4：两桶并存 → 旧笔记并入新桶 + 旧桶改名 _merged_ 留痕（G1 不删）", () => {
+    const { cwd, base, legacyDir, newDir } = mkRepo();
+    put(legacyDir, "旧记忆A");
+    put(newDir, "新桶已有B");
+    const r = mergeLegacyMemory(base, cwd);
+    expect(r).toEqual({ merged: 1, legacyBucket: encodeCwdLike(cwd) });
+    expect(listNotes(join(newDir, "memory")).map(n => n.title).toSorted()).toEqual(["新桶已有B", "旧记忆A"]);
+    expect(existsSync(join(base, `_merged_${encodeCwdLike(cwd)}`))).toBe(true);   // 留痕不删
+    expect(existsSync(legacyDir)).toBe(false);   // 原名让位（防下次重复合并）
+  });
+  it("分支 4 旧桶仅 MEMORY.md 索引：无内容可合 → 跳过不动（不改名）", () => {
+    const { cwd, base, legacyDir, newDir } = mkRepo();
+    mkdirSync(join(legacyDir, "memory"), { recursive: true });
+    writeFileSync(join(legacyDir, "memory", "MEMORY.md"), "# Memory Index\n");
+    put(newDir, "新桶已有B");
+    expect(mergeLegacyMemory(base, cwd)).toEqual({ merged: 0 });
+    expect(existsSync(join(legacyDir, "memory", "MEMORY.md"))).toBe(true);   // 原样不动
+    expect(existsSync(join(base, `_merged_${encodeCwdLike(cwd)}`))).toBe(false);
+  });
+  it("幂等（G8 注记）：分支 4 跑两遍零重复——第二遍旧键桶已不存在 = 分支 2", () => {
+    const { cwd, base, legacyDir, newDir } = mkRepo();
+    put(legacyDir, "旧记忆A");
+    put(newDir, "新桶已有B");
+    mergeLegacyMemory(base, cwd);
+    const r2 = mergeLegacyMemory(base, cwd);
+    expect(r2).toEqual({ merged: 0 });
+    expect(listNotes(join(newDir, "memory"))).toHaveLength(2);   // 无重复
   });
 });

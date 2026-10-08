@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { listNotes, rebuildIndex, slugify, writeNoteFile, type NoteType } from "./memstore.ts";
+import { encodeCwdLike, memoryBucketKey } from "./roots.ts";
 
 /** 五源导入件（m5-peers T6d，v3/v5 走查定案）：纯函数——探测/格式转换/标题去重/整理通道。
  *  导入 = 一次性搬运（D18，重复导入靠标题去重）；模型整理 = 依赖注入 llmStream（D20，默认关零 token）。 */
@@ -272,4 +273,35 @@ export async function importNotesProgressive(
   }
   if (imported > 0) rebuildIndex(destDir);   // 最后一次重建（走查九-①）
   return { imported, skipped: sources.length - fresh.length, merged };
+}
+
+export interface MergeLegacyResult { merged: number; legacyBucket?: string }
+
+/** 旧 cwd 键桶的启动合并（m5-peers-import-fix T5，D2）：桶键改 git 根后，曾在子目录启动写/导过记忆的
+ *  旧数据留在 cwd 键桶里读不到——启动时一次性合并，用户无感升级。判定序四分支（doc-review 定案——
+ *  「先探新桶存在性」收拢）：
+ *  ① 新旧键相同（非 git 目录——memoryBucketKey 回退裸键）→ 零操作；
+ *  ② 旧键桶不存在 → 零操作；
+ *  ③ 新键桶不存在 → 旧桶**直接改名**为新键名（rename 即迁移零拷贝；空桶同样改名占位）——
+ *    merged = 被改名桶的笔记数（rename 直迁同样是「旧记忆到位」，G9 toast 照报数；空桶 = 0 不 toast）；
+ *  ④ 两桶并存：旧桶有笔记 → importNotes 并入新桶（标题判重幂等可重入）→ 旧桶改名 `_merged_<原名>`
+ *    留痕不删（G1）；旧桶无笔记（含仅 MEMORY.md 索引）→ 跳过不动（无内容可合）。
+ *  合并只针对「当前 cwd 旧键桶」一个（D2：其他子目录旧桶等将来在那个目录启动时各自合并）。 */
+export function mergeLegacyMemory(memoryBase: string, cwd: string): MergeLegacyResult {
+  const newKey = memoryBucketKey(cwd);
+  const legacyKey = encodeCwdLike(cwd);
+  if (newKey === legacyKey) return { merged: 0 };   // ① 同键（非 git 回退）——本机从仓库根启动即此形态
+  const legacyDir = join(memoryBase, legacyKey);
+  if (!existsSync(legacyDir)) return { merged: 0 };   // ② 无旧桶
+  const legacyNotes = readSourceNotes(join(legacyDir, "memory"));   // 桶结构 = <key>/memory/*.md
+  const newDir = join(memoryBase, newKey);
+  if (!existsSync(newDir)) {
+    // ③ rename 直迁：merged = 桶内笔记数（空桶 0）；改名后旧键桶不存在 → 天然幂等
+    renameSync(legacyDir, newDir);
+    return { merged: legacyNotes.length, legacyBucket: legacyKey };
+  }
+  if (legacyNotes.length === 0) return { merged: 0 };   // ④ 无笔记（仅索引/空）——跳过不动
+  const { imported } = importNotes(join(newDir, "memory"), legacyNotes);
+  renameSync(legacyDir, join(memoryBase, `_merged_${legacyKey}`));   // G1 留痕不删；原名让位防重复合并
+  return { merged: imported, legacyBucket: legacyKey };
 }
