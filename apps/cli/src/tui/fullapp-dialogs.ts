@@ -270,11 +270,13 @@ export function createDialogs(app: FullApp) {
 
 	/** choose 的全屏形态：overlay 列表选择（Esc → undefined——宿主侧转「已取消（Esc）」，机制③同族）。
 	 *  单槽占用期 FIFO 暂存（批③②——不再顶退挂起者）。
-	 *  m5-ask-multi：opts 传入 = chooseEx 增强面。走查修（2026-10-08）后 resolve 回调只剩两口：
+	 *  m5-ask-multi：opts.custom: true = chooseEx 增强面。走查修（2026-10-08）后 resolve 回调只剩两口：
 	 *  undefined（Esc）与 items.length + 1（确定行——单选/多选统一提交口）；结算值按 pu 现值组装：
 	 *  checked 升序映射 + customCommitted 恒尾（单选圆圈唯一 → 两者互斥恰一项成员）。
-	 *  resolve 对外签名零改动（风险节铁律——勿为文本扩类型）。 */
-	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { multi?: boolean }): Promise<number | undefined | string[] | undefined> => {
+	 *  resolve 对外签名零改动（风险节铁律——勿为文本扩类型）。增强面旗标显式化（2026-10-08）：
+	 *  opts 传入不再隐式触发合成行——settings 高窗 opts.tall 等展示旗标走老选择面。
+	 *  settings 高窗（2026-10-08 用户拍板）：opts.tall: true = 页大小随终端高 [10,20]（渲染层 pickPageOf 现算）。 */
+	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { custom?: boolean; multi?: boolean; tall?: boolean }): Promise<number | undefined | string[] | undefined> => {
 		if (app.pendingUi !== undefined) {
 			return new Promise((resolve) => app.uiQueue.push({ run: () => {
 				if (app.stopped) { resolve(undefined); return; }
@@ -282,6 +284,7 @@ export function createDialogs(app: FullApp) {
 			} }));
 		}
 		app.state.overlayOpen = false; // 与斜杠菜单互斥
+		const ex = opts?.custom === true; // chooseEx 增强面（「其他」+「确定」合成行）——显式旗标
 		return new Promise((resolve) => {
 			// ≥12 项启用输入过滤（F5 九轮① 用户拍板：厂商目录全量直列、列表内输入即筛——includes 口径）
 			// m5-ask-multi：合成行不参与过滤（D8）——「其他」「确定」恒显示，阈值仍按普通项数计
@@ -290,18 +293,19 @@ export function createDialogs(app: FullApp) {
 				title,
 				items,
 				sel: Math.max(0, Math.min(items.length - 1, selAt)), // m4-7 T9：初始选中（详情 Esc 回列表选中行回到该技能）
-				resolve: opts === undefined
-					? resolve
-					: (n: number | undefined) => {
+				resolve: ex
+					? (n: number | undefined) => {
 						if (n === undefined) { resolve(undefined); return; }
 						const out = pu.checked.toSorted((a, b) => a - b).map((i) => items[i]!);
 						if (pu.customCommitted !== undefined) out.push(pu.customCommitted); // 「其他」恒尾语义
 						resolve(out);
-					},
+					}
+					: resolve,
 				...(items.length >= 12 ? { filter: "" } : {}),
 				...(keys !== undefined ? { extraKeys: keys } : {}),
+				...(ex ? { custom: true } : {}),
 				...(opts?.multi === true ? { multi: true } : {}),
-				...(opts !== undefined ? { custom: true } : {}),
+				...(opts?.tall === true ? { tall: true } : {}),
 				checked: [],
 				customText: "",
 				editing: false,

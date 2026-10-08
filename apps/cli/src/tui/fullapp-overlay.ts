@@ -26,15 +26,26 @@ export interface PickOverlayExt {
 	customText?: string;
 	customCommitted?: string;
 	checked?: number[];
+	/** 内容窗高（settings 高窗 2026-10-08）：frame 层按 pickPageOf(divRow, tall) 现算注入；缺省 OVERLAY_PAGE。 */
+	page?: number;
 }
+
+/** pick 浮层页大小（settings 高窗 2026-10-08 用户拍板）：tall 面按输入框上缘可用高动态取
+ *  [OVERLAY_PAGE, 20]——预算 = divRow − 6（顶框 + 空行 + 提示行 + 底框 4 恒定行，再留上下
+ *  余量两行的上界；增强面输入行不入预算——row 钳 0 兜底）；其余面恒 OVERLAY_PAGE。
+ *  渲染（frame 注入 ext.page）/ 翻页步长（keys）/ 鼠标点击（pickHitRow）三口共源——漂移即
+ *  点击错行或步长与视口不符。每帧现算，resize 即生效。 */
+export const pickPageOf = (divRow: number, tall: boolean | undefined): number =>
+	tall === true ? Math.max(OVERLAY_PAGE, Math.min(20, divRow - 6)) : OVERLAY_PAGE;
 
 /** pick 浮层行域视口几何（渲染与鼠标点击共源——两处口径漂移即点击错行）。
  *  rowsTotal 含合成行（其他〔+确定〕）；totalLines = 顶框 + 空行 + moreUp? + 内容窗 + moreDown? +
- *  输入行（editing）+ 提示行 + 底框——与 buildPickOverlay 的 olines 结构一一对齐。 */
-export function pickOverlayGeo(rowsTotal: number, sel: number, editing: boolean): { selI: number; winStart: number; winLen: number; moreUp: boolean; moreDown: boolean; totalLines: number } {
+ *  输入行（editing）+ 提示行 + 底框——与 buildPickOverlay 的 olines 结构一一对齐。
+ *  page（settings 高窗 2026-10-08）：内容窗高——缺省 OVERLAY_PAGE（老 choose 面逐字节原样）。 */
+export function pickOverlayGeo(rowsTotal: number, sel: number, editing: boolean, page: number = OVERLAY_PAGE): { selI: number; winStart: number; winLen: number; moreUp: boolean; moreDown: boolean; totalLines: number } {
 	const selI = Math.max(0, Math.min(rowsTotal - 1, sel));
-	const winStart = Math.max(0, Math.min(Math.max(0, rowsTotal - OVERLAY_PAGE), selI - OVERLAY_PAGE + 1));
-	const winLen = Math.min(OVERLAY_PAGE, rowsTotal - winStart);
+	const winStart = Math.max(0, Math.min(Math.max(0, rowsTotal - page), selI - page + 1));
+	const winLen = Math.min(page, rowsTotal - winStart);
 	const moreUp = winStart > 0;
 	const moreDown = rowsTotal - winStart - winLen > 0;
 	return { selI, winStart, winLen, moreUp, moreDown, totalLines: 4 + (moreUp ? 1 : 0) + winLen + (moreDown ? 1 : 0) + (editing ? 1 : 0) };
@@ -76,7 +87,7 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 	const topFill = Math.max(1, ow - 4 - visibleWidth(titleSeg) - visibleWidth(theme.dim(filterSeg)));
 	olines.push(theme.bg("surface2", theme.fg(bc, "╭─") + titleSeg + theme.fg(bc, "─".repeat(topFill)) + theme.dim(filterSeg) + theme.fg(bc, "─╮")));
 	olines.push(boxRow(""));
-	const { selI, winStart, winLen, moreUp, moreDown } = pickOverlayGeo(rowsTotal, sel, ext?.editing === true);
+	const { selI, winStart, winLen, moreUp, moreDown } = pickOverlayGeo(rowsTotal, sel, ext?.editing === true, ext?.page);
 	if (moreUp) olines.push(boxRow(theme.dim(`   ${t("pick.moreUp", { n: winStart })}`)));
 	for (let i = 0; i < winLen; i++) {
 		const gi = winStart + i;

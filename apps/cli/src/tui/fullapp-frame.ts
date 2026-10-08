@@ -4,6 +4,7 @@
  *  零改动——设计空白 7）；styleWithSelection 零 app 触达住模块级。非公开 API。 */
 
 import { INPUT_MAX_ROWS, layoutInputRows, locateCursor, permLabel, thumbGeometry, type InputRow } from "./fullapp-types.ts";
+import { pickPageOf } from "./fullapp-overlay.ts";
 import { t } from "../i18n/app.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { subagentCountHint } from "../subagent-status.ts";
@@ -236,6 +237,8 @@ export function createFrame(app: FullApp) {
 				checked: pu.checked,
 				...(pu.multi === true ? { multi: true } : {}),
 				...(pu.customCommitted !== undefined ? { customCommitted: pu.customCommitted } : {}),
+				// settings 高窗（2026-10-08）：页大小按本帧 divRow 现算——resize 即生效，keys/鼠标同源取值
+				...(pu.tall === true ? { page: pickPageOf(divRow, true) } : {}),
 			});
 		} else if (app.pendingUi?.kind === "view") {
 			const pu = app.pendingUi;

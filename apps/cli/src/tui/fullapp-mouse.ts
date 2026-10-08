@@ -6,7 +6,7 @@
 import { WHEEL_STEP, ALT_WHEEL_MULTIPLIER, thumbGeometry, wordRangeAt } from "./fullapp-types.ts";
 import { filterEntries } from "./fullapp-at.ts";
 import { pickActivateRow, type PickUi } from "./fullapp-keys.ts";
-import { pickOverlayGeo } from "./fullapp-overlay.ts";
+import { pickOverlayGeo, pickPageOf } from "./fullapp-overlay.ts";
 import { osc8LinkAtColumn, stripAnsi, visibleWidth } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
 import type { WheelEvent, ButtonEvent } from "./mouse.ts";
@@ -94,7 +94,7 @@ export function createMouse(app: FullApp) {
 		const pairs = pu.items.map((t, i) => ({ t, i }));
 		const filtered = pu.filter === undefined ? pairs : pairs.filter((p) => p.t.toLowerCase().includes(pu.filter!.toLowerCase()));
 		const rowsTotal = filtered.length + 2; // 两合成行恒在（走查修后单选/多选同构）
-		const geo = pickOverlayGeo(rowsTotal, pu.sel, false);
+		const geo = pickOverlayGeo(rowsTotal, pu.sel, false, pickPageOf(divRow, pu.tall)); // settings 高窗（2026-10-08）：页大小与渲染共源
 		const top = Math.max(0, divRow - geo.totalLines);
 		if (y < top || y > divRow - 1) return undefined; // 盒外（底框 = divRow−1，其下是输入框顶）
 		const gi = y - (top + 2 + (geo.moreUp ? 1 : 0)); // 顶框 + 空行 + moreUp? 后即内容窗首行

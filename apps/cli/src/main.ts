@@ -279,7 +279,7 @@ const pickFace =
 // 编号/文本回落（chooseExFace 不随 pickFace 的 TTY 门——管道喂「3」/「1,3」/自由文本照常工作）。
 // undefined = Esc（createReadlineUi chooseEx 侧统一转「已取消（Esc）」，MB-08 穿透不动）。
 const chooseExFace = async (title: string, items: string[], opts?: { multi?: boolean }): Promise<string[] | undefined> => {
-  if (activeApp !== undefined) return await activeApp.pickOverlay(title, items, 0, undefined, opts ?? {});
+  if (activeApp !== undefined) return await activeApp.pickOverlay(title, items, 0, undefined, { custom: true, ...opts });
   lv.write(`${t("main.pick.header", { title: title })}
 `);
   const r = await pick(items, terminalMenuIo(process.stdin.isTTY === true), opts ?? {});

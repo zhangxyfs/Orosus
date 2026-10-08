@@ -34,21 +34,22 @@ export type SettingsUiDeps = {
   localeApplied: (toast: string) => void;
 };
 
-/** /settings 二级菜单五项（SW-18 定案——/other 改名 /settings，别名 /config；前四项渲染原四子项面板，
- *  第五项「配置网络搜索」进 tool-web__settings 三级配置流。数据源 = harness 读口 h.usage()/h.status()）。 */
+/** /settings 根列表（SW-18 定案——/other 改名 /settings，别名 /config）。2026-10-08 用户拍板序位：
+ *  … 钩子 → MCP → 记忆（动态项，插此）→ 切换语言 → 更新检查 → 配置视觉模型 → 配置网络搜索——
+ *  记忆/语言/更新三项连座紧随 MCP，视觉/搜索两工具配置殿后。数据源 = harness 读口 h.usage()/h.status()。 */
 export const settingsItemsBase = (): string[] => [
-	t("settings.items.disk"),
-	t("settings.items.ctx"),
-	t("settings.items.tokens"),
-	t("settings.items.runtime"),
-	t("settings.items.subagent"),
-	t("settings.items.skills"),
-	t("settings.items.hooks"),
-	t("settings.items.mcp"),
-  t("settings.items.vision"),
-  t("settings.items.search"),
+  t("settings.items.disk"),
+  t("settings.items.ctx"),
+  t("settings.items.tokens"),
+  t("settings.items.runtime"),
+  t("settings.items.subagent"),
+  t("settings.items.skills"),
+  t("settings.items.hooks"),
+  t("settings.items.mcp"),
   t("settings.items.locale"),
   t("settings.items.update"),
+  t("settings.items.vision"),
+  t("settings.items.search"),
 ];
 /** 第五项 = 调 web 模块自有命令（模块命令 + host 挂菜单的 approval__permission 先例）；空串 = 静默成功/取消（notice 承担反馈）。 */
 const runSearchSettings = async (h: Harness): Promise<string> => ((await h.prompt("/tool-web__settings")) ?? "").trim();
@@ -108,14 +109,16 @@ const runImportWithProgress = async (app: FullApp, deps: MemoryImportDeps, ids: 
 	app.showToast(`${stopped ? `${t("settings.import.stopped")} ` : ""}${memoryImportResultText(r)}`, 6000);
 };
 
-/** D14（m5-peers T6b）：settings 面第一个动态条目——tool-peers 模块 active（启用）时尾部追加「记忆」；
- *  未启用/卸载即从列表消失。静态数组保留导出（hooks-ui.test 序位锚等外部消费兼容）。
+/** D14（m5-peers T6b）：settings 面动态条目——tool-peers 模块 active（启用）时插「记忆」于 MCP 后
+ *  （2026-10-08 用户拍板：MCP → 记忆 → 切换语言 → 更新检查 连座——原尾行追加形态退役）；未启用/卸载
+ *  即从列表消失、后续项上移一位。静态数组保留导出（hooks-ui.test 序位锚等外部消费兼容）。
  *  模块启停本身走 config enabled（通用模块启停 UI 顺延，D15 注记）——这里只看运行态。 */
 export const settingsItems = (h: Harness): string[] => {
-	const peersActive = h.graph().audit().some((a) => a.name === "tool-peers" && a.state === "active");
-  // m5-i18n T3：第 11 项「切换语言」恒在（索引 10）；m5-update-check：第 12 项「更新检查」（索引 11）；
-  // peers 动态项随后（索引 12）
-  return peersActive ? [...settingsItemsBase(), t("settings.items.memory")] : settingsItemsBase();
+  const peersActive = h.graph().audit().some((a) => a.name === "tool-peers" && a.state === "active");
+  if (!peersActive) return settingsItemsBase();
+  const base = settingsItemsBase();
+  const at = base.indexOf(t("settings.items.locale")); // 插在切换语言前 = MCP 后（连座首邻）
+  return [...base.slice(0, at), t("settings.items.memory"), ...base.slice(at)];
 };
 
 export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Promise<void> => {
@@ -123,8 +126,11 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 	// 只读子窗走 /tasks 同款 FIFO——viewText 占槽期循环重入的 pickOverlay 排队，关窗即自动顶上回根列表
 	for (;;) {
 		const items = settingsItems(deps.getH());
-		const picked = await app.pickOverlay(t("settings.title"), items);
+		// settings 高窗（2026-10-08 用户拍板）：根列表页大小随终端高动态 [10,20]（pickPageOf——13 项常规终端一屏尽览）
+		const picked = await app.pickOverlay(t("settings.title"), items, 0, undefined, { tall: true });
 		if (picked === undefined) return; // 根列表 Esc：整面收起
+		// 8+ 索引现算（2026-10-08 序位重排后记忆动态项插 MCP 后——位序随 peers 启停漂移，不落硬编码；0-7 恒稳定）
+		const at = (key: string): number => items.indexOf(t(key));
 		// 五个只读子窗一律 dock（2026-09-28 用户走查打回 m5 T2 的居中长相：贴输入框上缘——技能详情窗同款）
 		if (picked === 0) app.viewText(t("settings.title.disk"), diskUsageText(), { layout: "dock" });
 		else if (picked === 1) app.viewText(t("settings.title.ctx"), ctxUsageText(deps.getPanelCache()), { layout: "dock" });
@@ -161,7 +167,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 		else if (picked === 5) await openSkillsPanel(app, deps.skillDeps); // 技能面板自身管列表↔详情逐级返回；其根列表 Esc = 退出面板 → 回设置根列表
 		else if (picked === 6) await openHooksPanel(app, deps.hooksDeps); // m5-hooks T10：钩子面板自管（用户拍板不设 /hooks 命令）
 		else if (picked === 7) await openMcpPanel(app, deps.mcpDeps); // MCP 管理面（m4-3c T17）：面板自身管逐级返回
-		else if (picked === 8) {
+		else if (picked === at("settings.items.vision")) {
 			// F14 视觉模型：chooseVia 内取消（Esc）= 整支放弃回设置根列表
 			try {
 				const res = await runVisionSetting(
@@ -178,7 +184,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
-		else if (picked === 9) {
+		else if (picked === at("settings.items.search")) {
 			// 顶层后端菜单的 Esc → 回设置根列表（更深的 Esc 已在 tool-web 模块内逐级返回）
 			try {
 				const res = await runSearchSettings(deps.getH());
@@ -188,7 +194,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
-		else if (picked === 10) {
+		else if (picked === at("settings.items.locale")) {
 			// m5-i18n T3：「切换语言」行——与 /locale 命令同源；Esc 静默回设置根列表（不落盘）
 			try {
 				const toast = await runLocaleSetting(
@@ -205,7 +211,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
 				throw err;
 			}
 		}
-      else if (picked === 11) {
+      else if (picked === at("settings.items.update")) {
         // m5-update-check T5：「更新检查」开关——只管自动检测（写 [update] check；下次启动生效）
         try {
           const res = await runUpdateCheckSetting(async (title, items) => {
@@ -219,7 +225,7 @@ export const openSettingsPanel = async (app: FullApp, deps: SettingsUiDeps): Pro
           throw err;
         }
       }
-      else if (picked === 12) {
+      else if (picked === at("settings.items.memory")) {
         // m5-peers T6b + 走查修订三：「记忆」动态项——双开关 + 记忆导入（浏览窗不走设置入口：
         // /tool-peers__memory 命令 + Ctrl+P 总览两处，走查修订二）
         // 子菜单循环：切换后列表现读刷新（✓ 移位）；子菜单 Esc → 回设置根列表
@@ -262,6 +268,8 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 		const picked = await deps.commandUi.choose(t("settings.title"), items); // 根 Esc 穿透——整面收起
 		const idx = items.indexOf(picked);
 		if (idx === -1) return;
+		// 8+ 索引现算（全屏对等件——记忆动态项插 MCP 后，位序随 peers 启停漂移）
+		const at = (key: string): number => items.indexOf(t(key));
 		if (idx === 0) out(diskUsageText());
 		else if (idx === 1) out(ctxUsageText(deps.getPanelCache()));
 		else if (idx === 2) out(await tokenUsageText(deps.getH()));
@@ -296,7 +304,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 		else if (idx === 5) await openSkillsLine(out, deps.skillDeps);
 		else if (idx === 6) await openHooksLine(out, deps.hooksDeps); // m5-hooks T10 行模式对等件
 		else if (idx === 7) await openMcpLine(out, deps.mcpDeps);
-		else if (idx === 8) {
+		else if (idx === at("settings.items.vision")) {
 			try {
 				const res = await runVisionSetting(async (t, items) => deps.commandUi.choose(t, items), () => moduleConfigFileFor("tool-media", deps.getH()));
 				// 写盘即自动重载——行模式 /settings busy 期排队到 turn 结束，此处必然空闲（共用件口径）
@@ -307,7 +315,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 				throw err;
 			}
 		}
-		else if (idx === 9) {
+		else if (idx === at("settings.items.search")) {
 			try {
 				const res = await runSearchSettings(deps.getH());
 				if (res !== "") out(res);
@@ -316,7 +324,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 				throw err;
 			}
 		}
-		else if (idx === 10) {
+		else if (idx === at("settings.items.locale")) {
 			// m5-i18n T3 行模式对等件：「切换语言」——与 /locale 同源；Esc 静默回设置根菜单
 			try {
 				const toast = await runLocaleSetting((t, items) => deps.commandUi.choose(t, items), { getH: deps.getH, store: deps.localeStore });
@@ -326,7 +334,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
 				throw err;
 			}
 		}
-      else if (idx === 11) {
+      else if (idx === at("settings.items.update")) {
         // m5-update-check T5 行模式对等件：「更新检查」开关——Esc 静默回设置根菜单
         try {
           const res = await runUpdateCheckSetting((title, items) => deps.commandUi.choose(title, items), updateConfigFile());
@@ -336,7 +344,7 @@ export const openSettingsLine = async (out: (s: string) => void, deps: SettingsU
           throw err;
         }
       }
-      else if (idx === 12) {
+      else if (idx === at("settings.items.memory")) {
         // m5-peers T6b + 走查修订三 行模式对等件：「记忆」双开关 + 记忆导入——子菜单 Esc 回设置根菜单
 			for (;;) {
 				try {

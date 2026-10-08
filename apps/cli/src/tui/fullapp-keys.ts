@@ -2,7 +2,8 @@
  *  （L381-876 原样整体摘取，分派顺序/case 分组/早退路径一个不动——D4 结构红线）。
  *  体内 this.→app. 机械改写 119 处；子系统调用经装配对象前缀。非公开 API。 */
 
-import { CONN_SLOTS, inlineSlashWord, normCmd, OVERLAY_PAGE, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
+import { CONN_SLOTS, inlineSlashWord, normCmd, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
+import { pickPageOf } from "./fullapp-overlay.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
 import type { FullApp } from "./fullapp.ts";
@@ -457,8 +458,13 @@ export function createKeys(app: FullApp) {
 				}
 				if (key === "up" && rowsTotal > 0) pu.sel = (pu.sel - 1 + rowsTotal) % rowsTotal;
 				else if (key === "down" && rowsTotal > 0) pu.sel = (pu.sel + 1) % rowsTotal;
-				else if (key === "pageUp" && rowsTotal > 0) pu.sel = Math.max(0, pu.sel - OVERLAY_PAGE);
-				else if (key === "pageDown" && rowsTotal > 0) pu.sel = Math.min(rowsTotal - 1, pu.sel + OVERLAY_PAGE);
+				// settings 高窗（2026-10-08 用户拍板）：tall 面翻页步长 = 渲染同源页大小（pickPageOf——
+				// divRow 口径与渲染/鼠标一致：layoutFrame 的 streamH + queueH = 输入框顶框所在行）
+				else if ((key === "pageUp" || key === "pageDown") && rowsTotal > 0) {
+					const { streamH, queueH } = app.frame.layoutFrame();
+					const step = pickPageOf(streamH + queueH, pu.tall);
+					pu.sel = key === "pageUp" ? Math.max(0, pu.sel - step) : Math.min(rowsTotal - 1, pu.sel + step);
+				}
 				else if (key === "enter") pickActivateRow(app, pu, pu.sel, filtered);
 				else if (key === "escape") {
 					escCloseWin();

@@ -57,6 +57,8 @@ pnpm install
 
 npm 安装敲 `orosus`（源码安装敲 `pnpm orosus`）。
 
+升级敲 `orosus upgrade`——确认后下载校验、自动全局安装；平时每次启动也会自动检查新版本，有更新横幅常驻提示（`/settings → 更新检查` 可关自动口）。
+
 首次启动若无可用 provider，会自动进入 `/provider` 向导，按菜单引导完成端点 / 密钥 / 模型配置后自动 reload。
 
 ### 3. 日常使用
@@ -71,7 +73,7 @@ npm 安装敲 `orosus`（源码安装敲 `pnpm orosus`）。
 | 模块命令 | `/compact` `/permission` `/yolo` `/auto` | 手动压缩历史 / 切换审批三档 / 一键需要时候询问 / 从不询问模式 |
 | 侧问 | `/btw` | 旁路快问——带着当前对话上下文发问，答案开小窗、不进主对话流（回答中也可问；无参回看最近一次） |
 | 子代理 | `/tasks`（`/task`） | 子代理任务列表——回车进消息查看窗（实时刷新），挂审批的行回车即可批准或拒绝 |
-| 设置 | `/settings`（别名 `/config`） | 磁盘 / 上下文 / Token 用量、运行状态、子代理 / 技能 / 钩子 / MCP / 记忆管理、视觉模型与网络搜索配置 |
+| 设置 | `/settings`（别名 `/config`） | 磁盘 / 上下文 / Token 用量、运行状态、子代理 / 技能 / 钩子 / MCP / 记忆管理、视觉模型与网络搜索配置、更新检查开关 |
 
 技能：输入 `/` 的菜单技能区（`skill : 名`）回车即以用户消息加载全文；`/settings → 技能` 里 Alt+K 启停，出厂自带十一件（commit / code-review / research / doc-review 等）。
 
@@ -91,12 +93,13 @@ npm 安装敲 `orosus`（源码安装敲 `pnpm orosus`）。
 - **会话树**：`/fork` 分叉落盘成树——`/session-tree__view` 全屏看树跳枝、`/session-tree__branch` 在任意节点建新枝，项目内封闭
 - **TUI 界面**：全屏接管、流式重绘、Markdown 渲染（表格 / 代码高亮 / LaTeX）；键盘 + 鼠标双操作面——滚轮滚动、拖选即复制、双击选词 / 三击选行、URL 单击打开、滚动条；历史懒分页回看（翻到顶自动加载更早），Alt+E / O / F / S 分级折叠（思考块 / 工具明细 / 失败详情 / 前序步骤）
 - **数据自治理**：会话 JSONL 可读可 grep；`OROSUS_HOME` 环境变量 + `orosus home migrate` 支持整体迁移缓存目录；模块配置 `modules.d/` 每模块一文件
+- **自升级**：每次启动自动检查新版本（失败静默、不拦启动），有更新横幅常驻提示；`orosus upgrade` 一条命令自升级——真进度条下载 tarball、SRI 校验、npm / pnpm 自动识别全局安装；`/settings → 更新检查` 关自动口，手动升级不受影响
 
 ## 仓库结构
 
 ```
 Orosus/
-├─ apps/cli/                    # 唯一前端：REPL + 子命令（provider / module / sessions prune / home）
+├─ apps/cli/                    # 唯一前端：REPL + 子命令（provider / module / sessions prune / home / upgrade）
 ├─ packages/
 │  ├─ core/                     # 核心五件 + kernel + 诊断日志 + createHarness 编程式入口
 │  ├─ contracts/                # 零依赖契约，按域分包：module / tool / provider / fs / home

@@ -85,14 +85,20 @@ describe("peers 设置面（m5-peers T6b）", () => {
     expect(memoryImportResultText({ imported: 0, skipped: 5, merged: 0 })).toContain("全部与现有记忆重复");
   });
 
-  it("④ settingsItems 动态追加：tool-peers active 才含「记忆」；discovered/缺席不含；既有十二项序位不乱（T3 语言行 + m5-update-check 更新检查行）", () => {
+  it("④ settingsItems 动态插入：tool-peers active 才含「记忆」；discovered/缺席不含；序位 = MCP → 记忆 → 切换语言 → 更新检查 → 视觉 → 搜索（2026-10-08 用户拍板连座）", () => {
     const fakeH = (entries: { name: string; state: string }[]) =>
       ({ graph: () => ({ audit: () => entries }) }) as unknown as Harness;
     const withPeers = settingsItems(fakeH([{ name: "tool-peers", state: "active" }]));
-    expect(withPeers).toHaveLength(13) // m5-update-check 加「更新检查」行后 13（含记忆动态项）;
-    expect(withPeers[11]).toContain("更新检查"); // m5-update-check：语言行占 10 后更新检查随挪 11
-    expect(withPeers[12]).toContain("记忆"); // 更新检查行后记忆随挪 12
-    expect(settingsItems(fakeH([{ name: "tool-peers", state: "discovered" }])).some(x => x.startsWith("记忆"))).toBe(false);
+    expect(withPeers).toHaveLength(13);
+    expect(withPeers[7]).toContain("MCP");
+    expect(withPeers[8]).toContain("记忆"); // 拍板①：记忆 = MCP 下面一行
+    expect(withPeers[9]).toContain("切换语言"); // 拍板②：切换语言 = 记忆下面
+    expect(withPeers[10]).toContain("更新检查"); // 拍板③：更新检测 = 切换语言下面
+    expect(withPeers[11]).toContain("视觉");
+    expect(withPeers[12]).toContain("网络搜索");
+    const noPeers = settingsItems(fakeH([{ name: "tool-peers", state: "discovered" }]));
+    expect(noPeers.some(x => x.startsWith("记忆"))).toBe(false);
+    expect(noPeers[8]).toContain("切换语言"); // 记忆缺席——后续项上移一位
     const base = settingsItems(fakeH([]));
     expect(base.some(x => x.startsWith("记忆"))).toBe(false);
     // hooks-ui.test 外部锚位（技能 5 → 钩子 6 → MCP 7）不受影响

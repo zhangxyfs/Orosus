@@ -4,7 +4,8 @@ import { FullApp, type FullAppIO, type PanelData } from "./fullapp.ts";
 import { stripAnsi } from "./width.ts";
 
 /** m5-ask-multi 全屏挑选窗测试——rig 为 fullapp.test.ts 同款最小形态（本文件聚焦增强面，
- *  不混既有 270 用例的时序负载）。 */
+ *  不混既有 270 用例的时序负载）。2026-10-08 settings 高窗批：增强面旗标显式化——
+ *  opts 需带 custom: true（opts 传入不再隐式触发合成行；tall 等展示旗标走老选择面）。 */
 
 type FakeInput = NodeJS.ReadStream;
 type FakeOutput = NodeJS.WriteStream & { buf: string };
@@ -87,7 +88,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		app.start();
 		await flush();
 		const before = output.buf.length;
-		void app.pickOverlay("发布前检查", ["lint", "test"], 0, undefined, { multi: true });
+		void app.pickOverlay("发布前检查", ["lint", "test"], 0, undefined, { custom: true, multi: true });
 		await flush(80);
 		const frame = stripAnsi(output.buf.slice(before));
 		expect(frame).toContain("发布前检查（可多选）");
@@ -103,7 +104,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const { app, input } = rig();
 		app.start();
 		await flush();
-		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { custom: true, multi: true });
 		await flush();
 		key(input, "\x1b[B"); await flush(); // ↓ 乙
 		key(input, " "); await flush(); // 空格勾选——光标不动
@@ -122,7 +123,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const { app, input } = rig();
 		app.start();
 		await flush();
-		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { custom: true, multi: true });
 		await flush();
 		key(input, "\x1b[B"); key(input, "\x1b[B"); key(input, "\x1b[B"); key(input, "\x1b[B"); await flush(); // ↓↓↓↓ 确定行（3 项 multi：行域 5 行）
 		key(input, "\r"); await flush(80);
@@ -137,7 +138,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const { app, input, output } = rig();
 		app.start();
 		await flush();
-		const p = app.pickOverlay("单", ["A", "B"], 0, undefined, {});
+		const p = app.pickOverlay("单", ["A", "B"], 0, undefined, { custom: true });
 		await flush();
 		key(input, "\r"); await flush(); // Enter A——圆圈选定（走查修后不即答关窗）
 		let pu = app.pendingUi;
@@ -186,7 +187,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		app.start();
 		await flush();
 		app.setBusy(true);
-		const p = app.pickOverlay("选", ["甲", "乙"], 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", ["甲", "乙"], 0, undefined, { custom: true, multi: true });
 		await flush();
 		key(input, " "); await flush(); // 勾甲
 		key(input, "\x1b[B"); key(input, "\x1b[B"); await flush(); // ↓↓ 其他行
@@ -210,7 +211,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const { app, input, output } = rig();
 		app.start();
 		await flush();
-		const p = app.pickOverlay("选", ["甲", "乙"], 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", ["甲", "乙"], 0, undefined, { custom: true, multi: true });
 		await flush();
 		key(input, "\x1b[B"); key(input, "\x1b[B"); await flush(); // ↓↓ 其他行
 		key(input, "\r"); await flush(); // 进输入态（未勾）
@@ -235,7 +236,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		app.start();
 		await flush();
 		const items = Array.from({ length: 14 }, (_, i) => `v${i}`);
-		const p = app.pickOverlay("选", items, 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", items, 0, undefined, { custom: true, multi: true });
 		await flush();
 		key(input, "1"); key(input, "3"); await flush(); // 过滤词 "13"——唯一命中 v13（原始下标 13）
 		const frame = stripAnsi(output.buf.slice(-4000));
@@ -257,7 +258,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		const { streamH, queue, leftW } = app.frame.layoutFrame();
 		const divRow = streamH + (queue.length === 0 ? 0 : queue.length + 1);
 		expect(leftW).toBeGreaterThan(20);
-		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { multi: true });
+		const p = app.pickOverlay("选", ["甲", "乙", "丙"], 0, undefined, { custom: true, multi: true });
 		await flush(80);
 		const top = divRow - 9; // 3 项 multi：4 固定行 + 5 内容行（3 项 + 其他 + 确定）
 		press(input, 3, top + 2); await flush(); // 点击甲行——切换勾选
@@ -267,7 +268,7 @@ describe("pickOverlay 增强面（m5-ask-multi——多选 + 自由输入；D1-D
 		expect(pu.sel).toBe(0); // 焦点随点击
 		press(input, 3, top + 6); await flush(80); // 点击确定行——提交
 		await expect(p).resolves.toEqual(["甲"]);
-		const p2 = app.pickOverlay("单", ["A", "B"], 0, undefined, {});
+		const p2 = app.pickOverlay("单", ["A", "B"], 0, undefined, { custom: true });
 		await flush(80);
 		// 单选 2 项（走查修后行域 4：A/B/其他/确定）——总 8 行；B 行 = top2+3、确定行 = top2+5（内容区第 4 行）
 		const top2 = divRow - 8;

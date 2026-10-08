@@ -43,6 +43,8 @@ pnpm install
 
 Type `orosus` (or `pnpm orosus` when installed from source).
 
+To upgrade, run `orosus upgrade` — after confirmation it downloads, verifies and installs the new version globally; every launch also checks for updates automatically and shows a persistent banner line when one is available (toggle under `/settings → Update check`).
+
 On first launch, if no provider is configured, the `/provider` wizard opens automatically — follow the menus to set up endpoint / API key / model, and modules reload automatically afterwards.
 
 ### 3. Daily Use
@@ -57,7 +59,7 @@ Type natural language to chat. Commands start with `/` (a menu pops up as you ty
 | Module commands | `/compact` `/permission` `/yolo` `/auto` | Compact history / switch approval mode / one-shot ask-when-needed / never-ask mode |
 | Side question | `/btw` | A quick side question with the current conversation context — the answer opens a small window and never enters the main flow (works mid-answer; no argument reopens the last one) |
 | Subagents | `/tasks` (`/task`) | Subagent task list — Enter opens its message view (live refresh); rows with pending approvals can be answered right there |
-| Settings | `/settings` (alias `/config`) | Disk / context / token usage, runtime status, subagent / skill / hook / MCP / memory management, vision-model & web-search setup |
+| Settings | `/settings` (alias `/config`) | Disk / context / token usage, runtime status, subagent / skill / hook / MCP / memory management, vision-model & web-search setup, update-check toggle |
 
 Skills: pick one from the skill section of the `/` menu (`skill : name`) and press Enter to load it as a user message; toggle with Alt+K under `/settings → Skills`. Eleven factory skills ship built-in (commit, code-review, research, doc-review, …).
 
@@ -77,12 +79,13 @@ Skills: pick one from the skill section of the `/` menu (`skill : name`) and pre
 - **Session tree**: `/fork` forks persist as a tree — view and jump branches with `/session-tree__view`, branch at any node with `/session-tree__branch`, scoped to the project
 - **TUI**: full-screen takeover, streaming redraw, Markdown rendering (tables / code highlighting / LaTeX); keyboard and mouse both work — wheel scrolling, drag-select copies, double-click selects words, click opens URLs, scrollbar included; lazy-paged history (scrolling to the top loads earlier turns), tiered folding with Alt+E / O / F / S (thinking / tool details / error details / earlier steps)
 - **Data self-governance**: sessions stored as readable, grep-able JSONL; `OROSUS_HOME` env var + `orosus home migrate` to relocate the entire data directory; module configs live one-file-per-module under `modules.d/`
+- **Self-upgrade**: every launch checks for a newer version (failures stay silent and never block startup) and shows a persistent banner line when one is found; `orosus upgrade` self-upgrades in one command — streaming progress-bar tarball download, SRI verification, global install with npm/pnpm auto-detection; the automatic check can be turned off under `/settings → Update check` without affecting manual upgrades
 
 ## Repository Layout
 
 ```
 Orosus/
-├─ apps/cli/                    # The only frontend: REPL + subcommands (provider / module / sessions prune / home)
+├─ apps/cli/                    # The only frontend: REPL + subcommands (provider / module / sessions prune / home / upgrade)
 ├─ packages/
 │  ├─ core/                     # Core five + kernel + diagnostics log + createHarness entry
 │  ├─ contracts/                # Zero-dependency contracts: module / tool / provider / fs / home

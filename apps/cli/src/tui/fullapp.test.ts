@@ -4,6 +4,7 @@ import { FullApp, diagListLines, indexAtRowCol, layoutInputRows, locateCursor, t
 import type { AtEntry } from "./fullapp-at.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
+import { pickPageOf } from "./fullapp-overlay.ts";
 import { fg, dim } from "../theme.ts";
 
 type FakeInput = NodeJS.ReadStream;
@@ -975,6 +976,53 @@ describe("选择浮层输入过滤（F5 九轮①——厂商目录全量直列�
 		await flush(120);
 		expect((app as unknown as { pendingUi: { filter?: string } }).pendingUi?.filter).toBe("");
 		app.stop();
+	});
+});
+
+describe("pick 高窗页大小（settings 2026-10-08 用户拍板——页大小随终端高动态 [10,20]）", () => {
+	it("① pickPageOf：tall 面按 divRow−6 钳 [10,20]；非 tall 恒 10", () => {
+		expect(pickPageOf(30, true)).toBe(20); // divRow ≥ 26 → 到顶 20
+		expect(pickPageOf(26, true)).toBe(20);
+		expect(pickPageOf(20, true)).toBe(14); // 中间随高浮动
+		expect(pickPageOf(16, true)).toBe(10); // 钳下界
+		expect(pickPageOf(4, true)).toBe(10);
+		expect(pickPageOf(30, false)).toBe(10); // 老面恒 10
+		expect(pickPageOf(30, undefined)).toBe(10);
+	});
+
+	it("② pickOverlay { tall: true }：老选择面（无「其他/确定」合成行）+ pendingUi 挂 tall；13 项常规终端一屏尽览、PageDown 步长随页", async () => {
+		const r = rig(); // 默认 rows=30 → divRow=26 → pickPageOf=20
+		const items = Array.from({ length: 13 }, (_, i) => `项${String(i + 1).padStart(2, "0")}`);
+		void r.app.pickOverlay("设置", items, 0, undefined, { tall: true });
+		r.app.start();
+		await flush();
+		const pu = (r.app as unknown as { pendingUi: { tall?: true; custom?: true; sel: number } }).pendingUi; // 私有面测试探针
+		expect(pu?.tall).toBe(true);
+		expect(pu?.custom).toBeUndefined(); // 增强面旗标显式化（2026-10-08）——tall 不再隐式触发合成行
+		const plain = stripAnsi(r.output.buf);
+		expect(plain).toContain("项13"); // 老面 10 行只到 项10——高窗 13 项全显
+		expect(plain).not.toContain("还有"); // 无 ↑/↓ 余量行
+		expect(plain).not.toContain("其他"); // 老选择面无合成行
+		r.input.emit("data", "\x1b[6~"); // PageDown：tall 步长 = 页大小 20 → 钳到底（sel=12）
+		await flush(120);
+		expect((r.app as unknown as { pendingUi: { sel: number } }).pendingUi?.sel).toBe(12);
+		r.input.emit("data", "\x1b"); // Esc 收面
+		await flush();
+		r.app.stop();
+	});
+
+	it("③ 矮终端钳下界：divRow−6 < 10 → 页仍 10、余量行照常", async () => {
+		const r = rig(undefined, 100, 20); // rows=20 → divRow=16 → pickPageOf=10
+		const items = Array.from({ length: 13 }, (_, i) => `项${String(i + 1).padStart(2, "0")}`);
+		void r.app.pickOverlay("设置", items, 0, undefined, { tall: true });
+		r.app.start();
+		await flush();
+		const plain = stripAnsi(r.output.buf);
+		expect(plain).toContain("↓ 还有 3"); // 13 − 10 = 3 殿后
+		expect(plain).not.toContain("项13"); // 首屏只见前 10
+		r.input.emit("data", "\x1b");
+		await flush();
+		r.app.stop();
 	});
 });
 
