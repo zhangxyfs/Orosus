@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeLiveFile, LIVE_FILE, type LiveInfo } from "@orosus/core";
-import { scanLivePeers, PEER_STALE_MS } from "./ps.ts";
+import { bindTestLocale, t } from "./i18n/app.ts";
+import { formatPsList, scanLivePeers, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -131,5 +132,80 @@ describe("scanLivePeers 排序（codex agents_overview 分组法 + D3 五值）"
 
   it("⑮ 过期阈值常量 = 90s（D2——与 tool-peers isSessionLive 90_000 对齐，同项目一个「活」的定义）", () => {
     expect(PEER_STALE_MS).toBe(90_000);
+  });
+});
+
+/** formatPsList 用 entry 工厂（剥离 ANSI 断言内容——stripAnsi 走 width.ts 同族正则）。 */
+const peer = (sid: string, over: Partial<LiveInfo> = {}): PeerEntry => ({
+  ...good(sid, over),
+  stale: false,
+});
+const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+describe("formatPsList（m5-collab T4，/ps 输出形态 + D16 键化）", () => {
+  it("① 空态：无 peer → 单行空态文案（含 self 也只报「没有其他」）", () => {
+    expect(formatPsList([], { now: NOW })).toHaveLength(1);
+    expect(strip(formatPsList([], { now: NOW })[0]!)).toBe(t("ps.empty"));
+    expect(strip(formatPsList([], { self: peer("s_me"), now: NOW })[0]!)).toBe(t("ps.empty"));
+  });
+
+  it("② 五态混排：self 置顶带标记、标题行计数含 self、各行「图标+态名+标题 · 时间 · 模型」两段式", () => {
+    const peers = [
+      peer("s_wa", { phase: "waiting-approval", label: "部署脚本", lastEventAt: NOW - 60_000, model: "GLM-5.3" }),
+      peer("s_run", { phase: "running", label: "重构树视图", lastEventAt: NOW - 300_000, model: "GLM-5.3" }),
+      peer("s_idle", { phase: "idle", label: "写方案", lastEventAt: NOW - 120_000, model: "GLM-5.3" }),
+    ];
+    const lines = formatPsList(peers, { self: peer("s_me", { phase: "running", label: "我这会话", lastEventAt: NOW - 5_000, model: "GLM-5.3" }), now: NOW }).map(strip);
+    expect(lines[0]).toBe(t("ps.title", { n: 4 })); // 计数含 self
+    expect(lines[1]).toContain(t("ps.selfMark")); // self 行标记
+    expect(lines[1]).toContain("我这会话");
+    expect(lines[2]).toContain("等审批".slice(0, 2)); // 态名走键（zh 缺省locale）
+    expect(lines[2]).toContain("部署脚本");
+    expect(lines[2]).toContain("1 分钟前"); // relativeTime 复用（sessions.rel 族）
+    expect(lines[2]).toContain("GLM-5.3");
+    expect(lines[3]).toContain("重构树视图");
+    expect(lines[4]).toContain("写方案");
+  });
+
+  it("③ preview 在场 → dim 缩进第二行；缺省 → 无第二行（空槽不装饰）", () => {
+    const withPrev = formatPsList([peer("s_a", { label: "甲", preview: "正在写测试尾巴" })], { now: NOW }).map(strip);
+    expect(withPrev).toHaveLength(3); // 标题 + 主行 + preview 行
+    expect(withPrev[2]).toContain("正在写测试尾巴");
+    const without = formatPsList([peer("s_b", { label: "乙" })], { now: NOW });
+    expect(without).toHaveLength(2);
+  });
+
+  it("④ label 缺省 → sid 前 8 位兜底；model 缺省 → 模型段省略（不裸显「?」）", () => {
+    const bare = peer("s_1234567890abcdef"); // good() 本就不带 label/model——缺省路径即默认形态
+    const lines = formatPsList([bare], { now: NOW }).map(strip);
+    expect(lines[1]).toContain("s_123456");
+    expect(lines[1]).not.toContain("?");
+  });
+
+  it("⑤ 键化 parity：三语切换渲染文案跟随（zh-CN ↔ en-US 标题/态名/空态不同）", () => {
+    bindTestLocale("en-US");
+    const en = formatPsList([peer("s_a", { phase: "waiting-input", label: "x" })], { now: NOW }).map(strip);
+    expect(en[0]).toContain("active");
+    bindTestLocale("zh-CN");
+    const zh = formatPsList([peer("s_a", { phase: "waiting-input", label: "x" })], { now: NOW }).map(strip);
+    expect(zh[0]).toContain("个活跃");
+    expect(zh[0]).not.toBe(en[0]);
+    bindTestLocale("en-US");
+    const enEmpty = strip(formatPsList([], { now: NOW })[0]!);
+    bindTestLocale("zh-CN");
+    expect(strip(formatPsList([], { now: NOW })[0]!)).not.toBe(enEmpty);
+  });
+
+  it("⑥ ps.* 域三语键集一致（multilang parity 的批内自证——防漏键）", () => {
+    const probes = ["ps.title", "ps.empty", "ps.selfMark", "ps.phase.running", "ps.phase.waitingApproval", "ps.phase.waitingInput", "ps.phase.error", "ps.phase.idle", "slash.items.ps.desc", "slash.items.ps.long"];
+    for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+      bindTestLocale(tag);
+      for (const k of probes) {
+        const v = t(k);
+        expect(v, `${tag} 缺键 ${k}`).not.toBe(k); // 未命中键时 t 回落键名本身
+        expect(v.length).toBeGreaterThan(0);
+      }
+    }
+    bindTestLocale("zh-CN");
   });
 });

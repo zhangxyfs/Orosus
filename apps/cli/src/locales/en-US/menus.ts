@@ -80,6 +80,8 @@ export const enUSMenus: Record<string, string> = {
 	"slash.items.tasks.long": "Lists all sub- and grandchild agents of the current session (parent ID - grandchild ID marks lineage, grandchild rows sit right under their parent; an empty roster still opens with dispatch guidance). Enter opens an agent's message viewer (same renderer as the main window, live refresh while running); rows pending approval can be allowed or denied via Enter.",
 	"slash.items.btw.desc": "Side question (no interruption to the main chat)",
 	"slash.items.btw.long": "Fires a quick side question with the current chat context: the answer pops up in a small window (right above the input); it never enters the main chat stream, leaves no persistent trace, and does not interrupt an in-progress reply (askable mid-reply; a new question replaces an unfinished old one). Without arguments it shows the latest Q&A (in-process memory only — gone once the CLI restarts).",
+	"slash.items.ps.desc": "Active sessions",
+	"slash.items.ps.long": "Lists Orosus sessions running in this project right now (who is working, who is waiting for your approval, who is idle — with title, model, and last activity). Works while busy; for history, use /sessions.",
 	"slash.items.quit.desc": "Quit Orosus",
 	"slash.items.quit.long": "Quits the app and restores terminal state (cursor, screen buffer, and paste mode are all restored). Double-tap Ctrl+C while idle does the same.",
 	"slash.items.new.desc": "New session",

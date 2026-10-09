@@ -284,4 +284,14 @@ export const zhTWCli: Record<string, string> = {
 	"upgrade.installFail": "安裝失敗：{err}",
 	"upgrade.busyHint": "提示：Windows 下其他正在執行的 orosus 實例可能佔用檔案——關閉後重試",
 	"upgrade.done": "✦ 已升級到 {v}，感謝使用 Orosus！重新啟動 orosus 後生效",
+
+	// ---- m5-collab：会话协同 /ps 域 ----
+	"ps.title": "會話協同 · 本專案 {n} 個活躍",
+	"ps.empty": "本專案沒有其他活躍會話",
+	"ps.selfMark": "本會話",
+	"ps.phase.running": "正在跑",
+	"ps.phase.waitingApproval": "等審批",
+	"ps.phase.waitingInput": "等你輸入",
+	"ps.phase.error": "上輪報錯",
+	"ps.phase.idle": "閒著",
 };

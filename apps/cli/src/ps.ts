@@ -9,6 +9,10 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isLive, readLiveFile, type LiveInfo } from "@orosus/core";
+import { t } from "./i18n/app.ts";
+import { relativeTime } from "./sessions.ts";
+import * as theme from "./theme.ts";
+import { padToWidth, visibleWidth } from "./tui/width.ts";
 
 /** 过期阈值 90s（D2/D5）：= 心跳 15s × 6 拍容错，与 tool-peers isSessionLive 的 90_000 对齐——
  *  同项目一个「活」的定义（v7 定案③）。 */
@@ -50,4 +54,41 @@ export function scanLivePeers(sessionsDir: string, selfSid: string, opts?: { now
     out.push({ ...rec.info, sid: d.name, stale: false });
   }
   return out.sort((a, b) => PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase] || b.lastEventAt - a.lastEventAt);
+}
+
+// ---------- /ps 输出形态（T4，D16 全量键化） ----------
+
+/** 五态图标（● accent 跑 / ◉ warn 等审批·等输入 / ✗ err 报错 / ○ muted 闲——建议值按方案形态行）。 */
+const PHASE_ICON: Record<LiveInfo["phase"], string> = {
+  running: theme.fg("accent", "●"),
+  "waiting-approval": theme.fg("warn", "◉"),
+  "waiting-input": theme.fg("warn", "◉"),
+  error: theme.fg("err", "✗"),
+  idle: theme.fg("muted", "○"),
+};
+
+/** 五态名（键化——/ps 与协同卡共用同一组键，措辞两处一致）。 */
+export const phaseName = (p: LiveInfo["phase"]): string =>
+  t(`ps.phase.${p === "waiting-approval" ? "waitingApproval" : p === "waiting-input" ? "waitingInput" : p}`);
+
+/** /ps 输出行拼装：标题行（计数含 self）+ self 置顶行（本会话标记）+ peers 行（输入序 = scanLivePeers
+ *  排序序）+ preview 缩进第二行（在场才出——空槽不装饰）。无 peer → 单行空态文案（「其他」语义——
+ *  即便 self 在场也只报没有其他活跃会话）。行两段式：图标+态名+标题（白）+ 时间·模型（灰）。 */
+export function formatPsList(peers: PeerEntry[], opts?: { self?: PeerEntry; now?: number }): string[] {
+  if (peers.length === 0) return [theme.dim(t("ps.empty"))];
+  const rows: { entry: PeerEntry; self: boolean }[] = [
+    ...(opts?.self !== undefined ? [{ entry: opts.self, self: true }] : []),
+    ...peers.map((entry) => ({ entry, self: false })),
+  ];
+  const names = rows.map((r) => phaseName(r.entry.phase));
+  const nameW = Math.max(...names.map((n) => visibleWidth(n)));
+  const lines: string[] = [t("ps.title", { n: rows.length })];
+  rows.forEach((r, i) => {
+    const e = r.entry;
+    const title = e.label ?? e.sid.slice(0, 8); // 未命名不裸显全 sid（readTitle 同款口径）
+    const tail = theme.dim(` ${relativeTime(e.lastEventAt, opts?.now)}${e.model !== undefined ? ` · ${e.model}` : ""}`) + (r.self ? theme.dim(` · ${t("ps.selfMark")}`) : "");
+    lines.push(` ${PHASE_ICON[e.phase]} ${padToWidth(names[i]!, nameW)} ${title}${tail}`);
+    if (e.preview !== undefined) lines.push(theme.dim(`${" ".repeat(nameW + 4)}${e.preview}`)); // 缩进对齐标题列
+  });
+  return lines;
 }

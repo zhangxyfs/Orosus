@@ -284,4 +284,14 @@ export const zhCNCli: Record<string, string> = {
 	"upgrade.installFail": "安装失败：{err}",
 	"upgrade.busyHint": "提示：Windows 下其他正在运行的 orosus 实例可能占用文件——关闭后重试",
 	"upgrade.done": "✦ 已升级到 {v}，感谢使用 Orosus！重启 orosus 后生效",
+
+	// ---- m5-collab：会话协同 /ps 域 ----
+	"ps.title": "会话协同 · 本项目 {n} 个活跃",
+	"ps.empty": "本项目没有其他活跃会话",
+	"ps.selfMark": "本会话",
+	"ps.phase.running": "正在跑",
+	"ps.phase.waitingApproval": "等审批",
+	"ps.phase.waitingInput": "等你输入",
+	"ps.phase.error": "上轮报错",
+	"ps.phase.idle": "闲着",
 };

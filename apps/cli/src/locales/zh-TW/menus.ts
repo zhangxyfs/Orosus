@@ -80,6 +80,8 @@ export const zhTWMenus: Record<string, string> = {
 	"slash.items.tasks.long": "列出目前工作階段的全部子代理與孫代理（父編號 - 孫編號標註親緣、孫行緊跟父行；空冊也開列表並附派活指引），Enter 進它的訊息檢視窗（主視窗同款渲染、跑著的即時更新）；掛著審核的行 Enter 即可批准或拒絕。",
 	"slash.items.btw.desc": "側問（不打斷主對話）",
 	"slash.items.btw.long": "帶著目前對話上下文傳送一次旁路快問：答案開小窗展示（貼輸入框上方），不進主對話流、不留持久痕跡、也不打斷正在進行的回答（回答中同樣可問；新問會取代未完的舊問）。無參回看最近一次問答（僅本程序記憶體，重開 CLI 即沒）。",
+	"slash.items.ps.desc": "活躍會話列表",
+	"slash.items.ps.long": "列出本專案此刻正在運行的 Orosus 會話（誰在跑、誰在等你審批、誰閒著——含標題、模型、最近活動時間），busy 期同樣可看。歷史會話走 /sessions。",
 	"slash.items.quit.desc": "結束 Orosus",
 	"slash.items.quit.long": "結束應用程式並還原終端狀態（游標、螢幕緩衝區、貼上模式全部還原）。閒置時雙擊 Ctrl + C 同效。",
 	"slash.items.new.desc": "新工作階段",

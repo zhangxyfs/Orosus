@@ -80,6 +80,8 @@ export const zhCNMenus: Record<string, string> = {
 	"slash.items.tasks.long": "列出当前会话的全部子代理与孙代理（父编号 - 孙编号标注亲缘、孙行紧跟父行；空册也开列表并附派活指引），回车进它的消息查看窗（主窗口同款渲染、跑着的实时刷新）；挂着审批的行回车即可批准或拒绝。",
 	"slash.items.btw.desc": "侧问（不打断主对话）",
 	"slash.items.btw.long": "带着当前对话上下文发一次旁路快问：答案开小窗展示（贴输入框上方），不进主对话流、不留持久痕迹、也不打断正在进行的回答（回答中同样可问；新问会取代未完的旧问）。无参回看最近一次问答（仅本进程内存，重开 CLI 即没）。",
+	"slash.items.ps.desc": "活跃会话列表",
+	"slash.items.ps.long": "列出本项目此刻正在运行的 Orosus 会话（谁在跑、谁在等你审批、谁闲着——含标题、模型、最近活动时间），busy 期同样可看。历史会话走 /sessions。",
 	"slash.items.quit.desc": "退出 Orosus",
 	"slash.items.quit.long": "退出应用并恢复终端状态（光标、屏幕缓冲区、粘贴模式全部还原）。空闲时双击 Ctrl + C 同效。",
 	"slash.items.new.desc": "新会话",

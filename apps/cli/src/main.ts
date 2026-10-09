@@ -13,7 +13,7 @@ import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readLiveFile, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -70,6 +70,7 @@ import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { presence } from "./presence.ts";
+import { formatPsList, scanLivePeers, type PeerEntry } from "./ps.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
@@ -1046,6 +1047,19 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
           await openTasks(activeApp, out, { getH: () => h, sessionsDir, commandUi, notify });
           return "again";
         }
+        // /ps（m5-collab T4，D8）：本项目活跃会话列表——纯只读查盘（与 /tasks 同族零副作用），BUSY_EXEC
+        // 即改档（busy 期正是多开用户最想看「隔壁进展」的时刻）；活死分家——历史会话走 /sessions。
+        // 全屏走 dm.pushLine 原始通道（ANSI 行不经 md 渲染——pushMd 会吃掉转义序列，compact 完成行同款先例）
+        if (cmdNameOf(text) === "/ps") {
+          const peers = scanLivePeers(sessionsDir, h.sessionId);
+          const selfRec = readLiveFile(join(sessionsDir, h.sessionId));
+          const self: PeerEntry | undefined = selfRec !== undefined ? { ...selfRec.info, stale: false } : undefined;
+          for (const l of formatPsList(peers, self !== undefined ? { self } : {})) {
+            if (activeApp !== undefined) dm.pushLine(l);
+            else out(l);
+          }
+          return "again";
+        }
         // /btw（m5-btw）：侧问——不打断主对话的旁路快问。宿主拦截（D2：md 渲染件在宿主侧、/tasks
         // 同构先例）；BUSY_EXEC 即改档（busy 期立即执行不占 inflight）。问题 = 命令词后的原文（trim、
         // 保持内部换行不重写用户原文——ZCode slashCommands 口径）；无参 = 回看最近一次问答（D7 内存
@@ -1245,7 +1259,7 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
 // busy 期命令分级（2026-09-22 批①②④⑦d 用户拍板）：
 // BUSY_EXEC = 即改档——busy 期直接执行（/model 下一轮生效；/permission /yolo 本轮生效；/title 改名）；
 // BUSY_BLOCK = 拦回车档——submitGate 拦在提交前（会话/配置操作没理由排队，也不写历史提示行）
-const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径）
+const BUSY_EXEC = new Set(["/model", "/effort", "/permission", "/yolo", "/auto", "/title", "/rename", "/tasks", "/task", "/settings", "/config", "/btw", "/ps"]); // /tasks 即档（2026-09-27 用户拍板：busy 期也要能立即看列表/应答审批——只读面不动 turn） // /settings 即档（m4-7 §3.7 前置：busy 期可开技能管理面——Alt + K 走「即改档但副作用缓挂」新档：写配置即时、reload 缓到空闲后用户手 /reload） // /auto 与 /yolo 同族（批⑧）；/effort 即改档同 /model（下一轮生效，2026-09-25） // /btw 即档（m5-btw：busy 期旁路快问立即执行、不占 inflight——侧问永不阻塞主输入；闲时同路径） // /ps 即档（m5-collab D8：纯只读查盘零副作用——busy 期正是多开用户最想看「隔壁进展」的时刻）
 // /summary 已退役（2026-09-23 用户拍板——查看口 Ctrl+O），拦回车档同步摘除
 const BUSY_BLOCK = new Set(["/new", "/sessions", "/session", "/resume", "/provider"]);
 const cmdNameOf = (text: string): string => text.trim().replace(/^\/\s+/, "/").split(" ")[0]!.toLowerCase();
@@ -1308,6 +1322,7 @@ const slashItems = (): SlashItem[] => [
 	},
 	{ name: "/tasks", aliases: ["task"], desc: t("slash.items.tasks.desc"), long: t("slash.items.tasks.long") },
 	{ name: "/btw", desc: t("slash.items.btw.desc"), long: t("slash.items.btw.long") },
+	{ name: "/ps", desc: t("slash.items.ps.desc"), long: t("slash.items.ps.long") },
 	{ name: "/quit", aliases: ["exit", "q"], desc: t("slash.items.quit.desc"), long: t("slash.items.quit.long") },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）

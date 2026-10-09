@@ -284,4 +284,14 @@ export const enUSCli: Record<string, string> = {
 	"upgrade.installFail": "Install failed: {err}",
 	"upgrade.busyHint": "Hint: another running orosus instance may hold files on Windows — close it and retry",
 	"upgrade.done": "✦ Upgraded to {v} — thanks for using Orosus! Restart orosus to take effect",
+
+	// ---- m5-collab：会话协同 /ps 域 ----
+	"ps.title": "Collab · {n} active in this project",
+	"ps.empty": "No other active sessions in this project",
+	"ps.selfMark": "this session",
+	"ps.phase.running": "running",
+	"ps.phase.waitingApproval": "approval",
+	"ps.phase.waitingInput": "input",
+	"ps.phase.error": "error",
+	"ps.phase.idle": "idle",
 };
