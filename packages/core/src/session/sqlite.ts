@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { isSafeSessionId } from "./dir.ts";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
+import { SessionWriteLock } from "./wlock.ts";
 
 type NodeSqlite = typeof import("node:sqlite");
 
@@ -71,13 +72,20 @@ export function removeSqliteDbFiles(file: string): void {
 }
 
 /** SQLite 后端（§7.2，D42）：Node 内置 node:sqlite、零原生依赖；WAL；同步事务（无写队列——
- *  事务原子性使撕裂尾部不可达，torn-tail 修复为 jsonl 特有；未闭合 turn 的问题经 verifyChain 报告）。 */
+ *  事务原子性使撕裂尾部不可达，torn-tail 修复为 jsonl 特有；未闭合 turn 的问题经 verifyChain 报告）。
+ *  m5-collab T1：补 CS-03 同款单写者锁（此前双开裸奔——唯一索引兜撞号但两条 parentId 链已交织）。
+ *  与 jsonl 同路径同语义（D6 锁不随后端漂移）：<sid>/agents/session.lock、首次 append 抢锁（本后端
+ *  构造即建库，但「只读打开」走 openSessionDbReadOnly 不经本类——首写抢锁 ≈ jsonl 首次 drain）、
+ *  死 pid 回收、close 释放。无 drain/buffer 概念——抢锁失败该条 append 直接 reject（调用方契约与
+ *  jsonl 相同：错误带内、不假成功；事件不回滚重试——下次 append 重新抢锁即 CS-02 自愈的等价形态）。 */
 export class SqliteSessionStore implements SessionStore {
   readonly sessionId: string;
   private readonly db: import("node:sqlite").DatabaseSync;
   private seq = 0;
   private lastId: string | null = null;
   private closed = false;
+  private readonly wlock: SessionWriteLock;
+  private lockLabel: string | undefined; // 抢锁时点标题快照源：构造期镜像扫描 + append 截获（session/label）
 
   constructor(opts: { dir: string; sessionId?: string }) {
     if (!sqliteAvailable()) {
@@ -99,6 +107,7 @@ export class SqliteSessionStore implements SessionStore {
     }
     const db = openDatabase(join(sessionDir, "session.sqlite"));
     this.db = db;
+    this.wlock = new SessionWriteLock(join(sessionDir, "session.lock"));
     db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     db.exec(
       "CREATE TABLE IF NOT EXISTS events (" +
@@ -109,11 +118,23 @@ export class SqliteSessionStore implements SessionStore {
       const e = JSON.parse(row.json) as SessionEvent;
       this.seq = e.seq;
       this.lastId = e.id;
+      if (e.type === "session/label") {
+        const v = (e as { label?: unknown }).label;
+        if (typeof v === "string") this.lockLabel = v;
+      }
     }
   }
 
   append(type: string, fields: Record<string, unknown> = {}): Promise<SessionEvent> {
     if (this.closed) return Promise.reject(new Error("store closed"));
+    // 首写抢锁（幂等）——reject 形态保契约（与 store closed 同约：同步 throw 会让调用方 catch 形态分裂）；
+    // 失败时 seq/lastId 未动、事件未入库——下次 append 重抢（对方退出即成功，CS-02 自愈等价形态）
+    try {
+      this.wlock.acquire(this.lockLabel);
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    if (type === "session/label" && typeof fields.label === "string") this.lockLabel = fields.label; // 截获在抢锁后——锁载荷保快照语义
     const event: SessionEvent = {
       ...fields,
       v: 1,
@@ -142,7 +163,11 @@ export class SqliteSessionStore implements SessionStore {
   close(): Promise<void> {
     if (!this.closed) {
       this.closed = true;
-      this.db.close();
+      try {
+        this.db.close();
+      } finally {
+        this.wlock.release(); // close 后本 store 永不再写——锁必须释放（jsonl 同约）
+      }
     }
     return Promise.resolve();
   }

@@ -167,7 +167,8 @@ describe("CS-03 单写者锁（2026-09-28 code review）：同 sessionId 双实�
     const a = new JsonlSessionStore({ dir, sessionId: "s_lock" });
     await a.append("session/header", { format: 1 }); // 首写抢锁（await = drain 已完成 = 锁确在盘上——确定性面，无时序竞态）
     const b = new JsonlSessionStore({ dir, sessionId: "s_lock" });
-    await expect(b.append("user/message", { content: [] })).rejects.toThrow(/另一实例/); // 同进程双实例：锁 pid = 本进程 pid，活着 → 拒
+    // m5-collab T1：裸 Error 升级 SessionLockedError（结构化 holder——wlock.test.ts ③ 为类型断言主场，此处钉行为链）
+    await expect(b.append("user/message", { content: [] })).rejects.toThrow(/另一个 Orosus 进程/); // 同进程双实例：锁 pid = 本进程 pid，活着 → 拒
     await expect(b.close()).rejects.toThrow(); // close 诚实拒绝：b 的事件从未落盘（CS-02 语义——不谎报完成）
     await a.append("user/message", { content: [] });
     await a.close();

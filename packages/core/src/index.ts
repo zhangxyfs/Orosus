@@ -16,6 +16,8 @@ export { buildSessionTree, readSessionHead, isEmptySessionHead, type SessionHead
 export { purgeSessionDir, sweepEmptySessions, type EmptySessionSweep } from "./session/cleanup.ts";
 // m5-collab T0：live.json 活体心跳纯函数件——/ps、协同卡、多开提示的统一事实源（宿主侧读写口）
 export { isLive, readLiveFile, writeLiveFile, removeLiveFile, LIVE_FILE, type LiveInfo, type LiveRecord } from "./session/live.ts";
+// m5-collab T1：写者锁扩建——结构化撞锁错误（CLI 渲染层从 holder 组装人话文案）+ 恢复预警探测两件
+export { SessionLockedError, readLockHolder, pidAlive, SESSION_LOCK_FILE, type LockHolder } from "./session/wlock.ts";
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
 export { verifyChain } from "./session/fork.ts"; // 宿主面（M4-1 T6 复核用）：复合投影链校验
 export { repairFile } from "./session/jsonl.ts"; // 宿主面（M4-1 T6 复核用）：撕裂尾修复

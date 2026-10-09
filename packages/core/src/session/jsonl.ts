@@ -1,9 +1,10 @@
-import { appendFileSync, chmodSync, closeSync, constants, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, rmSync, readSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
 import { eventsFrom, lastCompaction, scanEventLines, stripRow, writeEventRows, type ScanLine } from "./eventindex.ts";
+import { SessionWriteLock } from "./wlock.ts";
 
 /** T7 装载分流阈（D6：cc SKIP_PRECOMPACT_THRESHOLD 同值 5MB）——小于此走全量快路径（零行为变化）。 */
 const WINDOW_LOAD_MIN_BYTES = 5 * 1024 * 1024;
@@ -43,26 +44,20 @@ export function hardeningNote(): string | null {
   return process.platform === "win32" ? "session-hardening: partial (windows)" : null;
 }
 
-/** 锁持有者 pid 是否仍活着（CS-03）：signal 0 探活——ESRCH = 已死；EPERM（权限不足/Windows 系统进程）
- *  按活着处理（宁拒勿撞：把活实例误判成 stale 会重新引入双写）。
- *  2026-10-01 起导出：空会话清扫（cleanup.ts）复用同款判活——锁在且持有者活着 = 他实例占用，跳过不清。 */
-export function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
+/** pidAlive/readLockPid 定义已迁 wlock.ts（m5-collab T1 抽锁小件供 jsonl/sqlite 共用）——
+ *  此处转出口保持原表面（cleanup.ts 与既有消费方零改动）。 */
+export { pidAlive, readLockPid } from "./wlock.ts";
 
-/** 读锁文件首行 pid（CS-03）：损坏/空文件返回 null——按 stale 回收处理，坏锁文件不许死锁后续打开。 */
-export function readLockPid(file: string): number | null {
-  try {
-    const pid = Number.parseInt(readFileSync(file, "utf8").split("\n")[0]!.trim(), 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
+/** 镜像里末条 session/label 的标题（m5-collab T1 锁载荷 label 快照源）：resume 路径 label 在历史镜像
+ *  里（窗口装载的头种子含 label——T7 readHeadSeeds），倒扫即止。无 label 历史 = undefined（锁维持旧两行）。 */
+function lastSessionLabel(events: SessionEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type !== "session/label") continue;
+    const v = (e as { label?: unknown }).label;
+    if (typeof v === "string") return v;
   }
+  return undefined;
 }
 
 /** 未闭合 turn 补结尾（repairFile 与 T7 窗口装载共用的纯函数段）：最后一个 turn/start 之后若无
@@ -329,8 +324,7 @@ export class JsonlSessionStore implements SessionStore {
   private drainError: Error | null = null; // 最近一次 drain 失败：buffer 仍有滞留期间 flush/close 复抛（不许谎报已落盘）
   private events: SessionEvent[] = []; // 内存镜像：all() 供 loop 投影（§6.2）；重开实例时从磁盘恢复
   private closed = false;
-  private readonly lockFile: string; // CS-03 单写者锁：<sid>/agents/session.lock（与主文件同目录）
-  private lockHeld = false;
+  private readonly wlock: SessionWriteLock; // CS-03 单写者锁：<sid>/agents/session.lock（与主文件同目录；m5-collab T1 抽 wlock 小件两后端共用）
 
   constructor(opts: { dir: string; sessionId?: string; load?: "window" | "full"; index?: { dbFile: string; bucket: string } }) {
     const sid = opts.sessionId ?? newId("s");
@@ -342,7 +336,7 @@ export class JsonlSessionStore implements SessionStore {
     this.sessionId = sid;
     this.dir = opts.dir;
     this.file = join(opts.dir, this.sessionId, "agents", "session.jsonl");
-    this.lockFile = join(opts.dir, this.sessionId, "agents", "session.lock");
+    this.wlock = new SessionWriteLock(join(opts.dir, this.sessionId, "agents", "session.lock"));
     // T7（m5-resume-perf）：装载策略分派——缺省 full（core 层显式 opt-in 窗口，测试可控；harness 装配层
     // 按 OROSUS_SESSION_LOAD 与文件大小决定）。窗口路径失败兜底 = 全量（等价不可证=回退全量，宁慢不错）。
     if ((opts.load ?? "full") === "window") {
@@ -631,43 +625,21 @@ export class JsonlSessionStore implements SessionStore {
   /** CS-03（2026-09-28 code review）单写者锁：同一 sessionId 的两个实例并发 append 会从同一尾巴读出
    *  相同 seq/lastId，随后重复 seq + 同 parentId 分岔的两条链交织落盘（O_APPEND 只保证字节不撕裂，管不了
    *  信封层撞号；sqlite 后端有 idx_events_session_seq 唯一索引兜底，jsonl 静默损坏）。锁 = <sid>/agents/
-   *  session.lock（O_EXCL 创建，内容 pid + 抢锁时间）。取舍：抢锁放首次 drain（首次落盘）而非构造期——
-   *  ① 保 D46 懒建语义（零 append 仍零落盘，连会话目录都不建）；② 只读第二实例（fork 视图/树扫描/测试）
-   *  不 append 即不受影响，构造与读路径零变化。持有者活着 → 抛错（append 侧经 CS-02 机制 reject，
-   *  等价 sqlite 唯一索引兜底但更早更明确）；已死/锁文件损坏 → stale 回收重建（进程崩溃未 close 的自愈）。
+   *  session.lock（O_EXCL 创建，内容 pid + 抢锁时间 + 可选标题〔m5-collab T1 第三行〕）。取舍：抢锁放首次
+   *  drain（首次落盘）而非构造期——① 保 D46 懒建语义（零 append 仍零落盘，连会话目录都不建）；② 只读
+   *  第二实例（fork 视图/树扫描/测试）不 append 即不受影响，构造与读路径零变化。持有者活着 → 抛
+   *  SessionLockedError（T1 结构化——裸 Error 退役；append 侧经 CS-02 机制 reject，等价 sqlite 唯一索引
+   *  兜底但更早更明确）；已死/锁文件损坏 → stale 回收重建（进程崩溃未 close 的自愈）。锁本体在 wlock.ts
+   *  （T1 抽出供 jsonl/sqlite 两后端共用——语义/路径两后端一致，D6）。
    *  与 CS-02 自愈天然协同：抢锁失败 → 本批 append reject、buffer 保留，另一实例退出后下次 drain 重试成功。 */
   private ensureLock(): void {
-    if (this.lockHeld) return;
-    const create = (): void => {
-      const fd = openSync(this.lockFile, "wx", 0o600);
-      try {
-        writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`, "utf8");
-      } finally {
-        closeSync(fd);
-      }
-    };
-    try {
-      create();
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const pid = readLockPid(this.lockFile);
-      if (pid !== null && pidAlive(pid)) {
-        throw new Error(`会话 ${this.sessionId} 已在另一实例打开（pid ${pid}）——双开并发写会 seq 撞号/parentId 链交织；关闭另一实例后重试`, { cause: err });
-      }
-      // stale 锁（持有者已崩溃退出）或坏锁文件：回收重建。竞争窗口内被他人抢先重建 = 再撞 EEXIST → 上抛，下轮 drain 重试
-      rmSync(this.lockFile, { force: true });
-      create();
-    }
-    this.lockHeld = true;
+    if (this.wlock.isHeld) return;
+    this.wlock.acquire(lastSessionLabel(this.events)); // label 取抢锁时点镜像快照（无 label 历史 = undefined 维持两行格式）
   }
 
   /** 释放写锁（close 路径）：best-effort——残留锁会被后续打开按 stale（pid 已死）回收。 */
   private releaseLock(): void {
-    if (!this.lockHeld) return;
-    this.lockHeld = false;
-    try {
-      rmSync(this.lockFile, { force: true });
-    } catch { /* 释放失败留档：stale 回收兜底 */ }
+    this.wlock.release();
   }
 
   append(type: string, fields: Record<string, unknown> = {}): Promise<SessionEvent> {
