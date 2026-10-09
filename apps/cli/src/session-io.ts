@@ -8,6 +8,7 @@ import { registerToolLabels, renderHistoryLines, historyPage } from "./render.ts
 import { migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 import { extractImageRefs } from "./paste.ts";
 import { SKILL_MARK_RE } from "./skills-ui.ts";
+import { presence } from "./presence.ts";
 import type { CliArgs } from "./args.ts";
 
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
@@ -110,6 +111,12 @@ export const createSession = async (deps: SessionDeps, extra: { fork?: { parentS
   });
   // 工具显示名喂给渲染层（label 优先呈现——2026-09-24 用户拍板）；reload 会换工具集合，四处 reload 位同步重喂
   registerToolLabels(h.graph().tools.toolInfos());
+  // m5-collab T2：心跳挂起（createSession 单缝覆盖启动/恢复/分叉/switchTo/intent-fork 五口——换会话
+  // 重进本缝 = presence 换挂，旧 sid live.json 即时清不残留幽灵）。--print/--dump-modules 无头一轮
+  // 不注册（D13：秒级生命周期，注册了只是列表噪音）；子会话经 subagentRunner 不过本缝，天然不注册（D14）
+  if (deps.args.print === undefined && deps.args.dumpModules !== true) {
+    presence.attach({ h, sessionsDir: extra.sessionsDir ?? activeDir, sid: h.sessionId, kind: deps.isFullscreen() ? "tui" : "line" });
+  }
   return h;
 };
 

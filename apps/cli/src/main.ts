@@ -69,6 +69,7 @@ import { configFace, configFaceTui, configFaceTuiBell, configFaceTuiLatex, modul
 import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
+import { presence } from "./presence.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
@@ -125,6 +126,7 @@ const proxyStateText = async (): Promise<string> => proxyDisplayText(envProxyUrl
  *  kimi-code 同款教训（其 main.ts 注释原话：an immediate process.exit could terminate before buffered
  *  output is flushed when the command is piped——headless 一律 exitCode + 排空）。 */
 const exitCli = async (code: number): Promise<never> => {
+  presence.dispose(); // m5-collab T2：退出摘牌——live.json 即时删（对端不等 90s 判死）；未 attach 时 noop
   process.exitCode = code;
   await Promise.all([
     new Promise<void>((resolve) => process.stdout.write("", () => resolve())),
@@ -2021,6 +2023,8 @@ if (args.print === undefined) try {
   rl.close();
   killAllBackgroundJobs(); // M4-3 T3：退出清杀——/quit、行模式 EOF、全屏 quit 全路径统一收口于此
                            // （ModuleContext 无退出缝；SIGINT 不在其列——现状只 cancel 当前 turn 不退出，v4.7 定案）
+  presence.dispose(); // m5-collab T2：退出摘牌（/quit、行模式 EOF、全屏 quit 全路径经此）——live.json 即时删。
+                      // SIGINT 不挂：本仓 SIGINT 只 cancel turn 不退出进程，挂了会误删活着的自己的牌
   await h.close();
   purgeIfEmptySession(h.sessionId); // 空会话退出即清（2026-10-01 拍板②）——h.close 后无句柄可删；h = 最后在开的会话
 }
