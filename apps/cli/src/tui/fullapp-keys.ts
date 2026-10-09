@@ -2,7 +2,7 @@
  *  （L381-876 原样整体摘取，分派顺序/case 分组/早退路径一个不动——D4 结构红线）。
  *  体内 this.→app. 机械改写 119 处；子系统调用经装配对象前缀。非公开 API。 */
 
-import { CONN_SLOTS, inlineSlashWord, normCmd, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
+import { CONN_SLOTS, inlineSlashWord, normCmd, syncSwitchRow, type DialogKeyCtx, type FocusIdx } from "./fullapp-types.ts";
 import { pickPageOf } from "./fullapp-overlay.ts";
 import { isPrintable } from "./keymatch.ts";
 import type { WidgetSpec } from "@orosus/contracts/module";
@@ -456,6 +456,19 @@ export function createKeys(app: FullApp) {
 					app.scheduler.requestImmediateRender();
 					return;
 				}
+				// 横选行 ←→（2026-10-09 用户拍板：kimi 形态 Orosus 样式）：仅 chooseSide 面置位（老面/增强面
+				// 无 switchRow 零感知）；当前高亮项无候选（valuesOf undefined/空/单值）不动作。切换后 idx 随
+				// 值清单长度取模环绕
+				if (pu.switchRow !== undefined && (key === "left" || key === "right")) {
+					const item = filtered[pu.sel]?.t;
+					syncSwitchRow(pu.switchRow, item);
+					const vals = item !== undefined ? pu.switchRow.valuesOf(item) : undefined;
+					if (vals !== undefined && vals.length > 1) {
+						pu.switchRow.switchIdx = (pu.switchRow.switchIdx + (key === "left" ? -1 : 1) + vals.length) % vals.length;
+					}
+					app.scheduler.requestImmediateRender();
+					return;
+				}
 				if (key === "up" && rowsTotal > 0) pu.sel = (pu.sel - 1 + rowsTotal) % rowsTotal;
 				else if (key === "down" && rowsTotal > 0) pu.sel = (pu.sel + 1) % rowsTotal;
 				// settings 高窗（2026-10-08 用户拍板）：tall 面翻页步长 = 渲染同源页大小（pickPageOf——
@@ -464,6 +477,10 @@ export function createKeys(app: FullApp) {
 					const { streamH, queueH } = app.frame.layoutFrame();
 					const step = pickPageOf(streamH + queueH, pu.tall);
 					pu.sel = key === "pageUp" ? Math.max(0, pu.sel - step) : Math.min(rowsTotal - 1, pu.sel + step);
+				}
+				// 横选行随高亮项重置（up/down/page 翻页后——syncedItem 记忆短路，同项零动作）
+				if (pu.switchRow !== undefined && (key === "up" || key === "down" || key === "pageUp" || key === "pageDown")) {
+					syncSwitchRow(pu.switchRow, filtered[pu.sel]?.t);
 				}
 				else if (key === "enter") pickActivateRow(app, pu, pu.sel, filtered);
 				else if (key === "escape") {

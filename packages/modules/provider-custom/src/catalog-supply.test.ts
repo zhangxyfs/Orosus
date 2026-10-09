@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWire, adaptBaseUrl } from "./infer.ts";
-import { detectSameGate, getCatalog, getCatalogWithSource, lookupModelThinking, modelThinking, persistCatalogCache, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
+import { detectSameGate, getCatalog, getCatalogWithSource, lookupModelThinking, modelThinking, persistCatalogCache, refreshCatalogIfStale, CATALOG_REFRESH_TTL_MS, resetCatalogCacheForTest, type Catalog } from "./catalog.ts";
 import { runProviderMenu, type MenuUi, type MenuDeps } from "./menu.ts";
 
 describe("协议推断（D34，kimi-code 实证映射收敛两族）", () => {
@@ -127,6 +127,45 @@ describe("目录拉取与快照兜底（D34）", () => {
       expect(r.source).toBe("disk");
       expect(Object.keys(r.catalog)).toContain("zhipuai");
       expect(r.fetchedAt).toBe(7_000_000);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("refreshCatalogIfStale（2026-10-09 拍板②：启动期后台刷新）：缺文件/超龄 → 在线拉取成功落盘返 true；TTL 内 → false 零网络；失败 → false 旧盘原样；不碰进程内目录缓存", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-refresh-"));
+    try {
+      const cacheFile = join(dir, "models-dev.json");
+      const payload = { vendor: { type: "openai", api: "https://x", models: { m1: { id: "m1", limit: { context: 8192 } } } } };
+      let fetchCount = 0;
+      const ok = (async () => {
+        fetchCount++;
+        return new Response(JSON.stringify(payload), { status: 200 });
+      }) as typeof fetch;
+      const fail = (async () => { throw new Error("network down"); }) as typeof fetch;
+      const T0 = 10_000_000;
+      // ① 缺文件 → 拉取 + 落盘 → true
+      expect(await refreshCatalogIfStale(cacheFile, { fetchImpl: ok, now: () => T0 })).toBe(true);
+      expect(fetchCount).toBe(1);
+      expect(JSON.parse(readFileSync(cacheFile, "utf8"))).toEqual({ fetchedAt: T0, catalog: payload });
+      // ② TTL 内（24h）→ false 不打上游不动盘
+      expect(await refreshCatalogIfStale(cacheFile, { fetchImpl: ok, now: () => T0 + 60_000 })).toBe(false);
+      expect(fetchCount).toBe(1);
+      expect(JSON.parse(readFileSync(cacheFile, "utf8")).fetchedAt).toBe(T0);
+      // ③ 超龄 → 重新拉取覆写盘
+      expect(await refreshCatalogIfStale(cacheFile, { fetchImpl: ok, now: () => T0 + CATALOG_REFRESH_TTL_MS + 1 })).toBe(true);
+      expect(fetchCount).toBe(2);
+      expect(JSON.parse(readFileSync(cacheFile, "utf8")).fetchedAt).toBe(T0 + CATALOG_REFRESH_TTL_MS + 1);
+      // ④ 超龄 + 失败 → false 且旧盘原样保留（下次启动再试）
+      const T2 = T0 + 2 * CATALOG_REFRESH_TTL_MS + 2;
+      expect(await refreshCatalogIfStale(cacheFile, { fetchImpl: fail, now: () => T2 })).toBe(false);
+      expect(JSON.parse(readFileSync(cacheFile, "utf8")).fetchedAt).toBe(T0 + CATALOG_REFRESH_TTL_MS + 1);
+      // ⑤ 不碰进程内目录缓存：前置种一个 online 内存态，刷新失败后 getCatalogWithSource 仍供旧 online
+      resetCatalogCacheForTest();
+      const seed = (async () => new Response(JSON.stringify({ seedVendor: { type: "openai", api: "https://s" } }), { status: 200 })) as typeof fetch;
+      await getCatalogWithSource({ fetchImpl: seed, now: () => T2 + 1_000, cacheFile: join(dir, "unused.json") });
+      expect(await refreshCatalogIfStale(cacheFile, { fetchImpl: fail, now: () => T2 + 2_000 })).toBe(false); // 盘上仍超龄、拉取失败
+      const after = await getCatalogWithSource({ fetchImpl: fail, now: () => T2 + 3_000, cacheFile: join(dir, "unused.json") }); // TTL 内（10min）→ 供旧内存
+      expect(after.source).toBe("online");
+      expect(Object.keys(after.catalog)).toContain("seedVendor");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

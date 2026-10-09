@@ -9,6 +9,7 @@ import { renderMarkdown } from "../mdpipe.ts";
 import { OnboardingSession, type OnboardingDeps, type OnboardingOutcome } from "./onboarding.ts";
 import type { DialogEvent, DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 import type { HostDialogKeys, PickExtraKeys } from "./fullapp-types.ts";
+import { syncSwitchRow } from "./fullapp-types.ts";
 import type { FullApp } from "./fullapp.ts";
 
 /** 弹窗保留键（决策点 7）：Esc/Ctrl+C/V/A/S/Z 绝对禁绑；宿主全局键在按键分发里先于弹窗分支消费
@@ -275,8 +276,11 @@ export function createDialogs(app: FullApp) {
 	 *  checked 升序映射 + customCommitted 恒尾（单选圆圈唯一 → 两者互斥恰一项成员）。
 	 *  resolve 对外签名零改动（风险节铁律——勿为文本扩类型）。增强面旗标显式化（2026-10-08）：
 	 *  opts 传入不再隐式触发合成行——settings 高窗 opts.tall 等展示旗标走老选择面。
-	 *  settings 高窗（2026-10-08 用户拍板）：opts.tall: true = 页大小随终端高 [10,20]（渲染层 pickPageOf 现算）。 */
-	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { custom?: boolean; multi?: boolean; tall?: boolean }): Promise<number | undefined | string[] | undefined> => {
+	 *  settings 高窗（2026-10-08 用户拍板）：opts.tall: true = 页大小随终端高 [10,20]（渲染层 pickPageOf 现算）。
+	 *  横选面（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态）：opts.switch = 老选择面 +
+	 *  底部左右选择器行；Enter 结算 { index, value }——value 按提交时 switchRow 现值（syncSwitchRow
+	 *  随高亮项重置后取值；项无候选 = undefined）。与 custom 互斥（/model 单选即答面无需确认行）。 */
+	const pickOverlay = (title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { custom?: boolean; multi?: boolean; tall?: boolean; switch?: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<number | undefined | string[] | undefined | { index: number; value: string | undefined } | undefined> => {
 		if (app.pendingUi !== undefined) {
 			return new Promise((resolve) => app.uiQueue.push({ run: () => {
 				if (app.stopped) { resolve(undefined); return; }
@@ -285,6 +289,7 @@ export function createDialogs(app: FullApp) {
 		}
 		app.state.overlayOpen = false; // 与斜杠菜单互斥
 		const ex = opts?.custom === true; // chooseEx 增强面（「其他」+「确定」合成行）——显式旗标
+		const sw = opts?.switch; // 横选面（chooseSide——老选择面 + 底部左右选择器行）
 		return new Promise((resolve) => {
 			// ≥12 项启用输入过滤（F5 九轮① 用户拍板：厂商目录全量直列、列表内输入即筛——includes 口径）
 			// m5-ask-multi：合成行不参与过滤（D8）——「其他」「确定」恒显示，阈值仍按普通项数计
@@ -293,23 +298,33 @@ export function createDialogs(app: FullApp) {
 				title,
 				items,
 				sel: Math.max(0, Math.min(items.length - 1, selAt)), // m4-7 T9：初始选中（详情 Esc 回列表选中行回到该技能）
-				resolve: ex
+				resolve: sw !== undefined
 					? (n: number | undefined) => {
 						if (n === undefined) { resolve(undefined); return; }
-						const out = pu.checked.toSorted((a, b) => a - b).map((i) => items[i]!);
-						if (pu.customCommitted !== undefined) out.push(pu.customCommitted); // 「其他」恒尾语义
-						resolve(out);
+						const item = items[n]!;
+						syncSwitchRow(pu.switchRow!, item); // 结算口兜底同步（键路漏调/直驱测试形态）
+						const vals = pu.switchRow!.valuesOf(item);
+						resolve({ index: n, value: vals !== undefined && vals.length > 0 ? (vals[pu.switchRow!.switchIdx] ?? vals[0]) : undefined });
 					}
-					: resolve,
+					: ex
+						? (n: number | undefined) => {
+							if (n === undefined) { resolve(undefined); return; }
+							const out = pu.checked.toSorted((a, b) => a - b).map((i) => items[i]!);
+							if (pu.customCommitted !== undefined) out.push(pu.customCommitted); // 「其他」恒尾语义
+							resolve(out);
+						}
+						: resolve,
 				...(items.length >= 12 ? { filter: "" } : {}),
 				...(keys !== undefined ? { extraKeys: keys } : {}),
 				...(ex ? { custom: true } : {}),
 				...(opts?.multi === true ? { multi: true } : {}),
 				...(opts?.tall === true ? { tall: true } : {}),
+				...(sw !== undefined ? { switchRow: { label: sw.label, valuesOf: sw.valuesOf, ...(sw.initialOf !== undefined ? { initialOf: sw.initialOf } : {}), switchIdx: 0 } } : {}),
 				checked: [],
 				customText: "",
 				editing: false,
 			};
+			if (pu.switchRow !== undefined) syncSwitchRow(pu.switchRow, items[pu.sel]); // 开窗初值（高亮项档位落位）
 			app.pendingUi = pu;
 			app.scheduler.requestImmediateRender();
 		});

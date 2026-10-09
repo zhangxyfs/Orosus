@@ -2,7 +2,7 @@
  *  （查看窗/控件窗/pick 选择框/诊断列表/斜杠菜单总装五件）。依赖 resolvePopupLayout（经
  *  dialogs.viewGeo）与 widgets 渲染件；this.→app. 机械改写 15 处。非公开 API。 */
 
-import { diagListLines, DIAG_LIST_ROWS, OVERLAY_PAGE, thumbGeometry, type HostDialogKeys, type PickExtraKeys, type SlashItem } from "./fullapp-types.ts";
+import { diagListLines, DIAG_LIST_ROWS, OVERLAY_PAGE, syncSwitchRow, thumbGeometry, type HostDialogKeys, type PickExtraKeys, type SlashItem, type SwitchRow } from "./fullapp-types.ts";
 import { filterEntries, type AtEntry } from "./fullapp-at.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 import { renderWidgetLines } from "./widgets.ts";
@@ -28,6 +28,9 @@ export interface PickOverlayExt {
 	checked?: number[];
 	/** 内容窗高（settings 高窗 2026-10-08）：frame 层按 pickPageOf(divRow, tall) 现算注入；缺省 OVERLAY_PAGE。 */
 	page?: number;
+	/** 底部横选行（2026-10-09 用户拍板：/model 选模型同窗选思考档）：传 pu.switchRow 活引用——渲染期
+	 *  syncSwitchRow 兜底同步（viewPage 同款回写纪律），键路漏调/过滤改选中也能落位。 */
+	switchRow?: SwitchRow;
 }
 
 /** pick 浮层页大小（settings 高窗 2026-10-08 用户拍板）：tall 面按输入框上缘可用高动态取
@@ -97,6 +100,23 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 		olines.push(gi === selI ? boxRow(theme.bg("accentSoft", padToWidth(row, oInner - 1))) : boxRow(row));
 	}
 	if (moreDown) olines.push(boxRow(theme.dim(`   ${t("pick.moreDown", { n: rowsTotal - winStart - winLen })}`)));
+	// 底部横选行（2026-10-09 用户拍板：kimi 形态 Orosus 样式）：标签白 fg（modeRow 同规——恒白不被值抢权），
+	// 候选值全列横排双空格隔（用户拍板 2026-10-09 二轮「不可能横向放不下，就横着放」——档位名恒短，
+	// 不做窗口/省略）——选中 [v] accent、未选中 fg；两侧 ‹ › 箭头 dim（多值才显）。候选按高亮项取
+	//（valuesOf；undefined/空 = 该项无档——「——」dim 降级，peers 模式行同款形）；渲染期 syncSwitchRow
+	// 兜底（viewPage 回写同款——键路漏调/过滤重置选中后此处落位）。插在列表与提示行之间；行级
+	// truncateToWidth 仅极端窄终端兜底。
+	if (ext?.switchRow !== undefined) {
+		const item = shown[selI]?.t;
+		syncSwitchRow(ext.switchRow, item);
+		const vals = item !== undefined ? ext.switchRow.valuesOf(item) : undefined;
+		const idx = ext.switchRow.switchIdx;
+		const labelSeg = theme.fg("fg", ` ${ext.switchRow.label}`);
+		const seg = vals === undefined || vals.length === 0
+			? theme.dim(" ——")
+			: `${vals.length > 1 ? theme.dim(" ‹") : ""}  ${vals.map((v, i) => (i === idx ? theme.fg("accent", `[${v}]`) : theme.fg("fg", v))).join("  ")}  ${vals.length > 1 ? theme.dim("› ") : ""}`;
+		olines.push(boxRow(truncateToWidth(labelSeg + seg, oInner)));
+	}
 	const extraLabels = extraKeys === undefined ? "" : Object.values(extraKeys).map((k) => k.label).join(" · ");
 	// 输入态（m5-ask-multi）：提示行上插自行输入行（草稿直显）；键导引换输入态版——不写「Esc 取消」
 	// 防误导（输入态 Esc 实为返回列表，非取消整窗）
@@ -106,7 +126,10 @@ const buildPickOverlay = (leftW: number, divRow: number, title: string, items: s
 		: custom
 			? t("pick.multi.foot") // 走查修：两态同键（措辞中性「选定」）；普通项 Enter=标记、仅确定行 Enter=提交
 			: (filter === undefined ? t("pick.foot.noFilter") : t("pick.foot.filter"));
-	olines.push(boxRow(theme.dim(` ${footCore}${extraLabels !== "" ? ` · ${extraLabels}` : ""}${t("pick.foot.esc")}`)));
+	// 横选面键导引（2026-10-09）：foot 追加「←→ 切换档位」——恒显（高亮项无候选时 ←→ 无操作，导引不撒谎的
+	// 口径按 modeRow 同规：行本身已用 —— 表达无档态）
+	const switchHint = ext?.switchRow !== undefined ? t("pick.switch.foot") : "";
+	olines.push(boxRow(theme.dim(` ${footCore}${switchHint !== "" ? ` · ${switchHint}` : ""}${extraLabels !== "" ? ` · ${extraLabels}` : ""}${t("pick.foot.esc")}`)));
 	olines.push(theme.bg("surface2", theme.fg(bc, "╰" + "─".repeat(oInner) + "╯")));
 	return { lines: olines, row: Math.max(0, divRow - olines.length), col: 0, width: ow };
 }

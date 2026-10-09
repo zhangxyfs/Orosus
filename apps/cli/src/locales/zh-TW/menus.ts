@@ -6,6 +6,7 @@ export const zhTWMenus: Record<string, string> = {
 	"pick.foot.noFilter": "↑↓ 選擇 · Enter 選定",
 	"pick.foot.filter": "輸入文字過濾 · ↑↓ 選擇 · Enter 選定",
 	"pick.foot.esc": "· Esc 取消",
+	"pick.switch.foot": "←→ 切換檔位",
 	"pick.multi.titleSuffix": "（可多選）",
 	"pick.other.label": "其他（自行輸入）",
 	"pick.multi.foot": "空格/Enter 選定 · 確定行提交",

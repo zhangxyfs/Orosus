@@ -442,12 +442,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
   // 窗口语义（M3 补强空白 §5 + 2026-09-29 兜底链）：核心顶层 contextWindow 显式值优先——正整数才生效，
   // 非法/≤0 忽略 + warn（三轮 P2：0 窗口会把阈值打成 0）；缺省/非法时按槽·模型查 models-dev 盘上缓存兜底
-  const readContextWindow = (core: Record<string, unknown>): number | undefined =>
+  // （sections 透传：裸槽名经 [provider-custom] defaultModel 解出真模型再查表——2026-10-08 修，详见
+  //  resolveContextWindow 头注）
+  const readContextWindow = (core: Record<string, unknown>, sections: Map<string, Record<string, unknown>>): number | undefined =>
     resolveContextWindow(core, {
       catalogFile: catalogCacheFile,
+      sections,
       onIllegal: (raw) => createLogger(sink, "kernel").warn("kernel.config.contextwindow", `contextWindow 配置非法（${String(raw)}）——须为正整数，已忽略`),
     });
-  let contextWindow = readContextWindow(config.core);
+  let contextWindow = readContextWindow(config.core, config.sections);
   let usageAnchor: { totalTokens: number; atMessageCount: number } | undefined; // usage 锚点（空白 §4）：主循环 stream 包装记录，二级调用不更新
 
   const defs: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; root?: string; layer?: "user" | "project" }[] = [
@@ -814,6 +817,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     // F5 十轮：键名 provider（值保留 slot/model 全形）；旧 model 行随过滤清除
     // CH-08：tomlBasicString 写侧转义（next 可能是端点清单/手输的任意文本）
     upsertTopLevelKey(/^\s*(model|provider)\s*=/, { line: `provider = ${tomlBasicString(next)}` });
+    // 窗口跟随换模型（2026-10-09 用户拍板①）：/model 不走 reload——contextWindow 闭包会停在旧模型的
+    // 窗口直到重启。此刻按新值重解析（条目级 > 目录；fake-core 形态 { provider: next } 绕开顶层旧钉值
+    // ——那是对旧模型的描述）；查到 → 内存 + 顶层键同步落盘（重启一致，import 链同落点）；查不到 →
+    // 不动（私有模型的手钉 contextWindow / 无目录数据场景保留原值）。仅实际变更时执行（重选同模型
+    // 不覆盖手钉值——与下方 effort 跟随同判据）。
+    if (next !== prevModelValue) {
+      const w = resolveContextWindow({ provider: next }, { catalogFile: catalogCacheFile, sections: config.sections });
+      if (w !== undefined && w !== contextWindow) {
+        contextWindow = w;
+        upsertTopLevelKey(/^\s*contextWindow\s*=/, { line: `contextWindow = ${w}` });
+      }
+    }
     // 档位跟随重解析：已设档且换了模型 → 新模型 segments 含旧档 → 保留（「设置过就尊重」）；
     // 不含 → 落默认档（kimi middleOf 取法）；目录不认识新模型 → lenient 保留原样发（端点 400 自证）。
     // 未设档不动作——effective 自动 = 新模型默认档（解析链天然跟随）。重选原模型不触发。
@@ -879,6 +894,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           ? candidates[0]!.name
           : (await commandUi.choose("选择平台", candidates.map((x) => `${x.name}（默认 ${x.defaultModel}，裸名即用）`))).split("（")[0]!;
         let next = slotName;
+        let sideEffort: string | undefined; // 同窗横选档位（2026-10-09）：本轮选定档——applyModelOverride 后落位
         const slot = graph.services.provider(slotName); // 消费路径（一轮 P2③）：listProviders 不透传槽值额外字段，经 provider() 取
         if (slot?.listModels !== undefined) {
           let models: string[] = [];
@@ -903,9 +919,38 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
               : curRaw.includes("/") ? curRaw.slice(curRaw.indexOf("/") + 1)
               : curRaw === slotName ? slot.defaultModel
               : curRaw;
+            // 思考档位预取（2026-10-09 用户拍板：选模型同窗选档——kimi 形态 Orosus 样式）：清单全模型并查
+            // 目录（thinkingInfoOf memoized 盘读毫秒级）；无档模型 valuesOf → undefined（行降级「——」）。
+            // 全清单无一家有档 = 不起横选面（老 choose 零变化——宿主无 chooseSide 口同路）
+            const effortsByModel = new Map<string, string[]>();
+            await Promise.all(models.map(async (m) => {
+              const info = await thinkingInfoOf(slotName, m);
+              if (info !== undefined) effortsByModel.set(m, segmentsOf(info));
+            }));
+            const dispItems = models.map((m) => (m === curBare ? `${m} ✓` : m));
             let mpick: string;
             try {
-              mpick = await commandUi.choose(`选择模型（${slotName}）`, models.map((m) => (m === curBare ? `${m} ✓` : m)));
+              if (commandUi.chooseSide !== undefined && effortsByModel.size > 0) {
+                // 初值口径（/effort 跟随链同源）：已设档在清单内 = 沿用（「设置过就尊重」）；未设/不在 = 该模型
+                // 目录默认档（middleOf 中位——defaultEffortOf 同式）
+                const storedEffort = effortOverride ?? cfgEffortValue();
+                const r = await commandUi.chooseSide(`选择模型（${slotName}）`, dispItems, {
+                  side: {
+                    label: "思考档位",
+                    valuesOf: (it) => effortsByModel.get(it.replace(/ ✓$/, "")),
+                    initialOf: (it) => {
+                      const segs = effortsByModel.get(it.replace(/ ✓$/, ""));
+                      if (segs === undefined) return undefined;
+                      if (storedEffort !== undefined && segs.includes(storedEffort)) return storedEffort;
+                      return segs[Math.floor(segs.length / 2)] ?? segs[0];
+                    },
+                  },
+                });
+                mpick = r.item;
+                sideEffort = r.value; // undefined = 项无档/宿主降级——档位跟随模型解析不动
+              } else {
+                mpick = await commandUi.choose(`选择模型（${slotName}）`, dispItems);
+              }
             } catch (err) {
               // Esc → 回平台列表（2026-09-28 拍板「子菜单 Esc 返回上一级」）。单槽直达时模型清单即根——
               // 无上级可回，Esc 穿透取消（2026-10-01 批 E 修正：原无条件 continue 在单槽下无限重列——
@@ -920,6 +965,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         // 批①：busy 期可执行、下一轮生效——主 turn 的 provider/model 在 prompt 开头一次性捕获（下方 resolveProvider），
         // 中途覆盖本轮无感。已知接受的泄漏面：ctx.llm 调用时解析（turn 内 compaction 二级调用会吃新模型）。
         await applyModelOverride(next); // m5 T9：核心动作抽共用——命令与设置服务同源（不双写）
+        // 同窗横选档位落位（2026-10-09）：显式选定（≠ 换模型后的有效档）才写——applyEffortOverride 双轨
+        //（内存 + 盘，/effort 同源出口）；值恒为横选所示（Enter 未动 = 初值 = 已设档或该模型默认）
+        if (sideEffort !== undefined) {
+          const nowEffort = await resolveStoredEffort();
+          if (sideEffort !== nowEffort) applyEffortOverride(sideEffort);
+        }
         return "";
       }
     }],
@@ -1543,7 +1594,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         ...(options.config?.cliOverrides !== undefined ? { cliOverrides: options.config.cliOverrides } : {}),
         env: options.config?.env ?? mergeEnvLayer(process.env, secrets),
       });
-      contextWindow = readContextWindow(config2.core); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
+      contextWindow = readContextWindow(config2.core, config2.sections); // reload 读新值——getter 形态下模块侧立即生效（空白 §5）
       const oldResolution = resolveSections(config.sections, oldDefs.map((g) => g.def), cliInput); // 旧配置启停解析——config 覆盖前留存（热插拔修复 T1：启停翻转算进变更）
       config = config2; // 核心顶层 key（model 等）同步更新——修复：reload 后 model/contextWindow 等仍读旧值（走查缺陷③：向导写 model + /reload 后 resolveProvider 仍读旧 config.core.model = undefined → "未配置 model"）
       const defs2: { def: ModuleDefinition; source: "builtin" | "inline" | "local"; entryHash?: string; root?: string; layer?: "user" | "project" }[] = [

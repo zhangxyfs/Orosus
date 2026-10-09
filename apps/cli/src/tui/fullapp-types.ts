@@ -299,6 +299,31 @@ export const modStateText = (state: string): string => t(`panel.mod.${state}`, u
 export const connStateText = (state: string): string => t(`panel.conn.${state === "pending-confirm" ? "pendingConfirm" : state}`, undefined, state);
 /** 连接列表每页行数（2026-10-01）：页 2 比页 0 少 3 行 KV + 上下文进度条——同框高多容 3 行（8 = 5+3）。 */
 export const CONN_SLOTS = 8;
+
+/** pick 浮层底部横选行状态（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态 Orosus 样式）。
+ *  值清单按高亮项经 valuesOf 取（undefined/空 = 该项无横选——行降级显「——」）；switchIdx/syncedItem
+ *  由 syncSwitchRow 维护。宿 fullapp.ts pendingUi pick 分支 / PickOverlayExt / 键路三处共用此形。 */
+export interface SwitchRow {
+	label: string;
+	valuesOf: (item: string) => string[] | undefined;
+	initialOf?: (item: string) => string | undefined;
+	switchIdx: number;
+	syncedItem?: string | undefined;
+}
+
+/** 横选行同步：高亮项变化时重置 switchIdx 到该项初值（initialOf 命中清单则取之，否则清单首项——
+ *  初值不在清单理论不可能，钳 0 兜底）。幂等——同项重复调用零动作（syncedItem 记忆短路）；键路
+ *  （up/down、←→）、渲染（buildPickOverlay 兜底）、结算（pickOverlay resolve 包装）多口共调。
+ *  放 fullapp-types：keys↔overlay 已有单向依赖，任何一侧反向即成环。 */
+export function syncSwitchRow(sw: SwitchRow | undefined, item: string | undefined): void {
+	if (sw === undefined || item === undefined || sw.syncedItem === item) return;
+	sw.syncedItem = item;
+	const vals = sw.valuesOf(item) ?? [];
+	const init = sw.initialOf?.(item);
+	const i = init !== undefined ? vals.indexOf(init) : -1;
+	sw.switchIdx = i >= 0 ? i : 0;
+}
+
 // 任务勾选色（m5 T12：渲染期现算——主题可切后导入期烤色会是旧主题快照；全仓唯一烤色点改掉）
 export const taskTick = (state: "done" | "active" | "pending"): string =>
 	state === "done" ? theme.fg("accent", "✓") : state === "active" ? theme.fg("warn", "◐") : theme.fg("muted", "○");

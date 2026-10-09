@@ -230,16 +230,19 @@ export function createFrame(app: FullApp) {
 		} else if (app.pendingUi?.kind === "pick") {
 			const pu = app.pendingUi;
 			// m5-ask-multi：增强面字段透传（老 choose 面全 falsy——渲染逐字节原样）
-			overlay = app.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys, {
-				custom: pu.custom === true,
-				editing: pu.editing,
-				customText: pu.customText,
-				checked: pu.checked,
-				...(pu.multi === true ? { multi: true } : {}),
-				...(pu.customCommitted !== undefined ? { customCommitted: pu.customCommitted } : {}),
-				// settings 高窗（2026-10-08）：页大小按本帧 divRow 现算——resize 即生效，keys/鼠标同源取值
-				...(pu.tall === true ? { page: pickPageOf(divRow, true) } : {}),
-			});
+				// m5-ask-multi：增强面字段透传（老 choose 面全 falsy——渲染逐字节原样）；横选行活引用
+				//  透传（2026-10-09：渲染期 syncSwitchRow 兜底同步——viewPage 回写同款）
+				overlay = app.overlay.buildPickOverlay(leftW, divRow, pu.title, pu.items, pu.sel, pu.filter, pu.extraKeys, {
+					custom: pu.custom === true,
+					editing: pu.editing,
+					customText: pu.customText,
+					checked: pu.checked,
+					...(pu.multi === true ? { multi: true } : {}),
+					...(pu.customCommitted !== undefined ? { customCommitted: pu.customCommitted } : {}),
+					...(pu.switchRow !== undefined ? { switchRow: pu.switchRow } : {}),
+					// settings 高窗（2026-10-08）：页大小按本帧 divRow 现算——resize 即生效，keys/鼠标同源取值
+					...(pu.tall === true ? { page: pickPageOf(divRow, true) } : {}),
+				});
 		} else if (app.pendingUi?.kind === "view") {
 			const pu = app.pendingUi;
 			// live 一秒结果缓存（m5-agentview-perf T4 / D1=1000ms——与查看窗转盘秒位节拍一致）：渲染层兜底，

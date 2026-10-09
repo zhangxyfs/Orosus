@@ -6,6 +6,7 @@ export const enUSMenus: Record<string, string> = {
 	"pick.foot.noFilter": "↑↓ Select · Enter confirm",
 	"pick.foot.filter": "Type to filter · ↑↓ Select · Enter confirm",
 	"pick.foot.esc": "· Esc Cancel",
+	"pick.switch.foot": "←→ Effort",
 	"pick.multi.titleSuffix": " (multi-select)",
 	"pick.other.label": "Other (type your own)",
 	"pick.multi.foot": "Space/Enter select · Confirm row submits",

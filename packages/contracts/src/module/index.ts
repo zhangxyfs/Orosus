@@ -161,6 +161,19 @@ export interface CommandUi {
    */
   chooseEx?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[]>;
   /**
+   * 列表 + 底部横选行（2026-10-09 用户拍板，可选）：choose 的同窗横选扩展——列表照旧单选，框底增一行
+   * 左右选择器（label + 候选值横排、选中 [v] 高亮；←→ 循环切换；Enter 连同列表项一并结算）。形态参照
+   * kimi 选模型的 Thinking 行，样式归宿主（Orosus 绿框同族）。
+   * side.valuesOf(item) = 该项的候选值清单（undefined/空 = 该项无横选——行降级显「——」、←→ 无操作）；
+   * side.initialOf(item) = 初值（缺省取清单首项）。返回 { item, value }——value 恒为提交时横选所示值
+   * （项无横选 = undefined，含宿主降级未选横选的情形）。Esc 取消 = 抛「已取消（Esc）」（与 choose
+   * 同字面量约定）。老宿主缺省不存在——调用方判空降级（/model：退老 choose，档位跟随模型解析）。
+   * @param title - 标题（显示在浮层头）。
+   * @param items - 候选清单（每项单行文本——与 choose 同口径）。
+   * @param opts.side - 横选行配置。
+   */
+  chooseSide?(title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ item: string; value: string | undefined }>;
+  /**
    * 是/否确认。
    * @param question - 问句（宿主显示为 `question [y/N]` 形态）。
    * @returns true = 确认；false = 否认或 Esc（Esc 折为 false——语义内 fail-closed，不抛错）。

@@ -35,6 +35,9 @@ export function createReadlineUi(io: {
   /** m5-ask-multi：增强挑选面（chooseEx 装配）——返回已组装的选中数组（picked 按索引映射 + 自定义
    *  恒尾，由宿主侧组装完毕）；undefined = Esc。单选恰一项、多选可多成员。 */
   chooseExFace?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[] | undefined>;
+  /** 列表+底部横选面（2026-10-09 用户拍板：chooseSide 装配）——返回 { item, value }；undefined = Esc
+   *  （createReadlineUi chooseSide 侧统一转「已取消（Esc）」）。 */
+  chooseSideFace?(title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ item: string; value: string | undefined } | undefined>;
   /** 瞬时提示出口（批⑧）：宿主给全屏 toast / 行模式单行；缺省 stdout 单行。m5 T3：透传时长参数（行模式忽略）。 */
   notice?(text: string, opts?: { durationMs?: number }): void;
 }): CommandUi {
@@ -48,6 +51,16 @@ export function createReadlineUi(io: {
       chooseEx: async (title: string, items: string[], opts?: { multi?: boolean }): Promise<string[]> => {
         if (items.length === 0) throw new Error(t("menu.err.noItems")); // CR-05 同款：空表入口即拒
         const r = await io.chooseExFace!(title, items, opts);
+        if (r === undefined) throw new Error(ESC_CANCELLED);
+        return r;
+      },
+    } : {}),
+    // 横选面（2026-10-09 用户拍板）：同款装配纪律——宿主给 chooseSideFace 才存在，Esc 统一字面量；
+    // 空表入口即拒（CR-05 同款）
+    ...(io.chooseSideFace !== undefined ? {
+      chooseSide: async (title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ item: string; value: string | undefined }> => {
+        if (items.length === 0) throw new Error(t("menu.err.noItems"));
+        const r = await io.chooseSideFace!(title, items, opts);
         if (r === undefined) throw new Error(ESC_CANCELLED);
         return r;
       },

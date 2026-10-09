@@ -41,7 +41,7 @@ import { DocModel } from "./tui/docmodel.ts";
 import { FullApp, type SlashItem } from "./tui/fullapp.ts";
 import * as theme from "./theme.ts";
 
-import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
+import { lookupModelVision, readCatalogDiskCache, defaultCatalogCacheFile, refreshCatalogIfStale, defaultMenuDeps, snapshotProviderView, catalogPreferredListModels, diskFirstCatalogLoader, openaiListModels, anthropicListModels, seedBundledCatalog, catalogProviderView } from "@orosus/provider-custom";
 import { persistToolWebSearch, upsertSecret } from "@orosus/tool-web";
 import { persistVisionModel } from "@orosus/tool-media";
 import { detectSources, findGitRoot, importMirror, importNotesProgressive, mergeLegacyMemory, memoryBucketKey, readSourceNotes, scanMirrorSources, type LlmStream, type PeerHomes } from "@orosus/tool-peers";
@@ -102,6 +102,13 @@ fireStartupUpdateCheck({
     && !shouldSkipStartupCheck(process.argv.slice(2)),
   lateNotify: (line) => notify(line),
 });
+
+// models-dev 目录启动期后台刷新（2026-10-09 用户拍板②「每次程序启动保证 models-dev.json 最新」）：
+// TTL 24h 内不重复打上游；成功自然落盘（窗口兜底链/模型清单/vision 清单下次解析即用新数据），
+// 失败静默保旧盘。非阻塞 fire-and-forget——离线/代理环境不拖启动；头less（--print/--version/子命令）跳过。
+if (!shouldSkipStartupCheck(process.argv.slice(2))) {
+  void refreshCatalogIfStale(defaultCatalogCacheFile()).catch(() => undefined);
+}
 
 /** 「网络 · MCP」卡代理态（2026-10-01 走查修准「开了代理却显直连」）：三源检测——
  *  ① 环境变量（流量真走——批 D 已接线 NODE_USE_ENV_PROXY）；② TUN 网卡（Clash Meta/v2rayN 的 TUN 模式
@@ -290,6 +297,29 @@ const chooseExFace = async (title: string, items: string[], opts?: { multi?: boo
   return out;
 };
 
+// 列表+底部横选面（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态 Orosus 样式）。
+// 全屏 = pickOverlay 横选面（框底左右选择器行，Enter 连同列表项一并结算）；行模式降级两步：先选列表项，
+// 项有候选值再问一步档位（初值 ✓ 勾标、该步 Esc = 不改档仅换项）。undefined = Esc（menu 装配侧统一转
+// 「已取消（Esc）」）。非 TTY 也装配（D13 编号回落——两步各自吃 pick 的非 TTY 形）。
+const chooseSideFace = async (title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ item: string; value: string | undefined } | undefined> => {
+  if (activeApp !== undefined) {
+    const r = await activeApp.pickOverlay(title, items, 0, undefined, { switch: opts.side });
+    if (r === undefined) return undefined;
+    return { item: items[r.index] ?? items[0]!, value: r.value };
+  }
+  lv.write(`${t("main.pick.header", { title: title })}
+`);
+  const n = await pick(items, terminalMenuIo(process.stdin.isTTY === true));
+  if (n === undefined) return undefined;
+  const item = items[n]!;
+  const vals = opts.side.valuesOf(item);
+  if (vals === undefined || vals.length === 0) return { item, value: undefined };
+  const init = opts.side.initialOf?.(item);
+  const m = await pick(vals.map((v) => (v === init ? `${v} ✓` : v)), terminalMenuIo(process.stdin.isTTY === true));
+  if (m === undefined) return { item, value: init }; // 档位步 Esc = 不改档（列表项仍生效）
+  return { item, value: vals[m]!.replace(/ ✓$/, "") };
+};
+
 // m5 T2：viewText 上契约（全屏走 FullApp 弹窗——新几何/自定义键/排队；行模式落 console 多行）。
 // 装配件独立在 uiface.ts（main.ts 是顶层脚本 import 即跑——装配层测试进不去）。
 const commandUi = createCliUi({
@@ -297,6 +327,7 @@ const commandUi = createCliUi({
   secretQuestion,
   ...pickFace,
   chooseExFace,
+  chooseSideFace,
   notice: notify, // 瞬时提示出口（批⑧契约口）：模块侧 ui.notice 同走 toast
   activeApp: () => activeApp,
   // m5 T4：贴图 = 注册表登记 + chip token 进输入框光标位（Alt+V 同款链路）；路径校验不过走 toast

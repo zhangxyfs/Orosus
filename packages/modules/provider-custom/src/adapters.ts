@@ -23,6 +23,10 @@ export const configSchema = z.object({
       baseUrl: z.string(),                   // 必填——自定义厂商无"官方默认端点"，端点就是定义的一部分
       apiKey: z.string().optional(),         // $ENV: 占位；省略不发鉴权头（本地/内网端点）
       defaultModel: z.string().optional(),   // D32：有值则 model = "<name>" 裸名可用
+      // 2026-10-09 用户拍板③：条目级默认上下文窗口——私有端点/网关自定义模型不在 models-dev 目录时的
+      // 配置面兜底；解析优先级 = 顶层显式 contextWindow > 本键 > 目录兜底（core load.ts 同链）。
+      // 模块本体不消费（窗口是 harness/显示/压缩阈值口径）——登记在这里只为配置形状入册不漂移。
+      contextWindow: z.number().int().positive().optional(),
       // m5-media F3/D1：openai 族工具结果带图三态（bridge=桥接 user 消息默认——opencode 生产同款、
       // T0 spike 2026-10-01 实证；inline=kimi keep_parts 私有扩展形态，确证端点用；placeholder=图不送文字占位）。
       // anthropic 族原生 tool_result 图块，本键无效。

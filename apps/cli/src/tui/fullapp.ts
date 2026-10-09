@@ -20,7 +20,7 @@ import type { DialogHandle, DialogSpec, PopupKey, PopupLayout, WidgetSpec } from
 import {
 	SIDEBAR_SWITCH_COOLDOWN_MS, SPIN_FRAMES,
 	type AppState, type FullAppIO, type HostDialogKeys,
-	type PickExtraKeys,
+	type PickExtraKeys, type SwitchRow,
 } from "./fullapp-types.ts";
 import { createPanels } from "./fullapp-panels.ts";
 import { createDialogs } from "./fullapp-dialogs.ts";
@@ -373,7 +373,11 @@ export class FullApp {
 			// 「其他」行恒占 items.length、「确定」行恒占 items.length + 1 合成索引，包装层按 pu 现值组装 string[]。
 			multi?: true; custom?: true; checked: number[]; customText: string; customCommitted?: string | undefined; editing: boolean;
 			/** settings 高窗（2026-10-08 用户拍板）：页大小随终端高动态 [10,20]——渲染/翻页/鼠标经 pickPageOf 共源。 */
-			tall?: true }
+			tall?: true;
+			/** 底部横选行（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态 Orosus 样式）：仅
+			 *  chooseSide 路置位（老 choose / chooseEx 面恒缺省——零感知）。valuesOf/initialOf 由调用方预取
+			 *  传入（渲染同步零 IO）；switchIdx 随高亮项经 syncSwitchRow 重置（键路/渲染/结算三口共调）。 */
+			switchRow?: SwitchRow }
 		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
 		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; liveCache?: { at: number; text: string } | undefined; bottom?: boolean | undefined; viewPage?: number }
 		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"]; hostKeys?: HostDialogKeys; disallowEscape?: boolean }
@@ -416,7 +420,10 @@ export class FullApp {
 	pickOverlay(title: string, items: string[], selAt?: number, keys?: PickExtraKeys): Promise<number | undefined>;
 	pickOverlay(title: string, items: string[], selAt: number | undefined, keys: PickExtraKeys | undefined, opts: { custom: true; multi?: boolean }): Promise<string[] | undefined>;
 	pickOverlay(title: string, items: string[], selAt: number | undefined, keys: PickExtraKeys | undefined, opts: { tall?: boolean }): Promise<number | undefined>;
-	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { custom?: boolean; multi?: boolean; tall?: boolean }): Promise<number | undefined | string[] | undefined> {
+	/** 横选面（2026-10-09 用户拍板）：老选择面 + 底部左右选择器行——Enter 结算 { index, value }
+	 *  （value = 提交时横选所示值；项无横选 = undefined）；Esc → undefined。 */
+	pickOverlay(title: string, items: string[], selAt: number | undefined, keys: PickExtraKeys | undefined, opts: { switch: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ index: number; value: string | undefined } | undefined>;
+	pickOverlay(title: string, items: string[], selAt = 0, keys?: PickExtraKeys, opts?: { custom?: boolean; multi?: boolean; tall?: boolean; switch?: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<number | undefined | string[] | undefined | { index: number; value: string | undefined } | undefined> {
 		return this.dialogs.pickOverlay(title, items, selAt, keys, opts);
 	}
 
@@ -503,8 +510,8 @@ export class FullApp {
 		return this.overlay.buildDialogOverlay(pu, leftW, divRow);
 	}
 
-	buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys): OverlayFrame {
-		return this.overlay.buildPickOverlay(leftW, divRow, title, items, sel, filter, extraKeys);
+	buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: PickExtraKeys, ext?: import("./fullapp-overlay.ts").PickOverlayExt): OverlayFrame {
+		return this.overlay.buildPickOverlay(leftW, divRow, title, items, sel, filter, extraKeys, ext);
 	}
 
 	buildOverlay(leftW: number, divRow: number): OverlayFrame {

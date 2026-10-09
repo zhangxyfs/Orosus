@@ -205,47 +205,103 @@ function readModelsDevCatalog(catalogFile: string): Record<string, unknown> | un
   }
 }
 
-/** 目录按模型查上下文窗口：全条目宽搜（key/尾段/id/name 四口径，与 provider-custom lookupModelVision
- *  同口径——同厂异门条目同模型窗口一致，命中但该条目无有效 limit.context 时继续搜下一条目）。
- *  model 形参接受「槽/模型」全名（首个 "/" 后段 = 模型 id，CT-02 口径）。limit.context 须正整数。
- *  未命中/坏文件/无文件 → undefined。 */
-export function lookupModelsDevContextWindow(catalogFile: string, model: string): number | undefined {
-  const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
-  if (bare === "") return undefined;
-  const catalog = readModelsDevCatalog(catalogFile);
-  if (catalog === undefined) return undefined;
-  for (const entry of Object.values(catalog)) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const models = (entry as { models?: unknown }).models;
-    if (typeof models !== "object" || models === null || Array.isArray(models)) continue;
-    for (const [key, m] of Object.entries(models as Record<string, unknown>)) {
-      if (typeof m !== "object" || m === null) continue;
-      const rec = m as { id?: unknown; name?: unknown };
-      if (key !== bare && !key.endsWith(`/${bare}`) && rec.id !== bare && rec.name !== bare) continue;
-      const ctx = (m as { limit?: { context?: unknown } }).limit?.context;
-      if (typeof ctx === "number" && Number.isInteger(ctx) && ctx > 0) return ctx;
-    }
+/** 单目录条目内按模型名查窗口（key/尾段/id/name 四口径，与 provider-custom lookupModelVision 同口径——
+ *  同厂异门条目同模型窗口一致，命中但该条目无有效 limit.context 时继续搜）。bare 为裸模型 id。 */
+function contextOfEntry(entry: unknown, bare: string): number | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
+  const models = (entry as { models?: unknown }).models;
+  if (typeof models !== "object" || models === null || Array.isArray(models)) return undefined;
+  for (const [key, m] of Object.entries(models as Record<string, unknown>)) {
+    if (typeof m !== "object" || m === null) continue;
+    const rec = m as { id?: unknown; name?: unknown };
+    if (key !== bare && !key.endsWith(`/${bare}`) && rec.id !== bare && rec.name !== bare) continue;
+    const ctx = (m as { limit?: { context?: unknown } }).limit?.context;
+    if (typeof ctx === "number" && Number.isInteger(ctx) && ctx > 0) return ctx;
   }
   return undefined;
 }
 
+/** 目录按模型查上下文窗口：slot 在场先精确命中该槽条目（2026-10-08 修：同模型名跨厂条目窗口可能
+ *  不同，宽搜取遍历序首个——按 provider+模型先对准本槽），未中/无槽再全条目宽搜。
+ *  model 形参接受「槽/模型」全名（首个 "/" 后段 = 模型 id，CT-02 口径）。limit.context 须正整数。
+ *  未命中/坏文件/无文件 → undefined。 */
+export function lookupModelsDevContextWindow(catalogFile: string, model: string, slot?: string): number | undefined {
+  const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+  if (bare === "") return undefined;
+  const catalog = readModelsDevCatalog(catalogFile);
+  if (catalog === undefined) return undefined;
+  if (slot !== undefined && slot !== "" && Object.hasOwn(catalog, slot)) {
+    const ctx = contextOfEntry(catalog[slot], bare);
+    if (ctx !== undefined) return ctx;
+  }
+  for (const entry of Object.values(catalog)) {
+    const ctx = contextOfEntry(entry, bare);
+    if (ctx !== undefined) return ctx;
+  }
+  return undefined;
+}
+
+/** [provider-custom] 槽 defaultModel 读法（请求链 adapter.defaultModel 的配置面同源——请求侧经
+ *  graph.services.provider(slot).defaultModel，本处纯读 [provider-custom] 节；merge 后 sections 键
+ *  小写约定）。形状不对/缺层 → undefined（lenient——窗口是显示/阈值口径，不因坏节炸配置面）。 */
+function defaultModelOf(sections: Map<string, Record<string, unknown>> | undefined, slot: string): string | undefined {
+  if (sections === undefined || slot === "") return undefined;
+  const providers = sections.get("provider-custom")?.providers;
+  if (!isPlainObject(providers)) return undefined;
+  const entry = providers[slot];
+  if (!isPlainObject(entry)) return undefined;
+  const dm = entry.defaultModel;
+  return typeof dm === "string" && dm !== "" ? dm : undefined;
+}
+
+/** [provider-custom] 槽条目级 contextWindow（2026-10-09 用户拍板③：私有端点/网关自定义模型不在
+ *  models-dev 目录时的配置面兜底——每家可配默认窗口，配了就用）。正整数才生效（纯数字串等价，
+ *  与顶层显式值同规 CH-06）；非法/缺层 → undefined 走下级（目录兜底）。 */
+function entryContextWindowOf(sections: Map<string, Record<string, unknown>> | undefined, slot: string): number | undefined {
+  if (sections === undefined || slot === "") return undefined;
+  const providers = sections.get("provider-custom")?.providers;
+  if (!isPlainObject(providers)) return undefined;
+  const entry = providers[slot];
+  if (!isPlainObject(entry)) return undefined;
+  const v = entry.contextWindow;
+  const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 /** contextWindow 解析全链（2026-09-29 用户拍板）：config 顶层显式值优先——正整数才生效（纯数字串
  *  等价，env 层 CH-06），provider import / 模型菜单写入的也是这个键，写了就用；缺省/非法时按当前
- *  槽·模型（core.model ?? core.provider——merge 归一后两层只活一个）查 models-dev 盘上缓存兜底；
- *  都无 → undefined。onIllegal：显式值在场但非法时回调（宿主 warn 用；显示侧不传 = 静默走兜底）。 */
+ *  槽·模型查 models-dev 盘上缓存兜底；都无 → undefined。onIllegal：显式值在场但非法时回调（宿主
+ *  warn 用；显示侧不传 = 静默走兜底）。
+ *  有效模型值与请求链同口径（2026-10-08 实机 bug 修：model 只写在 [provider-custom] 槽 defaultModel
+ *  时——本函数旧口径拿 core.model ?? core.provider 的槽名当模型名查表恒 miss → undefined → 压缩模块
+ *  落 60k 平阈值（实机 57k 显示即触发）+ 面板 200k 假窗。现与 cfgModelValue/resolveModelValue 同链：
+ *  provider 键优先（/model 持久化只写 provider 键、旧 model 行清除——provider 是权威键，model 为
+ *  遗留回退），值形「槽/模型」全名或裸槽名；裸槽名时经 sections 解析槽 defaultModel；都无才拿原值
+ *  宽搜（裸模型名兜底）。 */
 export function resolveContextWindow(
   core: Record<string, unknown>,
-  opts: { catalogFile?: string; onIllegal?: (raw: unknown) => void } = {},
+  opts: { catalogFile?: string; onIllegal?: (raw: unknown) => void; sections?: Map<string, Record<string, unknown>> } = {},
 ): number | undefined {
   const v = core.contextWindow;
   const n = typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : v;
   if (typeof n === "number" && Number.isInteger(n) && n > 0) return n;
   if (v !== undefined) opts.onIllegal?.(v);
-  const model = typeof core.model === "string" && core.model !== "" ? core.model
-    : typeof core.provider === "string" && core.provider !== "" ? core.provider
+  const raw = typeof core.provider === "string" && core.provider !== "" ? core.provider
+    : typeof core.model === "string" && core.model !== "" ? core.model
       : undefined;
-  if (model === undefined || opts.catalogFile === undefined) return undefined;
-  return lookupModelsDevContextWindow(opts.catalogFile, model);
+  if (raw === undefined) return undefined;
+  const slash = raw.indexOf("/");
+  const slot = (slash >= 0 ? raw.slice(0, slash) : raw).trim();
+  // 条目级兜底（拍板③）：[provider-custom.providers.<slot>].contextWindow 配了就用（赢目录）——
+  // 纯配置面，无 catalogFile 也生效；顶层显式值（上方可选返回）仍是最高优先（import 链对当前模型的钉值）
+  const entryCtx = entryContextWindowOf(opts.sections, slot);
+  if (entryCtx !== undefined) return entryCtx;
+  if (opts.catalogFile === undefined) return undefined;
+  const explicit = slash >= 0 ? raw.slice(slash + 1).trim() : undefined;
+  const bare = explicit !== undefined && explicit !== ""
+    ? explicit
+    : defaultModelOf(opts.sections, slot) ?? raw;
+  return lookupModelsDevContextWindow(opts.catalogFile, bare, slot);
 }
 
 /** 本地密钥文件（D37）：KEY=VALUE 行解析——坏行跳过并计数（调用方 warn，不因手改坏一行丢失全部密钥）。 */

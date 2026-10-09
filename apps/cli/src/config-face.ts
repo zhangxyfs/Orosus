@@ -28,7 +28,8 @@ export function configFacePaths(): { userFile: string; projectFile: string; user
 }
 export const configFace = (): { contextWindow: number; approvalMode: string } => {
 	const cfg = loadConfig(configFacePaths());
-	const cw = resolveContextWindow(cfg.core, { catalogFile: modelsDevCacheFile(orosusHome()) });
+	// sections 透传（2026-10-08 修）：裸槽名经 [provider-custom] defaultModel 解出真模型再查 models-dev 表
+	const cw = resolveContextWindow(cfg.core, { catalogFile: modelsDevCacheFile(orosusHome()), sections: cfg.sections });
 	const mode = (cfg.sections.get("approval") as { mode?: unknown } | undefined)?.mode;
 	return {
 		contextWindow: typeof cw === "number" ? cw : 200000,

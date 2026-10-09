@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import { FullApp, diagListLines, indexAtRowCol, layoutInputRows, locateCursor, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
+import type { SwitchRow } from "./fullapp-types.ts";
 import type { AtEntry } from "./fullapp-at.ts";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
@@ -1244,6 +1245,118 @@ describe("pickOverlay 当前值项染色（2026-09-25 用户拍板——/effort 
 		expect(text).not.toContain(fg("accent", "low")); // 普通项不染
 		expect(stripAnsi(text)).toContain(" low"); // 普通项仍在
 		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width); // ANSI 计宽不炸框
+	});
+});
+
+// 2026-10-09 用户拍板：/model 选模型同窗选思考档（kimi 形态 Orosus 样式）——框底左右选择器行
+describe("pickOverlay 底部横选行（chooseSide——/model 选模型同窗选思考档）", () => {
+	const EFFORTS: Record<string, string[]> = { "glm-5.3": ["off", "high", "max"], "glm-4.6": ["low", "high"] };
+	const build = (sel: number, items: string[], sw: SwitchRow): { lines: string[]; width: number } =>
+		(rig().app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: undefined, ext?: { switchRow?: SwitchRow }): { lines: string[]; width: number } })
+			.buildPickOverlay(60, 24, "选择模型（zhipuai-coding-plan）", items, sel, undefined, undefined, { switchRow: sw });
+	const row = (over: Partial<SwitchRow> = {}): SwitchRow => ({
+		label: "思考档位",
+		valuesOf: (it) => EFFORTS[it.replace(/ ✓$/, "")],
+		initialOf: (it) => EFFORTS[it.replace(/ ✓$/, "")]?.[1], // 初值 = 各模型第二档（high）
+		switchIdx: 0,
+		...over,
+	});
+
+	it("① 渲染：有档项高亮 → 标签白 + 值横排选中 [v] accent + ‹ › 箭头 + foot 追加 ←→ 导引；行宽不超框", () => {
+		const sw = row();
+		const ov = build(0, ["glm-5.3 ✓", "glm-4.6", "nope-model"], sw);
+		const text = ov.lines.join("\n");
+		// 渲染期 syncSwitchRow 落位：初值 high（idx 1）——选中段 [high] accent
+		expect(sw.switchIdx).toBe(1);
+		expect(text).toContain(fg("accent", "[high]"));
+		expect(text).toContain(fg("fg", " 思考档位")); // 标签白（modeRow 同规，前导空格在段内）
+		expect(text).toContain(`${dim(" ‹")}`); // 箭头 dim（前导空格在段内）
+		expect(stripAnsi(text)).toContain("off  [high]  max"); // 横排双空格
+		expect(text).toContain("←→ 切换档位"); // foot 追加（zh-CN 测试 locale）
+		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width);
+	});
+
+	it("② 无档项高亮 → 行降级「——」dim；单值清单 → 无箭头", () => {
+		const sw = row();
+		const ov = build(2, ["glm-5.3", "nope-model"], sw);
+		const text = ov.lines.join("\n");
+		expect(sw.syncedItem).toBe("nope-model"); // 同步跟随高亮项
+		expect(text).toContain(`${fg("fg", " 思考档位")}${dim(" ——")}`);
+		const single = row({ valuesOf: () => ["high"], initialOf: () => "high" });
+		const ov2 = build(0, ["glm-5.3"], single);
+		expect(ov2.lines.join("\n")).not.toContain("‹"); // 单值无箭头
+		expect(ov2.lines.join("\n")).toContain(fg("accent", "[high]"));
+	});
+
+	it("③ 键路：↓ 换高亮项 → 档位重置为该项初值；←→ 环绕循环；Enter 结算 { index, value }；无档项 Enter value undefined；Esc → undefined", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		const p = app.pickOverlay("选择模型（zhipuai-coding-plan）", ["glm-5.3", "glm-4.6", "nope-model"], 0, undefined, {
+			switch: { label: "思考档位", valuesOf: (it) => EFFORTS[it.replace(/ ✓$/, "")], initialOf: (it) => EFFORTS[it.replace(/ ✓$/, "")]?.[1] },
+		});
+		await flush(120);
+		const pu = (app as unknown as { pendingUi?: { switchRow?: SwitchRow } }).pendingUi;
+		expect(pu?.switchRow?.switchIdx).toBe(1); // 开窗初值：glm-5.3 → high（idx 1）
+		input.emit("data", "\x1b[D"); // ←：1 → 0（off）
+		await flush(80);
+		expect(pu?.switchRow?.switchIdx).toBe(0);
+		input.emit("data", "\x1b[D"); // ←：0 → 环绕 2（max）
+		await flush(80);
+		expect(pu?.switchRow?.switchIdx).toBe(2);
+		input.emit("data", "\x1b[B"); // ↓：高亮 glm-4.6 → 档位重置初值 high（该模型 idx 1）
+		await flush(80);
+		expect(pu?.switchRow?.switchIdx).toBe(1);
+		input.emit("data", "\r"); // Enter：结算 glm-4.6 + high
+		await flush(120);
+		await expect(p).resolves.toEqual({ index: 1, value: "high" });
+
+		// 无档项：value undefined（档位跟随模型解析）
+		const p2 = app.pickOverlay("选择模型（zhipuai-coding-plan）", ["glm-5.3", "nope-model"], 1, undefined, {
+			switch: { label: "思考档位", valuesOf: (it) => EFFORTS[it.replace(/ ✓$/, "")], initialOf: () => undefined },
+		});
+		await flush(120);
+		input.emit("data", "\r");
+		await flush(120);
+		await expect(p2).resolves.toEqual({ index: 1, value: undefined });
+
+		// Esc → undefined
+		const p3 = app.pickOverlay("选择模型（zhipuai-coding-plan）", ["glm-5.3"], 0, undefined, {
+			switch: { label: "思考档位", valuesOf: () => ["off", "max"], initialOf: () => "max" },
+		});
+		await flush(120);
+		input.emit("data", "\x1b");
+		await flush(80);
+		await expect(p3).resolves.toBeUndefined();
+		app.stop();
+	});
+
+	it("④ 老面零变化：无 opts.switch 的 pickOverlay 键路/结算与旧 choose 逐字节同形（Enter → number）", async () => {
+		const { app, input } = rig();
+		app.start();
+		await flush();
+		const p = app.pickOverlay("选择模型", ["m1", "m2"]);
+		await flush(120);
+		expect((app as unknown as { pendingUi?: { switchRow?: unknown } }).pendingUi?.switchRow).toBeUndefined(); // 横选行不置位
+		input.emit("data", "\r");
+		await flush(120);
+		await expect(p).resolves.toBe(0);
+		app.stop();
+	});
+
+	it("⑤ 多档位全列横排（2026-10-09 用户拍板二轮「不可能横向放不下，就横着放」）：8 值全直显、无 … 省略、选中 accent、宽度不炸框", () => {
+		const many = ["minimal", "low", "medium", "high", "highplus", "max", "ultra", "extreme"];
+		const sw = row({ valuesOf: () => many, initialOf: () => "max" });
+		const buildWide = (sel: number, items: string[], s: SwitchRow): { lines: string[]; width: number } =>
+			(rig().app as unknown as { buildPickOverlay(leftW: number, divRow: number, title: string, items: string[], sel: number, filter?: string, extraKeys?: undefined, ext?: { switchRow?: SwitchRow }): { lines: string[]; width: number } })
+				.buildPickOverlay(100, 24, "选择模型（zhipuai-coding-plan）", items, sel, undefined, undefined, { switchRow: s });
+		const ov = buildWide(0, ["glm-5.3"], sw);
+		const text = ov.lines.join("\n");
+		expect(sw.switchIdx).toBe(5); // 渲染期同步落位到初值 max
+		expect(stripAnsi(text)).toContain("minimal  low  medium  high  highplus  [max]  ultra  extreme"); // 全列直显双空格隔
+		expect(text).not.toContain("…"); // 不做窗口/省略
+		expect(text).toContain(fg("accent", "[max]"));
+		for (const l of ov.lines) expect(visibleWidth(l)).toBeLessThanOrEqual(ov.width);
 	});
 });
 

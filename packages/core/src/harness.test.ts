@@ -367,6 +367,67 @@ describe("命令框架（T10：路由三层/CommandUi/内建表与别名，D35/D
     await h.close();
   });
 
+  // 2026-10-09 用户拍板：/model 选模型同窗选思考档（kimi 形态 Orosus 样式）——chooseSide 面带档位清单与
+  // 初值（已设档沿用「设置过就尊重」/未设中位 middleOf），Enter 一并落 model + effort 双键；
+  // 宿主无 chooseSide 口 = 老 choose 路零变化（不写 effort——档位跟随模型解析不落盘）
+  it("⑦f /model 同窗横选档位：chooseSide 收 valuesOf/initialOf（未设档初值中位）；选定落 provider+effort 双键；无 chooseSide 口走老 choose 不写 effort", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cmd-side-"));
+    const store = new InMemorySessionStore();
+    const prov: ModuleDefinition = {
+      ...fakeModule("provider-fake"),
+      activate(ctx) {
+        ctx.provide("provider:fake" as never, {
+          stream: fakeProvider([[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]).stream,
+          defaultModel: "m1",
+          listModels: async () => ["m1", "m2"],
+          listThinking: async (m: string) => m === "m1"
+            ? { efforts: ["off", "high", "max"], hasToggle: false }
+            : m === "m2" ? { efforts: ["low", "high"], hasToggle: false } : undefined,
+        });
+      },
+    };
+    const seen: { values?: string[] | undefined; initial?: string | undefined; label?: string | undefined }[] = [];
+    const fakeUi: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
+      choose: async () => { throw new Error("不应 choose（chooseSide 面在场）"); },
+      confirm: async () => true,
+      chooseSide: async (_t, items, opts) => {
+        seen.push({ values: opts.side.valuesOf(items[1]!), initial: opts.side.initialOf?.(items[1]!), label: opts.side.label });
+        return { item: items[1]!, value: "low" }; // 选 m2 + low（非默认——证显式选定落盘）
+      },
+    };
+    const h = await createHarness({
+      store, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi,
+      modules: [prov], config: { ...hermetic(dir), cliOverrides: { model: "fake/m1" } },
+    });
+    await h.prompt("/model");
+    expect(seen).toEqual([{ values: ["low", "high"], initial: "high", label: "思考档位" }]); // m2 清单 + 未设档初值中位（middleOf 2 恰 high）
+    const cfgText = readFileSync(join(dir, "no-user.toml"), "utf8");
+    expect(cfgText).toMatch(/^provider = "fake\/m2"$/m); // 模型落盘（applyModelOverride 既有行为）
+    expect(cfgText).toMatch(/^effort = "low"$/m); // 横选档位落盘（applyEffortOverride——显式选定 ≠ 默认档才写）
+    expect(h.status().effort).toBe("low"); // 会话内存双轨
+    await h.close();
+
+    // 老宿主（无 chooseSide 口）：老 choose 路——模型照落，effort 不写盘（未设档时默认档是解析态非持久态）
+    const store2 = new InMemorySessionStore();
+    const fakeUi2: CommandUi = {
+      ask: async () => { throw new Error("不应 ask"); },
+      askSecret: async () => "",
+      choose: async (_t, items) => items.find((x) => x === "m2") ?? items[0]!,
+      confirm: async () => true,
+    };
+    const h2 = await createHarness({
+      store: store2, diagDir: dir, spillDir: join(dir, "spill"), commandUi: fakeUi2,
+      modules: [prov], config: { ...hermetic(join(dir, "p2")), cliOverrides: { model: "fake/m1" } }, // 独立 userFile——上一段已写过 effort 行
+    });
+    await h2.prompt("/model");
+    const cfg2 = readFileSync(join(dir, "p2", "no-user.toml"), "utf8");
+    expect(cfg2).toMatch(/^provider = "fake\/m2"$/m);
+    expect(cfg2).not.toMatch(/^effort = /m); // 无显式选定——档位跟随模型解析不落盘
+    await h2.close();
+  });
+
   // /effort（2026-09-25 三轮 kimi 同构）：菜单 = segmentsOf（off/…档位——kimi segmentsFor）+ 默认档
   // （kimi middleOf）+ 线缆（on/off 语义档）。双轨 = effortOverride 会话内存 + user config 顶层 effort 键。
   it("⑦e /model 模型列表 Esc 回平台列表（2026-09-28 用户拍板「子菜单 Esc 返回上一级」）；平台列表 Esc 整体取消", async () => {
@@ -1024,6 +1085,38 @@ describe("LlmPort 三扩展：usage 锚点 / contextWindow / maxTokens（M3 补�
     expect((await stateWith(undefined)).contextWindow).toBe(1_000_000); // 无显式 → 目录兜底
     expect((await stateWith("contextWindow = 262144\n")).contextWindow).toBe(262144); // 显式赢目录
     expect((await stateWith("contextWindow = 0\n")).contextWindow).toBe(1_000_000); // 非法显式（三轮 P2 warn 口径不变）→ 兜底救回
+  });
+
+  it("②d /model 换模型窗口跟随（2026-10-09 拍板①）：setModel 不走 reload——闭包窗口即时按新值重解析（条目级 > 目录）+ 顶层键同步落盘（重启一致）；目录查不到不动旧值（手钉保留）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-harness-cw-sw-"));
+    const catalogFile = join(dir, "models-dev.json");
+    writeFileSync(catalogFile, JSON.stringify({ fetchedAt: 1, catalog: { "zhipuai-coding-plan": { models: {
+      "glm-5.3": { limit: { context: 1_000_000 } }, "glm-4.6": { limit: { context: 200_000 } },
+    } } } }), "utf8");
+    const userFile = join(dir, "user.toml");
+    writeFileSync(userFile, [
+      'provider = "zhipuai-coding-plan/glm-5.3"',
+      "",
+      "[provider-custom.providers.zhipuai-coding-plan]",
+      'type = "openai"',
+      'baseUrl = "https://x.example/v1"',
+      'defaultModel = "glm-5.3"',
+    ].join("\n"), "utf8");
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeProviderModule("fake", []), stateModule()],
+      config: { userFile, projectFile: join(dir, "no-proj.toml"), catalogCacheFile: catalogFile, env: {} },
+    });
+    const cw = async (): Promise<number | null> => JSON.parse((await h.prompt("/llm-probe__state")) as string).contextWindow;
+    expect(await cw()).toBe(1_000_000); // 初始：全形 → 目录 glm-5.3
+    await h.setModel("zhipuai-coding-plan/glm-4.6");
+    expect(await cw()).toBe(200_000); // 内存即时跟随（不等 reload/重启）
+    expect(readFileSync(userFile, "utf8")).toMatch(/^contextWindow = 200000$/m); // 顶层键同步落盘——重启后显式值同口径
+    expect(readFileSync(userFile, "utf8")).toMatch(/^provider = "zhipuai-coding-plan\/glm-4.6"$/m); // provider 行同写（既有行为）
+    await h.setModel("zhipuai-coding-plan/nope-model"); // 目录查不到且无条目级 → 窗口不动（provider 行照写是既有行为）
+    expect(await cw()).toBe(200_000);
+    expect(readFileSync(userFile, "utf8")).toMatch(/^contextWindow = 200000$/m); // 手钉/已解析值不被 undefined 覆盖
+    await h.close();
   });
 
   it("③ reload 更新：改 config 文件后 /reload → contextWindow 读到新值（getter 代际正确性）", async () => {

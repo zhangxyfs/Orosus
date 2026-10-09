@@ -7,6 +7,10 @@ import { defineModule } from "@orosus/contracts/module";
 import { loadConfig, loadSecretsEnv, mergeEnvLayer, modelsDevCacheFile, lookupModelsDevContextWindow, resolveContextWindow } from "./load.ts";
 import { resolveSections } from "./validate.ts";
 
+/** [provider-custom] sections 构造件（条目级 contextWindow 用例）：给定条目窗口值 → sections Map。 */
+const sec = (cw: unknown): Map<string, Record<string, unknown>> =>
+  new Map([["provider-custom", { providers: { "zhipuai-coding-plan": { defaultModel: "glm-5.3", contextWindow: cw } } }]]);
+
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -244,6 +248,43 @@ describe("contextWindow 解析链（2026-09-29 用户拍板：config 显式值 >
     expect(illegal).toEqual([0]);
     expect(resolveContextWindow({ provider: "zhipuai-coding-plan/glm-5.3" })).toBeUndefined(); // 未给 catalogFile = 不查表（纯读面）
     expect(resolveContextWindow({}, { catalogFile: file })).toBeUndefined(); // 无 model 不查表
+  });
+
+  it("resolveContextWindow（2026-10-08 修）：裸槽名经 sections 的 defaultModel 解出真模型查表；provider 键优先于遗留 model 键；lookup 槽精确优先", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cw-dm-"));
+    const file = writeCatalog(CATALOG);
+    const sections = new Map([["provider-custom", { providers: { "zhipuai-coding-plan": { defaultModel: "glm-5.3" } } }]]);
+    // 实机回归钉：model 只写在 [provider-custom] 槽 defaultModel（顶层 provider 裸槽名）——旧口径拿槽名
+    // 当模型名查表恒 miss → undefined → 压缩 60k 平阈值 + 面板 200k 假窗
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { catalogFile: file, sections })).toBe(1_000_000);
+    // 调用方未透传 sections（旧调用面）→ 仍拿槽名宽搜 miss（不猜）
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { catalogFile: file })).toBeUndefined();
+    // provider 键优先（请求链 cfgModelValue 同口径——/model 持久化只写 provider 键、旧 model 行清除）
+    expect(resolveContextWindow({ provider: "zhipu/glm-4.6", model: "glm-5.3" }, { catalogFile: file, sections })).toBe(200_000);
+    // defaultModel 坏形状（空串）不解析 → 拿原值宽搜 miss → undefined
+    const badSections = new Map([["provider-custom", { providers: { "zhipuai-coding-plan": { defaultModel: "" } } }]]);
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { catalogFile: file, sections: badSections })).toBeUndefined();
+    // lookup 槽精确优先：同模型名跨条目窗口不同，slot 在场取本槽条目；槽条目不存在回落宽搜（既有行为）
+    const two = writeCatalog({ a: { models: { m1: { limit: { context: 8192 } } } }, b: { models: { m1: { limit: { context: 65536 } } } } });
+    expect(lookupModelsDevContextWindow(two, "m1", "b")).toBe(65536);
+    expect(lookupModelsDevContextWindow(two, "m1", "a")).toBe(8192);
+    expect(lookupModelsDevContextWindow(two, "m1")).toBe(8192);
+    expect(lookupModelsDevContextWindow(two, "m1", "absent-slot")).toBe(8192);
+  });
+
+  it("resolveContextWindow 条目级 contextWindow（2026-10-09 拍板③）：[provider-custom.providers.<槽>] 配了就用（赢目录、无需 catalogFile）；顶层显式仍最高；非法条目值走目录；纯数字串等价", () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-cw-entry-"));
+    const file = writeCatalog(CATALOG);
+    // 条目赢目录（目录说 glm-5.3 = 1M，条目 262144 生效）——私有端点模型的手兜底位
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { catalogFile: file, sections: sec(262144) })).toBe(262144);
+    // 纯配置面：无 catalogFile 也生效（不依赖目录数据）；纯数字串等价（与顶层显式值 CH-06 同规）
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { sections: sec("262144") })).toBe(262144);
+    // 顶层显式值仍最高（import 链对当前模型的钉值 > 条目级默认）
+    expect(resolveContextWindow({ contextWindow: 131072, provider: "zhipuai-coding-plan" }, { catalogFile: file, sections: sec(262144) })).toBe(131072);
+    // 非法条目值（0）→ 忽略走目录
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan" }, { catalogFile: file, sections: sec(0) })).toBe(1_000_000);
+    // 「槽/模型」全形也吃条目级（槽命中即用）
+    expect(resolveContextWindow({ provider: "zhipuai-coding-plan/glm-5.3" }, { catalogFile: file, sections: sec(65536) })).toBe(65536);
   });
 
   it("modelsDevCacheFile：宿主 cache 目录落点（provider-custom defaultCatalogCacheFile 同款路径）", () => {

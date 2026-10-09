@@ -22,6 +22,9 @@ export interface CliUiDeps {
   /** m5-ask-multi：增强挑选面（chooseEx 装配）——已组装 string[]（自定义恒尾）；undefined = Esc
    *  （createReadlineUi chooseEx 侧转「已取消（Esc）」）。非 TTY 也装配（D13 编号/文本回落）。 */
   chooseExFace?(title: string, items: string[], opts?: { multi?: boolean }): Promise<string[] | undefined>;
+  /** 列表+底部横选面（2026-10-09 用户拍板：chooseSide 装配）——{ item, value }；undefined = Esc。
+   *  行模式降级两步（先列表项、项有候选再问一步档位）。 */
+  chooseSideFace?(title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] | undefined; initialOf?: (item: string) => string | undefined } }): Promise<{ item: string; value: string | undefined } | undefined>;
   notice?(text: string, opts?: { durationMs?: number }): void;
   /** 当前全屏应用；undefined = 行模式。调用期现读——activeApp 的生命周期晚于本对象。 */
   activeApp(): FullAppFace | undefined;
@@ -36,6 +39,7 @@ export function createCliUi(deps: CliUiDeps): CommandUi {
       secretQuestion: deps.secretQuestion,
       ...(deps.pick !== undefined ? { pick: deps.pick } : {}),
       ...(deps.chooseExFace !== undefined ? { chooseExFace: deps.chooseExFace } : {}),
+      ...(deps.chooseSideFace !== undefined ? { chooseSideFace: deps.chooseSideFace } : {}),
       ...(deps.notice !== undefined ? { notice: deps.notice } : {}),
     }),
     viewText: (title, text, opts) => {

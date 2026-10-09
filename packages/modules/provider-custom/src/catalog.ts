@@ -173,29 +173,57 @@ export function persistCatalogCache(catalog: Catalog, cacheFile: string, fetched
   writeDiskCache(cacheFile, catalog, fetchedAt);
 }
 
+/** 在线拉取核（getCatalogWithSource 与 refreshCatalogIfStale 共用——单一写者防漂移）：10s 超时、
+ *  payload 形状校验（非对象拒收，目录数据当不受信输入——五轮审查定案）。失败 throw，成功返回
+ *  { catalog, fetchedAt }（fetchedAt = 发起时刻）。 */
+async function fetchCatalogOnline(opts: { registryUrl?: string; fetchImpl?: typeof fetch; now?: () => number }): Promise<{ catalog: Catalog; fetchedAt: number }> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const t = (opts.now ?? Date.now)();
+  const res = await doFetch(opts.registryUrl ?? MODELS_DEV_URL, {
+    headers: { accept: "application/json", "user-agent": OROSUS_USER_AGENT },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload: unknown = await res.json();
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error("unexpected catalog payload shape");
+  }
+  return { catalog: payload as Catalog, fetchedAt: t };
+}
+
+/** 启动期后台刷新闸（2026-10-09 用户拍板②：每次程序启动保证 models-dev.json 处于最新——TTL 内不重复
+ *  打上游）。缺省 24h；盘上信封 fetchedAt 超龄 / 缺文件 / 坏信封 → 在线拉取（成功落盘，fetchCatalogOnline
+ *  同核）；新鲜 → false 不动盘。拉取失败 false（盘上旧数据保留，下次启动再试）。不走 getCatalogWithSource
+ *  供给链——其 stale-while-error 失败路径返 source:"online"（内存旧数据）会误报刷新成功，且不该污染
+ *  进程内目录缓存。非阻塞由调用方 fire-and-forget；fetchImpl/now 注入测试密封。 */
+export const CATALOG_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
+export async function refreshCatalogIfStale(cacheFile: string, opts: { ttlMs?: number; now?: () => number; fetchImpl?: typeof fetch; registryUrl?: string } = {}): Promise<boolean> {
+  const now = opts.now ?? Date.now;
+  const disk = readDiskCache(cacheFile);
+  if (disk !== undefined && now() - disk.fetchedAt < (opts.ttlMs ?? CATALOG_REFRESH_TTL_MS)) return false;
+  try {
+    const { catalog, fetchedAt } = await fetchCatalogOnline(opts);
+    writeDiskCache(cacheFile, catalog, fetchedAt);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 目录拉取（D34 + 用户方案持久化）：10s 超时、10min 内存 TTL、payload 形状校验（非对象拒收）。
  *  供给链：内存 TTL → 网络（成功落盘）→ 失败供旧内存（stale-while-error）→ 磁盘缓存（曾拉取过的全量数据）→ 内置快照。
  *  builtin 兜底不落盘——盘上只存真实拉取数据，不让 7 家快照冒充本地缓存掩盖降级。 */
 export async function getCatalogWithSource(opts: { registryUrl?: string; fetchImpl?: typeof fetch; now?: () => number; cacheFile?: string } = {}): Promise<{ catalog: Catalog; source: CatalogSource; fetchedAt?: number }> {
   const now = opts.now ?? Date.now;
-  const doFetch = opts.fetchImpl ?? fetch;
   if (cache !== undefined && now() - cache.at < CACHE_TTL_MS) {
     return { catalog: cache.catalog, source: cache.source, ...(cache.fetchedAt !== undefined ? { fetchedAt: cache.fetchedAt } : {}) };
   }
   const t = now();
   try {
-    const res = await doFetch(opts.registryUrl ?? MODELS_DEV_URL, {
-      headers: { accept: "application/json", "user-agent": OROSUS_USER_AGENT },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const payload: unknown = await res.json();
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-      throw new Error("unexpected catalog payload shape"); // 目录数据当不受信输入（五轮审查定案）
-    }
-    cache = { catalog: payload as Catalog, at: t, source: "online", fetchedAt: t };
-    if (opts.cacheFile !== undefined) writeDiskCache(opts.cacheFile, cache.catalog, t);
-    return { catalog: cache.catalog, source: "online", fetchedAt: t };
+    const { catalog, fetchedAt } = await fetchCatalogOnline({ ...opts, now: () => t });
+    cache = { catalog, at: t, source: "online", fetchedAt };
+    if (opts.cacheFile !== undefined) writeDiskCache(opts.cacheFile, catalog, fetchedAt);
+    return { catalog, source: "online", fetchedAt };
   } catch {
     if (cache !== undefined) {
       return { catalog: cache.catalog, source: cache.source, ...(cache.fetchedAt !== undefined ? { fetchedAt: cache.fetchedAt } : {}) };
