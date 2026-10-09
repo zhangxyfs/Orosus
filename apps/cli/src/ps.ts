@@ -53,7 +53,7 @@ export function scanLivePeers(sessionsDir: string, selfSid: string, opts?: { now
     // sid 以目录名为准（扫描发现面的事实源——载荷 sid 与目录漂移时以发现位为准）
     out.push({ ...rec.info, sid: d.name, stale: false });
   }
-  return out.sort((a, b) => PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase] || b.lastEventAt - a.lastEventAt);
+  return out.toSorted((a, b) => PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase] || b.lastEventAt - a.lastEventAt);
 }
 
 // ---------- /ps 输出形态（T4，D16 全量键化） ----------

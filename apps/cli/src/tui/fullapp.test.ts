@@ -3,9 +3,12 @@ import { EventEmitter } from "node:events";
 import { FullApp, diagListLines, indexAtRowCol, layoutInputRows, locateCursor, type FullAppIO, type PanelData, type SlashItem } from "./fullapp.ts";
 import type { SwitchRow } from "./fullapp-types.ts";
 import type { AtEntry } from "./fullapp-at.ts";
+import type { PeerEntry } from "../ps.ts";
+import type { LiveInfo } from "@orosus/core";
 import type { DialogSpec } from "@orosus/contracts/module";
 import { stripAnsi, visibleWidth } from "./width.ts";
 import { pickPageOf } from "./fullapp-overlay.ts";
+import { bindTestLocale, t } from "../i18n/app.ts";
 import { fg, dim } from "../theme.ts";
 
 type FakeInput = NodeJS.ReadStream;
@@ -57,7 +60,7 @@ function rig(docLines: string[] = ["# 你好"], cols = 100, rows = 30, over: Par
 		rows: () => rows,
 		docTotal: () => docLines.length,
 		docWindow: (s, c) => docLines.slice(s, s + c),
-		submit: (t) => submitted.push(t),
+		submit: (text) => submitted.push(text),
 		// CTU-11：requestExit 死接口已三方删除（fullapp.ts 声明 + main.ts 实现 + 本桩）
 		requestCancel: () => actions.push("cancel"),
 		queueItems: () => [...queue],
@@ -492,7 +495,7 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 			{ name: "/help", desc: "帮助", long: "长说明" },
 			{ name: "/provider", desc: "厂商向导", long: "长" },
 		];
-		r.io.submitGate = (t) => (t.startsWith("/provider") ? "回答进行中——/provider 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）" : undefined);
+		r.io.submitGate = (text) => (text.startsWith("/provider") ? "回答进行中——/provider 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）" : undefined);
 		const { app, input } = r;
 		app.start();
 		await flush();
@@ -1954,7 +1957,7 @@ describe("toast 时长参数（m5 T3——缺省 3000 不变、范围 [1000, 300
 });
 
 describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order、←→ 切卡、单卡页码隐藏、渲染错误边界、卸载自然消失）", () => {
-	it("① 右上卡组翻页：运行状态 → 网络·MCP → top 模块卡（3/3）→ 回绕运行状态", async () => {
+	it("① 右上卡组翻页：运行状态 → 网络·MCP → 会话协同 → top 模块卡（4/4）→ 回绕运行状态（m5-collab T5 第 3 内建页随动）", async () => {
 		const { app, input, output } = rig(["# hi"], 100, 30, {
 			panelData: () => ({
 				...defaultPanelData(),
@@ -1967,11 +1970,13 @@ describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order�
 		await flush();
 		input.emit("data", "\x1b[C"); // → 网络·MCP
 		await flush();
+		input.emit("data", "\x1b[C"); // → 会话协同
+		await flush();
 		input.emit("data", "\x1b[C"); // → top 模块卡
 		await flush();
 		const b = stripAnsi(output.buf);
 		expect(b).toContain("上卡");
-		expect(b).toContain("3/3");
+		expect(b).toContain("4/4");
 		expect(b).toContain("上卡内容");
 		input.emit("data", "\x1b[C"); // 回绕运行状态
 		await flush();
@@ -1999,7 +2004,7 @@ describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order�
 		input.emit("data", "\x1b[C"); // → bottom 卡（焦点已在面板 2）
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("下卡");
-		expect(stripAnsi(output.buf)).toContain("1/2");
+		expect(stripAnsi(output.buf)).toContain("2/2"); // bottom 卡自身页签（m5-collab T5 随动：原断言的「1/2」系匹配右上运行状态旧页签 1/2——第 3 内建页起右上恒 1/3，改钉 bottom 卡自己的 2/2）
 		input.emit("data", "\x1b[D"); // ← 回任务清单
 		await flush();
 		expect(app.stateRef.taskPage).toBe(0);
@@ -2021,7 +2026,7 @@ describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order�
 		await flush();
 		input.emit("data", "\t"); // 聚焦面板 1
 		await flush();
-		input.emit("data", "\x1b[C\x1b[C"); // → 好卡（第 3 页）
+		input.emit("data", "\x1b[C\x1b[C\x1b[C"); // → 好卡（第 4 页——m5-collab T5 第 3 内建页随动：原两键到第 3 页）
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("好卡");
 		expect(stripAnsi(output.buf)).toContain("正常");
@@ -2040,11 +2045,11 @@ describe("模块卡与两区卡组（m5 T6——内建在前模块卡按 order�
 		await flush();
 		input.emit("data", "\t");
 		await flush();
-		input.emit("data", "\x1b[C\x1b[C"); // 到卡页
+		input.emit("data", "\x1b[C\x1b[C\x1b[C"); // 到卡页（m5-collab T5 第 3 内建页随动：原两键——top 模块卡现为第 4 页）
 		await flush();
 		expect(stripAnsi(output.buf)).toContain("将卸卡");
 		cards = []; // 模块卸载——卡注册表自然消失
-		input.emit("data", "\x1b[C"); // 页号 2 越界 → 夹回 0（运行状态）
+		input.emit("data", "\x1b[C"); // 页号 3 越界（pages 回落 3）→ 夹回 0（运行状态）
 		await flush();
 		expect(app.stateRef.statePage).toBe(0);
 		output.buf = "";
@@ -4819,5 +4824,274 @@ describe("dialog 禁 Esc（disallowEscape）", () => {
 		expect(plain).not.toContain("Esc 关闭");
 		expect(plain).not.toContain("Enter 激活");
 		app.stop();
+	});
+});
+const collabPeer = (sid: string, over: Partial<LiveInfo> = {}): PeerEntry => ({
+	v: 1, sid, pid: process.pid, token: `tok-${sid}`, kind: "tui", phase: "idle",
+	startedAt: Date.now() - 500_000, lastEventAt: Date.now() - 60_000, stale: false,
+	...over,
+});
+const collabPeersData = (list: PeerEntry[], self?: PeerEntry): PanelData["peers"] => ({ ...(self !== undefined ? { self } : {}), list });
+
+describe("「会话协同」内建卡（m5-collab T5——右上第 3 内建页 + presence 等待钩子）", () => {
+
+	it("① 四页循环：运行状态 → 网络·MCP → 会话协同（3/4）→ top 模块卡（4/4）→ 回绕", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({
+				...defaultPanelData(),
+				cards: [{ area: "top", order: 60, title: "上卡", widgets: [{ id: "t", kind: "text", text: "上卡内容" }] }],
+				peers: collabPeersData([collabPeer("s_a", { label: "兄弟会话", phase: "running" })], collabPeer("s_me", { label: "我这会话" })),
+			}),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t"); // 聚焦面板
+		await flush();
+		input.emit("data", "\x1b[C"); // → 网络·MCP
+		await flush();
+		input.emit("data", "\x1b[C"); // → 会话协同
+		await flush();
+		const collab = stripAnsi(output.buf);
+		expect(collab).toContain("会话协同");
+		expect(collab).toContain("3/4");
+		expect(collab).toContain("兄弟会话");
+		input.emit("data", "\x1b[C"); // → top 模块卡
+		await flush();
+		const mod = stripAnsi(output.buf);
+		expect(mod).toContain("上卡");
+		expect(mod).toContain("4/4");
+		input.emit("data", "\x1b[C"); // 回绕运行状态
+		await flush();
+		expect(app.stateRef.statePage).toBe(0);
+		app.stop();
+	});
+
+	it("② self 行置顶带「本会话」标记；peers 按输入序渲染（scanLivePeers 排序序——waiting 排最前）", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({
+				...defaultPanelData(),
+				peers: collabPeersData(
+					[collabPeer("s_wa", { label: "部署脚本", phase: "waiting-approval" }), collabPeer("s_run", { label: "重构树视图", phase: "running" })],
+					collabPeer("s_me", { label: "我这会话", phase: "running", lastEventAt: Date.now() - 5_000 }),
+				),
+			}),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C"); // → 协同页
+		await flush();
+		const plain = stripAnsi(output.buf);
+		const iSelf = plain.indexOf("我这会话");
+		const iWa = plain.indexOf("部署脚本");
+		const iRun = plain.indexOf("重构树视图");
+		expect(iSelf).toBeGreaterThan(-1);
+		expect(iSelf).toBeLessThan(iWa); // self 恒顶
+		expect(iWa).toBeLessThan(iRun); // 等审批在正在跑前
+		expect(plain).toContain(t("ps.selfMark"));
+		expect(plain).toContain(t("ps.phase.waitingApproval"));
+		app.stop();
+	});
+
+	it("③ 五态图标与态名渲染（● ◉ ✗ ○ 全到场）", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({
+				...defaultPanelData(),
+				peers: collabPeersData([
+					collabPeer("s_wa", { label: "甲审批", phase: "waiting-approval" }),
+					collabPeer("s_wi", { label: "乙问询", phase: "waiting-input" }),
+					collabPeer("s_run", { label: "丙在跑", phase: "running" }),
+					collabPeer("s_err", { label: "丁报错", phase: "error" }),
+					collabPeer("s_idle", { label: "戊闲着", phase: "idle" }),
+				]),
+			}),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		const raw = output.buf;
+		for (const icon of ["●", "◉", "✗", "○"]) expect(raw).toContain(icon);
+		const plain = stripAnsi(raw);
+		for (const k of ["ps.phase.waitingApproval", "ps.phase.waitingInput", "ps.phase.running", "ps.phase.error", "ps.phase.idle"]) {
+			expect(plain).toContain(t(k));
+		}
+		app.stop();
+	});
+
+	it("④ 空态：无 peer → 空态单行（self 在场时也报「没有其他活跃会话」）", async () => {
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), peers: collabPeersData([], collabPeer("s_me", { label: "我这会话" })) }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		const plain = stripAnsi(output.buf);
+		expect(plain).toContain(t("ps.empty"));
+		expect(plain).toContain("我这会话"); // self 行照常
+		app.stop();
+	});
+
+	it("⑤ 超槽分页：12 peer → 页签 n/m 出现，PgDn 翻页换内容（CONN_SLOTS 卡内分页先例）", async () => {
+		const many = Array.from({ length: 12 }, (_, i) => collabPeer(`s_p${i}`, { label: `会话${i.toString().padStart(2, "0")}`, phase: "idle" }));
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), peers: collabPeersData(many) }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		const page1 = stripAnsi(output.buf);
+		expect(page1).toContain("1/2"); // 12 超槽 → 两页
+		expect(page1).toContain("会话00");
+		input.emit("data", "\x1b[6~"); // PgDn
+		await flush();
+		const page2 = stripAnsi(output.buf);
+		expect(page2).toContain("2/2");
+		expect(page2).toContain("会话11"); // 尾页见末条
+		app.stop();
+	});
+
+	it("⑥ peers 现读跟随：panelData 换数据 → 下一帧渲染更新（跨进程态无事件源——每秒现读纪律）", async () => {
+		let list = [collabPeer("s_first", { label: "首批甲" })];
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), peers: collabPeersData(list) }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		expect(stripAnsi(output.buf)).toContain("首批甲");
+		list = [collabPeer("s_second", { label: "二批乙" })];
+		await flush(1100); // 过 1s tick——渲染期现读 panelData
+		expect(stripAnsi(output.buf)).toContain("二批乙");
+		app.stop();
+	});
+});
+
+describe("presence 等待钩子与协同页键路（m5-collab T5 续）", () => {
+
+	it("⑦ 等待钩子：pickOverlay 挂起 → presenceWaiting 收 approval，结算（Esc）→ null", async () => {
+		const calls: ("approval" | "input" | null)[] = [];
+		const { app, input } = rig(["# hi"], 100, 30, { presenceWaiting: (k) => calls.push(k) });
+		app.start();
+		await flush();
+		void app.pickOverlay("选", ["a", "b"]);
+		await flush();
+		expect(calls).toEqual(["approval"]);
+		input.emit("data", "\x1b"); // Esc 结算
+		await flush();
+		expect(calls).toEqual(["approval", null]);
+		app.stop();
+	});
+
+	it("⑧ 等待钩子：promptInput → input；viewText → null（查看窗不是等待）；openDialogHost → input", async () => {
+		const calls: ("approval" | "input" | null)[] = [];
+		const { app, input } = rig(["# hi"], 100, 30, { presenceWaiting: (k) => calls.push(k) });
+		app.start();
+		await flush();
+		void app.promptInput("问", false);
+		await flush();
+		expect(calls).toEqual(["input"]);
+		input.emit("data", "\x1b"); // Esc 结算 ask
+		await flush();
+		expect(calls).toEqual(["input", null]);
+		app.viewText("看", "文本");
+		await flush();
+		expect(calls).toEqual(["input", null, null]); // view 不等待——挂起即清
+		input.emit("data", "\x1b"); // 关 view
+		await flush();
+		app.openDialogHost({ title: "表", widgets: [{ id: "x", kind: "text", text: "w" }] });
+		await flush();
+		expect(calls[calls.length - 1]).toBe("input"); // dialog = 等问询族
+		app.stop();
+	});
+
+	it("⑨ 未接线 presenceWaiting（行模式/老宿主）→ 挂起流程照常不炸（可选口缺省纪律）", async () => {
+		const { app, input } = rig(["# hi"], 100, 30, {}); // rig 缺省不带 presenceWaiting
+		app.start();
+		await flush();
+		void app.pickOverlay("选", ["a"]);
+		await flush();
+		input.emit("data", "\x1b");
+		await flush();
+		expect(app.stateRef).toBeDefined();
+		app.stop();
+	});
+
+	it("⑩ 协同页 ↑↓ 不动 moduleSel、Enter 不热插拔（与网络页同款「无选择语义」口径）", async () => {
+		const { app, input } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), peers: { list: [collabPeer("s_a", { label: "甲" })] } }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C"); // → 协同页
+		await flush();
+		const sel0 = app.stateRef.moduleSel;
+		input.emit("data", "\x1b[A"); // ↑
+		await flush();
+		expect(app.stateRef.moduleSel).toBe(sel0);
+		input.emit("data", "\r"); // Enter——不动模块
+		await flush();
+		expect(app.stateRef.moduleSel).toBe(sel0);
+		app.stop();
+	});
+
+	it("⑪ 键化 parity：panel.title.collab / head.peers / hint.peerPage 三语在册不缺键", () => {
+		for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+			bindTestLocale(tag);
+			for (const k of ["panel.title.collab", "head.peers", "hint.peerPage"]) {
+				const v = t(k);
+				expect(v, `${tag} 缺键 ${k}`).not.toBe(k);
+				expect(v.length).toBeGreaterThan(0);
+			}
+		}
+		bindTestLocale("zh-CN");
+	});
+
+	it("⑫ 三语渲染对照：en-US 下卡标题/空态随语言切换", async () => {
+		bindTestLocale("en-US");
+		const { app, input, output } = rig(["# hi"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), peers: { list: [] } }),
+		});
+		app.start();
+		await flush();
+		input.emit("data", "\t");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		input.emit("data", "\x1b[C");
+		await flush();
+		const plain = stripAnsi(output.buf);
+		expect(plain).toContain(t("panel.title.collab"));
+		// 空态串在窄卡内被框宽截断——断言不被截的前缀段（截断本身是框纪律，非缺文案）
+		expect(plain).toContain(t("ps.empty").slice(0, 16));
+		expect(t("panel.title.collab")).toBe("Collab");
+		app.stop();
+		bindTestLocale("zh-CN");
 	});
 });

@@ -18,7 +18,7 @@ class FakeBus {
     };
   }
   fire(type: string, payload: unknown): void {
-    for (const l of [...(this.ls.get(type) ?? [])]) l(payload);
+    for (const l of Array.from(this.ls.get(type) ?? [])) l(payload); // 拷出再发——监听者在 emit 中退订不撕裂迭代
   }
   count(type: string): number {
     return this.ls.get(type)?.length ?? 0;

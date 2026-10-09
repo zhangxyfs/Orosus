@@ -682,6 +682,11 @@ export function createKeys(app: FullApp) {
 					const conns = app.io.panelData().network?.connections ?? [];
 					const connPages = Math.max(1, Math.ceil(conns.length / CONN_SLOTS));
 					s.connPage = Math.max(0, Math.min(connPages - 1, s.connPage + (key === "pageUp" ? -1 : 1)));
+				} else if (s.statePage === 2) {
+					// 会话协同页（m5-collab T5）：兄弟会话列表翻页（同 connPage 纯页号口径——渲染期夹回）
+					const peers = app.io.panelData().peers?.list ?? [];
+					const peerPages = Math.max(1, Math.ceil(peers.length / app.panels.collabSlots()));
+					s.peerPage = Math.max(0, Math.min(peerPages - 1, s.peerPage + (key === "pageUp" ? -1 : 1)));
 				} else {
 					const mods = app.io.panelData().modules;
 					const slots = app.panels.moduleSlots();
@@ -703,8 +708,8 @@ export function createKeys(app: FullApp) {
 				// 模块选择只在运行状态页（2026-10-01）：网络·MCP 页无选择语义——旧态 ↑↓ 隔页挪 moduleSel 属暗改
 				if (s.statePage === 0) s.moduleSel = Math.max(0, Math.min(mods.length - 1, s.moduleSel + (key === "up" ? -1 : 1)));
 			} else if (key === "left" || key === "right") {
-				// 右上卡组翻页（m5 T6）：[运行状态, 网络·MCP, ...top 模块卡] 循环；先夹回（卡消失后页号可能越界）
-				const pages = 2 + (app.io.panelData().cards ?? []).filter((c) => c.area === "top").length;
+				// 右上卡组翻页（m5 T6 + m5-collab T5）：[运行状态, 网络·MCP, 会话协同, ...top 模块卡] 循环；先夹回（卡消失后页号可能越界）
+				const pages = 3 + (app.io.panelData().cards ?? []).filter((c) => c.area === "top").length;
 				s.statePage = (Math.min(s.statePage, pages - 1) + (key === "left" ? -1 : 1) + pages) % pages;
 			} else if (key === "enter") {
 				// 模块热插拔（2026-09-23 用户拍板）：锁定项 toast 锁因；可插拔项宿主写 enabled + reload；

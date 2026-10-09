@@ -8,6 +8,7 @@ import { graphemeSpans, stripAnsi, truncateToWidth, visibleWidth } from "./width
 import type { WidgetSpec } from "@orosus/contracts/module";
 import type { DiagEntry } from "../module-diagnostics.ts";
 import type { AtEntry } from "./fullapp-at.ts";
+import type { PeerEntry } from "../ps.ts";
 import * as theme from "../theme.ts";
 import { t } from "../i18n/app.ts";
 
@@ -32,6 +33,10 @@ export interface PanelData {
 	 *  connections = mcp.catalog 服务行的投影（五态原文照传，渲染期映射点色）。可选——退化/测试路径
 	 *  不带时卡体给占位行。 */
 	network?: PanelNetwork | undefined;
+	/** 「会话协同」卡数据面（m5-collab T5）：self = 本会话（置顶行，可缺——attach 失败/测试路径），
+	 *  list = 兄弟活会话（scanLivePeers 已排序：waiting-approval → waiting-input → running → error → idle）。
+	 *  宿主每秒现读组装——peers 是跨进程状态、没有本进程事件源，不进 panelCache 快照（与 cards 同款纪律）。 */
+	peers?: { self?: PeerEntry | undefined; list: PeerEntry[] } | undefined;
 }
 
 /** 「网络 · MCP」卡连接行（消费侧本地声明——圈地纪律：类型结构不 import 模块包）。 */
@@ -168,6 +173,10 @@ export interface FullAppIO {
 	 *  空目录）。导航点现读、不缓存（渲染期不碰文件系统）；undefined = 宿主未供（菜单不开——
 	 *  行模式/测试缺省路径）。 */
 	atMenuEntries?(dir: string): { entries: AtEntry[]; miss?: boolean } | undefined;
+	/** presence 等待钩子（m5-collab T5）：pendingUi 置位/清空经 pendingUi setter 唯一出口上报——
+	 *  pick = approval（等审批族）、ask/dialog = input（等问询族）、view/undefined = null（不等待）。
+	 *  宿主接 presence.setWaiting；PresenceWriter 内部按 turn 活性再过滤（宿主菜单挂起不误报）。 */
+	presenceWaiting?(kind: "approval" | "input" | null): void;
 }
 
 export type FocusIdx = 0 | 1 | 2;
@@ -191,6 +200,8 @@ export interface AppState {
 	taskPage: number;
 	/** 「网络 · MCP」卡连接列表页号（2026-10-01）：纯页号（无选择语义——↑↓ 不动它），渲染期夹回。 */
 	connPage: number;
+	/** 「会话协同」卡兄弟会话列表页号（m5-collab T5）：同 connPage 纯页号口径（无选择语义），渲染期夹回。 */
+	peerPage: number;
 	scrollBack: number;
 	busy: boolean;
 	/** /compact 执行期（2026-09-23 用户拍板 UI 形态）：busy spinner 切换为「上下文压缩中…」石青（info）色——

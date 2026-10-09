@@ -51,6 +51,25 @@ import { createFrame } from "./fullapp-frame.ts";
 // 消费方九文件仍经本件 import——转出口维持不动（D3 消费方零改动）。
 export * from "./fullapp-types.ts";
 
+/** 挂起交互槽联合类型（m5-collab T5 从类字段声明提取为别名——字段改存取器，类型原地保留注释口径）。 */
+export type PendingUi =
+	| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys
+		// m5-ask-multi 增强面：multi/custom 仅 chooseEx 路置位（老 choose 面恒 falsy——33 处消费方零感知）；
+		// checked/customText/customCommitted/editing 恒初始化（单构建点 fullapp-dialogs pickOverlay），
+		// 老面读不到也写不到。resolve 签名零改动（风险节铁律）：自定义文本不经 resolve 携带——
+		// 「其他」行恒占 items.length、「确定」行恒占 items.length + 1 合成索引，包装层按 pu 现值组装 string[]。
+		multi?: true; custom?: true; checked: number[]; customText: string; customCommitted?: string | undefined; editing: boolean;
+		/** settings 高窗（2026-10-08 用户拍板）：页大小随终端高动态 [10,20]——渲染/翻页/鼠标经 pickPageOf 共源。 */
+		tall?: true;
+		/** 底部横选行（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态 Orosus 样式）：仅
+		 *  chooseSide 路置位（老 choose / chooseEx 面恒缺省——零感知）。valuesOf/initialOf 由调用方预取
+		 *  传入（渲染同步零 IO）；switchIdx 随高亮项经 syncSwitchRow 重置（键路/渲染/结算三口共调）。 */
+		switchRow?: SwitchRow }
+	| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
+	| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; liveCache?: { at: number; text: string } | undefined; bottom?: boolean | undefined; viewPage?: number }
+	| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"]; hostKeys?: HostDialogKeys; disallowEscape?: boolean }
+	| undefined;
+
 export class FullApp {
 	io: FullAppIO;
 	term: Term;
@@ -107,6 +126,7 @@ export class FullApp {
 			statePage: 0,
 			taskPage: 0,
 			connPage: 0,
+			peerPage: 0,
 			scrollBack: 0,
 			busy: false,
 			compacting: false,
@@ -365,23 +385,17 @@ export class FullApp {
 
 	// ---------- 全屏 CommandUi 适配面（choose → overlay 选择器；ask/askSecret → 输入行询问） ----------
 
-	pendingUi:
-		| { kind: "pick"; title: string; items: string[]; sel: number; resolve: (n: number | undefined) => void; filter?: string; extraKeys?: PickExtraKeys
-			// m5-ask-multi 增强面：multi/custom 仅 chooseEx 路置位（老 choose 面恒 falsy——33 处消费方零感知）；
-			// checked/customText/customCommitted/editing 恒初始化（单构建点 fullapp-dialogs pickOverlay），
-			// 老面读不到也写不到。resolve 签名零改动（风险节铁律）：自定义文本不经 resolve 携带——
-			// 「其他」行恒占 items.length、「确定」行恒占 items.length + 1 合成索引，包装层按 pu 现值组装 string[]。
-			multi?: true; custom?: true; checked: number[]; customText: string; customCommitted?: string | undefined; editing: boolean;
-			/** settings 高窗（2026-10-08 用户拍板）：页大小随终端高动态 [10,20]——渲染/翻页/鼠标经 pickPageOf 共源。 */
-			tall?: true;
-			/** 底部横选行（2026-10-09 用户拍板：/model 选模型同窗选思考档——kimi 形态 Orosus 样式）：仅
-			 *  chooseSide 路置位（老 choose / chooseEx 面恒缺省——零感知）。valuesOf/initialOf 由调用方预取
-			 *  传入（渲染同步零 IO）；switchIdx 随高亮项经 syncSwitchRow 重置（键路/渲染/结算三口共调）。 */
-			switchRow?: SwitchRow }
-		| { kind: "ask"; question: string; secret: boolean; prev: { input: string; cursor: number }; resolve: (v: string | undefined) => void }
-		| { kind: "view"; title: string; text: string; lines: string[]; scroll: number; pinned?: boolean; layout?: PopupLayout | "dock"; keys?: Record<string, PopupKey>; owner?: string | undefined; live?: (() => string) | undefined; liveCache?: { at: number; text: string } | undefined; bottom?: boolean | undefined; viewPage?: number }
-		| { kind: "dialog"; title: string; widgets: WidgetSpec[]; scroll: number; layout?: PopupLayout | "dock"; owner?: string | undefined; focusedId?: string | undefined; selById: Record<string, number>; inputById: Record<string, { text: string; cursor: number }>; onEvent?: DialogSpec["onEvent"]; hostKeys?: HostDialogKeys; disallowEscape?: boolean }
-		| undefined;
+	/** 挂起交互槽（pendingUi）——字段改存取器（m5-collab T5）：全部置位/清空经 setter 唯一出口上报
+	 *  presence 等待钩子（pick=approval、ask/dialog=input、view/undefined=null——PresenceWriter 再按
+	 *  turn 活性过滤，宿主菜单挂起不误报 waiting）。各置位点（dialogs/keys/stop/onboarding）零改动照走。 */
+	private pendingUiSlot: PendingUi = undefined;
+	get pendingUi(): PendingUi {
+		return this.pendingUiSlot;
+	}
+	set pendingUi(v: PendingUi) {
+		this.pendingUiSlot = v;
+		this.io.presenceWaiting?.(v === undefined || v.kind === "view" ? null : v.kind === "pick" ? "approval" : "input");
+	}
 
 	/** 挂起交互的 FIFO 暂存队列（批③② 审批互斥）：pendingUi 单槽占用期新到的 choose/ask 不再顶退——
 	 *  顶退会把挂起的审批 resolve(undefined) = 静默否决；暂存后当前挂起结算即自动展开。

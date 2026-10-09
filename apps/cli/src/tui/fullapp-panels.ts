@@ -12,6 +12,8 @@ import {
 	type ModuleCard, type PanelData,
 } from "./fullapp-types.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
+import { phaseIcon, phaseName, type PeerEntry } from "../ps.ts";
+import { relativeTime } from "../sessions.ts";
 import * as theme from "../theme.ts";
 import type { FullApp } from "./fullapp.ts";
 
@@ -111,6 +113,20 @@ const connRow = (c: NonNullable<PanelData["network"]>["connections"][number], w:
 	return ` ${dot} ${name}${desc === "" ? "" : ` ${desc}`}${" ".repeat(gap)}${right}`;
 };
 
+/** 「会话协同」卡兄弟会话行（m5-collab T5）：图标+态名+标题（白）+ 右列灰（self=本会话标记/peer=相对
+ *  时间）。布局同 connRow 预算式截断（名字源头截、右列与边框恒 ≥1 空隙）；模型名不进卡（侧栏宽度
+ *  装不下——/ps 行宽才带，D4 显示层取舍）。 */
+const peerRow = (e: PeerEntry, w: number, isSelf: boolean): string => {
+	const icon = phaseIcon(e.phase);
+	const name = phaseName(e.phase);
+	const right = isSelf ? theme.dim(t("ps.selfMark")) : theme.dim(relativeTime(e.lastEventAt));
+	// 标题源头截断：w − 前缀「 ● 」(3) − 态名 − gap(1) − 右列实宽 − 右端呼吸(1)
+	const titleTxt = truncateToWidth(e.label ?? e.sid.slice(0, 8), Math.max(4, w - 3 - visibleWidth(name) - 1 - visibleWidth(right) - 1));
+	const leftW = 3 + visibleWidth(name) + 1 + visibleWidth(titleTxt);
+	const gap = Math.max(1, w - leftW - visibleWidth(right) - 1);
+	return ` ${icon} ${name} ${titleTxt}${" ".repeat(gap)}${right}`;
+};
+
 export function createPanels(app: FullApp) {
 	const sidebarW = (): number => {
 		const cols = app.io.columns();
@@ -147,10 +163,11 @@ export function createPanels(app: FullApp) {
 		const d = app.io.panelData();
 		const focused = s.focusIdx === 1;
 		const inner = w - 2;
-		// 右上页序数组化（m5 T6，决策点 10 area:"top" 落位）：[运行状态, 网络·MCP, ...top 模块卡（按 order）]——
-		// 内建固定在前、模块卡排后（决策点 12）；页号渲染期夹回（卸载拆卡不需要通知——每秒现读自然消失）
+		// 右上页序数组化（m5 T6，决策点 10 area:"top" 落位 + m5-collab T5 第 3 内建页）：
+		// [运行状态, 网络·MCP, 会话协同, ...top 模块卡（按 order）]——内建固定在前、模块卡排后（决策点 12）；
+		// 页号渲染期夹回（卸载拆卡不需要通知——每秒现读自然消失）
 		const topCards = (d.cards ?? []).filter((c) => c.area === "top");
-		const pages = 2 + topCards.length;
+		const pages = 3 + topCards.length;
 		const page = Math.min(s.statePage, pages - 1);
 		if (page === 0) {
 			const content: string[] = [];
@@ -220,7 +237,36 @@ export function createPanels(app: FullApp) {
 			// 提示两行制（2026-10-01 走查打回：单行 27 列在窄侧栏被 wrapText 折行——拆两行各保短，行数恒定不闪）
 			return panelBox(t("panel.title.network"), `2/${pages}`, focused, w, h, content, [t("hint.switchCard"), t("hint.connPage")], undefined, [sepRow(inner)]);
 		}
-		return renderModuleCard(topCards[page - 2]!, w, h, focused, page, pages);
+		if (page === 2) {
+			// 「会话协同」卡（m5-collab T5，D9）：self 置顶 + 兄弟会话按 scanLivePeers 排序序渲染（等审批拎最前——
+			// codex「Needs you」化用）；超槽照 page 1 CONN_SLOTS 卡内分页先例（peerPage 纯页号，渲染期夹回）
+			const pd = d.peers;
+			const self = pd?.self;
+			const list = pd?.list ?? [];
+			const content: string[] = [];
+			if (self !== undefined) {
+				content.push(peerRow(self, inner, true));
+				content.push(sepRow(inner));
+			}
+			const slots = collabSlots();
+			const peerPages = Math.max(1, Math.ceil(list.length / slots));
+			const peerPage = Math.min(s.peerPage, peerPages - 1);
+			const lo = peerPage * slots;
+			const headL = ` ${theme.fg("muted", t("head.peers"))}`;
+			const pageTag = `${peerPage + 1}/${peerPages}`;
+			const room = inner - visibleWidth(headL) - 1;
+			const headR = theme.dim(room >= visibleWidth(`${pageTag} · PEERS`) ? `${pageTag} · PEERS` : pageTag);
+			content.push(headL + " ".repeat(Math.max(1, inner - visibleWidth(headL) - visibleWidth(headR))) + headR);
+			content.push(sepRow(inner));
+			if (list.length === 0) {
+				content.push(` ${theme.fg("muted", t("ps.empty"))}`); // 空态单行 muted（空槽不装饰纪律）
+			}
+			for (let i = lo; i < Math.min(list.length, lo + slots); i++) {
+				content.push(peerRow(list[i]!, inner, false));
+			}
+			return panelBox(t("panel.title.collab"), `3/${pages}`, focused, w, h, content, [t("hint.switchCard"), t("hint.peerPage")], undefined, [sepRow(inner)]);
+		}
+		return renderModuleCard(topCards[page - 3]!, w, h, focused, page, pages);
 	};
 
 	/** 模块卡页（m5 T6）：控件清单走只读渲染器；渲染抛错 = 当帧占位行 + 日志（全局约束 4——窗/卡保留）。 */
@@ -250,6 +296,14 @@ export function createPanels(app: FullApp) {
 	const taskPageSlots = (): number => {
 		const taskH = app.io.rows() - Math.max(8, Math.floor(app.io.rows() * 0.55));
 		return Math.max(2, taskH - 6);
+	};
+
+	// 「会话协同」卡每页兄弟会话行数（m5-collab T5——与 PgUp/PgDn 翻页共用本函数，两处漂移即页号错位）。
+	// 固定开销 10 = 顶框+空行+self 行+sep+小节头+sep+底部隔线+提示行×2+底框；与 page 1 CONN_SLOTS 的
+	// 「页 2 比页 0 少 KV 行故多容」同族口径（CONN_SLOTS 注）。小终端下限 2——再小从底部裁（提示行让路）
+	const collabSlots = (): number => {
+		const statusH = Math.max(8, Math.floor(app.io.rows() * 0.55));
+		return Math.max(2, statusH - 10);
 	};
 
 	const taskRows = (w: number, h: number): string[] => {
@@ -286,5 +340,5 @@ export function createPanels(app: FullApp) {
 		return panelBox(t("panel.title.tasks"), pages > 1 ? `1/${pages}` : "", focused, w, h, content, pages > 1 ? [t("hint.tasksCards")] : [t("hint.tasksPage")], footer, [sepRow(inner)]);
 	};
 
-	return { sidebarW, inputInnerW, tailLine, panelBox, kvRow, sep: sepRow, modRow, connRow, statusRows, renderModuleCard, moduleSlots, taskPageSlots, taskRows };
+	return { sidebarW, inputInnerW, tailLine, panelBox, kvRow, sep: sepRow, modRow, connRow, peerRow, statusRows, renderModuleCard, moduleSlots, taskPageSlots, collabSlots, taskRows };
 }

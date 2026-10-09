@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeLiveFile, LIVE_FILE, SessionLockedError, SESSION_LOCK_FILE, type LiveInfo, type LockHolder } from "@orosus/core";
 import { bindTestLocale, t } from "./i18n/app.ts";
+import { stripAnsi } from "./tui/width.ts";
 import { createMultiOpenTip, formatLockDenied, formatPsList, lockHeldByOther, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
 
 let dir: string;
@@ -20,8 +21,8 @@ const good = (sid: string, over: Partial<LiveInfo> = {}): LiveInfo => ({
 /** 在桶里放一个 live.json（写后把 mtime 拨到 now——判活不受真实时钟摆布）。 */
 const plant = (bucket: string, sid: string, info: LiveInfo, mtime: number = NOW): void => {
   writeLiveFile(join(bucket, sid), info);
-  const t = new Date(mtime);
-  utimesSync(join(bucket, sid, LIVE_FILE), t, t);
+  const dt = new Date(mtime);
+  utimesSync(join(bucket, sid, LIVE_FILE), dt, dt);
 };
 /** 在桶里放一个手写坏文件。 */
 const plantRaw = (bucket: string, sid: string, content: string): void => {
@@ -141,7 +142,7 @@ const peer = (sid: string, over: Partial<LiveInfo> = {}): PeerEntry => ({
   ...good(sid, over),
   stale: false,
 });
-const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+const strip = stripAnsi;
 
 describe("formatPsList（m5-collab T4，/ps 输出形态 + D16 键化）", () => {
   it("① 空态：无 peer → 单行空态文案（含 self 也只报「没有其他」）", () => {
@@ -211,8 +212,9 @@ describe("formatPsList（m5-collab T4，/ps 输出形态 + D16 键化）", () =>
   });
 });
 
+const holder = (over: Partial<LockHolder> = {}): LockHolder => ({ pid: 4321, since: "2026-10-09T14:35:42.000Z", ...over });
+
 describe("formatLockDenied / settleWithLock（m5-collab T6 撞锁 UX——holder 结构化组装 + label 补全）", () => {
-  const holder = (over: Partial<LockHolder> = {}): LockHolder => ({ pid: 4321, since: "2026-10-09T14:35:42.000Z", ...over });
 
   it("① holder.label 在场 → 文案带标题段（快照优先于 live.json）", () => {
     const msg = formatLockDenied(holder({ label: "锁里快照" }), [peer("s_x", { pid: 4321, label: "live 新鲜" })]);
@@ -273,12 +275,12 @@ describe("formatLockDenied / settleWithLock（m5-collab T6 撞锁 UX——holder
   });
 });
 
-describe("lockHeldByOther（T6 恢复预警探测——只读、不拦截）", () => {
-  const plantLock = (d: string, sid: string, pid: number): void => {
-    mkdirSync(join(d, sid, "agents"), { recursive: true });
-    writeFileSync(join(d, sid, "agents", SESSION_LOCK_FILE), `${pid}\n2026-10-09T01:00:00.000Z\n`);
-  };
+const plantLock = (d: string, sid: string, pid: number): void => {
+  mkdirSync(join(d, sid, "agents"), { recursive: true });
+  writeFileSync(join(d, sid, "agents", SESSION_LOCK_FILE), `${pid}\n2026-10-09T01:00:00.000Z\n`);
+};
 
+describe("lockHeldByOther（T6 恢复预警探测——只读、不拦截）", () => {
   it("⑦ 活锁他 pid → 返回该 pid（预警语义：打开不拦，告知写入会被拒）", () => {
     const d = tmp();
     const sleeper = spawn(process.execPath, ["-e", "setInterval(()=>{},5000)"], { stdio: "ignore" });
