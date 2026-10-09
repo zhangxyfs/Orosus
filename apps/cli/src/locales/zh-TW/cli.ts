@@ -299,4 +299,7 @@ export const zhTWCli: Record<string, string> = {
 	"lock.denied": "已攔截：該會話正被另一個 Orosus 程序使用（pid {pid}，起於 {since}{labelSeg}）——為避免寫壞記錄，本次輸入未寫入（會話仍可唯讀瀏覽）。請回到那個視窗操作，或等它結束後重試（屆時自動續寫）。",
 	"lock.labelSeg": "，標題「{label}」",
 	"lock.heldWarning": "提示：該會話正在另一個 Orosus 程序中開啟（pid {pid}）——可唯讀瀏覽，寫入會被拒絕直到它結束。",
+
+	// ---- m5-collab T7：多開提示 ----
+	"ps.tip.multi": "偵測到 {n} 個其他活躍會話——用 /title 給會話起名便於區分",
 };

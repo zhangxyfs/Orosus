@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeLiveFile, LIVE_FILE, SessionLockedError, SESSION_LOCK_FILE, type LiveInfo, type LockHolder } from "@orosus/core";
 import { bindTestLocale, t } from "./i18n/app.ts";
-import { formatLockDenied, formatPsList, lockHeldByOther, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
+import { createMultiOpenTip, formatLockDenied, formatPsList, lockHeldByOther, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -311,3 +311,51 @@ describe("lockHeldByOther（T6 恢复预警探测——只读、不拦截）", (
   });
 });
 
+
+describe("createMultiOpenTip（m5-collab T7 多开提示——cc tipRegistry 一次性节奏化用）", () => {
+  it("① 首启单会话（peers=0）→ 不弹（notice 零调用）", () => {
+    const tip = createMultiOpenTip();
+    const seen: string[] = [];
+    expect(tip([], { fullscreen: true, notice: (s) => seen.push(s) })).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("② 有 peer + TUI 形态 → 弹一次，文案带数量与 /title 指路", () => {
+    const tip = createMultiOpenTip();
+    const seen: string[] = [];
+    expect(tip([peer("s_a"), peer("s_b")], { fullscreen: true, notice: (s) => seen.push(s) })).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("2");
+    expect(seen[0]).toContain("/title");
+  });
+
+  it("③ 第二次不弹（每进程一次——哪怕 peers 仍在）", () => {
+    const tip = createMultiOpenTip();
+    const seen: string[] = [];
+    const opts = { fullscreen: true, notice: (s: string) => seen.push(s) };
+    expect(tip([peer("s_a")], opts)).toBe(true);
+    expect(tip([peer("s_a"), peer("s_b")], opts)).toBe(false);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("④ 行模式不弹（无 toast 面不打扰——D10）；notice 缺省同不弹", () => {
+    const tip = createMultiOpenTip();
+    const seen: string[] = [];
+    expect(tip([peer("s_a")], { fullscreen: false, notice: (s) => seen.push(s) })).toBe(false);
+    expect(tip([peer("s_a")], { fullscreen: true, notice: undefined })).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("⑤ parity：ps.tip.multi 三语在册带数量参数、文案不同", () => {
+    const vals = new Map<string, string>();
+    for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+      bindTestLocale(tag);
+      const v = t("ps.tip.multi", { n: 3 });
+      expect(v, `${tag} 缺键 ps.tip.multi`).not.toBe("ps.tip.multi");
+      expect(v).toContain("3");
+      vals.set(tag, v);
+    }
+    bindTestLocale("zh-CN");
+    expect(vals.get("zh-CN")).not.toBe(vals.get("en-US"));
+  });
+});

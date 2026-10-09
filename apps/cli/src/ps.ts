@@ -123,3 +123,18 @@ export function lockHeldByOther(dir: string, sid: string, selfPid: number): numb
   if (holder === null || holder.pid === selfPid) return null;
   return pidAlive(holder.pid) ? holder.pid : null;
 }
+
+// ---------- 多开提示（T7，D10） ----------
+
+/** 多开提示一次性节奏（cc tipRegistry「color-when-multi-clauding」化用）：每进程一次、TUI 形态才弹
+ *  （行模式无 toast 面不打扰——D10）、≥1 个其他活会话才弹。状态在闭包里——session-io 持进程级单例，
+ *  createSession 尾同缝调用（与 T6 恢复预警同族同缝）。返回 true = 本次弹了（测试断言面）。 */
+export function createMultiOpenTip(): (peers: PeerEntry[], opts: { fullscreen: boolean; notice?: ((s: string) => void) | undefined }) => boolean {
+  let shown = false;
+  return (peers, opts) => {
+    if (shown || !opts.fullscreen || peers.length === 0 || opts.notice === undefined) return false;
+    shown = true;
+    opts.notice(t("ps.tip.multi", { n: peers.length }));
+    return true;
+  };
+}

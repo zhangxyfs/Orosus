@@ -9,7 +9,7 @@ import { migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 import { extractImageRefs } from "./paste.ts";
 import { SKILL_MARK_RE } from "./skills-ui.ts";
 import { presence } from "./presence.ts";
-import { lockHeldByOther } from "./ps.ts";
+import { createMultiOpenTip, lockHeldByOther, scanLivePeers } from "./ps.ts";
 import { t } from "./i18n/app.ts";
 import type { CliArgs } from "./args.ts";
 
@@ -29,6 +29,9 @@ export const initActiveDir = (resume: { sessionId: string } | undefined): void =
 };
 export const activeDirRef = (): string => activeDir;
 export const setActiveDir = (dir: string): void => { activeDir = dir; };
+
+/** 多开提示进程级单例（m5-collab T7——一次性节奏状态在闭包里，createSession 尾同缝调用）。 */
+const multiOpenTip = createMultiOpenTip();
 
 /** 空会话退出即清（2026-10-01 用户拍板清理批②）：刚关的会话 0 消息 → 整目录不留（判定 = core
  *  isEmptySessionHead，fork 子体除外——投影含父辈）。异常退出走不到此（进程被杀）——残留壳由下次
@@ -122,6 +125,12 @@ export const createSession = async (deps: SessionDeps, extra: { fork?: { parentS
     // 活锁在场告知「写入会被拒绝直到它退出」（CS-02 自愈背书），免用户疑惑「打开时为什么不说」
     const holderPid = lockHeldByOther(extra.sessionsDir ?? activeDir, h.sessionId, process.pid);
     if (holderPid !== null) deps.commandUi.notice?.(t("lock.heldWarning", { pid: holderPid }));
+    // m5-collab T7 多开提示（D10：≥1 个其他活会话 + TUI 形态，每进程一次——cc tipRegistry 节奏）：
+    // 多开最常见的后续困扰是「几个窗口长得一样」——提一句 /title 起名好区分
+    multiOpenTip(scanLivePeers(extra.sessionsDir ?? activeDir, h.sessionId), {
+      fullscreen: deps.isFullscreen(),
+      ...(deps.commandUi.notice !== undefined ? { notice: (s: string) => deps.commandUi.notice!(s) } : {}),
+    });
   }
   return h;
 };

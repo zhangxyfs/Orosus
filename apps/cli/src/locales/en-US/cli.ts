@@ -299,4 +299,7 @@ export const enUSCli: Record<string, string> = {
 	"lock.denied": "Blocked: this session is in use by another Orosus process (pid {pid}, since {since}{labelSeg}). Your input was NOT written — the log stays intact and the session remains readable. Go back to that window, or retry after it exits (writes then resume automatically).",
 	"lock.labelSeg": ", title \"{label}\"",
 	"lock.heldWarning": "Note: this session is open in another Orosus process (pid {pid}) — you may browse read-only; writes will be refused until it exits.",
+
+	// ---- m5-collab T7：多开提示 ----
+	"ps.tip.multi": "Detected {n} other active sessions — name yours with /title to tell them apart",
 };
