@@ -1057,12 +1057,16 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         }
         // /ps（m5-collab T4，D8）：本项目活跃会话列表——纯只读查盘（与 /tasks 同族零副作用），BUSY_EXEC
         // 即改档（busy 期正是多开用户最想看「隔壁进展」的时刻）；活死分家——历史会话走 /sessions。
-        // 全屏走 dm.pushLine 原始通道（ANSI 行不经 md 渲染——pushMd 会吃掉转义序列，compact 完成行同款先例）
+        // 全屏 = dock 弹窗（2026-10-09 用户拍板：贴输入框上缘上弹、不占消息流区——/help dock 同款形态；
+        // 行模式 console 逐行）。标题行（含计数）进窗题，明细行进窗体；ANSI 色 walkText 原样透传（无 md 管线）
         if (cmdNameOf(text) === "/ps") {
           const pd = scanWithSelf(sessionsDir, h.sessionId);
-          for (const l of formatPsList(pd.list, pd.self !== undefined ? { self: pd.self } : {})) {
-            if (activeApp !== undefined) dm.pushLine(l);
-            else out(l);
+          const lines = formatPsList(pd.list, pd.self !== undefined ? { self: pd.self } : {});
+          if (activeApp !== undefined) {
+            const empty = pd.list.length === 0;
+            activeApp.viewText(empty ? t("panel.title.collab") : lines[0]!, empty ? lines[0]! : lines.slice(1).join("\n"), { layout: "dock" });
+          } else {
+            for (const l of lines) out(l);
           }
           return "again";
         }
