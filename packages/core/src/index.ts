@@ -14,6 +14,8 @@ export type { SessionFileEntry } from "./session/dir.ts";
 export { buildSessionTree, readSessionHead, isEmptySessionHead, type SessionHead } from "./session/tree.ts";
 // 空会话清理批（2026-10-01 用户拍板）：退出漏斗就地清 + 启动清扫异常退出残留壳（宿主 CLI 两调用点）
 export { purgeSessionDir, sweepEmptySessions, type EmptySessionSweep } from "./session/cleanup.ts";
+// m5-collab T0：live.json 活体心跳纯函数件——/ps、协同卡、多开提示的统一事实源（宿主侧读写口）
+export { isLive, readLiveFile, writeLiveFile, removeLiveFile, LIVE_FILE, type LiveInfo, type LiveRecord } from "./session/live.ts";
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
 export { verifyChain } from "./session/fork.ts"; // 宿主面（M4-1 T6 复核用）：复合投影链校验
 export { repairFile } from "./session/jsonl.ts"; // 宿主面（M4-1 T6 复核用）：撕裂尾修复
