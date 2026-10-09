@@ -96,6 +96,17 @@ describe("SessionLockedError（m5-collab T1）：裸 Error 换结构化拒绝", 
     expect(readLockHolder(lockPath(d, "s_st"))?.pid).toBe(process.pid); // 锁已易主
     await s.close();
   });
+
+  it("⑪ 撞锁会话的 close 放行（走查修主案）：被拒写滞留 buffer 的 close 不再抛——退出/换会话路径不崩", async () => {
+    const d = tmp();
+    const a = new JsonlSessionStore({ dir: d, sessionId: "s_nc" });
+    await a.append("session/header", { format: 1 }); // A 持锁
+    const b = new JsonlSessionStore({ dir: d, sessionId: "s_nc" });
+    await b.append("user/message", { content: [] }).catch(() => undefined); // B 被拒写——滞留事件已 reject 带内
+    await expect(b.close()).resolves.toBeUndefined(); // close 不二次升级（实机前案：/quit exit 7 裸堆栈）
+    await a.close(); // A 正常释放
+    // 对照：非锁 drain 错误仍诚实抛——盘外错误不放行（用 store closed 后的形态太贵，此处在钉语义边界）
+  });
 });
 
 describe("sqlite 后端同款锁（D6：锁语义不随后端漂移）", () => {

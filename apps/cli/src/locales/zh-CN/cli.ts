@@ -302,4 +302,5 @@ export const zhCNCli: Record<string, string> = {
 
 	// ---- m5-collab T7：多开提示 ----
 	"ps.tip.multi": "检测到 {n} 个其他活跃会话——用 /title 给会话起名便于区分",
+	"lock.submitBlocked": "该会话正被另一个 Orosus 进程占用（pid {pid}）——发送已拦截，输入已保留。回那个窗口操作，或等它退出；也可以 /fork 分叉副本接着干。",
 };

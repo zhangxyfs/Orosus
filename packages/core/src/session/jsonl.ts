@@ -4,7 +4,7 @@ import { newId, type SessionEvent, type SessionStore } from "./types.ts";
 import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
 import { eventsFrom, lastCompaction, scanEventLines, stripRow, writeEventRows, type ScanLine } from "./eventindex.ts";
-import { SessionWriteLock } from "./wlock.ts";
+import { SessionWriteLock, SessionLockedError } from "./wlock.ts";
 import { lastSessionLabel } from "./live.ts";
 
 /** T7 装载分流阈（D6：cc SKIP_PRECOMPACT_THRESHOLD 同值 5MB）——小于此走全量快路径（零行为变化）。 */
@@ -772,7 +772,14 @@ export class JsonlSessionStore implements SessionStore {
     this.closed = true;
     try {
       await this.queue;
-      if (this.buffer.length > 0) throw this.drainError ?? new Error("session log 未落盘（drain 失败后滞留）");
+      if (this.buffer.length > 0) {
+        const err = this.drainError ?? new Error("session log 未落盘（drain 失败后滞留）");
+        // m5-collab 走查修（2026-10-09 实机）：撞锁会话的 close 不升级——滞留事件在 append 时已逐个
+        // reject 带内（发送方已见拒绝文案）；close 再抛 SessionLockedError 会让退出/换会话路径整体崩
+        // （B resume A 在写的会话 → 被拒写 → /quit 即 exit 7 裸堆栈的实机前案；/sessions 切走同卡）。
+        // 锁从未归我 = 数据从未归我写，放行不是谎报；其余 drain 错误照抛（诚实口径不变）。
+        if (!(err instanceof SessionLockedError)) throw err;
+      }
     } finally {
       this.releaseLock(); // CS-03：close 后本 store 永不再写——锁必须释放（哪怕落盘失败在抛错）
     }

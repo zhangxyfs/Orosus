@@ -9,7 +9,7 @@ import { migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 import { extractImageRefs } from "./paste.ts";
 import { SKILL_MARK_RE } from "./skills-ui.ts";
 import { presence } from "./presence.ts";
-import { createMultiOpenTip, lockHeldByOther, scanLivePeers } from "./ps.ts";
+import { createMultiOpenTip, liveSessionActive, lockHeldByOther, scanLivePeers } from "./ps.ts";
 import { t } from "./i18n/app.ts";
 import type { CliArgs } from "./args.ts";
 
@@ -35,10 +35,14 @@ const multiOpenTip = createMultiOpenTip();
 
 /** 空会话退出即清（2026-10-01 用户拍板清理批②）：刚关的会话 0 消息 → 整目录不留（判定 = core
  *  isEmptySessionHead，fork 子体除外——投影含父辈）。异常退出走不到此（进程被杀）——残留壳由下次
- *  启动 sweepEmptySessions 兜底。purge 前置条件 = store 已 close（Windows 活句柄删不动）。 */
+ *  启动 sweepEmptySessions 兜底。purge 前置条件 = store 已 close（Windows 活句柄删不动）。
+ *  m5-collab 走查修④：活体护栏——live.json 活着（另一进程正开着这个空会话）跳过不误清。空会话
+ *  零写零锁、lock 管不到，live.json 是空会话唯一的占用信号；selfPid 排除自己（刚 dispose 完的残留
+ *  不挡自己——/new 同 sid 空档重开路径不走本函数，直调 purgeSessionDir 不受影响）。 */
 export const purgeIfEmptySession = (sid: string): void => {
   const loc = locateSessionFile(sessionsRoot, sid);
   if (loc === undefined) return;
+  if (liveSessionActive(loc.dir, process.pid)) return;
   const head = readSessionHead(loc.file);
   if (head !== undefined && isEmptySessionHead(head)) purgeSessionDir(dirname(loc.dir), sid);
 };

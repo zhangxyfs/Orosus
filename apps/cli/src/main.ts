@@ -70,7 +70,7 @@ import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { presence } from "./presence.ts";
-import { formatPsList, scanLivePeers, scanWithSelf, settleWithLock } from "./ps.ts";
+import { formatPsList, lockSubmitBlock, scanLivePeers, scanWithSelf, settleWithLock } from "./ps.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
@@ -1031,6 +1031,15 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
       // 模型未配置拦截（F5 七轮用户拍板）：仅提问——斜杠命令（/provider 向导本身！）必须放行，
       // 否则「让你去配 /provider」结果 /provider 也被拦（八轮用户实测怒点）
       const isCmdLine = text.trim().startsWith("/");
+      // m5-collab 走查修②：写锁门行模式闸（与全屏 submitGate 同闸）——他进程持锁拦自然语言消息在
+      // 提交前；不再走到 turn 里撞 drain 才报（全屏另有 submitGate 拦在回车前，此处是队列/管道兜底面）
+      if (!isCmdLine) {
+        const blocked = lockSubmitBlock(text, sessionsDir, h.sessionId, process.pid);
+        if (blocked !== undefined) {
+          notify(blocked);
+          return "again";
+        }
+      }
       if (
         !isCmdLine &&
         needsProviderSetup({ model: realReadModel(process.cwd())(), providers: h.graph().services.listProviders().map((p) => p.name) })
@@ -1408,7 +1417,10 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     submitGate: (text) => {
       // 批④：拦回车档的拒因（返回串 = 拦截——FullApp 尾行瞬显，输入保留不进历史）
       const c = cmdNameOf(text);
-      return inflight && BUSY_BLOCK.has(c) ? t("main.busy.note", { cmd: c }) : undefined;
+      if (inflight && BUSY_BLOCK.has(c)) return t("main.busy.note", { cmd: c });
+      // m5-collab 走查修②：写锁门（2026-10-09 用户拍板「弹窗已拦截就直接不允许发送」）——他进程持锁的
+      // 会话拦自然语言消息在回车前（输入保留）；命令面放行（/fork 逃生门、/quit、/ps 照常）
+      return lockSubmitBlock(text, sessionsDir, h.sessionId, process.pid);
     },
     // CTU-11（2026-09-28 code review）：requestExit 死接口三方删除（本实现 + fullapp.ts 声明 + 测试桩）——
     // 2026-09-23 拍板 Ctrl+C 不占用、退出走 /quit 后成遗迹，全仓 grep 零真实调用方

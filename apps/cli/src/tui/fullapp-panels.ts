@@ -12,7 +12,7 @@ import {
 	type ModuleCard, type PanelData,
 } from "./fullapp-types.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
-import { phaseIcon, phaseName, type PeerEntry } from "../ps.ts";
+import { peerDisplayName, phaseIcon, phaseName, type PeerEntry } from "../ps.ts";
 import { relativeTime } from "../sessions.ts";
 import * as theme from "../theme.ts";
 import type { FullApp } from "./fullapp.ts";
@@ -121,7 +121,7 @@ const peerRow = (e: PeerEntry, w: number, isSelf: boolean): string => {
 	const name = phaseName(e.phase);
 	const right = isSelf ? theme.dim(t("ps.selfMark")) : theme.dim(relativeTime(e.lastEventAt));
 	// 标题源头截断：w − 前缀「 ● 」(3) − 态名 − gap(1) − 右列实宽 − 右端呼吸(1)
-	const titleTxt = truncateToWidth(e.label ?? e.sid.slice(0, 8), Math.max(4, w - 3 - visibleWidth(name) - 1 - visibleWidth(right) - 1));
+	const titleTxt = truncateToWidth(peerDisplayName(e), Math.max(4, w - 3 - visibleWidth(name) - 1 - visibleWidth(right) - 1));
 	const leftW = 3 + visibleWidth(name) + 1 + visibleWidth(titleTxt);
 	const gap = Math.max(1, w - leftW - visibleWidth(right) - 1);
 	return ` ${icon} ${name} ${titleTxt}${" ".repeat(gap)}${right}`;

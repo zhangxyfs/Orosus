@@ -302,4 +302,5 @@ export const zhTWCli: Record<string, string> = {
 
 	// ---- m5-collab T7：多開提示 ----
 	"ps.tip.multi": "偵測到 {n} 個其他活躍會話——用 /title 給會話起名便於區分",
+	"lock.submitBlocked": "該會話正被另一個 Orosus 程序佔用（pid {pid}）——傳送已攔截，輸入已保留。回那個視窗操作，或等它結束；也可以 /fork 分叉副本接著做。",
 };

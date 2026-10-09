@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeLiveFile, LIVE_FILE, SessionLockedError, SESSION_LOCK_FILE, type LiveInfo, type LockHolder } from "@orosus/core";
 import { bindTestLocale, t } from "./i18n/app.ts";
 import { stripAnsi } from "./tui/width.ts";
-import { createMultiOpenTip, formatLockDenied, formatPsList, lockHeldByOther, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
+import { createMultiOpenTip, formatLockDenied, formatPsList, liveSessionActive, lockHeldByOther, lockSubmitBlock, peerDisplayName, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -177,11 +177,22 @@ describe("formatPsList（m5-collab T4，/ps 输出形态 + D16 键化）", () =>
     expect(without).toHaveLength(2);
   });
 
-  it("④ label 缺省 → sid 前 8 位兜底；model 缺省 → 模型段省略（不裸显「?」）", () => {
-    const bare = peer("s_1234567890abcdef"); // good() 本就不带 label/model——缺省路径即默认形态
+  it("④ label 缺省 → sid 随机段尾部兜底（ULID 前段是时间戳——同刻创建恒撞，走查实修）；model 缺省 → 模型段省略", () => {
+    const bare = peer("s_01M4GE0123456789abcdef"); // 尾 6 位 = 随机段尾
     const lines = formatPsList([bare], { now: NOW }).map(strip);
-    expect(lines[1]).toContain("s_123456");
+    expect(lines[1]).toContain("abcdef");
+    expect(lines[1]).toContain("s_…");
+    expect(lines[1]).not.toContain("01M4GE"); // 时间戳段不再当区分位
     expect(lines[1]).not.toContain("?");
+  });
+
+  it("④b peerDisplayName：两个同刻会话（时间戳段相同）兜底显示可区分（走查实修主案）", () => {
+    // ULID 布局：s_ + 10 位时间 + 16 位随机——前 8 位两会话相同，尾 6 位不同
+    const a = peer("s_01M4GEJ8X2K7T2QX9A1B2C3D4E");
+    const b = peer("s_01M4GEJ8X2ZZZZYYXXWWMVD000");
+    expect(peerDisplayName(a)).not.toBe(peerDisplayName(b));
+    expect(peerDisplayName(a)).toBe("s_…2C3D4E");
+    expect(peerDisplayName(peer("s_x", { label: "有标题" }))).toBe("有标题");
   });
 
   it("⑤ 键化 parity：三语切换渲染文案跟随（zh-CN ↔ en-US 标题/态名/空态不同）", () => {
@@ -359,5 +370,67 @@ describe("createMultiOpenTip（m5-collab T7 多开提示——cc tipRegistry 一
     }
     bindTestLocale("zh-CN");
     expect(vals.get("zh-CN")).not.toBe(vals.get("en-US"));
+  });
+});
+
+describe("lockSubmitBlock（走查修② 提交锁门——「弹窗已拦截就直接不允许发送」2026-10-09 用户拍板）", () => {
+  it("① 普通消息 + 他 pid 活锁 → 拦，文案带 pid 与 /fork 指路", () => {
+    const d = tmp();
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(()=>{},5000)"], { stdio: "ignore" });
+    try {
+      plantLock(d, "s_held", sleeper.pid!);
+      const msg = lockSubmitBlock("帮我改下部署脚本", d, "s_held", process.pid);
+      expect(msg).toBeDefined();
+      expect(msg).toContain(String(sleeper.pid));
+      expect(msg).toContain("/fork");
+    } finally {
+      sleeper.kill();
+    }
+  });
+
+  it("② 命令面全放行（/fork 逃生门 / /quit / /ps）——哪怕锁在场", () => {
+    const d = tmp();
+    plantLock(d, "s_held", 99_999_999); // 锁在场即够——命令形不看活死
+    for (const cmd of ["/fork", "/quit", "/ps", "/title 改名"]) {
+      expect(lockSubmitBlock(cmd, d, "s_held", process.pid), cmd).toBeUndefined();
+    }
+  });
+
+  it("③ 无锁 / 自己持锁 / 死 pid 锁 → 全放行", () => {
+    const d = tmp();
+    expect(lockSubmitBlock("你好", d, "s_none", process.pid)).toBeUndefined();
+    plantLock(d, "s_mine", process.pid);
+    expect(lockSubmitBlock("你好", d, "s_mine", process.pid)).toBeUndefined();
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    plantLock(d, "s_dead", dead.pid!);
+    expect(lockSubmitBlock("你好", d, "s_dead", process.pid)).toBeUndefined();
+  });
+
+  it("④ parity：lock.submitBlocked 三语在册带 pid、文案不同", () => {
+    const vals = new Map<string, string>();
+    for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+      bindTestLocale(tag);
+      const v = t("lock.submitBlocked", { pid: 55 });
+      expect(v, `${tag} 缺键`).not.toBe("lock.submitBlocked");
+      expect(v).toContain("55");
+      vals.set(tag, v);
+    }
+    bindTestLocale("zh-CN");
+    expect(vals.get("zh-CN")).not.toBe(vals.get("en-US"));
+  });
+});
+
+describe("liveSessionActive（走查修④ purge 活体护栏）", () => {
+  it("⑤ 活件 → true；无件 → false；死 pid → false；自己 pid → false（不挡自己的路）；坏件 → false", () => {
+    const d = tmp();
+    const sid = "s_pv";
+    expect(liveSessionActive(join(d, sid))).toBe(false); // 无件
+    writeLiveFile(join(d, sid), good(sid)); // 本进程 pid = 活
+    expect(liveSessionActive(join(d, sid))).toBe(true);
+    expect(liveSessionActive(join(d, sid), process.pid)).toBe(false); // 自己不挡
+    writeLiveFile(join(d, sid), good(sid, { pid: 99_999_999 })); // 死 pid
+    expect(liveSessionActive(join(d, sid))).toBe(false);
+    plantRaw(d, "s_bad2", "{broken");
+    expect(liveSessionActive(join(d, "s_bad2"))).toBe(false);
   });
 });

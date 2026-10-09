@@ -82,6 +82,11 @@ export const phaseIcon = (p: LiveInfo["phase"]): string => PHASE_META[p].icon();
 /** 五态名（键化——/ps 与协同卡共用同一组键，措辞两处一致）。 */
 export const phaseName = (p: LiveInfo["phase"]): string => t(PHASE_META[p].nameKey);
 
+/** 无标题会话的兜底显示名（2026-10-09 走查实修）：sid 前 8 位全是 ULID 时间戳段（types.ts newId
+ *  布局 = 前缀+10 位时间+16 位随机）——差不多同时创建的会话前 8 位恒撞（用户实测两行同 id）。
+ *  取「前缀 + … + 随机段尾 6 位」才可区分（同毫秒建的会话随机段自增错开——newId 递增条款）。 */
+export const peerDisplayName = (e: LiveInfo): string => e.label ?? `${e.sid.slice(0, 2)}…${e.sid.slice(-6)}`;
+
 /** /ps 输出行拼装：标题行（计数含 self）+ self 置顶行（本会话标记）+ peers 行（输入序 = scanLivePeers
  *  排序序）+ preview 缩进第二行（在场才出——空槽不装饰）。无 peer → 单行空态文案（「其他」语义——
  *  即便 self 在场也只报没有其他活跃会话）。行两段式：图标+态名+标题（白）+ 时间·模型（灰）。 */
@@ -96,7 +101,7 @@ export function formatPsList(peers: PeerEntry[], opts?: { self?: PeerEntry; now?
   const lines: string[] = [t("ps.title", { n: rows.length })];
   rows.forEach((r, i) => {
     const e = r.entry;
-    const title = e.label ?? e.sid.slice(0, 8); // 未命名不裸显全 sid（readTitle 同款口径）
+    const title = peerDisplayName(e);
     const tail = theme.dim(` ${relativeTime(e.lastEventAt, opts?.now)}${e.model !== undefined ? ` · ${e.model}` : ""}`) + (r.self ? theme.dim(` · ${t("ps.selfMark")}`) : "");
     lines.push(` ${phaseIcon(e.phase)} ${padToWidth(names[i]!, nameW)} ${title}${tail}`);
     if (e.preview !== undefined) lines.push(theme.dim(`${" ".repeat(nameW + 4)}${e.preview}`)); // 缩进对齐标题列
@@ -134,6 +139,26 @@ export function lockHeldByOther(dir: string, sid: string, selfPid: number): numb
   const holder = readLockHolder(join(dir, sid, "agents", SESSION_LOCK_FILE));
   if (holder === null || holder.pid === selfPid) return null;
   return pidAlive(holder.pid) ? holder.pid : null;
+}
+
+/** 提交闸门锁档（2026-10-09 用户拍板「既然弹窗已拦截，应该直接不允许发送消息」）：他进程持写锁的
+ *  会话拦自然语言消息在提交前——输入保留（submitGate 语义）、不撞盘不冒泡。命令面全放行：/fork
+ *  是现成逃生门（双开行为链第 4 段）、/quit 要能退、/ps 照常看。返回拒因文案 | undefined = 放行。 */
+export function lockSubmitBlock(text: string, dir: string, sid: string, selfPid: number): string | undefined {
+  if (text.trim().startsWith("/")) return undefined;
+  const pid = lockHeldByOther(dir, sid, selfPid);
+  return pid === null ? undefined : t("lock.submitBlocked", { pid });
+}
+
+/** 会话目录有活 live.json → true（purge 护栏——空会话退出清理与本批的组合缝：B 退一个 A 正开着的
+ *  空会话，原先只看锁不看心跳会把 A 的目录整个误删；锁管不到空会话〔零写零锁〕，live.json 才是空
+ *  会话的占用信号）。selfPid = 调用进程自己的 pid——自己刚 dispose 完的残留不挡自己的路（/new
+ *  同 sid 空档重开路径）。 */
+export function liveSessionActive(dir: string, selfPid?: number): boolean {
+  const rec = readLiveFile(dir);
+  if (rec === undefined) return false;
+  if (selfPid !== undefined && rec.info.pid === selfPid) return false;
+  return isLive(rec, Date.now(), PEER_STALE_MS);
 }
 
 // ---------- 多开提示（T7，D10） ----------
