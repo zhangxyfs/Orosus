@@ -66,7 +66,10 @@ export class SessionLockedError extends Error {
 /** 单写者锁（O_EXCL 创建，0o600）：实例级状态（held）+ 盘上互斥（文件在 = 有人写）。 */
 export class SessionWriteLock {
   private held = false;
-  constructor(private readonly lockFile: string) {}
+  private readonly lockFile: string; // 显式字段——Node strip-only TS 不支持 constructor 参数属性（CLI 子进程即炸）
+  constructor(lockFile: string) {
+    this.lockFile = lockFile;
+  }
 
   get isHeld(): boolean {
     return this.held;
