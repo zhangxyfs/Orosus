@@ -9,6 +9,8 @@ import { migrateModulesSections, seedHooksTemplate } from "./config-migrate.ts";
 import { extractImageRefs } from "./paste.ts";
 import { SKILL_MARK_RE } from "./skills-ui.ts";
 import { presence } from "./presence.ts";
+import { lockHeldByOther } from "./ps.ts";
+import { t } from "./i18n/app.ts";
 import type { CliArgs } from "./args.ts";
 
 // 会话目录分桶（M4-1 T1/D46）：根 = ~/.orosus/sessions；新会话落当前项目桶 sessionsRoot/<encodeCwd(cwd)>/
@@ -116,6 +118,10 @@ export const createSession = async (deps: SessionDeps, extra: { fork?: { parentS
   // 不注册（D13：秒级生命周期，注册了只是列表噪音）；子会话经 subagentRunner 不过本缝，天然不注册（D14）
   if (deps.args.print === undefined && deps.args.dumpModules !== true) {
     presence.attach({ h, sessionsDir: extra.sessionsDir ?? activeDir, sid: h.sessionId, kind: deps.isFullscreen() ? "tui" : "line" });
+    // m5-collab T6 恢复预警（双开行为链第 1 段补强）：只读探测活锁——打开不拦（D6/D7）、不抢锁零成本；
+    // 活锁在场告知「写入会被拒绝直到它退出」（CS-02 自愈背书），免用户疑惑「打开时为什么不说」
+    const holderPid = lockHeldByOther(extra.sessionsDir ?? activeDir, h.sessionId, process.pid);
+    if (holderPid !== null) deps.commandUi.notice?.(t("lock.heldWarning", { pid: holderPid }));
   }
   return h;
 };

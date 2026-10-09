@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeLiveFile, LIVE_FILE, type LiveInfo } from "@orosus/core";
+import { writeLiveFile, LIVE_FILE, SessionLockedError, SESSION_LOCK_FILE, type LiveInfo, type LockHolder } from "@orosus/core";
 import { bindTestLocale, t } from "./i18n/app.ts";
-import { formatPsList, scanLivePeers, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
+import { formatLockDenied, formatPsList, lockHeldByOther, scanLivePeers, settleWithLock, PEER_STALE_MS, type PeerEntry } from "./ps.ts";
 
 let dir: string;
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -209,3 +210,104 @@ describe("formatPsList（m5-collab T4，/ps 输出形态 + D16 键化）", () =>
     bindTestLocale("zh-CN");
   });
 });
+
+describe("formatLockDenied / settleWithLock（m5-collab T6 撞锁 UX——holder 结构化组装 + label 补全）", () => {
+  const holder = (over: Partial<LockHolder> = {}): LockHolder => ({ pid: 4321, since: "2026-10-09T14:35:42.000Z", ...over });
+
+  it("① holder.label 在场 → 文案带标题段（快照优先于 live.json）", () => {
+    const msg = formatLockDenied(holder({ label: "锁里快照" }), [peer("s_x", { pid: 4321, label: "live 新鲜" })]);
+    expect(msg).toContain("锁里快照");
+    expect(msg).not.toContain("live 新鲜");
+    expect(msg).toContain("4321");
+    expect(msg).toContain("14:35"); // since 截 HH:MM
+  });
+
+  it("② holder.label 缺省 → 按 pid 对 peers 查 live.json 补全（锁是抢锁时点快照、live.json 更新鲜）", () => {
+    const msg = formatLockDenied(holder(), [peer("s_x", { pid: 4321, label: "隔壁的会话" }), peer("s_y", { pid: 9999, label: "别家" })]);
+    expect(msg).toContain("隔壁的会话");
+    expect(msg).not.toContain("别家");
+  });
+
+  it("③ 两处都无 label → 无标题段（不残留占位）；peer 无 label 同理", () => {
+    const msg = formatLockDenied(holder(), [peer("s_x", { pid: 4321 })]);
+    expect(msg).not.toContain("标题");
+    expect(msg).toContain("4321");
+    const msg2 = formatLockDenied(holder(), []);
+    expect(msg2).not.toContain("标题");
+  });
+
+  it("④ 文案语义：本次输入未写入 + 可只读浏览 + 回那个窗口或等退出自动续写（CS-02 自愈背书）", () => {
+    const msg = formatLockDenied(holder(), []);
+    expect(msg).toContain("未写入");
+    expect(msg).toContain("只读");
+    expect(msg).toContain("自动续写");
+  });
+
+  it("⑤ settleWithLock 分流：SessionLockedError → notify 走 lock 文案；普通错误 → fallback 原路径", () => {
+    const seen: string[] = [];
+    const fallback: unknown[] = [];
+    settleWithLock(new SessionLockedError(holder({ label: "甲" })), { peers: () => [], notify: (s) => seen.push(s), fallback: (e) => fallback.push(e) });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("甲");
+    expect(fallback).toHaveLength(0);
+    const plain = new Error("别的错");
+    settleWithLock(plain, { peers: () => [], notify: (s) => seen.push(s), fallback: (e) => fallback.push(e) });
+    expect(fallback).toEqual([plain]); // 非锁错误不拦截——原政策件接管
+    expect(seen).toHaveLength(1);
+  });
+
+  it("⑥ lock.* 域三语键集一致且文案不同（parity 自证）", () => {
+    const probes = ["lock.denied", "lock.labelSeg", "lock.heldWarning"];
+    const seen = new Map<string, string>();
+    for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+      bindTestLocale(tag);
+      for (const k of probes) {
+        const v = t(k, { pid: 1, since: "00:00", labelSeg: "", label: "x" });
+        expect(v, `${tag} 缺键 ${k}`).not.toBe(k);
+        expect(v.length).toBeGreaterThan(0);
+      }
+      seen.set(tag, t("lock.heldWarning", { pid: 7 }));
+    }
+    bindTestLocale("zh-CN");
+    expect(seen.get("zh-CN")).not.toBe(seen.get("en-US"));
+  });
+});
+
+describe("lockHeldByOther（T6 恢复预警探测——只读、不拦截）", () => {
+  const plantLock = (d: string, sid: string, pid: number): void => {
+    mkdirSync(join(d, sid, "agents"), { recursive: true });
+    writeFileSync(join(d, sid, "agents", SESSION_LOCK_FILE), `${pid}\n2026-10-09T01:00:00.000Z\n`);
+  };
+
+  it("⑦ 活锁他 pid → 返回该 pid（预警语义：打开不拦，告知写入会被拒）", () => {
+    const d = tmp();
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(()=>{},5000)"], { stdio: "ignore" });
+    try {
+      plantLock(d, "s_held", sleeper.pid!);
+      expect(lockHeldByOther(d, "s_held", process.pid)).toBe(sleeper.pid);
+    } finally {
+      sleeper.kill();
+    }
+  });
+
+  it("⑧ 锁是自己的 pid → null（同进程同 sid 重开不预警）；死 pid → null（stale 不预警）；无锁 → null", () => {
+    const d = tmp();
+    plantLock(d, "s_mine", process.pid);
+    expect(lockHeldByOther(d, "s_mine", process.pid)).toBeNull();
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    plantLock(d, "s_dead", dead.pid!);
+    expect(lockHeldByOther(d, "s_dead", process.pid)).toBeNull();
+    expect(lockHeldByOther(d, "s_none", process.pid)).toBeNull();
+    expect(lockHeldByOther(join(d, "nope"), "s_none", process.pid)).toBeNull();
+  });
+
+  it("⑨ 预警文案键在场且带 pid（lock.heldWarning 三语）", () => {
+    for (const tag of ["zh-CN", "zh-TW", "en-US"]) {
+      bindTestLocale(tag);
+      const v = t("lock.heldWarning", { pid: 4242 });
+      expect(v).toContain("4242");
+    }
+    bindTestLocale("zh-CN");
+  });
+});
+

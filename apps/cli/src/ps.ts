@@ -8,7 +8,7 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { isLive, readLiveFile, type LiveInfo } from "@orosus/core";
+import { isLive, pidAlive, readLiveFile, readLockHolder, SessionLockedError, SESSION_LOCK_FILE, type LiveInfo, type LockHolder } from "@orosus/core";
 import { t } from "./i18n/app.ts";
 import { relativeTime } from "./sessions.ts";
 import * as theme from "./theme.ts";
@@ -58,14 +58,13 @@ export function scanLivePeers(sessionsDir: string, selfSid: string, opts?: { now
 
 // ---------- /ps 输出形态（T4，D16 全量键化） ----------
 
-/** 五态图标（● accent 跑 / ◉ warn 等审批·等输入 / ✗ err 报错 / ○ muted 闲——建议值按方案形态行）。 */
-const PHASE_ICON: Record<LiveInfo["phase"], string> = {
-  running: theme.fg("accent", "●"),
-  "waiting-approval": theme.fg("warn", "◉"),
-  "waiting-input": theme.fg("warn", "◉"),
-  error: theme.fg("err", "✗"),
-  idle: theme.fg("muted", "○"),
-};
+/** 五态图标（● accent 跑 / ◉ warn 等审批·等输入 / ✗ err 报错 / ○ muted 闲——建议值按方案形态行）。
+ *  /ps 与协同卡共用（单一源——两处图标不漂移）。 */
+export const phaseIcon = (p: LiveInfo["phase"]): string =>
+  p === "running" ? theme.fg("accent", "●")
+    : p === "waiting-approval" || p === "waiting-input" ? theme.fg("warn", "◉")
+      : p === "error" ? theme.fg("err", "✗")
+        : theme.fg("muted", "○");
 
 /** 五态名（键化——/ps 与协同卡共用同一组键，措辞两处一致）。 */
 export const phaseName = (p: LiveInfo["phase"]): string =>
@@ -87,8 +86,40 @@ export function formatPsList(peers: PeerEntry[], opts?: { self?: PeerEntry; now?
     const e = r.entry;
     const title = e.label ?? e.sid.slice(0, 8); // 未命名不裸显全 sid（readTitle 同款口径）
     const tail = theme.dim(` ${relativeTime(e.lastEventAt, opts?.now)}${e.model !== undefined ? ` · ${e.model}` : ""}`) + (r.self ? theme.dim(` · ${t("ps.selfMark")}`) : "");
-    lines.push(` ${PHASE_ICON[e.phase]} ${padToWidth(names[i]!, nameW)} ${title}${tail}`);
+    lines.push(` ${phaseIcon(e.phase)} ${padToWidth(names[i]!, nameW)} ${title}${tail}`);
     if (e.preview !== undefined) lines.push(theme.dim(`${" ".repeat(nameW + 4)}${e.preview}`)); // 缩进对齐标题列
   });
   return lines;
+}
+
+// ---------- 撞锁 UX（T6，D7/D16） ----------
+
+/** 撞锁人话文案（Reasonix session_lease_keeper 模板化用）：从 SessionLockedError.holder 结构化字段
+ *  t() 组装（D16：core 协议层不带最终文案，CLI 渲染层本地化）。label 取舍：锁载荷是抢锁时点快照
+ *  （可能缺/陈旧——抢锁后改名不重写），缺省时按 pid 对 peers 查 live.json 补全（它随事件刷新、
+ *  更新鲜）。since 显示层截 HH:MM（ISO 原串在 holder 里保留诊断价值）。 */
+export function formatLockDenied(holder: LockHolder, peers: PeerEntry[]): string {
+  const label = holder.label ?? peers.find((p) => p.pid === holder.pid)?.label;
+  const labelSeg = label !== undefined ? t("lock.labelSeg", { label }) : "";
+  return t("lock.denied", { pid: holder.pid, since: holder.since.slice(11, 16), labelSeg });
+}
+
+/** 错误分流（turn 失败收口唯一挂点——main.ts 各 catch 一处接入即覆盖全部路径）：SessionLockedError
+ *  走 lock 文案 notify（TUI toast / 行模式单行——notify 自分形态），其余错误交原政策件（Esc 静默/
+ *  toast 化口径不变）。注入式 deps 供测试；生产装配在 main.ts。 */
+export function settleWithLock(err: unknown, deps: { peers: () => PeerEntry[]; notify: (s: string) => void; fallback: (err: unknown) => void }): void {
+  if (err instanceof SessionLockedError) {
+    deps.notify(formatLockDenied(err.holder, deps.peers()));
+    return;
+  }
+  deps.fallback(err);
+}
+
+/** 恢复预警探测（T6 扩面——「打开不拦、打开时告知」）：只读探测活锁（readLockHolder + pidAlive，
+ *  零成本、不上锁不拦截），活锁且持有者不是自己 → 返回持有者 pid（调用方 toast）；自己/死 pid/
+ *  无锁/坏锁 → null（自己重开同 sid 不预警、stale 不预警——CS-03 回收路径兜住）。 */
+export function lockHeldByOther(dir: string, sid: string, selfPid: number): number | null {
+  const holder = readLockHolder(join(dir, sid, "agents", SESSION_LOCK_FILE));
+  if (holder === null || holder.pid === selfPid) return null;
+  return pidAlive(holder.pid) ? holder.pid : null;
 }

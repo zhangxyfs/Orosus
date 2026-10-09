@@ -294,4 +294,9 @@ export const zhTWCli: Record<string, string> = {
 	"ps.phase.waitingInput": "等你輸入",
 	"ps.phase.error": "上輪報錯",
 	"ps.phase.idle": "閒著",
+
+	// ---- m5-collab T6：撞锁 UX 域 ----
+	"lock.denied": "已攔截：該會話正被另一個 Orosus 程序使用（pid {pid}，起於 {since}{labelSeg}）——為避免寫壞記錄，本次輸入未寫入（會話仍可唯讀瀏覽）。請回到那個視窗操作，或等它結束後重試（屆時自動續寫）。",
+	"lock.labelSeg": "，標題「{label}」",
+	"lock.heldWarning": "提示：該會話正在另一個 Orosus 程序中開啟（pid {pid}）——可唯讀瀏覽，寫入會被拒絕直到它結束。",
 };

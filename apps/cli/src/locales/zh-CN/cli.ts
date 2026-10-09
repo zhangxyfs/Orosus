@@ -294,4 +294,9 @@ export const zhCNCli: Record<string, string> = {
 	"ps.phase.waitingInput": "等你输入",
 	"ps.phase.error": "上轮报错",
 	"ps.phase.idle": "闲着",
+
+	// ---- m5-collab T6：撞锁 UX 域 ----
+	"lock.denied": "已拦截：该会话正被另一个 Orosus 进程使用（pid {pid}，起于 {since}{labelSeg}）——为避免写坏日志，本次输入未写入（会话仍可只读浏览）。请回到那个窗口操作，或等它退出后重试（届时自动续写）。",
+	"lock.labelSeg": "，标题「{label}」",
+	"lock.heldWarning": "提示：该会话正在另一个 Orosus 进程中打开（pid {pid}）——可只读浏览，写入会被拒绝直到它退出。",
 };

@@ -294,4 +294,9 @@ export const enUSCli: Record<string, string> = {
 	"ps.phase.waitingInput": "input",
 	"ps.phase.error": "error",
 	"ps.phase.idle": "idle",
+
+	// ---- m5-collab T6：撞锁 UX 域 ----
+	"lock.denied": "Blocked: this session is in use by another Orosus process (pid {pid}, since {since}{labelSeg}). Your input was NOT written — the log stays intact and the session remains readable. Go back to that window, or retry after it exits (writes then resume automatically).",
+	"lock.labelSeg": ", title \"{label}\"",
+	"lock.heldWarning": "Note: this session is open in another Orosus process (pid {pid}) — you may browse read-only; writes will be refused until it exits.",
 };

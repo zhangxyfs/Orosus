@@ -70,7 +70,7 @@ import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { presence } from "./presence.ts";
-import { formatPsList, scanLivePeers, type PeerEntry } from "./ps.ts";
+import { formatPsList, scanLivePeers, settleWithLock, type PeerEntry } from "./ps.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
@@ -429,6 +429,14 @@ const settingsService: SettingsService = {
 let h: Harness;
 /** m5-i18n T3：宿主语言 store——图槽现读（会话切换图随换代，rebuild 时现解析）；界面主目录 T4 起。 */
 const localeStore = createLocaleStore({ getGraph: () => h.graph(), mainTables }); // m5-i18n T4 起主目录参与合并（T9 补接——pipe e2e 实锤）
+/** m5-collab T6：撞锁分流（turn 失败收口唯一挂点）——SessionLockedError 从 holder 结构化字段 t()
+ *  组装人话（D16：core 协议层不带最终文案）；label 缺省按 pid 对 scanLivePeers 查 live.json 补全
+ *  （锁载荷是抢锁时点快照、live.json 更新鲜）。其余错误走 repl-io 政策件（Esc 静默/toast 化口径不变）。
+ *  processReplLine catch-all、runSubmit 网兜、SessionDeps 三处接入——sessionSwitch void-catch 与
+ *  switchFailedFallback/intent-fork 两 catch 经 deps 全覆盖。 */
+const settleSessionError = (err: unknown): void => {
+  settleWithLock(err, { peers: () => scanLivePeers(sessionsDir, h.sessionId), notify, fallback: settleCommandError });
+};
 /** 会话族装配依赖（m5-split-main T5，D2 签名注入）：main.ts 留守件经此穿给 session-io.ts 的
  *  createSession/switchTo（h/lastEventId/tuiMode/pendingEcho 走闭包访问器，调用期现读现写）。 */
 const sessionDeps: SessionDeps = {
@@ -436,7 +444,7 @@ const sessionDeps: SessionDeps = {
   commandUi,
   settingsService,
   hostInfo,
-  settleCommandError,
+  settleCommandError: settleSessionError,
   getH: () => h,
   setH: (nh: Harness) => {
     h = nh;
@@ -1246,7 +1254,8 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         // （2026-09-20 用户实测拍板，推翻方案 v1.9「[错误] 呈现为可接受取舍」的留档）。机制不变：
         // 取消仍以抛错带内表达，仅 REPL 呈现面不再按错误打印。
         // 其余错误 toast 化（2026-09-23 用户拍板）：未知命令/路由失败等瞬时错误不落流区（消息原文本就自描述）
-        settleCommandError(err); // 政策件提取（2026-09-24）——runSubmit 网兜共用同一政策
+        // m5-collab T6：撞锁（SessionLockedError）经 settleSessionError 分流人话文案，其余照原政策
+        settleSessionError(err); // 政策件提取（2026-09-24）——runSubmit 网兜共用同一政策
       }
   return "again";
 };
@@ -1407,6 +1416,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
     // 视觉转述等待期（走查四）：双击 Esc 中止口——vision-media.ts 模块级单等待（经访问器，m5-split-main T4）
     visionTranscribing: () => visionTranscribing(),
     abortVisionTranscribe: () => { abortVisionTranscribe(); },
+    // m5-collab T5：presence 等待钩子——FullApp pendingUi 置位/清空上报（pick=approval、ask/dialog=input），
+    // PresenceWriter 内部按 turn 活性再过滤（宿主菜单挂起不误报 waiting）
+    presenceWaiting: (kind) => presence.setWaiting(kind),
     panelData: () => ({
       ...(getPanelCache() ?? {
         model: "…",
@@ -1422,6 +1434,13 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       }),
       cards: moduleCards(modulesDeps), // m5 T6：卡片恒现读——不进 panelCache 快照（getter 每秒被读一次）
       network: getPanelCache()?.network === undefined ? undefined : { ...getPanelCache()!.network!, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
+      // m5-collab T5：协同卡数据面——每秒现读（peers 是跨进程状态、没有本进程事件源，不进 panelCache；
+      // 桶内几十目录 readdir+stat 量级可接受——实测 >5ms 再加 1s 龄门缓存〔fullapp-frame liveCache 先例，顺延台账〕）
+      peers: (() => {
+        const list = scanLivePeers(sessionsDir, h.sessionId);
+        const selfRec = readLiveFile(join(sessionsDir, h.sessionId));
+        return { ...(selfRec !== undefined ? { self: { ...selfRec.info, stale: false as const } } : {}), list };
+      })(),
     }),
     slashCommands: () => slashItems(),
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；
@@ -1703,8 +1722,8 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       } catch (err) {
         // runSubmit 网兜（2026-09-24 走查实锤前案）：void-async 无 rejection 落点 = 进程杀手——
         // 拦截区（try 覆盖之外的 /help、会话切换等）逃逸的错误此前直通 FullApp 崩溃钩子 exit 7；
-        // 与 processReplLine catch-all 同政策（Esc 静默、其余 toast）
-        settleCommandError(err);
+        // 与 processReplLine catch-all 同政策（Esc 静默、其余 toast；m5-collab T6 撞锁分流同件）
+        settleSessionError(err);
       } finally {
         // busy 即改档不占有/释放 inflight——turn 的 finally 归原属主（条件块形态：finally 里不写 return——oxlint no-unsafe-finally）
         if (!busyExec) {
@@ -1757,12 +1776,12 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
   };
   // 就地换页失败兜底（两路共用）：旧会话已 close + 新会话构造失败 → toast + 重建空会话
   const switchFailedFallback = async (err: unknown): Promise<void> => {
-    settleCommandError(err);
+    settleSessionError(err); // m5-collab T6：撞锁分流同件（兜底重建 fresh 全新 sid 不撞锁——分流主要管原 err）
     try {
       const fresh = await createSession(sessionDeps);
       applySwitch({ h: fresh, dir: activeDirRef() }, sessionDeps);
       attachRender(fresh);
-    } catch (fatal) { settleCommandError(fatal); }
+    } catch (fatal) { settleSessionError(fatal); }
   };
 
   const switchInPlace = (sid: string): void => {
