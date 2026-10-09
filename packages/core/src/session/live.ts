@@ -14,7 +14,8 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pidAlive } from "./jsonl.ts";
+import { pidAlive } from "./wlock.ts";
+import type { SessionEvent } from "./types.ts";
 
 /** live.json 载荷 schema（v:1——版本字段留着将来加列不炸旧读者）。 */
 export interface LiveInfo {
@@ -111,4 +112,17 @@ export function removeLiveFile(dir: string, token: string): void {
   try {
     rmSync(file, { force: true });
   } catch { /* 删不掉留档：过期判死兜底（D15） */ }
+}
+
+/** 镜像倒扫末条 session/label 的标题（label 事件载荷 { label }；窗口装载的头种子含 label——
+ *  resume 路径不缺）。无 label 历史 = undefined。单源：jsonl 锁载荷快照 / sqlite 锁载荷 / presence
+ *  心跳 label 派生共用（code-review 轮抽出的三处重复）。 */
+export function lastSessionLabel(events: SessionEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type !== "session/label") continue;
+    const v = (e as { label?: unknown }).label;
+    if (typeof v === "string" && v !== "") return v;
+  }
+  return undefined;
 }

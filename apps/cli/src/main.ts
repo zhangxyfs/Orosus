@@ -13,7 +13,7 @@ import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readLiveFile, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
+import { appendInput, discoverModules, isEmptySessionHead, locateSessionFile, loadSecretsEnv, purgeSessionDir, readSessionHead, sweepEmptySessions, refreshEventIndex, defaultEventIndexFile } from "@orosus/core";
 import type { Harness } from "@orosus/core";
 import type { HostInfo, SettingsService, SubagentRosterEntry } from "@orosus/contracts/module";
 import { compactionSummaryView } from "./compaction-view.ts";
@@ -70,7 +70,7 @@ import { shortenPath, withLiveTokens } from "./usage-text.ts";
 import { abortVisionTranscribe, attachPendingImage, eyeModelUsable, imageSeqNow, pasteImageToMedia, pendingImageFiles, pendingLineSeqsRef, resetPendingLineSeqs, visionCandidates, visionTranscribing, waitVisionTranscribe } from "./vision-media.ts";
 import { activeDirRef, applySwitch, createSession, currentBucket, echoHistory, initActiveDir, inputHistoryFor, INPUT_ECHO_EVENT, prepareSwitch, purgeIfEmptySession, sessionsDir, sessionsRoot, setActiveDir, switchBusyGate, switchStepsFor, switchTo, type SessionDeps } from "./session-io.ts";
 import { presence } from "./presence.ts";
-import { formatPsList, scanLivePeers, settleWithLock, type PeerEntry } from "./ps.ts";
+import { formatPsList, scanLivePeers, scanWithSelf, settleWithLock } from "./ps.ts";
 import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
@@ -1059,10 +1059,8 @@ const processReplLine = async (text: string, out: (s: string) => void, typedInpu
         // 即改档（busy 期正是多开用户最想看「隔壁进展」的时刻）；活死分家——历史会话走 /sessions。
         // 全屏走 dm.pushLine 原始通道（ANSI 行不经 md 渲染——pushMd 会吃掉转义序列，compact 完成行同款先例）
         if (cmdNameOf(text) === "/ps") {
-          const peers = scanLivePeers(sessionsDir, h.sessionId);
-          const selfRec = readLiveFile(join(sessionsDir, h.sessionId));
-          const self: PeerEntry | undefined = selfRec !== undefined ? { ...selfRec.info, stale: false } : undefined;
-          for (const l of formatPsList(peers, self !== undefined ? { self } : {})) {
+          const pd = scanWithSelf(sessionsDir, h.sessionId);
+          for (const l of formatPsList(pd.list, pd.self !== undefined ? { self: pd.self } : {})) {
             if (activeApp !== undefined) dm.pushLine(l);
             else out(l);
           }
@@ -1436,11 +1434,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       network: getPanelCache()?.network === undefined ? undefined : { ...getPanelCache()!.network!, connections: mcpConnRows(mcpDeps) }, // 连接行每秒现读（mcp.catalog），KV 串用 refreshPanel 预取
       // m5-collab T5：协同卡数据面——每秒现读（peers 是跨进程状态、没有本进程事件源，不进 panelCache；
       // 桶内几十目录 readdir+stat 量级可接受——实测 >5ms 再加 1s 龄门缓存〔fullapp-frame liveCache 先例，顺延台账〕）
-      peers: (() => {
-        const list = scanLivePeers(sessionsDir, h.sessionId);
-        const selfRec = readLiveFile(join(sessionsDir, h.sessionId));
-        return { ...(selfRec !== undefined ? { self: { ...selfRec.info, stale: false as const } } : {}), list };
-      })(),
+      peers: scanWithSelf(sessionsDir, h.sessionId),
     }),
     slashCommands: () => slashItems(),
     // 技能区（m4-7 T7）：TTL 惰性刷新——菜单渲染同步口吃缓存，被调时隔 5s 后台刷一次；

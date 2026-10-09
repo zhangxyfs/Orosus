@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { writeLiveFile, removeLiveFile, type LiveInfo, type SessionEvent } from "@orosus/core";
+import { writeLiveFile, removeLiveFile, lastSessionLabel, type LiveInfo, type SessionEvent } from "@orosus/core";
 
 export const HEARTBEAT_MS = 15_000; // D2：kimi instanceRegistry 同款；过期阈值 90s = 6 拍容错（扫描侧）
 const LABEL_CAP = 60; // 存储层截 60 对齐标题帽（D4 两层口径：卡内显示层再取 40）
@@ -40,16 +40,8 @@ interface Attached {
   endError: boolean; // 上轮 turn/end kind=error（D3 error 态信号——下个 turn/start 清）
 }
 
-/** 镜像倒扫末条 session/label（窗口装载的头种子含 label——resume 路径不缺）。 */
-const deriveLabel = (events: SessionEvent[]): string | undefined => {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type !== "session/label") continue;
-    const v = (e as { label?: unknown }).label;
-    if (typeof v === "string" && v !== "") return v.slice(0, LABEL_CAP);
-  }
-  return undefined;
-};
+/** label 派生 = core lastSessionLabel 单源 + 存储层截 60（D4/T0 口径——标题帽对齐）。 */
+const deriveLabel = (events: SessionEvent[]): string | undefined => lastSessionLabel(events)?.slice(0, LABEL_CAP);
 
 /** 镜像倒扫末条 assistant/message 的 text 块拼接，压平空白取尾 40 字（reasoning 不混入）。 */
 const derivePreview = (events: SessionEvent[]): string | undefined => {

@@ -56,19 +56,31 @@ export function scanLivePeers(sessionsDir: string, selfSid: string, opts?: { now
   return out.toSorted((a, b) => PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase] || b.lastEventAt - a.lastEventAt);
 }
 
+/** /ps 数据面单点（handler 与协同卡 panelData 共用——扫描+self 装配一处）：list = scanLivePeers
+ *  排序序；self = 本会话 live.json 读回（attach 失败/测试路径可缺）。 */
+export function scanWithSelf(sessionsDir: string, selfSid: string): { self?: PeerEntry | undefined; list: PeerEntry[] } {
+  const list = scanLivePeers(sessionsDir, selfSid);
+  const rec = readLiveFile(join(sessionsDir, selfSid));
+  return { ...(rec !== undefined ? { self: { ...rec.info, stale: false } } : {}), list };
+}
+
 // ---------- /ps 输出形态（T4，D16 全量键化） ----------
 
-/** 五态图标（● accent 跑 / ◉ warn 等审批·等输入 / ✗ err 报错 / ○ muted 闲——建议值按方案形态行）。
- *  /ps 与协同卡共用（单一源——两处图标不漂移）。 */
-export const phaseIcon = (p: LiveInfo["phase"]): string =>
-  p === "running" ? theme.fg("accent", "●")
-    : p === "waiting-approval" || p === "waiting-input" ? theme.fg("warn", "◉")
-      : p === "error" ? theme.fg("err", "✗")
-        : theme.fg("muted", "○");
+/** 五态渲染元数据（图标走函数现算——主题可切，导入期烤色是旧快照〔taskTick 同款教训〕；态名键化——
+ *  /ps 与协同卡共用同一组键，措辞两处一致）。 ● accent 跑 / ◉ warn 等审批·等输入 / ✗ err 报错 / ○ muted 闲。 */
+const PHASE_META: Record<LiveInfo["phase"], { icon: () => string; nameKey: string }> = {
+  running: { icon: () => theme.fg("accent", "●"), nameKey: "ps.phase.running" },
+  "waiting-approval": { icon: () => theme.fg("warn", "◉"), nameKey: "ps.phase.waitingApproval" },
+  "waiting-input": { icon: () => theme.fg("warn", "◉"), nameKey: "ps.phase.waitingInput" },
+  error: { icon: () => theme.fg("err", "✗"), nameKey: "ps.phase.error" },
+  idle: { icon: () => theme.fg("muted", "○"), nameKey: "ps.phase.idle" },
+};
+
+/** 五态图标（/ps 与协同卡共用——单一源两处不漂移）。 */
+export const phaseIcon = (p: LiveInfo["phase"]): string => PHASE_META[p].icon();
 
 /** 五态名（键化——/ps 与协同卡共用同一组键，措辞两处一致）。 */
-export const phaseName = (p: LiveInfo["phase"]): string =>
-  t(`ps.phase.${p === "waiting-approval" ? "waitingApproval" : p === "waiting-input" ? "waitingInput" : p}`);
+export const phaseName = (p: LiveInfo["phase"]): string => t(PHASE_META[p].nameKey);
 
 /** /ps 输出行拼装：标题行（计数含 self）+ self 置顶行（本会话标记）+ peers 行（输入序 = scanLivePeers
  *  排序序）+ preview 缩进第二行（在场才出——空槽不装饰）。无 peer → 单行空态文案（「其他」语义——

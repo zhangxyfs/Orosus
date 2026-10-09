@@ -102,8 +102,8 @@
 ```
                     ┌─────────────────────────────┐
                     │        apps/cli（宿主）        │
-                    │  main.ts 1995 行 + tui/ + md/ │
-                    │  145 源文件 26759 行           │
+                    │  main.ts 2058 行 + tui/ + md/ │
+                    │  147 源文件 27428 行           │
                     └──────────────┬──────────────┘
                                    │ import + 装配
         ┌──────────────────────────┼──────────────────────────┐
@@ -155,7 +155,7 @@ Orosus/
 │   └── cli/                     # ★ 命令行宿主（145 源文件 26759 行）
 │       ├── tsdown.config.ts     # 发布构建：main + imaging-worker + media-worker
 │       └── src/
-│           ├── main.ts          # 入口：子命令→装配→REPL/TUI 双循环（1995 行）
+│           ├── main.ts          # 入口：子命令→装配→REPL/TUI 双循环（2058 行）
 │           ├── builtins.ts      # BUILTIN_MODULES：18 个内置模块清单
 │           ├── args.ts          # CLI 旗标解析
 │           ├── sessions.ts      # /sessions /fork /title 会话拦截层
@@ -192,6 +192,7 @@ Orosus/
 │   │       ├── loop/            # agentLoop + deriveMessages 投影
 │   │       ├── provider/        # parseModel 模型路由
 │   │       ├── session/         # JSONL/SQLite 存储 + fork + 树索引 + 事件索引
+│   │       │   # + live.ts 心跳件 + wlock.ts 单写者锁小件（m5-collab）
 │   │       ├── subagent/        # 子代理 runner + 常量
 │   │       └── tools/           # ToolRegistry + 调度 + 输出截断
 │   ├── i18n/                    # ★ 多语言运行时（floor.ts / runtime.ts）
@@ -233,19 +234,19 @@ Orosus/
 | tools/registry.ts | createToolRegistry :62 | 工具注册表；OUTPUT_LIMIT 32768 / HEAD_KEEP 24576 / TAIL_KEEP 8192 |
 | tools/schedule.ts | accessConflict :24 / scheduleByAccesses :41 | Access 贪心分组调度 |
 | subagent/{runner,constants}.ts | runner :275 | 并发 8 / 轮 100 / 上限 200 / 双保险丝 600s+7200s |
-| session/ | — | JSONL/SQLite 存储 + fork + 树索引 + 事件索引（见 §6.3） |
+| session/ | — | JSONL/SQLite 存储 + fork + 树索引 + 事件索引 + live.ts 心跳件 + wlock.ts 锁小件（见 §6.3） |
 
-### 5.3 apps/cli/src/main.ts — 入口（1995 行）
+### 5.3 apps/cli/src/main.ts — 入口（2058 行）
 
 | 锚点 | 职责 |
 |------|------|
-| exitCli :120 | 退出收口 |
-| chooseExFace :282 | chooseEx 全屏/行模式双 UI 面 |
-| importWithOrganize :472 | peers 记忆导入（含覆盖语义） |
-| attachRender :731 | 双订阅渲染编排挂接 |
-| processReplLine :843 | 行模式逐行处理（斜杠命令/消息/队列） |
-| runFullScreen :1313 | 全屏 TUI 主循环 |
-| onboardingInitial :1907 | 首次引导初始化 |
+| exitCli :129 | 退出收口 |
+| chooseExFace :292 | chooseEx 全屏/行模式双 UI 面 |
+| importWithOrganize :514 | peers 记忆导入（含覆盖语义） |
+| attachRender :773 | 双订阅渲染编排挂接 |
+| processReplLine :885 | 行模式逐行处理（斜杠命令/消息/队列） |
+| runFullScreen :1368 | 全屏 TUI 主循环 |
+| onboardingInitial :1968 | 首次引导初始化 |
 
 ### 5.4 CLI 顶层功能件（apps/cli/src/，除 main.ts 外非 test 文件）
 
@@ -363,7 +364,7 @@ todo_write：整表替换；完成后不清掉（全 ✓ 终痕留面板，仅�
 
 ### 6.2 main.ts 双循环
 
-`apps/cli/src/main.ts`（1995 行）两套循环并存：
+`apps/cli/src/main.ts`（2058 行）两套循环并存：
 
 - **行模式 REPL**：`processReplLine`（main.ts:843）逐行处理输入，斜杠命令与自然语言分流；
 - **全屏模式**：`runFullScreen`（main.ts:1313）接管 alt-screen，把输入喂进 TUI 组件树。
@@ -691,7 +692,7 @@ check-boundaries（模块依赖纪律门禁）/ check-publish-deps / gen-api-doc
 
 1. **契约窗口节奏**：模块不得反向依赖 core/彼此（check:boundaries 门禁）；新增能力优先经服务挂载，动 contracts 走批次级决策窗口。
 2. **常量页优先**：子代理限额、审批预算、渲染间隔等全部集中在常量页/常量行，调参改常量不动逻辑。
-3. **行数红线**：main.ts 1995 行、fullapp 族拆分后各件 <800 行；新功能优先落模块或拆分件，防止顶层文件重新膨胀。
+3. **行数红线**：main.ts 2058 行（m5-collab 起新功能数据面/卡片落 ps.ts·panels 族，顶层只留薄接线）、fullapp 族拆分后各件 <800 行；新功能优先落模块或拆分件，防止顶层文件重新膨胀。
 4. **宽度账本同源**：UI 拼行宽度必须与浮层渲染同源（FullApp.pickRowWidth()），新增提示行先过 WIDTH_BUDGETS 预算。
 5. **多语言三铁律**：i18n-audit（键齐全）/ i18n-no-raw-cjk（禁裸中文）/ i18n-pack-gen（语言包生成）进发布门禁；模块串经 ctx.t。
 6. **发布纪律**：release.mts 全绿才发；--fast 仅限改动面为零的发布；双远端推送遵守净化历史纪律（GitHub 公开仓不收 docs/superpowers）。

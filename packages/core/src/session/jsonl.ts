@@ -5,6 +5,7 @@ import { isSafeSessionId, scanBucketSessions } from "./dir.ts";
 import { openSessionDbReadOnly, sqliteAvailable } from "./sqlite.ts";
 import { eventsFrom, lastCompaction, scanEventLines, stripRow, writeEventRows, type ScanLine } from "./eventindex.ts";
 import { SessionWriteLock } from "./wlock.ts";
+import { lastSessionLabel } from "./live.ts";
 
 /** T7 装载分流阈（D6：cc SKIP_PRECOMPACT_THRESHOLD 同值 5MB）——小于此走全量快路径（零行为变化）。 */
 const WINDOW_LOAD_MIN_BYTES = 5 * 1024 * 1024;
@@ -47,18 +48,6 @@ export function hardeningNote(): string | null {
 /** pidAlive/readLockPid 定义已迁 wlock.ts（m5-collab T1 抽锁小件供 jsonl/sqlite 共用）——
  *  此处转出口保持原表面（cleanup.ts 与既有消费方零改动）。 */
 export { pidAlive, readLockPid } from "./wlock.ts";
-
-/** 镜像里末条 session/label 的标题（m5-collab T1 锁载荷 label 快照源）：resume 路径 label 在历史镜像
- *  里（窗口装载的头种子含 label——T7 readHeadSeeds），倒扫即止。无 label 历史 = undefined（锁维持旧两行）。 */
-function lastSessionLabel(events: SessionEvent[]): string | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.type !== "session/label") continue;
-    const v = (e as { label?: unknown }).label;
-    if (typeof v === "string") return v;
-  }
-  return undefined;
-}
 
 /** 未闭合 turn 补结尾（repairFile 与 T7 窗口装载共用的纯函数段）：最后一个 turn/start 之后若无
  *  turn/end，先补 turn 内缺 tool/result 的 call（M3/D41——日志里不许出现无结果的 tool/call）再补

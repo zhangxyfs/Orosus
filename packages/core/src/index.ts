@@ -15,7 +15,7 @@ export { buildSessionTree, readSessionHead, isEmptySessionHead, type SessionHead
 // 空会话清理批（2026-10-01 用户拍板）：退出漏斗就地清 + 启动清扫异常退出残留壳（宿主 CLI 两调用点）
 export { purgeSessionDir, sweepEmptySessions, type EmptySessionSweep } from "./session/cleanup.ts";
 // m5-collab T0：live.json 活体心跳纯函数件——/ps、协同卡、多开提示的统一事实源（宿主侧读写口）
-export { isLive, readLiveFile, writeLiveFile, removeLiveFile, LIVE_FILE, type LiveInfo, type LiveRecord } from "./session/live.ts";
+export { isLive, readLiveFile, writeLiveFile, removeLiveFile, lastSessionLabel, LIVE_FILE, type LiveInfo, type LiveRecord } from "./session/live.ts";
 // m5-collab T1：写者锁扩建——结构化撞锁错误（CLI 渲染层从 holder 组装人话文案）+ 恢复预警探测两件
 export { SessionLockedError, readLockHolder, pidAlive, SESSION_LOCK_FILE, type LockHolder } from "./session/wlock.ts";
 export { deriveMessages } from "./loop/convert.ts"; // 宿主面（M4-1 T6 复核用）：日志投影 → 模型消息
