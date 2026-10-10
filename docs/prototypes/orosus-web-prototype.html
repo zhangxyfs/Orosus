@@ -897,7 +897,6 @@
               </div>
               <div class="msg-acts">
                 <button data-mcopy title="复制消息">⧉ 复制</button>
-                <button data-medit title="取回输入框编辑">✎ 编辑</button>
               </div>
             </div>
 
@@ -934,7 +933,6 @@
               </div>
               <div class="msg-acts">
                 <button data-mcopy title="复制消息">⧉ 复制</button>
-                <button data-medit title="取回输入框编辑">✎ 编辑</button>
               </div>
             </div>
 
@@ -988,7 +986,6 @@
               </div>
               <div class="msg-acts">
                 <button data-mcopy title="复制消息">⧉ 复制</button>
-                <button data-medit title="取回输入框编辑">✎ 编辑</button>
               </div>
             </div>
 
@@ -1277,7 +1274,7 @@
           ? '<div class="msg-img">' + imgs.map(function (a) { return '<img class="photo" src="' + a.url + '" alt="' + esc(a.name) + '" />'; }).join('') + '</div>'
           : '';
         wrap.innerHTML = '<div class="msg-bubble">' + imgHtml + '<div class="msg-text">' + esc(text) + '</div><button class="msg-toggle">▾ 展开全部</button></div>' +
-          '<div class="msg-acts"><button data-mcopy title="复制消息">⧉ 复制</button><button data-medit title="取回输入框编辑">✎ 编辑</button></div>';
+          '<div class="msg-acts"><button data-mcopy title="复制消息">⧉ 复制</button></div>';
         stream.insertBefore(gap, tail);
         stream.insertBefore(wrap, tail);
         var bt = wrap.querySelector('.msg-text');
@@ -3376,19 +3373,11 @@
           scrollDown();
           return;
         }
-        /* 气泡操作：复制 / 编辑 */
+        /* 气泡操作：复制（✎ 编辑钮已移除——撤回能力未落地，方案 2026-10-10 口令一期隐藏） */
         var mc = e.target.closest('[data-mcopy]');
         if (mc) {
           var bubble = mc.closest('.msg-user').querySelector('.msg-text');
           copyText(bubble.textContent, '已复制消息');
-          return;
-        }
-        var me = e.target.closest('[data-medit]');
-        if (me) {
-          input.value = me.closest('.msg-user').querySelector('.msg-text').textContent;
-          autogrow();
-          input.focus();
-          toast('已取回输入框——改完再发');
           return;
         }
         /* 轮次操作：复制 / 分支 */
