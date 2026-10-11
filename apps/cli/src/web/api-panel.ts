@@ -6,9 +6,13 @@
  *  diagnostics/launchers 属后续任务（§2 api-panel.ts 全清单——YAGNI）。
  *  数据源全部走 CLI 纯函数件（tasks-cmd/modules-ui/usage-text/module-deps/module-toggle——§2 依赖
  *  方向白名单）与 HostedSession.core 只读口；/panel 结果 1s 缓存 + 事件驱动失效（§5 律三：
- *  turn/todo 事件到达即刷、模块插拔端点显式失效——refreshPanel 不随每请求重算 history）。 */
+ *  turn/todo 事件到达即刷、模块插拔端点显式失效——refreshPanel 不随每请求重算 history）。
+ *  T11 增量：network.connections 填充（T10 跨任务指针——TUI 渲染期另并 mcpConnRows 的 web 版，
+ *  装配期 await mcp.catalog 服务现读）+ mcpCatalogService/mcpCatalogRowsOf 导出（api-settings
+ *  的 MCP 页同源消费）+ invalidatePanelCache 导出（MCP ops 写盘 reload 后显式失效，toggle 同口径）。 */
 import type { ServerResponse } from "node:http";
 import type { ReloadReport, SessionEvent } from "@orosus/core";
+import type { McpCatalogRow } from "@orosus/mcp";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
@@ -51,6 +55,31 @@ const resolveSession = async (sid: string): Promise<HostedSession | undefined> =
 };
 
 // ---------- panel 装配（E2/E3 同口径聚合 + E6 peers 合并 + E7 任务投影） ----------
+
+/** mcp.catalog 服务现取（T11——mcp-ui.mcpCatalogRows 的 web 版：getOptional 是异步口（cmdrouter 同注），
+ *  漏 await 会拿到 Promise 恒非函数；模块未启用/换代 stale 抛错 = undefined——调用方按空表处理）。
+ *  api-settings 的 GET/ops 与本件 connections 填充同源消费（MCP 面单一数据口）。 */
+export const mcpCatalogService = async (h: NonNullable<HostedSession["core"]>): Promise<(() => McpCatalogRow[]) | undefined> => {
+  try {
+    const svc = await h.graph().services.getOptional("mcp.catalog");
+    return typeof svc === "function" ? (svc as () => McpCatalogRow[]) : undefined;
+  } catch {
+    return undefined; // 图换代窗（CK-12 stale 守卫）——按服务缺席处理
+  }
+};
+
+/** catalog 行快照（服务缺席 = 空表——mcp-ui 同语义：模块未启用不炸，消费面给指路文案）。 */
+export const mcpCatalogRowsOf = async (h: NonNullable<HostedSession["core"]>): Promise<McpCatalogRow[]> =>
+  (await mcpCatalogService(h))?.() ?? [];
+
+/** mcp.catalog 行 → 「网络 · MCP」卡连接行投影（TUI mcpConnRows〔mcp-ui.ts:48〕同式：五态原文照传、
+ *  说明段 = t("conn.desc") 传输型 + 工具数、connectMs 仅 connected 行带）。 */
+const connRowOf = (r: McpCatalogRow): { name: string; state: McpCatalogRow["state"]; desc: string; connectMs?: number } => ({
+  name: r.name,
+  state: r.state,
+  desc: t("conn.desc", { n: r.toolCount ?? "", transport: r.transport === "http" ? "HTTP" : "stdio" }),
+  ...(r.state === "connected" && r.connectMs !== undefined ? { connectMs: r.connectMs } : {}),
+});
 
 /** GET /panel 响应体（§3 :232 PanelData 同形投影）：permissionNext 是函数（不可序列化——权限面
  *  归 T8 /permission 端点族）、cards 是 TUI 卡渲染面（§3 形状无此键——T15/T16 无消费方，YAGNI），
@@ -124,6 +153,13 @@ const assemblePanel = (hs: HostedSession): Promise<WebPanelData> => {
         .toSorted((a, b) => phaseRank(a) - phaseRank(b) || b.lastEventAt - a.lastEventAt),
     };
     const pct = pd.contextWindow > 0 ? Math.min(100, Math.round((pd.tokens.input / pd.contextWindow) * 100)) : 0;
+    // network.connections（T10 指针闭合——TUI main.ts:1467 渲染期另并 mcpConnRows 的 web 版）：
+    // 装配期 await mcp.catalog 现读，行随 panel 缓存 1s TTL 走（§5 律三）；MCP ops 写盘 reload 后
+    // 显式失效（invalidatePanelCache——api-settings 消费）。
+    let network = pd.network;
+    if (network !== undefined) {
+      network = { ...network, connections: (await mcpCatalogRowsOf(h)).map(connRowOf) };
+    }
     return {
       model: pd.model,
       session: pd.session,
@@ -134,7 +170,7 @@ const assemblePanel = (hs: HostedSession): Promise<WebPanelData> => {
       ctx: { used: pd.tokens.input, window: pd.contextWindow, pct },
       modules: pd.modules,
       tasks: pd.tasks,
-      ...(pd.network !== undefined ? { network: pd.network } : {}),
+      ...(network !== undefined ? { network } : {}),
       ...(peers !== undefined ? { peers } : {}),
     };
   });
@@ -156,6 +192,12 @@ export const panelComputeCount = (): number => panelComputes;
 
 const invalidatePanel = (sid: string): void => {
   panelCache.delete(sid);
+};
+
+/** panel 缓存显式失效（T11 导出——api-settings 的 MCP ops 消费：写盘 reload 后与 T10 模块插拔
+ *  同口径即失效，下一 GET 重算出 connections/模块新态）。 */
+export const invalidatePanelCache = (sid: string): void => {
+  invalidatePanel(sid);
 };
 
 /** 事件驱动失效集（§5 律三「turn/todo/模块事件即刷」）：turn 边界（start/end——tokens 在轮末落定）、

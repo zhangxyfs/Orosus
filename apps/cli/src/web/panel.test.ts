@@ -281,11 +281,18 @@ describe("web T10：面板数据 API", () => {
       expect(["mounted", "loading", "off", "pendingConfirm"]).toContain(m.state);
     }
     expect(Array.isArray(p.tasks)).toBe(true);
-    // network 面（refreshPanel 预取：proxy/modelService 串；connections 属 T11 mcp.catalog——占位 []）
+    // network 面（refreshPanel 预取：proxy/modelService 串；connections = mcp.catalog 投影——T11 填充，
+    // 本用例无 MCP 配置：预装懒启动件 idle 行）
     expect(typeof p.network?.proxy).toBe("string");
     expect(p.network!.proxy.length).toBeGreaterThan(0);
     expect(typeof p.network?.modelService).toBe("string");
-    expect(p.network!.connections).toEqual([]);
+    expect(p.network!.connections.length).toBeGreaterThan(0);
+    for (const c of p.network!.connections) {
+      const row = c as { name: string; state: string; desc: string };
+      expect(typeof row.name).toBe("string");
+      expect(["connected", "idle", "failed", "pending-confirm", "disabled"]).toContain(row.state);
+      expect(row.desc.length).toBeGreaterThan(0);
+    }
     // peers 面（E6：self 置顶——host 会话 presence kind=web；list = 全桶合并其余活体）
     expect(p.peers?.self?.sid).toBe("s_panel1");
     expect(p.peers?.self?.kind).toBe("web");
