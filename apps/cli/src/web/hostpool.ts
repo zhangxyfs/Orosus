@@ -38,8 +38,8 @@ const headerCwdOf = (file: string): string | undefined => {
   }
 };
 
-/** 无头 CommandUi（core 缺省拒绝式四法同款）：T5 WebCommandUi（bridge-ui.ts）接位前的缺省装配——
- *  交互式命令 fail-closed，不炸托管。 */
+/** 无头 CommandUi（core 缺省拒绝式四法同款）：未注入 commandUi 的池（测试）的缺省装配——交互式
+ *  命令 fail-closed，不炸托管。生产装配（mod.ts）注入 T5 webCommandUiFactory（逐会话 WebCommandUi）。 */
 const headlessUi: CommandUi = {
   ask: async () => { throw new Error("无交互环境（headless）——web 交互桥未装配（T5 接位）"); },
   askSecret: async () => { throw new Error("无交互环境（headless）——web 交互桥未装配（T5 接位）"); },
@@ -50,13 +50,13 @@ const headlessUi: CommandUi = {
 export class HostPool {
   /** sessions 根（= join(home, "sessions")——与 CLI sessionsRoot 同形；路由存在性判据共用）。 */
   readonly root: string;
-  private readonly commandUi: CommandUi;
+  private readonly commandUi: CommandUi | ((hs: HostedSession) => CommandUi);
   private readonly hosts = new Map<string, HostedSession>();
   private readonly viewers = new Map<string, HostedSession>();
   private viewerOrder: string[] = [];
   private currentSid: string | undefined;
 
-  constructor(init: { home?: string; commandUi?: CommandUi } = {}) {
+  constructor(init: { home?: string; commandUi?: CommandUi | ((hs: HostedSession) => CommandUi) } = {}) {
     this.root = join(init.home ?? orosusHome(), "sessions");
     this.commandUi = init.commandUi ?? headlessUi;
   }

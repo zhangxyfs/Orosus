@@ -1,8 +1,9 @@
-/** 会话组端点（web 批 T3 本任务面 + T4 写侧）：GET events（分页回放——§3 形状）、GET stream（SSE——
- *  路由面，通道本体在 sse.ts）、POST send / DELETE queue / GET status（T4——消息写入链路：
- *  @ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）。answer/cancel 是 T5 交付物——
- *  YAGNI 不预铺。会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer 只读化身
- *  （回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer → 409 拒绝形）；不在盘 → 404。 */
+/** 会话组端点（web 批 T3 本任务面 + T4 写侧 + T5 交互应答）：GET events（分页回放——§3 形状）、
+ *  GET stream（SSE——路由面，通道本体在 sse.ts）、POST send / DELETE queue / GET status（T4——消息
+ *  写入链路：@ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）、POST answer（T5——
+ *  interaction 应答落点，桥本体在 bridge-ui.ts）。会话解析：池内 host 优先（live 扇出源）；未托管但
+ *  盘上存在 → viewer 只读化身（回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer →
+ *  409 拒绝形）；不在盘 → 404。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { locateSessionFile, readSessionHead } from "@orosus/core";
 import { registerRoute, readBody, sendJson } from "./server.ts";
@@ -12,6 +13,7 @@ import type { HostedSession } from "./hosted.ts";
 import { resolveAtRefs } from "../atfile.ts";
 import { INPUT_ECHO_EVENT } from "../session-io.ts";
 import { MAX_IMAGES_PER_MESSAGE, resolveImageIds } from "./api-files.ts";
+import { webCommandUiOf } from "./bridge-ui.ts";
 
 /** 回放分页每页上限（自创值登记——§5 律三：首屏有界，长会话按需加载）。 */
 export const EVENTS_PAGE_CAP = 200;
@@ -226,4 +228,51 @@ registerRoute("GET", "/api/sessions/:sid/status", async (_req, res, params) => {
     cwd: hs.cwd,
     bucket: hs.bucket,
   });
+});
+
+/** POST /api/sessions/:sid/answer {id, value} | {id, cancelled:true} → {ok:true} | {ok:true,noop:true}
+ *  （§3 interaction 应答协议落点——桥本体 bridge-ui.ts）。
+ *  - value 形态分 kind：choose=选中项原文 / chooseSide={item,value} 对 / ask|askSecret=文本 /
+ *    confirm="true"|"false" / chooseEx=多选数组（归一与契约校验在 WebCommandUi.valueOf）。
+ *  - cancelled:true → server 侧挂起 Promise reject「已取消（Esc）」（approval 拒绝路径同 TUI Esc；
+ *    confirm 按契约折 false）。
+ *  - 重复/晚到应答（已 settle 的 id）→ {ok:true,noop:true} 幂等——多端抢答先到先得（§3）。
+ *  - 未装配交互桥的会话（viewer/headless 池）无挂起可能 → 同 noop 形（不应 409：answer 不写状态）。 */
+registerRoute("POST", "/api/sessions/:sid/answer", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES); // ask 长文本粘贴同量级上限（send 同款自创值）
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { id?: unknown; value?: unknown; cancelled?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const id = typeof body.id === "string" && body.id !== "" ? body.id : undefined;
+  if (id === undefined) {
+    sendJson(res, 400, { ok: false, error: "missing id" });
+    return;
+  }
+  const ui = webCommandUiOf(hs);
+  if (ui === undefined) {
+    sendJson(res, 200, { ok: true, noop: true }); // 无桥 = 无挂起（viewer/headless 池）
+    return;
+  }
+  if (body.cancelled === true) {
+    ui.cancel(id);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  const delivered = ui.answer(id, body.value);
+  sendJson(res, 200, { ok: true, ...(delivered ? {} : { noop: true }) });
 });

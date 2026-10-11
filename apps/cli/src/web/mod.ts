@@ -14,6 +14,7 @@ import { findLiveInstance, writeInstance } from "./instance.ts";
 import { openBrowser } from "./open-browser.ts";
 import { onShutdown, startWebServer } from "./server.ts";
 import { HostPool } from "./hostpool.ts";
+import { webCommandUiFactory } from "./bridge-ui.ts";
 import { broadcastShutdownFrames } from "./sse.ts";
 import "./api-session.ts"; // T3 会话组端点注册（GET events/stream——模块加载期进路由表，readiness 序）
 import "./api-files.ts"; // T4 文件面端点注册（uploads/media/at——readiness 序同上；api-session 经它解析 imageIds）
@@ -129,8 +130,9 @@ export async function runWebSubcommand(
 
   // HostPool（T2）：池生命周期 = server 生命周期；SIGINT 清退序（G15 供给侧——填 T1 onShutdown
   // 注册位）= shutdown 帧广播（T3 sse.ts 全会话客户端注册表）→ pool.closeAll（实例文件清理在 T1
-  // shutdownWebServer 序内）
-  const p = new HostPool({ home });
+  // shutdownWebServer 序内）。commandUi 注入 T5 交互桥工厂（逐会话 WebCommandUi——broadcast 绑
+  // 该会话 SSE 扇出、pending 重放源注册、close fail-closed 钩子，见 bridge-ui.ts）
+  const p = new HostPool({ home, commandUi: webCommandUiFactory });
   pool = p;
   const off = onShutdown((reason) => {
     broadcastShutdownFrames(reason);

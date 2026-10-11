@@ -13,8 +13,8 @@
  *  - viewer（§4-11）：只读 resume 装配——不发 prompt 永不写盘不撞锁、无 presence（只读打开永不锁，
  *    协同批 D6）；host 接管同会话时由 HostPool 先关只读化身。
  *  - 常驻不回收（§4-15 一期边界）：会话随 server 生命常驻，不做 idle reaper。
- *  waiting-approval/waiting-input 两相位由 T5 WebCommandUi（bridge-ui.ts）接位驱动，本任务只推算
- *  running/idle/error 三值。 */
+ *  waiting-approval/waiting-input 两相位由 T5 WebCommandUi（bridge-ui.ts）经 setWaiting 挂点驱动；
+ *  close 起点跑关停钩子（挂起 interaction fail-closed 收场）。 */
 import { dirname, join } from "node:path";
 import {
   createHarness, encodeCwd, isEmptySessionHead, locateSessionFile, pidAlive,
@@ -53,13 +53,14 @@ export interface SendResult {
  *  sid 单独出现（无 forkFrom）= 打开该会话（resume 同源）；与 forkFrom 并存时忽略（fork 产新 sid，
  *  真实 sid 恒以 harness 为准）。sessionsRoot 缺省构造时现读 orosusHome()（GC9——env 感知，不绑
  *  CLI session-io 的模块级常量）；HostPool 传 server home 派生值。modules/config/harness 为测试
- *  注入面（fake provider / close 顺序探针），生产装配不走。 */
+ *  注入面（fake provider / close 顺序探针），生产装配不走。commandUi 亦可给工厂（T5：WebCommandUi
+ *  需逐会话绑定 broadcast/presence/close 钩子——assemble 期以 self 解析，HostPool 透传同参）。 */
 export interface HostedInit {
   cwd: string;
   sid?: string;
   resumeSid?: string;
   forkFrom?: string;
-  commandUi: CommandUi;
+  commandUi: CommandUi | ((self: HostedSession) => CommandUi);
   /** host（写侧，缺省）| viewer（只读）。 */
   mode?: "host" | "viewer";
   sessionsRoot?: string;
@@ -96,6 +97,8 @@ export class HostedSession {
   private turnActive = false;
   private dispatching = false;
   private endedWithError = false;
+  private waiting: "approval" | "input" | null = null;
+  private readonly closeHooks: (() => void)[] = [];
   private ring: SessionEvent[] = [];
   private queue: { index: number; text: string; images?: string[]; afterUserEvent?: AfterUserEvent }[] = [];
   private nextIndex = 0;
@@ -128,6 +131,9 @@ export class HostedSession {
   get ready(): Promise<void> { return this.readyGate; }
 
   private async assemble(): Promise<void> {
+    // T5：commandUi 工厂在此解析（self = 本会话）——WebCommandUi 的 broadcast/presence/close 钩子
+    // 逐会话绑定；注入式 harness 路径同样解析（close 钩子/重放源登记不依赖真模块图）。
+    const ui = typeof this.init.commandUi === "function" ? this.init.commandUi(this) : this.init.commandUi;
     let h: Harness;
     if (this.init.harness !== undefined) {
       h = this.init.harness; // 测试注入位
@@ -137,7 +143,7 @@ export class HostedSession {
         cwd: this.cwd,
         builtinModules: BUILTIN_MODULES,
         ...(this.init.modules !== undefined ? { modules: this.init.modules } : {}),
-        commandUi: this.init.commandUi,
+        commandUi: ui,
         autoTitle: true, // CLI 装配同款（首轮 completed 后自动起标题）
         sessionsDir: this.bucketDir,
         sessionsRoot: this.root,
@@ -189,8 +195,10 @@ export class HostedSession {
     if (e.type === "turn/start") {
       this.turnActive = true;
       this.endedWithError = false;
+      this.waiting = null; // 等相位随 turn 边界复位（presence.ts 同款——挂起属上轮的交互不跨轮显示）
     } else if (e.type === "turn/end") {
       this.turnActive = false;
+      this.waiting = null; // 同上（cancel 打断后 outlive turn 的挂起交互只剩重放帧，不再占相位）
       this.endedWithError = (e as { kind?: unknown }).kind === "error";
     }
     for (const cb of Array.from(this.eventSubs)) { // 快照迭代——回调内退订不跳元素
@@ -203,11 +211,30 @@ export class HostedSession {
    *  send 端点内部串行化」的托管制实现）。 */
   busy(): boolean { return this.dispatching || this.turnActive; }
 
-  /** 相位（LiveInfo 五值同源）：running/idle/error 本任务推算；waiting-approval/waiting-input 由
-   *  T5 WebCommandUi 的 interaction 桥驱动（本任务不实现——YAGNI）。 */
+  /** 相位（LiveInfo 五值同源）：waiting-approval/waiting-input 由 T5 WebCommandUi 的等相位挂点驱动
+   *  （setWaiting），running/idle/error 由本类推算。 */
   phase(): LiveInfo["phase"] {
+    if (this.waiting !== null) return this.waiting === "approval" ? "waiting-approval" : "waiting-input";
     if (this.dispatching || this.turnActive) return "running";
     return this.endedWithError ? "error" : "idle";
+  }
+
+  /** 等相位挂点（T5 WebCommandUi 消费——presence.ts:121 setWaiting 同语义）：等审批/等问询两族
+   *  （choose 族→approval、ask 族→input），null 清位。presence 侧仅在 turn 活性期生效（宿主菜单
+   *  挂起不误报）；本类 waiting 字段供 phase() 推导（GET status / live.json 同五值一致）。 */
+  setWaiting(kind: "approval" | "input" | null): void {
+    this.waiting = kind;
+    this.presence?.setWaiting(kind);
+  }
+
+  /** 关停钩子注册（T5 bridge-ui 消费——挂起 interaction fail-closed 等收尾面）：close() 起点同步
+   *  调用（先于 readyGate 等待——SIGINT 清退不让挂起交互多等一步）。返回反注册（幂等）。 */
+  onClose(hook: () => void): () => void {
+    this.closeHooks.push(hook);
+    return () => {
+      const i = this.closeHooks.indexOf(hook);
+      if (i >= 0) this.closeHooks.splice(i, 1);
+    };
   }
 
   /** 入队（busy 期 dispatch 的去处）：index 单调不复用（§3 DELETE /queue/:index 以最近快照为准）。
@@ -414,10 +441,15 @@ export class HostedSession {
 
   /** 关停序（brief 定档）：presence dispose → h.close → purgeIfEmpty（purge 必须在 h.close 完成**后**——
    *  Windows 活句柄删不动，session-io.ts:36 明文；同 CLI 退出实序）。幂等；viewer 无 presence、不 purge
-   *  （只读化身不拥有会话——清理归 host/退出漏斗）。 */
+   *  （只读化身不拥有会话——清理归 host/退出漏斗）。T5：close 起点先清等相位 + 跑关停钩子（挂起
+   *  interaction fail-closed——「已取消（Esc）」语义，confirm 折 false；重放源摘除防死卡重放）。 */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.setWaiting(null);
+    for (const hook of this.closeHooks.splice(0)) {
+      try { hook(); } catch { /* 钩子异常不拦关停 */ }
+    }
     await this.readyGate.catch(() => undefined); // 装配失败也继续（harness 缺席则跳过对应步）
     this.presence?.dispose();
     if (this.harness !== undefined) await this.harness.close();
