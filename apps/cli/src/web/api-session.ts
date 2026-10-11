@@ -24,6 +24,7 @@ import { readPins, togglePin } from "./pins.ts";
 import { hideCwd, readHidden, unhideCwd } from "./workspaces.ts";
 import { archiveSession, deleteSession, listArchived, renderMarkdown, unarchiveSession } from "./session-actions.ts";
 import { bucketCwd, headerCwd } from "./buckets.ts";
+import { updateInfoNow } from "../update-check.ts";
 
 /** 回放分页每页上限（自创值登记——§5 律三：首屏有界，长会话按需加载）。 */
 export const EVENTS_PAGE_CAP = 200;
@@ -430,9 +431,11 @@ registerRoute("GET", "/api/sessions", async (_req, res) => {
   sendJson(res, 200, { pinned, groups: groups.map(({ bucket, name, cwd, sessions }) => ({ bucket, name, cwd, sessions })) });
 });
 
-/** GET /api/bootstrap → {version, projects, pinned, currentSid?}（§3 :208）：projects 含 hidden 工作
- *  区全量（hidden:true——cwd 切换芯片找回入口，B10）；currentSid = 池当前游标（/web 交接指向；
- *  无则前端开最新）；update? 字段归 T12 接线——本端点缺省不出（方案 T12 接口行明文）。 */
+/** GET /api/bootstrap → {version, projects, pinned, currentSid?, update?}（§3 :208）：projects 含 hidden
+ *  工作区全量（hidden:true——cwd 切换芯片找回入口，B10）；currentSid = 池当前游标（/web 交接指向；
+ *  无则前端开最新）；update? = {current,latest}——T12 接线：updateInfoNow() 缓存直读（启动检查点火
+ *  的「确有新版」现值；server 无后台轮检，新鲜度与 /api/update 懒取同源 npm registry 通道）。
+ *  未查过/无新版 → 字段缺省（A4 胶囊首开不显，前端收 /api/update 懒取回包后补显）。 */
 registerRoute("GET", "/api/bootstrap", async (_req, res) => {
   const pool = webHostPool();
   if (pool === undefined) {
@@ -448,11 +451,13 @@ registerRoute("GET", "/api/bootstrap", async (_req, res) => {
     ...(hidden.has(cwd) ? { hidden: true as const } : {}),
   }));
   const cur = pool.current();
+  const upd = updateInfoNow();
   sendJson(res, 200, {
     version: OROSUS_VERSION,
     projects,
     pinned: readPins(pool.home),
     ...(cur !== undefined ? { currentSid: cur.sid } : {}),
+    ...(upd !== undefined ? { update: { current: OROSUS_VERSION, latest: upd.latest } } : {}),
   });
 });
 

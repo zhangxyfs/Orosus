@@ -135,6 +135,20 @@ pnpm gen-docs           # 生成 API 参考文档（docs/api，Markdown 人话�
 | MCP server 参考 | [docs/mcp-servers.md](docs/mcp-servers.md) |
 | API 文档（Markdown 生成） | [docs/api/README.md](docs/api/README.md) |
 
+## 更新日志
+
+> 每版一条（发布门禁强制在册）——已装用户在更新提示弹窗看到的内容即此段（npm registry 的 readme 与本文件同源）。
+
+### v0.1.1
+
+- **会话协同**：同项目会话互相看见——占用查询 / 认领 / 释放防止并行会话撞车，`/ps` 一条命令看本项目活跃会话，撞锁拒绝走结构化人话文案。
+- **共享记忆与导入**：跨会话共享记忆库（写 / 列 / 读 + `/tool-peers__memory` 浏览窗）；Claude Code / ZCode / qwen-code / codex / DeepSeek-Reasonix 五家既有记忆一键导入。
+- **更新检查与自升级**：每次启动自动检查新版本（有更新横幅常驻提示、失败静默不拦启动）；`orosus upgrade` 真进度条下载 + SRI 校验自升级；`/settings → 更新检查` 可关自动口。
+- **多语言**：简体中文 / 繁體中文 / English 三语界面 + multilang 语言包扩展档；`/settings → 切换语言`。
+- **视觉通道**：Alt+V 贴图、图 / 视频文件读取真实喂模型；非多模态模型可配视觉模型代看图（off / auto / 指定三态）。
+- **技能系统**：四轨技能目录（用户 / 项目 × 通用 / 品牌），同名项目压用户；出厂自带十一件技能。
+- **性能与稳定**：会话恢复窗口镜像全量升级、压缩后 token 口径修正、多处实机走查修复。
+
 ## License
 
 [MIT](LICENSE)

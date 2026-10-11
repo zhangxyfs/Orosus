@@ -1,4 +1,5 @@
-/** 设置端点（web 批 T11 建骨架 + MCP 页——§2 api-settings.ts 清单其余页归 T12/T13）：
+/** 设置端点（web 批 T11 骨架 + MCP 页；T12 本任务面——常规/语言/更新检查/模型偏好四页数据面 +
+ *  /api/update 更新内容链路；§2 清单其余页归 T13）：
  *  - GET /api/settings/mcp（§3 :254 → {servers:McpCatalogRow[]}）：mcp.catalog 服务行原样透传
  *    （五态/来源/指纹/failReason/connectMs 齐备——F6 详情页与 E5 审阅指纹的数据面）；
  *  - POST /api/settings/mcp/ops（§3 :255 {op,name?,spec?} → {ok,report?}）：op 透传 runMcpCommand
@@ -6,6 +7,20 @@
  *    模式同款 writeNestedTable 写器）+ start（E5 失败重连/F6 启动同口——懒启动件触发 mcp.start）；
  *    wrote → h.reload() 直接 await（§4-12：自带 in-flight 互斥与失败旧图续跑，busy 期排队语义同
  *    core——与 T10 模块插拔的 busy 409 不同面，MCP 设置写盘不拒 busy）+ panel 缓存显式失效。
+ *  - GET /api/settings/general（§3 :248，F1）：disk 五目录结构化（diskUsageText 同源名序）+ total 行、
+ *    tokens（h.usage 同源——本会话 current + 项目累计 lifetime）、ctx（lastUsageOf 末条投影 +
+ *    configFace 窗口）、runtime（托管装配时刻 elapsed——panel 同源）；
+ *  - GET/POST /api/settings/locale（§3 :259-260，F8）：三语 + 语言包槽列表；POST 走 h.setLanguage
+ *    （写 config 顶层 language + 内核地板对齐——新 harness 生效；页面自身不切语言，F8 边界）；
+ *  - GET/POST /api/settings/update（§3 :261-262，F9）：[update] check 开关读写（writeUpdateCheckKey）；
+ *  - POST /api/settings/prefs（§3 :263，F3）：模型偏好五键——visionModel（[tool-media] 三态）/
+ *    search.backend（[tool-web] 四态）/ [tool-subagent] model|approvalMode|maxTurns（null=跟随删键，
+ *    subagent-settings 写键族同款）——分别落 modules.d/tool-{media,web,subagent}.toml + reload 收口；
+ *  - GET /api/update（§3 :264，A4）：{current,latest?,hasUpdate,notes?,skipped?}——registry 全量 doc
+ *    自取（不动 update-check.ts 既有行为）：notes = readme 切「## 更新日志 → ### v<latest>」小节
+ *    （sliceChangelogNotes——与 scripts/release.mts 发布门禁同一格式契约）、skipped = versions 键序
+ *    中 current 与 latest 之间；懒取（弹窗打开才查）+ 1h 内存缓存 + 失败静默降级（回落启动检查缓存
+ *    updateInfoNow——stale-while-error，update-check.ts D2 同口径）。
  *  数据面锚定当前会话 harness（设置弹窗全局、模块图随会话——catalog/lazyState 每会话一图）；
  *  无当前会话 = GET 空表 / start 409；on/off/trust/remove/add 走纯配置面（deps 不含 getH）照常写盘，
  *  reload 缺席如实省略（report 不带——后续会话装配自然读新配置）。
@@ -14,10 +29,19 @@
  *  mcp-trust.json 模块侧硬编码 homedir()（知悉不修），web 侧注入 join(orosusHome(), "mcp-trust.json")
  *  ——生产（OROSUS_HOME 未设）与 mcpTrustFile() 同径，测试重定向隔离不落真 home。 */
 import { join } from "node:path";
-import { writeNestedTable, type Harness, type NestedTableValue, type ReloadReport } from "@orosus/core";
+import { loadConfig, sectionPath, writeSectionKey, writeNestedTable, type Harness, type NestedTableValue, type ReloadReport } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
+import { OROSUS_USER_AGENT, OROSUS_VERSION } from "@orosus/contracts/version";
+import { persistVisionModel } from "@orosus/tool-media";
 import type { McpCatalogRow } from "@orosus/mcp";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "../mcp-cmd.ts";
+import { configFace, configFacePaths } from "../config-face.ts";
+import { dirUsage } from "../tuicfg.ts";
+import { lastUsageOf } from "../usage-text.ts";
+import { BUILTIN_LOCALES, createLocaleStore } from "../i18n/store.ts";
+import { readUpdateCheckEnabled, updateConfigFile, writeUpdateCheckKey } from "../update-settings.ts";
+import { isNewerVersion, UPDATE_CHECK_TIMEOUT_MS, updateInfoNow } from "../update-check.ts";
+import { writeSubagentConfigKey } from "../subagent-settings.ts";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import { mcpCatalogService, invalidatePanelCache } from "./api-panel.ts";
@@ -230,4 +254,392 @@ registerRoute("POST", "/api/settings/mcp/ops", async (req, res) => {
   }
   const report = await reloadAfterWrite(anchor);
   sendJson(res, 200, { ok: true, text: r.text, ...(report !== undefined ? { report } : {}) });
+});
+
+// ---------- T12：常规 / 语言 / 更新检查 / 模型偏好（F1 / F8 / F9 / F3 数据面） ----------
+
+/** ctx 末条 usage 投影的事件末窗（lastUsageOf 只看末条 usage/compaction——50 条窗足够且成本有界，
+ *  §5 律三：设置弹窗打开才查，不随客户端数放大）。 */
+const GENERAL_CTX_EVENTS = 50;
+
+/** GET /api/settings/general → {ok, disk, tokens, ctx, runtime}（§3 :248，F1 常规页）。
+ *  disk：diskUsageText 同源五目录（cache/sessions/logs/tmp/modules——dirUsage 逐目录结构化）+
+ *  total 行（F1 磁盘条总计）；tokens：h.usage 同源（本会话 current + 项目累计 lifetime，四键恒在、
+ *  lifetime 缺席=0）；ctx：lastUsageOf 末条输入 + configFace 窗口链（pct = panel 同式）；runtime：
+ *  托管装配时刻 elapsed（Date.now()-createdAt——panel elapsedMs 同源，resume 不显历史年龄）。
+ *  无当前会话：disk 照常（home 面）、tokens/ctx.used 归零、elapsedMs=0——键形恒稳（前端渲染不掉键）。 */
+registerRoute("GET", "/api/settings/general", async (_req, res) => {
+  const home = orosusHome();
+  const names = ["cache", "sessions", "logs", "tmp", "modules"]; // diskUsageText 同源名序（usage-text.ts:76）
+  let totalBytes = 0;
+  let totalFiles = 0;
+  const disk: { name: string; mb: number; files: number }[] = [];
+  for (const name of names) {
+    const u = dirUsage(join(home, name));
+    totalBytes += u.bytes;
+    totalFiles += u.files;
+    disk.push({ name, mb: Math.round((u.bytes / 1024 / 1024) * 10) / 10, files: u.files });
+  }
+  disk.push({ name: "total", mb: Math.round((totalBytes / 1024 / 1024) * 10) / 10, files: totalFiles });
+
+  const hs = webHostPool()?.current();
+  const h = hs?.core;
+  let tokens = { input: 0, output: 0, lifetimeInput: 0, lifetimeOutput: 0 };
+  let used = 0;
+  if (h !== undefined && hs !== undefined) {
+    try {
+      const u = await h.usage(); // tokenUsageText 同一读口（本会话/项目累计双口径）
+      tokens = {
+        input: u.current.input,
+        output: u.current.output,
+        lifetimeInput: u.lifetime?.input ?? 0,
+        lifetimeOutput: u.lifetime?.output ?? 0,
+      };
+    } catch { /* usage 读失败——零值兜底（tokenUsageText 尽力面同款） */ }
+    try {
+      used = lastUsageOf(await hs.eventsPage(Number.MAX_SAFE_INTEGER, GENERAL_CTX_EVENTS)).input;
+    } catch { /* 尽力面同上 */ }
+  }
+  const window = configFace().contextWindow; // 解析链（config 显式 > models-dev > 200k 缺省）
+  const pct = window > 0 ? Math.min(100, Math.round((used / window) * 100)) : 0;
+  sendJson(res, 200, {
+    ok: true,
+    disk,
+    tokens,
+    ctx: { used, window, pct },
+    runtime: { elapsedMs: hs !== undefined ? Date.now() - hs.createdAt : 0 },
+  });
+});
+
+/** GET /api/settings/locale → {ok, current, locales:[{tag,label,module?}]}（§3 :259，F8）。
+ *  current = 分层配置顶层 language（未配置 = ""——前端按「随系统」渲染；harness 读口同源 loadConfig）；
+ *  locales = 内置三语原生名（BUILTIN_LOCALES）+ 语言包槽动态追加（createLocaleStore.availableLocales
+ *  ——main.ts:441 同一 store 构造式，module:true 标 multilang 扩展档；锚定 harness 的图换代窗 =
+ *  只出内置三语，降级不炸）。 */
+registerRoute("GET", "/api/settings/locale", async (_req, res) => {
+  const lang = loadConfig(configFacePaths()).core.language;
+  const current = typeof lang === "string" && lang !== "" ? lang : "";
+  const locales: { tag: string; label: string; module?: true }[] = BUILTIN_LOCALES.map((b) => ({ tag: b.tag, label: b.native }));
+  const anchor = anchorHarness();
+  if (anchor !== undefined) {
+    try {
+      const store = createLocaleStore({ getGraph: () => anchor.h.graph() });
+      await store.init(current === "" ? "en-US" : current); // setTag + rebuild（枚举 i18n.* 槽）
+      for (const e of store.availableLocales()) {
+        if (e.fromPack) locales.push({ tag: e.tag, label: e.native, module: true });
+      }
+    } catch { /* 图换代窗（CK-12）——内置三语兜底 */ }
+  }
+  sendJson(res, 200, { ok: true, current, locales });
+});
+
+/** POST /api/settings/locale {tag} → {ok}（§3 :260，F8）：h.setLanguage（core 单一写者口——写 config
+ *  顶层 language + setKernelLocale 内核地板对齐）。生效面 = 会话侧 t() 与新会话（F8 边界：web 页面
+ *  文案一期中文直写，语言切换不切页面自身）。合法档 = 内置三语 ∪ 语言包槽（图内 multilang）；
+ *  选当前语 = 无操作 noop（runLocaleSetting 同语义）。无当前会话 → 409（setLanguage 需 harness）。 */
+registerRoute("POST", "/api/settings/locale", async (req, res) => {
+  const raw = await readBody(req, SETTINGS_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { tag?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const tag = typeof body.tag === "string" ? body.tag.trim() : "";
+  if (tag === "") {
+    sendJson(res, 400, { ok: false, error: "tag 必填" });
+    return;
+  }
+  const anchor = anchorHarness();
+  if (anchor === undefined) {
+    sendJson(res, 409, { ok: false, error: "无当前会话" });
+    return;
+  }
+  let valid = BUILTIN_LOCALES.some((b) => b.tag === tag);
+  if (!valid) {
+    try {
+      const store = createLocaleStore({ getGraph: () => anchor.h.graph() });
+      await store.init("en-US");
+      valid = store.availableLocales().some((e) => e.tag === tag);
+    } catch { /* 图换代窗——只剩内置三语判定 */ }
+  }
+  if (!valid) {
+    sendJson(res, 400, { ok: false, error: `未知语言 "${tag}"（须为内置三语或已装语言包档）` });
+    return;
+  }
+  if (anchor.h.configuredLanguage() === tag) {
+    sendJson(res, 200, { ok: true, noop: true }); // 选当前语 = 无操作（不写盘——runLocaleSetting 同语义）
+    return;
+  }
+  try {
+    await anchor.h.setLanguage(tag);
+    sendJson(res, 200, { ok: true });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** GET /api/settings/update → {ok, enabled, current, latest?}（§3 :261，F9）：enabled = [update] check
+ *  开关（readUpdateCheckEnabled 用户层——设置流展示同口径，缺省开）；latest = 启动检查缓存直读
+ *  （updateInfoNow——server 无后台轮检，web server 进程由 main.ts 启动点火供值；未查过缺省）。 */
+registerRoute("GET", "/api/settings/update", async (_req, res) => {
+  const info = updateInfoNow();
+  sendJson(res, 200, {
+    ok: true,
+    enabled: readUpdateCheckEnabled(updateConfigFile()),
+    current: OROSUS_VERSION,
+    ...(info !== undefined ? { latest: info.latest } : {}),
+  });
+});
+
+/** POST /api/settings/update {enabled} → {ok}（§3 :262，F9）：writeUpdateCheckKey 写 [update] check
+ *  （留守节住 config.toml——行级节区感知保注释）；下次启动生效（自动口点火在 main.ts 启动期读开关）。 */
+registerRoute("POST", "/api/settings/update", async (req, res) => {
+  const raw = await readBody(req, SETTINGS_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { enabled?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  if (typeof body.enabled !== "boolean") {
+    sendJson(res, 400, { ok: false, error: "enabled 必须为布尔值" });
+    return;
+  }
+  writeUpdateCheckKey(body.enabled);
+  sendJson(res, 200, { ok: true });
+});
+
+/** prefs 写键的模块节路由（subagent-settings.ts:43 同款——五键全为内置模块节，路由恒 modules.d/
+ *  <名>.toml；sectionPath 负责建目录与带节头文件）。 */
+const prefsModuleFile = (name: string): string =>
+  sectionPath(name, { userConfig: join(orosusHome(), "config.toml"), modulesDir: join(orosusHome(), "modules.d"), isModule: () => true });
+
+/** POST /api/settings/prefs {key, value} → {ok, report?}（§3 :263，F3 模型偏好五键）：
+ *  - visionModel → [tool-media]（persistVisionModel——TUI runVisionSetting 同一写器；三态
+ *    off|auto|<槽/模型>）落 modules.d/tool-media.toml；
+ *  - search.backend → [tool-web.search]（writeSectionKey——四态 auto|llm|tavily|brave，
+ *    tool-web config schema 枚举同源）落 modules.d/tool-web.toml；
+ *  - model|approvalMode|maxTurns → [tool-subagent]（writeSubagentConfigKey——写法同
+ *    subagent-settings.ts:43-44：sectionPath 路由 + writeSectionKey，maxTurns 转 Number、
+ *    null=跟随删键）落 modules.d/tool-subagent.toml。
+ *  写盘 → reload 收口（§4-12 直接 await + panel 缓存失效——MCP ops 同口径；模块配置 reload 后生效）。
+ *  当前值读面不在 §3（T17 前端下拉的初值 = 各键缺省语义 + GET status/model 族——见 T12 报告接口确认）。 */
+registerRoute("POST", "/api/settings/prefs", async (req, res) => {
+  const raw = await readBody(req, SETTINGS_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { key?: unknown; value?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const key = typeof body.key === "string" ? body.key : "";
+  const value = body.value;
+  const anchor = anchorHarness();
+  try {
+    switch (key) {
+      case "visionModel": {
+        if (typeof value !== "string" || value.trim() === "") {
+          sendJson(res, 400, { ok: false, error: "visionModel 取值须为 off / auto / 模型全名（槽/模型）" });
+          return;
+        }
+        persistVisionModel(prefsModuleFile("tool-media"), value);
+        break;
+      }
+      case "search.backend": {
+        if (value !== "auto" && value !== "llm" && value !== "tavily" && value !== "brave") {
+          sendJson(res, 400, { ok: false, error: "search.backend 取值须为 auto / llm / tavily / brave" });
+          return;
+        }
+        writeSectionKey(prefsModuleFile("tool-web"), "tool-web.search", "backend", value);
+        break;
+      }
+      case "model": {
+        if (value !== null && (typeof value !== "string" || value.trim() === "")) {
+          sendJson(res, 400, { ok: false, error: "model 取值须为模型全名（槽/模型）或 null（跟随）" });
+          return;
+        }
+        writeSubagentConfigKey("model", value as string | null, join(orosusHome(), "config.toml"));
+        break;
+      }
+      case "approvalMode": {
+        if (value !== null && value !== "auto" && value !== "ask") {
+          sendJson(res, 400, { ok: false, error: "approvalMode 取值须为 auto / ask 或 null（跟随）" });
+          return;
+        }
+        writeSubagentConfigKey("approvalMode", value as string | null, join(orosusHome(), "config.toml"));
+        break;
+      }
+      case "maxTurns": {
+        if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || (value !== -1 && (value < 1 || value > 200)))) {
+          sendJson(res, 400, { ok: false, error: "maxTurns 取值须为 -1（不限）/ 1-200 整数或 null（跟随默认 100）" });
+          return;
+        }
+        writeSubagentConfigKey("maxTurns", value === null ? null : String(value), join(orosusHome(), "config.toml"));
+        break;
+      }
+      default:
+        sendJson(res, 400, { ok: false, error: "未知 key（合法键：visionModel / search.backend / model / approvalMode / maxTurns）" });
+        return;
+    }
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const report = await reloadAfterWrite(anchor);
+  sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
+});
+
+// ---------- T12：/api/update 更新内容链路（A4 胶囊 → 更新弹窗数据面） ----------
+
+/** registry 全量 doc URL（A4 选型：npm 是更新检查已验证可达的通道，registry doc 的 readme/versions
+ *  字段白送更新内容与落后清单——不引入 GitHub/Gitea Release 习惯与网络依赖）。 */
+const UPDATE_DOC_URL = "https://registry.npmjs.org/orosus";
+
+/** 更新内容内存缓存 TTL（§5 自创值登记表 :345「更新 notes 内存缓存 1h」——弹窗重复打开不重打
+ *  registry；版本内容演进以发布为界，1h 足新鲜）。 */
+const UPDATE_NOTES_CACHE_MS = 60 * 60 * 1000;
+
+/** registry 全量 doc 的消费面切片（形状校验后的窄视图）。 */
+interface RegistryDoc {
+  latest: string;
+  versions: Record<string, unknown>;
+  readme?: string | undefined;
+}
+
+/** 注入面 fetch（测试注假 registry——零真网络；缺省 global fetch）。最小结构面：url + headers/signal
+ *  init、{ok, status?, json()} 返回（typeof fetch 的窄形——免测试件 cast 全套 Response 面）。 */
+export type UpdateDocFetch = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<{ ok: boolean; status?: number; json(): Promise<unknown> }>;
+
+let updateFetchImpl: UpdateDocFetch | undefined;
+let updateDocCache: { at: number; doc: RegistryDoc } | undefined;
+
+/** 测试注入：假 registry fetch（undefined = 复位回 global fetch）。 */
+export const setUpdateFetchForTest = (f: UpdateDocFetch | undefined): void => {
+  updateFetchImpl = f;
+};
+
+/** 测试复位：清 notes/doc 内存缓存（每用例独立懒取）。 */
+export const resetUpdateCacheForTest = (): void => {
+  updateDocCache = undefined;
+};
+
+/** registry 全量 doc 取数（fetchLatestUpdate 同款纪律：10s 超时手控句柄 + 形状校验；失败抛错由
+ *  调用方静默降级——不动 update-check.ts 既有行为，web 侧自取）。 */
+const fetchRegistryDoc = async (): Promise<RegistryDoc> => {
+  const doFetch: UpdateDocFetch = updateFetchImpl ?? ((url, init) => fetch(url, init));
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), UPDATE_CHECK_TIMEOUT_MS);
+  try {
+    const res = await doFetch(UPDATE_DOC_URL, {
+      headers: { accept: "application/json", "user-agent": OROSUS_USER_AGENT },
+      signal: ac.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const doc = (await res.json()) as { "dist-tags"?: { latest?: unknown }; versions?: unknown; readme?: unknown };
+    if (typeof doc["dist-tags"]?.latest !== "string") throw new Error("unexpected registry payload shape");
+    return {
+      latest: doc["dist-tags"].latest,
+      versions: typeof doc.versions === "object" && doc.versions !== null && !Array.isArray(doc.versions) ? (doc.versions as Record<string, unknown>) : {},
+      ...(typeof doc.readme === "string" ? { readme: doc.readme } : {}),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/** npm registry readme「## 更新日志」段 → `### v<latest>` 小节切片（A4 更新内容数据源——纯函数，
+ *  测试直调两形）。段界：段头 ^##\s+更新日志\s*$ 起、下一个 ^## 止；小节头 ^###\s+v<版本>\s*$
+ *  严格形（scripts/release.mts readmeChangelogGate 发布门禁同一格式契约——两端一枚钉）。
+ *  返回小节全文（含 `### v<latest>` 头行——前端 marked 直渲）、尾空行剪净；无段/无该版小节 →
+ *  undefined（前端降级形态：版本号 + 落后列表 + 指引）。 */
+export function sliceChangelogNotes(readme: string | undefined, latest: string): string | undefined {
+  if (typeof readme !== "string" || readme === "") return undefined;
+  const target = `### v${latest}`;
+  const lines = readme.split(/\r?\n/);
+  const sectionRe = /^##\s+更新日志\s*$/;
+  let phase: "seek" | "section" = "seek";
+  let inSub = false;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (phase === "seek") {
+      if (sectionRe.test(line)) phase = "section";
+      continue;
+    }
+    if (/^##\s/.test(line)) break; // 下一个 h2——更新日志段止
+    if (/^###\s/.test(line)) {
+      inSub = line.trim() === target; // 小节头严格形（尾随空白容忍）
+      if (inSub) out.push(line.trim());
+      continue;
+    }
+    if (inSub) out.push(line);
+  }
+  while (out.length > 0 && out[out.length - 1]!.trim() === "") out.pop();
+  return out.length > 0 ? out.join("\n") : undefined;
+}
+
+/** skipped 推导：registry `versions` 键序（npm 按发布序插入）中 current 与 latest 之间的版本号
+ *  （不含两端——current 是在跑版、latest 是目标版；任一不在键序 = []，如实不猜）。 */
+const skippedVersions = (versions: Record<string, unknown>, current: string, latest: string): string[] => {
+  const keys = Object.keys(versions);
+  const i = keys.indexOf(current);
+  const j = keys.indexOf(latest);
+  return i >= 0 && j > i + 1 ? keys.slice(i + 1, j) : [];
+};
+
+/** GET /api/update → {current, latest?, hasUpdate, notes?, skipped?}（§3 :264，A4 更新弹窗数据面）。
+ *  - 懒取：弹窗打开才查（server 不后台轮检）；1h 内存缓存命中不重打 registry；
+ *  - 失败静默降级：doc 取数失败/坏形状 → 回落启动检查缓存 updateInfoNow（stale-while-error——
+ *    update-check.ts D2 同口径），仍无 → {current, hasUpdate:false}（latest 缺省）；
+ *  - latest 已知即随包回（即使 hasUpdate:false——「已是最新」也要能显示到什么版）；
+ *    notes/skipped 仅 hasUpdate 且 doc 在手时出（降级形不走这两个键——前端按缺席判降级）。 */
+registerRoute("GET", "/api/update", async (_req, res) => {
+  const current = OROSUS_VERSION;
+  let doc = updateDocCache !== undefined && Date.now() - updateDocCache.at < UPDATE_NOTES_CACHE_MS ? updateDocCache.doc : undefined;
+  if (doc === undefined) {
+    try {
+      doc = await fetchRegistryDoc();
+      updateDocCache = { at: Date.now(), doc };
+    } catch {
+      doc = undefined; // 静默降级——回落启动检查缓存（横幅同源值）
+    }
+  }
+  if (doc === undefined) {
+    const info = updateInfoNow();
+    if (info === undefined) {
+      sendJson(res, 200, { current, hasUpdate: false });
+      return;
+    }
+    sendJson(res, 200, { current, latest: info.latest, hasUpdate: isNewerVersion(info.latest, current) });
+    return;
+  }
+  const latest = doc.latest;
+  const hasUpdate = isNewerVersion(latest, current);
+  if (!hasUpdate) {
+    sendJson(res, 200, { current, latest, hasUpdate: false });
+    return;
+  }
+  const notes = sliceChangelogNotes(doc.readme, latest);
+  sendJson(res, 200, {
+    current,
+    latest,
+    hasUpdate: true,
+    ...(notes !== undefined ? { notes } : {}),
+    skipped: skippedVersions(doc.versions, current, latest),
+  });
 });
