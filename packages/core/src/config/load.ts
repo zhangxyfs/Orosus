@@ -190,7 +190,10 @@ export function modelsDevCacheFile(home: string): string {
  *  信封形状 { fetchedAt, catalog } 与 provider-custom catalog.ts 同一外部格式（models.dev api.json）。
  *  缺文件/坏 JSON/坏形状 → undefined（兜底读取不炸不吵）。 */
 let modelsDevMemo: { file: string; mtimeMs: number; catalog: Record<string, unknown> | undefined } | undefined;
-function readModelsDevCatalog(catalogFile: string): Record<string, unknown> | undefined {
+/** web 批 T13 导出（GC1 白名单——纯导出增量，无行为变化）：设置·提供商面读盘上目录缓存。
+ *  此前模块私有，消费方只有本文件窗口链；web 侧不得 import provider-custom（可卸载模块禁令），
+ *  目录数据走本读口（缓存文件与模块 defaultCatalogCacheFile 同一）。 */
+export function readModelsDevCatalog(catalogFile: string): Record<string, unknown> | undefined {
   try {
     const st = statSync(catalogFile);
     if (modelsDevMemo?.file === catalogFile && modelsDevMemo.mtimeMs === st.mtimeMs) return modelsDevMemo.catalog;

@@ -1,5 +1,6 @@
-/** 设置端点（web 批 T11 骨架 + MCP 页；T12 本任务面——常规/语言/更新检查/模型偏好四页数据面 +
- *  /api/update 更新内容链路；§2 清单其余页归 T13）：
+/** 设置端点（web 批 T11 骨架 + MCP 页；T12——常规/语言/更新检查/模型偏好四页数据面；
+ *  T13 本任务面——技能/钩子/记忆三页 + 提供商面独立模块 api-providers.ts；/api/update 更新内容链
+ *  T13 拆出 update-notes.ts〔评审指针，行为不变〕）：
  *  - GET /api/settings/mcp（§3 :254 → {servers:McpCatalogRow[]}）：mcp.catalog 服务行原样透传
  *    （五态/来源/指纹/failReason/connectMs 齐备——F6 详情页与 E5 审阅指纹的数据面）；
  *  - POST /api/settings/mcp/ops（§3 :255 {op,name?,spec?} → {ok,report?}）：op 透传 runMcpCommand
@@ -16,11 +17,18 @@
  *  - POST /api/settings/prefs（§3 :263，F3）：模型偏好五键——visionModel（[tool-media] 三态）/
  *    search.backend（[tool-web] 四态）/ [tool-subagent] model|approvalMode|maxTurns（null=跟随删键，
  *    subagent-settings 写键族同款）——分别落 modules.d/tool-{media,web,subagent}.toml + reload 收口；
- *  - GET /api/update（§3 :264，A4）：{current,latest?,hasUpdate,notes?,skipped?}——registry 全量 doc
- *    自取（不动 update-check.ts 既有行为）：notes = readme 切「## 更新日志 → ### v<latest>」小节
- *    （sliceChangelogNotes——与 scripts/release.mts 发布门禁同一格式契约）、skipped = versions 键序
- *    中 current 与 latest 之间；懒取（弹窗打开才查）+ 1h 内存缓存 + 失败静默降级（回落启动检查缓存
- *    updateInfoNow——stale-while-error，update-check.ts D2 同口径）。
+ *  - GET/POST /api/settings/skills（§3 :249-250，F4）：skill.catalog 服务行（四轨 scope/file）+
+ *    disabled 盘上现读覆盖（TUI skillCatalogRows 同口径——reload 前的 catalog 停用快照滞后，以盘
+ *    为准）；POST toggle 写 [skill] disabled 数组（toggleSkillDisabled——modules.d/skill.toml）+
+ *    reload 收口；
+ *  - GET/POST /api/settings/hooks（§3 :251-253，F5）：hooksFace(cwd)（池 startCwd——模块 .orosus
+ *    路径读点同口径）两层分节 + 项目信任态现算；POST toggle 行级改写（setHookDisabled——定位参
+ *    (file,event,tableIdx,hookIdx) 须命中当前 face 的实际行，file 白名单 = face 两文件——任意路径
+ *    写盘防线）；POST trust 写 hooks-trust.json（trustProjectHooks——sha256 digest 登记）+ reload；
+ *  - GET/POST /api/settings/memory（§3 :256-258，F7）：readPeersConfig/writePeersConfigKey 双开关
+ *    （[tool-peers] 键）+ 五源探测（detectSources——tool-peers 纯函数直用，main.ts:543 同源接线）；
+ *    POST import = 一次性搬运（detect + readSourceNotes + importNotes——organize 关〔D20 缺省零
+ *    token〕、mode=current 同 CLI）。
  *  数据面锚定当前会话 harness（设置弹窗全局、模块图随会话——catalog/lazyState 每会话一图）；
  *  无当前会话 = GET 空表 / start 409；on/off/trust/remove/add 走纯配置面（deps 不含 getH）照常写盘，
  *  reload 缺席如实省略（report 不带——后续会话装配自然读新配置）。
@@ -28,24 +36,35 @@
  *  （mcp/index.ts:379 读 process.cwd()）——deps.projectPath 即池 startCwd 与模块同口径；
  *  mcp-trust.json 模块侧硬编码 homedir()（知悉不修），web 侧注入 join(orosusHome(), "mcp-trust.json")
  *  ——生产（OROSUS_HOME 未设）与 mcpTrustFile() 同径，测试重定向隔离不落真 home。 */
+import { homedir } from "node:os";
 import { join } from "node:path";
+import type { IncomingMessage } from "node:http";
 import { loadConfig, sectionPath, writeSectionKey, writeNestedTable, type Harness, type NestedTableValue, type ReloadReport } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
-import { OROSUS_USER_AGENT, OROSUS_VERSION } from "@orosus/contracts/version";
+import type { CapabilityKey } from "@orosus/contracts/module";
+import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { persistVisionModel } from "@orosus/tool-media";
 import type { McpCatalogRow } from "@orosus/mcp";
+import { detectSources, findGitRoot, importNotes, memoryBucketKey, readSourceNotes, type PeerHomes } from "@orosus/tool-peers";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "../mcp-cmd.ts";
 import { configFace, configFacePaths } from "../config-face.ts";
 import { dirUsage } from "../tuicfg.ts";
 import { lastUsageOf } from "../usage-text.ts";
 import { BUILTIN_LOCALES, createLocaleStore } from "../i18n/store.ts";
 import { readUpdateCheckEnabled, updateConfigFile, writeUpdateCheckKey } from "../update-settings.ts";
-import { isNewerVersion, UPDATE_CHECK_TIMEOUT_MS, updateInfoNow } from "../update-check.ts";
+import { updateInfoNow } from "../update-check.ts";
 import { writeSubagentConfigKey } from "../subagent-settings.ts";
+import { readSkillDisabled, toggleSkillDisabled } from "../skill-settings.ts";
+import { hooksFace, setHookDisabled, trustProjectHooks } from "../hooks-ui.ts";
+import { readPeersConfig, writePeersConfigKey } from "../peers-settings.ts";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import { mcpCatalogService, invalidatePanelCache } from "./api-panel.ts";
 import { t } from "../i18n/app.ts";
+import "./update-notes.ts"; // T12 更新内容链（T13 拆出独立模块——模块加载即注册 GET /api/update）
+import "./api-providers.ts"; // T13 提供商面端点（/api/providers*——readiness 序经本文件链入 mod.ts）
+// T12 测试注入面 re-export（settings-data.test 既有 import 路径兼容——拆分行为不变）
+export { sliceChangelogNotes, setUpdateFetchForTest, resetUpdateCacheForTest, type UpdateDocFetch } from "./update-notes.ts";
 
 /** 会话解析后的 JSON 体上限（send/toggle 1MiB 同款自创值口径——edit spec/env 表量级，防失控客户端）。 */
 const SETTINGS_BODY_MAX_BYTES = 1024 * 1024;
@@ -505,141 +524,240 @@ registerRoute("POST", "/api/settings/prefs", async (req, res) => {
   sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
 });
 
-// ---------- T12：/api/update 更新内容链路（A4 胶囊 → 更新弹窗数据面） ----------
+// ---------- T13：技能 / 钩子 / 记忆（F4 / F5 / F7 数据面） ----------
 
-/** registry 全量 doc URL（A4 选型：npm 是更新检查已验证可达的通道，registry doc 的 readme/versions
- *  字段白送更新内容与落后清单——不引入 GitHub/Gitea Release 习惯与网络依赖）。 */
-const UPDATE_DOC_URL = "https://registry.npmjs.org/orosus";
-
-/** 更新内容内存缓存 TTL（§5 自创值登记表 :345「更新 notes 内存缓存 1h」——弹窗重复打开不重打
- *  registry；版本内容演进以发布为界，1h 足新鲜）。 */
-const UPDATE_NOTES_CACHE_MS = 60 * 60 * 1000;
-
-/** registry 全量 doc 的消费面切片（形状校验后的窄视图）。 */
-interface RegistryDoc {
-  latest: string;
-  versions: Record<string, unknown>;
-  readme?: string | undefined;
-}
-
-/** 注入面 fetch（测试注假 registry——零真网络；缺省 global fetch）。最小结构面：url + headers/signal
- *  init、{ok, status?, json()} 返回（typeof fetch 的窄形——免测试件 cast 全套 Response 面）。 */
-export type UpdateDocFetch = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<{ ok: boolean; status?: number; json(): Promise<unknown> }>;
-
-let updateFetchImpl: UpdateDocFetch | undefined;
-let updateDocCache: { at: number; doc: RegistryDoc } | undefined;
-
-/** 测试注入：假 registry fetch（undefined = 复位回 global fetch）。 */
-export const setUpdateFetchForTest = (f: UpdateDocFetch | undefined): void => {
-  updateFetchImpl = f;
-};
-
-/** 测试复位：清 notes/doc 内存缓存（每用例独立懒取）。 */
-export const resetUpdateCacheForTest = (): void => {
-  updateDocCache = undefined;
-};
-
-/** registry 全量 doc 取数（fetchLatestUpdate 同款纪律：10s 超时手控句柄 + 形状校验；失败抛错由
- *  调用方静默降级——不动 update-check.ts 既有行为，web 侧自取）。 */
-const fetchRegistryDoc = async (): Promise<RegistryDoc> => {
-  const doFetch: UpdateDocFetch = updateFetchImpl ?? ((url, init) => fetch(url, init));
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), UPDATE_CHECK_TIMEOUT_MS);
+/** POST 体解析小件（本节各端点同口径：上限 + JSON parse；failed = status/msg 已定，调用方直发）。 */
+type BodyResult = { failed: true; status: number; msg: string } | { failed: false; body: Record<string, unknown> };
+const readSettingsBody = async (req: IncomingMessage): Promise<BodyResult> => {
+  const raw = await readBody(req, SETTINGS_BODY_MAX_BYTES);
+  if (raw === "too-large") return { failed: true, status: 413, msg: "body too large" };
   try {
-    const res = await doFetch(UPDATE_DOC_URL, {
-      headers: { accept: "application/json", "user-agent": OROSUS_USER_AGENT },
-      signal: ac.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const doc = (await res.json()) as { "dist-tags"?: { latest?: unknown }; versions?: unknown; readme?: unknown };
-    if (typeof doc["dist-tags"]?.latest !== "string") throw new Error("unexpected registry payload shape");
-    return {
-      latest: doc["dist-tags"].latest,
-      versions: typeof doc.versions === "object" && doc.versions !== null && !Array.isArray(doc.versions) ? (doc.versions as Record<string, unknown>) : {},
-      ...(typeof doc.readme === "string" ? { readme: doc.readme } : {}),
-    };
-  } finally {
-    clearTimeout(timer);
+    return { failed: false, body: JSON.parse(raw.toString("utf8")) as Record<string, unknown> };
+  } catch {
+    return { failed: true, status: 400, msg: "invalid json" };
   }
 };
 
-/** npm registry readme「## 更新日志」段 → `### v<latest>` 小节切片（A4 更新内容数据源——纯函数，
- *  测试直调两形）。段界：段头 ^##\s+更新日志\s*$ 起、下一个 ^## 止；小节头 ^###\s+v<版本>\s*$
- *  严格形（scripts/release.mts readmeChangelogGate 发布门禁同一格式契约——两端一枚钉）。
- *  返回小节全文（含 `### v<latest>` 头行——前端 marked 直渲）、尾空行剪净；无段/无该版小节 →
- *  undefined（前端降级形态：版本号 + 落后列表 + 指引）。 */
-export function sliceChangelogNotes(readme: string | undefined, latest: string): string | undefined {
-  if (typeof readme !== "string" || readme === "") return undefined;
-  const target = `### v${latest}`;
-  const lines = readme.split(/\r?\n/);
-  const sectionRe = /^##\s+更新日志\s*$/;
-  let phase: "seek" | "section" = "seek";
-  let inSub = false;
-  const out: string[] = [];
-  for (const line of lines) {
-    if (phase === "seek") {
-      if (sectionRe.test(line)) phase = "section";
-      continue;
-    }
-    if (/^##\s/.test(line)) break; // 下一个 h2——更新日志段止
-    if (/^###\s/.test(line)) {
-      inSub = line.trim() === target; // 小节头严格形（尾随空白容忍）
-      if (inSub) out.push(line.trim());
-      continue;
-    }
-    if (inSub) out.push(line);
-  }
-  while (out.length > 0 && out[out.length - 1]!.trim() === "") out.pop();
-  return out.length > 0 ? out.join("\n") : undefined;
+/** web 侧项目根（钩子/记忆的项目层读点）：池 startCwd（server 启动 cwd 定格——§4-1 模块 process.cwd()
+ *  读点同口径；无池 = process.cwd() 兜底）。 */
+const webCwd = (): string => webHostPool()?.startCwd ?? process.cwd();
+
+/** skill.catalog 行（消费面类型本地声明——圈地纪律；字段与 skill 模块 catalogRow 对齐）。
+ *  服务键正型访问（T6 遗留 Minor 的本任务侧收口：CapabilityKey 品牌类型替代 cmdrouter 的
+ *  "skill.catalog" as never 逃生口——cmdrouter.ts 属 T6 文件不动，两处消费暂各自持键，取舍见报告）。 */
+interface SkillRow {
+  name: string;
+  description: string;
+  whenToUse?: string;
+  layer: string;
+  source: string;
+  file: string;
+  disabled: boolean;
+  modelInvocable: boolean;
 }
+const SKILL_CATALOG: CapabilityKey<() => SkillRow[]> = "skill.catalog";
 
-/** skipped 推导：registry `versions` 键序（npm 按发布序插入）中 current 与 latest 之间的版本号
- *  （不含两端——current 是在跑版、latest 是目标版；任一不在键序 = []，如实不猜）。 */
-const skippedVersions = (versions: Record<string, unknown>, current: string, latest: string): string[] => {
-  const keys = Object.keys(versions);
-  const i = keys.indexOf(current);
-  const j = keys.indexOf(latest);
-  return i >= 0 && j > i + 1 ? keys.slice(i + 1, j) : [];
+/** GET /api/settings/skills → {ok, skills:[{name,desc,usage?,scope,file,disabled}]}（§3 :249，F4）。
+ *  数据源 = 锚定 harness 的 skill.catalog 服务（目录现读——每次调用重扫磁盘，UI 面活数据）+ disabled
+ *  盘上现读覆盖（TUI skillCatalogRows 同口径：写盘与 reload 之间的快照滞后以盘为准）。无当前会话 /
+ *  模块未启用 → 空表（管理面缺席，前端指路文案自理）。 */
+registerRoute("GET", "/api/settings/skills", async (_req, res) => {
+  const anchor = anchorHarness();
+  let rows: SkillRow[] = [];
+  if (anchor !== undefined) {
+    try {
+      const catalog = await anchor.h.graph().services.getOptional(SKILL_CATALOG);
+      rows = typeof catalog === "function" ? catalog() : [];
+    } catch {
+      rows = []; // 服务面异常按空目录（cmdrouter skillSubmitOf 同口径）
+    }
+  }
+  const disabledNow = new Set(readSkillDisabled());
+  sendJson(res, 200, {
+    ok: true,
+    skills: rows.map((r) => ({
+      name: r.name,
+      desc: r.description,
+      ...(r.whenToUse !== undefined && r.whenToUse !== "" ? { usage: r.whenToUse } : {}),
+      scope: r.layer,
+      file: r.file,
+      disabled: disabledNow.has(r.name),
+    })),
+  });
+});
+
+/** POST /api/settings/skills/toggle {name, disabled} → {ok}（§3 :250，F4）：toggleSkillDisabled 写
+ *  [skill] disabled 数组（路由内建 → modules.d/skill.toml——空表删键回缺省态）+ reload 收口。
+ *  目标态与现态一致 → noop:true 不写盘（locale POST 同语义）；写盘 → h.reload()（§4-12 直接 await）。 */
+registerRoute("POST", "/api/settings/skills/toggle", async (req, res) => {
+  const b = await readSettingsBody(req);
+  if (b.failed) {
+    sendJson(res, b.status, { ok: false, error: b.msg });
+    return;
+  }
+  const name = typeof b.body["name"] === "string" ? b.body["name"].trim() : "";
+  if (typeof b.body["name"] !== "string" || name === "" || /\s/.test(name)) {
+    sendJson(res, 400, { ok: false, error: "name 必填（技能名，不含空白）" });
+    return;
+  }
+  if (typeof b.body["disabled"] !== "boolean") {
+    sendJson(res, 400, { ok: false, error: "disabled 必须为布尔值" });
+    return;
+  }
+  const anchor = anchorHarness();
+  const nowDisabled = readSkillDisabled().includes(name);
+  if (nowDisabled === b.body["disabled"]) {
+    sendJson(res, 200, { ok: true, noop: true }); // 同态无操作（不写盘不 reload）
+    return;
+  }
+  try {
+    toggleSkillDisabled(name);
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const report = await reloadAfterWrite(anchor);
+  sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
+});
+
+/** GET /api/settings/hooks → {ok, user, project, projectTrusted}（§3 :251，F5）：hooksFace(webCwd())
+ *  两层分节（user = <home>/modules.d/hooks.toml、project = <webCwd>/.orosus/modules.d/hooks.toml）+
+ *  项目信任态现算（evaluateProjectTrust 同源——面板与执行门同一判据）。行原样透传（event/command/
+ *  name?/product?/matcher?/timeout?/disabled/file/tableIdx/hookIdx——toggle 定位四元组随行自带）。 */
+registerRoute("GET", "/api/settings/hooks", async (_req, res) => {
+  const face = hooksFace(webCwd());
+  sendJson(res, 200, {
+    ok: true,
+    user: face.rows.filter((r) => r.origin === "user"),
+    project: face.rows.filter((r) => r.origin === "project"),
+    projectTrusted: face.projectTrusted,
+  });
+});
+
+/** POST /api/settings/hooks/toggle {file,event,tableIdx,hookIdx,disabled} → {ok}（§3 :252，F5）：
+ *  setHookDisabled 行级改写（保注释保键序——TUI e 键同款写器）。**写盘前双重防线**（checkEditSpec
+ *  同族纪律）：① file 白名单 = 当前 face 的 userFile/projectFile（setHookDisabled 收任意路径——
+ *  不设防即任意文件写盘口）；② 定位四元组须命中 face 的实际行（结构已变/陈旧索引 → 400 而非
+ *  写错行）。过验后写盘 + reload 收口（TUI 的 reloadModulesIdle 缓挂在 web 侧统一为 §4-12 直等）。 */
+registerRoute("POST", "/api/settings/hooks/toggle", async (req, res) => {
+  const b = await readSettingsBody(req);
+  if (b.failed) {
+    sendJson(res, b.status, { ok: false, error: b.msg });
+    return;
+  }
+  const file = typeof b.body["file"] === "string" ? b.body["file"] : "";
+  const event = typeof b.body["event"] === "string" ? b.body["event"] : "";
+  const tableIdx = b.body["tableIdx"];
+  const hookIdx = b.body["hookIdx"];
+  const disabled = b.body["disabled"];
+  if (typeof tableIdx !== "number" || !Number.isInteger(tableIdx) || tableIdx < 0
+    || typeof hookIdx !== "number" || !Number.isInteger(hookIdx) || hookIdx < 0) {
+    sendJson(res, 400, { ok: false, error: "tableIdx/hookIdx 必须为非负整数（行定位——GET 行自带）" });
+    return;
+  }
+  if (typeof disabled !== "boolean") {
+    sendJson(res, 400, { ok: false, error: "disabled 必须为布尔值" });
+    return;
+  }
+  const face = hooksFace(webCwd());
+  if (file !== face.userFile && file !== face.projectFile) {
+    sendJson(res, 400, { ok: false, error: "file 须为当前钩子面的用户级/项目级文件（GET 行自带）" });
+    return;
+  }
+  const hit = face.rows.find((r) => r.file === file && r.event === event && r.tableIdx === tableIdx && r.hookIdx === hookIdx);
+  if (hit === undefined) {
+    sendJson(res, 400, { ok: false, error: "未定位到该钩子行（结构已变——刷新列表后重试）" });
+    return;
+  }
+  const anchor = anchorHarness();
+  try {
+    setHookDisabled(file, hit.event, tableIdx, hookIdx, disabled);
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const report = await reloadAfterWrite(anchor);
+  sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
+});
+
+/** POST /api/settings/hooks/trust {} → {ok}（§3 :253，F5）：trustProjectHooks 写
+ *  <home>/hooks/hooks-trust.json（项目层 hooks.toml 当前内容 sha256 登记——审查即信任，即时生效）
+ *  + reload 收口（§1 F5 web 行：信任审查写盘 + reload）。项目层不适用/不可读 → 400（模块同款语义）。 */
+registerRoute("POST", "/api/settings/hooks/trust", async (req, res) => {
+  const b = await readSettingsBody(req);
+  if (b.failed) {
+    sendJson(res, b.status, { ok: false, error: b.msg });
+    return;
+  }
+  const anchor = anchorHarness();
+  try {
+    trustProjectHooks(webCwd());
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const report = await reloadAfterWrite(anchor);
+  sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
+});
+
+/** 五源家目录（main.ts:501 memorySourceHomes 同源——homedir 锚定，探测纯读；web 侧复刻接线，
+ *  detectSources/importNotes 为 tool-peers 模块包纯函数直用——brief Interfaces 明文允许）。 */
+const memorySourceHomes = (): PeerHomes => {
+  const home = homedir();
+  return {
+    claude: join(home, ".claude"),
+    zcode: join(home, ".zcode"),
+    qwen: join(home, ".qwen"),
+    codex: join(home, ".codex"),
+    reasonix: join(home, ".reasonix"),
+  };
 };
 
-/** GET /api/update → {current, latest?, hasUpdate, notes?, skipped?}（§3 :264，A4 更新弹窗数据面）。
- *  - 懒取：弹窗打开才查（server 不后台轮检）；1h 内存缓存命中不重打 registry；
- *  - 失败静默降级：doc 取数失败/坏形状 → 回落启动检查缓存 updateInfoNow（stale-while-error——
- *    update-check.ts D2 同口径），仍无 → {current, hasUpdate:false}（latest 缺省）；
- *  - latest 已知即随包回（即使 hasUpdate:false——「已是最新」也要能显示到什么版）；
- *    notes/skipped 仅 hasUpdate 且 doc 在手时出（降级形不走这两个键——前端按缺席判降级）。 */
-registerRoute("GET", "/api/update", async (_req, res) => {
-  const current = OROSUS_VERSION;
-  let doc = updateDocCache !== undefined && Date.now() - updateDocCache.at < UPDATE_NOTES_CACHE_MS ? updateDocCache.doc : undefined;
-  if (doc === undefined) {
-    try {
-      doc = await fetchRegistryDoc();
-      updateDocCache = { at: Date.now(), doc };
-    } catch {
-      doc = undefined; // 静默降级——回落启动检查缓存（横幅同源值）
-    }
-  }
-  if (doc === undefined) {
-    const info = updateInfoNow();
-    if (info === undefined) {
-      sendJson(res, 200, { current, hasUpdate: false });
-      return;
-    }
-    sendJson(res, 200, { current, latest: info.latest, hasUpdate: isNewerVersion(info.latest, current) });
+/** 当前项目记忆桶（main.ts:515 currentMemoryDir 同源——memoryBucketKey 键目录下的 memory/）。 */
+const currentMemoryDir = (): string => join(orosusHome(), "memories", "projects", memoryBucketKey(webCwd()), "memory");
+
+/** GET /api/settings/memory → {ok, workspaceMemory, sessionPeers, sources}（§3 :256，F7）：双开关读
+ *  [tool-peers] 两键（缺键 = 关）+ 五源探测（有货才列——runMemoryImportChoose 同口径 count>0；
+ *  id 集 = claude-code/zcode/qwen/codex/reasonix）。 */
+registerRoute("GET", "/api/settings/memory", async (_req, res) => {
+  const cfg = readPeersConfig();
+  const cwd = webCwd();
+  const sources = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd)
+    .filter((s) => s.count > 0)
+    .map((s) => s.id);
+  sendJson(res, 200, { ok: true, workspaceMemory: cfg.workspaceMemory, sessionPeers: cfg.sessionPeers, sources });
+});
+
+/** POST /api/settings/memory {key, value} → {ok}（§3 :257，F7）：writePeersConfigKey 写 [tool-peers]
+ *  单键（布尔裸值，路由内建 → modules.d/tool-peers.toml）+ reload 收口（D15 写键后重载）。 */
+registerRoute("POST", "/api/settings/memory", async (req, res) => {
+  const b = await readSettingsBody(req);
+  if (b.failed) {
+    sendJson(res, b.status, { ok: false, error: b.msg });
     return;
   }
-  const latest = doc.latest;
-  const hasUpdate = isNewerVersion(latest, current);
-  if (!hasUpdate) {
-    sendJson(res, 200, { current, latest, hasUpdate: false });
+  const key = b.body["key"];
+  if (key !== "workspaceMemory" && key !== "sessionPeers") {
+    sendJson(res, 400, { ok: false, error: "key 必须为 workspaceMemory / sessionPeers" });
     return;
   }
-  const notes = sliceChangelogNotes(doc.readme, latest);
-  sendJson(res, 200, {
-    current,
-    latest,
-    hasUpdate: true,
-    ...(notes !== undefined ? { notes } : {}),
-    skipped: skippedVersions(doc.versions, current, latest),
-  });
+  if (typeof b.body["value"] !== "boolean") {
+    sendJson(res, 400, { ok: false, error: "value 必须为布尔值" });
+    return;
+  }
+  writePeersConfigKey(key, b.body["value"]);
+  const report = await reloadAfterWrite(anchorHarness());
+  sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
+});
+
+/** POST /api/settings/memory/import {} → {ok, imported}（§3 :258，F7）：一次性搬运（D18——CLI
+ *  main.ts:543-568 current 模式同源接线）：detectSources → 有货源 readSourceNotes 汇总 →
+ *  importNotes 落当前项目桶（标题精确去重、逐条写文件、索引末次重建）。organize = false（D20 缺省
+ *  关——web 导入不耗 token；整理通道属 TUI 全屏流，web 一期不做）。无源 → imported:0 零落盘。 */
+registerRoute("POST", "/api/settings/memory/import", async (_req, res) => {
+  const cwd = webCwd();
+  const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd).filter((s) => s.count > 0);
+  const all = srcs.flatMap((s) => readSourceNotes(s.dir));
+  const r = importNotes(currentMemoryDir(), all);
+  sendJson(res, 200, { ok: true, imported: r.imported });
 });
