@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orosus（连山）· Web</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <!-- 窗体几何：整个应用窗体随浏览器渲染窗口自适应（:root --app-h——视口驱动，GC11），
+       不做固定像素；右侧面板按 55/45 弹性分配高度（与 TUI fullapp 的 statusH/taskH 同口径）；
+       设置弹窗高 = min(560px, 100vh − 160px)。勿写死像素。 -->
+  <div class="app" id="app">
+    <!-- appbar -->
+    <div class="appbar">
+      <img class="ab-logo" src="/assets/logo-icon-color.webp" alt="" />
+      <span class="ab-brand">orosus</span>
+      <button class="ab-title" id="session-title" title="点击聚焦左栏当前会话行"></button>
+      <span class="ab-addr gutter-hide" id="ab-addr"></span>
+      <span class="ab-acts">
+        <button class="btn-update" id="btn-update" title="新版本可用——查看更新" hidden>● 更新</button>
+        <button class="btn" id="btn-settings" title="设置">⚙ 设置</button>
+        <button class="btn" id="btn-help" title="帮助（/help）">? 帮助</button>
+        <button class="btn" id="btn-more" title="更多：诊断 / 模块总览 / 钩子注入 / 压缩摘要（TUI 的 Ctrl+E/P/H/O，浏览器键位冲突故入口在此）">⋮ 更多</button>
+        <button class="btn" id="btn-theme" title="切换浅色 / 深色主题">☀ 浅色</button>
+      </span>
+    </div>
+
+    <div class="app-body">
+      <!-- ═══ 左侧会话栏：新会话 / 置顶（含收缩钮） / 项目分组 / 当前高亮 ═══ -->
+      <aside class="lside" id="lside">
+        <div class="ls-rail-head">
+          <img class="ls-rail-logo" src="/assets/logo-icon-color.webp" alt="Orosus" />
+          <button class="ls-collapse" id="ls-collapse-rail" title="展开会话栏">⇥</button>
+        </div>
+        <div class="ls-top">
+          <button class="btn primary ls-new" id="btn-new" title="开始新会话（跟随当前会话所在项目）">＋ 新会话</button>
+        </div>
+        <div class="ls-body" id="ls-body"></div>
+      </aside>
+
+      <!-- ═══ left: stream / composer ═══ -->
+      <div class="main">
+        <!-- 悬浮任务清单（右栏收缩时出现，点击药丸展开） -->
+        <div class="todo-float" id="todo-float" hidden>
+          <button class="tf-pill" id="tf-pill" title="展开任务清单"><span class="ok">✓</span> <span class="tf-count" id="tf-count">0/0</span> 任务 <span class="tf-open">⇲</span></button>
+          <div class="tf-card" id="tf-card" hidden>
+            <div class="tf-head"><span>任务清单</span><span id="tf-count2">0/0</span></div>
+            <div class="tf-list" id="tf-list"></div>
+          </div>
+        </div>
+        <div class="stream" id="stream">
+          <div id="welcome" hidden>
+            <div class="banner">
+              <img src="/assets/logo-icon-color.webp" alt="Orosus logo" />
+              <div class="banner-meta">
+                <div><span class="ver" id="welcome-ver">v?</span><span class="sep">—</span><span class="dim">模块化 AI Agent Harness · Web</span></div>
+                <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。如层峦绵亘，灵脉贯通。</div>
+              </div>
+            </div>
+            <div class="line banner-hint">/ 命令菜单（含技能区） · @ 文件引用 · Enter 发送 · Shift + Enter 换行</div>
+            <div class="line banner-hint">点击展开思考与 diff · 面板页签点击切卡 · 顶栏按钮与芯片全部可点</div>
+          </div>
+
+          <div class="gap"></div>
+
+          <div class="pg-more" id="pg-more" hidden>↑ 加载更早消息</div>
+
+          <div class="gap"></div>
+          <div class="line dim" id="stream-tail">正在连接…</div>
+        </div>
+
+        <!-- composer 区 -->
+        <div class="composer-zone">
+          <div class="queuebar" id="queuebar"></div>
+          <div class="toastline" id="toastline"></div>
+          <form class="inputwrap" id="input-form" autocomplete="off">
+            <div class="popup" id="popup" hidden></div>
+            <div class="inputbox">
+              <!-- 文件夹切换：输入框正上方 6px、与框左缘对齐，仅空会话显示 -->
+              <button type="button" class="cwd-chip" id="cwd-chip" hidden title="切换工作目录"><span class="cwd-ic">📁</span> <span id="cwd-name"></span> ▾</button>
+              <!-- 贴图预览条（在框内、textarea 上方） -->
+              <div class="attachbar" id="attachbar" hidden></div>
+              <div class="ib-main">
+                <span class="pchar" aria-hidden="true">❯</span>
+                <textarea id="prompt-input" rows="2" placeholder="向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…" aria-label="指令输入框"></textarea>
+              </div>
+              <div class="ib-bar">
+                <span class="cb-left">
+                  <button type="button" class="cb-chip" id="btn-file" title="引用文件（= 输入 @）">＋ 文件</button>
+                  <button type="button" class="mode-chip" id="mode-chip" title="权限模式（点击打开档位列表）"></button>
+                </span>
+                <span class="cb-right">
+                  <button type="button" class="cb-chip" id="model-chip" title="切换模型"></button>
+                  <button type="button" class="cb-chip" id="effort-chip" title="思考投入档位"></button>
+                  <button type="submit" class="sendbtn idle" id="send-btn" title="发送（Enter）" aria-label="发送">↑</button>
+                </span>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- ═══ right sidebar ═══ -->
+      <aside class="side" id="rside">
+        <button class="rs-expand-btn" id="rs-expand" title="展开状态栏">⇤</button>
+        <!-- 右上：页签卡（状态 / 网络·MCP / 协同——与 TUI 右上卡组同三内建页） -->
+        <section class="panel panel-state" aria-label="状态面板">
+          <div class="ptabs">
+            <button class="ptab sel" data-tab="0">运行状态</button>
+            <button class="ptab" data-tab="1">网络 · MCP</button>
+            <button class="ptab" data-tab="2">会话协同</button>
+            <span class="ptab-en" id="state-en">1/3</span>
+            <button class="rs-collapse-btn" id="rs-collapse" title="收起状态栏">⇥</button>
+          </div>
+
+          <!-- 运行状态页 -->
+          <div class="page" id="state-page-1">
+            <dl class="kv">
+              <dt>模型</dt><dd><span class="clickable" id="kv-model" title="点击切换模型（/model）">—</span></dd>
+              <dt>会话</dt><dd><span class="clickable" id="kv-session" title="点击聚焦左栏当前会话行">—</span></dd>
+              <dt>工作目录</dt><dd class="info" id="kv-cwd">—</dd>
+              <dt>运行时间</dt><dd id="kv-elapsed">—</dd>
+              <dt>Tokens</dt><dd id="kv-tokens">—</dd>
+            </dl>
+
+            <hr class="side-sep" />
+
+            <div class="ctxbar-row">
+              <span class="lbl">上下文</span>
+              <div class="bar" role="img" aria-label="上下文占用"><i id="ctx-bar-fill"></i></div>
+              <span class="pct" id="ctx-pct">—</span>
+            </div>
+
+            <hr class="side-sep" />
+
+            <div class="subhead"><span>模块挂载</span><span class="en">MODULES</span></div>
+
+            <div id="mod-list"></div>
+
+            <div class="panel-hint">点击行挂载 / 卸载 · 锁定行点按提示原因</div>
+          </div>
+
+          <!-- 网络 · MCP 页 -->
+          <div class="page" id="state-page-2" hidden>
+            <dl class="kv">
+              <dt>代理</dt><dd id="kv-proxy">—</dd>
+              <dt>模型服务</dt><dd id="kv-modelsvc">—</dd>
+            </dl>
+
+            <hr class="side-sep" />
+
+            <div class="subhead"><span>网络 / MCP 连接</span><span class="en">SERVERS</span></div>
+
+            <div id="conn-list"></div>
+
+            <div class="panel-hint">失败可点击重连 · 未确认点击审阅指纹 · 管理走 /settings → MCP</div>
+          </div>
+
+          <!-- 会话协同页 -->
+          <div class="page" id="state-page-3" hidden>
+            <div id="peer-list"></div>
+            <div class="panel-hint">与 /ps 同序义：等审批 → 等输入 → 正在跑 → 报错 → 闲着</div>
+          </div>
+        </section>
+
+        <!-- 右下：任务清单（滚动，只读，Agent 实时同步） -->
+        <section class="panel panel-todo" aria-label="任务清单">
+          <div class="ptabs">
+            <span class="ptab sel static">任务清单</span>
+            <span class="ptab-en">TASKS</span>
+          </div>
+
+          <div class="todo-progress">
+            <div class="bar" role="img" aria-label="任务进度"><i id="todo-bar"></i></div>
+            <span class="count" id="todo-count">0/0</span>
+          </div>
+
+          <div id="todo-list"></div>
+
+          <div class="panel-hint">由 Agent 实时同步 · 只读</div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- 居中弹窗（设置 / 帮助 / 更多 / 重命名） -->
+    <div class="overlay" id="overlay" hidden>
+      <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+    </div>
+  </div>
+
+  <!-- 右键小菜单（工作区 ⋯ / 会话右键共用，内容按场景重拼） -->
+  <div class="ctx-menu" id="ctx-menu" hidden></div>
+
+  <!-- 确认弹窗层（所有删除/移除共用——叠在设置弹窗之上） -->
+  <div class="overlay overlay2" id="overlay2" hidden>
+    <div class="modal modal-sm" id="modal2" role="alertdialog" aria-modal="true"></div>
+  </div>
+
+  <!-- 断连 overlay（G15）：全屏弹窗骨架——正文与按钮由 api.js 驱动（两档：断开重试 / 已正常关闭） -->
+  <div class="overlay-disc" id="overlay-disc" hidden>
+    <div class="modal modal-sm" role="alertdialog" aria-modal="true">
+      <div class="pu-head"><span class="pu-title" id="disc-title"></span></div>
+      <div class="pu-body"><div class="pu-text" id="disc-body"></div></div>
+      <div class="pu-actions right"><button class="btn primary" id="disc-retry">重试连接</button></div>
+    </div>
+  </div>
+
+  <script src="/assets/vendor/marked.js" defer></script>
+  <script src="/assets/vendor/purify.js" defer></script>
+  <script src="/assets/api.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

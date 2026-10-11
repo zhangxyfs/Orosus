@@ -12,6 +12,11 @@
  *  的 EADDRINUSE 竞态窗由重试兜底；只绑 127.0.0.1（GC4 本机纪律）。 */
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createTcpServer } from "node:net";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { readFileSync, statSync, type Stats } from "node:fs";
+import { dirname, extname, join, resolve as resolvePath, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { orosusHome } from "@orosus/contracts/home";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { checkToken, hostAllowed } from "./auth.ts";
@@ -174,6 +179,114 @@ function makeRequestHandler(token: string): (req: IncomingMessage, res: ServerRe
 // 内建路由：GET /api/health（§3：{ok:true, version, pid}——实例活探测（G12）与存活判定同源）
 registerRoute("GET", "/api/health", (_req, res) => {
   sendOk(res, 200, { version: OROSUS_VERSION, pid: process.pid });
+});
+
+// ---------- 静态资产（T15：原型裁剪的零构建前端 + vendor UMD） ----------
+
+/** assets 树根（server.ts 同目录 assets/——index.html/style.css/api.js/app.js，T16/T17 续 render.js/ui.js）。 */
+const ASSETS_ROOT = join(fileURLToPath(new URL("./", import.meta.url)), "assets");
+
+/** CSP（§8-4 验收项）：脚本/样式/连接全部同源，零内联（index.html 全外引）；img-src 追加 data:
+ *  仅因原型 style.css 的下拉箭头用 data: SVG 背景（mp-ctl .fsel——T17 设置页消费面）。 */
+const CSP = "default-src 'self'; img-src 'self' data:";
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".webp": "image/webp",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+/** ETag 缓存（内容 sha1 前 32 位强校验；mtime 变更才重算——assets 均小文件）。 */
+const etagCache = new Map<string, { mtime: number; etag: string }>();
+
+function etagOf(abs: string, stat: Stats): string {
+  const c = etagCache.get(abs);
+  if (c !== undefined && c.mtime === stat.mtimeMs) return c.etag;
+  const etag = `"${createHash("sha1").update(readFileSync(abs)).digest("hex").slice(0, 32)}"`;
+  etagCache.set(abs, { mtime: stat.mtimeMs, etag });
+  return etag;
+}
+
+/** 静态响应（§5 律三）：index.html 恒 no-cache（入口页必取最新——T16/T17 迭代期不落旧壳）；
+ *  其余可缓存（revalidate 形 max-age=0 + ETag——二次加载 304，字节零往返）。CSP + nosniff 全量带。 */
+function serveStatic(req: IncomingMessage, res: ServerResponse, abs: string, alwaysFresh: boolean): void {
+  let stat: Stats;
+  try {
+    stat = statSync(abs);
+  } catch {
+    sendErr(res, 404, "not found");
+    return;
+  }
+  if (!stat.isFile()) {
+    sendErr(res, 404, "not found");
+    return;
+  }
+  const etag = etagOf(abs, stat);
+  const headers: Record<string, string> = {
+    "content-type": MIME[extname(abs).toLowerCase()] ?? "application/octet-stream",
+    "cache-control": alwaysFresh ? "no-cache" : "public, max-age=0, must-revalidate",
+    "content-security-policy": CSP,
+    "x-content-type-options": "nosniff",
+    etag,
+  };
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, headers);
+  res.end(readFileSync(abs));
+}
+
+/** /assets/vendor/* 供给面：node_modules UMD 定位（marked/dompurify——流区 markdown 渲染 T16 消费）。
+ *  marked 的 lib/marked.umd.js 不在包 exports 表——经 package.json 定位后拼 lib 路径；dompurify 的
+ *  dist/purify.js 在 exports 内直取。resolve 失败（依赖缺席）→ 404 不炸。 */
+const vendorRequire = createRequire(import.meta.url);
+function vendorFile(name: string): string | undefined {
+  try {
+    if (name === "marked.js") return join(dirname(vendorRequire.resolve("marked/package.json")), "lib", "marked.umd.js");
+    if (name === "purify.js") return vendorRequire.resolve("dompurify/dist/purify.js");
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+registerRoute("GET", "/", (req, res) => {
+  serveStatic(req, res, join(ASSETS_ROOT, "index.html"), true);
+});
+
+registerRoute("GET", "/assets/*", (req, res, params) => {
+  const rel = params["*"] ?? "";
+  if (rel === "") {
+    sendErr(res, 404, "not found");
+    return;
+  }
+  if (rel.startsWith("vendor/")) {
+    const name = rel.slice("vendor/".length);
+    const abs = name !== "" && !name.includes("/") ? vendorFile(name) : undefined;
+    if (abs === undefined) {
+      sendErr(res, 404, "not found");
+      return;
+    }
+    serveStatic(req, res, abs, false);
+    return;
+  }
+  // 穿越防护：resolve 后以 path.sep 前缀判归属（Windows 上 resolve 产反斜杠——拼 '/' 后缀会漏判，
+  // dsh 实测坑）；根自身不放行。已 %-decode 的 ".." 段被 resolve 折叠后由前缀检查兜住。
+  const abs = resolvePath(ASSETS_ROOT, rel);
+  if (!abs.startsWith(ASSETS_ROOT + sep)) {
+    sendErr(res, 404, "not found");
+    return;
+  }
+  serveStatic(req, res, abs, false);
 });
 
 // ---------- 端口探测与监听 ----------
