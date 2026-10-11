@@ -170,12 +170,17 @@ function $(id) { return document.getElementById(id); }
   }
 
   /* ── 贴图（D6：Ctrl+V 预览条 / ≤6 张前端拦截 / × 撤销 / 随消息发送） ── */
-  var attachments = []; /* {id, name, url(本地预览), failed}——id = /api/uploads 落盘名 */
+  var attachments = []; /* {id, name, url, failed}——url = /api/media 预览源（上传落盘后回填） */
   function renderAttach() {
     if (attachments.length === 0) { attachbar.hidden = true; attachbar.innerHTML = ''; return; }
     attachbar.hidden = false;
     attachbar.innerHTML = attachments.map(function (a, i) {
-      return '<span class="attach-thumb"><img src="' + esc(a.url) + '" alt="' + esc(a.name) + '" />' +
+      /* 评审 Important-2：预览源 = /api/media（server 已落盘路径）——blob: 会被自家 CSP
+       * img-src 'self' data: 吞成裂图；上传在途显 spinner 占位，落盘即换真图 */
+      var inner = a.url
+        ? '<img src="' + esc(a.url) + '" alt="' + esc(a.name) + '" />'
+        : '<span class="ax-waiting" title="上传中…">' + spinSvg('', 15) + '</span>';
+      return '<span class="attach-thumb">' + inner +
         (a.failed ? '<span class="ax-fail" title="上传失败">!</span>' : '') +
         '<button type="button" class="ax" data-ax="' + i + '" title="撤销挂图">✕</button></span>';
     }).join('');
@@ -184,8 +189,6 @@ function $(id) { return document.getElementById(id); }
     var ax = e.target.closest('[data-ax]');
     if (!ax) return;
     var i = parseInt(ax.getAttribute('data-ax'), 10);
-    var a = attachments[i];
-    if (a && a.url && a.url.indexOf('blob:') === 0) { try { URL.revokeObjectURL(a.url); } catch { /* 已释放 */ } }
     attachments.splice(i, 1);
     renderAttach();
   });
@@ -214,11 +217,14 @@ function $(id) { return document.getElementById(id); }
     if (files.length > room) { toast('最多 6 张图片——超出部分未添加'); files = files.slice(0, room); }
     if (currentSid === null) { toast('暂无会话——先新建或选择会话后再贴图'); return; }
     files.forEach(function (f) {
-      var a = { id: '', name: f.name || 'paste.png', url: URL.createObjectURL(f), failed: false };
+      var a = { id: '', name: f.name || 'paste.png', url: '', failed: false };
       attachments.push(a);
       renderAttach();
       uploadImage(f).then(function (r) {
         a.id = r.id;
+        var tok = A.getToken();
+        a.url = '/api/media?path=' + encodeURIComponent(r.path) + (tok ? '&token=' + encodeURIComponent(tok) : '');
+        renderAttach();
       }, function () {
         a.failed = true;
         renderAttach();

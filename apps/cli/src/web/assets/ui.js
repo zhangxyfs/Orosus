@@ -89,10 +89,12 @@
     opts = opts || {};
     var parts = splitLabel(text);
     var check = opts.check === true ? '<span class="pu-check">✓</span>' : (opts.checkBox ? '<span class="pu-check"></span>' : '');
-    var right = opts.right ? '<span class="pi-right">' + opts.right + '</span>' : '';
+    /* 评审 Important-5：title/desc/right 注入前一律 esc——interaction 的 items 是 server/模型侧
+     * 可控原文（审批卡），无转义可注入伪造行/标记（CSP 挡脚本但不挡标记注入） */
+    var right = opts.right ? '<span class="pi-right">' + esc(opts.right) + '</span>' : '';
     return '<span class="pu-caret">❯</span>' + check +
-      '<span class="pi-name">' + parts.title + '</span>' +
-      (parts.desc ? '<span class="pi-desc">' + parts.desc + '</span>' : (opts.desc ? '<span class="pi-desc">' + opts.desc + '</span>' : '')) +
+      '<span class="pi-name">' + esc(parts.title) + '</span>' +
+      (parts.desc ? '<span class="pi-desc">' + esc(parts.desc) + '</span>' : (opts.desc ? '<span class="pi-desc">' + esc(opts.desc) + '</span>' : '')) +
       right;
   }
 
@@ -197,6 +199,21 @@
     return '<div class="pu-text">' + lines.map(function (l) { return l === '' ? '&nbsp;' : esc(l); }).join('\n') + '</div>';
   }
 
+  /** 键盘导航的下一可选行（纯函数——node 直测）：环回跳过 sep 分隔行；
+   *  空 rows / 全分隔行 → -1（无可选行不动——防「纯分隔行浮层」死循环冻结整页，
+   *  评审 Critical-1：@ 菜单零匹配·目录不存在、/tasks 空名册均走 sep 兜底行）。 */
+  function nextRowIdx(rows, from, dir) {
+    var n = (rows || []).length;
+    if (n === 0) return -1;
+    var i = from;
+    var guard = 0;
+    do {
+      i = (i + dir + n) % n;
+      if (++guard > n) return -1; /* 走满一圈仍全是 sep——无 outlet */
+    } while (rows[i] && rows[i].sep);
+    return i;
+  }
+
   /* 键盘（↑↓/Enter/Esc）——app.js 的 input keydown 首先转交本口；返回 true = 已消费 */
   function handleInputKey(e) {
     ensureDom();
@@ -204,10 +221,11 @@
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         var d = e.key === 'ArrowDown' ? 1 : -1;
-        var i = pu.sel;
-        do { i = (i + d + pu.rows.length) % pu.rows.length; } while (pu.rows[i] && pu.rows[i].sep);
-        pu.sel = i;
-        renderPopup();
+        var ni = nextRowIdx(pu.rows, pu.sel, d);
+        if (ni >= 0 && ni !== pu.sel) {
+          pu.sel = ni;
+          renderPopup();
+        }
         return true;
       }
       if (e.key === 'Enter') {
@@ -900,6 +918,7 @@
     btwFrame: btwFrame,
     openCwdMenu: openCwdMenu,
     invalidateCaches: invalidateCaches,
+    nextRowIdx: nextRowIdx,
     MODES: MODES,
   };
 })();

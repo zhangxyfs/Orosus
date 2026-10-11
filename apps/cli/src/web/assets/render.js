@@ -366,8 +366,11 @@
     return t;
   }
   function placeIn(ctx, node) {
-    if (ctx.turn) ctx.turn.appendChild(node);
-    else ctx.appendTop(node);
+    /* 评审 Important-3 收容口径：turn 作用域事件（assistant/tool/注入行）无开口容器时补建
+     * （provisional）turn——分页边界落 mid-turn 的首事件不再散落顶级，turn/end 的 ensureTurn
+     * 认领同容器挂 foot，「⧉ 复制本轮」作用域（closest('.turn')）由此闭合、不再拷空。 */
+    if (!ctx.turn) ensureTurn(ctx);
+    ctx.turn.appendChild(node);
   }
   function liveCtx() {
     var ctx = makeCtx(function (node) { R.stream.insertBefore(node, R.tail); }, R.pendingClamp);
@@ -855,15 +858,11 @@
       var primary = emitEvent(ops[i].ev, ctx);
       if (primary) R.seqEls.set(ops[i].seq, primary);
     }
-    /* 跨页 straddle：本批以未闭合 turn 收尾 && 锚在某 turn 容器内 → 弃自建容器、子行直接并入目标 turn */
-    if (ctx.turn && anchorEl && anchorEl.parentElement !== R.stream && anchorEl.parentElement.classList.contains('turn') && frag.lastChild === ctx.turn) {
-      var target = anchorEl.parentElement;
-      while (ctx.turn.firstChild) target.insertBefore(ctx.turn.firstChild, anchorEl);
-      frag.removeChild(ctx.turn);
-      /* 已登记到被弃容器的 seq 锚重指目标容器 */
-      R.seqEls.forEach(function (v, k) { if (v === ctx.turn) R.seqEls.set(k, target); });
-      ctx.setTurn(target);
-    }
+    /* 分页补插语义（评审 Important-4 定档，取代原「跨页 straddle 合并」——彼条件恒假系死代码已删）：
+     *  锚 = stream 直属子级（resolveAnchor 上爬；turn 容器整只为插入位）→ 本批整段插在锚前，
+     *  时序恒正确。跨页 straddle（边界落 mid-turn）时同轮内容分属相邻两只 .turn 容器（先旧后新）：
+     *  placeIn 收容（Important-3）保证旧段自成容器非散落、turn/end 认领新段挂 foot——各自容器的
+     *  复制/悬停独立成立，不重排不丢序。 */
     if (anchorEl) R.stream.insertBefore(frag, anchorEl);
     else R.stream.insertBefore(frag, R.tail); /* 无锚（更早全空——理论不至）——落底 */
     var dh = R.stream.scrollHeight - h0;

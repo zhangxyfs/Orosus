@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import "./assets/render.js"; // 副作用挂 globalThis.OrosusRender（经典脚本零构建——node/浏览器同源导出）
+import "./assets/ui.js"; // 同源挂 globalThis.OrosusUI（顶层零 DOM 触碰——node 可载）
 
 /* noUncheckedIndexedAccess 下 Record 索引签名带 undefined——显式接口剥可选层（兼作导出面清单） */
 type Fn = (...args: unknown[]) => unknown;
@@ -18,6 +19,10 @@ interface RenderApi {
   fmtTurnTime: Fn; esc: Fn;
 }
 const R = (globalThis as { OrosusRender?: RenderApi }).OrosusRender!;
+interface UiApi {
+  nextRowIdx: (rows: Array<Record<string, unknown>>, from: number, dir: number) => number;
+}
+const UI = (globalThis as { OrosusUI?: UiApi }).OrosusUI!;
 const ASSETS_DIR = fileURLToPath(new URL("./assets/", import.meta.url));
 
 describe("web T16：planAppend 增量渲染计划（律一纯函数核）", () => {
@@ -213,5 +218,49 @@ describe("web T16：静态资产接线", () => {
     expect(chunkFn).not.toContain("marked");
     /* 律一硬断言：stream.innerHTML 从不被整体赋值（reset 清空走子节点 remove） */
     expect(src).not.toMatch(/stream\.innerHTML\s*=/);
+  });
+});
+
+describe("web T16 审查修复（Critical-1 + Important-2/3/4/5）", () => {
+  it("R1 键盘导航纯函数 nextRowIdx：全分隔行/空表 → -1 不死循环（@ 零匹配·tasks 空名册按 ↑↓ 不再冻结整页）", () => {
+    const sepRows = [{ sep: true }, { sep: true }, { sep: true }] as Array<Record<string, unknown>>;
+    expect(UI.nextRowIdx(sepRows, 0, 1)).toBe(-1);
+    expect(UI.nextRowIdx(sepRows, 2, -1)).toBe(-1);
+    expect(UI.nextRowIdx(sepRows, 1, 1)).toBe(-1);
+    expect(UI.nextRowIdx([], 0, 1)).toBe(-1);
+    const rows = [{ html: "a" }, { sep: true }, { html: "c" }] as Array<Record<string, unknown>>;
+    expect(UI.nextRowIdx(rows, 0, 1)).toBe(2); // 正向跳过 sep
+    expect(UI.nextRowIdx(rows, 2, 1)).toBe(0); // 正向环回
+    expect(UI.nextRowIdx(rows, 2, -1)).toBe(0); // 反向跳过 sep
+    expect(UI.nextRowIdx(rows, 0, -1)).toBe(2); // 反向环回
+    const single = [{ html: "only" }] as Array<Record<string, unknown>>;
+    expect(UI.nextRowIdx(single, 0, 1)).toBe(0); // 唯一可选行回到自身
+    expect(UI.nextRowIdx(single, 0, -1)).toBe(0);
+  });
+
+  it("R2 贴图预览不再用 blob:（CSP img-src 'self' data: 吞裂图）——上传落盘后走 /api/media 源", () => {
+    const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
+    const composerZone = src.slice(src.indexOf("贴图（D6"), src.indexOf("── 队列条"));
+    expect(composerZone).not.toContain("createObjectURL"); // 导出下载（a.href）面不受影响——只钉贴图段
+    expect(composerZone).not.toContain("revokeObjectURL");
+    expect(composerZone).toContain("/api/media?path="); // 预览源 = 落盘路径（Important-2 采用评审建议案）
+  });
+
+  it("R3 mid-turn 收容：placeIn 无开口容器必补建 turn（源码结构锚定）+ 恒假条件死代码已删（Important-3/4）", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const placeInFn = src.slice(src.indexOf("function placeIn("), src.indexOf("function liveCtx("));
+    expect(placeInFn).toContain("ensureTurn(ctx)"); // turn 作用域事件不再散落顶级——复制作用域闭合
+    expect(src).not.toContain("anchorEl.parentElement !== R.stream"); // 恒假分支（resolveAnchor 必上爬）已删
+  });
+
+  it("R4 itemRowHtml 转义（源码锚定）：pi-name/pi-desc/right 注入前 esc——审批卡 items 原文不可注伪造标记", () => {
+    const src = readFileSync(join(ASSETS_DIR, "ui.js"), "utf8");
+    const fn = src.slice(src.indexOf("function itemRowHtml("), src.indexOf("/* 通用渲染"));
+    expect(fn).toContain("esc(parts.title)");
+    expect(fn).toContain("esc(parts.desc)");
+    expect(fn).toContain("esc(opts.desc)");
+    expect(fn).toContain("esc(opts.right)");
+    expect(fn).not.toMatch(/\+\s*parts\.(title|desc)\s*\+/); // 裸拼接绝迹
+    expect(fn).not.toMatch(/\+\s*opts\.(desc|right)\s*\+/);
   });
 });

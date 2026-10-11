@@ -873,3 +873,6 @@ body.light .mp-ctl .fsel {
 
 /* 流区滚动容器定位（展开锚定的 offsetParent 基准——.turn 等中间层不带 position） */
 .stream { position: relative; }
+
+/* 贴图上传在途占位（评审 Important-2：预览源改 /api/media——落盘前 spinner 占位） */
+.attach-thumb .ax-waiting { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--muted-faint); }
