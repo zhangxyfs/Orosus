@@ -1,17 +1,27 @@
 /** 面板数据端点（web 批 T7 + T10 两任务面）：GET /tasks 子代理名册（活名册 ∪ 盘上历史去重——§1 G3）、
  *  POST /subagents/:id/approval 后台子代理挂起审批应答、GET /subagents/:id/events transcript 回放
- *  （末 500——§5 自创值）；T10 本任务面：GET /panel（PanelData 同形 JSON——E2/E3 同口径聚合 +
+ *  （末 500——§5 自创值）；T10 任务面：GET /panel（PanelData 同形 JSON——E2/E3 同口径聚合 +
  *  E6 全桶 peers 合并 + E7 任务清单投影）+ POST /modules/:name/toggle（E4 插拔链：closure →
- *  setModuleEnabledInConfig → h.reload 返回 ReloadReport 摘要）。hooks-activity/compaction/
- *  diagnostics/launchers 属后续任务（§2 api-panel.ts 全清单——YAGNI）。
- *  数据源全部走 CLI 纯函数件（tasks-cmd/modules-ui/usage-text/module-deps/module-toggle——§2 依赖
- *  方向白名单）与 HostedSession.core 只读口；/panel 结果 1s 缓存 + 事件驱动失效（§5 律三：
- *  turn/todo 事件到达即刷、模块插拔端点显式失效——refreshPanel 不随每请求重算 history）。
+ *  setModuleEnabledInConfig → h.reload 返回 ReloadReport 摘要）。
+ *  T14 任务面（更多菜单四窗数据面——A7 ⋮ 菜单，TUI Ctrl+E/P/H/O 的 web 化）：GET /diagnostics
+ *  （graph().audit() failed 行 + logDir）、GET /launchers（active 模块 launcher 登记投影——
+ *  collectLauncher〔module-launcher.ts〕Ctrl+P 同源；方案 A7 引 moduleCards() 系笔误——panel 卡
+ *  是 TUI 渲染面（widgets 含 getter 不可序列化、无 module/desc 键），§3 :272 端点名/形状与原型
+ *  「带界面模块的启动器」均指向 launcher 面）、GET /sessions/:sid/hooks-activity（hooks/run 事件
+ *  分桶归属最近 user/message——buildHookBuckets〔hooks-ui.ts:111〕同源单口）、GET /sessions/:sid/
+ *  compaction（末条 turn/compaction 的 summary/stats 或 404）。
+ *  数据源全部走 CLI 纯函数件（tasks-cmd/modules-ui/usage-text/module-deps/module-toggle/hooks-ui/
+ *  module-launcher——§2 依赖方向白名单）与 HostedSession.core 只读口；/panel 结果 1s 缓存 +
+ *  事件驱动失效（§5 律三：turn/todo 事件到达即刷、模块插拔端点显式失效——refreshPanel 不随每请求
+ *  重算 history）；更多菜单四端点是打开即拉面（非轮询）——现读不缓存（/tasks 同口径）。
  *  T11 增量：network.connections 填充（T10 跨任务指针——TUI 渲染期另并 mcpConnRows 的 web 版，
  *  装配期 await mcp.catalog 服务现读）+ mcpCatalogService/mcpCatalogRowsOf 导出（api-settings
  *  的 MCP 页同源消费）+ invalidatePanelCache 导出（MCP ops 写盘 reload 后显式失效，toggle 同口径）。 */
 import type { ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
+import { join } from "node:path";
 import type { ReloadReport, SessionEvent } from "@orosus/core";
+import { orosusHome } from "@orosus/contracts/home";
 import type { McpCatalogRow } from "@orosus/mcp";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import { registerRoute, readBody, sendJson } from "./server.ts";
@@ -25,6 +35,8 @@ import { setModuleEnabledInConfig } from "../module-toggle.ts";
 import { moduleConfigFileFor } from "../config-face.ts";
 import { toggleResultText } from "../module-toggle-result.ts";
 import { envProxyUrl, readWindowsSystemProxy, detectTunProxy, proxyDisplayText } from "../proxy-env.ts";
+import { buildHookBuckets } from "../hooks-ui.ts";
+import { collectLaunchers } from "../module-launcher.ts";
 import type { PanelData } from "../tui/fullapp.ts";
 import type { PeerEntry } from "../ps.ts";
 import { t } from "../i18n/app.ts";
@@ -423,4 +435,125 @@ registerRoute("GET", "/api/sessions/:sid/subagents/:id/events", async (_req, res
   }
   const events = agentEventsFromFile(hs.sessionsDir, hs.sid, id);
   sendJson(res, 200, { ok: true, events });
+});
+
+// ---------- 更多菜单四端点（T14：A7 ⋮ 菜单数据面——TUI Ctrl+E/P/H/O 的 web 化，打开即拉不缓存） ----------
+
+/** 查询参数解析（api-model queryParams 同款本地件——web/* 小工具不跨文件共享的既有惯例）。 */
+const queryParams = (req: IncomingMessage): URLSearchParams => {
+  const url = req.url ?? "";
+  const qi = url.indexOf("?");
+  return new URLSearchParams(qi >= 0 ? url.slice(qi + 1) : "");
+};
+
+/** 读侧会话解析（api-model resolveForRead 同口径）：sid 缺省 = 池当前会话游标（⋮ 菜单作用于
+ *  「本会话」——前端不传 sid 即当前选中）；显式 sid host 优先、盘上未托管走 viewer 只读化身；
+ *  显式不可解析 = undefined（调用方 404——sid 打错不静默空态）；无 sid 且无当前游标 = undefined
+ *  （调用方空态——读面不 404）。 */
+const resolveGlobalRead = async (sid: string): Promise<HostedSession | undefined> => {
+  const pool = webHostPool();
+  if (pool === undefined) return undefined;
+  const target = sid !== "" ? sid : pool.current()?.sid;
+  if (target === undefined) return undefined;
+  const hosted = pool.host(target);
+  if (hosted !== undefined) return hosted;
+  if (sid === "") return undefined; // 游标失效（会话已关）——空态而非 404
+  return pool.viewer(target).then(
+    (hs) => hs,
+    () => undefined, // 不在盘/装配失败——调用方 404
+  );
+};
+
+/** GET /api/diagnostics → {ok, rows, logDir}（§3 :271）。rows = graph().audit() **failed 行**
+ *  （A7 口径——「本会话出过问题的模块」；active/discovered/pending-confirm 不进：待决不是失败，
+ *  kernel types.ts ModuleState 注释同义）；行形 {name, failReason, state}（failReason 缺失兜底
+ *  空串——§3 形状必带键）。logDir = 诊断日志目录（TUI Ctrl+E 详情尾行「诊断日志：<file>」同源，
+ *  readDiagnostics 的目录段——前端指路用）。空会话（无当前游标）→ 空表 + logDir 仍有效。 */
+registerRoute("GET", "/api/diagnostics", async (req, res) => {
+  const sid = queryParams(req).get("sid") ?? "";
+  const hs = await resolveGlobalRead(sid);
+  if (hs === undefined && sid !== "") {
+    notFound(res); // 显式 sid 不可解析（api-model 同口径）
+    return;
+  }
+  const rows = (hs?.core?.graph().audit() ?? [])
+    .filter((a) => a.state === "failed")
+    .map((a) => ({ name: a.name, failReason: a.failReason ?? "", state: a.state }));
+  sendJson(res, 200, { ok: true, rows, logDir: join(orosusHome(), "logs") });
+});
+
+/** GET /api/launchers → {ok, cards}（§3 :272）。cards = active 模块 launcher 登记投影
+ *  {module, title, desc?}——collectLaunchers（module-launcher.ts：Ctrl+P 总览弹窗同一收集口，
+ *  main.ts:1603 同源）+ title 经 t(labelKey, undefined, label) 翻译（launcherRows/fullapp-overlay
+ *  同式——声明方自报键回落原文）；desc = 登记命令（Enter 执行面——T17 前端据此透传 h.prompt 或
+ *  send）。方案 A7 单元格引 moduleCards()（modules-ui.ts）系笔误：那是 TUI 右栏模块卡的渲染面
+ *  （widgets 含 getter 不可序列化、无 module/desc 键），与本端点形状无交集——以 §3 :272 端点名/
+ *  形状 + 原型「模块总览 → 带界面模块的启动器（TUI Ctrl+P）」为准。 */
+registerRoute("GET", "/api/launchers", async (req, res) => {
+  const sid = queryParams(req).get("sid") ?? "";
+  const hs = await resolveGlobalRead(sid);
+  if (hs === undefined && sid !== "") {
+    notFound(res);
+    return;
+  }
+  const cards = collectLaunchers(hs?.core?.graph().audit() ?? []).map((e) => ({
+    module: e.name,
+    title: e.labelKey !== undefined ? t(e.labelKey, undefined, e.label) : e.label,
+    ...(e.command !== undefined ? { desc: e.command } : {}),
+  }));
+  sendJson(res, 200, { ok: true, cards });
+});
+
+/** GET /api/sessions/:sid/hooks-activity → {ok, groups}（§3 :237）。分桶 = buildHookBuckets
+ *  （hooks-ui.ts:111 同源单口：hooks/run 与 steering 注入归属最近一条 user/message、首条消息前
+ *  的活动并入首桶、running 账按 runId 去重——TUI Ctrl+H 查看窗一字不差的语义复用）；
+ *  groups 投影 {userText = 桶 label（消息首行截断 ≤40）, count = 运行账条数, injections = 注入
+ *  文本数组}。无钩子活动 → 空表（「没有可看的」是空态不是错误）；viewer 只读化身同出数。 */
+registerRoute("GET", "/api/sessions/:sid/hooks-activity", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const hs = await resolveSession(sid);
+  const h = hs?.core;
+  if (h === undefined) {
+    notFound(res);
+    return;
+  }
+  const groups = buildHookBuckets(await h.history()).map((b) => ({
+    userText: b.label,
+    count: b.runs.length,
+    injections: b.injections.map((m) => m.text),
+  }));
+  sendJson(res, 200, { ok: true, groups });
+});
+
+/** turn/compaction 载荷标量统计投影（v2-v4 并集里可进摘要面的数字/元字段；keptUsers 完整投影
+ *  消息不内联——重载荷是回放面的事，摘要口只给 Ctrl+O 头行同级的统计）。 */
+const compactionStatsOf = (e: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  if (typeof e["trigger"] === "string" && e["trigger"] !== "") out["trigger"] = e["trigger"];
+  if (typeof e["keepUserHead"] === "number") out["keepUserHead"] = e["keepUserHead"];
+  if (typeof e["elidedCount"] === "number") out["elidedCount"] = e["elidedCount"];
+  if (typeof e["droppedCount"] === "number") out["droppedCount"] = e["droppedCount"];
+  return out;
+};
+
+/** GET /api/sessions/:sid/compaction → {ok, at, summary, stats} | 404（§3 :238）。末条带 summary 的
+ *  turn/compaction（compaction-view「全部列出最新在最上」的 web 单对象形——开窗即见最近一次）；
+ *  at = 事件 ts（ISO）、summary = 载荷 summary、stats = 标量统计投影（trigger/保留头/省略数/压掉数）。
+ *  无任何可用事件 → 404（Ctrl+O 无摘要走 toast 提示的 web 对应——缺资源不是空表）；viewer 同出数。 */
+registerRoute("GET", "/api/sessions/:sid/compaction", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const hs = await resolveSession(sid);
+  const h = hs?.core;
+  if (h === undefined) {
+    notFound(res);
+    return;
+  }
+  const events = await h.history();
+  const last = events.toReversed().find((e): e is SessionEvent & { summary: string } =>
+    e.type === "turn/compaction" && typeof (e as { summary?: unknown }).summary === "string");
+  if (last === undefined) {
+    notFound(res);
+    return;
+  }
+  sendJson(res, 200, { ok: true, at: last.ts, summary: last.summary, stats: compactionStatsOf(last as unknown as Record<string, unknown>) });
 });
