@@ -1292,25 +1292,30 @@ function $(id) { return document.getElementById(id); }
         });
       });
       sel('mp-vision').addEventListener('change', function () {
+        var el = this; /* revert 闭包捕获元素——strict-mode 裸调用 this === undefined（审查 Important） */
         var v = this.value;
-        postPref('visionModel', v, v === 'off' ? '视觉模型：已设为停用' : v === 'auto' ? '视觉模型：已设为自动（支持图片的当前模型直用）' : '视觉模型：已指定 ' + v + '（已写 [tool-media]）', function () { this.value = vision; });
+        postPref('visionModel', v, v === 'off' ? '视觉模型：已设为停用' : v === 'auto' ? '视觉模型：已设为自动（支持图片的当前模型直用）' : '视觉模型：已指定 ' + v + '（已写 [tool-media]）', function () { el.value = vision; });
       });
       sel('mp-search').addEventListener('change', function () {
+        var el = this;
         var v = this.value;
         var names = { auto: '自动（缺省）', llm: 'LLM Web Search', tavily: 'Tavily', brave: 'Brave' };
-        postPref('search.backend', v, '网络搜索后端：' + (names[v] ?? v) + '（已写 tool-web 配置）', function () { this.value = search; });
+        postPref('search.backend', v, '网络搜索后端：' + (names[v] ?? v) + '（已写 tool-web 配置）', function () { el.value = search; });
       });
       sel('mp-submodel').addEventListener('change', function () {
+        var el = this;
         var v = this.value;
-        postPref('model', v === '' ? null : v, v === '' ? '子代理模型：已清除（跟工种声明 / 父模型）' : '子代理模型：' + v + '（已写 [tool-subagent] model）', function () { this.value = sub.model ?? ''; });
+        postPref('model', v === '' ? null : v, v === '' ? '子代理模型：已清除（跟工种声明 / 父模型）' : '子代理模型：' + v + '（已写 [tool-subagent] model）', function () { el.value = sub.model ?? ''; });
       });
       sel('mp-subapproval').addEventListener('change', function () {
+        var el = this;
         var v = this.value;
-        postPref('approvalMode', v === '' ? null : v, v === '' ? '子代理审批模式：跟随主对话（配置键已清除）' : '子代理审批模式：' + (v === 'auto' ? '从不询问' : '需要时候询问') + '（已写 [tool-subagent] approvalMode）', function () { this.value = sub.approvalMode ?? ''; });
+        postPref('approvalMode', v === '' ? null : v, v === '' ? '子代理审批模式：跟随主对话（配置键已清除）' : '子代理审批模式：' + (v === 'auto' ? '从不询问' : '需要时候询问') + '（已写 [tool-subagent] approvalMode）', function () { el.value = sub.approvalMode ?? ''; });
       });
       sel('mp-subturns').addEventListener('change', function () {
+        var el = this;
         var v = this.value;
-        postPref('maxTurns', v === '' ? null : parseInt(v, 10), v === '' ? '子代理轮数上限：跟随默认（100）——配置键已清除' : '子代理轮数上限：已写入 ' + v, function () { this.value = turnCur; });
+        postPref('maxTurns', v === '' ? null : parseInt(v, 10), v === '' ? '子代理轮数上限：跟随默认（100）——配置键已清除' : '子代理轮数上限：已写入 ' + v, function () { el.value = turnCur; });
       });
     }, function (err) { pageLoadError(page, err); });
   }

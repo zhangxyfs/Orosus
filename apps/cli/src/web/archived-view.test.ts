@@ -115,4 +115,16 @@ describe("web T17：已归档视图纯函数（F10——三排序×筛选×分�
     expect(src.includes("OrosusArchived")).toBe(true);
     expect(src.includes("archivedView")).toBe(true);
   });
+
+  it("⑧ F3 偏好 revert 闭包零 this 形态（审查 Important——strict-mode 裸调用 this === undefined 会 TypeError，回滚失效）", () => {
+    const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
+    // revert 闭包以裸函数调用（postPref 内 revert()）——function () { this.value = … } 在顶层 IIFE
+    // 'use strict' 下 this === undefined，赋值抛 TypeError：select 停在失败值与盘上真值脱同步。
+    // 负断言：该闭包形态在 app.js 绝迹（change 监听器体内的 this.value = prev 合法——this 是元素，不在匹配面）。
+    expect(src.includes("function () { this.value ="), "revert 闭包不得用 this").toBe(false);
+    // 正锚定：五键 revert 均改捕获元素（el.value = 原值）
+    for (const anchor of ["el.value = vision", "el.value = search", "el.value = sub.model", "el.value = sub.approvalMode", "el.value = turnCur"]) {
+      expect(src.includes(anchor), `revert 须捕获元素：${anchor}`).toBe(true);
+    }
+  });
 });
