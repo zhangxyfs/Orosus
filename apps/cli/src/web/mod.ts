@@ -175,7 +175,7 @@ export async function runWebSubcommand(
       const hs = await p.create({ cwd: handover.cwd, resumeSid: handover.resumeSid });
       p.switchCurrent(hs.sid);
     } catch (err) {
-      io.out(`[web] 交接会话装载失败（server 空启）：${err instanceof Error ? err.message : String(err)}`);
+      io.out(t("web.handover.fail", { err: err instanceof Error ? err.message : String(err) })); // GC6：server 侧新用户可见文案走 t()
     }
   }
 

@@ -312,4 +312,5 @@ export const zhTWCli: Record<string, string> = {
 	"web.banner.manualOpen": "如果瀏覽器沒有自動開啟，請手動複製上方網址到瀏覽器",
 	"web.banner.keepTerminal": "保持本終端開啟——關閉終端將同時關閉網頁端",
 	"web.gate.needSetup": "首次使用請先在終端執行 orosus 完成首次引導（設定提供商與金鑰），再執行 orosus web",
+	"web.handover.fail": "[web] 交接會話裝載失敗（server 空啟）：{err}",
 };

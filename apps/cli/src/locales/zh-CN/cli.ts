@@ -312,4 +312,5 @@ export const zhCNCli: Record<string, string> = {
 	"web.banner.manualOpen": "如果浏览器没有自动打开，请手动复制上方网址到浏览器",
 	"web.banner.keepTerminal": "保持本终端开启——关闭终端将同时关闭网页端",
 	"web.gate.needSetup": "首次使用请先在终端运行 orosus 完成首次引导（配置提供商与密钥），再运行 orosus web",
+	"web.handover.fail": "[web] 交接会话装载失败（server 空启）：{err}",
 };
