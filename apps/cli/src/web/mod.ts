@@ -19,6 +19,7 @@ import { broadcastShutdownFrames } from "./sse.ts";
 import "./api-session.ts"; // T3 会话组端点注册（GET events/stream——模块加载期进路由表，readiness 序）
 import "./api-files.ts"; // T4 文件面端点注册（uploads/media/at——readiness 序同上；api-session 经它解析 imageIds）
 import "./api-panel.ts"; // T7 面板数据端点注册（tasks 名册/子代理审批/transcript 回放——readiness 序同上）
+import "./api-model.ts"; // T8 模型/思考档位/权限/命令表端点注册（readiness 序同上）
 
 export function isWebSubcommand(argv: string[]): boolean {
   return argv[0] === "web";
