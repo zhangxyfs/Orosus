@@ -4,8 +4,9 @@
  *    fresh 空会话拒归档（B12「fresh 不出现归档钮」的服务端口径——400 由调用方定形）。
  *    边界注记：CLI/TUI 无归档概念（红线不动）——归档仅 web 左栏/已归档页语义。
  *  - 删除守卫（B11 口径）：外部进程活会话（live.json pid 活且非本进程 / lock 活锁）→ 409；
- *    本进程 pool 托管会话（含当前与非当前）一律先 close（presence 撤 → h.close）再删——
- *    自身 presence 不作锁，否则本次运行内开过的会话全删不掉。
+ *    本进程 **host 托管**会话（含当前与非当前）先 close（presence 撤 → h.close）再删——自身
+ *    presence 不作锁（否则本次运行内开过的会话全删不掉）；viewer-only 化身无写者面，不豁免
+ *    外部守卫（先逐出再照跑——审查修：防绕过活锁守卫误删外部活会话）。
  *  - renderMarkdown：SessionEvent 流 → markdown（user/assistant 分节 + thinking 折叠引用 +
  *    工具行摘要）——纯函数，端点侧补标题头。 */
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -89,14 +90,17 @@ export function listArchived(root: string): ArchivedItem[] {
 export type DeleteResult = { ok: true } | { ok: false; status: 409 | 404; error: string };
 
 /** 永久删除（DELETE /api/sessions/:sid——B11 守卫口径）：
- *  1. 本进程 pool 托管（host/viewer，含当前与非当前）→ 先 pool.remove（close 序：presence 撤 →
- *     h.close → purgeIfEmpty——Windows 活句柄纪律）——自身 presence/锁不作删除障碍；
- *  2. 外部守卫（仅未托管时）：live.json 活体（pid 活且非本进程）或 lock 活锁 → 409；
- *  3. purgeSessionDir 剩余目录（托管会话非空时 close 不清，此处删尽；fresh 无盘壳目录也在此收口）。 */
+ *  1. 本进程 **host 托管**（写者，含当前与非当前）→ 先 pool.remove（close 序：presence 撤 →
+ *     h.close → purgeIfEmpty——Windows 活句柄纪律）——自身 presence/锁不作删除障碍（B11 明文）；
+ *  1b. viewer-only 化身（只读，无自身 presence）**不豁免外部守卫**：先 remove 逐出（关句柄），
+ *     再照跑守卫——会话目录的 live.json 若属外部进程（pid 活且非本进程），守卫必须拦（审查修：
+ *     原实现 lookup（host ∪ viewer）命中即整体跳守卫，viewer 绕过活锁守卫误删外部活会话）；
+ *  2. 外部守卫（host 未托管时）：live.json 活体（pid 活且非本进程）或 lock 活锁 → 409；
+ *  3. purgeSessionDir 剩余目录（host 会话非空时 close 不清，此处删尽；fresh 无盘壳目录也在此收口）。 */
 export async function deleteSession(root: string, sid: string, pool: HostPool | undefined): Promise<DeleteResult> {
-  const hosted = pool?.lookup(sid);
-  if (hosted !== undefined && pool !== undefined) {
-    await pool.remove(sid); // 先 close 再删（自身 presence 不作锁——B11 明文）
+  const hosted = pool?.host(sid); // 写者侧——唯一豁免外部守卫的形态（自身 presence/锁不作锁）
+  if (pool !== undefined && pool.lookup(sid) !== undefined) {
+    await pool.remove(sid); // host：先 close 再删；viewer-only：先逐出（无写者面）再走下方外部守卫
   }
   const loc = locateSessionFile(root, sid);
   if (loc === undefined) {
@@ -107,7 +111,7 @@ export async function deleteSession(root: string, sid: string, pool: HostPool | 
     return { ok: false, status: 404, error: "会话不存在" };
   }
   const bucketDir = dirname(loc.dir);
-  if (hosted === undefined) {
+  if (hosted === undefined) { // 未托管 / 仅 viewer——外部守卫照跑
     if (liveSessionActive(loc.dir, process.pid)) {
       return { ok: false, status: 409, error: "会话正被另一个 Orosus 进程使用" };
     }

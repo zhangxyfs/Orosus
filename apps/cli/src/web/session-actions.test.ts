@@ -238,6 +238,46 @@ describe("web T9：会话动作（归档/删除守卫/导出）", () => {
     await s.stop();
   }, 60_000);
 
+  it("⑪补（审查修）viewer 化身不豁免外部守卫：viewer + 外部活 pid live.json → 409 且 viewer 逐出；viewer + 死会话 → 200 删尽", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    const cwdC = tmpCwd();
+    await seedSession(home, cwdA, "s_hand", { user: "交接会话" });
+    await seedSession(home, cwdC, "s_ext_view", { user: "外部活会话（viewer 面）" });
+    await seedSession(home, cwdC, "s_dead_view", { user: "死会话（viewer 面）" });
+    const bucketC = join(home, "sessions", encodeCwd(cwdC));
+    const sleeper = await spawnSleeper();
+    killers.push(sleeper.kill);
+    writeFileSync(join(bucketC, "s_ext_view", "live.json"), JSON.stringify({
+      v: 1, sid: "s_ext_view", pid: sleeper.pid, token: "fabricate", kind: "tui",
+      phase: "running", startedAt: Date.now(), lastEventAt: Date.now(),
+    }), "utf8");
+    const s = await startWeb(home, cwdA, "s_hand");
+    const pool = webHostPool()!;
+
+    // viewer 化身进场：GET status 走只读装配（host 不在）
+    const st = await get(s, "/api/sessions/s_ext_view/status");
+    expect(st.status).toBe(200);
+    expect(pool.host("s_ext_view")).toBeUndefined();
+    expect(pool.lookup("s_ext_view")).toBeDefined(); // viewer 在池（LRU）
+
+    const d1 = await del(s, "/api/sessions/s_ext_view");
+    expect(d1.status).toBe(409); // 外部活 pid live.json → 守卫照拦（viewer 不豁免——审查修面）
+    expect(existsSync(join(bucketC, "s_ext_view"))).toBe(true); // 未删
+    expect(pool.lookup("s_ext_view")).toBeUndefined(); // viewer 已逐出（守卫前先清只读化身）
+
+    // 对照：viewer + 死会话 → 守卫通过 → 删尽（viewer 不拦删除）
+    const st2 = await get(s, "/api/sessions/s_dead_view/status");
+    expect(st2.status).toBe(200);
+    expect(pool.lookup("s_dead_view")).toBeDefined();
+    const d2 = await del(s, "/api/sessions/s_dead_view");
+    expect(d2.status).toBe(200);
+    expect(existsSync(join(bucketC, "s_dead_view"))).toBe(false);
+    await s.stop();
+  }, 60_000);
+
   it("⑫ 导出（B11）：export.md → text/markdown + attachment 头；内容含 user/assistant 消息与工具行摘要", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
