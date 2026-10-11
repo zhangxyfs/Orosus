@@ -1,19 +1,37 @@
-/** 面板数据端点（web 批 T7 本任务面）：GET /tasks 子代理名册（活名册 ∪ 盘上历史去重——§1 G3）、
+/** 面板数据端点（web 批 T7 + T10 两任务面）：GET /tasks 子代理名册（活名册 ∪ 盘上历史去重——§1 G3）、
  *  POST /subagents/:id/approval 后台子代理挂起审批应答、GET /subagents/:id/events transcript 回放
- *  （末 500——§5 自创值）。/panel 本体与 hooks-activity/compaction/diagnostics/launchers 属后续任务
- *  （§2 api-panel.ts 全清单——本文件只落 T7 三端点，YAGNI）。
- *  数据源全部走 CLI 纯函数件（tasks-cmd.ts——§2 依赖方向白名单）与 HostedSession.core 只读口；
- *  每请求现读（roster 是 O(册) 快照 + agents/ 目录 readdir，量级 = 单会话子代理数——panel 缓存 1s
- *  属 T10 /panel 装配面，此处不加）。 */
+ *  （末 500——§5 自创值）；T10 本任务面：GET /panel（PanelData 同形 JSON——E2/E3 同口径聚合 +
+ *  E6 全桶 peers 合并 + E7 任务清单投影）+ POST /modules/:name/toggle（E4 插拔链：closure →
+ *  setModuleEnabledInConfig → h.reload 返回 ReloadReport 摘要）。hooks-activity/compaction/
+ *  diagnostics/launchers 属后续任务（§2 api-panel.ts 全清单——YAGNI）。
+ *  数据源全部走 CLI 纯函数件（tasks-cmd/modules-ui/usage-text/module-deps/module-toggle——§2 依赖
+ *  方向白名单）与 HostedSession.core 只读口；/panel 结果 1s 缓存 + 事件驱动失效（§5 律三：
+ *  turn/todo 事件到达即刷、模块插拔端点显式失效——refreshPanel 不随每请求重算 history）。 */
 import type { ServerResponse } from "node:http";
+import type { ReloadReport, SessionEvent } from "@orosus/core";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import type { HostedSession } from "./hosted.ts";
-import { agentEventsFromFile, loadHistoricalSubagents, sortNewestFirst } from "../tasks-cmd.ts";
+import { agentEventsFromFile, loadHistoricalSubagents, sortNewestFirst, subagentUnloadBlock } from "../tasks-cmd.ts";
+import { refreshPanel, getPanelCache, lockReasonFor, type ModulesUiDeps } from "../modules-ui.ts";
+import { shortenPath, lastUsageOf } from "../usage-text.ts";
+import { computeMountClosure, computeUnmountClosure } from "../module-deps.ts";
+import { setModuleEnabledInConfig } from "../module-toggle.ts";
+import { moduleConfigFileFor } from "../config-face.ts";
+import { toggleResultText } from "../module-toggle-result.ts";
+import { envProxyUrl, readWindowsSystemProxy, detectTunProxy, proxyDisplayText } from "../proxy-env.ts";
+import type { PanelData } from "../tui/fullapp.ts";
+import type { PeerEntry } from "../ps.ts";
+import { t } from "../i18n/app.ts";
 
 /** 会话解析后的 JSON 体上限（approval {allow} 量级——send 1MiB 同款自创值口径，防失控客户端）。 */
 const PANEL_BODY_MAX_BYTES = 1024 * 1024;
+
+/** panel 结果缓存 TTL（§5 律三 / 自创值登记「panel 缓存 1s（事件失效）」）：2s 轮询 × N 标签共享
+ *  同一份装配结果——refreshPanel（history 全量读）成本不随客户端数放大；事件到达（turn/todo）
+ *  即失效，下一请求重算出新值。 */
+export const PANEL_CACHE_MS = 1_000;
 
 const notFound = (res: ServerResponse): void => {
   sendJson(res, 404, { ok: false, error: "not found" });
@@ -31,6 +49,269 @@ const resolveSession = async (sid: string): Promise<HostedSession | undefined> =
     () => undefined, // 不在盘/装配失败——调用方 404
   );
 };
+
+// ---------- panel 装配（E2/E3 同口径聚合 + E6 peers 合并 + E7 任务投影） ----------
+
+/** GET /panel 响应体（§3 :232 PanelData 同形投影）：permissionNext 是函数（不可序列化——权限面
+ *  归 T8 /permission 端点族）、cards 是 TUI 卡渲染面（§3 形状无此键——T15/T16 无消费方，YAGNI），
+ *  均不进 JSON；elapsedMs 由托管装配时刻（hs.createdAt——F5 九轮⑤「本次托管开始」同义，resume
+ *  旧会话不显示历史年龄）现算。 */
+interface WebPanelData {
+  model: string;
+  session: string;
+  cwd: string;
+  elapsedMs: number;
+  tokens: PanelData["tokens"];
+  contextWindow: number;
+  /** 上下文条（E3）：used = 末条 usage 输入，window = resolveContextWindow 解析链（configFace 同源，
+   *  无显式配置回落 200k），pct = min(100, round(used/window×100))——ctxUsageText 同式。 */
+  ctx: { used: number; window: number; pct: number };
+  modules: PanelData["modules"];
+  tasks: PanelData["tasks"];
+  network?: PanelData["network"];
+  peers?: { self?: PeerEntry; list: PeerEntry[] };
+}
+
+/** 系统代理一次读（缓存 Promise——reg query ~20ms，main.ts systemProxyOnce 同款纪律：展示专用）。 */
+let systemProxyOnce: Promise<string | undefined> | undefined;
+
+/** peers 行相位（/ps 序义排序键）：本进程托管行实时优先（T9 rowPhase 同口径）→ live.json 次之。 */
+const peerPhase = (p: PeerEntry): PeerEntry["phase"] => webHostPool()?.host(p.sid)?.phase() ?? p.phase;
+
+/** PS 相位序（ps.ts PHASE_ORDER 同序复刻：web/* 不改既有件——T9 api-session 同款本地常量）。 */
+const PHASE_ORDER: Record<string, number> = {
+  "waiting-approval": 0,
+  "waiting-input": 1,
+  running: 2,
+  error: 3,
+  idle: 4,
+};
+const phaseRank = (p: { phase: string }): number => PHASE_ORDER[p.phase] ?? 99; // 未知相位殿后（死行同义）
+
+/** panel 装配（缓存未命中时）：refreshPanel 复用 TUI 同一聚合（getActiveApp 缺省 undefined——
+ *  纯数据面零 TUI 依赖）+ cwd 用会话自身 cwd（refreshPanel 读 process.cwd()——TUI 单进程口径，
+ *  web 多项目池须按会话改写）+ E6 peers 全桶合并（HostPool.snapshot 的跨桶 scanLivePeers 面）。
+ *  refreshPanel 写 modules-ui 模块级 panelCache 单例——并发多会话装配交错会把「读到别人的快照」，
+ *  故全部装配经 panelSerial 串行（检查-装配-读取单线程原子；缓存命中路径不进串行链——零成本）。 */
+let panelSerial: Promise<unknown> = Promise.resolve();
+let panelComputes = 0;
+const assemblePanel = (hs: HostedSession): Promise<WebPanelData> => {
+  const run = panelSerial.then(async (): Promise<WebPanelData> => {
+    const h = hs.core;
+    if (h === undefined) throw new Error("会话装配失败");
+    const deps: ModulesUiDeps = {
+      getH: () => h,
+      getActiveApp: () => undefined,
+      refreshSkillMenu: () => {}, // TUI 技能菜单刷新钩子——web 无菜单面
+      proxyStateText: async () => {
+        systemProxyOnce ??= readWindowsSystemProxy();
+        return proxyDisplayText(envProxyUrl(), await systemProxyOnce, detectTunProxy());
+      },
+      runStartedAt: new Date(hs.createdAt).toISOString(), // 运行时间行：托管装配时刻（elapsedMs 源）
+      permCycle: () => ["ask-risky", "ask-always", "never"], // main.ts PERM_CYCLE 同序（permissionNext 不进 JSON）
+    };
+    await refreshPanel(deps);
+    const pd = getPanelCache(); // 串行链内读取——与 refreshPanel 间无插入点
+    if (pd === undefined) throw new Error("panel 快照未就绪");
+    const pool = webHostPool();
+    const snapPeers = pool?.snapshot().peers;
+    const peers: WebPanelData["peers"] = snapPeers === undefined ? undefined : {
+      // self 置顶（E6）：host 会话 presence 在扫描集；viewer 无 presence 可缺（scanWithSelf 同语义）
+      ...(snapPeers.has(hs.sid) ? { self: { ...snapPeers.get(hs.sid)!, phase: peerPhase(snapPeers.get(hs.sid)!) } } : {}),
+      list: [...snapPeers.values()]
+        .filter((p) => p.sid !== hs.sid)
+        .map((p) => ({ ...p, phase: peerPhase(p) }))
+        .toSorted((a, b) => phaseRank(a) - phaseRank(b) || b.lastEventAt - a.lastEventAt),
+    };
+    const pct = pd.contextWindow > 0 ? Math.min(100, Math.round((pd.tokens.input / pd.contextWindow) * 100)) : 0;
+    return {
+      model: pd.model,
+      session: pd.session,
+      cwd: shortenPath(hs.cwd, 26),
+      elapsedMs: Date.now() - hs.createdAt,
+      tokens: pd.tokens,
+      contextWindow: pd.contextWindow,
+      ctx: { used: pd.tokens.input, window: pd.contextWindow, pct },
+      modules: pd.modules,
+      tasks: pd.tasks,
+      ...(pd.network !== undefined ? { network: pd.network } : {}),
+      ...(peers !== undefined ? { peers } : {}),
+    };
+  });
+  panelSerial = run.then(
+    () => undefined,
+    () => undefined, // 失败不拦后续装配（串行链只防交错，不传播错误）
+  );
+  panelComputes++;
+  return run;
+};
+
+// ---------- panel 缓存（§5 律三：1s TTL + 事件失效） ----------
+
+interface PanelCacheEntry { at: number; data: WebPanelData }
+const panelCache = new Map<string, PanelCacheEntry>();
+
+/** 装配计数（⑥ 断言面：1s 窗内连续 GET 只装配一次；事件/插拔失效后下一 GET 重算）。 */
+export const panelComputeCount = (): number => panelComputes;
+
+const invalidatePanel = (sid: string): void => {
+  panelCache.delete(sid);
+};
+
+/** 事件驱动失效集（§5 律三「turn/todo/模块事件即刷」）：turn 边界（start/end——tokens 在轮末落定）、
+ *  压缩（input 换投影估算）、todo 写。模块插拔无会话事件流（h.reload 不落盘）——toggle 端点显式
+ *  失效；assistant/message 不失效而走 tokens 就地补丁（withLiveTokens——TUI「token 有变化就得更新」
+ *  同款，轮进行中缓存命中也能给出新鲜 tokens）。 */
+const PANEL_INVALIDATE_EVENTS = new Set(["turn/start", "turn/end", "turn/compaction", "tool-todo/write"]);
+
+/** 失效挂钩注册表（每 HostedSession 至多一个订阅——WeakSet 随会话回收，LRU 逐出不滞留）。 */
+const panelWatched = new WeakSet<HostedSession>();
+
+/** panel GET 解析会话时挂失效钩子：HostedSession.onEvent 是扇出面（T2 唯一订阅泵之后），
+ *  每会话一档，回调内只动本会话缓存条目（O(1)——扇出成本不随缓存会话数放大）。 */
+const watchPanelEvents = (hs: HostedSession): void => {
+  if (panelWatched.has(hs)) return;
+  panelWatched.add(hs);
+  hs.onEvent((e: SessionEvent) => {
+    if (PANEL_INVALIDATE_EVENTS.has(e.type)) {
+      invalidatePanel(hs.sid);
+      return;
+    }
+    if (e.type === "assistant/message") {
+      // tokens 就地补丁（withLiveTokens 同款单行语义：{...cache, tokens: lastUsageOf(events)}——
+      // 该函数签名钉死 TUI PanelData 形（permission/permissionNext 必带），web 投影直用 lastUsageOf）
+      const entry = panelCache.get(hs.sid);
+      if (entry !== undefined) entry.data = { ...entry.data, tokens: lastUsageOf([e]) };
+    }
+  });
+};
+
+/** GET /api/sessions/:sid/panel → PanelData 同形 JSON（§3 :232 + ok 加法键）。缓存命中直回
+ *  （§5 律三：2s 轮询 × N 标签不放大成 N 次 history 全量读）；未命中装配 + 挂失效钩子。 */
+registerRoute("GET", "/api/sessions/:sid/panel", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const cached = panelCache.get(sid);
+  if (cached !== undefined && Date.now() - cached.at < PANEL_CACHE_MS) {
+    sendJson(res, 200, { ok: true, ...cached.data });
+    return;
+  }
+  const hs = await resolveSession(sid);
+  if (hs === undefined || hs.core === undefined) {
+    notFound(res);
+    return;
+  }
+  watchPanelEvents(hs);
+  try {
+    const data = await assemblePanel(hs);
+    panelCache.set(sid, { at: Date.now(), data });
+    sendJson(res, 200, { ok: true, ...data });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---------- 模块插拔（E4：closure → setModuleEnabledInConfig → h.reload → ReloadReport 摘要） ----------
+
+/** POST /api/sessions/:sid/modules/:name/toggle {enabled?} → {ok,action,name,report,toast} | 409 {error}
+ *  （§3 :233）。链路 = main.ts toggleModule 同款（m5 T4 联动闭包 + S1 撞锁定拒绝 + S10 连带写日志）：
+ *  锁定模块 → 409 原因文案；busy 期 → 409（reload 走 quiesce，busy 插拔是 TUI 拒收面同款）；
+ *  body.enabled 可显式定方向（§3 形状），缺省按当前挂载态翻转；未知模块 → 404。
+ *  viewer 会话同受理（配置写盘是全局面，harness reload 合法——只读化身不锁图）。 */
+registerRoute("POST", "/api/sessions/:sid/modules/:name/toggle", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const name = params["name"] ?? "";
+  const hs = await resolveSession(sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const h = hs.core;
+  if (h === undefined) {
+    notFound(res);
+    return;
+  }
+  // body 可空（翻转档）；带 enabled 须布尔（显式方向档）
+  const raw = await readBody(req, PANEL_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { enabled?: unknown } = {};
+  if (raw.length > 0) {
+    try {
+      body = JSON.parse(raw.toString("utf8")) as typeof body;
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid json" });
+      return;
+    }
+  }
+  if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+    sendJson(res, 400, { ok: false, error: "enabled 必须为布尔值" });
+    return;
+  }
+  if (hs.busy()) {
+    sendJson(res, 409, { ok: false, error: t("main.module.busyToggle") });
+    return;
+  }
+  const audit = h.graph().audit();
+  const entry = audit.find((a) => a.name === name);
+  if (entry === undefined) {
+    notFound(res);
+    return;
+  }
+  const lockedReason = lockReasonFor(name);
+  if (lockedReason !== undefined) {
+    sendJson(res, 409, { ok: false, error: lockedReason }); // 锁定原因文案（②/④ 同源——lockReasonFor）
+    return;
+  }
+  const target = typeof body.enabled === "boolean" ? body.enabled : entry.state !== "active";
+  // 卸载 tool-subagent 守卫（main.ts 同款）：在跑/排队/挂审批的子代理在册不许卸
+  if (!target && name === "tool-subagent") {
+    const block = subagentUnloadBlock(h.subagents());
+    if (block !== undefined) {
+      sendJson(res, 409, { ok: false, error: block });
+      return;
+    }
+  }
+  // 联动闭包（m5 T4）：卸载带走硬依赖者、挂载自动补提供者；撞锁定拒绝整次（S1）
+  const depRows = audit.map((a) => ({ name: a.name, provides: a.provides, dependsOn: a.dependsOn, state: a.state }));
+  const lockedNames = audit.filter((a) => lockReasonFor(a.name) !== undefined).map((a) => a.name);
+  const closure = target ? computeMountClosure([name], depRows, lockedNames) : computeUnmountClosure([name], depRows, lockedNames);
+  if (!closure.ok) {
+    sendJson(res, 409, { ok: false, error: closure.blocked });
+    return;
+  }
+  // 写盘段（行级保注释；中途失败 = 漏写侧下次 reload 走 topo 降级——main.ts 同安全方向）
+  let written = 0;
+  for (const n of closure.write) {
+    try {
+      setModuleEnabledInConfig(n, target, moduleConfigFileFor(n, h));
+      written++;
+    } catch {
+      sendJson(res, 500, { ok: false, error: t("main.writePartialFail", { n: `${written}/${closure.write.length}` }) });
+      return;
+    }
+  }
+  const cascaded = closure.write.filter((n) => n !== name);
+  let report: ReloadReport;
+  try {
+    report = await h.reload();
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: t("main.toggle.fail", { err: err instanceof Error ? err.message : String(err) }) });
+    return;
+  }
+  if (cascaded.length > 0) {
+    h.log("host.module.cascade", `${t("main.cascade.verb")}${target ? t("modtoggle.verbMount") : t("modtoggle.verbUnmount")} ${name}${t("main.cascade.colon")}${target ? t("skills.action.enable") : t("mcp.action.disable")} ${cascaded.join("、")}`, { action: target ? "mount" : "unmount", target: name, cascaded }); // S10：toast 只报目标，连带写诊断日志
+  }
+  invalidatePanel(sid); // 模块面变化（§5 律三——reload 无会话事件流，插拔端点显式失效）
+  sendJson(res, 200, {
+    ok: true,
+    action: target ? "mount" : "unmount",
+    name,
+    report, // ReloadReport 摘要（added/removed/reloaded/unchanged/failed——§3 :233）
+    toast: toggleResultText(target ? "mount" : "unmount", name, report), // T15 toast 直显串（t() 服务端装配）
+  });
+});
 
 /** GET /api/sessions/:sid/tasks → {ok, rows}（§3：rows = (SubagentRosterEntry & {historical?:boolean})[]）。
  *  口径（§1 G3 = CLI openTasks 同源，tasks-cmd.ts:420）：活名册（h.subagents——进行中全列 + 已结束
