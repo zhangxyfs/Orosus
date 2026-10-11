@@ -876,3 +876,22 @@ body.light .mp-ctl .fsel {
 
 /* 贴图上传在途占位（评审 Important-2：预览源改 /api/media——落盘前 spinner 占位） */
 .attach-thumb .ax-waiting { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--muted-faint); }
+
+/* ─── T17 增量段（设置十页 / 帮助 / 更多 / 更新——CSP 无内联：几何变体全走类名或 JS 属性赋值） ─── */
+/* 设置页小节头间距变体（原型 subHead 的 margin-top:14px 内联款） */
+.set-page .subhead.mt { margin-top: 14px; }
+/* 提供商页头行（标题 + 右侧添加钮） */
+.set-page .pf-headrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+/* F1 上下文环形图（stroke 走 CSS 变量——SVG 属性面不认 var()；≥80% 换警戒色） */
+.ring-svg .ring-track { stroke: var(--border); }
+.ring-svg .ring-fill { stroke: var(--accent); }
+.ring-svg.ring-hot .ring-fill { stroke: var(--err); }
+.ring-svg .ring-text { fill: var(--fg); font-size: 16px; font-weight: 700; font-family: var(--font-mono); }
+/* 帮助弹窗内嵌表（复用 .help-sec/.help-row——去掉原型 .help 容器默认边框） */
+.help.help-inline { margin: 0; border: 0; padding: 0; }
+/* 更新弹窗 markdown 小节滚动面 */
+.update-notes { max-height: 40vh; overflow-y: auto; border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+/* 贴图上传失败静止占位（T16 复核 Minor②——spinner 不永转，失败显 ✕） */
+.attach-thumb .ax-stop { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--err); font-weight: 700; font-size: 16px; }
+/* MCP 修改表单的多行输入（textarea 复用 .fi 形制） */
+.set-page textarea.fi { resize: vertical; min-height: 56px; font-family: var(--font-mono); line-height: 1.5; }

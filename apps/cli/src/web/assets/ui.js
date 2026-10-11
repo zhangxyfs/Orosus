@@ -122,7 +122,7 @@
     }
     if (pu.switchRow !== undefined) {
       var sw = pu.switchRow;
-      html += '<div class="pu-switch"><span class="sw-label">' + sw.label + '</span>';
+      html += '<div class="pu-switch"><span class="sw-label">' + esc(sw.label) + '</span>'; /* sideLabel 服务端原文——esc 补位（T16 复核 Minor③） */
       if (sw.values === undefined || sw.values.length === 0) html += '<span class="sw-none">——</span>';
       else {
         sw.values.forEach(function (v, i) {
@@ -683,7 +683,11 @@
         onPick: function (i) {
           var r = rows[i];
           if (!r || r.sep) return;
-          if (r.data === 'manage') { H.toast('模型管理在 设置 → 提供商与模型（建设中）'); return; }
+          if (r.data === 'manage') { /* T17：换 openSettingsRoot 提供商页（app.js onManageModels 注入） */
+            if (H && typeof H.onManageModels === 'function') H.onManageModels();
+            else H.toast('模型管理在 设置 → 提供商与模型');
+            return;
+          }
           var p = r.data;
           if (!p.models || p.models.length === 0) { H.toast(p.displayName + ' 未配置端点——设置 → 提供商与模型 添加'); return; }
           openProviderModels(anchor, p);
@@ -700,7 +704,7 @@
     openPick({
       mini: 'right',
       anchor: anchor,
-      title: p.displayName,
+      title: esc(p.displayName), /* pu.title 原文直插——服务端可控字段 esc 补位（T16 复核 Minor③） */
       en: 'MODELS',
       items: rows,
       foot: '点击切换 · Esc 关闭',
@@ -804,7 +808,7 @@
           var tk = row.data;
           if (tk.pendingApproval) {
             openPick({
-              title: '子代理审批 ' + tk.id + ' · ' + (tk.label ?? '') + ' · ' + tk.pendingApproval.tool + '（' + tk.pendingApproval.reason + '）',
+              title: '子代理审批 ' + esc(tk.id) + ' · ' + esc(tk.label ?? '') + ' · ' + esc(tk.pendingApproval.tool) + '（' + esc(tk.pendingApproval.reason) + '）', /* esc 补位（Minor③） */
               items: ['批准一次', '拒绝'].map(function (s) { return { html: itemRowHtml(s) }; }),
               onPick: function (j) {
                 A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(tk.id) + '/approval', { method: 'POST', body: JSON.stringify({ allow: j === 0 }) })
@@ -819,7 +823,7 @@
           /* transcript 回放窗（T7：末 500 事件——render.renderTranscript 同款渲染） */
           var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
           openView({
-            title: '子代理 ' + tk.id + ' · ' + (tk.label ?? ''),
+            title: '子代理 ' + esc(tk.id) + ' · ' + esc(tk.label ?? ''), /* esc 补位（Minor③） */
             en: 'TRANSCRIPT',
             bodyHtml: '<div class="pu-text"><span class="' + st[1] + '">状态：' + st[0] + ' · ' + (tk.turns ?? 0) + ' 轮' + (tk.background ? ' · 后台' : '') + (tk.error ? ' · ' + esc(tk.error) : '') + '</span></div><div class="mini-stream" id="pu-transcript">加载中…</div>',
             foot: '滚动查看 · Esc 返回列表',
@@ -913,6 +917,7 @@
     openTasksPanel: openTasksPanel,
     openView: openView,
     viewLines: viewLines,
+    mdHtml: mdHtml, /* marked+DOMPurify 渲染口（T17 更新弹窗/注入全文/压缩摘要消费） */
     btwOpen: btwOpen,
     btwSetQuestion: btwSetQuestion,
     btwFrame: btwFrame,

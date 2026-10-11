@@ -395,6 +395,42 @@ describe("web T12：设置·数据面 API", () => {
     await s.stop();
   }, 60_000);
 
+  it("⑧ GET /api/settings/prefs（T17 F3 初值读面）：缺省语义 + POST 写后读回（vision/search/subagent）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    process.chdir(cwd);
+    writeProviderConfig(home);
+    await seedSession(home, cwd, "s_pref8");
+    const s = await startWebAt(home, cwd, "s_pref8");
+
+    // 缺省语义：visionModel="off" / search="auto" / subagent 三键 null=跟随
+    const g0 = await getJson(s, "/api/settings/prefs");
+    expect(g0.status).toBe(200);
+    expect(g0.body["ok"]).toBe(true);
+    expect(g0.body["visionModel"]).toBe("off");
+    expect(g0.body["search"]).toBe("auto");
+    expect(g0.body["subagent"]).toEqual({ model: null, approvalMode: null, maxTurns: null });
+
+    // POST 写 → GET 读回（读写同文件对：modules.d/tool-*.toml）
+    await post(s, "/api/settings/prefs", { key: "visionModel", value: "auto" });
+    await post(s, "/api/settings/prefs", { key: "search.backend", value: "tavily" });
+    await post(s, "/api/settings/prefs", { key: "model", value: "demo/model-x" });
+    await post(s, "/api/settings/prefs", { key: "approvalMode", value: "ask" });
+    await post(s, "/api/settings/prefs", { key: "maxTurns", value: 150 });
+    const g1 = await getJson(s, "/api/settings/prefs");
+    expect(g1.body["visionModel"]).toBe("auto");
+    expect(g1.body["search"]).toBe("tavily");
+    expect(g1.body["subagent"]).toEqual({ model: "demo/model-x", approvalMode: "ask", maxTurns: 150 });
+
+    // null 删键 → 读回跟随态
+    await post(s, "/api/settings/prefs", { key: "maxTurns", value: null });
+    const g2 = await getJson(s, "/api/settings/prefs");
+    expect(g2.body["subagent"]).toEqual({ model: "demo/model-x", approvalMode: "ask", maxTurns: null });
+
+    await s.stop();
+  }, 60_000);
+
   it("⑦ 更新内容链路：readme 切片两形 + /api/update 集成（notes+skipped 齐 / 失败降级）+ release 门禁", async () => {
     // —— 纯函数：readme 切片（含 / 不含 ### v<latest> 小节）——
     const sliced = sliceChangelogNotes(FAKE_README, NEWER);

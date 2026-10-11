@@ -17,6 +17,12 @@
  *  - POST /api/settings/prefs（§3 :263，F3）：模型偏好五键——visionModel（[tool-media] 三态）/
  *    search.backend（[tool-web] 四态）/ [tool-subagent] model|approvalMode|maxTurns（null=跟随删键，
  *    subagent-settings 写键族同款）——分别落 modules.d/tool-{media,web,subagent}.toml + reload 收口；
+ *  - GET /api/settings/prefs（T17 增补〔§3 形状增量——方案文档已追认〕，F3 下拉初值读面）：五键当前值
+ *    投影（visionModel/readVisionModel 同文件对、search.backend=loadConfig 有效视图、subagent 三键
+ *    readSubagentConfig——缺省语义 visionModel="off" / search="auto" / subagent 全 null=跟随）；
+
+ *    search.backend（[tool-web] 四态）/ [tool-subagent] model|approvalMode|maxTurns（null=跟随删键，
+ *    subagent-settings 写键族同款）——分别落 modules.d/tool-{media,web,subagent}.toml + reload 收口；
  *  - GET/POST /api/settings/skills（§3 :249-250，F4）：skill.catalog 服务行（四轨 scope/file）+
  *    disabled 盘上现读覆盖（TUI skillCatalogRows 同口径——reload 前的 catalog 停用快照滞后，以盘
  *    为准）；POST toggle 写 [skill] disabled 数组（toggleSkillDisabled——modules.d/skill.toml）+
@@ -43,7 +49,7 @@ import { loadConfig, sectionPath, writeSectionKey, writeNestedTable, type Harnes
 import { orosusHome } from "@orosus/contracts/home";
 import type { CapabilityKey } from "@orosus/contracts/module";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
-import { persistVisionModel } from "@orosus/tool-media";
+import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
 import type { McpCatalogRow } from "@orosus/mcp";
 import { detectSources, findGitRoot, importNotes, memoryBucketKey, readSourceNotes, type PeerHomes } from "@orosus/tool-peers";
 import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "../mcp-cmd.ts";
@@ -53,7 +59,7 @@ import { lastUsageOf } from "../usage-text.ts";
 import { BUILTIN_LOCALES, createLocaleStore } from "../i18n/store.ts";
 import { readUpdateCheckEnabled, updateConfigFile, writeUpdateCheckKey } from "../update-settings.ts";
 import { updateInfoNow } from "../update-check.ts";
-import { writeSubagentConfigKey } from "../subagent-settings.ts";
+import { readSubagentConfig, writeSubagentConfigKey } from "../subagent-settings.ts";
 import { readSkillDisabled, toggleSkillDisabled } from "../skill-settings.ts";
 import { hooksFace, setHookDisabled, trustProjectHooks } from "../hooks-ui.ts";
 import { readPeersConfig, writePeersConfigKey } from "../peers-settings.ts";
@@ -443,6 +449,34 @@ registerRoute("POST", "/api/settings/update", async (req, res) => {
  *  <名>.toml；sectionPath 负责建目录与带节头文件）。 */
 const prefsModuleFile = (name: string): string =>
   sectionPath(name, { userConfig: join(orosusHome(), "config.toml"), modulesDir: join(orosusHome(), "modules.d"), isModule: () => true });
+
+/** GET /api/settings/prefs → {ok, visionModel, search, subagent:{model,approvalMode,maxTurns}}（T17
+ *  增补——§3 形状增量已方案追认；F3 下拉初值读面）。读口与 POST 写面同文件对：
+ *  - visionModel：readVisionModel(prefsModuleFile("tool-media"))——modules.d/tool-media.toml（缺省 "off"）；
+ *  - search：loadConfig 有效视图 [tool-web.search].backend（分层合并后读值——缺省 "auto"）；
+ *  - subagent：readSubagentConfig（loadConfig + modules.d 同读——键缺席 = null 跟随态）。 */
+registerRoute("GET", "/api/settings/prefs", async (_req, res) => {
+  let visionModel = "off";
+  try {
+    visionModel = readVisionModel(prefsModuleFile("tool-media"));
+  } catch { /* 读失败按缺省 */
+  }
+  let search = "auto";
+  try {
+    // [tool-web.search] 在 TOML 解析面是嵌套对象（sections 键 = "tool-web"——CH-07 深合并后照旧嵌套）
+    const sec = loadConfig(configFacePaths()).sections.get("tool-web") as { search?: { backend?: unknown } } | undefined;
+    const b = sec?.search?.backend;
+    if (typeof b === "string" && b !== "") search = b;
+  } catch { /* 同上 */
+  }
+  const sub = readSubagentConfig(join(orosusHome(), "config.toml"));
+  sendJson(res, 200, {
+    ok: true,
+    visionModel,
+    search,
+    subagent: { model: sub.model ?? null, approvalMode: sub.approvalMode ?? null, maxTurns: sub.maxTurns ?? null },
+  });
+});
 
 /** POST /api/settings/prefs {key, value} → {ok, report?}（§3 :263，F3 模型偏好五键）：
  *  - visionModel → [tool-media]（persistVisionModel——TUI runVisionSetting 同一写器；三态
