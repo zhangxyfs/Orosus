@@ -196,7 +196,11 @@ const exitCli = async (code: number): Promise<never> => {
     // `orosus web`（web 批 T1）：起本机 server 并长驻——runWebSubcommand 直到 server 关停才返回；
     // 引导门（G16）/双开复用（G12）/端口换号（G13）/URL 横幅（G11）在 web/mod.ts 内编排
     if (isWebSubcommand(argv)) {
-      await exitCli(await runWebSubcommand(argv, { out: (l) => console.log(l) }));
+      const code = await runWebSubcommand(argv, { out: (l) => console.log(l) });
+      // 防御性驻留：复用路径刚做过 fetch（findLiveInstance 全局 undici fetch）——同款 Node v24 win32
+      // 竞态（fetch 后紧接 process.exit 撕 undici 池句柄 → libuv 断言 exit 127），provider/upgrade 同防
+      await new Promise((r) => setTimeout(r, 150));
+      await exitCli(code);
     }
     if (isUpgradeSubcommand(argv)) {
       // m5-update-check T4：`orosus upgrade` 自升级子命令（D3）——独立取数，不受 [update] check 开关影响（D4）
