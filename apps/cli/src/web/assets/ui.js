@@ -386,7 +386,7 @@
         var dirs = entries.filter(function (e2) { return e2.dir; }).length;
         var rows = entries.map(function (e2) {
           return {
-            html: '<span class="pu-caret">❯</span><span class="pi-name"' + (e2.dir ? ' style="color:var(--accent)"' : '') + '>' + esc(e2.name) + (e2.dir ? '/' : '') + '</span>',
+            html: '<span class="pu-caret">❯</span><span class="pi-name' + (e2.dir ? ' dir' : '') + '">' + esc(e2.name) + (e2.dir ? '/' : '') + '</span>',
             data: e2,
           };
         });
@@ -696,7 +696,7 @@
     }, function () { H.toast('拉取模型清单失败'); });
   }
   function openProviderModels(anchor, p) {
-    var rows = [{ html: '<span class="pi-name" style="color:var(--info)">‹ 返回</span>', data: 'back' }].concat(
+    var rows = [{ html: '<span class="pi-name back">‹ 返回</span>', data: 'back' }].concat(
       p.models.map(function (m) {
         return { html: '<span class="pu-caret">❯</span><span class="pu-check">' + (m.cur ? '✓' : '') + '</span><span class="pi-name">' + esc(m.name) + '</span>', data: m };
       }),

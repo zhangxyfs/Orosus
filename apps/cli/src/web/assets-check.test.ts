@@ -75,6 +75,13 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes("(max-width: 920px)"), "920px 断点保留").toBe(true);
   });
 
+  it("②补 全资产 style= 内联属性零容忍（T18 清位棘轮——CSP style-src 不放行，换类/CSSOM 实现）", () => {
+    // 属性形（style=" / style='）才计入——注释/文档里的字面 "style=" 不误伤（app.js 头注有「零 style= 属性」自述）
+    for (const name of ["api.js", "app.js", "render.js", "ui.js", "archived-view.js"]) {
+      expect(/\bstyle\s*=\s*["']/i.test(read(name)), `assets/${name} 不应有 style= 内联属性`).toBe(false);
+    }
+  });
+
   it("⑤补 esc() 全量转义：含双引号/单引号/&/</> 的输入不破出 HTML 属性（T15 审查 Important-1）", () => {
     const api = read("api.js");
     // 转义原语齐备（& < > " ' 五字符——title="…" 拼属性消费面的硬前提）

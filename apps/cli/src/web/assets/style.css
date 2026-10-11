@@ -597,6 +597,10 @@ body.light .mp-ctl .fsel {
 .pu-item .sep-line { flex: 1; border-bottom: 1px solid color-mix(in oklch, var(--border) 80%, transparent); margin-left: 10px; transform: translateY(-4px); }
 .pu-item.skill-row .pi-name { color: var(--warn); font-weight: 400; }
 .pu-item.skill-row.sel .pi-name { color: var(--warn); }
+/* T18 内联 style= 清位（CSP style-src 零容忍——换类保持同视觉）：@ 菜单目录行 accent / 模型二级「‹ 返回」info；
+   置于 .sel 规则之后——选中态名色不变（与原内联 style 优先级行为一致） */
+.pu-item .pi-name.dir { color: var(--accent); }
+.pu-item .pi-name.back { color: var(--info); }
 /* 行内三色态（/tasks 用） */
 .pu-item .st-ok { color: var(--muted); }
 .pu-item .st-run { color: var(--accent); }
