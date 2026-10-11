@@ -19,7 +19,7 @@
  *    响应头 X-Accel-Buffering: no + Cache-Control: no-cache。 */
 import type { ServerResponse } from "node:http";
 import type { SessionEvent } from "@orosus/core";
-import type { HostedSession } from "./hosted.ts";
+import type { BtwFrame, HostedSession } from "./hosted.ts";
 
 /** 自创值登记（方案 §5 表——改值先查那里）：SSE chunk 合批 50ms flush、首帧 retry 提示 3000ms、
  *  心跳 15s（unref）、写超时 >30s 逐出。测试经 configureSseTimers 注入短窗（心跳/写超时）。 */
@@ -58,6 +58,8 @@ interface SseClient {
   chain: Promise<void>;
   /** 挂起的 chunk 合批文本（50ms 窗内拼接，一次成帧）。 */
   chunkBuf: string;
+  /** 挂起的 btw 批（累积式——窗内后到覆盖先到，一次成帧；§5 律二同款降频）。 */
+  btwBuf: BtwFrame | undefined;
   chunkTimer: NodeJS.Timeout | undefined;
   pingTimer: NodeJS.Timeout | undefined;
   /** 已写出最新 ev seq——快照段与 live 帧的去重锚（注册先于快照的竞争窗由此兜住）。 */
@@ -140,6 +142,7 @@ const detachClient = (c: SseClient): void => {
     c.pingTimer = undefined;
   }
   c.chunkBuf = "";
+  c.btwBuf = undefined;
   const set = fanouts.get(c.hs);
   if (set !== undefined) {
     set.delete(c);
@@ -163,16 +166,23 @@ const armChunkFlush = (c: SseClient): void => {
   c.chunkTimer.unref?.();
 };
 
-/** 落地挂起的 chunk 批：一次成帧入链（取消计时器——窗提前关）。 */
+/** 落地挂起的 chunk 批：一次成帧入链（取消计时器——窗提前关）。btw 批同窗落地（累积式覆盖——
+ *  一次成帧；§3 帧型表外新增帧面，T6 报告登记）。 */
 const flushChunkBatch = (c: SseClient): void => {
   if (c.chunkTimer !== undefined) {
     clearTimeout(c.chunkTimer);
     c.chunkTimer = undefined;
   }
   const text = c.chunkBuf;
-  if (text === "" || c.closed) return;
-  c.chunkBuf = "";
-  enqueue(c, () => writeTask(c, () => writeFrame(c.res, "chunk", { text })));
+  if (text !== "" && !c.closed) {
+    c.chunkBuf = "";
+    enqueue(c, () => writeTask(c, () => writeFrame(c.res, "chunk", { text })));
+  }
+  const btw = c.btwBuf;
+  if (btw !== undefined && !c.closed) {
+    c.btwBuf = undefined;
+    enqueue(c, () => writeTask(c, () => writeFrame(c.res, "btw", btw)));
+  }
 };
 
 /** 直发帧（ev/interaction/queue/phase/shutdown 前置的帧序纪律）：先 flush 该客户端挂起的 chunk 批
@@ -244,6 +254,7 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
     hs,
     chain: Promise.resolve(),
     chunkBuf: "",
+    btwBuf: undefined,
     chunkTimer: undefined,
     pingTimer: undefined,
     lastSeq: after, // 重连游标：seq ≤ after 客户端已知——去重锚初值
@@ -274,6 +285,11 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
       armChunkFlush(c);
     }),
     hs.onQueue((items) => sendDirect(c, "queue", { items })), // 整表快照帧（多标签一致性）
+    hs.onBtw((f) => { // T6 侧问流帧（累积式合批——与主流 chunk 通道分面不串台）
+      if (c.closed) return;
+      c.btwBuf = f;
+      armChunkFlush(c);
+    }),
   );
   // 15s 心跳（unref）：注释帧 `: ping`，不带 id/event
   c.pingTimer = setInterval(() => {

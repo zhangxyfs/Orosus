@@ -26,6 +26,8 @@ import { orosusHome } from "@orosus/contracts/home";
 import { BUILTIN_MODULES } from "../builtins.ts";
 import { PresenceWriter } from "../presence.ts";
 import { liveSessionActive } from "../ps.ts";
+import { t } from "../i18n/app.ts";
+import { busyExecutable, commandNameOf, QUIT_CMDS, routeCommand, WEB_BUSY_BLOCK } from "./cmdrouter.ts";
 
 /** 事件 ring 容量（自创值登记——方案 §5 表：改值先查那里）。ring 是订阅侧最近窗口缓存，完整历史走
  *  harness history()（events() Channel 零订阅者时只留最近 256 条——CH-10 同纪律）。 */
@@ -40,13 +42,26 @@ const PROMPT_ID_ADMISSION_CAP = 256;
 export type AfterUserEvent = { type: string; fields: Record<string, unknown> }[];
 
 /** send 协议结果（§3 send 端点同形）：入队时 {ok:true,queued:true,index}；撞锁 {ok:false,holder}
- *  （holder = 锁载荷实读 {pid,since,label?}——前端 t() 组装人话，D16 口径）。 */
+ *  （holder = 锁载荷实读 {pid,since,label?}——前端 t() 组装人话，D16 口径）。T6 命令面扩两键：
+ *  output = 命令输出文本（§4-4 静默命令 "" 不带键——D16 命令行不进流区，输出走 toast/浮层）；
+ *  mark = 路由信号（cmdrouter.CommandMark——quit 由 server 执行，new/fork/skill/menu:model/tasks
+ *  由前端消费）。 */
 export interface SendResult {
   ok: boolean;
   queued?: boolean;
   index?: number;
   error?: string;
   holder?: { pid: number; since: string; label?: string };
+  output?: string;
+  mark?: string;
+}
+
+/** btw 流帧（T6 cmdrouter 消费——SSE `event: btw` 帧源）：answering = 累积正文（晚开窗整段渲染）、
+ *  answer = 终态全文、error = 失败原因。旁路快问不经 turn/chunk 通道（零落盘），独立帧面与主流
+ *  区分（busy 期 /btw 与主 turn 并流不串台）。 */
+export interface BtwFrame {
+  phase: "answering" | "answer" | "error";
+  text: string;
 }
 
 /** HostedSession 装配入参（brief 签名 + 少量可选注入面——T1 先例：可选注入不破坏签名形状）：
@@ -106,6 +121,7 @@ export class HostedSession {
   private readonly eventSubs = new Set<(e: SessionEvent) => void>();
   private readonly chunkSubs = new Set<(t: string) => void>();
   private readonly queueSubs = new Set<(items: { index: number; text: string }[]) => void>();
+  private readonly btwSubs = new Set<(f: BtwFrame) => void>();
 
   constructor(init: HostedInit) {
     this.init = init;
@@ -129,6 +145,11 @@ export class HostedSession {
   }
   /** 装配完成（createHarness + presence 挂起 + 订阅泵就绪）；失败 reject 由 Pool/调用方定口径。 */
   get ready(): Promise<void> { return this.readyGate; }
+  /** core harness 只读口（T6 cmdrouter 消费：命令透传 h.prompt / setLabel / fork / llm 直调；
+   *  装配前/已关 = undefined——cmdrouter 按会话装配失败报错）。 */
+  get core(): Harness | undefined { return this.harness; }
+  /** 项目桶目录（<root>/<bucket>——T6 /ps 的 scanWithSelf 扫描基址；presence/锁同址）。 */
+  get sessionsDir(): string { return this.bucketDir; }
 
   private async assemble(): Promise<void> {
     // T5：commandUi 工厂在此解析（self = 本会话）——WebCommandUi 的 broadcast/presence/close 钩子
@@ -270,21 +291,62 @@ export class HostedSession {
   /** send 端点的受理口（§3 POST send → 202 Accepted 语义）：受理即回——busy 入队同步定形
    *  {ok:true,queued,index}；闲时同步占位 + 锁检后即回 {ok:true}，turn 终值不挂 HTTP（事件流/
    *  相位帧是反馈面），done 带后台 turn 终值（dispatch 消费；内部自捕获不产生未处理拒绝）。
-   *  撞他进程活锁 {ok:false,holder}（409 形）与 viewer/已关拒绝同在此定形。 */
+   *  撞他进程活锁 {ok:false,holder}（409 形）与 viewer/已关拒绝同在此定形。命令面（"/" 开头）
+   *  走 routeCommand 分流（T6 cmdrouter——图片/旁注对命令无意义，不透传）。 */
   async accept(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
     if (this.closed) return { result: { ok: false, error: "会话已关闭" } };
     if (this.mode === "viewer") return { result: { ok: false, error: "viewer 会话只读（不发 prompt）" } };
-    if (text.startsWith("/")) return this.routeCommand(text, images, afterUserEvent); // 命令分流点（T6 接位）
+    if (text.startsWith("/")) return this.routeCommand(text); // 命令分流点（T6 cmdrouter）
     return this.runText(text, images, afterUserEvent);
   }
 
-  /** 命令分流点（T6 cmdrouter 接位）："/" 开头 = 命令面——T6 交付表驱动 cmdrouter（host 命令自写 +
-   *  模块命令透传 h.prompt + BUSY 分级：busy 安全命令直发不入队）。过渡期（T4）= 按消息路径透传：
-   *  core h.prompt 内建命令路由现成（/model /effort /help /reload + 模块 contribute:command 命令
-   *  同径派发，命令不落 user/message——harness.ts:1334 注记），busy 期与消息同队；命令返回文本
-   *  （§4-4「命令行不进流区」）暂随 done 丢弃——web 命令反馈面（toast/浮层）是 T6 交付物。 */
-  private routeCommand(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
-    return this.runText(text, images, afterUserEvent);
+  /** 命令分流点（T6 cmdrouter 接位——D15 busy 分级 + 表驱动路由）：
+   *  - /quit 族 busy 特例：先 cancel（立即打断当前 turn）再交 mark:"quit" 由 server 侧关当前会话；
+   *  - BLOCK 表（/new /fork）busy 期 → {ok:false,error}（409 语义——拦截提示保留输入）；
+   *  - EXEC 表 + `__` 模块命令 busy 期立即执行（core 命令路由在单并发守卫之前 harness.ts:1275，
+   *    不入队不占 dispatching——命令不建 turn）；
+   *  - 两表外默认档 = 与消息同队（busy 入队，出队再走本分流）；
+   *  - 闲时经 cmdrouter.routeCommand：host 命令自写 / 模块命令透传 h.prompt；命令输出与路由信号
+   *    随 result 定形（output/mark）；命令错误（含未知命令）折为 output（toast 面，D16）——错误
+   *    不是失败受理（ok 恒 true，区别于 BLOCK 拦截形）。/skill 合成体（submit）以消息路径重新
+   *  提交——runText 的排队/占位/锁检语义全套保留（CLI 递归管线的 web 同构）。 */
+  private async routeCommand(text: string): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
+    const { name } = commandNameOf(text);
+    if (this.busy()) {
+      if (QUIT_CMDS.has(name)) {
+        this.cancel(); // D15 特例：busy 期先 cancel 再关（turn/end interrupted 回流）
+        return { result: { ok: true, mark: "quit" } };
+      }
+      if (WEB_BUSY_BLOCK.has(name)) {
+        return { result: { ok: false, error: t("main.busy.note", { cmd: name }) } }; // 409 语义
+      }
+      if (!busyExecutable(name)) return this.runText(text); // 默认档：与消息同队（busy → 入队）
+      // EXEC/__：立即执行——下落与闲时同径（命令不建 turn，无并发面）
+    }
+    await this.readyGate.catch(() => undefined);
+    if (this.harness === undefined) return { result: { ok: false, error: "会话装配失败" } };
+    try {
+      const r = await routeCommand(this, text);
+      if (r.submit !== undefined) {
+        const rt = await this.runText(r.submit);
+        const mark = r.mark; // 闭包内窄化保持（属性窄化不跨闭包——const 局部承接）
+        if (mark !== undefined && rt.result.ok) {
+          rt.result = { ...rt.result, mark };
+          if (rt.done !== undefined) rt.done = rt.done.then((d): SendResult => (d.ok ? { ...d, mark } : d)); // dispatch 面同形
+        }
+        return rt;
+      }
+      return {
+        result: {
+          ok: true,
+          ...(r.output !== "" ? { output: r.output } : {}),
+          ...(r.mark !== undefined ? { mark: r.mark } : {}),
+        },
+      };
+    } catch (err) {
+      // 命令错误面 = toast（D16）：未知命令/路由失败文案即输出（TUI settleSessionError 同政策）
+      return { result: { ok: true, output: err instanceof Error ? err.message : String(err) } };
+    }
   }
 
   /** 消息路径：busy → 入队；闲 → 同步占位（先于任何 await——并发 accept 只能入队，§4-4「send 端点
@@ -415,6 +477,20 @@ export class HostedSession {
   onQueue(cb: (items: { index: number; text: string }[]) => void): () => void {
     this.queueSubs.add(cb);
     return () => { this.queueSubs.delete(cb); };
+  }
+
+  /** btw 流状态扇出口（T6 cmdrouter 消费——SSE `event: btw` 帧源）：旁路快问不经 turn/chunk
+   *  通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。返回退订函数。 */
+  onBtw(cb: (f: BtwFrame) => void): () => void {
+    this.btwSubs.add(cb);
+    return () => { this.btwSubs.delete(cb); };
+  }
+
+  /** btw 流状态广播（T6 runBtw 收流转发——answering 累积式/answer/error 终态）。 */
+  emitBtw(f: BtwFrame): void {
+    for (const cb of Array.from(this.btwSubs)) { // 快照迭代——回调内退订不跳元素
+      try { cb(f); } catch { /* 订阅方异常不拦扇出 */ }
+    }
   }
 
   /** 回放段（T3 SSE 首屏补齐/重连 backfill 源——「事件订阅自持 ring（cap 1024）+ 全量 history() 兜底」

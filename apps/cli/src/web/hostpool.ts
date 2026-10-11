@@ -136,6 +136,17 @@ export class HostPool {
     await Promise.all(all.map((hs) => hs.close().catch(() => undefined)));
   }
 
+  /** 关停并摘除单个会话（T6 /quit——G10 web 语义：关当前会话，server 常驻）：先清表（host 查询即刻
+   *  失效——后续请求按盘上会话走 viewer 只读化身）再 close（closeAll 同序）。幂等（不在池 = no-op）。 */
+  async remove(sid: string): Promise<void> {
+    const hs = this.hosts.get(sid) ?? this.viewers.get(sid);
+    this.hosts.delete(sid);
+    this.viewers.delete(sid);
+    this.viewerOrder = this.viewerOrder.filter((s) => s !== sid);
+    if (this.currentSid === sid) this.currentSid = undefined;
+    await hs?.close().catch(() => undefined);
+  }
+
   private touchViewer(sid: string): void {
     this.viewerOrder = this.viewerOrder.filter((s) => s !== sid);
     this.viewerOrder.push(sid);

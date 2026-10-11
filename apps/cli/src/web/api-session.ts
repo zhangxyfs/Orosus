@@ -174,9 +174,18 @@ registerRoute("POST", "/api/sessions/:sid/send", async (req, res, params) => {
     ? [{ type: INPUT_ECHO_EVENT, fields: { text: text ?? "" } }]
     : undefined;
   const { result } = await hs.accept(withAt, images, afterUserEvent);
-  // 展开降型（interface 无隐式索引签名——sendJson 收 Record；字段集即 §3 send 形）
+  // 展开降型（interface 无隐式索引签名——sendJson 收 Record；字段集即 §3 send 形 + T6 命令面
+  // output/mark 两键——cmdrouter 路由信号，T16 前端消费）
   if (result.ok) sendJson(res, 202, { ...result });
   else sendJson(res, 409, { ...result });
+  // /quit 族（G10 web 语义 = 关当前会话，server 常驻）：mark:"quit" 由本端点执行——响应先落地
+  // 再关（50ms 拆接同款窗，T4 CONNECTION_TEARDOWN_MS 先例），HostedSession.close 同 CLI 退出
+  // 序（presence/close/purgeIfEmpty）；busy 形已在分流点先 cancel（D15 特例）。
+  if (result.mark === "quit") {
+    const sidOf = hs.sid;
+    const timer = setTimeout(() => { void pool?.remove(sidOf).catch(() => undefined); }, 50);
+    timer.unref?.();
+  }
 });
 
 /** DELETE /api/sessions/:sid/queue/:index → {ok}（§3：index 以最近 queue 帧快照为准；撤回即广播
