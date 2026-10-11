@@ -205,8 +205,14 @@ function armShutdown(server: Server, home: string): void {
   });
 }
 
+/** SSE shutdown 帧刷出窗（T2）：broadcast 同步写出帧 + end 后，socket 缓冲的落地在后续 tick——
+ *  紧跟的 closeAllConnections 会撕掉未刷帧（G15「已正常关闭」变体文案依赖帧到达浏览器）。让出短窗
+ *  再拆连接；SIGINT 手感无可感知差异（50ms）。自创值登记同源口径。 */
+const CONNECTION_TEARDOWN_MS = 50;
+
 /** 触发清退序（SIGINT 钩子与测试同口；幂等）：广播 shutdown 监听（T2 的 SSE 帧 + pool.closeAll）
- *  → 删实例文件 → 关 server（closeAllConnections 保证长驻连接不拖死关停——SSE 时代同口）。 */
+ *  → 删实例文件 → 关 server（closeAllConnections 让出 SSE 帧刷出窗后执行，保证长驻连接不拖死
+ *  关停——SSE 时代同口）。 */
 export function shutdownWebServer(reason: string): void {
   if (armed === undefined) return;
   const { server, home } = armed;
@@ -214,7 +220,7 @@ export function shutdownWebServer(reason: string): void {
   broadcastShutdown(reason);
   removeInstance(home);
   server.close(() => undefined);
-  server.closeAllConnections?.();
+  setTimeout(() => server.closeAllConnections?.(), CONNECTION_TEARDOWN_MS).unref?.();
 }
 
 // ---------- 起服 ----------

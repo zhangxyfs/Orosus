@@ -889,12 +889,17 @@ function attachRender(h: Harness): void {
 process.on("SIGINT", () => h.cancel()); // Ctrl-C 中止当前 turn，不退出（h 为当前会话）
 
 /** 单行处理（REPL 与全屏共用——F3 抽取）：会话生命周期指令 → "switch"（重挂横幅/渲染）；
- *  /quit → "quit"；其余 → "again"。out = 输出通道（REPL=console.log，全屏=DocModel.pushLine——
+ *  /quit → "quit"；/web → "web"（T2 G14 形态切换——退出 TUI 同进程转入 web server，交接在
+ *  sessionLoop 退出路径）；其余 → "again"。out = 输出通道（REPL=console.log，全屏=DocModel.pushLine——
  *  全屏 alt-screen 下 console 输出会毁屏，一切带内输出必须进流区）。typedInput = 输入框原文（仅技能
  *  递归传——text 已是「标记行+原话+正文」合成体；旁注据此记原话，↑ 召回口径见 inputHistoryTexts）。 */
-const processReplLine = async (text: string, out: (s: string) => void, typedInput?: string): Promise<"again" | "switch" | "quit"> => {
+const processReplLine = async (text: string, out: (s: string) => void, typedInput?: string): Promise<"again" | "switch" | "quit" | "web"> => {
       const directive = sessionCommand(text, { sessionId: h.sessionId, lastEventId });
       if (directive.kind === "quit") return "quit"; // /quit 同义 /exit /q（用户要求 2026-09-18）——经 sessionCommand 可测面
+      // /web（web 批 T2 / G14 形态切换——用户 2026-10-10 口令）：退出 TUI、同进程转入 web server。
+      // busy 期先 h.cancel()（与 /quit 族同款——全屏 busy 拦截面在 runFullScreen submit 同点接入；
+      // 行模式 REPL 串行无 busy 态）；本分支只发信号，交接载荷捕获与形态衔接在 sessionLoop 退出路径
+      if (cmdNameOf(text) === "/web") return "web";
       if (directive.kind === "pick") {
         // /sessions（别名 /resume）无参：列表 + choose 选中即 resume（B9 形态；非交互指路直达）
         if (!process.stdin.isTTY) { out(formatSessions(sessionsRoot, h.sessionId, currentBucket) + "\n" + t("main.sessions.nonTty")); return "again"; }
@@ -1390,8 +1395,8 @@ const ASCII_BANNER = (VERSION: string): string[] => [
 	"",
 ];
 
-const runFullScreen = async (): Promise<"switch" | "quit"> => {
-  let action: "switch" | "quit" | undefined;
+const runFullScreen = async (): Promise<"switch" | "quit" | "web"> => {
+  let action: "switch" | "quit" | "web" | undefined;
   void refreshSkillMenu(skillDeps); // m4-7 T7：技能菜单首刷（异步先取，菜单首开即有数据；后续走 TTL + reload 显式点）
   const app = new FullApp({
     columns: () => process.stdout.columns ?? 80,
@@ -1413,9 +1418,9 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
       // 拦回车档（BUSY_BLOCK）已由 submitGate 拦在提交前（到不了这里）；其余命令与消息照旧排队
       const cmdN = cmdNameOf(text);
       if (inflight) {
-        if (cmdN === "/quit" || cmdN === "/exit" || cmdN === "/q") {
-          void h.cancel(); // 打断当前消息输出
-          action = "quit";
+        if (cmdN === "/quit" || cmdN === "/exit" || cmdN === "/q" || cmdN === "/web") {
+          void h.cancel(); // 打断当前消息输出（/web 同款——T2 G14 busy 期先 cancel 再交接）
+          action = cmdN === "/web" ? "web" : "quit";
           return;
         }
         if (BUSY_EXEC.has(cmdN) || cmdN.includes("__")) { runSubmit(text, true); return; }
@@ -1740,6 +1745,7 @@ const runFullScreen = async (): Promise<"switch" | "quit"> => {
         if (!busyExec) {
           if (r === "switch") action = "switch";
           else if (r === "quit") action = "quit";
+          else if (r === "web") action = "web"; // T2 G14：/web 形态切换——退出 FullApp 转入 web server
         }
       } catch (err) {
         // runSubmit 网兜（2026-09-24 走查实锤前案）：void-async 无 rejection 落点 = 进程杀手——
@@ -2004,7 +2010,13 @@ const onboardingInitial = async (): Promise<{ configured: string[]; active: stri
 	};
 };
 
-if (args.print === undefined) try {
+// T2 /web 形态切换（G14）信号：web = sessionLoop 退出序列完成后同进程转入 web server；
+// webHandover 在退出序列**前**捕获（purge 后 sid 失效由退出路径自查——空会话被清则不传，server 空启）
+let quitReason: "quit" | "web" | undefined;
+let webHandover: { resumeSid: string; cwd: string } | undefined;
+
+if (args.print === undefined) {
+  try {
   sessionLoop: for (;;) {
     // 横幅分流（F3）：全屏模式 console 输出会毁屏——横幅进 DocModel 流区；dm 每会话重置（新会话新文档）
     dm = newMainDocModel();
@@ -2054,6 +2066,11 @@ if (args.print === undefined) try {
       if (tuiMode === "full") {
         const action = await runFullScreen();
         if (action === "quit") break sessionLoop;
+        if (action === "web") {
+          quitReason = "web";
+          webHandover = { resumeSid: h.sessionId, cwd: process.cwd() }; // 退出序列前捕获（G14 交接载荷）
+          break sessionLoop;
+        }
         // switch（/new /resume /sessions 切换）回外层循环顶：dm 重建、横幅、attachRender(新 h)、
         // pendingEcho 消费全在那；退出全屏只剩 quit 一途（Ctrl+T 已改管侧栏开关——用户拍板）
         continue sessionLoop;
@@ -2070,6 +2087,11 @@ if (args.print === undefined) try {
       if (mb !== undefined) reportModelSwitch(mb);
       if (effortCmd) reportEffortSwitch(effortBefore);
       if (r === "quit") break sessionLoop;
+      if (r === "web") {
+        quitReason = "web";
+        webHandover = { resumeSid: h.sessionId, cwd: process.cwd() }; // 退出序列前捕获（G14 交接载荷）
+        break sessionLoop;
+      }
       if (r === "switch") continue sessionLoop;
       // CLI 拦截层（D38 第一层）：会话生命周期命令（/new /fork /sessions /resume /quit，D41/T6 + B9 拉前）
 
@@ -2083,4 +2105,17 @@ if (args.print === undefined) try {
                       // SIGINT 不挂：本仓 SIGINT 只 cancel turn 不退出进程，挂了会误删活着的自己的牌
   await h.close();
   purgeIfEmptySession(h.sessionId); // 空会话退出即清（2026-10-01 拍板②）——h.close 后无句柄可删；h = 最后在开的会话
+}
+// T2 /web 形态衔接（G14）：既有退出序列（上方 finally：presence/close/purgeIfEmpty——purge 在 h.close
+// 后）**完成后**同进程转入 web server；空会话被 purge（sid 失效）则不传 handover——server 空启
+// （runWebSubcommand 内 locate 同判双保险）；已有活实例时其内部复用打印既有 URL exit 0（不起第二个）
+if (quitReason === "web") {
+  const handover = webHandover !== undefined && locateSessionFile(sessionsRoot, webHandover.resumeSid) !== undefined
+    ? webHandover
+    : undefined;
+  const code = await runWebSubcommand([], { out: (l) => console.log(l) }, handover);
+  // 防御性驻留（undici exit-127 竞态——复用路径刚 fetch 后紧接 process.exit；T1 web 分支同款）
+  await new Promise((r) => setTimeout(r, 150));
+  await exitCli(code);
+}
 }

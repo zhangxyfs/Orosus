@@ -3,16 +3,18 @@
  *  打开既有 URL 退出 0，不起第二个 server）→ 起服（端口换号 G13；token 沿用 G15）→ URL 横幅
  *  （G11 三行式：地址 / 手动指路 / 终端存亡提示）+ 自动开浏览器（失败不炸——横幅兜底）。
  *  runWebSubcommand 长驻：直到 server 关停（SIGINT 清退序——server.ts）才返回。
- *  handover 参数（{resumeSid, cwd}）T1 定义、T2 接线（/web 形态切换——收到时 server 起后交给
- *  HostPool 作为首个托管会话）；本任务仅透传 cwd（项目层配置解析），pool 装配是 T2 产物。 */
+ *  T2 起：起服后建 HostPool（webHostPool() 访问位）+ onShutdown 清退接线（SSE shutdown 帧广播 +
+ *  pool.closeAll——G15 供给侧）；handover（/web 形态切换——T2 接线）作为首个托管会话 + 当前游标。 */
 import { join } from "node:path";
+import type { ServerResponse } from "node:http";
 import { orosusHome } from "@orosus/contracts/home";
-import { loadConfig } from "@orosus/core";
+import { loadConfig, locateSessionFile } from "@orosus/core";
 import { needsProviderSetup, readConfigModel } from "../onboarding.ts";
 import { t } from "../i18n/app.ts";
 import { findLiveInstance, writeInstance } from "./instance.ts";
 import { openBrowser } from "./open-browser.ts";
-import { startWebServer } from "./server.ts";
+import { onShutdown, registerRoute, sendJson, startWebServer } from "./server.ts";
+import { HostPool } from "./hostpool.ts";
 
 export function isWebSubcommand(argv: string[]): boolean {
   return argv[0] === "web";
@@ -81,6 +83,49 @@ export interface WebIo {
   cwd?: string;
 }
 
+// ---------- HostPool 归属（T2）----------
+// server 生命周期内单池（runWebSubcommand 每次起服重建）；T3+ 的 api-* 路由与测试经 webHostPool()
+// 访问。复用/引导门等早退路径不建池（webHostPool() = undefined）。
+let pool: HostPool | undefined;
+
+/** 当前 server 的 HostPool（无活 server = undefined——T3+ 路由消费位）。 */
+export function webHostPool(): HostPool | undefined {
+  return pool;
+}
+
+// ---------- SSE 连接面（T2 最小面：首帧组 + shutdown 帧广播）----------
+// ev/chunk/interaction/queue/phase 帧写器、每会话客户端注册表、50ms 合批与背压是 T3 sse.ts 交付物——
+// 本任务只落 G15 清退链的最小供给侧：SSE 客户端能连上（§3 端点形态 + 首帧组防中间层掐零字节流）、
+// SIGINT 清退时收到 shutdown 帧即显「已正常关闭」（不进无谓重连）。
+const sseClients = new Set<ServerResponse>();
+
+registerRoute("GET", "/api/sessions/:sid/stream", (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  if (pool === undefined || locateSessionFile(pool.root, sid) === undefined) {
+    sendJson(res, 404, { ok: false, error: "not found" });
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    "x-accel-buffering": "no",
+  });
+  res.write("retry: 3000\n: connected\n\n"); // §3 首帧组（qwen/dsh 先例——防代理掐零字节空闲流）
+  sseClients.add(res);
+  req.on("close", () => { sseClients.delete(res); });
+});
+
+/** 清退广播：全部 SSE 客户端写 shutdown 帧后 end（§3 帧型——其余帧不带 id 不烧号）。 */
+const sseShutdownFrame = (reason: string): void => {
+  for (const res of Array.from(sseClients)) { // 快照迭代——循环内 delete 不跳元素
+    sseClients.delete(res);
+    try {
+      res.write(`event: shutdown\ndata: ${JSON.stringify({ reason })}\n\n`);
+      res.end();
+    } catch { /* 已断连接——帧丢了客户端走重连耗尽判定（G15 兜底） */ }
+  }
+};
+
 export async function runWebSubcommand(
   argv: string[],
   io: WebIo,
@@ -89,6 +134,7 @@ export async function runWebSubcommand(
   const home = orosusHome(io.env ?? process.env);
   const cwd = handover?.cwd ?? io.cwd ?? process.cwd();
   const flags = parseWebFlags(argv.slice(1));
+  pool = undefined; // 早退路径（门/复用）不建池——webHostPool() 恒反映当前活 server
 
   // 引导门（G16）：首装未完成引导 → 指路终端，退出 1，不起 server
   const userFile = join(home, "config.toml");
@@ -112,8 +158,26 @@ export async function runWebSubcommand(
   const { server, port, token } = await startWebServer({ ...(flags.port !== undefined ? { port: flags.port } : {}), cwd, home });
   writeInstance(home, { v: 1, pid: process.pid, port, startedAt: Date.now(), token });
 
-  // handover（T1 定义、T2 接线）：收到时 server 起后把 {resumeSid, cwd} 交给 HostPool 作为
-  // 首个托管会话——HostPool 是 T2 产物，本任务不装配（T2 在此处与 /web 退出序列衔接）。
+  // HostPool（T2）：池生命周期 = server 生命周期；SIGINT 清退序（G15 供给侧——填 T1 onShutdown
+  // 注册位）= shutdown 帧广播 → pool.closeAll（实例文件清理在 T1 shutdownWebServer 序内）
+  const p = new HostPool({ home });
+  pool = p;
+  onShutdown((reason) => {
+    sseShutdownFrame(reason);
+    void p.closeAll();
+  });
+
+  // handover 接线（T1 参数在此生效——G14 /web 形态切换）：server 起后作为首个托管会话 + 当前会话
+  // 游标（浏览器 bootstrap 默认打开它——/api/bootstrap currentSid，T9 消费）；sid 已被退出序列
+  // purge（空会话）→ 跳过交接 server 空启（main.ts 侧 locate 失败不传是第一道，此处同判双保险）
+  if (handover !== undefined && locateSessionFile(join(home, "sessions"), handover.resumeSid) !== undefined) {
+    try {
+      const hs = await p.create({ cwd: handover.cwd, resumeSid: handover.resumeSid });
+      p.switchCurrent(hs.sid);
+    } catch (err) {
+      io.out(`[web] 交接会话装载失败（server 空启）：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // readiness 纪律：URL 横幅与开浏览器必须在全部路由注册完成之后（防「浏览器先到 404」竞态）——
   // T1 无 api-* 附加路由（/api/health 内建）；T2+ 的路由注册发生在 startWebServer 之前、此处之后不变。
