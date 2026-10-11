@@ -73,12 +73,54 @@ export function sendJson(res: ServerResponse, status: number, body: Record<strin
   res.end(JSON.stringify(body));
 }
 
+/** 请求体读取（T4：POST send 的 JSON 体与 POST uploads 的二进制体共用）：聚合 data 块至 cap——
+ *  content-length 预检 + 流式累计双保险（chunked 无预检可用）；超限返回 "too-large"（调用方回 413，
+ *  并自行延迟销毁连接让响应先落地——余体不吞不停读，settled 后续块为 no-op）。客户端中断 reject
+ *  （per-request catch → 400）。 */
+export function readBody(req: IncomingMessage, capBytes: number): Promise<Buffer | "too-large"> {
+  const declared = Number(req.headers["content-length"] ?? "");
+  if (Number.isFinite(declared) && declared > capBytes) return Promise.resolve("too-large");
+  return new Promise((resolve, reject) => {
+    const parts: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    req.on("data", (c: Buffer) => {
+      if (settled) return;
+      size += c.length;
+      if (size > capBytes) {
+        settled = true;
+        resolve("too-large");
+        return;
+      }
+      parts.push(c);
+    });
+    req.on("end", () => {
+      if (!settled) {
+        settled = true;
+        resolve(Buffer.concat(parts));
+      }
+    });
+    req.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+  });
+}
+
 const sendOk = (res: ServerResponse, status: number, extra: Record<string, unknown> = {}): void =>
   sendJson(res, status, { ok: true, ...extra });
 const sendErr = (res: ServerResponse, status: number, error: string): void =>
   sendJson(res, status, { ok: false, error });
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** JSON-only 护栏豁免面（T4）：POST /api/uploads 为二进制图体（?name=&sid= 查询参携带元数据，
+ *  content-type 是 image/* 而非 application/json）——按路径显式豁免。取舍：枚举路径集可读性最好、
+ *  单点豁免不值得为它扩 registerRoute 签名（路由元数据开关方案弃——记录于 T4 报告）；后续二进制
+ *  写端点（若有）须同此登记。 */
+const JSON_GUARD_EXEMPT = new Set(["/api/uploads"]);
 
 /** token 豁免面（brief T1 定档）：/ （页面首开——token 在 query 里随 URL 带来）与 /assets/*（静态树）。 */
 function tokenExempt(pathname: string): boolean {
@@ -103,8 +145,9 @@ function makeRequestHandler(token: string): (req: IncomingMessage, res: ServerRe
           sendErr(res, 401, "unauthorized");
           return;
         }
-        // 中间件 3：JSON-only POST 护栏（写方法要求 application/json——SSE/GET 不受限）
-        if (WRITE_METHODS.has(req.method ?? "") && !(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        // 中间件 3：JSON-only POST 护栏（写方法要求 application/json——SSE/GET 不受限；二进制写端点
+        // 豁免面见 JSON_GUARD_EXEMPT）
+        if (WRITE_METHODS.has(req.method ?? "") && !JSON_GUARD_EXEMPT.has(pathname) && !(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
           sendErr(res, 415, "content-type must be application/json");
           return;
         }

@@ -16,6 +16,7 @@ import { onShutdown, startWebServer } from "./server.ts";
 import { HostPool } from "./hostpool.ts";
 import { broadcastShutdownFrames } from "./sse.ts";
 import "./api-session.ts"; // T3 会话组端点注册（GET events/stream——模块加载期进路由表，readiness 序）
+import "./api-files.ts"; // T4 文件面端点注册（uploads/media/at——readiness 序同上；api-session 经它解析 imageIds）
 
 export function isWebSubcommand(argv: string[]): boolean {
   return argv[0] === "web";

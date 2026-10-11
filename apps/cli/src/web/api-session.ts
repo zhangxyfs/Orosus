@@ -1,16 +1,24 @@
-/** 会话组端点（web 批 T3 本任务面）：GET events（分页回放——§3 形状）+ GET stream（SSE——路由面，
- *  通道本体在 sse.ts）。send/answer/cancel/queue 撤回/status 等写侧端点是 T4/T5/T9 交付物——YAGNI
- *  不预铺。T2 的最小 stream 路由（mod.ts）已由本件接管升级（首帧组行为不回归——hosted.test.ts ⑨）。
- *  会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer 只读化身（回放可用，live 帧
- *  无——本进程无写者时本就无 live）；不在盘 → 404。 */
+/** 会话组端点（web 批 T3 本任务面 + T4 写侧）：GET events（分页回放——§3 形状）、GET stream（SSE——
+ *  路由面，通道本体在 sse.ts）、POST send / DELETE queue / GET status（T4——消息写入链路：
+ *  @ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）。answer/cancel 是 T5 交付物——
+ *  YAGNI 不预铺。会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer 只读化身
+ *  （回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer → 409 拒绝形）；不在盘 → 404。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { registerRoute, sendJson } from "./server.ts";
+import { locateSessionFile, readSessionHead } from "@orosus/core";
+import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import { openStream } from "./sse.ts";
 import type { HostedSession } from "./hosted.ts";
+import { resolveAtRefs } from "../atfile.ts";
+import { INPUT_ECHO_EVENT } from "../session-io.ts";
+import { MAX_IMAGES_PER_MESSAGE, resolveImageIds } from "./api-files.ts";
 
 /** 回放分页每页上限（自创值登记——§5 律三：首屏有界，长会话按需加载）。 */
 export const EVENTS_PAGE_CAP = 200;
+
+/** send JSON 体上限（T4 定档自创值——文本 + imageIds 远小于此；防失控客户端撑内存。§5 表补录
+ *  见 T4 报告）。 */
+const SEND_BODY_MAX_BYTES = 1024 * 1024;
 
 const notFound = (res: ServerResponse): void => {
   sendJson(res, 404, { ok: false, error: "not found" });
@@ -30,9 +38,9 @@ const intParam = (qs: URLSearchParams, key: string): number | undefined => {
   return Number.isInteger(n) && n >= 0 && n <= 1e15 ? n : undefined;
 };
 
-/** 会话解析（两端点同口径）：host 优先；盘上未托管 → viewer；否则 undefined（404）。 */
-const resolveSession = async (sid: string): Promise<HostedSession | undefined> => {
-  const pool = webHostPool();
+/** 会话解析（四端点同口径）：host 优先；盘上未托管 → viewer；否则 undefined（404）。pool 由调用方
+ *  传入（send 的 imageIds 解析与 status 的 label 装配同用 root）。 */
+const resolveSession = async (pool: ReturnType<typeof webHostPool>, sid: string): Promise<HostedSession | undefined> => {
   if (pool === undefined) return undefined;
   const hosted = pool.host(sid);
   if (hosted !== undefined) return hosted;
@@ -50,7 +58,8 @@ const resolveSession = async (sid: string): Promise<HostedSession | undefined> =
  *  事件（seq > 页尾，正向游标未到头）；latestSeq = 会话当前最大 seq（重连/续传游标锚）。 */
 registerRoute("GET", "/api/sessions/:sid/events", async (req, res, params) => {
   const sid = params["sid"] ?? "";
-  const hs = await resolveSession(sid);
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
   if (hs === undefined) {
     notFound(res);
     return;
@@ -82,7 +91,8 @@ registerRoute("GET", "/api/sessions/:sid/events", async (req, res, params) => {
 registerRoute("GET", "/api/sessions/:sid/stream", (req, res, params) => {
   void (async () => {
     const sid = params["sid"] ?? "";
-    const hs = await resolveSession(sid);
+    const pool = webHostPool();
+    const hs = await resolveSession(pool, sid);
     if (hs === undefined) {
       notFound(res);
       return;
@@ -90,4 +100,130 @@ registerRoute("GET", "/api/sessions/:sid/stream", (req, res, params) => {
     const after = intParam(queryParams(req), "after") ?? 0;
     openStream(res, hs, after);
   })();
+});
+
+/** POST /api/sessions/:sid/send {text, imageIds?, promptId?} → 202 {ok}|{ok,queued,index}|
+ *  {ok,noop} | 409 {error,holder?}（§3）。
+ *  - 受理即回（HostedSession.accept——turn 终值经事件流反馈，HTTP 不挂整轮；busy 期入队同步定形）。
+ *  - promptId 幂等键（网络重试场景，kimi/qwen 先例）：admission Map 去重（HostedSession 持有，保留
+ *    最近 256——自创值登记）；重复受理回 {ok:true,noop:true}。校验失败（400）不烧 id。
+ *  - @ 引用发送期展开（resolveAtRefs——atfile.ts:16 纯函数直 import，基址 = 会话 cwd 而非
+ *    process.cwd——§4-8）：content 含 [@path] 附件块；发出体 ≠ 原文时原文经 host/input-echo 旁注
+ *    紧随落盘（main.ts:1234 对齐——上键召回取原文的 web 同构）。
+ *  - imageIds = uploads 发形 id（≤6 张/消息——自创值登记 D6），解析域 = 会话 media 目录（跨会话
+ *    引用一步不可越）；图片以路径引用透传进 user/message 的 image part（core 现成）。
+ *  - viewer 会话 / 撞他进程活锁 / 已关 → 409 形（SendResult 原样透传）。 */
+registerRoute("POST", "/api/sessions/:sid/send", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { text?: unknown; imageIds?: unknown; promptId?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const text = typeof body.text === "string" ? body.text : undefined;
+  const promptId = typeof body.promptId === "string" && body.promptId !== "" ? body.promptId : undefined;
+  const imageIds = Array.isArray(body.imageIds) ? body.imageIds.filter((x): x is string => typeof x === "string") : undefined;
+  const nImages = imageIds?.length ?? 0;
+  if ((text === undefined || text.trim() === "") && nImages === 0) {
+    sendJson(res, 400, { ok: false, error: "text 不能为空" });
+    return;
+  }
+  if (nImages > MAX_IMAGES_PER_MESSAGE) {
+    sendJson(res, 400, { ok: false, error: `每条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片` });
+    return;
+  }
+  // imageIds → 绝对路径（先于 promptId admission——坏请求不烧幂等键）
+  let images: string[] | undefined;
+  if (nImages > 0) {
+    const sessionDir = hs.sessionDir;
+    if (sessionDir === undefined) {
+      sendJson(res, 409, { ok: false, error: "会话装配失败" });
+      return;
+    }
+    const r = resolveImageIds(sessionDir, imageIds!);
+    if ("error" in r) {
+      sendJson(res, 400, { ok: false, error: r.error });
+      return;
+    }
+    images = r.images;
+  }
+  // promptId admission：重复 id → noop 受理形（消息已在途/在队——不再二次受理）
+  if (promptId !== undefined && !hs.admitPromptId(promptId)) {
+    sendJson(res, 202, { ok: true, noop: true });
+    return;
+  }
+  // @ 引用展开（main.ts:1207-1209 同款）+ input-echo 旁注（发出体 ≠ 原话时原话随盘）
+  const { text: cleaned, attachments } = resolveAtRefs(text ?? "", hs.cwd);
+  const withAt = attachments.length > 0 ? `${cleaned}\n\n${attachments.join("\n\n")}` : cleaned;
+  const afterUserEvent = withAt !== (text ?? "")
+    ? [{ type: INPUT_ECHO_EVENT, fields: { text: text ?? "" } }]
+    : undefined;
+  const { result } = await hs.accept(withAt, images, afterUserEvent);
+  // 展开降型（interface 无隐式索引签名——sendJson 收 Record；字段集即 §3 send 形）
+  if (result.ok) sendJson(res, 202, { ...result });
+  else sendJson(res, 409, { ...result });
+});
+
+/** DELETE /api/sessions/:sid/queue/:index → {ok}（§3：index 以最近 queue 帧快照为准；撤回即广播
+ *  新快照——HostedSession.onQueue → SSE queue 帧；并发撤回按 server 当前表重算，不在队 = 404）。
+ *  DELETE 携 content-type: application/json（T1 写方法护栏合规形态——无体也带头，T16 api.js 约定）。 */
+registerRoute("DELETE", "/api/sessions/:sid/queue/:index", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const index = Number(params["index"] ?? "");
+  if (!Number.isInteger(index) || index < 0) {
+    sendJson(res, 400, { ok: false, error: "invalid index" });
+    return;
+  }
+  if (hs.withdraw(index)) sendJson(res, 200, { ok: true });
+  else sendJson(res, 404, { ok: false, error: "not in queue" });
+});
+
+/** GET /api/sessions/:sid/status → {sid,label,model,effort,permission,busy,phase,cwd,bucket}（§3）。
+ *  装配口径（§4-18——勿把 h.status() 当唯一数据源）：model/effort 取 h.status()（实返仅
+ *  {model,overridden,sessionId,effort?,modules}）；busy/phase 由 HostedSession 推算；permission
+ *  读 approval.current-mode 服务（[approval] 配置 + 会话 override）；label 经 readSessionHead
+ *  （session/label ?? firstUser 兜底）；sid/cwd/bucket 来自 HostedSession。九键恒在（未设 effort/
+ *  label 为空串——JSON 序列化不掉键，前端显示侧自定兜底形态）。 */
+registerRoute("GET", "/api/sessions/:sid/status", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined || pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const core = hs.coreStatus();
+  const loc = locateSessionFile(pool.root, hs.sid);
+  const head = loc !== undefined ? readSessionHead(loc.file) : undefined;
+  const permission = await hs.permissionMode();
+  sendJson(res, 200, {
+    sid: hs.sid,
+    label: head?.label ?? head?.firstUser ?? "",
+    model: core?.model ?? "",
+    effort: core?.effort ?? "",
+    permission,
+    busy: hs.busy(),
+    phase: hs.phase(),
+    cwd: hs.cwd,
+    bucket: hs.bucket,
+  });
 });

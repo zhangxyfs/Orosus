@@ -31,6 +31,14 @@ import { liveSessionActive } from "../ps.ts";
  *  harness history()（events() Channel 零订阅者时只留最近 256 条——CH-10 同纪律）。 */
 export const RING_CAP = 1024;
 
+/** promptId admission 保留数（自创值登记——方案 §5 表「promptId admission 保留最近 256」：send 幂等
+ *  键去重表的上限，防长驻 server 无界增长）。 */
+const PROMPT_ID_ADMISSION_CAP = 256;
+
+/** 宿主旁注事件（core prompt afterUserEvent 数组形态——main.ts:1232 同源消费面：@ 引用展开等
+ *  「发出体 ≠ 输入原文」场景经此把原话紧随 user/message 落盘，召回/回放取原文）。 */
+export type AfterUserEvent = { type: string; fields: Record<string, unknown> }[];
+
 /** send 协议结果（§3 send 端点同形）：入队时 {ok:true,queued:true,index}；撞锁 {ok:false,holder}
  *  （holder = 锁载荷实读 {pid,since,label?}——前端 t() 组装人话，D16 口径）。 */
 export interface SendResult {
@@ -89,8 +97,9 @@ export class HostedSession {
   private dispatching = false;
   private endedWithError = false;
   private ring: SessionEvent[] = [];
-  private queue: { index: number; text: string; images?: string[] }[] = [];
+  private queue: { index: number; text: string; images?: string[]; afterUserEvent?: AfterUserEvent }[] = [];
   private nextIndex = 0;
+  private readonly admitted = new Map<string, true>(); // promptId admission（见 admitPromptId）
   private readonly eventSubs = new Set<(e: SessionEvent) => void>();
   private readonly chunkSubs = new Set<(t: string) => void>();
   private readonly queueSubs = new Set<(items: { index: number; text: string }[]) => void>();
@@ -111,6 +120,10 @@ export class HostedSession {
   get sid(): string { return this.currentSid; }
   /** 项目桶名（= encodeCwd(cwd)）。 */
   get bucket(): string { return this.bucketName; }
+  /** 会话目录（<root>/<bucket>/<sid>——uploads/media 媒资落位与 send 的 imageIds 解析域；装配前 undefined）。 */
+  get sessionDir(): string | undefined {
+    return this.currentSid === "" ? undefined : join(this.bucketDir, this.currentSid);
+  }
   /** 装配完成（createHarness + presence 挂起 + 订阅泵就绪）；失败 reject 由 Pool/调用方定口径。 */
   get ready(): Promise<void> { return this.readyGate; }
 
@@ -197,10 +210,16 @@ export class HostedSession {
     return this.endedWithError ? "error" : "idle";
   }
 
-  /** 入队（busy 期 dispatch 的去处）：index 单调不复用（§3 DELETE /queue/:index 以最近快照为准）。 */
-  enqueue(text: string, images?: string[]): number {
+  /** 入队（busy 期 dispatch 的去处）：index 单调不复用（§3 DELETE /queue/:index 以最近快照为准）。
+   *  旁注（afterUserEvent）随队列项保留——排队消息的 @ 展开原文补跑时不丢。 */
+  enqueue(text: string, images?: string[], afterUserEvent?: AfterUserEvent): number {
     const index = this.nextIndex++;
-    this.queue.push({ index, text, ...(images !== undefined && images.length > 0 ? { images } : {}) });
+    this.queue.push({
+      index,
+      text,
+      ...(images !== undefined && images.length > 0 ? { images } : {}),
+      ...(afterUserEvent !== undefined ? { afterUserEvent } : {}),
+    });
     this.broadcastQueue();
     return index;
   }
@@ -221,36 +240,112 @@ export class HostedSession {
     }
   }
 
-  /** cmdrouter 分流后的执行口（prompt/命令——T6 消费）：busy → 入队；撞他进程活锁 → {ok:false,holder}；
-   *  其余 h.prompt 闭环。命令返回文本不在此透出（命令面走事件/toast——§4-4）。 */
-  async dispatch(text: string, images?: string[]): Promise<SendResult> {
-    if (this.closed) return { ok: false, error: "会话已关闭" };
-    if (this.mode === "viewer") return { ok: false, error: "viewer 会话只读（不发 prompt）" };
+  /** send 端点的受理口（§3 POST send → 202 Accepted 语义）：受理即回——busy 入队同步定形
+   *  {ok:true,queued,index}；闲时同步占位 + 锁检后即回 {ok:true}，turn 终值不挂 HTTP（事件流/
+   *  相位帧是反馈面），done 带后台 turn 终值（dispatch 消费；内部自捕获不产生未处理拒绝）。
+   *  撞他进程活锁 {ok:false,holder}（409 形）与 viewer/已关拒绝同在此定形。 */
+  async accept(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
+    if (this.closed) return { result: { ok: false, error: "会话已关闭" } };
+    if (this.mode === "viewer") return { result: { ok: false, error: "viewer 会话只读（不发 prompt）" } };
+    if (text.startsWith("/")) return this.routeCommand(text, images, afterUserEvent); // 命令分流点（T6 接位）
+    return this.runText(text, images, afterUserEvent);
+  }
+
+  /** 命令分流点（T6 cmdrouter 接位）："/" 开头 = 命令面——T6 交付表驱动 cmdrouter（host 命令自写 +
+   *  模块命令透传 h.prompt + BUSY 分级：busy 安全命令直发不入队）。过渡期（T4）= 按消息路径透传：
+   *  core h.prompt 内建命令路由现成（/model /effort /help /reload + 模块 contribute:command 命令
+   *  同径派发，命令不落 user/message——harness.ts:1334 注记），busy 期与消息同队；命令返回文本
+   *  （§4-4「命令行不进流区」）暂随 done 丢弃——web 命令反馈面（toast/浮层）是 T6 交付物。 */
+  private routeCommand(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
+    return this.runText(text, images, afterUserEvent);
+  }
+
+  /** 消息路径：busy → 入队；闲 → 同步占位（先于任何 await——并发 accept 只能入队，§4-4「send 端点
+   *  内部串行化」的托管制实现）→ 锁检 → 起跑不等待。 */
+  private async runText(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<{ result: SendResult; done?: Promise<SendResult> }> {
     if (this.busy()) {
-      const index = this.enqueue(text, images);
-      return { ok: true, queued: true, index };
+      const index = this.enqueue(text, images, afterUserEvent);
+      return { result: { ok: true, queued: true, index } };
     }
-    this.dispatching = true; // 同步占位（先于任何 await）——微任务窗内第二个 dispatch 只能入队
-    try {
-      await this.readyGate;
-      const h = this.harness;
-      if (h === undefined) return { ok: false, error: "会话装配失败" };
-      const holder = this.foreignLockHolder();
-      if (holder !== undefined) {
-        return {
+    this.dispatching = true; // 同步占位（先于任何 await）——微任务窗内第二个 accept 只能入队
+    await this.readyGate.catch(() => undefined); // Pool 出货前已 await（resolved 微任务让出；并发面已被占位封死）；装配失败面走下方 harness 缺席分支
+    const h = this.harness;
+    if (h === undefined) {
+      this.dispatching = false;
+      return { result: { ok: false, error: "会话装配失败" } };
+    }
+    const holder = this.foreignLockHolder();
+    if (holder !== undefined) {
+      this.dispatching = false;
+      return {
+        result: {
           ok: false,
           error: `会话正被另一个 Orosus 进程使用（pid ${holder.pid}）`,
           holder: { pid: holder.pid, since: holder.since, ...(holder.label !== undefined ? { label: holder.label } : {}) },
-        };
-      }
-      await h.prompt(text, images !== undefined && images.length > 0 ? { images } : {});
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    } finally {
-      this.dispatching = false;
-      this.drainQueue(); // 命令类 dispatch 不产 turn/end——收尾处统一补跑队列
+        },
+      };
     }
+    const done = (async (): Promise<SendResult> => {
+      try {
+        const opts: { images?: string[]; afterUserEvent?: AfterUserEvent } = {};
+        if (images !== undefined && images.length > 0) opts.images = images;
+        if (afterUserEvent !== undefined) opts.afterUserEvent = afterUserEvent;
+        await h.prompt(text, Object.keys(opts).length > 0 ? opts : undefined);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        this.dispatching = false;
+        this.drainQueue(); // 命令类 dispatch 不产 turn/end——收尾处统一补跑队列
+      }
+    })();
+    return { result: { ok: true }, done };
+  }
+
+  /** 旧入口（T2 契约——turn 终值等待形）：accept + await done（busy 入队/撞锁/拒绝形无 done 即返）。
+   *  T6 cmdrouter 的模块命令透传消费口。 */
+  async dispatch(text: string, images?: string[], afterUserEvent?: AfterUserEvent): Promise<SendResult> {
+    const { result, done } = await this.accept(text, images, afterUserEvent);
+    return done === undefined ? result : await done;
+  }
+
+  /** promptId admission（§3 send 幂等键；保留最近 256——自创值登记〔方案 §5 表〕防无界增长）：
+   *  Map 插入序即淘汰序（重见刷新位次）；首见 true（放行并登记），重见 false（端点回 {ok,noop:true}）。
+   *  受理即登记（含入队形）——网络重试的去重窗从第一次受理起算。 */
+  admitPromptId(promptId: string): boolean {
+    if (this.admitted.has(promptId)) {
+      this.admitted.delete(promptId);
+      this.admitted.set(promptId, true); // 刷新 LRU 位次
+      return false;
+    }
+    this.admitted.set(promptId, true);
+    if (this.admitted.size > PROMPT_ID_ADMISSION_CAP) {
+      const oldest = this.admitted.keys().next().value;
+      if (oldest !== undefined) this.admitted.delete(oldest);
+    }
+    return true;
+  }
+
+  /** h.status() 透传（§4-18 装配口径：实返仅 {model,overridden,sessionId,effort?,modules}——
+   *  busy/phase 由本类推算、permission 走 [approval] 服务面、sid/label/cwd/bucket 由端点侧装配）。
+   *  装配前/已关 = undefined（GET status 端点兜底空串）。 */
+  coreStatus(): { model: string; overridden: boolean; sessionId: string; effort?: string; modules: { active: number; failed: number; discovered: number } } | undefined {
+    return this.harness?.status();
+  }
+
+  /** permission 装配（§4-18：读 [approval] 配置 + 会话 override）：approval 模块服务
+   *  approval.current-mode（= state.modeOverride ?? cfg.mode 同源——subagent/runner.ts:90 同款消费，
+   *  运行期 /permission 切档即时可见）；服务缺席/坏值（模块未装/注入测试 harness）回落 ask-risky
+   *  （模块 schema 出厂默认）。 */
+  async permissionMode(): Promise<"ask-always" | "ask-risky" | "never"> {
+    const h = this.harness;
+    if (h === undefined) return "ask-risky";
+    try {
+      const svc = await h.graph().services.getOptional("approval.current-mode" as never);
+      const mode = typeof svc === "function" ? (svc as () => unknown)() : undefined;
+      if (mode === "ask-always" || mode === "ask-risky" || mode === "never") return mode;
+    } catch { /* 服务面异常——出厂默认兜底 */ }
+    return "ask-risky";
   }
 
   /** 他进程活锁探测（ps.ts lockHeldByOther 同源判据，取全量载荷供 holder 字段）：自己/死 pid/无锁 = 放行。 */
@@ -261,13 +356,14 @@ export class HostedSession {
     return pidAlive(holder.pid) ? holder : undefined;
   }
 
-  /** turn 结束/命令收尾后的队列补跑：非 busy 且有队首 → 依序执行下一条（§3 send 排队语义）。 */
+  /** turn 结束/命令收尾后的队列补跑：非 busy 且有队首 → 依序执行下一条（§3 send 排队语义；
+   *  旁注随队列项透传——排队消息的原文补跑不丢）。 */
   private drainQueue(): void {
     if (this.closed || this.busy()) return;
     const next = this.queue.shift();
     if (next === undefined) return;
     this.broadcastQueue();
-    void this.dispatch(next.text, next.images);
+    void this.dispatch(next.text, next.images, next.afterUserEvent);
   }
 
   /** Esc×2 同款全停（§3 POST /cancel）：h.cancel + stopAllSubagents（挂起审批自动按拒绝收场）。 */
