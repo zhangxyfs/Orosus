@@ -92,6 +92,9 @@ export const enUSMenus: Record<string, string> = {
 	"slash.items.title.long": "Names the current session (/title name; quotes optional), so you can find it by name in the /sessions list. Without arguments it does nothing.",
 	"slash.items.reload.desc": "Reload modules",
 	"slash.items.reload.long": "Reloads config and modules (use after editing config.toml or module files).",
+	// /web (web batch T1 menu entry; processReplLine branch wired in T2 — G14 mode switch: leave TUI, same process serves the web UI)
+	"slash.items.web.desc": "Switch to the web UI",
+	"slash.items.web.long": "Leaves the terminal UI and uses Orosus in the browser (opens the web UI automatically and hands over the current session; keep the terminal open — closing it also closes the web UI).",
 
 	// ---- T6 菜单族批 ----
 "menu.err.noItems": "No items to choose",

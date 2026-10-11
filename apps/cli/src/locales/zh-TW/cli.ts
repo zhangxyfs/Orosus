@@ -303,4 +303,13 @@ export const zhTWCli: Record<string, string> = {
 	// ---- m5-collab T7：多開提示 ----
 	"ps.tip.multi": "偵測到 {n} 個其他活躍會話——用 /title 給會話起名便於區分",
 	"lock.submitBlocked": "該會話正被另一個 Orosus 程序佔用（pid {pid}）——傳送已攔截，輸入已保留。回那個視窗操作，或等它結束；也可以 /fork 分叉副本接著做。",
+
+	// ---- web 批 T1：`orosus web` 子命令域 ----
+	"web.usage": "用法: orosus web [--port 連接埠號] [--no-open]（啟動本機網頁端；已有實例在執行時複用其位址）",
+	"web.badPort": "--port 須為 1-65535 的整數（得到 {v}）",
+	"web.banner.address": "Orosus 網頁端已就緒：{url}",
+	"web.banner.portSwitched": "連接埠 {from} 已被佔用，已改用 {to}",
+	"web.banner.manualOpen": "如果瀏覽器沒有自動開啟，請手動複製上方網址到瀏覽器",
+	"web.banner.keepTerminal": "保持本終端開啟——關閉終端將同時關閉網頁端",
+	"web.gate.needSetup": "首次使用請先在終端執行 orosus 完成首次引導（設定提供商與金鑰），再執行 orosus web",
 };

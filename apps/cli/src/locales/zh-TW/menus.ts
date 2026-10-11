@@ -92,6 +92,9 @@ export const zhTWMenus: Record<string, string> = {
 	"slash.items.title.long": "給目前工作階段起名字（/title 名字，引號可選），在 /sessions 列表裡按名字找工作階段。無參不做任何事。",
 	"slash.items.reload.desc": "重新載入模組",
 	"slash.items.reload.long": "重新載入設定與模組（改了 config.toml 或模組檔案後用）。",
+	// /web（web 批 T1 入選單；processReplLine 分支 T2 接線——G14 形態切換：退出 TUI 同程序轉入 server）
+	"slash.items.web.desc": "切換到網頁端",
+	"slash.items.web.long": "離開終端介面，在瀏覽器中使用 Orosus（自動開啟網頁端並交接目前工作階段；需保持終端開啟——關閉終端會同時關閉網頁端）。",
 
 	// ---- T6 菜单族批 ----
 "menu.err.noItems": "無可選項",

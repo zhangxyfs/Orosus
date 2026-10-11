@@ -303,4 +303,13 @@ export const enUSCli: Record<string, string> = {
 	// ---- m5-collab T7：多开提示 ----
 	"ps.tip.multi": "Detected {n} other active sessions — name yours with /title to tell them apart",
 	"lock.submitBlocked": "This session is held by another Orosus process (pid {pid}) — send blocked, your input is kept. Use that window or wait for it to exit; or /fork a copy to keep working.",
+
+	// ---- web batch T1: `orosus web` subcommand domain ----
+	"web.usage": "Usage: orosus web [--port <port>] [--no-open] (starts the local web UI; reuses the running instance's address if one is already up)",
+	"web.badPort": "--port must be an integer in 1-65535 (got {v})",
+	"web.banner.address": "Orosus web UI ready: {url}",
+	"web.banner.portSwitched": "Port {from} is already in use; switched to {to}",
+	"web.banner.manualOpen": "If the browser didn't open automatically, copy the address above into your browser",
+	"web.banner.keepTerminal": "Keep this terminal open — closing it also closes the web UI",
+	"web.gate.needSetup": "First-time setup isn't finished. Run orosus in a terminal to complete initial onboarding (provider and API key), then run orosus web",
 };

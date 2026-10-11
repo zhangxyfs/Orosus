@@ -77,6 +77,7 @@ import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
 import { fireStartupUpdateCheck, markBannerRendered, shouldSkipStartupCheck, updateInfoNow } from "./update-check.ts";
 import { isUpgradeSubcommand, runUpgradeSubcommand } from "./upgrade-cmd.ts";
+import { isWebSubcommand, runWebSubcommand } from "./web/mod.ts";
 import { readUpdateCheckEnabled } from "./update-settings.ts";
 import { buildHookBuckets, injectionRowsOf, type HooksUiDeps } from "./hooks-ui.ts";
 import { initReplIo, nextLine, notify, question, rl, secretQuestion, settleCommandError, stdoutEcho } from "./repl-io.ts";
@@ -191,6 +192,11 @@ const exitCli = async (code: number): Promise<never> => {
         discovered: discovered.map((m) => ({ name: m.def.name, root: m.root, entryHash: m.entryHash, layer: m.layer })),
         out: (l) => console.log(l),
       }));
+    }
+    // `orosus web`（web 批 T1）：起本机 server 并长驻——runWebSubcommand 直到 server 关停才返回；
+    // 引导门（G16）/双开复用（G12）/端口换号（G13）/URL 横幅（G11）在 web/mod.ts 内编排
+    if (isWebSubcommand(argv)) {
+      await exitCli(await runWebSubcommand(argv, { out: (l) => console.log(l) }));
     }
     if (isUpgradeSubcommand(argv)) {
       // m5-update-check T4：`orosus upgrade` 自升级子命令（D3）——独立取数，不受 [update] check 开关影响（D4）
@@ -1343,6 +1349,8 @@ const slashItems = (): SlashItem[] => [
 	{ name: "/tasks", aliases: ["task"], desc: t("slash.items.tasks.desc"), long: t("slash.items.tasks.long") },
 	{ name: "/btw", desc: t("slash.items.btw.desc"), long: t("slash.items.btw.long") },
 	{ name: "/ps", desc: t("slash.items.ps.desc"), long: t("slash.items.ps.long") },
+	// /web（web 批 T1 入菜单；processReplLine 命令分支 T2 接线——G14 形态切换：退出 TUI 同进程转入 server）
+	{ name: "/web", desc: t("slash.items.web.desc"), long: t("slash.items.web.long") },
 	{ name: "/quit", aliases: ["exit", "q"], desc: t("slash.items.quit.desc"), long: t("slash.items.quit.long") },
 	// F5 二轮⑨：既有命令全部进菜单（此前只有 10 条——/new /fork /resume /title /yolo /usage /status /reload 能打但菜单不可见）
 	// 批⑤⑥：/usage /status 退役出菜单（并入 /settings 面板；打字面留指路）

@@ -35,6 +35,7 @@
     "@orosus/tool-todo": "workspace:*",
     "@orosus/tool-web": "workspace:*",
     "cli-highlight": "^2.1.11",
+    "dompurify": "^3.2.7",
     "jimp": "^1.6.1",
     "jiti": "^2.7.0",
     "marked": "^16.4.2",

@@ -92,6 +92,9 @@ export const zhCNMenus: Record<string, string> = {
 	"slash.items.title.long": "给当前会话起名字（/title 名字，引号可选），在 /sessions 列表里按名字找会话。无参不做任何事。",
 	"slash.items.reload.desc": "重载模块",
 	"slash.items.reload.long": "重新加载配置与模块（改了 config.toml 或模块文件后用）。",
+	// /web（web 批 T1 入菜单；processReplLine 分支 T2 接线——G14 形态切换：退出 TUI 同进程转入 server）
+	"slash.items.web.desc": "切换到网页端",
+	"slash.items.web.long": "退出终端界面，在浏览器中使用 Orosus（自动打开网页端并交接当前会话；需保持终端开启——关闭终端会同时关闭网页端）。",
 
 	// ---- T6 菜单族批 ----
 "menu.err.noItems": "无可选项",

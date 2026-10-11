@@ -67,8 +67,10 @@ export class PresenceWriter {
   private cur: Attached | undefined;
 
   /** 挂起心跳（重复 attach = 先 dispose 旧 sid——/new、/resume、fork 换会话都再进 createSession，
-   *  旧 live.json 不即时清会残留至 90s 判死〔协同卡短现幽灵行〕）。 */
-  attach(opts: { h: PresenceHarness; sessionsDir: string; sid: string; kind: "tui" | "line" }): void {
+   *  旧 live.json 不即时清会残留至 90s 判死〔协同卡短现幽灵行〕）。
+   *  kind 含 "web"：协同批 D12 web 前瞻兑现（plans/2026-09-29-m5-session-collaboration.md:238——
+   *  枚举值 LiveInfo.kind 早已含 web，此处 attach 参数类型同步扩位；web 批 T2 起由 HostedSession 消费）。 */
+  attach(opts: { h: PresenceHarness; sessionsDir: string; sid: string; kind: "tui" | "line" | "web" }): void {
     this.dispose();
     const now = Date.now();
     const a: Attached = {
