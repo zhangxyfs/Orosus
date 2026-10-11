@@ -32,6 +32,48 @@ const notFound = (res: Parameters<typeof sendJson>[0]): void => {
 
 // ---------- MCP 面（F6 / E5） ----------
 
+/** edit spec 白名单键 → 值形状校验（审查修复件）：键族 = mcp 模块 config schema（mcp/index.ts
+ *  zod：command/args/env/url/enabled/deferred/timeoutMs/headers/cwd/transport/lazy——accesses
+ *  不在册：NestedTableValue 无其形，TUI 添加窗同款不写）；值形状 = NestedTableValue 合法形
+ *  （write.ts:107——string/number/boolean/string[]/单层平坦 string map）。**写盘前全量校验**：
+ *  writeNestedTable 无输出校验，null 值会写出非法 TOML、深层对象序列化成 [object Object]——
+ *  带病落盘砖化 mcp.toml 后 CM-01（write.ts:165-170）令后续一切写入静默 no-op 仍报成功。
+ *  TUI 自家 JSON 摄入口（mcp-add-window.ts parseJsonPaste）白名单 + 形状校验后才到同一写器——
+ *  web 端点对齐同口径。另要求 command/url 至少一项非空（parseJsonPaste noStartup 同判据——
+ *  防空壳覆写砖化条目）。 */
+const isFlatStringMap = (v: unknown): boolean =>
+  v !== null && typeof v === "object" && !Array.isArray(v)
+  && Object.values(v as Record<string, unknown>).every((x) => typeof x === "string");
+
+const EDIT_SPEC_KEYS: Record<string, (v: unknown) => boolean> = {
+  command: (v) => typeof v === "string" && v !== "",
+  url: (v) => typeof v === "string" && v !== "",
+  args: (v) => Array.isArray(v) && v.every((x) => typeof x === "string"),
+  env: isFlatStringMap,
+  headers: isFlatStringMap,
+  cwd: (v) => typeof v === "string",
+  timeoutMs: (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
+  enabled: (v) => typeof v === "boolean",
+  deferred: (v) => typeof v === "boolean",
+  lazy: (v) => typeof v === "boolean",
+  transport: (v) => v === "http" || v === "sse",
+};
+
+/** edit spec 校验（unknown 进、合法 values 出——非法一律拒，绝不带病落盘）。 */
+function checkEditSpec(spec: Record<string, unknown>): { ok: true; values: Record<string, NestedTableValue> } | { ok: false; error: string } {
+  const values: Record<string, NestedTableValue> = {};
+  for (const [k, v] of Object.entries(spec)) {
+    const shape = EDIT_SPEC_KEYS[k];
+    if (shape === undefined) return { ok: false, error: `spec 有未知键「${k}」（合法键：${Object.keys(EDIT_SPEC_KEYS).join("/")}）` };
+    if (!shape(v)) return { ok: false, error: `spec 键「${k}」的值形状非法` };
+    values[k] = v as NestedTableValue;
+  }
+  if (values["command"] === undefined && values["url"] === undefined) {
+    return { ok: false, error: t("mcp.json.noStartup") };
+  }
+  return { ok: true, values };
+}
+
 /** 设置页数据面锚点：当前会话 harness（bootstrap /web 交接与 POST /api/sessions 打开即切换）。
  *  catalog 与 lazy live 态随会话模块图——MCP 面读写都从这里取；无当前会话 = undefined（GET 空表、
  *  start 409；写族 op 不依赖 harness，纯配置面照常）。 */
@@ -79,8 +121,9 @@ const MCP_OPS = new Set(["on", "off", "trust", "remove", "add", "edit", "start"]
 /** POST /api/settings/mcp/ops {op, name?, spec?} → {ok, text, report?} | 202 {ok, starting} | 4xx {error}。
  *  - on/off/trust/remove/add：rawArgs 拼装透传 runMcpCommand（wrote:false → 400 + mcp-cmd 文案——
  *    用法/未找到/来源守卫等；wrote:true → reload 收口 + 200）；
- *  - edit：spec 为 server 值对象（writeNestedTable 覆写整表值——TUI 添加窗 edit 模式同款写器）；
- *    仅 config 来源（预装/项目行同 TUI 拒改文案）；
+ *  - edit：spec 为 server 值对象，**写盘前白名单键 + 值形状全量校验**（checkEditSpec——非法 400 不
+ *    落盘，TUI JSON 摄入口 parseJsonPaste 同口径），过验后 writeNestedTable 覆写整表值（TUI 添加窗
+ *    edit 模式同款写器）；仅 config 来源（预装/项目行同 TUI 拒改文案）；
  *  - start：懒启动件（deferred 且 idle/failed）→ 202 排队（连接最长 60s——npx 下载，后台触发，
  *    前端轮询 catalog 观察翻转）；已连接 → 409；非懒启动/停用件 → 409（mcp.start.unknownLazy 文案）。 */
 registerRoute("POST", "/api/settings/mcp/ops", async (req, res) => {
@@ -159,7 +202,12 @@ registerRoute("POST", "/api/settings/mcp/ops", async (req, res) => {
       sendJson(res, 400, { ok: false, error: row.source === "project" ? t("mcp.projectSource") : t("mcp.preloadNoEdit") });
       return;
     }
-    writeNestedTable(deps.configPath(), `mcp.servers.${name}`, body.spec as Record<string, NestedTableValue>);
+    const checked = checkEditSpec(body.spec as Record<string, unknown>); // 写盘前全量校验（见 EDIT_SPEC_KEYS 注）
+    if (!checked.ok) {
+      sendJson(res, 400, { ok: false, error: checked.error });
+      return;
+    }
+    writeNestedTable(deps.configPath(), `mcp.servers.${name}`, checked.values);
     const report = await reloadAfterWrite(anchor);
     sendJson(res, 200, { ok: true, text: t("mcp.modified", { name }), ...(report !== undefined ? { report } : {}) });
     return;

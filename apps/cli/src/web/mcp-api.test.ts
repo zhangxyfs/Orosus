@@ -7,7 +7,10 @@
  *  - ③ ops trust → mcp-trust.json 登记（trustProjectServer：折叠项目路径 + fingerprintServer 指纹）；
  *  - ④ remove 仅 config 来源：预装/缺 name → 400；config 条目 → 200 + toml 节键删除；
  *  - ⑤ ops start（lazy 启动走 mcp.start）：已连接 / 非懒启动件 → 409；未知名 → 404；idle 预装件 →
- *    202 排队（后台触发连接——PATH 掐空令 npx 即败，catalog 观察 idle→failed 翻转即证服务真跑）。 */
+ *    202 排队（后台触发连接——PATH 掐空令 npx 即败，catalog 观察 idle→failed 翻转即证服务真跑）。
+ *  - ⑥ edit（审查修复件）：合法 spec 真写盘（整表覆写 + reload 生效）；非法值形状 / 未知键 / 缺启动键
+ *    → 400 且文件字节不变（writeNestedTable 无输出校验——带病落盘会砖化 mcp.toml，CM-01 后续写入
+ *    静默 no-op）；预装件拒改（来源守卫先于形状校验，TUI 同文案）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -355,6 +358,53 @@ describe("web T11：MCP 面 API", () => {
       process.env.PATH = prevPath;
       try { rmSync(emptyBin, { recursive: true, force: true }); } catch { /* 同 afterEach 口径 */ }
     }
+
+    await s.stop();
+  }, 60_000);
+
+  it("⑥ ops edit：合法 spec 真写盘（覆写 + reload 生效）；非法形状/未知键/缺启动键 → 400 且文件不动；预装件拒改", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    process.chdir(cwd);
+    writeProviderConfig(home);
+    writeMcpToml(home, `[mcp.servers.editme]\ncommand = "${BAD_CMD}"\n`);
+    await seedSession(home, cwd, "s_edit6");
+    const s = await startWebAt(home, cwd, "s_edit6");
+    const tomlPath = join(home, "modules.d", "mcp.toml");
+
+    // 合法 spec：整表覆写（command/args/env 内联表）→ 200 + toml 真落盘 + reload 吃到新配置真连
+    const okr = await ops(s, { op: "edit", name: "editme", spec: { command: "node", args: [FIXTURE], env: { DEMO: "1" } } });
+    expect(okr.status).toBe(200);
+    const okBody = (await okr.json()) as { ok: boolean; text: string; report: { failed: unknown[] } };
+    expect(okBody.ok).toBe(true);
+    expect(okBody.text).toContain("editme");
+    expect(okBody.report.failed).toEqual([]);
+    const toml1 = readFileSync(tomlPath, "utf8");
+    expect(toml1).toContain(`command = "node"`);
+    expect(toml1).toContain(`DEMO = "1"`); // env 内联表真落盘
+    await waitFor(async () => rowOf(await getMcp(s), "editme").state === "connected");
+
+    // 非法族：全部 400 且零写盘（文件字节不变——带病落盘会把 mcp.toml 写出非法 TOML）
+    const bads: Array<Record<string, unknown>> = [
+      { command: null },                            // 已知键 null 值（非法 TOML——审查案①）
+      { command: "node", env: { K: { deep: 1 } } }, // 深层嵌套对象（[object Object] 砖——审查案②）
+      { command: "node", bogus: "x" },              // 未知键（白名单外）
+      { cwd: "D:/" },                               // 缺启动键（防空壳覆写砖化条目）
+      { command: "node", timeoutMs: -5 },           // 已知键坏值域（负超时）
+    ];
+    for (const bad of bads) {
+      const before = readFileSync(tomlPath, "utf8");
+      const r = await ops(s, { op: "edit", name: "editme", spec: bad });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { ok: boolean; error: string }).ok).toBe(false);
+      expect(readFileSync(tomlPath, "utf8")).toBe(before); // 拒绝路径零写盘
+    }
+
+    // 预装件拒改（来源守卫先于形状校验——TUI alt+n 同文案）
+    const pre = await ops(s, { op: "edit", name: "memory", spec: { command: "node" } });
+    expect(pre.status).toBe(400);
+    expect(((await pre.json()) as { error: string }).error).toBe(t("mcp.preloadNoEdit"));
 
     await s.stop();
   }, 60_000);
