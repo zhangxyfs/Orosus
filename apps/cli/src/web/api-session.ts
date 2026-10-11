@@ -635,7 +635,7 @@ registerRoute("GET", "/api/archived", async (_req, res) => {
 });
 
 /** DELETE /api/sessions/:sid → {ok}|409（§3 :216，B11）：purgeSessionDir + 活锁守卫（外部进程
- *  live pid 活 / lock 活锁 → 409）；本进程 pool 托管会话（含当前与非当前）先 close 再删——
+ *  live pid 活 / lock 活锁 → 409）；本进程 host 托管会话（含当前与非当前）先 close 再删（viewer 不豁免）——
  *  自身 presence 不作锁。守卫与删尽序在 session-actions.deleteSession（测试 ⑪ 面）。 */
 registerRoute("DELETE", "/api/sessions/:sid", async (_req, res, params) => {
   const pool = webHostPool();
