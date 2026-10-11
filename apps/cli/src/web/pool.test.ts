@@ -13,6 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 
 import { encodeCwd, JsonlSessionStore, type SessionEvent } from "@orosus/core";
 import { runWebSubcommand, webHostPool } from "./mod.ts";
@@ -41,9 +42,10 @@ const seedSession = async (
   home: string,
   cwd: string,
   sid: string,
-  opts: { label?: string; user?: string; assistant?: string; tool?: { name: string; args?: Record<string, unknown> } } = {},
+  opts: { label?: string; user?: string; assistant?: string; tool?: { name: string; args?: Record<string, unknown> }; manifestFirst?: boolean } = {},
 ): Promise<void> => {
   const store = new JsonlSessionStore({ dir: join(home, "sessions", encodeCwd(cwd)), sessionId: sid });
+  if (opts.manifestFirst === true) await store.append("mcp/manifest", { modules: [] }); // 真实会话实况：模块装载先于首条 header 落盘（T18 走查修的 headerCwd 回归面）
   await store.append("session/header", { format: 1, cwd, parentSession: null, moduleSummary: { active: 0, failed: 0, discovered: 0 } });
   if (opts.label !== undefined) await store.append("session/label", { label: opts.label });
   if (opts.user !== undefined) await store.append("user/message", { content: [{ kind: "text", text: opts.user }] });
@@ -489,5 +491,84 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect(opens[0]!.hs.sid).toBe(opens[1]!.hs.sid); // 并发双击共享同一装配 → 同一会话（不落两个 fresh）
     expect(opens.map((o) => o.reused)).toEqual([false, false]); // 同一 in-flight 结果对象（顺序二次调用的 reused:true 由 ⑬ 盖）
     await pool.closeAll();
+  }, 60_000);
+
+  it("⑮ fork 复合视图浏览器可见性（T18 走查修——C7/G7）：重排显示 seq 后父前缀经 events/SSE/export 三面可见", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    const cwdB = tmpCwd();
+    // manifestFirst = 真实会话实况（模块装载先于 header 落盘）——headerCwd 首行假设的回归面（T18 走查修）
+    await seedSession(home, cwdA, "s_parent", { label: "父会话", user: "父会话的用户消息", assistant: "父会话的助手回复", manifestFirst: true });
+    await seedSession(home, cwdB, "s_other", { user: "B 项目的会话" });
+    const s = await startWeb(home); // 空启（fork 只需盘上父会话——locateSessionFile）
+    // current 切到 B（POST {cwd} 即 switchCurrent）——fork 前有别的当前项目（修复前 headerCwd 首行
+    // 读 manifest 失败 → targetCwd 回落 current().cwd → fork 落错桶 + 父前缀空）
+    await post(s, "/api/sessions", { cwd: cwdB });
+
+    // POST {forkFrom} → fork 子体托管（fork 视图检测 + 重排基线装载）；落桶 = 父所在项目（headerCwd）
+    const rf = await post(s, "/api/sessions", { forkFrom: "s_parent" });
+    expect(rf.status).toBe(200);
+    const sidF = ((await rf.json()) as { sid: string }).sid;
+
+    // ① GET events（修复前恒空——core eventsBefore fork 复合视图口径）：最新页含父前缀 user/assistant
+    const evs = (await (await get(s, `/api/sessions/${sidF}/events`)).json()) as { events: SessionEvent[] };
+    const types = evs.events.map((e) => e.type);
+    expect(types).toContain("user/message");
+    expect(types).toContain("assistant/message");
+    expect(types).toContain("session/fork"); // 自身段标记同页可见
+    // 显示 seq 升序且全局唯一（修复前：祖辈段与自身段各自从 1 起——原始投影相撞）
+    const seqs = evs.events.map((e) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(new Set(seqs).size).toBe(seqs.length);
+
+    // ② SSE backfill（浏览器实路径——switchTo 先 GET events 再 after=maxSeq 续流）：父前缀 ev 帧到达
+    const frames: Array<{ event: string; data: string }> = [];
+    const req = httpRequest({ host: "127.0.0.1", port: Number(s.base.split(":")[2]), path: `/api/sessions/${sidF}/stream?after=0`, headers: s.auth }, (res) => {
+      let buf = "";
+      res.on("data", (c: Buffer) => {
+        buf += c.toString("utf8");
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let ev = "message";
+          const dataLines: string[] = [];
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event: ")) ev = line.slice(7).trim();
+            else if (line.startsWith("data: ")) dataLines.push(line.slice(6));
+          }
+          if (dataLines.length > 0) frames.push({ event: ev, data: dataLines.join("\n") });
+        }
+      });
+    });
+    req.end();
+    try {
+      await waitFor(() => frames.some((f) => f.event === "ev" && f.data.includes("user/message")));
+      expect(frames.some((f) => f.event === "ev" && f.data.includes("父会话的用户消息"))).toBe(true);
+    } finally {
+      req.destroy();
+    }
+
+    // ③ export.md（replayAfter(0) 同源——导出含父前缀）
+    const exp = await get(s, `/api/sessions/${sidF}/export.md`);
+    expect(await exp.text()).toContain("父会话的用户消息");
+
+    // ④ fork 内续聊：死端口 provider 快速收尾——新事件（user/message + turn 族）显示 seq 恒增不相撞
+    await post(s, `/api/sessions/${sidF}/send`, { text: "fork 内续聊" });
+    await waitFor(async () => {
+      const e2 = (await (await get(s, `/api/sessions/${sidF}/events`)).json()) as { events: SessionEvent[] };
+      return e2.events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("fork 内续聊"));
+    });
+    const evs2 = (await (await get(s, `/api/sessions/${sidF}/events`)).json()) as { events: SessionEvent[] };
+    const seqs2 = evs2.events.map((e) => e.seq);
+    expect(new Set(seqs2).size).toBe(seqs2.length); // 重排空间全局唯一（live ingest 复用同一 displaySeqOf）
+    expect(Math.max(...seqs2)).toBeGreaterThan(Math.max(...seqs)); // 续聊事件追加在投影尾
+
+    // ⑤ fork 落桶 = 父所在项目（headerCwd 扫行修复后不再回落 current().cwd 落错桶）
+    const groups = ((await (await get(s, "/api/sessions")).json()) as { groups: Array<{ cwd: string; sessions: Array<{ sid: string }> }> }).groups;
+    expect(groups.find((g) => g.cwd === cwdA)!.sessions.some((x) => x.sid === sidF)).toBe(true);
+    await s.stop();
   }, 60_000);
 });

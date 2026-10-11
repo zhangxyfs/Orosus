@@ -289,7 +289,9 @@ export class HostPool {
     }
     // 托管无盘行合并（fresh 新会话 header 懒写不在磁盘扫描集——左栏即时可见；托管-only 桶进 buckets）
     for (const hs of this.hosts.values()) {
-      if (!buckets.has(hs.bucket)) buckets.set(hs.bucket, hs.cwd);
+      // T18 走查修：托管 cwd 覆盖空反查（fresh 桶盘上只有 manifest——bucketCwd miss 得 ""；
+      // 托管会话的 cwd 是权威值：组名/B10 显隐/B8 tooltip 全靠它）
+      if (buckets.get(hs.bucket) === undefined || buckets.get(hs.bucket) === "") buckets.set(hs.bucket, hs.cwd);
       if (!rows.some((r) => r.sid === hs.sid)) {
         rows.push({
           sid: hs.sid,

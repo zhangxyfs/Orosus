@@ -19,18 +19,28 @@ export function bucketCwdReads(): number {
   return reads;
 }
 
-/** 会话 header 首行读 cwd（预算 4KB——header 含 moduleSummary 三计数，恒小；T2 hostpool 同源实现
- *  迁入本件统一归口）。坏行/无 header → undefined（调用方兜底）。 */
+/** 会话文件内 session/header 行读 cwd（预算 8KB；T18 走查修：真实会话首行常是 mcp/manifest——
+ *  模块装载先于首条 header 落盘，逐行扫前几行取首个 session/header，不再钉死第 1 行）。坏行/预算内
+ *  无 header → undefined（调用方兜底）。 */
 export function headerCwd(file: string): string | undefined {
   try {
-    const buf = Buffer.alloc(4096);
+    const buf = Buffer.alloc(8192);
     const fd = openSync(file, "r");
     try {
       const n = readSync(fd, buf, 0, buf.length, 0);
-      const nl = buf.indexOf(0x0a);
-      const line = buf.toString("utf8", 0, Math.min(n, nl === -1 ? buf.length : nl));
-      const cwd = (JSON.parse(line) as { cwd?: unknown }).cwd;
-      return typeof cwd === "string" && cwd !== "" ? cwd : undefined;
+      for (const line of buf.toString("utf8", 0, n).split("\n")) {
+        if (line === "") continue;
+        let parsed: { type?: unknown; cwd?: unknown };
+        try {
+          parsed = JSON.parse(line) as { type?: unknown; cwd?: unknown };
+        } catch {
+          return undefined; // 截断行/坏行止损（header 恒在文件头部——首坏行即无 header 可读）
+        }
+        if (parsed.type !== "session/header") continue;
+        const cwd = parsed.cwd;
+        return typeof cwd === "string" && cwd !== "" ? cwd : undefined;
+      }
+      return undefined;
     } finally {
       closeSync(fd);
     }
@@ -39,7 +49,10 @@ export function headerCwd(file: string): string | undefined {
   }
 }
 
-/** 桶 → cwd 反查（惰性、缓存）：桶内任一会话（mtime 序首个可读者）的 header 首行 cwd。 */
+/** 桶 → cwd 反查（惰性、缓存）：桶内任一会话（mtime 序首个可读者）的 session/header 行 cwd。
+ *  T18 走查修：undefined 不再缓存——fresh 会话盘上只有 mcp/manifest（header 懒写），首查必 miss；
+ *  桶名对 cwd 双射的前提是「读到过 header」，miss 时缓存会让该桶在本进程生命期内恒 ""（用户发出
+ *  首条消息、header 落盘后也不自愈）。miss 重试的盘读成本被 snapshot 1s TTL 门住（每次快照至多一轮）。 */
 export function bucketCwd(root: string, bucket: string): string | undefined {
   const key = `${root}\u0000${bucket}`;
   if (cwdCache.has(key)) return cwdCache.get(key);
@@ -49,6 +62,6 @@ export function bucketCwd(root: string, bucket: string): string | undefined {
     cwd = headerCwd(e.file);
     if (cwd !== undefined) break;
   }
-  cwdCache.set(key, cwd);
+  if (cwd !== undefined) cwdCache.set(key, cwd); // 只缓存成功读（失败见上注——fresh 桶待 header 落盘后自愈）
   return cwd;
 }

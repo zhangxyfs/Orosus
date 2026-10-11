@@ -15,6 +15,7 @@
  *  - 常驻不回收（§4-15 一期边界）：会话随 server 生命常驻，不做 idle reaper。
  *  waiting-approval/waiting-input 两相位由 T5 WebCommandUi（bridge-ui.ts）经 setWaiting 挂点驱动；
  *  close 起点跑关停钩子（挂起 interaction fail-closed 收场）。 */
+import { openSync, readSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   createHarness, encodeCwd, isEmptySessionHead, locateSessionFile, pidAlive,
@@ -96,6 +97,36 @@ export const purgeIfEmptyAt = (root: string, sid: string): void => {
   if (head !== undefined && isEmptySessionHead(head)) purgeSessionDir(dirname(loc.dir), sid);
 };
 
+/** 会话文件头部是否含 session/fork 标记（T18 走查修——fork 子体检测）：fork.ts 注「fork 即刻落盘保证
+ *  恒在自己文件前两行」，故只读首 8KB 前三行判型即可——resume/viewer 打开的 fork 子体无需全量装载。
+ *  读不到（文件缺席/坏行）= 非 fork 视图（假阴性不炸——退回普通会话口径）。 */
+const sessionFileHasForkMarker = (bucketDir: string, sid: string): boolean => {
+  let fd: number;
+  try {
+    fd = openSync(join(bucketDir, sid, "agents", "session.jsonl"), "r");
+  } catch {
+    return false;
+  }
+  try {
+    const buf = Buffer.alloc(8192);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    let parsed = 0;
+    for (const line of buf.subarray(0, n).toString("utf8").split("\n")) {
+      if (line === "") continue;
+      try {
+        if ((JSON.parse(line) as { type?: string }).type === "session/fork") return true;
+      } catch {
+        break; // 截断行/坏行止损（标记恒在前两行——到此未命中即非）
+      }
+      parsed += 1;
+      if (parsed >= 3) break;
+    }
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+};
+
 export class HostedSession {
   readonly cwd: string;
   readonly createdAt: number;
@@ -115,6 +146,16 @@ export class HostedSession {
   private waiting: "approval" | "input" | null = null;
   private readonly closeHooks: (() => void)[] = [];
   private ring: SessionEvent[] = [];
+  /** fork 复合视图（T18 走查修——C7/G7 浏览器可见性）：fork 会话投影 = 祖辈前缀 + 自身段，两段 seq
+   *  各自从 1 起相撞；web 协议的 ev 帧 id=seq 游标 + 客户端按 seq 去重/补插在原始投影上会丢前缀/丢
+   *  新事件（GET events 走 core eventsBefore 对 fork 复合视图恒空——hosted 注：前缀在祖辈文件）。
+   *  fork 视图的扇出/回放/分页统一改走「重排显示 seq」：投影顺序即显示顺序，连续 1..K。TUI 对照 =
+   *  forkInPlace 后 swapSessionIn 全量回显（main.ts「fork 继承父上下文——回显让继承可见」）。 */
+  private forkView = false;
+  /** 重排后的全投影（fork 视图专用——assembly 一次性装载 + ingest 追加；常驻内存与 §4-15 不回收同口径）。 */
+  private displayAll: SessionEvent[] = [];
+  private readonly displaySeqOf = new Map<string, number>(); // raw 事件 id → 显示 seq（幂等查重）
+  private displaySeqNext = 0;
   private queue: { index: number; text: string; images?: string[]; afterUserEvent?: AfterUserEvent }[] = [];
   private nextIndex = 0;
   private readonly admitted = new Map<string, true>(); // promptId admission（见 admitPromptId）
@@ -180,6 +221,9 @@ export class HostedSession {
     }
     this.harness = h;
     this.currentSid = h.sessionId;
+    // T18 走查修：fork 复合视图检测 + 重排基线装载（先于订阅泵起跑——ingest 的 rebase 依赖基线就位）
+    this.forkView = this.init.forkFrom !== undefined || sessionFileHasForkMarker(this.bucketDir, h.sessionId);
+    if (this.forkView) await this.loadDisplayProjection();
     this.presence?.attach({ h, sessionsDir: this.bucketDir, sid: h.sessionId, kind: "web" });
     this.startPumps();
   }
@@ -211,21 +255,50 @@ export class HostedSession {
 
   /** 事件摄入：ring 留窗 + busy/phase 推算 + 扇出 + turn 结束补跑队列。 */
   private ingest(e: SessionEvent): void {
-    this.ring.push(e);
+    // T18 走查修：fork 视图先重排（raw id → 连续显示 seq）——ring/扇出/displayAll 三面统一重排版。
+    // 已在投影内的事件（history 基线装载与 events() 通道缓冲双源重叠——fork 构造期自身段先落盘后经
+    // 通道重放）按 raw id 去重直弃；「每事件唯一 id」不变量下无合法双投。
+    let out = e;
+    if (this.forkView) {
+      if (this.displaySeqOf.has(e.id)) return;
+      out = this.rebase(e);
+      this.displayAll.push(out);
+    }
+    this.ring.push(out);
     if (this.ring.length > RING_CAP) this.ring.splice(0, this.ring.length - RING_CAP);
-    if (e.type === "turn/start") {
+    if (out.type === "turn/start") {
       this.turnActive = true;
       this.endedWithError = false;
       this.waiting = null; // 等相位随 turn 边界复位（presence.ts 同款——挂起属上轮的交互不跨轮显示）
-    } else if (e.type === "turn/end") {
+    } else if (out.type === "turn/end") {
       this.turnActive = false;
       this.waiting = null; // 同上（cancel 打断后 outlive turn 的挂起交互只剩重放帧，不再占相位）
-      this.endedWithError = (e as { kind?: unknown }).kind === "error";
+      this.endedWithError = (out as { kind?: unknown }).kind === "error";
     }
     for (const cb of Array.from(this.eventSubs)) { // 快照迭代——回调内退订不跳元素
-      try { cb(e); } catch { /* 订阅方异常不拦扇出 */ }
+      try { cb(out); } catch { /* 订阅方异常不拦扇出 */ }
     }
-    if (e.type === "turn/end") this.drainQueue(); // 扇出 turn/end 后再补跑（订阅方先看到本轮收尾）
+    if (out.type === "turn/end") this.drainQueue(); // 扇出 turn/end 后再补跑（订阅方先看到本轮收尾）
+  }
+
+  /** fork 视图投影装载（T18 走查修）：history() 复合投影一次性重排（displaySeqOf 建基线）；此后
+   *  ingest 追加重排——Map 按 raw id 查重幂等，history() 与 ring 双源不撞号。 */
+  private async loadDisplayProjection(): Promise<void> {
+    const h = this.harness;
+    if (h === undefined) return;
+    const all = await h.history();
+    for (const e of all) this.displayAll.push(this.rebase(e));
+  }
+
+  /** 事件重排：raw id → 连续显示 seq（首见分配、重见复用）；seq 恰未变时原对象直返（零拷贝）。 */
+  private rebase(e: SessionEvent): SessionEvent {
+    let seq = this.displaySeqOf.get(e.id);
+    if (seq === undefined) {
+      this.displaySeqNext += 1;
+      seq = this.displaySeqNext;
+      this.displaySeqOf.set(e.id, seq);
+    }
+    return seq === e.seq ? e : { ...e, seq };
   }
 
   /** busy = dispatch 占位 || turn 活跃（dispatch 同步占位防微任务窗双发——§4-4「prompt 并发期再调抛错，
@@ -498,6 +571,7 @@ export class HostedSession {
    *  内存快路径；ring 空或不覆盖（resume 会话的历史前缀不在 ring——pump 只收订阅后事件）→ 全量
    *  history() 兜底。 */
   async replayAfter(after: number): Promise<SessionEvent[]> {
+    if (this.forkView) return this.displayAll.filter((e) => e.seq > after); // T18：fork 视图前缀不在 ring——恒走重排投影
     if (this.ring.length > 0 && this.ring[0]!.seq <= after + 1) {
       return this.ring.filter((e) => e.seq > after);
     }
@@ -508,8 +582,13 @@ export class HostedSession {
   }
 
   /** 分页回放（T3 GET events 端点消费——core eventsBefore 透传：索引查段 + pread，首屏有界 §5 律三；
-   *  fork 复合视图恒空是 core 口径）。 */
+   *  fork 复合视图恒空是 core 口径）。T18 走查修：fork 视图改走重排投影内存切片（displayAll——分页
+   *  与回放同源，显示 seq 连续无相撞）。 */
   eventsPage(beforeSeq: number, limit: number): Promise<SessionEvent[]> {
+    if (this.forkView) {
+      const page = this.displayAll.filter((e) => e.seq < beforeSeq);
+      return Promise.resolve(page.slice(Math.max(0, page.length - limit)));
+    }
     const h = this.harness;
     if (h === undefined) return Promise.resolve([]);
     return h.eventsBefore(this.currentSid, beforeSeq, limit);
