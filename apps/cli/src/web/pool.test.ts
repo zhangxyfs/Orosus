@@ -6,7 +6,8 @@
  *  ⑤ POST {resumeSid} → viewer/host 换轨；⑥ 协同 peers 跨桶合并 + 组内 /ps 序义；⑦ 扫描缓存
  *  （§5 律三：1s 窗内 5 连 GET 只扫一次、过期重扫）；⑧ 工作区显隐（B10：hide 过滤 + 找回）；
  *  ⑨ 顶栏新建跟随（B1：current 所在项目 → 显式切换 → 无 current 回落启动 cwd）；⑬ fresh 沿用
- *  （B13：同项目二次 POST 同 sid + reused:true；发过消息后新 sid）。 */
+ *  （B13：同项目二次 POST 同 sid + reused:true；发过消息后新 sid）；⑭ 重命名任意会话
+ *  （T15 审查补漏端点 POST /:sid/title——非托管落盘/托管不扰 host/守卫面）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -429,6 +430,49 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     const b3 = (await r3.json()) as { sid: string; reused?: boolean };
     expect(b3.sid).not.toBe(b1.sid);
     expect(b3.reused).toBeUndefined();
+    await s.stop();
+  }, 60_000);
+
+  it("⑭ 重命名任意会话（T15 审查补漏端点）：非托管会话 session/label 落盘 + 托管会话不扰 host + 守卫面", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    const cwdB = tmpCwd();
+    await seedSession(home, cwdA, "s_host", { label: "托管中的会话", user: "有消息非 fresh" });
+    await seedSession(home, cwdB, "s_disk", { label: "盘上非托管" }); // 他项目、未托管（无 host/viewer）
+    const s = await startWeb(home, cwdA, "s_host");
+
+    // 非托管会话（他项目、外部视角）：重命名 → 200 + session/label 落盘 + 扫描出新（不切当前会话）
+    const r1 = await post(s, "/api/sessions/s_disk/title", { title: '新名"含引号"与<尖括号>' });
+    expect(r1.status).toBe(200);
+    expect(await r1.json()).toEqual({ ok: true });
+    const disk = readFileSync(join(home, "sessions", encodeCwd(cwdB), "s_disk", "agents", "session.jsonl"), "utf8");
+    const labelEv = disk.trim().split("\n")
+      .map((l) => JSON.parse(l) as { type?: string; label?: string })
+      .filter((e) => e.type === "session/label")
+      .at(-1); // 旁路写追加的 session/label（ setTitle 同款）
+    expect(labelEv?.label).toBe('新名"含引号"与<尖括号>'); // 引号/尖括号原文落盘（JSON 转义在行级）
+    const body1 = await sessionsBody(s);
+    const rowDisk = body1.groups.find((g) => g.cwd === cwdB)!.sessions.find((x) => x.sid === "s_disk")!;
+    expect(rowDisk.label).toBe('新名"含引号"与<尖括号>'); // invalidateScan → 即时出新
+    const boot1 = (await (await get(s, "/api/bootstrap")).json()) as { currentSid?: string };
+    expect(boot1.currentSid).toBe("s_host"); // 重命名他项目会话不劫持当前游标
+
+    // 托管中会话（host 在池）：重命名 → 200 + host 不扰（status 仍 200 且 sid 不变）+ 行标签出新
+    const r2 = await post(s, "/api/sessions/s_host/title", { title: "托管后改名" });
+    expect(r2.status).toBe(200);
+    const st = await get(s, "/api/sessions/s_host/status");
+    expect(st.status).toBe(200); // host 化身健在（旁路写不碰 host）
+    const body2 = await sessionsBody(s);
+    const rowHost = body2.groups.find((g) => g.cwd === cwdA)!.sessions.find((x) => x.sid === "s_host")!;
+    expect(rowHost.label).toBe("托管后改名");
+    expect(rowHost.cur).toBe(true);
+
+    // 守卫面：空标题 / 纯空白 → 400；未知 sid → 404
+    expect((await post(s, "/api/sessions/s_disk/title", { title: "" })).status).toBe(400);
+    expect((await post(s, "/api/sessions/s_disk/title", { title: "   " })).status).toBe(400);
+    expect((await post(s, "/api/sessions/s_none/title", { title: "x" })).status).toBe(404);
     await s.stop();
   }, 60_000);
 

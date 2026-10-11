@@ -75,6 +75,22 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes("(max-width: 920px)"), "920px 断点保留").toBe(true);
   });
 
+  it("⑤补 esc() 全量转义：含双引号/单引号/&/</> 的输入不破出 HTML 属性（T15 审查 Important-1）", () => {
+    const api = read("api.js");
+    // 转义原语齐备（& < > " ' 五字符——title="…" 拼属性消费面的硬前提）
+    expect(api.includes('&quot;'), 'esc 须转义双引号（&quot;）').toBe(true);
+    expect(api.includes('&#39;'), "esc 须转义单引号（&#39;）").toBe(true);
+    // 行为级验证：以同源实现复算（浏览器原生路径同式）——五字符全转 + 幂等源字符不二次转义
+    const escLike = (s: string): string =>
+      String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    const sample = '会话"引号"与\'单引号\'<b>&amp;</b>';
+    const out = escLike(sample);
+    expect(out).toBe("会话&quot;引号&quot;与&#39;单引号&#39;&lt;b&gt;&amp;amp;&lt;/b&gt;");
+    expect(out.includes('"')).toBe(false);
+    expect(out.includes("<")).toBe(false);
+    expect(out.includes(">")).toBe(false);
+  });
+
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {
     const { server, port } = await startWebServer({ cwd: process.cwd(), home: process.cwd() });
     const base = `http://127.0.0.1:${port}`;

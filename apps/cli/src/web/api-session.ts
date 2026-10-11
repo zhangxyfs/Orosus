@@ -2,9 +2,10 @@
  *  回放——§3 形状）、GET stream（SSE——路由面，通道本体在 sse.ts）、POST send / DELETE queue /
  *  GET status（T4——消息写入链路：@ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）、
  *  POST answer（T5——interaction 应答落点，桥本体在 bridge-ui.ts）、GET bootstrap / GET sessions /
- *  POST sessions 三形态 / POST workspaces hide / POST pin / archive / unarchive / GET archived /
+ *  POST sessions 三形态 / POST workspaces hide / POST pin / title / archive / unarchive / GET archived /
  *  DELETE / export.md（T9——左栏会话列表的全部数据面：分组/置顶/归档/删除守卫/导出/fresh 沿用/
- *  工作区显隐/跨项目创建）。会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer
+ *  工作区显隐/跨项目创建；POST title 为 T15 审查补漏——B11 重命名任意会话的 setTitle 直挂）。
+ *  会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer
  *  只读化身（回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer → 409 拒绝形）；
  *  不在盘 → 404。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -25,6 +26,7 @@ import { hideCwd, readHidden, unhideCwd } from "./workspaces.ts";
 import { archiveSession, deleteSession, listArchived, renderMarkdown, unarchiveSession } from "./session-actions.ts";
 import { bucketCwd, headerCwd } from "./buckets.ts";
 import { updateInfoNow } from "../update-check.ts";
+import { setTitle } from "../sessions.ts";
 
 /** 回放分页每页上限（自创值登记——§5 律三：首屏有界，长会话按需加载）。 */
 export const EVENTS_PAGE_CAP = 200;
@@ -567,6 +569,54 @@ registerRoute("POST", "/api/sessions/:sid/pin", async (req, res, params) => {
   }
   const pinned = togglePin(pool.home, params["sid"] ?? "");
   sendJson(res, 200, { ok: true, pinned });
+});
+
+/** POST /api/sessions/:sid/title {title} → {ok}（B11 重命名任意会话——方案漏列、T15 审查补漏）：
+ *  写路按持有者分派——**托管中（host 在池）走 core `setLabel` 活写口**（session/label 事件回流 SSE；
+ *  旁路写在 CS-03 单写者锁下必抛——host 持锁）；**非托管走 setTitle 旁路写**（sessions.ts:187——
+ *  不碰 host，外部进程持有会话亦可命名）。无 resume 劫持当前会话的副作用；截断 200 字符（kimi 同款）；
+ *  label 落盘后经扫描缓存失效在左栏下一轮轮询出新。 */
+registerRoute("POST", "/api/sessions/:sid/title", async (req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const sid = params["sid"] ?? "";
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { title?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (title === "") {
+    sendJson(res, 400, { ok: false, error: "title 不能为空" });
+    return;
+  }
+  const hosted = pool.host(sid);
+  if (hosted !== undefined) {
+    const h = hosted.core; // 写者在池——活写口（事件回流 + host 自己的写锁）
+    if (h === undefined) {
+      notFound(res);
+      return;
+    }
+    await h.setLabel(title);
+  } else {
+    const r = await setTitle(pool.root, "", sid, title); // target 恒给——currentSid 形参不参与
+    if (r === undefined) {
+      notFound(res);
+      return;
+    }
+  }
+  pool.invalidateScan();
+  sendJson(res, 200, { ok: true });
 });
 
 /** POST /api/sessions/:sid/archive → {ok}（§3 :213，B12）：写 agents/archived 标记（内容 = ISO 一行）；

@@ -332,9 +332,8 @@ function $(id) { return document.getElementById(id); }
       return undefined;
     });
   }
-  /* 重命名（B11）：弹窗输入 → /title 命令通道。当前会话直发；非当前会话先 resume 打开再发
-   *  （任意会话重命名的 HTTP 面后端未交付——setTitle 未挂路由，报告留档；副作用 = 重命名后
-   *  该会话成为当前会话）。 */
+  /* 重命名（B11）：弹窗输入 → POST /api/sessions/:sid/title（setTitle 旁路写——任意会话可达，
+   *  不碰 host、不切当前会话；T15 审查补漏端点）。 */
   function renameSession(sid) {
     modalClose();
     openModal({
@@ -353,15 +352,14 @@ function $(id) { return document.getElementById(id); }
     window.setTimeout(function () { var el = document.getElementById('rename-input'); if (el) { el.value = rowTitle(sid) === '（未命名会话）' ? '' : rowTitle(sid); el.focus(); } }, 30);
   }
   function doRename(sid, name) {
-    var send = function (target) {
-      return A.fetchJson('/api/sessions/' + encodeURIComponent(target) + '/send', { method: 'POST', body: JSON.stringify({ text: '/title ' + name }) }).then(function (r) {
-        toast(r.output || '已命名 → ' + name);
-        if (target === currentSid) setSessionTitle(name, sid);
-        void pollSessions();
-      }, function (err) { toast('重命名失败：' + err.message); });
-    };
-    if (sid === currentSid) return send(sid);
-    openSession(sid).then(function () { return send(sid); });
+    A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/title', { method: 'POST', body: JSON.stringify({ title: name }) }).then(function () {
+      toast('已命名 → ' + name);
+      /* 本地即时补（旁路写不经 host——无 SSE label 帧）：当前会话顶栏同步 + 左栏行标签刷新 */
+      if (sid === currentSid) setSessionTitle(name, sid);
+      var f = findRow(sid);
+      if (f) f.row.label = name;
+      void pollSessions();
+    }, function (err) { toast('重命名失败：' + err.message); });
   }
   /* 导出（B11）：fetch blob 下载（token 走头——不进地址栏历史） */
   function exportSession(sid) {

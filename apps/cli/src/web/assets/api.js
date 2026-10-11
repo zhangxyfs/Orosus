@@ -94,7 +94,10 @@
       }, function () { /* 仍在断开——弹窗保留，后台持续重连 */ });
     });
   }
-  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
   /** 显示断连弹窗。variant：'lost'（断开——重试按钮后台持续重连，成功自动消）| 'shutdown'（server 已
    *  正常关闭——停止重连）| 'notoken'（本页无令牌——指路终端网址）。onRetry 由 openStream 注入。 */
   var discRetryFn = null;
