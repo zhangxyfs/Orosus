@@ -294,6 +294,28 @@ export class HostedSession {
     return () => { this.queueSubs.delete(cb); };
   }
 
+  /** 回放段（T3 SSE 首屏补齐/重连 backfill 源——「事件订阅自持 ring（cap 1024）+ 全量 history() 兜底」
+   *  语义）：seq > after 的事件升序。ring 覆盖（首元素 seq ≤ after+1——(after, ring 尾] 全在 ring）走
+   *  内存快路径；ring 空或不覆盖（resume 会话的历史前缀不在 ring——pump 只收订阅后事件）→ 全量
+   *  history() 兜底。 */
+  async replayAfter(after: number): Promise<SessionEvent[]> {
+    if (this.ring.length > 0 && this.ring[0]!.seq <= after + 1) {
+      return this.ring.filter((e) => e.seq > after);
+    }
+    const h = this.harness;
+    if (h === undefined) return this.ring.filter((e) => e.seq > after);
+    const all = await h.history();
+    return all.filter((e) => e.seq > after);
+  }
+
+  /** 分页回放（T3 GET events 端点消费——core eventsBefore 透传：索引查段 + pread，首屏有界 §5 律三；
+   *  fork 复合视图恒空是 core 口径）。 */
+  eventsPage(beforeSeq: number, limit: number): Promise<SessionEvent[]> {
+    const h = this.harness;
+    if (h === undefined) return Promise.resolve([]);
+    return h.eventsBefore(this.currentSid, beforeSeq, limit);
+  }
+
   /** 关停序（brief 定档）：presence dispose → h.close → purgeIfEmpty（purge 必须在 h.close 完成**后**——
    *  Windows 活句柄删不动，session-io.ts:36 明文；同 CLI 退出实序）。幂等；viewer 无 presence、不 purge
    *  （只读化身不拥有会话——清理归 host/退出漏斗）。 */

@@ -6,15 +6,16 @@
  *  T2 起：起服后建 HostPool（webHostPool() 访问位）+ onShutdown 清退接线（SSE shutdown 帧广播 +
  *  pool.closeAll——G15 供给侧）；handover（/web 形态切换——T2 接线）作为首个托管会话 + 当前游标。 */
 import { join } from "node:path";
-import type { ServerResponse } from "node:http";
 import { orosusHome } from "@orosus/contracts/home";
 import { loadConfig, locateSessionFile } from "@orosus/core";
 import { needsProviderSetup, readConfigModel } from "../onboarding.ts";
 import { t } from "../i18n/app.ts";
 import { findLiveInstance, writeInstance } from "./instance.ts";
 import { openBrowser } from "./open-browser.ts";
-import { onShutdown, registerRoute, sendJson, startWebServer } from "./server.ts";
+import { onShutdown, startWebServer } from "./server.ts";
 import { HostPool } from "./hostpool.ts";
+import { broadcastShutdownFrames } from "./sse.ts";
+import "./api-session.ts"; // T3 会话组端点注册（GET events/stream——模块加载期进路由表，readiness 序）
 
 export function isWebSubcommand(argv: string[]): boolean {
   return argv[0] === "web";
@@ -93,39 +94,6 @@ export function webHostPool(): HostPool | undefined {
   return pool;
 }
 
-// ---------- SSE 连接面（T2 最小面：首帧组 + shutdown 帧广播）----------
-// ev/chunk/interaction/queue/phase 帧写器、每会话客户端注册表、50ms 合批与背压是 T3 sse.ts 交付物——
-// 本任务只落 G15 清退链的最小供给侧：SSE 客户端能连上（§3 端点形态 + 首帧组防中间层掐零字节流）、
-// SIGINT 清退时收到 shutdown 帧即显「已正常关闭」（不进无谓重连）。
-const sseClients = new Set<ServerResponse>();
-
-registerRoute("GET", "/api/sessions/:sid/stream", (req, res, params) => {
-  const sid = params["sid"] ?? "";
-  if (pool === undefined || locateSessionFile(pool.root, sid) === undefined) {
-    sendJson(res, 404, { ok: false, error: "not found" });
-    return;
-  }
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-cache",
-    "x-accel-buffering": "no",
-  });
-  res.write("retry: 3000\n: connected\n\n"); // §3 首帧组（qwen/dsh 先例——防代理掐零字节空闲流）
-  sseClients.add(res);
-  req.on("close", () => { sseClients.delete(res); });
-});
-
-/** 清退广播：全部 SSE 客户端写 shutdown 帧后 end（§3 帧型——其余帧不带 id 不烧号）。 */
-const sseShutdownFrame = (reason: string): void => {
-  for (const res of Array.from(sseClients)) { // 快照迭代——循环内 delete 不跳元素
-    sseClients.delete(res);
-    try {
-      res.write(`event: shutdown\ndata: ${JSON.stringify({ reason })}\n\n`);
-      res.end();
-    } catch { /* 已断连接——帧丢了客户端走重连耗尽判定（G15 兜底） */ }
-  }
-};
-
 export async function runWebSubcommand(
   argv: string[],
   io: WebIo,
@@ -159,13 +127,16 @@ export async function runWebSubcommand(
   writeInstance(home, { v: 1, pid: process.pid, port, startedAt: Date.now(), token });
 
   // HostPool（T2）：池生命周期 = server 生命周期；SIGINT 清退序（G15 供给侧——填 T1 onShutdown
-  // 注册位）= shutdown 帧广播 → pool.closeAll（实例文件清理在 T1 shutdownWebServer 序内）
+  // 注册位）= shutdown 帧广播（T3 sse.ts 全会话客户端注册表）→ pool.closeAll（实例文件清理在 T1
+  // shutdownWebServer 序内）
   const p = new HostPool({ home });
   pool = p;
-  onShutdown((reason) => {
-    sseShutdownFrame(reason);
+  const off = onShutdown((reason) => {
+    broadcastShutdownFrames(reason);
     void p.closeAll();
+    pool = undefined; // 契约：清退后 webHostPool() 恒 undefined（T2 审查指针②——closeAll 即失效）
   });
+  server.once("close", off); // 进程内多次起停（测试）不堆积 onShutdown 监听（T2 审查指针③）
 
   // handover 接线（T1 参数在此生效——G14 /web 形态切换）：server 起后作为首个托管会话 + 当前会话
   // 游标（浏览器 bootstrap 默认打开它——/api/bootstrap currentSid，T9 消费）；sid 已被退出序列

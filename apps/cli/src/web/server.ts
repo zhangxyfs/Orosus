@@ -176,9 +176,14 @@ function listenServer(server: Server, port: number): Promise<void> {
 
 const shutdownListeners: Array<(reason: string) => void> = [];
 
-/** 清退监听注册位（brief「后续任务消费」行——T2 填充：SSE shutdown 帧广播 + HostPool.closeAll）。 */
-export function onShutdown(fn: (reason: string) => void): void {
+/** 清退监听注册位（brief「后续任务消费」行——T2 填充：SSE shutdown 帧广播 + HostPool.closeAll）。
+ *  返回反注册函数（T3：mod.ts 在 server close 时摘除——进程内多次起停〔测试〕不堆积监听、闭包不持旧池）。 */
+export function onShutdown(fn: (reason: string) => void): () => void {
   shutdownListeners.push(fn);
+  return () => {
+    const i = shutdownListeners.indexOf(fn);
+    if (i >= 0) shutdownListeners.splice(i, 1);
+  };
 }
 
 /** 广播清退（T2 的 SIGINT 清退序在 G15 调用）：逐监听调用，单监听抛错不拦其余与关停。 */
