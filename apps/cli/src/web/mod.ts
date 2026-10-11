@@ -134,7 +134,7 @@ export async function runWebSubcommand(
   // 注册位）= shutdown 帧广播（T3 sse.ts 全会话客户端注册表）→ pool.closeAll（实例文件清理在 T1
   // shutdownWebServer 序内）。commandUi 注入 T5 交互桥工厂（逐会话 WebCommandUi——broadcast 绑
   // 该会话 SSE 扇出、pending 重放源注册、close fail-closed 钩子，见 bridge-ui.ts）
-  const p = new HostPool({ home, commandUi: webCommandUiFactory });
+  const p = new HostPool({ home, cwd, commandUi: webCommandUiFactory }); // cwd = server 启动 cwd（T9 B1 无当前会话回落档）
   pool = p;
   const off = onShutdown((reason) => {
     broadcastShutdownFrames(reason);

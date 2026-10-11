@@ -1,19 +1,29 @@
-/** 会话组端点（web 批 T3 本任务面 + T4 写侧 + T5 交互应答）：GET events（分页回放——§3 形状）、
- *  GET stream（SSE——路由面，通道本体在 sse.ts）、POST send / DELETE queue / GET status（T4——消息
- *  写入链路：@ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）、POST answer（T5——
- *  interaction 应答落点，桥本体在 bridge-ui.ts）。会话解析：池内 host 优先（live 扇出源）；未托管但
- *  盘上存在 → viewer 只读化身（回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer →
- *  409 拒绝形）；不在盘 → 404。 */
+/** 会话组端点（web 批 T3 本任务面 + T4 写侧 + T5 交互应答 + T9 会话池数据面）：GET events（分页
+ *  回放——§3 形状）、GET stream（SSE——路由面，通道本体在 sse.ts）、POST send / DELETE queue /
+ *  GET status（T4——消息写入链路：@ 引用展开 + 贴图 imageIds 解析 + promptId 幂等 + 202 受理即回）、
+ *  POST answer（T5——interaction 应答落点，桥本体在 bridge-ui.ts）、GET bootstrap / GET sessions /
+ *  POST sessions 三形态 / POST workspaces hide / POST pin / archive / unarchive / GET archived /
+ *  DELETE / export.md（T9——左栏会话列表的全部数据面：分组/置顶/归档/删除守卫/导出/fresh 沿用/
+ *  工作区显隐/跨项目创建）。会话解析：池内 host 优先（live 扇出源）；未托管但盘上存在 → viewer
+ *  只读化身（回放可用，live 帧无——本进程无写者时本就无 live；send 对 viewer → 409 拒绝形）；
+ *  不在盘 → 404。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { basename, dirname, join } from "node:path";
 import { locateSessionFile, readSessionHead } from "@orosus/core";
+import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import { openStream } from "./sse.ts";
 import type { HostedSession } from "./hosted.ts";
+import { freshOf, type PoolScanRow, type ScanSnapshot } from "./hostpool.ts";
 import { resolveAtRefs } from "../atfile.ts";
 import { INPUT_ECHO_EVENT } from "../session-io.ts";
 import { MAX_IMAGES_PER_MESSAGE, resolveImageIds } from "./api-files.ts";
 import { webCommandUiOf } from "./bridge-ui.ts";
+import { readPins, togglePin } from "./pins.ts";
+import { hideCwd, readHidden, unhideCwd } from "./workspaces.ts";
+import { archiveSession, deleteSession, listArchived, renderMarkdown, unarchiveSession } from "./session-actions.ts";
+import { bucketCwd, headerCwd } from "./buckets.ts";
 
 /** 回放分页每页上限（自创值登记——§5 律三：首屏有界，长会话按需加载）。 */
 export const EVENTS_PAGE_CAP = 200;
@@ -51,6 +61,15 @@ const resolveSession = async (pool: ReturnType<typeof webHostPool>, sid: string)
     () => undefined, // 不在盘/装配失败——调用方 404
   );
 };
+
+/** sid → 桶目录（archive 路由用：盘上定位取桶；不在盘 = undefined）。 */
+const bucketDirOf = (root: string, sid: string): string | undefined => {
+  const loc = locateSessionFile(root, sid);
+  return loc === undefined ? undefined : dirname(loc.dir);
+};
+
+/** 请求体字符串字段（非空串才算在场——POST sessions 三形态/workspaces hide 共用）。 */
+const bodyStr = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** GET /api/sessions/:sid/events?after&limit → {ok, events, hasMore, latestSeq}（§3 形状）。
  *  数据源 = core eventsBefore 游标（harness 索引查段 + pread——§5 律三「扫描解析有缓存、成本不随
@@ -307,4 +326,352 @@ registerRoute("POST", "/api/sessions/:sid/cancel", async (req, res, params) => {
   }
   hs.cancel();
   sendJson(res, 200, { ok: true });
+});
+
+// ---------- T9：跨项目会话池数据面（bootstrap / sessions / 三形态创建 / 显隐 / 置顶 / 归档 / 删除 / 导出）----------
+
+/** 组内行序（⑥ /ps 序义——ps.ts PHASE_ORDER 同序复刻：web/* 不改既有件，本地同源常量）：
+ *  活体行按相位序（等审批 → 等问询 → 跑 → 错 → 闲）在前，死行按 mtime 新到旧在后。 */
+const PHASE_ORDER: Record<string, number> = {
+  "waiting-approval": 0,
+  "waiting-input": 1,
+  running: 2,
+  error: 3,
+  idle: 4,
+};
+
+/** 左栏会话行（§3 :218 SessionRow + fresh?:true——B12/B13 前端消费面〔fresh 无归档钮/占位文案〕，
+ *  可选键缺席 = 语义假，exactOptionalPropertyTypes 口径条件展开）。 */
+export interface SessionRow {
+  sid: string;
+  label: string;
+  relMs: number;
+  live: boolean;
+  kind?: "tui" | "line" | "web";
+  phase?: string;
+  model?: string;
+  preview?: string;
+  cur?: true;
+  fresh?: true;
+}
+
+/** 行相位（rowOf 同一优先序：托管实时优先 → peers live.json；无相位 = 死行）。 */
+const rowPhase = (pool: NonNullable<ReturnType<typeof webHostPool>>, snap: ScanSnapshot, r: PoolScanRow): string | undefined =>
+  pool.host(r.sid)?.phase() ?? snap.peers.get(r.sid)?.phase;
+
+/** 扫描行 → 协议行：live/phase/kind 托管优先（实时）→ peers 次之（live.json）；relMs 以
+ *  max(mtime, lastEventAt) 为活动锚。 */
+const rowOf = (pool: NonNullable<ReturnType<typeof webHostPool>>, snap: ScanSnapshot, r: PoolScanRow): SessionRow => {
+  const hosted = pool.host(r.sid);
+  const peer = snap.peers.get(r.sid);
+  const phase = rowPhase(pool, snap, r);
+  const model = hosted?.coreStatus()?.model ?? peer?.model;
+  return {
+    sid: r.sid,
+    label: r.label,
+    relMs: Date.now() - Math.max(r.mtimeMs, peer?.lastEventAt ?? 0),
+    live: hosted !== undefined || peer !== undefined,
+    ...(hosted !== undefined ? { kind: "web" as const } : peer !== undefined ? { kind: peer.kind } : {}),
+    ...(phase !== undefined ? { phase } : {}),
+    ...(model !== undefined && model !== "" ? { model } : {}),
+    ...(peer?.preview !== undefined ? { preview: peer.preview } : {}),
+    ...(pool.current()?.sid === r.sid ? { cur: true as const } : {}),
+    ...(r.fresh ? { fresh: true as const } : {}),
+  };
+};
+
+/** GET /api/sessions → {pinned, groups}（§3 :210）：groups 已过滤 hidden 桶（B10）与 archived 会话
+ *  （B12）；组名 = basename(cwd)；置顶区独立成列（B2，pins.json 序）且同样过滤 hidden/archived。 */
+registerRoute("GET", "/api/sessions", async (_req, res) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    sendJson(res, 200, { pinned: [], groups: [] });
+    return;
+  }
+  const snap = pool.snapshot();
+  const hidden = new Set(readHidden(pool.home));
+  const rowsBySid = new Map(snap.rows.map((r) => [r.sid, r]));
+
+  const byBucket = new Map<string, PoolScanRow[]>();
+  for (const r of snap.rows) {
+    if (r.archived) continue; // B12：归档不进左栏
+    const list = byBucket.get(r.bucket);
+    if (list !== undefined) list.push(r);
+    else byBucket.set(r.bucket, [r]);
+  }
+  const groups = [...byBucket.entries()]
+    .map(([bucket, rows]) => {
+      const cwd = snap.buckets.get(bucket) ?? "";
+      return { bucket, cwd, rows, hidden: hidden.has(cwd) };
+    })
+    .filter((g) => !g.hidden) // B10：hidden 桶不出列
+    .map((g) => ({
+      bucket: g.bucket,
+      name: basename(g.cwd) || g.bucket, // 组名 = basename(cwd)（B3；反查失败回落桶名）
+      cwd: g.cwd,
+      newest: Math.max(...g.rows.map((r) => r.mtimeMs)),
+      sessions: g.rows
+        .toSorted((a, b) => {
+          const pa = PHASE_ORDER[rowPhase(pool, snap, a) ?? ""] ?? 99;
+          const pb = PHASE_ORDER[rowPhase(pool, snap, b) ?? ""] ?? 99;
+          return pa !== pb ? pa - pb : b.mtimeMs - a.mtimeMs;
+        })
+        .map((r) => rowOf(pool, snap, r)),
+    }))
+    .toSorted((a, b) => b.newest - a.newest); // 工作区按最新活动在前
+
+  const pinned: SessionRow[] = [];
+  for (const sid of readPins(pool.home)) {
+    const r = rowsBySid.get(sid);
+    if (r === undefined || r.archived) continue;
+    if (hidden.has(snap.buckets.get(r.bucket) ?? "")) continue; // hidden 桶的置顶一并隐（显隐压过置顶）
+    pinned.push(rowOf(pool, snap, r));
+  }
+  sendJson(res, 200, { pinned, groups: groups.map(({ bucket, name, cwd, sessions }) => ({ bucket, name, cwd, sessions })) });
+});
+
+/** GET /api/bootstrap → {version, projects, pinned, currentSid?}（§3 :208）：projects 含 hidden 工作
+ *  区全量（hidden:true——cwd 切换芯片找回入口，B10）；currentSid = 池当前游标（/web 交接指向；
+ *  无则前端开最新）；update? 字段归 T12 接线——本端点缺省不出（方案 T12 接口行明文）。 */
+registerRoute("GET", "/api/bootstrap", async (_req, res) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    sendJson(res, 200, { version: OROSUS_VERSION, projects: [], pinned: [] });
+    return;
+  }
+  const snap = pool.snapshot();
+  const hidden = new Set(readHidden(pool.home));
+  const projects = [...snap.buckets.entries()].map(([bucket, cwd]) => ({
+    bucket,
+    cwd,
+    name: basename(cwd) || bucket,
+    ...(hidden.has(cwd) ? { hidden: true as const } : {}),
+  }));
+  const cur = pool.current();
+  sendJson(res, 200, {
+    version: OROSUS_VERSION,
+    projects,
+    pinned: readPins(pool.home),
+    ...(cur !== undefined ? { currentSid: cur.sid } : {}),
+  });
+});
+
+/** POST /api/sessions {cwd?, resumeSid?, forkFrom?} → {sid, reused?:true}（§3 :219 三形态）：
+ *  - cwd 缺省 = 当前会话所在项目（pool.current()?.cwd ?? pool 启动 cwd）——顶栏「＋ 新会话」
+ *    （B1 跟随语义）；带 cwd = 工作区行 ＋ / cwd 芯片显式指定（B9/D5）；
+ *  - resumeSid = 打开既有会话（host 换轨——viewer 化身先关）；forkFrom = 分叉新会话；
+ *  - 同项目已有 fresh 空会话 → 沿用返回该 sid（reused:true，B13——池内 per-cwd 互斥，并发双击
+ *    不落两个 fresh）；
+ *  - 打开/创建即切当前游标（switchCurrent——currentSid 与 B1 跟随基准随之迁移）；
+ *  - cwd 在 hidden 表 → 自动移出（B10 找回：POST {同 cwd} 建会话即重新可见）。 */
+registerRoute("POST", "/api/sessions", async (req, res) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { cwd?: unknown; resumeSid?: unknown; forkFrom?: unknown } = {};
+  const text = raw.toString("utf8").trim();
+  if (text !== "") {
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid json" });
+      return;
+    }
+  }
+  const cwd = bodyStr(body.cwd);
+  const resumeSid = bodyStr(body.resumeSid);
+  const forkFrom = bodyStr(body.forkFrom);
+  if ([cwd, resumeSid, forkFrom].filter((x) => x !== undefined).length > 1) {
+    sendJson(res, 400, { ok: false, error: "cwd/resumeSid/forkFrom 三选一" });
+    return;
+  }
+  const targetLoc = resumeSid !== undefined ? locateSessionFile(pool.root, resumeSid)
+    : forkFrom !== undefined ? locateSessionFile(pool.root, forkFrom)
+      : undefined;
+  if ((resumeSid !== undefined || forkFrom !== undefined) && targetLoc === undefined) {
+    sendJson(res, 404, { ok: false, error: "会话不存在" });
+    return;
+  }
+  try {
+    // B1 跟随链：显式 cwd > 目标会话自身 cwd（resume/fork 落在它自己的项目——跨项目打开不串桶）>
+    // 当前会话所在项目 > server 启动 cwd
+    const targetCwd = cwd
+      ?? (targetLoc !== undefined ? headerCwd(targetLoc.file) : undefined)
+      ?? pool.current()?.cwd
+      ?? pool.startCwd;
+    const { hs, reused } = await pool.openSession({
+      cwd: targetCwd,
+      ...(resumeSid !== undefined ? { resumeSid } : {}),
+      ...(forkFrom !== undefined ? { forkFrom } : {}),
+    });
+    pool.switchCurrent(hs.sid);
+    unhideCwd(pool.home, hs.cwd); // B10 找回：该 cwd 建会话自动移出 hidden（幂等）
+    sendJson(res, 200, { sid: hs.sid, ...(reused ? { reused: true } : {}) });
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** POST /api/workspaces/hide {cwd} → {ok}（§3 :212，B10）：移除工作区（仅显隐——文件与会话保留）；
+ *  找回 = POST /api/sessions {同 cwd} 自动移出（或 unarchive 联动）。 */
+registerRoute("POST", "/api/workspaces/hide", async (req, res) => {
+  const pool = webHostPool();
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { cwd?: unknown } = {};
+  const text = raw.toString("utf8").trim();
+  if (text !== "") {
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid json" });
+      return;
+    }
+  }
+  if (typeof body.cwd !== "string" || body.cwd === "") {
+    sendJson(res, 400, { ok: false, error: "missing cwd" });
+    return;
+  }
+  if (pool !== undefined) hideCwd(pool.home, body.cwd);
+  sendJson(res, 200, { ok: true });
+});
+
+/** POST /api/sessions/:sid/pin → {ok, pinned}（B2/B11 置顶 toggle——§3 端点表未列的补面：前端
+ *  悬停钮/右键「置顶」的消费口，pins.ts togglePin 的路由接线；不校验会话存在〔对已删会话的置顶
+ *  在读侧自然跳过〕）。 */
+registerRoute("POST", "/api/sessions/:sid/pin", async (req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES); // 排空请求体（keep-alive 管线卫生）
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  const pinned = togglePin(pool.home, params["sid"] ?? "");
+  sendJson(res, 200, { ok: true, pinned });
+});
+
+/** POST /api/sessions/:sid/archive → {ok}（§3 :213，B12）：写 agents/archived 标记（内容 = ISO 一行）；
+ *  fresh 空会话 → 400（盘上判据 isEmptySessionHead；托管无盘 fresh 由池面拦截）；不在盘 → 404。 */
+registerRoute("POST", "/api/sessions/:sid/archive", async (req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const sid = params["sid"] ?? "";
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  const hosted = pool.lookup(sid);
+  if (hosted !== undefined && await freshOf(hosted)) {
+    sendJson(res, 400, { ok: false, error: "空会话不能归档" }); // 托管 fresh（header 懒写不在盘）
+    return;
+  }
+  const bucketDir = hosted !== undefined ? join(pool.root, hosted.bucket) : bucketDirOf(pool.root, sid);
+  if (bucketDir === undefined) {
+    notFound(res);
+    return;
+  }
+  const r = archiveSession(bucketDir, sid);
+  if (r.ok) {
+    pool.invalidateScan();
+    sendJson(res, 200, { ok: true });
+  } else {
+    sendJson(res, r.status, { ok: false, error: r.error });
+  }
+});
+
+/** POST /api/sessions/:sid/unarchive → {ok}（§3 :214，B12/F10）：删标记文件；该会话 cwd 在 hidden
+ *  表 → server 同步 unhide（恢复即找回——落 server 侧保证原子）；不在盘 → 404。 */
+registerRoute("POST", "/api/sessions/:sid/unarchive", async (req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const sid = params["sid"] ?? "";
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  const loc = locateSessionFile(pool.root, sid);
+  if (loc === undefined) {
+    notFound(res);
+    return;
+  }
+  unarchiveSession(join(pool.root, loc.bucket), sid);
+  const cwd = bucketCwd(pool.root, loc.bucket);
+  if (cwd !== undefined && cwd !== "") unhideCwd(pool.home, cwd); // 恢复即找回（§3 端点注释）
+  pool.invalidateScan();
+  sendJson(res, 200, { ok: true });
+});
+
+/** GET /api/archived → {items}（§3 :215，B12/F10）：已归档列表（title/cwd/双时间——归档时刻倒序；
+ *  session-actions.listArchived，bucketCwd 反查缓存命中）。 */
+registerRoute("GET", "/api/archived", async (_req, res) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    sendJson(res, 200, { items: [] });
+    return;
+  }
+  sendJson(res, 200, { items: listArchived(pool.root) });
+});
+
+/** DELETE /api/sessions/:sid → {ok}|409（§3 :216，B11）：purgeSessionDir + 活锁守卫（外部进程
+ *  live pid 活 / lock 活锁 → 409）；本进程 pool 托管会话（含当前与非当前）先 close 再删——
+ *  自身 presence 不作锁。守卫与删尽序在 session-actions.deleteSession（测试 ⑪ 面）。 */
+registerRoute("DELETE", "/api/sessions/:sid", async (_req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const r = await deleteSession(pool.root, params["sid"] ?? "", pool);
+  if (r.ok) {
+    pool.invalidateScan();
+    sendJson(res, 200, { ok: true });
+  } else {
+    sendJson(res, r.status, { ok: false, error: r.error });
+  }
+});
+
+/** GET /api/sessions/:sid/export.md → text/markdown（attachment，§3 :217，B11）：SessionEvent 流 →
+ *  markdown（renderMarkdown——user/assistant 分节 + thinking 折叠引用 + 工具行摘要）+ 标题头
+ *  （session/label 优先）；会话解析同口径（host → viewer → 404）。 */
+registerRoute("GET", "/api/sessions/:sid/export.md", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined || pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const events = await hs.replayAfter(0);
+  const loc = locateSessionFile(pool.root, hs.sid);
+  const head = loc !== undefined ? readSessionHead(loc.file) : undefined;
+  const title = head?.label ?? head?.firstUser ?? hs.sid;
+  const md = `# ${title}\n\n> 会话 ID：${hs.sid}\n> 项目：${hs.cwd}\n> 导出时间：${new Date().toISOString()}\n\n---\n${renderMarkdown(events)}`;
+  res.writeHead(200, {
+    "content-type": "text/markdown; charset=utf-8",
+    "content-disposition": `attachment; filename="oro-${hs.sid}.md"`,
+    "cache-control": "no-store",
+  });
+  res.end(md);
 });
