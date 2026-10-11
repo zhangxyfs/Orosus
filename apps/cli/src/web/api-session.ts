@@ -285,3 +285,26 @@ registerRoute("POST", "/api/sessions/:sid/answer", async (req, res, params) => {
   const delivered = ui.answer(id, body.value);
   sendJson(res, 200, { ok: true, ...(delivered ? {} : { noop: true }) });
 });
+
+/** POST /api/sessions/:sid/cancel → {ok}（§3：h.cancel + stopAllSubagents——D11 发送键 stop 态 /
+ *  D12 双击 Esc 的服务端全停口；busy 期 /quit 族先 cancel 的同款动作 T6 已消费）。
+ *  - **既定语义（T5 钉住，测试 ①钉）**：不 resolve 挂起的 interaction 卡——turn 阻塞至卡片应答或
+ *    close；前端双击 Esc 连带 POST /answer {cancelled} 是 T16 的职责，本端点不越权 fail-close。
+ *  - stopAllSubagents 把挂起审批自动按拒绝收场（决策 3/12——绝不卡死）。
+ *  - 无请求体字段（content-type: application/json 头即 T1 写护栏合规形态；体读后弃——连接卫生）。 */
+registerRoute("POST", "/api/sessions/:sid/cancel", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES); // 排空请求体（keep-alive 管线卫生；无字段可解析）
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  hs.cancel();
+  sendJson(res, 200, { ok: true });
+});
