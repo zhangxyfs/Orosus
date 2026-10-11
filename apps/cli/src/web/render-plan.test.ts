@@ -1,0 +1,217 @@
+/** web 批 T16 伴生测试：render.js 纯函数区——planAppend 增量渲染计划 + 事件→行文案推导。
+ *  口径：§5 律一（渲染器与 DOM 解耦——`planAppend(renderedSeqs, events) → 操作列表` 纯函数，
+ *  node 直测零 DOM）+ brief Steps① 的映射族（tool 行/diff/思考块预览/技能标记/usage 旁注文案源）。
+ *  DOM 应用层无 node 可测面（无 jsdom 依赖纪律）——「无整区重渲路径」由代码走查自证（报告留档）。 */
+import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import "./assets/render.js"; // 副作用挂 globalThis.OrosusRender（经典脚本零构建——node/浏览器同源导出）
+
+/* noUncheckedIndexedAccess 下 Record 索引签名带 undefined——显式接口剥可选层（兼作导出面清单） */
+type Fn = (...args: unknown[]) => unknown;
+interface RenderApi {
+  planAppend: Fn; isGhostTool: Fn; toolDisplayName: Fn; toolKeyArg: Fn; toolHeadText: Fn;
+  lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn; thinkPreviewOf: Fn;
+  skillMarkOf: Fn; textOf: Fn; reasoningOf: Fn; imagesOf: Fn; fmtK: Fn; fmtDur: Fn;
+  fmtTurnTime: Fn; esc: Fn;
+}
+const R = (globalThis as { OrosusRender?: RenderApi }).OrosusRender!;
+const ASSETS_DIR = fileURLToPath(new URL("./assets/", import.meta.url));
+
+describe("web T16：planAppend 增量渲染计划（律一纯函数核）", () => {
+  it("① 空底座顺序追加：ops 全 append、seqs 升序、maxSeq 到位", () => {
+    const out = R.planAppend([], [
+      { seq: 2, type: "turn/start" },
+      { seq: 1, type: "user/message" },
+      { seq: 3, type: "assistant/message" },
+    ]) as { ops: { op: string; seq: number }[]; seqs: number[]; maxSeq: number };
+    expect(out.ops.map((o) => o.op)).toEqual(["append", "append", "append"]);
+    expect(out.ops.map((o) => o.seq)).toEqual([1, 2, 3]); // 乱序批先排序
+    expect(out.seqs).toEqual([1, 2, 3]);
+    expect(out.maxSeq).toBe(3);
+  });
+
+  it("② 已渲染 seq 重复到达（SSE backfill 重叠）——天然去重跳过", () => {
+    const out = R.planAppend([1, 2, 3], [{ seq: 3, type: "turn/end" }, { seq: 4, type: "user/message" }]) as {
+      ops: { op: string; seq: number }[];
+      seqs: number[];
+    };
+    expect(out.ops).toHaveLength(1);
+    expect(out.ops[0]!.op).toBe("append");
+    expect(out.ops[0]!.seq).toBe(4);
+    expect(out.seqs).toEqual([1, 2, 3, 4]);
+  });
+
+  it("③ 断线 backfill 按 seq 补插：beforeSeq = 最小的更大已渲染 seq（不重排已渲染区）", () => {
+    const out = R.planAppend([10, 11], [{ seq: 9, type: "user/message" }, { seq: 8, type: "turn/end" }]) as {
+      ops: { op: string; seq: number; beforeSeq?: number }[];
+      seqs: number[];
+    };
+    expect(out.ops.map((o) => o.op)).toEqual(["insert", "insert"]);
+    expect(out.ops.map((o) => o.seq)).toEqual([8, 9]);
+    expect(out.ops.every((o) => o.beforeSeq === 10)).toBe(true);
+    expect(out.seqs).toEqual([8, 9, 10, 11]);
+  });
+
+  it("④ 混合批（backfill 旧页 + live 新尾同批）：insert 在前 append 在后、seqs 全序", () => {
+    const out = R.planAppend([10], [{ seq: 15, type: "assistant/message" }, { seq: 3, type: "user/message" }]) as {
+      ops: { op: string; seq: number; beforeSeq?: number }[];
+      seqs: number[];
+    };
+    expect(out.ops.map((o) => o.op)).toEqual(["insert", "append"]);
+    expect(out.ops[0]).toMatchObject({ seq: 3, beforeSeq: 10 });
+    expect(out.ops[1]!.seq).toBe(15);
+    expect(out.seqs).toEqual([3, 10, 15]);
+  });
+
+  it("⑤ 纯函数纪律：入参 renderedSeqs/events 均不被改动；空事件批 → 零 ops", () => {
+    const rendered = [5, 6];
+    const events = [{ seq: 4, type: "turn/end" }, { seq: 7, type: "user/message" }];
+    const out = R.planAppend(rendered, events) as { ops: unknown[]; seqs: number[] };
+    expect(rendered).toEqual([5, 6]);
+    expect(events).toHaveLength(2);
+    expect(out.seqs).toEqual([4, 5, 6, 7]);
+    const empty = R.planAppend([1, 2], []) as { ops: unknown[]; seqs: number[] };
+    expect(empty.ops).toEqual([]);
+    expect(empty.seqs).toEqual([1, 2]);
+    const junk = R.planAppend([1], [null, undefined, {}, { type: "x" }]) as { ops: unknown[]; seqs: number[] };
+    expect(junk.ops).toEqual([]); // 无 seq 字段的脏数据被滤除
+  });
+
+  it("⑥ 2000 事件长会话计划性能：全量追加一次计划 < 500ms 且 ops 计数精确（性能验收①的纯函数面）", () => {
+    const events = Array.from({ length: 2000 }, (_, i) => ({ seq: i + 1, type: i % 4 === 0 ? "user/message" : "assistant/message" }));
+    const t0 = Date.now();
+    const out = R.planAppend([], events) as { ops: unknown[]; seqs: number[]; maxSeq: number };
+    const ms = Date.now() - t0;
+    expect(out.ops).toHaveLength(2000);
+    expect(out.seqs).toHaveLength(2000);
+    expect(out.maxSeq).toBe(2000);
+    expect(ms).toBeLessThan(500);
+  });
+});
+
+describe("web T16：事件 → 行文案映射族（纯推导）", () => {
+  it("⑦ 幽灵工具与显示名：tasks 纯查询双侧静默；模块前缀剥离 + 首字母大写", () => {
+    expect(R.isGhostTool("tool-subagent__tasks")).toBe(true);
+    expect(R.isGhostTool("tool-fs__read")).toBe(false);
+    expect(R.toolDisplayName("tool-fs__read")).toBe("Read");
+    expect(R.toolDisplayName("tool-shell__bash")).toBe("Bash");
+    expect(R.toolDisplayName("WebFetch")).toBe("WebFetch");
+  });
+
+  it("⑧ 关键参数：path 在 cwd 内相对化、URL 不相对化、command 折叠空白 + 60 字帽", () => {
+    const cwd = "D:\\develop\\Orosus";
+    expect(R.toolKeyArg({ path: "D:\\develop\\Orosus\\packages\\core\\src\\harness.ts" }, cwd)).toBe("packages/core/src/harness.ts");
+    expect(R.toolKeyArg({ path: "C:\\elsewhere\\x.ts" }, cwd)).toBe("C:\\elsewhere\\x.ts");
+    expect(R.toolKeyArg({ url: "https://docs.orosus.dev/harness" }, cwd)).toBe("https://docs.orosus.dev/harness");
+    const longCmd = "npm " + "run ".repeat(30) + "build";
+    expect((R.toolKeyArg({ command: longCmd }, cwd) as string).length).toBeLessThanOrEqual(60);
+    expect(R.toolKeyArg({ pattern: "planAppend" }, "")).toBe("planAppend");
+    expect(R.toolKeyArg(undefined, "")).toBe("");
+  });
+
+  it("⑨ 工具行头 + chip：Using→Used 形态与「 · N 行」段（C6）", () => {
+    const args = { path: "D:\\develop\\Orosus\\a.ts" };
+    expect(R.toolHeadText("tool-fs__read", args, "D:\\develop\\Orosus", false)).toBe("● Using Read(a.ts)");
+    expect(R.toolHeadText("tool-fs__read", args, "D:\\develop\\Orosus", true, "214 行")).toBe("● Used Read(a.ts) · 214 行");
+    expect(R.lineCountOf("l1\n\nl2\nl3\n\n")).toBe(3); // 空行不计
+  });
+
+  it("⑩ diff 行（C5）：write 全量增行去尾空段；edit 上下文 3 行 + 增删行 + gap 隔断", () => {
+    const w = R.diffRowsOf("tool-fs__write", { path: "a.ts", content: "a\nb\n\n\n" }) as { tag: string; no: number; text: string }[];
+    expect(w.map((r) => r.tag)).toEqual(["add", "add"]);
+    expect(w[1]).toMatchObject({ no: 2, text: "b" });
+    const oldText = Array.from({ length: 10 }, (_, i) => "old" + i).join("\n");
+    const newText = Array.from({ length: 10 }, (_, i) => (i === 5 ? "new5" : "old" + i)).join("\n");
+    const e = R.diffRowsOf("tool-fs__edit", { path: "a.ts", edits: [{ oldText, newText }] }) as { tag: string; no: number }[];
+    const tags = e.map((r) => r.tag);
+    expect(tags[0]).toBe("gap"); // 前缀 >3 行 → gap 隔断
+    expect(tags.filter((t) => t === "ctx")).toHaveLength(6); // 前后各 3 行上下文
+    expect(tags.filter((t) => t === "del")).toHaveLength(1);
+    expect(tags.filter((t) => t === "add")).toHaveLength(1);
+    expect(R.diffRowsOf("tool-shell__bash", { command: "ls" })).toBeNull(); // 非 edit/write 无 diff
+    expect(R.diffRowsOf("tool-fs__write", { content: "" })).toBeNull(); // 空内容
+  });
+
+  it("⑪ 变更统计与结果 chip：edit +A -D / write N 行 / 失败 / 拒绝 / 截断 / 附件（usage 旁注同源的 chip 面）", () => {
+    expect(R.changeStatsOf("tool-fs__write", { content: "a\nb\nc" })).toEqual({ adds: 3, dels: 0, lines: 3 });
+    const st = R.changeStatsOf("tool-fs__edit", { edits: [{ oldText: "a\nb\nc\nd\ne", newText: "a\nx\nc\nd\ne" }] }) as { adds: number; dels: number };
+    expect(st).toMatchObject({ adds: 1, dels: 1 });
+    expect(R.resultChip({ output: "l1\nl2", name: "tool-fs__read", args: {} })).toBe("2 行");
+    expect(R.resultChip({ output: "", name: "tool-fs__edit", args: { edits: [{ oldText: "a\nb", newText: "x\ny\nz" }] } })).toBe("+3 -2"); // toolview 同口径：pre/suf=0 → del 2 add 3
+    expect(R.resultChip({ output: "x", name: "tool-fs__write", args: { content: "a\nb" }, truncated: true, images: [{ path: "p" }] })).toBe("2 行 · 截断 · 1 附件");
+    expect(R.resultChip({ isError: true, output: "boom", name: "t", args: {} })).toBe("失败");
+    expect(R.resultChip({ denied: true, output: "", name: "t", args: {} })).toBe("已拒绝");
+  });
+
+  it("⑫ 思考块折叠期预览（§5 律二：全文不进 DOM——预览前 2 行、行帽 160 字）", () => {
+    expect(R.thinkPreviewOf("第一行\n第二行\n第三行")).toBe("第一行\n第二行");
+    expect(R.thinkPreviewOf("\n\n正文起")).toBe("正文起"); // 打头空行不占预览
+    const long = "x".repeat(200);
+    expect((R.thinkPreviewOf(long) as string).length).toBeLessThanOrEqual(161);
+  });
+
+  it("⑬ 技能加载标记行检测（C9）：SKILL_MARK 前缀 → 名；普通文本 → null", () => {
+    expect(R.skillMarkOf('（用户通过菜单手动加载技能 "tdd"——请按该技能正文行事）\n\n# TDD 技能正文…')).toBe("tdd");
+    expect(R.skillMarkOf("普通消息")).toBeNull();
+    expect(R.skillMarkOf("")).toBeNull();
+  });
+
+  it("⑭ content 块拆解：text 拼接 / reasoning 拼接 / image 路径列表（C3 图注面）", () => {
+    const ev = {
+      content: [
+        { kind: "reasoning", text: "想一" },
+        { kind: "text", text: "正" },
+        { kind: "image", path: "b/s/media/web-x.png", mimeType: "image/png" },
+        { kind: "text", text: "文" },
+      ],
+    };
+    expect(R.textOf(ev)).toBe("正文");
+    expect(R.reasoningOf(ev)).toBe("想一");
+    expect(R.imagesOf(ev)).toEqual([{ kind: "image", path: "b/s/media/web-x.png", mimeType: "image/png" }]);
+    expect(R.textOf({})).toBe("");
+  });
+
+  it("⑮ 数字与时间格式：fmtK 千位压缩 / fmtDur 持续时长 / fmtTurnTime 今天-昨天-日期三态", () => {
+    expect(R.fmtK(900)).toBe("900");
+    expect(R.fmtK(1200)).toBe("1.2k");
+    expect(R.fmtK(12345)).toBe("12k");
+    expect(R.fmtDur(168000)).toBe("持续了 168 秒"); // <5 分钟直显秒（原型「持续了 168 秒」同式）
+    expect(R.fmtDur(90000)).toBe("持续了 90 秒");
+    expect(R.fmtDur(360000)).toBe("持续了 6 分 0 秒");
+    expect(R.fmtDur(undefined)).toBe("");
+    const now = new Date("2026-10-11T10:00:00").getTime();
+    expect(R.fmtTurnTime("2026-10-11T09:05:00Z", now)).toMatch(/^今天 \d{2}:\d{2}$/); // 本地时区任意——形态断言
+    expect(R.fmtTurnTime("2026-10-10T09:05:00Z", now)).toMatch(/^(昨天|\d+月\d+日) \d{2}:\d{2}$/);
+    expect(R.fmtTurnTime("not-a-date", now)).toBe("");
+  });
+
+  it("⑯ esc 全量转义（五字符——api.js 同源口径）", () => {
+    expect(R.esc('a<b>&"c\'')).toBe("a&lt;b&gt;&amp;&quot;c&#39;");
+  });
+});
+
+describe("web T16：静态资产接线", () => {
+  it("⑰ index.html 引入 render.js/ui.js 且序在 app.js 之前；流式期零 markdown 断言（律二源码面）", () => {
+    const html = readFileSync(join(ASSETS_DIR, "index.html"), "utf-8");
+    const iRender = html.indexOf("/assets/render.js");
+    const iUi = html.indexOf("/assets/ui.js");
+    const iApp = html.indexOf("/assets/app.js");
+    expect(iRender).toBeGreaterThan(0);
+    expect(iUi).toBeGreaterThan(0);
+    expect(iApp).toBeGreaterThan(iRender);
+    expect(iApp).toBeGreaterThan(iUi);
+    expect(existsSync(join(ASSETS_DIR, "render.js"))).toBe(true);
+    expect(existsSync(join(ASSETS_DIR, "ui.js"))).toBe(true);
+    /* 律二硬断言：chunk 流式路径（chunk/flushChunk）不触 marked/DOMPurify——mdRender 仅在
+     * assistant/message 转正路径（emitAssistant）被调 */
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf-8");
+    const chunkFn = src.slice(src.indexOf("function chunk("), src.indexOf("function finalizeLive"));
+    expect(chunkFn).not.toContain("mdRender");
+    expect(chunkFn).not.toContain("marked");
+    /* 律一硬断言：stream.innerHTML 从不被整体赋值（reset 清空走子节点 remove） */
+    expect(src).not.toMatch(/stream\.innerHTML\s*=/);
+  });
+});

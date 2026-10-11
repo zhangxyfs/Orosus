@@ -1,13 +1,14 @@
-/* Orosus web 前端骨架（web 批 T15）——app.js：启动序（health 自证 → bootstrap → currentSid/最新会话）、
- * 主题切换、左栏（B1-B15 前端面：新会话跟随/分组折叠/每组 5 条展开更多/置顶/当前高亮/收缩窄轨/
- * 2s 轮询/行首活动指示/工作区行三功能/会话行双钮与右键七项）、右栏三页签壳 + 任务清单 + 收缩悬浮卡、
- * appbar 按钮壳接线。
- * 流区渲染（render.js）与浮层交互（ui.js）是 T16/T17——本件只做状态机骨架，不做流区内容渲染。
+/* Orosus web 前端应用（web 批 T15 骨架 + T16 流区/composer 全交互）——app.js：启动序（health 自证 →
+ * bootstrap → currentSid/最新会话）、主题切换、左栏（B1-B15）、右栏三页签 + 任务清单 + 收缩悬浮卡、
+ * appbar 按钮接线；T16：流区渲染接线（render.js——SSE ev/chunk/queue/phase/interaction/btw 全帧面）、
+ * composer（发送四态/贴图 ≤6/Esc 双击停止/队列条撤回/cwd 芯片/命令 mark 分发）。
  * 性能律：轮询回调字段 diff（渲染签名比对）后按需更新 DOM，数据不变不碰 DOM。 */
 function $(id) { return document.getElementById(id); }
 (function () {
   'use strict';
   var A = window.OrosusAPI;
+  var UI = window.OrosusUI;
+  var render = window.OrosusRender;
   var esc = A.esc;
 
   /* ═══════════ refs ═══════════ */
@@ -17,6 +18,17 @@ function $(id) { return document.getElementById(id); }
   var lside = $('lside');
   var rside = $('rside');
   var toastline = $('toastline');
+  var streamEl = $('stream');
+  var pgMoreEl = $('pg-more');
+  var input = $('prompt-input');
+  var form = $('input-form');
+  var sendBtn = $('send-btn');
+  var attachbar = $('attachbar');
+  var queuebar = $('queuebar');
+  var cwdChip = $('cwd-chip');
+  var modelChip = $('model-chip');
+  var effortChip = $('effort-chip');
+  var modeChip = $('mode-chip');
 
   /* ═══════════ toast（原型直裁：输入框上边缘黄字行、自消） ═══════════ */
   var toastTimer = null;
@@ -49,6 +61,330 @@ function $(id) { return document.getElementById(id); }
     return '<svg class="spin-svg' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="40" stroke-dashoffset="16"/></svg>';
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════
+   * T16：composer 全交互 + 流区/浮层接线（render.js/ui.js 消费面）
+   * ══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── UI 宿主回调（ui.js init：toast / 会话语境 / 命令提交 / cwd 切换） ── */
+  UI.init({
+    toast: toast,
+    getSid: function () { return currentSid ?? ''; },
+    getCwd: function () { return sessionCwd; },
+    getEffort: function () { return currentEffort; },
+    onStatusChanged: function () { if (currentSid !== null) fetchStatus(currentSid); },
+    onCommandSubmit: function (text) { sendCommandText(text); },
+    onCwdPick: function (cwd, name) {
+      createSession({ cwd: cwd }).then(function (r) {
+        if (r) toast('工作目录 → ' + name + '（已在该目录开会话，原空会话保留）');
+      });
+    },
+  });
+
+  /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
+  function sendCore(text, imageIds, promptId) {
+    var body = { text: text };
+    if (imageIds && imageIds.length > 0) body.imageIds = imageIds;
+    if (promptId) body.promptId = promptId;
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/send', { method: 'POST', body: JSON.stringify(body) });
+  }
+  function newPromptId() {
+    try { return crypto.randomUUID(); } catch { return 'p-' + Date.now() + '-' + Math.random().toString(36).slice(2); }
+  }
+  function handleSendResponse(r, text) {
+    sendingNow = false;
+    attachments = [];
+    renderAttach();
+    syncSendBtn();
+    if (text.indexOf('/btw') === 0 && text.trim().length > 4) {
+      UI.btwSetQuestion(text.trim().replace(/^\/btw\s+/, '')); /* 侧问小窗标题源（帧面无问题文本） */
+    }
+    if (r && r.queued) { /* 入队——队列条由 SSE queue 帧整表快照驱动（唯一真源） */ }
+    if (r && typeof r.output === 'string' && r.output !== '') presentCommandOutput(r.output);
+    if (r && r.mark) handleMark(r.mark, r);
+    /* C8 压缩中尾行窗：/compact 受理起显「上下文压缩中…」，turn/compaction 事件 / idle 相位收口 */
+    if (/^\/compact(\s|$)/.test(text)) render.setCompacting(true);
+  }
+  function handleSendError(err, text) {
+    sendingNow = false;
+    syncSendBtn();
+    /* 失败保留输入（409 拦截提示保留输入 / viewer 只读 / 网络失败同口径） */
+    input.value = text;
+    autogrow();
+    syncSendBtn();
+    toast('发送失败：' + err.message);
+  }
+  function submit() {
+    if (UI.pickCurrent()) return; /* 浮层开着时点发送键 = 确认当前选中行（与 Enter 同效；view 窗不拦截） */
+    var text = input.value.trim();
+    if (text === '') return;
+    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
+    var imgs = attachments.slice();
+    if (imgs.some(function (a) { return a.failed; })) { toast('有图片上传失败——点 × 撤销后重试'); return; }
+    if (imgs.some(function (a) { return !a.id; })) { toast('图片尚在上传——稍候再发送'); return; }
+    var ids = imgs.map(function (a) { return a.id; });
+    input.value = '';
+    autogrow();
+    sendingNow = true;
+    syncSendBtn();
+    sendCore(text, ids, newPromptId()).then(
+      function (r) { handleSendResponse(r, text); },
+      function (err) { handleSendError(err, text); },
+    );
+  }
+  /** 斜杠菜单技能区/命令区选中 → 提交（ui.js 已清输入框）。 */
+  function sendCommandText(text) {
+    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
+    sendingNow = true;
+    syncSendBtn();
+    sendCore(text).then(
+      function (r) { handleSendResponse(r, text); },
+      function (err) { handleSendError(err, text); },
+    );
+  }
+  /** 命令输出呈现（D16：命令行不进流区——短文 toast、长文/多行 dock 只读窗）。 */
+  function presentCommandOutput(output) {
+    if (output.length > 300 || output.split('\n').length > 5) {
+      UI.openView({ title: '命令输出', en: 'OUTPUT', bodyHtml: '<div class="pu-text">' + esc(output) + '</div>', foot: '滚动查看 · Esc 关闭' });
+    } else {
+      toast(output, 6000);
+    }
+  }
+  /** mark 路由信号分发（T6 全集）：quit/new/fork/menu:model/tasks；skill 标记行随 user/message 事件回流。 */
+  function handleMark(mark) {
+    if (mark === 'quit') {
+      toast('已退出当前会话');
+      void afterMaybeCurrentGone(currentSid);
+    } else if (mark === 'new') {
+      createSession({}).then(function (r) {
+        if (r) render.appendMarkLine('[新会话 ' + shortSid(r.sid) + '] · 当前会话保留，点左侧会话行可切回');
+      });
+    } else if (mark === 'fork') {
+      createSession({ forkFrom: currentSid }).then(function (r) {
+        if (r) toast('已分叉出新会话——继承全部上下文');
+      });
+    } else if (mark === 'menu:model') {
+      UI.openModelMenu(modelChip);
+    } else if (mark === 'tasks') {
+      UI.openTasksPanel();
+    }
+  }
+
+  /* ── 贴图（D6：Ctrl+V 预览条 / ≤6 张前端拦截 / × 撤销 / 随消息发送） ── */
+  var attachments = []; /* {id, name, url(本地预览), failed}——id = /api/uploads 落盘名 */
+  function renderAttach() {
+    if (attachments.length === 0) { attachbar.hidden = true; attachbar.innerHTML = ''; return; }
+    attachbar.hidden = false;
+    attachbar.innerHTML = attachments.map(function (a, i) {
+      return '<span class="attach-thumb"><img src="' + esc(a.url) + '" alt="' + esc(a.name) + '" />' +
+        (a.failed ? '<span class="ax-fail" title="上传失败">!</span>' : '') +
+        '<button type="button" class="ax" data-ax="' + i + '" title="撤销挂图">✕</button></span>';
+    }).join('');
+  }
+  attachbar.addEventListener('click', function (e) {
+    var ax = e.target.closest('[data-ax]');
+    if (!ax) return;
+    var i = parseInt(ax.getAttribute('data-ax'), 10);
+    var a = attachments[i];
+    if (a && a.url && a.url.indexOf('blob:') === 0) { try { URL.revokeObjectURL(a.url); } catch { /* 已释放 */ } }
+    attachments.splice(i, 1);
+    renderAttach();
+  });
+  /** 上传不走 fetchJson（其会覆盖 content-type 为 JSON——二进制体须原始 fetch）。 */
+  function uploadImage(file) {
+    var sid = currentSid;
+    return fetch('/api/uploads?sid=' + encodeURIComponent(sid ?? '') + '&name=' + encodeURIComponent(file.name || 'paste.png'), {
+      method: 'POST',
+      headers: { 'x-orosus-token': A.getToken(), 'content-type': file.type || 'application/octet-stream' },
+      body: file,
+    }).then(function (res) {
+      return res.text().then(function (t) {
+        var b = {};
+        try { b = t ? JSON.parse(t) : {}; } catch { /* 非 JSON 错误壳 */ }
+        if (!res.ok) throw new Error(b.error || 'HTTP ' + res.status);
+        return b;
+      });
+    });
+  }
+  input.addEventListener('paste', function (e) {
+    var files = Array.prototype.slice.call((e.clipboardData && e.clipboardData.files) || []).filter(function (f) { return f.type.indexOf('image/') === 0; });
+    if (files.length === 0) return;
+    e.preventDefault();
+    var room = 6 - attachments.length; /* 最多 6 张（D6 原型口径——前端拦截） */
+    if (room <= 0) { toast('最多 6 张图片——已达上限'); return; }
+    if (files.length > room) { toast('最多 6 张图片——超出部分未添加'); files = files.slice(0, room); }
+    if (currentSid === null) { toast('暂无会话——先新建或选择会话后再贴图'); return; }
+    files.forEach(function (f) {
+      var a = { id: '', name: f.name || 'paste.png', url: URL.createObjectURL(f), failed: false };
+      attachments.push(a);
+      renderAttach();
+      uploadImage(f).then(function (r) {
+        a.id = r.id;
+      }, function () {
+        a.failed = true;
+        renderAttach();
+        toast('图片上传失败：' + a.name);
+      });
+    });
+    toast('[已粘贴图片]——将随下一条消息发送（点 × 撤销）');
+  });
+
+  /* ── 队列条（D2：queue 帧整表快照 = 唯一真源；点击撤回） ── */
+  function renderQueue(items) {
+    if (!items || items.length === 0) { queuebar.classList.remove('has'); queuebar.innerHTML = ''; return; }
+    queuebar.classList.add('has');
+    queuebar.innerHTML = items.map(function (q) {
+      return '<div class="queue-row" data-q="' + q.index + '" title="点击撤回该条">' +
+        '<span>⌛</span><span class="qtext">' + esc(q.text) + '</span><span class="dim">排队中</span></div>';
+    }).join('') + '<div class="queue-hint">点击撤回 · 回答结束后依序发送</div>';
+  }
+  queuebar.addEventListener('click', function (e) {
+    var row = e.target.closest('.queue-row');
+    if (!row || currentSid === null) return;
+    var idx = parseInt(row.getAttribute('data-q'), 10);
+    A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/queue/' + idx, { method: 'DELETE', body: '' })
+      .then(function () {
+        toast('已撤回排队消息（TUI 键位：↑ 召回队尾）');
+      }, function (err) {
+        if (err.status === 404) return; /* 并发撤回被 server 表重算吸收——静默 */
+        toast('撤回失败：' + err.message);
+      });
+  });
+
+  /* ── 发送键四态（D11：idle/ready/sending/stop ■）+ busy 期点击 = 停止 ── */
+  function syncSendBtn() {
+    sendBtn.classList.remove('idle', 'ready', 'sending', 'stop');
+    if (busy) { sendBtn.classList.add('stop'); sendBtn.textContent = '■'; sendBtn.title = '停止生成（双击 Esc 同效）'; return; }
+    if (sendingNow) { sendBtn.classList.add('sending'); sendBtn.innerHTML = spinSvg('', 13); sendBtn.title = '正在发送…'; return; }
+    if (input.value.trim() !== '') { sendBtn.classList.add('ready'); sendBtn.textContent = '↑'; sendBtn.title = '发送（Enter）'; return; }
+    sendBtn.classList.add('idle');
+    sendBtn.textContent = '↑';
+    sendBtn.title = '发送（Enter）';
+  }
+  sendBtn.addEventListener('click', function (e) {
+    if (busy) {
+      e.preventDefault();
+      e.stopPropagation();
+      stopGeneration();
+    }
+  }, true);
+
+  /* ── Esc 链 + 双击停止（D12：POST /cancel + 连带 POST /answer {cancelled}——T5/T7 指针） ── */
+  function stopGeneration() {
+    escArmedAt = 0;
+    busy = false;
+    syncSendBtn();
+    if (currentSid !== null) {
+      A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/cancel', { method: 'POST', body: '{}' })
+        .catch(function () { /* 取消失败静默——turn/end interrupted 事件面兜底 */ });
+    }
+    /* 挂起交互浮层关闭 → ui.js onClose 连带 POST /answer {id, cancelled}（不 resolve 卡会挂死 turn） */
+    UI.cancelPending();
+  }
+  function handleEscGlobal() {
+    if (!$('overlay2').hidden) return; /* 确认弹窗层（capture 处理器已管） */
+    if (!$('overlay').hidden) return;  /* 居中弹窗层（T15 处理器已管——多级逐次返回） */
+    if (UI.isOpen()) { UI.closePopup(); input.focus(); return; }
+    if (!$('tf-card').hidden) { $('tf-card').hidden = true; $('todo-float').classList.remove('open'); return; }
+    if (busy) {
+      var now = Date.now();
+      if (now - escArmedAt < 1000) {
+        stopGeneration();
+      } else {
+        escArmedAt = now;
+        toast('再按一次 Esc 停止生成与全部子代理');
+      }
+    }
+  }
+
+  /* ── composer 输入：多行长高（D1）+ 菜单键（↑↓/Enter/Esc）+ Enter 发送 ── */
+  function autogrow() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 168) + 'px';
+  }
+  input.addEventListener('input', function () {
+    autogrow();
+    syncSendBtn();
+    UI.inputChanged(input); /* @ 菜单优先（词尾 @）、斜杠菜单其次（行首 / 词）——过滤随输入 */
+  });
+  input.addEventListener('keydown', function (e) {
+    if (UI.handleInputKey(e)) return; /* 浮层键盘（↑↓/Enter/Esc）优先消费 */
+    if (e.key === 'Escape') { handleEscGlobal(); return; }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    submit();
+  });
+
+  /* ── ＋ 文件（D7：光标处插入 @ 并开文件菜单） ── */
+  $('btn-file').addEventListener('click', function () {
+    var v = input.value;
+    var pos = input.selectionStart ?? v.length;
+    input.value = v.slice(0, pos) + '@' + v.slice(pos);
+    input.focus();
+    input.selectionStart = input.selectionEnd = pos + 1;
+    UI.inputChanged(input);
+  });
+
+  /* ── cwd 切换芯片（D5：仅空会话——C1 事件数判据；候选 = 项目池含 hidden 找回） ── */
+  function syncCwdGate() {
+    var empty = currentSid !== null && !render.userSeen();
+    cwdChip.hidden = !empty;
+    var nm = sessionCwd ? sessionCwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
+    $('cwd-name').textContent = nm || '选择目录';
+  }
+  cwdChip.addEventListener('click', function () {
+    if (cwdChip.hidden) { toast('当前会话已有消息——新会话后才能切换工作目录'); return; }
+    var pool = projectsPool.slice();
+    if (sessionCwd !== '' && !pool.some(function (p) { return p.cwd === sessionCwd; })) {
+      pool.push({ cwd: sessionCwd, name: sessionCwd.split(/[\\/]/).pop() || sessionCwd });
+    }
+    if (pool.length === 0) { toast('暂无已知项目——先在某个目录下创建过会话后可切换'); return; }
+    UI.openCwdMenu(cwdChip, pool, sessionCwd);
+  });
+
+  /* ── 芯片：模型（D9）/ 思考档位（D10）/ 权限（D8）——status 装配显示面 ── */
+  function modelTail(full) {
+    var s = String(full ?? '');
+    return s.indexOf('/') >= 0 ? s.slice(s.indexOf('/') + 1) : (s || '（未配置）');
+  }
+  function syncChips(st) {
+    sessionCwd = typeof st.cwd === 'string' ? st.cwd : sessionCwd;
+    currentPerm = typeof st.permission === 'string' ? st.permission : currentPerm;
+    currentEffort = typeof st.effort === 'string' ? st.effort : currentEffort;
+    modelChip.innerHTML = esc(modelTail(st.model)) + ' <span class="dim">▾</span>';
+    /* D10 口径：芯片显示 status.effort（未设置 = 目录默认档名）——永不渲染「自动」二字 */
+    effortChip.innerHTML = '思考 ' + esc(currentEffort !== '' ? currentEffort : '—') + ' <span class="dim">▾</span>';
+    var m = null;
+    for (var i = 0; i < UI.MODES.length; i++) if (UI.MODES[i].key === currentPerm) m = UI.MODES[i];
+    modeChip.innerHTML = '◆ ' + (m ? m.label : (currentPerm || '—')) + ' ▾';
+    modeChip.classList.toggle('never', currentPerm === 'never');
+    syncCwdGate();
+  }
+  function fetchStatus(sid) {
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/status').then(function (st) {
+      if (currentSid !== sid) return;
+      syncChips(st);
+    }, function () { /* status 拉取失败静默（外部会话） */ });
+  }
+  modelChip.addEventListener('click', function () { UI.openModelMenu(modelChip); });
+  effortChip.addEventListener('click', function () { UI.openEffortMenu(effortChip); });
+  modeChip.addEventListener('click', function () { UI.openPermMenu(modeChip, currentPerm); });
+  $('kv-model').addEventListener('click', function () { UI.openModelMenu(modelChip); });
+  syncSendBtn();
+
+  /* ── interaction 应答口（ui.js 审批浮层 → POST /answer） ── */
+  function answerInteraction(body) {
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/answer', { method: 'POST', body: JSON.stringify(body) })
+      .catch(function (err) {
+        toast('应答失败：' + err.message);
+        UI.invalidateCaches();
+      });
+  }
+
   /* ═══════════ 主题：深 / 浅切换（localStorage 记忆——原型直裁） ═══════════ */
   var btnTheme = $('btn-theme');
   function applyTheme(light) {
@@ -66,7 +402,13 @@ function $(id) { return document.getElementById(id); }
   var prevRowMap = new Map();     /* 上一轮 SessionRow（B14 转移检测：跑完→done） */
   var panelInfo = null;           /* {data, fetchedAt}——运行时间跳秒基准 */
   var sessionTitle = '';
-  var busy = false;               /* 当前会话 turn 进行中（phase 帧驱动——T16 流区联动消费同位） */
+  var busy = false;               /* 当前会话 turn 进行中（phase 帧驱动——render 尾行/停止键同源） */
+  var sessionCwd = '';            /* 当前会话工作目录（status 装配——@ 菜单/工具行相对化基准） */
+  var currentPerm = '';           /* 权限三档（芯片显示 + 菜单勾标） */
+  var currentEffort = '';         /* 思考档位显示口径（status.effort——未设置=目录默认档名，D10） */
+  var projectsPool = [];          /* cwd 芯片候选（bootstrap.projects——含 hidden 找回，D5） */
+  var sendingNow = false;         /* 发送四态之「发送中」（POST 在途） */
+  var escArmedAt = 0;             /* Esc 双击停止的 armed 时刻 */
 
   /* 会话活动指示持久化（B14：done/failed 终态 + lastSeen per-sid——重开不复燃） */
   var SACT_KEY = 'orosus-web-sact';
@@ -192,6 +534,7 @@ function $(id) { return document.getElementById(id); }
       /* 当前会话行标签/活动可能变了——顶栏与右栏标题随行刷新 */
       var cur = next.get(currentSid ?? '');
       if (cur && cur.label !== '' && cur.label !== sessionTitle) setSessionTitle(cur.label, cur.sid);
+      syncCwdGate(); /* cwd 芯片显隐随会话态（fresh 判据轮询兜底——事件驱动为主） */
     }, function () { /* 同上 */ });
   }
 
@@ -322,12 +665,14 @@ function $(id) { return document.getElementById(id); }
       if (goneSid !== currentSid) return;
       var next = firstRemaining(findGroupOfSid(goneSid)?.cwd);
       if (next) return openSession(next);
-      /* 无会话可切——空态 */
+      /* 无会话可切——空态（渲染器卸载——欢迎页留显） */
       if (streamCtl) streamCtl.close();
       streamCtl = null;
       currentSid = null;
       setSessionTitle('', '');
+      render.close();
       showWelcome(true);
+      syncCwdGate();
       tailEl.textContent = '暂无会话——点击左栏「＋ 新会话」开始';
       return undefined;
     });
@@ -569,33 +914,66 @@ function $(id) { return document.getElementById(id); }
   sessionTitleEl.addEventListener('click', flashCurrentSession);
   kvSession.addEventListener('click', flashCurrentSession);
 
-  /* 切换视图：SSE 重开 + 面板立即拉一次（事件渲染归 T16——本件维护游标/phase/终态状态机） */
+  /* 切换视图（T16 全接线）：流区重置 + 最新一页回放（events API）→ SSE 续流（after=maxSeq）+
+   * status 装配（芯片/cwd）+ 面板即拉。欢迎页显隐归 render（C1 事件数判据——T15 竞态消除）。 */
   function switchTo(sid) {
+    /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
+    UI.closePopup();
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
     seenSet(sid);
     var f = findRow(sid);
     var label = f && f.row.label !== '' ? f.row.label : '新会话';
     setSessionTitle(label, sid);
-    showWelcome(!!(f && f.row.fresh));
-    tailEl.innerHTML = '正在连接…';
+    render.open({
+      sid: sid,
+      stream: streamEl,
+      tail: tailEl,
+      welcome: welcomeEl,
+      pgMore: pgMoreEl,
+      onFork: function (fromSid) {
+        createSession({ forkFrom: fromSid }).then(function (r) {
+          if (r) toast('已分叉出新会话——继承全部上下文');
+        });
+      },
+      onCopy: copyText,
+      onUserSeen: syncCwdGate,
+      cwdOf: function () { return sessionCwd; },
+    });
     renderSidebar();
-    streamCtl = A.openStream(sid, 0, {
-      onOpen: function () { if (currentSid === sid) tailEl.innerHTML = '正在待命 <span class="caret" aria-hidden="true"></span>'; },
-      onEvent: function (ev) {
-        if (currentSid !== sid || !ev) return;
-        if (ev.type === 'session/label' && typeof ev.label === 'string') setSessionTitle(ev.label, sid);
-        if (ev.type === 'user/message') showWelcome(false);
-        if (ev.type === 'turn/end' && currentSid === sid) { /* 已读——不落未读点 */ }
-      },
-      phase: function (d) {
-        if (currentSid !== sid || !d) return;
-        busy = !!d.busy;
-        if (busy) tailEl.innerHTML = spinSvg() + ' 正在回答…';
-        else tailEl.innerHTML = '正在待命 <span class="caret" aria-hidden="true"></span>';
-        if (d.phase === 'error') sactSet(sid, 'failed');
-      },
-      onShutdown: function () { /* api.js 已显「已正常关闭」弹窗并停止重连 */ },
+    syncCwdGate();
+    /* status 先行（cwd/芯片基准——工具行相对化与 @ 菜单基址），回放随后 */
+    var eventsLoaded = fetchStatus(sid).then(function () {
+      return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/events');
+    }).then(function (r) {
+      if (currentSid !== sid) return;
+      render.ingest(r.events ?? [], { page: 'latest' }); /* 首屏有界（§5 律三：每页 ≤200） */
+    }, function () { /* 回放失败静默——SSE 续流面兜底 */ });
+    eventsLoaded.then(function () {
+      if (currentSid !== sid) return;
+      streamCtl = A.openStream(sid, render.maxSeq(), {
+        onEvent: function (ev) {
+          if (currentSid !== sid || !ev) return;
+          if (ev.type === 'session/label' && typeof ev.label === 'string') setSessionTitle(ev.label, sid);
+          render.ingest([ev]);
+        },
+        chunk: function (d) { if (currentSid === sid && d) render.chunk(d.text); },
+        queue: function (d) { if (currentSid === sid) renderQueue(d && d.items); },
+        phase: function (d) {
+          if (currentSid !== sid || !d) return;
+          busy = !!d.busy;
+          render.setPhase(d.phase, d.busy);
+          if (!busy) render.setCompacting(false); /* 压缩窗收口兜底（turn/compaction 事件为主信号） */
+          syncSendBtn();
+          if (d.phase === 'error') sactSet(sid, 'failed');
+        },
+        interaction: function (frame) {
+          if (currentSid !== sid || !frame) return;
+          UI.openInteraction(frame, answerInteraction);
+        },
+        btw: function (d) { if (currentSid === sid && d) UI.btwFrame(d); },
+        onShutdown: function () { /* api.js 已显「已正常关闭」弹窗并停止重连 */ },
+      });
     });
     return fetchPanel(sid);
   }
@@ -757,6 +1135,7 @@ function $(id) { return document.getElementById(id); }
     }).then(function (bs) {
       if (bs === null) return; /* 启动即断——弹窗已出（重试成功后刷新即恢复） */
       if (bs.update) $('btn-update').hidden = false; /* A4 更新胶囊壳（内容弹窗 T17） */
+      projectsPool = Array.isArray(bs.projects) ? bs.projects : []; /* cwd 芯片候选池（D5——含 hidden 找回） */
       return pollSessions().then(function () {
         var target = null;
         if (bs.currentSid && findRow(bs.currentSid)) target = bs.currentSid; /* /web 交接会话优先 */
@@ -766,6 +1145,7 @@ function $(id) { return document.getElementById(id); }
         if (target) return switchTo(target);
         setSessionTitle('', '');
         showWelcome(true);
+        syncCwdGate();
         tailEl.textContent = '暂无会话——点击左栏「＋ 新会话」开始';
         return undefined;
       });
@@ -777,5 +1157,10 @@ function $(id) { return document.getElementById(id); }
       A.showDisconnect('lost');
     });
   }
+  /* 全局 Esc（输入框外）：确认层/居中弹窗让位（T15 处理器管）→ 浮层 → 悬浮卡 → 双击停止 */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (document.activeElement !== input) handleEscGlobal();
+  });
   boot();
 })();

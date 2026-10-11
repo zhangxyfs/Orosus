@@ -22,11 +22,13 @@
   function getToken() { return token; }
   function authHeaders() { return token ? { 'x-orosus-token': token } : {}; }
 
-  /** fetch JSON 封装：非 2xx 抛 Error（status/body 附体；error 字段优先为文案）。 */
+  /** fetch JSON 封装：非 2xx 抛 Error（status/body 附体；error 字段优先为文案）。
+   *  DELETE 无 body 也带 content-type: application/json——server 写方法护栏对 DELETE 同样生效
+   *  （T1 护栏；T16 修复：队列撤回/会话删除的无 body DELETE 此前会被 415 拦下）。 */
   function fetchJson(path, init) {
     init = init || {};
     var headers = Object.assign({}, authHeaders(), init.headers || {});
-    if (init.body !== undefined) headers['content-type'] = 'application/json';
+    if (init.body !== undefined || (init.method || 'GET') === 'DELETE') headers['content-type'] = 'application/json';
     return fetch(path, Object.assign({}, init, { headers: headers })).then(function (res) {
       return res.text().then(function (text) {
         var body = {};
