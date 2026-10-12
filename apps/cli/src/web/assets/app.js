@@ -491,8 +491,9 @@ function $(id) { return document.getElementById(id); }
     return '<span class="sdot sdot-none">○</span>';
   }
   function lsRowHtml(row, prev, pinned, sact, seen) {
-    /* 当前行判据：服务端 cur（pool 游标）∪ 前端本地视图态 currentSid——点击切换即时高亮不等轮询 */
-    var isCur = row.cur === true || row.sid === currentSid;
+    /* 当前行判据 = 本标签页视图态 currentSid（纯本地——多标签各看各的；server 游标 row.cur
+     *  只服务 B1 项目跟随/bootstrap 初值，不参与高亮，否则它标签页的游标会把本页染成双选中） */
+    var isCur = row.sid === currentSid;
     var act = rowActivity(row, isCur ? null : prev, sact, seen);
     var title = row.label !== '' ? row.label : (row.fresh ? '新会话' : '（未命名会话）');
     return '<div class="ls-item' + (isCur ? ' cur' : '') + (pinned ? ' pinned-row' : '') + '" data-sid="' + esc(row.sid) + '" data-pinned="' + (pinned ? 1 : '') + '">' +
