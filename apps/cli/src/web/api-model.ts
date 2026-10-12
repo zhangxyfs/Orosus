@@ -17,12 +17,12 @@
  *    auto/清档口——未设置即目录默认档）。
  *  - POST /api/sessions/:sid/permission {mode} → {ok}：h.prompt("/permission "+mode)（D8——core 命令
  *    路由在单并发守卫之前 harness.ts:1275，busy 安全；写生效层 + approval/policy 事件回流）。
- *  - GET /api/commands → {items:[{name,desc,long,aliases?[],module?:true}]}（§3）：web 命令表 14 条
- *    （G1 口径：不含 /settings /sessions /provider /permission——走界面；/context 键入放行但菜单不列）
- *    + graph().commands 模块命令投影（module:true；desc = 模块描述 mod.desc.<owner> 键——命令本身
- *    无独立文案键，宿主菜单同源键族复用）。desc/long 复用 slashItems 同族 t() 键（slashItems 是
- *    main.ts:1339 模块私有、main.ts import 即执行不可 import——G1，web 表自写复用同键）。技能不在
- *    命令面（D13：技能清单走 /api/settings/skills〔T13〕，菜单技能区与命令区分家）。
+ *  - GET /api/commands → {items:[{name,desc,long,aliases?[]}]}（§3）：web 命令表 15 条（含 /web——
+ *    2026-10-12 走查口径）。G1：不含 /settings /sessions /provider /permission——走界面；/context
+ *    键入放行但菜单不列；模块 __ 命令不投影入表（TUI slashItems 同款口径——键入经透传面仍可达，
+ *    仅菜单不列）。desc/long 复用 slashItems 同族 t() 键（slashItems 是 main.ts:1339 模块私有、
+ *    main.ts import 即执行不可 import——G1，web 表自写复用同键）。技能不在命令面（D13：技能清单
+ *    走 /api/settings/skills〔T13〕，菜单技能区与命令区分家）。
  *  会话解析：写侧三端点 host-only（setModel/setEffort/h.prompt 落的是用户级 config.toml——viewer
  *  只读化身不写：盘上未托管 → 409 只读形，不在盘 → 404）；GET 两端点读侧 ?sid= → host 优先、
  *  viewer 兜底（api-session resolveSession 同口径；显式 sid 不可解析 → 404），sid 缺省 = 池当前会话
@@ -30,7 +30,6 @@
  *  commands 仅宿主表）。 */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { locateSessionFile } from "@orosus/core";
-import type { Harness } from "@orosus/core";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import type { HostedSession } from "./hosted.ts";
@@ -279,9 +278,11 @@ registerRoute("POST", "/api/sessions/:sid/permission", async (req, res, params) 
 
 // ---------- GET /api/commands（G1/D13 命令表） ----------
 
-/** web 命令表 14 条（原型 CMDS 序逐字——G1：不含 /settings /sessions /provider /permission——走
- *  界面；/context 键入放行但菜单不列）。key = slashItems 同族 t() 键段（slash.items.<key>.desc/
- *  long——三语齐备）；aliases = 原型展开 18 名的三组。 */
+/** web 命令表 15 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕——2026-10-12 走查口径：用户点名 /web
+ *  应在列；G1：不含 /settings /sessions /provider /permission——走界面；/context 键入放行但菜单
+ *  不列）。模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径（slashItems 不列模块
+ *  命令；原型 CMDS 14 条已含 /yolo /auto /compact 别名面；走查前曾投影全量 __ 原名被用户否了——
+ *  键入仍经 cmdrouter 透传面可达，仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）。 */
 const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[] }[] = [
   { name: "/yolo", key: "yolo" },
   { name: "/auto", key: "auto" },
@@ -292,6 +293,7 @@ const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[
   { name: "/tasks", key: "tasks", aliases: ["task"] },
   { name: "/btw", key: "btw" },
   { name: "/ps", key: "ps" },
+  { name: "/web", key: "web" },
   { name: "/quit", key: "quit", aliases: ["exit", "q"] },
   { name: "/new", key: "new" },
   { name: "/fork", key: "fork" },
@@ -312,14 +314,5 @@ registerRoute("GET", "/api/commands", async (req, res) => {
     long: t(`slash.items.${c.key}.long`),
     ...(c.aliases !== undefined ? { aliases: [...c.aliases] } : {}),
   }));
-  const h: Harness | undefined = hs?.core;
-  if (h !== undefined) {
-    // 模块命令投影（<module>__<command> 全名；module:true 标记——键入经 cmdrouter 透传面可达）。
-    // desc = 模块描述（mod.desc.<owner> 键——modules-ui.ts:241 同源消费；命令本身无独立文案键），
-    // long = ""（详释区仅宿主命令有长文）。
-    for (const c of h.graph().commands) {
-      items.push({ name: `/${c.name}`, desc: t(`mod.desc.${c.owner}`, undefined, ""), long: "", module: true });
-    }
-  }
   sendJson(res, 200, { items });
 });

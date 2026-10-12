@@ -370,6 +370,25 @@ describe("web T6：命令路由 cmdrouter", () => {
     await s.stop();
   }, 60_000);
 
+  it("⑨补 /web 入表空转（2026-10-12 走查口径）：web 内打 /web → 202 + 已是 Web 界面指引文案（不未知、不关会话）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwd = tmpCwd();
+    await seedSession(home, cwd, "s_web");
+    const s = await startWeb(home, cwd, "s_web");
+
+    const r = await postSend(s, "s_web", "/web");
+    expect(r.status).toBe(202);
+    const b = (await r.json()) as { ok?: boolean; output?: string; mark?: string };
+    expect(b.ok).toBe(true);
+    expect(b.output ?? "").toContain("Web"); // web.alreadyWeb（三语键——zh-CN「当前已是 Web 界面…」）
+    expect(b.mark).toBeUndefined(); // 不关会话（/quit 族语义不沾）
+    const st = await fetch(`${s.base}/api/sessions/s_web/status`, { headers: s.auth });
+    expect(st.status).toBe(200); // 会话健在
+    await s.stop();
+  }, 60_000);
+
   it("⑩ busy 三档：/model（EXEC）立即可发 / /title（EXEC）立即执行 / /new（BLOCK）409 语义 / /compact（两表外）入队 / /quit 先 cancel 再关", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;

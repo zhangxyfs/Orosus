@@ -313,4 +313,5 @@ export const zhTWCli: Record<string, string> = {
 	"web.banner.keepTerminal": "保持本終端開啟——關閉終端將同時關閉網頁端",
 	"web.gate.needSetup": "首次使用請先在終端執行 orosus 完成首次引導（設定提供商與金鑰），再執行 orosus web",
 	"web.handover.fail": "[web] 交接會話裝載失敗（server 空啟）：{err}",
+	"web.alreadyWeb": "目前已是 Web 介面——/web 用於從 TUI 切換過來（終端機裡執行 orosus 後用 /web）",
 };

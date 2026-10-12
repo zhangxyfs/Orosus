@@ -95,6 +95,7 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
   if (QUIT_CMDS.has(name)) return { output: "", mark: "quit" }; // G10：关当前会话——server 侧执行
   if (name === "/new") return { output: "", mark: "new" }; // G8：前端 POST /api/sessions + 清流区
   if (name === "/fork") return { output: "", mark: "fork" }; // G7：前端 POST /api/sessions {forkFrom}
+  if (name === "/web") return { output: t("web.alreadyWeb") }; // web 内打 /web = 空转（TUI→web 单向；2026-10-12 走查：菜单列入表，打键给指引文案）
   if (name === "/model") return { output: "", mark: "menu:model" }; // §4-5/D9：不走 choose 桥——前端开结构化菜单
   if (name === "/tasks" || name === "/task") return { output: "", mark: "tasks" }; // G3：T7 数据面 + 前端面板
   if (name === "/title" || name === "/rename") {

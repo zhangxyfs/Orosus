@@ -313,4 +313,5 @@ export const enUSCli: Record<string, string> = {
 	"web.banner.keepTerminal": "Keep this terminal open — closing it also closes the web UI",
 	"web.gate.needSetup": "First-time setup isn't finished. Run orosus in a terminal to complete initial onboarding (provider and API key), then run orosus web",
 	"web.handover.fail": "[web] Failed to load the handed-over session (server started empty): {err}",
+	"web.alreadyWeb": "Already in the Web UI — /web switches from the TUI to here (run orosus in a terminal, then /web)",
 };

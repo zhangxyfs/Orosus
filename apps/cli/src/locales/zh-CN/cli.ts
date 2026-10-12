@@ -313,4 +313,5 @@ export const zhCNCli: Record<string, string> = {
 	"web.banner.keepTerminal": "保持本终端开启——关闭终端将同时关闭网页端",
 	"web.gate.needSetup": "首次使用请先在终端运行 orosus 完成首次引导（配置提供商与密钥），再运行 orosus web",
 	"web.handover.fail": "[web] 交接会话装载失败（server 空启）：{err}",
+	"web.alreadyWeb": "当前已是 Web 界面——/web 用于从 TUI 切换过来（终端里运行 orosus 后用 /web）",
 };

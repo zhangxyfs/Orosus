@@ -286,7 +286,7 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     await s.stop();
   }, 60_000);
 
-  it("⑤ GET /api/commands：web 命令表 14 条 + 模块命令投影；技能与界面命令不可见", async () => {
+  it("⑤ GET /api/commands：web 命令表 15 条（含 /web）；模块 __ 命令不投影；技能与界面命令不可见", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
     writeCatalogCache(home);
@@ -299,12 +299,15 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect(status).toBe(200);
     const items = (body as { items: CommandRow[] }).items;
     const names = items.map((i) => i.name);
-    // 14 条（原型 CMDS 序逐字——G1：不含 /settings /sessions /provider /permission）
-    expect(names.slice(0, 14)).toEqual(["/yolo", "/auto", "/help", "/model", "/effort", "/compact", "/tasks", "/btw", "/ps", "/quit", "/new", "/fork", "/title", "/reload"]);
+    // 15 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕——2026-10-12 走查口径；G1：不含 /settings /sessions /provider /permission）
+    expect(names).toEqual(["/yolo", "/auto", "/help", "/model", "/effort", "/compact", "/tasks", "/btw", "/ps", "/web", "/quit", "/new", "/fork", "/title", "/reload"]);
     // 分家口径：界面命令 / 放行不列项 / 技能不在命令面（/provider /permission 键入经 core 别名仍可达——仅菜单不列）
-    for (const n of ["/settings", "/sessions", "/provider", "/permission", "/context", "/web", "/skill"]) {
+    for (const n of ["/settings", "/sessions", "/provider", "/permission", "/context", "/skill"]) {
       expect(names).not.toContain(n);
     }
+    // 模块 __ 命令不投影入表（走查修——原型/TUI 菜单同款；键入经透传面仍可达）
+    expect(names.some((n) => n.includes("__"))).toBe(false);
+    expect(items.some((i) => i.module === true)).toBe(false);
     expect(names.some((n) => n.toLowerCase().includes("skill"))).toBe(false); // 技能走 /api/settings/skills（T13——D13 前端合流）
     // desc/long 与 slashItems 同族 t() 键同源（G1：main.ts 模块私有不可 import——web 表复用同键）
     const model = items.find((i) => i.name === "/model")!;
@@ -312,8 +315,11 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect(model.long).toBe(t("slash.items.model.long"));
     const yolo = items.find((i) => i.name === "/yolo")!;
     expect(yolo.desc).toBe(t("slash.items.yolo.desc"));
-    // 14 条 desc/long 全非空
-    for (const row of items.slice(0, 14)) {
+    const web = items.find((i) => i.name === "/web")!;
+    expect(web.desc).toBe(t("slash.items.web.desc"));
+    expect(web.long).toBe(t("slash.items.web.long"));
+    // 15 条 desc/long 全非空
+    for (const row of items) {
       expect(row.desc).toBeTruthy();
       expect(row.long).toBeTruthy();
     }
@@ -321,15 +327,10 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect(items.find((i) => i.name === "/quit")!.aliases).toEqual(["exit", "q"]);
     expect(items.find((i) => i.name === "/tasks")!.aliases).toEqual(["task"]);
     expect(items.find((i) => i.name === "/title")!.aliases).toEqual(["rename"]);
-    // 模块命令投影（graph().commands——builtin 模块图：approval/session-tree 在场，module:true 标记）
-    const mod = items.find((i) => i.name === "/approval__permission");
-    expect(mod).toBeDefined();
-    expect(mod!.module).toBe(true);
-    expect(items.some((i) => i.name === "/session-tree__view" && i.module === true)).toBe(true);
     // 无 sid 形：池当前会话图兜底（不 404）
     const cur = await get(s, "/api/commands");
     expect(cur.status).toBe(200);
-    expect((cur.body as { items: CommandRow[] }).items.length).toBeGreaterThan(14);
+    expect((cur.body as { items: CommandRow[] }).items.length).toBe(15);
     await s.stop();
   }, 60_000);
 });
