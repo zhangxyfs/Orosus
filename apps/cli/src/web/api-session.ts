@@ -574,7 +574,8 @@ registerRoute("POST", "/api/sessions/:sid/pin", async (req, res, params) => {
 /** POST /api/sessions/:sid/title {title} → {ok}（B11 重命名任意会话——方案漏列、T15 审查补漏）：
  *  写路按持有者分派——**托管中（host 在池）走 core `setLabel` 活写口**（session/label 事件回流 SSE；
  *  旁路写在 CS-03 单写者锁下必抛——host 持锁）；**非托管走 setTitle 旁路写**（sessions.ts:187——
- *  不碰 host，外部进程持有会话亦可命名）。无 resume 劫持当前会话的副作用；截断 200 字符（kimi 同款）；
+ *  不碰 host：无活写者的盘上会话可命名；外部进程活锁中的会话撞 CS-03 单写者锁 → per-request
+ *  catch 净 400 拒绝〔按设计正确〕）。无 resume 劫持当前会话的副作用；截断 200 字符（kimi 同款）；
  *  label 落盘后经扫描缓存失效在左栏下一轮轮询出新。 */
 registerRoute("POST", "/api/sessions/:sid/title", async (req, res, params) => {
   const pool = webHostPool();

@@ -196,10 +196,13 @@ const fakeOpenai = async (cmd: string): Promise<{ url: string; requests: Array<R
       let body: Record<string, unknown> = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>; } catch { /* 坏体按空 */ }
       requests.push(body);
-      const sys = typeof body["system"] === "string" ? (body["system"] as string) : "";
-      const msgs = Array.isArray(body["messages"]) ? (body["messages"] as Array<{ role?: string }>) : [];
+      const msgs = Array.isArray(body["messages"]) ? (body["messages"] as Array<{ role?: string; content?: unknown }>) : [];
+      // system 在 wire messages[0] 而非顶层字段（translate-openai.ts:60 投影形——fakeOpenaiSub 同读法；
+      // 顶层 body["system"] 恒空，isTitle 分支曾因此不可达）
+      const sys = msgs[0]?.role === "system" && typeof msgs[0]?.content === "string" ? msgs[0].content : "";
+      const hasTools = Array.isArray(body["tools"]) && (body["tools"] as unknown[]).length > 0;
       const last = msgs.at(-1);
-      const isTitle = sys.includes("标题");
+      const isTitle = !hasTools && sys.includes("标题");
       const afterTool = last?.role === "tool";
       res.writeHead(200, { "content-type": "text/event-stream" });
       const frames = isTitle || afterTool

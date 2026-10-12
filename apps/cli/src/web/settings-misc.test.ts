@@ -482,7 +482,7 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
     const secretsPath = join(home, "secrets.env");
 
     // upsert：apiKey 值落 secrets.env、槽内只写 $ENV: 引用；contextWindow 顶层键（数字裸）
-    const up = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "https://api.acme.dev/v1", apiKey: "sk-t13-123", defaultModel: "acme-1", contextWindow: 128000 } });
+    const up = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "http://127.0.0.1:9/v1", apiKey: "sk-t13-123", defaultModel: "acme-1", contextWindow: 128000 } });
     expect(up.status).toBe(200);
     expect(((await up.json()) as { ok: boolean; report?: { failed: unknown[] } }).report?.failed).toEqual([]); // reload 收口
     const toml = readFileSync(configPath, "utf8");
@@ -494,7 +494,7 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
     const keys = [...section.matchAll(/^([A-Za-z0-9_-]+)\s*=/gm)].map((m) => m[1]!);
     expect(keys).toEqual(["type", "baseUrl", "apiKey", "defaultModel"]);
     expect(section).toContain('type = "openai"');
-    expect(section).toContain('baseUrl = "https://api.acme.dev/v1"');
+    expect(section).toContain('baseUrl = "http://127.0.0.1:9/v1"');
     expect(section).toContain('apiKey = "$ENV:OROSUS_ACME_KEY"'); // 槽内只写引用
     expect(section).toContain('defaultModel = "acme-1"');
     const secrets = readFileSync(secretsPath, "utf8");
@@ -509,15 +509,15 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
       .filter((r) => r.key === "acme");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.proto).toBe("openai");
-    expect(rows[0]!.baseUrl).toBe("https://api.acme.dev/v1");
+    expect(rows[0]!.baseUrl).toBe("http://127.0.0.1:9/v1");
     expect(rows[0]!.defaultModel).toBe("acme-1");
     expect(rows[0]!.modelCount).toBe(rows[0]!.models.length);
 
     // 编辑不重发 apiKey → 保留旧 $ENV: 引用（掩码表单语义）；secret 行不动
-    const edit = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "https://api.acme.dev/v2", defaultModel: "acme-2" } });
+    const edit = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "http://127.0.0.1:9/v2", defaultModel: "acme-2" } });
     expect(edit.status).toBe(200);
     const toml2 = readFileSync(configPath, "utf8");
-    expect(toml2).toContain('baseUrl = "https://api.acme.dev/v2"');
+    expect(toml2).toContain('baseUrl = "http://127.0.0.1:9/v2"');
     expect(toml2).toContain('defaultModel = "acme-2"');
     expect(toml2).toContain('apiKey = "$ENV:OROSUS_ACME_KEY"');
     expect(readFileSync(secretsPath, "utf8")).toContain("OROSUS_ACME_KEY=sk-t13-123");

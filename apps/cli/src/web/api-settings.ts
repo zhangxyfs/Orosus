@@ -20,9 +20,6 @@
  *  - GET /api/settings/prefs（T17 增补〔§3 形状增量——方案文档已追认〕，F3 下拉初值读面）：五键当前值
  *    投影（visionModel/readVisionModel 同文件对、search.backend=loadConfig 有效视图、subagent 三键
  *    readSubagentConfig——缺省语义 visionModel="off" / search="auto" / subagent 全 null=跟随）；
-
- *    search.backend（[tool-web] 四态）/ [tool-subagent] model|approvalMode|maxTurns（null=跟随删键，
- *    subagent-settings 写键族同款）——分别落 modules.d/tool-{media,web,subagent}.toml + reload 收口；
  *  - GET/POST /api/settings/skills（§3 :249-250，F4）：skill.catalog 服务行（四轨 scope/file）+
  *    disabled 盘上现读覆盖（TUI skillCatalogRows 同口径——reload 前的 catalog 停用快照滞后，以盘
  *    为准）；POST toggle 写 [skill] disabled 数组（toggleSkillDisabled——modules.d/skill.toml）+
@@ -149,7 +146,8 @@ const webMcpDeps = async (h: Harness | undefined): Promise<McpCmdDeps> => {
 };
 
 /** wrote → reload 收口（§4-12 直接 await；成功即失效该会话 panel 缓存——T10 toggle 同口径）。
- *  reload 抛错由调用方 catch 回 500（写盘已落、旧图续跑——语义与 T10 toggle.fail 同档）。 */
+ *  reload 抛错由 server.ts 通用 per-request catch 兜底回 400「bad request」（写盘已落、旧图续跑
+ *  ——语义与 T10 toggle.fail 同档；各调用方不另设 try/catch，400 而非 500 是兜底壳的既定形态）。 */
 const reloadAfterWrite = async (anchor: { sid: string; h: Harness } | undefined): Promise<ReloadReport | undefined> => {
   if (anchor === undefined) return undefined;
   const report = await anchor.h.reload();
@@ -487,7 +485,7 @@ registerRoute("GET", "/api/settings/prefs", async (_req, res) => {
  *    subagent-settings.ts:43-44：sectionPath 路由 + writeSectionKey，maxTurns 转 Number、
  *    null=跟随删键）落 modules.d/tool-subagent.toml。
  *  写盘 → reload 收口（§4-12 直接 await + panel 缓存失效——MCP ops 同口径；模块配置 reload 后生效）。
- *  当前值读面不在 §3（T17 前端下拉的初值 = 各键缺省语义 + GET status/model 族——见 T12 报告接口确认）。 */
+ *  当前值读面 = GET /api/settings/prefs（T17 增补，§3 形状增量已方案追认）。 */
 registerRoute("POST", "/api/settings/prefs", async (req, res) => {
   const raw = await readBody(req, SETTINGS_BODY_MAX_BYTES);
   if (raw === "too-large") {
