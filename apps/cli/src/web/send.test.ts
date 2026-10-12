@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net";
 
 import { encodeCwd, JsonlSessionStore, type Harness, type SessionEvent } from "@orosus/core";
 import type { CommandUi } from "@orosus/contracts/module";
-import { runWebSubcommand } from "./mod.ts";
+import { runWebSubcommand, webHostPool } from "./mod.ts";
 import { instanceFilePath } from "./instance.ts";
 import { shutdownWebServer } from "./server.ts";
 import { HostedSession } from "./hosted.ts";
@@ -385,6 +385,34 @@ describe("web T4：消息发送 + 附件与 @ 引用", () => {
     // 未知 sid → 404
     const nf = await fetch(`${s.base}/api/sessions/s_none/status`, { headers: s.auth });
     expect(nf.status).toBe(404);
+    await s.stop();
+  }, 60_000);
+
+  it("⑧ 浏览态写升级（2026-10-12 走查修——「viewer 会话只读（不发 prompt）」根因）：GET status 建 viewer 化身 → POST send 自动换轨 host 真发消息（user/message 落盘 + 池内 host 在册）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home); // 死端口 provider——user/message 照落、turn 快速收尾
+    const cwd = tmpCwd();
+    await seedSession(home, cwd, "s_view", "被浏览的会话");
+    await seedSession(home, cwd, "s_main", "交接主会话"); // startWeb 的 handover 形参必填——主会话占交接位，s_view 保持池外
+    const s = await startWeb(home, cwd, "s_main");
+
+    // 先读建立 viewer 化身（前端浏览态实路径——GET status 经 resolveSession 装配 viewer 进池）
+    const st = await fetch(`${s.base}/api/sessions/s_view/status`, { headers: s.auth });
+    expect(st.status).toBe(200);
+    expect(webHostPool()!.host("s_view")).toBeUndefined(); // 此刻仍是 viewer 化身
+    expect(webHostPool()!.lookup("s_view")).toBeDefined();
+
+    // 写意图 → 自动升级 host（不再 409 viewer 只读）→ 真发消息落盘
+    const r = await postSend(s, "s_view", { text: "浏览态直接发消息" });
+    expect(r.status).toBe(202);
+    expect((await r.json()) as { ok: boolean }).toMatchObject({ ok: true });
+    await waitFor(async () => {
+      const ev = await fetch(`${s.base}/api/sessions/s_view/events`, { headers: s.auth });
+      const eb = (await ev.json()) as { events: SessionEvent[] };
+      return eb.events.some((e) => e.type === "user/message" && JSON.stringify(e).includes("浏览态直接发消息"));
+    });
+    expect(webHostPool()!.host("s_view")).toBeDefined(); // 已换轨为 host 托管
     await s.stop();
   }, 60_000);
 

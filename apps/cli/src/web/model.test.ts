@@ -228,10 +228,14 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect((await post(s, "/api/sessions/s_switch/model", { platform: "nope", model: "x" })).status).toBe(400);
     expect((await post(s, "/api/sessions/s_switch/model", { platform: "demo" })).status).toBe(400);
 
-    // 盘上未托管会话（viewer 化只读）→ 409；不在盘 → 404
+    // 盘上未托管会话 → ensureHost 换轨升级后照常写（2026-10-12 走查修——viewer 409 只读形退役）；
+    // 不在盘 → 404
     const cwd2 = tmpCwd();
     await seedSession(home, cwd2, "s_other");
-    expect((await post(s, "/api/sessions/s_other/model", { platform: "demo", model: "model-x" })).status).toBe(409);
+    const up = await post(s, "/api/sessions/s_other/model", { platform: "demo", model: "model-x" });
+    expect(up.status).toBe(200);
+    expect(await up.json()).toEqual({ ok: true });
+    expect((await statusOf(s, "s_other"))["model"]).toBe("demo/model-x"); // 升级后 host 在册可读写
     expect((await post(s, "/api/sessions/s_none/model", { platform: "demo", model: "model-x" })).status).toBe(404);
     await s.stop();
   }, 60_000);
@@ -286,7 +290,7 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     await s.stop();
   }, 60_000);
 
-  it("⑤ GET /api/commands：web 命令表 15 条（含 /web）；模块 __ 命令不投影；技能与界面命令不可见", async () => {
+  it("⑤ GET /api/commands：web 命令表 14 条（含 /web、去 /model——2026-10-12 走查口径）；模块 __ 命令不投影；技能与界面命令不可见", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
     writeCatalogCache(home);
@@ -299,10 +303,11 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect(status).toBe(200);
     const items = (body as { items: CommandRow[] }).items;
     const names = items.map((i) => i.name);
-    // 15 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕——2026-10-12 走查口径；G1：不含 /settings /sessions /provider /permission）
-    expect(names).toEqual(["/yolo", "/auto", "/help", "/model", "/effort", "/compact", "/tasks", "/btw", "/ps", "/web", "/quit", "/new", "/fork", "/title", "/reload"]);
-    // 分家口径：界面命令 / 放行不列项 / 技能不在命令面（/provider /permission 键入经 core 别名仍可达——仅菜单不列）
-    for (const n of ["/settings", "/sessions", "/provider", "/permission", "/context", "/skill"]) {
+    // 14 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕 − /model〔2026-10-12 走查口径：模型切换走
+    // composer 芯片菜单，命令面板不列——键入仍可达〕；G1：不含 /settings /sessions /provider /permission）
+    expect(names).toEqual(["/yolo", "/auto", "/help", "/effort", "/compact", "/tasks", "/btw", "/ps", "/web", "/quit", "/new", "/fork", "/title", "/reload"]);
+    // 分家口径：界面命令 / 放行不列项 / 技能不在命令面（/provider /permission 键入经 core 别名仍可达——仅菜单不列；/model 键入可达 cmdrouter menu:model 面）
+    for (const n of ["/settings", "/sessions", "/provider", "/permission", "/context", "/skill", "/model"]) {
       expect(names).not.toContain(n);
     }
     // 模块 __ 命令不投影入表（走查修——原型/TUI 菜单同款；键入经透传面仍可达）
@@ -310,15 +315,12 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     expect(items.some((i) => i.module === true)).toBe(false);
     expect(names.some((n) => n.toLowerCase().includes("skill"))).toBe(false); // 技能走 /api/settings/skills（T13——D13 前端合流）
     // desc/long 与 slashItems 同族 t() 键同源（G1：main.ts 模块私有不可 import——web 表复用同键）
-    const model = items.find((i) => i.name === "/model")!;
-    expect(model.desc).toBe(t("slash.items.model.desc"));
-    expect(model.long).toBe(t("slash.items.model.long"));
     const yolo = items.find((i) => i.name === "/yolo")!;
     expect(yolo.desc).toBe(t("slash.items.yolo.desc"));
     const web = items.find((i) => i.name === "/web")!;
     expect(web.desc).toBe(t("slash.items.web.desc"));
     expect(web.long).toBe(t("slash.items.web.long"));
-    // 15 条 desc/long 全非空
+    // 14 条 desc/long 全非空
     for (const row of items) {
       expect(row.desc).toBeTruthy();
       expect(row.long).toBeTruthy();
@@ -330,7 +332,7 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     // 无 sid 形：池当前会话图兜底（不 404）
     const cur = await get(s, "/api/commands");
     expect(cur.status).toBe(200);
-    expect((cur.body as { items: CommandRow[] }).items.length).toBe(15);
+    expect((cur.body as { items: CommandRow[] }).items.length).toBe(14);
     await s.stop();
   }, 60_000);
 });

@@ -140,10 +140,15 @@ registerRoute("GET", "/api/sessions/:sid/stream", (req, res, params) => {
 registerRoute("POST", "/api/sessions/:sid/send", async (req, res, params) => {
   const sid = params["sid"] ?? "";
   const pool = webHostPool();
-  const hs = await resolveSession(pool, sid);
+  let hs = await resolveSession(pool, sid);
   if (hs === undefined) {
     notFound(res);
     return;
+  }
+  // 写意图升级（2026-10-12 走查修）：浏览态（viewer）会话键入即写——先换轨 host 再受理；
+  // 外部进程活锁在 runText 锁检面定形 409（holder 人话——§8-3 TUI+web 写互斥不变）
+  if (pool !== undefined && pool.host(sid) === undefined) {
+    hs = await pool.ensureHost(sid).catch(() => undefined) ?? hs;
   }
   const raw = await readBody(req, SEND_BODY_MAX_BYTES);
   if (raw === "too-large") {

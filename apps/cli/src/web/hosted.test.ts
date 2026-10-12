@@ -266,6 +266,33 @@ describe("web T2：HostedSession 托管引擎 + HostPool + /web 交接", () => {
     await hs.close();
   }, 30_000);
 
+  it("③补 相位结算兜底帧（2026-10-12 走查修——「消息完成仍显示工作中」根因）：turn/end 事件时点 busy() 仍 true（dispatching 占位未释——SSE 内联相位帧在该时点读出恒真的前提缺陷钉住）；done 结算后 onState 开火且末帧 busy false", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const hs = new HostedSession({
+      cwd,
+      commandUi: headlessUi,
+      modules: [fakeProviderModule("fake", [[
+        { type: "text/delta", text: "回答正文" },
+        { type: "finish", kind: "stop" },
+      ]])],
+      config: { userFile: join(home, "config.toml"), projectFile: join(cwd, "no.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+    });
+    await hs.ready;
+    let busyAtTurnEnd: boolean | undefined;
+    const statesFired: boolean[] = [];
+    hs.onState(() => statesFired.push(hs.busy()));
+    hs.onEvent((e) => { if (e.type === "turn/end") busyAtTurnEnd = hs.busy(); });
+
+    const r = await hs.dispatch("你好");
+    expect(r.ok).toBe(true);
+    expect(busyAtTurnEnd).toBe(true); // 竞态前提：turn/end 扇出时点 dispatching 占位未释——内联帧此时读 busy 恒 true
+    expect(statesFired.length).toBeGreaterThanOrEqual(1); // 结算后兜底帧开火（sse.ts onState → phase 帧归真）
+    expect(statesFired[statesFired.length - 1]).toBe(false); // 末帧 busy=false——前端尾行据此落定「待命」
+    await hs.close();
+  }, 30_000);
+
   it("④ close 序 = presence dispose → h.close → purgeIfEmpty：purge 严格在 h.close 完成后（顺序探针）；空会话目录被清、活会话保留", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;

@@ -344,6 +344,21 @@ describe("web T3：SSE 通道与事件回放", () => {
     conn.destroy();
   }, 30_000);
 
+  it("⑤补 化身关停 → SSE 优雅断流（2026-10-12 走查修——viewer→host 升级时前端僵尸流的修复面）：hs.close() → 客户端 socket 收到 end（浏览器 EventSource 据此自动带游标重连拾新 host）", async () => {
+    const work = tmpDir("orosus-web-t3-");
+    const { hs } = makeHosted(work, async () => []);
+    await hs.ready;
+    const { port } = await startBare(() => ({ hs, after: 0 }));
+    const conn = connectSse(port, "/?after=0");
+    await waitForFrame(conn, (fs) => fs.some((f) => f.comment === "connected"));
+    await hs.close(); // 化身关停（升级/quit/删除同款路径）
+    await Promise.race([
+      conn.ended,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("close 后 5s 未断流")), 5000)),
+    ]); // res.end() 到达——不断流则前端永不知化身已换
+    conn.destroy();
+  }, 30_000);
+
   it("⑥ 合批硬断言（§5 律二）：60ms 内注入 100 个小 chunk → chunk 帧数 ≤3 且文本拼接无损", async () => {
     const work = tmpDir("orosus-web-t3-");
     const { hs, pushChunk } = makeHosted(work, async () => []);

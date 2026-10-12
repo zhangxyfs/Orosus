@@ -275,10 +275,14 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
   c.unsubs.push(
     hs.onEvent((e) => {
       sendEv(c, e);
-      if (e.type === "turn/start" || e.type === "turn/end") {
-        sendDirect(c, "phase", { phase: hs.phase(), busy: hs.busy() }); // 相位随 turn 起落
+      // 相位随 turn 起落。turn/end 的内联读只在非 dispatch 态发送——host 派发中（dispatching 占位
+      // 未释）此处读 busy() 恒 true 会把前端尾行卡死「工作中」；那种情形由 HostedSession 结算后
+      // emitState → onState 兜底帧归真（viewer 无 dispatch 面，内联读即真值）。
+      if (e.type === "turn/start" || (e.type === "turn/end" && !hs.busy())) {
+        sendDirect(c, "phase", { phase: hs.phase(), busy: hs.busy() });
       }
     }),
+    hs.onState(() => sendDirect(c, "phase", { phase: hs.phase(), busy: hs.busy() })), // 结算后归真帧
     hs.onChunk((t) => {
       if (c.closed) return;
       c.chunkBuf += t;
@@ -299,6 +303,13 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
   c.pingTimer.unref?.();
   res.once("close", () => dropClient(c));
   res.once("error", () => dropClient(c)); // socket 级错误兜底（未监听 error 会炸进程）
+  /* 化身关停 → 优雅断流（2026-10-12 走查修——viewer→host 升级会 close 旧 viewer 化身：不断流则
+   *  前端 SSE 成僵尸——连着但永无新帧）。res.end() 触发浏览器 EventSource error → api.js 重连逻辑
+   *  带 after 游标重开（server 侧解析到新 host——补洞 + 续流，升级无缝）。 */
+  c.unsubs.push(hs.onClose(() => {
+    detachClient(c);
+    try { c.res.end(); } catch { /* 已断 */ }
+  }));
 }
 
 /** 清退广播（G15，mod.ts onShutdown 消费）：全部客户端写 shutdown 帧 + end（§3 帧型，不带 id）。

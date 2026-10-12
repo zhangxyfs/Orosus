@@ -27,6 +27,11 @@
       }
       var act = e.target.closest('[data-act]');
       if (act && pu && pu.onAction) { pu.onAction(act.getAttribute('data-act')); return; }
+      /* 自定义体弹窗（两栏模型菜单等）：data-mmi 行点击委派给 onCustomClick */
+      if (pu && pu.kind === 'modelmenu' && pu.onCustomClick) {
+        var mi = e.target.closest('[data-mmi]');
+        if (mi) { pu.onCustomClick(mi.getAttribute('data-mmi')); return; }
+      }
       var item = e.target.closest('.pu-item[data-i]');
       if (!item || !pu) return;
       pu.sel = parseInt(item.getAttribute('data-i'), 10);
@@ -109,6 +114,8 @@
     html += '<div class="pu-body" id="pu-body">';
     if (pu.kind === 'view') {
       html += pu.bodyHtml;
+    } else if (pu.customBody !== undefined) {
+      html += pu.customBody(); /* 自定义体（两栏模型菜单等——自带行标记 data-mmi 走 onCustomClick） */
     } else {
       pu.rows.forEach(function (r, i) {
         html += '<div class="pu-item' + (i === pu.sel ? ' sel' : '') + (r.cls ? ' ' + r.cls : '') + '"' + (r.sep ? '' : ' data-i="' + i + '"') + '>' + r.html + '</div>';
@@ -138,6 +145,7 @@
     popup.classList.toggle('anchor-right', pu.mini === 'right' || pu.mini === true);
     popup.classList.toggle('anchor-left', pu.mini === 'left');
     popup.classList.toggle('mini-pop', !!pu.mini);
+    popup.classList.toggle('mm2-pop', pu.kind === 'modelmenu');
     /* 锚定弹窗：底边贴芯片上缘（不压按钮），水平与芯片对齐 */
     if (pu.anchor) {
       var wrapR = popup.parentElement.getBoundingClientRect();
@@ -217,6 +225,18 @@
   /* 键盘（↑↓/Enter/Esc）——app.js 的 input keydown 首先转交本口；返回 true = 已消费 */
   function handleInputKey(e) {
     ensureDom();
+    if (pu && pu.kind === 'modelmenu') {
+      /* 两栏模型菜单：方向/Enter/Tab 全委派 onKey；Esc 本地收 */
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePopup();
+        focusInput();
+        return true;
+      }
+      if (pu.onKey && pu.onKey(e)) return true;
+      if (e.key === 'Tab') e.preventDefault(); /* 不漂移焦点 */
+      return true;
+    }
     if (pu && (pu.kind === 'menu' || pu.kind === 'pick' || pu.kind === 'at')) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -225,6 +245,28 @@
         if (ni >= 0 && ni !== pu.sel) {
           pu.sel = ni;
           renderPopup();
+        }
+        return true;
+      }
+      /* Tab 补全（2026-10-12 走查——此前 Tab 走浏览器默认焦点漂移，「写几个字母后 tab 无效」）：
+       *  斜杠菜单 = 选中行补进输入框（命令名+空格进参数区 / 技能补整形）后收菜单；
+       *  @ 菜单 = 同 Enter（目录下钻/文件插入）；pick 窗 = 不换焦点即可。 */
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var row = pu.rows[pu.sel];
+        if (row && !row.sep && row.data !== undefined && row.data !== null) {
+          if (pu.kind === 'menu') {
+            var inp = document.getElementById('prompt-input');
+            if (inp) {
+              inp.value = row.skill ? '/skill : ' + row.data.name : String(row.data.name) + ' ';
+              closePopup();
+              inp.focus();
+              return true;
+            }
+          } else if (pu.kind === 'at') {
+            if (pu.onPick) pu.onPick(pu.sel);
+            return true;
+          }
         }
         return true;
       }
@@ -661,63 +703,109 @@
     return A.fetchJson('/api/models' + (sid ? '?sid=' + encodeURIComponent(sid) : ''));
   }
   /** 模型两级菜单（D9）：提供商 → 模型（✓ 勾标 + 「管理模型」入口 + 未配置提示）。 */
+  /* 模型两级菜单（2026-10-12 走查改版：两栏同弹——左提供商 + 右该商模型表，替代原两次串行弹窗；
+   *  ←→ 切提供商、↑↓ 选模型、Enter/点击切换、Esc 关闭；管理模型行进设置提供商页） */
   function openModelMenu(anchor) {
     fetchModels().then(function (data) {
+      if (!data) { H.toast('拉取模型清单失败'); return; }
+      var providers = data.providers ?? [];
       var current = String(data.current ?? '');
-      var curPlatform = current.indexOf('/') === 0 ? '' : current.split('/')[0];
-      var rows = (data.providers ?? []).map(function (p) {
-        return {
-          html: '<span class="pu-caret">❯</span><span class="pu-check">' + (p.key === curPlatform ? '✓' : '') + '</span><span class="pi-name">' + esc(p.displayName) + '</span><span class="pi-desc">' + (p.models && p.models.length ? p.models.length + ' 个模型' : '未配置') + '</span><span class="pi-right">›</span>',
-          data: p,
-        };
-      });
-      rows.push({ html: '<span class="dim">──</span><span class="sep-line"></span>', cls: 'sep', sep: true });
-      rows.push({ html: '<span class="pu-caret">❯</span><span class="pi-name">管理模型</span><span class="pi-desc">设置 → 提供商与模型</span>', data: 'manage' });
-      openPick({
+      /* 当前平台解析：current 形不定（"平台/模型"限定形 | 裸平台键 | 空）——先按首段取，
+       *  落空再用模型级 cur 勾标反查（裸模型名/空串两形兜底） */
+      var curPlatform = current.split('/')[0];
+      if (!providers.some(function (p) { return p.key === curPlatform; })) {
+        var byCur = providers.find(function (p) { return (p.models ?? []).some(function (m) { return m.cur; }); });
+        curPlatform = byCur ? byCur.key : '';
+      }
+      var mm = { pIdx: 0, mIdx: 0 };
+      var ci = providers.findIndex(function (p) { return p.key === curPlatform; });
+      if (ci >= 0) mm.pIdx = ci;
+      var modelsOf = function () { return (providers[mm.pIdx] && providers[mm.pIdx].models) ?? []; };
+      var syncCur = function () {
+        var ms = modelsOf();
+        var ci2 = ms.findIndex(function (m) { return m.cur; });
+        mm.mIdx = ci2 >= 0 ? ci2 : 0;
+      };
+      syncCur();
+      var switchTo = function (m) {
+        var p = providers[mm.pIdx];
+        if (!p || !m) return;
+        A.fetchJson('/api/sessions/' + encodeURIComponent(H.getSid()) + '/model', { method: 'POST', body: JSON.stringify({ platform: p.key, model: m.name }) })
+          .then(function () {
+            closePopup();
+            focusInput();
+            H.toast('模型已切换 → ' + p.key + '/' + m.name + '（下一轮生效）');
+            H.onStatusChanged();
+          }, function (err) { H.toast('切换失败：' + err.message); });
+      };
+      pu = {
+        kind: 'modelmenu',
         mini: 'right',
         anchor: anchor,
         title: '模型',
         en: 'MODEL',
-        items: rows,
-        foot: '点提供商展开模型 · Esc 关闭',
-        onPick: function (i) {
-          var r = rows[i];
-          if (!r || r.sep) return;
-          if (r.data === 'manage') { /* T17：换 openSettingsRoot 提供商页（app.js onManageModels 注入） */
+        rows: [],
+        foot: '←→ 提供商 · ↑↓ 模型 · Enter 切换 · Esc 关闭',
+        customBody: function () {
+          var left = providers.map(function (p, i) {
+            return '<div class="mm2-p' + (i === mm.pIdx ? ' sel' : '') + '" data-mmi="p:' + i + '">' +
+              '<span class="mm2-check">' + (p.key === curPlatform ? '✓' : '') + '</span>' +
+              '<span class="mm2-pname">' + esc(p.displayName) + '</span>' +
+              '<span class="mm2-go">›</span></div>';
+          }).join('');
+          left += '<div class="mm2-p mm2-manage" data-mmi="manage"><span class="mm2-check"></span><span class="mm2-pname">管理模型</span><span class="mm2-go">›</span></div>';
+          var ms = modelsOf();
+          var right = ms.length === 0
+            ? '<div class="mm2-empty">（该提供商未配置端点——设置 → 提供商与模型 添加）</div>'
+            : ms.map(function (m, i) {
+              return '<div class="mm2-m' + (i === mm.mIdx ? ' sel' : '') + '" data-mmi="m:' + i + '">' +
+                '<span class="mm2-mname">' + esc(m.name) + '</span>' +
+                '<span class="mm2-check">' + (m.cur ? '✓' : '') + '</span></div>';
+            }).join('');
+          return '<div class="mm2"><div class="mm2-left">' + left + '</div><div class="mm2-right">' + right + '</div></div>';
+        },
+        onCustomClick: function (mmi) {
+          if (mmi === 'manage') {
             if (H && typeof H.onManageModels === 'function') H.onManageModels();
             else H.toast('模型管理在 设置 → 提供商与模型');
             return;
           }
-          var p = r.data;
-          if (!p.models || p.models.length === 0) { H.toast(p.displayName + ' 未配置端点——设置 → 提供商与模型 添加'); return; }
-          openProviderModels(anchor, p);
+          var m2 = /^([pm]):(\d+)$/.exec(mmi ?? '');
+          if (!m2) return;
+          var idx = parseInt(m2[2], 10);
+          if (m2[1] === 'p') {
+            mm.pIdx = idx;
+            syncCur();
+            renderPopup();
+          } else {
+            switchTo(modelsOf()[idx]);
+          }
         },
-      });
+        onKey: function (e) {
+          var ms = modelsOf();
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            var dp = e.key === 'ArrowRight' ? 1 : -1;
+            mm.pIdx = Math.min(Math.max(0, mm.pIdx + dp), providers.length - 1);
+            syncCur();
+            renderPopup();
+            return true;
+          }
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (ms.length === 0) return true;
+            var dm = e.key === 'ArrowDown' ? 1 : -1;
+            mm.mIdx = (mm.mIdx + dm + ms.length) % ms.length;
+            renderPopup();
+            return true;
+          }
+          if (e.key === 'Enter') {
+            switchTo(ms[mm.mIdx]);
+            return true;
+          }
+          return false;
+        },
+      };
+      renderPopup();
     }, function () { H.toast('拉取模型清单失败'); });
-  }
-  function openProviderModels(anchor, p) {
-    var rows = [{ html: '<span class="pi-name back">‹ 返回</span>', data: 'back' }].concat(
-      p.models.map(function (m) {
-        return { html: '<span class="pu-caret">❯</span><span class="pu-check">' + (m.cur ? '✓' : '') + '</span><span class="pi-name">' + esc(m.name) + '</span>', data: m };
-      }),
-    );
-    openPick({
-      mini: 'right',
-      anchor: anchor,
-      title: esc(p.displayName), /* pu.title 原文直插——服务端可控字段 esc 补位（T16 复核 Minor③） */
-      en: 'MODELS',
-      items: rows,
-      foot: '点击切换 · Esc 关闭',
-      onPick: function (i) {
-        if (i === 0) { openModelMenu(anchor); return; }
-        var m = p.models[i - 1];
-        A.fetchJson('/api/sessions/' + encodeURIComponent(H.getSid()) + '/model', { method: 'POST', body: JSON.stringify({ platform: p.key, model: m.name }) })
-          .then(function () {
-            H.toast('模型已切换 → ' + p.key + '/' + m.name + '（下一轮生效）');
-            H.onStatusChanged();
-          }, function (err) { H.toast('切换失败：' + err.message); });
-      },
-    });
   }
   /** 思考档位菜单（D10：仅正常思考档位列表——无 auto 项；菜单只列模型目录声明的档位）。 */
   function openEffortMenu(anchor) {

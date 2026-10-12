@@ -165,6 +165,7 @@ export class HostedSession {
   private readonly chunkSubs = new Set<(t: string) => void>();
   private readonly queueSubs = new Set<(items: { index: number; text: string }[]) => void>();
   private readonly btwSubs = new Set<(f: BtwFrame) => void>();
+  private readonly stateSubs = new Set<() => void>();
 
   constructor(init: HostedInit) {
     this.init = init;
@@ -461,6 +462,11 @@ export class HostedSession {
       } finally {
         this.dispatching = false;
         this.drainQueue(); // 命令类 dispatch 不产 turn/end——收尾处统一补跑队列
+        /* 终态相位兜底（2026-10-12 走查修——「消息已完成但仍显示工作中」根因）：turn/end 事件扇出
+         *  时 dispatching 占位未释（本 finally 在 prompt() 结算后才跑）——事件监听侧彼时读 busy()
+         *  恒 true，相位帧把前端尾行卡在「工作中」。结算后相位归真，补一帧终态（队列入题已起跑时
+         *  busy 仍 true——drainQueue 先行，本帧如实反映「下一轮进行中」）。 */
+        this.emitState();
       }
     })();
     return { result: { ok: true }, done };
@@ -552,6 +558,20 @@ export class HostedSession {
   onQueue(cb: (items: { index: number; text: string }[]) => void): () => void {
     this.queueSubs.add(cb);
     return () => { this.queueSubs.delete(cb); };
+  }
+
+  /** 相位变化订阅（SSE phase 帧补充源——turn/start|end 事件内联帧之外的「结算后归真」兜底）。
+   *  返回退订函数。 */
+  onState(cb: () => void): () => void {
+    this.stateSubs.add(cb);
+    return () => { this.stateSubs.delete(cb); };
+  }
+
+  /** 相位扇出（busy/phase 推算值归真后通知——订阅方自重读 phase()/busy()）。 */
+  private emitState(): void {
+    for (const cb of Array.from(this.stateSubs)) { // 快照迭代——回调内退订不跳元素
+      try { cb(); } catch { /* 订阅方异常不拦扇出 */ }
+    }
   }
 
   /** btw 流状态扇出口（T6 cmdrouter 消费——SSE `event: btw` 帧源）：旁路快问不经 turn/chunk

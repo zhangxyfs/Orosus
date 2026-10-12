@@ -535,6 +535,24 @@ body.light .mp-ctl .fsel {
 .popup.anchor-right { left: auto; width: 320px; right: 20px; bottom: 32px; }
 .popup.anchor-left { right: auto; width: 280px; left: 20px; bottom: 32px; }
 .popup.mini-pop { width: 224px; }
+/* 两栏模型菜单（2026-10-12 走查改版——左提供商 + 右模型表同弹） */
+.popup.mm2-pop { width: 420px; }
+.popup.mm2-pop .pu-head { display: none; }
+.popup.mm2-pop.mini-pop .pu-foot { display: block; } /* mini-pop 默认隐头尾——两栏菜单保留键位提示行 */
+.mm2 { display: flex; min-height: 0; }
+.mm2-left { flex: 0 0 152px; border-right: 1px solid var(--border); padding: 4px; }
+.mm2-right { flex: 1; min-width: 0; padding: 4px; max-height: min(320px, calc(100vh - 260px)); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.mm2-p, .mm2-m { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 7px; font-size: 12.5px; cursor: pointer; transition: background 0.12s ease; }
+.mm2-p:hover, .mm2-m:hover { background: var(--fg-soft); }
+.mm2-p.sel { background: var(--accent-soft); }
+.mm2-m.sel { background: var(--accent-soft); }
+.mm2-check { flex: 0 0 14px; text-align: center; color: var(--accent); font-size: 12px; }
+.mm2-pname, .mm2-mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.mm2-p.sel .mm2-pname, .mm2-m.sel .mm2-mname { color: var(--accent); font-weight: 600; }
+.mm2-go { flex: 0 0 auto; color: var(--muted-faint); }
+.mm2-manage { margin-top: 2px; border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); border-radius: 0 0 7px 7px; color: var(--muted); }
+.mm2-manage .mm2-pname { color: var(--muted); }
+.mm2-empty { padding: 14px 10px; color: var(--muted-faint); font-size: 12px; line-height: 1.6; }
 .popup.mini-pop .pu-head, .popup.mini-pop .pu-foot { display: none; }
 .popup.mini-pop .pu-body { padding: 4px 0; }
 .popup.mini-pop .pu-item { padding: 4px 10px; }
@@ -851,17 +869,20 @@ body.light .mp-ctl .fsel {
 /* 助手正文 markdown 块（agent-md：● 引导符 + .md 正文区——marked+DOMPurify 转正产物） */
 .line.agent-md { display: flex; align-items: flex-start; gap: 8px; }
 .agent-md .bullet { flex: 0 0 auto; color: var(--accent); }
-.agent-md .md { flex: 1; min-width: 0; }
-.md p { margin: 0 0 0.6em; white-space: pre-wrap; word-break: break-word; }
+/* 2026-10-12 走查修（「内容渲染这么多空」）：.line 的 pre-wrap 经继承灌进 .md——marked 产物里
+   块级元素间的结构换行（</p>\n<p>）与 breaks:true 残留的 <br>+\n 全部显形成空白行（块间距翻倍、
+   引用块首行空白）。.md 容器归一为 normal（pre/code 由 UA 默认 pre 保持），间距只由 margin 承担。 */
+.agent-md .md { flex: 1; min-width: 0; white-space: normal; line-height: 1.65; }
+.md p { margin: 0 0 0.5em; white-space: normal; word-break: break-word; }
 .md p:last-child { margin-bottom: 0; }
-.md h1, .md h2, .md h3, .md h4 { margin: 0.8em 0 0.4em; font-size: 1.05em; color: var(--fg); }
+.md h1, .md h2, .md h3, .md h4 { margin: 0.7em 0 0.35em; font-size: 1.05em; color: var(--fg); }
 .md h1 { font-size: 1.15em; }
-.md ul, .md ol { margin: 0.2em 0 0.6em; padding-left: 1.6em; }
-.md li { margin: 0.15em 0; }
+.md ul, .md ol { margin: 0.15em 0 0.5em; padding-left: 1.6em; }
+.md li { margin: 0.1em 0; }
 .md code { font-family: var(--font-mono); font-size: 0.92em; background: var(--fg-soft); border-radius: 4px; padding: 1px 5px; }
-.md pre { margin: 0.4em 0 0.7em; padding: 8px 12px; background: var(--fg-soft); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
-.md pre code { background: none; padding: 0; font-size: 0.92em; line-height: 1.6; }
-.md blockquote { margin: 0.4em 0 0.6em; padding: 2px 0 2px 12px; border-left: 2px solid var(--border); color: var(--muted-dim); }
+.md pre { margin: 0.35em 0 0.6em; padding: 8px 12px; background: var(--fg-soft); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; font-size: 0.92em; line-height: 1.6; white-space: pre; }
+.md blockquote { margin: 0.35em 0 0.5em; padding: 2px 0 2px 12px; border-left: 2px solid var(--border); color: var(--muted-dim); }
 .md table { border-collapse: collapse; margin: 0.4em 0 0.7em; font-size: 0.95em; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 .md a { color: var(--accent); }

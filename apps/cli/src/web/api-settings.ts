@@ -124,7 +124,11 @@ function checkEditSpec(spec: Record<string, unknown>): { ok: true; values: Recor
  *  catalog 与 lazy live 态随会话模块图——MCP 面读写都从这里取；无当前会话 = undefined（GET 空表、
  *  start 409；写族 op 不依赖 harness，纯配置面照常）。 */
 const anchorHarness = (): { sid: string; h: Harness } | undefined => {
-  const hs = webHostPool()?.current();
+  // 游标兜底 viewer 化身（2026-10-12 走查修——浏览态会话同样给设置页供数；reload 只重建内存图，
+  //  viewer 安全）：current() 只认 hosts，游标指向 viewer 时需 lookup 兜底
+  const pool = webHostPool();
+  const cursor = pool?.cursorSid();
+  const hs = pool?.current() ?? (cursor !== undefined ? pool?.lookup(cursor) : undefined);
   const h = hs?.core;
   return hs !== undefined && h !== undefined ? { sid: hs.sid, h } : undefined;
 };
@@ -305,7 +309,10 @@ registerRoute("GET", "/api/settings/general", async (_req, res) => {
   }
   disk.push({ name: "total", mb: Math.round((totalBytes / 1024 / 1024) * 10) / 10, files: totalFiles });
 
-  const hs = webHostPool()?.current();
+  // 游标兜底 viewer 化身（同 anchorHarness——常规页 tokens/ctx 在浏览态会话下也要出数）
+  const pool0 = webHostPool();
+  const cursor0 = pool0?.cursorSid();
+  const hs = pool0?.current() ?? (cursor0 !== undefined ? pool0?.lookup(cursor0) : undefined);
   const h = hs?.core;
   let tokens = { input: 0, output: 0, lifetimeInput: 0, lifetimeOutput: 0 };
   let used = 0;

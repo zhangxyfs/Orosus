@@ -75,16 +75,27 @@ const resolveForRead = async (pool: HostPool | undefined, sid: string | undefine
   );
 };
 
-/** 写侧会话解析：host-only（viewer 只读化身不写配置）。返回 undefined = 响应已回（409/404）。 */
-const writeTarget = (pool: HostPool | undefined, sid: string, res: ServerResponse): HostedSession | undefined => {
-  const hosted = pool?.host(sid);
-  if (hosted !== undefined) return hosted;
-  if (pool !== undefined && locateSessionFile(pool.root, sid) !== undefined) {
-    sendJson(res, 409, { ok: false, error: "viewer 会话只读（设置面走托管会话）" });
-  } else {
+/** 写侧会话解析：host 优先，viewer/盘上未托管 → ensureHost 换轨升级（2026-10-12 走查修——此前
+ *  viewer 409 只读形，浏览态会话切模型/权限全拦；升级面锁检在 runText/装配层定形）。
+ *  返回 undefined = 响应已回（404——不在盘/装配失败）。 */
+const writeTarget = async (pool: HostPool | undefined, sid: string, res: ServerResponse): Promise<HostedSession | undefined> => {
+  if (pool === undefined) {
     notFound(res);
+    return undefined;
   }
-  return undefined;
+  const hosted = pool.host(sid);
+  if (hosted !== undefined) return hosted;
+  if (locateSessionFile(pool.root, sid) === undefined) {
+    notFound(res);
+    return undefined;
+  }
+  return pool.ensureHost(sid).then(
+    (hs) => hs,
+    () => {
+      sendJson(res, 409, { ok: false, error: "会话装配失败（重试或检查会话文件）" });
+      return undefined;
+    },
+  );
 };
 
 /** 写侧请求体解析（三端点同口径）：JSON parse + 字段收形（string 化——坏形交调用方 400）。 */
@@ -180,7 +191,7 @@ registerRoute("GET", "/api/models", async (req, res) => {
  *  （命令与设置服务同源——覆盖槽 + 写盘顶层 provider 键 + contextWindow/档位跟随重解析在 core
  *  闭环）；busy 安全下一轮生效（D9）。platform 须在图内（防手误写脏 config）。 */
 registerRoute("POST", "/api/sessions/:sid/model", async (req, res, params) => {
-  const hs = writeTarget(webHostPool(), params["sid"] ?? "", res);
+  const hs = await writeTarget(webHostPool(), params["sid"] ?? "", res);
   if (hs === undefined) return;
   const fields = await readFields(req);
   if (fields.failed) {
@@ -214,7 +225,7 @@ registerRoute("POST", "/api/sessions/:sid/model", async (req, res, params) => {
  *  伪档：auto 拒收，未设置态本就解析为目录默认档）；格式闸与 core applyEffortOverride 同规。
  *  目录外手设档 core 亦 lenient 收（自定义端点模型可不在目录）——本端点同口径放行。 */
 registerRoute("POST", "/api/sessions/:sid/effort", async (req, res, params) => {
-  const hs = writeTarget(webHostPool(), params["sid"] ?? "", res);
+  const hs = await writeTarget(webHostPool(), params["sid"] ?? "", res);
   if (hs === undefined) return;
   const fields = await readFields(req);
   if (fields.failed) {
@@ -251,7 +262,7 @@ registerRoute("POST", "/api/sessions/:sid/effort", async (req, res, params) => {
  *  别名表路由 approval__permission（写生效层 + approval/policy 事件 + 运行期 override 即时可见）；
  *  busy 安全（core 命令路由在单并发守卫之前 harness.ts:1275——不经 send 分流，无排队）。 */
 registerRoute("POST", "/api/sessions/:sid/permission", async (req, res, params) => {
-  const hs = writeTarget(webHostPool(), params["sid"] ?? "", res);
+  const hs = await writeTarget(webHostPool(), params["sid"] ?? "", res);
   if (hs === undefined) return;
   const fields = await readFields(req);
   if (fields.failed) {
@@ -279,15 +290,15 @@ registerRoute("POST", "/api/sessions/:sid/permission", async (req, res, params) 
 // ---------- GET /api/commands（G1/D13 命令表） ----------
 
 /** web 命令表 15 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕——2026-10-12 走查口径：用户点名 /web
- *  应在列；G1：不含 /settings /sessions /provider /permission——走界面；/context 键入放行但菜单
- *  不列）。模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径（slashItems 不列模块
- *  命令；原型 CMDS 14 条已含 /yolo /auto /compact 别名面；走查前曾投影全量 __ 原名被用户否了——
- *  键入仍经 cmdrouter 透传面可达，仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）。 */
+ *  应在列、/model 去掉〔模型切换走 composer 芯片两级菜单，命令面板不再列——键入 /model 仍可达，
+ *  cmdrouter mark:menu:model 面不变〕；G1：不含 /settings /sessions /provider /permission——走界面；
+ *  /context 键入放行但菜单不列）。模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径
+ *  （slashItems 不列模块命令；走查前曾投影全量 __ 原名被用户否了——键入仍经 cmdrouter 透传面可达，
+ *  仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）。 */
 const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[] }[] = [
   { name: "/yolo", key: "yolo" },
   { name: "/auto", key: "auto" },
   { name: "/help", key: "help" },
-  { name: "/model", key: "model" },
   { name: "/effort", key: "effort" },
   { name: "/compact", key: "compact" },
   { name: "/tasks", key: "tasks", aliases: ["task"] },

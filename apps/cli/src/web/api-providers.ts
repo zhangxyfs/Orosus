@@ -38,7 +38,10 @@ const PROVIDERS_BODY_MAX_BYTES = 1024 * 1024;
 // ---------- 锚点 / reload（api-settings 同名件私有拷贝——互不反向 import，见文件头注） ----------
 
 const anchorHarness = (): { sid: string; h: Harness } | undefined => {
-  const hs = webHostPool()?.current();
+  // 游标兜底 viewer 化身（2026-10-12 走查修——与 api-settings.anchorHarness 同口径）
+  const pool = webHostPool();
+  const cursor = pool?.cursorSid();
+  const hs = pool?.current() ?? (cursor !== undefined ? pool?.lookup(cursor) : undefined);
   const h = hs?.core;
   return hs !== undefined && h !== undefined ? { sid: hs.sid, h } : undefined;
 };

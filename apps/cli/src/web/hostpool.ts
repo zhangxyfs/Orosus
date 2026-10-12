@@ -238,6 +238,23 @@ export class HostPool {
     this.currentSid = sid;
   }
 
+  /** 写意图升级（2026-10-12 走查修——「viewer 会话只读（不发 prompt）」根因：启动直开/浏览态会话
+   *  停在 viewer，键入即撞只读拒绝）：viewer 化身/未托管盘上会话 → host 换轨（openSession resumeSid
+   *  幂等面——hosts 命中直返、viewer 先关再换、in-flight 互斥共享一次装配；外部进程活锁由
+   *  HostedSession 的 foreignLockHolder 面在写时定形 409）。cwd 链：池内化身 → 盘上 header 反查。 */
+  async ensureHost(sid: string): Promise<HostedSession> {
+    const hosted = this.hosts.get(sid);
+    if (hosted !== undefined) return hosted;
+    let cwd = this.lookup(sid)?.cwd;
+    if (cwd === undefined) {
+      const loc = locateSessionFile(this.root, sid);
+      if (loc === undefined) throw new Error(`会话 ${sid} 不存在`);
+      cwd = headerCwd(loc.file) ?? process.cwd();
+    }
+    const { hs } = await this.openSession({ cwd, resumeSid: sid });
+    return hs;
+  }
+
   /** 游标 sid 直读（cur 行标记/B1 跟随用——游标可能指向 viewer，current() 只认 hosts）。 */
   cursorSid(): string | undefined {
     return this.currentSid;
