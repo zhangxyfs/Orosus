@@ -9,7 +9,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { scanBucketSessions } from "@orosus/core";
 
-/** 反查缓存（键 = root + 桶名；值 undefined 也缓存——坏桶不反复试盘）。 */
+/** 反查缓存（键 = root + 桶名；只缓存成功读——undefined 不缓存，fresh 桶 header 落盘后可自愈，见 bucketCwd 注）。 */
 const cwdCache = new Map<string, string | undefined>();
 
 /** 盘读次数（测试断言面：缓存命中不放大盘读）。 */

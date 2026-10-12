@@ -7,7 +7,9 @@
  *  （§5 律三：1s 窗内 5 连 GET 只扫一次、过期重扫）；⑧ 工作区显隐（B10：hide 过滤 + 找回）；
  *  ⑨ 顶栏新建跟随（B1：current 所在项目 → 显式切换 → 无 current 回落启动 cwd）；⑬ fresh 沿用
  *  （B13：同项目二次 POST 同 sid + reused:true；发过消息后新 sid）；⑭ 重命名任意会话
- *  （T15 审查补漏端点 POST /:sid/title——非托管落盘/托管不扰 host/守卫面）。 */
+ *  （T15 审查补漏端点 POST /:sid/title——非托管落盘/托管不扰 host/守卫面）；⑯ fork 子会话
+ *  resume 恢复 fork 视图 + ⑯补负面对照（T18 评审返工——sessionFileHasForkMarker 标记扫描分支
+ *  此前零覆盖：⑮ 走 POST {forkFrom} 短路了文件检查，本件种盘上 fork 子体经 {resumeSid} 打开）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +54,22 @@ const seedSession = async (
   if (opts.assistant !== undefined) await store.append("assistant/message", { content: [{ kind: "text", text: opts.assistant }] });
   if (opts.tool !== undefined) await store.append("tool/call", { name: opts.tool.name, ...(opts.tool.args !== undefined ? { args: opts.tool.args } : {}), callId: "call_seed" });
   await store.close();
+};
+
+/** 种 fork 父子会话对（⑯ 用——真盘实形参照 core harness.test.ts「fork 零 turn 也立即落盘」：子文件
+ *  首行 session/header（parentSession 指父）+ 次行 session/fork（sourceEntryId = fork 时刻父尾）。 */
+const seedForkPair = async (home: string, cwd: string, parentSid: string, childSid: string): Promise<void> => {
+  const dir = join(home, "sessions", encodeCwd(cwd));
+  const parent = new JsonlSessionStore({ dir, sessionId: parentSid });
+  await parent.append("session/header", { format: 1, cwd, parentSession: null, moduleSummary: { active: 0, failed: 0, discovered: 0 } });
+  await parent.append("user/message", { content: [{ kind: "text", text: "父会话的用户消息" }] });
+  await parent.append("assistant/message", { content: [{ kind: "text", text: "父会话的助手回复" }] });
+  const tailId = (await parent.all()).at(-1)!.id;
+  await parent.close();
+  const child = new JsonlSessionStore({ dir, sessionId: childSid });
+  await child.append("session/header", { format: 1, cwd, parentSession: parentSid, moduleSummary: { active: 0, failed: 0, discovered: 0 } });
+  await child.append("session/fork", { sourceEntryId: tailId, parentSession: parentSid });
+  await child.close();
 };
 
 interface Stack {
@@ -569,6 +587,60 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     // ⑤ fork 落桶 = 父所在项目（headerCwd 扫行修复后不再回落 current().cwd 落错桶）
     const groups = ((await (await get(s, "/api/sessions")).json()) as { groups: Array<{ cwd: string; sessions: Array<{ sid: string }> }> }).groups;
     expect(groups.find((g) => g.cwd === cwdA)!.sessions.some((x) => x.sid === sidF)).toBe(true);
+    await s.stop();
+  }, 60_000);
+
+  it("⑯ fork 子会话 resume 恢复 fork 视图（T18 评审返工——sessionFileHasForkMarker 标记扫描面）：盘上子体经 POST {resumeSid} 打开 → 父前缀可见 + 显示 seq 重排连续", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    await seedForkPair(home, cwdA, "s_fpar", "s_fkid");
+    const s = await startWeb(home); // 空启——子体只在盘上（init.forkFrom 缺席，标记扫描是唯一检测口）
+
+    // POST {resumeSid}（无 forkFrom）→ 重开/server 重启后从列表恢复 fork 子会话的实路径：
+    // assemble 期 init.forkFrom === undefined → sessionFileHasForkMarker 扫子文件前几行命中
+    const r = await post(s, "/api/sessions", { resumeSid: "s_fkid" });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ sid: "s_fkid" }); // resume 沿用原 sid（fork 产新 sid 只在 POST {forkFrom}）
+
+    // 标记命中 → forkView 重排投影：父前缀 3 事件 + 自身段（header/session/fork + resume 追加的
+    // mcp/manifest）→ 显示 seq 连续 1..N 全局唯一（原始投影两段各自从 1 起相撞）；
+    // 修复面口径：标记扫描失效时 eventsPage 走 core eventsBefore——对 ForkedSessionStore 恒 []（前缀在祖辈文件）
+    const evs = (await (await get(s, "/api/sessions/s_fkid/events")).json()) as { events: SessionEvent[]; latestSeq: number };
+    const blob = JSON.stringify(evs.events);
+    expect(blob).toContain("父会话的用户消息"); // 父辈消息经复合视图可见
+    expect(blob).toContain("父会话的助手回复");
+    expect(evs.events.map((e) => e.type)).toContain("session/fork"); // 自身段标记同页可见
+    const seqs = evs.events.map((e) => e.seq);
+    expect(seqs).toEqual(seqs.map((_, i) => i + 1)); // 重排显示 seq 连续 1..N（升序即投影序）
+    expect(new Set(seqs).size).toBe(seqs.length); // 全局唯一（修复前两段相撞）
+    expect(evs.latestSeq).toBe(seqs.length);
+    // 父前缀显示 seq 与盘上原值一致（前缀段居首、rebase 首见分配恰未变——零拷贝直返口径）
+    const parentUser = evs.events.find((e) => e.type === "user/message" && JSON.stringify(e).includes("父会话的用户消息"))!;
+    expect(parentUser.seq).toBe(2);
+    await s.stop();
+  }, 60_000);
+
+  it("⑯补 负面对照：无标记的非 fork 会话 resume → 不重排（eventsBefore 裸读、盘上 seq 原样）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    await seedSession(home, cwdA, "s_plain", { user: "普通会话消息", assistant: "普通会话回复" }); // header 1 / user 2 / assistant 3
+    const s = await startWeb(home);
+
+    const r = await post(s, "/api/sessions", { resumeSid: "s_plain" });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ sid: "s_plain" });
+    const evs = (await (await get(s, "/api/sessions/s_plain/events")).json()) as { events: SessionEvent[]; latestSeq: number };
+    const types = evs.events.map((e) => e.type);
+    const seqs = evs.events.map((e) => e.seq);
+    // 盘上既有事件的 seq 原样（header 1 / user 2 / assistant 3——resume 只追加 mcp/manifest 于尾，不重排）
+    expect(types).toEqual(["session/header", "user/message", "assistant/message", "mcp/manifest"]);
+    expect(seqs).toEqual([1, 2, 3, 4]); // 文件原序裸读（fork 视图重排对本会话不适用——标记扫描未命中）
+    expect(evs.latestSeq).toBe(4);
+    expect(JSON.stringify(evs.events)).toContain("普通会话消息");
     await s.stop();
   }, 60_000);
 });

@@ -97,9 +97,11 @@ export const purgeIfEmptyAt = (root: string, sid: string): void => {
   if (head !== undefined && isEmptySessionHead(head)) purgeSessionDir(dirname(loc.dir), sid);
 };
 
-/** 会话文件头部是否含 session/fork 标记（T18 走查修——fork 子体检测）：fork.ts 注「fork 即刻落盘保证
- *  恒在自己文件前两行」，故只读首 8KB 前三行判型即可——resume/viewer 打开的 fork 子体无需全量装载。
- *  读不到（文件缺席/坏行）= 非 fork 视图（假阴性不炸——退回普通会话口径）。 */
+/** 会话文件头部是否含 session/fork 标记（T18 走查修——fork 子体检测）：fork 子体的盘上实形 =
+ *  首行 session/header + 次行 session/fork（fork.ts 即刻落盘保证——resume 后续事件只追加在后）。
+ *  本函数写实口径：读首 8KB、逐行 parse **至多前三个非空行**，任一行 type 命中即 fork（两行实形
+ *  + 一行余量——resume/viewer 打开的 fork 子体无需全量装载）。读不到（文件缺席/坏行/三行内未命中）
+ *  = 非 fork 视图（假阴性不炸——退回普通会话口径）。 */
 const sessionFileHasForkMarker = (bucketDir: string, sid: string): boolean => {
   let fd: number;
   try {
@@ -116,7 +118,7 @@ const sessionFileHasForkMarker = (bucketDir: string, sid: string): boolean => {
       try {
         if ((JSON.parse(line) as { type?: string }).type === "session/fork") return true;
       } catch {
-        break; // 截断行/坏行止损（标记恒在前两行——到此未命中即非）
+        break; // 截断行/坏行止损（标记在文件头部——预算内未命中即非）
       }
       parsed += 1;
       if (parsed >= 3) break;
