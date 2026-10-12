@@ -378,7 +378,7 @@ const rowOf = (pool: NonNullable<ReturnType<typeof webHostPool>>, snap: ScanSnap
     ...(phase !== undefined ? { phase } : {}),
     ...(model !== undefined && model !== "" ? { model } : {}),
     ...(peer?.preview !== undefined ? { preview: peer.preview } : {}),
-    ...(pool.current()?.sid === r.sid ? { cur: true as const } : {}),
+    ...(pool.cursorSid() === r.sid ? { cur: true as const } : {}),
     ...(r.fresh ? { fresh: true as const } : {}),
   };
 };
@@ -508,10 +508,12 @@ registerRoute("POST", "/api/sessions", async (req, res) => {
   }
   try {
     // B1 跟随链：显式 cwd > 目标会话自身 cwd（resume/fork 落在它自己的项目——跨项目打开不串桶）>
-    // 当前会话所在项目 > server 启动 cwd
+    // 当前会话所在项目（游标指向 viewer 化身时经 lookup 兜底取 cwd）> server 启动 cwd
+    const cursorCwd = pool.current()?.cwd
+      ?? (pool.cursorSid() !== undefined ? pool.lookup(pool.cursorSid()!)?.cwd : undefined);
     const targetCwd = cwd
       ?? (targetLoc !== undefined ? headerCwd(targetLoc.file) : undefined)
-      ?? pool.current()?.cwd
+      ?? cursorCwd
       ?? pool.startCwd;
     const { hs, reused } = await pool.openSession({
       cwd: targetCwd,
@@ -524,6 +526,24 @@ registerRoute("POST", "/api/sessions", async (req, res) => {
   } catch (err) {
     sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/** POST /api/sessions/:sid/current → {ok}（前端点击切换同步 server 侧「当前会话」游标——
+ *  走查补：此前游标只在 POST /api/sessions 打开时切换，纯点击切换 server 不知情，
+ *  cur 行标记与 B1 项目跟随全失效）。游标是纯视图态——不校验会话存在性（viewer 化身同样可作游标）。 */
+registerRoute("POST", "/api/sessions/:sid/current", (req, res, params) => {
+  const pool = webHostPool();
+  if (pool === undefined) {
+    notFound(res);
+    return;
+  }
+  const sid = params["sid"] ?? "";
+  if (sid === "") {
+    sendJson(res, 400, { ok: false, error: "missing sid" });
+    return;
+  }
+  pool.switchCurrent(sid);
+  sendJson(res, 200, { ok: true });
 });
 
 /** POST /api/workspaces/hide {cwd} → {ok}（§3 :212，B10）：移除工作区（仅显隐——文件与会话保留）；

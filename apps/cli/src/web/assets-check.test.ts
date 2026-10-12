@@ -82,6 +82,24 @@ describe("web T15：前端骨架静态资产", () => {
     }
   });
 
+  it("②补二 hidden 属性显式兜底（2026-10-12 走查修）：带 display 规则的类必须有对应 [hidden] 覆盖——否则作者样式盖掉 UA 的 display:none（「加载更早消息」曾因此恒显）", () => {
+    const css = read("style.css");
+    const html = read("index.html");
+    expect(css).toContain(".pg-more[hidden]"); // 无历史消息时不显示加载更早（修复前误写 .pg[hidden]）
+    expect(css).not.toMatch(/^\.pg\[hidden\]/m); // 无效选择器绝迹（元素类名是 pg-more）
+    // index.html 所有带 hidden 初始态的元素：其每个类若在 CSS 中设了 display，就必须有 .类名[hidden] 覆盖
+    const tags = [...html.matchAll(/<[^>]*\bhidden\b[^>]*>/gi)];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const tag of tags) {
+      const clsAttr = /class="([^"]*)"/i.exec(tag[0])?.[1] ?? "";
+      for (const c of clsAttr.split(/\s+/).filter(Boolean)) {
+        const rule = new RegExp("\\." + c + "[^{]*\\{[^}]*\\}").exec(css)?.[0] ?? "";
+        if (!/\bdisplay\s*:/.test(rule)) continue; // 该类不设 display——UA hidden 规则生效，无需兜底
+        expect(css.includes("." + c + "[hidden]"), `类 .${c} 设了 display 又用于 hidden 元素（${tag[0].slice(0, 60)}…）——须有 [hidden] 覆盖规则`).toBe(true);
+      }
+    }
+  });
+
   it("⑤补 esc() 全量转义：含双引号/单引号/&/</> 的输入不破出 HTML 属性（T15 审查 Important-1）", () => {
     const api = read("api.js");
     // 转义原语齐备（& < > " ' 五字符——title="…" 拼属性消费面的硬前提）

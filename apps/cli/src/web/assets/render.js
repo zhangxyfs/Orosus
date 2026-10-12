@@ -102,6 +102,25 @@
     return '● ' + (used ? 'Used ' : 'Using ') + toolDisplayName(name) + (arg === '' ? '' : '(' + arg + ')') + (chip ? ' · ' + chip : '');
   }
 
+  /** 工具行头 HTML（分段配色——用户走查口径：动词=主文本、工具名=#7cc9a5、参数与后缀=#97a49a）。
+   *  与 toolHeadText 同文案、逐段 esc；前缀 ● 归 tchar 段（此处不再重复）。 */
+  function toolHeadHtml(name, args, cwd, used, chip) {
+    var arg = toolKeyArg(args, cwd);
+    return '<span class="tverb">' + (used ? 'Used' : 'Using') + '</span> ' +
+      '<span class="tname">' + esc(toolDisplayName(name)) + '</span>' +
+      (arg === '' ? '' : '<span class="targs">(' + esc(arg) + ')</span>') +
+      (chip ? '<span class="targs"> · ' + esc(chip) + '</span>' : '');
+  }
+
+  /** 分页切片（右栏模块/连接列表共用——用户走查口径：列表超幅分页不出滚动条）：
+   *  total 条、pageSize 每页、page 当前页（越界收拢）→ {page, pages, from, to}（from..to 为 slice 区间）。 */
+  function pageSlice(total, page, pageSize) {
+    var size = Math.max(1, pageSize | 0);
+    var pages = Math.max(1, Math.ceil(total / size));
+    var p = Math.min(Math.max(0, page | 0), pages - 1);
+    return { page: p, pages: pages, from: p * size, to: Math.min(total, (p + 1) * size) };
+  }
+
   /** 结果输出 → 非空行数（render.ts toolResultChip 同口径）。 */
   function lineCountOf(output) {
     var text = typeof output === 'string' ? output : String(output ?? '');
@@ -530,7 +549,7 @@
       return null;
     }
     var args = (ev.args && typeof ev.args === 'object' && !Array.isArray(ev.args)) ? ev.args : {};
-    var line = el('div', 'line tool-line', '<span class="tchar">●</span>' + esc(toolHeadText(name, args, R.cwdOf(), false)));
+    var line = el('div', 'line tool-line', '<span class="tchar">●</span>' + toolHeadHtml(name, args, R.cwdOf(), false));
     line.setAttribute('data-seq', String(ev.seq));
     line.setAttribute('data-callid', callId);
     placeIn(ctx, line);
@@ -577,7 +596,7 @@
   /** tool/result → 工具行原位合并（律一：局部替换，不重排）：Using→Used + chip + ⎿ 子行。 */
   function patchToolRow(row, ev) {
     var chip = resultChip({ isError: ev.isError === true, denied: ev.denied === true, truncated: ev.truncated === true, images: ev.images, output: ev.output, name: row.name, args: row.args });
-    row.line.innerHTML = '<span class="tchar">●</span>' + esc(toolHeadText(row.name, row.args, R.cwdOf(), true, chip));
+    row.line.innerHTML = '<span class="tchar">●</span>' + toolHeadHtml(row.name, row.args, R.cwdOf(), true, chip);
     if (ev.isError === true) row.line.classList.add('tool-err');
     if (ev.denied === true) row.line.classList.add('tool-denied');
     var outText = typeof ev.output === 'string' ? ev.output : String(ev.output ?? '');
@@ -969,6 +988,8 @@
     toolDisplayName: toolDisplayName,
     toolKeyArg: toolKeyArg,
     toolHeadText: toolHeadText,
+    toolHeadHtml: toolHeadHtml,
+    pageSlice: pageSlice,
     lineCountOf: lineCountOf,
     diffRowsOf: diffRowsOf,
     changeStatsOf: changeStatsOf,

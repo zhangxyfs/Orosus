@@ -232,9 +232,15 @@ export class HostPool {
     return hs;
   }
 
-  /** 前端「当前会话」游标（server 持——/web 交接后指向交接会话；POST /api/sessions 打开即切换）。 */
+  /** 前端「当前会话」游标（server 持——/web 交接后指向交接会话；POST /api/sessions 打开即切换；
+   *  点击切换经 POST /api/sessions/:sid/current 同步——viewer 化身同样可作游标）。 */
   switchCurrent(sid: string): void {
     this.currentSid = sid;
+  }
+
+  /** 游标 sid 直读（cur 行标记/B1 跟随用——游标可能指向 viewer，current() 只认 hosts）。 */
+  cursorSid(): string | undefined {
+    return this.currentSid;
   }
 
   current(): HostedSession | undefined {

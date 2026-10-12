@@ -491,12 +491,14 @@ function $(id) { return document.getElementById(id); }
     return '<span class="sdot sdot-none">○</span>';
   }
   function lsRowHtml(row, prev, pinned, sact, seen) {
-    var act = rowActivity(row, row.cur ? null : prev, sact, seen);
+    /* 当前行判据：服务端 cur（pool 游标）∪ 前端本地视图态 currentSid——点击切换即时高亮不等轮询 */
+    var isCur = row.cur === true || row.sid === currentSid;
+    var act = rowActivity(row, isCur ? null : prev, sact, seen);
     var title = row.label !== '' ? row.label : (row.fresh ? '新会话' : '（未命名会话）');
-    return '<div class="ls-item' + (row.cur ? ' cur' : '') + (pinned ? ' pinned-row' : '') + '" data-sid="' + esc(row.sid) + '" data-pinned="' + (pinned ? 1 : '') + '">' +
+    return '<div class="ls-item' + (isCur ? ' cur' : '') + (pinned ? ' pinned-row' : '') + '" data-sid="' + esc(row.sid) + '" data-pinned="' + (pinned ? 1 : '') + '">' +
       sactHtml(act) +
       '<span class="stitle" title="' + esc(title) + '">' + esc(title) + '</span>' +
-      (row.cur ? '<span class="curtag">当前</span>' : '') +
+      (isCur ? '<span class="curtag">当前</span>' : '') +
       '<button class="sact-btn spin-pin" data-sact="pin" title="' + (pinned ? '取消置顶' : '置顶') + '">' + PIN_SVG + '</button>' +
       (row.fresh ? '' : '<button class="sact-btn" data-sact="archive" title="归档">' + ARCHIVE_SVG + '</button>') +
       '<span class="srel">' + esc(fmtRel(row.relMs)) + '</span>' +
@@ -2064,6 +2066,8 @@ function $(id) { return document.getElementById(id); }
     UI.closePopup();
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
+    /* 服务端游标同步（fire-and-forget）——B1「＋新会话跟随当前项目」与左栏 cur 标记的 server 侧真源 */
+    A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/current', { method: 'POST', body: '{}' }).then(null, function () { /* 游标同步失败无碍视图 */ });
     seenSet(sid);
     var f = findRow(sid);
     var label = f && f.row.label !== '' ? f.row.label : '新会话';
@@ -2154,6 +2158,85 @@ function $(id) { return document.getElementById(id); }
   var MOD_STATE_TEXT = { mounted: '已挂载', loading: '挂载中', off: '未挂载', pendingConfirm: '待确认' };
   var CONN_STATE_TEXT = { connected: '已连接', idle: '待启动', failed: '失败', 'pending-confirm': '未确认', disabled: '已停用' };
   var kvSig = '', modSig = '', connSig = '', peerSig = '', todoSig = '';
+  /* 模块挂载 / 网络·MCP 连接两列表统一分页（用户走查口径：运行状态页不出滚动条——
+   *  列表区 flex 界高 overflow:hidden，超幅走页脚分页器；页大小量高自适应视口） */
+  var modListEl = $('mod-list'), connListEl = $('conn-list');
+  var modPagerEl = $('mod-pager'), connPagerEl = $('conn-pager');
+  var lastModules = [], lastConns = [];
+  var modPage = 0, connPage = 0, modSize = 6, connSize = 6;
+  var modRenderKey = '', connRenderKey = '';
+  function listPageSize(listEl, lastSize) {
+    var h = listEl.clientHeight; /* .plist flex:1 界高——与内容行数无关，测量稳定 */
+    if (h <= 0) return lastSize; /* 隐藏页签量不到——保留旧值 */
+    var row = listEl.querySelector('.mod');
+    var rh = row !== null ? row.getBoundingClientRect().height : 0;
+    if (rh <= 0) rh = 30; /* 首渲兜底行高（.mod padding 4×2 + 12.5px×1.75 行高 ≈ 30px） */
+    return Math.max(1, Math.floor(h / rh));
+  }
+  function syncPager(pagerEl, pg) {
+    pagerEl.hidden = pg.pages <= 1;
+    if (pagerEl.hidden) return;
+    var ind = pagerEl.querySelector('.pg-ind');
+    if (ind) ind.textContent = (pg.page + 1) + '/' + pg.pages;
+    var prev = pagerEl.querySelector('[data-pg="prev"]'), next = pagerEl.querySelector('[data-pg="next"]');
+    if (prev) prev.disabled = pg.page <= 0;
+    if (next) next.disabled = pg.page >= pg.pages - 1;
+  }
+  function modRowHtml(m) {
+    var dot = m.state === 'mounted' ? '●' : (m.state === 'loading' || m.state === 'pendingConfirm') ? '◐' : '○';
+    var tip = m.locked ? (m.lockedReason ?? '已锁定——不可插拔') : (MOD_STATE_TEXT[m.state] ?? m.state);
+    return '<div class="mod ' + esc(m.state) + '" data-mod="' + esc(m.name) + '" title="' + esc(tip) + '">' +
+      '<span class="dot">' + dot + '</span><span class="mname">' + esc(m.name) + (m.locked ? '<span class="locktag"> · 锁定</span>' : '') + '</span>' +
+      '<span class="mdesc">' + esc(m.desc ?? '') + '</span><span class="mstate">' + (MOD_STATE_TEXT[m.state] ?? m.state) + '</span></div>';
+  }
+  function connRowHtml(c) {
+    var cls = c.state === 'connected' ? 'mounted' : c.state === 'failed' ? 'failed' : c.state === 'pending-confirm' ? 'failed pending' : 'off';
+    var dot = c.state === 'connected' ? '●' : (c.state === 'failed' || c.state === 'pending-confirm') ? '●' : '○';
+    var right = c.state === 'connected' && c.connectMs !== undefined ? c.connectMs + 'ms' : CONN_STATE_TEXT[c.state] ?? c.state;
+    return '<div class="mod ' + cls + '" data-conn="' + esc(c.name) + '" data-cstate="' + esc(c.state) + '" title="' + esc(c.desc) + '"><span class="dot">' + dot + '</span><span class="mname">' + esc(c.name) + '</span><span class="mdesc">' + esc(c.desc) + '</span><span class="mstate">' + esc(right) + '</span></div>';
+  }
+  function renderModPage() {
+    modSize = listPageSize(modListEl, modSize);
+    var pg = render.pageSlice(lastModules.length, modPage, modSize);
+    modPage = pg.page;
+    var key = modSig + '#' + pg.page + 'x' + modSize;
+    if (key !== modRenderKey) {
+      modRenderKey = key;
+      modListEl.innerHTML = lastModules.slice(pg.from, pg.to).map(modRowHtml).join('');
+    }
+    syncPager(modPagerEl, pg);
+  }
+  function renderConnPage() {
+    connSize = listPageSize(connListEl, connSize);
+    var pg = render.pageSlice(lastConns.length, connPage, connSize);
+    connPage = pg.page;
+    var key = connSig + '#' + pg.page + 'x' + connSize;
+    if (key !== connRenderKey) {
+      connRenderKey = key;
+      connListEl.innerHTML = lastConns.slice(pg.from, pg.to).map(connRowHtml).join('') || '<div class="panel-hint">（无 MCP 连接配置）</div>';
+    }
+    syncPager(connPagerEl, pg);
+  }
+  modPagerEl.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-pg]');
+    if (!b) return;
+    modPage += b.getAttribute('data-pg') === 'next' ? 1 : -1;
+    renderModPage();
+  });
+  connPagerEl.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-pg]');
+    if (!b) return;
+    connPage += b.getAttribute('data-pg') === 'next' ? 1 : -1;
+    renderConnPage();
+  });
+  if (typeof ResizeObserver === 'function') {
+    /* 视口驱动（GC11）：窗高变化 → 列表界高变 → 页大小重算（隐藏页签显示时同样触发） */
+    var panelRO = new ResizeObserver(function () {
+      A.rafFlush(function () { renderModPage(); renderConnPage(); });
+    });
+    panelRO.observe(modListEl);
+    panelRO.observe(connListEl);
+  }
   function todoHtml(tasks) {
     return tasks.map(function (t) {
       return '<div class="todo" data-state="' + esc(t.state) + '" title="由 Agent 实时同步"><span class="tick">' + (TICK[t.state] ?? '○') + '</span><span class="ttext">' + esc(t.text) + '</span></div>';
@@ -2179,32 +2262,23 @@ function $(id) { return document.getElementById(id); }
         $('ctx-pct').textContent = fmtK(ctx.used) + '/' + fmtK(ctx.window);
       }
     }
-    /* 模块挂载（E4 显示面；插拔交互归 T16/T17） */
+    /* 模块挂载（E4 显示面；插拔交互归 T16/T17）——分页渲染（页脚分页器） */
     var ms = (data.modules ?? []).map(function (m) { return m.name + ':' + m.state + (m.locked ? 'L' : ''); }).join('|');
     if (ms !== modSig) {
       modSig = ms;
-      $('mod-list').innerHTML = (data.modules ?? []).map(function (m) {
-        var dot = m.state === 'mounted' ? '●' : (m.state === 'loading' || m.state === 'pendingConfirm') ? '◐' : '○';
-        var tip = m.locked ? (m.lockedReason ?? '已锁定——不可插拔') : (MOD_STATE_TEXT[m.state] ?? m.state);
-        return '<div class="mod ' + esc(m.state) + '" data-mod="' + esc(m.name) + '" title="' + esc(tip) + '">' +
-          '<span class="dot">' + dot + '</span><span class="mname">' + esc(m.name) + (m.locked ? '<span class="locktag"> · 锁定</span>' : '') + '</span>' +
-          '<span class="mdesc">' + esc(m.desc ?? '') + '</span><span class="mstate">' + (MOD_STATE_TEXT[m.state] ?? m.state) + '</span></div>';
-      }).join('');
+      lastModules = data.modules ?? [];
     }
-    /* 网络 · MCP 连接（E5 显示面） */
+    renderModPage();
+    /* 网络 · MCP 连接（E5 显示面）——分页渲染（与模块挂载统一） */
     var conns = (data.network && data.network.connections) ?? [];
     var cs = conns.map(function (c) { return c.name + ':' + c.state + ':' + (c.connectMs ?? ''); }).join('|');
     if (cs !== connSig) {
       connSig = cs;
-      $('conn-list').innerHTML = conns.map(function (c) {
-        var cls = c.state === 'connected' ? 'mounted' : c.state === 'failed' ? 'failed' : c.state === 'pending-confirm' ? 'failed pending' : 'off';
-        var dot = c.state === 'connected' ? '●' : (c.state === 'failed' || c.state === 'pending-confirm') ? '●' : '○';
-        var right = c.state === 'connected' && c.connectMs !== undefined ? c.connectMs + 'ms' : CONN_STATE_TEXT[c.state] ?? c.state;
-        return '<div class="mod ' + cls + '" data-conn="' + esc(c.name) + '" data-cstate="' + esc(c.state) + '" title="' + esc(c.desc) + '"><span class="dot">' + dot + '</span><span class="mname">' + esc(c.name) + '</span><span class="mdesc">' + esc(c.desc) + '</span><span class="mstate">' + esc(right) + '</span></div>';
-      }).join('') || '<div class="panel-hint">（无 MCP 连接配置）</div>';
+      lastConns = conns;
       $('kv-proxy').textContent = (data.network && data.network.proxy) ?? '—';
       $('kv-modelsvc').textContent = (data.network && data.network.modelService) ?? '—';
     }
+    renderConnPage();
     /* 会话协同（E6 显示面；点击只读视图归 T16） */
     var peers = data.peers;
     var ps = peers ? (peers.self ? peers.self.sid + ':' + peers.self.phase : '') + ';' + (peers.list ?? []).map(function (p) { return p.sid + ':' + p.phase + ':' + (p.label ?? '') + ':' + (p.preview ?? ''); }).join('|') : '';

@@ -643,4 +643,34 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect(JSON.stringify(evs.events)).toContain("普通会话消息");
     await s.stop();
   }, 60_000);
+
+  it("⑰ 点击切换游标同步（2026-10-12 走查修——POST /:sid/current）：纯点击切会话 → server 游标跟随 → cur 行标记 + B1 跨项目跟随（viewer 化身兜底取 cwd）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwdA = tmpCwd();
+    const cwdB = tmpCwd();
+    await seedSession(home, cwdA, "s_a", { user: "A 项目会话" });
+    await seedSession(home, cwdB, "s_b", { label: "B 项目会话", user: "B 项目消息" });
+    const s = await startWeb(home, cwdA, "s_a"); // current = s_a（host）
+
+    // 纯点击切到 B 项目会话（前端 switchTo 实路径：GET status 经 resolveSession 装配 viewer 进池 +
+    // POST /current 同步游标——不经 POST /api/sessions）
+    expect((await get(s, "/api/sessions/s_b/status")).status).toBe(200);
+    expect((await post(s, "/api/sessions/s_b/current", {})).status).toBe(200);
+
+    // cur 行标记：s_b cur:true、s_a 无 cur（游标唯一）
+    const body = await sessionsBody(s);
+    expect(rowIn(body.groups.find((g) => g.cwd === cwdB)!, "s_b").cur).toBe(true);
+    expect(rowIn(body.groups.find((g) => g.cwd === cwdA)!, "s_a").cur).toBeUndefined();
+
+    // B1 跟随：游标指向 viewer 化身（s_b 非 host——current() 只认 hosts，经 lookup 兜底取 cwd）——
+    // 无 cwd POST → 新会话落在 B 项目桶
+    const r2 = await post(s, "/api/sessions", {});
+    expect(r2.status).toBe(200);
+    const sid2 = ((await r2.json()) as { sid: string }).sid;
+    const st2 = (await (await get(s, `/api/sessions/${sid2}/status`)).json()) as { bucket: string };
+    expect(st2.bucket).toBe(encodeCwd(cwdB));
+    await s.stop();
+  }, 60_000);
 });

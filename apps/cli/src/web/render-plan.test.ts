@@ -14,6 +14,7 @@ import "./assets/ui.js"; // 同源挂 globalThis.OrosusUI（顶层零 DOM 触碰
 type Fn = (...args: unknown[]) => unknown;
 interface RenderApi {
   planAppend: Fn; isGhostTool: Fn; toolDisplayName: Fn; toolKeyArg: Fn; toolHeadText: Fn;
+  toolHeadHtml: Fn; pageSlice: Fn;
   lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn; thinkPreviewOf: Fn;
   skillMarkOf: Fn; textOf: Fn; reasoningOf: Fn; imagesOf: Fn; fmtK: Fn; fmtDur: Fn;
   fmtTurnTime: Fn; esc: Fn;
@@ -262,5 +263,31 @@ describe("web T16 审查修复（Critical-1 + Important-2/3/4/5）", () => {
     expect(fn).toContain("esc(opts.right)");
     expect(fn).not.toMatch(/\+\s*parts\.(title|desc)\s*\+/); // 裸拼接绝迹
     expect(fn).not.toMatch(/\+\s*opts\.(desc|right)\s*\+/);
+  });
+});
+
+describe("web 走查修复（2026-10-12 用户口令轮）：工具行分段配色 + 面板分页纯函数", () => {
+  it("W1 toolHeadHtml 分段配色：tverb/tname/targs 三段 + 逐段 esc + ● 归 tchar 不重复", () => {
+    const html = R.toolHeadHtml("tool-shell__bash", { command: 'ls "<x>"' }, "", true, "22 行") as string;
+    expect(html).toContain('<span class="tverb">Used</span>'); // 动词段——主文本色（浅黑/深白）
+    expect(html).toContain('<span class="tname">Bash</span>'); // 工具名段——#7cc9a5
+    expect(html).toContain('<span class="targs">(ls &quot;&lt;x&gt;&quot;)</span>'); // 参数段——#97a49a + esc
+    expect(html).toContain('<span class="targs"> · 22 行</span>'); // chip 后缀同段色
+    expect(html).not.toContain("●"); // ● 归 tchar 段——行头不再重复（旧拼接收窄前为 ●●）
+    // 空参数/无 chip 形态
+    expect(R.toolHeadHtml("tool-fs__read", {}, "", false)).toBe(
+      '<span class="tverb">Using</span> <span class="tname">Read</span>',
+    );
+    // 文案面与 toolHeadText 同源（同一 toolKeyArg/toolDisplayName 推导）——文本内容等价
+    const text = (R.toolHeadHtml("tool-fs__read", { path: "a.ts" }, "", true, "3 行") as string).replace(/<[^>]+>/g, "");
+    expect(text).toBe("Used Read(a.ts) · 3 行");
+  });
+
+  it("W2 pageSlice 分页切片：页数/收拢/边界（面板模块与连接列表共用）", () => {
+    expect(R.pageSlice(13, 0, 6)).toEqual({ page: 0, pages: 3, from: 0, to: 6 });
+    expect(R.pageSlice(13, 2, 6)).toEqual({ page: 2, pages: 3, from: 12, to: 13 }); // 尾页短页
+    expect(R.pageSlice(13, 9, 6)).toEqual({ page: 2, pages: 3, from: 12, to: 13 }); // 越界收拢
+    expect(R.pageSlice(0, 0, 6)).toEqual({ page: 0, pages: 1, from: 0, to: 0 }); // 空表一页
+    expect(R.pageSlice(5, 0, 0)).toEqual({ page: 0, pages: 5, from: 0, to: 1 }); // pageSize 0 兜底为 1
   });
 });

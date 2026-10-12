@@ -114,8 +114,8 @@
             <button class="rs-collapse-btn" id="rs-collapse" title="收起状态栏">⇥</button>
           </div>
 
-          <!-- 运行状态页 -->
-          <div class="page" id="state-page-1">
+          <!-- 运行状态页（kv/上下文定高不滚动；模块列表分页——用户走查口径） -->
+          <div class="page paged" id="state-page-1">
             <dl class="kv">
               <dt>模型</dt><dd><span class="clickable" id="kv-model" title="点击切换模型（/model）">—</span></dd>
               <dt>会话</dt><dd><span class="clickable" id="kv-session" title="点击聚焦左栏当前会话行">—</span></dd>
@@ -136,13 +136,14 @@
 
             <div class="subhead"><span>模块挂载</span><span class="en">MODULES</span></div>
 
-            <div id="mod-list"></div>
+            <div class="plist" id="mod-list"></div>
+            <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页">›</button></div>
 
             <div class="panel-hint">点击行挂载 / 卸载 · 锁定行点按提示原因</div>
           </div>
 
-          <!-- 网络 · MCP 页 -->
-          <div class="page" id="state-page-2" hidden>
+          <!-- 网络 · MCP 页（连接列表分页——与模块挂载统一） -->
+          <div class="page paged" id="state-page-2" hidden>
             <dl class="kv">
               <dt>代理</dt><dd id="kv-proxy">—</dd>
               <dt>模型服务</dt><dd id="kv-modelsvc">—</dd>
@@ -152,7 +153,8 @@
 
             <div class="subhead"><span>网络 / MCP 连接</span><span class="en">SERVERS</span></div>
 
-            <div id="conn-list"></div>
+            <div class="plist" id="conn-list"></div>
+            <div class="pager" id="conn-pager" hidden><button data-pg="prev" aria-label="上一页">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页">›</button></div>
 
             <div class="panel-hint">失败可点击重连 · 未确认点击审阅指纹 · 管理走 /settings → MCP</div>
           </div>
