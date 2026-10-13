@@ -11,6 +11,7 @@ import toolFs from "@orosus/tool-fs";
 import type { CommandUi, ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
 import approval from "@orosus/approval";
 import toolSubagent from "@orosus/tool-subagent";
+import toolTodo from "@orosus/tool-todo";
 
 /**
  * 端到端十三场景（M4.5 T15）：主/子/孙三套剧本经真模块链（模型 → tool-subagent__spawn → 内核 runner）。
@@ -148,6 +149,11 @@ const histOf = async (h: Setup["h"]): Promise<{ type: string; [k: string]: unkno
 const toolResults = async (h: Setup["h"]): Promise<{ output: string; isError: boolean }[]> =>
   (await histOf(h)).filter((e) => e.type === "tool/result") as unknown as { output: string; isError: boolean }[];
 const firstSpawnResult = async (h: Setup["h"]): Promise<string> => (await toolResults(h))[0]!.output;
+
+/** 子代理会话文件（真盘 jsonl——makeStore 恒 JsonlSessionStore）逐行解析：T7 三方向回归的落盘断言口。 */
+const agentEventsOf = (h: Setup["h"], agentId: string): Record<string, unknown>[] =>
+  readFileSync(join(dir!, "sessions", h.sessionId, "agents", `agents_${agentId}`, "agents", "session.jsonl"), "utf8")
+    .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as Record<string, unknown>);
 
 describe("端到端十三场景 T15", () => {
   it("s1 单发全流程：主对话调 spawn → 子代理跑完 → 结论进工具结果回主对话，花名册 completed", async () => {
@@ -649,4 +655,139 @@ describe("端到端十三场景 T15", () => {
     expect(s.h.graph().tools.specs().map((t) => t.name)).not.toContain("ondemand__lazy"); // 主对话模型面同样未被污染
     await s.h.close();
   }, 15000);
+
+  // ——问题1三方向回归（批次二 T7 / known-issues.md:49）：真模块链（extraModules 加真 tool-todo——分桶/路由机制走真件非 mock）
+  it("s17 子代理 todo 隔离 e2e（问题1方向一 T7）：子代理写 todo 不改主清单——主桶读回仍是主清单；主会话末条 tool-todo/write 仍是主清单事件；子的写落自己会话文件（载荷带 agentId）", async () => {
+    const s = await setup(
+      [
+        call("m1", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "主任务甲", status: "in_progress" }, { content: "主任务乙", status: "pending" }] })),
+        spawnCall("c1", { description: "建子清单", prompt: "建你自己的清单" }), // 前台——主对话等子写完才继续
+        call("m2", "tool-todo__todo_write", JSON.stringify({})), // 省略 todos = 读回主桶
+        text("主对话收尾"),
+      ],
+      [
+        call("a1", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "子任务X", status: "in_progress" }] })),
+        text("子清单建好了"),
+      ],
+      { extraModules: [toolTodo] },
+    );
+    await s.h.prompt("建主清单再派子代理");
+    expect((await toolResults(s.h))[1]!.output).toContain("子清单建好了"); // 前台 spawn 收束——子代理已跑完（result 序：m1 写、c1 spawn）
+    // ① 主桶读回（末条 tool/result = m2 查询）：仍是主清单、子任务不可见（若串桶则读到子的或被顶掉）
+    const readBack = (await toolResults(s.h)).at(-1)!;
+    expect(readBack.isError).toBe(false);
+    expect(readBack.output).toContain("主任务甲");
+    expect(readBack.output).toContain("主任务乙");
+    expect(readBack.output).not.toContain("子任务X");
+    // ② 主会话 tool-todo/write 恰 1 条（m1 主写；查询不落日志）——末条 = 主清单事件、无 agentId 字段
+    //   （T2 路由口径：主写走 activate 白名单通道不带 agentId；旧机制子写会漏进主会话顶掉末条）
+    const todoEvents = (await histOf(s.h)).filter((e) => e.type === "tool-todo/write");
+    expect(todoEvents).toHaveLength(1);
+    expect(todoEvents.at(-1)).toMatchObject({ todos: [{ content: "主任务甲", status: "in_progress" }, { content: "主任务乙", status: "pending" }] });
+    expect((todoEvents.at(-1) as { agentId?: unknown }).agentId).toBeUndefined();
+    // ③ 子代理的写落自己会话文件（真盘）：载荷带 agentId 归属（路由层保证不落主会话——②的恰 1 条即证）
+    const agentId = s.h.subagents()[0]!.id;
+    const agentTodo = agentEventsOf(s.h, agentId).filter((e) => e.type === "tool-todo/write");
+    expect(agentTodo).toHaveLength(1);
+    expect(agentTodo[0]).toMatchObject({ todos: [{ content: "子任务X", status: "in_progress" }], agentId });
+    await s.h.close();
+  }, 15000);
+
+  it("s18 全完成清空只清自己 e2e（问题1方向二 T7，双向真链）：子清单全 done → 只清子桶（主清单纹丝不动）；主清单全 done → 在跑子代理的桶不动", async () => {
+    // 双向会合桩（gate__hold 无释放口故自建）：flag/wait 按 key 会合——钉死两处因果序
+    // （子#2 建清单先于主全完成；子#2 读回后于主全完成），不赌并发时序。
+    const flags = new Map<string, boolean>();
+    const waiters = new Map<string, (() => void)[]>();
+    const syncMod: ModuleDefinition = {
+      name: "sync", version: "0.1.0", description: "会合桩", api: 1, mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "sync__flag", description: "打旗", parameters: z.object({ key: z.string() }),
+          resolveExecution: (input) => {
+            const { key } = input as { key: string };
+            return Promise.resolve({
+              accesses: [], approvalRule: "sync__flag",
+              execute: () => {
+                flags.set(key, true);
+                for (const w of (waiters.get(key) ?? []).splice(0)) w();
+                return Promise.resolve({ output: `旗 ${key} 已立`, isError: false });
+              },
+            });
+          },
+        }));
+        ctx.contribute.tool(defineTool({
+          name: "sync__wait", description: "等旗", parameters: z.object({ key: z.string() }),
+          resolveExecution: (input) => {
+            const { key } = input as { key: string };
+            return Promise.resolve({
+              accesses: [], approvalRule: "sync__wait",
+              execute: () => new Promise((res) => {
+                const fin = (): void => res({ output: `旗 ${key} 已立`, isError: false });
+                if (flags.get(key) === true) fin();
+                else {
+                  const arr = waiters.get(key);
+                  if (arr === undefined) waiters.set(key, [fin]);
+                  else arr.push(fin);
+                }
+              }),
+            });
+          },
+        }));
+      },
+    };
+    const s = await setup(
+      [
+        call("m1", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "主任务", status: "in_progress" }] })),
+        spawnCall("c1", { description: "全完成子", prompt: "建清单并全部完成" }), // 前台——a 链跑完才回主对话
+        call("m2", "tool-todo__todo_write", JSON.stringify({})), // 读主桶——子#1 全完成未殃及主（方向一）
+        spawnCall("c2", { description: "守清单子", prompt: "建你自己的清单守着", background: true }),
+        call("m3", "sync__wait", JSON.stringify({ key: "sub2ready" })), // 等子#2 建好清单（钉序：其建清单必然先于主全完成）
+        call("m4", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "主任务", status: "done" }] })), // 主全完成 → 只应清主桶
+        call("m5", "sync__flag", JSON.stringify({ key: "maindone" })), // 放行子#2 读回（钉序：其读回必然后于主全完成）
+        call("m6", "tool-todo__todo_write", JSON.stringify({})), // 读主桶——已被自己的全完成清空
+        text("主对话收尾"),
+      ],
+      [ // 子#1（前台）与子#2（后台）共用 fake2 流顺序消费（s12a 同款）
+        // 子#1：建子清单 → 全 done（自动清自己的桶）→ 读回空
+        call("a1", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "子任务", status: "in_progress" }] })),
+        call("a2", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "子任务", status: "done" }] })),
+        call("a3", "tool-todo__todo_write", JSON.stringify({})),
+        text("子一完"),
+        // 子#2：建子清单 → 报就绪 → 等主全完成 → 读回仍在（方向二）
+        call("b1", "tool-todo__todo_write", JSON.stringify({ todos: [{ content: "守备任务", status: "in_progress" }] })),
+        call("b2", "sync__flag", JSON.stringify({ key: "sub2ready" })),
+        call("b3", "sync__wait", JSON.stringify({ key: "maindone" })),
+        call("b4", "tool-todo__todo_write", JSON.stringify({})),
+        text("子二完"),
+      ],
+      { extraModules: [toolTodo, syncMod] },
+    );
+    await s.h.prompt("跑双向清空");
+    const sub1 = s.h.subagents().find((a) => a.label === "全完成子")!;
+    const sub2 = s.h.subagents().find((a) => a.label === "守清单子")!;
+    // 主对话 tool/result 序：m1 写、c1 spawn、m2 读、c2 后台入册、m3 等、m4 全完成、m5 旗、m6 读
+    const rs = await toolResults(s.h);
+    // 方向一：子#1 全完成只清子桶——主桶读回（m2）仍是主清单
+    expect(rs[2]!.output).toContain("主任务");
+    expect(rs[2]!.output).not.toContain("子任务");
+    // 主全完成清了自己：m4 结果 cleared、m6 读回为空
+    expect(rs.some((r) => r.output.includes("Todo list cleared."))).toBe(true);
+    expect(rs.at(-1)!.output).toBe("（清单为空）");
+    // 子#1 自己的桶已清（a3 读回空）；其终痕落自己会话文件带 agentId（双写分叉在子路径保真）
+    const sub1Todo = agentEventsOf(s.h, sub1.id).filter((e) => e.type === "tool-todo/write");
+    expect(sub1Todo).toHaveLength(2);
+    expect(sub1Todo[1]).toMatchObject({ todos: [{ content: "子任务", status: "done" }], agentId: sub1.id });
+    const sub1Results = agentEventsOf(s.h, sub1.id).filter((e) => e.type === "tool/result") as unknown as { output: string }[];
+    expect(sub1Results.at(-1)!.output).toBe("（清单为空）");
+    // 方向二：主全完成不动在跑子#2 的桶——b4 读回（必然后于 m4）仍有守备任务
+    await waitUntil(() => s.h.subagents().find((a) => a.id === sub2.id)?.status === "completed", 8000);
+    const sub2Results = agentEventsOf(s.h, sub2.id).filter((e) => e.type === "tool/result") as unknown as { output: string }[];
+    expect(sub2Results.at(-1)!.output).toContain("守备任务");
+    // 主会话 todo 事件恰 2 条（m1 写 + m4 终痕）、全无 agentId——子的写零漏入主会话
+    const mainTodo = (await histOf(s.h)).filter((e) => e.type === "tool-todo/write");
+    expect(mainTodo).toHaveLength(2);
+    expect(mainTodo.every((e) => (e as { agentId?: unknown }).agentId === undefined)).toBe(true);
+    expect(mainTodo.at(-1)).toMatchObject({ todos: [{ content: "主任务", status: "done" }] });
+    await s.h.close();
+  }, 25000);
 });
