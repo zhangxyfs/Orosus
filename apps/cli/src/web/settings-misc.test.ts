@@ -331,7 +331,7 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
     await s.stop();
   }, 60_000);
 
-  it("④ POST /api/settings/memory/import：无源 → {imported:0}；种 codex 源一条 → imported:1 落当前项目桶", async () => {
+  it("④ POST /api/settings/memory/import {ids?,organize?,mode?}：无源全零；坏参 400；单源导入 1 条落当前桶；重复导入覆盖更新；newCount 差集归零", async () => {
     const userHome = tmpUserHome();
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
@@ -341,11 +341,18 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
     await seedSession(home, cwd, "s_imp4");
     const s = await startWebAt(home, cwd, "s_imp4");
 
-    // 无源（密封 HOME、五源目录皆缺）→ imported:0
+    // 无源（密封 HOME、五源目录皆缺）→ 全零（空 body = 全部源 · current · 不整理——旧消费方兼容档）
     const empty = await post(s, "/api/settings/memory/import", {});
     expect(empty.status).toBe(200);
-    expect((await empty.json())).toEqual({ ok: true, imported: 0 });
+    expect(await empty.json()).toEqual({ ok: true, imported: 0, updated: 0, skipped: 0, merged: 0 });
     expect(existsSync(join(home, "memories"))).toBe(false); // 零源零落盘
+
+    // 坏参四款 → 400 不落盘（ids 非串数组 / ids 未知源 / mode 越界 / organize 非布尔）
+    expect((await post(s, "/api/settings/memory/import", { ids: "codex" })).status).toBe(400);
+    expect((await post(s, "/api/settings/memory/import", { ids: ["nope"] })).status).toBe(400);
+    expect((await post(s, "/api/settings/memory/import", { mode: "both" })).status).toBe(400);
+    expect((await post(s, "/api/settings/memory/import", { organize: "yes" })).status).toBe(400);
+    expect(existsSync(join(home, "memories"))).toBe(false);
 
     // 种 codex 全局源一条（<HOME>/.codex/memories——detectSources codex 轨）
     mkdirSync(join(userHome, ".codex", "memories"), { recursive: true });
@@ -360,12 +367,20 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
       "正文一行。",
       "",
     ].join("\n"), "utf8");
+    // GET sources 富形行（2026-10-12 原型 v2 记忆导入卡）：id/label/dir(~ 前缀)/count/newCount/global
     const g = await getJson(s, "/api/settings/memory");
-    expect(g.body["sources"]).toEqual(["codex"]);
+    const src = (g.body["sources"] as Array<Record<string, unknown>>)[0]!;
+    expect(src["id"]).toBe("codex");
+    expect(src["label"]).toBe("codex");
+    expect(src["count"]).toBe(1);
+    expect(src["newCount"]).toBe(1);
+    expect(src["global"]).toBe(true);
+    expect(String(src["dir"])).toContain(join(".codex", "memories"));
 
-    const r = await post(s, "/api/settings/memory/import", {});
+    // 单源导入（ids 勾选档——卡面「导入该源/导入选中」同口）
+    const r = await post(s, "/api/settings/memory/import", { ids: ["codex"] });
     expect(r.status).toBe(200);
-    expect((await r.json())).toEqual({ ok: true, imported: 1 });
+    expect(await r.json()).toEqual({ ok: true, imported: 1, updated: 0, skipped: 0, merged: 0 });
     // 落当前项目记忆桶（memoryBucketKey 键目录下的 memory/ 有一个 .md）
     const bucketBase = join(home, "memories", "projects");
     const buckets = readdirSync(bucketBase);
@@ -373,9 +388,12 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
     const memDir = join(bucketBase, buckets[0]!, "memory");
     expect(readdirSync(memDir).filter((n) => n.endsWith(".md") && n !== "MEMORY.md")).toHaveLength(1); // MEMORY.md = 索引（countNotes 同口径跳过）
 
-    // 重复导入 → 标题去重 skipped（imported:0——一次性搬运 D18 同款）
+    // 重复导入 → 覆盖更新（imported:0 updated:1——「重复导入将覆盖同标题旧版」2026-10-08 拍板）
     const again = await post(s, "/api/settings/memory/import", {});
-    expect(((await again.json()) as { imported: number }).imported).toBe(0);
+    expect(await again.json()).toEqual({ ok: true, imported: 0, updated: 1, skipped: 0, merged: 0 });
+    // 已导差集归零（GET newCount = 0——卡面「新 0」态）
+    const g2 = await getJson(s, "/api/settings/memory");
+    expect((g2.body["sources"] as Array<Record<string, unknown>>)[0]!["newCount"]).toBe(0);
 
     await s.stop();
   }, 60_000);

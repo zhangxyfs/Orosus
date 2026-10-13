@@ -51,9 +51,10 @@ const headlessUi: CommandUi = {
   confirm: async () => { throw new Error("无交互环境（headless）"); },
 };
 
-/** 引导门放行形态的 config.toml（T1 测试同款）。 */
+/** 引导门放行形态的 config.toml（T1 测试同款）。type 必带（provider-custom schema 必填协议族——缺省
+ *  会在子进程打印「模块降级」警告行，与本用例断言面无关的噪音）。 */
 const writeProviderConfig = (home: string): void => {
-  writeFileSync(join(home, "config.toml"), 'model = "demo/model-x"\n\n[provider-custom.providers.demo]\nbaseUrl = "http://127.0.0.1:9"\n', "utf8");
+  writeFileSync(join(home, "config.toml"), 'model = "demo/model-x"\n\n[provider-custom.providers.demo]\nbaseUrl = "http://127.0.0.1:9"\ntype = "openai"\n', "utf8");
 };
 
 /** 手工可控 provider（main.test.ts fakeProv 先例 + 挂起/放行闸门）：entered = 流已进入（turn 已起），
@@ -556,7 +557,7 @@ describe("web T2：HostedSession 托管引擎 + HostPool + /web 交接", () => {
     child.stdin.write("/web\n");
     // /web → 退出序列（空会话 purge → 交接跳过）→ server 起服 → URL 横幅（三行式）+ 实例文件落位
     await waitFor(() => out.includes("http://127.0.0.1"), 20_000);
-    expect(out).toContain("保持本终端开启");
+    await waitFor(() => out.includes("保持本终端开启"), 20_000); // 横幅三行可能分次 flush——第三行也走等待（2026-10-12 竞态修：重载机 split flush 漏断言）
     await waitFor(() => existsSync(join(home, "web", "server.json")));
     expect(child.exitCode).toBe(null); // 长驻（server 存活——退出序列后形态切换而非进程退出）
   }, 40_000);

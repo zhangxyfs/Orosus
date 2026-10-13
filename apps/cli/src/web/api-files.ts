@@ -5,6 +5,7 @@
  *  上传自创值（方案 §5 表）：≤10MB、仅 image/*、每消息 ≤6 张（D6）。 */
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { locateSessionFile } from "@orosus/core";
@@ -163,6 +164,52 @@ registerRoute("GET", "/api/media", (req, res) => {
     if (!res.headersSent) notFound(res);
     else res.destroy();
   }
+});
+
+/** POST /api/open {path} → {ok}（2026-10-12 走查：技能详情等处的文件路径点击——系统默认程序打开）。
+ *  本机 localhost + token 已是全权界面（等价 TUI 直接跑 shell 的用户意图面），但仍做两道轻门：
+ *  绝对路径 + 已存在的普通文件（目录/缺席拒绝）。平台分发：win `cmd /c start ""`、darwin `open`、
+ *  其余 `xdg-open`——detached + stdio ignore（不挂 server 进程组，程序生命周期归桌面）。 */
+registerRoute("POST", "/api/open", async (req, res) => {
+  const raw = await readBody(req, 64 * 1024);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { path?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const p = typeof body.path === "string" ? body.path : "";
+  if (p === "" || !isAbsolute(p)) {
+    sendJson(res, 400, { ok: false, error: "path 必须为绝对路径" });
+    return;
+  }
+  const abs = resolve(p);
+  let isFile = false;
+  try {
+    isFile = statSync(abs).isFile();
+  } catch { /* 缺席走 404 */ }
+  if (!isFile) {
+    sendJson(res, 404, { ok: false, error: "文件不存在" });
+    return;
+  }
+  try {
+    const child = process.platform === "win32"
+      ? spawn("cmd", ["/c", "start", "", abs], { detached: true, stdio: "ignore" })
+      : process.platform === "darwin"
+        ? spawn("open", [abs], { detached: true, stdio: "ignore" })
+        : spawn("xdg-open", [abs], { detached: true, stdio: "ignore" });
+    child.unref();
+    child.on("error", () => undefined); // 找不到打开器（无桌面环境）——spawn 异步错误不炸进程
+  } catch {
+    sendJson(res, 500, { ok: false, error: "打开失败（系统无默认程序关联或桌面环境缺席）" });
+    return;
+  }
+  sendJson(res, 200, { ok: true });
 });
 
 /** send 端点的 imageIds → 绝对路径（§3 POST send {imageIds}）：id = 会话 media 目录内文件名

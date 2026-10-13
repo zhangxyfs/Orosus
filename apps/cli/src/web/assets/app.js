@@ -80,7 +80,8 @@ function $(id) { return document.getElementById(id); }
         if (r) toast('工作目录 → ' + name + '（已在该目录开会话，原空会话保留）');
       });
     },
-    onManageModels: function () { openSettingsRoot(1); }, /* 模型菜单「管理模型」→ 设置·提供商页（T17） */
+    onBrowseFolder: function () { openDirPicker(); }, /* cwd 菜单「📂 浏览文件夹…」（走查八轮：重新选择文件夹——任意目录下钻） */
+    onManageModels: function () { openSettingsRoot(2); }, /* 模型菜单「管理模型」→ 设置·提供商页（外观页插位后 idx 1→2） */
   });
 
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
@@ -284,6 +285,9 @@ function $(id) { return document.getElementById(id); }
     escArmedAt = 0;
     busy = false;
     syncSendBtn();
+    /* 乐观复位尾行（2026-10-12 走查修——「已停止仍显示工作中」：点击停止只复位了发送键，尾行
+     *  spinner 要等 server 相位帧；取消收尾慢时两者长时间不一致。真实相位帧随后归真/纠偏） */
+    render.setPhase('idle', false);
     if (currentSid !== null) {
       A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/cancel', { method: 'POST', body: '{}' })
         .catch(function () { /* 取消失败静默——turn/end interrupted 事件面兜底 */ });
@@ -353,9 +357,90 @@ function $(id) { return document.getElementById(id); }
     if (sessionCwd !== '' && !pool.some(function (p) { return p.cwd === sessionCwd; })) {
       pool.push({ cwd: sessionCwd, name: sessionCwd.split(/[\\/]/).pop() || sessionCwd });
     }
-    if (pool.length === 0) { toast('暂无已知项目——先在某个目录下创建过会话后可切换'); return; }
+    if (pool.length === 0) { openDirPicker(); return; } /* 无已知项目池 → 直接进浏览窗（走查八轮） */
     UI.openCwdMenu(cwdChip, pool, sessionCwd);
   });
+
+  /* ── 目录浏览窗（2026-10-12 走查八轮：文件夹芯片的「重新选择文件夹」——/api/at 目录下钻 + ..
+   *  上级回退 + 路径输入直达（回车）；选定 = 在该目录开会话。/api/at 复用 @ 菜单数据源
+   *  （readdir + 目录前置），只取 dir:true 行。 ── */
+  var dpState = { path: '' };
+  function dpParentOf(p) {
+    var s = String(p ?? '').replace(/[\\/]+$/, '');
+    var i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+    if (i < 0) return null;
+    if (i <= 2 && /^[A-Za-z]:/.test(s)) return s.slice(0, 2) + '\\'; /* 盘根 D:\ 止步于其自身 */
+    if (s.length <= 3 && /^[A-Za-z]:[\\/]?$/.test(s)) return null;
+    return s.slice(0, i);
+  }
+  function openDirPicker() {
+    dpState.path = sessionCwd || '';
+    openModal({
+      title: '选择工作目录',
+      en: 'BROWSE',
+      bodyHtml: '<div class="dp-bar"><input class="fi" id="dp-input" placeholder="输入路径直达（回车跳转）…" /></div><div class="dp-list" id="dp-list"><div class="sp-note">加载中…</div></div>',
+      actionsHtml: '<span class="spacer"></span><button class="btn" data-act="cancel">取消</button><button class="btn primary" data-act="open">在此目录开会话</button>',
+      onAction: function (a) {
+        if (a === 'open') {
+          var p = dpState.path;
+          modalClose();
+          if (p !== '') {
+            var nm = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+            createSession({ cwd: p }).then(function (r) {
+              if (r) toast('工作目录 → ' + nm + '（已在该目录开会话，原空会话保留）');
+            });
+          }
+          return;
+        }
+        modalClose();
+      },
+      onClick: function (e) {
+        var row = e.target.closest('[data-dp]');
+        if (!row) return;
+        var v = row.getAttribute('data-dp');
+        if (v === '..') {
+          var up = dpParentOf(dpState.path);
+          if (up !== null && up !== dpState.path) { dpState.path = up; dpLoad(); }
+          return;
+        }
+        dpState.path = dpState.path.replace(/[\\/]+$/, '') + '\\' + v;
+        dpLoad();
+      },
+    });
+    window.setTimeout(function () {
+      var inp = $('dp-input');
+      if (inp) {
+        inp.value = dpState.path;
+        inp.focus();
+        inp.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          var v = inp.value.trim();
+          if (v === '') return;
+          dpState.path = v;
+          dpLoad();
+        });
+      }
+    }, 30);
+    dpLoad();
+  }
+  function dpLoad() {
+    A.fetchJson('/api/at?cwd=' + encodeURIComponent(dpState.path), { timeoutMs: 8000 }).then(function (d) {
+      var dirs = (d.entries ?? []).filter(function (x) { return x.dir; });
+      var up = dpParentOf(dpState.path);
+      var html = '';
+      if (up !== null && up !== dpState.path) html += '<div class="dp-row" data-dp="..">📂 .. <span class="dim">上级目录</span></div>';
+      html += dirs.map(function (x) { return '<div class="dp-row" data-dp="' + esc(x.name) + '">📁 ' + esc(x.name) + '</div>'; }).join('');
+      if (html === '') html = '<div class="sp-note">（没有子目录——可直接在下方「在此目录开会话」）</div>';
+      var list = $('dp-list');
+      if (list) list.innerHTML = html;
+      var inp = $('dp-input');
+      if (inp && inp.value !== dpState.path) inp.value = dpState.path;
+    }, function () {
+      var list = $('dp-list');
+      if (list) list.innerHTML = '<div class="sp-note">（目录不可读——检查路径后回车重试）</div>';
+    });
+  }
 
   /* ── 芯片：模型（D9）/ 思考档位（D10）/ 权限（D8）——status 装配显示面 ── */
   function modelTail(full) {
@@ -405,6 +490,26 @@ function $(id) { return document.getElementById(id); }
   }
   btnTheme.addEventListener('click', function () { applyTheme(!document.body.classList.contains('light')); });
   try { applyTheme(localStorage.getItem('orosus-web-theme') === 'light'); } catch { /* 同上 */ }
+
+  /* 原型 v2 外观·整体字号（写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定
+   * 〔2026-10-12 走查修：曾用 body.zoom 会连框架一起缩放，被用户否〕；localStorage 记忆，boot 恢复）。 */
+  var FONT_SCALES = [
+    { name: '小', scale: 0.875 },
+    { name: '默认', scale: 1 },
+    { name: '大', scale: 1.125 },
+    { name: '特大', scale: 1.25 },
+    { name: '超大', scale: 1.4 }
+  ];
+  var fontScaleIdx = 1;
+  function applyFontScale(i) {
+    fontScaleIdx = i;
+    document.documentElement.style.setProperty('--fz', String(FONT_SCALES[i].scale)); /* 全表 font-size = calc(Npx * var(--fz))——字体缩放单源 */
+    try { localStorage.setItem('orosus-web-fontscale', String(i)); } catch { /* 存储被拒 */ }
+  }
+  try {
+    var fsInit = parseInt(localStorage.getItem('orosus-web-fontscale') ?? '', 10);
+    if (fsInit >= 0 && fsInit < FONT_SCALES.length) applyFontScale(fsInit);
+  } catch { /* 同上 */ }
 
   /* ═══════════ 全局状态 ═══════════ */
   var currentSid = null;          /* 当前查看的会话（视图态） */
@@ -510,9 +615,15 @@ function $(id) { return document.getElementById(id); }
   function renderSidebar() {
     var sact = sactAll();
     var seen = loadJson(SEEN_KEY);
-    var html = '<div class="ls-sec"><span>已置顶</span><span class="ls-count">' + sessionsData.pinned.length + '</span><button class="ls-collapse" id="ls-collapse" title="收起会话栏">⇤</button></div>';
-    if (sessionsData.pinned.length === 0) html += '<div class="ls-sec ls-hint"><span>（悬停会话行可置顶）</span></div>';
-    html += sessionsData.pinned.map(function (s) { return lsRowHtml(s, prevRowMap.get(s.sid), true, sact, seen); }).join('');
+    /* 置顶区（2026-10-12 走查口径）：有置顶才显「已置顶 N」分组头与行；无置顶零占位——仅保留
+     *  ⇤ 收起钮（会话栏收起入口不能随区隐没）。 */
+    var html = '';
+    if (sessionsData.pinned.length > 0) {
+      html += '<div class="ls-sec"><span>已置顶</span><span class="ls-count">' + sessionsData.pinned.length + '</span><button class="ls-collapse" id="ls-collapse" title="收起会话栏">⇤</button></div>';
+      html += sessionsData.pinned.map(function (s) { return lsRowHtml(s, prevRowMap.get(s.sid), true, sact, seen); }).join('');
+    } else {
+      html += '<div class="ls-sec ls-pin-empty"><button class="ls-collapse" id="ls-collapse" title="收起会话栏">⇤</button></div>';
+    }
     html += '<div class="ls-sec"><span>项目</span><span class="ls-count">' + sessionsData.groups.length + '</span></div>';
     sessionsData.groups.forEach(function (g) {
       var open = groupOpen[g.cwd] !== false;
@@ -540,7 +651,7 @@ function $(id) { return document.getElementById(id); }
   }
   /* 2s 轮询回调（diff 后按需更新——签名门内建；失败静默——断连面由 SSE 看门狗管） */
   function pollSessions() {
-    return A.fetchJson('/api/sessions').then(function (data) {
+    return A.fetchJson('/api/sessions', { timeoutMs: 9000 }).then(function (data) {
       var next = rememberRows(data);
       sessionsData = data;
       renderSidebar();
@@ -636,7 +747,9 @@ function $(id) { return document.getElementById(id); }
   function createSession(body) {
     return A.fetchJson('/api/sessions', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
       if (r.reused) toast('已有空会话——沿用并刷新创建时间');
-      return switchTo(r.sid).then(function () { return r; });
+      /* 先刷新左栏再切视图（2026-10-12 走查修——「新会话不立即出现在列表」根因：switchTo 只重渲
+       *  旧 sessionsData，新行要等 2s 轮询；pollSessions 先行让新行与「当前」高亮一步到位） */
+      return pollSessions().then(function () { return switchTo(r.sid); }).then(function () { return r; });
     }, function (err) { toast('新建会话失败：' + err.message); });
   }
   /* 工作区行 ＋（B9）：在该工作区下新建（fresh 沿用语义在 server 侧，reused 提示同口） */
@@ -708,7 +821,19 @@ function $(id) { return document.getElementById(id); }
         modalClose();
       },
     });
-    window.setTimeout(function () { var el = document.getElementById('rename-input'); if (el) { el.value = rowTitle(sid) === '（未命名会话）' ? '' : rowTitle(sid); el.focus(); } }, 30);
+    /* 走查五轮：回车即保存——与 data-act=save 按钮同路径（弹窗点击委派复用，不另接线） */
+    window.setTimeout(function () {
+      var el = document.getElementById('rename-input');
+      if (!el) return;
+      el.value = rowTitle(sid) === '（未命名会话）' ? '' : rowTitle(sid);
+      el.focus();
+      el.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var btn = modal.querySelector('[data-act="save"]');
+        if (btn) btn.click();
+      });
+    }, 30);
   }
   function doRename(sid, name) {
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/title', { method: 'POST', body: JSON.stringify({ title: name }) }).then(function () {
@@ -794,10 +919,12 @@ function $(id) { return document.getElementById(id); }
     var item = e.target.closest('[data-ctx]');
     if (!item) return;
     var act = item.getAttribute('data-ctx');
-    hideCtx();
-    if (ctxSid !== null) { sessionCtxAct(act, ctxSid); return; }
+    /* 目标先取后藏（2026-10-12 走查三轮根因修）：hideCtx 会清空 ctxSid/ctxGroup——此前先藏后读，
+     *  两个判据恒假，右键菜单全部条目点击无动作（「右键菜单完全没实现」的根因）。 */
+    var sid = ctxSid;
     var g = ctxGroup;
-    ctxGroup = null;
+    hideCtx();
+    if (sid !== null) { sessionCtxAct(act, sid); return; }
     if (!g) return;
     if (act === 'copy') copyText(g.cwd, '已复制路径');
     else if (act === 'remove') {
@@ -931,13 +1058,13 @@ function $(id) { return document.getElementById(id); }
 
   var SET_PAGES = [
     { name: '常规', desc: '上下文 / Token / 磁盘', render: pageGeneral },
+    { name: '外观', desc: '主题 / 明暗 / 字号 / 语言', render: pageAppearance },
     { name: '提供商与模型', desc: '供应商列表 / 目录添加 / 模型表', render: pageProviders },
     { name: '模型偏好', desc: '默认模型 / 视觉 / 搜索 / 子代理', render: pageModelPrefs },
     { name: '技能', desc: '查看 / 启停', render: pageSkills },
     { name: '钩子', desc: '查看 / 启停 / 信任审查', render: pageHooks },
     { name: 'MCP', desc: 'server 管理与添加', render: pageMcp },
-    { name: '记忆', desc: '工作区记忆 / 会话感知', render: pageMemory },
-    { name: '切换语言', desc: '简 / 繁 / 英 + 语言包扩展', render: pageLocale },
+    { name: '记忆', desc: '工作区记忆 / 会话感知 / 导入', render: pageMemory },
     { name: '更新检查', desc: '启动时自动检测新版本', render: pageUpdate },
     { name: '已归档的会话', desc: '查看 / 恢复到会话列表', render: pageArchived },
   ];
@@ -1247,7 +1374,7 @@ function $(id) { return document.getElementById(id); }
         mpRow('默认模型', '<select class="fsel" id="mp-model"><option value=""' + (current === '' ? ' selected' : '') + '>（未配置）</option>' + modelOptGroups(current, providers) + '</select>') +
         mpRow('视觉模型', '<select class="fsel" id="mp-vision">' +
           '<option value="off"' + (vision === 'off' ? ' selected' : '') + '>停用（默认）</option>' +
-          '<option value="auto"' + (vision === 'auto' ? ' selected' : '') + '>自动（当前模型支持图片时直接用它）</option>' +
+          '<option value="auto"' + (vision === 'auto' ? ' selected' : '') + '>自动（用已配置模型里支持图片的）</option>' +
           (visionCur && !modelOptGroups(visionCur, providers).includes('value="' + esc(visionCur) + '"')
             ? '<option value="' + esc(visionCur) + '" selected>' + esc(visionCur) + '（当前）</option>' : '') +
           modelOptGroups(visionCur, providers) + '</select>') +
@@ -1297,7 +1424,7 @@ function $(id) { return document.getElementById(id); }
       sel('mp-vision').addEventListener('change', function () {
         var el = this; /* revert 闭包捕获元素——strict-mode 裸调用 this === undefined（审查 Important） */
         var v = this.value;
-        postPref('visionModel', v, v === 'off' ? '视觉模型：已设为停用' : v === 'auto' ? '视觉模型：已设为自动（支持图片的当前模型直用）' : '视觉模型：已指定 ' + v + '（已写 [tool-media]）', function () { el.value = vision; });
+        postPref('visionModel', v, v === 'off' ? '视觉模型：已设为停用' : v === 'auto' ? '视觉模型：已设为自动（用已配置模型里支持图片的）' : '视觉模型：已指定 ' + v + '（已写 [tool-media]）', function () { el.value = vision; });
       });
       sel('mp-search').addEventListener('change', function () {
         var el = this;
@@ -1324,6 +1451,18 @@ function $(id) { return document.getElementById(id); }
   }
 
   /* ── F4 技能（GET /api/settings/skills——行即详情五字段；POST toggle 写 [skill] disabled + reload） ── */
+  /* ── F4 技能（2026-10-12 走查七轮重做：平铺名录 → 富列表行——状态点 + 双行文 + 行内启停拨杆 +
+   *    范围徽标；点击行仍进详情。TUI 详情窗 Alt+K 的 web 化不变） ── */
+  var SKILL_SCOPE = { user: '用户', project: '项目', bundled: '内置' };
+  function skillRowHtml(s) {
+    return '<div class="lr-row' + (s.disabled ? ' off' : '') + '" data-k="skill" data-v="' + esc(s.name) + '">' +
+      '<span class="mdot ' + (s.disabled ? 'off">○' : 'ok">●') + '</span>' +
+      '<span class="lr-main"><span class="lr-name">' + esc(s.name) +
+      ' <span class="lr-tag">' + esc(SKILL_SCOPE[s.scope] ?? s.scope ?? '') + '</span></span>' +
+      (s.desc ? '<span class="lr-desc">' + esc(s.desc) + '</span>' : '') + '</span>' +
+      '<button class="mc-toggle' + (s.disabled ? '' : ' on') + '" data-sw="' + esc(s.name) + '" role="switch" aria-checked="' + String(!s.disabled) + '" aria-label="' + esc(s.name) + ' 启停" title="' + (s.disabled ? '启用' : '停用') + '"></button>' +
+      '<span class="lr-caret">›</span></div>';
+  }
   function pageSkills(page) {
     pageLoading(page);
     A.fetchJson('/api/settings/skills').then(function (d) {
@@ -1333,16 +1472,45 @@ function $(id) { return document.getElementById(id); }
         setPageHandler = null;
         return;
       }
-      page.innerHTML = spTitle('技能', 'SKILLS · 四轨目录') + skills.map(function (s) {
-        return '<div class="pu-item" data-k="skill" data-v="' + esc(s.name) + '"><span class="pu-check"></span>' +
-          '<span class="pi-name">' + esc(s.name) + (s.disabled ? ' <span class="dim">[已停用]</span>' : '') + '</span>' +
-          '<span class="pi-desc">' + esc(s.desc ?? '') + '</span><span class="pi-right">' + esc(s.scope ?? '') + '</span></div>';
-      }).join('') + '<div class="sp-note">点击进入详情——详情页内可启用 / 停用（= TUI 详情窗 Alt + K 的 web 化）。</div>';
+      var offN = skills.filter(function (s) { return s.disabled; }).length;
+      page.innerHTML = spTitle('技能', 'SKILLS · 四轨目录') +
+        '<div class="lr-sum">共 ' + skills.length + ' 个 · 启用 ' + (skills.length - offN) + ' · 停用 ' + offN + '</div>' +
+        skills.map(skillRowHtml).join('') +
+        '<div class="sp-note">拨杆直接启停（写 [skill] disabled + 模块重载，斜杠菜单即刻生效）；点击行进详情——详情页内文件可点击打开。</div>';
       setPageHandler = function (e) {
+        /* 拨杆先行（行内直切不进详情）；点击行其余部位进详情 */
+        var sw = e.target.closest('[data-sw]');
+        if (sw) {
+          var name = sw.getAttribute('data-sw');
+          var s = skills.find(function (x) { return x.name === name; });
+          if (!s) return;
+          var target = !s.disabled;
+          A.fetchJson('/api/settings/skills/toggle', { method: 'POST', body: JSON.stringify({ name: name, disabled: target }) }).then(function () {
+            s.disabled = target;
+            toast((target ? '已停用 ' : '已启用 ') + name + '（模块已重载，清单即刻生效）');
+            UI.invalidateCaches(); /* 斜杠菜单技能区 30s 缓存同步失效 */
+            /* 行原位刷新（零整页重拉——点/拨杆/统计三段换装） */
+            var rowEl = sw.closest('.lr-row');
+            if (rowEl) {
+              rowEl.classList.toggle('off', target);
+              var dot = rowEl.querySelector('.mdot');
+              if (dot) { dot.className = 'mdot ' + (target ? 'off' : 'ok'); dot.textContent = target ? '○' : '●'; }
+              sw.classList.toggle('on', !target);
+              sw.setAttribute('aria-checked', String(!target));
+              sw.title = target ? '启用' : '停用';
+            }
+            var sumEl = page.querySelector('.lr-sum');
+            if (sumEl) {
+              var off2 = skills.filter(function (x) { return x.disabled; }).length;
+              sumEl.textContent = '共 ' + skills.length + ' 个 · 启用 ' + (skills.length - off2) + ' · 停用 ' + off2;
+            }
+          }, function (err) { toast('操作失败：' + err.message); });
+          return;
+        }
         var row = e.target.closest('[data-k="skill"]');
         if (!row) return;
-        var s = skills.find(function (x) { return x.name === row.getAttribute('data-v'); });
-        if (s) renderSkillDetail(page, s);
+        var s2 = skills.find(function (x) { return x.name === row.getAttribute('data-v'); });
+        if (s2) renderSkillDetail(page, s2);
       };
     }, function (err) { pageLoadError(page, err); });
   }
@@ -1355,11 +1523,19 @@ function $(id) { return document.getElementById(id); }
       (s.usage ? kvRow('适用', esc(s.usage)) : '') +
       kvRow('范围', esc(s.scope ?? '')) +
       kvRow('状态', s.disabled ? '<span class="bad">停用</span>' : '<span class="ok">启用</span>') +
-      kvRow('文件', esc(s.file ?? ''), 'info') +
+      /* 2026-10-12 走查：文件路径可点击——POST /api/open 系统默认程序打开 */
+      kvRow('文件', '<button type="button" class="kv-link" data-k="open-file" data-v="' + esc(s.file ?? '') + '" title="点击用系统默认程序打开">' + esc(s.file ?? '') + '</button>', 'info') +
       '</div>' +
       '<div class="pu-actions"><button class="btn" data-k="skill-toggle">' + (s.disabled ? '启用' : '停用') + '</button></div>';
     setPageHandler = function (e) {
-      if (e.target.closest('[data-k="skill-back"]')) { renderSetPage(3); return; }
+      if (e.target.closest('[data-k="skill-back"]')) { renderSetPage(4); return; } /* 技能页（外观插位后 3→4） */
+      if (e.target.closest('[data-k="open-file"]')) {
+        var path = e.target.closest('[data-k="open-file"]').getAttribute('data-v');
+        A.fetchJson('/api/open', { method: 'POST', body: JSON.stringify({ path: path }) }).then(function () {
+          toast('已请求系统默认程序打开');
+        }, function (err) { toast('打开失败：' + err.message); });
+        return;
+      }
       if (e.target.closest('[data-k="skill-toggle"]')) {
         var target = !s.disabled;
         A.fetchJson('/api/settings/skills/toggle', { method: 'POST', body: JSON.stringify({ name: s.name, disabled: target }) }).then(function () {
@@ -1374,11 +1550,21 @@ function $(id) { return document.getElementById(id); }
 
   /* ── F5 钩子（GET /api/settings/hooks——用户级/项目级分节；POST toggle/trust） ── */
   var HOOK_TIMEOUT_DEFAULT = 60;
-  function hookRowHtml(h) {
-    var status = h.disabled ? '<span class="dim">[已停用]</span>' : '';
-    var meta = [h.product, h.event, h.origin === 'user' ? '用户' : '项目'].filter(Boolean).join(' · ');
-    return status + esc(h.name ? h.name : h.event + ' · ' + (h.origin === 'user' ? '用户' : '项目')) +
-      '<span class="pi-desc">' + esc(h.command ?? '') + ' · ' + esc(meta) + '</span>';
+  /* ── F5 钩子（2026-10-12 走查七轮重做：与技能页同款富列表行——状态点 + 说明/命令双行 + 行内启停
+   *    拨杆 + 产品/未信任徽标；点击行仍进详情（信任审查在详情页）。TUI e/t 键的 web 化不变） ── */
+  function hookRowHtmlV2(h, trusted) {
+    var comp = h.file + '|' + h.event + '|' + h.tableIdx + '|' + h.hookIdx;
+    var untrusted = h.origin === 'project' && !trusted;
+    return '<div class="lr-row' + (h.disabled ? ' off' : '') + '" data-k="hook" data-v="' + esc(comp) + '">' +
+      '<span class="mdot ' + (h.disabled ? 'off">○' : 'ok">●') + '</span>' +
+      '<span class="lr-main"><span class="lr-name">' + esc(h.name ? h.name : h.event) +
+      (h.name ? ' <span class="lr-tag">' + esc(h.event) + '</span>' : '') +
+      (h.product ? ' <span class="lr-tag info">' + esc(h.product) + '</span>' : '') +
+      (untrusted ? ' <span class="lr-tag warn">未信任</span>' : '') +
+      '</span>' +
+      '<span class="lr-desc mono">' + esc(h.command ?? '') + (h.matcher ? '　·　matcher: ' + esc(h.matcher) : '') + '</span></span>' +
+      '<button class="mc-toggle' + (h.disabled ? '' : ' on') + '" data-sw="' + esc(comp) + '" role="switch" aria-checked="' + String(!h.disabled) + '" aria-label="' + esc(h.event) + ' 钩子启停" title="' + (h.disabled ? '启用' : '停用') + '"></button>' +
+      '<span class="lr-caret">›</span></div>';
   }
   function pageHooks(page) {
     pageLoading(page);
@@ -1387,16 +1573,37 @@ function $(id) { return document.getElementById(id); }
       var proj = d.project ?? [];
       var trusted = !!d.projectTrusted;
       var sec = function (title, rows) {
-        return subHeadT(title, title.indexOf('项目') === 0) + (rows.length > 0 ? rows.map(function (h) {
-          return '<div class="pu-item" data-k="hook" data-v="' + esc(h.file + '|' + h.event + '|' + h.tableIdx + '|' + h.hookIdx) + '"><span class="pu-check"></span><span class="pi-name">' + hookRowHtml(h) +
-            (h.origin === 'project' && !trusted ? ' <span class="st-warn">· 未信任</span>' : '') + '</span></div>';
+        return subHeadT(title + '（' + rows.length + '）', title.indexOf('项目') === 0) + (rows.length > 0 ? rows.map(function (h) {
+          return hookRowHtmlV2(h, trusted);
         }).join('') : '<div class="sp-note">（空——钩子增编走 TOML 文件：' + esc(title.indexOf('项目') === 0 ? '项目 .orosus/hooks' : '~/.orosus/hooks') + '，改后 /reload）</div>');
       };
       page.innerHTML = spTitle('钩子', 'HOOKS · 七事件生命周期') +
         sec('用户级', user) + sec('项目级（须信任审查）', proj) +
-        '<div class="sp-note">点击进入详情——详情页内启停 / 项目层信任审查（= TUI e / t 键的 web 化）。</div>';
+        '<div class="sp-note">拨杆直接启停（行级写盘 + 重载生效）；点击行进详情——项目层信任审查在详情页。</div>';
       var all = user.concat(proj);
       setPageHandler = function (e) {
+        /* 拨杆先行（行内直切）；点击行其余部位进详情 */
+        var sw = e.target.closest('[data-sw]');
+        if (sw) {
+          var cv = sw.getAttribute('data-sw');
+          var h2 = all.find(function (x) { return x.file + '|' + x.event + '|' + x.tableIdx + '|' + x.hookIdx === cv; });
+          if (!h2) return;
+          var target = !h2.disabled;
+          A.fetchJson('/api/settings/hooks/toggle', { method: 'POST', body: JSON.stringify({ file: h2.file, event: h2.event, tableIdx: h2.tableIdx, hookIdx: h2.hookIdx, disabled: target }) }).then(function () {
+            h2.disabled = target;
+            toast((target ? '已停用 ' : '已启用 ') + (h2.name ? h2.name : h2.event) + '（行级写盘，重载后生效）');
+            var rowEl = sw.closest('.lr-row');
+            if (rowEl) {
+              rowEl.classList.toggle('off', target);
+              var dot = rowEl.querySelector('.mdot');
+              if (dot) { dot.className = 'mdot ' + (target ? 'off' : 'ok'); dot.textContent = target ? '○' : '●'; }
+              sw.classList.toggle('on', !target);
+              sw.setAttribute('aria-checked', String(!target));
+              sw.title = target ? '启用' : '停用';
+            }
+          }, function (err) { toast('操作失败：' + err.message); });
+          return;
+        }
         var row = e.target.closest('[data-k="hook"]');
         if (!row) return;
         var h = all.find(function (x) { return x.file + '|' + x.event + '|' + x.tableIdx + '|' + x.hookIdx === row.getAttribute('data-v'); });
@@ -1421,7 +1628,7 @@ function $(id) { return document.getElementById(id); }
       (h.origin === 'project' && !trusted ? '<button class="btn primary" data-k="hook-trust">信任审查（TUI t 键）</button>' : '') +
       '</div>';
     setPageHandler = function (e) {
-      if (e.target.closest('[data-k="hook-back"]')) { renderSetPage(4); return; }
+      if (e.target.closest('[data-k="hook-back"]')) { renderSetPage(5); return; } /* 钩子页（外观插位后 4→5） */
       if (e.target.closest('[data-k="hook-toggle"]')) {
         var target = !h.disabled;
         A.fetchJson('/api/settings/hooks/toggle', { method: 'POST', body: JSON.stringify({ file: h.file, event: h.event, tableIdx: h.tableIdx, hookIdx: h.hookIdx, disabled: target }) }).then(function () {
@@ -1438,16 +1645,31 @@ function $(id) { return document.getElementById(id); }
     };
   }
 
-  /* ── F6 MCP（GET /api/settings/mcp——McpCatalogRow 五态；POST /api/settings/mcp/ops 七 op） ── */
+  /* ── F6 MCP（GET /api/settings/mcp——McpCatalogRow 五态；POST /api/settings/mcp/ops 七 op + 结构化 add）
+   *  2026-10-12 走查二轮重构（对齐 TUI）：列表行 = 状态点（绿=已连接 / 红=失败 / 灰=停用·待启动）+
+   *  名称 + 传输·工具数 + 行上「启动」（懒启动件）/「详情」钮——右侧状态文字退役；添加/修改窗对齐
+   *  TUI Alt+N（mcp-add-window.ts）：手动/JSON 双页签、传输三档、高级区 env/headers/cwd/超时秒。 */
   var MCP_STATE_TEXT = { connected: '已连接 · 启用', idle: '待启动 · 启用', failed: '失败 · 启用', disabled: '已停用', 'pending-confirm': '未确认' };
   var MCP_SOURCE_TEXT = { config: '配置文件', project: '项目 .mcp.json', preload: '预装' };
   var MCP_TRANSPORT_TEXT = { stdio: 'stdio 子进程', http: 'HTTP（远程）', sse: 'SSE（远程）' };
+  function mcpDot(m) {
+    if (m.state === 'connected') return '<span class="mdot ok">●</span>';
+    if (m.state === 'failed') return '<span class="mdot bad">●</span>';
+    if (m.state === 'disabled') return '<span class="mdot off">●</span>';
+    if (m.state === 'pending-confirm') return '<span class="mdot bad">◉</span>';
+    return '<span class="mdot off">○</span>'; /* idle 待启动 */
+  }
   function mcpRowLine(m) {
-    var dotCls = m.state === 'connected' ? 'st-run' : (m.state === 'idle' || m.state === 'disabled') ? 'dim' : 'st-err';
-    var dot = (m.state === 'idle' || m.state === 'disabled') ? '○' : '●';
-    var desc = (m.state === 'connected' ? ((m.transport === 'http' || m.transport === 'sse' ? 'HTTP' : 'stdio') + ' · ' + (m.toolCount ?? 0) + ' 工具') : (m.transport === 'http' || m.transport === 'sse' ? 'HTTP' : 'stdio'));
-    return '<span class="pu-check"><span class="' + dotCls + '">' + dot + '</span></span>' +
-      '<span class="pi-name">' + esc(m.name) + '</span><span class="pi-desc">' + esc(desc) + '</span><span class="pi-right">' + esc(MCP_STATE_TEXT[m.state] ?? m.state) + '</span>';
+    var remote = m.transport === 'http' || m.transport === 'sse';
+    var desc = remote ? 'HTTP' : 'stdio';
+    if (m.state === 'connected' && typeof m.toolCount === 'number') desc += ' · ' + m.toolCount + ' 工具';
+    var acts = '';
+    if (m.deferred === true && (m.state === 'idle' || m.state === 'failed')) {
+      acts += '<button class="btn tiny" data-k="mcp-start" data-v="' + esc(m.name) + '" title="懒启动件首次连接（npx 下载最长 60 秒）">启动</button>';
+    }
+    acts += '<button class="btn tiny" data-k="mcp-detail" data-v="' + esc(m.name) + '">详情</button>';
+    return mcpDot(m) +
+      '<span class="pi-name">' + esc(m.name) + '</span><span class="pi-desc">' + esc(desc) + '</span><span class="pi-right mcp-acts">' + acts + '</span>';
   }
   function pageMcp(page) {
     pageLoading(page);
@@ -1456,14 +1678,25 @@ function $(id) { return document.getElementById(id); }
       page.innerHTML = '<div class="pf-headrow">' + spTitle('MCP', 'SERVERS · ' + servers.length + ' 个 · 预装按需启动') +
         '<button class="btn primary" data-k="mcp-add">＋ 添加</button></div>' +
         (servers.length > 0 ? servers.map(function (m) {
-          return '<div class="pu-item" data-k="mcp" data-v="' + esc(m.name) + '">' + mcpRowLine(m) + '</div>';
+          return '<div class="pu-item" data-k="mcp" data-v="' + esc(m.name) + '" title="' + esc(MCP_TRANSPORT_TEXT[m.transport] ?? m.transport ?? 'stdio') + '">' + mcpRowLine(m) + '</div>';
         }).join('') : '<div class="sp-note">（无 MCP server——mcp 模块未启用或未配置）</div>') +
-        '<div class="sp-note">点击进入详情——启停 / 修改 / 删除 / 确认信任都在详情页内（= TUI Alt+K / Alt+N / d / t 的 web 化）。</div>';
+        '<div class="sp-note">状态点：绿=已连接 · 红=失败 · 灰=停用/待启动；「启动」仅懒启动件（首次连接可能需要下载）；其余操作（停用/信任/修改/删除）在详情页。</div>';
       setPageHandler = function (e) {
-        if (e.target.closest('[data-k="mcp-add"]')) { renderMcpAdd(page); return; }
+        if (e.target.closest('[data-k="mcp-add"]')) { renderMcpForm(page, 'add'); return; }
+        var start = e.target.closest('[data-k="mcp-start"]');
+        if (start) {
+          var nm = start.getAttribute('data-v');
+          A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify({ op: 'start', name: nm }) }).then(function (r) {
+            toast(r && r.starting ? '正在启动 ' + nm + '（首次可能需要下载，最长 60 秒）…' : '已触发启动');
+            window.setTimeout(function () { if (document.getElementById('set-page')) pageMcp(page); }, 5000);
+          }, function (err) { toast(err.status === 409 ? err.message : '启动失败：' + err.message); });
+          return;
+        }
+        var det = e.target.closest('[data-k="mcp-detail"]');
         var row = e.target.closest('[data-k="mcp"]');
-        if (!row) return;
-        var m = servers.find(function (x) { return x.name === row.getAttribute('data-v'); });
+        var target = det ?? row;
+        if (!target) return;
+        var m = servers.find(function (x) { return x.name === target.getAttribute('data-v'); });
         if (m) renderMcpDetail(page, m);
       };
     }, function (err) { pageLoadError(page, err); });
@@ -1493,7 +1726,7 @@ function $(id) { return document.getElementById(id); }
       '</div>' +
       '<div class="pu-actions">' + acts.join('') + '</div>';
     setPageHandler = function (e) {
-      if (e.target.closest('[data-k="mcp-back"]')) { renderSetPage(5); return; }
+      if (e.target.closest('[data-k="mcp-back"]')) { renderSetPage(6); return; } /* MCP 页（外观插位后 5→6） */
       if (e.target.closest('[data-k="mcp-toggle"]')) {
         var off = m.state !== 'disabled';
         mcpOp(page, { op: off ? 'off' : 'on', name: m.name }, function () { toast((off ? '已停用 ' : '已启用 ') + m.name + '——模块图重载后生效'); pageMcp(page); });
@@ -1515,7 +1748,7 @@ function $(id) { return document.getElementById(id); }
         mcpOp(page, { op: 'trust', name: m.name }, function () { toast('已确认 ' + m.name + '——模块图重载后连接'); pageMcp(page); });
         return;
       }
-      if (e.target.closest('[data-k="mcp-edit"]')) { renderMcpEdit(page, m); return; }
+      if (e.target.closest('[data-k="mcp-edit"]')) { renderMcpForm(page, 'edit', m); return; }
       if (e.target.closest('[data-k="mcp-del"]')) {
         openConfirm({
           title: '删除 MCP server',
@@ -1534,118 +1767,504 @@ function $(id) { return document.getElementById(id); }
       if (onOk) onOk(r);
     }, function (err) { toast('操作失败：' + err.message); });
   }
-  /** 添加表单（POST ops add——spec = 命令行或 URL 串，mcp-cmd add 语义）。 */
-  function renderMcpAdd(page) {
+  /** 添加/修改 MCP server 窗（TUI Alt+N mcp-add-window.ts 的 web 化——2026-10-12 走查二轮）：
+   *  手动/JSON 双页签（共享草稿互转不丢）+ 传输方式三档 + 高级区（env/headers〔远程〕/cwd〔stdio〕/
+   *  超时秒）。保存走 ops add/edit 的结构化 spec（服务端 checkEditSpec 白名单校验同 TUI 写器）。 */
+  function renderMcpForm(page, mode, row) {
     setPageHandler = null;
-    page.innerHTML = '<span class="sp-back" data-k="mcp-back2">‹ 返回 MCP 列表</span>' + spTitle('添加 MCP server') +
-      '<div class="pf-row"><label>名称 <span class="req">*</span></label><input class="fi" id="mcp-name" placeholder="context7" /></div>' +
-      '<div class="pf-row"><label>命令行或 URL <span class="req">*</span></label><input class="fi" id="mcp-spec" placeholder="npx -y @modelcontextprotocol/server-filesystem ~ 或 https://mcp.example.com/mcp" /></div>' +
-      '<div class="sp-note">命令行形态拆 command + args 落盘；URL 形态走 HTTP 传输。环境变量等高级字段添加后在「修改」里补。</div>' +
-      '<div class="pu-actions"><span class="spacer"></span><button class="btn" data-k="mcp-cancel">取消</button><button class="btn primary" data-k="mcp-save">添加</button></div>';
-    setPageHandler = function (e) {
-      if (e.target.closest('[data-k="mcp-back2"]') || e.target.closest('[data-k="mcp-cancel"]')) { pageMcp(page); return; }
-      if (e.target.closest('[data-k="mcp-save"]')) {
-        var name = (page.querySelector('#mcp-name').value || '').trim();
-        var spec = (page.querySelector('#mcp-spec').value || '').trim();
-        if (name === '' || /\s/.test(name)) { toast('名称必填且不含空白'); return; }
-        if (spec === '') { toast('命令行或 URL 必填'); return; }
-        mcpOp(page, { op: 'add', name: name, spec: spec }, function () { pageMcp(page); });
+    var isEdit = mode === 'edit';
+    var draft = { name: isEdit ? row.name : '', transport: 'stdio', cmd: '', env: '', headers: '', cwd: '', timeout: '', jsonText: '' };
+    var tab = 'manual';
+    var advOpen = isEdit; /* TUI：edit 高级区默认展开 */
+    var msg = '';
+    var msgBad = false;
+    function paint() { setPageHandler = null; paintNow(); }
+    function paintNow() {
+      var remote = draft.transport !== 'stdio';
+      var html = '<span class="pf-back" data-k="mcp-back">‹ 返回 MCP 列表</span>' +
+        spTitle(isEdit ? '修改 ' + row.name : '添加 MCP server') +
+        '<div class="mcp-tabs">' +
+          '<button type="button" class="mcp-tab' + (tab === 'manual' ? ' sel' : '') + '" data-k="mtp-manual">手动</button>' +
+          '<button type="button" class="mcp-tab' + (tab === 'json' ? ' sel' : '') + '" data-k="mtp-json">JSON</button>' +
+          '<span class="mcp-tab-hint">页签间草稿互转</span></div>';
+      if (tab === 'manual') {
+        html += (isEdit
+            ? '<div class="pf-row"><label>名称</label><input class="fi" value="' + esc(draft.name) + '" readonly /></div>'
+            : '<div class="pf-row"><label>名称 <span class="req">*</span></label><input class="fi" id="mf-name" placeholder="my-search（字母/数字/-/_）" value="' + esc(draft.name) + '" /></div>') +
+          '<div class="pf-row"><label>传输方式</label><select class="fsel" id="mf-transport">' +
+            '<option value="stdio"' + (!remote ? ' selected' : '') + '>stdio（本地子进程）</option>' +
+            '<option value="http"' + (draft.transport === 'http' ? ' selected' : '') + '>HTTP（远程）</option>' +
+            '<option value="sse"' + (draft.transport === 'sse' ? ' selected' : '') + '>SSE（远程）</option></select></div>' +
+          '<div class="pf-row"><label>' + (remote ? 'URL <span class="req">*</span>' : '命令 <span class="req">*</span>') + '</label>' +
+            '<input class="fi" id="mf-cmd" value="' + esc(draft.cmd) + '" placeholder="' + (remote ? 'https://mcp.internal.example.com/sse' : 'npx -y my-search-mcp（整行命令，支持引号参数）') + '" /></div>' +
+          '<div class="pf-row"><button type="button" class="btn" data-k="mf-adv">' + (advOpen ? '▾' : '▸') + ' 高级' + (advOpen ? '' : remote ? '（headers / 环境变量 / 超时）' : '（环境变量 / 工作目录 / 超时）') + '</button></div>';
+        if (advOpen) {
+          html += '<div class="pf-row"><label>环境变量（每行 KEY=VALUE' + (isEdit ? '；裸 KEY = 保持原值' : '') + '）</label><textarea class="fi" id="mf-env" rows="2" placeholder="API_KEY=xxx"></textarea></div>';
+          if (remote) html += '<div class="pf-row"><label>请求头（每行 KEY=VALUE）</label><textarea class="fi" id="mf-headers" rows="2" placeholder="Authorization=Bearer …"></textarea></div>';
+          else html += '<div class="pf-row"><label>工作目录</label><input class="fi" id="mf-cwd" value="' + esc(draft.cwd) + '" placeholder="（缺省 = 项目根）" /></div>';
+          html += '<div class="pf-row"><label>超时（秒，正整数）</label><input class="fi" id="mf-timeout" value="' + esc(draft.timeout) + '" placeholder="（缺省 60）" /></div>';
+        }
+      } else {
+        html += '<div class="sp-note">粘贴单条 server 的 JSON（{"mcpServers": {…}} 包裹或裸对象均可；一次只接受一个 server）。</div>' +
+          '<div class="pf-row"><label>JSON</label><textarea class="fi" id="mf-json" rows="8" placeholder="{&quot;mcpServers&quot;: {&quot;my-search&quot;: {&quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;my-search-mcp&quot;]}}}"></textarea></div>';
       }
-    };
-  }
-  /** 修改表单（POST ops edit——结构化 spec 整表覆写，仅 config 来源；checkEditSpec 键白名单面）。 */
-  function renderMcpEdit(page, m) {
-    setPageHandler = null;
-    page.innerHTML = '<span class="sp-back" data-k="mcp-back2">‹ 返回 ' + esc(m.name) + '</span>' + spTitle('修改 ' + m.name) +
-      '<div class="pf-row"><label>命令（stdio）</label><input class="fi" id="mcp-command" value="' + esc(m.command ?? '') + '" placeholder="npx -y server-name" /></div>' +
-      '<div class="pf-row"><label>URL（http/sse 型）</label><input class="fi" id="mcp-url" value="' + esc(m.url ?? '') + '" placeholder="https://mcp.example.com/mcp" /></div>' +
-      '<div class="pf-row"><label>参数（每行一个）</label><textarea class="fi" id="mcp-args" rows="3" placeholder="-y&#10;server-name"></textarea></div>' +
-      '<div class="pf-row"><label>环境变量（每行 KEY=VALUE）</label><textarea class="fi" id="mcp-env" rows="3" placeholder="API_KEY=xxx"></textarea></div>' +
-      '<div class="pf-row"><label>超时（毫秒，正整数）</label><input class="fi" id="mcp-timeout" placeholder="留空 = 不写" /></div>' +
-      '<div class="sp-note">修改将整体覆写该条目配置（command/url 至少一项；未能预读的字段留空即不写）。</div>' +
-      '<div class="pu-actions"><span class="spacer"></span><button class="btn" data-k="mcp-cancel">取消</button><button class="btn primary" data-k="mcp-save">保存</button></div>';
-    setPageHandler = function (e) {
-      if (e.target.closest('[data-k="mcp-back2"]') || e.target.closest('[data-k="mcp-cancel"]')) { renderMcpDetail(page, m); return; }
-      if (e.target.closest('[data-k="mcp-save"]')) {
-        var spec = {};
-        var command = (page.querySelector('#mcp-command').value || '').trim();
-        var url = (page.querySelector('#mcp-url').value || '').trim();
-        if (command === '' && url === '') { toast('命令与 URL 至少填一项'); return; }
-        if (command !== '') spec.command = command;
-        if (url !== '') spec.url = url;
-        var args = (page.querySelector('#mcp-args').value || '').split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l !== ''; });
-        if (args.length > 0) spec.args = args;
-        var env = {};
-        (page.querySelector('#mcp-env').value || '').split('\n').forEach(function (l) {
-          var eq = l.indexOf('=');
-          if (eq > 0) env[l.slice(0, eq).trim()] = l.slice(eq + 1).trim();
-        });
-        if (Object.keys(env).length > 0) spec.env = env;
-        var to = parseInt(page.querySelector('#mcp-timeout').value, 10);
-        if (Number.isFinite(to) && to > 0) spec.timeoutMs = to;
-        mcpOp(page, { op: 'edit', name: m.name, spec: spec }, function () { pageMcp(page); });
+      if (msg !== '') html += '<div class="sp-note ' + (msgBad ? 'bad' : '') + '">' + (msgBad ? '✕ ' : '✓ ') + esc(msg) + '</div>';
+      html += '<div class="pu-actions"><span class="spacer"></span><button class="btn" data-k="mcp-cancel">取消</button>' +
+        '<button class="btn primary" data-k="mcp-save">' + (isEdit ? '保存' : '添加') + '</button></div>';
+      page.innerHTML = html;
+      bind();
+    }
+    function bind() {
+      var q = function (id) { return page.querySelector('#' + id); };
+      var nameEl = q('mf-name'), cmdEl = q('mf-cmd'), envEl = q('mf-env'), hdEl = q('mf-headers'), cwdEl = q('mf-cwd'), toEl = q('mf-timeout'), jsonEl = q('mf-json');
+      var syncInputs = function () {
+        if (nameEl) draft.name = nameEl.value;
+        if (cmdEl) draft.cmd = cmdEl.value;
+        if (envEl) draft.env = envEl.value;
+        if (hdEl) draft.headers = hdEl.value;
+        if (cwdEl) draft.cwd = cwdEl.value;
+        if (toEl) draft.timeout = toEl.value;
+        if (jsonEl) draft.jsonText = jsonEl.value;
+      };
+      [nameEl, cmdEl, envEl, hdEl, cwdEl, toEl, jsonEl].forEach(function (el) {
+        if (el) el.addEventListener('input', function () { syncInputs(); msg = ''; });
+      });
+      var tr = q('mf-transport');
+      if (tr) tr.addEventListener('change', function () { draft.transport = this.value; paint(); });
+      setPageHandler = function (e) {
+        if (e.target.closest('[data-k="mcp-back"]') || e.target.closest('[data-k="mcp-cancel"]')) { pageMcp(page); return; }
+        if (e.target.closest('[data-k="mtp-manual"]') && tab !== 'manual') {
+          syncInputs();
+          var fromJson = parseMcpJson(draft.jsonText);
+          if (fromJson.error === undefined && fromJson.name !== undefined) applyJsonToDraft(fromJson, draft);
+          tab = 'manual'; msg = ''; paint();
+          return;
+        }
+        if (e.target.closest('[data-k="mtp-json"]') && tab !== 'json') {
+          syncInputs();
+          draft.jsonText = draftToJsonText(draft);
+          tab = 'json'; msg = ''; paint();
+          return;
+        }
+        if (e.target.closest('[data-k="mf-adv"]')) { syncInputs(); advOpen = !advOpen; paint(); return; }
+        if (e.target.closest('[data-k="mcp-save"]')) { syncInputs(); void save(); }
+      };
+      if (jsonEl) { jsonEl.value = draft.jsonText; }
+      if (envEl) envEl.value = draft.env;
+      if (hdEl) hdEl.value = draft.headers;
+      if (cwdEl) cwdEl.value = draft.cwd;
+      if (toEl) toEl.value = draft.timeout;
+    }
+    function save() {
+      var name = draft.name.trim();
+      var spec;
+      if (tab === 'json') {
+        var parsed = parseMcpJson(draft.jsonText);
+        if (parsed.error !== undefined) { msg = parsed.error; msgBad = true; paintNow(); return; }
+        if (!isEdit) name = parsed.name;
+        spec = parsed.spec;
+      } else {
+        if (name === '' || /\s/.test(name)) { msg = '名称必填且不含空白'; msgBad = true; paintNow(); return; }
+        var built = buildMcpSpec(draft);
+        if (built.error !== undefined) { msg = built.error; msgBad = true; paintNow(); return; }
+        spec = built.spec;
       }
-    };
+      A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify(isEdit ? { op: 'edit', name: row.name, spec: spec } : { op: 'add', name: name, spec: spec }) }).then(function (r) {
+        toast(isEdit ? '已保存 ' + name + '——模块图重载后生效' : '已添加 ' + name + '——模块图重载后连接');
+        if (r && r.report && r.report.failed && r.report.failed.length) toast('部分模块重载失败：' + r.report.failed.map(function (f) { return f.name; }).join(', '));
+        pageMcp(page);
+      }, function (err) { msg = err.message; msgBad = true; paintNow(); });
+    }
+    if (isEdit) {
+      pageLoading(page, '读取原配置…');
+      A.fetchJson('/api/settings/mcp/entry?name=' + encodeURIComponent(row.name)).then(function (d) {
+        var v = d.values ?? {};
+        var remote = row.transport === 'http' || row.transport === 'sse';
+        draft.transport = remote ? (v.transport === 'sse' ? 'sse' : 'http') : 'stdio';
+        draft.cmd = remote ? String(v.url ?? '') : [v.command ?? ''].concat(Array.isArray(v.args) ? v.args : []).join(' ').trim();
+        draft.env = Object.keys(v.env ?? {}).join('\n'); /* TUI 拍板：edit 只显键名不显值 */
+        draft.headers = Object.keys(v.headers ?? {}).join('\n');
+        draft.cwd = typeof v.cwd === 'string' ? v.cwd : '';
+        draft.timeout = typeof v.timeoutMs === 'number' ? String(Math.round(v.timeoutMs / 1000)) : '';
+        paint();
+      }, function () { msg = '原配置读取失败（仅 config 来源可改）'; msgBad = true; paint(); });
+    } else {
+      paint();
+    }
   }
 
-  /* ── F7 记忆（GET/POST /api/settings/memory；POST /import——五源探测 + 一次性搬运） ── */
-  var MEM_SOURCE_NAMES = { 'claude-code': 'Claude Code', zcode: 'ZCode', qwen: 'qwen', codex: 'codex', reasonix: 'Reasonix' };
+  /* MCP 窗纯函数（TUI mcp-add-window 同族——splitCommandLine/parseKeyValueLines/parseJsonPaste 的 web 版） */
+  function splitMcpCmd(line) {
+    var out = [], cur = '', q = '';
+    for (var i = 0; i < line.length; i++) {
+      var c = line.charAt(i);
+      if (q) { if (c === q) q = ''; else cur += c; }
+      else if (c === '"' || c === "'") q = c;
+      else if (c === ' ' || c === '\t') { if (cur !== '') { out.push(cur); cur = ''; } }
+      else cur += c;
+    }
+    if (cur !== '') out.push(cur);
+    return q !== '' ? null : out;
+  }
+  function parseMcpKv(text) {
+    var pairs = {};
+    var lines = String(text ?? '').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line === '') continue;
+      var eq = line.indexOf('=');
+      if (eq <= 0) return { error: '环境变量/请求头行须为 KEY=VALUE：' + line };
+      pairs[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    }
+    return { pairs: pairs };
+  }
+  function buildMcpSpec(d) {
+    var timeoutOf = function (spec) {
+      if (d.timeout.trim() === '') return null;
+      var s = Number(d.timeout);
+      if (!Number.isFinite(s) || s <= 0) return '超时须为正数（秒）';
+      spec.timeoutMs = Math.round(s * 1000);
+      return null;
+    };
+    if (d.transport === 'stdio') {
+      var parts = splitMcpCmd(d.cmd.trim());
+      if (parts === null) return { error: '命令行引号未闭合' };
+      if (parts.length === 0) return { error: '命令必填' };
+      var env = parseMcpKv(d.env);
+      if (env.error) return env;
+      var spec = { command: parts[0] };
+      if (parts.length > 1) spec.args = parts.slice(1);
+      if (Object.keys(env.pairs).length > 0) spec.env = env.pairs;
+      if (d.cwd.trim() !== '') spec.cwd = d.cwd.trim();
+      var te = timeoutOf(spec);
+      if (te) return { error: te };
+      return { spec: spec };
+    }
+    if (!/^https?:\/\//i.test(d.cmd.trim())) return { error: 'URL 须以 http:// 或 https:// 开头' };
+    var env2 = parseMcpKv(d.env);
+    if (env2.error) return env2;
+    var hd = parseMcpKv(d.headers);
+    if (hd.error) return hd;
+    var spec2 = { url: d.cmd.trim() };
+    if (d.transport === 'sse') spec2.transport = 'sse';
+    if (Object.keys(hd.pairs).length > 0) spec2.headers = hd.pairs;
+    if (Object.keys(env2.pairs).length > 0) spec2.env = env2.pairs;
+    var te2 = timeoutOf(spec2);
+    if (te2) return { error: te2 };
+    return { spec: spec2 };
+  }
+  function parseMcpJson(text) {
+    var o;
+    try { o = JSON.parse(text); } catch { return { error: 'JSON 解析失败' }; }
+    if (o === null || typeof o !== 'object' || Array.isArray(o)) return { error: 'JSON 须为对象' };
+    if (o.mcpServers !== undefined) {
+      if (o.mcpServers === null || typeof o.mcpServers !== 'object' || Array.isArray(o.mcpServers)) return { error: 'mcpServers 须为对象' };
+      o = o.mcpServers;
+    }
+    var names = Object.keys(o).filter(function (k) { return o[k] !== null && typeof o[k] === 'object'; });
+    if (names.length === 0) return { error: '缺少 server 条目' };
+    if (names.length > 1) return { error: '一次只接受一个 server（收到 ' + names.length + ' 个：' + names.slice(0, 3).join('、') + '）' };
+    var name = names[0];
+    var entry = o[name];
+    var hasCmd = typeof entry.command === 'string' && entry.command !== '';
+    var hasUrl = typeof entry.url === 'string' && entry.url !== '';
+    if (!hasCmd && !hasUrl) return { error: 'server 条目缺 command 或 url' };
+    var spec = {};
+    if (hasUrl) spec.url = entry.url;
+    else {
+      spec.command = entry.command;
+      if (Array.isArray(entry.args) && entry.args.every(function (x) { return typeof x === 'string'; })) spec.args = entry.args;
+    }
+    if (entry.transport === 'sse') spec.transport = 'sse';
+    ['env', 'headers'].forEach(function (k) {
+      var v = entry[k];
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) return;
+      var p = {};
+      Object.keys(v).forEach(function (kk) { if (typeof v[kk] === 'string') p[kk] = v[kk]; });
+      if (Object.keys(p).length > 0) spec[k] = p;
+    });
+    if (typeof entry.cwd === 'string') spec.cwd = entry.cwd;
+    if (typeof entry.timeoutMs === 'number' && entry.timeoutMs > 0) spec.timeoutMs = entry.timeoutMs;
+    return { name: name, spec: spec };
+  }
+  function draftToJsonText(d) {
+    var body = d.transport === 'stdio'
+      ? Object.assign({ command: d.cmd.split(' ')[0] ?? '' }, d.cmd.indexOf(' ') >= 0 ? { args: d.cmd.split(' ').slice(1) } : {})
+      : Object.assign({ url: d.cmd }, d.transport === 'sse' ? { transport: 'sse' } : {});
+    var env = parseMcpKv(d.env).pairs;
+    if (Object.keys(env).length > 0) body.env = env;
+    if (d.transport === 'stdio' && d.cwd !== '') body.cwd = d.cwd;
+    if (d.timeout !== '') { var n = Number(d.timeout); if (Number.isFinite(n) && n > 0) body.timeoutMs = Math.round(n * 1000); }
+    var name = d.name.trim() === '' ? 'my-server' : d.name.trim();
+    var servers = {};
+    servers[name] = body;
+    return JSON.stringify({ mcpServers: servers }, null, 2);
+  }
+  function applyJsonToDraft(parsed, d) {
+    d.name = parsed.name;
+    if (typeof parsed.spec.url === 'string') {
+      d.cmd = parsed.spec.url;
+      d.transport = parsed.spec.transport === 'sse' ? 'sse' : 'http';
+    } else {
+      d.transport = 'stdio';
+      d.cmd = [parsed.spec.command ?? ''].concat(Array.isArray(parsed.spec.args) ? parsed.spec.args : []).join(' ').trim();
+    }
+    d.env = Object.keys(parsed.spec.env ?? {}).map(function (k) { return k + '=' + parsed.spec.env[k]; }).join('\n');
+    d.headers = Object.keys(parsed.spec.headers ?? {}).map(function (k) { return k + '=' + parsed.spec.headers[k]; }).join('\n');
+    d.cwd = typeof parsed.spec.cwd === 'string' ? parsed.spec.cwd : '';
+    d.timeout = typeof parsed.spec.timeoutMs === 'number' ? String(Math.round(parsed.spec.timeoutMs / 1000)) : '';
+  }
+
+
+
+  /* ── F7 记忆（原型 v2：swRow 双开关 + 记忆导入卡——检索 → 勾选 → 导入；数据口 = GET 富 sources
+   *    + POST /import {ids, organize, mode}——与 TUI runMemoryImportChoose 执行段同口径） ── */
+  var MEM_IMPORT = { sources: null, scope: 'current', polish: false, busy: false }; /* 跨页缓存：翻设置页不重复检索 */
+  function swRowHtml(label, desc, on, k, v) {
+    return '<div class="sp-swrow" data-k="' + k + '" data-v="' + esc(v) + '"><span class="sw-txt"><span class="sw-name">' + esc(label) + '</span><span class="sw-sub">' + esc(desc) + '</span></span>' +
+      '<button class="mc-toggle' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" aria-label="' + esc(label) + '"></button></div>';
+  }
+  /** 导入结果人话（peers-settings memoryImportResultText 的 web 面——覆盖/跳过/镜像段拼装）。 */
+  function memResultText(r) {
+    var segs = [];
+    if ((r.imported ?? 0) > 0) segs.push('导入 ' + r.imported + ' 条新记忆');
+    if ((r.updated ?? 0) > 0) segs.push('更新覆盖 ' + r.updated + ' 条旧版');
+    if ((r.skipped ?? 0) > 0) segs.push('源内同名跳过 ' + r.skipped + ' 条');
+    if (segs.length === 0) segs.push('没有新记忆（同标题旧版已覆盖）');
+    if (r.mirror) segs.push('镜像 ' + r.mirror.projects + ' 个项目' + (r.mirror.unresolved > 0 ? '（未归类 ' + r.mirror.unresolved + ' 条）' : ''));
+    return segs.join(' · ') + (MEM_IMPORT.polish ? '（含模型整理）' : '');
+  }
+  function memRowHtml(s) {
+    var cnt = s.imported
+      ? '<span class="mc-count"><span class="ok">✓ 已导入 ' + s.count + ' 条</span></span>'
+      : '<span class="mc-count">' + s.count + ' 条 · ' + ((s.newCount ?? 0) > 0 ? '<span class="new">新 ' + s.newCount + '</span>' : '<span class="zero">新 0</span>') + '</span>';
+    return '<div class="mc-row' + (s.imported ? ' done' : '') + '" data-agent="' + esc(s.id) + '">' +
+      '<input type="checkbox" class="mc-cb" data-cb="' + esc(s.id) + '"' + (s.on ? ' checked' : '') + (s.imported ? ' disabled' : '') + ' aria-label="选择 ' + esc(s.label) + '">' +
+      '<span class="mc-agent">' + esc(s.label) + '</span>' +
+      (s.global ? '<span class="mc-glob">全局</span>' : '') +
+      '<span class="mc-path" title="' + esc(s.dir ?? '') + '">' + esc(s.dir ?? '') + '</span>' + cnt +
+      '<button class="mc-one" data-one="' + esc(s.id) + '"' + (s.imported || MEM_IMPORT.busy ? ' disabled' : '') + '>' + (s.imported ? '已导入' : '导入该源') + '</button></div>';
+  }
+  function memCardHtml() {
+    var mi = MEM_IMPORT;
+    var srcs = mi.sources;
+    var scanning = srcs === null;
+    var status = scanning
+      ? '<span class="mc-spin"></span> 正在检索 Claude Code / ZCode / qwen / codex / Reasonix…'
+      : '<span class="ok">✓</span> 已检索 5 家常用 agent · 发现 ' + (srcs ?? []).length + ' 个记忆源';
+    var list = scanning
+      ? '<div class="mc-empty"><span class="mc-spin mc-spin-inline"></span>正在枚举各 agent 的记忆条目…</div>'
+      : ((srcs ?? []).length ? (srcs ?? []).map(memRowHtml).join('') : '<div class="mc-empty">本机没有检测到可导入的记忆</div>');
+    var sel = (srcs ?? []).filter(function (s) { return s.on && !s.imported; });
+    var selTotal = sel.reduce(function (n, s) { return n + s.count; }, 0);
+    var selNew = sel.reduce(function (n, s) { return n + (s.newCount ?? 0); }, 0);
+    var allOn = (srcs ?? []).length > 0 && (srcs ?? []).every(function (s) { return s.on || s.imported; });
+    return '<div class="mem-card">' +
+      '<div class="mc-head"><span class="mc-title">记忆导入</span><span class="mc-status">' + status + '</span>' +
+      '<button class="mc-refresh" data-k="mc-refresh">重新检索</button></div>' +
+      '<div id="mc-list">' + list + '</div>' +
+      '<div class="mc-opts">' +
+      '<div class="mc-opt"><span class="mc-opt-label">导入范围</span><span class="mc-seg">' +
+      '<button class="seg' + (mi.scope === 'current' ? ' cur' : '') + '" data-k="mc-scope" data-v="current">仅当前项目</button>' +
+      '<button class="seg' + (mi.scope === 'all' ? ' cur' : '') + '" data-k="mc-scope" data-v="all">全部项目（各归各桶）</button></span></div>' +
+      '<div class="mc-opt"><span class="mc-opt-label">用模型整理</span>' +
+      '<button class="mc-toggle' + (mi.polish ? ' on' : '') + '" data-k="mc-polish" role="switch" aria-checked="' + mi.polish + '" aria-label="用模型整理"></button>' +
+      '<span class="mc-opt-hint">逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理</span></div>' +
+      '</div>' +
+      '<div class="mc-foot"><label class="mc-all"><input type="checkbox" class="mc-cb" data-k="mc-all"' + (allOn ? ' checked' : '') + '> 全选</label>' +
+      '<span class="mc-sum">已选 ' + sel.length + ' 个来源 · 共 ' + selTotal + ' 条 · 新 ' + selNew + '</span>' +
+      '<button class="btn primary" data-k="mc-import"' + (sel.length === 0 || mi.busy ? ' disabled' : '') + '>' + (mi.busy ? '导入中…' : '导入选中') + '</button></div>' +
+      '<div class="mc-note">重复导入将覆盖同标题旧版 · 导入本身不耗 token（开启「用模型整理」除外）</div>' +
+      '</div>';
+  }
+  /** 卡片直绑（原型 bindMemCard 同构——每次 outerHTML 换装后重绑；双开关仍走 setPageHandler 委派）。 */
+  function bindMemCard(page) {
+    var card = page.querySelector('.mem-card');
+    if (!card) return;
+    var refresh = function () { var c = page.querySelector('.mem-card'); if (c) { c.outerHTML = memCardHtml(); bindMemCard(page); } };
+    card.querySelector('[data-k="mc-refresh"]').addEventListener('click', function () {
+      MEM_IMPORT.sources = null; /* 回扫描态（转圈） */
+      refresh();
+      A.fetchJson('/api/settings/memory').then(function (d) {
+        MEM_IMPORT.sources = (d.sources ?? []).map(function (s) { return { id: s.id, label: s.label, dir: s.dir, count: s.count, newCount: s.newCount, global: s.global, on: true, imported: false }; });
+        refresh();
+      }, function (err) { toast('检索失败：' + err.message); refresh(); });
+    });
+    card.querySelectorAll('.mc-cb[data-cb]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var s = (MEM_IMPORT.sources ?? []).find(function (x) { return x.id === cb.getAttribute('data-cb'); });
+        if (s) s.on = cb.checked;
+        refresh();
+      });
+    });
+    card.querySelectorAll('.mc-row').forEach(function (row) {
+      row.addEventListener('click', function (e) {
+        if (e.target.closest('.mc-one') || e.target.closest('.mc-cb')) return;
+        var cb = row.querySelector('.mc-cb');
+        if (cb && !cb.disabled) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); }
+      });
+    });
+    card.querySelector('[data-k="mc-all"]').addEventListener('change', function () {
+      var on = this.checked;
+      (MEM_IMPORT.sources ?? []).forEach(function (s) { if (!s.imported) s.on = on; });
+      refresh();
+    });
+    card.querySelectorAll('[data-k="mc-scope"]').forEach(function (seg) {
+      seg.addEventListener('click', function () {
+        MEM_IMPORT.scope = seg.getAttribute('data-v');
+        refresh();
+        toast('导入范围：' + (MEM_IMPORT.scope === 'all' ? '全部项目（各归各桶）' : '仅当前项目'));
+      });
+    });
+    card.querySelector('[data-k="mc-polish"]').addEventListener('click', function () {
+      MEM_IMPORT.polish = !MEM_IMPORT.polish;
+      refresh();
+      toast('用模型整理：' + (MEM_IMPORT.polish ? '开（导入时逐条整理，一次性消耗 token）' : '关'));
+    });
+    card.querySelectorAll('[data-one]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        memImport(page, [btn.getAttribute('data-one')]);
+      });
+    });
+    card.querySelector('[data-k="mc-import"]').addEventListener('click', function () {
+      var ids = (MEM_IMPORT.sources ?? []).filter(function (s) { return s.on && !s.imported; }).map(function (s) { return s.id; });
+      memImport(page, ids);
+    });
+  }
+  /** 执行导入（单源/勾选集同口）：POST {ids, organize, mode} → 标已导 + 人话 toast + 静默重取计数。 */
+  function memImport(page, ids) {
+    var mi = MEM_IMPORT;
+    if (mi.busy || ids.length === 0) return;
+    mi.busy = true;
+    var redraw = function () { var c = page.querySelector('.mem-card'); if (c) { c.outerHTML = memCardHtml(); bindMemCard(page); } };
+    redraw();
+    A.fetchJson('/api/settings/memory/import', { method: 'POST', body: JSON.stringify({ ids: ids, organize: mi.polish, mode: mi.scope }) }).then(function (r) {
+      mi.busy = false;
+      ids.forEach(function (id) { var s = (mi.sources ?? []).find(function (x) { return x.id === id; }); if (s) s.imported = true; });
+      toast(memResultText(r));
+      /* 静默重取计数（newCount 归零实况）——保留 imported 标 */
+      A.fetchJson('/api/settings/memory').then(function (d) {
+        (d.sources ?? []).forEach(function (f) {
+          var s = (mi.sources ?? []).find(function (x) { return x.id === f.id; });
+          if (s) { s.count = f.count; s.newCount = f.newCount; }
+        });
+        redraw();
+      }, function () { redraw(); });
+    }, function (err) {
+      mi.busy = false;
+      toast('导入失败：' + err.message);
+      redraw();
+    });
+  }
   function pageMemory(page) {
     pageLoading(page);
     A.fetchJson('/api/settings/memory').then(function (d) {
       var ws = !!d.workspaceMemory;
       var peers = !!d.sessionPeers;
-      var sources = d.sources ?? [];
-      page.innerHTML = spTitle('记忆', 'MEMORY · tool-peers') +
-        optRow('工作区记忆 —— ' + (ws ? '开 ✓' : '关'), '共享笔记 + 索引注入：本会话写、其他会话读；开启后系统提示带记忆索引，有 token 消耗', ws, 'mem', 'ws') +
-        optRow('会话感知 —— ' + (peers ? '开 ✓' : '关'), '查同伴 / 文件占用：peers 查询对每个活会话按需做一句话总结，有 token 消耗', peers, 'mem', 'peers') +
-        '<div class="pu-item" data-k="mem-import"><span class="pu-check"></span><span class="pi-name">记忆导入</span><span class="pi-desc">从 ' + (sources.length > 0 ? sources.map(function (s) { return MEM_SOURCE_NAMES[s] ?? s; }).join(' / ') : 'Claude Code / ZCode / qwen / codex / Reasonix') + ' 搬入既有记忆——不耗 token' + (sources.length > 0 ? '（检出 ' + sources.length + ' 家有货）' : '（本机未检出可导入源）') + '</span></div>' +
-        '<div class="sp-note">浏览窗在 更多 ▸ 模块总览（tool-peers 启动器）。</div>';
-      setPageHandler = function (e) {
-        if (e.target.closest('[data-v="ws"]')) {
-          A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'workspaceMemory', value: !ws }) }).then(function () {
-            toast('工作区记忆：' + (!ws ? '开' : '关') + '（已写 [tool-peers] workspaceMemory）');
-            pageMemory(page);
-          }, function (err) { toast('设置失败：' + err.message); });
-        } else if (e.target.closest('[data-v="peers"]')) {
-          A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'sessionPeers', value: !peers }) }).then(function () {
-            toast('会话感知：' + (!peers ? '开' : '关') + '（已写 [tool-peers] sessionPeers）');
-            pageMemory(page);
-          }, function (err) { toast('设置失败：' + err.message); });
-        } else if (e.target.closest('[data-k="mem-import"]')) {
-          toast('正在导入…（标题精确去重，重复导入自动跳过）');
-          A.fetchJson('/api/settings/memory/import', { method: 'POST', body: '{}' }).then(function (r) {
-            var n = r && typeof r.imported === 'number' ? r.imported : 0;
-            toast(n > 0 ? '已导入 ' + n + ' 条记忆（当前项目桶）' : '本机没有检测到可导入的新记忆——支持 Claude Code / ZCode / qwen / codex / Reasonix 五家');
-            pageMemory(page);
-          }, function (err) { toast('导入失败：' + err.message); });
-        }
-      };
+      MEM_IMPORT.sources = (d.sources ?? []).map(function (s) { return { id: s.id, label: s.label, dir: s.dir, count: s.count, newCount: s.newCount, global: s.global, on: true, imported: false }; });
+      renderMemPage(page, ws, peers);
     }, function (err) { pageLoadError(page, err); });
   }
+  function renderMemPage(page, ws, peers) {
+    page.innerHTML = spTitle('记忆', 'MEMORY · tool-peers') +
+      swRowHtml('工作区记忆', '共享笔记 + 索引注入：本会话写、其他会话读；开启后系统提示带记忆索引，有 token 消耗', ws, 'mem', 'ws') +
+      swRowHtml('会话感知', '查同伴 / 文件占用：peers 查询对每个活会话按需做一句话总结，有 token 消耗', peers, 'mem', 'peers') +
+      memCardHtml() +
+      '<div class="sp-note">浏览窗在 更多 ▸ 模块总览（tool-peers 启动器）。</div>';
+    setPageHandler = function (e) {
+      if (e.target.closest('[data-v="ws"]')) {
+        A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'workspaceMemory', value: !ws }) }).then(function () {
+          toast('工作区记忆：' + (!ws ? '开' : '关') + '（已写 [tool-peers] workspaceMemory）');
+          renderMemPage(page, !ws, peers);
+        }, function (err) { toast('设置失败：' + err.message); });
+      } else if (e.target.closest('[data-v="peers"]')) {
+        A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'sessionPeers', value: !peers }) }).then(function () {
+          toast('会话感知：' + (!peers ? '开' : '关') + '（已写 [tool-peers] sessionPeers）');
+          renderMemPage(page, ws, !peers);
+        }, function (err) { toast('设置失败：' + err.message); });
+      }
+    };
+    bindMemCard(page);
+  }
 
-  /* ── F8 切换语言（GET/POST /api/settings/locale——作用于会话侧 t() 与新会话，页面自身不切） ── */
-  function pageLocale(page) {
+  /* ── F1b 外观（原型 v2：主题卡 + 明暗 + 整体字号 + 语言——原「切换语言」页并入；语言写 config
+   *    会话侧即时生效，页面自身不切〔web 中文直写〕；FONT_SCALES/applyFontScale/applyTheme 在顶栏
+   *    主题区块同位声明——boot 与本页共用）。 ── */
+  var LANG_EN = { 'zh-CN': 'Chinese Simplified', 'zh-TW': 'Chinese Traditional', 'en-US': 'English', en: 'English', ja: 'Japanese', ko: 'Korean', de: 'German', fr: 'French', es: 'Spanish' };
+  function langRowHtml(l, cur, pack) {
+    return '<div class="ap-lang' + (cur ? ' cur' : '') + ' ap-fade" data-k="ap-lang" data-v="' + esc(l.tag) + '" role="radio" aria-checked="' + cur + '">' +
+      '<span class="ap-radio"></span>' +
+      '<span class="al-txt"><span class="al-native">' + esc(l.label) + '</span><span class="al-label">' + esc(LANG_EN[l.tag] ?? l.tag) + '</span></span>' +
+      (pack ? '<span class="al-tag pack">语言包</span>' : '<span class="al-tag">内置</span>') +
+      (cur ? '<span class="al-cur">当前</span>' : '') + '</div>';
+  }
+  function pageAppearance(page) {
     pageLoading(page);
     A.fetchJson('/api/settings/locale').then(function (d) {
       var current = String(d.current ?? '');
       var locales = d.locales ?? [];
-      page.innerHTML = spTitle('切换语言', 'LOCALE') +
-        (current === '' ? optRow('随系统（未配置）', '', true, 'locale', '') : '') +
-        locales.map(function (l) {
-          return optRow(l.label + (l.module ? '（语言包扩展档）' : ''), '', current === l.tag, 'locale', l.tag);
-        }).join('') +
-        '<div class="sp-note">切换写入 config 即时生效（会话侧 t() 与新会话）——页面自身不切语言（web 一期中文直写）。</div>';
+      var builtins = locales.filter(function (l) { return !l.module; });
+      var packs = locales.filter(function (l) { return !!l.module; });
+      var light = document.body.classList.contains('light');
+      var fs = fontScaleIdx;
+      page.innerHTML = spTitle('外观', 'APPEARANCE') +
+        subHeadT('主题', 1) +
+        '<div class="ap-themes">' +
+          '<div class="ap-theme cur"><span class="at-prev"><span class="half d"><i></i></span><span class="half l"><i></i></span></span>' +
+          '<span class="at-name">连山<span class="at-en">LIANSHAN</span><span class="at-cur">当前主题</span></span>' +
+          '<span class="at-desc">每个主题含深色 / 浅色两套模式——用下方「明暗模式」切换</span></div>' +
+          '<div class="ap-theme ghost">更多主题即将到来</div>' +
+        '</div>' +
+        subHeadT('明暗模式', 1) +
+        '<div class="sp-swrow static"><span class="sw-txt"><span class="sw-name">界面明暗</span>' +
+          '<span class="sw-sub">与主界面右上角 ☀ / ☾ 按钮联动，即时生效并记忆</span></span>' +
+          '<span class="mc-seg">' +
+          '<button class="seg' + (!light ? ' cur' : '') + '" data-k="ap-mode" data-v="dark">深色</button>' +
+          '<button class="seg' + (light ? ' cur' : '') + '" data-k="ap-mode" data-v="light">浅色</button>' +
+          '</span></div>' +
+        subHeadT('整体字号', 1) +
+        '<div class="sp-swrow static"><span class="sw-txt"><span class="sw-name">界面字号</span>' +
+          '<span class="sw-sub" id="ap-fs-sub">当前：' + FONT_SCALES[fs].name + '（' + Math.round(FONT_SCALES[fs].scale * 100) + '%）· 仅放大界面文字——框架与布局尺寸不变</span></span>' +
+          '<span class="mc-seg">' + FONT_SCALES.map(function (f, i) {
+            return '<button class="seg' + (i === fs ? ' cur' : '') + '" data-k="ap-scale" data-v="' + i + '">' + f.name + '</button>';
+          }).join('') + '</span></div>' +
+        subHeadT('语言', 1) +
+        '<div id="ap-langs">' +
+        (current === '' ? '<div class="ap-lang cur" data-k="ap-lang" data-v="" role="radio" aria-checked="true"><span class="ap-radio"></span><span class="al-txt"><span class="al-native">随系统</span><span class="al-label">跟随操作系统语言</span></span><span class="al-cur">当前</span></div>' : '') +
+        builtins.map(function (l) { return langRowHtml(l, current === l.tag, false); }).join('') +
+        '</div>' +
+        (packs.length > 0 ? '<div id="ap-langpack">' + packs.map(function (l) { return langRowHtml(l, current === l.tag, true); }).join('') + '</div>' : '') +
+        '<div class="sp-note">切换写入 config 即时生效（会话侧 t() 与新会话）——页面自身不切语言；语言包由 multilang 模块挂载后在此列出。</div>';
       setPageHandler = function (e) {
-        var row = e.target.closest('[data-k="locale"]');
-        if (!row) return;
-        var tag = row.getAttribute('data-v');
-        if (tag === current) { toast('当前已是该语言'); return; }
-        A.fetchJson('/api/settings/locale', { method: 'POST', body: JSON.stringify({ tag: tag }) }).then(function () {
-          toast('语言已切换（已写入 config，新会话生效）——页面自身不切语言');
-          current = tag;
-          renderSetPage(7);
-        }, function (err) { toast(err.status === 409 ? '暂无当前会话——语言切换需要会话承载（先新建或选择一个会话）' : '切换失败：' + err.message); });
+        var t;
+        if ((t = e.target.closest('[data-k="ap-mode"]'))) {
+          var toLight = t.getAttribute('data-v') === 'light';
+          if (toLight !== document.body.classList.contains('light')) {
+            applyTheme(toLight);
+            toast(toLight ? '已切换浅色模式——连山 · 宣纸' : '已切换深色模式——连山 · 玄墨');
+          }
+          var seg1 = t.parentNode.querySelectorAll('.seg');
+          seg1.forEach(function (s) { s.classList.toggle('cur', s === t); });
+          return;
+        }
+        if ((t = e.target.closest('[data-k="ap-scale"]'))) {
+          var i = parseInt(t.getAttribute('data-v'), 10);
+          var changed = i !== fontScaleIdx;
+          applyFontScale(i);
+          t.parentNode.querySelectorAll('.seg').forEach(function (s) { s.classList.toggle('cur', s === t); });
+          var sub = page.querySelector('#ap-fs-sub');
+          if (sub) sub.textContent = '当前：' + FONT_SCALES[i].name + '（' + Math.round(FONT_SCALES[i].scale * 100) + '%）· 仅放大界面文字——框架与布局尺寸不变';
+          if (changed) toast('字号已调整为「' + FONT_SCALES[i].name + '」（' + Math.round(FONT_SCALES[i].scale * 100) + '%）');
+          return;
+        }
+        if ((t = e.target.closest('[data-k="ap-lang"]'))) {
+          var tag = t.getAttribute('data-v');
+          if (tag === current) { toast('当前已是该语言'); return; }
+          A.fetchJson('/api/settings/locale', { method: 'POST', body: JSON.stringify({ tag: tag }) }).then(function () {
+            toast('语言已切换（已写入 config，新会话生效）——页面自身不切语言');
+            pageAppearance(page);
+          }, function (err) { toast(err.status === 409 ? '暂无当前会话——语言切换需要会话承载（先新建或选择一个会话）' : '切换失败：' + err.message); });
+        }
       };
     }, function (err) { pageLoadError(page, err); });
   }
@@ -1665,7 +2284,7 @@ function $(id) { return document.getElementById(id); }
         var v = row.getAttribute('data-v') === '1';
         A.fetchJson('/api/settings/update', { method: 'POST', body: JSON.stringify({ enabled: v }) }).then(function () {
           toast(v ? '已开启更新检查——下次启动生效' : '已关闭更新检查——横幅与自动检测停用，orosus upgrade 仍可用');
-          renderSetPage(8);
+          renderSetPage(9); /* 更新检查页（外观插位后 8→9） */
         }, function (err) { toast('设置失败：' + err.message); });
       };
     }, function (err) { pageLoadError(page, err); });
@@ -1772,7 +2391,7 @@ function $(id) { return document.getElementById(id); }
         ['更多 ▸ 钩子注入', '本会话钩子注入条目列表（TUI 的 Ctrl+H——浏览器键位冲突，故入顶栏）'],
       ]],
       ['界面与鼠标操作（web 版）', [
-        ['左侧会话栏', '顶部「＋ 新会话」；置顶（行悬停 📌）与项目分组；当前会话青玉高亮「当前」；「已置顶」行 ⇤ 收起为窄轨'],
+        ['左侧会话栏', '顶部「＋ 新会话」；置顶（行悬停 📌，有置顶才显「已置顶」区）与项目分组；当前会话青玉高亮「当前」；顶部 ⇤ 收起为窄轨'],
         ['会话行', '悬停出 置顶/归档 图标钮；右键 = 分叉/置顶/归档/重命名/复制 ID/导出/删除（删除均有确认弹窗）；每组最多 5 条，「∨ 展开更多」每次多 5 条'],
         ['会话行状态', '进行中显示圆弧转圈动画；完成后未选中 → 绿点（待读）/ 红点（失败），选中即消；红绿点持久化——退服务重开仍在'],
         ['右侧状态栏', '页签点击切卡；右上角 ⇥ 收起为窄轨（窄轨上 ⇤ 展开）'],
@@ -1783,7 +2402,7 @@ function $(id) { return document.getElementById(id); }
         ['输入框（多行）', '按钮全部在框内：左下 文件+权限，右下 模型/思考/发送键；最多 6 行文字（超出框内滚动）'],
         ['输入框左上 📁', '切换工作目录——仅空会话可切（已有消息时锁定）'],
         ['流区分页', '消息过多时顶部出现「↑ 加载更早消息」，点击逐页展开'],
-        ['用户消息气泡', '居右、宽 ≤80%；超过 5 行半自动收拢可展开；悬停出「⧉ 复制」（✎ 编辑钮已隐藏——撤回能力未落地）；图片直接预览（80×57，最多 6 张）'],
+        ['用户消息气泡', '居右、宽 ≤80%；超过 5 行半自动收拢可展开；悬停出「⧉ 复制」（✎ 编辑钮已隐藏——撤回能力未落地）；图片方形预览（64×64，最多 6 张）'],
         ['完成的任务', '悬停所在轮出「⧉ 复制 / ⑂ 分支」+ 完成时间；生成中显示「工作中 N 秒」'],
         ['思考块 / diff', '点击块头部或「还有 N 行」展开收起'],
         ['模块行', '点击挂载/卸载；锁定行点按显示原因'],
@@ -2020,13 +2639,14 @@ function $(id) { return document.getElementById(id); }
     if (!row) return;
     var name = row.getAttribute('data-conn');
     var st = row.getAttribute('data-cstate');
-    if (st === 'failed') {
+    /* 走查五轮：idle（已配置未启动）与失败同路径——点击即拉起（懒启动件，ops start） */
+    if (st === 'failed' || st === 'idle') {
       A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify({ op: 'start', name: name }) }).then(function (r) {
         if (r && r.starting) toast('正在启动 ' + name + '（首次可能需要下载，最长 60 秒）…');
         else toast('已触发启动');
       }, function (err) { toast(err.message); });
     } else if (st === 'pending-confirm') {
-      openSettingsRoot(5);
+      openSettingsRoot(6); /* MCP 页（外观页插位后 idx 5→6） */
       window.setTimeout(function () {
         var page = document.getElementById('set-page');
         if (!page) return;
@@ -2036,6 +2656,19 @@ function $(id) { return document.getElementById(id); }
         });
       }, 50);
     }
+  });
+
+  /* E4 模块插拔交互（2026-10-12 走查五轮落地——TUI fullapp-keys.ts toggleModule 同款语义）：
+   * 行点击 → POST toggle 缺省翻转（server 侧闭包：卸载带走硬依赖者/挂载自动补提供者——§3 :233）；
+   * 锁定行本地示因不落请求（TUI 同款）；busy 期 409 文案直显（fetchJson 以 body.error 为 message）。 */
+  $('mod-list').addEventListener('click', function (e) {
+    var row = e.target.closest('[data-mod]');
+    if (!row || !currentSid) return;
+    var name = row.getAttribute('data-mod');
+    var m = (lastModules || []).find(function (x) { return x.name === name; });
+    if (m && m.locked) { toast(m.lockedReason ?? '已锁定——不可插拔'); return; }
+    A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/modules/' + encodeURIComponent(name) + '/toggle', { method: 'POST', body: JSON.stringify({}) })
+      .then(function (r) { if (r && r.toast) toast(r.toast); }, function (err) { toast(err.message); });
   });
 
   /* ═══════════ 当前会话视图（appbar 标题 / 流区骨架态 / SSE 状态机） ═══════════ */
@@ -2079,6 +2712,7 @@ function $(id) { return document.getElementById(id); }
       tail: tailEl,
       welcome: welcomeEl,
       pgMore: pgMoreEl,
+      toBottom: $('to-bottom'),
       onFork: function (fromSid) {
         createSession({ forkFrom: fromSid }).then(function (r) {
           if (r) toast('已分叉出新会话——继承全部上下文');
@@ -2086,6 +2720,7 @@ function $(id) { return document.getElementById(id); }
       },
       onCopy: copyText,
       onUserSeen: syncCwdGate,
+      onAgentOpen: function (id) { UI.openSubagent(id); }, /* spawn 组卡行点击 → 回放窗直进 */
       cwdOf: function () { return sessionCwd; },
     });
     renderSidebar();
@@ -2105,14 +2740,18 @@ function $(id) { return document.getElementById(id); }
           if (ev.type === 'session/label' && typeof ev.label === 'string') setSessionTitle(ev.label, sid);
           render.ingest([ev]);
         },
-        chunk: function (d) { if (currentSid === sid && d) render.chunk(d.text); },
+        /* 走查六轮：think 帧分路折叠思考块（reasoning 增量不再裸流正文——render.thinkChunk） */
+        chunk: function (d) { if (currentSid === sid && d) { if (d.think) render.thinkChunk(d.text); else render.chunk(d.text); } },
         queue: function (d) { if (currentSid === sid) renderQueue(d && d.items); },
         phase: function (d) {
           if (currentSid !== sid || !d) return;
+          var wasBusy = busy;
           busy = !!d.busy;
           render.setPhase(d.phase, d.busy);
           if (!busy) render.setCompacting(false); /* 压缩窗收口兜底（turn/compaction 事件为主信号） */
           syncSendBtn();
+          /* 相位落定即刷左栏（2026-10-12 走查修——行转圈原本要等下一轮 2s 轮询才收口） */
+          if (wasBusy && !busy) void pollSessions();
           if (d.phase === 'error') sactSet(sid, 'failed');
         },
         interaction: function (frame) {
@@ -2157,7 +2796,6 @@ function $(id) { return document.getElementById(id); }
   /* 面板渲染（2s 轮询 + 签名门——数据不变 DOM 零触碰；运行时间跳秒本地自增） */
   var TICK = { pending: '○', active: '◐', done: '✓' };
   var MOD_STATE_TEXT = { mounted: '已挂载', loading: '挂载中', off: '未挂载', pendingConfirm: '待确认' };
-  var CONN_STATE_TEXT = { connected: '已连接', idle: '待启动', failed: '失败', 'pending-confirm': '未确认', disabled: '已停用' };
   var kvSig = '', modSig = '', connSig = '', peerSig = '', todoSig = '';
   /* 模块挂载 / 网络·MCP 连接两列表统一分页（用户走查口径：运行状态页不出滚动条——
    *  列表区 flex 界高 overflow:hidden，超幅走页脚分页器；页大小量高自适应视口） */
@@ -2192,9 +2830,12 @@ function $(id) { return document.getElementById(id); }
   }
   function connRowHtml(c) {
     var cls = c.state === 'connected' ? 'mounted' : c.state === 'failed' ? 'failed' : c.state === 'pending-confirm' ? 'failed pending' : 'off';
-    var dot = c.state === 'connected' ? '●' : (c.state === 'failed' || c.state === 'pending-confirm') ? '●' : '○';
-    var right = c.state === 'connected' && c.connectMs !== undefined ? c.connectMs + 'ms' : CONN_STATE_TEXT[c.state] ?? c.state;
-    return '<div class="mod ' + cls + '" data-conn="' + esc(c.name) + '" data-cstate="' + esc(c.state) + '" title="' + esc(c.desc) + '"><span class="dot">' + dot + '</span><span class="mname">' + esc(c.name) + '</span><span class="mdesc">' + esc(c.desc) + '</span><span class="mstate">' + esc(right) + '</span></div>';
+    /* 2026-10-12 走查二轮：状态文字退役——绿=已连接（尾注连接耗时）/红=失败·未确认/灰=停用·待启动 */
+    var dot = c.state === 'connected' ? '<span class="mdot ok">●</span>'
+      : (c.state === 'failed' || c.state === 'pending-confirm') ? '<span class="mdot bad">●</span>'
+      : '<span class="mdot off">○</span>';
+    var right = c.state === 'connected' && c.connectMs !== undefined ? c.connectMs + 'ms' : '';
+    return '<div class="mod ' + cls + '" data-conn="' + esc(c.name) + '" data-cstate="' + esc(c.state) + '" title="' + esc(c.desc) + '">' + dot + '<span class="mname">' + esc(c.name) + '</span><span class="mdesc">' + esc(c.desc) + '</span><span class="mstate">' + esc(right) + '</span></div>';
   }
   function renderModPage() {
     modSize = listPageSize(modListEl, modSize);
@@ -2290,13 +2931,17 @@ function $(id) { return document.getElementById(id); }
         if (peers.self) html2 += peerHtml(peers.self, true);
         html2 += '<hr class="side-sep" /><div class="subhead"><span>活跃会话</span><span class="en">PEERS</span></div>';
         (peers.list ?? []).forEach(function (p) { html2 += peerHtml(p, false); });
+        if (!(peers.list ?? []).length) html2 += '<div class="panel-hint">（无其它进程——同项目 TUI 会话运行时会出现在这里）</div>';
       } else {
         html2 = '<div class="panel-hint">（暂无协同数据）</div>';
       }
       $('peer-list').innerHTML = html2;
     }
-    /* 任务清单（E7）+ 悬浮卡计数同步（E8） */
+    /* 任务清单（E7）+ 悬浮卡计数同步（E8）。空态进度条显隐在签名门外——空清单签名恒等于
+     *  初值（''），门内永不会跑（走查三轮：0/0 时空进度条仍显示的根因）。 */
     var tasks = data.tasks ?? [];
+    var tp = document.querySelector('.todo-progress');
+    if (tp) tp.classList.toggle('empty', tasks.length === 0);
     var ts = tasks.map(function (t) { return t.text + ':' + t.state; }).join('|');
     if (ts !== todoSig) {
       todoSig = ts;
@@ -2323,7 +2968,7 @@ function $(id) { return document.getElementById(id); }
   /* panel 轮询（2s，与 sessions 同拍错峰 1s——api.js addPoll） */
   function fetchPanel(sid) {
     if (sid === null || sid === undefined) return Promise.resolve();
-    return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/panel').then(function (data) {
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/panel', { timeoutMs: 9000 }).then(function (data) {
       panelInfo = { data: data, fetchedAt: Date.now() };
       A.rafFlush(function () { renderPanel(data); });
     }, function () { /* 面板拉取失败静默（断连面由 SSE 看门狗管） */ });
@@ -2371,8 +3016,48 @@ function $(id) { return document.getElementById(id); }
       /* 轮询节拍器：sessions 2s / panel 2s 错峰 1s（自创值登记口径） */
       A.addPoll(2000, 0, pollSessions);
       A.addPoll(2000, 1000, function () { return fetchPanel(currentSid); });
+      /* spawn 组卡名册轮询（走查六轮）：页面有组卡行才取 /tasks——行态/标题校正 + 头行聚合 */
+      A.addPoll(2000, 500, pollSpawnGroups);
     }, function () {
       A.showDisconnect('lost');
+    });
+  }
+
+  /* ── spawn 组卡状态轮询（render.js 零 fetch 纪律的配套面——DOM 钩子驱动） ── */
+  var SPAWN_ST = { queued: ['排队中', 'st-run'], running: ['运行中', 'st-run'], completed: ['已完成', 'st-ok'], failed: ['失败', 'st-err'] };
+  function pollSpawnGroups() {
+    if (!currentSid || document.querySelector('.spawn-group .sg-row') === null) return undefined;
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/tasks', { timeoutMs: 9000 }).then(function (r) {
+      updateSpawnGroups(r.rows ?? []);
+    }, function () { /* 静默——下一拍再试 */ });
+  }
+  function updateSpawnGroups(rows) {
+    document.querySelectorAll('.spawn-group').forEach(function (g) {
+      var n = 0, running = 0, done = 0, failed = 0;
+      g.querySelectorAll('.sg-row[data-agent-id]').forEach(function (row) {
+        n++;
+        var id = row.getAttribute('data-agent-id');
+        var e = rows.find(function (x) { return x.id === id; });
+        if (!e) return;
+        var st = SPAWN_ST[e.status] ?? [String(e.status), 'st-run'];
+        var stEl = row.querySelector('.sg-st');
+        if (stEl) {
+          stEl.textContent = st[0] + (e.pendingApproval ? ' · 等审批' : '');
+          stEl.className = 'sg-st ' + st[1] + (e.pendingApproval ? ' st-warn' : '');
+        }
+        if (e.status === 'running' || e.status === 'queued') running++;
+        else if (e.status === 'completed') done++;
+        else if (e.status === 'failed') failed++;
+      });
+      var sum = g.querySelector('.sg-sum');
+      if (sum && n > 0) {
+        /* 头行聚合（TUI agentGroupLines 同款四态）：活动>0 运行中 M；全成 已完成；全败 失败；混合 M/N 完成 */
+        sum.textContent = '· ' + n + ' 个任务 · ' +
+          (running > 0 ? '运行中 ' + running + (done + failed > 0 ? ' · 已终 ' + (done + failed) : '')
+            : failed === 0 ? '全部完成'
+            : done === 0 ? '全部失败'
+            : done + '/' + n + ' 完成');
+      }
     });
   }
   /* 全局 Esc（输入框外）：确认层/居中弹窗让位（T15 处理器管）→ 浮层 → 悬浮卡 → 双击停止 */

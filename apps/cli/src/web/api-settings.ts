@@ -48,8 +48,8 @@ import type { CapabilityKey } from "@orosus/contracts/module";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { persistVisionModel, readVisionModel } from "@orosus/tool-media";
 import type { McpCatalogRow } from "@orosus/mcp";
-import { detectSources, findGitRoot, importNotes, memoryBucketKey, readSourceNotes, type PeerHomes } from "@orosus/tool-peers";
-import { runMcpCommand, defaultMcpCmdDeps, type McpCmdDeps } from "../mcp-cmd.ts";
+import { detectSources, findGitRoot, importMirror, importNotesProgressive, memoryBucketKey, readSourceNotes, scanMirrorSources, type LlmStream, type PeerHomes } from "@orosus/tool-peers";
+import { runMcpCommand, defaultMcpCmdDeps, configuredServers, type McpCmdDeps } from "../mcp-cmd.ts";
 import { configFace, configFacePaths } from "../config-face.ts";
 import { dirUsage } from "../tuicfg.ts";
 import { lastUsageOf } from "../usage-text.ts";
@@ -166,6 +166,25 @@ registerRoute("GET", "/api/settings/mcp", async (_req, res) => {
   sendJson(res, 200, { ok: true, servers });
 });
 
+/** GET /api/settings/mcp/entry?name= → {ok, values}（2026-10-12 走查：修改窗预填的原始配置值——
+ *  catalog 行不含 env/timeout 等高级字段，TUI 编辑窗读原始表同源；仅 config 来源条目（预装/项目
+ *  不可改，无预填面）；不在配置 = 404）。 */
+registerRoute("GET", "/api/settings/mcp/entry", (req, res) => {
+  const url = req.url ?? "";
+  const qi = url.indexOf("?");
+  const name = new URLSearchParams(qi >= 0 ? url.slice(qi + 1) : "").get("name") ?? "";
+  if (name === "") {
+    sendJson(res, 400, { ok: false, error: "name 必填" });
+    return;
+  }
+  const values = configuredServers(defaultMcpCmdDeps().configPath())[name];
+  if (values === undefined) {
+    notFound(res);
+    return;
+  }
+  sendJson(res, 200, { ok: true, values });
+});
+
 /** op 全集（§3 :255 枚举 + start——E5 失败重连/F6「启动」按钮同口，方案 §3 表成文在先）。 */
 const MCP_OPS = new Set(["on", "off", "trust", "remove", "add", "edit", "start"]);
 
@@ -233,6 +252,26 @@ registerRoute("POST", "/api/settings/mcp/ops", async (req, res) => {
   }
 
   const deps = await webMcpDeps(anchor?.h);
+
+  // add 结构化形态（2026-10-12 走查：TUI 添加窗 Alt+N 同款值对象——手动表单/JSON 粘贴两入口共用；
+  // 串形 spec（命令行/URL）走下方 mcp-cmd add 透传不变）。重名守卫 + checkEditSpec 全量校验 + 直写
+  // writeNestedTable（TUI mcp-add-window save 同款写器）。
+  if (op === "add" && typeof body.spec === "object" && body.spec !== null && !Array.isArray(body.spec)) {
+    const configPath = deps.configPath();
+    if (name in configuredServers(configPath)) {
+      sendJson(res, 400, { ok: false, error: t("mcp.add.dup", { name }) });
+      return;
+    }
+    const checked = checkEditSpec(body.spec as Record<string, unknown>);
+    if (!checked.ok) {
+      sendJson(res, 400, { ok: false, error: checked.error });
+      return;
+    }
+    writeNestedTable(configPath, `mcp.servers.${name}`, checked.values);
+    const report = await reloadAfterWrite(anchor);
+    sendJson(res, 200, { ok: true, text: t("mcp.add.written", { name, path: configPath }), ...(report !== undefined ? { report } : {}) });
+    return;
+  }
 
   if (op === "edit") {
     if (name === "") {
@@ -755,15 +794,25 @@ const memorySourceHomes = (): PeerHomes => {
 /** 当前项目记忆桶（main.ts:515 currentMemoryDir 同源——memoryBucketKey 键目录下的 memory/）。 */
 const currentMemoryDir = (): string => join(orosusHome(), "memories", "projects", memoryBucketKey(webCwd()), "memory");
 
-/** GET /api/settings/memory → {ok, workspaceMemory, sessionPeers, sources}（§3 :256，F7）：双开关读
- *  [tool-peers] 两键（缺键 = 关）+ 五源探测（有货才列——runMemoryImportChoose 同口径 count>0；
- *  id 集 = claude-code/zcode/qwen/codex/reasonix）。 */
+/** GET /api/settings/memory → {ok, workspaceMemory, sessionPeers, sources}（§3 :256，F7——2026-10-12
+ *  原型 v2 记忆导入卡：sources 富形行）：双开关读 [tool-peers] 两键（缺键 = 关）+ 五源探测（有货才列
+ *  ——runMemoryImportChoose 同口径 count>0；destDir 传当前项目桶 → newCount = 已导差集〔D7〕+
+ *  codex global 标注〔G2〕；dir 缩 ~ 前缀显示——行 path 位直投）。id 集 = claude-code/zcode/qwen/
+ *  codex/reasonix。 */
 registerRoute("GET", "/api/settings/memory", async (_req, res) => {
   const cfg = readPeersConfig();
   const cwd = webCwd();
-  const sources = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd)
+  const home = join(homedir()); // join 归一化分隔符——env 形态（正/反斜杠）不扰 startsWith 比对
+  const sources = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd, currentMemoryDir())
     .filter((s) => s.count > 0)
-    .map((s) => s.id);
+    .map((s) => ({
+      id: s.id,
+      label: s.label,
+      dir: s.dir === undefined ? "" : s.dir.startsWith(home) ? "~" + s.dir.slice(home.length) : s.dir,
+      count: s.count,
+      ...(s.newCount !== undefined ? { newCount: s.newCount } : {}),
+      ...(s.global === true ? { global: true } : {}),
+    }));
   sendJson(res, 200, { ok: true, workspaceMemory: cfg.workspaceMemory, sessionPeers: cfg.sessionPeers, sources });
 });
 
@@ -789,14 +838,90 @@ registerRoute("POST", "/api/settings/memory", async (req, res) => {
   sendJson(res, 200, { ok: true, ...(report !== undefined ? { report } : {}) });
 });
 
-/** POST /api/settings/memory/import {} → {ok, imported}（§3 :258，F7）：一次性搬运（D18——CLI
- *  main.ts:543-568 current 模式同源接线）：detectSources → 有货源 readSourceNotes 汇总 →
- *  importNotes 落当前项目桶（标题精确去重、逐条写文件、索引末次重建）。organize = false（D20 缺省
- *  关——web 导入不耗 token；整理通道属 TUI 全屏流，web 一期不做）。无源 → imported:0 零落盘。 */
-registerRoute("POST", "/api/settings/memory/import", async (_req, res) => {
+/** POST /api/settings/memory/import {ids?, organize?, mode?} → {ok, imported, updated, skipped, merged,
+ *  mirror?}（§3 :258，F7——2026-10-12 原型 v2 记忆导入卡升级：单源/勾选集/全部 + 范围档 + 模型整理）。
+ *  链路 = main.ts importWithOrganize 同源接线（TUI runMemoryImportChoose 执行段同口径）：current 档
+ *  readSourceNotes 汇总 → importNotesProgressive 落当前项目桶（标题判重、重复覆盖更新）；all 档四家
+ *  走镜像各归各桶（scanMirrorSources + importMirror）、codex 仍导当前桶（G12 projects 不 +1）。
+ *  organize = true 逐条模型整理（llm 取锚会话 h.llm()——无活会话 400；D20 web 闸门随原型 v2 开）。
+ *  body 可空（{} = 全部源 · current · 不整理——旧消费方兼容档）。无源 → 全零零落盘。 */
+registerRoute("POST", "/api/settings/memory/import", async (req, res) => {
+  const b = await readSettingsBody(req);
+  if (b.failed) {
+    sendJson(res, b.status, { ok: false, error: b.msg });
+    return;
+  }
   const cwd = webCwd();
-  const srcs = detectSources(memorySourceHomes(), findGitRoot(cwd), cwd).filter((s) => s.count > 0);
-  const all = srcs.flatMap((s) => readSourceNotes(s.dir));
-  const r = importNotes(currentMemoryDir(), all);
-  sendJson(res, 200, { ok: true, imported: r.imported });
+  const homes = memorySourceHomes();
+  const srcs = detectSources(homes, findGitRoot(cwd), cwd).filter((s) => s.count > 0);
+  const validIds = new Set(srcs.map((s) => s.id));
+  let ids = srcs.map((s) => s.id);
+  let organize = false;
+  let mode: "current" | "all" = "current";
+  if (b.body["ids"] !== undefined) {
+    if (!Array.isArray(b.body["ids"]) || !b.body["ids"].every((x) => typeof x === "string")) {
+      sendJson(res, 400, { ok: false, error: "ids 必须为字符串数组" });
+      return;
+    }
+    ids = b.body["ids"] as string[];
+    if (!ids.every((id) => validIds.has(id))) {
+      sendJson(res, 400, { ok: false, error: "ids 含未知或无货的记忆源" });
+      return;
+    }
+  }
+  if (b.body["organize"] !== undefined) {
+    if (typeof b.body["organize"] !== "boolean") {
+      sendJson(res, 400, { ok: false, error: "organize 必须为布尔值" });
+      return;
+    }
+    organize = b.body["organize"];
+  }
+  if (b.body["mode"] !== undefined) {
+    if (b.body["mode"] !== "current" && b.body["mode"] !== "all") {
+      sendJson(res, 400, { ok: false, error: "mode 必须为 current / all" });
+      return;
+    }
+    mode = b.body["mode"];
+  }
+  const anchor = anchorHarness();
+  const llm: LlmStream | undefined = anchor === undefined ? undefined : (rq) => anchor.h.llm().stream(rq);
+  if (organize && llm === undefined) {
+    sendJson(res, 400, { ok: false, error: "用模型整理需要活会话承载（先新建或选择一个会话）" });
+    return;
+  }
+  if (mode === "all") {
+    const mirrorIds = ids.filter((id) => id !== "codex");
+    let imported = 0, updated = 0, skipped = 0, merged = 0;
+    let mirror: { projects: number; unresolved: number } | undefined;
+    if (mirrorIds.length > 0) {
+      const buckets = scanMirrorSources(homes).filter((bk) => mirrorIds.includes(bk.sourceId));
+      const r = await importMirror(join(orosusHome(), "memories", "projects"), buckets, {
+        organize,
+        ...(llm !== undefined ? { llm } : {}),
+      });
+      imported += r.imported;
+      updated += r.updated;
+      skipped += r.skipped;
+      mirror = { projects: r.projects, unresolved: r.unresolved };
+    }
+    if (ids.includes("codex")) {
+      const all = readSourceNotes(srcs.find((s) => s.id === "codex")?.dir);
+      const r = await importNotesProgressive(currentMemoryDir(), all, {
+        organize,
+        ...(llm !== undefined ? { llm } : {}),
+      });
+      imported += r.imported;
+      updated += r.updated;
+      skipped += r.skipped;
+      merged += r.merged;
+    }
+    sendJson(res, 200, { ok: true, imported, updated, skipped, merged, ...(mirror !== undefined ? { mirror } : {}) });
+    return;
+  }
+  const all = ids.flatMap((id) => readSourceNotes(srcs.find((s) => s.id === id)?.dir));
+  const r = await importNotesProgressive(currentMemoryDir(), all, {
+    organize,
+    ...(llm !== undefined ? { llm } : {}),
+  });
+  sendJson(res, 200, { ok: true, ...r });
 });

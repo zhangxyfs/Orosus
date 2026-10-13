@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
@@ -179,6 +179,31 @@ describe("历史子代理名册（2026-09-27 拍板：不删旧数据就得能�
 		const c = hist.find((e) => e.id === "cccc0003")!;
 		expect(c.depth).toBe(2);
 		expect(c.parentId).toBe("aaaa0001");
+	});
+
+	it("㊺f2 无 turn/end 的历史行：事件文件新鲜（90s 内在写）→ 进行中；陈旧断更 → 失败（2026-10-12 走查修——活名册空缺时在跑子代理不再误标失败）", () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-hist-run-"));
+		const sid = "s_main02";
+		const mkNoEnd = (id: string): string => {
+			const file = join(dir!, "sessions", sid, "agents", `agents_${id}`, "agents", "session.jsonl");
+			mkdirSync(join(file, ".."), { recursive: true });
+			writeFileSync(file, [
+				{ v: 1, id: "e1", ts: "2026-10-12T10:00:00.000Z", type: "session/header", parentSession: null },
+				{ v: 1, id: "e2", ts: "2026-10-12T10:00:01.000Z", type: "user/message", content: [{ kind: "text", text: "任务" }] },
+				{ v: 1, id: "e3", ts: "2026-10-12T10:00:02.000Z", type: "turn/step" },
+			].map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+			return file;
+		};
+		const freshFile = mkNoEnd("dddd0004"); // 刚写——mtime 新鲜
+		const staleFile = mkNoEnd("eeee0005");
+		const old = new Date(Date.now() - 200_000); // 200 秒前——陈旧断更档
+		utimesSync(staleFile, old, old);
+		mkdirSync(join(dir!, "sessions", sid, "agents"), { recursive: true });
+		writeFileSync(join(dir!, "sessions", sid, "agents", "session.jsonl"), JSON.stringify({ v: 1, id: "m1", ts: "t0", type: "session/header", parentSession: null }) + "\n", "utf8");
+		const hist = loadHistoricalSubagents(join(dir, "sessions"), sid);
+		expect(hist.find((e) => e.id === "dddd0004")!.status).toBe("running"); // 进行中——新鲜
+		expect(hist.find((e) => e.id === "eeee0005")!.status).toBe("failed"); // 陈旧无终 → 失败（原口径）
+		expect(freshFile).toBeDefined();
 	});
 
 	it("㊺g 排序最新在最上 + 查看窗可进（历史条目喂 renderAgentView 走同一渲染）", () => {

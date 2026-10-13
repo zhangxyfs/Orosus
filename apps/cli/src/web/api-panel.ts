@@ -131,7 +131,7 @@ const phaseRank = (p: { phase: string }): number => PHASE_ORDER[p.phase] ?? 99; 
 
 /** panel 装配（缓存未命中时）：refreshPanel 复用 TUI 同一聚合（getActiveApp 缺省 undefined——
  *  纯数据面零 TUI 依赖）+ cwd 用会话自身 cwd（refreshPanel 读 process.cwd()——TUI 单进程口径，
- *  web 多项目池须按会话改写）+ E6 peers 全桶合并（HostPool.snapshot 的跨桶 scanLivePeers 面）。
+ *  web 多项目池须按会话改写）+ E6 peers（走查五轮修订：同桶外部进程——全桶合并面废弃）。
  *  refreshPanel 写 modules-ui 模块级 panelCache 单例——并发多会话装配交错会把「读到别人的快照」，
  *  故全部装配经 panelSerial 串行（检查-装配-读取单线程原子；缓存命中路径不进串行链——零成本）。 */
 let panelSerial: Promise<unknown> = Promise.resolve();
@@ -155,12 +155,15 @@ const assemblePanel = (hs: HostedSession): Promise<WebPanelData> => {
     const pd = getPanelCache(); // 串行链内读取——与 refreshPanel 间无插入点
     if (pd === undefined) throw new Error("panel 快照未就绪");
     const pool = webHostPool();
-    const snapPeers = pool?.snapshot().peers;
-    const peers: WebPanelData["peers"] = snapPeers === undefined ? undefined : {
+    const snap = pool?.snapshot();
+    const peers: WebPanelData["peers"] = snap === undefined ? undefined : {
       // self 置顶（E6）：host 会话 presence 在扫描集；viewer 无 presence 可缺（scanWithSelf 同语义）
-      ...(snapPeers.has(hs.sid) ? { self: { ...snapPeers.get(hs.sid)!, phase: peerPhase(snapPeers.get(hs.sid)!) } } : {}),
-      list: [...snapPeers.values()]
-        .filter((p) => p.sid !== hs.sid)
+      ...(snap.peers.has(hs.sid) ? { self: { ...snap.peers.get(hs.sid)!, phase: peerPhase(snap.peers.get(hs.sid)!) } } : {}),
+      // 2026-10-12 走查五轮：协同卡只列「同桶外部进程」——本池托管会话出列（左栏可切，重复列出
+      // 被用户否）+ 跨桶全并面废弃（回归 TUI /ps 同项目口径：sid→桶 以 rows 为准，无盘 peer 行剔）。
+      list: [...snap.peers.values()]
+        .filter((p) => p.sid !== hs.sid && pool!.host(p.sid) === undefined)
+        .filter((p) => snap.rows.find((r) => r.sid === p.sid)?.bucket === hs.bucket)
         .map((p) => ({ ...p, phase: peerPhase(p) }))
         .toSorted((a, b) => phaseRank(a) - phaseRank(b) || b.lastEventAt - a.lastEventAt),
     };

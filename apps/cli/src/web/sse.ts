@@ -58,6 +58,9 @@ interface SseClient {
   chain: Promise<void>;
   /** 挂起的 chunk 合批文本（50ms 窗内拼接，一次成帧）。 */
   chunkBuf: string;
+  /** 挂起的思考增量批（2026-10-12 走查：reasoning/delta 与正文分路——帧载荷 {text, think:true}；
+   *  同窗内思考先于正文落地——模型先想后答的自然序）。 */
+  thinkBuf: string | undefined;
   /** 挂起的 btw 批（累积式——窗内后到覆盖先到，一次成帧；§5 律二同款降频）。 */
   btwBuf: BtwFrame | undefined;
   chunkTimer: NodeJS.Timeout | undefined;
@@ -173,6 +176,11 @@ const flushChunkBatch = (c: SseClient): void => {
     clearTimeout(c.chunkTimer);
     c.chunkTimer = undefined;
   }
+  const think = c.thinkBuf;
+  if (think !== undefined && think !== "" && !c.closed) {
+    c.thinkBuf = undefined;
+    enqueue(c, () => writeTask(c, () => writeFrame(c.res, "chunk", { text: think, think: true })));
+  }
   const text = c.chunkBuf;
   if (text !== "" && !c.closed) {
     c.chunkBuf = "";
@@ -254,6 +262,7 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
     hs,
     chain: Promise.resolve(),
     chunkBuf: "",
+    thinkBuf: undefined,
     btwBuf: undefined,
     chunkTimer: undefined,
     pingTimer: undefined,
@@ -283,9 +292,10 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
       }
     }),
     hs.onState(() => sendDirect(c, "phase", { phase: hs.phase(), busy: hs.busy() })), // 结算后归真帧
-    hs.onChunk((t) => {
+    hs.onChunk((t, think) => {
       if (c.closed) return;
-      c.chunkBuf += t;
+      if (think) c.thinkBuf = (c.thinkBuf ?? "") + t;
+      else c.chunkBuf += t;
       armChunkFlush(c);
     }),
     hs.onQueue((items) => sendDirect(c, "queue", { items })), // 整表快照帧（多标签一致性）

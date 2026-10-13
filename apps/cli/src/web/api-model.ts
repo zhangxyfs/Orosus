@@ -289,10 +289,11 @@ registerRoute("POST", "/api/sessions/:sid/permission", async (req, res, params) 
 
 // ---------- GET /api/commands（G1/D13 命令表） ----------
 
-/** web 命令表 15 条（原型 CMDS 序 + /web 插 TUI 位〔/ps 后〕——2026-10-12 走查口径：用户点名 /web
- *  应在列、/model 去掉〔模型切换走 composer 芯片两级菜单，命令面板不再列——键入 /model 仍可达，
- *  cmdrouter mark:menu:model 面不变〕；G1：不含 /settings /sessions /provider /permission——走界面；
- *  /context 键入放行但菜单不列）。模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径
+/** web 命令表 12 条（原型 CMDS 序 + /web 入表——2026-10-12 走查口径：/model 去〔模型切换走 composer
+ *  芯片两级菜单，键入 /model 仍可达，cmdrouter mark:menu:model 面不变〕+ 走查五轮 /ps /quit 出表
+ *  〔运行状态右侧卡片已覆盖其功能——键入仍可达，cmdrouter 执行面不变，仅菜单不列〕；
+ *  G1：不含 /settings /sessions /provider /permission——走界面；/context 键入放行但菜单不列）。
+ *  模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径
  *  （slashItems 不列模块命令；走查前曾投影全量 __ 原名被用户否了——键入仍经 cmdrouter 透传面可达，
  *  仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）。 */
 const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[] }[] = [
@@ -303,9 +304,7 @@ const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[
   { name: "/compact", key: "compact" },
   { name: "/tasks", key: "tasks", aliases: ["task"] },
   { name: "/btw", key: "btw" },
-  { name: "/ps", key: "ps" },
   { name: "/web", key: "web" },
-  { name: "/quit", key: "quit", aliases: ["exit", "q"] },
   { name: "/new", key: "new" },
   { name: "/fork", key: "fork" },
   { name: "/title", key: "title", aliases: ["rename"] },

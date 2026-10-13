@@ -162,7 +162,7 @@ export class HostedSession {
   private nextIndex = 0;
   private readonly admitted = new Map<string, true>(); // promptId admission（见 admitPromptId）
   private readonly eventSubs = new Set<(e: SessionEvent) => void>();
-  private readonly chunkSubs = new Set<(t: string) => void>();
+  private readonly chunkSubs = new Set<(t: string, think: boolean) => void>();
   private readonly queueSubs = new Set<(items: { index: number; text: string }[]) => void>();
   private readonly btwSubs = new Set<(f: BtwFrame) => void>();
   private readonly stateSubs = new Set<() => void>();
@@ -248,8 +248,9 @@ export class HostedSession {
           if (this.closed) break;
           if (c.type !== "text/delta" && c.type !== "reasoning/delta") continue; // 只扇文本增量（§3 chunk 帧 {"text"}）
           const text = c.text;
+          const think = c.type === "reasoning/delta"; // 2026-10-12 走查：思考增量打标分路——前端折叠思考块（不再裸流成正文）
           for (const cb of Array.from(this.chunkSubs)) { // 快照迭代——回调内退订不跳元素
-            try { cb(text); } catch { /* 订阅方异常不拦扇出 */ }
+            try { cb(text, think); } catch { /* 订阅方异常不拦扇出 */ }
           }
         }
       } catch { /* 同上 */ }
@@ -309,10 +310,14 @@ export class HostedSession {
   busy(): boolean { return this.dispatching || this.turnActive; }
 
   /** 相位（LiveInfo 五值同源）：waiting-approval/waiting-input 由 T5 WebCommandUi 的等相位挂点驱动
-   *  （setWaiting），running/idle/error 由本类推算。 */
+   *  （setWaiting），running/idle/error 由本类推算。
+   *  2026-10-12 走查修：waiting 只在 busy 期生效（presence.ts setWaiting 的 turnActive 守卫同口径）——
+   *  挂起交互漏清/turn 外逸时相位不再永久 waiting-*，左栏行不再常转圈（任务停了还显示转圈的根因之一）。 */
   phase(): LiveInfo["phase"] {
-    if (this.waiting !== null) return this.waiting === "approval" ? "waiting-approval" : "waiting-input";
-    if (this.dispatching || this.turnActive) return "running";
+    if (this.dispatching || this.turnActive) {
+      if (this.waiting !== null) return this.waiting === "approval" ? "waiting-approval" : "waiting-input";
+      return "running";
+    }
     return this.endedWithError ? "error" : "idle";
   }
 
@@ -624,6 +629,8 @@ export class HostedSession {
     if (this.closed) return;
     this.closed = true;
     this.setWaiting(null);
+    this.turnActive = false; // 关停即终局——相位不再报 running/waiting（idle/error 由 endedWithError 推导）
+    this.dispatching = false;
     for (const hook of this.closeHooks.splice(0)) {
       try { hook(); } catch { /* 钩子异常不拦关停 */ }
     }

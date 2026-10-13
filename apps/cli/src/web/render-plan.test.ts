@@ -14,8 +14,8 @@ import "./assets/ui.js"; // 同源挂 globalThis.OrosusUI（顶层零 DOM 触碰
 type Fn = (...args: unknown[]) => unknown;
 interface RenderApi {
   planAppend: Fn; isGhostTool: Fn; toolDisplayName: Fn; toolKeyArg: Fn; toolHeadText: Fn;
-  toolHeadHtml: Fn; pageSlice: Fn;
-  lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn; thinkPreviewOf: Fn;
+  toolHeadHtml: Fn; toolTailOf: Fn; crWash: Fn; outputLinesOf: Fn; pageSlice: Fn;
+  lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn;
   skillMarkOf: Fn; textOf: Fn; reasoningOf: Fn; imagesOf: Fn; fmtK: Fn; fmtDur: Fn;
   fmtTurnTime: Fn; esc: Fn;
 }
@@ -152,11 +152,11 @@ describe("web T16：事件 → 行文案映射族（纯推导）", () => {
     expect(R.resultChip({ denied: true, output: "", name: "t", args: {} })).toBe("已拒绝");
   });
 
-  it("⑫ 思考块折叠期预览（§5 律二：全文不进 DOM——预览前 2 行、行帽 160 字）", () => {
-    expect(R.thinkPreviewOf("第一行\n第二行\n第三行")).toBe("第一行\n第二行");
-    expect(R.thinkPreviewOf("\n\n正文起")).toBe("正文起"); // 打头空行不占预览
-    const long = "x".repeat(200);
-    expect((R.thinkPreviewOf(long) as string).length).toBeLessThanOrEqual(161);
+  it("⑫ 思考块收起零内容行（2026-10-12 走查五轮口令：只留标题行——尾行预览亦不显；全文只在展开时进 DOM〔§5 律二〕）", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf-8");
+    expect(src).toMatch(/bodyEl\.textContent = collapsed \? '' : t\.fullText;/); // 折叠空体（源锚——DOM 应用层无 node 直测面）
+    expect(src).not.toMatch(/thinkPreviewOf/); // 预览函数整体退役（定义/调用/导出三处全清）
+    expect(readFileSync(join(ASSETS_DIR, "style.css"), "utf-8")).toMatch(/\.think\.collapsed \.think-body \{ display: none; \}/); // 收起即不占行
   });
 
   it("⑬ 技能加载标记行检测（C9）：SKILL_MARK 前缀 → 名；普通文本 → null", () => {
@@ -289,5 +289,82 @@ describe("web 走查修复（2026-10-12 用户口令轮）：工具行分段配�
     expect(R.pageSlice(13, 9, 6)).toEqual({ page: 2, pages: 3, from: 12, to: 13 }); // 越界收拢
     expect(R.pageSlice(0, 0, 6)).toEqual({ page: 0, pages: 1, from: 0, to: 0 }); // 空表一页
     expect(R.pageSlice(5, 0, 0)).toEqual({ page: 0, pages: 5, from: 0, to: 1 }); // pageSize 0 兜底为 1
+  });
+});
+
+describe("web 走查修（2026-10-12 第二轮）：工具行收起零预览 + 展开体分形", () => {
+  it("T1 toolTailOf 尾名剥离（展开体形态分派键）+ crWash CR 行内取尾（bash 进度条不堆行——调研 §2.6 口径）", () => {
+    expect(R.toolTailOf("tool-shell__bash")).toBe("bash");
+    expect(R.toolTailOf("tool-fs__read")).toBe("read");
+    expect(R.toolTailOf("mcp__ctx7__query")).toBe("query");
+    expect(R.toolTailOf("WebFetch")).toBe("WebFetch");
+    expect(R.crWash("download 10%\rdownload 99%\rdone  ")).toBe("done");
+    expect(R.crWash("no-cr")).toBe("no-cr");
+  });
+
+  it("T2 outputLinesOf：CR 清洗 + 尾空行剥除（展开体行源统一口）", () => {
+    expect(R.outputLinesOf("a\nb\rc\n\n\n")).toEqual(["a", "c"]);
+    expect(R.outputLinesOf("")).toEqual([]);
+    expect(R.outputLinesOf("\n\n")).toEqual([]);
+  });
+
+  it("T3 源码锚定：emitToolCall 不再直插 diff 预览；patchToolRow 不再插 ⎿ 子行/out-fold——收起态零预览", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const callFn = src.slice(src.indexOf("function emitToolCall("), src.indexOf("/* ── 工具体构建"));
+    expect(callFn).not.toContain("buildDiffBlock"); // diff 归展开体（懒构建）
+    expect(callFn).toContain("tool-body"); // 展开体容器随行创建
+    // 向下展开（走查二轮口令）：工具行点击不锚定尾随元素（被点行不动），越出视口顺滚最小量
+    expect(callFn).toContain("revealBelow(body)");
+    expect(callFn).not.toContain("anchoredToggle");
+    const patchFn = src.slice(src.indexOf("function patchToolRow("), src.indexOf("function firstLineOf("));
+    expect(patchFn).not.toContain("out-fold");
+    expect(patchFn).not.toContain("sub-line");
+    expect(patchFn).toContain("fillToolBody"); // 展开中 → 原位重装不收拢
+    // 展开体分形齐全（bash 终端回放 / read 行号内容 / edit·write diff / 其余输出块）
+    expect(src).toContain("function buildTermBody(");
+    expect(src).toContain("function buildFileBody(");
+    expect(src).toContain("function buildDiffBody(");
+    expect(src).toContain("function buildOutBody(");
+    expect(src).toContain("function buildLineFold("); // 超长输出头尾截断（调研 §5-5）
+  });
+
+  it("T5 源码锚定（走查二轮）：工具体 10 行高帽 + 体内滚动；浅色主题流区 #F8F8F8 + 终端块白底", () => {
+    const css = readFileSync(join(ASSETS_DIR, "style.css"), "utf8");
+    expect(css).toContain(".tool-body .term { max-height: calc(10 * 1.75em + 16px); overflow-y: auto; }"); // 10 行高帽（term 自身内衬）
+    expect(css).toContain(".tool-body .tb-file, .tool-body .tb-out, .tool-body .tb-diffwrap { max-height: calc(10 * 1.75em); overflow-y: auto; }");
+    expect(css).toContain("body.light .stream { background: #f8f8f8; }");
+    expect(css).toContain("body.light .term { background: #ffffff;");
+  });
+
+  it("T4 源码锚定：回到底部浮钮（调研 §5-1 P1）——open 装配 toBottom + 滚动/流式/摄入三面同步显隐", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    expect(src).toContain("toBottom: opts.toBottom || null");
+    expect(src).toContain("function syncToBottom()");
+    const scrollFn = src.slice(src.indexOf("stream.addEventListener('scroll'"), src.indexOf("pgMore.addEventListener"));
+    expect(scrollFn).toContain("syncToBottom()");
+  });
+});
+
+describe("web 走查修（2026-10-13 用户口令）：复制口径 = 正文 markdown 源串、思考不入", () => {
+  it("C1 源码锚定：emitAssistant 把 textOf 源串挂上 agent-md.mdSource；turnTextsOf 优先取源串", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const emitFn = src.slice(src.indexOf("function emitAssistant("), src.indexOf("/** 思考块（C4）"));
+    expect(emitFn).toContain("md.mdSource = text;"); // 正文 markdown 源串随块存（渲染态 textContent 丢围栏/标记）
+    const copyFn = src.slice(src.indexOf("function turnTextsOf("), src.indexOf("function bindOnce("));
+    expect(copyFn).toContain("l.mdSource"); // 有源串取源串
+    expect(copyFn).toContain("l.textContent.replace(/^●\\s*/, '')"); // 流式残段（agent-line 无源串）退回渲染态
+    expect(copyFn).toContain("'.agent-md, .agent-line'"); // 选择器不含 .think——思考块结构性不入复制
+  });
+
+  it("C2 纯函数面：textOf/reasoningOf 分源——mdSource 所存的 text 天然不含思考", () => {
+    const ev = {
+      content: [
+        { kind: "reasoning", text: "先想想……" },
+        { kind: "text", text: "# 结论\n\n**加粗** 与 `代码`" },
+      ],
+    };
+    expect(R.textOf(ev)).toBe("# 结论\n\n**加粗** 与 `代码`"); // markdown 标记原样保留
+    expect(R.textOf(ev)).not.toContain("先想想"); // 思考永不混入正文源串
+    expect(R.reasoningOf(ev)).toBe("先想想……");
   });
 });

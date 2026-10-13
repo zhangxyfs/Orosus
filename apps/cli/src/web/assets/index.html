@@ -49,25 +49,29 @@
             <div class="tf-list" id="tf-list"></div>
           </div>
         </div>
-        <div class="stream" id="stream">
-          <div id="welcome" hidden>
-            <div class="banner">
-              <img src="/assets/logo-icon-color.webp" alt="Orosus logo" />
-              <div class="banner-meta">
-                <div><span class="ver" id="welcome-ver">v?</span><span class="sep">—</span><span class="dim">模块化 AI Agent Harness · Web</span></div>
-                <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。如层峦绵亘，灵脉贯通。</div>
+        <div class="stream-wrap">
+          <div class="stream" id="stream">
+            <div id="welcome" hidden>
+              <div class="banner">
+                <img src="/assets/logo-icon-color.webp" alt="Orosus logo" />
+                <div class="banner-meta">
+                  <div><span class="ver" id="welcome-ver">v?</span><span class="sep">—</span><span class="dim">模块化 AI Agent Harness · Web</span></div>
+                  <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。如层峦绵亘，灵脉贯通。</div>
+                </div>
               </div>
+              <div class="line banner-hint">/ 命令菜单（含技能区） · @ 文件引用 · Enter 发送 · Shift + Enter 换行</div>
+              <div class="line banner-hint">点击展开思考与 diff · 面板页签点击切卡 · 顶栏按钮与芯片全部可点</div>
             </div>
-            <div class="line banner-hint">/ 命令菜单（含技能区） · @ 文件引用 · Enter 发送 · Shift + Enter 换行</div>
-            <div class="line banner-hint">点击展开思考与 diff · 面板页签点击切卡 · 顶栏按钮与芯片全部可点</div>
+
+            <div class="gap"></div>
+
+            <div class="pg-more" id="pg-more" hidden>↑ 加载更早消息</div>
+
+            <div class="gap"></div>
+            <div class="line dim" id="stream-tail">正在连接…</div>
           </div>
-
-          <div class="gap"></div>
-
-          <div class="pg-more" id="pg-more" hidden>↑ 加载更早消息</div>
-
-          <div class="gap"></div>
-          <div class="line dim" id="stream-tail">正在连接…</div>
+          <!-- 回到底部浮钮（离开底部 >160px 出现——点击回底并恢复滚动跟随） -->
+          <button type="button" class="to-bottom" id="to-bottom" hidden title="回到底部（恢复跟随新消息）">↓ 回到底部</button>
         </div>
 
         <!-- composer 区 -->

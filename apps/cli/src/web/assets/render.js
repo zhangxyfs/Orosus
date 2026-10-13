@@ -6,10 +6,13 @@
  *      全文件不存在任何「整区重渲」代码路径（律一）；断线 backfill 按 seq 补插。
  * 流式（律二）：chunk 帧只 append 纯文本节点（不跑 marked/DOMPurify），经 rafFlush 合帧；
  *   assistant/message（转正）事件到达才整块 markdown 渲染替换流式文本。
- * 折叠件（思考块/diff/超长工具结果/气泡展开）自带展开锚定（2026-10-10 用户口令：
- *   展开过程中距顶部距离保持不变——锚 = 紧随折叠件后的首个元素（折叠件底缘），展开前后
- *   视口位置差值回写 scrollTop；不可锚块顶——折叠件展开/收起不动其顶缘，块顶差值恒 0）。
- * 滚动跟随仅当用户在底部 40px 内。
+ * 折叠件（思考块/diff 中段/气泡展开）自带展开锚定（2026-10-10 用户口令：展开过程中距顶部距离保持
+ *   不变——锚 = 紧随折叠件后的首个元素，视口位置差值回写 scrollTop）。工具展开体例外（2026-10-12
+ *   走查二轮口令）：向下展开——被点行不动、下方内容顺延下移，体越出视口时顺滚最小量（体有 10 行高帽）。
+ * 工具行（2026-10-12 走查）：收起态零预览——「Using/Used X(关键参数) · N 行」一行即全部；
+ *   点击行体按工具类型展开（bash 终端回放 / read 行号内容 / edit·write diff / 其余输出块），
+ *   结果懒构建、原位重装不收拢；体高帽 10 行（超出体内滚动）；超长输出头尾截断 + bash CR 行内取尾。
+ * 滚动跟随仅当用户在底部 40px 内；离开底部 >160px 显「回到底部」浮钮（点击回底并恢复跟随）。
  * 导出挂 globalThis.OrosusRender（浏览器 window === globalThis；node 测试同源可取）。 */
 (function () {
   'use strict';
@@ -222,18 +225,6 @@
     return chip;
   }
 
-  /** 思考块折叠期预览：前 2 行、每行截 160 字（折叠期全文不进 DOM——§5 律二）。 */
-  function thinkPreviewOf(text) {
-    var lines = String(text ?? '').split('\n');
-    var out = [];
-    for (var i = 0; i < lines.length && out.length < 2; i++) {
-      var l = lines[i].trim();
-      if (l === '' && out.length === 0) continue; /* 打头空行不占预览 */
-      out.push(l.length > 160 ? l.slice(0, 160) + '…' : l);
-    }
-    return out.join('\n');
-  }
-
   /** 技能加载标记行检测（SKILL_MARK 前缀——T6 合成体随 user/message 回流，正文不整渲）。 */
   function skillMarkOf(text) {
     var t = String(text ?? '');
@@ -298,8 +289,13 @@
 
   var PAGE = 200;          /* 回放分页每页上限（§5 律三：首屏有界） */
   var STICK_PX = 40;       /* 滚动跟随判定：距底 ≤40px */
-  var OUT_FOLD_KEEP = 5;   /* 超长工具结果折叠保留行 */
-  var OUT_FOLD_MIN = 12;   /* 超过此行数的工具结果进入折叠件 */
+  var TO_BOTTOM_PX = 160;  /* 距底超过此值显示「回到底部」浮钮（调研 §5-1 P1 口径） */
+  /* 工具体内容预算（2026-10-12 走查 + 调研 §5-5 head-tail 截断口径——展开体是 opt-in DOM，
+   *  超长输出头尾保留、中段折叠点击展开） */
+  var TB_LINE_CAP = 500;   /* 单行字符帽（超长截断标注） */
+  var TB_HEAD = 120;       /* 头保留行数 */
+  var TB_TAIL = 30;        /* 尾保留行数 */
+  var TB_FOLD_MIN = 200;   /* 超过此行数进入头尾截断 */
 
   var R = null; /* 当前会话的渲染状态（render.open 装配） */
   var bound = false; /* 流区骨架事件绑定（一次性——元素是静态骨架） */
@@ -322,10 +318,26 @@
     var tok = (typeof globalThis.OrosusAPI !== 'undefined' && globalThis.OrosusAPI.getToken) ? globalThis.OrosusAPI.getToken() : '';
     return '/api/media?path=' + encodeURIComponent(path) + (tok ? '&token=' + encodeURIComponent(tok) : '');
   }
+  var mdPurifyHooked = false;
   function mdRender(text) {
     try {
       if (typeof globalThis.marked !== 'undefined' && typeof globalThis.DOMPurify !== 'undefined') {
-        return globalThis.DOMPurify.sanitize(globalThis.marked.parse(text, { breaks: true, gfm: true }));
+        var DP = globalThis.DOMPurify;
+        /* 外链加固（调研 §5-6 P3——cc-haha/opencode 同款，一次性钩子）：外链补 rel 且新开标签
+         * （原地导航会整页离开 GUI）；img 剥 srcset（不自家的响应式源）。 */
+        if (!mdPurifyHooked && typeof DP.addHook === 'function') {
+          mdPurifyHooked = true;
+          DP.addHook('afterSanitizeAttributes', function (node) {
+            if (typeof node.tagName !== 'string') return;
+            if (node.tagName === 'A' && node.getAttribute('href')) {
+              node.setAttribute('rel', 'noopener noreferrer');
+              node.setAttribute('target', '_blank');
+            } else if (node.tagName === 'IMG') {
+              node.removeAttribute('srcset');
+            }
+          });
+        }
+        return DP.sanitize(globalThis.marked.parse(text, { breaks: true, gfm: true }));
       }
     } catch { /* 渲染失败兜底纯文本 */ }
     return '<p>' + esc(text).replace(/\n/g, '<br>') + '</p>';
@@ -354,10 +366,13 @@
     var before = anchor ? anchor.getBoundingClientRect().top : foldEl.getBoundingClientRect().bottom;
     toggleFn();
     var sc = scrollParentOf(foldEl);
-    if (!sc) return;
-    var after = anchor ? anchor.getBoundingClientRect().top : foldEl.getBoundingClientRect().bottom;
-    var delta = after - before;
-    if (delta !== 0) sc.scrollTop += delta;
+    if (sc) {
+      var after = anchor ? anchor.getBoundingClientRect().top : foldEl.getBoundingClientRect().bottom;
+      var delta = after - before;
+      if (delta !== 0) sc.scrollTop += delta;
+    }
+    /* 折叠件开合改变布局——回到底部浮钮显隐随之刷新（scrollTop 未变时不触发 scroll 事件的补偿口） */
+    syncToBottom();
   }
 
   function nearBottom() {
@@ -366,6 +381,13 @@
   }
   function followScroll() {
     if (R && R.stick) R.stream.scrollTop = R.stream.scrollHeight;
+  }
+  /* ── 「回到底部」浮钮（调研 §5-1 P1：用户滚动权不可被剥夺——离开底部出现、点击回底并恢复跟随；
+   *    程序贴底（followScroll 落在底）时自然隐去。 ── */
+  function syncToBottom() {
+    if (R === null || !R.toBottom) return;
+    var away = R.stream.scrollHeight - R.stream.scrollTop - R.stream.clientHeight;
+    R.toBottom.hidden = away <= TO_BOTTOM_PX;
   }
 
   /* ── 渲染上下文：live（主流区，落位 = tail 之前）与 backfill fragment（落位 = frag 尾）共用 ──
@@ -459,6 +481,7 @@
   }
 
   function emitUser(ev, ctx) {
+    R.spawnGroup = null; /* 消息边界断 spawn 组（TUI docmodel 同口径） */
     var text = textOf(ev);
     var skill = skillMarkOf(text);
     if (skill !== null) {
@@ -494,6 +517,7 @@
 
   function emitAssistant(ev, ctx) {
     finalizeLive(); /* 流式文本节点让位（律二：事件边界一次 markdown 整块替换） */
+    R.spawnGroup = null; /* 消息边界断 spawn 组（TUI docmodel 同口径） */
     var first = null;
     var reasoning = reasoningOf(ev);
     var text = textOf(ev);
@@ -504,6 +528,7 @@
     }
     if (text !== '') {
       var md = el('div', 'line agent-md', '<span class="bullet">●</span><div class="md">' + mdRender(text) + '</div>');
+      md.mdSource = text; /* 复制口径：正文 markdown 源串（textOf 只拼 text part——思考永不入），渲染态 textContent 丢围栏/标记不可用 */
       md.setAttribute('data-seq', String(ev.seq));
       placeIn(ctx, md);
       if (first === null) first = md;
@@ -516,7 +541,8 @@
     return first;
   }
 
-  /** 思考块（C4）：默认收起；折叠期全文不进 DOM（_full 挂 JS 属性，展开换装）；展开锚定。 */
+  /** 思考块（C4）：默认收起；折叠期零内容行（2026-10-12 走查五轮——只留标题行，尾行预览亦不显）
+   *  且全文不进 DOM（_full 挂 JS 属性，展开换装）；展开锚定。 */
   function buildThink(fullText, durText) {
     var t = el('div', 'think collapsed', '');
     var headEl = el('div', 'think-head');
@@ -524,7 +550,6 @@
     t.appendChild(headEl);
     t.appendChild(bodyEl);
     t.fullText = fullText;
-    t.previewText = thinkPreviewOf(fullText);
     function head(collapsed) {
       headEl.innerHTML = '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>[思考]' +
         (durText !== '' ? ' <span class="think-dur">· ' + esc(durText) + '</span>' : '') +
@@ -532,13 +557,70 @@
     }
     function apply(collapsed) {
       head(collapsed);
-      bodyEl.textContent = collapsed ? t.previewText : t.fullText;
+      bodyEl.textContent = collapsed ? '' : t.fullText;
     }
     apply(true);
     headEl.addEventListener('click', function () {
-      anchoredToggle(t, function () { apply(t.classList.toggle('collapsed')); });
+      /* 向下展开且零顺滚（走查八轮定案：被点头行纹丝不动，内容向下顺延，用户自滚续读）。
+       *  前史：anchoredToggle 锚定后续行 = 向上长；顺滚三行封顶档用户亦否（要绝对不动）。 */
+      apply(t.classList.toggle('collapsed'));
+      syncToBottom();
     });
     return t;
+  }
+
+  /** spawn 结果文本 → 8 位子代理编号（tasks-cmd.ts spawnIdsIn 同口径——结果文本里的 8 位 hex 全收）。 */
+  function spawnIdsIn(output) {
+    var out = [];
+    var m = String(output ?? '').match(/[0-9a-f]{8}/g);
+    if (m) for (var i = 0; i < m.length; i++) out.push(m[i]);
+    return out;
+  }
+  /** 子代理组卡（TUI agent 组同款语义——web 卡片形）：头行「● N 个子代理 + 聚合状态」+ 组员行
+   *  （├─ 标题 + 编号 + 状态）。状态刷新归 app.js 名册轮询（render 保持零 fetch——行带
+   *  data-agent-id 钩子，点击经 onAgentOpen 回调进回放窗）。 */
+  function ensureSpawnGroup(ctx) {
+    if (R.spawnGroup && R.spawnGroup.el.isConnected) return R.spawnGroup;
+    var g = el('div', 'spawn-group');
+    var head = el('div', 'sg-head', '<span class="sg-dot">●</span><span class="sg-title">子代理</span><span class="sg-sum"></span>');
+    var list = el('div', 'sg-list');
+    g.appendChild(head);
+    g.appendChild(list);
+    placeIn(ctx, g);
+    R.spawnGroup = { el: g, list: list, sum: head.querySelector('.sg-sum'), rows: new Map(), anyLive: true };
+    return R.spawnGroup;
+  }
+  /** spawn result → 组员行挂卡（编号序 = prompts 序——label 从 args.description/items 按下标配对，
+   *  名册轮询到达后以花名册为准校正）；isError → 组内错误行（占位符误用等校验错，静默会看不懂）。 */
+  function spawnResultInto(ev, spArgs, ctx) {
+    var grp = R.spawnGroup;
+    if (!grp || !grp.el.isConnected) grp = ensureSpawnGroup(ctx);
+    var output = typeof ev.output === 'string' ? ev.output : String(ev.output ?? '');
+    if (ev.isError === true) {
+      var errLine = el('div', 'sg-err', '⎿ 派活失败：' + esc(firstLineOf(output)));
+      grp.list.appendChild(errLine);
+      grp.sum.textContent = '· 派活失败';
+      return;
+    }
+    var ids = spawnIdsIn(output);
+    var desc = typeof spArgs.description === 'string' ? spArgs.description : '';
+    var items = Array.isArray(spArgs.items) ? spArgs.items : null;
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      if (grp.rows.has(id)) continue;
+      var label = items !== null && typeof items[i] === 'string' ? desc + '：' + items[i] : desc;
+      var row = el('div', 'sg-row', '<span class="sg-caret">├─</span><span class="sg-name">' + esc(label || '子代理任务') + '</span><span class="sg-id">' + esc(id) + '</span><span class="sg-st st-run">已派出…</span>');
+      row.setAttribute('data-agent-id', id);
+      (function (aid) {
+        row.addEventListener('click', function () { R.onAgentOpen(aid); });
+      })(id);
+      grp.list.appendChild(row);
+      grp.rows.set(id, row);
+    }
+    var n = grp.rows.size;
+    if (n > 0) grp.sum.textContent = '· ' + n + ' 个任务 · 运行中…';
+    followScroll();
+    syncToBottom();
   }
 
   function emitToolCall(ev, ctx) {
@@ -549,14 +631,185 @@
       return null;
     }
     var args = (ev.args && typeof ev.args === 'object' && !Array.isArray(ev.args)) ? ev.args : {};
-    var line = el('div', 'line tool-line', '<span class="tchar">●</span>' + toolHeadHtml(name, args, R.cwdOf(), false));
+    /* 子代理派活（TUI docmodel 同款口径：spawn 不落工具行——call 开组、result 抠编号挂组员；
+     *  连续 spawn 并一组，其它渲染事件〔用户/助手消息、别的工具〕断组）。 */
+    if (name === 'tool-subagent__spawn') {
+      R.spawnCalls.set(callId, args);
+      var grp = ensureSpawnGroup(ctx);
+      return grp.el;
+    }
+    R.spawnGroup = null; /* 断组 */
+    var line = el('div', 'line tool-line', '<span class="tchar">●</span>' + toolHeadHtml(name, args, R.cwdOf(), false) + '<span class="tcaret" aria-hidden="true">▸</span>');
     line.setAttribute('data-seq', String(ev.seq));
     line.setAttribute('data-callid', callId);
+    line.title = '点击展开 / 收起详情';
     placeIn(ctx, line);
-    R.toolRows.set(callId, { line: line, name: name, args: args });
-    var rows = diffRowsOf(name, args);
-    if (rows !== null) placeIn(ctx, buildDiffBlock(rows)); /* C5：edit/write 载荷 diff 块（默认折叠帽 5 行） */
+    /* 展开体（2026-10-12 走查口径：收起态零预览——「Used X(x) · N 行」一行即全部；点击行体按工具
+     *  类型展开：bash → 终端回放、read → 行号内容、edit/write → diff、其余 → 输出块。懒构建——
+     *  首次展开才进 DOM（§5 律二同族；结果到达原位重装不收拢）。 */
+    var body = el('div', 'tool-body');
+    body.hidden = true;
+    insertAfter(line, body);
+    var row = { line: line, body: body, name: name, args: args, result: null, built: false };
+    line.addEventListener('click', function () {
+      if (!row.built) {
+        fillToolBody(row);
+        row.built = true;
+      }
+      var expanding = body.hidden;
+      body.hidden = !expanding;
+      var c = line.querySelector('.tcaret');
+      if (c) c.textContent = body.hidden ? '▸' : '▾';
+      /* 向下展开（2026-10-12 走查二轮用户口令：不锚定尾随元素——被点行不动、下方内容顺延下移；
+       * 体越出视口下缘时顺滚最小量让整体可见。体有 10 行高帽，顺滚量有界不惊跳。 */
+      if (expanding) revealBelow(body);
+      syncToBottom();
+    });
+    R.toolRows.set(callId, row);
     return line;
+  }
+
+  /* ── 工具体构建（收起零预览配套——按工具尾名分形） ── */
+
+  /** 工具尾名（tool-shell__bash → bash——形态分派键）。 */
+  function toolTailOf(name) {
+    var n = String(name ?? '');
+    return n.indexOf('__') >= 0 ? n.split('__').pop() : n;
+  }
+
+  /** bash 输出 CR 语义清洗（调研 §2.6 cc-haha 口径）：行内取最后一个 \r 之后——进度条不堆行。 */
+  function crWash(l) {
+    var i = l.lastIndexOf('\r');
+    return (i >= 0 ? l.slice(i + 1) : l).trimEnd();
+  }
+  function capLine(l) {
+    return l.length > TB_LINE_CAP ? l.slice(0, TB_LINE_CAP) + '…' : l;
+  }
+
+  /** 行数组 → 头尾保留折叠块（超长输出：头 TB_HEAD + 「⋯ 中间还有 N 行」+ 中段 data-extra + 尾
+   *  TB_TAIL——展开锚定；调研 §5-5 dsh head-tail-cap 口径）。rowHtml(line) → 完整行 HTML。 */
+  function buildLineFold(lines, rowHtml) {
+    var block = el('div', 'tb-fold');
+    var total = lines.length;
+    var fold = total > TB_FOLD_MIN;
+    var head = fold ? TB_HEAD : total;
+    var mid = fold ? total - head - TB_TAIL : 0;
+    var html = '';
+    for (var i = 0; i < head; i++) html += rowHtml(lines[i]);
+    if (fold) {
+      html += '<div class="tb-more" data-tbmore>⋯ 中间还有 ' + mid + ' 行 · 点击展开全部</div>';
+      for (var j = 0; j < mid; j++) html += rowHtml(lines[head + j]).replace('<div ', '<div data-extra ');
+      for (var t = 0; t < TB_TAIL; t++) html += rowHtml(lines[head + mid + t]);
+    }
+    block.innerHTML = html;
+    var more = block.querySelector('[data-tbmore]');
+    if (more) more.addEventListener('click', function () {
+      anchoredToggle(block, function () {
+        var expanded = block.classList.toggle('expanded');
+        more.textContent = expanded ? '点击收起中段' : '⋯ 中间还有 ' + mid + ' 行 · 点击展开全部';
+      });
+    });
+    return block;
+  }
+
+  function outputLinesOf(output) {
+    var text = typeof output === 'string' ? output : String(output ?? '');
+    var lines = text.split('\n').map(crWash);
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+
+  /** bash → 终端回放块（$ 命令 + 输出——恒深底双主题不变，走查图 4 口径）。 */
+  function buildTermBody(row) {
+    var wrap = el('div', 'term' + (row.result && row.result.isError ? ' term-err' : ''));
+    var cmd = typeof row.args.command === 'string' ? row.args.command : '';
+    wrap.innerHTML = '<div class="term-cmd">$ ' + esc(cmd) + '</div>';
+    if (!row.result) {
+      wrap.appendChild(el('div', 'term-out term-dim', '（运行中…）'));
+      return wrap;
+    }
+    var lines = outputLinesOf(row.result.output);
+    if (lines.length === 0) wrap.appendChild(el('div', 'term-out term-dim', '（无输出）'));
+    else wrap.appendChild(buildLineFold(lines.map(capLine), function (l) { return '<div class="term-out">' + esc(l) + '</div>'; }));
+    return wrap;
+  }
+
+  var READ_ROW_RE = /^(\d+)→(.*)$/;
+
+  /** read → 行号内容块（输出本带 `N→正文` 前缀——拆装为行号槽 + 正文，走查图 5 口径；页脚/提示行归 note）。 */
+  function buildFileBody(row) {
+    var wrap = el('div', 'tb-file');
+    if (!row.result) {
+      wrap.innerHTML = '<div class="tb-note">（等待结果…）</div>';
+      return wrap;
+    }
+    var lines = outputLinesOf(row.result.output);
+    if (lines.length === 0) {
+      wrap.innerHTML = '<div class="tb-note">（无输出）</div>';
+      return wrap;
+    }
+    wrap.appendChild(buildLineFold(lines, function (l) {
+      var m = READ_ROW_RE.exec(l);
+      if (m) return '<div class="tb-frow"><span class="g">' + m[1] + '</span><span>' + esc(capLine(m[2])) + '</span></div>';
+      return '<div class="tb-note">' + esc(capLine(l)) + '</div>';
+    }));
+    return wrap;
+  }
+
+  /** edit/write → diff 块（载荷自算 diffRowsOf——既有行号 + 增删染色件原样复用；错误结果前置注记）。 */
+  function buildDiffBody(row) {
+    var wrap = el('div', 'tb-diffwrap');
+    if (row.result && row.result.isError) {
+      wrap.appendChild(el('div', 'tb-note bad', esc(capLine(firstLineOf(row.result.output)))));
+    }
+    var rows = diffRowsOf(row.name, row.args);
+    if (rows !== null) wrap.appendChild(buildDiffBlock(rows));
+    else if (!row.result) wrap.appendChild(el('div', 'tb-note', '（等待结果…）'));
+    else wrap.appendChild(el('div', 'tb-note', esc(capLine(firstLineOf(row.result.output)) || '（无输出）')));
+    return wrap;
+  }
+
+  /** 其余工具 → 通用输出块（pre-wrap 行折叠同族；错误结果整块染赭石）。 */
+  function buildOutBody(row) {
+    var wrap = el('div', 'tb-out');
+    if (!row.result) {
+      wrap.innerHTML = '<div class="tb-note">（等待结果…）</div>';
+      return wrap;
+    }
+    var lines = outputLinesOf(row.result.output);
+    if (lines.length === 0) {
+      wrap.innerHTML = '<div class="tb-note">' + (row.result.isError ? '<span class="bad">（失败，无输出）</span>' : '（无输出）') + '</div>';
+      return wrap;
+    }
+    var bad = row.result.isError ? ' tb-bad' : '';
+    wrap.appendChild(buildLineFold(lines.map(capLine), function (l) { return '<div class="tb-orow' + bad + '">' + esc(l) + '</div>'; }));
+    return wrap;
+  }
+
+  /** 工具体内容装配（row.result 在场时按类分形；denied 压过一切）。 */
+  function fillToolBody(row) {
+    row.body.innerHTML = '';
+    var node;
+    if (row.result && row.result.denied) {
+      node = el('div', 'tb-note bad', '已拒绝——本轮不执行');
+    } else {
+      var tail = toolTailOf(row.name);
+      if (tail === 'bash') node = buildTermBody(row);
+      else if (tail === 'read') node = buildFileBody(row);
+      else if (tail === 'edit' || tail === 'write') node = buildDiffBody(row);
+      else node = buildOutBody(row);
+    }
+    row.body.appendChild(node);
+  }
+
+  /** 向下展开的顺滚口：体越出滚动视口下缘时滚最小量让体整体可见（体有高帽——顺滚有界）。 */
+  function revealBelow(body) {
+    var sc = scrollParentOf(body);
+    if (!sc) return;
+    var vr = sc.getBoundingClientRect();
+    var br = body.getBoundingClientRect();
+    var over = br.bottom - vr.bottom + 8;
+    if (over > 0) sc.scrollTop += over;
   }
 
   function buildDiffBlock(rows) {
@@ -582,6 +835,13 @@
   function emitToolResult(ev, ctx) {
     var callId = String(ev.callId ?? '');
     if (R.ghostCalls.has(callId)) return null;
+    /* spawn 结果（TUI 同款：不落行——编号从结果文本抠出挂进组卡；失败 = 组内错误行） */
+    var spArgs = R.spawnCalls.get(callId);
+    if (spArgs !== undefined) {
+      R.spawnCalls.delete(callId);
+      spawnResultInto(ev, spArgs, ctx);
+      return R.spawnGroup ? R.spawnGroup.el : null;
+    }
     var row = R.toolRows.get(callId);
     if (row) {
       patchToolRow(row, ev);
@@ -593,44 +853,21 @@
     return s;
   }
 
-  /** tool/result → 工具行原位合并（律一：局部替换，不重排）：Using→Used + chip + ⎿ 子行。 */
+  /** tool/result → 工具行原位合并（律一：局部替换，不重排）：Using→Used + chip；结果数据入 row——
+   *  展开体已建则原位重装（保持展开态），未建则留待首次展开（收起态零预览——2026-10-12 走查）。 */
   function patchToolRow(row, ev) {
     var chip = resultChip({ isError: ev.isError === true, denied: ev.denied === true, truncated: ev.truncated === true, images: ev.images, output: ev.output, name: row.name, args: row.args });
-    row.line.innerHTML = '<span class="tchar">●</span>' + toolHeadHtml(row.name, row.args, R.cwdOf(), true, chip);
+    row.result = {
+      output: typeof ev.output === 'string' ? ev.output : String(ev.output ?? ''),
+      isError: ev.isError === true,
+      denied: ev.denied === true,
+      truncated: ev.truncated === true,
+    };
+    row.line.innerHTML = '<span class="tchar">●</span>' + toolHeadHtml(row.name, row.args, R.cwdOf(), true, chip) +
+      '<span class="tcaret" aria-hidden="true">' + (row.body.hidden ? '▸' : '▾') + '</span>';
     if (ev.isError === true) row.line.classList.add('tool-err');
     if (ev.denied === true) row.line.classList.add('tool-denied');
-    var outText = typeof ev.output === 'string' ? ev.output : String(ev.output ?? '');
-    var lines = outText.split('\n').map(function (l) { return l.trimEnd(); });
-    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-    if (lines.length === 0) {
-      if (ev.denied === true) insertAfter(row.line, el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">已拒绝——本轮不执行</span>'));
-      return;
-    }
-    if (lines.length > OUT_FOLD_MIN) {
-      /* 超长工具结果 → 折叠件（§5 律二：默认帽 5 行 + 「还有 N 行」展开——展开锚定同族） */
-      var html = '';
-      var extra = 0;
-      for (var i = 0; i < lines.length; i++) {
-        var hidden = i >= OUT_FOLD_KEEP;
-        if (hidden) extra++;
-        var l = lines[i].length > 500 ? lines[i].slice(0, 500) + '…' : lines[i];
-        html += '<div class="of-row' + (ev.isError === true ? ' of-err' : '') + '"' + (hidden ? ' data-extra' : '') + '>' + esc(l) + '</div>';
-      }
-      var fold = el('div', 'out-fold', html + '<div class="diff-more">… 还有 ' + extra + ' 行 · 点击展开全部</div>');
-      var more = fold.querySelector('.diff-more');
-      more.addEventListener('click', function () {
-        anchoredToggle(fold, function () {
-          var expanded = fold.classList.toggle('expanded');
-          more.textContent = expanded ? '点击收起' : '… 还有 ' + extra + ' 行 · 点击展开全部';
-        });
-      });
-      insertAfter(row.line, fold);
-      return;
-    }
-    var first = firstLineOf(ev.output);
-    var bad = ev.isError === true || ev.denied === true;
-    var sub = el('div', 'line sub-line', '<span class="tree">⎿</span><span' + (bad ? ' class="bad"' : '') + '>' + esc(first.length > 240 ? first.slice(0, 240) + '…' : first) + '</span>');
-    insertAfter(row.line, sub);
+    if (row.built) fillToolBody(row);
   }
 
   function firstLineOf(output) {
@@ -701,8 +938,73 @@
     R.live.textNode.appendData(R.live.buf);
     R.live.buf = '';
     followScroll();
+    syncToBottom(); /* 流式长高——距底变远时浮钮即时出现（stick 期无 scroll 事件） */
+  }
+
+  /* ── 流式思考块（2026-10-12 走查六轮口令：reasoning 增量不再裸流成正文——折叠块承载，默认只显
+   *  「▸[思考] · 持续了 N 秒 · 点击展开」标题行且秒数走字；全文不进 DOM（律二），用户手动展开才挂
+   *  内容并随流增量；assistant/message 到达时正式块原位替换（finalizeLive 收编）。 ── */
+  function thinkFlush() {
+    if (R === null || !R.live.thinkOpen || !R.live.thinkBodyNode || R.live.thinkBuf === '') return;
+    R.live.thinkBodyNode.appendData(R.live.thinkBuf);
+    R.live.thinkBuf = '';
+    followScroll();
+    syncToBottom();
+  }
+  function thinkChunk(text) {
+    if (R === null || typeof text !== 'string' || text === '') return;
+    if (R.live.thinkEl === null || !R.live.thinkEl.isConnected) {
+      var ctx = liveCtx();
+      var t = ensureTurn(ctx);
+      var tk = el('div', 'think collapsed', '');
+      var headEl = el('div', 'think-head', '<span class="tcaret">▸</span>[思考] <span class="think-dur">· 持续了 1 秒</span> <span class="think-hint">· 点击展开</span>');
+      var bodyEl = el('div', 'think-body');
+      tk.appendChild(headEl);
+      tk.appendChild(bodyEl);
+      t.appendChild(tk);
+      R.live.thinkEl = tk;
+      R.live.thinkBuf = '';
+      R.live.thinkSince = Date.now();
+      R.live.thinkOpen = false;
+      R.live.thinkBodyNode = document.createTextNode('');
+      bodyEl.appendChild(R.live.thinkBodyNode);
+      var durEl = headEl.querySelector('.think-dur');
+      R.live.thinkTimer = window.setInterval(function () {
+        if (R === null || R.live.thinkEl === null || !durEl) return;
+        durEl.textContent = '· ' + fmtDur(Date.now() - R.live.thinkSince); /* 秒数走字（内容仍折叠） */
+      }, 1000);
+      headEl.addEventListener('click', function () {
+        var collapsed = tk.classList.toggle('collapsed');
+        R.live.thinkOpen = !collapsed;
+        var caret = headEl.querySelector('.tcaret');
+        if (caret) caret.textContent = collapsed ? '▸' : '▾';
+        var hint = headEl.querySelector('.think-hint');
+        if (hint) hint.textContent = '· 点击' + (collapsed ? '展开' : '收起');
+        if (!collapsed && R.live.thinkBodyNode) { /* 展开一刻补挂累计全文（折叠期零 DOM——律二） */
+          R.live.thinkBodyNode.appendData(R.live.thinkBuf);
+          R.live.thinkBuf = '';
+        } /* 展开零顺滚（走查八轮定案——同正式块：头行纹丝不动） */
+        syncToBottom();
+      });
+    }
+    if (R.live.thinkOpen && R.live.thinkBodyNode) {
+      R.live.thinkBuf += text;
+      rafFlush(thinkFlush);
+    } else {
+      R.live.thinkBuf += text; /* 折叠期纯累积——DOM 零触碰 */
+    }
   }
   function finalizeLive() {
+    /* 流式思考块收编（2026-10-12 走查六轮）：assistant/message 的正式块随后原位落（buildThink）；
+     *  turn/end 中断档同口清——残块不留。 */
+    if (R.live.thinkEl !== null) {
+      R.live.thinkEl.remove();
+      R.live.thinkEl = null;
+      R.live.thinkBuf = '';
+      R.live.thinkOpen = false;
+      R.live.thinkBodyNode = null;
+      if (R.live.thinkTimer !== null) { window.clearInterval(R.live.thinkTimer); R.live.thinkTimer = null; }
+    }
     if (R.live.lineEl === null) return;
     R.live.lineEl.remove(); /* 流式行永远在转正块之前（chunk 追加即尾）——腾位后转正块落尾即原位 */
     R.live.lineEl = null;
@@ -759,13 +1061,15 @@
     R = {
       sid: opts.sid,
       stream: opts.stream, tail: opts.tail, welcome: opts.welcome, pgMore: opts.pgMore,
+      toBottom: opts.toBottom || null,
       onFork: opts.onFork || function () {},
       onCopy: opts.onCopy || function () {},
       onUserSeen: opts.onUserSeen || null,
+      onAgentOpen: opts.onAgentOpen || function () {}, /* spawn 组卡行点击 → 回放窗（app.js 接线 ui.openSubagent） */
       cwdOf: opts.cwdOf || function () { return ''; },
-      seqs: [], seqEls: new Map(), toolRows: new Map(), ghostCalls: new Set(),
+      seqs: [], seqEls: new Map(), toolRows: new Map(), ghostCalls: new Set(), spawnCalls: new Map(), spawnGroup: null,
       openTurn: null,
-      live: { lineEl: null, textNode: null, buf: '' },
+      live: { lineEl: null, textNode: null, buf: '', thinkEl: null, thinkBuf: '', thinkSince: 0, thinkOpen: false, thinkTimer: null, thinkBodyNode: null },
       userSeen: false,
       busy: false, compacting: false, errorFlash: false,
       busyTimer: null, busyStart: 0,
@@ -781,18 +1085,23 @@
     R.welcome.hidden = false;
     R.tail.innerHTML = '正在连接…';
     bindOnce();
+    if (R.toBottom) R.toBottom.hidden = true;
     return api;
   }
 
   function close() {
     if (R === null) return;
     window.clearInterval(R.busyTimer);
+    if (R.live && R.live.thinkTimer !== null) window.clearInterval(R.live.thinkTimer);
     R = null;
   }
 
-  /** 一只 .turn 容器内的正文文本（复制口径——agent-md/agent-line，行首 ● 剥离）。 */
+  /** 一只 .turn 容器内的正文文本（复制口径——agent-md/agent-line，行首 ● 剥离；.think 思考块永不入选）。
+   *  agent-md 带 mdSource 时取正文 markdown 源串（2026-10-13 用户口令）——渲染态 textContent 会丢
+   *  代码围栏/加粗/表格等标记；agent-line（流式未转正残段）无源串，退回 textContent。 */
   function turnTextsOf(t) {
     return Array.prototype.slice.call(t.querySelectorAll('.agent-md, .agent-line')).map(function (l) {
+      if (typeof l.mdSource === 'string') return l.mdSource;
       return l.textContent.replace(/^●\s*/, '');
     });
   }
@@ -845,10 +1154,11 @@
       var img = e.target.closest('.msg-img .photo');
       if (img) window.open(img.getAttribute('src'), '_blank'); /* C3：点击放大 */
     });
-    /* 滚动：跟随判定（距底 40px）+ 滚顶自动加载更早（C2：先下滚 >40px 再回顶才触发 + 400ms 冷却） */
+    /* 滚动：跟随判定（距底 40px）+ 回到底部浮钮显隐 + 滚顶自动加载更早（C2：先下滚 >40px 再回顶才触发 + 400ms 冷却） */
     stream.addEventListener('scroll', function () {
       if (R === null) return;
       R.stick = nearBottom();
+      syncToBottom();
       if (R.pgMore.hidden) { R.pgArmed = false; return; }
       if (stream.scrollTop > STICK_PX) { R.pgArmed = true; return; }
       if (!R.pgArmed || R.pgCooling || R.loadingEarlier) return;
@@ -858,6 +1168,13 @@
       window.setTimeout(function () { if (R) R.pgCooling = false; }, 400);
     });
     pgMore.addEventListener('click', function () { loadEarlier(); });
+    var toBottom = R.toBottom;
+    if (toBottom) toBottom.addEventListener('click', function () {
+      if (R === null) return;
+      R.stick = true;
+      R.stream.scrollTop = R.stream.scrollHeight;
+      syncToBottom();
+    });
   }
 
   /* ── 事件批摄入（首屏 / SSE ev / 翻页）——律一：append 或按 seq 补插，无整区重渲 ── */
@@ -878,6 +1195,7 @@
     syncPgMore();
     flushClamps();
     if (wasStick) rafFlush(followScroll);
+    syncToBottom();
   }
 
   function applyInsertGroup(ops) {
@@ -989,12 +1307,14 @@
     toolKeyArg: toolKeyArg,
     toolHeadText: toolHeadText,
     toolHeadHtml: toolHeadHtml,
+    toolTailOf: toolTailOf,
+    crWash: crWash,
+    outputLinesOf: outputLinesOf,
     pageSlice: pageSlice,
     lineCountOf: lineCountOf,
     diffRowsOf: diffRowsOf,
     changeStatsOf: changeStatsOf,
     resultChip: resultChip,
-    thinkPreviewOf: thinkPreviewOf,
     skillMarkOf: skillMarkOf,
     textOf: textOf,
     imagesOf: imagesOf,
@@ -1007,6 +1327,7 @@
     open: open,
     ingest: ingest,
     chunk: chunk,
+    thinkChunk: thinkChunk,
     setPhase: setPhase,
     setCompacting: setCompacting,
     maxSeq: maxSeq,

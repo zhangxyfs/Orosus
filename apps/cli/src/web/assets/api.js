@@ -26,10 +26,20 @@
    *  DELETE 无 body 也带 content-type: application/json——server 写方法护栏对 DELETE 同样生效
    *  （T1 护栏；T16 修复：队列撤回/会话删除的无 body DELETE 此前会被 415 拦下）。 */
   function fetchJson(path, init) {
-    init = init || {};
+    init = Object.assign({}, init);
+    /* 超时护栏（2026-10-12 走查六根因修）：fetch 无超时——一个永不 settle 的请求会把调用方的
+     *  in-flight 互斥（轮询 p.busy）永久卡死，sessions/panel 轮询整页冻结、运行中转圈不显示即此。
+     *  init.timeoutMs（非 fetch 标准键——摘除不进 init）到期 AbortController 中止 → reject 走原失败面。 */
+    var timer = null;
+    if (typeof init.timeoutMs === 'number' && init.timeoutMs > 0) {
+      var ctrl = new AbortController();
+      init.signal = ctrl.signal;
+      timer = setTimeout(function () { ctrl.abort(); }, init.timeoutMs);
+    }
+    delete init.timeoutMs;
     var headers = Object.assign({}, authHeaders(), init.headers || {});
     if (init.body !== undefined || (init.method || 'GET') === 'DELETE') headers['content-type'] = 'application/json';
-    return fetch(path, Object.assign({}, init, { headers: headers })).then(function (res) {
+    var done = fetch(path, Object.assign({}, init, { headers: headers })).then(function (res) {
       return res.text().then(function (text) {
         var body = {};
         try { body = text ? JSON.parse(text) : {}; } catch { /* 非 JSON 错误壳 */ }
@@ -42,17 +52,28 @@
         return body;
       });
     });
+    if (timer !== null) done.finally(function () { clearTimeout(timer); });
+    return done;
   }
 
-  /* ═══════════ rafFlush：全局合帧器（§5 律二）——同帧多次调用同一 fn 只在下一 rAF 执行一次 ═══════════ */
+  /* ═══════════ rafFlush：全局合帧器（§5 律二）——同帧多次调用同一 fn 只执行一次。
+   *  rAF + 200ms 定时器兜底（2026-10-12 走查三轮——调研 §2.7 Reasonix rafBatch 同款）：后台标签/
+   *  WebView 节流时 rAF 停摆但 timer 仍触发——面板渲染等 rafFlush 链不再整体卡死；rAF 先到则取消
+   *  timer（前台零行为变化）。 */
   var rafPending = new Map();
   function rafFlush(fn) {
     if (rafPending.has(fn)) return;
-    rafPending.set(fn, true);
-    requestAnimationFrame(function () {
+    var entry = {};
+    rafPending.set(fn, entry);
+    var run = function () {
+      if (!rafPending.has(fn)) return;
       rafPending.delete(fn);
+      if (entry.raf !== undefined) cancelAnimationFrame(entry.raf);
+      if (entry.timer !== undefined) clearTimeout(entry.timer);
       fn();
-    });
+    };
+    entry.raf = requestAnimationFrame(run);
+    entry.timer = setTimeout(run, 200);
   }
 
   /* ═══════════ 轮询统一节拍器（§5）：1s 基拍；sessions（2s）与 panel（2s）同拍错峰 1s ═══════════ */
@@ -64,12 +85,18 @@
     for (var i = 0; i < pollers.length; i++) {
       var p = pollers[i];
       if (p.stopped || p.busy) continue;
-      if ((tickN - p.offset) % p.every === 0) {
-        p.busy = true;
-        Promise.resolve().then(p.fn).catch(function () { /* 轮询失败静默（断连面由 SSE 看门狗管） */ }).then(function () { p.busy = false; });
-      }
+      if ((tickN - p.offset) % p.every === 0) runPoll(p);
     }
   }, TICK_MS);
+  function runPoll(p) {
+    p.busy = true;
+    /* 看门狗（2026-10-12 走查六根因修）：fn 内请求挂起（fetch 原生无超时）时 12s 兜底释放互斥——
+     *  此前一次挂起即永久卡死（sessions/panel 轮询整页冻结、运行中侧栏不转圈的根因）。迟到响应
+     *  写回无害（渲染幂等）；fn 侧另有 timeoutMs 中止档（真正掐断请求）。 */
+    var release = function () { p.busy = false; };
+    Promise.resolve().then(p.fn).catch(function () { /* 轮询失败静默（断连面由 SSE 看门狗管） */ }).then(release);
+    setTimeout(release, 12000);
+  }
   /** 注册轮询（intervalMs/offsetMs 以秒级取整；返回 {stop}）。in-flight 互斥：上一次未回不发下一次。 */
   function addPoll(intervalMs, offsetMs, fn) {
     var p = { every: Math.max(1, Math.round(intervalMs / TICK_MS)), offset: Math.max(0, Math.round((offsetMs || 0) / TICK_MS)), fn: fn, busy: false, stopped: false };

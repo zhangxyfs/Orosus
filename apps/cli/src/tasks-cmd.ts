@@ -283,8 +283,9 @@ export function createAgentViewRenderer(
  * 历史子代理名册（2026-09-27 用户拍板：不删旧数据就得能查看——/tasks 列出盘上历史，最新在最上）。
  * 从主会话文件夹的 agents/ 目录重建：状态/轮数/工具调用/词元/起止时间取自各子代理会话文件；
  * 简述/后台/工种取自主会话文件里 spawn 工具调用的参数（callId 配对结果文本中的 8 位编号）。
- * 一期口径注记：状态按最后 turn/end 推断（completed→已完成，其余→失败）——截断收尾（撞限/超时）
- * 在旧文件里同为 interrupted，归入失败；新单子由活名册展示（带 truncated 标注），不在此纠偏。
+ * 一期口径注记：状态按最后 turn/end 推断（completed→已完成；无 turn/end 且事件文件仍在写〔mtime
+ *  90s 内〕→ 进行中〔2026-10-12 走查修——活名册空缺场景不再误标失败〕；其余→失败）——截断收尾
+ *  （撞限/超时）在旧文件里同为 interrupted，归入失败；新单子由活名册展示（带 truncated 标注），不在此纠偏。
  */
 export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): SubagentRosterEntry[] {
   const agentsDir = join(sessionsDir, mainSid, "agents");
@@ -310,7 +311,15 @@ export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): S
     const steps = events.filter((e) => e.type === "turn/step").length;
     const toolCalls = events.filter((e) => e.type === "tool/call").length;
     const lastEnd = [...events].reverse().find((e) => e.type === "turn/end") as { kind?: string } | undefined;
-    const status: SubagentRosterEntry["status"] = lastEnd?.kind === "completed" ? "completed" : "failed";
+    /* 2026-10-12 走查修：无 turn/end 且事件文件仍在写（mtime 新鲜，90s 同窗——PEER_STALE_MS 同值）
+     *  = 进行中——父进程重启/他端（web server）托管时活名册为空，历史行是唯一的面，此前一律判
+     *  「失败」（在跑的子代理被全量误标，用户走查抓包）；停笔断更（陈旧）才归失败。 */
+    let fresh = false;
+    if (lastEnd === undefined) {
+      try { fresh = Date.now() - statSync(join(agentsDir, d, "agents", "session.jsonl")).mtimeMs < 90_000; } catch { /* stat 失败按陈旧档 */ }
+    }
+    const status: SubagentRosterEntry["status"] =
+      lastEnd?.kind === "completed" ? "completed" : lastEnd === undefined && fresh ? "running" : "failed";
     const usage = events.reduce(
       (acc, e) => {
         const u = (e as { usage?: { input?: number; output?: number } }).usage;

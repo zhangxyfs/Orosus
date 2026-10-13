@@ -45,7 +45,9 @@ const makeUi = (): { ui: WebCommandUi; frames: InteractionFrame[]; waiting: Arra
   return { ui, frames, waiting };
 };
 
-/** 注入式 fake harness（T2 ④ 同款缝——⑧ 的 close 钩子面不装配真模块图）。 */
+/** 注入式 fake harness（T2 ④ 同款缝——⑧ 的 close 钩子面不装配真模块图）。
+ *  events 首吐一条 turn/start（2026-10-12 走查修适配：phase() 的 waiting 相位只在 busy 期生效——
+ *  ⑧ 的「挂起期 waiting-approval」断言须有活 turn 承载，与生产路径同构）。 */
 const makeFakeHarness = (sid: string): Harness => {
   let stopped = false;
   const idle = async (): Promise<void> => {
@@ -59,7 +61,11 @@ const makeFakeHarness = (sid: string): Harness => {
     prompt: async () => undefined,
     cancel: () => {},
     steer: () => false,
-    events: () => (async function* () { await idle(); yield* []; })(),
+    events: () => (async function* () {
+      yield { v: 1, id: "fake-turn-1", parentId: null, seq: 1, ts: new Date().toISOString(), type: "turn/start" };
+      await idle();
+      yield* [];
+    })(),
     history: async () => [],
     ensureHistoryFull: async () => {},
     eventsBefore: async () => [],
@@ -313,6 +319,7 @@ describe("web T5：WebCommandUi 交互桥（单元件）", () => {
     try {
       const hs = new HostedSession({ cwd: home, commandUi: webCommandUiFactory, harness: makeFakeHarness("s_close"), sessionsRoot: join(home, "sessions") });
       await hs.ready;
+      await tick(); // events 泵先吞 fake turn/start（turnActive 置位——等相位须在 turn 内；后挂交互避免被 turn/start 复位）
       const ui = webCommandUiOf(hs);
       expect(ui).toBeInstanceOf(WebCommandUi);
       const pChoose = ui!.choose("审批卡", ["批准一次", "拒绝"]);

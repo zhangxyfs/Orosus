@@ -7,11 +7,14 @@
  *  - ④ 锁定模块 toggle → 409 {error: 原因文案}；未知模块 404；坏 body 400；
  *  - ⑤ tasks 从 tool-todo/write 事件投影三态（done/in_progress→active/pending）；无 todo 事件 → []；
  *  - ⑥ 缓存断言（§5 律三）：1s 缓存连续两次 GET 第二次不重算（panelComputeCount 计数）；
- *    tool-todo/write 事件到达即失效下一请求出新值；模块 toggle（reload）后即失效。 */
+ *    tool-todo/write 事件到达即失效下一请求出新值；模块 toggle（reload）后即失效。
+ *  - ⑦ peers 投影（2026-10-12 走查五轮）：同桶外部进程在列；本池托管同伴与跨桶活体出列
+ *    （协同卡 = TUI /ps 同项目外部进程口径——全桶合并/自家托管重复列均被用户走查否）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { spawn } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { createServer as createHttpServer } from "node:http";
 
@@ -64,6 +67,21 @@ const seedSession = async (home: string, cwd: string, sid: string, opts: SeedOpt
   }
   if (opts.todos !== undefined) await store.append("tool-todo/write", { todos: opts.todos });
   await store.close();
+};
+
+/** 真驻留子进程（⑦ live.json fabrication 的活 pid 源——pool.test 同款）。 */
+const spawnSleeper = async (): Promise<{ pid: number; kill: () => void }> => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 400)); // Windows 上 pid 探活可达窗
+  return { pid: child.pid!, kill: () => { try { child.kill(); } catch { /* 已退 */ } } };
+};
+
+/** fabricate live.json（会话目录根——scanLivePeers 的事实源；⑦ 外部进程协同行）。 */
+const writeLive = (sessionDir: string, opts: { pid: number; phase: string; kind?: string }): void => {
+  writeFileSync(join(sessionDir, "live.json"), JSON.stringify({
+    v: 1, sid: basename(sessionDir), pid: opts.pid, token: "fabricate", kind: opts.kind ?? "tui",
+    phase: opts.phase, startedAt: Date.now(), lastEventAt: Date.now(),
+  }), "utf8");
 };
 
 interface Stack {
@@ -293,7 +311,7 @@ describe("web T10：面板数据 API", () => {
       expect(["connected", "idle", "failed", "pending-confirm", "disabled"]).toContain(row.state);
       expect(row.desc.length).toBeGreaterThan(0);
     }
-    // peers 面（E6：self 置顶——host 会话 presence kind=web；list = 全桶合并其余活体）
+    // peers 面（E6 + 走查五轮修订：self 置顶——host 会话 presence kind=web；list = 同桶外部进程——⑦ 细断言）
     expect(p.peers?.self?.sid).toBe("s_panel1");
     expect(p.peers?.self?.kind).toBe("web");
     expect(Array.isArray(p.peers?.list)).toBe(true);
@@ -487,4 +505,36 @@ describe("web T10：面板数据 API", () => {
     sse.destroy();
     await s.stop();
   }, 120_000);
+
+  it("⑦ peers 投影（2026-10-12 走查五轮口径）：同桶外部进程在列；本池托管同伴出列；跨桶活体出列", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home, "http://127.0.0.1:9"); // 死端口——本用例不发 prompt
+    const cwd1 = tmpCwd(), cwd2 = tmpCwd(); // 双桶（同项目/他项目）
+    await seedSession(home, cwd1, "s_p1", { label: "当前" });
+    await seedSession(home, cwd1, "s_sib", { label: "托管同伴" });
+    await seedSession(home, cwd1, "s_ext", { label: "同桶外进程" });
+    await seedSession(home, cwd2, "s_far", { label: "他桶外进程" });
+    const s = await startWeb(home, cwd1, "s_p1");
+    // 本池第二托管（kind=web presence——协同卡须出列的面）
+    const open = await postJson(s, "/api/sessions", { resumeSid: "s_sib" });
+    expect(open.status).toBe(200);
+    // 外部活体（live.json + 真 pid）：同桶 s_ext / 他桶 s_far
+    const sleeper = await spawnSleeper();
+    try {
+      writeLive(join(home, "sessions", encodeCwd(cwd1), "s_ext"), { pid: sleeper.pid, phase: "idle", kind: "tui" });
+      writeLive(join(home, "sessions", encodeCwd(cwd2), "s_far"), { pid: sleeper.pid, phase: "idle", kind: "tui" });
+      await new Promise((r) => setTimeout(r, 1_100)); // 快照缓存 1s TTL 出窗（open 期已建快照）
+      const p = await getPanel(s, "s_p1");
+      expect(p.peers?.self?.sid).toBe("s_p1");
+      const sids = (p.peers?.list ?? []).map((x) => x.sid);
+      expect(sids).toContain("s_ext"); // 同桶外部 TUI 进程——协同面有效信息（TUI /ps 同项目口径）
+      expect(sids).not.toContain("s_sib"); // 本池托管同伴——左栏可切，协同卡不重复列（走查五轮）
+      expect(sids).not.toContain("s_far"); // 跨桶活体——全桶合并面废弃
+      expect(sids).not.toContain("s_p1"); // self 置顶不重复入列
+    } finally {
+      sleeper.kill();
+      await s.stop();
+    }
+  }, 60_000);
 });

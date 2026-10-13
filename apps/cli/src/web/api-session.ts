@@ -527,6 +527,17 @@ registerRoute("POST", "/api/sessions", async (req, res) => {
     });
     pool.switchCurrent(hs.sid);
     unhideCwd(pool.home, hs.cwd); // B10 找回：该 cwd 建会话自动移出 hidden（幂等）
+    /* fork 自动命名（2026-10-12 走查修——TUI main.ts:1007 既有拍板「fork <父标题>」的 web 补齐：
+     *  fork 子体自身文件只有 header+fork 标记，firstUser/label 双缺 → 左栏裸显「（未命名会话）」；
+     *  经 h.setLabel 活写口落 session/label（autoTitle 见已有 label 即跳过——不覆盖）。 */
+    if (forkFrom !== undefined && !reused && hs.core !== undefined) {
+      const parentHead = readSessionHead(targetLoc!.file);
+      const parentTitle = parentHead?.label ?? parentHead?.firstUser;
+      if (parentTitle !== undefined && parentTitle !== "") {
+        await hs.core.setLabel(`fork ${parentTitle}`).catch(() => undefined);
+        pool.invalidateScan();
+      }
+    }
     sendJson(res, 200, { sid: hs.sid, ...(reused ? { reused: true } : {}) });
   } catch (err) {
     sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });

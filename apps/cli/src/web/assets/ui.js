@@ -870,18 +870,69 @@
 
   /* ═══════════ /tasks 浮层（T7 数据面：名册 + 等审批应答 + transcript 回放窗） ═══════════ */
   var TASK_STATUS = { queued: ['排队中', 'st-run'], running: ['运行中', 'st-run'], completed: ['已完成', 'st-ok'], failed: ['失败', 'st-err'] };
+  var taskViewTimer = null; /* 回放窗 2s 轮询（2026-10-12 走查六轮：实时刷新 + 贴底跟随；关窗即停） */
+
+  /** 名册行（走查六轮：状态移到 id 后即显——此前埋在超长 label 尾端不可见；历史行带标；等审批/后台徽标保留）。 */
+  function taskRowHtml(tk) {
+    var rel = tk.depth === 2 ? tk.parentId + ' - ' + tk.id : tk.id;
+    var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
+    var tag = (tk.pendingApproval ? ' <span class="st-warn">· 等审批</span>' : '') + (tk.background ? ' <span class="dim">· 后台</span>' : '') + (tk.historical ? ' <span class="dim">· 历史</span>' : '');
+    return '<span class="pu-caret">❯</span><span class="' + st[1] + '">[' + (tk.depth === 2 ? '孙代理' : '子代理') + '] ' + esc(rel) + '</span>' +
+      ' <span class="tk-st ' + st[1] + '">' + st[0] + '</span>' + tag +
+      '<span class="pi-desc">' + esc(tk.label ?? '') + '</span>';
+  }
+
+  /** transcript 回放窗（走查六轮三修：单滚动〔CSS :has 体退滚动〕+ 2s 实时刷新〔事件数变才重渲〕+
+   *  贴底跟随〔用户上翻中不打扰〕）。 */
+  function openTaskView(tk) {
+    var sid = H.getSid();
+    var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
+    openView({
+      title: '子代理 ' + esc(tk.id) + ' · ' + esc(tk.label ?? ''),
+      en: 'TRANSCRIPT',
+      bodyHtml: '<div class="pu-text"><span class="' + st[1] + '">状态：' + st[0] + ' · ' + (tk.turns ?? 0) + ' 轮' + (tk.background ? ' · 后台' : '') + (tk.error ? ' · ' + esc(tk.error) : '') + '</span></div><div class="mini-stream" id="pu-transcript">加载中…</div>',
+      foot: '滚动查看 · Esc 返回列表',
+    });
+    var load = function () {
+      A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(tk.id) + '/events', { timeoutMs: 8000 }).then(function (er) { /* 超时档——挂起不堆叠 */
+        var box = document.getElementById('pu-transcript');
+        if (!box || !globalThis.OrosusRender) return;
+        var n = (er.events ?? []).length;
+        if (box.getAttribute('data-n') === String(n)) return; /* 无新事件零重渲——滚动位不动 */
+        var pinBottom = box.getAttribute('data-n') === null || (box.scrollHeight - box.scrollTop - box.clientHeight < 40);
+        box.setAttribute('data-n', String(n));
+        box.innerHTML = '';
+        globalThis.OrosusRender.renderTranscript(box, er.events ?? []);
+        if (pinBottom) box.scrollTop = box.scrollHeight;
+      }, function () {
+        var box = document.getElementById('pu-transcript');
+        if (box && box.getAttribute('data-n') === null) box.textContent = '（回放拉取失败）';
+      });
+    };
+    load();
+    if (taskViewTimer !== null) clearInterval(taskViewTimer);
+    taskViewTimer = setInterval(function () {
+      if (!document.getElementById('pu-transcript')) { clearInterval(taskViewTimer); taskViewTimer = null; return; } /* 关窗自停 */
+      load();
+    }, 2000);
+  }
+
+  /** 组卡行直进（app.js spawn 组卡点击面）：名册查证在册 → 直接回放窗（等审批优先进应答）。 */
+  function openSubagent(id) {
+    var sid = H.getSid();
+    A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/tasks').then(function (r) {
+      var tk = (r.rows ?? []).find(function (x) { return x.id === id; });
+      if (!tk) { H.toast('子代理 ' + id + ' 不在册（可能已清理）'); return; }
+      if (tk.pendingApproval) { openTasksPanel(); return; } /* 等审批走列表应答链 */
+      openTaskView(tk);
+    }, function () { H.toast('拉取子代理名册失败'); });
+  }
 
   function openTasksPanel() {
     var sid = H.getSid();
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/tasks').then(function (r) {
       var rows = (r.rows ?? []).map(function (tk) {
-        var rel = tk.depth === 2 ? tk.parentId + ' - ' + tk.id : tk.id;
-        var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
-        var tag = (tk.pendingApproval ? ' <span class="st-warn">· 等审批</span>' : '') + (tk.background ? ' <span class="dim">· 后台</span>' : '');
-        return {
-          html: '<span class="pu-caret">❯</span><span class="' + st[1] + '">[' + (tk.depth === 2 ? '孙代理' : '子代理') + '] ' + esc(rel) + '</span><span class="pi-desc">' + esc(tk.label ?? '') + ' · ' + st[0] + tag + '</span>',
-          data: tk,
-        };
+        return { html: taskRowHtml(tk), data: tk };
       });
       if (rows.length === 0) {
         rows = [{ html: '<span class="dim">（暂无在册子代理——对模型说「派个子代理去 …」后这里会列出；后台跑完结论自动送回对话）</span>', cls: 'sep', sep: true }];
@@ -908,24 +959,7 @@
             });
             return;
           }
-          /* transcript 回放窗（T7：末 500 事件——render.renderTranscript 同款渲染） */
-          var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
-          openView({
-            title: '子代理 ' + esc(tk.id) + ' · ' + esc(tk.label ?? ''), /* esc 补位（Minor③） */
-            en: 'TRANSCRIPT',
-            bodyHtml: '<div class="pu-text"><span class="' + st[1] + '">状态：' + st[0] + ' · ' + (tk.turns ?? 0) + ' 轮' + (tk.background ? ' · 后台' : '') + (tk.error ? ' · ' + esc(tk.error) : '') + '</span></div><div class="mini-stream" id="pu-transcript">加载中…</div>',
-            foot: '滚动查看 · Esc 返回列表',
-          });
-          A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(tk.id) + '/events').then(function (er) {
-            var box = document.getElementById('pu-transcript');
-            if (box && globalThis.OrosusRender) {
-              box.innerHTML = '';
-              globalThis.OrosusRender.renderTranscript(box, er.events ?? []);
-            }
-          }, function () {
-            var box = document.getElementById('pu-transcript');
-            if (box) box.textContent = '（回放拉取失败）';
-          });
+          openTaskView(tk); /* transcript 回放窗（单滚动 + 实时刷新 + 贴底跟随——走查六轮） */
         },
       });
     }, function () { H.toast('拉取子代理名册失败'); });
@@ -960,14 +994,17 @@
     else if (frame.phase === 'error') body.innerHTML = '<span class="bad">侧问失败：' + esc(frame.text ?? '') + '</span>';
   }
 
-  /* ═══════════ cwd 芯片菜单（D5：仅空会话；候选 = 项目池） ═══════════ */
+  /* ═══════════ cwd 芯片菜单（D5：仅空会话；候选 = 项目池 + 「浏览文件夹…」直达任意目录〔走查八轮〕） ═══════════ */
   function openCwdMenu(anchor, projects, currentCwd) {
-    var rows = projects.map(function (p) {
+    var rows = [{
+      html: '<span class="pu-caret">❯</span><span class="pu-check"></span><span class="pi-name">📂 浏览文件夹…</span><span class="pi-desc">任意目录——下钻 / 上级回退 / 路径直达</span>',
+      browse: true,
+    }].concat(projects.map(function (p) {
       return {
         html: '<span class="pu-caret">❯</span><span class="pu-check">' + (p.cwd === currentCwd ? '✓' : '') + '</span><span class="pi-name">' + esc(p.name) + '</span><span class="pi-desc">' + esc(p.cwd) + (p.hidden ? '（已移除——选择即找回）' : '') + '</span>',
         data: p,
       };
-    });
+    }));
     openPick({
       mini: 'right',
       anchor: anchor,
@@ -976,7 +1013,10 @@
       items: rows,
       foot: '选择后在所选目录开会话（当前空会话保留）· Esc 关闭',
       onPick: function (i) {
-        var p = rows[i] && rows[i].data;
+        var row = rows[i];
+        if (!row) return;
+        if (row.browse) { H.onBrowseFolder(); return; }
+        var p = row.data;
         if (!p) return;
         H.onCwdPick(p.cwd, p.name);
       },
@@ -1003,6 +1043,7 @@
     openEffortMenu: openEffortMenu,
     openPermMenu: openPermMenu,
     openTasksPanel: openTasksPanel,
+    openSubagent: openSubagent, /* spawn 组卡行点击直进回放（app.js onAgentOpen 接线） */
     openView: openView,
     viewLines: viewLines,
     mdHtml: mdHtml, /* marked+DOMPurify 渲染口（T17 更新弹窗/注入全文/压缩摘要消费） */

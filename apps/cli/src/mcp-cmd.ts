@@ -81,8 +81,8 @@ export function defaultMcpCmdDeps(): McpCmdDeps {
   };
 }
 
-/** 配置文件里的既有 server 名（重名校验 + on/off 读旧值）。 */
-const configuredServers = (path: string): Record<string, Record<string, unknown>> => {
+/** 配置文件里的既有 server 名（重名校验 + on/off 读旧值）。web add 结构化形态共用（2026-10-12）。 */
+export const configuredServers = (path: string): Record<string, Record<string, unknown>> => {
   if (!existsSync(path)) return {};
   try {
     const doc = parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
