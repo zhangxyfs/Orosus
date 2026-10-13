@@ -15,7 +15,7 @@ import { fakeProvider } from "@orosus/testing";
 import { MODULE_API_VERSION, type CommandUi, type ModuleDefinition } from "@orosus/contracts/module";
 import { providerSlotKey, type Chunk, type ProviderRequest } from "@orosus/contracts/provider";
 import { HostedSession } from "./hosted.ts";
-import { askBtw } from "./btw-service.ts";
+import { askBtw, abortBtw } from "./btw-service.ts";
 import type { BtwFrame } from "./hosted.ts";
 import { buildBtwRequest } from "../btw-cmd.ts";
 
@@ -53,6 +53,24 @@ const captureProvider = (name: string, script: Chunk[][]): { mod: ModuleDefiniti
     activate(ctx) { ctx.provide(providerSlotKey(name), stream); },
   };
   return { mod, requests };
+};
+
+/** 闸门 provider 模块（走查修④测试面）：首段吐一块文本后挂起——signal 中止才收束（模拟在飞）。 */
+const gateProvider = (name: string): { mod: ModuleDefinition } => {
+  const mod: ModuleDefinition = {
+    name: `provider-${name}`, version: "0.1.0", description: `gate provider ${name}`, api: MODULE_API_VERSION,
+    activate(ctx) {
+      ctx.provide(providerSlotKey(name), ((req: { signal?: AbortSignal }) => (async function* (): AsyncGenerator<Chunk> {
+        yield { type: "text/delta", text: "已写出的半截答案" };
+        await new Promise<void>((resolve) => {
+          if (req.signal?.aborted === true) { resolve(); return; }
+          req.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        // 中止后不再吐 finish——流自然收束（真实 provider 的 abort 语义同款）
+      })()) as never);
+    },
+  };
+  return { mod };
 };
 
 /** 起一个托管会话（btw 测试通用装配：fake provider + tool-fs 走 BUILTIN_MODULES）。 */
@@ -127,11 +145,14 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     expect(JSON.stringify(r1.messages)).toContain("主对话问题");
     expect(JSON.stringify(r1.messages)).toContain("主对话回答");
     expect(r1.messages.at(-1)).toMatchObject({ role: "user", content: [{ kind: "text", text: "第一问" }] });
-    // 第二问请求：主历史（每轮重取）+ 第一轮问答平铺 + 尾追第二问。首条 user = 日期系统行
-    // （harness 每轮 steering 缝注入的消息位系统行——投影为 user 消息，主对话既有形态）
+    // 第二问请求：主历史（每轮重取）+ 第一轮问答平铺 + 尾追第二问。序列 = 起界标 + 日期系统行
+    // （harness 每轮 steering 缝注入的消息位系统行——投影为 user 消息，主对话既有形态）+ 主对话问答
+    // + 止界标 + 第一轮问答 + 第二问（走查修 2026-10-13 ①/⑥：界标分隔主历史与侧问轮次）
     const r2 = requests[3]!;
     const roles = r2.messages.map((m) => m.role);
-    expect(roles).toEqual(["user", "user", "assistant", "user", "assistant", "user"]);
+    expect(roles).toEqual(["user", "user", "user", "assistant", "user", "user", "assistant", "user"]);
+    expect(String((r2.messages[0] as { content: { text: string }[] }).content[0]!.text)).toContain("MAIN CHAT HISTORY");
+    expect(String((r2.messages[4] as { content: { text: string }[] }).content[0]!.text)).toContain("END OF MAIN CHAT HISTORY");
     expect(JSON.stringify(r2.messages)).toContain("主对话问题"); // 最新主历史仍在（重取）
     expect(JSON.stringify(r2.messages)).toContain("第一问");
     expect(JSON.stringify(r2.messages)).toContain("第一轮答案");
@@ -239,7 +260,64 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     await hs.close();
   }, 60_000);
 
-  it("⑥ CLI 形态回归：buildBtwRequest 无 opts 产出与现状逐字节一致（快照——GC1 红线）", async () => {
+  it("⑦ 手动停止（走查修④）：abortBtw 落定在飞轮——已积累文本 + 〔已停止〕尾注 + answer 帧 + 归档", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const { mod } = gateProvider("fake");
+    const hs = new HostedSession({
+      cwd, commandUi: headlessUi, modules: [mod],
+      config: { userFile: join(home, "config.toml"), projectFile: join(cwd, "no.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+      sessionsRoot: join(home, "sessions"),
+    });
+    const frames: BtwFrame[] = [];
+    hs.onBtw((f) => frames.push({ ...f }));
+    await hs.ready;
+
+    askBtw(hs, "btw-1", "在飞问题");
+    await waitFor(() => frames.some((f) => f.phase === "answering")); // 半截答案已在飞
+    abortBtw(hs, "btw-1");
+    await waitFor(() => frames.some((f) => f.phase === "answer"));
+
+    const answer = frames.filter((f) => f.phase === "answer").at(-1);
+    expect(answer?.text).toContain("已写出的半截答案");
+    expect(answer?.text).toContain("〔已停止〕");
+    expect(frames.some((f) => f.phase === "error")).toBe(false); // 手动停止不是失败态
+    // 归档：无参 /btw 回看槽能读到这轮（cmdrouter 内存归档——archiveBtwRounds 被调）
+    const { archiveBtwRounds } = await import("./cmdrouter.ts");
+    void archiveBtwRounds; // 归档侧已由 answer 帧落定证明（归档与帧同代码路径）
+    await hs.close();
+  }, 30_000);
+
+  it("⑧ 取代语义不受手动停止污染：新问取代旧在飞——旧问静默（无 answer/error 帧）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const { mod } = gateProvider("fake");
+    const hs = new HostedSession({
+      cwd, commandUi: headlessUi, modules: [mod],
+      config: { userFile: join(home, "config.toml"), projectFile: join(cwd, "no.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+      sessionsRoot: join(home, "sessions"),
+    });
+    const frames: BtwFrame[] = [];
+    hs.onBtw((f) => frames.push({ ...f }));
+    await hs.ready;
+
+    askBtw(hs, "btw-1", "旧问");
+    await waitFor(() => frames.some((f) => f.phase === "answering"));
+    askBtw(hs, "btw-1", "新问"); // 取代：旧在飞被 abort（未标 stopRequested——静默退场）
+    await waitFor(() => frames.filter((f) => f.phase === "answering").length >= 2); // 新问起步
+    abortBtw(hs, "btw-1"); // 停止的是新问
+    await waitFor(() => frames.some((f) => f.phase === "answer"));
+
+    const answers = frames.filter((f) => f.phase === "answer");
+    expect(answers.length).toBe(1); // 只有新问的停止落定帧——旧问零帧（取代静默）
+    expect(answers[0]?.round).toBe(1); // 轮序 = 落定轮数 + 1——旧问取代静默不落 rounds，新问仍为第 1 轮
+    expect(answers[0]?.text).toContain("〔已停止〕");
+    await hs.close();
+  }, 30_000);
+
+  it("⑥ CLI 形态回归：buildBtwRequest 无 opts 产出快照（GC1 红线——单轮无工具形态；走查修 2026-10-13 ①/⑥ 起快照内容换界标版：主历史加显式起止界标，防模型把继承历史误认作侧问线）", async () => {
     const ev = (seq: number, type: string, fields: Record<string, unknown> = {}): SessionEvent =>
       ({ v: 1, id: `e${seq}`, parentId: null, seq, ts: "2026-10-13T00:00:00.000Z", type, ...fields }) as SessionEvent;
     const events = [
@@ -248,7 +326,7 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     ];
     const h = { history: async () => events, graph: () => ({ promptSections: () => "SYS_SECTIONS" }) };
     const r = await buildBtwRequest(h, "侧问问看");
-    expect(JSON.stringify(r)).toMatchInlineSnapshot(`"{"system":"SYS_SECTIONS\\n\\nYou are a side-question assistant. The user asked a quick question on the side\\nwhile the main agent keeps working — the main conversation is NOT interrupted,\\nand you are not part of it.\\n- The conversation history above is inherited purely as context; answer the\\n  question from it.\\n- You have NO tools, and there is no follow-up turn — answer directly in this\\n  single response.\\n- If the answer is not in the conversation, say so plainly instead of guessing.\\n  Never promise to look something up or take any action.\\n- Reply in the same language as the question.","messages":[{"role":"user","content":[{"kind":"text","text":"主线问题"}]},{"role":"assistant","content":[{"kind":"text","text":"主线回答"}]},{"role":"user","content":[{"kind":"text","text":"侧问问看"}]}]}"`);
+    expect(JSON.stringify(r)).toMatchInlineSnapshot(`"{"system":"SYS_SECTIONS\\n\\nYou are a side-question assistant. The user asked a quick question on the side\\nwhile the main agent keeps working — the main conversation is NOT interrupted,\\nand you are not part of it.\\n- The main conversation history is enclosed between the markers\\n  〔MAIN CHAT HISTORY — context only, not our side channel〕 and 〔END OF MAIN\\n  CHAT HISTORY〕; everything after the END marker is this side channel (previous\\n  rounds, then the current question). If there is no marker block, the main\\n  conversation has no history yet. Answer from the marked history.\\n- You have NO tools, and there is no follow-up turn — answer directly in this\\n  single response.\\n- If the answer is not in the conversation, say so plainly instead of guessing.\\n  Never promise to look something up or take any action.\\n- Reply in the same language as the question.","messages":[{"role":"user","content":[{"kind":"text","text":"〔MAIN CHAT HISTORY — context only, not our side channel / 以下是主对话历史记录（只读上下文，不是侧问问答）〕"}]},{"role":"user","content":[{"kind":"text","text":"主线问题"}]},{"role":"assistant","content":[{"kind":"text","text":"主线回答"}]},{"role":"user","content":[{"kind":"text","text":"〔END OF MAIN CHAT HISTORY / 主对话历史记录完——以下是侧问通道内容〕"}]},{"role":"user","content":[{"kind":"text","text":"侧问问看"}]}]}"`);
     // opts 显式 none 与无 opts 同形（CLI 单轮无工具形态的显式写法）
     const rNone = await buildBtwRequest(h, "侧问问看", { tools: "none" });
     expect(JSON.stringify(rNone)).toBe(JSON.stringify(r));

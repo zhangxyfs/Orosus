@@ -411,7 +411,7 @@
    *    ctx = { appendTop(el)——top-level 落位；turn——当前 .turn 容器（null = 顶级）；
    *            setTurn(t)；pendingClamp[]——待测高气泡；fragMode } */
   function makeCtx(appendTop, sharedClamp) {
-    var ctx = { appendTop: appendTop, turn: null, fragMode: false, pendingClamp: sharedClamp || [], usage: null };
+    var ctx = { appendTop: appendTop, turn: null, fragMode: false, pendingClamp: sharedClamp || [], usage: null, noFork: false };
     ctx.setTurn = function (t) { ctx.turn = t; };
     return ctx;
   }
@@ -1078,7 +1078,7 @@
     var usageText = usage ? '<span class="tf-time">↑ ' + fmtK(usage.input) + ' · ↓ ' + fmtK(usage.output) + '</span>' : '';
     var foot = el('div', 'turn-foot',
       '<button type="button" class="tf-btn" data-tf="copy" title="复制本轮回复">⧉ 复制</button>' +
-      '<button type="button" class="tf-btn" data-tf="fork" title="从此处分叉会话">⑂ 分支</button>' +
+      (ctx.noFork ? '' : '<button type="button" class="tf-btn" data-tf="fork" title="从此处分叉会话">⑂ 分支</button>') + /* 走查修②：回放态（子代理 tab）无分叉面 */
       '<span class="tf-time">完成于 ' + esc(fmtTurnTime(ev.ts)) + '</span>' + usageText);
     foot.setAttribute('data-seq', String(ev.seq));
     t.appendChild(foot);
@@ -1445,11 +1445,46 @@
   }
 
   /** transcript 回放窗渲染（/tasks 查看窗——子代理 jsonl 原始行，无 seq；一次性静态渲染 ≤500 行）。 */
-  function renderTranscript(container, events) {
+  /** 走查修③（2026-10-13 用户报障）：回放容器的点击委派——主流区的 bindOnce 只绑 R.stream，
+   *  分栏里的子代理回放（.ag-stream）点击曾是死面。三件：.msg-toggle 展开/收起（锚定口径同款）、
+   *  [data-mcopy] 用户气泡复制、[data-tf="copy"] 轮复制；分支钮回放态不渲染（noFork），
+   *  此委派亦不处理 fork。挂在常驻容器上（#pane-body——tab 体重渲不换容器，一次绑定永效）。 */
+  function bindTranscriptActions(container, opts) {
+    var onCopy = opts && opts.onCopy;
+    container.addEventListener('click', function (e) {
+      var tg = e.target && e.target.closest ? e.target.closest('.msg-toggle') : null;
+      if (tg) {
+        var mu = tg.closest('.msg-user');
+        if (!mu) return;
+        anchoredToggle(mu, function () {
+          var expanded = mu.classList.toggle('expanded');
+          mu.classList.toggle('msg-clamped', !expanded);
+          tg.textContent = expanded ? '▴ 收起' : '▾ 展开全部';
+        });
+        return;
+      }
+      var mc = e.target && e.target.closest ? e.target.closest('[data-mcopy]') : null;
+      if (mc) {
+        var bubble = mc.closest('.msg-user') && mc.closest('.msg-user').querySelector('.msg-text');
+        if (bubble && typeof onCopy === 'function') onCopy(bubble.textContent, '已复制消息');
+        return;
+      }
+      var tf = e.target && e.target.closest ? e.target.closest('[data-tf="copy"]') : null;
+      if (tf) {
+        var turn = tf.closest('.turn');
+        var md = turn && (finalMdOf(turn) || claimBackward(turn));
+        var text = md ? (typeof md.mdSource === 'string' ? md.mdSource : md.textContent.replace(/^●\s*/, '')) : '';
+        if (typeof onCopy === 'function') onCopy(text, text !== '' ? '已复制本轮回复' : '（本轮无可复制文本）');
+      }
+    });
+  }
+
+  function renderTranscript(container, events, opts) {
     container.innerHTML = '';
     var localClamp = [];
     var ctx = makeCtx(function (node) { container.appendChild(node); }, localClamp);
     ctx.noWork = true; /* 回放窗豁免（2026-10-13 工作组设计：timeline 原样陈列不进组） */
+    ctx.noFork = !!(opts && opts.noFork); /* 走查修②：子代理回放的轮脚无「分支」（分叉只对主会话有意义） */
     var evs = (events || []).slice(-500);
     for (var i = 0; i < evs.length; i++) emitEvent(evs[i], ctx);
     measureClamp(localClamp);
@@ -1481,6 +1516,8 @@
     fmtWorkDur: fmtWorkDur,
     fmtTurnTime: fmtTurnTime,
     esc: esc,
+    mdRender: mdRender, /* 走查修⑤：btw 回答落定态复用同款 markdown 渲染（marked+DOMPurify，外链加固钩子在内） */
+    bindTranscriptActions: bindTranscriptActions, /* 走查修③：分栏回放的点击委派（展开/复制） */
     /* DOM 应用层 */
     open: open,
     ingest: ingest,

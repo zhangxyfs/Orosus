@@ -14,6 +14,8 @@ const ev = (seq: number, type: string, fields: Record<string, unknown> = {}): Se
   ({ v: 1, id: `e${seq}`, parentId: null, seq, ts: "2026-10-03T00:00:00.000Z", type, ...fields }) as SessionEvent;
 
 const userEv = (seq: number, text: string): SessionEvent => ev(seq, "user/message", { content: [{ kind: "text", text }] });
+/** 消息首文本件读取（ModelMessage 联合型的 toolResult 支无 content——结构化窄化后再取）。 */
+const textOf = (m: ModelMessage): string => String((m as { content?: { kind: string; text?: string }[] }).content?.[0]?.text ?? "");
 const asstEv = (seq: number, text: string): SessionEvent => ev(seq, "assistant/message", { content: [{ kind: "text", text }] });
 
 /** 桩 harness（BtwRequestSource 结构面）：sections 可注入、history 计数可断言。 */
@@ -66,25 +68,30 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
   it("② messages 尾追：deriveMessages 同源投影 + 问题消息收尾（继承父上下文不需要 fork 链）", async () => {
     const events = [userEv(1, "主线问题"), asstEv(2, "主线回答")];
     const r = await buildBtwRequest(stubH(events), "侧问：这个 unsafe 必要吗");
-    expect(r.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    /* 走查修（2026-10-13 报障①/⑥）：主历史两端加界标——角色序列 = 起界标+历史+止界标+问题 */
+    expect(r.messages.map((m) => m.role)).toEqual(["user", "user", "assistant", "user", "user"]);
+    expect(textOf(r.messages[0]!)).toContain("MAIN CHAT HISTORY");
+    expect(textOf(r.messages[3]!)).toContain("END OF MAIN CHAT HISTORY");
     expect(r.messages.at(-1)).toMatchObject({ role: "user", content: [{ kind: "text", text: "侧问：这个 unsafe 必要吗" }] });
   });
 
   it("③ 投影尾部防御两态：缺果尾剥 toolCalls（纯工具回合整条去）/ 干净尾不动", async () => {
+    /* 界标定位小工具：止界标下标（历史尾 = 止界标前一条；问题尾 = 恒末条） */
+    const endMark = (ms: ModelMessage[]): number => ms.findIndex((m) => textOf(m).includes("END OF MAIN CHAT HISTORY"));
     // 缺果尾 a：assistant 有正文 + tool/call 已落、result 未落 → 剥 toolCalls 留正文（cc stripInProgress 同族）
     const dangling = [userEv(1, "q"), asstEv(2, "我先看看文件"), ev(3, "tool/call", { callId: "c1", name: "Read", args: {} })];
     const r1 = await buildBtwRequest(stubH(dangling), "侧问");
-    expect(r1.messages.at(-2)).toMatchObject({ role: "assistant", content: [{ kind: "text", text: "我先看看文件" }] });
-    expect(r1.messages.at(-2)).not.toHaveProperty("toolCalls");
+    expect(r1.messages[endMark(r1.messages) - 1]).toMatchObject({ role: "assistant", content: [{ kind: "text", text: "我先看看文件" }] });
+    expect(r1.messages[endMark(r1.messages) - 1]).not.toHaveProperty("toolCalls");
     // 缺果尾 b：纯工具回合（content 空、只挂 toolCalls——主循环不会遇到的形态）→ 整条去
     const pureTool = [userEv(1, "q"), ev(2, "assistant/message", { content: [] }), ev(3, "tool/call", { callId: "c1", name: "Read", args: {} })];
     const r2 = await buildBtwRequest(stubH(pureTool), "侧问");
-    expect(r2.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(r2.messages.map((m) => m.role)).toEqual(["user", "user", "user", "user"]); // 起界标+q+止界标+问题
     // 干净尾：assistant 收尾 + 上一对 call/result 齐 → 原样透传（末条照样是尾追问题）
     const clean = [userEv(1, "q"), asstEv(2, "我看完了"), ev(3, "tool/call", { callId: "c1", name: "Read", args: {} }), ev(4, "tool/result", { callId: "c1", output: "文件内容" }), asstEv(5, "结论")];
     const r3 = await buildBtwRequest(stubH(clean), "侧问");
-    expect(r3.messages.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "assistant", "user"]);
-    expect(r3.messages[1]).toMatchObject({ toolCalls: [{ callId: "c1", name: "Read" }] }); // 中段配对不误伤
+    expect(r3.messages.map((m) => m.role)).toEqual(["user", "user", "assistant", "toolResult", "assistant", "user", "user"]);
+    expect(r3.messages[2]).toMatchObject({ toolCalls: [{ callId: "c1", name: "Read" }] }); // 中段配对不误伤
     // 纯函数面：非 assistant 尾 / 无 toolCalls 尾原样返回同一引用
     const bare = [{ role: "user", content: [{ kind: "text", text: "q" }] }] as ModelMessage[];
     expect(stripTrailingDanglingToolCalls(bare)).toBe(bare);

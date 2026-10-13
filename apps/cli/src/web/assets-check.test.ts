@@ -299,6 +299,27 @@ describe("web T15：前端骨架静态资产", () => {
     expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
   });
 
+  it("⑪ 走查修（2026-10-13 用户报障六连）：回放交互委派 + 分支钮裁除 + btw 停止钮 + md 渲染 + 历史界标", () => {
+    const render = read("render.js");
+    const app = read("app.js");
+    const paneJs = read("pane.js");
+    /* ③ bindTranscriptActions 导出 + #pane-body 常驻绑定（展开/复制在子代理 tab 生效） */
+    expect(render).toContain("bindTranscriptActions: bindTranscriptActions");
+    expect(app).toContain("OrosusRender.bindTranscriptActions(paneBodyEl");
+    /* ② noFork：renderTranscript 第三参 + 轮脚分支钮条件渲染 + 子代理 tab 接线 */
+    expect(render).toContain("ctx.noFork = !!(opts && opts.noFork)");
+    expect(render).toContain("ctx.noFork ? ''");
+    expect(app).toContain("renderTranscript(streamEl, events, { noFork: true })");
+    /* ④ btw 停止钮：pane.js 在飞判据（answering/tool/未回填非 error 同款三口径）+ app.js 停止路由 */
+    expect(paneJs).toContain("data-btwstop");
+    expect(paneJs).toContain("lastRd.phase === 'answering' || lastRd.phase === 'tool'");
+    expect(app).toContain("abort: true");
+    /* ⑤ btw 落定回答走 mdRender（导出 + btwMd 消费 + 在飞不跑 md） */
+    expect(render).toContain("mdRender: mdRender");
+    expect(paneJs).toContain("R.mdRender");
+    /* ①/⑥ 主历史界标（btw-cmd.ts 是 ts 不在本资产面——此处钉前端可证面：无。界标由 btw-cmd/btw-service 测试面钉） */
+  });
+
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {
     const { server, port } = await startWebServer({ cwd: process.cwd(), home: process.cwd() });
     const base = `http://127.0.0.1:${port}`;

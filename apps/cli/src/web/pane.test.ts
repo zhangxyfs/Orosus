@@ -321,10 +321,40 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     ] });
     expect(html2).toContain('<div class="msg-text">这是什么</div>'); // 复用 .msg-user 气泡
     expect(html2).toContain("回答中…"); // 回答中相位态
-    expect(html2).toContain('<div class="btw-a">答案</div>'); // 落定态纯文本
+    expect(html2).toContain('<div class="btw-a"><div class="md">答案</div></div>'); // 落定态走 md 渲染（走查修⑤——node 态无 OrosusRender 降级 esc 纯文本，壳层 .md 恒在）
     expect(html2).toContain("侧问失败：坏了"); // 失败终态
     expect(html2).toContain("查证中…"); // 查证中相位态
     expect(html2).not.toContain('<div class="msg-text"></div>'); // 空 q 垫片不出空气泡
+  });
+
+  it("走查修④⑤（2026-10-13 用户报障）：在飞末轮发送钮变 ■ 停止 + 落定回答走 mdRender（在飞保持纯文本）", () => {
+    // ④ 在飞 → 停止钮（type=button 不走 submit + data-btwstop 路由标记）；落定/空态 → 恢复原发送钮
+    const flying = P.btwTabHtml({ rounds: [{ q: "q", a: null, phase: "answering" }] });
+    expect(flying).toContain('data-btwstop="1"');
+    expect(flying).toContain(">■</button>");
+    expect(flying).toContain('class="sendbtn stop"');
+    const toolPhase = P.btwTabHtml({ rounds: [{ q: "q", a: "半截", phase: "tool" }] });
+    expect(toolPhase).toContain('data-btwstop="1"'); // 查证中也算在飞
+    const settled = P.btwTabHtml({ rounds: [{ q: "q", a: "答", phase: null }] });
+    expect(settled).not.toContain("data-btwstop");
+    const errDone = P.btwTabHtml({ rounds: [{ q: "q", a: "坏了", phase: "error" }] });
+    expect(errDone).not.toContain("data-btwstop"); // error 终态不在飞
+    const lockedFlying = P.btwTabHtml({ rounds: [{ q: "q", a: null, phase: "answering" }] }, true);
+    expect(lockedFlying).not.toContain("data-btwstop"); // 锁定态（跨会话）不出停止钮——composer 全禁用口径
+    // ⑤ 落定回答经 OrosusRender.mdRender；在飞不跑 md（律二）
+    const calls: string[] = [];
+    (globalThis as Record<string, unknown>)["OrosusRender"] = { mdRender: (t: string) => { calls.push(t); return "<p>MD:" + t + "</p>"; } };
+    try {
+      const html = P.btwTabHtml({ rounds: [{ q: "q", a: "**粗体**", phase: null }] });
+      expect(calls).toEqual(["**粗体**"]);
+      expect(html).toContain('<div class="md"><p>MD:**粗体**</p></div>');
+      calls.length = 0;
+      const fly = P.btwTabHtml({ rounds: [{ q: "q", a: "半截文本", phase: "answering" }] });
+      expect(calls).toEqual([]); // 在飞纯文本不跑 md
+      expect(fly).toContain("半截文本");
+    } finally {
+      delete (globalThis as Record<string, unknown>)["OrosusRender"];
+    }
   });
 });
 

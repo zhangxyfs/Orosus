@@ -154,20 +154,30 @@
   }
 
   /** 单轮 HTML（v2 4492-4498 直裁 + 拍板相位态）：q 气泡复用 .msg-user（空 q 垫片不出空气泡）；
-   *  .btw-a 回答区——error 终态 / 落定纯文本 / 回答中·查证中 spinner 相位（查证中保留已积累文本）。 */
+   *  .btw-a 回答区——error 终态 / 落定 markdown（走查修⑤：复用 OrosusRender.mdRender——主流同款
+   *  marked+DOMPurify；node 测试态无 render.js 时降级 esc 纯文本）/ 回答中·查证中 spinner 相位
+   *  （律二：在飞只攒纯文本，落定才整块 md 渲染——与主流 chunk→转正同律）。 */
+  function btwMd(text) {
+    var R = globalThis.OrosusRender;
+    if (R && typeof R.mdRender === 'function') return R.mdRender(text);
+    return esc(text);
+  }
   function btwRoundHtml(rd) {
     var q = rd && rd.q ? String(rd.q) : '';
     var a = rd && rd.a != null ? String(rd.a) : '';
     var phase = rd && rd.phase ? rd.phase : null;
+    var inFlight = phase === 'answering' || phase === 'tool';
     var bubble = q === '' ? '' :
       '<div class="msg-user"><div class="msg-bubble"><div class="msg-text">' + esc(q) + '</div></div></div>';
     var body;
     if (phase === 'error') {
       body = '<span class="bad">侧问失败：' + esc(a) + '</span>';
-    } else {
+    } else if (inFlight) {
       body = a !== '' ? esc(a) : '';
       if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">查证中…</span>';
       else if (body === '') body = btwSpin(12) + ' <span class="dim">回答中…</span>';
+    } else {
+      body = a !== '' ? '<div class="md">' + btwMd(a) + '</div>' : '';
     }
     return '<div class="btw-round">' + bubble + '<div class="btw-a">' + body + '</div></div>';
   }
@@ -185,6 +195,10 @@
     var rounds = (data && data.rounds) || [];
     var lk = locked === true;
     var dis = lk ? ' disabled' : '';
+    /* 走查修④：末轮在飞 → 发送钮变 ■ 停止（对齐主 composer 忙时换停止）。在飞口径与 app.js
+     *  sendBtwAsk 尾弹判据同款：answering/tool 相位（半截文本也算）或 a 未回填且非 error 终态。 */
+    var lastRd = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+    var inFlight = !lk && !!lastRd && (lastRd.phase === 'answering' || lastRd.phase === 'tool' || (lastRd.a == null && lastRd.phase !== 'error'));
     var html = '<div class="btw-wrap">' +
       '<div class="btw-scope">旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘</div>' +
       '<div class="btw-stream" id="btw-stream">';
@@ -199,7 +213,9 @@
       '<textarea id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
       '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button></span>' +
       '<span class="cb-right"><span class="btw-hint">旁路 · 只读工具 · 走当前会话模型</span>' +
-      '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送"' + dis + '>↑</button></span></div>' +
+      (inFlight
+        ? '<button type="button" class="sendbtn stop" id="btw-send" data-btwstop="1" title="停止本轮侧问" aria-label="停止">■</button>'
+        : '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送"' + dis + '>↑</button>') + '</span></div>' +
       '</div></form></div>';
     return html;
   }

@@ -2812,6 +2812,11 @@ function $(id) { return document.getElementById(id); }
   var pane = $('pane');
   var paneTabsEl = $('pane-tabs');
   var paneBodyEl = $('pane-body');
+  /* 走查修③（2026-10-13 用户报障）：分栏回放的点击委派——展开全部/气泡复制/轮复制。
+   *  挂常驻 #pane-body（tab 体重渲不换容器，一次绑定永效）；分支钮在回放态不渲染（noFork）。 */
+  if (globalThis.OrosusRender && typeof globalThis.OrosusRender.bindTranscriptActions === 'function') {
+    globalThis.OrosusRender.bindTranscriptActions(paneBodyEl, { onCopy: copyText });
+  }
   function paneIsOpen() { return !pane.hidden; }
   function renderPaneTabs() {
     /* W1 空态分支（v2 renderPaneTabs 同款）——选项卡数据结构随 W2 引入 */
@@ -3087,7 +3092,7 @@ function $(id) { return document.getElementById(id); }
         if (cur !== String(n)) { /* 事件数门：无新事件零重渲——滚动位不动（走查六轮同款） */
           pinBottom = cur === null || (streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight < 40);
           streamEl.setAttribute('data-n', String(n));
-          if (globalThis.OrosusRender) globalThis.OrosusRender.renderTranscript(streamEl, events);
+          if (globalThis.OrosusRender) globalThis.OrosusRender.renderTranscript(streamEl, events, { noFork: true }); /* 走查修②：子代理回放无分叉面 */
         }
         syncSpinner(row);
         if (pinBottom) streamEl.scrollTop = streamEl.scrollHeight;
@@ -3242,11 +3247,11 @@ function $(id) { return document.getElementById(id); }
     var bForm = bodyEl.querySelector('#btw-form');
     var bInput = bodyEl.querySelector('#btw-input');
     var bSend = bodyEl.querySelector('#btw-send');
-    function syncBtn() { bSend.className = 'sendbtn ' + (bInput.value.trim() ? 'ready' : 'idle'); }
+    function syncBtn() { if (bSend.hasAttribute('data-btwstop')) return; bSend.className = 'sendbtn ' + (bInput.value.trim() ? 'ready' : 'idle'); }
     if (!btwRenderNoFocus) bInput.focus(); /* 用户驱动开 tab/切换即聚焦（v2 4551）；帧驱动重渲不抢焦点 */
     bInput.addEventListener('input', syncBtn);
     bInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); bForm.requestSubmit(); }
+      if (e.key === 'Enter' && !e.shiftKey && !bSend.hasAttribute('data-btwstop')) { e.preventDefault(); bForm.requestSubmit(); }
       e.stopPropagation(); /* 不触发主输入框的 Esc / 快捷键逻辑（v2 4555-4558） */
     });
     bForm.addEventListener('submit', function (e) {
@@ -3254,6 +3259,14 @@ function $(id) { return document.getElementById(id); }
       var q = bInput.value.trim();
       if (!q) return;
       sendBtwAsk(Pane.activeTab(), q); /* 活跃 tab 即本渲染器所属实例（换 tab 时旧表单已随重渲摘除） */
+    });
+    /* 走查修④（2026-10-13 用户报障）：在飞时发送钮已变 ■ 停止（type=button 不走 submit）——
+     * 点击 = POST {tab, abort:true}，server 侧 abortBtw 结算在飞轮（〔已停止〕尾注回落）。 */
+    if (bSend.hasAttribute('data-btwstop')) bSend.addEventListener('click', function () {
+      var tab = Pane.activeTab();
+      if (!tab || !tab.data.sid) return;
+      bSend.className = 'sendbtn idle'; /* 即时落灰（帧回填后重渲归真——不等网络） */
+      A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, abort: true }) }).then(null, function () { toast('停止失败——网络或服务异常'); });
     });
     bodyEl.querySelector('#btw-file').addEventListener('click', function () { /* ＋文件 = 插入 @（光标位） */
       bInput.focus();

@@ -101,11 +101,14 @@ const execBtwTool = async (
   }
 };
 
-/** btw 选项卡实例：rounds = 已完成问答轮串（跨问存活），ctrl = 本 tab 单飞中止器。 */
+/** btw 选项卡实例：rounds = 已完成问答轮串（跨问存活），ctrl = 本 tab 单飞中止器；
+ *  stopRequested = 用户手动停止（走查修④）——与被新问取代共用 abort 通道但结算口径不同：
+ *  取代 = 静默退场（新问接管帧面）；手动停止 = 落定当前轮（已积累文本 + 〔已停止〕尾注 + 归档）。 */
 interface BtwInstance {
   tab: string;
   rounds: BtwRound[];
   ctrl: AbortController;
+  stopRequested?: boolean;
 }
 
 /** 每会话的 btw 实例表（tab id → instance；cmdrouter.btwBySession 同款 WeakMap 形态）。 */
@@ -135,11 +138,24 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
   const emit = (phase: BtwFrame["phase"], text: string): void => {
     hs.emitBtw({ tab, phase, text, round: roundNo });
   };
+  let latestText = ""; // 本问已积累正文（手动停止落定的读取面——IIFE 流内更新）
+  /* 手动停止落定（走查修④）：仅 stopRequested 时结算——把在飞轮落成「已积累文本 + 〔已停止〕尾注」
+   *  并入轮串归档（与正常 answer 同面：前端收到 answer 帧即定终态，不再悬「回答中…」）。 */
+  const settleIfStopped = (): void => {
+    if (!inst.stopRequested) return;
+    const partial = latestText; // 中止瞬间已积累的文本（无则空——尾注自成内容）
+    const settled = partial === "" ? "〔已停止〕" : `${partial}
+
+〔已停止〕`;
+    inst.rounds.push({ q, a: settled });
+    archiveBtwRounds(hs, inst.rounds);
+    emit("answer", settled);
+  };
   void (async () => {
     const carry: ModelMessage[] = []; // 本问内工具往返（assistant toolCalls + toolResult 对——不跨问）
     try {
       for (let reqRound = 1; ; reqRound++) {
-        if (inst.ctrl.signal.aborted) return;
+        if (inst.ctrl.signal.aborted) { settleIfStopped(); return; }
         // 每请求重拼：最新主历史（每轮重取）+ 前序 rounds 平铺 + 本问尾追 + 本问工具往返
         const { system, messages } = await buildBtwRequest(h, q, { tools: "readonly", rounds: inst.rounds });
         const face = btwToolsOf(h);
@@ -148,6 +164,7 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
         for await (const c of h.llm().stream({ system, messages: [...messages, ...carry], tools: face.specs, signal: inst.ctrl.signal })) {
           if (c.type === "text/delta") {
             text += c.text;
+            latestText = text;
             emit("answering", text); // 累积式（前端晚开窗整段渲染）
           } else if (c.type === "toolcall/argumentsDelta") {
             const p = pending.get(c.callId) ?? { callId: c.callId, name: "", argsJson: "" };
@@ -160,7 +177,7 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
           }
           // reasoning/usage/server-search：侧问小窗不消费
         }
-        if (inst.ctrl.signal.aborted) return; // 被新问取代/会话关停——静默退场（新问接管帧面）
+        if (inst.ctrl.signal.aborted) { settleIfStopped(); return; } // 取代静默 / 手动停止落定（走查修④）
         const calls = [...pending.values()];
         if (calls.length === 0) {
           inst.rounds.push({ q, a: text });
@@ -195,8 +212,18 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
         }
       }
     } catch (err) {
-      if (inst.ctrl.signal.aborted) return; // abort 途中抛（AbortError 等）→ 被取代，不当失败文案
+      if (inst.ctrl.signal.aborted) { settleIfStopped(); return; } // abort 途中抛（AbortError 等）→ 取代静默 / 手动停止落定
       emit("error", err instanceof Error ? err.message : String(err));
     }
   })();
+}
+
+/** 手动停止（走查修④——POST /btw {tab, abort:true} 消费）：标 stopRequested 再 abort——
+ *  与「新问取代」共用中止通道但结算不同：askBtw 各中止哨兵认 stopRequested → 落定当前轮
+ *  （已积累文本 + 〔已停止〕尾注 + answer 帧 + 归档），未标则维持取代语义静默退场。 */
+export function abortBtw(hs: HostedSession, tab: string): void {
+  const inst = btwTabs.get(hs)?.get(tab);
+  if (inst === undefined) return;
+  inst.stopRequested = true;
+  inst.ctrl.abort();
 }

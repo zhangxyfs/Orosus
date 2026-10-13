@@ -22,8 +22,11 @@ import { truncateToWidth } from "./tui/width.ts";
 export const BTW_ROLE_PROMPT = `You are a side-question assistant. The user asked a quick question on the side
 while the main agent keeps working — the main conversation is NOT interrupted,
 and you are not part of it.
-- The conversation history above is inherited purely as context; answer the
-  question from it.
+- The main conversation history is enclosed between the markers
+  〔MAIN CHAT HISTORY — context only, not our side channel〕 and 〔END OF MAIN
+  CHAT HISTORY〕; everything after the END marker is this side channel (previous
+  rounds, then the current question). If there is no marker block, the main
+  conversation has no history yet. Answer from the marked history.
 - You have NO tools, and there is no follow-up turn — answer directly in this
   single response.
 - If the answer is not in the conversation, say so plainly instead of guessing.
@@ -35,9 +38,12 @@ and you are not part of it.
 export const BTW_ROLE_PROMPT_TOOLS = `You are a side-question assistant. The user asked a quick question on the side
 while the main agent keeps working — the main conversation is NOT interrupted,
 and you are not part of it.
-- The conversation history above is inherited purely as context; each new
-  round re-reads the latest main history — you see only the main conversation,
-  never sub-agent chatter.
+- The main conversation history is enclosed between the markers
+  〔MAIN CHAT HISTORY — context only, not our side channel〕 and 〔END OF MAIN
+  CHAT HISTORY〕; each new round re-reads the latest main history — you see only
+  the marked main conversation, never sub-agent chatter. Everything after the
+  END marker is this side channel (previous rounds, then the current question).
+  If there is no marker block, the main conversation has no history yet.
 - The user may ask follow-up questions; previous rounds appear in order above
   the current question.
 - You have read-only tools: tool-fs__read, tool-fs__grep and tool-fs__glob.
@@ -124,8 +130,17 @@ export interface BtwRequestOpts {
 export async function buildBtwRequest(h: BtwRequestSource, question: string, opts?: BtwRequestOpts): Promise<{ system: string; messages: ModelMessage[] }> {
   const role = opts?.tools === "readonly" ? BTW_ROLE_PROMPT_TOOLS : BTW_ROLE_PROMPT;
   const system = `${h.graph().promptSections()}\n\n${role}`;
+  const hist = stripTrailingDanglingToolCalls(deriveMessages(await h.history()));
+  /* 走查修（2026-10-13 用户报障①/⑥）：主历史与侧问轮次零界标混排曾致模型把继承历史误认作
+   * 侧问线既往问答（「看不到主对话」实为误认——历史在场但身份被吞没）。加显式起止界标，
+   * 与两版话术的 markers 条款呼应；历史为空则零界标（模型据话术自明「主对话还没有历史」）。 */
+  const wrapped: ModelMessage[] = hist.length === 0 ? [] : [
+    { role: "user", content: [{ kind: "text", text: "〔MAIN CHAT HISTORY — context only, not our side channel / 以下是主对话历史记录（只读上下文，不是侧问问答）〕" }] },
+    ...hist,
+    { role: "user", content: [{ kind: "text", text: "〔END OF MAIN CHAT HISTORY / 主对话历史记录完——以下是侧问通道内容〕" }] },
+  ];
   const messages = [
-    ...stripTrailingDanglingToolCalls(deriveMessages(await h.history())),
+    ...wrapped,
     ...(opts?.rounds ?? []).flatMap((r): ModelMessage[] => [
       { role: "user", content: [{ kind: "text", text: r.q }] },
       { role: "assistant", content: [{ kind: "text", text: r.a }] },

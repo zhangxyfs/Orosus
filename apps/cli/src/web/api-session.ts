@@ -21,7 +21,7 @@ import { resolveAtRefs } from "../atfile.ts";
 import { INPUT_ECHO_EVENT } from "../session-io.ts";
 import { MAX_IMAGES_PER_MESSAGE, resolveImageIds } from "./api-files.ts";
 import { webCommandUiOf } from "./bridge-ui.ts";
-import { askBtw } from "./btw-service.ts";
+import { askBtw, abortBtw } from "./btw-service.ts";
 import { readPins, togglePin } from "./pins.ts";
 import { hideCwd, readHidden, unhideCwd } from "./workspaces.ts";
 import { archiveSession, deleteSession, listArchived, renderMarkdown, unarchiveSession } from "./session-actions.ts";
@@ -364,7 +364,7 @@ registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
     sendJson(res, 413, { ok: false, error: "body too large" });
     return;
   }
-  let body: { tab?: unknown; q?: unknown };
+  let body: { tab?: unknown; q?: unknown; abort?: unknown };
   try {
     body = JSON.parse(raw.toString("utf8")) as typeof body;
   } catch {
@@ -372,6 +372,17 @@ registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
     return;
   }
   const tab = typeof body.tab === "string" ? body.tab.trim() : "";
+  /* 走查修④（2026-10-13 用户报障）：{tab, abort:true} = 停止该 tab 在飞侧问（对齐主 composer
+   *  忙时停止钮）——abortBtw 落定当前轮（〔已停止〕尾注 + answer 帧），无实例则静默 202。 */
+  if (body.abort === true) {
+    if (tab === "") {
+      sendJson(res, 400, { ok: false, error: "tab 不能为空" });
+      return;
+    }
+    abortBtw(hs, tab);
+    sendJson(res, 202, { ok: true });
+    return;
+  }
   const q = typeof body.q === "string" ? body.q.trim() : "";
   if (tab === "" || q === "") {
     sendJson(res, 400, { ok: false, error: "tab 与 q 不能为空" });
