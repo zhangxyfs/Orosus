@@ -725,7 +725,8 @@
   }
   /** 子代理组卡（TUI agent 组同款语义——web 卡片形）：头行「● N 个子代理 + 聚合状态」+ 组员行
    *  （├─ 标题 + 编号 + 状态）。状态刷新归 app.js 名册轮询（render 保持零 fetch——行带
-   *  data-agent-id 钩子，点击经 onAgentOpen 回调进回放窗）。 */
+   *  data-agent-id 钩子，点击经 onAgentOpen 回调进分栏 agent tab：W3 起 app.js 侧接
+   *  OrosusPane open-or-switch，v2 1195 交互契约「已开则切换，不重复开」）。 */
   function ensureSpawnGroup(ctx) {
     if (R.spawnGroup && R.spawnGroup.el.isConnected) return R.spawnGroup;
     var g = el('div', 'spawn-group');
@@ -758,8 +759,9 @@
       var label = items !== null && typeof items[i] === 'string' ? desc + '：' + items[i] : desc;
       var row = el('div', 'sg-row', '<span class="sg-caret">├─</span><span class="sg-name">' + esc(label || '子代理任务') + '</span><span class="sg-id">' + esc(id) + '</span><span class="sg-st st-run">已派出…</span>');
       row.setAttribute('data-agent-id', id);
+      row.title = '点击在右侧分栏查看该子代理（已开则切换，不重复开）'; /* v2 1195 交互契约 */
       (function (aid) {
-        row.addEventListener('click', function () { R.onAgentOpen(aid); });
+        row.addEventListener('click', function () { R.onAgentOpen(aid); }); /* app.js 侧 W3 改接 OrosusPane open-or-switch */
       })(id);
       grp.list.appendChild(row);
       grp.rows.set(id, row);
@@ -1233,7 +1235,7 @@
       onFork: opts.onFork || function () {},
       onCopy: opts.onCopy || function () {},
       onUserSeen: opts.onUserSeen || null,
-      onAgentOpen: opts.onAgentOpen || function () {}, /* spawn 组卡行点击 → 回放窗（app.js 接线 ui.openSubagent） */
+      onAgentOpen: opts.onAgentOpen || function () {}, /* spawn 组卡行点击 → 分栏 agent tab（app.js 接线 OrosusPane open-or-switch——W3） */
       cwdOf: opts.cwdOf || function () { return ''; },
       seqs: [], seqEls: new Map(), toolRows: new Map(), ghostCalls: new Set(), spawnCalls: new Map(), spawnGroup: null,
       openTurn: null,

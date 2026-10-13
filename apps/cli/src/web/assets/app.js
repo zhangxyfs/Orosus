@@ -169,7 +169,7 @@ function $(id) { return document.getElementById(id); }
     } else if (mark === 'menu:model') {
       UI.openModelMenu(modelChip);
     } else if (mark === 'tasks') {
-      UI.openTasksPanel();
+      cmdTasks(); /* W3：/tasks = 分栏批量开 tab（v2 2528-2537 目标形态——不弹列表面） */
     }
   }
 
@@ -2720,7 +2720,7 @@ function $(id) { return document.getElementById(id); }
       },
       onCopy: copyText,
       onUserSeen: syncCwdGate,
-      onAgentOpen: function (id) { UI.openSubagent(id); }, /* spawn 组卡行点击 → 回放窗直进 */
+      onAgentOpen: function (id) { openAgentTab(id); }, /* W3：spawn 组卡行点击 → OrosusPane agent open-or-switch */
       cwdOf: function () { return sessionCwd; },
     });
     renderSidebar();
@@ -2849,10 +2849,199 @@ function $(id) { return document.getElementById(id); }
     document.addEventListener('mousemove', mv);
     document.addEventListener('mouseup', up);
   });
-  /* 顶栏入口（v2 4730-4734）：◧ 分栏 = 打开 / 关闭——W3 到位后未开分支改接 cmdTasks()（本任务先开空栏） */
+  /* 顶栏入口（v2 4730-4734）：◧ 分栏 = 打开 / 关闭——未开分支 = /tasks 同款（cmdTasks 批量开 tab） */
   $('btn-split').addEventListener('click', function () {
     if (paneIsOpen()) { closePane(); toast('分栏已收回'); return; }
-    openPane();
+    cmdTasks();
+  });
+
+  /* ═══════════ 子代理选项卡（问题 2 W3——v2 4393-4481/4520-4545/4683-4688/2528-2537 直裁） ═══════════
+   * · /tasks（cmdTasks）：openPane + 名册每行 open-or-switch 一个 agent tab（有几开几，无列表视图）；
+   *   空名册 → 打开空分栏（.pt-empty 空态）；
+   * · 主流 spawn 组卡行点击（onAgentOpen → openAgentTab）：OrosusPane open-or-switch（不再进回放窗）；
+   * · tab 内容（onBodyRender('agent')）：.ag-wrap = 可选 .ag-approval 审批条（⚠ 工具名 + 原因 +
+   *   拒绝/批准一次——data-aga → 既有 POST approval，服务端零改动）+ .ag-stream 回放
+   *   （OrosusRender.renderTranscript 复用：事件数门零重渲 + 贴底跟随）+ 运行中尾行 spinner；
+   *   回放轮询 2s 仅活跃 tab（addPoll 驱动 + bodyEl 内容脱离 DOM 自摘——GC7）；
+   * · 状态点（dotOf 覆写 agentTabDot）：pendingApproval ◉ 先行短路，TASK_ICON 四态（v2 1598-1599）；
+   *   updateSpawnGroups 名册轮询同步刷已开 tab 的点（dotOf 注入实现，签名门——名册不变 DOM 零触碰）。 */
+  var Pane = window.OrosusPane;
+  var AGENT_ICON = { queued: '○', running: '◐', completed: '✓', failed: '✗' }; /* v2 1599 TASK_ICON 四态 */
+  var taskRoster = []; /* 最近一次 /tasks 名册（agentTabDot + 审批条数据源——updateSpawnGroups 拍内更新） */
+  var taskDotSig = ''; /* 名册签名（id:状态:审批）——不变不重渲 tab 条（§5 律三） */
+  function rosterRowOf(id) {
+    for (var ri = 0; ri < taskRoster.length; ri++) if (taskRoster[ri].id === id) return taskRoster[ri];
+    return null;
+  }
+  function refreshAgentTabDots() {
+    if (document.querySelector('#pt-list .pt-item') === null) return; /* 无已开 tab——零开销 */
+    var sig = taskRoster.map(function (r) { return r.id + ':' + (r.status ?? '') + ':' + (r.pendingApproval ? 1 : 0); }).join('|');
+    if (sig === taskDotSig) return;
+    taskDotSig = sig;
+    Pane.renderTabs();
+  }
+  /* agent 状态点注入（v2 agentTabDot 4393-4396）：审批 ◉ 短路 → 四态图标；非 agent kind / 不在册 → W2 缺省点（v2 4404-4407） */
+  var paneDotDefault = Pane.dotOf;
+  Pane.dotOf = function (tab) {
+    if (!tab || tab.kind !== 'agent') return paneDotDefault(tab); /* btw 等其它 kind 归缺省（W6 并存） */
+    var row = rosterRowOf(tab.id);
+    if (!row) return paneDotDefault(tab);
+    if (row.pendingApproval) return '<span class="pt-dot st-warn">◉</span>';
+    var st = SPAWN_ST[row.status] ?? [String(row.status), 'st-run'];
+    return '<span class="pt-dot ' + st[1] + '">' + (AGENT_ICON[row.status] ?? '◐') + '</span>';
+  };
+  /* ＋菜单内容源（v2 4683-4688 直裁）：名册行「子代理 · label」（孙代理 ⎿ 前缀）；已开的由 pane.js 滤除 */
+  Pane.plusSource = function () {
+    if (taskRoster.length === 0 && currentSid !== null) void refreshTasks(currentSid); /* 冷缓存预热——下次开即实名册 */
+    return taskRoster.map(function (tk) {
+      return {
+        kind: 'agent',
+        id: tk.id,
+        label: '子代理 · ' + (tk.label || tk.id),
+        prefix: tk.depth === 2 ? '⎿ ' : '',
+        open: function () { openAgentTab(tk.id); },
+      };
+    });
+  };
+  /** 拉名册并刷 tab 状态点（cmdTasks / sg-row 点击 / 审批应答共用；sid 守卫——切会话后不回写他话名册）。 */
+  function refreshTasks(sid) {
+    return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/tasks').then(function (r) {
+      var rows = r.rows ?? [];
+      if (sid === currentSid) {
+        taskRoster = rows;
+        refreshAgentTabDots();
+      }
+      return rows;
+    });
+  }
+  /** /tasks（v2 cmdTasks 2528-2537 目标形态）：openPane + 名册每行各开一个 agent tab（open-or-switch）；
+   *  空名册 → 空分栏（.pt-empty 空态——known-issues.md:99 定案）。 */
+  function cmdTasks() {
+    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
+    var sid = currentSid; /* 拉取期间切会话不改写归属（tab 的 data.sid 恒指开栏时会话） */
+    refreshTasks(sid).then(function (rows) {
+      if (rows.length === 0) {
+        UI.openPane();
+        toast('暂无在册子代理——分栏已打开（对模型说「派个子代理去 …」后这里会列出）');
+        return;
+      }
+      rows.forEach(function (tk) {
+        addAgentTab(sid, tk);
+      });
+    }, function () { toast('拉取子代理名册失败'); });
+  }
+  /** 主流 sg-row 点击 → agent open-or-switch（v2 openAgentTab 4431-4441）：名册查证 label 后进分栏。 */
+  function openAgentTab(id) {
+    if (currentSid === null) return;
+    var sid = currentSid;
+    var known = rosterRowOf(id);
+    if (known !== null) { addAgentTab(sid, known); return; }
+    refreshTasks(sid).then(function (rows) {
+      var tk = null;
+      for (var oi = 0; oi < rows.length; oi++) if (rows[oi].id === id) tk = rows[oi];
+      if (!tk) { toast('子代理 ' + id + ' 不在册（可能已清理）'); return; }
+      addAgentTab(sid, tk);
+    }, function () { toast('拉取子代理名册失败'); });
+  }
+  function addAgentTab(sid, tk) {
+    var label = tk.label || tk.id;
+    Pane.addTab({ kind: 'agent', id: tk.id, label: label, data: { sid: sid, id: tk.id, label: label } });
+  }
+  /* agent tab 内容渲染器（v2 agentTabHtml 4456-4481 直裁——todo 悬浮条 .ag-todo 归 W4 不在本面）：
+   *  回放轮询走 agentStreamLoads 注册表（boot 内 A.addPoll(2000) 驱动）——.ag-stream 脱离 DOM 即自摘，
+   *  切 tab / 关 tab / 收分栏三路全部停轮（GC7 仅活跃 tab 轮询）。 */
+  var agentStreamLoads = [];
+  Pane.onBodyRender('agent', function (data, bodyEl) {
+    bodyEl.innerHTML = '<div class="ag-wrap"><div class="ag-stream">加载中…</div></div>';
+    var wrapEl = bodyEl.querySelector('.ag-wrap');
+    var streamEl = wrapEl.querySelector('.ag-stream');
+    var sid = data.sid, id = data.id;
+    var approvalSig = '';
+    var pollBusy = false, answerBusy = false;
+    function syncApproval(row) {
+      var pa = row && row.pendingApproval ? row.pendingApproval : null;
+      var sig = pa ? (pa.tool ?? '') + '␀' + (pa.reason ?? '') : '';
+      if (sig === approvalSig) return;
+      approvalSig = sig;
+      var old = wrapEl.querySelector('.ag-approval');
+      if (old) old.remove();
+      if (!pa) return;
+      var bar = document.createElement('div');
+      bar.className = 'ag-approval';
+      bar.innerHTML = '<span class="st-warn">◉</span><span class="aga-text">⚠ ' + esc(pa.tool ?? '') + ' 等待批准——' + esc(pa.reason ?? '') + '</span>' +
+        '<button class="btn" data-aga="no">拒绝</button><button class="btn primary" data-aga="yes">批准一次</button>';
+      wrapEl.insertBefore(bar, streamEl);
+    }
+    function syncSpinner(row) {
+      var want = !!row && row.status === 'running';
+      var has = streamEl.querySelector('.agent-spin') !== null;
+      if (want === has) return;
+      if (want) {
+        var sp = document.createElement('div');
+        sp.className = 'line dim agent-spin';
+        sp.innerHTML = spinSvg('', 12) + ' 正在生成…';
+        streamEl.appendChild(sp);
+      } else {
+        streamEl.querySelector('.agent-spin').remove();
+      }
+    }
+    /* 审批条批/拒（v2 bindPaneBody 4532-4543 → 既有 POST approval 真链路）：应答后收条 + 刷名册状态点 */
+    wrapEl.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-aga]');
+      if (!b || answerBusy) return;
+      answerBusy = true;
+      var allow = b.getAttribute('data-aga') === 'yes';
+      A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(id) + '/approval', { method: 'POST', body: JSON.stringify({ allow: allow }) })
+        .then(function () {
+          answerBusy = false;
+          toast((allow ? '已批准 ' : '已拒绝 ') + id + ' 的 ' + (data.label || '子代理任务'));
+          return refreshTasks(sid);
+        }, function (err) {
+          answerBusy = false;
+          toast('应答失败：' + err.message);
+          return null;
+        })
+        .then(function (rows) {
+          if (!wrapEl.isConnected) return; /* tab 已关/切走——收条留给下一拍名册轮询 */
+          var row = rows ? rows.find(function (x) { return x.id === id; }) : rosterRowOf(id);
+          var old = wrapEl.querySelector('.ag-approval');
+          if (old) old.remove();
+          approvalSig = '';
+          syncApproval(row ?? null);
+        });
+    });
+    var load = function () {
+      if (!wrapEl.isConnected) { /* tab 切走/关闭/分栏收回——自摘停轮（GC7 仅活跃 tab） */
+        var li = agentStreamLoads.indexOf(load);
+        if (li >= 0) agentStreamLoads.splice(li, 1);
+        return;
+      }
+      if (pollBusy) return;
+      pollBusy = true;
+      A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(id) + '/events', { timeoutMs: 8000 }).then(function (er) {
+        pollBusy = false;
+        if (!wrapEl.isConnected) return;
+        var row = rosterRowOf(id);
+        syncApproval(row);
+        var events = er.events ?? [];
+        var n = events.length;
+        var cur = streamEl.getAttribute('data-n');
+        var pinBottom = false;
+        if (cur !== String(n)) { /* 事件数门：无新事件零重渲——滚动位不动（走查六轮同款） */
+          pinBottom = cur === null || (streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight < 40);
+          streamEl.setAttribute('data-n', String(n));
+          if (globalThis.OrosusRender) globalThis.OrosusRender.renderTranscript(streamEl, events);
+        }
+        syncSpinner(row);
+        if (pinBottom) streamEl.scrollTop = streamEl.scrollHeight;
+      }, function () {
+        pollBusy = false;
+        if (!wrapEl.isConnected) return;
+        if (streamEl.getAttribute('data-n') === null) streamEl.textContent = '（回放拉取失败）';
+      });
+    };
+    agentStreamLoads.push(load);
+    load();
   });
 
   /* 面板渲染（2s 轮询 + 签名门——数据不变 DOM 零触碰；运行时间跳秒本地自增） */
@@ -3079,8 +3268,12 @@ function $(id) { return document.getElementById(id); }
       /* 轮询节拍器：sessions 2s / panel 2s 错峰 1s（自创值登记口径） */
       A.addPoll(2000, 0, pollSessions);
       A.addPoll(2000, 1000, function () { return fetchPanel(currentSid); });
-      /* spawn 组卡名册轮询（走查六轮）：页面有组卡行才取 /tasks——行态/标题校正 + 头行聚合 */
+      /* spawn 组卡名册轮询（走查六轮）：页面有组卡行才取 /tasks——行态/标题校正 + 头行聚合（W3：已开 agent tab 同驱动） */
       A.addPoll(2000, 500, pollSpawnGroups);
+      /* agent tab 回放轮询（W3/GC7 仅活跃 tab）：装载器自检 isConnected——脱离 DOM 即自摘，倒序遍历防遍历中摘除 */
+      A.addPoll(2000, 1500, function () {
+        for (var ai = agentStreamLoads.length - 1; ai >= 0; ai--) agentStreamLoads[ai]();
+      });
     }, function () {
       A.showDisconnect('lost');
     });
@@ -3089,12 +3282,16 @@ function $(id) { return document.getElementById(id); }
   /* ── spawn 组卡状态轮询（render.js 零 fetch 纪律的配套面——DOM 钩子驱动） ── */
   var SPAWN_ST = { queued: ['排队中', 'st-run'], running: ['运行中', 'st-run'], completed: ['已完成', 'st-ok'], failed: ['失败', 'st-err'] };
   function pollSpawnGroups() {
-    if (!currentSid || document.querySelector('.spawn-group .sg-row') === null) return undefined;
+    if (!currentSid) return undefined;
+    /* W3：已开 agent tab 也驱动名册轮询（状态点/审批条新鲜）——组卡行或选项卡条任一在即取 */
+    if (document.querySelector('.spawn-group .sg-row') === null && document.querySelector('#pt-list .pt-item') === null) return undefined;
     return A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/tasks', { timeoutMs: 9000 }).then(function (r) {
       updateSpawnGroups(r.rows ?? []);
     }, function () { /* 静默——下一拍再试 */ });
   }
   function updateSpawnGroups(rows) {
+    taskRoster = rows; /* 名册缓存（agentTabDot 状态点 + 审批条数据源——W3） */
+    refreshAgentTabDots(); /* 已开 agent tab 状态点联动（dotOf 注入实现，签名门） */
     document.querySelectorAll('.spawn-group').forEach(function (g) {
       var n = 0, running = 0, done = 0, failed = 0;
       g.querySelectorAll('.sg-row[data-agent-id]').forEach(function (row) {

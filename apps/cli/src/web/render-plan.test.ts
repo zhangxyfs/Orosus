@@ -199,6 +199,31 @@ describe("web T16：事件 → 行文案映射族（纯推导）", () => {
   });
 });
 
+describe("web W3（问题 2）：/tasks 改造 + 主流行 open-or-switch 路由", () => {
+  it("W3a render.js：spawn 组卡 sg-row 点击路由保持 R.onAgentOpen 回调（app.js 侧改接 OrosusPane）+ data-agent-id 钩子 + v2 分栏 title 提示", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const zone = src.slice(src.indexOf("function spawnResultInto"), src.indexOf("function emitToolCall"));
+    expect(zone).toContain("row.setAttribute('data-agent-id', id)");
+    expect(zone).toContain("R.onAgentOpen(aid)"); // 点击回调机制不变——路由目标在 app.js 接线处改 OrosusPane
+    expect(zone).toContain("row.title ="); // v2 1195：「点击在右侧分栏查看该子代理（已开则切换，不重复开）」
+    expect(zone).toContain("右侧分栏查看");
+    expect(zone).not.toContain("回放窗"); // 旧「进回放窗」口径绝迹（v2 交互契约：分栏 open-or-switch）
+  });
+
+  it("W3b app.js：onAgentOpen 接线改 openAgentTab（OrosusPane agent open-or-switch）——ui.openSubagent 面绝迹", () => {
+    const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
+    expect(/onAgentOpen:\s*function\s*\(id\)\s*\{\s*openAgentTab\(id\);\s*\}/.test(src), "onAgentOpen → openAgentTab 接线").toBe(true);
+    expect(src).not.toContain("UI.openSubagent"); // 旧回放窗直进口拆除
+  });
+
+  it("W3c app.js：handleMark tasks 分支改 cmdTasks()（分栏批量开 tab）——不再弹 /tasks 列表面", () => {
+    const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
+    const zone = src.slice(src.indexOf("function handleMark"), src.indexOf("贴图（D6"));
+    expect(zone).toContain("cmdTasks()");
+    expect(zone).not.toContain("openTasksPanel");
+  });
+});
+
 describe("web T16：静态资产接线", () => {
   it("⑰ index.html 引入 render.js/ui.js 且序在 app.js 之前；流式期零 markdown 断言（律二源码面）", () => {
     const html = readFileSync(join(ASSETS_DIR, "index.html"), "utf-8");

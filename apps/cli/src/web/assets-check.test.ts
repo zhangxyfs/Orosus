@@ -239,6 +239,37 @@ describe("web T15：前端骨架静态资产", () => {
     expect(js.includes("attributeFilter: ['hidden']"), "#pane hidden 观测（外路开合状态对齐）").toBe(true);
   });
 
+  it("⑨ W3 子代理选项卡：.ag-/.agent-run CSS 直裁（v2 959-973/987-993）+ ui.js 旧三面绝迹（全仓残留清零）", () => {
+    const css = read("style.css");
+    /* .ag- 系类存在（v2 959-964 直裁；.ag-todo 悬浮条归 W4 不在本面） */
+    for (const cls of [".ag-wrap", ".ag-approval", ".ag-approval .aga-text", ".ag-approval .btn", ".ag-stream", ".agent-run", ".agent-run.grand"]) {
+      expect(css.includes(cls), `.ag 系类 ${cls} 应存在`).toBe(true);
+    }
+    /* 审批条关键值照抄（v2 961）：warn 描边 color-mix + warn-soft 底 + 圆角 8px */
+    const aga = /\.ag-approval\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
+    expect(aga).toContain("color-mix(in oklch, var(--warn) 45%, var(--border))");
+    expect(aga).toContain("var(--warn-soft)");
+    expect(/\.ag-approval\s*\{[^}]*border-radius:\s*8px/.test(css), "审批条 8px 圆角").toBe(true);
+    /* 行内三色态全局版（v2 969-973——此前仅 .pu-item/.sg-st 作用域版；pt-dot 状态点/审批条 ◉ 消费面） */
+    expect(/^\.st-ok \{/m.test(css), "全局 .st-ok").toBe(true);
+    expect(/^\.st-run \{/m.test(css), "全局 .st-run").toBe(true);
+    expect(/^\.st-warn \{/m.test(css), "全局 .st-warn").toBe(true);
+    expect(/^\.st-err \{/m.test(css), "全局 .st-err").toBe(true);
+    /* ui.js 旧面拆除：三函数 + 名册行渲染面（TASK_STATUS/taskRowHtml/taskViewTimer）+ 导出全绝迹 */
+    const ui = read("ui.js");
+    for (const name of ["openTasksPanel", "openTaskView", "openSubagent", "taskRowHtml", "TASK_STATUS", "taskViewTimer"]) {
+      expect(ui.includes(name), `ui.js 不应再含 ${name}`).toBe(false);
+    }
+    /* 全 assets 残留清零（消费面盘点：app.js handleMark/onAgentOpen + ui.js 内部互调，均在本任务改造面内） */
+    for (const name of ["openTasksPanel", "openTaskView", "openSubagent"]) {
+      for (const f of ["app.js", "render.js", "ui.js", "pane.js", "archived-view.js", "index.html"]) {
+        expect(read(f).includes(name), `assets/${f} 不应残留 ${name}`).toBe(false);
+      }
+    }
+    /* GC6 CSP 棘轮回归：本面新增样式全走类，零内联（②补 面 + index.html 恒零 style=） */
+    expect(css.includes(".ag-approval .btn"), "审批按钮换类实现（不内联）").toBe(true);
+  });
+
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {
     const { server, port } = await startWebServer({ cwd: process.cwd(), home: process.cwd() });
     const base = `http://127.0.0.1:${port}`;

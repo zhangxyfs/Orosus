@@ -868,102 +868,9 @@
     });
   }
 
-  /* ═══════════ /tasks 浮层（T7 数据面：名册 + 等审批应答 + transcript 回放窗） ═══════════ */
-  var TASK_STATUS = { queued: ['排队中', 'st-run'], running: ['运行中', 'st-run'], completed: ['已完成', 'st-ok'], failed: ['失败', 'st-err'] };
-  var taskViewTimer = null; /* 回放窗 2s 轮询（2026-10-12 走查六轮：实时刷新 + 贴底跟随；关窗即停） */
-
-  /** 名册行（走查六轮：状态移到 id 后即显——此前埋在超长 label 尾端不可见；历史行带标；等审批/后台徽标保留）。 */
-  function taskRowHtml(tk) {
-    var rel = tk.depth === 2 ? tk.parentId + ' - ' + tk.id : tk.id;
-    var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
-    var tag = (tk.pendingApproval ? ' <span class="st-warn">· 等审批</span>' : '') + (tk.background ? ' <span class="dim">· 后台</span>' : '') + (tk.historical ? ' <span class="dim">· 历史</span>' : '');
-    return '<span class="pu-caret">❯</span><span class="' + st[1] + '">[' + (tk.depth === 2 ? '孙代理' : '子代理') + '] ' + esc(rel) + '</span>' +
-      ' <span class="tk-st ' + st[1] + '">' + st[0] + '</span>' + tag +
-      '<span class="pi-desc">' + esc(tk.label ?? '') + '</span>';
-  }
-
-  /** transcript 回放窗（走查六轮三修：单滚动〔CSS :has 体退滚动〕+ 2s 实时刷新〔事件数变才重渲〕+
-   *  贴底跟随〔用户上翻中不打扰〕）。 */
-  function openTaskView(tk) {
-    var sid = H.getSid();
-    var st = TASK_STATUS[tk.status] ?? [String(tk.status), 'st-run'];
-    openView({
-      title: '子代理 ' + esc(tk.id) + ' · ' + esc(tk.label ?? ''),
-      en: 'TRANSCRIPT',
-      bodyHtml: '<div class="pu-text"><span class="' + st[1] + '">状态：' + st[0] + ' · ' + (tk.turns ?? 0) + ' 轮' + (tk.background ? ' · 后台' : '') + (tk.error ? ' · ' + esc(tk.error) : '') + '</span></div><div class="mini-stream" id="pu-transcript">加载中…</div>',
-      foot: '滚动查看 · Esc 返回列表',
-    });
-    var load = function () {
-      A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(tk.id) + '/events', { timeoutMs: 8000 }).then(function (er) { /* 超时档——挂起不堆叠 */
-        var box = document.getElementById('pu-transcript');
-        if (!box || !globalThis.OrosusRender) return;
-        var n = (er.events ?? []).length;
-        if (box.getAttribute('data-n') === String(n)) return; /* 无新事件零重渲——滚动位不动 */
-        var pinBottom = box.getAttribute('data-n') === null || (box.scrollHeight - box.scrollTop - box.clientHeight < 40);
-        box.setAttribute('data-n', String(n));
-        box.innerHTML = '';
-        globalThis.OrosusRender.renderTranscript(box, er.events ?? []);
-        if (pinBottom) box.scrollTop = box.scrollHeight;
-      }, function () {
-        var box = document.getElementById('pu-transcript');
-        if (box && box.getAttribute('data-n') === null) box.textContent = '（回放拉取失败）';
-      });
-    };
-    load();
-    if (taskViewTimer !== null) clearInterval(taskViewTimer);
-    taskViewTimer = setInterval(function () {
-      if (!document.getElementById('pu-transcript')) { clearInterval(taskViewTimer); taskViewTimer = null; return; } /* 关窗自停 */
-      load();
-    }, 2000);
-  }
-
-  /** 组卡行直进（app.js spawn 组卡点击面）：名册查证在册 → 直接回放窗（等审批优先进应答）。 */
-  function openSubagent(id) {
-    var sid = H.getSid();
-    A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/tasks').then(function (r) {
-      var tk = (r.rows ?? []).find(function (x) { return x.id === id; });
-      if (!tk) { H.toast('子代理 ' + id + ' 不在册（可能已清理）'); return; }
-      if (tk.pendingApproval) { openTasksPanel(); return; } /* 等审批走列表应答链 */
-      openTaskView(tk);
-    }, function () { H.toast('拉取子代理名册失败'); });
-  }
-
-  function openTasksPanel() {
-    var sid = H.getSid();
-    A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/tasks').then(function (r) {
-      var rows = (r.rows ?? []).map(function (tk) {
-        return { html: taskRowHtml(tk), data: tk };
-      });
-      if (rows.length === 0) {
-        rows = [{ html: '<span class="dim">（暂无在册子代理——对模型说「派个子代理去 …」后这里会列出；后台跑完结论自动送回对话）</span>', cls: 'sep', sep: true }];
-      }
-      openPick({
-        title: '子代理任务（选择查看 · 等审批的可应答）',
-        en: (r.rows ?? []).length + ' 个任务',
-        items: rows,
-        onPick: function (i) {
-          var row = rows[i];
-          if (!row || row.sep || !row.data) return;
-          var tk = row.data;
-          if (tk.pendingApproval) {
-            openPick({
-              title: '子代理审批 ' + esc(tk.id) + ' · ' + esc(tk.label ?? '') + ' · ' + esc(tk.pendingApproval.tool) + '（' + esc(tk.pendingApproval.reason) + '）', /* esc 补位（Minor③） */
-              items: ['批准一次', '拒绝'].map(function (s) { return { html: itemRowHtml(s) }; }),
-              onPick: function (j) {
-                A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(tk.id) + '/approval', { method: 'POST', body: JSON.stringify({ allow: j === 0 }) })
-                  .then(function () {
-                    H.toast((j === 0 ? '已批准 ' : '已拒绝 ') + tk.id + ' 的 ' + (tk.label ?? ''));
-                    openTasksPanel(); /* 行刷新 */
-                  }, function (err) { H.toast('应答失败：' + err.message); });
-              },
-            });
-            return;
-          }
-          openTaskView(tk); /* transcript 回放窗（单滚动 + 实时刷新 + 贴底跟随——走查六轮） */
-        },
-      });
-    }, function () { H.toast('拉取子代理名册失败'); });
-  }
+  /* ═══════════ /tasks 旧浮出面已下线（问题 2 W3——v2 分栏形态接管：app.js cmdTasks 批量开
+   *  agent tab + tab 内审批条 + .ag-stream 回放；本块原 /tasks 列表面 + transcript 回放窗 + 组卡
+   *  行直进三函数与名册行渲染面整体拆除，导出面同步摘除——残留引用全仓清零） ═══════════ */
 
   /* ═══════════ /btw 小窗（T6：answering 累积整段替换 / answer·error 终态；零落盘不可重放） ═══════════ */
   var btw = { q: '', open: false };
@@ -1042,8 +949,6 @@
     openModelMenu: openModelMenu,
     openEffortMenu: openEffortMenu,
     openPermMenu: openPermMenu,
-    openTasksPanel: openTasksPanel,
-    openSubagent: openSubagent, /* spawn 组卡行点击直进回放（app.js onAgentOpen 接线） */
     openView: openView,
     viewLines: viewLines,
     mdHtml: mdHtml, /* marked+DOMPurify 渲染口（T17 更新弹窗/注入全文/压缩摘要消费） */
