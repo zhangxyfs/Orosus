@@ -16,7 +16,9 @@
  *  重算 history）；更多菜单四端点是打开即拉面（非轮询）——现读不缓存（/tasks 同口径）。
  *  T11 增量：network.connections 填充（T10 跨任务指针——TUI 渲染期另并 mcpConnRows 的 web 版，
  *  装配期 await mcp.catalog 服务现读）+ mcpCatalogService/mcpCatalogRowsOf 导出（api-settings
- *  的 MCP 页同源消费）+ invalidatePanelCache 导出（MCP ops 写盘 reload 后显式失效，toggle 同口径）。 */
+ *  的 MCP 页同源消费）+ invalidatePanelCache 导出（MCP ops 写盘 reload 后显式失效，toggle 同口径）。
+ *  批次三 W4 任务面（问题 2）：GET /sessions/:sid/subagents/:id/todo——子代理 todo 悬浮条数据
+ *  （子代理会话文件末条 tool-todo/write 的 panelTasksFromEvent 同源投影，1s 缓存 panel 同款口径）。 */
 import type { ServerResponse } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
@@ -28,6 +30,7 @@ import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
 import type { HostedSession } from "./hosted.ts";
 import { agentEventsFromFile, loadHistoricalSubagents, sortNewestFirst, subagentUnloadBlock } from "../tasks-cmd.ts";
+import { panelTasksFromEvent } from "../todo-panel.ts";
 import { refreshPanel, getPanelCache, lockReasonFor, type ModulesUiDeps } from "../modules-ui.ts";
 import { shortenPath, lastUsageOf } from "../usage-text.ts";
 import { computeMountClosure, computeUnmountClosure } from "../module-deps.ts";
@@ -438,6 +441,41 @@ registerRoute("GET", "/api/sessions/:sid/subagents/:id/events", async (_req, res
   }
   const events = agentEventsFromFile(hs.sessionsDir, hs.sid, id);
   sendJson(res, 200, { ok: true, events });
+});
+
+// ---------- 子代理 todo 悬浮条（批次三 W4——问题 2，数据 = 子代理会话文件） ----------
+
+/** 子代理 todo 缓存条目（§5 律三 panel 同款 TTL 口径——2s 轮询 × N 标签共享同一份文件读）。 */
+interface AgTodoCacheEntry { at: number; tasks: { text: string; state: "done" | "active" | "pending" }[] }
+const agTodoCache = new Map<string, AgTodoCacheEntry>();
+
+/** GET /api/sessions/:sid/subagents/:id/todo → {ok, tasks:[{text,state}]}（W4 悬浮条数据面）。
+ *  读子代理会话文件末条 tool-todo/write（agentEventsFromFile 末窗基建——events 端点同源读法），
+ *  投影复用 panelTasksFromEvent（todo-panel 同源单口——主/子清单口径一致：content/status → text/state，
+ *  元素级防御同承）；todo_write 是全量替换语义，末条即当前清单。无文件/无 todo 事件/载荷非数组 →
+ *  空表（「没有清单」不是错误——events 端点空态同语义）；未知 sid → 404。
+ *  1s 缓存复用 PANEL_CACHE_MS（panel 同款口径）；事件驱动失效后置——子代理事件落自己的
+ *  session.jsonl，不经主会话 onEvent 泵，TTL 出窗即出新值（悬浮条 2s 轮询下新鲜度足够）。 */
+registerRoute("GET", "/api/sessions/:sid/subagents/:id/todo", async (_req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const id = params["id"] ?? "";
+  const key = `${sid}/${id}`;
+  const cached = agTodoCache.get(key);
+  if (cached !== undefined && Date.now() - cached.at < PANEL_CACHE_MS) {
+    sendJson(res, 200, { ok: true, tasks: cached.tasks });
+    return;
+  }
+  const hs = await resolveSession(sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const lastTodo = agentEventsFromFile(hs.sessionsDir, hs.sid, id)
+    .toReversed()
+    .find((e) => e.type === "tool-todo/write");
+  const tasks = (lastTodo !== undefined ? panelTasksFromEvent(lastTodo) : undefined) ?? [];
+  agTodoCache.set(key, { at: Date.now(), tasks });
+  sendJson(res, 200, { ok: true, tasks });
 });
 
 // ---------- 更多菜单四端点（T14：A7 ⋮ 菜单数据面——TUI Ctrl+E/P/H/O 的 web 化，打开即拉不缓存） ----------

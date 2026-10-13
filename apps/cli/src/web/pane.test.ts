@@ -4,7 +4,9 @@
  *  open-or-switch 幂等（同 kind+id 二次开 = 只激活不新增）/ closeTabAt 越界修正 active /
  *  全关 → empty=true（W1 closePane 钩子）/ 混合 kind 共存（agent 与 btw 同 id 互不冲突）。
  *  W3 追加：agent tab 接线面（app.js 侧 onBodyRender('agent')/agentTabDot/cmdTasks/openAgentTab）——
- *  DOM+fetch 耦合无 node 可测面（无 jsdom 纪律），走 render-plan.test.ts 同款源码锚定。 */
+ *  DOM+fetch 耦合无 node 可测面（无 jsdom 纪律），走 render-plan.test.ts 同款源码锚定。
+ *  W4 追加：子代理 todo 悬浮条可见性（.todo-float.ag-todo——无数据不渲染 + 签名门 +
+ *  agentStreamLoads 同拍轮询），同款源码锚定；端点真栈面归 subagent-todo.test.ts。 */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -211,5 +213,45 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
   it("W3⑥ btn-split 未开分支改接 cmdTasks（W1 留位收口——v2 4730-4734 同款：◧ 分栏 = /tasks 形态）", () => {
     const zone = APP.slice(APP.indexOf("$('btn-split').addEventListener"), APP.indexOf("子代理选项卡（问题 2 W3"));
     expect(zone).toContain("cmdTasks();");
+  });
+});
+
+describe("web W4（问题 2）：子代理 todo 悬浮条（app.js/style.css 源码锚定——DOM 壳无 node 可测面纪律）", () => {
+  const APP = readFileSync(fileURLToPath(new URL("./assets/app.js", import.meta.url)), "utf8");
+  const CSS = readFileSync(fileURLToPath(new URL("./assets/style.css", import.meta.url)), "utf8");
+  const W4 = APP.slice(APP.indexOf("todo 悬浮条（问题 2 W4"), APP.indexOf("agentStreamLoads.push(load)"));
+
+  it("W4① 悬浮条 DOM（v2 4461-4471 直裁）：.todo-float.ag-todo + tf-pill（tf-owner = agentId 前 4 位 + ✓ + done/total 任务 + ⇲）+ tf-card（tf-head「任务清单 · <完整id>」+ 计数 + tf-list 行）", () => {
+    expect(W4.length, "app.js 应含 W4 接线区").toBeGreaterThan(0);
+    expect(W4).toContain("syncAgTodo");
+    expect(W4).toContain("'todo-float ag-todo'");
+    expect(W4).toContain("id.slice(0, 4)"); // tf-owner 归属徽标 = agentId 前 4 位（v2 4464）
+    expect(W4).toContain("任务清单 · "); // 卡头「任务清单 · <完整id>」（v2 4465）
+    expect(W4).toContain("data-agtf"); // pill 开合锚（v2 4464 → 4526-4531）
+    expect(W4).toContain("tf-count");
+    expect(W4).toContain("tf-card");
+    expect(W4).toContain("tf-list");
+    expect(W4).toContain("data-state="); // 行态三色（done/active/pending）
+  });
+
+  it("W4② 可见性纪律（v2 4462）：todos 空 → 整个不渲染；数据签名门——不变 DOM 零触碰；卡开合态跨刷新保持", () => {
+    expect(W4).toContain("tasks.length === 0"); // 空 → 摘除后不重建（整个不渲染）
+    expect(W4).toContain("agTodoSig"); // 签名门（GC7 律三）
+    expect(W4).toContain("agTodoOpen"); // 重渲保持开合态
+  });
+
+  it("W4③ 轮询 GC7：todo 取数搭 agentStreamLoads 同拍（2s 仅活跃 tab——isConnected 失效自摘）+ GET /subagents/:id/todo 端点", () => {
+    expect(W4).toContain("'/todo'");
+    expect(W4).toContain("encodeURIComponent(id)");
+    expect(W4).toContain("isConnected");
+    expect(APP).toContain("A.addPoll(2000, 1500"); // 既有 2s 节拍器驱动（W3 同拍）
+  });
+
+  it("W4④ style.css：.ag-todo 定位（v2 965 top:8px;right:14px）+ 卡面 z-index 8（v2 966）", () => {
+    const ag = /\.ag-todo\s*\{[^}]*\}/.exec(CSS)?.[0] ?? "";
+    expect(ag, ".ag-todo 规则应存在").toContain("position: absolute");
+    expect(ag).toContain("top: 8px");
+    expect(ag).toContain("right: 14px");
+    expect(CSS).toContain(".ag-todo .tf-card { z-index: 8; }");
   });
 });

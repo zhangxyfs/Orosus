@@ -2947,7 +2947,7 @@ function $(id) { return document.getElementById(id); }
     var label = tk.label || tk.id;
     Pane.addTab({ kind: 'agent', id: tk.id, label: label, data: { sid: sid, id: tk.id, label: label } });
   }
-  /* agent tab 内容渲染器（v2 agentTabHtml 4456-4481 直裁——todo 悬浮条 .ag-todo 归 W4 不在本面）：
+  /* agent tab 内容渲染器（v2 agentTabHtml 4456-4481 直裁——todo 悬浮条 .ag-todo 见下方 W4 段）：
    *  回放轮询走 agentStreamLoads 注册表（boot 内 A.addPoll(2000) 驱动）——.ag-stream 脱离 DOM 即自摘，
    *  切 tab / 关 tab / 收分栏三路全部停轮（GC7 仅活跃 tab 轮询）。 */
   var agentStreamLoads = [];
@@ -2957,7 +2957,7 @@ function $(id) { return document.getElementById(id); }
     var streamEl = wrapEl.querySelector('.ag-stream');
     var sid = data.sid, id = data.id;
     var approvalSig = '';
-    var pollBusy = false, answerBusy = false;
+    var pollBusy = false, answerBusy = false, todoBusy = false;
     function syncApproval(row) {
       var pa = row && row.pendingApproval ? row.pendingApproval : null;
       var sig = pa ? (pa.tool ?? '') + '␀' + (pa.reason ?? '') : '';
@@ -2985,8 +2985,45 @@ function $(id) { return document.getElementById(id); }
         streamEl.querySelector('.agent-spin').remove();
       }
     }
-    /* 审批条批/拒（v2 bindPaneBody 4532-4543 → 既有 POST approval 真链路）：应答后收条 + 刷名册状态点 */
+    /* ═══ 子代理 todo 悬浮条（问题 2 W4——v2 4461-4471 直裁，数据 = GET /subagents/:id/todo） ═══
+     * · .todo-float.ag-todo 浮在 .ag-wrap 右上（top:8px;right:14px——style.css W4 段）；
+     * · tf-owner 归属徽标 = agentId 前 4 位；卡头「任务清单 · <完整id>」+ done/total 计数；
+     * · todos 空 → 整个不渲染（v2 4462 纪律——有数据才出现，清单清空即摘除）；
+     * · 签名门 diff（GC7 律三——数据不变 DOM 零触碰）；卡开合态跨刷新保持（数据变重渲不强制收卡）；
+     * · 轮询搭 agentStreamLoads 同拍（2s 仅活跃 tab——isConnected 自摘，GC7）。 */
+    var agTodoSig = '';
+    var agTodoOpen = false;
+    var AG_TODO_TICK = { done: '✓', active: '◐', pending: '○' }; /* v2 4456 TODO_TICK 三态 */
+    function syncAgTodo(tasks) {
+      var sig = tasks.map(function (t) { return t.text + ':' + t.state; }).join('|');
+      if (sig === agTodoSig) return; /* 签名门：数据不变零触碰 */
+      agTodoSig = sig;
+      var old = wrapEl.querySelector('.todo-float.ag-todo');
+      if (old) old.remove();
+      if (tasks.length === 0) return; /* v2 纪律：无任务数据整个不渲染 */
+      var done = tasks.filter(function (t) { return t.state === 'done'; }).length;
+      var fl = document.createElement('div');
+      fl.className = 'todo-float ag-todo' + (agTodoOpen ? ' open' : '');
+      fl.innerHTML = '<button class="tf-pill" data-agtf="' + esc(id) + '" title="该子代理自己的任务清单（与主清单隔离）"><span class="tf-owner">' + esc(id.slice(0, 4)) + '</span><span class="ok">✓</span> <span class="tf-count">' + done + '/' + tasks.length + '</span> 任务 <span class="tf-open">⇲</span></button>' +
+        '<div class="tf-card"' + (agTodoOpen ? '' : ' hidden') + '><div class="tf-head"><span>任务清单 · ' + esc(id) + '</span><span>' + done + '/' + tasks.length + '</span></div><div class="tf-list">' +
+        tasks.map(function (t) {
+          return '<div class="todo" data-state="' + esc(t.state) + '"><span class="tick">' + (AG_TODO_TICK[t.state] ?? '○') + '</span><span class="ttext">' + esc(t.text) + '</span></div>';
+        }).join('') + '</div></div>';
+      wrapEl.insertBefore(fl, wrapEl.firstChild); /* v2 序：悬浮条居 .ag-wrap 首位（审批条/回放之前） */
+    }
+    /* 审批条批/拒（v2 bindPaneBody 4532-4543 → 既有 POST approval 真链路）：应答后收条 + 刷名册状态点；
+     * W4 todo 悬浮条开合（v2 4526-4531）先行分支——pill 点击展开/收起卡面 */
     wrapEl.addEventListener('click', function (e) {
+      var p = e.target.closest('[data-agtf]');
+      if (p) {
+        var card = wrapEl.querySelector('.ag-todo .tf-card');
+        if (card) {
+          agTodoOpen = card.hidden;
+          card.hidden = !agTodoOpen;
+          p.parentElement.classList.toggle('open', agTodoOpen);
+        }
+        return;
+      }
       var b = e.target.closest('[data-aga]');
       if (!b || answerBusy) return;
       answerBusy = true;
@@ -3015,6 +3052,16 @@ function $(id) { return document.getElementById(id); }
         var li = agentStreamLoads.indexOf(load);
         if (li >= 0) agentStreamLoads.splice(li, 1);
         return;
+      }
+      if (!todoBusy) { /* W4：todo 悬浮条取数与回放同拍（2s 仅活跃 tab——服务端 1s 缓存兜读盘成本） */
+        todoBusy = true;
+        A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/subagents/' + encodeURIComponent(id) + '/todo', { timeoutMs: 8000 }).then(function (tr) {
+          todoBusy = false;
+          if (!wrapEl.isConnected) return;
+          syncAgTodo(tr.tasks ?? []);
+        }, function () {
+          todoBusy = false; /* 静默——下一拍再试（悬浮条保持旧态，不闪空） */
+        });
       }
       if (pollBusy) return;
       pollBusy = true;
