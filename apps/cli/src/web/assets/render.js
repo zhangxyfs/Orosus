@@ -483,6 +483,69 @@
     if (R && R.workTicking === w) R.workTicking = null;
   }
 
+  /** 组外直属 .agent-md（已结算挪出的最终正文）。 */
+  function finalMdOf(t) {
+    var l = t.querySelectorAll(':scope > .agent-md');
+    return l.length > 0 ? l[l.length - 1] : null;
+  }
+  /** 组内最后一块 .agent-md（未结算轮的最终正文候选）。 */
+  function groupMdLastOf(t) {
+    var b = t.querySelector('.work-body');
+    if (!b) return null;
+    var l = b.querySelectorAll('.agent-md');
+    return l.length > 0 ? l[l.length - 1] : null;
+  }
+  /** straddle 认领：页界落正文与 turn/end 之间时正文滞留旧段组内——回溯无 foot 的前置 .turn
+   *  段取最后一块（回溯止于有 foot 的段：正常轮中间正文不偷）。复制口径同款回溯（Task 4）。 */
+  function claimBackward(t) {
+    var p = t.previousElementSibling;
+    while (p && p.classList && p.classList.contains('turn') && !p.querySelector(':scope > .turn-foot')) {
+      var md = groupMdLastOf(p);
+      if (md) return md;
+      p = p.previousElementSibling;
+    }
+    return null;
+  }
+
+  /** 幂等结算评估（emitTurnEnd 首评 / applyInsertGroup 后重估同口）：
+   *  挪最终正文出组 → 纯文本轮组体空留头无箭头 → 零内容轮整组摘除 → 有过程可藏挂箭头收起。 */
+  function evalTurn(t) {
+    if (!t.workSettled) return;
+    var w = t.querySelector(':scope > .work');
+    if (!w) {
+      /* 纯 foot 段（straddle 新段零内容）——仍认领正文 */
+      if (!finalMdOf(t)) {
+        var md0 = claimBackward(t);
+        if (md0) { var foot0 = t.querySelector(':scope > .turn-foot'); t.insertBefore(md0, foot0 || null); }
+      }
+      return;
+    }
+    workHeadStop(w);
+    w.workState = 'settled';
+    var body = w.lastChild;
+    if (!finalMdOf(t)) {
+      var md = groupMdLastOf(t) || claimBackward(t);
+      if (md) t.insertBefore(md, w.nextSibling); /* 组后即正文（轮尾 sub-line / foot 更在其下） */
+    }
+    var hasBody = body.childNodes.length > 0;
+    var mdNow = finalMdOf(t);
+    if (!hasBody && !mdNow) { w.remove(); return; }
+    var collapsible = hasBody && !!mdNow; /* 有正文且有过程可藏才可收（无正文轮常开无箭头） */
+    var wantCollapsed = collapsible;
+    if (wantCollapsed !== w.classList.contains('collapsed')) collapseAnchored(w, wantCollapsed);
+    workHeadRender(w, t.workLabel, collapsible, wantCollapsed);
+  }
+
+  /** 翻页/补插后重估：后到的旧段可能补出 straddle 正文——footed 轮全量幂等重跑。 */
+  function reevalSettledTurns() {
+    if (R === null) return;
+    var kids = R.stream.children;
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      if (k.classList && k.classList.contains('turn') && k.workSettled) evalTurn(k);
+    }
+  }
+
   function placeIn(ctx, node) {
     /* 评审 Important-3 收容口径不变；2026-10-13 起轮内行改投工作组体（回放窗 ctx.noWork 豁免）。 */
     if (!ctx.turn) ensureTurn(ctx);
@@ -987,6 +1050,14 @@
   function emitTurnEnd(ev, ctx) {
     finalizeLive();
     var t = ensureTurn(ctx);
+    /* 工作组结算（spec §3.5）：先定旗标与文案再评估——正文挪出落在轮尾 sub-line / foot 之上 */
+    var stopped = ev.kind === 'interrupted' || ev.kind === 'error';
+    var startMs = typeof t.turnStartTs === 'string' ? new Date(t.turnStartTs).getTime() : NaN;
+    var endMs = typeof ev.ts === 'string' ? new Date(ev.ts).getTime() : NaN;
+    var durMs = (!isNaN(startMs) && !isNaN(endMs)) ? Math.max(0, endMs - startMs) : null;
+    t.workSettled = true;
+    t.workLabel = stopped ? '已停止' : (durMs === null ? '已处理' : '已工作 ' + fmtWorkDur(durMs));
+    evalTurn(t);
     if (ev.kind === 'interrupted') {
       t.appendChild(el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">已停止生成</span> <span class="dim">· 停止按钮 / 双击 Esc 同效</span>'));
     } else if (ev.kind === 'error') {
@@ -1312,6 +1383,7 @@
     if (dh > 0) R.stream.scrollTop = st0 + dh; /* 视口内容稳定（翻页不跳） */
     R.stick = false; /* 回看历史——退出跟随 */
     measureClamp(localClamp);
+    reevalSettledTurns(); /* 新插入段可能补出 straddle 旧段——footed 轮重估（认领正文/补收起） */
   }
 
   function resolveAnchor(beforeSeq) {

@@ -410,3 +410,25 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(css).toContain(".work.collapsed .work-body { display: none; }");
   });
 });
+
+describe("web 工作组（2026-10-13 设计）：结算序列", () => {
+  it("G4 源码锚定：emitTurnEnd 结算四步（停表→挪正文→换头→收起）+ straddle 回溯认领 + 翻页重估", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const endFn = src.slice(src.indexOf("function emitTurnEnd("), src.indexOf("/* ── 流式 chunk"));
+    expect(endFn).toContain("workSettled = true"); // 结算旗标（翻页重估的入场券）
+    expect(endFn).toContain("workLabel"); // 三态文案定值
+    expect(src).toContain("'已工作 '"); // 组头文案族后两枚随本任务结算接线落地（spec §3.3 逐字）
+    expect(src).toContain("'已停止'");
+    expect(endFn).toContain("evalTurn(t)");
+    expect(endFn.indexOf("evalTurn(t)")).toBeLessThan(endFn.indexOf('data-tf="copy"')); // 结算先于挂 foot（正文落 foot 之上）
+    const evalFn = src.slice(src.indexOf("function evalTurn("), src.indexOf("function reevalSettledTurns("));
+    expect(evalFn).toContain("groupMdLastOf(t) || claimBackward(t)"); // 组内最后正文，缺则跨段认领（结果必可见）
+    expect(evalFn).toContain("insertBefore(md,"); // 挪出组外
+    expect(evalFn).toContain("w.remove()"); // 零内容轮整组摘除（ZCode hasWork 同口径）
+    const claimFn = src.slice(src.indexOf("function claimBackward("), src.indexOf("function evalTurn("));
+    expect(claimFn).toContain(".turn-foot"); // 回溯止于有 foot 的段（不偷正常轮的中间正文）
+    expect(src).toContain("reevalSettledTurns()"); // applyInsertGroup 后重估（后到的旧段补出正文）
+    expect(src).toContain("function finalMdOf(");
+    expect(src).toContain("':scope > .agent-md'"); // 组外直属 = 已结算最终正文
+  });
+});
