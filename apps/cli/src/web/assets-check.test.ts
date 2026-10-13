@@ -272,13 +272,17 @@ describe("web T15：前端骨架静态资产", () => {
 
   it("⑩ W6 btw 选项卡：.btw-* CSS 直裁（v2 976-984——字号按 --fz 换算惯例）+ 旧弹窗面绝迹 + 截获块发问源 + hint 诚实口径", () => {
     const css = read("style.css");
-    for (const cls of [".btw-wrap", ".btw-scope", ".btw-stream", ".btw-round", ".btw-round .msg-user", ".btw-a", ".btw-a .dim", ".btw-form", ".btw-hint"]) {
+    for (const cls of [".btw-wrap", ".btw-scope", ".btw-stream", ".btw-round", ".btw-a", ".btw-a .dim", ".btw-form", ".btw-hint"]) {
       expect(css.includes(cls), `.btw 系类 ${cls} 应存在`).toBe(true);
     }
     expect(/\.btw-wrap\s*\{[^}]*flex-direction:\s*column/.test(css), ".btw-wrap 纵向列布局").toBe(true);
     expect(/\.btw-stream\s*\{[^}]*overflow-y:\s*auto/.test(css), ".btw-stream 滚动流").toBe(true);
     expect(/\.btw-round\s*\{[^}]*flex-direction:\s*column/.test(css), ".btw-round 纵向").toBe(true);
-    expect(/\.btw-round \.msg-user\s*\{[^}]*margin-left:\s*auto/.test(css), ".btw-round .msg-user 右贴（v2 980）").toBe(true);
+    /* 走查修钉（2026-10-13 用户报障）：v2:980 的 margin-left:auto 裁掉——auto 外边距禁用 flex stretch，
+     * .msg-user 收缩适配后 .msg-bubble max-width:80% 循环百分比解析，短消息气泡被挤成单字竖行；
+     * 右贴由 .msg-user 既有 align-items:flex-end 承担。钉死该规则不得复活 + 走查修注记在场。 */
+    expect(/\.btw-round \.msg-user\s*\{[^}]*margin-left:\s*auto/.test(css), ".btw-round .msg-user margin-left:auto 不得复活（短消息挤压回归）").toBe(false);
+    expect(css.includes("循环百分比"), "style.css 应有走查修注记（裁掉 margin-left:auto 的机理）").toBe(true);
     expect(/\.btw-a\s*\{[^}]*white-space:\s*pre-wrap/.test(css), ".btw-a pre-wrap").toBe(true);
     expect(/\.btw-form\s*\{[^}]*border-top:\s*1px solid var\(--border\)/.test(css), ".btw-form 上描边（v2 983）").toBe(true);
     /* 旧弹窗三面（ui.js btwOpen/btwSetQuestion/btwFrame——T6 形态）拆除绝迹：定义 + 弹窗体内 id 全清 */

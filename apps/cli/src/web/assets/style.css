@@ -986,7 +986,10 @@ body.light .work-head { color: var(--muted); }
 .btw-scope { padding: 8px 16px 0; color: var(--muted-faint); font-size: calc(11px * var(--fz)); }
 .btw-stream { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 14px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .btw-round { display: flex; flex-direction: column; gap: 8px; }
-.btw-round .msg-user { margin-left: auto; }
+/* 走查修（2026-10-13 用户报障）：v2:980 的 .btw-round .msg-user 右贴规则（margin-left auto）裁掉——auto 外边距
+ * 禁用 flex stretch（flexbox §4.3），.msg-user 收缩适配后 .msg-bubble 的 max-width:80% 陷入循环百分比
+ * 解析，短消息气泡被挤成单字竖行（实测 margin-left 526px、bubble 48px、「你好」两字两行）；右贴本由
+ * .msg-user 的 align-items:flex-end 承担（:312），该行纯属冗余兼有害。 */
 .btw-a { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: 1.75; white-space: pre-wrap; word-break: break-word; padding-left: 2px; }
 .btw-a .dim { color: var(--muted-dim); }
 .btw-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
