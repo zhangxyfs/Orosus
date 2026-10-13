@@ -494,7 +494,16 @@ export function createSubagentRunner(deps: SubagentDeps): SubagentPort & {
       const allowed = req.allowedTools !== undefined ? new Set(req.allowedTools) : undefined;
       const disallowed = req.disallowedTools !== undefined ? new Set(req.disallowedTools) : undefined;
       const bus = createEventBus(deps.sink); // 子代理独立 bus：steering/followUp 不串主对话
-      const tools = createToolRegistry({ bus, sink: deps.sink, spillDir, mediaDir });
+      // 执行身份接线（问题3机制地基 T1）：registry 构造期直给身份 + 子代理会话落盘口——工具 execute 期
+      // 经 ctx.agent/ctx.sessionAppend 见到（agentStore 在上方已先建，闭包捕获；错误带内进 rlog 不炸工具）
+      const tools = createToolRegistry({
+        bus, sink: deps.sink, spillDir, mediaDir,
+        identity: { agentId: id, depth },
+        sessionAppend: (type, payload) => {
+          void agentStore.append(type, payload as Record<string, unknown>).catch((err) =>
+            rlog.error("kernel.subagent.session-append-error", "子代理工具事件落盘失败", { agentId: id, type, error: String(err) }));
+        },
+      });
       // 写报备归一（决策 24①）：禁通配符、限项目内、大小写折叠——报备失败 = 单子拒绝（模糊报备等于没有报备）
       if (req.writePaths !== undefined) {
         const norm = req.writePaths.map((p) => normalizeClaimPath(deps.cwd, p));

@@ -543,4 +543,47 @@ describe("端到端十三场景 T15", () => {
     for (const f of files) expect(readFileSync(join(rootC, f), "utf8")).toBe(big);
     await s3.h.close();
   }, 45000);
+
+  it("s15 执行身份盖章 e2e（问题3机制地基 T1）：主对话直调 ctx.agent/sessionAppend=undefined；子代理内调见到身份 + sessionAppend 落自己会话不进主历史", async () => {
+    const seen: { agent?: { agentId: string; depth: number } | undefined; append?: ((type: string, payload: unknown) => void) | undefined }[] = [];
+    const probeMod: ModuleDefinition = {
+      name: "probe", version: "0.1.0", description: "身份探针", api: 1, mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "probe__who", description: "记录执行身份", parameters: z.object({}),
+          resolveExecution: () => Promise.resolve({
+            accesses: [], approvalRule: "probe__who",
+            execute: (tc) => {
+              seen.push({ agent: tc.agent, append: tc.sessionAppend });
+              tc.sessionAppend?.("tool-todo/write", { items: [{ text: "探针条目", status: "done" }] }); // 有口才落（主对话 undefined = 不落）
+              return Promise.resolve({ output: "probed", isError: false });
+            },
+          }),
+        }));
+      },
+    };
+    const s = await setup(
+      [call("m1", "probe__who", "{}"), text("主对话收尾")],
+      [call("a1", "probe__who", "{}"), text("探完了")],
+      { extraModules: [probeMod] },
+    );
+    // 主对话直调：无身份（ctx.agent === undefined = 主对话语义，GC9 兼容面）
+    await s.h.prompt("探一下主对话");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.agent).toBeUndefined();
+    expect(seen[0]!.append).toBeUndefined();
+    // 经 port.spawn 子代理调：registry 盖章的身份 + 落盘口
+    const out = (await s.port.spawn({ label: "身份探针", prompt: "去探" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");
+    expect(out.id).toMatch(/^[0-9a-f]{8}$/); // 8 位 hex（决策 20）
+    expect(seen).toHaveLength(2);
+    expect(seen[1]!.agent).toEqual({ agentId: out.id, depth: 1 });
+    expect(seen[1]!.append).toBeTypeOf("function");
+    // 落盘路由：事件进子代理自己会话文件（sessions/<主sid>/agents/agents_<id>/agents/session.jsonl 直读）、不进主会话历史
+    const raw = readFileSync(join(dir!, "sessions", s.h.sessionId, "agents", `agents_${out.id}`, "agents", "session.jsonl"), "utf8");
+    expect(raw).toContain("tool-todo/write");
+    expect(raw).toContain("探针条目");
+    expect((await histOf(s.h)).some((e) => e.type === "tool-todo/write")).toBe(false);
+    await s.h.close();
+  }, 15000);
 });

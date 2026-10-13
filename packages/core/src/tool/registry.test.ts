@@ -445,3 +445,42 @@ describe("tool/pre-input 入参门（m5-hooks T1）", () => {
     expect(preInputCalls).toBe(0); // ok:false 带内短路先于入参门
   });
 });
+
+// 问题3机制地基 T1：执行身份盖章——registry 构造期注入 identity/sessionAppend，execute 构造 ctx 时统一铺入
+describe("执行身份盖章（问题3机制地基 T1）", () => {
+  /** 身份探针工具：execute 收到的 ctx 原样捕获（agent/sessionAppend 两字段的在场性即断言对象）。 */
+  const probe = (seen: { agent?: { agentId: string; depth: number } | undefined; sessionAppend?: unknown }[]) =>
+    defineTool({
+      name: "m__who",
+      description: "身份探针",
+      parameters: z.object({}),
+      resolveExecution: async () => ({
+        accesses: [], approvalRule: "m__who",
+        execute: async (tc) => { seen.push({ agent: tc.agent, sessionAppend: tc.sessionAppend }); return { output: "ok", isError: false }; },
+      }),
+    });
+
+  it("① 带 identity + sessionAppend 构造：execute 收到的 ctx 带两字段（盖章 = registry 实例级）", async () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-spill-"));
+    const s = sink();
+    const bus = createEventBus(s);
+    const sessionAppend = (_type: string, _payload: unknown): void => undefined;
+    const reg = createToolRegistry({ bus, sink: s, spillDir: dir, mediaDir: join(dir, "media"), identity: { agentId: "abcd1234", depth: 1 }, sessionAppend });
+    const seen: { agent?: { agentId: string; depth: number }; sessionAppend?: unknown }[] = [];
+    reg.register(probe(seen), "m");
+    await reg.run({ id: "c1", name: "m__who", args: {} }, { signal: new AbortController().signal });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.agent).toEqual({ agentId: "abcd1234", depth: 1 });
+    expect(seen[0]!.sessionAppend).toBe(sessionAppend); // 即传入函数（同一引用）
+  });
+
+  it("② 不带两参构造（主对话兼容面）：ctx.agent/ctx.sessionAppend 均为 undefined", async () => {
+    const { reg } = setup();
+    const seen: { agent?: { agentId: string; depth: number }; sessionAppend?: unknown }[] = [];
+    reg.register(probe(seen), "m");
+    await reg.run({ id: "c1", name: "m__who", args: {} }, { signal: new AbortController().signal });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.agent).toBeUndefined();
+    expect(seen[0]!.sessionAppend).toBeUndefined();
+  });
+});

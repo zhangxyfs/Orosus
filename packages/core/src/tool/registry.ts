@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { Disposer, Logger } from "@orosus/contracts/module";
-import { Access, type Tool, type ToolExecution, type ToolInfo, type ToolResult } from "@orosus/contracts/tool";
+import { Access, type Tool, type ToolContext, type ToolExecution, type ToolIdentity, type ToolInfo, type ToolResult } from "@orosus/contracts/tool";
 import type { ToolSpec } from "@orosus/contracts/provider";
 import { CORE_POINTS, type EventBus } from "../kernel/bus.ts";
 import { createLogger, type DiagSink } from "../diag/logger.ts";
@@ -58,8 +58,10 @@ export interface ToolRegistry {
  * plan = resolveExecution（声明）+ 参数校验（失败短路为带内结果）；execute = tool/pre-execute waterfall（审批）
  * → execute → 归一（截断/spill）。run 为合成口（M1 语义不变）。loop 消费 plan/execute 做 §6.3 并发分组。
  * fail-closed 默认值：accesses 缺省 = kind:"all"；approvalRule 缺省 = 需要审批。
+ * 执行身份盖章（问题3机制地基）：identity/sessionAppend 构造期注入（runner 建子代理 registry 时直给），
+ * execute 构造 ctx 时按需铺入——工具代码零感知；不带即主对话（ctx.agent === undefined，GC9 存量零改动）。
  */
-export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string; mediaDir?: string }): ToolRegistry {
+export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillDir: string; mediaDir?: string; identity?: ToolIdentity; sessionAppend?: ToolContext["sessionAppend"] }): ToolRegistry {
   const tools: { tool: Tool; owner: string; tombstoned?: boolean }[] = [];
   // CX-06 修复（2026-09-28 code review）：溢写文件序号（registry 实例内单调）——callId 是 provider 流的
   // 外部可控值，部分厂商/桥接层会跨轮复用同一 id，原样做文件名会互相覆写（前一次溢写全文丢失）。
@@ -209,7 +211,13 @@ export function createToolRegistry(opts: { bus: EventBus; sink: DiagSink; spillD
 
       let result: ToolResult;
       try {
-        result = await effective.execution.execute({ callId: effective.callId, signal, log: effective.log });
+        result = await effective.execution.execute({
+          callId: effective.callId,
+          signal,
+          log: effective.log,
+          ...(opts.identity !== undefined ? { agent: opts.identity } : {}),
+          ...(opts.sessionAppend !== undefined ? { sessionAppend: opts.sessionAppend } : {}),
+        });
       } catch (err) {
         result = { output: `工具执行抛错：${String(err)}`, isError: true };
       }

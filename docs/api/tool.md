@@ -82,6 +82,20 @@ export interface ToolResult { … }
 | `rawImages?` | `rawImages?: { data: string; mimeType: ToolImageMime }[]` | 内联图（m5-media F2 产出侧形态）：base64 原始数据（如 MCP server 的 image 块）——core 归一化 （落盘会话媒资库 + T6 尺寸归一）后转 images 路径形态；**永不进会话日志**（归一化发生在 loop 落条前）。坏条目（空 data/非白名单 mime/超 10MB 块帽）剔除，不炸工具契约。 |
 | `videos?` | `videos?: { path: string; mimeType: ToolVideoMime }[]` | 视频附件（m5-media F11 路①）：路径引用（模型目录 input 含 video 的端点直发 video_url——2026-10-01 spike 实证 glm-5.3-flash 吃 data URL 视频）。 |
 | `rawVideos?` | `rawVideos?: { data: string; mimeType: ToolVideoMime }[]` | 内联视频（m5-media F11——MCP video 块同通道）：core 落媒资库转 videos 路径形态（100MB 块帽）。 |
+## ToolIdentity（接口）
+
+执行身份：缺省（undefined）= 主对话；子/孙代理 = 其 agentId 与深度。
+
+```ts
+export interface ToolIdentity { … }
+```
+
+**成员**
+
+| 名 | 形态 | 说明 |
+|---|---|---|
+| `agentId` | `agentId: string` |  |
+| `depth` | `depth: 1 \| 2` |  |
 ## ToolContext（接口）
 
 工具执行期上下文。signal 供取消传播（长耗时工具必须响应）；callId 关联 tool/call 与 tool/result。
@@ -97,6 +111,16 @@ export interface ToolContext { … }
 | `callId` | `callId: string` |  |
 | `signal` | `signal: AbortSignal` |  |
 | `log` | `log: Logger` |  |
+| `agent?` | `agent?: ToolIdentity` | 执行身份（GC9：可选，存量桩零改动）。 |
+| `sessionAppend?` | `sessionAppend?: (type: string, payload: unknown) => void` | 身份归属的会话事件落盘口：子代理 = 落自己的 agents/agents_<id>/agents/session.jsonl； 主对话路径模块仍走 activate 期 ctx.session.append（白名单检查在内），不用此口。 |
+
+**方法参数**
+
+| 方法 | 参 | 说明 |
+|---|---|---|
+| `sessionAppend` | `type` | 事件类型（如 "tool-todo/write"——模块自定 <module>/* 命名空间）。 |
+| `sessionAppend` | `payload` | 事件载荷（自由形状，随类型约定）。 |
+
 ## ToolExecution（接口）
 
 阶段一产出：声明（无副作用）+ 执行闭包（唯一产生副作用的环节）。

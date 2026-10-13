@@ -68,11 +68,24 @@ export interface ToolResult {
   rawVideos?: { data: string; mimeType: ToolVideoMime }[];
 }
 
+/** 执行身份：缺省（undefined）= 主对话；子/孙代理 = 其 agentId 与深度。 */
+export interface ToolIdentity {
+  agentId: string;
+  depth: 1 | 2;
+}
+
 /** 工具执行期上下文。signal 供取消传播（长耗时工具必须响应）；callId 关联 tool/call 与 tool/result。 */
 export interface ToolContext {
   callId: string;
   signal: AbortSignal;
   log: Logger;
+  /** 执行身份（GC9：可选，存量桩零改动）。 */
+  agent?: ToolIdentity;
+  /** 身份归属的会话事件落盘口：子代理 = 落自己的 agents/agents_<id>/agents/session.jsonl；
+   *  主对话路径模块仍走 activate 期 ctx.session.append（白名单检查在内），不用此口。
+   * @param type - 事件类型（如 "tool-todo/write"——模块自定 <module>/* 命名空间）。
+   * @param payload - 事件载荷（自由形状，随类型约定）。 */
+  sessionAppend?: (type: string, payload: unknown) => void;
 }
 
 /** 阶段一产出：声明（无副作用）+ 执行闭包（唯一产生副作用的环节）。 */
