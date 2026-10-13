@@ -68,6 +68,9 @@ export interface CommandResult {
   /** 命令输出文本（§4-4：命令返回值是文本、静默命令 ""——D16 命令行不进流区，输出走 toast/浮层）。 */
   output: string;
   mark?: CommandMark;
+  /** 无参 /btw 的归档轮次（走查修：mark:"btw" 专用搭载——回看改由选项卡水合承载，output 恒 ""
+   *  不再弹窗；undefined = 无归档）。 */
+  btwRounds?: BtwRound[];
   /** /skill 合成体——分流点以消息路径重新提交（CLI 递归管线的 web 同构：busy 排队语义保留）。
    *  busy 期 /skill 根本不进本件（默认档入队的是原文，出队时再解析）。 */
   submit?: string;
@@ -118,8 +121,11 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
     // 归档文本，D7 内存槽）+ mark 同发（前端开或复用空草稿 btw tab——v2 cmdBtw 无参分支）。CLI 单轮
     // 形态不动（btw-cmd.ts openBtw，GC1）。
     if (args === "") {
+      /* 走查修（2026-10-13 用户报障）：无参回看不再走 output 弹窗（旧形态残留——分栏批后弹窗已
+       * 下线）；归档轮次经 btwRounds 搭载，前端 mark 分支水合进 btw 选项卡（v2:1673「无参直接打开
+       * 侧问选项卡」的忠实形态）。无归档也恒开 tab（空态引导文案在 tab 内）。 */
       const last = lastBtwOf(hs);
-      return { output: last === undefined ? BTW_USAGE_HINT : btwArchiveText(last), mark: "btw" };
+      return { output: "", mark: "btw", ...(last !== undefined ? { btwRounds: last } : {}) };
     }
     return { output: "", mark: "btw" };
   }
@@ -155,10 +161,6 @@ export function archiveBtwRounds(hs: HostedSession, rounds: BtwRound[]): void {
   btwBySession.set(hs, st);
   st.last = [...rounds];
 }
-
-/** 回看文本形态（CLI 行模式 `[侧问] 问\n答` 同形逐轮拼接——前端 view 窗整段渲染；无参 /btw 的
- *  主消费面已随 W6 转入 mark:btw 开 tab，此文本形为回看兜底）。 */
-const btwArchiveText = (rounds: BtwRound[]): string => rounds.map((r) => `[侧问] ${r.q}\n${r.a}`).join("\n");
 
 // ---------- /skill（G6：目录解析 + 标记行合成体） ----------
 

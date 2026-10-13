@@ -337,16 +337,17 @@ describe("web T6：命令路由 cmdrouter", () => {
     expect(frames).toHaveLength(0); // 也不再自行扇帧——帧面归 POST /btw（askBtw）
     expect((await hs.replayAfter(0)).filter((e) => e.type === "user/message")).toHaveLength(0); // 零落盘不变（D5/D6）
 
-    // 选项卡数据面（POST /btw 真身）经 askBtw 完成归档后：无参回看走 rounds 归档文本 + mark:btw 同发
-    // （前端开或复用空草稿 btw tab——v2 cmdBtw 无参分支「无参直接打开侧问选项卡」）
+    // 选项卡数据面（POST /btw 真身）经 askBtw 完成归档后：无参回看 = mark:btw + btwRounds 搭载
+    // （走查修 2026-10-13 用户报障：output 恒 "" 不再弹窗——回看由前端水合进 btw 选项卡承载，
+    //  v2:1673「无参直接打开侧问选项卡」忠实形态）
     askBtw(hs, "btw-1", "这是什么");
     await waitFor(() => frames.some((f) => f.phase === "answer" && f.tab === "btw-1"));
     expect(frames.some((f) => f.phase === "answering" && f.text === "侧问" && f.tab === "btw-1" && f.round === 1)).toBe(true);
     expect(frames.some((f) => f.phase === "answer" && f.text === "侧问答案" && f.tab === "btw-1" && f.round === 1)).toBe(true);
     const back = await hs.dispatch("/btw");
-    expect(back.output ?? "").toContain("这是什么");
-    expect(back.output ?? "").toContain("侧问答案");
+    expect(back.output ?? "").toBe(""); // 弹窗退役——无文本输出（空串在链路里可缺席，?? 归一）
     expect(back.mark).toBe("btw");
+    expect(back.btwRounds).toEqual([{ q: "这是什么", a: "侧问答案" }]); // 归档轮次随 mark 搭载（前端水合）
     await hs.close();
   }, 60_000);
 

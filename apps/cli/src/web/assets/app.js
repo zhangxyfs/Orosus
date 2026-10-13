@@ -157,7 +157,7 @@ function $(id) { return document.getElementById(id); }
     }
   }
   /** mark 路由信号分发（T6 全集）：quit/new/fork/menu:model/tasks；skill 标记行随 user/message 事件回流。 */
-  function handleMark(mark) {
+  function handleMark(mark, r) { /* r = send 响应（走查修：btw mark 携带 btwRounds 归档轮次透传 cmdBtw） */
     if (mark === 'quit') {
       toast('已退出当前会话');
       void afterMaybeCurrentGone(currentSid);
@@ -174,7 +174,7 @@ function $(id) { return document.getElementById(id); }
     } else if (mark === 'tasks') {
       cmdTasks(); /* W3：/tasks = 分栏批量开 tab（v2 2528-2537 目标形态——不弹列表面） */
     } else if (mark === 'btw') {
-      cmdBtw(); /* W6：带参（截获块问题文本）开新 tab 即发问；无参复用空草稿 tab 或新开（v2 cmdBtw 2541-2548） */
+      cmdBtw(r); /* W6：带参（截获块问题文本）开新 tab 即发问；无参复用空草稿 tab 或新开（v2 cmdBtw 2541-2548；走查修：r.btwRounds 水合回看——弹窗退役） */
     }
   }
 
@@ -3134,17 +3134,25 @@ function $(id) { return document.getElementById(id); }
     return m !== null ? '侧问 ' + m[1] : String(tabId || '侧问');
   }
   /** /btw mark 分支（v2 cmdBtw 2541-2548）：带参开新 tab 并即发问；无参复用空草稿（rounds 尚空）
-   *  btw tab 或新开（v2 无参 toast 分支的「不叠开空 tab」细化——brief 口径「开或复用空草稿」）。 */
-  function cmdBtw() {
+   *  btw tab 或新开（v2 无参 toast 分支的「不叠开空 tab」细化——brief 口径「开或复用空草稿」）。
+   *  走查修（2026-10-13 用户报障）：无参回看不再弹窗——server 归档轮次经 r.btwRounds 搭载，
+   *  水合进目标 tab（仅当目标 tab rounds 为空——不覆写活实例；无归档则空态 tab 引导）。 */
+  function cmdBtw(r) {
     var q = pendingBtwQuestion;
     pendingBtwQuestion = '';
     if (q) { sendBtwAsk(openBtwTab(), q); return; }
+    var arch = r && Array.isArray(r.btwRounds) ? r.btwRounds : null;
     var tabs = Pane.tabsOf();
     for (var i = tabs.length - 1; i >= 0; i--) {
       var t = tabs[i];
-      if (t.kind === 'btw' && t.data && (t.data.rounds ?? []).length === 0) { Pane.activateTab(i); return; }
+      if (t.kind === 'btw' && t.data && (t.data.rounds ?? []).length === 0) {
+        Pane.activateTab(i);
+        if (arch && arch.length > 0) { t.data.rounds = arch; Pane.rerenderBody(); }
+        return;
+      }
     }
-    openBtwTab();
+    var nt = openBtwTab();
+    if (arch && arch.length > 0) { nt.data.rounds = arch; Pane.rerenderBody(); }
   }
   /** 发问（W5 数据面）：本地 push {q,a:null} 占位等帧回填 + POST /btw {tab,q} 受理即回（202）。
    *  POST 失败即标 error 相位（不悬转）。 */

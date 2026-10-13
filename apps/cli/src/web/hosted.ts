@@ -55,6 +55,8 @@ export interface SendResult {
   holder?: { pid: number; since: string; label?: string };
   output?: string;
   mark?: string;
+  /** 无参 /btw 归档轮次搭载（走查修 2026-10-13：回看水合进 btw 选项卡，弹窗退役——cmdrouter → 前端）。 */
+  btwRounds?: { q: string; a: string }[];
 }
 
 /** btw 流帧（T6 cmdrouter 消费——SSE `event: btw` 帧源；W5 多轮化扩形）：tab = 侧问选项卡 id
@@ -426,6 +428,7 @@ export class HostedSession {
           ok: true,
           ...(r.output !== "" ? { output: r.output } : {}),
           ...(r.mark !== undefined ? { mark: r.mark } : {}),
+          ...(r.btwRounds !== undefined ? { btwRounds: r.btwRounds } : {}), // 无参 /btw 回看搭载（走查修）
         },
       };
     } catch (err) {

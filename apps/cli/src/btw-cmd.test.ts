@@ -4,7 +4,7 @@ import type { Chunk, ModelMessage } from "@orosus/contracts/provider";
 import { stripAnsi } from "./tui/width.ts";
 import type { FullApp } from "./tui/fullapp.ts";
 import {
-  BTW_ROLE_PROMPT, BTW_USAGE_HINT, buildBtwRequest, openBtw, reopenBtw, lastBtwArchive,
+  BTW_ROLE_PROMPT, BTW_USAGE_HINT, buildBtwRequest, windowBtwHistory, openBtw, reopenBtw, lastBtwArchive,
   renderBtwView, stripTrailingDanglingToolCalls, btwTitle,
   type BtwRequestSource, type BtwStreamReq, type BtwDeps, type BtwSlot,
 } from "./btw-cmd.ts";
@@ -95,6 +95,30 @@ describe("/btw 侧问本体（m5-btw T2）", () => {
     // 纯函数面：非 assistant 尾 / 无 toolCalls 尾原样返回同一引用
     const bare = [{ role: "user", content: [{ kind: "text", text: "q" }] }] as ModelMessage[];
     expect(stripTrailingDanglingToolCalls(bare)).toBe(bare);
+  });
+
+  it("⑨ 历史窗口收口（走查修·借鉴 ZCode 侧聊过长压缩）：超预算留尾垫省略注记 / 未超原引用直过 / 单条恒保底", async () => {
+    // 未超预算：同一引用直过（零成本路径）
+    const small = [{ role: "user", content: [{ kind: "text", text: "q" }] }] as ModelMessage[];
+    expect(windowBtwHistory(small)).toBe(small);
+    // 超预算：前两条巨块（各 ~60KB）+ 末条小——留末条，头部垫省略注记
+    const big = "巨".repeat(120_000); // 120k 字符 ≈ 120KB 序列化——单条即超 96KB 预算，两条巨块只可能留小尾巴
+    const hist = [
+      { role: "user", content: [{ kind: "text", text: big }] },
+      { role: "assistant", content: [{ kind: "text", text: big }] },
+      { role: "assistant", content: [{ kind: "text", text: "近处的小结论" }] },
+    ] as ModelMessage[];
+    const out = windowBtwHistory(hist);
+    expect(out.length).toBe(2);
+    expect(String((out[0] as { content: { text: string }[] }).content[0]!.text)).toContain("2 条主对话消息已省略");
+    expect(String((out[1] as { content: { text: string }[] }).content[0]!.text)).toBe("近处的小结论");
+    // buildBtwRequest 集成：省略注记落在两界标之间
+    const events = [userEv(1, big), asstEv(2, big), asstEv(3, "近处的小结论")];
+    const r = await buildBtwRequest(stubH(events), "侧问");
+    const joined = JSON.stringify(r.messages);
+    expect(joined.indexOf("MAIN CHAT HISTORY")).toBeLessThan(joined.indexOf("已省略"));
+    expect(joined.indexOf("已省略")).toBeLessThan(joined.indexOf("END OF MAIN CHAT HISTORY"));
+    expect(joined).toContain("近处的小结论");
   });
 
   it("④ 三态迁移：answering→answer 归档 / 抛错→error 不归档 / 新问先中止旧在飞 / abort-完成同拍已入终态不覆写", async () => {

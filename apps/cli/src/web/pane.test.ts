@@ -395,7 +395,7 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
   it("W6⑦ /btw mark 分支 + :102-104 截获块改发问源 + 裁剪 composer 交互（Enter 发送/Shift+Enter 换行、stopPropagation、保草稿、＋文件插 @）", () => {
     const hm = APP.slice(APP.indexOf("function handleMark"), APP.indexOf("贴图（D6"));
     expect(hm).toContain("mark === 'btw'");
-    expect(hm).toContain("cmdBtw();");
+    expect(hm).toContain("cmdBtw(r);"); // 走查修：mark 响应透传（r.btywRounds 无参回看水合）
     expect(APP).toContain("pendingBtwQuestion"); // 截获块存问题文本（mark 响应不带文本——发问源）
     expect(W6).toContain("e.key === 'Enter' && !e.shiftKey");
     expect(W6).toContain("requestSubmit()");
