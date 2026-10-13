@@ -346,14 +346,10 @@ describe("web 走查修（2026-10-12 第二轮）：工具行收起零预览 + �
 });
 
 describe("web 走查修（2026-10-13 用户口令）：复制口径 = 正文 markdown 源串、思考不入", () => {
-  it("C1 源码锚定：emitAssistant 把 textOf 源串挂上 agent-md.mdSource；turnTextsOf 优先取源串", () => {
+  it("C1 源码锚定：emitAssistant 把 textOf 源串挂上 agent-md.mdSource", () => {
     const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
     const emitFn = src.slice(src.indexOf("function emitAssistant("), src.indexOf("/** 思考块（C4）"));
     expect(emitFn).toContain("md.mdSource = text;"); // 正文 markdown 源串随块存（渲染态 textContent 丢围栏/标记）
-    const copyFn = src.slice(src.indexOf("function turnTextsOf("), src.indexOf("function bindOnce("));
-    expect(copyFn).toContain("l.mdSource"); // 有源串取源串
-    expect(copyFn).toContain("l.textContent.replace(/^●\\s*/, '')"); // 流式残段（agent-line 无源串）退回渲染态
-    expect(copyFn).toContain("'.agent-md, .agent-line'"); // 选择器不含 .think——思考块结构性不入复制
   });
 
   it("C2 纯函数面：textOf/reasoningOf 分源——mdSource 所存的 text 天然不含思考", () => {
@@ -430,5 +426,19 @@ describe("web 工作组（2026-10-13 设计）：结算序列", () => {
     expect(src).toContain("reevalSettledTurns()"); // applyInsertGroup 后重估（后到的旧段补出正文）
     expect(src).toContain("function finalMdOf(");
     expect(src).toContain("':scope > .agent-md'"); // 组外直属 = 已结算最终正文
+  });
+});
+
+describe("web 工作组（2026-10-13 设计 §3.7）：复制收窄为最终正文", () => {
+  it("G5 源码锚定：turnTextsOf 退役——复制取组外最终块（中间过渡正文归过程不再入拷）", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    expect(src).not.toContain("function turnTextsOf("); // 旧口径（全块并集）退役
+    const copyFn = src.slice(src.indexOf("if (kind === 'copy')"), src.indexOf("} else if (kind === 'fork')"));
+    expect(copyFn).toContain("finalMdOf(turn)"); // 组外直属最终正文
+    expect(copyFn).toContain("claimBackward(turn)"); // straddle 兜底（只读不回挪——evalTurn 已认领）
+    expect(copyFn).toContain("md.mdSource"); // markdown 源串（2026-10-13 复制批口径延续）
+    expect(copyFn).toContain("已复制本轮回复");
+    expect(copyFn).toContain("（本轮无可复制文本）"); // 无正文轮兜底文案不变
+    expect(src).not.toContain("自动合并两段"); // foot 复制钮 tooltip 旧并集口径同步退役（3c——用户可见标签不撒谎）
   });
 });

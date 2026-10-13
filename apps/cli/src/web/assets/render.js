@@ -1067,7 +1067,7 @@
     var usage = ctx.usage;
     var usageText = usage ? '<span class="tf-time">↑ ' + fmtK(usage.input) + ' · ↓ ' + fmtK(usage.output) + '</span>' : '';
     var foot = el('div', 'turn-foot',
-      '<button type="button" class="tf-btn" data-tf="copy" title="复制本轮回复（跨分页边界的轮次自动合并两段）">⧉ 复制</button>' +
+      '<button type="button" class="tf-btn" data-tf="copy" title="复制本轮回复">⧉ 复制</button>' +
       '<button type="button" class="tf-btn" data-tf="fork" title="从此处分叉会话">⑂ 分支</button>' +
       '<span class="tf-time">完成于 ' + esc(fmtTurnTime(ev.ts)) + '</span>' + usageText);
     foot.setAttribute('data-seq', String(ev.seq));
@@ -1258,16 +1258,6 @@
     R = null;
   }
 
-  /** 一只 .turn 容器内的正文文本（复制口径——agent-md/agent-line，行首 ● 剥离；.think 思考块永不入选）。
-   *  agent-md 带 mdSource 时取正文 markdown 源串（2026-10-13 用户口令）——渲染态 textContent 会丢
-   *  代码围栏/加粗/表格等标记；agent-line（流式未转正残段）无源串，退回 textContent。 */
-  function turnTextsOf(t) {
-    return Array.prototype.slice.call(t.querySelectorAll('.agent-md, .agent-line')).map(function (l) {
-      if (typeof l.mdSource === 'string') return l.mdSource;
-      return l.textContent.replace(/^●\s*/, '');
-    });
-  }
-
   function bindOnce() {
     if (bound) return;
     bound = true;
@@ -1296,18 +1286,11 @@
         var kind = tf.getAttribute('data-tf');
         var turn = tf.closest('.turn');
         if (kind === 'copy') {
-          var texts = turnTextsOf(turn);
-          /* 跨页 straddle（T16 复核 Minor① 收容案——复制取并集）：turn 内容分属相邻两只 .turn 容器
-           *  （先旧后新——旧段无 foot、foot 挂新段）。本容器无正文时回溯无 foot 的前置 .turn 段并入，
-           *  页界恰落 mid-turn 时不再拷空。 */
-          if (texts.length === 0) {
-            var p = turn.previousElementSibling;
-            while (p && p.classList && p.classList.contains('turn') && !p.querySelector('.turn-foot')) {
-              texts = turnTextsOf(p).concat(texts);
-              p = p.previousElementSibling;
-            }
-          }
-          R.onCopy(texts.join('\n'), texts.length > 0 ? '已复制本轮回复' : '（本轮无可复制文本）');
+          /* 2026-10-13 工作组设计 §3.7：只拷组外最终正文（中间过渡正文归组内过程不入拷）。
+           *  straddle 兜底只读不回挪——evalTurn 认领后 finalMdOf 恒命中。 */
+          var md = finalMdOf(turn) || claimBackward(turn);
+          var text = md ? (typeof md.mdSource === 'string' ? md.mdSource : md.textContent.replace(/^●\s*/, '')) : '';
+          R.onCopy(text, text !== '' ? '已复制本轮回复' : '（本轮无可复制文本）');
         } else if (kind === 'fork') {
           R.onFork(R.sid);
         }
