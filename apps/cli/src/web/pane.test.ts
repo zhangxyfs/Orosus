@@ -45,7 +45,8 @@ interface PaneApi {
   /* W6：btw 选项卡纯函数段 */
   btwTabSpec: (seq: number) => Tab & { data: { rounds: BtwRound[] } };
   applyBtwFrame: (rounds: BtwRound[], frame: BtwFrameIn) => BtwRound[];
-  btwTabHtml: (data: { rounds: BtwRound[] }) => string;
+  settleBtwRounds: (rounds: BtwRound[]) => number;
+  btwTabHtml: (data: { rounds: BtwRound[] }, locked?: boolean) => string;
 }
 const P = (globalThis as { OrosusPane?: PaneApi }).OrosusPane!;
 const open = (tabs: Tab[], active: number, tab: Tab): OpenRes => P.openOrSwitch(tabs, active, tab) as OpenRes;
@@ -381,5 +382,73 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
         expect(src.includes(name), `assets/${f} 不应残留 ${name}`).toBe(false);
       }
     }
+  });
+});
+
+describe("web W6 复核修（Important#1/#2 + Minor#1——切走结算/门控/发送清空/前缀口径统一）", () => {
+  const APP = readFileSync(fileURLToPath(new URL("./assets/app.js", import.meta.url)), "utf8");
+
+  it("F① settleBtwRounds 切走结算：在飞轮（a 空或 answering/tool 相位）a 落「〔已中断：切换会话〕」+ phase 清终态；error/落定轮不动；幂等", () => {
+    const rounds: BtwRound[] = [
+      { q: "已答", a: "答案全文", phase: null }, // 落定终态——不动
+      { q: "本地占位", a: null, phase: "answering" }, // sendBtwAsk 本地 push 形——永转「回答中…」的源头
+      { q: "空文本帧", a: "", phase: "answering" }, // answering 帧空文本（a=''）同样永转——一并结算
+      { q: "半程", a: "部分文本", phase: "answering" }, // 流中断前已有半程文本——保留追加不覆盖
+      { q: "查证中", a: "已积累", phase: "tool" }, // tool 相位在飞
+      { q: "失败", a: "坏了", phase: "error" }, // error 终态——不动
+    ];
+    expect(P.settleBtwRounds(rounds)).toBe(4);
+    expect(rounds[0]).toEqual({ q: "已答", a: "答案全文", phase: null });
+    expect(rounds[1]).toEqual({ q: "本地占位", a: "〔已中断：切换会话〕", phase: null });
+    expect(rounds[2]).toEqual({ q: "空文本帧", a: "〔已中断：切换会话〕", phase: null });
+    expect(rounds[3]).toEqual({ q: "半程", a: "部分文本\n〔已中断：切换会话〕", phase: null }); // 半程文本保留
+    expect(rounds[4]).toEqual({ q: "查证中", a: "已积累\n〔已中断：切换会话〕", phase: null });
+    expect(rounds[5]).toEqual({ q: "失败", a: "坏了", phase: "error" });
+    expect(P.settleBtwRounds(rounds)).toBe(0); // 幂等——全终态再结算零改动
+    expect(P.settleBtwRounds([])).toBe(0); // 空表零结算
+  });
+
+  it("F② btwTabHtml locked 门控态：textarea/发送钮/＋文件全 disabled + 「侧问绑定原会话」诚实提示行；未锁路径零 disabled 零提示行", () => {
+    const locked = P.btwTabHtml({ rounds: [] }, true);
+    expect(locked).toContain('<div class="btw-locked">侧问绑定原会话——切回后可继续发问</div>');
+    expect(locked).toContain('<textarea id="btw-input" rows="2" disabled');
+    expect(locked).toContain('id="btw-file" title="引用文件（= 输入 @）" disabled');
+    expect(locked).toContain('class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送" disabled');
+    const open = P.btwTabHtml({ rounds: [{ q: "问", a: "答", phase: null }] }, false);
+    expect(open).not.toContain("disabled");
+    expect(open).not.toContain("btw-locked");
+    expect(open).not.toContain("侧问绑定原会话");
+    const plain = P.btwTabHtml({ rounds: [] }); // 旧单参调用兼容——缺省不锁
+    expect(plain).not.toContain("disabled");
+  });
+
+  it("F③ switchTo 切走结算接线 + composer sid 门控接线（app.js 源锚定）", () => {
+    // ② 切走结算：switchTo 捕获离去 sid → 关流后 currentSid 已换新时结算 + 活跃 btw tab 重渲刷门控
+    const sw = APP.slice(APP.indexOf("function switchTo"), APP.indexOf("服务端游标同步"));
+    expect(sw).toContain("var fromSid = currentSid"); // 离去会话判据在关流/换 currentSid 前捕获
+    expect(sw).toContain("settleBtwOnSwitch(fromSid)");
+    const settle = APP.slice(APP.indexOf("function settleBtwOnSwitch"), APP.indexOf("Pane.onBodyRender('btw'"));
+    expect(settle).toContain("t.data.sid !== fromSid"); // 仅离去会话的 btw tab 结算——他 tab 不误伤
+    expect(settle).toContain("Pane.settleBtwRounds(t.data.rounds)");
+    expect(settle).toContain("Pane.activeTab() === t"); // 活跃者无论有无在飞轮都重渲——composer 门控即时生效（防旧表单滞留窗）
+    expect(settle).toContain("rerenderBtwKeepingDraft()"); // 草稿保留
+    // ① composer 门控：渲染器按 data.sid !== currentSid 出 locked 态（disabled 归 F② 纯函数面钉）
+    const render = APP.slice(APP.indexOf("Pane.onBodyRender('btw'"), APP.indexOf("面板渲染（2s 轮询"));
+    expect(render).toContain("var locked = data.sid !== currentSid");
+    expect(render).toContain("Pane.btwTabHtml(data, locked)");
+  });
+
+  it("F④ 发送清空（Important#1）+ /btw 前缀口径统一（Minor#1）（app.js 源锚定）", () => {
+    // 发送成功 push 轮次清空侧问框——清在保草稿重渲之前（rerenderBtwKeepingDraft 读到空草稿 → 空 textarea）
+    const send = APP.slice(APP.indexOf("function sendBtwAsk"), APP.indexOf("function btwFeed"));
+    const clearAt = send.indexOf("bi.value = ''");
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(send.indexOf("rerenderBtwKeepingDraft()", clearAt)).toBeGreaterThan(clearAt); // 先清后渲
+    expect(send.indexOf("rounds.push(rd)")).toBeLessThan(clearAt); // 仅本地 push 成功之后的路径清空——sid 空守卫早退（问文保留）不受影响
+    // 前缀判定唯一口径：共享常量，截获存文与失败清存两处同源；indexOf 区分大小写版绝迹
+    const pipe = APP.slice(APP.indexOf("发送管线"), APP.indexOf("function submit"));
+    expect(pipe).toContain("var BTW_PREFIX_RE = /^\\/btw(\\s|$)/i");
+    expect(pipe.match(/BTW_PREFIX_RE\.test\(text\)/g)).toHaveLength(2); // handleSendResponse 截获 + handleSendError 清存
+    expect(APP).not.toContain("indexOf('/btw')");
   });
 });

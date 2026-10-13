@@ -991,6 +991,8 @@ body.light .work-head { color: var(--muted); }
 .btw-a .dim { color: var(--muted-dim); }
 .btw-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .btw-hint { color: var(--muted-faint); font-size: calc(10.5px * var(--fz)); }
+/* W6复核修 Important#2①：跨会话门控提示行（btwTabHtml locked 态——composer 已 disabled，诚实告知发问归属） */
+.btw-locked { padding: 6px 16px 0; color: var(--muted-dim); font-size: calc(11px * var(--fz)); border-top: 1px solid var(--border); }
 
 @media (max-width: 920px) {
   .app-body { grid-template-columns: 1fr; height: auto; }

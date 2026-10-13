@@ -85,6 +85,7 @@ function $(id) { return document.getElementById(id); }
   });
 
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
+  var BTW_PREFIX_RE = /^\/btw(\s|$)/i; /* /btw 前缀判定唯一口径（W6复核修 Minor#1）：截获存文（handleSendResponse）与失败清存（handleSendError）共用——ignoreCase 交集，杜绝大小写漏捕/误捕 */
   function sendCore(text, imageIds, promptId) {
     var body = { text: text };
     if (imageIds && imageIds.length > 0) body.imageIds = imageIds;
@@ -100,7 +101,7 @@ function $(id) { return document.getElementById(id); }
     renderAttach();
     syncSendBtn();
     pendingBtwQuestion = ''; /* 发问源（W6）：先清陈旧——仅本条 /btw 带参重新存文（mark 响应不带文本） */
-    if (/^\/btw\s/i.test(text) && text.trim().length > 4) {
+    if (BTW_PREFIX_RE.test(text) && text.trim().length > 4) {
       pendingBtwQuestion = text.trim().replace(/^\/btw\s+/i, ''); /* 供 mark 分支消费（cmdBtw 开新 tab 即发问） */
     }
     if (r && r.queued) { /* 入队——队列条由 SSE queue 帧整表快照驱动（唯一真源） */ }
@@ -112,7 +113,7 @@ function $(id) { return document.getElementById(id); }
   function handleSendError(err, text) {
     sendingNow = false;
     syncSendBtn();
-    if (text.indexOf('/btw') === 0) pendingBtwQuestion = ''; /* 失败不吃陈旧问文（输入已还原——重发再存） */
+    if (BTW_PREFIX_RE.test(text)) pendingBtwQuestion = ''; /* 失败不吃陈旧问文（输入已还原——重发再存；前缀口径与截获块同一正则） */
     /* 失败保留输入（409 拦截提示保留输入 / viewer 只读 / 网络失败同口径） */
     input.value = text;
     autogrow();
@@ -2702,8 +2703,10 @@ function $(id) { return document.getElementById(id); }
   function switchTo(sid) {
     /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
     UI.closePopup();
+    var fromSid = currentSid; /* 离去会话——W6复核修 Important#2②：在飞 btw 轮结算的归属判据 */
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
+    settleBtwOnSwitch(fromSid); /* 切走结算：离去会话 btw tab 在飞轮落终态 + 活跃者重渲刷 composer 门控（Important#2①） */
     /* 服务端游标同步（fire-and-forget）——B1「＋新会话跟随当前项目」与左栏 cur 标记的 server 侧真源 */
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/current', { method: 'POST', body: '{}' }).then(null, function () { /* 游标同步失败无碍视图 */ });
     seenSet(sid);
@@ -3150,7 +3153,16 @@ function $(id) { return document.getElementById(id); }
     }
     var rd = { q: q, a: null, phase: 'answering' };
     rounds.push(rd);
-    if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
+    if (Pane.activeTab() === tab) {
+      /* W6复核修 Important#1（对齐 v2 4578-4581：v2 发送后 renderPaneBody 换空 textarea）：本次发送
+       * 成功 push 轮次清空侧问框——清在保草稿重渲之前，重渲读到空草稿即出空 textarea（否则问题文本
+       * 残留 composer，再按 Enter 重复发送同一问）。帧驱动的重渲仍走 rerenderBtwKeepingDraft 保未
+       * 发送草稿（其他用户在编辑中不被帧清掉——该保留的保留）；仅本 push 轮次路径清空，sid 空守卫
+       * 早退（问文保留）与 cmdBtw 新 tab（本空）两路径不受影响。 */
+      var bi = document.getElementById('btw-input');
+      if (bi !== null) bi.value = '';
+      rerenderBtwKeepingDraft();
+    }
     A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, q: q }) }).then(null, function (err) {
       rd.phase = 'error';
       rd.a = '发送失败：' + err.message;
@@ -3192,8 +3204,26 @@ function $(id) { return document.getElementById(id); }
     if (hadFocus && ni !== null) ni.focus();
   }
   var btwRenderNoFocus = false; /* 帧驱动重渲的 focus 抑制位（rerenderBtwKeepingDraft 置位） */
+  /** W6复核修 Important#2②（切走结算——tab 设计为跨会话存活）：switchTo 关旧 SSE 流后遍历已开 btw
+   *  tabs，凡 data.sid === 离去 sid 者，在飞轮次经 Pane.settleBtwRounds 本地结算为终态（a 落
+   *  「〔已中断：切换会话〕」标记——消除永转「回答中…」；btw 帧只在归属会话的流里，旧流已关，永无
+   *  回填）。零服务端往返（btw D6 零落盘无归档端点可查——本地结算即诚实口径）。活跃的离去会话 btw
+   *  tab 无论有无在飞轮都重渲：既显结算标记，也把 composer 切到 sid 门控禁用态（Important#2①——
+   *  防「切会话后旧表单未重渲仍可发」的滞留窗）。 */
+  function settleBtwOnSwitch(fromSid) {
+    var tabs = Pane.tabsOf();
+    var refresh = false;
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i];
+      if (!t || t.kind !== 'btw' || !t.data || t.data.sid !== fromSid) continue;
+      Pane.settleBtwRounds(t.data.rounds);
+      if (Pane.activeTab() === t) refresh = true;
+    }
+    if (refresh) rerenderBtwKeepingDraft(); /* currentSid 已换新——重渲即出 locked composer；草稿保留 */
+  }
   Pane.onBodyRender('btw', function (data, bodyEl) {
-    bodyEl.innerHTML = Pane.btwTabHtml(data);
+    var locked = data.sid !== currentSid; /* Important#2①：跨会话门控——非归属会话的 btw 帧已随旧流关闭，发问将永无回填 */
+    bodyEl.innerHTML = Pane.btwTabHtml(data, locked);
     var bForm = bodyEl.querySelector('#btw-form');
     var bInput = bodyEl.querySelector('#btw-input');
     var bSend = bodyEl.querySelector('#btw-send');

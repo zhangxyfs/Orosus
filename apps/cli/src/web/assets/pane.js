@@ -2,8 +2,9 @@
  * 结构分两段（render.js 同款纪律）：
  *   ① 纯函数区：tab 模型三件套 findTab/openOrSwitch/closeTabAt + 行 HTML 推导
  *      （tabRowHtml/dropRowsHtml/tabTitle——零 DOM 依赖，pane.test.ts node 直测）
- *      + W6 btw 纯函数段（btwTabSpec/applyBtwFrame/btwTabHtml——实例铸造/帧归约/内容 HTML 推导，
- *      同零 DOM 依赖直测；DOM 事件绑定薄壳在 app.js 的 onBodyRender('btw') 注册器内）；
+ *      + W6 btw 纯函数段（btwTabSpec/applyBtwFrame/settleBtwRounds/btwTabHtml——实例铸造/帧归约/
+ *      切走结算/内容 HTML 推导（含 locked 门控态），同零 DOM 依赖直测；DOM 事件绑定薄壳在 app.js
+ *      的 onBodyRender('btw') 注册器内）；
  *   ② DOM 薄壳段：⌄ 全部选项卡下拉（搜索过滤 / 行点击切换 / 行尾 ×）+ ＋ 新建菜单（定位 clamp
  *      进选项卡条）+ tab 右键菜单（关闭 / 关闭其他 / 关闭所有——复用 #ctx-menu 单例模式）+
  *      renderTabs/activateTab/addTab/closeAt/onBodyRender 导出面（W3 子代理 tab / W6 btw tab 消费）。
@@ -132,6 +133,26 @@
     return list;
   }
 
+  /** settleBtwRounds(rounds) -> 结算数（W6复核修 Important#2②：切走结算——跨会话切换时在飞轮本地落终态）。
+   *  在飞判据：a 空（null/undefined/''——本地 push 占位 {q,a:null} 与空文本 answering 帧都会永转
+   *  「回答中…」）或 phase 为 answering/tool（半程文本冻结非终态）；error 终态不动。结算 = a 落中断
+   *  标记（半程文本保留换行追加，不覆盖）+ phase 清 null（落定态——非 error：中断非失败）。
+   *  幂等：全终态再结算零改动返回 0。零服务端往返（btw D6 零落盘无归档端点可查——本地结算即诚实口径）。 */
+  function settleBtwRounds(rounds) {
+    var list = rounds || [];
+    var settled = 0;
+    for (var i = 0; i < list.length; i++) {
+      var rd = list[i];
+      if (!rd || rd.phase === 'error') continue;
+      var inFlight = rd.phase === 'answering' || rd.phase === 'tool' || rd.a == null || rd.a === '';
+      if (!inFlight) continue;
+      rd.a = (rd.a ? rd.a + '\n' : '') + '〔已中断：切换会话〕';
+      rd.phase = null;
+      settled++;
+    }
+    return settled;
+  }
+
   /** 单轮 HTML（v2 4492-4498 直裁 + 拍板相位态）：q 气泡复用 .msg-user（空 q 垫片不出空气泡）；
    *  .btw-a 回答区——error 终态 / 落定纯文本 / 回答中·查证中 spinner 相位（查证中保留已积累文本）。 */
   function btwRoundHtml(rd) {
@@ -151,14 +172,19 @@
     return '<div class="btw-round">' + bubble + '<div class="btw-a">' + body + '</div></div>';
   }
 
-  /** btwTabHtml(data)——选项卡内容 HTML（v2 4484-4507 直裁）：.btw-scope 说明行 + .btw-stream
+  /** btwTabHtml(data, locked)——选项卡内容 HTML（v2 4484-4507 直裁）：.btw-scope 说明行 + .btw-stream
    *  rounds（空态 pane-blank）+ 裁剪版 composer（.ib-main ❯+textarea rows=2 + .ib-bar 左仅
    *  ＋文件〔= 插入 @〕、右 hint + 发送钮——去 mode/model/effort 三芯片，拍板第 4 条）。
+   *  locked=true（W6复核修 Important#2①：composer 按 sid 门控）——textarea/发送钮/＋文件全 disabled
+   *  + .btw-locked 诚实提示行「侧问绑定原会话——切回后可继续发问」（btw 帧只在归属会话的 SSE 流里，
+   *  切走后发问将永无帧回填——杜绝新发问滞留）。
    *  hint 诚实口径「旁路 · 只读工具 · 走当前会话模型」——不照抄 v2 :4505 原文（「模型」一词与
    *  实现不符：btw 每次调用解析当前 provider/model，含 /model 覆盖也跟随——自创值登记④）。
    *  placeholder 同口径去「Ctrl + V 贴图」claim（POST /btw 无 imageIds 面——标签不得撒谎）。 */
-  function btwTabHtml(data) {
+  function btwTabHtml(data, locked) {
     var rounds = (data && data.rounds) || [];
+    var lk = locked === true;
+    var dis = lk ? ' disabled' : '';
     var html = '<div class="btw-wrap">' +
       '<div class="btw-scope">旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘</div>' +
       '<div class="btw-stream" id="btw-stream">';
@@ -167,12 +193,13 @@
     }
     for (var i = 0; i < rounds.length; i++) html += btwRoundHtml(rounds[i]);
     html += '</div>' +
+      (lk ? '<div class="btw-locked">侧问绑定原会话——切回后可继续发问</div>' : '') +
       '<form class="btw-form" id="btw-form" autocomplete="off"><div class="inputbox">' +
       '<div class="ib-main"><span class="pchar" aria-hidden="true">❯</span>' +
-      '<textarea id="btw-input" rows="2" placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
-      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）">＋ 文件</button></span>' +
+      '<textarea id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
+      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button></span>' +
       '<span class="cb-right"><span class="btw-hint">旁路 · 只读工具 · 走当前会话模型</span>' +
-      '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送">↑</button></span></div>' +
+      '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送"' + dis + '>↑</button></span></div>' +
       '</div></form></div>';
     return html;
   }
@@ -189,6 +216,7 @@
     /* W6：btw 选项卡纯函数 */
     btwTabSpec: btwTabSpec,
     applyBtwFrame: applyBtwFrame,
+    settleBtwRounds: settleBtwRounds,
     btwTabHtml: btwTabHtml,
   };
 
