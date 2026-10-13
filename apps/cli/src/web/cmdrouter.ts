@@ -10,7 +10,8 @@
  *     - /tasks /task：mark:"tasks" 信号——前端开任务面板（G3 数据面 GET /tasks 是 T7 交付）。
  *     - /title /rename：h.setLabel 活写口（session/label 事件回流；无参静默——CLI 批⑦拍板同款）。
  *     - /ps：scanWithSelf/formatPsList 文本（ps.ts 纯函数直 import；ANSI 剥离——web 输出面是 HTML）。
- *     - /btw：runBtw 旁路直调（h.llm().stream 零落盘；流经 HostedSession.onBtw 扇出 SSE btw 帧）。
+ *     - /btw：mark:"btw" 信号——前端开 btw 选项卡（带参开新 tab 即发问 POST /btw；无参开/复用 +
+ *       回看归档文本）。旧 runBtw 单轮直调路径 W6 下线（多轮归 btw-service.askBtw）；CLI 形态不动。
  *     - /skill：目录解析 + 标记行合成体（G6——CLI 是宿主拦截递归走消息管线，web 同构：返回 submit
  *       由分流点走消息路径，busy 排队语义保留）。
  *  ② core 内建（/effort /help /reload /context）+ 别名表（/yolo /auto /permission /provider /compact）
@@ -25,7 +26,7 @@
  *  /fork）→ 409 语义 {error}；两表外默认档 = 与消息同队（对齐 TUI「其余命令与消息照旧排队」
  *  main.ts:1401）；/quit 族 busy 特例 = 先 cancel 再关当前会话（TUI :1400 立即打断同款）。 */
 import { readFileSync } from "node:fs";
-import { buildBtwRequest, BTW_USAGE_HINT, type BtwRound } from "../btw-cmd.ts";
+import { BTW_USAGE_HINT, type BtwRound } from "../btw-cmd.ts";
 import { formatPsList, scanWithSelf } from "../ps.ts";
 import { t } from "../i18n/app.ts";
 import { SKILL_MARK_PREFIX, SKILL_MARK_TAIL } from "../i18n/protocol-strings.ts";
@@ -59,8 +60,9 @@ export function commandNameOf(raw: string): { name: string; args: string } {
 /** 路由结果标记（分流点透传到 send 响应，前端消费）：new/fork = 开会话动作（T9）；quit = 关当前
  *  会话（server 执行）；skill = 技能合成体已提交（T16 收菜单/流区标记行）；menu:model = 前端开
  *  模型菜单（§1 D9 差异口径——brief 接口的 mark 并集 + Steps 点名的 menu:model 信号）；
- *  tasks = 前端开任务面板（G3——T7 数据面）。 */
-export type CommandMark = "new" | "fork" | "quit" | "skill" | "menu:model" | "tasks";
+ *  tasks = 前端开任务面板（G3——T7 数据面）；btw = 前端开 btw 选项卡（W6——带参开新 tab 即发问
+ *  〔POST /btw 多轮路径〕、无参开/复用空草稿 tab 并回看归档文本）。 */
+export type CommandMark = "new" | "fork" | "quit" | "skill" | "menu:model" | "tasks" | "btw";
 
 export interface CommandResult {
   /** 命令输出文本（§4-4：命令返回值是文本、静默命令 ""——D16 命令行不进流区，输出走 toast/浮层）。 */
@@ -111,25 +113,15 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
     return { output: stripAnsi(lines.join("\n")) };
   }
   if (name === "/btw") {
+    // W6 两端切换（同 commit 无中间态）：带参不再直调 runBtw（旧单轮路径下线）——mark:"btw" 受理即回，
+    // 前端开新 btw tab 并自行 POST /btw {tab, q}（askBtw 多轮路径，W5 数据面）；无参 = 回看（rounds
+    // 归档文本，D7 内存槽）+ mark 同发（前端开或复用空草稿 btw tab——v2 cmdBtw 无参分支）。CLI 单轮
+    // 形态不动（btw-cmd.ts openBtw，GC1）。
     if (args === "") {
       const last = lastBtwOf(hs);
-      return { output: last === undefined ? BTW_USAGE_HINT : btwArchiveText(last) }; // 无参回看（D7 内存槽）
+      return { output: last === undefined ? BTW_USAGE_HINT : btwArchiveText(last), mark: "btw" };
     }
-    // 参数式：受理即回——runBtw 后台收流经 onBtw 扇出（SSE btw 帧小窗）；完成归档 lastBtw
-    // W5 帧形：帧带 tab + round（旧单轮路径固定 "btw"/1；多轮 per-tab 实例走 btw-service.askBtw——
-    // 本分支切换并入 W6 与前端 handleMark 同 commit）
-    let acc = "";
-    void runBtw(hs, args, (delta) => {
-      acc += delta;
-      hs.emitBtw({ tab: "btw", phase: "answering", text: acc, round: 1 }); // 累积式（前端晚开窗也能整段渲染）
-    }).then(
-      (text) => { hs.emitBtw({ tab: "btw", phase: "answer", text, round: 1 }); },
-      (err) => {
-        if (err instanceof Error && err.message === BTW_REPLACED) return; // 被新侧问取代——新问占窗，不投终态
-        hs.emitBtw({ tab: "btw", phase: "error", text: err instanceof Error ? err.message : String(err), round: 1 });
-      },
-    );
-    return { output: "" };
+    return { output: "", mark: "btw" };
   }
   if (name === "/skill") {
     const inject = await skillSubmitOf(h, args);
@@ -141,24 +133,18 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
   return { output: (await h.prompt(raw)) ?? "" }; // 消息路径返回 undefined——命令路径 string（§4-4）
 }
 
-// ---------- /btw（G2：旁路快问——不打断主对话、零落盘、lastBtw server 持） ----------
+// ---------- /btw（G2：旁路侧问——W6 起前端选项卡形态；本件只持无参回看的内存归档槽） ----------
 
-/** 每会话 btw 状态：单飞控制器（新问先中止旧在飞——CLI 进程级单件的会话级化；多轮 per-tab 实例的
- *  控制器在 btw-service 各自持有，此处 ctrl 属旧单轮路径）+ 回看归档（W5 起存 rounds 串）。 */
+/** 每会话 btw 归档槽：最近一次完成侧问的问答轮串（仅 answer 态归档——被中止/失败的问不入）。
+ *  问答本体走 btw-service.askBtw（POST /btw 数据面，per-tab 实例自管单飞/中止）；旧 runBtw 单轮
+ *  直调路径（会话级单飞 + close 钩子中止）已随 W6 下线——在飞中止职责整体移驻 btw-service。 */
 interface BtwState {
-  ctrl?: AbortController;
-  /** 最近一次完成侧问的问答轮串（仅 answer 态归档——被中止/失败的问不入；W5 多轮化：内存槽随
-   *  rounds 形存，btw-service 每轮完成经 archiveBtwRounds 覆写）。 */
   last?: BtwRound[];
-  hooked?: boolean; // close 钩子已注册（会话关停时中止在飞侧问）
 }
 const btwBySession = new WeakMap<HostedSession, BtwState>();
 
-/** 被新侧问取代的哨兵（btw-cmd.ts openBtw 同字面量——终态不投帧，新问接管小窗）。 */
-const BTW_REPLACED = "已被新侧问取代";
-
-/** 无参 /btw 回看数据口（D7）：lastBtw 内存槽（仅 answer 态归档——被中止/失败的问不入）。
- *  W5 起返回 rounds 串（旧单轮路径归档单元素数组——消费面 btwArchiveText 逐轮拼接）。 */
+/** 无参 /btw 回看数据口（D7）：lastBtw 内存槽（W5 起存 rounds 串——btw-service 每轮完成经
+ *  archiveBtwRounds 覆写，消费面 btwArchiveText 逐轮拼接）。 */
 export function lastBtwOf(hs: HostedSession): BtwRound[] | undefined {
   return btwBySession.get(hs)?.last;
 }
@@ -171,44 +157,8 @@ export function archiveBtwRounds(hs: HostedSession, rounds: BtwRound[]): void {
 }
 
 /** 回看文本形态（CLI 行模式 `[侧问] 问\n答` 同形逐轮拼接——前端 view 窗整段渲染；无参 /btw 的
- *  W6 前端消费为开 tab 展示，此文本形为兜底）。 */
+ *  主消费面已随 W6 转入 mark:btw 开 tab，此文本形为回看兜底）。 */
 const btwArchiveText = (rounds: BtwRound[]): string => rounds.map((r) => `[侧问] ${r.q}\n${r.a}`).join("\n");
-
-/** 带参侧问（brief 签名）：buildBtwRequest（btw-cmd.ts 纯函数）+ h.llm().stream 直调收流——
- *  零落盘（不经 store/loop，events 无 user/message）；onChunk 收 text/delta 增量；错误带内
- *  （finish/error 不抛——消费侧此刻才升级）与 AbortError 统一 throw。单飞：同会话新问先 abort
- *  旧在飞（旧问以 BTW_REPLACED 收场、不入归档）。完成归档 lastBtw 并返回答案全文。 */
-export async function runBtw(hs: HostedSession, q: string, onChunk: (t: string) => void): Promise<string> {
-  const st = btwBySession.get(hs) ?? {};
-  btwBySession.set(hs, st);
-  st.ctrl?.abort(); // 新问先中止旧在飞（qwen cancelBtw 同款）
-  const ac = new AbortController();
-  st.ctrl = ac;
-  if (st.hooked !== true) {
-    st.hooked = true;
-    hs.onClose(() => st.ctrl?.abort()); // 会话关停 → 在飞侧问中止（CLI「关 CLI 即没」的 web 同构）
-  }
-  const h = hs.core;
-  if (h === undefined) throw new Error("会话装配失败");
-  const replaced = (): boolean => ac.signal.aborted;
-  const { system, messages } = await buildBtwRequest(h, q);
-  if (replaced()) throw new Error(BTW_REPLACED);
-  let text = "";
-  for await (const c of h.llm().stream({ system, messages, signal: ac.signal })) {
-    if (c.type === "text/delta") {
-      text += c.text;
-      onChunk(c.text);
-    } else if (c.type === "finish") {
-      if (c.kind === "error") throw new Error(c.errorMessage ?? "llm 调用失败");
-      if (c.kind === "aborted" && !ac.signal.aborted) throw new Error("已中止"); // 适配器静默中止——不把半截当答案
-      break; // stop/length = 完整答案（无工具单轮）
-    }
-    // reasoning/usage/server-search：侧问小窗不消费
-  }
-  if (replaced()) throw new Error(BTW_REPLACED); // 收流途中被新问取代
-  st.last = [{ q, a: text }]; // 只有走完的 answer 态归档（旧单轮路径：单元素 rounds 串）
-  return text;
-}
 
 // ---------- /skill（G6：目录解析 + 标记行合成体） ----------
 

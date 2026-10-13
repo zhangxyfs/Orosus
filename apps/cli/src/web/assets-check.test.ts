@@ -270,6 +270,31 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes(".ag-approval .btn"), "审批按钮换类实现（不内联）").toBe(true);
   });
 
+  it("⑩ W6 btw 选项卡：.btw-* CSS 直裁（v2 976-984——字号按 --fz 换算惯例）+ 旧弹窗面绝迹 + 截获块发问源 + hint 诚实口径", () => {
+    const css = read("style.css");
+    for (const cls of [".btw-wrap", ".btw-scope", ".btw-stream", ".btw-round", ".btw-round .msg-user", ".btw-a", ".btw-a .dim", ".btw-form", ".btw-hint"]) {
+      expect(css.includes(cls), `.btw 系类 ${cls} 应存在`).toBe(true);
+    }
+    expect(/\.btw-wrap\s*\{[^}]*flex-direction:\s*column/.test(css), ".btw-wrap 纵向列布局").toBe(true);
+    expect(/\.btw-stream\s*\{[^}]*overflow-y:\s*auto/.test(css), ".btw-stream 滚动流").toBe(true);
+    expect(/\.btw-round\s*\{[^}]*flex-direction:\s*column/.test(css), ".btw-round 纵向").toBe(true);
+    expect(/\.btw-round \.msg-user\s*\{[^}]*margin-left:\s*auto/.test(css), ".btw-round .msg-user 右贴（v2 980）").toBe(true);
+    expect(/\.btw-a\s*\{[^}]*white-space:\s*pre-wrap/.test(css), ".btw-a pre-wrap").toBe(true);
+    expect(/\.btw-form\s*\{[^}]*border-top:\s*1px solid var\(--border\)/.test(css), ".btw-form 上描边（v2 983）").toBe(true);
+    /* 旧弹窗三面（ui.js btwOpen/btwSetQuestion/btwFrame——T6 形态）拆除绝迹：定义 + 弹窗体内 id 全清 */
+    const ui = read("ui.js");
+    for (const name of ["btwOpen", "btwSetQuestion", "btwFrame", "btwTitle", "pu-btw-body"]) {
+      expect(ui.includes(name), `ui.js 不应再含 ${name}`).toBe(false);
+    }
+    /* GC6 CSP 棘轮回归：btw 面样式全走类（②补 面不回归）+ hint 诚实口径（自创值登记④——v2 :4505
+       「不继承权限/模型/思考档设置」的「模型」一词与实现不符，btw 每次调用解析当前 provider/model） */
+    const js = read("app.js");
+    const paneJs = read("pane.js");
+    expect(js).toContain("pendingBtwQuestion"); // /btw 截获块：标题源 → 发问源（mark 响应不带文本）
+    expect(paneJs).toContain("旁路 · 只读工具 · 走当前会话模型"); // 改写后 hint（btwTabHtml 内）
+    expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
+  });
+
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {
     const { server, port } = await startWebServer({ cwd: process.cwd(), home: process.cwd() });
     const base = `http://127.0.0.1:${port}`;

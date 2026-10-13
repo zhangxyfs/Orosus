@@ -16,6 +16,7 @@ import { instanceFilePath } from "./instance.ts";
 import { shutdownWebServer } from "./server.ts";
 import { HostedSession } from "./hosted.ts";
 import { WEB_BUSY_BLOCK, WEB_BUSY_EXEC } from "./cmdrouter.ts";
+import { askBtw } from "./btw-service.ts";
 
 /** 轮询等待（25ms 步进；谓词可异步；超时抛错）。 */
 const waitFor = async (pred: () => boolean | Promise<boolean>, ms = 8_000): Promise<void> => {
@@ -309,7 +310,7 @@ describe("web T6：命令路由 cmdrouter", () => {
     await s.stop();
   }, 60_000);
 
-  it("⑧ /btw 问题 → llm().stream 收流（fake provider）零落盘 + onBtw 帧三态 + 无参回看", async () => {
+  it("⑧ /btw 带参 → {output:'',mark:'btw'} 受理即回（W6 前端开 tab 自行 POST /btw——旧 runBtw 单轮直调下线：零 llm 请求零自扇帧）；askBtw 归档后无参回看 rounds 文本 + mark 同发", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
     const cwd = tmpCwd();
@@ -327,25 +328,25 @@ describe("web T6：命令路由 cmdrouter", () => {
     const frames: { tab: string; phase: string; text: string; round: number }[] = [];
     hs.onBtw((f) => frames.push({ ...f }));
 
+    // 带参：受理即回 mark:btw——routeCommand 层 {output:"", mark:"btw"}（空 output 不上 SendResult 面，
+    // hosted.ts 分流点省略空串）。问答本体由前端 POST /btw {tab,q} → askBtw 承接（W5 数据面）。
     const r = await hs.dispatch("/btw 这是什么");
-    expect(r).toEqual({ ok: true }); // 受理即回——侧问不挂 HTTP（答案经流帧小窗）
-    await waitFor(() => frames.some((f) => f.phase === "answer"));
-    expect(frames.some((f) => f.phase === "answering" && f.text === "侧问")).toBe(true); // 累积式流帧
-    // W5 帧形改造：帧带 tab + round（旧单轮路径固定 tab "btw"、round 1——新多轮路径 per-tab 实例）
-    expect(frames.some((f) => f.phase === "answering" && f.text === "侧问" && f.tab === "btw" && f.round === 1)).toBe(true);
-    expect(frames.some((f) => f.phase === "answer" && f.text === "侧问答案" && f.tab === "btw" && f.round === 1)).toBe(true);
+    expect(r).toEqual({ ok: true, mark: "btw" });
+    await new Promise((res) => setTimeout(res, 150)); // 微任务窗——旧 runBtw 若残留会现形（llm 请求/自扇帧）
+    expect(requests.length).toBe(0); // 旧单轮直调已下线：本路径不再发 llm 请求
+    expect(frames).toHaveLength(0); // 也不再自行扇帧——帧面归 POST /btw（askBtw）
+    expect((await hs.replayAfter(0)).filter((e) => e.type === "user/message")).toHaveLength(0); // 零落盘不变（D5/D6）
 
-    // llm 请求形状：system 带侧问话术、末消息 = 问题（buildBtwRequest 纯函数拼装）
-    expect(requests.length).toBe(1);
-    expect(requests[0]!.system ?? "").toContain("side-question assistant");
-    expect(JSON.stringify(requests[0]!.messages)).toContain("这是什么");
-    // 零落盘：不进主对话流、不留痕（events 无 user/message——D5/D6）
-    expect((await hs.replayAfter(0)).filter((e) => e.type === "user/message")).toHaveLength(0);
-
-    // 无参回看：lastBtw server 持（内存槽——D7）
+    // 选项卡数据面（POST /btw 真身）经 askBtw 完成归档后：无参回看走 rounds 归档文本 + mark:btw 同发
+    // （前端开或复用空草稿 btw tab——v2 cmdBtw 无参分支「无参直接打开侧问选项卡」）
+    askBtw(hs, "btw-1", "这是什么");
+    await waitFor(() => frames.some((f) => f.phase === "answer" && f.tab === "btw-1"));
+    expect(frames.some((f) => f.phase === "answering" && f.text === "侧问" && f.tab === "btw-1" && f.round === 1)).toBe(true);
+    expect(frames.some((f) => f.phase === "answer" && f.text === "侧问答案" && f.tab === "btw-1" && f.round === 1)).toBe(true);
     const back = await hs.dispatch("/btw");
     expect(back.output ?? "").toContain("这是什么");
     expect(back.output ?? "").toContain("侧问答案");
+    expect(back.mark).toBe("btw");
     await hs.close();
   }, 60_000);
 

@@ -13,6 +13,10 @@ import { fileURLToPath } from "node:url";
 
 import "./assets/pane.js"; // 副作用挂 globalThis.OrosusPane（经典脚本零构建——node/浏览器同源导出；DOM 段 document 守卫不触）
 
+/* W6 追加面：btw 选项卡纯函数（btwTabSpec/applyBtwFrame/btwTabHtml——帧归约与 HTML 推导零 DOM 依赖）。 */
+type BtwRound = { q: string; a: string | null; phase: string | null };
+type BtwFrameIn = { tab: string; phase: string; text: string; round: number };
+
 /* noUncheckedIndexedAccess 下显式接口剥可选层（兼作导出面清单） */
 type Fn = (...args: unknown[]) => unknown;
 interface Tab {
@@ -38,6 +42,10 @@ interface PaneApi {
   tabTitle: Fn;
   tabRowHtml: Fn;
   dropRowsHtml: Fn;
+  /* W6：btw 选项卡纯函数段 */
+  btwTabSpec: (seq: number) => Tab & { data: { rounds: BtwRound[] } };
+  applyBtwFrame: (rounds: BtwRound[], frame: BtwFrameIn) => BtwRound[];
+  btwTabHtml: (data: { rounds: BtwRound[] }) => string;
 }
 const P = (globalThis as { OrosusPane?: PaneApi }).OrosusPane!;
 const open = (tabs: Tab[], active: number, tab: Tab): OpenRes => P.openOrSwitch(tabs, active, tab) as OpenRes;
@@ -253,5 +261,125 @@ describe("web W4（问题 2）：子代理 todo 悬浮条（app.js/style.css 源
     expect(ag).toContain("top: 8px");
     expect(ag).toContain("right: 14px");
     expect(CSS).toContain(".ag-todo .tf-card { z-index: 8; }");
+  });
+});
+
+describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2 4442-4452/4484-4507/4568-4588 语义）", () => {
+  it("W6① btwTabSpec 每次新实例：btw-N 自增 id、label「侧问 N」、data.rounds 各自独立数组（两实例互不透）", () => {
+    const s1 = P.btwTabSpec(1);
+    const s2 = P.btwTabSpec(2);
+    expect(s1).toEqual({ kind: "btw", id: "btw-1", label: "侧问 1", data: { rounds: [] } });
+    expect(s2.id).toBe("btw-2");
+    expect(s2.label).toBe("侧问 2");
+    expect(s1.data.rounds).not.toBe(s2.data.rounds); // rounds 各自独立——多实例互不渗透
+    // 帧按实例落位：btw-1 收帧不渗 btw-2
+    P.applyBtwFrame(s1.data.rounds, { tab: "btw-1", phase: "answering", text: "甲", round: 1 });
+    expect(s1.data.rounds).toHaveLength(1);
+    expect(s2.data.rounds).toHaveLength(0);
+  });
+
+  it("W6② applyBtwFrame 帧归约：answering 累积 → tool 相位保文 → answer 落定；error 终态；round 超前垫空 q 片", () => {
+    const rounds: BtwRound[] = [];
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "answering", text: "先查证", round: 1 });
+    expect(rounds[0]).toEqual({ q: "", a: "先查证", phase: "answering" });
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "tool", text: "查证中…", round: 1 });
+    expect(rounds[0]!.phase).toBe("tool");
+    expect(rounds[0]!.a).toBe("先查证"); // tool 相位不覆盖已积累文本（查证后 answering 续流是新一轮累积）
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "answering", text: "答案", round: 1 });
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "answer", text: "答案全文", round: 1 });
+    expect(rounds[0]).toEqual({ q: "", a: "答案全文", phase: null }); // answer 终态 = phase 清空
+    // round 超前：垫空 q 轮（重载 / 自动开 tab 后的帧对位——帧不带问题文本）
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "answering", text: "乙", round: 3 });
+    expect(rounds).toHaveLength(3);
+    expect(rounds[2]).toEqual({ q: "", a: "乙", phase: "answering" });
+    // error 终态
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "error", text: "炸了", round: 3 });
+    expect(rounds[2]).toEqual({ q: "", a: "炸了", phase: "error" });
+  });
+
+  it("W6③ btwTabHtml：scope 行照抄 + rounds 渲染（msg-user 气泡 + btw-a 回答中/查证中/失败相位态）+ 裁剪版 composer（无三芯片）+ hint 诚实口径", () => {
+    const html = P.btwTabHtml({ rounds: [] });
+    expect(html).toContain("旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘");
+    expect(html).toContain("还没有侧问"); // 空态（v2 4490）
+    expect(html).toContain('id="btw-form"');
+    expect(html).toContain('id="btw-input" rows="2"');
+    expect(html).toContain('id="btw-file"');
+    expect(html).toContain('title="引用文件（= 输入 @）"'); // ＋文件 = 插入 @
+    expect(html).toContain('id="btw-send"');
+    expect(html).toContain("旁路 · 只读工具 · 走当前会话模型"); // hint 诚实口径（自创值登记④）
+    expect(html).not.toContain("不继承权限/模型/思考档"); // v2 :4505 原文「模型」一词与实现不符——不照抄
+    for (const chip of ["mode-chip", "model-chip", "effort-chip"]) {
+      expect(html.includes(chip), `裁剪版 composer 不应含 ${chip}（拍板第 4 条：去三芯片）`).toBe(false);
+    }
+    const html2 = P.btwTabHtml({ rounds: [
+      { q: "这是什么", a: null, phase: "answering" },
+      { q: "第二问", a: "答案", phase: null },
+      { q: "第三问", a: "坏了", phase: "error" },
+      { q: "第四问", a: "查过", phase: "tool" },
+      { q: "", a: "垫片轮", phase: null },
+    ] });
+    expect(html2).toContain('<div class="msg-text">这是什么</div>'); // 复用 .msg-user 气泡
+    expect(html2).toContain("回答中…"); // 回答中相位态
+    expect(html2).toContain('<div class="btw-a">答案</div>'); // 落定态纯文本
+    expect(html2).toContain("侧问失败：坏了"); // 失败终态
+    expect(html2).toContain("查证中…"); // 查证中相位态
+    expect(html2).not.toContain('<div class="msg-text"></div>'); // 空 q 垫片不出空气泡
+  });
+});
+
+describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚定——DOM 壳无 node 可测面纪律）", () => {
+  const APP = readFileSync(fileURLToPath(new URL("./assets/app.js", import.meta.url)), "utf8");
+  const UI = readFileSync(fileURLToPath(new URL("./assets/ui.js", import.meta.url)), "utf8");
+  const W6 = APP.slice(APP.indexOf("btw 选项卡（问题 2 W6"), APP.indexOf("面板渲染（2s 轮询"));
+
+  it("W6④ openBtwTab 每次新实例（btwTabSpec + addTab）＋ plusSource「✦ 侧问选项卡」类型行（v2 4442-4452/4685）", () => {
+    expect(W6.length, "app.js 应含 W6 接线区").toBeGreaterThan(0);
+    expect(W6).toContain("btwSeq");
+    expect(W6).toContain("Pane.btwTabSpec(btwSeq)");
+    expect(W6).toContain("Pane.addTab(spec)");
+    const ps = APP.slice(APP.indexOf("Pane.plusSource = function"), APP.indexOf("拉名册并刷 tab 状态点"));
+    expect(ps).toContain("侧问选项卡");
+    expect(ps).toContain("✦ ");
+    expect(ps).toContain("openBtwTab()");
+  });
+
+  it("W6⑤ 发送链路：POST /btw {tab,q}（W5 askBtw 数据面）+ 本地 push {q,a:null} 占位 + 单飞尾轮对齐 + POST 失败标错不悬转", () => {
+    expect(W6).toContain("'/btw'");
+    expect(W6).toContain("JSON.stringify({ tab: tab.id, q: q })");
+    expect(W6).toContain("{ q: q, a: null, phase: 'answering' }");
+    expect(W6).toContain("rounds.pop()"); // 尾部在飞轮先弹——server per-tab 单飞 abort 旧在飞（旧问不入 rounds），对齐帧 round 对位
+    expect(W6).toContain("发送失败："); // POST 失败即标 error 相位
+  });
+
+  it("W6⑥ SSE btw 帧按 tab 分发：未开 tab 的 answering/answer 帧自动开 tab（对齐旧 btwOpen 自动占窗）+ 仅活跃 tab 重渲（GC7）", () => {
+    expect(APP).toMatch(/btw: function \(d\) \{ if \(currentSid === sid && d\) btwFeed\(d\); \}/); // :2761 接线改派 btwFeed
+    expect(W6).toContain("function btwFeed(frame)");
+    expect(W6).toContain("frame.tab");
+    expect(W6).toContain("frame.phase !== 'answering' && frame.phase !== 'answer'");
+    expect(W6).toContain("Pane.applyBtwFrame");
+    expect(W6).toContain("Pane.activeTab() === tab");
+    expect(W6).toContain("rerenderBtwKeepingDraft()");
+  });
+
+  it("W6⑦ /btw mark 分支 + :102-104 截获块改发问源 + 裁剪 composer 交互（Enter 发送/Shift+Enter 换行、stopPropagation、保草稿、＋文件插 @）", () => {
+    const hm = APP.slice(APP.indexOf("function handleMark"), APP.indexOf("贴图（D6"));
+    expect(hm).toContain("mark === 'btw'");
+    expect(hm).toContain("cmdBtw();");
+    expect(APP).toContain("pendingBtwQuestion"); // 截获块存问题文本（mark 响应不带文本——发问源）
+    expect(W6).toContain("e.key === 'Enter' && !e.shiftKey");
+    expect(W6).toContain("requestSubmit()");
+    expect(W6).toContain("e.stopPropagation()"); // 不触发主输入框 Esc / 快捷键逻辑（v2 4555-4558）
+    expect(W6).toContain("function rerenderBtwKeepingDraft");
+    expect(W6).toContain("'@'"); // ＋文件 = 插入 @
+  });
+
+  it("W6⑧ 旧弹窗三面绝迹：ui.js btwOpen/btwSetQuestion/btwFrame/btwTitle 拆除 + 导出面清理 + 全 assets 零残留", () => {
+    for (const name of ["btwOpen", "btwSetQuestion", "btwFrame", "btwTitle"]) {
+      expect(UI.includes(name), `ui.js 不应再含 ${name}`).toBe(false);
+      for (const f of ["app.js", "render.js", "ui.js", "pane.js", "archived-view.js", "index.html"]) {
+        const src = readFileSync(fileURLToPath(new URL("./assets/" + f, import.meta.url)), "utf8");
+        expect(src.includes(name), `assets/${f} 不应残留 ${name}`).toBe(false);
+      }
+    }
   });
 });

@@ -99,8 +99,9 @@ function $(id) { return document.getElementById(id); }
     attachments = [];
     renderAttach();
     syncSendBtn();
-    if (text.indexOf('/btw') === 0 && text.trim().length > 4) {
-      UI.btwSetQuestion(text.trim().replace(/^\/btw\s+/, '')); /* 侧问小窗标题源（帧面无问题文本） */
+    pendingBtwQuestion = ''; /* 发问源（W6）：先清陈旧——仅本条 /btw 带参重新存文（mark 响应不带文本） */
+    if (/^\/btw\s/i.test(text) && text.trim().length > 4) {
+      pendingBtwQuestion = text.trim().replace(/^\/btw\s+/i, ''); /* 供 mark 分支消费（cmdBtw 开新 tab 即发问） */
     }
     if (r && r.queued) { /* 入队——队列条由 SSE queue 帧整表快照驱动（唯一真源） */ }
     if (r && typeof r.output === 'string' && r.output !== '') presentCommandOutput(r.output);
@@ -111,6 +112,7 @@ function $(id) { return document.getElementById(id); }
   function handleSendError(err, text) {
     sendingNow = false;
     syncSendBtn();
+    if (text.indexOf('/btw') === 0) pendingBtwQuestion = ''; /* 失败不吃陈旧问文（输入已还原——重发再存） */
     /* 失败保留输入（409 拦截提示保留输入 / viewer 只读 / 网络失败同口径） */
     input.value = text;
     autogrow();
@@ -170,6 +172,8 @@ function $(id) { return document.getElementById(id); }
       UI.openModelMenu(modelChip);
     } else if (mark === 'tasks') {
       cmdTasks(); /* W3：/tasks = 分栏批量开 tab（v2 2528-2537 目标形态——不弹列表面） */
+    } else if (mark === 'btw') {
+      cmdBtw(); /* W6：带参（截获块问题文本）开新 tab 即发问；无参复用空草稿 tab 或新开（v2 cmdBtw 2541-2548） */
     }
   }
 
@@ -2372,7 +2376,7 @@ function $(id) { return document.getElementById(id); }
         ['/effort', '思考投入档位（档位来自模型目录声明）'],
         ['/reload', '重新加载模块配置'],
         ['/help', '显示此帮助'],
-        ['/btw', '侧问——/btw <问题> 旁路快问（不打断主对话；无参回看最近一次）'],
+        ['/btw', '侧问——/btw <问题> 旁路快问（右侧分栏多轮追问，不打断主对话；无参直接打开侧问选项卡）'],
       ]],
       ['模块命令', [
         ['/compact', '手动压缩对话历史（摘要查看口 = 顶栏「更多 ▸ 压缩摘要」）'],
@@ -2758,7 +2762,7 @@ function $(id) { return document.getElementById(id); }
           if (currentSid !== sid || !frame) return;
           UI.openInteraction(frame, answerInteraction);
         },
-        btw: function (d) { if (currentSid === sid && d) UI.btwFrame(d); },
+        btw: function (d) { if (currentSid === sid && d) btwFeed(d); },
         onShutdown: function () { /* api.js 已显「已正常关闭」弹窗并停止重连 */ },
       });
     });
@@ -2890,10 +2894,12 @@ function $(id) { return document.getElementById(id); }
     var st = SPAWN_ST[row.status] ?? [String(row.status), 'st-run'];
     return '<span class="pt-dot ' + st[1] + '">' + (AGENT_ICON[row.status] ?? '◐') + '</span>';
   };
-  /* ＋菜单内容源（v2 4683-4688 直裁）：名册行「子代理 · label」（孙代理 ⎿ 前缀）；已开的由 pane.js 滤除 */
+  /* ＋菜单内容源（v2 4683-4688 直裁）：类型行「✦ 侧问选项卡」（W6——无 id，每次点击开新实例）居首，
+   *  随后名册行「子代理 · label」（孙代理 ⎿ 前缀）；已开的由 pane.js 滤除 */
   Pane.plusSource = function () {
     if (taskRoster.length === 0 && currentSid !== null) void refreshTasks(currentSid); /* 冷缓存预热——下次开即实名册 */
-    return taskRoster.map(function (tk) {
+    var rows = [{ kind: 'btw', label: '侧问选项卡', prefix: '✦ ', open: function () { openBtwTab(); } }];
+    return rows.concat(taskRoster.map(function (tk) {
       return {
         kind: 'agent',
         id: tk.id,
@@ -2901,7 +2907,7 @@ function $(id) { return document.getElementById(id); }
         prefix: tk.depth === 2 ? '⎿ ' : '',
         open: function () { openAgentTab(tk.id); },
       };
-    });
+    }));
   };
   /** 拉名册并刷 tab 状态点（cmdTasks / sg-row 点击 / 审批应答共用；sid 守卫——切会话后不回写他话名册）。 */
   function refreshTasks(sid) {
@@ -3089,6 +3095,133 @@ function $(id) { return document.getElementById(id); }
     };
     agentStreamLoads.push(load);
     load();
+  });
+
+  /* ═══════════ btw 选项卡（问题 2 W6——v2 4442-4452/4484-4507/4547-4588 直裁，弹窗形态下线） ═══════════
+   * · openBtwTab()：每次新实例（btw-N 自增 id、label「侧问 N」）——＋ 菜单「✦ 侧问选项卡」与 /btw
+   *   带参同此（v2 4442）；btwSeq 页面寿命单调不随分栏关回收（防 id 撞 server 侧存活实例的帧落位）；
+   * · tab 内容（onBodyRender('btw')）：.btw-scope 说明行 + .btw-stream rounds 渲染（.msg-user 气泡 +
+   *   .btw-a 回答中/查证中/失败相位态）+ 裁剪版 composer（.ib-main ❯+textarea rows=2 + .ib-bar 左仅
+   *   ＋文件〔= 插入 @〕、右 hint + 发送钮——去 mode/model/effort 三芯片，拍板第 4 条）；Enter 发送 /
+   *   Shift+Enter 换行、keydown stopPropagation（v2 4555-4558）、重渲保草稿（rerenderBtwKeepingDraft，
+   *   v2 4569-4577 同款——帧面重渲不抢主输入框焦点，原本在侧问框时归还）；
+   * · 发送 = POST /btw {tab, q}（W5 askBtw 数据面）+ 本地 push {q, a:null} 占位等帧回填；尾部在飞轮
+   *   先弹掉——server per-tab 单飞新问 abort 旧在飞（旧问不入 rounds），对齐本地轮序与帧 round；
+   * · SSE btw 帧按 frame.tab 分发（btwFeed）：未开 tab 的 answering/answer 帧自动开 tab（对齐
+   *   旧小窗的自动占窗语义——tool/error 不占窗）；仅活跃 tab 重渲（GC7——非活跃只改数据）；
+   * · /btw mark 分支（cmdBtw）：带参（handleSendResponse 截获块存的问题文本——mark 响应不带文本）
+   *   开新 tab 即发问；无参复用空草稿（未发过问的）btw tab 或新开。 */
+  var btwSeq = 0;
+  var pendingBtwQuestion = ''; /* /btw 前缀截获块存文（发问源——mark 分支消费后即清） */
+  function openBtwTab() {
+    btwSeq++;
+    var spec = Pane.btwTabSpec(btwSeq);
+    spec.data.sid = currentSid; /* 归属会话（POST /btw 落点——切会话后 tab 内发问仍指原会话） */
+    Pane.addTab(spec);
+    return Pane.activeTab(); /* addTab 尾插即激活——返回新实例（data 与 spec 同引用） */
+  }
+  function btwLabelOf(tabId) {
+    var m = /^btw-(\d+)$/.exec(String(tabId || ''));
+    return m !== null ? '侧问 ' + m[1] : String(tabId || '侧问');
+  }
+  /** /btw mark 分支（v2 cmdBtw 2541-2548）：带参开新 tab 并即发问；无参复用空草稿（rounds 尚空）
+   *  btw tab 或新开（v2 无参 toast 分支的「不叠开空 tab」细化——brief 口径「开或复用空草稿」）。 */
+  function cmdBtw() {
+    var q = pendingBtwQuestion;
+    pendingBtwQuestion = '';
+    if (q) { sendBtwAsk(openBtwTab(), q); return; }
+    var tabs = Pane.tabsOf();
+    for (var i = tabs.length - 1; i >= 0; i--) {
+      var t = tabs[i];
+      if (t.kind === 'btw' && t.data && (t.data.rounds ?? []).length === 0) { Pane.activateTab(i); return; }
+    }
+    openBtwTab();
+  }
+  /** 发问（W5 数据面）：本地 push {q,a:null} 占位等帧回填 + POST /btw {tab,q} 受理即回（202）。
+   *  POST 失败即标 error 相位（不悬转）。 */
+  function sendBtwAsk(tab, q) {
+    if (!tab.data.sid) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; } /* 无会话不开问——输入未清（不走重渲），问文保留 */
+    var rounds = tab.data.rounds;
+    while (rounds.length > 0) { /* 尾部在飞轮先弹：server 单飞 abort 的旧问不入 rounds——对齐帧 round 对位 */
+      var last = rounds[rounds.length - 1];
+      var inFlight = last.phase === 'answering' || last.phase === 'tool' || (last.a == null && last.phase !== 'error');
+      if (!inFlight) break;
+      rounds.pop();
+    }
+    var rd = { q: q, a: null, phase: 'answering' };
+    rounds.push(rd);
+    if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
+    A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, q: q }) }).then(null, function (err) {
+      rd.phase = 'error';
+      rd.a = '发送失败：' + err.message;
+      if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
+    });
+  }
+  /** SSE btw 帧按 tab 分发（W5 帧形 {tab, phase, text, round}）：落对应实例 rounds；未开 tab 的
+   *  answering/answer 帧 = 自动开 tab（对齐旧小窗自动占窗语义）；仅活跃 tab 重渲（GC7）。 */
+  function btwFeed(frame) {
+    var tabs = Pane.tabsOf();
+    var tab = null;
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].kind === 'btw' && tabs[i].id === frame.tab) { tab = tabs[i]; break; }
+    }
+    if (tab === null) {
+      if (frame.phase !== 'answering' && frame.phase !== 'answer') return; /* tool/error 不占窗（旧口径） */
+      var spec = { kind: 'btw', id: frame.tab, label: btwLabelOf(frame.tab), data: { sid: currentSid, rounds: [] } };
+      Pane.addTab(spec);
+      tab = Pane.activeTab();
+    }
+    Pane.applyBtwFrame(tab.data.rounds, frame);
+    if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
+  }
+  /** 重渲保草稿（v2 4569-4577 同款）：帧驱动重渲不吞侧问框未发草稿 + 焦点归还（原本在侧问框时）——
+   *  帧面重渲不抢主输入框焦点（v2 bindPaneBody 无条件 focus 的盲点补丁）。 */
+  function rerenderBtwKeepingDraft() {
+    var bi = document.getElementById('btw-input');
+    var draft = bi ? bi.value : '';
+    var hadFocus = bi !== null && bi === document.activeElement;
+    btwRenderNoFocus = true; /* 帧驱动重渲不抢焦点（渲染器聚焦位抑制——同步重渲，置位即安全） */
+    Pane.rerenderBody();
+    btwRenderNoFocus = false;
+    var ni = document.getElementById('btw-input');
+    if (ni !== null && draft !== '') {
+      ni.value = draft;
+      var sb = document.getElementById('btw-send');
+      if (sb !== null) sb.className = 'sendbtn ' + (draft.trim() ? 'ready' : 'idle');
+    }
+    if (hadFocus && ni !== null) ni.focus();
+  }
+  var btwRenderNoFocus = false; /* 帧驱动重渲的 focus 抑制位（rerenderBtwKeepingDraft 置位） */
+  Pane.onBodyRender('btw', function (data, bodyEl) {
+    bodyEl.innerHTML = Pane.btwTabHtml(data);
+    var bForm = bodyEl.querySelector('#btw-form');
+    var bInput = bodyEl.querySelector('#btw-input');
+    var bSend = bodyEl.querySelector('#btw-send');
+    function syncBtn() { bSend.className = 'sendbtn ' + (bInput.value.trim() ? 'ready' : 'idle'); }
+    if (!btwRenderNoFocus) bInput.focus(); /* 用户驱动开 tab/切换即聚焦（v2 4551）；帧驱动重渲不抢焦点 */
+    bInput.addEventListener('input', syncBtn);
+    bInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); bForm.requestSubmit(); }
+      e.stopPropagation(); /* 不触发主输入框的 Esc / 快捷键逻辑（v2 4555-4558） */
+    });
+    bForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var q = bInput.value.trim();
+      if (!q) return;
+      sendBtwAsk(Pane.activeTab(), q); /* 活跃 tab 即本渲染器所属实例（换 tab 时旧表单已随重渲摘除） */
+    });
+    bodyEl.querySelector('#btw-file').addEventListener('click', function () { /* ＋文件 = 插入 @（光标位） */
+      bInput.focus();
+      var s = bInput.selectionStart ?? bInput.value.length;
+      var epos = bInput.selectionEnd ?? s;
+      var pad = s > 0 && bInput.value.charAt(s - 1) !== ' ' ? ' ' : '';
+      bInput.value = bInput.value.slice(0, s) + pad + '@' + bInput.value.slice(epos);
+      var pos = s + pad.length + 1;
+      bInput.setSelectionRange(pos, pos);
+      syncBtn();
+    });
+    var bs = bodyEl.querySelector('#btw-stream');
+    bs.scrollTop = bs.scrollHeight; /* 贴底（v2 4565-4566） */
   });
 
   /* 面板渲染（2s 轮询 + 签名门——数据不变 DOM 零触碰；运行时间跳秒本地自增） */

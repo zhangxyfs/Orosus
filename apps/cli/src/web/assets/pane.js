@@ -1,11 +1,13 @@
 /* Orosus web 详情分栏·选项卡机构（问题 2 W2——v2 原型 1244-1250/4390-4708 直裁）。
  * 结构分两段（render.js 同款纪律）：
  *   ① 纯函数区：tab 模型三件套 findTab/openOrSwitch/closeTabAt + 行 HTML 推导
- *      （tabRowHtml/dropRowsHtml/tabTitle——零 DOM 依赖，pane.test.ts node 直测）；
+ *      （tabRowHtml/dropRowsHtml/tabTitle——零 DOM 依赖，pane.test.ts node 直测）
+ *      + W6 btw 纯函数段（btwTabSpec/applyBtwFrame/btwTabHtml——实例铸造/帧归约/内容 HTML 推导，
+ *      同零 DOM 依赖直测；DOM 事件绑定薄壳在 app.js 的 onBodyRender('btw') 注册器内）；
  *   ② DOM 薄壳段：⌄ 全部选项卡下拉（搜索过滤 / 行点击切换 / 行尾 ×）+ ＋ 新建菜单（定位 clamp
  *      进选项卡条）+ tab 右键菜单（关闭 / 关闭其他 / 关闭所有——复用 #ctx-menu 单例模式）+
  *      renderTabs/activateTab/addTab/closeAt/onBodyRender 导出面（W3 子代理 tab / W6 btw tab 消费）。
- * 注入缝（W3/W6 接线位）：
+ * 注入缝（W3 已接线 agent；W6 已接线 btw）：
  *   · OrosusPane.dotOf(tab)——状态点。缺省：btw ✦ / 其余 ◐ 兜底（v2 4404-4407 的缺省支）。
  *     W3 覆写为 agentTabDot（v2 4393-4396 口径：pendingApproval 独立布尔先行短路 ◉，
  *     映射本体 TASK_ICON 仅四态 queued○/running◐/completed✓/failed✗——v2 1598-1599）。
@@ -13,6 +15,8 @@
  *     带 id = 实例行（已开的滤除——findTab < 0 才列出）；无 id = 类型行（每次点击开新实例，
  *     W6 的「✦ 侧问选项卡」即此类）。全开时禁用态文案「子代理均已打开」（v2 4688）。
  *   · OrosusPane.onBodyRender(kind, renderer)——内容渲染器注册：renderer(data, bodyEl)。
+ *   · W6 只读口：tabsOf()（tab 快照）/ activeTab()（活跃 tab 对象）/ rerenderBody()（仅重渲
+ *     内容区——btw 帧驱动重渲保草稿用，不重渲选项卡条）。
  * 与 W1 的接合（不改 app.js——GC 本批文件面）：
  *   · W1 closePane 会整体清写 #pane-tabs 的 innerHTML（空态口径）——本壳 renderTabs 先
  *     ensureShell 自愈内部结构（⌄/列表/＋/两浮层五件）；事件全部委派在持久的 #pane-tabs 上，
@@ -100,6 +104,79 @@
     return rows.length ? rows.join('') : '<div class="ptd-none">无匹配的标签页</div>';
   }
 
+  /* ═══════════ btw 选项卡纯函数段（问题 2 W6——v2 4442-4452/4484-4507/4568-4588 直裁语义） ═══════════ */
+
+  /* 圆弧旋转 spinner（app.js 同款标记自持一份——经典脚本零构建，不做跨件 import） */
+  function btwSpin(size) {
+    return '<svg class="spin-svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="40" stroke-dashoffset="16"/></svg>';
+  }
+
+  /** btwTabSpec(seq) -> addTab 规格（v2 openBtwTab 4443-4451：每次调用新实例——btw-N 自增 id、
+   *  label「侧问 N」、data.rounds 各自独立数组。app.js 在 data 上补 sid 后 addTab）。 */
+  function btwTabSpec(seq) {
+    return { kind: 'btw', id: 'btw-' + seq, label: '侧问 ' + seq, data: { rounds: [] } };
+  }
+
+  /** applyBtwFrame(rounds, frame)——SSE btw 帧（W5 形 {tab, phase, text, round}）落到实例 rounds 的
+   *  归约（原地改，返回同数组）：round 超前垫空 q 片（帧不带问题文本——重载/自动开 tab 后的对位）；
+   *  answering 累积式文本 / tool 相位保文只换相位 / answer 终态清相位 / error 终态带文案。 */
+  function applyBtwFrame(rounds, frame) {
+    var list = rounds || [];
+    var r = Math.max(1, frame && frame.round ? frame.round : 1);
+    while (list.length < r) list.push({ q: '', a: null, phase: null });
+    var rd = list[r - 1];
+    if (frame.phase === 'answer') { rd.a = frame.text ?? ''; rd.phase = null; }
+    else if (frame.phase === 'error') { rd.a = frame.text ?? ''; rd.phase = 'error'; }
+    else if (frame.phase === 'tool') { rd.phase = 'tool'; } // 查证中——不覆盖已积累文本（下一轮 answering 重新累积）
+    else { rd.a = frame.text ?? ''; rd.phase = 'answering'; }
+    return list;
+  }
+
+  /** 单轮 HTML（v2 4492-4498 直裁 + 拍板相位态）：q 气泡复用 .msg-user（空 q 垫片不出空气泡）；
+   *  .btw-a 回答区——error 终态 / 落定纯文本 / 回答中·查证中 spinner 相位（查证中保留已积累文本）。 */
+  function btwRoundHtml(rd) {
+    var q = rd && rd.q ? String(rd.q) : '';
+    var a = rd && rd.a != null ? String(rd.a) : '';
+    var phase = rd && rd.phase ? rd.phase : null;
+    var bubble = q === '' ? '' :
+      '<div class="msg-user"><div class="msg-bubble"><div class="msg-text">' + esc(q) + '</div></div></div>';
+    var body;
+    if (phase === 'error') {
+      body = '<span class="bad">侧问失败：' + esc(a) + '</span>';
+    } else {
+      body = a !== '' ? esc(a) : '';
+      if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">查证中…</span>';
+      else if (body === '') body = btwSpin(12) + ' <span class="dim">回答中…</span>';
+    }
+    return '<div class="btw-round">' + bubble + '<div class="btw-a">' + body + '</div></div>';
+  }
+
+  /** btwTabHtml(data)——选项卡内容 HTML（v2 4484-4507 直裁）：.btw-scope 说明行 + .btw-stream
+   *  rounds（空态 pane-blank）+ 裁剪版 composer（.ib-main ❯+textarea rows=2 + .ib-bar 左仅
+   *  ＋文件〔= 插入 @〕、右 hint + 发送钮——去 mode/model/effort 三芯片，拍板第 4 条）。
+   *  hint 诚实口径「旁路 · 只读工具 · 走当前会话模型」——不照抄 v2 :4505 原文（「模型」一词与
+   *  实现不符：btw 每次调用解析当前 provider/model，含 /model 覆盖也跟随——自创值登记④）。
+   *  placeholder 同口径去「Ctrl + V 贴图」claim（POST /btw 无 imageIds 面——标签不得撒谎）。 */
+  function btwTabHtml(data) {
+    var rounds = (data && data.rounds) || [];
+    var html = '<div class="btw-wrap">' +
+      '<div class="btw-scope">旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘</div>' +
+      '<div class="btw-stream" id="btw-stream">';
+    if (rounds.length === 0) {
+      html += '<div class="pane-blank">还没有侧问——在下方输入框直接提问，或主输入框 /btw &lt;问题&gt;<br/>带着主对话上下文，不打断正在进行的回答</div>';
+    }
+    for (var i = 0; i < rounds.length; i++) html += btwRoundHtml(rounds[i]);
+    html += '</div>' +
+      '<form class="btw-form" id="btw-form" autocomplete="off"><div class="inputbox">' +
+      '<div class="ib-main"><span class="pchar" aria-hidden="true">❯</span>' +
+      '<textarea id="btw-input" rows="2" placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
+      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）">＋ 文件</button></span>' +
+      '<span class="cb-right"><span class="btw-hint">旁路 · 只读工具 · 走当前会话模型</span>' +
+      '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送">↑</button></span></div>' +
+      '</div></form></div>';
+    return html;
+  }
+
   var P = {
     /* 纯函数（node 直测面） */
     findTab: findTab,
@@ -109,6 +186,10 @@
     tabRowHtml: tabRowHtml,
     dropRowsHtml: dropRowsHtml,
     esc: esc,
+    /* W6：btw 选项卡纯函数 */
+    btwTabSpec: btwTabSpec,
+    applyBtwFrame: applyBtwFrame,
+    btwTabHtml: btwTabHtml,
   };
 
   /* ═══════════════════ ② DOM 薄壳段（浏览器自举——node 下无 document 则整段惰置） ═══════════════════ */
@@ -130,6 +211,12 @@
   P.onBodyRender = function (kind, renderer) {
     if (typeof kind === 'string' && typeof renderer === 'function') bodyRenderers[kind] = renderer;
   };
+  /* W6 只读口（btw 帧按 tab 分发消费）：tabsOf = tab 快照（复用空草稿 tab 搜索/帧落位查表）；
+   *  activeTab = 活跃 tab 对象（帧分发判活跃——非活跃只改数据不触 DOM，GC7）；rerenderBody = 仅重渲
+   *  内容区（帧驱动重渲保草稿——不重渲选项卡条，数据不变 DOM 零触碰）。 */
+  P.tabsOf = function () { return tabs.slice(); };
+  P.activeTab = function () { return tabs[activeTab] ?? null; };
+  P.rerenderBody = renderPaneBody;
 
   /* W1 导出面（app.js 载入后齐备——交互期恒可用；pane.js 先于 app.js 载入故须惰取） */
   function ui() { return globalThis.OrosusUI || {}; }

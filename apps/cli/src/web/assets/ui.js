@@ -2,7 +2,7 @@
  * mini 锚定 + 键盘（↑↓/Enter/Esc）+ 详释区（原型 :1449-1582 直裁）；
  * 斜杠菜单（命令 + 技能殿后 + 前缀/模糊过滤 + 零命中关窗）、@ 文件菜单（两级下钻）、
  * 审批浮层（interaction 帧 → POST /answer；ask/askSecret/confirm/chooseEx/chooseSide 同族）、
- * 模型/档位/权限芯片菜单、/tasks 浮层、/btw 小窗、cwd 芯片菜单。
+ * 模型/档位/权限芯片菜单、cwd 芯片菜单（/tasks 浮层 W3 下线、/btw 小窗 W6 下线——选项卡形态接管）。
  * 依赖：window.OrosusAPI（fetchJson/esc）；宿主回调经 init 注入（app.js）。 */
 (function () {
   'use strict';
@@ -872,34 +872,9 @@
    *  agent tab + tab 内审批条 + .ag-stream 回放；本块原 /tasks 列表面 + transcript 回放窗 + 组卡
    *  行直进三函数与名册行渲染面整体拆除，导出面同步摘除——残留引用全仓清零） ═══════════ */
 
-  /* ═══════════ /btw 小窗（T6：answering 累积整段替换 / answer·error 终态；零落盘不可重放） ═══════════ */
-  var btw = { q: '', open: false };
-
-  function btwTitle(q) {
-    var s = String(q ?? '');
-    return '侧问 · ' + (s.length > 16 ? s.slice(0, 16) + '…' : s);
-  }
-  function btwOpen(q) {
-    btw = { q: String(q ?? ''), open: true };
-    openView({
-      title: btwTitle(btw.q),
-      en: 'SIDE',
-      bodyHtml: '<div class="pu-text"><span class="dim">带着当前对话上下文快问——不进主对话流、不留痕</span></div><div class="pu-text" id="pu-btw-body">…</div>',
-      foot: 'Esc 关闭（关窗不中断——答案落定后可无参 /btw 回看）',
-    });
-  }
-  function btwSetQuestion(q) { btw.q = String(q ?? ''); }
-  function btwFrame(frame) {
-    if (!btw.open) {
-      if (frame.phase === 'answering' || frame.phase === 'answer') btwOpen(btw.q || '');
-      else return;
-    }
-    var body = document.getElementById('pu-btw-body');
-    if (!body) return;
-    if (frame.phase === 'answering') body.innerHTML = '<span class="dim">回答中</span><br><br>' + esc(frame.text ?? '');
-    else if (frame.phase === 'answer') body.innerHTML = esc(frame.text ?? '');
-    else if (frame.phase === 'error') body.innerHTML = '<span class="bad">侧问失败：' + esc(frame.text ?? '') + '</span>';
-  }
+  /* ═══════════ /btw 小窗已下线（问题 2 W6——选项卡形态接管：app.js btwFeed 按 tab 分帧 +
+   *  pane.js onBodyRender('btw') 裁剪版 composer；本块原弹窗三函数（开窗/存标题/收帧）+ btw 槽
+   *  变量 + 标题推导一并拆除，导出面同步摘除——残留引用全仓清零） ═══════════ */
 
   /* ═══════════ cwd 芯片菜单（D5：仅空会话；候选 = 项目池 + 「浏览文件夹…」直达任意目录〔走查八轮〕） ═══════════ */
   function openCwdMenu(anchor, projects, currentCwd) {
@@ -952,9 +927,6 @@
     openView: openView,
     viewLines: viewLines,
     mdHtml: mdHtml, /* marked+DOMPurify 渲染口（T17 更新弹窗/注入全文/压缩摘要消费） */
-    btwOpen: btwOpen,
-    btwSetQuestion: btwSetQuestion,
-    btwFrame: btwFrame,
     openCwdMenu: openCwdMenu,
     invalidateCaches: invalidateCaches,
     nextRowIdx: nextRowIdx,
