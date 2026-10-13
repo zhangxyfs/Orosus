@@ -58,12 +58,19 @@ export const spawnAllowedAtDepth = (depth: 1 | 2): boolean => depth < 2;
  *  名单外工具静态判不了（第三方写工具不占闸——越界回执仍会抓到实际写）。 */
 export const WRITE_CAPABLE_TOOLS: ReadonlySet<string> = new Set(["tool-fs__write", "tool-fs__edit", "tool-shell__bash"]);
 
-/** 子代理抄面整族剥离名册（2026-10-03 对照九仓修）：清单配套工具——技能清单段（order 0）只进主对话
- *  系统提示，工具被抄进而清单不可见时，模型只能指着一份看不见的清单猜名（skill__load 参数描述明写
- *  「The name of a skill from the available-skills list」——2026-10-03 m5-skill-trigger 模型可见面
- *  英文化后的措辞）。九仓无一给普通子代理配技能清单；子代理「按什么行事」由
- *  rolePrompt 工种正文承担（kimi profile/Reasonix 技能正文即子代理人格——同族形态）。 */
-const SUBAGENT_HIDDEN_TOOLS: ReadonlySet<string> = new Set(["skill__load"]);
+/** 子代理抄面整族剥离名册（2026-10-03 对照九仓修 + 2026-10-13 问题3病灶4 T6）——「抄面会出问题的工具」两类：
+ *  · skill__load（清单配套）：技能清单段（order 0）只进主对话系统提示，工具被抄进而清单不可见时，
+ *    模型只能指着一份看不见的清单猜名（skill__load 参数描述明写「The name of a skill from the
+ *    available-skills list」——2026-10-03 m5-skill-trigger 模型可见面英文化后的措辞）。九仓无一给普通
+ *    子代理配技能清单；子代理「按什么行事」由 rolePrompt 工种正文承担（kimi profile/Reasonix 技能正文
+ *    即子代理人格——同族形态）。skill `loaded` 审视留档（2026-10-13，T6）：skill__load 已在本名单——
+ *    子代理无调用路径，其加载副作用无从发生，无需动作。
+ *  · tool-search__search（问题3病灶4）：reveal 裁断——reveal 作用的是主图共享注册表（tool-search/src/
+ *    index.ts:101 经 activate 闭包捕获的 ctx.tools 直通），子代理 reveal 只污染主面且对自身拷贝面无效
+ *    （下方抄面 liveNames 经 specs() 已过滤未 reveal 的 deferred 工具——reveal 改主图进不了 spawn 时刻
+ *    定格的子代理拷贝面），故子代理面定格为 spawn 时刻已 reveal 集，与 skill__load 同款处理；
+ *    主代理要给子代理用按需工具：自己先 reveal，抄面自然带过去。 */
+const SUBAGENT_HIDDEN_TOOLS: ReadonlySet<string> = new Set(["skill__load", "tool-search__search"]);
 
 /** [tool-subagent] 限值键读取（双保险丝批 2026-09-27）：maxTurns / inactivityTimeoutMs / totalTimeoutMs。
  *  手改文件未经 schema 校验——validate 谓词兜底（不合法视同未配置）。 */

@@ -5,7 +5,7 @@ import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
 import { createHarness, InMemorySessionStore, scanBucketSessions } from "@orosus/core";
 import { fakeProvider } from "@orosus/testing";
-import { providerSlotKey, type Chunk, type StreamFn } from "@orosus/contracts/provider";
+import { providerSlotKey, type Chunk, type ProviderRequest, type StreamFn } from "@orosus/contracts/provider";
 import { Access, defineTool } from "@orosus/contracts/tool";
 import toolFs from "@orosus/tool-fs";
 import type { CommandUi, ModuleDefinition, SubagentOutcome, SubagentPort } from "@orosus/contracts/module";
@@ -51,6 +51,7 @@ interface Setup {
   writes: Map<string, string>;
   gate: { active(): number; started(): Promise<void> };
   bashCommands: string[];
+  agentRequests: ProviderRequest[]; // 子代理（fake2 槽）模型请求——子代理工具面从这里断言（T6 s16）
 }
 
 /** [tool-subagent] model 注入：已有节则节内插、没有则前置新节（避免重复节头炸 TOML）。 */
@@ -139,7 +140,7 @@ const setup = async (mainScript: Chunk[][], agentScript: Chunk[][], opts: { appr
     config: { userFile: join(dir, "user.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "fake/m" } },
   });
   cur = h; // TS-13：登记当前 harness——测试体末尾的显式 close 照旧，失败路径由 afterEach 兜底
-  return { h, port: port!, writes, gate, bashCommands };
+  return { h, port: port!, writes, gate, bashCommands, agentRequests: agentProvider.requests };
 };
 
 const histOf = async (h: Setup["h"]): Promise<{ type: string; [k: string]: unknown }[]> =>
@@ -584,6 +585,68 @@ describe("端到端十三场景 T15", () => {
     expect(raw).toContain("tool-todo/write");
     expect(raw).toContain("探针条目");
     expect((await histOf(s.h)).some((e) => e.type === "tool-todo/write")).toBe(false);
+    await s.h.close();
+  }, 15000);
+
+  it("s16 tool-search 子代理禁 reveal e2e（问题3病灶4 T6）：子代理面恒无 tool-search__search（剧本点名落空=未知工具带内）；主图 revealed 集零变化——reveal 经 activate 闭包直通主图共享注册表，子代理调用只污染主面对自身拷贝面无效", async () => {
+    // meta 工具机制复刻（真件 @orosus/tool-search 未进根 devDeps——形态逐点对齐 searchMetaTool）：
+    // activate 闭包捕获 ctx.tools（= 主图注册表缝），execute 期 reveal 直改主图——病灶接线原样
+    const toolSearchReplica: ModuleDefinition = {
+      name: "tool-search", version: "0.1.0", description: "meta 复刻", api: 1,
+      mounts: ["tools.reveal", "tools.list", "contribute:tool"],
+      activate(ctx) {
+        ctx.tools.enable(); // 机制开态（真模块 activate 同款——deferred 标记生效、specs 藏未 reveal）
+        const tools = ctx.tools;
+        ctx.contribute.tool(defineTool({
+          name: "tool-search__search", description: "搜索即加载", parameters: z.object({ query: z.string().min(1) }),
+          resolveExecution: (input) => {
+            const { query } = input as { query: string };
+            return Promise.resolve({
+              accesses: [], approvalRule: "tool-search__search",
+              execute: () => {
+                const names = query.startsWith("select:") ? query.slice(7).split(",").map((x) => x.trim()).filter((x) => x !== "") : [];
+                tools.reveal(names); // 搜索即 reveal——直落主图注册表（无论调用者是谁）
+                return Promise.resolve({ output: names.length > 0 ? `已加载：${names.join("、")}` : "未命中", isError: false });
+              },
+            });
+          },
+        }));
+      },
+    };
+    const ondemand: ModuleDefinition = {
+      name: "ondemand", version: "0.1.0", description: "按需件", api: 1, mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "ondemand__lazy", description: "按需工具", parameters: z.object({}), deferred: true,
+          resolveExecution: () => Promise.resolve({
+            accesses: [], approvalRule: "ondemand__lazy",
+            execute: () => Promise.resolve({ output: "ok", isError: false }),
+          }),
+        }));
+      },
+    };
+    const s = await setup(
+      [spawnCall("c1", { description: "搜工具", prompt: "搜" }), text("主对话收尾")],
+      [call("a1", "tool-search__search", JSON.stringify({ query: "select:ondemand__lazy" })), text("搜不了，收尾")],
+      { extraModules: [toolSearchReplica, ondemand] },
+    );
+    const deferredOf = () => s.h.graph().tools.toolInfos({ deferredOnly: true });
+    expect(deferredOf().map((t) => `${t.name}:${t.revealed}`)).toEqual(["ondemand__lazy:false"]); // 基线：目录在、零 reveal
+    await s.h.prompt("派个搜索的");
+    const out = await firstSpawnResult(s.h);
+    expect(out).toContain("子代理完成（1/1）");
+    expect(out).toContain("收尾");
+    const agentId = s.h.subagents()[0]!.id;
+    // ① 子代理工具面不含 meta 工具（spawn 定格面）；deferred 未 reveal 也不进面（定格为 spawn 时刻已 reveal 集）
+    const face = s.agentRequests[0]!.tools.map((t) => t.name);
+    expect(face).not.toContain("tool-search__search");
+    expect(face).not.toContain("ondemand__lazy");
+    // ② 剧本点名落空：子代理拷贝注册表里没有该工具——带内「未知工具」错误（不炸循环，照常收尾）
+    const raw = readFileSync(join(dir!, "sessions", s.h.sessionId, "agents", `agents_${agentId}`, "agents", "session.jsonl"), "utf8");
+    expect(raw).toContain("未知工具");
+    // ③ 主图 revealed 集零变化：reveal 未发生（面被剥 → 调用落空 → 主对话工具面不被跨上下文改写）
+    expect(deferredOf().map((t) => `${t.name}:${t.revealed}`)).toEqual(["ondemand__lazy:false"]);
+    expect(s.h.graph().tools.specs().map((t) => t.name)).not.toContain("ondemand__lazy"); // 主对话模型面同样未被污染
     await s.h.close();
   }, 15000);
 });

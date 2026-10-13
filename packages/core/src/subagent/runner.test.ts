@@ -271,6 +271,35 @@ describe("子代理 T2（工具过滤：按工种减 + 到顶剥 + 双层门控�
     await h.close();
   });
 
+  it("⑤c tool-search meta 工具剥（问题3病灶4 T6）：meta 工具非 deferred 恒在主图 specs，但 reveal 经 activate 闭包直改主图注册表——子代理调用只污染主面对自身拷贝面无效，与 skill__load 同款进剥离名单；剧本点名落空（未知工具带内）不炸循环", async () => {
+    let searchRan = 0;
+    // meta 工具形态复刻（真件在 @orosus/tool-search——core 测试不反向依赖模块包）：非 deferred 常规注册
+    const fakeMeta = fakeModule("tool-search", {
+      mounts: ["contribute:tool"],
+      activate(ctx) {
+        ctx.contribute.tool(defineTool({
+          name: "tool-search__search", description: "搜索即加载", parameters: z.object({}),
+          resolveExecution: () => Promise.resolve({
+            accesses: [], approvalRule: "tool-search__search",
+            execute: () => { searchRan++; return Promise.resolve({ output: "已加载", isError: false }); },
+          }),
+        }));
+      },
+    });
+    const h = await setup({
+      script: [toolCallChunk("c1", "tool-search__search"), textChunk("子代理结论")], // 剧本点名 meta 工具
+      extraModules: [fakeMeta],
+    });
+    const out = (await port!.spawn({ label: "meta 落空", prompt: "go" })) as SubagentOutcome;
+    expect(out.status).toBe("completed");            // 落空不炸循环——照常收尾交结论
+    expect(out.conclusion).toBe("子代理结论");
+    expect(searchRan).toBe(0);                       // 面上没有 → 拷贝注册表没有 → 调用路径不存在
+    expect(lastRequests[0]!.tools.map((t) => t.name)).not.toContain("tool-search__search"); // 子代理面恒无
+    // 主面对照：非 deferred 不经 reveal 门——主图 specs 恒含（主对话的搜索即加载机制不因剥离受损）
+    expect(h.graph().tools.specs().map((t) => t.name)).toContain("tool-search__search");
+    await h.close();
+  });
+
   it("⑥ 到顶剥（双层门控同一函数）：子代理面含派活类工具，孙代理面剥净；亲缘 header 挂父代理编号；谓词两态", async () => {
     expect(spawnAllowedAtDepth(1)).toBe(true);
     expect(spawnAllowedAtDepth(2)).toBe(false);
