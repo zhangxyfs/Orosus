@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import toolTodo, { createTodoTool } from "./index.ts";
+import type { Tool, ToolIdentity } from "@orosus/contracts/tool";
 
 let dir: string | undefined;
 afterEach(() => { if (dir !== undefined) rmSync(dir, { recursive: true, force: true }); dir = undefined; });
@@ -95,6 +96,84 @@ describe("tool-todo 全完成终痕（onWrite 日志面）", () => {
   it("⑦ 省略 todos 查询 → 不触发 onWrite（读不落日志）", async () => {
     const { seen } = await execWithLog([{}]);
     expect(seen).toHaveLength(0);
+  });
+});
+
+// ——按身份分桶（批次一 T2 / 问题1机制面）：分桶键 = ctx.agent?.agentId ?? "main"——主/子/孙各持一份清单
+describe("tool-todo 按身份分桶（T2）", () => {
+  // 同一工厂实例，逐调用指定执行身份与落盘口（直调 execute——消费 T1 的 ctx.agent / ctx.sessionAppend）
+  const drive = async (
+    tool: Tool,
+    steps: { input: Record<string, unknown>; agent?: ToolIdentity; sessionAppend?: (type: string, payload: unknown) => void }[],
+  ) => {
+    const outs: { output: string; isError: boolean }[] = [];
+    let i = 0;
+    for (const s of steps) {
+      const plan = await tool.resolveExecution(s.input);
+      // exactOptionalPropertyTypes：可选字段不显式传 undefined——按步内有无条件展开
+      const ctx = {
+        callId: `c${++i}`, signal: new AbortController().signal, log: noLog,
+        ...(s.agent !== undefined ? { agent: s.agent } : {}),
+        ...(s.sessionAppend !== undefined ? { sessionAppend: s.sessionAppend } : {}),
+      };
+      outs.push(await plan.execute(ctx));
+    }
+    return outs;
+  };
+  const agent = (agentId: string): ToolIdentity => ({ agentId, depth: 1 });
+
+  it("① a 写清单 → 主读不可见；主写 → a 读不可见（互不串桶，各读各的）", async () => {
+    const { tool } = createTodoTool();
+    const outs = await drive(tool, [
+      { input: { todos: [{ content: "子代理任务", status: "pending" }] }, agent: agent("a") },
+      { input: {} }, // 主读（省略 todos）——看不到 a 的清单
+      { input: { todos: [{ content: "主对话任务", status: "pending" }] } }, // 主写
+      { input: {}, agent: agent("a") }, // a 读——看不到主的清单
+    ]);
+    expect(outs[1]!.output).toBe("（清单为空）");
+    expect(outs[3]!.output).toContain("子代理任务");
+    expect(outs[3]!.output).not.toContain("主对话任务");
+  });
+
+  it("② a 全完成 → 只清 a 桶；b 桶与主桶纹丝不动", async () => {
+    const { tool } = createTodoTool();
+    const outs = await drive(tool, [
+      { input: { todos: [{ content: "A1", status: "pending" }] }, agent: agent("a") },
+      { input: { todos: [{ content: "B1", status: "pending" }] }, agent: agent("b") },
+      { input: { todos: [{ content: "M1", status: "pending" }] } }, // 主桶
+      { input: { todos: [{ content: "A1", status: "done" }] }, agent: agent("a") }, // a 全完成 → 自动清
+      { input: {}, agent: agent("a") },
+      { input: {}, agent: agent("b") },
+      { input: {} }, // 主读
+    ]);
+    expect(outs[3]!.output).toContain("cleared"); // a 模型面照旧清空（测试③口径）
+    expect(outs[4]!.output).toBe("（清单为空）"); // a 桶已清
+    expect(outs[5]!.output).toContain("B1"); // b 桶不动
+    expect(outs[6]!.output).toContain("M1"); // 主桶不动
+  });
+
+  it("③ 子代理写 → sessionAppend 落 tool-todo/write 载荷带 agentId；主写仍走 onWrite（落盘路由各归各）", async () => {
+    const written: { content: string; status: string }[][] = [];
+    const { tool } = createTodoTool((todos) => written.push(todos.map((t) => ({ ...t }))));
+    const events: { type: string; payload: unknown }[] = [];
+    const append = (type: string, payload: unknown) => events.push({ type, payload });
+    await drive(tool, [
+      { input: { todos: [{ content: "子任务", status: "in_progress" }] }, agent: agent("a"), sessionAppend: append },
+      { input: { todos: [{ content: "主任务", status: "pending" }] }, sessionAppend: append }, // 主写：即便带落盘口也不走它
+    ]);
+    expect(events).toEqual([{ type: "tool-todo/write", payload: { todos: [{ content: "子任务", status: "in_progress" }], agentId: "a" } }]);
+    expect(written).toEqual([[{ content: "主任务", status: "pending" }]]); // onWrite 只收主写的
+  });
+
+  it("④ 子代理全完成 → sessionAppend 载荷落全量终痕（全 done 全表）；模型面照旧清空（双写分叉在子路径保真）", async () => {
+    const { tool } = createTodoTool();
+    const events: { type: string; payload: unknown }[] = [];
+    const outs = await drive(tool, [
+      { input: { todos: [{ content: "A", status: "done" }, { content: "B", status: "done" }] }, agent: agent("a"), sessionAppend: (type, payload) => events.push({ type, payload }) },
+      { input: {}, agent: agent("a") },
+    ]);
+    expect(events).toEqual([{ type: "tool-todo/write", payload: { todos: [{ content: "A", status: "done" }, { content: "B", status: "done" }], agentId: "a" } }]);
+    expect(outs[1]!.output).toBe("（清单为空）"); // 模型面不背完成账
   });
 });
 

@@ -1,5 +1,5 @@
 import { defineModule } from "@orosus/contracts/module";
-import { defineTool, type Tool } from "@orosus/contracts/tool";
+import { defineTool, type Tool, type ToolContext } from "@orosus/contracts/tool";
 import { z } from "zod";
 
 interface TodoItem { content: string; status: "pending" | "in_progress" | "done" }
@@ -16,16 +16,27 @@ Single-step tasks do not need a todo list.
 While genuinely parallel work is underway (concurrent sub-agents or background tasks), multiple in_progress items are legitimate.
 Do not create a todo list merely to wrap a single delegation — track your own sequential work here.`;
 
-/** 工厂：工具与状态同闭包——模块侧 promptSection 经 state 读最新值（tool-fs 工厂可测面同款）。 */
+/** 工厂：工具与状态同闭包——模块侧 promptSection 经 state 读最新值（tool-fs 工厂可测面同款）。
+ *  分桶（批次一 T2）：state 单件 → 按执行身份分桶——主/子/孙各持一份清单互不串扰；
+ *  返回的 state = 主桶（既有调用面/测试经无 agent 上下文驱动，零改动兼容）。 */
 export function createTodoTool(onWrite?: (todos: TodoItem[]) => void): { tool: Tool; state: TodoState } {
-  const state: TodoState = { todos: [] };
+  const buckets = new Map<string, TodoState>();
+  const main: TodoState = { todos: [] };
+  buckets.set("main", main); // 预置主桶——state 返回面要拿同一对象
+  const bucketOf = (ctx: ToolContext): TodoState => {
+    const key = ctx.agent?.agentId ?? "main";
+    let b = buckets.get(key);
+    if (b === undefined) { b = { todos: [] }; buckets.set(key, b); }
+    return b;
+  };
   const tool = defineTool({
     name: "tool-todo__todo_write",
     description: `Track progress on multi-step tasks. Send the ENTIRE list every call (whole-list replacement).
 You can reorder, remove, add, or modify items freely.
 Omit todos to READ the current list. Send [] to clear.
 Mark tasks done IMMEDIATELY (do not batch). Keep exactly one in_progress when you work sequentially; multiple in_progress is fine while parallel sub-agents or background tasks are running.
-Do NOT call when nothing changed — query first if unsure. Auto-cleared when ALL items are done.`,
+Do NOT call when nothing changed — query first if unsure. Auto-cleared when ALL items are done.
+This list is scoped to the current agent (main conversation or each subagent has its own); writes never touch other agents' lists.`,
     parameters: z.object({
       todos: z.array(z.object({
         content: z.string().min(1),
@@ -37,23 +48,27 @@ Do NOT call when nothing changed — query first if unsure. Auto-cleared when AL
       return {
         accesses: [],
         approvalRule: "tool-todo__todo_write",
-        execute: async () => {
+        execute: async (ctx) => {
+          const bucket = bucketOf(ctx);
           if (newTodos === undefined) {
-            return { output: render(state.todos) || "（清单为空）", isError: false };
+            return { output: render(bucket.todos) || "（清单为空）", isError: false };
           }
           // 全完成双写分叉（2026-09-23 用户拍板「完成后别清掉，也许用户还想看」）：
           // 模型面照旧清空（提示词不背完成账——cc-haha 机理，测试③④口径不动）；
           // 日志面落全量终痕（全 ✓）——面板投影 .at(-1) 留住完成态，不被自动清空抹掉。
-          // onWrite 上行是面板唯一通道（ToolContext 无 session 口——TUI 批 F4 定的回调面）
           const allDone = newTodos.length > 0 && newTodos.every((t) => t.status === "done");
-          state.todos = allDone ? [] : newTodos;
-          onWrite?.(allDone ? newTodos : state.todos);
-          return { output: state.todos.length === 0 ? "Todo list cleared." : `Todo list updated:\n${render(state.todos)}`, isError: false };
+          bucket.todos = allDone ? [] : newTodos;
+          const todos = allDone ? newTodos : bucket.todos; // 落盘载荷：全完成落全量终痕（两条路径同此口径）
+          // 落盘路由（批次一 T2）：主对话走 activate 期白名单通道 onWrite（TUI 批 F4 定的回调面，现状不变）；
+          // 子代理走 T1 的 ctx.sessionAppend 直落自己的 session.jsonl，载荷带 agentId 归属。
+          if (ctx.agent === undefined) onWrite?.(todos);
+          else ctx.sessionAppend?.("tool-todo/write", { todos, agentId: ctx.agent.agentId });
+          return { output: bucket.todos.length === 0 ? "Todo list cleared." : `Todo list updated:\n${render(bucket.todos)}`, isError: false };
         },
       };
     },
   });
-  return { tool, state };
+  return { tool, state: main };
 }
 
 export default defineModule({
