@@ -12,6 +12,9 @@
  * 工具行（2026-10-12 走查）：收起态零预览——「Using/Used X(关键参数) · N 行」一行即全部；
  *   点击行体按工具类型展开（bash 终端回放 / read 行号内容 / edit·write diff / 其余输出块），
  *   结果懒构建、原位重装不收拢；体高帽 10 行（超出体内滚动）；超长输出头尾截断 + bash CR 行内取尾。
+ * 工作组（2026-10-13 设计 specs/2026-10-13-web-work-section-design.md）：轮内除最终正文外全部
+ *   内容入 .work 组（组即轮体，流式零重排）；turn/end 结算——挪最终正文出组、组头三态四文案
+ *   （工作中走字无箭头 / 已工作 N ▸ 收起 / 已停止 / 已处理兜底）、有过程可藏才挂箭头。
  * 滚动跟随仅当用户在底部 40px 内；离开底部 >160px 显「回到底部」浮钮（点击回底并恢复跟随）。
  * 导出挂 globalThis.OrosusRender（浏览器 window === globalThis；node 测试同源可取）。 */
 (function () {
@@ -420,12 +423,71 @@
     ctx.setTurn(t);
     return t;
   }
+  /* ── 工作组（2026-10-13 设计）——轮内过程容器：组即轮体，轮内行自始入组（流式零重排） ── */
+
+  /** 惰性建组（组头默认「已处理」收起态——无 turn/start 的 provisional/straddle 段的兜底形；
+   *  emitTurnStart 到会改写为工作中走字 / fragMode 已处理，结算再换终态）。 */
+  function ensureWork(t) {
+    var w = t.querySelector(':scope > .work');
+    if (w) return w;
+    w = el('div', 'work collapsed');
+    var head = el('div', 'work-head');
+    var body = el('div', 'work-body');
+    w.appendChild(head);
+    w.appendChild(body);
+    t.insertBefore(w, t.firstChild); /* 组置顶 */
+    workHeadRender(w, '已处理', true, true);
+    head.addEventListener('click', function () {
+      if (!head.classList.contains('clickable')) return; /* 工作中/无正文轮——点击无效（ZCode onOpenChange=undefined 同款） */
+      collapseAnchored(w, !w.classList.contains('collapsed'));
+    });
+    return w;
+  }
+  function workBodyOf(t) { return ensureWork(t).lastChild; }
+
+  /** 组头渲染（三态四文案——spec §3.3 表逐字）。collapsible=false：无箭头、点击无效。 */
+  function workHeadRender(w, label, collapsible, collapsed) {
+    var head = w.firstChild;
+    head.innerHTML = (collapsible ? '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' : '') + esc(label);
+    head.classList.toggle('clickable', collapsible);
+  }
+
+  /** 开合统一口（锚定纪律：跟随中收起→贴底；非跟随→anchoredToggle 保视口锚）。 */
+  function collapseAnchored(w, collapse) {
+    var apply = function () {
+      w.classList.toggle('collapsed', collapse);
+      var c = w.firstChild.querySelector('.tcaret');
+      if (c) c.textContent = collapse ? '▸' : '▾';
+    };
+    if (R.stick) { apply(); followScroll(); syncToBottom(); }
+    else anchoredToggle(w, apply);
+  }
+
+  /** 工作中走字（1s 步进；无 start 事实不 tick——静态「工作中」待结算兜底）。
+   *  单槽管理（R.workTicking）：新一轮起 tick 强制停旧（协议异常防泄漏）。 */
+  function workHeadTick(w, tsIso) {
+    if (R.workTicking && R.workTicking !== w) workHeadStop(R.workTicking);
+    var startMs = typeof tsIso === 'string' ? new Date(tsIso).getTime() : NaN;
+    if (isNaN(startMs)) return;
+    w.workState = 'running';
+    var tick = function () {
+      if (R === null || !w.isConnected || w.workState !== 'running') { workHeadStop(w); return; }
+      workHeadRender(w, '工作中 ' + fmtWorkDur(Date.now() - startMs), false, false);
+    };
+    w.workTimer = window.setInterval(tick, 1000);
+    tick(); /* 立即一帧——首秒不空白（尾行 tick 同款） */
+    R.workTicking = w;
+  }
+  function workHeadStop(w) {
+    if (w.workTimer) { window.clearInterval(w.workTimer); w.workTimer = null; }
+    if (R && R.workTicking === w) R.workTicking = null;
+  }
+
   function placeIn(ctx, node) {
-    /* 评审 Important-3 收容口径：turn 作用域事件（assistant/tool/注入行）无开口容器时补建
-     * （provisional）turn——分页边界落 mid-turn 的首事件不再散落顶级，turn/end 的 ensureTurn
-     * 认领同容器挂 foot，「⧉ 复制本轮」作用域（closest('.turn')）由此闭合、不再拷空。 */
+    /* 评审 Important-3 收容口径不变；2026-10-13 起轮内行改投工作组体（回放窗 ctx.noWork 豁免）。 */
     if (!ctx.turn) ensureTurn(ctx);
-    ctx.turn.appendChild(node);
+    if (ctx.noWork) { ctx.turn.appendChild(node); return; }
+    workBodyOf(ctx.turn).appendChild(node);
   }
   function liveCtx() {
     var ctx = makeCtx(function (node) { R.stream.insertBefore(node, R.tail); }, R.pendingClamp);
@@ -906,7 +968,20 @@
       ctx.setTurn(t);
     }
     ctx.usage = null;
-    return ctx.turn;
+    var t2 = ctx.turn;
+    t2.turnStartTs = typeof ev.ts === 'string' ? ev.ts : null; /* 结算时长数据源（缺 → 已处理兜底） */
+    if (ctx.noWork) return t2; /* 回放窗豁免 */
+    var w = ensureWork(t2);
+    if (ctx.fragMode) {
+      /* 历史孤儿段（跨分页 straddle 旧段——本容器永远等不到 turn/end）：出生即「已处理」收起 */
+      w.classList.add('collapsed');
+      workHeadRender(w, '已处理', true, true);
+    } else {
+      w.classList.remove('collapsed');
+      workHeadRender(w, '工作中 ' + fmtWorkDur(0), false, false);
+      workHeadTick(w, t2.turnStartTs);
+    }
+    return t2;
   }
 
   function emitTurnEnd(ev, ctx) {
@@ -939,7 +1014,7 @@
       var line = el('div', 'line agent-line', '<span class="bullet">●</span>');
       var span = el('span', 'live-text');
       line.appendChild(span);
-      t.appendChild(line);
+      workBodyOf(t).appendChild(line);
       R.live.lineEl = line;
       R.live.textNode = document.createTextNode('');
       span.appendChild(R.live.textNode);
@@ -975,7 +1050,7 @@
       var bodyEl = el('div', 'think-body');
       tk.appendChild(headEl);
       tk.appendChild(bodyEl);
-      t.appendChild(tk);
+      workBodyOf(t).appendChild(tk);
       R.live.thinkEl = tk;
       R.live.thinkBuf = '';
       R.live.thinkSince = Date.now();
@@ -1087,6 +1162,7 @@
       userSeen: false,
       busy: false, compacting: false, errorFlash: false,
       busyTimer: null, busyStart: 0,
+      workTicking: null,
       stick: true, loadingEarlier: false, hasMore: false,
       pendingClamp: [],
       pgArmed: false, pgCooling: false,
@@ -1106,6 +1182,7 @@
   function close() {
     if (R === null) return;
     window.clearInterval(R.busyTimer);
+    if (R.workTicking) workHeadStop(R.workTicking);
     if (R.live && R.live.thinkTimer !== null) window.clearInterval(R.live.thinkTimer);
     R = null;
   }
@@ -1307,6 +1384,7 @@
     container.innerHTML = '';
     var localClamp = [];
     var ctx = makeCtx(function (node) { container.appendChild(node); }, localClamp);
+    ctx.noWork = true; /* 回放窗豁免（2026-10-13 工作组设计：timeline 原样陈列不进组） */
     var evs = (events || []).slice(-500);
     for (var i = 0; i < evs.length; i++) emitEvent(evs[i], ctx);
     measureClamp(localClamp);

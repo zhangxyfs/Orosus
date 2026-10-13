@@ -382,3 +382,31 @@ describe("web 工作组（2026-10-13 设计）：fmtWorkDur 时长格式化（ZC
     expect(R.fmtWorkDur(183_600_000)).toBe("2 天 3 小时");
   });
 });
+
+describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
+  it("G2 源码锚定：轮内行统一投组（placeIn/chunk/thinkChunk 三投口）+ 组头文案 + 回放窗豁免", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    expect(src).toContain("function ensureWork(");
+    expect(src).toContain("function workBodyOf(");
+    const placeFn = src.slice(src.indexOf("function placeIn("), src.indexOf("function liveCtx("));
+    expect(placeFn).toContain("workBodyOf(ctx.turn)"); // 轮内行改投组体
+    expect(placeFn).toContain("ctx.noWork"); // 回放窗豁免（timeline 原样陈列）
+    const chunkFn = src.slice(src.indexOf("function chunk("), src.indexOf("function flushChunk("));
+    expect(chunkFn).toContain("workBodyOf(t)"); // 流式正文行入组
+    const thinkFn = src.slice(src.indexOf("function thinkChunk("), src.indexOf("function finalizeLive("));
+    expect(thinkFn).toContain("workBodyOf(t)"); // 流式思考块入组
+    expect(src).toContain("'工作中 '"); // 组头文案前两枚（spec §3.3 逐字）——本任务落地
+    expect(src).toContain("'已处理'"); // 「已工作 」/「已停止」由 T3 结算接线引入（G4 断言——2026-10-13 审查修：T2 源码尚无该两字面量）
+    const startFn = src.slice(src.indexOf("function emitTurnStart("), src.indexOf("function emitTurnEnd("));
+    expect(startFn).toContain("turnStartTs"); // 轮始 ts 落元素（结算时长数据源）
+    expect(startFn).toContain("workHeadTick"); // 工作中走字
+    expect(startFn).toContain("ctx.fragMode"); // 历史孤儿段出生即「已处理」收起
+  });
+
+  it("G3 CSS 锚定：组头下边框分隔线 + 收起态隐藏组体（明暗主题变量复用）", () => {
+    const css = readFileSync(join(ASSETS_DIR, "style.css"), "utf8");
+    expect(css).toContain(".work-head {");
+    expect(css).toContain("border-bottom: 1px solid var(--border);");
+    expect(css).toContain(".work.collapsed .work-body { display: none; }");
+  });
+});
