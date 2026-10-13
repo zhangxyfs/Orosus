@@ -116,6 +116,76 @@ describe("web T15：前端骨架静态资产", () => {
     expect(out.includes(">")).toBe(false);
   });
 
+  it("⑦ W1 分栏骨架：splitter/pane/pane-tabs/pane-body/btn-split DOM + 右栏互斥/拖拽/悬浮条下移/归属徽标 CSS + JS 契约（v2 直裁）", () => {
+    const html = read("index.html");
+    /* DOM 契约（v2 1241-1252 / 1032 同名 id） */
+    for (const id of ["splitter", "pane", "pane-tabs", "pane-body", "btn-split"]) {
+      expect(html.includes(`id="${id}"`), `#${id} 应存在`).toBe(true);
+    }
+    /* 位置契约：splitter/pane 落在 .main 与 #rside 之间（右栏互斥的布局锚点） */
+    const iMain = html.indexOf('class="main"');
+    const iSplitter = html.indexOf('id="splitter"');
+    const iPaneBody = html.indexOf('id="pane-body"');
+    const iRside = html.indexOf('id="rside"');
+    expect(iMain, ".main 应存在").toBeGreaterThan(-1);
+    expect(iSplitter).toBeGreaterThan(iMain);
+    expect(iPaneBody).toBeGreaterThan(iSplitter);
+    expect(iRside).toBeGreaterThan(iPaneBody);
+    /* 顶栏入口：#btn-split 在 .ab-acts 末尾（btn-theme 之后），文案 ◧ 分栏（v2 1032） */
+    expect(html.indexOf('id="btn-split"')).toBeGreaterThan(html.indexOf('id="btn-theme"'));
+    expect(html.includes(">◧ 分栏</button>"), "btn-split 文案").toBe(true);
+    /* 主悬浮条归属徽标钩子：#tf-pill 内首元素 .tf-owner、文案「主」（v2 1053） */
+    expect(/id="tf-pill"[^>]*><span class="tf-owner">主<\/span>/.test(html), ".tf-owner 归属徽标「主」").toBe(true);
+    /* GC2 棘轮：v2 评审件零移植 */
+    expect(html.includes("data-spec"), "data-spec 评审件不移植（GC2）").toBe(false);
+    expect(html.includes("btn-specs"), "「标注」钮评审件不移植（GC2）").toBe(false);
+
+    const css = read("style.css");
+    /* 右栏互斥：分栏开 = .side 隐藏（v2 922） */
+    expect(/\.app-body\.split \.side\s*\{\s*display:\s*none;\s*\}/.test(css), ".app-body.split .side 互斥规则").toBe(true);
+    /* 分栏态切 flex（app-body 默认 grid——成全 v2 拖拽的 pane.style.flex 口径） */
+    expect(/\.app-body\.split\s*\{\s*display:\s*flex;\s*\}/.test(css), "分栏态 flex 形态开关").toBe(true);
+    /* splitter：col-resize 拖拽形态（v2 916-918） */
+    expect(/\.splitter\s*\{[^}]*cursor:\s*col-resize/.test(css), ".splitter col-resize").toBe(true);
+    expect(css.includes(".splitter[hidden]"), ".splitter [hidden] 兜底").toBe(true);
+    /* pane：右侧分栏卡（v2 920-921） */
+    expect(/\.pane\s*\{[^}]*border-left:\s*1px solid var\(--border\)/.test(css), ".pane border-left").toBe(true);
+    expect(css.includes(".pane[hidden]"), ".pane [hidden] 兜底").toBe(true);
+    /* 分栏时主悬浮条下移 46px（v2 839——与子代理悬浮条同水平线；作用域限定 .main） */
+    expect(/\.app-body\.split \.main > \.todo-float\s*\{[^}]*top:\s*46px/.test(css), "主悬浮条下移规则").toBe(true);
+    /* 归属徽标：10px mono、border、4px 圆角（v2 967） */
+    const tfOwner = /\.tf-owner\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
+    expect(/font-family:\s*var\(--font-mono\)/.test(tfOwner), ".tf-owner mono").toBe(true);
+    expect(/border-radius:\s*4px/.test(tfOwner), ".tf-owner 4px 圆角").toBe(true);
+    expect(/font-size:\s*calc\(10px/.test(tfOwner), ".tf-owner 10px").toBe(true);
+    /* ≤920px 媒体查询：分栏转纵向堆叠（v2 996-1005 同款） */
+    const mq = /@media \(max-width: 920px\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    expect(mq.includes(".splitter { display: none; }"), "920px 分隔条隐藏").toBe(true);
+    expect(/\.pane\s*\{[^}]*flex:\s*0 0 auto;[^}]*border-top:\s*1px solid var\(--border\)/.test(mq), "920px 分栏纵向堆叠").toBe(true);
+    expect(/\.app-body\.split\s*\{[^}]*flex-direction:\s*column/.test(mq), "920px 分栏态纵向").toBe(true);
+
+    const js = read("app.js");
+    /* JS 契约：openPane/closePane/paneIsOpen 挂 window.OrosusUI（W2-W6 依赖面） */
+    expect(js.includes("function paneIsOpen()"), "paneIsOpen 定义").toBe(true);
+    expect(js.includes("function openPane()"), "openPane 定义").toBe(true);
+    expect(js.includes("function closePane()"), "closePane 定义").toBe(true);
+    for (const [name, fn] of [["paneIsOpen", "paneIsOpen"], ["openPane", "openPane"], ["closePane", "closePane"]] as const) {
+      expect(new RegExp(`UI\\.${name}\\s*=\\s*${fn}\\b`).test(js), `UI.${name} 挂 OrosusUI`).toBe(true);
+    }
+    /* 形态开关 + close 清空 pane.style.flex（v2 4368-4389） */
+    expect(js.includes("appBody.classList.add('split')"), "open 加 split").toBe(true);
+    expect(js.includes("appBody.classList.remove('split')"), "close 去 split").toBe(true);
+    expect(js.includes("pane.style.flex = ''"), "close 清空 pane.style.flex").toBe(true);
+    /* 拖拽 clamp：分栏下限 300px、主列下限 480px（v2 4710-4728） */
+    expect(/Math\.min\(Math\.max\(startW - \(ev\.clientX - startX\), 300\), bodyW - 480\)/.test(js), "拖拽 clamp 300/480").toBe(true);
+    expect(js.includes("pane.style.flex = '0 0 ' + Math.round(w) + 'px'"), "拖拽落定 flex 定宽").toBe(true);
+    /* syncTodoFloat 可见性矩阵 v2 4323 口径：(右栏收窄 || 分栏开) && 主清单非空 */
+    expect(js.includes("todoFloat.hidden = !(railed || split)"), "悬浮条两源可见性").toBe(true);
+    expect(js.includes("mainTodoCount() === 0"), "主清单空则不显示").toBe(true);
+    /* 顶栏入口接线：已开则收（v2 4731-4734——W3 后未开分支改接 cmdTasks） */
+    expect(js.includes("toast('分栏已收回')"), "收起 toast").toBe(true);
+  });
+
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {
     const { server, port } = await startWebServer({ cwd: process.cwd(), home: process.cwd() });
     const base = `http://127.0.0.1:${port}`;

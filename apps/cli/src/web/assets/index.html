@@ -23,6 +23,7 @@
         <button class="btn" id="btn-help" title="帮助（/help）">? 帮助</button>
         <button class="btn" id="btn-more" title="更多：诊断 / 模块总览 / 钩子注入 / 压缩摘要（TUI 的 Ctrl+E/P/H/O，浏览器键位冲突故入口在此）">⋮ 更多</button>
         <button class="btn" id="btn-theme" title="切换浅色 / 深色主题">☀ 浅色</button>
+        <button class="btn" id="btn-split" title="详情分栏——子代理 / 侧问在右侧分栏并行查看（点击打开 / 关闭）">◧ 分栏</button>
       </span>
     </div>
 
@@ -41,9 +42,9 @@
 
       <!-- ═══ left: stream / composer ═══ -->
       <div class="main">
-        <!-- 悬浮任务清单（右栏收缩时出现，点击药丸展开） -->
+        <!-- 悬浮任务清单（右栏收缩或分栏时出现，点击药丸展开；.tf-owner 归属徽标「主」与子代理悬浮条区分） -->
         <div class="todo-float" id="todo-float" hidden>
-          <button class="tf-pill" id="tf-pill" title="展开任务清单"><span class="ok">✓</span> <span class="tf-count" id="tf-count">0/0</span> 任务 <span class="tf-open">⇲</span></button>
+          <button class="tf-pill" id="tf-pill" title="展开任务清单"><span class="tf-owner">主</span><span class="ok">✓</span> <span class="tf-count" id="tf-count">0/0</span> 任务 <span class="tf-open">⇲</span></button>
           <div class="tf-card" id="tf-card" hidden>
             <div class="tf-head"><span>任务清单</span><span id="tf-count2">0/0</span></div>
             <div class="tf-list" id="tf-list"></div>
@@ -104,6 +105,15 @@
           </form>
         </div>
       </div>
+
+      <!-- ═══ 详情分栏（问题 2 目标形态）：分隔条可拖拽（默认 50/50）+ 选项卡条（打开并存、显示互斥） ═══ -->
+      <div class="splitter" id="splitter" hidden title="拖拽调整左右比例"></div>
+      <section class="pane" id="pane" hidden aria-label="详情分栏面板">
+        <div class="pane-tabs" id="pane-tabs">
+          <span class="pt-empty">暂无打开的选项卡</span>
+        </div>
+        <div class="pane-body" id="pane-body"></div>
+      </section>
 
       <!-- ═══ right sidebar ═══ -->
       <aside class="side" id="rside">

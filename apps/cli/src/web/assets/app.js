@@ -2779,10 +2779,13 @@ function $(id) { return document.getElementById(id); }
   });
   var todoFloat = $('todo-float');
   var tfCard = $('tf-card');
+  function mainTodoCount() { return panelInfo && panelInfo.data ? (panelInfo.data.tasks ?? []).length : 0; }
   function syncTodoFloat() {
     var railed = rside.classList.contains('rail');
-    todoFloat.hidden = !railed;
-    if (!railed) { tfCard.hidden = true; todoFloat.classList.remove('open'); }
+    var split = appBody.classList.contains('split');
+    /* 主清单无数据时不显示悬浮条（v2 4323 口径：右栏收窄 || 分栏开，且清单非空） */
+    todoFloat.hidden = !(railed || split) || mainTodoCount() === 0;
+    if (todoFloat.hidden) { tfCard.hidden = true; todoFloat.classList.remove('open'); }
   }
   $('rs-collapse').addEventListener('click', function () { rside.classList.add('rail'); syncTodoFloat(); });
   $('rs-expand').addEventListener('click', function () { rside.classList.remove('rail'); syncTodoFloat(); });
@@ -2791,6 +2794,65 @@ function $(id) { return document.getElementById(id); }
     tfCard.hidden = !opening;
     todoFloat.classList.toggle('open', opening);
     if (opening) renderTfList();
+  });
+
+  /* ═══════════ 详情分栏骨架（问题 2 W1——v2 4351-4389/4710-4734 直裁） ═══════════
+   * · `.app-body.split` 类 = 分栏开唯一形态开关：右栏卡片隐藏、主任务悬浮条留主流右上（归属徽标「主」）
+   * · 选项卡条内部结构随 W2 到位（本任务空壳 + .pt-empty 空态） */
+  var appBody = document.querySelector('.app-body');
+  var splitter = $('splitter');
+  var pane = $('pane');
+  var paneTabsEl = $('pane-tabs');
+  var paneBodyEl = $('pane-body');
+  function paneIsOpen() { return !pane.hidden; }
+  function renderPaneTabs() {
+    /* W1 空态分支（v2 renderPaneTabs 同款）——选项卡数据结构随 W2 引入 */
+    paneTabsEl.innerHTML = '<span class="pt-empty">暂无打开的选项卡</span>';
+  }
+  function openPane() {
+    if (paneIsOpen()) return;
+    pane.hidden = false;
+    splitter.hidden = false;
+    appBody.classList.add('split');
+    /* 主任务悬浮条留在主流右上，不随分栏挪移 */
+    syncTodoFloat();
+  }
+  function closePane() {
+    pane.hidden = true;
+    splitter.hidden = true;
+    appBody.classList.remove('split');
+    pane.style.flex = '';
+    renderPaneTabs();
+    paneBodyEl.innerHTML = '';
+    syncTodoFloat();
+  }
+  /* 导出面（W2-W6 依赖契约）：挂 window.OrosusUI */
+  UI.paneIsOpen = paneIsOpen;
+  UI.openPane = openPane;
+  UI.closePane = closePane;
+  /* 分隔条拖拽：默认 50/50（两侧 flex:1），拖动后固定像素宽（分栏下限 300px、主列下限 480px） */
+  splitter.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    splitter.classList.add('drag');
+    var startX = e.clientX;
+    var startW = pane.getBoundingClientRect().width;
+    var bodyW = appBody.getBoundingClientRect().width;
+    function mv(ev) {
+      var w = Math.min(Math.max(startW - (ev.clientX - startX), 300), bodyW - 480);
+      pane.style.flex = '0 0 ' + Math.round(w) + 'px';
+    }
+    function up() {
+      splitter.classList.remove('drag');
+      document.removeEventListener('mousemove', mv);
+      document.removeEventListener('mouseup', up);
+    }
+    document.addEventListener('mousemove', mv);
+    document.addEventListener('mouseup', up);
+  });
+  /* 顶栏入口（v2 4730-4734）：◧ 分栏 = 打开 / 关闭——W3 到位后未开分支改接 cmdTasks()（本任务先开空栏） */
+  $('btn-split').addEventListener('click', function () {
+    if (paneIsOpen()) { closePane(); toast('分栏已收回'); return; }
+    openPane();
   });
 
   /* 面板渲染（2s 轮询 + 签名门——数据不变 DOM 零触碰；运行时间跳秒本地自增） */
@@ -2952,6 +3014,7 @@ function $(id) { return document.getElementById(id); }
       $('tf-count').textContent = done + '/' + tasks.length;
       $('tf-count2').textContent = done + '/' + tasks.length;
       if (!tfCard.hidden) renderTfList();
+      syncTodoFloat(); /* 清单空 ↔ 非空切换时悬浮条可见性跟随（v2 静态 todos 的实数据适配——签名门内，数据不变不碰 DOM） */
     }
   }
   function peerHtml(p, self) {

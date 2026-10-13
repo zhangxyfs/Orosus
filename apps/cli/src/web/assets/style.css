@@ -842,6 +842,8 @@ body.light .work-head { color: var(--muted); }
 /* ─── 悬浮任务清单（右栏收缩时浮在消息窗右上角） ──────────────── */
 .todo-float { position: absolute; top: 10px; right: 14px; z-index: 6; }
 .todo-float[hidden] { display: none; }
+/* 分栏时主悬浮条下移，与分栏内子代理悬浮条（选项卡条 ≈37px + 上偏 8px）落在同一水平线；作用域限定 .main，避免误伤分栏里的 .ag-todo */
+.app-body.split .main > .todo-float { top: 46px; }
 .tf-pill {
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
@@ -850,6 +852,8 @@ body.light .work-head { color: var(--muted); }
 }
 .tf-pill:hover { border-color: var(--accent-line); color: var(--fg); }
 .tf-pill .tf-count { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
+/* 悬浮条归属徽标（v2 967 直裁）：主流「主」/ 子代理 = agentId 前 4 位——10px mono、border、4px 圆角 */
+.tf-owner { color: var(--muted-faint); font-size: calc(10px * var(--fz)); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-family: var(--font-mono); }
 .tf-open { visibility: hidden; color: var(--muted-dim); }
 .todo-float:hover .tf-open, .todo-float.open .tf-open { visibility: visible; }
 .tf-card {
@@ -890,8 +894,30 @@ body.light .work-head { color: var(--muted); }
 .ph-running { color: var(--accent); } .ph-wait { color: var(--warn); }
 .ph-error { color: var(--err); } .ph-idle { color: var(--muted); }
 
+/* ─── 详情分栏（问题 2 W1——v2 916-922 直裁：splitter/pane/右栏互斥） ───
+   .app-body 默认三列 grid；分栏态切 flex（`.app-body.split` 为分栏开唯一形态开关），
+   成全 v2 拖拽口径 pane.style.flex 定宽（grid 项不吃 flex）。默认 50/50（main 与 pane 均 flex:1）。 */
+.splitter { flex: 0 0 5px; cursor: col-resize; background: transparent; transition: background 0.15s ease; }
+.splitter:hover, .splitter.drag { background: var(--accent-line); }
+.splitter[hidden] { display: none; }
+
+.pane { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 45%, var(--bg)); }
+.pane[hidden] { display: none; }
+.app-body.split .side { display: none; }
+.app-body.split { display: flex; }
+.app-body.split .lside { flex: 0 0 auto; }
+.app-body.split .main { flex: 1 1 0; }
+
+/* 选项卡条（W1 空壳——.pt-list/.pt-item 等内部结构随 W2 到位；空态文案先行） */
+.pane-tabs { position: relative; display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); }
+.pt-empty { color: var(--muted-faint); font-size: calc(11.5px * var(--fz)); padding: 0 6px 7px; white-space: nowrap; }
+.pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
 @media (max-width: 920px) {
   .app-body { grid-template-columns: 1fr; height: auto; }
+  .app-body.split { flex-direction: column; }
+  .splitter { display: none; }
+  .pane { flex: 0 0 auto; max-height: 480px; border-left: 0; border-top: 1px solid var(--border); }
   .stream { max-height: 460px; }
   .side { border-left: 0; border-top: 1px solid var(--border); }
   .panel-state, .panel-todo { flex: 0 0 auto; max-height: 420px; }
