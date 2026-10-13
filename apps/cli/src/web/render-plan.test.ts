@@ -423,7 +423,8 @@ describe("web 工作组（2026-10-13 设计）：结算序列", () => {
     expect(evalFn).toContain("w.remove()"); // 零内容轮整组摘除（ZCode hasWork 同口径）
     const claimFn = src.slice(src.indexOf("function claimBackward("), src.indexOf("function evalTurn("));
     expect(claimFn).toContain(".turn-foot"); // 回溯止于有 foot 的段（不偷正常轮的中间正文）
-    expect(src).toContain("reevalSettledTurns()"); // applyInsertGroup 后重估（后到的旧段补出正文）
+    const insertFn = src.slice(src.indexOf("function applyInsertGroup("), src.indexOf("function resolveAnchor("));
+    expect(insertFn).toContain("reevalSettledTurns()"); // applyInsertGroup 后重估（钉调用点——定义行自含弱化修复）
     expect(src).toContain("function finalMdOf(");
     expect(src).toContain("':scope > .agent-md'"); // 组外直属 = 已结算最终正文
   });
@@ -437,6 +438,7 @@ describe("web 工作组（2026-10-13 设计 §3.7）：复制收窄为最终正�
     expect(copyFn).toContain("finalMdOf(turn)"); // 组外直属最终正文
     expect(copyFn).toContain("claimBackward(turn)"); // straddle 兜底（只读不回挪——evalTurn 已认领）
     expect(copyFn).toContain("md.mdSource"); // markdown 源串（2026-10-13 复制批口径延续）
+    expect(copyFn).toContain("replace(/^●\\s*/, '')"); // 流式残段无源串时退回渲染态（钉兜底正则）
     expect(copyFn).toContain("已复制本轮回复");
     expect(copyFn).toContain("（本轮无可复制文本）"); // 无正文轮兜底文案不变
     expect(src).not.toContain("自动合并两段"); // foot 复制钮 tooltip 旧并集口径同步退役（3c——用户可见标签不撒谎）

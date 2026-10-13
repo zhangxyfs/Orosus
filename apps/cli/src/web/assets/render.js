@@ -439,6 +439,7 @@
     workHeadRender(w, '已处理', true, true);
     head.addEventListener('click', function () {
       if (!head.classList.contains('clickable')) return; /* 工作中/无正文轮——点击无效（ZCode onOpenChange=undefined 同款） */
+      w.userToggled = true; /* 手动开合一等交互（spec §3.5）——翻页重估不再补收起 */
       collapseAnchored(w, !w.classList.contains('collapsed'));
     });
     return w;
@@ -531,7 +532,7 @@
     var mdNow = finalMdOf(t);
     if (!hasBody && !mdNow) { w.remove(); return; }
     var collapsible = hasBody && !!mdNow; /* 有正文且有过程可藏才可收（无正文轮常开无箭头） */
-    var wantCollapsed = collapsible;
+    var wantCollapsed = collapsible && !w.userToggled; /* 用户手动展开过——重估不踩（spec §3.5 手动开合一等交互） */
     if (wantCollapsed !== w.classList.contains('collapsed')) collapseAnchored(w, wantCollapsed);
     workHeadRender(w, t.workLabel, collapsible, wantCollapsed);
   }
