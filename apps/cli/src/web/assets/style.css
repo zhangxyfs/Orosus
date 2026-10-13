@@ -539,7 +539,7 @@ body.light .term-err .term-out { color: #cf222e; }
 .work-head { color: var(--muted-dim); font-size: 0.9em; padding: 2px 6px 3px 2ch; margin-bottom: 4px; user-select: none; } /* 2026-10-13 用户口令：不画下边框（横线无必要） */
 .work-head.clickable { cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
 .work-head.clickable:hover { background: var(--fg-soft); color: var(--muted); }
-.work-head .tcaret { color: var(--muted); margin-right: 6px; }
+.work-head .tcaret { color: var(--muted); margin-left: 6px; } /* 箭头在文案后（2026-10-13 口令） */
 .work.collapsed .work-head { margin-bottom: 0; }
 .work.collapsed .work-body { display: none; }
 body.light .work-head { color: var(--muted); }

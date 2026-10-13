@@ -397,6 +397,8 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(startFn).toContain("turnStartTs"); // 轮始 ts 落元素（结算时长数据源）
     expect(startFn).toContain("workHeadTick"); // 工作中走字
     expect(startFn).toContain("ctx.fragMode"); // 历史孤儿段出生即「已处理」收起
+    const renderFn = src.slice(src.indexOf("function workHeadRender("), src.indexOf("function collapseAnchored("));
+    expect(renderFn.indexOf("esc(label)")).toBeLessThan(renderFn.indexOf("tcaret")); // 箭头在文案后（2026-10-13 口令——ZCode「已工作 N ›」形）；collapsible=false 时零 caret（工作中无箭头）
   });
 
   it("G3 CSS 锚定：组头无下边框（2026-10-13 用户口令——横线无必要）+ 收起态隐藏组体（明暗主题变量复用）", () => {

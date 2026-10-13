@@ -454,7 +454,8 @@
   /** 组头渲染（三态四文案——spec §3.3 表逐字）。collapsible=false：无箭头、点击无效。 */
   function workHeadRender(w, label, collapsible, collapsed) {
     var head = w.firstChild;
-    head.innerHTML = (collapsible ? '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' : '') + esc(label);
+    /* 箭头在文案后（2026-10-13 用户口令——ZCode「已工作 N ›」形：收起 ▸、展开 ▾、工作中不渲染）。 */
+    head.innerHTML = esc(label) + (collapsible ? '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' : '');
     head.classList.toggle('clickable', collapsible);
   }
 
