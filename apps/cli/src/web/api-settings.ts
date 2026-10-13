@@ -854,8 +854,8 @@ registerRoute("POST", "/api/settings/memory/import", async (req, res) => {
   const cwd = webCwd();
   const homes = memorySourceHomes();
   const srcs = detectSources(homes, findGitRoot(cwd), cwd).filter((s) => s.count > 0);
-  const validIds = new Set(srcs.map((s) => s.id));
-  let ids = srcs.map((s) => s.id);
+  const validIds = new Set<string>(srcs.map((s) => s.id)); /* 键型放宽对齐 string——has(id) 编译面通，含源校验语义原样 */
+  let ids: string[] = srcs.map((s) => s.id); /* 放宽声明（元素五源 union → string）：下方请求体分支整体重赋——validIds 含源校验兜底，语义不变 */
   let organize = false;
   let mode: "current" | "all" = "current";
   if (b.body["ids"] !== undefined) {

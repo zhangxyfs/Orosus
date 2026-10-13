@@ -557,8 +557,9 @@ export class HostedSession {
     return () => { this.eventSubs.delete(cb); };
   }
 
-  /** 流式增量扇出口（T3 SSE 的 chunk 帧源——50ms 合批在彼处，本口只转发）。 */
-  onChunk(cb: (t: string) => void): () => void {
+  /** 流式增量扇出口（T3 SSE 的 chunk 帧源——50ms 合批在彼处，本口只转发）。
+   *  think 形参 = 思考增量分路标（:169 Set 元素型/:257 发射点本就两参——签名面补齐，零行为变化）。 */
+  onChunk(cb: (t: string, think: boolean) => void): () => void {
     this.chunkSubs.add(cb);
     return () => { this.chunkSubs.delete(cb); };
   }
