@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ModuleContext } from "@orosus/contracts/module";
-import type { Tool } from "@orosus/contracts/tool";
+import type { Tool, ToolIdentity } from "@orosus/contracts/tool";
 import type { Fs } from "@orosus/contracts/fs";
 import def from "./index.ts";
 
@@ -716,5 +716,67 @@ describe("code review P3 批（2026-09-28）", () => {
   it("MB-15 模块 description 补全五工具（read/write/edit/glob/grep——README 同步）", () => {
     expect(def.description).toContain("glob");
     expect(def.description).toContain("grep");
+  });
+});
+
+// ——读守卫记忆按身份分桶（批次一 T5 / 问题3病灶3）：分桶键 = ctx.agent?.agentId ?? "main"——主/子各持一份
+// readState（写前比对）与 lastRead（mtime 去重），互不稀释：子的读不满足主的 edit「先读」前置、
+// 主的新鲜读不洗白子的写前守卫旧印象、子的读不替主触发 file_unchanged
+describe("tool-fs 读守卫记忆按身份分桶（T5）", () => {
+  const agent = (agentId: string): ToolIdentity => ({ agentId, depth: 1 });
+  // 按执行身份驱动（不带 agent 字段 = 主对话——批次一统一约定：ctx.agent 缺省即主）
+  const runAs = async (tool: Tool, args: unknown, who?: ToolIdentity) => {
+    const exec = await tool.resolveExecution(args);
+    return exec.execute({
+      callId: "c1", signal: new AbortController().signal, log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} },
+      ...(who !== undefined ? { agent: who } : {}),
+    });
+  };
+  const setup = async () => {
+    const { ctx, tools } = fakeCtx();
+    await def.activate(ctx);
+    return { read: tools[0]!, write: tools[1]!, edit: tools[2]! };
+  };
+
+  it("① 子桶 read → 主桶 edit 同文件仍获「本会话尚未读取过该文件」前置提示（子的读不替主背书）；主自读后提示消失", async () => {
+    writeFileSync(join(dir, "t5a.txt"), "alpha\nbeta\n");
+    const t = await setup();
+    await runAs(t.read, { path: "t5a.txt" }, agent("a")); // 子代理读过（共享实现 = 主桶被稀释成「已读」）
+    const miss = await runAs(t.edit, { path: "t5a.txt", edits: [{ oldText: "gamma", newText: "x" }] }); // 主桶未读
+    expect(miss.isError).toBe(true);
+    expect(miss.output).toContain("本会话尚未读取过该文件"); // 分桶：主桶空——提示仍在
+    await runAs(t.read, { path: "t5a.txt" }); // 主自己读一次
+    const miss2 = await runAs(t.edit, { path: "t5a.txt", edits: [{ oldText: "gamma", newText: "x" }] });
+    expect(miss2.isError).toBe(true); // gamma 仍不存在（未找到待替换文本照报）
+    expect(miss2.output).not.toContain("本会话尚未读取过该文件"); // 主桶已有自己的记录——提示消失（桶内功能不破）
+  });
+
+  it("② 主桶 read → 子桶 write 仍被 mtime 守卫拦住要求先读（主的新鲜读不洗白子的旧印象）；子重读后放行", async () => {
+    writeFileSync(join(dir, "t5b.txt"), "v1\n");
+    const t = await setup();
+    await runAs(t.read, { path: "t5b.txt" }, agent("a")); // 子读过 v1（子桶记 t1）
+    writeFileSync(join(dir, "t5b.txt"), "v2\n");
+    bumpMtime(join(dir, "t5b.txt")); // 强制 mtime 前移——不赌时序
+    await runAs(t.read, { path: "t5b.txt" }); // 主读过 v2（共享实现 = 记录被主刷新成新鲜 → 子的旧印象被洗白）
+    const blocked = await runAs(t.write, { path: "t5b.txt", content: "按旧印象覆盖\n" }, agent("a"));
+    expect(blocked.isError).toBe(true); // 分桶：子桶仍 t1——照拦（防子按 v1 旧印象覆盖 v2）
+    expect(blocked.output).toContain("读取后被修改过");
+    await runAs(t.read, { path: "t5b.txt" }, agent("a")); // 子重读最新
+    const ok = await runAs(t.write, { path: "t5b.txt", content: "子代理重读后写入\n" }, agent("a"));
+    expect(ok.isError).toBe(false);
+  });
+
+  it("③ lastRead 去重同款分桶：子读过的文件主再读仍得全文（不 file_unchanged），反向亦然", async () => {
+    writeFileSync(join(dir, "t5c.txt"), "MARK\n");
+    writeFileSync(join(dir, "t5d.txt"), "TAG\n");
+    const t = await setup();
+    await runAs(t.read, { path: "t5c.txt" }, agent("a"));
+    const mainRead = await runAs(t.read, { path: "t5c.txt" }); // 主读同文件同参
+    expect(mainRead.output).toContain("1→MARK");
+    expect(mainRead.output).not.toContain("file_unchanged");
+    await runAs(t.read, { path: "t5d.txt" }); // 主先读
+    const subRead = await runAs(t.read, { path: "t5d.txt" }, agent("a")); // 子再读
+    expect(subRead.output).toContain("1→TAG");
+    expect(subRead.output).not.toContain("file_unchanged");
   });
 });

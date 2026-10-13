@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, readdirSync, realpathSync, statSync } from
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
-import { Access, defineTool, type Tool } from "@orosus/contracts/tool";
+import { Access, defineTool, type Tool, type ToolContext } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
 
 /** fs 能力的本地实现（规则 1 提供者）。**读面放开（2026-10-01 批 C 方案一拍板：读任意绝对路径——
@@ -315,8 +315,9 @@ const declaredPath = (fs: LocalFs, path: string): string => {
 
 /**
  * 写前比对状态（M4.5 T7②——决策 24④，cc readFileState 同族）：path → 上次读取时的 mtime（+全量读的内容快照）。
- * 模块级共享（read 记 / write·edit 查并刷新）——主对话与所有子代理同图同工具实例，天然互相看得见：
- * A 读过、B 改了、A 再写 = 被拦要求重读（「读后被改还按旧印象覆盖」正是写乱的主因）。
+ * 按执行身份分桶（批次一 T5 / 问题3病灶3，桶选择在 activate 内 readStateOf）：read 记 / write·edit 查并刷新
+ * 各走各桶——主对话与子代理互不稀释：A 读过、B 改了、A 再写 = 被拦要求重读（「读后被改还按旧印象覆盖」
+ * 正是写乱的主因）；反向同样成立——B 的读记录不替 A 背书（A 没读过不受拦），B 的新鲜读/写刷新不洗白 A 的旧印象。
  * 写成功后刷新记录——自己连续写（write→edit）不会被自己的写拦住。
  */
 type ReadState = Map<string, { mtimeMs: number; content?: string }>;
@@ -363,9 +364,7 @@ const noteWrite = (fs: LocalFs, path: string, readState: ReadState, knownContent
   }
 };
 
-function readTool(fs: LocalFs, readState: ReadState): Tool {
-  // mtime 去重状态（cc readFileState 同款）：键 = 归一绝对路径+offset+limit，值 = mtimeMs——文件被改即失效
-  const lastRead = new Map<string, number>();
+function readTool(fs: LocalFs, readStateOf: (tctx: ToolContext) => ReadState, lastReadOf: (tctx: ToolContext) => Map<string, number>): Tool {
   return defineTool({
     name: "tool-fs__read",
     description: "Read file contents with optional line range. Results include line numbers (N→text format).\nUse this tool — not shell commands like cat/head/tail — to inspect text files.\nAbsolute paths are accepted and may point outside the working directory (e.g. other local repos the user referenced); writes stay confined to the working directory.\nSensitive files (.env / SSH keys / credentials, incl. variants) are denied by default — ask the user to provide such content directly if truly needed.\nParameters:\n  path: Relative path (or absolute path) to the file\n  offset: 1-based starting line number (optional)\n  limit: Maximum number of lines to return (optional)\nDefaults to the first 2000 lines; use offset (e.g. offset=2001) for continuation.\nRe-reading an unchanged file with the same range returns a file_unchanged notice instead of repeating content.\nFiles larger than 1MB are rejected (use grep to locate content or shell tools to read sections); binary files are rejected.\nLines longer than 8KB are truncated.",
@@ -381,7 +380,11 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
         // 不与调度器按 cwd 归一的基准错位；解析失败回落原始串（execute 内自会带内报错）
         accesses: [Access.fsRead(declaredPath(fs, path))],
         approvalRule: "tool-fs__read",
-        execute: async () => {
+        execute: async (tctx) => {
+          // 桶按执行身份取（批次一 T5）——守卫/去重逻辑零改动，只换数据源（lastRead 键 = 归一绝对路径+offset+limit，
+          // 值 = mtimeMs——文件被改即失效；桶随身份隔离后子读过的文件主再读仍得全文）
+          const readState = readStateOf(tctx);
+          const lastRead = lastReadOf(tctx);
           try {
             const abs = fs.resolveAbs(path); // MB-03：状态键统一绝对路径（拼写变体同键）
             if (isSensitivePath(abs)) {
@@ -436,7 +439,7 @@ function readTool(fs: LocalFs, readState: ReadState): Tool {
   });
 }
 
-function writeTool(fs: LocalFs, readState: ReadState): Tool {
+function writeTool(fs: LocalFs, readStateOf: (tctx: ToolContext) => ReadState): Tool {
   return defineTool({
     name: "tool-fs__write",
     description: "Create a new file or completely replace an existing file's contents.\nUse this tool — not shell echo/redirection or heredocs — to create or overwrite files.\nFor targeted changes to existing files, prefer edit instead (read the file first).",
@@ -446,7 +449,8 @@ function writeTool(fs: LocalFs, readState: ReadState): Tool {
       return {
         accesses: [Access.fsWrite(declaredPath(fs, path))], // CT-04：字面绝对路径声明（按本模块 root 归一）
         approvalRule: "tool-fs__write",
-        execute: async () => {
+        execute: async (tctx) => {
+          const readState = readStateOf(tctx); // 写前比对状态桶按执行身份取（批次一 T5）——守卫逻辑零改动，只换数据源
           try {
             const guard = await writeGuard(fs, path, readState); // 写前比对（决策 24④）
             if (guard !== undefined) return { output: guard, isError: true };
@@ -493,7 +497,7 @@ const locateDivergence = (before: string, oldText: string): string => {
  *  （原样可匹配的从不走这里），文件里真有 N→ 开头的行不受扰。 */
 const stripLineNos = (s: string): string => s.replace(/^\d+→/gm, "");
 
-function editTool(fs: LocalFs, readState: ReadState): Tool {
+function editTool(fs: LocalFs, readStateOf: (tctx: ToolContext) => ReadState): Tool {
   return defineTool({
     name: "tool-fs__edit",
     description: "Make precise text replacements in a file using exact oldText matching.\nUse this tool — not sed/awk — for targeted file edits.\nAll edits are matched against the ORIGINAL file simultaneously (not incrementally).\nEach edit's oldText must appear exactly once, unless replaceAll is set.\nIf two edits overlap, the call fails — merge them or target disjoint regions.\nCRLF-tolerant: on CRLF files, \\n-only line breaks in oldText/newText are auto-normalized to the file's style. Tip: for long CJK (Chinese etc.) lines, quote a short distinctive substring instead of the whole line — matching is byte-exact, and long bracket-dense quotes are prone to transcription slips.",
@@ -510,7 +514,8 @@ function editTool(fs: LocalFs, readState: ReadState): Tool {
       return {
         accesses: [Access.fsWrite(declaredPath(fs, path))], // CT-04：字面绝对路径声明（按本模块 root 归一）
         approvalRule: "tool-fs__edit",
-        execute: async () => {
+        execute: async (tctx) => {
+          const readState = readStateOf(tctx); // 写前比对状态桶按执行身份取（批次一 T5）——守卫/前置提示逻辑零改动，只换数据源
           try {
             const guard = await writeGuard(fs, path, readState); // 写前比对（决策 24④）——edit 自带的现读不替代模型侧的读记录
             if (guard !== undefined) return { output: guard, isError: true };
@@ -713,11 +718,29 @@ export default defineModule({
   activate(ctx) {
     // M1：根 = 进程 cwd；root 配置项待真实需求出现时经本模块 config schema 加入
     const fs = new LocalFs(process.cwd());
-    const readState: ReadState = new Map(); // 写前比对共享状态（read 记 / write·edit 查——M4.5 T7②）
+    // 读守卫记忆分桶（批次一 T5 / 问题3病灶3）：readState（写前比对）与 lastRead（mtime 去重）各按执行身份
+    // 持桶（键 = ctx.agent?.agentId ?? "main"，批次一统一约定）——主与子代理互不稀释。分桶内存随代理数线性
+    // 增长（readState 含全量内容快照为最大头）——生命周期锚在本 activate 闭包（随会话终了/reload 重建清零），
+    // 无进程级累积，本批不做主动清理。
+    const readStates = new Map<string, ReadState>();
+    const readStateOf = (tctx: ToolContext): ReadState => {
+      const key = tctx.agent?.agentId ?? "main";
+      let m = readStates.get(key);
+      if (m === undefined) { m = new Map(); readStates.set(key, m); }
+      return m;
+    };
+    // mtime 去重状态同款分桶（cc readFileState 同款语义）：键 = 归一绝对路径+offset+limit，值 = mtimeMs——文件被改即失效
+    const lastReads = new Map<string, Map<string, number>>();
+    const lastReadOf = (tctx: ToolContext): Map<string, number> => {
+      const key = tctx.agent?.agentId ?? "main";
+      let m = lastReads.get(key);
+      if (m === undefined) { m = new Map(); lastReads.set(key, m); }
+      return m;
+    };
     ctx.provide(FS, fs);
-    ctx.contribute.tool(readTool(fs, readState));
-    ctx.contribute.tool(writeTool(fs, readState));
-    ctx.contribute.tool(editTool(fs, readState));
+    ctx.contribute.tool(readTool(fs, readStateOf, lastReadOf));
+    ctx.contribute.tool(writeTool(fs, readStateOf));
+    ctx.contribute.tool(editTool(fs, readStateOf));
     ctx.contribute.tool(globTool(fs));
     ctx.contribute.tool(grepTool(fs));
   },
