@@ -2,7 +2,7 @@ import { orosusHome } from "@orosus/contracts/home";
 import { basename, dirname, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import type { CommandUi, HostInfo, LlmPort, ModuleDefinition, SettingsService } from "@orosus/contracts/module";
-import type { Chunk, ContentPart, ModelMessage, StreamFn } from "@orosus/contracts/provider";
+import type { Chunk, ContentPart, ModelMessage, StreamFn, ToolSpec } from "@orosus/contracts/provider";
 import { createDiagSink, createLogger } from "./diag/logger.ts";
 import { hardeningNote, JsonlSessionStore, lastUsageTotal, sumUsage } from "./session/jsonl.ts";
 import { SqliteSessionStore, sqliteAvailable } from "./session/sqlite.ts";
@@ -171,7 +171,8 @@ export interface Harness {
   /** 双击 Esc 全停（M4.5 T14/决策 12）：停止全部子代理（在跑/排队），未答审批自动按拒绝收场。 */
   stopAllSubagents(): void;
   /** 宿主二级调用口（m5-btw T1，/btw 直调用）：返回 llmHolder.impl——模块 ctx.llm 转发的同一实现体（D39）。
-   *  调用时解析当前 provider/model（含 /model 覆盖）、内建 tools:[]、全程零落盘（不经 store/loop）。 */
+   *  调用时解析当前 provider/model（含 /model 覆盖）、缺省 tools:[]（W5 起可选传 tools——btw 只读侧问用；
+   *  既有二级调用不传，语义零变化）、全程零落盘（不经 store/loop）。 */
   llm(): LlmPort;
   pendingConfirms(): { name: string; version: string; layer: "user" | "project"; root: string; reason: string; entryHash: string; def: import("@orosus/contracts/module").ModuleDefinition }[];
   /** 宿主日志口（T4/S10）：宿主侧信息性事件写诊断日志——与 kernel 同一 sink 同一队列（lvl=info；
@@ -1142,7 +1143,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // ctx.llm 实现（D39/T4 + 补强 T3 三扩展 + M4-3 T1b model/webSearch/listModels 扩展）：
   // 调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
   llmHolder.impl = {
-    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }) =>
+    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean; tools?: readonly ToolSpec[] }) =>
       (async function* (): AsyncGenerator<Chunk> {
         let resolved: { stream: StreamFn; model: string };
         try {
@@ -1158,7 +1159,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           model: resolved.model,
           system: req.system ?? "",
           messages: req.messages,
-          tools: [], // 二级调用不带客户端工具（D39）——webSearch 是服务端搜索声明，与 tools 正交（M4-3 T1b）
+          // 工具面透传（web 批 W5）：req.tools 给了就带（btw 只读侧问工具面），缺省 = 空——二级调用
+          // 不带客户端工具（D39）原语义不变（compaction/自动标题零变化）。readonly→可变数组拷贝一份
+          tools: req.tools === undefined ? [] : [...req.tools],
           ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
           ...(req.webSearch !== undefined ? { webSearch: req.webSearch } : {}),
           signal: req.signal ?? new AbortController().signal,

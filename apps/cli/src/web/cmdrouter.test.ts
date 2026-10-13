@@ -324,14 +324,16 @@ describe("web T6：命令路由 cmdrouter", () => {
       sessionsRoot: join(home, "sessions"),
     });
     await hs.ready;
-    const frames: { phase: string; text: string }[] = [];
+    const frames: { tab: string; phase: string; text: string; round: number }[] = [];
     hs.onBtw((f) => frames.push({ ...f }));
 
     const r = await hs.dispatch("/btw 这是什么");
     expect(r).toEqual({ ok: true }); // 受理即回——侧问不挂 HTTP（答案经流帧小窗）
     await waitFor(() => frames.some((f) => f.phase === "answer"));
     expect(frames.some((f) => f.phase === "answering" && f.text === "侧问")).toBe(true); // 累积式流帧
-    expect(frames.some((f) => f.phase === "answer" && f.text === "侧问答案")).toBe(true);
+    // W5 帧形改造：帧带 tab + round（旧单轮路径固定 tab "btw"、round 1——新多轮路径 per-tab 实例）
+    expect(frames.some((f) => f.phase === "answering" && f.text === "侧问" && f.tab === "btw" && f.round === 1)).toBe(true);
+    expect(frames.some((f) => f.phase === "answer" && f.text === "侧问答案" && f.tab === "btw" && f.round === 1)).toBe(true);
 
     // llm 请求形状：system 带侧问话术、末消息 = 问题（buildBtwRequest 纯函数拼装）
     expect(requests.length).toBe(1);

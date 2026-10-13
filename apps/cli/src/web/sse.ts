@@ -61,8 +61,9 @@ interface SseClient {
   /** 挂起的思考增量批（2026-10-12 走查：reasoning/delta 与正文分路——帧载荷 {text, think:true}；
    *  同窗内思考先于正文落地——模型先想后答的自然序）。 */
   thinkBuf: string | undefined;
-  /** 挂起的 btw 批（累积式——窗内后到覆盖先到，一次成帧；§5 律二同款降频）。 */
-  btwBuf: BtwFrame | undefined;
+  /** 挂起的 btw 帧批（W5 多轮化：answering 累积式同 tab 窗内合并（律二降频——每窗至多一条），
+   *  tool/answer/error 终态与跨 tab 帧保序排队——单问内「tool→answering→answer」与多 tab 并流不丢帧）。 */
+  btwBuf: BtwFrame[];
   chunkTimer: NodeJS.Timeout | undefined;
   pingTimer: NodeJS.Timeout | undefined;
   /** 已写出最新 ev seq——快照段与 live 帧的去重锚（注册先于快照的竞争窗由此兜住）。 */
@@ -145,7 +146,7 @@ const detachClient = (c: SseClient): void => {
     c.pingTimer = undefined;
   }
   c.chunkBuf = "";
-  c.btwBuf = undefined;
+  c.btwBuf = [];
   const set = fanouts.get(c.hs);
   if (set !== undefined) {
     set.delete(c);
@@ -169,8 +170,8 @@ const armChunkFlush = (c: SseClient): void => {
   c.chunkTimer.unref?.();
 };
 
-/** 落地挂起的 chunk 批：一次成帧入链（取消计时器——窗提前关）。btw 批同窗落地（累积式覆盖——
- *  一次成帧；§3 帧型表外新增帧面，T6 报告登记）。 */
+/** 落地挂起的 chunk 批：一次成帧入链（取消计时器——窗提前关）。btw 批同窗保序落地（W5 多轮化：
+ *  tool/answer/error 与跨 tab 帧不丢——入链序 = 到达序；§3 帧型表外新增帧面，T6 报告登记）。 */
 const flushChunkBatch = (c: SseClient): void => {
   if (c.chunkTimer !== undefined) {
     clearTimeout(c.chunkTimer);
@@ -186,10 +187,11 @@ const flushChunkBatch = (c: SseClient): void => {
     c.chunkBuf = "";
     enqueue(c, () => writeTask(c, () => writeFrame(c.res, "chunk", { text })));
   }
-  const btw = c.btwBuf;
-  if (btw !== undefined && !c.closed) {
-    c.btwBuf = undefined;
-    enqueue(c, () => writeTask(c, () => writeFrame(c.res, "btw", btw)));
+  if (c.btwBuf.length > 0 && !c.closed) {
+    const frames = c.btwBuf.splice(0);
+    for (const btw of frames) {
+      enqueue(c, () => writeTask(c, () => writeFrame(c.res, "btw", btw)));
+    }
   }
 };
 
@@ -263,7 +265,7 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
     chain: Promise.resolve(),
     chunkBuf: "",
     thinkBuf: undefined,
-    btwBuf: undefined,
+    btwBuf: [],
     chunkTimer: undefined,
     pingTimer: undefined,
     lastSeq: after, // 重连游标：seq ≤ after 客户端已知——去重锚初值
@@ -299,9 +301,14 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
       armChunkFlush(c);
     }),
     hs.onQueue((items) => sendDirect(c, "queue", { items })), // 整表快照帧（多标签一致性）
-    hs.onBtw((f) => { // T6 侧问流帧（累积式合批——与主流 chunk 通道分面不串台）
+    hs.onBtw((f) => { // T6 侧问流帧（W5 多轮化：answering 同 tab 窗内合并、其余保序——与主流 chunk 通道分面不串台）
       if (c.closed) return;
-      c.btwBuf = f;
+      if (f.phase === "answering") {
+        // 累积式合并：同 tab 挂起的旧 answering 帧让位（最新已含全部正文——律二每窗至多一条）
+        const i = c.btwBuf.findIndex((x) => x.tab === f.tab && x.phase === "answering");
+        if (i >= 0) c.btwBuf.splice(i, 1);
+      }
+      c.btwBuf.push(f);
       armChunkFlush(c);
     }),
   );

@@ -25,7 +25,7 @@
  *  /fork）→ 409 语义 {error}；两表外默认档 = 与消息同队（对齐 TUI「其余命令与消息照旧排队」
  *  main.ts:1401）；/quit 族 busy 特例 = 先 cancel 再关当前会话（TUI :1400 立即打断同款）。 */
 import { readFileSync } from "node:fs";
-import { buildBtwRequest, BTW_USAGE_HINT } from "../btw-cmd.ts";
+import { buildBtwRequest, BTW_USAGE_HINT, type BtwRound } from "../btw-cmd.ts";
 import { formatPsList, scanWithSelf } from "../ps.ts";
 import { t } from "../i18n/app.ts";
 import { SKILL_MARK_PREFIX, SKILL_MARK_TAIL } from "../i18n/protocol-strings.ts";
@@ -116,15 +116,17 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
       return { output: last === undefined ? BTW_USAGE_HINT : btwArchiveText(last) }; // 无参回看（D7 内存槽）
     }
     // 参数式：受理即回——runBtw 后台收流经 onBtw 扇出（SSE btw 帧小窗）；完成归档 lastBtw
+    // W5 帧形：帧带 tab + round（旧单轮路径固定 "btw"/1；多轮 per-tab 实例走 btw-service.askBtw——
+    // 本分支切换并入 W6 与前端 handleMark 同 commit）
     let acc = "";
     void runBtw(hs, args, (delta) => {
       acc += delta;
-      hs.emitBtw({ phase: "answering", text: acc }); // 累积式（前端晚开窗也能整段渲染）
+      hs.emitBtw({ tab: "btw", phase: "answering", text: acc, round: 1 }); // 累积式（前端晚开窗也能整段渲染）
     }).then(
-      (text) => { hs.emitBtw({ phase: "answer", text }); },
+      (text) => { hs.emitBtw({ tab: "btw", phase: "answer", text, round: 1 }); },
       (err) => {
         if (err instanceof Error && err.message === BTW_REPLACED) return; // 被新侧问取代——新问占窗，不投终态
-        hs.emitBtw({ phase: "error", text: err instanceof Error ? err.message : String(err) });
+        hs.emitBtw({ tab: "btw", phase: "error", text: err instanceof Error ? err.message : String(err), round: 1 });
       },
     );
     return { output: "" };
@@ -141,10 +143,13 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
 
 // ---------- /btw（G2：旁路快问——不打断主对话、零落盘、lastBtw server 持） ----------
 
-/** 每会话 btw 状态：单飞控制器（新问先中止旧在飞——CLI 进程级单件的会话级化）+ 回看归档。 */
+/** 每会话 btw 状态：单飞控制器（新问先中止旧在飞——CLI 进程级单件的会话级化；多轮 per-tab 实例的
+ *  控制器在 btw-service 各自持有，此处 ctrl 属旧单轮路径）+ 回看归档（W5 起存 rounds 串）。 */
 interface BtwState {
   ctrl?: AbortController;
-  last?: { question: string; text: string };
+  /** 最近一次完成侧问的问答轮串（仅 answer 态归档——被中止/失败的问不入；W5 多轮化：内存槽随
+   *  rounds 形存，btw-service 每轮完成经 archiveBtwRounds 覆写）。 */
+  last?: BtwRound[];
   hooked?: boolean; // close 钩子已注册（会话关停时中止在飞侧问）
 }
 const btwBySession = new WeakMap<HostedSession, BtwState>();
@@ -152,13 +157,22 @@ const btwBySession = new WeakMap<HostedSession, BtwState>();
 /** 被新侧问取代的哨兵（btw-cmd.ts openBtw 同字面量——终态不投帧，新问接管小窗）。 */
 const BTW_REPLACED = "已被新侧问取代";
 
-/** 无参 /btw 回看数据口（D7）：lastBtw 内存槽（仅 answer 态归档——被中止/失败的问不入）。 */
-export function lastBtwOf(hs: HostedSession): { question: string; text: string } | undefined {
+/** 无参 /btw 回看数据口（D7）：lastBtw 内存槽（仅 answer 态归档——被中止/失败的问不入）。
+ *  W5 起返回 rounds 串（旧单轮路径归档单元素数组——消费面 btwArchiveText 逐轮拼接）。 */
+export function lastBtwOf(hs: HostedSession): BtwRound[] | undefined {
   return btwBySession.get(hs)?.last;
 }
 
-/** 回看文本形态（CLI 行模式 `[侧问] 问\n答` 同形——前端 view 窗整段渲染）。 */
-const btwArchiveText = (last: { question: string; text: string }): string => `[侧问] ${last.question}\n${last.text}`;
+/** rounds 归档写口（btw-service 每轮 answer 完成时覆写——最近完成侧问的问答链）。 */
+export function archiveBtwRounds(hs: HostedSession, rounds: BtwRound[]): void {
+  const st = btwBySession.get(hs) ?? {};
+  btwBySession.set(hs, st);
+  st.last = [...rounds];
+}
+
+/** 回看文本形态（CLI 行模式 `[侧问] 问\n答` 同形逐轮拼接——前端 view 窗整段渲染；无参 /btw 的
+ *  W6 前端消费为开 tab 展示，此文本形为兜底）。 */
+const btwArchiveText = (rounds: BtwRound[]): string => rounds.map((r) => `[侧问] ${r.q}\n${r.a}`).join("\n");
 
 /** 带参侧问（brief 签名）：buildBtwRequest（btw-cmd.ts 纯函数）+ h.llm().stream 直调收流——
  *  零落盘（不经 store/loop，events 无 user/message）；onChunk 收 text/delta 增量；错误带内
@@ -192,7 +206,7 @@ export async function runBtw(hs: HostedSession, q: string, onChunk: (t: string) 
     // reasoning/usage/server-search：侧问小窗不消费
   }
   if (replaced()) throw new Error(BTW_REPLACED); // 收流途中被新问取代
-  st.last = { question: q, text }; // 只有走完的 answer 态归档
+  st.last = [{ q, a: text }]; // 只有走完的 answer 态归档（旧单轮路径：单元素 rounds 串）
   return text;
 }
 

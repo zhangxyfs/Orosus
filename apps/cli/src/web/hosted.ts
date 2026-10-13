@@ -57,12 +57,16 @@ export interface SendResult {
   mark?: string;
 }
 
-/** btw 流帧（T6 cmdrouter 消费——SSE `event: btw` 帧源）：answering = 累积正文（晚开窗整段渲染）、
- *  answer = 终态全文、error = 失败原因。旁路快问不经 turn/chunk 通道（零落盘），独立帧面与主流
- *  区分（busy 期 /btw 与主 turn 并流不串台）。 */
+/** btw 流帧（T6 cmdrouter 消费——SSE `event: btw` 帧源；W5 多轮化扩形）：tab = 侧问选项卡 id
+ *  （多轮 per-tab 实例——帧随 tab 路由到对应选项卡；旧单轮路径固定 "btw"）；answering = 累积正文
+ *  （晚开窗整段渲染）、tool = 工具查证中（前端显「查证中…」——W6 消费，本批只定帧形）、answer =
+ *  终态全文、error = 失败原因；round = 问题轮序（1 起——同轮内的查证与回答同号）。旁路快问不经
+ *  turn/chunk 通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。 */
 export interface BtwFrame {
-  phase: "answering" | "answer" | "error";
+  tab: string;
+  phase: "answering" | "answer" | "error" | "tool";
   text: string;
+  round: number;
 }
 
 /** HostedSession 装配入参（brief 签名 + 少量可选注入面——T1 先例：可选注入不破坏签名形状）：
@@ -579,14 +583,16 @@ export class HostedSession {
     }
   }
 
-  /** btw 流状态扇出口（T6 cmdrouter 消费——SSE `event: btw` 帧源）：旁路快问不经 turn/chunk
-   *  通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。返回退订函数。 */
+  /** btw 流状态扇出口（T6 cmdrouter 消费——SSE `event: btw` 帧源；W5：帧带 tab/round）：旁路快问
+   *  不经 turn/chunk 通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。
+   *  返回退订函数。 */
   onBtw(cb: (f: BtwFrame) => void): () => void {
     this.btwSubs.add(cb);
     return () => { this.btwSubs.delete(cb); };
   }
 
-  /** btw 流状态广播（T6 runBtw 收流转发——answering 累积式/answer/error 终态）。 */
+  /** btw 流状态广播（T6 runBtw / W5 btw-service 收流转发——answering 累积式 / tool 查证 /
+   *  answer/error 终态；帧随 tab 路由）。 */
   emitBtw(f: BtwFrame): void {
     for (const cb of Array.from(this.btwSubs)) { // 快照迭代——回调内退订不跳元素
       try { cb(f); } catch { /* 订阅方异常不拦扇出 */ }

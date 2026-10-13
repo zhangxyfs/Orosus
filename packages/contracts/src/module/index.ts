@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 import type { Tool, ToolInfo } from "../tool/index.ts";
-import type { Chunk, ModelMessage } from "../provider/index.ts";
+import type { Chunk, ModelMessage, ToolSpec } from "../provider/index.ts";
 
 /** 核心模块 API 主版本。核心按主版本做兼容检查（支持 N 与 N-1，见设计 §8.5）。 */
 export const MODULE_API_VERSION = 1;
@@ -380,8 +380,10 @@ export interface LlmPort {
    * @param req.maxTokens - 输出上限 token 数（正整数；可省 = 不限）。
    * @param req.model - 钉非当前提供商的模型时用（"provider/model" 限定形；可省 = 当前模型。切分口径（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id——嵌套 id 如 openai/gpt-4o 原样保留，与核心 parseModel 同口径）。
    * @param req.webSearch - 声明服务端原生搜索（端点不支持时被忽略；可省）。
+   * @param req.tools - 客户端工具面（可省——缺省 = 不带客户端工具，D39 二级调用语义不变；
+   *   web 批 W5：btw 只读侧问的工具面经此通道透传，模型可见可调）。
    */
-  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean }): AsyncIterable<Chunk>;
+  stream(req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean; tools?: readonly ToolSpec[] }): AsyncIterable<Chunk>;
   /** 模型目录（SW-17）：跨 provider 槽聚合的可用模型（条目统一 `provider/model` 限定形——钉选值同款格式；
    *  切分口径同 stream.model（CT-02 钉）：首个 "/" 前 = 提供商名、其余整体 = 模型 id，嵌套 id 不截断——
    *  显示层取尾段会丢前缀，消费方须按此口径切分）。

@@ -21,6 +21,7 @@ import { resolveAtRefs } from "../atfile.ts";
 import { INPUT_ECHO_EVENT } from "../session-io.ts";
 import { MAX_IMAGES_PER_MESSAGE, resolveImageIds } from "./api-files.ts";
 import { webCommandUiOf } from "./bridge-ui.ts";
+import { askBtw } from "./btw-service.ts";
 import { readPins, togglePin } from "./pins.ts";
 import { hideCwd, readHidden, unhideCwd } from "./workspaces.ts";
 import { archiveSession, deleteSession, listArchived, renderMarkdown, unarchiveSession } from "./session-actions.ts";
@@ -334,6 +335,50 @@ registerRoute("POST", "/api/sessions/:sid/cancel", async (req, res, params) => {
   }
   hs.cancel();
   sendJson(res, 200, { ok: true });
+});
+
+/** POST /api/sessions/:sid/btw {tab, q} → 202 {ok}（W5 多轮侧问受理口——选项卡内提问的数据面）：
+ *  - tab = btw 选项卡 id（前端 pane 铸，如 "btw-1"）；q = 本轮问题。受理即回（fire-and-forget）——
+ *    答案/查证/失败经 SSE `event: btw` 帧回流（帧带 tab/round，sse.ts 透传）。
+ *  - 同 tab 新问先中止旧在飞（per-tab 单飞）；已完成轮 rounds 随实例存活——第二问请求体自动含
+ *    前轮问答 + 最新主历史（每轮重取）。只读工具面（read/grep/glob）+ 保险丝 8 轮在 btw-service。
+ *  - 零落盘（D6）：不经 store/loop——主会话 history 与子代理目录均无 btw 痕迹。
+ *  - 浏览态（viewer）会话键入即写意图——同 send 升级 host 再受理（写互斥/活锁口径一致）。 */
+registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  let hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  if (pool !== undefined && pool.host(sid) === undefined) {
+    hs = await pool.ensureHost(sid).catch(() => undefined) ?? hs; // 写意图升级（send 同款）
+  }
+  if (hs.core === undefined) {
+    sendJson(res, 409, { ok: false, error: "会话装配失败" });
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES);
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { tab?: unknown; q?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const tab = typeof body.tab === "string" ? body.tab.trim() : "";
+  const q = typeof body.q === "string" ? body.q.trim() : "";
+  if (tab === "" || q === "") {
+    sendJson(res, 400, { ok: false, error: "tab 与 q 不能为空" });
+    return;
+  }
+  askBtw(hs, tab, q); // 受理即回——流经 onBtw 扇出（SSE btw 帧）
+  sendJson(res, 202, { ok: true });
 });
 
 // ---------- T9：跨项目会话池数据面（bootstrap / sessions / 三形态创建 / 显隐 / 置顶 / 归档 / 删除 / 导出）----------

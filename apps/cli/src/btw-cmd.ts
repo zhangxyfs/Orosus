@@ -17,7 +17,8 @@ import type { FullApp } from "./tui/fullapp.ts";
 import { truncateToWidth } from "./tui/width.ts";
 
 /** 侧问角色话术（§四：四要素 = 五家收敛定式——独立轻量实例 / 主对话未被打断 / 无工具单轮 /
- *  不知道就说不、不许承诺去查）。英文与描述层全英方向一致（m5-tool-lang 口径）。 */
+ *  不知道就说不、不许承诺去查）。英文与描述层全英方向一致（m5-tool-lang 口径）。
+ *  CLI 无工具单轮版（GC1 红线：CLI 形态原样保留）。 */
 export const BTW_ROLE_PROMPT = `You are a side-question assistant. The user asked a quick question on the side
 while the main agent keeps working — the main conversation is NOT interrupted,
 and you are not part of it.
@@ -28,6 +29,29 @@ and you are not part of it.
 - If the answer is not in the conversation, say so plainly instead of guessing.
   Never promise to look something up or take any action.
 - Reply in the same language as the question.`;
+
+/** 侧问角色话术·只读工具版（web 批 W5）：多轮追问 + 允用 Read/Grep/Glob 查证、仍声明只感知主对话。
+ *  工具名用实名（tool-fs__read/grep/glob——模型面 name 即调用名）；无写访问、无派活能力。 */
+export const BTW_ROLE_PROMPT_TOOLS = `You are a side-question assistant. The user asked a quick question on the side
+while the main agent keeps working — the main conversation is NOT interrupted,
+and you are not part of it.
+- The conversation history above is inherited purely as context; each new
+  round re-reads the latest main history — you see only the main conversation,
+  never sub-agent chatter.
+- The user may ask follow-up questions; previous rounds appear in order above
+  the current question.
+- You have read-only tools: tool-fs__read, tool-fs__grep and tool-fs__glob.
+  Use them to verify facts in the project before answering. You cannot write,
+  edit, run commands, or spawn agents — never claim to have done so.
+- If the answer is not in the conversation or the files, say so plainly
+  instead of guessing.
+- Reply in the same language as the question.`;
+
+/** 侧问轮（web 批 W5 多轮形态）：q = 该轮问题、a = 该轮答案——同一 btw 选项卡的问答链（内存态，零落盘）。 */
+export interface BtwRound {
+  q: string;
+  a: string;
+}
 
 /** 无参 /btw 无记录（或尚无归档）时的用法提示——toast 一行，不进流区不落盘（D6 同口径）。 */
 export const BTW_USAGE_HINT = "用法：/btw <问题>——带着当前对话上下文的旁路快问，不打断主对话；无参可回看最近一次问答";
@@ -84,14 +108,28 @@ export function stripTrailingDanglingToolCalls(messages: ModelMessage[]): ModelM
   return [...messages.slice(0, -1), rest];
 }
 
+/** buildBtwRequest 参数化面（web 批 W5）：tools = 工具形态（"none" = CLI 无工具单轮〔缺省同〕、
+ *  "readonly" = web 只读工具多轮）；rounds = 同 tab 前序问答链（平铺进 messages——q→user、a→assistant）。
+ *  无 opts 调用与 CLI 既有产出逐字节一致（快照钉——GC1 红线）。 */
+export interface BtwRequestOpts {
+  tools?: "none" | "readonly";
+  rounds?: BtwRound[];
+}
+
 /** 侧问请求拼装（纯函数）：system = promptSections 现算 + 话术尾段（D4：一次拼进 system，不做
- *  cc 式每问包装——不追缓存纯付 token）；messages = 历史同源投影（deriveMessages，与主循环
- *  同款）+ 尾追问题消息。上下文 = 调用瞬间的一次只读快照（正在流式的回答不可见——assistant/message
- *  完成才落事件）。 */
-export async function buildBtwRequest(h: BtwRequestSource, question: string): Promise<{ system: string; messages: ModelMessage[] }> {
-  const system = `${h.graph().promptSections()}\n\n${BTW_ROLE_PROMPT}`;
+ *  cc 式每问包装——不追缓存纯付 token；W5：话术按 opts.tools 分版——readonly 用只读工具版）；
+ *  messages = 历史同源投影（deriveMessages，与主循环同款——每轮调用现取最新主历史快照）+ rounds
+ *  平铺（q→user、a→assistant）+ 尾追问题消息。上下文 = 调用瞬间的一次只读快照（正在流式的回答
+ *  不可见——assistant/message 完成才落事件）。 */
+export async function buildBtwRequest(h: BtwRequestSource, question: string, opts?: BtwRequestOpts): Promise<{ system: string; messages: ModelMessage[] }> {
+  const role = opts?.tools === "readonly" ? BTW_ROLE_PROMPT_TOOLS : BTW_ROLE_PROMPT;
+  const system = `${h.graph().promptSections()}\n\n${role}`;
   const messages = [
     ...stripTrailingDanglingToolCalls(deriveMessages(await h.history())),
+    ...(opts?.rounds ?? []).flatMap((r): ModelMessage[] => [
+      { role: "user", content: [{ kind: "text", text: r.q }] },
+      { role: "assistant", content: [{ kind: "text", text: r.a }] },
+    ]),
     { role: "user", content: [{ kind: "text", text: question }] } as ModelMessage,
   ];
   return { system, messages };
