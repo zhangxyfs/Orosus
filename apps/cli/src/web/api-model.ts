@@ -295,15 +295,17 @@ registerRoute("POST", "/api/sessions/:sid/permission", async (req, res, params) 
  *  G1：不含 /settings /sessions /provider /permission——走界面；/context 键入放行但菜单不列）。
  *  模块命令（<module>__<command>）**不投影入表**——TUI 菜单同款口径
  *  （slashItems 不列模块命令；走查前曾投影全量 __ 原名被用户否了——键入仍经 cmdrouter 透传面可达，
- *  仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）。 */
-const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[] }[] = [
+ *  仅菜单不列）。key = slashItems 同族 t() 键段（三语齐备）；web: true 两条（/tasks /btw——W7 分栏
+ *  形态文案与 TUI 分家）走 slash.webitems.* 平行键族（三语齐备）——TUI slash.items.* 原键原文案不
+ *  动（GC1 红线：本批 UI 改动只落 apps/cli/src/web）。 */
+const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[]; web?: boolean }[] = [
   { name: "/yolo", key: "yolo" },
   { name: "/auto", key: "auto" },
   { name: "/help", key: "help" },
   { name: "/effort", key: "effort" },
   { name: "/compact", key: "compact" },
-  { name: "/tasks", key: "tasks", aliases: ["task"] },
-  { name: "/btw", key: "btw" },
+  { name: "/tasks", key: "tasks", aliases: ["task"], web: true },
+  { name: "/btw", key: "btw", web: true },
   { name: "/web", key: "web" },
   { name: "/new", key: "new" },
   { name: "/fork", key: "fork" },
@@ -318,11 +320,14 @@ registerRoute("GET", "/api/commands", async (req, res) => {
     notFound(res);
     return;
   }
-  const items: { name: string; desc: string; long: string; aliases?: string[]; module?: boolean }[] = WEB_CMDS.map((c) => ({
-    name: c.name,
-    desc: t(`slash.items.${c.key}.desc`),
-    long: t(`slash.items.${c.key}.long`),
-    ...(c.aliases !== undefined ? { aliases: [...c.aliases] } : {}),
-  }));
+  const items: { name: string; desc: string; long: string; aliases?: string[]; module?: boolean }[] = WEB_CMDS.map((c) => {
+    const fam = c.web === true ? `slash.webitems.${c.key}` : `slash.items.${c.key}`; // W7：/tasks /btw web 分家键（GC1——TUI 键不动）
+    return {
+      name: c.name,
+      desc: t(`${fam}.desc`),
+      long: t(`${fam}.long`),
+      ...(c.aliases !== undefined ? { aliases: [...c.aliases] } : {}),
+    };
+  });
   sendJson(res, 200, { items });
 });

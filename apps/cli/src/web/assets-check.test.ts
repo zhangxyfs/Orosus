@@ -65,14 +65,14 @@ describe("web T15：前端骨架静态资产", () => {
     expect(existsSync(req.resolve("dompurify/dist/purify.js")), "dompurify UMD 应存在").toBe(true);
   });
 
-  it("⑤ GC11：style.css 保留视口驱动几何变量与公式（无写死窗体高）", () => {
+  it("⑤ GC11：style.css 保留视口驱动几何变量与公式（无写死窗体高）——W7 全量复核：55/45 现属右栏状态卡/任务清单（T15 期「右栏弹性」语义随批次三分栏已过时，钉到真实归属）", () => {
     const css = read("style.css");
     expect(css.includes("--app-h:"), "--app-h 变量保留").toBe(true);
     expect(css.includes("100vh"), "视口驱动公式保留").toBe(true);
-    expect(css.includes("flex: 1 1 55%"), "右栏 55/45 弹性保留").toBe(true);
-    expect(css.includes("flex: 1 1 45%"), "右栏 55/45 弹性保留（45）").toBe(true);
+    expect(css.includes(".panel-state { flex: 1 1 55%; }"), "右栏状态卡 55%（.panel-state——与 TUI fullapp 同口径）").toBe(true);
+    expect(css.includes(".panel-todo { flex: 1 1 45%;"), "右栏任务清单 45%（.panel-todo）").toBe(true);
     expect(css.includes("min(560px, calc(100vh - 160px))"), "设置弹窗高度公式保留").toBe(true);
-    expect(css.includes("(max-width: 920px)"), "920px 断点保留").toBe(true);
+    expect(css.includes("(max-width: 920px)"), "920px 断点保留（⑦ 复核：分栏纵向堆叠组仍真）").toBe(true);
   });
 
   it("②补 全资产 style= 内联属性零容忍（T18 清位棘轮——CSP style-src 不放行，换类/CSSOM 实现）", () => {
