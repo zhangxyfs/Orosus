@@ -1,6 +1,9 @@
+/** 分桶注记（批次一 T3 / 问题3病灶1）：子代理 goal 仅为记录——子代理系统提示为 spawn 定格文本、
+ *  不消费主图 promptSections，其 loop 用独立 bus（runner.ts:496），故子代理桶无提示段/续跑注入
+ *  （拍板目标 = 主对话不被劫持，此为其必然形态）。桶选择与落盘路由见 activate 内 storeOf。 */
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
-import { defineTool, type Tool } from "@orosus/contracts/tool";
+import { defineTool, type Tool, type ToolContext } from "@orosus/contracts/tool";
 import { createGoalStore, OBJECTIVE_MAX, BLOCKED_STREAK_REQUIRED, type GoalStore, type GoalState } from "./state.ts";
 
 export { createGoalStore, OBJECTIVE_MAX, BLOCKED_STREAK_REQUIRED, type GoalStore, type GoalState } from "./state.ts";
@@ -21,8 +24,12 @@ const snapshotJson = (s: GoalState | null): string => {
 };
 
 /** 三工具（dsh tool-goal index.ts:196/208/235 与 Reasonix creategoal/getgoal/updategoal 同族——
- *  kimi 的预算工具并入 create 参数，v1 不独设）。 */
-export function goalTools(store: GoalStore): Tool[] {
+ *  kimi 的预算工具并入 create 参数，v1 不独设）。
+ *  桶选择（批次一 T3）：入参既收恒定单桶（既有调用面——单测直配/旧接线，行为不变），也收按执行身份
+ *  取桶的 resolve 函数（activate 装配面）——同一批 Tool 实例被主图与子代理 registry 双注册（runner.ts:515
+ *  全量抄走），身份只能在 execute 期按 ctx 辨。 */
+export function goalTools(selection: GoalStore | ((ctx: ToolContext) => GoalStore)): Tool[] {
+  const storeOf = (ctx: ToolContext): GoalStore => (typeof selection === "function" ? selection(ctx) : selection);
   return [
     defineTool({
       name: "tool-goal__create",
@@ -38,9 +45,10 @@ Use when the user gives a task that needs sustained multi-step work. Do NOT crea
         const { objective, maxRounds, replace } = input as { objective: string; maxRounds?: number; replace?: boolean };
         return Promise.resolve({
           accesses: [],
-          approvalRule: "tool-goal__create",
-          execute: () => {
-            const r = store.create({ objective, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(replace !== undefined ? { replace } : {}) });
+        approvalRule: "tool-goal__create",
+        execute: (ctx) => {
+          const store = storeOf(ctx);
+          const r = store.create({ objective, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(replace !== undefined ? { replace } : {}) });
             if (!r.ok) return Promise.resolve({ output: r.message, isError: true });
             return Promise.resolve({ output: `目标已建立：${objective.slice(0, 200)}${objective.length > 200 ? "…" : ""}——未达终态不要停止（完成报 complete，受阻三轮同因报 blocked）。`, isError: false });
           },
@@ -54,7 +62,7 @@ Use when the user gives a task that needs sustained multi-step work. Do NOT crea
       resolveExecution: () => Promise.resolve({
         accesses: [],
         approvalRule: "tool-goal__get",
-        execute: () => Promise.resolve({ output: snapshotJson(store.current()), isError: false }),
+        execute: (ctx) => Promise.resolve({ output: snapshotJson(storeOf(ctx).current()), isError: false }),
       }),
     }),
     defineTool({
@@ -71,7 +79,8 @@ blocked: ONLY when truly stuck — requires the SAME blocker reported on 3 conse
         return Promise.resolve({
           accesses: [],
           approvalRule: "tool-goal__update",
-          execute: () => {
+          execute: (ctx) => {
+            const store = storeOf(ctx);
             if (action === "complete") {
               const r = store.complete(reason);
               return Promise.resolve({ output: r.ok ? `目标已结清为完成：${reason.slice(0, 200)}` : r.message, isError: !r.ok });
@@ -132,9 +141,25 @@ export default defineModule({
   api: 1,
   logEvents: ["tool-goal/change"], // 变更事件流（存源不存渲染——fold 重建的恢复面顺延：ModuleContext 无会话事件读口，T8 登记）
   activate(ctx) {
-    const store = createGoalStore((s) => ctx.session.append("tool-goal/change", { goal: s }));
-    for (const t of goalTools(store)) ctx.contribute.tool(t);
-    ctx.contribute.promptSection({ order: 22, get text() { return goalSectionText(store); } }); // tool-search 目录段 21 之后的空位（kernel 分配表）
-    ctx.events.on("agent/follow-up", () => goalFollowUp(store)); // 续跑轮（T7——collect 缝订阅，模型欲停即续）
+    // 分桶（批次一 T3 / 问题3病灶1）：Map 按执行身份持桶（键 = ctx.agent?.agentId ?? "main"，批次一统一约定）。
+    // 主桶落盘走 activate 期白名单通道（现状不变）；子代理桶经 T1 ctx.sessionAppend 落自己的 session.jsonl
+    // （载荷带 agentId 归属，同 T2 路由口径——sessionAppend 每 spawn 一次构造，桶创建期捕获即稳态）。
+    const buckets = new Map<string, GoalStore>();
+    const main = createGoalStore((s) => ctx.session.append("tool-goal/change", { goal: s }));
+    buckets.set("main", main); // 预置主桶——下行 promptSection/续跑订阅钉死读它
+    const storeOf = (tctx: ToolContext): GoalStore => {
+      const key = tctx.agent?.agentId ?? "main";
+      let b = buckets.get(key);
+      if (b === undefined) {
+        b = createGoalStore((s) => tctx.sessionAppend?.("tool-goal/change", { goal: s, agentId: key }));
+        buckets.set(key, b);
+      }
+      return b;
+    };
+    for (const t of goalTools(storeOf)) ctx.contribute.tool(t);
+    // 钉死 main 桶（病灶 1 修复核心）：子代理目标改不了主提示段、劫持不了主循环续跑——
+    // 子代理本就无此二缝（见文件头注记），主对话只消费自己的目标
+    ctx.contribute.promptSection({ order: 22, get text() { return goalSectionText(main); } }); // tool-search 目录段 21 之后的空位（kernel 分配表）
+    ctx.events.on("agent/follow-up", () => goalFollowUp(main)); // 续跑轮（T7——collect 缝订阅，模型欲停即续）
   },
 });

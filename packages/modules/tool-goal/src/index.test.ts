@@ -6,7 +6,7 @@ import { createHarness, InMemorySessionStore } from "@orosus/core";
 import { fakeModule, fakeProvider } from "@orosus/testing";
 import type { Chunk } from "@orosus/contracts/provider";
 import type { ModuleContext } from "@orosus/contracts/module";
-import type { Tool } from "@orosus/contracts/tool";
+import type { Tool, ToolIdentity } from "@orosus/contracts/tool";
 import toolGoal, { createGoalStore, goalTools, goalSectionText, goalFollowUp, OBJECTIVE_MAX, type GoalState } from "./index.ts";
 
 let dir = "";
@@ -364,5 +364,93 @@ describe("tool-goal followUp 续跑轮（M4-3 T7）", () => {
     const lastReq = fp.requests[fp.requests.length - 1]!;
     const texts = lastReq.messages.map((m) => JSON.stringify(m)).join("\n");
     expect(texts).toContain("goal-round");
+  });
+});
+
+// ——按身份分桶（批次一 T3 / 问题3病灶1）：分桶键 = ctx.agent?.agentId ?? "main"——主/子各持一份目标；
+//    promptSection 与续跑订阅钉死主桶（子代理目标不改写主提示段、不劫持主循环续跑）
+describe("tool-goal 按身份分桶（T3）", () => {
+  // 模块装配面取证：activate 一次抓全工具注册 + promptSection + follow-up 订阅 + 主桶落盘通道，
+  // 再逐调用指定执行身份直调 execute——消费 T1 的 ctx.agent / ctx.sessionAppend（测试⑩ fake ctx 同款扩面）
+  const assemble = () => {
+    const tools: Tool[] = [];
+    const sections: { order: number; text: string }[] = [];
+    const appends: { type: string; payload: unknown }[] = [];
+    const handlers = new Map<string, () => unknown>();
+    const ctx = {
+      config: undefined, configRead: () => Promise.resolve(undefined), log: noLog,
+      contribute: {
+        tool: (t: Tool) => (tools.push(t), () => {}),
+        command: () => () => {},
+        promptSection: (s: { order: number; text: string }) => (sections.push(s), () => {}),
+      },
+      session: { append: (type: string, payload: unknown) => { appends.push({ type, payload }); } },
+      events: { on: (p: string, h: () => unknown) => (handlers.set(p, h), () => {}), emit: () => Promise.resolve() },
+    } as unknown as ModuleContext;
+    toolGoal.activate(ctx);
+    return {
+      tools, sections, appends,
+      followUp: () => handlers.get("agent/follow-up")!() as { text: string; sourceModule: string }[],
+    };
+  };
+  const agent = (agentId: string): ToolIdentity => ({ agentId, depth: 1 });
+  // exactOptionalPropertyTypes：可选字段不显式传 undefined——按有无条件展开（T2 drive 同款）
+  const call = async (
+    tool: Tool, input: Record<string, unknown>,
+    opts: { agent?: ToolIdentity; sessionAppend?: (type: string, payload: unknown) => void } = {},
+  ) => {
+    const plan = await tool.resolveExecution(input);
+    return plan.execute({
+      callId: "c", signal: new AbortController().signal, log: noLog,
+      ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+      ...(opts.sessionAppend !== undefined ? { sessionAppend: opts.sessionAppend } : {}),
+    });
+  };
+
+  it("① 子代理上下文 create → 主桶 get 仍 null（子目标不串主桶）", async () => {
+    const { tools } = assemble();
+    const [create, get] = tools;
+    const r = await call(create!, { objective: "子代理目标" }, { agent: agent("a") });
+    expect(r.isError).toBe(false);
+    const mainGet = await call(get!, {}); // 主对话身份读——看不见 a 的目标
+    expect(mainGet.output).toContain("当前无活动目标");
+  });
+
+  it("② 主桶 create 后子代理上下文 get 为 null（各读各桶；主桶自身照常可见）", async () => {
+    const { tools } = assemble();
+    const [create, get] = tools;
+    await call(create!, { objective: "主对话目标" });
+    const sub = await call(get!, {}, { agent: agent("a") });
+    expect(sub.output).toContain("当前无活动目标");
+    expect((await call(get!, {})).output).toContain("主对话目标");
+  });
+
+  it("③ 双活例：promptSection 段文本与 goalFollowUp 续跑只映主桶——子代理目标改不了主提示段、劫持不了主循环续跑", async () => {
+    const { tools, sections, followUp } = assemble();
+    const [create] = tools;
+    await call(create!, { objective: "子代理目标" }, { agent: agent("a") }); // 子桶先活
+    await call(create!, { objective: "主对话目标" }); // 主桶后活——双活对峙
+    const text = sections[0]!.text; // getter 活读——此刻两桶均 active
+    expect(text).toContain("主对话目标");
+    expect(text).not.toContain("子代理目标");
+    const notes = followUp();
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toContain("主对话目标");
+    expect(notes[0]!.text).not.toContain("子代理目标");
+  });
+
+  it("④ 落盘路由：子桶变更经 ctx.sessionAppend 落 tool-goal/change（载荷带 agentId）；主桶仍走 activate 期 session.append", async () => {
+    const { tools, appends } = assemble();
+    const [create, , update] = tools; // [create, get, update]——跳位取第三件
+    const events: { type: string; payload: unknown }[] = [];
+    const append = (type: string, payload: unknown) => events.push({ type, payload });
+    await call(create!, { objective: "子目标" }, { agent: agent("a"), sessionAppend: append });
+    await call(update!, { action: "complete", reason: "done" }, { agent: agent("a"), sessionAppend: append });
+    expect(events).toHaveLength(2); // create + complete 均上行子代理会话
+    expect(events[0]).toMatchObject({ type: "tool-goal/change", payload: { agentId: "a", goal: { objective: "子目标", status: "active" } } });
+    expect(events[1]).toMatchObject({ type: "tool-goal/change", payload: { agentId: "a", goal: { status: "complete" } } });
+    await call(create!, { objective: "主目标" }, { sessionAppend: append }); // 主写：即便带落盘口也不走它
+    expect(appends).toHaveLength(1);
+    expect(appends[0]).toMatchObject({ type: "tool-goal/change", payload: { goal: { objective: "主目标" } } });
   });
 });
