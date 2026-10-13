@@ -8,9 +8,11 @@ import type { Fs } from "@orosus/contracts/fs";
 import def from "./index.ts";
 import { resolveShell } from "./shell.ts";
 
-/** 最小 fake ctx：tool-shell 用到 services.get（消费 fs 能力）+ contribute.tool。 */
-function fakeCtx(files: Map<string, string>): { ctx: ModuleContext; tools: Tool[] } {
+/** 最小 fake ctx：tool-shell 用到 services.get（消费 fs 能力）+ contribute.tool；
+ *  events.on 记录（jobs.test.ts 同族——followUp 订阅断言位）。 */
+function fakeCtx(files: Map<string, string>): { ctx: ModuleContext; tools: Tool[]; listeners: Map<string, ((p: unknown) => unknown)[]> } {
   const tools: Tool[] = [];
+  const listeners = new Map<string, ((p: unknown) => unknown)[]>();
   const fakeFs: Fs = {
     read: (p) => {
       const v = files.get(p);
@@ -33,17 +35,32 @@ function fakeCtx(files: Map<string, string>): { ctx: ModuleContext; tools: Tool[
       promptSection: () => () => {},
     },
     session: { append: () => {} },
-    events: { on: () => () => {}, emit: () => Promise.resolve() },
+    events: { on: (type: string, l: (p: unknown) => unknown) => { const arr = listeners.get(type) ?? []; arr.push(l); listeners.set(type, arr); return () => {}; }, emit: () => Promise.resolve() },
   } as unknown as ModuleContext;
-  return { ctx, tools };
+  return { ctx, tools, listeners };
 }
 
-const run = (tool: Tool, args: unknown) =>
+/** agentId 传参 = 子代理身份执行（批次一 T4 测试驱动位——registry 盖章形态的测试侧等价）；缺省 = 主对话。 */
+const run = (tool: Tool, args: unknown, agentId?: string) =>
   tool
     .resolveExecution(args)
     .then((exec) =>
-      exec.execute({ callId: "c1", signal: new AbortController().signal, log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} } }),
+      exec.execute({
+        callId: "c1",
+        signal: new AbortController().signal,
+        log: { trace() {}, debug() {}, info() {}, warn() {}, error() {} },
+        ...(agentId !== undefined ? { agent: { agentId, depth: 1 } } : {}),
+      }),
     );
+
+/** 轮询等待（jobs.test.ts 同款——close 置位类竞速的确定性等待）。 */
+const waitFor = async (cond: () => boolean | Promise<boolean>, ms = 8000): Promise<void> => {
+  const t0 = Date.now();
+  while (!(await cond())) {
+    if (Date.now() - t0 > ms) throw new Error("waitFor 超时");
+    await new Promise((r) => setTimeout(r, 20));
+  }
+};
 
 // 跨平台命令：node -e 在 cmd / sh 下行为一致
 const OK_CMD = `node -e "process.stdout.write('ok')"`;
@@ -307,5 +324,77 @@ describe("tool-shell 壳解析 + cmd 方言护栏接线（走查批 2026-09-26�
       command: `OROSUS_SHELL_PROBE=x node -e "process.stdout.write(process.env.OROSUS_SHELL_PROBE ?? 'none')"`,
     });
     expect(r.output).toBe("x");
+  });
+});
+
+// 批次一 T4 / 问题3病灶2：workdir 记忆按执行身份分桶 + 后台作业属主打标（主 followUp 只排 main 属主）
+describe("tool-shell 身份分桶（批次一 T4 / 问题3病灶2）", () => {
+  const CWD_CMD = `node -e "process.stdout.write(process.cwd())"`;
+  const OK_BG = `node -e "process.stdout.write('bg-ok')"`;
+  const mk = async () => {
+    const { ctx, tools } = fakeCtx(new Map());
+    await def.activate(ctx);
+    return tools[0]!;
+  };
+  let dir: string | undefined;
+  const tmp = () => {
+    dir = mkdtempSync(join(tmpdir(), "orosus-sh-bucket-"));
+    return dir;
+  };
+  afterEach(() => { if (dir !== undefined) { rmSync(dir, { recursive: true, force: true }); dir = undefined; } });
+
+  it("① 子代理桶的 workdir 记忆不漏进主桶：a 桶 workdir 成功后，主桶下一条仍解析进程 cwd", async () => {
+    const tool = await mk();
+    const d = tmp();
+    const sub = await run(tool, { command: CWD_CMD, workdir: d }, "sub-a");
+    expect(sub.isError).toBe(false);
+    expect(sub.output).toBe(d); // 子桶内：workdir 生效并被子桶记忆
+    const main = await run(tool, { command: CWD_CMD });
+    expect(main.output).toBe(process.cwd()); // 旧实现：单例记忆——主桶下一条解析到 d（病灶 2 实锤形态）
+  });
+
+  it("② 互不可见：主桶记忆不漏进子桶；子桶自身记忆链照常；agentId 各持一份", async () => {
+    const tool = await mk();
+    const d = tmp();
+    mkdirSync(join(d, "s1"));
+    await run(tool, { command: CWD_CMD, workdir: d }); // 主桶记忆 = d
+    expect((await run(tool, { command: CWD_CMD }, "sub-a")).output).toBe(process.cwd()); // 子桶不吃主桶记忆
+    await run(tool, { command: CWD_CMD, workdir: join(d, "s1") }, "sub-a"); // 子桶记忆 = d/s1
+    expect((await run(tool, { command: CWD_CMD })).output).toBe(d); // 主桶记忆未被子桶覆盖
+    expect((await run(tool, { command: CWD_CMD }, "sub-b")).output).toBe(process.cwd()); // 另一子代理独立起步
+    expect((await run(tool, { command: CWD_CMD }, "sub-a")).output).toBe(join(d, "s1")); // 子桶自己的记忆链工作
+  });
+
+  it("③ 子代理起的后台作业完成通知不进主 followUp 收集（主属主照常送达——阳性对照）", async () => {
+    const home = mkdtempSync(join(tmpdir(), "orosus-sh-owner-"));
+    const prevHome = process.env["OROSUS_HOME"];
+    process.env["OROSUS_HOME"] = home; // HERMETIC：bg 目录走 orosusHome 单点（jobs.test.ts 同款）
+    const { ctx, tools, listeners } = fakeCtx(new Map());
+    const ret = await def.activate(ctx);
+    try {
+      const followUp = listeners.get("agent/follow-up")!;
+      const sub = await run(tools[0]!, { command: OK_BG, run_in_background: true }, "sub-a");
+      const subId = /bg-[0-9a-f]{8}/.exec(sub.output)![0]!;
+      const main = await run(tools[0]!, { command: OK_BG, run_in_background: true });
+      const mainId = /bg-[0-9a-f]{8}/.exec(main.output)![0]!;
+      // 确定性等待两作业 done：output 工具的 state 头（输出文件有内容 ≠ close 已置——jobs.test.ts ⑭ 同款竞速教训）
+      const output = tools.find((t) => t.name === "tool-shell__output")!;
+      await waitFor(() => run(output, { id: subId }).then((r) => r.output.includes("已结束")));
+      await waitFor(() => run(output, { id: mainId }).then((r) => r.output.includes("已结束")));
+      // 两作业均已 done：主 followUp collect 只出货 main 属主——子代理属主完成通知不在其中
+      //（本批丢弃，见 index.ts 文件头注记）；drain 是一次一报语义，轮询累积安全
+      const texts: string[] = [];
+      await waitFor(() => {
+        texts.push(...(followUp[0]!(undefined) as { text: string }[]).map((n) => n.text));
+        return texts.some((t) => t.includes(mainId));
+      });
+      expect(texts.some((t) => t.includes(mainId))).toBe(true); // 阳性对照：主属主照常送达
+      expect(texts.some((t) => t.includes(subId))).toBe(false); // 旧实现：单池 drain 全出货——子代理作业通知吞进主对话
+    } finally {
+      ret?.dispose?.();
+      if (prevHome === undefined) delete process.env["OROSUS_HOME"];
+      else process.env["OROSUS_HOME"] = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -179,13 +179,17 @@ export function decodeOut(buf: Buffer): string {
     .join("\n");
 }
 
-/** 后台作业登记项。done 在 close 后置位；notified = followUp 已报过（一次一报）。 */
+/** 后台作业登记项。done 在 close 后置位；notified = followUp 已报过（一次一报）。
+ *  owner（批次一 T4）：作业属主键（ctx.agent?.agentId ?? "main"，index.ts 侧打标）——registry 保持
+ *  进程级单件（跨代理互查/互杀 = 进程级语义，known-issues.md:134 已辩护），归属信息随登记走，
+ *  drainNotifications 据此过滤。 */
 export interface BgJob {
   id: string;
   child: ChildProcess;
   file: string;
   command: string;
   startedAt: number;
+  owner: string;
   done?: { code: number | null; chars: number };
   notified: boolean;
 }
@@ -200,7 +204,9 @@ const notificationText = (job: BgJob): string =>
 const STALE_OUTPUT_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** 后台作业注册表（M4-3 T3）：spawn 登记 → 输出落盘追加 → close 置 done → followUp 报完成 → 收尾清杀。
- *  SW-5：id = bg-<短随机>，输出文件 <dir>/bg-<id>.output；SW-7：v1 无超时（用户 kill 或进程自终）。 */
+ *  SW-5：id = bg-<短随机>，输出文件 <dir>/bg-<id>.output；SW-7：v1 无超时（用户 kill 或进程自终）。
+ *  作业属主打标（批次一 T4）：单件保持进程级（跨代理互查/互杀 = 进程级语义），登记记 owner 键、
+ *  完成通知按属主过滤——主 followUp 不再吞子代理作业通知（问题3病灶2）。 */
 export class JobRegistry {
   private jobs = new Map<string, BgJob>();
   readonly dir: string;
@@ -210,8 +216,9 @@ export class JobRegistry {
     this.shell = shell; // 前台/后台共用同一壳结论（走查批 2026-09-26——后台 bash 作业与前台同方言）
   }
 
-  /** 启动作业：立即返回登记项（不等命令完成——输出经文件描述符直接落盘，内存零累积）。 */
-  start(command: string, cwd?: string): BgJob {
+  /** 启动作业：立即返回登记项（不等命令完成——输出经文件描述符直接落盘，内存零累积）。
+   *  owner = 作业属主键（批次一 T4，缺省 "main"——registry 直用方/存量测试零改动）。 */
+  start(command: string, cwd?: string, owner: string = "main"): BgJob {
     mkdirSync(this.dir, { recursive: true });
     const id = `bg-${randomUUID().slice(0, 8)}`;
     const file = join(this.dir, `${id}.output`);
@@ -229,7 +236,7 @@ export class JobRegistry {
             stdio: ["ignore", "pipe", "pipe"],
             detached: process.platform !== "win32",
           });
-    const job: BgJob = { id, child, file, command, startedAt: Date.now(), notified: false };
+    const job: BgJob = { id, child, file, command, startedAt: Date.now(), owner, notified: false };
     child.stdout.on("data", (d: Buffer) => writeSync(fd, d));
     child.stderr.on("data", (d: Buffer) => writeSync(fd, d));
     child.on("error", (err) => writeSync(fd, `\n[spawn 失败：${err.message}]`));
@@ -302,11 +309,13 @@ export class JobRegistry {
   }
 
   /** followUp 收集口：done 且未报的作业置已报并出货（一次一报；kimi 完成通知同款——
-   *  作业完成晚于回合结束也没关系，通知落在下一轮停顿时送达）。 */
-  drainNotifications(): { text: string; sourceModule: string }[] {
+   *  作业完成晚于回合结束也没关系，通知落在下一轮停顿时送达）。
+   *  owner 过滤形参（批次一 T4）：只出货指定属主的作业——主 bus 订阅传 "main"（子代理属主完成通知
+   *  本批无去处/丢弃——子代理 bus 在 runner 私有、模块侧无订阅缝，见 index.ts 文件头注记）。 */
+  drainNotifications(owner: string = "main"): { text: string; sourceModule: string }[] {
     const out: { text: string; sourceModule: string }[] = [];
     for (const job of this.jobs.values()) {
-      if (job.done !== undefined && !job.notified) {
+      if (job.owner === owner && job.done !== undefined && !job.notified) {
         job.notified = true;
         out.push({ text: notificationText(job), sourceModule: "tool-shell" });
       }

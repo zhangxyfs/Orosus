@@ -1,10 +1,16 @@
+/** 分桶/属主注记（批次一 T4 / 问题3病灶2）：①bash 的 workdir 记忆按执行身份分桶（键 =
+ *  ctx.agent?.agentId ?? "main"，批次一统一约定）——子代理的目录记忆不再串进主对话，反之亦然
+ *  （桶选择见 activate 内 memoryOf）。②JobRegistry 保持进程级单件（跨代理互查/互杀 = 进程级语义，
+ *  known-issues.md:134 已辩护），但作业登记记 owner 键，主 bus 的 followUp 订阅只排 main 属主通知——
+ *  **子代理属主作业完成通知本批丢弃**：子代理 bus 在 runner 私有（runner.ts:496）、模块侧无订阅缝，
+ *  未来若要送达需在 runner 为子代理 bus 挂 per-身份 drain（依赖模块暴露口，超出本批）。 */
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { defineModule } from "@orosus/contracts/module";
 import { orosusHome } from "@orosus/contracts/home";
-import { Access, defineTool, type Tool, type ToolResult } from "@orosus/contracts/tool";
+import { Access, defineTool, type Tool, type ToolContext, type ToolResult } from "@orosus/contracts/tool";
 import { FS, type Fs } from "@orosus/contracts/fs";
 import { JobRegistry, killTree, decodeOut, sweepTreeRemnants, type BgJob } from "./jobs.ts";
 import { resolveShell, lintCmdCommand, classifyFailure, type ShellSpec } from "./shell.ts";
@@ -25,6 +31,10 @@ const CAPTURE_TAIL = 256 * 1024;
 /** 跨调用目录记忆（M4-3 T2 伪持久第一半）：记「上次 workdir 参数解析后的绝对路径」——不捕获 shell 内部 cd
  *  （捕获需 shell 感知的 pwd/cd 回写，win32 cmd 与 POSIX 命令不同，SW-9 v1 不做）。 */
 interface ShellMemory { lastWorkdir: string | undefined }
+
+/** 分桶键（批次一统一约定）：ctx.agent 缺省 = 主对话（沿用 ALS 深度 1 语义），否则 agentId。
+ *  记忆分桶与作业属主打标共用此键。 */
+const ownerKeyOf = (tctx: ToolContext): string => tctx.agent?.agentId ?? "main";
 
 /** cwd 解析链：显式 workdir（相对 → 基于上次记忆；无记忆 → 进程 cwd）> 记忆 > 进程 cwd。
  *  目标不存在/不是目录 → 回落进程 cwd 并在结果里说明（cc-haha Shell.ts:222-238 同款兜底，SW-9）。 */
@@ -156,7 +166,9 @@ function dialectTexts(shell: ShellSpec): { description: string; commandHint: str
   };
 }
 
-function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: ShellSpec): Tool {
+/** 记忆取桶函数（批次一 T4）：同一批 Tool 实例被主图与子代理 registry 双注册（runner.ts:515 全量
+ *  抄走），身份只能在 execute 期按 ctx 辨——工厂收取桶函数而非恒定单桶（T3 storeOf 同款取舍）。 */
+function bashTool(fs: Fs, memoryOf: (tctx: ToolContext) => ShellMemory, registry: JobRegistry, shell: ShellSpec): Tool {
   const { description, commandHint } = dialectTexts(shell);
   return defineTool({
     name: "tool-shell__bash",
@@ -183,6 +195,7 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: She
           // 前台/后台同拦（后台只是执行形态，方言问题相同）。bash/sh 壳不拦。
           const guard = shell.kind === "cmd" ? lintCmdCommand(command) : undefined;
           if (guard !== undefined) return Promise.resolve({ output: guard, isError: true });
+          const memory = memoryOf(tctx); // 记忆桶按执行身份取（批次一 T4）——resolveCwd 链与回写只换记忆源，逻辑零变形
           if (run_in_background === true) {
             // 后台（M4-3 T3）：spawn 登记即返回——输出落盘、完成自动通知、勿轮询（kimi bashTool.ts:412-436 同款指引）。
             // cwd 同样走解析链，但不改记忆（命令成败未知——T2 规矩 = 退出码 0 才记）。
@@ -193,7 +206,7 @@ function bashTool(fs: Fs, memory: ShellMemory, registry: JobRegistry, shell: She
             // catch-all 兜底且报错无恢复指引；这里自己接住带内返回。
             let job: BgJob;
             try {
-              job = registry.start(command, cwd);
+              job = registry.start(command, cwd, ownerKeyOf(tctx)); // 属主打标（批次一 T4）——进程级单件内按身份归属
             } catch (err) {
               return Promise.resolve({
                 output: `后台作业启动失败：${err instanceof Error ? err.message : String(err)}——检查输出目录 ${registry.dir} 可写（磁盘空间/权限）后重试，或去掉 run_in_background 改前台执行`,
@@ -304,12 +317,22 @@ export default defineModule({
     const registry = new JobRegistry(defaultBgDir(), shell);
     registry.cleanupStaleOutputs(); // MB-14：启动清陈旧（>7 天的 bg-*.output）——bg 目录不再跨会话无限累积
     activeRegistry = registry;
-    ctx.contribute.tool(bashTool(fs, { lastWorkdir: undefined }, registry, shell)); // 记忆随激活生命周期（reload 重建即清零——新配置新起点）
+    // 记忆分桶（批次一 T4）：Map 按执行身份持桶（键 = ctx.agent?.agentId ?? "main"，ownerKeyOf）。
+    // 记忆随激活生命周期（reload 重建即清零——新配置新起点），桶亦然。
+    const memories = new Map<string, ShellMemory>();
+    const memoryOf = (tctx: ToolContext): ShellMemory => {
+      const key = ownerKeyOf(tctx);
+      let m = memories.get(key);
+      if (m === undefined) { m = { lastWorkdir: undefined }; memories.set(key, m); }
+      return m;
+    };
+    ctx.contribute.tool(bashTool(fs, memoryOf, registry, shell));
     ctx.contribute.tool(outputTool(registry));
     ctx.contribute.tool(killTool(registry));
     // 完成通知 = followUp 收集点订阅（loop.ts:213-216：模型无工具调用欲停时 collect，
-    // 返回非空即作 steering 注入并 continue——作业完成晚于回合结束也落在下一轮停顿时送达）
-    ctx.events.on("agent/follow-up", () => registry.drainNotifications());
+    // 返回非空即作 steering 注入并 continue——作业完成晚于回合结束也落在下一轮停顿时送达）。
+    // 只排 main 属主（批次一 T4）：子代理属主作业完成通知不进主对话（本批丢弃——见文件头注记）
+    ctx.events.on("agent/follow-up", () => registry.drainNotifications("main"));
     // dispose 杀光活作业（disposeAll 消费链，activate.ts:358——reload 换下时清场）
     return {
       dispose: () => {
