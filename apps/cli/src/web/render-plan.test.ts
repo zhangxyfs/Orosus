@@ -399,10 +399,11 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(startFn).toContain("ctx.fragMode"); // 历史孤儿段出生即「已处理」收起
   });
 
-  it("G3 CSS 锚定：组头下边框分隔线 + 收起态隐藏组体（明暗主题变量复用）", () => {
+  it("G3 CSS 锚定：组头无下边框（2026-10-13 用户口令——横线无必要）+ 收起态隐藏组体（明暗主题变量复用）", () => {
     const css = readFileSync(join(ASSETS_DIR, "style.css"), "utf8");
     expect(css).toContain(".work-head {");
-    expect(css).toContain("border-bottom: 1px solid var(--border);");
+    const headRules = css.slice(css.indexOf(".work-head {"), css.indexOf(".work-head .tcaret"));
+    expect(headRules).not.toContain("border-bottom"); // 组头下不画横线（口令去除——防回流钉）
     expect(css).toContain(".work.collapsed .work-body { display: none; }");
   });
 });

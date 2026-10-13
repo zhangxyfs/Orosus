@@ -439,8 +439,13 @@
     workHeadRender(w, '已处理', true, true);
     head.addEventListener('click', function () {
       if (!head.classList.contains('clickable')) return; /* 工作中/无正文轮——点击无效（ZCode onOpenChange=undefined 同款） */
-      w.userToggled = true; /* 手动开合一等交互（spec §3.5）——翻页重估不再补收起 */
-      collapseAnchored(w, !w.classList.contains('collapsed'));
+      /* 手动开合：向下展开零顺滚（2026-10-13 用户口令——同思考块走查八轮定案：被点头行纹丝不动、
+       *  内容向下顺延、用户自滚续读；结算/翻页重估的程序化收起仍走 collapseAnchored 锚定）。 */
+      w.userToggled = true; /* 手动开合一等交互（spec §3.5）——翻页重估不改用户手动态 */
+      var collapsed = w.classList.toggle('collapsed');
+      var c = head.querySelector('.tcaret');
+      if (c) c.textContent = collapsed ? '▸' : '▾';
+      syncToBottom();
     });
     return w;
   }
@@ -453,7 +458,8 @@
     head.classList.toggle('clickable', collapsible);
   }
 
-  /** 开合统一口（锚定纪律：跟随中收起→贴底；非跟随→anchoredToggle 保视口锚）。 */
+  /** 程序化开合口（结算/翻页重估专用——手动点击走 ensureWork 点击器的向下展开零顺滚口径）。
+   *  锚定纪律：跟随中收起→贴底；非跟随→anchoredToggle 保视口锚。 */
   function collapseAnchored(w, collapse) {
     var apply = function () {
       w.classList.toggle('collapsed', collapse);

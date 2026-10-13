@@ -536,7 +536,7 @@ body.light .term-err .term-out { color: #cf222e; }
 
 /* 工作组（2026-10-13 设计：specs/2026-10-13-web-work-section-design.md）——轮内过程容器 */
 .work { margin: 2px 0; }
-.work-head { color: var(--muted-dim); font-size: 0.9em; padding: 2px 6px 3px 2ch; border-bottom: 1px solid var(--border); margin-bottom: 4px; user-select: none; }
+.work-head { color: var(--muted-dim); font-size: 0.9em; padding: 2px 6px 3px 2ch; margin-bottom: 4px; user-select: none; } /* 2026-10-13 用户口令：不画下边框（横线无必要） */
 .work-head.clickable { cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
 .work-head.clickable:hover { background: var(--fg-soft); color: var(--muted); }
 .work-head .tcaret { color: var(--muted); margin-right: 6px; }
