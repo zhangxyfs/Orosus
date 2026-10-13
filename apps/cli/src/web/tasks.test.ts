@@ -8,7 +8,9 @@
  *  - ③ pendingApproval 行 → POST subagents/:id/approval {allow:true} → 子代理继续（真子代理审批全链：
  *    OpenAI 协议假服务双轨分派——主对话派后台单 → 子代理 bash 触发 ask-risky park → 放行后工具真跑、
  *    结论轮收尾、行转 completed）；
- *  - ④ GET subagents/:id/events transcript 回放末 500 条截断（自创值——fabricate 600 行 jsonl）。 */
+ *  - ④ GET subagents/:id/events transcript 回放末 500 条截断（自创值——fabricate 600 行 jsonl）；
+ *  - ⑤ :id 八位 hex 形态校验（终审收口）——%2F 单段穿越形态解码后 id="y/../../etc" 直拼 agents_<id>
+ *    路径 → 400 拒绝（tasks-cmd 名册 [0-9a-f]{8} 同款口径）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -488,6 +490,24 @@ describe("web T7：停止与子代理面", () => {
     // 该 fabricated 单在 /tasks 为历史行（historical:true——无活名册时的纯历史形态）
     const rows = await getTasks(s, "s_ev04");
     expect(rows.some((x) => x.id === "eeee0400" && x.historical === true)).toBe(true);
+
+    await s.stop();
+  }, 60_000);
+
+  it("⑤ GET subagents/:id/events 路径面：:id 非 8 位 hex → 400（%2F 单段穿越形态——终审 93d12907 收口）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home, "http://127.0.0.1:9"); // 引导门放行（死端口——本用例不发 prompt）
+    const cwd = tmpCwd();
+    await seedSession(home, cwd, "s_ev05");
+    const s = await startWeb(home, cwd, "s_ev05");
+
+    // %2F 在单段内存活分段（server.ts 分段→逐段 decodeURIComponent）→ 解码后 id="y/../../etc"——
+    // id 直拼 agents_<id> 文件路径的穿越面，端点入口形态校验拦为 400
+    const bad = await fetch(`${s.base}/api/sessions/s_ev05/subagents/y%2F..%2F..%2Fetc/events`, { headers: s.auth });
+    expect(bad.status).toBe(400);
+    const b = (await bad.json()) as { ok: boolean };
+    expect(b.ok).toBe(false);
 
     await s.stop();
   }, 60_000);

@@ -45,10 +45,10 @@ Use when the user gives a task that needs sustained multi-step work. Do NOT crea
         const { objective, maxRounds, replace } = input as { objective: string; maxRounds?: number; replace?: boolean };
         return Promise.resolve({
           accesses: [],
-        approvalRule: "tool-goal__create",
-        execute: (ctx) => {
-          const store = storeOf(ctx);
-          const r = store.create({ objective, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(replace !== undefined ? { replace } : {}) });
+          approvalRule: "tool-goal__create",
+          execute: (ctx) => {
+            const store = storeOf(ctx);
+            const r = store.create({ objective, ...(maxRounds !== undefined ? { maxRounds } : {}), ...(replace !== undefined ? { replace } : {}) });
             if (!r.ok) return Promise.resolve({ output: r.message, isError: true });
             return Promise.resolve({ output: `目标已建立：${objective.slice(0, 200)}${objective.length > 200 ? "…" : ""}——未达终态不要停止（完成报 complete，受阻三轮同因报 blocked）。`, isError: false });
           },

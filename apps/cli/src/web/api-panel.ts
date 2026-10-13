@@ -434,6 +434,10 @@ registerRoute("POST", "/api/sessions/:sid/subagents/:id/approval", async (req, r
 registerRoute("GET", "/api/sessions/:sid/subagents/:id/events", async (_req, res, params) => {
   const sid = params["sid"] ?? "";
   const id = params["id"] ?? "";
+  if (!/^[0-9a-f]{8}$/.test(id)) {
+    sendJson(res, 400, { ok: false, error: "id 必须为八位十六进制编号" }); // 形态校验（终审收口）：id 直拼 agents_<id> 路径——%2F 单段解码可携穿越形态，tasks-cmd 名册 [0-9a-f]{8} 同款口径
+    return;
+  }
   const hs = await resolveSession(sid);
   if (hs === undefined) {
     notFound(res);
@@ -459,6 +463,10 @@ const agTodoCache = new Map<string, AgTodoCacheEntry>();
 registerRoute("GET", "/api/sessions/:sid/subagents/:id/todo", async (_req, res, params) => {
   const sid = params["sid"] ?? "";
   const id = params["id"] ?? "";
+  if (!/^[0-9a-f]{8}$/.test(id)) {
+    sendJson(res, 400, { ok: false, error: "id 必须为八位十六进制编号" }); // 形态校验（终审收口）：events 端点同款——id 直拼 agents_<id> 路径，先于缓存查拒
+    return;
+  }
   const key = `${sid}/${id}`;
   const cached = agTodoCache.get(key);
   if (cached !== undefined && Date.now() - cached.at < PANEL_CACHE_MS) {

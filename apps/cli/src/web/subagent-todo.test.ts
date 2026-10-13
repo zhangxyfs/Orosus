@@ -4,7 +4,7 @@
  *    （panelTasksFromEvent 同源：content/status → text/state，in_progress→active 映射面一并钉住）；
  *  - 空态：无文件 / 有文件无 todo 事件 → {ok, tasks: []}（「没有清单」不是错误——events 端点同语义）；
  *  - 1s 缓存（panel 同款 TTL 口径）：窗内改盘不出新值、出窗即出新值；
- *  - 路由面：未知 sid → 404。
+ *  - 路由面：未知 sid → 404；:id 非 8 位 hex（%2F 穿越形态）→ 400（终审收口——id 直拼 agents_<id> 路径）。
  *  栈 = tasks.test.ts 同款真栈（runWebSubcommand handover + fabricate 盘上子代理 jsonl——
  *  tasks-cmd.test ㊺ 手法：路径形状 <sessionsDir>/<sid>/agents/agents_<id>/agents/session.jsonl）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -197,6 +197,24 @@ describe("web W4（问题 2）：子代理 todo 悬浮条数据端点（真栈�
 		await new Promise((r) => setTimeout(r, 1_100));
 		const r3 = await getTodo(s, "s_w4c", "ef550021");
 		expect(((await r3.json()) as { tasks: TodoRow[] }).tasks).toEqual([{ text: "次版", state: "done" }]);
+
+		await s.stop();
+	}, 60_000);
+
+	it("④ 路径面：:id 非 8 位 hex → 400（%2F 单段穿越形态——终审 93d12907 收口，events 端点同款）", async () => {
+		const home = tmpHome();
+		process.env["OROSUS_HOME"] = home;
+		writeProviderConfig(home, "http://127.0.0.1:9");
+		const cwd = tmpCwd();
+		await seedSession(home, cwd, "s_w4d");
+		const s = await startWeb(home, cwd, "s_w4d");
+
+		// %2F 在单段内存活分段（server.ts 分段→逐段 decodeURIComponent）→ 解码后 id="y/../../etc"——
+		// id 直拼 agents_<id> 文件路径的穿越面，端点入口形态校验拦为 400
+		const bad = await getTodo(s, "s_w4d", "y%2F..%2F..%2Fetc");
+		expect(bad.status).toBe(400);
+		const b = (await bad.json()) as { ok: boolean };
+		expect(b.ok).toBe(false);
 
 		await s.stop();
 	}, 60_000);
