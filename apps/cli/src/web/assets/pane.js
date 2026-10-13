@@ -223,7 +223,7 @@
 
   /* ── ⌄ 全部选项卡下拉（v2 4634-4677 直裁） ── */
   function dropHtml(q) {
-    return '<div class="ptd-search"><input id="ptd-q" type="text" placeholder="搜索标签页…" value="' + esc(q || '').replace(/"/g, '&quot;') + '" aria-label="搜索标签页"></div>' +
+    return '<div class="ptd-search"><input id="ptd-q" type="text" placeholder="搜索标签页…" value="' + esc(q || '') + '" aria-label="搜索标签页"></div>' +
       '<div class="ptd-sec">打开的标签页</div><div class="ptd-rows" id="ptd-rows">' + dropRowsHtml(tabs, activeTab, q, P.dotOf) + '</div>';
   }
   function renderDrop(q) {

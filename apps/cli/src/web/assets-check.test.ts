@@ -212,6 +212,7 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes(".pt-menu[hidden]"), ".pt-menu [hidden] 兜底").toBe(true);
     expect(css.includes(".pt-drop[hidden]"), ".pt-drop [hidden] 兜底").toBe(true);
     expect(css.includes(".pt-menu .ctx-item:disabled"), "禁用态换类").toBe(true);
+    expect(css.includes(".ctx-menu .ctx-item:disabled"), "右键菜单禁用态作用域（v2 4606）").toBe(true);
 
     const js = read("pane.js");
     /* 纯函数三件套（brief Interfaces 逐字签名） */

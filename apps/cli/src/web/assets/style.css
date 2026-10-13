@@ -928,6 +928,8 @@ body.light .work-head { color: var(--muted); }
 .pt-menu[hidden] { display: none; }
 .pt-menu .ctx-item { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-menu .ctx-item:disabled { opacity: .45; pointer-events: none; }
+/* 右键菜单（#ctx-menu）内禁用行——tab 右键「关闭其他标签」等；v2 4606 原值 */
+.ctx-menu .ctx-item:disabled { opacity: .45; pointer-events: none; }
 /* ⌄ 全部选项卡下拉：搜索框 + 「打开的标签页」清单，行点击切换、行尾 × 关闭 */
 .pt-drop { position: absolute; top: calc(100% + 4px); left: 8px; z-index: 22; width: 300px; background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; box-shadow: 0 12px 32px -14px oklch(0 0 0 / 0.45); }
 .pt-drop[hidden] { display: none; }
