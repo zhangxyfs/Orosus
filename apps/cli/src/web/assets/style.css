@@ -908,10 +908,42 @@ body.light .work-head { color: var(--muted); }
 .app-body.split .lside { flex: 0 0 auto; }
 .app-body.split .main { flex: 1 1 0; }
 
-/* 选项卡条（W1 空壳——.pt-list/.pt-item 等内部结构随 W2 到位；空态文案先行） */
+/* ─── 选项卡条（问题 2 W2——v2 924-957 直裁）：打开并存、显示互斥；各带 ×；
+   左端 ⌄ 全部选项卡下拉、右端 ＋ 新建（类型可扩展）；溢出裁切不滚动 ─── */
 .pane-tabs { position: relative; display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); }
+.pt-list { flex: 1 1 0; display: flex; align-items: flex-end; gap: 2px; min-width: 0; overflow: hidden; }
 .pt-empty { color: var(--muted-faint); font-size: calc(11.5px * var(--fz)); padding: 0 6px 7px; white-space: nowrap; }
+.pt-item { flex: 1 1 0; min-width: 0; max-width: 200px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 7px 6px 11px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); font-size: calc(12px * var(--fz)); cursor: pointer; white-space: nowrap; transition: color 0.15s ease, background 0.15s ease; }
+.pt-item:hover { color: var(--fg); background: var(--fg-soft); }
+.pt-item.sel { color: var(--fg); background: var(--surface-2); border-color: var(--border); position: relative; }
+.pt-item.sel::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--surface-2); }
+.pt-dot { flex: 0 0 auto; font-size: calc(10px * var(--fz)); }
+.pt-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pt-x { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-faint); font-size: calc(10px * var(--fz)); }
+.pt-x:hover { color: var(--err); background: var(--err-soft); }
+.pt-add, .pt-chev { flex: 0 0 auto; width: 24px; height: 24px; margin-bottom: 3px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-dim); border: 1px solid transparent; font-size: calc(12px * var(--fz)); transition: all 0.15s ease; }
+.pt-add:hover, .pt-chev:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+/* ＋ 新建菜单（复用 .ctx-item 行；禁用态 v2 行内 style 换类——CSP 禁内联） */
+.pt-menu { position: absolute; top: calc(100% + 4px); z-index: 20; min-width: 150px; max-width: 280px; background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: 9px; padding: 4px; display: flex; flex-direction: column; box-shadow: 0 12px 32px -14px oklch(0 0 0 / 0.45); }
+.pt-menu[hidden] { display: none; }
+.pt-menu .ctx-item { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-menu .ctx-item:disabled { opacity: .45; pointer-events: none; }
+/* ⌄ 全部选项卡下拉：搜索框 + 「打开的标签页」清单，行点击切换、行尾 × 关闭 */
+.pt-drop { position: absolute; top: calc(100% + 4px); left: 8px; z-index: 22; width: 300px; background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; box-shadow: 0 12px 32px -14px oklch(0 0 0 / 0.45); }
+.pt-drop[hidden] { display: none; }
+.ptd-search input { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); font-size: calc(12.5px * var(--fz)); padding: 6px 10px; outline: none; }
+.ptd-search input:focus { border-color: var(--accent-line); }
+.ptd-sec { padding: 8px 8px 4px; color: var(--muted-faint); font-size: calc(11px * var(--fz)); letter-spacing: 0.08em; }
+.ptd-rows { max-height: 280px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.ptd-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px; border-radius: 7px; color: var(--fg); font-size: calc(12.5px * var(--fz)); }
+.ptd-row:hover, .ptd-row.sel { background: var(--fg-soft); }
+.ptd-row .ptd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptd-x { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-faint); font-size: calc(10px * var(--fz)); }
+.ptd-x:hover { color: var(--err); background: var(--err-soft); }
+.ptd-none { padding: 10px 8px; color: var(--muted-faint); font-size: calc(12px * var(--fz)); }
+
 .pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pane-blank { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted-faint); font-size: calc(12.5px * var(--fz)); padding: 24px; text-align: center; line-height: 1.9; }
 
 @media (max-width: 920px) {
   .app-body { grid-template-columns: 1fr; height: auto; }

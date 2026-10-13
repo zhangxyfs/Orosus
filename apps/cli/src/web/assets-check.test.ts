@@ -77,7 +77,7 @@ describe("web T15：前端骨架静态资产", () => {
 
   it("②补 全资产 style= 内联属性零容忍（T18 清位棘轮——CSP style-src 不放行，换类/CSSOM 实现）", () => {
     // 属性形（style=" / style='）才计入——注释/文档里的字面 "style=" 不误伤（app.js 头注有「零 style= 属性」自述）
-    for (const name of ["api.js", "app.js", "render.js", "ui.js", "archived-view.js"]) {
+    for (const name of ["api.js", "app.js", "render.js", "ui.js", "archived-view.js", "pane.js"]) {
       expect(/\bstyle\s*=\s*["']/i.test(read(name)), `assets/${name} 不应有 style= 内联属性`).toBe(false);
     }
   });
@@ -184,6 +184,58 @@ describe("web T15：前端骨架静态资产", () => {
     expect(js.includes("mainTodoCount() === 0"), "主清单空则不显示").toBe(true);
     /* 顶栏入口接线：已开则收（v2 4731-4734——W3 后未开分支改接 cmdTasks） */
     expect(js.includes("toast('分栏已收回')"), "收起 toast").toBe(true);
+  });
+
+  it("⑧ W2 选项卡机构：#pane-tabs 内部 DOM + 加载序 + .pt-*/.ptd-* CSS 直裁 + pane.js 纯函数/DOM 壳/注入缝契约（v2 1244-1250/4390-4708）", () => {
+    const html = read("index.html");
+    /* DOM 契约（v2 1244-1250）：⌄ / 列表 / ＋ / 两浮层五件 */
+    for (const id of ["pt-chev", "pt-list", "pt-add", "pt-menu", "pt-drop"]) {
+      expect(html.includes(`id="${id}"`), `#${id} 应存在`).toBe(true);
+    }
+    expect(html.includes('title="查看全部选项卡（搜索 / 切换 / 关闭）"'), "⌄ title 文案（v2 1245）").toBe(true);
+    expect(html.includes('title="新建选项卡（类型可扩展）"'), "＋ title 文案（v2 1247）").toBe(true);
+    /* 空态先置于 #pt-list 内（renderTabs 空分支同款输出） */
+    expect(/id="pt-list"><span class="pt-empty">暂无打开的选项卡<\/span>/.test(html), "空态文案先置于 #pt-list").toBe(true);
+    /* 加载序：pane.js 在 ui.js 前（brief Files——纯函数段先行，ui/app 消费） */
+    const iPane = html.indexOf("/assets/pane.js");
+    expect(iPane, "pane.js 应被引用").toBeGreaterThan(-1);
+    expect(iPane).toBeLessThan(html.indexOf("/assets/ui.js"));
+
+    const css = read("style.css");
+    /* .pt- 全套关键类（v2 924-957 直裁；字号按仓内 --fz 换算惯例） */
+    for (const cls of [".pt-list", ".pt-item", ".pt-item.sel", ".pt-item.sel::after", ".pt-dot", ".pt-label", ".pt-x", ".pt-add", ".pt-chev", ".pt-menu", ".pt-drop", ".ptd-search", ".ptd-sec", ".ptd-rows", ".ptd-row", ".ptd-x", ".ptd-none", ".pane-blank"]) {
+      expect(css.includes(cls), `.pt 系类 ${cls} 应存在`).toBe(true);
+    }
+    /* 关键值照抄：浮层阴影 / tab 圆角 8px 8px 0 0 / [hidden] 兜底 / 禁用态换类（v2 行内 style → CSP 禁内联） */
+    expect(css.includes("0 12px 32px -14px oklch(0 0 0 / 0.45)"), "浮层阴影照抄").toBe(true);
+    expect(/\.pt-item\s*\{[^}]*border-radius:\s*8px 8px 0 0;/.test(css), "tab 圆角 8px 8px 0 0").toBe(true);
+    expect(css.includes(".pt-menu[hidden]"), ".pt-menu [hidden] 兜底").toBe(true);
+    expect(css.includes(".pt-drop[hidden]"), ".pt-drop [hidden] 兜底").toBe(true);
+    expect(css.includes(".pt-menu .ctx-item:disabled"), "禁用态换类").toBe(true);
+
+    const js = read("pane.js");
+    /* 纯函数三件套（brief Interfaces 逐字签名） */
+    expect(js.includes("function findTab(tabs, kind, id)"), "findTab 签名").toBe(true);
+    expect(js.includes("function openOrSwitch(tabs, active, tab)"), "openOrSwitch 签名").toBe(true);
+    expect(js.includes("function closeTabAt(tabs, active, i)"), "closeTabAt 签名").toBe(true);
+    /* DOM 壳四方法 + 注入缝挂 OrosusPane（W3/W6 消费面） */
+    for (const m of ["renderTabs", "activateTab", "addTab", "closeAt", "onBodyRender", "dotOf", "plusSource"]) {
+      expect(js.includes(`P.${m}`), `OrosusPane.${m} 导出面`).toBe(true);
+    }
+    /* 交互契约：＋菜单 clamp 进选项卡条（v2 4690-4696）；全开禁用文案（v2 4688）；
+       右键三支复用 #ctx-menu 单例（v2 4598-4624）；全关接 W1 closePane（v2 4623）；
+       ⌄ 搜索过滤（v2 4650-4659）；W1 closePane 清写 #pane-tabs 后的壳自愈（不改 app.js 的接合） */
+    expect(/Math\.min\(r\.right - pr\.left - mw, pr\.width - mw - 4\)/.test(js), "＋菜单 clamp").toBe(true);
+    expect(js.includes(">子代理均已打开</button>"), "全开禁用文案").toBe(true);
+    expect(js.includes('data-ptctx="close"'), "右键：关闭标签").toBe(true);
+    expect(js.includes('data-ptctx="close-others"'), "右键：关闭其他").toBe(true);
+    expect(js.includes('data-ptctx="close-all"'), "右键：关闭所有").toBe(true);
+    expect(js.includes("getElementById('ctx-menu')"), "复用 #ctx-menu 单例").toBe(true);
+    expect(js.includes("closePane"), "全关接 W1 closePane").toBe(true);
+    expect(js.includes("搜索标签页"), "⌄ 搜索框").toBe(true);
+    expect(js.includes("无匹配的标签页"), "⌄ 过滤无匹配空态").toBe(true);
+    expect(js.includes("function ensureShell()"), "壳自愈（W1 closePane 清写后重建）").toBe(true);
+    expect(js.includes("attributeFilter: ['hidden']"), "#pane hidden 观测（外路开合状态对齐）").toBe(true);
   });
 
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {

@@ -109,8 +109,13 @@
       <!-- ═══ 详情分栏（问题 2 目标形态）：分隔条可拖拽（默认 50/50）+ 选项卡条（打开并存、显示互斥） ═══ -->
       <div class="splitter" id="splitter" hidden title="拖拽调整左右比例"></div>
       <section class="pane" id="pane" hidden aria-label="详情分栏面板">
+        <!-- 选项卡条内部（v2 1244-1250 直裁）：左端 ⌄ 全部选项卡下拉 / tab 列表（溢出裁切不滚动）/ 右端 ＋ 新建；#pt-menu/#pt-drop 两浮层 -->
         <div class="pane-tabs" id="pane-tabs">
-          <span class="pt-empty">暂无打开的选项卡</span>
+          <button class="pt-chev" id="pt-chev" title="查看全部选项卡（搜索 / 切换 / 关闭）"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>
+          <div class="pt-list" id="pt-list"><span class="pt-empty">暂无打开的选项卡</span></div>
+          <button class="pt-add" id="pt-add" title="新建选项卡（类型可扩展）">＋</button>
+          <div class="pt-menu" id="pt-menu" hidden></div>
+          <div class="pt-drop" id="pt-drop" hidden></div>
         </div>
         <div class="pane-body" id="pane-body"></div>
       </section>
@@ -227,6 +232,7 @@
   <script src="/assets/api.js" defer></script>
   <script src="/assets/render.js" defer></script>
   <script src="/assets/archived-view.js" defer></script>
+  <script src="/assets/pane.js" defer></script>
   <script src="/assets/ui.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>
