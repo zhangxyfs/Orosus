@@ -532,7 +532,7 @@
     var mdNow = finalMdOf(t);
     if (!hasBody && !mdNow) { w.remove(); return; }
     var collapsible = hasBody && !!mdNow; /* 有正文且有过程可藏才可收（无正文轮常开无箭头） */
-    var wantCollapsed = collapsible && !w.userToggled; /* 用户手动展开过——重估不踩（spec §3.5 手动开合一等交互） */
+    var wantCollapsed = w.userToggled ? w.classList.contains('collapsed') : collapsible; /* 用户动过的组保持手动态（双向）；未动过的组走默认收起（翻页补收起路径不变） */
     if (wantCollapsed !== w.classList.contains('collapsed')) collapseAnchored(w, wantCollapsed);
     workHeadRender(w, t.workLabel, collapsible, wantCollapsed);
   }
