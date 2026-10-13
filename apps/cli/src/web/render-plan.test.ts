@@ -17,7 +17,7 @@ interface RenderApi {
   toolHeadHtml: Fn; toolTailOf: Fn; crWash: Fn; outputLinesOf: Fn; pageSlice: Fn;
   lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn;
   skillMarkOf: Fn; textOf: Fn; reasoningOf: Fn; imagesOf: Fn; fmtK: Fn; fmtDur: Fn;
-  fmtTurnTime: Fn; esc: Fn;
+  fmtTurnTime: Fn; fmtWorkDur: Fn; esc: Fn;
 }
 const R = (globalThis as { OrosusRender?: RenderApi }).OrosusRender!;
 interface UiApi {
@@ -366,5 +366,19 @@ describe("web 走查修（2026-10-13 用户口令）：复制口径 = 正文 mar
     expect(R.textOf(ev)).toBe("# 结论\n\n**加粗** 与 `代码`"); // markdown 标记原样保留
     expect(R.textOf(ev)).not.toContain("先想想"); // 思考永不混入正文源串
     expect(R.reasoningOf(ev)).toBe("先想想……");
+  });
+});
+
+describe("web 工作组（2026-10-13 设计）：fmtWorkDur 时长格式化（ZCode workDuration 同款）", () => {
+  it("G1 秒取整至少 1 秒；非零段最多两段；中文数字单位间一空格", () => {
+    expect(R.fmtWorkDur(0)).toBe("1 秒"); // 至少 1 秒（0ms 可读性兜底）
+    expect(R.fmtWorkDur(400)).toBe("1 秒");
+    expect(R.fmtWorkDur(1500)).toBe("2 秒"); // 向最近取整
+    expect(R.fmtWorkDur(59_000)).toBe("59 秒");
+    expect(R.fmtWorkDur(60_000)).toBe("1 分"); // 零秒段省略
+    expect(R.fmtWorkDur(483_000)).toBe("8 分 3 秒");
+    expect(R.fmtWorkDur(3_780_000)).toBe("1 小时 3 分"); // 最多两段——秒不写
+    expect(R.fmtWorkDur(3_600_000)).toBe("1 小时");
+    expect(R.fmtWorkDur(183_600_000)).toBe("2 天 3 小时");
   });
 });

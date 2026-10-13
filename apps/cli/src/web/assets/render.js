@@ -272,6 +272,20 @@
     return '持续了 ' + m + ' 分 ' + (s % 60) + ' 秒';
   }
 
+  /** 工作组头时长（2026-10-13 设计 §3.4——ZCode lib/workDuration.ts 同款规则）：
+   *  秒向最近取整、至少 1 秒；天/时/分/秒只写非零段、最多两段；中文数字与单位间一空格。
+   *  「工作中 8 分 3 秒」/「已工作 1 小时 3 分」。 */
+  function fmtWorkDur(ms) {
+    var s = Math.max(1, Math.round((ms || 0) / 1000));
+    var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    var parts = [];
+    if (d > 0) parts.push(d + ' 天');
+    if (h > 0) parts.push(h + ' 小时');
+    if (m > 0) parts.push(m + ' 分');
+    if (ss > 0 || parts.length === 0) parts.push(ss + ' 秒');
+    return parts.slice(0, 2).join(' ');
+  }
+
   /** turn 完成时间（turn/end ts → 「今天 14:02」/「昨天 14:02」/「10月8日 14:02」）。 */
   function dayStartOf(x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); }
   function fmtTurnTime(tsIso, nowMs) {
@@ -1321,6 +1335,7 @@
     reasoningOf: reasoningOf,
     fmtK: fmtK,
     fmtDur: fmtDur,
+    fmtWorkDur: fmtWorkDur,
     fmtTurnTime: fmtTurnTime,
     esc: esc,
     /* DOM 应用层 */
