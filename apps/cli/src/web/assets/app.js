@@ -2707,6 +2707,7 @@ function $(id) { return document.getElementById(id); }
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
     settleBtwOnSwitch(fromSid); /* 切走结算：离去会话 btw tab 在飞轮落终态 + 活跃者重渲刷 composer 门控（Important#2①） */
+    unlockBtwOnReturn(); /* 切回解锁（W6复核修二）：A→B→A 回环——归属新 currentSid 的活跃 btw tab 仍持离去时锁态渲染 */
     /* 服务端游标同步（fire-and-forget）——B1「＋新会话跟随当前项目」与左栏 cur 标记的 server 侧真源 */
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/current', { method: 'POST', body: '{}' }).then(null, function () { /* 游标同步失败无碍视图 */ });
     seenSet(sid);
@@ -3220,6 +3221,20 @@ function $(id) { return document.getElementById(id); }
       if (Pane.activeTab() === t) refresh = true;
     }
     if (refresh) rerenderBtwKeepingDraft(); /* currentSid 已换新——重渲即出 locked composer；草稿保留 */
+  }
+  /** W6复核修二（切回解锁——settleBtwOnSwitch 的对偶面）：A→B→A 回环后，活跃 btw tab 若归属新
+   *  currentSid（切回原会话），其 DOM 仍是离去时锁态渲染（composer disabled + .btw-locked 提示行）——
+   *  切走结算只理离去 sid（t.data.sid !== fromSid 跳过），切回方向无人重渲（locked 是渲染期派生态，
+   *  data.sid === currentSid 复成立也不会让旧 DOM 自动解锁）。GC7 签名门（只在必要时重渲）：活跃
+   *  tab 非 btw / data.sid !== currentSid / 当前渲染无锁态（.btw-locked 缺席——首次归属渲染本就不锁，
+   *  切走路径 settleBtwOnSwitch 刚渲出的锁属离去 sid，此处 sid 门先弹）任一即早退零触碰；保草稿/
+   *  焦点归还走 rerenderBtwKeepingDraft——与 settleBtwOnSwitch 同一口径，不改离去结算语义。 */
+  function unlockBtwOnReturn() {
+    var t = Pane.activeTab();
+    if (!t || t.kind !== 'btw' || !t.data || t.data.sid !== currentSid) return;
+    var body = document.getElementById('pane-body');
+    if (!body || body.querySelector('.btw-locked') === null) return; /* 渲染即签名——无锁态零重渲 */
+    rerenderBtwKeepingDraft();
   }
   Pane.onBodyRender('btw', function (data, bodyEl) {
     var locked = data.sid !== currentSid; /* Important#2①：跨会话门控——非归属会话的 btw 帧已随旧流关闭，发问将永无回填 */

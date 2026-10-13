@@ -451,4 +451,20 @@ describe("web W6 复核修（Important#1/#2 + Minor#1——切走结算/门控/�
     expect(pipe.match(/BTW_PREFIX_RE\.test\(text\)/g)).toHaveLength(2); // handleSendResponse 截获 + handleSendError 清存
     expect(APP).not.toContain("indexOf('/btw')");
   });
+
+  it("F⑤ 切回解锁（W6复核修二）：A→B→A 回环后归属新 currentSid 的活跃 btw tab 重渲解锁——三重门 + GC7 签名门（app.js 源锚定）", () => {
+    // switchTo 接线：切走结算之后跑解锁——离去 sid 的锁先由 settle 渲出（此路 sid 门先弹不叠渲），切回 sid 由 unlock 收
+    const sw = APP.slice(APP.indexOf("function switchTo"), APP.indexOf("服务端游标同步"));
+    const settleAt = sw.indexOf("settleBtwOnSwitch(fromSid)");
+    const unlockAt = sw.indexOf("unlockBtwOnReturn()");
+    expect(unlockAt).toBeGreaterThan(-1);
+    expect(unlockAt).toBeGreaterThan(settleAt); // 结算在前——两向互斥（unlock 的 sid 门对离去 sid 早退）
+    // 解锁函数：kind/sid 门 + 渲染签名门（.btw-locked 缺席零重渲）+ 保草稿重渲（与 settle 同口径）
+    const unlock = APP.slice(APP.indexOf("function unlockBtwOnReturn"), APP.indexOf("Pane.onBodyRender('btw'"));
+    expect(unlock).toContain("t.kind !== 'btw'"); // 仅 btw tab——agent tab 不误伤
+    expect(unlock).toContain("t.data.sid !== currentSid"); // 仅归属新 currentSid 的 tab——settleBtwOnSwitch 刚渲的离去锁不在此路重渲
+    expect(unlock).toContain("body.querySelector('.btw-locked')"); // 签名门：当前渲染确持锁态才重渲（GC7——首次归属渲染本就解锁，零触碰）
+    expect(unlock).toContain("rerenderBtwKeepingDraft()"); // 草稿/焦点保留——与 settleBtwOnSwitch 同一口径
+    expect(unlock).not.toContain("settleBtwRounds"); // 只解锁不结算——离去结算语义不被切回路径改坏
+  });
 });
