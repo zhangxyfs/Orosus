@@ -580,12 +580,21 @@
       case 'turn/end': return emitTurnEnd(ev, ctx);
       case 'turn/compaction': {
         var n = Number(ev.droppedCount ?? 0);
-        var m = el('div', 'line mark-line', '[已压缩：' + n + ' 条历史 → 摘要（顶栏「更多 ▸ 压缩摘要」查看）]');
-        m.setAttribute('data-seq', String(ev.seq));
-        ctx.appendTop(m);
+        /* 走查修⑩（仿 ZCode 图3）：落定态 = 横杠夹「⊘ 上下文已压缩 · N 条」可点行（点击开压缩摘要
+         *  弹窗——onCompactionOpen 回调）；「摘要查看」提示挪 toast（onCompactionDone）不再占流区行文。
+         *  过程行在 = 原位换面；不在（自动压缩无 /compact 受理）= 就地新插。 */
+        var line = (R.cmpLine !== null && R.cmpLine.isConnected) ? R.cmpLine : el('div', 'cmp-line', '');
+        line.className = 'cmp-line done';
+        line.innerHTML = '<span class="cmp-rule"></span><span class="cmp-text">⊘ 上下文已压缩' + (n > 0 ? ' · ' + n + ' 条' : '') + '</span><span class="cmp-rule"></span>';
+        line.title = '点击查看压缩摘要';
+        line.setAttribute('data-cmp', '1');
+        line.setAttribute('data-seq', String(ev.seq));
+        if (!line.isConnected) ctx.appendTop(line);
+        R.cmpLine = null;
         R.compacting = false;
         syncTail();
-        return m;
+        if (typeof R.onCompactionDone === 'function') R.onCompactionDone('已压缩：' + n + ' 条历史 → 摘要——点横杠查看详情');
+        return line;
       }
       case 'turn/prune': {
         var prunes = Array.isArray(ev.prunes) ? ev.prunes.length : 0;
@@ -1204,6 +1213,20 @@
     if (R === null) return;
     R.compacting = !!on;
     syncTail();
+    /* 走查修⑩（2026-10-14 用户报障）：压缩过程态进流区——仿 ZCode 图1「横杠夹动画行」（原来只有
+     *  右下发送钮转圈，主流毫无动静）。开工插动画行，收口（turn/compaction 落定 / idle 相位复位）
+     *  撤或换。 */
+    if (on) {
+      if (R.cmpLine === null || !R.cmpLine.isConnected) {
+        R.cmpLine = el('div', 'cmp-line working', '<span class="cmp-rule"></span><span class="cmp-text">' + spinSvg('', 12) + ' 正在压缩上下文…</span><span class="cmp-rule"></span>');
+        R.stream.appendChild(R.cmpLine);
+        followScroll();
+        syncToBottom();
+      }
+    } else if (R.cmpLine !== null && R.cmpLine.classList.contains('working')) {
+      R.cmpLine.remove();
+      R.cmpLine = null;
+    }
   }
   function syncTail() {
     if (R === null) return;
@@ -1246,12 +1269,14 @@
       onCopy: opts.onCopy || function () {},
       onUserSeen: opts.onUserSeen || null,
       onAgentOpen: opts.onAgentOpen || function () {}, /* spawn 组卡行点击 → 分栏 agent tab（app.js 接线 OrosusPane open-or-switch——W3） */
+      onCompactionDone: opts.onCompactionDone || null, /* 走查修⑩：压缩落定提示（toast 文本交由 app.js） */
+      onCompactionOpen: opts.onCompactionOpen || null, /* 走查修⑩：落定横杠点击 → 打开压缩摘要弹窗 */
       cwdOf: opts.cwdOf || function () { return ''; },
       seqs: [], seqEls: new Map(), toolRows: new Map(), ghostCalls: new Set(), spawnCalls: new Map(), spawnGroup: null,
       openTurn: null,
       live: { lineEl: null, textNode: null, buf: '', thinkEl: null, thinkBuf: '', thinkSince: 0, thinkOpen: false, thinkTimer: null, thinkBodyNode: null },
       userSeen: false,
-      busy: false, compacting: false, errorFlash: false,
+      busy: false, compacting: false, errorFlash: false, cmpLine: null,
       busyTimer: null, busyStart: 0,
       workTicking: null,
       stick: true, loadingEarlier: false, hasMore: false,
@@ -1301,6 +1326,8 @@
         R.onCopy(bubble.textContent, '已复制消息');
         return;
       }
+      var cmp = e.target.closest('.cmp-line.done[data-cmp]');
+      if (cmp && R && typeof R.onCompactionOpen === 'function') { R.onCompactionOpen(); return; } /* 走查修⑩：落定横杠点开摘要 */
       var tf = e.target.closest('[data-tf]');
       if (tf && R) {
         var kind = tf.getAttribute('data-tf');
