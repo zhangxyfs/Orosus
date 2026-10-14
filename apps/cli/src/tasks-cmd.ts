@@ -349,9 +349,21 @@ export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): S
 }
 
 /** spawn 结果文本 → 8 位子代理编号（/tasks 历史重建与 DocModel 回放组共用一口——两处口径必须一致，
- *  否则同一结果抠出的编号集合不同会错挂：前台「- <id> · …」/后台「…：<id>、<id>」两形态都覆盖）。 */
+ *  否则同一结果抠出的编号集合不同会错挂：前台「- <id> · …」/后台「…：<id>、<id>」两形态都覆盖）。
+ *  2026-10-13 走查修②（用户报障「8 子代理不全可点」）：不再全文裸扫 hex——报告正文/路径/spill 标记里的
+ *  8 位 hex（如 web_search_20250305、bucket 哈希 524861ea、callId 残段）曾混进当编号（幻影行点不动）。
+ *  只认三个结构位：编号名册括号（新格式头，抗截断）/ 后台已入册行的顿号串 / 汇总行「- <id> · 完成|失败 · N 轮」，
+ *  顺序 = 文本出场序（名册头先行 = 派单序），首次出现去重。 */
 export function spawnIdsIn(output: string): string[] {
-  return [...String(output ?? "").matchAll(/[0-9a-f]{8}/g)].map((m) => m[0]!);
+  const out: string[] = [];
+  const push = (id: string): void => { if (!out.includes(id)) out.push(id); };
+  const text = String(output ?? "");
+  const roster = text.match(/编号：([0-9a-f]{8}(?:、[0-9a-f]{8})*)\]/);
+  if (roster) for (const id of roster[1]!.split("、")) push(id);
+  for (const m of text.matchAll(/^- ([0-9a-f]{8}) · (?:完成|失败) · \d+ 轮/gm)) push(m[1]!);
+  const bg = text.match(/后台已入册（[^）]*）：((?:[0-9a-f]{8}、?)+)/);
+  if (bg) for (const m of bg[1]!.matchAll(/[0-9a-f]{8}/g)) push(m[0]);
+  return out;
 }
 
 /** 主会话文件 → spawn 调用元数据（id → 简述/后台/工种）：call 事件记参数、result 事件按 callId 配对，

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as theme from "./theme.ts";
 import { stripAnsi, visibleWidth } from "./tui/width.ts";
-import { agentEventsFromFile, createAgentViewRenderer, emptyTasksRow, loadHistoricalSubagents, openTasks, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
+import { spawnIdsIn, agentEventsFromFile, createAgentViewRenderer, emptyTasksRow, loadHistoricalSubagents, openTasks, renderAgentView, sortNewestFirst, subagentUnloadBlock, taskIdOfRow, tasksListRows } from "./tasks-cmd.ts";
 import type { AgentViewIO } from "./tasks-cmd.ts";
 import type { SubagentRosterEntry } from "@orosus/contracts/module";
 
@@ -345,5 +345,29 @@ describe("openTasks 查看窗接线增量渲染器（m5-agentview-perf T3：实�
     expect(reads).toBe(1); // 文件未变不重读
     expect(stripAnsi(b)).toContain("任务正文");
     expect(b).toBe(a); // 同一文件状态文本同形
+  });
+});
+
+
+describe("spawnIdsIn 结构化编号抠取（2026-10-13 走查修②——用户报障「8 子代理不全可点」）", () => {
+  it("名册括号（新格式头，抗截断）/ 旧汇总行 / 后台票行三形态全覆盖 + 正文幻影 hex 不进", () => {
+    const phantom = '报告正文引用了 web_search_20250305 与 bucket 哈希 524861ea 与 spill-1-call_f96e14e5d41a4ae79bdc7a5f.txt';
+    // 新格式：编号名册先行（溢写截断保头段恒存活）
+    expect(spawnIdsIn(`子代理完成（8/8）[编号：34a85d8e、2f2d7d6a、3265d37f]：
+- 34a85d8e · 完成 · 13 轮
+${phantom}
+- 2f2d7d6a · 完成 · 58 轮`))
+      .toEqual(["34a85d8e", "2f2d7d6a", "3265d37f"]); // 名册序 = 派单序；幻影零入
+    // 旧格式（无名册）：汇总行兜底
+    expect(spawnIdsIn(`子代理完成（2/2）：
+- 34a85d8e · 完成 · 13 轮
+- 2f2d7d6a · 失败 · 3 轮
+${phantom}`))
+      .toEqual(["34a85d8e", "2f2d7d6a"]);
+    // 后台票行
+    expect(spawnIdsIn("后台已入册（3 个，跑完自动送回）：ab528ac7、d87f5b5a、e4d17dd4。期间去做别的独立工作"))
+      .toEqual(["ab528ac7", "d87f5b5a", "e4d17dd4"]);
+    // 校验错/无编号
+    expect(spawnIdsIn("派活失败：任务书必须含 {{item}} 占位符")).toEqual([]);
   });
 });

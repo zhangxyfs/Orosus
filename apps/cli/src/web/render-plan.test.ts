@@ -472,3 +472,21 @@ describe("web 工作组（2026-10-13 设计 §3.7）：复制收窄为最终正�
     expect(src).not.toContain("自动合并两段"); // foot 复制钮 tooltip 旧并集口径同步退役（3c——用户可见标签不撒谎）
   });
 });
+
+
+describe("spawnIdsIn 结构化编号抠取（2026-10-13 走查修②——与 tasks-cmd 同口径互证）", () => {
+  it("名册括号/旧汇总行/后台票行三形态 + 正文幻影 hex 不进", () => {
+    const R = (globalThis as unknown as { OrosusRender: { spawnIdsIn: (o: string) => string[] } }).OrosusRender;
+    const phantom = '正文引用 web_search_20250305 与 bucket 哈希 524861ea 与 spill-1-call_f96e14e5d41a4ae79bdc7a5f.txt';
+    expect(R.spawnIdsIn(`子代理完成（8/8）[编号：34a85d8e、2f2d7d6a、3265d37f]：
+- 34a85d8e · 完成 · 13 轮
+${phantom}
+- 2f2d7d6a · 完成 · 58 轮`))
+      .toEqual(["34a85d8e", "2f2d7d6a", "3265d37f"]);
+    expect(R.spawnIdsIn(`- 34a85d8e · 完成 · 13 轮
+- 2f2d7d6a · 失败 · 3 轮
+${phantom}`)).toEqual(["34a85d8e", "2f2d7d6a"]);
+    expect(R.spawnIdsIn("后台已入册（2 个，跑完自动送回）：ab528ac7、d87f5b5a。期间去做别的")).toEqual(["ab528ac7", "d87f5b5a"]);
+    expect(R.spawnIdsIn("派活失败：占位符误用")).toEqual([]);
+  });
+});

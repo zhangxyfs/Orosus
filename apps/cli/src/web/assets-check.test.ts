@@ -317,6 +317,14 @@ describe("web T15：前端骨架静态资产", () => {
     /* 思考块样式（CSP 类面） */
     const css = read("style.css");
     expect(css).toContain(".btw-think");
+    /* 走查修②（8 子代理不全可点）：render.js 结构化抠号（拒绝全文裸扫）+ 名册回填补行（旧会话
+     *  溢写截断漏编的盘真源兜底）+ 生产端编号名册前置（tasks-cmd/render-plan 行为测试面互证） */
+    const render = read("render.js");
+    expect(render).toContain("编号：([0-9a-f]{8}");
+    expect(render).not.toContain("String(output ?? '').match(/[0-9a-f]{8}/g)"); // 全文裸扫绝迹（票行内的局部 match 合法保留）
+    const appSrc = read("app.js");
+    expect(appSrc).toContain('sg-row[data-agent-id="'); // 回填查重钩
+    expect(appSrc).toContain("走查修②");
   });
 
   it("⑪ 走查修（2026-10-13 用户报障六连）：回放交互委派 + 分支钮裁除 + btw 停止钮 + md 渲染 + 历史界标", () => {

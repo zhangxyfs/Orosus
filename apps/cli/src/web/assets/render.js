@@ -716,11 +716,21 @@
     return t;
   }
 
-  /** spawn 结果文本 → 8 位子代理编号（tasks-cmd.ts spawnIdsIn 同口径——结果文本里的 8 位 hex 全收）。 */
+  /** spawn 结果文本 → 8 位子代理编号（tasks-cmd.ts spawnIdsIn 同口径）。2026-10-13 走查修②
+   *  （用户报障「8 子代理不全可点」）：不再全文裸扫 hex——报告正文/路径/spill 标记里的 8 位 hex
+   *  （web_search_20250305、bucket 哈希、callId 残段）曾混进当编号（幻影行点不动）。只认三个结构位：
+   *  编号名册括号（新格式头，抗截断）/ 后台已入册行的顿号串 / 汇总行「- <id> · 完成|失败 · N 轮」；
+   *  顺序 = 文本出场序（名册头先行 = 派单序），首次出现去重。 */
   function spawnIdsIn(output) {
     var out = [];
-    var m = String(output ?? '').match(/[0-9a-f]{8}/g);
-    if (m) for (var i = 0; i < m.length; i++) out.push(m[i]);
+    var push = function (id) { if (out.indexOf(id) < 0) out.push(id); };
+    var text = String(output ?? '');
+    var roster = text.match(/编号：([0-9a-f]{8}(?:、[0-9a-f]{8})*)\]/);
+    if (roster) { var ids = roster[1].split('、'); for (var i = 0; i < ids.length; i++) push(ids[i]); }
+    var lineRe = /^- ([0-9a-f]{8}) · (?:完成|失败) · \d+ 轮/gm;
+    var lm; while ((lm = lineRe.exec(text)) !== null) push(lm[1]);
+    var bg = text.match(/后台已入册（[^）]*）：((?:[0-9a-f]{8}、?)+)/);
+    if (bg) { var bm = bg[1].match(/[0-9a-f]{8}/g); if (bm) for (var j = 0; j < bm.length; j++) push(bm[j]); }
     return out;
   }
   /** 子代理组卡（TUI agent 组同款语义——web 卡片形）：头行「● N 个子代理 + 聚合状态」+ 组员行
@@ -1503,6 +1513,7 @@
     crWash: crWash,
     outputLinesOf: outputLinesOf,
     pageSlice: pageSlice,
+    spawnIdsIn: spawnIdsIn, /* 走查修②：结构化编号抠取（node 直测面——与 tasks-cmd 同口径互证） */
     lineCountOf: lineCountOf,
     diffRowsOf: diffRowsOf,
     changeStatsOf: changeStatsOf,

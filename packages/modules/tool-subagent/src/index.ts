@@ -182,7 +182,10 @@ async function runSpawn(
     const parts: string[] = [];
     if (done.length > 0) {
       const okCount = done.filter((o) => o.status === "completed").length;
-      parts.push(`子代理完成（${okCount}/${done.length}）：\n${done.map(fmtOutcome).join("\n")}`);
+      /* 编号名册前置（2026-10-13 走查修②——用户报障「8 子代理不全可点」）：结果体超 32KB 溢写截断
+       *  时中段编号随正文逸出（spawnIdsIn 抠不到 → 组卡行缺失）。名册压头段（截断保头尾）恒存活；
+       *  顺序 = 派单序（done 保序——前端行标签按序配对 items 不破）。 */
+      parts.push(`子代理完成（${okCount}/${done.length}）[编号：${done.map((o) => o.id).join("、")}]：\n${done.map(fmtOutcome).join("\n")}`);
     }
     if (tickets.length > 0) {
       parts.push(`后台已入册（${tickets.length} 个，跑完自动送回）：${tickets.map((t) => t.id).join("、")}。期间去做别的独立工作——送回行没到 = 还在跑：不要轮询、不要预测结论、不要重派替身。`);

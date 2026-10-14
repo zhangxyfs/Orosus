@@ -70,6 +70,7 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     expect(toolResult).toBeDefined();
     expect(toolResult!.isError).toBe(false);
     expect(toolResult!.output).toContain("子代理完成（1/1）");
+    expect(toolResult!.output).toMatch(/子代理完成（1\/1）\[编号：[0-9a-f]{8}\]/); // 走查修②：编号名册前置（抗溢写截断）
     expect(toolResult!.output).toContain("子代理结论");
     expect(toolResult!.output).toMatch(/[0-9a-f]{8} · 完成/);
     const final = events.filter((e) => e.type === "assistant/message").at(-1) as unknown as { content: { kind: string; text: string }[] };
@@ -91,6 +92,7 @@ describe("派活工具 T6（模块本体：spawn/tasks/stop + 批量校验 + 工
     expect(port.calls[1]!.prompt).toBe("总结 乙 文件");
     expect(port.calls[0]!.label).toBe("批量总结：甲");
     expect(out.output).toContain("子代理完成（2/2）");
+    expect(out.output).toMatch(/\[编号：[0-9a-f]{8}、[0-9a-f]{8}\]/); // 名册顺序 = 派单序
 
     expect((await exec(spawnTool!, { description: "x", prompt: "没有占位符", items: ["a", "b"] })).output).toContain("{{item}}");
     expect((await exec(spawnTool!, { description: "x", prompt: "做 {{item}}", items: ["a", "a"] })).output).toContain("互异");

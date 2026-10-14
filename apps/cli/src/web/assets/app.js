@@ -3535,6 +3535,30 @@ function $(id) { return document.getElementById(id); }
   function updateSpawnGroups(rows) {
     taskRoster = rows; /* 名册缓存（agentTabDot 状态点 + 审批条数据源——W3） */
     refreshAgentTabDots(); /* 已开 agent tab 状态点联动（dotOf 注入实现，签名门） */
+    /* 走查修②（2026-10-13 用户报障「8 子代理不全可点」）：名册回填——结果文本溢写截断/旧格式
+     *  致 spawnIdsIn 漏抠的编号，盘上有会话文件（名册来自目录扫描=真源）就补行进末个组卡，
+     *  否则这些子代理在 web 再无入口（/tasks 已随口令下线）。补行带点击（openAgentTab 同款）。 */
+    var groups = document.querySelectorAll('.spawn-group');
+    var lastG = groups.length > 0 ? groups[groups.length - 1] : null;
+    if (lastG !== null) {
+      var gList = lastG.querySelector('.sg-list');
+      rows.forEach(function (e) {
+        if (e.depth !== 1) return; /* 孙代理的行挂在父行下（如有）——本批只补一代行 */
+        if (lastG.querySelector('.sg-row[data-agent-id="' + e.id + '"]')) return;
+        var st = SPAWN_ST[e.status] ?? [String(e.status), 'st-run'];
+        var row = document.createElement('div');
+        row.className = 'sg-row';
+        row.setAttribute('data-agent-id', e.id);
+        row.title = '点击在右侧分栏查看该子代理（已开则切换，不重复开）';
+        var caret = document.createElement('span'); caret.className = 'sg-caret'; caret.textContent = '├─';
+        var nm = document.createElement('span'); nm.className = 'sg-name'; nm.textContent = e.label || e.id;
+        var idEl = document.createElement('span'); idEl.className = 'sg-id'; idEl.textContent = e.id;
+        var stEl = document.createElement('span'); stEl.className = 'sg-st ' + st[1]; stEl.textContent = st[0];
+        row.appendChild(caret); row.appendChild(nm); row.appendChild(idEl); row.appendChild(stEl);
+        row.addEventListener('click', function () { openAgentTab(e.id); });
+        if (gList) gList.appendChild(row);
+      });
+    }
     document.querySelectorAll('.spawn-group').forEach(function (g) {
       var n = 0, running = 0, done = 0, failed = 0;
       g.querySelectorAll('.sg-row[data-agent-id]').forEach(function (row) {
