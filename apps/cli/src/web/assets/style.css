@@ -999,8 +999,8 @@ body.light .work-head { color: var(--muted); }
 .pane-picker { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; overflow-y: auto; }
 .pp-title { font-size: calc(16px * var(--fz)); font-weight: 600; color: var(--fg); }
 .pp-sub { color: var(--muted-dim); font-size: calc(12px * var(--fz)); margin-bottom: 12px; }
-.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; width: min(520px, 92%); }
-.pp-card { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 12px; border: 1.5px dashed var(--border); border-radius: 12px; background: transparent; color: var(--fg); cursor: pointer; font-size: calc(13px * var(--fz)); transition: border-color 0.15s ease, background 0.15s ease; }
+.pp-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: min(520px, 92%); } /* 走查修⑧（用户口令：单卡也要水平居中——grid auto-fill 会把独卡顶左） */
+.pp-card { flex: 0 0 132px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 12px; border: 1.5px dashed var(--border); border-radius: 12px; background: transparent; color: var(--fg); cursor: pointer; font-size: calc(13px * var(--fz)); transition: border-color 0.15s ease, background 0.15s ease; }
 .pp-card:hover { border-color: var(--accent-line); background: var(--accent-soft); }
 .pp-ico { font-size: calc(18px * var(--fz)); color: var(--muted); }
 .pp-card:hover .pp-ico { color: var(--accent); }

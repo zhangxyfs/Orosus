@@ -3121,6 +3121,8 @@ function $(id) { return document.getElementById(id); }
     for (var i = tabs.length - 1; i >= 0; i--) {
       var t = tabs[i];
       if (t.kind === 'btw' && t.data && (t.data.rounds ?? []).length === 0) {
+        UI.openPane(); /* 走查修⑧（用户报障「/btw 打不开分栏」）：复用空草稿也必须开栏——tab 记忆保留
+                         *  后，保留的空草稿 tab 在栏关着时仍在册，activateTab 只切显不开栏 */
         Pane.activateTab(i);
         if (arch && arch.length > 0) { t.data.rounds = arch; Pane.rerenderBody(); }
         return;

@@ -360,6 +360,15 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(src).toContain("paneBodyEl.childNodes.length === 0"); // 首开/重开渲口（壳完好 body 空也渲）
   });
 
+  it("走查修⑧（2026-10-13 用户报障「/btw 打不开分栏」）：cmdBtw 复用空草稿 tab 也先开栏（保留态 tab 在栏外仍在册）", () => {
+    const src = readFileSync(fileURLToPath(new URL("./assets/app.js", import.meta.url)), "utf8");
+    const zone = src.slice(src.indexOf("function cmdBtw"), src.indexOf("function sendBtwAsk"));
+    const reuseIdx = zone.indexOf("Pane.activateTab(i)");
+    expect(reuseIdx).toBeGreaterThan(-1);
+    expect(zone.lastIndexOf("UI.openPane()", reuseIdx), "activateTab 前必须先 openPane").toBeGreaterThan(-1);
+    expect(zone.lastIndexOf("UI.openPane()", reuseIdx)).toBeLessThan(reuseIdx);
+  });
+
   it("走查修①（2026-10-13 用户口令·图2形态）：pickerHtml 零 tab 选择器——标题/副题/虚线卡片网格 + esc + 多行扩列", () => {
     const html = P.pickerHtml([{ kind: "btw", label: "侧问", prefix: "✦ ", open() {} }]);
     expect(html).toContain("打开标签页");

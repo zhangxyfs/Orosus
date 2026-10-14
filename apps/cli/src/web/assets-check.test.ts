@@ -316,6 +316,9 @@ describe("web T15：前端骨架静态资产", () => {
     }
     expect(paneJs).toContain("function pickerHtml");
     expect(paneJs).toContain("打开标签页");
+    /* 单卡水平居中（走查修⑧ 用户口令）：grid auto-fill 顶左形态废弃——flex wrap + justify-center */
+    expect(/\.pp-grid\s*\{[^}]*justify-content:\s*center/.test(css), "卡片网格居中").toBe(true);
+    expect(css.includes("repeat(auto-fill"), "pp-grid 不再是 auto-fill grid").toBe(false);
     /* 记忆保留：观察器 close 分支不清 tabs */
     const obs = paneJs.slice(paneJs.indexOf("new MutationObserver"), paneJs.indexOf("}).observe("));
     expect(obs.includes("tabs = [];"), "收回不清卡").toBe(false);
