@@ -527,6 +527,8 @@ function $(id) { return document.getElementById(id); }
   var currentPerm = '';           /* 权限三档（芯片显示 + 菜单勾标） */
   var currentEffort = '';         /* 思考档位显示口径（status.effort——未设置=目录默认档名，D10） */
   var currentModel = '';          /* 会话当前模型限定形（status.model——btw 芯片默认值的数据源，走查修⑨） */
+  var btwModelPref = null;        /* 设置「侧问模型」偏好（GET prefs 懒载一次；写面 postPref 同步；走查修⑨③） */
+  var btwModelPrefLoaded = false;
   var projectsPool = [];          /* cwd 芯片候选（bootstrap.projects——含 hidden 找回，D5） */
   var sendingNow = false;         /* 发送四态之「发送中」（POST 在途） */
   var escArmedAt = 0;             /* Esc 双击停止的 armed 时刻 */
@@ -1005,7 +1007,7 @@ function $(id) { return document.getElementById(id); }
   function renderModal() {
     var top = modalStack[modalStack.length - 1];
     if (!top) { overlay.hidden = true; modal.innerHTML = ''; return; }
-    modal.className = 'modal' + (top.wide ? ' settings-modal' : '');
+    modal.className = 'modal' + (top.wide ? ' settings-modal' : '') + (top.big ? ' compact-modal' : ''); /* 走查修⑩② */
     modal.innerHTML = '<div class="pu-head"><span class="pu-title">' + top.title + '</span>' +
       '<span class="pu-en">' + (top.en ?? '') + '</span>' +
       (modalStack.length > 1 ? '<button class="btn" data-mback>‹ 返回</button>' : '') +
@@ -1065,7 +1067,7 @@ function $(id) { return document.getElementById(id); }
     { name: '常规', desc: '上下文 / Token / 磁盘', render: pageGeneral },
     { name: '外观', desc: '主题 / 明暗 / 字号 / 语言', render: pageAppearance },
     { name: '提供商与模型', desc: '供应商列表 / 目录添加 / 模型表', render: pageProviders },
-    { name: '模型偏好', desc: '默认模型 / 视觉 / 搜索 / 子代理', render: pageModelPrefs },
+    { name: '模型偏好', desc: '默认模型 / 视觉 / 搜索 / 侧问 / 子代理', render: pageModelPrefs }, /* 走查修⑨③ */
     { name: '技能', desc: '查看 / 启停', render: pageSkills },
     { name: '钩子', desc: '查看 / 启停 / 信任审查', render: pageHooks },
     { name: 'MCP', desc: 'server 管理与添加', render: pageMcp },
@@ -1365,6 +1367,7 @@ function $(id) { return document.getElementById(id); }
       var vision = String(pf.visionModel ?? 'off');
       var search = String(pf.search ?? 'auto');
       var sub = pf.subagent ?? {};
+      var btwCur = typeof pf.btwModel === 'string' ? pf.btwModel : ''; /* 走查修⑨③ */
       var visionCur = (vision !== 'off' && vision !== 'auto') ? vision : '';
       var turnCur = sub.maxTurns === null || sub.maxTurns === undefined ? '' : String(sub.maxTurns);
       var turnOpts = [
@@ -1375,7 +1378,7 @@ function $(id) { return document.getElementById(id); }
       ];
       if (turnCur !== '' && !turnOpts.some(function (o) { return o.v === turnCur; })) turnOpts.push({ v: turnCur, l: '当前 ' + turnCur });
       page.innerHTML = spTitle('模型偏好', 'PREFERENCES') +
-        '<div class="sp-note">默认模型 / 视觉模型 / 网络搜索 / 子代理模型——改一项写一项，立即写盘并重载生效。</div>' +
+        '<div class="sp-note">默认模型 / 视觉模型 / 网络搜索 / 侧问模型 / 子代理模型——改一项写一项，立即写盘并重载生效。</div>' +
         mpRow('默认模型', '<select class="fsel" id="mp-model"><option value=""' + (current === '' ? ' selected' : '') + '>（未配置）</option>' + modelOptGroups(current, providers) + '</select>') +
         mpRow('视觉模型', '<select class="fsel" id="mp-vision">' +
           '<option value="off"' + (vision === 'off' ? ' selected' : '') + '>停用（默认）</option>' +
@@ -1388,6 +1391,7 @@ function $(id) { return document.getElementById(id); }
           '<option value="llm"' + (search === 'llm' ? ' selected' : '') + '>LLM Web Search（模型内置）</option>' +
           '<option value="tavily"' + (search === 'tavily' ? ' selected' : '') + '>Tavily（需 API key）</option>' +
           '<option value="brave"' + (search === 'brave' ? ' selected' : '') + '>Brave（需 API key）</option></select>') +
+        mpRow('侧问模型', '<select class="fsel" id="mp-btwmodel"><option value=""' + (!btwCur ? ' selected' : '') + '>跟随会话当前（缺省）</option>' + modelOptGroups(btwCur, providers) + '</select>') + /* 走查修⑨③ */
         mpRow('子代理模型', '<select class="fsel" id="mp-submodel"><option value=""' + (!sub.model ? ' selected' : '') + '>跟随（工种声明 / 父模型）</option>' +
           (sub.model && !modelOptGroups(sub.model, providers).includes('value="' + esc(sub.model) + '"')
             ? '<option value="' + esc(sub.model) + '" selected>' + esc(sub.model) + '（当前）</option>' : '') +
@@ -1436,6 +1440,12 @@ function $(id) { return document.getElementById(id); }
         var v = this.value;
         var names = { auto: '自动（缺省）', llm: 'LLM Web Search', tavily: 'Tavily', brave: 'Brave' };
         postPref('search.backend', v, '网络搜索后端：' + (names[v] ?? v) + '（已写 tool-web 配置）', function () { el.value = search; });
+      });
+      sel('mp-btwmodel').addEventListener('change', function () {
+        var el = this;
+        var v = this.value;
+        postPref('btwModel', v === '' ? null : v, v === '' ? '侧问模型：已清除（跟随会话当前）' : '侧问模型：' + v + '（已写 config.toml 顶层 btwModel）', function () { el.value = btwCur; });
+        btwModelPref = v === '' ? null : v; /* 芯片默认源同步（免等下次 GET） */
       });
       sel('mp-submodel').addEventListener('change', function () {
         var el = this;
@@ -2576,6 +2586,7 @@ function $(id) { return document.getElementById(id); }
       openModal({
         title: '压缩摘要（最近一次）',
         en: 'COMPACTION',
+        big: true, /* 走查修⑩②：大屏放宽（compact-modal——用户报障「屏幕这么大只占一点」） */
         bodyHtml: '<div class="pu-text"><span class="dim">' + esc(meta) + '</span></div><div class="pu-text md">' + UI.mdHtml(d.summary ?? '') + '</div>',
         foot: '只读窗 · Esc 关闭',
       });
@@ -2728,6 +2739,8 @@ function $(id) { return document.getElementById(id); }
       onCopy: copyText,
       onUserSeen: syncCwdGate,
       onAgentOpen: function (id) { openAgentTab(id); }, /* W3：spawn 组卡行点击 → OrosusPane agent open-or-switch */
+      onCompactionDone: function (text) { toast(text, 6000); }, /* 走查修⑩：落定提示挪 toast（不占流区行文） */
+      onCompactionOpen: function () { openCompactWindow(); }, /* 走查修⑩：横杠点开摘要弹窗 */
       cwdOf: function () { return sessionCwd; },
     });
     renderSidebar();
@@ -3099,7 +3112,17 @@ function $(id) { return document.getElementById(id); }
    *   开新 tab 即发问；无参复用空草稿（未发过问的）btw tab 或新开。 */
   var btwSeq = 0;
   var pendingBtwQuestion = ''; /* /btw 前缀截获块存文（发问源——mark 分支消费后即清） */
+  function loadBtwModelPref() { /* 走查修⑨③：偏好懒载一次——到达时若活跃 tab 是 btw 即重渲芯片 */
+    if (btwModelPrefLoaded) return;
+    btwModelPrefLoaded = true;
+    A.fetchJson('/api/settings/prefs').then(function (pf) {
+      btwModelPref = pf && typeof pf.btwModel === 'string' && pf.btwModel !== '' ? pf.btwModel : null;
+      var t = Pane.activeTab();
+      if (t && t.kind === 'btw') Pane.rerenderBody();
+    }, function () { /* 读失败按无偏好 */ });
+  }
   function openBtwTab() {
+    loadBtwModelPref();
     btwSeq++;
     var spec = Pane.btwTabSpec(btwSeq);
     spec.data.sid = currentSid; /* 归属会话（POST /btw 落点——切会话后 tab 内发问仍指原会话） */
@@ -3298,7 +3321,7 @@ function $(id) { return document.getElementById(id); }
   Pane.onBodyRender('btw', function (data, bodyEl) {
     var locked = data.sid !== currentSid; /* Important#2①：跨会话门控——非归属会话的 btw 帧已随旧流关闭，发问将永无回填 */
     /* 走查修⑨：芯片显示 = tab 覆盖值 ?? 会话当前（渲染期现算——会话换模型/档后重渲即跟随） */
-    data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(currentModel);
+    data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(btwModelPref || currentModel); /* 走查修⑨③：tab 覆盖 > 侧问偏好 > 会话当前 */
     data.chipEffort = data.btwEffort ? data.btwEffort : (currentEffort !== '' ? currentEffort : '—');
     bodyEl.innerHTML = Pane.btwTabHtml(data, locked);
     var bForm = bodyEl.querySelector('#btw-form');

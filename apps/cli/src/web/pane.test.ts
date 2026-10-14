@@ -46,7 +46,7 @@ interface PaneApi {
   btwTabSpec: (seq: number) => Tab & { data: { rounds: BtwRound[] } };
   applyBtwFrame: (rounds: BtwRound[], frame: BtwFrameIn) => BtwRound[];
   settleBtwRounds: (rounds: BtwRound[]) => number;
-  btwTabHtml: (data: { rounds: BtwRound[] }, locked?: boolean) => string;
+  btwTabHtml: (data: { rounds: BtwRound[]; chipModel?: string; chipEffort?: string }, locked?: boolean) => string; /* 走查修⑨ */
   pickerHtml: (rows: { kind: string; id?: string; label: string; prefix?: string; open: () => void }[]) => string; /* 走查修① */
 }
 const P = (globalThis as { OrosusPane?: PaneApi }).OrosusPane!;

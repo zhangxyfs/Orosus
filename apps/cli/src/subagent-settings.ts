@@ -1,4 +1,6 @@
 import { join, dirname } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { parse } from "smol-toml";
 import { loadConfig, writeSectionKey, sectionPath } from "@orosus/core";
 import { orosusHome } from "@orosus/contracts/home";
 import { t } from "./i18n/app.ts";
@@ -135,4 +137,61 @@ export async function runSubagentMaxTurnsSetting(
   return hit.v === null
     ? t("subagent.turns.cleared")
     : t("subagent.turns.setPreset", { label: hit.label, v: hit.v === -1 ? undefined : hit.v, timeOnly: hit.v === -1 ? "1" : undefined });
+}
+
+/** 走查修⑨③（2026-10-14 用户口令）：侧问模型偏好——config.toml **顶层键** `btwModel`（限定形
+ *  provider/model 或裸模型名；缺省/缺键 = 跟随会话当前模型）。顶层键容忍度 = CH-06 表外键小写透传；
+ *  不写 modules.d（btw 非模块——orphan 节会触发「无对应已安装模块」警告）。 */
+export function readBtwModel(filePath = join(orosusHome(), "config.toml")): string | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+  } catch {
+    return undefined; // 缺文件 = 跟随态
+  }
+  try {
+    const parsed = parse(raw) as Record<string, unknown>;
+    const v = parsed["btwModel"];
+    return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 写/删顶层 btwModel 键（value null = 删键回跟随）。CM-01 同款拒写：文件在但整文件 parse 失败 = 不动。 */
+export function writeBtwModelKey(value: string | null, filePath = join(orosusHome(), "config.toml")): void {
+  let raw = "";
+  try {
+    raw = readFileSync(filePath, "utf8").replace(/^﻿/, "");
+  } catch {
+    /* 缺文件从空起 */
+  }
+  if (raw !== "") {
+    try {
+      parse(raw);
+    } catch {
+      return; // CM-01：读不懂的盘不动
+    }
+  }
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  const lines = raw === "" ? [] : raw.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === "" && raw !== "") lines.pop();
+  const keyRe = /^\s*btwModel\s*=/;
+  const SECTION_RE_LOCAL = /^\s*\[/;
+  // 顶层区 = 首个节头之前；命中既有行就改写/删除，否则插到首节前（无节则尾追）
+  let firstSection = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (SECTION_RE_LOCAL.test(lines[i]!)) { firstSection = i; break; }
+    if (firstSection === -1 && keyRe.test(lines[i]!)) {
+      if (value === null) lines.splice(i, 1);
+      else lines[i] = `btwModel = ${JSON.stringify(value)}`;
+      writeFileSync(filePath, lines.join(eol) + eol, "utf8");
+      return;
+    }
+  }
+  if (value === null) return; // 删键但键不在场
+  const line = `btwModel = ${JSON.stringify(value)}`;
+  if (firstSection >= 0) lines.splice(firstSection, 0, line, "");
+  else { if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push(""); lines.push(line); }
+  writeFileSync(filePath, lines.join(eol) + eol, "utf8");
 }

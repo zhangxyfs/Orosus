@@ -306,6 +306,30 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes("th:first-child"), "首列 nowrap 收缩贴合规则已裁（图1 挤压根因）").toBe(false);
   });
 
+  it("⑬d 走查修⑩（2026-10-14 用户报障）：/compact 过程态横杠 + 摘要弹窗加大 + 侧问模型偏好", () => {
+    const render = read("render.js");
+    const app = read("app.js");
+    const css = read("style.css");
+    /* ① 过程行 + 落定横杠（仿 ZCode 图1/图3）+ 点击开摘要 + 提示挪 toast */
+    expect(css).toContain(".cmp-line");
+    expect(css).toContain(".cmp-line.working");
+    expect(css).toContain(".cmp-line.done");
+    expect(render).toContain("正在压缩上下文");
+    expect(render).toContain("⊘ 上下文已压缩");
+    expect(render).toContain("onCompactionOpen");
+    expect(render).toContain("onCompactionDone");
+    expect(render.includes("[已压缩："), "旧行文提示退役（toast 化）").toBe(false);
+    expect(app).toContain("onCompactionOpen: function () { openCompactWindow(); }");
+    /* ② 弹窗加大 */
+    expect(css).toContain(".modal.compact-modal");
+    expect(app).toContain("big: true, /* 走查修⑩②");
+    /* ③ 侧问模型偏好：设置页行在子代理模型前 + prefs 键 + 芯片默认序 */
+    expect(app).toContain("id=\"mp-btwmodel\"");
+    expect(app.indexOf("mp-btwmodel")).toBeLessThan(app.indexOf("mp-submodel")); // 在子代理前（口令）
+    expect(app).toContain("postPref('btwModel'");
+    expect(app).toContain("btwModelPref || currentModel");
+  });
+
   it("⑬c 走查修⑨（2026-10-14 用户口令）：btw 芯片——模型/思考档 tab 级临时覆盖", () => {
     const paneJs = read("pane.js");
     const app = read("app.js");
@@ -326,7 +350,7 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app).toContain("tab.data.btwModel ? { model: tab.data.btwModel }");
     expect(app).toContain("tab.data.btwEffort ? { effort: tab.data.btwEffort }");
     /* 渲染期现算默认（覆盖 ?? 会话当前） */
-    expect(app).toContain("data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(currentModel)");
+    expect(app).toContain("data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(btwModelPref || currentModel)"); /* 走查修⑨③：默认序 = tab 覆盖 > 侧问偏好 > 会话当前 */
   });
 
   it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {

@@ -993,7 +993,19 @@ body.light .work-head { color: var(--muted); }
 .btw-a { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: 1.75; white-space: pre-wrap; word-break: break-word; padding-left: 2px; }
 .btw-think { color: var(--muted-dim); font-size: calc(12px * var(--fz)); line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); margin-bottom: 6px; max-height: calc(1.7em * 10); overflow-y: auto; } /* 走查修②：思考过程块——主流思考块同款保留语义（暗色缩进条 + 限高滚动） */
 .btw-think .dim { display: block; margin-bottom: 2px; }
-.btw-chip { font-size: calc(11px * var(--fz)); padding: 1px 8px; } /* 走查修⑨：侧问 composer 模型/思考档芯片（cb-chip 基座的紧凑形） */
+.btw-chip { font-size: calc(11px * var(--fz)); padding: 1px 8px; }
+
+/* 走查修⑩（2026-10-14 用户报障）：压缩过程/落定横杠——仿 ZCode 图1/图3（横杠夹中行文字；
+ *  working = 转圈动画行；done = 可点（hover 提示色），点开压缩摘要弹窗）。 */
+.cmp-line { display: flex; align-items: center; gap: 10px; margin: 10px 2px; color: var(--muted-dim); font-size: calc(11.5px * var(--fz)); }
+.cmp-line .cmp-rule { flex: 1; height: 1px; background: var(--border); transition: background 0.15s ease; }
+.cmp-line .cmp-text { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cmp-line.working .cmp-text { color: var(--info); }
+.cmp-line.done { cursor: pointer; }
+.cmp-line.done:hover .cmp-text { color: var(--fg); }
+.cmp-line.done:hover .cmp-rule { background: var(--accent-line); }
+/* 走查修⑩②：压缩摘要弹窗加大（用户报障「屏幕这么大只占一点」——settings-modal 之上再放宽高） */
+.modal.compact-modal { width: min(1100px, calc(100% - 40px)); max-width: calc(100% - 40px); height: min(82vh, calc(100vh - 60px)); max-height: 82vh; } /* 走查修⑨：侧问 composer 模型/思考档芯片（cb-chip 基座的紧凑形） */
 
 /* 走查修①（2026-10-13 用户口令）：零 tab 空态「打开标签页」选择器——仿图2 ZCode 形态
  * （居中标题 + 副题 + 虚线大卡网格；卡片 = 可开类型行，现仅侧问，类型扩展自动多卡）。 */

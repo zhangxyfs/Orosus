@@ -56,7 +56,7 @@ import { lastUsageOf } from "../usage-text.ts";
 import { BUILTIN_LOCALES, createLocaleStore } from "../i18n/store.ts";
 import { readUpdateCheckEnabled, updateConfigFile, writeUpdateCheckKey } from "../update-settings.ts";
 import { updateInfoNow } from "../update-check.ts";
-import { readSubagentConfig, writeSubagentConfigKey } from "../subagent-settings.ts";
+import { readBtwModel, readSubagentConfig, writeBtwModelKey, writeSubagentConfigKey } from "../subagent-settings.ts";
 import { readSkillDisabled, toggleSkillDisabled } from "../skill-settings.ts";
 import { hooksFace, setHookDisabled, trustProjectHooks } from "../hooks-ui.ts";
 import { readPeersConfig, writePeersConfigKey } from "../peers-settings.ts";
@@ -514,11 +514,13 @@ registerRoute("GET", "/api/settings/prefs", async (_req, res) => {
   } catch { /* 同上 */
   }
   const sub = readSubagentConfig(join(orosusHome(), "config.toml"));
+  const btwModel = readBtwModel(); /* 走查修⑨③：侧问模型偏好（config.toml 顶层键——缺省 null = 跟随会话当前） */
   sendJson(res, 200, {
     ok: true,
     visionModel,
     search,
     subagent: { model: sub.model ?? null, approvalMode: sub.approvalMode ?? null, maxTurns: sub.maxTurns ?? null },
+    btwModel: btwModel ?? null,
   });
 });
 
@@ -590,8 +592,18 @@ registerRoute("POST", "/api/settings/prefs", async (req, res) => {
         writeSubagentConfigKey("maxTurns", value === null ? null : String(value), join(orosusHome(), "config.toml"));
         break;
       }
+      case "btwModel": {
+        /* 走查修⑨③：侧问模型偏好（config.toml 顶层 btwModel 键；值 = provider/model 限定形或裸模型名
+         *  ——SW-17 解析口认两形；null/空串 = 删键回跟随会话当前） */
+        if (value !== null && (typeof value !== "string" || value.trim() === "")) {
+          sendJson(res, 400, { ok: false, error: "btwModel 取值须为 模型名（可槽/模型限定形）或 null（跟随）" });
+          return;
+        }
+        writeBtwModelKey(value === null ? null : value.trim(), join(orosusHome(), "config.toml"));
+        break;
+      }
       default:
-        sendJson(res, 400, { ok: false, error: "未知 key（合法键：visionModel / search.backend / model / approvalMode / maxTurns）" });
+        sendJson(res, 400, { ok: false, error: "未知 key（合法键：visionModel / search.backend / model / approvalMode / maxTurns / btwModel）" });
         return;
     }
   } catch (err) {
