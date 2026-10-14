@@ -330,11 +330,19 @@ export function loadHistoricalSubagents(sessionsDir: string, mainSid: string): S
     const parent = typeof header.parentSession === "string" && header.parentSession.startsWith("agents_")
       ? header.parentSession.slice("agents_".length) : undefined;
     const m = meta.get(id);
+    /* 走查修②（用户报障「子代理名字叫历史任务不对」）：meta 落空（结果文本截断/旧格式）时回退到
+     *  子代理会话首条用户消息（任务书 prompt）首行截断——任务书即该代理的真名，胜过空名兜底。 */
+    let label = m?.label;
+    if (label === undefined) {
+      const firstUser = events.find((e) => e.type === "user/message") as { content?: { kind?: string; text?: string }[] } | undefined;
+      const firstLine = (firstUser?.content ?? []).filter((p) => p.kind === "text").map((p) => p.text ?? "").join(" ").split("\n")[0]?.trim() ?? "";
+      if (firstLine !== "") label = firstLine.length > 40 ? firstLine.slice(0, 40) + "…" : firstLine;
+    }
     out.push({
       id,
       depth: parent !== undefined ? 2 : 1,
       ...(parent !== undefined ? { parentId: parent } : {}),
-      label: m?.label ?? t("tasks.history.label"),
+      label: label ?? t("tasks.history.label"),
       status,
       background: m?.background ?? false,
       ...(m?.roleName !== undefined ? { roleName: m.roleName } : {}),
@@ -375,7 +383,7 @@ function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<str
   } catch {
     return new Map();
   }
-  const calls = new Map<string, { description?: string; background?: boolean; role?: string }>();
+  const calls = new Map<string, { description?: string; background?: boolean; role?: string; items?: string[] }>();
   const out = new Map<string, { label: string; background: boolean; roleName?: string }>();
   for (const l of raw.split("\n")) {
     if (l.trim() === "") continue;
@@ -388,16 +396,22 @@ function spawnMetaFromMainSession(sessionsDir: string, mainSid: string): Map<str
     if (e.type === "tool/call" && e.name === "tool-subagent__spawn" && typeof e.callId === "string") {
       const desc = typeof e.args?.description === "string" ? (e.args.description as string) : undefined;
       const role = typeof e.args?.role === "string" ? (e.args.role as string) : undefined;
+      const items = Array.isArray(e.args?.items) ? (e.args.items as unknown[]).filter((x): x is string => typeof x === "string") : undefined;
       calls.set(e.callId, {
         ...(desc !== undefined ? { description: desc } : {}),
         background: e.args?.background === true,
         ...(role !== undefined ? { role } : {}),
+        ...(items !== undefined ? { items } : {}),
       });
     } else if (e.type === "tool/result" && typeof e.callId === "string" && calls.has(e.callId)) {
       const c = calls.get(e.callId)!;
-      for (const id of spawnIdsIn(String(e.output ?? ""))) {
-        out.set(id, { label: c.description ?? t("tasks.history.label"), background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
-      }
+      const ids = spawnIdsIn(String(e.output ?? ""));
+      ids.forEach((id, i) => {
+        /* 走查修②：批量派单按序对条目（编号名册序=派单序——截断旧文本只剩前 N 个时前 N 对依然真） */
+        const item = c.items?.[i];
+        const label = item !== undefined && c.description !== undefined ? `${c.description}：${item}` : c.description ?? t("tasks.history.label");
+        out.set(id, { label, background: c.background === true, ...(c.role !== undefined ? { roleName: c.role } : {}) });
+      });
     }
   }
   return out;

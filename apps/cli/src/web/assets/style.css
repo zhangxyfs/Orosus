@@ -993,6 +993,17 @@ body.light .work-head { color: var(--muted); }
 .btw-a { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: 1.75; white-space: pre-wrap; word-break: break-word; padding-left: 2px; }
 .btw-think { color: var(--muted-dim); font-size: calc(12px * var(--fz)); line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); margin-bottom: 6px; max-height: calc(1.7em * 10); overflow-y: auto; } /* 走查修②：思考过程块——主流思考块同款保留语义（暗色缩进条 + 限高滚动） */
 .btw-think .dim { display: block; margin-bottom: 2px; }
+
+/* 走查修①（2026-10-13 用户口令）：零 tab 空态「打开标签页」选择器——仿图2 ZCode 形态
+ * （居中标题 + 副题 + 虚线大卡网格；卡片 = 可开类型行，现仅侧问，类型扩展自动多卡）。 */
+.pane-picker { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; overflow-y: auto; }
+.pp-title { font-size: calc(16px * var(--fz)); font-weight: 600; color: var(--fg); }
+.pp-sub { color: var(--muted-dim); font-size: calc(12px * var(--fz)); margin-bottom: 12px; }
+.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; width: min(520px, 92%); }
+.pp-card { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 12px; border: 1.5px dashed var(--border); border-radius: 12px; background: transparent; color: var(--fg); cursor: pointer; font-size: calc(13px * var(--fz)); transition: border-color 0.15s ease, background 0.15s ease; }
+.pp-card:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+.pp-ico { font-size: calc(18px * var(--fz)); color: var(--muted); }
+.pp-card:hover .pp-ico { color: var(--accent); }
 .btw-a .dim { color: var(--muted-dim); }
 .btw-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .btw-hint { color: var(--muted-faint); font-size: calc(10.5px * var(--fz)); }
@@ -1071,9 +1082,12 @@ body.light .work-head { color: var(--muted); }
 .md blockquote { margin: 0.35em 0 0.5em; padding: 2px 0 2px 12px; border-left: 2px solid var(--border); color: var(--muted-dim); }
 /* 表格（2026-10-12 走修：对齐 TUI table.ts 列宽分配观感——满宽铺开 + 首列贴合内容不逐字竖排 +
    其余列按内容需求分配 + 顶对齐；此前无宽约束，长内容列挤扁窄列、类别列逐字断行不可读） */
-.md table { border-collapse: collapse; margin: 0.4em 0 0.7em; font-size: 0.95em; width: 100%; }
-.md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
-.md th:first-child, .md td:first-child { width: 1%; white-space: nowrap; } /* 首列收缩贴合（类别/键名列）——长首列退化由 nowrap 自然顶宽 */
+/* 走查修①（2026-10-13 用户报障图1）：表格改 table-layout:fixed——列宽按列数均分+内容换行兜底，
+ *  不再有「首列 nowrap 贴合」把超长路径顶到吞噬其余列的退化（旧规则注释自认的退化形态实锤翻车）。
+ *  参照系借法（kimi-code/ZCode 均为 TUI——其表格是「宽度预算制：每列分得有界配额、内容在配额内换行」，
+ *  web 直译 = fixed 布局 + anywhere 换行；两仓无 web 表格 CSS 可直裁，原则借鉴而非照抄）。 */
+.md table { border-collapse: collapse; margin: 0.4em 0 0.7em; font-size: 0.95em; width: 100%; table-layout: fixed; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
 .md a { color: var(--accent); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 0.8em 0; }
 .md img { max-width: 100%; border-radius: 8px; }

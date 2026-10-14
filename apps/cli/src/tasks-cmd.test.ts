@@ -206,6 +206,31 @@ describe("历史子代理名册（2026-09-27 拍板：不删旧数据就得能�
 		expect(freshFile).toBeDefined();
 	});
 
+	it("走查修②（用户报障「子代理名字叫历史任务不对」）：批量派单按序对条目 + meta 落空回退任务书首行", () => {
+		dir = mkdtempSync(join(tmpdir(), "orosus-hist-label-"));
+		const sid = "s_main03";
+		// 两只代理盘上有档；主会话 spawn 结果只点名第一只（模拟旧会话溢写截断——第二只 meta 落空）
+		const mkAgent = (id: string, promptFirstLine: string): void => {
+			const file = join(dir!, "sessions", sid, "agents", `agents_${id}`, "agents", "session.jsonl");
+			mkdirSync(join(file, ".."), { recursive: true });
+			writeFileSync(file, [
+				{ v: 1, id: "e1", ts: "2026-10-13T10:00:00.000Z", type: "session/header", parentSession: null },
+				{ v: 1, id: "e2", ts: "2026-10-13T10:00:01.000Z", type: "user/message", content: [{ kind: "text", text: promptFirstLine + "\n第二行细则" }] },
+				{ v: 1, id: "e3", ts: "2026-10-13T10:01:00.000Z", type: "turn/end", kind: "completed" },
+			].map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		};
+		mkAgent("aaaa0001", "区域A任务书");
+		mkAgent("bbbb0002", "区域B任务书——我这行才是该代理的真名");
+		const main = [
+			{ v: 1, id: "m1", ts: "t0", type: "tool/call", callId: "c1", name: "tool-subagent__spawn", args: { description: "并行调研", items: ["【A】契约包", "【B】内核"] } },
+			{ v: 1, id: "m2", ts: "t0", type: "tool/result", callId: "c1", output: "子代理完成（2/2）：\n- aaaa0001 · 完成 · 3 轮\n（中段截断逸出——bbbb0002 编号不在文本）" },
+		];
+		writeFileSync(join(dir!, "sessions", sid, "agents", "session.jsonl"), main.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+		const hist = loadHistoricalSubagents(join(dir, "sessions"), sid);
+		expect(hist.length).toBe(2);
+		expect(hist.find((e) => e.id === "aaaa0001")!.label).toBe("并行调研：【A】契约包"); // meta 命中 + 按序对条目
+		expect(hist.find((e) => e.id === "bbbb0002")!.label).toBe("区域B任务书——我这行才是该代理的真名"); // meta 落空 → 任务书首行
+	});
 	it("㊺g 排序最新在最上 + 查看窗可进（历史条目喂 renderAgentView 走同一渲染）", () => {
 		const entries = sortNewestFirst([
 			T({ id: "aaaa0001", label: "旧的", enqueuedAt: "2026-09-27T10:00:00Z", startedAt: "2026-09-27T10:00:01Z" }),

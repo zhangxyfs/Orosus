@@ -299,6 +299,13 @@ describe("web T15：前端骨架静态资产", () => {
     expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
   });
 
+  it("⑬b 走查修①表格（用户报障图1）：.md table 固定布局——列均分+单元格任意换行，首列 nowrap 挤压形态绝迹", () => {
+    const css = read("style.css");
+    expect(/\.md table\s*\{[^}]*table-layout:\s*fixed/.test(css), "表格固定布局（列宽有界均分）").toBe(true);
+    expect(/\.md th, \.md td\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css), "单元格任意点换行").toBe(true);
+    expect(css.includes("th:first-child"), "首列 nowrap 收缩贴合规则已裁（图1 挤压根因）").toBe(false);
+  });
+
   it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {
     const css = read("style.css");
     const app = read("app.js");
