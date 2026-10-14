@@ -317,6 +317,30 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     await hs.close();
   }, 30_000);
 
+  it("⑨ 思考流（走查修②）：reasoning/delta 消费为 thinking 帧——累积式、先于 answering、answer 后不再发；正文消息不含思考", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const { hs, requests, frames } = setupSession([
+      [
+        { type: "reasoning/delta", text: "想一" },
+        { type: "reasoning/delta", text: "想二" },
+        { type: "text/delta", text: "答案" },
+        { type: "finish", kind: "stop" },
+      ],
+    ], home, cwd);
+    await hs.ready;
+    askBtw(hs, "btw-1", "带思考的问题");
+    await waitFor(() => frames.some((f) => f.phase === "answer"));
+    const thinks = frames.filter((f) => f.phase === "thinking");
+    expect(thinks.length).toBeGreaterThanOrEqual(1);
+    expect(thinks.at(-1)?.text).toBe("想一想二"); // 累积式（"想一"+"想二"）
+    expect(thinks.every((f) => f.round === 1 && f.tab === "btw-1")).toBe(true);
+    // 思考不进正文消息（wire 面无 thinking 文本泄漏）
+    expect(JSON.stringify(requests[0]?.messages ?? [])).not.toContain("想一想二");
+    await hs.close();
+  }, 30_000);
+
   it("⑥ CLI 形态回归：buildBtwRequest 无 opts 产出快照（GC1 红线——单轮无工具形态；走查修 2026-10-13 ①/⑥ 起快照内容换界标版：主历史加显式起止界标，防模型把继承历史误认作侧问线）", async () => {
     const ev = (seq: number, type: string, fields: Record<string, unknown> = {}): SessionEvent =>
       ({ v: 1, id: `e${seq}`, parentId: null, seq, ts: "2026-10-13T00:00:00.000Z", type, ...fields }) as SessionEvent;

@@ -139,6 +139,7 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
     hs.emitBtw({ tab, phase, text, round: roundNo });
   };
   let latestText = ""; // 本问已积累正文（手动停止落定的读取面——IIFE 流内更新）
+  let think = ""; // 累积思考文本（走查修②：reasoning/delta 消费——与主流思考块同源，answer 后保留）
   /* 手动停止落定（走查修④）：仅 stopRequested 时结算——把在飞轮落成「已积累文本 + 〔已停止〕尾注」
    *  并入轮串归档（与正常 answer 同面：前端收到 answer 帧即定终态，不再悬「回答中…」）。 */
   const settleIfStopped = (): void => {
@@ -166,6 +167,9 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
             text += c.text;
             latestText = text;
             emit("answering", text); // 累积式（前端晚开窗整段渲染）
+          } else if (c.type === "reasoning/delta") {
+            think += c.text;
+            emit("thinking", think); // 走查修②：思考流帧（前端活跃 tab 增量渲染——与主流思考块同源）
           } else if (c.type === "toolcall/argumentsDelta") {
             const p = pending.get(c.callId) ?? { callId: c.callId, name: "", argsJson: "" };
             if (c.name !== undefined && c.name !== "") p.name = c.name;

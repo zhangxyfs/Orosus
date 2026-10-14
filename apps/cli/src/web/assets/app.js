@@ -2903,20 +2903,12 @@ function $(id) { return document.getElementById(id); }
     var st = SPAWN_ST[row.status] ?? [String(row.status), 'st-run'];
     return '<span class="pt-dot ' + st[1] + '">' + (AGENT_ICON[row.status] ?? '◐') + '</span>';
   };
-  /* ＋菜单内容源（v2 4683-4688 直裁）：类型行「✦ 侧问选项卡」（W6——无 id，每次点击开新实例）居首，
-   *  随后名册行「子代理 · label」（孙代理 ⎿ 前缀）；已开的由 pane.js 滤除 */
+  /* ＋菜单内容源（走查修③——2026-10-13 用户口令）：只留「✦ 侧问」类型行（点击即开新侧问选项卡，
+   *  仿 ZCode 侧聊入口形态）；子代理不再罗列（其入口 = /tasks 批量开卡与主流 spawn 组行点击——
+   *  名册罗列在 /tasks 全开后只剩噪音）。原 v2 4683-4688 名册行形态废弃，pane.js 滤除/禁用态逻辑
+   *  兼容保留（单行恒可开，不再触达禁用态）。 */
   Pane.plusSource = function () {
-    if (taskRoster.length === 0 && currentSid !== null) void refreshTasks(currentSid); /* 冷缓存预热——下次开即实名册 */
-    var rows = [{ kind: 'btw', label: '侧问选项卡', prefix: '✦ ', open: function () { openBtwTab(); } }];
-    return rows.concat(taskRoster.map(function (tk) {
-      return {
-        kind: 'agent',
-        id: tk.id,
-        label: '子代理 · ' + (tk.label || tk.id),
-        prefix: tk.depth === 2 ? '⎿ ' : '',
-        open: function () { openAgentTab(tk.id); },
-      };
-    }));
+    return [{ kind: 'btw', label: '侧问', prefix: '✦ ', open: function () { openBtwTab(); } }];
   };
   /** 拉名册并刷 tab 状态点（cmdTasks / sg-row 点击 / 审批应答共用；sid 守卫——切会话后不回写他话名册）。 */
   function refreshTasks(sid) {
@@ -3198,7 +3190,12 @@ function $(id) { return document.getElementById(id); }
       tab = Pane.activeTab();
     }
     Pane.applyBtwFrame(tab.data.rounds, frame);
-    if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
+    if (Pane.activeTab() === tab) {
+      /* 走查修②（闪烁根除）：answering/thinking 帧增量渲染（只改末轮两元素，composer 不重建）；
+       *  tool 相位切换与 answer/error 终态仍整体重渲（终帧 md 整块渲染兜底）。 */
+      if ((frame.phase === 'answering' || frame.phase === 'thinking') && Pane.btwLiveUpdate(frame)) return;
+      rerenderBtwKeepingDraft();
+    }
   }
   /** 重渲保草稿（v2 4569-4577 同款）：帧驱动重渲不吞侧问框未发草稿 + 焦点归还（原本在侧问框时）——
    *  帧面重渲不抢主输入框焦点（v2 bindPaneBody 无条件 focus 的盲点补丁）。 */

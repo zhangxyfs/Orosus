@@ -63,10 +63,12 @@ export interface SendResult {
  *  （多轮 per-tab 实例——帧随 tab 路由到对应选项卡；旧单轮路径固定 "btw"）；answering = 累积正文
  *  （晚开窗整段渲染）、tool = 工具查证中（前端显「查证中…」——W6 消费，本批只定帧形）、answer =
  *  终态全文、error = 失败原因；round = 问题轮序（1 起——同轮内的查证与回答同号）。旁路快问不经
- *  turn/chunk 通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。 */
+ *  turn/chunk 通道（零落盘），独立帧面与主流区分（busy 期 /btw 与主 turn 并流不串台）。
+ *  走查修（2026-10-13 用户报障②）：thinking = 累积思考文本（reasoning/delta 消费——与主流思考块
+ *  同源；先于正文到达，answer 后仍保留展示）。 */
 export interface BtwFrame {
   tab: string;
-  phase: "answering" | "answer" | "error" | "tool";
+  phase: "answering" | "answer" | "error" | "tool" | "thinking";
   text: string;
   round: number;
 }

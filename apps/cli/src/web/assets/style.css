@@ -991,6 +991,8 @@ body.light .work-head { color: var(--muted); }
  * 解析，短消息气泡被挤成单字竖行（实测 margin-left 526px、bubble 48px、「你好」两字两行）；右贴本由
  * .msg-user 的 align-items:flex-end 承担（:312），该行纯属冗余兼有害。 */
 .btw-a { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: 1.75; white-space: pre-wrap; word-break: break-word; padding-left: 2px; }
+.btw-think { color: var(--muted-dim); font-size: calc(12px * var(--fz)); line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); margin-bottom: 6px; max-height: calc(1.7em * 10); overflow-y: auto; } /* 走查修②：思考过程块——主流思考块同款保留语义（暗色缩进条 + 限高滚动） */
+.btw-think .dim { display: block; margin-bottom: 2px; }
 .btw-a .dim { color: var(--muted-dim); }
 .btw-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
 .btw-hint { color: var(--muted-faint); font-size: calc(10.5px * var(--fz)); }

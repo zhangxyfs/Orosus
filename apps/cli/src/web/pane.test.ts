@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import "./assets/pane.js"; // 副作用挂 globalThis.OrosusPane（经典脚本零构建——node/浏览器同源导出；DOM 段 document 守卫不触）
 
 /* W6 追加面：btw 选项卡纯函数（btwTabSpec/applyBtwFrame/btwTabHtml——帧归约与 HTML 推导零 DOM 依赖）。 */
-type BtwRound = { q: string; a: string | null; phase: string | null };
+type BtwRound = { q: string; a: string | null; phase: string | null; think?: string };
 type BtwFrameIn = { tab: string; phase: string; text: string; round: number };
 
 /* noUncheckedIndexedAccess 下显式接口剥可选层（兼作导出面清单） */
@@ -214,9 +214,7 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
     expect(APP).toContain("taskRoster = rows;"); // updateSpawnGroups 拍内更新名册缓存
     expect(APP).toContain("refreshAgentTabDots();"); // 联动刷新已开 agent tab 状态点（dotOf 注入实现）
     expect(APP).toContain("querySelector('#pt-list .pt-item')"); // 名册轮询门：组卡行或已开 tab 任一在即取
-    expect(W3).toContain("Pane.plusSource = function"); // ＋菜单内容源（v2 4683-4688：子代理 · label / 孙代理 ⎿ 前缀）
-    expect(W3).toContain("子代理 · ");
-    expect(W3).toContain("⎿ ");
+    expect(W3).toContain("Pane.plusSource = function"); // ＋菜单内容源（走查修③：只留「✦ 侧问」类型行——子代理不罗列，入口走 /tasks 与 spawn 组行；孙代理 ⎿ 前缀随罗列一同废弃）
   });
 
   it("W3⑥ btn-split 未开分支改接 cmdTasks（W1 留位收口——v2 4730-4734 同款：◧ 分栏 = /tasks 形态）", () => {
@@ -327,6 +325,32 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(html2).not.toContain('<div class="msg-text"></div>'); // 空 q 垫片不出空气泡
   });
 
+  it("走查修②（2026-10-13 用户报障）：thinking 帧——思考文本落 rd.think、相位不倒退、思考中出停止钮、思考块渲染且 answer 后保留、切走结算视为在飞", () => {
+    const rounds: BtwRound[] = [];
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "thinking", text: "先想想", round: 1 });
+    expect(rounds[0]).toMatchObject({ q: "", a: null, phase: "thinking", think: "先想想" });
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "thinking", text: "先想想再想想", round: 1 }); // 累积
+    expect(rounds[0]!.think).toBe("先想想再想想");
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "answering", text: "答", round: 1 }); // 正文启
+    P.applyBtwFrame(rounds, { tab: "btw-1", phase: "thinking", text: "又想", round: 1 }); // 正文已启不倒退
+    expect(rounds[0]!.phase).toBe("answering");
+    expect(rounds[0]!.think).toBe("又想"); // 思考文本更新（交错流）
+    // 渲染：thinking 相位 = 思考块（走字提示）+ 空 .btw-a；answer 落定 = 思考块保留（「思考过程」标头）+ md 正文
+    const r2: BtwRound[] = [{ q: "q", a: null, phase: "thinking", think: "想" }];
+    const hThink = P.btwTabHtml({ rounds: r2 });
+    expect(hThink).toContain('class="btw-think"');
+    expect(hThink).toContain("思考中…");
+    expect(hThink).toContain('data-btwstop="1"'); // 思考中也可停止
+    P.applyBtwFrame(r2, { tab: "btw-1", phase: "answer", text: "**答**", round: 1 });
+    const hDone = P.btwTabHtml({ rounds: r2 });
+    expect(hDone).toContain("思考过程"); // 落定后思考块保留（标头换静态）
+    expect(hDone).not.toContain("data-btwstop");
+    // 切走结算：纯 thinking 轮（无正文）视为在飞
+    const r3: BtwRound[] = [{ q: "q", a: null, phase: "thinking", think: "想" }];
+    expect(P.settleBtwRounds(r3)).toBe(1);
+    expect(String(r3[0]!.a)).toContain("已中断");
+  });
+
   it("走查修④⑤（2026-10-13 用户报障）：在飞末轮发送钮变 ■ 停止 + 落定回答走 mdRender（在飞保持纯文本）", () => {
     // ④ 在飞 → 停止钮（type=button 不走 submit + data-btwstop 路由标记）；落定/空态 → 恢复原发送钮
     const flying = P.btwTabHtml({ rounds: [{ q: "q", a: null, phase: "answering" }] });
@@ -369,7 +393,7 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
     expect(W6).toContain("Pane.btwTabSpec(btwSeq)");
     expect(W6).toContain("Pane.addTab(spec)");
     const ps = APP.slice(APP.indexOf("Pane.plusSource = function"), APP.indexOf("拉名册并刷 tab 状态点"));
-    expect(ps).toContain("侧问选项卡");
+    expect(ps).toContain("label: '侧问'"); // 走查修③：＋菜单单入口「✦ 侧问」（仿 ZCode 侧聊入口；旧名册罗列废弃）
     expect(ps).toContain("✦ ");
     expect(ps).toContain("openBtwTab()");
   });

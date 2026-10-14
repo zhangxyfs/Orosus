@@ -299,6 +299,26 @@ describe("web T15：前端骨架静态资产", () => {
     expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
   });
 
+  it("⑫ 走查修五连（2026-10-13 用户报障②③）：btw 思考流 + 增量渲染根除闪烁 + ＋菜单单入口", () => {
+    const app = read("app.js");
+    const paneJs = read("pane.js");
+    const svc = read("../btw-service.ts") === "" ? "" : null; // ts 不在资产面——btw-service 断言走其测试件
+    void svc;
+    /* ② 思考流：server 消费 reasoning/delta（btw-service 测试面钉）+ 前端 thinking 相位渲染/停止钮/增量更新 */
+    expect(paneJs).toContain("phase === 'thinking'");
+    expect(paneJs).toContain('class="btw-think"');
+    expect(paneJs).toContain("btwLiveUpdate: btwLiveUpdate");
+    expect(app).toContain("Pane.btwLiveUpdate(frame)");
+    /* ② 闪烁根除：answering/thinking 活跃帧不再整渲（增量优先，整渲只留相位切换/终态兜底） */
+    expect(app).toContain("(frame.phase === 'answering' || frame.phase === 'thinking') && Pane.btwLiveUpdate(frame)) return;");
+    /* ③ ＋菜单单入口：只留「✦ 侧问」类型行 */
+    expect(app).toContain("label: '侧问', prefix: '✦ '");
+    expect(app).not.toContain("子代理 · ' + (tk.label");
+    /* 思考块样式（CSP 类面） */
+    const css = read("style.css");
+    expect(css).toContain(".btw-think");
+  });
+
   it("⑪ 走查修（2026-10-13 用户报障六连）：回放交互委派 + 分支钮裁除 + btw 停止钮 + md 渲染 + 历史界标", () => {
     const render = read("render.js");
     const app = read("app.js");

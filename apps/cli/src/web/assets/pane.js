@@ -129,6 +129,7 @@
     if (frame.phase === 'answer') { rd.a = frame.text ?? ''; rd.phase = null; }
     else if (frame.phase === 'error') { rd.a = frame.text ?? ''; rd.phase = 'error'; }
     else if (frame.phase === 'tool') { rd.phase = 'tool'; } // 查证中——不覆盖已积累文本（下一轮 answering 重新累积）
+    else if (frame.phase === 'thinking') { rd.think = frame.text ?? ''; if (rd.phase !== 'answering' && rd.phase !== 'tool') rd.phase = 'thinking'; } // 走查修②：思考流——正文已启不倒退
     else { rd.a = frame.text ?? ''; rd.phase = 'answering'; }
     return list;
   }
@@ -144,7 +145,7 @@
     for (var i = 0; i < list.length; i++) {
       var rd = list[i];
       if (!rd || rd.phase === 'error') continue;
-      var inFlight = rd.phase === 'answering' || rd.phase === 'tool' || rd.a == null || rd.a === '';
+      var inFlight = rd.phase === 'answering' || rd.phase === 'tool' || rd.phase === 'thinking' || rd.a == null || rd.a === '';
       if (!inFlight) continue;
       rd.a = (rd.a ? rd.a + '\n' : '') + '〔已中断：切换会话〕';
       rd.phase = null;
@@ -166,12 +167,18 @@
     var q = rd && rd.q ? String(rd.q) : '';
     var a = rd && rd.a != null ? String(rd.a) : '';
     var phase = rd && rd.phase ? rd.phase : null;
-    var inFlight = phase === 'answering' || phase === 'tool';
+    var think = rd && rd.think ? String(rd.think) : '';
+    var inFlight = phase === 'answering' || phase === 'tool' || phase === 'thinking';
     var bubble = q === '' ? '' :
       '<div class="msg-user"><div class="msg-bubble"><div class="msg-text">' + esc(q) + '</div></div></div>';
+    /* 思考块（走查修②）：thinking 相位带走字提示；正文已启/落定后保留展示（主流思考块同款保留语义） */
+    var thinkHtml = think === '' ? '' :
+      '<div class="btw-think"><span class="dim">' + (phase === 'thinking' ? btwSpin(12) + ' 思考中…' : '思考过程') + '</span>' + esc(think) + '</div>';
     var body;
     if (phase === 'error') {
       body = '<span class="bad">侧问失败：' + esc(a) + '</span>';
+    } else if (phase === 'thinking') {
+      body = '';
     } else if (inFlight) {
       body = a !== '' ? esc(a) : '';
       if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">查证中…</span>';
@@ -179,7 +186,7 @@
     } else {
       body = a !== '' ? '<div class="md">' + btwMd(a) + '</div>' : '';
     }
-    return '<div class="btw-round">' + bubble + '<div class="btw-a">' + body + '</div></div>';
+    return '<div class="btw-round">' + bubble + thinkHtml + '<div class="btw-a">' + body + '</div></div>';
   }
 
   /** btwTabHtml(data, locked)——选项卡内容 HTML（v2 4484-4507 直裁）：.btw-scope 说明行 + .btw-stream
@@ -198,7 +205,7 @@
     /* 走查修④：末轮在飞 → 发送钮变 ■ 停止（对齐主 composer 忙时换停止）。在飞口径与 app.js
      *  sendBtwAsk 尾弹判据同款：answering/tool 相位（半截文本也算）或 a 未回填且非 error 终态。 */
     var lastRd = rounds.length > 0 ? rounds[rounds.length - 1] : null;
-    var inFlight = !lk && !!lastRd && (lastRd.phase === 'answering' || lastRd.phase === 'tool' || (lastRd.a == null && lastRd.phase !== 'error'));
+    var inFlight = !lk && !!lastRd && (lastRd.phase === 'answering' || lastRd.phase === 'tool' || lastRd.phase === 'thinking' || (lastRd.a == null && lastRd.phase !== 'error'));
     var html = '<div class="btw-wrap">' +
       '<div class="btw-scope">旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘</div>' +
       '<div class="btw-stream" id="btw-stream">';
@@ -220,6 +227,43 @@
     return html;
   }
 
+  /* btwLiveUpdate(frame)（走查修②）：活跃 btw tab 在飞帧的增量渲染——answering/thinking 帧
+   *  只改末轮 .btw-a / .btw-think 两元素（answering 节流 400ms 的渐进 md 解析），不再整体重渲
+   *  （整渲每帧重建 composer textarea = 闪烁根因）；相位切换（tool）与终态（answer/error）仍走
+   *  整体重渲。返回 true = 已增量处理（调用方免整渲）；false = 结构不匹配请整渲。
+   *  近底自动跟随（>64px 视差不抢滚动）。DOM 面挂导出（node 测试只验存在性——行为走浏览器走查）。 */
+  var btwLastLiveAt = 0;
+  function btwLiveUpdate(frame) {
+    var stream = document.getElementById('btw-stream');
+    if (stream === null) return false;
+    var rounds = stream.querySelectorAll('.btw-round');
+    var last = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+    if (last === null) return false;
+    var aEl = last.querySelector('.btw-a');
+    if (aEl === null) return false;
+    if (frame.phase === 'thinking') {
+      var tEl = last.querySelector('.btw-think');
+      if (tEl === null) {
+        tEl = document.createElement('div');
+        tEl.className = 'btw-think';
+        last.insertBefore(tEl, aEl);
+      }
+      tEl.innerHTML = '<span class="dim">' + btwSpin(12) + ' 思考中…</span>' + esc(frame.text || '');
+      if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 64) stream.scrollTop = stream.scrollHeight;
+      return true;
+    }
+    if (frame.phase === 'answering') {
+      var now = Date.now();
+      if (now - btwLastLiveAt < 400) return true; /* 节流：渐进 md 解析每 400ms 至多一次（终帧由 answer 整渲兜底） */
+      btwLastLiveAt = now;
+      var txt = frame.text || '';
+      aEl.innerHTML = (txt !== '' ? '<div class="md">' + btwMd(txt) + '</div>' : '') + btwSpin(12) + ' <span class="dim">回答中…</span>';
+      if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 64) stream.scrollTop = stream.scrollHeight;
+      return true;
+    }
+    return false;
+  }
+
   var P = {
     /* 纯函数（node 直测面） */
     findTab: findTab,
@@ -233,6 +277,7 @@
     btwTabSpec: btwTabSpec,
     applyBtwFrame: applyBtwFrame,
     settleBtwRounds: settleBtwRounds,
+    btwLiveUpdate: btwLiveUpdate, /* 走查修②：在飞帧增量渲染（app.js btwFeed 消费——闪烁根除） */
     btwTabHtml: btwTabHtml,
   };
 
@@ -391,7 +436,9 @@
     for (var k = 0; k < plusRows.length; k++) {
       html += '<button class="ctx-item" data-ptm="' + k + '">' + (plusRows[k].prefix || '') + esc(plusRows[k].label || '') + '</button>';
     }
-    if (unopened.length === 0) html += '<button class="ctx-item" disabled>子代理均已打开</button>';
+    /* 走查修③：禁用态脚注只在「内容源确曾提供实例行而全被滤除」时出现——plusSource 只给类型行
+     *  （本批新形态：＋菜单只列「✦ 侧问」）时不显（恒显会误导成「子代理都在别处开着」）。 */
+    if (agents.length > 0 && unopened.length === 0) html += '<button class="ctx-item" disabled>子代理均已打开</button>';
     ptMenuEl.innerHTML = html;
     ptMenuEl.hidden = false;
     /* 定位 clamp（v2 4690-4696 直裁）：右缘对齐 ＋ 按钮，再双向夹取，保证弹层完整落在选项卡条内 */

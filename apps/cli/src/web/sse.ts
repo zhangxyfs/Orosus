@@ -303,9 +303,9 @@ export function openStream(res: ServerResponse, hs: HostedSession, after: number
     hs.onQueue((items) => sendDirect(c, "queue", { items })), // 整表快照帧（多标签一致性）
     hs.onBtw((f) => { // T6 侧问流帧（W5 多轮化：answering 同 tab 窗内合并、其余保序——与主流 chunk 通道分面不串台）
       if (c.closed) return;
-      if (f.phase === "answering") {
-        // 累积式合并：同 tab 挂起的旧 answering 帧让位（最新已含全部正文——律二每窗至多一条）
-        const i = c.btwBuf.findIndex((x) => x.tab === f.tab && x.phase === "answering");
+      if (f.phase === "answering" || f.phase === "thinking") {
+        // 累积式合并：同 tab 挂起的旧 answering/thinking 帧让位（最新已含全部文本——律二每窗至多一条；走查修：thinking 同款口径）
+        const i = c.btwBuf.findIndex((x) => x.tab === f.tab && x.phase === f.phase);
         if (i >= 0) c.btwBuf.splice(i, 1);
       }
       c.btwBuf.push(f);
