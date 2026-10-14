@@ -454,6 +454,7 @@ function $(id) { return document.getElementById(id); }
     sessionCwd = typeof st.cwd === 'string' ? st.cwd : sessionCwd;
     currentPerm = typeof st.permission === 'string' ? st.permission : currentPerm;
     currentEffort = typeof st.effort === 'string' ? st.effort : currentEffort;
+    currentModel = typeof st.model === 'string' ? st.model : currentModel; /* 走查修⑨ */
     modelChip.innerHTML = esc(modelTail(st.model)) + ' <span class="dim">▾</span>';
     /* D10 口径：芯片显示 status.effort（未设置 = 目录默认档名）——永不渲染「自动」二字 */
     effortChip.innerHTML = '思考 ' + esc(currentEffort !== '' ? currentEffort : '—') + ' <span class="dim">▾</span>';
@@ -525,6 +526,7 @@ function $(id) { return document.getElementById(id); }
   var sessionCwd = '';            /* 当前会话工作目录（status 装配——@ 菜单/工具行相对化基准） */
   var currentPerm = '';           /* 权限三档（芯片显示 + 菜单勾标） */
   var currentEffort = '';         /* 思考档位显示口径（status.effort——未设置=目录默认档名，D10） */
+  var currentModel = '';          /* 会话当前模型限定形（status.model——btw 芯片默认值的数据源，走查修⑨） */
   var projectsPool = [];          /* cwd 芯片候选（bootstrap.projects——含 hidden 找回，D5） */
   var sendingNow = false;         /* 发送四态之「发送中」（POST 在途） */
   var escArmedAt = 0;             /* Esc 双击停止的 armed 时刻 */
@@ -3104,6 +3106,64 @@ function $(id) { return document.getElementById(id); }
     Pane.addTab(spec);
     return Pane.activeTab(); /* addTab 尾插即激活——返回新实例（data 与 spec 同引用） */
   }
+  /* 走查修⑨（2026-10-14 用户口令）：btw 模型覆盖菜单——平铺「跟随会话当前」+ 目录全量
+   *  provider/model 限定形行（临时覆盖只作用本 tab 的发问，不动会话模型——主菜单的 POST /model
+   *  写会话语义在此刻意不复用）。 */
+  function openBtwModelMenu(tab, anchorEl) {
+    if (!tab) return;
+    UI.fetchModels().then(function (data) {
+      if (!data) { toast('拉取模型清单失败'); return; }
+      var items = [{ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (!tab.data.btwModel ? '✓' : '') + '</span><span class="pi-name">跟随会话当前（' + esc(modelTail(currentModel)) + '）</span>', data: '' }];
+      (data.providers ?? []).forEach(function (p) {
+        (p.models ?? []).forEach(function (m) {
+          var q = p.key + '/' + m.name;
+          items.push({ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (tab.data.btwModel === q ? '✓' : '') + '</span><span class="pi-name">' + esc(q) + '</span>', data: q });
+        });
+      });
+      UI.openPick({
+        mini: 'right', anchor: anchorEl, title: '侧问模型（临时）', en: 'MODEL', items: items,
+        foot: '点击选定——仅本侧问卡生效 · Esc 关闭',
+        onPick: function (i) {
+          var v = items[i] && items[i].data;
+          if (v === undefined) return;
+          if (v === '') delete tab.data.btwModel; else tab.data.btwModel = v;
+          Pane.rerenderBody(); /* 芯片现算刷新 */
+        },
+      });
+    }, function () { toast('拉取模型清单失败'); });
+  }
+  /* 思考档覆盖菜单：档位取自生效模型（覆盖模型 ?? 会话当前）的目录声明；无声明按主菜单同款提示。 */
+  function openBtwEffortMenu(tab, anchorEl) {
+    if (!tab) return;
+    UI.fetchModels().then(function (data) {
+      if (!data) { toast('拉取模型清单失败'); return; }
+      var effective = tab.data.btwModel || currentModel;
+      var plat = (data.providers ?? []).find(function (p) { return effective.indexOf(p.key + '/') === 0 || p.key === effective; });
+      var modelName = effective.indexOf('/') >= 0 ? effective.slice(effective.indexOf('/') + 1) : effective;
+      var entry = plat ? (plat.models ?? []).find(function (m) { return m.name === modelName; }) : null;
+      /* 裸平台键形态（目录的 models[].name 有的带限定形有的不带——两段都试） */
+      if (!entry && plat) entry = (plat.models ?? []).find(function (m) { return (plat.key + '/' + m.name) === effective || m.name === effective; });
+      var efforts = (entry && entry.efforts) || [];
+      if (efforts.length === 0) {
+        toast('模型 ' + (modelName || '（未配置）') + ' 无思考档位信息（目录未声明 effort 档）');
+        return;
+      }
+      var items = [{ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (!tab.data.btwEffort ? '✓' : '') + '</span><span class="pi-name">跟随会话当前（' + esc(currentEffort !== '' ? currentEffort : '—') + '）</span>', data: '' }];
+      efforts.forEach(function (v) {
+        items.push({ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (tab.data.btwEffort === v ? '✓' : '') + '</span><span class="pi-name">' + esc(v) + '</span>', data: v });
+      });
+      UI.openPick({
+        mini: 'right', anchor: anchorEl, title: '侧问思考档（临时）', en: 'EFFORT', items: items,
+        foot: '点击选定——仅本侧问卡生效 · Esc 关闭',
+        onPick: function (i) {
+          var v = items[i] && items[i].data;
+          if (v === undefined) return;
+          if (v === '') delete tab.data.btwEffort; else tab.data.btwEffort = v;
+          Pane.rerenderBody();
+        },
+      });
+    }, function () { toast('拉取模型清单失败'); });
+  }
   function btwLabelOf(tabId) {
     var m = /^btw-(\d+)$/.exec(String(tabId || ''));
     return m !== null ? '侧问 ' + m[1] : String(tabId || '侧问');
@@ -3154,7 +3214,11 @@ function $(id) { return document.getElementById(id); }
       if (bi !== null) bi.value = '';
       rerenderBtwKeepingDraft();
     }
-    A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, q: q }) }).then(null, function (err) {
+    A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({
+      tab: tab.id, q: q,
+      ...(tab.data.btwModel ? { model: tab.data.btwModel } : {}), /* 走查修⑨：tab 级临时覆盖随问携带 */
+      ...(tab.data.btwEffort ? { effort: tab.data.btwEffort } : {}),
+    }) }).then(null, function (err) {
       rd.phase = 'error';
       rd.a = '发送失败：' + err.message;
       if (Pane.activeTab() === tab) rerenderBtwKeepingDraft();
@@ -3233,6 +3297,9 @@ function $(id) { return document.getElementById(id); }
   }
   Pane.onBodyRender('btw', function (data, bodyEl) {
     var locked = data.sid !== currentSid; /* Important#2①：跨会话门控——非归属会话的 btw 帧已随旧流关闭，发问将永无回填 */
+    /* 走查修⑨：芯片显示 = tab 覆盖值 ?? 会话当前（渲染期现算——会话换模型/档后重渲即跟随） */
+    data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(currentModel);
+    data.chipEffort = data.btwEffort ? data.btwEffort : (currentEffort !== '' ? currentEffort : '—');
     bodyEl.innerHTML = Pane.btwTabHtml(data, locked);
     var bForm = bodyEl.querySelector('#btw-form');
     var bInput = bodyEl.querySelector('#btw-input');
@@ -3258,6 +3325,12 @@ function $(id) { return document.getElementById(id); }
       bSend.className = 'sendbtn idle'; /* 即时落灰（帧回填后重渲归真——不等网络） */
       A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, abort: true }) }).then(null, function () { toast('停止失败——网络或服务异常'); });
     });
+    /* 走查修⑨：模型/思考档芯片——tab 级临时覆盖菜单（写 tab.data.btwModel/btwEffort，下次发问随
+     *  POST /btw 携带；「跟随会话当前」行 = 清覆盖）。 */
+    var bModelChip = bodyEl.querySelector('#btw-model');
+    if (bModelChip) bModelChip.addEventListener('click', function () { openBtwModelMenu(Pane.activeTab(), bModelChip); });
+    var bEffortChip = bodyEl.querySelector('#btw-effort');
+    if (bEffortChip) bEffortChip.addEventListener('click', function () { openBtwEffortMenu(Pane.activeTab(), bEffortChip); });
     bodyEl.querySelector('#btw-file').addEventListener('click', function () { /* ＋文件 = 插入 @（光标位） */
       bInput.focus();
       var s = bInput.selectionStart ?? bInput.value.length;

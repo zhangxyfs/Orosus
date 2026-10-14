@@ -360,6 +360,18 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(src).toContain("paneBodyEl.childNodes.length === 0"); // 首开/重开渲口（壳完好 body 空也渲）
   });
 
+  it("走查修⑨（2026-10-14 用户口令）：btw composer 模型/思考档芯片——渲染覆盖值或会话当前 + locked 禁用", () => {
+    const html = P.btwTabHtml({ rounds: [], chipModel: "glm-5.3", chipEffort: "max" });
+    expect(html).toContain('id="btw-model"');
+    expect(html).toContain("glm-5.3");
+    expect(html).toContain('id="btw-effort"');
+    expect(html).toContain("思考 max");
+    const blank = P.btwTabHtml({ rounds: [] });
+    expect(blank).toContain("模型 —"); // 无渲染期现算数据时的兜底形
+    const locked = P.btwTabHtml({ rounds: [], chipModel: "glm-5.3", chipEffort: "max" }, true);
+    expect(locked).toContain('id="btw-model" title="本侧问临时指定模型（默认跟随会话当前）" disabled');
+  });
+
   it("走查修⑧（2026-10-13 用户报障「/btw 打不开分栏」）：cmdBtw 复用空草稿 tab 也先开栏（保留态 tab 在栏外仍在册）", () => {
     const src = readFileSync(fileURLToPath(new URL("./assets/app.js", import.meta.url)), "utf8");
     const zone = src.slice(src.indexOf("function cmdBtw"), src.indexOf("function sendBtwAsk"));
@@ -434,7 +446,7 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
 
   it("W6⑤ 发送链路：POST /btw {tab,q}（W5 askBtw 数据面）+ 本地 push {q,a:null} 占位 + 单飞尾轮对齐 + POST 失败标错不悬转", () => {
     expect(W6).toContain("'/btw'");
-    expect(W6).toContain("JSON.stringify({ tab: tab.id, q: q })");
+    expect(W6).toContain("tab: tab.id, q: q,"); // 走查修⑨：POST 体扩 model/effort 覆盖键（条件展开——缺省不带）
     expect(W6).toContain("{ q: q, a: null, phase: 'answering' }");
     expect(W6).toContain("rounds.pop()"); // 尾部在飞轮先弹——server per-tab 单飞 abort 旧在飞（旧问不入 rounds），对齐帧 round 对位
     expect(W6).toContain("发送失败："); // POST 失败即标 error 相位

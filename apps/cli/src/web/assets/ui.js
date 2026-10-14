@@ -923,6 +923,8 @@
     pendingId: pendingId,
     openModelMenu: openModelMenu,
     openEffortMenu: openEffortMenu,
+    openPick: openPick, /* 走查修⑨：btw 芯片 tab 级覆盖菜单复用 */
+    fetchModels: fetchModels, /* 同——模型目录数据源 */
     openPermMenu: openPermMenu,
     openView: openView,
     viewLines: viewLines,

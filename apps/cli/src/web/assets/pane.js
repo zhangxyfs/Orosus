@@ -218,7 +218,11 @@
       '<form class="btw-form" id="btw-form" autocomplete="off"><div class="inputbox">' +
       '<div class="ib-main"><span class="pchar" aria-hidden="true">❯</span>' +
       '<textarea id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
-      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button></span>' +
+      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button>' +
+      /* 走查修⑨（2026-10-14 用户口令）：模型/思考档两芯片——tab 级临时覆盖；显示 = 覆盖值或会话当前
+       *  （data.chipModel/chipEffort 由 app.js 渲染期现算）。 */
+      '<button type="button" class="cb-chip btw-chip" id="btw-model" title="本侧问临时指定模型（默认跟随会话当前）"' + dis + '>' + esc((data && data.chipModel) || '模型 —') + ' ▾</button>' +
+      '<button type="button" class="cb-chip btw-chip" id="btw-effort" title="本侧问临时指定思考档（默认跟随会话当前）"' + dis + '>思考 ' + esc((data && data.chipEffort) || '—') + ' ▾</button></span>' +
       '<span class="cb-right"><span class="btw-hint">旁路 · 只读工具 · 走当前会话模型</span>' +
       (inFlight
         ? '<button type="button" class="sendbtn stop" id="btw-send" data-btwstop="1" title="停止本轮侧问" aria-label="停止">■</button>'

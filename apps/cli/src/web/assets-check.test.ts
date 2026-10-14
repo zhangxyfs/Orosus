@@ -306,6 +306,29 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes("th:first-child"), "首列 nowrap 收缩贴合规则已裁（图1 挤压根因）").toBe(false);
   });
 
+  it("⑬c 走查修⑨（2026-10-14 用户口令）：btw 芯片——模型/思考档 tab 级临时覆盖", () => {
+    const paneJs = read("pane.js");
+    const app = read("app.js");
+    const css = read("style.css");
+    const ui = read("ui.js");
+    /* composer 两芯片（＋文件旁）+ locked 态同步禁用 */
+    expect(paneJs).toContain('id="btw-model"');
+    expect(paneJs).toContain('id="btw-effort"');
+    expect(css).toContain(".btw-chip");
+    /* 菜单：openPick/fetchModels 导出 + tab 级覆盖写面 + 「跟随会话当前」清覆盖行 */
+    expect(ui).toContain("openPick: openPick");
+    expect(ui).toContain("fetchModels: fetchModels");
+    expect(app).toContain("openBtwModelMenu");
+    expect(app).toContain("openBtwEffortMenu");
+    expect(app).toContain("delete tab.data.btwModel");
+    expect(app).toContain("delete tab.data.btwEffort");
+    /* POST 体条件展开携带 */
+    expect(app).toContain("tab.data.btwModel ? { model: tab.data.btwModel }");
+    expect(app).toContain("tab.data.btwEffort ? { effort: tab.data.btwEffort }");
+    /* 渲染期现算默认（覆盖 ?? 会话当前） */
+    expect(app).toContain("data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(currentModel)");
+  });
+
   it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {
     const css = read("style.css");
     const app = read("app.js");

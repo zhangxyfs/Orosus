@@ -364,7 +364,7 @@ registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
     sendJson(res, 413, { ok: false, error: "body too large" });
     return;
   }
-  let body: { tab?: unknown; q?: unknown; abort?: unknown };
+  let body: { tab?: unknown; q?: unknown; abort?: unknown; model?: unknown; effort?: unknown };
   try {
     body = JSON.parse(raw.toString("utf8")) as typeof body;
   } catch {
@@ -388,7 +388,10 @@ registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
     sendJson(res, 400, { ok: false, error: "tab 与 q 不能为空" });
     return;
   }
-  askBtw(hs, tab, q); // 受理即回——流经 onBtw 扇出（SSE btw 帧）
+  /* tab 级临时覆盖（2026-10-13 走查——侧问 composer 模型/思考档芯片）：非字符串忽略 */
+  const model = typeof body.model === "string" && body.model.trim() !== "" ? body.model.trim() : undefined;
+  const effort = typeof body.effort === "string" && body.effort.trim() !== "" ? body.effort.trim() : undefined;
+  askBtw(hs, tab, q, { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) }); // 受理即回——流经 onBtw 扇出（SSE btw 帧）
   sendJson(res, 202, { ok: true });
 });
 

@@ -1143,7 +1143,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // ctx.llm 实现（D39/T4 + 补强 T3 三扩展 + M4-3 T1b model/webSearch/listModels 扩展）：
   // 调用时解析当前 provider/model（含 /model 覆盖、reload 后的新图）；错误带内
   llmHolder.impl = {
-    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean; tools?: readonly ToolSpec[] }) =>
+    stream: (req: { system?: string; messages: ModelMessage[]; signal?: AbortSignal; maxTokens?: number; model?: string; webSearch?: boolean; tools?: readonly ToolSpec[]; reasoningEffort?: string }) =>
       (async function* (): AsyncGenerator<Chunk> {
         let resolved: { stream: StreamFn; model: string };
         try {
@@ -1164,6 +1164,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           tools: req.tools === undefined ? [] : [...req.tools],
           ...(req.maxTokens !== undefined ? { maxTokens: req.maxTokens } : {}),
           ...(req.webSearch !== undefined ? { webSearch: req.webSearch } : {}),
+          ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}), /* 走查修（2026-10-13）：思考档透传（btw tab 级覆盖；缺省不传——端点按会话当前档） */
           signal: req.signal ?? new AbortController().signal,
         });
       })(),

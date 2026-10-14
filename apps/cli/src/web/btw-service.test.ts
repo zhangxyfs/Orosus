@@ -341,6 +341,26 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     await hs.close();
   }, 30_000);
 
+  it("⑩ tab 级临时覆盖（走查修⑨ 用户口令）：askBtw opts {model, effort} → 请求线带 model 限定形 + reasoningEffort；不传则零键（缺省随会话当前档）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const { hs, requests } = setupSession([[{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }]], home, cwd);
+    await hs.ready;
+    askBtw(hs, "btw-1", "带覆盖的问", { model: "fake/model-y", effort: "high" });
+    await waitFor(() => requests.length >= 1 && requests[0] !== undefined);
+    const req = requests[0]!;
+    expect(req.model).toBe("model-y"); // 限定形经 SW-17 解析为裸模型名落线（提供商槽已限定）
+    expect((req as { reasoningEffort?: string }).reasoningEffort).toBe("high");
+    // 对照：无覆盖的第二 tab——model 解析为会话当前（fake/x 的裸名 x）、无 reasoningEffort 键
+    askBtw(hs, "btw-2", "无覆盖的问");
+    await waitFor(() => requests.length >= 2);
+    const req2 = requests[1]!;
+    expect(req2.model).toBe("x");
+    expect((req2 as { reasoningEffort?: string }).reasoningEffort).toBeUndefined();
+    await hs.close();
+  }, 30_000);
+
   it("⑥ CLI 形态回归：buildBtwRequest 无 opts 产出快照（GC1 红线——单轮无工具形态；走查修 2026-10-13 ①/⑥ 起快照内容换界标版：主历史加显式起止界标，防模型把继承历史误认作侧问线）", async () => {
     const ev = (seq: number, type: string, fields: Record<string, unknown> = {}): SessionEvent =>
       ({ v: 1, id: `e${seq}`, parentId: null, seq, ts: "2026-10-13T00:00:00.000Z", type, ...fields }) as SessionEvent;

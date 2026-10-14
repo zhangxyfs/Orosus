@@ -118,7 +118,7 @@ const btwTabs = new WeakMap<HostedSession, Map<string, BtwInstance>>();
  *  答案经 SSE btw 帧回流）。同 tab 新问先中止旧在飞（被中止问静默退场、不入归档）；rounds 随实例
  *  跨问存活。每问内：请求 → 文本流（answering 累积帧）→ 遇工具调用执行回注续流（tool 帧）→ 无调用
  *  即 answer（push rounds + 归档 + answer 帧）；保险丝 8 轮熔断 error 帧。 */
-export function askBtw(hs: HostedSession, tab: string, q: string): void {
+export function askBtw(hs: HostedSession, tab: string, q: string, opts?: { model?: string; effort?: string }): void {
   const h = hs.core;
   if (h === undefined) throw new Error("会话装配失败");
   let tabs = btwTabs.get(hs);
@@ -162,7 +162,11 @@ export function askBtw(hs: HostedSession, tab: string, q: string): void {
         const face = btwToolsOf(h);
         let text = "";
         const pending = new Map<string, { callId: string; name: string; argsJson: string }>();
-        for await (const c of h.llm().stream({ system, messages: [...messages, ...carry], tools: face.specs, signal: inst.ctrl.signal })) {
+        for await (const c of h.llm().stream({
+          system, messages: [...messages, ...carry], tools: face.specs, signal: inst.ctrl.signal,
+          ...(opts?.model !== undefined ? { model: opts.model } : {}), // tab 级临时模型覆盖（2026-10-13 走查——SW-17 限定形/裸值同口）
+          ...(opts?.effort !== undefined ? { reasoningEffort: opts.effort } : {}), // tab 级思考档覆盖（契约增量透传）
+        })) {
           if (c.type === "text/delta") {
             text += c.text;
             latestText = text;
