@@ -47,6 +47,7 @@ interface PaneApi {
   applyBtwFrame: (rounds: BtwRound[], frame: BtwFrameIn) => BtwRound[];
   settleBtwRounds: (rounds: BtwRound[]) => number;
   btwTabHtml: (data: { rounds: BtwRound[] }, locked?: boolean) => string;
+  pickerHtml: (rows: { kind: string; id?: string; label: string; prefix?: string; open: () => void }[]) => string; /* 走查修① */
 }
 const P = (globalThis as { OrosusPane?: PaneApi }).OrosusPane!;
 const open = (tabs: Tab[], active: number, tab: Tab): OpenRes => P.openOrSwitch(tabs, active, tab) as OpenRes;
@@ -194,15 +195,10 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
     expect(W3).toContain("paneDotDefault(tab)"); // 非agent kind（W6 btw 并存）/ 不在册 → W2 缺省点（v2 4404-4407 兑底）
   });
 
-  it("W3④ cmdTasks：名册每行 open-or-switch 各开一个 agent tab（有几开几，无列表视图）；空名册 → openPane 空分栏；拉取失败 toast", () => {
-    const zone = W3.slice(W3.indexOf("function cmdTasks"), W3.indexOf("function openAgentTab"));
-    expect(zone).toContain("var sid = currentSid"); // 拉取期间切会话不改写归属
-    expect(zone).toContain("refreshTasks(sid)");
-    expect(zone).toContain("UI.openPane()"); // 空名册 → 打开空分栏（.pt-empty 空态）
-    expect(zone).toContain("rows.forEach");
-    expect(zone).toContain("addAgentTab(sid, tk)"); // 每行各开一个（open-or-switch 经 addAgentTab → Pane.addTab）
-    expect(W3).toContain("Pane.addTab({ kind: 'agent'");
-    expect(zone).toContain("拉取子代理名册失败");
+  it("W3④ 走查修①（2026-10-13 用户口令）：/tasks 入口下线——cmdTasks 绝迹 + agent 开卡只剩 spawn 组行与回填两路", () => {
+    expect(W3.includes("function cmdTasks"), "cmdTasks 应随 /tasks 入口下线删除").toBe(false);
+    expect(W3).toContain("Pane.addTab({ kind: 'agent'"); // addAgentTab 健在（spawn 组行点击的唯一开卡道）
+    expect(W3).toContain("走查修①"); // 段头注记口径同步
   });
 
   it("W3⑤ 主流 open-or-switch + 状态点联动：openAgentTab 名册查证（不在册 toast 兑底）+ onAgentOpen 接线 + updateSpawnGroups 刷点 + 轮询门扩至已开 tab + plusSource 注入", () => {
@@ -217,9 +213,11 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
     expect(W3).toContain("Pane.plusSource = function"); // ＋菜单内容源（走查修③：只留「✦ 侧问」类型行——子代理不罗列，入口走 /tasks 与 spawn 组行；孙代理 ⎿ 前缀随罗列一同废弃）
   });
 
-  it("W3⑥ btn-split 未开分支改接 cmdTasks（W1 留位收口——v2 4730-4734 同款：◧ 分栏 = /tasks 形态）", () => {
+  it("W3⑥ btn-split 纯开合（走查修① 用户口令：◧ = 打开/关闭——零 tab 出「打开标签页」选择器、有卡原样恢复；/tasks 形态废弃）", () => {
     const zone = APP.slice(APP.indexOf("$('btn-split').addEventListener"), APP.indexOf("子代理选项卡（问题 2 W3"));
-    expect(zone).toContain("cmdTasks();");
+    expect(zone).toContain("UI.openPane()");
+    expect(zone.includes("cmdTasks"), "btn-split 不再接 cmdTasks").toBe(false);
+    expect(zone).toContain("closePane()");
   });
 });
 
@@ -351,7 +349,34 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(String(r3[0]!.a)).toContain("已中断");
   });
 
-  it("走查修④⑤（2026-10-13 用户报障）：在飞末轮发送钮变 ■ 停止 + 落定回答走 mdRender（在飞保持纯文本）", () => {
+  it("走查修①（用户口令第三条）：收回不清卡——观察器 close 分支不再清 tabs/activeTab，重开按保留态重绘", () => {
+    const src = readFileSync(fileURLToPath(new URL("./assets/pane.js", import.meta.url)), "utf8");
+    const zone = src.slice(src.indexOf("new MutationObserver"), src.indexOf("}).observe("));
+    expect(zone.includes("tabs = []"), "收回不再清空 tab 集合（口令：未全关的卡重开恢复）").toBe(false);
+    expect(zone).toContain("走查修①"); // 注记在案
+    // 选择器空态接线：renderPaneBody 零 tab 走 pickerHtml；卡片点击委派 [data-pp] 挂常驻 #pane-body
+    expect(src).toContain("pickerHtml(rows)");
+    expect(src).toContain("e.target.closest('[data-pp]')");
+    expect(src).toContain("paneBodyEl.childNodes.length === 0"); // 首开/重开渲口（壳完好 body 空也渲）
+  });
+
+  it("走查修①（2026-10-13 用户口令·图2形态）：pickerHtml 零 tab 选择器——标题/副题/虚线卡片网格 + esc + 多行扩列", () => {
+    const html = P.pickerHtml([{ kind: "btw", label: "侧问", prefix: "✦ ", open() {} }]);
+    expect(html).toContain("打开标签页");
+    expect(html).toContain("选择要在侧边面板中打开的标签。");
+    expect(html).toContain('class="pp-card" data-pp="0"');
+    expect(html).toContain("✦");
+    expect(html).toContain("侧问");
+    const two = P.pickerHtml([
+      { kind: "btw", label: "侧问", prefix: "✦ ", open() {} },
+      { kind: "x", label: "<注入>", prefix: "?", open() {} },
+    ]);
+    expect(two).toContain('data-pp="1"');
+    expect(two).toContain("&lt;注入&gt;"); // esc
+    expect(P.pickerHtml([])).toContain('class="pp-grid"'); // 零行也不塌架（正常态下 plusSource 恒有侧问行）
+  });
+
+  it("走查修①（2026-10-13 用户口令）：在飞末轮发送钮变 ■ 停止 + 落定回答走 mdRender（在飞保持纯文本）", () => {
     // ④ 在飞 → 停止钮（type=button 不走 submit + data-btwstop 路由标记）；落定/空态 → 恢复原发送钮
     const flying = P.btwTabHtml({ rounds: [{ q: "q", a: null, phase: "answering" }] });
     expect(flying).toContain('data-btwstop="1"');

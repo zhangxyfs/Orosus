@@ -248,6 +248,7 @@ export const enUSCli: Record<string, string> = {
 	"main.compact.done": "Context compaction complete",
 	"main.toast.effortSet2": "Effort set to {level} (written to config)",
 	"main.toast.effortSwitched2": "Effort switched {before} → {after} (written to config)",
+"main.tasks.web-removed": "/tasks is retired on web — open a subagent from its spawn-group row in the main stream, or the ◧ split button",
 	"main.busy.note": "A reply is in progress — {cmd} can't run this turn (Esc cancels; press Enter again afterwards)",
 	"main.hooks.lockSuffix": " · locked — {why}",
 	"main.writePartialFail": "Config write failed midway ({n} modules written — align via /reload or restart)",

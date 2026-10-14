@@ -290,7 +290,7 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     await s.stop();
   }, 60_000);
 
-  it("⑤ GET /api/commands：web 命令表 12 条（含 /web、去 /model /ps /quit——2026-10-12 走查口径）；模块 __ 命令不投影；技能与界面命令不可见", async () => {
+  it("⑤ GET /api/commands：web 命令表 11 条（走查修① /tasks 下线）——原 12 条（含 /web、去 /model /ps /quit——2026-10-12 走查口径）；模块 __ 命令不投影；技能与界面命令不可见", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
     writeCatalogCache(home);
@@ -306,7 +306,7 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
     // 12 条（原型 CMDS 序 + /web 入表 − /model〔走查口径：模型切换走 composer 芯片菜单〕
     // − /ps /quit〔走查五轮：运行状态右侧卡片已覆盖——键入仍可达，仅菜单不列〕；
     // G1：不含 /settings /sessions /provider /permission）
-    expect(names).toEqual(["/yolo", "/auto", "/help", "/effort", "/compact", "/tasks", "/btw", "/web", "/new", "/fork", "/title", "/reload"]);
+    expect(names).toEqual(["/yolo", "/auto", "/help", "/effort", "/compact", "/btw", "/web", "/new", "/fork", "/title", "/reload"]); // 走查修①：/tasks 下线（用户口令 2026-10-13）
     // 分家口径：界面命令 / 放行不列项 / 技能不在命令面（/provider /permission 键入经 core 别名仍可达——仅菜单不列；/model 键入可达 cmdrouter menu:model 面）
     for (const n of ["/settings", "/sessions", "/provider", "/permission", "/context", "/skill", "/model"]) {
       expect(names).not.toContain(n);
@@ -330,13 +330,12 @@ describe("web T8：模型/effort/权限/命令表 API", () => {
       expect(row.desc).toBeTruthy();
       expect(row.long).toBeTruthy();
     }
-    // 别名（/task、/rename 两组——/quit 出表后其 /exit /q 组随之不在命令面）
-    expect(items.find((i) => i.name === "/tasks")!.aliases).toEqual(["task"]);
+    // 别名（/rename 组——/quit 出表后其 /exit /q 组随之不在；/task 随走查修① /tasks 下线出表）令面）
     expect(items.find((i) => i.name === "/title")!.aliases).toEqual(["rename"]);
     // 无 sid 形：池当前会话图兜底（不 404）
     const cur = await get(s, "/api/commands");
     expect(cur.status).toBe(200);
-    expect((cur.body as { items: CommandRow[] }).items.length).toBe(12);
+    expect((cur.body as { items: CommandRow[] }).items.length).toBe(11); // 走查修①：/tasks 下线后 11 条
     await s.stop();
   }, 60_000);
 });

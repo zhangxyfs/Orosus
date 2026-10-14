@@ -272,6 +272,7 @@
     tabTitle: tabTitle,
     tabRowHtml: tabRowHtml,
     dropRowsHtml: dropRowsHtml,
+    pickerHtml: pickerHtml, /* 走查修①：零 tab 空态「打开标签页」选择器（图2 形态） */
     esc: esc,
     /* W6：btw 选项卡纯函数 */
     btwTabSpec: btwTabSpec,
@@ -280,6 +281,21 @@
     btwLiveUpdate: btwLiveUpdate, /* 走查修②：在飞帧增量渲染（app.js btwFeed 消费——闪烁根除） */
     btwTabHtml: btwTabHtml,
   };
+
+  /** pickerHtml(rows)（走查修①——用户口令 2026-10-13，仿图2 ZCode「打开标签页」）：零 tab 空态
+   *  = 选择器卡页面（标题 + 副标题 + 卡片网格）；rows = 类型行（无 id——每次点击开新实例）。
+   *  卡片 = 虚线描边大卡（图标字形 + 名）。纯函数零 DOM——node 直测。 */
+  function pickerHtml(rows) {
+    var cards = '';
+    for (var i = 0; i < (rows || []).length; i++) {
+      cards += '<button type="button" class="pp-card" data-pp="' + i + '">' +
+        '<span class="pp-ico">' + esc(rows[i].prefix || '') + '</span>' +
+        '<span class="pp-label">' + esc(rows[i].label || '') + '</span></button>';
+    }
+    return '<div class="pane-picker"><div class="pp-title">打开标签页</div>' +
+      '<div class="pp-sub">选择要在侧边面板中打开的标签。</div>' +
+      '<div class="pp-grid">' + cards + '</div></div>';
+  }
 
   /* ═══════════════════ ② DOM 薄壳段（浏览器自举——node 下无 document 则整段惰置） ═══════════════════ */
 
@@ -349,7 +365,15 @@
   function renderPaneBody() {
     var t = tabs[activeTab];
     if (!t) {
-      paneBodyEl.innerHTML = '<div class="pane-blank">分栏已打开，暂无选项卡<br/>/tasks = 为每个子代理各开一个选项卡 · 点击主流中的子代理条目 · ＋ 新建侧问</div>';
+      /* 走查修①（用户口令 2026-10-13）：零 tab 空态 = 「打开标签页」选择器（仿图2 ZCode 形态）——
+       *  卡片取 plusSource 的类型行（无 id 行——现仅「✦ 侧问」，类型扩展时自动多卡）；点击卡片
+       *  经 paneBodyEl 委派的 [data-pp] 路由调该行的 open()（卡片行序与 pickerHtml 同源现取）。 */
+      var rows = [];
+      if (typeof P.plusSource === 'function') {
+        var src = P.plusSource();
+        for (var i = 0; i < src.length; i++) { if (src[i] && (src[i].id === null || src[i].id === undefined)) rows.push(src[i]); }
+      }
+      paneBodyEl.innerHTML = pickerHtml(rows);
       return;
     }
     var r = bodyRenderers[t.kind];
@@ -482,6 +506,18 @@
 
   /* ── 接线：全部委派在持久的 #pane-tabs / #ctx-menu 上——壳重建不掉线（见文件头注） ── */
   function bindShell() {
+    /* 走查修①：选择器卡片点击（零 tab 空态的「打开标签页」卡面）——委派挂常驻 #pane-body
+     * （picker 由 renderPaneBody 重渲，容器不换）；行序与 pickerHtml 同源现取。 */
+    paneBodyEl.addEventListener('click', function (e) {
+      var card = e.target && e.target.closest ? e.target.closest('[data-pp]') : null;
+      if (card === null) return;
+      if (typeof P.plusSource !== 'function') return;
+      var src = P.plusSource();
+      var rows = [];
+      for (var i = 0; i < src.length; i++) { if (src[i] && (src[i].id === null || src[i].id === undefined)) rows.push(src[i]); }
+      var row = rows[Number(card.getAttribute('data-pp'))];
+      if (row && typeof row.open === 'function') row.open();
+    });
     paneTabsEl.addEventListener('click', function (e) {
       if (e.target.closest('#pt-add')) { openPlusMenu(); return; }
       if (e.target.closest('#pt-chev')) {
@@ -541,18 +577,17 @@
       if (!ptMenuEl.hidden && !e.target.closest('#pt-menu') && !e.target.closest('#pt-add')) ptMenuEl.hidden = true;
       if (!ptDropEl.hidden && !e.target.closest('#pt-drop') && !e.target.closest('#pt-chev')) ptDropEl.hidden = true;
     });
-    /* #pane hidden 变更对齐（外路开合——◧ 顶栏按钮 / W3 cmdTasks）：关 = 状态复位（v2 closePane
-     * 4382-4386 同款）；开 = 壳自愈后按需重渲（重建过才渲——addTab 路径已渲，避免二次重渲） */
+    /* #pane hidden 变更对齐（外路开合——◧ 顶栏按钮）：关 = 只收浮层（走查修① 用户口令：tab 状态
+     *  保留不再清空——未全关的 tab 重开原样恢复；DOM 清写由外路 closePane 做，重开时壳自愈 + 状态
+     *  重绘回同一批卡）；开 = 壳自愈后按需重渲（重建过才渲——addTab 路径已渲，避免二次重渲）。 */
     new MutationObserver(function () {
       if (paneEl.hidden) {
-        tabs = [];
-        activeTab = -1;
         ctxTabIdx = -1;
         if (ptMenuEl) ptMenuEl.hidden = true;
         if (ptDropEl) ptDropEl.hidden = true;
-        ensureShell();
-        renderTabs();
-      } else if (ensureShell()) {
+      } else if (ensureShell() || paneBodyEl.childNodes.length === 0) {
+        /* 走查修①：壳完好但 body 空（首开/收起重开——W1 期只渲重建路径的缺口）也渲——零 tab 出
+         *  选择器、保留 tab 恢复陈列；addTab 路径已渲的（body 非空）不重复触碰（GC7）。 */
         renderTabs();
         renderPaneBody();
       }

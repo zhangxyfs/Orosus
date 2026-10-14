@@ -248,6 +248,7 @@ export const zhCNCli: Record<string, string> = {
 	"main.compact.done": "上下文压缩完成",
 	"main.toast.effortSet2": "思考档位已设为 {level}（已写入 config）",
 	"main.toast.effortSwitched2": "思考档位已切换 {before} → {after}（已写入 config）",
+"main.tasks.web-removed": "/tasks 已在 web 端下线——子代理查看：点击主流里的派活组卡行，或顶栏 ◧ 分栏",
 	"main.busy.note": "回答进行中——{cmd} 本轮不可执行（Esc 取消当前回答；结束后原文再按回车即发）",
 	"main.hooks.lockSuffix": " · 锁定——{why}",
 	"main.writePartialFail": "配置写盘中途失败（已写 {n} 个模块，可 /reload 或重启对齐）",

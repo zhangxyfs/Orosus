@@ -216,10 +216,11 @@ describe("web W3（问题 2）：/tasks 改造 + 主流行 open-or-switch 路由
     expect(src).not.toContain("UI.openSubagent"); // 旧回放窗直进口拆除
   });
 
-  it("W3c app.js：handleMark tasks 分支改 cmdTasks()（分栏批量开 tab）——不再弹 /tasks 列表面", () => {
+  it("W3c app.js：handleMark 无 tasks 分支（走查修① 用户口令 2026-10-13：/tasks 入口下线——cmdTasks 一并删除）", () => {
     const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
     const zone = src.slice(src.indexOf("function handleMark"), src.indexOf("贴图（D6"));
-    expect(zone).toContain("cmdTasks()");
+    expect(zone.includes("cmdTasks"), "cmdTasks 已随 /tasks 入口下线").toBe(false);
+    expect(zone.includes("'tasks'"), "handleMark 无 tasks 分支").toBe(false);
     expect(zone).not.toContain("openTasksPanel");
   });
 });

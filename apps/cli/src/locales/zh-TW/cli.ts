@@ -248,6 +248,7 @@ export const zhTWCli: Record<string, string> = {
 	"main.compact.done": "上下文壓縮完成",
 	"main.toast.effortSet2": "思考檔位已設為 {level}（已寫入 config）",
 	"main.toast.effortSwitched2": "思考檔位已切換 {before} → {after}（已寫入 config）",
+"main.tasks.web-removed": "/tasks 已在 web 端下線——子代理檢視：點擊主流裡的派活組卡列，或頂欄 ◧ 分欄",
 	"main.busy.note": "回答進行中——{cmd} 本輪不可執行（Esc 取消當前回答；結束後原文再按 Enter 即發）",
 	"main.hooks.lockSuffix": " · 鎖定——{why}",
 	"main.writePartialFail": "配置寫盤中途失敗（已寫 {n} 個模組，可 /reload 或重啟對齊）",

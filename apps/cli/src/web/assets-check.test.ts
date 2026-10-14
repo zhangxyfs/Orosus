@@ -299,6 +299,24 @@ describe("web T15：前端骨架静态资产", () => {
     expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
   });
 
+  it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {
+    const css = read("style.css");
+    const app = read("app.js");
+    const paneJs = read("pane.js");
+    /* 选择器样式与 DOM 推导 */
+    for (const cls of [".pane-picker", ".pp-title", ".pp-sub", ".pp-grid", ".pp-card"]) {
+      expect(css.includes(cls), `${cls} 应存在`).toBe(true);
+    }
+    expect(paneJs).toContain("function pickerHtml");
+    expect(paneJs).toContain("打开标签页");
+    /* 记忆保留：观察器 close 分支不清 tabs */
+    const obs = paneJs.slice(paneJs.indexOf("new MutationObserver"), paneJs.indexOf("}).observe("));
+    expect(obs.includes("tabs = [];"), "收回不清卡").toBe(false);
+    /* /tasks 下线：帮助表/命令分支绝迹；btn-split 纯开合 */
+    expect(app.includes("'打开右侧分栏，为每个子代理开一个选项卡'"), "帮助表 /tasks 行已删").toBe(false);
+    expect(app.includes("function cmdTasks"), "cmdTasks 已删").toBe(false);
+  });
+
   it("⑫ 走查修五连（2026-10-13 用户报障②③）：btw 思考流 + 增量渲染根除闪烁 + ＋菜单单入口", () => {
     const app = read("app.js");
     const paneJs = read("pane.js");

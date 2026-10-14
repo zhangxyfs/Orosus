@@ -62,7 +62,7 @@ export function commandNameOf(raw: string): { name: string; args: string } {
  *  模型菜单（§1 D9 差异口径——brief 接口的 mark 并集 + Steps 点名的 menu:model 信号）；
  *  tasks = 前端开任务面板（G3——T7 数据面）；btw = 前端开 btw 选项卡（W6——带参开新 tab 即发问
  *  〔POST /btw 多轮路径〕、无参开/复用空草稿 tab 并回看归档文本）。 */
-export type CommandMark = "new" | "fork" | "quit" | "skill" | "menu:model" | "tasks" | "btw";
+export type CommandMark = "new" | "fork" | "quit" | "skill" | "menu:model" | "btw"; // 走查修①：tasks 值退役（/tasks web 入口下线）
 
 export interface CommandResult {
   /** 命令输出文本（§4-4：命令返回值是文本、静默命令 ""——D16 命令行不进流区，输出走 toast/浮层）。 */
@@ -102,7 +102,9 @@ export async function routeCommand(hs: HostedSession, raw: string): Promise<Comm
   if (name === "/fork") return { output: "", mark: "fork" }; // G7：前端 POST /api/sessions {forkFrom}
   if (name === "/web") return { output: t("web.alreadyWeb") }; // web 内打 /web = 空转（TUI→web 单向；2026-10-12 走查：菜单列入表，打键给指引文案）
   if (name === "/model") return { output: "", mark: "menu:model" }; // §4-5/D9：不走 choose 桥——前端开结构化菜单
-  if (name === "/tasks" || name === "/task") return { output: "", mark: "tasks" }; // G3：T7 数据面 + 前端面板
+  /* 走查修①（2026-10-13 用户口令）：web 端 /tasks 入口下线——不再发 mark（前端 tasks 分支已拆）；
+   *  保留命令名可达性，答引导文案（toast 面——GET /tasks 数据端点不动，spawn 组轮询/开卡查证在用）。 */
+  if (name === "/tasks" || name === "/task") return { output: t("main.tasks.web-removed") };
   if (name === "/title" || name === "/rename") {
     if (args === "") return { output: "" }; // 无参静默零写入（CLI 批⑦拍板同款）
     const label = unquote(args);

@@ -171,8 +171,6 @@ function $(id) { return document.getElementById(id); }
       });
     } else if (mark === 'menu:model') {
       UI.openModelMenu(modelChip);
-    } else if (mark === 'tasks') {
-      cmdTasks(); /* W3：/tasks = 分栏批量开 tab（v2 2528-2537 目标形态——不弹列表面） */
     } else if (mark === 'btw') {
       cmdBtw(r); /* W6：带参（截获块问题文本）开新 tab 即发问；无参复用空草稿 tab 或新开（v2 cmdBtw 2541-2548；走查修：r.btwRounds 水合回看——弹窗退役） */
     }
@@ -2384,7 +2382,6 @@ function $(id) { return document.getElementById(id); }
         ['/yolo · /auto', '快捷档：需要时候询问 / 从不询问（权限档走输入框 ◆ 芯片小弹窗）'],
       ]],
       ['信息面板', [
-        ['/tasks', '打开右侧分栏，为每个子代理开一个选项卡'],
         ['/ps', '本项目活跃会话（谁在跑、谁等审批、谁闲着）'],
       ]],
       ['技能（四轨目录：~/.agents/skills → ~/.orosus/skills → 项目 .agents/skills → 项目 .orosus/skills）', [
@@ -2862,15 +2859,17 @@ function $(id) { return document.getElementById(id); }
     document.addEventListener('mousemove', mv);
     document.addEventListener('mouseup', up);
   });
-  /* 顶栏入口（v2 4730-4734）：◧ 分栏 = 打开 / 关闭——未开分支 = /tasks 同款（cmdTasks 批量开 tab） */
+  /* 顶栏入口（走查修①——2026-10-13 用户口令，对齐图2 ZCode 形态）：◧ 分栏 = 打开 / 关闭。
+   *  打开时零 tab → 「打开标签页」选择器（pane.js 空态承载）；有 tab → 原样恢复（收回不清卡——
+   *  未全关的 tab 重开再现，口令第三条）；子代理开卡入口 = 主流 spawn 组行点击（/tasks 已下线）。 */
   $('btn-split').addEventListener('click', function () {
     if (paneIsOpen()) { closePane(); toast('分栏已收回'); return; }
-    cmdTasks();
+    UI.openPane();
   });
 
   /* ═══════════ 子代理选项卡（问题 2 W3——v2 4393-4481/4520-4545/4683-4688/2528-2537 直裁） ═══════════
-   * · /tasks（cmdTasks）：openPane + 名册每行 open-or-switch 一个 agent tab（有几开几，无列表视图）；
-   *   空名册 → 打开空分栏（.pt-empty 空态）；
+   * · 走查修①（2026-10-13 用户口令）：/tasks 命令入口已下线（原「批量开 tab」形态废弃）——子代理
+   *   开卡入口 = 主流 spawn 组行点击 + 名册回填补行（走查修②）；◧ 分栏钮 = 纯开合（选择器/记忆恢复）；
    * · 主流 spawn 组卡行点击（onAgentOpen → openAgentTab）：OrosusPane open-or-switch（不再进回放窗）；
    * · tab 内容（onBodyRender('agent')）：.ag-wrap = 可选 .ag-approval 审批条（⚠ 工具名 + 原因 +
    *   拒绝/批准一次——data-aga → 既有 POST approval，服务端零改动）+ .ag-stream 回放
@@ -2920,22 +2919,6 @@ function $(id) { return document.getElementById(id); }
       }
       return rows;
     });
-  }
-  /** /tasks（v2 cmdTasks 2528-2537 目标形态）：openPane + 名册每行各开一个 agent tab（open-or-switch）；
-   *  空名册 → 空分栏（.pt-empty 空态——known-issues.md:99 定案）。 */
-  function cmdTasks() {
-    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
-    var sid = currentSid; /* 拉取期间切会话不改写归属（tab 的 data.sid 恒指开栏时会话） */
-    refreshTasks(sid).then(function (rows) {
-      if (rows.length === 0) {
-        UI.openPane();
-        toast('暂无在册子代理——分栏已打开（对模型说「派个子代理去 …」后这里会列出）');
-        return;
-      }
-      rows.forEach(function (tk) {
-        addAgentTab(sid, tk);
-      });
-    }, function () { toast('拉取子代理名册失败'); });
   }
   /** 主流 sg-row 点击 → agent open-or-switch（v2 openAgentTab 4431-4441）：名册查证 label 后进分栏。 */
   function openAgentTab(id) {

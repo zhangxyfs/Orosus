@@ -280,6 +280,22 @@ describe("web T6：命令路由 cmdrouter", () => {
     await s.stop();
   }, 60_000);
 
+  it("⑦b /tasks web 下线提示（走查修① 用户口令 2026-10-13）：返回引导文案 + 零 mark（前端无 tasks 分支）", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    writeProviderConfig(home);
+    const cwd = tmpCwd();
+    await seedSession(home, cwd, "s_tk");
+    const s = await startWeb(home, cwd, "s_tk");
+    const r = await postSend(s, "s_tk", "/tasks");
+    expect(r.status).toBe(202);
+    const b = (await r.json()) as { ok?: boolean; output?: string; mark?: string };
+    expect(b.ok).toBe(true);
+    expect(b.mark === undefined || b.mark === null || b.mark === "").toBe(true); // mark 不再发
+    expect(b.output ?? "").toContain("下线"); // 引导文案（三语键 t()——zh-CN 跑测口径）
+    expect(b.output ?? "").toContain("◧");
+  });
+
   it("⑦ /ps → 输出含 peers 行与 self 置顶（scanWithSelf 文本、无 ANSI）", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;

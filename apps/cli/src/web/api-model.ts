@@ -304,7 +304,6 @@ const WEB_CMDS: readonly { name: string; key: string; aliases?: readonly string[
   { name: "/help", key: "help" },
   { name: "/effort", key: "effort" },
   { name: "/compact", key: "compact" },
-  { name: "/tasks", key: "tasks", aliases: ["task"], web: true },
   { name: "/btw", key: "btw", web: true },
   { name: "/web", key: "web" },
   { name: "/new", key: "new" },
