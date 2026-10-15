@@ -187,6 +187,16 @@ describe("web T14：更多菜单 API（诊断/总览/钩子注入/压缩摘要�
     const nf = await fetch(`${s.base}/api/launchers?sid=s_none`, { headers: s.auth });
     expect(nf.status).toBe(404);
 
+    // 走查修回归钉（2026-10-15 用户报障「模块总览显示不出带界面模块」）：游标指向 viewer 会话
+    // （侧栏点击未发消息的会话 → POST current 同步）时不得恒空——cursorSid 直读 + viewer 兜底装配
+    await seedSession(home, cwd, "s_viewer_cur", []);
+    const sw = await fetch(`${s.base}/api/sessions/s_viewer_cur/current`, { method: "POST", headers: { ...s.auth, "content-type": "application/json" }, body: "{}" });
+    expect(sw.status).toBe(200);
+    const b2 = await getJson<LauncherBody>(s, "/api/launchers");
+    expect(b2.cards.some((c) => c.module === "tool-peers")).toBe(true); // viewer 游标下总览照常出数
+    const d2 = await getJson<DiagBody>(s, "/api/diagnostics");
+    expect(d2.ok).toBe(true); // diagnostics 同愈（同一 resolveGlobalRead）
+
     await s.stop();
   }, 60_000);
 

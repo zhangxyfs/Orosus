@@ -64,14 +64,15 @@ const queryParams = (req: IncomingMessage): URLSearchParams => {
  *  sid 打错不该静默空态）。无 sid 且无当前游标 → undefined（调用方空态——读面不 404）。 */
 const resolveForRead = async (pool: HostPool | undefined, sid: string | undefined): Promise<HostedSession | undefined> => {
   if (pool === undefined) return undefined;
-  const target = sid !== undefined && sid !== "" ? sid : pool.current()?.sid;
+  /* 走查修（2026-10-15，与 api-panel resolveGlobalRead 同案）：current() 只认 host，游标可指向
+   * viewer（switchCurrent 语义）——改 cursorSid() 直读 + viewer 兜底，否则 viewer 游标下读面恒空。 */
+  const target = sid !== undefined && sid !== "" ? sid : pool.cursorSid();
   if (target === undefined) return undefined;
   const hosted = pool.host(target);
   if (hosted !== undefined) return hosted;
-  if (sid === undefined || sid === "") return undefined; // 游标失效（会话已关）——空态而非 404
   return pool.viewer(target).then(
     (hs) => hs,
-    () => undefined, // 不在盘/装配失败——调用方 404
+    () => undefined, // 不在盘/装配失败——调用方按 sid 有无定 404/空态
   );
 };
 

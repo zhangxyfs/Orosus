@@ -501,18 +501,21 @@ const queryParams = (req: IncomingMessage): URLSearchParams => {
 /** 读侧会话解析（api-model resolveForRead 同口径）：sid 缺省 = 池当前会话游标（⋮ 菜单作用于
  *  「本会话」——前端不传 sid 即当前选中）；显式 sid host 优先、盘上未托管走 viewer 只读化身；
  *  显式不可解析 = undefined（调用方 404——sid 打错不静默空态）；无 sid 且无当前游标 = undefined
- *  （调用方空态——读面不 404）。 */
+ *  （调用方空态——读面不 404）。
+ *  走查修（2026-10-15 用户报障「模块总览显示不出带界面模块」）：空 sid 原用 pool.current()——那只认
+ *  host 会话，而 switchCurrent 明确允许游标指向 viewer 化身（侧栏点击未发消息的会话即 viewer）→
+ *  current() undefined → 端点拿空 audit → 总览/诊断双面恒空。改用 cursorSid() 直读游标 + viewer
+ *  兜底装配（switchCurrent 注释「viewer 化身同样可作游标」的兑现）。 */
 const resolveGlobalRead = async (sid: string): Promise<HostedSession | undefined> => {
   const pool = webHostPool();
   if (pool === undefined) return undefined;
-  const target = sid !== "" ? sid : pool.current()?.sid;
+  const target = sid !== "" ? sid : pool.cursorSid();
   if (target === undefined) return undefined;
   const hosted = pool.host(target);
   if (hosted !== undefined) return hosted;
-  if (sid === "") return undefined; // 游标失效（会话已关）——空态而非 404
   return pool.viewer(target).then(
     (hs) => hs,
-    () => undefined, // 不在盘/装配失败——调用方 404
+    () => undefined, // 不在盘/装配失败——按 sid 有无定 404/空态
   );
 };
 
