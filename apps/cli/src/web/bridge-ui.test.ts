@@ -557,6 +557,7 @@ describe("web dialog T4：WebCommandUi.dialog 桥接（设计 12.1-6/7/8 桥面�
     ui.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] });
     frames.length = 0;
     const p = ui.ask("问询");
+    p.catch(() => {}); // cancel 清场 = fail-closed reject——预挂吞咽防 unhandled rejection
     await tick();
     expect(frames.map((f) => f.kind)).toEqual(["dialog", "ask"]); // close（supersede）+ ask
     expect(frames[0]).toMatchObject({ op: "close" });
@@ -573,6 +574,7 @@ describe("web dialog T4：WebCommandUi.dialog 桥接（设计 12.1-6/7/8 桥面�
   it("④ pendingFrames：挂起交互在前、活跃 dialog 快照在后（最新 revision）；关窗后不含", async () => {
     const { ui } = makeUi();
     const p = ui.choose("选", ["甲", "乙"]);
+    p.catch(() => {}); // cancel 清场 = fail-closed reject——预挂吞咽防 unhandled rejection
     await tick();
     const h = ui.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] })!;
     h.update([{ id: "l", kind: "list", interactive: true, items: ["a", "b"] }]);

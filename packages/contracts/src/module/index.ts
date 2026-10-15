@@ -1054,6 +1054,9 @@ export interface ModuleContext<C = unknown> {
   readonly host?: HostInfo | undefined;
 }
 
+/** 模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"；不匹配宿主不进模块图（整模块排除，非隐藏入口）。 */
+export type UiTarget = "tui" | "gui" | "all";
+
 /** 模块定义（§5.1 完整形态）。声明式：activate 之前全部静态信息可读。
  *
  * @example
@@ -1065,9 +1068,6 @@ export interface ModuleContext<C = unknown> {
  * });
  * ```
  */
-/** 模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"；不匹配宿主不进模块图（整模块排除，非隐藏入口）。 */
-export type UiTarget = "tui" | "gui" | "all";
-
 export interface ModuleDefinition<C = unknown> {
   /** 模块名（kebab-case，全局唯一——重名降级；工具/命令名前缀也用它）。 */
   name: string;

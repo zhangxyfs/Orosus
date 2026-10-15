@@ -768,6 +768,14 @@ activate(ctx) {
 }
 ```
 
+## UiTarget（类型）
+
+模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"；不匹配宿主不进模块图（整模块排除，非隐藏入口）。
+
+```ts
+export type UiTarget = "tui" | "gui" | "all"
+```
+
 ## ModuleDefinition（接口）
 
 模块定义（§5.1 完整形态）。声明式：activate 之前全部静态信息可读。
@@ -788,6 +796,7 @@ export interface ModuleDefinition<C = unknown> { … }
 | `provides?` | `provides?: string[]` | 自己提供的能力 key 清单（ctx.provide 的合法域；建议 `<模块名>.<能力>`；可省）。 |
 | `defaultEnabled?` | `defaultEnabled?: boolean` | 缺省启用与否（缺省 true；配置 [模块名] enabled 可覆盖）。 |
 | `launcher?` | `launcher?: { label: string; command?: string; labelKey?: string }` | 模块总览启动器登记（m5-peers T6e，A-1 极简版 D22）：带 UI 的模块向宿主总览弹窗（Ctrl+P） 自报入口——label = 显示名、command = 指向模块既有斜杠命令（经 audit() 透出，active 模块才收； 完整版 open(ctx) 直开窗照原拍板顺延）。labelKey = 总览行翻译键（住宿主 locales/modules 域， 2026-10-07 走查加——静态声明没法 ctx.t，渲染端 t(labelKey, undefined, label) 回落声明原值）。 |
+| `uiTarget?` | `uiTarget?: UiTarget` | 模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"（TUI/GUI/无头均可）；"tui"/"gui" = 仅对应宿主， 不匹配宿主不进模块图（不激活、不进 audit/catalog/设置页——用户在该宿主看不到，不是「已禁用」）。 运行期非法字符串按静态校验错误处理（validateModule），不宽容等同 all。 |
 | `uses?` | `uses?: string[]` | 声明使用的非能力标记（如 "config.foreign" = 要 overlay 别人 section；可省）。 |
 | `mounts?` | `mounts?: string[]` | 宿主口白名单（一经声明 = 只能用列出的口；缺省 = 不限制）。可用位："settings"、"contribute:tool"、"contribute:command"、"contribute:promptSection"、"contribute:configOverlay"、"contribute:card"、"tools.reveal"、"tools.list"、"emit"、"hook:<事件名>"、"provide"、"get"。 |
 | `config?` | `config?: ZodType<C>` | 自家配置节的 zod schema（声明了才读得到 [模块名] 节；校验带默认值；可省）。 |
