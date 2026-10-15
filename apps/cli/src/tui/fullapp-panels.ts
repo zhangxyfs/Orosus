@@ -49,7 +49,7 @@ const panelBox = (title: string, en: string, focused: boolean, w: number, h: num
 };
 
 const kvRow = (label: string, value: string, w: number): string => {
-	return ` ${theme.fg("muted", padToWidth(label, 8))} ${truncateToWidth(value, w - 11)}`;
+	return ` ${theme.fg("muted", padToWidth(label, 8))} ${truncateToWidth(value, w - 10)}`;
 };
 
 const sepRow = (w: number): string => {
@@ -175,7 +175,7 @@ export function createPanels(app: FullApp) {
 			content.push(kvRow(t("kv.session"), d.session, inner));
 			content.push(kvRow(t("kv.cwd"), theme.fg("info", d.cwd), inner));
 			content.push(kvRow(t("kv.elapsed"), elapsedText(d.startedAt), inner)); // F5 二轮④
-			content.push(kvRow("Tokens", `↑ ${d.tokens.input.toLocaleString()} · ↓ ${d.tokens.output.toLocaleString()}`, inner)); // F5 二轮⑤
+			content.push(kvRow("Tokens", `↑ ${d.tokens.input.toLocaleString()} · ↓ ${d.tokens.output.toLocaleString()} · ${d.tokens.cacheHitPct === undefined ? "—" : `${d.tokens.cacheHitPct}%`}`, inner)); // F5 二轮⑤
 			content.push(sepRow(inner));
 			// 上下文占用 = 末次请求的输入规模（上下文体量口径）；占比再小也至少给一格 ▏（F5 二轮⑥——
 			// 0k/1000k 时零绿块被读成「进度条坏了」）

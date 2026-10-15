@@ -270,9 +270,9 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css.includes(".ag-approval .btn"), "审批按钮换类实现（不内联）").toBe(true);
   });
 
-  it("⑩ W6 btw 选项卡：.btw-* CSS 直裁（v2 976-984——字号按 --fz 换算惯例）+ 旧弹窗面绝迹 + 截获块发问源 + hint 诚实口径", () => {
+  it("⑩ W6 btw 选项卡：.btw-* CSS 直裁（v2 976-984——字号按 --fz 换算惯例）+ 旧弹窗面绝迹 + 截获块发问源 + hint 行文退役（走查修⑪）", () => {
     const css = read("style.css");
-    for (const cls of [".btw-wrap", ".btw-scope", ".btw-stream", ".btw-round", ".btw-a", ".btw-a .dim", ".btw-form", ".btw-hint"]) {
+    for (const cls of [".btw-wrap", ".btw-scope", ".btw-stream", ".btw-round", ".btw-a", ".btw-a .dim", ".btw-form"]) { /* 走查修⑪：.btw-hint 随 hint 行文退役摘除 */
       expect(css.includes(cls), `.btw 系类 ${cls} 应存在`).toBe(true);
     }
     expect(/\.btw-wrap\s*\{[^}]*flex-direction:\s*column/.test(css), ".btw-wrap 纵向列布局").toBe(true);
@@ -290,12 +290,12 @@ describe("web T15：前端骨架静态资产", () => {
     for (const name of ["btwOpen", "btwSetQuestion", "btwFrame", "btwTitle", "pu-btw-body"]) {
       expect(ui.includes(name), `ui.js 不应再含 ${name}`).toBe(false);
     }
-    /* GC6 CSP 棘轮回归：btw 面样式全走类（②补 面不回归）+ hint 诚实口径（自创值登记④——v2 :4505
-       「不继承权限/模型/思考档设置」的「模型」一词与实现不符，btw 每次调用解析当前 provider/model） */
+    /* GC6 CSP 棘轮回归：btw 面样式全走类（②补 面不回归）。composer hint 行文走查修⑪退役——
+     *  「走当前会话模型」在 tab 覆盖/侧问偏好生效时失真，「旁路 · 只读工具」与 .btw-scope 行全重；
+     *  只锁 v2 :4505 失实原文（「模型」一词与实现不符）不复活 */
     const js = read("app.js");
     const paneJs = read("pane.js");
     expect(js).toContain("pendingBtwQuestion"); // /btw 截获块：标题源 → 发问源（mark 响应不带文本）
-    expect(paneJs).toContain("旁路 · 只读工具 · 走当前会话模型"); // 改写后 hint（btwTabHtml 内）
     expect(paneJs.includes("不继承权限/模型/思考档"), "v2 :4505 失实原文不照抄").toBe(false);
   });
 
@@ -351,6 +351,148 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app).toContain("tab.data.btwEffort ? { effort: tab.data.btwEffort }");
     /* 渲染期现算默认（覆盖 ?? 会话当前） */
     expect(app).toContain("data.chipModel = data.btwModel ? modelTail(data.btwModel) : modelTail(btwModelPref || currentModel)"); /* 走查修⑨③：默认序 = tab 覆盖 > 侧问偏好 > 会话当前 */
+  });
+
+  it("⑬d 走查修⑪（2026-10-14 用户口令）：侧问芯片位次对齐主 composer + 弹窗脱锚修复 + 模型菜单复用主两栏", () => {
+    const paneJs = read("pane.js");
+    const app = read("app.js");
+    const css = read("style.css");
+    const ui = read("ui.js");
+    /* ① 位次：cb-left 仅 ＋文件；cb-right = btw-model + btw-effort + btw-send（芯片在发送钮左面）；
+     *  hint 行文退役（模型口径失真 + 与 .btw-scope 全重）——类一并摘除 */
+    const bar = paneJs.slice(paneJs.indexOf('class="ib-bar"'), paneJs.indexOf("'</div></form></div>'"));
+    expect(bar.indexOf('id="btw-file"')).toBeLessThan(bar.indexOf('class="cb-right"'));
+    expect(bar.indexOf('id="btw-model"')).toBeGreaterThan(bar.indexOf('class="cb-right"'));
+    expect(bar.indexOf('id="btw-effort"')).toBeGreaterThan(bar.indexOf('id="btw-model"'));
+    expect(bar.indexOf('id="btw-send"')).toBeGreaterThan(bar.indexOf('id="btw-effort"'));
+    expect(paneJs.includes("btw-hint"), "hint 行文退役").toBe(false);
+    expect(css.includes(".btw-hint"), ".btw-hint 类摘除").toBe(false);
+    /* ② 定位：锚定坐标允许负值探出输入框（侧问锚点在右分栏），只做视口级钳位——
+     *  旧 Math.max(4,…) 下钳绝迹（栏外锚点被钳回主输入框右缘 = 脱锚根因） */
+    const anchorZone = ui.slice(ui.indexOf("if (pu.anchor)"), ui.indexOf("/* 选中行滚入视野 */"));
+    expect(anchorZone).toContain("window.innerWidth");
+    expect(anchorZone.includes("Math.max(4,"), "视口钳位取代 4px 下钳").toBe(false);
+    /* 侧问芯片入外击豁免列（开着菜单点芯片不先关后开闪一遍） */
+    expect(ui).toContain("#btw-model, #btw-effort");
+    /* ③ 模型菜单复用主两栏：openModelMenu opts 钩子面（current/focus/follow/onSwitch）+
+     *  「跟随」清覆盖行（mm2-follow 发线分隔）+ 平铺限定形长名单退役 */
+    expect(ui).toContain("opts.onSwitch");
+    expect(ui).toContain("opts.follow");
+    expect(ui).toContain('data-mmi="follow"');
+    expect(css).toContain(".mm2-follow");
+    expect(app).toContain("UI.openModelMenu(anchorEl, {");
+    expect(app.includes("title: '侧问模型（临时）'"), "平铺 openPick 菜单退役").toBe(false);
+  });
+
+  it("⑬e 走查修⑫（2026-10-14 用户口令四条）：侧问＋文件弹窗 + 芯片 toggle + 权限弹窗两行式 + 关 tab 即 abort", () => {
+    const paneJs = read("pane.js");
+    const app = read("app.js");
+    const css = read("style.css");
+    const ui = read("ui.js");
+    /* ① 侧问 @ 文件菜单：inputChanged 锚定/宽随锚 + atOnly（侧问无斜杠面）+ btw-file 接线 + 键盘归浮层 */
+    expect(ui).toContain("anchorWide: !!anchor");
+    expect(ui).toContain("opts && opts.atOnly");
+    expect(app).toContain("UI.inputChanged(bInput, { anchor: bForm, atOnly: true })");
+    expect(app).toContain("if (UI.handleInputKey(e)) { e.stopPropagation(); return; }");
+    expect(ui).toContain("#btw-file"); /* 外击豁免（toggle 由处理器显式承担） */
+    /* ② toggle：isAnchorOpen/openKind 导出 + 主三芯片/侧问两芯片/两「＋文件」再点 = 关 */
+    expect(ui).toContain("isAnchorOpen: function (el)");
+    expect(ui).toContain("openKind: function ()");
+    expect(app).toContain("if (UI.isAnchorOpen(modelChip)) { UI.closePopup(); return; } UI.openModelMenu(modelChip);");
+    expect(app).toContain("if (UI.isAnchorOpen(bModelChip)) { UI.closePopup(); return; }");
+    expect(app).toContain("if (UI.isAnchorOpen(bEffortChip)) { UI.closePopup(); return; }");
+    expect((app.match(/UI\.openKind\(\) === 'at'/g) ?? []).length).toBe(2); /* 主 + 侧问 ＋文件 双处 */
+    /* 焦点归还位（侧问面不抢主输入框） */
+    expect(ui).toContain("var focusBack = null;");
+    expect(ui).toContain("focusBack = anchorInputOf(anchor);");
+    /* 锚亡关窗（侧问 composer 帧驱动重建——不沿死锚乱飞） */
+    expect(ui).toContain("if (!pu.anchor.isConnected) { closePopup(); return; }");
+    /* ③ 权限弹窗：详释区退役（MODES.long 摘除 + openPermMenu 无 longOf）+ 两行式行 + perm-pop 宽度 */
+    const modesZone = ui.slice(ui.indexOf("var MODES = ["), ui.indexOf("];", ui.indexOf("var MODES = [")));
+    expect(modesZone.includes("long:"), "MODES.long 随详释区摘除").toBe(false);
+    const permZone = ui.slice(ui.indexOf("function openPermMenu"), ui.indexOf("openCwdMenu"));
+    expect(permZone.includes("longOf"), "权限窗详释区退役").toBe(false);
+    expect(ui).toContain("PERM_ICONS");
+    expect(ui).toContain("popClass: 'perm-pop'");
+    for (const cls of [".popup.perm-pop", ".pu-item.perm-row", ".pm-tx", ".pm-name", ".pm-desc"]) {
+      expect(css.includes(cls), `${cls} 应存在`).toBe(true);
+    }
+    /* ④ 关 tab 即 abort：pane 钩三路（closeAt/关闭其他/关闭所有）+ app 侧问面消费 + 迟到帧防复活 +
+     *  「关闭所有标签」名实相符（显式清空——◧ 收回不清卡不受影响） */
+    expect(paneJs).toContain("P.onTabClosed = null;");
+    expect(paneJs).toContain("notifyClosed(closed)");
+    expect(paneJs).toContain("notifyClosed(dropped)");
+    expect(paneJs).toContain("notifyClosed(all)");
+    const closeAllZone = paneJs.slice(paneJs.indexOf("act === 'close-all'"), paneJs.indexOf("/* ── 接线"));
+    expect(/tabs = \[\];/.test(closeAllZone), "关闭所有标签显式清 tab 集").toBe(true);
+    expect(app).toContain("Pane.onTabClosed = function (tab)");
+    expect(app).toContain("abort: true");
+    expect(app).toContain("if (btwClosedTabs.has(frame.tab)) return;");
+    expect(app).toContain("btwClosedTabs.clear();");
+  });
+
+  it("⑬f 走查修⑬⑮（2026-10-14 用户口令）：kv 会话名单写者 + 会话名单行省略 + 侧问 md 观感对齐主流", () => {
+    const app = read("app.js");
+    const css = read("style.css");
+    /* ① kv-session 单写者化：renderPanel 不再写它（server 投影只认 session/label 事件——未命名恒
+     *  「新会话」，盖掉左栏首条消息派生名）；写面只剩 setSessionTitle；data.session 出 sig */
+    expect(app.includes("$('kv-session').textContent = data.session"), "renderPanel 不再写 kv-session").toBe(false);
+    expect(app).toContain("kvSession.textContent = name !== '' ? name : '—'");
+    expect(/\.ls-item \.stitle\s*\{[^}]*white-space:\s*nowrap/.test(css), "左栏会话名单行省略（走查修⑮ 回退两行夹）").toBe(true);
+    expect(/\.ls-item \.stitle\s*\{[^}]*-webkit-line-clamp/.test(css), ".stitle 不带 line-clamp（两行夹已拆）").toBe(false);
+    expect(css).toContain(".kv dd #kv-session");
+    expect(app).toContain("kvSession.title = name !== '' ? name : '';");
+    /* ② 侧问 md 观感：.btw-a 的 pre-wrap 不再继承进 .md（主流 .agent-md .md 同款归一） */
+    expect(css).toContain(".btw-a .md { white-space: normal; line-height: 1.65; }");
+    expect(css).toContain(".agent-md .md { flex: 1; min-width: 0; white-space: normal; line-height: 1.65; }"); /* 主流基准未动 */
+  });
+
+  it("⑬g 走查修⑭（2026-10-14 用户口令）：设置页模型表增删——编辑/手填同面可编辑 + 声明接管语义", () => {
+    const app = read("app.js");
+    const css = read("style.css");
+    /* 模型表交互件：行尾 ✕ + 添加行（回车同效）+ 恢复自动发现 + 默认模型下拉随表重建 */
+    for (const k of ['data-k="pf-mdel"', 'data-k="pf-madd"', 'data-k="pf-mreset"', "pf-mnew"]) {
+      expect(app.includes(k), `app.js 应含 ${k}`).toBe(true);
+    }
+    expect(app).toContain("renderModelRows");
+    expect(app).toContain("addModelRow");
+    expect(app.includes("只读——槽值发现；增删走 provider 子命令/TOML"), "只读文案退役").toBe(false);
+    /* 保存携表三态：恢复 = []（摘键）/ 改动或接管 = 全表 / 未触碰 = 不带键（不冻结发现） */
+    expect(app).toContain("if (mf.reset) spec.models = [];");
+    expect(app).toContain("else if (mf.dirty || mf.declared !== null) spec.models = mf.list;");
+    /* 手填新槽同面（isNew 不再跳过模型表区） */
+    expect(app.includes("isNew ? '' : '<div class=\"pf-row\"><label>模型表"), "手填表单补模型表").toBe(false);
+    for (const cls of [".pf-madd", ".pf-mdel", ".pf-mnote"]) {
+      expect(css.includes(cls), `${cls} 应存在`).toBe(true);
+    }
+  });
+
+  it("⑬h 走查修⑮（2026-10-14 用户口令七条）：目录过滤/排序 + 下拉箭头 + trim + 更新入外观 + 草稿首发", () => {
+    const app = read("app.js");
+    const css = read("style.css");
+    /* ② 输入值统一 trim（pf-key / MCP syncInputs 全字段） + 浏览器 autofill 全关（autocomplete=off 全量覆写） */
+    expect(app).toContain("(page.querySelector('#pf-key').value || '').trim()");
+    expect(app).toContain("draft.jsonText = jsonEl.value.trim()");
+    const inputTags = (app.match(/<input /g) ?? []).length + (app.match(/<textarea /g) ?? []).length;
+    const offTags = (app.match(/<input autocomplete="off" /g) ?? []).length + (app.match(/<textarea autocomplete="off" /g) ?? []).length;
+    expect(offTags, "全部 input/textarea 带 autocomplete=off（浏览器不自动记录表单信息）").toBe(inputTags);
+    /* ③ 过滤走类不走 hidden 属性 + 目录按名排序 */
+    expect(app).toContain("r.classList.toggle('hide', !r.getAttribute('data-name').includes(s))");
+    expect(app).toContain("provData.vendors = (d.vendors ?? []).toSorted(");
+    expect(css).toContain(".pf-vrow.hide");
+    /* ④ 下拉箭头自定义定位（appearance:none + 内嵌 chevron 10px） */
+    expect(css).toContain("appearance: none;");
+    expect(css).toContain("background-position: right 10px center;");
+    /* ⑥ 更新检测并入外观（SET_PAGES 无独立更新页）+ mc-seg 分段开关 */
+    expect(app.includes("render: pageUpdate"), "独立更新页退役").toBe(false);
+    expect(app).toContain("data-k=\"ap-update\"");
+    expect(app).toContain("/api/settings/update");
+    /* ⑦ 草稿首发：btn-new 只开窗不建会话；sendDraft 先建后发；cwd 芯片草稿在场 */
+    expect(app).toContain("$('btn-new').addEventListener('click', function () { openDraft(); })");
+    expect(app).toContain("function sendDraft(text, imgs)");
+    expect(app).toContain("createSession({ cwd: draftCwd })");
+    expect(app).toContain("var empty = draftActive || (currentSid !== null && !render.userSeen())");
+    expect(app).toContain("draftActive = false; /* 走查修⑮⑦：切走即出草稿态");
   });
 
   it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {
@@ -421,6 +563,36 @@ describe("web T15：前端骨架静态资产", () => {
     expect(render).toContain("mdRender: mdRender");
     expect(paneJs).toContain("R.mdRender");
     /* ①/⑥ 主历史界标（btw-cmd.ts 是 ts 不在本资产面——此处钉前端可证面：无。界标由 btw-cmd/btw-service 测试面钉） */
+  });
+
+  it("⑤c 运行状态 Tokens 行显示缓存命中率，且命中率变化会触发重渲", () => {
+    const app = read("app.js");
+    expect(app).toContain("data.tokens && data.tokens.cacheHitPct");
+    expect(app).toContain("tk.cacheHitPct === undefined ? '—' : tk.cacheHitPct + '%'");
+  });
+
+  it("⑤c补 模块列表移除底部操作提示，释放的高度交由自适应分页列表使用", () => {
+    const html = read("index.html");
+    const statePage = html.slice(html.indexOf('id="state-page-1"'), html.indexOf('id="state-page-2"'));
+    expect(statePage).not.toContain("点击行挂载 / 卸载 · 锁定行点按提示原因");
+    expect(statePage).not.toContain('class="panel-hint"');
+    expect(statePage).toContain('id="mod-list"');
+    expect(read("app.js")).toContain("modSize = listPageSize(modListEl, modSize)");
+  });
+
+  it("⑤d GUI 外观从 gui.toml 启动恢复，旧 localStorage 仅用于迁移与失败回退", () => {
+    const app = read("app.js");
+    expect(app).toContain("function loadGuiPreferences(");
+    expect(app).toContain("guiPreferencesReady = loadGuiPreferences()");
+    expect(app).toContain("appearanceConfigured");
+    expect(app).toContain("saveGuiAppearance({ mode:");
+    expect(app).toContain("saveGuiAppearance({ fontScale:");
+    expect(app).toContain("localStorage.removeItem('orosus-web-theme'");
+    expect(app).toContain("localStorage.removeItem('orosus-web-fontscale'");
+    expect(app).not.toContain("localStorage.setItem('orosus-web-theme'");
+    expect(app).not.toContain("localStorage.setItem('orosus-web-fontscale'");
+    expect(app).toContain("esc(guiTheme)");
+    expect(app).not.toContain("已写 config.toml 顶层 btwModel");
   });
 
   it("⑥ server 静态路由：/ 与 /assets/* 免 token、CSP 头、index 恒 no-cache、其余 ETag + 304、vendor 可达", async () => {

@@ -3,7 +3,10 @@ import type { Chunk, ContentPart, ModelMessage } from "@orosus/contracts/provide
 
 /** 跨事件的可变解析状态（每条流一份）。 */
 export interface SseState {
-  inputTokens: number;
+  inputTokens: number; // input_tokens（非缓存部分）；完整输入在 usageChunk 中汇总
+  cacheHitTokens?: number;
+  cacheCreationTokens?: number;
+  outputTokens?: number;
   currentCall: { callId: string } | null;
   pendingStop: string | null;
 }
@@ -49,12 +52,39 @@ function errorFinishChunks(err: unknown): Chunk[] {
   return [{ type: "finish", kind: "error", errorMessage: `${t}：${m}` }];
 }
 
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+/** message_start 与 message_delta 都会上报 usage；按字段右合并，最终 delta 可补全或覆盖 start 的占位值。 */
+function mergeUsage(state: SseState, usage: AnthropicUsage | null | undefined): void {
+  if (usage === null || usage === undefined) return;
+  if (typeof usage.input_tokens === "number") state.inputTokens = usage.input_tokens;
+  if (typeof usage.output_tokens === "number") state.outputTokens = usage.output_tokens;
+  if (typeof usage.cache_creation_input_tokens === "number") state.cacheCreationTokens = usage.cache_creation_input_tokens;
+  if (typeof usage.cache_read_input_tokens === "number") state.cacheHitTokens = usage.cache_read_input_tokens;
+}
+
+function usageChunk(state: SseState): Chunk {
+  // Anthropic 的 input_tokens 不含缓存读/写；归一为 OpenAI prompt_tokens 同义的完整输入规模。
+  const input = state.inputTokens + (state.cacheCreationTokens ?? 0) + (state.cacheHitTokens ?? 0);
+  return {
+    type: "usage",
+    input,
+    output: state.outputTokens ?? 0,
+    ...(state.cacheHitTokens !== undefined ? { cacheHit: state.cacheHitTokens } : {}),
+  };
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- 线缆格式按运行时形状窄化 */
 export function mapEvent(state: SseState, event: string, raw: unknown): Chunk[] {
   const data = raw as any;
   switch (event) {
     case "message_start":
-      state.inputTokens = data?.message?.usage?.input_tokens ?? 0;
+      mergeUsage(state, data?.message?.usage);
       return [];
     case "content_block_start":
       if (data?.content_block?.type === "tool_use") {
@@ -81,7 +111,8 @@ export function mapEvent(state: SseState, event: string, raw: unknown): Chunk[] 
       return [];
     case "message_delta":
       state.pendingStop = data?.delta?.stop_reason ?? state.pendingStop;
-      return [{ type: "usage", input: state.inputTokens, output: data?.usage?.output_tokens ?? 0 }];
+      mergeUsage(state, data?.usage);
+      return [usageChunk(state)];
     case "message_stop":
       return [{ type: "finish", kind: mapStopReason(state.pendingStop) }];
     case "error":

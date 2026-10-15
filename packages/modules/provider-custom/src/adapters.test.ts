@@ -308,6 +308,17 @@ describe("listModels（模型发现 T2/D32 修订——createAdapters 随槽装�
     expect(await off.get("zhipuai-coding-plan")!.listThinking!("glm-5.3")).toBeUndefined(); // 目录不可用不 throw
   });
 
+  it("声明模型表（2026-10-14 走查修⑭——web 设置面增删的落点）：槽内 models 非空即接管发现链（目录/live 全让位，零端点请求）；空数组不接管（回目录优选）；schema 保键", async () => {
+    let liveCalls = 0;
+    const fetchImpl = (async () => { liveCalls++; return new Response(JSON.stringify({ data: [{ id: "m-live" }] }), { status: 200 }); }) as typeof fetch;
+    const declared = createAdapters({ providers: { "zhipuai-coding-plan": { ...entry, models: ["my-new-model", "glm-5.3"] } } }, fetchImpl, catalogWithCodingPlan);
+    expect(await declared.get("zhipuai-coding-plan")!.listModels!()).toEqual(["my-new-model", "glm-5.3"]); // 声明序原样
+    expect(liveCalls).toBe(0); // 接管即零发现——目录与 live 都不触
+    const empty = createAdapters({ providers: { "zhipuai-coding-plan": { ...entry, models: [] } } }, fetchImpl, catalogWithCodingPlan);
+    expect(await empty.get("zhipuai-coding-plan")!.listModels!()).toEqual(["glm-5.3-flash", "glm-5.3"]); // 空数组 = 目录优选原行为
+    expect(configSchema.parse({ providers: { x: { ...entry, models: ["m1", "m2"] } } }).providers.x!.models).toEqual(["m1", "m2"]); // 键入册不漂移
+  });
+
   it("目录优选：全量目录（online）含本槽条目 → 策展清单为覆盖口径且不发端点请求（2026-09-22 /model 清单修复——live 按量池混入套餐外模型，选了就 1113；deprecated/非 tool_call 过滤随目录口径）", async () => {
     let liveCalls = 0;
     const fetchImpl = (async () => { liveCalls++; return new Response(JSON.stringify({ data: [{ id: "glm-4.7" }, { id: "glm-5.2" }] }), { status: 200 }); }) as typeof fetch;

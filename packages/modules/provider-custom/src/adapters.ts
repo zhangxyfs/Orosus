@@ -23,6 +23,11 @@ export const configSchema = z.object({
       baseUrl: z.string(),                   // 必填——自定义厂商无"官方默认端点"，端点就是定义的一部分
       apiKey: z.string().optional(),         // $ENV: 占位；省略不发鉴权头（本地/内网端点）
       defaultModel: z.string().optional(),   // D32：有值则 model = "<name>" 裸名可用
+      // 2026-10-14 走查修（用户口令「模型表没有新增模型 id 的功能」）：槽内声明模型表——web 设置面
+      // 增删的落盘键。非空即接管发现链（目录优选/live 兜底全部让位——所见即所编，目录漏网/滥列都能修）；
+      // 缺省/空数组 = 自动发现（原行为）。空表由写入侧摘键（api-providers upsert 缺省不写），本 schema
+      // 只认非空字符串条目。
+      models: z.array(z.string().min(1)).optional(),
       // 2026-10-09 用户拍板③：条目级默认上下文窗口——私有端点/网关自定义模型不在 models-dev 目录时的
       // 配置面兜底；解析优先级 = 顶层显式 contextWindow > 本键 > 目录兜底（core load.ts 同链）。
       // 模块本体不消费（窗口是 harness/显示/压缩阈值口径）——登记在这里只为配置形状入册不漂移。
@@ -129,7 +134,9 @@ export function createAdapters(
     }
     out.set(name, {
       stream,
-      listModels: catalogPreferredListModels(name, live, loadCatalog), // 目录优选——策展覆盖口径优先，live 兜底
+      listModels: p.models !== undefined && p.models.length > 0
+        ? async () => [...p.models!] // 声明模型表接管（2026-10-14 走查修）——非空数组即覆盖口径，发现链让位
+        : catalogPreferredListModels(name, live, loadCatalog), // 目录优选——策展覆盖口径优先，live 兜底
       listThinking: async (model: string): Promise<{ efforts: string[]; offEffort?: string; hasToggle: boolean } | undefined> => { // /effort 数据源：目录三级匹配（catalog.ts），读不到/不认识 → undefined（核心走 lenient 指引）
         try {
           const { catalog } = await loadCatalog();

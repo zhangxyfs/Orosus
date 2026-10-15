@@ -88,7 +88,7 @@
               <div class="attachbar" id="attachbar" hidden></div>
               <div class="ib-main">
                 <span class="pchar" aria-hidden="true">❯</span>
-                <textarea id="prompt-input" rows="2" placeholder="向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…" aria-label="指令输入框"></textarea>
+                <textarea autocomplete="off" id="prompt-input" rows="2" placeholder="向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…" aria-label="指令输入框"></textarea>
               </div>
               <div class="ib-bar">
                 <span class="cb-left">
@@ -157,8 +157,6 @@
 
             <div class="plist" id="mod-list"></div>
             <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页">›</button></div>
-
-            <div class="panel-hint">点击行挂载 / 卸载 · 锁定行点按提示原因</div>
           </div>
 
           <!-- 网络 · MCP 页（连接列表分页——与模块挂载统一） -->

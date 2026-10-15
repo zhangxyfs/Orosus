@@ -59,6 +59,17 @@ describe("agentLoop（§6.2 零策略骨架）", () => {
     expect(deriveMessages(all).at(-1)).toEqual({ role: "assistant", content: [{ kind: "text", text: "你好" }] }); // reasoning 不回流模型（v1 定案）
   });
 
+  it("缓存命中 token 随 usage 落 assistant/message，供 TUI/Web 命中率投影读取", async () => {
+    const { run, session } = setup([[
+      { type: "text/delta", text: "答" },
+      { type: "usage", input: 100, output: 5, cacheHit: 98 },
+      { type: "finish", kind: "stop" },
+    ]]);
+    await run();
+    const msg = (await session.all()).find((e) => e.type === "assistant/message")!;
+    expect(msg.usage).toEqual({ input: 100, output: 5, cacheHit: 98 });
+  });
+
   it("livePush 收到全量 chunk（断流后旁路是唯一实时面）", async () => {
     const { s, bus, tools, session, provider } = setup([[
       { type: "text/delta", text: "a" },

@@ -229,7 +229,7 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect(body.pinned[0]!.cur).toBe(true); // 当前会话标（handover 指向 s_pin）
     expect(body.groups.find((g) => g.cwd === cwdA)!.sessions.some((x) => x.sid === "s_pin")).toBe(true); // 组内仍在
 
-    const raw = readFileSync(join(home, "web", "pins.json"), "utf8"); // 持久化（B2）
+    const raw = readFileSync(join(home, "gui", "pins.json"), "utf8"); // 持久化（B2）
     expect(JSON.parse(raw)).toEqual(["s_pin"]);
     const boot = await get(s, "/api/bootstrap");
     expect(((await boot.json()) as { pinned: string[] }).pinned).toEqual(["s_pin"]); // bootstrap 同步
@@ -237,7 +237,7 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     const off = await post(s, "/api/sessions/s_pin/pin", {}); // 再 toggle = 取消
     expect(await off.json()).toEqual({ ok: true, pinned: false });
     expect((await sessionsBody(s)).pinned).toEqual([]);
-    expect(JSON.parse(readFileSync(join(home, "web", "pins.json"), "utf8"))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(home, "gui", "pins.json"), "utf8"))).toEqual([]);
     await s.stop();
   }, 60_000);
 
@@ -373,7 +373,7 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect(projB!.hidden).toBe(true);
     expect(boot.projects.find((p) => p.cwd === cwdA)!.hidden).toBeUndefined();
     expect(boot.projects.map((p) => p.bucket).toSorted()).toEqual([encodeCwd(cwdA), encodeCwd(cwdB)].toSorted());
-    expect(JSON.parse(readFileSync(join(home, "web", "workspaces.json"), "utf8"))).toEqual({ v: 1, hidden: [cwdB] });
+    expect(JSON.parse(readFileSync(join(home, "gui", "workspaces.json"), "utf8"))).toEqual({ v: 1, hidden: [cwdB] });
     expect(existsSync(b1File)).toBe(true); // 盘上文件与会话目录未被删
 
     const re = await post(s, "/api/sessions", { cwd: cwdB }); // 找回：同 cwd 建会话
@@ -494,6 +494,29 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect((await post(s, "/api/sessions/s_disk/title", { title: "   " })).status).toBe(400);
     expect((await post(s, "/api/sessions/s_none/title", { title: "x" })).status).toBe(404);
     await s.stop();
+  }, 60_000);
+
+  it("走查修⑯（2026-10-14 用户报障）：同 sid 跨桶只保留最近活动一行（跨目录 resume 落两份文件——磁盘扫描去重）", async () => {
+    const home = tmpHome();
+    const cwdA = tmpCwd();
+    const cwdB = tmpCwd();
+    const sid = "s_dupbucket";
+    // A 桶：完整会话（新）／B 桶：同 sid 空壳（旧）——两条不同目录 resume 会落的盘形
+    await seedSession(home, cwdA, sid, { user: "A 桶正文", label: "A 桶标题" });
+    const dirB = join(home, "sessions", encodeCwd(cwdB));
+    const storeB = new JsonlSessionStore({ dir: dirB, sessionId: sid });
+    await storeB.append("session/header", { format: 1, cwd: cwdB, parentSession: null, moduleSummary: { active: 0, failed: 0, discovered: 0 } });
+    await storeB.close();
+    // 强制 mtime 差序（同毫秒写 flaky 规避——utimesSync 前移）：B 空壳推旧 60s，A 正文保持当下
+    const { utimesSync } = await import("node:fs");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(dirB, sid, "agents", "session.jsonl"), old, old);
+    const pool = new HostPool({ home });
+    const rows = pool.snapshot().rows.filter((r) => r.sid === sid);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.label).toBe("A 桶标题"); // 最近活动者胜（A 有正文，B 空壳让位）
+    expect(rows[0]!.bucket).toBe(encodeCwd(cwdA));
+    await pool.closeAll();
   }, 60_000);
 
   it("in-flight 互斥（T2 审查指针）：并发同 sid viewer / 并发同 cwd openSession 共享一次装配，不重复建", async () => {

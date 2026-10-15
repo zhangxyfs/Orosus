@@ -24,7 +24,7 @@ import type { Logger } from "@orosus/contracts/module";
 import type { Tool, ToolExecution, ToolResult } from "@orosus/contracts/tool";
 import { buildBtwRequest, type BtwRound } from "../btw-cmd.ts";
 import { archiveBtwRounds } from "./cmdrouter.ts";
-import { readBtwModel } from "../subagent-settings.ts";
+import { readBtwModel } from "./gui-settings.ts";
 import type { BtwFrame, HostedSession } from "./hosted.ts";
 
 /** btw 只读工具白名单（主图实名——模型面 name 即调用名；写/改/派活类一律不出面）。 */
@@ -136,8 +136,8 @@ export function askBtw(hs: HostedSession, tab: string, q: string, opts?: { model
   const inst: BtwInstance = { tab, rounds: [...(prior?.rounds ?? [])], ctrl: new AbortController() };
   tabs.set(tab, inst);
   const roundNo = inst.rounds.length + 1; // 本问轮序（帧 round——同问内查证与回答同号）
-  /* 走查修⑨③（2026-10-14 用户口令）：默认模型 = 设置「模型偏好 → 侧问模型」——无 tab 覆盖时读
-   *  配置顶层 btwModel 键（每问现读文件——改偏好零重载即时生效；侧问是手动低频动作，读盘开销可忽略）。 */
+  /* 默认模型 = 设置「模型偏好 → 侧问模型」——无 tab 覆盖时读 gui/gui.toml [sideQuestion].model
+   *  （每问现读文件——改偏好零重载即时生效；侧问是手动低频动作，读盘开销可忽略）。 */
   const effModel = opts?.model ?? readBtwModel();
   const emit = (phase: BtwFrame["phase"], text: string): void => {
     hs.emitBtw({ tab, phase, text, round: roundNo });

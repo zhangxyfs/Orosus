@@ -190,13 +190,12 @@
   }
 
   /** btwTabHtml(data, locked)——选项卡内容 HTML（v2 4484-4507 直裁）：.btw-scope 说明行 + .btw-stream
-   *  rounds（空态 pane-blank）+ 裁剪版 composer（.ib-main ❯+textarea rows=2 + .ib-bar 左仅
-   *  ＋文件〔= 插入 @〕、右 hint + 发送钮——去 mode/model/effort 三芯片，拍板第 4 条）。
+   *  rounds（空态 pane-blank）+ 裁剪版 composer（.ib-main ❯+textarea rows=2 + .ib-bar——左仅 ＋文件
+   *  〔= 插入 @〕、右 = btw 模型/思考档两芯片 + 发送钮，位次与主 composer cb-right 同构〔走查修⑪〕；
+   *  去主那枚 mode-chip——旁路恒只读，拍板第 4 条）。
    *  locked=true（W6复核修 Important#2①：composer 按 sid 门控）——textarea/发送钮/＋文件全 disabled
    *  + .btw-locked 诚实提示行「侧问绑定原会话——切回后可继续发问」（btw 帧只在归属会话的 SSE 流里，
    *  切走后发问将永无帧回填——杜绝新发问滞留）。
-   *  hint 诚实口径「旁路 · 只读工具 · 走当前会话模型」——不照抄 v2 :4505 原文（「模型」一词与
-   *  实现不符：btw 每次调用解析当前 provider/model，含 /model 覆盖也跟随——自创值登记④）。
    *  placeholder 同口径去「Ctrl + V 贴图」claim（POST /btw 无 imageIds 面——标签不得撒谎）。 */
   function btwTabHtml(data, locked) {
     var rounds = (data && data.rounds) || [];
@@ -217,13 +216,16 @@
       (lk ? '<div class="btw-locked">侧问绑定原会话——切回后可继续发问</div>' : '') +
       '<form class="btw-form" id="btw-form" autocomplete="off"><div class="inputbox">' +
       '<div class="ib-main"><span class="pchar" aria-hidden="true">❯</span>' +
-      '<textarea id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
-      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button>' +
+      '<textarea autocomplete="off" id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
+      /* 走查修⑪（2026-10-14 用户口令）：芯片位次对齐主 composer——左仅 ＋文件，右 = 模型/思考档/发送钮
+       *  （主：cb-right = model-chip + effort-chip + send-btn）。原 cb-right 的 hint 行文退役：「走当前
+       *  会话模型」在 tab 覆盖/侧问偏好生效时失真，「旁路 · 只读工具」与顶上 .btw-scope 行全重。 */
+      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button></span>' +
+      '<span class="cb-right">' +
       /* 走查修⑨（2026-10-14 用户口令）：模型/思考档两芯片——tab 级临时覆盖；显示 = 覆盖值或会话当前
        *  （data.chipModel/chipEffort 由 app.js 渲染期现算）。 */
       '<button type="button" class="cb-chip btw-chip" id="btw-model" title="本侧问临时指定模型（默认跟随会话当前）"' + dis + '>' + esc((data && data.chipModel) || '模型 —') + ' ▾</button>' +
-      '<button type="button" class="cb-chip btw-chip" id="btw-effort" title="本侧问临时指定思考档（默认跟随会话当前）"' + dis + '>思考 ' + esc((data && data.chipEffort) || '—') + ' ▾</button></span>' +
-      '<span class="cb-right"><span class="btw-hint">旁路 · 只读工具 · 走当前会话模型</span>' +
+      '<button type="button" class="cb-chip btw-chip" id="btw-effort" title="本侧问临时指定思考档（默认跟随会话当前）"' + dis + '>思考 ' + esc((data && data.chipEffort) || '—') + ' ▾</button>' +
       (inFlight
         ? '<button type="button" class="sendbtn stop" id="btw-send" data-btwstop="1" title="停止本轮侧问" aria-label="停止">■</button>'
         : '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送"' + dis + '>↑</button>') + '</span></div>' +
@@ -316,6 +318,16 @@
   };
   /* ＋菜单内容源（W3/W6 注入；null = 尚无可开项——菜单只剩禁用态行） */
   P.plusSource = null;
+  /* 走查修⑫（2026-10-14 用户口令④）：tab 关闭通知钩——app.js 侧问面消费（关 tab 即 abort 在飞轮）。
+   *  签名 (tab)——逐个被关 tab 各调一次（closeAt / 关闭其他 / 关闭所有三路全覆盖）；
+   *  ◧ 分栏收回（hidden）不是关 tab——不触钩（走查修①记忆保留，工作照跑）。 */
+  P.onTabClosed = null;
+  function notifyClosed(list) {
+    if (typeof P.onTabClosed !== 'function') return;
+    for (var k = 0; k < list.length; k++) {
+      try { P.onTabClosed(list[k]); } catch { /* 钩炸不堵关 tab */ }
+    }
+  }
   /* 内容渲染器注册：onBodyRender('agent', function (data, bodyEl) { … })——未注册 kind 显示占位 */
   P.onBodyRender = function (kind, renderer) {
     if (typeof kind === 'string' && typeof renderer === 'function') bodyRenderers[kind] = renderer;
@@ -408,11 +420,14 @@
     renderPaneBody();
     return res;
   };
-  /* 全关 → empty → W1 closePane 收回分栏（v2 4421-4429：closeTabAt 全空即 closePane） */
+  /* 全关 → empty → W1 closePane 收回分栏（v2 4421-4429：closeTabAt 全空即 closePane）。
+   *  走查修⑫：被关 tab 先过 onTabClosed 钩（侧问 abort 面）再落态。 */
   P.closeAt = function (i) {
+    var closed = (i >= 0 && i < tabs.length) ? [tabs[i]] : [];
     var res = closeTabAt(tabs, activeTab, i);
     tabs = res.tabs;
     activeTab = res.active;
+    notifyClosed(closed);
     if (res.empty) {
       var cp = ui().closePane;
       if (cp) cp(); /* 状态复位/壳自愈由 #pane hidden 的 MutationObserver 兜（外路 ◧ 收回同款） */
@@ -427,7 +442,7 @@
 
   /* ── ⌄ 全部选项卡下拉（v2 4634-4677 直裁） ── */
   function dropHtml(q) {
-    return '<div class="ptd-search"><input id="ptd-q" type="text" placeholder="搜索标签页…" value="' + esc(q || '') + '" aria-label="搜索标签页"></div>' +
+    return '<div class="ptd-search"><input autocomplete="off" id="ptd-q" type="text" placeholder="搜索标签页…" value="' + esc(q || '') + '" aria-label="搜索标签页"></div>' +
       '<div class="ptd-sec">打开的标签页</div><div class="ptd-rows" id="ptd-rows">' + dropRowsHtml(tabs, activeTab, q, P.dotOf) + '</div>';
   }
   function renderDrop(q) {
@@ -497,14 +512,25 @@
     if (i < 0 || i >= tabs.length) return;
     if (act === 'close') P.closeAt(i);
     else if (act === 'close-others') {
+      /* 走查修⑫：被弹掉的 tab 也过关闭钩（侧问 abort 面） */
+      var dropped = [];
+      for (var j = 0; j < tabs.length; j++) if (j !== i) dropped.push(tabs[j]);
       tabs = [tabs[i]];
       activeTab = 0;
+      notifyClosed(dropped);
       renderTabs();
       renderPaneBody();
       refreshDrop();
     } else if (act === 'close-all') {
+      /* 走查修⑫：「关闭所有标签」名实相符——显式清空 + 过关闭钩。走查修①的收回不清卡只管 ◧/外路
+       *  hidden 收回（工作照跑）；本手势是显式全关，不再借 observer 隐清（该清态已被走查修①摘除），
+       *  就地自清——重开回选择器空态。 */
+      var all = tabs.slice();
+      tabs = [];
+      activeTab = -1;
+      notifyClosed(all);
       var cp = ui().closePane;
-      if (cp) cp(); /* 选项卡全关 → 分栏自动收回（v2 4623；状态复位由 observer 兜） */
+      if (cp) cp(); /* 选项卡全关 → 分栏自动收回（v2 4623） */
     }
   }
 

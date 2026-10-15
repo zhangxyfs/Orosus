@@ -52,7 +52,7 @@ const writeProviderConfig = (home: string, baseUrl: string, model = "demo/model-
 
 interface SeedOpts {
   label?: string;
-  usage?: { input: number; output: number };
+  usage?: { input: number; output: number; cacheHit?: number };
   todos?: Array<{ content: string; status: string }>;
 }
 
@@ -159,7 +159,7 @@ interface PanelBody {
   session: string;
   cwd: string;
   elapsedMs: number;
-  tokens: { input: number; output: number; postCompaction?: boolean };
+  tokens: { input: number; output: number; cacheHitPct?: number; postCompaction?: boolean };
   contextWindow: number;
   ctx: { used: number; window: number; pct: number };
   modules: PanelModule[];
@@ -275,7 +275,7 @@ describe("web T10：面板数据 API", () => {
     process.env["OROSUS_HOME"] = home;
     const cwd = tmpCwd();
     writeProviderConfig(home, "http://127.0.0.1:9", "provider-custom/model-x"); // 死端口——本用例不发 prompt
-    await seedSession(home, cwd, "s_panel1", { label: "面板会话", usage: { input: 90_000, output: 1_200 } });
+    await seedSession(home, cwd, "s_panel1", { label: "面板会话", usage: { input: 90_000, output: 1_200, cacheHit: 88_200 } });
     const s = await startWeb(home, cwd, "s_panel1");
 
     const p = await getPanel(s, "s_panel1");
@@ -286,8 +286,8 @@ describe("web T10：面板数据 API", () => {
     expect(p.cwd).toBe(shortenPath(cwd, 26)); // 会话 cwd（hosted.cwd）——非 server 进程 cwd
     expect(p.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(p.elapsedMs).toBeLessThan(60_000);
-    // tokens = 末条 usage 分拆（lastUsageOf 同口径）
-    expect(p.tokens).toEqual({ input: 90_000, output: 1_200 });
+    // tokens = 末条 usage 分拆 + 缓存命中率（88,200 / 90,000 = 98%）
+    expect(p.tokens).toEqual({ input: 90_000, output: 1_200, cacheHitPct: 98 });
     // ctx = used/window/pct（E3：lastUsageOf ÷ resolveContextWindow——configFace 同链，无显式配置回落 200k）
     expect(p.contextWindow).toBe(200_000);
     expect(p.ctx).toEqual({ used: 90_000, window: 200_000, pct: 45 });

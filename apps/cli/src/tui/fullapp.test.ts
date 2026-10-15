@@ -104,6 +104,15 @@ describe("全屏应用骨架（TUI 批阶段三 F3——双栏布局 + 焦点循
 		expect(plain).toContain("❯");
 		expect(output.buf.startsWith("\x1b[?1049h")).toBe(true); // 进 alt-screen
 	});
+	it("①b 运行状态 Tokens 行在输入/输出后显示缓存命中率", async () => {
+		const { app, output } = rig(["# 你好"], 100, 30, {
+			panelData: () => ({ ...defaultPanelData(), tokens: { input: 11_841, output: 132, cacheHitPct: 98 } }),
+		});
+		app.start();
+		await flush();
+		app.stop();
+		expect(stripAnsi(output.buf)).toContain(`↑ ${(11_841).toLocaleString()} · ↓ ${(132).toLocaleString()} · 98%`);
+	});
 	it("② Tab 焦点循环 → 聚焦面板框变青玉（accent SGR）", async () => {
 		const { app, input, output } = rig();
 		app.start();

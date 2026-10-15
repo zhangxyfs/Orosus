@@ -1,13 +1,16 @@
 /** web 批 T13——提供商面端点（api-providers.ts）：
  *  - GET /api/providers（§3 :266，F2 品牌列表）→ {ok, providers:[{key,name,proto,baseUrl,modelCount,
  *    models,defaultModel?,hasApiKey?}]}：读配置（loadConfig 的 [provider-custom].providers 槽——读面
- *    为分层合并后的有效视图）；models = 槽值 listModels（目录优选 + live 兜底——provider-custom
- *    adapters；锚定当前会话 harness 的图取槽值服务，无会话/死端点 → 空表降级）。**模型表无配置写面**
- *    （五轮复核补：F2「模型表增删」一期降级只读展示 + defaultModel 选择）。
+ *    为分层合并后的有效视图）；models = 槽值 listModels（声明模型表接管 > 目录优选 > live 兜底——
+ *    provider-custom 槽内 models 键，2026-10-14 走查修⑭二期；锚定当前会话 harness 的图取槽值服务，
+ *    无会话/死端点 → 空表降级）+ declaredModels（声明表原值透传——设置页「自定义接管中」态判据）。
+ *    （五轮复核补：F2「模型表增删」一期降级只读展示 + defaultModel 选择——走查修⑭起模型表可增删）。
  *  - POST /api/providers（§3 :267，F2 自定义手填/编辑/删除）{op:"upsert"|"remove", slot, spec?,
  *    removeSecret?} → {ok}：web 侧 writeNestedTable 写用户 config.toml 的
- *    [provider-custom.providers.<slot>]——槽内键序 type/baseUrl/apiKey?/defaultModel?
- *    （provider-cmd.ts:251-255 写形同款）；apiKey 槽内只写 $ENV: 引用、值经 upsertSecret 落
+ *    [provider-custom.providers.<slot>]——槽内键序 type/baseUrl/apiKey?/defaultModel?/models?
+ *    （provider-cmd.ts:251-255 写形同款 + 走查修⑭ models 键）；表单不管的槽键（toolImages/
+ *    acceptedImageMimes/槽级 contextWindow 等）保存时按原序回填——整表替换不再静默抹键（同修）。
+ *    apiKey 槽内只写 $ENV: 引用、值经 upsertSecret 落
  *    secrets.env（tool-web settings.ts:49 原地更新件——CM-13/MV-05 纪律）；contextWindow 落顶层键
  *    （provider-cmd.ts:264 同形——读侧槽位级有兜底但写侧统一顶层）；remove = 删节键 +
  *    removeSecret 控制连删 secret 行。**写盘前形状校验**（T11 checkEditSpec 同款纪律——防带病落盘）。
@@ -155,7 +158,9 @@ registerRoute("GET", "/api/providers", async (_req, res) => {
         }
       }
     }
-    const rec = entry as { type?: unknown; baseUrl?: unknown; defaultModel?: unknown; apiKey?: unknown };
+    const rec = entry as { type?: unknown; baseUrl?: unknown; defaultModel?: unknown; apiKey?: unknown; models?: unknown };
+    const declared = Array.isArray(rec.models) ? rec.models.filter((m): m is string => typeof m === "string" && m !== "") : [];
+    if (declared.length > 0) models = declared; /* 声明表即生效表（接管语义）——无会话/重载窗口期也如实返回，不借发现链空表降级 */
     rows.push({
       key: slot,
       name: slot, // 自定义槽无显示名——name = slot（目录厂商名在 /api/providers/catalog）
@@ -163,6 +168,9 @@ registerRoute("GET", "/api/providers", async (_req, res) => {
       baseUrl: typeof rec.baseUrl === "string" ? rec.baseUrl : "",
       modelCount: models.length,
       models,
+      /* 走查修⑭：declaredModels = 槽内声明模型表（config 原值）——设置页据此显示「自定义接管中」
+       *  态与「恢复自动发现」出口；缺省/空 = 自动发现（models 字段即发现链结果） */
+      ...(declared.length > 0 ? { declaredModels: declared } : {}),
       ...(typeof rec.defaultModel === "string" && rec.defaultModel !== "" ? { defaultModel: rec.defaultModel } : {}),
       ...(typeof rec.apiKey === "string" && rec.apiKey !== "" ? { hasApiKey: true } : {}), // 引用在（值不回显）
     });
@@ -175,7 +183,9 @@ registerRoute("GET", "/api/providers", async (_req, res) => {
 /** upsert spec 白名单键 → 值形状校验（T11 checkEditSpec 同款纪律：写盘前全量校验，非法一律拒）。
  *  键族与值域 = provider-cmd import 落盘面同源：type（协议 id）/ baseUrl（http(s) URL）/
  *  defaultModel?（裸模型 id）/ contextWindow?（顶层键——整数 ≥1024，provider-cmd.ts:262 同闸）/
- *  apiKey?（明文只进 secrets.env——换行注入拒绝，CM-13 同款）。 */
+ *  apiKey?（明文只进 secrets.env——换行注入拒绝，CM-13 同款）/
+ *  models?（2026-10-14 走查修「模型表增删」二期：声明模型表——字符串数组，条目 1..128 字符零空白，
+ *  ≤64 条去重；空数组 = 摘键回自动发现）。 */
 const SPEC_KEYS: Record<string, (v: unknown) => boolean> = {
   type: (v) => typeof v === "string" && v.trim() !== "" && !/\s/.test(v),
   baseUrl: (v) => {
@@ -190,6 +200,7 @@ const SPEC_KEYS: Record<string, (v: unknown) => boolean> = {
   defaultModel: (v) => typeof v === "string" && v.trim() !== "",
   contextWindow: (v) => typeof v === "number" && Number.isInteger(v) && v >= 1024,
   apiKey: (v) => typeof v === "string" && v !== "" && !/[\r\n]/.test(v),
+  models: (v) => Array.isArray(v) && v.length <= 64 && v.every((m) => typeof m === "string" && m.trim() !== "" && m.length <= 128 && !/\s/.test(m)), /* 模型 id 零空白（UI 同闸） */
 };
 
 interface CheckedSpec {
@@ -198,6 +209,7 @@ interface CheckedSpec {
   defaultModel?: string;
   contextWindow?: number;
   apiKey?: string;
+  models?: string[];
 }
 
 function checkProviderSpec(spec: Record<string, unknown>): { ok: true; spec: CheckedSpec } | { ok: false; error: string } {
@@ -211,6 +223,7 @@ function checkProviderSpec(spec: Record<string, unknown>): { ok: true; spec: Che
     if (k === "defaultModel") out.defaultModel = v as string;
     if (k === "contextWindow") out.contextWindow = v as number;
     if (k === "apiKey") out.apiKey = v as string;
+    if (k === "models") out.models = [...new Set((v as string[]).map((m) => m.trim()))]; // 去重（去空白后）——写面前归一
   }
   if (out.type === "" || out.baseUrl === "") {
     return { ok: false, error: "spec 必须含 type 与 baseUrl（http/https URL）" };
@@ -271,17 +284,30 @@ registerRoute("POST", "/api/providers", async (req, res) => {
   }
   const values: Record<string, NestedTableValue> = { type: checked.spec.type, baseUrl: checked.spec.baseUrl };
   // apiKey：掩码表单不重发即保留旧 $ENV: 引用（凭据语义——值不回显、编辑不清空）；重发即换新
+  const oldSlot = readUserProviders()[slot];
   if (checked.spec.apiKey !== undefined) {
     const envName = deriveEnvKey(slot);
     upsertSecret(secretsEnvPath(), envName, checked.spec.apiKey); // 明文只落 secrets.env（0600 + 原地更新）
     values["apiKey"] = `$ENV:${envName}`;
   } else {
-    const old = readUserProviders()[slot];
-    const oldRef = typeof old?.["apiKey"] === "string" ? old["apiKey"] : "";
+    const oldRef = typeof oldSlot?.["apiKey"] === "string" ? oldSlot["apiKey"] : "";
     if (oldRef.startsWith("$ENV:")) values["apiKey"] = oldRef;
   }
   // defaultModel：普通字段——缺省即清除（整表替换语义；F2「defaultModel 选择」的清选路径）
   if (checked.spec.defaultModel !== undefined) values["defaultModel"] = checked.spec.defaultModel;
+  // 声明模型表（走查修⑭二期）：非空数组落键（接管发现链）；空数组 = 不写键（回自动发现——
+  //  整表替换语义下缺键即摘键，「恢复自动发现」路径）
+  if (checked.spec.models !== undefined && checked.spec.models.length > 0) values["models"] = checked.spec.models;
+  /* 走查修⑭：整表替换前回填表单不管的槽键（toolImages/acceptedImageMimes/槽级 contextWindow 等——
+   *  旧面一保存就被静默抹掉）。托管键集 = type/baseUrl/apiKey/defaultModel/models；保留键按原序殿后。 */
+  const MANAGED = new Set(["type", "baseUrl", "apiKey", "defaultModel", "models"]);
+  if (oldSlot !== undefined) {
+    for (const [k, v] of Object.entries(oldSlot)) {
+      if (MANAGED.has(k)) continue;
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") values[k] = v;
+      else if (Array.isArray(v) && v.every((x) => typeof x === "string")) values[k] = v as string[];
+    }
+  }
   writeNestedTable(userConfigPath(), `provider-custom.providers.${slot}`, values);
   if (checked.spec.contextWindow !== undefined) writeTopLevelKey(userConfigPath(), "contextWindow", checked.spec.contextWindow);
   const report = await reloadAfterWrite(anchor);

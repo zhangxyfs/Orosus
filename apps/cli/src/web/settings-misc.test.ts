@@ -567,4 +567,65 @@ describe("web T13：设置·技能/钩子/记忆/提供商 API", () => {
 
     await s.stop();
   }, 60_000);
+
+  it("⑧ 模型表增删（2026-10-14 走查修⑭）：upsert models 落键 + declaredModels 读面 + 表单不管键回填 + 空表摘键 + 校验族", async () => {
+    tmpUserHome();
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    process.chdir(cwd);
+    writeProviderConfig(home);
+    await seedSession(home, cwd, "s_prov8");
+    const s = await startWebAt(home, cwd, "s_prov8");
+    const configPath = join(home, "config.toml");
+
+    // upsert 携声明模型表：槽内 models 数组落键；GET 读面 declaredModels 与 models 同值（声明接管发现链）
+    const up = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "http://127.0.0.1:9/v1", defaultModel: "acme-1", models: ["acme-1", "acme-2"] } });
+    expect(up.status).toBe(200);
+    let toml = readFileSync(configPath, "utf8");
+    expect(toml).toContain('models = ["acme-1", "acme-2"]');
+    const g = await getJson(s, "/api/providers");
+    const row = (g.body["providers"] as { key: string; models: string[]; declaredModels?: string[] }[]).find((r) => r.key === "acme")!;
+    expect(row.models).toEqual(["acme-1", "acme-2"]); // 声明接管——不经端点发现
+    expect(row.declaredModels).toEqual(["acme-1", "acme-2"]);
+
+    // 手工塞表单不管的槽键（toolImages/acceptedImageMimes/槽级 contextWindow）→ 再保存不得被抹（旧面整表替换静默丢键）
+    const secStart = toml.indexOf("[provider-custom.providers.acme]");
+    const nextSec = toml.indexOf("\n[", secStart + 1); // 须按行首「\n[」找下一节——models 数组值自带 [ 会骗过裸 indexOf
+    const secEnd = nextSec === -1 ? toml.length : nextSec + 1;
+    toml = toml.slice(0, secEnd) + 'toolImages = "inline"\nacceptedImageMimes = ["image/png"]\ncontextWindow = 64000\n' + toml.slice(secEnd);
+    writeFileSync(configPath, toml, "utf8");
+    const edit = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "http://127.0.0.1:9/v2", defaultModel: "acme-1", models: ["acme-1", "acme-2"] } });
+    expect(edit.status).toBe(200);
+    const toml2 = readFileSync(configPath, "utf8");
+    expect(toml2).toContain('toolImages = "inline"'); // 未管键回填
+    expect(toml2).toContain('acceptedImageMimes = ["image/png"]');
+    expect(toml2).toContain("contextWindow = 64000"); // 槽级键（区别于 UI 顶层键）亦保
+    expect(toml2).toContain('baseUrl = "http://127.0.0.1:9/v2"');
+
+    // 恢复自动发现：models: [] → 摘键（读面 declaredModels 缺席；models 回发现链——死端口空表）
+    const reset = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: { type: "openai", baseUrl: "http://127.0.0.1:9/v2", defaultModel: "acme-1", models: [] } });
+    expect(reset.status).toBe(200);
+    const toml3 = readFileSync(configPath, "utf8");
+    expect(toml3).not.toContain("models = [");
+    expect(toml3).toContain('toolImages = "inline"'); // 摘键不误伤未管键
+    const g2 = await getJson(s, "/api/providers");
+    const row2 = (g2.body["providers"] as { key: string; declaredModels?: string[] }[]).find((r) => r.key === "acme")!;
+    expect(row2.declaredModels).toBeUndefined();
+
+    // 校验族：坏 models 形状一律 400 且零落盘
+    const before = readFileSync(configPath, "utf8");
+    for (const bad of [
+      { type: "openai", baseUrl: "http://127.0.0.1:9/v1", models: "acme-1" },
+      { type: "openai", baseUrl: "http://127.0.0.1:9/v1", models: ["a b"] },
+      { type: "openai", baseUrl: "http://127.0.0.1:9/v1", models: [""] },
+      { type: "openai", baseUrl: "http://127.0.0.1:9/v1", models: [123] },
+      { type: "openai", baseUrl: "http://127.0.0.1:9/v1", models: Array.from({ length: 65 }, (_, i) => `m${i}`) },
+    ]) {
+      const r = await post(s, "/api/providers", { op: "upsert", slot: "acme", spec: bad });
+      expect(r.status).toBe(400);
+    }
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+    await s.stop();
+  }, 60_000);
 });

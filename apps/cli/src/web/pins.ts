@@ -1,17 +1,17 @@
-/** 置顶读写（web 批 T9，B2）：~/.orosus/web/pins.json（sid 数组，0600——GC9 web 私有数据根）。
+/** 置顶读写：~/.orosus/gui/pins.json（sid 数组，0600；旧 ~/.orosus/web/ 仅作迁移前回退）。
  *  纯文件面：读侧坏件降级空表；写侧 mkdir 保底 + 0600 权限（instance.ts 同款私有数据纪律）。
  *  顺序语义：数组序 = 置顶区显示序（插入序）；去重由 toggle 保证。 */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { guiDataFile, guiDir, readGuiDataPath } from "./gui-files.ts";
 
 export function pinsFile(home: string): string {
-  return join(home, "web", "pins.json");
+  return guiDataFile(home, "pins.json");
 }
 
 /** 读置顶表（坏件/缺文件 → 空表；非字符串成员滤除——防手改脏件炸列表）。 */
 export function readPins(home: string): string[] {
   try {
-    const o = JSON.parse(readFileSync(pinsFile(home), "utf8")) as unknown;
+    const o = JSON.parse(readFileSync(readGuiDataPath(home, "pins.json"), "utf8")) as unknown;
     if (!Array.isArray(o)) return [];
     return o.filter((x): x is string => typeof x === "string");
   } catch {
@@ -19,9 +19,9 @@ export function readPins(home: string): string[] {
   }
 }
 
-/** 写置顶表（0600；web 目录 mkdir 保底）。 */
+/** 写置顶表（0600；gui 目录 mkdir 保底）。 */
 export function writePins(home: string, sids: string[]): void {
-  mkdirSync(join(home, "web"), { recursive: true });
+  mkdirSync(guiDir(home), { recursive: true });
   writeFileSync(pinsFile(home), JSON.stringify(sids), { mode: 0o600 });
 }
 

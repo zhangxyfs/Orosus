@@ -417,7 +417,7 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(chunkFn).toContain("workBodyOf(t)"); // 流式正文行入组
     const thinkFn = src.slice(src.indexOf("function thinkChunk("), src.indexOf("function finalizeLive("));
     expect(thinkFn).toContain("workBodyOf(t)"); // 流式思考块入组
-    expect(src).toContain("'工作中 '"); // 组头文案前两枚（spec §3.3 逐字）——本任务落地
+    expect(src).toContain("'工作中'"); // 组头文案前两枚（spec §3.3 逐字）——本任务落地
     expect(src).toContain("'已处理'"); // 「已工作 」/「已停止」由 T3 结算接线引入（G4 断言——2026-10-13 审查修：T2 源码尚无该两字面量）
     const startFn = src.slice(src.indexOf("function emitTurnStart("), src.indexOf("function emitTurnEnd("));
     expect(startFn).toContain("turnStartTs"); // 轮始 ts 落元素（结算时长数据源）
@@ -433,6 +433,22 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     const headRules = css.slice(css.indexOf(".work-head {"), css.indexOf(".work-head .tcaret"));
     expect(headRules).not.toContain("border-bottom"); // 组头下不画横线（口令去除——防回流钉）
     expect(css).toContain(".work.collapsed .work-body { display: none; }");
+  });
+
+  it("G3b 顶部仅时间显暖黄；底部 busy 尾行只留 spinner，不再重复工作中与秒表", () => {
+    const src = readFileSync(join(ASSETS_DIR, "render.js"), "utf8");
+    const headFn = src.slice(src.indexOf("function workHeadRender("), src.indexOf("function collapseAnchored("));
+    expect(headFn).toContain("duration === undefined");
+    expect(headFn).toContain('class="doing"');
+    const tickFn = src.slice(src.indexOf("function workHeadTick("), src.indexOf("function workHeadStop("));
+    expect(tickFn).toContain("workHeadRender(w, '工作中', false, false, fmtWorkDur(");
+    const tailFn = src.slice(src.indexOf("function syncTail("), src.indexOf("/* ── 装配 / 重置"));
+    expect(tailFn).toContain("t.innerHTML = spinSvg('', 12);");
+    expect(tailFn).not.toContain("tail-time");
+    expect(tailFn).not.toContain("busyStart");
+    expect(src).not.toContain("R.busyTimer");
+    const css = readFileSync(join(ASSETS_DIR, "style.css"), "utf8");
+    expect(css).toContain(".doing { color: var(--warn); }");
   });
 });
 

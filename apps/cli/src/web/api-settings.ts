@@ -56,7 +56,8 @@ import { lastUsageOf } from "../usage-text.ts";
 import { BUILTIN_LOCALES, createLocaleStore } from "../i18n/store.ts";
 import { readUpdateCheckEnabled, updateConfigFile, writeUpdateCheckKey } from "../update-settings.ts";
 import { updateInfoNow } from "../update-check.ts";
-import { readBtwModel, readSubagentConfig, writeBtwModelKey, writeSubagentConfigKey } from "../subagent-settings.ts";
+import { readSubagentConfig, writeSubagentConfigKey } from "../subagent-settings.ts";
+import { GUI_FONT_SCALES, readBtwModel, readGuiPreferences, writeGuiPreferences, type GuiPreferencePatch } from "./gui-settings.ts";
 import { readSkillDisabled, toggleSkillDisabled } from "../skill-settings.ts";
 import { hooksFace, setHookDisabled, trustProjectHooks } from "../hooks-ui.ts";
 import { readPeersConfig, writePeersConfigKey } from "../peers-settings.ts";
@@ -494,6 +495,49 @@ registerRoute("POST", "/api/settings/update", async (req, res) => {
 const prefsModuleFile = (name: string): string =>
   sectionPath(name, { userConfig: join(orosusHome(), "config.toml"), modulesDir: join(orosusHome(), "modules.d"), isModule: () => true });
 
+/** GUI 外观与侧问偏好统一读写：~/.orosus/gui/gui.toml。GET 的 exists 供前端决定是否迁移 localStorage。 */
+const guiResponse = () => {
+  const p = readGuiPreferences();
+  return { ok: true as const, exists: p.exists, appearanceConfigured: p.appearanceConfigured, theme: p.theme, mode: p.mode, fontScale: p.fontScale, btwModel: p.btwModel ?? null };
+};
+
+const guiPatchError = (body: Record<string, unknown>): string | undefined => {
+  const allowed = new Set(["theme", "mode", "fontScale", "btwModel"]);
+  for (const key of Object.keys(body)) if (!allowed.has(key)) return `未知 GUI 配置键：${key}`;
+  if (body["theme"] !== undefined && (typeof body["theme"] !== "string" || body["theme"].trim() === "")) return "theme 须为非空字符串";
+  if (body["mode"] !== undefined && body["mode"] !== "dark" && body["mode"] !== "light") return "mode 取值须为 dark / light";
+  if (body["fontScale"] !== undefined && (typeof body["fontScale"] !== "number" || !GUI_FONT_SCALES.some((s) => s === body["fontScale"]))) {
+    return `fontScale 取值须为 ${GUI_FONT_SCALES.join(" / ")}`;
+  }
+  if (body["btwModel"] !== undefined && body["btwModel"] !== null && (typeof body["btwModel"] !== "string" || body["btwModel"].trim() === "")) {
+    return "btwModel 取值须为模型名或 null（跟随）";
+  }
+  return undefined;
+};
+
+registerRoute("GET", "/api/settings/gui", async (_req, res) => {
+  sendJson(res, 200, guiResponse());
+});
+
+registerRoute("POST", "/api/settings/gui", async (req, res) => {
+  const parsed = await readSettingsBody(req);
+  if (parsed.failed) {
+    sendJson(res, parsed.status, { ok: false, error: parsed.msg });
+    return;
+  }
+  const error = guiPatchError(parsed.body);
+  if (error !== undefined) {
+    sendJson(res, 400, { ok: false, error });
+    return;
+  }
+  try {
+    writeGuiPreferences(orosusHome(), parsed.body as GuiPreferencePatch);
+    sendJson(res, 200, guiResponse());
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 /** GET /api/settings/prefs → {ok, visionModel, search, subagent:{model,approvalMode,maxTurns}}（T17
  *  增补——§3 形状增量已方案追认；F3 下拉初值读面）。读口与 POST 写面同文件对：
  *  - visionModel：readVisionModel(prefsModuleFile("tool-media"))——modules.d/tool-media.toml（缺省 "off"）；
@@ -514,7 +558,7 @@ registerRoute("GET", "/api/settings/prefs", async (_req, res) => {
   } catch { /* 同上 */
   }
   const sub = readSubagentConfig(join(orosusHome(), "config.toml"));
-  const btwModel = readBtwModel(); /* 走查修⑨③：侧问模型偏好（config.toml 顶层键——缺省 null = 跟随会话当前） */
+  const btwModel = readBtwModel(); /* 侧问模型偏好（gui/gui.toml [sideQuestion].model；缺省 null = 跟随会话当前） */
   sendJson(res, 200, {
     ok: true,
     visionModel,
@@ -593,13 +637,12 @@ registerRoute("POST", "/api/settings/prefs", async (req, res) => {
         break;
       }
       case "btwModel": {
-        /* 走查修⑨③：侧问模型偏好（config.toml 顶层 btwModel 键；值 = provider/model 限定形或裸模型名
-         *  ——SW-17 解析口认两形；null/空串 = 删键回跟随会话当前） */
+        /* 侧问模型偏好（gui/gui.toml [sideQuestion].model；null/空串 = 删键回跟随会话当前）。 */
         if (value !== null && (typeof value !== "string" || value.trim() === "")) {
           sendJson(res, 400, { ok: false, error: "btwModel 取值须为 模型名（可槽/模型限定形）或 null（跟随）" });
           return;
         }
-        writeBtwModelKey(value === null ? null : value.trim(), join(orosusHome(), "config.toml"));
+        writeGuiPreferences(orosusHome(), { btwModel: value === null ? null : value.trim() });
         break;
       }
       default:

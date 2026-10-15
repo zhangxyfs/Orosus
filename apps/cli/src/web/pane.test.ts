@@ -294,7 +294,7 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(rounds[2]).toEqual({ q: "", a: "炸了", phase: "error" });
   });
 
-  it("W6③ btwTabHtml：scope 行照抄 + rounds 渲染（msg-user 气泡 + btw-a 回答中/查证中/失败相位态）+ 裁剪版 composer（无三芯片）+ hint 诚实口径", () => {
+  it("W6③ btwTabHtml：scope 行照抄 + rounds 渲染（msg-user 气泡 + btw-a 回答中/查证中/失败相位态）+ 裁剪版 composer（无主栏三芯片）+ 走查修⑪ 芯片位次对齐主 composer", () => {
     const html = P.btwTabHtml({ rounds: [] });
     expect(html).toContain("旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘");
     expect(html).toContain("还没有侧问"); // 空态（v2 4490）
@@ -303,10 +303,18 @@ describe("web W6（问题 2）：btw 选项卡纯函数（pane.js 直测——v2
     expect(html).toContain('id="btw-file"');
     expect(html).toContain('title="引用文件（= 输入 @）"'); // ＋文件 = 插入 @
     expect(html).toContain('id="btw-send"');
-    expect(html).toContain("旁路 · 只读工具 · 走当前会话模型"); // hint 诚实口径（自创值登记④）
+    // 走查修⑪（2026-10-14 用户口令）：hint 行文退役（「走当前会话模型」覆盖/偏好生效时失真、
+    // 余半与 scope 行全重）；芯片位次对齐主 composer——cb-left 仅 ＋文件，cb-right = 模型/思考档/发送钮
+    expect(html).not.toContain("btw-hint");
+    expect(html).not.toContain("走当前会话模型");
     expect(html).not.toContain("不继承权限/模型/思考档"); // v2 :4505 原文「模型」一词与实现不符——不照抄
+    const rightIdx = html.indexOf('class="cb-right"');
+    expect(html.indexOf('id="btw-file"')).toBeLessThan(rightIdx); // ＋文件留守 cb-left
+    expect(html.indexOf('id="btw-model"')).toBeGreaterThan(rightIdx);
+    expect(html.indexOf('id="btw-effort"')).toBeGreaterThan(html.indexOf('id="btw-model"'));
+    expect(html.indexOf('id="btw-send"')).toBeGreaterThan(html.indexOf('id="btw-effort"')); // 芯片在发送钮左面（口令）
     for (const chip of ["mode-chip", "model-chip", "effort-chip"]) {
-      expect(html.includes(chip), `裁剪版 composer 不应含 ${chip}（拍板第 4 条：去三芯片）`).toBe(false);
+      expect(html.includes(chip), `裁剪版 composer 不应含主栏芯片 ${chip}`).toBe(false);
     }
     const html2 = P.btwTabHtml({ rounds: [
       { q: "这是什么", a: null, phase: "answering" },
@@ -511,7 +519,7 @@ describe("web W6 复核修（Important#1/#2 + Minor#1——切走结算/门控/�
   it("F② btwTabHtml locked 门控态：textarea/发送钮/＋文件全 disabled + 「侧问绑定原会话」诚实提示行；未锁路径零 disabled 零提示行", () => {
     const locked = P.btwTabHtml({ rounds: [] }, true);
     expect(locked).toContain('<div class="btw-locked">侧问绑定原会话——切回后可继续发问</div>');
-    expect(locked).toContain('<textarea id="btw-input" rows="2" disabled');
+    expect(locked).toContain('<textarea autocomplete="off" id="btw-input" rows="2" disabled');
     expect(locked).toContain('id="btw-file" title="引用文件（= 输入 @）" disabled');
     expect(locked).toContain('class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送" disabled');
     const open = P.btwTabHtml({ rounds: [{ q: "问", a: "答", phase: null }] }, false);

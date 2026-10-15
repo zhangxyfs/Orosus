@@ -327,7 +327,13 @@ export class HostPool {
         });
       }
     }
-    return { at: Date.now(), rows, peers, buckets };
+    // 走查修⑯（2026-10-14 用户报障「这个会话怎么出现在两个桶里」）：同 sid 在多个桶并存时只保留
+    //  最近活动的一行——resume 到不同工作目录会在新目录再落一份文件（HostedSession.sessionDir 随
+    //  cwd 走），磁盘扫描不做跨桶 dedup 就出双行（并各带一个「当前」高亮）。最近 mtime 者赢。
+    const bestBySid = new Map<string, number>();
+    for (const r of rows) bestBySid.set(r.sid, Math.max(bestBySid.get(r.sid) ?? -Infinity, r.mtimeMs));
+    const uniqueRows = rows.filter((r) => r.mtimeMs === bestBySid.get(r.sid));
+    return { at: Date.now(), rows: uniqueRows, peers, buckets };
   }
 
   /** 全部关停（G15 SIGINT 清退序——T1 onShutdown 注册位消费）：先清表（host 查询即刻失效）再逐个

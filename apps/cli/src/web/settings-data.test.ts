@@ -13,7 +13,7 @@
  *    （成功 → notes+skipped 齐；取数失败 → notes 缺省、其余字段完整——降级走启动检查缓存）+
  *    release 门禁（fabricate 无段 README → 人话报错；有段含本版条目 → 通过；真仓 README 自证）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -331,6 +331,47 @@ describe("web T12：设置·数据面 API", () => {
     expect(bad.status).toBe(400);
     expect(readFileSync(join(home, "config.toml"), "utf8")).toBe(before);
 
+    await s.stop();
+  }, 60_000);
+
+  it("⑤b GUI 偏好统一落 gui/gui.toml + 旧 config/web 数据迁移 + 非法值拒写", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    process.chdir(cwd);
+    writeProviderConfig(home);
+    const configFile = join(home, "config.toml");
+    writeFileSync(configFile, 'btwModel = "demo/legacy"\n' + readFileSync(configFile, "utf8"), "utf8");
+    mkdirSync(join(home, "web"), { recursive: true });
+    writeFileSync(join(home, "web", "pins.json"), '["s_gui"]', "utf8");
+    writeFileSync(join(home, "web", "workspaces.json"), '{"v":1,"hidden":["D:/legacy"]}', "utf8");
+    await seedSession(home, cwd, "s_gui");
+    const s = await startWebAt(home, cwd, "s_gui");
+
+    const initial = await getJson(s, "/api/settings/gui");
+    expect(initial.status).toBe(200);
+    expect(initial.body).toMatchObject({ exists: true, appearanceConfigured: false, mode: "dark", fontScale: 1, btwModel: "demo/legacy" });
+    expect(existsSync(join(home, "gui", "pins.json"))).toBe(true);
+    expect(existsSync(join(home, "gui", "workspaces.json"))).toBe(true);
+    expect(existsSync(join(home, "web", "pins.json"))).toBe(false);
+    expect(existsSync(join(home, "web", "workspaces.json"))).toBe(false);
+    expect(readFileSync(configFile, "utf8")).not.toContain("btwModel");
+
+    const written = await post(s, "/api/settings/gui", { theme: "连山", mode: "light", fontScale: 1.25, btwModel: "demo/new-model" });
+    expect(written.status).toBe(200);
+    expect(await written.json()).toMatchObject({ ok: true, appearanceConfigured: true, theme: "连山", mode: "light", fontScale: 1.25, btwModel: "demo/new-model" });
+    const guiRaw = readFileSync(join(home, "gui", "gui.toml"), "utf8");
+    expect(guiRaw).toContain("[appearance]");
+    expect(guiRaw).toContain('mode = "light"');
+    expect(guiRaw).toContain("fontScale = 1.25");
+    expect(guiRaw).toContain("[sideQuestion]");
+    expect(guiRaw).toContain('model = "demo/new-model"');
+    expect((await getJson(s, "/api/settings/prefs")).body["btwModel"]).toBe("demo/new-model");
+
+    const beforeBad = guiRaw;
+    const bad = await post(s, "/api/settings/gui", { fontScale: 1.1 });
+    expect(bad.status).toBe(400);
+    expect(readFileSync(join(home, "gui", "gui.toml"), "utf8")).toBe(beforeBad);
     await s.stop();
   }, 60_000);
 

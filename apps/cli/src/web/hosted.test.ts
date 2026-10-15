@@ -558,7 +558,7 @@ describe("web T2：HostedSession 托管引擎 + HostPool + /web 交接", () => {
     // /web → 退出序列（空会话 purge → 交接跳过）→ server 起服 → URL 横幅（三行式）+ 实例文件落位
     await waitFor(() => out.includes("http://127.0.0.1"), 20_000);
     await waitFor(() => out.includes("保持本终端开启"), 20_000); // 横幅三行可能分次 flush——第三行也走等待（2026-10-12 竞态修：重载机 split flush 漏断言）
-    await waitFor(() => existsSync(join(home, "web", "server.json")));
+    await waitFor(() => existsSync(join(home, "gui", "server.json")));
     expect(child.exitCode).toBe(null); // 长驻（server 存活——退出序列后形态切换而非进程退出）
   }, 40_000);
 });

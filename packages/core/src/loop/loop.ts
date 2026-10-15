@@ -176,7 +176,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
     const streamT0 = Date.now();
     let text = "";
     let reasoning = ""; // T5/D45：流内累积——reasoning 首次持久化（只入审计/显示面；投影跳过，模型可见性不变）
-    let usage: { input: number; output: number } | undefined;
+    let usage: { input: number; output: number; cacheHit?: number } | undefined;
     const pending = new Map<string, PendingToolCall>();
     let finish: Extract<Chunk, { type: "finish" }> = { type: "finish", kind: "stop" };
     let sawFinish = false; // CL-02：流结束前是否收到 finish 块（provider 契约要求必有——缺块 = 截断/违约）
@@ -197,7 +197,7 @@ export async function* agentLoop(opts: LoopOptions): AsyncGenerator<SessionEvent
             reasoning += chunk.text;
             break;
           case "usage":
-            usage = { input: chunk.input, output: chunk.output };
+            usage = { input: chunk.input, output: chunk.output, ...(chunk.cacheHit !== undefined ? { cacheHit: chunk.cacheHit } : {}) };
             break;
           case "toolcall/argumentsDelta": {
             const p = pending.get(chunk.callId) ?? { callId: chunk.callId, name: "", argsJson: "" };

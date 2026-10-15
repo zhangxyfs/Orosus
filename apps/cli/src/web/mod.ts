@@ -11,6 +11,7 @@ import { loadConfig, locateSessionFile } from "@orosus/core";
 import { needsProviderSetup, readConfigModel } from "../onboarding.ts";
 import { t } from "../i18n/app.ts";
 import { findLiveInstance, writeInstance } from "./instance.ts";
+import { migrateLegacyGuiData } from "./gui-settings.ts";
 import { openBrowser } from "./open-browser.ts";
 import { onShutdown, startWebServer } from "./server.ts";
 import { HostPool } from "./hostpool.ts";
@@ -116,6 +117,9 @@ export async function runWebSubcommand(
     io.out(t("web.gate.needSetup"));
     return 1;
   }
+
+  // 老版本 ~/.orosus/web/ 共享数据与侧问偏好先迁到 GUI 公共目录，再走实例复用。
+  migrateLegacyGuiData(home);
 
   // 双开复用（G12）：活实例（pid + /api/health 双确认）→ 打印/打开既有 URL 退出 0；
   // handover 场景同口径（G14：已有活实例时不起新 server，打印既有 URL——T2 接线侧同判）

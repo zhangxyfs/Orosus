@@ -1,13 +1,13 @@
-/** 实例文件（web 批 T1，G12 双开复用 / G15 token 恢复链）：~/.orosus/web/server.json 是
+/** 实例文件（web 批 T1，G12 双开复用 / G15 token 恢复链）：~/.orosus/gui/server.json 是
  *  「本机唯一 web server 实例」的单一事实源——{v,pid,port,startedAt,token}，0600 原子写（tmp+rename）。
  *  活实例探测（findLiveInstance）= 读文件 → pidAlive（EPERM=活——core wlock 同源判据）→
  *  fetch /api/health（10s 超时，自创值登记）双确认——Windows 纪律用 health 探测而非裸 TCP connect（§4-9）。
  *  起服 token 决策（reuseOrMintToken）：已存且形状合法 → 沿用（接管/重启场景，不重铸——旧标签页
  *  断连重试仍有效）；否则新铸（调用方起服后回写实例文件）。 */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { pidAlive } from "@orosus/core";
 import { isValidTokenShape, mintToken } from "./auth.ts";
+import { guiDataFile, guiDir, legacyWebDataFile, readGuiDataPath } from "./gui-files.ts";
 
 /** 实例文件载荷（v=1 起始版本；演进时读侧拒旧版并按死实例处理）。 */
 export interface WebInstance {
@@ -18,16 +18,16 @@ export interface WebInstance {
   token: string;
 }
 
-/** 实例文件路径（home = orosusHome() 解析结果；GC9 实例数据落 ~/.orosus/web/）。 */
+/** 实例文件路径（home = orosusHome() 解析结果；实例数据落 GUI 公共目录，旧 web 路径仅回退读取）。 */
 export function instanceFilePath(home: string): string {
-  return join(home, "web", "server.json");
+  return guiDataFile(home, "server.json");
 }
 
 /** 读实例文件：缺文件/坏 JSON/形状不符 → undefined（按无实例处理，不让坏文件炸起服）。 */
 export function readInstance(home: string): WebInstance | undefined {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(instanceFilePath(home), "utf8")) as unknown;
+    raw = JSON.parse(readFileSync(readGuiDataPath(home, "server.json"), "utf8")) as unknown;
   } catch {
     return undefined;
   }
@@ -42,7 +42,7 @@ export function readInstance(home: string): WebInstance | undefined {
 /** 原子写实例文件：先写同目录 tmp（mode 0600——token 不落世界可读）再 rename 顶替，
  *  读侧永远读到完整文件（半写 JSON 会被 readInstance 判坏回落无实例）。 */
 export function writeInstance(home: string, inst: WebInstance): void {
-  mkdirSync(join(home, "web"), { recursive: true });
+  mkdirSync(guiDir(home), { recursive: true });
   const file = instanceFilePath(home);
   const tmp = `${file}.tmp-${process.pid}`;
   writeFileSync(tmp, JSON.stringify(inst), { mode: 0o600, encoding: "utf8" });
@@ -53,6 +53,7 @@ export function writeInstance(home: string, inst: WebInstance): void {
 export function removeInstance(home: string): void {
   try {
     rmSync(instanceFilePath(home), { force: true });
+    rmSync(legacyWebDataFile(home, "server.json"), { force: true });
   } catch { /* 退出路径不炸 */ }
 }
 

@@ -12,6 +12,7 @@
 
   /* ═══════════ dock 浮层框架（三 kind：menu 斜杠菜单 / pick 选择列表 / view 只读窗） ═══════════ */
   var popup = null, pu = null;
+  var extraPopClass = null; /* 本窗附加类（perm-pop 等——开窗换上/关窗摘除，openPick opts.popClass） */
   var pendingInteraction = null; /* 当前挂起 interaction（id + answer 口——Esc 取消面） */
 
   function ensureDom() {
@@ -58,19 +59,24 @@
       if (pendingInteraction) return;
       var path = e.composedPath ? e.composedPath() : [];
       if (path.includes(popup)) return;
-      if (e.target.closest('#mode-chip, #model-chip, #effort-chip, #cwd-chip, #btn-file, #kv-model, #send-btn')) return;
+      if (e.target.closest('#mode-chip, #model-chip, #effort-chip, #cwd-chip, #btn-file, #kv-model, #send-btn, #btw-model, #btw-effort, #btw-file')) return; /* 走查修⑪⑫：侧问两芯片+两「＋文件」同列豁免——toggle 关窗语义由各自点击处理器显式承担（开着菜单点芯片不再先关后开闪一遍/重复插 @） */
       closePopup();
     }, true);
   }
 
   function esc(s) { return A.esc(String(s ?? '')); }
-  function focusInput() { var i = document.getElementById('prompt-input'); if (i) i.focus(); }
+  /* 走查修⑫（2026-10-14 用户口令②）：焦点归还位——浮层在哪条 composer 开就还哪条
+   *  （侧问面开菜单 Esc/选定后不再抢主输入框）。null = 主输入框（审批/查看等主场面）。 */
+  var focusBack = null;
+  function focusInput() { var i = focusBack || document.getElementById('prompt-input'); if (i) i.focus(); }
+  function anchorInputOf(a) { var f = a && a.closest ? a.closest('form') : null; return f ? f.querySelector('textarea') : null; }
 
   function closePopup() {
     ensureDom();
     popup.hidden = true;
     popup.innerHTML = '';
     popup.classList.remove('anchor-right', 'anchor-left', 'mini-pop');
+    if (extraPopClass !== null) { popup.classList.remove(extraPopClass); extraPopClass = null; }
     popup.style.left = '';
     popup.style.right = '';
     popup.style.bottom = '';
@@ -146,17 +152,37 @@
     popup.classList.toggle('anchor-left', pu.mini === 'left');
     popup.classList.toggle('mini-pop', !!pu.mini);
     popup.classList.toggle('mm2-pop', pu.kind === 'modelmenu');
-    /* 锚定弹窗：底边贴芯片上缘（不压按钮），水平与芯片对齐 */
+    if (extraPopClass !== null) { popup.classList.remove(extraPopClass); extraPopClass = null; }
+    if (pu.popClass) { popup.classList.add(pu.popClass); extraPopClass = pu.popClass; }
+    /* 锚定弹窗：底边贴芯片上缘（不压按钮），水平与芯片对齐。
+     *  走查修⑪（2026-10-14 用户报障「侧问芯片弹窗脱锚」）：坐标系 = 偏移父（.inputwrap）相对值，
+     *  锚点可在主 composer 之外（侧问栏芯片在右分栏）——旧 Math.max(4,…) 下钳把栏外锚点算出的负值
+     *  钳成 4px，弹窗飞回主输入框右缘。改为允许负值（弹窗探出输入框伸进分栏，祖先无 overflow 裁切），
+     *  只做视口级钳位（左右各留 4px 边距）；量宽前先双 auto——沿用的内联 left/right 会把
+     *  offsetWidth 拉成拉伸宽（left+right 同设的绝对定位宽度受制），类定宽才量得准。
+     *  走查修⑫：anchorWide（@ 菜单贴侧问 composer）= 左右缘同时对齐锚元素（dock 同宽口径的锚定版）；
+     *  锚元素被重渲摘除（isConnected=false——侧问 composer 帧驱动重建）即关窗，不沿死锚乱飞。 */
     if (pu.anchor) {
+      if (!pu.anchor.isConnected) { closePopup(); return; }
       var wrapR = popup.parentElement.getBoundingClientRect();
       var ar = pu.anchor.getBoundingClientRect();
       popup.style.bottom = Math.round(wrapR.bottom - ar.top + 6) + 'px';
-      if (pu.mini === 'left') {
-        popup.style.left = Math.max(4, Math.round(ar.left - wrapR.left)) + 'px';
-        popup.style.right = 'auto';
+      popup.style.left = 'auto';
+      popup.style.right = 'auto';
+      if (pu.anchorWide) {
+        popup.style.left = Math.round(ar.left - wrapR.left) + 'px';
+        popup.style.right = Math.round(wrapR.right - ar.right) + 'px';
       } else {
-        popup.style.right = Math.max(4, Math.round(wrapR.right - ar.right)) + 'px';
-        popup.style.left = 'auto';
+        var pw = popup.offsetWidth;
+        if (pu.mini === 'left') {
+          var l = Math.round(ar.left - wrapR.left);
+          l = Math.max(Math.round(4 - wrapR.left), Math.min(l, Math.round(window.innerWidth - pw - 4 - wrapR.left)));
+          popup.style.left = l + 'px';
+        } else {
+          var r = Math.round(wrapR.right - ar.right);
+          r = Math.max(Math.round(wrapR.right - window.innerWidth + 4), Math.min(r, Math.round(wrapR.right - pw - 4)));
+          popup.style.right = r + 'px';
+        }
       }
     }
     /* 选中行滚入视野 */
@@ -170,10 +196,12 @@
   }
 
   function openPick(opts) {
+    focusBack = anchorInputOf(opts.anchor); /* 走查修⑫：焦点归还位 = 芯片所属 composer 的输入框（无锚 = 主输入框） */
     pu = {
       kind: 'pick',
       mini: opts.mini,
       anchor: opts.anchor,
+      popClass: opts.popClass,
       title: opts.title,
       en: opts.en ?? '',
       rows: opts.items.map(function (it) { return typeof it === 'string' ? { html: itemRowHtml(it) } : it; }),
@@ -192,6 +220,7 @@
   }
 
   function openView(opts) {
+    focusBack = null; /* 只读窗归主输入框 */
     pu = {
       kind: 'view',
       title: opts.title,
@@ -348,6 +377,7 @@
     return hit.concat(mid, fuzzy);
   }
   function openMenu(input) {
+    focusBack = input; /* 斜杠菜单由输入框敲出——归还本框 */
     Promise.all([fetchCommands(), fetchSkills()]).then(function (res) {
       var cmds = res[0], skills = res[1];
       var q = menuFilterQ(input);
@@ -392,12 +422,15 @@
     });
   }
 
-  /* 输入框 input 事件派发：@ 菜单优先（词尾 @）；斜杠菜单其次（行首 / 词） */
-  function inputChanged(input) {
+  /* 输入框 input 事件派发：@ 菜单优先（词尾 @）；斜杠菜单其次（行首 / 词）。
+   *  走查修⑫：opts.anchor = @ 菜单锚定元素（宽随锚——侧问 composer 贴栏形态）；opts.atOnly =
+   *  只开 @ 面（侧问输入框无斜杠命令语义，行首 / 不进场）。 */
+  function inputChanged(input, opts) {
     ensureDom();
     var v = input.value;
-    if (/(?:^|\s)@[^\s]*$/.test(v)) { openAtMenu(input); return; }
+    if (/(?:^|\s)@[^\s]*$/.test(v)) { openAtMenu(input, opts && opts.anchor); return; }
     if (pu && pu.kind === 'at') closePopup();
+    if (opts && opts.atOnly) return;
     var lead = v.trimStart();
     if (lead.indexOf('/') === 0 && !/\s/.test(lead) && !v.includes('\n')) {
       openMenu(input);
@@ -412,7 +445,8 @@
     var m = /(?:^|\s)@([^\s]*)$/.exec(input.value);
     return m ? m[1] : null;
   }
-  function openAtMenu(input) {
+  function openAtMenu(input, anchor) {
+    focusBack = input; /* @ 菜单由输入框敲出——归还本框（侧问框同口径） */
     var q = atMenuQuery(input);
     if (q === null) { if (pu && pu.kind === 'at') closePopup(); return; }
     var slash = Math.max(q.lastIndexOf('/'), q.lastIndexOf('\\'));
@@ -435,6 +469,8 @@
         if (rows.length === 0) rows = [{ html: '<span class="dim">（' + (entries.length === 0 ? '目录不存在——检查路径' : '无匹配文件') + '）</span>', cls: 'sep', sep: true }];
         pu = {
           kind: 'at',
+          anchor: anchor, /* 走查修⑫：锚定 + 宽随锚（侧问 composer）——缺省 dock 主输入框（旧形态） */
+          anchorWide: !!anchor,
           title: dir === '' ? '@ 文件' : '@ ' + dir + '/',
           en: dirs + ' 个目录 · ' + (entries.length - dirs) + ' 个文件',
           rows: rows,
@@ -470,6 +506,7 @@
 
   function openInteraction(frame, answer) {
     ensureDom();
+    focusBack = null; /* 审批/问询属主输入框场——归还主框（不沿上次侧问菜单的归还位） */
     var kind = String(frame.kind ?? 'choose');
     if (kind === 'notice') {
       closePopup();
@@ -692,10 +729,17 @@
   function pendingId() { return pendingInteraction ? pendingInteraction.id : null; }
 
   /* ═══════════ 模型 / 档位 / 权限芯片菜单（D8/D9/D10） ═══════════ */
+  /* 走查修⑫（2026-10-14 用户口令③）：权限弹窗底部详释长文区（pu-long/longOf）退役——行改两行式
+   *  （图标 + 档位名 + 一行短描述，✓ 右置，仿图3 行式）；MODES.long 随详释区一并摘除。 */
+  var PERM_ICONS = {
+    'ask-always': '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.4 9.3a2.6 2.6 0 1 1 3.6 2.4c-.7.3-1 .8-1 1.6v.4"/><path d="M12 16.9v.3"/></svg>',
+    'ask-risky': '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 2.8v5.1c0 4.3-2.9 7.3-7 9.1-4.1-1.8-7-4.8-7-9.1V5.8z"/><path d="M9.3 12.1l1.9 1.9 3.5-4.2"/></svg>',
+    'never': '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2.5 4.5 14H11l-1 7.5L18.5 10H12z"/></svg>',
+  };
   var MODES = [
-    { key: 'ask-always', label: '每次都询问', desc: '每次工具调用都确认', long: '最高安全档：每一次工具调用（包括只读文件）都要你确认后才执行。浏览陌生代码库、敏感目录或不信任的会话时用。' },
-    { key: 'ask-risky', label: '需要时候询问', desc: '仅危险操作确认', long: '日常默认档：只读操作（读文件、列目录）直接放行，写文件、执行命令、网络请求等有副作用的操作才确认。' },
-    { key: 'never', label: '从不询问', desc: '全自动，有问题模型自行判断', long: '全自动档：所有工具批准都自动处理（含危险命令）；只有你手写的 deny 规则仍会拦。完全信任当前会话、追求连续执行时用。' },
+    { key: 'ask-always', label: '每次都询问', desc: '每次工具调用都确认' },
+    { key: 'ask-risky', label: '需要时候询问', desc: '仅危险操作确认' },
+    { key: 'never', label: '从不询问', desc: '全自动，有问题模型自行判断' },
   ];
 
   function fetchModels() {
@@ -704,31 +748,56 @@
   }
   /** 模型两级菜单（D9）：提供商 → 模型（✓ 勾标 + 「管理模型」入口 + 未配置提示）。 */
   /* 模型两级菜单（2026-10-12 走查改版：两栏同弹——左提供商 + 右该商模型表，替代原两次串行弹窗；
-   *  ←→ 切提供商、↑↓ 选模型、Enter/点击切换、Esc 关闭；管理模型行进设置提供商页） */
-  function openModelMenu(anchor) {
+   *  ←→ 切提供商、↑↓ 选模型、Enter/点击切换、Esc 关闭；管理模型行进设置提供商页）。
+   *  走查修⑪（2026-10-14 用户口令「侧问模型弹窗与主代理一致」）：opts 钩子面——侧问卡复用同弹，
+   *  覆盖语义经 opts 注入，UI 形态一份：
+   *  · opts.current = 勾标目标限定形（'' = 无勾——跟随态）；缺省 = 会话当前（data.current + m.cur 口径）
+   *  · opts.focus   = 初始落栏限定形（缺省 = current 非空则之，否则 data.current）
+   *  · opts.follow  = { label, checked }——右栏首行「跟随…」清覆盖行（点选 = onSwitch(null, null)）
+   *  · opts.onSwitch = (platformKey|null, modelName|null)——自定义切换面（缺省 = POST 会话模型） */
+  function openModelMenu(anchor, opts) {
+    opts = opts || {};
+    focusBack = anchorInputOf(anchor); /* 走查修⑫：归还位 = 芯片所属 composer（侧问芯片 → 侧问框） */
     fetchModels().then(function (data) {
       if (!data) { H.toast('拉取模型清单失败'); return; }
       var providers = data.providers ?? [];
-      var current = String(data.current ?? '');
-      /* 当前平台解析：current 形不定（"平台/模型"限定形 | 裸平台键 | 空）——先按首段取，
+      var ownCur = opts.current !== undefined; /* 自带勾标目标（侧问覆盖语义）——缺省走会话当前 */
+      var current = String(ownCur ? opts.current : (data.current ?? ''));
+      var focus = String(opts.focus !== undefined ? opts.focus : (current !== '' ? current : (data.current ?? '')));
+      /* 落栏平台解析：focus 形不定（"平台/模型"限定形 | 裸平台键 | 空）——先按首段取，
        *  落空再用模型级 cur 勾标反查（裸模型名/空串两形兜底） */
-      var curPlatform = current.split('/')[0];
-      if (!providers.some(function (p) { return p.key === curPlatform; })) {
+      var focPlatform = focus.split('/')[0];
+      if (!providers.some(function (p) { return p.key === focPlatform; })) {
         var byCur = providers.find(function (p) { return (p.models ?? []).some(function (m) { return m.cur; }); });
-        curPlatform = byCur ? byCur.key : '';
+        focPlatform = byCur ? byCur.key : '';
       }
       var mm = { pIdx: 0, mIdx: 0 };
-      var ci = providers.findIndex(function (p) { return p.key === curPlatform; });
+      var ci = providers.findIndex(function (p) { return p.key === focPlatform; });
       if (ci >= 0) mm.pIdx = ci;
+      var followOff = opts.follow ? 1 : 0; /* 右栏首行「跟随…」占位——mIdx 行号 = 模型序 + followOff */
       var modelsOf = function () { return (providers[mm.pIdx] && providers[mm.pIdx].models) ?? []; };
+      /* 勾标两口径：主 = 会话当前（server m.cur 旗标 / 落栏平台出勾）；侧问 = 覆盖目标限定形整串比对 */
+      var isCurM = function (p, m) {
+        if (ownCur) return current !== '' && p.key + '/' + m.name === current;
+        return !!m.cur;
+      };
+      var isCurP = function (p) {
+        if (ownCur) return current !== '' && p.key === current.split('/')[0];
+        return p.key === focPlatform;
+      };
       var syncCur = function () {
         var ms = modelsOf();
-        var ci2 = ms.findIndex(function (m) { return m.cur; });
-        mm.mIdx = ci2 >= 0 ? ci2 : 0;
+        var ci2 = ms.findIndex(function (m) { return isCurM(providers[mm.pIdx], m); });
+        mm.mIdx = ci2 >= 0 ? ci2 + followOff : 0;
       };
       syncCur();
-      var switchTo = function (m) {
-        var p = providers[mm.pIdx];
+      var doSwitch = function (p, m) { /* (null, null) = 「跟随」行点选（仅自定义面有此语义） */
+        if (opts.onSwitch) {
+          closePopup();
+          focusInput();
+          opts.onSwitch(p && m ? p.key : null, p && m ? m.name : null);
+          return;
+        }
         if (!p || !m) return;
         A.fetchJson('/api/sessions/' + encodeURIComponent(H.getSid()) + '/model', { method: 'POST', body: JSON.stringify({ platform: p.key, model: m.name }) })
           .then(function () {
@@ -737,6 +806,11 @@
             H.toast('模型已切换 → ' + p.key + '/' + m.name + '（下一轮生效）');
             H.onStatusChanged();
           }, function (err) { H.toast('切换失败：' + err.message); });
+      };
+      var pickRow = function (i) {
+        if (opts.follow && i === 0) { doSwitch(null, null); return; }
+        var m = modelsOf()[opts.follow ? i - 1 : i];
+        if (m) doSwitch(providers[mm.pIdx], m);
       };
       pu = {
         kind: 'modelmenu',
@@ -749,18 +823,24 @@
         customBody: function () {
           var left = providers.map(function (p, i) {
             return '<div class="mm2-p' + (i === mm.pIdx ? ' sel' : '') + '" data-mmi="p:' + i + '">' +
-              '<span class="mm2-check">' + (p.key === curPlatform ? '✓' : '') + '</span>' +
+              '<span class="mm2-check">' + (isCurP(p) ? '✓' : '') + '</span>' +
               '<span class="mm2-pname">' + esc(p.displayName) + '</span>' +
               '<span class="mm2-go">›</span></div>';
           }).join('');
           left += '<div class="mm2-p mm2-manage" data-mmi="manage"><span class="mm2-check"></span><span class="mm2-pname">管理模型</span><span class="mm2-go">›</span></div>';
           var ms = modelsOf();
-          var right = ms.length === 0
+          var right = '';
+          if (opts.follow) {
+            right += '<div class="mm2-m mm2-follow' + (mm.mIdx === 0 ? ' sel' : '') + '" data-mmi="follow">' +
+              '<span class="mm2-mname">' + esc(opts.follow.label) + '</span>' +
+              '<span class="mm2-check">' + (opts.follow.checked ? '✓' : '') + '</span></div>';
+          }
+          right += ms.length === 0
             ? '<div class="mm2-empty">（该提供商未配置端点——设置 → 提供商与模型 添加）</div>'
             : ms.map(function (m, i) {
-              return '<div class="mm2-m' + (i === mm.mIdx ? ' sel' : '') + '" data-mmi="m:' + i + '">' +
+              return '<div class="mm2-m' + (i + followOff === mm.mIdx ? ' sel' : '') + '" data-mmi="m:' + i + '">' +
                 '<span class="mm2-mname">' + esc(m.name) + '</span>' +
-                '<span class="mm2-check">' + (m.cur ? '✓' : '') + '</span></div>';
+                '<span class="mm2-check">' + (isCurM(providers[mm.pIdx], m) ? '✓' : '') + '</span></div>';
             }).join('');
           return '<div class="mm2"><div class="mm2-left">' + left + '</div><div class="mm2-right">' + right + '</div></div>';
         },
@@ -770,6 +850,7 @@
             else H.toast('模型管理在 设置 → 提供商与模型');
             return;
           }
+          if (mmi === 'follow') { pickRow(0); return; }
           var m2 = /^([pm]):(\d+)$/.exec(mmi ?? '');
           if (!m2) return;
           var idx = parseInt(m2[2], 10);
@@ -778,11 +859,11 @@
             syncCur();
             renderPopup();
           } else {
-            switchTo(modelsOf()[idx]);
+            doSwitch(providers[mm.pIdx], modelsOf()[idx]);
           }
         },
         onKey: function (e) {
-          var ms = modelsOf();
+          var total = modelsOf().length + followOff;
           if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
             var dp = e.key === 'ArrowRight' ? 1 : -1;
             mm.pIdx = Math.min(Math.max(0, mm.pIdx + dp), providers.length - 1);
@@ -791,14 +872,14 @@
             return true;
           }
           if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            if (ms.length === 0) return true;
+            if (total === 0) return true;
             var dm = e.key === 'ArrowDown' ? 1 : -1;
-            mm.mIdx = (mm.mIdx + dm + ms.length) % ms.length;
+            mm.mIdx = (mm.mIdx + dm + total) % total;
             renderPopup();
             return true;
           }
           if (e.key === 'Enter') {
-            switchTo(ms[mm.mIdx]);
+            pickRow(mm.mIdx);
             return true;
           }
           return false;
@@ -841,21 +922,26 @@
       });
     }, function () { H.toast('拉取模型清单失败'); });
   }
-  /** 权限三档小弹窗（D8：芯片上方 mini 锚定 + never 警示黄）。 */
+  /** 权限三档小弹窗（D8：芯片上方 mini 锚定。走查修⑫：两行式行——图标 + 档位名 + 短描述，
+   *  ✓ 右置；底部详释区退役，never 档警示黄随旧行式一并简化）。 */
   function openPermMenu(anchor, current) {
     openPick({
       mini: 'left',
       anchor: anchor,
+      popClass: 'perm-pop',
       title: '权限模式',
       en: 'PERMISSION',
       items: MODES.map(function (m) {
         return {
-          html: '<span class="pu-caret">❯</span><span class="pu-check">' + (m.key === current ? '✓' : '') + '</span><span class="pi-name">' + m.label + '</span><span class="pi-desc">' + esc(m.desc) + '</span>',
+          html: '<span class="pm-ic">' + (PERM_ICONS[m.key] || '') + '</span>' +
+            '<span class="pm-tx"><span class="pm-name">' + m.label + '</span>' +
+            '<span class="pm-desc">' + esc(m.desc) + '</span></span>' +
+            '<span class="pu-check">' + (m.key === current ? '✓' : '') + '</span>',
           data: m,
+          cls: 'perm-row',
         };
       }),
       sel: Math.max(0, MODES.findIndex(function (m) { return m.key === current; })),
-      longOf: function (row) { return '<div class="ln dim">' + esc(row.data.long) + '</div>'; },
       foot: '点击选定，立即生效并写入配置 · Esc 关闭',
       onPick: function (i) {
         var m = MODES[i];
@@ -914,6 +1000,8 @@
     closePopup: closePopup,
     isOpen: isOpen,
     isMenuOpen: isMenuOpen,
+    isAnchorOpen: function (el) { ensureDom(); return !popup.hidden && pu !== null && pu.anchor === el; }, /* 走查修⑫：芯片 toggle——本芯片的菜单开着 → 再点 = 关 */
+    openKind: function () { ensureDom(); return popup.hidden || pu === null ? null : pu.kind; }, /* 同——「＋文件」判 @ 菜单在场用 */
     pickCurrent: pickCurrent,
     handleInputKey: handleInputKey,
     inputChanged: inputChanged,

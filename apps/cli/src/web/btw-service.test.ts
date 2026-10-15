@@ -6,7 +6,7 @@
  *  ③保险丝第 8 轮熔断 error 帧；④非白名单工具不出现在请求工具面；⑤零落盘（主 history 与子代理目录
  *  均无 btw 痕迹）；⑥CLI 形态回归快照。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -361,10 +361,11 @@ describe("web W5：btw 服务端多轮化 + 只读工具面", () => {
     await hs.close();
   }, 30_000);
 
-  it("⑪ 侧问模型偏好（走查修⑨③）：config 顶层 btwModel 键 → 无 tab 覆盖时 wire model = 偏好值；tab 覆盖仍最高", async () => {
+  it("⑪ 侧问模型偏好（gui/gui.toml [sideQuestion].model）→ 无 tab 覆盖时 wire model = 偏好值；tab 覆盖仍最高", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
-    writeFileSync(join(home, "config.toml"), 'btwModel = "fake/model-y"\n', "utf8");
+    mkdirSync(join(home, "gui"), { recursive: true });
+    writeFileSync(join(home, "gui", "gui.toml"), '[sideQuestion]\nmodel = "fake/model-y"\n', "utf8");
     const cwd = tmpCwd();
     const { hs, requests } = setupSession([[{ type: "text/delta", text: "答" }, { type: "finish", kind: "stop" }], [{ type: "text/delta", text: "答2" }, { type: "finish", kind: "stop" }]], home, cwd);
     await hs.ready;

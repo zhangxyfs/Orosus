@@ -76,6 +76,12 @@ function $(id) { return document.getElementById(id); }
     onStatusChanged: function () { if (currentSid !== null) fetchStatus(currentSid); },
     onCommandSubmit: function (text) { sendCommandText(text); },
     onCwdPick: function (cwd, name) {
+      if (draftActive) { /* 走查修⑮⑦：草稿态选目录只改草稿归属——首条消息才落桶（不提前建会话） */
+        draftCwd = cwd;
+        syncCwdGate();
+        toast('工作目录 → ' + name + '（发送首条消息时在该目录建会话）');
+        return;
+      }
       createSession({ cwd: cwd }).then(function (r) {
         if (r) toast('工作目录 → ' + name + '（已在该目录开会话，原空会话保留）');
       });
@@ -124,6 +130,7 @@ function $(id) { return document.getElementById(id); }
     if (UI.pickCurrent()) return; /* 浮层开着时点发送键 = 确认当前选中行（与 Enter 同效；view 窗不拦截） */
     var text = input.value.trim();
     if (text === '') return;
+    if (draftActive) { sendDraft(text, attachments.slice()); return; } /* 走查修⑮⑦：草稿态首条消息 = 先建后发 */
     if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
     var imgs = attachments.slice();
     if (imgs.some(function (a) { return a.failed; })) { toast('有图片上传失败——点 × 撤销后重试'); return; }
@@ -138,8 +145,35 @@ function $(id) { return document.getElementById(id); }
       function (err) { handleSendError(err, text); },
     );
   }
+  /** 走查修⑮⑦（2026-10-14 用户口令）：草稿态首发——先建会话（落 draftCwd 所在桶）再发消息。
+   *  createSession 内部已完成 pollSessions + switchTo（currentSid 就位），随后走正常 sendCore 链。
+   *  建失败（toast 已示）= 还原输入并复位，不携 draftCwd 重试。 */
+  function sendDraft(text, imgs) {
+    if (imgs.some(function (a) { return a.failed; })) { toast('有图片上传失败——点 × 撤销后重试'); return; }
+    if (imgs.some(function (a) { return !a.id; })) { toast('图片尚在上传——稍候再发送'); return; }
+    var ids = imgs.map(function (a) { return a.id; });
+    input.value = '';
+    autogrow();
+    sendingNow = true;
+    syncSendBtn();
+    createSession({ cwd: draftCwd }).then(function (r) {
+      if (!r) { /* 建会话失败（createSession 已 toast）——还原输入并复位发送态 */
+        sendingNow = false;
+        input.value = text;
+        autogrow();
+        syncSendBtn();
+        return;
+      }
+      draftActive = false;
+      return sendCore(text, ids, newPromptId());
+    }).then(
+      function (r) { if (r) handleSendResponse(r, text); },
+      function (err) { handleSendError(err, text); },
+    );
+  }
   /** 斜杠菜单技能区/命令区选中 → 提交（ui.js 已清输入框）。 */
   function sendCommandText(text) {
+    if (draftActive) { sendDraft(text, []); return; } /* 走查修⑮⑦：斜杠命令同走首发先建 */
     if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
     sendingNow = true;
     syncSendBtn();
@@ -337,8 +371,9 @@ function $(id) { return document.getElementById(id); }
     submit();
   });
 
-  /* ── ＋ 文件（D7：光标处插入 @ 并开文件菜单） ── */
+  /* ── ＋ 文件（D7：光标处插入 @ 并开文件菜单。走查修⑫：@ 菜单开着时再点 = 收——toggle 统一口径） ── */
   $('btn-file').addEventListener('click', function () {
+    if (UI.openKind() === 'at') { UI.closePopup(); return; }
     var v = input.value;
     var pos = input.selectionStart ?? v.length;
     input.value = v.slice(0, pos) + '@' + v.slice(pos);
@@ -349,9 +384,9 @@ function $(id) { return document.getElementById(id); }
 
   /* ── cwd 切换芯片（D5：仅空会话——C1 事件数判据；候选 = 项目池含 hidden 找回） ── */
   function syncCwdGate() {
-    var empty = currentSid !== null && !render.userSeen();
+    var empty = draftActive || (currentSid !== null && !render.userSeen()); /* 走查修⑮⑦：草稿态也算空会话（cwd 芯片在场） */
     cwdChip.hidden = !empty;
-    var nm = sessionCwd ? sessionCwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
+    var nm = (draftActive ? draftCwd : sessionCwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
     $('cwd-name').textContent = nm || '选择目录';
   }
   cwdChip.addEventListener('click', function () {
@@ -361,6 +396,7 @@ function $(id) { return document.getElementById(id); }
       pool.push({ cwd: sessionCwd, name: sessionCwd.split(/[\\/]/).pop() || sessionCwd });
     }
     if (pool.length === 0) { openDirPicker(); return; } /* 无已知项目池 → 直接进浏览窗（走查八轮） */
+    if (UI.isAnchorOpen(cwdChip)) { UI.closePopup(); return; } /* 走查修⑫：toggle 统一口径 */
     UI.openCwdMenu(cwdChip, pool, sessionCwd);
   });
 
@@ -381,7 +417,7 @@ function $(id) { return document.getElementById(id); }
     openModal({
       title: '选择工作目录',
       en: 'BROWSE',
-      bodyHtml: '<div class="dp-bar"><input class="fi" id="dp-input" placeholder="输入路径直达（回车跳转）…" /></div><div class="dp-list" id="dp-list"><div class="sp-note">加载中…</div></div>',
+      bodyHtml: '<div class="dp-bar"><input autocomplete="off" class="fi" id="dp-input" placeholder="输入路径直达（回车跳转）…" /></div><div class="dp-list" id="dp-list"><div class="sp-note">加载中…</div></div>',
       actionsHtml: '<span class="spacer"></span><button class="btn" data-act="cancel">取消</button><button class="btn primary" data-act="open">在此目录开会话</button>',
       onAction: function (a) {
         if (a === 'open') {
@@ -470,10 +506,12 @@ function $(id) { return document.getElementById(id); }
       syncChips(st);
     }, function () { /* status 拉取失败静默（外部会话） */ });
   }
-  modelChip.addEventListener('click', function () { UI.openModelMenu(modelChip); });
-  effortChip.addEventListener('click', function () { UI.openEffortMenu(effortChip); });
-  modeChip.addEventListener('click', function () { UI.openPermMenu(modeChip, currentPerm); });
-  $('kv-model').addEventListener('click', function () { UI.openModelMenu(modelChip); });
+  /* 走查修⑫（2026-10-14 用户口令②）：芯片点击 toggle——本芯片菜单开着再点 = 关窗；开着别的窗
+   *  点本芯片 = openXxx 直接换 pu 重渲（关旧开新同帧完成，无闪烁）。 */
+  modelChip.addEventListener('click', function () { if (UI.isAnchorOpen(modelChip)) { UI.closePopup(); return; } UI.openModelMenu(modelChip); });
+  effortChip.addEventListener('click', function () { if (UI.isAnchorOpen(effortChip)) { UI.closePopup(); return; } UI.openEffortMenu(effortChip); });
+  modeChip.addEventListener('click', function () { if (UI.isAnchorOpen(modeChip)) { UI.closePopup(); return; } UI.openPermMenu(modeChip, currentPerm); });
+  $('kv-model').addEventListener('click', function () { if (UI.isAnchorOpen(modelChip)) { UI.closePopup(); return; } UI.openModelMenu(modelChip); });
   syncSendBtn();
 
   /* ── interaction 应答口（ui.js 审批浮层 → POST /answer） ── */
@@ -485,18 +523,28 @@ function $(id) { return document.getElementById(id); }
       });
   }
 
-  /* ═══════════ 主题：深 / 浅切换（localStorage 记忆——原型直裁） ═══════════ */
+  /* ═══════════ GUI 外观：gui/gui.toml 为唯一事实源；localStorage 仅作旧版迁移与读取失败回退 ═══════════ */
   var btnTheme = $('btn-theme');
+  var guiTheme = '连山';
   function applyTheme(light) {
     document.body.classList.toggle('light', light);
     btnTheme.textContent = light ? '☾ 深色' : '☀ 浅色';
-    try { localStorage.setItem('orosus-web-theme', light ? 'light' : 'dark'); } catch { /* 存储被拒 */ }
   }
-  btnTheme.addEventListener('click', function () { applyTheme(!document.body.classList.contains('light')); });
-  try { applyTheme(localStorage.getItem('orosus-web-theme') === 'light'); } catch { /* 同上 */ }
+  function saveGuiAppearance(patch, onError) {
+    return A.fetchJson('/api/settings/gui', { method: 'POST', body: JSON.stringify(patch) }).then(null, function (err) {
+      if (onError) onError(err);
+      toast('外观设置写入失败：' + err.message);
+      return null;
+    });
+  }
+  btnTheme.addEventListener('click', function () {
+    var previous = document.body.classList.contains('light');
+    var next = !previous;
+    applyTheme(next);
+    saveGuiAppearance({ mode: next ? 'light' : 'dark' }, function () { applyTheme(previous); });
+  });
 
-  /* 原型 v2 外观·整体字号（写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定
-   * 〔2026-10-12 走查修：曾用 body.zoom 会连框架一起缩放，被用户否〕；localStorage 记忆，boot 恢复）。 */
+  /* 整体字号写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定。 */
   var FONT_SCALES = [
     { name: '小', scale: 0.875 },
     { name: '默认', scale: 1 },
@@ -507,13 +555,54 @@ function $(id) { return document.getElementById(id); }
   var fontScaleIdx = 1;
   function applyFontScale(i) {
     fontScaleIdx = i;
-    document.documentElement.style.setProperty('--fz', String(FONT_SCALES[i].scale)); /* 全表 font-size = calc(Npx * var(--fz))——字体缩放单源 */
-    try { localStorage.setItem('orosus-web-fontscale', String(i)); } catch { /* 存储被拒 */ }
+    document.documentElement.style.setProperty('--fz', String(FONT_SCALES[i].scale));
   }
-  try {
-    var fsInit = parseInt(localStorage.getItem('orosus-web-fontscale') ?? '', 10);
-    if (fsInit >= 0 && fsInit < FONT_SCALES.length) applyFontScale(fsInit);
-  } catch { /* 同上 */ }
+  function fontScaleIndex(scale) {
+    var idx = FONT_SCALES.findIndex(function (f) { return f.scale === scale; });
+    return idx >= 0 ? idx : 1;
+  }
+  function clearLegacyAppearance() {
+    try {
+      localStorage.removeItem('orosus-web-theme');
+      localStorage.removeItem('orosus-web-fontscale');
+    } catch { /* 存储被拒 */ }
+  }
+  function loadGuiPreferences() {
+    return A.fetchJson('/api/settings/gui').then(function (p) {
+      var legacyMode = null;
+      var legacyIdx = null;
+      try {
+        var oldTheme = localStorage.getItem('orosus-web-theme');
+        if (oldTheme === 'light' || oldTheme === 'dark') legacyMode = oldTheme;
+        var oldScale = parseInt(localStorage.getItem('orosus-web-fontscale') ?? '', 10);
+        if (oldScale >= 0 && oldScale < FONT_SCALES.length) legacyIdx = oldScale;
+      } catch { /* 存储被拒 */ }
+      guiTheme = typeof p.theme === 'string' && p.theme !== '' ? p.theme : '连山';
+      var hasAppearance = p.appearanceConfigured === true;
+      var mode = hasAppearance ? p.mode : (legacyMode ?? p.mode);
+      var scale = hasAppearance ? fontScaleIndex(p.fontScale) : (legacyIdx ?? fontScaleIndex(p.fontScale));
+      applyTheme(mode === 'light');
+      applyFontScale(scale);
+      btwModelPref = typeof p.btwModel === 'string' && p.btwModel !== '' ? p.btwModel : null;
+      btwModelPrefLoaded = true;
+      if (hasAppearance) {
+        clearLegacyAppearance();
+        return null;
+      }
+      /* 首次迁移：浏览器旧值胜过默认值，完整落一份 GUI 配置后再清 localStorage。 */
+      return A.fetchJson('/api/settings/gui', {
+        method: 'POST',
+        body: JSON.stringify({ theme: guiTheme, mode: mode, fontScale: FONT_SCALES[scale].scale, btwModel: p.btwModel ?? null }),
+      }).then(function () { clearLegacyAppearance(); }, function () { /* 保留旧值，下次启动重试 */ });
+    }, function () {
+      /* 服务配置暂不可读时保持旧版行为，不让启动链断在偏好接口上。 */
+      try {
+        applyTheme(localStorage.getItem('orosus-web-theme') === 'light');
+        var fsInit = parseInt(localStorage.getItem('orosus-web-fontscale') ?? '', 10);
+        if (fsInit >= 0 && fsInit < FONT_SCALES.length) applyFontScale(fsInit);
+      } catch { /* 存储被拒 */ }
+    });
+  }
 
   /* ═══════════ 全局状态 ═══════════ */
   var currentSid = null;          /* 当前查看的会话（视图态） */
@@ -527,8 +616,9 @@ function $(id) { return document.getElementById(id); }
   var currentPerm = '';           /* 权限三档（芯片显示 + 菜单勾标） */
   var currentEffort = '';         /* 思考档位显示口径（status.effort——未设置=目录默认档名，D10） */
   var currentModel = '';          /* 会话当前模型限定形（status.model——btw 芯片默认值的数据源，走查修⑨） */
-  var btwModelPref = null;        /* 设置「侧问模型」偏好（GET prefs 懒载一次；写面 postPref 同步；走查修⑨③） */
+  var btwModelPref = null;        /* 设置「侧问模型」偏好（gui/gui.toml；GET 启动恢复 + 写面同步） */
   var btwModelPrefLoaded = false;
+  var guiPreferencesReady = null;
   var projectsPool = [];          /* cwd 芯片候选（bootstrap.projects——含 hidden 找回，D5） */
   var sendingNow = false;         /* 发送四态之「发送中」（POST 在途） */
   var escArmedAt = 0;             /* Esc 双击停止的 armed 时刻 */
@@ -577,6 +667,10 @@ function $(id) { return document.getElementById(id); }
   var PHASE_DOT = { running: ['●', 'sdot-run'], 'waiting-approval': ['◉', 'sdot-wait'], 'waiting-input': ['◉', 'sdot-wait'], error: ['✗', 'sdot-err'], idle: ['○', 'sdot-idle'] };
   var PIN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 7 3.2 3.2V16H6.8v-1.8L10 11 9 4z"/><path d="M12 16v5"/></svg>';
   var ARCHIVE_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18v4H3z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>';
+  /* 项目组头文件夹标识（2026-10-13 用户口令：文件夹取代 ▾/▸ 小箭头，项目与会话行一眼可分；
+   *  开合态用 folder-open/folder 双形表达，点击仍切换折叠） */
+  var FOLDER_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
+  var FOLDER_OPEN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>';
 
   /* 行首活动指示（B14）：进行中转圈 / 完成未读绿点 / 失败红点（localStorage 终态持久化——重开不
    *  复燃）/ phase 图标 / ○。真跑（live running/waiting）压过旧终态；终态压过 idle 瞬态。
@@ -635,7 +729,7 @@ function $(id) { return document.getElementById(id); }
     sessionsData.groups.forEach(function (g) {
       var open = groupOpen[g.cwd] !== false;
       var limit = groupShow[g.cwd] ?? 5;
-      html += '<div class="ls-group" data-group="' + esc(g.cwd) + '" data-path="' + esc(g.cwd) + '"><span class="gcaret">' + (open ? '▾' : '▸') + '</span><span class="gname">' + esc(g.name) + '</span><span class="gcount">' + g.sessions.length + '</span><span class="g-acts"><button class="g-act" data-gact="more" title="更多">⋯</button><button class="g-act" data-gact="new" title="在该工作区下新建会话">＋</button></span></div>';
+      html += '<div class="ls-group" data-group="' + esc(g.cwd) + '" data-path="' + esc(g.cwd) + '"><span class="gicon">' + (open ? FOLDER_OPEN_SVG : FOLDER_SVG) + '</span><span class="gname">' + esc(g.name) + '</span><span class="gcount">' + g.sessions.length + '</span><span class="g-acts"><button class="g-act" data-gact="more" title="更多">⋯</button><button class="g-act" data-gact="new" title="在该工作区下新建会话">＋</button></span></div>';
       if (open) {
         html += g.sessions.slice(0, limit).map(function (s) { return lsRowHtml(s, prevRowMap.get(s.sid), false, sact, seen); }).join('');
         if (g.sessions.length > limit) {
@@ -750,7 +844,7 @@ function $(id) { return document.getElementById(id); }
   }
 
   /* ＋ 新会话（B1：不带 cwd 直发——跟随当前会话项目） */
-  $('btn-new').addEventListener('click', function () { void createSession({}); });
+  $('btn-new').addEventListener('click', function () { openDraft(); }); /* 走查修⑮⑦：只开新会话窗，首发才落桶 */
   function createSession(body) {
     return A.fetchJson('/api/sessions', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
       if (r.reused) toast('已有空会话——沿用并刷新创建时间');
@@ -818,7 +912,7 @@ function $(id) { return document.getElementById(id); }
     openModal({
       title: '重命名会话',
       en: sid,
-      bodyHtml: '<div class="pf-row rename-row"><label>会话名</label><input class="fi" id="rename-input" /></div>',
+      bodyHtml: '<div class="pf-row rename-row"><label>会话名</label><input autocomplete="off" class="fi" id="rename-input" /></div>',
       actionsHtml: '<span class="spacer"></span><button class="btn" data-act="cancel">取消</button><button class="btn primary" data-act="save">保存</button>',
       onAction: function (a) {
         if (a === 'save') {
@@ -1048,9 +1142,6 @@ function $(id) { return document.getElementById(id); }
 
   function spTitle(t, en) { return '<div class="sp-title">' + esc(t) + (en ? '<span class="en">' + esc(en) + '</span>' : '') + '</div>'; }
   function subHeadT(t, mt) { return '<div class="subhead' + (mt ? ' mt' : '') + '"><span>' + esc(t) + '</span></div>'; }
-  function optRow(label, desc, checked, k, v) {
-    return '<div class="pu-item" data-k="' + esc(k) + '" data-v="' + esc(v) + '"><span class="pu-check">' + (checked ? '✓' : '') + '</span><span class="pi-name">' + esc(label) + '</span>' + (desc ? '<span class="pi-desc">' + esc(desc) + '</span>' : '') + '</div>';
-  }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
   function fmtDateTime(ms) {
     if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '—';
@@ -1072,7 +1163,6 @@ function $(id) { return document.getElementById(id); }
     { name: '钩子', desc: '查看 / 启停 / 信任审查', render: pageHooks },
     { name: 'MCP', desc: 'server 管理与添加', render: pageMcp },
     { name: '记忆', desc: '工作区记忆 / 会话感知 / 导入', render: pageMemory },
-    { name: '更新检查', desc: '启动时自动检测新版本', render: pageUpdate },
     { name: '已归档的会话', desc: '查看 / 恢复到会话列表', render: pageArchived },
   ];
 
@@ -1168,7 +1258,7 @@ function $(id) { return document.getElementById(id); }
   }
 
   /* ── F2 提供商与模型（GET /api/providers + catalog；写口 POST /api/providers〔自定义/编辑〕与
-   *    POST /api/providers/cmd〔目录添加——provider import argv，T13 钉形〕；模型表只读 + defaultModel 选择） ── */
+   *    POST /api/providers/cmd〔目录添加——provider import argv，T13 钉形〕；模型表增删 + defaultModel 选择〔走查修⑭〕） ── */
   var SLOT_COLORS = ['#4a7dff', '#5b6ef0', '#e04e5a', '#7a5af5', '#f55036', '#1f8a70', '#b07d2b', '#8a5cf5'];
   function provLetter(name) { return String(name ?? '?').trim().slice(0, 1).toUpperCase() || '?'; }
   function provIcon(name) {
@@ -1192,7 +1282,7 @@ function $(id) { return document.getElementById(id); }
             '<span class="vname">' + esc(p.name ?? p.key) + '</span><span class="vbadge">' + esc(p.proto ?? 'openai') + '</span>' +
             '<span class="vcount">' + (p.modelCount ?? (p.models ?? []).length) + ' 个模型 ›</span></div>';
         }).join('') + '</div>' +
-        '<div class="sp-note">点供应商进编辑页（协议 / 密钥 / Base URL / 默认模型）；目录添加走 models.dev 缓存；当前模型切换在输入框右下模型芯片。</div>';
+        '<div class="sp-note">点供应商进编辑页（协议 / 密钥 / Base URL / 默认模型 / 模型表增删）；目录添加走 models.dev 缓存；当前模型切换在输入框右下模型芯片。</div>';
       paintVicos(page);
       setPageHandler = function (e) {
         var row = e.target.closest('[data-k="prov"]');
@@ -1201,37 +1291,113 @@ function $(id) { return document.getElementById(id); }
       };
     }, function (err) { pageLoadError(page, err); });
   }
-  /** 编辑 / 自定义手填表单（POST /api/providers upsert——writeNestedTable 路线）。 */
+  /** 编辑 / 自定义手填表单（POST /api/providers upsert——writeNestedTable 路线）。
+   *  走查修⑭（2026-10-14 用户口令「没有新增模型 id 的功能、自定义供应商啥都没有」）：模型表一期
+   *  只读形态退役——编辑页与手填表单同面可增删（行尾 ✕ + 底部添加行，回车同效）。语义：
+   *  · 增删后保存 = 声明模型表接管自动发现（槽内 models 键——目录优选/live 兜底让位）；
+   *  · 「恢复自动发现」= 保存时摘键（spec.models: []），回到目录/端点发现；
+   *  · 未触碰模型表的保存不带 models 键——不把自动发现意外冻结成自定义表；
+   *  · 手填新槽可留空——保存后端点 live 清单自动填充，手填即接管。 */
   function renderProviderForm(page, p, isNew) {
     setPageHandler = null;
-    var models = (p && p.models) || [];
-    var defOpts = isNew
-      ? ''
-      : '<option value="">（不设默认模型）</option>' + models.map(function (m) {
-          return '<option value="' + esc(m) + '"' + (p.defaultModel === m ? ' selected' : '') + '>' + esc(m) + '</option>';
-        }).join('');
+    var declared = p && Array.isArray(p.declaredModels) && p.declaredModels.length > 0 ? p.declaredModels : null;
+    var mf = { /* 模型表工作态（本表单闭包共享） */
+      list: (declared || (p && p.models) || []).slice(),
+      dirty: false,
+      reset: false,
+      declared: declared,
+    };
+    var wantDef = p && p.defaultModel ? p.defaultModel : '';
     page.innerHTML =
       '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(p ? p.key : 'custom') + ' ' + esc(isNew ? '自定义供应商' : (p.name ?? p.key)) + ' <span class="vbadge">' + (isNew ? '手填' : '编辑') + '</span></span>' +
-      '<div class="pf-row"><label>名称（槽位 id） <span class="req">*</span></label><input class="fi" id="pf-name" value="' + esc(isNew ? '' : (p.key ?? '')) + '" placeholder="my-openai" ' + (isNew ? '' : 'readonly') + ' /></div>' +
+      '<div class="pf-row"><label>名称（槽位 id） <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-name" value="' + esc(isNew ? '' : (p.key ?? '')) + '" placeholder="my-openai" ' + (isNew ? '' : 'readonly') + ' /></div>' +
       '<div class="pf-row"><label>API 协议 <span class="req">*</span></label><select class="fsel" id="pf-proto"><option value="openai"' + (!p || (p.proto ?? 'openai') === 'openai' ? ' selected' : '') + '>OpenAI</option><option value="anthropic"' + (p && p.proto === 'anthropic' ? ' selected' : '') + '>Anthropic</option></select></div>' +
-      '<div class="pf-row"><label>API Key</label><div class="pf-key"><input class="fi" id="pf-key" type="password" placeholder="' + (!isNew && p && p.hasApiKey ? '已配置——留空保留' : 'sk-…') + '" /><button type="button" class="eye" data-k="pf-eye" title="显示 / 隐藏">👁</button></div></div>' +
-      '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input class="fi" id="pf-url" value="' + esc(p && p.baseUrl ? p.baseUrl : '') + '" placeholder="https://api.example.com/v1" /></div>' +
+      '<div class="pf-row"><label>API Key</label><div class="pf-key"><input autocomplete="off" class="fi" id="pf-key" type="password" placeholder="' + (!isNew && p && p.hasApiKey ? '已配置——留空保留' : 'sk-…') + '" /><button type="button" class="eye" data-k="pf-eye" title="显示 / 隐藏">👁</button></div></div>' +
+      '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-url" value="' + esc(p && p.baseUrl ? p.baseUrl : '') + '" placeholder="https://api.example.com/v1" /></div>' +
       '<div class="pf-row"><label>默认模型</label>' + (isNew
-        ? '<input class="fi" id="pf-def" placeholder="模型 id（可留空，保存后再确认默认）" />'
-        : '<select class="fsel" id="pf-def">' + defOpts + '</select>') + '</div>' +
-      '<div class="pf-row"><label>上下文窗口（全局顶层键——所有槽共享）</label><input class="fi" id="pf-ctx" placeholder="留空 = 不修改" /></div>' +
-      (isNew ? '' : '<div class="pf-row"><label>模型表（只读——槽值发现；增删走 provider 子命令/TOML）· ' + models.length + ' 个</label>' +
-        '<div class="pf-models"><div class="pf-mhead"><span>模型 ID</span><span></span><span></span><span></span></div>' +
-        models.map(function (m) { return '<div class="pf-mrow"><input class="fi" value="' + esc(m) + '" readonly /><span></span><span></span><span></span></div>'; }).join('') + '</div></div>') +
+        ? '<input autocomplete="off" class="fi" id="pf-def" placeholder="模型 id（可留空，保存后再确认默认）" />'
+        : '<select class="fsel" id="pf-def"></select>') + '</div>' +
+      '<div class="pf-row"><label>上下文窗口（全局顶层键——所有槽共享）</label><input autocomplete="off" class="fi" id="pf-ctx" placeholder="留空 = 不修改" /></div>' +
+      '<div class="pf-row"><label>模型表 · <span id="pf-mcount">0</span> 个 <span class="dim" id="pf-msrc"></span></label>' +
+        '<div class="pf-models">' +
+          '<div class="pf-mhead"><span>模型 ID</span><span></span></div>' +
+          '<div id="pf-mrows"></div>' +
+          '<div class="pf-madd"><input autocomplete="off" class="fi" id="pf-mnew" placeholder="模型 id（回车或点 ＋ 添加）" /><button type="button" class="btn" data-k="pf-madd">＋ 添加</button></div>' +
+        '</div>' +
+        '<div class="pf-mnote" id="pf-mnote"></div></div>' +
       '<div class="pu-actions"><span class="spacer"></span>' +
         (isNew ? '' : '<button class="btn danger" data-k="pf-del">删除供应商</button>') +
         '<button class="btn" data-k="pf-cancel">取消</button>' +
         '<button class="btn primary" data-k="pf-save">保存</button></div>';
     paintVicos(page);
-    setPageHandler = function (e) { providerFormAct(page, p, isNew, e); };
+    page.querySelector('#pf-mnew').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addModelRow(page, mf); }
+    });
+    renderModelRows(page, mf, wantDef);
+    setPageHandler = function (e) { providerFormAct(page, p, isNew, e, mf); };
   }
-  function providerFormAct(page, p, isNew, e) {
+  /** 模型表工作区重渲（行 + 计数 + 来源/提示文案 + 默认模型下拉联动）。wantDef 仅首开（= 槽值默认）。 */
+  function renderModelRows(page, mf, wantDef) {
+    page.querySelector('#pf-mcount').textContent = String(mf.list.length);
+    var rows = page.querySelector('#pf-mrows');
+    var note = page.querySelector('#pf-mnote');
+    var src = page.querySelector('#pf-msrc');
+    var add = page.querySelector('.pf-madd');
+    if (mf.reset) {
+      rows.innerHTML = '';
+      add.style.display = 'none';
+      src.textContent = '';
+      note.innerHTML = '将恢复自动发现（目录优选 + 端点清单）——保存生效。 <button type="button" class="btn" data-k="pf-mreset">取消恢复</button>';
+    } else {
+      add.style.display = '';
+      rows.innerHTML = mf.list.map(function (m, i) {
+        return '<div class="pf-mrow"><input autocomplete="off" class="fi" value="' + esc(m) + '" readonly /><button type="button" class="pf-mdel" data-k="pf-mdel" data-m="' + i + '" title="移除该模型">✕</button></div>';
+      }).join('');
+      src.textContent = mf.declared !== null ? '（自定义表——已接管自动发现）' : '（自动发现——目录优选 + 端点清单）';
+      note.innerHTML = (mf.dirty ? '已修改——保存后接管为自定义表（自动发现让位）。' : '') +
+        (mf.declared !== null ? ' <button type="button" class="btn" data-k="pf-mreset">恢复自动发现</button>' : '');
+    }
+    /* 默认模型下拉随表重建（编辑页）：选中值仍在表中则保留；被移出表 → 回落「不设」（保存即清默认） */
+    var sel = page.querySelector('#pf-def');
+    if (sel && sel.tagName === 'SELECT') {
+      var cur = wantDef !== undefined ? wantDef : sel.value;
+      sel.innerHTML = '<option value="">（不设默认模型）</option>' + mf.list.map(function (m) {
+        return '<option value="' + esc(m) + '">' + esc(m) + '</option>';
+      }).join('');
+      sel.value = mf.list.indexOf(cur) >= 0 ? cur : '';
+    }
+  }
+  function addModelRow(page, mf) {
+    var inp = page.querySelector('#pf-mnew');
+    var v = (inp.value || '').trim();
+    if (v === '') return;
+    if (/\s/.test(v) || v.length > 128) { toast('模型 id 不含空白字符且 ≤ 128 字符'); return; }
+    if (mf.list.indexOf(v) >= 0) { toast('「' + v + '」已在表中'); return; }
+    if (mf.list.length >= 64) { toast('模型表上限 64 个'); return; }
+    if (mf.reset) { mf.reset = false; mf.list = []; } /* 恢复态下又添加 = 取消恢复，从空表重建自定义 */
+    mf.list.push(v);
+    mf.dirty = true;
+    inp.value = '';
+    inp.focus();
+    renderModelRows(page, mf);
+  }
+  function providerFormAct(page, p, isNew, e, mf) {
     if (e.target.closest('[data-k="pf-back"]') || e.target.closest('[data-k="pf-cancel"]')) { pageProviders(page); return; }
+    if (e.target.closest('[data-k="pf-madd"]')) { addModelRow(page, mf); return; }
+    var mdel = e.target.closest('[data-k="pf-mdel"]');
+    if (mdel) {
+      mf.list.splice(parseInt(mdel.getAttribute('data-m'), 10), 1);
+      mf.dirty = true;
+      mf.reset = false;
+      renderModelRows(page, mf);
+      return;
+    }
+    if (e.target.closest('[data-k="pf-mreset"]')) {
+      mf.reset = !mf.reset;
+      if (mf.reset) mf.dirty = true; /* 摘键回发现也是改动——保存须携带 models: [] */
+      renderModelRows(page, mf);
+      return;
+    }
     if (e.target.closest('[data-k="pf-eye"]')) {
       var inp = page.querySelector('#pf-key');
       inp.type = inp.type === 'password' ? 'text' : 'password';
@@ -1259,13 +1425,17 @@ function $(id) { return document.getElementById(id); }
       if (slot === '' || !/^[A-Za-z0-9_-]+$/.test(slot)) { toast(isNew ? '名称必填（字母/数字/-/_ 的槽位 id）' : '槽位异常'); return; }
       if (!/^https?:\/\//.test(url)) { toast('Base URL 得以 http:// 或 https:// 开头'); return; }
       var spec = { type: page.querySelector('#pf-proto').value, baseUrl: url };
-      var key = page.querySelector('#pf-key').value;
+      var key = (page.querySelector('#pf-key').value || '').trim(); /* 走查修⑮②：设置文本框统一忽略前后空格 */
       if (key !== '') spec.apiKey = key; /* 缺省 = 保留旧 $ENV: 引用（掩码不重发不清凭据） */
       var defEl = page.querySelector('#pf-def');
       var def = defEl ? (defEl.value || '').trim() : '';
       if (def !== '') spec.defaultModel = def; /* 缺省 = 清除默认（整表替换的普通字段） */
-      var ctxW = parseInt(page.querySelector('#pf-ctx').value, 10);
+      var ctxW = parseInt((page.querySelector('#pf-ctx').value || '').trim(), 10);
       if (Number.isFinite(ctxW) && ctxW >= 1024) spec.contextWindow = ctxW; /* 缺省不动顶层 */
+      /* 走查修⑭：模型表——恢复态 = []（摘键回自动发现）；改动过或本就自定义接管 = 携全表；
+       *  未触碰且非接管态 = 不带键（自动发现不被意外冻结） */
+      if (mf.reset) spec.models = [];
+      else if (mf.dirty || mf.declared !== null) spec.models = mf.list;
       A.fetchJson('/api/providers', { method: 'POST', body: JSON.stringify({ op: 'upsert', slot: slot, spec: spec }) }).then(function (r) {
         toast('已写入「' + slot + '」' + (r && r.report ? '——模块图重载后生效' : ''));
         pageProviders(page);
@@ -1276,9 +1446,13 @@ function $(id) { return document.getElementById(id); }
   function renderProviderAdd(page) {
     pageLoading(page);
     A.fetchJson('/api/providers/catalog').then(function (d) {
-      provData.vendors = d.vendors ?? [];
+      /* 走查修⑮③：目录按供应商名排序（原名索引——用户口令「为啥没按提供商和名字排列」） */
+      provData.vendors = (d.vendors ?? []).toSorted(function (a, b) {
+        var an = String(a.name ?? a.key).toLowerCase(), bn = String(b.name ?? b.key).toLowerCase();
+        return an < bn ? -1 : an > bn ? 1 : 0;
+      });
       page.innerHTML = '<span class="pf-back" data-k="pf-back">‹ 添加供应商</span>' +
-        '<div class="pf-row"><input class="fi" id="pf-q" placeholder="搜索供应商" /></div>' +
+        '<div class="pf-row"><input autocomplete="off" class="fi" id="pf-q" placeholder="搜索供应商" /></div>' +
         '<div class="pf-list" id="pf-vlist">' + provData.vendors.map(function (v, vi) {
           return '<div class="pf-vrow" data-k="vend" data-v="' + vi + '" data-name="' + esc(String(v.name ?? '').toLowerCase()) + '">' + provIcon(v.key) +
             '<span class="vname">' + esc(v.name ?? v.key) + '</span><span class="vbadge">' + esc(v.proto ?? 'openai') + '</span>' +
@@ -1292,7 +1466,9 @@ function $(id) { return document.getElementById(id); }
       q.addEventListener('input', function () {
         var s = q.value.trim().toLowerCase();
         page.querySelectorAll('#pf-vlist .pf-vrow[data-name]').forEach(function (r) {
-          r.hidden = !r.getAttribute('data-name').includes(s);
+          /* 走查修⑮③：过滤失效根因——.pf-vrow 的 display:flex 作者样式压过 UA 的 [hidden] 规则，
+           *  r.hidden = true 根本不生效。改类切换（.pf-vrow.hide 置 none）。 */
+          r.classList.toggle('hide', !r.getAttribute('data-name').includes(s));
         });
       });
       setPageHandler = function (e) {
@@ -1311,8 +1487,8 @@ function $(id) { return document.getElementById(id); }
     var models = (v && v.models) || [];
     page.innerHTML =
       '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(v ? v.key : 'catalog') + ' ' + esc(v ? v.name ?? v.key : '目录供应商') + ' <span class="vbadge">目录导入</span></span>' +
-      '<div class="pf-row"><label>API Key <span class="req">*</span></label><input class="fi" id="pf-key" type="password" placeholder="sk-…" /></div>' +
-      '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input class="fi" id="pf-url" value="' + esc(v ? v.baseUrl ?? '' : '') + '" /></div>' +
+      '<div class="pf-row"><label>API Key <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-key" type="password" placeholder="sk-…" /></div>' +
+      '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-url" value="' + esc(v ? v.baseUrl ?? '' : '') + '" /></div>' +
       '<div class="pf-row"><label>默认模型 <span class="req">*</span></label><select class="fsel" id="pf-def">' +
         models.map(function (m, i) {
           return '<option value="' + esc(m.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(m.label ?? m.id) + (m.ctx ? '（' + m.ctx + '）' : '') + '</option>';
@@ -1444,7 +1620,7 @@ function $(id) { return document.getElementById(id); }
       sel('mp-btwmodel').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        postPref('btwModel', v === '' ? null : v, v === '' ? '侧问模型：已清除（跟随会话当前）' : '侧问模型：' + v + '（已写 config.toml 顶层 btwModel）', function () { el.value = btwCur; });
+        postPref('btwModel', v === '' ? null : v, v === '' ? '侧问模型：已清除（跟随会话当前）' : '侧问模型：' + v + '（已写 gui/gui.toml [sideQuestion]）', function () { el.value = btwCur; });
         btwModelPref = v === '' ? null : v; /* 芯片默认源同步（免等下次 GET） */
       });
       sel('mp-submodel').addEventListener('change', function () {
@@ -1804,24 +1980,24 @@ function $(id) { return document.getElementById(id); }
           '<span class="mcp-tab-hint">页签间草稿互转</span></div>';
       if (tab === 'manual') {
         html += (isEdit
-            ? '<div class="pf-row"><label>名称</label><input class="fi" value="' + esc(draft.name) + '" readonly /></div>'
-            : '<div class="pf-row"><label>名称 <span class="req">*</span></label><input class="fi" id="mf-name" placeholder="my-search（字母/数字/-/_）" value="' + esc(draft.name) + '" /></div>') +
+            ? '<div class="pf-row"><label>名称</label><input autocomplete="off" class="fi" value="' + esc(draft.name) + '" readonly /></div>'
+            : '<div class="pf-row"><label>名称 <span class="req">*</span></label><input autocomplete="off" class="fi" id="mf-name" placeholder="my-search（字母/数字/-/_）" value="' + esc(draft.name) + '" /></div>') +
           '<div class="pf-row"><label>传输方式</label><select class="fsel" id="mf-transport">' +
             '<option value="stdio"' + (!remote ? ' selected' : '') + '>stdio（本地子进程）</option>' +
             '<option value="http"' + (draft.transport === 'http' ? ' selected' : '') + '>HTTP（远程）</option>' +
             '<option value="sse"' + (draft.transport === 'sse' ? ' selected' : '') + '>SSE（远程）</option></select></div>' +
           '<div class="pf-row"><label>' + (remote ? 'URL <span class="req">*</span>' : '命令 <span class="req">*</span>') + '</label>' +
-            '<input class="fi" id="mf-cmd" value="' + esc(draft.cmd) + '" placeholder="' + (remote ? 'https://mcp.internal.example.com/sse' : 'npx -y my-search-mcp（整行命令，支持引号参数）') + '" /></div>' +
+            '<input autocomplete="off" class="fi" id="mf-cmd" value="' + esc(draft.cmd) + '" placeholder="' + (remote ? 'https://mcp.internal.example.com/sse' : 'npx -y my-search-mcp（整行命令，支持引号参数）') + '" /></div>' +
           '<div class="pf-row"><button type="button" class="btn" data-k="mf-adv">' + (advOpen ? '▾' : '▸') + ' 高级' + (advOpen ? '' : remote ? '（headers / 环境变量 / 超时）' : '（环境变量 / 工作目录 / 超时）') + '</button></div>';
         if (advOpen) {
-          html += '<div class="pf-row"><label>环境变量（每行 KEY=VALUE' + (isEdit ? '；裸 KEY = 保持原值' : '') + '）</label><textarea class="fi" id="mf-env" rows="2" placeholder="API_KEY=xxx"></textarea></div>';
-          if (remote) html += '<div class="pf-row"><label>请求头（每行 KEY=VALUE）</label><textarea class="fi" id="mf-headers" rows="2" placeholder="Authorization=Bearer …"></textarea></div>';
-          else html += '<div class="pf-row"><label>工作目录</label><input class="fi" id="mf-cwd" value="' + esc(draft.cwd) + '" placeholder="（缺省 = 项目根）" /></div>';
-          html += '<div class="pf-row"><label>超时（秒，正整数）</label><input class="fi" id="mf-timeout" value="' + esc(draft.timeout) + '" placeholder="（缺省 60）" /></div>';
+          html += '<div class="pf-row"><label>环境变量（每行 KEY=VALUE' + (isEdit ? '；裸 KEY = 保持原值' : '') + '）</label><textarea autocomplete="off" class="fi" id="mf-env" rows="2" placeholder="API_KEY=xxx"></textarea></div>';
+          if (remote) html += '<div class="pf-row"><label>请求头（每行 KEY=VALUE）</label><textarea autocomplete="off" class="fi" id="mf-headers" rows="2" placeholder="Authorization=Bearer …"></textarea></div>';
+          else html += '<div class="pf-row"><label>工作目录</label><input autocomplete="off" class="fi" id="mf-cwd" value="' + esc(draft.cwd) + '" placeholder="（缺省 = 项目根）" /></div>';
+          html += '<div class="pf-row"><label>超时（秒，正整数）</label><input autocomplete="off" class="fi" id="mf-timeout" value="' + esc(draft.timeout) + '" placeholder="（缺省 60）" /></div>';
         }
       } else {
         html += '<div class="sp-note">粘贴单条 server 的 JSON（{"mcpServers": {…}} 包裹或裸对象均可；一次只接受一个 server）。</div>' +
-          '<div class="pf-row"><label>JSON</label><textarea class="fi" id="mf-json" rows="8" placeholder="{&quot;mcpServers&quot;: {&quot;my-search&quot;: {&quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;my-search-mcp&quot;]}}}"></textarea></div>';
+          '<div class="pf-row"><label>JSON</label><textarea autocomplete="off" class="fi" id="mf-json" rows="8" placeholder="{&quot;mcpServers&quot;: {&quot;my-search&quot;: {&quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;my-search-mcp&quot;]}}}"></textarea></div>';
       }
       if (msg !== '') html += '<div class="sp-note ' + (msgBad ? 'bad' : '') + '">' + (msgBad ? '✕ ' : '✓ ') + esc(msg) + '</div>';
       html += '<div class="pu-actions"><span class="spacer"></span><button class="btn" data-k="mcp-cancel">取消</button>' +
@@ -1833,13 +2009,14 @@ function $(id) { return document.getElementById(id); }
       var q = function (id) { return page.querySelector('#' + id); };
       var nameEl = q('mf-name'), cmdEl = q('mf-cmd'), envEl = q('mf-env'), hdEl = q('mf-headers'), cwdEl = q('mf-cwd'), toEl = q('mf-timeout'), jsonEl = q('mf-json');
       var syncInputs = function () {
-        if (nameEl) draft.name = nameEl.value;
-        if (cmdEl) draft.cmd = cmdEl.value;
-        if (envEl) draft.env = envEl.value;
-        if (hdEl) draft.headers = hdEl.value;
-        if (cwdEl) draft.cwd = cwdEl.value;
-        if (toEl) draft.timeout = toEl.value;
-        if (jsonEl) draft.jsonText = jsonEl.value;
+        /* 走查修⑮②：设置文本框统一忽略前后空格（读入即 trim——不回写，打字过程不受扰） */
+        if (nameEl) draft.name = nameEl.value.trim();
+        if (cmdEl) draft.cmd = cmdEl.value.trim();
+        if (envEl) draft.env = envEl.value.trim();
+        if (hdEl) draft.headers = hdEl.value.trim();
+        if (cwdEl) draft.cwd = cwdEl.value.trim();
+        if (toEl) draft.timeout = toEl.value.trim();
+        if (jsonEl) draft.jsonText = jsonEl.value.trim();
       };
       [nameEl, cmdEl, envEl, hdEl, cwdEl, toEl, jsonEl].forEach(function (el) {
         if (el) el.addEventListener('input', function () { syncInputs(); msg = ''; });
@@ -2054,7 +2231,7 @@ function $(id) { return document.getElementById(id); }
       ? '<span class="mc-count"><span class="ok">✓ 已导入 ' + s.count + ' 条</span></span>'
       : '<span class="mc-count">' + s.count + ' 条 · ' + ((s.newCount ?? 0) > 0 ? '<span class="new">新 ' + s.newCount + '</span>' : '<span class="zero">新 0</span>') + '</span>';
     return '<div class="mc-row' + (s.imported ? ' done' : '') + '" data-agent="' + esc(s.id) + '">' +
-      '<input type="checkbox" class="mc-cb" data-cb="' + esc(s.id) + '"' + (s.on ? ' checked' : '') + (s.imported ? ' disabled' : '') + ' aria-label="选择 ' + esc(s.label) + '">' +
+      '<input autocomplete="off" type="checkbox" class="mc-cb" data-cb="' + esc(s.id) + '"' + (s.on ? ' checked' : '') + (s.imported ? ' disabled' : '') + ' aria-label="选择 ' + esc(s.label) + '">' +
       '<span class="mc-agent">' + esc(s.label) + '</span>' +
       (s.global ? '<span class="mc-glob">全局</span>' : '') +
       '<span class="mc-path" title="' + esc(s.dir ?? '') + '">' + esc(s.dir ?? '') + '</span>' + cnt +
@@ -2086,7 +2263,7 @@ function $(id) { return document.getElementById(id); }
       '<button class="mc-toggle' + (mi.polish ? ' on' : '') + '" data-k="mc-polish" role="switch" aria-checked="' + mi.polish + '" aria-label="用模型整理"></button>' +
       '<span class="mc-opt-hint">逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理</span></div>' +
       '</div>' +
-      '<div class="mc-foot"><label class="mc-all"><input type="checkbox" class="mc-cb" data-k="mc-all"' + (allOn ? ' checked' : '') + '> 全选</label>' +
+      '<div class="mc-foot"><label class="mc-all"><input autocomplete="off" type="checkbox" class="mc-cb" data-k="mc-all"' + (allOn ? ' checked' : '') + '> 全选</label>' +
       '<span class="mc-sum">已选 ' + sel.length + ' 个来源 · 共 ' + selTotal + ' 条 · 新 ' + selNew + '</span>' +
       '<button class="btn primary" data-k="mc-import"' + (sel.length === 0 || mi.busy ? ' disabled' : '') + '>' + (mi.busy ? '导入中…' : '导入选中') + '</button></div>' +
       '<div class="mc-note">重复导入将覆盖同标题旧版 · 导入本身不耗 token（开启「用模型整理」除外）</div>' +
@@ -2202,9 +2379,8 @@ function $(id) { return document.getElementById(id); }
     bindMemCard(page);
   }
 
-  /* ── F1b 外观（原型 v2：主题卡 + 明暗 + 整体字号 + 语言——原「切换语言」页并入；语言写 config
-   *    会话侧即时生效，页面自身不切〔web 中文直写〕；FONT_SCALES/applyFontScale/applyTheme 在顶栏
-   *    主题区块同位声明——boot 与本页共用）。 ── */
+  /* ── F1b 外观（主题卡 + 明暗 + 整体字号 + 语言：前三项写 gui/gui.toml，语言仍写 config.toml；
+   *    会话侧即时生效，页面自身不切语言；FONT_SCALES/applyFontScale/applyTheme 与顶栏共用。 ── */
   var LANG_EN = { 'zh-CN': 'Chinese Simplified', 'zh-TW': 'Chinese Traditional', 'en-US': 'English', en: 'English', ja: 'Japanese', ko: 'Korean', de: 'German', fr: 'French', es: 'Spanish' };
   function langRowHtml(l, cur, pack) {
     return '<div class="ap-lang' + (cur ? ' cur' : '') + ' ap-fade" data-k="ap-lang" data-v="' + esc(l.tag) + '" role="radio" aria-checked="' + cur + '">' +
@@ -2215,18 +2391,20 @@ function $(id) { return document.getElementById(id); }
   }
   function pageAppearance(page) {
     pageLoading(page);
-    A.fetchJson('/api/settings/locale').then(function (d) {
+    Promise.all([A.fetchJson('/api/settings/locale'), A.fetchJson('/api/settings/update')]).then(function (res) {
+      var d = res[0], upd = res[1];
       var current = String(d.current ?? '');
       var locales = d.locales ?? [];
       var builtins = locales.filter(function (l) { return !l.module; });
       var packs = locales.filter(function (l) { return !!l.module; });
+      var updEnabled = !!(upd && upd.enabled);
       var light = document.body.classList.contains('light');
       var fs = fontScaleIdx;
       page.innerHTML = spTitle('外观', 'APPEARANCE') +
         subHeadT('主题', 1) +
         '<div class="ap-themes">' +
           '<div class="ap-theme cur"><span class="at-prev"><span class="half d"><i></i></span><span class="half l"><i></i></span></span>' +
-          '<span class="at-name">连山<span class="at-en">LIANSHAN</span><span class="at-cur">当前主题</span></span>' +
+          '<span class="at-name">' + esc(guiTheme) + '<span class="at-en">LIANSHAN</span><span class="at-cur">当前主题</span></span>' +
           '<span class="at-desc">每个主题含深色 / 浅色两套模式——用下方「明暗模式」切换</span></div>' +
           '<div class="ap-theme ghost">更多主题即将到来</div>' +
         '</div>' +
@@ -2243,6 +2421,15 @@ function $(id) { return document.getElementById(id); }
           '<span class="mc-seg">' + FONT_SCALES.map(function (f, i) {
             return '<button class="seg' + (i === fs ? ' cur' : '') + '" data-k="ap-scale" data-v="' + i + '">' + f.name + '</button>';
           }).join('') + '</span></div>' +
+        /* 走查修⑮⑥：更新检测并入外观（原独立页退役）——位置 = 整体字号下、语言上；按钮换 mc-seg 分段式 */
+        subHeadT('更新检查', 1) +
+        '<div class="sp-swrow static"><span class="sw-txt"><span class="sw-name">启动时自动检测新版本</span>' +
+          '<span class="sw-sub">关 = 不联网检测（orosus upgrade 手动口不受影响）· 写盘下次启动生效</span></span>' +
+          '<span class="mc-seg">' +
+          '<button class="seg' + (updEnabled ? ' cur' : '') + '" data-k="ap-update" data-v="1">开</button>' +
+          '<button class="seg' + (!updEnabled ? ' cur' : '') + '" data-k="ap-update" data-v="0">关</button>' +
+          '</span></div>' +
+        '<div class="sp-note">当前版本 ' + esc(String(upd.current ?? '?')) + (upd.latest ? ' · 已知最新 ' + esc(String(upd.latest)) : '') + '</div>' +
         subHeadT('语言', 1) +
         '<div id="ap-langs">' +
         (current === '' ? '<div class="ap-lang cur" data-k="ap-lang" data-v="" role="radio" aria-checked="true"><span class="ap-radio"></span><span class="al-txt"><span class="al-native">随系统</span><span class="al-label">跟随操作系统语言</span></span><span class="al-cur">当前</span></div>' : '') +
@@ -2252,10 +2439,23 @@ function $(id) { return document.getElementById(id); }
         '<div class="sp-note">切换写入 config 即时生效（会话侧 t() 与新会话）——页面自身不切语言；语言包由 multilang 模块挂载后在此列出。</div>';
       setPageHandler = function (e) {
         var t;
+        if ((t = e.target.closest('[data-k="ap-update"]'))) {
+          var toEnable = t.getAttribute('data-v') === '1';
+          if (toEnable !== updEnabled) {
+            updEnabled = toEnable;
+            A.fetchJson('/api/settings/update', { method: 'POST', body: JSON.stringify({ enabled: toEnable }) }).then(function () {
+              toast(toEnable ? '已开启更新检查——下次启动生效' : '已关闭更新检查——横幅与自动检测停用，orosus upgrade 仍可用');
+            }, function (err) { toast('设置失败：' + err.message); });
+          }
+          t.parentNode.querySelectorAll('.seg').forEach(function (s) { s.classList.toggle('cur', s === t); });
+          return;
+        }
         if ((t = e.target.closest('[data-k="ap-mode"]'))) {
           var toLight = t.getAttribute('data-v') === 'light';
           if (toLight !== document.body.classList.contains('light')) {
+            var previousMode = !toLight;
             applyTheme(toLight);
+            saveGuiAppearance({ mode: toLight ? 'light' : 'dark' }, function () { applyTheme(previousMode); });
             toast(toLight ? '已切换浅色模式——连山 · 宣纸' : '已切换深色模式——连山 · 玄墨');
           }
           var seg1 = t.parentNode.querySelectorAll('.seg');
@@ -2265,7 +2465,9 @@ function $(id) { return document.getElementById(id); }
         if ((t = e.target.closest('[data-k="ap-scale"]'))) {
           var i = parseInt(t.getAttribute('data-v'), 10);
           var changed = i !== fontScaleIdx;
+          var previousScale = fontScaleIdx;
           applyFontScale(i);
+          saveGuiAppearance({ fontScale: FONT_SCALES[i].scale }, function () { applyFontScale(previousScale); });
           t.parentNode.querySelectorAll('.seg').forEach(function (s) { s.classList.toggle('cur', s === t); });
           var sub = page.querySelector('#ap-fs-sub');
           if (sub) sub.textContent = '当前：' + FONT_SCALES[i].name + '（' + Math.round(FONT_SCALES[i].scale * 100) + '%）· 仅放大界面文字——框架与布局尺寸不变';
@@ -2280,27 +2482,6 @@ function $(id) { return document.getElementById(id); }
             pageAppearance(page);
           }, function (err) { toast(err.status === 409 ? '暂无当前会话——语言切换需要会话承载（先新建或选择一个会话）' : '切换失败：' + err.message); });
         }
-      };
-    }, function (err) { pageLoadError(page, err); });
-  }
-
-  /* ── F9 更新检查（GET/POST /api/settings/update——[update] check 开关，下次启动生效） ── */
-  function pageUpdate(page) {
-    pageLoading(page);
-    A.fetchJson('/api/settings/update').then(function (d) {
-      var enabled = !!d.enabled;
-      page.innerHTML = spTitle('更新检查', 'UPDATE') +
-        optRow('开（启动时自动检测新版本）', '', enabled, 'update', '1') +
-        optRow('关（不联网检测；orosus upgrade 手动口不受影响）', '', !enabled, 'update', '0') +
-        '<div class="sp-note">当前版本 ' + esc(String(d.current ?? '?')) + (d.latest ? ' · 已知最新 ' + esc(String(d.latest)) : '') + '——开关写盘下次启动生效。</div>';
-      setPageHandler = function (e) {
-        var row = e.target.closest('[data-k="update"]');
-        if (!row) return;
-        var v = row.getAttribute('data-v') === '1';
-        A.fetchJson('/api/settings/update', { method: 'POST', body: JSON.stringify({ enabled: v }) }).then(function () {
-          toast(v ? '已开启更新检查——下次启动生效' : '已关闭更新检查——横幅与自动检测停用，orosus upgrade 仍可用');
-          renderSetPage(9); /* 更新检查页（外观插位后 8→9） */
-        }, function (err) { toast('设置失败：' + err.message); });
       };
     }, function (err) { pageLoadError(page, err); });
   }
@@ -2320,7 +2501,7 @@ function $(id) { return document.getElementById(id); }
     arData.forEach(function (a) { if (a.cwd && !wsList.includes(a.cwd)) wsList.push(a.cwd); });
     var groups = AV.archivedView(arData, arState);
     var body = '<div class="ar-tools">' +
-      '<input class="fi" id="ar-q" placeholder="搜索已归档会话" value="' + esc(arState.q) + '" />' +
+      '<input autocomplete="off" class="fi" id="ar-q" placeholder="搜索已归档会话" value="' + esc(arState.q) + '" />' +
       '<select class="fsel" id="ar-ws"><option value="">所有工作区</option>' + wsList.map(function (w) {
         var nm = w.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || w;
         return '<option' + (arState.ws === w ? ' selected' : '') + ' value="' + esc(w) + '">' + esc(nm) + '</option>';
@@ -2410,7 +2591,7 @@ function $(id) { return document.getElementById(id); }
         ['会话行状态', '进行中显示圆弧转圈动画；完成后未选中 → 绿点（待读）/ 红点（失败），选中即消；红绿点持久化——退服务重开仍在'],
         ['右侧状态栏', '页签点击切卡；右上角 ⇥ 收起为窄轨（窄轨上 ⇤ 展开）'],
         ['顶栏红色「更新」', '有新版本的升级提示（非刷新列表）——查看更新内容 / 立即升级'],
-        ['设置', '居中双栏十页：常规 / 提供商与模型 / 模型偏好 / 技能 / 钩子 / MCP / 记忆 / 语言 / 更新检查 / 已归档的会话'],
+        ['设置', '居中双栏九页：常规 / 外观 / 提供商与模型 / 模型偏好 / 技能 / 钩子 / MCP / 记忆 / 已归档的会话（更新检查并入外观页——走查修⑮⑥）'],
         ['帮助 / 更多', '居中弹窗；子项下钻后「‹ 返回」逐级回退，Esc 同效'],
         ['顶栏 ☀/☾', '浅色（宣纸系）/ 深色（玄墨系）主题切换，记忆选择'],
         ['输入框（多行）', '按钮全部在框内：左下 文件+权限，右下 模型/思考/发送键；最多 6 行文字（超出框内滚动）'],
@@ -2693,6 +2874,7 @@ function $(id) { return document.getElementById(id); }
     sessionTitle = name;
     sessionTitleEl.innerHTML = name !== '' ? esc(name) + ' <span class="dim">' + esc(shortSid(sid)) + '</span>' : '<span class="dim">（无会话）</span>';
     kvSession.textContent = name !== '' ? name : '—';
+    kvSession.title = name !== '' ? name : ''; /* 走查修⑮：单行省略悬停给全文 */
   }
   function shortSid(sid) { return sid ? '#' + String(sid).slice(-4) : ''; }
   function showWelcome(show) { welcomeEl.hidden = !show; }
@@ -2710,13 +2892,39 @@ function $(id) { return document.getElementById(id); }
 
   /* 切换视图（T16 全接线）：流区重置 + 最新一页回放（events API）→ SSE 续流（after=maxSeq）+
    * status 装配（芯片/cwd）+ 面板即拉。欢迎页显隐归 render（C1 事件数判据——T15 竞态消除）。 */
+  /* 走查修⑮⑦（2026-10-14 用户口令）：＋新会话 = 只开新会话窗（草稿态），不立即落桶。
+   *  draftActive/draftCwd 是本窗态唯一真源——视图 = 无会话空流（welcome + composer + cwd 芯片可改归属）；
+   *  首条消息（sendDraft）才 createSession 落桶。切走/首发成功即出草稿态。 */
+  var draftActive = false, draftCwd = '';
+  function openDraft() {
+    UI.closePopup();
+    if (streamCtl) { streamCtl.close(); streamCtl = null; }
+    draftCwd = sessionCwd; /* 落桶项目 = 点按时刻当前会话所在项目（B1 跟随口径） */
+    draftActive = true;
+    currentSid = null;
+    setSessionTitle('新会话', '');
+    render.open({
+      sid: null, stream: streamEl, tail: tailEl, welcome: welcomeEl, pgMore: pgMoreEl, toBottom: $('to-bottom'),
+      onFork: function (fromSid) { createSession({ forkFrom: fromSid }).then(function (r) { if (r) toast('已分叉出新会话——继承全部上下文'); }); },
+      onCopy: copyText,
+      onUserSeen: syncCwdGate,
+      onAgentOpen: function (id) { openAgentTab(id); },
+      onCompactionDone: function (text) { toast(text, 6000); },
+      onCompactionOpen: function () { openCompactWindow(); },
+      cwdOf: function () { return draftCwd; },
+    });
+    renderSidebar();
+    syncCwdGate();
+  }
   function switchTo(sid) {
     /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
     UI.closePopup();
+    draftActive = false; /* 走查修⑮⑦：切走即出草稿态（再点 ＋新会话 可重开） */
     var fromSid = currentSid; /* 离去会话——W6复核修 Important#2②：在飞 btw 轮结算的归属判据 */
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
     settleBtwOnSwitch(fromSid); /* 切走结算：离去会话 btw tab 在飞轮落终态 + 活跃者重渲刷 composer 门控（Important#2①） */
+    btwClosedTabs.clear(); /* 走查修⑫：已关 tab 防复活册随切换清——btw 帧只在当前会话 SSE 流里，换流即失效 */
     unlockBtwOnReturn(); /* 切回解锁（W6复核修二）：A→B→A 回环——归属新 currentSid 的活跃 btw tab 仍持离去时锁态渲染 */
     /* 服务端游标同步（fire-and-forget）——B1「＋新会话跟随当前项目」与左栏 cur 标记的 server 侧真源 */
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/current', { method: 'POST', body: '{}' }).then(null, function () { /* 游标同步失败无碍视图 */ });
@@ -3121,6 +3329,23 @@ function $(id) { return document.getElementById(id); }
       if (t && t.kind === 'btw') Pane.rerenderBody();
     }, function () { /* 读失败按无偏好 */ });
   }
+  /* 走查修⑫（2026-10-14 用户口令④）：侧问 tab 被关 = 其归属会话的 per-tab 在飞轮立即 abort
+   *  （POST /btw {tab, abort:true}——composer ■ 停止同款通道，server abortBtw 落定〔已停止〕）。
+   *  边界口径：◧ 分栏收回不是关 tab（走查修①记忆保留——帧照落 data，工作不停）；子代理 tab 不在
+   *  本面（server 侧任务自管，关 tab 只是关窗）。已关 tab id 入 btwClosedTabs 册——abort 后迟到帧
+   *  不再触发 btwFeed 的自动开 tab（防复活）；册随切会话清（帧只在当前会话流里）。 */
+  var btwClosedTabs = new Set();
+  Pane.onTabClosed = function (tab) {
+    if (!tab || tab.kind !== 'btw' || !tab.data) return;
+    btwClosedTabs.add(tab.id);
+    var rounds = tab.data.rounds ?? [];
+    var last = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+    var inFlight = !!last && (last.phase === 'answering' || last.phase === 'tool' || last.phase === 'thinking' || (last.a == null && last.phase !== 'error'));
+    if (!inFlight) return; /* 无在飞轮零请求——已落定轮次纯本地态，server 侧无可停 */
+    if (!tab.data.sid || tab.data.sid !== currentSid) return; /* 跨会话 tab 切走时已在飞结算（本地口径），其 SSE 流随切走关闭——无帧可等，无流可停 */
+    A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, abort: true }) })
+      .then(null, function () { /* abort 失败静默——tab 已关，server 侧残轮随会话关停兜底 abort（btw-service 会话级保险丝） */ });
+  };
   function openBtwTab() {
     loadBtwModelPref();
     btwSeq++;
@@ -3129,31 +3354,25 @@ function $(id) { return document.getElementById(id); }
     Pane.addTab(spec);
     return Pane.activeTab(); /* addTab 尾插即激活——返回新实例（data 与 spec 同引用） */
   }
-  /* 走查修⑨（2026-10-14 用户口令）：btw 模型覆盖菜单——平铺「跟随会话当前」+ 目录全量
-   *  provider/model 限定形行（临时覆盖只作用本 tab 的发问，不动会话模型——主菜单的 POST /model
-   *  写会话语义在此刻意不复用）。 */
+  /* 走查修⑨（2026-10-14 用户口令）：btw 模型覆盖菜单。走查修⑪起复用主两栏 modelmenu（弹窗形态
+   *  与主代理一份——平铺限定形长名单退役，前缀截断问题随两栏消解）；tab 级临时覆盖语义经 opts 钩子
+   *  注入（写 tab.data.btwModel，下次发问随 POST /btw 携带——主默认面的 POST /model 写会话语义
+   *  在此刻意不复用）。「跟随…」行 = 清覆盖（落定 侧问偏好 ?? 会话当前，括注报落定值）。 */
   function openBtwModelMenu(tab, anchorEl) {
     if (!tab) return;
-    UI.fetchModels().then(function (data) {
-      if (!data) { toast('拉取模型清单失败'); return; }
-      var items = [{ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (!tab.data.btwModel ? '✓' : '') + '</span><span class="pi-name">跟随会话当前（' + esc(modelTail(currentModel)) + '）</span>', data: '' }];
-      (data.providers ?? []).forEach(function (p) {
-        (p.models ?? []).forEach(function (m) {
-          var q = p.key + '/' + m.name;
-          items.push({ html: '<span class="pu-caret">❯</span><span class="pu-check">' + (tab.data.btwModel === q ? '✓' : '') + '</span><span class="pi-name">' + esc(q) + '</span>', data: q });
-        });
-      });
-      UI.openPick({
-        mini: 'right', anchor: anchorEl, title: '侧问模型（临时）', en: 'MODEL', items: items,
-        foot: '点击选定——仅本侧问卡生效 · Esc 关闭',
-        onPick: function (i) {
-          var v = items[i] && items[i].data;
-          if (v === undefined) return;
-          if (v === '') delete tab.data.btwModel; else tab.data.btwModel = v;
-          Pane.rerenderBody(); /* 芯片现算刷新 */
-        },
-      });
-    }, function () { toast('拉取模型清单失败'); });
+    var effective = tab.data.btwModel || btwModelPref || currentModel; /* 跟随落定值——初始落栏 + 「跟随」行括注 */
+    UI.openModelMenu(anchorEl, {
+      current: tab.data.btwModel || '', /* 勾标 = 覆盖目标限定形；空串 = 跟随态（仅「跟随」行出勾） */
+      focus: effective,
+      follow: {
+        label: (btwModelPref ? '跟随侧问偏好（' : '跟随会话当前（') + modelTail(effective) + '）',
+        checked: !tab.data.btwModel,
+      },
+      onSwitch: function (pk, mn) {
+        if (pk === null || mn === null) delete tab.data.btwModel; else tab.data.btwModel = pk + '/' + mn;
+        Pane.rerenderBody(); /* 芯片现算刷新 */
+      },
+    });
   }
   /* 思考档覆盖菜单：档位取自生效模型（覆盖模型 ?? 会话当前）的目录声明；无声明按主菜单同款提示。 */
   function openBtwEffortMenu(tab, anchorEl) {
@@ -3256,6 +3475,7 @@ function $(id) { return document.getElementById(id); }
       if (tabs[i].kind === 'btw' && tabs[i].id === frame.tab) { tab = tabs[i]; break; }
     }
     if (tab === null) {
+      if (btwClosedTabs.has(frame.tab)) return; /* 走查修⑫：已关 tab 的迟到帧（abort 途中的在飞尾帧）——不复活 */
       if (frame.phase !== 'answering' && frame.phase !== 'answer') return; /* tool/error 不占窗（旧口径） */
       var spec = { kind: 'btw', id: frame.tab, label: btwLabelOf(frame.tab), data: { sid: currentSid, rounds: [] } };
       Pane.addTab(spec);
@@ -3329,8 +3549,12 @@ function $(id) { return document.getElementById(id); }
     var bSend = bodyEl.querySelector('#btw-send');
     function syncBtn() { if (bSend.hasAttribute('data-btwstop')) return; bSend.className = 'sendbtn ' + (bInput.value.trim() ? 'ready' : 'idle'); }
     if (!btwRenderNoFocus) bInput.focus(); /* 用户驱动开 tab/切换即聚焦（v2 4551）；帧驱动重渲不抢焦点 */
-    bInput.addEventListener('input', syncBtn);
+    bInput.addEventListener('input', function () {
+      syncBtn();
+      UI.inputChanged(bInput, { anchor: bForm, atOnly: true }); /* 走查修⑫：@ 文件菜单锚侧问 composer（宽随锚）；atOnly——侧问无斜杠命令语义 */
+    });
     bInput.addEventListener('keydown', function (e) {
+      if (UI.handleInputKey(e)) { e.stopPropagation(); return; } /* 走查修⑫：@ 菜单/芯片菜单开着时 ↑↓/Enter/Esc/Tab 归浮层（Enter 不再误发送） */
       if (e.key === 'Enter' && !e.shiftKey && !bSend.hasAttribute('data-btwstop')) { e.preventDefault(); bForm.requestSubmit(); }
       e.stopPropagation(); /* 不触发主输入框的 Esc / 快捷键逻辑（v2 4555-4558） */
     });
@@ -3349,12 +3573,13 @@ function $(id) { return document.getElementById(id); }
       A.fetchJson('/api/sessions/' + encodeURIComponent(tab.data.sid) + '/btw', { method: 'POST', body: JSON.stringify({ tab: tab.id, abort: true }) }).then(null, function () { toast('停止失败——网络或服务异常'); });
     });
     /* 走查修⑨：模型/思考档芯片——tab 级临时覆盖菜单（写 tab.data.btwModel/btwEffort，下次发问随
-     *  POST /btw 携带；「跟随会话当前」行 = 清覆盖）。 */
+     *  POST /btw 携带；「跟随会话当前」行 = 清覆盖）。走查修⑫：toggle 统一口径——本芯片菜单开着再点 = 关。 */
     var bModelChip = bodyEl.querySelector('#btw-model');
-    if (bModelChip) bModelChip.addEventListener('click', function () { openBtwModelMenu(Pane.activeTab(), bModelChip); });
+    if (bModelChip) bModelChip.addEventListener('click', function () { if (UI.isAnchorOpen(bModelChip)) { UI.closePopup(); return; } openBtwModelMenu(Pane.activeTab(), bModelChip); });
     var bEffortChip = bodyEl.querySelector('#btw-effort');
-    if (bEffortChip) bEffortChip.addEventListener('click', function () { openBtwEffortMenu(Pane.activeTab(), bEffortChip); });
-    bodyEl.querySelector('#btw-file').addEventListener('click', function () { /* ＋文件 = 插入 @（光标位） */
+    if (bEffortChip) bEffortChip.addEventListener('click', function () { if (UI.isAnchorOpen(bEffortChip)) { UI.closePopup(); return; } openBtwEffortMenu(Pane.activeTab(), bEffortChip); });
+    bodyEl.querySelector('#btw-file').addEventListener('click', function () { /* ＋文件 = 插入 @（光标位）并开文件菜单（走查修⑫ 前只插 @ 不开窗） */
+      if (UI.openKind() === 'at') { UI.closePopup(); return; } /* 再点 = 收（toggle 统一口径） */
       bInput.focus();
       var s = bInput.selectionStart ?? bInput.value.length;
       var epos = bInput.selectionEnd ?? s;
@@ -3363,6 +3588,7 @@ function $(id) { return document.getElementById(id); }
       var pos = s + pad.length + 1;
       bInput.setSelectionRange(pos, pos);
       syncBtn();
+      UI.inputChanged(bInput, { anchor: bForm, atOnly: true });
     });
     var bs = bodyEl.querySelector('#btw-stream');
     bs.scrollTop = bs.scrollHeight; /* 贴底（v2 4565-4566） */
@@ -3464,15 +3690,18 @@ function $(id) { return document.getElementById(id); }
     $('tf-list').innerHTML = todoHtml(tasks);
   }
   function renderPanel(data) {
-    /* 运行状态 kv + 上下文条 */
-    var sig = [data.model, data.session, data.cwd, data.tokens && data.tokens.input, data.tokens && data.tokens.output, data.ctx && data.ctx.pct, data.ctx && data.ctx.used, data.ctx && data.ctx.window].join('|');
+    /* 运行状态 kv + 上下文条。
+     *  走查修⑬（2026-10-14 用户报障「右栏会话名恒显新会话」）：kv-session 单写者化——本函数不再写
+     *  它。旧面两处写源互踩：panel 轮询写 server 内核投影（sessionLabelOf 只认 session/label 事件——
+     *  未 /title 的会话恒「新会话」），把 setSessionTitle 写入的左栏派生名（首条用户消息——顶栏/左栏
+     *  同源口径）覆盖掉。data.session 同步出 sig（陈旧值拍动不再触发 kv 重渲）。 */
+    var sig = [data.model, data.cwd, data.tokens && data.tokens.input, data.tokens && data.tokens.output, data.tokens && data.tokens.cacheHitPct, data.ctx && data.ctx.pct, data.ctx && data.ctx.used, data.ctx && data.ctx.window].join('|');
     if (sig !== kvSig) {
       kvSig = sig;
       $('kv-model').textContent = data.model ?? '—';
-      $('kv-session').textContent = data.session || '—';
       $('kv-cwd').textContent = data.cwd ?? '—';
       var tk = data.tokens;
-      $('kv-tokens').textContent = tk ? '↑ ' + (tk.input ?? 0).toLocaleString() + ' · ↓ ' + (tk.output ?? 0).toLocaleString() : '—';
+      $('kv-tokens').textContent = tk ? '↑ ' + (tk.input ?? 0).toLocaleString() + ' · ↓ ' + (tk.output ?? 0).toLocaleString() + ' · ' + (tk.cacheHitPct === undefined ? '—' : tk.cacheHitPct + '%') : '—';
       var ctx = data.ctx;
       if (ctx) {
         $('ctx-bar-fill').style.width = ctx.pct + '%';
@@ -3565,13 +3794,14 @@ function $(id) { return document.getElementById(id); }
     A.fetchJson('/api/health').then(function (h) {
       $('ab-addr').textContent = location.host + ' · token 已校验';
       $('welcome-ver').textContent = 'v' + (h.version ?? '?');
-      return A.fetchJson('/api/bootstrap');
+      return Promise.all([A.fetchJson('/api/bootstrap'), guiPreferencesReady]);
     }, function () {
       A.showDisconnect('lost', function () {
         A.fetchJson('/api/health').then(function () { location.reload(); }, function () { /* 仍断开 */ });
       });
       return null;
-    }).then(function (bs) {
+    }).then(function (startup) {
+      var bs = startup === null ? null : startup[0];
       if (bs === null) return; /* 启动即断——弹窗已出（重试成功后刷新即恢复） */
       if (bs.update) $('btn-update').hidden = false; /* A4 更新胶囊壳（内容弹窗 T17） */
       projectsPool = Array.isArray(bs.projects) ? bs.projects : []; /* cwd 芯片候选池（D5——含 hidden 找回） */
@@ -3673,5 +3903,6 @@ function $(id) { return document.getElementById(id); }
     if (e.key !== 'Escape') return;
     if (document.activeElement !== input) handleEscGlobal();
   });
+  guiPreferencesReady = loadGuiPreferences();
   boot();
 })();

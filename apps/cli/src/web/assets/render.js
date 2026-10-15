@@ -451,11 +451,13 @@
   }
   function workBodyOf(t) { return ensureWork(t).lastChild; }
 
-  /** 组头渲染（三态四文案——spec §3.3 表逐字）。collapsible=false：无箭头、点击无效。 */
-  function workHeadRender(w, label, collapsible, collapsed) {
+  /** 组头渲染（三态四文案——spec §3.3 表逐字）。collapsible=false：无箭头、点击无效；
+   *  duration 仅工作中传入，时长独立用 .doing 暖黄，「工作中」本身沿用组头灰色。 */
+  function workHeadRender(w, label, collapsible, collapsed, duration) {
     var head = w.firstChild;
+    var text = duration === undefined ? esc(label) : esc(label) + ' <span class="doing">' + esc(duration) + '</span>';
     /* 箭头在文案后（2026-10-13 用户口令——ZCode「已工作 N ›」形：收起 ▸、展开 ▾、工作中不渲染）。 */
-    head.innerHTML = esc(label) + (collapsible ? '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' : '');
+    head.innerHTML = text + (collapsible ? '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' : '');
     head.classList.toggle('clickable', collapsible);
   }
 
@@ -480,7 +482,7 @@
     w.workState = 'running';
     var tick = function () {
       if (R === null || !w.isConnected || w.workState !== 'running') { workHeadStop(w); return; }
-      workHeadRender(w, '工作中 ' + fmtWorkDur(Date.now() - startMs), false, false);
+      workHeadRender(w, '工作中', false, false, fmtWorkDur(Date.now() - startMs));
     };
     w.workTimer = window.setInterval(tick, 1000);
     tick(); /* 立即一帧——首秒不空白（尾行 tick 同款） */
@@ -1070,7 +1072,7 @@
       workHeadRender(w, '已处理', true, true);
     } else {
       w.classList.remove('collapsed');
-      workHeadRender(w, '工作中 ' + fmtWorkDur(0), false, false);
+      workHeadRender(w, '工作中', false, false, fmtWorkDur(0));
       workHeadTick(w, t2.turnStartTs);
     }
     return t2;
@@ -1201,7 +1203,7 @@
     R.live.buf = '';
   }
 
-  /* ── 尾行三态（C8：工作中 N 秒走字 / 压缩中 / 待命光标） ── */
+  /* ── 尾行三态（工作中仅 spinner / 压缩中 / 待命光标） ── */
   function setPhase(phase, isBusy) {
     if (R === null) return;
     R.busy = !!isBusy;
@@ -1230,24 +1232,11 @@
   }
   function syncTail() {
     if (R === null) return;
-    window.clearInterval(R.busyTimer);
-    R.busyTimer = null;
     var t = R.tail;
     if (R.compacting) {
       t.innerHTML = spinSvg('', 12) + ' <span class="info">上下文压缩中…</span>';
     } else if (R.busy) {
-      R.busyStart = Date.now();
-      /* 结构只建一次，走字只改文本节点——SVG 动画元素不被重写，旋转不重头（原型同款） */
-      t.innerHTML = spinSvg('', 12) + ' 工作中 <span class="doing" id="tail-time"></span>';
-      var tick = function () {
-        if (R === null || R.busyTimer === null) return;
-        var s = Math.max(1, Math.floor((Date.now() - R.busyStart) / 1000));
-        var mm = Math.floor(s / 60), ss = String(s % 60).padStart(2, '0');
-        var te = t.querySelector('#tail-time');
-        if (te) te.textContent = (mm > 0 ? mm + ' 分 ' : '') + ss + ' 秒';
-      };
-      tick();
-      R.busyTimer = window.setInterval(tick, 1000);
+      t.innerHTML = spinSvg('', 12);
     } else if (R.errorFlash) {
       t.innerHTML = '上轮报错 <span class="dim">· 详见流区</span>';
       window.setTimeout(function () {
@@ -1277,7 +1266,6 @@
       live: { lineEl: null, textNode: null, buf: '', thinkEl: null, thinkBuf: '', thinkSince: 0, thinkOpen: false, thinkTimer: null, thinkBodyNode: null },
       userSeen: false,
       busy: false, compacting: false, errorFlash: false, cmpLine: null,
-      busyTimer: null, busyStart: 0,
       workTicking: null,
       stick: true, loadingEarlier: false, hasMore: false,
       pendingClamp: [],
@@ -1297,7 +1285,6 @@
 
   function close() {
     if (R === null) return;
-    window.clearInterval(R.busyTimer);
     if (R.workTicking) workHeadStop(R.workTicking);
     if (R.live && R.live.thinkTimer !== null) window.clearInterval(R.live.thinkTimer);
     R = null;

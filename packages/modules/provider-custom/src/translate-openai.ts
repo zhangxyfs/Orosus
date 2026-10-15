@@ -112,6 +112,21 @@ export function toOpenAITools(tools: ToolSpec[]): ApiMessage[] {
   return tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
 }
 
+interface OpenAIUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_cache_hit_tokens?: number; // DeepSeek
+  prompt_cache_miss_tokens?: number; // DeepSeek（prompt_tokens 缺席时与命中数合成完整输入）
+  prompt_tokens_details?: { cached_tokens?: number }; // OpenAI
+}
+
+/** 各 OpenAI 兼容方言的缓存命中数归一到 provider 中立 usage；input 始终是完整提示词规模。 */
+function usageChunk(usage: OpenAIUsage): Chunk {
+  const cacheHit = usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens;
+  const input = usage.prompt_tokens ?? ((usage.prompt_cache_hit_tokens ?? 0) + (usage.prompt_cache_miss_tokens ?? 0));
+  return { type: "usage", input, output: usage.completion_tokens ?? 0, ...(cacheHit !== undefined ? { cacheHit } : {}) };
+}
+
 /** 单个 SSE data 块（已 JSON.parse）→ Chunk[]（模块文档决策点 2–3）。
  *  usage 两种方言都接：OpenAI 官方空 choices 尾包（include_usage），以及 GLM/DeepSeek 与最后一个
  *  finish 帧同帧到达（不带 stream_options 也发）——只认空 choices 会把后者整帧丢掉，/usage 恒 0。 */
@@ -127,11 +142,11 @@ export function mapSseChunk(state: OaiStreamState, obj: Record<string, unknown>)
           : "网关错误帧";
     return [{ type: "finish", kind: "error", errorMessage: `流错误：${msg}` }];
   }
-  const usage = obj.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+  const usage = obj.usage as OpenAIUsage | null | undefined;
   const choices = obj.choices as Array<Record<string, unknown>> | undefined;
   const choice = choices?.[0];
   if (choice === undefined) {
-    return usage ? [{ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 }] : [];
+    return usage ? [usageChunk(usage)] : [];
   }
   const delta = (choice.delta ?? {}) as Record<string, unknown>;
   const chunks: Chunk[] = [];
@@ -165,6 +180,6 @@ export function mapSseChunk(state: OaiStreamState, obj: Record<string, unknown>)
         : { type: "finish", kind: "error", errorMessage: `finish_reason: ${finish}` }, // content_filter 及未知：带内错误不静默
     );
   }
-  if (usage) chunks.push({ type: "usage", input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 });
+  if (usage) chunks.push(usageChunk(usage));
   return chunks;
 }

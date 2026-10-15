@@ -18,7 +18,7 @@ export interface PanelData {
 	model: string;
 	session: string;
 	cwd: string;
-	tokens: { input: number; output: number; postCompaction?: boolean }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出）；postCompaction = 末条压缩晚于末条 usage，input 为压缩后投影估算（v3：压缩的数字回落不得滞后到下一条消息）
+	tokens: { input: number; output: number; cacheHitPct?: number; postCompaction?: boolean }; // 末条 usage 分拆（F5 二轮⑤：↑ 输入 · ↓ 输出 · 缓存命中率）；postCompaction = 末条压缩晚于末条 usage，input 为压缩后投影估算（v3：压缩的数字回落不得滞后到下一条消息）
 	startedAt: string | undefined; // 会话首事件 ts（F5 二轮④：运行时间行数据源）
 	contextWindow: number;
 	modules: { name: string; desc: string; state: "mounted" | "loading" | "off" | "pendingConfirm"; locked?: boolean; lockedReason?: string }[]; // locked = 不可热插拔；pendingConfirm = m5 T17 待确认第三方（回车弹确认窗）（2026-09-23 用户拍板：名后灰「· 锁定」，回车 toast 锁因）；其余回车实时插拔（宿主写 enabled + reload）

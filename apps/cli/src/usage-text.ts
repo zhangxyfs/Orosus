@@ -27,28 +27,40 @@ export const shortenPath = (p: string, maxW: number): string => {
 	return "…" + sep + tail;
 };
 
-/** 末条 usage 输入/输出分拆（core jsonl.ts lastUsageTotal 同口径复制——/context 回退锚：末条即最近上下文规模）。
+interface UsageFields { input?: number; output?: number; cacheHit?: number }
+
+/** provider 已把 input 归一为完整提示词规模，因此缓存命中率 = 缓存命中输入 ÷ 全部输入（不含输出）。 */
+const usageProjection = (u: UsageFields): PanelData["tokens"] => {
+  const input = u.input ?? 0;
+  const hit = u.cacheHit;
+  const cacheHitPct = typeof hit === "number" && Number.isFinite(hit) && hit >= 0 && Number.isFinite(input) && input > 0
+    ? Math.max(0, Math.min(100, Math.round((hit / input) * 100)))
+    : undefined;
+  return { input, output: u.output ?? 0, ...(cacheHitPct !== undefined ? { cacheHitPct } : {}) };
+};
+
+/** 末条 usage 输入/输出/缓存命中率分拆（core jsonl.ts lastUsageTotal 同口径复制——末条即最近上下文规模）。
  *  F5 二轮⑤：面板 Tokens 行要 ↑ 输入 · ↓ 输出 分列，不再合并总量。
  *  v3 压缩后口径（2026-09-23 实机首例二：压缩成功但面板仍显示压缩前 73k——末条 usage 停在压缩前的请求，
  *  数字回落被滞后掩盖到下一条消息）：末条 turn/compaction 晚于末条 usage 时，input 换压缩后投影估算
  *  （deriveMessages 已应用压缩事件）并置 postCompaction 标记。 */
-export const lastUsageOf = (events: SessionEvent[]): { input: number; output: number; postCompaction?: boolean } => {
+export const lastUsageOf = (events: SessionEvent[]): PanelData["tokens"] => {
   let usageSeq = -1;
-  let result = { input: 0, output: 0 };
+  let result: PanelData["tokens"] = { input: 0, output: 0 };
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.type === "assistant/chunk") {
-      const c = e.chunk as { type?: string; input?: number; output?: number } | undefined;
-      if (c?.type === "usage") { result = { input: c.input ?? 0, output: c.output ?? 0 }; usageSeq = e.seq; break; }
+      const c = e.chunk as (UsageFields & { type?: string }) | undefined;
+      if (c?.type === "usage") { result = usageProjection(c); usageSeq = e.seq; break; }
     }
     if (e.type === "assistant/message") {
-      const u = e.usage as { input?: number; output?: number } | undefined;
-      if (u !== undefined) { result = { input: u.input ?? 0, output: u.output ?? 0 }; usageSeq = e.seq; break; }
+      const u = e.usage as UsageFields | undefined;
+      if (u !== undefined) { result = usageProjection(u); usageSeq = e.seq; break; }
     }
   }
   const lastCompaction = events.filter((e) => e.type === "turn/compaction").at(-1) as { seq?: number } | undefined;
   if (lastCompaction !== undefined && (lastCompaction.seq ?? 0) > usageSeq) {
-    return { input: estimateTokens(deriveMessages(events)), output: result.output, postCompaction: true };
+    return { ...result, input: estimateTokens(deriveMessages(events)), postCompaction: true };
   }
   return result;
 };

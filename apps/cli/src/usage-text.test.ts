@@ -36,6 +36,13 @@ describe("Tokens/上下文实时刷新（withLiveTokens——2026-10-04 拍板�
 		expect(next).not.toBe(c);
 	});
 
+	it("缓存命中率 = cacheHit/input 四舍五入为整数百分比；零输入不制造百分比", () => {
+		const hit = withLiveTokens(cache(), [ev(1, "assistant/message", { usage: { input: 11_841, output: 132, cacheHit: 11_604 } })])!;
+		expect(hit.tokens).toEqual({ input: 11_841, output: 132, cacheHitPct: 98 });
+		const empty = withLiveTokens(cache(), [ev(1, "assistant/message", { usage: { input: 0, output: 0, cacheHit: 0 } })])!;
+		expect(empty.tokens).toEqual({ input: 0, output: 0 });
+	});
+
 	it("多轮请求取末条 usage——模型第 N 次调用的数字顶掉第 N-1 次", () => {
 		const next = withLiveTokens(cache(), [
 			ev(1, "user/message"),
@@ -49,10 +56,10 @@ describe("Tokens/上下文实时刷新（withLiveTokens——2026-10-04 拍板�
 
 	it("assistant/chunk usage 方言（GLM 同帧尾包）也被认——消息不带 usage 不丢统计", () => {
 		const next = withLiveTokens(cache(), [
-			ev(1, "assistant/chunk", { chunk: { type: "usage", input: 88, output: 9 } }),
+			ev(1, "assistant/chunk", { chunk: { type: "usage", input: 88, output: 9, cacheHit: 80 } }),
 			ev(2, "assistant/message"), // 无 usage 字段（方言：只走 chunk）
 		])!;
-		expect(next.tokens).toEqual({ input: 88, output: 9 });
+		expect(next.tokens).toEqual({ input: 88, output: 9, cacheHitPct: 91 });
 	});
 
 	it("turn/compaction 晚于末条 usage：input 换压缩后投影估算并带 postCompaction 标记（输出累计不丢）", () => {

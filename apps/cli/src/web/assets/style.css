@@ -163,7 +163,7 @@ body.light .think-hint { color: var(--muted-dim); }
 .ls-sec { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted-faint); font-size: calc(10.5px * var(--fz)); letter-spacing: 0.14em; padding: 10px 8px 4px; }
 .ls-group { position: relative; color: var(--muted); font-size: calc(12px * var(--fz)); display: flex; align-items: center; gap: 6px; padding: 6px 8px 3px; cursor: pointer; border-radius: 6px; }
 .ls-group:hover { background: var(--fg-soft); }
-.ls-group .gcaret { color: var(--muted-faint); width: 12px; text-align: center; }
+.ls-group .gicon { color: var(--muted-faint); width: 14px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .ls-group .gname { font-weight: 600; }
 .ls-group .gcount { margin-left: auto; color: var(--muted-faint); font-size: calc(11px * var(--fz)); }
 /* 悬停项目行：上方浮出完整路径 tooltip（0.35s 延迟防闪） */
@@ -357,16 +357,33 @@ body.light .stream { background: #f8f8f8; }
   color: var(--fg); font: inherit; font-family: var(--font-mono); font-size: calc(12.5px * var(--fz));
   padding: 7px 10px; outline: none; transition: border-color 0.15s ease;
 }
+/* 走查修⑮④：自定义下拉箭头（原 native 箭头贴死右缘）——appearance:none + 内嵌 chevron 定位 10px */
+.fsel {
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23888f9c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+}
 .fi:focus, .fsel:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .fi::placeholder { color: var(--muted-faint); }
 .pf-key { position: relative; }
 .pf-key .eye { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--muted-dim); padding: 2px 4px; border-radius: 5px; }
 .pf-key .eye:hover { color: var(--accent); }
 .pf-models { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
-.pf-mhead, .pf-mrow { display: grid; grid-template-columns: 1.3fr 0.7fr 1.2fr 30px; gap: 8px; align-items: center; padding: 6px 10px; }
+/* 走查修⑭：模型表可增删——两列（id + 移除钮），旧四列只读骨架退役 */
+.pf-mhead, .pf-mrow { display: grid; grid-template-columns: 1fr 30px; gap: 8px; align-items: center; padding: 6px 10px; }
 .pf-mhead { color: var(--muted); font-size: calc(11.5px * var(--fz)); background: var(--surface); border-bottom: 1px solid var(--border); }
 .pf-mhead .req { color: var(--err); }
 .pf-mrow + .pf-mrow { border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+.pf-mdel { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px 5px; border-radius: 5px; font-size: calc(12.5px * var(--fz)); }
+.pf-mdel:hover { color: var(--err); background: var(--fg-soft); }
+.pf-madd { display: flex; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--border); background: var(--surface); }
+.pf-madd .fi { flex: 1; min-width: 0; }
+.pf-madd .btn { flex: 0 0 auto; }
+.pf-mnote { color: var(--muted-dim); font-size: calc(11px * var(--fz)); margin-top: 6px; }
+.pf-mnote .btn { padding: 1px 8px; font-size: calc(11px * var(--fz)); margin-left: 4px; }
 .pf-mrow .fi { padding: 5px 8px; font-size: calc(12px * var(--fz)); }
 .pf-mrow .mdel { color: var(--muted-faint); text-align: center; border-radius: 5px; }
 .pf-mrow .mdel:hover { color: var(--err); background: var(--err-soft); }
@@ -378,6 +395,7 @@ body.light .stream { background: #f8f8f8; }
 .pf-vrow { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
 .pf-vrow:hover { background: var(--fg-soft); }
 .pf-vrow + .pf-vrow { border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+.pf-vrow.hide { display: none; } /* 走查修⑮③：过滤隐藏走类——作者 display:flex 压过 UA [hidden] */
 .pf-vrow .vico, .pf-back .vico { width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: calc(12px * var(--fz)); flex: 0 0 auto; position: relative; overflow: hidden; }
 .vico .vico-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .pf-vrow .vname { color: var(--fg); font-weight: 600; }
@@ -623,6 +641,8 @@ body.light .work-head { color: var(--muted); }
 .mm2-p.sel .mm2-pname, .mm2-m.sel .mm2-mname { color: var(--accent); font-weight: 600; }
 .mm2-go { flex: 0 0 auto; color: var(--muted-faint); }
 .mm2-manage { margin-top: 2px; border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); border-radius: 0 0 7px 7px; color: var(--muted); }
+/* 走查修⑪：侧问模型菜单右栏首行「跟随…」清覆盖行——发线分隔模型表（.mm2-manage 对偶面） */
+.mm2-follow { margin-bottom: 2px; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); border-radius: 7px 7px 0 0; }
 .mm2-manage .mm2-pname { color: var(--muted); }
 .mm2-empty { padding: 14px 10px; color: var(--muted-faint); font-size: calc(12px * var(--fz)); line-height: 1.6; }
 .popup.mini-pop .pu-head, .popup.mini-pop .pu-foot { display: none; }
@@ -630,6 +650,16 @@ body.light .work-head { color: var(--muted); }
 .popup.mini-pop .pu-item { padding: 4px 10px; }
 .popup.mini-pop .pi-name { font-size: calc(12.5px * var(--fz)); }
 .popup.mini-pop .pi-desc { font-size: calc(11.5px * var(--fz)); }
+/* 走查修⑫（2026-10-14 用户口令③）：权限弹窗两行式行（仿图3——图标 + 档位名 + 短描述，✓ 右置）；
+ *  底部详释区（pu-long）在权限窗退役 */
+.popup.perm-pop { width: 264px; }
+.pu-item.perm-row { display: flex; align-items: center; gap: 9px; padding: 7px 10px; }
+.pm-ic { flex: 0 0 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.pu-item.sel .pm-ic { color: var(--accent); }
+.pm-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pm-name { color: var(--fg); font-weight: 600; font-size: calc(12.5px * var(--fz)); }
+.pm-desc { color: var(--muted-dim); font-size: calc(11px * var(--fz)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.perm-row .pu-check { flex: 0 0 14px; text-align: center; color: var(--accent); }
 
 /* ─── composer 控制行（文件+权限 | 模型/思考/发送） ─────────────── */
 .composer-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--gap-sm); padding: 8px 4px 0; }
@@ -805,6 +835,8 @@ body.light .work-head { color: var(--muted); }
 .kv dd.info { color: var(--info); }
 .kv dd .clickable { color: var(--info); cursor: pointer; border-radius: 5px; padding: 0 4px; margin: 0 -4px; transition: background 0.15s ease; }
 .kv dd .clickable:hover { background: var(--accent-soft); color: var(--accent); }
+/* 走查修⑮（2026-10-14 用户口令①）：会话名恒单行省略——右栏会话名同样式（悬停 title 给全文） */
+.kv dd #kv-session { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 
 .bar { height: 5px; border-radius: 3px; background: color-mix(in oklch, var(--border) 62%, transparent); overflow: hidden; }
 .bar > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s ease; }
@@ -991,6 +1023,10 @@ body.light .work-head { color: var(--muted); }
  * 解析，短消息气泡被挤成单字竖行（实测 margin-left 526px、bubble 48px、「你好」两字两行）；右贴本由
  * .msg-user 的 align-items:flex-end 承担（:312），该行纯属冗余兼有害。 */
 .btw-a { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: 1.75; white-space: pre-wrap; word-break: break-word; padding-left: 2px; }
+/* 走查修⑬（2026-10-14 用户口令②）：侧问落定/增量 md 块与主流同款观感——.btw-a 的 pre-wrap 只是
+ *  在飞纯文本相位的壳，继承进 .md 会把 marked 产物的换行缩进渲成字面空行（主流同款坑——
+ *  「内容渲染这么多空」走查修注记在 .agent-md .md 处）。归一 normal + 行高 1.65 对齐主流口径。 */
+.btw-a .md { white-space: normal; line-height: 1.65; }
 .btw-think { color: var(--muted-dim); font-size: calc(12px * var(--fz)); line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); margin-bottom: 6px; max-height: calc(1.7em * 10); overflow-y: auto; } /* 走查修②：思考过程块——主流思考块同款保留语义（暗色缩进条 + 限高滚动） */
 .btw-think .dim { display: block; margin-bottom: 2px; }
 .btw-chip { font-size: calc(11px * var(--fz)); padding: 1px 8px; }
@@ -1019,7 +1055,7 @@ body.light .work-head { color: var(--muted); }
 .pp-card:hover .pp-ico { color: var(--accent); }
 .btw-a .dim { color: var(--muted-dim); }
 .btw-form { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
-.btw-hint { color: var(--muted-faint); font-size: calc(10.5px * var(--fz)); }
+/* 走查修⑪：composer 的 hint 行文随芯片位次对齐主栏退役（模型口径失真 + 与 .btw-scope 全重）——hint 类一并摘除 */
 /* W6复核修 Important#2①：跨会话门控提示行（btwTabHtml locked 态——composer 已 disabled，诚实告知发问归属） */
 .btw-locked { padding: 6px 16px 0; color: var(--muted-dim); font-size: calc(11px * var(--fz)); border-top: 1px solid var(--border); }
 

@@ -54,6 +54,46 @@ describe("thinkingParamFor（MP-02：enabled 恒钉 budget_tokens——官方必
   });
 });
 
+describe("mapEvent usage 缓存命中归一", () => {
+  const st = (): SseState => ({ inputTokens: 0, currentCall: null, pendingStop: null });
+
+  it("cache_read ÷（普通输入 + cache_creation + cache_read）所需字段齐全，input 归一为完整提示词规模", () => {
+    const state = st();
+    expect(mapEvent(state, "message_start", {
+      message: { usage: { input_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 950 } },
+    })).toEqual([]);
+    expect(mapEvent(state, "message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 12 } }))
+      .toEqual([{ type: "usage", input: 1000, output: 12, cacheHit: 950 }]);
+  });
+
+  it("无缓存统计的旧响应保持原 input/output 形状，不伪造 cacheHit", () => {
+    const state = st();
+    mapEvent(state, "message_start", { message: { usage: { input_tokens: 20 } } });
+    expect(mapEvent(state, "message_delta", { delta: {}, usage: { output_tokens: 12 } }))
+      .toEqual([{ type: "usage", input: 20, output: 12 }]);
+  });
+
+  it("message_delta 携带最终完整 usage 时覆盖 message_start 的零占位（GLM 实机回归）", () => {
+    const state = st();
+    mapEvent(state, "message_start", { message: { usage: { input_tokens: 0, output_tokens: 1 } } });
+    expect(mapEvent(state, "message_delta", {
+      delta: { stop_reason: "end_turn" },
+      usage: { input_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 950, output_tokens: 12 },
+    })).toEqual([{ type: "usage", input: 1000, output: 12, cacheHit: 950 }]);
+  });
+
+  it("message_delta 只更新部分字段时保留 message_start 缓存项并重算完整 input", () => {
+    const state = st();
+    mapEvent(state, "message_start", {
+      message: { usage: { input_tokens: 20, cache_creation_input_tokens: 30, cache_read_input_tokens: 950, output_tokens: 1 } },
+    });
+    expect(mapEvent(state, "message_delta", {
+      delta: { stop_reason: "end_turn" },
+      usage: { input_tokens: 21, output_tokens: 12 },
+    })).toEqual([{ type: "usage", input: 1001, output: 12, cacheHit: 950 }]);
+  });
+});
+
 // MP-03 回归（报告条目：switch 无 error 分支、default 返 []——SSE 流内 error 事件被静默吞，
 // 服务端随即关流无 message_stop，loop 缺省补 stop，半截回复冒充完整答复）
 describe("mapEvent 流内 error 事件（MP-03：error 事件 → finish{kind:\"error\"} 带内终局）", () => {

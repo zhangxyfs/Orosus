@@ -20,6 +20,20 @@ describe("mapSseChunk usage 提取（/usage 走查：GLM 方言 usage 与 finish
       .toEqual([{ type: "usage", input: 3, output: 5 }]);
   });
 
+  it("②b DeepSeek 缓存统计：prompt_cache_hit_tokens 归一为 cacheHit（98% 的分子）", () => {
+    expect(mapSseChunk(state(), {
+      choices: [],
+      usage: { prompt_tokens: 1000, completion_tokens: 20, prompt_cache_hit_tokens: 980, prompt_cache_miss_tokens: 20 },
+    })).toEqual([{ type: "usage", input: 1000, output: 20, cacheHit: 980 }]);
+  });
+
+  it("②c OpenAI 缓存统计：prompt_tokens_details.cached_tokens 归一为 cacheHit", () => {
+    expect(mapSseChunk(state(), {
+      choices: [],
+      usage: { prompt_tokens: 1000, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 490 } },
+    })).toEqual([{ type: "usage", input: 1000, output: 20, cacheHit: 490 }]);
+  });
+
   it("③ include_usage 中间帧 usage:null + 正常 choices → 不产 usage chunk、正文不受扰", () => {
     const out = mapSseChunk(state(), {
       choices: [{ delta: { content: "hi" } }],

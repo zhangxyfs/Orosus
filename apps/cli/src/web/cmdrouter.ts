@@ -26,7 +26,7 @@
  *  /fork）→ 409 语义 {error}；两表外默认档 = 与消息同队（对齐 TUI「其余命令与消息照旧排队」
  *  main.ts:1401）；/quit 族 busy 特例 = 先 cancel 再关当前会话（TUI :1400 立即打断同款）。 */
 import { readFileSync } from "node:fs";
-import { BTW_USAGE_HINT, type BtwRound } from "../btw-cmd.ts";
+import { type BtwRound } from "../btw-cmd.ts";
 import { formatPsList, scanWithSelf } from "../ps.ts";
 import { t } from "../i18n/app.ts";
 import { SKILL_MARK_PREFIX, SKILL_MARK_TAIL } from "../i18n/protocol-strings.ts";

@@ -9,7 +9,7 @@ export type Chunk =
    *  OpenAI 系 web_search 字段·web_search_call 事件）归一上报——llm 搜索后端的「真搜过」判据（Reasonix
    *  web_search_call completed 校验同款思想）。只在请求带 webSearch 时出现；loop 与渲染面默认忽略。 */
   | { type: "server-search"; hits: { title: string; url: string }[] }
-  | { type: "usage"; input: number; output: number }
+  | { type: "usage"; input: number; output: number; /** 本次输入中命中提示词缓存的 token 数；未上报时缺席。 */ cacheHit?: number }
   | { type: "finish"; kind: "stop" | "length" | "toolUse" | "error" | "aborted"; errorMessage?: string; errorCode?: string };
 
 /** 消费 stream 的标准形态（错误带内，不许 reject——§6.4）：
