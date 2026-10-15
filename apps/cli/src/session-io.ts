@@ -86,6 +86,7 @@ export const createSession = async (deps: SessionDeps, extra: { fork?: { parentS
     }
   }
   const h = await createHarness({
+    hostUi: "tui" as const, // web-dialog 批 T2：CLI 宿主界面形态（uiTarget 过滤判据——full/line 同为终端）
     // T11（m5-resume-perf）：行模式不窗口化（零回归——echoHistory 只翻已载入行，窗口化会让 ≥5MB
     // 会话的更早历史在行模式看不到；tuiMode 是 CLI 态 core 不可知，判据落本装配层）
     ...(deps.isFullscreen() ? {} : { sessionLoad: "full" as const }),

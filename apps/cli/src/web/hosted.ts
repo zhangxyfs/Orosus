@@ -214,6 +214,7 @@ export class HostedSession {
       const resumeSid = this.init.resumeSid ?? (this.init.forkFrom === undefined ? this.init.sid : undefined);
       h = await createHarness({
         cwd: this.cwd,
+        hostUi: "gui" as const, // web-dialog 批 T2：Web 宿主界面形态（写侧/只读化身每会话同铸同值——uiTarget 过滤判据）
         builtinModules: BUILTIN_MODULES,
         ...(this.init.modules !== undefined ? { modules: this.init.modules } : {}),
         commandUi: ui,

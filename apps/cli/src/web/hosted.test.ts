@@ -16,8 +16,8 @@ import { request as httpRequest } from "node:http";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { createHarness, encodeCwd, JsonlSessionStore, SESSION_LOCK_FILE, type Harness } from "@orosus/core";
-import { fakeProviderModule } from "@orosus/testing";
+import { createHarness, encodeCwd, InMemorySessionStore, JsonlSessionStore, SESSION_LOCK_FILE, type Harness } from "@orosus/core";
+import { fakeModule, fakeProviderModule } from "@orosus/testing";
 import type { CommandUi, ModuleDefinition } from "@orosus/contracts/module";
 import type { Chunk, ProviderRequest, StreamFn } from "@orosus/contracts/provider";
 import { BUILTIN_MODULES } from "../builtins.ts";
@@ -561,4 +561,51 @@ describe("web T2：HostedSession 托管引擎 + HostPool + /web 交接", () => {
     await waitFor(() => existsSync(join(home, "web", "server.json")));
     expect(child.exitCode).toBe(null); // 长驻（server 存活——退出序列后形态切换而非进程退出）
   }, 40_000);
+});
+
+describe("web uiTarget host 注入（web-dialog 批 T2）", () => {
+  const homes: string[] = [];
+  let prevHome: string | undefined;
+  beforeEach(() => { prevHome = process.env["OROSUS_HOME"]; });
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env["OROSUS_HOME"];
+    else process.env["OROSUS_HOME"] = prevHome;
+    while (homes.length > 0) {
+      const h = homes.pop()!;
+      try { rmSync(h, { recursive: true, force: true }); } catch { /* Windows 句柄迟到则留给系统 tmp 清理 */ }
+    }
+  });
+
+  it("① HostedSession 装配 hostUi:gui——uiTarget:tui 探针不进 Web harness 模块图（写侧/只读化身每会话同铸同值）", async () => {
+    const home = mkdtempSync(join(tmpdir(), "orosus-web-t2-ui-"));
+    homes.push(home);
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    const hs = new HostedSession({
+      cwd,
+      commandUi: headlessUi,
+      modules: [
+        fakeProviderModule("fake", [[{ type: "text/delta", text: "x" }, { type: "finish", kind: "stop" }]]),
+        fakeModule("tui-probe", { uiTarget: "tui", activate() {} }),
+      ],
+      config: { userFile: join(home, "config.toml"), projectFile: join(cwd, "no.toml"), env: {}, cliOverrides: { model: "fake/x" } },
+    });
+    await hs.ready;
+    const names = hs.core!.graph().audit().map((a) => a.name);
+    expect(names).not.toContain("tui-probe");
+    expect(names).toContain("provider-fake");
+    await hs.close();
+  }, 30_000);
+
+  it("② 缺省无头语义：裸 createHarness（不传 hostUi）——uiTarget:gui 探针也不进（嵌入方与既有测试行为不变）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orosus-web-t2-bare-"));
+    homes.push(dir);
+    const h = await createHarness({
+      store: new InMemorySessionStore(), diagDir: dir, spillDir: join(dir, "spill"),
+      modules: [fakeModule("gui-probe", { uiTarget: "gui", activate() {} })],
+      config: { userFile: join(dir, "no.toml"), projectFile: join(dir, "no2.toml"), env: {}, cliOverrides: { model: "x/y" } },
+    });
+    expect(h.graph().audit().some((a) => a.name === "gui-probe")).toBe(false);
+    await h.close();
+  });
 });
