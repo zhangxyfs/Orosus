@@ -526,3 +526,79 @@ const hsIdle = async (s: Stack, sid: string): Promise<boolean> => {
   const b = (await r.json()) as { phase?: string; busy?: boolean };
   return b.phase === "idle" && b.busy === false;
 };
+
+describe("web dialog T4：WebCommandUi.dialog 桥接（设计 12.1-6/7/8 桥面）", () => {
+  it("① dialog 是自有属性：描述符拷贝后可用；owner 经 spec 注入贯通 relay（ownerTagUi 包装同机制）", () => {
+    const { ui } = makeUi();
+    expect(Object.getOwnPropertyDescriptor(ui, "dialog")?.value).toBe(ui.dialog); // 自有属性非原型方法
+    const copy = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ui)) as typeof ui;
+    expect(typeof copy.dialog).toBe("function"); // ownerTagUi 的描述符拷贝路径后不丢
+    copy.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }], owner: "mod-x" }); // ownerTagUi 机制 = {...spec, owner}
+    expect(ui.dialogRelay.snapshotFrame()).toMatchObject({ op: "open" });
+    ui.dialogRelay.closeByOwner("mod-x"); // owner 贯通到 relay record（卸载关窗判据）
+    expect(ui.dialogRelay.snapshotFrame()).toBeUndefined();
+  });
+
+  it("② viewText supersede：dialog → viewText 帧序 [open, close, viewText]；帧带真实 title 与 layout（缺省无 layout 键零回归）", () => {
+    const { ui, frames } = makeUi();
+    ui.dialog({ title: "列表窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] });
+    ui.viewText("记忆 · 索引", "# 正文", { markdown: true, layout: "full" });
+    expect(frames.map((f) => f.kind)).toEqual(["dialog", "dialog", "viewText"]); // open → close（supersede）→ viewText
+    expect(frames[1]).toMatchObject({ op: "close" });
+    expect(frames[2]).toMatchObject({ title: "记忆 · 索引", markdown: true, layout: "full" }); // 布局保留 + 真实标题（设计 §9）
+    expect(ui.dialogRelay.snapshotFrame()).toBeUndefined();
+    frames.length = 0;
+    ui.viewText("帮助", "纯文本"); // 缺省：无 layout 键（dock 行为零回归）
+    expect("layout" in frames[0]!).toBe(false);
+  });
+
+  it("③ 可答交互 supersede、notice 不动 dialog：ask 前关窗；notice 后窗仍在", async () => {
+    const { ui, frames } = makeUi();
+    ui.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] });
+    frames.length = 0;
+    const p = ui.ask("问询");
+    await tick();
+    expect(frames.map((f) => f.kind)).toEqual(["dialog", "ask"]); // close（supersede）+ ask
+    expect(frames[0]).toMatchObject({ op: "close" });
+    ui.cancel(frames[1]!.id); // 清挂起（不留在 pending 影响后续用例）
+    await tick();
+    frames.length = 0;
+    ui.dialog({ title: "窗2", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] });
+    ui.notice("提示");
+    expect(ui.dialogRelay.snapshotFrame()).toBeDefined(); // notice 只是 toast 不关窗（设计 §5.1）
+    expect(frames.some((f) => f.op === "close")).toBe(false);
+    ui.dialogRelay.closeActive();
+  });
+
+  it("④ pendingFrames：挂起交互在前、活跃 dialog 快照在后（最新 revision）；关窗后不含", async () => {
+    const { ui } = makeUi();
+    const p = ui.choose("选", ["甲", "乙"]);
+    await tick();
+    const h = ui.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] })!;
+    h.update([{ id: "l", kind: "list", interactive: true, items: ["a", "b"] }]);
+    const frames = ui.pendingFrames();
+    expect(frames[0]).toMatchObject({ kind: "choose" }); // 挂起在前
+    expect(frames[1]).toMatchObject({ kind: "dialog", op: "open", revision: 2 }); // 快照在后、revision 最新（设计 §6.1）
+    h.close();
+    expect(ui.pendingFrames()).toHaveLength(1); // 关窗后重放源不含 dialog
+    ui.cancel((frames[0] as { id: string }).id);
+    await tick();
+  });
+
+  it("⑤ 工厂 close 钩子：会话销毁走服务端关窗路径（relay 关窗 + harness 引用摘除防悬挂）", async () => {
+    const home = mkdtempSync(join(tmpdir(), "orosus-web-t5-dlg-"));
+    process.env["OROSUS_HOME"] = home;
+    try {
+      const hs = new HostedSession({ cwd: home, commandUi: webCommandUiFactory, harness: makeFakeHarness("s_dlg"), sessionsRoot: join(home, "sessions") });
+      await hs.ready;
+      await tick();
+      const ui = webCommandUiOf(hs)!;
+      ui.dialog({ title: "窗", widgets: [{ id: "l", kind: "list", interactive: true, items: ["a"] }] });
+      expect(ui.dialogRelay.snapshotFrame()).toBeDefined();
+      await hs.close();
+      expect(ui.dialogRelay.snapshotFrame()).toBeUndefined(); // close 钩子：relay 关窗（broadcast 对已断流无人收——设计 §6.3）
+    } finally {
+      try { rmSync(home, { recursive: true, force: true }); } catch { /* Windows 句柄迟到留给系统 tmp */ }
+    }
+  }, 30_000);
+});
