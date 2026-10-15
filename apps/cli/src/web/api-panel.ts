@@ -40,6 +40,7 @@ import { toggleResultText } from "../module-toggle-result.ts";
 import { envProxyUrl, readWindowsSystemProxy, detectTunProxy, proxyDisplayText } from "../proxy-env.ts";
 import { buildHookBuckets } from "../hooks-ui.ts";
 import { collectLaunchers } from "../module-launcher.ts";
+import { activeModuleNamesOf, closeGoneDialogs } from "./bridge-ui.ts"; // web-dialog 批 T6：owner 关窗接线
 import type { PanelData } from "../tui/fullapp.ts";
 import type { PeerEntry } from "../ps.ts";
 import { t } from "../i18n/app.ts";
@@ -353,6 +354,7 @@ registerRoute("POST", "/api/sessions/:sid/modules/:name/toggle", async (req, res
     }
   }
   const cascaded = closure.write.filter((n) => n !== name);
+  const modulesBefore = activeModuleNamesOf(h); // web-dialog 批 T6：reload 前拍活跃集——diff 出消失模块即关其窗
   let report: ReloadReport;
   try {
     report = await h.reload();
@@ -360,6 +362,7 @@ registerRoute("POST", "/api/sessions/:sid/modules/:name/toggle", async (req, res
     sendJson(res, 500, { ok: false, error: t("main.toggle.fail", { err: err instanceof Error ? err.message : String(err) }) });
     return;
   }
+  closeGoneDialogs(hs, modulesBefore); // TUI closeGoneModuleUi 同口径：diff 激活集（不解析 report——报表口径不一）
   if (cascaded.length > 0) {
     h.log("host.module.cascade", `${t("main.cascade.verb")}${target ? t("modtoggle.verbMount") : t("modtoggle.verbUnmount")} ${name}${t("main.cascade.colon")}${target ? t("skills.action.enable") : t("mcp.action.disable")} ${cascaded.join("、")}`, { action: target ? "mount" : "unmount", target: name, cascaded }); // S10：toast 只报目标，连带写诊断日志
   }

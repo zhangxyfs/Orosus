@@ -136,6 +136,10 @@ export class WebCommandUi implements CommandUi {
    *  卸载关窗判定。返回句柄被替换后 update/close 静默失效（TUI 排队期同语义）。 */
   dialog = (spec: DialogSpec): DialogHandle | undefined => this.relay.open(spec);
 
+  /** owner 关窗桥面（web-dialog 批 T6）：模块启停端点 diff 出消失模块后逐个调（closeGoneDialogs 的
+   *  实例出口——经 webCommandUiOf(hs) 触达，转发 relay.closeByOwner）。 */
+  closeDialogsByOwner = (owner: string): void => { this.relay.closeByOwner(owner); };
+
   constructor(deps: WebCommandUiDeps) {
     this.deps = deps;
     this.harnessRef = deps.harnessRef;
@@ -266,6 +270,24 @@ const bySession = new WeakMap<HostedSession, WebCommandUi>();
 /** 查会话的交互桥（未装配 = undefined——viewer/headless 池；路由按 noop 处理）。 */
 export function webCommandUiOf(hs: HostedSession): WebCommandUi | undefined {
   return bySession.get(hs);
+}
+
+/** 与 TUI closeGoneModuleUi 同口径（diff 激活集，不解析 reload report——TUI 注释原话：报表解析在各
+ *  调用点口径不一，直接 diff 激活集更稳）。不复用 modules-ui.ts 既有 activeModuleNames（:168）：那个绑
+ *  ModulesUiDeps（TUI 面板依赖壳，经 deps.getH() 取 harness），web 侧只有裸 Harness——语义同源、形状
+ *  不合，自写 Harness 直参版（web-dialog 批 T6，溯源 4）。 */
+export function activeModuleNamesOf(h: Harness): Set<string> {
+  return new Set(h.graph().audit().filter((a) => a.state === "active").map((a) => a.name));
+}
+
+/** 模块启停端点的关窗接线：reload 前拍活跃集、reload 后 diff——消失模块名下仍在册的窗走服务端关闭
+ *  路径（广播 close 帧，不调模块回调——模块代码已随卸载销毁，设计 §5.1/§10）。 */
+export function closeGoneDialogs(hs: HostedSession, before: Set<string>): void {
+  const ui = webCommandUiOf(hs);
+  const h = hs.core;
+  if (ui === undefined || h === undefined) return;
+  const after = activeModuleNamesOf(h);
+  for (const n of before) if (!after.has(n)) ui.closeDialogsByOwner(n);
 }
 
 /** HostPool 装配工厂（mod.ts 消费——T2 报告接口确认「T5 装配位置 = HostPool 构造参数」）：每会话
