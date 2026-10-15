@@ -180,6 +180,13 @@ export class DialogRelay {
     this.deps.broadcast({ id: r.id, kind: "dialog", op: "close" });
   }
 
+  /** 用户关窗（端点 close:true）：id 匹配当前 record 才关，未知/已关 id 幂等不动（设计 §6.4）。 */
+  closeById(id: string): boolean {
+    if (this.record?.id !== id) return false;
+    this.closeActive();
+    return true;
+  }
+
   /** owner 匹配当前 record 才关（模块启停端点 diff 出消失模块后逐个调）。 */
   closeByOwner(owner: string): void {
     if (this.record?.spec.owner === owner) this.closeActive();

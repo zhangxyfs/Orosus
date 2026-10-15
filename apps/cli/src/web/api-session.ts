@@ -11,6 +11,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, dirname, join } from "node:path";
 import { locateSessionFile, readSessionHead } from "@orosus/core";
+import type { DialogEvent } from "@orosus/contracts/module";
 import { OROSUS_VERSION } from "@orosus/contracts/version";
 import { registerRoute, readBody, sendJson } from "./server.ts";
 import { webHostPool } from "./mod.ts";
@@ -312,6 +313,84 @@ registerRoute("POST", "/api/sessions/:sid/answer", async (req, res, params) => {
   }
   const delivered = ui.answer(id, body.value);
   sendJson(res, 200, { ok: true, ...(delivered ? {} : { noop: true }) });
+});
+
+/** POST /api/sessions/:sid/dialog-event → {ok[, revision|closed|noop]}（web-dialog 批 T5，设计 §6.4）：
+ *  浏览器 → 服务端的控件窗事件上行唯一通道（下行复用 interaction SSE）。校验两层——**结构校验在端点**
+ *  （纯 body 形状，不依赖会话状态）：坏 JSON/缺 id/event 与 close 同现或都缺/type 非法/控件 id 非串/
+ *  input.text 非串/index 缺失（select）或非整数 → 400；**语义校验在 relay**（判定需读当前快照）：
+ *  未知/已关/被替换 id、目标控件消失、越界 index、类型不匹配、owner 已不活跃 → 幂等 noop，不调模块
+ *  回调（浏览器不可信也不为难迟到事件——设计 §6.4/§10）。close:true 走服务端关窗路径（广播 close 帧，
+ *  不调 onEvent）。body 上限复用 SEND_BODY_MAX_BYTES（空白登记 #5）。 */
+registerRoute("POST", "/api/sessions/:sid/dialog-event", async (req, res, params) => {
+  const sid = params["sid"] ?? "";
+  const pool = webHostPool();
+  const hs = await resolveSession(pool, sid);
+  if (hs === undefined) {
+    notFound(res);
+    return;
+  }
+  const raw = await readBody(req, SEND_BODY_MAX_BYTES); // /answer、/send 同口径
+  if (raw === "too-large") {
+    sendJson(res, 413, { ok: false, error: "body too large" });
+    return;
+  }
+  let body: { id?: unknown; event?: { type?: unknown; id?: unknown; text?: unknown; index?: unknown }; close?: unknown };
+  try {
+    body = JSON.parse(raw.toString("utf8")) as typeof body;
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid json" });
+    return;
+  }
+  const id = typeof body.id === "string" && body.id !== "" ? body.id : undefined;
+  if (id === undefined) {
+    sendJson(res, 400, { ok: false, error: "missing id" });
+    return;
+  }
+  const hasEvent = body.event !== undefined;
+  const hasClose = body.close !== undefined;
+  if (hasEvent === hasClose) { // 同现或都缺：二选一（设计 §6.4）
+    sendJson(res, 400, { ok: false, error: "event/close 二选一" });
+    return;
+  }
+  const ui = webCommandUiOf(hs);
+  if (ui === undefined) {
+    sendJson(res, 200, { ok: true, noop: true }); // 无桥 = 无窗（viewer/headless 池——/answer 同款）
+    return;
+  }
+  if (hasClose) {
+    const closed = ui.dialogRelay.closeById(id);
+    sendJson(res, 200, { ok: true, ...(closed ? {} : { noop: true }) });
+    return;
+  }
+  const ev = body.event!;
+  const type = ev.type;
+  const widgetId = typeof ev.id === "string" && ev.id !== "" ? ev.id : undefined;
+  if ((type !== "input" && type !== "select" && type !== "activate") || widgetId === undefined) {
+    sendJson(res, 400, { ok: false, error: "bad event shape" });
+    return;
+  }
+  const idx = ev.index;
+  if (type === "input") {
+    if (typeof ev.text !== "string" || idx !== undefined) { // input 不带 index（设计 §6.4）
+      sendJson(res, 400, { ok: false, error: "bad event shape" });
+      return;
+    }
+  } else if (type === "select") {
+    if (!Number.isInteger(idx)) { // select 必带整数索引（契约 DialogEvent）
+      sendJson(res, 400, { ok: false, error: "bad event shape" });
+      return;
+    }
+  } else if (idx !== undefined && !Number.isInteger(idx)) { // activate：索引可选，给了必须整数
+    sendJson(res, 400, { ok: false, error: "bad event shape" });
+    return;
+  }
+  const e: DialogEvent =
+    type === "input" ? { type, id: widgetId, text: ev.text as string }
+    : type === "select" ? { type, id: widgetId, index: idx as number }
+    : idx !== undefined ? { type, id: widgetId, index: idx as number }
+    : { type, id: widgetId };
+  sendJson(res, 200, ui.dialogRelay.event(id, e));
 });
 
 /** POST /api/sessions/:sid/cancel → {ok}（§3：h.cancel + stopAllSubagents——D11 发送键 stop 态 /
