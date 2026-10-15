@@ -79,6 +79,7 @@ export interface HarnessOptions {
   mediaDir?: string;   // m5-media F2：会话媒资库显式注入（缺省 <sid>/media）
   secretsFile?: string;                     // 缺省 ~/.orosus/secrets.env（D37）；测试传 tmp 路径密封
   commandUi?: CommandUi;                   // 命令交互 UI（D35/D38）：CLI 注 readline 版；缺省拒绝式（无头 fail-closed）
+  hostUi?: "tui" | "gui" | "headless";     // web-dialog 批设计 §11.3：宿主界面形态——uiTarget 过滤判据（缺省 headless，嵌入方/无头测试不变）；启动与 reload 传同一值
   settings?: SettingsService;              // m5 T9 口子四：设置服务实现（写面）——经内核装配成 ctx.settings（mounts "settings" 白名单校验）；缺省不装（模块读 undefined 降级）
   host?: HostInfo;                         // m5 T9 读面：宿主状态快照——ctx.host 直挂无 mounts 位（决策点 24）；缺省不装
   autoTitle?: boolean;                     // 会话自动标题（M4-2 B9 拉前）：首轮 completed 后生成 session/label。核心缺省关（保守——宿主显式开；CLI 装配 true）
@@ -588,6 +589,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
         sessionForkOut: sessionForkFn, // 会话树批 T10：ctx.session.fork 装配（mounts "session.fork" 门）
         treeOut: treeFn,               // 会话树批 T10：ctx.session.tree 装配（只读无门）
         subagent: subagentRunner,      // M4.5 子代理批：ctx.subagent 装配（mounts "subagent" 门）
+        ...(options.hostUi !== undefined ? { hostUi: options.hostUi } : {}), // uiTarget 过滤判据（缺省不传 = headless）
         ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：设置服务写面（ctx.settings 装配）
         ...(options.host !== undefined ? { host: options.host } : {}),               // m5 T9：宿主状态读面（ctx.host 直挂）
         ...(options.sessionSwitch !== undefined ? { sessionSwitch: options.sessionSwitch } : {}), // 会话树批 T10/T11：宿主切换缝
@@ -1684,6 +1686,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
           ...(options.settings !== undefined ? { settings: options.settings } : {}), // m5 T9：reload 同款透传（新图 ctx 装配不缺件）
           ...(options.host !== undefined ? { host: options.host } : {}),
           subagent: subagentRunner, // M4.5 子代理批：reload 后重激活模块的 ctx.subagent 不缺件
+          ...(options.hostUi !== undefined ? { hostUi: options.hostUi } : {}), // uiTarget 过滤判据——reload 与启动同值（防模块集合跳变，设计 §11.3）
           ...(blocked.length > 0 ? { blocked } : {}), // m5 T17：待确认桶随新图可见（重算后的 blocked）
           reuse: { bus: oldGraph.bus, tools: oldGraph.tools, overlays: oldGraph.overlays }, // overlays 跨代共享（CK-04：换下模块的 overlay 摘除对所有代 ctx 生效）
           preserved,

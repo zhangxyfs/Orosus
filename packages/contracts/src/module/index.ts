@@ -1065,6 +1065,9 @@ export interface ModuleContext<C = unknown> {
  * });
  * ```
  */
+/** 模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"；不匹配宿主不进模块图（整模块排除，非隐藏入口）。 */
+export type UiTarget = "tui" | "gui" | "all";
+
 export interface ModuleDefinition<C = unknown> {
   /** 模块名（kebab-case，全局唯一——重名降级；工具/命令名前缀也用它）。 */
   name: string;
@@ -1085,6 +1088,10 @@ export interface ModuleDefinition<C = unknown> {
    *  完整版 open(ctx) 直开窗照原拍板顺延）。labelKey = 总览行翻译键（住宿主 locales/modules 域，
    *  2026-10-07 走查加——静态声明没法 ctx.t，渲染端 t(labelKey, undefined, label) 回落声明原值）。 */
   launcher?: { label: string; command?: string; labelKey?: string };
+  /** 模块界面适用面（web-dialog 批设计 §11.1）：缺省 "all"（TUI/GUI/无头均可）；"tui"/"gui" = 仅对应宿主，
+   *  不匹配宿主不进模块图（不激活、不进 audit/catalog/设置页——用户在该宿主看不到，不是「已禁用」）。
+   *  运行期非法字符串按静态校验错误处理（validateModule），不宽容等同 all。 */
+  uiTarget?: UiTarget;
   /** 声明使用的非能力标记（如 "config.foreign" = 要 overlay 别人 section；可省）。 */
   uses?: string[];
   /** 宿主口白名单（一经声明 = 只能用列出的口；缺省 = 不限制）。可用位："settings"、"contribute:tool"、"contribute:command"、"contribute:promptSection"、"contribute:configOverlay"、"contribute:card"、"tools.reveal"、"tools.list"、"emit"、"hook:<事件名>"、"provide"、"get"。 */

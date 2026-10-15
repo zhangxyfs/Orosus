@@ -23,6 +23,10 @@ export function validateModule(def: ModuleDefinition): string[] {
   if (def.api !== MODULE_API_VERSION && def.api !== MODULE_API_VERSION - 1) {
     v.push(`api ${def.api} 超出核心兼容窗口（支持 ${MODULE_API_VERSION} 与 ${MODULE_API_VERSION - 1}）`);
   }
+  // uiTarget（web-dialog 批设计 §11.1）：非法值必须是可见的静态校验错误——静默等同 all 会让写错值的模块无声消失
+  if (def.uiTarget !== undefined && !["tui", "gui", "all"].includes(def.uiTarget)) {
+    v.push(`uiTarget "${String(def.uiTarget)}" 非法（仅 tui | gui | all）`);
+  }
   for (const key of def.provides ?? []) {
     if (CORE_RESERVED_SLOT_KEYS.includes(key as (typeof CORE_RESERVED_SLOT_KEYS)[number]) ||
         CORE_RESERVED_SLOT_PREFIXES.some((p) => key.startsWith(p))) {

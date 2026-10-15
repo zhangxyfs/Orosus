@@ -88,6 +88,7 @@ export interface LoadModulesInput {
   llm?: LlmHolder;         // 二级模型口持有器（D39/T4）：harness 装配后写入
   i18n?: import("./activate.ts").I18nHolder;  // m5-i18n T2：宿主翻译口持有器（ctx.t 装配；reload 沿用同一 holder）
   blocked?: { def: ModuleDefinition; source: string; reason: string; layer?: "user" | "project"; root?: string }[];  // m5 T17：待确认桶（layer/root 供弹窗显示来源）
+  hostUi?: "tui" | "gui" | "headless";  // web-dialog 批设计 §11.3：宿主界面形态（uiTarget 过滤判据）。缺省 headless（嵌入方与既有测试行为不变）；启动与 reload 必须传同一值，防模块集合跳变
   reuse?: { bus: EventBus; tools: ToolRegistry; overlays?: OverlayEntry[] };   // reload 传入当前实例复用（T14/T15）——缺省新建（启动路径不变）；overlays 跨代共享（CK-04）
   preserved?: Map<string, import("./activate.ts").PreservedInstance>;  // reload：Unchanged 沿用（透传 activate）
   generations?: Map<string, number>;               // reload：旧代际基线（透传 activate）
@@ -120,6 +121,17 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   }
   const disabledNames = new Set<string>(); // 禁用 ≠ 降级：仍进 records/audit（state "discovered"，--dump-modules 可见，§5.4）
   const staticFailed: { name: string; reason: string }[] = [];
+  // uiTarget 宿主适用面（web-dialog 批设计 §11.2）：过滤插在重名/静态校验之后、拓扑与激活之前——
+  // 早于此则作者写错值会静默消失、同名保护可被借道绕过；被滤模块整模块排除（不激活、不进 records，
+  // 用户在该宿主根本看不到——不是「已禁用」条目）。缺省 headless：嵌入方与既有测试行为不变。
+  const hostUi = input.hostUi ?? "headless";
+  const hostExcluded = new Set<string>();
+  const hostExcludes = (def: ModuleDefinition): boolean => {
+    const t = def.uiTarget;
+    return t !== undefined && t !== "all" && t !== hostUi;
+  };
+  // 待信任第三方走同一谓词：不适用宿主的 blocked 不经 pending-confirm 侧门显示（设计 §11.2）
+  const blocked = input.blocked?.filter((b) => !hostExcludes(b.def)) ?? [];
   const candidates: ModuleDefinition[] = [];
   for (const def of [...defs].sort((a, b) => a.name.localeCompare(b.name))) {
     if (disabled.has(def.name)) { disabledNames.add(def.name); continue; }
@@ -132,6 +144,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
       staticFailed.push({ name: def.name, reason: violations.join("；") });
       continue;
     }
+    if (hostExcludes(def)) { hostExcluded.add(def.name); continue; }
     candidates.push(def);
   }
   // staticFailed 补发射（T7）：静态校验失败原本只进 records 不落日志——弹窗数据源按事件码过滤时这类问题整个消失
@@ -185,7 +198,14 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
   for (const name of requiredDisabled.filter((n) => cliDisabledIntent(n))) {
     log.warn("kernel.config.required-absent", `required=true 的模块 "${name}" 被 CLI（--no-modules/--disable）显式禁用——护栏降级为告警`, { module: name });
   }
-  for (const b of input.blocked ?? []) {
+  // uiTarget 过滤性缺席的 required（web-dialog 批设计 §11.2 口径差拍板）：宿主过滤是平台事实非配置矛盾——
+  // 声明 gui 的 required 模块不该拖死所有无头/TUI 宿主，归 CLI 显式意图同档（warn 不阻断），不进 requiredMisconfigured 阻断集
+  for (const name of hostExcluded) {
+    if (sections.isRequired(name)) {
+      log.warn("kernel.config.required-host-filtered", `required=true 的模块 "${name}" 不适用本宿主界面（uiTarget 过滤）——护栏降级为告警`, { module: name });
+    }
+  }
+  for (const b of blocked) {
     if (sections.isRequired(b.def.name)) {
       log.warn("kernel.config.required-absent", `required=true 的模块 "${b.def.name}" 在待确认桶（pending-confirm）——确认后方生效`, { module: b.def.name });
     }
@@ -204,7 +224,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
 
   const byName = new Map(input.defs.map((d) => [d.def.name, d]));
   const entryHashByName = new Map(input.defs.map((d) => [d.def.name, d.entryHash]));
-  for (const b of input.blocked ?? []) {
+  for (const b of blocked) {
     // CK-09：重名检查只盖 input.defs——blocked 与启用模块同名时无条件覆写会把启用条目的 source 错标
     // （builtin 被改成 local）且 byName 查找结果不确定。启用侧已有同名 → 跳过覆写 + warn；
     // records 双同名条目保留（pending-confirm 可见性是有意的）
@@ -230,7 +250,7 @@ export async function loadModules(input: LoadModulesInput): Promise<ModuleGraph>
         // 「reload 起递增」（types.ts §5.5）。与激活路径同式：generations 基线 +1（harness 透传旧图全量 records 的代际）
         state: "failed" as const, failReason: f.reason, generation: (input.generations?.get(f.name) ?? 0) + 1,
       })),
-    ...(input.blocked ?? []).map((b) => ({
+    ...blocked.map((b) => ({
       def: b.def, name: b.def.name, source: "local" as const,
       // m5 T17：待确认桶——不进 failed 计数（是待决不是失败）；generation 恒 1：无实例不递增（§5.5 代际按实例计）
       state: "pending-confirm" as const, failReason: b.reason, generation: 1,
