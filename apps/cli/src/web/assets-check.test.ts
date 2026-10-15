@@ -677,6 +677,7 @@ describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态
     expect(html.slice(m!.index, m!.index + 200)).toContain('role="dialog"');
     const css = read("style.css");
     expect(css).toContain(".overlay-dlg[hidden] { display: none; }"); /* hidden 显式兜底（②补二口径） */
+    expect(css).toContain(".dlg-full { width: calc(100% - 24px); height: auto; max-height: calc(100% - 24px); }"); /* 走查修（2026-10-15）：full 宽度近全幅、高度随内容封顶——少内容不撑空壳；center80 维持 80% 固定 */
   });
 
   it("⑱ CSP 洁净（dialog.js/ui.js/app.js 源锚）：无 style= 串模板、无 on*= 内联事件、动态几何走 CSSOM", () => {

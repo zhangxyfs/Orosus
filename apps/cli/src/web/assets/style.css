@@ -1384,7 +1384,7 @@ body.light .work-head { color: var(--muted); }
   max-width: calc(100% - 24px); max-height: calc(100% - 24px);
 }
 .dlg-center80 { width: 80%; height: 80%; }
-.dlg-full { width: calc(100% - 24px); height: calc(100% - 24px); }
+.dlg-full { width: calc(100% - 24px); height: auto; max-height: calc(100% - 24px); } /* 走查修（2026-10-15 用户走查）：宽度近全幅、高度随内容封顶——两行列表不再撑满全屏空壳；center80 维持 80% 固定（设计 §8.1 语义） */
 .dlg-custom { /* mapLayout 语义映射（T7）落 CSS 变量：边距三档由 margin 变量承载（对边同给=边距间居中/单边=贴边/缺=容器居中） */
   width: var(--dlg-w, 80%); height: var(--dlg-h, 80%);
   margin-left: var(--dlg-left, auto); margin-right: var(--dlg-right, auto);
