@@ -499,6 +499,8 @@
   function mdHtml(text) {
     try {
       if (typeof globalThis.marked !== 'undefined' && typeof globalThis.DOMPurify !== 'undefined') {
+        /* 链接加固钩子由 render.js 装载期统一注册（全局 DOMPurify 单例）——此处 sanitize 的产物里
+         * 外链已补 target=_blank、相对引用（笔记 .md 等）已剥 href 标 md-ref（走查修 2026-10-15）。 */
         return globalThis.DOMPurify.sanitize(globalThis.marked.parse(String(text), { breaks: true, gfm: true }));
       }
     } catch { /* 兜底纯文本 */ }

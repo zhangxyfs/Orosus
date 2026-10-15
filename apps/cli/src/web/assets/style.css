@@ -1138,6 +1138,7 @@ body.light .work-head { color: var(--muted); }
 .md table { border-collapse: collapse; margin: 0.4em 0 0.7em; font-size: 0.95em; width: 100%; table-layout: fixed; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
 .md a { color: var(--accent); }
+.md a.md-ref { text-decoration-style: dashed; cursor: pointer; } /* 走查修（2026-10-15）：内容内引用（钩子剥 href）——虚线下划线示意可点，点击由 app.js 委托出提示 */
 .md hr { border: none; border-top: 1px solid var(--border); margin: 0.8em 0; }
 .md img { max-width: 100%; border-radius: 8px; }
 

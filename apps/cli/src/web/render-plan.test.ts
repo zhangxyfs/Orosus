@@ -18,6 +18,7 @@ interface RenderApi {
   lineCountOf: Fn; diffRowsOf: Fn; changeStatsOf: Fn; resultChip: Fn;
   skillMarkOf: Fn; textOf: Fn; reasoningOf: Fn; imagesOf: Fn; fmtK: Fn; fmtDur: Fn;
   fmtTurnTime: Fn; fmtWorkDur: Fn; esc: Fn;
+  mdLinkHook: Fn; ensureMdLinkHook: Fn; /* 走查修（2026-10-15）：链接加固钩子本体与注册口 */
 }
 const R = (globalThis as { OrosusRender?: RenderApi }).OrosusRender!;
 interface UiApi {
@@ -505,5 +506,80 @@ ${phantom}
 ${phantom}`)).toEqual(["34a85d8e", "2f2d7d6a"]);
     expect(R.spawnIdsIn("后台已入册（2 个，跑完自动送回）：ab528ac7、d87f5b5a。期间去做别的")).toEqual(["ab528ac7", "d87f5b5a"]);
     expect(R.spawnIdsIn("派活失败：占位符误用")).toEqual([]);
+  });
+});
+
+/* ── 走查修（2026-10-15 用户报障）：md 链接加固钩子——相对引用防导航劫持 ──
+ *  病灶：MEMORY.md 索引类 viewText 内容里 [标题](笔记.md) 被渲染成真 <a href>，点击后
+ *  浏览器原地导航到不存在的路由（URL 未带 token）→ 整页 {"ok":false,"error":"unauthorized"}。
+ *  钩子三分支：外链加固新开标签；#锚点保留（文内滚动）；其余相对引用剥 href 标 md-ref（点击由
+ *  app.js 委托提示）。钩子挂全局 DOMPurify 单例——ui.js mdHtml（viewText 大窗/dock 弹窗）同享。 */
+interface FakeNode {
+  tagName: string;
+  attrs: Record<string, string>;
+  getAttribute(k: string): string | null;
+  setAttribute(k: string, v: string): void;
+  removeAttribute(k: string): void;
+}
+function fakeNode(tagName: string, attrs: Record<string, string>): FakeNode {
+  const store: Record<string, string> = { ...attrs };
+  return {
+    tagName,
+    attrs: store,
+    getAttribute: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k]! : null),
+    setAttribute: (k, v) => { store[k] = v; },
+    removeAttribute: (k) => { delete store[k]; },
+  };
+}
+describe("走查修（2026-10-15）：md 链接加固钩子三分支 + 幂等注册", () => {
+  it("① 相对引用（笔记 .md）：剥 href 防导航劫持，data-ref 存原文、class 追加 md-ref", () => {
+    const n = fakeNode("A", { href: "user-declared-path-untouchable.md" });
+    (R.mdLinkHook as Fn)(n);
+    expect(n.attrs.href).toBeUndefined();
+    expect(n.attrs["data-ref"]).toBe("user-declared-path-untouchable.md");
+    expect(n.attrs["class"]).toBe("md-ref");
+    const withCls = fakeNode("A", { href: "./sub/部署要点.md", class: "x" });
+    (R.mdLinkHook as Fn)(withCls);
+    expect(withCls.attrs["class"]).toBe("x md-ref");
+    expect(withCls.attrs["data-ref"]).toBe("./sub/部署要点.md");
+  });
+
+  it("② 外链（http/https/协议相对）：rel=noopener noreferrer + target=_blank，href 原样保留", () => {
+    const n = fakeNode("A", { href: "https://example.com/x?y=1" });
+    (R.mdLinkHook as Fn)(n);
+    expect(n.attrs.href).toBe("https://example.com/x?y=1");
+    expect(n.attrs.rel).toBe("noopener noreferrer");
+    expect(n.attrs.target).toBe("_blank");
+    expect(n.attrs["class"]).toBeUndefined();
+    const proto = fakeNode("A", { href: "//cdn.example.com/a.js" });
+    (R.mdLinkHook as Fn)(proto);
+    expect(proto.attrs.target).toBe("_blank");
+  });
+
+  it("③ #锚点/无 href 的 <a> 原样不动（文内滚动无路由语义）；img 剥 srcset 不动 src；非锚标签不碰", () => {
+    const anchor = fakeNode("A", { href: "#sec-1" });
+    (R.mdLinkHook as Fn)(anchor);
+    expect(anchor.attrs).toEqual({ href: "#sec-1" });
+    const bare = fakeNode("A", {});
+    (R.mdLinkHook as Fn)(bare);
+    expect(Object.keys(bare.attrs)).toHaveLength(0);
+    const img = fakeNode("IMG", { src: "/api/media?path=a.png", srcset: "a 1x, b 2x" });
+    (R.mdLinkHook as Fn)(img);
+    expect(img.attrs.srcset).toBeUndefined();
+    expect(img.attrs.src).toBe("/api/media?path=a.png");
+    const span = fakeNode("SPAN", { class: "y" });
+    (R.mdLinkHook as Fn)(span);
+    expect(span.attrs["class"]).toBe("y");
+  });
+
+  it("④ ensureMdLinkHook：afterSanitizeAttributes 挂 mdLinkHook 本体（同引用）且幂等；无 addHook 面静默跳过", () => {
+    const registered: Array<[string, Fn]> = [];
+    const fakeDp = { addHook: (ev: string, fn: Fn) => { registered.push([ev, fn]); } };
+    (R.ensureMdLinkHook as Fn)(fakeDp);
+    (R.ensureMdLinkHook as Fn)(fakeDp);
+    expect(registered).toHaveLength(1);
+    expect(registered[0]![0]).toBe("afterSanitizeAttributes");
+    expect(registered[0]![1]).toBe(R.mdLinkHook);
+    expect((R.ensureMdLinkHook as Fn)(null)).toBeUndefined();
   });
 });

@@ -107,6 +107,14 @@ function $(id) { return document.getElementById(id); }
     });
   }
 
+  /* 走查修（2026-10-15 用户报障「索引里头点了报错」）：相对引用点击提示——MEMORY.md 索引类 viewText
+   * 里的 [标题](笔记.md) 经 render.js 链接加固钩子剥 href 标 md-ref（无 HTTP 路由，点了会整页 unauthorized）。
+   * document 级委托收口——流区/dock 浮层/大窗弹层三面的 a.md-ref 一处通用。 */
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a.md-ref') : null;
+    if (a) toast('「' + (a.getAttribute('data-ref') || '') + '」是内容内引用（非网页链接）——请在对应列表中打开', 3200);
+  });
+
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
   var BTW_PREFIX_RE = /^\/btw(\s|$)/i; /* /btw 前缀判定唯一口径（W6复核修 Minor#1）：截获存文（handleSendResponse）与失败清存（handleSendError）共用——ignoreCase 交集，杜绝大小写漏捕/误捕 */
   function sendCore(text, imageIds, promptId) {

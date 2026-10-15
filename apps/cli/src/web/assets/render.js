@@ -335,26 +335,42 @@
     var tok = (typeof globalThis.OrosusAPI !== 'undefined' && globalThis.OrosusAPI.getToken) ? globalThis.OrosusAPI.getToken() : '';
     return '/api/media?path=' + encodeURIComponent(path) + (tok ? '&token=' + encodeURIComponent(tok) : '');
   }
+  /* md 链接加固钩子（外链加固起家于调研 §5-6 P3；2026-10-15 用户报障补相对引用分支——MEMORY.md
+   * 索引类 viewText 里的 [标题](笔记.md) 被渲染成真 <a href>，点击后原地导航到无 token 的不存在的
+   * 路由 → 整页 unauthorized）。三分支：
+   *   外链（http(s)/协议相对）→ rel=noopener noreferrer + target=_blank（原地导航会整页离开 GUI）；
+   *   #锚点 → 原样保留（文内滚动定位，无路由语义）；
+   *   其余相对引用 → 剥 href 防导航，标 md-ref + data-ref（app.js 委托点击出提示）。
+   * img 剥 srcset（不自家的响应式源）。挂全局 DOMPurify 单例——ui.js mdHtml 的 sanitize 同享此钩。 */
   var mdPurifyHooked = false;
+  function mdLinkHook(node) {
+    if (typeof node.tagName !== 'string') return;
+    if (node.tagName === 'A') {
+      var h = node.getAttribute('href');
+      if (!h) return;
+      if (/^(https?:)?\/\//i.test(h)) {
+        node.setAttribute('rel', 'noopener noreferrer');
+        node.setAttribute('target', '_blank');
+      } else if (h.charAt(0) !== '#') {
+        node.removeAttribute('href');
+        node.setAttribute('data-ref', h);
+        node.setAttribute('class', ((node.getAttribute('class') || '') + ' md-ref').trim());
+      }
+    } else if (node.tagName === 'IMG') {
+      node.removeAttribute('srcset');
+    }
+  }
+  function ensureMdLinkHook(dp) {
+    if (!dp || typeof dp.addHook !== 'function' || mdPurifyHooked) return;
+    mdPurifyHooked = true;
+    dp.addHook('afterSanitizeAttributes', mdLinkHook);
+  }
+  ensureMdLinkHook(globalThis.DOMPurify); /* 装载期即注册——不等 mdRender 首调（render.js 先于 ui.js 装载，viewText 可能更早到） */
   function mdRender(text) {
     try {
       if (typeof globalThis.marked !== 'undefined' && typeof globalThis.DOMPurify !== 'undefined') {
-        var DP = globalThis.DOMPurify;
-        /* 外链加固（调研 §5-6 P3——cc-haha/opencode 同款，一次性钩子）：外链补 rel 且新开标签
-         * （原地导航会整页离开 GUI）；img 剥 srcset（不自家的响应式源）。 */
-        if (!mdPurifyHooked && typeof DP.addHook === 'function') {
-          mdPurifyHooked = true;
-          DP.addHook('afterSanitizeAttributes', function (node) {
-            if (typeof node.tagName !== 'string') return;
-            if (node.tagName === 'A' && node.getAttribute('href')) {
-              node.setAttribute('rel', 'noopener noreferrer');
-              node.setAttribute('target', '_blank');
-            } else if (node.tagName === 'IMG') {
-              node.removeAttribute('srcset');
-            }
-          });
-        }
-        return DP.sanitize(globalThis.marked.parse(text, { breaks: true, gfm: true }));
+        ensureMdLinkHook(globalThis.DOMPurify); /* node import 态装载期无 DP——首调补挂 */
+        return globalThis.DOMPurify.sanitize(globalThis.marked.parse(text, { breaks: true, gfm: true }));
       }
     } catch { /* 渲染失败兜底纯文本 */ }
     return '<p>' + esc(text).replace(/\n/g, '<br>') + '</p>';
@@ -1542,6 +1558,8 @@
     fmtTurnTime: fmtTurnTime,
     esc: esc,
     mdRender: mdRender, /* 走查修⑤：btw 回答落定态复用同款 markdown 渲染（marked+DOMPurify，外链加固钩子在内） */
+    mdLinkHook: mdLinkHook, /* 走查修（2026-10-15）：链接加固钩子本体（外链新开/#锚点保留/相对引用剥 href——node 直测） */
+    ensureMdLinkHook: ensureMdLinkHook, /* 同上：钩子注册口（装载期调用 + mdRender 首调兜底，幂等） */
     bindTranscriptActions: bindTranscriptActions, /* 走查修③：分栏回放的点击委派（展开/复制） */
     /* DOM 应用层 */
     open: open,
