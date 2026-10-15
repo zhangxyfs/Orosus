@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { browserBody, browserEntries, relativeTime, renderBrowserList } from "./browser.ts";
+import { browserBody, browserEntries, browserPage, relativeTime, renderBrowserList, MEMORY_PAGE_SIZE } from "./browser.ts";
 import { listNotes, writeNote } from "./memstore.ts";
 
 let dir: string;
@@ -86,5 +86,54 @@ describe("renderBrowserList 与 browserBody", () => {
     expect(browserBody(dir, entries[1]!.file)).toContain("content-here");
     expect(browserBody(dir, "MEMORY.md")).toContain("# Memory Index");
     expect(browserBody(dir, "../evil.md")).toBeUndefined();
+  });
+});
+
+describe("browserEntries 索引驱动快路径（2026-10-15 用户走查「列表卡」）", () => {
+  it("标题/简介取自索引行（不读笔记正文）：手改 frontmatter name 后索引行标题滞后——「索引即缓存」；行标题与索引一致", () => {
+    writeNote(dir, "Original Title", "original summary", "b");
+    // 事后手改笔记 frontmatter（不经模块写入侧——索引行保持旧标题）
+    const files = listNotes(dir);
+    const noteFile = join(dir, files[0]!.file);
+    writeFileSync(noteFile, "---\nname: Hand Edited\ndescription: new\n---\n\nbody\n");
+    const entries = browserEntries(dir);
+    expect(entries[1]?.title).toBe("Original Title");   // 来自索引行（快路径零正文读的实证：内容标题 Hand Edited 不上列表）
+    expect(entries[1]?.summary).toBe("original summary");
+  });
+
+  it("索引引用指向不存在的文件 → 跳过不炸", () => {
+    writeNote(dir, "Alive", "s", "b");
+    writeFileSync(join(dir, "MEMORY.md"), `# Memory Index\n\n- [Ghost](ghost.md) — g\n- [Alive](${listNotes(dir)[0]!.file}) — s\n`);
+    const titles = browserEntries(dir).map((e) => e.title);
+    expect(titles).not.toContain("Ghost");
+    expect(titles).toContain("Alive");
+  });
+});
+
+describe("browserPage 分页（2026-10-15 用户走查「能不能分页加载」）", () => {
+  const mk = (n: number): Parameters<typeof renderBrowserList>[0] =>
+    Array.from({ length: n }, (_, i) => ({ file: `n${i}.md`, title: `笔记${i}`, summary: "", updatedAtMs: NOW - i * 1000, isIndex: false }));
+  it(`单页（≤${MEMORY_PAGE_SIZE} 条）无哨兵；首页仅尾行「下一页」`, () => {
+    const one = browserPage(mk(MEMORY_PAGE_SIZE), 1, NOW);
+    expect(one.lines).toHaveLength(MEMORY_PAGE_SIZE);   // 恰一页：无哨兵
+    expect(one.hasPrev).toBe(false);
+    expect(one.hasNext).toBe(false);
+    const two = browserPage(mk(MEMORY_PAGE_SIZE + 1), 1, NOW);
+    expect(two.lines).toHaveLength(MEMORY_PAGE_SIZE + 1);   // 50 实行 + 尾哨兵
+    expect(two.hasNext).toBe(true);
+    expect(two.lines.at(-1)).toContain("下一页");
+    expect(two.lines.at(-1)).toContain("还有 1 条");
+  });
+  it("中间页双哨兵（首行上一页/尾行下一页）；越界页码钳回；实行数 = 页容量", () => {
+    const pg2 = browserPage(mk(120), 2, NOW);
+    expect(pg2.pageCount).toBe(3);
+    expect(pg2.lines[0]).toContain("上一页");
+    expect(pg2.lines.at(-1)).toContain("下一页");
+    expect(pg2.lines).toHaveLength(MEMORY_PAGE_SIZE + 2);   // 50 实行 + 双哨兵
+    expect(browserPage(mk(120), 99, NOW).page).toBe(3);   // 越界钳回末页
+    expect(browserPage(mk(120), 0, NOW).page).toBe(1);     // 钳回首页
+    const last = browserPage(mk(120), 3, NOW);
+    expect(last.lines).toHaveLength(20 + 1);               // 末页 20 实行 + 仅首哨兵
+    expect(last.hasNext).toBe(false);
   });
 });

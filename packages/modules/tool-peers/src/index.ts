@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineModule } from "@orosus/contracts/module";
 import { z } from "zod";
-import { browserBody, browserEntries, renderBrowserList } from "./browser.ts";
+import { browserBody, browserEntries, browserPage, renderBrowserList, MEMORY_PAGE_SIZE } from "./browser.ts";
 import { PeersEnv } from "./env.ts";
 import { truncateIndex } from "./memstore.ts";
 import { createMemoryTools, createPeersTools } from "./tools.ts";
@@ -77,18 +77,35 @@ export default defineModule({
         await ui.notice(msg);
         return "";
       }
-      const lines = renderBrowserList(entries, Date.now(), t);
       if (ui.dialog === undefined) {
+        // 行模式回落：无交互面翻不了页——仍整表只读列出（分页属控件窗面）
+        const lines = renderBrowserList(entries, Date.now(), t);
         ui.viewText?.(t("peers.win.list.fallback", undefined, "记忆 · 本项目（只读列表——全屏模式可 Enter 打开）"), lines.join("\n"), { layout: "full" });
         return "";
       }
+      // 分页（2026-10-15 用户走查）：page 为命令级活状态——onEvent 闭包现读，翻页经 handle.update
+      // 整窗换页（reset:selection 滚回顶 = 翻页语义）；哨兵行占列表首/尾，激活映射按 hasPrev 偏移。
+      let page = 1;
+      const widgetsOf = () => {
+        const pg = browserPage(entries, page, Date.now(), t);
+        return [
+          { id: "list", kind: "list" as const, interactive: true, items: pg.lines },
+          ...(pg.pageCount > 1 ? [{
+            id: "pginfo", kind: "text" as const, style: "muted" as const,
+            text: t("peers.win.page.info", { page: pg.page, pageCount: pg.pageCount, total: entries.length }, `第 ${pg.page}/${pg.pageCount} 页 · 共 ${entries.length} 条`),
+          }] : []),
+        ];
+      };
       const handle = ui.dialog({
         title: t("peers.win.title", undefined, "记忆 · 本项目 —— ↑↓ 选择 · Enter 打开 · Esc 关闭"),
         layout: "full",
-        widgets: [{ id: "list", kind: "list", interactive: true, items: lines }],
+        widgets: widgetsOf(),
         onEvent: (e) => {
           if (e.type === "activate" && e.id === "list" && e.index !== undefined) {
-            const entry = entries[e.index];
+            const pg = browserPage(entries, page, Date.now(), t);
+            if (pg.hasPrev && e.index === 0) { page = pg.page - 1; handle?.update(widgetsOf()); return undefined; }
+            if (pg.hasNext && e.index === pg.lines.length - 1) { page = pg.page + 1; handle?.update(widgetsOf()); return undefined; }
+            const entry = entries[(pg.page - 1) * MEMORY_PAGE_SIZE + (e.index - (pg.hasPrev ? 1 : 0))];
             if (entry === undefined) return undefined;
             const body = browserBody(dir, entry.file);
             handle?.close();   // 正文窗走 viewText FIFO 顶上

@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { listNotes } from "./memstore.ts";
+import { noteMetaOfText } from "./memstore.ts";
 
 /** 记忆浏览窗数据件（m5-peers T6c，v3 走查二轮）：纯函数——列表序/标题/相对时间/正文读取。
  *  窗交互在 index.ts（命令接线：dialog 控件窗列表 + viewText 正文——PopupKey 无选中态，执行期核实走
@@ -11,15 +11,17 @@ export type BrowserT = (key: string, params?: Record<string, string | number>, f
 
 export interface BrowserEntry { file: string; title: string; summary: string; updatedAtMs: number; isIndex: boolean }
 
-/** 列表项：第一项恒 MEMORY.md 本体；其后按索引引用顺序；标题三级（frontmatter name → 首个 # → 文件名兜底——
- *  listNotes 内建）。孤儿笔记（有文件无索引行——手工文件/写盘中途）按 mtime 补尾不丢内容。
- *  summary = frontmatter description（2026-10-07 用户走查验形：行内标题后展示简介）。 */
+/** 列表项：第一项恒 MEMORY.md 本体；其后按索引引用顺序。孤儿笔记（有文件无索引行——手工文件/
+ *  写盘中途）按 mtime 补尾不丢内容。
+ *  性能口径（2026-10-15 用户走查「加载记忆列表卡」）：标题/简介取自**索引行本身**（模块写入侧
+ *  buildIndex 与笔记同源维护），mtime 走 statSync——开窗**不读任何笔记正文**；正文延迟到 Enter 打开
+ *  时单篇读（browserBody 本就如此）。代价：手工改笔记 frontmatter 后索引行标题滞后到下次写/重建
+ *  （「索引即缓存」——孤儿行仍现读正文取题，不丢）。此前实现经 listNotes 逐篇 readFileSync，
+ *  百篇级在 Windows 上开窗显著卡顿。 */
 export function browserEntries(memoryDir: string): BrowserEntry[] {
   const indexFile = join(memoryDir, "MEMORY.md");
   if (!existsSync(indexFile)) return [];
   const indexText = readFileSync(indexFile, "utf8");
-  const notes = listNotes(memoryDir);
-  const metaByFile = new Map(notes.map(n => [n.file, n]));
   const entries: BrowserEntry[] = [{
     file: "MEMORY.md",
     title: "共享记忆索引（MEMORY.md）",
@@ -28,18 +30,49 @@ export function browserEntries(memoryDir: string): BrowserEntry[] {
     isIndex: true,
   }];
   const seen = new Set<string>(["MEMORY.md"]);
-  for (const m of indexText.matchAll(/- \[([^\]]*)\]\(([^)]+)\)/g)) {
+  for (const m of indexText.matchAll(/- \[([^\]]*)\]\(([^)]+)\)(?: — (.*))?/g)) {
     const file = m[2] ?? "";
     if (seen.has(file)) continue;
-    const meta = metaByFile.get(file);
-    if (meta === undefined) continue;   // 引用指向不存在的文件 → 跳过
+    let mtime: number;
+    try { mtime = statSync(join(memoryDir, file)).mtimeMs; } catch { continue; } // 引用指向不存在的文件 → 跳过
     seen.add(file);
-    entries.push({ file, title: meta.title, summary: meta.summary, updatedAtMs: meta.updatedAtMs, isIndex: false });
+    entries.push({ file, title: m[1] ?? "", summary: m[3] ?? "", updatedAtMs: mtime, isIndex: false });
   }
-  for (const n of notes) {
-    if (!seen.has(n.file)) entries.push({ file: n.file, title: n.title, summary: n.summary, updatedAtMs: n.updatedAtMs, isIndex: false });
+  // 孤儿扫描：名单级对比（readdir，零正文读）——仅孤儿行现读正文取题（noteMetaOfText 与写入侧同源）
+  let names: string[] = [];
+  try { names = readdirSync(memoryDir); } catch { names = []; }
+  const orphans = names
+    .filter(n => n.endsWith(".md") && n !== "MEMORY.md" && !seen.has(n))
+    .map(n => {
+      const file = join(memoryDir, n);
+      try { return noteMetaOfText(n, readFileSync(file, "utf8"), statSync(file).mtimeMs); } catch { return undefined; }
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== undefined)
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs || (a.file < b.file ? -1 : 1));
+  for (const o of orphans) {
+    entries.push({ file: o.file, title: o.title, summary: o.summary, updatedAtMs: o.updatedAtMs, isIndex: false });
   }
   return entries;
+}
+
+/** 分页（2026-10-15 用户走查「能不能分页加载」）：单页行数自创值 50（TUI 视口 ~30-40 行的 1.5 倍
+ *  上下，翻页不碎；Web 帧体量恒定）。首页无上一页哨兵；有后继时尾行加「下一页」哨兵——
+ *  Enter 哨兵 → handle.update 整窗换页（reset:selection 滚回顶 = 翻页语义天然契合）。 */
+export const MEMORY_PAGE_SIZE = 50;
+
+export interface BrowserPage { lines: string[]; page: number; pageCount: number; hasPrev: boolean; hasNext: boolean }
+
+export function browserPage(entries: BrowserEntry[], page: number, now: number, tr?: BrowserT): BrowserPage {
+  const t = tr ?? ((_k, _p, f) => f ?? _k);
+  const pageCount = Math.max(1, Math.ceil(entries.length / MEMORY_PAGE_SIZE));
+  const p = Math.min(Math.max(1, page), pageCount); // 越界钳回（哨兵竞态下双保险）
+  const slice = entries.slice((p - 1) * MEMORY_PAGE_SIZE, p * MEMORY_PAGE_SIZE);
+  const lines = renderBrowserList(slice, now, tr);
+  const hasPrev = p > 1;
+  const hasNext = p < pageCount;
+  if (hasPrev) lines.unshift(t("peers.win.page.prev", undefined, "‹ 上一页"));
+  if (hasNext) lines.push(t("peers.win.page.next", { rest: entries.length - p * MEMORY_PAGE_SIZE }, `下一页 ›（还有 ${entries.length - p * MEMORY_PAGE_SIZE} 条）`));
+  return { lines, page: p, pageCount, hasPrev, hasNext };
 }
 
 /** mtime 相对时间：/sessions relativeTime 同款口径（刚刚/N 分钟/N 小时/N 天）；超 30 天落日期

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import mod, { configSchema } from "./index.ts";
+import { writeNote } from "./memstore.ts";
 import { memoryBucketKey } from "./roots.ts";
 
 describe("tool-peers module", () => {
@@ -149,5 +150,64 @@ describe("T6 门控矩阵与索引段", () => {
     expect(await handler("", { notice: (t: string) => { notices.push(t); } })).toBe("");
     expect(notices[0]).toContain("尚未定位到当前项目会话");
     expect(await handler("", {})).toContain("尚未定位到当前项目会话");   // 无头回退：返回串承载
+  });
+});
+
+describe("记忆浏览窗分页（2026-10-15 用户走查「能不能分页加载」）", () => {
+  let root: string;
+  let memBase: string;
+  let sessionsRoot: string;
+  const bootPayload = { session_id: "s1", transcript_path: "", cwd: "" };
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "peers-page-"));
+    memBase = join(root, "mem");
+    sessionsRoot = join(root, "sessions");
+    mkdirSync(join(sessionsRoot, "D--proj-x", "s1", "agents"), { recursive: true });
+    writeFileSync(join(sessionsRoot, "D--proj-x", "s1", "agents", "session.jsonl"), "{}\n");
+    bootPayload.transcript_path = join(sessionsRoot, "D--proj-x", "s1", "agents", "session.jsonl");
+    bootPayload.cwd = root;
+  });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("56 条 → 2 页：首页 50 实 + 尾「下一页」哨兵 + pginfo；哨兵 Enter → update 翻页（首「‹ 上一页」）；页内偏移映射开正确笔记", async () => {
+    const dir = join(memBase, memoryBucketKey(bootPayload.cwd), "memory");
+    mkdirSync(dir, { recursive: true });
+    for (let i = 1; i <= 55; i++) writeNote(dir, `分页笔记 ${String(i).padStart(2, "0")}`, "s", `body-${i}`);
+    const h = activateWith({ ...FULL_ON, memoryBase: memBase, sessionsRoot });
+    (h.listeners.get("session/start") as (p: unknown) => void)(bootPayload);
+
+    const opened: { widgets: { id: string; kind: string; interactive?: boolean; items?: string[]; text?: string }[]; onEvent?: (e: unknown) => unknown }[] = [];
+    const updates: { widgets: { id: string; kind: string; items?: string[]; text?: string }[] }[] = [];
+    const views: { title: string; text: string }[] = [];
+    const handle = { update: (widgets: unknown) => { updates.push(widgets as never); }, close: () => {} };
+    const ui = {
+      dialog: (spec: { widgets: unknown[]; onEvent?: (e: unknown) => unknown }) => { opened.push(spec as never); return handle; },
+      viewText: (title: string, text: string) => { views.push({ title, text }); },
+      notice: async () => {},
+    } as never;   // 命令 handler 的 ui 参数（对话/查看口 mock）
+    await h.commandHandlers.get("tool-peers__memory")!("", ui);
+
+    // 首页：50 实行 + 尾哨兵 = 51 行；pginfo 页码件在场
+    const first = opened[0]!;
+    const list1 = first.widgets.find((w) => w.id === "list")!;
+    expect(list1.items).toHaveLength(51);
+    expect(list1.items!.at(-1)).toContain("下一页");
+    expect(first.widgets.find((w) => w.id === "pginfo")!.text).toContain("第 1/2 页");
+    expect(first.widgets.find((w) => w.id === "pginfo")!.text).toContain("共 56 条");
+
+    // Enter 尾哨兵（index 50）→ update 整窗换页：第 2 页 = 首哨兵 + 6 实行 + pginfo 2/2
+    (first.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 50 });
+    const page2widgets = updates[0] as { id: string; items?: string[]; text?: string }[];   // update 参数 = widgets 数组本体
+    const page2 = page2widgets.find((w) => w.id === "list")!;
+    expect(page2.items).toHaveLength(7); // ‹上一页 + 6 实行（无下一页哨兵）
+    expect(page2.items![0]).toContain("上一页");
+    expect(page2widgets.find((w) => w.id === "pginfo")!.text).toContain("第 2/2 页");
+
+    // 页内偏移：第 2 页 index 1 = 首个实行（hasPrev 偏移 1）→ 开对应笔记（标题对行文）
+    (first.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 1 });
+    expect(views).toHaveLength(1);
+    const rowTitle = page2.items![1]!.trim().split(" · ")[0]!; // 行文「  标题 · 简介 · 时间」
+    expect(views[0]!.title).toBe(rowTitle);
+    expect(views[0]!.text).toMatch(/body-\d+/);
   });
 });

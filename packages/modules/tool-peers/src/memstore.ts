@@ -61,19 +61,24 @@ export function listNotes(dir: string): NoteMeta[] {
     if (!name.endsWith(".md") || name === "MEMORY.md") continue;
     const file = join(dir, name);
     try {
-      const text = readFileSync(file, "utf8");
-      const fmName = frontmatterField(text, "name");
-      let title = fmName ?? "";
-      if (title === "") {
-        const h = text.split("\n").find(l => l.startsWith("# "));
-        title = h !== undefined ? h.slice(2).trim() : name.replace(/\.md$/, "");
-      }
-      notes.push({ file: name, title, summary: frontmatterField(text, "description") ?? "", updatedAtMs: statSync(file).mtimeMs, sourceTitle: frontmatterField(text, "source_name") });
+      notes.push(noteMetaOfText(name, readFileSync(file, "utf8"), statSync(file).mtimeMs));
     } catch { /* 坏文件跳行 */ }
   }
   // mtime 新到旧；同毫秒 tie 按文件名稳定序（防同批写 flaky）
   notes.sort((a, b) => b.updatedAtMs - a.updatedAtMs || (a.file < b.file ? -1 : 1));
   return notes;
+}
+
+/** 单篇笔记元数据（纯函数——listNotes 与浏览窗孤儿行共用一源）：标题三级
+ *  frontmatter name → 首个 # → 文件名兜底。 */
+export function noteMetaOfText(name: string, text: string, updatedAtMs: number): NoteMeta {
+  const fmName = frontmatterField(text, "name");
+  let title = fmName ?? "";
+  if (title === "") {
+    const h = text.split("\n").find(l => l.startsWith("# "));
+    title = h !== undefined ? h.slice(2).trim() : name.replace(/\.md$/, "");
+  }
+  return { file: name, title, summary: frontmatterField(text, "description") ?? "", updatedAtMs, sourceTitle: frontmatterField(text, "source_name") };
 }
 
 export function buildIndex(notes: NoteMeta[]): string {
