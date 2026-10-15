@@ -656,3 +656,50 @@ describe("web T15：前端骨架静态资产", () => {
     }
   });
 });
+
+describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态面）", () => {
+  it("⑯ dialog.js 存在且加载序正确：api.js 之后（esc/fetchJson 可用）、ui.js 与 app.js 之前（分派/注入方就位）", () => {
+    const html = read("index.html");
+    const order = [...html.matchAll(/<script src="\/assets\/([a-z-]+\.js)" defer>/g)].map((m) => m[1] ?? "");
+    const at = (n: string) => order.indexOf(n);
+    expect(at("dialog.js")).toBeGreaterThanOrEqual(0);
+    expect(at("dialog.js")).toBeGreaterThan(at("api.js"));
+    expect(at("dialog.js")).toBeGreaterThan(at("pane.js"));
+    expect(at("dialog.js")).toBeLessThan(at("ui.js"));
+    expect(at("dialog.js")).toBeLessThan(at("app.js"));
+  });
+
+  it("⑰ #dlg-overlay 静态节点：存在、hidden 兜底、overlay-dlg 类、内层 role=dialog", () => {
+    const html = read("index.html");
+    expect(html).toContain('id="dlg-overlay"');
+    const m = /<div class="overlay overlay-dlg" id="dlg-overlay" hidden>/.exec(html);
+    expect(m).not.toBeNull();
+    expect(html.slice(m!.index, m!.index + 200)).toContain('role="dialog"');
+    const css = read("style.css");
+    expect(css).toContain(".overlay-dlg[hidden] { display: none; }"); /* hidden 显式兜底（②补二口径） */
+  });
+
+  it("⑱ CSP 洁净（dialog.js/ui.js/app.js 源锚）：无 style= 串模板、无 on*= 内联事件、动态几何走 CSSOM", () => {
+    const dj = read("dialog.js");
+    expect(dj).not.toContain('style="');
+    expect(/\son[a-z]+\s*=/.test(dj)).toBe(false);
+    expect(dj).toContain("setProperty"); /* 进度条/列宽/layout 变量 = CSSOM 落地（非 style= 属性） */
+    const uj = read("ui.js");
+    expect(uj).not.toContain('style="');
+    const aj = read("app.js");
+    expect(/\son[a-z]+\s*=/.test(aj)).toBe(false);
+  });
+
+  it("⑲ 接线面源锚：ui.js 有 dialog 分派分支与 frame.title/layout 消费；app.js 有 unmount 与 setViewModal/wire 注入", () => {
+    const uj = read("ui.js");
+    expect(uj).toContain("OrosusDialog.onFrame(frame)");
+    expect(uj).toContain("frame.title || '查看'");
+    expect(uj).toContain("frame.layout");
+    expect(uj).toContain("setViewModal");
+    const aj = read("app.js");
+    expect(aj).toContain("OrosusDialog.unmount()");
+    expect(aj).toContain("UI.setViewModal(");
+    expect(aj).toContain("OrosusDialog.wire(");
+    expect(aj).toContain("/dialog-event");
+  });
+});

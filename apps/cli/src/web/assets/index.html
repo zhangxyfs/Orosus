@@ -206,6 +206,11 @@
     <div class="overlay" id="overlay" hidden>
       <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
     </div>
+
+    <!-- 控件窗（web-dialog 批 T8：模块 ui.dialog 的大窗——z 50 压设置页、被确认层压；静态节点可被 assets-check 断言；tabindex=-1 = 开窗焦点落位（无交互控件时键盘事件仍有宿主）） -->
+    <div class="overlay overlay-dlg" id="dlg-overlay" hidden>
+      <div class="dlg-modal" role="dialog" aria-modal="true" tabindex="-1"></div>
+    </div>
   </div>
 
   <!-- 右键小菜单（工作区 ⋯ / 会话右键共用，内容按场景重拼） -->
@@ -231,6 +236,7 @@
   <script src="/assets/render.js" defer></script>
   <script src="/assets/archived-view.js" defer></script>
   <script src="/assets/pane.js" defer></script>
+  <script src="/assets/dialog.js" defer></script>
   <script src="/assets/ui.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>

@@ -1371,3 +1371,66 @@ body.light .work-head { color: var(--muted); }
 .dp-list { margin: 0 14px 4px; max-height: 42vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
 .dp-row { padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: calc(12.5px * var(--fz)); color: var(--fg); font-family: var(--font-mono); }
 .dp-row:hover { background: var(--fg-soft); }
+
+/* ─── 控件窗（web-dialog 批 T8：模块 ui.dialog 的大窗——设计 §8；z 50 压设置页、被确认层压，空白登记 #1） ─── */
+:root { --dlg-row-h: 1.7em; } /* 空白登记 #2：终端行高近似基准（与界面字体联动——mapLayout 高度换算消费） */
+.overlay-dlg { z-index: 50; }
+.overlay-dlg[hidden] { display: none; } /* hidden 显式兜底（assets-check ②补二口径） */
+.dlg-modal {
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 24px 64px -20px oklch(0 0 0 / 0.55);
+  min-width: min(420px, calc(100% - 32px)); min-height: 180px;
+  max-width: calc(100% - 24px); max-height: calc(100% - 24px);
+}
+.dlg-center80 { width: 80%; height: 80%; }
+.dlg-full { width: calc(100% - 24px); height: calc(100% - 24px); }
+.dlg-custom { /* mapLayout 语义映射（T7）落 CSS 变量：边距三档由 margin 变量承载（对边同给=边距间居中/单边=贴边/缺=容器居中） */
+  width: var(--dlg-w, 80%); height: var(--dlg-h, 80%);
+  margin-left: var(--dlg-left, auto); margin-right: var(--dlg-right, auto);
+  margin-top: var(--dlg-top, auto); margin-bottom: var(--dlg-bottom, auto);
+}
+.dlg-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.dlg-title { flex: 1; font-weight: 600; font-size: calc(13.5px * var(--fz)); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlg-x { flex: none; background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.dlg-x:hover { color: var(--fg); background: var(--fg-soft); }
+.dlg-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+
+/* 八类控件（设计 §8.2） */
+.dw-text { color: var(--fg); font-size: calc(13px * var(--fz)); line-height: var(--dlg-row-h); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dw-text.dw-muted { color: var(--muted); }
+.dw-text.dw-accent { color: var(--accent); }
+.dw-text.dw-warn { color: var(--warn, #d9ab5c); }
+.dw-text.dw-nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dw-kv { display: flex; gap: 10px; font-size: calc(13px * var(--fz)); line-height: var(--dlg-row-h); }
+.dw-kv .dw-k { color: var(--muted); flex: none; }
+.dw-kv .dw-v { color: var(--fg); overflow-wrap: anywhere; }
+.dw-sep { border-top: 1px solid var(--border); margin: 2px 0; }
+.dw-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dw-list:not(.dw-interactive) .dw-row { padding: 3px 8px 3px 18px; position: relative; color: var(--fg); font-size: calc(13px * var(--fz)); line-height: var(--dlg-row-h); }
+.dw-list:not(.dw-interactive) .dw-row::before { content: "·"; position: absolute; left: 8px; color: var(--muted); }
+.dw-list.dw-interactive .dw-row { padding: 5px 10px 5px 28px; position: relative; border-radius: 7px; cursor: pointer; color: var(--fg); font-size: calc(13px * var(--fz)); line-height: var(--dlg-row-h); }
+.dw-list.dw-interactive .dw-row::before { content: ""; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 6px; height: 6px; border-radius: 50%; background: transparent; border: 1px solid var(--muted); }
+.dw-list.dw-interactive .dw-row:hover { background: var(--fg-soft); }
+.dw-list.dw-interactive .dw-row.dw-sel { background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg); }
+.dw-list.dw-interactive .dw-row.dw-sel::before { background: var(--accent); border-color: var(--accent); }
+.dw-list.dw-interactive.dw-focus { outline: 1px solid color-mix(in oklch, var(--accent) 45%, transparent); outline-offset: 2px; border-radius: 8px; }
+.dw-empty { color: var(--muted); font-size: calc(13px * var(--fz)); padding: 3px 8px; }
+.dw-progress { display: flex; align-items: center; gap: 10px; }
+.dw-progress .dw-bar { flex: 1; height: 8px; border-radius: 5px; background: var(--fg-soft); overflow: hidden; }
+.dw-progress .dw-bar::after { content: ""; display: block; height: 100%; width: 100%; background: var(--accent); border-radius: inherit; transform-origin: left; }
+.dw-progress .dw-num { flex: none; color: var(--muted); font-size: calc(12px * var(--fz)); font-family: var(--font-mono); min-width: 38px; text-align: right; }
+.dw-input { display: flex; flex-direction: column; gap: 4px; }
+.dw-input .dw-il { color: var(--muted); font-size: calc(12px * var(--fz)); }
+.dw-input .dw-field { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); font-size: calc(13px * var(--fz)); font-family: inherit; line-height: 1.5; padding: 6px 10px; resize: vertical; }
+.dw-input .dw-field:focus { outline: 1px solid var(--accent); }
+.dw-cols { display: grid; gap: 12px; align-items: start; }
+.dw-cols.dw-eq { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.dw-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+@media (max-width: 640px) { .dw-cols { grid-template-columns: 1fr !important; } } /* 窄视口纵向堆叠（设计 §8.2） */
+.dw-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: calc(12.5px * var(--fz)); }
+.dw-table th, .dw-table td { border-bottom: 1px solid var(--border); padding: 5px 8px; text-align: left; overflow-wrap: anywhere; } /* 主表格同款纪律（走查修①后）：固定布局+任意点换行，无首列 nowrap（挤压根因已裁） */
+.dw-table th { color: var(--muted); font-weight: 600; }
+
+/* viewText 大窗（空白登记 #8：复用 .modal 骨架 + view 变体——与压缩摘要大窗同口径；单向消息窗） */
+.modal.view-modal { width: min(1100px, calc(100% - 48px)); max-width: calc(100% - 48px); height: min(82vh, calc(100vh - 60px)); max-height: 82vh; }

@@ -90,6 +90,23 @@ function $(id) { return document.getElementById(id); }
     onManageModels: function () { openSettingsRoot(2); }, /* 模型菜单「管理模型」→ 设置·提供商页（外观页插位后 idx 1→2） */
   });
 
+  /* web-dialog 批 T8：dialog 上行口与大窗壳注入（app.js 在 ui.js/dialog.js 之后装配——经注入口，不反向依赖）。
+   * 上行：sid 在事件入队时捕获（dialog.js 持开窗会话）——切会话后在途事件仍回旧会话端点，对端幂等 noop；
+   * 失败 toast 不阻断队列（设计 §6.5）。大窗壳：viewText full/center80 走 modalStack（空白登记 #8——单向
+   * 消息窗，关闭纯本地不发 dialog-event）。 */
+  UI.setViewModal(function (o) {
+    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭' });
+  });
+  if (globalThis.OrosusDialog && typeof globalThis.OrosusDialog.wire === 'function') {
+    globalThis.OrosusDialog.wire({
+      post: function (sid, body) {
+        return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/dialog-event', { method: 'POST', body: JSON.stringify(body) });
+      },
+      getSid: function () { return currentSid ?? ''; },
+      toast: function () { toast('控件窗事件发送失败，稍后自动重试下一步操作', 3200); },
+    });
+  }
+
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
   var BTW_PREFIX_RE = /^\/btw(\s|$)/i; /* /btw 前缀判定唯一口径（W6复核修 Minor#1）：截获存文（handleSendResponse）与失败清存（handleSendError）共用——ignoreCase 交集，杜绝大小写漏捕/误捕 */
   function sendCore(text, imageIds, promptId) {
@@ -1101,7 +1118,7 @@ function $(id) { return document.getElementById(id); }
   function renderModal() {
     var top = modalStack[modalStack.length - 1];
     if (!top) { overlay.hidden = true; modal.innerHTML = ''; return; }
-    modal.className = 'modal' + (top.wide ? ' settings-modal' : '') + (top.big ? ' compact-modal' : ''); /* 走查修⑩② */
+    modal.className = 'modal' + (top.wide ? ' settings-modal' : '') + (top.big ? ' compact-modal' : '') + (top.view ? ' view-modal' : ''); /* 走查修⑩②；view-modal = web-dialog 批 T8 viewText 大窗 */
     modal.innerHTML = '<div class="pu-head"><span class="pu-title">' + top.title + '</span>' +
       '<span class="pu-en">' + (top.en ?? '') + '</span>' +
       (modalStack.length > 1 ? '<button class="btn" data-mback>‹ 返回</button>' : '') +
@@ -2919,6 +2936,7 @@ function $(id) { return document.getElementById(id); }
   function switchTo(sid) {
     /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
     UI.closePopup();
+    if (globalThis.OrosusDialog) globalThis.OrosusDialog.unmount(); /* web-dialog 批 T8：旧会话控件窗本地清理（在途队列以捕获 sid 自然收尾——设计 §10「先用旧 sid 提交关闭」） */
     draftActive = false; /* 走查修⑮⑦：切走即出草稿态（再点 ＋新会话 可重开） */
     var fromSid = currentSid; /* 离去会话——W6复核修 Important#2②：在飞 btw 轮结算的归属判据 */
     if (streamCtl) { streamCtl.close(); streamCtl = null; }

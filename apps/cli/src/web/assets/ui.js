@@ -68,6 +68,7 @@
   /* 走查修⑫（2026-10-14 用户口令②）：焦点归还位——浮层在哪条 composer 开就还哪条
    *  （侧问面开菜单 Esc/选定后不再抢主输入框）。null = 主输入框（审批/查看等主场面）。 */
   var focusBack = null;
+  var viewModalOpener = null; /* web-dialog 批 T8：viewText 大窗壳（app.js 注入——modalStack 宿主，空白登记 #8；不注 = 退回 dock 路径） */
   function focusInput() { var i = focusBack || document.getElementById('prompt-input'); if (i) i.focus(); }
   function anchorInputOf(a) { var f = a && a.closest ? a.closest('form') : null; return f ? f.querySelector('textarea') : null; }
 
@@ -513,11 +514,22 @@
       H.toast(String(frame.text ?? ''), frame.durationMs);
       return;
     }
+    if (kind === 'dialog') { /* web-dialog 批 T8：控件窗帧转发 dialog renderer（独立 #dlg-overlay——与 dock/设置页互不复用） */
+      pendingInteraction = null;
+      if (globalThis.OrosusDialog) globalThis.OrosusDialog.onFrame(frame);
+      return;
+    }
     if (kind === 'viewText') {
       pendingInteraction = null;
+      var lay = frame.layout; /* web-dialog 批 T4/T8：布局与真实标题进帧（设计 §9——不再硬编码「查看」） */
+      if ((lay === 'full' || lay === 'center80') && viewModalOpener) {
+        /* 大窗壳：单向消息窗——宿主走 app.js openModal modalStack（空白登记 #8），关闭纯本地不发 dialog-event */
+        viewModalOpener({ title: frame.title || '查看', bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>' });
+        return;
+      }
       pu = {
         kind: 'view',
-        title: '查看',
+        title: frame.title || '查看',
         en: 'VIEW',
         bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>',
         foot: '滚动查看（单向消息，无需应答） · Esc 关闭',
@@ -998,6 +1010,7 @@
       ensureDom();
     },
     closePopup: closePopup,
+    setViewModal: function (fn) { viewModalOpener = fn; }, /* web-dialog 批 T8：大窗壳注入口（app.js 装配后注——不反向 import） */
     isOpen: isOpen,
     isMenuOpen: isMenuOpen,
     isAnchorOpen: function (el) { ensureDom(); return !popup.hidden && pu !== null && pu.anchor === el; }, /* 走查修⑫：芯片 toggle——本芯片的菜单开着 → 再点 = 关 */
