@@ -52,21 +52,21 @@ describe("m5-i18n 全量清单对账（i18n-inventory/ 五分区）", () => {
 });
 
 describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑源）", () => {
-	it("A/B 键数 1496=1496、键集零漂移、分区计数（引导修 +5 onboard.p2.pick 族 + setDefault 补选 +2，2026-10-07）", () => {
+	it("A/B 键数 2463=2463（m5 1496 + web 区 967）、键集零漂移、分区计数（web-i18n 批 2026-10-16：五段落表 + 跨段并键 15 + 撞名改 2）", () => {
 		const { a, b } = parseTranslations();
-		expect(a.length).toBe(1496);
-		expect(b.length).toBe(1496);
+		expect(a.length).toBe(2463);
+		expect(b.length).toBe(2463);
 		const aKeys = new Set(a.map((r) => r.key));
 		const bKeys = new Set(b.map((r) => r.key));
 		expect(aKeys).toEqual(bKeys);
-		// 键内零重复（同键双收是勘正⑥教训）
+		// 键内零重复（同键双收是勘正⑥教训；web.* 前缀与 m5 zone-d tool-web 57 键前缀共存，撞键亦靠此闸）
 		expect(aKeys.size).toBe(a.length);
 		const zoneCounts = new Map<string, number>();
 		for (const r of a) zoneCounts.set(r.zone, (zoneCounts.get(r.zone) ?? 0) + 1);
-		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238 });
+		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238, w: 967 });
 	});
 
-	it("zh 列 A/B 两表逐键一致 + 勘正⑩被删 11 键不再出现（抽取严禁双搬）", () => {
+	it("zh 列 A/B 两表逐键一致 + 勘正⑩被删 11 键不再出现（抽取严禁双搬）+ web 并键 15 键不再出现", () => {
 		const { a, b } = parseTranslations();
 		const zhB = new Map(b.map((r) => [r.key, r.zh]));
 		for (const r of a) expect(zhB.get(r.key), `zh 列漂移：${r.key}`).toBe(r.zh);
@@ -82,8 +82,24 @@ describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑�
 			"tasks.approved",
 			"tasks.rejected",
 			"tasks.viewTitle",
+			// web-i18n 并键（2026-10-16 audit 同串异键 14 组——保留键见 ta-zone-w-* 复用节）
+			"web.render.connecting",
+			"web.ui.cwd.title",
+			"web.pane.btw.fileTitle",
+			"web.shell.sendTitle",
+			"web.pane.btw.sendTitle",
+			"web.pane.btw.sendAria",
+			"web.pane.chevTitle",
+			"web.pane.noTabs",
+			"web.pane.addTitle",
+			"web.view.footAnnounce",
+			"web.view.footScroll",
+			"web.spawn.taskFallback",
+			"web.btw.modelsFetchFail",
+			"web.misc.peers.phError",
+			"web.render.spawn.rowTitle",
 		];
 		const present = killed.filter((k) => zhB.has(k));
-		expect(present, "勘正⑩被删键再现——并键决定被回退或误编辑").toEqual([]);
+		expect(present, "被删键再现——并键决定被回退或误编辑").toEqual([]);
 	});
 });
