@@ -75,7 +75,7 @@ import { mcpConnRows, type McpUiDeps } from "./mcp-ui.ts";
 import { refreshSkillMenu, skillInjectText, skillMenuTtl, skillTypedName, type SkillUiDeps } from "./skills-ui.ts";
 import { SKILL_MARK_PREFIX } from "./i18n/protocol-strings.ts";
 import { openSettingsLine, openSettingsPanel, type SettingsUiDeps } from "./settings-ui.ts";
-import { fireStartupUpdateCheck, markBannerRendered, shouldSkipStartupCheck, updateInfoNow } from "./update-check.ts";
+import { bannerLine, fireStartupUpdateCheck, markBannerRendered, shouldSkipStartupCheck, updateInfoNow } from "./update-check.ts";
 import { isUpgradeSubcommand, runUpgradeSubcommand } from "./upgrade-cmd.ts";
 import { isWebSubcommand, runWebSubcommand } from "./web/mod.ts";
 import { readUpdateCheckEnabled } from "./update-settings.ts";
@@ -2031,7 +2031,7 @@ if (args.print === undefined) {
     {
       const upd = updateInfoNow();
       if (upd !== undefined) {
-        const line = theme.fg("fg", t("update.banner", { v: upd.latest }));
+        const line = theme.fg("fg", bannerLine(upd));
         if (tuiMode === "full") {
           dm.pushLine("");
           dm.pushLine(line);

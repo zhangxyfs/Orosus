@@ -22,9 +22,9 @@ const tmp = (): string => {
 };
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-const registryResponse = (version: string, integrity?: string): Response =>
+const registryResponse = (version: string, integrity?: string, description?: string): Response =>
 	new Response(
-		JSON.stringify({ name: "orosus", version, dist: { tarball: `https://registry.npmjs.org/orosus/-/orosus-${version}.tgz`, ...(integrity !== undefined ? { integrity } : {}) } }),
+		JSON.stringify({ name: "orosus", version, ...(description !== undefined ? { description } : {}), dist: { tarball: `https://registry.npmjs.org/orosus/-/orosus-${version}.tgz`, ...(integrity !== undefined ? { integrity } : {}) } }),
 		{ headers: { "content-type": "application/json" } },
 	);
 
@@ -51,6 +51,13 @@ describe("fetchLatestUpdate（注入 fetch + 形状校验 + 静默 err）", () =
 		expect(r.info?.latest).toBe("9.9.9");
 		expect(r.info?.tarball).toContain("orosus-9.9.9.tgz");
 		expect(r.info?.integrity).toBe("sha512-abc");
+		expect(r.info?.notes).toBeUndefined(); // 无 description → 不带 notes
+	});
+	it("notes 解析：description 在场 → notes（trim）；空白串/非串 → 不带", async () => {
+		const ok = await fetchLatestUpdate({ fetchImpl: (async () => registryResponse("9.9.9", undefined, " 0.2.0：修了 A 和 B ")) as unknown as typeof fetch });
+		expect(ok.info?.notes).toBe("0.2.0：修了 A 和 B");
+		const blank = await fetchLatestUpdate({ fetchImpl: (async () => registryResponse("9.9.9", undefined, "   ")) as unknown as typeof fetch });
+		expect(blank.info?.notes).toBeUndefined();
 	});
 	it("HTTP 非 2xx / 坏形状 / 抛错 → err 人话（不 reject）", async () => {
 		expect((await fetchLatestUpdate({ fetchImpl: (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch })).err).toContain("HTTP 500");

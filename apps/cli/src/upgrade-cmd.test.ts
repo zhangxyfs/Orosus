@@ -31,11 +31,11 @@ const setup = (): { configPath: string; tmpDir: string } => {
 	return { configPath, tmpDir: join(dir, "tmp") };
 };
 
-const fetchWith = (version: string, opts: { integrity?: string; tarballFail?: boolean } = {}): typeof fetch =>
+const fetchWith = (version: string, opts: { integrity?: string; tarballFail?: boolean; description?: string } = {}): typeof fetch =>
 	(async (url: string | URL): Promise<Response> => {
 		if (String(url).includes("/latest")) {
 			return new Response(
-				JSON.stringify({ version, dist: { tarball: "https://registry.npmjs.org/orosus/-/orosus-0.2.0.tgz", ...(opts.integrity !== undefined ? { integrity: opts.integrity } : {}) } }),
+				JSON.stringify({ version, ...(opts.description !== undefined ? { description: opts.description } : {}), dist: { tarball: "https://registry.npmjs.org/orosus/-/orosus-0.2.0.tgz", ...(opts.integrity !== undefined ? { integrity: opts.integrity } : {}) } }),
 				{ headers: { "content-type": "application/json" } },
 			);
 		}
@@ -110,6 +110,26 @@ describe("runUpgradeSubcommand 分支", () => {
 		expect(r.code).toBe(1);
 		expect(r.lines[0]).toContain("检查更新失败");
 		expect(r.lines[0]).toContain("offline");
+	});
+
+	it("notes 在场 → 确认问询前展示当版更新说明（先知情再决定）；无 notes → 不多行", async () => {
+		let confirmPrompt = "";
+		const r = await run(["upgrade"], {
+			currentVersion: "0.1.0",
+			fetchImpl: fetchWith("0.2.0", { description: "0.2.0：贴图压缩提速 + 新增 /foo 命令" }),
+			isTTY: true,
+			confirm: async (p) => { confirmPrompt = p; return false; }, // 拒绝——只验确认前展示
+		});
+		expect(r.lines.some((l) => l.includes("📦 0.2.0") && l.includes("贴图压缩提速"))).toBe(true);
+		expect(r.lines.indexOf(r.lines.find((l) => l.includes("📦"))!)).toBeLessThan(999);
+		expect(confirmPrompt).toContain("0.2.0"); // notes 行在 confirm 之前（confirm 收到的问询）
+		const plain = await run(["upgrade"], {
+			currentVersion: "0.1.0",
+			fetchImpl: fetchWith("0.2.0"),
+			isTTY: true,
+			confirm: async () => false,
+		});
+		expect(plain.lines.some((l) => l.includes("📦"))).toBe(false);
 	});
 
 	it("已最新 → 退出码 0", async () => {

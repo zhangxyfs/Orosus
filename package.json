@@ -1,6 +1,7 @@
 {
   "name": "orosus",
   "version": "0.1.1",
+  "description": "0.2.0：升级前即见当版更新说明（启动横幅与 orosus upgrade 确认前展示）；发版时更新本字段",
   "private": true,
   "type": "module",
   "engines": {

@@ -10,7 +10,7 @@ import { OROSUS_USER_AGENT, OROSUS_VERSION } from "@orosus/contracts/version";
 import { orosusHome } from "@orosus/contracts/home";
 import { t } from "./i18n/app.ts";
 
-export interface UpdateInfo { latest: string; tarball: string; integrity?: string }
+export interface UpdateInfo { latest: string; tarball: string; integrity?: string; /** 当版更新说明（发行 manifest 的 description——发版者写；升级确认/横幅展示） */ notes?: string }
 export interface UpdateFetchResult { info?: UpdateInfo; err?: string }
 
 export const UPDATE_REGISTRY_URL = "https://registry.npmjs.org/orosus/latest";
@@ -73,13 +73,14 @@ export async function fetchLatestUpdate(opts: { fetchImpl?: typeof fetch | undef
 			signal: ac.signal,
 		});
 		if (!res.ok) throw new Error(`HTTP ${res.status}`);
-		const doc = (await res.json()) as { version?: unknown; dist?: { tarball?: unknown; integrity?: unknown } };
+		const doc = (await res.json()) as { version?: unknown; description?: unknown; dist?: { tarball?: unknown; integrity?: unknown } };
 		if (typeof doc.version !== "string" || typeof doc.dist?.tarball !== "string") throw new Error("unexpected registry payload shape");
 		return {
 			info: {
 				latest: doc.version,
 				tarball: doc.dist.tarball,
 				...(typeof doc.dist.integrity === "string" ? { integrity: doc.dist.integrity } : {}),
+				...(typeof doc.description === "string" && doc.description.trim() !== "" ? { notes: doc.description.trim() } : {}),
 			},
 		};
 	} catch (err) {
@@ -129,12 +130,18 @@ export function fireStartupUpdateCheck(opts: { enabled: boolean; lateNotify: (li
 			settled = r.info;
 			if (bannerDone && !bannerHasLine && !lateToasted) {
 				lateToasted = true;
-				opts.lateNotify(t("update.banner", { v: r.info.latest }));
+				opts.lateNotify(bannerLine(r.info));
 			}
 		} else {
 			settled = undefined; // registry 说没有新版（本地新于 registry/回滚）——下次循环起横幅不再渲染
 		}
 	});
+}
+
+/** 横幅行文案：i18n 模板 + 有当版说明时语言中性追加（notes 是发版者手写文案原样展示，不走翻译）。 */
+export function bannerLine(info: { latest: string; notes?: string }): string {
+	const base = t("update.banner", { v: info.latest });
+	return info.notes !== undefined ? `${base} · ${info.notes}` : base;
 }
 
 /** 横幅行现值（盘上初值或网络已回填）——undefined = 无新版或未点火。 */

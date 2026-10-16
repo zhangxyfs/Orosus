@@ -159,9 +159,13 @@ export async function runUpgradeSubcommand(argv: string[], io: UpgradeCmdIo): Pr
 		return 0;
 	}
 	if (!(io.isTTY ?? process.stdout.isTTY === true)) {
-		io.out(t("upgrade.headless", { cur: current, latest: info.latest }));
+		const head = t("upgrade.headless", { cur: current, latest: info.latest });
+		io.out(info.notes !== undefined ? `${head} · ${info.notes}` : head);
 		return 0;
 	}
+	// 当版更新说明（发行 manifest 的 description，registry 元数据直取）：确认问询前展示——
+	// 用户先知道这版改了什么再决定升不升。语言中性前缀（notes 是发版者手写文案原样展示）
+	if (info.notes !== undefined) io.out(`📦 ${info.latest} ${info.notes}`);
 	const yes = await (io.confirm ?? defaultConfirm)(t("upgrade.confirm", { cur: current, latest: info.latest }));
 	if (!yes) {
 		io.out(t("upgrade.declined", { v: current }));
