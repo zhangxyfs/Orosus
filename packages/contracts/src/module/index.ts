@@ -207,14 +207,17 @@ export interface CommandUi {
    *  @param opts.keys - 自定义键（键名 → 动作）；键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"），保留键注册即拒。
    *  @param opts.markdown - 声明正文为 markdown（m5-peers 走查六-③）：支持的宿主先渲染（回显面 md 管线
    *   同源）再显示——标题层级/列表/代码块带样式；不支持的宿主按纯文本原样显示（内容不丢）。可省 = 纯文本。
+   *  @param opts.back - 「返回」命令（2026-10-16 用户口令「详情页关闭后返回列表页」）：GUI 在用户关闭
+   *   正文窗后回跑该命令（如重开列表窗）——单向窗本地关闭宿主本不可知，此为模块显式指路。TUI 现实现
+   *   不消费（Esc 关窗语义不变）。
    *  @param opts.owner - 内核自动标注的模块名（@internal——模块勿自填）。
    *
- *  @example
- *  ```ts
- *  ui.viewText?.("便签", notes.join("\n"), { layout: { height: 20, marginTop: 2 } });
- *  ```
+   *  @example
+   *  ```ts
+   *  ui.viewText?.("便签", notes.join("\n"), { layout: { height: 20, marginTop: 2 } });
+   *  ```
    */
-  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; owner?: string }): void;
+  viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; back?: string; owner?: string }): void;
   /** 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃
    *  （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。
    *  @param text - 插入文本（与用户手打等效——可退格删除；多行文本宿主按编辑器规则并入）。

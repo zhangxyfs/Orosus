@@ -95,8 +95,8 @@ function $(id) { return document.getElementById(id); }
    * 失败 toast 不阻断队列（设计 §6.5）。大窗壳：viewText full/center80 走 modalStack（空白登记 #8——单向
    * 消息窗，关闭纯本地不发 dialog-event）。 */
   UI.setViewModal(function (o) {
-    var lb = launcherBack; launcherBack = false; /* 走查②标记转移：总览→窗→笔记链——正文窗自身关闭时回总览 */
-    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭', backLauncher: lb });
+    var lb = launcherBack; launcherBack = false; /* 走查②标记转移：总览→窗→笔记链——正文窗关闭时的回跳归属见 modalClose */
+    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭', ...(o.back ? { backCmd: o.back, keepLauncher: lb } : { backLauncher: lb }) });
   });
   if (globalThis.OrosusDialog && typeof globalThis.OrosusDialog.wire === 'function') {
     globalThis.OrosusDialog.wire({
@@ -1146,10 +1146,22 @@ function $(id) { return document.getElementById(id); }
   function modalReplace(opts) { modalStack[modalStack.length - 1] = opts; renderModal(); }
   function modalBack() { modalStack.pop(); renderModal(); }
   function modalClose() {
-    var hadLb = modalStack.some(function (m) { return m !== undefined && m !== null && m.backLauncher; });
+    /* 回跳归属（走查②④）：backCmd（模块 viewText back——详情返回列表）优先；无 back 才走总览回跳。
+     * keepLauncher 串链：总览→窗→详情→Esc→列表→Esc→总览。 */
+    var backCmd = null, keepLauncher = false, hadLb = false;
+    modalStack.forEach(function (m) {
+      if (m === undefined || m === null) return;
+      if (m.backCmd) { backCmd = m.backCmd; keepLauncher = !!m.keepLauncher; }
+      if (m.backLauncher) hadLb = true;
+    });
     modalStack = [];
     renderModal();
-    if (hadLb) openLauncherWindow(); /* 走查（2026-10-16 用户口令②）：总览来源的正文大窗关闭 → 回总览页（GUI 专属行为） */
+    if (backCmd !== null) {
+      sendCommandText(backCmd); /* 走查④（2026-10-16 用户口令「详情页关闭后返回列表页」）：回跑模块返回命令重开列表 */
+      if (keepLauncher) launcherBack = true;
+      return;
+    }
+    if (hadLb) openLauncherWindow(); /* 走查②：总览来源的正文大窗关闭 → 回总览页（GUI 专属行为） */
   }
   modal.addEventListener('click', function (e) {
     if (e.target.closest('[data-mclose]')) { modalClose(); return; }

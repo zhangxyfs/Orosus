@@ -123,7 +123,9 @@ export default defineModule({
             const body = browserBody(dir, entry.file);
             handle?.close();   // 正文窗走 viewText FIFO 顶上
             const title = entry.isIndex ? t("peers.win.index.title", undefined, entry.title) : entry.title;
-            if (body !== undefined) ui.viewText?.(title, body, { layout: "full", markdown: true });   // 走查六-③：md 渲染（不支持的宿主按纯文本原样显示）
+            // back（2026-10-16 用户口令「详情页关闭后返回列表页」）：GUI 关正文窗后回跑本命令重开列表——
+            // 取代旧「Esc 返回列表 = 手动重开命令」降级（T7 偏差记档就此销案；预热+快路径下重开≈壳即现）。
+            if (body !== undefined) ui.viewText?.(title, body, { layout: "full", markdown: true, back: "/tool-peers__memory" });   // 走查六-③：md 渲染（不支持的宿主按纯文本原样显示）
           }
           return undefined;
         },

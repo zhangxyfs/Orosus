@@ -152,7 +152,7 @@ export interface CommandUi { … }
 | `chooseSide?` | `chooseSide?(title: string, items: string[], opts: { side: { label: string; valuesOf: (item: string) => string[] \| undefined; initialOf?: (item: string) => string \| undefined } }): Promise<{ item: string; value: string \| undefined }>` | 列表 + 底部横选行（2026-10-09 用户拍板，可选）：choose 的同窗横选扩展——列表照旧单选，框底增一行 左右选择器（label + 候选值横排、选中 [v] 高亮；←→ 循环切换；Enter 连同列表项一并结算）。形态参照 kimi 选模型的 Thinking 行，样式归宿主（Orosus 绿框同族）。 side.valuesOf(item) = 该项的候选值清单（undefined/空 = 该项无横选——行降级显「——」、←→ 无操作）； side.initialOf(item) = 初值（缺省取清单首项）。返回 { item, value }——value 恒为提交时横选所示值 （项无横选 = undefined，含宿主降级未选横选的情形）。Esc 取消 = 抛「已取消（Esc）」（与 choose 同字面量约定）。老宿主缺省不存在——调用方判空降级（/model：退老 choose，档位跟随模型解析）。 |
 | `confirm` | `confirm(question: string): Promise<boolean>` | 是/否确认。 |
 | `notice?` | `notice?(text: string, opts?: { durationMs?: number }): void` | 瞬时提示（2026-09-22 批⑧，可选）：「无可压缩/已切换」类一次性反馈——全屏宿主走浮动 toast（3s 自消）， 行模式宿主落单行。命令体应 notice(...) 后返回空串（静默约定），而不是把提示当结果文本返回。 缺省/无头实现可静默丢弃——notice 是增强反馈，不承载命令语义。 m5 扩第二可选参（时长毫秒）：缺省 3000，允许范围 [1000, 30000]，越界按边界值算——不传即缺省， 主程序自己的提示全走缺省零变化。 |
-| `viewText?` | `viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; owner?: string }): void` | 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式 静默丢弃。窗排队（一次一窗，后来的等旧窗关）。 opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的 属主判定靠它；模块开发者无须也不应自填（@internal）。 同源）再显示——标题层级/列表/代码块带样式；不支持的宿主按纯文本原样显示（内容不丢）。可省 = 纯文本。 |
+| `viewText?` | `viewText?(title: string, text: string, opts?: { layout?: PopupLayout; keys?: Record<string, PopupKey>; markdown?: boolean; back?: string; owner?: string }): void` | 弹自己的只读文本窗（m5 口子一，可选）：大小位置经 layout 自定、可绑自定义键。缺省/无头/行模式 静默丢弃。窗排队（一次一窗，后来的等旧窗关）。 opts.owner 是内核包装层自动标注的模块名（宿主内建调用 = undefined）——「模块卸载关它的窗」的 属主判定靠它；模块开发者无须也不应自填（@internal）。 同源）再显示——标题层级/列表/代码块带样式；不支持的宿主按纯文本原样显示（内容不丢）。可省 = 纯文本。 正文窗后回跑该命令（如重开列表窗）——单向窗本地关闭宿主本不可知，此为模块显式指路。TUI 现实现 不消费（Esc 关窗语义不变）。 |
 | `insertText?` | `readonly insertText?: ((text: string) => void) \| undefined` | 往主输入框光标位插入文本（m5 附带能力 3，可选）：与用户手打等效（可退格删除）。行模式/无头静默丢弃 （读出来是 undefined——CLI 实现是活 getter，随全屏/行模式切换存在性）。 |
 | `attachImage?` | `readonly attachImage?: ((path: string) => void) \| undefined` | 贴一张图进输入框（m5 附带能力 3，可选）：chip 形态 [image #N]，随发送上传。路径不存在时黄字提示。 行模式无文内 chip 机制——读出来是 undefined（同 insertText 活 getter）。 |
 | `dialog?` | `readonly dialog?: ((spec: DialogSpec) => DialogHandle \| undefined) \| undefined` | 控件窗（m5 口子三，可选）：交控件清单宿主代画，用户操作变事件回传。返回句柄可 update(新清单)/close()； 不支持控件窗的宿主（行模式/无头）返回 undefined——模块须判空降级（如回退 viewText）。 属性式 \| undefined：CLI 实现是活 getter（随全屏/行模式切换存在性，同 insertText）。 |
@@ -176,6 +176,7 @@ export interface CommandUi { … }
 | `viewText` | `opts.layout` | 布局；缺省 "center80"。非法值整体回退 center80；终端装不下 = 不弹 + 黄字。 |
 | `viewText` | `opts.keys` | 自定义键（键名 → 动作）；键名用 keymatch 规范名（"r"、"alt+r"、"pageUp"），保留键注册即拒。 |
 | `viewText` | `opts.markdown` | 声明正文为 markdown（m5-peers 走查六-③）：支持的宿主先渲染（回显面 md 管线 |
+| `viewText` | `opts.back` | 「返回」命令（2026-10-16 用户口令「详情页关闭后返回列表页」）：GUI 在用户关闭 |
 | `viewText` | `opts.owner` | 内核自动标注的模块名（@internal——模块勿自填）。 |
 | `insertText` | `text` | 插入文本（与用户手打等效——可退格删除；多行文本宿主按编辑器规则并入）。 |
 | `attachImage` | `path` | 图片文件绝对路径（PNG/JPEG/WebP/GIF）；不存在 = 黄字提示；随下一条消息发送（需 vision 模型）。 |

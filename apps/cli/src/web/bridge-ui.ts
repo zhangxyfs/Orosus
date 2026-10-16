@@ -50,6 +50,8 @@ export type InteractionFrame = {
   reset?: "selection" | "all" | "none";
   layout?: PopupLayout;
   widgets?: SerializedWidget[];
+  /** viewText「返回」命令（2026-10-16 用户口令）：GUI 用户关正文窗后回跑——详情返回列表语义。 */
+  back?: string;
 };
 
 /** 可答交互的 kind（viewText/notice 单向帧不在列）。 */
@@ -115,12 +117,12 @@ export class WebCommandUi implements CommandUi {
   };
 
   /** 单向帧（brief：viewText/notice 广播即完成——不进 pending、不设等相位）。opts 收窄到 web 可渲染面
- *  （markdown + layout——web-dialog 批 T4 起 layout 进帧，full/center80 前端走大窗、dock/缺省原路径
- *  零回归；keys 仍不桥）。发出前先关当前 dialog（设计 §5.1 supersede）。owner 不透传——大窗是单向
- *  消息，关闭只在本地（设计 §9）。 */
-  viewText = (title: string, text: string, opts?: { markdown?: boolean; layout?: PopupLayout }): void => {
+   *  （markdown + layout——web-dialog 批 T4 起 layout 进帧，full/center80 前端走大窗、dock/缺省原路径
+   *  零回归；keys 仍不桥）。发出前先关当前 dialog（设计 §5.1 supersede）。owner 不透传——大窗是单向
+   *  消息，关闭只在本地（设计 §9）；back 透传（2026-10-16 用户口令「详情关闭返回列表」——GUI 关窗回跑）。 */
+  viewText = (title: string, text: string, opts?: { markdown?: boolean; layout?: PopupLayout; back?: string }): void => {
     this.relay.supersede();
-    this.deps.broadcast({ id: this.nextId(), kind: "viewText", title, text, ...(opts?.markdown === true ? { markdown: true } : {}), ...(opts?.layout !== undefined ? { layout: opts.layout } : {}) });
+    this.deps.broadcast({ id: this.nextId(), kind: "viewText", title, text, ...(opts?.markdown === true ? { markdown: true } : {}), ...(opts?.layout !== undefined ? { layout: opts.layout } : {}), ...(opts?.back !== undefined ? { back: opts.back } : {}) });
   };
 
   notice = (text: string, opts?: { durationMs?: number }): void => {

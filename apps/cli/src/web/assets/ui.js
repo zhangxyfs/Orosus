@@ -525,8 +525,9 @@
       pendingInteraction = null;
       var lay = frame.layout; /* web-dialog 批 T4/T8：布局与真实标题进帧（设计 §9——不再硬编码「查看」） */
       if ((lay === 'full' || lay === 'center80') && viewModalOpener) {
-        /* 大窗壳：单向消息窗——宿主走 app.js openModal modalStack（空白登记 #8），关闭纯本地不发 dialog-event */
-        viewModalOpener({ title: frame.title || '查看', bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>' });
+        /* 大窗壳：单向消息窗——宿主走 app.js openModal modalStack（空白登记 #8），关闭纯本地不发 dialog-event；
+         * frame.back（2026-10-16 用户口令「详情关闭返回列表」）随壳透传——app.js 关窗时回跑该命令 */
+        viewModalOpener({ title: frame.title || '查看', bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>', back: frame.back });
         return;
       }
       pu = {

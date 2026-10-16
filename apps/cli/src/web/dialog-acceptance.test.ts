@@ -128,6 +128,7 @@ describe("web dialog T9：记忆链路验收（设计 12.4）", () => {
     expect(vt.title).toBe("部署要点"); // 真实文件名标题——不再硬编码「查看」
     expect(vt.markdown).toBe(true);
     expect(vt.text).toContain("t9-accept-标记"); // 正文 = 笔记文件内容
+    expect((vt as { back?: string }).back).toBe("/tool-peers__memory"); // 走查④（2026-10-16）：详情帧带返回命令——GUI 关窗回列表
   }, 40_000);
 
   it("② 未知/越界激活不读文件：noop 回执且无 viewText 帧", async () => {
