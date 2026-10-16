@@ -1,0 +1,1476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orosus（连山）· 三省六部 Web GUI 原型（真实 UI 体系复刻版）</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════════════
+     连山主题色 · 逐值对齐 apps/cli/src/web/assets/style.css:2-34
+     ═══════════════════════════════════════════════════════════════════ */
+  :root {
+    --bg:        #0a100e;   /* 玄墨 · 页面底色 */
+    --surface:   #121b17;   /* 层峦 · 面板、顶栏 */
+    --surface-2: #18241e;   /* 浮峦 · 输入框、悬浮层 */
+    --fg:        #e9eee6;   /* 宣纸 · 主文本 */
+    --muted:     #97a49a;   /* 山岚 · 次文本 */
+    --border:    #25352d;   /* 叠嶂 · 分隔线 */
+    --accent:    #7cc9a5;   /* 青玉 · 主强调 */
+    --info:      #84b8cd;   /* 石青 · 信息、路径、链接 */
+    --warn:      #d4a25e;   /* 暖金 · 进行、注意 */
+    --err:       #d07f70;   /* 赭石 · 错误、危险 */
+
+    --accent-soft:  color-mix(in oklch, var(--accent) 13%, transparent);
+    --accent-line:  color-mix(in oklch, var(--accent) 38%, var(--border));
+    --fg-soft:      color-mix(in oklch, var(--fg) 5%, transparent);
+    --muted-dim:    color-mix(in oklch, var(--muted) 68%, transparent);
+    --muted-faint:  color-mix(in oklch, var(--muted) 46%, transparent);
+    --err-soft:     color-mix(in oklch, var(--err) 11%, transparent);
+    --warn-soft:    color-mix(in oklch, var(--warn) 12%, transparent);
+
+    --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Microsoft YaHei', monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --radius: 10px;
+  }
+  body.light {
+    --bg:        #eef1ea;   /* 纸田 */
+    --surface:   #f7f9f4;   /* 宣纸 */
+    --surface-2: #ffffff;   /* 云白 */
+    --fg:        #222b25;   /* 松烟 */
+    --muted:     #64726a;   /* 竹灰 */
+    --border:    #d6ded4;   /* 篱痕 */
+    --accent:    #2f8f5f;   /* 石绿 */
+    --info:      #357a9c;
+    --warn:      #a8762a;
+    --err:       #b14e3f;
+    --muted-dim:   color-mix(in oklch, var(--muted) 88%, transparent);
+    --muted-faint: color-mix(in oklch, var(--muted) 72%, transparent);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 380px at 50% -140px, color-mix(in oklch, var(--accent) 7%, transparent), transparent 70%),
+      var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 14px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; cursor: pointer; color: inherit; background: none; border: 0; padding: 0; }
+
+  /* ═══ 原型页外壳（注记条 / 步骤条 / 导航 / 布局 / 右侧注记） ═══════════ */
+  .pagehead { max-width: 1780px; margin: 16px auto 6px; padding: 0 16px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .pagehead .brand { font-family: var(--font-mono); font-size: 18px; font-weight: 700; letter-spacing: .04em; display: flex; align-items: center; gap: 10px; }
+  .pagehead .brand img { width: 24px; height: 24px; border-radius: 6px; display: block; }
+  .pagehead .brand .cn { color: var(--muted); font-weight: 400; font-size: 13px; letter-spacing: .08em; }
+  .pagehead .meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted-dim); letter-spacing: .05em; }
+
+  .wrap { max-width: 1780px; margin: 0 auto 48px; padding: 0 16px; }
+  .notebar { padding: 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  .notebar b { color: var(--fg); }
+  .notebar .proto { color: var(--warn); }
+
+  .stepbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+  .chip2 { font-family: var(--font-mono); font-size: 11.5px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); opacity: .55; cursor: pointer; user-select: none; white-space: nowrap; }
+  .chip2.done { opacity: 1; }
+  .chip2.cur { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; opacity: 1; }
+  .chip2 .n { opacity: .55; margin-right: 4px; }
+  .navrow { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+  .navbtn { font: inherit; font-size: 12.5px; padding: 5px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); }
+  .navbtn:hover { border-color: var(--accent); }
+  .navbtn:disabled { opacity: .35; cursor: default; }
+  .navrow .pos { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 344px; gap: 14px; align-items: start; }
+  @media (max-width: 1500px) { .layout { grid-template-columns: 1fr; } }
+
+  /* 右侧注记面板 */
+  .notes { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 14px 16px; font-size: 13px; color: var(--muted); position: sticky; top: 12px; }
+  .notes h3 { margin: 0 0 8px; font-size: 13.5px; color: var(--fg); }
+  .notes h3 .no { color: var(--accent); font-family: var(--font-mono); margin-right: 6px; }
+  .notes .ops { margin: 10px 0 0; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 8px; background: var(--fg-soft); }
+  .notes .ops .t { color: var(--warn); font-size: 11.5px; letter-spacing: .05em; margin-bottom: 4px; }
+  .notes .ops ul { margin: 0; padding-left: 16px; }
+  .notes .ops li { margin: 3px 0; color: var(--fg); font-size: 12.5px; }
+  .notes .why { margin: 10px 0 0; font-size: 12.5px; }
+  .notes .why b { color: var(--fg); }
+  .notes .anchor { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); opacity: .78; font-family: var(--font-mono); border-top: 1px dashed var(--border); padding-top: 6px; word-break: break-all; line-height: 1.7; }
+  .notes a { color: var(--info); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     ═══ Web 应用窗体复刻（index.html:13-206 · style.css 全真口径） ═══════
+     ═══════════════════════════════════════════════════════════════════ */
+  .app {
+    position: relative;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 0 color-mix(in oklch, white 4%, transparent) inset, 0 26px 60px color-mix(in oklch, black 55%, transparent);
+    font-family: var(--font-mono);
+    font-size: 14px; line-height: 1.75;
+    height: clamp(560px, calc(100vh - 296px), 880px);
+    display: flex; flex-direction: column;
+  }
+  body.light .app { background: var(--bg); box-shadow: 0 1px 0 color-mix(in oklch, white 70%, transparent) inset, 0 24px 60px color-mix(in oklch, black 16%, transparent); }
+
+  /* appbar（index.html:15-28 · style.css:99-106） */
+  .appbar { display: flex; align-items: center; gap: 12px; background: var(--surface); border-bottom: 1px solid var(--border); padding: 9px 14px; }
+  .appbar .ab-logo { width: 22px; height: 22px; border-radius: 5px; display: block; }
+  .appbar .ab-brand { font-weight: 700; letter-spacing: .04em; }
+  .appbar .ab-title { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 6px; padding: 3px 8px; margin: -3px 0; }
+  .appbar .ab-title .dim { color: var(--muted-faint); }
+  .appbar .ab-addr { color: var(--muted-faint); font-size: 11px; letter-spacing: .04em; white-space: nowrap; }
+  .appbar .ab-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); padding: 5px 11px; border-radius: 8px; font-size: 12px; font-family: var(--font-mono); white-space: nowrap; transition: border-color .15s ease, color .15s ease; }
+  .btn:hover { border-color: var(--accent-line); color: var(--accent); }
+  .btn.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+
+  .app-body { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; flex: 1; min-height: 0; }
+  .app-body.split { display: flex; }
+  .app-body.split .side { display: none; }
+  .app-body.split .lside { flex: 0 0 auto; }
+  .app-body.split .main { flex: 1 1 0; }
+
+  /* ─── 左侧会话栏（index.html:32-41 · style.css:146-260 · 行结构 app.js:699-713） ─── */
+  .lside { width: 260px; border-right: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 62%, var(--bg)); display: flex; flex-direction: column; min-height: 0; }
+  .ls-top { padding: 10px 10px 8px; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+  .ls-new { width: 100%; justify-content: center; }
+  .btn.primary { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+  .ls-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 8px 12px; min-height: 0; }
+  .ls-sec { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted-faint); font-size: 10.5px; letter-spacing: .14em; padding: 10px 8px 4px; }
+  .ls-sec .ls-count { margin-left: 8px; }
+  .ls-sec .ls-collapse { margin-left: auto; }
+  .ls-sec.ls-pin-empty { padding: 6px 8px 0; justify-content: flex-end; }
+  .ls-collapse { width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-dim); border: 1px solid transparent; font-size: 13px; }
+  .ls-collapse:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .ls-group { position: relative; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; padding: 6px 8px 3px; border-radius: 6px; cursor: pointer; }
+  .ls-group:hover { background: var(--fg-soft); }
+  .ls-group .gicon { color: var(--muted-faint); width: 14px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+  .ls-group .gname { font-weight: 600; }
+  .ls-group .gcount { margin-left: auto; color: var(--muted-faint); font-size: 11px; }
+  .ls-group .g-acts { display: inline-flex; gap: 2px; visibility: hidden; }
+  .ls-group:hover .g-acts { visibility: visible; }
+  .g-act { width: 18px; height: 18px; border-radius: 5px; color: var(--muted-faint); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  .g-act:hover { color: var(--accent); background: var(--accent-soft); }
+  .ls-more { display: flex; align-items: center; gap: 6px; padding: 4px 8px; margin: 2px 0 0 18px; color: var(--muted-dim); font-size: 11.5px; border-radius: 6px; }
+  .ls-more:hover { color: var(--accent); background: var(--accent-soft); }
+  .ls-item { display: flex; align-items: baseline; gap: 7px; padding: 5px 8px; border-radius: 7px; font-size: 12.5px; position: relative; }
+  .ls-item:hover { background: var(--fg-soft); }
+  .ls-item .sact { flex: 0 0 auto; width: 11px; text-align: center; font-size: 10px; }
+  .ls-item .sact .spin-svg { vertical-align: 0; }
+  .ls-item .sact.done { color: var(--accent); }
+  .ls-item .sact.failed { color: var(--err); }
+  .ls-item .sdot { flex: 0 0 auto; width: 11px; text-align: center; font-size: 10px; }
+  .ls-item .stitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .ls-item .srel { flex: 0 0 auto; color: var(--muted-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ls-item .spin-pin, .ls-item .sact-btn { flex: 0 0 auto; color: var(--muted-faint); visibility: hidden; padding: 2px 3px; border-radius: 4px; display: inline-flex; align-items: center; }
+  .ls-item:hover .spin-pin, .ls-item:hover .sact-btn { visibility: visible; }
+  .ls-item .spin-pin:hover, .ls-item .sact-btn:hover { color: var(--accent); background: var(--accent-soft); }
+  .ls-item.pinned-row .spin-pin { visibility: visible; color: var(--warn); }
+  .ls-item.cur, .ls-item.cur:hover { background: color-mix(in oklch, var(--accent) 17%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .ls-item.cur .stitle { color: var(--accent); font-weight: 600; }
+  .ls-item .curtag { flex: 0 0 auto; color: var(--accent); font-size: 10px; }
+  .sdot-run { color: var(--accent); } .sdot-idle { color: var(--muted); } .sdot-ok { color: var(--accent); } .sdot-none { color: var(--muted-faint); }
+  .sdot-wait { color: var(--warn); } .sdot-err { color: var(--err); }
+
+  /* ─── 主流区（index.html:53-76 · style.css:286-543） ─── */
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+  .stream-wrap { position: relative; display: flex; flex: 1; min-height: 0; }
+  .stream { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 24px; }
+  .stream::-webkit-scrollbar { width: 8px; }
+  .stream::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .line { white-space: pre-wrap; word-break: break-word; }
+  .line + .line { margin-top: 2px; }
+  .gap { height: 16px; }
+  .dim { color: var(--muted-dim); }
+  .banner-hint { color: var(--muted-dim); margin-bottom: 4px; }
+
+  /* 用户消息气泡（style.css:311-336 · 行结构 render.js:658-662——溢出收起态带 .msg-clamped + ▾ 展开全部） */
+  .msg-user { display: flex; flex-direction: column; align-items: flex-end; margin: 4px 0; }
+  .msg-bubble { max-width: 80%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px 14px 4px 14px; padding: 10px 14px; color: var(--fg); position: relative; }
+  .msg-text { white-space: pre-wrap; word-break: break-word; }
+  .msg-clamped .msg-text { max-height: calc(1.75em * 5.5); overflow: hidden; position: relative; }
+  .msg-toggle { display: none; margin: 2px auto 0; color: var(--muted-dim); font-size: 12px; border-radius: 6px; padding: 1px 10px; }
+  .msg-clamped .msg-toggle, .msg-user.expanded .msg-toggle { display: inline-flex; }
+  .msg-toggle:hover { color: var(--accent); background: var(--accent-soft); }
+  .msg-acts { display: flex; gap: 2px; margin-top: 4px; padding-right: 2px; opacity: 0; }
+  .msg-user:hover .msg-acts { opacity: 1; }
+  .msg-acts button { color: var(--muted-dim); font-size: 12px; padding: 2px 8px; border-radius: 6px; }
+  .msg-acts button:hover { color: var(--accent); background: var(--accent-soft); }
+
+  /* 工作组（style.css:555-563 · 设计 specs/2026-10-13-web-work-section-design.md） */
+  .turn { margin: 2px 0; }
+  .work { margin: 2px 0; }
+  .work-head { color: var(--muted-dim); font-size: .9em; padding: 2px 6px 3px 2ch; margin-bottom: 4px; user-select: none; }
+  .work-head .doing { color: var(--warn); }
+  .work-head .tcaret { color: var(--muted); margin-left: 6px; }
+  body.light .work-head { color: var(--muted); }
+  .work-body { display: block; }
+  .work-body.hide { display: none; }
+
+  /* 思考块（style.css:544-553） */
+  .think { margin: 4px 0 4px 2ch; border-left: 2px dashed var(--border); padding: 2px 0 2px 10px; font-size: .9em; }
+  .think-head { color: var(--muted-dim); cursor: pointer; border-radius: 5px; padding: 1px 6px; margin: -1px -6px; display: inline-block; }
+  .think-head:hover { background: var(--fg-soft); color: var(--muted); }
+  .think-head .tcaret { color: var(--muted); margin-right: 6px; }
+  .think-hint { color: var(--muted-faint); font-size: .92em; }
+  .think-dur { color: var(--muted-faint); }
+
+  /* 工具行（style.css:472-522 · render.js:796-840,1028-1041） */
+  .tool-line { color: var(--muted); border-radius: 5px; }
+  .tool-line .tchar { color: var(--accent); margin-right: 8px; }
+  .tool-line .tverb { color: var(--fg); }
+  .tool-line .tname { color: #7cc9a5; font-weight: 700; }
+  .tool-line .targs { color: #97a49a; }
+  .tool-line .tcaret { color: var(--muted-faint); margin-left: 8px; font-size: .85em; }
+  .tool-line.tool-err .tchar { color: var(--err); }
+  .tool-body { margin: 2px 0 4px 2ch; }
+  .tb-out { border-left: 2px solid var(--border); font-size: .92em; padding: 2px 0; }
+  .tb-orow { white-space: pre-wrap; word-break: break-word; padding: 0 10px; color: var(--muted-dim); }
+  .tb-note { color: var(--muted-faint); padding: 1px 10px; }
+
+  /* 奏章体（新增件 · 工具展开体的朝会专属形态） */
+  .tb-memorial { border-left: 2px solid var(--accent-line); font-size: .92em; padding: 2px 0; }
+  .tbm-head { display: flex; align-items: baseline; gap: 10px; padding: 2px 10px 6px; }
+  .tbm-tag { color: var(--accent); border: 1px solid var(--accent-line); border-radius: 5px; padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+  .tbm-meta { color: var(--muted-faint); font-size: 11.5px; }
+  .tbm-link { margin-left: auto; color: var(--info); font-size: 11.5px; border-radius: 6px; padding: 1px 8px; }
+  .tbm-link:hover { background: var(--accent-soft); color: var(--accent); }
+  .tbm-tag.err { color: var(--err); border-color: color-mix(in oklch, var(--err) 42%, var(--border)); }
+  .back-link { color: var(--info); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .back-link:hover { color: var(--accent); }
+  .esc-row { justify-content: center; color: var(--muted-dim); font-size: 12px; }
+  .esc-row:hover { background: var(--fg-soft); }
+  .clk { cursor: pointer; }
+
+  .agent-md { display: flex; align-items: flex-start; gap: 8px; }
+  .agent-md .bullet { flex: 0 0 auto; color: var(--accent); }
+  .agent-md .md { flex: 1; min-width: 0; white-space: normal; line-height: 1.65; }
+  .md p { margin: 0 0 .5em; white-space: normal; word-break: break-word; }
+  .md p:last-child { margin-bottom: 0; }
+  .md h1, .md h2, .md h3, .md h4 { margin: .7em 0 .35em; font-size: 1.05em; color: var(--fg); }
+  .md ul { margin: .15em 0 .5em; padding-left: 1.6em; }
+  .md li { margin: .1em 0; }
+  .md code { font-family: var(--font-mono); font-size: .92em; color: var(--info); background: var(--fg-soft); border-radius: 4px; padding: 1px 5px; }
+  .md blockquote { margin: .35em 0 .5em; padding: 2px 0 2px 12px; border-left: 2px solid var(--border); color: var(--muted-dim); }
+  .md table { border-collapse: collapse; margin: .4em 0 .7em; font-size: .95em; width: 100%; table-layout: fixed; }
+  .md th, .md td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+  .md .hl-warn { color: var(--warn); }
+  .md .hl-ok { color: var(--accent); }
+  .md .dim2 { color: var(--muted-dim); }
+
+  .sub-line { color: var(--muted-dim); padding-left: 2ch; }
+  .sub-line .tree { color: var(--muted-faint); margin-right: 6px; }
+  .mark-line { color: var(--muted-faint); padding-left: 2ch; }
+  .ok { color: var(--accent); } .doing { color: var(--warn); } .bad { color: var(--err); } .info { color: var(--info); }
+
+  /* 轮脚（style.css:462-470：复制 / 分支 + 完成于 + usage——悬停轮次才显形，原型同样 hover 才显） */
+  .turn-foot { display: flex; align-items: center; gap: 2px; margin: 8px 0 0 2ch; opacity: 0; transition: opacity .15s ease; }
+  .turn:hover .turn-foot { opacity: 1; }
+  .turn-foot .tf-btn { color: var(--muted-dim); font-size: 12px; padding: 2px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; }
+  .turn-foot .tf-btn:hover { color: var(--accent); background: var(--accent-soft); }
+  .turn-foot .tf-time { color: var(--muted-faint); font-size: 11.5px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+  .caret { display: inline-block; width: 8px; height: 15px; vertical-align: -2px; background: var(--accent); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .spin-svg { display: inline-block; vertical-align: -1.5px; animation: spin .9s linear infinite; color: var(--accent); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ═══ 朝会卡（新增件 · spawn 组卡族——壳件复用 .spawn-group/.sg-head/.sg-list/.sg-row，
+         只增三小件：进度行 / 阶段行 / 注记行；style.css:1328-1344 直续） ═══ */
+  .court-card .sg-title { color: var(--fg); font-weight: 700; }
+  .court-card .sg-dot { color: var(--accent); }
+  .court-card .sg-dot.err { color: var(--err); }
+  .court-card .sg-dot.dim { color: var(--muted); }
+  .court-card .sg-dot.done { color: var(--accent); }
+  .cc-rec { margin-left: auto; color: var(--info); font-size: 11.5px; border-radius: 6px; padding: 1px 8px; flex: 0 0 auto; }
+  .cc-rec:hover { background: var(--accent-soft); color: var(--accent); }
+  .cc-prog { display: flex; align-items: center; gap: 8px; margin: 5px 1px 3px; }
+  .cc-bar { flex: 0 0 140px; height: 5px; border-radius: 3px; background: color-mix(in oklch, var(--border) 62%, transparent); overflow: hidden; }
+  .cc-bar > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .cc-num { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .cc-wave { color: var(--muted-faint); font-size: 11.5px; }
+  .cc-rows { display: flex; flex-direction: column; margin-top: 2px; }
+  .cc-row { display: flex; gap: 8px; align-items: baseline; padding: 1px 2px; }
+  .cc-ic { flex: 0 0 auto; width: 12px; text-align: center; font-size: .9em; }
+  .cc-row.done .cc-ic { color: var(--accent); }
+  .cc-row.run .cc-ic { color: var(--accent); }
+  .cc-row.todo .cc-ic { color: var(--muted-faint); }
+  .cc-row.err .cc-ic { color: var(--err); }
+  .cc-lab { color: var(--fg); white-space: nowrap; font-weight: 600; }
+  .cc-row.todo .cc-lab { color: var(--muted); font-weight: 400; }
+  .cc-sum { color: var(--muted-dim); font-size: .92em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-note { color: var(--muted-dim); font-size: .92em; padding: 3px 2px 0 2ch; }
+  .cc-note.warn { color: var(--warn); }
+
+  /* ─── 子代理组卡（style.css:1328-1344 直裁——朝会卡壳件复用） ─── */
+  .spawn-group { margin: 4px 0 4px 2ch; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px 6px; background: color-mix(in oklch, var(--surface-2) 35%, transparent); font-size: 12.5px; }
+  .sg-head { display: flex; gap: 8px; align-items: baseline; color: var(--fg); font-weight: 600; }
+  .sg-head .sg-dot { color: var(--accent); }
+  .sg-head .sg-sum { color: var(--muted-dim); font-weight: 400; font-size: .92em; }
+  .sg-list { margin-top: 4px; display: flex; flex-direction: column; gap: 1px; }
+  .sg-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px 2px 2px; cursor: pointer; border-radius: 5px; }
+  .sg-row:hover { background: var(--fg-soft); }
+  .sg-caret { color: var(--muted-faint); font-family: var(--font-mono); flex: 0 0 auto; }
+  .sg-name { color: var(--accent); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .sg-id { color: var(--muted-faint); font-family: var(--font-mono); font-size: .9em; flex: 0 0 auto; }
+  .sg-st { white-space: nowrap; font-size: .92em; flex: 0 0 auto; }
+  .sg-st.st-run { color: var(--accent); }
+  .sg-st.st-ok { color: var(--muted); }
+  .sg-st.st-err { color: var(--err); }
+  .sg-st.st-warn { color: var(--warn); }
+  .sg-err { color: var(--err); padding: 2px 0 2px 2ch; font-size: .95em; }
+  /* 行内三色态全局版（style.css:996-1001 直裁） */
+  .st-ok { color: var(--accent); } .st-run { color: var(--accent); } .st-warn { color: var(--warn); } .st-err { color: var(--err); }
+  .st-q { color: var(--muted-faint); } .st-wave { color: var(--info); }
+
+  /* ─── composer 区（index.html:79-106 · style.css:596-800） ─── */
+  .composer-zone { position: relative; }
+  /* 排队消息条（style.css:598-604 · 行结构 app.js:282-287——busy 期，输入框上方逐条显示） */
+  .queuebar { display: none; padding: 2px 20px; }
+  .queuebar.has { display: block; }
+  .queue-row { display: flex; align-items: baseline; gap: 8px; color: var(--warn); font-size: 12.5px; padding: 2px 6px; border-radius: 6px; }
+  .queue-row:hover { background: var(--warn-soft); }
+  .queue-row .qtext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .queue-hint { color: var(--muted-faint); font-size: 11px; padding: 0 6px 2px; }
+  .toastline { padding: 2px 20px; color: var(--warn); font-size: 12.5px; display: none; }
+  .toastline.show { display: block; }
+  .inputwrap { position: relative; padding: 4px 20px 12px; }
+
+  .popup { position: absolute; left: 20px; right: 20px; bottom: 100%; margin-bottom: 6px; background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: 480px; z-index: 10; }
+  .pu-head { display: flex; align-items: baseline; gap: 10px; padding: 7px 14px 6px; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+  .pu-title { color: var(--accent); font-weight: 600; white-space: pre-wrap; }
+  .pu-en { margin-left: auto; color: var(--muted-faint); font-size: 10.5px; letter-spacing: .1em; white-space: nowrap; }
+  .pu-close { color: var(--muted-faint); padding: 0 4px; border-radius: 4px; font-size: 12px; flex: 0 0 auto; }
+  .pu-body { overflow-y: auto; min-height: 0; padding: 4px 0; }
+  .pu-item { display: flex; align-items: baseline; gap: 8px; padding: 5px 14px; cursor: pointer; }
+  .pu-item .pu-caret { flex: 0 0 12px; color: var(--accent); visibility: hidden; }
+  .pu-item.sel { background: var(--accent-soft); }
+  .pu-item.sel .pu-caret { visibility: visible; }
+  .pu-item .pi-name { color: var(--fg); font-weight: 600; white-space: nowrap; }
+  .pu-item .pi-desc { flex: 1; min-width: 0; color: var(--muted-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pu-item:hover { background: var(--fg-soft); }
+  .pu-foot { padding: 6px 14px; color: var(--muted-faint); font-size: 10.5px; border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+
+  .inputbox { position: relative; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); padding: 10px 12px 8px; transition: border-color .15s ease, box-shadow .15s ease; }
+  .inputbox:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .ib-main { display: flex; align-items: flex-start; gap: 10px; }
+  .inputbox .pchar { color: var(--accent); font-weight: 700; line-height: 1.75; }
+  .inputbox .tx { flex: 1; min-width: 0; color: var(--fg); line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+  .inputbox .tx.holder { color: var(--muted-dim); }
+  .ib-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .cb-left, .cb-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .cb-chip { color: var(--muted); font-size: 12px; padding: 3px 9px; border-radius: 7px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; border: 1px solid transparent; }
+  .cb-chip:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .cb-chip .dim { color: var(--muted-faint); }
+  .mode-chip { color: var(--accent); border-radius: 6px; padding: 2px 7px; font-size: 12px; white-space: nowrap; }
+  .mode-chip:hover { background: var(--accent-soft); }
+  .sendbtn { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); color: var(--muted); background: transparent; font-size: 15px; }
+  .sendbtn.ready { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .sendbtn.idle { color: var(--muted-faint); }
+  .sendbtn.stop { color: #fff; background: var(--err); border-color: var(--err); font-size: 11px; }
+
+  /* ─── 详情分栏（index.html:109-121 · style.css:929-1013） ─── */
+  .splitter { flex: 0 0 5px; background: transparent; }
+  .pane { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 45%, var(--bg)); }
+  .pane-tabs { position: relative; display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); }
+  .pt-list { flex: 1 1 0; display: flex; align-items: flex-end; gap: 2px; min-width: 0; overflow: hidden; }
+  .pt-item { flex: 0 1 auto; min-width: 0; max-width: 200px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 7px 6px 11px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .pt-item:hover { color: var(--fg); background: var(--fg-soft); }
+  .pt-item.sel { color: var(--fg); background: var(--surface-2); border-color: var(--border); position: relative; }
+  .pt-item.sel::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--surface-2); }
+  .pt-dot { flex: 0 0 auto; font-size: 10px; }
+  .pt-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pt-x { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-faint); font-size: 10px; }
+  .pt-x:hover { color: var(--err); background: var(--err-soft); }
+  .pt-add, .pt-chev { flex: 0 0 auto; width: 24px; height: 24px; margin-bottom: 3px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted-dim); border: 1px solid transparent; font-size: 12px; }
+  .pt-add:hover, .pt-chev:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* 朝会实录（新增件 · 分栏选项卡 kind:'court'） */
+  .court-rec { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .cr-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 16px 8px; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+  .cr-title { color: var(--fg); font-weight: 700; }
+  .cr-sub { color: var(--muted-faint); font-size: 11.5px; }
+  .cr-live { margin-left: auto; color: var(--warn); font-size: 11.5px; }
+  .cr-live.done { color: var(--accent); }
+  .cr-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 18px 18px; font-size: .95em; }
+  .cr-sec { margin-top: 10px; }
+  .cr-sec > h4 { margin: 0 0 4px; font-size: 12.5px; color: var(--accent); font-weight: 700; }
+  .cr-sec > h4 .badge { color: var(--muted-faint); font-weight: 400; font-size: 11px; margin-left: 8px; }
+  .cr-sec.dim0 > h4 { color: var(--muted); }
+  .cr-row { color: var(--fg); font-size: 12.5px; margin: 1px 0; padding-left: 2px; }
+  .cr-row.dim2 { color: var(--muted-dim); }
+  .cr-issue { color: var(--warn); font-size: 12.5px; margin: 2px 0 2px 12px; }
+  .cr-issue::before { content: "▸ "; }
+
+  /* 子代理选项卡（style.css:984-994） */
+  .ag-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  .ag-stream { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 16px; }
+  .ag-stream::-webkit-scrollbar { width: 8px; }
+  .ag-stream::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .ag-stream .agent-spin { color: var(--muted-dim); }
+
+  /* 悬浮任务清单（style.css:874-899） */
+  .todo-float { position: absolute; top: 8px; right: 14px; z-index: 6; }
+  .tf-pill { display: inline-flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 12px; padding: 4px 12px; }
+  .tf-pill .tf-count { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tf-open { visibility: hidden; color: var(--muted-dim); }
+  .todo-float:hover .tf-open, .todo-float.open .tf-open { visibility: visible; }
+  .tf-owner { color: var(--muted-faint); font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-family: var(--font-mono); }
+  .tf-card { position: absolute; top: calc(100% + 6px); right: 0; width: 300px; background: var(--surface-2); border: 1px solid var(--accent-line); border-radius: 10px; max-height: 340px; display: flex; flex-direction: column; overflow: hidden; z-index: 8; }
+  .tf-card[hidden] { display: none; } /* hidden 兜底——display:flex 会盖掉 UA 的 [hidden]（style.css:896 同款） */
+  .tf-head { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 12px 6px; color: var(--muted); font-size: 11px; letter-spacing: .12em; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); }
+  .tf-list { overflow-y: auto; padding: 6px 8px; }
+
+  /* ─── 右栏（index.html:123-204 · style.css:802-870） ─── */
+  .side { width: 360px; border-left: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 50%, var(--bg)); display: flex; flex-direction: column; min-height: 0; }
+  .panel { padding: 12px 16px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .panel-state { flex: 1 1 55%; }
+  .panel-todo { flex: 1 1 45%; border-top: 1px solid var(--border); }
+  .ptabs { display: flex; align-items: baseline; gap: 2px; border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent); margin-bottom: 10px; }
+  .ptab { color: var(--muted-dim); font-size: 12px; letter-spacing: .06em; padding: 4px 10px 7px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .ptab.sel { color: var(--accent); border-bottom-color: var(--accent); }
+  .ptab.static { cursor: default; }
+  .ptabs .ptab-en { margin-left: auto; color: var(--muted-faint); font-size: 10px; letter-spacing: .08em; }
+  .side .page { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+  .kv { display: grid; grid-template-columns: 70px 1fr; gap: 1px 12px; font-size: 12.5px; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; color: var(--fg); font-variant-numeric: tabular-nums; word-break: break-all; }
+  .kv dd.info { color: var(--info); }
+  .kv dd .clickable { color: var(--info); }
+  .side-sep { border: 0; border-top: 1px dashed color-mix(in oklch, var(--border) 80%, transparent); margin: 10px 0; }
+  .ctxbar-row { display: flex; align-items: center; gap: 10px; }
+  .bar { flex: 1; height: 5px; border-radius: 3px; background: color-mix(in oklch, var(--border) 62%, transparent); overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .ctxbar-row .lbl { color: var(--muted); font-size: 12px; }
+  .ctxbar-row .pct { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .subhead { color: var(--muted); font-size: 11px; letter-spacing: .16em; display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+  .subhead .en { color: var(--muted-faint); font-size: 10px; letter-spacing: .08em; }
+  .mod { display: flex; align-items: center; gap: 9px; border-radius: 7px; padding: 4px 8px; margin: 1px 0 0; font-size: 12.5px; }
+  .mod .dot { flex: 0 0 auto; width: 10px; text-align: center; font-size: 11px; }
+  .mod.mounted .dot { color: var(--accent); }
+  .mod.active .dot { color: var(--warn); }
+  .mod .mname { color: var(--fg); white-space: nowrap; }
+  .mod .mname .locktag { color: var(--muted-faint); font-size: 11px; }
+  .mod .mdesc { flex: 1; min-width: 0; color: var(--muted-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mod .mstate { flex: 0 0 auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mod.mounted .mstate { color: var(--accent); }
+  .mod.active .mstate { color: var(--warn); }
+  .panel-hint { margin-top: auto; padding-top: 8px; color: var(--muted-faint); font-size: 11px; }
+  /* 面板页（实装 .page.paged：页不出滚动条，列表区量高定页大小）——原型按可视余高定高 112px ≈ 3 行 */
+  .panel-state .page .plist { flex: 1; min-height: 0; height: 112px; overflow: hidden; }
+  .pager { display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 6px; color: var(--muted-faint); font-size: 11px; }
+  .pager button { color: var(--muted-dim); padding: 1px 10px; border-radius: 6px; font-size: 13px; }
+  .pager button:hover { color: var(--accent); background: var(--accent-soft); }
+  .pager .pg-ind { font-variant-numeric: tabular-nums; letter-spacing: .06em; }
+  .todo-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .todo-progress .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .todo { display: flex; align-items: center; gap: 9px; border-radius: 7px; padding: 4px 8px; margin: 1px 0 0; font-size: 12.5px; }
+  .todo .tick { flex: 0 0 auto; width: 12px; text-align: center; }
+  .todo[data-state="done"] .tick { color: var(--accent); }
+  .todo[data-state="active"] .tick { color: var(--warn); }
+  .todo[data-state="pending"] .tick { color: var(--muted-faint); }
+  .todo .ttext { flex: 1; min-width: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .todo[data-state="done"] .ttext { color: var(--muted-dim); text-decoration: line-through; text-decoration-color: var(--muted-faint); }
+  .todo[data-state="active"] .ttext { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<header class="pagehead">
+  <span class="brand"><img src="../../web/assets/logo-icon-color.webp" alt="Orosus" />Orosus <span class="cn">连山 · 三省六部 Web GUI 原型</span></span>
+  <span class="meta">v0.1 · 2026-10-14 · 鼠标优先 · 形态口径 = apps/cli/src/web 实装</span>
+</header>
+
+<div class="wrap">
+  <div class="notebar">
+    <b>三省六部 · 朝会 Web GUI 原型（真实 UI 体系复刻版）</b>——应用壳（appbar / 会话栏 / 流区 / 工作组 / 详情分栏 / 状态·任务面板 / composer / interaction 浮层）逐项对齐 <span class="proto">apps/cli/src/web 实装</span>；
+    新增件只四类：<b>朝会卡</b>（流区内 · spawn 组卡族）·<b>奏章体</b>（工具展开体的朝会专属形）·<b>朝会实录</b>（分栏选项卡 kind: court）·<b>部行点击→既有子代理选项卡</b>（open-or-switch，白送件）。
+    <br/><b>史实校准（2026-10-14 网调落点）</b>：门下审驳按唐制三档体例（<b>封还 / 驳正 / 涂归</b>，见第 6–7 步与实录）· 户部核账先行<b>规则预检</b>（零 LLM，门下只审语义）· 「保留意见放行」的历史对位 = <b>政事堂合议</b>（第 7 步支线）· 高风险写面执行前 <b>画敕</b>请旨注记（第 8 步）。
+    点步骤条或 ←/→ 推进；四条支线：第 4 步选 Esc、第 7 步进政事堂、第 9 步点 ■ 硬停、第 9 步点工部行开分栏。每屏注记尾有「复刻锚点」file:line——实施批照锚点做，不会跑偏。
+  </div>
+
+  <div class="stepbar" id="stepbar"></div>
+  <div class="navrow">
+    <button class="navbtn" id="prev">← 上一步</button>
+    <button class="navbtn" id="next">下一步 →</button>
+    <span class="pos" id="pos"></span>
+    <button class="navbtn" id="restart" style="margin-left:auto">↺ 重新走查</button>
+    <button class="navbtn" id="theme">☀ 浅色面</button>
+  </div>
+
+  <div class="layout">
+    <div id="appscl"></div>
+    <div class="notes" id="notes"></div>
+  </div>
+</div>
+
+<script>
+/* ═══════════ 状态与导航 ═══════════ */
+const S = { i: 0, choice: null, dark: true };
+
+/* ═══════════ 通用小件 ═══════════ */
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const dim = (t) => `<span class="dim">${t}</span>`;
+const spin = () => `<svg class="spin-svg" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 1.5 A6.5 6.5 0 0 1 14.5 8"/></svg>`;
+
+/* ═══════════ 流区件 ═══════════ */
+/* 用户消息气泡（render.js:641-667——内含 ▾ 展开全部（收起态才显）+ 悬停 ⧉ 复制；clamped = 超 5.5 行收起态） */
+const userBubble = (t, clamped) => `<div class="msg-user${clamped ? ' msg-clamped' : ''}"><div class="msg-bubble"><div class="msg-text">${esc(t)}</div><button type="button" class="msg-toggle">▾ 展开全部</button></div><div class="msg-acts"><button type="button" title="复制消息">⧉ 复制</button></div></div>`;
+
+const markLine = (t) => `<div class="line mark-line">${t}</div>`;
+
+/* 工作组头（render.js workHeadRender/workHeadTick——工作中无箭头不可收；结算后箭头+收起） */
+const workHead = (o) => o.mode === 'running'
+  ? `<div class="work-head">工作中 <span class="doing">${o.dur}</span></div>`
+  : `<div class="work-head">${esc(o.label)}${o.caret ? `<span class="tcaret">${o.caret}</span>` : ''}</div>`;
+
+/* 思考块折叠态（render.js:704-728——.think.collapsed > .think-head + .think-body（收起体空，全文不进 DOM）） */
+const thinkBlock = (dur) => `<div class="think collapsed"><div class="think-head"><span class="tcaret">▸</span>[思考]${dur ? ` <span class="think-dur">· ${dur}</span>` : ''} <span class="think-hint">· 点击展开</span></div><div class="think-body"></div></div>`;
+
+/* 工具行（render.js toolHeadHtml:113-121 · patchToolRow:1028-1041） */
+const toolLine = (o) => {
+  const arg = o.arg ? `<span class="targs">(${esc(o.arg)})</span>` : '';
+  const chip = o.chip ? `<span class="targs"> · ${esc(o.chip)}</span>` : '';
+  const caret = o.caret ? `<span class="tcaret">${o.caret}</span>` : '';
+  return `<div class="line tool-line${o.err ? ' tool-err' : ''}"><span class="tchar">●</span> <span class="tverb">${o.used ? 'Used' : 'Using'}</span> <span class="tname">${esc(o.name)}</span>${arg}${chip}${caret}</div>`;
+};
+
+const agentMd = (inner) => `<div class="line agent-md"><span class="bullet">●</span><div class="md">${inner}</div></div>`;
+const subLine = (t) => `<div class="line sub-line"><span class="tree">⎿</span>${t}</div>`;
+const tailLine = (busy) => busy ? `<div class="line dim">${spin()}</div>` : `<div class="line dim">正在待命 <span class="caret"></span></div>`;
+/* 轮脚（render.js:1099-1103——复制/分支 + 完成于（fmtTurnTime：今天/昨天/M月D日 HH:MM）+ ↑/↓ usage；hover 才显） */
+const turnFoot = (time, usage) => `<div class="turn-foot"><button type="button" class="tf-btn" title="复制本轮回复">⧉ 复制</button><button type="button" class="tf-btn" title="从此处分叉会话">⑂ 分支</button><span class="tf-time">完成于 ${time}</span>${usage ? `<span class="tf-time">${usage}</span>` : ''}</div>`;
+
+/* ═══════════ 朝会卡（新增件 · spawn 组卡族——壳件复用 .spawn-group/.sg-head/.sg-list/.sg-row） ═══════════ */
+const DEPT_IDS = { 兵部: '4b1c88a2', 工部: '7f3a21c4', 礼部: '2d9e4b17', 刑部: 'a2c35f08' };
+function courtCard(c) {
+  const dotCls = c.state === 'running' ? '' : c.state === 'done' ? ' done' : c.state === 'err' ? ' err' : ' dim';
+  const head = `
+    <div class="sg-head">
+      <span class="sg-dot${dotCls}">●</span>
+      <span class="sg-title">三省六部</span>
+      <span class="sg-sum">· ${c.stage}</span>
+      ${c.record ? `<button class="cc-rec" data-go="${c.record}">实录 ⇥</button>` : ''}
+    </div>`;
+  const prog = `
+    <div class="cc-prog"><span class="cc-bar"><i style="width:${c.pct}%"></i></span><span class="cc-num">${c.prog}</span><span class="cc-wave">${c.wave}</span></div>`;
+  const rows = (c.stages || []).map((s) => `
+    <div class="cc-row ${s.cls}"><span class="cc-ic">${s.ic}</span><span class="cc-lab">${s.label}</span><span class="cc-sum">${s.sum || ''}</span></div>`).join('');
+  /* 部行 = .sg-row 真形态（label 名 + 8 位编号 + 状态；点击 → openAgentTab open-or-switch） */
+  const depts = c.depts ? `<div class="sg-list">${c.depts.map((d) => `
+      <div class="sg-row"${d.click ? ` data-go="${d.click}"` : ''}${d.click ? ' title="点击在右侧分栏查看该子代理（已开则切换，不重复开）"' : ''}>
+        <span class="sg-caret">${d.last ? '└─' : '├─'}</span>
+        <span class="sg-name">${d.name}${d.task ? ' ' + d.task : ''}</span>
+        <span class="sg-id">${d.id || DEPT_IDS[d.name] || ''}</span>
+        <span class="sg-st ${d.stCls}">${d.st}</span>
+      </div>`).join('')}</div>` : '';
+  const noteWarn = c.noteWarn || /驳回|保留意见/.test(c.note || '');
+  const note = c.note ? `<div class="cc-note${noteWarn ? ' warn' : ''}">⎿ ${c.note}</div>` : '';
+  return `<div class="spawn-group court-card">${head}${prog}<div class="cc-rows">${rows}</div>${depts}${note}</div>`;
+}
+
+/* 奏章体（新增件——convene 工具结果展开体；buildMemorialBody） */
+function memorialBody(o) {
+  return `<div class="tool-body"><div class="tb-memorial">
+    <div class="tbm-head"><span class="tbm-tag">奏章</span><span class="tbm-meta">${o.meta}</span><button class="tbm-link" data-go="${o.record}">◧ 查看朝会实录</button></div>
+    <div class="md">${o.md}</div>
+  </div></div>`;
+}
+
+/* 中断/散朝奏章（正文版） */
+const memorialPlain = (o) => `<div class="tool-body"><div class="tb-memorial">
+  <div class="tbm-head"><span class="tbm-tag${o.tagErr ? ' err' : ''}">${o.tag}</span><span class="tbm-meta">${o.meta}</span></div>
+  <div class="md">${o.md}</div>
+</div></div>`;
+
+/* ═══════════ 壳体件（appbar / 会话栏 / 右栏 / composer / 分栏） ═══════════ */
+
+const appbar = (a) => `
+<div class="appbar">
+  <img class="ab-logo" src="../../web/assets/logo-icon-color.webp" alt="" />
+  <span class="ab-brand">orosus</span>
+  <button class="ab-title" title="点击聚焦左栏当前会话行">tool-fs 重构 <span class="dim">#8f21</span></button>
+  <span class="ab-addr">127.0.0.1:52431 · token 已校验</span>
+  <span class="ab-acts">
+    <button class="btn">⚙ 设置</button>
+    <button class="btn">? 帮助</button>
+    <button class="btn">⋮ 更多</button>
+    <button class="btn" id="ab-theme">☀ 浅色</button>
+    <button class="btn${a && a.pane ? ' on' : ''}">◧ 分栏</button>
+  </span>
+</div>`;
+
+/* 左栏（index.html:32-41 骨架 · app.js:699-743 行结构：置顶区 → 项目区 → 组头(文件夹图标) → 行(活动点/标题/当前/时间)） */
+const FOLDER_OPEN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>';
+const PIN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 7 3.2 3.2V16H6.8v-1.8L10 11 9 4z"/><path d="M12 16v5"/></svg>';
+const ARCHIVE_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18v4H3z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>';
+
+function lside(a) {
+  const busy = a && a.courtState === 'running';
+  /* 行：sact/sdot + stitle + curtag + （悬停）置顶/归档钮 + srel（fmtRel 文案：刚刚 / N 分 / N 小时 / 昨天 / 上周 / M/D） */
+  const row = (o) => `
+    <div class="ls-item${o.cur ? ' cur' : ''}${o.pinned ? ' pinned-row' : ''}">
+      ${o.spin ? `<span class="sact">${spin()}</span>` : `<span class="sdot ${o.dotCls}">${o.dot}</span>`}
+      <span class="stitle" title="${esc(o.title)}">${esc(o.title)}</span>
+      ${o.cur ? '<span class="curtag">当前</span>' : ''}
+      <button class="sact-btn spin-pin" title="${o.pinned ? '取消置顶' : '置顶'}">${PIN_SVG}</button>
+      <button class="sact-btn" title="归档">${ARCHIVE_SVG}</button>
+      <span class="srel">${o.rel}</span>
+    </div>`;
+  return `<aside class="lside">
+    <div class="ls-top"><button class="btn primary ls-new">＋ 新会话</button></div>
+    <div class="ls-body">
+      <div class="ls-sec"><span>已置顶</span><span class="ls-count">1</span><button class="ls-collapse" title="收起会话栏">⇤</button></div>
+      ${row({ pinned: true, dot: '○', dotCls: 'sdot-none', title: '三省六部 web 原型走查', rel: '2 小时' })}
+      <div class="ls-sec"><span>项目</span><span class="ls-count">2</span></div>
+      <div class="ls-group" data-path="D:\\develop\\Orosus"><span class="gicon">${FOLDER_OPEN_SVG}</span><span class="gname">Orosus</span><span class="gcount">5</span><span class="g-acts"><button class="g-act" title="更多">⋯</button><button class="g-act" title="在该工作区下新建会话">＋</button></span></div>
+      ${row({ cur: true, spin: busy, dot: '○', dotCls: 'sdot-none', title: 'tool-fs 重构', rel: busy ? '刚刚' : '11:44' })}
+      ${row({ dot: '○', dotCls: 'sdot-idle', title: 'web 走查修⑩ 补漏', rel: '昨天' })}
+      ${row({ dot: '●', dotCls: 'sdot-ok', title: 'sansheng-liubu 方案评审', rel: '昨天' })}
+      ${row({ dot: '○', dotCls: 'sdot-idle', title: '设置页打磨', rel: '3 天前' })}
+      ${row({ dot: '○', dotCls: 'sdot-none', title: 'M5 走查记录', rel: '上周' })}
+      <div class="ls-more">∨ 展开更多（还有 2 条）</div>
+      <div class="ls-group" data-path="D:\\develop\\ZCode"><span class="gicon">${FOLDER_OPEN_SVG}</span><span class="gname">ZCode</span><span class="gcount">2</span><span class="g-acts"><button class="g-act" title="更多">⋯</button><button class="g-act" title="在该工作区下新建会话">＋</button></span></div>
+    </div>
+  </aside>`;
+}
+
+/* 右栏（index.html:123-204 结构 · 行结构 app.js:3599-3631/3692-3700；模块名与描述 = zh-CN locales 原文，
+   列表量高自适应分页（app.js listPageSize 口径）——本屏可视高约 3 行/页，摆第 7/7 页（含朝会模块） */
+const MOD_PAGE = (courtRunning) => [
+  { name: 'tool-subagent', desc: '子代理派活工具族——独立上下文帮手（spawn 派活 / 在册查询 / 停单个）', state: 'mounted' },
+  { name: 'tool-peers', desc: '会话互相感知——同项目会话占用查询与共享记忆', state: 'mounted' },
+  /* sansheng-liubu 描述 = specs/modules/sansheng-liubu.md §2 description；活动态行 = 设计增量（数据面可从活动会话事件推导） */
+  { name: 'sansheng-liubu', desc: '三省六部朝会编排——起草/审驳/分解/波次并行/奏章汇总的多分身协作政策', state: courtRunning ? 'active' : 'mounted' },
+];
+
+/* 'HH:MM:SS' → fmtElapsed 口径（app.js:656-664：N 秒 / N 分 N 秒 / N 时 N 分） */
+function fmtElapsedOf(hms) {
+  const m = /^(\d+):(\d\d):(\d\d)$/.exec(String(hms || ''));
+  if (!m) return '';
+  const h = +m[1], mi = +m[2], s = +m[3];
+  const total = h * 3600 + mi * 60 + s;
+  if (total < 60) return total + ' 秒';
+  if (total < 3600) return mi + ' 分 ' + s + ' 秒';
+  return h + ' 时 ' + mi + ' 分';
+}
+
+function sidePanels(a) {
+  const court = a.courtState;
+  const late = court === 'done'; /* 奏章回注后主上下文吃进结果——tokens/上下文随之抬升 */
+  const elapsed = fmtElapsedOf(a.elapsed) || '26 分 11 秒';
+  const tokens = late ? '↑ 3,988 · ↓ 39,127 · 55%' : '↑ 2,411 · ↓ 28,873 · 62%';
+  const ctx = late ? '21k/200k' : '12k/200k';
+  const ctxPct = late ? 10.5 : 6;
+  const MOD_STATE_TEXT = { mounted: '已挂载', loading: '挂载中', off: '未挂载', pendingConfirm: '待确认', active: '朝会进行中' };
+  const modRow = (m) => {
+    const dot = m.state === 'mounted' ? '●' : (m.state === 'loading' || m.state === 'pendingConfirm') ? '◐' : m.state === 'active' ? '◐' : '○';
+    return `<div class="mod ${m.state}" title="${esc(m.desc)}"><span class="dot">${dot}</span><span class="mname">${esc(m.name)}</span><span class="mdesc">${esc(m.desc)}</span><span class="mstate">${MOD_STATE_TEXT[m.state]}</span></div>`;
+  };
+  const mods = MOD_PAGE(court === 'running').map(modRow).join('');
+  const todo = a.todo || [];
+  const done = todo.filter((t) => t.state === 'done').length;
+  const tick = { done: '✓', active: '◐', pending: '○' };
+  const todoRows = todo.map((t) => `<div class="todo" data-state="${t.state}" title="由 Agent 实时同步"><span class="tick">${tick[t.state] || '○'}</span><span class="ttext">${esc(t.text)}</span></div>`).join('');
+  return `<aside class="side">
+    <section class="panel panel-state">
+      <div class="ptabs"><button class="ptab sel">运行状态</button><button class="ptab">网络 · MCP</button><button class="ptab">会话协同</button><span class="ptab-en">1/3</span></div>
+      <div class="page">
+        <dl class="kv">
+          <dt>模型</dt><dd><span class="clickable" title="点击切换模型（/model）">GLM-5.3</span></dd>
+          <dt>会话</dt><dd><span class="clickable" title="tool-fs 重构">tool-fs 重构</span></dd>
+          <dt>工作目录</dt><dd class="info">D:\\develop\\Orosus</dd>
+          <dt>运行时间</dt><dd>${elapsed}</dd>
+          <dt>Tokens</dt><dd>${tokens}</dd>
+        </dl>
+        <hr class="side-sep" />
+        <div class="ctxbar-row"><span class="lbl">上下文</span><div class="bar"><i style="width:${ctxPct}%"></i></div><span class="pct">${ctx}</span></div>
+        <hr class="side-sep" />
+        <div class="subhead"><span>模块挂载</span><span class="en">MODULES</span></div>
+        <div class="plist">${mods}</div>
+        <div class="pager"><button>‹</button><span class="pg-ind">7/7</span><button>›</button></div>
+        <div class="panel-hint">点击行挂载 / 卸载 · 锁定行点按提示原因</div>
+      </div>
+    </section>
+    <section class="panel panel-todo">
+      <div class="ptabs"><span class="ptab sel static">任务清单</span><span class="ptab-en">TASKS</span></div>
+      <div class="todo-progress"><div class="bar"><i style="width:${todo.length ? Math.round(done / todo.length * 100) : 0}%"></i></div><span class="count">${done}/${todo.length}</span></div>
+      <div>${todoRows}</div>
+      <div class="panel-hint">由 Agent 实时同步 · 只读</div>
+    </section>
+  </aside>`;
+}
+
+/* interaction 浮层（ui.js:507-598 · style.css:611-719） */
+function popupHTML(p) {
+  const rows = p.items.map((it, i) => `
+    <div class="pu-item${i === p.sel ? ' sel' : ''}" data-go="${p.go}" data-choice="${it.key || ''}">
+      <span class="pu-caret">❯</span><span class="pi-name">${it.name}</span>
+      ${it.desc ? `<span class="pi-desc">${it.desc}</span>` : ''}
+    </div>`).join('');
+  const escRow = p.escGo ? `<div class="pu-item esc-row" data-go="${p.escGo}">${p.escText || 'Esc 取消'}</div>` : '';
+  return `<div class="popup">
+    <div class="pu-head"><span class="pu-title">${p.title}</span><span class="pu-en">${p.en || ''}</span><span class="pu-close">✕</span></div>
+    <div class="pu-body">${p.pre || ''}${rows}${escRow}</div>
+    <div class="pu-foot">${p.foot || ''}</div>
+  </div>`;
+}
+
+/* composer（index.html:82-105） */
+function composerZone(a) {
+  const c = a.composer || {};
+  const send = c.stop
+    ? `<button class="sendbtn stop" title="停止生成（双击 Esc 同效）"${c.stopGo ? ` data-go="${c.stopGo}"` : ''}>■</button>`
+    : c.ready
+      ? '<button class="sendbtn ready" title="发送（Enter）">↑</button>'
+      : '<button class="sendbtn idle" title="发送（Enter）">↑</button>';
+  const tx = c.text
+    ? `<span class="tx">${esc(c.text)}</span>`
+    : `<span class="tx holder">${esc(c.holder || '向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…')}</span>`;
+  return `<div class="composer-zone">
+    <div class="queuebar${c.queue ? ' has' : ''}">${c.queue || ''}</div>
+    <div class="toastline${c.toast ? ' show' : ''}">${c.toast || ''}</div>
+    <div class="inputwrap">
+      ${a.popup ? popupHTML(a.popup) : ''}
+      <div class="inputbox${c.go ? ' clk' : ''}"${c.go ? ` data-go="${c.go}"` : ''}>
+        <div class="ib-main"><span class="pchar">❯</span>${tx}</div>
+        <div class="ib-bar">
+          <span class="cb-left">
+            <button class="cb-chip" title="引用文件（= 输入 @）">＋ 文件</button>
+            <button class="mode-chip" title="权限模式">◆ 需要时候询问 ▾</button>
+          </span>
+          <span class="cb-right">
+            <button class="cb-chip" title="切换模型">GLM-5.3 <span class="dim">▾</span></button>
+            <button class="cb-chip" title="思考投入档位">思考 high <span class="dim">▾</span></button>
+            ${send}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* 分栏（index.html:109-121 · style.css:929-1013） */
+function paneHTML(p) {
+  const tabs = p.tabs.map((t) => `
+    <div class="pt-item${t.sel ? ' sel' : ''}"${t.go ? ` data-go="${t.go}"` : ''}>
+      <span class="pt-dot ${t.dotCls || ''}">${t.dot || ''}</span>
+      <span class="pt-label">${esc(t.label)}</span><span class="pt-x">✕</span>
+    </div>`).join('');
+  return `<div class="pane-tabs">
+    <button class="pt-chev" title="查看全部选项卡"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>
+    <div class="pt-list">${tabs}</div>
+    <button class="pt-add" title="新建选项卡">＋</button>
+  </div>
+  <div class="pane-body">${p.body}</div>`;
+}
+
+/* 应用整壳组装 */
+function renderApp(a) {
+  return `<div class="app">
+    ${appbar(a)}
+    <div class="app-body${a.pane ? ' split' : ''}">
+      ${lside(a)}
+      <div class="main">
+        <div class="stream-wrap"><div class="stream">${a.stream}</div></div>
+        ${composerZone(a)}
+      </div>
+      ${a.pane ? `<div class="splitter"></div><section class="pane">${paneHTML(a.pane)}</section>` : sidePanels(a)}
+    </div>
+  </div>`;
+}
+
+/* ═══════════ 朝会实录（新增件 · 分栏选项卡 kind:'court'）与子代理回放内容 ═══════════ */
+function courtRecord() {
+  return `<div class="court-rec">
+    <div class="cr-head"><span class="cr-title">朝会实录</span><span class="cr-sub">tool-fs 重构 · 14:03 · 214/240 轮</span><span class="cr-live done">✓ 已完成</span></div>
+    <div class="cr-body">
+      <div class="cr-sec"><h4>诏书<span class="badge">convene · 用时 14 分</span></h4>
+        <div class="cr-row">把 tool-fs 重构掉，注意别破坏只读工具的语义。</div>
+        <div class="cr-row dim2">圣裁（开朝中请旨）：<b>保持 API 兼容，旧签名留垫片</b>（B 档）。</div>
+        <div class="cr-row dim2">画敕（风险门）：写面 6 文件 · 同包 · 无删除 → 低风险直通（未触发请旨）。</div></div>
+      <div class="cr-sec"><h4>中书省 · 起草<span class="badge">3 版</span></h4>
+        <div class="cr-row">终稿（v3）：fs 工具族按读写分离重组——read/glob/grep 归只读面；write/edit 归写面统一走写闸报备；旧签名保留垫片标 deprecated；分两波执行，工先刑后。</div>
+        <div class="cr-row dim2">v1→v2：依圣裁改 API 兼容档；v2→v3：按门下意见补迁移说明。</div></div>
+      <div class="cr-sec"><h4>门下省 · 审驳<span class="badge">2/2 轮 · 放行</span></h4>
+        <div class="cr-row dim2">第 1 轮：封还 1 · 驳正 1（唐制封驳二体——封还=整案退回重拟；驳正=指错并给方向）：</div>
+        <div class="cr-issue">封还 · read 窗口语义变更未说明迁移影响（中书重拟，v3 已补）</div>
+        <div class="cr-issue">驳正 · 刑部与工部写路径重叠，应排波次 2（尚书任务单已改）</div>
+        <div class="cr-row dim2">第 2 轮：放行 · <span class="hl-warn">保留意见 1 条——门下涂归定稿：「补充 read 窗口迁移说明」径改为「§4 迁移说明」随敕下发礼部</span>。</div></div>
+      <div class="cr-sec"><h4>尚书省 · 任务单<span class="badge">4 任务 · 2 波</span></h4>
+        <table class="md"><tr><th>#</th><th>部</th><th>任务</th><th>波</th><th>轮数</th></tr>
+        <tr><td>1</td><td>兵部</td><td>清理废弃命令与临时脚本</td><td>1</td><td>12</td></tr>
+        <tr><td>2</td><td>工部</td><td>重构 fs 工具族读写分离</td><td>1</td><td>41</td></tr>
+        <tr><td>3</td><td>礼部</td><td>补全注释与模块文档</td><td>2</td><td>18</td></tr>
+        <tr><td>4</td><td>刑部</td><td>跑全量测试校验语义</td><td>2</td><td>9</td></tr></table></div>
+      <div class="cr-sec"><h4>六部 · 结论<span class="badge">全文在各部子会话 · 此处摘要</span></h4>
+        <div class="cr-row dim2">工部 ✓ 改 6 文件 · 兵部 ✓ 清理 3 处 · 礼部 ✓ 含迁移说明 · 刑部 ✓ 877 passed / 0 failed</div></div>
+      <div class="cr-sec"><h4>户部 · 轮数账</h4>
+        <div class="cr-row dim2">执行 80（兵 12 · 工 41 · 礼 18 · 刑 9）+ 编制 45（中书 19 · 门下 23 · 尚书 2 · 吏 1）= <b>214 / 240</b></div></div>
+    </div>
+  </div>`;
+}
+
+/* 子代理选项卡内容（既有件 · app.js:3112-3250：ag-todo 悬浮条（默认收起，点击开卡）+ ag-stream 回放
+   renderTranscript——首条即派活 user/message 气泡，其后思考块/工具行/结论正文） */
+function agentTabBody(live, todoOpen) {
+  const todos = live
+    ? [['done', '读 read/write/edit 三文件确认边界'], ['active', '上移族级报备逻辑（edit/write 合并）'], ['pending', '垫片 compat.ts 落位']]
+    : [['done', '读 read/write/edit 三文件确认边界'], ['done', '上移族级报备逻辑（edit/write 合并）'], ['done', '垫片 compat.ts 落位']];
+  const tick = { done: '✓', active: '◐', pending: '○' };
+  const doneN = todos.filter((t) => t[0] === 'done').length;
+  return `<div class="ag-wrap">
+    <div class="todo-float">
+      <button class="tf-pill" title="该子代理自己的任务清单（与主清单隔离）"><span class="tf-owner">7f3a</span><span class="ok">✓</span> <span class="tf-count">${doneN}/3</span> 任务 <span class="tf-open">⇲</span></button>
+      <div class="tf-card"${todoOpen ? '' : ' hidden'}>
+        <div class="tf-head"><span>任务清单 · 7f3a21c4</span><span>${doneN}/3</span></div>
+        <div class="tf-list">${todos.map(([st, tx]) => `<div class="todo" data-state="${st}" title="由 Agent 实时同步"><span class="tick">${tick[st]}</span><span class="ttext">${esc(tx)}</span></div>`).join('')}</div>
+      </div>
+    </div>
+    <div class="ag-stream">
+      ${userBubble('【派活 · 工部】重构 fs 工具族读写分离——按定稿 v3 执行：read/glob/grep 归只读面，write/edit 归写面统一走写闸报备；旧签名保留垫片标 deprecated。门下保留意见（补充 read 窗口迁移说明）转礼部，不在你范围。写路径报备：src/tools/read.ts、src/tools/write.ts、src/tools/edit.ts、src/tools/compat.ts。', true)}
+      ${thinkBlock('持续了 21 秒')}
+      ${toolLine({ used: true, name: 'Read', arg: 'src/tools/read.ts', chip: '214 行', caret: '▸' })}
+      ${toolLine({ used: true, name: 'Read', arg: 'src/tools/write.ts', chip: '96 行', caret: '▸' })}
+      ${thinkBlock('持续了 8 秒')}
+      ${toolLine({ used: true, name: 'Edit', arg: 'src/tools/read.ts', chip: '+12 -4', caret: '▸' })}
+      ${toolLine({ used: true, name: 'Edit', arg: 'src/tools/write.ts', chip: '+8 -2', caret: '▸' })}
+      ${toolLine({ used: true, name: 'Write', arg: 'src/tools/compat.ts', chip: '37 行', caret: '▸' })}
+      ${live
+        ? `<div class="line agent-spin">${spin()} 正在生成…</div>`
+        : agentMd('<p>读写分离完成 3/5：read/write 已分面、垫片已落 compat.ts；剩 edit.ts 归面与 glob 的 accesses 声明收敛。改动共 6 文件。</p>')}
+    </div>
+  </div>`;
+}
+
+/* ═══════════ 剧本数据（故事 = tool-fs 重构 · 与 TUI 原型同本） ═══════════ */
+const TASK = '把 tool-fs 重构掉，注意别破坏只读工具的语义';
+
+const TODO_MID = [
+  { state: 'done', text: '梳理 tool-fs 现有工具面' },
+  { state: 'active', text: '朝会：读写分离重构（三省六部）' },
+  { state: 'pending', text: '校验与文档收尾' },
+];
+const TODO_DONE = TODO_MID.map((t) => ({ state: 'done', text: t.text }));
+
+/* 前情一轮（已结算工作组——收敛态） */
+const priorTurn = () => `
+${userBubble('先把 tool-fs 的现状摸一遍——哪些工具、各自干什么、有没有重复')}
+<div class="turn">
+  <div class="work"><div class="work-head">已工作 1 分 12 秒<span class="tcaret">▸</span></div><div class="work-body hide"></div></div>
+  ${agentMd('<p>tool-fs 共 6 个工具：<code>read</code> / <code>grep</code> / <code>glob</code>（只读面），<code>write</code> / <code>edit</code> / <code>bash</code>。3 处重复注册：read 与 glob 的 accesses 声明分居三文件；edit 的报备逻辑与 write 是同一段复制——读写边界含糊，适合整体重构。</p>')}
+  ${turnFoot('今天 11:48', '↑ 3,102 · ↓ 31,254')}
+</div>`;
+
+/* 朝会轮（工作组 = .turn > .work >（.work-head + .work-body）——render.js:430-452 ensureWork 真结构） */
+function courtTurn(o) {
+  return `<div class="turn">
+    <div class="work">
+      ${o.workDone
+        ? workHead({ mode: 'settled', label: o.headLabel || '已工作 14 分 30 秒', caret: o.caret || '▸' })
+        : workHead({ mode: 'running', dur: o.headDur || '0 秒' })}
+      <div class="work-body${o.bodyHide ? ' hide' : ''}">
+        ${o.thinkDur ? thinkBlock(o.thinkDur) : ''}
+        ${o.tool ? toolLine(o.tool) : ''}
+        ${o.card ? courtCard(o.card) : ''}
+        ${o.memo || ''}
+        ${o.extra || ''}
+      </div>
+    </div>
+    ${o.finalMd || ''}
+    ${o.foot || ''}
+  </div>`;
+}
+
+const backLink = (go, text) => `<div class="line mark-line"><span class="back-link" data-go="${go}">${text}</span></div>`;
+
+/* 朝会卡阶段树快捷构造 */
+const stg = (ic, cls, label, sum) => ({ ic, cls, label, sum });
+const C_ROOT = [
+  stg('✓', 'done', '户部核账', '规则预检 ✓ · 立案（预算 4×40 ≤ 240）'),
+  stg('○', 'todo', '中书起草', ''),
+  stg('○', 'todo', '门下审驳', ''),
+  stg('○', 'todo', '尚书分解', ''),
+  stg('○', 'todo', '六部执行', ''),
+  stg('○', 'todo', '吏部汇总', ''),
+];
+
+/* 奏章正文（最终态） */
+const MEMORIAL_MD = `
+  <p>工部完成读写分离重构（41 轮，改 6 文件）；兵部清理 3 处废弃命令；刑部全量测试 <span class="hl-ok">877 passed / 0 failed</span>；礼部文档同步含迁移说明。总耗 <b>214/240 轮</b>，用时 14 分。</p>
+  <p><span class="dim2">门下：封还 1 · 驳正 1 皆已闭环；涂归定稿的保留意见随敕下发（§4 迁移说明 · 礼部交付）。吏部建议：垫片无调用方后可于下个里程碑移除。</span></p>`;
+
+/* ═══════════ 十三步主线 ═══════════ */
+const STEPS = [
+/* 0 入口 */
+{
+  name: '入口',
+  what: '入口 = 自然语言（模型按「何时开朝」promptSection 自行调 convene——本原型主线）或模块命令 <b>/sansheng-liubu__court &lt;任务&gt;</b> 直发起朝（薄壳同管线；键可达、菜单不列——模块 __ 命令不投影）。本屏：任务已敲进 composer，发送键呈 ready 绿档。',
+  ops: ['点输入框（= 按 Enter 发送）', '或点「下一步」'],
+  why: '模块 defaultEnabled:false（旗舰 opt-in——单次朝会 token 量级大，防模型意外开朝写大账单）；开启走设置或 config。未启用时模型退回 tool-subagent 手动编排，能力不残缺。',
+  anchor: 'composer index.html:79-106 · 发送键三态 style.css:703-714 · 模块 __ 命令不投影 plans/2026-10-10-orosus-web-full.md:143（G1）',
+  app: () => ({
+    stream: priorTurn(),
+    tail: 'idle',
+    composer: { text: TASK, ready: true, go: '1' },
+    todo: TODO_MID, elapsed: '00:26:11', courtState: null,
+  }),
+},
+/* 1 开朝 */
+{
+  name: '开朝',
+  what: '一轮新 turn：工作组头「工作中」起走字（web 形态——轮内过程全在组内）；模型思考（收起态）→ 呼 <b>convene</b>。<b>朝会卡</b>落流区（新增件 · spawn 组卡族）：头行 = 三省六部 + 当前阶段 + 实录入口；进度行 = 轮数预算条；阶段树 = 户部/中书/门下/尚书/六部/吏部。<b>户部核账 = 规则预检</b>（零 LLM）：预算 4×40≤240 ✓ · 任务图无环 ✓ · 写路径无 wholeRepo ✓——立案。',
+  ops: ['下一步：看中书起草', '任意时刻：点卡头「实录 ⇥」开分栏实录（第 12 步同口）'],
+  why: '规则层先行、语义层随后——门下只审语义（AI 时代同类方案同款分层：CSDN「三省六部」LangGraph 版 = 规则审核（代码，零成本）→ 语义审核（LLM））。预检不过 = 零 spawn 的说明性散朝（防意外大账单）。朝会卡由 sansheng-liubu/* 七枚 logEvents 驱动（起朝/起草完/审驳轮/任务单/派波/部完/奏章）——事件重放即可重建卡片，翻页/刷新同一结果；web 零轮询（与 spawn 组卡同纪律）。',
+  anchor: '新增件 .court-card（建议落 style.css 尾段）· 事件源 specs/modules/sansheng-liubu.md §2 logEvents 七枚 · 工作组 render.js:426-557',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '12 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '户部核账 · 规则预检通过', cap: '预算 240 轮', record: '11',
+        pct: 0, prog: '0/240 轮', wave: '波 0/2', stages: C_ROOT,
+        note: '规则预检（零 LLM）：预算 ≤ 帽 · 任务图无环 · 写路径无 wholeRepo · 任务数 4≤8——门下只审语义',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:26:23', courtState: 'running',
+  }),
+},
+/* 2 中书 */
+{
+  name: '中书',
+  what: '中书省起草（只读分身 · research 工具面）。主流区只见朝会卡的一条阶段行——内层几十轮读码不进主流区（上下文隔离）；要看全程就点开子代理选项卡。',
+  ops: ['下一步：中书发现 blocking 歧义，请旨'],
+  why: '中书/门下都是真子代理：在册、分栏可开卡、内层工具照走审批瀑布。起草要读码、审驳要对照代码——「瓶颈已从生成转向验证」，门的价值恰在能自证。可选模式（史实对位 · <b>五花判事</b>）：唐制军国大事「中书舍人各执所见，杂署其名」、中书令择优为底稿（《资治通鉴》贞观三年）——AI 形态 = N 稿竞拟（N 个起草分身并行、主持分身择优/合并）；本稿主线走单稿，config 可开。',
+  anchor: '临时角色直传 contracts/src/module/index.ts:543-567 · 开卡 app.js:3092-3107 · 结论保尾 32K contracts:577-595',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '2 分 10 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '中书省起草 · 第 1 版', cap: '预算 240 轮', record: '11',
+        pct: 3, prog: '7/240 轮', wave: '波 0/2',
+        stages: [C_ROOT[0], stg('◐', 'run', '中书起草', '只读分身 · 读码起草中…'), C_ROOT[2], C_ROOT[3], C_ROOT[4], C_ROOT[5]],
+        note: '中书按 research 工具面读码——先画读写边界，草案带假设节与验证判据',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:28:21', courtState: 'running',
+  }),
+},
+/* 3 请旨 */
+{
+  name: '请旨',
+  what: '中书起草中撞上「不问没法写方案」的歧义，内层调 tool-ask 请旨——web 形态 = <b>interaction 浮层</b>（贴 composer 上缘的 dock 弹窗：标题即问题、行即选项）。你的朱批会写进实录；Esc = 拒绝作答（→ 支线·散朝）。',
+  ops: ['点选项 A 或 B', '或点浮层里「Esc 拒绝作答」→ 支线·散朝'],
+  why: '请旨三档：开朝前主模型先问 → 中书请旨（现在）→ 散朝早退。门下/六部禁问。浮层是既有 interaction 全族（choose/ask/confirm/chooseEx 共一形态）；busy 期嵌套弹窗照常可用（组件层无 busy 锁）。',
+  anchor: 'interaction 浮层 ui.js:507-598 · 样式 style.css:611-719 · 朱批直达内层上下文（不整朝重来）sansheng-liubu.md §6 决策 3',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '2 分 48 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '中书省起草 · 请旨待圣裁', cap: '预算 240 轮', record: '11',
+        pct: 3, prog: '7/240 轮', wave: '波 0/2',
+        stages: [C_ROOT[0], stg('◐', 'run', '中书起草', '等圣裁'), C_ROOT[2], C_ROOT[3], C_ROOT[4], C_ROOT[5]],
+        note: '发现 blocking 歧义：API 兼容性——已调 tool-ask 请旨',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    popup: {
+      title: '重构是否允许破坏 tool-fs 已导出 API 的兼容性？（直接影响方案走向）',
+      en: 'CHOOSE', go: '4', sel: 1,
+      items: [
+        { key: 'A', name: 'A 允许破坏——同步更新所有调用方' },
+        { key: 'B', name: 'B 不允许——保持 API 兼容，旧签名留垫片' },
+      ],
+      escGo: 'b1', escText: 'Esc 拒绝作答（朝会将请旨散朝）',
+      foot: '点击选定 · Esc = 拒绝并关闭',
+    },
+    todo: TODO_MID, elapsed: '00:28:59', courtState: 'running',
+  }),
+},
+/* 4 续稿 */
+{
+  name: '续稿',
+  what: '朱批直达中书上下文（内层对话继续，<b>不整朝重来</b>）——依圣意出 v2（旧签名留垫片标 deprecated）。toast 报裁决回执；朝会卡注记行随事件更新。',
+  ops: ['下一步：草案交门下'],
+  why: '「中书请旨」比「散朝重开」省：已读的码、已写的 v1 全保留。toast = 既有 toastline 件（无框暖金字、自消）。',
+  anchor: 'toast style.css:605-607 · 有界循环在工具执行器内自行实现（sansheng-liubu.md §4 第 6 点）',
+  app: () => {
+    const ruling = S.choice === 'A' ? '允许破坏 · 同步更新调用方' : '保持 API 兼容 · 旧签名留垫片';
+    return {
+      stream: priorTurn() + userBubble(TASK) + courtTurn({
+        headDur: '4 分 05 秒', thinkDur: '持续了 9 秒',
+        tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+        card: {
+          state: 'running', stage: '中书省起草 · 第 2 版（依圣意）', cap: '预算 240 轮', record: '11',
+          pct: 8, prog: '19/240 轮', wave: '波 0/2',
+          stages: [C_ROOT[0], stg('◐', 'run', '中书起草', 'v2 · ' + ruling), C_ROOT[2], C_ROOT[3], C_ROOT[4], C_ROOT[5]],
+          note: '圣裁已达中书：' + ruling + '——v1 的读码结论全保留',
+        },
+      }),
+      tail: 'busy',
+      composer: { stop: true, toast: '圣裁已回 · 中书续稿（' + ruling + '）' },
+      todo: TODO_MID, elapsed: '00:30:16', courtState: 'running',
+    };
+  },
+},
+/* 5 门下① */
+{
+  name: '门下①',
+  what: '门下审驳第 1 轮 → <b>封还 1 条 + 驳正 1 条</b>——唐制封驳本有二体：<b>封还</b>（整案退回重拟）与<b>驳正</b>（指出错误、给出修正方向）；AI 形态 = verdict JSON 的两种 return 档。门下也是只读分身——自己读代码核草案（验证才是价值）。',
+  ops: ['下一步：中书改完交第 2 轮'],
+  why: '封驳有界循环，上限 maxReviewRounds=2；到顶仍不过 = 带保留意见放行（历史对位 = 政事堂合议，见第 7 步支线）。唐制门下三档：封还 / 驳正 / <b>涂归</b>（门下径改敕条后放行，《新唐书·百官志》「诏敕不便者，涂窜而奏还」——第 7 步示涂归一例）。审的是内容，执行许可仍归审批瀑布——两回事。',
+  anchor: '驳回条目 = 卡尾 .cc-note（新增件）· 门下 JSON 契约 {verdict: pass|封还|驳正, issues[]} sansheng-liubu.md §2 第 3 步 · 史实锚：封驳权（侍中/黄门侍郎/给事中）《百度百科·封驳》',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '6 分 40 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '门下审驳 · 第 1/2 轮 → 封还 1 · 驳正 1', cap: '预算 240 轮', record: '11',
+        pct: 14, prog: '33/240 轮', wave: '波 0/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', 'v2 · 依圣裁保持 API 兼容'), stg('◐', 'run', '门下审驳', '第 1/2 轮 · 封还 1 · 驳正 1'), C_ROOT[3], C_ROOT[4], C_ROOT[5]],
+        note: '封还 · read 窗口语义变更未说明迁移影响（整案退回重拟）；驳正 · 刑/工写路径重叠，应排波次 2（给出修正方向）',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:32:51', courtState: 'running',
+  }),
+},
+/* 6 门下② */
+{
+  name: '门下②',
+  what: '中书出 v3（补迁移说明 + 波次调整），门下第 2 轮<b>放行</b>——保留意见 1 条以<b>涂归</b>方式定稿（门下径改措辞后放行，不再来回一轮。「诏敕不便者，涂窜而奏还」——《新唐书·百官志》）。',
+  ops: ['下一步：尚书分解', '点卡下链接 → 支线·政事堂合议（假如 2/2 仍不过）'],
+  why: '终裁与保留意见如实记录。保留意见随六部提示词下发——「已知异议」进执行部上下文。假如 2/2 仍不过：不硬放行、也不散朝，依例升 <b>政事堂合议</b>（唐制三省首长合议协调；开元后「中书门下」一体）——见本步支线。',
+  anchor: '决策 6 带保留意见放行 sansheng-liubu.md §6 · 涂归史实《新唐书》· 政事堂《通典》「宰相常于门下省议事」',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '8 分 12 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '门下审驳 · 2/2 轮 → 放行（涂归 1 处）', cap: '预算 240 轮', record: '11',
+        pct: 18, prog: '42/240 轮', wave: '波 0/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', 'v3 · 补迁移说明'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留意见 1 条（涂归）'), C_ROOT[3], C_ROOT[4], C_ROOT[5]],
+        note: '涂归 · 「补充 read 窗口迁移说明」由门下径改为「§4 迁移说明」随任务单下发礼部（门下径改，不再来回一轮）',
+      },
+      extra: `<div class="line mark-line"><span class="back-link" data-go="b4">假如第 2 轮仍不过？→ 支线 · 政事堂合议（历史正解：升堂对质，不硬放行）</span></div>`,
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:34:23', courtState: 'running',
+  }),
+},
+/* 7 尚书 */
+{
+  name: '尚书',
+  what: '尚书分解（零工具分身升级档 · ctx.llm 直调）：定稿 → JSON 任务单——<b>4 任务 2 波</b>。部行落卡（波次执行后行即可点开卡）。',
+  ops: ['下一步：波次 1 开跑'],
+  why: '<b>画敕门</b>（史实对位）：唐制门下通过 ≠ 生效——须皇帝画「敕」方可颁行；AI 形态 = 高风险写面（跨包 / 含删除 / wholeRepo）执行前请旨一次，本单 6 文件同包无删除 → 低风险直通。波次制：after 依赖 ∪ 写路径冲突边拓扑分层，波内并行、波间串行（工先刑后天然成立）。刑部默认不报备 writePaths（跑测试临时写面广，报备反误伤）——靠波次序保证在工后。',
+  anchor: '任务单 JSON 契约（解析失败修复一轮）sansheng-liubu.md §2 第 4 步 · 写协调闸 writegate.ts:20,91-110,129 · 画敕史实《百度百科·封驳》「诏书必须经门下省审查通过并签字副署同意后，才能生效」',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '8 分 30 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '尚书省分解 · 任务单已出', cap: '预算 240 轮', record: '11',
+        pct: 18, prog: '44/240 轮', wave: '波 0/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), C_ROOT[4], C_ROOT[5]],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '○ 排队（波 1）', stCls: 'st-q' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '○ 排队（波 1）', stCls: 'st-q' },
+          { name: '礼部', task: '补全注释与模块文档', st: '○ 排队（等工部）', stCls: 'st-q' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '◇ 波 2', stCls: 'st-wave', last: true },
+        ],
+        note: '写路径预检：工/礼 无重叠 · 刑部不报备 · 画敕门：同包 6 文件无删除 → 低风险直通',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:34:41', courtState: 'running',
+  }),
+},
+/* 8 波1 */
+{
+  name: '波1',
+  what: '<b>波次 1 执行</b>：兵部完成（✓ 12 轮）、工部执行中（◐ 41 轮）——部行 = 真子代理，<b>点行开分栏</b>看该部全程（支线·查看窗）。礼部排队（等工部）、刑部排波 2。本屏交互最丰富。',
+  ops: ['点「工部」行 → 支线·查看窗（分栏开卡）', '点 composer ■（或双击 Esc）→ 支线·硬停', '或点「下一步」'],
+  why: '并发位与手动 spawn 共享全局 8；部不得再派生（disallowedTools 剥派生工具）。每部结论保尾 32K 存子会话文件——主流区只见阶段行与部行，细看进卡。',
+  anchor: '部行点击 = openAgentTab open-or-switch（app.js:3092-3107）· 并发/剥派生 runner.ts:289-324,507 · 常量 constants.ts:5-22',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '11 分 20 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '六部执行 · 波次 1/2', cap: '预算 240 轮', record: '11',
+        pct: 36, prog: '87/240 轮', wave: '波 1/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('◐', 'run', '六部执行', '波 1/2'), C_ROOT[5]],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '◐ 41 轮', stCls: 'st-run', click: 'b3', agent: '7f3a21c4' },
+          { name: '礼部', task: '补全注释与模块文档', st: '○ 排队（等工部）', stCls: 'st-q' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '◇ 波 2', stCls: 'st-wave', last: true },
+        ],
+        note: '波内并行、波间串行；部内层工具动作照走审批瀑布',
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true, stopGo: 'b2' },
+    todo: TODO_MID, elapsed: '00:37:31', courtState: 'running',
+  }),
+},
+/* 9 波2 */
+{
+  name: '波2',
+  what: '<b>波次 2</b>：礼/刑并行开跑相继完成——刑部全量测试 877 passed。预算 214/240，吏部汇总收口中。',
+  ops: ['下一步：奏章回朝'],
+  why: '波 2 = 礼/刑并行（写路径不重叠）；刑部靠波次序保证在工部之后。吏部 = 奏章综合（ctx.llm 直调）——纯文本综合不开分身。',
+  anchor: '波次编成 sansheng-liubu.md §2 第 5/7 步 · 吏部不占分身 §2 config 注记',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '13 分 50 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '六部执行 · 波次 2/2 · 吏部汇总中', cap: '预算 240 轮', record: '11',
+        pct: 89, prog: '214/240 轮', wave: '波 2/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('◐', 'run', '六部执行', '波 2/2'), stg('◐', 'run', '吏部汇总', '奏章综合中…')],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '✓ 完成 · 41 轮', stCls: 'st-ok' },
+          { name: '礼部', task: '补全注释与模块文档', st: '✓ 完成 · 18 轮', stCls: 'st-ok' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '◐ 9 轮', stCls: 'st-run', last: true },
+        ],
+      },
+    }),
+    tail: 'busy',
+    composer: { stop: true, queue: '<div class="queue-row" title="点击撤回该条"><span>⌛</span><span class="qtext">顺带把 glob 的 accesses 声明也收敛一下</span><span class="dim">排队中</span></div><div class="queue-hint">点击撤回 · 回答结束后依序发送</div>' },
+    todo: TODO_MID, elapsed: '00:40:01', courtState: 'running',
+  }),
+},
+/* 10 奏章 */
+{
+  name: '奏章',
+  what: '朝会完成：工具行原位合并「● Used Convene(…) · 14 分 · 214/240 轮」；<b>奏章</b> = 工具展开体（新增奏章体：头签 + meta + 实录入口）。朝会卡转完成态（全阶段 ✓）。toast 报「奏章已回」。本屏为「工作中」未结算态（模型正在写终稿）。',
+  ops: ['点卡头「实录 ⇥」→ 下一步（分栏实录）', '或点「◧ 查看朝会实录」同口'],
+  why: '奏章是本次调用唯一的 tool/result——主模型只吃这一条，中间 214 轮全在隔离上下文。展开体默认收起（与所有工具行同律）；轮次结束后工具行随工作组收起（见第 13 步收束态）。',
+  anchor: '工具行合并 render.js:1028-1041 · 展开体 fillToolBody render.js:960-973（建议增 convene 分支 → 奏章体）· chip 由朝会事件合成（增量）',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '14 分 2 秒', thinkDur: '持续了 9 秒',
+      tool: { used: true, name: 'Convene', arg: TASK, chip: '14 分 · 214/240 轮', caret: '▾' },
+      card: {
+        state: 'done', stage: '朝会完成 · 用时 14 分', cap: '预算 240 轮', record: '11',
+        pct: 89, prog: '214/240 轮', wave: '波 2/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('✓', 'done', '六部执行', '4/4 完成'), stg('✓', 'done', '吏部汇总', '奏章已出')],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '✓ 完成 · 41 轮', stCls: 'st-ok' },
+          { name: '礼部', task: '补全注释与模块文档', st: '✓ 完成 · 18 轮', stCls: 'st-ok' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '✓ 完成 · 9 轮', stCls: 'st-ok', last: true },
+        ],
+      },
+      memo: memorialBody({ meta: '14 分 · 214/240 轮 · 8 员分身', record: '11', md: MEMORIAL_MD }),
+    }),
+    tail: 'busy',
+    composer: { stop: true, toast: '朝会完成 · 奏章已回 · 点朝会卡「实录」回看全程' },
+    todo: TODO_MID, elapsed: '00:40:13', courtState: 'done',
+  }),
+},
+/* 11 实录 */
+{
+  name: '实录',
+  what: '点「实录 ⇥」分栏开出<b>朝会实录</b>选项卡（新增件 kind:\'court\'）：诏书（含朱批 + 画敕门）/ 中书 3 版 / 门下 2 轮（封还 · 驳正 · 涂归）/ 尚书任务单 / 六部结论 / 户部账——数据全来自 logEvents 落盘，重启后照看（重放保真）。同时轮次已结算：工具行随工作组收进「已工作 14 分 30 秒 ▸」，终稿正文在组外。',
+  ops: ['看分栏实录全文', '下一步：收束视角（换看工部选项卡）'],
+  why: '过程默认收起是本 web 形态的设计（2026-10-13 工作组）；奏章与朝会卡都在组内，展开回看。实录 tab 与会话同寿命：分栏收起不丢，重开再现（◧ 分栏钮）。',
+  anchor: '实录 = 分栏 tab（同族 app.js:3112-3250 · 注册器 pane.js）· 工作组结算 render.js:1081+（evalTurn:522-547）',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      workDone: true, headLabel: '已工作 14 分 30 秒', caret: '▸', bodyHide: true,
+      think: true, thinkDur: '持续了 9 秒',
+      tool: { used: true, name: 'Convene', arg: TASK, chip: '14 分 · 214/240 轮', caret: '▾' },
+      card: {
+        state: 'done', stage: '朝会完成 · 用时 14 分', cap: '预算 240 轮', record: '11',
+        pct: 89, prog: '214/240 轮', wave: '波 2/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('✓', 'done', '六部执行', '4/4 完成'), stg('✓', 'done', '吏部汇总', '奏章已出')],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '✓ 完成 · 41 轮', stCls: 'st-ok' },
+          { name: '礼部', task: '补全注释与模块文档', st: '✓ 完成 · 18 轮', stCls: 'st-ok' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '✓ 完成 · 9 轮', stCls: 'st-ok', last: true },
+        ],
+      },
+      memo: memorialBody({ meta: '14 分 · 214/240 轮 · 8 员分身', record: '11', md: MEMORIAL_MD }),
+      finalMd: agentMd('<p>重构完成：fs 工具族已按读写分离重组（改 6 文件），全量测试 <b>877 passed / 0 failed</b>，文档与迁移说明已同步。过程与逐部结论都在上面收起的「已工作」组里——展开可见奏章与朝会卡。</p>'),
+      foot: turnFoot('今天 14:31', '↑ 3,988 · ↓ 39,127'),
+    }),
+    tail: 'idle',
+    composer: {},
+    todo: TODO_DONE, elapsed: '00:40:41', courtState: 'done',
+    pane: {
+      tabs: [
+        { label: '朝会实录', dot: '✓', dotCls: 'st-ok', sel: true },
+        { label: '工部 重构 fs 工具族读写分离', dot: '✓', dotCls: 'st-ok' },
+        { label: '中书 起草 tool-fs 重构', dot: '✓', dotCls: 'st-ok' },
+      ],
+      body: courtRecord(),
+    },
+  }),
+},
+/* 12 收束 */
+{
+  name: '收束',
+  what: '收束视角：分栏选项卡条 = <b>朝会名册</b>——朝会实录 + 各部一卡（点朝会卡部行 open-or-switch 开关）。工部选项卡 = 该部子代理回放：思考块 / 工具行（真实 chip）/ 该部自己的 todo 悬浮条（3/3）——全是既有件。',
+  ops: ['点选项卡切换各员', '最后：点「↺ 重新走查」，或试四条支线：第 4 步 Esc / 第 7 步政事堂 / 第 9 步 ■ / 点工部行'],
+  why: '/tasks 列表已下线（2026-10-13 口令）——名册承载 = 朝会卡行 + 分栏选项卡；部子会话落主桶 agents/ 子目录（树扫描免疫，无树噪音）。收束后：模块行回「已挂载」、任务清单 3/3（收回分栏即见）。全程可从 logEvents 重放——翻页/刷新后同样的卡与实录。对标（2026 AI 时代同类）：OpenClaw「edict」12 员朝廷（太子分拣→中书→门下→尚书→六部并行，实时看板）作者实测「一次全员朝会 ~100 次模型调用——别轻易劳驾满朝文武」——本模块 defaultEnabled:false 与户部预算帽同旨；CSDN LangGraph 版等价物 = 驳回上限后转人工。',
+  anchor: '子代理回放 app.js:3112-3250 · ag-todo 悬浮条 app.js:3155-3171 · 子会话落盘 决策 19 · /tasks 下线 走查修①（app.js:3038-3047）',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      workDone: true, headLabel: '已工作 14 分 30 秒', caret: '▸', bodyHide: true,
+      think: true, thinkDur: '持续了 9 秒',
+      tool: { used: true, name: 'Convene', arg: TASK, chip: '14 分 · 214/240 轮', caret: '▾' },
+      card: {
+        state: 'done', stage: '朝会完成 · 用时 14 分', cap: '预算 240 轮', record: '11',
+        pct: 89, prog: '214/240 轮', wave: '波 2/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('✓', 'done', '六部执行', '4/4 完成'), stg('✓', 'done', '吏部汇总', '奏章已出')],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '✓ 完成 · 41 轮', stCls: 'st-ok', click: 'b3', agent: '7f3a21c4' },
+          { name: '礼部', task: '补全注释与模块文档', st: '✓ 完成 · 18 轮', stCls: 'st-ok' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '✓ 完成 · 9 轮', stCls: 'st-ok', last: true },
+        ],
+      },
+      memo: memorialBody({ meta: '14 分 · 214/240 轮 · 8 员分身', record: '11', md: MEMORIAL_MD }),
+      finalMd: agentMd('<p>重构完成：fs 工具族已按读写分离重组（改 6 文件），全量测试 <b>877 passed / 0 failed</b>。</p>'),
+      foot: turnFoot('今天 14:31', '↑ 3,988 · ↓ 39,127'),
+    }),
+    tail: 'idle',
+    composer: {},
+    todo: TODO_DONE, elapsed: '00:40:41', courtState: 'done',
+    pane: {
+      tabs: [
+        { label: '朝会实录', dot: '✓', dotCls: 'st-ok' },
+        { label: '中书 起草 tool-fs 重构', dot: '✓', dotCls: 'st-ok' },
+        { label: '门下 审驳·草案 v2/v3', dot: '✓', dotCls: 'st-ok' },
+        { label: '工部 重构 fs 工具族读写分离', dot: '✓', dotCls: 'st-ok', sel: true },
+        { label: '刑部 跑全量测试校验语义', dot: '✓', dotCls: 'st-ok' },
+      ],
+      body: agentTabBody(false, false),
+    },
+  }),
+},
+];
+
+/* ═══════════ 三条支线 ═══════════ */
+const BRANCHES = {
+b1: {
+  branch: true, name: '支线 · 请旨散朝',
+  what: '在请旨浮层按 Esc = 拒绝作答（interaction cancelled）。中书收摊，模块在六部 spawn 前<b>早退</b>——零执行成本，奏章 = 未决问题清单。工具行按既有时长 chip 收场；朝会卡转「已散朝」（未启阶段标未消耗）。',
+  ops: ['点「回到主线第 4 步」链接重新朱批'],
+  why: '散朝不是失败：起草 7 轮的钱花了、执行 160 轮的钱省了；答复后重新开朝即可。已花轮数照记账（户部口径）。本屏为结算后的展开回看态。',
+  anchor: 'interaction cancelled = cancelOnClose ui.js:530 · 早退语义 sansheng-liubu.md §2 第 2 步 · 奏章尾部建议加「续办指引」（本稿）',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      workDone: true, headLabel: '已工作 2 分 4 秒', caret: '▾',
+      think: true, thinkDur: '持续了 9 秒',
+      tool: { used: true, name: 'Convene', arg: TASK, chip: '2 分 · 7 轮', caret: '▾' },
+      card: {
+        state: 'dim', stage: '已散朝 · 请旨未决', cap: '已花 7/240 轮', record: '11',
+        pct: 3, prog: '7/240 轮', wave: '波 0/2',
+        stages: [
+          C_ROOT[0],
+          stg('✗', 'err', '中书起草', '请旨未决 · 停止'),
+          stg('○', 'todo', '门下审驳', '未启 · 未消耗轮数'),
+          stg('○', 'todo', '尚书分解', '未启 · 未消耗轮数'),
+          stg('○', 'todo', '六部执行', '未启 · 未消耗轮数'),
+          stg('○', 'todo', '吏部汇总', '未启 · 未消耗轮数'),
+        ],
+        note: '六部 spawn 之前早退——零执行成本',
+      },
+      memo: memorialPlain({
+        tag: '奏章', meta: '散朝 · 零执行 · 已花 7/240 轮',
+        md: '<p>请旨散朝（零执行）：中书认为以下问题不问清无法起草——① 重构是否允许破坏 tool-fs 已导出 API 的兼容性？已花费：起草 7 轮。答复后重新开朝即可。</p>',
+      }),
+      extra: backLink('3', '← 回到主线第 4 步（请旨）重新朱批'),
+    }),
+    tail: 'idle',
+    composer: { toast: '请旨散朝 · 零执行成本 · 答复后可重开' },
+    todo: TODO_MID, elapsed: '00:28:59', courtState: 'done',
+  }),
+},
+b2: {
+  branch: true, name: '支线 · 硬停',
+  what: '波次 1 按下 composer 的 <b>■</b>（停止生成；双击 Esc 同效）= h.cancel → 取消链一路传到每个 spawn 与每次 llm 调用。已完的兵部入奏章、进行中的工部<b>不落盘不采信</b>、未启的礼/刑标未启——工具行按失败态（赭石 ●）收场，朝会卡「已中断」。',
+  ops: ['点「回到主线第 9 步」链接继续走查'],
+  why: '语义与 m5-peers 硬中断（13bc937）一致：三态如实记录；续办诏书带「兵部已完」免重派。停止 = 会话级（一次停整轮），不设朝会专属停止键。组头落「已停止」无时长（打断态口径）。',
+  anchor: '停止键 app.js:302-320（sendbtn.stop + POST /cancel + 双击 Esc）· 取消链 contracts:675-678,347（tc.signal → caller.signal）· 三态奏章 13bc937 同款',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      workDone: true, headLabel: '已停止', caret: '▾',
+      think: true, thinkDur: '持续了 9 秒',
+      tool: { used: true, name: 'Convene', arg: TASK, chip: '已中断（用户停止） · 4 分 40 秒', caret: '▾', err: true },
+      card: {
+        state: 'err', stage: '已中断 · 波次 1/2', cap: '已用 59/240 轮', record: '11',
+        pct: 25, prog: '59/240 轮', wave: '波 1/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('✗', 'err', '六部执行', '波 1/2 · 中断'), stg('○', 'todo', '吏部汇总', '未启')],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '✗ 中断 · 不采信', stCls: 'st-err' },
+          { name: '礼部', task: '补全注释与模块文档', st: '○ 未启', stCls: 'st-q' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '○ 未启', stCls: 'st-q', last: true },
+        ],
+        note: '取消链已传播：进行中工部不落盘、不采信——工作区改动以自查为准',
+      },
+      memo: memorialPlain({
+        tag: '中断奏章', meta: '4 分 40 秒 · 59/240 轮', tagErr: true,
+        md: '<p><b>【已完】</b>兵部 ✓ 12 轮——清理 3 处，结论可信。<b>【进行中】</b>工部——41 轮进行到一半，不落盘、不采信，改动状态以工作区为准请自查。<b>【未启】</b>礼部、刑部——未消耗轮数。</p><p>已用 <b>59/240 轮</b>；续办诏书带「兵部已完」即可免重派。</p>',
+      }),
+      extra: backLink('8', '← 回到主线第 9 步（波次 1）继续走查'),
+    }),
+    tail: 'idle',
+    composer: { toast: '已硬停 · 中断奏章已回' },
+    todo: TODO_MID, elapsed: '00:32:11', courtState: 'done',
+  }),
+},
+b3: {
+  branch: true, name: '支线 · 六部查看窗',
+  what: '点工部行——分栏开出该部<b>子代理选项卡</b>（既有件 · open-or-switch）：回放该部内层全程（思考块折叠态 + 工具行带真实 chip + 部自己的 todo 悬浮条 1/3）。朝会实录 tab 同栏并存（◐ 进行中）。',
+  ops: ['对照工部 todo 悬浮条（1/3）与主流朝会卡（41 轮）', '点「回到主线第 9 步」链接继续走查'],
+  why: '六部 = 真子代理：花名册/查看窗/审批全现成——朝会唯一新交互件就是「卡行 → agentId 映射」（open-or-switch 防止重复开卡）。部内层工具照走审批瀑布：若触发，卡顶出 ⚠ 审批条同屏可批。',
+  anchor: '查看窗 app.js:3112-3250 · 审批条 app.js:3119-3132 · ag-todo app.js:3155-3171 · 部行映射 sansheng-liubu.md §3 贡献物表',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '11 分 20 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '六部执行 · 波次 1/2', cap: '预算 240 轮', record: '11',
+        pct: 36, prog: '87/240 轮', wave: '波 1/2',
+        stages: [C_ROOT[0], stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'), stg('✓', 'done', '门下审驳', '2/2 放行 · 保留 1 条'), stg('✓', 'done', '尚书分解', '4 任务 · 2 波'), stg('◐', 'run', '六部执行', '波 1/2'), C_ROOT[5]],
+        depts: [
+          { name: '兵部', task: '清理废弃命令与临时脚本', st: '✓ 完成 · 12 轮', stCls: 'st-ok' },
+          { name: '工部', task: '重构 fs 工具族读写分离', st: '◐ 41 轮', stCls: 'st-run', click: 'b3', agent: '7f3a21c4' },
+          { name: '礼部', task: '补全注释与模块文档', st: '○ 排队（等工部）', stCls: 'st-q' },
+          { name: '刑部', task: '跑全量测试校验语义', st: '◇ 波 2', stCls: 'st-wave', last: true },
+        ],
+      },
+      extra: backLink('8', '← 回到主线第 9 步（波次 1）继续走查'),
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:37:31', courtState: 'running',
+    pane: {
+      tabs: [
+        { label: '朝会实录', dot: '◐', dotCls: 'st-run' },
+        { label: '工部 重构 fs 工具族读写分离', dot: '◐', dotCls: 'st-run', sel: true },
+      ],
+      body: agentTabBody(true, true),
+    },
+  }),
+},
+b4: {
+  branch: true, name: '支线 · 政事堂合议',
+  what: '假如门下第 2 轮仍不过：<b>不硬放行、也不散朝</b>——升 <b>政事堂合议</b>（唐制：三省首长定期于门下省政事堂议事，《通典》「旧制，宰相常于门下省议事，谓之政事堂」；开元十一年改称「中书门下」）。AI 形态：中书令与侍中并席一次直调对质（ctx.llm 单次调用——双案并列 + 分歧点清单），产出一致定稿，或「两案并存上请」交主模型/用户裁定。',
+  ops: ['点「回到主线第 7 步」链接继续走查'],
+  why: '对决策点 6 的补充出口：原稿「带保留意见放行」保留（成本最低、可用性优先）；合议作为「2/2 仍不过」的第三档——一次 LLM 直调换分歧收敛，而不是把分歧直接带进执行。AI 时代同类（CSDN LangGraph 版三省六部）的等价物 = 驳回上限 2 次后转人工兜底；本模块的「人工」= 主模型 / 请旨。',
+  anchor: '政事堂史实《通典》· 开元十一年改中书门下（百度百科·三省六部制）· 合议 = ctx.llm 直调（与尚书/吏部同口）sansheng-liubu.md §4 第 5 点 · 决策 6 备选档',
+  app: () => ({
+    stream: priorTurn() + userBubble(TASK) + courtTurn({
+      headDur: '9 分 03 秒', thinkDur: '持续了 9 秒',
+      tool: { used: false, name: 'Convene', arg: TASK, caret: '▸' },
+      card: {
+        state: 'running', stage: '政事堂合议 · 中书门下并席', cap: '预算 240 轮', record: '11',
+        pct: 19, prog: '45/240 轮', wave: '波 0/2',
+        stages: [
+          C_ROOT[0],
+          stg('✓', 'done', '中书起草', '3 版 · 终稿 v3'),
+          stg('✗', 'err', '门下审驳', '2/2 仍不过 · 依例升堂'),
+          stg('◐', 'run', '政事堂合议', '中书令 + 侍中并席 · 对质中…'),
+          C_ROOT[4], C_ROOT[5],
+        ],
+        note: '分歧点 2：① 垫片移除期限（门下要写死）② 迁移说明粒度（中书认为可后补）——合议将产出一致定稿，或两案并存上请裁定',
+      },
+      extra: backLink('6', '← 回到主线第 7 步（门下②）继续走查'),
+    }),
+    tail: 'busy',
+    composer: { stop: true },
+    todo: TODO_MID, elapsed: '00:35:08', courtState: 'running',
+  }),
+},
+};
+
+/* ═══════════ 渲染引擎 ═══════════ */
+const STEP_NAMES = ['入口', '开朝', '中书', '请旨', '续稿', '门下①', '门下②', '尚书', '波1', '波2', '奏章', '实录', '收束'];
+
+function stepDef(id) {
+  if (id === 'b1' || id === 'b2' || id === 'b3' || id === 'b4') return BRANCHES[id];
+  return STEPS[Number(id)];
+}
+
+function render() {
+  const def = stepDef(S.i);
+  const a = def.app();
+  const stream = (a.stream || '') + tailLine(a.tail === 'busy');
+  document.getElementById('appscl').innerHTML = renderApp(Object.assign({}, a, { stream }));
+  const st = document.querySelector('#appscl .stream');
+  if (st) st.scrollTop = st.scrollHeight; /* 贴底跟随（真实 app followScroll 同口径） */
+  const bt = document.querySelector('#ab-theme');
+  if (bt) bt.textContent = S.dark ? '☀ 浅色' : '● 深色';
+
+  const isBranch = !!def.branch;
+  document.getElementById('notes').innerHTML = `
+    <h3><span class="no">${isBranch ? '支线' : '第 ' + (Number(S.i) + 1) + ' 步'}</span>${def.name}</h3>
+    <div>${def.what}</div>
+    <div class="ops"><div class="t">可操作</div><ul>${def.ops.map((o) => `<li>${o}</li>`).join('')}</ul></div>
+    <div class="why"><b>机制注记：</b>${def.why}</div>
+    <div class="anchor">复刻锚点：${def.anchor || ''}</div>`;
+
+  document.getElementById('stepbar').innerHTML = STEP_NAMES.map((n, i) =>
+    `<span class="chip2 ${String(i) === S.i ? 'cur' : (i <= Number(S.i) ? 'done' : '')}" data-go="${i}"><span class="n">${i + 1}</span>${n}</span>`).join('');
+  document.getElementById('pos').textContent = isBranch ? def.name : `${Number(S.i) + 1} / ${STEPS.length}`;
+  document.getElementById('prev').disabled = isBranch || Number(S.i) === 0;
+  document.getElementById('next').disabled = isBranch || Number(S.i) === STEPS.length - 1;
+}
+
+function go(id, choice) {
+  if (choice) S.choice = choice;
+  S.i = String(id);
+  render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#ab-theme')) { toggleTheme(); return; }
+  const el = e.target.closest('[data-go]');
+  if (!el) return;
+  go(el.dataset.go, el.dataset.choice);
+});
+document.getElementById('prev').onclick = () => { if (Number(S.i) > 0) go(Number(S.i) - 1); };
+document.getElementById('next').onclick = () => { if (Number(S.i) < STEPS.length - 1) go(Number(S.i) + 1); };
+document.getElementById('restart').onclick = () => { S.choice = null; go(0); };
+document.getElementById('theme').onclick = toggleTheme;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') document.getElementById('next').click();
+  if (e.key === 'ArrowLeft') document.getElementById('prev').click();
+});
+function toggleTheme() {
+  S.dark = !S.dark;
+  document.body.classList.toggle('light', !S.dark);
+  document.getElementById('theme').textContent = S.dark ? '☀ 浅色面' : '● 深色面';
+  const bt = document.querySelector('#ab-theme');
+  if (bt) bt.textContent = S.dark ? '☀ 浅色' : '● 深色';
+}
+render();
+</script>
+</body>
+</html>
