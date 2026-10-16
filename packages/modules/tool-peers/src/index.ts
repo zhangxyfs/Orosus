@@ -54,6 +54,11 @@ export default defineModule({
       const p = payload as { session_id?: string; transcript_path?: string; cwd?: string };
       if (p.session_id !== undefined && p.transcript_path !== undefined && p.cwd !== undefined) {
         env.onSessionStart({ session_id: p.session_id, transcript_path: p.transcript_path, cwd: p.cwd });
+        // 首开预热（2026-10-16 用户报障「弹窗慢只在 web 启动后第一次」）：冷 fs/杀软首扫下百级文件
+        // 数百 ms——开窗即壳已保窗体秒开，此处再后台只读扫一遍把冷成本挪到会话开启时刻，首次
+        // 打开与后续同速。零 UI 零副作用（browserEntries 纯读），失败静默。
+        const warmDir = env.memoryDir();
+        if (warmDir !== undefined && existsSync(join(warmDir, "MEMORY.md"))) void browserEntries(warmDir).catch(() => {});
       }
     });
     // 记忆浏览窗（T6c，D17：不设开关、不耗 token——模块启用即可用；命令是人用操作面，模型不可调）。
@@ -105,7 +110,7 @@ export default defineModule({
       };
       const handle = ui.dialog({
         title: t("peers.win.title", undefined, "记忆 · 本项目 —— ↑↓ 选择 · Enter 打开 · Esc 关闭"),
-        layout: "full",
+        layout: "center80",   // 2026-10-16 用户口令「占屏幕 80%——全屏太大看着累」（正文 viewText 仍 full——阅读面）
         widgets: widgetsOf(),
         onEvent: (e) => {
           if (loaded === null) return undefined;   // 装填期事件空转（壳上无列表，防御位）

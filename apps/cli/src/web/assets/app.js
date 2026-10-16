@@ -95,7 +95,8 @@ function $(id) { return document.getElementById(id); }
    * 失败 toast 不阻断队列（设计 §6.5）。大窗壳：viewText full/center80 走 modalStack（空白登记 #8——单向
    * 消息窗，关闭纯本地不发 dialog-event）。 */
   UI.setViewModal(function (o) {
-    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭' });
+    var lb = launcherBack; launcherBack = false; /* 走查②标记转移：总览→窗→笔记链——正文窗自身关闭时回总览 */
+    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭', backLauncher: lb });
   });
   if (globalThis.OrosusDialog && typeof globalThis.OrosusDialog.wire === 'function') {
     globalThis.OrosusDialog.wire({
@@ -104,6 +105,9 @@ function $(id) { return document.getElementById(id); }
       },
       getSid: function () { return currentSid ?? ''; },
       toast: function () { toast('控件窗事件发送失败，稍后自动重试下一步操作', 3200); },
+      onUserClose: function () { /* 走查（2026-10-16 用户口令②）：用户 Esc/✕ 关窗——总览来源则回总览页（supersede 关不触发） */
+        if (launcherBack) { launcherBack = false; openLauncherWindow(); }
+      },
     });
   }
 
@@ -118,6 +122,7 @@ function $(id) { return document.getElementById(id); }
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
   var BTW_PREFIX_RE = /^\/btw(\s|$)/i; /* /btw 前缀判定唯一口径（W6复核修 Minor#1）：截获存文（handleSendResponse）与失败清存（handleSendError）共用——ignoreCase 交集，杜绝大小写漏捕/误捕 */
   function sendCore(text, imageIds, promptId) {
+    launcherBack = false; /* 新命令出手即换源（走查②：总览回跳标记只属上一条启动器命令——启动器 onClick 在 sendCommandText 返回后重置） */
     var body = { text: text };
     if (imageIds && imageIds.length > 0) body.imageIds = imageIds;
     if (promptId) body.promptId = promptId;
@@ -647,6 +652,7 @@ function $(id) { return document.getElementById(id); }
   var projectsPool = [];          /* cwd 芯片候选（bootstrap.projects——含 hidden 找回，D5） */
   var sendingNow = false;         /* 发送四态之「发送中」（POST 在途） */
   var escArmedAt = 0;             /* Esc 双击停止的 armed 时刻 */
+  var launcherBack = false;       /* 走查（2026-10-16 用户口令②）：当前工具界面源自模块总览——用户关窗后回总览页（纯 GUI） */
 
   /* 会话活动指示持久化（B14：done/failed 终态 + lastSeen per-sid——重开不复燃） */
   var SACT_KEY = 'orosus-web-sact';
@@ -1139,7 +1145,12 @@ function $(id) { return document.getElementById(id); }
   function openModal(opts) { modalStack.push(opts); renderModal(); }
   function modalReplace(opts) { modalStack[modalStack.length - 1] = opts; renderModal(); }
   function modalBack() { modalStack.pop(); renderModal(); }
-  function modalClose() { modalStack = []; renderModal(); }
+  function modalClose() {
+    var hadLb = modalStack.some(function (m) { return m !== undefined && m !== null && m.backLauncher; });
+    modalStack = [];
+    renderModal();
+    if (hadLb) openLauncherWindow(); /* 走查（2026-10-16 用户口令②）：总览来源的正文大窗关闭 → 回总览页（GUI 专属行为） */
+  }
   modal.addEventListener('click', function (e) {
     if (e.target.closest('[data-mclose]')) { modalClose(); return; }
     if (e.target.closest('[data-mback]')) { modalBack(); return; }
@@ -2736,6 +2747,7 @@ function $(id) { return document.getElementById(id); }
           modalClose();
           if (currentSid === null) { toast('暂无会话——启动器命令需要一个当前会话来执行'); return; }
           sendCommandText(c.desc);
+          launcherBack = true; /* 走查（2026-10-16 用户口令②）：此窗源自总览——用户关窗后回总览页 */
           toast('已提交 ' + c.desc);
         },
       });
@@ -2945,6 +2957,7 @@ function $(id) { return document.getElementById(id); }
     /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
     UI.closePopup();
     if (globalThis.OrosusDialog) globalThis.OrosusDialog.unmount(); /* web-dialog 批 T8：旧会话控件窗本地清理（在途队列以捕获 sid 自然收尾——设计 §10「先用旧 sid 提交关闭」） */
+    launcherBack = false; /* 走查②：换会话即换源——总览回跳标记不跨会话 */
     draftActive = false; /* 走查修⑮⑦：切走即出草稿态（再点 ＋新会话 可重开） */
     var fromSid = currentSid; /* 离去会话——W6复核修 Important#2②：在飞 btw 轮结算的归属判据 */
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
@@ -2980,15 +2993,9 @@ function $(id) { return document.getElementById(id); }
     renderSidebar();
     syncCwdGate();
     /* status 先行（cwd/芯片基准——工具行相对化与 @ 菜单基址），回放随后 */
-    var eventsLoaded = fetchStatus(sid).then(function () {
-      return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/events');
-    }).then(function (r) {
+    var wireStream = function (after) {
       if (currentSid !== sid) return;
-      render.ingest(r.events ?? [], { page: 'latest' }); /* 首屏有界（§5 律三：每页 ≤200） */
-    }, function () { /* 回放失败静默——SSE 续流面兜底 */ });
-    eventsLoaded.then(function () {
-      if (currentSid !== sid) return;
-      streamCtl = A.openStream(sid, render.maxSeq(), {
+      streamCtl = A.openStream(sid, after, {
         onEvent: function (ev) {
           if (currentSid !== sid || !ev) return;
           if (ev.type === 'session/label' && typeof ev.label === 'string') setSessionTitle(ev.label, sid);
@@ -3015,7 +3022,19 @@ function $(id) { return document.getElementById(id); }
         btw: function (d) { if (currentSid === sid && d) btwFeed(d); },
         onShutdown: function () { /* api.js 已显「已正常关闭」弹窗并停止重连 */ },
       });
-    });
+    };
+    var eventsLoaded = fetchStatus(sid).then(function () {
+      return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/events');
+    }).then(function (r) {
+      if (currentSid !== sid) return;
+      /* 走查（2026-10-16 用户报障「仅 web 启动后第一次开弹窗慢」）：流连接提前到首屏装帧之前——
+       * 事件响应一到即连（after = 本页最大 seq），dialog/interaction 帧不再排在 200 条首屏 DOM
+       * 装帧之后；装帧与流续读并行（JS 单线程：ingest 同步跑完才轮到 SSE 回调，序不乱）。 */
+      var mx = 0;
+      (r.events ?? []).forEach(function (e) { if (e && typeof e.seq === 'number' && e.seq > mx) mx = e.seq; });
+      wireStream(mx);
+      render.ingest(r.events ?? [], { page: 'latest' }); /* 首屏有界（§5 律三：每页 ≤200） */
+    }, function () { /* 回放失败静默——SSE 兜底连流（after=0 全量，与旧行为一致） */ wireStream(0); });
     return fetchPanel(sid);
   }
 

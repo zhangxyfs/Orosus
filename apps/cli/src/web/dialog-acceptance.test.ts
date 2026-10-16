@@ -102,7 +102,7 @@ describe("web dialog T9：记忆链路验收（设计 12.4）", () => {
     await waitFor(async () => (await send("/tool-peers__memory")).ok);
     await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "open"));
     const open = sseFrames.find((f) => f.kind === "dialog" && f.op === "open")!;
-    expect(open.layout).toBe("full"); // 不再掉进输入框上方只读条（设计 §1 根因句）
+    expect(open.layout).toBe("center80"); // 2026-10-16 用户口令③「占屏 80%——全屏太大」（正文 viewText 仍 full）；不再掉进输入框上方只读条（设计 §1 根因句）
     expect(open.widgets![0]!.id).toBe("loading"); // 开窗即壳（2026-10-16）：开窗帧 = 装填态，列表在 update 帧随异步扫描抵达
     await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "update"));
     const upd = sseFrames.find((f) => f.kind === "dialog" && f.op === "update")!;

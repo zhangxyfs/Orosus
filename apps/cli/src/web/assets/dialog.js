@@ -204,7 +204,7 @@
     var cur = null;        /* { id, sid, widgets, selById, focusedId } */
     var queue = null;      /* createEventQueue 实例（wire 时建） */
     var latestFrame = null;
-    var postFn = null, getSid = null, toastFn = null;
+    var postFn = null, getSid = null, toastFn = null, onUserCloseFn = null;
     var retiredIds = {};   /* unmount 后不再上行的 dialog id（挂起队列静默收尾——不发 HTTP） */
 
     function ensureDom() {
@@ -450,13 +450,18 @@
     function requestClose() {
       if (!cur || !queue) return;
       queue.close(cur.id, { id: cur.id, close: true, sid: cur.sid }); /* 排在先前事件之后；确认以服务端 close 帧为准 */
+      if (typeof onUserCloseFn === 'function') { /* 走查（2026-10-16 用户口令）：用户关窗（Esc/✕）回调——app.js 凭此「返回上一页」（启动器来源回总览）；supersede 关（viewText 顶替）不走此路 */
+        try { onUserCloseFn(); } catch (e2) { /* 回调失败不阻断关窗 */ }
+      }
     }
 
-    /* 上行口注入（app.js）：post(sid, body) → Promise；getSid() 供开窗时记属主会话；toast 供失败提示。 */
+    /* 上行口注入（app.js）：post(sid, body) → Promise；getSid() 供开窗时记属主会话；toast 供失败提示；
+     * onUserClose = 用户主动关窗回调（Esc/✕——supersede 关不触发）。 */
     function wire(opts) {
       postFn = opts.post;
       getSid = opts.getSid;
       toastFn = opts.toast;
+      onUserCloseFn = opts.onUserClose ?? null;
       queue = createEventQueue({
         post: function (body) {
           var sid = body.sid;
