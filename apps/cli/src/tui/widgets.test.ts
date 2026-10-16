@@ -129,3 +129,26 @@ describe("progress 分数块档位（CTW-05 回归钉 2026-09-28——FRACS 索�
 		expect(s8th).not.toContain("▊");
 	});
 });
+
+describe("列表结构行（2026-10-16 用户走查「时间显示在最右边」）：TUI 拼回单串与字符串形态同形", () => {
+	it("① 交互列表：{ text, note } 行拼 `text · note`；字符串行原样——两种行同窗混排", () => {
+		const items = [
+			{ text: "◆ 共享记忆索引（MEMORY.md）", note: "6 分钟前" },
+			{ text: "  部署要点 · 简介", note: "2 天前" },
+			"‹ 上一页",
+			{ text: "无注行" },
+		];
+		const w = renderWidgetLines([{ id: "l", kind: "list", interactive: true, items }], 60).lines.map(stripAnsi);
+		expect(w[0]).toContain("◆ 共享记忆索引（MEMORY.md） · 6 分钟前");
+		expect(w[1]).toContain("  部署要点 · 简介 · 2 天前");
+		expect(w[2]).toContain("‹ 上一页");
+		expect(w[3]).toContain("无注行");
+		expect(w[3]).not.toContain(" · "); // note 缺席不拼尾
+	});
+
+	it("② 非交互列表同款拼回（只读 list 的结构行不落对象串）", () => {
+		const w = renderWidgetLines([{ id: "l", kind: "list", items: [{ text: "甲", note: "1 小时前" }, "乙"] }], 40).lines.map(stripAnsi);
+		expect(w[0]).toContain("甲 · 1 小时前");
+		expect(w[1]).toContain("乙");
+	});
+});

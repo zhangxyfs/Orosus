@@ -185,3 +185,33 @@ describe("web dialog T7：事件队列协调（设计 §6.5 + 12.3）", () => {
     expect(q.frameAllowed("w-unknown")).toBe(true);
   });
 });
+
+describe("web dialog 列表结构行（2026-10-16 用户走查「时间最右、简介能显示多少显示多少」）", () => {
+  it("dw-cols 双栏：{ text, note } 行 = dw-cell 主文 + dw-note 侧注；字符串行照旧无栏——同窗混排", () => {
+    const w = D();
+    const html = w.widgetHtml({
+      id: "list", kind: "list", interactive: true,
+      items: [
+        { text: "◆ 共享记忆索引（MEMORY.md）", note: "6 分钟前" },
+        { text: "  部署要点 · 很长的简介".repeat(3), note: "2 天前" },
+        "‹ 上一页",
+        { text: "无注行" },
+      ],
+    }, {});
+    expect(html).toContain('class="dw-row dw-cols" data-idx="0"');
+    expect(html).toContain('<span class="dw-cell">◆ 共享记忆索引（MEMORY.md）</span><span class="dw-note">6 分钟前</span>');
+    expect(html).toContain('<span class="dw-cell">  部署要点 · 很长的简介');
+    expect(html).toContain('<span class="dw-note">2 天前</span>');   // 长简介不挤掉时间（截断交给 CSS ellipsis）
+    expect(html).not.toContain("‹ 上一页</span>");   // 字符串行原样（无 dw-cell 包裹）
+    expect(html).toContain('<span class="dw-cell">无注行</span>');
+    expect(html).not.toContain('data-idx="2" dw-cols');   // 哨兵行不带双栏类
+  });
+
+  it("结构行原文全过 esc：text/note 含 HTML 特字符不落裸标签", () => {
+    const w = D();
+    const html = w.widgetHtml({ id: "list", kind: "list", items: [{ text: '<img src=x>', note: 'a"b&c' }] }, {});
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("a&quot;b&amp;c");
+  });
+});

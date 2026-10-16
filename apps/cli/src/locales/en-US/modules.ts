@@ -190,6 +190,7 @@ export const enUSModules: Record<string, string> = {
 	"peers.win.empty": "This project has no shared memory yet — have the model save a note (tool-peers__memory__write), or enable workspace memory first",
 	"peers.win.list.fallback": "Memory · this project (read-only list — press Enter in full-screen mode to open)",
 	"peers.win.title": "Memory · this project — ↑↓ Select · Enter Open · Esc Close",
+	"peers.win.loading": "Loading memories…",
 	"peers.win.index.title": "Shared memory index (MEMORY.md)",
 	"peers.win.page.prev": "‹ Previous page",
 	"peers.win.page.next": "Next page › ({rest} more)",

@@ -190,6 +190,7 @@ export const zhCNModules: Record<string, string> = {
 	"peers.win.empty": "本项目还没有共享记忆——让模型记一条（tool-peers__memory__write），或先开启工作区记忆",
 	"peers.win.list.fallback": "记忆 · 本项目（只读列表——全屏模式可 Enter 打开）",
 	"peers.win.title": "记忆 · 本项目 —— ↑↓ 选择 · Enter 打开 · Esc 关闭",
+	"peers.win.loading": "正在装载记忆列表…",
 	"peers.win.index.title": "共享记忆索引（MEMORY.md）",
 	"peers.win.page.prev": "‹ 上一页",
 	"peers.win.page.next": "下一页 ›（还有 {rest} 条）",

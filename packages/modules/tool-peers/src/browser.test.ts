@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { browserBody, browserEntries, browserPage, relativeTime, renderBrowserList, MEMORY_PAGE_SIZE } from "./browser.ts";
+import { browserBody, browserEntries, browserPage, browserRowText, relativeTime, renderBrowserList, MEMORY_PAGE_SIZE } from "./browser.ts";
 import { listNotes, writeNote } from "./memstore.ts";
 
 let dir: string;
@@ -52,19 +52,23 @@ describe("renderBrowserList 与 browserBody", () => {
     utimesSync(join(dir, listNotes(dir)[0]!.file), new Date(NOW - 5 * 60_000), new Date(NOW - 5 * 60_000));   // mtime 钉 5 分钟前（墙钟漂移隔离）
     const entries = browserEntries(dir);
     const lines = renderBrowserList(entries, NOW);
-    expect(lines[0]).toContain("◆");
-    expect(lines[1]).toContain("First");
-    expect(lines[1]).toContain("5 分钟前");
+    expect(lines[0]!.text).toContain("◆");
+    expect(lines[1]!.text).toContain("First");
+    expect(lines[1]!.note).toBe("5 分钟前");
   });
-  it("走查验形（2026-10-07）：行含简介（标题后、时间前）；简介帽 60 字截断带 …", () => {
+  it("走查验形（2026-10-07）：行含简介（标题后、时间前）；简介帽 60 字截断带 …；结构行拼回单串与旧形态同形", () => {
     writeNote(dir, "Has Desc", "一句话简介", "b");
     writeNote(dir, "Long Desc", "x".repeat(80), "b2");
     utimesSync(join(dir, listNotes(dir)[1]!.file), new Date(NOW - 30_000), new Date(NOW - 30_000));
     const lines = renderBrowserList(browserEntries(dir), NOW);
-    const hasDesc = lines.find(l => l.includes("Has Desc"))!;
-    expect(hasDesc).toContain(" · 一句话简介 · ");
-    const longDesc = lines.find(l => l.includes("Long Desc"))!;
-    expect(longDesc).toContain(` · ${"x".repeat(59)}… · `);   // 60 帽：59 字 + …
+    const hasDesc = lines.find(l => l.text.includes("Has Desc"))!;
+    expect(hasDesc.text).toContain(" · 一句话简介");   // 简介在 text 段（note = 时间不混入）
+    expect(hasDesc.note).toBe("刚刚");
+    const longDesc = lines.find(l => l.text.includes("Long Desc"))!;
+    expect(longDesc.text).toContain(` · ${"x".repeat(59)}…`);   // 60 帽：59 字 + …
+    expect(browserRowText(hasDesc)).toBe(`${hasDesc.text} · ${hasDesc.note}`);   // 拼回 = TUI/只读回落同形
+    expect(browserRowText("‹ 上一页")).toBe("‹ 上一页");   // 字符串行（哨兵）原样
+    expect(browserRowText({ text: "无注行" })).toBe("无注行");   // note 缺席不拼尾
   });
   it("tr 注入走键（ctx.t 接线钉）：索引行标题/相对时间经 peers.* 键；无 tr 回落作者中文", () => {
     writeNote(dir, "N1", "s", "b");
@@ -76,9 +80,9 @@ describe("renderBrowserList 与 browserBody", () => {
     };
     utimesSync(join(dir, "MEMORY.md"), new Date(NOW - 2 * 86_400_000), new Date(NOW - 2 * 86_400_000));   // 钉索引行 mtime（断言对象是 lines[0]）
     const lines = renderBrowserList(browserEntries(dir), NOW, tr);
-    expect(lines[0]).toContain("Shared memory index (MEMORY.md)");
-    expect(lines[0]).toContain("2 d ago");
-    expect(renderBrowserList(browserEntries(dir), NOW)[0]).toContain("共享记忆索引");   // 无 tr = 作者中文回落
+    expect(lines[0]!.text).toContain("Shared memory index (MEMORY.md)");
+    expect(lines[0]!.note).toBe("2 d ago");
+    expect(renderBrowserList(browserEntries(dir), NOW)[0]!.text).toContain("共享记忆索引");   // 无 tr = 作者中文回落
   });
   it("body 读回原文 + 防穿越；MEMORY.md 可读", () => {
     writeNote(dir, "N", "s", "content-here");

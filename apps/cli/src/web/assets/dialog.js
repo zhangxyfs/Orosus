@@ -42,7 +42,15 @@
             if (state.selById && state.selById[w.id] === i) rc += ' dw-sel';
             if (state.focusedId === w.id) rc += ' dw-focus';
           }
-          return '<li class="' + rc + '"' + (w.interactive ? ' data-idx="' + i + '"' : '') + '>' + esc(it) + '</li>';
+          /* 结构行（2026-10-16 用户走查）：{ text, note } → dw-cols 双栏——左主文占满截断、右窄注（时间类）贴右 */
+          var body;
+          if (it !== null && typeof it === 'object') {
+            rc += ' dw-cols';
+            body = '<span class="dw-cell">' + esc(it.text ?? '') + '</span>' + (it.note ? '<span class="dw-note">' + esc(it.note) + '</span>' : '');
+          } else {
+            body = esc(it);
+          }
+          return '<li class="' + rc + '"' + (w.interactive ? ' data-idx="' + i + '"' : '') + '>' + body + '</li>';
         });
         return open + rows.join('') + '</ul>';
       }

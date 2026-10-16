@@ -250,10 +250,16 @@ export interface CommandUi {
   readonly dialog?: ((spec: DialogSpec) => DialogHandle | undefined) | undefined;
 }
 
+/** 列表项（2026-10-16 用户走查）：字符串直用（两段式惯例照旧）；对象形态 = `text` 主文 + 可选
+ *  `note` 侧注（时间/计数类窄栏）。GUI 渲染「左主文占满截断 + 右侧注固定贴右」，TUI 拼回
+ *  `text · note` 单行（与字符串形态同形——终端宽度截断照旧）。 */
+export type DialogListItem = string | { text: string; note?: string };
+
 /** 控件（m5 口子二/三共用）——「给数据不给画面」：模块交控件清单，画永远是宿主画。八种：
  *  text 一段文字（可带样式与折行开关）/ kv 一行「标签: 值」/ sep 分隔线 / list 列表（interactive =
- *  可选中，选中变化回事件）/ progress 进度条（value/max）/ input 输入框（label 字段名画进框顶边、
- *  multiline 多行、lines 高度、enterSubmit 回车即提交）/ columns 多列（cols 每列又是控件清单，可嵌套）/ table 表格。
+ *  可选中，选中变化回事件；items 可给字符串或 { text, note } 结构行——见 DialogListItem）/ progress
+ *  进度条（value/max）/ input 输入框（label 字段名画进框顶边、multiline 多行、lines 高度、enterSubmit
+ *  回车即提交）/ columns 多列（cols 每列又是控件清单，可嵌套）/ table 表格。
  *  text/value/progress 的 value 字段给函数 = 活值：宿主渲染期现读（卡片每秒、控件窗每帧）。
  *
  * @example
@@ -268,7 +274,7 @@ export type WidgetSpec =
   | { id: string; kind: "text"; text: string | (() => string); style?: "muted" | "accent" | "warn"; wrap?: "auto" | "none" }
   | { id: string; kind: "kv"; label: string; value: string | (() => string) }
   | { id: string; kind: "sep" }
-  | { id: string; kind: "list"; interactive?: boolean; items: string[] }
+  | { id: string; kind: "list"; interactive?: boolean; items: DialogListItem[] }
   | { id: string; kind: "progress"; value: number | (() => number); max: number }
   | { id: string; kind: "input"; label?: string; multiline?: boolean; lines?: number; enterSubmit?: boolean; placeholder?: string }
   | { id: string; kind: "columns"; cols: WidgetSpec[][]; widths?: number[] }

@@ -9,14 +9,14 @@
  *  语义锚点（自仓 TUI）：句柄失效 = fullapp-dialogs.ts 排队期无操作同款（闭包持 record 引用比对）；
  *  onEvent 返回清单 = 整窗替换滚回顶（reset:"all"）；update 滚回顶保留焦点（reset:"selection"）；
  *  卸载巡检 notice 用 TUI closeModuleUi 同款文案。 */
-import type { DialogEvent, DialogHandle, DialogSpec, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
+import type { DialogEvent, DialogHandle, DialogListItem, DialogSpec, PopupLayout, WidgetSpec } from "@orosus/contracts/module";
 
 /** 序列化后的控件（SSE 不能传函数——设计 §7）：函数字段求值成 JSON 值，其余原样浅拷贝。 */
 export type SerializedWidget =
   | { id: string; kind: "text"; text: string; style?: "muted" | "accent" | "warn"; wrap?: "auto" | "none" }
   | { id: string; kind: "kv"; label: string; value: string }
   | { id: string; kind: "sep" }
-  | { id: string; kind: "list"; interactive?: boolean; items: string[] }
+  | { id: string; kind: "list"; interactive?: boolean; items: DialogListItem[] }
   | { id: string; kind: "progress"; value: number; max: number }
   | { id: string; kind: "input"; label?: string; multiline?: boolean; lines?: number; enterSubmit?: boolean; placeholder?: string }
   | { id: string; kind: "columns"; cols: SerializedWidget[][]; widths?: number[] }

@@ -60,14 +60,14 @@ export function browserEntries(memoryDir: string): BrowserEntry[] {
  *  Enter 哨兵 → handle.update 整窗换页（reset:selection 滚回顶 = 翻页语义天然契合）。 */
 export const MEMORY_PAGE_SIZE = 50;
 
-export interface BrowserPage { lines: string[]; page: number; pageCount: number; hasPrev: boolean; hasNext: boolean }
+export interface BrowserPage { lines: (string | BrowserRow)[]; page: number; pageCount: number; hasPrev: boolean; hasNext: boolean }
 
 export function browserPage(entries: BrowserEntry[], page: number, now: number, tr?: BrowserT): BrowserPage {
   const t = tr ?? ((_k, _p, f) => f ?? _k);
   const pageCount = Math.max(1, Math.ceil(entries.length / MEMORY_PAGE_SIZE));
   const p = Math.min(Math.max(1, page), pageCount); // 越界钳回（哨兵竞态下双保险）
   const slice = entries.slice((p - 1) * MEMORY_PAGE_SIZE, p * MEMORY_PAGE_SIZE);
-  const lines = renderBrowserList(slice, now, tr);
+  const lines: (string | BrowserRow)[] = renderBrowserList(slice, now, tr);   // 实行结构化 + 首尾哨兵字符串行
   const hasPrev = p > 1;
   const hasNext = p < pageCount;
   if (hasPrev) lines.unshift(t("peers.win.page.prev", undefined, "‹ 上一页"));
@@ -93,16 +93,26 @@ export function relativeTime(then: number, now: number, tr?: BrowserT): string {
   return d2.getFullYear() === new Date(now).getFullYear() ? `${mm}-${dd}` : `${d2.getFullYear()}-${mm}-${dd}`;
 }
 
-/** 列表行（2026-10-07 用户走查验形）：「{◆} 标题 · 简介 · 相对时间」——简介缺席则省中段；
- *  简介帽 60 字（全屏列表行宽有限，防挤掉时间）。索引行标题/时间串均走 tr。 */
-export function renderBrowserList(entries: BrowserEntry[], now: number, tr?: BrowserT): string[] {
+/** 结构行（2026-10-16 用户走查「时间显示在最右边，简介能显示多少显示多少」）：text = 标题(+简介)、
+ *  note = 相对时间——GUI dw-cols 双栏（简介 CSS 截断、时间贴右）；TUI 宿主拼回 `text · note` 单行
+ *  （与旧字符串形态同形）。简介帽 60 字保留（TUI 单行宽度截断下护时间可见）。索引行标题/时间串走 tr。 */
+export interface BrowserRow { text: string; note?: string }
+
+export function renderBrowserList(entries: BrowserEntry[], now: number, tr?: BrowserT): BrowserRow[] {
   const t = tr ?? ((_k, _p, f) => f ?? _k);
   return entries.map((e) => {
     const title = e.isIndex ? t("peers.win.index.title", undefined, e.title) : e.title;
     const desc = e.summary.length > 60 ? `${e.summary.slice(0, 59)}…` : e.summary;
-    const time = relativeTime(e.updatedAtMs, now, tr);
-    return `${e.isIndex ? "◆" : " "} ${title}${desc !== "" ? ` · ${desc}` : ""} · ${time}`;
+    return {
+      text: `${e.isIndex ? "◆" : " "} ${title}${desc !== "" ? ` · ${desc}` : ""}`,
+      note: relativeTime(e.updatedAtMs, now, tr),
+    };
   });
+}
+
+/** 行单串化（行模式只读回落同形消费）：字符串行（翻页哨兵）原样；对象行拼 `text · note`。 */
+export function browserRowText(row: string | BrowserRow): string {
+  return typeof row === "string" ? row : row.note !== undefined && row.note !== "" ? `${row.text} · ${row.note}` : row.text;
 }
 
 /** 正文读取：MEMORY.md 本体或笔记原文；basename 防穿越。 */

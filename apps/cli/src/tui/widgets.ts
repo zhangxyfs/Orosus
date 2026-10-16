@@ -4,13 +4,18 @@
  *  铁律：模块给数据不给画面——文字不许夹终端控制码，宿主按看得见的宽度折行/截断（全局约束 1）。
  *  活值字段（text/value 为函数）渲染期现读；抛错由调用方（卡片 = 当帧占位/剔除）兜底。 */
 
-import type { WidgetSpec } from "@orosus/contracts/module";
+import type { DialogListItem, WidgetSpec } from "@orosus/contracts/module";
 import * as theme from "../theme.ts";
 import { pickLabel } from "../picker.ts";
 import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts";
 
 const resolveText = (v: string | (() => string)): string => (typeof v === "function" ? v() : v);
 const resolveNum = (v: number | (() => number)): number => (typeof v === "function" ? v() : v);
+
+/** 结构行拼回单串（2026-10-16 用户走查）：{ text, note } → `text · note`——TUI 与字符串形态同形
+ *  （宽度截断照旧，不右贴）。 */
+const rowText = (it: DialogListItem): string =>
+	typeof it === "string" ? it : it.note !== undefined && it.note !== "" ? `${it.text} · ${it.note}` : it.text;
 
 const FRACS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 
@@ -39,26 +44,26 @@ export function renderWidgetLines(
 	const lists: WidgetListPos[] = [];
 	for (const wd of widgets) {
 		switch (wd.kind) {
-			case "list": {
-				if (wd.interactive === true && wd.items.length > 0) {
-					const focused = st?.focusedId === wd.id;
-					const sel = st?.selById?.[wd.id] ?? 0;
-					lists.push({ id: wd.id, baseLine: lines.length, count: wd.items.length });
-					for (let i = 0; i < wd.items.length; i++) {
-						const mark = i === sel ? (focused ? theme.fg("accent", "❯") : theme.dim("❯")) : theme.dim(" ");
-						// 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；选中行标题青玉、说明仍灰）
-						const text = pickLabel(wd.items[i]!, { current: i === sel });
-						lines.push(` ${mark} ${truncateToWidth(text, Math.max(1, w - 3))}`);
+				case "list": {
+					if (wd.interactive === true && wd.items.length > 0) {
+						const focused = st?.focusedId === wd.id;
+						const sel = st?.selById?.[wd.id] ?? 0;
+						lists.push({ id: wd.id, baseLine: lines.length, count: wd.items.length });
+						for (let i = 0; i < wd.items.length; i++) {
+							const mark = i === sel ? (focused ? theme.fg("accent", "❯") : theme.dim("❯")) : theme.dim(" ");
+							// 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；选中行标题青玉、说明仍灰）
+							const text = pickLabel(rowText(wd.items[i]!), { current: i === sel });
+							lines.push(` ${mark} ${truncateToWidth(text, Math.max(1, w - 3))}`);
+						}
+						break;
 					}
+					if (wd.items.length === 0) {
+						lines.push(theme.dim(" （空）"));
+						break;
+					}
+					for (const item of wd.items) lines.push(` ${theme.dim("·")} ${truncateToWidth(rowText(item), Math.max(1, w - 3))}`);
 					break;
 				}
-				if (wd.items.length === 0) {
-					lines.push(theme.dim(" （空）"));
-					break;
-				}
-				for (const item of wd.items) lines.push(` ${theme.dim("·")} ${truncateToWidth(item, Math.max(1, w - 3))}`);
-				break;
-			}
 			case "input": {
 				const st0 = st?.inputById?.[wd.id];
 				const focused = st?.focusedId === wd.id;

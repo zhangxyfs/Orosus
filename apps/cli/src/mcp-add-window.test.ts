@@ -99,7 +99,7 @@ describe("T17 添加窗——控件清单结构（三档联动）", () => {
     expect(tabText).toContain(fg("fg", "  JSON")); // 未选页签白
     const t = ws.find((w) => w.id === "transport");
     expect(t !== undefined && t.kind === "list" && t.interactive === true && t.items.length).toBe(1); // 三档并一行（单条 list 项保焦点圈）
-    const row = t !== undefined && t.kind === "list" ? stripAnsi(t.items[0]!) : "";
+    const row = t !== undefined && t.kind === "list" ? stripAnsi(t.items[0] as string) : "";
     expect(row).toContain("● HTTP（远程）"); // 选中档实心点
     expect(row).toContain("○ stdio 子进程"); // 未选档空心点同行
     expect(row).toContain("○ SSE");

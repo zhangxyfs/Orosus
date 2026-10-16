@@ -1416,6 +1416,9 @@ body.light .work-head { color: var(--muted); }
 .dw-list.dw-interactive .dw-row.dw-sel { background: color-mix(in oklch, var(--accent) 16%, transparent); color: var(--fg); }
 .dw-list.dw-interactive .dw-row.dw-sel::before { background: var(--accent); border-color: var(--accent); }
 .dw-list.dw-interactive.dw-focus { outline: 1px solid color-mix(in oklch, var(--accent) 45%, transparent); outline-offset: 2px; border-radius: 8px; }
+.dw-row.dw-cols { display: flex; align-items: center; gap: 10px; } /* 结构行（2026-10-16 用户走查）：左主文占满截断 + 右窄注贴右 */
+.dw-row.dw-cols .dw-cell { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw-row.dw-cols .dw-note { flex: 0 0 auto; color: var(--muted); font-size: calc(11px * var(--fz)); }
 .dw-empty { color: var(--muted); font-size: calc(13px * var(--fz)); padding: 3px 8px; }
 .dw-progress { display: flex; align-items: center; gap: 10px; }
 .dw-progress .dw-bar { flex: 1; height: 8px; border-radius: 5px; background: var(--fg-soft); overflow: hidden; }

@@ -187,27 +187,50 @@ describe("记忆浏览窗分页（2026-10-15 用户走查「能不能分页加�
     } as never;   // 命令 handler 的 ui 参数（对话/查看口 mock）
     await h.commandHandlers.get("tool-peers__memory")!("", ui);
 
-    // 首页：50 实行 + 尾哨兵 = 51 行；pginfo 页码件在场
-    const first = opened[0]!;
-    const list1 = first.widgets.find((w) => w.id === "list")!;
+    // 开窗即壳（2026-10-16 用户走查）：开窗帧 = 装填态（loading 件，无列表）——点击到窗壳零等待
+    const shell = opened[0]!;
+    expect(shell.widgets).toHaveLength(1);
+    expect(shell.widgets[0]!.id).toBe("loading");
+    expect(shell.widgets[0]!.text).toContain("正在装载");
+    await new Promise((r) => { setTimeout(r, 5); });   // 冲 setTimeout(0)：扫描完成后 update 整窗换入
+
+    // 装填后首页：50 实行 + 尾哨兵 = 51 行（实行 = { text, note } 结构行——GUI 时间右贴/TUI 拼单串）；pginfo 在场
+    const loadedWidgets = updates[0] as { id: string; kind: string; items?: ({ text: string; note?: string } | string)[]; text?: string }[];
+    const list1 = loadedWidgets.find((w) => w.id === "list")!;
     expect(list1.items).toHaveLength(51);
-    expect(list1.items!.at(-1)).toContain("下一页");
-    expect(first.widgets.find((w) => w.id === "pginfo")!.text).toContain("第 1/2 页");
-    expect(first.widgets.find((w) => w.id === "pginfo")!.text).toContain("共 56 条");
+    expect(list1.items!.at(-1) as string).toContain("下一页");   // 哨兵 = 字符串行
+    const firstRow = list1.items![1] as { text: string; note?: string };   // items[0] = 索引行（◆）；实行按 mtime 序
+    expect(firstRow.text).toMatch(/分页笔记 \d+/);
+    expect(firstRow.text).toContain(" · s");   // 简介在主文段
+    expect(firstRow.note).toMatch(/分钟前|刚刚|小时前/);   // 时间在 note 侧栏（不挤主文）
+    expect(loadedWidgets.find((w) => w.id === "pginfo")!.text).toContain("第 1/2 页");
+    expect(loadedWidgets.find((w) => w.id === "pginfo")!.text).toContain("共 56 条");
 
     // Enter 尾哨兵（index 50）→ update 整窗换页：第 2 页 = 首哨兵 + 6 实行 + pginfo 2/2
-    (first.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 50 });
-    const page2widgets = updates[0] as { id: string; items?: string[]; text?: string }[];   // update 参数 = widgets 数组本体
+    (shell.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 50 });
+    const page2widgets = updates[1] as { id: string; items?: ({ text: string; note?: string } | string)[]; text?: string }[];   // update 参数 = widgets 数组本体（updates[0] = 装填）
     const page2 = page2widgets.find((w) => w.id === "list")!;
     expect(page2.items).toHaveLength(7); // ‹上一页 + 6 实行（无下一页哨兵）
-    expect(page2.items![0]).toContain("上一页");
+    expect(page2.items![0] as string).toContain("上一页");
     expect(page2widgets.find((w) => w.id === "pginfo")!.text).toContain("第 2/2 页");
 
-    // 页内偏移：第 2 页 index 1 = 首个实行（hasPrev 偏移 1）→ 开对应笔记（标题对行文）
-    (first.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 1 });
+    // 页内偏移：第 2 页 index 1 = 首个实行（hasPrev 偏移 1）→ 开对应笔记（标题对行文 text 段）
+    (shell.onEvent as (e: unknown) => unknown)({ type: "activate", id: "list", index: 1 });
     expect(views).toHaveLength(1);
-    const rowTitle = page2.items![1]!.trim().split(" · ")[0]!; // 行文「  标题 · 简介 · 时间」
+    const rowTitle = (page2.items![1] as { text: string }).text.trim().split(" · ")[0]!;
     expect(views[0]!.title).toBe(rowTitle);
     expect(views[0]!.text).toMatch(/body-\d+/);
+  });
+
+  it("空仓门（2026-10-16 装填流重构）：MEMORY.md 缺席 → notice 不开窗（stat 级预检与旧全扫等价）", async () => {
+    const h = activateWith({ ...FULL_ON, memoryBase: memBase, sessionsRoot });
+    (h.listeners.get("session/start") as (p: unknown) => void)(bootPayload);   // dir 定位成功但仓空（beforeEach 只建会话文件）
+    const notices: string[] = [];
+    const dialogs: unknown[] = [];
+    const ui = { dialog: (spec: unknown) => { dialogs.push(spec); return { update: () => {}, close: () => {} }; }, notice: async (m: string) => { notices.push(m); } } as never;
+    await h.commandHandlers.get("tool-peers__memory")!("", ui);
+    await new Promise((r) => { setTimeout(r, 5); });
+    expect(notices[0]).toContain("还没有共享记忆");
+    expect(dialogs).toHaveLength(0);   // 空仓不开窗壳（预检先于开窗）
   });
 });
