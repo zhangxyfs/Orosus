@@ -81,13 +81,13 @@ export default defineModule({
       }
       if (ui.dialog === undefined) {
         // 行模式回落：无交互面翻不了页——仍整表只读列出（分页属控件窗面；无窗壳可先现，同步整表）
-        const lines = renderBrowserList(browserEntries(dir), Date.now(), t);
+        const lines = renderBrowserList(await browserEntries(dir), Date.now(), t);
         ui.viewText?.(t("peers.win.list.fallback", undefined, "记忆 · 本项目（只读列表——全屏模式可 Enter 打开）"), lines.map(browserRowText).join("\n"), { layout: "full" });
         return "";
       }
       // 开窗即壳后装填（2026-10-16 用户走查）：先以装填态开窗（GUI 点击到窗壳零等待），扫描挪到
-      // 下一宏任务——开窗帧先行出线，条目扫完经 handle.update 整窗换入。TUI 同路径（索引驱动扫描
-      // 毫秒级，装填态一闪即过，终态与旧「扫完才开窗」一致）。
+      // 下一宏任务且走并行异步 stat（慢盘/杀软下串行 statSync 百级文件数百 ms）——开窗帧先行出线，
+      // 条目扫完经 handle.update 整窗换入。TUI 同路径（索引驱动扫描毫秒级，装填态一闪即过）。
       let page = 1;
       let loaded: BrowserEntry[] | null = null;   // null = 装填中（onEvent 空转）
       const widgetsOf = () => {
@@ -123,7 +123,7 @@ export default defineModule({
           return undefined;
         },
       });
-      setTimeout(() => { loaded = browserEntries(dir); handle?.update(widgetsOf()); }, 0);
+      setTimeout(() => { void browserEntries(dir).then((es) => { loaded = es; handle?.update(widgetsOf()); }); }, 0);
       return "";
     });
     // v2 门控注册：双关 = activate 空转（零工具零段零 token；浏览命令不受门控——D17）

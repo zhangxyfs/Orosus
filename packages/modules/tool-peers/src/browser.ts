@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { noteMetaOfText } from "./memstore.ts";
 
-/** 记忆浏览窗数据件（m5-peers T6c，v3 走查二轮）：纯函数——列表序/标题/相对时间/正文读取。
+/** 记忆浏览窗数据件（m5-peers T6c，v3 走查二轮）：列表序/标题/相对时间/正文读取。
  *  窗交互在 index.ts（命令接线：dialog 控件窗列表 + viewText 正文——PopupKey 无选中态，执行期核实走
  *  session-tree__view 同款 interactive list；「Esc 返回列表」降级为重开命令，偏差记档 T7）。 */
 
@@ -13,40 +14,45 @@ export interface BrowserEntry { file: string; title: string; summary: string; up
 
 /** 列表项：第一项恒 MEMORY.md 本体；其后按索引引用顺序。孤儿笔记（有文件无索引行——手工文件/
  *  写盘中途）按 mtime 补尾不丢内容。
- *  性能口径（2026-10-15 用户走查「加载记忆列表卡」）：标题/简介取自**索引行本身**（模块写入侧
- *  buildIndex 与笔记同源维护），mtime 走 statSync——开窗**不读任何笔记正文**；正文延迟到 Enter 打开
- *  时单篇读（browserBody 本就如此）。代价：手工改笔记 frontmatter 后索引行标题滞后到下次写/重建
- *  （「索引即缓存」——孤儿行仍现读正文取题，不丢）。此前实现经 listNotes 逐篇 readFileSync，
- *  百篇级在 Windows 上开窗显著卡顿。 */
-export function browserEntries(memoryDir: string): BrowserEntry[] {
+ *  性能口径（2026-10-15 用户走查「加载记忆列表卡」→ 2026-10-16 报障「弹窗还是慢」再硬化）：标题/
+ *  简介取自**索引行本身**（模块写入侧 buildIndex 与笔记同源维护），mtime/孤儿扫描走 **fs/promises
+ *  并行**（Promise.all）——串行 statSync 在慢盘/杀软过滤驱动下每文件 1-3ms、百级文件数百 ms，并行
+ *  后墙钟压到单次盘往返量级；开窗**不读任何索引成员正文**（孤儿仍现读取题，不丢）。正文延迟到
+ *  Enter 打开时单篇读（browserBody 本就如此）。代价：手工改笔记 frontmatter 后索引行标题滞后到
+ *  下次写/重建（「索引即缓存」）。此前实现经 listNotes 逐篇 readFileSync，百篇级在 Windows 上
+ *  开窗显著卡顿。 */
+const INDEX_LINE_RE = /- \[([^\]]*)\]\(([^)]+)\)(?: — (.*))?/g;
+
+export async function browserEntries(memoryDir: string): Promise<BrowserEntry[]> {
   const indexFile = join(memoryDir, "MEMORY.md");
   if (!existsSync(indexFile)) return [];
   const indexText = readFileSync(indexFile, "utf8");
+  const indexMtime = await stat(indexFile).then((s) => s.mtimeMs, () => 0);
   const entries: BrowserEntry[] = [{
     file: "MEMORY.md",
     title: "共享记忆索引（MEMORY.md）",
     summary: "",
-    updatedAtMs: statSync(indexFile).mtimeMs,
+    updatedAtMs: indexMtime,
     isIndex: true,
   }];
   const seen = new Set<string>(["MEMORY.md"]);
-  for (const m of indexText.matchAll(/- \[([^\]]*)\]\(([^)]+)\)(?: — (.*))?/g)) {
+  const matches = [...indexText.matchAll(INDEX_LINE_RE)];
+  const mtimes = await Promise.all(matches.map((m) => stat(join(memoryDir, m[2] ?? "")).then((s) => s.mtimeMs, () => null)));
+  matches.forEach((m, i) => {
     const file = m[2] ?? "";
-    if (seen.has(file)) continue;
-    let mtime: number;
-    try { mtime = statSync(join(memoryDir, file)).mtimeMs; } catch { continue; } // 引用指向不存在的文件 → 跳过
+    if (seen.has(file) || mtimes[i] === null) return; // 引用指向不存在的文件 → 跳过
     seen.add(file);
-    entries.push({ file, title: m[1] ?? "", summary: m[3] ?? "", updatedAtMs: mtime, isIndex: false });
-  }
-  // 孤儿扫描：名单级对比（readdir，零正文读）——仅孤儿行现读正文取题（noteMetaOfText 与写入侧同源）
-  let names: string[] = [];
-  try { names = readdirSync(memoryDir); } catch { names = []; }
-  const orphans = names
-    .filter(n => n.endsWith(".md") && n !== "MEMORY.md" && !seen.has(n))
-    .map(n => {
-      const file = join(memoryDir, n);
-      try { return noteMetaOfText(n, readFileSync(file, "utf8"), statSync(file).mtimeMs); } catch { return undefined; }
-    })
+    entries.push({ file, title: m[1] ?? "", summary: m[3] ?? "", updatedAtMs: mtimes[i]!, isIndex: false });
+  });
+  // 孤儿扫描：名单级对比（readdir，索引成员零正文读）——仅孤儿行现读正文取题（noteMetaOfText 与写入侧同源）
+  const names = await readdir(memoryDir).then((ns) => ns, () => [] as string[]);
+  const orphanNames = names.filter(n => n.endsWith(".md") && n !== "MEMORY.md" && !seen.has(n));
+  const [orphanStats, orphanTexts] = await Promise.all([
+    Promise.all(orphanNames.map(n => stat(join(memoryDir, n)).then((s) => s.mtimeMs, () => null))),
+    Promise.all(orphanNames.map(n => readFile(join(memoryDir, n), "utf8").then((t) => t, () => null))),
+  ]);
+  const orphans = orphanNames
+    .map((n, i) => orphanStats[i] === null || orphanTexts[i] === null ? undefined : noteMetaOfText(n, orphanTexts[i]!, orphanStats[i]!))
     .filter((x): x is NonNullable<typeof x> => x !== undefined)
     .sort((a, b) => b.updatedAtMs - a.updatedAtMs || (a.file < b.file ? -1 : 1));
   for (const o of orphans) {
@@ -93,18 +99,18 @@ export function relativeTime(then: number, now: number, tr?: BrowserT): string {
   return d2.getFullYear() === new Date(now).getFullYear() ? `${mm}-${dd}` : `${d2.getFullYear()}-${mm}-${dd}`;
 }
 
-/** 结构行（2026-10-16 用户走查「时间显示在最右边，简介能显示多少显示多少」）：text = 标题(+简介)、
- *  note = 相对时间——GUI dw-cols 双栏（简介 CSS 截断、时间贴右）；TUI 宿主拼回 `text · note` 单行
- *  （与旧字符串形态同形）。简介帽 60 字保留（TUI 单行宽度截断下护时间可见）。索引行标题/时间串走 tr。 */
+/** 结构行（2026-10-16 用户走查「时间最右、简介显示到时间前面一点」）：text = 标题(+完整简介)、
+ *  note = 相对时间——GUI dw-cols 双栏（简介顶到时间前由 CSS ellipsis 截断）；TUI 宿主自适应截断
+ *  （主文压到剩余宽度、note 恒可见——widgets.ts renderListItem）。**模块侧不再截简介**（旧 60 字帽
+ *  是 TUI 固定宽护时间的粗器，GUI 全宽下浪费；TUI 现按实际宽度自适应）。索引行标题/时间串走 tr。 */
 export interface BrowserRow { text: string; note?: string }
 
 export function renderBrowserList(entries: BrowserEntry[], now: number, tr?: BrowserT): BrowserRow[] {
   const t = tr ?? ((_k, _p, f) => f ?? _k);
   return entries.map((e) => {
     const title = e.isIndex ? t("peers.win.index.title", undefined, e.title) : e.title;
-    const desc = e.summary.length > 60 ? `${e.summary.slice(0, 59)}…` : e.summary;
     return {
-      text: `${e.isIndex ? "◆" : " "} ${title}${desc !== "" ? ` · ${desc}` : ""}`,
+      text: `${e.isIndex ? "◆" : " "} ${title}${e.summary !== "" ? ` · ${e.summary}` : ""}`,
       note: relativeTime(e.updatedAtMs, now, tr),
     };
   });

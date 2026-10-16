@@ -152,3 +152,24 @@ describe("列表结构行（2026-10-16 用户走查「时间显示在最右边�
 		expect(w[1]).toContain("乙");
 	});
 });
+
+describe("列表结构行自适应截断（2026-10-16 用户走查二轮「简介显示到时间前面一点」——摘模块 60 帽后的 TUI 接棒）", () => {
+	it("③ 长主文压进剩余宽度：note 恒在行尾可见、行不越界——宽窗多显窄窗少显（按实际宽度自适应）", () => {
+		const item = { text: `标题 · ${"长".repeat(60)}`, note: "5 分钟前" };
+		const rows = (w: number) => renderWidgetLines([{ id: "l", kind: "list", interactive: true, items: [item] }], w).lines.map(stripAnsi);
+		const r40 = rows(40)[0]!;
+		expect(r40.endsWith("5 分钟前")).toBe(true); // note 存活在行尾（不被长主文顶掉）
+		expect(r40).not.toContain("长".repeat(40)); // 主文被压缩
+		const r80 = rows(80)[0]!;
+		expect(r80.endsWith("5 分钟前")).toBe(true);
+		expect(stripAnsi(r80).length).toBeGreaterThan(stripAnsi(r40).length); // 宽窗显示更多主文
+		const r160 = rows(160)[0]!;
+		expect(r160).toContain("长".repeat(60)); // 全放得下：不截
+		expect(r160.endsWith("5 分钟前")).toBe(true);
+	});
+
+	it("④ 非交互列表同款自适应（只读 list 长主文不吞 note）", () => {
+		const w = renderWidgetLines([{ id: "l", kind: "list", items: [{ text: `甲 · ${"长".repeat(50)}`, note: "1 小时前" }] }], 40).lines.map(stripAnsi);
+		expect(w[0]!.endsWith("1 小时前")).toBe(true);
+	});
+});

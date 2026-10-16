@@ -12,26 +12,26 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const NOW = Date.parse("2026-10-06T12:00:00.000Z");
 
 describe("browserEntries（m5-peers T6c）", () => {
-  it("第一项恒 MEMORY.md 本体，其后按索引引用顺序；标题取 frontmatter name 非文件名", () => {
+  it("第一项恒 MEMORY.md 本体，其后按索引引用顺序；标题取 frontmatter name 非文件名", async () => {
     writeNote(dir, "First Note", "s1", "b1");
     writeNote(dir, "Second Note", "s2", "b2");
-    const entries = browserEntries(dir);
+    const entries = await browserEntries(dir);
     expect(entries[0]?.isIndex).toBe(true);
     expect(entries[0]?.file).toBe("MEMORY.md");
     expect(entries.slice(1).map(e => e.title)).toEqual(["Second Note", "First Note"]);   // 索引引用顺序（mtime 新者先被索引引用）
     expect(entries.every(e => !e.title.endsWith(".md") || e.isIndex)).toBe(true);   // 标题非文件名（索引行除外——它就叫 MEMORY.md）
   });
 
-  it("孤儿笔记（有文件无索引行）按 mtime 补尾不丢", () => {
+  it("孤儿笔记（有文件无索引行）按 mtime 补尾不丢", async () => {
     writeNote(dir, "Indexed", "s", "b");
     writeFileSync(join(dir, "2026-01-01-orphan.md"), "---\nname: Orphan\ndescription: o\n---\n\nbody\n");
-    const titles = browserEntries(dir).map(e => e.title);
+    const titles = (await browserEntries(dir)).map(e => e.title);
     expect(titles).toContain("Orphan");
     expect(titles.indexOf("Orphan")).toBeGreaterThan(titles.indexOf("Indexed"));
   });
 
-  it("无 MEMORY.md → 空列表", () => {
-    expect(browserEntries(dir)).toEqual([]);
+  it("无 MEMORY.md → 空列表（async 扫描同语义）", async () => {
+    expect(await browserEntries(dir)).toEqual([]);
   });
 });
 
@@ -47,30 +47,31 @@ describe("relativeTime（/sessions 同款 + 超 30 天落日期）", () => {
 });
 
 describe("renderBrowserList 与 browserBody", () => {
-  it("行含标题与相对时间；◆ 标索引行", () => {
+  it("行含标题与相对时间；◆ 标索引行", async () => {
     writeNote(dir, "First", "s1", "body1");
     utimesSync(join(dir, listNotes(dir)[0]!.file), new Date(NOW - 5 * 60_000), new Date(NOW - 5 * 60_000));   // mtime 钉 5 分钟前（墙钟漂移隔离）
-    const entries = browserEntries(dir);
+    const entries = await browserEntries(dir);
     const lines = renderBrowserList(entries, NOW);
     expect(lines[0]!.text).toContain("◆");
     expect(lines[1]!.text).toContain("First");
     expect(lines[1]!.note).toBe("5 分钟前");
   });
-  it("走查验形（2026-10-07）：行含简介（标题后、时间前）；简介帽 60 字截断带 …；结构行拼回单串与旧形态同形", () => {
+  it("走查验形（2026-10-07 起）：行含简介（标题后、时间前）；2026-10-16 摘帽——简介全文进 text 段（截断归渲染端：GUI CSS/TUI 自适应）；结构行拼回单串与旧形态同形", async () => {
     writeNote(dir, "Has Desc", "一句话简介", "b");
     writeNote(dir, "Long Desc", "x".repeat(80), "b2");
     utimesSync(join(dir, listNotes(dir)[1]!.file), new Date(NOW - 30_000), new Date(NOW - 30_000));
-    const lines = renderBrowserList(browserEntries(dir), NOW);
+    const lines = renderBrowserList(await browserEntries(dir), NOW);
     const hasDesc = lines.find(l => l.text.includes("Has Desc"))!;
     expect(hasDesc.text).toContain(" · 一句话简介");   // 简介在 text 段（note = 时间不混入）
     expect(hasDesc.note).toBe("刚刚");
     const longDesc = lines.find(l => l.text.includes("Long Desc"))!;
-    expect(longDesc.text).toContain(` · ${"x".repeat(59)}…`);   // 60 帽：59 字 + …
+    expect(longDesc.text).toContain(` · ${"x".repeat(80)}`);   // 摘 60 帽：80 字全文（渲染端各自截断）
+    expect(longDesc.text).not.toContain("…");   // 模块侧不再造 …
     expect(browserRowText(hasDesc)).toBe(`${hasDesc.text} · ${hasDesc.note}`);   // 拼回 = TUI/只读回落同形
     expect(browserRowText("‹ 上一页")).toBe("‹ 上一页");   // 字符串行（哨兵）原样
     expect(browserRowText({ text: "无注行" })).toBe("无注行");   // note 缺席不拼尾
   });
-  it("tr 注入走键（ctx.t 接线钉）：索引行标题/相对时间经 peers.* 键；无 tr 回落作者中文", () => {
+  it("tr 注入走键（ctx.t 接线钉）：索引行标题/相对时间经 peers.* 键；无 tr 回落作者中文", async () => {
     writeNote(dir, "N1", "s", "b");
     const tr = (k: string, p?: Record<string, string | number>, f?: string): string => {
       if (k === "peers.win.index.title") return "Shared memory index (MEMORY.md)";
@@ -79,14 +80,14 @@ describe("renderBrowserList 与 browserBody", () => {
       return f ?? k;
     };
     utimesSync(join(dir, "MEMORY.md"), new Date(NOW - 2 * 86_400_000), new Date(NOW - 2 * 86_400_000));   // 钉索引行 mtime（断言对象是 lines[0]）
-    const lines = renderBrowserList(browserEntries(dir), NOW, tr);
+    const lines = renderBrowserList(await browserEntries(dir), NOW, tr);
     expect(lines[0]!.text).toContain("Shared memory index (MEMORY.md)");
     expect(lines[0]!.note).toBe("2 d ago");
-    expect(renderBrowserList(browserEntries(dir), NOW)[0]!.text).toContain("共享记忆索引");   // 无 tr = 作者中文回落
+    expect(renderBrowserList(await browserEntries(dir), NOW)[0]!.text).toContain("共享记忆索引");   // 无 tr = 作者中文回落
   });
-  it("body 读回原文 + 防穿越；MEMORY.md 可读", () => {
+  it("body 读回原文 + 防穿越；MEMORY.md 可读", async () => {
     writeNote(dir, "N", "s", "content-here");
-    const entries = browserEntries(dir);
+    const entries = await browserEntries(dir);
     expect(browserBody(dir, entries[1]!.file)).toContain("content-here");
     expect(browserBody(dir, "MEMORY.md")).toContain("# Memory Index");
     expect(browserBody(dir, "../evil.md")).toBeUndefined();
@@ -94,21 +95,21 @@ describe("renderBrowserList 与 browserBody", () => {
 });
 
 describe("browserEntries 索引驱动快路径（2026-10-15 用户走查「列表卡」）", () => {
-  it("标题/简介取自索引行（不读笔记正文）：手改 frontmatter name 后索引行标题滞后——「索引即缓存」；行标题与索引一致", () => {
+  it("标题/简介取自索引行（不读笔记正文）：手改 frontmatter name 后索引行标题滞后——「索引即缓存」；行标题与索引一致", async () => {
     writeNote(dir, "Original Title", "original summary", "b");
     // 事后手改笔记 frontmatter（不经模块写入侧——索引行保持旧标题）
     const files = listNotes(dir);
     const noteFile = join(dir, files[0]!.file);
     writeFileSync(noteFile, "---\nname: Hand Edited\ndescription: new\n---\n\nbody\n");
-    const entries = browserEntries(dir);
+    const entries = await browserEntries(dir);
     expect(entries[1]?.title).toBe("Original Title");   // 来自索引行（快路径零正文读的实证：内容标题 Hand Edited 不上列表）
     expect(entries[1]?.summary).toBe("original summary");
   });
 
-  it("索引引用指向不存在的文件 → 跳过不炸", () => {
+  it("索引引用指向不存在的文件 → 跳过不炸", async () => {
     writeNote(dir, "Alive", "s", "b");
     writeFileSync(join(dir, "MEMORY.md"), `# Memory Index\n\n- [Ghost](ghost.md) — g\n- [Alive](${listNotes(dir)[0]!.file}) — s\n`);
-    const titles = browserEntries(dir).map((e) => e.title);
+    const titles = (await browserEntries(dir)).map((e) => e.title);
     expect(titles).not.toContain("Ghost");
     expect(titles).toContain("Alive");
   });

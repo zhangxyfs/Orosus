@@ -12,10 +12,17 @@ import { padToWidth, truncateToWidth, visibleWidth, wrapText } from "./width.ts"
 const resolveText = (v: string | (() => string)): string => (typeof v === "function" ? v() : v);
 const resolveNum = (v: number | (() => number)): number => (typeof v === "function" ? v() : v);
 
-/** 结构行拼回单串（2026-10-16 用户走查）：{ text, note } → `text · note`——TUI 与字符串形态同形
- *  （宽度截断照旧，不右贴）。 */
-const rowText = (it: DialogListItem): string =>
-	typeof it === "string" ? it : it.note !== undefined && it.note !== "" ? `${it.text} · ${it.note}` : it.text;
+/** 结构行渲染（2026-10-16 用户走查二轮「简介显示到时间前面一点」）：{ text, note } → 主文压进剩余
+ *  宽度（截断）、` · note` 恒拼在行尾可见——取代模块侧旧 60 字帽（固定宽粗器），按实际终端宽自适应。
+ *  字符串行原样（宽度截断照旧，不右贴）。行前缀预算 3（「 ❯ 」/「 · 」），分隔「 · 」3。 */
+const renderListItem = (it: DialogListItem, w: number): string => {
+	if (typeof it === "string") return it;
+	const note = it.note ?? "";
+	if (note === "") return it.text;
+	const budget = w - 3 - visibleWidth(note) - 3;
+	if (budget < 1) return truncateToWidth(`${it.text} · ${note}`, Math.max(1, w - 3)); // 极窄兜底：整行截（note 可能被吃）
+	return `${truncateToWidth(it.text, budget)} · ${note}`;
+};
 
 const FRACS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 
@@ -52,7 +59,7 @@ export function renderWidgetLines(
 						for (let i = 0; i < wd.items.length; i++) {
 							const mark = i === sel ? (focused ? theme.fg("accent", "❯") : theme.dim("❯")) : theme.dim(" ");
 							// 两段式（2026-09-28 用户拍板：子界面与斜杠主菜单同形——标题白/说明灰；选中行标题青玉、说明仍灰）
-							const text = pickLabel(rowText(wd.items[i]!), { current: i === sel });
+							const text = pickLabel(renderListItem(wd.items[i]!, w), { current: i === sel });
 							lines.push(` ${mark} ${truncateToWidth(text, Math.max(1, w - 3))}`);
 						}
 						break;
@@ -61,7 +68,7 @@ export function renderWidgetLines(
 						lines.push(theme.dim(" （空）"));
 						break;
 					}
-					for (const item of wd.items) lines.push(` ${theme.dim("·")} ${truncateToWidth(rowText(item), Math.max(1, w - 3))}`);
+					for (const item of wd.items) lines.push(` ${theme.dim("·")} ${truncateToWidth(renderListItem(item, w), Math.max(1, w - 3))}`);
 					break;
 				}
 			case "input": {

@@ -98,16 +98,20 @@ describe("web dialog T9：记忆链路验收（设计 12.4）", () => {
 
   const send = (text: string): Promise<Response> => post(`/api/sessions/${sid}/send`, { text });
 
-  it("① 记忆链路：/tool-peers__memory → dialog open(full + interactive list 含笔记行) → activate → close → viewText(full + markdown + 真实标题 + 正文)", async () => {
+  it("① 记忆链路：/tool-peers__memory → open(full + 装填壳) → update(装填 list 含笔记行) → activate → close → viewText(full + markdown + 真实标题 + 正文)", async () => {
     await waitFor(async () => (await send("/tool-peers__memory")).ok);
     await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "open"));
     const open = sseFrames.find((f) => f.kind === "dialog" && f.op === "open")!;
     expect(open.layout).toBe("full"); // 不再掉进输入框上方只读条（设计 §1 根因句）
-    const list = open.widgets!.find((w) => w.id === "list")!;
+    expect(open.widgets![0]!.id).toBe("loading"); // 开窗即壳（2026-10-16）：开窗帧 = 装填态，列表在 update 帧随异步扫描抵达
+    await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "update"));
+    const upd = sseFrames.find((f) => f.kind === "dialog" && f.op === "update")!;
+    const list = upd.widgets!.find((w) => w.id === "list")!;
     expect(list.kind).toBe("list");
     expect(list.interactive).toBe(true);
-    expect(list.items!.some((it) => it.includes("部署要点"))).toBe(true);
-    expect(list.items!.some((it) => it.includes("MEMORY.md"))).toBe(true); // 索引行在列
+    const rowText = (it: unknown): string => (typeof it === "string" ? it : (it as { text: string }).text);
+    expect(list.items!.some((it) => rowText(it).includes("部署要点"))).toBe(true);
+    expect(list.items!.some((it) => rowText(it).includes("MEMORY.md"))).toBe(true); // 索引行在列
 
     const s1 = await post(`/api/sessions/${sid}/dialog-event`, { id: open.id, event: { type: "select", id: "list", index: 1 } });
     expect(((await s1.json()) as { ok: boolean }).ok).toBe(true);
@@ -128,7 +132,7 @@ describe("web dialog T9：记忆链路验收（设计 12.4）", () => {
 
   it("② 未知/越界激活不读文件：noop 回执且无 viewText 帧", async () => {
     await waitFor(async () => (await send("/tool-peers__memory")).ok);
-    await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "open"));
+    await waitFor(() => sseFrames.some((f) => f.kind === "dialog" && f.op === "update")); // 装填完成后再打事件（装填期 activate 本就空转）
     const open = sseFrames.find((f) => f.kind === "dialog" && f.op === "open")!;
     const viewTextCountBefore = sseFrames.filter((f) => f.kind === "viewText").length;
     const n1 = await post(`/api/sessions/${sid}/dialog-event`, { id: open.id, event: { type: "activate", id: "list", index: 99 } });

@@ -192,7 +192,7 @@ describe("记忆浏览窗分页（2026-10-15 用户走查「能不能分页加�
     expect(shell.widgets).toHaveLength(1);
     expect(shell.widgets[0]!.id).toBe("loading");
     expect(shell.widgets[0]!.text).toContain("正在装载");
-    await new Promise((r) => { setTimeout(r, 5); });   // 冲 setTimeout(0)：扫描完成后 update 整窗换入
+    await new Promise((r) => { setTimeout(r, 20); });   // 冲 setTimeout(0) + 异步扫描链：装填 update 落账
 
     // 装填后首页：50 实行 + 尾哨兵 = 51 行（实行 = { text, note } 结构行——GUI 时间右贴/TUI 拼单串）；pginfo 在场
     const loadedWidgets = updates[0] as { id: string; kind: string; items?: ({ text: string; note?: string } | string)[]; text?: string }[];
