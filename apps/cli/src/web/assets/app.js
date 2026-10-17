@@ -1272,10 +1272,16 @@ function $(id) { return document.getElementById(id); }
         if (setPageHandler) setPageHandler(e);
       },
     });
-    renderSetPage(pageIdx ?? 0);
+    renderSetPage(pageIdx ?? setTabRecall());
+  }
+  var SET_KEY = 'orosus-web-settings';
+  function setTabRecall() { /* 报障修（2026-10-17）：重开设置回上次页签（localStorage 存续——本次服务期间含 F5 均记忆）；越界/缺失回落 0 号 */
+    var v = loadJson(SET_KEY).tab;
+    return typeof v === 'number' && v >= 0 && v < SET_PAGES.length && Math.floor(v) === v ? v : 0;
   }
   function renderSetPage(i) {
     setState.nav = i;
+    var st = loadJson(SET_KEY); st.tab = i; saveJson(SET_KEY, st); /* 报障修：页签切换即记录（含直达页） */
     var nav = document.getElementById('set-nav');
     var page = document.getElementById('set-page');
     if (!nav || !page) return;
@@ -2494,6 +2500,7 @@ function $(id) { return document.getElementById(id); }
       (cur ? OrosusI18N.t('web.settings.general.tagCurrent') : '') + '</div>';
   }
   function pageAppearance(page) {
+    var keepScroll = page.scrollTop; /* 报障修（2026-10-17）：切语言重渲保滚动位——pageLoading/innerHTML 重建会归顶；语言区深居页中，归顶即「找不到刚点过的行」 */
     pageLoading(page);
     Promise.all([A.fetchJson('/api/settings/locale'), A.fetchJson('/api/settings/update')]).then(function (res) {
       var d = res[0], upd = res[1];
@@ -2541,6 +2548,7 @@ function $(id) { return document.getElementById(id); }
         '</div>' +
         (packs.length > 0 ? '<div id="ap-langpack">' + packs.map(function (l) { return langRowHtml(l, current === l.tag, true); }).join('') + '</div>' : '') +
         OrosusI18N.t('web.settings.appearance.langNoteHtml');
+      page.scrollTop = keepScroll; /* 报障修：重渲后还原滚动位（新页高不足时浏览器自钳制）——常规页签直开时 keepScroll 本为 0 无扰动 */
       setPageHandler = function (e) {
         var t;
         if ((t = e.target.closest('[data-k="ap-update"]'))) {

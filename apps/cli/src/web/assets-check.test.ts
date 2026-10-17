@@ -706,6 +706,14 @@ describe("web T15：前端骨架静态资产", () => {
     const offenders = cjk.filter((s) => !whitelist.some((w) => w.includes(s.trim()) || s.trim().includes(w)));
     expect(offenders, `残留裸中文：${offenders.join(" | ")}`).toEqual([]);
   });
+
+  it("㉑ 报障修（2026-10-17 二连）：切语言重渲保滚动位 + 设置页签记忆（重开回上次页）", () => {
+    const app = read("app.js");
+    expect(app).toContain("var keepScroll = page.scrollTop"); // 外观页重渲前捕获滚动位（语言区深居页中，归顶即找不到刚点的行）
+    expect(app).toContain("page.scrollTop = keepScroll"); // 重渲后还原（新页高不足浏览器自钳）
+    expect(app).toContain("setTabRecall()"); // 打开设置回上次页签（显式直达页优先——E5 审阅直达不受扰）
+    expect(app).toContain("var SET_KEY = 'orosus-web-settings'"); // 记录键（localStorage——本次服务期间含 F5 均记忆）
+  });
 });
 
 describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态面）", () => {
