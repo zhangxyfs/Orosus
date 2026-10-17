@@ -11,4 +11,7 @@ export const zhTWWeb: Messages = {
 	"web.common.loading": "載入中…",
 	"web.common.retry": "重試",
 	"web.settings.langSwitched": "語言已切換",
+	"web.settings.langAlready": "目前已是該語言",
+	"web.settings.langNoSession": "暫無目前工作階段——語言切換需要工作階段承載（先新增或選擇一個工作階段）",
+	"web.toast.switchFail": "切換失敗：",
 };

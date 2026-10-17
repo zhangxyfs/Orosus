@@ -6,14 +6,14 @@ import { ruRU } from "./locales/ru-RU.ts";
 
 /**
  * m5-i18n T17-T19：三语包 D9 parity 硬锁 + 复数实表。
- * 键集对比面：内置键集 = 1504（M4 web 样板补 title 键 +2，2026-10-17；M1 web i18n 批样板 +6；
+ * 键集对比面：内置键集 = 1507（M5 切换重渲染 +3：langAlready/langNoSession/switchFail，2026-10-17；M4 web 样板补 title 键 +2；M1 web i18n 批样板 +6；
  * 此前 1496 = 2026-10-07 引导修 +5、setDefault 补选 +2；上批指令收尾 +22 表侧已追、pack 侧当时漏再生成本批补齐）
- * ——由 tests/i18n/spec-audit.test.ts 锁表侧，此处锁「包键数 == 1504 且零重复」（跨包键集全等价由 e2e 挂载后 t() 覆盖面保证）。
+ * ——由 tests/i18n/spec-audit.test.ts 锁表侧，此处锁「包键数 == 1507 且零重复」（跨包键集全等价由 e2e 挂载后 t() 覆盖面保证）。
  */
 describe("multilang 三语包 parity（D9 硬锁）", () => {
-	const EXPECTED_KEYS = 1504; // 1496 引导修终态（2026-10-07）+ M1 web 样板 6 键 + M4 appbar title 2 键（2026-10-17）
+	const EXPECTED_KEYS = 1507; // 1496 引导修终态（2026-10-07）+ M1 web 样板 6 键 + M4 appbar title 2 键（2026-10-17）+ M5 切换三键（2026-10-17）
 
-	it("① ja/ko/ru 各 1504 键、键内零重复、键名三包全等（与内置键集的逐键全等由表侧锁 + 生成器键序锁共同保证）", () => {
+	it("① ja/ko/ru 各 1507 键、键内零重复、键名三包全等（与内置键集的逐键全等由表侧锁 + 生成器键序锁共同保证）", () => {
 		for (const [name, pack] of [["ja-JP", jaJP], ["ko-KR", koKR], ["ru-RU", ruRU]] as const) {
 			const keys = Object.keys(pack);
 			expect(keys.length, `${name} 键数`).toBe(EXPECTED_KEYS);

@@ -585,8 +585,7 @@ function $(id) { return document.getElementById(id); }
     document.documentElement.lang = OrosusI18N.cur();
   }
   var i18nListeners = [];
-  // eslint-disable-next-line no-unused-vars -- E 任务消费面（语言切换重水合/重渲回调注册口）——M4 先立接口（brief Interfaces）
-  function onI18NChange(fn) { i18nListeners.push(fn); }
+  function onI18NChange(fn) { i18nListeners.push(fn); } // M5 起自有消费（下方 chrome 重渲染注册）——E 任务再扩面
   function loadMessages(tag) {
     return A.fetchJson('/api/i18n/messages' + (tag ? '?tag=' + encodeURIComponent(tag) : '')).then(function (d) {
       OrosusI18N.setMessages(d.tag, d.messages);
@@ -603,6 +602,13 @@ function $(id) { return document.getElementById(id); }
       var f = $('i18n-fail');
       if (f) f.hidden = true; /* 取表恢复——兜底块退场；boot 已拒则断连层在场，其「重试连接」走 health 探活整页重启 */
     }, function () { /* 仍取不到——兜底块保持，可再点 */ });
+  });
+  /* M5 chrome 重渲染：切语言 = 取表后广播（loadMessages 内 hydrateI18n 已刷静态壳）——此处补壳外随语言重建面。
+   * 分栏/选项卡/btw 等轮询驱动面：2s 轮询自然以新语言重建（W3 轮询序既有行为）；进行中流视图的消息体是模型产出，不属界面文案，不重建。 */
+  onI18NChange(function () {
+    hydrateI18n(); // 静态壳（appbar/侧栏钮/welcome banner 文案）随表刷新
+    applyTheme(document.body.classList.contains('light')); // 主题钮文案随语言重建（applyTheme 内含钮面文案）
+    if (typeof pageAppearance === 'function' && document.querySelector('[data-k="ap-lang"]')) { /* 设置页开着的情形由切换 handler 重建；非外观页的设置子页走各自的 setPageHandler 失效重建——C2 走查面 */ }
   });
 
   /* 整体字号写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定。 */
@@ -2459,7 +2465,7 @@ function $(id) { return document.getElementById(id); }
   }
 
   /* ── F1b 外观（主题卡 + 明暗 + 整体字号 + 语言：前三项写 gui/gui.toml，语言仍写 config.toml；
-   *    会话侧即时生效，页面自身不切语言；FONT_SCALES/applyFontScale/applyTheme 与顶栏共用。 ── */
+   *    切换即时生效（M5：重拉表→水合+页面重建）；FONT_SCALES/applyFontScale/applyTheme 与顶栏共用。 ── */
   var LANG_EN = { 'zh-CN': 'Chinese Simplified', 'zh-TW': 'Chinese Traditional', 'en-US': 'English', en: 'English', ja: 'Japanese', ko: 'Korean', de: 'German', fr: 'French', es: 'Spanish' };
   function langRowHtml(l, cur, pack) {
     return '<div class="ap-lang' + (cur ? ' cur' : '') + ' ap-fade" data-k="ap-lang" data-v="' + esc(l.tag) + '" role="radio" aria-checked="' + cur + '">' +
@@ -2515,7 +2521,7 @@ function $(id) { return document.getElementById(id); }
         builtins.map(function (l) { return langRowHtml(l, current === l.tag, false); }).join('') +
         '</div>' +
         (packs.length > 0 ? '<div id="ap-langpack">' + packs.map(function (l) { return langRowHtml(l, current === l.tag, true); }).join('') + '</div>' : '') +
-        '<div class="sp-note">切换写入 config 即时生效（会话侧 t() 与新会话）——页面自身不切语言；语言包由 multilang 模块挂载后在此列出。</div>';
+        '<div class="sp-note">切换写入 config 并即时生效——界面与新会话随新语言（M5 重拉表重建）；语言包由 multilang 模块挂载后在此列出。</div>';
       setPageHandler = function (e) {
         var t;
         if ((t = e.target.closest('[data-k="ap-update"]'))) {
@@ -2555,11 +2561,16 @@ function $(id) { return document.getElementById(id); }
         }
         if ((t = e.target.closest('[data-k="ap-lang"]'))) {
           var tag = t.getAttribute('data-v');
-          if (tag === current) { toast('当前已是该语言'); return; }
+          if (tag === current) { toast(OrosusI18N.t('web.settings.langAlready')); return; }
           A.fetchJson('/api/settings/locale', { method: 'POST', body: JSON.stringify({ tag: tag }) }).then(function () {
-            toast('语言已切换（已写入 config，新会话生效）——页面自身不切语言');
-            pageAppearance(page);
-          }, function (err) { toast(err.status === 409 ? '暂无当前会话——语言切换需要会话承载（先新建或选择一个会话）' : '切换失败：' + err.message); });
+            return loadMessages(tag === '' ? OrosusI18N.normalizeLocaleTag(navigator.language) : tag).then(function () {
+              toast(OrosusI18N.t('web.settings.langSwitched'));
+              pageAppearance(page); // 设置·外观页随新表重建（语言区就在本页）
+            });
+          }, function (err) {
+            if (err.status === 409) toast(OrosusI18N.t('web.settings.langNoSession'));
+            else toast(OrosusI18N.t('web.toast.switchFail') + err.message);
+          });
         }
       };
     }, function (err) { pageLoadError(page, err); });

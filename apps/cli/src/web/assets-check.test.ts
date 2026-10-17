@@ -670,6 +670,14 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app.includes("/api/i18n/messages")).toBe(true);
     expect(app.includes('document.documentElement.lang')).toBe(true);
   });
+
+  it("⑲ web-i18n M5：切换重渲染——onChange 注册 + 新语言 toast + 旧边界文案退役", () => {
+    const app = read("app.js");
+    expect(app.includes("onI18NChange(function")).toBe(true);
+    expect(app.includes("web.settings.langSwitched")).toBe(true);
+    expect(app.includes("页面自身不切语言")).toBe(false); // F8 旧边界注释性文案退役
+    expect(app.includes("当前已是该语言")).toBe(false); // 同上——E 批换键前的先行断言（本任务随 handler 改造一并换）
+  });
 });
 
 describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态面）", () => {

@@ -11,4 +11,7 @@ export const enUSWeb: Messages = {
 	"web.common.loading": "Loading…",
 	"web.common.retry": "Retry",
 	"web.settings.langSwitched": "Language switched",
+	"web.settings.langAlready": "Already this language",
+	"web.settings.langNoSession": "No current session — language switching needs a session to land on (create or select one first)",
+	"web.toast.switchFail": "Switch failed: ",
 };

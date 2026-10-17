@@ -1504,4 +1504,7 @@ export const ruRU: Record<string, string> = {
 	"web.common.loading": "Загрузка…",
 	"web.common.retry": "Повторить",
 	"web.settings.langSwitched": "Язык переключён",
+	"web.settings.langAlready": "Это уже текущий язык",
+	"web.settings.langNoSession": "Нет текущей сессии — для смены языка нужна сессия (сначала создайте или выберите её)",
+	"web.toast.switchFail": "Ошибка переключения: ",
 };

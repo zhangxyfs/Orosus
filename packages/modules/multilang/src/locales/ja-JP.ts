@@ -1504,4 +1504,7 @@ export const jaJP: Record<string, string> = {
 	"web.common.loading": "読み込み中…",
 	"web.common.retry": "再試行",
 	"web.settings.langSwitched": "言語を切り替えました",
+	"web.settings.langAlready": "すでにこの言語です",
+	"web.settings.langNoSession": "現在のセッションがありません——言語切替にはセッションが必要です（先に作成または選択してください）",
+	"web.toast.switchFail": "切替に失敗しました：",
 };

@@ -11,4 +11,7 @@ export const zhCNWeb: Messages = {
 	"web.common.loading": "加载中…",
 	"web.common.retry": "重试",
 	"web.settings.langSwitched": "语言已切换",
+	"web.settings.langAlready": "当前已是该语言",
+	"web.settings.langNoSession": "暂无当前会话——语言切换需要会话承载（先新建或选择一个会话）",
+	"web.toast.switchFail": "切换失败：",
 };

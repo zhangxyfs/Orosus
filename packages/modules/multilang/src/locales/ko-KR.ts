@@ -1504,4 +1504,7 @@ export const koKR: Record<string, string> = {
 	"web.common.loading": "로드 중…",
 	"web.common.retry": "재시도",
 	"web.settings.langSwitched": "언어가 전환되었어요",
+	"web.settings.langAlready": "이미 이 언어예요",
+	"web.settings.langNoSession": "현재 세션이 없어요—언어 전환에는 세션이 필요해요(먼저 만들거나 선택해 주세요)",
+	"web.toast.switchFail": "전환 실패:",
 };
