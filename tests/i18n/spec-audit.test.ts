@@ -52,10 +52,10 @@ describe("m5-i18n 全量清单对账（i18n-inventory/ 五分区）", () => {
 });
 
 describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑源）", () => {
-	it("A/B 键数 2460=2460（m5 1496 + web 区 964）、键集零漂移、分区计数（web-i18n 批 2026-10-16：五段落表 + 跨段并键 15 + 主题族图标出节点并键 3；E5 2026-10-17 执行期补账 +1：web.render.chip.lines；E8 2026-10-17 销表行 −1：web.settings.langSwitchedToast〔M5 退役核实，现源无串〕）", () => {
+	it("A/B 键数 2461=2461（m5 1496 + web 区 965、键集零漂移、分区计数（web-i18n 批 2026-10-16：五段落表 + 跨段并键 15 + 主题族图标出节点并键 3；E5 2026-10-17 执行期补账 +1：web.render.chip.lines；E8 销表行 −1 langSwitchedToast；统一草稿化 2026-10-17 销旧抽新 −5+6：草稿族新键）", () => {
 		const { a, b } = parseTranslations();
-		expect(a.length).toBe(2460);
-		expect(b.length).toBe(2460);
+		expect(a.length).toBe(2461);
+		expect(b.length).toBe(2461);
 		const aKeys = new Set(a.map((r) => r.key));
 		const bKeys = new Set(b.map((r) => r.key));
 		expect(aKeys).toEqual(bKeys);
@@ -63,7 +63,7 @@ describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑�
 		expect(aKeys.size).toBe(a.length);
 		const zoneCounts = new Map<string, number>();
 		for (const r of a) zoneCounts.set(r.zone, (zoneCounts.get(r.zone) ?? 0) + 1);
-		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238, w: 964 });
+		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238, w: 965 });
 	});
 
 	it("zh 列 A/B 两表逐键一致 + 勘正⑩被删 11 键不再出现（抽取严禁双搬）+ web 并键 15 键不再出现", () => {

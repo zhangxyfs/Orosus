@@ -31,9 +31,10 @@ describe("m5-i18n 界面主目录三语 parity", () => {
 });
 
 /** web-i18n C2：web.* 区六侧键集全等（parity ①式补主表三侧同核——multilang 包侧不可越界 import 主表，
- *  落位于此）。w 区表行集（ta/tb-zone-w-*，964 键）为核：三包全量含表、主表三侧同核、主侧缺口 =
- *  E5/E6/E8 登记的 17 不落键（外邦 w-2 退役/变体族 6〔sessionNote/markNew×2/forked/createdIn×2——
- *  现源无串，外邦集成时按补表纪律落表〕+ 无消费位公共微标签种子 11）——集成落表时此清单同步收缩。 */
+ *  落位于此）。w 区表行集（ta/tb-zone-w-*，965 键）为核：三包全量含表、主表三侧同核、主侧缺口 =
+ *  无消费位公共微标签种子 10〔close 已随 lightbox 落表；统一草稿化销旧抽新 2026-10-17：
+ *  −5 退役/变体（sessionNote/markNew×2/forked/createdInPost）+6 草稿族新键 +createdInPre 复用续命
+ *  ——外邦会话未提交，app.js 换键在其工作树、随其功能提交走〕。 */
 describe("web-i18n C2：web.* 区六侧键集（三主表 + 三语言包 × w 区表行集）", () => {
 	const W = new Set(
 		parseTranslations()
@@ -43,7 +44,6 @@ describe("web-i18n C2：web.* 区六侧键集（三主表 + 三语言包 × w �
 	const EXPECTED_GAP = [
 		"web.common.all",
 		"web.common.clear",
-		"web.common.close",
 		"web.common.collapse",
 		"web.common.copied",
 		"web.common.copy",
@@ -52,16 +52,10 @@ describe("web-i18n C2：web.* 区六侧键集（三主表 + 三语言包 × w �
 		"web.common.open",
 		"web.common.search",
 		"web.common.success",
-		"web.cwd.sessionNote",
-		"web.session.markNewPost",
-		"web.session.markNewPre",
-		"web.toast.createdInPost",
-		"web.toast.createdInPre",
-		"web.toast.forked",
-	].sort();
+													].sort();
 
-	it("① w 区表行 964；主表三侧 web 切片同核且 ⊆ 表；三包 w 区键集全量含表（964）", () => {
-		expect(W.size).toBe(964);
+	it("① w 区表行 965；主表三侧 web 切片同核且 ⊆ 表；三包 w 区键集全量含表（965）", () => {
+		expect(W.size).toBe(965);
 		const t = mainTables();
 		const slice = (tag: string): string[] => Object.keys(t[tag]!).filter((k) => W.has(k)).sort();
 		const cn = slice("zh-CN");
@@ -73,7 +67,7 @@ describe("web-i18n C2：web.* 区六侧键集（三主表 + 三语言包 × w �
 		}
 	});
 
-	it("② 主侧缺口恰为登记的 17 键（外邦退役/变体族 6 + 无消费位种子 11——清单外的缺口即回归）", () => {
+	it("② 主侧缺口恰为登记的 10 键（无消费位种子——清单外的缺口即回归）", () => {
 		const t = mainTables();
 		const cn = new Set(Object.keys(t["zh-CN"]!).filter((k) => W.has(k)));
 		expect([...W].filter((k) => !cn.has(k)).sort()).toEqual(EXPECTED_GAP);
