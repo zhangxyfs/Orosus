@@ -868,6 +868,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   // m5-i18n T3：语言切换核心动作（/locale 与 SettingsService 同源——单一写者）
   const applyLanguageOverride = async (tag: string): Promise<void> => {
     upsertTopLevelKey(/^\s*language\s*=/, { line: `language = ${tomlBasicString(tag)}` });
+    config.core.language = tag; // 内存快照随写盘同步（2026-10-17 web 走查修）：configuredLanguage 的 noop 判定此前冻结在构建时语言——切走再切回启动语恒命中 noop 不写盘，config 停留在上一语（用户「切不回启动语言」即此）
     setKernelLocale(tag); // core 自渲染面（failReason 族）跟随新语言——旧账保持原语言（D5）
   };
 

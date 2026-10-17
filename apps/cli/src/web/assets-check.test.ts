@@ -687,6 +687,8 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app.includes("web.settings.langSwitched")).toBe(true);
     expect(app.includes("页面自身不切语言")).toBe(false); // F8 旧边界注释性文案退役
     expect(app.includes("当前已是该语言")).toBe(false); // 同上——E 批换键前的先行断言（本任务随 handler 改造一并换）
+    const li = app.indexOf("onI18NChange(function");
+    expect(app.slice(li, li + 1000)).toContain("renderSidebar"); // 报障修（2026-10-17）：左侧会话列表挂入 chrome 重渲染链——切语言即时换语
   });
 
   it("⑳ web-i18n E9：index.html 裸中文清零——CJK 仅剩 #i18n-fail 白名单（data-i18n 载体豁免形）", () => {

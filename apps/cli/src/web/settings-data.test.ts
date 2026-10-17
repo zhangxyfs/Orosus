@@ -334,6 +334,36 @@ describe("web T12：设置·数据面 API", () => {
     await s.stop();
   }, 60_000);
 
+  it("⑤c 走查修回归（2026-10-17 用户报障：切回启动语言被 noop 吞）——起始显式 zh-CN，A→B→A 往返回程必须真写盘", async () => {
+    const home = tmpHome();
+    process.env["OROSUS_HOME"] = home;
+    const cwd = tmpCwd();
+    process.chdir(cwd);
+    writeProviderConfig(home);
+    writeFileSync(join(home, "config.toml"), `language = "zh-CN"\n${readFileSync(join(home, "config.toml"), "utf8")}`, "utf8"); // 起始显式 zh-CN（复刻现场：harness 快照冻结在启动语言；顶层键须在节前——追加节后会被 TOML 归入节内）
+    await seedSession(home, cwd, "s_loc5c");
+    const s = await startWebAt(home, cwd, "s_loc5c");
+
+    const g = await getJson(s, "/api/settings/locale");
+    expect(g.body["current"]).toBe("zh-CN");
+
+    const away = await post(s, "/api/settings/locale", { tag: "zh-TW" });
+    expect(((await away.json()) as { ok: boolean; noop?: boolean }).noop).toBeUndefined();
+    expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('language = "zh-TW"');
+
+    // 回程（旧缺陷：configuredLanguage 读冻结内存快照 zh-CN === zh-CN → noop 不写盘，config 停在 zh-TW——
+    // 页面标记与重启后界面都回不去 zh-CN）
+    const back = await post(s, "/api/settings/locale", { tag: "zh-CN" });
+    expect(((await back.json()) as { ok: boolean; noop?: boolean }).noop).toBeUndefined();
+    expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('language = "zh-CN"');
+    const g2 = await getJson(s, "/api/settings/locale");
+    expect(g2.body["current"]).toBe("zh-CN");
+    const again = await post(s, "/api/settings/locale", { tag: "zh-CN" });
+    expect(((await again.json()) as { ok: boolean; noop?: boolean }).noop).toBe(true); // 同语重选 = noop（正语义保留）
+
+    await s.stop();
+  }, 60_000);
+
   it("⑤b GUI 偏好统一落 gui/gui.toml + 旧 config/web 数据迁移 + 非法值拒写", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;

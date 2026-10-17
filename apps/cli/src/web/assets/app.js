@@ -612,6 +612,7 @@ function $(id) { return document.getElementById(id); }
     applyTheme(document.body.classList.contains('light')); // 主题钮文案随语言重建（applyTheme 内含钮面文案）
     document.title = 'Orosus' + (/^(zh|ja|ko)/i.test(OrosusI18N.cur()) ? '（' : '(') + OrosusI18N.t('web.shell.title'); /* E6 机制 B：tab 题合成（键为尾段截文——闭括在表值内）；C2b N3：开括随语配对——zh/ja/ko 表值闭全角）配全角（，en/ru 闭半角) 配半角(（boot 取表与切语言两路均经本监听） */
     $('ab-addr').textContent = location.host + OrosusI18N.t('web.misc.tokenOkSeg'); /* C2b N1：地址段随表重写——host 前缀拼接非纯模板，挂本监听重跑写逻辑（boot 序取表前的裸键前置写已退役；此处唯一写入位，幂等无双重写） */
+    renderSidebar(); /* 报障修（2026-10-17）：左侧会话列表随语言重建——列表文案 t() 渲染期现算，重跑即换语；boot 首广播时 sessionsData 尚空（缺省空态安全），数据到达后自会重建 */
     if (typeof pageAppearance === 'function' && document.querySelector('[data-k="ap-lang"]')) { /* 设置页开着的情形由切换 handler 重建；非外观页的设置子页走各自的 setPageHandler 失效重建——C2 走查面 */ }
   });
 
