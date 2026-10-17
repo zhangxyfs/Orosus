@@ -610,7 +610,8 @@ function $(id) { return document.getElementById(id); }
   onI18NChange(function () {
     hydrateI18n(); // 静态壳（appbar/侧栏钮/welcome banner 文案）随表刷新
     applyTheme(document.body.classList.contains('light')); // 主题钮文案随语言重建（applyTheme 内含钮面文案）
-    document.title = 'Orosus（' + OrosusI18N.t('web.shell.title'); /* E6 机制 B：tab 题合成（键为「连山）· Web」截段——闭半括在值内；boot 取表与切语言两路均经本监听 */
+    document.title = 'Orosus' + (/^(zh|ja|ko)/i.test(OrosusI18N.cur()) ? '（' : '(') + OrosusI18N.t('web.shell.title'); /* E6 机制 B：tab 题合成（键为尾段截文——闭括在表值内）；C2b N3：开括随语配对——zh/ja/ko 表值闭全角）配全角（，en/ru 闭半角) 配半角(（boot 取表与切语言两路均经本监听） */
+    $('ab-addr').textContent = location.host + OrosusI18N.t('web.misc.tokenOkSeg'); /* C2b N1：地址段随表重写——host 前缀拼接非纯模板，挂本监听重跑写逻辑（boot 序取表前的裸键前置写已退役；此处唯一写入位，幂等无双重写） */
     if (typeof pageAppearance === 'function' && document.querySelector('[data-k="ap-lang"]')) { /* 设置页开着的情形由切换 handler 重建；非外观页的设置子页走各自的 setPageHandler 失效重建——C2 走查面 */ }
   });
 
@@ -3908,11 +3909,11 @@ function $(id) { return document.getElementById(id); }
       return;
     }
     A.fetchJson('/api/health').then(function (h) {
-      $('ab-addr').textContent = location.host + OrosusI18N.t('web.misc.tokenOkSeg');
       $('welcome-ver').textContent = 'v' + (h.version ?? '?');
       /* web-i18n M4：语言解析与取表并入启动序（Promise.all 门控首渲染——首渲染即目标语言）。
        * current === '' = 随系统 → 浏览器语（spec §3）；取表失败 = loadMessages 自示 #i18n-fail 并抛
-       * → 本 all 拒绝 → 下方兜底分支 showDisconnect('lost')（z 80）——兜底块 z 90 压其上，重试钮可点。 */
+       * → 本 all 拒绝 → 下方兜底分支 showDisconnect('lost')（z 80）——兜底块 z 90 压其上，重试钮可点。
+       * ab-addr 地址段不在此前置写（取表前 t() 裸键直出——C2b N1）：改挂 chrome onI18NChange 随表重写。 */
       return Promise.all([
         A.fetchJson('/api/bootstrap'), guiPreferencesReady,
         A.fetchJson('/api/settings/locale').then(function (lc) {
