@@ -82,7 +82,7 @@ export const enUSWeb: Messages = {
 	"web.ui.menu.nCmds": "{n} commands",
 	"web.ui.menu.nSkills": "{n} skills",
 	"web.ui.menu.keysFoot": "↑↓ Select · Enter Run · Esc Close",
-	"web.ui.menu.usage": "Applies to:",
+	"web.ui.menu.usage": "Applies to: ",
 	"web.ui.at.noDir": "Directory not found — check the path",
 	"web.ui.at.noMatch": "No matching files",
 	"web.ui.at.titleRoot": "@ Files",
