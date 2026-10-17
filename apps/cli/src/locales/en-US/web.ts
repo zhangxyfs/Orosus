@@ -5,7 +5,9 @@ import type { Messages } from "@orosus/i18n";
 export const enUSWeb: Messages = {
 	"web.shell.settings": "Settings",
 	"web.shell.help": "Help",
+	"web.shell.helpTitle": "Help (/help)",
 	"web.shell.more": "More",
+	"web.shell.moreTitle": "More: diagnostics / module overview / hook injections / compaction summary (TUI's Ctrl+E/P/H/O — keys conflict in the browser, so the entries live here)",
 	"web.common.loading": "Loading…",
 	"web.common.retry": "Retry",
 	"web.settings.langSwitched": "Language switched",

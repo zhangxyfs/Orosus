@@ -1109,6 +1109,17 @@ body.light .work-head { color: var(--muted); }
 .overlay-disc .pu-text { line-height: 1.9; }
 .overlay-disc .disc-hint { margin-top: 10px; }
 
+/* web-i18n M4 协议级兜底块（spec §3——i18n 取表失败才现身，文案是唯一白名单裸中文/英文并书）：
+   全屏 fixed z 90 压过断连层（z 80——boot Promise.all 随取表失败一起拒绝会唤起断连弹窗，
+   兜底块须在其上且重试钮可点）；不透明底防两层弹窗叠影。 */
+#i18n-fail {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: var(--bg); color: var(--fg);
+}
+#i18n-fail[hidden] { display: none; }
+#i18n-fail .if-line { color: var(--muted); font-size: calc(14px * var(--fz)); }
+
 /* ═══════════ T16 产品增量段：流区 markdown 块 / 审批浮层附行 / 问询输入行 /
    多选清单 / 超长工具结果折叠件 / transcript 回放窗 / 工具行失败态 ═══════════ */
 

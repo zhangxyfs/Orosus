@@ -574,6 +574,37 @@ function $(id) { return document.getElementById(id); }
     saveGuiAppearance({ mode: next ? 'light' : 'dark' }, function () { applyTheme(previous); });
   });
 
+  /* ═══════════ web-i18n（M4）：data-i18n 水合 + 取表 + 协议级兜底 ═══════════
+   * 水合三态：[data-i18n]→textContent（图标挪出文本节点——.bi span 常驻，水合只写文案 span）、
+   * [data-i18n-title]→title、[data-i18n-ph]→placeholder（E 任务按同构模式铺开）。
+   * 取表 = M2 端点（服务端单一权威 web.* 切片）；失败 = #i18n-fail 协议级兜底（唯一白名单裸文案）。 */
+  function hydrateI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = OrosusI18N.t(el.getAttribute('data-i18n')); });
+    document.querySelectorAll('[data-i18n-title]').forEach(function (el) { el.title = OrosusI18N.t(el.getAttribute('data-i18n-title')); });
+    document.querySelectorAll('[data-i18n-ph]').forEach(function (el) { el.placeholder = OrosusI18N.t(el.getAttribute('data-i18n-ph')); });
+    document.documentElement.lang = OrosusI18N.cur();
+  }
+  var i18nListeners = [];
+  // eslint-disable-next-line no-unused-vars -- E 任务消费面（语言切换重水合/重渲回调注册口）——M4 先立接口（brief Interfaces）
+  function onI18NChange(fn) { i18nListeners.push(fn); }
+  function loadMessages(tag) {
+    return A.fetchJson('/api/i18n/messages' + (tag ? '?tag=' + encodeURIComponent(tag) : '')).then(function (d) {
+      OrosusI18N.setMessages(d.tag, d.messages);
+      hydrateI18n();
+      i18nListeners.forEach(function (fn) { fn(); });
+      return d.tag;
+    }, function () {
+      var f = $('i18n-fail'); if (f) f.hidden = false; /* 协议级兜底（重试钮闭包恢复） */
+      throw new Error('i18n messages unavailable');
+    });
+  }
+  $('i18n-retry').addEventListener('click', function () {
+    loadMessages(OrosusI18N.cur()).then(function () {
+      var f = $('i18n-fail');
+      if (f) f.hidden = true; /* 取表恢复——兜底块退场；boot 已拒则断连层在场，其「重试连接」走 health 探活整页重启 */
+    }, function () { /* 仍取不到——兜底块保持，可再点 */ });
+  });
+
   /* 整体字号写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定。 */
   var FONT_SCALES = [
     { name: '小', scale: 0.875 },
@@ -1199,7 +1230,7 @@ function $(id) { return document.getElementById(id); }
   function kvRow(k, v, cls) {
     return '<span class="k">' + esc(k) + '</span><span class="v ' + (cls ?? '') + '">' + v + '</span>'; /* v 由调用方负责转义 */
   }
-  function pageLoading(page, text) { setPageHandler = null; page.innerHTML = '<div class="sp-note">' + esc(text ?? '加载中…') + '</div>'; }
+  function pageLoading(page, text) { setPageHandler = null; page.innerHTML = '<div class="sp-note">' + esc(text ?? OrosusI18N.t('web.common.loading')) + '</div>'; } /* web-i18n M4：默认文案入键（boot 序先取表后开窗） */
   function pageLoadError(page, err) { setPageHandler = null; page.innerHTML = '<div class="sp-note bad">' + esc('加载失败：' + (err && err.message ? err.message : '网络错误')) + '</div>'; }
 
   var SET_PAGES = [
@@ -3851,7 +3882,16 @@ function $(id) { return document.getElementById(id); }
     A.fetchJson('/api/health').then(function (h) {
       $('ab-addr').textContent = location.host + ' · token 已校验';
       $('welcome-ver').textContent = 'v' + (h.version ?? '?');
-      return Promise.all([A.fetchJson('/api/bootstrap'), guiPreferencesReady]);
+      /* web-i18n M4：语言解析与取表并入启动序（Promise.all 门控首渲染——首渲染即目标语言）。
+       * current === '' = 随系统 → 浏览器语（spec §3）；取表失败 = loadMessages 自示 #i18n-fail 并抛
+       * → 本 all 拒绝 → 下方兜底分支 showDisconnect('lost')（z 80）——兜底块 z 90 压其上，重试钮可点。 */
+      return Promise.all([
+        A.fetchJson('/api/bootstrap'), guiPreferencesReady,
+        A.fetchJson('/api/settings/locale').then(function (lc) {
+          var tag = lc.current === '' ? OrosusI18N.normalizeLocaleTag(navigator.language) : lc.current; /* 随系统=浏览器测（spec §3） */
+          return loadMessages(tag);
+        }),
+      ]);
     }, function () {
       A.showDisconnect('lost', function () {
         A.fetchJson('/api/health').then(function () { location.reload(); }, function () { /* 仍断开 */ });

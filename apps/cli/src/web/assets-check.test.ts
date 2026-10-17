@@ -655,6 +655,21 @@ describe("web T15：前端骨架静态资产", () => {
       server.closeAllConnections?.();
     }
   });
+
+  it("⑱ web-i18n M4：i18n.js 资产在链 + index.html 水合属性 + 协议级兜底白名单", () => {
+    const html = read("index.html");
+    expect(html.includes('/assets/i18n.js" defer')).toBe(true); // api.js 之后、render.js 之前
+    expect(html.indexOf("/assets/api.js") < html.indexOf("/assets/i18n.js")).toBe(true);
+    expect(html.indexOf("/assets/i18n.js") < html.indexOf("/assets/render.js")).toBe(true);
+    expect(html.includes('data-i18n="web.shell.settings"')).toBe(true); // 样板水合位（btn-settings）
+    // 协议级兜底（i18n 系统自身不可用——唯一白名单裸文案，spec §3）
+    expect(html.includes("无法加载界面文案")).toBe(true);
+    expect(html.includes("Failed to load UI texts")).toBe(true);
+    const app = read("app.js");
+    expect(app.includes("function hydrateI18n")).toBe(true);
+    expect(app.includes("/api/i18n/messages")).toBe(true);
+    expect(app.includes('document.documentElement.lang')).toBe(true);
+  });
 });
 
 describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态面）", () => {

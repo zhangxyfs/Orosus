@@ -5,7 +5,9 @@ import type { Messages } from "@orosus/i18n";
 export const zhCNWeb: Messages = {
 	"web.shell.settings": "设置",
 	"web.shell.help": "帮助",
+	"web.shell.helpTitle": "帮助（/help）",
 	"web.shell.more": "更多",
+	"web.shell.moreTitle": "更多：诊断 / 模块总览 / 钩子注入 / 压缩摘要（TUI 的 Ctrl+E/P/H/O，浏览器键位冲突故入口在此）",
 	"web.common.loading": "加载中…",
 	"web.common.retry": "重试",
 	"web.settings.langSwitched": "语言已切换",

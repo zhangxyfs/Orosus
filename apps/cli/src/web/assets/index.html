@@ -19,9 +19,9 @@
       <span class="ab-addr gutter-hide" id="ab-addr"></span>
       <span class="ab-acts">
         <button class="btn-update" id="btn-update" title="新版本可用——查看更新" hidden>● 更新</button>
-        <button class="btn" id="btn-settings" title="设置">⚙ 设置</button>
-        <button class="btn" id="btn-help" title="帮助（/help）">? 帮助</button>
-        <button class="btn" id="btn-more" title="更多：诊断 / 模块总览 / 钩子注入 / 压缩摘要（TUI 的 Ctrl+E/P/H/O，浏览器键位冲突故入口在此）">⋮ 更多</button>
+        <button class="btn" id="btn-settings" data-i18n-title="web.shell.settings"><span class="bi" aria-hidden="true">⚙ </span><span data-i18n="web.shell.settings">设置</span></button>
+        <button class="btn" id="btn-help" data-i18n-title="web.shell.helpTitle"><span class="bi" aria-hidden="true">? </span><span data-i18n="web.shell.help">帮助</span></button>
+        <button class="btn" id="btn-more" data-i18n-title="web.shell.moreTitle"><span class="bi" aria-hidden="true">⋮ </span><span data-i18n="web.shell.more">更多</span></button>
         <button class="btn" id="btn-theme" title="切换浅色 / 深色主题">☀ 浅色</button>
         <button class="btn" id="btn-split" title="详情分栏——子代理 / 侧问在右侧分栏并行查看（点击打开 / 关闭）">◧ 分栏</button>
       </span>
@@ -233,11 +233,19 @@
   <script src="/assets/vendor/marked.js" defer></script>
   <script src="/assets/vendor/purify.js" defer></script>
   <script src="/assets/api.js" defer></script>
+  <script src="/assets/i18n.js" defer></script>
   <script src="/assets/render.js" defer></script>
   <script src="/assets/archived-view.js" defer></script>
   <script src="/assets/pane.js" defer></script>
   <script src="/assets/dialog.js" defer></script>
   <script src="/assets/ui.js" defer></script>
   <script src="/assets/app.js" defer></script>
+
+  <!-- web-i18n M4 协议级兜底（spec §3）：i18n 系统自身不可用（取表失败）时的唯一白名单裸文案——
+       不进键表、不随语言翻；重试钮成功后退场。样式见 style.css #i18n-fail（压过断连层 z80）。 -->
+  <div id="i18n-fail" hidden>
+    <div class="if-line">无法加载界面文案 · Failed to load UI texts</div>
+    <button class="btn" id="i18n-retry">重试 · Retry</button>
+  </div>
 </body>
 </html>
