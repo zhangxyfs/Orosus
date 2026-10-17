@@ -13,7 +13,7 @@ import { ruRU } from "./locales/ru-RU.ts";
  * ——由 tests/i18n/spec-audit.test.ts 锁表侧，此处锁「包键数 == 2460 且零重复」（跨包键集全等价由 e2e 挂载后 t() 覆盖面保证）。
  */
 describe("multilang 三语包 parity（D9 硬锁）", () => {
-	const EXPECTED_KEYS = 2461; // 统一草稿化销旧抽新（2026-10-17）：1496 + w 区 965（−5 退役/变体 +6 草稿族新键）
+	const EXPECTED_KEYS = 2465; // +peers.win 补账（2026-10-17）：56df43bf 只落两侧主表——三包 +4
 
 	it("① ja/ko/ru 各 2460 键、键内零重复、键名三包全等（与内置键集的逐键全等由表侧锁 + 生成器键序锁共同保证）", () => {
 		for (const [name, pack] of [["ja-JP", jaJP], ["ko-KR", koKR], ["ru-RU", ruRU]] as const) {
