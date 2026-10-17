@@ -324,8 +324,8 @@ describe("web T15：前端骨架静态资产", () => {
     expect(css).toContain(".cmp-line");
     expect(css).toContain(".cmp-line.working");
     expect(css).toContain(".cmp-line.done");
-    expect(render).toContain("正在压缩上下文");
-    expect(render).toContain("⊘ 上下文已压缩");
+    expect(render).toContain("web.render.cmp.working"); // E5 换键：过程行文案 t('…cmp.working')（值「 正在压缩上下文…」在 zh-CN 主表）
+    expect(render).toContain("web.render.cmp.done"); // 落定横杠文案 t('…cmp.done')（值「⊘ 上下文已压缩」在 zh-CN 主表）
     expect(render).toContain("onCompactionOpen");
     expect(render).toContain("onCompactionDone");
     expect(render.includes("[已压缩："), "旧行文提示退役（toast 化）").toBe(false);

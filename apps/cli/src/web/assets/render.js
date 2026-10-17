@@ -161,7 +161,7 @@
     var rows = [];
     var CTX = 3;
     var preShown = Math.min(pre, CTX);
-    if (pre > preShown) rows.push({ tag: 'gap', no: 0, text: '⋯ 上方还有 ' + (pre - preShown) + ' 行' });
+    if (pre > preShown) rows.push({ tag: 'gap', no: 0, text: OrosusI18N.t('web.render.diff.gapUp', { n: pre - preShown }) });
     for (var i = pre - preShown; i < pre; i++) rows.push({ tag: 'ctx', no: i + 1, text: oldLines[i] });
     for (var d = pre; d < oldLines.length - suf; d++) rows.push({ tag: 'del', no: d + 1, text: oldLines[d] });
     for (var a = pre; a < newLines.length - suf; a++) rows.push({ tag: 'add', no: a + 1, text: newLines[a] });
@@ -170,7 +170,7 @@
       var idx = oldLines.length - sufShown + j;
       rows.push({ tag: 'ctx', no: idx + 1, text: oldLines[idx] });
     }
-    if (suf > sufShown) rows.push({ tag: 'gap', no: 0, text: '⋯ 下方还有 ' + (suf - sufShown) + ' 行' });
+    if (suf > sufShown) rows.push({ tag: 'gap', no: 0, text: OrosusI18N.t('web.render.diff.gapDown', { n: suf - sufShown }) });
     return dedentRows(rows);
   }
 
@@ -216,15 +216,15 @@
   /** 结果 chip 文案（tool/result → 工具行原位合并的「 · N 行 / +A -D / 失败」段）。 */
   function resultChip(result) {
     if (!result) return '';
-    if (result.isError) return '失败';
-    if (result.denied) return '已拒绝';
+    if (result.isError) return OrosusI18N.t('web.common.fail');
+    if (result.denied) return OrosusI18N.t('web.render.chip.denied');
     var stats = changeStatsOf(result.name, result.args);
     var chip;
-    if (stats === null) chip = lineCountOf(result.output) + ' 行';
+    if (stats === null) chip = OrosusI18N.t('web.render.chip.lines', { n: lineCountOf(result.output) });
     else if (stats.dels > 0) chip = '+' + stats.adds + ' -' + stats.dels;
-    else chip = stats.adds + ' 行';
-    if (result.truncated) chip += ' · 截断';
-    if (Array.isArray(result.images) && result.images.length > 0) chip += ' · ' + result.images.length + ' 附件';
+    else chip = OrosusI18N.t('web.render.chip.lines', { n: stats.adds });
+    if (result.truncated) chip += OrosusI18N.t('web.render.chip.trunc');
+    if (Array.isArray(result.images) && result.images.length > 0) chip += OrosusI18N.t('web.render.chip.attach', { n: result.images.length });
     return chip;
   }
 
@@ -270,9 +270,9 @@
   function fmtDur(ms) {
     if (typeof ms !== 'number' || ms < 0) return '';
     var s = Math.max(1, Math.round(ms / 1000));
-    if (s < 300) return '持续了 ' + s + ' 秒';
+    if (s < 300) return OrosusI18N.t('web.render.dur.sec', { n: s });
     var m = Math.floor(s / 60);
-    return '持续了 ' + m + ' 分 ' + (s % 60) + ' 秒';
+    return OrosusI18N.t('web.render.dur.minSec', { m: m, s: s % 60 });
   }
 
   /** 工作组头时长（2026-10-13 设计 §3.4——ZCode lib/workDuration.ts 同款规则）：
@@ -282,10 +282,10 @@
     var s = Math.max(1, Math.round((ms || 0) / 1000));
     var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
     var parts = [];
-    if (d > 0) parts.push(d + ' 天');
-    if (h > 0) parts.push(h + ' 小时');
-    if (m > 0) parts.push(m + ' 分');
-    if (ss > 0 || parts.length === 0) parts.push(ss + ' 秒');
+    if (d > 0) parts.push(OrosusI18N.t('web.render.wdur.day', { n: d }));
+    if (h > 0) parts.push(OrosusI18N.t('web.render.wdur.hr', { n: h }));
+    if (m > 0) parts.push(OrosusI18N.t('web.render.wdur.min', { n: m }));
+    if (ss > 0 || parts.length === 0) parts.push(OrosusI18N.t('web.render.wdur.sec', { n: ss }));
     return parts.slice(0, 2).join(' ');
   }
 
@@ -297,9 +297,9 @@
     var now = new Date(typeof nowMs === 'number' ? nowMs : Date.now());
     var hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     var diffDays = Math.round((dayStartOf(now) - dayStartOf(d)) / 86400000);
-    if (diffDays <= 0) return '今天 ' + hm;
-    if (diffDays === 1) return '昨天 ' + hm;
-    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
+    if (diffDays <= 0) return OrosusI18N.t('web.render.time.today', { time: hm });
+    if (diffDays === 1) return OrosusI18N.t('web.render.time.yesterday', { time: hm });
+    return OrosusI18N.t('web.render.time.md', { m: d.getMonth() + 1, d: d.getDate(), time: hm });
   }
 
   /* ═══════════════════ ② DOM 应用层（薄壳——只 append / insertBefore / 局部替换 / 行内合并） ═══════════════════ */
@@ -452,7 +452,7 @@
     w.appendChild(head);
     w.appendChild(body);
     t.insertBefore(w, t.firstChild); /* 组置顶 */
-    workHeadRender(w, '已处理', true, true);
+    workHeadRender(w, OrosusI18N.t('web.render.work.done'), true, true);
     head.addEventListener('click', function () {
       if (!head.classList.contains('clickable')) return; /* 工作中/无正文轮——点击无效（ZCode onOpenChange=undefined 同款） */
       /* 手动开合：向下展开零顺滚（2026-10-13 用户口令——同思考块走查八轮定案：被点头行纹丝不动、
@@ -498,7 +498,7 @@
     w.workState = 'running';
     var tick = function () {
       if (R === null || !w.isConnected || w.workState !== 'running') { workHeadStop(w); return; }
-      workHeadRender(w, '工作中', false, false, fmtWorkDur(Date.now() - startMs));
+      workHeadRender(w, OrosusI18N.t('web.render.work.running'), false, false, fmtWorkDur(Date.now() - startMs));
     };
     w.workTimer = window.setInterval(tick, 1000);
     tick(); /* 立即一帧——首秒不空白（尾行 tick 同款） */
@@ -603,27 +603,33 @@
          *  过程行在 = 原位换面；不在（自动压缩无 /compact 受理）= 就地新插。 */
         var line = (R.cmpLine !== null && R.cmpLine.isConnected) ? R.cmpLine : el('div', 'cmp-line', '');
         line.className = 'cmp-line done';
-        line.innerHTML = '<span class="cmp-rule"></span><span class="cmp-text">⊘ 上下文已压缩' + (n > 0 ? ' · ' + n + ' 条' : '') + '</span><span class="cmp-rule"></span>';
-        line.title = '点击查看压缩摘要';
+        line.innerHTML = '<span class="cmp-rule"></span><span class="cmp-text">' + OrosusI18N.t('web.render.cmp.done') + (n > 0 ? OrosusI18N.t('web.render.cmp.doneN', { n: n }) : '') + '</span><span class="cmp-rule"></span>';
+        line.title = OrosusI18N.t('web.render.cmp.viewTitle');
         line.setAttribute('data-cmp', '1');
         line.setAttribute('data-seq', String(ev.seq));
         if (!line.isConnected) ctx.appendTop(line);
         R.cmpLine = null;
         R.compacting = false;
         syncTail();
-        if (typeof R.onCompactionDone === 'function') R.onCompactionDone('已压缩：' + n + ' 条历史 → 摘要——点横杠查看详情');
+        if (typeof R.onCompactionDone === 'function') R.onCompactionDone(OrosusI18N.t('web.render.cmp.toast', { n: n }));
         return line;
       }
       case 'turn/prune': {
         var prunes = Array.isArray(ev.prunes) ? ev.prunes.length : 0;
-        var mp = el('div', 'line mark-line', '[已裁剪：' + prunes + ' 处长工具输出]');
+        var mp = el('div', 'line mark-line', OrosusI18N.t('web.render.pruneMark', { n: prunes }));
         mp.setAttribute('data-seq', String(ev.seq));
         ctx.appendTop(mp);
         return mp;
       }
       case 'session/fork': {
         var parent = typeof ev.parentSession === 'string' ? ev.parentSession : '';
-        var mf = el('div', 'line mark-line', '[分叉会话' + (parent !== '' ? '——继承自 ' + esc(parent) : '') + '，历史完整保留]');
+        /* forkMark 无参形自带中缝逗号（zh/zh-TW 全角、en 半角）——有 parent 时 parent 段嵌中缝（表注「无参拆段」） */
+        var mfHtml = OrosusI18N.t('web.render.forkMark');
+        if (parent !== '') {
+          var sepAt = mfHtml.search(/[，,]/);
+          mfHtml = mfHtml.slice(0, sepAt) + OrosusI18N.t('web.render.forkMark.parent', { parent: esc(parent) }) + mfHtml.slice(sepAt);
+        }
+        var mf = el('div', 'line mark-line', mfHtml);
         mf.setAttribute('data-seq', String(ev.seq));
         ctx.appendTop(mf);
         return mf;
@@ -635,7 +641,7 @@
         for (var i = 0; i < msgs.length; i++) {
           var m2 = msgs[i] || {};
           if ((m2.sourceModule === 'host/hook' || m2.sourceModule === 'hooks') && typeof m2.text === 'string' && m2.text !== '') {
-            var s = el('div', 'line sub-line', '<span class="tree">⌁</span>' + esc('钩子注入 · ' + m2.text.length + ' 字符（顶栏「更多 ▸ 钩子注入」查看）'));
+            var s = el('div', 'line sub-line', '<span class="tree">⌁</span>' + esc(OrosusI18N.t('web.render.hook.inject', { n: m2.text.length })));
             placeIn(ctx, s);
             if (first === null) first = s;
           }
@@ -643,7 +649,7 @@
         return first;
       }
       case 'hooks/input-rewrite': {
-        var hw = el('div', 'line sub-line', '<span class="tree">⌁</span>' + esc('工具参数已被钩子改写——行内显示原始参数，执行用改后参数'));
+        var hw = el('div', 'line sub-line', '<span class="tree">⌁</span>' + esc(OrosusI18N.t('web.render.hook.rewrite')));
         placeIn(ctx, hw);
         return hw;
       }
@@ -660,7 +666,7 @@
     var skill = skillMarkOf(text);
     if (skill !== null) {
       /* 技能加载标记行（C9）——合成体正文（技能全文）不整渲 */
-      var m = el('div', 'line mark-line', '[已加载技能 ' + esc(skill) + '] <span class="dim">· 正文已注入模型上下文</span>');
+      var m = el('div', 'line mark-line', OrosusI18N.t('web.render.skill.loaded', { name: esc(skill) }));
       m.setAttribute('data-seq', String(ev.seq));
       ctx.appendTop(m);
       markUserSeen();
@@ -669,12 +675,12 @@
     var imgs = imagesOf(ev);
     var imgHtml = '';
     for (var i = 0; i < imgs.length; i++) {
-      imgHtml += '<img class="photo" src="' + esc(mediaUrl(imgs[i].path)) + '" alt="图片附件" loading="lazy" />';
+      imgHtml += '<img class="photo" src="' + esc(mediaUrl(imgs[i].path)) + '" alt="' + esc(OrosusI18N.t('web.render.img.alt')) + '" loading="lazy" />';
     }
     var wrap = el('div', 'msg-user',
       '<div class="msg-bubble">' + (imgHtml !== '' ? '<div class="msg-img">' + imgHtml + '</div>' : '') +
-      '<div class="msg-text">' + esc(text) + '</div><button type="button" class="msg-toggle">▾ 展开全部</button></div>' +
-      '<div class="msg-acts"><button type="button" data-mcopy title="复制消息">⧉ 复制</button></div>');
+      '<div class="msg-text">' + esc(text) + '</div><button type="button" class="msg-toggle">' + OrosusI18N.t('web.render.msg.expandAll') + '</button></div>' +
+      '<div class="msg-acts"><button type="button" data-mcopy title="' + OrosusI18N.t('web.render.msg.copyTitle') + '">' + OrosusI18N.t('web.render.copy.iconBtn') + '</button></div>');
     wrap.setAttribute('data-seq', String(ev.seq));
     ctx.appendTop(wrap);
     ctx.pendingClamp.push(wrap); /* 入 DOM 后测高（>5.5 行收拢） */
@@ -708,7 +714,7 @@
       if (first === null) first = md;
     }
     if (ev.finishKind === 'length') {
-      var tr = el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">输出达 max_tokens 上限被截断（finishKind=length）</span>');
+      var tr = el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">' + OrosusI18N.t('web.render.lenCap') + '</span>');
       placeIn(ctx, tr);
     }
     if (ev.usage && typeof ev.usage.input === 'number') ctx.usage = ev.usage; /* usage 旁注——turn-foot 收口呈现 */
@@ -725,9 +731,9 @@
     t.appendChild(bodyEl);
     t.fullText = fullText;
     function head(collapsed) {
-      headEl.innerHTML = '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>[思考]' +
+      headEl.innerHTML = '<span class="tcaret">' + (collapsed ? '▸' : '▾') + '</span>' + OrosusI18N.t('web.render.think.tag') +
         (durText !== '' ? ' <span class="think-dur">· ' + esc(durText) + '</span>' : '') +
-        ' <span class="think-hint">· 点击' + (collapsed ? '展开' : '收起') + '</span>';
+        ' <span class="think-hint">' + OrosusI18N.t(collapsed ? 'web.render.think.hintExpand' : 'web.render.think.hintCollapse') + '</span>';
     }
     function apply(collapsed) {
       head(collapsed);
@@ -767,7 +773,7 @@
   function ensureSpawnGroup(ctx) {
     if (R.spawnGroup && R.spawnGroup.el.isConnected) return R.spawnGroup;
     var g = el('div', 'spawn-group');
-    var head = el('div', 'sg-head', '<span class="sg-dot">●</span><span class="sg-title">子代理</span><span class="sg-sum"></span>');
+    var head = el('div', 'sg-head', '<span class="sg-dot">●</span><span class="sg-title">' + OrosusI18N.t('web.render.subagent.title') + '</span><span class="sg-sum"></span>');
     var list = el('div', 'sg-list');
     g.appendChild(head);
     g.appendChild(list);
@@ -782,9 +788,9 @@
     if (!grp || !grp.el.isConnected) grp = ensureSpawnGroup(ctx);
     var output = typeof ev.output === 'string' ? ev.output : String(ev.output ?? '');
     if (ev.isError === true) {
-      var errLine = el('div', 'sg-err', '⎿ 派活失败：' + esc(firstLineOf(output)));
+      var errLine = el('div', 'sg-err', OrosusI18N.t('web.render.spawn.errLine', { msg: esc(firstLineOf(output)) }));
       grp.list.appendChild(errLine);
-      grp.sum.textContent = '· 派活失败';
+      grp.sum.textContent = OrosusI18N.t('web.render.spawn.errSum');
       return;
     }
     var ids = spawnIdsIn(output);
@@ -794,9 +800,9 @@
       var id = ids[i];
       if (grp.rows.has(id)) continue;
       var label = items !== null && typeof items[i] === 'string' ? desc + '：' + items[i] : desc;
-      var row = el('div', 'sg-row', '<span class="sg-caret">├─</span><span class="sg-name">' + esc(label || '子代理任务') + '</span><span class="sg-id">' + esc(id) + '</span><span class="sg-st st-run">已派出…</span>');
+      var row = el('div', 'sg-row', '<span class="sg-caret">├─</span><span class="sg-name">' + esc(label || OrosusI18N.t('web.render.spawn.labelFallback')) + '</span><span class="sg-id">' + esc(id) + '</span><span class="sg-st st-run">' + OrosusI18N.t('web.render.spawn.dispatched') + '</span>');
       row.setAttribute('data-agent-id', id);
-      row.title = '点击在右侧分栏查看该子代理（已开则切换，不重复开）'; /* v2 1195 交互契约 */
+      row.title = OrosusI18N.t('web.spawn.rowTip'); /* v2 1195 交互契约 */
       (function (aid) {
         row.addEventListener('click', function () { R.onAgentOpen(aid); }); /* app.js 侧 W3 改接 OrosusPane open-or-switch */
       })(id);
@@ -804,7 +810,7 @@
       grp.rows.set(id, row);
     }
     var n = grp.rows.size;
-    if (n > 0) grp.sum.textContent = '· ' + n + ' 个任务 · 运行中…';
+    if (n > 0) grp.sum.textContent = OrosusI18N.t('web.render.spawn.sum', { n: n });
     followScroll();
     syncToBottom();
   }
@@ -828,7 +834,7 @@
     var line = el('div', 'line tool-line', '<span class="tchar">●</span>' + toolHeadHtml(name, args, R.cwdOf(), false) + '<span class="tcaret" aria-hidden="true">▸</span>');
     line.setAttribute('data-seq', String(ev.seq));
     line.setAttribute('data-callid', callId);
-    line.title = '点击展开 / 收起详情';
+    line.title = OrosusI18N.t('web.render.tool.rowTitle');
     placeIn(ctx, line);
     /* 展开体（2026-10-12 走查口径：收起态零预览——「Used X(x) · N 行」一行即全部；点击行体按工具
      *  类型展开：bash → 终端回放、read → 行号内容、edit/write → diff、其余 → 输出块。懒构建——
@@ -883,7 +889,7 @@
     var html = '';
     for (var i = 0; i < head; i++) html += rowHtml(lines[i]);
     if (fold) {
-      html += '<div class="tb-more" data-tbmore>⋯ 中间还有 ' + mid + ' 行 · 点击展开全部</div>';
+      html += '<div class="tb-more" data-tbmore>' + OrosusI18N.t('web.render.fold.more', { n: mid }) + '</div>';
       for (var j = 0; j < mid; j++) html += rowHtml(lines[head + j]).replace('<div ', '<div data-extra ');
       for (var t = 0; t < TB_TAIL; t++) html += rowHtml(lines[head + mid + t]);
     }
@@ -892,7 +898,7 @@
     if (more) more.addEventListener('click', function () {
       anchoredToggle(block, function () {
         var expanded = block.classList.toggle('expanded');
-        more.textContent = expanded ? '点击收起中段' : '⋯ 中间还有 ' + mid + ' 行 · 点击展开全部';
+        more.textContent = expanded ? OrosusI18N.t('web.render.fold.collapse') : OrosusI18N.t('web.render.fold.more', { n: mid });
       });
     });
     return block;
@@ -911,11 +917,11 @@
     var cmd = typeof row.args.command === 'string' ? row.args.command : '';
     wrap.innerHTML = '<div class="term-cmd">$ ' + esc(cmd) + '</div>';
     if (!row.result) {
-      wrap.appendChild(el('div', 'term-out term-dim', '（运行中…）'));
+      wrap.appendChild(el('div', 'term-out term-dim', OrosusI18N.t('web.render.term.running')));
       return wrap;
     }
     var lines = outputLinesOf(row.result.output);
-    if (lines.length === 0) wrap.appendChild(el('div', 'term-out term-dim', '（无输出）'));
+    if (lines.length === 0) wrap.appendChild(el('div', 'term-out term-dim', OrosusI18N.t('web.render.noOut')));
     else wrap.appendChild(buildLineFold(lines.map(capLine), function (l) { return '<div class="term-out">' + esc(l) + '</div>'; }));
     return wrap;
   }
@@ -926,12 +932,12 @@
   function buildFileBody(row) {
     var wrap = el('div', 'tb-file');
     if (!row.result) {
-      wrap.innerHTML = '<div class="tb-note">（等待结果…）</div>';
+      wrap.innerHTML = '<div class="tb-note">' + OrosusI18N.t('web.render.waiting') + '</div>';
       return wrap;
     }
     var lines = outputLinesOf(row.result.output);
     if (lines.length === 0) {
-      wrap.innerHTML = '<div class="tb-note">（无输出）</div>';
+      wrap.innerHTML = '<div class="tb-note">' + OrosusI18N.t('web.render.noOut') + '</div>';
       return wrap;
     }
     wrap.appendChild(buildLineFold(lines, function (l) {
@@ -950,8 +956,8 @@
     }
     var rows = diffRowsOf(row.name, row.args);
     if (rows !== null) wrap.appendChild(buildDiffBlock(rows));
-    else if (!row.result) wrap.appendChild(el('div', 'tb-note', '（等待结果…）'));
-    else wrap.appendChild(el('div', 'tb-note', esc(capLine(firstLineOf(row.result.output)) || '（无输出）')));
+    else if (!row.result) wrap.appendChild(el('div', 'tb-note', OrosusI18N.t('web.render.waiting')));
+    else wrap.appendChild(el('div', 'tb-note', esc(capLine(firstLineOf(row.result.output)) || OrosusI18N.t('web.render.noOut'))));
     return wrap;
   }
 
@@ -959,12 +965,12 @@
   function buildOutBody(row) {
     var wrap = el('div', 'tb-out');
     if (!row.result) {
-      wrap.innerHTML = '<div class="tb-note">（等待结果…）</div>';
+      wrap.innerHTML = '<div class="tb-note">' + OrosusI18N.t('web.render.waiting') + '</div>';
       return wrap;
     }
     var lines = outputLinesOf(row.result.output);
     if (lines.length === 0) {
-      wrap.innerHTML = '<div class="tb-note">' + (row.result.isError ? '<span class="bad">（失败，无输出）</span>' : '（无输出）') + '</div>';
+      wrap.innerHTML = '<div class="tb-note">' + (row.result.isError ? '<span class="bad">' + OrosusI18N.t('web.render.failNoOut') + '</span>' : OrosusI18N.t('web.render.noOut')) + '</div>';
       return wrap;
     }
     var bad = row.result.isError ? ' tb-bad' : '';
@@ -977,7 +983,7 @@
     row.body.innerHTML = '';
     var node;
     if (row.result && row.result.denied) {
-      node = el('div', 'tb-note bad', '已拒绝——本轮不执行');
+      node = el('div', 'tb-note bad', OrosusI18N.t('web.render.body.denied'));
     } else {
       var tail = toolTailOf(row.name);
       if (tail === 'bash') node = buildTermBody(row);
@@ -1007,12 +1013,12 @@
       if (hidden) extra++;
       html += '<div class="diff-row diff-' + r.tag + '"' + (hidden ? ' data-extra' : '') + '><span class="g">' + (r.no > 0 ? r.no : '') + '</span><span>' + esc(r.text) + '</span></div>';
     }
-    var d = el('div', 'diff' + (extra > 0 ? '' : ' expanded'), html + (extra > 0 ? '<div class="diff-more">… 还有 ' + extra + ' 行 · 点击展开全部</div>' : ''));
+    var d = el('div', 'diff' + (extra > 0 ? '' : ' expanded'), html + (extra > 0 ? '<div class="diff-more">' + OrosusI18N.t('web.render.diff.more', { n: extra }) + '</div>' : ''));
     var more = d.querySelector('.diff-more');
     if (more) more.addEventListener('click', function () {
       anchoredToggle(d, function () {
         var expanded = d.classList.toggle('expanded');
-        more.textContent = expanded ? '点击收起' : '… 还有 ' + extra + ' 行 · 点击展开全部';
+        more.textContent = expanded ? OrosusI18N.t('web.render.diff.collapse') : OrosusI18N.t('web.render.diff.more', { n: extra });
       });
     });
     return d;
@@ -1085,10 +1091,10 @@
     if (ctx.fragMode) {
       /* 历史孤儿段（跨分页 straddle 旧段——本容器永远等不到 turn/end）：出生即「已处理」收起 */
       w.classList.add('collapsed');
-      workHeadRender(w, '已处理', true, true);
+      workHeadRender(w, OrosusI18N.t('web.render.work.done'), true, true);
     } else {
       w.classList.remove('collapsed');
-      workHeadRender(w, '工作中', false, false, fmtWorkDur(0));
+      workHeadRender(w, OrosusI18N.t('web.render.work.running'), false, false, fmtWorkDur(0));
       workHeadTick(w, t2.turnStartTs);
     }
     return t2;
@@ -1103,20 +1109,20 @@
     var endMs = typeof ev.ts === 'string' ? new Date(ev.ts).getTime() : NaN;
     var durMs = (!isNaN(startMs) && !isNaN(endMs)) ? Math.max(0, endMs - startMs) : null;
     t.workSettled = true;
-    t.workLabel = stopped ? '已停止' : (durMs === null ? '已处理' : '已工作 ' + fmtWorkDur(durMs));
+    t.workLabel = stopped ? OrosusI18N.t('web.render.work.stopped') : (durMs === null ? OrosusI18N.t('web.render.work.done') : OrosusI18N.t('web.render.work.worked', { dur: fmtWorkDur(durMs) }));
     evalTurn(t);
     if (ev.kind === 'interrupted') {
-      t.appendChild(el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">已停止生成</span> <span class="dim">· 停止按钮 / 双击 Esc 同效</span>'));
+      t.appendChild(el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">' + OrosusI18N.t('web.render.turn.stopped') + '</span> <span class="dim">' + OrosusI18N.t('web.render.turn.stoppedHint') + '</span>'));
     } else if (ev.kind === 'error') {
       var msg = typeof ev.errorMessage === 'string' ? ev.errorMessage : '';
-      t.appendChild(el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">⚠ 回答出错' + (msg !== '' ? '：' + esc(msg) : '') + '</span>'));
+      t.appendChild(el('div', 'line sub-line', '<span class="tree">⎿</span><span class="bad">' + OrosusI18N.t('web.render.turn.error') + (msg !== '' ? '：' + esc(msg) : '') + '</span>'));
     }
     var usage = ctx.usage;
     var usageText = usage ? '<span class="tf-time">↑ ' + fmtK(usage.input) + ' · ↓ ' + fmtK(usage.output) + '</span>' : '';
     var foot = el('div', 'turn-foot',
-      '<button type="button" class="tf-btn" data-tf="copy" title="复制本轮回复">⧉ 复制</button>' +
-      (ctx.noFork ? '' : '<button type="button" class="tf-btn" data-tf="fork" title="从此处分叉会话">⑂ 分支</button>') + /* 走查修②：回放态（子代理 tab）无分叉面 */
-      '<span class="tf-time">完成于 ' + esc(fmtTurnTime(ev.ts)) + '</span>' + usageText);
+      '<button type="button" class="tf-btn" data-tf="copy" title="' + OrosusI18N.t('web.render.turn.copyTitle') + '">' + OrosusI18N.t('web.render.copy.iconBtn') + '</button>' +
+      (ctx.noFork ? '' : '<button type="button" class="tf-btn" data-tf="fork" title="' + OrosusI18N.t('web.render.turn.forkTitle') + '">' + OrosusI18N.t('web.render.turn.forkBtn') + '</button>') + /* 走查修②：回放态（子代理 tab）无分叉面 */
+      '<span class="tf-time">' + OrosusI18N.t('web.render.turn.doneAt', { time: fmtTurnTime(ev.ts) }) + '</span>' + usageText);
     foot.setAttribute('data-seq', String(ev.seq));
     t.appendChild(foot);
     ctx.setTurn(null);
@@ -1164,7 +1170,7 @@
       var ctx = liveCtx();
       var t = ensureTurn(ctx);
       var tk = el('div', 'think collapsed', '');
-      var headEl = el('div', 'think-head', '<span class="tcaret">▸</span>[思考] <span class="think-dur">· 持续了 1 秒</span> <span class="think-hint">· 点击展开</span>');
+      var headEl = el('div', 'think-head', '<span class="tcaret">▸</span>' + OrosusI18N.t('web.render.think.tag') + ' <span class="think-dur">' + OrosusI18N.t('web.render.think.durInit') + '</span> <span class="think-hint">' + OrosusI18N.t('web.render.think.hintExpand') + '</span>');
       var bodyEl = el('div', 'think-body');
       tk.appendChild(headEl);
       tk.appendChild(bodyEl);
@@ -1186,7 +1192,7 @@
         var caret = headEl.querySelector('.tcaret');
         if (caret) caret.textContent = collapsed ? '▸' : '▾';
         var hint = headEl.querySelector('.think-hint');
-        if (hint) hint.textContent = '· 点击' + (collapsed ? '展开' : '收起');
+        if (hint) hint.textContent = OrosusI18N.t(collapsed ? 'web.render.think.hintExpand' : 'web.render.think.hintCollapse');
         if (!collapsed && R.live.thinkBodyNode) { /* 展开一刻补挂累计全文（折叠期零 DOM——律二） */
           R.live.thinkBodyNode.appendData(R.live.thinkBuf);
           R.live.thinkBuf = '';
@@ -1236,7 +1242,7 @@
      *  撤或换。 */
     if (on) {
       if (R.cmpLine === null || !R.cmpLine.isConnected) {
-        R.cmpLine = el('div', 'cmp-line working', '<span class="cmp-rule"></span><span class="cmp-text">' + spinSvg('', 12) + ' 正在压缩上下文…</span><span class="cmp-rule"></span>');
+        R.cmpLine = el('div', 'cmp-line working', '<span class="cmp-rule"></span><span class="cmp-text">' + spinSvg('', 12) + OrosusI18N.t('web.render.cmp.working') + '</span><span class="cmp-rule"></span>');
         R.stream.appendChild(R.cmpLine);
         followScroll();
         syncToBottom();
@@ -1250,16 +1256,16 @@
     if (R === null) return;
     var t = R.tail;
     if (R.compacting) {
-      t.innerHTML = spinSvg('', 12) + ' <span class="info">上下文压缩中…</span>';
+      t.innerHTML = spinSvg('', 12) + ' <span class="info">' + OrosusI18N.t('web.render.tail.compacting') + '</span>';
     } else if (R.busy) {
       t.innerHTML = spinSvg('', 12);
     } else if (R.errorFlash) {
-      t.innerHTML = '上轮报错 <span class="dim">· 详见流区</span>';
+      t.innerHTML = OrosusI18N.t('web.render.tail.lastErr') + ' <span class="dim">' + OrosusI18N.t('web.render.tail.lastErrHint') + '</span>';
       window.setTimeout(function () {
         if (R && !R.busy && !R.compacting && R.errorFlash) { R.errorFlash = false; syncTail(); }
       }, 4000);
     } else {
-      t.innerHTML = '正在待命 <span class="caret" aria-hidden="true"></span>';
+      t.innerHTML = OrosusI18N.t('web.render.tail.standby') + ' <span class="caret" aria-hidden="true"></span>';
     }
   }
 
@@ -1291,9 +1297,9 @@
       if (c !== R.welcome && c !== R.tail && c !== R.pgMore) c.remove();
     });
     R.pgMore.hidden = true;
-    R.pgMore.textContent = '↑ 加载更早消息';
+    R.pgMore.textContent = OrosusI18N.t('web.render.pgMore');
     R.welcome.hidden = false;
-    R.tail.innerHTML = '正在连接…';
+    R.tail.innerHTML = OrosusI18N.t('web.shell.connecting');
     bindOnce();
     if (R.toBottom) R.toBottom.hidden = true;
     return api;
@@ -1319,14 +1325,14 @@
         anchoredToggle(mu, function () {
           var expanded = mu.classList.toggle('expanded');
           mu.classList.toggle('msg-clamped', !expanded);
-          tg.textContent = expanded ? '▴ 收起' : '▾ 展开全部';
+          tg.textContent = expanded ? OrosusI18N.t('web.render.msg.collapse') : OrosusI18N.t('web.render.msg.expandAll');
         });
         return;
       }
       var mc = e.target.closest('[data-mcopy]');
       if (mc && R) {
         var bubble = mc.closest('.msg-user').querySelector('.msg-text');
-        R.onCopy(bubble.textContent, '已复制消息');
+        R.onCopy(bubble.textContent, OrosusI18N.t('web.render.copiedMsg'));
         return;
       }
       var cmp = e.target.closest('.cmp-line.done[data-cmp]');
@@ -1340,7 +1346,7 @@
            *  straddle 兜底只读不回挪——evalTurn 认领后 finalMdOf 恒命中。 */
           var md = finalMdOf(turn) || claimBackward(turn);
           var text = md ? (typeof md.mdSource === 'string' ? md.mdSource : md.textContent.replace(/^●\s*/, '')) : '';
-          R.onCopy(text, text !== '' ? '已复制本轮回复' : '（本轮无可复制文本）');
+          R.onCopy(text, text !== '' ? OrosusI18N.t('web.render.copiedReply') : OrosusI18N.t('web.render.copyEmpty'));
         } else if (kind === 'fork') {
           R.onFork(R.sid);
         }
@@ -1455,21 +1461,21 @@
   function loadEarlier() {
     if (R === null || R.loadingEarlier || !R.hasMore || R.seqs.length === 0) return;
     R.loadingEarlier = true;
-    R.pgMore.textContent = '加载中…';
+    R.pgMore.textContent = OrosusI18N.t('web.common.loading');
     var oldest = R.seqs[0];
     var after = Math.max(0, oldest - 1 - PAGE);
     fetchJson('/api/sessions/' + encodeURIComponent(R.sid) + '/events?after=' + after + '&limit=' + PAGE)
       .then(function (r) {
         var evs = r.events ?? [];
         R.loadingEarlier = false;
-        R.pgMore.textContent = '↑ 加载更早消息';
+        R.pgMore.textContent = OrosusI18N.t('web.render.pgMore');
         if (evs.length === 0) { R.hasMore = false; syncPgMore(); return; }
         ingest(evs, { page: 'earlier' });
         R.hasMore = evs.length >= PAGE; /* 满页 = 可能还有更早；短页 = 已到头 */
         syncPgMore();
       }, function () {
         R.loadingEarlier = false;
-        R.pgMore.textContent = '↑ 加载更早消息';
+        R.pgMore.textContent = OrosusI18N.t('web.render.pgMore');
         syncPgMore();
       });
   }
@@ -1499,14 +1505,14 @@
         anchoredToggle(mu, function () {
           var expanded = mu.classList.toggle('expanded');
           mu.classList.toggle('msg-clamped', !expanded);
-          tg.textContent = expanded ? '▴ 收起' : '▾ 展开全部';
+          tg.textContent = expanded ? OrosusI18N.t('web.render.msg.collapse') : OrosusI18N.t('web.render.msg.expandAll');
         });
         return;
       }
       var mc = e.target && e.target.closest ? e.target.closest('[data-mcopy]') : null;
       if (mc) {
         var bubble = mc.closest('.msg-user') && mc.closest('.msg-user').querySelector('.msg-text');
-        if (bubble && typeof onCopy === 'function') onCopy(bubble.textContent, '已复制消息');
+        if (bubble && typeof onCopy === 'function') onCopy(bubble.textContent, OrosusI18N.t('web.render.copiedMsg'));
         return;
       }
       var tf = e.target && e.target.closest ? e.target.closest('[data-tf="copy"]') : null;
@@ -1514,7 +1520,7 @@
         var turn = tf.closest('.turn');
         var md = turn && (finalMdOf(turn) || claimBackward(turn));
         var text = md ? (typeof md.mdSource === 'string' ? md.mdSource : md.textContent.replace(/^●\s*/, '')) : '';
-        if (typeof onCopy === 'function') onCopy(text, text !== '' ? '已复制本轮回复' : '（本轮无可复制文本）');
+        if (typeof onCopy === 'function') onCopy(text, text !== '' ? OrosusI18N.t('web.render.copiedReply') : OrosusI18N.t('web.render.copyEmpty'));
       }
     });
   }

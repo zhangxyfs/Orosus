@@ -9,6 +9,10 @@ import { fileURLToPath } from "node:url";
 
 import "./assets/render.js"; // 副作用挂 globalThis.OrosusRender（经典脚本零构建——node/浏览器同源导出）
 import "./assets/ui.js"; // 同源挂 globalThis.OrosusUI（顶层零 DOM 触碰——node 可载）
+import "./assets/i18n.js"; // web-i18n E5：文案换键 OrosusI18N.t('web.render.*')——node 直测侧绑 zh-CN 主表后照断原中文
+import { zhCNWeb } from "../locales/zh-CN/web.ts";
+
+(globalThis as { OrosusI18N?: { setMessages(tag: string, m: Record<string, string>): void } }).OrosusI18N!.setMessages("zh-CN", zhCNWeb);
 
 /* noUncheckedIndexedAccess 下 Record 索引签名带 undefined——显式接口剥可选层（兼作导出面清单） */
 type Fn = (...args: unknown[]) => unknown;
@@ -206,8 +210,8 @@ describe("web W3（问题 2）：/tasks 改造 + 主流行 open-or-switch 路由
     const zone = src.slice(src.indexOf("function spawnResultInto"), src.indexOf("function emitToolCall"));
     expect(zone).toContain("row.setAttribute('data-agent-id', id)");
     expect(zone).toContain("R.onAgentOpen(aid)"); // 点击回调机制不变——路由目标在 app.js 接线处改 OrosusPane
-    expect(zone).toContain("row.title ="); // v2 1195：「点击在右侧分栏查看该子代理（已开则切换，不重复开）」
-    expect(zone).toContain("右侧分栏查看");
+    expect(zone).toContain("row.title ="); // v2 1195：「点击在右侧分栏查看该子代理（已开则切换，不重复开）」（E5 换键：t('web.spawn.rowTip')，值在 zh-CN 主表）
+    expect(zone).toContain("web.spawn.rowTip");
     expect(zone).not.toContain("回放窗"); // 旧「进回放窗」口径绝迹（v2 交互契约：分栏 open-or-switch）
   });
 
@@ -418,8 +422,8 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(chunkFn).toContain("workBodyOf(t)"); // 流式正文行入组
     const thinkFn = src.slice(src.indexOf("function thinkChunk("), src.indexOf("function finalizeLive("));
     expect(thinkFn).toContain("workBodyOf(t)"); // 流式思考块入组
-    expect(src).toContain("'工作中'"); // 组头文案前两枚（spec §3.3 逐字）——本任务落地
-    expect(src).toContain("'已处理'"); // 「已工作 」/「已停止」由 T3 结算接线引入（G4 断言——2026-10-13 审查修：T2 源码尚无该两字面量）
+    expect(src).toContain("'web.render.work.running'"); // 组头文案前两枚（spec §3.3 逐字）——本任务落地（web-i18n E5 换键：文案字面量→t('键')，断言改键锚定）
+    expect(src).toContain("'web.render.work.done'"); // 「已工作 」/「已停止」由 T3 结算接线引入（G4 断言——2026-10-13 审查修：T2 源码尚无该两字面量）
     const startFn = src.slice(src.indexOf("function emitTurnStart("), src.indexOf("function emitTurnEnd("));
     expect(startFn).toContain("turnStartTs"); // 轮始 ts 落元素（结算时长数据源）
     expect(startFn).toContain("workHeadTick"); // 工作中走字
@@ -442,7 +446,7 @@ describe("web 工作组（2026-10-13 设计）：组骨架与投口", () => {
     expect(headFn).toContain("duration === undefined");
     expect(headFn).toContain('class="doing"');
     const tickFn = src.slice(src.indexOf("function workHeadTick("), src.indexOf("function workHeadStop("));
-    expect(tickFn).toContain("workHeadRender(w, '工作中', false, false, fmtWorkDur(");
+    expect(tickFn).toContain("workHeadRender(w, OrosusI18N.t('web.render.work.running'), false, false, fmtWorkDur(");
     const tailFn = src.slice(src.indexOf("function syncTail("), src.indexOf("/* ── 装配 / 重置"));
     expect(tailFn).toContain("t.innerHTML = spinSvg('', 12);");
     expect(tailFn).not.toContain("tail-time");
@@ -459,8 +463,8 @@ describe("web 工作组（2026-10-13 设计）：结算序列", () => {
     const endFn = src.slice(src.indexOf("function emitTurnEnd("), src.indexOf("/* ── 流式 chunk"));
     expect(endFn).toContain("workSettled = true"); // 结算旗标（翻页重估的入场券）
     expect(endFn).toContain("workLabel"); // 三态文案定值
-    expect(src).toContain("'已工作 '"); // 组头文案族后两枚随本任务结算接线落地（spec §3.3 逐字）
-    expect(src).toContain("'已停止'");
+    expect(src).toContain("'web.render.work.worked'"); // 组头文案族后两枚随本任务结算接线落地（spec §3.3 逐字；E5 换键断言改键锚定）
+    expect(src).toContain("'web.render.work.stopped'");
     expect(endFn).toContain("evalTurn(t)");
     expect(endFn.indexOf("evalTurn(t)")).toBeLessThan(endFn.indexOf('data-tf="copy"')); // 结算先于挂 foot（正文落 foot 之上）
     const evalFn = src.slice(src.indexOf("function evalTurn("), src.indexOf("function reevalSettledTurns("));
@@ -485,8 +489,8 @@ describe("web 工作组（2026-10-13 设计 §3.7）：复制收窄为最终正�
     expect(copyFn).toContain("claimBackward(turn)"); // straddle 兜底（只读不回挪——evalTurn 已认领）
     expect(copyFn).toContain("md.mdSource"); // markdown 源串（2026-10-13 复制批口径延续）
     expect(copyFn).toContain("replace(/^●\\s*/, '')"); // 流式残段无源串时退回渲染态（钉兜底正则）
-    expect(copyFn).toContain("已复制本轮回复");
-    expect(copyFn).toContain("（本轮无可复制文本）"); // 无正文轮兜底文案不变
+    expect(copyFn).toContain("web.render.copiedReply");
+    expect(copyFn).toContain("web.render.copyEmpty"); // 无正文轮兜底文案不变（E5 换键断言改键锚定）
     expect(src).not.toContain("自动合并两段"); // foot 复制钮 tooltip 旧并集口径同步退役（3c——用户可见标签不撒谎）
   });
 });
