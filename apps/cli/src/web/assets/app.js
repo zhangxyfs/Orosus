@@ -613,6 +613,14 @@ function $(id) { return document.getElementById(id); }
     document.title = 'Orosus' + (/^(zh|ja|ko)/i.test(OrosusI18N.cur()) ? '（' : '(') + OrosusI18N.t('web.shell.title'); /* E6 机制 B：tab 题合成（键为尾段截文——闭括在表值内）；C2b N3：开括随语配对——zh/ja/ko 表值闭全角）配全角（，en/ru 闭半角) 配半角(（boot 取表与切语言两路均经本监听） */
     $('ab-addr').textContent = location.host + OrosusI18N.t('web.misc.tokenOkSeg'); /* C2b N1：地址段随表重写——host 前缀拼接非纯模板，挂本监听重跑写逻辑（boot 序取表前的裸键前置写已退役；此处唯一写入位，幂等无双重写） */
     renderSidebar(); /* 报障修（2026-10-17）：左侧会话列表随语言重建——列表文案 t() 渲染期现算，重跑即换语；boot 首广播时 sessionsData 尚空（缺省空态安全），数据到达后自会重建 */
+    var sn = document.getElementById('set-nav');
+    if (sn) { /* 报障修（2026-10-17 二轮）：设置弹窗开着时其左导航/标题/底注/关窗钮也随新表重建——内容页由切换 handler 重建，弹窗壳此前从不在列 */
+      sn.innerHTML = setNavHtml(setState.nav);
+      var pt = document.querySelector('.pu-title'); if (pt) pt.textContent = OrosusI18N.t('web.shell.settings');
+      var pe = document.querySelector('.pu-en'); if (pe) pe.textContent = 'SETTINGS';
+      var pf = document.querySelector('.pu-foot'); if (pf) pf.textContent = OrosusI18N.t('web.settings.foot');
+      var mc = document.querySelector('.pu-head [data-mclose]'); if (mc) mc.outerHTML = OrosusI18N.t('web.shell.modalClose');
+    }
     if (typeof pageAppearance === 'function' && document.querySelector('[data-k="ap-lang"]')) { /* 设置页开着的情形由切换 handler 重建；非外观页的设置子页走各自的 setPageHandler 失效重建——C2 走查面 */ }
   });
 
@@ -1275,6 +1283,11 @@ function $(id) { return document.getElementById(id); }
     renderSetPage(pageIdx ?? setTabRecall());
   }
   var SET_KEY = 'orosus-web-settings';
+  function setNavHtml(i) { /* 报障修（2026-10-17）：导航栏 HTML 独立成器——renderSetPage 与切语言 chrome 刷新共用 */
+    return SET_PAGES.map(function (p, j) {
+      return '<button class="nv' + (j === i ? ' sel' : '') + '" data-nv="' + j + '">' + esc(p.name) + '<span class="nv-desc">' + esc(p.desc) + '</span></button>';
+    }).join('');
+  }
   function setTabRecall() { /* 报障修（2026-10-17）：重开设置回上次页签（localStorage 存续——本次服务期间含 F5 均记忆）；越界/缺失回落 0 号 */
     var v = loadJson(SET_KEY).tab;
     return typeof v === 'number' && v >= 0 && v < SET_PAGES.length && Math.floor(v) === v ? v : 0;
@@ -1285,9 +1298,7 @@ function $(id) { return document.getElementById(id); }
     var nav = document.getElementById('set-nav');
     var page = document.getElementById('set-page');
     if (!nav || !page) return;
-    nav.innerHTML = SET_PAGES.map(function (p, j) {
-      return '<button class="nv' + (j === i ? ' sel' : '') + '" data-nv="' + j + '">' + esc(p.name) + '<span class="nv-desc">' + esc(p.desc) + '</span></button>';
-    }).join('');
+    nav.innerHTML = setNavHtml(i);
     page.scrollTop = 0;
     page.innerHTML = '';
     SET_PAGES[i].render(page);

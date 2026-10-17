@@ -714,6 +714,16 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app).toContain("setTabRecall()"); // 打开设置回上次页签（显式直达页优先——E5 审阅直达不受扰）
     expect(app).toContain("var SET_KEY = 'orosus-web-settings'"); // 记录键（localStorage——本次服务期间含 F5 均记忆）
   });
+
+  it("㉒ 报障修（2026-10-17 三轮）：切语言时设置弹窗壳随新表重建——左导航/标题/底注/关窗钮", () => {
+    const app = read("app.js");
+    expect(app).toContain("function setNavHtml(i)"); // 导航栏 HTML 独立成器（renderSetPage 与 chrome 刷新共用）
+    const li = app.indexOf("onI18NChange(function");
+    const blk = app.slice(li, li + 1600);
+    expect(blk).toContain("setNavHtml(setState.nav)"); // 设置开着时左导航随语言重建
+    expect(blk).toContain("web.settings.foot"); // 底注
+    expect(blk).toContain(".pu-head [data-mclose]"); // 关窗钮（值带 data-mclose 整段替换）
+  });
 });
 
 describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态面）", () => {
