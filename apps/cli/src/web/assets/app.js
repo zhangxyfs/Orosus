@@ -1654,27 +1654,27 @@ function $(id) { return document.getElementById(id); }
           '<option value="auto"' + (search === 'auto' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchAuto') +
           '<option value="llm"' + (search === 'llm' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchLlm') +
           '<option value="tavily"' + (search === 'tavily' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchTavily') +
-          '<option value="brave"' + (search === 'brave' ? ' selected' : '') + '>Brave（需 API key）</option></select>') +
-        mpRow('侧问模型', '<select class="fsel" id="mp-btwmodel"><option value=""' + (!btwCur ? ' selected' : '') + '>跟随会话当前（缺省）</option>' + modelOptGroups(btwCur, providers) + '</select>') + /* 走查修⑨③ */
-        mpRow('子代理模型', '<select class="fsel" id="mp-submodel"><option value=""' + (!sub.model ? ' selected' : '') + '>跟随（工种声明 / 父模型）</option>' +
+          '<option value="brave"' + (search === 'brave' ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optBackendBrave')) +
+        mpRow(OrosusI18N.t('web.settings.prefs.sideModel'), '<select class="fsel" id="mp-btwmodel"><option value=""' + (!btwCur ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optSideFollow') + modelOptGroups(btwCur, providers) + '</select>') + /* 走查修⑨③ */
+        mpRow(OrosusI18N.t('web.settings.prefs.subagentModel'), '<select class="fsel" id="mp-submodel"><option value=""' + (!sub.model ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optSubagentFollow') +
           (sub.model && !modelOptGroups(sub.model, providers).includes('value="' + esc(sub.model) + '"')
-            ? '<option value="' + esc(sub.model) + '" selected>' + esc(sub.model) + '（当前）</option>' : '') +
+            ? '<option value="' + esc(sub.model) + '" selected>' + esc(sub.model) + OrosusI18N.t('web.settings.mp.current') : '') +
           modelOptGroups(sub.model ?? '', providers) + '</select>') +
-        mpRow('审批模式', '<select class="fsel" id="mp-subapproval">' +
-          '<option value=""' + (!sub.approvalMode ? ' selected' : '') + '>跟随主对话（缺省）</option>' +
-          '<option value="auto"' + (sub.approvalMode === 'auto' ? ' selected' : '') + '>从不询问</option>' +
-          '<option value="ask"' + (sub.approvalMode === 'ask' ? ' selected' : '') + '>需要时候询问</option></select>', true) +
-        mpRow('轮数上限', '<select class="fsel" id="mp-subturns">' + turnOpts.map(function (o) {
+        mpRow(OrosusI18N.t('web.settings.prefs.approvalMode'), '<select class="fsel" id="mp-subapproval">' +
+          '<option value=""' + (!sub.approvalMode ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optApprovalFollow') +
+          '<option value="auto"' + (sub.approvalMode === 'auto' ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optNeverAsk') +
+          '<option value="ask"' + (sub.approvalMode === 'ask' ? ' selected' : '') + OrosusI18N.t('web.settings.prefs.optAskRisky'), true) +
+        mpRow(OrosusI18N.t('web.settings.prefs.maxRounds'), '<select class="fsel" id="mp-subturns">' + turnOpts.map(function (o) {
           return '<option value="' + esc(o.v) + '"' + (turnCur === o.v ? ' selected' : '') + '>' + esc(o.l) + '</option>';
         }).join('') + '</select>', true) +
-        '<div class="sp-note">子代理模型下方的审批模式 / 轮数上限是子代理专属子项；「跟随」= 删配置键（缺省语义）。</div>';
+        OrosusI18N.t('web.settings.prefs.noteSubagentItems');
       setPageHandler = null;
       var sel = function (id) { return page.querySelector('#' + id); };
       function postPref(key, value, okMsg, revert) {
         A.fetchJson('/api/settings/prefs', { method: 'POST', body: JSON.stringify({ key: key, value: value }) }).then(function () {
           toast(okMsg);
         }, function (err) {
-          toast('设置失败：' + err.message);
+          toast(OrosusI18N.t('web.toast.settingFail') + err.message);
           if (revert) revert();
         });
       }
@@ -1682,14 +1682,14 @@ function $(id) { return document.getElementById(id); }
         var val = this.value;
         var prev = current;
         if (val === '') { this.value = prev; return; }
-        if (currentSid === null) { toast('暂无会话——默认模型切换需要当前会话（/model 写顶层 provider 键）'); this.value = prev; return; }
+        if (currentSid === null) { toast(OrosusI18N.t('web.toast.modelSwitchNeedSession')); this.value = prev; return; }
         var parts = val.split('/');
         var mname = parts.slice(1).join('/');
         A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/model', { method: 'POST', body: JSON.stringify({ platform: parts[0], model: mname }) }).then(function () {
           current = val;
-          toast('默认模型已切换 → ' + val + '（已写 config，下一轮生效）');
+          toast(OrosusI18N.t('web.toast.modelSwitched') + val + OrosusI18N.t('web.toast.writtenConfigNextRound'));
         }, function (err) {
-          toast('切换失败：' + err.message);
+          toast(OrosusI18N.t('web.toast.switchFail') + err.message);
           var el = sel('mp-model');
           if (el) el.value = prev;
         });
@@ -1697,34 +1697,34 @@ function $(id) { return document.getElementById(id); }
       sel('mp-vision').addEventListener('change', function () {
         var el = this; /* revert 闭包捕获元素——strict-mode 裸调用 this === undefined（审查 Important） */
         var v = this.value;
-        postPref('visionModel', v, v === 'off' ? '视觉模型：已设为停用' : v === 'auto' ? '视觉模型：已设为自动（用已配置模型里支持图片的）' : '视觉模型：已指定 ' + v + '（已写 [tool-media]）', function () { el.value = vision; });
+        postPref('visionModel', v, v === 'off' ? OrosusI18N.t('web.toast.visionSetDisabled') : v === 'auto' ? OrosusI18N.t('web.toast.visionSetAuto') : OrosusI18N.t('web.toast.visionSet') + v + OrosusI18N.t('web.toast.writtenToolMedia'), function () { el.value = vision; });
       });
       sel('mp-search').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        var names = { auto: '自动（缺省）', llm: 'LLM Web Search', tavily: 'Tavily', brave: 'Brave' };
-        postPref('search.backend', v, '网络搜索后端：' + (names[v] ?? v) + '（已写 tool-web 配置）', function () { el.value = search; });
+        var names = { auto: OrosusI18N.t('web.settings.prefs.optAuto'), llm: 'LLM Web Search', tavily: 'Tavily', brave: 'Brave' };
+        postPref('search.backend', v, OrosusI18N.t('web.toast.searchBackendSet') + (names[v] ?? v) + OrosusI18N.t('web.toast.writtenToolWeb'), function () { el.value = search; });
       });
       sel('mp-btwmodel').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        postPref('btwModel', v === '' ? null : v, v === '' ? '侧问模型：已清除（跟随会话当前）' : '侧问模型：' + v + '（已写 gui/gui.toml [sideQuestion]）', function () { el.value = btwCur; });
+        postPref('btwModel', v === '' ? null : v, v === '' ? OrosusI18N.t('web.toast.sideModelCleared') : OrosusI18N.t('web.toast.sideModelSet') + v + OrosusI18N.t('web.toast.writtenSideQuestion'), function () { el.value = btwCur; });
         btwModelPref = v === '' ? null : v; /* 芯片默认源同步（免等下次 GET） */
       });
       sel('mp-submodel').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        postPref('model', v === '' ? null : v, v === '' ? '子代理模型：已清除（跟工种声明 / 父模型）' : '子代理模型：' + v + '（已写 [tool-subagent] model）', function () { el.value = sub.model ?? ''; });
+        postPref('model', v === '' ? null : v, v === '' ? OrosusI18N.t('web.toast.subagentModelCleared') : OrosusI18N.t('web.toast.subagentModelSet') + v + OrosusI18N.t('web.toast.writtenSubagentModel'), function () { el.value = sub.model ?? ''; });
       });
       sel('mp-subapproval').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        postPref('approvalMode', v === '' ? null : v, v === '' ? '子代理审批模式：跟随主对话（配置键已清除）' : '子代理审批模式：' + (v === 'auto' ? '从不询问' : '需要时候询问') + '（已写 [tool-subagent] approvalMode）', function () { el.value = sub.approvalMode ?? ''; });
+        postPref('approvalMode', v === '' ? null : v, v === '' ? OrosusI18N.t('web.toast.subagentApprovalFollow') : OrosusI18N.t('web.toast.subagentApprovalSet') + (v === 'auto' ? OrosusI18N.t('web.toast.subagentApprovalNever') : OrosusI18N.t('web.toast.subagentApprovalRisky')) + OrosusI18N.t('web.toast.writtenSubagentApproval'), function () { el.value = sub.approvalMode ?? ''; });
       });
       sel('mp-subturns').addEventListener('change', function () {
         var el = this;
         var v = this.value;
-        postPref('maxTurns', v === '' ? null : parseInt(v, 10), v === '' ? '子代理轮数上限：跟随默认（100）——配置键已清除' : '子代理轮数上限：已写入 ' + v, function () { el.value = turnCur; });
+        postPref('maxTurns', v === '' ? null : parseInt(v, 10), v === '' ? OrosusI18N.t('web.toast.subagentRoundsFollow') : OrosusI18N.t('web.toast.subagentRoundsSet') + v, function () { el.value = turnCur; });
       });
     }, function (err) { pageLoadError(page, err); });
   }
@@ -1732,14 +1732,14 @@ function $(id) { return document.getElementById(id); }
   /* ── F4 技能（GET /api/settings/skills——行即详情五字段；POST toggle 写 [skill] disabled + reload） ── */
   /* ── F4 技能（2026-10-12 走查七轮重做：平铺名录 → 富列表行——状态点 + 双行文 + 行内启停拨杆 +
    *    范围徽标；点击行仍进详情。TUI 详情窗 Alt+K 的 web 化不变） ── */
-  var SKILL_SCOPE = { user: '用户', project: '项目', bundled: '内置' };
+  var SKILL_SCOPE = { get user() { return OrosusI18N.t('web.settings.skills.trackUser'); }, get project() { return OrosusI18N.t('web.settings.skills.trackProject'); }, get bundled() { return OrosusI18N.t('web.settings.skills.trackBuiltin'); } };
   function skillRowHtml(s) {
     return '<div class="lr-row' + (s.disabled ? ' off' : '') + '" data-k="skill" data-v="' + esc(s.name) + '">' +
       '<span class="mdot ' + (s.disabled ? 'off">○' : 'ok">●') + '</span>' +
       '<span class="lr-main"><span class="lr-name">' + esc(s.name) +
       ' <span class="lr-tag">' + esc(SKILL_SCOPE[s.scope] ?? s.scope ?? '') + '</span></span>' +
       (s.desc ? '<span class="lr-desc">' + esc(s.desc) + '</span>' : '') + '</span>' +
-      '<button class="mc-toggle' + (s.disabled ? '' : ' on') + '" data-sw="' + esc(s.name) + '" role="switch" aria-checked="' + String(!s.disabled) + '" aria-label="' + esc(s.name) + ' 启停" title="' + (s.disabled ? '启用' : '停用') + '"></button>' +
+      '<button class="mc-toggle' + (s.disabled ? '' : ' on') + '" data-sw="' + esc(s.name) + '" role="switch" aria-checked="' + String(!s.disabled) + '" aria-label="' + esc(s.name) + OrosusI18N.t('web.settings.skills.toggleAria') + (s.disabled ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled')) + '"></button>' +
       '<span class="lr-caret">›</span></div>';
   }
   function pageSkills(page) {
@@ -1747,15 +1747,15 @@ function $(id) { return document.getElementById(id); }
     A.fetchJson('/api/settings/skills').then(function (d) {
       var skills = d.skills ?? [];
       if (skills.length === 0) {
-        page.innerHTML = spTitle('技能', 'SKILLS · 四轨目录') + '<div class="sp-note">（暂无技能——技能目录四轨：~/.agents/skills → ~/.orosus/skills → 项目 .agents/skills → 项目 .orosus/skills；skill 模块未启用时此页为空）</div>';
+        page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.skills'), OrosusI18N.t('web.settings.skills.title')) + OrosusI18N.t('web.settings.skills.emptyNote');
         setPageHandler = null;
         return;
       }
       var offN = skills.filter(function (s) { return s.disabled; }).length;
-      page.innerHTML = spTitle('技能', 'SKILLS · 四轨目录') +
-        '<div class="lr-sum">共 ' + skills.length + ' 个 · 启用 ' + (skills.length - offN) + ' · 停用 ' + offN + '</div>' +
+      page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.skills'), OrosusI18N.t('web.settings.skills.title')) +
+        OrosusI18N.t('web.settings.skills.sumTotal') + skills.length + OrosusI18N.t('web.settings.skills.sumEnabled') + (skills.length - offN) + OrosusI18N.t('web.settings.skills.sumDisabled') + offN + '</div>' +
         skills.map(skillRowHtml).join('') +
-        '<div class="sp-note">拨杆直接启停（写 [skill] disabled + 模块重载，斜杠菜单即刻生效）；点击行进详情——详情页内文件可点击打开。</div>';
+        OrosusI18N.t('web.settings.skills.note');
       setPageHandler = function (e) {
         /* 拨杆先行（行内直切不进详情）；点击行其余部位进详情 */
         var sw = e.target.closest('[data-sw]');
@@ -1766,7 +1766,7 @@ function $(id) { return document.getElementById(id); }
           var target = !s.disabled;
           A.fetchJson('/api/settings/skills/toggle', { method: 'POST', body: JSON.stringify({ name: name, disabled: target }) }).then(function () {
             s.disabled = target;
-            toast((target ? '已停用 ' : '已启用 ') + name + '（模块已重载，清单即刻生效）');
+            toast((target ? OrosusI18N.t('web.toast.skillDisabled') : OrosusI18N.t('web.toast.skillEnabled')) + name + OrosusI18N.t('web.toast.skillReloaded'));
             UI.invalidateCaches(); /* 斜杠菜单技能区 30s 缓存同步失效 */
             /* 行原位刷新（零整页重拉——点/拨杆/统计三段换装） */
             var rowEl = sw.closest('.lr-row');
@@ -1776,14 +1776,14 @@ function $(id) { return document.getElementById(id); }
               if (dot) { dot.className = 'mdot ' + (target ? 'off' : 'ok'); dot.textContent = target ? '○' : '●'; }
               sw.classList.toggle('on', !target);
               sw.setAttribute('aria-checked', String(!target));
-              sw.title = target ? '启用' : '停用';
+              sw.title = target ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled');
             }
             var sumEl = page.querySelector('.lr-sum');
             if (sumEl) {
               var off2 = skills.filter(function (x) { return x.disabled; }).length;
-              sumEl.textContent = '共 ' + skills.length + ' 个 · 启用 ' + (skills.length - off2) + ' · 停用 ' + off2;
+              sumEl.textContent = OrosusI18N.t('web.settings.skills.detailTotal') + skills.length + OrosusI18N.t('web.settings.skills.sumEnabled') + (skills.length - off2) + OrosusI18N.t('web.settings.skills.sumDisabled') + off2;
             }
-          }, function (err) { toast('操作失败：' + err.message); });
+          }, function (err) { toast(OrosusI18N.t('web.toast.opFail') + err.message); });
           return;
         }
         var row = e.target.closest('[data-k="skill"]');
@@ -1794,35 +1794,35 @@ function $(id) { return document.getElementById(id); }
     }, function (err) { pageLoadError(page, err); });
   }
   function renderSkillDetail(page, s) {
-    page.innerHTML = '<span class="sp-back" data-k="skill-back">‹ 返回技能列表</span>' +
-      spTitle('技能详情') +
+    page.innerHTML = OrosusI18N.t('web.settings.skills.back') +
+      spTitle(OrosusI18N.t('web.settings.skills.detailTitle')) +
       '<div class="pu-kv">' +
-      kvRow('名称', esc(s.name)) +
-      kvRow('描述', esc(s.desc ?? '')) +
-      (s.usage ? kvRow('适用', esc(s.usage)) : '') +
-      kvRow('范围', esc(s.scope ?? '')) +
-      kvRow('状态', s.disabled ? '<span class="bad">停用</span>' : '<span class="ok">启用</span>') +
+      kvRow(OrosusI18N.t('web.settings.skills.fName'), esc(s.name)) +
+      kvRow(OrosusI18N.t('web.settings.skills.fDesc'), esc(s.desc ?? '')) +
+      (s.usage ? kvRow(OrosusI18N.t('web.settings.skills.fApplies'), esc(s.usage)) : '') +
+      kvRow(OrosusI18N.t('web.settings.skills.fScope'), esc(s.scope ?? '')) +
+      kvRow(OrosusI18N.t('web.settings.skills.fStatus'), s.disabled ? OrosusI18N.t('web.settings.skills.badgeDisabled') : OrosusI18N.t('web.settings.skills.badgeEnabled')) +
       /* 2026-10-12 走查：文件路径可点击——POST /api/open 系统默认程序打开 */
-      kvRow('文件', '<button type="button" class="kv-link" data-k="open-file" data-v="' + esc(s.file ?? '') + '" title="点击用系统默认程序打开">' + esc(s.file ?? '') + '</button>', 'info') +
+      kvRow(OrosusI18N.t('web.settings.skills.fFiles'), '<button type="button" class="kv-link" data-k="open-file" data-v="' + esc(s.file ?? '') + OrosusI18N.t('web.settings.skills.openWithTitle') + esc(s.file ?? '') + '</button>', 'info') +
       '</div>' +
-      '<div class="pu-actions"><button class="btn" data-k="skill-toggle">' + (s.disabled ? '启用' : '停用') + '</button></div>';
+      '<div class="pu-actions"><button class="btn" data-k="skill-toggle">' + (s.disabled ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled')) + '</button></div>';
     setPageHandler = function (e) {
       if (e.target.closest('[data-k="skill-back"]')) { renderSetPage(4); return; } /* 技能页（外观插位后 3→4） */
       if (e.target.closest('[data-k="open-file"]')) {
         var path = e.target.closest('[data-k="open-file"]').getAttribute('data-v');
         A.fetchJson('/api/open', { method: 'POST', body: JSON.stringify({ path: path }) }).then(function () {
-          toast('已请求系统默认程序打开');
-        }, function (err) { toast('打开失败：' + err.message); });
+          toast(OrosusI18N.t('web.toast.openRequested'));
+        }, function (err) { toast(OrosusI18N.t('web.toast.openPlainFail') + err.message); });
         return;
       }
       if (e.target.closest('[data-k="skill-toggle"]')) {
         var target = !s.disabled;
         A.fetchJson('/api/settings/skills/toggle', { method: 'POST', body: JSON.stringify({ name: s.name, disabled: target }) }).then(function () {
           s.disabled = target;
-          toast((target ? '已停用 ' : '已启用 ') + s.name + '（模块已重载，清单即刻生效）');
+          toast((target ? OrosusI18N.t('web.toast.skillDisabled') : OrosusI18N.t('web.toast.skillEnabled')) + s.name + OrosusI18N.t('web.toast.skillReloaded'));
           UI.invalidateCaches(); /* 斜杠菜单技能区 30s 缓存同步失效 */
           renderSkillDetail(page, s);
-        }, function (err) { toast('操作失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.opFail') + err.message); });
       }
     };
   }
@@ -1839,10 +1839,10 @@ function $(id) { return document.getElementById(id); }
       '<span class="lr-main"><span class="lr-name">' + esc(h.name ? h.name : h.event) +
       (h.name ? ' <span class="lr-tag">' + esc(h.event) + '</span>' : '') +
       (h.product ? ' <span class="lr-tag info">' + esc(h.product) + '</span>' : '') +
-      (untrusted ? ' <span class="lr-tag warn">未信任</span>' : '') +
+      (untrusted ? OrosusI18N.t('web.settings.hooks.tagUntrusted') : '') +
       '</span>' +
       '<span class="lr-desc mono">' + esc(h.command ?? '') + (h.matcher ? '　·　matcher: ' + esc(h.matcher) : '') + '</span></span>' +
-      '<button class="mc-toggle' + (h.disabled ? '' : ' on') + '" data-sw="' + esc(comp) + '" role="switch" aria-checked="' + String(!h.disabled) + '" aria-label="' + esc(h.event) + ' 钩子启停" title="' + (h.disabled ? '启用' : '停用') + '"></button>' +
+      '<button class="mc-toggle' + (h.disabled ? '' : ' on') + '" data-sw="' + esc(comp) + '" role="switch" aria-checked="' + String(!h.disabled) + '" aria-label="' + esc(h.event) + OrosusI18N.t('web.settings.hooks.toggleAria') + (h.disabled ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled')) + '"></button>' +
       '<span class="lr-caret">›</span></div>';
   }
   function pageHooks(page) {
@@ -1851,14 +1851,14 @@ function $(id) { return document.getElementById(id); }
       var user = d.user ?? [];
       var proj = d.project ?? [];
       var trusted = !!d.projectTrusted;
-      var sec = function (title, rows) {
-        return subHeadT(title + '（' + rows.length + '）', title.indexOf('项目') === 0) + (rows.length > 0 ? rows.map(function (h) {
+      var sec = function (title, rows, isProj) { /* web-i18n E7：项目级判定改显式参（原 title.indexOf('项目') 对译文不稳） */
+        return subHeadT(title + '（' + rows.length + '）', isProj) + (rows.length > 0 ? rows.map(function (h) {
           return hookRowHtmlV2(h, trusted);
-        }).join('') : '<div class="sp-note">（空——钩子增编走 TOML 文件：' + esc(title.indexOf('项目') === 0 ? '项目 .orosus/hooks' : '~/.orosus/hooks') + '，改后 /reload）</div>');
+        }).join('') : OrosusI18N.t('web.settings.hooks.emptyNoteA') + esc(isProj ? OrosusI18N.t('web.settings.hooks.emptyNotePath') : '~/.orosus/hooks') + OrosusI18N.t('web.settings.hooks.emptyNoteB'));
       };
-      page.innerHTML = spTitle('钩子', 'HOOKS · 七事件生命周期') +
-        sec('用户级', user) + sec('项目级（须信任审查）', proj) +
-        '<div class="sp-note">拨杆直接启停（行级写盘 + 重载生效）；点击行进详情——项目层信任审查在详情页。</div>';
+      page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.hooks'), OrosusI18N.t('web.settings.hooks.title')) +
+        sec(OrosusI18N.t('web.settings.hooks.levelUser'), user, false) + sec(OrosusI18N.t('web.settings.hooks.levelProjectTrust'), proj, true) +
+        OrosusI18N.t('web.settings.hooks.note');
       var all = user.concat(proj);
       setPageHandler = function (e) {
         /* 拨杆先行（行内直切）；点击行其余部位进详情 */
@@ -1870,7 +1870,7 @@ function $(id) { return document.getElementById(id); }
           var target = !h2.disabled;
           A.fetchJson('/api/settings/hooks/toggle', { method: 'POST', body: JSON.stringify({ file: h2.file, event: h2.event, tableIdx: h2.tableIdx, hookIdx: h2.hookIdx, disabled: target }) }).then(function () {
             h2.disabled = target;
-            toast((target ? '已停用 ' : '已启用 ') + (h2.name ? h2.name : h2.event) + '（行级写盘，重载后生效）');
+            toast((target ? OrosusI18N.t('web.toast.skillDisabled') : OrosusI18N.t('web.toast.skillEnabled')) + (h2.name ? h2.name : h2.event) + OrosusI18N.t('web.toast.rowWrittenReload'));
             var rowEl = sw.closest('.lr-row');
             if (rowEl) {
               rowEl.classList.toggle('off', target);
@@ -1878,9 +1878,9 @@ function $(id) { return document.getElementById(id); }
               if (dot) { dot.className = 'mdot ' + (target ? 'off' : 'ok'); dot.textContent = target ? '○' : '●'; }
               sw.classList.toggle('on', !target);
               sw.setAttribute('aria-checked', String(!target));
-              sw.title = target ? '启用' : '停用';
+              sw.title = target ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled');
             }
-          }, function (err) { toast('操作失败：' + err.message); });
+          }, function (err) { toast(OrosusI18N.t('web.toast.opFail') + err.message); });
           return;
         }
         var row = e.target.closest('[data-k="hook"]');
@@ -1891,20 +1891,20 @@ function $(id) { return document.getElementById(id); }
     }, function (err) { pageLoadError(page, err); });
   }
   function renderHookDetail(page, h, trusted) {
-    page.innerHTML = '<span class="sp-back" data-k="hook-back">‹ 返回钩子列表</span>' +
-      spTitle('钩子详情') +
+    page.innerHTML = OrosusI18N.t('web.settings.hooks.back') +
+      spTitle(OrosusI18N.t('web.settings.hooks.detailTitle')) +
       '<div class="pu-kv">' +
-      (h.name ? kvRow('说明', esc(h.name)) : '') +
-      kvRow('事件', esc(h.event)) +
+      (h.name ? kvRow(OrosusI18N.t('web.settings.hooks.fDesc'), esc(h.name)) : '') +
+      kvRow(OrosusI18N.t('web.settings.hooks.fEvent'), esc(h.event)) +
       (h.matcher ? kvRow('matcher', esc(h.matcher)) : '') +
-      kvRow('命令', esc(h.command ?? ''), 'info') +
-      kvRow('超时', esc(String(h.timeout ?? HOOK_TIMEOUT_DEFAULT) + 's')) +
-      kvRow('来源', h.origin === 'user' ? '用户级' : '项目级') +
-      kvRow('信任态', h.origin === 'user' ? '用户级免审' : (trusted ? '<span class="ok">已信任</span>' : '<span class="st-warn">未信任——须审查后生效</span>')) +
+      kvRow(OrosusI18N.t('web.settings.hooks.fCommand'), esc(h.command ?? ''), 'info') +
+      kvRow(OrosusI18N.t('web.settings.hooks.fTimeout'), esc(String(h.timeout ?? HOOK_TIMEOUT_DEFAULT) + 's')) +
+      kvRow(OrosusI18N.t('web.settings.hooks.fSource'), h.origin === 'user' ? OrosusI18N.t('web.settings.hooks.levelUser') : OrosusI18N.t('web.settings.hooks.levelProject')) +
+      kvRow(OrosusI18N.t('web.settings.hooks.fTrustState'), h.origin === 'user' ? OrosusI18N.t('web.settings.hooks.userExempt') : (trusted ? OrosusI18N.t('web.settings.hooks.trusted') : OrosusI18N.t('web.settings.hooks.untrustedWarn'))) +
       '</div>' +
       '<div class="pu-actions">' +
-      '<button class="btn" data-k="hook-toggle">' + (h.disabled ? '启用' : '停用') + '</button>' +
-      (h.origin === 'project' && !trusted ? '<button class="btn primary" data-k="hook-trust">信任审查（TUI t 键）</button>' : '') +
+      '<button class="btn" data-k="hook-toggle">' + (h.disabled ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled')) + '</button>' +
+      (h.origin === 'project' && !trusted ? OrosusI18N.t('web.settings.hooks.trustBtn') : '') +
       '</div>';
     setPageHandler = function (e) {
       if (e.target.closest('[data-k="hook-back"]')) { renderSetPage(5); return; } /* 钩子页（外观插位后 4→5） */
@@ -1912,14 +1912,14 @@ function $(id) { return document.getElementById(id); }
         var target = !h.disabled;
         A.fetchJson('/api/settings/hooks/toggle', { method: 'POST', body: JSON.stringify({ file: h.file, event: h.event, tableIdx: h.tableIdx, hookIdx: h.hookIdx, disabled: target }) }).then(function () {
           h.disabled = target;
-          toast((target ? '已停用' : '已启用') + '（行级写盘，重载后生效）');
+          toast((target ? OrosusI18N.t('web.toast.hookDisabled') : OrosusI18N.t('web.toast.hookEnabled')) + OrosusI18N.t('web.toast.rowWrittenReload'));
           renderHookDetail(page, h, trusted);
-        }, function (err) { toast('操作失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.opFail') + err.message); });
       } else if (e.target.closest('[data-k="hook-trust"]')) {
         A.fetchJson('/api/settings/hooks/trust', { method: 'POST', body: '{}' }).then(function () {
-          toast('项目层钩子已通过信任审查（sha256 已登记）');
+          toast(OrosusI18N.t('web.toast.hookTrusted'));
           pageHooks(page);
-        }, function (err) { toast('信任失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.trustFail') + err.message); });
       }
     };
   }
@@ -1928,9 +1928,23 @@ function $(id) { return document.getElementById(id); }
    *  2026-10-12 走查二轮重构（对齐 TUI）：列表行 = 状态点（绿=已连接 / 红=失败 / 灰=停用·待启动）+
    *  名称 + 传输·工具数 + 行上「启动」（懒启动件）/「详情」钮——右侧状态文字退役；添加/修改窗对齐
    *  TUI Alt+N（mcp-add-window.ts）：手动/JSON 双页签、传输三档、高级区 env/headers/cwd/超时秒。 */
-  var MCP_STATE_TEXT = { connected: '已连接 · 启用', idle: '待启动 · 启用', failed: '失败 · 启用', disabled: '已停用', 'pending-confirm': '未确认' };
-  var MCP_SOURCE_TEXT = { config: '配置文件', project: '项目 .mcp.json', preload: '预装' };
-  var MCP_TRANSPORT_TEXT = { stdio: 'stdio 子进程', http: 'HTTP（远程）', sse: 'SSE（远程）' };
+  var MCP_STATE_TEXT = { /* web-i18n E7：模块级标签图改 get 访问器（消费期取表）；disabled 位「已停用」与 hookDisabled 同串复用 */
+    get connected() { return OrosusI18N.t('web.settings.mcp.stConnected'); },
+    get idle() { return OrosusI18N.t('web.settings.mcp.stLazy'); },
+    get failed() { return OrosusI18N.t('web.settings.mcp.stFailed'); },
+    get disabled() { return OrosusI18N.t('web.toast.hookDisabled'); },
+    get ['pending-confirm']() { return OrosusI18N.t('web.settings.mcp.stUnconfirmed'); },
+  };
+  var MCP_SOURCE_TEXT = {
+    get config() { return OrosusI18N.t('web.settings.mcp.fConfigFile'); },
+    get project() { return OrosusI18N.t('web.settings.mcp.projectConfig'); },
+    get preload() { return OrosusI18N.t('web.settings.mcp.preinstalled'); },
+  };
+  var MCP_TRANSPORT_TEXT = {
+    get stdio() { return OrosusI18N.t('web.settings.mcp.trStdio'); },
+    get http() { return OrosusI18N.t('web.settings.mcp.trHttp'); },
+    get sse() { return OrosusI18N.t('web.settings.mcp.trSse'); },
+  };
   function mcpDot(m) {
     if (m.state === 'connected') return '<span class="mdot ok">●</span>';
     if (m.state === 'failed') return '<span class="mdot bad">●</span>';
@@ -1941,12 +1955,12 @@ function $(id) { return document.getElementById(id); }
   function mcpRowLine(m) {
     var remote = m.transport === 'http' || m.transport === 'sse';
     var desc = remote ? 'HTTP' : 'stdio';
-    if (m.state === 'connected' && typeof m.toolCount === 'number') desc += ' · ' + m.toolCount + ' 工具';
+    if (m.state === 'connected' && typeof m.toolCount === 'number') desc += ' · ' + m.toolCount + OrosusI18N.t('web.settings.mcp.toolsSuffix');
     var acts = '';
     if (m.deferred === true && (m.state === 'idle' || m.state === 'failed')) {
-      acts += '<button class="btn tiny" data-k="mcp-start" data-v="' + esc(m.name) + '" title="懒启动件首次连接（npx 下载最长 60 秒）">启动</button>';
+      acts += '<button class="btn tiny" data-k="mcp-start" data-v="' + esc(m.name) + OrosusI18N.t('web.settings.mcp.startBtnLazy');
     }
-    acts += '<button class="btn tiny" data-k="mcp-detail" data-v="' + esc(m.name) + '">详情</button>';
+    acts += '<button class="btn tiny" data-k="mcp-detail" data-v="' + esc(m.name) + OrosusI18N.t('web.settings.mcp.detailsBtn');
     return mcpDot(m) +
       '<span class="pi-name">' + esc(m.name) + '</span><span class="pi-desc">' + esc(desc) + '</span><span class="pi-right mcp-acts">' + acts + '</span>';
   }
@@ -1954,21 +1968,21 @@ function $(id) { return document.getElementById(id); }
     pageLoading(page);
     A.fetchJson('/api/settings/mcp').then(function (d) {
       var servers = d.servers ?? [];
-      page.innerHTML = '<div class="pf-headrow">' + spTitle('MCP', 'SERVERS · ' + servers.length + ' 个 · 预装按需启动') +
-        '<button class="btn primary" data-k="mcp-add">＋ 添加</button></div>' +
+      page.innerHTML = '<div class="pf-headrow">' + spTitle('MCP', 'SERVERS · ' + servers.length + OrosusI18N.t('web.settings.mcp.sumSuffix')) +
+        OrosusI18N.t('web.settings.mcp.addBtn') +
         (servers.length > 0 ? servers.map(function (m) {
           return '<div class="pu-item" data-k="mcp" data-v="' + esc(m.name) + '" title="' + esc(MCP_TRANSPORT_TEXT[m.transport] ?? m.transport ?? 'stdio') + '">' + mcpRowLine(m) + '</div>';
-        }).join('') : '<div class="sp-note">（无 MCP server——mcp 模块未启用或未配置）</div>') +
-        '<div class="sp-note">状态点：绿=已连接 · 红=失败 · 灰=停用/待启动；「启动」仅懒启动件（首次连接可能需要下载）；其余操作（停用/信任/修改/删除）在详情页。</div>';
+        }).join('') : OrosusI18N.t('web.settings.mcp.emptyNote')) +
+        OrosusI18N.t('web.settings.mcp.legendNote');
       setPageHandler = function (e) {
         if (e.target.closest('[data-k="mcp-add"]')) { renderMcpForm(page, 'add'); return; }
         var start = e.target.closest('[data-k="mcp-start"]');
         if (start) {
           var nm = start.getAttribute('data-v');
           A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify({ op: 'start', name: nm }) }).then(function (r) {
-            toast(r && r.starting ? '正在启动 ' + nm + '（首次可能需要下载，最长 60 秒）…' : '已触发启动');
+            toast(r && r.starting ? OrosusI18N.t('web.toast.mcpStarting') + nm + OrosusI18N.t('web.toast.mcpStartingHint') : OrosusI18N.t('web.toast.mcpStartTriggered'));
             window.setTimeout(function () { if (document.getElementById('set-page')) pageMcp(page); }, 5000);
-          }, function (err) { toast(err.status === 409 ? err.message : '启动失败：' + err.message); });
+          }, function (err) { toast(err.status === 409 ? err.message : OrosusI18N.t('web.toast.mcpStartFail') + err.message); });
           return;
         }
         var det = e.target.closest('[data-k="mcp-detail"]');
@@ -1982,58 +1996,58 @@ function $(id) { return document.getElementById(id); }
   }
   function renderMcpDetail(page, m) {
     var acts = [];
-    if (m.deferred === true && (m.state === 'idle' || m.state === 'failed')) acts.push('<button class="btn primary" data-k="mcp-start">启动</button>');
-    else acts.push('<button class="btn" data-k="mcp-toggle">' + (m.state === 'disabled' ? '启用' : '停用') + '</button>');
+    if (m.deferred === true && (m.state === 'idle' || m.state === 'failed')) acts.push(OrosusI18N.t('web.settings.mcp.startBtn'));
+    else acts.push('<button class="btn" data-k="mcp-toggle">' + (m.state === 'disabled' ? OrosusI18N.t('web.settings.skills.stateEnabled') : OrosusI18N.t('web.settings.skills.stateDisabled')) + '</button>');
     if (m.source === 'config') {
-      acts.push('<button class="btn" data-k="mcp-edit">修改</button>');
-      acts.push('<button class="btn danger" data-k="mcp-del">删除</button>');
+      acts.push(OrosusI18N.t('web.settings.mcp.editBtn'));
+      acts.push(OrosusI18N.t('web.settings.mcp.delBtn'));
     }
-    if (m.state === 'pending-confirm') acts.push('<button class="btn primary" data-k="mcp-trust">确认信任（TUI t 键）</button>');
-    var specDesc = m.instructions ?? ((m.toolCount ?? 0) > 0 ? m.toolCount + ' 个工具' : '—');
-    page.innerHTML = '<span class="sp-back" data-k="mcp-back">‹ 返回 MCP 列表</span>' +
+    if (m.state === 'pending-confirm') acts.push(OrosusI18N.t('web.settings.mcp.trustBtn'));
+    var specDesc = m.instructions ?? ((m.toolCount ?? 0) > 0 ? m.toolCount + OrosusI18N.t('web.settings.mcp.toolsCount') : '—');
+    page.innerHTML = OrosusI18N.t('web.settings.mcp.back') +
       spTitle(m.name + ' · MCP server') +
       '<div class="pu-kv">' +
-      kvRow('名称', esc(m.name)) +
-      kvRow('说明', esc(specDesc)) +
-      kvRow('状态', esc(MCP_STATE_TEXT[m.state] ?? m.state) + (m.connectMs !== undefined && m.state === 'connected' ? ' · ' + m.connectMs + 'ms' : '')) +
-      kvRow('来源', esc(MCP_SOURCE_TEXT[m.source] ?? m.source)) +
-      kvRow('传输方式', esc(MCP_TRANSPORT_TEXT[m.transport] ?? m.transport ?? 'stdio')) +
-      kvRow(m.url ? 'URL' : '命令', esc(m.url ?? m.command ?? '—'), 'info') +
+      kvRow(OrosusI18N.t('web.settings.skills.fName'), esc(m.name)) +
+      kvRow(OrosusI18N.t('web.settings.hooks.fDesc'), esc(specDesc)) +
+      kvRow(OrosusI18N.t('web.settings.skills.fStatus'), esc(MCP_STATE_TEXT[m.state] ?? m.state) + (m.connectMs !== undefined && m.state === 'connected' ? ' · ' + m.connectMs + 'ms' : '')) +
+      kvRow(OrosusI18N.t('web.settings.hooks.fSource'), esc(MCP_SOURCE_TEXT[m.source] ?? m.source)) +
+      kvRow(OrosusI18N.t('web.settings.mcp.fTransport'), esc(MCP_TRANSPORT_TEXT[m.transport] ?? m.transport ?? 'stdio')) +
+      kvRow(m.url ? 'URL' : OrosusI18N.t('web.settings.hooks.fCommand'), esc(m.url ?? m.command ?? '—'), 'info') +
       (m.failReason ? '<span class="k"></span><span class="v dim">' + esc(m.failReason) + '</span>' : '') +
-      (m.state === 'pending-confirm' ? '<span class="k"></span><span class="v dim">未确认——核对指纹后确认连接（指纹 ' + esc((m.fingerprint ?? '').slice(0, 8)) + '…；确认一次永久可用，配置被改过会重新要求）</span>' : '') +
-      (m.source === 'preload' ? '<span class="k"></span><span class="v dim">预装 server——只能停用不能删除</span>' : '') +
+      (m.state === 'pending-confirm' ? OrosusI18N.t('web.settings.mcp.unconfirmedA') + esc((m.fingerprint ?? '').slice(0, 8)) + OrosusI18N.t('web.settings.mcp.unconfirmedB') : '') +
+      (m.source === 'preload' ? OrosusI18N.t('web.settings.mcp.preinstalledNote') : '') +
       '</div>' +
       '<div class="pu-actions">' + acts.join('') + '</div>';
     setPageHandler = function (e) {
       if (e.target.closest('[data-k="mcp-back"]')) { renderSetPage(6); return; } /* MCP 页（外观插位后 5→6） */
       if (e.target.closest('[data-k="mcp-toggle"]')) {
         var off = m.state !== 'disabled';
-        mcpOp(page, { op: off ? 'off' : 'on', name: m.name }, function () { toast((off ? '已停用 ' : '已启用 ') + m.name + '——模块图重载后生效'); pageMcp(page); });
+        mcpOp(page, { op: off ? 'off' : 'on', name: m.name }, function () { toast((off ? OrosusI18N.t('web.toast.skillDisabled') : OrosusI18N.t('web.toast.skillEnabled')) + m.name + OrosusI18N.t('web.toast.savedPost')); pageMcp(page); });
         return;
       }
       if (e.target.closest('[data-k="mcp-start"]')) {
         A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify({ op: 'start', name: m.name }) }).then(function (r) {
           if (r && r.starting) {
-            toast('正在启动 ' + m.name + '（首次可能需要下载，最长 60 秒）…');
+            toast(OrosusI18N.t('web.toast.mcpStarting') + m.name + OrosusI18N.t('web.toast.mcpStartingHint'));
             window.setTimeout(function () { pageMcp(page); }, 5000); /* lazy 态翻转走 catalog（202 排队无失败回执帧） */
           } else {
-            toast('已触发启动');
+            toast(OrosusI18N.t('web.toast.mcpStartTriggered'));
             pageMcp(page);
           }
-        }, function (err) { toast(err.status === 409 ? err.message : '启动失败：' + err.message); });
+        }, function (err) { toast(err.status === 409 ? err.message : OrosusI18N.t('web.toast.mcpStartFail') + err.message); });
         return;
       }
       if (e.target.closest('[data-k="mcp-trust"]')) {
-        mcpOp(page, { op: 'trust', name: m.name }, function () { toast('已确认 ' + m.name + '——模块图重载后连接'); pageMcp(page); });
+        mcpOp(page, { op: 'trust', name: m.name }, function () { toast(OrosusI18N.t('web.toast.mcpConfirmed') + m.name + OrosusI18N.t('web.toast.mcpConfirmedReload')); pageMcp(page); });
         return;
       }
       if (e.target.closest('[data-k="mcp-edit"]')) { renderMcpForm(page, 'edit', m); return; }
       if (e.target.closest('[data-k="mcp-del"]')) {
         openConfirm({
-          title: '删除 MCP server',
-          bodyHtml: '<div class="pu-text">将永久删除 server「<b>' + esc(m.name) + '</b>」的配置条目，无法恢复。</div>',
-          confirmText: '删除',
-          onConfirm: function () { mcpOp(page, { op: 'remove', name: m.name }, function () { toast('已删除 ' + m.name + '——模块图重载后生效'); pageMcp(page); }); },
+          title: OrosusI18N.t('web.settings.mcp.delTitle'),
+          bodyHtml: OrosusI18N.t('web.settings.mcp.delTextA') + esc(m.name) + OrosusI18N.t('web.settings.mcp.delTextB'),
+          confirmText: OrosusI18N.t('web.common.delete'),
+          onConfirm: function () { mcpOp(page, { op: 'remove', name: m.name }, function () { toast(OrosusI18N.t('web.toast.mcpDeleted') + m.name + OrosusI18N.t('web.toast.savedPost')); pageMcp(page); }); },
         });
       }
     };
@@ -2042,9 +2056,9 @@ function $(id) { return document.getElementById(id); }
   function mcpOp(page, body, onOk) {
     A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
       if (r && typeof r.text === 'string' && r.text !== '') toast(r.text);
-      if (r && r.report && r.report.failed && r.report.failed.length) toast('部分模块重载失败：' + r.report.failed.map(function (f) { return f.name; }).join(', '));
+      if (r && r.report && r.report.failed && r.report.failed.length) toast(OrosusI18N.t('web.toast.reloadPartialFail') + r.report.failed.map(function (f) { return f.name; }).join(', '));
       if (onOk) onOk(r);
-    }, function (err) { toast('操作失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.opFail') + err.message); });
   }
   /** 添加/修改 MCP server 窗（TUI Alt+N mcp-add-window.ts 的 web 化——2026-10-12 走查二轮）：
    *  手动/JSON 双页签（共享草稿互转不丢）+ 传输方式三档 + 高级区（env/headers〔远程〕/cwd〔stdio〕/
@@ -2060,36 +2074,36 @@ function $(id) { return document.getElementById(id); }
     function paint() { setPageHandler = null; paintNow(); }
     function paintNow() {
       var remote = draft.transport !== 'stdio';
-      var html = '<span class="pf-back" data-k="mcp-back">‹ 返回 MCP 列表</span>' +
-        spTitle(isEdit ? '修改 ' + row.name : '添加 MCP server') +
+      var html = OrosusI18N.t('web.settings.mcp.backForm') +
+        spTitle(isEdit ? OrosusI18N.t('web.settings.mcp.formTitleEdit') + row.name : OrosusI18N.t('web.settings.mcp.formTitleAdd')) +
         '<div class="mcp-tabs">' +
-          '<button type="button" class="mcp-tab' + (tab === 'manual' ? ' sel' : '') + '" data-k="mtp-manual">手动</button>' +
+          '<button type="button" class="mcp-tab' + (tab === 'manual' ? ' sel' : '') + OrosusI18N.t('web.settings.mcp.tabManual') +
           '<button type="button" class="mcp-tab' + (tab === 'json' ? ' sel' : '') + '" data-k="mtp-json">JSON</button>' +
-          '<span class="mcp-tab-hint">页签间草稿互转</span></div>';
+          OrosusI18N.t('web.settings.mcp.tabHint');
       if (tab === 'manual') {
         html += (isEdit
-            ? '<div class="pf-row"><label>名称</label><input autocomplete="off" class="fi" value="' + esc(draft.name) + '" readonly /></div>'
-            : '<div class="pf-row"><label>名称 <span class="req">*</span></label><input autocomplete="off" class="fi" id="mf-name" placeholder="my-search（字母/数字/-/_）" value="' + esc(draft.name) + '" /></div>') +
-          '<div class="pf-row"><label>传输方式</label><select class="fsel" id="mf-transport">' +
-            '<option value="stdio"' + (!remote ? ' selected' : '') + '>stdio（本地子进程）</option>' +
-            '<option value="http"' + (draft.transport === 'http' ? ' selected' : '') + '>HTTP（远程）</option>' +
-            '<option value="sse"' + (draft.transport === 'sse' ? ' selected' : '') + '>SSE（远程）</option></select></div>' +
-          '<div class="pf-row"><label>' + (remote ? 'URL <span class="req">*</span>' : '命令 <span class="req">*</span>') + '</label>' +
-            '<input autocomplete="off" class="fi" id="mf-cmd" value="' + esc(draft.cmd) + '" placeholder="' + (remote ? 'https://mcp.internal.example.com/sse' : 'npx -y my-search-mcp（整行命令，支持引号参数）') + '" /></div>' +
-          '<div class="pf-row"><button type="button" class="btn" data-k="mf-adv">' + (advOpen ? '▾' : '▸') + ' 高级' + (advOpen ? '' : remote ? '（headers / 环境变量 / 超时）' : '（环境变量 / 工作目录 / 超时）') + '</button></div>';
+            ? OrosusI18N.t('web.settings.mcp.fNameEdit') + esc(draft.name) + '" readonly /></div>'
+            : OrosusI18N.t('web.settings.mcp.fNameAdd') + esc(draft.name) + '" /></div>') +
+          OrosusI18N.t('web.settings.mcp.fTransportForm') +
+            '<option value="stdio"' + (!remote ? ' selected' : '') + OrosusI18N.t('web.settings.mcp.optStdio') +
+            '<option value="http"' + (draft.transport === 'http' ? ' selected' : '') + OrosusI18N.t('web.settings.mcp.optHttp') +
+            '<option value="sse"' + (draft.transport === 'sse' ? ' selected' : '') + OrosusI18N.t('web.settings.mcp.optSse') +
+          '<div class="pf-row"><label>' + (remote ? 'URL <span class="req">*</span>' : OrosusI18N.t('web.settings.mcp.fCommand')) + '</label>' +
+            '<input autocomplete="off" class="fi" id="mf-cmd" value="' + esc(draft.cmd) + '" placeholder="' + (remote ? 'https://mcp.internal.example.com/sse' : OrosusI18N.t('web.settings.mcp.cmdPlaceholder')) + '" /></div>' +
+          '<div class="pf-row"><button type="button" class="btn" data-k="mf-adv">' + (advOpen ? '▾' : '▸') + OrosusI18N.t('web.settings.mcp.advancedToggle') + (advOpen ? '' : remote ? OrosusI18N.t('web.settings.mcp.advHttpHint') : OrosusI18N.t('web.settings.mcp.advStdioHint')) + '</button></div>';
         if (advOpen) {
-          html += '<div class="pf-row"><label>环境变量（每行 KEY=VALUE' + (isEdit ? '；裸 KEY = 保持原值' : '') + '）</label><textarea autocomplete="off" class="fi" id="mf-env" rows="2" placeholder="API_KEY=xxx"></textarea></div>';
-          if (remote) html += '<div class="pf-row"><label>请求头（每行 KEY=VALUE）</label><textarea autocomplete="off" class="fi" id="mf-headers" rows="2" placeholder="Authorization=Bearer …"></textarea></div>';
-          else html += '<div class="pf-row"><label>工作目录</label><input autocomplete="off" class="fi" id="mf-cwd" value="' + esc(draft.cwd) + '" placeholder="（缺省 = 项目根）" /></div>';
-          html += '<div class="pf-row"><label>超时（秒，正整数）</label><input autocomplete="off" class="fi" id="mf-timeout" value="' + esc(draft.timeout) + '" placeholder="（缺省 60）" /></div>';
+          html += OrosusI18N.t('web.settings.mcp.envLabelA') + (isEdit ? OrosusI18N.t('web.settings.mcp.envLabelB') : '') + '）</label><textarea autocomplete="off" class="fi" id="mf-env" rows="2" placeholder="API_KEY=xxx"></textarea></div>';
+          if (remote) html += OrosusI18N.t('web.settings.mcp.fHeaders');
+          else html += OrosusI18N.t('web.settings.mcp.fCwd') + esc(draft.cwd) + OrosusI18N.t('web.settings.mcp.cwdPlaceholder');
+          html += OrosusI18N.t('web.settings.mcp.fTimeout') + esc(draft.timeout) + OrosusI18N.t('web.settings.mcp.timeoutPlaceholder');
         }
       } else {
-        html += '<div class="sp-note">粘贴单条 server 的 JSON（{"mcpServers": {…}} 包裹或裸对象均可；一次只接受一个 server）。</div>' +
+        html += OrosusI18N.t('web.settings.mcp.jsonNote') +
           '<div class="pf-row"><label>JSON</label><textarea autocomplete="off" class="fi" id="mf-json" rows="8" placeholder="{&quot;mcpServers&quot;: {&quot;my-search&quot;: {&quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;my-search-mcp&quot;]}}}"></textarea></div>';
       }
       if (msg !== '') html += '<div class="sp-note ' + (msgBad ? 'bad' : '') + '">' + (msgBad ? '✕ ' : '✓ ') + esc(msg) + '</div>';
-      html += '<div class="pu-actions"><span class="spacer"></span><button class="btn" data-k="mcp-cancel">取消</button>' +
-        '<button class="btn primary" data-k="mcp-save">' + (isEdit ? '保存' : '添加') + '</button></div>';
+      html += OrosusI18N.t('web.settings.mcp.cancelBtn') +
+        '<button class="btn primary" data-k="mcp-save">' + (isEdit ? OrosusI18N.t('web.common.save') : OrosusI18N.t('web.settings.mcp.addConfirmBtn')) + '</button></div>';
       page.innerHTML = html;
       bind();
     }
@@ -2144,19 +2158,19 @@ function $(id) { return document.getElementById(id); }
         if (!isEdit) name = parsed.name;
         spec = parsed.spec;
       } else {
-        if (name === '' || /\s/.test(name)) { msg = '名称必填且不含空白'; msgBad = true; paintNow(); return; }
+        if (name === '' || /\s/.test(name)) { msg = OrosusI18N.t('web.toast.nameRequired'); msgBad = true; paintNow(); return; }
         var built = buildMcpSpec(draft);
         if (built.error !== undefined) { msg = built.error; msgBad = true; paintNow(); return; }
         spec = built.spec;
       }
       A.fetchJson('/api/settings/mcp/ops', { method: 'POST', body: JSON.stringify(isEdit ? { op: 'edit', name: row.name, spec: spec } : { op: 'add', name: name, spec: spec }) }).then(function (r) {
-        toast(isEdit ? '已保存 ' + name + '——模块图重载后生效' : '已添加 ' + name + '——模块图重载后连接');
-        if (r && r.report && r.report.failed && r.report.failed.length) toast('部分模块重载失败：' + r.report.failed.map(function (f) { return f.name; }).join(', '));
+        toast(isEdit ? OrosusI18N.t('web.toast.mcpSaved') + name + OrosusI18N.t('web.toast.savedPost') : OrosusI18N.t('web.toast.mcpAdded') + name + OrosusI18N.t('web.toast.mcpConfirmedReload'));
+        if (r && r.report && r.report.failed && r.report.failed.length) toast(OrosusI18N.t('web.toast.reloadPartialFail') + r.report.failed.map(function (f) { return f.name; }).join(', '));
         pageMcp(page);
       }, function (err) { msg = err.message; msgBad = true; paintNow(); });
     }
     if (isEdit) {
-      pageLoading(page, '读取原配置…');
+      pageLoading(page, OrosusI18N.t('web.toast.readingConfig'));
       A.fetchJson('/api/settings/mcp/entry?name=' + encodeURIComponent(row.name)).then(function (d) {
         var v = d.values ?? {};
         var remote = row.transport === 'http' || row.transport === 'sse';
@@ -2167,7 +2181,7 @@ function $(id) { return document.getElementById(id); }
         draft.cwd = typeof v.cwd === 'string' ? v.cwd : '';
         draft.timeout = typeof v.timeoutMs === 'number' ? String(Math.round(v.timeoutMs / 1000)) : '';
         paint();
-      }, function () { msg = '原配置读取失败（仅 config 来源可改）'; msgBad = true; paint(); });
+      }, function () { msg = OrosusI18N.t('web.toast.readConfigFail'); msgBad = true; paint(); });
     } else {
       paint();
     }
@@ -2193,7 +2207,7 @@ function $(id) { return document.getElementById(id); }
       var line = lines[i].trim();
       if (line === '') continue;
       var eq = line.indexOf('=');
-      if (eq <= 0) return { error: '环境变量/请求头行须为 KEY=VALUE：' + line };
+      if (eq <= 0) return { error: OrosusI18N.t('web.toast.kvLineInvalid') + line };
       pairs[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
     }
     return { pairs: pairs };
@@ -2202,14 +2216,14 @@ function $(id) { return document.getElementById(id); }
     var timeoutOf = function (spec) {
       if (d.timeout.trim() === '') return null;
       var s = Number(d.timeout);
-      if (!Number.isFinite(s) || s <= 0) return '超时须为正数（秒）';
+      if (!Number.isFinite(s) || s <= 0) return OrosusI18N.t('web.toast.timeoutInvalid');
       spec.timeoutMs = Math.round(s * 1000);
       return null;
     };
     if (d.transport === 'stdio') {
       var parts = splitMcpCmd(d.cmd.trim());
-      if (parts === null) return { error: '命令行引号未闭合' };
-      if (parts.length === 0) return { error: '命令必填' };
+      if (parts === null) return { error: OrosusI18N.t('web.toast.unclosedQuote') };
+      if (parts.length === 0) return { error: OrosusI18N.t('web.toast.commandRequired') };
       var env = parseMcpKv(d.env);
       if (env.error) return env;
       var spec = { command: parts[0] };
@@ -2220,7 +2234,7 @@ function $(id) { return document.getElementById(id); }
       if (te) return { error: te };
       return { spec: spec };
     }
-    if (!/^https?:\/\//i.test(d.cmd.trim())) return { error: 'URL 须以 http:// 或 https:// 开头' };
+    if (!/^https?:\/\//i.test(d.cmd.trim())) return { error: OrosusI18N.t('web.toast.urlScheme') };
     var env2 = parseMcpKv(d.env);
     if (env2.error) return env2;
     var hd = parseMcpKv(d.headers);
@@ -2235,20 +2249,20 @@ function $(id) { return document.getElementById(id); }
   }
   function parseMcpJson(text) {
     var o;
-    try { o = JSON.parse(text); } catch { return { error: 'JSON 解析失败' }; }
-    if (o === null || typeof o !== 'object' || Array.isArray(o)) return { error: 'JSON 须为对象' };
+    try { o = JSON.parse(text); } catch { return { error: OrosusI18N.t('web.toast.jsonParseFail') }; }
+    if (o === null || typeof o !== 'object' || Array.isArray(o)) return { error: OrosusI18N.t('web.toast.jsonMustBeObject') };
     if (o.mcpServers !== undefined) {
-      if (o.mcpServers === null || typeof o.mcpServers !== 'object' || Array.isArray(o.mcpServers)) return { error: 'mcpServers 须为对象' };
+      if (o.mcpServers === null || typeof o.mcpServers !== 'object' || Array.isArray(o.mcpServers)) return { error: OrosusI18N.t('web.toast.mcpServersMustBeObject') };
       o = o.mcpServers;
     }
     var names = Object.keys(o).filter(function (k) { return o[k] !== null && typeof o[k] === 'object'; });
-    if (names.length === 0) return { error: '缺少 server 条目' };
-    if (names.length > 1) return { error: '一次只接受一个 server（收到 ' + names.length + ' 个：' + names.slice(0, 3).join('、') + '）' };
+    if (names.length === 0) return { error: OrosusI18N.t('web.toast.missingServerEntry') };
+    if (names.length > 1) return { error: OrosusI18N.t('web.toast.oneServerOnlyA') + names.length + OrosusI18N.t('web.toast.oneServerOnlyB') + names.slice(0, 3).join('、') + '）' };
     var name = names[0];
     var entry = o[name];
     var hasCmd = typeof entry.command === 'string' && entry.command !== '';
     var hasUrl = typeof entry.url === 'string' && entry.url !== '';
-    if (!hasCmd && !hasUrl) return { error: 'server 条目缺 command 或 url' };
+    if (!hasCmd && !hasUrl) return { error: OrosusI18N.t('web.toast.serverEntryIncomplete') };
     var spec = {};
     if (hasUrl) spec.url = entry.url;
     else {
@@ -2307,54 +2321,54 @@ function $(id) { return document.getElementById(id); }
   /** 导入结果人话（peers-settings memoryImportResultText 的 web 面——覆盖/跳过/镜像段拼装）。 */
   function memResultText(r) {
     var segs = [];
-    if ((r.imported ?? 0) > 0) segs.push('导入 ' + r.imported + ' 条新记忆');
-    if ((r.updated ?? 0) > 0) segs.push('更新覆盖 ' + r.updated + ' 条旧版');
-    if ((r.skipped ?? 0) > 0) segs.push('源内同名跳过 ' + r.skipped + ' 条');
-    if (segs.length === 0) segs.push('没有新记忆（同标题旧版已覆盖）');
-    if (r.mirror) segs.push('镜像 ' + r.mirror.projects + ' 个项目' + (r.mirror.unresolved > 0 ? '（未归类 ' + r.mirror.unresolved + ' 条）' : ''));
-    return segs.join(' · ') + (MEM_IMPORT.polish ? '（含模型整理）' : '');
+    if ((r.imported ?? 0) > 0) segs.push(OrosusI18N.t('web.toast.memImportedNewA') + r.imported + OrosusI18N.t('web.toast.memImportedNewB'));
+    if ((r.updated ?? 0) > 0) segs.push(OrosusI18N.t('web.toast.memOverwriteA') + r.updated + OrosusI18N.t('web.toast.memOverwriteB'));
+    if ((r.skipped ?? 0) > 0) segs.push(OrosusI18N.t('web.toast.memSkippedA') + r.skipped + OrosusI18N.t('web.toast.memSkippedB'));
+    if (segs.length === 0) segs.push(OrosusI18N.t('web.toast.memNothingNew'));
+    if (r.mirror) segs.push(OrosusI18N.t('web.toast.memMirroredA') + r.mirror.projects + OrosusI18N.t('web.toast.memMirroredB') + (r.mirror.unresolved > 0 ? OrosusI18N.t('web.toast.memUncategorizedA') + r.mirror.unresolved + OrosusI18N.t('web.toast.memUncategorizedB') : ''));
+    return segs.join(' · ') + (MEM_IMPORT.polish ? OrosusI18N.t('web.toast.memWithCleanup') : '');
   }
   function memRowHtml(s) {
     var cnt = s.imported
-      ? '<span class="mc-count"><span class="ok">✓ 已导入 ' + s.count + ' 条</span></span>'
-      : '<span class="mc-count">' + s.count + ' 条 · ' + ((s.newCount ?? 0) > 0 ? '<span class="new">新 ' + s.newCount + '</span>' : '<span class="zero">新 0</span>') + '</span>';
+      ? OrosusI18N.t('web.toast.memImportedOkA') + s.count + OrosusI18N.t('web.toast.memImportedOkB')
+      : '<span class="mc-count">' + s.count + OrosusI18N.t('web.settings.memory.rowCount') + ((s.newCount ?? 0) > 0 ? OrosusI18N.t('web.settings.memory.tagNew') + s.newCount + '</span>' : OrosusI18N.t('web.settings.memory.tagNewZero')) + '</span>';
     return '<div class="mc-row' + (s.imported ? ' done' : '') + '" data-agent="' + esc(s.id) + '">' +
-      '<input autocomplete="off" type="checkbox" class="mc-cb" data-cb="' + esc(s.id) + '"' + (s.on ? ' checked' : '') + (s.imported ? ' disabled' : '') + ' aria-label="选择 ' + esc(s.label) + '">' +
+      '<input autocomplete="off" type="checkbox" class="mc-cb" data-cb="' + esc(s.id) + '"' + (s.on ? ' checked' : '') + (s.imported ? ' disabled' : '') + OrosusI18N.t('web.settings.memory.selectAria') + esc(s.label) + '">' +
       '<span class="mc-agent">' + esc(s.label) + '</span>' +
-      (s.global ? '<span class="mc-glob">全局</span>' : '') +
+      (s.global ? OrosusI18N.t('web.settings.memory.tagGlobal') : '') +
       '<span class="mc-path" title="' + esc(s.dir ?? '') + '">' + esc(s.dir ?? '') + '</span>' + cnt +
-      '<button class="mc-one" data-one="' + esc(s.id) + '"' + (s.imported || MEM_IMPORT.busy ? ' disabled' : '') + '>' + (s.imported ? '已导入' : '导入该源') + '</button></div>';
+      '<button class="mc-one" data-one="' + esc(s.id) + '"' + (s.imported || MEM_IMPORT.busy ? ' disabled' : '') + '>' + (s.imported ? OrosusI18N.t('web.settings.memory.srcImported') : OrosusI18N.t('web.settings.memory.importSourceBtn')) + '</button></div>';
   }
   function memCardHtml() {
     var mi = MEM_IMPORT;
     var srcs = mi.sources;
     var scanning = srcs === null;
     var status = scanning
-      ? '<span class="mc-spin"></span> 正在检索 Claude Code / ZCode / qwen / codex / Reasonix…'
-      : '<span class="ok">✓</span> 已检索 5 家常用 agent · 发现 ' + (srcs ?? []).length + ' 个记忆源';
+      ? OrosusI18N.t('web.settings.memory.scanning')
+      : OrosusI18N.t('web.settings.memory.scannedA') + (srcs ?? []).length + OrosusI18N.t('web.settings.memory.scannedB');
     var list = scanning
-      ? '<div class="mc-empty"><span class="mc-spin mc-spin-inline"></span>正在枚举各 agent 的记忆条目…</div>'
-      : ((srcs ?? []).length ? (srcs ?? []).map(memRowHtml).join('') : '<div class="mc-empty">本机没有检测到可导入的记忆</div>');
+      ? OrosusI18N.t('web.settings.memory.enumerating')
+      : ((srcs ?? []).length ? (srcs ?? []).map(memRowHtml).join('') : OrosusI18N.t('web.settings.memory.noneDetected'));
     var sel = (srcs ?? []).filter(function (s) { return s.on && !s.imported; });
     var selTotal = sel.reduce(function (n, s) { return n + s.count; }, 0);
     var selNew = sel.reduce(function (n, s) { return n + (s.newCount ?? 0); }, 0);
     var allOn = (srcs ?? []).length > 0 && (srcs ?? []).every(function (s) { return s.on || s.imported; });
     return '<div class="mem-card">' +
-      '<div class="mc-head"><span class="mc-title">记忆导入</span><span class="mc-status">' + status + '</span>' +
-      '<button class="mc-refresh" data-k="mc-refresh">重新检索</button></div>' +
+      OrosusI18N.t('web.settings.memory.title') + status + '</span>' +
+      OrosusI18N.t('web.settings.memory.rescanBtn') +
       '<div id="mc-list">' + list + '</div>' +
       '<div class="mc-opts">' +
-      '<div class="mc-opt"><span class="mc-opt-label">导入范围</span><span class="mc-seg">' +
-      '<button class="seg' + (mi.scope === 'current' ? ' cur' : '') + '" data-k="mc-scope" data-v="current">仅当前项目</button>' +
-      '<button class="seg' + (mi.scope === 'all' ? ' cur' : '') + '" data-k="mc-scope" data-v="all">全部项目（各归各桶）</button></span></div>' +
-      '<div class="mc-opt"><span class="mc-opt-label">用模型整理</span>' +
-      '<button class="mc-toggle' + (mi.polish ? ' on' : '') + '" data-k="mc-polish" role="switch" aria-checked="' + mi.polish + '" aria-label="用模型整理"></button>' +
-      '<span class="mc-opt-hint">逐条优化内容 + 重写摘要 + 英文短题，消耗 token 一次性；开启后所有导入路径都走整理</span></div>' +
+      OrosusI18N.t('web.settings.memory.scopeLabel') +
+      '<button class="seg' + (mi.scope === 'current' ? ' cur' : '') + OrosusI18N.t('web.settings.memory.scopeCurrentBtn') +
+      '<button class="seg' + (mi.scope === 'all' ? ' cur' : '') + OrosusI18N.t('web.settings.memory.scopeAllBtn') +
+      OrosusI18N.t('web.settings.memory.cleanupLabel') +
+      '<button class="mc-toggle' + (mi.polish ? ' on' : '') + '" data-k="mc-polish" role="switch" aria-checked="' + mi.polish + OrosusI18N.t('web.settings.memory.cleanupAria') +
+      OrosusI18N.t('web.settings.memory.cleanupHint') +
       '</div>' +
-      '<div class="mc-foot"><label class="mc-all"><input autocomplete="off" type="checkbox" class="mc-cb" data-k="mc-all"' + (allOn ? ' checked' : '') + '> 全选</label>' +
-      '<span class="mc-sum">已选 ' + sel.length + ' 个来源 · 共 ' + selTotal + ' 条 · 新 ' + selNew + '</span>' +
-      '<button class="btn primary" data-k="mc-import"' + (sel.length === 0 || mi.busy ? ' disabled' : '') + '>' + (mi.busy ? '导入中…' : '导入选中') + '</button></div>' +
-      '<div class="mc-note">重复导入将覆盖同标题旧版 · 导入本身不耗 token（开启「用模型整理」除外）</div>' +
+      '<div class="mc-foot"><label class="mc-all"><input autocomplete="off" type="checkbox" class="mc-cb" data-k="mc-all"' + (allOn ? ' checked' : '') + OrosusI18N.t('web.settings.memory.selectAll') +
+      OrosusI18N.t('web.settings.memory.sumSelected') + sel.length + OrosusI18N.t('web.settings.memory.sumSources') + selTotal + OrosusI18N.t('web.settings.memory.sumEntries') + selNew + '</span>' +
+      '<button class="btn primary" data-k="mc-import"' + (sel.length === 0 || mi.busy ? ' disabled' : '') + '>' + (mi.busy ? OrosusI18N.t('web.settings.memory.importing') : OrosusI18N.t('web.settings.memory.importSelectedBtn')) + '</button></div>' +
+      OrosusI18N.t('web.settings.memory.note') +
       '</div>';
   }
   /** 卡片直绑（原型 bindMemCard 同构——每次 outerHTML 换装后重绑；双开关仍走 setPageHandler 委派）。 */
@@ -2368,7 +2382,7 @@ function $(id) { return document.getElementById(id); }
       A.fetchJson('/api/settings/memory').then(function (d) {
         MEM_IMPORT.sources = (d.sources ?? []).map(function (s) { return { id: s.id, label: s.label, dir: s.dir, count: s.count, newCount: s.newCount, global: s.global, on: true, imported: false }; });
         refresh();
-      }, function (err) { toast('检索失败：' + err.message); refresh(); });
+      }, function (err) { toast(OrosusI18N.t('web.toast.scanFail') + err.message); refresh(); });
     });
     card.querySelectorAll('.mc-cb[data-cb]').forEach(function (cb) {
       cb.addEventListener('change', function () {
@@ -2393,13 +2407,13 @@ function $(id) { return document.getElementById(id); }
       seg.addEventListener('click', function () {
         MEM_IMPORT.scope = seg.getAttribute('data-v');
         refresh();
-        toast('导入范围：' + (MEM_IMPORT.scope === 'all' ? '全部项目（各归各桶）' : '仅当前项目'));
+        toast(OrosusI18N.t('web.toast.scopeSet') + (MEM_IMPORT.scope === 'all' ? OrosusI18N.t('web.toast.scopeAll') : OrosusI18N.t('web.toast.scopeCurrent')));
       });
     });
     card.querySelector('[data-k="mc-polish"]').addEventListener('click', function () {
       MEM_IMPORT.polish = !MEM_IMPORT.polish;
       refresh();
-      toast('用模型整理：' + (MEM_IMPORT.polish ? '开（导入时逐条整理，一次性消耗 token）' : '关'));
+      toast(OrosusI18N.t('web.toast.cleanupSet') + (MEM_IMPORT.polish ? OrosusI18N.t('web.toast.cleanupOn') : OrosusI18N.t('web.toast.cleanupOff')));
     });
     card.querySelectorAll('[data-one]').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -2432,7 +2446,7 @@ function $(id) { return document.getElementById(id); }
       }, function () { redraw(); });
     }, function (err) {
       mi.busy = false;
-      toast('导入失败：' + err.message);
+      toast(OrosusI18N.t('web.toast.importFail') + err.message);
       redraw();
     });
   }
@@ -2446,22 +2460,22 @@ function $(id) { return document.getElementById(id); }
     }, function (err) { pageLoadError(page, err); });
   }
   function renderMemPage(page, ws, peers) {
-    page.innerHTML = spTitle('记忆', 'MEMORY · tool-peers') +
-      swRowHtml('工作区记忆', '共享笔记 + 索引注入：本会话写、其他会话读；开启后系统提示带记忆索引，有 token 消耗', ws, 'mem', 'ws') +
-      swRowHtml('会话感知', '查同伴 / 文件占用：peers 查询对每个活会话按需做一句话总结，有 token 消耗', peers, 'mem', 'peers') +
+    page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.memory'), 'MEMORY · tool-peers') +
+      swRowHtml(OrosusI18N.t('web.settings.memory.workspaceMemory'), OrosusI18N.t('web.settings.memory.workspaceMemoryHint'), ws, 'mem', 'ws') +
+      swRowHtml(OrosusI18N.t('web.settings.memory.sessionPeers'), OrosusI18N.t('web.settings.memory.sessionPeersHint'), peers, 'mem', 'peers') +
       memCardHtml() +
-      '<div class="sp-note">浏览窗在 更多 ▸ 模块总览（tool-peers 启动器）。</div>';
+      OrosusI18N.t('web.settings.memory.whereNote');
     setPageHandler = function (e) {
       if (e.target.closest('[data-v="ws"]')) {
         A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'workspaceMemory', value: !ws }) }).then(function () {
-          toast('工作区记忆：' + (!ws ? '开' : '关') + '（已写 [tool-peers] workspaceMemory）');
+          toast(OrosusI18N.t('web.toast.workspaceMemorySet') + (!ws ? OrosusI18N.t('web.toast.togOn') : OrosusI18N.t('web.toast.cleanupOff')) + OrosusI18N.t('web.toast.writtenWorkspaceMemory'));
           renderMemPage(page, !ws, peers);
-        }, function (err) { toast('设置失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.settingFail') + err.message); });
       } else if (e.target.closest('[data-v="peers"]')) {
         A.fetchJson('/api/settings/memory', { method: 'POST', body: JSON.stringify({ key: 'sessionPeers', value: !peers }) }).then(function () {
-          toast('会话感知：' + (!peers ? '开' : '关') + '（已写 [tool-peers] sessionPeers）');
+          toast(OrosusI18N.t('web.toast.sessionPeersSet') + (!peers ? OrosusI18N.t('web.toast.togOn') : OrosusI18N.t('web.toast.cleanupOff')) + OrosusI18N.t('web.toast.writtenSessionPeers'));
           renderMemPage(page, ws, !peers);
-        }, function (err) { toast('设置失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.settingFail') + err.message); });
       }
     };
     bindMemCard(page);
@@ -2474,8 +2488,8 @@ function $(id) { return document.getElementById(id); }
     return '<div class="ap-lang' + (cur ? ' cur' : '') + ' ap-fade" data-k="ap-lang" data-v="' + esc(l.tag) + '" role="radio" aria-checked="' + cur + '">' +
       '<span class="ap-radio"></span>' +
       '<span class="al-txt"><span class="al-native">' + esc(l.label) + '</span><span class="al-label">' + esc(LANG_EN[l.tag] ?? l.tag) + '</span></span>' +
-      (pack ? '<span class="al-tag pack">语言包</span>' : '<span class="al-tag">内置</span>') +
-      (cur ? '<span class="al-cur">当前</span>' : '') + '</div>';
+      (pack ? OrosusI18N.t('web.settings.general.tagPack') : OrosusI18N.t('web.settings.general.tagBuiltin')) +
+      (cur ? OrosusI18N.t('web.settings.general.tagCurrent') : '') + '</div>';
   }
   function pageAppearance(page) {
     pageLoading(page);
@@ -2488,13 +2502,13 @@ function $(id) { return document.getElementById(id); }
       var updEnabled = !!(upd && upd.enabled);
       var light = document.body.classList.contains('light');
       var fs = fontScaleIdx;
-      page.innerHTML = spTitle('外观', 'APPEARANCE') +
-        subHeadT('主题', 1) +
+      page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.appearance'), 'APPEARANCE') +
+        subHeadT(OrosusI18N.t('web.settings.appearance.theme'), 1) +
         '<div class="ap-themes">' +
           '<div class="ap-theme cur"><span class="at-prev"><span class="half d"><i></i></span><span class="half l"><i></i></span></span>' +
-          '<span class="at-name">' + esc(guiTheme) + '<span class="at-en">LIANSHAN</span><span class="at-cur">当前主题</span></span>' +
-          '<span class="at-desc">每个主题含深色 / 浅色两套模式——用下方「明暗模式」切换</span></div>' +
-          '<div class="ap-theme ghost">更多主题即将到来</div>' +
+          '<span class="at-name">' + esc(guiTheme) + OrosusI18N.t('web.settings.appearance.currentTheme') +
+          OrosusI18N.t('web.settings.appearance.themeDesc') +
+          OrosusI18N.t('web.settings.appearance.moreComing') +
         '</div>' +
         subHeadT('明暗模式', 1) +
         '<div class="sp-swrow static"><span class="sw-txt"><span class="sw-name">界面明暗</span>' +
