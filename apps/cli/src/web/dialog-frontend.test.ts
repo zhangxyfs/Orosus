@@ -2,6 +2,10 @@
  *  node 直 import（pane.test.ts:14 同模式——纯函数段不碰 DOM）；DOM/接线面的源码锚定归 T8。 */
 import { describe, it, expect } from "vitest";
 import "./assets/dialog.js"; // 副作用挂 globalThis.OrosusDialog（pane.test.ts:14 同模式——纯函数段 node 直测）
+import "./assets/i18n.js"; // web-i18n E2：widgetHtml 空列表占位换键 OrosusI18N.t('web.common.empty')——node 直测侧绑 zh-CN 主表后照断「（空）」
+import { zhCNWeb } from "../locales/zh-CN/web.ts";
+
+(globalThis as { OrosusI18N?: { setMessages(tag: string, m: Record<string, string>): void } }).OrosusI18N!.setMessages("zh-CN", zhCNWeb);
 
 /** 纯函数核的 TS 视图（JS 经典脚本零构建——类型只描消费面）。 */
 interface DialogCore {

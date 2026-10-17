@@ -35,7 +35,7 @@
       case 'list': {
         var open = '<ul class="dw dw-list' + (w.interactive ? ' dw-interactive' : '') + '" data-wid="' + esc(w.id) + '">';
         var items = w.items || [];
-        if (items.length === 0) return open + '<li class="dw-empty">（空）</li></ul>';
+        if (items.length === 0) return open + '<li class="dw-empty">' + OrosusI18N.t('web.common.empty') + '</li></ul>';
         var rows = items.map(function (it, i) {
           var rc = 'dw-row';
           if (w.interactive) {
@@ -304,8 +304,7 @@
       var mapped = mapLayout(frame.layout);
       modalEl.className = 'dlg-modal ' + (mapped ? mapped.cls : 'dlg-center80');
       if (mapped && mapped.css) for (var k in mapped.css) modalEl.style.setProperty(k, mapped.css[k]);
-      modalEl.innerHTML = '<div class="dlg-head"><span class="dlg-title">' + esc(frame.title || '') + '</span>' +
-        '<button class="dlg-x" type="button" aria-label="关闭（Esc）">✕</button></div>' +
+      modalEl.innerHTML = '<div class="dlg-head"><span class="dlg-title">' + esc(frame.title || '') + '</span>' + OrosusI18N.t('web.dialog.closeEsc') +
         '<div class="dlg-body"></div>';
     }
 

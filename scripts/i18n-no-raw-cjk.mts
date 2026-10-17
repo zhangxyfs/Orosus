@@ -66,7 +66,7 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/startup-error.ts", max: 0, note: "T14 清零（启动失败行）" },
 	// web-i18n 批（2026-10-16 spec §4）：web GUI 前端资产入册——E 批逐文件清零
 	{ file: "apps/cli/src/web/assets/api.js", max: 0, note: "E1 清零（断连 overlay 三档文案全族 web.disconnect.*）" },
-	{ file: "apps/cli/src/web/assets/dialog.js", max: 2 /* E2 */ },
+	{ file: "apps/cli/src/web/assets/dialog.js", max: 0, note: "E2 清零（控件面两串 web.dialog.closeEsc / web.common.empty 种子）" },
 	{ file: "apps/cli/src/web/assets/pane.js", max: 40 /* E3 */ },
 	{ file: "apps/cli/src/web/assets/ui.js", max: 73 /* E4 */ },
 	{ file: "apps/cli/src/web/assets/render.js", max: 109 /* E5 */ },

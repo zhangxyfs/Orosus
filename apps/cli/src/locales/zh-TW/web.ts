@@ -27,4 +27,7 @@ export const zhTWWeb: Messages = {
 	"web.disconnect.noTokenHint": "請回到終端機查看 <b>orosus web</b> 列印的網址（含 <b>?token=</b> 參數），用該網址開啟本頁。",
 	"web.disconnect.noTokenNote": "<div class=\"dim disc-hint\">權杖只在首次開啟時隨網址帶入，隨後儲存在本分頁的工作階段儲存區中。</div>",
 	"web.disconnect.exitedBody": "server 處理程序可能已結束（終端被關閉或已 Ctrl+C）。<br>",
+	/* web-i18n E2：dialog.js 控件面（ta-zone-w-1 繁體列——三主側平行落，ja/ko/ru 由 C2 gen 收口） */
+	"web.dialog.closeEsc": "<button class=\"dlg-x\" type=\"button\" aria-label=\"關閉（Esc）\">✕</button></div>",
+	"web.common.empty": "（空）",
 };

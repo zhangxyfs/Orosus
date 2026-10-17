@@ -27,4 +27,7 @@ export const zhCNWeb: Messages = {
 	"web.disconnect.noTokenHint": "请回到终端查看 <b>orosus web</b> 打印的网址（含 <b>?token=</b> 参数），用该网址打开本页。",
 	"web.disconnect.noTokenNote": "<div class=\"dim disc-hint\">令牌只在首次打开时随网址带入，随后保存在本标签页会话存储中。</div>",
 	"web.disconnect.exitedBody": "server 进程可能已退出（终端被关闭或已 Ctrl+C）。<br>",
+	/* web-i18n E2：dialog.js 控件面（ta-zone-w-1 简体列——三主侧平行落，ja/ko/ru 由 C2 gen 收口） */
+	"web.dialog.closeEsc": "<button class=\"dlg-x\" type=\"button\" aria-label=\"关闭（Esc）\">✕</button></div>",
+	"web.common.empty": "（空）",
 };

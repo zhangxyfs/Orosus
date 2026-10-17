@@ -27,4 +27,7 @@ export const enUSWeb: Messages = {
 	"web.disconnect.noTokenHint": "Return to the terminal, take the URL printed by <b>orosus web</b> (it includes the <b>?token=</b> parameter) and open this page with it.",
 	"web.disconnect.noTokenNote": "<div class=\"dim disc-hint\">The token rides in the URL only on first open; afterwards it is kept in this tab's session storage.</div>",
 	"web.disconnect.exitedBody": "The server process may have exited (terminal closed or Ctrl+C pressed).<br>",
+	/* web-i18n E2: dialog.js widget surface (ta-zone-w-1 English column — three main sides in parallel; ja/ko/ru land via C2 gen) */
+	"web.dialog.closeEsc": "<button class=\"dlg-x\" type=\"button\" aria-label=\"Close (Esc)\">✕</button></div>",
+	"web.common.empty": "(empty)",
 };
