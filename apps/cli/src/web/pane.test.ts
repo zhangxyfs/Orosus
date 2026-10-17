@@ -169,19 +169,20 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
   it("W3① onBodyRender('agent') 注册：.ag-wrap + 可选 .ag-approval（⚠ 工具名 + 原因 + data-aga 拒/批准一次 → 既有 POST approval）+ .ag-stream 回放（renderTranscript 复用）+ 运行中尾行 spinner", () => {
     expect(W3.length, "app.js 应含 W3 接线区").toBeGreaterThan(0);
     expect(W3).toContain("Pane.onBodyRender('agent', function (data, bodyEl)");
-    expect(W3).toContain('class="ag-wrap"');
+    expect(W3).toContain("web.spawn.loadingHtml"); // web-i18n E8：首载骨架随值入表（bindBuiltinLocale 直读 zh-CN 表）
+    expect(zhCNWeb["web.spawn.loadingHtml"]).toContain('class="ag-wrap"');
     expect(W3).toContain("bar.className = 'ag-approval'");
     expect(W3).toContain("aga-text");
-    expect(W3).toContain('data-aga="no"');
-    expect(W3).toContain('data-aga="yes"');
-    expect(W3).toContain("批准一次");
-    expect(W3).toContain("等待批准——");
+    expect(zhCNWeb["web.spawn.approvalBtnsHtml"]).toContain('data-aga="no"'); // web-i18n E8：按钮面随值入表
+    expect(zhCNWeb["web.spawn.approvalBtnsHtml"]).toContain('data-aga="yes"');
+    expect(W3).toContain("web.spawn.approvalBtnsHtml"); // web-i18n E8：换键后断言键（zh 值「批准一次」在 zh-CN 表）
+    expect(W3).toContain("web.spawn.awaitSeg");
     expect(W3).toContain("/approval"); // 既有端点 POST …/subagents/:id/approval——服务端零改动
     expect(W3).toContain("JSON.stringify({ allow:");
     expect(W3).toContain("renderTranscript"); // 回放复用 OrosusRender.renderTranscript
     expect(W3).toContain("sp.className = 'line dim agent-spin'");
     expect(W3).toContain("spinSvg('', 12)");
-    expect(W3).toContain("正在生成…");
+    expect(W3).toContain("web.spawn.generatingSeg"); // web-i18n E8：换键后断言键（zh 值「正在生成…」在 zh-CN 表）
   });
 
   it("W3② 回放轮询 GC7：2s addPoll 既有口径驱动 + 活跃门（isConnected 失效自摘——仅活跃 tab 轮询）+ 事件数门零重渲 + 贴底跟随", () => {
@@ -208,7 +209,7 @@ describe("web W3（问题 2）：子代理选项卡接线面（app.js 源码锚�
   it("W3⑤ 主流 open-or-switch + 状态点联动：openAgentTab 名册查证（不在册 toast 兑底）+ onAgentOpen 接线 + updateSpawnGroups 刷点 + 轮询门扩至已开 tab + plusSource 注入", () => {
     const zone = W3.slice(W3.indexOf("function openAgentTab"), W3.indexOf("Pane.onBodyRender('agent'"));
     expect(zone).toContain("rosterRowOf(id)");
-    expect(zone).toContain("不在册");
+    expect(zone).toContain("web.spawn.notFoundSuffix"); // web-i18n E8：换键后断言键（zh 值「 不在册（可能已清理）」在 zh-CN 表）
     expect(zone).toContain("addAgentTab");
     expect(APP).toMatch(/onAgentOpen:\s*function\s*\(id\)\s*\{\s*openAgentTab\(id\);\s*\}/); // sg-row 点击 → open-or-switch
     expect(APP).toContain("taskRoster = rows;"); // updateSpawnGroups 拍内更新名册缓存
@@ -451,7 +452,7 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
     expect(W6).toContain("Pane.btwTabSpec(btwSeq)");
     expect(W6).toContain("Pane.addTab(spec)");
     const ps = APP.slice(APP.indexOf("Pane.plusSource = function"), APP.indexOf("拉名册并刷 tab 状态点"));
-    expect(ps).toContain("label: '侧问'"); // 走查修③：＋菜单单入口「✦ 侧问」（仿 ZCode 侧聊入口；旧名册罗列废弃）
+    expect(ps).toContain("label: OrosusI18N.t('web.btw.plusLabel')"); // 走查修③：＋菜单单入口「✦ 侧问」（仿 ZCode 侧聊入口；旧名册罗列废弃）；web-i18n E8 换键后断言键形
     expect(ps).toContain("✦ ");
     expect(ps).toContain("openBtwTab()");
   });
@@ -461,7 +462,7 @@ describe("web W6（问题 2）：btw 选项卡接线面（app.js/ui.js 源码锚
     expect(W6).toContain("tab: tab.id, q: q,"); // 走查修⑨：POST 体扩 model/effort 覆盖键（条件展开——缺省不带）
     expect(W6).toContain("{ q: q, a: null, phase: 'answering' }");
     expect(W6).toContain("rounds.pop()"); // 尾部在飞轮先弹——server per-tab 单飞 abort 旧在飞（旧问不入 rounds），对齐帧 round 对位
-    expect(W6).toContain("发送失败："); // POST 失败即标 error 相位
+    expect(W6).toContain("web.toast.sendFail"); // POST 失败即标 error 相位；web-i18n E8 换键后断言键（zh 值「发送失败：」在 zh-CN 表）
   });
 
   it("W6⑥ SSE btw 帧按 tab 分发：未开 tab 的 answering/answer 帧自动开 tab（对齐旧 btwOpen 自动占窗）+ 仅活跃 tab 重渲（GC7）", () => {

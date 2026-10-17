@@ -70,7 +70,7 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/web/assets/pane.js", max: 0, note: "E3 清零（分栏/选项卡/btw 面板全族 web.pane.* + shell/composer 复用键六枚）" },
 	{ file: "apps/cli/src/web/assets/ui.js", max: 0, note: "E4 清零（菜单/悬浮卡/审批面全族 web.ui.* + shell/common 复用键四枚）" },
 	{ file: "apps/cli/src/web/assets/render.js", max: 0, note: "E5 清零（会话流渲染/面板页签全族 web.render.* + 复用键）" },
-	{ file: "apps/cli/src/web/assets/app.js", max: 295 /* E7 片二清毕（w-3 设置族 240 字面量入键）；余 = 片三（E8）＋外邦统一草稿化 13＋连山品牌不翻 2＋未命名比较 E8 档 1 */ },
+	{ file: "apps/cli/src/web/assets/app.js", max: 13 /* E8 片三清毕（w-4 230 键落表＋复用 18）；工作树余 = 外邦统一草稿化 13（:79/:425/:89×2/:233/:462×2/:933×2/:3037×2/resetPanelDraft ×2——其销旧抽新集成后收 0）；commit 态余 12 = w-2 退役族串（sessionNote/markNew/forked/createdIn——外邦替串后消）；连山品牌 2 走 i18n:brand 行级豁免；未命名比较 1 已改对 t() 源串（E7 sec/isProj 同型） */ },
 	{ file: "apps/cli/src/web/assets/archived-view.js", max: 0 /* 注释占位入册：零字面量基线（AST 只扫字面量，注释天然不扫）——未来防护 */ },
 ];
 

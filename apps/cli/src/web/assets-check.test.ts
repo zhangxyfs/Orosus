@@ -188,7 +188,7 @@ describe("web T15：前端骨架静态资产", () => {
     expect(js.includes("todoFloat.hidden = !(railed || split)"), "悬浮条两源可见性").toBe(true);
     expect(js.includes("mainTodoCount() === 0"), "主清单空则不显示").toBe(true);
     /* 顶栏入口接线：已开则收（v2 4731-4734——W3 后未开分支改接 cmdTasks） */
-    expect(js.includes("toast('分栏已收回')"), "收起 toast").toBe(true);
+    expect(js.includes("toast(OrosusI18N.t('web.pane.collapsedToast'))"), "收起 toast").toBe(true); /* web-i18n E8：换键后断言键形（zh 值「分栏已收回」在 zh-CN 表） */
   });
 
   it("⑧ W2 选项卡机构：#pane-tabs 内部 DOM + 加载序 + .pt-*/.ptd-* CSS 直裁 + pane.js 纯函数/DOM 壳/注入缝契约（v2 1244-1250/4390-4708）", () => {
@@ -538,8 +538,8 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app).toContain("Pane.btwLiveUpdate(frame)");
     /* ② 闪烁根除：answering/thinking 活跃帧不再整渲（增量优先，整渲只留相位切换/终态兜底） */
     expect(app).toContain("(frame.phase === 'answering' || frame.phase === 'thinking') && Pane.btwLiveUpdate(frame)) return;");
-    /* ③ ＋菜单单入口：只留「✦ 侧问」类型行 */
-    expect(app).toContain("label: '侧问', prefix: '✦ '");
+    /* ③ ＋菜单单入口：只留「✦ 侧问」类型行（web-i18n E8 换键后断言键形——zh 值「侧问」在 zh-CN 表） */
+    expect(app).toContain("label: OrosusI18N.t('web.btw.plusLabel'), prefix: '✦ '");
     expect(app).not.toContain("子代理 · ' + (tk.label");
     /* 思考块样式（CSP 类面） */
     const css = read("style.css");
