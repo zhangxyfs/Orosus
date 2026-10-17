@@ -14,4 +14,17 @@ export const enUSWeb: Messages = {
 	"web.settings.langAlready": "Already this language",
 	"web.settings.langNoSession": "No current session — language switching needs a session to land on (create or select one first)",
 	"web.toast.switchFail": "Switch failed: ",
+	/* web-i18n E1: api.js disconnect surface (ta-zone-w-1 English column — three main sides in parallel; ja/ko/ru land via C2 gen) */
+	"web.disconnect.retry": "Reconnect",
+	"web.disconnect.title": "Disconnected from the Orosus server",
+	"web.disconnect.retrying": "Retrying…",
+	"web.disconnect.closedTitle": "Server closed normally",
+	"web.disconnect.closedBody": "The server process exited normally (shutdown signal received).<br>",
+	"web.disconnect.closedHint": "Return to the terminal, run <b>orosus web</b> again (or <b>/web</b> in the TUI), then click Retry or refresh this page.",
+	"web.disconnect.portHint": "<div class=\"dim disc-hint\">If retries keep failing, the server may have switched to a new port — open the URL most recently printed in the terminal.</div>",
+	"web.disconnect.noTokenTitle": "This page is missing the access token",
+	"web.disconnect.noTokenBody": "This page carries no access token.<br>",
+	"web.disconnect.noTokenHint": "Return to the terminal, take the URL printed by <b>orosus web</b> (it includes the <b>?token=</b> parameter) and open this page with it.",
+	"web.disconnect.noTokenNote": "<div class=\"dim disc-hint\">The token rides in the URL only on first open; afterwards it is kept in this tab's session storage.</div>",
+	"web.disconnect.exitedBody": "The server process may have exited (terminal closed or Ctrl+C pressed).<br>",
 };

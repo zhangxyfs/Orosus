@@ -105,7 +105,7 @@
   }
 
   /* ═══════════ 断连弹窗（G15）——两档：lost（重连耗尽，可重试）/ shutdown（已正常关闭，停重连） ═══════════ */
-  var DISC_LOST_MS_TITLE = '与 Orosus server 的连接已断开';
+  var DISC_LOST_MS_KEY = 'web.disconnect.title'; /* web-i18n E1：断连面入键（api.js 先于 i18n.js 载入——存键常量，值在 showDisconnect 调用期 t() 取） */
   var overlayDisc, discTitle, discBody, discRetry;
   function ensureDiscDom() {
     if (overlayDisc !== undefined) return;
@@ -114,7 +114,7 @@
     discBody = document.getElementById('disc-body');
     discRetry = document.getElementById('disc-retry');
     if (discRetry) discRetry.addEventListener('click', function () {
-      discRetry.textContent = '正在重试…';
+      discRetry.textContent = OrosusI18N.t('web.disconnect.retrying');
       if (discRetryFn) discRetryFn();
       /* 兜底探测：立即打一次 /api/health（token 沿用——同端口重启即可成功，G15 恢复链） */
       fetchJson('/api/health').then(function () {
@@ -135,26 +135,26 @@
     if (onRetry) discRetryFn = onRetry;
     if (variant === 'shutdown') {
       discRetryFn = null; /* 停止自动重连——重试钮转为手动恢复口（health 活即整页重启动序） */
-      discTitle.textContent = 'server 已正常关闭';
-      discBody.innerHTML = 'server 进程已正常退出（收到关闭信号）。<br>' +
-        '请回到终端重新运行 <b>orosus web</b>（或 TUI 中 <b>/web</b>），然后点击重试或刷新本页。' +
-        '<div class="dim disc-hint">若重试持续失败，server 可能已换用新端口——请以终端最新打印的网址打开。</div>';
+      discTitle.textContent = OrosusI18N.t('web.disconnect.closedTitle');
+      discBody.innerHTML = OrosusI18N.t('web.disconnect.closedBody') +
+        OrosusI18N.t('web.disconnect.closedHint') +
+        OrosusI18N.t('web.disconnect.portHint');
       discRetry.hidden = false;
-      discRetry.textContent = '重试连接';
+      discRetry.textContent = OrosusI18N.t('web.disconnect.retry');
     } else if (variant === 'notoken') {
       discRetryFn = null;
-      discTitle.textContent = '本页缺少访问令牌';
-      discBody.innerHTML = '本页未携带访问令牌（token）。<br>' +
-        '请回到终端查看 <b>orosus web</b> 打印的网址（含 <b>?token=</b> 参数），用该网址打开本页。' +
-        '<div class="dim disc-hint">令牌只在首次打开时随网址带入，随后保存在本标签页会话存储中。</div>';
+      discTitle.textContent = OrosusI18N.t('web.disconnect.noTokenTitle');
+      discBody.innerHTML = OrosusI18N.t('web.disconnect.noTokenBody') +
+        OrosusI18N.t('web.disconnect.noTokenHint') +
+        OrosusI18N.t('web.disconnect.noTokenNote');
       discRetry.hidden = true;
     } else {
-      discTitle.textContent = DISC_LOST_MS_TITLE;
-      discBody.innerHTML = 'server 进程可能已退出（终端被关闭或已 Ctrl+C）。<br>' +
-        '请回到终端重新运行 <b>orosus web</b>（或 TUI 中 <b>/web</b>），然后点击重试或刷新本页。' +
-        '<div class="dim disc-hint">若重试持续失败，server 可能已换用新端口——请以终端最新打印的网址打开。</div>';
+      discTitle.textContent = OrosusI18N.t(DISC_LOST_MS_KEY);
+      discBody.innerHTML = OrosusI18N.t('web.disconnect.exitedBody') +
+        OrosusI18N.t('web.disconnect.closedHint') +
+        OrosusI18N.t('web.disconnect.portHint');
       discRetry.hidden = false;
-      discRetry.textContent = '重试连接';
+      discRetry.textContent = OrosusI18N.t('web.disconnect.retry');
     }
     overlayDisc.hidden = false;
   }

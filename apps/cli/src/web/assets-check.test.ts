@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startWebServer } from "./server.ts";
+import { mainTables } from "../locales/index.ts";
 
 const ASSETS_DIR = fileURLToPath(new URL("./assets/", import.meta.url));
 const read = (name: string): string => readFileSync(join(ASSETS_DIR, name), "utf8");
@@ -43,11 +44,15 @@ describe("web T15：前端骨架静态资产", () => {
     for (const id of ["overlay-disc", "disc-title", "disc-body", "disc-retry"]) {
       expect(html.includes(`id="${id}"`), `#${id} 应存在`).toBe(true);
     }
-    // 两档文案锚点在 api.js（断开 / 已正常关闭）
+    // 两档文案锚点在 api.js（web-i18n E1 换键：断开 / 已正常关闭 / 重试连接 三串入 web.disconnect.*——键常量在 api.js，文案走主表 zh-CN 侧直读）
     const api = read("api.js");
-    expect(api.includes("与 Orosus server 的连接已断开"), "断开型标题文案").toBe(true);
-    expect(api.includes("已正常关闭"), "shutdown 变体文案").toBe(true);
-    expect(api.includes("重试连接"), "重试按钮文案").toBe(true);
+    for (const key of ["web.disconnect.title", "web.disconnect.closedTitle", "web.disconnect.retry"]) {
+      expect(api.includes(`'${key}'`), `${key} 键应在 api.js`).toBe(true);
+    }
+    const zh = mainTables()["zh-CN"]!;
+    expect(zh["web.disconnect.title"], "断开型标题文案").toBe("与 Orosus server 的连接已断开");
+    expect(zh["web.disconnect.closedTitle"], "shutdown 变体文案").toBe("server 已正常关闭");
+    expect(zh["web.disconnect.retry"], "重试按钮文案").toBe("重试连接");
   });
 
   it("④ 引用路径全可达：index.html 引到的本地文件都在 assets 树或 vendor 解析域内", () => {
