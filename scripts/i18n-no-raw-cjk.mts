@@ -64,13 +64,22 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/tui/streamview.ts", max: 0, note: "T13 清零（行模式思考前缀）" },
 	{ file: "apps/cli/src/banner.ts", max: 0, note: "T14 清零（零配置/降级/激活三态）" },
 	{ file: "apps/cli/src/startup-error.ts", max: 0, note: "T14 清零（启动失败行）" },
+	// web-i18n 批（2026-10-16 spec §4）：web GUI 前端资产入册——E 批逐文件清零
+	{ file: "apps/cli/src/web/assets/api.js", max: 15 /* E1 实测入册→清零 */ },
+	{ file: "apps/cli/src/web/assets/dialog.js", max: 2 /* E2 */ },
+	{ file: "apps/cli/src/web/assets/pane.js", max: 40 /* E3 */ },
+	{ file: "apps/cli/src/web/assets/ui.js", max: 73 /* E4 */ },
+	{ file: "apps/cli/src/web/assets/render.js", max: 109 /* E5 */ },
+	{ file: "apps/cli/src/web/assets/app.js", max: 842 /* E6-E8 三片清零 */ },
+	{ file: "apps/cli/src/web/assets/archived-view.js", max: 0 /* 注释占位入册：零字面量基线（AST 只扫字面量，注释天然不扫）——未来防护 */ },
 ];
 
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/; // CJK 统一表意 + 部首 + CJK 符号/全角（不含假名谚文——界面串以汉字为主，误报宁可少）
 
 /** 扫单文件源码：返回含 CJK 的字面量（file:line + 文本）。可导入形态供测试。 */
 export function scanSource(file: string, source: string): { line: number; text: string }[] {
-	const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ES2023, true, ts.ScriptKind.TS);
+	// ScriptKind 按扩展名：.js 前端资产按 JS 解析（字符串字面量/模板段同口径——visit 逻辑零改动）
+	const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ES2023, true, file.endsWith(".js") ? ts.ScriptKind.JS : ts.ScriptKind.TS);
 	const hits: { line: number; text: string }[] = [];
 	const visit = (node: ts.Node): void => {
 		const isDiag = (pos: number): boolean => {
