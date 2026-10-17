@@ -136,11 +136,11 @@ describe("web T15：前端骨架静态资产", () => {
     expect(iSplitter).toBeGreaterThan(iMain);
     expect(iPaneBody).toBeGreaterThan(iSplitter);
     expect(iRside).toBeGreaterThan(iPaneBody);
-    /* 顶栏入口：#btn-split 在 .ab-acts 末尾（btn-theme 之后），文案 ◧ 分栏（v2 1032） */
+    /* 顶栏入口：#btn-split 在 .ab-acts 末尾（btn-theme 之后），文案 ◧ 分栏（v2 1032——web-i18n E9 换 data-i18n 载体形） */
     expect(html.indexOf('id="btn-split"')).toBeGreaterThan(html.indexOf('id="btn-theme"'));
-    expect(html.includes(">◧ 分栏</button>"), "btn-split 文案").toBe(true);
-    /* 主悬浮条归属徽标钩子：#tf-pill 内首元素 .tf-owner、文案「主」（v2 1053） */
-    expect(/id="tf-pill"[^>]*><span class="tf-owner">主<\/span>/.test(html), ".tf-owner 归属徽标「主」").toBe(true);
+    expect(html.includes('data-i18n="web.shell.split"'), "btn-split 水合键").toBe(true);
+    /* 主悬浮条归属徽标钩子：#tf-pill 内首元素 .tf-owner、文案「主」（v2 1053——E9 水合载体形） */
+    expect(/id="tf-pill"[^>]*><span class="tf-owner" data-i18n="web\.shell\.ownerBadge">主<\/span>/.test(html), ".tf-owner 归属徽标「主」").toBe(true);
     /* GC2 棘轮：v2 评审件零移植 */
     expect(html.includes("data-spec"), "data-spec 评审件不移植（GC2）").toBe(false);
     expect(html.includes("btn-specs"), "「标注」钮评审件不移植（GC2）").toBe(false);
@@ -197,10 +197,10 @@ describe("web T15：前端骨架静态资产", () => {
     for (const id of ["pt-chev", "pt-list", "pt-add", "pt-menu", "pt-drop"]) {
       expect(html.includes(`id="${id}"`), `#${id} 应存在`).toBe(true);
     }
-    expect(html.includes('title="查看全部选项卡（搜索 / 切换 / 关闭）"'), "⌄ title 文案（v2 1245）").toBe(true);
-    expect(html.includes('title="新建选项卡（类型可扩展）"'), "＋ title 文案（v2 1247）").toBe(true);
-    /* 空态先置于 #pt-list 内（renderTabs 空分支同款输出） */
-    expect(/id="pt-list"><span class="pt-empty">暂无打开的选项卡<\/span>/.test(html), "空态文案先置于 #pt-list").toBe(true);
+    expect(html.includes('data-i18n-title="web.shell.tabsAll"'), "⌄ 水合键（v2 1245——web-i18n E9 载体形）").toBe(true);
+    expect(html.includes('data-i18n-title="web.shell.tabNew"'), "＋ 水合键（v2 1247——同上）").toBe(true);
+    /* 空态先置于 #pt-list 内（renderTabs 空分支同款输出——E9 载体形） */
+    expect(/id="pt-list"><span class="pt-empty" data-i18n="web\.shell\.tabsEmpty">暂无打开的选项卡<\/span>/.test(html), "空态文案先置于 #pt-list").toBe(true);
     /* 加载序：pane.js 在 ui.js 前（brief Files——纯函数段先行，ui/app 消费） */
     const iPane = html.indexOf("/assets/pane.js");
     expect(iPane, "pane.js 应被引用").toBeGreaterThan(-1);
@@ -687,6 +687,22 @@ describe("web T15：前端骨架静态资产", () => {
     expect(app.includes("web.settings.langSwitched")).toBe(true);
     expect(app.includes("页面自身不切语言")).toBe(false); // F8 旧边界注释性文案退役
     expect(app.includes("当前已是该语言")).toBe(false); // 同上——E 批换键前的先行断言（本任务随 handler 改造一并换）
+  });
+
+  it("⑳ web-i18n E9：index.html 裸中文清零——CJK 仅剩 #i18n-fail 白名单（data-i18n 载体豁免形）", () => {
+    const html = read("index.html");
+    /* Controller adjudication ⑥（2026-10-17，supersedes 计划 ⑳ 字面块——deviation recorded）：
+     * M4 样板要求可译文本以中文回退内容留在 data-i18n 载体内（boot 取表掩护首绘；降级显源语而非空白），
+     * 故扫描必须豁免载体。载体 = 开标签携带任一 data-i18n* 属性（data-i18n / -title / -ph）的元素——
+     * 其开标签（连同属性值）与其后首个 < 前的文本一并出扫；M4 专属文案 span 结构保证可译文本皆居此类元素。
+     * 载体子元素不在豁免面（豁免不沿 DOM 下传）。断言自检口径：在载体外新增裸中文文本节点必须失败。 */
+    const stripped = html
+      .replace(/<!--[\s\S]*?-->/g, "") // ① 注释豁免（HTML 内注记与兜底块说明不扫）
+      .replace(/<[^>]*data-i18n[^>]*>[^<]*/g, ""); // ② data-i18n 载体豁免（裁决 ⑥ 修订形；不带尾 < 锚——载体紧邻时前载体不得吞掉后载体的开 <，tf-pill→tf-owner 即此形）
+    const whitelist = ["无法加载界面文案", "重试 · Retry"]; // #i18n-fail 协议级兜底（spec §3——唯一白名单）
+    const cjk = stripped.match(/[一-龥][^<>"]*/g) ?? [];
+    const offenders = cjk.filter((s) => !whitelist.some((w) => w.includes(s.trim()) || s.trim().includes(w)));
+    expect(offenders, `残留裸中文：${offenders.join(" | ")}`).toEqual([]);
   });
 });
 

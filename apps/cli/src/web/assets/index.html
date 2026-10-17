@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Orosus（连山）· Web</title>
+  <!-- web-i18n E9：title 截段位（ta-zone-w-1 行 7——键值只含尾段「连山）· Web」，「Orosus（」前缀留代码）。
+       title 元素容不下 span，水合三态无 aria/前缀形——此处挂 data-i18n-title 载体（⑳ 豁免 + 键登记），
+       运行期整题拼接 document.title = 'Orosus（' + t('web.shell.title') 属 app.js 面（E6/E8 跟进——括号随拉丁排版半角亦需代码侧感知）。 -->
+  <title data-i18n-title="web.shell.title">Orosus（连山）· Web</title>
   <link rel="stylesheet" href="/assets/style.css" />
 </head>
 <body>
@@ -15,15 +18,15 @@
     <div class="appbar">
       <img class="ab-logo" src="/assets/logo-icon-color.webp" alt="" />
       <span class="ab-brand">orosus</span>
-      <button class="ab-title" id="session-title" title="点击聚焦左栏当前会话行"></button>
+      <button class="ab-title" id="session-title" data-i18n-title="web.shell.focusSessionRow"></button>
       <span class="ab-addr gutter-hide" id="ab-addr"></span>
       <span class="ab-acts">
-        <button class="btn-update" id="btn-update" title="新版本可用——查看更新" hidden>● 更新</button>
+        <button class="btn-update" id="btn-update" data-i18n-title="web.shell.updateAvailable" hidden><span class="bi" aria-hidden="true">● </span><span data-i18n="web.shell.update">更新</span></button>
         <button class="btn" id="btn-settings" data-i18n-title="web.shell.settings"><span class="bi" aria-hidden="true">⚙ </span><span data-i18n="web.shell.settings">设置</span></button>
         <button class="btn" id="btn-help" data-i18n-title="web.shell.helpTitle"><span class="bi" aria-hidden="true">? </span><span data-i18n="web.shell.help">帮助</span></button>
         <button class="btn" id="btn-more" data-i18n-title="web.shell.moreTitle"><span class="bi" aria-hidden="true">⋮ </span><span data-i18n="web.shell.more">更多</span></button>
-        <button class="btn" id="btn-theme" title="切换浅色 / 深色主题">☀ 浅色</button>
-        <button class="btn" id="btn-split" title="详情分栏——子代理 / 侧问在右侧分栏并行查看（点击打开 / 关闭）">◧ 分栏</button>
+        <button class="btn" id="btn-theme" data-i18n-title="web.shell.themeTitle"><span class="bi" aria-hidden="true">☀ </span><span data-i18n="web.shell.themeLight">浅色</span></button>
+        <button class="btn" id="btn-split" data-i18n-title="web.shell.splitTitle"><span class="bi" aria-hidden="true">◧ </span><span data-i18n="web.shell.split">分栏</span></button>
       </span>
     </div>
 
@@ -32,10 +35,10 @@
       <aside class="lside" id="lside">
         <div class="ls-rail-head">
           <img class="ls-rail-logo" src="/assets/logo-icon-color.webp" alt="Orosus" />
-          <button class="ls-collapse" id="ls-collapse-rail" title="展开会话栏">⇥</button>
+          <button class="ls-collapse" id="ls-collapse-rail" data-i18n-title="web.shell.expandSidebar">⇥</button>
         </div>
         <div class="ls-top">
-          <button class="btn primary ls-new" id="btn-new" title="开始新会话（跟随当前会话所在项目）">＋ 新会话</button>
+          <button class="btn primary ls-new" id="btn-new" data-i18n-title="web.shell.newSessionTitle" data-i18n="web.shell.newSession">＋ 新会话</button>
         </div>
         <div class="ls-body" id="ls-body"></div>
       </aside>
@@ -44,9 +47,9 @@
       <div class="main">
         <!-- 悬浮任务清单（右栏收缩或分栏时出现，点击药丸展开；.tf-owner 归属徽标「主」与子代理悬浮条区分） -->
         <div class="todo-float" id="todo-float" hidden>
-          <button class="tf-pill" id="tf-pill" title="展开任务清单"><span class="tf-owner">主</span><span class="ok">✓</span> <span class="tf-count" id="tf-count">0/0</span> 任务 <span class="tf-open">⇲</span></button>
+          <button class="tf-pill" id="tf-pill" data-i18n-title="web.shell.expandTasks"><span class="tf-owner" data-i18n="web.shell.ownerBadge">主</span><span class="ok">✓</span> <span class="tf-count" id="tf-count">0/0</span> <span data-i18n="web.shell.tasksWord">任务</span> <span class="tf-open">⇲</span></button>
           <div class="tf-card" id="tf-card" hidden>
-            <div class="tf-head"><span>任务清单</span><span id="tf-count2">0/0</span></div>
+            <div class="tf-head"><span data-i18n="web.shell.taskList">任务清单</span><span id="tf-count2">0/0</span></div>
             <div class="tf-list" id="tf-list"></div>
           </div>
         </div>
@@ -56,23 +59,23 @@
               <div class="banner">
                 <img src="/assets/logo-icon-color.webp" alt="Orosus logo" />
                 <div class="banner-meta">
-                  <div><span class="ver" id="welcome-ver">v?</span><span class="sep">—</span><span class="dim">模块化 AI Agent Harness · Web</span></div>
-                  <div class="dim">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。如层峦绵亘，灵脉贯通。</div>
+                  <div><span class="ver" id="welcome-ver">v?</span><span class="sep">—</span><span class="dim" data-i18n="web.welcome.subtitle">模块化 AI Agent Harness · Web</span></div>
+                  <div class="dim" data-i18n="web.welcome.motto">玄墨为基，青玉点睛，石青、暖金、赭石各载其义。如层峦绵亘，灵脉贯通。</div>
                 </div>
               </div>
-              <div class="line banner-hint">/ 命令菜单（含技能区） · @ 文件引用 · Enter 发送 · Shift + Enter 换行</div>
-              <div class="line banner-hint">点击展开思考与 diff · 面板页签点击切卡 · 顶栏按钮与芯片全部可点</div>
+              <div class="line banner-hint">/ <span data-i18n="web.welcome.hintKeys">命令菜单（含技能区） · @ 文件引用 · Enter 发送 · Shift + Enter 换行</span></div>
+              <div class="line banner-hint" data-i18n="web.welcome.hintClick">点击展开思考与 diff · 面板页签点击切卡 · 顶栏按钮与芯片全部可点</div>
             </div>
 
             <div class="gap"></div>
 
-            <div class="pg-more" id="pg-more" hidden>↑ 加载更早消息</div>
+            <div class="pg-more" id="pg-more" hidden><span class="bi" aria-hidden="true">↑ </span><span data-i18n="web.shell.loadEarlier">加载更早消息</span></div>
 
             <div class="gap"></div>
-            <div class="line dim" id="stream-tail">正在连接…</div>
+            <div class="line dim" id="stream-tail" data-i18n="web.shell.connecting">正在连接…</div>
           </div>
           <!-- 回到底部浮钮（离开底部 >160px 出现——点击回底并恢复滚动跟随） -->
-          <button type="button" class="to-bottom" id="to-bottom" hidden title="回到底部（恢复跟随新消息）">↓ 回到底部</button>
+          <button type="button" class="to-bottom" id="to-bottom" hidden data-i18n-title="web.shell.toBottomTitle"><span class="bi" aria-hidden="true">↓ </span><span data-i18n="web.shell.toBottom">回到底部</span></button>
         </div>
 
         <!-- composer 区 -->
@@ -83,22 +86,22 @@
             <div class="popup" id="popup" hidden></div>
             <div class="inputbox">
               <!-- 文件夹切换：输入框正上方 6px、与框左缘对齐，仅空会话显示 -->
-              <button type="button" class="cwd-chip" id="cwd-chip" hidden title="切换工作目录"><span class="cwd-ic">📁</span> <span id="cwd-name"></span> ▾</button>
+              <button type="button" class="cwd-chip" id="cwd-chip" hidden data-i18n-title="web.shell.switchCwd"><span class="cwd-ic">📁</span> <span id="cwd-name"></span> ▾</button>
               <!-- 贴图预览条（在框内、textarea 上方） -->
               <div class="attachbar" id="attachbar" hidden></div>
               <div class="ib-main">
                 <span class="pchar" aria-hidden="true">❯</span>
-                <textarea autocomplete="off" id="prompt-input" rows="2" placeholder="向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…" aria-label="指令输入框"></textarea>
+                <textarea autocomplete="off" id="prompt-input" rows="2" data-i18n-ph="web.shell.inputPlaceholder" placeholder="向 Orosus 提问，@ 添加上下文，/ 选择命令，Ctrl + V 粘贴图片（最多 6 张）…" aria-label="指令输入框"></textarea>
               </div>
               <div class="ib-bar">
                 <span class="cb-left">
-                  <button type="button" class="cb-chip" id="btn-file" title="引用文件（= 输入 @）">＋ 文件</button>
-                  <button type="button" class="mode-chip" id="mode-chip" title="权限模式（点击打开档位列表）"></button>
+                  <button type="button" class="cb-chip" id="btn-file" data-i18n-title="web.shell.attachTitle"><span class="bi" aria-hidden="true">＋ </span><span data-i18n="web.shell.attachBtn">文件</span></button>
+                  <button type="button" class="mode-chip" id="mode-chip" data-i18n-title="web.shell.modeTitle"></button>
                 </span>
                 <span class="cb-right">
-                  <button type="button" class="cb-chip" id="model-chip" title="切换模型"></button>
-                  <button type="button" class="cb-chip" id="effort-chip" title="思考投入档位"></button>
-                  <button type="submit" class="sendbtn idle" id="send-btn" title="发送（Enter）" aria-label="发送">↑</button>
+                  <button type="button" class="cb-chip" id="model-chip" data-i18n-title="web.shell.modelTitle"></button>
+                  <button type="button" class="cb-chip" id="effort-chip" data-i18n-title="web.shell.effortTitle"></button>
+                  <button type="submit" class="sendbtn idle" id="send-btn" data-i18n-title="web.composer.send.title" title="发送（Enter）" aria-label="发送">↑</button>
                 </span>
               </div>
             </div>
@@ -107,13 +110,15 @@
       </div>
 
       <!-- ═══ 详情分栏（问题 2 目标形态）：分隔条可拖拽（默认 50/50）+ 选项卡条（打开并存、显示互斥） ═══ -->
-      <div class="splitter" id="splitter" hidden title="拖拽调整左右比例"></div>
-      <section class="pane" id="pane" hidden aria-label="详情分栏面板">
+      <div class="splitter" id="splitter" hidden data-i18n-title="web.shell.splitterTitle"></div>
+      <!-- web-i18n E9：aria-label 专位无水合态（三态=data-i18n 文本/-title/-ph）——挂 data-i18n-title 载体（⑳ 豁免+悬停即译），
+           aria 属性自身的随语言改写需 app.js 增 aria 态（E6-E8/C2 跟进——静态源值即回退）。 -->
+      <section class="pane" id="pane" hidden aria-label="详情分栏面板" data-i18n-title="web.shell.paneLabel">
         <!-- 选项卡条内部（v2 1244-1250 直裁）：左端 ⌄ 全部选项卡下拉 / tab 列表（溢出裁切不滚动）/ 右端 ＋ 新建；#pt-menu/#pt-drop 两浮层 -->
         <div class="pane-tabs" id="pane-tabs">
-          <button class="pt-chev" id="pt-chev" title="查看全部选项卡（搜索 / 切换 / 关闭）"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>
-          <div class="pt-list" id="pt-list"><span class="pt-empty">暂无打开的选项卡</span></div>
-          <button class="pt-add" id="pt-add" title="新建选项卡（类型可扩展）">＋</button>
+          <button class="pt-chev" id="pt-chev" data-i18n-title="web.shell.tabsAll"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>
+          <div class="pt-list" id="pt-list"><span class="pt-empty" data-i18n="web.shell.tabsEmpty">暂无打开的选项卡</span></div>
+          <button class="pt-add" id="pt-add" data-i18n-title="web.shell.tabNew">＋</button>
           <div class="pt-menu" id="pt-menu" hidden></div>
           <div class="pt-drop" id="pt-drop" hidden></div>
         </div>
@@ -122,82 +127,82 @@
 
       <!-- ═══ right sidebar ═══ -->
       <aside class="side" id="rside">
-        <button class="rs-expand-btn" id="rs-expand" title="展开状态栏">⇤</button>
+        <button class="rs-expand-btn" id="rs-expand" data-i18n-title="web.shell.expandStatus">⇤</button>
         <!-- 右上：页签卡（状态 / 网络·MCP / 协同——与 TUI 右上卡组同三内建页） -->
-        <section class="panel panel-state" aria-label="状态面板">
+        <section class="panel panel-state" aria-label="状态面板" data-i18n-title="web.shell.statusPanel">
           <div class="ptabs">
-            <button class="ptab sel" data-tab="0">运行状态</button>
-            <button class="ptab" data-tab="1">网络 · MCP</button>
-            <button class="ptab" data-tab="2">会话协同</button>
+            <button class="ptab sel" data-tab="0" data-i18n="web.shell.tabStatus">运行状态</button>
+            <button class="ptab" data-tab="1" data-i18n="web.shell.tabNet">网络 · MCP</button>
+            <button class="ptab" data-tab="2" data-i18n="web.shell.tabPeers">会话协同</button>
             <span class="ptab-en" id="state-en">1/3</span>
-            <button class="rs-collapse-btn" id="rs-collapse" title="收起状态栏">⇥</button>
+            <button class="rs-collapse-btn" id="rs-collapse" data-i18n-title="web.shell.collapseStatus">⇥</button>
           </div>
 
           <!-- 运行状态页（kv/上下文定高不滚动；模块列表分页——用户走查口径） -->
           <div class="page paged" id="state-page-1">
             <dl class="kv">
-              <dt>模型</dt><dd><span class="clickable" id="kv-model" title="点击切换模型（/model）">—</span></dd>
-              <dt>会话</dt><dd><span class="clickable" id="kv-session" title="点击聚焦左栏当前会话行">—</span></dd>
-              <dt>工作目录</dt><dd class="info" id="kv-cwd">—</dd>
-              <dt>运行时间</dt><dd id="kv-elapsed">—</dd>
+              <dt data-i18n="web.shell.kvModel">模型</dt><dd><span class="clickable" id="kv-model" data-i18n-title="web.shell.kvModelClick">—</span></dd>
+              <dt data-i18n="web.shell.kvSession">会话</dt><dd><span class="clickable" id="kv-session" data-i18n-title="web.shell.focusSessionRow">—</span></dd>
+              <dt data-i18n="web.shell.kvCwd">工作目录</dt><dd class="info" id="kv-cwd">—</dd>
+              <dt data-i18n="web.shell.kvUptime">运行时间</dt><dd id="kv-elapsed">—</dd>
               <dt>Tokens</dt><dd id="kv-tokens">—</dd>
             </dl>
 
             <hr class="side-sep" />
 
             <div class="ctxbar-row">
-              <span class="lbl">上下文</span>
-              <div class="bar" role="img" aria-label="上下文占用"><i id="ctx-bar-fill"></i></div>
+              <span class="lbl" data-i18n="web.shell.kvContext">上下文</span>
+              <div class="bar" role="img" aria-label="上下文占用" data-i18n-title="web.shell.ctxUsage"><i id="ctx-bar-fill"></i></div>
               <span class="pct" id="ctx-pct">—</span>
             </div>
 
             <hr class="side-sep" />
 
-            <div class="subhead"><span>模块挂载</span><span class="en">MODULES</span></div>
+            <div class="subhead"><span data-i18n="web.shell.kvModules">模块挂载</span><span class="en">MODULES</span></div>
 
             <div class="plist" id="mod-list"></div>
-            <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页">›</button></div>
+            <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-title="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-title="web.shell.pageNext">›</button></div>
           </div>
 
           <!-- 网络 · MCP 页（连接列表分页——与模块挂载统一） -->
           <div class="page paged" id="state-page-2" hidden>
             <dl class="kv">
-              <dt>代理</dt><dd id="kv-proxy">—</dd>
-              <dt>模型服务</dt><dd id="kv-modelsvc">—</dd>
+              <dt data-i18n="web.shell.kvProxy">代理</dt><dd id="kv-proxy">—</dd>
+              <dt data-i18n="web.shell.kvModelSvc">模型服务</dt><dd id="kv-modelsvc">—</dd>
             </dl>
 
             <hr class="side-sep" />
 
-            <div class="subhead"><span>网络 / MCP 连接</span><span class="en">SERVERS</span></div>
+            <div class="subhead"><span data-i18n="web.shell.kvConns">网络 / MCP 连接</span><span class="en">SERVERS</span></div>
 
             <div class="plist" id="conn-list"></div>
-            <div class="pager" id="conn-pager" hidden><button data-pg="prev" aria-label="上一页">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页">›</button></div>
+            <div class="pager" id="conn-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-title="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-title="web.shell.pageNext">›</button></div>
 
-            <div class="panel-hint">失败可点击重连 · 未确认点击审阅指纹 · 管理走 /settings → MCP</div>
+            <div class="panel-hint" data-i18n="web.shell.netHint">失败可点击重连 · 未确认点击审阅指纹 · 管理走 /settings → MCP</div>
           </div>
 
           <!-- 会话协同页 -->
           <div class="page" id="state-page-3" hidden>
             <div id="peer-list"></div>
-            <div class="panel-hint">与 /ps 同序义：等审批 → 等输入 → 正在跑 → 报错 → 闲着</div>
+            <div class="panel-hint" data-i18n="web.shell.peersHint">与 /ps 同序义：等审批 → 等输入 → 正在跑 → 报错 → 闲着</div>
           </div>
         </section>
 
         <!-- 右下：任务清单（滚动，只读，Agent 实时同步） -->
-        <section class="panel panel-todo" aria-label="任务清单">
+        <section class="panel panel-todo" aria-label="任务清单" data-i18n-title="web.shell.taskList">
           <div class="ptabs">
-            <span class="ptab sel static">任务清单</span>
+            <span class="ptab sel static" data-i18n="web.shell.taskList">任务清单</span>
             <span class="ptab-en">TASKS</span>
           </div>
 
           <div class="todo-progress">
-            <div class="bar" role="img" aria-label="任务进度"><i id="todo-bar"></i></div>
+            <div class="bar" role="img" aria-label="任务进度" data-i18n-title="web.shell.taskProgress"><i id="todo-bar"></i></div>
             <span class="count" id="todo-count">0/0</span>
           </div>
 
           <div id="todo-list"></div>
 
-          <div class="panel-hint">由 Agent 实时同步 · 只读</div>
+          <div class="panel-hint" data-i18n="web.shell.taskSync">由 Agent 实时同步 · 只读</div>
         </section>
       </aside>
     </div>
@@ -226,7 +231,7 @@
     <div class="modal modal-sm" role="alertdialog" aria-modal="true">
       <div class="pu-head"><span class="pu-title" id="disc-title"></span></div>
       <div class="pu-body"><div class="pu-text" id="disc-body"></div></div>
-      <div class="pu-actions right"><button class="btn primary" id="disc-retry">重试连接</button></div>
+      <div class="pu-actions right"><button class="btn primary" id="disc-retry" data-i18n="web.disconnect.retry">重试连接</button></div>
     </div>
   </div>
 
