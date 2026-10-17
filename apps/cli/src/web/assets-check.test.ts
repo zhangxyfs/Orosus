@@ -727,7 +727,7 @@ describe("web dialog T8：控件窗静态资产与接线面（设计 12.3 静态
   it("⑲ 接线面源锚：ui.js 有 dialog 分派分支与 frame.title/layout 消费；app.js 有 unmount 与 setViewModal/wire 注入", () => {
     const uj = read("ui.js");
     expect(uj).toContain("OrosusDialog.onFrame(frame)");
-    expect(uj).toContain("frame.title || '查看'");
+    expect(uj).toContain("frame.title || OrosusI18N.t('web.common.view')"); /* E4 换键：'查看' → t()（键值即简体原文） */
     expect(uj).toContain("frame.layout");
     expect(uj).toContain("setViewModal");
     const aj = read("app.js");

@@ -68,7 +68,7 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/web/assets/api.js", max: 0, note: "E1 清零（断连 overlay 三档文案全族 web.disconnect.*）" },
 	{ file: "apps/cli/src/web/assets/dialog.js", max: 0, note: "E2 清零（控件面两串 web.dialog.closeEsc / web.common.empty 种子）" },
 	{ file: "apps/cli/src/web/assets/pane.js", max: 0, note: "E3 清零（分栏/选项卡/btw 面板全族 web.pane.* + shell/composer 复用键六枚）" },
-	{ file: "apps/cli/src/web/assets/ui.js", max: 73 /* E4 */ },
+	{ file: "apps/cli/src/web/assets/ui.js", max: 0, note: "E4 清零（菜单/悬浮卡/审批面全族 web.ui.* + shell/common 复用键四枚）" },
 	{ file: "apps/cli/src/web/assets/render.js", max: 109 /* E5 */ },
 	{ file: "apps/cli/src/web/assets/app.js", max: 842 /* E6-E8 三片清零 */ },
 	{ file: "apps/cli/src/web/assets/archived-view.js", max: 0 /* 注释占位入册：零字面量基线（AST 只扫字面量，注释天然不扫）——未来防护 */ },

@@ -117,7 +117,7 @@
     if (pu.syncSwitch) pu.syncSwitch(); /* sel 变更联动（chooseSide 横选候选随行） */
     var html = '<div class="pu-head"><span class="pu-title">' + pu.title + '</span>' +
       (pu.en ? '<span class="pu-en">' + pu.en + '</span>' : '<span class="pu-en"></span>') +
-      '<span class="pu-close" data-close title="关闭（Esc）">✕</span></div>';
+      '<span class="pu-close" data-close title="' + OrosusI18N.t('web.ui.pop.closeEsc') + '">✕</span></div>';
     html += '<div class="pu-body" id="pu-body">';
     if (pu.kind === 'view') {
       html += pu.bodyHtml;
@@ -207,7 +207,7 @@
       en: opts.en ?? '',
       rows: opts.items.map(function (it) { return typeof it === 'string' ? { html: itemRowHtml(it) } : it; }),
       sel: opts.sel ?? 0,
-      foot: opts.foot ?? '点击选定 · Esc 取消',
+      foot: opts.foot ?? OrosusI18N.t('web.ui.pick.footDefault'),
       longOf: opts.longOf,
       switchRow: opts.switchRow,
       onPick: function (i) {
@@ -228,7 +228,7 @@
       en: opts.en ?? '',
       bodyHtml: opts.bodyHtml,
       actionsHtml: opts.actionsHtml,
-      foot: opts.foot ?? '滚动查看 · Esc 关闭',
+      foot: opts.foot ?? OrosusI18N.t('web.ui.view.footDefault'),
       onAction: opts.onAction,
     };
     renderPopup();
@@ -387,28 +387,28 @@
       if (cmdRows.length === 0 && skillRows.length === 0) { closePopup(); return; } /* 零命中关窗（拍板） */
       var rows = cmdRows.map(function (c) {
         var alias = c.aliases && c.aliases.length ? ' <span class="dim">（' + c.aliases.join(', ') + '）</span>' : '';
-        return { html: '<span class="pu-caret">❯</span><span class="pi-name">' + esc(c.name) + alias + (c.module ? ' <span class="dim">· 模块</span>' : '') + '</span><span class="pi-desc">' + esc(c.desc ?? '') + '</span>', data: c };
+        return { html: '<span class="pu-caret">❯</span><span class="pi-name">' + esc(c.name) + alias + (c.module ? ' <span class="dim">' + OrosusI18N.t('web.ui.menu.modTag') + '</span>' : '') + '</span><span class="pi-desc">' + esc(c.desc ?? '') + '</span>', data: c };
       });
       if (skillRows.length > 0) {
-        rows.push({ html: '<span class="dim">── 技能</span><span class="sep-line"></span>', cls: 'sep', sep: true });
+        rows.push({ html: '<span class="dim">' + OrosusI18N.t('web.ui.menu.sepSkills') + '</span><span class="sep-line"></span>', cls: 'sep', sep: true });
         skillRows.forEach(function (s) {
           rows.push({ html: '<span class="pu-caret">❯</span><span class="pi-name">skill : ' + esc(s.name) + '</span><span class="pi-desc">' + esc(s.desc ?? '') + '</span>', cls: 'skill-row', data: s, skill: true });
         });
       }
       pu = {
         kind: 'menu',
-        title: '斜杠命令',
-        en: cmdRows.length + ' 个命令' + (skillRows.length ? ' · ' + skillRows.length + ' 个技能' : ''),
+        title: OrosusI18N.t('web.ui.menu.title'),
+        en: OrosusI18N.t('web.ui.menu.nCmds', { n: cmdRows.length }) + (skillRows.length ? ' · ' + OrosusI18N.t('web.ui.menu.nSkills', { n: skillRows.length }) : ''),
         rows: rows,
         sel: 0,
         longOf: function (row) {
-          if (row.sep) return '<div class="ln"></div><div class="ln"></div><div class="ln dim">↑↓ 选择 · Enter 执行 · Esc 关闭</div>';
+          if (row.sep) return '<div class="ln"></div><div class="ln"></div><div class="ln dim">' + OrosusI18N.t('web.ui.menu.keysFoot') + '</div>';
           if (row.skill) {
             return '<div class="ln dim">' + esc(row.data.desc ?? '') + '</div><div class="ln"></div>' +
-              '<div class="ln dim">' + (row.data.usage ? '适用：' + esc(row.data.usage) : '') + '</div>';
+              '<div class="ln dim">' + (row.data.usage ? OrosusI18N.t('web.ui.menu.usage') + esc(row.data.usage) : '') + '</div>';
           }
           return '<div class="ln dim">' + esc(row.data.long ?? row.data.desc ?? '') + '</div>' +
-            '<div class="ln dim">↑↓ 选择 · Enter 执行 · Esc 关闭</div>';
+            '<div class="ln dim">' + OrosusI18N.t('web.ui.menu.keysFoot') + '</div>';
         },
         onPick: function (i) {
           var row = pu.rows[i];
@@ -467,16 +467,16 @@
             data: e2,
           };
         });
-        if (rows.length === 0) rows = [{ html: '<span class="dim">（' + (entries.length === 0 ? '目录不存在——检查路径' : '无匹配文件') + '）</span>', cls: 'sep', sep: true }];
+        if (rows.length === 0) rows = [{ html: '<span class="dim">（' + (entries.length === 0 ? OrosusI18N.t('web.ui.at.noDir') : OrosusI18N.t('web.ui.at.noMatch')) + '）</span>', cls: 'sep', sep: true }];
         pu = {
           kind: 'at',
           anchor: anchor, /* 走查修⑫：锚定 + 宽随锚（侧问 composer）——缺省 dock 主输入框（旧形态） */
           anchorWide: !!anchor,
-          title: dir === '' ? '@ 文件' : '@ ' + dir + '/',
-          en: dirs + ' 个目录 · ' + (entries.length - dirs) + ' 个文件',
+          title: dir === '' ? OrosusI18N.t('web.ui.at.titleRoot') : '@ ' + dir + '/',
+          en: OrosusI18N.t('web.ui.at.counts', { dirs: dirs, files: entries.length - dirs }),
           rows: rows,
           sel: 0,
-          foot: '点击插入路径 · 目录点击进下层 · Esc 返回',
+          foot: OrosusI18N.t('web.ui.at.foot'),
           onPick: function (i) {
             var e2 = rows[i].data;
             if (!e2) return;
@@ -527,15 +527,15 @@
       if ((lay === 'full' || lay === 'center80') && viewModalOpener) {
         /* 大窗壳：单向消息窗——宿主走 app.js openModal modalStack（空白登记 #8），关闭纯本地不发 dialog-event；
          * frame.back（2026-10-16 用户口令「详情关闭返回列表」）随壳透传——app.js 关窗时回跑该命令 */
-        viewModalOpener({ title: frame.title || '查看', bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>', back: frame.back });
+        viewModalOpener({ title: frame.title || OrosusI18N.t('web.common.view'), bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>', back: frame.back });
         return;
       }
       pu = {
         kind: 'view',
-        title: frame.title || '查看',
+        title: frame.title || OrosusI18N.t('web.common.view'),
         en: 'VIEW',
         bodyHtml: '<div class="pu-text md">' + (frame.markdown ? mdHtml(frame.text) : esc(frame.text)) + '</div>',
-        foot: '滚动查看（单向消息，无需应答） · Esc 关闭',
+        foot: OrosusI18N.t('web.ui.view.footText'),
       };
       renderPopup();
       return;
@@ -550,14 +550,14 @@
     if (kind === 'confirm') {
       pu = {
         kind: 'pick',
-        title: esc(frame.title ?? '确认'),
+        title: esc(frame.title ?? OrosusI18N.t('web.common.confirm')),
         en: 'CONFIRM',
         rows: [
-          { html: itemRowHtml('确认') },
-          { html: itemRowHtml('取消') },
+          { html: itemRowHtml(OrosusI18N.t('web.common.confirm')) },
+          { html: itemRowHtml(OrosusI18N.t('web.common.cancel')) },
         ],
         sel: 0,
-        foot: '点击选定 · Esc = 取消',
+        foot: OrosusI18N.t('web.ui.confirm.foot'),
         onClose: cancelOnClose,
         onPick: function (i) {
           if (pu) pu.answered = true;
@@ -579,7 +579,7 @@
     }
     /* choose——含 approval 弹窗（title 多行 = 工具/规则/访问/原因四行，items 原样展示、点击回传原文） */
     var lines = String(frame.title ?? '').split('\n');
-    var titleHtml = esc(lines[0] ?? '选择');
+    var titleHtml = esc(lines[0] ?? OrosusI18N.t('web.ui.choose.title'));
     var headExtra = '';
     for (var i = 1; i < lines.length; i++) {
       headExtra += '<div class="appr-line">' + esc(lines[i]) + '</div>';
@@ -591,7 +591,7 @@
       en: lines.length > 1 ? 'APPROVAL' : 'CHOOSE',
       rows: items.map(function (it) { return { html: itemRowHtml(String(it)) }; }),
       sel: 0,
-      foot: '点击选定 · Esc = 拒绝并关闭',
+      foot: OrosusI18N.t('web.ui.choose.foot'),
       onClose: cancelOnClose,
       onPick: function (idx) {
         if (pu) pu.answered = true;
@@ -616,13 +616,13 @@
     var secret = frame.kind === 'askSecret';
     pu = {
       kind: 'view',
-      title: esc(frame.title ?? '输入'),
+      title: esc(frame.title ?? OrosusI18N.t('web.ui.ask.title')),
       en: secret ? 'SECRET' : 'ASK',
       bodyHtml:
-        '<div class="ask-row"><input class="fi" id="pu-ask-input" type="' + (secret ? 'password' : 'text') + '" autocomplete="off" placeholder="' + (secret ? '输入（掩码）…' : '输入…') + '" />' +
-        '<button type="button" class="btn primary" data-act="send">提交</button></div>',
+        '<div class="ask-row"><input class="fi" id="pu-ask-input" type="' + (secret ? 'password' : 'text') + '" autocomplete="off" placeholder="' + (secret ? OrosusI18N.t('web.ui.ask.phSecret') : OrosusI18N.t('web.ui.ask.ph')) + '" />' +
+        '<button type="button" class="btn primary" data-act="send">' + OrosusI18N.t('web.ui.ask.submit') + '</button></div>',
       actionsHtml: '',
-      foot: 'Enter 提交 · Esc 取消',
+      foot: OrosusI18N.t('web.ui.ask.foot'),
       onClose: cancelOnClose,
       onAction: function (act) {
         if (act !== 'send') return;
@@ -653,7 +653,7 @@
     var items = Array.isArray(frame.items) ? frame.items : [];
     var picked = new Set();
     var bodyHtml = (function () {
-      var html = '<div class="pu-text"><span class="dim">可多选（点击行切换勾选）——Enter / 提交按钮发送所选</span></div><div class="cx-list">';
+      var html = '<div class="pu-text"><span class="dim">' + OrosusI18N.t('web.ui.chooseEx.hint') + '</span></div><div class="cx-list">';
       items.forEach(function (it, i) {
         html += '<div class="pu-item cx-item' + (picked.has(i) ? ' sel' : '') + '" data-cx="' + i + '">' + itemRowHtml(String(it), { check: picked.has(i) }) + '</div>';
       });
@@ -662,11 +662,11 @@
     })();
     pu = {
       kind: 'view',
-      title: esc(frame.title ?? '多选'),
+      title: esc(frame.title ?? OrosusI18N.t('web.ui.chooseEx.title')),
       en: 'CHOOSE-EX',
       bodyHtml: bodyHtml,
-      actionsHtml: '<span class="spacer"></span><button type="button" class="btn" data-act="cancel">取消</button><button type="button" class="btn primary" data-act="send">提交所选（0）</button>',
-      foot: '点击行切换勾选 · Enter 提交 · Esc 取消',
+      actionsHtml: '<span class="spacer"></span><button type="button" class="btn" data-act="cancel">' + OrosusI18N.t('web.common.cancel') + '</button><button type="button" class="btn primary" data-act="send">' + OrosusI18N.t('web.ui.chooseEx.submitN', { n: 0 }) + '</button>',
+      foot: OrosusI18N.t('web.ui.chooseEx.foot'),
       onClose: cancelOnClose,
       onAction: function (act) {
         if (act === 'cancel') {
@@ -696,7 +696,7 @@
         var chk = row.querySelector('.pu-check');
         if (chk) chk.textContent = picked.has(i) ? '✓' : '';
         var btn = popup.querySelector('[data-act="send"]');
-        if (btn) btn.textContent = '提交所选（' + picked.size + '）';
+        if (btn) btn.textContent = OrosusI18N.t('web.ui.chooseEx.submitN', { n: picked.size });
       });
     }
   }
@@ -707,12 +707,12 @@
     var sidesOf = function (item) { return Array.isArray(valueMap[item]) ? valueMap[item] : []; };
     pu = {
       kind: 'pick',
-      title: esc(frame.title ?? '选择'),
+      title: esc(frame.title ?? OrosusI18N.t('web.ui.choose.title')),
       en: 'CHOOSE-SIDE',
       rows: items.map(function (it) { return { html: itemRowHtml(String(it)) }; }),
       sel: 0,
-      switchRow: { label: frame.sideLabel ?? '档位', values: sidesOf(items[0]), idx: 0 },
-      foot: '点击选定（横选档位随行提交）· Esc 取消',
+      switchRow: { label: frame.sideLabel ?? OrosusI18N.t('web.ui.chooseSide.switch'), values: sidesOf(items[0]), idx: 0 },
+      foot: OrosusI18N.t('web.ui.chooseSide.foot'),
       onClose: cancelOnClose,
       syncSwitch: function () {
         var it = items[pu.sel];
@@ -751,10 +751,12 @@
     'ask-risky': '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 2.8v5.1c0 4.3-2.9 7.3-7 9.1-4.1-1.8-7-4.8-7-9.1V5.8z"/><path d="M9.3 12.1l1.9 1.9 3.5-4.2"/></svg>',
     'never': '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2.5 4.5 14H11l-1 7.5L18.5 10H12z"/></svg>',
   };
+  /* E4 i18n：label/desc 走 getter 惰性取表（ui.js 求值先于 app.js boot setMessages——快照会定格空表键名；
+   *  getter 每次读随当前语言走，导出形不变——app.js:528 m.label / openPermMenu esc(m.desc) 消费照旧） */
   var MODES = [
-    { key: 'ask-always', label: '每次都询问', desc: '每次工具调用都确认' },
-    { key: 'ask-risky', label: '需要时候询问', desc: '仅危险操作确认' },
-    { key: 'never', label: '从不询问', desc: '全自动，有问题模型自行判断' },
+    { key: 'ask-always', get label() { return OrosusI18N.t('web.ui.perm.askAlways'); }, get desc() { return OrosusI18N.t('web.ui.perm.askAlwaysDesc'); } },
+    { key: 'ask-risky', get label() { return OrosusI18N.t('web.ui.perm.askRisky'); }, get desc() { return OrosusI18N.t('web.ui.perm.askRiskyDesc'); } },
+    { key: 'never', get label() { return OrosusI18N.t('web.ui.perm.never'); }, get desc() { return OrosusI18N.t('web.ui.perm.neverDesc'); } },
   ];
 
   function fetchModels() {
@@ -774,7 +776,7 @@
     opts = opts || {};
     focusBack = anchorInputOf(anchor); /* 走查修⑫：归还位 = 芯片所属 composer（侧问芯片 → 侧问框） */
     fetchModels().then(function (data) {
-      if (!data) { H.toast('拉取模型清单失败'); return; }
+      if (!data) { H.toast(OrosusI18N.t('web.ui.model.fetchFail')); return; }
       var providers = data.providers ?? [];
       var ownCur = opts.current !== undefined; /* 自带勾标目标（侧问覆盖语义）——缺省走会话当前 */
       var current = String(ownCur ? opts.current : (data.current ?? ''));
@@ -818,9 +820,9 @@
           .then(function () {
             closePopup();
             focusInput();
-            H.toast('模型已切换 → ' + p.key + '/' + m.name + '（下一轮生效）');
+            H.toast(OrosusI18N.t('web.ui.model.switched', { model: p.key + '/' + m.name }));
             H.onStatusChanged();
-          }, function (err) { H.toast('切换失败：' + err.message); });
+          }, function (err) { H.toast(OrosusI18N.t('web.ui.model.switchFail', { err: err.message })); });
       };
       var pickRow = function (i) {
         if (opts.follow && i === 0) { doSwitch(null, null); return; }
@@ -831,10 +833,10 @@
         kind: 'modelmenu',
         mini: 'right',
         anchor: anchor,
-        title: '模型',
+        title: OrosusI18N.t('web.ui.model.title'),
         en: 'MODEL',
         rows: [],
-        foot: '←→ 提供商 · ↑↓ 模型 · Enter 切换 · Esc 关闭',
+        foot: OrosusI18N.t('web.ui.model.foot'),
         customBody: function () {
           var left = providers.map(function (p, i) {
             return '<div class="mm2-p' + (i === mm.pIdx ? ' sel' : '') + '" data-mmi="p:' + i + '">' +
@@ -842,7 +844,7 @@
               '<span class="mm2-pname">' + esc(p.displayName) + '</span>' +
               '<span class="mm2-go">›</span></div>';
           }).join('');
-          left += '<div class="mm2-p mm2-manage" data-mmi="manage"><span class="mm2-check"></span><span class="mm2-pname">管理模型</span><span class="mm2-go">›</span></div>';
+          left += '<div class="mm2-p mm2-manage" data-mmi="manage"><span class="mm2-check"></span><span class="mm2-pname">' + OrosusI18N.t('web.ui.model.manage') + '</span><span class="mm2-go">›</span></div>';
           var ms = modelsOf();
           var right = '';
           if (opts.follow) {
@@ -851,7 +853,7 @@
               '<span class="mm2-check">' + (opts.follow.checked ? '✓' : '') + '</span></div>';
           }
           right += ms.length === 0
-            ? '<div class="mm2-empty">（该提供商未配置端点——设置 → 提供商与模型 添加）</div>'
+            ? '<div class="mm2-empty">' + OrosusI18N.t('web.ui.model.noEndpoints') + '</div>'
             : ms.map(function (m, i) {
               return '<div class="mm2-m' + (i + followOff === mm.mIdx ? ' sel' : '') + '" data-mmi="m:' + i + '">' +
                 '<span class="mm2-mname">' + esc(m.name) + '</span>' +
@@ -862,7 +864,7 @@
         onCustomClick: function (mmi) {
           if (mmi === 'manage') {
             if (H && typeof H.onManageModels === 'function') H.onManageModels();
-            else H.toast('模型管理在 设置 → 提供商与模型');
+            else H.toast(OrosusI18N.t('web.ui.model.manageHint'));
             return;
           }
           if (mmi === 'follow') { pickRow(0); return; }
@@ -901,7 +903,7 @@
         },
       };
       renderPopup();
-    }, function () { H.toast('拉取模型清单失败'); });
+    }, function () { H.toast(OrosusI18N.t('web.ui.model.fetchFail')); });
   }
   /** 思考档位菜单（D10：仅正常思考档位列表——无 auto 项；菜单只列模型目录声明的档位）。 */
   function openEffortMenu(anchor) {
@@ -912,30 +914,30 @@
       var entry = plat ? (plat.models ?? []).find(function (m) { return m.name === modelName; }) : null;
       var efforts = (entry && entry.efforts) || [];
       if (efforts.length === 0) {
-        H.toast('模型 ' + (modelName || '（未配置）') + ' 无思考档位信息（目录未声明 effort 档）——可直敲 /effort <档位> 手动指定');
+        H.toast(OrosusI18N.t('web.ui.effort.noInfo', { model: modelName || OrosusI18N.t('web.ui.effort.unconfigured') }));
         return;
       }
       var curEffort = H.getEffort();
       openPick({
         mini: 'right',
         anchor: anchor,
-        title: '思考投入',
+        title: OrosusI18N.t('web.ui.effort.title'),
         en: 'EFFORT',
         items: efforts.map(function (v) {
           return { html: '<span class="pu-caret">❯</span><span class="pu-check">' + (v === curEffort ? '✓' : '') + '</span><span class="pi-name">' + esc(v) + '</span>', data: v };
         }),
-        foot: '点击选定（档位来自模型目录）',
+        foot: OrosusI18N.t('web.ui.effort.foot'),
         onPick: function (i) {
           var v = efforts[i];
           if (v === curEffort) return;
           A.fetchJson('/api/sessions/' + encodeURIComponent(H.getSid()) + '/effort', { method: 'POST', body: JSON.stringify({ level: v }) })
             .then(function () {
-              H.toast('思考档位已设为 ' + v + '（已写入 config）');
+              H.toast(OrosusI18N.t('web.ui.effort.set', { effort: v }));
               H.onStatusChanged();
-            }, function (err) { H.toast('设置失败：' + err.message); });
+            }, function (err) { H.toast(OrosusI18N.t('web.ui.effort.setFail', { err: err.message })); });
         },
       });
-    }, function () { H.toast('拉取模型清单失败'); });
+    }, function () { H.toast(OrosusI18N.t('web.ui.model.fetchFail')); });
   }
   /** 权限三档小弹窗（D8：芯片上方 mini 锚定。走查修⑫：两行式行——图标 + 档位名 + 短描述，
    *  ✓ 右置；底部详释区退役，never 档警示黄随旧行式一并简化）。 */
@@ -944,7 +946,7 @@
       mini: 'left',
       anchor: anchor,
       popClass: 'perm-pop',
-      title: '权限模式',
+      title: OrosusI18N.t('web.ui.perm.title'),
       en: 'PERMISSION',
       items: MODES.map(function (m) {
         return {
@@ -957,14 +959,14 @@
         };
       }),
       sel: Math.max(0, MODES.findIndex(function (m) { return m.key === current; })),
-      foot: '点击选定，立即生效并写入配置 · Esc 关闭',
+      foot: OrosusI18N.t('web.ui.perm.foot'),
       onPick: function (i) {
         var m = MODES[i];
         A.fetchJson('/api/sessions/' + encodeURIComponent(H.getSid()) + '/permission', { method: 'POST', body: JSON.stringify({ mode: m.key }) })
           .then(function () {
-            H.toast('权限模式 → ' + m.label + '（已写入配置）');
+            H.toast(OrosusI18N.t('web.ui.perm.set', { mode: m.label }));
             H.onStatusChanged();
-          }, function (err) { H.toast('设置失败：' + err.message); });
+          }, function (err) { H.toast(OrosusI18N.t('web.ui.effort.setFail', { err: err.message })); });
       },
     });
   }
@@ -980,21 +982,21 @@
   /* ═══════════ cwd 芯片菜单（D5：仅空会话；候选 = 项目池 + 「浏览文件夹…」直达任意目录〔走查八轮〕） ═══════════ */
   function openCwdMenu(anchor, projects, currentCwd) {
     var rows = [{
-      html: '<span class="pu-caret">❯</span><span class="pu-check"></span><span class="pi-name">📂 浏览文件夹…</span><span class="pi-desc">任意目录——下钻 / 上级回退 / 路径直达</span>',
+      html: '<span class="pu-caret">❯</span><span class="pu-check"></span><span class="pi-name">' + OrosusI18N.t('web.ui.cwd.browse') + '</span><span class="pi-desc">' + OrosusI18N.t('web.ui.cwd.browseDesc') + '</span>',
       browse: true,
     }].concat(projects.map(function (p) {
       return {
-        html: '<span class="pu-caret">❯</span><span class="pu-check">' + (p.cwd === currentCwd ? '✓' : '') + '</span><span class="pi-name">' + esc(p.name) + '</span><span class="pi-desc">' + esc(p.cwd) + (p.hidden ? '（已移除——选择即找回）' : '') + '</span>',
+        html: '<span class="pu-caret">❯</span><span class="pu-check">' + (p.cwd === currentCwd ? '✓' : '') + '</span><span class="pi-name">' + esc(p.name) + '</span><span class="pi-desc">' + esc(p.cwd) + (p.hidden ? OrosusI18N.t('web.ui.cwd.hiddenTag') : '') + '</span>',
         data: p,
       };
     }));
     openPick({
       mini: 'right',
       anchor: anchor,
-      title: '切换工作目录',
+      title: OrosusI18N.t('web.shell.switchCwd'),
       en: 'CWD',
       items: rows,
-      foot: '选择后在所选目录开会话（当前空会话保留）· Esc 关闭',
+      foot: OrosusI18N.t('web.ui.cwd.foot'),
       onPick: function (i) {
         var row = rows[i];
         if (!row) return;
