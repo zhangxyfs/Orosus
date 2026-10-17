@@ -52,10 +52,10 @@ describe("m5-i18n 全量清单对账（i18n-inventory/ 五分区）", () => {
 });
 
 describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑源）", () => {
-	it("A/B 键数 2463=2463（m5 1496 + web 区 967）、键集零漂移、分区计数（web-i18n 批 2026-10-16：五段落表 + 跨段并键 15 + 撞名改 2）", () => {
+	it("A/B 键数 2460=2460（m5 1496 + web 区 964）、键集零漂移、分区计数（web-i18n 批 2026-10-16：五段落表 + 跨段并键 15 + 主题族图标出节点并键 3）", () => {
 		const { a, b } = parseTranslations();
-		expect(a.length).toBe(2463);
-		expect(b.length).toBe(2463);
+		expect(a.length).toBe(2460);
+		expect(b.length).toBe(2460);
 		const aKeys = new Set(a.map((r) => r.key));
 		const bKeys = new Set(b.map((r) => r.key));
 		expect(aKeys).toEqual(bKeys);
@@ -63,7 +63,7 @@ describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑�
 		expect(aKeys.size).toBe(a.length);
 		const zoneCounts = new Map<string, number>();
 		for (const r of a) zoneCounts.set(r.zone, (zoneCounts.get(r.zone) ?? 0) + 1);
-		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238, w: 967 });
+		expect(Object.fromEntries([...zoneCounts].sort())).toEqual({ a: 281, b: 502, c: 299, d: 176, e: 238, w: 964 });
 	});
 
 	it("zh 列 A/B 两表逐键一致 + 勘正⑩被删 11 键不再出现（抽取严禁双搬）+ web 并键 15 键不再出现", () => {
@@ -98,6 +98,10 @@ describe("m5-i18n 五语译文对照表对账（ta/tb 分区段件 = 可编辑�
 			"web.btw.modelsFetchFail",
 			"web.misc.peers.phError",
 			"web.render.spawn.rowTitle",
+			// 主题族并键（2026-10-16 用户口令「文案不是一个文案么」——☀/☾ 图标出文本节点后浅色/深色各一键）
+			"web.shell.themeLightFull",
+			"web.settings.appearance.darkBtn",
+			"web.settings.appearance.lightBtn",
 		];
 		const present = killed.filter((k) => zhB.has(k));
 		expect(present, "被删键再现——并键决定被回退或误编辑").toEqual([]);
