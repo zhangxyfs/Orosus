@@ -111,9 +111,10 @@
 
       <!-- ═══ 详情分栏（问题 2 目标形态）：分隔条可拖拽（默认 50/50）+ 选项卡条（打开并存、显示互斥） ═══ -->
       <div class="splitter" id="splitter" hidden data-i18n-title="web.shell.splitterTitle"></div>
-      <!-- web-i18n E9：aria-label 专位无水合态（三态=data-i18n 文本/-title/-ph）——挂 data-i18n-title 载体（⑳ 豁免+悬停即译），
-           aria 属性自身的随语言改写需 app.js 增 aria 态（E6-E8/C2 跟进——静态源值即回退）。 -->
-      <section class="pane" id="pane" hidden aria-label="详情分栏面板" data-i18n-title="web.shell.paneLabel">
+      <!-- web-i18n E9→E6：aria 专位起初借 data-i18n-title 载体（⑳ 豁免+悬停即译的过渡形）；E6 机制 A 落
+           data-i18n-aria 水合态（app.js hydrateI18n）后本区八键九位已翻正——aria-label 随语言改写，静态源值即回退。
+           #prompt-input/#send-btn 仍借同元素 -ph/-title 载体（aria 不随切——C2 跟进）。 -->
+      <section class="pane" id="pane" hidden aria-label="详情分栏面板" data-i18n-aria="web.shell.paneLabel">
         <!-- 选项卡条内部（v2 1244-1250 直裁）：左端 ⌄ 全部选项卡下拉 / tab 列表（溢出裁切不滚动）/ 右端 ＋ 新建；#pt-menu/#pt-drop 两浮层 -->
         <div class="pane-tabs" id="pane-tabs">
           <button class="pt-chev" id="pt-chev" data-i18n-title="web.shell.tabsAll"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>
@@ -129,7 +130,7 @@
       <aside class="side" id="rside">
         <button class="rs-expand-btn" id="rs-expand" data-i18n-title="web.shell.expandStatus">⇤</button>
         <!-- 右上：页签卡（状态 / 网络·MCP / 协同——与 TUI 右上卡组同三内建页） -->
-        <section class="panel panel-state" aria-label="状态面板" data-i18n-title="web.shell.statusPanel">
+        <section class="panel panel-state" aria-label="状态面板" data-i18n-aria="web.shell.statusPanel">
           <div class="ptabs">
             <button class="ptab sel" data-tab="0" data-i18n="web.shell.tabStatus">运行状态</button>
             <button class="ptab" data-tab="1" data-i18n="web.shell.tabNet">网络 · MCP</button>
@@ -152,7 +153,7 @@
 
             <div class="ctxbar-row">
               <span class="lbl" data-i18n="web.shell.kvContext">上下文</span>
-              <div class="bar" role="img" aria-label="上下文占用" data-i18n-title="web.shell.ctxUsage"><i id="ctx-bar-fill"></i></div>
+              <div class="bar" role="img" aria-label="上下文占用" data-i18n-aria="web.shell.ctxUsage"><i id="ctx-bar-fill"></i></div>
               <span class="pct" id="ctx-pct">—</span>
             </div>
 
@@ -161,7 +162,7 @@
             <div class="subhead"><span data-i18n="web.shell.kvModules">模块挂载</span><span class="en">MODULES</span></div>
 
             <div class="plist" id="mod-list"></div>
-            <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-title="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-title="web.shell.pageNext">›</button></div>
+            <div class="pager" id="mod-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-aria="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-aria="web.shell.pageNext">›</button></div>
           </div>
 
           <!-- 网络 · MCP 页（连接列表分页——与模块挂载统一） -->
@@ -176,7 +177,7 @@
             <div class="subhead"><span data-i18n="web.shell.kvConns">网络 / MCP 连接</span><span class="en">SERVERS</span></div>
 
             <div class="plist" id="conn-list"></div>
-            <div class="pager" id="conn-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-title="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-title="web.shell.pageNext">›</button></div>
+            <div class="pager" id="conn-pager" hidden><button data-pg="prev" aria-label="上一页" data-i18n-aria="web.shell.pagePrev">‹</button><span class="pg-ind">1/1</span><button data-pg="next" aria-label="下一页" data-i18n-aria="web.shell.pageNext">›</button></div>
 
             <div class="panel-hint" data-i18n="web.shell.netHint">失败可点击重连 · 未确认点击审阅指纹 · 管理走 /settings → MCP</div>
           </div>
@@ -189,14 +190,14 @@
         </section>
 
         <!-- 右下：任务清单（滚动，只读，Agent 实时同步） -->
-        <section class="panel panel-todo" aria-label="任务清单" data-i18n-title="web.shell.taskList">
+        <section class="panel panel-todo" aria-label="任务清单" data-i18n-aria="web.shell.taskList">
           <div class="ptabs">
             <span class="ptab sel static" data-i18n="web.shell.taskList">任务清单</span>
             <span class="ptab-en">TASKS</span>
           </div>
 
           <div class="todo-progress">
-            <div class="bar" role="img" aria-label="任务进度" data-i18n-title="web.shell.taskProgress"><i id="todo-bar"></i></div>
+            <div class="bar" role="img" aria-label="任务进度" data-i18n-aria="web.shell.taskProgress"><i id="todo-bar"></i></div>
             <span class="count" id="todo-count">0/0</span>
           </div>
 

@@ -50,7 +50,7 @@ function $(id) { return document.getElementById(id); }
       var ok = false;
       try { ok = document.execCommand('copy'); } catch { /* 剪贴板被拒 */ }
       ta.remove();
-      toast(ok ? okMsg : '复制失败');
+      toast(ok ? okMsg : OrosusI18N.t('web.common.copyFail'));
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(t).then(function () { toast(okMsg); }, fallback);
@@ -79,7 +79,7 @@ function $(id) { return document.getElementById(id); }
       if (draftActive) { /* 走查修⑮⑦：草稿态选目录只改草稿归属——首条消息才落桶（不提前建会话） */
         draftCwd = cwd;
         syncCwdGate();
-        toast('工作目录 → ' + name + '（发送首条消息时在该目录建会话）');
+        toast(OrosusI18N.t('web.cwd.toastPrefix') + name + OrosusI18N.t('web.cwd.draftNote'));
         return;
       }
       createSession({ cwd: cwd }).then(function (r) {
@@ -96,7 +96,7 @@ function $(id) { return document.getElementById(id); }
    * 消息窗，关闭纯本地不发 dialog-event）。 */
   UI.setViewModal(function (o) {
     var lb = launcherBack; launcherBack = false; /* 走查②标记转移：总览→窗→笔记链——正文窗关闭时的回跳归属见 modalClose */
-    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: '滚动查看（单向消息，无需应答） · Esc 关闭', ...(o.back ? { backCmd: o.back, keepLauncher: lb } : { backLauncher: lb }) });
+    openModal({ title: o.title, en: 'VIEW', bodyHtml: o.bodyHtml, view: true, foot: OrosusI18N.t('web.ui.view.footText'), ...(o.back ? { backCmd: o.back, keepLauncher: lb } : { backLauncher: lb }) });
   });
   if (globalThis.OrosusDialog && typeof globalThis.OrosusDialog.wire === 'function') {
     globalThis.OrosusDialog.wire({
@@ -104,7 +104,7 @@ function $(id) { return document.getElementById(id); }
         return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/dialog-event', { method: 'POST', body: JSON.stringify(body) });
       },
       getSid: function () { return currentSid ?? ''; },
-      toast: function () { toast('控件窗事件发送失败，稍后自动重试下一步操作', 3200); },
+      toast: function () { toast(OrosusI18N.t('web.toast.dialogSendFail'), 3200); },
       onUserClose: function () { /* 走查（2026-10-16 用户口令②）：用户 Esc/✕ 关窗——总览来源则回总览页（supersede 关不触发） */
         if (launcherBack) { launcherBack = false; openLauncherWindow(); }
       },
@@ -116,7 +116,7 @@ function $(id) { return document.getElementById(id); }
    * document 级委托收口——流区/dock 浮层/大窗弹层三面的 a.md-ref 一处通用。 */
   document.addEventListener('click', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a.md-ref') : null;
-    if (a) toast('「' + (a.getAttribute('data-ref') || '') + '」是内容内引用（非网页链接）——请在对应列表中打开', 3200);
+    if (a) toast('「' + (a.getAttribute('data-ref') || '') + OrosusI18N.t('web.toast.mdRefPost'), 3200);
   });
 
   /* ── 发送管线（命令与消息统一口：202 受理即回——output/mark/queued 按 T6 协议分发） ── */
@@ -154,17 +154,17 @@ function $(id) { return document.getElementById(id); }
     input.value = text;
     autogrow();
     syncSendBtn();
-    toast('发送失败：' + err.message);
+    toast(OrosusI18N.t('web.toast.sendFail') + err.message);
   }
   function submit() {
     if (UI.pickCurrent()) return; /* 浮层开着时点发送键 = 确认当前选中行（与 Enter 同效；view 窗不拦截） */
     var text = input.value.trim();
     if (text === '') return;
     if (draftActive) { sendDraft(text, attachments.slice()); return; } /* 走查修⑮⑦：草稿态首条消息 = 先建后发 */
-    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
+    if (currentSid === null) { toast(OrosusI18N.t('web.welcome.noSession.pick')); return; }
     var imgs = attachments.slice();
-    if (imgs.some(function (a) { return a.failed; })) { toast('有图片上传失败——点 × 撤销后重试'); return; }
-    if (imgs.some(function (a) { return !a.id; })) { toast('图片尚在上传——稍候再发送'); return; }
+    if (imgs.some(function (a) { return a.failed; })) { toast(OrosusI18N.t('web.toast.attachFailed')); return; }
+    if (imgs.some(function (a) { return !a.id; })) { toast(OrosusI18N.t('web.toast.attachUploading')); return; }
     var ids = imgs.map(function (a) { return a.id; });
     input.value = '';
     autogrow();
@@ -179,8 +179,8 @@ function $(id) { return document.getElementById(id); }
    *  createSession 内部已完成 pollSessions + switchTo（currentSid 就位），随后走正常 sendCore 链。
    *  建失败（toast 已示）= 还原输入并复位，不携 draftCwd 重试。 */
   function sendDraft(text, imgs) {
-    if (imgs.some(function (a) { return a.failed; })) { toast('有图片上传失败——点 × 撤销后重试'); return; }
-    if (imgs.some(function (a) { return !a.id; })) { toast('图片尚在上传——稍候再发送'); return; }
+    if (imgs.some(function (a) { return a.failed; })) { toast(OrosusI18N.t('web.toast.attachFailed')); return; }
+    if (imgs.some(function (a) { return !a.id; })) { toast(OrosusI18N.t('web.toast.attachUploading')); return; }
     var ids = imgs.map(function (a) { return a.id; });
     input.value = '';
     autogrow();
@@ -204,7 +204,7 @@ function $(id) { return document.getElementById(id); }
   /** 斜杠菜单技能区/命令区选中 → 提交（ui.js 已清输入框）。 */
   function sendCommandText(text) {
     if (draftActive) { sendDraft(text, []); return; } /* 走查修⑮⑦：斜杠命令同走首发先建 */
-    if (currentSid === null) { toast('暂无会话——先在左栏「＋ 新会话」或选择一个会话'); return; }
+    if (currentSid === null) { toast(OrosusI18N.t('web.welcome.noSession.pick')); return; }
     sendingNow = true;
     syncSendBtn();
     sendCore(text).then(
@@ -215,7 +215,7 @@ function $(id) { return document.getElementById(id); }
   /** 命令输出呈现（D16：命令行不进流区——短文 toast、长文/多行 dock 只读窗）。 */
   function presentCommandOutput(output) {
     if (output.length > 300 || output.split('\n').length > 5) {
-      UI.openView({ title: '命令输出', en: 'OUTPUT', bodyHtml: '<div class="pu-text">' + esc(output) + '</div>', foot: '滚动查看 · Esc 关闭' });
+      UI.openView({ title: OrosusI18N.t('web.view.cmdOutTitle'), en: 'OUTPUT', bodyHtml: '<div class="pu-text">' + esc(output) + '</div>', foot: OrosusI18N.t('web.ui.view.footDefault') });
     } else {
       toast(output, 6000);
     }
@@ -223,7 +223,7 @@ function $(id) { return document.getElementById(id); }
   /** mark 路由信号分发（T6 全集）：quit/new/fork/menu:model/tasks；skill 标记行随 user/message 事件回流。 */
   function handleMark(mark, r) { /* r = send 响应（走查修：btw mark 携带 btwRounds 归档轮次透传 cmdBtw） */
     if (mark === 'quit') {
-      toast('已退出当前会话');
+      toast(OrosusI18N.t('web.toast.quit'));
       void afterMaybeCurrentGone(currentSid);
     } else if (mark === 'new') {
       createSession({}).then(function (r) {
@@ -251,11 +251,11 @@ function $(id) { return document.getElementById(id); }
       var inner = a.url
         ? '<img src="' + esc(a.url) + '" alt="' + esc(a.name) + '" />'
         : a.failed
-          ? '<span class="ax-stop" title="上传失败——点 ✕ 撤销后重试">✕</span>' /* 失败态静止占位（T16 复核 Minor②——spinner 不再永转） */
-          : '<span class="ax-waiting" title="上传中…">' + spinSvg('', 15) + '</span>';
+          ? OrosusI18N.t('web.composer.attach.stopChip') /* 失败态静止占位（T16 复核 Minor②——spinner 不再永转） */
+          : OrosusI18N.t('web.composer.attach.waitingChip') + spinSvg('', 15);
       return '<span class="attach-thumb">' + inner +
-        (a.failed ? '<span class="ax-fail" title="上传失败">!</span>' : '') +
-        '<button type="button" class="ax" data-ax="' + i + '" title="撤销挂图">✕</button></span>';
+        (a.failed ? OrosusI18N.t('web.composer.attach.failBadge') : '') +
+        '<button type="button" class="ax" data-ax="' + i + OrosusI18N.t('web.composer.attach.removeBtn');
     }).join('');
   }
   attachbar.addEventListener('click', function (e) {
@@ -286,9 +286,9 @@ function $(id) { return document.getElementById(id); }
     if (files.length === 0) return;
     e.preventDefault();
     var room = 6 - attachments.length; /* 最多 6 张（D6 原型口径——前端拦截） */
-    if (room <= 0) { toast('最多 6 张图片——已达上限'); return; }
-    if (files.length > room) { toast('最多 6 张图片——超出部分未添加'); files = files.slice(0, room); }
-    if (currentSid === null) { toast('暂无会话——先新建或选择会话后再贴图'); return; }
+    if (room <= 0) { toast(OrosusI18N.t('web.composer.attach.limitReached')); return; }
+    if (files.length > room) { toast(OrosusI18N.t('web.composer.attach.limitPartial')); files = files.slice(0, room); }
+    if (currentSid === null) { toast(OrosusI18N.t('web.welcome.noSession.paste')); return; }
     files.forEach(function (f) {
       var a = { id: '', name: f.name || 'paste.png', url: '', failed: false };
       attachments.push(a);
@@ -301,10 +301,10 @@ function $(id) { return document.getElementById(id); }
       }, function () {
         a.failed = true;
         renderAttach();
-        toast('图片上传失败：' + a.name);
+        toast(OrosusI18N.t('web.toast.attachUploadFail') + a.name);
       });
     });
-    toast('[已粘贴图片]——将随下一条消息发送（点 × 撤销）');
+    toast(OrosusI18N.t('web.toast.attachPasted'));
   });
 
   /* ── 队列条（D2：queue 帧整表快照 = 唯一真源；点击撤回） ── */
@@ -312,9 +312,9 @@ function $(id) { return document.getElementById(id); }
     if (!items || items.length === 0) { queuebar.classList.remove('has'); queuebar.innerHTML = ''; return; }
     queuebar.classList.add('has');
     queuebar.innerHTML = items.map(function (q) {
-      return '<div class="queue-row" data-q="' + q.index + '" title="点击撤回该条">' +
-        '<span>⌛</span><span class="qtext">' + esc(q.text) + '</span><span class="dim">排队中</span></div>';
-    }).join('') + '<div class="queue-hint">点击撤回 · 回答结束后依序发送</div>';
+      return '<div class="queue-row" data-q="' + q.index + OrosusI18N.t('web.composer.queue.rowTitle') +
+        '<span>⌛</span><span class="qtext">' + esc(q.text) + OrosusI18N.t('web.composer.queue.rowState');
+    }).join('') + OrosusI18N.t('web.composer.queue.hint');
   }
   queuebar.addEventListener('click', function (e) {
     var row = e.target.closest('.queue-row');
@@ -322,22 +322,22 @@ function $(id) { return document.getElementById(id); }
     var idx = parseInt(row.getAttribute('data-q'), 10);
     A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/queue/' + idx, { method: 'DELETE', body: '' })
       .then(function () {
-        toast('已撤回排队消息（TUI 键位：↑ 召回队尾）');
+        toast(OrosusI18N.t('web.toast.queueRecalled'));
       }, function (err) {
         if (err.status === 404) return; /* 并发撤回被 server 表重算吸收——静默 */
-        toast('撤回失败：' + err.message);
+        toast(OrosusI18N.t('web.toast.queueRecallFail') + err.message);
       });
   });
 
   /* ── 发送键四态（D11：idle/ready/sending/stop ■）+ busy 期点击 = 停止 ── */
   function syncSendBtn() {
     sendBtn.classList.remove('idle', 'ready', 'sending', 'stop');
-    if (busy) { sendBtn.classList.add('stop'); sendBtn.textContent = '■'; sendBtn.title = '停止生成（双击 Esc 同效）'; return; }
-    if (sendingNow) { sendBtn.classList.add('sending'); sendBtn.innerHTML = spinSvg('', 13); sendBtn.title = '正在发送…'; return; }
-    if (input.value.trim() !== '') { sendBtn.classList.add('ready'); sendBtn.textContent = '↑'; sendBtn.title = '发送（Enter）'; return; }
+    if (busy) { sendBtn.classList.add('stop'); sendBtn.textContent = '■'; sendBtn.title = OrosusI18N.t('web.composer.send.stopTitle'); return; }
+    if (sendingNow) { sendBtn.classList.add('sending'); sendBtn.innerHTML = spinSvg('', 13); sendBtn.title = OrosusI18N.t('web.composer.send.sendingTitle'); return; }
+    if (input.value.trim() !== '') { sendBtn.classList.add('ready'); sendBtn.textContent = '↑'; sendBtn.title = OrosusI18N.t('web.composer.send.title'); return; }
     sendBtn.classList.add('idle');
     sendBtn.textContent = '↑';
-    sendBtn.title = '发送（Enter）';
+    sendBtn.title = OrosusI18N.t('web.composer.send.title');
   }
   sendBtn.addEventListener('click', function (e) {
     if (busy) {
@@ -373,7 +373,7 @@ function $(id) { return document.getElementById(id); }
         stopGeneration();
       } else {
         escArmedAt = now;
-        toast('再按一次 Esc 停止生成与全部子代理');
+        toast(OrosusI18N.t('web.toast.escStopAll'));
       }
     }
   }
@@ -417,10 +417,10 @@ function $(id) { return document.getElementById(id); }
     var empty = draftActive || (currentSid !== null && !render.userSeen()); /* 走查修⑮⑦：草稿态也算空会话（cwd 芯片在场） */
     cwdChip.hidden = !empty;
     var nm = (draftActive ? draftCwd : sessionCwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
-    $('cwd-name').textContent = nm || '选择目录';
+    $('cwd-name').textContent = nm || OrosusI18N.t('web.cwd.chipPick');
   }
   cwdChip.addEventListener('click', function () {
-    if (cwdChip.hidden) { toast('当前会话已有消息——新会话后才能切换工作目录'); return; }
+    if (cwdChip.hidden) { toast(OrosusI18N.t('web.cwd.lockedToast')); return; }
     var pool = projectsPool.slice();
     if (sessionCwd !== '' && !pool.some(function (p) { return p.cwd === sessionCwd; })) {
       pool.push({ cwd: sessionCwd, name: sessionCwd.split(/[\\/]/).pop() || sessionCwd });
@@ -445,10 +445,10 @@ function $(id) { return document.getElementById(id); }
   function openDirPicker() {
     dpState.path = sessionCwd || '';
     openModal({
-      title: '选择工作目录',
+      title: OrosusI18N.t('web.cwd.pickerTitle'),
       en: 'BROWSE',
-      bodyHtml: '<div class="dp-bar"><input autocomplete="off" class="fi" id="dp-input" placeholder="输入路径直达（回车跳转）…" /></div><div class="dp-list" id="dp-list"><div class="sp-note">加载中…</div></div>',
-      actionsHtml: '<span class="spacer"></span><button class="btn" data-act="cancel">取消</button><button class="btn primary" data-act="open">在此目录开会话</button>',
+      bodyHtml: OrosusI18N.t('web.cwd.pickerBody'),
+      actionsHtml: OrosusI18N.t('web.cwd.pickerActions'),
       onAction: function (a) {
         if (a === 'open') {
           var p = dpState.path;
@@ -498,23 +498,23 @@ function $(id) { return document.getElementById(id); }
       var dirs = (d.entries ?? []).filter(function (x) { return x.dir; });
       var up = dpParentOf(dpState.path);
       var html = '';
-      if (up !== null && up !== dpState.path) html += '<div class="dp-row" data-dp="..">📂 .. <span class="dim">上级目录</span></div>';
+      if (up !== null && up !== dpState.path) html += OrosusI18N.t('web.cwd.pickerParent');
       html += dirs.map(function (x) { return '<div class="dp-row" data-dp="' + esc(x.name) + '">📁 ' + esc(x.name) + '</div>'; }).join('');
-      if (html === '') html = '<div class="sp-note">（没有子目录——可直接在下方「在此目录开会话」）</div>';
+      if (html === '') html = OrosusI18N.t('web.cwd.pickerNoSub');
       var list = $('dp-list');
       if (list) list.innerHTML = html;
       var inp = $('dp-input');
       if (inp && inp.value !== dpState.path) inp.value = dpState.path;
     }, function () {
       var list = $('dp-list');
-      if (list) list.innerHTML = '<div class="sp-note">（目录不可读——检查路径后回车重试）</div>';
+      if (list) list.innerHTML = OrosusI18N.t('web.cwd.pickerUnreadable');
     });
   }
 
   /* ── 芯片：模型（D9）/ 思考档位（D10）/ 权限（D8）——status 装配显示面 ── */
   function modelTail(full) {
     var s = String(full ?? '');
-    return s.indexOf('/') >= 0 ? s.slice(s.indexOf('/') + 1) : (s || '（未配置）');
+    return s.indexOf('/') >= 0 ? s.slice(s.indexOf('/') + 1) : (s || OrosusI18N.t('web.composer.chipUnset'));
   }
   function syncChips(st) {
     sessionCwd = typeof st.cwd === 'string' ? st.cwd : sessionCwd;
@@ -523,7 +523,7 @@ function $(id) { return document.getElementById(id); }
     currentModel = typeof st.model === 'string' ? st.model : currentModel; /* 走查修⑨ */
     modelChip.innerHTML = esc(modelTail(st.model)) + ' <span class="dim">▾</span>';
     /* D10 口径：芯片显示 status.effort（未设置 = 目录默认档名）——永不渲染「自动」二字 */
-    effortChip.innerHTML = '思考 ' + esc(currentEffort !== '' ? currentEffort : '—') + ' <span class="dim">▾</span>';
+    effortChip.innerHTML = OrosusI18N.t('web.composer.chipThink') + esc(currentEffort !== '' ? currentEffort : '—') + ' <span class="dim">▾</span>';
     var m = null;
     for (var i = 0; i < UI.MODES.length; i++) if (UI.MODES[i].key === currentPerm) m = UI.MODES[i];
     modeChip.innerHTML = '◆ ' + (m ? m.label : (currentPerm || '—')) + ' ▾';
@@ -548,7 +548,7 @@ function $(id) { return document.getElementById(id); }
   function answerInteraction(body) {
     return A.fetchJson('/api/sessions/' + encodeURIComponent(currentSid) + '/answer', { method: 'POST', body: JSON.stringify(body) })
       .catch(function (err) {
-        toast('应答失败：' + err.message);
+        toast(OrosusI18N.t('web.toast.answerFail') + err.message);
         UI.invalidateCaches();
       });
   }
@@ -558,12 +558,12 @@ function $(id) { return document.getElementById(id); }
   var guiTheme = '连山';
   function applyTheme(light) {
     document.body.classList.toggle('light', light);
-    btnTheme.textContent = light ? '☾ 深色' : '☀ 浅色';
+    btnTheme.innerHTML = '<span class="bi" aria-hidden="true">' + (light ? '☾ ' : '☀ ') + '</span><span data-i18n="' + (light ? 'web.shell.themeDark' : 'web.shell.themeLight') + '">' + OrosusI18N.t(light ? 'web.shell.themeDark' : 'web.shell.themeLight') + '</span>'; /* E6 机制 C：图标出文本节点（E9 span 结构）+ 随语言重建（chrome onI18NChange 调 applyTheme） */
   }
   function saveGuiAppearance(patch, onError) {
     return A.fetchJson('/api/settings/gui', { method: 'POST', body: JSON.stringify(patch) }).then(null, function (err) {
       if (onError) onError(err);
-      toast('外观设置写入失败：' + err.message);
+      toast(OrosusI18N.t('web.toast.guiSaveFail') + err.message);
       return null;
     });
   }
@@ -582,6 +582,8 @@ function $(id) { return document.getElementById(id); }
     document.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = OrosusI18N.t(el.getAttribute('data-i18n')); });
     document.querySelectorAll('[data-i18n-title]').forEach(function (el) { el.title = OrosusI18N.t(el.getAttribute('data-i18n-title')); });
     document.querySelectorAll('[data-i18n-ph]').forEach(function (el) { el.placeholder = OrosusI18N.t(el.getAttribute('data-i18n-ph')); });
+    document.querySelectorAll('[data-i18n-aria]').forEach(function (el) { el.setAttribute('aria-label', OrosusI18N.t(el.getAttribute('data-i18n-aria'))); }); /* E6 机制 A：aria 专位水合态（E9 借 -title 载体的过渡形退役——index.html 八处已翻 data-i18n-aria） */
+    document.querySelectorAll('[data-i18n-html]').forEach(function (el) { el.innerHTML = OrosusI18N.t(el.getAttribute('data-i18n-html')); }); /* E6 机制 D：HTML 值载体（断连 overlay 正文段——值含 <br>/<b> 标记，textContent 形不容；api.js 动态挂载） */
     document.documentElement.lang = OrosusI18N.cur();
   }
   var i18nListeners = [];
@@ -608,16 +610,17 @@ function $(id) { return document.getElementById(id); }
   onI18NChange(function () {
     hydrateI18n(); // 静态壳（appbar/侧栏钮/welcome banner 文案）随表刷新
     applyTheme(document.body.classList.contains('light')); // 主题钮文案随语言重建（applyTheme 内含钮面文案）
+    document.title = 'Orosus（' + OrosusI18N.t('web.shell.title'); /* E6 机制 B：tab 题合成（键为「连山）· Web」截段——闭半括在值内；boot 取表与切语言两路均经本监听 */
     if (typeof pageAppearance === 'function' && document.querySelector('[data-k="ap-lang"]')) { /* 设置页开着的情形由切换 handler 重建；非外观页的设置子页走各自的 setPageHandler 失效重建——C2 走查面 */ }
   });
 
   /* 整体字号写 --fz 驱动全表 font-size calc——只放大文字，框架/控件几何恒定。 */
   var FONT_SCALES = [
-    { name: '小', scale: 0.875 },
-    { name: '默认', scale: 1 },
-    { name: '大', scale: 1.125 },
-    { name: '特大', scale: 1.25 },
-    { name: '超大', scale: 1.4 }
+    { get name() { return OrosusI18N.t('web.settings.font.xs'); }, scale: 0.875 },
+    { get name() { return OrosusI18N.t('web.settings.font.default'); }, scale: 1 },
+    { get name() { return OrosusI18N.t('web.settings.font.l'); }, scale: 1.125 },
+    { get name() { return OrosusI18N.t('web.settings.font.xl'); }, scale: 1.25 },
+    { get name() { return OrosusI18N.t('web.settings.font.xxl'); }, scale: 1.4 }
   ];
   var fontScaleIdx = 1;
   function applyFontScale(i) {
@@ -706,12 +709,12 @@ function $(id) { return document.getElementById(id); }
 
   /* ═══════════ 工具 ═══════════ */
   function fmtRel(ms) {
-    if (ms < 60 * 1000) return '刚刚';
-    if (ms < 60 * 60 * 1000) return Math.floor(ms / 60000) + ' 分';
-    if (ms < 24 * 3600 * 1000) return Math.floor(ms / 3600000) + ' 小时';
-    if (ms < 48 * 3600 * 1000) return '昨天';
-    if (ms < 7 * 24 * 3600 * 1000) return Math.floor(ms / 86400000) + ' 天';
-    if (ms < 14 * 24 * 3600 * 1000) return '上周';
+    if (ms < 60 * 1000) return OrosusI18N.t('web.session.relJustNow');
+    if (ms < 60 * 60 * 1000) return Math.floor(ms / 60000) + OrosusI18N.t('web.session.relMin');
+    if (ms < 24 * 3600 * 1000) return Math.floor(ms / 3600000) + OrosusI18N.t('web.session.relHour');
+    if (ms < 48 * 3600 * 1000) return OrosusI18N.t('web.session.relYesterday');
+    if (ms < 7 * 24 * 3600 * 1000) return Math.floor(ms / 86400000) + OrosusI18N.t('web.session.relDay');
+    if (ms < 14 * 24 * 3600 * 1000) return OrosusI18N.t('web.session.relWeek');
     var d = new Date(Date.now() - ms);
     return (d.getMonth() + 1) + '/' + d.getDate();
   }
@@ -724,11 +727,11 @@ function $(id) { return document.getElementById(id); }
   function fmtElapsed(ms) {
     if (ms < 0) ms = 0;
     var s = Math.floor(ms / 1000);
-    if (s < 60) return s + ' 秒';
+    if (s < 60) return s + OrosusI18N.t('web.settings.elapsed.sec');
     var m = Math.floor(s / 60);
-    if (m < 60) return m + ' 分 ' + (s % 60) + ' 秒';
+    if (m < 60) return m + OrosusI18N.t('web.settings.elapsed.min') + (s % 60) + OrosusI18N.t('web.settings.elapsed.sec');
     var h = Math.floor(m / 60);
-    return h + ' 时 ' + (m % 60) + ' 分';
+    return h + OrosusI18N.t('web.settings.elapsed.hour') + (m % 60) + OrosusI18N.t('web.settings.elapsed.min');
   }
 
   /* ═══════════ 左栏：渲染（B3/B5/B7/B14/B15） ═══════════ */
@@ -769,13 +772,13 @@ function $(id) { return document.getElementById(id); }
      *  只服务 B1 项目跟随/bootstrap 初值，不参与高亮，否则它标签页的游标会把本页染成双选中） */
     var isCur = row.sid === currentSid;
     var act = rowActivity(row, isCur ? null : prev, sact, seen);
-    var title = row.label !== '' ? row.label : (row.fresh ? '新会话' : '（未命名会话）');
+    var title = row.label !== '' ? row.label : (row.fresh ? OrosusI18N.t('web.session.freshTitle') : OrosusI18N.t('web.session.unnamedTitle'));
     return '<div class="ls-item' + (isCur ? ' cur' : '') + (pinned ? ' pinned-row' : '') + '" data-sid="' + esc(row.sid) + '" data-pinned="' + (pinned ? 1 : '') + '">' +
       sactHtml(act) +
       '<span class="stitle" title="' + esc(title) + '">' + esc(title) + '</span>' +
-      (isCur ? '<span class="curtag">当前</span>' : '') +
-      '<button class="sact-btn spin-pin" data-sact="pin" title="' + (pinned ? '取消置顶' : '置顶') + '">' + PIN_SVG + '</button>' +
-      (row.fresh ? '' : '<button class="sact-btn" data-sact="archive" title="归档">' + ARCHIVE_SVG + '</button>') +
+      (isCur ? OrosusI18N.t('web.session.curTag') : '') +
+      '<button class="sact-btn spin-pin" data-sact="pin" title="' + (pinned ? OrosusI18N.t('web.session.unpin') : OrosusI18N.t('web.session.pin')) + '">' + PIN_SVG + '</button>' +
+      (row.fresh ? '' : '<button class="sact-btn" data-sact="archive" title="' + OrosusI18N.t('web.session.archiveBtn') + '">' + ARCHIVE_SVG + '</button>') +
       '<span class="srel">' + esc(fmtRel(row.relMs)) + '</span>' +
       '</div>';
   }
@@ -788,24 +791,24 @@ function $(id) { return document.getElementById(id); }
      *  ⇤ 收起钮（会话栏收起入口不能随区隐没）。 */
     var html = '';
     if (sessionsData.pinned.length > 0) {
-      html += '<div class="ls-sec"><span>已置顶</span><span class="ls-count">' + sessionsData.pinned.length + '</span><button class="ls-collapse" id="ls-collapse" title="收起会话栏">⇤</button></div>';
+      html += OrosusI18N.t('web.session.pinnedHeader') + sessionsData.pinned.length + OrosusI18N.t('web.session.collapseBtn');
       html += sessionsData.pinned.map(function (s) { return lsRowHtml(s, prevRowMap.get(s.sid), true, sact, seen); }).join('');
     } else {
-      html += '<div class="ls-sec ls-pin-empty"><button class="ls-collapse" id="ls-collapse" title="收起会话栏">⇤</button></div>';
+      html += OrosusI18N.t('web.session.collapseBtnEmpty');
     }
-    html += '<div class="ls-sec"><span>项目</span><span class="ls-count">' + sessionsData.groups.length + '</span></div>';
+    html += OrosusI18N.t('web.session.projectsHeader') + sessionsData.groups.length + '</span></div>';
     sessionsData.groups.forEach(function (g) {
       var open = groupOpen[g.cwd] !== false;
       var limit = groupShow[g.cwd] ?? 5;
-      html += '<div class="ls-group" data-group="' + esc(g.cwd) + '" data-path="' + esc(g.cwd) + '"><span class="gicon">' + (open ? FOLDER_OPEN_SVG : FOLDER_SVG) + '</span><span class="gname">' + esc(g.name) + '</span><span class="gcount">' + g.sessions.length + '</span><span class="g-acts"><button class="g-act" data-gact="more" title="更多">⋯</button><button class="g-act" data-gact="new" title="在该工作区下新建会话">＋</button></span></div>';
+      html += '<div class="ls-group" data-group="' + esc(g.cwd) + '" data-path="' + esc(g.cwd) + '"><span class="gicon">' + (open ? FOLDER_OPEN_SVG : FOLDER_SVG) + '</span><span class="gname">' + esc(g.name) + '</span><span class="gcount">' + g.sessions.length + OrosusI18N.t('web.session.groupActs');
       if (open) {
         html += g.sessions.slice(0, limit).map(function (s) { return lsRowHtml(s, prevRowMap.get(s.sid), false, sact, seen); }).join('');
         if (g.sessions.length > limit) {
-          html += '<div class="ls-more" data-more="' + esc(g.cwd) + '">∨ 展开更多（还有 ' + (g.sessions.length - limit) + ' 条）</div>';
+          html += '<div class="ls-more" data-more="' + esc(g.cwd) + '">' + OrosusI18N.t('web.session.morePre') + (g.sessions.length - limit) + OrosusI18N.t('web.session.morePost');
         }
       }
     });
-    if (sessionsData.groups.length === 0) html += '<div class="ls-sec ls-hint"><span>（暂无项目——点击上方「＋ 新会话」开始）</span></div>';
+    if (sessionsData.groups.length === 0) html += OrosusI18N.t('web.session.noProjects');
     if (html === lsSig) return; /* 数据无变化——DOM 零触碰 */
     lsSig = html;
     lsBody.innerHTML = html;
@@ -888,7 +891,7 @@ function $(id) { return document.getElementById(id); }
   function rowTitle(sid) {
     var f = findRow(sid);
     if (!f) return sid;
-    return f.row.label !== '' ? f.row.label : (f.row.fresh ? '新会话' : '（未命名会话）');
+    return f.row.label !== '' ? f.row.label : (f.row.fresh ? OrosusI18N.t('web.session.freshTitle') : OrosusI18N.t('web.session.unnamedTitle'));
   }
   /* 剩余首个会话（置顶优先——归档/删除/移除工作区切走口径） */
   function firstRemaining(excludeCwd) {
@@ -915,11 +918,11 @@ function $(id) { return document.getElementById(id); }
   $('btn-new').addEventListener('click', function () { openDraft(); }); /* 走查修⑮⑦：只开新会话窗，首发才落桶 */
   function createSession(body) {
     return A.fetchJson('/api/sessions', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
-      if (r.reused) toast('已有空会话——沿用并刷新创建时间');
+      if (r.reused) toast(OrosusI18N.t('web.toast.sessionReused'));
       /* 先刷新左栏再切视图（2026-10-12 走查修——「新会话不立即出现在列表」根因：switchTo 只重渲
        *  旧 sessionsData，新行要等 2s 轮询；pollSessions 先行让新行与「当前」高亮一步到位） */
       return pollSessions().then(function () { return switchTo(r.sid); }).then(function () { return r; });
-    }, function (err) { toast('新建会话失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.createFail') + err.message); });
   }
   /* 工作区行 ＋（B9）：在该工作区下新建（fresh 沿用语义在 server 侧，reused 提示同口） */
   function newSessionInProject(g) {
@@ -931,29 +934,29 @@ function $(id) { return document.getElementById(id); }
   function openSession(sid) {
     return A.fetchJson('/api/sessions', { method: 'POST', body: JSON.stringify({ resumeSid: sid }) }).then(function (r) {
       return switchTo(r.sid);
-    }, function (err) { toast('打开会话失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.openFail') + err.message); });
   }
   /* 置顶（B2/B11） */
   function togglePin(sid) {
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/pin', { method: 'POST', body: '{}' }).then(function (r) {
-      toast(r.pinned ? '已置顶「' + rowTitle(sid) + '」' : '已取消置顶「' + rowTitle(sid) + '」');
+      toast(r.pinned ? OrosusI18N.t('web.toast.pinnedPre') + rowTitle(sid) + '」' : OrosusI18N.t('web.toast.unpinnedPre') + rowTitle(sid) + '」');
       void pollSessions();
-    }, function (err) { toast('置顶失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.pinFail') + err.message); });
   }
   /* 归档（B12）：归档当前会话 → 切剩余首个（置顶优先） */
   function archiveSession(sid) {
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/archive', { method: 'POST', body: '{}' }).then(function () {
-      toast('已归档「' + rowTitle(sid) + '」——设置 ▸ 已归档的会话 可恢复');
+      toast(OrosusI18N.t('web.toast.archivedPre') + rowTitle(sid) + OrosusI18N.t('web.toast.archivedPost'));
       return afterMaybeCurrentGone(sid);
-    }, function (err) { toast('归档失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.archiveFail') + err.message); });
   }
   /* 删除（B11）：overlay2 确认层叠于设置弹窗之上 */
   function deleteSession(sid) {
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid), { method: 'DELETE' }).then(function () {
-      toast('已永久删除「' + rowTitle(sid) + '」');
+      toast(OrosusI18N.t('web.toast.deletedPre') + rowTitle(sid) + '」');
       var m = sactAll(); delete m[sid]; saveJson(SACT_KEY, m);
       return afterMaybeCurrentGone(sid);
-    }, function (err) { toast(err.status === 409 ? '删除被拒：' + err.message : '删除失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t(err.status === 409 ? 'web.toast.deleteDenied' : 'web.toast.deleteFail') + err.message); });
   }
   /* 当前会话被归档/删除/其工作区被移除后：切剩余首个（无则空态） */
   function afterMaybeCurrentGone(goneSid) {
@@ -969,7 +972,7 @@ function $(id) { return document.getElementById(id); }
       render.close();
       showWelcome(true);
       syncCwdGate();
-      tailEl.textContent = '暂无会话——点击左栏「＋ 新会话」开始';
+      tailEl.textContent = OrosusI18N.t('web.welcome.noSession.start');
       return undefined;
     });
   }
@@ -978,10 +981,10 @@ function $(id) { return document.getElementById(id); }
   function renameSession(sid) {
     modalClose();
     openModal({
-      title: '重命名会话',
+      title: OrosusI18N.t('web.session.renameTitle'),
       en: sid,
-      bodyHtml: '<div class="pf-row rename-row"><label>会话名</label><input autocomplete="off" class="fi" id="rename-input" /></div>',
-      actionsHtml: '<span class="spacer"></span><button class="btn" data-act="cancel">取消</button><button class="btn primary" data-act="save">保存</button>',
+      bodyHtml: OrosusI18N.t('web.session.renameRow'),
+      actionsHtml: OrosusI18N.t('web.session.renameActions'),
       onAction: function (a) {
         if (a === 'save') {
           var v = document.getElementById('rename-input').value.trim();
@@ -1006,13 +1009,13 @@ function $(id) { return document.getElementById(id); }
   }
   function doRename(sid, name) {
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/title', { method: 'POST', body: JSON.stringify({ title: name }) }).then(function () {
-      toast('已命名 → ' + name);
+      toast(OrosusI18N.t('web.toast.renamed') + name);
       /* 本地即时补（旁路写不经 host——无 SSE label 帧）：当前会话顶栏同步 + 左栏行标签刷新 */
       if (sid === currentSid) setSessionTitle(name, sid);
       var f = findRow(sid);
       if (f) f.row.label = name;
       void pollSessions();
-    }, function (err) { toast('重命名失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.renameFail') + err.message); });
   }
   /* 导出（B11）：fetch blob 下载（token 走头——不进地址栏历史） */
   function exportSession(sid) {
@@ -1028,9 +1031,9 @@ function $(id) { return document.getElementById(id); }
         a.click();
         a.remove();
         window.setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-        toast('已导出 ' + a.download);
+        toast(OrosusI18N.t('web.toast.exported') + a.download);
       });
-    }, function (err) { toast('导出失败：' + err.message); });
+    }, function (err) { toast(OrosusI18N.t('web.toast.exportFail') + err.message); });
   }
 
   /* ═══════════ 右键菜单（原型 :3554-3666 直裁——图标 SVG + 定位 + 互清） ═══════════ */
@@ -1059,8 +1062,8 @@ function $(id) { return document.getElementById(id); }
   function openWsCtxMenu(g, anchorEl) {
     ctxGroup = g;
     ctxSid = null;
-    ctxMenu.innerHTML = '<button class="ctx-item" data-ctx="copy">' + ic('copy') + '复制路径</button>' +
-      '<button class="ctx-item danger" data-ctx="remove">' + ic('folderX') + '移除工作区…</button>';
+    ctxMenu.innerHTML = '<button class="ctx-item" data-ctx="copy">' + ic('copy') + OrosusI18N.t('web.session.ctxCopyPath') +
+      '<button class="ctx-item danger" data-ctx="remove">' + ic('folderX') + OrosusI18N.t('web.session.ctxRemoveWs');
     ctxMenu.hidden = false;
     var r = anchorEl.getBoundingClientRect();
     ctxMenu.style.left = Math.round(r.right - ctxMenu.offsetWidth) + 'px';
@@ -1073,13 +1076,13 @@ function $(id) { return document.getElementById(id); }
     ctxSid = sid;
     ctxGroup = null;
     ctxMenu.innerHTML =
-      '<button class="ctx-item" data-ctx="fork">' + ic('fork') + '分叉会话</button>' +
-      '<button class="ctx-item" data-ctx="pin">' + ic('pin') + (f.pinned ? '取消置顶' : '置顶') + '</button>' +
-      (f.row.fresh ? '' : '<button class="ctx-item" data-ctx="archive">' + ic('archive') + '归档</button>') +
-      '<button class="ctx-item" data-ctx="rename">' + ic('edit') + '重命名</button>' +
-      '<button class="ctx-item" data-ctx="copyid">' + ic('copy') + '复制会话 ID</button>' +
-      '<button class="ctx-item" data-ctx="export">' + ic('download') + '导出会话</button>' +
-      '<button class="ctx-item danger" data-ctx="delete">' + ic('trash') + '删除</button>';
+      '<button class="ctx-item" data-ctx="fork">' + ic('fork') + OrosusI18N.t('web.session.ctxFork') +
+      '<button class="ctx-item" data-ctx="pin">' + ic('pin') + (f.pinned ? OrosusI18N.t('web.session.unpin') : OrosusI18N.t('web.session.pin')) + '</button>' +
+      (f.row.fresh ? '' : '<button class="ctx-item" data-ctx="archive">' + ic('archive') + OrosusI18N.t('web.session.ctxArchive') + '</button>') +
+      '<button class="ctx-item" data-ctx="rename">' + ic('edit') + OrosusI18N.t('web.session.ctxRename') +
+      '<button class="ctx-item" data-ctx="copyid">' + ic('copy') + OrosusI18N.t('web.session.ctxCopyId') +
+      '<button class="ctx-item" data-ctx="export">' + ic('download') + OrosusI18N.t('web.session.ctxExport') +
+      '<button class="ctx-item danger" data-ctx="delete">' + ic('trash') + OrosusI18N.t('web.session.ctxDelete');
     ctxMenu.hidden = false;
     ctxMenu.style.left = Math.min(x, window.innerWidth - 170) + 'px';
     ctxMenu.style.top = Math.min(y, window.innerHeight - 260) + 'px';
@@ -1095,21 +1098,21 @@ function $(id) { return document.getElementById(id); }
     hideCtx();
     if (sid !== null) { sessionCtxAct(act, sid); return; }
     if (!g) return;
-    if (act === 'copy') copyText(g.cwd, '已复制路径');
+    if (act === 'copy') copyText(g.cwd, OrosusI18N.t('web.toast.copiedPath'));
     else if (act === 'remove') {
       var currentInGoneWs = currentSid !== null && findGroupOfSid(currentSid)?.cwd === g.cwd;
       openConfirm({
-        title: '移除工作区',
-        bodyHtml: '<div class="pu-text">确认从列表移除工作区「<b>' + esc(g.name) + '</b>」？\n\n' +
+        title: OrosusI18N.t('web.session.removeWsTitle'),
+        bodyHtml: OrosusI18N.t('web.session.removeWsPre') + esc(g.name) + '</b>」？\n\n' +
           '<span class="info">' + esc(g.cwd) + '</span>\n\n' +
-          '<span class="dim">文件夹和文件不会被删除，其中的会话记录也会保留，重新添加该文件夹即可找回。</span></div>',
-        confirmText: '移除',
+          OrosusI18N.t('web.session.removeWsNote'),
+        confirmText: OrosusI18N.t('web.session.removeConfirm'),
         onConfirm: function () {
           A.fetchJson('/api/workspaces/hide', { method: 'POST', body: JSON.stringify({ cwd: g.cwd }) }).then(function () {
-            toast('已移除工作区「' + g.name + '」——文件与会话记录均保留，重新添加即可找回');
+            toast(OrosusI18N.t('web.toast.wsRemovedPre') + g.name + OrosusI18N.t('web.toast.wsRemovedPost'));
             if (currentInGoneWs) return afterMaybeCurrentGone(currentSid);
             return pollSessions();
-          }, function (err) { toast('移除失败：' + err.message); });
+          }, function (err) { toast(OrosusI18N.t('web.toast.removeFail') + err.message); });
         },
       });
     }
@@ -1124,14 +1127,14 @@ function $(id) { return document.getElementById(id); }
     } else if (act === 'rename') {
       renameSession(sid);
     } else if (act === 'copyid') {
-      copyText(sid, '已复制会话 ID ' + sid);
+      copyText(sid, OrosusI18N.t('web.toast.copiedSid') + sid);
     } else if (act === 'export') {
       exportSession(sid);
     } else if (act === 'delete') {
       openConfirm({
-        title: '删除会话',
-        bodyHtml: '<div class="pu-text">将永久删除「<b>' + esc(rowTitle(sid)) + '</b>」的全部对话记录，无法恢复。\n\n<span class="dim">工作区里的文件和代码改动不受影响。</span></div>',
-        confirmText: '永久删除',
+        title: OrosusI18N.t('web.session.deleteTitle'),
+        bodyHtml: OrosusI18N.t('web.session.deletePre') + esc(rowTitle(sid)) + OrosusI18N.t('web.session.deletePost') + '\n\n' + OrosusI18N.t('web.session.deleteNote'),
+        confirmText: OrosusI18N.t('web.session.deleteConfirm'),
         onConfirm: function () { void deleteSession(sid); },
       });
     }
@@ -1142,9 +1145,9 @@ function $(id) { return document.getElementById(id); }
   var modal2 = $('modal2');
   var confirmYes = null; /* 当前确认弹窗的「确认」回调（openConfirm/closeConfirm 成对维护） */
   function openConfirm(opts) {
-    modal2.innerHTML = '<div class="pu-head"><span class="pu-title">' + opts.title + '</span><span class="pu-close" data-c2="no" title="取消（Esc）">✕</span></div>' +
+    modal2.innerHTML = '<div class="pu-head"><span class="pu-title">' + opts.title + '</span>' + OrosusI18N.t('web.shell.confirmClose') +
       '<div class="pu-body">' + opts.bodyHtml + '</div>' +
-      '<div class="pu-actions right"><button class="btn" data-c2="no">取消</button><button class="btn del" data-c2="yes">' + (opts.confirmText ?? '永久删除') + '</button></div>';
+      OrosusI18N.t('web.shell.confirmActions') + (opts.confirmText ?? OrosusI18N.t('web.session.deleteConfirm')) + '</button></div>';
     overlay2.hidden = false;
     confirmYes = opts.onConfirm;
   }
@@ -1172,8 +1175,8 @@ function $(id) { return document.getElementById(id); }
     modal.className = 'modal' + (top.wide ? ' settings-modal' : '') + (top.big ? ' compact-modal' : '') + (top.view ? ' view-modal' : ''); /* 走查修⑩②；view-modal = web-dialog 批 T8 viewText 大窗 */
     modal.innerHTML = '<div class="pu-head"><span class="pu-title">' + top.title + '</span>' +
       '<span class="pu-en">' + (top.en ?? '') + '</span>' +
-      (modalStack.length > 1 ? '<button class="btn" data-mback>‹ 返回</button>' : '') +
-      '<span class="pu-close" data-mclose title="关闭（Esc）">✕</span></div>' +
+      (modalStack.length > 1 ? OrosusI18N.t('web.shell.modalBack') : '') +
+      OrosusI18N.t('web.shell.modalClose') +
       '<div class="pu-body">' + top.bodyHtml + '</div>' +
       (top.actionsHtml ? '<div class="pu-actions right">' + top.actionsHtml + '</div>' : '') +
       (top.foot ? '<div class="pu-foot">' + top.foot + '</div>' : '');
@@ -1237,18 +1240,18 @@ function $(id) { return document.getElementById(id); }
     return '<span class="k">' + esc(k) + '</span><span class="v ' + (cls ?? '') + '">' + v + '</span>'; /* v 由调用方负责转义 */
   }
   function pageLoading(page, text) { setPageHandler = null; page.innerHTML = '<div class="sp-note">' + esc(text ?? OrosusI18N.t('web.common.loading')) + '</div>'; } /* web-i18n M4：默认文案入键（boot 序先取表后开窗） */
-  function pageLoadError(page, err) { setPageHandler = null; page.innerHTML = '<div class="sp-note bad">' + esc('加载失败：' + (err && err.message ? err.message : '网络错误')) + '</div>'; }
+  function pageLoadError(page, err) { setPageHandler = null; page.innerHTML = '<div class="sp-note bad">' + esc(OrosusI18N.t('web.settings.loadFail') + (err && err.message ? err.message : OrosusI18N.t('web.settings.netError'))) + '</div>'; }
 
   var SET_PAGES = [
-    { name: '常规', desc: '上下文 / Token / 磁盘', render: pageGeneral },
-    { name: '外观', desc: '主题 / 明暗 / 字号 / 语言', render: pageAppearance },
-    { name: '提供商与模型', desc: '供应商列表 / 目录添加 / 模型表', render: pageProviders },
-    { name: '模型偏好', desc: '默认模型 / 视觉 / 搜索 / 侧问 / 子代理', render: pageModelPrefs }, /* 走查修⑨③ */
-    { name: '技能', desc: '查看 / 启停', render: pageSkills },
-    { name: '钩子', desc: '查看 / 启停 / 信任审查', render: pageHooks },
-    { name: 'MCP', desc: 'server 管理与添加', render: pageMcp },
-    { name: '记忆', desc: '工作区记忆 / 会话感知 / 导入', render: pageMemory },
-    { name: '已归档的会话', desc: '查看 / 恢复到会话列表', render: pageArchived },
+    { get name() { return OrosusI18N.t('web.settings.nav.general'); }, get desc() { return OrosusI18N.t('web.settings.nav.generalDesc'); }, render: pageGeneral },
+    { get name() { return OrosusI18N.t('web.settings.nav.appearance'); }, get desc() { return OrosusI18N.t('web.settings.nav.appearanceDesc'); }, render: pageAppearance },
+    { get name() { return OrosusI18N.t('web.settings.nav.providers'); }, get desc() { return OrosusI18N.t('web.settings.nav.providersDesc'); }, render: pageProviders },
+    { get name() { return OrosusI18N.t('web.settings.nav.prefs'); }, get desc() { return OrosusI18N.t('web.settings.nav.prefsDesc'); }, render: pageModelPrefs }, /* 走查修⑨③ */
+    { get name() { return OrosusI18N.t('web.settings.nav.skills'); }, get desc() { return OrosusI18N.t('web.settings.nav.skillsDesc'); }, render: pageSkills },
+    { get name() { return OrosusI18N.t('web.settings.nav.hooks'); }, get desc() { return OrosusI18N.t('web.settings.nav.hooksDesc'); }, render: pageHooks },
+    { name: 'MCP', get desc() { return OrosusI18N.t('web.settings.nav.mcpDesc'); }, render: pageMcp },
+    { get name() { return OrosusI18N.t('web.settings.nav.memory'); }, get desc() { return OrosusI18N.t('web.settings.nav.memoryDesc'); }, render: pageMemory },
+    { get name() { return OrosusI18N.t('web.settings.nav.archived'); }, get desc() { return OrosusI18N.t('web.settings.nav.archivedDesc'); }, render: pageArchived },
   ];
 
   /** 打开设置弹窗（原型 openSettingsRoot：居中双栏 wide；pageIdx = 初始页（E5 审阅/管理模型直达用））。 */
@@ -1257,10 +1260,10 @@ function $(id) { return document.getElementById(id); }
     modalClose();
     openModal({
       wide: true,
-      title: '设置',
+      title: OrosusI18N.t('web.shell.settings'),
       en: 'SETTINGS',
       bodyHtml: '<div class="set-grid"><div class="set-nav" id="set-nav"></div><div class="set-page" id="set-page"></div></div>',
-      foot: '左侧选项卡切换页面 · Esc 关闭',
+      foot: OrosusI18N.t('web.settings.foot'),
       onClick: function (e) {
         var nv = e.target.closest('[data-nv]');
         if (nv) { renderSetPage(parseInt(nv.getAttribute('data-nv'), 10)); return; }
@@ -1287,7 +1290,7 @@ function $(id) { return document.getElementById(id); }
   function genRingSvg(pct, hot) {
     var c = 2 * Math.PI * 34;
     var used = Math.round(c * pct / 100);
-    return '<svg class="ring-svg' + (hot ? ' ring-hot' : '') + '" width="92" height="92" viewBox="0 0 92 92" aria-label="上下文占用 ' + pct + '%">' +
+    return '<svg class="ring-svg' + (hot ? ' ring-hot' : '') + OrosusI18N.t('web.settings.ctxRingAria') + pct + '%">' +
       '<circle class="ring-track" cx="46" cy="46" r="34" fill="none" stroke-width="10"/>' +
       '<circle class="ring-fill" cx="46" cy="46" r="34" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="' + used + ' ' + (Math.round(c) - used) + '" transform="rotate(-90 46 46)"/>' +
       '<text x="46" y="52" text-anchor="middle" class="ring-text">' + pct + '%</text></svg>';
@@ -1298,7 +1301,7 @@ function $(id) { return document.getElementById(id); }
   function genDiskRow(name, mb, files) {
     return '<div class="disk-row" data-mb="' + mb + '"><span class="dk-name">' + esc(name) + '</span>' +
       '<span class="dk-bar"><i></i></span>' +
-      '<span class="dk-size">' + mb.toFixed(1) + ' MB</span><span class="dk-files">' + files + ' 个文件</span></div>';
+      '<span class="dk-size">' + mb.toFixed(1) + ' MB</span><span class="dk-files">' + files + OrosusI18N.t('web.settings.diskFilesPost');
   }
   function pageGeneral(page) {
     pageLoading(page);
@@ -1309,28 +1312,28 @@ function $(id) { return document.getElementById(id); }
       var disk = (d.disk ?? []).filter(function (r) { return r.name !== 'total'; });
       var total = (d.disk ?? []).find(function (r) { return r.name === 'total'; });
       var maxMb = disk.reduce(function (m, r) { return Math.max(m, r.mb ?? 0); }, 0);
-      page.innerHTML = spTitle('常规', 'GENERAL') +
-        subHeadT('上下文用量') +
+      page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.general'), 'GENERAL') +
+        subHeadT(OrosusI18N.t('web.settings.ctxTitle')) +
         '<div class="gen-flex">' + genRingSvg(ctx.pct ?? 0, (ctx.pct ?? 0) >= 80) +
           '<div class="gen-legend">' +
-            '<div class="gl-row"><span class="gl-k">模型</span><span class="gl-v">' + esc(model) + '</span></div>' +
-            '<div class="gl-row"><span class="gl-k">窗口</span><span class="gl-v">' + (ctx.window ?? 0).toLocaleString() + ' tokens</span></div>' +
-            '<div class="gl-row"><span class="gl-k">已用</span><span class="gl-v"><span class="ok">~' + (ctx.used ?? 0).toLocaleString() + '</span>（' + (ctx.pct ?? 0) + '%）</span></div>' +
-            '<div class="gl-row"><span class="gl-k">输入累计</span><span class="gl-v">↑ ' + fmtK(tk.lifetimeInput) + '</span></div>' +
-            '<div class="gl-row"><span class="gl-k">输出累计</span><span class="gl-v">↓ ' + fmtK(tk.lifetimeOutput) + '</span></div>' +
+            OrosusI18N.t('web.settings.kvModel') + esc(model) + '</span></div>' +
+            OrosusI18N.t('web.settings.kvWindow') + (ctx.window ?? 0).toLocaleString() + ' tokens</span></div>' +
+            OrosusI18N.t('web.settings.kvUsed') + (ctx.used ?? 0).toLocaleString() + '</span>（' + (ctx.pct ?? 0) + '%）</span></div>' +
+            OrosusI18N.t('web.settings.kvInputTotal') + fmtK(tk.lifetimeInput) + '</span></div>' +
+            OrosusI18N.t('web.settings.kvOutputTotal') + fmtK(tk.lifetimeOutput) + '</span></div>' +
           '</div></div>' +
-        '<div class="sp-note">口径：已用 = 最近一次请求的输入规模；增长到阈值（80%）会自动压缩，/compact 可手动。运行时间 ' + esc(fmtElapsed((d.runtime ?? { elapsedMs: 0 }).elapsedMs)) + '。</div>' +
-        subHeadT('Token 用量', true) +
+        OrosusI18N.t('web.settings.ctxNote') + esc(fmtElapsed((d.runtime ?? { elapsedMs: 0 }).elapsedMs)) + '。</div>' +
+        subHeadT(OrosusI18N.t('web.settings.tokenTitle'), true) +
         '<div class="stat-cards">' +
-          genStat('本会话 · 输入', (tk.input ?? 0).toLocaleString(), 'tokens') +
-          genStat('本会话 · 输出', (tk.output ?? 0).toLocaleString(), 'tokens') +
-          genStat('项目累计 · 输入', fmtK(tk.lifetimeInput), 'tokens') +
-          genStat('项目累计 · 输出', fmtK(tk.lifetimeOutput), 'tokens') +
+          genStat(OrosusI18N.t('web.settings.stat.sessionIn'), (tk.input ?? 0).toLocaleString(), 'tokens') +
+          genStat(OrosusI18N.t('web.settings.stat.sessionOut'), (tk.output ?? 0).toLocaleString(), 'tokens') +
+          genStat(OrosusI18N.t('web.settings.stat.projectIn'), fmtK(tk.lifetimeInput), 'tokens') +
+          genStat(OrosusI18N.t('web.settings.stat.projectOut'), fmtK(tk.lifetimeOutput), 'tokens') +
         '</div>' +
-        subHeadT('磁盘占用 · ~/.orosus', true) +
+        subHeadT(OrosusI18N.t('web.settings.diskTitle'), true) +
         '<div class="disk">' + disk.map(function (r) { return genDiskRow(r.name, r.mb ?? 0, r.files ?? 0); }).join('') + '</div>' +
-        (total ? '<div class="dk-total"><span>合计 ' + (total.mb ?? 0).toFixed(1) + ' MB · ' + (total.files ?? 0) + ' 个文件</span></div>' : '') +
-        '<div class="sp-note">清理口径：cache 可安全删除；tmp 为粘贴图片暂存，可手动清；sessions 是会话历史（orosus sessions prune 清理）。</div>';
+        (total ? OrosusI18N.t('web.settings.diskTotalPre') + (total.mb ?? 0).toFixed(1) + ' MB · ' + (total.files ?? 0) + OrosusI18N.t('web.settings.diskFilesPost') : '') +
+        OrosusI18N.t('web.settings.diskNote');
       /* 磁盘条宽度：CSP 无内联——JS 属性赋值（比例相对五目录最大值） */
       if (maxMb > 0) {
         page.querySelectorAll('.disk-row').forEach(function (row) {
@@ -1360,14 +1363,14 @@ function $(id) { return document.getElementById(id); }
     pageLoading(page);
     A.fetchJson('/api/providers').then(function (d) {
       provData.providers = d.providers ?? [];
-      page.innerHTML = '<div class="pf-headrow">' + spTitle('模型供应商', 'PROVIDERS') +
-        '<button class="btn primary" data-k="prov-add">＋ 添加供应商</button></div>' +
+      page.innerHTML = '<div class="pf-headrow">' + spTitle(OrosusI18N.t('web.settings.provTitle'), 'PROVIDERS') +
+        OrosusI18N.t('web.settings.provAddBtn') +
         '<div class="pf-list">' + provData.providers.map(function (p, pi) {
           return '<div class="pf-vrow" data-k="prov" data-v="' + pi + '">' + provIcon(p.key) +
             '<span class="vname">' + esc(p.name ?? p.key) + '</span><span class="vbadge">' + esc(p.proto ?? 'openai') + '</span>' +
-            '<span class="vcount">' + (p.modelCount ?? (p.models ?? []).length) + ' 个模型 ›</span></div>';
+            '<span class="vcount">' + (p.modelCount ?? (p.models ?? []).length) + OrosusI18N.t('web.settings.provCountPost');
         }).join('') + '</div>' +
-        '<div class="sp-note">点供应商进编辑页（协议 / 密钥 / Base URL / 默认模型 / 模型表增删）；目录添加走 models.dev 缓存；当前模型切换在输入框右下模型芯片。</div>';
+        OrosusI18N.t('web.settings.provNote');
       paintVicos(page);
       setPageHandler = function (e) {
         var row = e.target.closest('[data-k="prov"]');
@@ -1394,26 +1397,26 @@ function $(id) { return document.getElementById(id); }
     };
     var wantDef = p && p.defaultModel ? p.defaultModel : '';
     page.innerHTML =
-      '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(p ? p.key : 'custom') + ' ' + esc(isNew ? '自定义供应商' : (p.name ?? p.key)) + ' <span class="vbadge">' + (isNew ? '手填' : '编辑') + '</span></span>' +
-      '<div class="pf-row"><label>名称（槽位 id） <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-name" value="' + esc(isNew ? '' : (p.key ?? '')) + '" placeholder="my-openai" ' + (isNew ? '' : 'readonly') + ' /></div>' +
-      '<div class="pf-row"><label>API 协议 <span class="req">*</span></label><select class="fsel" id="pf-proto"><option value="openai"' + (!p || (p.proto ?? 'openai') === 'openai' ? ' selected' : '') + '>OpenAI</option><option value="anthropic"' + (p && p.proto === 'anthropic' ? ' selected' : '') + '>Anthropic</option></select></div>' +
-      '<div class="pf-row"><label>API Key</label><div class="pf-key"><input autocomplete="off" class="fi" id="pf-key" type="password" placeholder="' + (!isNew && p && p.hasApiKey ? '已配置——留空保留' : 'sk-…') + '" /><button type="button" class="eye" data-k="pf-eye" title="显示 / 隐藏">👁</button></div></div>' +
+      '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(p ? p.key : 'custom') + ' ' + esc(isNew ? OrosusI18N.t('web.settings.formCustom') : (p.name ?? p.key)) + ' <span class="vbadge">' + (isNew ? OrosusI18N.t('web.settings.formManual') : OrosusI18N.t('web.common.edit')) + '</span></span>' +
+      OrosusI18N.t('web.settings.fName') + esc(isNew ? '' : (p.key ?? '')) + '" placeholder="my-openai" ' + (isNew ? '' : 'readonly') + ' /></div>' +
+      OrosusI18N.t('web.settings.fProto') + (!p || (p.proto ?? 'openai') === 'openai' ? ' selected' : '') + '>OpenAI</option><option value="anthropic"' + (p && p.proto === 'anthropic' ? ' selected' : '') + '>Anthropic</option></select></div>' +
+      '<div class="pf-row"><label>API Key</label><div class="pf-key"><input autocomplete="off" class="fi" id="pf-key" type="password" placeholder="' + (!isNew && p && p.hasApiKey ? OrosusI18N.t('web.settings.keyConfigured') : 'sk-…') + OrosusI18N.t('web.settings.fEye') +
       '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-url" value="' + esc(p && p.baseUrl ? p.baseUrl : '') + '" placeholder="https://api.example.com/v1" /></div>' +
-      '<div class="pf-row"><label>默认模型</label>' + (isNew
-        ? '<input autocomplete="off" class="fi" id="pf-def" placeholder="模型 id（可留空，保存后再确认默认）" />'
+      OrosusI18N.t('web.settings.fDefaultLabel') + (isNew
+        ? OrosusI18N.t('web.settings.fDefaultPh')
         : '<select class="fsel" id="pf-def"></select>') + '</div>' +
-      '<div class="pf-row"><label>上下文窗口（全局顶层键——所有槽共享）</label><input autocomplete="off" class="fi" id="pf-ctx" placeholder="留空 = 不修改" /></div>' +
-      '<div class="pf-row"><label>模型表 · <span id="pf-mcount">0</span> 个 <span class="dim" id="pf-msrc"></span></label>' +
+      OrosusI18N.t('web.settings.fCtx') +
+      OrosusI18N.t('web.settings.fModelsLabel') +
         '<div class="pf-models">' +
-          '<div class="pf-mhead"><span>模型 ID</span><span></span></div>' +
+          OrosusI18N.t('web.settings.fModelsHead') +
           '<div id="pf-mrows"></div>' +
-          '<div class="pf-madd"><input autocomplete="off" class="fi" id="pf-mnew" placeholder="模型 id（回车或点 ＋ 添加）" /><button type="button" class="btn" data-k="pf-madd">＋ 添加</button></div>' +
+          OrosusI18N.t('web.settings.fModelsAdd') +
         '</div>' +
         '<div class="pf-mnote" id="pf-mnote"></div></div>' +
       '<div class="pu-actions"><span class="spacer"></span>' +
-        (isNew ? '' : '<button class="btn danger" data-k="pf-del">删除供应商</button>') +
-        '<button class="btn" data-k="pf-cancel">取消</button>' +
-        '<button class="btn primary" data-k="pf-save">保存</button></div>';
+        (isNew ? '' : OrosusI18N.t('web.settings.fDeleteBtn')) +
+        OrosusI18N.t('web.settings.fCancelBtn') +
+        OrosusI18N.t('web.settings.fSaveBtn');
     paintVicos(page);
     page.querySelector('#pf-mnew').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); addModelRow(page, mf); }
@@ -1432,21 +1435,21 @@ function $(id) { return document.getElementById(id); }
       rows.innerHTML = '';
       add.style.display = 'none';
       src.textContent = '';
-      note.innerHTML = '将恢复自动发现（目录优选 + 端点清单）——保存生效。 <button type="button" class="btn" data-k="pf-mreset">取消恢复</button>';
+      note.innerHTML = OrosusI18N.t('web.settings.mResetNote');
     } else {
       add.style.display = '';
       rows.innerHTML = mf.list.map(function (m, i) {
-        return '<div class="pf-mrow"><input autocomplete="off" class="fi" value="' + esc(m) + '" readonly /><button type="button" class="pf-mdel" data-k="pf-mdel" data-m="' + i + '" title="移除该模型">✕</button></div>';
+        return '<div class="pf-mrow"><input autocomplete="off" class="fi" value="' + esc(m) + '" readonly /><button type="button" class="pf-mdel" data-k="pf-mdel" data-m="' + i + OrosusI18N.t('web.settings.mDelBtn');
       }).join('');
-      src.textContent = mf.declared !== null ? '（自定义表——已接管自动发现）' : '（自动发现——目录优选 + 端点清单）';
-      note.innerHTML = (mf.dirty ? '已修改——保存后接管为自定义表（自动发现让位）。' : '') +
-        (mf.declared !== null ? ' <button type="button" class="btn" data-k="pf-mreset">恢复自动发现</button>' : '');
+      src.textContent = mf.declared !== null ? OrosusI18N.t('web.settings.srcCustom') : OrosusI18N.t('web.settings.srcAuto');
+      note.innerHTML = (mf.dirty ? OrosusI18N.t('web.settings.mDirtyNote') : '') +
+        (mf.declared !== null ? OrosusI18N.t('web.settings.mResetBtn') : '');
     }
     /* 默认模型下拉随表重建（编辑页）：选中值仍在表中则保留；被移出表 → 回落「不设」（保存即清默认） */
     var sel = page.querySelector('#pf-def');
     if (sel && sel.tagName === 'SELECT') {
       var cur = wantDef !== undefined ? wantDef : sel.value;
-      sel.innerHTML = '<option value="">（不设默认模型）</option>' + mf.list.map(function (m) {
+      sel.innerHTML = OrosusI18N.t('web.settings.noDefaultOpt') + mf.list.map(function (m) {
         return '<option value="' + esc(m) + '">' + esc(m) + '</option>';
       }).join('');
       sel.value = mf.list.indexOf(cur) >= 0 ? cur : '';
@@ -1456,9 +1459,9 @@ function $(id) { return document.getElementById(id); }
     var inp = page.querySelector('#pf-mnew');
     var v = (inp.value || '').trim();
     if (v === '') return;
-    if (/\s/.test(v) || v.length > 128) { toast('模型 id 不含空白字符且 ≤ 128 字符'); return; }
-    if (mf.list.indexOf(v) >= 0) { toast('「' + v + '」已在表中'); return; }
-    if (mf.list.length >= 64) { toast('模型表上限 64 个'); return; }
+    if (/\s/.test(v) || v.length > 128) { toast(OrosusI18N.t('web.toast.modelIdInvalid')); return; }
+    if (mf.list.indexOf(v) >= 0) { toast('「' + v + OrosusI18N.t('web.toast.modelDupPost')); return; }
+    if (mf.list.length >= 64) { toast(OrosusI18N.t('web.toast.modelLimit')); return; }
     if (mf.reset) { mf.reset = false; mf.list = []; } /* 恢复态下又添加 = 取消恢复，从空表重建自定义 */
     mf.list.push(v);
     mf.dirty = true;
@@ -1490,15 +1493,15 @@ function $(id) { return document.getElementById(id); }
     }
     if (e.target.closest('[data-k="pf-del"]')) {
       openConfirm({
-        title: '删除供应商',
-        bodyHtml: '<div class="pu-text">将永久删除供应商「<b>' + esc(p.name ?? p.key) + '</b>」的槽位配置与模型表，无法恢复。\n\n<span class="dim">secrets.env 中的密钥行同时移除。</span></div>',
-        confirmText: '删除供应商',
+        title: OrosusI18N.t('web.settings.delProvTitle'),
+        bodyHtml: OrosusI18N.t('web.settings.delProvPre') + esc(p.name ?? p.key) + OrosusI18N.t('web.settings.delProvPost') + '\n\n' + OrosusI18N.t('web.settings.delProvNote'),
+        confirmText: OrosusI18N.t('web.settings.delProvTitle'),
         onConfirm: function () {
           A.fetchJson('/api/providers', { method: 'POST', body: JSON.stringify({ op: 'remove', slot: p.key, removeSecret: true }) }).then(function (r) {
-            toast('已移除 ' + (p.name ?? p.key));
-            if (r && r.report && r.report.failed && r.report.failed.length) toast('部分模块重载失败：' + r.report.failed.map(function (f) { return f.name; }).join(', '));
+            toast(OrosusI18N.t('web.toast.provRemoved') + (p.name ?? p.key));
+            if (r && r.report && r.report.failed && r.report.failed.length) toast(OrosusI18N.t('web.toast.reloadPartialFail') + r.report.failed.map(function (f) { return f.name; }).join(', '));
             pageProviders(page);
-          }, function (err) { toast('删除失败：' + err.message); });
+          }, function (err) { toast(OrosusI18N.t('web.toast.deleteFail') + err.message); });
         },
       });
       return;
@@ -1507,8 +1510,8 @@ function $(id) { return document.getElementById(id); }
       var name = (page.querySelector('#pf-name').value || '').trim();
       var url = (page.querySelector('#pf-url').value || '').trim();
       var slot = isNew ? name : (p ? p.key : name);
-      if (slot === '' || !/^[A-Za-z0-9_-]+$/.test(slot)) { toast(isNew ? '名称必填（字母/数字/-/_ 的槽位 id）' : '槽位异常'); return; }
-      if (!/^https?:\/\//.test(url)) { toast('Base URL 得以 http:// 或 https:// 开头'); return; }
+      if (slot === '' || !/^[A-Za-z0-9_-]+$/.test(slot)) { toast(isNew ? OrosusI18N.t('web.toast.slotNameRequired') : OrosusI18N.t('web.toast.slotInvalid')); return; }
+      if (!/^https?:\/\//.test(url)) { toast(OrosusI18N.t('web.toast.urlInvalid')); return; }
       var spec = { type: page.querySelector('#pf-proto').value, baseUrl: url };
       var key = (page.querySelector('#pf-key').value || '').trim(); /* 走查修⑮②：设置文本框统一忽略前后空格 */
       if (key !== '') spec.apiKey = key; /* 缺省 = 保留旧 $ENV: 引用（掩码不重发不清凭据） */
@@ -1522,9 +1525,9 @@ function $(id) { return document.getElementById(id); }
       if (mf.reset) spec.models = [];
       else if (mf.dirty || mf.declared !== null) spec.models = mf.list;
       A.fetchJson('/api/providers', { method: 'POST', body: JSON.stringify({ op: 'upsert', slot: slot, spec: spec }) }).then(function (r) {
-        toast('已写入「' + slot + '」' + (r && r.report ? '——模块图重载后生效' : ''));
+        toast(OrosusI18N.t('web.toast.savedPre') + slot + '」' + (r && r.report ? OrosusI18N.t('web.toast.savedPost') : ''));
         pageProviders(page);
-      }, function (err) { toast('保存失败：' + err.message); });
+      }, function (err) { toast(OrosusI18N.t('web.toast.saveFail') + err.message); });
     }
   }
   /** 添加供应商：目录搜索（models.dev 缓存——source 恒 cache）+ 自定义手填。 */
@@ -1536,16 +1539,16 @@ function $(id) { return document.getElementById(id); }
         var an = String(a.name ?? a.key).toLowerCase(), bn = String(b.name ?? b.key).toLowerCase();
         return an < bn ? -1 : an > bn ? 1 : 0;
       });
-      page.innerHTML = '<span class="pf-back" data-k="pf-back">‹ 添加供应商</span>' +
-        '<div class="pf-row"><input autocomplete="off" class="fi" id="pf-q" placeholder="搜索供应商" /></div>' +
+      page.innerHTML = OrosusI18N.t('web.settings.addBack') +
+        OrosusI18N.t('web.settings.provSearch') +
         '<div class="pf-list" id="pf-vlist">' + provData.vendors.map(function (v, vi) {
           return '<div class="pf-vrow" data-k="vend" data-v="' + vi + '" data-name="' + esc(String(v.name ?? '').toLowerCase()) + '">' + provIcon(v.key) +
             '<span class="vname">' + esc(v.name ?? v.key) + '</span><span class="vbadge">' + esc(v.proto ?? 'openai') + '</span>' +
-            '<span class="vcount">' + (v.models ?? []).length + ' 个模型</span></div>';
+            '<span class="vcount">' + (v.models ?? []).length + OrosusI18N.t('web.settings.vendorCountPost');
         }).join('') +
-        '<div class="pf-vrow" data-k="vend-custom">' + provIcon('custom') + '<span class="vname">自定义（手填）</span><span class="vcount">OpenAI 兼容端点</span></div>' +
+        '<div class="pf-vrow" data-k="vend-custom">' + provIcon('custom') + OrosusI18N.t('web.settings.customRow') +
         '</div>' +
-        '<div class="sp-note">从 models.dev 目录缓存选择（预填端点与模型表；缓存为空时先在终端 orosus provider import 刷新），或自定义手填。</div>';
+        OrosusI18N.t('web.settings.addNote');
       paintVicos(page);
       var q = page.querySelector('#pf-q');
       q.addEventListener('input', function () {
@@ -1571,17 +1574,17 @@ function $(id) { return document.getElementById(id); }
     setPageHandler = null;
     var models = (v && v.models) || [];
     page.innerHTML =
-      '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(v ? v.key : 'catalog') + ' ' + esc(v ? v.name ?? v.key : '目录供应商') + ' <span class="vbadge">目录导入</span></span>' +
+      '<span class="pf-back" data-k="pf-back">‹ ' + provIcon(v ? v.key : 'catalog') + ' ' + esc(v ? v.name ?? v.key : OrosusI18N.t('web.settings.catalogName')) + OrosusI18N.t('web.settings.catalogBadge') +
       '<div class="pf-row"><label>API Key <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-key" type="password" placeholder="sk-…" /></div>' +
       '<div class="pf-row"><label>Base URL <span class="req">*</span></label><input autocomplete="off" class="fi" id="pf-url" value="' + esc(v ? v.baseUrl ?? '' : '') + '" /></div>' +
-      '<div class="pf-row"><label>默认模型 <span class="req">*</span></label><select class="fsel" id="pf-def">' +
+      OrosusI18N.t('web.settings.impDefaultLabel') +
         models.map(function (m, i) {
           return '<option value="' + esc(m.id) + '"' + (i === 0 ? ' selected' : '') + '>' + esc(m.label ?? m.id) + (m.ctx ? '（' + m.ctx + '）' : '') + '</option>';
         }).join('') + '</select></div>' +
-      '<div class="sp-note">导入走 provider import 子命令（目录模型表与上下文窗口自动落盘——上下文取目录 limit）。模型目录：' + (models.length) + ' 个。</div>' +
+      OrosusI18N.t('web.settings.importNotePre') + (models.length) + OrosusI18N.t('web.settings.importNotePost') +
       '<div class="pu-actions"><span class="spacer"></span>' +
-        '<button class="btn" data-k="pf-cancel">取消</button>' +
-        '<button class="btn primary" data-k="pf-save">导入</button></div>';
+        OrosusI18N.t('web.settings.fCancelBtn') +
+        OrosusI18N.t('web.settings.impImportBtn');
     paintVicos(page);
     setPageHandler = function (e) {
       if (e.target.closest('[data-k="pf-back"]') || e.target.closest('[data-k="pf-cancel"]')) { renderProviderAdd(page); return; }
@@ -1589,17 +1592,17 @@ function $(id) { return document.getElementById(id); }
         var key = (page.querySelector('#pf-key').value || '').trim();
         var url = (page.querySelector('#pf-url').value || '').trim();
         var def = page.querySelector('#pf-def').value;
-        if (key === '') { toast('API Key 必填（导入命令需要 --key）'); return; }
-        if (!/^https?:\/\//.test(url)) { toast('Base URL 得以 http:// 或 https:// 开头'); return; }
+        if (key === '') { toast(OrosusI18N.t('web.toast.keyRequired')); return; }
+        if (!/^https?:\/\//.test(url)) { toast(OrosusI18N.t('web.toast.urlInvalid')); return; }
         var argv = ['provider', 'import', v.key, '--baseUrl', url, '--key', key, '--model', def];
         A.fetchJson('/api/providers/cmd', { method: 'POST', body: JSON.stringify({ argv: argv }) }).then(function (r) {
           if (r.code === 0) {
-            toast('已导入「' + (v.name ?? v.key) + '」' + (r.report ? '——模块图重载后生效' : ''));
+            toast(OrosusI18N.t('web.toast.importedPre') + (v.name ?? v.key) + '」' + (r.report ? OrosusI18N.t('web.toast.savedPost') : ''));
             pageProviders(page);
           } else {
-            toast(r.out || '导入失败（code ' + r.code + '）');
+            toast(r.out || OrosusI18N.t('web.toast.importFailCode') + r.code + '）');
           }
-        }, function (err) { toast('导入失败：' + err.message); });
+        }, function (err) { toast(OrosusI18N.t('web.toast.importFail') + err.message); });
       }
     };
   }
@@ -1632,25 +1635,25 @@ function $(id) { return document.getElementById(id); }
       var visionCur = (vision !== 'off' && vision !== 'auto') ? vision : '';
       var turnCur = sub.maxTurns === null || sub.maxTurns === undefined ? '' : String(sub.maxTurns);
       var turnOpts = [
-        { v: '', l: '跟随默认——100 轮' },
-        { v: '150', l: '150——较长任务' },
-        { v: '200', l: '200——钳位上限' },
-        { v: '-1', l: '不限（仅时长兜底）' },
+        { v: '', l: OrosusI18N.t('web.settings.turn.follow') },
+        { v: '150', l: OrosusI18N.t('web.settings.turn.t150') },
+        { v: '200', l: OrosusI18N.t('web.settings.turn.t200') },
+        { v: '-1', l: OrosusI18N.t('web.settings.turn.unlimited') },
       ];
-      if (turnCur !== '' && !turnOpts.some(function (o) { return o.v === turnCur; })) turnOpts.push({ v: turnCur, l: '当前 ' + turnCur });
-      page.innerHTML = spTitle('模型偏好', 'PREFERENCES') +
-        '<div class="sp-note">默认模型 / 视觉模型 / 网络搜索 / 侧问模型 / 子代理模型——改一项写一项，立即写盘并重载生效。</div>' +
-        mpRow('默认模型', '<select class="fsel" id="mp-model"><option value=""' + (current === '' ? ' selected' : '') + '>（未配置）</option>' + modelOptGroups(current, providers) + '</select>') +
-        mpRow('视觉模型', '<select class="fsel" id="mp-vision">' +
-          '<option value="off"' + (vision === 'off' ? ' selected' : '') + '>停用（默认）</option>' +
-          '<option value="auto"' + (vision === 'auto' ? ' selected' : '') + '>自动（用已配置模型里支持图片的）</option>' +
+      if (turnCur !== '' && !turnOpts.some(function (o) { return o.v === turnCur; })) turnOpts.push({ v: turnCur, l: OrosusI18N.t('web.settings.turn.current') + turnCur });
+      page.innerHTML = spTitle(OrosusI18N.t('web.settings.nav.prefs'), 'PREFERENCES') +
+        OrosusI18N.t('web.settings.prefsNote') +
+        mpRow(OrosusI18N.t('web.settings.mp.default'), '<select class="fsel" id="mp-model"><option value=""' + (current === '' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.unset') + modelOptGroups(current, providers) + '</select>') +
+        mpRow(OrosusI18N.t('web.settings.mp.vision'), '<select class="fsel" id="mp-vision">' +
+          '<option value="off"' + (vision === 'off' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.visionOff') +
+          '<option value="auto"' + (vision === 'auto' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.visionAuto') +
           (visionCur && !modelOptGroups(visionCur, providers).includes('value="' + esc(visionCur) + '"')
-            ? '<option value="' + esc(visionCur) + '" selected>' + esc(visionCur) + '（当前）</option>' : '') +
+            ? '<option value="' + esc(visionCur) + '" selected>' + esc(visionCur) + OrosusI18N.t('web.settings.mp.current') : '') +
           modelOptGroups(visionCur, providers) + '</select>') +
-        mpRow('网络搜索', '<select class="fsel" id="mp-search">' +
-          '<option value="auto"' + (search === 'auto' ? ' selected' : '') + '>自动（缺省）</option>' +
-          '<option value="llm"' + (search === 'llm' ? ' selected' : '') + '>LLM Web Search（模型内置）</option>' +
-          '<option value="tavily"' + (search === 'tavily' ? ' selected' : '') + '>Tavily（需 API key）</option>' +
+        mpRow(OrosusI18N.t('web.settings.mp.search'), '<select class="fsel" id="mp-search">' +
+          '<option value="auto"' + (search === 'auto' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchAuto') +
+          '<option value="llm"' + (search === 'llm' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchLlm') +
+          '<option value="tavily"' + (search === 'tavily' ? ' selected' : '') + OrosusI18N.t('web.settings.mp.searchTavily') +
           '<option value="brave"' + (search === 'brave' ? ' selected' : '') + '>Brave（需 API key）</option></select>') +
         mpRow('侧问模型', '<select class="fsel" id="mp-btwmodel"><option value=""' + (!btwCur ? ' selected' : '') + '>跟随会话当前（缺省）</option>' + modelOptGroups(btwCur, providers) + '</select>') + /* 走查修⑨③ */
         mpRow('子代理模型', '<select class="fsel" id="mp-submodel"><option value=""' + (!sub.model ? ' selected' : '') + '>跟随（工种声明 / 父模型）</option>' +
@@ -2993,7 +2996,7 @@ function $(id) { return document.getElementById(id); }
     draftCwd = sessionCwd; /* 落桶项目 = 点按时刻当前会话所在项目（B1 跟随口径） */
     draftActive = true;
     currentSid = null;
-    setSessionTitle('新会话', '');
+    setSessionTitle(OrosusI18N.t('web.session.freshTitle'), '');
     render.open({
       sid: null, stream: streamEl, tail: tailEl, welcome: welcomeEl, pgMore: pgMoreEl, toBottom: $('to-bottom'),
       onFork: function (fromSid) { createSession({ forkFrom: fromSid }).then(function (r) { if (r) toast('已分叉出新会话——继承全部上下文'); }); },
@@ -3023,7 +3026,7 @@ function $(id) { return document.getElementById(id); }
     A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/current', { method: 'POST', body: '{}' }).then(null, function () { /* 游标同步失败无碍视图 */ });
     seenSet(sid);
     var f = findRow(sid);
-    var label = f && f.row.label !== '' ? f.row.label : '新会话';
+    var label = f && f.row.label !== '' ? f.row.label : OrosusI18N.t('web.session.freshTitle');
     setSessionTitle(label, sid);
     render.open({
       sid: sid,
@@ -3923,7 +3926,7 @@ function $(id) { return document.getElementById(id); }
         setSessionTitle('', '');
         showWelcome(true);
         syncCwdGate();
-        tailEl.textContent = '暂无会话——点击左栏「＋ 新会话」开始';
+        tailEl.textContent = OrosusI18N.t('web.welcome.noSession.start');
         return undefined;
       });
     }).then(function () {

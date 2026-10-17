@@ -128,31 +128,40 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   /** 显示断连弹窗。variant：'lost'（断开——重试按钮后台持续重连，成功自动消）| 'shutdown'（server 已
-   *  正常关闭——停止重连）| 'notoken'（本页无令牌——指路终端网址）。onRetry 由 openStream 注入。 */
+   *  正常关闭——停止重连）| 'notoken'（本页无令牌——指路终端网址）。onRetry 由 openStream 注入。
+   *  web-i18n E6 机制 D：标题/正文段随写随挂 data-i18n / data-i18n-html 载体——boot 先于取表渲染时
+   *  t() 显键（notoken/health-fail 早路径），表后至（#i18n-fail 重试钮）经 app.js chrome
+   *  onI18NChange → hydrateI18n 重水合为译文；notoken 且端点亦不可达的硬例表永不至——键面即
+   *  协议级失败态（E6 报告已档）。正文值含 <br>/<b> 标记故走 -html 形（textContent 形不容）。 */
   var discRetryFn = null;
+  function setDiscTitle(key) {
+    discTitle.setAttribute('data-i18n', key); /* 纯文本值——textContent 水合形 */
+    discTitle.textContent = OrosusI18N.t(key);
+  }
+  function discSeg(key) { return '<span data-i18n-html="' + key + '">' + OrosusI18N.t(key) + '</span>'; }
   function showDisconnect(variant, onRetry) {
     ensureDiscDom();
     if (onRetry) discRetryFn = onRetry;
     if (variant === 'shutdown') {
       discRetryFn = null; /* 停止自动重连——重试钮转为手动恢复口（health 活即整页重启动序） */
-      discTitle.textContent = OrosusI18N.t('web.disconnect.closedTitle');
-      discBody.innerHTML = OrosusI18N.t('web.disconnect.closedBody') +
-        OrosusI18N.t('web.disconnect.closedHint') +
-        OrosusI18N.t('web.disconnect.portHint');
+      setDiscTitle('web.disconnect.closedTitle');
+      discBody.innerHTML = discSeg('web.disconnect.closedBody') +
+        discSeg('web.disconnect.closedHint') +
+        discSeg('web.disconnect.portHint');
       discRetry.hidden = false;
       discRetry.textContent = OrosusI18N.t('web.disconnect.retry');
     } else if (variant === 'notoken') {
       discRetryFn = null;
-      discTitle.textContent = OrosusI18N.t('web.disconnect.noTokenTitle');
-      discBody.innerHTML = OrosusI18N.t('web.disconnect.noTokenBody') +
-        OrosusI18N.t('web.disconnect.noTokenHint') +
-        OrosusI18N.t('web.disconnect.noTokenNote');
+      setDiscTitle('web.disconnect.noTokenTitle');
+      discBody.innerHTML = discSeg('web.disconnect.noTokenBody') +
+        discSeg('web.disconnect.noTokenHint') +
+        discSeg('web.disconnect.noTokenNote');
       discRetry.hidden = true;
     } else {
-      discTitle.textContent = OrosusI18N.t(DISC_LOST_MS_KEY);
-      discBody.innerHTML = OrosusI18N.t('web.disconnect.exitedBody') +
-        OrosusI18N.t('web.disconnect.closedHint') +
-        OrosusI18N.t('web.disconnect.portHint');
+      setDiscTitle(DISC_LOST_MS_KEY);
+      discBody.innerHTML = discSeg('web.disconnect.exitedBody') +
+        discSeg('web.disconnect.closedHint') +
+        discSeg('web.disconnect.portHint');
       discRetry.hidden = false;
       discRetry.textContent = OrosusI18N.t('web.disconnect.retry');
     }

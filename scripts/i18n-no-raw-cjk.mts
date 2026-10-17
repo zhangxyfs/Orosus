@@ -70,7 +70,7 @@ export const ENROLLED: readonly { file: string; max: number; note?: string }[] =
 	{ file: "apps/cli/src/web/assets/pane.js", max: 0, note: "E3 清零（分栏/选项卡/btw 面板全族 web.pane.* + shell/composer 复用键六枚）" },
 	{ file: "apps/cli/src/web/assets/ui.js", max: 0, note: "E4 清零（菜单/悬浮卡/审批面全族 web.ui.* + shell/common 复用键四枚）" },
 	{ file: "apps/cli/src/web/assets/render.js", max: 0, note: "E5 清零（会话流渲染/面板页签全族 web.render.* + 复用键）" },
-	{ file: "apps/cli/src/web/assets/app.js", max: 842 /* E6-E8 三片清零 */ },
+	{ file: "apps/cli/src/web/assets/app.js", max: 593 /* E6 片一清毕（w-2 壳与会话区 250 字面量入键）；余 = 片二/三（E7/E8）＋外邦统一草稿化变体 9＋连山品牌不翻 2＋未命名比较 E8 档 1 */ },
 	{ file: "apps/cli/src/web/assets/archived-view.js", max: 0 /* 注释占位入册：零字面量基线（AST 只扫字面量，注释天然不扫）——未来防护 */ },
 ];
 
