@@ -7,6 +7,8 @@
  * 解析链（@orosus/i18n chainFor）：active → en-US；zh-TW 特例经 zh-CN；缺键 → fallback 参数 → key。
  *
  * t() 是每帧热路径：合并表按 tag 预构建（rebuild 异步），t() 只读同步缓存（m5-render-perf 敏感区）。
+ * tableFor（web-i18n M2）：合并表按 tag 只读口——web 译表端点 /api/i18n/messages 的切片源
+ * （rebuild 后才有效，未 init 返回 undefined——与 t() 同读同一份缓存，无第二份构建）。
  * 挂/卸载语言包都走 h.reload()——宿主 reload 后调 store.rebuild()。
  */
 
@@ -81,6 +83,8 @@ export interface LocaleStore {
 	setLanguage(rawTag: string): Promise<void>;
 	/** 当前 tag（归一形）。 */
 	activeTag(): string;
+	/** 合并表只读口（web-i18n M2：/api/i18n/messages 切片源——rebuild 后才有效，未 init 返回 undefined）。 */
+	tableFor(tag: string): Messages | undefined;
 	/** reload 后重建（挂/卸载语言包、catalog 增删都经此）。 */
 	rebuild(): Promise<void>;
 	/** /locale 列表：内置三语原生名 + 语言包槽动态追加（P4）。 */
@@ -161,6 +165,7 @@ export function createLocaleStore(deps: LocaleStoreDeps): LocaleStore {
 			await rebuild();
 		},
 		activeTag: () => tag,
+		tableFor: (rawTag: string) => merged.get(normalizeLocaleTag(rawTag)),
 		rebuild,
 		availableLocales(): LocaleEntry[] {
 			const out: LocaleEntry[] = BUILTIN_LOCALES.map((b) => ({ ...b, fromPack: false }));

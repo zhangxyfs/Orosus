@@ -67,6 +67,7 @@ import { mcpCatalogService, invalidatePanelCache } from "./api-panel.ts";
 import { t } from "../i18n/app.ts";
 import "./update-notes.ts"; // T12 更新内容链（T13 拆出独立模块——模块加载即注册 GET /api/update）
 import "./api-providers.ts"; // T13 提供商面端点（/api/providers*——readiness 序经本文件链入 mod.ts）
+import "./api-i18n.ts"; // web-i18n M2 译表数据面（GET /api/i18n/messages——readiness 序随本链入 mod.ts）
 // T12 测试注入面 re-export（settings-data.test 既有 import 路径兼容——拆分行为不变）
 export { sliceChangelogNotes, setUpdateFetchForTest, resetUpdateCacheForTest, type UpdateDocFetch } from "./update-notes.ts";
 
@@ -124,7 +125,7 @@ function checkEditSpec(spec: Record<string, unknown>): { ok: true; values: Recor
 /** 设置页数据面锚点：当前会话 harness（bootstrap /web 交接与 POST /api/sessions 打开即切换）。
  *  catalog 与 lazy live 态随会话模块图——MCP 面读写都从这里取；无当前会话 = undefined（GET 空表、
  *  start 409；写族 op 不依赖 harness，纯配置面照常）。 */
-const anchorHarness = (): { sid: string; h: Harness } | undefined => {
+export const anchorHarness = (): { sid: string; h: Harness } | undefined => {
   // 游标兜底 viewer 化身（2026-10-12 走查修——浏览态会话同样给设置页供数；reload 只重建内存图，
   //  viewer 安全）：current() 只认 hosts，游标指向 viewer 时需 lookup 兜底
   const pool = webHostPool();
