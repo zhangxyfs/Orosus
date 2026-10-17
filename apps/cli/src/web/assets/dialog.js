@@ -450,7 +450,7 @@
       if (!cur || !queue) return;
       queue.close(cur.id, { id: cur.id, close: true, sid: cur.sid }); /* 排在先前事件之后；确认以服务端 close 帧为准 */
       if (typeof onUserCloseFn === 'function') { /* 走查（2026-10-16 用户口令）：用户关窗（Esc/✕）回调——app.js 凭此「返回上一页」（启动器来源回总览）；supersede 关（viewText 顶替）不走此路 */
-        try { onUserCloseFn(); } catch (e2) { /* 回调失败不阻断关窗 */ }
+        try { onUserCloseFn(); } catch { /* 回调失败不阻断关窗 */ }
       }
     }
 

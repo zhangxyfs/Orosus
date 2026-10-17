@@ -3095,7 +3095,7 @@ function $(id) { return document.getElementById(id); }
         onShutdown: function () { /* api.js 已显「已正常关闭」弹窗并停止重连 */ },
       });
     };
-    var eventsLoaded = fetchStatus(sid).then(function () {
+    fetchStatus(sid).then(function () {
       return A.fetchJson('/api/sessions/' + encodeURIComponent(sid) + '/events');
     }).then(function (r) {
       if (currentSid !== sid) return;
