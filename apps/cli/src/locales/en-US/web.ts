@@ -43,7 +43,7 @@ export const enUSWeb: Messages = {
 	"web.pane.btw.toolPhase": " Verifying…",
 	"web.pane.btw.answering": " Answering…",
 	"web.pane.btw.scope": "Bypass Asides · sees only the main conversation (re-reads the latest history each turn) · read-only tools Read/Grep/Glob only · never enters the main stream or disk",
-	"web.pane.btw.blankL1": "No Asides yet — ask in the box below, or type /btw <question> in the main input",
+	"web.pane.btw.blankL1": "No Asides yet — ask in the box below, or type /btw &lt;question&gt; in the main input",
 	"web.pane.btw.blankL2": "Carries main-conversation context without interrupting an in-flight reply",
 	"web.pane.btw.locked": "This Aside is bound to its original session — switch back to keep asking",
 	"web.pane.btw.placeholder": "Follow up — re-reads the latest main history each turn (@ to reference files)…",

@@ -181,8 +181,8 @@
       body = '';
     } else if (inFlight) {
       body = a !== '' ? esc(a) : '';
-      if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.toolPhase') + '</span>';
-      else if (body === '') body = btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
+      if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + '<span class="dim">' + OrosusI18N.t('web.pane.btw.toolPhase') + '</span>';
+      else if (body === '') body = btwSpin(12) + '<span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
     } else {
       body = a !== '' ? '<div class="md">' + btwMd(a) + '</div>' : '';
     }
@@ -263,7 +263,7 @@
       if (now - btwLastLiveAt < 400) return true; /* 节流：渐进 md 解析每 400ms 至多一次（终帧由 answer 整渲兜底） */
       btwLastLiveAt = now;
       var txt = frame.text || '';
-      aEl.innerHTML = (txt !== '' ? '<div class="md">' + btwMd(txt) + '</div>' : '') + btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
+      aEl.innerHTML = (txt !== '' ? '<div class="md">' + btwMd(txt) + '</div>' : '') + btwSpin(12) + '<span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
       if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 64) stream.scrollTop = stream.scrollHeight;
       return true;
     }
