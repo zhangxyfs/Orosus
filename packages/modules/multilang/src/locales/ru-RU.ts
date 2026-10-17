@@ -1496,4 +1496,10 @@ export const ruRU: Record<string, string> = {
 	"core.reload.summary": "reload завершён: added {list｜нет} / removed {list｜нет} / reloaded {list｜нет} / unchanged {n} / failed{: {name} ({первая строка reason})…｜ нет}",
 	"core.context.model": "Модель: {model｜(не настроена)}",
 	"core.context.rest": "Окно: {n} tokens{ ({pct}%)} / неизвестно (можно задать через /provider import --model) / Занято: ~{n} tokens ({pct}%)",
+	"web.shell.settings": "Настройки",
+	"web.shell.help": "Справка",
+	"web.shell.more": "Ещё",
+	"web.common.loading": "Загрузка…",
+	"web.common.retry": "Повторить",
+	"web.settings.langSwitched": "Язык переключён",
 };

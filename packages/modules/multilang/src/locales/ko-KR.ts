@@ -1496,4 +1496,10 @@ export const koKR: Record<string, string> = {
 	"core.reload.summary": "reload 완료: added {list｜없음} / removed {list｜없음} / reloaded {list｜없음} / unchanged {n} / failed{: {name}({reason 첫 줄})…｜ 없음}",
 	"core.context.model": "모델: {model｜(미구성)}",
 	"core.context.rest": "창: {n} tokens{({pct}%)} ／ 미상(/provider import --model로 기록 가능) ／ 사용량: ~{n} tokens({pct}%)",
+	"web.shell.settings": "설정",
+	"web.shell.help": "도움말",
+	"web.shell.more": "더보기",
+	"web.common.loading": "로드 중…",
+	"web.common.retry": "재시도",
+	"web.settings.langSwitched": "언어가 전환되었어요",
 };

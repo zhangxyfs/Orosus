@@ -17,6 +17,7 @@ import { zhCNPopups } from "./zh-CN/popups.ts";
 import { zhCNOnboard } from "./zh-CN/onboarding.ts";
 import { zhCNStream } from "./zh-CN/stream.ts";
 import { zhCNModules } from "./zh-CN/modules.ts";
+import { zhCNWeb } from "./zh-CN/web.ts";
 import { zhTWInput } from "./zh-TW/input.ts";
 import { zhTWPanels } from "./zh-TW/panels.ts";
 import { zhTWMcp } from "./zh-TW/mcp.ts";
@@ -29,6 +30,7 @@ import { zhTWPopups } from "./zh-TW/popups.ts";
 import { zhTWOnboard } from "./zh-TW/onboarding.ts";
 import { zhTWStream } from "./zh-TW/stream.ts";
 import { zhTWModules } from "./zh-TW/modules.ts";
+import { zhTWWeb } from "./zh-TW/web.ts";
 import { enUSInput } from "./en-US/input.ts";
 import { enUSPanels } from "./en-US/panels.ts";
 import { enUSMcp } from "./en-US/mcp.ts";
@@ -41,9 +43,10 @@ import { enUSPopups } from "./en-US/popups.ts";
 import { enUSOnboard } from "./en-US/onboarding.ts";
 import { enUSStream } from "./en-US/stream.ts";
 import { enUSModules } from "./en-US/modules.ts";
+import { enUSWeb } from "./en-US/web.ts";
 
 export const mainTables = (): Record<string, Messages> => ({
-	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices, ...zhCNSettings, ...zhCNHelp, ...zhCNCli, ...zhCNPopups, ...zhCNOnboard, ...zhCNStream, ...zhCNModules },
-	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices, ...zhTWSettings, ...zhTWHelp, ...zhTWCli, ...zhTWPopups, ...zhTWOnboard, ...zhTWStream, ...zhTWModules },
-	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices, ...enUSSettings, ...enUSHelp, ...enUSCli, ...enUSPopups, ...enUSOnboard, ...enUSStream, ...enUSModules },
+	"zh-CN": { ...zhCNInput, ...zhCNPanels, ...zhCNMcp, ...zhCNMenus, ...zhCNNotices, ...zhCNSettings, ...zhCNHelp, ...zhCNCli, ...zhCNPopups, ...zhCNOnboard, ...zhCNStream, ...zhCNModules, ...zhCNWeb },
+	"zh-TW": { ...zhTWInput, ...zhTWPanels, ...zhTWMcp, ...zhTWMenus, ...zhTWNotices, ...zhTWSettings, ...zhTWHelp, ...zhTWCli, ...zhTWPopups, ...zhTWOnboard, ...zhTWStream, ...zhTWModules, ...zhTWWeb },
+	"en-US": { ...enUSInput, ...enUSPanels, ...enUSMcp, ...enUSMenus, ...enUSNotices, ...enUSSettings, ...enUSHelp, ...enUSCli, ...enUSPopups, ...enUSOnboard, ...enUSStream, ...enUSModules, ...enUSWeb },
 });

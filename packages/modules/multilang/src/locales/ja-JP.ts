@@ -1496,4 +1496,10 @@ export const jaJP: Record<string, string> = {
 	"core.reload.summary": "reload 完了：added {list｜なし} / removed {list｜なし} / reloaded {list｜なし} / unchanged {n} / failed{：{name}（{reason の先頭行}）…｜ なし}",
 	"core.context.model": "モデル: {model｜（未設定）}",
 	"core.context.rest": "ウィンドウ: {n} tokens{（{pct}%）} ／ 不明（/provider import --model で書き込み可能） ／ 使用量: ~{n} tokens（{pct}%）",
+	"web.shell.settings": "設定",
+	"web.shell.help": "ヘルプ",
+	"web.shell.more": "その他",
+	"web.common.loading": "読み込み中…",
+	"web.common.retry": "再試行",
+	"web.settings.langSwitched": "言語を切り替えました",
 };
