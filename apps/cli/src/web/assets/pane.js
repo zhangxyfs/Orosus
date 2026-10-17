@@ -79,20 +79,20 @@
 
   /** tab 行 title 口径（v2 4409/4644）：btw → 「label（旁路 · 不进主对话）」；其余 → 「id · label」。 */
   function tabTitle(t) {
-    return esc(t.kind === 'btw' ? t.label + '（旁路 · 不进主对话）' : t.id + ' · ' + t.label);
+    return esc(t.kind === 'btw' ? t.label + OrosusI18N.t('web.pane.btw.tabSuffix') : t.id + ' · ' + t.label);
   }
 
   /** tab 条行 HTML（v2 4402-4412 直裁；dotOf 注入缝在此消费——span 行 + 行尾 ×）。 */
   function tabRowHtml(t, i, active, dotOf) {
     return '<span class="pt-item' + (i === active ? ' sel' : '') + '" data-pt="' + i + '" title="' + tabTitle(t) + '">' +
       dotOf(t) + '<span class="pt-label">' + esc(t.label) + '</span>' +
-      '<button class="pt-x" data-ptx="' + i + '" title="关闭选项卡">✕</button></span>';
+      '<button class="pt-x" data-ptx="' + i + '" title="' + OrosusI18N.t('web.pane.tab.closeTitle') + '">✕</button></span>';
   }
 
   /** ⌄ 下拉行 HTML（v2 4635-4649 直裁）：q 过滤 label（小写包含）；空 / 无匹配双空态文案照抄。 */
   function dropRowsHtml(tabs, active, q, dotOf) {
     var list = tabs || [];
-    if (list.length === 0) return '<div class="ptd-none">暂无打开的标签页——/tasks 开全部子代理 · ＋ 新建侧问</div>';
+    if (list.length === 0) return '<div class="ptd-none">' + OrosusI18N.t('web.pane.drop.empty') + '</div>';
     var qq = (q || '').trim().toLowerCase();
     var rows = [];
     for (var i = 0; i < list.length; i++) {
@@ -100,9 +100,9 @@
       if (qq && String(t.label == null ? '' : t.label).toLowerCase().indexOf(qq) < 0) continue;
       rows.push('<button class="ptd-row' + (i === active ? ' sel' : '') + '" data-ptd="' + i + '" title="' + tabTitle(t) + '">' +
         dotOf(t) + '<span class="ptd-label">' + esc(t.label) + '</span>' +
-        '<span class="ptd-x" data-ptdx="' + i + '" title="关闭选项卡">✕</span></button>');
+        '<span class="ptd-x" data-ptdx="' + i + '" title="' + OrosusI18N.t('web.pane.tab.closeTitle') + '">✕</span></button>');
     }
-    return rows.length ? rows.join('') : '<div class="ptd-none">无匹配的标签页</div>';
+    return rows.length ? rows.join('') : '<div class="ptd-none">' + OrosusI18N.t('web.pane.drop.noMatch') + '</div>';
   }
 
   /* ═══════════ btw 选项卡纯函数段（问题 2 W6——v2 4442-4452/4484-4507/4568-4588 直裁语义） ═══════════ */
@@ -115,7 +115,7 @@
   /** btwTabSpec(seq) -> addTab 规格（v2 openBtwTab 4443-4451：每次调用新实例——btw-N 自增 id、
    *  label「侧问 N」、data.rounds 各自独立数组。app.js 在 data 上补 sid 后 addTab）。 */
   function btwTabSpec(seq) {
-    return { kind: 'btw', id: 'btw-' + seq, label: '侧问 ' + seq, data: { rounds: [] } };
+    return { kind: 'btw', id: 'btw-' + seq, label: OrosusI18N.t('web.pane.btw.tabLabel', { n: seq }), data: { rounds: [] } };
   }
 
   /** applyBtwFrame(rounds, frame)——SSE btw 帧（W5 形 {tab, phase, text, round}）落到实例 rounds 的
@@ -147,7 +147,7 @@
       if (!rd || rd.phase === 'error') continue;
       var inFlight = rd.phase === 'answering' || rd.phase === 'tool' || rd.phase === 'thinking' || rd.a == null || rd.a === '';
       if (!inFlight) continue;
-      rd.a = (rd.a ? rd.a + '\n' : '') + '〔已中断：切换会话〕';
+      rd.a = (rd.a ? rd.a + '\n' : '') + OrosusI18N.t('web.pane.btw.interrupted');
       rd.phase = null;
       settled++;
     }
@@ -173,16 +173,16 @@
       '<div class="msg-user"><div class="msg-bubble"><div class="msg-text">' + esc(q) + '</div></div></div>';
     /* 思考块（走查修②）：thinking 相位带走字提示；正文已启/落定后保留展示（主流思考块同款保留语义） */
     var thinkHtml = think === '' ? '' :
-      '<div class="btw-think"><span class="dim">' + (phase === 'thinking' ? btwSpin(12) + ' 思考中…' : '思考过程') + '</span>' + esc(think) + '</div>';
+      '<div class="btw-think"><span class="dim">' + (phase === 'thinking' ? btwSpin(12) + OrosusI18N.t('web.pane.btw.thinking') : OrosusI18N.t('web.pane.btw.thoughts')) + '</span>' + esc(think) + '</div>';
     var body;
     if (phase === 'error') {
-      body = '<span class="bad">侧问失败：' + esc(a) + '</span>';
+      body = '<span class="bad">' + OrosusI18N.t('web.pane.btw.fail', { err: esc(a) }) + '</span>';
     } else if (phase === 'thinking') {
       body = '';
     } else if (inFlight) {
       body = a !== '' ? esc(a) : '';
-      if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">查证中…</span>';
-      else if (body === '') body = btwSpin(12) + ' <span class="dim">回答中…</span>';
+      if (phase === 'tool') body += (body !== '' ? '\n' : '') + btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.toolPhase') + '</span>';
+      else if (body === '') body = btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
     } else {
       body = a !== '' ? '<div class="md">' + btwMd(a) + '</div>' : '';
     }
@@ -206,29 +206,29 @@
     var lastRd = rounds.length > 0 ? rounds[rounds.length - 1] : null;
     var inFlight = !lk && !!lastRd && (lastRd.phase === 'answering' || lastRd.phase === 'tool' || lastRd.phase === 'thinking' || (lastRd.a == null && lastRd.phase !== 'error'));
     var html = '<div class="btw-wrap">' +
-      '<div class="btw-scope">旁路侧问 · 只感知主对话（每轮重取最新历史）· 仅 Read/Grep/Glob 只读工具 · 不进主对话流、不落盘</div>' +
+      '<div class="btw-scope">' + OrosusI18N.t('web.pane.btw.scope') + '</div>' +
       '<div class="btw-stream" id="btw-stream">';
     if (rounds.length === 0) {
-      html += '<div class="pane-blank">还没有侧问——在下方输入框直接提问，或主输入框 /btw &lt;问题&gt;<br/>带着主对话上下文，不打断正在进行的回答</div>';
+      html += '<div class="pane-blank">' + OrosusI18N.t('web.pane.btw.blankL1') + '<br/>' + OrosusI18N.t('web.pane.btw.blankL2') + '</div>';
     }
     for (var i = 0; i < rounds.length; i++) html += btwRoundHtml(rounds[i]);
     html += '</div>' +
-      (lk ? '<div class="btw-locked">侧问绑定原会话——切回后可继续发问</div>' : '') +
+      (lk ? '<div class="btw-locked">' + OrosusI18N.t('web.pane.btw.locked') + '</div>' : '') +
       '<form class="btw-form" id="btw-form" autocomplete="off"><div class="inputbox">' +
       '<div class="ib-main"><span class="pchar" aria-hidden="true">❯</span>' +
-      '<textarea autocomplete="off" id="btw-input" rows="2"' + dis + ' placeholder="继续追问——每轮重取最新主对话历史（@ 引用文件）…" aria-label="侧问输入框"></textarea></div>' +
+      '<textarea autocomplete="off" id="btw-input" rows="2"' + dis + ' placeholder="' + OrosusI18N.t('web.pane.btw.placeholder') + '" aria-label="' + OrosusI18N.t('web.pane.btw.inputAria') + '"></textarea></div>' +
       /* 走查修⑪（2026-10-14 用户口令）：芯片位次对齐主 composer——左仅 ＋文件，右 = 模型/思考档/发送钮
        *  （主：cb-right = model-chip + effort-chip + send-btn）。原 cb-right 的 hint 行文退役：「走当前
        *  会话模型」在 tab 覆盖/侧问偏好生效时失真，「旁路 · 只读工具」与顶上 .btw-scope 行全重。 */
-      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="引用文件（= 输入 @）"' + dis + '>＋ 文件</button></span>' +
+      '<div class="ib-bar"><span class="cb-left"><button type="button" class="cb-chip" id="btw-file" title="' + OrosusI18N.t('web.shell.attachTitle') + '"' + dis + '>' + OrosusI18N.t('web.pane.btw.fileBtn') + '</button></span>' +
       '<span class="cb-right">' +
       /* 走查修⑨（2026-10-14 用户口令）：模型/思考档两芯片——tab 级临时覆盖；显示 = 覆盖值或会话当前
        *  （data.chipModel/chipEffort 由 app.js 渲染期现算）。 */
-      '<button type="button" class="cb-chip btw-chip" id="btw-model" title="本侧问临时指定模型（默认跟随会话当前）"' + dis + '>' + esc((data && data.chipModel) || '模型 —') + ' ▾</button>' +
-      '<button type="button" class="cb-chip btw-chip" id="btw-effort" title="本侧问临时指定思考档（默认跟随会话当前）"' + dis + '>思考 ' + esc((data && data.chipEffort) || '—') + ' ▾</button>' +
+      '<button type="button" class="cb-chip btw-chip" id="btw-model" title="' + OrosusI18N.t('web.pane.btw.modelTitle') + '"' + dis + '>' + esc((data && data.chipModel) || OrosusI18N.t('web.pane.btw.modelChip')) + ' ▾</button>' +
+      '<button type="button" class="cb-chip btw-chip" id="btw-effort" title="' + OrosusI18N.t('web.pane.btw.effortTitle') + '"' + dis + '>' + OrosusI18N.t('web.pane.btw.effortChip', { effort: esc((data && data.chipEffort) || '—') }) + ' ▾</button>' +
       (inFlight
-        ? '<button type="button" class="sendbtn stop" id="btw-send" data-btwstop="1" title="停止本轮侧问" aria-label="停止">■</button>'
-        : '<button type="submit" class="sendbtn idle" id="btw-send" title="发送（Enter）" aria-label="发送"' + dis + '>↑</button>') + '</span></div>' +
+        ? '<button type="button" class="sendbtn stop" id="btw-send" data-btwstop="1" title="' + OrosusI18N.t('web.pane.btw.stopTitle') + '" aria-label="' + OrosusI18N.t('web.pane.btw.stopAria') + '">■</button>'
+        : '<button type="submit" class="sendbtn idle" id="btw-send" title="' + OrosusI18N.t('web.composer.send.title') + '" aria-label="' + OrosusI18N.t('web.shell.send') + '"' + dis + '>↑</button>') + '</span></div>' +
       '</div></form></div>';
     return html;
   }
@@ -254,7 +254,7 @@
         tEl.className = 'btw-think';
         last.insertBefore(tEl, aEl);
       }
-      tEl.innerHTML = '<span class="dim">' + btwSpin(12) + ' 思考中…</span>' + esc(frame.text || '');
+      tEl.innerHTML = '<span class="dim">' + btwSpin(12) + OrosusI18N.t('web.pane.btw.thinking') + '</span>' + esc(frame.text || '');
       if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 64) stream.scrollTop = stream.scrollHeight;
       return true;
     }
@@ -263,7 +263,7 @@
       if (now - btwLastLiveAt < 400) return true; /* 节流：渐进 md 解析每 400ms 至多一次（终帧由 answer 整渲兜底） */
       btwLastLiveAt = now;
       var txt = frame.text || '';
-      aEl.innerHTML = (txt !== '' ? '<div class="md">' + btwMd(txt) + '</div>' : '') + btwSpin(12) + ' <span class="dim">回答中…</span>';
+      aEl.innerHTML = (txt !== '' ? '<div class="md">' + btwMd(txt) + '</div>' : '') + btwSpin(12) + ' <span class="dim">' + OrosusI18N.t('web.pane.btw.answering') + '</span>';
       if (stream.scrollHeight - stream.scrollTop - stream.clientHeight < 64) stream.scrollTop = stream.scrollHeight;
       return true;
     }
@@ -298,8 +298,8 @@
         '<span class="pp-ico">' + esc(rows[i].prefix || '') + '</span>' +
         '<span class="pp-label">' + esc(rows[i].label || '') + '</span></button>';
     }
-    return '<div class="pane-picker"><div class="pp-title">打开标签页</div>' +
-      '<div class="pp-sub">选择要在侧边面板中打开的标签。</div>' +
+    return '<div class="pane-picker"><div class="pp-title">' + OrosusI18N.t('web.pane.picker.title') + '</div>' +
+      '<div class="pp-sub">' + OrosusI18N.t('web.pane.picker.sub') + '</div>' +
       '<div class="pp-grid">' + cards + '</div></div>';
   }
 
@@ -347,9 +347,9 @@
 
   /* #pane-tabs 内部结构（v2 1244-1250 直裁；W1 closePane 整写 innerHTML 后由 ensureShell 自愈） */
   function shellHtml() {
-    return '<button class="pt-chev" id="pt-chev" title="查看全部选项卡（搜索 / 切换 / 关闭）"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>' +
-      '<div class="pt-list" id="pt-list"><span class="pt-empty">暂无打开的选项卡</span></div>' +
-      '<button class="pt-add" id="pt-add" title="新建选项卡（类型可扩展）">＋</button>' +
+    return '<button class="pt-chev" id="pt-chev" title="' + OrosusI18N.t('web.shell.tabsAll') + '"><svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.6 6 6.1 9.5 2.6"/><path d="M2.5 6.4 6 9.9 9.5 6.4"/></svg></button>' +
+      '<div class="pt-list" id="pt-list"><span class="pt-empty">' + OrosusI18N.t('web.shell.tabsEmpty') + '</span></div>' +
+      '<button class="pt-add" id="pt-add" title="' + OrosusI18N.t('web.shell.tabNew') + '">＋</button>' +
       '<div class="pt-menu" id="pt-menu" hidden></div>' +
       '<div class="pt-drop" id="pt-drop" hidden></div>';
   }
@@ -371,7 +371,7 @@
   function renderTabs() {
     ensureShell();
     if (tabs.length === 0) {
-      ptListEl.innerHTML = '<span class="pt-empty">暂无打开的选项卡</span>';
+      ptListEl.innerHTML = '<span class="pt-empty">' + OrosusI18N.t('web.shell.tabsEmpty') + '</span>';
       return;
     }
     var html = '';
@@ -395,7 +395,7 @@
     var r = bodyRenderers[t.kind];
     paneBodyEl.innerHTML = '';
     if (r) r(t.data, paneBodyEl);
-    else paneBodyEl.innerHTML = '<div class="pane-blank">「' + esc(t.kind) + '」类型尚无内容渲染器——onBodyRender 注册</div>';
+    else paneBodyEl.innerHTML = '<div class="pane-blank">' + OrosusI18N.t('web.pane.noRenderer', { type: esc(t.kind) }) + '</div>';
   }
 
   /* ── 导出面四方法（brief Interfaces 逐字契约） ── */
@@ -442,8 +442,8 @@
 
   /* ── ⌄ 全部选项卡下拉（v2 4634-4677 直裁） ── */
   function dropHtml(q) {
-    return '<div class="ptd-search"><input autocomplete="off" id="ptd-q" type="text" placeholder="搜索标签页…" value="' + esc(q || '') + '" aria-label="搜索标签页"></div>' +
-      '<div class="ptd-sec">打开的标签页</div><div class="ptd-rows" id="ptd-rows">' + dropRowsHtml(tabs, activeTab, q, P.dotOf) + '</div>';
+    return '<div class="ptd-search"><input autocomplete="off" id="ptd-q" type="text" placeholder="' + OrosusI18N.t('web.pane.drop.searchPh') + '" value="' + esc(q || '') + '" aria-label="' + OrosusI18N.t('web.pane.drop.searchAria') + '"></div>' +
+      '<div class="ptd-sec">' + OrosusI18N.t('web.pane.drop.section') + '</div><div class="ptd-rows" id="ptd-rows">' + dropRowsHtml(tabs, activeTab, q, P.dotOf) + '</div>';
   }
   function renderDrop(q) {
     ptDropEl.innerHTML = dropHtml(q);
@@ -481,7 +481,7 @@
     }
     /* 走查修③：禁用态脚注只在「内容源确曾提供实例行而全被滤除」时出现——plusSource 只给类型行
      *  （本批新形态：＋菜单只列「✦ 侧问」）时不显（恒显会误导成「子代理都在别处开着」）。 */
-    if (agents.length > 0 && unopened.length === 0) html += '<button class="ctx-item" disabled>子代理均已打开</button>';
+    if (agents.length > 0 && unopened.length === 0) html += '<button class="ctx-item" disabled>' + OrosusI18N.t('web.pane.plus.allOpen') + '</button>';
     ptMenuEl.innerHTML = html;
     ptMenuEl.hidden = false;
     /* 定位 clamp（v2 4690-4696 直裁）：右缘对齐 ＋ 按钮，再双向夹取，保证弹层完整落在选项卡条内 */
@@ -499,9 +499,9 @@
     ctxTabIdx = i;
     var onlyOne = tabs.length <= 1; /* 仅剩一个标签时「关闭其他标签」禁用（v2 4603/4606） */
     ctxMenuEl.innerHTML =
-      '<button class="ctx-item" data-ptctx="close">关闭标签</button>' +
-      '<button class="ctx-item" data-ptctx="close-others"' + (onlyOne ? ' disabled' : '') + '>关闭其他标签</button>' +
-      '<button class="ctx-item" data-ptctx="close-all">关闭所有标签</button>';
+      '<button class="ctx-item" data-ptctx="close">' + OrosusI18N.t('web.pane.ctx.close') + '</button>' +
+      '<button class="ctx-item" data-ptctx="close-others"' + (onlyOne ? ' disabled' : '') + '>' + OrosusI18N.t('web.pane.ctx.closeOthers') + '</button>' +
+      '<button class="ctx-item" data-ptctx="close-all">' + OrosusI18N.t('web.pane.ctx.closeAll') + '</button>';
     ctxMenuEl.hidden = false;
     ctxMenuEl.style.left = Math.min(x, window.innerWidth - 150) + 'px';
     ctxMenuEl.style.top = Math.min(y, window.innerHeight - 130) + 'px';

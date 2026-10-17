@@ -232,14 +232,19 @@ describe("web T15：前端骨架静态资产", () => {
        右键三支复用 #ctx-menu 单例（v2 4598-4624）；全关接 W1 closePane（v2 4623）；
        ⌄ 搜索过滤（v2 4650-4659）；W1 closePane 清写 #pane-tabs 后的壳自愈（不改 app.js 的接合） */
     expect(/Math\.min\(r\.right - pr\.left - mw, pr\.width - mw - 4\)/.test(js), "＋菜单 clamp").toBe(true);
-    expect(js.includes(">子代理均已打开</button>"), "全开禁用文案").toBe(true);
+    /* web-i18n E3 换键：pane.js 文案走 web.pane.* 键（zh-CN 主表侧直读锚定——值事实源在表） */
+    const zhPane = mainTables()["zh-CN"]!;
+    expect(js.includes("'web.pane.plus.allOpen'"), "全开禁用键").toBe(true);
+    expect(zhPane["web.pane.plus.allOpen"], "全开禁用文案").toBe("子代理均已打开");
     expect(js.includes('data-ptctx="close"'), "右键：关闭标签").toBe(true);
     expect(js.includes('data-ptctx="close-others"'), "右键：关闭其他").toBe(true);
     expect(js.includes('data-ptctx="close-all"'), "右键：关闭所有").toBe(true);
     expect(js.includes("getElementById('ctx-menu')"), "复用 #ctx-menu 单例").toBe(true);
     expect(js.includes("closePane"), "全关接 W1 closePane").toBe(true);
-    expect(js.includes("搜索标签页"), "⌄ 搜索框").toBe(true);
-    expect(js.includes("无匹配的标签页"), "⌄ 过滤无匹配空态").toBe(true);
+    expect(js.includes("'web.pane.drop.searchPh'"), "⌄ 搜索框键").toBe(true);
+    expect(zhPane["web.pane.drop.searchPh"], "⌄ 搜索框文案").toBe("搜索标签页…");
+    expect(js.includes("'web.pane.drop.noMatch'"), "⌄ 过滤无匹配空态键").toBe(true);
+    expect(zhPane["web.pane.drop.noMatch"], "⌄ 过滤无匹配空态文案").toBe("无匹配的标签页");
     expect(js.includes("function ensureShell()"), "壳自愈（W1 closePane 清写后重建）").toBe(true);
     expect(js.includes("attributeFilter: ['hidden']"), "#pane hidden 观测（外路开合状态对齐）").toBe(true);
   });

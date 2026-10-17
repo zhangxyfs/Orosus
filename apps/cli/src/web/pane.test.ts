@@ -12,6 +12,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import "./assets/pane.js"; // 副作用挂 globalThis.OrosusPane（经典脚本零构建——node/浏览器同源导出；DOM 段 document 守卫不触）
+import "./assets/i18n.js"; // web-i18n E3：纯函数段文案换键 OrosusI18N.t('web.pane.*')——node 直测侧绑 zh-CN 主表后照断原中文
+import { zhCNWeb } from "../locales/zh-CN/web.ts";
+
+(globalThis as { OrosusI18N?: { setMessages(tag: string, m: Record<string, string>): void } }).OrosusI18N!.setMessages("zh-CN", zhCNWeb);
 
 /* W6 追加面：btw 选项卡纯函数（btwTabSpec/applyBtwFrame/btwTabHtml——帧归约与 HTML 推导零 DOM 依赖）。 */
 type BtwRound = { q: string; a: string | null; phase: string | null; think?: string };
