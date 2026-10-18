@@ -476,16 +476,6 @@ registerRoute("POST", "/api/sessions/:sid/btw", async (req, res, params) => {
 
 // ---------- T9：跨项目会话池数据面（bootstrap / sessions / 三形态创建 / 显隐 / 置顶 / 归档 / 删除 / 导出）----------
 
-/** 组内行序（⑥ /ps 序义——ps.ts PHASE_ORDER 同序复刻：web/* 不改既有件，本地同源常量）：
- *  活体行按相位序（等审批 → 等问询 → 跑 → 错 → 闲）在前，死行按 mtime 新到旧在后。 */
-const PHASE_ORDER: Record<string, number> = {
-  "waiting-approval": 0,
-  "waiting-input": 1,
-  running: 2,
-  error: 3,
-  idle: 4,
-};
-
 /** 左栏会话行（§3 :218 SessionRow + fresh?:true——B12/B13 前端消费面〔fresh 无归档钮/占位文案〕，
  *  可选键缺席 = 语义假，exactOptionalPropertyTypes 口径条件展开）。 */
 export interface SessionRow {
@@ -556,13 +546,10 @@ registerRoute("GET", "/api/sessions", async (_req, res) => {
       name: basename(g.cwd) || g.bucket, // 组名 = basename(cwd)（B3；反查失败回落桶名）
       cwd: g.cwd,
       newest: Math.max(...g.rows.map((r) => r.mtimeMs)),
-      sessions: g.rows
-        .toSorted((a, b) => {
-          const pa = PHASE_ORDER[rowPhase(pool, snap, a) ?? ""] ?? 99;
-          const pb = PHASE_ORDER[rowPhase(pool, snap, b) ?? ""] ?? 99;
-          return pa !== pb ? pa - pb : b.mtimeMs - a.mtimeMs;
-        })
-        .map((r) => rowOf(pool, snap, r)),
+      /* 组内行序：纯 mtime 新到旧（2026-10-17 修——原 /ps 相位序复刻「活行恒在死行前」，而 web 点击
+       *  查看 host 化即成活体 → 仅点开也跳顶；行序只认会话内容时间，与托管状态/相位脱钩。相位仍是
+       *  行标记（rowOf 的 phase 字段转圈/图标不变），不再占序；真跑起来的会话事件追加 mtime 自新。 */
+      sessions: g.rows.toSorted((a, b) => b.mtimeMs - a.mtimeMs).map((r) => rowOf(pool, snap, r)),
     }))
     .toSorted((a, b) => b.newest - a.newest); // 工作区按最新活动在前
 

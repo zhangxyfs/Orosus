@@ -500,9 +500,86 @@ describe("web T15：前端骨架静态资产", () => {
     /* ⑦ 草稿首发：btn-new 只开窗不建会话；sendDraft 先建后发；cwd 芯片草稿在场 */
     expect(app).toContain("$('btn-new').addEventListener('click', function () { openDraft(); })");
     expect(app).toContain("function sendDraft(text, imgs)");
-    expect(app).toContain("createSession({ cwd: draftCwd })");
     expect(app).toContain("var empty = draftActive || (currentSid !== null && !render.userSeen())");
-    expect(app).toContain("draftActive = false; /* 走查修⑮⑦：切走即出草稿态");
+    expect(app).toContain("draftActive = false; draftForkFrom = ''; /* 走查修⑮⑦：切走即出草稿态");
+    /* ⑦b 统一草稿化（2026-10-17 用户口令②）：全部新建会话入口只开草稿零请求——createSession 调用
+     *  收口为 sendDraft 一处（定义不计；贴图已改本地暂存、发送才上传——⑬k 重做后不再贴图即建） */
+    expect(app.match(/createSession\(/g)?.length, "createSession 直呼收口").toBe(2);
+    expect(app).toContain("draftForkFrom !== '' ? { forkFrom: draftForkFrom } : { cwd: draftCwd }");
+    expect(app).toContain("function openDraft(opts)");
+    expect(app).toContain("openDraft({ cwd: g.cwd })");
+    expect(app).toContain("openDraft({ cwd: cwd })");
+    expect(app).toContain("openDraft({ cwd: p })");
+    expect(app).toContain("openDraft({ forkFrom: sid })");
+    expect(app).toContain("openDraft({ forkFrom: fromSid })");
+    expect(app).toContain("openDraft({ forkFrom: currentSid })");
+    expect(app).toContain("draftActive = false; draftForkFrom = '';");
+    expect(app).toContain("web.toast.forkCwdGuard"); // 2026-10-17 销旧抽新随键换形（i18n 会话——原裸串断言）
+    /* ⑦c 草稿窗右栏清空（2026-10-17 用户口令③）：fetchPanel(null) 早退——openDraft 主动清面板
+     *  （任务清单空态 + 签名门复位），无会话空态（会话删光）同口径 */
+    expect(app).toContain("resetPanelDraft(); /* 统一草稿化（2026-10-17 用户口令③）：右栏随草稿清空");
+    expect(app).toContain("function resetPanelDraft()");
+    expect(app).toContain("web.misc.todoEmptyHtml"); // 同上随键换形
+    expect(app).toContain("if (draftActive) $('kv-cwd').textContent = draftCwd || '—';");
+    /* ⑦d 草稿窗尾行（2026-10-17 用户口令④）：render.open 对 sid:null 直落待命（syncTail 空转分支）
+     *  ——「正在连接…」瞬态文案没有后续帧改写会永挂 */
+    const rd = read("render.js");
+    expect(rd).toContain("if (opts.sid === null || opts.sid === undefined) syncTail();");
+    expect(rd).toContain("else R.tail.innerHTML = OrosusI18N.t('web.shell.connecting');");
+  });
+
+  it("⑬j 浏览窗锚点跟草稿（2026-10-17 用户报障）：新会话重选文件夹后再开「浏览文件夹」——初始路径 = 草稿目录，不得回落旧会话 sessionCwd", () => {
+    const app = read("app.js");
+    /* openDirPicker 初始路径必须与 cwd 芯片菜单 base 同锚（统一草稿化口径 draftActive ? draftCwd : sessionCwd）
+     * ——报障链：旧会话在 D:\A → ＋新会话（草稿 = A）→ 浏览窗选 B（draftCwd = B）→ 再开浏览窗，
+     *    旧口径 dpState.path = sessionCwd 仍指 A（dp-input 默认路径显示 A——错）。 */
+    expect(app).toContain("dpState.path = (draftActive ? draftCwd : sessionCwd) || '';");
+    expect(app.includes("dpState.path = sessionCwd"), "旧口径（不看草稿）应绝迹").toBe(false);
+  });
+
+  it("⑬k 贴图本地暂存、发送才上传 + toast 压过 composer 浮层（2026-10-17 用户报障②③④→重做）", () => {
+    const app = read("app.js");
+    const css = read("style.css");
+    /* ② 贴图零请求零副作用（2026-10-17 用户口径「本来就应该粘贴的时候是本地的」）：File 留内存 +
+     *  data: 预览（CSP img-src 'self' data: 允许、blob: 被吞）——贴图不得触发建会话/任何网络请求；
+     *  上传只在发送链：草稿 = 先建会话→传→发（sendDraft），普通会话 = 先传→发（submit）。 */
+    const pasteSeg = app.slice(app.indexOf("input.addEventListener('paste'"), app.indexOf("/* ── 队列条"));
+    expect(app).toContain("rd.readAsDataURL(f)");
+    expect(pasteSeg.includes("createSession"), "贴图不得触发建会话").toBe(false);
+    expect(pasteSeg.includes("uploadImage"), "贴图不得触发上传").toBe(false);
+    expect(app).toContain("function uploadPending(imgs)");
+    expect(app).toContain("return uploadPending(imgs).then(function (ids) {"); /* 草稿链：建会话后传再发 */
+    expect(app).toContain("uploadPending(attachments.slice()).then(function (ids) {"); /* 普通链：先传再发 */
+    /* ③④ toast 行与 dock 浮层（.popup，bottom:100% 贴输入框上缘 z-10）/cwd 芯片（z-3，同带）重叠——
+     *  toast 是提示层须压其上；压层后自带实底药丸（surface-2 不透明 + 暖金描边）可读。 */
+    expect(/\.toastline\s*\{[^}]*position:\s*relative;[^}]*z-index:\s*20;/.test(css), "toast 定位抬层（z-20 > .popup z-10 > .cwd-chip z-3）").toBe(true);
+    expect(/\.toastline\s*\{[^}]*width:\s*fit-content;[^}]*background:\s*var\(--surface-2\);/.test(css), "toast 实底药丸（内容自适应 + 实底可读）").toBe(true);
+  });
+
+  it("⑬l 图片预览 lightbox（2026-10-17 用户口径）：贴图缩略图 + 流区消息图点击放大——半透明底 + 居中大图 + ×/Esc/点底关", () => {
+    const html = read("index.html");
+    const app = read("app.js");
+    const css = read("style.css");
+    /* 静态壳：#lightbox（overlay-lb）+ #lb-img + #lb-close（可被源码锚定断言）——✕ 钮走
+     *  web.common.close 种子键（E9 载体形 data-i18n-title——⑳ 裸中文门禁零豁免） */
+    for (const id of ["lightbox", "lb-img", "lb-close"]) {
+      expect(html.includes(`id="${id}"`), `#${id} 应存在`).toBe(true);
+    }
+    expect(html.includes('class="overlay-lb"'), "lightbox 壳类").toBe(true);
+    expect(html.includes('data-i18n-title="web.common.close"'), "✕ 钮关闭键（种子消费落表）").toBe(true);
+    /* 文档级委托：消息图（render.js img.photo——/api/media 源）与贴图缩略图（data: 源）统一捕获；
+     *  Esc 链最优先收 lightbox（层位最顶）。 */
+    expect(app).toContain("e.target.closest('img.photo, .attach-thumb img')");
+    expect(app).toContain("lbImg.src = src;");
+    expect(app).toContain("if (!$('lightbox').hidden) { lbClose(); return; }");
+    /* 旧「C3 点击放大」= window.open 新标签页开原图——lightbox 接管后须绝迹（双开 = 弹窗 + 图片页） */
+    expect(read("render.js").includes("window.open(img.getAttribute('src')"), "旧开页式点击放大应绝迹").toBe(false);
+    /* 层位 70：压确认层/浮层（60），让位断连弹窗（80）与 M4 兜底（90）；点底关（zoom-out）+
+     *  可放大提示（zoom-in）+ 大图约束（视口留边 + 圆角投影）。 */
+    expect(/\.overlay-lb\s*\{[^}]*z-index:\s*70;/.test(css), "lightbox 层位 z-70").toBe(true);
+    expect(/\.overlay-lb\[hidden\]\s*\{\s*display:\s*none;\s*\}/.test(css), "[hidden] 兜底").toBe(true);
+    expect(css.includes(".attach-thumb img, .msg-user img.photo { cursor: zoom-in; }"), "可点放大提示").toBe(true);
+    expect(/\.overlay-lb img\s*\{[^}]*max-width:\s*calc\(100vw - 96px\);[^}]*border-radius:\s*10px;/.test(css), "大图视口约束 + 圆角").toBe(true);
   });
 
   it("⑬ 走查修①（用户口令）：「打开标签页」选择器 + tab 记忆保留 + /tasks 入口下线", () => {
@@ -685,7 +762,7 @@ describe("web T15：前端骨架静态资产", () => {
     const app = read("app.js");
     expect(app.includes("onI18NChange(function")).toBe(true);
     expect(app.includes("web.settings.langSwitched")).toBe(true);
-    expect(app.includes("页面自身不切语言")).toBe(false); // F8 旧边界注释性文案退役
+    expect(app.includes("页面自身不切语言")).toBe(false); // F8 旧边界文案退役
     expect(app.includes("当前已是该语言")).toBe(false); // 同上——E 批换键前的先行断言（本任务随 handler 改造一并换）
     const li = app.indexOf("onI18NChange(function");
     expect(app.slice(li, li + 1000)).toContain("renderSidebar"); // 报障修（2026-10-17）：左侧会话列表挂入 chrome 重渲染链——切语言即时换语

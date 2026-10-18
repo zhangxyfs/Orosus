@@ -236,6 +236,12 @@
     </div>
   </div>
 
+  <!-- 图片预览 lightbox（2026-10-17 用户口径）：贴图缩略图/流区消息图点击放大——半透明底 + 居中大图；×/Esc/点底关 -->
+  <div class="overlay-lb" id="lightbox" hidden role="dialog" aria-modal="true">
+    <button type="button" class="lb-x" id="lb-close" data-i18n-title="web.common.close">✕</button>
+    <img id="lb-img" alt="" />
+  </div>
+
   <script src="/assets/vendor/marked.js" defer></script>
   <script src="/assets/vendor/purify.js" defer></script>
   <script src="/assets/api.js" defer></script>

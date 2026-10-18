@@ -165,7 +165,11 @@ body.light .think-hint { color: var(--muted-dim); }
 .ls-group:hover { background: var(--fg-soft); }
 .ls-group .gicon { color: var(--muted-faint); width: 14px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .ls-group .gname { font-weight: 600; }
+/* 分组计数（2026-10-17 走查二轮）：右推贴行尾——与「项目 N」计数（space-between 推右）
+ *  同一边缘对齐（原 margin-left:auto 被常驻占位的 g-acts 顶开 ~40px 即旧患）；
+ *  悬停时数字让位右侧 ⋯＋ 钮组（g-acts display 进场不常驻占位） */
 .ls-group .gcount { margin-left: auto; color: var(--muted-faint); font-size: calc(11px * var(--fz)); }
+.ls-group:hover .gcount { display: none; }
 /* 悬停项目行：上方浮出完整路径 tooltip（0.35s 延迟防闪） */
 .ls-group::after {
   content: attr(data-path);
@@ -176,9 +180,9 @@ body.light .think-hint { color: var(--muted-dim); }
   opacity: 0; pointer-events: none; transition: opacity 0.12s ease 0.35s; z-index: 30;
 }
 .ls-group:hover::after { opacity: 1; }
-/* 悬停项目行：右侧两枚图标钮（更多 ⋯ / 该工作区新建会话 ＋） */
-.ls-group .g-acts { display: inline-flex; gap: 2px; visibility: hidden; }
-.ls-group:hover .g-acts { visibility: visible; }
+/* 悬停项目行：右侧两枚图标钮（更多 ⋯ / 该工作区新建会话 ＋）——display 切换不占位 */
+.ls-group .g-acts { display: none; gap: 2px; margin-left: auto; }
+.ls-group:hover .g-acts { display: inline-flex; }
 .g-act { width: 18px; height: 18px; border-radius: 5px; color: var(--muted-faint); display: inline-flex; align-items: center; justify-content: center; font-size: calc(12px * var(--fz)); }
 .g-act:hover { color: var(--accent); background: var(--accent-soft); }
 /* 右键小菜单（⋯ 更多 / 会话右键） */
@@ -209,7 +213,7 @@ body.light .think-hint { color: var(--muted-dim); }
 .ls-more:hover { color: var(--accent); background: var(--accent-soft); }
 
 /* 会话行活动指示：进行中 ⠻ 转圈 / 完成未读绿点 / 失败红点 */
-.ls-item .sact { flex: 0 0 auto; width: 11px; text-align: center; font-size: calc(10px * var(--fz)); }
+.ls-item .sact { flex: 0 0 14px; width: 14px; text-align: center; font-size: calc(10px * var(--fz)); }
 .ls-item .sact .spin { display: inline-block; color: var(--accent); }
 .ls-item .sact.done { color: var(--accent); }
 .ls-item .sact.failed { color: var(--err); }
@@ -229,28 +233,40 @@ body.light .think-hint { color: var(--muted-dim); }
 .ar-sort button.sel { background: var(--accent-soft); color: var(--accent); }
 .ls-item { display: flex; align-items: baseline; gap: 7px; padding: 5px 8px; border-radius: 7px; cursor: pointer; font-size: calc(12.5px * var(--fz)); position: relative; }
 .ls-item:hover { background: var(--fg-soft); }
-.ls-item .sdot { flex: 0 0 auto; width: 11px; text-align: center; font-size: calc(10px * var(--fz)); }
+.ls-item .sdot { flex: 0 0 14px; width: 14px; text-align: center; font-size: calc(10px * var(--fz)); }
 .ls-item .stitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+/* 标题走马灯（2026-10-17 走查）：常态 .stmove display:contents——文本直落 .stitle，单行省略照旧；
+ *  挂 .marq 后双份轨道显形（.st-dup 复一份+段尾 2.5em 间隔），整体位移 -50% 无缝循环。
+ *  溢出测量与 --marq-dur 由 app.js mouseover 委托按需挂载。 */
+.ls-item .stitle .stmove { display: contents; }
+.ls-item .stitle .st-dup { display: none; }
+.ls-item .stitle.marq { text-overflow: clip; }
+.ls-item .stitle.marq .stmove { display: inline-block; white-space: nowrap; animation: stmarq var(--marq-dur, 10s) linear infinite; will-change: transform; }
+.ls-item .stitle.marq .stseg { display: inline-block; padding-right: 2.5em; }
+.ls-item .stitle.marq .st-dup { display: inline-block; }
+@keyframes stmarq { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .ls-item .srel { flex: 0 0 auto; color: var(--muted-faint); font-size: calc(11px * var(--fz)); font-variant-numeric: tabular-nums; }
-.ls-item .spin-pin { flex: 0 0 auto; color: var(--muted-faint); font-size: calc(11px * var(--fz)); visibility: hidden; padding: 2px 3px; border-radius: 4px; display: inline-flex; align-items: center; }
-.ls-item .spin-pin svg { display: block; }
-.ls-item:hover .spin-pin { visibility: visible; }
-.ls-item .spin-pin:hover { color: var(--warn); background: var(--warn-soft); }
-.ls-item.pinned-row .spin-pin { visibility: visible; color: var(--warn); }
-.ls-item.pinned-row .spin-pin svg { fill: currentColor; }
-/* 归档钮：悬停行才显示（移走即隐） */
-.ls-item .sact-btn { flex: 0 0 auto; color: var(--muted-faint); visibility: hidden; padding: 2px 3px; border-radius: 4px; display: inline-flex; align-items: center; }
+/* 会话行双动作钮（zcode 形）：display 切换非 visibility——常态不占槽，悬停/置顶行才进场
+ *  （置顶钮与状态点同宽 14px 定槽互换——标题起点零跳动；归档钮进右槽换下时间） */
+.ls-item .sact-btn { flex: 0 0 auto; align-self: center; color: var(--muted-faint); display: none; padding: 2px 3px; border-radius: 4px; align-items: center; }
 .ls-item .sact-btn svg { display: block; }
-.ls-item:hover .sact-btn { visibility: visible; }
+.ls-item:hover .sact-btn { display: inline-flex; }
 .ls-item .sact-btn:hover { color: var(--accent); background: var(--accent-soft); }
-.ls-item.pinned-row .sact-btn[data-sact="pin"] { visibility: visible; color: var(--warn); }
+.ls-item .sact-btn.spin-pin { flex: 0 0 14px; width: 14px; justify-content: center; padding: 3px 0; }
+.ls-item .spin-pin svg { display: block; }
+.ls-item .spin-pin:hover { color: var(--warn); background: var(--warn-soft); }
+.ls-item.pinned-row .sact-btn[data-sact="pin"] { display: inline-flex; color: var(--warn); }
 .ls-item.pinned-row .sact-btn[data-sact="pin"] svg { fill: currentColor; }
+/* 左槽互换（2026-10-17 走查 zcode 形）：悬停/置顶行 = 状态点让位图钉（display:none 腾槽——
+ *  visibility 留空盒会把标题顶右） */
+.ls-item:hover .sdot, .ls-item:hover .sact, .ls-item.pinned-row .sdot, .ls-item.pinned-row .sact { display: none; }
+/* 右槽互换：悬停且有归档钮时时间让位（fresh 行无归档钮——时间保留） */
+.ls-item:hover:has(> .sact-btn[data-sact="archive"]) .srel { display: none; }
 /* 选中会话行：清晰选中背景（用户走查口径——浅色系取中性灰绿、深色系青玉 tint 加深一档），左侧 accent 内嵌条 */
 .ls-item.cur, .ls-item.cur:hover { background: color-mix(in oklch, var(--accent) 17%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
 body.light .ls-item.cur, body.light .ls-item.cur:hover { background: color-mix(in oklch, var(--muted) 22%, transparent); }
 .ls-item.cur .stitle { color: var(--accent); font-weight: 600; }
 body.light .ls-item.cur .stitle { color: var(--fg); }
-.ls-item .curtag { flex: 0 0 auto; color: var(--accent); font-size: calc(10px * var(--fz)); }
 .ls-item.flash { animation: curflash 1.2s ease; }
 @keyframes curflash { 0%, 60% { background: var(--accent-soft); } 100% { background: transparent; } }
 /* 左侧栏收缩态：窄轨 */
@@ -602,8 +618,16 @@ body.light .work-head { color: var(--muted); }
 .queue-row:hover { background: var(--warn-soft); }
 .queue-row .qtext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .queue-hint { color: var(--muted-faint); font-size: calc(11px * var(--fz)); padding: 0 6px 2px; }
-/* toast：输入框上边缘黄字行（真实形态——无框、全宽、自消） */
-.toastline { display: none; padding: 2px 20px; color: var(--warn); font-size: calc(12.5px * var(--fz)); }
+/* toast：输入框上边缘黄字行（自消）。该带与 dock 浮层（.popup z-10）/cwd 芯片（z-3）重叠——toast
+ * 压其上（2026-10-17 用户报障③）且自带实底药丸（报障④：裸字叠菜单文字两头不可读——内容自适应宽，
+ * surface-2 两主题均不透明，暖金描边同 .mode-chip.never 悬边配方） */
+.toastline {
+  display: none; margin: 0 20px; width: fit-content; max-width: calc(100% - 40px);
+  padding: 3px 10px; color: var(--warn); font-size: calc(12.5px * var(--fz));
+  background: var(--surface-2); border: 1px solid color-mix(in oklch, var(--warn) 42%, var(--border)); border-radius: 7px;
+  position: relative; z-index: 20;
+}
+.toastline.show { display: block; }
 .toastline.show { display: block; }
 
 .inputwrap { position: relative; padding: 4px 20px 12px; }
@@ -1109,6 +1133,16 @@ body.light .work-head { color: var(--muted); }
 .overlay-disc .pu-text { line-height: 1.9; }
 .overlay-disc .disc-hint { margin-top: 10px; }
 
+/* 图片预览 lightbox（2026-10-17 用户口径）：贴图缩略图/流区消息图点击放大——半透明黑底 + 居中大图
+ * （圆角投影）；层位 70：压确认层/浮层（60），让位断连弹窗（80）与 M4 兜底（90）。 */
+.overlay-lb { position: fixed; inset: 0; z-index: 70; background: color-mix(in oklch, black 72%, transparent); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.overlay-lb[hidden] { display: none; }
+.overlay-lb img { max-width: calc(100vw - 96px); max-height: calc(100vh - 96px); border-radius: 10px; box-shadow: 0 24px 80px -24px oklch(0 0 0 / 0.85); }
+.lb-x { position: absolute; top: 14px; right: 18px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid color-mix(in oklch, #fff 25%, transparent); color: #fff; background: color-mix(in oklch, #fff 8%, transparent); font-size: calc(14px * var(--fz)); cursor: pointer; }
+.lb-x:hover { background: color-mix(in oklch, #fff 18%, transparent); }
+/* 可点放大提示：贴图缩略图与流区消息图（lightbox 自身点图即关——zoom-out 在容器上） */
+.attach-thumb img, .msg-user img.photo { cursor: zoom-in; }
+
 /* web-i18n M4 协议级兜底块（spec §3——i18n 取表失败才现身，文案是唯一白名单裸中文/英文并书）：
    全屏 fixed z 90 压过断连层（z 80——boot Promise.all 随取表失败一起拒绝会唤起断连弹窗，
    兜底块须在其上且重试钮可点）；不透明底防两层弹窗叠影。 */
@@ -1206,6 +1240,8 @@ body.light .work-head { color: var(--muted); }
 
 /* 贴图上传在途占位（评审 Important-2：预览源改 /api/media——落盘前 spinner 占位） */
 .attach-thumb .ax-waiting { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--muted-faint); }
+/* 发送链上传遮罩（贴图本地暂存 2026-10-17：data: 预览在下不闪换，上传在途覆 spinner） */
+.attach-thumb .up-spin { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in oklch, var(--bg) 62%, transparent); }
 
 /* ─── T17 增量段（设置十页 / 帮助 / 更多 / 更新——CSP 无内联：几何变体全走类名或 JS 属性赋值） ─── */
 /* 设置页小节头间距变体（原型 subHead 的 margin-top:14px 内联款） */

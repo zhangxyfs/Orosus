@@ -270,12 +270,12 @@ describe("web T16 审查修复（Critical-1 + Important-2/3/4/5）", () => {
     expect(UI.nextRowIdx(single, 0, -1)).toBe(0);
   });
 
-  it("R2 贴图预览不再用 blob:（CSP img-src 'self' data: 吞裂图）——上传落盘后走 /api/media 源", () => {
+  it("R2 贴图预览不用 blob:（CSP img-src 'self' data: 吞裂图）——本地暂存走 data: 源（2026-10-17 重做：贴图零请求、发送才上传）", () => {
     const src = readFileSync(join(ASSETS_DIR, "app.js"), "utf8");
     const composerZone = src.slice(src.indexOf("贴图（D6"), src.indexOf("── 队列条"));
     expect(composerZone).not.toContain("createObjectURL"); // 导出下载（a.href）面不受影响——只钉贴图段
     expect(composerZone).not.toContain("revokeObjectURL");
-    expect(composerZone).toContain("/api/media?path="); // 预览源 = 落盘路径（Important-2 采用评审建议案）
+    expect(composerZone).toContain("rd.readAsDataURL(f)"); // 预览源 = data: 本地读取（Important-2 的 /api/media 预览面随本地暂存退役）
   });
 
   it("R3 mid-turn 收容：placeIn 无开口容器必补建 turn（源码结构锚定）+ 恒假条件死代码已删（Important-3/4）", () => {

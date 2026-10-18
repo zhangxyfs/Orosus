@@ -3,7 +3,7 @@
  *  （JsonlSessionStore 真盘 + live.json/锁文件 fabricate）：
  *  ① 全桶分组（组名 = basename(cwd)、行字段齐）；② pinned 置顶区 + toggle 持久化（pins.json）；
  *  ③ bucket→cwd 反查缓存命中（盘读计数不放大）；④ POST {cwd} → 新 harness bucket = encodeCwd(cwd)；
- *  ⑤ POST {resumeSid} → viewer/host 换轨；⑥ 协同 peers 跨桶合并 + 组内 /ps 序义；⑦ 扫描缓存
+ *  ⑤ POST {resumeSid} → viewer/host 换轨；⑥ 协同 peers 跨桶合并 + 组内纯 mtime 行序；⑦ 扫描缓存
  *  （§5 律三：1s 窗内 5 连 GET 只扫一次、过期重扫）；⑧ 工作区显隐（B10：hide 过滤 + 找回）；
  *  ⑨ 顶栏新建跟随（B1：current 所在项目 → 显式切换 → 无 current 回落启动 cwd）；⑬ fresh 沿用
  *  （B13：同项目二次 POST 同 sid + reused:true；发过消息后新 sid）；⑭ 重命名任意会话
@@ -11,7 +11,7 @@
  *  resume 恢复 fork 视图 + ⑯补负面对照（T18 评审返工——sessionFileHasForkMarker 标记扫描分支
  *  此前零覆盖：⑮ 走 POST {forkFrom} 短路了文件检查，本件种盘上 fork 子体经 {resumeSid} 打开）。 */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -298,7 +298,7 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     await s.stop();
   }, 60_000);
 
-  it("⑥ 协同 peers 跨桶合并：两桶活体行 live/phase/kind 齐 + 组内 /ps 序义（waiting → running → error → idle → 死行）", async () => {
+  it("⑥ 协同 peers 跨桶合并：两桶活体行 live/phase/kind 齐 + 组内行序纯 mtime（活体不插队）", async () => {
     const home = tmpHome();
     process.env["OROSUS_HOME"] = home;
     writeProviderConfig(home);
@@ -313,6 +313,12 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     writeLive(join(home, "sessions", encodeCwd(cwdA), "s_l1"), { pid: sleeper.pid, phase: "running" });
     writeLive(join(home, "sessions", encodeCwd(cwdA), "s_l2"), { pid: sleeper.pid, phase: "waiting-approval" });
     writeLive(join(home, "sessions", encodeCwd(cwdB), "s_l3"), { pid: sleeper.pid, phase: "error", kind: "line" });
+    // 互异 mtime 显式前移（同毫秒并列 flaky 防护）：死行最新、running 居中、waiting-approval 最旧
+    const sessionFile = (cwd: string, sid: string): string => join(home, "sessions", encodeCwd(cwd), sid, "agents", "session.jsonl");
+    const base = Date.now();
+    utimesSync(sessionFile(cwdA, "s_dead"), new Date(base - 60_000), new Date(base - 60_000));
+    utimesSync(sessionFile(cwdA, "s_l1"), new Date(base - 3_600_000), new Date(base - 3_600_000));
+    utimesSync(sessionFile(cwdA, "s_l2"), new Date(base - 86_400_000), new Date(base - 86_400_000));
     const s = await startWeb(home); // 空启（无托管——行序断言干净）
 
     const body = await sessionsBody(s);
@@ -322,11 +328,19 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     expect(rowIn(gA, "s_l1")).toMatchObject({ live: true, phase: "running", kind: "tui" });
     expect(rowIn(gA, "s_l2")).toMatchObject({ live: true, phase: "waiting-approval", kind: "tui" });
     expect(rowIn(gB, "s_l3")).toMatchObject({ live: true, phase: "error", kind: "line" });
-    // 组内 /ps 序义：waiting → running → 死行（ps.ts PHASE_ORDER 同序）
-    const order = gA.sessions.map((x) => x.sid);
-    expect(order.indexOf("s_l2")).toBeLessThan(order.indexOf("s_l1"));
-    expect(order.indexOf("s_l1")).toBeLessThan(order.indexOf("s_dead"));
-    expect(gB.sessions[0]!.sid).toBe("s_l3"); // 活体行（error）在死行前
+    // 组内行序纯 mtime（2026-10-17 修——原 /ps 序义复刻 waiting → running → 死行，活体恒在死行前）：
+    // 死行（最新）居首、活体按自身 mtime 居后——相位只作行标记不占序
+    expect(gA.sessions.map((x) => x.sid)).toEqual(["s_dead", "s_l1", "s_l2"]);
+    expect(gB.sessions.map((x) => x.sid)).toEqual(["s_l3"]);
+    // 回归面：点击查看（POST resumeSid → host 化最旧的 s_l2）不换序——旧行为有两条跳顶路径：
+    //  ①活体相位插队（api-session.ts 排序已修）；②启动期 mcp/manifest 落盘前推 mtime（hostpool.ts
+    //  装配后回滚）。此处同时覆盖两者。
+    const r = await post(s, "/api/sessions", { resumeSid: "s_l2" });
+    expect(r.status).toBe(200);
+    const body2 = await sessionsBody(s);
+    const gA2 = body2.groups.find((g) => g.cwd === cwdA)!;
+    expect(gA2.sessions.map((x) => x.sid)).toEqual(["s_dead", "s_l1", "s_l2"]);
+    expect(rowIn(gA2, "s_l2")).toMatchObject({ live: true, phase: "idle", kind: "web" }); // 托管实时相位仍标行
     await s.stop();
   }, 60_000);
 
@@ -508,7 +522,6 @@ describe("web T9：跨项目会话池（全桶/反查/置顶/cwd 切换/协同�
     await storeB.append("session/header", { format: 1, cwd: cwdB, parentSession: null, moduleSummary: { active: 0, failed: 0, discovered: 0 } });
     await storeB.close();
     // 强制 mtime 差序（同毫秒写 flaky 规避——utimesSync 前移）：B 空壳推旧 60s，A 正文保持当下
-    const { utimesSync } = await import("node:fs");
     const old = new Date(Date.now() - 60_000);
     utimesSync(join(dirB, sid, "agents", "session.jsonl"), old, old);
     const pool = new HostPool({ home });

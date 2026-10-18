@@ -15,7 +15,7 @@
  *  - switchCurrent/current：前端「当前会话」游标（server 持——/web 交接后指向交接会话，
  *    /api/bootstrap currentSid 消费；POST /api/sessions 打开/创建即切换〔B1 跟随语义〕）。
  *  - closeAll（G15 SIGINT 清退序）：全部 host+viewer 逐个 close（幂等），清表清游标。 */
-import { existsSync, utimesSync } from "node:fs";
+import { existsSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import {
   encodeCwd, isEmptySessionHead, locateSessionFile, readSessionHead, scanBucketSessions, scanSessionFiles,
@@ -214,6 +214,12 @@ export class HostPool {
   /** 装配本体（T2 create 序）：host 接管同会话的 viewer 只读化身时先关再换（免双订阅浪费）。 */
   private async assemble(opts: { cwd: string; resumeSid?: string; forkFrom?: string }): Promise<HostedSession> {
     const staleViewer = opts.resumeSid !== undefined ? this.viewers.get(opts.resumeSid) : undefined;
+    /* 2026-10-17 修（左栏行序跳顶②）：打开既有会话不算活动——启动期模块激活必落一条 mcp/manifest
+     * （main.ts:245「每次启动物化会话文件」），会把文件 mtime 前推到「现在」，纯 mtime 行序的左栏
+     * （api-session.ts）便把仅点开查看的会话跳到组首。开前锚定 mtime、装配后回滚（fork/fresh 无旧
+     * 文件可锚不适用；跨桶 resume 落新文件的罕见路径不回滚——新文件视为新活动）。 */
+    const resumeFile = opts.resumeSid !== undefined ? locateSessionFile(this.root, opts.resumeSid)?.file : undefined;
+    const resumeMtime = (() => { try { return resumeFile !== undefined ? statSync(resumeFile).mtimeMs : undefined; } catch { return undefined; } })();
     const hs = new HostedSession({
       cwd: opts.cwd,
       ...(opts.resumeSid !== undefined ? { resumeSid: opts.resumeSid } : {}),
@@ -222,6 +228,11 @@ export class HostPool {
       sessionsRoot: this.root,
     });
     await hs.ready;
+    if (resumeFile !== undefined && resumeMtime !== undefined) {
+      await new Promise<void>((r) => setImmediate(r)); // 模块 sessionAppend 是 void 不回执——让位一拍待落盘
+      try { utimesSync(resumeFile, new Date(resumeMtime), new Date(resumeMtime)); } catch { /* 回滚尽力而为 */ }
+      this.invalidateScan(); // 回滚后的 mtime 即刻生效（装配窗内并发 GET 可能已缓存前推值）
+    }
     if (staleViewer !== undefined) {
       this.viewers.delete(opts.resumeSid!);
       this.viewerOrder = this.viewerOrder.filter((s) => s !== opts.resumeSid);

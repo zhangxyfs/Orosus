@@ -1299,7 +1299,10 @@
     R.pgMore.hidden = true;
     R.pgMore.textContent = OrosusI18N.t('web.render.pgMore');
     R.welcome.hidden = false;
-    R.tail.innerHTML = OrosusI18N.t('web.shell.connecting');
+    /* 统一草稿化（2026-10-17 用户口令④）：草稿窗（sid:null）无流可连——connecting 瞬态文案没有
+     *  后续帧来改写会永挂；直落待命态（syncTail 空转分支——与空会话同形态，复用既有键零新增） */
+    if (opts.sid === null || opts.sid === undefined) syncTail();
+    else R.tail.innerHTML = OrosusI18N.t('web.shell.connecting');
     bindOnce();
     if (R.toBottom) R.toBottom.hidden = true;
     return api;
@@ -1352,8 +1355,8 @@
         }
         return;
       }
-      var img = e.target.closest('.msg-img .photo');
-      if (img) window.open(img.getAttribute('src'), '_blank'); /* C3：点击放大 */
+      /* 消息图点击放大已由 app.js lightbox 接管（2026-10-17 用户口径：弹窗预览）——原 C3
+       *  window.open 新标签开原图退役（双开 = 弹窗 + 图片页）。 */
     });
     /* 滚动：跟随判定（距底 40px）+ 回到底部浮钮显隐 + 滚顶自动加载更早（C2：先下滚 >40px 再回顶才触发 + 400ms 冷却） */
     stream.addEventListener('scroll', function () {

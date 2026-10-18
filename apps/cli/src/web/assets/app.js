@@ -76,15 +76,17 @@ function $(id) { return document.getElementById(id); }
     onStatusChanged: function () { if (currentSid !== null) fetchStatus(currentSid); },
     onCommandSubmit: function (text) { sendCommandText(text); },
     onCwdPick: function (cwd, name) {
+      if (draftActive && draftForkFrom !== '') { toast(OrosusI18N.t('web.toast.forkCwdGuard')); return; }
       if (draftActive) { /* 走查修⑮⑦：草稿态选目录只改草稿归属——首条消息才落桶（不提前建会话） */
         draftCwd = cwd;
         syncCwdGate();
         toast(OrosusI18N.t('web.cwd.toastPrefix') + name + OrosusI18N.t('web.cwd.draftNote'));
         return;
       }
-      createSession({ cwd: cwd }).then(function (r) {
-        if (r) toast('工作目录 → ' + name + '（已在该目录开会话，原空会话保留）');
-      });
+      /* 统一草稿化（2026-10-17 用户口令②）：空会话态选目录 = 开该目录草稿窗——「原空会话保留」的
+       *  即建语义退役（空会话堆积源头一并消除） */
+      openDraft({ cwd: cwd });
+      toast(OrosusI18N.t('web.cwd.toastPrefix') + name + OrosusI18N.t('web.toast.cwdDraftNote'));
     },
     onBrowseFolder: function () { openDirPicker(); }, /* cwd 菜单「📂 浏览文件夹…」（走查八轮：重新选择文件夹——任意目录下钻） */
     onManageModels: function () { openSettingsRoot(2); }, /* 模型菜单「管理模型」→ 设置·提供商页（外观页插位后 idx 1→2） */
@@ -162,31 +164,28 @@ function $(id) { return document.getElementById(id); }
     if (text === '') return;
     if (draftActive) { sendDraft(text, attachments.slice()); return; } /* 走查修⑮⑦：草稿态首条消息 = 先建后发 */
     if (currentSid === null) { toast(OrosusI18N.t('web.welcome.noSession.pick')); return; }
-    var imgs = attachments.slice();
-    if (imgs.some(function (a) { return a.failed; })) { toast(OrosusI18N.t('web.toast.attachFailed')); return; }
-    if (imgs.some(function (a) { return !a.id; })) { toast(OrosusI18N.t('web.toast.attachUploading')); return; }
-    var ids = imgs.map(function (a) { return a.id; });
     input.value = '';
     autogrow();
-    sendingNow = true;
+    sendingNow = true; /* 发送链在途（含贴图上传）——钮转 spinner，失败由 handleSendError 还原 */
     syncSendBtn();
-    sendCore(text, ids, newPromptId()).then(
+    uploadPending(attachments.slice()).then(function (ids) { /* 贴图本地暂存（2026-10-17 用户口径）：发送才上传 */
+      return sendCore(text, ids, newPromptId());
+    }).then(
       function (r) { handleSendResponse(r, text); },
       function (err) { handleSendError(err, text); },
     );
   }
   /** 走查修⑮⑦（2026-10-14 用户口令）：草稿态首发——先建会话（落 draftCwd 所在桶）再发消息。
-   *  createSession 内部已完成 pollSessions + switchTo（currentSid 就位），随后走正常 sendCore 链。
-   *  建失败（toast 已示）= 还原输入并复位，不携 draftCwd 重试。 */
+   *  统一草稿化（2026-10-17 用户口令②）：分叉草稿以 forkFrom 落桶（三选一互斥——目录沿用父会话）。
+   *  createSession 内部已完成 pollSessions + switchTo（currentSid 就位），随后上传贴图再走 sendCore 链
+   *  （贴图本地暂存 2026-10-17 用户口径：上传挪进发送链——建失败/上传失败（toast 已示）= 还原输入并复位，
+   *  不携 draftCwd 重试；附件保留可重发）。 */
   function sendDraft(text, imgs) {
-    if (imgs.some(function (a) { return a.failed; })) { toast(OrosusI18N.t('web.toast.attachFailed')); return; }
-    if (imgs.some(function (a) { return !a.id; })) { toast(OrosusI18N.t('web.toast.attachUploading')); return; }
-    var ids = imgs.map(function (a) { return a.id; });
     input.value = '';
     autogrow();
     sendingNow = true;
     syncSendBtn();
-    createSession({ cwd: draftCwd }).then(function (r) {
+    createSession(draftForkFrom !== '' ? { forkFrom: draftForkFrom } : { cwd: draftCwd }).then(function (r) {
       if (!r) { /* 建会话失败（createSession 已 toast）——还原输入并复位发送态 */
         sendingNow = false;
         input.value = text;
@@ -195,7 +194,9 @@ function $(id) { return document.getElementById(id); }
         return;
       }
       draftActive = false;
-      return sendCore(text, ids, newPromptId());
+      return uploadPending(imgs).then(function (ids) {
+        return sendCore(text, ids, newPromptId());
+      });
     }).then(
       function (r) { if (r) handleSendResponse(r, text); },
       function (err) { handleSendError(err, text); },
@@ -226,13 +227,10 @@ function $(id) { return document.getElementById(id); }
       toast(OrosusI18N.t('web.toast.quit'));
       void afterMaybeCurrentGone(currentSid);
     } else if (mark === 'new') {
-      createSession({}).then(function (r) {
-        if (r) render.appendMarkLine('[新会话 ' + shortSid(r.sid) + '] · 当前会话保留，点左侧会话行可切回');
-      });
+      openDraft(); /* 统一草稿化（2026-10-17 用户口令②）：/new 只开草稿——首条消息才落桶 */
+      toast(OrosusI18N.t('web.session.markDraftToast'), 4000);
     } else if (mark === 'fork') {
-      createSession({ forkFrom: currentSid }).then(function (r) {
-        if (r) toast('已分叉出新会话——继承全部上下文');
-      });
+      openDraft({ forkFrom: currentSid }); /* 统一草稿化：/fork 只开分叉草稿——首条消息才复制上下文落桶（toast 归 openDraft） */
     } else if (mark === 'menu:model') {
       UI.openModelMenu(modelChip);
     } else if (mark === 'btw') {
@@ -240,25 +238,24 @@ function $(id) { return document.getElementById(id); }
     }
   }
 
-  /* ── 贴图（D6：Ctrl+V 预览条 / ≤6 张前端拦截 / × 撤销 / 随消息发送） ── */
-  var attachments = []; /* {id, name, url, failed}——url = /api/media 预览源（上传落盘后回填） */
+  /* ── 贴图（D6：Ctrl+V 预览条 / ≤6 张前端拦截 / × 撤销 / 本地暂存——发送才上传〔2026-10-17 用户口径〕） ── */
+  var attachments = []; /* {file, name, url, failed, uploading}——file 留内存（发送才上传）；url = data: 本地预览（CSP 容 data: 禁 blob:） */
   function renderAttach() {
     if (attachments.length === 0) { attachbar.hidden = true; attachbar.innerHTML = ''; return; }
     attachbar.hidden = false;
     attachbar.innerHTML = attachments.map(function (a, i) {
-      /* 评审 Important-2：预览源 = /api/media（server 已落盘路径）——blob: 会被自家 CSP
-       * img-src 'self' data: 吞成裂图；上传在途显 spinner 占位，落盘即换真图 */
+      /* 预览源 = data: URL（FileReader 本地读取——零请求）；发送链上传在途加 .up-spin 遮罩（真图在下不闪换） */
       var inner = a.url
         ? '<img src="' + esc(a.url) + '" alt="' + esc(a.name) + '" />'
-        : a.failed
-          ? OrosusI18N.t('web.composer.attach.stopChip') /* 失败态静止占位（T16 复核 Minor②——spinner 不再永转） */
-          : OrosusI18N.t('web.composer.attach.waitingChip') + spinSvg('', 15);
-      return '<span class="attach-thumb">' + inner +
+        : OrosusI18N.t('web.composer.attach.waitingChip') + spinSvg('', 15); /* data: 读取中（毫秒级瞬态） */
+      var overlay = a.uploading ? '<span class="up-spin">' + spinSvg('', 15) + '</span>' : '';
+      return '<span class="attach-thumb">' + inner + overlay +
         (a.failed ? OrosusI18N.t('web.composer.attach.failBadge') : '') +
         '<button type="button" class="ax" data-ax="' + i + OrosusI18N.t('web.composer.attach.removeBtn');
     }).join('');
   }
   attachbar.addEventListener('click', function (e) {
+    if (sendingNow) return; /* 发送链在途（ids 已按快照在传）——此时摘图不改变本次发送，摘不动 */
     var ax = e.target.closest('[data-ax]');
     if (!ax) return;
     var i = parseInt(ax.getAttribute('data-ax'), 10);
@@ -281,6 +278,29 @@ function $(id) { return document.getElementById(id); }
       });
     });
   }
+  /** 发送链上传（贴图本地暂存的发送半程）：逐张传（uploadImage 取当下 currentSid——草稿链在
+   *  createSession 后调用，sid 已就位），首败即断——缩略图标失败角标、错误文本走 handleSendError
+   *  （还原输入可整链重试，附件保留）。 */
+  function uploadPending(imgs) {
+    imgs.forEach(function (a) { a.failed = false; a.uploading = true; });
+    renderAttach();
+    var ids = [];
+    var chain = Promise.resolve();
+    imgs.forEach(function (a) {
+      chain = chain.then(function () {
+        return uploadImage(a.file).then(function (r) {
+          ids.push(r.id);
+          a.uploading = false;
+          renderAttach();
+        }, function () {
+          a.failed = true; a.uploading = false;
+          renderAttach();
+          throw new Error(OrosusI18N.t('web.toast.attachUploadFail') + a.name);
+        });
+      });
+    });
+    return chain.then(function () { return ids; });
+  }
   input.addEventListener('paste', function (e) {
     var files = Array.prototype.slice.call((e.clipboardData && e.clipboardData.files) || []).filter(function (f) { return f.type.indexOf('image/') === 0; });
     if (files.length === 0) return;
@@ -288,23 +308,33 @@ function $(id) { return document.getElementById(id); }
     var room = 6 - attachments.length; /* 最多 6 张（D6 原型口径——前端拦截） */
     if (room <= 0) { toast(OrosusI18N.t('web.composer.attach.limitReached')); return; }
     if (files.length > room) { toast(OrosusI18N.t('web.composer.attach.limitPartial')); files = files.slice(0, room); }
-    if (currentSid === null) { toast(OrosusI18N.t('web.welcome.noSession.paste')); return; }
+    /* 纯本地（2026-10-17 用户口径「本来就应该粘贴的时候是本地的」）：File 留内存 + data: 预览——
+     *  零请求零副作用（不建会话/不上传），上传只发生在发送链（submit/sendDraft → uploadPending） */
     files.forEach(function (f) {
-      var a = { id: '', name: f.name || 'paste.png', url: '', failed: false };
+      var a = { file: f, name: f.name || 'paste.png', url: '', failed: false, uploading: false };
       attachments.push(a);
       renderAttach();
-      uploadImage(f).then(function (r) {
-        a.id = r.id;
-        var tok = A.getToken();
-        a.url = '/api/media?path=' + encodeURIComponent(r.path) + (tok ? '&token=' + encodeURIComponent(tok) : '');
-        renderAttach();
-      }, function () {
-        a.failed = true;
-        renderAttach();
-        toast(OrosusI18N.t('web.toast.attachUploadFail') + a.name);
-      });
+      var rd = new FileReader();
+      rd.onload = function () { a.url = String(rd.result); renderAttach(); };
+      rd.readAsDataURL(f);
     });
     toast(OrosusI18N.t('web.toast.attachPasted'));
+  });
+
+  /* ── 图片预览 lightbox（2026-10-17 用户口径）：贴图缩略图 + 流区消息图（img.photo——render.js
+   *  注入、pane 子代理流同源）点击放大——文档级委托统一捕获；× / Esc（handleEscGlobal 首位）/ 点底关。 ── */
+  var lightbox = $('lightbox'), lbImg = $('lb-img');
+  function lbClose() { lightbox.hidden = true; lbImg.src = ''; }
+  function lbOpen(src) {
+    if (!src) return;
+    lbImg.src = src;
+    lightbox.hidden = false;
+  }
+  $('lb-close').addEventListener('click', lbClose);
+  lightbox.addEventListener('click', function (e) { if (e.target === lightbox || e.target === lbImg) lbClose(); });
+  document.addEventListener('click', function (e) {
+    var im = e.target.closest ? e.target.closest('img.photo, .attach-thumb img') : null;
+    if (im) lbOpen(im.src);
   });
 
   /* ── 队列条（D2：queue 帧整表快照 = 唯一真源；点击撤回） ── */
@@ -363,6 +393,7 @@ function $(id) { return document.getElementById(id); }
     UI.cancelPending();
   }
   function handleEscGlobal() {
+    if (!$('lightbox').hidden) { lbClose(); return; } /* 图片预览层（z-70）最顶——Esc 先收 */
     if (!$('overlay2').hidden) return; /* 确认弹窗层（capture 处理器已管） */
     if (!$('overlay').hidden) return;  /* 居中弹窗层（T15 处理器已管——多级逐次返回） */
     if (UI.isOpen()) { UI.closePopup(); input.focus(); return; }
@@ -418,16 +449,19 @@ function $(id) { return document.getElementById(id); }
     cwdChip.hidden = !empty;
     var nm = (draftActive ? draftCwd : sessionCwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
     $('cwd-name').textContent = nm || OrosusI18N.t('web.cwd.chipPick');
+    if (draftActive) $('kv-cwd').textContent = draftCwd || '—'; /* 统一草稿化（2026-10-17 用户口令③）：右栏 kv-cwd 跟草稿归属（草稿态 panel 无数据源——本口单写） */
   }
   cwdChip.addEventListener('click', function () {
     if (cwdChip.hidden) { toast(OrosusI18N.t('web.cwd.lockedToast')); return; }
+    if (draftActive && draftForkFrom !== '') { toast(OrosusI18N.t('web.toast.forkCwdGuard')); return; } /* 统一草稿化：forkFrom 三选一互斥——目录改了也不随建（不误导） */
+    var base = draftActive ? draftCwd : sessionCwd; /* 统一草稿化：草稿态以草稿目录为锚（菜单高亮/池兜底） */
     var pool = projectsPool.slice();
-    if (sessionCwd !== '' && !pool.some(function (p) { return p.cwd === sessionCwd; })) {
-      pool.push({ cwd: sessionCwd, name: sessionCwd.split(/[\\/]/).pop() || sessionCwd });
+    if (base !== '' && !pool.some(function (p) { return p.cwd === base; })) {
+      pool.push({ cwd: base, name: base.split(/[\\/]/).pop() || base });
     }
     if (pool.length === 0) { openDirPicker(); return; } /* 无已知项目池 → 直接进浏览窗（走查八轮） */
     if (UI.isAnchorOpen(cwdChip)) { UI.closePopup(); return; } /* 走查修⑫：toggle 统一口径 */
-    UI.openCwdMenu(cwdChip, pool, sessionCwd);
+    UI.openCwdMenu(cwdChip, pool, base);
   });
 
   /* ── 目录浏览窗（2026-10-12 走查八轮：文件夹芯片的「重新选择文件夹」——/api/at 目录下钻 + ..
@@ -443,7 +477,7 @@ function $(id) { return document.getElementById(id); }
     return s.slice(0, i);
   }
   function openDirPicker() {
-    dpState.path = sessionCwd || '';
+    dpState.path = (draftActive ? draftCwd : sessionCwd) || ''; /* 浏览窗锚点跟草稿（与 cwd 菜单 base 同口径）：重选文件夹后再开不得回落旧会话目录 */
     openModal({
       title: OrosusI18N.t('web.cwd.pickerTitle'),
       en: 'BROWSE',
@@ -455,9 +489,8 @@ function $(id) { return document.getElementById(id); }
           modalClose();
           if (p !== '') {
             var nm = p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
-            createSession({ cwd: p }).then(function (r) {
-              if (r) toast('工作目录 → ' + nm + '（已在该目录开会话，原空会话保留）');
-            });
+            openDraft({ cwd: p }); /* 统一草稿化（2026-10-17 用户口令②）：选定目录只开草稿——首条消息才建会话 */
+            toast(OrosusI18N.t('web.cwd.toastPrefix') + nm + OrosusI18N.t('web.cwd.draftNote'));
           }
           return;
         }
@@ -746,8 +779,8 @@ function $(id) { return document.getElementById(id); }
 
   /* ═══════════ 左栏：渲染（B3/B5/B7/B14/B15） ═══════════ */
   var PHASE_DOT = { running: ['●', 'sdot-run'], 'waiting-approval': ['◉', 'sdot-wait'], 'waiting-input': ['◉', 'sdot-wait'], error: ['✗', 'sdot-err'], idle: ['○', 'sdot-idle'] };
-  var PIN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 7 3.2 3.2V16H6.8v-1.8L10 11 9 4z"/><path d="M12 16v5"/></svg>';
-  var ARCHIVE_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18v4H3z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>';
+  var PIN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg>';
+  var ARCHIVE_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>';
   /* 项目组头文件夹标识（2026-10-13 用户口令：文件夹取代 ▾/▸ 小箭头，项目与会话行一眼可分；
    *  开合态用 folder-open/folder 双形表达，点击仍切换折叠） */
   var FOLDER_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>';
@@ -783,13 +816,16 @@ function $(id) { return document.getElementById(id); }
     var isCur = row.sid === currentSid;
     var act = rowActivity(row, isCur ? null : prev, sact, seen);
     var title = row.label !== '' ? row.label : (row.fresh ? OrosusI18N.t('web.session.freshTitle') : OrosusI18N.t('web.session.unnamedTitle'));
+    /* 2026-10-17 走查（zcode 形布局）：左槽 = 状态点（悬停/置顶行换成置顶钮）、右槽 = 时间
+     *  （悬停且有归档钮时换成归档钮）——CSS 显隐互换，DOM 全量渲染零重建。标题走马灯 =
+     *  .stmove 双份轨道（常态 display:contents 不碍单行省略；mouseover 委托测得溢出挂 .marq
+     *  起播，循环位移 -50% 无缝）。 */
     return '<div class="ls-item' + (isCur ? ' cur' : '') + (pinned ? ' pinned-row' : '') + '" data-sid="' + esc(row.sid) + '" data-pinned="' + (pinned ? 1 : '') + '">' +
       sactHtml(act) +
-      '<span class="stitle" title="' + esc(title) + '">' + esc(title) + '</span>' +
-      (isCur ? OrosusI18N.t('web.session.curTag') : '') +
       '<button class="sact-btn spin-pin" data-sact="pin" title="' + (pinned ? OrosusI18N.t('web.session.unpin') : OrosusI18N.t('web.session.pin')) + '">' + PIN_SVG + '</button>' +
-      (row.fresh ? '' : '<button class="sact-btn" data-sact="archive" title="' + OrosusI18N.t('web.session.archiveBtn') + '">' + ARCHIVE_SVG + '</button>') +
+      '<span class="stitle" title="' + esc(title) + '"><span class="stmove"><span class="stseg">' + esc(title) + '</span><span class="stseg st-dup" aria-hidden="true">' + esc(title) + '</span></span></span>' +
       '<span class="srel">' + esc(fmtRel(row.relMs)) + '</span>' +
+      (row.fresh ? '' : '<button class="sact-btn" data-sact="archive" title="' + OrosusI18N.t('web.session.archiveBtn') + '">' + ARCHIVE_SVG + '</button>') +
       '</div>';
   }
   /* 渲染签名门（性能律）：可见内容（含相对时间取整文案）不变 → DOM 一字不动 */
@@ -883,6 +919,24 @@ function $(id) { return document.getElementById(id); }
     e.preventDefault();
     openSessionCtxMenu(row.getAttribute('data-sid'), e.clientX, e.clientY);
   });
+  /* 标题走马灯（2026-10-17 走查）：悬停溢出才起播——mouseover 委托测 .stitle 溢出（此刻
+   *  :hover 布局已应用，右槽时间已让位归档钮，测得即所见；重渲换 DOM 后鼠标一动即重测）。
+   *  速度 ~30px/s 下限 6s；无溢出静默跳过（.marq 不挂，双份轨道照旧 display:none）。 */
+  lsBody.addEventListener('mouseover', function (e) {
+    var st = (e.target.closest('.ls-item') || null)?.querySelector('.stitle') ?? null;
+    if (!st || st.classList.contains('marq')) return;
+    if (st.scrollWidth - st.clientWidth < 3) return;
+    st.style.setProperty('--marq-dur', Math.max(6, Math.round(st.scrollWidth / 30)) + 's');
+    st.classList.add('marq');
+  });
+  /* 离行即停（2026-10-17 走查二轮）：鼠标出行（relatedTarget 不在行内——行内子元素间移动
+   *  不算，出窗为 null 亦算离）即摘 .marq——走马灯只在悬停期间跑，离行回省略号常态。 */
+  lsBody.addEventListener('mouseout', function (e) {
+    var item = e.target.closest('.ls-item') || null;
+    if (!item || (e.relatedTarget !== null && item.contains(e.relatedTarget))) return;
+    var st = item.querySelector('.stitle');
+    if (st) st.classList.remove('marq');
+  });
   $('ls-collapse-rail').addEventListener('click', function () { lside.classList.remove('rail'); });
 
   function findGroup(cwd) {
@@ -934,11 +988,11 @@ function $(id) { return document.getElementById(id); }
       return pollSessions().then(function () { return switchTo(r.sid); }).then(function () { return r; });
     }, function (err) { toast(OrosusI18N.t('web.toast.createFail') + err.message); });
   }
-  /* 工作区行 ＋（B9）：在该工作区下新建（fresh 沿用语义在 server 侧，reused 提示同口） */
+  /* 工作区行 ＋（B9）：统一草稿化（2026-10-17 用户口令②）——开该工作区草稿窗（fresh 沿用语义在
+   *  server 侧，落桶发生在首条消息 sendDraft 时；reused 提示随建时出） */
   function newSessionInProject(g) {
-    void createSession({ cwd: g.cwd }).then(function (r) {
-      if (r && !r.reused) toast('已在「' + g.name + '」下新建会话');
-    });
+    openDraft({ cwd: g.cwd });
+    toast(OrosusI18N.t('web.toast.createdInPre') + g.name + OrosusI18N.t('web.toast.createdDraftPost'));
   }
   /* 点击切换（B5）：POST {resumeSid} host 换轨 + 视图切换 */
   function openSession(sid) {
@@ -982,6 +1036,7 @@ function $(id) { return document.getElementById(id); }
       render.close();
       showWelcome(true);
       syncCwdGate();
+      resetPanelDraft(); /* 统一草稿化（2026-10-17 用户口令③）：空态右栏同清——不留已删会话投影 */
       tailEl.textContent = OrosusI18N.t('web.welcome.noSession.start');
       return undefined;
     });
@@ -1050,8 +1105,8 @@ function $(id) { return document.getElementById(id); }
   function ic(name) {
     var P = {
       fork: '<circle cx="12" cy="18" r="2.4"/><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M18 8.4v1.2c0 1-.8 2-2 2H8c-1.2 0-2-1-2-2V8.4"/><path d="M12 11.6v3.2"/>',
-      pin: '<path d="M9 4h6l-1 7 3.2 3.2V16H6.8v-1.8L10 11 9 4z"/><path d="M12 16v5"/>',
-      archive: '<path d="M3 4h18v4H3z"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
+      pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>',
+      archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
       edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
       copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
       download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
@@ -1129,7 +1184,7 @@ function $(id) { return document.getElementById(id); }
   });
   function sessionCtxAct(act, sid) {
     if (act === 'fork') {
-      void createSession({ forkFrom: sid }).then(function (r) { if (r) toast('已分叉出新会话——继承全部上下文'); });
+      openDraft({ forkFrom: sid }); /* 统一草稿化（2026-10-17 用户口令②）：分叉只开草稿——首条消息才落桶（toast 归 openDraft） */
     } else if (act === 'pin') {
       togglePin(sid);
     } else if (act === 'archive') {
@@ -3023,18 +3078,25 @@ function $(id) { return document.getElementById(id); }
    * status 装配（芯片/cwd）+ 面板即拉。欢迎页显隐归 render（C1 事件数判据——T15 竞态消除）。 */
   /* 走查修⑮⑦（2026-10-14 用户口令）：＋新会话 = 只开新会话窗（草稿态），不立即落桶。
    *  draftActive/draftCwd 是本窗态唯一真源——视图 = 无会话空流（welcome + composer + cwd 芯片可改归属）；
-   *  首条消息（sendDraft）才 createSession 落桶。切走/首发成功即出草稿态。 */
-  var draftActive = false, draftCwd = '';
-  function openDraft() {
+   *  首条消息（sendDraft）才 createSession 落桶。切走/首发成功即出草稿态。
+   *  统一草稿化（2026-10-17 用户口令②）：全部新建会话入口（工作区行＋/cwd 芯片/浏览窗/\/new、\/fork
+   *  命令/分叉按钮）一律只开草稿窗零请求。draftForkFrom = 分叉草稿的父会话——服务端三选一口
+   *  cwd/forkFrom 互斥，分叉落桶目录沿用父会话（draftCwd 仅作芯片显示，不可改）。 */
+  var draftActive = false, draftCwd = '', draftForkFrom = '';
+  function openDraft(opts) {
+    opts = opts ?? {};
     UI.closePopup();
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
-    draftCwd = sessionCwd; /* 落桶项目 = 点按时刻当前会话所在项目（B1 跟随口径） */
+    draftForkFrom = opts.forkFrom ?? '';
+    if (opts.cwd) draftCwd = opts.cwd;
+    else if (draftForkFrom !== '') draftCwd = findGroupOfSid(draftForkFrom)?.cwd ?? sessionCwd; /* 分叉草稿目录 = 父会话所在项目（置顶行也在原分组——findGroupOfSid 可查） */
+    else draftCwd = sessionCwd; /* 落桶项目 = 点按时刻当前会话所在项目（B1 跟随口径） */
     draftActive = true;
     currentSid = null;
     setSessionTitle(OrosusI18N.t('web.session.freshTitle'), '');
     render.open({
       sid: null, stream: streamEl, tail: tailEl, welcome: welcomeEl, pgMore: pgMoreEl, toBottom: $('to-bottom'),
-      onFork: function (fromSid) { createSession({ forkFrom: fromSid }).then(function (r) { if (r) toast('已分叉出新会话——继承全部上下文'); }); },
+      onFork: function (fromSid) { openDraft({ forkFrom: fromSid }); /* 统一草稿化：草稿流为空本无入口——留同口径兜底 */ },
       onCopy: copyText,
       onUserSeen: syncCwdGate,
       onAgentOpen: function (id) { openAgentTab(id); },
@@ -3044,13 +3106,15 @@ function $(id) { return document.getElementById(id); }
     });
     renderSidebar();
     syncCwdGate();
+    resetPanelDraft(); /* 统一草稿化（2026-10-17 用户口令③）：右栏随草稿清空——任务清单空态，不留上一会话投影 */
+    if (draftForkFrom !== '') toast(OrosusI18N.t('web.toast.forkDraftPre') + rowTitle(draftForkFrom) + OrosusI18N.t('web.toast.forkDraftPost'));
   }
   function switchTo(sid) {
     /* 切会话前先关浮层——挂起交互的 cancelled 应答仍指向原会话（currentSid 未变） */
     UI.closePopup();
     if (globalThis.OrosusDialog) globalThis.OrosusDialog.unmount(); /* web-dialog 批 T8：旧会话控件窗本地清理（在途队列以捕获 sid 自然收尾——设计 §10「先用旧 sid 提交关闭」） */
     launcherBack = false; /* 走查②：换会话即换源——总览回跳标记不跨会话 */
-    draftActive = false; /* 走查修⑮⑦：切走即出草稿态（再点 ＋新会话 可重开） */
+    draftActive = false; draftForkFrom = ''; /* 走查修⑮⑦：切走即出草稿态（再点 ＋新会话 可重开）——统一草稿化：分叉归属一并清 */
     var fromSid = currentSid; /* 离去会话——W6复核修 Important#2②：在飞 btw 轮结算的归属判据 */
     if (streamCtl) { streamCtl.close(); streamCtl = null; }
     currentSid = sid;
@@ -3070,11 +3134,7 @@ function $(id) { return document.getElementById(id); }
       welcome: welcomeEl,
       pgMore: pgMoreEl,
       toBottom: $('to-bottom'),
-      onFork: function (fromSid) {
-        createSession({ forkFrom: fromSid }).then(function (r) {
-          if (r) toast('已分叉出新会话——继承全部上下文');
-        });
-      },
+      onFork: function (fromSid) { openDraft({ forkFrom: fromSid }); }, /* 统一草稿化（2026-10-17 用户口令②）：流区分叉钮只开草稿——首条消息才落桶（toast 归 openDraft） */
       onCopy: copyText,
       onUserSeen: syncCwdGate,
       onAgentOpen: function (id) { openAgentTab(id); }, /* W3：spawn 组卡行点击 → OrosusPane agent open-or-switch */
@@ -3914,6 +3974,37 @@ function $(id) { return document.getElementById(id); }
       panelInfo = { data: data, fetchedAt: Date.now() };
       A.rafFlush(function () { renderPanel(data); });
     }, function () { /* 面板拉取失败静默（断连面由 SSE 看门狗管） */ });
+  }
+  /* 统一草稿化（2026-10-17 用户口令③）：无会话视图右栏清空——草稿窗与「会话全删光」空态共用。
+   *  fetchPanel(null) 早退，不主动清则任务清单/模块/协同一直挂上一会话的陈旧投影。签名门一并
+   *  复位：落桶/切会话后首轮 panel 不被旧签名挡（kv-cwd 草稿态归 syncCwdGate——随草稿归属走）。 */
+  function resetPanelDraft() {
+    panelInfo = null;
+    kvSig = modSig = connSig = peerSig = todoSig = '';
+    modRenderKey = connRenderKey = '';
+    modPage = connPage = 0;
+    lastModules = [];
+    lastConns = [];
+    if (!draftActive) $('kv-cwd').textContent = '—'; /* 非草稿空态（会话删光）无目录可言；草稿态由 syncCwdGate 先写 */
+    $('kv-model').textContent = '—';
+    $('kv-tokens').textContent = '—';
+    $('kv-elapsed').textContent = '—';
+    $('ctx-bar-fill').style.width = '0%';
+    $('ctx-pct').textContent = '—';
+    $('kv-proxy').textContent = '—';
+    $('kv-modelsvc').textContent = '—';
+    renderModPage();
+    renderConnPage();
+    $('peer-list').innerHTML = OrosusI18N.t('web.misc.peers.noDataHtml');
+    var tp = document.querySelector('.todo-progress');
+    if (tp) tp.classList.add('empty');
+    $('todo-list').innerHTML = OrosusI18N.t('web.misc.todoEmptyHtml');
+    $('todo-count').textContent = '0/0';
+    $('todo-bar').style.width = '0%';
+    $('tf-count').textContent = '0/0';
+    $('tf-count2').textContent = '0/0';
+    if (!tfCard.hidden) renderTfList();
+    syncTodoFloat();
   }
   /* 运行时间跳秒（T10 报告指针：缓存命中 elapsedMs ≤1s 陈旧——本地节拍自增） */
   setInterval(function () {
